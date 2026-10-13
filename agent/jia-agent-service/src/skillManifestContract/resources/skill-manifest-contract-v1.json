@@ -1,0 +1,961 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    {
+      "id": "image-edit",
+      "kind": "manifest",
+      "json": "{\"schemaVersion\": 1, \"skillKey\": \"image-edit\", \"skillVersion\": \"1.0.0\", \"title\": \"图片编辑\", \"description\": \"按用户要求修改已授权的一张图片。\", \"runner\": \"provider-operation\", \"entrypoint\": \"image-http.edit\", \"parametersSchema\": {\"type\": \"object\", \"properties\": {}, \"required\": [], \"additionalProperties\": false, \"$schema\": \"https://json-schema.org/draft/2020-12/schema\"}, \"inputs\": {\"minItems\": 1, \"maxItems\": 1, \"acceptedMimeTypes\": [\"image/png\", \"image/jpeg\"]}, \"outputs\": {\"mimeTypes\": [\"image/png\"], \"multiple\": false, \"dataSchema\": null, \"artifactsRequired\": true}, \"requirements\": {\"providerAlias\": \"image\"}, \"costInfo\": {\"mode\": \"UNKNOWN\", \"amount\": null, \"currency\": null, \"unit\": \"image\", \"description\": \"由绑定服务商收费，平台仅登记说明。\", \"source\": null, \"updatedAt\": null}}",
+      "expected": true,
+      "skillKey": "image-edit",
+      "skillVersion": "1.0.0"
+    },
+    {
+      "id": "absent-cost",
+      "kind": "manifest",
+      "json": "{\"schemaVersion\": 1, \"skillKey\": \"image-edit\", \"skillVersion\": \"1.0.0\", \"title\": \"图片编辑\", \"description\": \"按用户要求修改已授权的一张图片。\", \"runner\": \"provider-operation\", \"entrypoint\": \"image-http.edit\", \"parametersSchema\": {\"type\": \"object\", \"properties\": {}, \"required\": [], \"additionalProperties\": false, \"$schema\": \"https://json-schema.org/draft/2020-12/schema\"}, \"inputs\": {\"minItems\": 1, \"maxItems\": 1, \"acceptedMimeTypes\": [\"image/png\", \"image/jpeg\"]}, \"outputs\": {\"mimeTypes\": [\"image/png\"], \"multiple\": false, \"dataSchema\": null, \"artifactsRequired\": true}, \"requirements\": {\"providerAlias\": \"image\"}}",
+      "expected": true,
+      "skillKey": "image-edit",
+      "skillVersion": "1.0.0"
+    },
+    {
+      "id": "bad-cost-only",
+      "kind": "manifest",
+      "json": "{\"schemaVersion\": 1, \"skillKey\": \"image-edit\", \"skillVersion\": \"1.0.0\", \"title\": \"图片编辑\", \"description\": \"按用户要求修改已授权的一张图片。\", \"runner\": \"provider-operation\", \"entrypoint\": \"image-http.edit\", \"parametersSchema\": {\"type\": \"object\", \"properties\": {}, \"required\": [], \"additionalProperties\": false, \"$schema\": \"https://json-schema.org/draft/2020-12/schema\"}, \"inputs\": {\"minItems\": 1, \"maxItems\": 1, \"acceptedMimeTypes\": [\"image/png\", \"image/jpeg\"]}, \"outputs\": {\"mimeTypes\": [\"image/png\"], \"multiple\": false, \"dataSchema\": null, \"artifactsRequired\": true}, \"requirements\": {\"providerAlias\": \"image\"}, \"costInfo\": {\"mode\": \"NOT_A_PRICE\", \"amount\": false}}",
+      "expected": true,
+      "skillKey": "image-edit",
+      "skillVersion": "1.0.0"
+    },
+    {
+      "id": "unknown-field",
+      "kind": "manifest",
+      "json": "{\"schemaVersion\": 1, \"skillKey\": \"image-edit\", \"skillVersion\": \"1.0.0\", \"title\": \"图片编辑\", \"description\": \"按用户要求修改已授权的一张图片。\", \"runner\": \"provider-operation\", \"entrypoint\": \"image-http.edit\", \"parametersSchema\": {\"type\": \"object\", \"properties\": {}, \"required\": [], \"additionalProperties\": false, \"$schema\": \"https://json-schema.org/draft/2020-12/schema\"}, \"inputs\": {\"minItems\": 1, \"maxItems\": 1, \"acceptedMimeTypes\": [\"image/png\", \"image/jpeg\"]}, \"outputs\": {\"mimeTypes\": [\"image/png\"], \"multiple\": false, \"dataSchema\": null, \"artifactsRequired\": true}, \"requirements\": {\"providerAlias\": \"image\"}, \"costInfo\": {\"mode\": \"UNKNOWN\", \"amount\": null, \"currency\": null, \"unit\": \"image\", \"description\": \"由绑定服务商收费，平台仅登记说明。\", \"source\": null, \"updatedAt\": null}, \"consentRequired\": true}",
+      "expected": false,
+      "skillKey": "image-edit",
+      "skillVersion": "1.0.0"
+    },
+    {
+      "id": "wrong-identity",
+      "kind": "manifest",
+      "json": "{\"schemaVersion\": 1, \"skillKey\": \"image-generate\", \"skillVersion\": \"1.0.0\", \"title\": \"图片编辑\", \"description\": \"按用户要求修改已授权的一张图片。\", \"runner\": \"provider-operation\", \"entrypoint\": \"image-http.edit\", \"parametersSchema\": {\"type\": \"object\", \"properties\": {}, \"required\": [], \"additionalProperties\": false, \"$schema\": \"https://json-schema.org/draft/2020-12/schema\"}, \"inputs\": {\"minItems\": 1, \"maxItems\": 1, \"acceptedMimeTypes\": [\"image/png\", \"image/jpeg\"]}, \"outputs\": {\"mimeTypes\": [\"image/png\"], \"multiple\": false, \"dataSchema\": null, \"artifactsRequired\": true}, \"requirements\": {\"providerAlias\": \"image\"}, \"costInfo\": {\"mode\": \"UNKNOWN\", \"amount\": null, \"currency\": null, \"unit\": \"image\", \"description\": \"由绑定服务商收费，平台仅登记说明。\", \"source\": null, \"updatedAt\": null}}",
+      "expected": false,
+      "skillKey": "image-edit",
+      "skillVersion": "1.0.0"
+    },
+    {
+      "id": "entry-absolute",
+      "kind": "manifest",
+      "json": "{\"schemaVersion\": 1, \"skillKey\": \"image-edit\", \"skillVersion\": \"1.0.0\", \"title\": \"图片编辑\", \"description\": \"按用户要求修改已授权的一张图片。\", \"runner\": \"provider-operation\", \"entrypoint\": \"/usr/bin/x\", \"parametersSchema\": {\"type\": \"object\", \"properties\": {}, \"required\": [], \"additionalProperties\": false, \"$schema\": \"https://json-schema.org/draft/2020-12/schema\"}, \"inputs\": {\"minItems\": 1, \"maxItems\": 1, \"acceptedMimeTypes\": [\"image/png\", \"image/jpeg\"]}, \"outputs\": {\"mimeTypes\": [\"image/png\"], \"multiple\": false, \"dataSchema\": null, \"artifactsRequired\": true}, \"requirements\": {\"providerAlias\": \"image\"}, \"costInfo\": {\"mode\": \"UNKNOWN\", \"amount\": null, \"currency\": null, \"unit\": \"image\", \"description\": \"由绑定服务商收费，平台仅登记说明。\", \"source\": null, \"updatedAt\": null}}",
+      "expected": false,
+      "skillKey": "image-edit",
+      "skillVersion": "1.0.0"
+    },
+    {
+      "id": "entry-parent",
+      "kind": "manifest",
+      "json": "{\"schemaVersion\": 1, \"skillKey\": \"image-edit\", \"skillVersion\": \"1.0.0\", \"title\": \"图片编辑\", \"description\": \"按用户要求修改已授权的一张图片。\", \"runner\": \"provider-operation\", \"entrypoint\": \"../x\", \"parametersSchema\": {\"type\": \"object\", \"properties\": {}, \"required\": [], \"additionalProperties\": false, \"$schema\": \"https://json-schema.org/draft/2020-12/schema\"}, \"inputs\": {\"minItems\": 1, \"maxItems\": 1, \"acceptedMimeTypes\": [\"image/png\", \"image/jpeg\"]}, \"outputs\": {\"mimeTypes\": [\"image/png\"], \"multiple\": false, \"dataSchema\": null, \"artifactsRequired\": true}, \"requirements\": {\"providerAlias\": \"image\"}, \"costInfo\": {\"mode\": \"UNKNOWN\", \"amount\": null, \"currency\": null, \"unit\": \"image\", \"description\": \"由绑定服务商收费，平台仅登记说明。\", \"source\": null, \"updatedAt\": null}}",
+      "expected": false,
+      "skillKey": "image-edit",
+      "skillVersion": "1.0.0"
+    },
+    {
+      "id": "entry-nested-parent",
+      "kind": "manifest",
+      "json": "{\"schemaVersion\": 1, \"skillKey\": \"image-edit\", \"skillVersion\": \"1.0.0\", \"title\": \"图片编辑\", \"description\": \"按用户要求修改已授权的一张图片。\", \"runner\": \"provider-operation\", \"entrypoint\": \"scripts/../x\", \"parametersSchema\": {\"type\": \"object\", \"properties\": {}, \"required\": [], \"additionalProperties\": false, \"$schema\": \"https://json-schema.org/draft/2020-12/schema\"}, \"inputs\": {\"minItems\": 1, \"maxItems\": 1, \"acceptedMimeTypes\": [\"image/png\", \"image/jpeg\"]}, \"outputs\": {\"mimeTypes\": [\"image/png\"], \"multiple\": false, \"dataSchema\": null, \"artifactsRequired\": true}, \"requirements\": {\"providerAlias\": \"image\"}, \"costInfo\": {\"mode\": \"UNKNOWN\", \"amount\": null, \"currency\": null, \"unit\": \"image\", \"description\": \"由绑定服务商收费，平台仅登记说明。\", \"source\": null, \"updatedAt\": null}}",
+      "expected": false,
+      "skillKey": "image-edit",
+      "skillVersion": "1.0.0"
+    },
+    {
+      "id": "entry-backslash",
+      "kind": "manifest",
+      "json": "{\"schemaVersion\": 1, \"skillKey\": \"image-edit\", \"skillVersion\": \"1.0.0\", \"title\": \"图片编辑\", \"description\": \"按用户要求修改已授权的一张图片。\", \"runner\": \"provider-operation\", \"entrypoint\": \"scripts\\\\x\", \"parametersSchema\": {\"type\": \"object\", \"properties\": {}, \"required\": [], \"additionalProperties\": false, \"$schema\": \"https://json-schema.org/draft/2020-12/schema\"}, \"inputs\": {\"minItems\": 1, \"maxItems\": 1, \"acceptedMimeTypes\": [\"image/png\", \"image/jpeg\"]}, \"outputs\": {\"mimeTypes\": [\"image/png\"], \"multiple\": false, \"dataSchema\": null, \"artifactsRequired\": true}, \"requirements\": {\"providerAlias\": \"image\"}, \"costInfo\": {\"mode\": \"UNKNOWN\", \"amount\": null, \"currency\": null, \"unit\": \"image\", \"description\": \"由绑定服务商收费，平台仅登记说明。\", \"source\": null, \"updatedAt\": null}}",
+      "expected": false,
+      "skillKey": "image-edit",
+      "skillVersion": "1.0.0"
+    },
+    {
+      "id": "entry-drive",
+      "kind": "manifest",
+      "json": "{\"schemaVersion\": 1, \"skillKey\": \"image-edit\", \"skillVersion\": \"1.0.0\", \"title\": \"图片编辑\", \"description\": \"按用户要求修改已授权的一张图片。\", \"runner\": \"provider-operation\", \"entrypoint\": \"C:/x\", \"parametersSchema\": {\"type\": \"object\", \"properties\": {}, \"required\": [], \"additionalProperties\": false, \"$schema\": \"https://json-schema.org/draft/2020-12/schema\"}, \"inputs\": {\"minItems\": 1, \"maxItems\": 1, \"acceptedMimeTypes\": [\"image/png\", \"image/jpeg\"]}, \"outputs\": {\"mimeTypes\": [\"image/png\"], \"multiple\": false, \"dataSchema\": null, \"artifactsRequired\": true}, \"requirements\": {\"providerAlias\": \"image\"}, \"costInfo\": {\"mode\": \"UNKNOWN\", \"amount\": null, \"currency\": null, \"unit\": \"image\", \"description\": \"由绑定服务商收费，平台仅登记说明。\", \"source\": null, \"updatedAt\": null}}",
+      "expected": false,
+      "skillKey": "image-edit",
+      "skillVersion": "1.0.0"
+    },
+    {
+      "id": "entry-url",
+      "kind": "manifest",
+      "json": "{\"schemaVersion\": 1, \"skillKey\": \"image-edit\", \"skillVersion\": \"1.0.0\", \"title\": \"图片编辑\", \"description\": \"按用户要求修改已授权的一张图片。\", \"runner\": \"provider-operation\", \"entrypoint\": \"https://x/y\", \"parametersSchema\": {\"type\": \"object\", \"properties\": {}, \"required\": [], \"additionalProperties\": false, \"$schema\": \"https://json-schema.org/draft/2020-12/schema\"}, \"inputs\": {\"minItems\": 1, \"maxItems\": 1, \"acceptedMimeTypes\": [\"image/png\", \"image/jpeg\"]}, \"outputs\": {\"mimeTypes\": [\"image/png\"], \"multiple\": false, \"dataSchema\": null, \"artifactsRequired\": true}, \"requirements\": {\"providerAlias\": \"image\"}, \"costInfo\": {\"mode\": \"UNKNOWN\", \"amount\": null, \"currency\": null, \"unit\": \"image\", \"description\": \"由绑定服务商收费，平台仅登记说明。\", \"source\": null, \"updatedAt\": null}}",
+      "expected": false,
+      "skillKey": "image-edit",
+      "skillVersion": "1.0.0"
+    },
+    {
+      "id": "entry-encoded-parent",
+      "kind": "manifest",
+      "json": "{\"schemaVersion\": 1, \"skillKey\": \"image-edit\", \"skillVersion\": \"1.0.0\", \"title\": \"图片编辑\", \"description\": \"按用户要求修改已授权的一张图片。\", \"runner\": \"provider-operation\", \"entrypoint\": \"%2e%2e/x\", \"parametersSchema\": {\"type\": \"object\", \"properties\": {}, \"required\": [], \"additionalProperties\": false, \"$schema\": \"https://json-schema.org/draft/2020-12/schema\"}, \"inputs\": {\"minItems\": 1, \"maxItems\": 1, \"acceptedMimeTypes\": [\"image/png\", \"image/jpeg\"]}, \"outputs\": {\"mimeTypes\": [\"image/png\"], \"multiple\": false, \"dataSchema\": null, \"artifactsRequired\": true}, \"requirements\": {\"providerAlias\": \"image\"}, \"costInfo\": {\"mode\": \"UNKNOWN\", \"amount\": null, \"currency\": null, \"unit\": \"image\", \"description\": \"由绑定服务商收费，平台仅登记说明。\", \"source\": null, \"updatedAt\": null}}",
+      "expected": false,
+      "skillKey": "image-edit",
+      "skillVersion": "1.0.0"
+    },
+    {
+      "id": "entry-empty-segment",
+      "kind": "manifest",
+      "json": "{\"schemaVersion\": 1, \"skillKey\": \"image-edit\", \"skillVersion\": \"1.0.0\", \"title\": \"图片编辑\", \"description\": \"按用户要求修改已授权的一张图片。\", \"runner\": \"provider-operation\", \"entrypoint\": \"scripts//x\", \"parametersSchema\": {\"type\": \"object\", \"properties\": {}, \"required\": [], \"additionalProperties\": false, \"$schema\": \"https://json-schema.org/draft/2020-12/schema\"}, \"inputs\": {\"minItems\": 1, \"maxItems\": 1, \"acceptedMimeTypes\": [\"image/png\", \"image/jpeg\"]}, \"outputs\": {\"mimeTypes\": [\"image/png\"], \"multiple\": false, \"dataSchema\": null, \"artifactsRequired\": true}, \"requirements\": {\"providerAlias\": \"image\"}, \"costInfo\": {\"mode\": \"UNKNOWN\", \"amount\": null, \"currency\": null, \"unit\": \"image\", \"description\": \"由绑定服务商收费，平台仅登记说明。\", \"source\": null, \"updatedAt\": null}}",
+      "expected": false,
+      "skillKey": "image-edit",
+      "skillVersion": "1.0.0"
+    },
+    {
+      "id": "unknown-runner",
+      "kind": "manifest",
+      "json": "{\"schemaVersion\": 1, \"skillKey\": \"image-edit\", \"skillVersion\": \"1.0.0\", \"title\": \"图片编辑\", \"description\": \"按用户要求修改已授权的一张图片。\", \"runner\": \"shell\", \"entrypoint\": \"image-http.edit\", \"parametersSchema\": {\"type\": \"object\", \"properties\": {}, \"required\": [], \"additionalProperties\": false, \"$schema\": \"https://json-schema.org/draft/2020-12/schema\"}, \"inputs\": {\"minItems\": 1, \"maxItems\": 1, \"acceptedMimeTypes\": [\"image/png\", \"image/jpeg\"]}, \"outputs\": {\"mimeTypes\": [\"image/png\"], \"multiple\": false, \"dataSchema\": null, \"artifactsRequired\": true}, \"requirements\": {\"providerAlias\": \"image\"}, \"costInfo\": {\"mode\": \"UNKNOWN\", \"amount\": null, \"currency\": null, \"unit\": \"image\", \"description\": \"由绑定服务商收费，平台仅登记说明。\", \"source\": null, \"updatedAt\": null}}",
+      "expected": false,
+      "skillKey": "image-edit",
+      "skillVersion": "1.0.0"
+    },
+    {
+      "id": "source-count",
+      "kind": "manifest",
+      "json": "{\"schemaVersion\": 1, \"skillKey\": \"image-edit\", \"skillVersion\": \"1.0.0\", \"title\": \"图片编辑\", \"description\": \"按用户要求修改已授权的一张图片。\", \"runner\": \"provider-operation\", \"entrypoint\": \"image-http.edit\", \"parametersSchema\": {\"type\": \"object\", \"properties\": {}, \"required\": [], \"additionalProperties\": false, \"$schema\": \"https://json-schema.org/draft/2020-12/schema\"}, \"inputs\": {\"minItems\": 2, \"maxItems\": 1, \"acceptedMimeTypes\": [\"image/png\", \"image/jpeg\"]}, \"outputs\": {\"mimeTypes\": [\"image/png\"], \"multiple\": false, \"dataSchema\": null, \"artifactsRequired\": true}, \"requirements\": {\"providerAlias\": \"image\"}, \"costInfo\": {\"mode\": \"UNKNOWN\", \"amount\": null, \"currency\": null, \"unit\": \"image\", \"description\": \"由绑定服务商收费，平台仅登记说明。\", \"source\": null, \"updatedAt\": null}}",
+      "expected": false,
+      "skillKey": "image-edit",
+      "skillVersion": "1.0.0"
+    },
+    {
+      "id": "source-bound",
+      "kind": "manifest",
+      "json": "{\"schemaVersion\": 1, \"skillKey\": \"image-edit\", \"skillVersion\": \"1.0.0\", \"title\": \"图片编辑\", \"description\": \"按用户要求修改已授权的一张图片。\", \"runner\": \"provider-operation\", \"entrypoint\": \"image-http.edit\", \"parametersSchema\": {\"type\": \"object\", \"properties\": {}, \"required\": [], \"additionalProperties\": false, \"$schema\": \"https://json-schema.org/draft/2020-12/schema\"}, \"inputs\": {\"minItems\": 1, \"maxItems\": 33, \"acceptedMimeTypes\": [\"image/png\", \"image/jpeg\"]}, \"outputs\": {\"mimeTypes\": [\"image/png\"], \"multiple\": false, \"dataSchema\": null, \"artifactsRequired\": true}, \"requirements\": {\"providerAlias\": \"image\"}, \"costInfo\": {\"mode\": \"UNKNOWN\", \"amount\": null, \"currency\": null, \"unit\": \"image\", \"description\": \"由绑定服务商收费，平台仅登记说明。\", \"source\": null, \"updatedAt\": null}}",
+      "expected": false,
+      "skillKey": "image-edit",
+      "skillVersion": "1.0.0"
+    },
+    {
+      "id": "empty-output",
+      "kind": "manifest",
+      "json": "{\"schemaVersion\": 1, \"skillKey\": \"image-edit\", \"skillVersion\": \"1.0.0\", \"title\": \"图片编辑\", \"description\": \"按用户要求修改已授权的一张图片。\", \"runner\": \"provider-operation\", \"entrypoint\": \"image-http.edit\", \"parametersSchema\": {\"type\": \"object\", \"properties\": {}, \"required\": [], \"additionalProperties\": false, \"$schema\": \"https://json-schema.org/draft/2020-12/schema\"}, \"inputs\": {\"minItems\": 1, \"maxItems\": 1, \"acceptedMimeTypes\": [\"image/png\", \"image/jpeg\"]}, \"outputs\": {\"mimeTypes\": [], \"multiple\": false, \"dataSchema\": null, \"artifactsRequired\": false}, \"requirements\": {\"providerAlias\": \"image\"}, \"costInfo\": {\"mode\": \"UNKNOWN\", \"amount\": null, \"currency\": null, \"unit\": \"image\", \"description\": \"由绑定服务商收费，平台仅登记说明。\", \"source\": null, \"updatedAt\": null}}",
+      "expected": false,
+      "skillKey": "image-edit",
+      "skillVersion": "1.0.0"
+    },
+    {
+      "id": "remote-ref",
+      "kind": "manifest",
+      "json": "{\"schemaVersion\": 1, \"skillKey\": \"image-edit\", \"skillVersion\": \"1.0.0\", \"title\": \"图片编辑\", \"description\": \"按用户要求修改已授权的一张图片。\", \"runner\": \"provider-operation\", \"entrypoint\": \"image-http.edit\", \"parametersSchema\": {\"type\": \"object\", \"properties\": {}, \"required\": [], \"additionalProperties\": false, \"$schema\": \"https://json-schema.org/draft/2020-12/schema\", \"$ref\": \"https://example.invalid/schema\"}, \"inputs\": {\"minItems\": 1, \"maxItems\": 1, \"acceptedMimeTypes\": [\"image/png\", \"image/jpeg\"]}, \"outputs\": {\"mimeTypes\": [\"image/png\"], \"multiple\": false, \"dataSchema\": null, \"artifactsRequired\": true}, \"requirements\": {\"providerAlias\": \"image\"}, \"costInfo\": {\"mode\": \"UNKNOWN\", \"amount\": null, \"currency\": null, \"unit\": \"image\", \"description\": \"由绑定服务商收费，平台仅登记说明。\", \"source\": null, \"updatedAt\": null}}",
+      "expected": false,
+      "skillKey": "image-edit",
+      "skillVersion": "1.0.0"
+    },
+    {
+      "id": "file-ref",
+      "kind": "manifest",
+      "json": "{\"schemaVersion\": 1, \"skillKey\": \"image-edit\", \"skillVersion\": \"1.0.0\", \"title\": \"图片编辑\", \"description\": \"按用户要求修改已授权的一张图片。\", \"runner\": \"provider-operation\", \"entrypoint\": \"image-http.edit\", \"parametersSchema\": {\"type\": \"object\", \"properties\": {}, \"required\": [], \"additionalProperties\": false, \"$schema\": \"https://json-schema.org/draft/2020-12/schema\", \"$ref\": \"file:///etc/passwd\"}, \"inputs\": {\"minItems\": 1, \"maxItems\": 1, \"acceptedMimeTypes\": [\"image/png\", \"image/jpeg\"]}, \"outputs\": {\"mimeTypes\": [\"image/png\"], \"multiple\": false, \"dataSchema\": null, \"artifactsRequired\": true}, \"requirements\": {\"providerAlias\": \"image\"}, \"costInfo\": {\"mode\": \"UNKNOWN\", \"amount\": null, \"currency\": null, \"unit\": \"image\", \"description\": \"由绑定服务商收费，平台仅登记说明。\", \"source\": null, \"updatedAt\": null}}",
+      "expected": false,
+      "skillKey": "image-edit",
+      "skillVersion": "1.0.0"
+    },
+    {
+      "id": "wrong-draft",
+      "kind": "manifest",
+      "json": "{\"schemaVersion\": 1, \"skillKey\": \"image-edit\", \"skillVersion\": \"1.0.0\", \"title\": \"图片编辑\", \"description\": \"按用户要求修改已授权的一张图片。\", \"runner\": \"provider-operation\", \"entrypoint\": \"image-http.edit\", \"parametersSchema\": {\"type\": \"object\", \"properties\": {}, \"required\": [], \"additionalProperties\": false, \"$schema\": \"http://json-schema.org/draft-07/schema#\"}, \"inputs\": {\"minItems\": 1, \"maxItems\": 1, \"acceptedMimeTypes\": [\"image/png\", \"image/jpeg\"]}, \"outputs\": {\"mimeTypes\": [\"image/png\"], \"multiple\": false, \"dataSchema\": null, \"artifactsRequired\": true}, \"requirements\": {\"providerAlias\": \"image\"}, \"costInfo\": {\"mode\": \"UNKNOWN\", \"amount\": null, \"currency\": null, \"unit\": \"image\", \"description\": \"由绑定服务商收费，平台仅登记说明。\", \"source\": null, \"updatedAt\": null}}",
+      "expected": false,
+      "skillKey": "image-edit",
+      "skillVersion": "1.0.0"
+    },
+    {
+      "id": "missing-draft",
+      "kind": "manifest",
+      "json": "{\"schemaVersion\": 1, \"skillKey\": \"image-edit\", \"skillVersion\": \"1.0.0\", \"title\": \"图片编辑\", \"description\": \"按用户要求修改已授权的一张图片。\", \"runner\": \"provider-operation\", \"entrypoint\": \"image-http.edit\", \"parametersSchema\": {\"type\": \"object\", \"properties\": {}, \"required\": [], \"additionalProperties\": false}, \"inputs\": {\"minItems\": 1, \"maxItems\": 1, \"acceptedMimeTypes\": [\"image/png\", \"image/jpeg\"]}, \"outputs\": {\"mimeTypes\": [\"image/png\"], \"multiple\": false, \"dataSchema\": null, \"artifactsRequired\": true}, \"requirements\": {\"providerAlias\": \"image\"}, \"costInfo\": {\"mode\": \"UNKNOWN\", \"amount\": null, \"currency\": null, \"unit\": \"image\", \"description\": \"由绑定服务商收费，平台仅登记说明。\", \"source\": null, \"updatedAt\": null}}",
+      "expected": false,
+      "skillKey": "image-edit",
+      "skillVersion": "1.0.0"
+    },
+    {
+      "id": "invalid-schema",
+      "kind": "manifest",
+      "json": "{\"schemaVersion\": 1, \"skillKey\": \"image-edit\", \"skillVersion\": \"1.0.0\", \"title\": \"图片编辑\", \"description\": \"按用户要求修改已授权的一张图片。\", \"runner\": \"provider-operation\", \"entrypoint\": \"image-http.edit\", \"parametersSchema\": {\"type\": \"not-json-type\", \"properties\": {}, \"required\": [], \"additionalProperties\": false, \"$schema\": \"https://json-schema.org/draft/2020-12/schema\"}, \"inputs\": {\"minItems\": 1, \"maxItems\": 1, \"acceptedMimeTypes\": [\"image/png\", \"image/jpeg\"]}, \"outputs\": {\"mimeTypes\": [\"image/png\"], \"multiple\": false, \"dataSchema\": null, \"artifactsRequired\": true}, \"requirements\": {\"providerAlias\": \"image\"}, \"costInfo\": {\"mode\": \"UNKNOWN\", \"amount\": null, \"currency\": null, \"unit\": \"image\", \"description\": \"由绑定服务商收费，平台仅登记说明。\", \"source\": null, \"updatedAt\": null}}",
+      "expected": false,
+      "skillKey": "image-edit",
+      "skillVersion": "1.0.0"
+    },
+    {
+      "id": "unknown-schema-key",
+      "kind": "manifest",
+      "json": "{\"schemaVersion\": 1, \"skillKey\": \"image-edit\", \"skillVersion\": \"1.0.0\", \"title\": \"图片编辑\", \"description\": \"按用户要求修改已授权的一张图片。\", \"runner\": \"provider-operation\", \"entrypoint\": \"image-http.edit\", \"parametersSchema\": {\"type\": \"object\", \"properties\": {}, \"required\": [], \"additionalProperties\": false, \"$schema\": \"https://json-schema.org/draft/2020-12/schema\", \"cyfParams\": true}, \"inputs\": {\"minItems\": 1, \"maxItems\": 1, \"acceptedMimeTypes\": [\"image/png\", \"image/jpeg\"]}, \"outputs\": {\"mimeTypes\": [\"image/png\"], \"multiple\": false, \"dataSchema\": null, \"artifactsRequired\": true}, \"requirements\": {\"providerAlias\": \"image\"}, \"costInfo\": {\"mode\": \"UNKNOWN\", \"amount\": null, \"currency\": null, \"unit\": \"image\", \"description\": \"由绑定服务商收费，平台仅登记说明。\", \"source\": null, \"updatedAt\": null}}",
+      "expected": false,
+      "skillKey": "image-edit",
+      "skillVersion": "1.0.0"
+    },
+    {
+      "id": "unresolved-ref",
+      "kind": "manifest",
+      "json": "{\"schemaVersion\": 1, \"skillKey\": \"image-edit\", \"skillVersion\": \"1.0.0\", \"title\": \"图片编辑\", \"description\": \"按用户要求修改已授权的一张图片。\", \"runner\": \"provider-operation\", \"entrypoint\": \"image-http.edit\", \"parametersSchema\": {\"type\": \"object\", \"properties\": {}, \"required\": [], \"additionalProperties\": false, \"$schema\": \"https://json-schema.org/draft/2020-12/schema\", \"$ref\": \"#/$defs/missing\"}, \"inputs\": {\"minItems\": 1, \"maxItems\": 1, \"acceptedMimeTypes\": [\"image/png\", \"image/jpeg\"]}, \"outputs\": {\"mimeTypes\": [\"image/png\"], \"multiple\": false, \"dataSchema\": null, \"artifactsRequired\": true}, \"requirements\": {\"providerAlias\": \"image\"}, \"costInfo\": {\"mode\": \"UNKNOWN\", \"amount\": null, \"currency\": null, \"unit\": \"image\", \"description\": \"由绑定服务商收费，平台仅登记说明。\", \"source\": null, \"updatedAt\": null}}",
+      "expected": false,
+      "skillKey": "image-edit",
+      "skillVersion": "1.0.0"
+    },
+    {
+      "id": "duplicate-key",
+      "kind": "manifest",
+      "json": "{\"schemaVersion\": 1, \"schemaVersion\": 1, \"skillKey\": \"image-edit\", \"skillVersion\": \"1.0.0\", \"title\": \"\\u56fe\\u7247\\u7f16\\u8f91\", \"description\": \"\\u6309\\u7528\\u6237\\u8981\\u6c42\\u4fee\\u6539\\u5df2\\u6388\\u6743\\u7684\\u4e00\\u5f20\\u56fe\\u7247\\u3002\", \"runner\": \"provider-operation\", \"entrypoint\": \"image-http.edit\", \"parametersSchema\": {\"type\": \"object\", \"properties\": {}, \"required\": [], \"additionalProperties\": false, \"$schema\": \"https://json-schema.org/draft/2020-12/schema\"}, \"inputs\": {\"minItems\": 1, \"maxItems\": 1, \"acceptedMimeTypes\": [\"image/png\", \"image/jpeg\"]}, \"outputs\": {\"mimeTypes\": [\"image/png\"], \"multiple\": false, \"dataSchema\": null, \"artifactsRequired\": true}, \"requirements\": {\"providerAlias\": \"image\"}, \"costInfo\": {\"mode\": \"UNKNOWN\", \"amount\": null, \"currency\": null, \"unit\": \"image\", \"description\": \"\\u7531\\u7ed1\\u5b9a\\u670d\\u52a1\\u5546\\u6536\\u8d39\\uff0c\\u5e73\\u53f0\\u4ec5\\u767b\\u8bb0\\u8bf4\\u660e\\u3002\", \"source\": null, \"updatedAt\": null}}",
+      "expected": false,
+      "skillKey": "image-edit",
+      "skillVersion": "1.0.0"
+    },
+    {
+      "id": "trailing-json",
+      "kind": "manifest",
+      "json": "{\"schemaVersion\": 1, \"skillKey\": \"image-edit\", \"skillVersion\": \"1.0.0\", \"title\": \"\\u56fe\\u7247\\u7f16\\u8f91\", \"description\": \"\\u6309\\u7528\\u6237\\u8981\\u6c42\\u4fee\\u6539\\u5df2\\u6388\\u6743\\u7684\\u4e00\\u5f20\\u56fe\\u7247\\u3002\", \"runner\": \"provider-operation\", \"entrypoint\": \"image-http.edit\", \"parametersSchema\": {\"type\": \"object\", \"properties\": {}, \"required\": [], \"additionalProperties\": false, \"$schema\": \"https://json-schema.org/draft/2020-12/schema\"}, \"inputs\": {\"minItems\": 1, \"maxItems\": 1, \"acceptedMimeTypes\": [\"image/png\", \"image/jpeg\"]}, \"outputs\": {\"mimeTypes\": [\"image/png\"], \"multiple\": false, \"dataSchema\": null, \"artifactsRequired\": true}, \"requirements\": {\"providerAlias\": \"image\"}, \"costInfo\": {\"mode\": \"UNKNOWN\", \"amount\": null, \"currency\": null, \"unit\": \"image\", \"description\": \"\\u7531\\u7ed1\\u5b9a\\u670d\\u52a1\\u5546\\u6536\\u8d39\\uff0c\\u5e73\\u53f0\\u4ec5\\u767b\\u8bb0\\u8bf4\\u660e\\u3002\", \"source\": null, \"updatedAt\": null}} {}",
+      "expected": false,
+      "skillKey": "image-edit",
+      "skillVersion": "1.0.0"
+    },
+    {
+      "id": "entry-newline",
+      "kind": "manifest",
+      "json": "{\"schemaVersion\": 1, \"skillKey\": \"image-edit\", \"skillVersion\": \"1.0.0\", \"title\": \"图片编辑\", \"description\": \"按用户要求修改已授权的一张图片。\", \"runner\": \"provider-operation\", \"entrypoint\": \"image-http.edit\\n\", \"parametersSchema\": {\"type\": \"object\", \"properties\": {}, \"required\": [], \"additionalProperties\": false, \"$schema\": \"https://json-schema.org/draft/2020-12/schema\"}, \"inputs\": {\"minItems\": 1, \"maxItems\": 1, \"acceptedMimeTypes\": [\"image/png\", \"image/jpeg\"]}, \"outputs\": {\"mimeTypes\": [\"image/png\"], \"multiple\": false, \"dataSchema\": null, \"artifactsRequired\": true}, \"requirements\": {\"providerAlias\": \"image\"}, \"costInfo\": {\"mode\": \"UNKNOWN\", \"amount\": null, \"currency\": null, \"unit\": \"image\", \"description\": \"由绑定服务商收费，平台仅登记说明。\", \"source\": null, \"updatedAt\": null}}",
+      "expected": false,
+      "skillKey": "image-edit",
+      "skillVersion": "1.0.0"
+    },
+    {
+      "id": "key-newline",
+      "kind": "manifest",
+      "json": "{\"schemaVersion\": 1, \"skillKey\": \"image-edit\\n\", \"skillVersion\": \"1.0.0\", \"title\": \"图片编辑\", \"description\": \"按用户要求修改已授权的一张图片。\", \"runner\": \"provider-operation\", \"entrypoint\": \"image-http.edit\", \"parametersSchema\": {\"type\": \"object\", \"properties\": {}, \"required\": [], \"additionalProperties\": false, \"$schema\": \"https://json-schema.org/draft/2020-12/schema\"}, \"inputs\": {\"minItems\": 1, \"maxItems\": 1, \"acceptedMimeTypes\": [\"image/png\", \"image/jpeg\"]}, \"outputs\": {\"mimeTypes\": [\"image/png\"], \"multiple\": false, \"dataSchema\": null, \"artifactsRequired\": true}, \"requirements\": {\"providerAlias\": \"image\"}, \"costInfo\": {\"mode\": \"UNKNOWN\", \"amount\": null, \"currency\": null, \"unit\": \"image\", \"description\": \"由绑定服务商收费，平台仅登记说明。\", \"source\": null, \"updatedAt\": null}}",
+      "expected": false,
+      "skillKey": "image-edit",
+      "skillVersion": "1.0.0"
+    },
+    {
+      "id": "utf8-bom",
+      "kind": "manifest",
+      "json": "﻿{\"schemaVersion\": 1, \"skillKey\": \"image-edit\", \"skillVersion\": \"1.0.0\", \"title\": \"\\u56fe\\u7247\\u7f16\\u8f91\", \"description\": \"\\u6309\\u7528\\u6237\\u8981\\u6c42\\u4fee\\u6539\\u5df2\\u6388\\u6743\\u7684\\u4e00\\u5f20\\u56fe\\u7247\\u3002\", \"runner\": \"provider-operation\", \"entrypoint\": \"image-http.edit\", \"parametersSchema\": {\"type\": \"object\", \"properties\": {}, \"required\": [], \"additionalProperties\": false, \"$schema\": \"https://json-schema.org/draft/2020-12/schema\"}, \"inputs\": {\"minItems\": 1, \"maxItems\": 1, \"acceptedMimeTypes\": [\"image/png\", \"image/jpeg\"]}, \"outputs\": {\"mimeTypes\": [\"image/png\"], \"multiple\": false, \"dataSchema\": null, \"artifactsRequired\": true}, \"requirements\": {\"providerAlias\": \"image\"}, \"costInfo\": {\"mode\": \"UNKNOWN\", \"amount\": null, \"currency\": null, \"unit\": \"image\", \"description\": \"\\u7531\\u7ed1\\u5b9a\\u670d\\u52a1\\u5546\\u6536\\u8d39\\uff0c\\u5e73\\u53f0\\u4ec5\\u767b\\u8bb0\\u8bf4\\u660e\\u3002\", \"source\": null, \"updatedAt\": null}}",
+      "expected": false,
+      "skillKey": "image-edit",
+      "skillVersion": "1.0.0"
+    },
+    {
+      "id": "data-only",
+      "kind": "manifest",
+      "json": "{\"schemaVersion\": 1, \"skillKey\": \"image-edit\", \"skillVersion\": \"1.0.0\", \"title\": \"图片编辑\", \"description\": \"按用户要求修改已授权的一张图片。\", \"runner\": \"provider-operation\", \"entrypoint\": \"image-http.edit\", \"parametersSchema\": {\"type\": \"object\", \"properties\": {}, \"required\": [], \"additionalProperties\": false, \"$schema\": \"https://json-schema.org/draft/2020-12/schema\"}, \"inputs\": {\"minItems\": 1, \"maxItems\": 1, \"acceptedMimeTypes\": [\"image/png\", \"image/jpeg\"]}, \"outputs\": {\"mimeTypes\": [], \"multiple\": false, \"dataSchema\": {\"$schema\": \"https://json-schema.org/draft/2020-12/schema\", \"type\": \"object\", \"properties\": {\"summary\": {\"type\": \"string\"}}, \"required\": [\"summary\"], \"additionalProperties\": false}, \"artifactsRequired\": false}, \"requirements\": {\"providerAlias\": \"image\"}, \"costInfo\": {\"mode\": \"UNKNOWN\", \"amount\": null, \"currency\": null, \"unit\": \"image\", \"description\": \"由绑定服务商收费，平台仅登记说明。\", \"source\": null, \"updatedAt\": null}}",
+      "expected": true,
+      "skillKey": "image-edit",
+      "skillVersion": "1.0.0"
+    },
+    {
+      "id": "valid-chinese",
+      "kind": "parameters",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "mode": {
+            "enum": [
+              "a",
+              "b"
+            ]
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "name",
+          "count"
+        ],
+        "additionalProperties": false
+      },
+      "json": "{\"name\": \"图片资料\", \"count\": 2}",
+      "expected": true
+    },
+    {
+      "id": "missing-required",
+      "kind": "parameters",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "mode": {
+            "enum": [
+              "a",
+              "b"
+            ]
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "name",
+          "count"
+        ],
+        "additionalProperties": false
+      },
+      "json": "{\"name\": \"x\"}",
+      "expected": false
+    },
+    {
+      "id": "no-coercion",
+      "kind": "parameters",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "mode": {
+            "enum": [
+              "a",
+              "b"
+            ]
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "name",
+          "count"
+        ],
+        "additionalProperties": false
+      },
+      "json": "{\"name\": \"x\", \"count\": \"2\"}",
+      "expected": false
+    },
+    {
+      "id": "extra-not-deleted",
+      "kind": "parameters",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "mode": {
+            "enum": [
+              "a",
+              "b"
+            ]
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "name",
+          "count"
+        ],
+        "additionalProperties": false
+      },
+      "json": "{\"name\": \"x\", \"count\": 2, \"surprise\": 1}",
+      "expected": false
+    },
+    {
+      "id": "fractional-integer",
+      "kind": "parameters",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "mode": {
+            "enum": [
+              "a",
+              "b"
+            ]
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "name",
+          "count"
+        ],
+        "additionalProperties": false
+      },
+      "json": "{\"name\": \"x\", \"count\": 2.5}",
+      "expected": false
+    },
+    {
+      "id": "safe-integer",
+      "kind": "parameters",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "mode": {
+            "enum": [
+              "a",
+              "b"
+            ]
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "name",
+          "count"
+        ],
+        "additionalProperties": false
+      },
+      "json": "{\"name\": \"x\", \"count\": 9007199254740991}",
+      "expected": true
+    },
+    {
+      "id": "unsafe-integer",
+      "kind": "parameters",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "mode": {
+            "enum": [
+              "a",
+              "b"
+            ]
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "name",
+          "count"
+        ],
+        "additionalProperties": false
+      },
+      "json": "{\"name\": \"x\", \"count\": 9007199254740992}",
+      "expected": false
+    },
+    {
+      "id": "unsafe-rounded",
+      "kind": "parameters",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "mode": {
+            "enum": [
+              "a",
+              "b"
+            ]
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "name",
+          "count"
+        ],
+        "additionalProperties": false
+      },
+      "json": "{\"name\":\"x\",\"count\":9007199254740993}",
+      "expected": false
+    },
+    {
+      "id": "duplicate-parameter",
+      "kind": "parameters",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "mode": {
+            "enum": [
+              "a",
+              "b"
+            ]
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "name",
+          "count"
+        ],
+        "additionalProperties": false
+      },
+      "json": "{\"name\":\"x\",\"count\":2,\"count\":3}",
+      "expected": false
+    },
+    {
+      "id": "empty-name",
+      "kind": "parameters",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "mode": {
+            "enum": [
+              "a",
+              "b"
+            ]
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "name",
+          "count"
+        ],
+        "additionalProperties": false
+      },
+      "json": "{\"name\": \"\", \"count\": 1}",
+      "expected": false
+    },
+    {
+      "id": "unicode-codepoints",
+      "kind": "parameters",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "mode": {
+            "enum": [
+              "a",
+              "b"
+            ]
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "name",
+          "count"
+        ],
+        "additionalProperties": false
+      },
+      "json": "{\"name\": \"😀\", \"count\": 1}",
+      "expected": true
+    },
+    {
+      "id": "enum-rejected",
+      "kind": "parameters",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "mode": {
+            "enum": [
+              "a",
+              "b"
+            ]
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "name",
+          "count"
+        ],
+        "additionalProperties": false
+      },
+      "json": "{\"name\": \"x\", \"count\": 1, \"mode\": \"c\"}",
+      "expected": false
+    },
+    {
+      "id": "unique-items",
+      "kind": "parameters",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "mode": {
+            "enum": [
+              "a",
+              "b"
+            ]
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "name",
+          "count"
+        ],
+        "additionalProperties": false
+      },
+      "json": "{\"name\": \"x\", \"count\": 1, \"tags\": [\"a\", \"a\"]}",
+      "expected": false
+    },
+    {
+      "id": "no-default-insertion",
+      "kind": "parameters",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "default": "x"
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "mode": {
+            "enum": [
+              "a",
+              "b"
+            ]
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "name",
+          "count"
+        ],
+        "additionalProperties": false
+      },
+      "json": "{\"count\": 1}",
+      "expected": false
+    },
+    {
+      "id": "defs-valid",
+      "kind": "parameters",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "code": {
+            "$ref": "#/$defs/code"
+          }
+        },
+        "$defs": {
+          "code": {
+            "type": "string",
+            "const": "ok"
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "additionalProperties": false
+      },
+      "json": "{\"code\": \"ok\"}",
+      "expected": true
+    },
+    {
+      "id": "defs-invalid",
+      "kind": "parameters",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "code": {
+            "$ref": "#/$defs/code"
+          }
+        },
+        "$defs": {
+          "code": {
+            "type": "string",
+            "const": "ok"
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "additionalProperties": false
+      },
+      "json": "{\"code\": \"bad\"}",
+      "expected": false
+    },
+    {
+      "id": "unpaired-unicode",
+      "kind": "parameters",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "mode": {
+            "enum": [
+              "a",
+              "b"
+            ]
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "name",
+          "count"
+        ],
+        "additionalProperties": false
+      },
+      "json": "{\"name\":\"\\ud800\",\"count\":1}",
+      "expected": false
+    },
+    {
+      "id": "format-annotation",
+      "kind": "parameters",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "format": "email"
+          }
+        }
+      },
+      "json": "{\"name\": \"not-an-email\"}",
+      "expected": true
+    },
+    {
+      "id": "const-data-ref-is-not-schema",
+      "kind": "parameters",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "const": {
+          "$ref": "https://example.invalid/literal"
+        }
+      },
+      "json": "{\"$ref\": \"https://example.invalid/literal\"}",
+      "expected": true
+    },
+    {
+      "id": "one-of",
+      "kind": "parameters",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "oneOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      },
+      "json": "3",
+      "expected": true
+    },
+    {
+      "id": "one-of-reject",
+      "kind": "parameters",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "oneOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      },
+      "json": "true",
+      "expected": false
+    },
+    {
+      "id": "dependent-required",
+      "kind": "parameters",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "dependentRequired": {
+          "a": [
+            "b"
+          ]
+        }
+      },
+      "json": "{\"a\": 1}",
+      "expected": false
+    },
+    {
+      "id": "unevaluated-properties",
+      "kind": "parameters",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "allOf": [
+          {
+            "properties": {
+              "a": {
+                "type": "integer"
+              }
+            }
+          }
+        ],
+        "unevaluatedProperties": false
+      },
+      "json": "{\"a\": 1, \"b\": 2}",
+      "expected": false
+    }
+  ]
+}

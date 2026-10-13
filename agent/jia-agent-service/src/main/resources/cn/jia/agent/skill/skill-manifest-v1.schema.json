@@ -1,0 +1,132 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "skillKey",
+    "skillVersion",
+    "title",
+    "description",
+    "runner",
+    "entrypoint",
+    "parametersSchema",
+    "inputs",
+    "outputs",
+    "requirements"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "skillKey": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,63}(?![\\s\\S])"
+    },
+    "skillVersion": {
+      "type": "string",
+      "pattern": "^[0-9A-Za-z][0-9A-Za-z.+-]{0,63}(?![\\s\\S])"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1
+    },
+    "runner": {
+      "enum": [
+        "provider-operation",
+        "local-script",
+        "native-model"
+      ]
+    },
+    "entrypoint": {
+      "type": "string",
+      "minLength": 1
+    },
+    "parametersSchema": {
+      "type": "object"
+    },
+    "inputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "minItems",
+        "maxItems",
+        "acceptedMimeTypes"
+      ],
+      "properties": {
+        "minItems": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 32
+        },
+        "maxItems": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 32
+        },
+        "acceptedMimeTypes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9!#$&^_.+-]*/[a-z0-9][a-z0-9!#$&^_.+-]*(?![\\s\\S])"
+          }
+        }
+      }
+    },
+    "outputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dataSchema",
+        "mimeTypes",
+        "multiple",
+        "artifactsRequired"
+      ],
+      "properties": {
+        "dataSchema": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "mimeTypes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9!#$&^_.+-]*/[a-z0-9][a-z0-9!#$&^_.+-]*(?![\\s\\S])"
+          }
+        },
+        "multiple": {
+          "type": "boolean"
+        },
+        "artifactsRequired": {
+          "type": "boolean"
+        }
+      }
+    },
+    "requirements": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "providerAlias": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,63}(?![\\s\\S])"
+        },
+        "tools": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}(?![\\s\\S])"
+          }
+        }
+      }
+    }
+  }
+}
