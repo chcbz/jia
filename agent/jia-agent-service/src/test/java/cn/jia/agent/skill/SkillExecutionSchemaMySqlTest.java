@@ -26,6 +26,7 @@ public class SkillExecutionSchemaMySqlTest {
         new AgentTaskProviderCostConsentSchemaInitializer(jdbc).afterPropertiesSet();
         new ControlledImageExecutionSchemaInitializer(jdbc).afterPropertiesSet();
         new ControlledImageFollowupV3SchemaInitializer(jdbc).afterPropertiesSet();
+        apply("db/economy-v0-skill-application.sql");
         apply("db/agent-skill-execution-v1.sql");apply("db/agent-personal-workspace-skill-v1.sql");
     }
     void apply(String name) throws Exception {String sql=new ClassPathResource(name).getContentAsString(StandardCharsets.UTF_8).lines().filter(l->!l.stripLeading().startsWith("--")).reduce("",(a,b)->a+b+"\n");for(String s:sql.split(";"))if(!s.isBlank())jdbc.execute(s);}
@@ -56,6 +57,12 @@ public class SkillExecutionSchemaMySqlTest {
         assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM agent_skill_execution",Integer.class));attachment("half");detector().afterPropertiesSet();
         jdbc.execute("ALTER TABLE agent_skill_execution DROP CHECK chk_skill_execution_version,ADD CONSTRAINT chk_skill_execution_version CHECK (version>=-1)");
         assertThrows(IllegalStateException.class,()->detector().afterPropertiesSet());
+    }
+    @Test void receiptScopeIndexIsExplicitAndDriftIsNotRepaired() {
+        detector().afterPropertiesSet();
+        jdbc.execute("ALTER TABLE economy_skill_result_receipt DROP INDEX idx_skill_receipt_installation_scope");
+        assertThrows(IllegalStateException.class,()->detector().afterPropertiesSet());
+        assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema=DATABASE() AND table_name='economy_skill_result_receipt' AND index_name='idx_skill_receipt_installation_scope'",Integer.class));
     }
     @Test void realCasAndTransactionPairRollback() {
         var tx=new TransactionTemplate(new DataSourceTransactionManager(source));

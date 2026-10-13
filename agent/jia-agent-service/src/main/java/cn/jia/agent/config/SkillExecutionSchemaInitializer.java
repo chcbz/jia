@@ -27,7 +27,7 @@ public final class SkillExecutionSchemaInitializer implements InitializingBean {
         }catch(java.sql.SQLException failure){throw new IllegalStateException("Skill schema discovery unavailable",failure);}
         var tables=jdbc.queryForList("SELECT engine,table_collation FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='agent_skill_execution'");
         if(tables.size()!=1||!"InnoDB".equals(text(tables.getFirst(),"engine"))||!"utf8mb4_0900_bin".equals(text(tables.getFirst(),"table_collation")))throw new IllegalStateException("Explicit skill schema installation missing or drifted");
-        validateColumns();validateIndexes();
+        validateColumns();validateIndexes();validateReceiptIndex();
         validateChecks("agent_skill_execution",attachmentChecks(),true);
         validateChecks("agent_personal_workspace_execution",Map.of("chk_pwex_output_mime",MIME_CATALOG_CHECK,"chk_pwex_state",STATE_CATALOG_CHECK,"chk_pwex_execution_protocol",protocolCatalogCheck()),false);
         var mime=jdbc.queryForList("SELECT column_type,is_nullable,column_default FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='agent_personal_workspace_execution' AND column_name='output_content_mime_type'");
@@ -58,6 +58,12 @@ public final class SkillExecutionSchemaInitializer implements InitializingBean {
         var expected=Map.of("PRIMARY",List.of("id"),"uk_skill_execution_scope",List.of("tenant_id","client_id","owner_jiacn","execution_id"));
         if(rows.size()!=5)throw new IllegalStateException("Skill index partial/unknown");
         for(var entry:expected.entrySet()) {var found=rows.stream().filter(r->entry.getKey().equals(text(r,"index_name"))).toList();if(found.size()!=entry.getValue().size())throw new IllegalStateException("Skill index drift");for(int i=0;i<found.size();i++){var row=found.get(i);if(!"0".equals(text(row,"non_unique"))||!Integer.toString(i+1).equals(text(row,"seq_in_index"))||!entry.getValue().get(i).equals(text(row,"column_name"))||value(row,"sub_part")!=null||!"BTREE".equals(text(row,"index_type")))throw new IllegalStateException("Skill index drift");}}
+    }
+    private void validateReceiptIndex() {
+        var rows=jdbc.queryForList("SELECT non_unique,seq_in_index,column_name,sub_part,index_type FROM information_schema.statistics WHERE table_schema=DATABASE() AND table_name='economy_skill_result_receipt' AND index_name='idx_skill_receipt_installation_scope' ORDER BY seq_in_index");
+        var expected=List.of("tenant_id","client_id","installation_id","outcome");
+        if(rows.size()!=expected.size())throw new IllegalStateException("Skill receipt installation scope index missing/drifted");
+        for(int i=0;i<rows.size();i++) {var row=rows.get(i);if(!"1".equals(text(row,"non_unique"))||!Integer.toString(i+1).equals(text(row,"seq_in_index"))||!expected.get(i).equals(text(row,"column_name"))||value(row,"sub_part")!=null||!"BTREE".equals(text(row,"index_type")))throw new IllegalStateException("Skill receipt installation scope index drift");}
     }
     static Map<String,String> attachmentChecks() {return Map.of(
         "chk_skill_execution_scope","((tenant_id = '0') and (owner_jiacn <> '0'))",

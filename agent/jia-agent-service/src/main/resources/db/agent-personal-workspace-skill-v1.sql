@@ -21,3 +21,7 @@ ALTER TABLE agent_personal_workspace_execution
     OR (execution_protocol_version=4 AND execution_mode='CONVERSATION' AND permitted_operation='EXECUTE_SKILL'
       AND controlled_consent_id IS NULL AND operation_grant_id IS NULL AND runtime_input_snapshot_digest IS NOT NULL
       AND runtime_input_snapshot_digest REGEXP '^[0-9a-f]{64}$'));
+
+-- Installation-scoped authority reads use this existing receipt table, not a full history scan.
+ALTER TABLE economy_skill_result_receipt
+  ADD INDEX idx_skill_receipt_installation_scope (tenant_id,client_id,installation_id,outcome);
