@@ -27,4 +27,9 @@ class EconomySkillApplicationSchemaContractTest {
         assertEquals(6,triggers.size());
         assertTrue(triggers.containsKey("trg_skill_app_result_no_update"));assertTrue(triggers.containsKey("trg_skill_app_binding_no_delete"));
     }
+    @Test void exactLatestReceiptIndexIsDeclaredWithoutRewritingHistoricalDdl() {
+        var index=EconomySkillApplicationSchemaInitializer.expectedTables().get("economy_skill_result_receipt").indexes().get("idx_skill_receipt_installation_scope");
+        assertFalse(index.unique());assertEquals(java.util.List.of("tenant_id","client_id","installation_id","outcome"),index.columns());
+        assertFalse(EconomySkillApplicationSchemaInitializer.tableDdlStatements().stream().anyMatch(sql->sql.contains("idx_skill_receipt_installation_scope")));
+    }
 }
