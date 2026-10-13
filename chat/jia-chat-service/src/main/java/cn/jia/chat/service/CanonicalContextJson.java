@@ -4,6 +4,8 @@ import cn.jia.core.util.JsonUtil;
 
 import java.math.BigDecimal;
 import java.math.BigInteger;
+import java.math.MathContext;
+import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -19,6 +21,24 @@ public final class CanonicalContextJson {
         return out.toString();
     }
 
+    private static void requireSafeInteger(BigInteger integer) {
+        if (integer.abs().compareTo(BigInteger.valueOf(9007199254740991L)) > 0)
+            throw new IllegalArgumentException("Canonical context forbids unsafe integers; use strings");
+    }
+
+    // Search significant digits against the exact binary value, selecting the nearest decimal
+    // (ties to even). Unlike Java/Jackson formatting this permits 5e-324 for the minimum subnormal.
+    private static BigDecimal shortestDecimal(double value) {
+        if (value == 0) return BigDecimal.ZERO;
+        BigDecimal exact = new BigDecimal(value);
+        for (int precision = 1; precision <= 17; precision++) {
+            BigDecimal rounded = exact.round(new MathContext(precision, RoundingMode.HALF_EVEN));
+            if (Double.doubleToLongBits(rounded.doubleValue()) == Double.doubleToLongBits(value))
+                return rounded.stripTrailingZeros();
+        }
+        throw new IllegalArgumentException("No portable decimal representation");
+    }
+
     private static void append(StringBuilder out, Object value) {
         if (value == null) {
             out.append("null");
@@ -28,14 +48,18 @@ public final class CanonicalContextJson {
             out.append(bool);
         } else if (value instanceof Byte || value instanceof Short || value instanceof Integer
                 || value instanceof Long || value instanceof BigInteger) {
-            out.append(value);
+            BigInteger integer = new BigInteger(value.toString());
+            requireSafeInteger(integer);
+            out.append(integer);
         } else if (value instanceof BigDecimal decimal && decimal.scale() <= 0) {
-            out.append(decimal.toBigIntegerExact());
+            BigInteger integer = decimal.toBigIntegerExact();
+            requireSafeInteger(integer);
+            out.append(integer);
         } else if (value instanceof Number number) {
             double n=number.doubleValue();
             if(!Double.isFinite(n)||(n==Math.rint(n)&&Math.abs(n)>9007199254740991d))
                 throw new IllegalArgumentException("Canonical context forbids non-portable numbers");
-            BigDecimal decimal=new BigDecimal(tools.jackson.core.io.schubfach.DoubleToDecimal.toString(n)).stripTrailingZeros();
+            BigDecimal decimal=shortestDecimal(n);
             if(decimal.signum()==0)out.append('0');
             else if(Math.abs(n)>=1e-6&&Math.abs(n)<1e21)out.append(decimal.toPlainString());
             else {String text=decimal.toString().replace("E","e");out.append(text);}

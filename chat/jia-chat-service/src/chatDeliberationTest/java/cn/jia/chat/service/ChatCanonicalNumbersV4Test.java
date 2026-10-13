@@ -12,6 +12,6 @@ class ChatCanonicalNumbersV4Test {
                 assertEquals(row.get("canonical"),actual,row.toString());assertEquals(row.get("sha256"),ChatSkillSourceAccessService.sha(actual.getBytes(StandardCharsets.UTF_8)));}
         }
         assertEquals("0",CanonicalContextJson.write(-0.0));
-        for(var invalid:List.of(Double.NaN,Double.POSITIVE_INFINITY,9007199254740992d))assertThrows(IllegalArgumentException.class,()->CanonicalContextJson.write(invalid));
+        for(var invalid:List.of(Double.NaN,Double.POSITIVE_INFINITY,9007199254740992d,9007199254740992L,new java.math.BigInteger("9007199254740992")))assertThrows(IllegalArgumentException.class,()->CanonicalContextJson.write(invalid));
     }
 }
