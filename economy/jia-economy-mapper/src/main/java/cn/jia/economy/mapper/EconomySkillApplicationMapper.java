@@ -16,6 +16,15 @@ public interface EconomySkillApplicationMapper {
     SkillAgentVersionEntity lockVersion(@Param("tenantId") String t,@Param("clientId") String c,@Param("agentId") String a);
     @Update("UPDATE economy_skill_agent_version SET version=version+1,source_hash=#{hash} WHERE " + S + " AND agent_id=#{agentId} AND OCTET_LENGTH(agent_id)=OCTET_LENGTH(#{agentId}) AND version=#{version} AND version<9223372036854775807")
     int advanceVersion(@Param("tenantId") String t,@Param("clientId") String c,@Param("agentId") String a,@Param("hash") byte[] hash,@Param("version") long v);
+    /** Result message IDs differ from command IDs. Only durable successful receipts prove activation. */
+    @Select("SELECT COUNT(*) FROM economy_skill_result_receipt WHERE " + S
+            + " AND installation_id=#{installationId} AND OCTET_LENGTH(installation_id)=OCTET_LENGTH(#{installationId})"
+            + " AND CAST(installation_id AS BINARY)=CAST(#{installationId} AS BINARY)"
+            + " AND CAST(tenant_id AS BINARY)=CAST(#{tenantId} AS BINARY)"
+            + " AND CAST(client_id AS BINARY)=CAST(#{clientId} AS BINARY)"
+            + " AND outcome='ACTIVE' AND OCTET_LENGTH(request_hash)=32")
+    long successfulReceipts(@Param("tenantId") String t,@Param("clientId") String c,
+            @Param("installationId") String i);
     @Select("SELECT installation_id,request_hash,outcome FROM economy_skill_result_receipt WHERE " + S + " AND message_id=#{messageId} AND OCTET_LENGTH(message_id)=OCTET_LENGTH(#{messageId})")
     SkillResultReceiptEntity result(@Param("tenantId") String t,@Param("clientId") String c,@Param("messageId") String m);
     @Select("SELECT installation_id,request_hash,outcome FROM economy_skill_result_receipt WHERE " + S + " AND message_id=#{messageId} AND OCTET_LENGTH(message_id)=OCTET_LENGTH(#{messageId}) FOR UPDATE")

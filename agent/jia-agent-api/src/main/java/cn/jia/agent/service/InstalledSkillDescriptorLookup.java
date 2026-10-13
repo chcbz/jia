@@ -1,0 +1,23 @@
+package cn.jia.agent.service;
+
+import java.util.List;
+import java.util.Objects;
+
+/** Authoritative installation facts; NOT task authorization or execution admission. */
+public interface InstalledSkillDescriptorLookup {
+    /** manifestJson is verified normalized metadata, not a Provider config or an executable command. */
+    record Descriptor(String skillKey, String skillVersion, String installationId,
+            String packageSha256, String manifestSha256, String manifestJson,
+            String runtimeInstallationId, String runtimeHostId, String reasonCode) {
+        public boolean verified() { return reasonCode == null && manifestJson != null; }
+    }
+    record Snapshot(List<Descriptor> skills) {
+        public Snapshot { skills = List.copyOf(Objects.requireNonNull(skills)); }
+    }
+    Snapshot read(SkillCapabilityLookup.Scope scope);
+
+    final class SourceUnavailable extends RuntimeException {
+        public SourceUnavailable() { super("SKILL_DESCRIPTOR_SOURCE_UNAVAILABLE"); }
+        public SourceUnavailable(Throwable cause) { super("SKILL_DESCRIPTOR_SOURCE_UNAVAILABLE", cause); }
+    }
+}

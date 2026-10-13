@@ -112,6 +112,7 @@ class SkillMarketplaceRealTransactionTest {
         schemaConnection=ds.getConnection();
         for(String resource:List.of("db/economy-v0-foundation.sql","db/economy-v0-skill-marketplace.sql","db/economy-v0-skill-application.sql","db/agent-command-transport-schema.sql")) schema(resource);
         var config=new org.apache.ibatis.session.Configuration();config.setMapUnderscoreToCamelCase(true);
+        config.addInterceptor(new SkillExecutionMapperRealTransactionTest.MySqlBinaryCastAdapter());
         for(Class<?> type:List.of(EconomySkillMarketplaceMapper.class,EconomySkillApplicationMapper.class,EconomySkillCredentialMapper.class,EconomyLedgerMapper.class,AgentCommandTransportMapper.class)) config.addMapper(type);
         var factory=new SqlSessionFactoryBean();factory.setDataSource(ds);factory.setConfiguration(config);
         var sql=new SqlSessionTemplate(Objects.requireNonNull(factory.getObject()));
@@ -303,6 +304,16 @@ class SkillMarketplaceRealTransactionTest {
         assertEquals(0,count("economy_skill_result_receipt"));assertEquals("INSTALLING",installation().getStatus());
         success.put("manifestSha256",HexFormat.of().formatHex(SkillPackageStore.sha256(manifest)));
         results.accept(proof(),success);assertEquals(1,count("economy_skill_result_receipt"));
+        assertEquals(1,app.successfulReceipts(ACTOR.tenantId(),ACTOR.clientId(),i.getInstallationId()));
+        assertEquals(0,app.successfulReceipts(ACTOR.tenantId(),ACTOR.clientId(),i.getCommandId()));
+        assertEquals(0,app.successfulReceipts(ACTOR.tenantId(),"client-a",i.getInstallationId()));
+        assertEquals(0,app.successfulReceipts(ACTOR.tenantId(),ACTOR.clientId(),i.getInstallationId().toUpperCase(Locale.ROOT)));
+        var identities=mock(AgentIdentityService.class);
+        when(identities.requireCanonicalAgentIdInScope(ACTOR.tenantId(),ACTOR.clientId(),ACTOR.ownerJiacn(),AGENT)).thenReturn(AGENT);
+        var descriptors=new InstalledSkillDescriptorService(identities,market,app,provider(new SkillPackages(packageRoot)));
+        var descriptor=descriptors.read(new SkillCapabilityLookup.Scope(ACTOR.tenantId(),ACTOR.clientId(),ACTOR.ownerJiacn(),AGENT)).skills().getFirst();
+        assertTrue(descriptor.verified()); assertEquals(success.get("manifestSha256"),descriptor.manifestSha256());
+        assertEquals("pdf-export",descriptor.skillKey());
         var tampered=new LinkedHashMap<>(success);tampered.put("manifestSha256","0".repeat(64));
         assertThrows(SkillMarketplaceException.class,()->results.accept(proof(),tampered));
         // New service/process with cold package cache still replays the immutable receipt after object retirement.
