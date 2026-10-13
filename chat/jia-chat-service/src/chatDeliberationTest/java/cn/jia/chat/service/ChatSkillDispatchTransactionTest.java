@@ -73,7 +73,7 @@ class ChatSkillDispatchTransactionTest {
                 context.register(TxConfig.class);context.registerBean("transactionManager",DataSourceTransactionManager.class,()->manager);context.registerBean(ChatActionExecutionService.class,()->service);context.registerBean(ChatActionDispatchService.class,()->new ChatActionDispatchService(finals,roots,bindings,conversations,scopes,typed,mock(ChatTypedInspectionContextService.class),requests,dao,outbox,context.getBeanProvider(ChatActionDispatchService.Executor.class)));context.refresh();
                 var executor=context.getBean(ChatActionExecutionService.class);var dispatch=context.getBean(ChatActionDispatchService.class);
                 assertThrows(IllegalTransactionStateException.class,()->executor.admit(action));
-                if(!"none".equals(failure)) {assertEquals("injected-"+failure,assertThrows(RuntimeException.class,()->dispatch.consume(claim)).getMessage());assertEquals(0,evidence.queryForObject("SELECT COUNT(*) FROM writes",Integer.class));}
+                if(!"none".equals(failure)) {var error=assertThrows(RuntimeException.class,()->dispatch.consume(claim));if(!("injected-"+failure).equals(error.getMessage()))throw new AssertionError("Unexpected rejection before "+failure,error);assertEquals(0,evidence.queryForObject("SELECT COUNT(*) FROM writes",Integer.class));}
                 else {
                     dispatch.consume(claim);assertEquals(7,evidence.queryForObject("SELECT COUNT(*) FROM writes",Integer.class));
                     assertEquals("exec",link.get().executionId());assertEquals("EXECUTE",step.get().kind());assertEquals(10L,child.get().getUserMessageId());
