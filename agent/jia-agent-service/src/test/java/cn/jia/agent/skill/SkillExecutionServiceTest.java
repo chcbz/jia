@@ -166,7 +166,7 @@ public class SkillExecutionServiceTest {
         });service.setRuntimeAuthentication(auth);
         assertEquals("NEW",service.startEffect(runtime,"task","run","generate",start()).disposition());
         assertEquals(List.of(false,true),observed);
-        observed.clear();when(installed.read(any())).thenThrow(new InstalledSkillDescriptorLookup.SourceUnavailable());
+        observed.clear();doThrow(new InstalledSkillDescriptorLookup.SourceUnavailable()).when(installed).read(any());
         assertEquals("RECORDED",service.startEffect(runtime,"task","run","generate",start()).disposition());
         assertTrue(observed.isEmpty());
     }

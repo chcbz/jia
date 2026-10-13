@@ -2907,9 +2907,10 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         for(var input:inputs)if(!unique.add(skillString(input,"inputRef")))throw failure(Reason.BAD_REQUEST);
         String sourceDigest=plainSha(skillJson(inputs));
         if(!sourceDigest.equals(snapshot.get("sourceSnapshotDigest")))throw failure(Reason.BAD_REQUEST);
-        prepareSkillCatalog(scope,command.targetAgentId());
         String digest=plainSha(skillJson(snapshot));String seed=skillJson(List.of(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),command.actionEventId()));
         String executionId="pwe_"+plainSha(seed+"\\nexecution").substring(0,60);String runId="pwe_run_"+plainSha(seed+"\\nrun");String key="skill_"+plainSha(seed);
+        if(executions.findByIdempotency(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),key)==null)
+            prepareSkillCatalog(scope,command.targetAgentId());
         return taskMutations.executeWithLockedTaskRootInOwnerScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),command.taskId(),root->{
             requireConversationRoot(root,scope,command.taskId(),command.targetAgentId(),command.assignmentRevision());
             var prior=executions.findByIdempotency(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),key);
