@@ -974,6 +974,10 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                         || !same(candidate.getOwnerJiacn(),scope.ownerJiacn())
                         || !same(candidate.getTargetAgentId(),scope.agentId())) continue;
                 try {
+                    // Materialize immutable package metadata before acquiring the task lock. The
+                    // locked skillCommand repeats authority/fence checks; this read is not a grant.
+                    if(Objects.equals(4,candidate.getExecutionProtocolVersion()))
+                        prepareSkillCatalog(skillOwner(scope),scope.agentId());
                     result.add(withConversationRoot(scope,candidate.getTaskId(),candidate.getRunId(),false,
                             execution -> {
                                 if (!same(candidate.getExecutionId(),execution.getExecutionId()))
@@ -1024,6 +1028,10 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                         || !same(candidate.getOwnerJiacn(),scope.ownerJiacn())
                         || !same(candidate.getTargetAgentId(),scope.agentId())) continue;
                 try {
+                    // Materialize immutable package metadata before acquiring the task lock. The
+                    // locked skillCommand repeats authority/fence checks; this read is not a grant.
+                    if(Objects.equals(4,candidate.getExecutionProtocolVersion()))
+                        prepareSkillCatalog(skillOwner(scope),scope.agentId());
                     result.add(withConversationRoot(scope,candidate.getTaskId(),candidate.getRunId(),false,
                             execution -> commandView(scope,candidate,execution)));
                 } catch (Failure stale) {
@@ -2815,6 +2823,11 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         if(!skillExecutions.compareAndSet(row,version,expectedPhase))throw failure(Reason.TASK_CONFLICT);
         row.setVersion(Math.addExact(version,1));
     }
+    private void prepareSkillCatalog(OwnerScope scope,String agent) {
+        if(installedSkills==null)throw failure(Reason.CAPABILITY_UNAVAILABLE);
+        installedSkills.read(new cn.jia.agent.service.SkillCapabilityLookup.Scope(
+                scope.tenantId(),scope.clientId(),scope.ownerJiacn(),agent));
+    }
     private Map<String,Object> verifiedSkillDescriptor(OwnerScope scope,String agent,Map<String,Object> snapshot,boolean runtimeRequired) {
         var selected=skillObject(snapshot.get("skill"));var key=skillString(selected,"key");var version=skillString(selected,"version");
         var capScope=new cn.jia.agent.service.SkillCapabilityLookup.Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),agent);
@@ -2875,7 +2888,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
             skillSourceAccess.requireAuthorized(scope,execution.getTaskId(),execution.getConversationId(),skillLong(snapshot.get("conversationGeneration")),input);
         }else throw failure(Reason.BAD_REQUEST);
     }
-    @Override @Transactional(rollbackFor=Exception.class)
+    @Override
     public cn.jia.agent.service.SkillExecutionService.Creation create(OwnerScope scope,cn.jia.agent.service.SkillExecutionService.Create command) {
         requireSkillEnabled();validateOwnerScope(scope);if(command==null)throw failure(Reason.BAD_REQUEST);
         id(command.actionEventId(),"actionEventId",100);id(command.taskId(),"taskId",100);id(command.conversationId(),"conversationId",100);
@@ -2894,6 +2907,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         for(var input:inputs)if(!unique.add(skillString(input,"inputRef")))throw failure(Reason.BAD_REQUEST);
         String sourceDigest=plainSha(skillJson(inputs));
         if(!sourceDigest.equals(snapshot.get("sourceSnapshotDigest")))throw failure(Reason.BAD_REQUEST);
+        prepareSkillCatalog(scope,command.targetAgentId());
         String digest=plainSha(skillJson(snapshot));String seed=skillJson(List.of(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),command.actionEventId()));
         String executionId="pwe_"+plainSha(seed+"\\nexecution").substring(0,60);String runId="pwe_run_"+plainSha(seed+"\\nrun");String key="skill_"+plainSha(seed);
         return taskMutations.executeWithLockedTaskRootInOwnerScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),command.taskId(),root->{
@@ -2986,10 +3000,18 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     private static String skillEffectRevision(Map<String,Object> snapshot) {
         return snapshot.get("providerBinding")==null?null:skillString(skillObject(snapshot.get("providerBinding")),"revision");
     }
-    @Override @Transactional(rollbackFor=Exception.class)
+    @Override
     public cn.jia.agent.service.SkillExecutionService.EffectReceipt startEffect(RuntimeScope scope,String taskId,String runId,String effectId,cn.jia.agent.service.SkillExecutionService.EffectStart command) {
         requireSkillEnabled();nativeAuthentication(scope);id(effectId,"effectId",100);
         if(command==null||!sha(command.effectDigest()))throw failure(Reason.BAD_REQUEST);
+        // A cold process must prepare bytes outside the native/task transaction. Replays skip
+        // preparation and keep the durable effect receipt independent of package retention.
+        var observedExecution=runtimeExecution(scope,taskId,runId,false);
+        if(!Objects.equals(4,observedExecution.getExecutionProtocolVersion()))throw failure(Reason.NOT_FOUND);
+        var observedSkill=skillRow(skillOwner(scope),observedExecution.getExecutionId(),false);
+        requireSkillSnapshot(observedSkill,command.executionId(),command.snapshotDigest());
+        if(!skillMap(observedSkill.getEffectsJson()).containsKey(effectId))
+            prepareSkillCatalog(skillOwner(scope),scope.agentId());
         return nativeMutation(scope,()->withConversationRoot(scope,taskId,runId,true,execution->{
             requireConversationFence(scope,execution,command.fence(),false);if(!Objects.equals(4,execution.getExecutionProtocolVersion()))throw failure(Reason.NOT_FOUND);
             var skill=skillRow(skillOwner(scope),execution.getExecutionId(),true);requireSkillSnapshot(skill,command.executionId(),command.snapshotDigest());

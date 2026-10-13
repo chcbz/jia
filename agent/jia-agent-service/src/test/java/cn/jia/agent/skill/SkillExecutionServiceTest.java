@@ -155,4 +155,19 @@ public class SkillExecutionServiceTest {
         var result=service.failConversation(runtime,"task","run",fence,"AGENT_DELIVERY_FAILED");assertEquals("FAILED",result.state());assertEquals("FAILED",skill.getPhase());
     }
 
+    @Test void newEffectPreparesBeforeNativeTransactionButReplaysNeverReprepare() {
+        var auth=mock(AgentRuntimeAuthenticationService.class);var observed=new ArrayList<Boolean>();
+        var descriptors=installed.read(new SkillCapabilityLookup.Scope("0","client","owner","agent"));
+        when(installed.read(any())).thenAnswer(i->{observed.add(org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive());return descriptors;});
+        when(auth.withNativeFence(any(),any())).thenAnswer(i->{
+            org.springframework.transaction.support.TransactionSynchronizationManager.setActualTransactionActive(true);
+            try{return ((Supplier<?>)i.getArgument(1)).get();}
+            finally{org.springframework.transaction.support.TransactionSynchronizationManager.setActualTransactionActive(false);}
+        });service.setRuntimeAuthentication(auth);
+        assertEquals("NEW",service.startEffect(runtime,"task","run","generate",start()).disposition());
+        assertEquals(List.of(false,true),observed);
+        observed.clear();when(installed.read(any())).thenThrow(new InstalledSkillDescriptorLookup.SourceUnavailable());
+        assertEquals("RECORDED",service.startEffect(runtime,"task","run","generate",start()).disposition());
+        assertTrue(observed.isEmpty());
+    }
 }
