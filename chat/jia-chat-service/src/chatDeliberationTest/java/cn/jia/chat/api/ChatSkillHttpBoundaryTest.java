@@ -49,6 +49,6 @@ class ChatSkillHttpBoundaryTest {
         when(capabilities.taskCatalog(any(),anyString())).thenThrow(new IllegalStateException("private provider/token/path"));
         mvc.perform(get("/agent/tasks/task/skill-capabilities").queryParam("targetAgentId","agent").principal(jwt("owner")))
                 .andExpect(status().isServiceUnavailable()).andExpect(header().string("Cache-Control","no-store"))
-                .andExpect(jsonPath("$.code").value("SKILL_CAPABILITIES_503")).andExpect(jsonPath("$.data").isEmpty());
+                .andExpect(jsonPath("$.code").value("SKILL_CAPABILITIES_503")).andExpect(jsonPath("$.data").doesNotExist());
     }
 }
