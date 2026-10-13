@@ -53,6 +53,13 @@ public class ChatBountyAssetProjector {
         this.broker = Objects.requireNonNull(broker);
     }
 
+    private cn.jia.agent.service.SkillExecutionService skills;
+    private cn.jia.agent.service.AgentTaskMutationTransaction taskMutations;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setSkillProjectionServices(cn.jia.agent.service.SkillExecutionService skills,cn.jia.agent.service.AgentTaskMutationTransaction tasks) {
+        this.skills=Objects.requireNonNull(skills);this.taskMutations=Objects.requireNonNull(tasks);
+    }
+
     public record Candidate(String tenantId, String ownerJiacn, String clientId, String requestId,
             String stepId, String executionId) { }
     public record Asset(String assetId, String tenantId, String ownerJiacn, String clientId,
@@ -70,9 +77,9 @@ public class ChatBountyAssetProjector {
                   AND l.tenant_id=s.tenant_id AND l.owner_jiacn=s.owner_jiacn AND l.client_id=s.client_id
                 JOIN agent_personal_workspace_execution e ON e.execution_id=l.execution_id
                   AND e.tenant_id=s.tenant_id AND e.client_id=s.client_id AND e.owner_jiacn=s.owner_jiacn
-                  AND e.execution_state IN ('OUTPUT_COMMITTED','FAILED','INPUTS_REVOKED') AND e.execution_mode='CONVERSATION'
+                  AND e.execution_state IN ('OUTPUT_COMMITTED','RESULT_COMMITTED','FAILED','INPUTS_REVOKED') AND e.execution_mode='CONVERSATION'
                 WHERE s.kind='EXECUTE' AND l.state='RUNNING'
-                  AND (s.state='RUNNING' OR (s.state='OUTPUT_COMMITTED' AND e.execution_state='OUTPUT_COMMITTED'))
+                  AND (s.state='RUNNING' OR (s.state=e.execution_state AND e.execution_state IN ('OUTPUT_COMMITTED','RESULT_COMMITTED')))
                   AND (? IS NULL OR s.step_id > ?)
                 ORDER BY s.step_id LIMIT ?
                 """, (rs, n) -> new Candidate(rs.getString(1), rs.getString(2), rs.getString(3),
@@ -85,13 +92,21 @@ public class ChatBountyAssetProjector {
     @Transactional(rollbackFor = Exception.class)
     public int project(Candidate candidate) {
         if (candidate == null) throw new IllegalArgumentException("Missing candidate");
+        if(taskMutations==null)throw new IllegalStateException("Task projection lock unavailable");
+        var roots=jdbc.queryForList("SELECT task_id FROM agent_personal_workspace_execution WHERE BINARY tenant_id=BINARY ? AND BINARY client_id=BINARY ? AND BINARY owner_jiacn=BINARY ? AND BINARY execution_id=BINARY ?",
+                candidate.tenantId(),candidate.clientId(),candidate.ownerJiacn(),candidate.executionId());
+        if(roots.size()!=1)return 0;
+        return taskMutations.executeWithLockedTaskRootInOwnerScope(candidate.tenantId(),candidate.clientId(),candidate.ownerJiacn(),
+                (String)roots.getFirst().get("task_id"),root->projectWithinRoot(candidate));
+    }
+    private int projectWithinRoot(Candidate candidate) {
         var request = requests.getRequest(candidate.tenantId(), candidate.ownerJiacn(),
                 candidate.clientId(), candidate.requestId());
         if (request == null || request.steps() == null) return 0;
         var step = request.steps().stream().filter(value -> candidate.stepId().equals(value.stepId()))
                 .findFirst().orElse(null);
-        boolean repairLink = "OUTPUT_COMMITTED".equals(request.state()) && step != null
-                && "OUTPUT_COMMITTED".equals(step.state()) && "RUNNING".equals(step.executionState());
+        boolean repairLink = Set.of("OUTPUT_COMMITTED","RESULT_COMMITTED").contains(request.state()) && step != null
+                && request.state().equals(step.state()) && "RUNNING".equals(step.executionState());
         if (!candidate.requestId().equals(request.requestId())
                 || !("RUNNING".equals(request.state()) || repairLink)
                 || step == null || !"EXECUTE".equals(step.kind()) || !("RUNNING".equals(step.state()) || repairLink)
@@ -101,18 +116,20 @@ public class ChatBountyAssetProjector {
                 candidate.clientId(), candidate.ownerJiacn());
         var execution = executions.get(scope, candidate.executionId());
         if (execution == null || !"CONVERSATION".equals(execution.executionMode())
-                || !Set.of("OUTPUT_COMMITTED", "FAILED", "INPUTS_REVOKED").contains(execution.state())
+                || !Set.of("OUTPUT_COMMITTED", "RESULT_COMMITTED", "FAILED", "INPUTS_REVOKED").contains(execution.state())
                 || !candidate.executionId().equals(execution.executionId())
                 || !step.taskId().equals(execution.taskId())
                 || !request.conversationId().equals(execution.conversationId())
                 || !step.targetAgentId().equals(execution.targetAgentId())
                 || execution.runId() == null) return 0;
-        if (repairLink && !"OUTPUT_COMMITTED".equals(execution.state())) return 0;
-        if (!"OUTPUT_COMMITTED".equals(execution.state())) return projectFailure(candidate, request, step, execution.state());
-        List<PersonalWorkspaceExecutionService.ConversationOutputInfo> outputs = executions.listConversationOutputs(
-                scope, step.taskId(), execution.runId());
-        if (outputs == null || outputs.isEmpty() || outputs.size() > 128)
-            throw new IllegalStateException("Committed output catalogue is unavailable");
+        boolean generic="RESULT_COMMITTED".equals(execution.state());String terminal=generic?"RESULT_COMMITTED":"OUTPUT_COMMITTED";
+        if (repairLink && !request.state().equals(execution.state())) return 0;
+        if (!Set.of("OUTPUT_COMMITTED","RESULT_COMMITTED").contains(execution.state())) return projectFailure(candidate, request, step, execution.state());
+        cn.jia.agent.service.SkillExecutionService.ResultView resultView=generic?skills.result(scope,candidate.executionId()):null;
+        Map<String,Object> manifest=generic?verifiedResult(resultView,candidate.executionId()):null;
+        List<PersonalWorkspaceExecutionService.ConversationOutputInfo> outputs = executions.listConversationOutputs(scope, step.taskId(), execution.runId());
+        if(outputs==null||outputs.size()>128||!generic&&outputs.isEmpty())throw new IllegalStateException("Committed output catalogue unavailable");
+        if(generic)verifyArtifacts(manifest,outputs);
         // Runtime grant/root locks are acquired above. Other writers follow root -> conversation.
         ChatConversationEntity live = conversations.lockScopedById(candidate.ownerJiacn(),
                 candidate.clientId(), request.conversationId());
@@ -212,19 +229,21 @@ public class ChatBountyAssetProjector {
             }
             count++;
         }
+        if (generic) count+=projectData(candidate,request,step,live,manifest,repairLink);
         if (repairLink) {
-            finalizeExecutionLink(candidate, "OUTPUT_COMMITTED", System.currentTimeMillis());
+            finalizeExecutionLink(candidate, terminal, System.currentTimeMillis());
+            if(generic)skills.markProjected(scope,candidate.executionId(),(String)manifest.get("resultDigest"));
             return 1; // Progress only; no new message, asset, event or provider request.
         }
-        if (count > 0) {
-            finalizeExecutionLink(candidate, "OUTPUT_COMMITTED", System.currentTimeMillis());
+        if (count > 0 || generic) {
+            finalizeExecutionLink(candidate, terminal, System.currentTimeMillis());
             // The source catalogue was checked against committed bytes and an immutable intent.
             // A later GET or SSE replay only reads this projection; it never starts execution.
             var stored = jdbc.update("""
-                    UPDATE chat_interaction_step SET state='OUTPUT_COMMITTED',state_version=state_version+1,
+                    UPDATE chat_interaction_step SET state=?,state_version=state_version+1,
                       updated_at=? WHERE step_id=? AND tenant_id=? AND owner_jiacn=? AND client_id=?
                       AND state='RUNNING' AND state_version=?
-                    """, System.currentTimeMillis(), candidate.stepId(), candidate.tenantId(),
+                    """, terminal, System.currentTimeMillis(), candidate.stepId(), candidate.tenantId(),
                     candidate.ownerJiacn(), candidate.clientId(), Long.parseLong(step.stateVersion()));
             if (stored != 1) throw new IllegalStateException("Unable to finalize step projection");
             var requestRow = events.findRequest(candidate.tenantId(), candidate.ownerJiacn(),
@@ -235,10 +254,69 @@ public class ChatBountyAssetProjector {
                     || !candidate.clientId().equals(requestRow.getClientId())
                     || !candidate.requestId().equals(requestRow.getRequestId())
                     || !request.conversationId().equals(requestRow.getConversationId())
-                    || events.updateRequestState(requestRow, "OUTPUT_COMMITTED", System.currentTimeMillis()) != 1)
+                    || events.updateRequestState(requestRow, terminal, System.currentTimeMillis()) != 1)
                 throw new IllegalStateException("Unable to finalize request projection");
         }
+        if(generic)skills.markProjected(scope,candidate.executionId(),(String)manifest.get("resultDigest"));
         return count;
+    }
+
+    static Map<String,Object> verifiedResult(cn.jia.agent.service.SkillExecutionService.ResultView view,String executionId) {
+        if(view==null||!executionId.equals(view.executionId())||!"RESULT_COMMITTED".equals(view.state())
+                ||!Set.of("ARCHIVING","COMPLETE").contains(view.phase())||view.resultManifest()==null)throw new IllegalStateException("Result not committed");
+        var manifest=view.resultManifest();
+        if(!manifest.keySet().equals(Set.of("schemaVersion","data","artifacts","resultDigest","manifestId"))
+                ||!Integer.valueOf(1).equals(manifest.get("schemaVersion"))||!(manifest.get("artifacts") instanceof List<?>))throw new IllegalStateException("Invalid result manifest");
+        var preimage=new java.util.LinkedHashMap<>(manifest);preimage.remove("resultDigest");preimage.remove("manifestId");
+        if(!ChatSkillSnapshotJson.sha(preimage).equals(manifest.get("resultDigest")))throw new IllegalStateException("Result digest mismatch");return manifest;
+    }
+    static void verifyArtifacts(Map<String,Object> manifest,List<PersonalWorkspaceExecutionService.ConversationOutputInfo> outputs) {
+        var artifacts=(List<?>)manifest.get("artifacts");if(artifacts.size()!=outputs.size())throw new IllegalStateException("Result artifact count mismatch");
+        var seen=new java.util.HashSet<String>();
+        for(Object value:artifacts) {
+            if(!(value instanceof Map<?,?> item)||!item.keySet().equals(Set.of("outputId","sha256","byteLength"))
+                    ||!(item.get("outputId") instanceof String id)||!seen.add(id))throw new IllegalStateException("Invalid artifact");
+            var actual=outputs.stream().filter(o->id.equals(o.outputId())).toList();
+            if(actual.size()!=1||!item.get("sha256").equals(actual.getFirst().sha256())
+                    ||!item.get("byteLength").toString().equals(Long.toString(actual.getFirst().byteLength())))throw new IllegalStateException("Artifact lineage mismatch");
+        }
+    }
+    /** One deterministic data message for data-only or data+files. No empty asset and no inferred replacement. */
+    private int projectData(Candidate c,ChatDeliberationService.RequestView request,ChatDeliberationService.StepView step,
+            ChatConversationEntity live,Map<String,Object> manifest,boolean repair) {
+        if(manifest.get("data")==null&&!((List<?>)manifest.get("artifacts")).isEmpty())return 0;
+        String id="skill-result-"+digest(c.tenantId()+"\n"+c.clientId()+"\n"+c.ownerJiacn()+"\n"+c.executionId()).substring(0,40);
+        var existing=jdbc.queryForList("SELECT payload_json FROM chat_conversation_event WHERE BINARY tenant_id=BINARY ? AND BINARY owner_jiacn=BINARY ? AND BINARY client_id=BINARY ? AND BINARY event_id=BINARY ? FOR UPDATE",
+                c.tenantId(),c.ownerJiacn(),c.clientId(),id);
+        if(!existing.isEmpty()) {
+            if(existing.size()!=1)throw new IllegalStateException("Result message duplicate");
+            var prior=ChatSkillSnapshotJson.object((String)existing.getFirst().get("payload_json"));
+            if(!c.executionId().equals(prior.get("executionId"))||!manifest.get("resultDigest").equals(prior.get("resultDigest"))
+                    ||!request.conversationId().equals(prior.get("conversationId"))||!c.requestId().equals(prior.get("requestId"))
+                    ||!ChatSkillSnapshotJson.write(manifest.get("data")).equals(ChatSkillSnapshotJson.write(prior.get("data"))))throw new IllegalStateException("Projected result differs");return 0;
+        }
+        if(repair)throw new IllegalStateException("Result data message missing");
+        String text=manifest.get("data")==null?"执行结果已登记。":ChatSkillSnapshotJson.write(manifest.get("data"));
+        var metadata=new java.util.LinkedHashMap<String,Object>();metadata.put("requestId",c.requestId());metadata.put("stepId",c.stepId());
+        metadata.put("agentId",step.targetAgentId());metadata.put("executionId",c.executionId());metadata.put("resultDigest",manifest.get("resultDigest"));metadata.put("data",manifest.get("data"));
+        var message=new ChatMessageEntity().setConversationId(request.conversationId()).setMessageType("ASSISTANT").setContent(text)
+                .setMetadata(JsonUtil.toJson(metadata)).setJiacn(c.ownerJiacn()).setSyncStatus("PENDING").setConversationType("juyiting").setSenderType("agent").setSenderName("好汉");
+        message.init4Creation();if(messages.insertScoped(c.tenantId(),c.clientId(),message)!=1||message.getId()==null)throw new IllegalStateException("Result message persistence failed");
+        var frame=new java.util.LinkedHashMap<String,Object>(metadata);frame.put("type","agent_message");frame.put("conversationId",request.conversationId());
+        frame.put("messageId",Long.toString(message.getId()));frame.put("senderType","agent");frame.put("senderName","好汉");frame.put("content",text);frame.put("parts",List.of());
+        var event=new ChatConversationEventEntity().setEventId(id).setTenantId(c.tenantId()).setOwnerJiacn(c.ownerJiacn()).setClientId(c.clientId())
+                .setConversationId(request.conversationId()).setConversationGeneration(live.getLifecycleGeneration()).setRequestId(c.requestId())
+                .setEventType("agent_message").setEventVersion(0L).setPayloadJson(JsonUtil.toJson(frame)).setOccurredAt(System.currentTimeMillis());
+        if(events.insertEvent(event)!=1||event.getEventSequence()==null||events.assignEventVersion(event.getEventSequence())!=1)throw new IllegalStateException("Result event persistence failed");
+        if(TransactionSynchronizationManager.isSynchronizationActive()) {
+            var signal=new java.util.LinkedHashMap<String,Object>(frame);signal.put("eventId",id);signal.put("eventSequence",Long.toString(event.getEventSequence()));signal.put("eventVersion",Long.toString(event.getEventSequence()));
+            long generation=live.getLifecycleGeneration();TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override public void afterCommit() {broker.publishIfSubscribed(request.conversationId(),generation,()->{
+                    var current=conversations.findScopedById(c.ownerJiacn(),c.clientId(),request.conversationId());return current!=null&&current.getDeletedAt()==null
+                            &&c.tenantId().equals(current.getTenantId())&&Objects.equals(generation,current.getLifecycleGeneration());},signal);}
+            });
+        }
+        return 1;
     }
 
     /** Exact monotone link CAS follows the existing owner/root/conversation locks.

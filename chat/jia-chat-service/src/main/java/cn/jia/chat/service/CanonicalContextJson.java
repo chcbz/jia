@@ -35,7 +35,7 @@ public final class CanonicalContextJson {
             double n=number.doubleValue();
             if(!Double.isFinite(n)||(n==Math.rint(n)&&Math.abs(n)>9007199254740991d))
                 throw new IllegalArgumentException("Canonical context forbids non-portable numbers");
-            BigDecimal decimal=BigDecimal.valueOf(n).stripTrailingZeros();
+            BigDecimal decimal=new BigDecimal(tools.jackson.core.io.schubfach.DoubleToDecimal.toString(n)).stripTrailingZeros();
             if(decimal.signum()==0)out.append('0');
             else if(Math.abs(n)>=1e-6&&Math.abs(n)<1e21)out.append(decimal.toPlainString());
             else {String text=decimal.toString().replace("E","e");out.append(text);}

@@ -18,15 +18,18 @@ public final class TypedDeliberationDeclaration {
     private static final String TOOL_POLICY = "read-only-constrained";
 
     private final State state;
+    private final Map<String,Object> materials;
 
-    private TypedDeliberationDeclaration(State state) { this.state = state; }
+    private TypedDeliberationDeclaration(State state) { this(state,null); }
+
+    private TypedDeliberationDeclaration(State state,Map<String,Object> materials) {this.state=state;this.materials=materials;}
 
     public static TypedDeliberationDeclaration parse(Object raw) {
         if (raw == null) return new TypedDeliberationDeclaration(State.UNDECLARED);
         try {
             if (!(raw instanceof Map<?, ?> candidate)
                     || !candidate.keySet().stream().allMatch(String.class::isInstance)
-                    || !candidate.keySet().equals(KEYS)) throw invalid();
+                    || !(candidate.keySet().equals(KEYS)||candidate.keySet().equals(withMaterialsKeys()))) throw invalid();
             @SuppressWarnings("unchecked") Map<String, Object> value = (Map<String, Object>) candidate;
             exactInteger(value.get("schemaVersion"), 4);
             String state = exactText(value.get("state"));
@@ -37,7 +40,7 @@ public final class TypedDeliberationDeclaration {
             exact(value.get("engine"), ENGINE);
             if (!(value.get("strictNoToolsVerified") instanceof Boolean verified) || verified) throw invalid();
             exact(value.get("toolPolicy"), TOOL_POLICY);
-            return new TypedDeliberationDeclaration(State.valueOf(state));
+            return new TypedDeliberationDeclaration(State.valueOf(state),value.containsKey("materialsInput")?cn.jia.chat.service.ChatMaterialsInputContract.declaration(value.get("materialsInput")):null);
         } catch (RuntimeException invalid) {
             return new TypedDeliberationDeclaration(State.UNSUPPORTED);
         }
@@ -58,9 +61,11 @@ public final class TypedDeliberationDeclaration {
         value.put("engine", ENGINE);
         value.put("strictNoToolsVerified", false);
         value.put("toolPolicy", TOOL_POLICY);
+        if(materials!=null)value.put("materialsInput",materials);
         return Map.copyOf(value);
     }
 
+    private static Set<String> withMaterialsKeys() {var keys=new java.util.HashSet<>(KEYS);keys.add("materialsInput");return Set.copyOf(keys);}
     private static void exactInteger(Object value, int expected) {
         if (!(value instanceof Byte || value instanceof Short || value instanceof Integer || value instanceof Long)
                 || ((Number) value).longValue() != expected) throw invalid();

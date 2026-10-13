@@ -42,7 +42,7 @@ public final class ChatActionFinalValidator {
         TypedInspectionFinalValidator.InspectionInputReceipt receipt = null;
         if (inspectionAuthority != null) {
             receipt = TypedInspectionFinalValidator.validateInputReceiptJson(inspectionAuthority,
-                    facts.availableSources().stream().map(ChatActionOutcomeContract.Source::sourceRefId).toList(),
+                    ((List<?>)((Map<?,?>)inspectionAuthority).get("sources")).stream().map(x->(String)((Map<?,?>)x).get("sourceRefId")).toList(),
                     rawReceipt);
         } else if (rawReceipt != null) {
             throw invalid("ACTION_FINAL_UNEXPECTED_RECEIPT");

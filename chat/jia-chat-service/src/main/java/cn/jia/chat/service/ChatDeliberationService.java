@@ -63,6 +63,8 @@ public class ChatDeliberationService {
     private ChatInteractionStepStore interactionSteps;
     private ChatTypedDeliberationService typedDeliberation;
     private ChatTypedInspectionService typedInspection;
+    private ChatMaterialsInputService materialsAuthority;
+    @Autowired public void setMaterialsAuthority(ChatMaterialsInputService service) {materialsAuthority=service;}
     private ChatInspectionAuthorityService inspectionAuthority;
     private ChatActionFinalService actionFinals;
 
@@ -360,6 +362,11 @@ public class ChatDeliberationService {
                         java.util.Collections.unmodifiableMap(new LinkedHashMap<>(trustedTypedInspection)));
                 if (trustedTypedAdmission != null) typedFacts.put("typedDeliberationAdmission",
                         java.util.Collections.unmodifiableMap(new LinkedHashMap<>(trustedTypedAdmission)));
+                if (trustedTypedAdmission != null && trustedTypedAdmission.containsKey("nativeMaterials")) {
+                    var materials=ChatMaterialsInputContract.bind(trustedTypedAdmission.get("nativeMaterials"),tenantId,ownerJiacn,clientId,
+                            conversationId,expectedGeneration,scope.taskId(),requestId,turnId,targetAgentId);
+                    if(materials!=null)typedFacts.put("materialsInput",materials);
+                }
                 if (continuationFacts != null) typedFacts.put("actionContinuation", continuationFacts);
                 facts = java.util.Collections.unmodifiableMap(new LinkedHashMap<>(typedFacts));
             }
@@ -514,7 +521,12 @@ public class ChatDeliberationService {
                     snapshotId, contextDigest, safeContent, outcomeContractVersion, rawInteractionOutcomeJson,
                     rawInspectionInputReceiptJson, sender, visible));
         }
-        if (rawInspectionInputReceiptJson != null) throw invalid("Inspection receipt is forbidden for CHAT");
+        if(InteractionRoute.CHAT.name().equals(visible.getRoute())&&materialsAuthority!=null) {
+            return materialsAuthority.withFinalAuthority(visible,()->persistFinalLocked(tenantId,ownerJiacn,clientId,conversationId,
+                    conversationGeneration,agentId,requestId,turnId,dispatchId,snapshotId,contextDigest,safeContent,outcomeContractVersion,
+                    rawInteractionOutcomeJson,rawInspectionInputReceiptJson,sender,visible));
+        }
+        if (rawInspectionInputReceiptJson != null) throw invalid("Material receipt requires trusted CHAT authority");
         return persistFinalLocked(tenantId, ownerJiacn, clientId, conversationId, conversationGeneration, agentId,
                 requestId, turnId, dispatchId, snapshotId, contextDigest, safeContent, outcomeContractVersion,
                 rawInteractionOutcomeJson, null, sender, visible);

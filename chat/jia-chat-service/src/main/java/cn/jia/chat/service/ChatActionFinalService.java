@@ -73,7 +73,7 @@ public class ChatActionFinalService {
         String taskId = taskId(facts);
         if (!taskId.equals(admission.taskId())) throw persistence("Action admission task differs from snapshot");
         var typed = discussion(facts, turn.getRoute());
-        Object authority = null;
+        Object authority = ChatMaterialsInputContract.authority(facts.get("materialsInput"));
         if ("INSPECT".equals(turn.getRoute())) {
             Map<String, Object> inspection = inspection(facts, admission);
             Map<String, Object> profile = map(map(inspection.get("manifest")).get("profile"));
@@ -172,7 +172,8 @@ public class ChatActionFinalService {
         var row = store.findOutcomeByRequest(scope, turn.getRequestId());
         var admission = requireAdmission(scope, turn.getRequestId(), turn.getTurnId(), turn.getRequestRevision());
         var stored = parse(row.outcomeJson());
-        Map<String, Object> inputAuthority = null;
+        var actionSnapshot=dao.findSnapshot(scope.tenantId(),scope.ownerJiacn(),scope.clientId(),turn.getSnapshotId());
+        Map<String, Object> inputAuthority = ChatMaterialsInputContract.authority(parse(actionSnapshot.getFactsManifestJson()).get("materialsInput"));
         if ("INSPECT".equals(turn.getRoute())) inputAuthority = authority(
                 ChatTypedInspectionContextService.inspection(admission.sourceCatalogJson()));
         var validated = ChatActionFinalValidator.validateJson(parse(row.bindingJson()), parse(row.factsJson()),
@@ -224,7 +225,7 @@ public class ChatActionFinalService {
                     || !Integer.valueOf(4).equals(stored.get("schemaVersion"))) throw persistence("Stored action final is invalid");
             try {
                 validated = ChatActionFinalValidator.validateJson(binding(turn, admission.taskId()), typed,
-                        inspection == null ? null : authority(inspection), row.text(), 4,
+                        inspection == null ? ChatMaterialsInputContract.authority(facts.get("materialsInput")) : authority(inspection), row.text(), 4,
                         canonical(stored.get("interactionOutcome")), stored.get("inspectionInputReceipt") == null
                                 ? null : canonical(stored.get("inspectionInputReceipt")));
             } catch (IllegalArgumentException invalid) { throw persistence("Stored action final is invalid"); }

@@ -108,7 +108,7 @@ public class ChatTypedDiscussionAdmissionService {
             var deliveryBasis=deliveryParent(storeScope,command,parent);
             var deliveryTargets=deliveryBasis==null?List.<Map<String,Object>>of():finals.deliveryTargets(storeScope,deliveryBasis);
             var admitted=deliberation.admit(tenantId,sender,conversationId,generation,scope,
-                    InteractionRoute.CHAT,input,null,context.facts(),admissionFacts(command,context.selectors(),deliveryBasis,deliveryTargets));
+                    InteractionRoute.CHAT,input,null,context.facts(),nativeAdmissionFacts(command,context,deliveryBasis,deliveryTargets));
             List<String> turnIds=admitted.dispatches().stream().map(ChatDeliberationService.Dispatch::turnId).toList();
             if(turnIds.size()!=1)throw unavailable();
             long now=System.currentTimeMillis();
@@ -189,6 +189,12 @@ public class ChatTypedDiscussionAdmissionService {
         return Boolean.TRUE.equals(view.get("deliverable"))?basis:null;
     }
 
+    private static Map<String,Object> nativeAdmissionFacts(ChatTypedDeliberationWire.DiscussionCommand command,
+            ChatTypedDeliberationContextService.Context context,Map<String,Object> deliveryBasis,List<Map<String,Object>> targets) {
+        var facts=new LinkedHashMap<>(admissionFacts(command,context.selectors(),deliveryBasis,targets));
+        facts.put("nativeMaterials",ChatMaterialsInputContract.candidates(context.frozenDeclaration(),ChatTypedDeliberationContextService.parseCatalog(context.sourceCatalogJson())));
+        return java.util.Collections.unmodifiableMap(facts);
+    }
     private static Map<String,Object> admissionFacts(ChatTypedDeliberationWire.DiscussionCommand command,
             List<ChatTypedDeliberationWire.SourceSelector> selectors, Map<String,Object> deliveryParent,List<Map<String,Object>> deliveryTargets) {
         Map<String,Object> value=new LinkedHashMap<>();

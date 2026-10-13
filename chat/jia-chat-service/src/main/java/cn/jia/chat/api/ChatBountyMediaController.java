@@ -106,7 +106,7 @@ public class ChatBountyMediaController {
         var allowed = authorize(requestId, stepId, authentication);
         var items = executions.listConversationOutputs(allowed.scope(), allowed.step().taskId(),
                 allowed.execution().runId());
-        if (items == null || items.isEmpty() || items.size() > 128) throw unavailable();
+        if (items == null || items.size() > 128) throw unavailable();
         var body = new java.util.ArrayList<OutputItem>(items.size());
         for (var item : items) {
             if (item == null || !allowed.execution().executionId().equals(item.executionId())
@@ -272,7 +272,7 @@ public class ChatBountyMediaController {
                 || !request.conversationId().equals(execution.conversationId())
                 || !step.targetAgentId().equals(execution.targetAgentId())
                 || !"CONVERSATION".equals(execution.executionMode())
-                || !"OUTPUT_COMMITTED".equals(execution.state()) || !safeId(execution.runId()))
+                || !java.util.Set.of("OUTPUT_COMMITTED","RESULT_COMMITTED").contains(execution.state()) || !safeId(execution.runId()))
             throw unavailable();
         return new Authorized(scope, request, step, execution);
     }

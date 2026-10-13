@@ -20,16 +20,18 @@ public final class ChatSkillSourceAccessService implements SkillSourceAccessServ
     private final PersonalWorkspaceExecutionService files;
     private final SkillExecutionService skills;
     private final JdbcTemplate jdbc;
+    private final cn.jia.agent.service.PersonalWorkspaceStorage storage;
     public ChatSkillSourceAccessService(ChatConversationDao conversations,JuyitingConversationScopeService scopes,
             ChatConversationArchiveStore archive,@org.springframework.context.annotation.Lazy PersonalWorkspaceExecutionService files,
-            @org.springframework.context.annotation.Lazy SkillExecutionService skills,JdbcTemplate jdbc) {
-        this.conversations=conversations;this.scopes=scopes;this.archive=archive;this.files=files;this.skills=skills;this.jdbc=jdbc;
+            @org.springframework.context.annotation.Lazy SkillExecutionService skills,JdbcTemplate jdbc,cn.jia.agent.service.PersonalWorkspaceStorage storage) {
+        this.conversations=conversations;this.scopes=scopes;this.archive=archive;this.files=files;this.skills=skills;this.jdbc=jdbc;this.storage=storage;
     }
     @Override public void requireAuthorized(PersonalWorkspaceExecutionService.OwnerScope scope,String task,
             String conversation,long generation,Map<String,Object> input) {
         String target=conversation(scope,task,conversation,generation);
         var identity=object(input.get("sourceIdentity"));String kind=(String)input.get("sourceKind");
-        if("CURRENT_CONVERSATION_ASSET".equals(kind)) {
+        if("TASK_LINKED_WORKSPACE_VERSION".equals(kind)) {workspace(scope,task,identity,input);}
+        else if("CURRENT_CONVERSATION_ASSET".equals(kind)) {
             var source=asset(scope,task,conversation,generation,target,identity);
             if(!source.contentMimeType().equals(input.get("contentMimeType"))||!source.sha256().equals(input.get("sha256"))
                     ||source.byteLength()!=decimal(input.get("byteLength"))||!identity.equals(assetIdentity(source)))throw missing();
@@ -42,7 +44,12 @@ public final class ChatSkillSourceAccessService implements SkillSourceAccessServ
     @Override public PersonalWorkspaceExecutionService.RuntimeContent read(PersonalWorkspaceExecutionService.OwnerScope scope,
             String task,String conversation,long generation,Map<String,Object> input) {
         requireAuthorized(scope,task,conversation,generation,input);var identity=object(input.get("sourceIdentity"));byte[] bytes;String filename;
-        if("CURRENT_CONVERSATION_ASSET".equals(input.get("sourceKind"))) {
+        if("TASK_LINKED_WORKSPACE_VERSION".equals(input.get("sourceKind"))) {
+            var row=workspace(scope,task,identity,input);
+            var content=storage.read(new cn.jia.agent.service.PersonalWorkspaceStorage.Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn()),
+                    text(row,"storage_uri"),(String)input.get("sha256"),decimal(input.get("byteLength")),(String)input.get("contentMimeType"));
+            bytes=content.content();filename="material";
+        }else if("CURRENT_CONVERSATION_ASSET".equals(input.get("sourceKind"))) {
             var s=asset(scope,task,conversation,generation,conversation(scope,task,conversation,generation),identity);
             var output=files.readConversationOutput(scope,task,s.runId(),s.outputId());
             if(output==null||!s.executionId().equals(output.executionId())||!s.outputId().equals(output.outputId())
@@ -54,7 +61,23 @@ public final class ChatSkillSourceAccessService implements SkillSourceAccessServ
         requireAuthorized(scope,task,conversation,generation,input);
         return new PersonalWorkspaceExecutionService.RuntimeContent(filename,(String)input.get("contentMimeType"),bytes);
     }
-    String conversation(PersonalWorkspaceExecutionService.OwnerScope s,String task,String id,long generation) {
+    private Map<String,Object> workspace(PersonalWorkspaceExecutionService.OwnerScope s,String task,Map<String,Object> identity,Map<String,Object> input) {
+        if(!identity.keySet().equals(Set.of("kind","fileId","version","purpose"))||!"TASK_LINKED_WORKSPACE_VERSION".equals(identity.get("kind"))
+                ||!Set.of("INPUT","REFERENCE").contains(identity.get("purpose")))throw missing();
+        var rows=jdbc.queryForList("""
+            SELECT v.storage_uri,v.content_hash,v.byte_length,v.content_mime_type FROM agent_personal_workspace_task_file_link l
+            JOIN agent_personal_workspace_file f ON BINARY f.tenant_id=BINARY l.tenant_id AND BINARY f.client_id=BINARY l.client_id
+              AND BINARY f.owner_jiacn=BINARY l.owner_jiacn AND BINARY f.file_id=BINARY l.file_id AND f.state='ACTIVE'
+            JOIN agent_personal_workspace_file_version v ON BINARY v.tenant_id=BINARY l.tenant_id AND BINARY v.client_id=BINARY l.client_id
+              AND BINARY v.owner_jiacn=BINARY l.owner_jiacn AND BINARY v.file_id=BINARY l.file_id AND v.version=l.file_version
+            WHERE BINARY l.tenant_id=BINARY ? AND BINARY l.client_id=BINARY ? AND BINARY l.owner_jiacn=BINARY ? AND BINARY l.task_id=BINARY ?
+              AND BINARY l.file_id=BINARY ? AND l.file_version=? AND BINARY l.link_role=BINARY ? AND l.link_state='ACTIVE'
+            """,s.tenantId(),s.clientId(),s.ownerJiacn(),task,text(identity,"fileId"),decimal(identity.get("version")),text(identity,"purpose"));
+        if(rows.size()!=1)throw missing();var row=rows.getFirst();
+        if(!input.get("sha256").equals(row.get("content_hash"))||decimal(input.get("byteLength"))!=decimal(row.get("byte_length"))
+                ||!input.get("contentMimeType").equals(row.get("content_mime_type")))throw missing();return row;
+    }
+    public String conversation(PersonalWorkspaceExecutionService.OwnerScope s,String task,String id,long generation) {
         var c=conversations.findScopedById(s.ownerJiacn(),s.clientId(),id);
         if(c==null||c.getId()==null||!id.equals(Long.toString(c.getId()))||!s.tenantId().equals(c.getTenantId())
                 ||!s.ownerJiacn().equals(c.getJiacn())||!s.clientId().equals(c.getClientId())||c.getDeletedAt()!=null
