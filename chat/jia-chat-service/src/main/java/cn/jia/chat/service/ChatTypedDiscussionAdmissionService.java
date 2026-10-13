@@ -39,6 +39,9 @@ public class ChatTypedDiscussionAdmissionService {
     private final ChatTypedDeliberationContextService contexts;
     private final ChatTypedDeliberationService typed;
     private final ChatActionFinalService finals;
+    private ChatSkillPackagePreparationService packagePreparation;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setPackagePreparation(ChatSkillPackagePreparationService value) { packagePreparation=Objects.requireNonNull(value); }
     private cn.jia.agent.service.AgentTaskExecutionGrantService skillGrants;
     @org.springframework.beans.factory.annotation.Autowired
     public void setSkillGrants(cn.jia.agent.service.AgentTaskExecutionGrantService value){skillGrants=Objects.requireNonNull(value);}
@@ -55,13 +58,26 @@ public class ChatTypedDiscussionAdmissionService {
         this.contexts=Objects.requireNonNull(contexts);this.typed=Objects.requireNonNull(typed);this.finals=Objects.requireNonNull(finals);
     }
 
-    @Transactional(rollbackFor=Exception.class)
+    @Transactional(propagation=org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
     public ChatTypedDeliberationWire.Accepted admit(String tenantId, ServerResolvedSender sender,
             String conversationId, String idempotencyKey, ChatTypedDeliberationWire.DiscussionCommand command) {
         if(!"0".equals(tenantId)||sender==null||!ServerResolvedSender.USER_TYPE.equals(sender.type())
                 ||!exact(sender.jiacn(),50)||!exact(sender.clientId(),50)||!exact(conversationId,100)
                 ||!exact(idempotencyKey,100)||command==null)throw invalid();
         String owner=sender.jiacn(),client=sender.clientId();
+        // A cold package store may perform I/O only here, before root/Chat locks and money/execution work.
+        // This is merely a locator read. Every owner/assignment/ACL/key fact is rechecked under the root below.
+        var locator=conversations.findScopedById(owner,client,conversationId);
+        if(locator==null||locator.getDeletedAt()!=null||locator.getLifecycleGeneration()==null||locator.getLifecycleGeneration()<1
+                ||!tenantId.equals(locator.getTenantId())||!owner.equals(locator.getJiacn())||!client.equals(locator.getClientId())
+                ||!command.taskId().equals(locator.getTaskId()))throw unavailable();
+        var locatorScope=new ChatTypedDeliberationStore.Scope(tenantId,owner,client,conversationId,locator.getLifecycleGeneration());
+        var known=typed.store().findAdmissionByKey(locatorScope,idempotencyKey,false);
+        if(known==null) {
+            var targets=scopes.parsePersistedTargetAgentIds(locator.getTargetAgentIds());if(targets.size()!=1)throw unavailable();
+            if(packagePreparation==null)throw persistence("Skill package preparation is unavailable");
+            packagePreparation.prepare(new cn.jia.agent.service.SkillCapabilityLookup.Scope(tenantId,client,owner,targets.getFirst()));
+        }
         return taskMutations.executeWithLockedTaskRootInOwnerScope(tenantId,client,owner,command.taskId(),root->{
             ChatBountyBindingStore.Binding binding;
             try { binding=bindings.lock(new ChatBountyBindingStore.Scope(tenantId,owner,client),command.taskId()); }

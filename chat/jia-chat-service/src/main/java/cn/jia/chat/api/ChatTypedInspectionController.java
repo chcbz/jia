@@ -53,13 +53,7 @@ public final class ChatTypedInspectionController {
     public ResponseEntity<JsonResult<ChatTypedInspectionWire.Accepted>> admit(
             @PathVariable String conversationId, @RequestBody(required = false) String raw,
             Authentication authentication, HttpServletRequest request) {
-        if (request.getQueryString() != null) throw invalid();
-        String key = singleHeader(request, IDEMPOTENCY_HEADER);
-        Scope scope = scope(authentication);
-        ChatTypedInspectionWire.Accepted value = admissions.admit(scope.tenantId(), scope.sender(),
-                conversationId, key, ChatTypedInspectionWire.parse(raw));
-        return ResponseEntity.status(HttpStatus.ACCEPTED).cacheControl(CacheControl.noStore())
-                .header("X-Content-Type-Options", "nosniff").body(JsonResult.success(value));
+        return RetiredSkillWriteEndpoint.response();
     }
 
     @GetMapping("/{conversationId}/interactions/inspection/request")

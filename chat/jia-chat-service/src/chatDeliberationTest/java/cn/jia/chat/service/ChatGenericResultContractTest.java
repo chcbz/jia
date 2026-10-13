@@ -5,7 +5,7 @@ import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
 class ChatGenericResultContractTest {
     private Map<String,Object> manifest(Object data) {
-        var m=new LinkedHashMap<String,Object>();m.put("schemaVersion",1);m.put("data",data);m.put("artifacts",List.of());String digest=ChatSkillSnapshotJson.sha(m);
+        var m=new LinkedHashMap<String,Object>();m.put("schemaVersion",1);m.put("data",data);m.put("artifacts",List.of());m.put("inputReceipts",List.of());String digest=ChatSkillSnapshotJson.sha(m);
         m.put("resultDigest",digest);m.put("manifestId","manifest");return m;
     }
     @Test void dataOnlyResultDoesNotRequireAnArtifactAndArchivingIsNotACompletionClaim() {

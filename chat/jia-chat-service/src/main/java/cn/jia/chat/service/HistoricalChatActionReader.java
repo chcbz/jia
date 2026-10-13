@@ -586,7 +586,7 @@ public class HistoricalChatActionReader {
         if (raw instanceof Map<?, ?> value) return (Map<String, Object>)value;
         throw persistence("Stored action object is invalid");
     }
-    private static String canonical(Object value) { return CanonicalContextJson.write(value); }
+    private static String canonical(Object value) { return HistoricalCanonicalContextJson.write(value); }
     private static String stable(String prefix, String... parts) {
         // Same immutable question-ID convention as the existing clarification CAS path.
         try { return prefix + "_" + java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")

@@ -8,6 +8,9 @@ import cn.jia.core.entity.JsonResult;
 import org.springframework.http.*;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
+import jakarta.servlet.http.HttpServletRequest;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
+import java.util.Objects;
 
 /** Browser-safe directory only. A GET never upgrades grants, executes, or approves costs. */
 @RestController
@@ -21,8 +24,14 @@ public final class TaskSkillCapabilityController {
     }
     @GetMapping("/{taskId}/skill-capabilities")
     public ResponseEntity<JsonResult<ChatActionCapabilityService.TaskCatalog>> read(@PathVariable String taskId,
-            @RequestParam String targetAgentId,Authentication authentication) {
-        String tenant=tenants.resolve(authentication);var sender=identities.resolve(EsContextHolder.getContext());
+            @RequestParam String targetAgentId,Authentication authentication,HttpServletRequest request) {
+        if (!(authentication instanceof JwtAuthenticationToken jwt) || !authentication.isAuthenticated()) throw missing();
+        if (request.getQueryString() == null || request.getParameterMap().size() != 1 || (request.getParameterValues("targetAgentId") == null || request.getParameterValues("targetAgentId").length != 1)
+                || request.getContentLengthLong() > 0 || request.getHeader(HttpHeaders.TRANSFER_ENCODING) != null) throw missing();
+        String tenant=tenants.resolve(authentication);var context=EsContextHolder.getContext();
+        if (context==null || !Objects.equals(tenant,context.getTenantId()) || !Objects.equals(jwt.getToken().getClaimAsString("jiacn"),context.getJiacn())
+                || !Objects.equals(jwt.getToken().getClaimAsString("client_id"),context.getClientId())) throw missing();
+        var sender=identities.resolve(context);
         if(!"0".equals(tenant)||sender==null||!ServerResolvedSender.USER_TYPE.equals(sender.type())||!exact(taskId)||!exact(targetAgentId))throw missing();
         var result=capabilities.taskCatalog(new ChatActionCapabilityService.Scope(tenant,sender.jiacn(),sender.clientId(),targetAgentId),taskId);
         return ResponseEntity.ok().cacheControl(CacheControl.noStore()).header("X-Content-Type-Options","nosniff").body(JsonResult.success(result));

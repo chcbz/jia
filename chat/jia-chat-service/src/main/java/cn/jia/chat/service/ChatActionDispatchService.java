@@ -20,7 +20,10 @@ import java.util.Objects;
 @Service
 public class ChatActionDispatchService {
     /** Existing execution adapter must persist its own stable child under the caller's transaction. */
-    public interface Executor { String admit(ChatActionFinalService.BoundAction action); }
+    public interface Executor {
+        default void prepare(ChatActionFinalService.BoundAction action) { }
+        String admit(ChatActionFinalService.BoundAction action);
+    }
 
     /** Confirmed stale immutable request, not a transient DB/lease/runtime failure. */
     public static final class Rejected extends ChatDeliberationException {
@@ -50,10 +53,15 @@ public class ChatActionDispatchService {
         this.dao=dao; this.outbox=outbox; this.executors=executors;
     }
 
-    @Transactional(rollbackFor = Exception.class)
+    @Transactional(propagation=org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
     public void consume(ChatDeliberationOutboxService.Claim claim) {
         var initial = finals.loadAction(claim.row());
         var parent = initial.outcome(); var scope = parent.scope();
+        var executor=executors.getIfUnique();
+        if(executor==null)throw new IllegalStateException("Skill execution adapter is unavailable");
+        // No root/conversation/outbox lock across immutable package I/O. Replay skips preparation entirely.
+        if(typed.findAdmissionByKey(scope,ChatActionFinalValidator.actionEventId(initial.validated()),false)==null)
+            executor.prepare(initial);
         tasks.executeWithLockedTaskRootInOwnerScope(scope.tenantId(), scope.clientId(), scope.ownerJiacn(), parent.taskId(), root -> {
             var binding = bindings.lock(new ChatBountyBindingStore.Scope(scope.tenantId(), scope.ownerJiacn(), scope.clientId()), parent.taskId());
             String target = (String) initial.validated().binding().get("targetAgentId");
@@ -77,8 +85,6 @@ public class ChatActionDispatchService {
             var capability = action.validated().dispatchFacts().availableActions().stream().filter(c -> c.actionId().equals(
                     action.validated().interactionOutcome().action().actionId())).findFirst().orElseThrow();
             if(!"EXECUTE".equals(capability.kind())||!"EXECUTE_SKILL".equals(capability.operation()))throw new Rejected();
-            var executor=executors.getIfUnique();
-            if(executor==null)throw new IllegalStateException("Skill execution adapter is unavailable");
             executor.admit(action);
             if (!outbox.sent(claim, System.currentTimeMillis())) throw conflict("Action outbox lease changed");
             return null;

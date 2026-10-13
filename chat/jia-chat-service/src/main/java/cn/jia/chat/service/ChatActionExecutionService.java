@@ -44,6 +44,16 @@ public class ChatActionExecutionService implements ChatActionDispatchService.Exe
     }
 
     @Override
+    @Transactional(propagation=Propagation.NOT_SUPPORTED)
+    public void prepare(ChatActionFinalService.BoundAction action) {
+        if(org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive())
+            throw new InstalledSkillDescriptorLookup.SourceUnavailable();
+        var scope=action.outcome().scope();
+        installed.read(new SkillCapabilityLookup.Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),
+                (String)action.validated().binding().get("targetAgentId")));
+    }
+
+    @Override
     @Transactional(propagation=Propagation.MANDATORY, rollbackFor=Exception.class)
     public String admit(ChatActionFinalService.BoundAction action) {
         var parent=action.outcome(); var scope=parent.scope();

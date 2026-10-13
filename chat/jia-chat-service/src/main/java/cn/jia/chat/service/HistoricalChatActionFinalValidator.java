@@ -55,7 +55,7 @@ public final class HistoricalChatActionFinalValidator {
         preimage.put("content", content);
         preimage.put("interactionOutcome", outcomeMap(outcome));
         preimage.put("inspectionInputReceipt", receipt == null ? null : TypedInspectionFinalValidator.receiptMap(receipt));
-        String canonical = CanonicalContextJson.write(preimage);
+        String canonical = HistoricalCanonicalContextJson.write(preimage);
         return new ValidatedFinal(binding, facts, content, outcome, receipt, canonical, "sha256:" + sha256(canonical));
     }
 
@@ -98,7 +98,7 @@ public final class HistoricalChatActionFinalValidator {
     public static String actionEventId(ValidatedFinal value) {
         if (!"ACTION_REQUEST".equals(value.interactionOutcome().kind()))
             throw invalid("ACTION_FINAL_HAS_NO_ACTION");
-        return "act_" + sha256(CanonicalContextJson.write(Map.of("domain", "juyiting.action-event",
+        return "act_" + sha256(HistoricalCanonicalContextJson.write(Map.of("domain", "juyiting.action-event",
                 "binding", value.binding(), "finalDigest", value.finalDigest()))).substring(0, 40);
     }
 

@@ -53,7 +53,9 @@ public final class ChatSkillResultController {
         Object outputs=List.of();if(view.resultManifest()!=null) {
             var manifest=view.resultManifest();var digest=new LinkedHashMap<>(manifest);digest.remove("manifestId");digest.remove("resultDigest");
             if(!ChatSkillSnapshotJson.sha(digest).equals(manifest.get("resultDigest")))throw unavailable();
-            var response=media.outputs((String)chain.get("request_id"),(String)chain.get("step_id"),authentication);outputs=response.getBody().getData();
+            if (complete) {
+                var response=media.outputs((String)chain.get("request_id"),(String)chain.get("step_id"),authentication);outputs=response.getBody().getData();
+            }
         }
         body.put("outputs",outputs);
         return ResponseEntity.ok().cacheControl(CacheControl.noStore()).header("X-Content-Type-Options","nosniff").body(JsonResult.success(Collections.unmodifiableMap(body)));

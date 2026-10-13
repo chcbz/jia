@@ -9,8 +9,8 @@ import static org.junit.jupiter.api.Assertions.*;
 class TypedDeliberationDeclarationTest {
     static Map<String,Object> declaration(String state) {
         Map<String,Object> value=new LinkedHashMap<>();
-        value.put("schemaVersion",3);value.put("state",state);
-        value.put("carrier","CHAT_MESSAGE_FINAL_SIDECAR_V3");
+        value.put("schemaVersion",4);value.put("state",state);
+        value.put("carrier","CHAT_MESSAGE_FINAL_SIDECAR_V4");
         value.put("referenceModes",List.of("NONE","AVAILABLE"));
         value.put("outcomeKinds",List.of("ANSWER","CLARIFY","ACTION_REQUEST"));
         value.put("engine","CODEX_APP_SERVER_NATIVE_OUTPUT_SCHEMA");
@@ -35,6 +35,20 @@ class TypedDeliberationDeclarationTest {
         assertEquals(TypedDeliberationDeclaration.State.UNSUPPORTED,TypedDeliberationDeclaration.parse(extra).state());
         Map<String,Object> weakened=declaration("READY");weakened.put("strictNoToolsVerified",true);
         assertEquals(TypedDeliberationDeclaration.State.UNSUPPORTED,TypedDeliberationDeclaration.parse(weakened).state());
+    }
+    @Test void v4NativeDeclarationSurvivesRealSessionRegistryIntoOriginalChatMaterialFacts() {
+        var profile=Map.<String,Object>of("schemaVersion",1,"supportedInputs",List.of(Map.of("mediaKind","image","mimeType","image/png","carrier","LOCAL_IMAGE","carrierContractDigest","sha256:"+"a".repeat(64))));
+        var declaration=declaration("READY");declaration.put("materialsInput",profile);
+        var sessions=new TypedDeliberationSessionRegistry();sessions.register("session","0","owner","client","agent",declaration);
+        var registered=sessions.requireSingleReady(new TypedDeliberationSessionRegistry.Scope("0","owner","client"),"agent");
+        assertEquals(profile,registered.frozenDeclaration().get("materialsInput"));assertTrue(registered.supportedOperations().isEmpty());
+        var sources=List.of(Map.<String,Object>of("sourceRefId","image","sourceKind","TASK_WORKSPACE_FILE","contentHash","b".repeat(64),"byteLength","4","contentMimeType","image/png"),
+                Map.<String,Object>of("sourceRefId","unsupported","sourceKind","TASK_WORKSPACE_FILE","contentHash","c".repeat(64),"byteLength","5","contentMimeType","application/pdf"));
+        var candidates=cn.jia.chat.service.ChatMaterialsInputContract.candidates(registered.frozenDeclaration(),sources);
+        var facts=cn.jia.chat.service.ChatMaterialsInputContract.bind(candidates,"0","owner","client","1",1,"task","request","turn","agent");
+        assertEquals(List.of("image"),cn.jia.chat.service.ChatMaterialsInputContract.refs(facts));assertEquals(2,sources.size());
+        assertTrue(facts.toString().contains("LOCAL_IMAGE"));
+        sessions.remove("session");assertThrows(IllegalStateException.class,()->sessions.requireSingleReady(new TypedDeliberationSessionRegistry.Scope("0","owner","client"),"agent"));
     }
     @Test void legacyDeclarationDoesNotSilentlyNegotiateNewRequests() {
         var old = declaration("READY"); old.put("schemaVersion",1);

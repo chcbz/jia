@@ -4,7 +4,7 @@ import cn.jia.core.util.JsonUtil;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 
-/** Exact core snapshot/result encoding: sorted object keys, array order retained, Jackson JSON scalars. */
+/** Shared core snapshot/result encoding: UTF16 keys, array order, shortest portable JSON numbers. */
 public final class ChatSkillSnapshotJson {
     private ChatSkillSnapshotJson() { }
     static Object canonical(Object value) {
@@ -13,7 +13,7 @@ public final class ChatSkillSnapshotJson {
         if(value instanceof List<?> list)return list.stream().map(ChatSkillSnapshotJson::canonical).toList();
         return value;
     }
-    public static String write(Object value) {return JsonUtil.toJson(canonical(value));}
+    public static String write(Object value) {return cn.jia.agent.service.SkillCanonicalJson.write(value);}
     public static String sha(Object value) {return ChatSkillSourceAccessService.sha(write(value).getBytes(StandardCharsets.UTF_8));}
     @SuppressWarnings("unchecked") static Map<String,Object> object(String json) {return JsonUtil.getMapper().readValue(json,Map.class);}
 }

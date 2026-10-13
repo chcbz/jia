@@ -265,8 +265,8 @@ public class ChatBountyAssetProjector {
         if(view==null||!executionId.equals(view.executionId())||!"RESULT_COMMITTED".equals(view.state())
                 ||!Set.of("ARCHIVING","COMPLETE").contains(view.phase())||view.resultManifest()==null)throw new IllegalStateException("Result not committed");
         var manifest=view.resultManifest();
-        if(!manifest.keySet().equals(Set.of("schemaVersion","data","artifacts","resultDigest","manifestId"))
-                ||!Integer.valueOf(1).equals(manifest.get("schemaVersion"))||!(manifest.get("artifacts") instanceof List<?>))throw new IllegalStateException("Invalid result manifest");
+        if(!manifest.keySet().equals(Set.of("schemaVersion","data","artifacts","inputReceipts","resultDigest","manifestId"))
+                ||!Integer.valueOf(1).equals(manifest.get("schemaVersion"))||!(manifest.get("artifacts") instanceof List<?>)||!(manifest.get("inputReceipts") instanceof List<?>))throw new IllegalStateException("Invalid result manifest");
         var preimage=new java.util.LinkedHashMap<>(manifest);preimage.remove("resultDigest");preimage.remove("manifestId");
         if(!ChatSkillSnapshotJson.sha(preimage).equals(manifest.get("resultDigest")))throw new IllegalStateException("Result digest mismatch");return manifest;
     }

@@ -38,7 +38,7 @@ public final class AgentMaterialsInputController {
     public ResponseEntity<byte[]> content(@PathVariable String requestId,
             @PathVariable String turnId, @PathVariable String sourceRefId,
             Authentication authentication, HttpServletRequest request) {
-        if (request.getQueryString() != null || request.getContentLengthLong() > 0) throw unavailable();
+        if (request.getQueryString() != null || request.getContentLengthLong() > 0 || request.getHeader(HttpHeaders.TRANSFER_ENCODING) != null) throw unavailable();
         if (!(authentication instanceof AgentRuntimeAuthentication runtime) || !runtime.isAuthenticated()) {
             throw new RuntimeAccessException(authentication == null || !authentication.isAuthenticated()
                     ? HttpStatus.UNAUTHORIZED : HttpStatus.FORBIDDEN);
@@ -50,7 +50,7 @@ public final class AgentMaterialsInputController {
         cn.jia.agent.service.PersonalWorkspaceExecutionService.RuntimeContent value = authority.read(runtime.getPrincipal(), requestId,
                 turnId, sourceRefId, headers.getFirst());
         // Source storage can perform I/O; never hold the new Runtime fence across it.
-        // Inspection is read-only. Current installation/proof is checked again for delivery.
+        // Native material input is read-only. Current installation/proof is checked again for delivery.
         return runtimeAuthentication.withNativeFence(runtime, () -> ResponseEntity.ok().cacheControl(CacheControl.noStore())
                 .header("X-Content-Type-Options", "nosniff")
                 .header(HttpHeaders.CONTENT_TYPE, value.contentMimeType())
