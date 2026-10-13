@@ -1,7 +1,7 @@
 package cn.jia.agent.api;
 import cn.jia.agent.skill.*;
 import cn.jia.agent.hosting.HostingRentHttp;
-import cn.jia.core.common.JsonResult;
+import cn.jia.core.entity.JsonResult;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.*;

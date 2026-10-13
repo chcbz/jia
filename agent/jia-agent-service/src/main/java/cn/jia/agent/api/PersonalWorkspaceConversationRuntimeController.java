@@ -97,8 +97,7 @@ public final class PersonalWorkspaceConversationRuntimeController {
                 executions.renewConversationLease(scope(authentication),taskId,runId,fence(request))));
     }
 
-    @PostMapping(value="/{taskId}/runs/{runId}/conversation/provider-start",
-            consumes=MediaType.APPLICATION_JSON_VALUE,produces=MediaType.APPLICATION_JSON_VALUE)
+    // Retired latest skill contract: no provider-start/inspection-v3 execution writes.
     public ResponseEntity<ProviderStartReceipt> providerStart(@PathVariable String taskId,
             @PathVariable String runId,@RequestBody FenceRequest request,
             HttpServletRequest servletRequest,Authentication authentication) {
@@ -110,8 +109,7 @@ public final class PersonalWorkspaceConversationRuntimeController {
         return ok(new ProviderStartReceipt(true));
     }
 
-    @PostMapping(value="/{taskId}/runs/{runId}/conversation/provider-start-controlled-image",
-            consumes=MediaType.APPLICATION_JSON_VALUE,produces=MediaType.APPLICATION_JSON_VALUE)
+    // Retired latest skill contract: no provider-start/inspection-v3 execution writes.
     public ResponseEntity<PersonalWorkspaceExecutionService.ControlledProviderStartReceipt>
             controlledProviderStart(@PathVariable String taskId,@PathVariable String runId,
             @RequestBody(required=false) String rawBody,HttpServletRequest request,
@@ -125,8 +123,7 @@ public final class PersonalWorkspaceConversationRuntimeController {
         }
     }
 
-    @PostMapping(value="/{taskId}/runs/{runId}/conversation/provider-start-controlled-image-v3",
-            consumes=MediaType.APPLICATION_JSON_VALUE,produces=MediaType.APPLICATION_JSON_VALUE)
+    // Retired latest skill contract: no provider-start/inspection-v3 execution writes.
     public ResponseEntity<PersonalWorkspaceExecutionService.ControlledProviderStartReceiptV3>
             controlledProviderStartV3(@PathVariable String taskId,@PathVariable String runId,
             @RequestBody(required=false) String rawBody,HttpServletRequest request,Authentication authentication) {
@@ -138,8 +135,7 @@ public final class PersonalWorkspaceConversationRuntimeController {
     // Bean-to-Map sanitization loses the source union's NON_NULL serialization contract.
     // Keep the exact wire shape without weakening runtime authentication, fencing, or other routes.
     @AllowSensitiveOutput(reason="Native authenticated V3 input metadata requires exact source union fields; no secrets")
-    @PostMapping(value="/{taskId}/runs/{runId}/conversation/inputs-v3",consumes=MediaType.APPLICATION_JSON_VALUE,
-            produces=MediaType.APPLICATION_JSON_VALUE)
+    // Retired latest skill contract: no provider-start/inspection-v3 execution writes.
     public ResponseEntity<PersonalWorkspaceExecutionService.ConversationInputSnapshotV3> inputsV3(
             @PathVariable String taskId,@PathVariable String runId,@RequestBody FenceRequest fence,
             HttpServletRequest request,Authentication authentication) {

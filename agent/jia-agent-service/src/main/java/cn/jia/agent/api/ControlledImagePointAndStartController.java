@@ -54,7 +54,7 @@ public final class ControlledImagePointAndStartController {
         this.bridge=Objects.requireNonNull(bridge);
     }
 
-    @PostMapping(consumes=MediaType.APPLICATION_JSON_VALUE,produces=MediaType.APPLICATION_JSON_VALUE)
+    // Retired latest-contract write: history remains read-only; skills register fees, never authorize them.
     public ResponseEntity<JsonResult<ControlledImagePointAndStartDTO.Receipt>> submit(
             @PathVariable String taskId,
             @RequestHeader(value="Idempotency-Key",required=false) String key,

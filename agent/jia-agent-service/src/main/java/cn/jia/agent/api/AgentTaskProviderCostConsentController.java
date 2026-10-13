@@ -62,7 +62,7 @@ public final class AgentTaskProviderCostConsentController {
         this.consents=Objects.requireNonNull(consents,"consents");
     }
 
-    @PostMapping(consumes=MediaType.APPLICATION_JSON_VALUE,produces=MediaType.APPLICATION_JSON_VALUE)
+    // Retired latest-contract write: history remains read-only; skills register fees, never authorize them.
     public ResponseEntity<AgentTaskProviderCostConsentDTO> issue(@PathVariable String taskId,
             @RequestBody(required=false) String rawBody,
             @RequestHeader(value="Idempotency-Key",required=false) String key,
@@ -95,8 +95,7 @@ public final class AgentTaskProviderCostConsentController {
         return ok(consents.getByIdempotencyKey(scope,taskId,key));
     }
 
-    @PostMapping(value="/{consentId}/revoke",consumes=MediaType.APPLICATION_JSON_VALUE,
-            produces=MediaType.APPLICATION_JSON_VALUE)
+    // Retired latest-contract write: history remains read-only; skills register fees, never authorize them.
     public ResponseEntity<AgentTaskProviderCostConsentDTO> revoke(@PathVariable String taskId,
             @PathVariable String consentId,@RequestBody(required=false) String rawBody,
             @RequestHeader(value="Idempotency-Key",required=false) String key,
