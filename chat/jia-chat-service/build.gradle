@@ -112,6 +112,11 @@ configurations.named(chatDeliberationSourceSet.implementationConfigurationName) 
 configurations.named(chatDeliberationSourceSet.runtimeOnlyConfigurationName) {
     extendsFrom configurations.testRuntimeOnly
 }
+// Real immutable-package integration fixtures; no production Chat -> economy dependency.
+dependencies {
+    add(chatDeliberationSourceSet.implementationConfigurationName, project(':economy:jia-economy-core'))
+    add(chatDeliberationSourceSet.implementationConfigurationName, project(':economy:jia-economy-mapper'))
+}
 tasks.register('chatDeliberation', Test) {
     group = 'verification'
     description = 'Runs T10/T11/T15 route, snapshot, durable turn and protocol compatibility tests.'

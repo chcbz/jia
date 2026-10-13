@@ -53,7 +53,7 @@ class ChatGenericProjectionTransactionTest {
             when(f.jdbc.update(contains("UPDATE chat_step_execution_link"),any(Object[].class))).thenAnswer(i->write.apply("link"));
             when(f.jdbc.update(contains("UPDATE chat_interaction_step"),any(Object[].class))).thenAnswer(i->write.apply("step"));
             when(f.events.updateRequestState(any(),eq("RESULT_COMMITTED"),anyLong())).thenAnswer(i->write.apply("request"));
-            doAnswer(i->{write.apply("mark");return null;}).when(f.skills).markProjected(eq(f.owner),eq("exec"),eq(f.manifest.get("resultDigest")));
+            doAnswer(i->{write.apply("mark");return null;}).when(f.skills).markProjected(eq(f.owner),eq("exec"),eq((String)f.manifest.get("resultDigest")));
             try(var context=new AnnotationConfigApplicationContext()) {
                 context.getEnvironment().getPropertySources().addFirst(new org.springframework.core.env.MapPropertySource("test",Map.of("chat.bounty-asset.enabled","true")));
                 context.register(TxConfig.class);context.registerBean("transactionManager",DataSourceTransactionManager.class,()->new DataSourceTransactionManager(source));
