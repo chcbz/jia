@@ -2995,7 +2995,8 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
             for(var input:skillInputs(snapshot))verifySkillInput(skillOwner(scope),execution,input);
             var effect=new LinkedHashMap<String,Object>();effect.put("effectDigest",command.effectDigest());effect.put("bindingRevision",command.providerBindingRevision());
             effect.put("status","START_RECORDED");effect.put("providerRequestId",null);effect.put("providerIdempotencyKey",null);effect.put("resultDigest",null);
-            effect.put("ownerRuntimeFence",Map.of("runtimeInstanceId",scope.runtimeInstanceId(),"leaseVersion",command.fence().version()));effects.put(effectId,effect);
+            var proof=AgentRuntimeAuthenticationService.requireProof(nativeAuthentication(scope));
+            effect.put("ownerRuntimeFence",Map.of("runtimeInstanceId",scope.runtimeInstanceId(),"leaseVersion",command.fence().version(),"runtimeInstallationId",proof.installationId(),"hostId",proof.hostId(),"sessionGeneration",proof.sessionGeneration()));effects.put(effectId,effect);
             String phase=skill.getPhase();long version=skill.getVersion();skill.setEffectsJson(skillJson(effects)).setPhase("WAITING_PROVIDER");skillCas(skill,phase,version);
             return skillEffectReceipt(effect,"NEW");
         }));
@@ -3009,7 +3010,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     @Override @Transactional(rollbackFor=Exception.class)
     public cn.jia.agent.service.SkillExecutionService.EffectReceipt recordEffect(RuntimeScope scope,String taskId,String runId,String effectId,cn.jia.agent.service.SkillExecutionService.EffectResult command) {
         requireSkillEnabled();nativeAuthentication(scope);id(effectId,"effectId",100);
-        if(command==null||!sha(command.effectDigest())||!Set.of("ACCEPTED","SUCCEEDED","FAILED","UNKNOWN").contains(command.status())
+        if(command==null||command.status()==null||!sha(command.effectDigest())||!Set.of("ACCEPTED","SUCCEEDED","FAILED","UNKNOWN").contains(command.status())
                 ||command.resultDigest()!=null&&!sha(command.resultDigest())||"SUCCEEDED".equals(command.status())&&command.resultDigest()==null)throw failure(Reason.BAD_REQUEST);
         if(command.providerRequestId()!=null)id(command.providerRequestId(),"providerRequestId",100);
         return nativeMutation(scope,()->withConversationRoot(scope,taskId,runId,true,execution->{
