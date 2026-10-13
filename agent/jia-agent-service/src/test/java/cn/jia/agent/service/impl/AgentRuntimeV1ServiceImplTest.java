@@ -24,6 +24,7 @@ class AgentRuntimeV1ServiceImplTest {
     private AgentCommandAckService acks;
     private AgentRuntimeV1ServiceImpl service;
     private cn.jia.agent.dao.AgentIdentityRegistryDao registry;
+    private cn.jia.agent.security.AgentRuntimeAuthenticationService sessions;
 
     @BeforeEach void setUp() {
         installations = mock(AgentRuntimeV1InstallationDao.class);
@@ -32,7 +33,8 @@ class AgentRuntimeV1ServiceImplTest {
         @SuppressWarnings("unchecked") ObjectProvider<AgentCommandAckService> provider = mock(ObjectProvider.class);
         when(provider.getIfAvailable()).thenReturn(acks);
         registry = mock(cn.jia.agent.dao.AgentIdentityRegistryDao.class);
-        service = new AgentRuntimeV1ServiceImpl(installations, identities, registry, provider);
+        sessions = mock(cn.jia.agent.security.AgentRuntimeAuthenticationService.class);
+        service = new AgentRuntimeV1ServiceImpl(installations, identities, registry, provider, sessions);
     }
 
     @Test void webCreationStoresOnlyProvidedDigestAndReturnsRedactedView() {
@@ -54,6 +56,170 @@ class AgentRuntimeV1ServiceImplTest {
         AgentRuntimeV1InstallationEntity persisted = captor.getValue();
         assertArrayEquals(java.util.HexFormat.of().parseHex(digest), persisted.getEnrollmentSecretHash());
         assertNull(persisted.getRuntimeAuthorizationHash());
+    }
+
+    private static final String INTERNAL_ID = "rti_0123456789abcdef0123456789abcdef";
+    private cn.jia.agent.entity.AgentRuntimeV1InstallationRequest candidate(String manifest, String secret, long expires) {
+        return new AgentRuntimeV1InstallationRequest(INTERNAL_ID, AGENT, "1", manifest, secret, expires);
+    }
+    private void internalOwner() {
+        var identity = new cn.jia.agent.entity.AgentIdentityRegistryEntity().setCanonicalAgentId(AGENT).setOwnerJiacn("owner-a");
+        identity.setTenantId("0"); identity.setClientId("client-a");
+        when(registry.findExactByCanonicalInScope("0", "client-a", "owner-a", AGENT)).thenReturn(identity);
+    }
+    private AgentRuntimeV1InstallationEntity internalInstallation(String status) {
+        var row = installation(status).setInstallationId(INTERNAL_ID).setEnrollmentSecretHash(java.util.HexFormat.of().parseHex("b".repeat(64)))
+                .setManifestSha256("a".repeat(64)).setEnrollmentExpiresAt(2000L);
+        row.setTenantId("0"); return row;
+    }
+    @Test void internalEnsureCreatesThenExactlyReplaysWithoutRotatingOrExposingSecrets() {
+        internalOwner();
+        var row = internalInstallation("PENDING");
+        when(installations.findInScope("0", "client-a", INTERNAL_ID)).thenReturn(null, row);
+        when(installations.lock(INTERNAL_ID)).thenReturn(row);
+        var request = candidate("a".repeat(64), "b".repeat(64), 2000);
+        var created = service.ensureInstallation("0", "client-a", "owner-a", request, NOW);
+        assertEquals(created, service.ensureInstallation("0", "client-a", "owner-a", request, NOW + 1));
+        verify(installations, times(1)).insertCandidateIfAbsent(any());
+        var order = inOrder(installations);
+        order.verify(installations).findInScope("0", "client-a", INTERNAL_ID);
+        order.verify(installations).insertCandidateIfAbsent(any());
+        order.verify(installations).lock(INTERNAL_ID);
+        verify(installations, never()).insert(any());
+        verifyNoInteractions(identities, sessions, acks);
+        assertFalse(created.toString().contains("enrollmentSecret"));
+        assertFalse(created.toString().contains("b".repeat(64)));
+    }
+    @Test void internalEnsureActiveReplayAfterEnrollmentExpiryIsNotReenrollment() {
+        internalOwner(); var row = internalInstallation("ACTIVE").setEnrollmentConsumedAt(1500L);
+        when(installations.findInScope("0", "client-a", INTERNAL_ID)).thenReturn(row);
+        when(installations.lock(INTERNAL_ID)).thenReturn(row);
+        assertEquals("ACTIVE", service.ensureInstallation("0", "client-a", "owner-a",
+                candidate("a".repeat(64), "b".repeat(64), 2000), 3000).status());
+        verify(installations, never()).insertCandidateIfAbsent(any()); verify(installations, never()).activate(any(), any(), anyLong());
+    }
+    @Test void internalEnsureRejectsDigestExpiryIdentityAndRevokedWinnerWithoutOverwrite() {
+        internalOwner(); var row = internalInstallation("ACTIVE");
+        when(installations.findInScope("0", "client-a", INTERNAL_ID)).thenReturn(row);
+        when(installations.lock(INTERNAL_ID)).thenReturn(row);
+        for (var request : java.util.List.of(candidate("c".repeat(64), "b".repeat(64), 2000),
+                candidate("a".repeat(64), "c".repeat(64), 2000), candidate("a".repeat(64), "b".repeat(64), 2001))) {
+            assertThrows(AgentServiceImpl.AgentBizException.class, () -> service.ensureInstallation("0", "client-a", "owner-a", request, NOW));
+        }
+        row.setStatus("REVOKED");
+        assertThrows(AgentServiceImpl.AgentBizException.class, () -> service.ensureInstallation("0", "client-a", "owner-a",
+                candidate("a".repeat(64), "b".repeat(64), 2000), NOW));
+        verify(installations, never()).insertCandidateIfAbsent(any());
+        row.setStatus("ACTIVE"); row.setClientId("other-client");
+        assertThrows(AgentServiceImpl.AgentBizException.class, () -> service.ensureInstallation("0", "client-a", "owner-a",
+                candidate("a".repeat(64), "b".repeat(64), 2000), NOW));
+    }
+    @Test void internalEnsureRejectsUnprovenOwnerAndExpiredNewCandidateBeforeInsert() {
+        var request = candidate("a".repeat(64), "b".repeat(64), 2000);
+        assertThrows(AgentServiceImpl.AgentBizException.class, () -> service.ensureInstallation("0", "client-a", "other-owner", request, NOW));
+        verifyNoInteractions(installations); internalOwner();
+        assertThrows(AgentServiceImpl.AgentBizException.class, () -> service.ensureInstallation("0", "client-a", "owner-a", request, 3000));
+        verify(installations, never()).insertCandidateIfAbsent(any());
+    }
+
+    @Test void absentHintUsesUniqueInsertThenExactWinnerReadAndRejectsConcurrentDifferentDigest() {
+        internalOwner();
+        var winner = internalInstallation("PENDING").setManifestSha256("c".repeat(64));
+        when(installations.findInScope("0", "client-a", INTERNAL_ID)).thenReturn(null);
+        doNothing().when(installations).insertCandidateIfAbsent(any()); // another candidate won
+        when(installations.lock(INTERNAL_ID)).thenReturn(winner);
+        assertThrows(AgentServiceImpl.AgentBizException.class, () -> service.ensureInstallation("0", "client-a", "owner-a",
+                candidate("a".repeat(64), "b".repeat(64), 2000), NOW));
+        var order = inOrder(installations);
+        order.verify(installations).findInScope("0", "client-a", INTERNAL_ID);
+        order.verify(installations).insertCandidateIfAbsent(any()); order.verify(installations).lock(INTERNAL_ID);
+        verify(installations, never()).activate(any(), any(), anyLong());
+    }
+    @Test void expiredNewCandidateNeverObtainsMissingKeyGapLock() {
+        internalOwner();
+        assertThrows(AgentServiceImpl.AgentBizException.class, () -> service.ensureInstallation("0", "client-a", "owner-a",
+                candidate("a".repeat(64), "b".repeat(64), 2000), 3000));
+        verify(installations, never()).lock(anyString()); verify(installations, never()).insertCandidateIfAbsent(any());
+    }
+
+    @Test void concurrentAbsentInstallationCandidatesUseActualUniqueInsertAndOneExactWinnerInH2Transactions() throws Exception {
+        installationRace(false);
+    }
+    @Test void h2RepeatableReadSnapshotDiagnosesMissingLockingCurrentViewWithoutWeakeningAuthorization() throws Exception {
+        installationRace(true);
+    }
+    private void installationRace(boolean diagnoseRepeatableRead) throws Exception {
+        // Actual mapper SQL + Spring transactions. H2 READ_COMMITTED proves unique-insert
+        // contention only. The separate RR diagnostic is NOT MySQL locking-read evidence.
+        internalOwner();
+        var source = new org.springframework.jdbc.datasource.DriverManagerDataSource(
+                "jdbc:h2:mem:installation_race_" + java.util.UUID.randomUUID() + ";MODE=MYSQL;DB_CLOSE_DELAY=-1;LOCK_TIMEOUT=10000", "sa", "");
+        var jdbc = new org.springframework.jdbc.core.JdbcTemplate(source);
+        jdbc.execute("CREATE TABLE agent_runtime_v1_installation(id BIGINT AUTO_INCREMENT PRIMARY KEY,installation_id VARCHAR(100) UNIQUE,"
+                + "canonical_agent_id VARCHAR(100),manifest_version VARCHAR(100),manifest_sha256 VARCHAR(64),enrollment_secret_hash BINARY(32),"
+                + "enrollment_expires_at BIGINT,status VARCHAR(32),version BIGINT,tenant_id VARCHAR(50),client_id VARCHAR(50))");
+        var factory = new org.mybatis.spring.SqlSessionFactoryBean(); factory.setDataSource(source);
+        var configuration = new org.apache.ibatis.session.Configuration(); configuration.setMapUnderscoreToCamelCase(true);
+        configuration.addMapper(cn.jia.agent.mapper.AgentRuntimeV1InstallationMapper.class); factory.setConfiguration(configuration);
+        var mapper = new org.mybatis.spring.SqlSessionTemplate(java.util.Objects.requireNonNull(factory.getObject()))
+                .getMapper(cn.jia.agent.mapper.AgentRuntimeV1InstallationMapper.class);
+        var bothAbsent = new java.util.concurrent.CountDownLatch(2);
+        when(installations.findInScope("0", "client-a", INTERNAL_ID)).thenAnswer(call -> {
+            var hint = mapper.selectByInstallationInScope("0", "client-a", INTERNAL_ID);
+            if (hint == null) {
+                bothAbsent.countDown(); assertTrue(bothAbsent.await(5, java.util.concurrent.TimeUnit.SECONDS));
+            }
+            return hint;
+        });
+        doAnswer(call -> { mapper.insertCandidateIfAbsent(call.getArgument(0)); return null; })
+                .when(installations).insertCandidateIfAbsent(any());
+        var missingReads = new java.util.concurrent.ConcurrentLinkedQueue<java.util.Map<String, Integer>>();
+        var independent = new org.springframework.jdbc.core.JdbcTemplate(
+                new org.springframework.jdbc.datasource.DriverManagerDataSource(source.getUrl(), "sa", ""));
+        when(installations.lock(INTERNAL_ID)).thenAnswer(call -> {
+            var row = mapper.selectByInstallationForUpdate(INTERNAL_ID);
+            if (row == null) {
+                missingReads.add(java.util.Map.of("transactionRawRows", jdbc.queryForObject("SELECT COUNT(*) FROM agent_runtime_v1_installation", Integer.class),
+                        "committedRawRows", independent.queryForObject("SELECT COUNT(*) FROM agent_runtime_v1_installation", Integer.class)));
+            } else {
+                assertEquals(INTERNAL_ID, row.getInstallationId(), "mapped installationId");
+                assertEquals("0", row.getTenantId(), "mapped tenantId"); assertEquals("client-a", row.getClientId(), "mapped clientId");
+                assertEquals(AGENT, row.getCanonicalAgentId(), "mapped agentId"); assertEquals("1", row.getManifestVersion(), "mapped manifestVersion");
+                assertEquals("a".repeat(64), row.getManifestSha256(), "mapped manifest digest");
+                assertArrayEquals(java.util.HexFormat.of().parseHex("b".repeat(64)), row.getEnrollmentSecretHash(), "mapped synthetic secret digest");
+                assertEquals(2000L, row.getEnrollmentExpiresAt(), "mapped expiry");
+                assertEquals("PENDING", row.getStatus()); assertNotNull(row.getId()); assertEquals(0L, row.getVersion());
+            }
+            return row;
+        });
+        var transactions = new org.springframework.transaction.support.TransactionTemplate(
+                new org.springframework.jdbc.datasource.DataSourceTransactionManager(source));
+        transactions.setIsolationLevel(diagnoseRepeatableRead ? org.springframework.transaction.TransactionDefinition.ISOLATION_REPEATABLE_READ
+                : org.springframework.transaction.TransactionDefinition.ISOLATION_READ_COMMITTED);
+        var request = candidate("a".repeat(64), "b".repeat(64), 2000);
+        try (var executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
+            java.util.concurrent.Callable<Object> ensure = () -> {
+                try { return transactions.execute(status -> service.ensureInstallation("0", "client-a", "owner-a", request, NOW)); }
+                catch (AgentServiceImpl.AgentBizException denied) { return denied; }
+            };
+            var first = executor.submit(ensure); var second = executor.submit(ensure);
+            var results = java.util.List.of(first.get(10, java.util.concurrent.TimeUnit.SECONDS), second.get(10, java.util.concurrent.TimeUnit.SECONDS));
+            if (diagnoseRepeatableRead) {
+                assertEquals(1, results.stream().filter(cn.jia.agent.entity.AgentRuntimeV1InstallationView.class::isInstance).count());
+                assertEquals(1, results.stream().filter(AgentServiceImpl.AgentBizException.class::isInstance).count());
+                assertEquals(java.util.List.of(java.util.Map.of("transactionRawRows", 0, "committedRawRows", 1)), java.util.List.copyOf(missingReads));
+                System.out.println("H2_CURRENT_VIEW_DIAGNOSTIC locking_row_missing=true transaction_raw_rows=0 committed_raw_rows=1; production authorization rejected, not weakened");
+            } else {
+                assertInstanceOf(cn.jia.agent.entity.AgentRuntimeV1InstallationView.class, results.get(0));
+                assertEquals(results.get(0), results.get(1)); assertTrue(missingReads.isEmpty());
+            }
+            assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM agent_runtime_v1_installation", Integer.class));
+            verify(installations, times(2)).insertCandidateIfAbsent(any()); verify(installations, times(2)).lock(INTERNAL_ID);
+            assertEquals("PENDING", transactions.execute(status -> service.ensureInstallation("0", "client-a", "owner-a", request, 3000)).status());
+            assertThrows(AgentServiceImpl.AgentBizException.class, () -> transactions.execute(status -> service.ensureInstallation(
+                    "0", "client-a", "owner-a", candidate("c".repeat(64), "b".repeat(64), 2000), NOW)));
+            assertEquals("a".repeat(64), jdbc.queryForObject("SELECT manifest_sha256 FROM agent_runtime_v1_installation", String.class));
+        } finally { jdbc.execute("DROP ALL OBJECTS"); }
     }
 
     @Test void rejectsInstallationIdThatCannotBeBoundIntoTheManifest() {
@@ -103,7 +269,8 @@ class AgentRuntimeV1ServiceImplTest {
         when(installations.findActiveByAuthorizationHash(any())).thenReturn(null);
         assertThrows(AgentServiceImpl.AgentBizException.class,
                 () -> service.heartbeat("revoked", runtime("tenant-a", AGENT), NOW));
-        assertThrows(AgentServiceImpl.AgentBizException.class,
+        when(sessions.verify(any())).thenThrow(new IllegalArgumentException("rejected"));
+        assertThrows(IllegalArgumentException.class,
                 () -> service.acknowledge("revoked", "msg-1", ack("tenant-a", AGENT), NOW));
         verifyNoInteractions(acks);
     }
@@ -111,9 +278,15 @@ class AgentRuntimeV1ServiceImplTest {
     @Test void manifestMismatchRequiresRebindAndValidAckIsBoundToInstallationIdentity() {
         AgentRuntimeV1InstallationEntity active = installation("ACTIVE").setRuntimeAuthorizationHash(sha("auth"));
         when(installations.findActiveByAuthorizationHash(any())).thenReturn(active);
-        assertEquals("REBINDS_REQUIRED", service.session("auth",
-                new cn.jia.agent.entity.AgentRuntimeV1RuntimeRequest("rti-1", "tenant-a", "client-a", AGENT,
-                        "wrong", HASH, "ok"), NOW).status());
+        when(installations.lock("rti-1")).thenReturn(active);
+        assertThrows(AgentServiceImpl.AgentBizException.class, () -> service.session("auth",
+                new cn.jia.agent.entity.AgentRuntimeV1SessionRequest("rti-1", "tenant-a", "client-a", AGENT,
+                        "wrong", HASH, "host-1", "boot-1"), NOW));
+        var proof = new cn.jia.agent.security.AgentRuntimeAuthenticationService.Proof(
+                new cn.jia.agent.security.AgentRuntimeAuthentication.Scope("tenant-a", "client-a", "owner-a", AGENT, "boot-1"),
+                "rti-1", "host-1", 1, "a".repeat(64), 1, 0);
+        when(sessions.verify(any())).thenReturn(proof);
+        when(sessions.withFence(eq(proof), eq(false), any())).thenAnswer(inv -> ((java.util.function.Supplier<?>) inv.getArgument(2)).get());
         when(acks.acknowledge(any(AgentCommandAck.class), eq(NOW)))
                 .thenReturn(new AgentCommandAckResult(AgentCommandAckResult.Kind.ADVANCED, "RECEIVED", 2));
         var result = service.acknowledge("auth", "msg-1", ack("tenant-a", AGENT), NOW);
@@ -134,6 +307,20 @@ class AgentRuntimeV1ServiceImplTest {
                 () -> service.acknowledge("auth", "msg-1", ack("tenant-b", AGENT), NOW));
     }
 
+    @Test void wrongStatusOrNonMonotonicD06ReceiptCannotBeClaimedAsCommit() {
+        var proof = new cn.jia.agent.security.AgentRuntimeAuthenticationService.Proof(
+                new cn.jia.agent.security.AgentRuntimeAuthentication.Scope("tenant-a", "client-a", "owner-a", AGENT, "boot-1"),
+                "rti-1", "host-1", 1, "a".repeat(64), 1, 0);
+        when(sessions.verify(any())).thenReturn(proof);
+        when(sessions.withFence(eq(proof), eq(false), any())).thenAnswer(inv -> ((java.util.function.Supplier<?>) inv.getArgument(2)).get());
+        for (var result : java.util.List.of(
+                new AgentCommandAckResult(AgentCommandAckResult.Kind.ADVANCED, "STARTED", 2),
+                new AgentCommandAckResult(AgentCommandAckResult.Kind.ADVANCED, "RECEIVED", 1),
+                new AgentCommandAckResult(AgentCommandAckResult.Kind.PRIOR, "RECEIVED", 0))) {
+            when(acks.acknowledge(any(), eq(NOW))).thenReturn(result);
+            assertThrows(AgentServiceImpl.AgentBizException.class, () -> service.acknowledge("auth", "msg-1", ack("tenant-a", AGENT), NOW));
+        }
+    }
     @Test void managementRequiresExactOwnerWithinSharedTenantBeforeReturningOrRevoking() {
         AgentRuntimeV1InstallationEntity row = installation("ACTIVE");
         row.setTenantId("0");
@@ -203,7 +390,8 @@ class AgentRuntimeV1ServiceImplTest {
     }
     private static AgentRuntimeV1AckRequest ackWithCorrelation(String tenant, String agent, String correlationId) {
         return new AgentRuntimeV1AckRequest("msg-1", correlationId, "cmd-1", "task-1", null,
-                tenant, "client-a", agent, "ref", "9999", "RECEIVED");
+                tenant, "client-a", agent, "ref", "9999", "RECEIVED",
+                "rti-1", "host-1", "boot-1", 1, 1L);
     }
     private static byte[] sha(String value) {
         try { return java.security.MessageDigest.getInstance("SHA-256").digest(value.getBytes(java.nio.charset.StandardCharsets.UTF_8)); }

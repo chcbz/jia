@@ -1,6 +1,7 @@
 package cn.jia.agent.api;
 
 import cn.jia.agent.security.AgentRuntimeAuthentication;
+import cn.jia.agent.security.AgentRuntimeAuthenticationService;
 import cn.jia.agent.service.PersonalWorkspaceExecutionService;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.ContentDisposition;
@@ -30,12 +31,18 @@ import java.util.Objects;
 public class PersonalWorkspaceRuntimeFileController {
     private static final String CACHE_CONTROL = "private, no-store";
     private final PersonalWorkspaceExecutionService service;
-    public PersonalWorkspaceRuntimeFileController(PersonalWorkspaceExecutionService service) { this.service=Objects.requireNonNull(service,"service"); }
+    private final AgentRuntimeAuthenticationService runtimeAuthentication;
+    public PersonalWorkspaceRuntimeFileController(PersonalWorkspaceExecutionService service,
+            AgentRuntimeAuthenticationService runtimeAuthentication) {
+        this.service=Objects.requireNonNull(service,"service");
+        this.runtimeAuthentication=Objects.requireNonNull(runtimeAuthentication,"runtimeAuthentication");
+    }
 
     @GetMapping(value = "/workspace-executions/commands", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<RuntimeQueueView> queuedCommands(HttpServletRequest request, Authentication authentication) {
         requireNoQuery(request);
-        return json(new RuntimeQueueView(service.runtimeQueuedCommands(scope(authentication), 16)));
+        var queue=new RuntimeQueueView(service.runtimeQueuedCommands(scope(authentication), 16));
+        return json(runtimeAuthentication.withNativeFence(authentication,()->queue));
     }
 
     @PostMapping(value = "/{taskId}/runs/{runId}/start", consumes = MediaType.APPLICATION_JSON_VALUE,
@@ -45,18 +52,24 @@ public class PersonalWorkspaceRuntimeFileController {
             Authentication authentication) {
         requireNoQuery(servletRequest);
         if (request == null || request.commandId() == null || request.messageId() == null) throw new RequestFailure();
-        return json(service.start(scope(authentication), taskId, runId, request.commandId(), request.messageId()));
+        return json(runtimeAuthentication.withNativeFence(authentication, () ->
+                service.start(scope(authentication), taskId, runId, request.commandId(), request.messageId())));
     }
 
     @GetMapping(value = "/{taskId}/runs/{runId}/inputs", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<List<PersonalWorkspaceExecutionService.RuntimeInput>> inputs(@PathVariable String taskId,
             @PathVariable String runId, HttpServletRequest request, Authentication authentication) {
-        requireNoQuery(request); return json(service.runtimeInputs(scope(authentication), taskId, runId));
+        requireNoQuery(request);
+        var inputs=service.runtimeInputs(scope(authentication), taskId, runId);
+        return json(runtimeAuthentication.withNativeFence(authentication,()->inputs));
     }
     @GetMapping("/{taskId}/runs/{runId}/inputs/{inputRef}/content")
     public ResponseEntity<byte[]> content(@PathVariable String taskId, @PathVariable String runId,
             @PathVariable String inputRef, HttpServletRequest request, Authentication authentication) {
-        requireNoQuery(request); PersonalWorkspaceExecutionService.RuntimeContent content=service.runtimeInputContent(scope(authentication),taskId,runId,inputRef);
+        requireNoQuery(request);
+        var loaded=service.runtimeInputContent(scope(authentication),taskId,runId,inputRef);
+        // Revalidate the admitted proof after source I/O, never while holding it across storage.
+        var content=runtimeAuthentication.withNativeFence(authentication,()->loaded);
         return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL,CACHE_CONTROL).header("X-Content-Type-Options","nosniff")
                 .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment().filename(safe(content.filename()),StandardCharsets.UTF_8).build().toString())
                 .contentType(MediaType.parseMediaType(content.contentMimeType())).contentLength(content.bytes().length).body(content.bytes());
@@ -72,7 +85,10 @@ public class PersonalWorkspaceRuntimeFileController {
         requireNoQueryString(request); if(file==null || !taskId.equals(declaredTaskId) || !runId.equals(declaredRunId)
                 || !outputId.equals(declaredOutputId) || !declaredSha256.matches("[0-9a-f]{64}")
                 || !declaredLength.matches("0|[1-9][0-9]*")) throw new RequestFailure();
-        PersonalWorkspaceExecutionService.StagedOutput staged = service.stageOutput(scope(authentication),taskId,runId,outputId,file.getOriginalFilename(),file.getContentType(),file.getBytes());
+        byte[] bytes=file.getBytes();
+        if(!declaredSha256.equals(digest(bytes))||!declaredLength.equals(Integer.toString(bytes.length)))
+            throw new RequestFailure();
+        PersonalWorkspaceExecutionService.StagedOutput staged = service.stageOutput(scope(authentication),taskId,runId,outputId,file.getOriginalFilename(),file.getContentType(),bytes);
         if (!declaredSha256.equals(staged.sha256()) || !declaredLength.equals(Long.toString(staged.byteLength()))) throw new RequestFailure();
         return ResponseEntity.status(HttpStatus.CREATED).header(HttpHeaders.CACHE_CONTROL,CACHE_CONTROL).body(staged);
     }
@@ -93,7 +109,8 @@ public class PersonalWorkspaceRuntimeFileController {
             Authentication authentication) {
         requireNoQuery(servletRequest);
         if (request == null || request.code() == null) throw new RequestFailure();
-        return json(service.fail(scope(authentication), taskId, runId, request.code()));
+        return json(runtimeAuthentication.withNativeFence(authentication, () ->
+                service.fail(scope(authentication), taskId, runId, request.code())));
     }
     @ExceptionHandler(PersonalWorkspaceExecutionService.Failure.class)
     public ResponseEntity<ErrorBody> failure(PersonalWorkspaceExecutionService.Failure ignored) { return error(HttpStatus.NOT_FOUND,"RUNTIME_FILE_NOT_FOUND","Runtime file access is unavailable"); }
@@ -109,6 +126,10 @@ public class PersonalWorkspaceRuntimeFileController {
     }
     private static void requireNoQuery(HttpServletRequest request){if(request.getParameterMap()!=null&&!request.getParameterMap().isEmpty())throw new RequestFailure();}
     private static void requireNoQueryString(HttpServletRequest request){if(request.getQueryString()!=null&&!request.getQueryString().isEmpty())throw new RequestFailure();}
+    private static String digest(byte[] bytes) {
+        try { return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes)); }
+        catch(java.security.NoSuchAlgorithmException impossible) { throw new IllegalStateException(impossible); }
+    }
     private static String safe(String value){return value==null?"output.bin":value.replaceAll("[\\\\/:*?\"<>|\\p{Cntrl}]","_").replaceAll("^\\.+","").trim();}
     private static <T> ResponseEntity<T> json(T body){return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL,CACHE_CONTROL).contentType(MediaType.APPLICATION_JSON).body(body);}
     private static ResponseEntity<ErrorBody> error(HttpStatus status,String code,String message){return ResponseEntity.status(status).header(HttpHeaders.CACHE_CONTROL,CACHE_CONTROL).contentType(new MediaType(MediaType.APPLICATION_JSON,StandardCharsets.UTF_8)).body(new ErrorBody(code,message));}

@@ -2,6 +2,7 @@ package cn.jia.agent.api;
 
 import cn.jia.agent.config.AgentTaskEventsGate;
 import cn.jia.agent.security.AgentRuntimeAuthentication;
+import cn.jia.agent.security.AgentRuntimeAuthenticationService;
 import cn.jia.agent.entity.AgentTaskContextPackDTO;
 import cn.jia.agent.exception.AgentTaskContextPackException;
 import cn.jia.agent.service.AgentTaskContextPackService;
@@ -43,6 +44,7 @@ public class AgentTaskContextPackController {
 
     private final AgentTaskContextPackService contextPackService;
     private final AgentTaskEventsGate taskEventsGate;
+    private final AgentRuntimeAuthenticationService runtimeAuthentication;
 
     @GetMapping(value = "/{taskId}/context-pack", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<byte[]> contextPack(@PathVariable String taskId,
@@ -60,6 +62,9 @@ public class AgentTaskContextPackController {
             throw new AgentTaskContextPackException(
                     AgentTaskContextPackException.Reason.CONTEXT_UNAVAILABLE);
         }
+        if (authentication instanceof AgentRuntimeAuthentication) {
+            runtimeAuthentication.validateCurrent(AgentRuntimeAuthenticationService.requireProof(authentication),false);
+        }
         AgentTaskContextPackDTO pack = contextPackService.generate(
                 scope.tenantId(), scope.clientId(), scope.ownerJiacn(), taskId, scope.actorAgentId(), expectedVersion);
         final byte[] body;
@@ -74,6 +79,15 @@ public class AgentTaskContextPackController {
                     AgentTaskContextPackException.Reason.CONTEXT_UNAVAILABLE);
         }
         requireSerializedScope(body, scope, taskId, expectedVersion);
+        // Retain F01's original snapshot isolation. Re-fence only the delivery of its
+        // already generated/validated bytes, not all source reads or the servlet chain.
+        if (authentication instanceof AgentRuntimeAuthentication) {
+            return runtimeAuthentication.withNativeFence(authentication, () -> response(body));
+        }
+        return response(body);
+    }
+
+    private static ResponseEntity<byte[]> response(byte[] body) {
         return ResponseEntity.ok()
                 .header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL_VALUE)
                 .contentType(MediaType.APPLICATION_JSON)

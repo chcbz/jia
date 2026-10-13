@@ -11,6 +11,14 @@ public interface ManagedHostingProvisioner {
     boolean available();
     /** Pure exact-scope capability check before a NEW reserve; replay never needs runtime capability. */
     default boolean availableFor(String tenantId, String clientId, String ownerJiacn) { return available(); }
+    /** Transaction-external live control/template probe; replay must be resolved before invoking it. */
+    default boolean probeCapabilities(String tenantId, String clientId, String ownerJiacn) {
+        if (org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive())
+            throw new IllegalStateException("Hosting capability I/O inside transaction");
+        return availableFor(tenantId, clientId, ownerJiacn);
+    }
+    record Candidate(String installationId, String manifestSha256, String enrollmentSecretSha256,
+                     long enrollmentExpiresAt, long provisionGeneration, String hostId) { }
     Observation prepareAndObserve(Preparation preparation);
     record Preparation(String tenantId, String clientId, String ownerJiacn, String agentId,
                        String intentId, String leaseId, String bindingId, long reservedAt,

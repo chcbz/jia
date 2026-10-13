@@ -17,6 +17,7 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import java.util.*;
 import java.util.concurrent.*;
 import static org.junit.jupiter.api.Assertions.*;
@@ -80,6 +81,10 @@ class HostingRentReprovisionTransactionTest {
         ObjectProvider<ManagedHostingProvisioner> providers = mock(ObjectProvider.class); when(providers.getIfAvailable()).thenReturn(provider);
         when(provider.available()).thenReturn(true);
         when(provider.availableFor(anyString(), anyString(), anyString())).thenAnswer(call -> provider.available());
+        when(provider.probeCapabilities(anyString(), anyString(), anyString())).thenAnswer(call -> {
+            assertFalse(TransactionSynchronizationManager.isActualTransactionActive());
+            return provider.available();
+        });
         app = new HostingRentApplicationService(new AgentHostingRentProperties(true, null, null, null),
                 new EconomyPreviewGate(new EconomyPreviewProperties(true, List.of(new EconomyPreviewProperties.AllowedScope("0", "Client-A")))),
                 owners, rent, ledger, mock(AgentHostingRentBindingMapper.class), bindings, mock(AgentRuntimeDao.class), identities,

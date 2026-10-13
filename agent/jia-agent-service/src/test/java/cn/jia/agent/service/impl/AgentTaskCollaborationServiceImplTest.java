@@ -417,6 +417,41 @@ class AgentTaskCollaborationServiceImplTest {
     }
 
     @Test
+    void preparedInlineArtifactFreezesCallerCommandAndRevalidatesOriginalVersion() {
+        allow(ACTOR,"worker");var command=artifactCommand(1,0);
+        var prepared=service.preparePublication(TENANT,CLIENT,OWNER,TASK,ACTOR,command);
+        command.setContent("mutated");command.setProducerAgentId(TARGET);command.setArtifactVersion(7);
+        when(artifactDao.insert(eq(TENANT),eq(CLIENT),eq(OWNER),any())).thenReturn(1);
+        when(artifactDao.findVersion(TENANT,CLIENT,OWNER,TASK,"artifact-1",1)).thenReturn(artifact("artifact-1",1,ACTOR,"task_members"));
+        var result=service.publishPrepared(TENANT,CLIENT,OWNER,TASK,ACTOR,prepared);
+        assertEquals(1,result.getArtifactVersion());assertEquals(ACTOR,result.getProducerAgentId());
+        assertEquals("PreparedArtifactPublication[REDACTED]",prepared.toString());
+        verify(artifactDao,org.mockito.Mockito.times(2)).findLatestVersionForUpdate(TENANT,CLIENT,OWNER,TASK,"artifact-1");
+        verify(eventWriter).append(any());
+    }
+
+    @Test
+    void preparedCapabilityIsNotCallerSuppliedStorageOrCrossScopeAuthority() {
+        allow(ACTOR,"worker");var prepared=service.preparePublication(TENANT,CLIENT,OWNER,TASK,ACTOR,artifactCommand(1,0));
+        assertEquals(Reason.FORBIDDEN,assertThrows(AgentTaskCollaborationException.class,
+                ()->service.publishPrepared(TENANT,"different-client",OWNER,TASK,ACTOR,prepared)).getReason());
+        assertEquals(Reason.FORBIDDEN,assertThrows(AgentTaskCollaborationException.class,
+                ()->service.publishPrepared(TENANT,CLIENT,OWNER,TASK,ACTOR,
+                        new cn.jia.agent.service.AgentTaskArtifactService.PreparedPublication(){})).getReason());
+        verify(artifactDao,never()).insert(any(),any(),any(),any());verify(eventWriter,never()).append(any());
+    }
+
+    @Test
+    void preparedVersionConflictNeverRepeatsPublicationOrAppendsEvent() {
+        allow(ACTOR,"worker");var prepared=service.preparePublication(TENANT,CLIENT,OWNER,TASK,ACTOR,artifactCommand(1,0));
+        when(artifactDao.findLatestVersionForUpdate(TENANT,CLIENT,OWNER,TASK,"artifact-1"))
+                .thenReturn(artifact("artifact-1",1,ACTOR,"task_members"));
+        assertEquals(Reason.VERSION_CONFLICT,assertThrows(AgentTaskCollaborationException.class,
+                ()->service.publishPrepared(TENANT,CLIENT,OWNER,TASK,ACTOR,prepared)).getReason());
+        verify(artifactDao,never()).insert(any(),any(),any(),any());verify(eventWriter,never()).append(any());
+    }
+
+    @Test
     void artifactVersionChainFailsClosedOnStaleExpectedPreviousVersion() {
         allow(ACTOR, "worker");
         when(artifactDao.findLatestVersionForUpdate(TENANT, CLIENT, OWNER, TASK, "artifact-1"))
@@ -753,7 +788,10 @@ class AgentTaskCollaborationServiceImplTest {
     void ordinaryArtifactContractDoesNotExposeWorkItemResultMutation() {
         assertTrue(java.util.Arrays.stream(cn.jia.agent.service.AgentTaskArtifactService.class.getMethods())
                 .noneMatch(method -> method.getName().toLowerCase().contains("result")));
-        assertEquals(1, cn.jia.agent.service.AgentWorkItemResultCommitService.class.getDeclaredMethods().length);
+        assertEquals(java.util.Set.of("commitResult", "preflightRuntimeResult", "prepareRuntimeResult",
+                "commitPreparedRuntimeResult", "readRuntimeResult"), java.util.Arrays.stream(
+                cn.jia.agent.service.AgentWorkItemResultCommitService.class.getDeclaredMethods())
+                .map(java.lang.reflect.Method::getName).collect(java.util.stream.Collectors.toSet()));
     }
 
 

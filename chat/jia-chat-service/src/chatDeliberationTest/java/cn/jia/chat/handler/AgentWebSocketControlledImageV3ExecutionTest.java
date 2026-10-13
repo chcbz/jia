@@ -90,6 +90,7 @@ class AgentWebSocketControlledImageV3ExecutionTest {
             WebSocketSession session,Object execution,NativeProviderCredentialBindingDeclaration binding)
             throws Exception {
         ((Map<String,WebSocketSession>)field(handler,"sessions")).put(session.getId(),session);
+        ((Map<String,Boolean>)field(handler,"sessionDurableStateHealthy")).put(session.getId(),true);
         ((Map<String,Set<String>>)field(handler,"sessionAgentIds")).computeIfAbsent(
                 session.getId(),ignored->ConcurrentHashMap.newKeySet()).add("agent-a");
         ((Map<String,Set<String>>)field(handler,"successfullyRegisteredAgentIds")).computeIfAbsent(

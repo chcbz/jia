@@ -266,7 +266,9 @@ public class ChatActionFinalService {
                     v.interactionOutcome().action().actionId())).findFirst().orElseThrow();
             route = "INSPECT_INPUTS".equals(capability.kind()) ? "INSPECT" : "EXECUTE";
             childId = "INSPECT".equals(route) ? ChatDeliberationService.inspectionContinuationRequestId(actionId)
-                    : cn.jia.chat.api.ChatBountyInteractionV3Wire.shaText("action-execute\n" + actionId);
+                    : "GENERATE_TEXT_FILE".equals(capability.operation())
+                            ? ChatTextFileActionExecutionService.requestId(actionId)
+                            : cn.jia.chat.api.ChatBountyInteractionV3Wire.shaText("action-execute\n" + actionId);
             if (!"SENT".equals(event.getStatus()) || !scope.equals(childAdmission.scope())
                     || !actionId.equals(childAdmission.idempotencyKey()) || !childId.equals(childAdmission.requestId())
                     || !parent.outcomeId().equals(childAdmission.parentOutcomeId()) || !parent.taskId().equals(childAdmission.taskId())

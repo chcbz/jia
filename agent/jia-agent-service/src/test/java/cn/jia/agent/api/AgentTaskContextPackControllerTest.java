@@ -49,7 +49,7 @@ class AgentTaskContextPackControllerTest extends BaseMockTest {
     void setUp() {
         lenient().when(gate.allows(anyString(), anyString())).thenReturn(true);
         mvc = MockMvcBuilders.standaloneSetup(
-                new AgentTaskContextPackController(service, gate)).build();
+                new AgentTaskContextPackController(service, gate, org.mockito.Mockito.mock(cn.jia.agent.security.AgentRuntimeAuthenticationService.class))).build();
     }
 
     @AfterEach

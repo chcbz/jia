@@ -10,6 +10,9 @@ import cn.jia.chat.deliberation.ChatRequestEntity;
 import cn.jia.chat.entity.ChatConversationEntity;
 import cn.jia.chat.deliberation.ChatInteractionStepStore;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import java.nio.charset.StandardCharsets;
@@ -103,6 +106,39 @@ class ChatBountyExecutionCoordinatorTest {
     }
 
     @Test void exactPersistedReferenceIsForwardedOnlyAfterMatchingLiveGrant() throws Exception {
+        assertExactRequirementExecution("画一只鸟", "背景更鲜艳", "画一只鸟\n\n背景更鲜艳");
+    }
+
+    static java.util.stream.Stream<Arguments> exactRequirementContents() {
+        return java.util.stream.Stream.of(
+                Arguments.of("画一只鸟", "画一只鸟", "画一只鸟"),
+                Arguments.of("画一只鸟", "蓝色羽毛", "画一只鸟\n\n蓝色羽毛"),
+                Arguments.of("画一只鸟", null, "画一只鸟"),
+                Arguments.of("画一只鸟", "", "画一只鸟"),
+                Arguments.of("画一只鸟", " ", "画一只鸟\n\n "),
+                Arguments.of("画一只鸟", "画一只鸟，蓝色", "画一只鸟\n\n画一只鸟，蓝色"),
+                Arguments.of("画一只鸟\n\n画一只鸟", "画一只鸟\n\n画一只鸟", "画一只鸟\n\n画一只鸟"),
+                Arguments.of(" 画一只鸟 ", "画一只鸟", " 画一只鸟 \n\n画一只鸟"));
+    }
+
+
+    @ParameterizedTest @MethodSource("exactRequirementContents")
+    void executesOnlyExactBootstrapRequirementContent(String title, String description, String expected) throws Exception {
+        assertExactRequirementExecution(title, description, expected);
+    }
+
+    private void assertExactRequirementExecution(String title, String description, String exactInstruction) throws Exception {
+        persistedRequirementImage(title, description, exactInstruction);
+        assertEquals("RUNNING",coordinator.coordinate(candidate));
+        verify(executions).createConversation(any(),argThat(command ->
+                exactInstruction.equals(command.instruction())
+                        && command.references().size()==1
+                        && "file".equals(command.references().getFirst().fileId())
+                        && command.references().getFirst().version()==1
+                        && "a".repeat(64).equals(command.references().getFirst().contentHash())));
+    }
+
+    private void persistedRequirementImage(String title, String description, String exactInstruction) throws Exception {
         String hash="a".repeat(64), requirementHash="b".repeat(64), referencesHash="c".repeat(64);
         String snapshotDigest=HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(
                 CanonicalContextJson.write(Map.of("requirementHash",requirementHash,
@@ -118,10 +154,9 @@ class ChatBountyExecutionCoordinatorTest {
                         .setClientId("client").setRequestId("req").setRequestRevision(1L)
                         .setConversationId("42").setConversationGeneration(1L)
                         .setAggregateState("PLANNING").setUserMessageId(7L).setStateVersion(0L));
-        String exactInstruction="画一只鸟\n\n背景更鲜艳";
         when(requirements.read(any(),eq("task"),eq(1L)))
                 .thenReturn(new AgentTaskRequirementSnapshotService.Snapshot(
-                        "0","client","owner","task",1,"画一只鸟","背景更鲜艳",requirementHash,"task"));
+                        "0","client","owner","task",1,title,description,requirementHash,"task"));
         when(jdbc.query(anyString(), org.mockito.ArgumentMatchers.<RowMapper<Object>>any(),
                 any(Object[].class))).thenAnswer(invocation->{
             @SuppressWarnings("unchecked") RowMapper<Object> mapper=invocation.getArgument(1);
@@ -155,13 +190,59 @@ class ChatBountyExecutionCoordinatorTest {
         when(steps.bindExecution(any(),eq("execution"),anyLong())).thenReturn(1);
         when(steps.updateStepState(any(),eq("RUNNING"),anyLong())).thenReturn(1);
         when(requests.updateRequestState(any(),eq("RUNNING"),anyLong())).thenReturn(1);
-        assertEquals("RUNNING",coordinator.coordinate(candidate));
-        verify(executions).createConversation(any(),argThat(command ->
-                exactInstruction.equals(command.instruction())
-                        && command.references().size()==1
-                        && "file".equals(command.references().getFirst().fileId())
-                        && command.references().getFirst().version()==1
-                        && hash.equals(command.references().getFirst().contentHash())));
+    }
+
+    @ParameterizedTest @org.junit.jupiter.params.provider.ValueSource(strings = {
+            "content", "expanded-duplicate", "description", "title", "hash", "tenant", "client", "owner", "task", "revision", "digest"})
+    void alteredImmutableSnapshotFailsBeforeAdmissionOrExecution(String mutation) throws Exception {
+        String instruction = "画一只鸟";
+        persistedRequirementImage("画一只鸟", "画一只鸟",
+                "content".equals(mutation) ? "画一只鸟!" :
+                "expanded-duplicate".equals(mutation) ? "画一只鸟\n\n画一只鸟" : instruction);
+        when(requirements.read(any(), eq("task"), eq(1L))).thenReturn(
+                new AgentTaskRequirementSnapshotService.Snapshot(
+                        "tenant".equals(mutation) ? "1" : "0",
+                        "client".equals(mutation) ? "foreign-client" : "client",
+                        "owner".equals(mutation) ? "foreign-owner" : "owner",
+                        "task".equals(mutation) ? "foreign-task" : "task",
+                        "revision".equals(mutation) ? 2 : 1,
+                        "title".equals(mutation) ? "another title" : "画一只鸟",
+                        "description".equals(mutation) ? "changed description" : "画一只鸟",
+                        "hash".equals(mutation) ? "d".repeat(64) : "b".repeat(64), "task"));
+        if ("digest".equals(mutation)) {
+            when(steps.findStep("0", "owner", "client", "req", 1, 1)).thenReturn(
+                    new ChatInteractionStepStore.Step("step", "0", "owner", "client", "req", 1, 1,
+                            "42", 1, "task", 2, "grant", 1, "agent", "EXECUTE", "ADMITTED",
+                            0, "d".repeat(64), 1, 1));
+        }
+        assertThrows(IllegalStateException.class, () -> coordinator.coordinate(candidate));
+        verifyNoInteractions(grants, executions, conversations);
+        verify(steps, never()).bindExecution(any(), anyString(), anyLong());
+        verify(steps, never()).updateStepState(any(), anyString(), anyLong());
+        verify(requests, never()).updateRequestState(any(), anyString(), anyLong());
+    }
+
+    @ParameterizedTest @org.junit.jupiter.params.provider.NullAndEmptySource
+    @org.junit.jupiter.params.provider.ValueSource(strings = {" ", "\n\t"})
+    void missingSnapshotTitleFailsBeforeAdmission(String title) throws Exception {
+        persistedRequirementImage(title, "description", "description");
+        assertThrows(IllegalStateException.class, () -> coordinator.coordinate(candidate));
+        verifyNoInteractions(grants, executions, conversations);
+    }
+
+    @Test void revokedPaidConsentOnEqualRequirementWaitsWithoutExecutionOrRelayFailure() throws Exception {
+        persistedRequirementImage("画一只鸟", "画一只鸟", "画一只鸟");
+        when(grants.admitControlledV3(any(), eq("task"), eq("grant"), eq(1L), eq(2L), eq("agent"),
+                eq("GENERATE_IMAGE"), eq("NEW_EXECUTION"), isNull(), isNull(), isNull()))
+                .thenReturn(new AgentTaskExecutionGrantService.Admission("grant", 1, 2,
+                        "agent", "GENERATE_IMAGE", false, List.of(), null, null));
+        when(steps.updateStepState(any(), eq("WAITING_AUTHORIZATION"), anyLong())).thenReturn(1);
+        when(requests.updateRequestState(any(), eq("WAITING_AUTHORIZATION"), anyLong())).thenReturn(1);
+        assertEquals("WAITING_AUTHORIZATION", coordinator.coordinate(candidate));
+        verify(steps).updateStepState(any(), eq("WAITING_AUTHORIZATION"), anyLong());
+        verify(requests).updateRequestState(any(), eq("WAITING_AUTHORIZATION"), anyLong());
+        verify(steps, never()).bindExecution(any(), anyString(), anyLong());
+        verifyNoInteractions(executions, conversations);
     }
 
     @Test void persistedCapabilityWaitIsIdempotentUntilRuntimeReturns() throws Exception {

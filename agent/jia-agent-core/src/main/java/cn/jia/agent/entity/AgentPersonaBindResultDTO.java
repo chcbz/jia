@@ -26,5 +26,20 @@ public class AgentPersonaBindResultDTO implements Serializable {
     private String message;
     private String envExample;
     private String profileExample;
+    private RuntimeSetup runtimeSetup;
     private List<String> commands;
+
+    @Data
+    public static class RuntimeSetup implements Serializable {
+        @Serial
+        private static final long serialVersionUID = 1L;
+
+        private String runtimeProtocolVersion;
+        private String tenantId;
+        private String clientId;
+        private String canonicalAgentId;
+        private String manifestVersion;
+        private String installationCreatePath;
+        private String guideUrl;
+    }
 }

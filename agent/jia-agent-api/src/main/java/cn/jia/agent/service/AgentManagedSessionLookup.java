@@ -1,11 +1,15 @@
 package cn.jia.agent.service;
-/** Read-only in-memory evidence from an authenticated, successfully registered managed WS session.
- * No network I/O: money admission may consult it while holding the canonical runtime lock. */
+
+import cn.jia.agent.entity.AgentRawCommandDispatchResult;
+
+/** Exact live transport evidence, never an API-key or immutable product-install binding. */
 public interface AgentManagedSessionLookup {
-    boolean isReady(String tenantId,String clientId,String canonicalAgentId,String apiKeyId,byte[] registrationHash);
-    /** Only after the caller's admission transaction commits; exact key/generation, never broadcast. */
-    default cn.jia.agent.entity.AgentRawCommandDispatchResult dispatch(String tenantId,String clientId,
-            String canonicalAgentId,String apiKeyId,byte[] registrationHash,byte[] wire) {
-        return cn.jia.agent.entity.AgentRawCommandDispatchResult.rejected();
+    record SessionFence(String runtimeInstallationId, String hostId, String runtimeInstanceId,
+                        long sessionGeneration) { }
+    boolean isReady(String tenantId, String clientId, String canonicalAgentId, SessionFence fence);
+    /** After commit only, one current authenticated session, never broadcast. */
+    default AgentRawCommandDispatchResult dispatch(String tenantId, String clientId,
+            String canonicalAgentId, SessionFence fence, byte[] wire) {
+        return AgentRawCommandDispatchResult.rejected();
     }
 }

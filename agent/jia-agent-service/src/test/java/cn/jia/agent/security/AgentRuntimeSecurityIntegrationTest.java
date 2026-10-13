@@ -37,7 +37,7 @@ import org.springframework.security.oauth2.server.resource.authentication.JwtAut
 import org.springframework.security.web.FilterChainProxy;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
-import org.springframework.test.web.servlet.request.MockMultipartHttpServletRequestBuilder;
+import org.springframework.test.web.servlet.request.AbstractMockHttpServletRequestBuilder;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -74,7 +74,9 @@ class AgentRuntimeSecurityIntegrationTest {
     AgentIdentityRegistryDao identityRegistryDao;
     AgentIdentityAliasDao identityAliasDao;
     AgentPersonaBindingDao identityBindingDao;
-    ApiKeyService keys;
+    ApiKeyService keys; // Legacy management collaborator is intentionally not execution authority.
+    cn.jia.agent.dao.AgentRuntimeV1InstallationDao installations;
+    final Map<String, cn.jia.agent.entity.AgentRuntimeV1InstallationEntity> installationRows = new HashMap<>();
     AccountSecurityService accounts;
     PersonalWorkspaceExecutionService workspaceExecutions;
     MockMvc mvc;
@@ -109,9 +111,11 @@ class AgentRuntimeSecurityIntegrationTest {
                     List.of(new AgentTaskEventsProperties.AllowedScope(TENANT, CLIENT_A),
                             new AgentTaskEventsProperties.AllowedScope(TENANT, CLIENT_B))));
         }
+        @Bean cn.jia.agent.dao.AgentRuntimeV1InstallationDao installations() { return mock(cn.jia.agent.dao.AgentRuntimeV1InstallationDao.class); }
         @Bean AgentRuntimeAuthenticationService auth(AgentRuntimeDao r, AgentIdentityService i,
-                ApiKeyService k, AccountSecurityService a, AgentTaskEventsGate g) {
-            return new AgentRuntimeAuthenticationService(r, i, k, a, g);
+                cn.jia.agent.dao.AgentRuntimeV1InstallationDao installations, AgentIdentityRegistryDao registry,
+                AccountSecurityService a, AgentTaskEventsGate g) {
+            return new AgentRuntimeAuthenticationService(r, installations, registry, i, a, g);
         }
     }
 
@@ -178,6 +182,21 @@ class AgentRuntimeSecurityIntegrationTest {
         identityAliasDao = context.getBean(AgentIdentityAliasDao.class);
         identityBindingDao = context.getBean(AgentPersonaBindingDao.class);
         keys = context.getBean(ApiKeyService.class);
+        installations = context.getBean(cn.jia.agent.dao.AgentRuntimeV1InstallationDao.class);
+        when(installations.lock(anyString())).thenAnswer(inv -> installationRows.get(inv.getArgument(0)));
+        when(installations.findInScope(anyString(), anyString(), anyString())).thenAnswer(inv -> {
+            var row = installationRows.get(inv.getArgument(2));
+            return row != null && inv.getArgument(0).equals(row.getTenantId()) && inv.getArgument(1).equals(row.getClientId()) ? row : null;
+        });
+        when(rows.findInScope(anyString(), anyString(), anyString())).thenAnswer(inv -> {
+            var row = persisted.get(inv.getArgument(2));
+            return row != null && inv.getArgument(0).equals(row.getTenantId()) && inv.getArgument(1).equals(row.getClientId()) ? row : null;
+        });
+        when(rows.lockInScope(anyString(), anyString(), anyString())).thenAnswer(inv -> {
+            var row=persisted.get(inv.getArgument(2));
+            return row!=null && inv.getArgument(0).equals(row.getTenantId())
+                    && inv.getArgument(1).equals(row.getClientId()) ? row : null;
+        });
         accounts = context.getBean(AccountSecurityService.class);
         workspaceExecutions = context.getBean(PersonalWorkspaceExecutionService.class);
         when(rows.findByAgentId(anyString())).thenAnswer(inv -> persisted.get(inv.getArgument(0)));
@@ -197,16 +216,16 @@ class AgentRuntimeSecurityIntegrationTest {
                 });
         seed(A, OWNER_A, "a", TOKEN_A);
         seed(B, OWNER_B, "b", TOKEN_B);
-        auth.bind("socket-a", CLIENT_A, OWNER_A, A, "runtime-a", "key-a", TOKEN_A, openA::get);
-        auth.bind("socket-b", CLIENT_B, OWNER_B, B, "runtime-b", "key-b", TOKEN_B, () -> true);
+        bind(auth, "socket-a", CLIENT_A, OWNER_A, A, "runtime-a", "key-a", TOKEN_A, openA::get);
+        bind(auth, "socket-b", CLIENT_B, OWNER_B, B, "runtime-b", "key-b", TOKEN_B, () -> true);
         FilterChainProxy filters = context.getBean(FilterChainProxy.class);
         mvc = MockMvcBuilders.standaloneSetup(new RuntimeScopeProbeController())
                 .addFilters(filters).build();
         runtimeFailureMvc = MockMvcBuilders.standaloneSetup(
-                        new PersonalWorkspaceRuntimeFileController(workspaceExecutions))
+                        new PersonalWorkspaceRuntimeFileController(workspaceExecutions,auth))
                 .addFilters(filters).build();
         conversationMvc = MockMvcBuilders.standaloneSetup(
-                        new PersonalWorkspaceConversationRuntimeController(workspaceExecutions))
+                        new PersonalWorkspaceConversationRuntimeController(workspaceExecutions,auth))
                 .addFilters(filters).build();
     }
 
@@ -226,10 +245,16 @@ class AgentRuntimeSecurityIntegrationTest {
     void seedDirect(String agent, String owner, String client, long bindingId, String keyId,
             String token, String canonicalType) {
         var row = new AgentRuntimeEntity().setAgentId(agent).setOwnerJiacn(owner)
-                .setBindingId(bindingId).setTokenHash(token).setStatus("online");
+                .setBindingId(bindingId).setTokenHash(verifier(owner, token)).setStatus("online")
+                .setRuntimeInstallationId(installationId(bindingId)).setRuntimeHostId("host")
+                .setRuntimeInstanceId("runtime-" + keyId.substring("key-".length())).setRuntimeSessionGeneration(1L);
         row.setTenantId(TENANT);
         row.setClientId(client);
         persisted.put(agent, row);
+        var installation = new cn.jia.agent.entity.AgentRuntimeV1InstallationEntity()
+                .setInstallationId(installationId(bindingId)).setCanonicalAgentId(agent).setStatus("ACTIVE");
+        installation.setTenantId(TENANT); installation.setClientId(client);
+        installationRows.put(installation.getInstallationId(), installation);
         var key = new OauthApiKeyEntity().setId(keyId).setJiacn(owner)
                 .setClientId(client).setApiKey("fixture-api-key-" + keyId).setStatus(1);
         key.setTenantId(TENANT);
@@ -273,16 +298,39 @@ class AgentRuntimeSecurityIntegrationTest {
                 && owner.equals(actualOwner);
     }
 
-    MockHttpServletRequestBuilder headers(
-            MockHttpServletRequestBuilder request, String agent, String runtime, String token) {
-        return request.header("Authorization", "AgentRuntime " + token)
-                .header("X-Agent-Id", agent).header("X-Agent-Runtime-Id", runtime);
+    <B extends AbstractMockHttpServletRequestBuilder<?>> B headers(
+            B request, String agent, String runtime, String token) {
+        request.header("Authorization", "AgentRuntime " + credential(token))
+                .header("X-Agent-Id", agent).header("X-Agent-Runtime-Id", runtime)
+                .header("X-Agent-Installation-Id", installationFor(agent)).header("X-Agent-Host-Id", "host")
+                .header("X-Agent-Session-Generation", persisted.containsKey(agent) && persisted.get(agent).getRuntimeSessionGeneration() != null
+                        ? persisted.get(agent).getRuntimeSessionGeneration().toString() : "1");
+        return request;
     }
 
-    MockMultipartHttpServletRequestBuilder headers(
-            MockMultipartHttpServletRequestBuilder request, String agent, String runtime, String token) {
-        return (MockMultipartHttpServletRequestBuilder) request.header("Authorization", "AgentRuntime " + token)
-                .header("X-Agent-Id", agent).header("X-Agent-Runtime-Id", runtime);
+    static String credential(String token) { return token.startsWith("rts1_") ? token : "rts1_" + token.repeat(2); }
+    static String installationId(long id) { return "rti_" + "%032x".formatted(id); }
+    String installationFor(String agent) {
+        var row = persisted.get(agent);
+        return row != null && row.getRuntimeInstallationId() != null ? row.getRuntimeInstallationId() : installationId(999);
+    }
+    static String verifier(String owner, String token) {
+        return "urs1:" + AgentRuntimeAuthenticationService.digestHex(credential(token)) + ":" + (OWNER_B.equals(owner) ? 2 : 1) + ":0";
+    }
+    AgentRuntimeAuthenticationFilter.SessionHeaders proofHeaders(String agent, String runtime, String token) {
+        var row = persisted.get(agent);
+        return new AgentRuntimeAuthenticationFilter.SessionHeaders(agent, installationFor(agent), "host", runtime,
+                row != null && row.getRuntimeSessionGeneration() != null ? row.getRuntimeSessionGeneration() : 1, credential(token));
+    }
+    AgentRuntimeAuthenticationService.Receipt bind(AgentRuntimeAuthenticationService service, String session,
+            String client, String owner, String agent, String runtime, String legacyManagementKey, String token,
+            java.util.function.BooleanSupplier connected) {
+        var proof = service.verify(proofHeaders(agent, runtime, token));
+        if (!client.equals(proof.scope().clientId()) || !owner.equals(proof.scope().ownerJiacn())) throw new IllegalArgumentException("wrong scope");
+        return service.bind(session, proof, connected);
+    }
+    AgentRuntimeAuthentication authenticate(AgentRuntimeAuthenticationService service, String agent, String runtime, String token) {
+        return service.authenticate(proofHeaders(agent, runtime, token), true);
     }
 
     JwtAuthenticationToken browserJwt() {
@@ -296,6 +344,32 @@ class AgentRuntimeSecurityIntegrationTest {
 
     MockHttpServletRequestBuilder requestA() {
         return headers(get("/agent/tasks/task-a/context-pack"), A, "runtime-a", TOKEN_A);
+    }
+
+    @Test
+    void e05InternalPathsRequireActualCurrentNativeChannelAndNeverApiKeyOrJwtFallback() throws Exception {
+        var results=mock(cn.jia.agent.service.AgentWorkItemResultCommitService.class);
+        var reassignments=mock(cn.jia.agent.service.AgentWorkItemReassignmentService.class);
+        var view=new cn.jia.agent.entity.AgentWorkItemResultCommitViewDTO();view.setTaskId("task-a");view.setWorkItemId("work-a");view.setStatus("submitted");view.setWorkItemVersion(7L);
+        when(results.readRuntimeResult(TENANT,CLIENT_A,OWNER_A,"task-a","work-a",A,"receipt-a","command-a")).thenReturn(view);
+        var e05=MockMvcBuilders.standaloneSetup(new cn.jia.agent.api.AgentWorkItemRuntimeResultController(results,reassignments,auth))
+                .addFilters(context.getBean(FilterChainProxy.class)).build();
+        String path="/internal/agent/tasks/task-a/work-items/work-a/reassignments/receipt-a/commands/command-a/result-commit";
+        e05.perform(headers(get(path),A,"runtime-a",TOKEN_A)).andExpect(status().isOk())
+                .andExpect(header().string("Cache-Control","private, no-store")).andExpect(jsonPath("$.status").value("submitted"));
+        verify(results).readRuntimeResult(TENANT,CLIENT_A,OWNER_A,"task-a","work-a",A,"receipt-a","command-a");
+        clearInvocations(results,reassignments,keys);
+        e05.perform(get(path).principal(browserJwt())).andExpect(status().isUnauthorized());
+        e05.perform(get(path).header("X-API-Key","fixture-api-key-key-a")).andExpect(status().isUnauthorized());
+        e05.perform(headers(get(path),A,"runtime-a",TOKEN_A).header("X-API-Key","fixture-api-key-key-a")).andExpect(status().isUnauthorized());
+        e05.perform(headers(get(path),B,"runtime-a",TOKEN_A)).andExpect(status().isUnauthorized());
+        e05.perform(headers(get(path),A,"runtime-a",TOKEN_A).header("Origin","https://browser.invalid")).andExpect(status().isForbidden());
+        e05.perform(headers(get(path),A,"runtime-a",TOKEN_A).queryParam("actorAgentId",A)).andExpect(status().isForbidden());
+        e05.perform(headers(post(path.replace("/result-commit","/lease")),A,"runtime-a",TOKEN_A)).andExpect(status().isForbidden());
+        e05.perform(headers(get(path+"/extra"),A,"runtime-a",TOKEN_A)).andExpect(status().isForbidden());
+        openA.set(false);
+        e05.perform(headers(get(path),A,"runtime-a",TOKEN_A)).andExpect(status().isUnauthorized());
+        verifyNoInteractions(results,reassignments,keys);
     }
 
     @Test
@@ -361,7 +435,7 @@ class AgentRuntimeSecurityIntegrationTest {
                 .contentType("application/json").content(body)).andExpect(status().isBadRequest());
         conversationMvc.perform(headers(post(claim),A,"runtime-a",TOKEN_A)
                 .queryParam("token",lease.token()).contentType("application/json").content(body))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isUnauthorized()).andExpect(jsonPath("$.code").value("AGENT_RUNTIME_UNAUTHENTICATED"));
         verify(workspaceExecutions).runtimeConversationCommandViews(scope,16);
         verify(workspaceExecutions,times(1)).claimConversationStart(scope,"task-a","run-a","cmd-a","msg-a");
         verifyNoMoreInteractions(workspaceExecutions);
@@ -387,11 +461,31 @@ class AgentRuntimeSecurityIntegrationTest {
         conversationMvc.perform(headers(post(path),A,"runtime-a",TOKEN_A).header("Origin","https://browser.invalid")
                 .contentType("application/json").content(json)).andExpect(status().isForbidden());
         conversationMvc.perform(headers(post(path),A,"runtime-a",TOKEN_A).queryParam("token",fence.token())
-                .contentType("application/json").content(json)).andExpect(status().isBadRequest());
+                .contentType("application/json").content(json)).andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("AGENT_RUNTIME_UNAUTHENTICATED"));
         conversationMvc.perform(headers(post(path+"/extra"),A,"runtime-a",TOKEN_A)
                 .contentType("application/json").content(json)).andExpect(status().isForbidden());
         verify(workspaceExecutions,times(1)).conversationInputs(scope,"task-a","run-a",fence);
         verifyNoMoreInteractions(workspaceExecutions);
+    }
+
+    @Test
+    void skillPackageUsesActualNativeChainAndNeverLegacyKeyOrProductInstallAsRuntimeProof() throws Exception {
+        var installs=mock(cn.jia.agent.skill.SkillInstallResultService.class);
+        var controller=new cn.jia.agent.api.SkillPackageController(installs);
+        var packageMvc=MockMvcBuilders.standaloneSetup(controller).addFilters(context.getBean(FilterChainProxy.class)).build();
+        String path="/internal/agent/skill-installations/si_original/package";
+        when(installs.packageBytes(any(),eq("si_original"))).thenReturn(new byte[]{1,2,3});
+        packageMvc.perform(headers(get(path),A,"runtime-a",TOKEN_A))
+                .andExpect(status().isOk()).andExpect(header().string("Cache-Control","private, no-store"));
+        var proof=org.mockito.ArgumentCaptor.forClass(AgentRuntimeAuthenticationService.Proof.class);
+        verify(installs).packageBytes(proof.capture(),eq("si_original"));
+        assertEquals(A,proof.getValue().scope().agentId());assertNotEquals("si_original",proof.getValue().installationId());
+        packageMvc.perform(get(path).header("X-API-Key","old-secret")).andExpect(status().isUnauthorized());
+        packageMvc.perform(get(path)).andExpect(status().isUnauthorized());
+        packageMvc.perform(headers(get(path),A,"runtime-a",TOKEN_A).header("X-Agent-Installation-Id","si_original"))
+                .andExpect(status().isUnauthorized());
+        verifyNoMoreInteractions(installs);verifyNoInteractions(keys);
     }
 
     @Test
@@ -411,7 +505,8 @@ class AgentRuntimeSecurityIntegrationTest {
                 .andExpect(content().bytes(new byte[]{1,2,3}));
         conversationMvc.perform(headers(get(path),A,"runtime-a",TOKEN_A)).andExpect(status().isForbidden());
         conversationMvc.perform(headers(post(path),A,"runtime-a",TOKEN_A).queryParam("token",fence.token())
-                .contentType("application/json").content(body)).andExpect(status().isBadRequest());
+                .contentType("application/json").content(body)).andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("AGENT_RUNTIME_UNAUTHENTICATED"));
         conversationMvc.perform(headers(post(path),A,"runtime-a",TOKEN_A)
                 .header("Origin","https://browser.invalid").contentType("application/json").content(body))
                 .andExpect(status().isForbidden());
@@ -421,6 +516,40 @@ class AgentRuntimeSecurityIntegrationTest {
                 .contentType("application/json").content(body)).andExpect(status().isForbidden());
         verify(workspaceExecutions,times(1)).conversationInputContent(scope,"task-a","run-a",fence,"input_1");
         verifyNoMoreInteractions(workspaceExecutions);
+    }
+
+    @Test
+    void generationChangedDuringConversationSourceReadCannotDeliverOldAdmittedBytes() throws Exception {
+        var scope=new PersonalWorkspaceExecutionService.RuntimeScope(TENANT,CLIENT_A,OWNER_A,A,"runtime-a");
+        var fence=new PersonalWorkspaceExecutionService.ConversationFence(2L,"01234567-89ab-cdef-0123-456789abcdef");
+        String source="private-source-must-not-leak";
+        when(workspaceExecutions.conversationInputContent(scope,"task-a","run-a",fence,"input_1"))
+                .thenAnswer(call->{
+                    persisted.get(A).setRuntimeSessionGeneration(2L).setRuntimeInstanceId("replacement");
+                    return new PersonalWorkspaceExecutionService.RuntimeContent("bird.png","image/png",source.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                });
+        var response=conversationMvc.perform(headers(post("/internal/agent/tasks/task-a/runs/run-a/conversation/inputs/input_1/content"),A,"runtime-a",TOKEN_A)
+                .contentType("application/json").content("{\"version\":2,\"token\":\""+fence.token()+"\"}"))
+                .andExpect(status().isBadRequest()).andReturn().getResponse();
+        assertFalse(response.getContentAsString().contains(source));
+        var ordered=inOrder(workspaceExecutions,installations,rows);
+        ordered.verify(workspaceExecutions).conversationInputContent(scope,"task-a","run-a",fence,"input_1");
+        ordered.verify(installations).lock(installationFor(A));
+        ordered.verify(rows).lockInScope(TENANT,CLIENT_A,A);
+    }
+
+    @Test
+    void installationRevokedDuringFileSourceReadCannotDeliverPreparedBytes() throws Exception {
+        var scope=new PersonalWorkspaceExecutionService.RuntimeScope(TENANT,CLIENT_A,OWNER_A,A,"runtime-a");
+        String source="revoked-private-file";
+        when(workspaceExecutions.runtimeInputContent(scope,"task-a","run-a","input_1")).thenAnswer(call->{
+            installationRows.get(installationFor(A)).setStatus("REVOKED");
+            return new PersonalWorkspaceExecutionService.RuntimeContent("file.png","image/png",source.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        });
+        var response=runtimeFailureMvc.perform(headers(get("/internal/agent/tasks/task-a/runs/run-a/inputs/input_1/content"),A,"runtime-a",TOKEN_A))
+                .andExpect(status().isBadRequest()).andReturn().getResponse();
+        assertFalse(response.getContentAsString().contains(source));
+        verify(workspaceExecutions).runtimeInputContent(scope,"task-a","run-a","input_1");
     }
 
     @Test
@@ -598,7 +727,7 @@ class AgentRuntimeSecurityIntegrationTest {
     void persistedLegacyCanonicalRegistrationAuthorizesClosedRuntimeRoutesWithFullScope() throws Exception {
         seedDirect(LEGACY, OWNER_A, CLIENT_A, 3L, "key-legacy", "3".repeat(32),
                 AgentConstants.IDENTITY_TYPE_LEGACY_CANONICAL);
-        var receipt = auth.bind("socket-legacy", CLIENT_A, OWNER_A, LEGACY,
+        var receipt = bind(auth, "socket-legacy", CLIENT_A, OWNER_A, LEGACY,
                 "runtime-legacy", "key-legacy", "3".repeat(32), () -> true);
         assertEquals("native-runtime-v1", receipt.scheme());
         assertEquals(TENANT, receipt.tenantId());
@@ -627,7 +756,7 @@ class AgentRuntimeSecurityIntegrationTest {
     @Test
     void aliasSystemUnknownInactiveCrossScopeAndLegacyOwnerTenantRegistrationsFail() {
         for (String invalid : List.of("invalid agent id", "agent/invalid", "a".repeat(101))) {
-            assertThrows(RuntimeException.class, () -> auth.bind("invalid-wire", CLIENT_A, OWNER_A,
+            assertThrows(RuntimeException.class, () -> bind(auth, "invalid-wire", CLIENT_A, OWNER_A,
                     invalid, "runtime-invalid", "key-a", TOKEN_A, () -> true));
         }
 
@@ -649,18 +778,18 @@ class AgentRuntimeSecurityIntegrationTest {
         aliasRuntime.setTenantId(TENANT);
         aliasRuntime.setClientId(CLIENT_A);
         persisted.put(alias, aliasRuntime);
-        assertThrows(RuntimeException.class, () -> auth.bind("alias", CLIENT_A, OWNER_A, alias,
+        assertThrows(RuntimeException.class, () -> bind(auth, "alias", CLIENT_A, OWNER_A, alias,
                 "runtime-alias", "key-alias", "4".repeat(32), () -> true));
 
         seedDirect(AgentConstants.BUILTIN_SONGJIANG_AGENT_ID, OWNER_A, CLIENT_A, 12L,
                 "key-system", "5".repeat(32), AgentConstants.IDENTITY_TYPE_SYSTEM);
-        assertThrows(RuntimeException.class, () -> auth.bind("system", CLIENT_A, OWNER_A,
+        assertThrows(RuntimeException.class, () -> bind(auth, "system", CLIENT_A, OWNER_A,
                 AgentConstants.BUILTIN_SONGJIANG_AGENT_ID, "runtime-system", "key-system",
                 "5".repeat(32), () -> true));
 
         seedDirect("noncanonical-direct", OWNER_A, CLIENT_A, 16L, "key-noncanonical",
                 "9".repeat(32), "ALIAS");
-        assertThrows(RuntimeException.class, () -> auth.bind("noncanonical", CLIENT_A, OWNER_A,
+        assertThrows(RuntimeException.class, () -> bind(auth, "noncanonical", CLIENT_A, OWNER_A,
                 "noncanonical-direct", "runtime-noncanonical", "key-noncanonical",
                 "9".repeat(32), () -> true));
 
@@ -668,7 +797,7 @@ class AgentRuntimeSecurityIntegrationTest {
                 "6".repeat(32), AgentConstants.IDENTITY_TYPE_LEGACY_CANONICAL);
         persistedIdentitiesByBinding.remove(13L);
         persistedIdentitiesByCanonical.remove("unknown-direct-id");
-        assertThrows(RuntimeException.class, () -> auth.bind("unknown", CLIENT_A, OWNER_A,
+        assertThrows(RuntimeException.class, () -> bind(auth, "unknown", CLIENT_A, OWNER_A,
                 "unknown-direct-id", "runtime-unknown", "key-unknown", "6".repeat(32), () -> true));
 
         seedDirect("jyt-inactive", OWNER_A, CLIENT_A, 14L, "key-inactive",
@@ -676,7 +805,7 @@ class AgentRuntimeSecurityIntegrationTest {
         persistedIdentitiesByBinding.get(14L)
                 .setLifecycleStatus(AgentConstants.IDENTITY_STATUS_SUSPENDED).setSuspendedAt(3L);
         persistedBindings.get(14L).setStatus(AgentConstants.BINDING_STATUS_SUSPENDED);
-        assertThrows(RuntimeException.class, () -> auth.bind("inactive", CLIENT_A, OWNER_A,
+        assertThrows(RuntimeException.class, () -> bind(auth, "inactive", CLIENT_A, OWNER_A,
                 "jyt-inactive", "runtime-inactive", "key-inactive", "7".repeat(32), () -> true));
 
         seedDirect("jyt-cross-scope", OWNER_A, CLIENT_A, 15L, "key-cross-original",
@@ -686,7 +815,7 @@ class AgentRuntimeSecurityIntegrationTest {
                 .setClientId(CLIENT_B).setApiKey("fixture-api-key-cross").setStatus(1);
         crossKey.setTenantId(TENANT);
         when(keys.get("key-cross")).thenReturn(crossKey);
-        assertThrows(RuntimeException.class, () -> auth.bind("cross", CLIENT_B, OWNER_A,
+        assertThrows(RuntimeException.class, () -> bind(auth, "cross", CLIENT_B, OWNER_A,
                 "jyt-cross-scope", "runtime-cross", "key-cross", "8".repeat(32), () -> true));
 
         seedDirect("jyt-legacy-owner-tenant", OWNER_A, CLIENT_A, 17L, "key-legacy-tenant",
@@ -695,7 +824,7 @@ class AgentRuntimeSecurityIntegrationTest {
         keys.get("key-legacy-tenant").setTenantId(OWNER_A);
         persistedBindings.get(17L).setTenantId(OWNER_A);
         persistedIdentitiesByBinding.get(17L).setTenantId(OWNER_A);
-        assertThrows(RuntimeException.class, () -> auth.bind("legacy-owner-tenant", CLIENT_A, OWNER_A,
+        assertThrows(RuntimeException.class, () -> bind(auth, "legacy-owner-tenant", CLIENT_A, OWNER_A,
                 "jyt-legacy-owner-tenant", "runtime-legacy-tenant", "key-legacy-tenant",
                 "a".repeat(32), () -> true));
     }
@@ -845,29 +974,30 @@ class AgentRuntimeSecurityIntegrationTest {
 
     @Test
     void revokeRotateDisconnectAndOldSocketCloseCannotAuthorizeOrKillNewBinding() throws Exception {
-        persisted.get(A).setTokenHash("3".repeat(32));
-        assertThrows(RuntimeException.class, () -> auth.authenticate(A, "runtime-a", "3".repeat(32)));
+        persisted.get(A).setTokenHash(verifier(OWNER_A, "3".repeat(32)));
+        persisted.get(A).setRuntimeInstanceId("runtime-new").setRuntimeSessionGeneration(2L);
+        assertThrows(RuntimeException.class, () -> authenticate(auth, A, "runtime-a", "3".repeat(32)));
         mvc.perform(requestA()).andExpect(status().isUnauthorized());
-        auth.bind("socket-a-new", CLIENT_A, OWNER_A, A, "runtime-new", "key-a", "3".repeat(32), () -> true);
+        bind(auth, "socket-a-new", CLIENT_A, OWNER_A, A, "runtime-new", "key-a", "3".repeat(32), () -> true);
         auth.disconnect("socket-a");
-        assertEquals(A, auth.authenticate(A, "runtime-new", "3".repeat(32)).getName());
-        assertThrows(RuntimeException.class, () -> auth.authenticate(A, "runtime-a", TOKEN_A));
+        assertEquals(A, authenticate(auth, A, "runtime-new", "3".repeat(32)).getName());
+        assertThrows(RuntimeException.class, () -> authenticate(auth, A, "runtime-a", TOKEN_A));
         auth.disconnect("socket-a-new");
-        assertThrows(RuntimeException.class, () -> auth.authenticate(A, "runtime-new", "3".repeat(32)));
-        assertEquals(B, auth.authenticate(B, "runtime-b", TOKEN_B).getName());
+        assertThrows(RuntimeException.class, () -> authenticate(auth, A, "runtime-new", "3".repeat(32)));
+        assertEquals(B, authenticate(auth, B, "runtime-b", TOKEN_B).getName());
     }
 
     @Test
     void closedSocketRevokedKeyScopeDriftSuspendedIdentityAndAccountEpochAreRechecked() throws Exception {
-        keys.get("key-a").setApiKey("rotated-key");
+        installationRows.get(installationId(1)).setStatus("REVOKED");
         mvc.perform(requestA()).andExpect(status().isUnauthorized());
-        keys.get("key-a").setApiKey("fixture-api-key-key-a");
+        installationRows.get(installationId(1)).setStatus("ACTIVE");
         openA.set(false);
         mvc.perform(requestA()).andExpect(status().isUnauthorized());
         openA.set(true);
-        keys.get("key-a").setStatus(0);
+        persisted.get(A).setRuntimeHostId("foreign-host");
         mvc.perform(requestA()).andExpect(status().isUnauthorized());
-        keys.get("key-a").setStatus(1);
+        persisted.get(A).setRuntimeHostId("host");
         when(accounts.findUniqueByExactJiacn(OWNER_A)).thenReturn(Optional.of(
                 new AccountSecuritySnapshot(1, OWNER_A, AccountState.ACTIVE, 1)));
         mvc.perform(requestA()).andExpect(status().isUnauthorized());
@@ -887,14 +1017,25 @@ class AgentRuntimeSecurityIntegrationTest {
     }
 
     @Test
+    void proofRotatedAfterHttpAdmissionCannotMutateOriginalWorkspaceRun() {
+        var admitted=authenticate(auth,A,"runtime-a",TOKEN_A);
+        persisted.get(A).setRuntimeSessionGeneration(2L).setRuntimeInstanceId("replacement-boot");
+        var controller=new PersonalWorkspaceRuntimeFileController(workspaceExecutions,auth);
+        var request=new org.springframework.mock.web.MockHttpServletRequest("POST","/internal/agent/tasks/task-a/runs/run-a/failure");
+        assertThrows(RuntimeException.class,()->controller.failure("task-a","run-a",
+                new PersonalWorkspaceRuntimeFileController.FailureRequest("OUTPUT_MISSING"),request,admitted));
+        verifyNoInteractions(workspaceExecutions);
+    }
+
+    @Test
     void disabledCapabilityIsReflectedWithoutChangingAuthenticatedScope() {
         var disabledGate = new AgentTaskEventsGate(new AgentTaskEventsProperties(false, List.of()));
-        var scopedAuth = new AgentRuntimeAuthenticationService(rows, context.getBean(AgentIdentityService.class),
-                keys, accounts, disabledGate);
-        var receipt = scopedAuth.bind("disabled", CLIENT_A, OWNER_A, A,
+        var scopedAuth = new AgentRuntimeAuthenticationService(rows,
+                installations, identityRegistryDao, context.getBean(AgentIdentityService.class), accounts, disabledGate);
+        var receipt = bind(scopedAuth, "disabled", CLIENT_A, OWNER_A, A,
                 "runtime-a", "key-a", TOKEN_A, () -> true);
         assertFalse(receipt.contextPackEnabled());
-        var principal = scopedAuth.authenticate(A, "runtime-a", TOKEN_A).getPrincipal();
+        var principal = authenticate(scopedAuth, A, "runtime-a", TOKEN_A).getPrincipal();
         assertEquals(TENANT, principal.tenantId());
         assertEquals(CLIENT_A, principal.clientId());
         assertEquals(OWNER_A, principal.ownerJiacn());
@@ -909,7 +1050,7 @@ class AgentRuntimeSecurityIntegrationTest {
                 new AccountSecuritySnapshot(1, OWNER_A, AccountState.ACTIVE, 0)));
         persistedBindings.remove(1L);
         mvc.perform(requestA()).andExpect(status().isUnauthorized());
-        assertThrows(RuntimeException.class, () -> auth.bind("wrong-owner", CLIENT_A, OWNER_B,
+        assertThrows(RuntimeException.class, () -> bind(auth, "wrong-owner", CLIENT_A, OWNER_B,
                 A, "runtime-other", "key-a", TOKEN_A, () -> true));
     }
 
@@ -936,7 +1077,7 @@ class AgentRuntimeSecurityIntegrationTest {
     void runtimeV1ClientLaneIsPostOnlyAndExcludesScopedInstallationAdministration() {
         var servletContext = new MockServletContext();
         for (String path : List.of("/agent/runtime/v1/enroll", "/agent/runtime/v1/session",
-                "/agent/runtime/v1/heartbeat", "/agent/runtime/v1/commands/message-1/acks")) {
+                "/agent/runtime/v1/heartbeat")) {
             assertTrue(AgentRuntimeSecurityConfiguration.selectsRuntimeV1ClientLane(
                     post(path).buildRequest(servletContext)));
             assertFalse(AgentRuntimeSecurityConfiguration.selectsRuntimeV1ClientLane(
@@ -950,12 +1091,12 @@ class AgentRuntimeSecurityIntegrationTest {
     }
 
     @Test
-    void selectorClaimsRuntimeCredentialsButNotEstablishedApiKeyWebSocketAgentHeader() throws Exception {
+    void selectorClaimsExclusiveRuntimeWebSocketLaneAndRejectsLegacyApiKeyCredentials() throws Exception {
         var servletContext = new MockServletContext();
-        assertFalse(AgentRuntimeAuthenticationFilter.selectsRuntimeCredentialLane(
+        assertTrue(AgentRuntimeAuthenticationFilter.selectsRuntimeCredentialLane(
                 get("/ws/agent/channel").header("X-API-Key", "api-key")
                         .header("X-Agent-Id", A).buildRequest(servletContext)));
-        assertFalse(AgentRuntimeAuthenticationFilter.selectsRuntimeCredentialLane(
+        assertTrue(AgentRuntimeAuthenticationFilter.selectsRuntimeCredentialLane(
                 get("/ws/agent/channel").queryParam("api_key", "api-key")
                         .queryParam("agentId", A).buildRequest(servletContext)));
         assertTrue(AgentRuntimeAuthenticationFilter.selectsRuntimeCredentialLane(
@@ -971,6 +1112,12 @@ class AgentRuntimeSecurityIntegrationTest {
                 get("/ws/agent/channel").header("Authorization", "AgentRuntimeMalformed")
                         .buildRequest(servletContext)));
 
+        mvc.perform(get("/ws/agent/channel").header("X-API-Key","api-key").header("X-Agent-Id",A))
+                .andExpect(status().isUnauthorized()).andExpect(jsonPath("$.code").value("AGENT_RUNTIME_UNAUTHENTICATED"));
+        mvc.perform(get("/ws/agent/channel").queryParam("api_key","api-key").queryParam("agentId",A))
+                .andExpect(status().isUnauthorized()).andExpect(jsonPath("$.code").value("AGENT_RUNTIME_UNAUTHENTICATED"));
+        verifyNoInteractions(keys);
+
         mvc.perform(get("/agent/tasks/task-a/context-pack")
                         .header("Authorization", "AgentRuntimeMalformed")
                         .header("X-Agent-Id", A).header("X-Agent-Runtime-Id", "runtime-a"))
@@ -983,7 +1130,7 @@ class AgentRuntimeSecurityIntegrationTest {
 
     @Test
     void noMintedJwtAndBearerNeverSelectsTheRuntimeCredentialLane() {
-        var principal = auth.authenticate(A, "runtime-a", TOKEN_A);
+        var principal = authenticate(auth, A, "runtime-a", TOKEN_A);
         assertNull(principal.getCredentials());
         assertFalse(principal.toString().contains(TOKEN_A));
         assertEquals(TENANT, principal.getPrincipal().tenantId());
@@ -993,7 +1140,7 @@ class AgentRuntimeSecurityIntegrationTest {
                 get("/agent/tasks/task-a/context-pack")
                         .header("Authorization", "Bearer original-jwt")
                         .buildRequest(new MockServletContext())));
-        assertThrows(RuntimeException.class, () -> auth.bind("s", CLIENT_A, OWNER_B,
+        assertThrows(RuntimeException.class, () -> bind(auth, "s", CLIENT_A, OWNER_B,
                 A, "r", "key-a", TOKEN_A, () -> true));
     }
 }

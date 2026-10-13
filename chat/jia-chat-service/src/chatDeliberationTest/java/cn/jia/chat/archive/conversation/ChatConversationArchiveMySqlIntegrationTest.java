@@ -21,7 +21,19 @@ import java.util.HexFormat;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.*;
+import static org.mockito.ArgumentMatchers.*;
+import cn.jia.chat.service.ChatTypedDeliberationService;
+import cn.jia.chat.service.ChatActionFinalService;
+import cn.jia.chat.deliberation.ChatTypedDeliberationStore;
+import org.springframework.context.annotation.AnnotationConfigApplicationContext;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.transaction.annotation.EnableTransactionManagement;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.aop.support.AopUtils;
+import java.sql.SQLException;
+import java.util.Map;
 
 /** Isolated MySQL 8 DDL, transaction, scope and archive-recovery evidence; no Provider is called. */
 @EnabledIfEnvironmentVariable(named = "MMD_U1_REFERENCE_MYSQL_URL", matches = ".+")
@@ -283,6 +295,155 @@ class ChatConversationArchiveMySqlIntegrationTest {
                 null, null, 1, now, now);
     }
 
+    @Test
+    void committedAssetAuthorizationUsesExactTerminalLinkForBothReaders() {
+        insertCommittedAsset();
+        var unlocked = store.findAuthorizedSource(OWNER, "42", "asset", 1, "agent");
+        var locked = transactions.required(() ->
+                store.findAuthorizedSourceForUpdate(OWNER, "42", "asset", 1, "agent"));
+        assertNotNull(unlocked);
+        assertEquals(unlocked, locked);
+        assertEquals("execution", locked.executionId());
+        assertEquals("run", locked.runId());
+        assertEquals("output", locked.outputId());
+        assertEquals("image/png", locked.contentMimeType());
+        assertEquals("a".repeat(64), locked.sha256());
+        assertEquals(10, locked.byteLength());
+    }
+
+    @Test
+    void committedAssetAuthorizationRejectsEveryNonterminalLinkAndExactScopeDrift() {
+        insertCommittedAsset();
+        for (String state : new String[]{"RUNNING", "WAITING_ADMISSION", "FAILED", "INPUTS_REVOKED"}) {
+            jdbc.update("UPDATE chat_step_execution_link SET state=?", state);
+            assertAssetRejected();
+        }
+        jdbc.update("UPDATE chat_step_execution_link SET state='OUTPUT_COMMITTED'");
+        for (Scope scope : new Scope[]{new Scope("1", "owner", "client"),
+                new Scope("0", "foreign", "client"), new Scope("0", "owner", "foreign"),
+                new Scope("0", "owner ", "client")}) {
+            assertNull(store.findAuthorizedSource(scope, "42", "asset", 1, "agent"));
+            assertNull(transactions.required(() ->
+                    store.findAuthorizedSourceForUpdate(scope, "42", "asset", 1, "agent")));
+        }
+        assertNull(store.findAuthorizedSource(OWNER, "42", "asset", 2, "agent"));
+        assertNull(store.findAuthorizedSource(OWNER, "42", "asset ", 1, "agent"));
+        assertNull(store.findAuthorizedSource(OWNER, "042", "asset", 1, "agent"));
+        assertNull(store.findAuthorizedSource(OWNER, "42", "asset", 1, "foreign"));
+        for (String[] damage : new String[][]{
+                {"chat_conversation", "lifecycle_generation", "4", "3"},
+                {"chat_conversation", "deleted_at", "1", null},
+                {"chat_conversation", "conversation_scope_key", "task:foreign", "task:task-1"},
+                {"chat_conversation", "target_agent_ids", "[\"foreign\"]", "[\"agent\"]"},
+                {"chat_conversation", "target_agent_ids", "[\"agent\",\"foreign\"]", "[\"agent\"]"},
+                {"chat_interaction_step", "request_revision", "2", "1"},
+                {"chat_interaction_step", "kind", "CHAT", "EXECUTE"},
+                {"chat_interaction_step", "state", "RUNNING", "OUTPUT_COMMITTED"},
+                {"chat_interaction_step", "request_id", "foreign", "producer"},
+                {"chat_interaction_step", "step_id", "foreign", "step"},
+                {"chat_interaction_step", "task_id", "foreign", "task-1"},
+                {"chat_step_execution_link", "execution_id", "foreign", "execution"},
+                {"chat_step_execution_link", "owner_jiacn", "foreign", "owner"},
+                {"chat_request", "aggregate_state", "RUNNING", "OUTPUT_COMMITTED"}}) {
+            // Identifiers are compile-time fixture constants, never request payload.
+            String sql = "UPDATE " + damage[0] + " SET " + damage[1] + "=?";
+            jdbc.update(sql, damage[2]);
+            assertAssetRejected();
+            jdbc.update(sql, damage[3]);
+            assertNotNull(store.findAuthorizedSource(OWNER, "42", "asset", 1, "agent"));
+        }
+    }
+
+    @Test
+    void committedAssetAuthorizationRejectsAmbiguousRowsAndNullExecution() {
+        insertCommittedAsset();
+        jdbc.update("INSERT INTO chat_conversation_asset SELECT * FROM chat_conversation_asset");
+        assertAssetRejected();
+        jdbc.update("DELETE FROM chat_conversation_asset LIMIT 1");
+        jdbc.update("UPDATE chat_step_execution_link SET execution_id=NULL");
+        assertAssetRejected();
+    }
+
+    @Test
+    void typedOutcomeReadAllowsRequiredJdbcLockWithoutMutation() {
+        var before = jdbc.queryForList("SELECT * FROM chat_conversation");
+        try (var context = lockingReadContext()) {
+            var typed = context.getBean(ChatTypedDeliberationService.class);
+            assertTrue(AopUtils.isCglibProxy(typed));
+            assertEquals(Map.of("state", "READY"), typed.read(
+                    new ChatTypedDeliberationStore.Scope("0", "owner", "client", "42", 3),
+                    "request", "turn", 1));
+        }
+        assertEquals(before, jdbc.queryForList("SELECT * FROM chat_conversation"));
+        assertFalse(TransactionSynchronizationManager.isActualTransactionActive());
+    }
+
+    @Test
+    void explicitReadOnlyCallerStillRejectsRequiredJdbcLockWithoutTransactionSplitting() {
+        try (var context = lockingReadContext()) {
+            var typed = context.getBean(ChatTypedDeliberationService.class);
+            var readOnly = new TransactionTemplate(new DataSourceTransactionManager(source));
+            readOnly.setReadOnly(true);
+            DataAccessException failure = assertThrows(DataAccessException.class, () -> readOnly.execute(status ->
+                    typed.read(new ChatTypedDeliberationStore.Scope("0", "owner", "client", "42", 3),
+                            "request", "turn", 1)));
+            Throwable cause = failure;
+            while (!(cause instanceof SQLException) && cause.getCause() != null) cause = cause.getCause();
+            assertInstanceOf(SQLException.class, cause);
+            var sql = (SQLException) cause;
+            assertEquals(1792, sql.getErrorCode());
+            assertEquals("25006", sql.getSQLState());
+        }
+        assertFalse(TransactionSynchronizationManager.isActualTransactionActive());
+    }
+
+    private AnnotationConfigApplicationContext lockingReadContext() {
+        ChatActionFinalService finals = mock(ChatActionFinalService.class);
+        when(finals.readIfV3(any(), eq("request"), eq("turn"), eq(1L), eq("CHAT")))
+                .thenAnswer(invocation -> {
+                    assertTrue(TransactionSynchronizationManager.isActualTransactionActive());
+                    return transactions.required(() -> {
+                        jdbc.queryForObject("SELECT id FROM chat_conversation WHERE id=42 FOR UPDATE", Long.class);
+                        assertFalse(TransactionSynchronizationManager.isCurrentTransactionReadOnly());
+                        return Map.of("state", "READY");
+                    });
+                });
+        var context = new AnnotationConfigApplicationContext();
+        context.register(LockingReadConfiguration.class);
+        context.registerBean(DataSourceTransactionManager.class,
+                () -> new DataSourceTransactionManager(source));
+        context.registerBean(ChatTypedDeliberationService.class, () -> {
+            var typed = new ChatTypedDeliberationService(mock(ChatTypedDeliberationStore.class));
+            typed.setActionFinals(finals);
+            return typed;
+        });
+        context.refresh();
+        return context;
+    }
+
+    @Configuration
+    @EnableTransactionManagement(proxyTargetClass = true)
+    static class LockingReadConfiguration { }
+
+    private void assertAssetRejected() {
+        assertNull(store.findAuthorizedSource(OWNER, "42", "asset", 1, "agent"));
+        assertNull(transactions.required(() ->
+                store.findAuthorizedSourceForUpdate(OWNER, "42", "asset", 1, "agent")));
+    }
+
+    private void insertCommittedAsset() {
+        jdbc.update("UPDATE chat_conversation SET target_agent_ids='[\"agent\"]' WHERE id=42");
+        jdbc.update("INSERT INTO chat_conversation_asset VALUES "
+                + "('asset','0','owner','client','42',3,'producer','step','execution','run','output','image/png',?,10,1)",
+                "a".repeat(64));
+        jdbc.update("INSERT INTO chat_interaction_step VALUES "
+                + "('step','0','owner','client','producer',1,'42',3,'task-1','EXECUTE','OUTPUT_COMMITTED')");
+        jdbc.update("INSERT INTO chat_step_execution_link VALUES "
+                + "('0','owner','client','step','execution','OUTPUT_COMMITTED')");
+        jdbc.update("INSERT INTO chat_request VALUES "
+                + "('0','owner','client','producer',1,'42',3,'OUTPUT_COMMITTED')");
+    }
+
     private void createSourceTables() {
         jdbc.execute("""
                 CREATE TABLE chat_conversation (
@@ -290,7 +451,7 @@ class ChatConversationArchiveMySqlIntegrationTest {
                   jiacn VARCHAR(50) NOT NULL, client_id VARCHAR(50) NOT NULL,
                   conversation_type VARCHAR(20), conversation_scope_type VARCHAR(20),
                   conversation_scope_key VARCHAR(120), task_id VARCHAR(64), deleted_at BIGINT,
-                  lifecycle_generation BIGINT NOT NULL, status INT DEFAULT 0
+                  lifecycle_generation BIGINT NOT NULL, status INT DEFAULT 0, target_agent_ids JSON
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin
                 """);
         jdbc.execute("""

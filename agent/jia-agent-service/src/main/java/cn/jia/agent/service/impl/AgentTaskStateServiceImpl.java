@@ -170,6 +170,7 @@ public class AgentTaskStateServiceImpl implements AgentTaskStateService {
         requireStrictScopeAndId(tenantId, clientId, ownerJiacn, taskId, "taskId");
         requireId(agentId, "agentId");
         return withLockedTaskRoot(tenantId, clientId, ownerJiacn, taskId, root -> {
+            requireNotCancelled(root);
             MemberChange change = prepareMember(tenantId, clientId, ownerJiacn, taskId, agentId, transition, now());
             requireSingleCasUpdate(memberDao.updateByVersion(
                     tenantId, clientId, ownerJiacn, taskId, agentId, change.expectedVersion(), change.update()));
@@ -184,6 +185,7 @@ public class AgentTaskStateServiceImpl implements AgentTaskStateService {
             AgentTaskStateTransitionDTO transition) {
         requireStrictScopeAndId(tenantId, clientId, ownerJiacn, workItemId, "workItemId");
         return withLockedTaskRootForWorkItem(tenantId, clientId, ownerJiacn, workItemId, root -> {
+            requireNotCancelled(root);
             String taskId = root.getTaskId();
             WorkItemChange change = prepareWorkItem(
                     tenantId, clientId, ownerJiacn, taskId, workItemId, transition, now());
@@ -206,6 +208,7 @@ public class AgentTaskStateServiceImpl implements AgentTaskStateService {
         requireId(agentId, "agentId");
         requireId(workItemId, "workItemId");
         return withLockedTaskRoot(tenantId, clientId, ownerJiacn, taskId, root -> {
+            requireNotCancelled(root);
             long changedAt = now();
             MemberChange memberChange = prepareMember(
                     tenantId, clientId, ownerJiacn, taskId, agentId, memberTransition, changedAt);
@@ -379,6 +382,13 @@ public class AgentTaskStateServiceImpl implements AgentTaskStateService {
                 || current.getCompletedAt() != null || changedAt <= 0) {
             throw new AgentTaskStateException(Reason.INVALID_PERSISTED_STATE,
                     "Submitted work item lacks canonical accepted-result completion proof");
+        }
+    }
+
+    private void requireNotCancelled(AgentTaskMetaEntity root) {
+        if ("cancelled".equals(root.getRewardStatus())) {
+            throw new AgentTaskStateException(Reason.INVALID_TRANSITION,
+                    "Cancelled task children cannot admit state mutations");
         }
     }
 

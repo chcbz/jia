@@ -600,7 +600,114 @@ class ChatControllerTest extends BaseMockTest {
         return (JsonResult<?>) method.invoke(controller, request);
     }
 
+    @Test
+    void durablePostForwardsFinalFrameCompletesAndAdmitsSecondRequestInSameConversation() {
+        EsContext context = new EsContext();
+        context.setTenantId("0"); context.setJiacn("tester"); context.setClientId("web-client");
+        EsContextHolder.setContext(context);
+        ChatConversationEventBroker broker = new ChatConversationEventBroker();
+        ChatController controller = newController(broker);
+        when(chatConversationService.get("1001"))
+                .thenAnswer(ignored -> chatConversationService.getOwned("tester", "web-client", "1001"));
+        when(redisService.subscribeToChannel("1001")).thenReturn(Flux.never());
+        java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicInteger> reads =
+                new java.util.concurrent.ConcurrentHashMap<>();
+        when(chatDeliberationService.getRequest(eq("0"), eq("tester"), eq("web-client"), anyString()))
+                .thenAnswer(invocation -> {
+                    String id = invocation.getArgument(3);
+                    int read = reads.computeIfAbsent(id, ignored -> new java.util.concurrent.atomic.AtomicInteger()).incrementAndGet();
+                    if (read == 1) {
+                        // Real broker buffer registration precedes this read. No delayed mock event.
+                        assertTrue(broker.publishIfSubscribed("1001", 1L, () -> true, Map.of(
+                                "requestId", id, "conversationId", "1001", "type", "agent_message", "content", "final-" + id)));
+                    }
+                    ChatDeliberationService.TurnView turn = new ChatDeliberationService.TurnView(
+                            "turn-agent-wuyong", id, "1", "1001", "1", "agent-wuyong", "snapshot-agent-wuyong",
+                            "dispatch-agent-wuyong", "CHAT", read == 1 ? "STREAMING" : "FINAL_PERSISTED", "1", "0", null,
+                            read == 1 ? null : "12", "1", "1");
+                    return new ChatDeliberationService.RequestView(id, "1", "1001", "1", "11",
+                            read == 1 ? "RUNNING" : "COMPLETED", "1", List.of(turn), List.of());
+                });
+        for (String id : List.of("round-1", "round-2")) {
+            ChatMessageDTO request = new ChatMessageDTO();
+            request.setConversationId("1001"); request.setRequestId(id); request.setContent("question-" + id);
+            request.setConversationType("juyiting"); request.setConversationScopeType("public");
+            request.setConversationScopeKey("public"); request.setTargetAgentIds(List.of("agent-wuyong"));
+            List<String> frames = controller.handleChat(request).collectList().block(Duration.ofSeconds(2));
+            assertTrue(frames.getFirst().contains("\"conversationId\":\"1001\""));
+            assertEquals(1, frames.stream().filter(frame -> frame.contains("final-" + id)).count());
+            assertTrue(frames.get(frames.size() - 2).contains("final-" + id));
+            assertEquals(2, reads.get(id).get());
+        }
+        verify(chatDeliberationService, org.mockito.Mockito.times(2)).admit(eq("0"), any(), eq("1001"), eq(1L), any(), any(), any(), any());
+        verify(chatClientBuilder, never()).build(); // Durable relay has no summary/model tail.
+        verify(agentWebSocketHandler, never()).sendDirectMessageToAgent(any(), any(), any(), any(Map.class));
+    }
+
+    @Test
+    void ordinaryNonHallModelStreamStillCompletesWithAllContent() {
+        EsContext context = new EsContext();
+        context.setTenantId("0"); context.setJiacn("tester"); context.setClientId("web-client");
+        EsContextHolder.setContext(context);
+        chatClient = org.mockito.Mockito.mock(ChatClient.class, org.mockito.Mockito.RETURNS_DEEP_STUBS);
+        when(chatClient.prompt(any(Prompt.class)).advisors(any(java.util.function.Consumer.class))
+                .messages().stream().content()).thenReturn(Flux.just("第一块", "第二块"));
+        ChatController controller = newController(new ChatConversationEventBroker());
+        ChatConversationEntity normal = new ChatConversationEntity()
+                .setId(1001L).setJiacn("tester").setTitle("已有标题").setConversationType("normal").setLifecycleGeneration(1L);
+        normal.setTenantId("0"); normal.setClientId("web-client");
+        when(chatConversationService.get("1001")).thenReturn(normal);
+        when(redisService.subscribeToChannel("1001")).thenReturn(Flux.never());
+        ChatMessageDTO request = new ChatMessageDTO();
+        request.setConversationId("1001"); request.setContent("普通聊天"); request.setConversationType("normal");
+        List<String> frames = controller.handleChat(request).collectList().block(Duration.ofSeconds(2));
+        assertEquals(3, frames.size());
+        assertTrue(frames.get(0).contains("第一块"));
+        assertTrue(frames.get(1).contains("第二块"));
+        assertTrue(frames.getLast().contains("normal"));
+        verify(chatDeliberationService, never()).getRequest(anyString(), anyString(), anyString(), anyString());
+        verify(chatDeliberationService, never()).admit(anyString(), any(), anyString(), org.mockito.ArgumentMatchers.anyLong(), any(), any(), any(), any());
+        verify(chatClientBuilder, never()).build();
+    }
+
+    @Test
+    void durableSnapshotReadErrorRetainsExplicitRecoveryErrorFrame() {
+        EsContext context = new EsContext();
+        context.setTenantId("0"); context.setJiacn("tester"); context.setClientId("web-client");
+        EsContextHolder.setContext(context);
+        ChatController controller = newController(new ChatConversationEventBroker());
+        when(chatConversationService.get("1001"))
+                .thenAnswer(ignored -> chatConversationService.getOwned("tester", "web-client", "1001"));
+        when(redisService.subscribeToChannel("1001")).thenReturn(Flux.never());
+        when(chatDeliberationService.getRequest(eq("0"), eq("tester"), eq("web-client"), eq("round-failed-read")))
+                .thenThrow(new IllegalStateException("unavailable"));
+        ChatMessageDTO request = new ChatMessageDTO();
+        request.setConversationId("1001"); request.setRequestId("round-failed-read"); request.setContent("议事");
+        request.setConversationType("juyiting"); request.setConversationScopeType("public");
+        request.setConversationScopeKey("public"); request.setTargetAgentIds(List.of("agent-wuyong"));
+        List<String> frames = controller.handleChat(request).collectList().block(Duration.ofSeconds(2));
+        assertEquals(3, frames.size());
+        assertTrue(frames.getLast().contains("error"));
+        assertTrue(frames.getFirst().contains("1001"));
+        verify(chatDeliberationService, org.mockito.Mockito.times(1)).admit(eq("0"), any(), eq("1001"), eq(1L), any(), any(), any(), any());
+    }
+
     private ChatController newController() {
+        ChatConversationEventBroker.LiveSubscription subscription =
+                org.mockito.Mockito.mock(ChatConversationEventBroker.LiveSubscription.class);
+        org.mockito.Mockito.lenient().when(chatConversationEventBroker.subscribeBuffered(anyString(),
+                org.mockito.ArgumentMatchers.anyLong(), any())).thenReturn(subscription);
+        org.mockito.Mockito.lenient().when(subscription.flux()).thenAnswer(ignored -> {
+            Flux<String> legacyFixture = chatConversationEventBroker.stream("1001", 1L, () -> true);
+            return legacyFixture == null ? Flux.empty() : legacyFixture;
+        });
+        org.mockito.Mockito.lenient().when(chatDeliberationService.getRequest(anyString(), anyString(), anyString(), anyString()))
+                .thenAnswer(invocation -> new ChatDeliberationService.RequestView(invocation.getArgument(3),
+                        "1", "1001", "1", "11", "RUNNING", "1", List.of(), List.of()));
+        return newController(chatConversationEventBroker);
+    }
+
+    private ChatController newController(ChatConversationEventBroker eventBroker) {
         if (EsContextHolder.getContext().getTenantId() == null) {
             EsContextHolder.getContext().setTenantId("0");
         }
@@ -646,7 +753,7 @@ class ChatControllerTest extends BaseMockTest {
         JuyitingConversationScopeService scopeService = new JuyitingConversationScopeService(builtinHallAgentSupport, agentService);
         JuyitingAgentRelayService relayService = new JuyitingAgentRelayService(
                 agentWebSocketHandler,
-                chatConversationEventBroker,
+                eventBroker,
                 builtinHallAgentSupport,
                 chatConversationService,
                 agentService,
@@ -659,7 +766,7 @@ class ChatControllerTest extends BaseMockTest {
                 chatConversationService,
                 redisService,
                 chatClientBuilder,
-                chatConversationEventBroker,
+                eventBroker,
                 builtinHallAgentSupport,
                 scopeService,
                 relayService,

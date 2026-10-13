@@ -19,13 +19,13 @@ import org.springframework.web.socket.config.annotation.WebSocketHandlerRegistry
 public class WebSocketConfig implements WebSocketConfigurer {
     private final ChatClient chatClient;
     private final AgentWebSocketHandler agentWebSocketHandler;
-    private final ApiKeyHandshakeInterceptor apiKeyHandshakeInterceptor;
+    private final AgentRuntimeHandshakeInterceptor agentRuntimeHandshakeInterceptor;
 
     public WebSocketConfig(@Lazy ChatClient chatClient, AgentWebSocketHandler agentWebSocketHandler,
-            ApiKeyHandshakeInterceptor apiKeyHandshakeInterceptor) {
+            AgentRuntimeHandshakeInterceptor agentRuntimeHandshakeInterceptor) {
         this.chatClient = chatClient;
         this.agentWebSocketHandler = agentWebSocketHandler;
-        this.apiKeyHandshakeInterceptor = apiKeyHandshakeInterceptor;
+        this.agentRuntimeHandshakeInterceptor = agentRuntimeHandshakeInterceptor;
     }
 
     @Value("${jia.chat.service.websocket.allowed-origin-patterns:*}")
@@ -36,7 +36,7 @@ public class WebSocketConfig implements WebSocketConfigurer {
         registry.addHandler(new ChatWebSocketHandler(chatClient), "/ws/chat")
                 .setAllowedOriginPatterns(allowedOriginPatterns);
         registry.addHandler(agentWebSocketHandler, "/ws/agent/channel")
-                .addInterceptors(apiKeyHandshakeInterceptor)
+                .addInterceptors(agentRuntimeHandshakeInterceptor)
                 .setAllowedOriginPatterns(allowedOriginPatterns);
     }
 }

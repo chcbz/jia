@@ -23,12 +23,12 @@ class EconomyHostingRentSchemaContractTest {
                 StandardCharsets.UTF_8);
 
         List<String> tables = List.of("economy_hosting_rent_plan", "economy_hosting_rent_quote",
-                "economy_hosting_lease", "economy_hosting_provisioning_intent");
+                "economy_hosting_lease", "economy_hosting_provisioning_intent", "economy_hosting_reprovision");
         for (String table : tables) {
             assertEquals(1, occurrences(hosting, "CREATE TABLE IF NOT EXISTS " + table + " "), table);
             assertFalse(foundation.contains(table), table);
         }
-        assertEquals(4, occurrences(hosting, "CREATE TABLE IF NOT EXISTS "));
+        assertEquals(5, occurrences(hosting, "CREATE TABLE IF NOT EXISTS "));
         String lower = hosting.toLowerCase();
         assertFalse(lower.contains("insert into"));
         assertFalse(lower.contains("update "));
@@ -43,6 +43,24 @@ class EconomyHostingRentSchemaContractTest {
         assertTrue(hosting.contains("UNIQUE KEY uk_hosting_lease_agent (tenant_id,client_id,agent_id,live_slot)"));
         assertTrue(hosting.contains("status = 'REFUNDED' AND live_slot IS NULL"));
         assertTrue(hosting.contains("live_slot IS NOT NULL AND live_slot = 1"));
+    }
+
+    @Test void runtimeLinkageFreshSchemaAndExplicitMigrationAreAdditiveAndEquivalent() throws Exception {
+        Path db = apiRoot().resolve("economy/jia-economy-mapper/src/main/resources/db");
+        String fresh = Files.readString(db.resolve("economy-v0-hosting-rent.sql")).replaceAll("\\s+", " ");
+        String migration = Files.readString(db.resolve("migration-gss-hosting-runtime-v1-20261010.sql"));
+        String normalizedMigration = migration.replaceAll("\\s+", " ");
+        for (String token : List.of("runtime_installation_id VARCHAR(100) NULL", "runtime_manifest_sha256 VARCHAR(64) NULL",
+                "runtime_provision_generation BIGINT NOT NULL DEFAULT 0", "runtime_target_generation BIGINT NULL",
+                "uk_hosting_intent_installation", "chk_hosting_intent_runtime", "chk_hosting_reprovision_runtime",
+                "runtime_installation_id IS NULL AND runtime_manifest_sha256 IS NULL AND runtime_provision_generation = 0",
+                "runtime_target_generation IS NULL OR runtime_target_generation > 0")) {
+            assertTrue(fresh.contains(token), token); assertTrue(normalizedMigration.contains(token), token);
+        }
+        String statements = migration.replaceAll("(?m)--[^\n]*", "").toLowerCase();
+        assertEquals(2, occurrences(statements, "alter table"));
+        for (String forbidden : List.of("insert into", "update ", "delete from", "drop ", "truncate "))
+            assertFalse(statements.contains(forbidden), forbidden);
     }
 
     private static int occurrences(String text, String needle) {

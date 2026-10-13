@@ -30,10 +30,10 @@ public interface EconomySkillApplicationMapper {
     // a safe retry must be separately admitted rather than reusing an old install's identity.
     @Select("SELECT * FROM economy_skill_entitlement WHERE " + S + " AND target_agent_id=#{agentId} AND OCTET_LENGTH(target_agent_id)=OCTET_LENGTH(#{agentId}) AND skill_key=#{skillKey} AND OCTET_LENGTH(skill_key)=OCTET_LENGTH(#{skillKey}) FOR UPDATE")
     List<SkillEntitlementEntity> lockSkillKey(@Param("tenantId") String t,@Param("clientId") String c,@Param("agentId") String a,@Param("skillKey") String k);
-    @Select("SELECT api_key_id,registration_hash,escrow_version FROM economy_skill_delivery_binding WHERE " + S + " AND installation_id=#{installationId} AND OCTET_LENGTH(installation_id)=OCTET_LENGTH(#{installationId})")
+    @Select("SELECT canonical_agent_id,runtime_installation_id,runtime_host_id,api_key_id,registration_hash,escrow_version FROM economy_skill_delivery_binding WHERE " + S + " AND installation_id=#{installationId} AND OCTET_LENGTH(installation_id)=OCTET_LENGTH(#{installationId})")
     SkillDeliveryBindingEntity deliveryBinding(@Param("tenantId") String t,@Param("clientId") String c,@Param("installationId") String i);
-    @Insert("INSERT INTO economy_skill_delivery_binding(tenant_id,client_id,installation_id,api_key_id,registration_hash,escrow_version) VALUES(#{tenantId},#{clientId},#{installationId},#{keyId},#{hash},#{escrowVersion})")
-    int insertDeliveryBinding(@Param("tenantId") String t,@Param("clientId") String c,@Param("installationId") String i,@Param("keyId") String k,@Param("hash") byte[] h,@Param("escrowVersion") Long v);
+    @Insert("INSERT INTO economy_skill_delivery_binding(tenant_id,client_id,installation_id,canonical_agent_id,runtime_installation_id,runtime_host_id,escrow_version) VALUES(#{tenantId},#{clientId},#{installationId},#{canonicalAgentId},#{runtimeInstallationId},#{runtimeHostId},#{escrowVersion})")
+    int insertDeliveryBinding(@Param("tenantId") String t,@Param("clientId") String c,@Param("installationId") String i,@Param("canonicalAgentId") String a,@Param("runtimeInstallationId") String ri,@Param("runtimeHostId") String rh,@Param("escrowVersion") Long v);
     @Select("SELECT * FROM economy_skill_order WHERE " + S + " AND order_id=#{orderId} AND OCTET_LENGTH(order_id)=OCTET_LENGTH(#{orderId})")
     SkillOrderEntity order(@Param("tenantId") String t,@Param("clientId") String c,@Param("orderId") String o);
     @Select("SELECT order_id FROM economy_skill_order WHERE " + S + " AND quote_id=#{quoteId} AND OCTET_LENGTH(quote_id)=OCTET_LENGTH(#{quoteId})")

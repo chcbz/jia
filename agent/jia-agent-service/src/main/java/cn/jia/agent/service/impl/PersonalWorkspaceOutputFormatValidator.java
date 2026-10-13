@@ -26,7 +26,7 @@ final class PersonalWorkspaceOutputFormatValidator {
     static final String DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
     static final String XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
     static final String PPTX = "application/vnd.openxmlformats-officedocument.presentationml.presentation";
-    private static final Set<String> SUPPORTED = Set.of(PNG, JPEG, PDF, DOCX, XLSX, PPTX);
+    private static final Set<String> SUPPORTED = Set.of(PNG, JPEG, PDF, DOCX, XLSX, PPTX, "text/plain");
     private static final byte[] PNG_SIGNATURE = new byte[] {
             (byte) 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a};
 
@@ -35,6 +35,13 @@ final class PersonalWorkspaceOutputFormatValidator {
     static boolean isValid(String contentMimeType, byte[] content) {
         if (!SUPPORTED.contains(contentMimeType) || content == null || content.length == 0) return false;
         try {
+            if ("text/plain".equals(contentMimeType)) {
+                String text = java.nio.charset.StandardCharsets.UTF_8.newDecoder()
+                        .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                        .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+                        .decode(java.nio.ByteBuffer.wrap(content)).toString();
+                return !text.isEmpty() && text.indexOf('\0') < 0;
+            }
             if (PNG.equals(contentMimeType)) return hasPrefix(content, PNG_SIGNATURE) && ImageIO.read(new ByteArrayInputStream(content)) != null;
             if (JPEG.equals(contentMimeType)) {
                 return content.length >= 3 && (content[0] & 0xff) == 0xff && (content[1] & 0xff) == 0xd8

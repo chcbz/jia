@@ -267,13 +267,12 @@ public final class ArchiveAgentExecutionAdapter implements ArchiveAgentExecution
             require(expected.runtimeInstanceId().equals(live.runtimeInstanceId())
                     && MessageDigest.isEqual(expected.registrationHash(), live.registrationHash()),
                     "ARCHIVE_EXECUTION_TARGET_FENCED");
-            return new DispatchTarget(controlled, live.apiKeyId());
+            return new DispatchTarget(controlled, live.sessionFence());
         });
         AgentManagedSessionLookup managed = sessions.getIfAvailable();
         require(managed != null, "ARCHIVE_EXECUTION_TRANSPORT_UNAVAILABLE");
         AgentRawCommandDispatchResult result = managed.dispatch(expected.tenant(), expected.client(),
-                expected.canonicalAgent(), current.apiKeyId(),
-                current.target().registrationHash(), exactWire);
+                expected.canonicalAgent(), current.sessionFence(), exactWire);
         return result == null ? AgentRawCommandDispatchResult.rejected() : result;
     }
 
@@ -369,7 +368,7 @@ public final class ArchiveAgentExecutionAdapter implements ArchiveAgentExecution
     private static void exactProof(Expected expected, InstalledSkillResolver.Proof proof) {
         require(expected.skillProof().equals(proof), "ARCHIVE_EXECUTION_SKILL_FENCED");
     }
-    private record DispatchTarget(LockedTarget target, String apiKeyId) { }
+    private record DispatchTarget(LockedTarget target, AgentManagedSessionLookup.SessionFence sessionFence) { }
 
     private static void require(boolean condition, String code) {
         if (!condition) throw new ArchiveAgentExecutionPort.Denied(code);

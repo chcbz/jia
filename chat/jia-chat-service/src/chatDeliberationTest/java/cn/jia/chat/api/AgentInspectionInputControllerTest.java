@@ -18,7 +18,8 @@ import static org.mockito.Mockito.when;
 
 class AgentInspectionInputControllerTest {
     private final ChatInspectionAuthorityService authority = mock(ChatInspectionAuthorityService.class);
-    private final AgentInspectionInputController controller = new AgentInspectionInputController(authority);
+    private final cn.jia.agent.security.AgentRuntimeAuthenticationService authentication = mock(cn.jia.agent.security.AgentRuntimeAuthenticationService.class);
+    private final AgentInspectionInputController controller = new AgentInspectionInputController(authority,authentication);
 
     @Test
     void humanJwtAndAnonymousNeverReachMachineAuthority() {
@@ -38,7 +39,12 @@ class AgentInspectionInputControllerTest {
         AgentRuntimeAuthentication runtime = mock(AgentRuntimeAuthentication.class);
         AgentRuntimeAuthentication.Scope scope =
                 new AgentRuntimeAuthentication.Scope("0", "client", "owner", "agent", "runtime");
-        when(runtime.getPrincipal()).thenReturn(scope);
+        when(runtime.getPrincipal()).thenReturn(scope);when(runtime.isAuthenticated()).thenReturn(true);
+        var proof=new cn.jia.agent.security.AgentRuntimeAuthenticationService.Proof(scope,
+                "rti_"+"a".repeat(32),"host",1L,"a".repeat(64),1L,1L);
+        when(runtime.getDetails()).thenReturn(proof);
+        when(authentication.withNativeFence(org.mockito.ArgumentMatchers.eq(runtime),org.mockito.ArgumentMatchers.any()))
+                .thenAnswer(i->((java.util.function.Supplier<?>)i.getArgument(1)).get());
         byte[] bytes = "bird\n".getBytes(StandardCharsets.UTF_8);
         when(authority.read(scope, "request", "turn", "source", digest()))
                 .thenReturn(new ChatInspectionAuthorityService.Content("bird.txt", "text/plain", bytes));

@@ -102,7 +102,9 @@ public class ChatTypedDeliberationService {
         return projection(outcome);
     }
 
-    @Transactional(readOnly=true)
+    // Delivery-relation replay uses the existing owner-authorized locking output reader.
+    // This projection performs no business mutation, but cannot run in a SQL READ ONLY transaction.
+    @Transactional(rollbackFor=Exception.class)
     public Object read(ChatTypedDeliberationStore.Scope scope,String requestId,
             String expectedTurnId,long requestRevision){
         if (actionFinals != null) {

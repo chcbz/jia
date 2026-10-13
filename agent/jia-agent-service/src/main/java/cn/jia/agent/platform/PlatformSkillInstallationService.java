@@ -213,7 +213,7 @@ public final class PlatformSkillInstallationService implements AgentControlledCo
         if(target==null) return AgentRawCommandDispatchResult.rejected();
         var managed=sessions.getIfAvailable();
         require(managed!=null,503,"PLATFORM_SKILL_TRANSPORT_UNAVAILABLE");
-        var sent=managed.dispatch(tenant,client,agent,target.apiKeyId(),target.registrationHash(),wire);
+        var sent=managed.dispatch(tenant,client,agent,target.sessionFence(),wire);
         if(sent!=null && sent.status()==AgentRawCommandDispatchResult.rejected().status()) {
             tx.executeWithoutResult(status->{
                 store.lockScope(scope);var i=found(scope,resource,true);

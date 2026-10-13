@@ -154,9 +154,14 @@ public final class AgentCommandAckServiceImpl implements AgentCommandAckService 
             AgentCommandAck ack, AgentCommandDeliveryEntity delivery, long now) {
         boolean exactTerminalPrior = ack.ackStatus().equals(delivery.getStatus())
                 && TERMINAL_ACK_STATUSES.contains(delivery.getStatus());
-        if (now >= delivery.getExpiresAt() && !exactTerminalPrior) {
+        if (now >= delivery.getExpiresAt() && !exactTerminalPrior && !startedTerminalReport(ack, delivery)) {
             throw rejected("ACK_DELIVERY_EXPIRED");
         }
+    }
+
+    // Expiry gates new admission, not the terminal report of durably STARTED work.
+    static boolean startedTerminalReport(AgentCommandAck ack, AgentCommandDeliveryEntity delivery) {
+        return "STARTED".equals(delivery.getStatus()) && TERMINAL_ACK_STATUSES.contains(ack.ackStatus());
     }
 
     private void validateSentSource(
@@ -176,7 +181,9 @@ public final class AgentCommandAckServiceImpl implements AgentCommandAckService 
                 && inbox.getProcessedAt() == null
                 && exact(inbox.getLeaseOwner(), 100)
                 && inbox.getLeaseUntil() != null && inbox.getLeaseUntil() > now
-                && now < delivery.getExpiresAt()
+                && (now < delivery.getExpiresAt() || startedTerminalReport(ack, delivery)
+                    || (ack.ackStatus().equals(delivery.getStatus())
+                        && TERMINAL_ACK_STATUSES.contains(delivery.getStatus())))
                 && delivery.getNextRetryAt() == null && validAckLastError(delivery)
                 && inbox.getNextRetryAt() == null && inbox.getLastError() == null;
         boolean settledSentLane = !"CONSUMED".equals(delivery.getStatus())

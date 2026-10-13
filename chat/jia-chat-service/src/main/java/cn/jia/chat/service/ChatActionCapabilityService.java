@@ -22,6 +22,14 @@ public final class ChatActionCapabilityService {
     private final ControlledImageProviderAuthorityLookup authorities;
     private final boolean inspectionEnabled;
     private final boolean executionEnabled;
+    private final boolean textExecutionEnabled;
+    private cn.jia.agent.service.NativeTextFileRuntimeLookup textFiles;
+    private cn.jia.agent.service.PersonalWorkspaceExecutionService workspaceExecutions;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setTextFileCapabilities(cn.jia.agent.service.NativeTextFileRuntimeLookup lookup,
+            cn.jia.agent.service.PersonalWorkspaceExecutionService executions) {
+        this.textFiles = lookup; this.workspaceExecutions = executions;
+    }
 
     public ChatActionCapabilityService(TypedInspectionSessionRegistry inspections,
             ObjectProvider<ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup> executions,
@@ -35,6 +43,7 @@ public final class ChatActionCapabilityService {
         this.authorities = Objects.requireNonNull(authorities);
         this.inspectionEnabled = inspectionEnabled;
         this.executionEnabled = bridgeEnabled && providerEnabled && executionEnabled;
+        this.textExecutionEnabled = executionEnabled;
     }
 
     /** Catalogue entries contain authoritative mediaType/contentMimeType metadata, never bytes. */
@@ -62,6 +71,11 @@ public final class ChatActionCapabilityService {
             }
         }
         if (executionEnabled) appendImageAdapter(scope, actions);
+        if (textExecutionEnabled && catalog.isEmpty() && textFiles != null && workspaceExecutions != null
+                && workspaceExecutions.capabilities().allowedMimeTypes().contains("text/plain")
+                && textFiles.ready(new cn.jia.agent.service.NativeTextFileRuntimeLookup.Scope(
+                        scope.tenantId(),scope.clientId(),scope.ownerJiacn(),scope.targetAgentId())))
+            actions.add(action("generate-text-file", "EXECUTE", "GENERATE_TEXT_FILE", List.of(), 0, 0));
         return List.copyOf(actions);
     }
 

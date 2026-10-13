@@ -185,14 +185,15 @@ class ChatActionExecutionServiceTest {
         final ChatActionFinalService.BoundAction action;
         final ChatTurnEntity parentTurn;
         final ChatActionExecutionService service;
-        Fixture(boolean withSource) {
+        Fixture(boolean withSource) { this(withSource,false); }
+        Fixture(boolean withSource, boolean textFile) {
             base.consumer(); // Install durable admission and task/binding/claim mock storage.
             var selector=Map.of("kind","TASK_LINKED_WORKSPACE_VERSION","fileId","file","version","1","purpose","INPUT");
             var catalog=withSource?List.<Map<String,Object>>of(Map.of("sourceRefId","source_"+"a".repeat(40),"selector",selector,
                     "sourceKind","TASK_WORKSPACE_FILE","selectorKind","TASK_LINKED_WORKSPACE_VERSION","mediaType","image",
                     "contentMimeType","image/png","contentHash","a".repeat(64),"byteLength","12")):List.<Map<String,Object>>of();
             var facts=Map.<String,Object>of("schemaVersion",3,"availableSources",withSource?List.of(Map.of("sourceRefId","source_"+"a".repeat(40),"kind","TASK_WORKSPACE_FILE","mediaType","image")):List.of(),
-                    "inspectedSourceRefIds",List.of(),"availableActions",List.of(Map.of("actionId","generate-image","kind","EXECUTE","operation","GENERATE_IMAGE","inputMediaTypes",List.of("image"),"minSources",0,"maxSources",16)));
+                    "inspectedSourceRefIds",List.of(),"availableActions",List.of(Map.of("actionId",textFile?"generate-text-file":"generate-image","kind","EXECUTE","operation",textFile?"GENERATE_TEXT_FILE":"GENERATE_IMAGE","inputMediaTypes",textFile?List.of():List.of("image"),"minSources",0,"maxSources",textFile?0:16)));
             var input=new ChatMessageDTO(); input.setRequestId("execute-parent"); input.setContent("请画一只鸟");
             var admission=base.deliberation.admit("0",new ServerResolvedSender("user","用户","owner","client",DisplayNameSource.NICKNAME),"42",1,base.chatScope,
                     InteractionRoute.CHAT,input,null,facts);
@@ -201,7 +202,7 @@ class ChatActionExecutionServiceTest {
             bound.put("requestId","execute-parent");bound.put("turnId",dispatch.turnId());bound.put("dispatchId",dispatch.dispatchId());
             bound.put("snapshotId",dispatch.contextSnapshotId());bound.put("contextDigest",dispatch.contextHash());
             var outcome=new LinkedHashMap<String,Object>();outcome.put("schemaVersion",3);outcome.put("kind","ACTION_REQUEST");outcome.put("text","开始画鸟");outcome.put("clarification",null);
-            outcome.put("action",Map.of("actionId","generate-image","instruction","画一只站在树枝上的鸟","sourceRefIds",withSource?List.of("source_"+"a".repeat(40)):List.of()));
+            outcome.put("action",Map.of("actionId",textFile?"generate-text-file":"generate-image","instruction","画一只站在树枝上的鸟","sourceRefIds",withSource?List.of("source_"+"a".repeat(40)):List.of()));
             var finalValue=ChatActionFinalValidator.validateJson(bound,facts,null,"开始画鸟",3,CanonicalContextJson.write(outcome),null);
             parentTurn.setFinalDigest(finalValue.finalDigest()).setFinalMessageId(1000L).setState(ChatDeliberationStates.FINAL_PERSISTED);
             var scope=base.action.outcome().scope();

@@ -1,0 +1,190 @@
+{
+  "fixtureVersion": 1,
+  "sourceFrame": "command-dispatch-e05.canonical.redacted.json",
+  "headers": {
+    "Authorization": "AgentRuntime REDACTED_SESSION_TOKEN",
+    "X-Agent-Id": "agt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "X-Agent-Installation-Id": "rti_0123456789abcdef0123456789abcdef",
+    "X-Agent-Host-Id": "host-fixture",
+    "X-Agent-Runtime-Id": "boot-fixture",
+    "X-Agent-Session-Generation": "7"
+  },
+  "versionSource": {
+    "canonicalContextVersion": "5",
+    "claimedWorkItemVersion": 5,
+    "confirmedStartedWorkItemVersion": 6,
+    "submittedWorkItemVersion": 7,
+    "rule": "Use only the last confirmed lease response or exact GET lease readback version. Never predict heartbeat/CAS or rewrite the raw contextVersion."
+  },
+  "postResult": {
+    "method": "POST",
+    "path": "/internal/agent/tasks/task-1/work-items/work-1/reassignments/rsn_cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc/commands/cmd_hall_action_9dd18f3cf8da97efee635d92477921c4aa5f15eb6b36e593c5400c89cf1273d0/result-commit",
+    "request": {
+      "workItemId": "work-1",
+      "producerAgentId": "agt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "leaseToken": "REDACTED_ORIGINAL_BUSINESS_LEASE",
+      "expectedWorkItemVersion": 6,
+      "artifact": {
+        "artifactId": "artifact-e05-original",
+        "workItemId": "work-1",
+        "producerAgentId": "agt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "artifactType": "summary",
+        "title": "E05 Result",
+        "content": "E05 fixture result",
+        "storageUri": null,
+        "contentBytes": null,
+        "contentMimeType": null,
+        "contentHash": "8bccc5208a5944ea0e5d7fef1c6a0d525e1b76fe38041aaa249a6e0b638aa45c",
+        "contentByteLength": 18,
+        "artifactVersion": 1,
+        "expectedPreviousVersion": 0,
+        "visibility": "task_members",
+        "metadata": {}
+      }
+    },
+    "status": 200,
+    "response": {
+      "taskId": "task-1",
+      "workItemId": "work-1",
+      "status": "submitted",
+      "workItemVersion": 7,
+      "submittedAt": 2000,
+      "artifact": {
+        "artifactId": "artifact-e05-original",
+        "workItemId": "work-1",
+        "producerAgentId": "agt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "artifactType": "summary",
+        "title": "E05 Result",
+        "content": "E05 fixture result",
+        "storageUri": null,
+        "contentMimeType": "text/plain",
+        "contentHash": "8bccc5208a5944ea0e5d7fef1c6a0d525e1b76fe38041aaa249a6e0b638aa45c",
+        "contentByteLength": 18,
+        "artifactVersion": 1,
+        "visibility": "task_members",
+        "metadata": {},
+        "taskId": "task-1",
+        "managedStorage": false,
+        "createdAt": 2000
+      }
+    },
+    "responseEnvelope": "raw AgentWorkItemResultCommitViewDTO"
+  },
+  "getResult": {
+    "method": "GET",
+    "path": "/internal/agent/tasks/task-1/work-items/work-1/reassignments/rsn_cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc/commands/cmd_hall_action_9dd18f3cf8da97efee635d92477921c4aa5f15eb6b36e593c5400c89cf1273d0/result-commit",
+    "query": null,
+    "body": null,
+    "status": 200,
+    "response": {
+      "taskId": "task-1",
+      "workItemId": "work-1",
+      "status": "submitted",
+      "workItemVersion": 7,
+      "submittedAt": 2000,
+      "artifact": {
+        "artifactId": "artifact-e05-original",
+        "workItemId": "work-1",
+        "producerAgentId": "agt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "artifactType": "summary",
+        "title": "E05 Result",
+        "content": "E05 fixture result",
+        "storageUri": null,
+        "contentMimeType": "text/plain",
+        "contentHash": "8bccc5208a5944ea0e5d7fef1c6a0d525e1b76fe38041aaa249a6e0b638aa45c",
+        "contentByteLength": 18,
+        "artifactVersion": 1,
+        "visibility": "task_members",
+        "metadata": {},
+        "taskId": "task-1",
+        "managedStorage": false,
+        "createdAt": 2000
+      }
+    },
+    "responseEnvelope": "raw AgentWorkItemResultCommitViewDTO"
+  },
+  "getLease": {
+    "method": "GET",
+    "path": "/internal/agent/tasks/task-1/work-items/work-1/reassignments/rsn_cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc/commands/cmd_hall_action_9dd18f3cf8da97efee635d92477921c4aa5f15eb6b36e593c5400c89cf1273d0/lease",
+    "query": null,
+    "body": null,
+    "status": 200,
+    "response": {
+      "reassignmentId": "rsn_cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "commandId": "cmd_hall_action_9dd18f3cf8da97efee635d92477921c4aa5f15eb6b36e593c5400c89cf1273d0",
+      "taskId": "task-1",
+      "workItemId": "work-1",
+      "agentId": "agt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "status": "running",
+      "leaseToken": "REDACTED_ORIGINAL_BUSINESS_LEASE",
+      "leaseUntil": 301000,
+      "workItemVersion": 6,
+      "attemptCount": 2,
+      "maxAttempts": 3,
+      "changedAt": 2000
+    },
+    "responseEnvelope": "raw AgentWorkItemReassignmentLeaseDTO"
+  },
+  "errorResponses": [
+    {
+      "status": 400,
+      "response": {
+        "code": "BAD_REQUEST",
+        "message": "Runtime work item result is unavailable"
+      }
+    },
+    {
+      "status": 403,
+      "response": {
+        "code": "WORK_ITEM_RESULT_FORBIDDEN",
+        "message": "Runtime work item result is unavailable"
+      }
+    },
+    {
+      "status": 404,
+      "response": {
+        "code": "WORK_ITEM_RESULT_NOT_FOUND",
+        "message": "Runtime work item result is unavailable"
+      }
+    },
+    {
+      "status": 404,
+      "response": {
+        "code": "WORK_ITEM_REASSIGNMENT_NOT_FOUND",
+        "message": "Runtime work item result is unavailable"
+      }
+    },
+    {
+      "status": 409,
+      "response": {
+        "code": "WORK_ITEM_RESULT_STALE",
+        "message": "Runtime work item result is unavailable"
+      }
+    },
+    {
+      "status": 409,
+      "response": {
+        "code": "WORK_ITEM_RESULT_RECOVERY_REQUIRED",
+        "message": "Runtime work item result is unavailable"
+      }
+    },
+    {
+      "status": 503,
+      "response": {
+        "code": "WORK_ITEM_RESULT_UNAVAILABLE",
+        "message": "Runtime work item result is unavailable"
+      }
+    }
+  ],
+  "cacheControl": "private, no-store",
+  "rules": [
+    "All proof headers come from the current authenticated transport, never the business payload.",
+    "POST lease/start/heartbeat keep their original exact actorAgentId query and strict expectedWorkItemVersion contract.",
+    "GET lease returns only the original receipt current live token/version; no claim, start, heartbeat or version mutation.",
+    "GET result needs unique persisted source/workItem/artifact/event proof. 404/409 and D06 ACK never confirm business success or allow automatic rerun.",
+    "POST replay returns the original submitted result only when the original immutable material digest also matches.",
+    "Prepared publication is process-local opaque material, never a wire field; external storage I/O must run outside every database transaction/fence.",
+    "Business leaseToken is redacted here and never persisted into ordinary checkpoints, logs or ACK."
+  ],
+  "evidenceStatus": "Exact DTO/controller serialization assertions implemented; Flow execution NOT_RUN. Example values are synthetic/redacted, not production HTTP results."
+}

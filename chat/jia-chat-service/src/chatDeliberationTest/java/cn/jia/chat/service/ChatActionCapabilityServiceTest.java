@@ -81,6 +81,31 @@ class ChatActionCapabilityServiceTest {
         assertEquals(List.of(),service().available(scope,List.of()));
         verifyNoInteractions(authorities);
     }
+    @Test void textFileNeedsExecutionFlagMimeAndExactReadyRuntimeWithoutSources() {
+        var lookup=mock(cn.jia.agent.service.NativeTextFileRuntimeLookup.class);
+        var files=mock(cn.jia.agent.service.PersonalWorkspaceExecutionService.class);
+        var service=service(); service.setTextFileCapabilities(lookup,files);
+        when(files.capabilities()).thenReturn(new cn.jia.agent.service.PersonalWorkspaceExecutionService.ExecutionCapabilities(
+                List.of("text/plain"),List.of(),true));
+        var key=new cn.jia.agent.service.NativeTextFileRuntimeLookup.Scope("0","client","owner","agent");
+        assertEquals(List.of(),service.available(scope,List.of()));
+        when(lookup.ready(key)).thenReturn(true);
+        var actions=service.available(scope,List.of());
+        assertEquals(List.of(Map.of("actionId","generate-text-file","kind","EXECUTE","operation","GENERATE_TEXT_FILE",
+                "inputMediaTypes",List.of(),"minSources",0,"maxSources",0)),actions);
+        assertDoesNotThrow(()->ChatActionOutcomeContract.facts(Map.of("schemaVersion",3,"availableActions",actions,
+                "availableSources",List.of(),"inspectedSourceRefIds",List.of())));
+        assertEquals(List.of(),service.available(scope,List.of(source("text","text/plain"))));
+        var withoutImage=new ChatActionCapabilityService(inspections,providers,authorities,false,false,false,true);
+        withoutImage.setTextFileCapabilities(lookup,files);
+        assertEquals(actions,withoutImage.available(scope,List.of()));
+        var disabled=new ChatActionCapabilityService(inspections,providers,authorities,false,false,false,false);
+        disabled.setTextFileCapabilities(lookup,files);
+        assertEquals(List.of(),disabled.available(scope,List.of()));
+        when(files.capabilities()).thenReturn(new cn.jia.agent.service.PersonalWorkspaceExecutionService.ExecutionCapabilities(
+                List.of("image/png"),List.of(),true));
+        assertEquals(List.of(),service.available(scope,List.of()));
+    }
     private void readyImage() {
         when(providers.getIfUnique()).thenReturn(executions);
         when(executions.current(any())).thenReturn(new RuntimeDeclarationLookup.Declaration(RuntimeDeclarationLookup.State.READY,

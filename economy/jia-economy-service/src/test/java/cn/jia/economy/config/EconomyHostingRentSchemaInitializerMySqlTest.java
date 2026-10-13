@@ -66,6 +66,18 @@ class EconomyHostingRentSchemaInitializerMySqlTest {
     }
 
     @Test
+    void runtimeLinkageWidthsDefaultsUniquenessAndPositiveTargetAreFailClosed() {
+        assertIncompatibleCompleteCatalog(new CatalogChange("runtime_width", "intent", "runtime_installation_id  VARCHAR(100) NULL",
+                "runtime_installation_id  VARCHAR(99) NULL", "columns"));
+        assertIncompatibleCompleteCatalog(new CatalogChange("runtime_default", "intent", "runtime_provision_generation BIGINT NOT NULL DEFAULT 0",
+                "runtime_provision_generation BIGINT NOT NULL DEFAULT 1", "columns"));
+        assertIncompatibleCompleteCatalog(new CatalogChange("runtime_unique", "intent", "UNIQUE KEY uk_hosting_intent_installation",
+                "KEY uk_hosting_intent_installation", "indexes"));
+        assertIncompatibleCompleteCatalog(new CatalogChange("runtime_target", "reprovision", "runtime_target_generation > 0",
+                "runtime_target_generation >= 0", "checks"));
+    }
+
+    @Test
     void fullCatalogWithSameColumnNamesButIncompatibleDefinitionsFailsWithoutRepair() {
         for (CatalogChange change : List.of(
                 new CatalogChange("type", "plan", "amount_micro       BIGINT NOT NULL",

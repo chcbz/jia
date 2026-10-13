@@ -35,9 +35,12 @@ CREATE TABLE IF NOT EXISTS economy_skill_delivery_binding (
  tenant_id VARCHAR(50) NOT NULL,
  client_id VARCHAR(50) NOT NULL,
  installation_id VARCHAR(100) NOT NULL,
- api_key_id VARCHAR(100) NOT NULL,
- registration_hash BINARY(32) NOT NULL,
+ api_key_id VARCHAR(100) DEFAULT NULL,
+ registration_hash BINARY(32) DEFAULT NULL,
  escrow_version BIGINT DEFAULT NULL,
+ canonical_agent_id VARCHAR(100) DEFAULT NULL,
+ runtime_installation_id VARCHAR(100) DEFAULT NULL,
+ runtime_host_id VARCHAR(100) DEFAULT NULL,
  PRIMARY KEY (id),
  UNIQUE KEY uk_skill_delivery_binding (tenant_id,client_id,installation_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;

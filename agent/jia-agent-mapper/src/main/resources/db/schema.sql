@@ -96,7 +96,7 @@ CREATE TABLE IF NOT EXISTS agent_identity_registry (
     lifecycle_status        VARCHAR(20) NOT NULL DEFAULT 'PROVISIONED' COMMENT 'PROVISIONED/ACTIVE/SUSPENDED/RETIRED | RETIRED is terminal and cannot be reverted',
     client_id               VARCHAR(50) DEFAULT NULL COMMENT 'Immutable owner-scope client after insert | NULL only for system identity',
     owner_jiacn             VARCHAR(50) DEFAULT NULL COMMENT 'Immutable owner-scope jiacn after insert | NULL only for system identity',
-    tenant_id               VARCHAR(50) DEFAULT '0' COMMENT 'Single tenant ID for non-system identities | NULL only for system',
+    tenant_id               VARCHAR(50) DEFAULT '0' COMMENT 'Single tenant scope; 0 for every identity including system rows',
     binding_id              BIGINT DEFAULT NULL COMMENT 'Audited source binding ID | immutable after insert | not an ownership substitute',
     provisioned_at          BIGINT DEFAULT NULL COMMENT 'Provisioned time',
     activated_at            BIGINT DEFAULT NULL COMMENT 'First activation time',
@@ -128,7 +128,7 @@ CREATE TABLE IF NOT EXISTS agent_identity_registry (
     ),
     CONSTRAINT chk_identity_registry_scope CHECK (
         (canonical_type = 'SYSTEM'
-            AND client_id IS NULL AND owner_jiacn IS NULL AND tenant_id IS NULL)
+            AND client_id IS NULL AND owner_jiacn IS NULL AND tenant_id = '0')
         OR (canonical_type <> 'SYSTEM'
             AND client_id IS NOT NULL AND TRIM(client_id) <> ''
             AND owner_jiacn IS NOT NULL AND TRIM(owner_jiacn) <> ''
@@ -157,7 +157,7 @@ CREATE TABLE IF NOT EXISTS agent_identity_alias (
                             ) STORED,
     client_id               VARCHAR(50) NOT NULL COMMENT 'Immutable owner-scope client after insert',
     owner_jiacn             VARCHAR(50) NOT NULL COMMENT 'Immutable owner-scope jiacn after insert',
-    tenant_id               VARCHAR(50) NOT NULL COMMENT 'Single tenant ID; always 0',
+    tenant_id               VARCHAR(50) NOT NULL COMMENT 'Single tenant scope; always 0 | immutable after insert',
     audit_reason            VARCHAR(1000) NOT NULL COMMENT 'Auditable alias evidence/reason',
     create_time             BIGINT DEFAULT NULL COMMENT 'Create time',
     update_time             BIGINT DEFAULT NULL COMMENT 'Update time',

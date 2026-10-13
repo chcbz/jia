@@ -104,7 +104,7 @@ public final class EconomySkillApplicationSchemaInitializer implements Initializ
                     rs.getString("collation_name"), normalizeExtra(rs.getString("extra"))), table.name());
             if (!table.columns().equals(columns)) {
                 throw new IllegalStateException("ECO-V0 skill table " + table.name()
-                        + " has incompatible columns: " + columns);
+                        + " has incompatible columns; controlled schema migration is required (no automatic ownership backfill): " + columns);
             }
             Map<String, IndexSpec> indexes = inspectIndexes(table.name());
             if (!table.indexes().equals(indexes)) {

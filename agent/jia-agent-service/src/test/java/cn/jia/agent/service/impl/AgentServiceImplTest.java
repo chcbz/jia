@@ -363,9 +363,11 @@ class AgentServiceImplTest extends BaseMockTest {
             AgentRuntimeEntity inserted = invocation.getArgument(0);
             committedRuntime.set(inserted);
             return 1;
-        }).when(agentRuntimeDao).insert(any(AgentRuntimeEntity.class));
+        }).when(agentRuntimeDao).updateById(any(AgentRuntimeEntity.class));
         when(eventPublisherProvider.getIfAvailable()).thenReturn(eventPublisher);
 
+        var sessionClaim = claimedRuntime("agent-001");
+        org.mockito.Mockito.doReturn(sessionClaim).when(agentRuntimeDao).lockInScope("0", "jia_client", "agent-001");
         AgentRegisterDTO request = new AgentRegisterDTO();
         request.setAgentId("agent-001");
         request.setAbilities(List.of("planning", "research"));
@@ -375,10 +377,10 @@ class AgentServiceImplTest extends BaseMockTest {
 
         assertEquals("agent-001", result.getAgentId());
         assertEquals(AgentConstants.STATUS_ONLINE, result.getStatus());
-        assertNotNull(result.getToken());
+        assertNull(result.getToken());
 
         ArgumentCaptor<AgentRuntimeEntity> entityCaptor = ArgumentCaptor.forClass(AgentRuntimeEntity.class);
-        verify(agentRuntimeDao).insert(entityCaptor.capture());
+        verify(agentRuntimeDao).updateById(entityCaptor.capture());
         AgentRuntimeEntity saved = entityCaptor.getValue();
         assertEquals("agent-001", saved.getAgentId());
         assertEquals("吴用", saved.getName());
@@ -407,6 +409,8 @@ class AgentServiceImplTest extends BaseMockTest {
         when(agentPersonaDao.findByCode("wuyong")).thenReturn(persona);
         when(agentRuntimeDao.findByAgentId("agent-001")).thenReturn(null);
 
+        var sessionClaim = claimedRuntime("agent-001");
+        org.mockito.Mockito.doReturn(sessionClaim).when(agentRuntimeDao).lockInScope("0", "jia_client", "agent-001");
         AgentRegisterDTO request = new AgentRegisterDTO();
         request.setAgentId("agent-001");
         request.setAbilities(List.of(" code-edit ", "debug", "DEBUG"));
@@ -414,7 +418,7 @@ class AgentServiceImplTest extends BaseMockTest {
         agentService.register(request);
 
         ArgumentCaptor<AgentRuntimeEntity> captor = ArgumentCaptor.forClass(AgentRuntimeEntity.class);
-        verify(agentRuntimeDao).insert(captor.capture());
+        verify(agentRuntimeDao).updateById(captor.capture());
         assertEquals("[\"code-edit\",\"debug\"]", captor.getValue().getAbilities());
     }
 
@@ -432,13 +436,15 @@ class AgentServiceImplTest extends BaseMockTest {
         when(agentPersonaDao.findByCode("wuyong")).thenReturn(persona);
         when(agentRuntimeDao.findByAgentId("agent-001")).thenReturn(null);
 
+        var sessionClaim = claimedRuntime("agent-001");
+        org.mockito.Mockito.doReturn(sessionClaim).when(agentRuntimeDao).lockInScope("0", "jia_client", "agent-001");
         AgentRegisterDTO request = new AgentRegisterDTO();
         request.setAgentId("agent-001");
         agentService.register(request);
 
         ArgumentCaptor<AgentRuntimeEntity> captor = ArgumentCaptor.forClass(AgentRuntimeEntity.class);
-        verify(agentRuntimeDao).findByAgentIdForUpdate("agent-001");
-        verify(agentRuntimeDao).insert(captor.capture());
+        verify(agentRuntimeDao).lockInScope("0", "jia_client", "agent-001");
+        verify(agentRuntimeDao).updateById(captor.capture());
         assertEquals("[\"planning\",\"research\"]", captor.getValue().getAbilities());
     }
 
@@ -461,9 +467,10 @@ class AgentServiceImplTest extends BaseMockTest {
         when(agentIdentityService.activateForFirstRegistration(identity)).thenReturn(identity);
         when(agentPersonaDao.findByCode("wuyong")).thenReturn(persona);
         org.mockito.Mockito.doReturn(lockedCurrent).when(agentRuntimeDao)
-                .findByAgentIdForUpdate("agent-001");
+                .lockInScope("0", "jia_client", "agent-001");
         when(agentRuntimeDao.findByAgentId("agent-001")).thenReturn(lockedCurrent);
 
+        claim(lockedCurrent);
         AgentRegisterDTO request = new AgentRegisterDTO();
         request.setAgentId("agent-001");
         agentService.register(request);
@@ -471,12 +478,12 @@ class AgentServiceImplTest extends BaseMockTest {
         assertEquals("[\"current-skill\"]", lockedCurrent.getAbilities());
         assertEquals("[\"stale-skill\"]", stale.getAbilities());
         verify(agentRuntimeDao).findByAgentId("agent-001");
-        verify(agentRuntimeDao).findByAgentIdForUpdate("agent-001");
+        verify(agentRuntimeDao).lockInScope("0", "jia_client", "agent-001");
         verify(agentRuntimeDao).updateById(lockedCurrent);
         org.mockito.InOrder lockOrder = org.mockito.Mockito.inOrder(
                 agentIdentityService, agentRuntimeDao);
         lockOrder.verify(agentIdentityService).activateForFirstRegistration(identity);
-        lockOrder.verify(agentRuntimeDao).findByAgentIdForUpdate("agent-001");
+        lockOrder.verify(agentRuntimeDao).lockInScope("0", "jia_client", "agent-001");
         lockOrder.verify(agentRuntimeDao).updateById(lockedCurrent);
         lockOrder.verify(agentRuntimeDao).findByAgentId("agent-001");
     }
@@ -639,14 +646,14 @@ class AgentServiceImplTest extends BaseMockTest {
         when(agentIdentityService.requireActiveBinding(identity, null)).thenReturn(binding);
         when(agentIdentityService.activateForFirstRegistration(identity)).thenReturn(identity);
         when(agentPersonaDao.findByCode("wuyong")).thenReturn(persona("wuyong", "吴用", "智多星"));
-        org.mockito.Mockito.doReturn(null).when(agentRuntimeDao)
-                .findByAgentIdForUpdate("agent-001");
         when(agentRuntimeDao.findByAgentId("agent-001")).thenAnswer(invocation -> {
             assertTrue(insideScope.get(), "committed reread must run inside the exact-scope lock");
             return replacedBinding;
         });
         org.mockito.Mockito.lenient().when(eventPublisherProvider.getIfAvailable())
                 .thenReturn(eventPublisher);
+        var sessionClaim = claimedRuntime("agent-001");
+        org.mockito.Mockito.doReturn(sessionClaim).when(agentRuntimeDao).lockInScope("0", "jia_client", "agent-001");
         AgentRegisterDTO request = new AgentRegisterDTO();
         request.setAgentId("agent-001");
 
@@ -1521,13 +1528,15 @@ class AgentServiceImplTest extends BaseMockTest {
         });
         when(agentPersonaDao.findByCode("wuyong")).thenReturn(persona("wuyong", "吴用", "智多星"));
 
+        var sessionClaim = claimedRuntime(canonical);
+        org.mockito.Mockito.doReturn(sessionClaim).when(agentRuntimeDao).lockInScope("0", "jia_client", canonical);
         AgentRegisterDTO request = new AgentRegisterDTO();
         request.setAgentId(legacy);
         AgentRegisterResultDTO result = agentService.register(request);
 
         assertEquals(canonical, result.getAgentId());
         ArgumentCaptor<AgentRuntimeEntity> runtimeCaptor = ArgumentCaptor.forClass(AgentRuntimeEntity.class);
-        verify(agentRuntimeDao).insert(runtimeCaptor.capture());
+        verify(agentRuntimeDao).updateById(runtimeCaptor.capture());
         assertEquals(canonical, runtimeCaptor.getValue().getAgentId());
         assertEquals(binding.getId(), runtimeCaptor.getValue().getBindingId());
     }
@@ -3712,6 +3721,16 @@ class AgentServiceImplTest extends BaseMockTest {
         AgentRuntimeEntity agent = runtimeAgent(agentId, name, status, abilities);
         markOwned(agent);
         return agent;
+    }
+
+    private AgentRuntimeEntity claimedRuntime(String agentId) {
+        AgentRuntimeEntity runtime = ownedAgent(agentId, agentId, "offline", null);
+        runtime.setId(99L); runtime.setTenantId("0"); claim(runtime); return runtime;
+    }
+    private void claim(AgentRuntimeEntity runtime) {
+        runtime.setRuntimeInstallationId("rti_" + "1".repeat(32)).setRuntimeHostId("host")
+                .setRuntimeInstanceId("boot").setRuntimeSessionGeneration(1L)
+                .setTokenHash("urs1:" + "a".repeat(64) + ":1:0");
     }
 
     private AgentRuntimeEntity runtimeAgent(String agentId, String name, String status, String abilities) {

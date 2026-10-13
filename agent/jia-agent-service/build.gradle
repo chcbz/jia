@@ -420,6 +420,9 @@ def managedHostingRegressionSourceSet = sourceSets.create('managedHostingRegress
         include 'cn/jia/agent/hosting/UnixManagedHostingProvisionerTest.java'
         include 'cn/jia/agent/hosting/ManagedHostingCredentialsTest.java'
         include 'cn/jia/agent/hosting/HostingRentApplicationServiceTest.java'
+        include 'cn/jia/agent/hosting/HostingRentReprovisionTransactionTest.java'
+        include 'cn/jia/agent/service/AgentPersonaProvisioningServiceTest.java'
+        include 'cn/jia/agent/service/impl/AgentRuntimeV1ServiceImplTest.java'
         include 'cn/jia/agent/hosting/HostingRentReconcilerTest.java'
         include 'cn/jia/agent/config/AgentHostingRentConfigurationTest.java'
     }
@@ -438,7 +441,7 @@ tasks.register('managedHostingRegression', Test) {
     maxHeapSize = '256m'
     jvmArgs '-XX:MaxMetaspaceSize=160m', '-Xss256k'
     group = 'verification'
-    description = 'Runs isolated managed-hosting owner ACL, credential and readiness regressions.'
+    description = 'Runs isolated Runtime-v1 managed-hosting ACL, exact installation linkage, admission and readiness regressions.'
     dependsOn tasks.named(managedHostingRegressionSourceSet.classesTaskName)
     testClassesDirs = managedHostingRegressionSourceSet.output.classesDirs
     classpath = managedHostingRegressionSourceSet.runtimeClasspath
@@ -767,6 +770,7 @@ tasks.register('mmdControlledImageFollowupV3', Test) {
 }
 
 
+
 // AAM native route allowlist security slice.
 def archiveMaintenanceSecuritySourceSet = sourceSets.create('archiveMaintenanceSecurity') {
     java {
@@ -826,4 +830,71 @@ tasks.register('archivePlatformContracts', Test) {
     maxParallelForks = 1
     maxHeapSize = '256m'
     useJUnitPlatform()
+
+// EXECUTION-HISTORY-HTTP-20261008: isolated real transport/SQL slice, no production startup.
+def executionHistoryHttpSourceSet = sourceSets.create('executionHistoryHttp') {
+    java.srcDir 'src/executionHistoryHttp/java'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(executionHistoryHttpSourceSet.implementationConfigurationName) {
+    extendsFrom configurations.implementation
+}
+configurations.named(executionHistoryHttpSourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.runtimeOnly
+}
+dependencies {
+    add(executionHistoryHttpSourceSet.implementationConfigurationName,
+            platform("org.springframework.boot:spring-boot-dependencies:${libs.versions.spring.boot.asProvider().get()}"))
+    add(executionHistoryHttpSourceSet.implementationConfigurationName, libs.junit.jupiter)
+    add(executionHistoryHttpSourceSet.implementationConfigurationName, 'org.mybatis:mybatis-spring:4.0.0')
+    add(executionHistoryHttpSourceSet.implementationConfigurationName, 'org.apache.tomcat.embed:tomcat-embed-core')
+    add(executionHistoryHttpSourceSet.implementationConfigurationName, 'org.springframework.security:spring-security-config')
+    add(executionHistoryHttpSourceSet.implementationConfigurationName, 'org.springframework.security:spring-security-web')
+    add(executionHistoryHttpSourceSet.implementationConfigurationName, 'org.springframework.security:spring-security-oauth2-resource-server')
+    add(executionHistoryHttpSourceSet.implementationConfigurationName, 'org.springframework.security:spring-security-oauth2-jose')
+    add(executionHistoryHttpSourceSet.implementationConfigurationName, project(':task:jia-task-core'))
+    add(executionHistoryHttpSourceSet.implementationConfigurationName, project(':task:jia-task-api'))
+    add(executionHistoryHttpSourceSet.implementationConfigurationName, project(':oauth:jia-oauth-api'))
+    add(executionHistoryHttpSourceSet.runtimeOnlyConfigurationName, 'org.junit.platform:junit-platform-launcher:6.0.1')
+    add(executionHistoryHttpSourceSet.runtimeOnlyConfigurationName, libs.mysql)
+}
+tasks.register('executionHistoryHttp', Test) {
+    group = 'verification'
+    description = 'Real loopback HTTP/JWT/production service/MyBatis/private MySQL/shared frontend contract.'
+    dependsOn tasks.named(executionHistoryHttpSourceSet.classesTaskName)
+    testClassesDirs = executionHistoryHttpSourceSet.output.classesDirs
+    classpath = executionHistoryHttpSourceSet.runtimeClasspath
+    useJUnitPlatform()
+    maxParallelForks = 1
+    // External shared fixture/scripts/source are part of this test's explicit input identity.
+    ['CYF_HISTORY_CONTRACT', 'CYF_HISTORY_NODE_SCRIPT'].each { key ->
+        def path = providers.environmentVariable(key)
+        if (path.isPresent()) inputs.file(path.get())
+    }
+    inputs.property('webSource', providers.environmentVariable('CYF_HISTORY_WEB_COMMIT').orElse('UNSET'))
+    testLogging { events 'passed', 'failed'; exceptionFormat 'full'; showStandardStreams = true }
+}
+
+// GSS-CANCEL-20261010: isolated targeted suite, preserving historical default-test debt.
+def initialCancellationSourceSet = sourceSets.create('initialCancellation') {
+    java.srcDir 'src/initialCancellation/java'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(initialCancellationSourceSet.implementationConfigurationName) {
+    extendsFrom configurations.testImplementation
+}
+configurations.named(initialCancellationSourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.testRuntimeOnly
+}
+tasks.register('initialCancellation', Test) {
+    group = 'verification'
+    description = 'Initial owner cancellation HTTP/service/root transaction and late-start contracts.'
+    dependsOn tasks.named(initialCancellationSourceSet.classesTaskName)
+    testClassesDirs = initialCancellationSourceSet.output.classesDirs
+    classpath = initialCancellationSourceSet.runtimeClasspath
+    useJUnitPlatform()
+    maxParallelForks = 1
+
 }

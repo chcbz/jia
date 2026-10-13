@@ -50,6 +50,10 @@ public interface PersonalWorkspaceExecutionDao {
     List<String> listActiveExecutionIdsByFile(String tenantId, String clientId,
             String ownerJiacn, String fileId, int limit);
     void updateInput(PersonalWorkspaceExecutionInputEntity input);
+    /** Immutable output preparation without retaining a row lock across private storage I/O.
+     * Mutating consumers must revalidate the complete tuple under their original root locks. */
+    PersonalWorkspaceExecutionOutputEntity findOutput(String tenantId, String clientId,
+            String ownerJiacn, String executionId, String outputId);
     PersonalWorkspaceExecutionOutputEntity lockOutput(String tenantId, String clientId,
             String ownerJiacn, String executionId, String outputId);
     List<PersonalWorkspaceExecutionOutputEntity> lockOutputs(String tenantId, String clientId,

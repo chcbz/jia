@@ -1,0 +1,1 @@
+GSS-HOSTING-API-20261010 frozen shared fixture; copied without modification from /home/isp/wsps/cyf/docs/implementation/fixtures/gss-hosting-control-v1.json; 2026-10-10; SHA-256 5c4b833e6db5bab3122c6dee17ef49198462aee3c3edf58f628ed8571e241403. Synthetic only, not production evidence.

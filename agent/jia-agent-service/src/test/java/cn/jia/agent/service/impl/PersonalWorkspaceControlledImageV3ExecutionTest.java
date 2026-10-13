@@ -169,7 +169,7 @@ class PersonalWorkspaceControlledImageV3ExecutionTest {
   int stage=source.indexOf("StagedOutput stageConversationOutput(");
   int stageAuthority=source.indexOf("\"RESULT\"",stage);
   int stageFence=source.indexOf("requireControlledV3StartedForResult(execution)",stage);
-  int stageWrite=source.indexOf("stageOutputLocked(",stage);
+  int stageWrite=source.indexOf("persistStagedOutput(",stage);
   assertTrue(stage>=0&&stageAuthority>stage&&stageFence>stageAuthority&&stageWrite>stageFence);
   int commit=source.indexOf("CommitView commitConversationOutput(");
   int commitAuthority=source.indexOf("\"RESULT\"",commit);

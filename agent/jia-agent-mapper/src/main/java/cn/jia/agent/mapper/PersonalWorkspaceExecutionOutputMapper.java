@@ -9,6 +9,26 @@ import java.util.List;
 
 public interface PersonalWorkspaceExecutionOutputMapper extends BaseMapper<PersonalWorkspaceExecutionOutputEntity> {
     @Select("""
+            SELECT * FROM agent_personal_workspace_execution_output
+             WHERE tenant_id=#{tenantId} AND client_id=#{clientId} AND owner_jiacn=#{ownerJiacn}
+               AND execution_id=#{executionId} AND output_id=#{outputId}
+               AND CAST(tenant_id AS BINARY)=CAST(#{tenantId} AS BINARY)
+               AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(#{tenantId})
+               AND CAST(client_id AS BINARY)=CAST(#{clientId} AS BINARY)
+               AND OCTET_LENGTH(client_id)=OCTET_LENGTH(#{clientId})
+               AND CAST(owner_jiacn AS BINARY)=CAST(#{ownerJiacn} AS BINARY)
+               AND OCTET_LENGTH(owner_jiacn)=OCTET_LENGTH(#{ownerJiacn})
+               AND CAST(execution_id AS BINARY)=CAST(#{executionId} AS BINARY)
+               AND OCTET_LENGTH(execution_id)=OCTET_LENGTH(#{executionId})
+               AND CAST(output_id AS BINARY)=CAST(#{outputId} AS BINARY)
+               AND OCTET_LENGTH(output_id)=OCTET_LENGTH(#{outputId})
+             LIMIT 1
+            """)
+    PersonalWorkspaceExecutionOutputEntity findByOutputId(@Param("tenantId") String tenantId,
+            @Param("clientId") String clientId, @Param("ownerJiacn") String ownerJiacn,
+            @Param("executionId") String executionId, @Param("outputId") String outputId);
+
+    @Select("""
             SELECT o.*
               FROM agent_personal_workspace_execution_output o
               JOIN agent_personal_workspace_execution e

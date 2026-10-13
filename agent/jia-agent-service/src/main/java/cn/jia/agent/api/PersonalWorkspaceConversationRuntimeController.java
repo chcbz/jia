@@ -1,6 +1,7 @@
 package cn.jia.agent.api;
 
 import cn.jia.agent.security.AgentRuntimeAuthentication;
+import cn.jia.agent.security.AgentRuntimeAuthenticationService;
 import cn.jia.core.security.AllowSensitiveOutput;
 import cn.jia.agent.service.PersonalWorkspaceExecutionService;
 import jakarta.servlet.http.HttpServletRequest;
@@ -54,19 +55,25 @@ public final class PersonalWorkspaceConversationRuntimeController {
     public record ProviderStartReceipt(boolean started) { }
     private final PersonalWorkspaceExecutionService executions;
 
-    public PersonalWorkspaceConversationRuntimeController(PersonalWorkspaceExecutionService executions) {
+    private final AgentRuntimeAuthenticationService runtimeAuthentication;
+    public PersonalWorkspaceConversationRuntimeController(PersonalWorkspaceExecutionService executions,
+            AgentRuntimeAuthenticationService runtimeAuthentication) {
         this.executions=Objects.requireNonNull(executions,"executions");
+        this.runtimeAuthentication=Objects.requireNonNull(runtimeAuthentication,"runtimeAuthentication");
     }
 
     @GetMapping(value="/conversation-executions/commands",produces=MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<ConversationQueue> commands(HttpServletRequest request,Authentication authentication) {
         noQuery(request);
-        return ok(new ConversationQueue(executions.runtimeConversationCommandViews(scope(authentication),16)));
+        var queue=new ConversationQueue(executions.runtimeConversationCommandViews(scope(authentication),16));
+        return ok(runtimeAuthentication.withNativeFence(authentication,()->queue));
     }
 
     @GetMapping(value="/conversation-executions/controlled-image-v3-commands",produces=MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<ConversationQueueV3> controlledV3Commands(HttpServletRequest request,Authentication authentication) {
-        noQuery(request);return ok(new ConversationQueueV3(executions.runtimeControlledImageV3Commands(scope(authentication),16)));
+        noQuery(request);
+        var queue=new ConversationQueueV3(executions.runtimeControlledImageV3Commands(scope(authentication),16));
+        return ok(runtimeAuthentication.withNativeFence(authentication,()->queue));
     }
 
     @PostMapping(value="/{taskId}/runs/{runId}/conversation/lease",consumes=MediaType.APPLICATION_JSON_VALUE,
@@ -76,8 +83,8 @@ public final class PersonalWorkspaceConversationRuntimeController {
             Authentication authentication) {
         noQuery(request);
         if (claim==null || claim.commandId()==null || claim.messageId()==null) throw new BadRequest();
-        return ok(executions.claimConversationStart(scope(authentication),taskId,runId,
-                claim.commandId(),claim.messageId()));
+        return ok(runtimeAuthentication.withNativeFence(authentication, () ->
+                executions.claimConversationStart(scope(authentication),taskId,runId,claim.commandId(),claim.messageId())));
     }
 
     @PostMapping(value="/{taskId}/runs/{runId}/conversation/lease/renew",consumes=MediaType.APPLICATION_JSON_VALUE,
@@ -86,7 +93,8 @@ public final class PersonalWorkspaceConversationRuntimeController {
             @PathVariable String runId,@RequestBody FenceRequest request,HttpServletRequest servletRequest,
             Authentication authentication) {
         noQuery(servletRequest);
-        return ok(executions.renewConversationLease(scope(authentication),taskId,runId,fence(request)));
+        return ok(runtimeAuthentication.withNativeFence(authentication, () ->
+                executions.renewConversationLease(scope(authentication),taskId,runId,fence(request))));
     }
 
     @PostMapping(value="/{taskId}/runs/{runId}/conversation/provider-start",
@@ -95,7 +103,10 @@ public final class PersonalWorkspaceConversationRuntimeController {
             @PathVariable String runId,@RequestBody FenceRequest request,
             HttpServletRequest servletRequest,Authentication authentication) {
         noQuery(servletRequest);
-        executions.beginConversationProviderStart(scope(authentication),taskId,runId,fence(request));
+        runtimeAuthentication.withNativeFence(authentication,()->{
+            executions.beginConversationProviderStart(scope(authentication),taskId,runId,fence(request));
+            return null;
+        });
         return ok(new ProviderStartReceipt(true));
     }
 
@@ -132,7 +143,9 @@ public final class PersonalWorkspaceConversationRuntimeController {
     public ResponseEntity<PersonalWorkspaceExecutionService.ConversationInputSnapshotV3> inputsV3(
             @PathVariable String taskId,@PathVariable String runId,@RequestBody FenceRequest fence,
             HttpServletRequest request,Authentication authentication) {
-        noQuery(request);return ok(executions.conversationInputsV3(scope(authentication),taskId,runId,fence(fence)));
+        noQuery(request);
+        var inputs=executions.conversationInputsV3(scope(authentication),taskId,runId,fence(fence));
+        return ok(runtimeAuthentication.withNativeFence(authentication,()->inputs));
     }
 
     @PostMapping(value="/{taskId}/runs/{runId}/conversation/inputs",consumes=MediaType.APPLICATION_JSON_VALUE,
@@ -141,7 +154,8 @@ public final class PersonalWorkspaceConversationRuntimeController {
             @PathVariable String taskId,@PathVariable String runId,@RequestBody FenceRequest fence,
             HttpServletRequest request,Authentication authentication) {
         noQuery(request);
-        return ok(executions.conversationInputs(scope(authentication),taskId,runId,fence(fence)));
+        var inputs=executions.conversationInputs(scope(authentication),taskId,runId,fence(fence));
+        return ok(runtimeAuthentication.withNativeFence(authentication,()->inputs));
     }
 
     @PostMapping(value="/{taskId}/runs/{runId}/conversation/inputs/{inputRef}/content",
@@ -150,8 +164,9 @@ public final class PersonalWorkspaceConversationRuntimeController {
             @PathVariable String inputRef,@RequestBody FenceRequest fence,
             HttpServletRequest request,Authentication authentication) {
         noQuery(request);
-        var content=executions.conversationInputContent(scope(authentication),taskId,runId,
+        var loaded=executions.conversationInputContent(scope(authentication),taskId,runId,
                 fence(fence),inputRef);
+        var content=runtimeAuthentication.withNativeFence(authentication,()->loaded);
         if (content==null || content.bytes()==null) throw new BadRequest();
         return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL,CACHE_CONTROL)
                 .header("X-Content-Type-Options","nosniff")
@@ -259,7 +274,8 @@ public final class PersonalWorkspaceConversationRuntimeController {
             Authentication authentication) {
         noQuery(request);
         if (body==null || body.code()==null) throw new BadRequest();
-        return ok(executions.failConversation(scope(authentication),taskId,runId,fence(body.fence()),body.code()));
+        return ok(runtimeAuthentication.withNativeFence(authentication, () ->
+                executions.failConversation(scope(authentication),taskId,runId,fence(body.fence()),body.code())));
     }
 
     @ExceptionHandler(ControlledStartFailure.class)

@@ -74,7 +74,7 @@ class AgentTaskContextPackHttpActorTest {
         AgentTaskContextPackServiceImpl generator = spy(new AgentTaskContextPackServiceImpl(
                 workspace, outcomes, source, Optional.of(adapter)));
         MockMvc mvc = MockMvcBuilders.standaloneSetup(
-                new AgentTaskContextPackController(generator, gate)).build();
+                new AgentTaskContextPackController(generator, gate, mock(cn.jia.agent.security.AgentRuntimeAuthenticationService.class))).build();
 
         when(gate.allows(TENANT, CLIENT)).thenReturn(true);
         when(workspace.snapshot(TENANT, CLIENT, OWNER, TASK, REQUESTER)).thenReturn(workspace());

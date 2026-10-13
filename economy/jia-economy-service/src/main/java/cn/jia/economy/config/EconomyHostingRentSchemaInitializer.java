@@ -390,6 +390,9 @@ public final class EconomyHostingRentSchemaInitializer implements InitializingBe
                 column("refund_transaction_id", "varchar(100)", true, null, ""),
                 column("refunded_at", "bigint", true, null, ""),
                 column("managed_api_key_id", "varchar(100)", true, null, ""),
+                column("runtime_installation_id", "varchar(100)", true, null, ""),
+                column("runtime_manifest_sha256", "varchar(64)", true, null, ""),
+                column("runtime_provision_generation", "bigint", false, "0", ""),
                 column("outcome_evidence_ref", "varchar(100)", true, null, ""),
                 column("service_ready_at", "bigint", true, null, ""),
                 column("paid_from", "bigint", true, null, ""),
@@ -401,10 +404,12 @@ public final class EconomyHostingRentSchemaInitializer implements InitializingBe
                 column("update_time", "bigint", false, null, "")), List.of(
                 index("PRIMARY", true, "id"),
                 index("uk_hosting_intent_id", true, "tenant_id,client_id,intent_id"),
+                index("uk_hosting_intent_installation", true, "tenant_id,client_id,runtime_installation_id"),
                 index("uk_hosting_intent_quote", true, "tenant_id,client_id,quote_id"),
                 index("uk_hosting_intent_reserve_key", true, "tenant_id,client_id,principal_type,principal_id,reserve_idempotency_key"),
                 index("idx_hosting_intent_lease", false, "tenant_id,client_id,lease_id,version"),
                 index("idx_hosting_intent_status", false, "tenant_id,client_id,status,update_time,intent_id")),
+                check("chk_hosting_intent_runtime", "(runtime_installation_id IS NULL AND runtime_manifest_sha256 IS NULL AND runtime_provision_generation = 0) OR (quote_purpose = 'INITIAL' AND runtime_installation_id IS NOT NULL AND runtime_manifest_sha256 IS NOT NULL AND OCTET_LENGTH(runtime_manifest_sha256) = 64 AND runtime_provision_generation > 0)"),
                 check("chk_hosting_intent_values", "amount_micro > 0 AND period_seconds > 0 AND escrow_version > 0 AND version > 0"),
                 check("chk_hosting_intent_actor", "principal_type = 'USER'"),
                 check("chk_hosting_intent_reserve_key", "OCTET_LENGTH(reserve_idempotency_key) = 36"),
@@ -444,6 +449,7 @@ public final class EconomyHostingRentSchemaInitializer implements InitializingBe
                 column("live_slot", "tinyint", true, "1", ""),
                 column("version", "bigint", false, null, ""),
                 column("service_ready_at", "bigint", true, null, ""),
+                column("runtime_target_generation", "bigint", true, null, ""),
                 column("evidence_ref", "varchar(100)", true, null, ""),
                 column("tenant_id", "varchar(50)", false, null, ""),
                 column("client_id", "varchar(50)", false, null, "")), List.of(
@@ -452,6 +458,7 @@ public final class EconomyHostingRentSchemaInitializer implements InitializingBe
                 index("uk_hosting_reprovision_key", true, "tenant_id,client_id,principal_id,idempotency_key"),
                 index("uk_hosting_reprovision_live", true, "tenant_id,client_id,lease_id,live_slot"),
                 index("idx_hosting_reprovision_pending", false, "status,id")),
+                check("chk_hosting_reprovision_runtime", "runtime_target_generation IS NULL OR runtime_target_generation > 0"),
                 check("chk_hosting_reprovision_values", "lease_version > 0 AND version > 0 AND requested_at > 0 AND paid_through > requested_at"),
                 check("chk_hosting_reprovision_key", "OCTET_LENGTH(idempotency_key) = 36 AND OCTET_LENGTH(request_hash) = 32"),
                 check("chk_hosting_reprovision_state", "(status IN ('ACCEPTED','PROVISIONING_UNKNOWN') AND live_slot IS NOT NULL AND live_slot = 1 AND service_ready_at IS NULL) OR (status = 'SERVICE_READY' AND live_slot IS NULL AND service_ready_at IS NOT NULL AND service_ready_at >= requested_at AND evidence_ref IS NOT NULL) OR (status = 'FAILED_NO_EFFECT' AND live_slot IS NULL AND service_ready_at IS NULL AND evidence_ref IS NOT NULL)")));
