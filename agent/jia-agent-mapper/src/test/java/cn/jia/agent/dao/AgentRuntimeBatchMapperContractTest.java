@@ -3,6 +3,7 @@ package cn.jia.agent.dao;
 import cn.jia.agent.mapper.AgentPersonaBindingMapper;
 import cn.jia.agent.mapper.AgentPersonaMapper;
 import cn.jia.agent.mapper.AgentTaskMetaMapper;
+import com.baomidou.mybatisplus.annotation.InterceptorIgnore;
 import org.apache.ibatis.annotations.Select;
 import org.junit.jupiter.api.Test;
 
@@ -14,13 +15,16 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class AgentRuntimeBatchMapperContractTest {
     @Test
-    void personaRuntimeProjectionIsOneBoundedColumnOnlyQuery() throws Exception {
+    void personaRuntimeProjectionIsOneBoundedByteExactPublicAndTenantQuery() throws Exception {
         String sql = selectSql(AgentPersonaMapper.class, "selectRuntimeProjection");
 
         assertTrue(sql.startsWith("select persona_code, rank_no, star_name, name, title, avatar, visual_config,"));
-        assertTrue(sql.contains("abilities, power, intelligence, leadership, system_agent from agent_persona"));
+        assertTrue(sql.contains("abilities, power, intelligence, leadership, system_agent, tenant_id, client_id from agent_persona"));
+        assertTrue(sql.contains("tenant_id = '0'"));
+        assertExactParameter(sql, "tenant_id", "tenantid");
+        assertExactParameter(sql, "client_id", "clientid");
         assertFalse(sql.contains("select *"));
-        assertFalse(sql.contains("where"));
+        assertFalse(sql.contains("active = 1"));
     }
 
     @Test
@@ -36,6 +40,10 @@ class AgentRuntimeBatchMapperContractTest {
         assertFalse(catalog.contains("owner_jiacn"));
 
         String overlay = selectSql(AgentPersonaBindingMapper.class, "findCatalogOverlay");
+        InterceptorIgnore overlayIgnore = AgentPersonaBindingMapper.class.getMethod(
+                        "findCatalogOverlay", String.class, String.class, String.class, int.class)
+                .getAnnotation(InterceptorIgnore.class);
+        assertTrue(overlayIgnore != null && "true".equals(overlayIgnore.tenantLine()));
         assertTrue(overlay.contains("from agent_persona_binding b"));
         assertTrue(overlay.contains("inner join agent_persona p"));
         assertTrue(overlay.contains("cast(p.persona_code as binary) = cast(b.persona_code as binary)"));

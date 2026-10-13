@@ -10,7 +10,13 @@ public interface AgentPersonaDao extends IBaseDao<AgentPersonaEntity> {
 
     AgentPersonaEntity findByCode(String personaCode);
 
-    List<AgentPersonaEntity> findRuntimeProjection();
+    AgentPersonaEntity findByNameInReadScope(
+            String tenantId, String clientId, String name);
+
+    AgentPersonaEntity findByCodeInReadScope(
+            String tenantId, String clientId, String personaCode);
+
+    List<AgentPersonaEntity> findRuntimeProjection(String tenantId, String clientId);
 
     List<AgentPersonaEntity> findCatalogProjection(String tenantId, String clientId);
 }

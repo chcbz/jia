@@ -2618,7 +2618,7 @@ class AgentServiceImplTest extends BaseMockTest {
         songjiang.setSystemAgent(true);
         personas.add(songjiang);
         when(agentRuntimeDao.findMapVisible("jia_client")).thenReturn(runtimes);
-        when(agentPersonaDao.findRuntimeProjection()).thenReturn(personas);
+        when(agentPersonaDao.findRuntimeProjection("0", "jia_client")).thenReturn(personas);
         when(agentTaskMetaDao.findStatsByAgents(any())).thenAnswer(invocation ->
                 invocation.<List<AgentTaskStatsScope>>getArgument(0).stream()
                         .map(scope -> taskStats(scope, 2, 1, 1, 1, 12))
@@ -2633,7 +2633,7 @@ class AgentServiceImplTest extends BaseMockTest {
         assertEquals(12L, result.getFirst().getStats().getAverageDurationSeconds());
         assertEquals(AgentConstants.BUILTIN_SONGJIANG_AGENT_ID, result.getLast().getAgentId());
         verify(agentRuntimeDao, times(1)).findMapVisible("jia_client");
-        verify(agentPersonaDao, times(1)).findRuntimeProjection();
+        verify(agentPersonaDao, times(1)).findRuntimeProjection("0", "jia_client");
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<AgentTaskStatsScope>> scopes = ArgumentCaptor.forClass(List.class);
         verify(agentTaskMetaDao, times(1)).findStatsByAgents(scopes.capture());
@@ -2662,7 +2662,7 @@ class AgentServiceImplTest extends BaseMockTest {
         context.setJiacn("tenant-a");
         EsContextHolder.setContext(context);
         when(agentRuntimeDao.findMapVisible("client-a")).thenReturn(List.of(tenantA, tenantB));
-        when(agentPersonaDao.findRuntimeProjection()).thenReturn(List.of());
+        when(agentPersonaDao.findRuntimeProjection("0", "client-a")).thenReturn(List.of());
         when(agentTaskMetaDao.findStatsByAgents(any())).thenReturn(List.of(
                 taskStats(new AgentTaskStatsScope("tenant-a", "client-a", "shared-agent"),
                         3, 2, 1, 2, 20),
@@ -2705,7 +2705,7 @@ class AgentServiceImplTest extends BaseMockTest {
         when(agentRuntimeDao.findRosterByOwner(
                 "jia_client", "jiacn", AgentConstants.STATUS_OFFLINE, "planning"))
                 .thenReturn(runtimes);
-        when(agentPersonaDao.findRuntimeProjection()).thenReturn(personas);
+        when(agentPersonaDao.findRuntimeProjection("0", "jia_client")).thenReturn(personas);
         when(agentTaskMetaDao.findStatsByAgents(any())).thenAnswer(invocation ->
                 invocation.<List<AgentTaskStatsScope>>getArgument(0).stream()
                         .map(scope -> taskStats(scope, 3, 2, 1, 2, 30))
@@ -2722,7 +2722,7 @@ class AgentServiceImplTest extends BaseMockTest {
             assertEquals(15L, result.getList().getFirst().getStats().getAverageDurationSeconds());
             verify(agentRuntimeDao, times(1)).findRosterByOwner(
                     "jia_client", "jiacn", AgentConstants.STATUS_OFFLINE, "planning");
-            verify(agentPersonaDao, times(1)).findRuntimeProjection();
+            verify(agentPersonaDao, times(1)).findRuntimeProjection("0", "jia_client");
             @SuppressWarnings("unchecked")
             ArgumentCaptor<List<AgentTaskStatsScope>> scopes = ArgumentCaptor.forClass(List.class);
             verify(agentTaskMetaDao, times(1)).findStatsByAgents(scopes.capture());
@@ -2753,7 +2753,7 @@ class AgentServiceImplTest extends BaseMockTest {
                 () -> agentService.listRoster(null, null, 1, 50));
 
         assertEquals(AgentErrorConstants.AGENT_FORBIDDEN, failure.getCode());
-        verify(agentPersonaDao, never()).findRuntimeProjection();
+        verify(agentPersonaDao, never()).findRuntimeProjection(anyString(), anyString());
         verify(agentTaskMetaDao, never()).findStatsByAgents(any());
     }
 
@@ -2772,7 +2772,7 @@ class AgentServiceImplTest extends BaseMockTest {
                 () -> agentService.listRoster(null, null, 1, 50));
 
         assertEquals(AgentErrorConstants.AGENT_FORBIDDEN, failure.getCode());
-        verify(agentPersonaDao, never()).findRuntimeProjection();
+        verify(agentPersonaDao, never()).findRuntimeProjection(anyString(), anyString());
         verify(agentTaskMetaDao, never()).findStatsByAgents(any());
     }
 
@@ -2794,7 +2794,7 @@ class AgentServiceImplTest extends BaseMockTest {
                 AgentServiceImpl.AgentBizException.class, agentService::listMapAgents);
 
         assertEquals(AgentErrorConstants.AGENT_FORBIDDEN, failure.getCode());
-        verify(agentPersonaDao, never()).findRuntimeProjection();
+        verify(agentPersonaDao, never()).findRuntimeProjection(anyString(), anyString());
         verify(agentTaskMetaDao, never()).findStatsByAgents(any());
     }
 
@@ -2810,7 +2810,7 @@ class AgentServiceImplTest extends BaseMockTest {
         context.setJiacn("tenant-a");
         EsContextHolder.setContext(context);
         when(agentRuntimeDao.findMapVisible("client-a")).thenReturn(List.of(runtime));
-        when(agentPersonaDao.findRuntimeProjection()).thenReturn(List.of());
+        when(agentPersonaDao.findRuntimeProjection("0", "client-a")).thenReturn(List.of());
         AgentTaskStatsScope scope = new AgentTaskStatsScope(
                 "tenant-a", "client-a", "agent-owned");
         when(agentTaskMetaDao.findStatsByAgents(any())).thenReturn(List.of(
@@ -2835,7 +2835,7 @@ class AgentServiceImplTest extends BaseMockTest {
         context.setJiacn("tenant-a");
         EsContextHolder.setContext(context);
         when(agentRuntimeDao.findMapVisible("client-a")).thenReturn(List.of(runtime));
-        when(agentPersonaDao.findRuntimeProjection()).thenReturn(List.of());
+        when(agentPersonaDao.findRuntimeProjection("0", "client-a")).thenReturn(List.of());
         AgentTaskStatsScope foreignScope = new AgentTaskStatsScope(
                 "tenant-a", "client-b", "agent-owned");
         when(agentTaskMetaDao.findStatsByAgents(any())).thenReturn(List.of(

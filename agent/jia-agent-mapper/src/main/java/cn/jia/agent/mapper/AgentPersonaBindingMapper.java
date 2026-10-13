@@ -1,6 +1,7 @@
 package cn.jia.agent.mapper;
 
 import cn.jia.agent.entity.AgentPersonaBindingEntity;
+import com.baomidou.mybatisplus.annotation.InterceptorIgnore;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
@@ -58,6 +59,7 @@ public interface AgentPersonaBindingMapper extends BaseMapper<AgentPersonaBindin
             @Param("personaCode") String personaCode,
             @Param("activeStatus") int activeStatus);
 
+    @InterceptorIgnore(tenantLine = "true")
     @Select("""
             SELECT CASE WHEN b.owner_jiacn = #{ownerJiacn}
                               AND CAST(b.owner_jiacn AS BINARY) = CAST(#{ownerJiacn} AS BINARY)
