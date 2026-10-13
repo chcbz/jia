@@ -45,11 +45,12 @@ public final class SkillManifestCodec {
     public SkillManifestCodec() {
         config = new SchemaValidatorsConfig();
         config.setTypeLoose(false);
+        config.setEcma262Validator(true);
         config.setFormatAssertionsEnabled(false);
         factory = JsonSchemaFactory.getInstance(SpecVersion.VersionFlag.V202012, builder ->
                 builder.schemaLoaders(loaders -> loaders.add(iri -> {
                     // Built-in Draft2020-12 resources only; never fall through to HTTP/file loaders.
-                    require(iri.toString().startsWith("classpath:2020-12/"), "SKILL_SCHEMA_REF_FORBIDDEN");
+                    require(iri.toString().startsWith("classpath:draft/2020-12/"), "SKILL_SCHEMA_REF_FORBIDDEN");
                     return null;
                 })));
         metaSchema = factory.getSchema(SchemaLocation.of(DIALECT), config);

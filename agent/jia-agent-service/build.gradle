@@ -22,6 +22,7 @@ dependencies {
     implementation libs.spring.rabbit
     implementation libs.jackson.databind
     implementation 'com.networknt:json-schema-validator:1.5.9'
+    implementation 'org.jruby.joni:joni:2.2.6'
     // Keep the workspace document runtime on one POI generation. POI 3.14
     // combined with xmlbeans/full schemas from POI 5.4 fails at runtime with
     // XmlOptions.put(Object) and CTPoint2D.setX(long) NoSuchMethodError. The
