@@ -18,7 +18,7 @@ public final class SkillExecutionSchemaInitializer implements InitializingBean {
     static final String MIME_CATALOG_CHECK="(((execution_protocol_version is not null) and (execution_protocol_version = 4)) or ((output_content_mime_type is not null) and (output_content_mime_type in ("+PersonalWorkspaceExecutionSchemaInitializer.OUTPUT_MIMES+"))))";
     static final String STATE_CATALOG_CHECK="((execution_state in ('QUEUED','INPUTS_REVOKED','OUTPUT_STAGED','OUTPUT_COMMITTED','FAILED')) or ((execution_state = 'RESULT_COMMITTED') and (execution_protocol_version is not null) and (execution_protocol_version = 4)))";
     static String protocolCatalogCheck() {
-        String legacy=ControlledImageFollowupV3SchemaInitializer.EXECUTION_PROTOCOL_CATALOG_CHECK;
+        String legacy=ControlledImageFollowupV3SchemaInitializer.EXECUTION_PROTOCOL_CATALOG_CHECK.replace("\\'", "'");
         return legacy.substring(0,legacy.length()-1)+" or ((execution_protocol_version = 4) and (execution_mode = 'CONVERSATION') and (permitted_operation = 'EXECUTE_SKILL') and (controlled_consent_id is null) and (operation_grant_id is null) and (runtime_input_snapshot_digest is not null) and regexp_like(runtime_input_snapshot_digest,cast('^[0-9a-f]{64}$' as char charset binary))))";
     }
     @Override public void afterPropertiesSet() {

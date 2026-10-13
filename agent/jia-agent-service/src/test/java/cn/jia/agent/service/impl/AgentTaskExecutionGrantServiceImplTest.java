@@ -71,23 +71,23 @@ class AgentTaskExecutionGrantServiceImplTest {
     void pointWithoutMaterialsCreatesDeliberationNotImageOrPaidAuthority() {
         when(links.list("0","client","owner","task-1",null,null,33)).thenReturn(List.of());
         var receipt=service.assignForDeliberation(scope(),"task-1","point-empty","agent-1",0,1);
-        assertEquals(List.of("DELIBERATE","GENERATE_TEXT_FILE","INSPECT_INPUTS"),receipt.getPermittedOperations());
+        assertEquals(List.of("DELIBERATE","EXECUTE_SKILL"),receipt.getPermittedOperations());
         assertFalse(receipt.getPaidExecutionAuthorized());
         assertTrue(receipt.getInputs().isEmpty());
         assertEquals("DELIBERATE",bootstraps.byAction.values().iterator().next().getPermittedOperation());
         assertNull(grants.byAction.values().iterator().next().getCostAuthorizationRef());
     }
 
-    @Test void newOrdinaryGrantAdmitsTextButAnOldGrantDoesNotGainTheOperation() {
+    @Test void newOrdinaryGrantAdmitsSkillButAnOldGrantDoesNotGainTheOperation() {
         when(links.list("0","client","owner","task-1",null,null,33)).thenReturn(List.of());
         var grant=service.assignForDeliberation(scope(),"task-1","text-grant","agent-1",0,1);
-        assertEquals("GENERATE_TEXT_FILE",service.admit(scope(),"task-1",grant.getGrantId(),grant.getGrantVersion(),
-                grant.getAssignmentRevision(),"agent-1","GENERATE_TEXT_FILE",false).operation());
+        assertEquals("EXECUTE_SKILL",service.admit(scope(),"task-1",grant.getGrantId(),grant.getGrantVersion(),
+                grant.getAssignmentRevision(),"agent-1","EXECUTE_SKILL",false).operation());
         assertThrows(AgentTaskExecutionGrantException.class,()->service.admit(scope(),"task-1",grant.getGrantId(),
                 grant.getGrantVersion(),grant.getAssignmentRevision(),"agent-1","GENERATE_IMAGE",true));
         grants.byAction.values().iterator().next().setPermittedOperationsJson("[\"DELIBERATE\",\"INSPECT_INPUTS\"]");
         assertThrows(AgentTaskExecutionGrantException.class,()->service.admit(scope(),"task-1",grant.getGrantId(),
-                grant.getGrantVersion(),grant.getAssignmentRevision(),"agent-1","GENERATE_TEXT_FILE",false));
+                grant.getGrantVersion(),grant.getAssignmentRevision(),"agent-1","EXECUTE_SKILL",false));
     }
 
     @Test
@@ -622,6 +622,22 @@ class AgentTaskExecutionGrantServiceImplTest {
         request.setRequestedOperations(List.of("GENERATE_IMAGE","INSPECT_INPUTS","EDIT_IMAGE"));
         request.setInitialOperation(initialOperation);
         return request;
+    }
+
+    @Test void oldBaselineIsReplacedByDistinctLatestGrantWithoutFeesOrBootstrapReplay() {
+        when(links.list("0","client","owner","task-1",null,null,33)).thenReturn(List.of());
+        var original=service.assignForDeliberation(scope(),"task-1","old","agent-1",0,1);
+        var old=grants.byId.get(original.getGrantId());old.setPermittedOperationsJson("[\"DELIBERATE\"]").setPermittedToolPolicyRef("NO_TOOLS_V1");
+        var next=service.resolveSkillBaseline(scope(),"task-1",original.getAssignmentRevision(),"agent-1");
+        assertNotEquals(original.getGrantId(),next.grantId());assertEquals("SUPERSEDED",old.getState());assertEquals("EXECUTE_SKILL",next.operation());assertFalse(next.paidExecutionAuthorized());
+        var current=grants.byId.get(next.grantId());assertEquals("SKILLS_V1",current.getPermittedToolPolicyRef());assertNull(current.getCostAuthorizationRef());assertEquals(1,bootstraps.byAction.size());
+        assertEquals(next,service.resolveSkillBaseline(scope(),"task-1",original.getAssignmentRevision(),"agent-1"));assertEquals(2,grants.byId.size());
+    }
+    @Test void latestBaselineDoesNotReviveRevokedGrantOrDifferentAssignment() {
+        when(links.list("0","client","owner","task-1",null,null,33)).thenReturn(List.of());
+        var original=service.assignForDeliberation(scope(),"task-1","old-revoked","agent-1",0,1);
+        assertThrows(AgentTaskExecutionGrantException.class,()->service.resolveSkillBaseline(scope(),"task-1",99,"agent-1"));
+        grants.byId.get(original.getGrantId()).setState("REVOKED");assertThrows(AgentTaskExecutionGrantException.class,()->service.resolveSkillBaseline(scope(),"task-1",original.getAssignmentRevision(),"agent-1"));assertEquals(1,grants.byId.size());
     }
     private static AgentTaskExecutionGrantService.Scope scope() {
         return new AgentTaskExecutionGrantService.Scope("0","client","owner");
