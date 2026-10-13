@@ -2447,7 +2447,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     }
 
     private RuntimeCommand command(PersonalWorkspaceExecutionEntity execution, List<RuntimeInput> inputs) {
-        if (inputs.size() > MAX_EXECUTION_INPUTS || !"QUEUED".equals(execution.getExecutionState())) return null;
+        if (Objects.equals(4,execution.getExecutionProtocolVersion()) || inputs.size() > MAX_EXECUTION_INPUTS || !"QUEUED".equals(execution.getExecutionState())) return null;
         String outputMime = execution.getOutputContentMimeType();
         String extension = EXTENSIONS.get(outputMime);
         if (!executionMimeTypes.contains(outputMime) || extension == null || storage.maxContentBytes() < 1

@@ -14,6 +14,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 /**
  * Additive catalog for schema-3 follow-up authority.
@@ -395,7 +396,7 @@ public final class ControlledImageFollowupV3SchemaInitializer implements Initial
                         + table + "." + entry.getKey());
             }
             if (!canonicalCheck(entry.getValue()).equals(canonicalCheck(found.clause()))
-                    && !(table.equals(EXECUTION_TABLE) && entry.getKey().equals("chk_pwex_execution_protocol")
+                    && !(Set.of(EXECUTION_TABLE,"controlled execution v3").contains(table) && entry.getKey().equals("chk_pwex_execution_protocol")
                          && canonicalCheck(SkillExecutionSchemaInitializer.protocolCatalogCheck()).equals(canonicalCheck(found.clause())))) {
                 throw new IllegalStateException("Follow-up CHECK definition drift: "
                         + table + "." + entry.getKey());
