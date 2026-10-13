@@ -16,6 +16,7 @@ import cn.jia.agent.entity.AgentPersonaBindingEntity;
 import cn.jia.agent.entity.AgentRuntimeEntity;
 import cn.jia.agent.service.AgentIdentityService;
 import cn.jia.agent.service.PersonalWorkspaceExecutionService;
+import cn.jia.agent.service.SkillExecutionService;
 import cn.jia.agent.service.impl.AgentIdentityServiceImpl;
 import cn.jia.core.context.EsContextHolder;
 import cn.jia.oauth.entity.OauthApiKeyEntity;
@@ -104,7 +105,7 @@ class AgentRuntimeSecurityIntegrationTest {
         @Bean ApiKeyService keys() { return mock(ApiKeyService.class); }
         @Bean AccountSecurityService accounts() { return mock(AccountSecurityService.class); }
         @Bean PersonalWorkspaceExecutionService workspaceExecutions() {
-            return mock(PersonalWorkspaceExecutionService.class);
+            return mock(PersonalWorkspaceExecutionService.class, withSettings().extraInterfaces(SkillExecutionService.class));
         }
         @Bean AgentTaskEventsGate gate() {
             return new AgentTaskEventsGate(new AgentTaskEventsProperties(true,
@@ -446,8 +447,8 @@ class AgentRuntimeSecurityIntegrationTest {
         var scope=new PersonalWorkspaceExecutionService.RuntimeScope(TENANT,CLIENT_A,OWNER_A,A,"runtime-a");
         var fence=new PersonalWorkspaceExecutionService.ConversationFence(2L,
                 "01234567-89ab-cdef-0123-456789abcdef");
-        var input=new PersonalWorkspaceExecutionService.ConversationInputSnapshot("exec-a",2L,true,List.of());
-        when(workspaceExecutions.conversationInputs(scope,"task-a","run-a",fence)).thenReturn(input);
+        var input=new SkillExecutionService.Inputs(1,"exec-a",2L,"a".repeat(64),true,List.of());
+        when(((SkillExecutionService)workspaceExecutions).inputs(scope,"task-a","run-a",fence)).thenReturn(input);
         String path="/internal/agent/tasks/task-a/runs/run-a/conversation/inputs";
         String json="{\"version\":2,\"token\":\""+fence.token()+"\"}";
         conversationMvc.perform(headers(post(path),A,"runtime-a",TOKEN_A).contentType("application/json").content(json))
@@ -465,7 +466,7 @@ class AgentRuntimeSecurityIntegrationTest {
                 .andExpect(jsonPath("$.code").value("AGENT_RUNTIME_UNAUTHENTICATED"));
         conversationMvc.perform(headers(post(path+"/extra"),A,"runtime-a",TOKEN_A)
                 .contentType("application/json").content(json)).andExpect(status().isForbidden());
-        verify(workspaceExecutions,times(1)).conversationInputs(scope,"task-a","run-a",fence);
+        verify((SkillExecutionService)workspaceExecutions,times(1)).inputs(scope,"task-a","run-a",fence);
         verifyNoMoreInteractions(workspaceExecutions);
     }
 
@@ -495,7 +496,7 @@ class AgentRuntimeSecurityIntegrationTest {
                 "01234567-89ab-cdef-0123-456789abcdef");
         String path="/internal/agent/tasks/task-a/runs/run-a/conversation/inputs/input_1/content";
         String body="{\"version\":2,\"token\":\""+fence.token()+"\"}";
-        when(workspaceExecutions.conversationInputContent(scope,"task-a","run-a",fence,"input_1"))
+        when(((SkillExecutionService)workspaceExecutions).inputContent(scope,"task-a","run-a","input_1",fence))
                 .thenReturn(new PersonalWorkspaceExecutionService.RuntimeContent("bird.png","image/png",new byte[]{1,2,3}));
         conversationMvc.perform(headers(post(path),A,"runtime-a",TOKEN_A)
                 .contentType("application/json").content(body))
@@ -514,7 +515,7 @@ class AgentRuntimeSecurityIntegrationTest {
                 .contentType("application/json").content(body)).andExpect(status().isUnauthorized());
         conversationMvc.perform(headers(post(path+"/extra"),A,"runtime-a",TOKEN_A)
                 .contentType("application/json").content(body)).andExpect(status().isForbidden());
-        verify(workspaceExecutions,times(1)).conversationInputContent(scope,"task-a","run-a",fence,"input_1");
+        verify((SkillExecutionService)workspaceExecutions,times(1)).inputContent(scope,"task-a","run-a","input_1",fence);
         verifyNoMoreInteractions(workspaceExecutions);
     }
 
@@ -523,7 +524,7 @@ class AgentRuntimeSecurityIntegrationTest {
         var scope=new PersonalWorkspaceExecutionService.RuntimeScope(TENANT,CLIENT_A,OWNER_A,A,"runtime-a");
         var fence=new PersonalWorkspaceExecutionService.ConversationFence(2L,"01234567-89ab-cdef-0123-456789abcdef");
         String source="private-source-must-not-leak";
-        when(workspaceExecutions.conversationInputContent(scope,"task-a","run-a",fence,"input_1"))
+        when(((SkillExecutionService)workspaceExecutions).inputContent(scope,"task-a","run-a","input_1",fence))
                 .thenAnswer(call->{
                     persisted.get(A).setRuntimeSessionGeneration(2L).setRuntimeInstanceId("replacement");
                     return new PersonalWorkspaceExecutionService.RuntimeContent("bird.png","image/png",source.getBytes(java.nio.charset.StandardCharsets.UTF_8));
@@ -533,7 +534,7 @@ class AgentRuntimeSecurityIntegrationTest {
                 .andExpect(status().isBadRequest()).andReturn().getResponse();
         assertFalse(response.getContentAsString().contains(source));
         var ordered=inOrder(workspaceExecutions,installations,rows);
-        ordered.verify(workspaceExecutions).conversationInputContent(scope,"task-a","run-a",fence,"input_1");
+        ordered.verify((SkillExecutionService)workspaceExecutions).inputContent(scope,"task-a","run-a","input_1",fence);
         ordered.verify(installations).lock(installationFor(A));
         ordered.verify(rows).lockInScope(TENANT,CLIENT_A,A);
     }
@@ -553,78 +554,31 @@ class AgentRuntimeSecurityIntegrationTest {
     }
 
     @Test
-    void nativeProviderStartRequiresExactRuntimeFenceAndRejectsBrowserRoutes() throws Exception {
-        var scope=new PersonalWorkspaceExecutionService.RuntimeScope(TENANT,CLIENT_A,OWNER_A,A,"runtime-a");
+    void retiredNativeProviderStartCannotExecuteEvenWithAuthenticRuntime() throws Exception {
         String path="/internal/agent/tasks/task-a/runs/run-a/conversation/provider-start";
         String body="{\"version\":1,\"token\":\"01234567-89ab-cdef-0123-456789abcdef\"}";
-        conversationMvc.perform(headers(post(path),A,"runtime-a",TOKEN_A)
-                .contentType("application/json").content(body))
-                .andExpect(status().isOk()).andExpect(jsonPath("$.started").value(true));
-        verify(workspaceExecutions).beginConversationProviderStart(scope,"task-a","run-a",
-                new PersonalWorkspaceExecutionService.ConversationFence(1,
-                        "01234567-89ab-cdef-0123-456789abcdef"));
-        conversationMvc.perform(headers(post(path),A,"runtime-a",TOKEN_A)
-                .contentType("application/json").content("{\"version\":0,\"token\":\"bad\"}"))
-                .andExpect(status().isBadRequest());
-        conversationMvc.perform(headers(post(path),A,"runtime-b",TOKEN_A)
-                .contentType("application/json").content(body)).andExpect(status().isUnauthorized());
-        conversationMvc.perform(headers(post(path),A,"runtime-a",TOKEN_A)
-                .header("Origin","https://browser.invalid").contentType("application/json").content(body))
-                .andExpect(status().isForbidden());
-        conversationMvc.perform(headers(post(path+"/extra"),A,"runtime-a",TOKEN_A)
+        conversationMvc.perform(headers(post(path),A,"runtime-a",TOKEN_A).contentType("application/json").content(body))
+                .andExpect(status().isNotFound());
+        conversationMvc.perform(headers(post(path),A,"runtime-b",TOKEN_A).contentType("application/json").content(body))
+                .andExpect(status().isUnauthorized());
+        conversationMvc.perform(headers(post(path),A,"runtime-a",TOKEN_A).header("Origin","https://browser.invalid")
                 .contentType("application/json").content(body)).andExpect(status().isForbidden());
-        verifyNoMoreInteractions(workspaceExecutions);
+        conversationMvc.perform(headers(post(path+"/extra"),A,"runtime-a",TOKEN_A)).andExpect(status().isForbidden());
+        verifyNoInteractions(workspaceExecutions);
     }
 
-
     @Test
-    void controlledProviderStartUsesOnlyTheV2SiblingAndExactRuntimeScope() throws Exception {
-        var scope=new PersonalWorkspaceExecutionService.RuntimeScope(TENANT,CLIENT_A,OWNER_A,A,"runtime-a");
-        var descriptor=new PersonalWorkspaceExecutionService.ProviderExecution("CONTROLLED_IMAGE_HTTP_V1",
-                "consent_1234567890abcdef1234567890abcdef","binding-a","1","model-a",16,1,1);
-        var fence=new PersonalWorkspaceExecutionService.ConversationFence(1,
-                "01234567-89ab-cdef-0123-456789abcdef");
-        var request=new PersonalWorkspaceExecutionService.ControlledProviderStart(2,"cmd-a","msg-a",
-                "exec-a",descriptor,fence);
-        var receipt=new PersonalWorkspaceExecutionService.ControlledProviderStartReceipt(2,true,"task-a",
-                "run-a","exec-a","cmd-a","msg-a",descriptor,1);
-        when(workspaceExecutions.beginControlledConversationProviderStart(scope,"task-a","run-a",request))
-                .thenReturn(receipt);
-        String path="/internal/agent/tasks/task-a/runs/run-a/conversation/provider-start-controlled-image";
-        String body="""
-                {"schemaVersion":2,"commandId":"cmd-a","messageId":"msg-a","executionId":"exec-a",
-                 "providerExecution":{"providerLane":"CONTROLLED_IMAGE_HTTP_V1",
-                 "consentId":"consent_1234567890abcdef1234567890abcdef","bindingId":"binding-a",
-                 "bindingEpoch":"1","modelId":"model-a","maxInputItems":16,
-                 "maxOutboundRequestAttempts":1,"precallFenceVersion":1},
-                 "fence":{"version":1,"token":"01234567-89ab-cdef-0123-456789abcdef"}}
-                """;
-        conversationMvc.perform(headers(post(path),A,"runtime-a",TOKEN_A)
-                .contentType("application/json").content(body))
-                .andExpect(status().isOk()).andExpect(jsonPath("$.schemaVersion").value(2))
-                .andExpect(jsonPath("$.started").value(true))
-                .andExpect(jsonPath("$.leaseVersion").value(1))
-                .andExpect(jsonPath("$.token").doesNotExist());
-        for (String invalid:List.of(
-                body.replace("{\"schemaVersion\":2","{\"schemaVersion\":2,\"schemaVersion\":2"),
-                body.replace("\"providerExecution\":{","\"authority\":true,\"providerExecution\":{"),
-                body.replace("\"bindingEpoch\":\"1\"","\"bindingEpoch\":\"9007199254740992\""),
-                body.replace("\"consentId\":\"consent_1234567890abcdef1234567890abcdef\"",
-                        "\"consentId\":\"forged\""),
-                body.replace("\"bindingId\":\"binding-a\"","\"bindingId\":\" \""),
-                body.replace("\"precallFenceVersion\":1","\"precallFenceVersion\":1,\"token\":\"secret\""),
-                body.replace("\"version\":1","\"version\":9007199254740992"),
-                body+" {}")) {
-            conversationMvc.perform(headers(post(path),A,"runtime-a",TOKEN_A)
-                            .contentType("application/json").content(invalid))
-                    .andExpect(status().isBadRequest());
+    void retiredControlledProviderStartsRejectAllBodiesAndDoNotAuthorizeCost() throws Exception {
+        for(String suffix:List.of("provider-start-controlled-image","provider-start-controlled-image-v3")) {
+            String path="/internal/agent/tasks/task-a/runs/run-a/conversation/"+suffix;
+            for(String body:List.of("{}","{\"schemaVersion\":2}","{\"schemaVersion\":3,\"consentId\":\"forged\"}"))
+                conversationMvc.perform(headers(post(path),A,"runtime-a",TOKEN_A).contentType("application/json").content(body))
+                        .andExpect(status().isNotFound());
+            conversationMvc.perform(headers(post(path),A,"runtime-b",TOKEN_A).contentType("application/json").content("{}"))
+                    .andExpect(status().isUnauthorized());
+            conversationMvc.perform(headers(post(path+"/extra"),A,"runtime-a",TOKEN_A)).andExpect(status().isForbidden());
         }
-        conversationMvc.perform(headers(post(path),A,"runtime-b",TOKEN_A)
-                .contentType("application/json").content(body)).andExpect(status().isUnauthorized());
-        conversationMvc.perform(headers(post(path+"/extra"),A,"runtime-a",TOKEN_A)
-                .contentType("application/json").content(body)).andExpect(status().isForbidden());
-        verify(workspaceExecutions).beginControlledConversationProviderStart(scope,"task-a","run-a",request);
-        verifyNoMoreInteractions(workspaceExecutions);
+        verifyNoInteractions(workspaceExecutions);
     }
 
     @Test
@@ -665,30 +619,31 @@ class AgentRuntimeSecurityIntegrationTest {
     }
 
     @Test
-    void stagedRecoveryHttpContractUsesCurrentNativeIdentityAndNeverAcceptsBrowserOrStartBody() throws Exception {
+    void genericResultHttpContractUsesCurrentNativeIdentityAndRejectsOldRecoveryBodies() throws Exception {
         var scope=new PersonalWorkspaceExecutionService.RuntimeScope(TENANT,CLIENT_A,OWNER_A,A,"runtime-a");
-        var proof=new PersonalWorkspaceExecutionService.ConversationResultRecovery("execution-a","command-a","message-a",
-                "b".repeat(64),List.of(new PersonalWorkspaceExecutionService.OutputDeclaration("output_1","a".repeat(64),12L)));
+        var fence=new PersonalWorkspaceExecutionService.ConversationFence(1L,"01234567-89ab-cdef-0123-456789abcdef");
+        var command=new SkillExecutionService.ResultCommit(fence,"b".repeat(64),Map.of("summary","ok"),List.of(),List.of());
         String manifest="pwe_m_"+"c".repeat(64);
         String path="/internal/agent/tasks/task-a/runs/run-a/conversation/result-commits/"+manifest;
-        when(workspaceExecutions.recoverStagedConversationOutput(scope,"task-a","run-a",manifest,proof))
-                .thenReturn(new PersonalWorkspaceExecutionService.CommitView(manifest,"COMMITTED",List.of()));
-        String body="{\"schemaVersion\":1,\"executionId\":\"execution-a\",\"commandId\":\"command-a\","
-                +"\"messageId\":\"message-a\",\"inputSnapshotDigest\":\""+"b".repeat(64)+"\","
-                +"\"outputs\":[{\"outputId\":\"output_1\",\"sha256\":\""+"a".repeat(64)+"\",\"length\":12}]}";
+        when(((SkillExecutionService)workspaceExecutions).commitResult(scope,"task-a","run-a",manifest,command))
+                .thenReturn(new SkillExecutionService.ResultReceipt(manifest,"RESULT_COMMITTED","ARCHIVING","c".repeat(64)));
+        String body="{\"fence\":{\"version\":1,\"token\":\""+fence.token()+"\"},\"snapshotDigest\":\""+"b".repeat(64)
+                +"\",\"data\":{\"summary\":\"ok\"},\"artifacts\":[],\"inputReceipts\":[]}";
         conversationMvc.perform(headers(post(path),A,"runtime-a",TOKEN_A).contentType("application/json").content(body))
-                .andExpect(status().isOk()).andExpect(jsonPath("$.state").value("COMMITTED"));
-        conversationMvc.perform(headers(post(path),A,"runtime-a",TOKEN_A).contentType("application/json")
-                .content(body.replace("\"schemaVersion\":1","\"schemaVersion\":2"))).andExpect(status().isBadRequest());
-        conversationMvc.perform(headers(post(path),A,"runtime-a",TOKEN_A).contentType("application/json")
-                .content("{\"fence\":{\"version\":1,\"token\":\"old\"}}")).andExpect(status().isBadRequest());
+                .andExpect(status().isOk()).andExpect(jsonPath("$.state").value("RESULT_COMMITTED"))
+                .andExpect(jsonPath("$.phase").value("ARCHIVING")).andExpect(header().string("Cache-Control","private, no-store"));
+        for(String invalid:List.of("{\"schemaVersion\":1,\"executionId\":\"execution-a\",\"outputs\":[]}",
+                body.replace("\"artifacts\":[]","\"artifacts\":[],\"authority\":true"),
+                body.replace("\"data\":", "\"data\":null,\"data\":"),body+" {}"))
+            conversationMvc.perform(headers(post(path),A,"runtime-a",TOKEN_A).contentType("application/json").content(invalid))
+                    .andExpect(status().isBadRequest());
         conversationMvc.perform(headers(post(path),A,"runtime-b",TOKEN_A).contentType("application/json").content(body))
                 .andExpect(status().isUnauthorized());
         conversationMvc.perform(headers(post(path),A,"runtime-a",TOKEN_A).header("Origin","https://kit.chaoyoufan.cn")
                 .contentType("application/json").content(body)).andExpect(status().isForbidden());
         conversationMvc.perform(headers(get(path),A,"runtime-a",TOKEN_A)).andExpect(status().isForbidden());
         conversationMvc.perform(headers(post(path+"/content"),A,"runtime-a",TOKEN_A)).andExpect(status().isForbidden());
-        verify(workspaceExecutions).recoverStagedConversationOutput(scope,"task-a","run-a",manifest,proof);
+        verify((SkillExecutionService)workspaceExecutions).commitResult(scope,"task-a","run-a",manifest,command);
         verifyNoMoreInteractions(workspaceExecutions);
     }
 
