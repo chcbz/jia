@@ -153,6 +153,9 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
     private TypedDeliberationSessionRegistry typedDeliberationSessions;
     private TypedInspectionSessionRegistry typedInspectionSessions;
     private NativeTextFileSessionRegistry nativeTextFileSessions;
+    private SkillExecutionSessionRegistry skillExecutionSessions;
+    @Autowired(required = false)
+    public void setSkillExecutionSessions(SkillExecutionSessionRegistry sessions) { this.skillExecutionSessions = sessions; }
     @Autowired(required = false)
     public void setNativeTextFileSessions(NativeTextFileSessionRegistry sessions) { this.nativeTextFileSessions = sessions; }
     @Autowired(required = false)
@@ -313,6 +316,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                 // detection before the generic normalizer can collapse them into a Map.
                 payload = STRICT_RAW_COMMAND_JSON.readValue(message.getPayload(), MESSAGE_TYPE);
             } catch (Exception malformed) {
+                if (skillExecutionSessions != null) skillExecutionSessions.remove(session.getId());
                 sendProtocolError(session, Map.of(), "AGENT_REGISTRATION_INVALID",
                         "Agent registration payload is invalid");
                 return;
@@ -349,6 +353,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             normalized = protocolMessageNormalizer.normalizeInbound(payload);
             payload = normalized.payload();
         } catch (AgentProtocolMessageNormalizer.AgentProtocolException e) {
+            if (declaredRegistration && skillExecutionSessions != null) skillExecutionSessions.remove(session.getId());
             sendProtocolError(session, payload, e.getCode(), e.getMessage());
             return;
         }
@@ -832,6 +837,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                     TypedDeliberationDeclaration.parse(payload.get("typedDeliberation"));
             TypedInspectionDeclaration typedInspection =
                     TypedInspectionDeclaration.parse(payload.get("typedInspection"));
+            var skillExecution = SkillExecutionDeclaration.parse(payload.get("skillExecution"));
             AgentRegisterDTO request = new AgentRegisterDTO();
             request.setAgentId(agentId);
             request.setName(asString(payload.get("name")));
@@ -914,6 +920,12 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                             sessionClientId(session), sessionJiacn(session), result.getAgentId()),
                     payload.get("nativeTextFileExecution"),
                     () -> typedDeliberationSessionCurrent(session, result.getAgentId()));
+            if (skillExecutionSessions != null) skillExecutionSessions.register(session.getId(),
+                    new cn.jia.agent.service.SkillCapabilityLookup.Scope(proof.scope().tenantId(),
+                            proof.scope().clientId(), proof.scope().ownerJiacn(), proof.scope().agentId()),
+                    new cn.jia.agent.service.AgentManagedSessionLookup.SessionFence(proof.installationId(),
+                            proof.hostId(), proof.scope().runtimeInstanceId(), proof.sessionGeneration()),
+                    skillExecution, () -> typedDeliberationSessionCurrent(session, result.getAgentId()));
             signalRegisteredReconnect(session, result.getAgentId());
             sendCapabilityIndex(session, payload);
         } catch (Exception e) {
@@ -1479,6 +1491,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
     private void removeTypedInspectionSession(String sessionId) {
         if (typedInspectionSessions != null) typedInspectionSessions.remove(sessionId);
         if (nativeTextFileSessions != null) nativeTextFileSessions.remove(sessionId);
+        if (skillExecutionSessions != null) skillExecutionSessions.remove(sessionId);
     }
 
     private boolean typedDeliberationSessionCurrent(WebSocketSession session, String agentId) {
