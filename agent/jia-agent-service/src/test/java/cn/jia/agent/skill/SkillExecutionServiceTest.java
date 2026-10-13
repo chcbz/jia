@@ -86,7 +86,7 @@ public class SkillExecutionServiceTest {
     }
     SkillExecutionService.EffectStart start(){return new SkillExecutionService.EffectStart("exec",skill.getSnapshotSha256(),fence,HASH,null);}
     SkillExecutionService.EffectResult effect(String status,String id,String result){return new SkillExecutionService.EffectResult("exec",skill.getSnapshotSha256(),fence,HASH,null,status,id,result);}
-    SkillExecutionService.ResultCommit dataResult(){return new SkillExecutionService.ResultCommit(fence,skill.getSnapshotSha256(),Map.of("answer","识别结果"),List.of());}
+    SkillExecutionService.ResultCommit dataResult(){return new SkillExecutionService.ResultCommit(fence,skill.getSnapshotSha256(),Map.of("answer","识别结果"),List.of(),List.of());}
     @Test void effectIsNewOnceAndReplayDoesNotRecheckProviderOrInstallation() {
         assertEquals("NEW",service.startEffect(runtime,"task","run","generate",start()).disposition());
         clearInvocations(installed);assertEquals("RECORDED",service.startEffect(runtime,"task","run","generate",start()).disposition());verifyNoInteractions(installed);
@@ -111,9 +111,9 @@ public class SkillExecutionServiceTest {
         service.startEffect(runtime,"task","run","generate",start());service.recordEffect(runtime,"task","run","generate",effect("SUCCEEDED","request",HASH));
         var first=service.commitResult(runtime,"task","run","manifest",dataResult());clearInvocations(storage,installed);
         assertEquals(first,service.commitResult(runtime,"task","run","manifest",dataResult()));verifyNoInteractions(storage,installed);
-        assertThrows(Failure.class,()->service.commitResult(runtime,"task","run","manifest",new SkillExecutionService.ResultCommit(fence,skill.getSnapshotSha256(),Map.of("answer","changed"),List.of())));
+        assertThrows(Failure.class,()->service.commitResult(runtime,"task","run","manifest",new SkillExecutionService.ResultCommit(fence,skill.getSnapshotSha256(),Map.of("answer","changed"),List.of(),List.of())));
     }
-    @Test void structuredDataSchemaIsRealNotMarker(){service.startEffect(runtime,"task","run","generate",start());service.recordEffect(runtime,"task","run","generate",effect("SUCCEEDED","request",HASH));assertThrows(RuntimeException.class,()->service.commitResult(runtime,"task","run","manifest",new SkillExecutionService.ResultCommit(fence,skill.getSnapshotSha256(),Map.of("answer",7),List.of())));}
+    @Test void structuredDataSchemaIsRealNotMarker(){service.startEffect(runtime,"task","run","generate",start());service.recordEffect(runtime,"task","run","generate",effect("SUCCEEDED","request",HASH));assertThrows(RuntimeException.class,()->service.commitResult(runtime,"task","run","manifest",new SkillExecutionService.ResultCommit(fence,skill.getSnapshotSha256(),Map.of("answer",7),List.of(),List.of())));}
     @Test void failedSourceSnapshotAndWrongSkillDigestReject(){skill.setSnapshotSha256("b".repeat(64));assertThrows(Failure.class,()->service.startEffect(runtime,"task","run","generate",start()));}
     @Test void projectionRequiresCommittedMacroState(){assertThrows(Failure.class,()->service.markProjected(owner,"exec",HASH));}
     @Test void resultReadNeedsCurrentConversationAcl(){when(conversations.requireAccessible(any(),eq("42"))).thenReturn(null);assertThrows(Failure.class,()->service.result(owner,"exec"));}
@@ -126,4 +126,33 @@ public class SkillExecutionServiceTest {
     }
     @Test void mismatchedGrantSnapshotCannotCreate(){var snapshot=snapshot();snapshot.put("taskGrant",Map.of("id","other","version",1,"assignmentRevision",7));assertThrows(Failure.class,()->service.create(owner,new SkillExecutionService.Create("action","task","42",1,"agent","grant",1,7,snapshot)));verify(pwe,never()).insert(any());}
     @Test void malformedParametersCannotCreate(){var snapshot=snapshot();snapshot.put("parameters",Map.of("unknown",true));assertThrows(RuntimeException.class,()->service.create(owner,new SkillExecutionService.Create("action","task","42",1,"agent","grant",1,7,snapshot)));verify(pwe,never()).insert(any());}
+    void replaceSnapshot(Map<String,Object> snapshot) {skill.setSnapshotJson(json(snapshot)).setSnapshotSha256(sha(json(snapshot)));}
+    @Test void resultStoresExactCarrierEvidenceAndRejectsMissingReceipt() {
+        var snapshot=snapshot();snapshot.put("inputs",List.of(Map.of("inputRef","input_1","sha256",HASH)));replaceSnapshot(snapshot);
+        assertThrows(Failure.class,()->service.commitResult(runtime,"task","run","manifest",dataResult()));
+        var receipt=new SkillExecutionService.InputReceipt("input_1",HASH,"native-image","DELIVERED");
+        var result=service.commitResult(runtime,"task","run","manifest",new SkillExecutionService.ResultCommit(fence,skill.getSnapshotSha256(),Map.of("answer","bird"),List.of(),List.of(receipt)));
+        assertEquals("RESULT_COMMITTED",result.state());assertTrue(skill.getResultManifestJson().contains("native-image"));
+    }
+    @Test void wrongReceiptHashCarrierAndDuplicatesReject() {
+        var snapshot=snapshot();snapshot.put("inputs",List.of(Map.of("inputRef","input_1","sha256",HASH)));replaceSnapshot(snapshot);
+        for(var receipt:List.of(new SkillExecutionService.InputReceipt("input_1","b".repeat(64),"native-image","DELIVERED"),new SkillExecutionService.InputReceipt("input_1",HASH,"model-said-so","DELIVERED"),new SkillExecutionService.InputReceipt("input_1",HASH,"native-image","CLAIMED")))
+            assertThrows(Failure.class,()->service.commitResult(runtime,"task","run","manifest",new SkillExecutionService.ResultCommit(fence,skill.getSnapshotSha256(),Map.of("answer","bird"),List.of(),List.of(receipt))));
+        verify(pwe,never()).update(any());
+    }
+    @Test void scalarAndArrayDataFollowDeclaredSchema() {
+        outputs.put("dataSchema",Map.of("$schema",SkillManifestCodec.DIALECT,"type","array","items",Map.of("type","string")));replaceSnapshot(snapshot());
+        var result=service.commitResult(runtime,"task","run","manifest",new SkillExecutionService.ResultCommit(fence,skill.getSnapshotSha256(),List.of("bird"),List.of(),List.of()));
+        assertEquals("RESULT_COMMITTED",result.state());assertTrue(skill.getResultManifestJson().contains("[\"bird\"]"));
+    }
+    @Test void unknownEffectFailureDoesNotInventDefinitiveFailure() {
+        service.startEffect(runtime,"task","run","generate",start());
+        var result=service.failConversation(runtime,"task","run",fence,"AGENT_DELIVERY_FAILED");
+        assertEquals("QUEUED",result.state());assertEquals("RESULT_UNKNOWN",skill.getPhase());assertEquals("SKILL_EFFECT_RESULT_UNKNOWN",skill.getLastErrorCode());
+    }
+    @Test void definitiveFailureUpdatesBothRows() {
+        service.startEffect(runtime,"task","run","generate",start());service.recordEffect(runtime,"task","run","generate",effect("FAILED","request",null));
+        var result=service.failConversation(runtime,"task","run",fence,"AGENT_DELIVERY_FAILED");assertEquals("FAILED",result.state());assertEquals("FAILED",skill.getPhase());
+    }
+
 }

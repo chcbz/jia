@@ -68,7 +68,7 @@ public final class ControlledImageFollowupV3SchemaInitializer implements Initial
             "]{32}$\\' as char charset binary)) and regexp_like(`runtime_input_snapshot_digest`,cast(_utf8mb4\\'^[0-9a-f]{64}$\\" +
             "' as char charset binary)))) and (`output_content_mime_type` = _utf8mb4\\'image/png\\')))";
 
-    private static final String EXECUTION_PROTOCOL_CATALOG_CHECK =
+    static final String EXECUTION_PROTOCOL_CATALOG_CHECK =
             "(((`execution_protocol_version` = 1) and (`controlled_consent_id` is null) and (`operation_grant_id` is null) an" +
             "d (`runtime_input_snapshot_digest` is null)) or ((`execution_protocol_version` = 2) and regexp_like(`controlled_" +
             "consent_id`,cast(_utf8mb4\\'^consent_[0-9a-f]{32}$\\' as char charset binary)) and (`operation_grant_id` is null) " +
@@ -394,7 +394,9 @@ public final class ControlledImageFollowupV3SchemaInitializer implements Initial
                 throw new IllegalStateException("Follow-up CHECK enforcement drift: "
                         + table + "." + entry.getKey());
             }
-            if (!canonicalCheck(entry.getValue()).equals(canonicalCheck(found.clause()))) {
+            if (!canonicalCheck(entry.getValue()).equals(canonicalCheck(found.clause()))
+                    && !(table.equals(EXECUTION_TABLE) && entry.getKey().equals("chk_pwex_execution_protocol")
+                         && canonicalCheck(SkillExecutionSchemaInitializer.protocolCatalogCheck()).equals(canonicalCheck(found.clause())))) {
                 throw new IllegalStateException("Follow-up CHECK definition drift: "
                         + table + "." + entry.getKey());
             }
@@ -559,7 +561,7 @@ public final class ControlledImageFollowupV3SchemaInitializer implements Initial
                 + "AND output_content_mime_type='image/png')";
     }
 
-    private static String executionProtocolCheckDdl() {
+    static String executionProtocolCheckDdl() {
         return "(execution_protocol_version=1 AND controlled_consent_id IS NULL "
                 + "AND operation_grant_id IS NULL AND runtime_input_snapshot_digest IS NULL) OR "
                 + "(execution_protocol_version=2 "

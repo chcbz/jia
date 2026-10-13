@@ -30,7 +30,9 @@ public interface SkillExecutionService {
     record Resume(String executionId,String snapshotDigest) { }
     record ResumeReceipt(ConversationLease lease,String phase,List<String> allowedWork,Map<String,Object> resultManifest) { }
     ResumeReceipt resume(RuntimeScope scope,String taskId,String runId,Resume command);
-    record ResultCommit(ConversationFence fence,String snapshotDigest,Map<String,Object> data,List<OutputDeclaration> artifacts) { }
+    record InputReceipt(String inputRef,String sha256,String carrier,String delivery) { }
+    record ResultCommit(ConversationFence fence,String snapshotDigest,Object data,List<OutputDeclaration> artifacts,
+            List<InputReceipt> inputReceipts) { }
     record ResultReceipt(String manifestId,String state,String phase,String resultDigest) { }
     ResultReceipt commitResult(RuntimeScope scope,String taskId,String runId,String manifestId,ResultCommit command);
     record ResultView(String executionId,String state,String phase,String lastErrorCode,String snapshotDigest,

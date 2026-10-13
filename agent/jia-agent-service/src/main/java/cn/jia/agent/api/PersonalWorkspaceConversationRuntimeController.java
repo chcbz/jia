@@ -154,7 +154,7 @@ public final class PersonalWorkspaceConversationRuntimeController {
             @PathVariable String taskId,@PathVariable String runId,@RequestBody FenceRequest fence,
             HttpServletRequest request,Authentication authentication) {
         noQuery(request);
-        var inputs=skills().inputs(scope(authentication),taskId,runId,fence(fence));
+        var inputs=skillCall(()->skills().inputs(scope(authentication),taskId,runId,fence(fence)));
         return ok(runtimeAuthentication.withNativeFence(authentication,()->inputs));
     }
 
@@ -164,8 +164,7 @@ public final class PersonalWorkspaceConversationRuntimeController {
             @PathVariable String inputRef,@RequestBody FenceRequest fence,
             HttpServletRequest request,Authentication authentication) {
         noQuery(request);
-        var loaded=executions.conversationInputContent(scope(authentication),taskId,runId,
-                fence(fence),inputRef);
+        var loaded=skillCall(()->skills().inputContent(scope(authentication),taskId,runId,inputRef,fence(fence)));
         var content=runtimeAuthentication.withNativeFence(authentication,()->loaded);
         if (content==null || content.bytes()==null) throw new BadRequest();
         return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL,CACHE_CONTROL)
@@ -301,7 +300,7 @@ public final class PersonalWorkspaceConversationRuntimeController {
     @PostMapping(value="/{taskId}/runs/{runId}/conversation/result-commits/{manifestId}",consumes=MediaType.APPLICATION_JSON_VALUE,produces=MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<cn.jia.agent.service.SkillExecutionService.ResultReceipt> skillResultCommit(
             @PathVariable String taskId,@PathVariable String runId,@PathVariable String manifestId,@RequestBody String raw,HttpServletRequest request,Authentication authentication) {
-        noQuery(request);var command=skillBody(raw,Set.of("fence","snapshotDigest","data","artifacts"),cn.jia.agent.service.SkillExecutionService.ResultCommit.class);
+        noQuery(request);var command=skillBody(raw,Set.of("fence","snapshotDigest","data","artifacts","inputReceipts"),cn.jia.agent.service.SkillExecutionService.ResultCommit.class);
         return ok(skillCall(()->skills().commitResult(scope(authentication),taskId,runId,manifestId,command)));
     }
 
