@@ -43,6 +43,19 @@ public final class SkillInstallResultService {
         var visible=app.order(tenant,client,hint.getOrderId());
         require(visible!=null,403,"SKILL_RESULT_REJECTED");
         byte[] hash=resultHash(body);
+        // Immutable receipt replay does not depend on a package still being resident/readable.
+        var existing=app.result(tenant,client,messageId);
+        if(existing!=null) return authentication.withFence(proof,false,()-> {
+            var actor=new HostingRentHttp.Actor(visible.getBuyerId(),tenant,client,proof.scope().ownerJiacn());
+            require(skills.available(actor),503,"SKILL_MARKETPLACE_DISABLED");
+            requireBinding(app.deliveryBinding(tenant,client,installId),registeredAgent,proof);
+            same(existing.getRequestHash(),hash);require(installId.equals(existing.getInstallationId()),409,"SKILL_RESULT_CONFLICT");
+            return receipt(body);
+        });
+        // Authority comes from exact-scope DB approval + immutable package bytes, never agent claims.
+        var successPackage="SUCCEEDED".equals(body.get("status"))
+                ?packages.getObject().prepare(market.selectApprovedProductVersion(tenant,client,hint.getProductVersionId())):null;
+        var expectedManifest=successPackage==null?null:packages.getObject().manifest(successPackage);
         return authentication.withFence(proof,false,()->tx.execute(s->{
             String ownerJiacn=proof.scope().ownerJiacn();
             var actor=new HostingRentHttp.Actor(visible.getBuyerId(),tenant,client,ownerJiacn);
@@ -70,6 +83,11 @@ public final class SkillInstallResultService {
             boolean refund=!success && failure!=null && SAFE_FAILURES.contains(failure);
             long now=System.currentTimeMillis(); long installedAt=0;
             if(success) {
+                SkillPackages.revalidate(market.selectApprovedProductVersionForUpdate(tenant,client,i.getProductVersionId()),successPackage);
+                require(successPackage.product().productVersionId().equals(i.getProductVersionId())
+                        && successPackage.product().packageSize()==i.getPackageSize()
+                        && Arrays.equals(successPackage.product().packageSha256(),i.getPackageSha256()),409,"SKILL_RESULT_CONFLICT");
+                validateManifestBinding(body,expectedManifest);
                 require(failure==null,409,"SKILL_RESULT_CONFLICT");
                 installedAt=HostingRentHttp.positive(text(body,"installedAt"));
                 require(installedAt<=Math.addExact(now,300000L) && installedAt>=Math.max(1,order.getHeldAt()-300000L),409,"SKILL_RESULT_CONFLICT");
@@ -148,6 +166,10 @@ public final class SkillInstallResultService {
                 && ("SUCCEEDED".equals(b.get("status")) || "FAILED".equals(b.get("status"))),409,"SKILL_RESULT_CONFLICT");
         for(String field:List.of("agentId","sourceAgentId"))
             require(!b.containsKey(field) || i.getTargetAgentId().equals(b.get(field)),403,"SKILL_RESULT_REJECTED");
+    }
+    static void validateManifestBinding(Map<String,Object> body,SkillManifestCodec.Manifest expected) {
+        require(expected==null?!body.containsKey("manifestSha256")
+                :expected.manifestSha256().equals(body.get("manifestSha256")),409,"SKILL_MANIFEST_BINDING_MISMATCH");
     }
     static byte[] resultHash(Map<String,Object> body) {
         Map<String,String> values=new TreeMap<>();

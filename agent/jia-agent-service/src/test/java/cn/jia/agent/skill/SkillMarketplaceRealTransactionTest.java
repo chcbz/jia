@@ -87,6 +87,8 @@ class SkillMarketplaceRealTransactionTest {
     private EconomySkillApplicationMapper app;
     private SkillMarketplaceService service;
     private SkillInstallResultService results;
+    private AgentCommandTransportDao commandsForResults;
+    private org.springframework.transaction.PlatformTransactionManager transactionManagerForResults;
     private AgentRuntimeAuthenticationService authentication;
     private SkillAgentVersions versions;
     private AgentRuntimeEntity runtime;
@@ -161,6 +163,7 @@ class SkillMarketplaceRealTransactionTest {
         when(sessions.isReady(eq(ACTOR.tenantId()),eq(ACTOR.clientId()),eq(AGENT),any())).thenReturn(true);
         service=new SkillMarketplaceService(market,app,ledger,posting,gate,versions,runtimes,provider(writer),provider(transport),provider(packages),provider(authentication),provider(sessions),manager);
         dispatch=new SkillInstallDispatchService(app,market,service,versions,authentication,commands,provider(sessions),manager);
+        commandsForResults=commands;transactionManagerForResults=manager;
         results=new SkillInstallResultService(market,app,commands,service,versions,authentication,provider(packages),manager);
         for(var p:new PlatformSkillPackageCatalog().products()) {
             market.insertProduct(new SkillProductEntity().setProductId(p.productId()).setSellerType("SYSTEM").setSellerId("SKILL_STORE")
@@ -264,11 +267,19 @@ class SkillMarketplaceRealTransactionTest {
                 "SELECT COUNT(*) FROM agent_command_operation_audit WHERE operation_id='audit-op-1'",Integer.class));
     }
     @Test void dynamicallyStoredApprovedPackageUsesRealPurchaseAndInstallTransactions() throws Exception {
+        byte[] manifest="""
+                {"schemaVersion":1,"skillKey":"pdf-export","skillVersion":"1.0.0","title":"PDF","description":"export",
+                 "runner":"native-model","entrypoint":"pdf.export",
+                 "parametersSchema":{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object"},
+                 "inputs":{"minItems":0,"maxItems":0,"acceptedMimeTypes":[]},
+                 "outputs":{"dataSchema":null,"mimeTypes":["application/pdf"],"multiple":false,"artifactsRequired":true},
+                 "requirements":{}}
+                """.getBytes(StandardCharsets.UTF_8);
         var buffer=new java.io.ByteArrayOutputStream();
         try(var zip=new java.util.zip.ZipOutputStream(buffer)) {
             zip.putNextEntry(new java.util.zip.ZipEntry("SKILL.md"));
-            zip.write("---\nname: pdf-export\ndescription: export pdf\n---\nExport a PDF.\n".getBytes(StandardCharsets.UTF_8));
-            zip.closeEntry();
+            zip.write("---\nname: pdf-export\ndescription: export pdf\nmetadata:\n  version: \"1.0.0\"\n---\nExport a PDF.\n".getBytes(StandardCharsets.UTF_8));
+            zip.closeEntry();zip.putNextEntry(new java.util.zip.ZipEntry("manifest.json"));zip.write(manifest);zip.closeEntry();
         }
         byte[] packageBytes=buffer.toByteArray();new SkillPackageStore(packageRoot).publish(packageBytes);
         var seed=new PlatformSkillPackageCatalog().products().getFirst();
@@ -287,7 +298,18 @@ class SkillMarketplaceRealTransactionTest {
         assertNull(market.selectApprovedProductVersion(ACTOR.tenantId(),"other-client","spv_dynamic_pdf_1"));
         jdbc.update("UPDATE economy_skill_product SET current_product_version_id='a-later-version',version=3 WHERE product_id='sp_dynamic_pdf'");
         assertArrayEquals(packageBytes,results.packageBytes(proof(),i.getInstallationId()));
-        var success=result(i,"SUCCEEDED",null);results.accept(proof(),success);
+        var success=result(i,"SUCCEEDED",null);
+        assertEquals("SKILL_MANIFEST_BINDING_MISMATCH",assertThrows(SkillMarketplaceException.class,()->results.accept(proof(),success)).code());
+        assertEquals(0,count("economy_skill_result_receipt"));assertEquals("INSTALLING",installation().getStatus());
+        success.put("manifestSha256",HexFormat.of().formatHex(SkillPackageStore.sha256(manifest)));
+        results.accept(proof(),success);assertEquals(1,count("economy_skill_result_receipt"));
+        var tampered=new LinkedHashMap<>(success);tampered.put("manifestSha256","0".repeat(64));
+        assertThrows(SkillMarketplaceException.class,()->results.accept(proof(),tampered));
+        // New service/process with cold package cache still replays the immutable receipt after object retirement.
+        java.nio.file.Files.delete(packageRoot.resolve(HexFormat.of().formatHex(SkillPackageStore.sha256(packageBytes))+".zip"));
+        var cold=new SkillInstallResultService(market,app,commandsForResults,service,versions,authentication,
+                provider(new SkillPackages(packageRoot)),transactionManagerForResults);
+        assertEquals(results.accept(proof(),success),cold.accept(proof(),success));
         assertEquals("ACTIVE",service.order(ACTOR,i.getOrderId()).get("status"));
         assertEquals(receipt,service.purchase(ACTOR,idem,body,false));assertEquals(100000000L,wallet());
     }

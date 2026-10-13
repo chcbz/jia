@@ -16,6 +16,8 @@ public final class SkillPackages {
     private final PlatformSkillPackageCatalog seed = new PlatformSkillPackageCatalog();
     private final SkillPackageStore store;
     private final Map<String,byte[]> bytesByDigest = new ConcurrentHashMap<>();
+    private final Map<String,Optional<SkillManifestCodec.Manifest>> manifestsByDigest = new ConcurrentHashMap<>();
+    private final SkillManifestCodec manifestCodec = new SkillManifestCodec();
     public SkillPackages() { this(Path.of("/home/isp/state/cyf-skill-packages")); }
     public SkillPackages(Path root) { store = new SkillPackageStore(root); }
     public PlatformSkillPackage prepare(SkillProductVersionEntity approved) {
@@ -42,7 +44,20 @@ public final class SkillPackages {
         var metadata=new PlatformSkillProduct(approved.getProductId(),approved.getProductVersionId(),approved.getSkillKey(),
                 approved.getSkillVersion(),approved.getSkillKey(),"",approved.getPriceMicro(),approved.getDeploymentRestriction(),
                 null,approved.getPackageSha256(),approved.getPackageSize(),approved.getApprovedPermissionsManifest(),approved.getApprovedPermissionsSha256());
-        return new PlatformSkillPackage(metadata,bytes);
+        var prepared = new PlatformSkillPackage(metadata,bytes);
+        manifest(prepared); // archive/schema projection happens before any transaction/fence
+        return prepared;
+    }
+    public SkillManifestCodec.Manifest manifest(PlatformSkillPackage prepared) {
+        require(!TransactionSynchronizationManager.isActualTransactionActive(),503,"SKILL_PACKAGE_PREPARE_IN_TRANSACTION");
+        String digest=HexFormat.of().formatHex(prepared.product().packageSha256());
+        var descriptor=manifestsByDigest.computeIfAbsent(digest,key->Optional.ofNullable(SkillPackageDescriptor.read(prepared,manifestCodec))).orElse(null);
+        if(descriptor!=null) {
+            var document=descriptor.document();
+            require(prepared.product().skillKey().equals(document.path("skillKey").asText())
+                    && prepared.product().skillVersion().equals(document.path("skillVersion").asText()),400,"SKILL_IDENTITY_MISMATCH");
+        }
+        return descriptor;
     }
     public static void revalidate(SkillProductVersionEntity approved,PlatformSkillPackage prepared) {
         require(approved!=null && prepared!=null && "APPROVED".equals(approved.getReviewStatus()),503,"SKILL_PACKAGE_UNAVAILABLE");

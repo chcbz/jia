@@ -16,6 +16,8 @@ public interface EconomySkillApplicationMapper {
     SkillAgentVersionEntity lockVersion(@Param("tenantId") String t,@Param("clientId") String c,@Param("agentId") String a);
     @Update("UPDATE economy_skill_agent_version SET version=version+1,source_hash=#{hash} WHERE " + S + " AND agent_id=#{agentId} AND OCTET_LENGTH(agent_id)=OCTET_LENGTH(#{agentId}) AND version=#{version} AND version<9223372036854775807")
     int advanceVersion(@Param("tenantId") String t,@Param("clientId") String c,@Param("agentId") String a,@Param("hash") byte[] hash,@Param("version") long v);
+    @Select("SELECT installation_id,request_hash,outcome FROM economy_skill_result_receipt WHERE " + S + " AND message_id=#{messageId} AND OCTET_LENGTH(message_id)=OCTET_LENGTH(#{messageId})")
+    SkillResultReceiptEntity result(@Param("tenantId") String t,@Param("clientId") String c,@Param("messageId") String m);
     @Select("SELECT installation_id,request_hash,outcome FROM economy_skill_result_receipt WHERE " + S + " AND message_id=#{messageId} AND OCTET_LENGTH(message_id)=OCTET_LENGTH(#{messageId}) FOR UPDATE")
     SkillResultReceiptEntity lockResult(@Param("tenantId") String t,@Param("clientId") String c,@Param("messageId") String m);
     @Insert("INSERT INTO economy_skill_result_receipt(tenant_id,client_id,message_id,installation_id,request_hash,outcome,create_time) VALUES(#{tenantId},#{clientId},#{messageId},#{installationId},#{hash},#{outcome},#{now})")
