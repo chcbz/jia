@@ -1,4 +1,6 @@
 dependencies {
+    // action-v4 reuses the same standard codec/dialect as verified skill packages.
+    implementation 'com.networknt:json-schema-validator:1.5.9'
 	api project(':common:jia-common-core')
 	implementation project(':common:jia-common-service')
 	api project(':chat:jia-chat-api')
