@@ -61,7 +61,7 @@ public final class ChatSkillResultController {
     @ExceptionHandler({ChatDeliberationException.class,PersonalWorkspaceExecutionService.Failure.class})
     public ResponseEntity<JsonResult<Void>> failure(RuntimeException error) {
         int status=error instanceof ChatDeliberationException e&&e.reason()==ChatDeliberationException.Reason.PERSISTENCE_ERROR?503:
-                error instanceof PersonalWorkspaceExecutionService.Failure f&&f.reason()!=PersonalWorkspaceExecutionService.Reason.NOT_FOUND?503:404;
+                error instanceof PersonalWorkspaceExecutionService.Failure f&&f.getReason()!=PersonalWorkspaceExecutionService.Reason.NOT_FOUND?503:404;
         return ResponseEntity.status(status).cacheControl(CacheControl.noStore()).body(JsonResult.failure("SKILL_RESULT_"+status,status==404?"Result is unavailable":"Result source unavailable"));
     }
     private static boolean id(String s){return s!=null&&s.matches("[A-Za-z0-9][A-Za-z0-9._:-]{0,99}");}
