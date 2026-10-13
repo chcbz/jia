@@ -36,10 +36,9 @@ public final class AgentRuntimeAuthenticationFilter extends OncePerRequestFilter
         // No matrix parameters, encoded separators, dot-segments or alternate dispatch paths.
         String id = "[A-Za-z0-9][A-Za-z0-9._:-]{0,99}";
 
-        return "GET".equals(request.getMethod()) && path.matches("/internal/agent/platform-skills/installations/"+id+"/package")
-                || "POST".equals(request.getMethod()) && path.matches("/internal/agent/platform-skills/installations/"+id+"/result")
-
-        return ("GET".equals(request.getMethod()) || "POST".equals(request.getMethod()))
+        return "GET".equals(request.getMethod()) && path.matches("/internal/agent/platform-skills/installations/" + id + "/package")
+                || "POST".equals(request.getMethod()) && path.matches("/internal/agent/platform-skills/installations/" + id + "/result")
+                || ("GET".equals(request.getMethod()) || "POST".equals(request.getMethod()))
                 && path.matches("/internal/agent/tasks/" + id + "/work-items/" + id + "/reassignments/" + id
                 + "/commands/" + id + "/result-commit")
                 || "GET".equals(request.getMethod()) && path.matches("/internal/agent/tasks/" + id
