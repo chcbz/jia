@@ -3102,7 +3102,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         var envelope=new LinkedHashMap<String,Object>();envelope.put("schemaVersion",1);envelope.put("data",data);
         envelope.put("artifacts",artifacts.stream().map(a->Map.of("outputId",a.outputId(),"sha256",a.sha256(),"byteLength",a.byteLength())).toList());
         envelope.put("inputReceipts",command.inputReceipts().stream().map(r->{
-            if(r==null||r.inputRef()==null||r.carrier()==null||!sha(r.sha256())||!Set.of("native-text","native-image","native-audio","parsed-text","provider-image").contains(r.carrier())||!"DELIVERED".equals(r.delivery()))throw failure(Reason.BAD_REQUEST);
+            if(r==null||r.inputRef()==null||r.carrier()==null||!sha(r.sha256())||!Set.of("native-text","native-image","native-audio","parsed-text","provider-image","local-file").contains(r.carrier())||!"DELIVERED".equals(r.delivery()))throw failure(Reason.BAD_REQUEST);
             return Map.of("inputRef",r.inputRef(),"sha256",r.sha256(),"carrier",r.carrier(),"delivery",r.delivery());
         }).toList());
         String digest=plainSha(skillJson(envelope));envelope.put("resultDigest",digest);envelope.put("manifestId",manifestId);
@@ -3119,6 +3119,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
             var frozenInputs=skillInputs(snapshot);var receiptRefs=new LinkedHashSet<String>();
             if(frozenInputs.size()!=command.inputReceipts().size())throw failure(Reason.BAD_REQUEST);
             for(var receipt:command.inputReceipts()) {
+                if("local-file".equals(receipt.carrier())&&!"local-script".equals(skillString(skillObject(snapshot.get("skill")),"runner")))throw failure(Reason.BAD_REQUEST);
                 if(!receiptRefs.add(receipt.inputRef())||frozenInputs.stream().noneMatch(i->same(skillString(i,"inputRef"),receipt.inputRef())&&same(skillString(i,"sha256"),receipt.sha256())))throw failure(Reason.BAD_REQUEST);
             }
             if(Boolean.TRUE.equals(spec.get("artifactsRequired"))&&artifacts.isEmpty()||!Boolean.TRUE.equals(spec.get("multiple"))&&artifacts.size()>1)throw failure(Reason.BAD_REQUEST);

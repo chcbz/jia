@@ -170,4 +170,9 @@ public class SkillExecutionServiceTest {
         assertEquals("RECORDED",service.startEffect(runtime,"task","run","generate",start()).disposition());
         assertTrue(observed.isEmpty());
     }
+    @Test void localFileReceiptNeverClaimsNativeCarrierDelivery() {
+        var input=new LinkedHashMap<String,Object>();input.put("inputRef","source");input.put("sourceKind","TASK_LINKED_WORKSPACE_VERSION");input.put("sha256",HASH);input.put("byteLength",1);input.put("contentMimeType","image/png");input.put("sourceIdentity",Map.of("fileId","file","version",1,"purpose","REFERENCE"));
+        var snap=snapshot();snap.put("inputs",List.of(input));snap.put("sourceSnapshotDigest",sha(json(List.of(input))));skill.setSnapshotJson(json(snap)).setSnapshotSha256(sha(json(snap)));
+        assertThrows(Failure.class,()->service.commitResult(runtime,"task","run","manifest",new SkillExecutionService.ResultCommit(fence,skill.getSnapshotSha256(),Map.of("answer","bird"),List.of(),List.of(new SkillExecutionService.InputReceipt("source",HASH,"local-file","DELIVERED")))));
+    }
 }
