@@ -46,6 +46,10 @@ public interface AgentTaskExecutionGrantService {
     Admission resolveAndAdmit(Scope scope, String taskId, long expectedAssignmentRevision,
             String targetAgentId, String operation, boolean paidExecution);
 
+    /** Trusted owner action upgrades only the current deliberation baseline, never an old action key.
+     * Retains requirement/assignment epoch; no cost authorization is inherited. */
+    Admission resolveSkillBaseline(Scope scope,String taskId,long assignmentRevision,String targetAgentId);
+
     /** Current owner-scoped metadata tuple for constructing a follow-up preview. Grants no operation. */
     FollowupContext currentFollowupContext(Scope scope,String taskId,String targetAgentId);
     record FollowupContext(String taskId,String targetAgentId,long taskVersion,

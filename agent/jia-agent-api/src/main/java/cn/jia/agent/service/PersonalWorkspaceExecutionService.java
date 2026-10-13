@@ -36,7 +36,7 @@ public interface PersonalWorkspaceExecutionService {
     /** Native runtime inbox; intentionally separate from legacy unfenced commands. */
     List<ConversationRuntimeCommand> runtimeConversationCommands(RuntimeScope scope, int limit);
     List<? extends ConversationCommandView> runtimeConversationCommandViews(RuntimeScope scope,int limit);
-    sealed interface ConversationCommandView permits ConversationRuntimeCommand,ControlledConversationRuntimeCommand,ControlledConversationRuntimeCommandV3 { }
+    sealed interface ConversationCommandView permits ConversationRuntimeCommand,ControlledConversationRuntimeCommand,ControlledConversationRuntimeCommandV3,SkillExecutionService.Command { }
     record ConversationRuntimeCommand(int schemaVersion, String taskId, String runId,
             String conversationId, String commandId, String messageId, String instruction,
             String outputContentMimeType, String outputId) implements ConversationCommandView { }
