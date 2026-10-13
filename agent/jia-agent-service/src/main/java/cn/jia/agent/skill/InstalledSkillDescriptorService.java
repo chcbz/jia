@@ -64,6 +64,7 @@ public final class InstalledSkillDescriptorService implements InstalledSkillDesc
                 || !exact(s,o.getTenantId(),o.getClientId(),o.getTargetAgentId())
                 || !Objects.equals(s.tenantId(),v.getTenantId())||!Objects.equals(s.clientId(),v.getClientId())
                 || !"SUCCEEDED".equals(i.getStatus())||!"ACTIVE".equals(o.getStatus())||!"APPROVED".equals(v.getReviewStatus())
+                || e.getActivatedAt()==null||e.getActivatedAt()<1||!Objects.equals(e.getActivatedAt(),i.getInstalledAt())
                 || !Objects.equals(e.getInstallationId(),i.getInstallationId())
                 || !Objects.equals(e.getOrderId(),i.getOrderId())||!Objects.equals(e.getOrderId(),o.getOrderId())
                 || !Objects.equals(e.getProductVersionId(),i.getProductVersionId())

@@ -27,10 +27,10 @@ class InstalledSkillDescriptorServiceTest {
         e=new SkillEntitlementEntity().setTenantId("0").setClientId("client").setTargetAgentId("agent")
                 .setSkillKey("text-file").setSkillVersion("1.0.0").setEntitlementId("ent").setInstallationId("ins")
                 .setOrderId("ord").setProductVersionId("pv").setStatus("ACTIVE").setPermissionGrantVersion(1L)
-                .setApprovedPermissionsManifest(permissions).setApprovedPermissionsSha256(hash).setVersion(2L);
+                .setApprovedPermissionsManifest(permissions).setApprovedPermissionsSha256(hash).setVersion(2L).setActivatedAt(1L);
         i=new SkillInstallationEntity().setTenantId("0").setClientId("client").setTargetAgentId("agent")
                 .setInstallationId("ins").setOrderId("ord").setProductVersionId("pv").setStatus("SUCCEEDED")
-                .setSkillKey("text-file").setSkillVersion("1.0.0").setPackageSha256(hash).setPackageSize(100L);
+                .setSkillKey("text-file").setSkillVersion("1.0.0").setPackageSha256(hash).setPackageSize(100L).setInstalledAt(1L);
         o=new SkillOrderEntity().setTenantId("0").setClientId("client").setTargetAgentId("agent").setOrderId("ord")
                 .setProductVersionId("pv").setStatus("ACTIVE").setPermissionGrantVersion(1L)
                 .setApprovedPermissionsManifest(permissions).setApprovedPermissionsSha256(hash);
@@ -59,6 +59,22 @@ class InstalledSkillDescriptorServiceTest {
         o.setPermissionGrantVersion(2L);assertEquals("SKILL_INSTALLATION_EVIDENCE_INVALID",read().reasonCode());
         o.setPermissionGrantVersion(1L);i.setPackageSize(101L);assertFalse(read().verified());
         i.setPackageSize(100L);v.setSkillKey("other");assertFalse(read().verified());verifyNoInteractions(packages);
+    }
+    @Test void activationMustReferToSameSuccessfulInstallationEpoch() {
+        i.setInstalledAt(2L);assertEquals("SKILL_INSTALLATION_EVIDENCE_INVALID",read().reasonCode());
+        i.setInstalledAt(1L);e.setActivatedAt(null);assertFalse(read().verified());verifyNoInteractions(packages);
+    }
+    @Test void multipleVerifiedDescriptorsUseOnlyOneFinalEntitlementRead() {
+        var store=mock(SkillPackages.class);when(packages.getIfUnique()).thenReturn(store);
+        var node=new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode();node.put("runner","native-model");
+        when(store.manifest(any())).thenReturn(new SkillManifestCodec.Manifest(node,"a".repeat(64)));
+        var second=new SkillEntitlementEntity().setTenantId("0").setClientId("client").setTargetAgentId("agent")
+                .setSkillKey("text-file").setSkillVersion("1.0.0").setEntitlementId("ent-2").setInstallationId("ins")
+                .setOrderId("ord").setProductVersionId("pv").setStatus("ACTIVE").setPermissionGrantVersion(1L)
+                .setApprovedPermissionsManifest("[]").setApprovedPermissionsSha256(new byte[32]).setVersion(2L).setActivatedAt(1L);
+        when(market.selectEntitlementsByAgent("0","client","agent")).thenReturn(List.of(e,second));
+        assertTrue(service.read(scope).skills().stream().allMatch(InstalledSkillDescriptorLookup.Descriptor::verified));
+        verify(market,times(2)).selectEntitlementsByAgent("0","client","agent");
     }
     @Test void caseVariantScopeRowsCannotMatch() {
         e.setClientId("Client");assertThrows(InstalledSkillDescriptorLookup.SourceUnavailable.class,()->read());
