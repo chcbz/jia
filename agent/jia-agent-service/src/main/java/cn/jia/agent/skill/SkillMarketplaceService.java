@@ -74,7 +74,7 @@ public final class SkillMarketplaceService {
     }
     private Map<String,Object> detail(HostingRentHttp.Actor a,SkillProductEntity p,boolean admin) {
         var v=market.selectPurchasableProductVersion(a.tenantId(),a.clientId(),p.getCurrentProductVersionId());
-        require(v!=null,404,"SKILL_PRODUCT_NOT_FOUND"); verifyPackage(v);
+        require(v!=null,404,"SKILL_PRODUCT_NOT_FOUND"); packages.getObject().prepare(v);
         Map<String,Object> dto=new LinkedHashMap<>();
         dto.put("productId",p.getProductId()); dto.put("name",p.getName()); dto.put("description",p.getDescription());
         dto.put("productVersionId",v.getProductVersionId()); dto.put("skillKey",v.getSkillKey()); dto.put("skillVersion",v.getSkillVersion());
@@ -92,6 +92,7 @@ public final class SkillMarketplaceService {
             same(old.getRequestHash(),hash); return quoteDto(old);
         });
         if (replay != null) return replay;
+        var prepared = preparePublished(a, body.get("productVersionId"));
         var proof = readyProof(a, body.get("targetAgentId"));
         return authentication.getObject().withFence(proof, false, () -> tx.execute(s->{
             actorLock(a);
@@ -100,7 +101,7 @@ public final class SkillMarketplaceService {
             String agent=body.get("targetAgentId"), productVersion=body.get("productVersionId");
             long version=HostingRentHttp.positive(body.get("expectedAgentVersion"));
             versions.requireOwned(a,agent,version,true); requireReady(a,agent,proof);
-            var v=productLocked(a,productVersion,admin);
+            var v=productLocked(a,productVersion,admin,prepared);
             require(application.lockSkillKey(a.tenantId(),a.clientId(),agent,v.getSkillKey()).isEmpty(),409,"SKILL_ALREADY_ORDERED");
             long now=System.currentTimeMillis();
             var q=new SkillPurchaseQuoteEntity().setQuoteId(id("sq_")).setActorType("USER").setActorId(a.actorId())
@@ -123,6 +124,7 @@ public final class SkillMarketplaceService {
             require(order!=null,503,"SKILL_STATE_UNAVAILABLE"); return orderDto(order,old.getOrderStatus());
         });
         if (replay != null) return replay;
+        var prepared = preparePublished(a, body.get("productVersionId"));
         var proof = readyProof(a, body.get("targetAgentId"));
         return authentication.getObject().withFence(proof, false, () -> tx.execute(s->{
             actorLock(a);
@@ -141,7 +143,7 @@ public final class SkillMarketplaceService {
                     && q.getExpectedPriceMicro().toString().equals(body.get("expectedPriceMicro")),409,"SKILL_QUOTE_MISMATCH");
             versions.requireOwned(a,q.getTargetAgentId(),q.getExpectedAgentVersion(),true);
             requireReady(a,q.getTargetAgentId(),proof);
-            var v=productLocked(a,q.getProductVersionId(),admin);
+            var v=productLocked(a,q.getProductVersionId(),admin,prepared);
             require(v.getPriceMicro().equals(q.getExpectedPriceMicro()) && Arrays.equals(v.getApprovedPermissionsSha256(),q.getApprovedPermissionsSha256())
                     && v.getApprovedPermissionsManifest().equals(body.get("approvedPermissions")),409,"SKILL_PERMISSIONS_MISMATCH");
             require(application.lockSkillKey(a.tenantId(),a.clientId(),q.getTargetAgentId(),v.getSkillKey()).isEmpty(),409,"SKILL_ALREADY_ORDERED");
@@ -189,22 +191,20 @@ public final class SkillMarketplaceService {
             return orderDto(order,"FUNDS_HELD");
         }));
     }
-    private SkillProductVersionEntity productLocked(HostingRentHttp.Actor a,String id,boolean admin) {
+    private SkillProductVersionEntity productLocked(HostingRentHttp.Actor a,String id,boolean admin,
+            cn.jia.economy.config.skillseed.PlatformSkillPackageCatalog.PlatformSkillPackage prepared) {
         var published=market.selectPurchasableProductVersion(a.tenantId(),a.clientId(),id);
         require(published!=null,404,"SKILL_PRODUCT_NOT_FOUND");
         var p=market.selectProductForUpdate(a.tenantId(),a.clientId(),published.getProductId());
         require(p!=null && "PUBLISHED".equals(p.getStatus()) && id.equals(p.getCurrentProductVersionId()),409,"SKILL_PRODUCT_CHANGED");
         var v=market.selectApprovedProductVersionForUpdate(a.tenantId(),a.clientId(),id);
         require(v!=null && ("NONE".equals(v.getDeploymentRestriction()) || admin),403,"SKILL_ADMIN_REQUIRED");
-        verifyPackage(v); return v;
+        SkillPackages.revalidate(v,prepared); return v;
     }
-    private void verifyPackage(SkillProductVersionEntity v) {
-        var p=packages.getObject().get(v.getProductVersionId()).product();
-        require(p.skillKey().equals(v.getSkillKey()) && p.skillVersion().equals(v.getSkillVersion()) && p.packageSize()==v.getPackageSize()
-                && Arrays.equals(p.packageSha256(),v.getPackageSha256()) && p.priceMicro()==v.getPriceMicro()
-                && p.approvedPermissionsManifest().equals(v.getApprovedPermissionsManifest())
-                && Arrays.equals(p.approvedPermissionsSha256(),v.getApprovedPermissionsSha256())
-                && p.deploymentRestriction().equals(v.getDeploymentRestriction()),503,"SKILL_PACKAGE_UNAVAILABLE");
+    private cn.jia.economy.config.skillseed.PlatformSkillPackageCatalog.PlatformSkillPackage preparePublished(HostingRentHttp.Actor a,String id) {
+        var approved=market.selectPurchasableProductVersion(a.tenantId(),a.clientId(),id);
+        require(approved!=null,404,"SKILL_PRODUCT_NOT_FOUND");
+        return packages.getObject().prepare(approved);
     }
     private AgentRuntimeAuthenticationService.Proof readyProof(HostingRentHttp.Actor actor, String agentId) {
         HostingRentHttp.exact(agentId,100);

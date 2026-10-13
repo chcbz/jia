@@ -104,6 +104,10 @@ public final class SkillInstallResultService {
         require(ownerJiacn!=null && !ownerJiacn.isBlank() && !"0".equals(ownerJiacn),403,"SKILL_DOWNLOAD_FORBIDDEN");
         var hint=app.installation(t,c,installationId);
         require(hint!=null && proof.scope().agentId().equals(hint.getTargetAgentId()),403,"SKILL_DOWNLOAD_FORBIDDEN");
+        // Version lookup remains exact-scope and need not be the current market pointer.
+        // In-flight installation keeps its approved immutable version across ordinary upgrades.
+        var approved=market.selectApprovedProductVersion(t,c,hint.getProductVersionId());
+        var pkg=packages.getObject().prepare(approved);
         return authentication.withFence(proof,false,()->tx.execute(s->{
             var visible=app.order(t,c,hint.getOrderId());
             require(visible!=null,403,"SKILL_DOWNLOAD_FORBIDDEN");
@@ -116,9 +120,10 @@ public final class SkillInstallResultService {
             var binding=app.deliveryBinding(t,c,installationId);
             requireBinding(binding,i.getTargetAgentId(),proof);
             requireCurrentDelivery(i,commands.lockDelivery(t,c,ownerJiacn,i.getCommandId()),ownerJiacn,true);
-            var pkg=packages.getObject().get(i.getProductVersionId());
+            var lockedVersion=market.selectApprovedProductVersionForUpdate(t,c,i.getProductVersionId());
+            SkillPackages.revalidate(lockedVersion,pkg);
             require(pkg.product().packageSize()==i.getPackageSize() && Arrays.equals(pkg.product().packageSha256(),i.getPackageSha256()),503,"SKILL_PACKAGE_UNAVAILABLE");
-            return pkg.bytes(); // already cached at startup; no filesystem/network I/O under transaction
+            return pkg.bytes(); // prepared before fence/locks; no filesystem/network I/O under transaction
         }));
     }
     static void requireCurrentDelivery(SkillInstallationEntity i,AgentCommandDeliveryEntity d,String ownerJiacn,boolean download) {
