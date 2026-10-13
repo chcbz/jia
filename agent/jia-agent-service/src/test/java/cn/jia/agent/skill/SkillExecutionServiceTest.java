@@ -69,7 +69,7 @@ public class SkillExecutionServiceTest {
         var snapshot=snapshot();String digest=sha(json(snapshot));
         execution=new PersonalWorkspaceExecutionEntity().setExecutionId("exec").setTaskId("task").setRunId("run").setConversationId("42").setTargetAgentId("agent").setOwnerJiacn("owner")
                 .setExecutionMode("CONVERSATION").setExecutionState("QUEUED").setExecutionProtocolVersion(4).setPermittedOperation("EXECUTE_SKILL").setTaskGrantId("grant").setTaskGrantVersion(1L).setAssignmentRevision(7L)
-                .setConversationLeaseVersion(1L).setConversationLeaseToken(fence.token()).setConversationLeaseRuntimeId("runtime").setConversationLeaseExpiresAt(System.currentTimeMillis()+900000);
+                .setGrantRevision(1L).setCreatedAt(1L).setConversationLeaseVersion(1L).setConversationLeaseToken(fence.token()).setConversationLeaseRuntimeId("runtime").setConversationLeaseExpiresAt(System.currentTimeMillis()+900000);
         execution.setTenantId("0");execution.setClientId("client");
         skill=new SkillExecutionEntity().setTenantId("0").setClientId("client").setOwnerJiacn("owner").setExecutionId("exec").setSkillKey("analysis").setSkillVersion("1.0.0")
                 .setPackageSha256(HASH).setManifestSha256(HASH).setSnapshotJson(json(snapshot)).setSnapshotSha256(digest).setPhase("RUNNING").setVersion(0L).setEffectsJson("{}");
