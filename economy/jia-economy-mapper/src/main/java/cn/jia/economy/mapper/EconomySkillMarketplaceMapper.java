@@ -109,6 +109,21 @@ public interface EconomySkillMarketplaceMapper {
             WHERE """ + EXACT_SCOPE + """
               AND product_version_id=#{productVersionId} AND review_status='APPROVED'
               AND OCTET_LENGTH(product_version_id)=OCTET_LENGTH(#{productVersionId})
+            LIMIT 1
+            """)
+    SkillProductVersionEntity selectApprovedProductVersion(
+            @Param("tenantId") String tenantId,
+            @Param("clientId") String clientId,
+            @Param("productVersionId") String productVersionId);
+
+    @Select("""
+            SELECT id,product_version_id,product_id,version_sequence,skill_key,skill_version,price_micro,
+                   package_sha256,package_size,approved_permissions_manifest,approved_permissions_sha256,
+                   deployment_restriction,review_status,tenant_id,client_id,create_time
+            FROM economy_skill_product_version
+            WHERE """ + EXACT_SCOPE + """
+              AND product_version_id=#{productVersionId} AND review_status='APPROVED'
+              AND OCTET_LENGTH(product_version_id)=OCTET_LENGTH(#{productVersionId})
             LIMIT 1 FOR UPDATE
             """)
     SkillProductVersionEntity selectApprovedProductVersionForUpdate(
