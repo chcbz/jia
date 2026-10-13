@@ -2775,20 +2775,10 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         if(skillExecutions==null||installedSkills==null||skillCapabilities==null||skillPolicy==null)
             throw failure(Reason.CAPABILITY_UNAVAILABLE);
     }
-    /** Deterministic canonical JSON: map keys sorted, array order retained, no secret/path fields added. */
-    private static Object skillCanonical(Object value) {
-        if(value instanceof Map<?,?> map) {
-            var result=new java.util.TreeMap<String,Object>();
-            for(var entry:map.entrySet()) {
-                if(!(entry.getKey() instanceof String key))throw failure(Reason.BAD_REQUEST);
-                result.put(key,skillCanonical(entry.getValue()));
-            }
-            return result;
-        }
-        if(value instanceof List<?> list)return list.stream().map(PersonalWorkspaceExecutionServiceImpl::skillCanonical).toList();
-        return value;
+    private static String skillJson(Object value) {
+        try {return cn.jia.agent.service.SkillCanonicalJson.write(value);}
+        catch(IllegalArgumentException invalid){throw failure(Reason.BAD_REQUEST);}
     }
-    private static String skillJson(Object value) {return v3Json(skillCanonical(value));}
     @SuppressWarnings("unchecked") private static Map<String,Object> skillObject(Object value) {
         if(!(value instanceof Map<?,?>))throw failure(Reason.BAD_REQUEST);
         return (Map<String,Object>)value;
