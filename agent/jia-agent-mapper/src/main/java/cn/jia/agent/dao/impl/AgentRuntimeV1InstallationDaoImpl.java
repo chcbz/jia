@@ -11,6 +11,7 @@ import lombok.RequiredArgsConstructor;
 @RequiredArgsConstructor
 public class AgentRuntimeV1InstallationDaoImpl extends BaseDaoImpl<AgentRuntimeV1InstallationMapper, AgentRuntimeV1InstallationEntity>
         implements AgentRuntimeV1InstallationDao {
+    @Override public void insertCandidateIfAbsent(AgentRuntimeV1InstallationEntity candidate) { baseMapper.insertCandidateIfAbsent(candidate); }
     @Override public AgentRuntimeV1InstallationEntity lock(String installationId) { return baseMapper.selectByInstallationForUpdate(installationId); }
     @Override public AgentRuntimeV1InstallationEntity findInScope(String tenantId, String clientId, String installationId) { return baseMapper.selectByInstallationInScope(tenantId, clientId, installationId); }
     @Override public AgentRuntimeV1InstallationEntity findActiveByAuthorizationHash(byte[] hash) { return baseMapper.selectActiveByAuthorizationHash(hash); }

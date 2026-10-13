@@ -33,6 +33,10 @@ public class EconomyHostingProvisioningIntentEntity {
     private Long refundedAt;
     /** Existing OAuth key row reference; never a secret or a fallback identity. */
     private String managedApiKeyId;
+    private String runtimeInstallationId;
+    private String runtimeManifestSha256;
+    /** Operation generation, independent of financial CAS version and Runtime session generation. */
+    private Long runtimeProvisionGeneration;
     private String outcomeEvidenceRef;
     private Long serviceReadyAt;
     private Long paidFrom;

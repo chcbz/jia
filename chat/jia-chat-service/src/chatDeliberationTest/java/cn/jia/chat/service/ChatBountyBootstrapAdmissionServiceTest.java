@@ -13,6 +13,9 @@ import cn.jia.chat.entity.ChatConversationEntity;
 import cn.jia.chat.entity.ChatMessageEntity;
 import cn.jia.core.util.JsonUtil;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -185,6 +188,46 @@ class ChatBountyBootstrapAdmissionServiceTest {
                 .thenThrow(new ChatDeliberationException(ChatDeliberationException.Reason.PERSISTENCE_ERROR,"Runtime unavailable"));
         assertThrows(ChatDeliberationException.class,()->service.admit(genericClaim(List.of())));
         verifyNoInteractions(steps,messages,deliberation,broker);
+    }
+
+    static java.util.stream.Stream<Arguments> exactRequirementContents() {
+        return java.util.stream.Stream.of(
+                Arguments.of("画一只鸟", "画一只鸟", "画一只鸟"),
+                Arguments.of("画一只鸟", "蓝色羽毛", "画一只鸟\n\n蓝色羽毛"),
+                Arguments.of("画一只鸟", null, "画一只鸟"),
+                Arguments.of("画一只鸟", "", "画一只鸟"),
+                Arguments.of("画一只鸟", " ", "画一只鸟\n\n "),
+                Arguments.of("画一只鸟", "画一只鸟，蓝色", "画一只鸟\n\n画一只鸟，蓝色"),
+                Arguments.of("画一只鸟\n\n画一只鸟", "画一只鸟\n\n画一只鸟", "画一只鸟\n\n画一只鸟"),
+                Arguments.of(" 画一只鸟 ", "画一只鸟", " 画一只鸟 \n\n画一只鸟"));
+    }
+
+    @ParameterizedTest @MethodSource("exactRequirementContents")
+    void imageBootstrapPersistsExactWholeFieldContent(String title, String description, String expected) throws Exception {
+        authorized();
+        when(requirements.read(scope, "task-1", 1L)).thenReturn(
+                new AgentTaskRequirementSnapshotService.Snapshot("0", "client", "owner",
+                        "task-1", 1L, title, description, snapshotHash, "CREATE"));
+        when(discussions.ensure(scope, "task-1", "grant-1", 1L, 3L,
+                "agent-1", "GENERATE_IMAGE", title))
+                .thenReturn(new ChatBountyConversationService.Discussion("10", 1L, true));
+        service.admit(claim());
+        var message = org.mockito.ArgumentCaptor.forClass(ChatMessageEntity.class);
+        verify(messages).insertScoped(eq("0"), eq("client"), message.capture());
+        assertEquals(expected, message.getValue().getContent());
+        assertTrue(message.getValue().getMetadata().contains("\"requirementHash\":\"" + snapshotHash + "\""));
+        verify(steps, times(1)).insertLink(any());
+        verifyNoInteractions(typedDiscussion);
+    }
+
+    @ParameterizedTest @org.junit.jupiter.params.provider.NullAndEmptySource
+    @org.junit.jupiter.params.provider.ValueSource(strings = {" ", "\n\t"})
+    void missingRequirementTitleNeverCreatesRequest(String title) throws Exception {
+        when(requirements.read(scope, "task-1", 1L)).thenReturn(
+                new AgentTaskRequirementSnapshotService.Snapshot("0", "client", "owner",
+                        "task-1", 1L, title, "valid description", snapshotHash, "CREATE"));
+        assertThrows(IllegalStateException.class, () -> service.admit(claim()));
+        verifyNoInteractions(discussions, messages, deliberation, steps, typedDiscussion, broker);
     }
 
     @Test void acceptedInitialRequestIsNotDispatchedAsChatOrMarkedAsGenerated() throws Exception {

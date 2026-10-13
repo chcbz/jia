@@ -11,6 +11,37 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class PersonalWorkspaceExecutionSchemaInitializerTest {
     @Test
+    void textMimeMigrationVerifiesEnforcedDefinitionAndIsIdempotent() {
+        var jdbc=mock(JdbcTemplate.class);
+        var old=java.util.Map.<String,Object>of("enforced","YES","check_clause",
+                "(`output_content_mime_type` in ("+PersonalWorkspaceExecutionSchemaInitializer.DOCUMENT_MIMES.replace("'", "\\'")+"))");
+        var current=java.util.Map.<String,Object>of("enforced","YES","check_clause",
+                "(`output_content_mime_type` in ("+PersonalWorkspaceExecutionSchemaInitializer.OUTPUT_MIMES+"))");
+        when(jdbc.queryForList(PersonalWorkspaceExecutionSchemaInitializer.MIME_CHECK_QUERY))
+                .thenReturn(java.util.List.of(old),java.util.List.of(current));
+        var initializer=new PersonalWorkspaceExecutionSchemaInitializer(jdbc);
+        initializer.migrateTextOutputMime();
+        initializer.migrateTextOutputMime();
+        verify(jdbc,times(1)).execute(PersonalWorkspaceExecutionSchemaInitializer.textOutputMimeMigrationStatement());
+        assertTrue(PersonalWorkspaceExecutionSchemaInitializer.ddlStatements().getFirst().contains("'text/plain'"));
+        assertTrue(PersonalWorkspaceExecutionSchemaInitializer.outputMimeMigrationStatement().contains("'text/plain'"));
+    }
+
+    @Test
+    void missingDisabledDriftedOrUnappliedMimeCheckCannotPass() {
+        for (var row:java.util.List.of(
+                java.util.Map.<String,Object>of("enforced","NO","check_clause","1"),
+                java.util.Map.<String,Object>of("enforced","YES","check_clause","1"),
+                java.util.Map.<String,Object>of("enforced","YES","check_clause",
+                    "output_content_mime_type in ("+PersonalWorkspaceExecutionSchemaInitializer.DOCUMENT_MIMES+")"))) {
+            var jdbc=mock(JdbcTemplate.class);
+            when(jdbc.queryForList(PersonalWorkspaceExecutionSchemaInitializer.MIME_CHECK_QUERY)).thenReturn(java.util.List.of(row));
+            assertThrows(IllegalStateException.class,()->new PersonalWorkspaceExecutionSchemaInitializer(jdbc).migrateTextOutputMime());
+        }
+        assertThrows(IllegalStateException.class,()->new PersonalWorkspaceExecutionSchemaInitializer(mock(JdbcTemplate.class)).migrateTextOutputMime());
+    }
+
+    @Test
     void conversationMigrationContainsByteOnlyAndGrantFenceChecks() {
         var execution=PersonalWorkspaceExecutionSchemaInitializer.conversationMigrationStatement(
                 PersonalWorkspaceExecutionSchemaInitializer.CONVERSATION_EXECUTION_RESOURCE,

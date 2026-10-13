@@ -19,6 +19,8 @@ import cn.jia.economy.service.impl.EconomyPostingServiceImpl;
 import cn.jia.oauth.entity.OauthApiKeyEntity;
 import cn.jia.oauth.service.ApiKeyService;
 import org.junit.jupiter.api.*;
+import org.junit.jupiter.api.io.TempDir;
+import java.nio.file.Path;
 import org.mybatis.spring.*;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.core.io.ByteArrayResource;
@@ -78,12 +80,15 @@ class SkillMarketplaceRealTransactionTest {
             "redrive_guard               TINYINT GENERATED ALWAYS AS (IF(settlement_state IN ('SOURCE_REQUEUED','NOT_ACQUIRED'),NULL,1)) STORED";
     private static final String H2_REDRIVE_GUARD=
             "redrive_guard               TINYINT GENERATED ALWAYS AS (CASE WHEN settlement_state IN ('SOURCE_REQUEUED','NOT_ACQUIRED') THEN NULL ELSE 1 END)";
+    @TempDir Path packageRoot;
     private Connection schemaConnection;
     private JdbcTemplate jdbc;
     private EconomySkillMarketplaceMapper market;
     private EconomySkillApplicationMapper app;
     private SkillMarketplaceService service;
     private SkillInstallResultService results;
+    private AgentCommandTransportDao commandsForResults;
+    private org.springframework.transaction.PlatformTransactionManager transactionManagerForResults;
     private AgentRuntimeAuthenticationService authentication;
     private SkillAgentVersions versions;
     private AgentRuntimeEntity runtime;
@@ -107,6 +112,7 @@ class SkillMarketplaceRealTransactionTest {
         schemaConnection=ds.getConnection();
         for(String resource:List.of("db/economy-v0-foundation.sql","db/economy-v0-skill-marketplace.sql","db/economy-v0-skill-application.sql","db/agent-command-transport-schema.sql")) schema(resource);
         var config=new org.apache.ibatis.session.Configuration();config.setMapUnderscoreToCamelCase(true);
+        config.addInterceptor(new SkillExecutionMapperRealTransactionTest.MySqlBinaryCastAdapter());
         for(Class<?> type:List.of(EconomySkillMarketplaceMapper.class,EconomySkillApplicationMapper.class,EconomySkillCredentialMapper.class,EconomyLedgerMapper.class,AgentCommandTransportMapper.class)) config.addMapper(type);
         var factory=new SqlSessionFactoryBean();factory.setDataSource(ds);factory.setConfiguration(config);
         var sql=new SqlSessionTemplate(Objects.requireNonNull(factory.getObject()));
@@ -147,7 +153,7 @@ class SkillMarketplaceRealTransactionTest {
         when(transport.allowsDispatch(ACTOR.tenantId(),ACTOR.clientId())).thenReturn(true);
         var commands=new AgentCommandTransportDaoImpl(sql.getMapper(AgentCommandTransportMapper.class));
         AgentCommandTransportWriter writer=new AgentCommandTransportWriterImpl(commands,transport,agents,mock(AgentTaskCollaborationAccessService.class),manager);
-        var packages=new SkillPackages(); keys=mock(ApiKeyService.class);
+        var packages=new SkillPackages(packageRoot); keys=mock(ApiKeyService.class);
         key=new OauthApiKeyEntity();key.setId("key-1");key.setJiacn(ACTOR.ownerJiacn());key.setClientId(ACTOR.clientId());key.setTenantId(ACTOR.tenantId());key.setStatus(1);
         when(keys.get("key-1")).thenReturn(key);
         credentialMapper=spy(sql.getMapper(EconomySkillCredentialMapper.class));
@@ -158,6 +164,7 @@ class SkillMarketplaceRealTransactionTest {
         when(sessions.isReady(eq(ACTOR.tenantId()),eq(ACTOR.clientId()),eq(AGENT),any())).thenReturn(true);
         service=new SkillMarketplaceService(market,app,ledger,posting,gate,versions,runtimes,provider(writer),provider(transport),provider(packages),provider(authentication),provider(sessions),manager);
         dispatch=new SkillInstallDispatchService(app,market,service,versions,authentication,commands,provider(sessions),manager);
+        commandsForResults=commands;transactionManagerForResults=manager;
         results=new SkillInstallResultService(market,app,commands,service,versions,authentication,provider(packages),manager);
         for(var p:new PlatformSkillPackageCatalog().products()) {
             market.insertProduct(new SkillProductEntity().setProductId(p.productId()).setSellerType("SYSTEM").setSellerId("SKILL_STORE")
@@ -259,6 +266,63 @@ class SkillMarketplaceRealTransactionTest {
                 "SELECT * FROM agent_command_operation_audit WHERE operation_id='audit-op-1'"));
         assertEquals(1,jdbc.queryForObject(
                 "SELECT COUNT(*) FROM agent_command_operation_audit WHERE operation_id='audit-op-1'",Integer.class));
+    }
+    @Test void dynamicallyStoredApprovedPackageUsesRealPurchaseAndInstallTransactions() throws Exception {
+        byte[] manifest="""
+                {"schemaVersion":1,"skillKey":"pdf-export","skillVersion":"1.0.0","title":"PDF","description":"export",
+                 "runner":"native-model","entrypoint":"pdf.export",
+                 "parametersSchema":{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object"},
+                 "inputs":{"minItems":0,"maxItems":0,"acceptedMimeTypes":[]},
+                 "outputs":{"dataSchema":null,"mimeTypes":["application/pdf"],"multiple":false,"artifactsRequired":true},
+                 "requirements":{}}
+                """.getBytes(StandardCharsets.UTF_8);
+        var buffer=new java.io.ByteArrayOutputStream();
+        try(var zip=new java.util.zip.ZipOutputStream(buffer)) {
+            zip.putNextEntry(new java.util.zip.ZipEntry("SKILL.md"));
+            zip.write("---\nname: pdf-export\ndescription: export pdf\nmetadata:\n  version: \"1.0.0\"\n---\nExport a PDF.\n".getBytes(StandardCharsets.UTF_8));
+            zip.closeEntry();zip.putNextEntry(new java.util.zip.ZipEntry("manifest.json"));zip.write(manifest);zip.closeEntry();
+        }
+        byte[] packageBytes=buffer.toByteArray();new SkillPackageStore(packageRoot).publish(packageBytes);
+        var seed=new PlatformSkillPackageCatalog().products().getFirst();
+        market.insertProduct(new SkillProductEntity().setProductId("sp_dynamic_pdf").setSellerType("SYSTEM").setSellerId("SKILL_STORE")
+                .setName("Dynamic PDF").setDescription("not classpath").setStatus("DRAFT").setVersion(1L)
+                .setTenantId(ACTOR.tenantId()).setClientId(ACTOR.clientId()).setCreateTime(1L).setUpdateTime(1L));
+        market.insertProductVersion(new SkillProductVersionEntity().setProductVersionId("spv_dynamic_pdf_1").setProductId("sp_dynamic_pdf")
+                .setVersionSequence(1L).setSkillKey("pdf-export").setSkillVersion("1.0.0").setPriceMicro(0L)
+                .setPackageSha256(SkillPackageStore.sha256(packageBytes)).setPackageSize((long)packageBytes.length)
+                .setApprovedPermissionsManifest(seed.approvedPermissionsManifest()).setApprovedPermissionsSha256(seed.approvedPermissionsSha256())
+                .setDeploymentRestriction("NONE").setReviewStatus("APPROVED").setTenantId(ACTOR.tenantId()).setClientId(ACTOR.clientId()).setCreateTime(1L));
+        assertEquals(1,market.publishProductVersion(ACTOR.tenantId(),ACTOR.clientId(),"sp_dynamic_pdf","spv_dynamic_pdf_1",1,2));
+        var body=purchaseBody("spv_dynamic_pdf_1");String idem=uuid();var receipt=service.purchase(ACTOR,idem,body,false);
+        var i=installation();sent(i);assertArrayEquals(packageBytes,results.packageBytes(proof(),i.getInstallationId()));
+        // Exact approved lookup is scope-isolated and does not depend on the product's current pointer.
+        assertNull(market.selectApprovedProductVersion(ACTOR.tenantId(),"other-client","spv_dynamic_pdf_1"));
+        jdbc.update("UPDATE economy_skill_product SET current_product_version_id='a-later-version',version=3 WHERE product_id='sp_dynamic_pdf'");
+        assertArrayEquals(packageBytes,results.packageBytes(proof(),i.getInstallationId()));
+        var success=result(i,"SUCCEEDED",null);
+        assertEquals("SKILL_MANIFEST_BINDING_MISMATCH",assertThrows(SkillMarketplaceException.class,()->results.accept(proof(),success)).code());
+        assertEquals(0,count("economy_skill_result_receipt"));assertEquals("INSTALLING",installation().getStatus());
+        success.put("manifestSha256",HexFormat.of().formatHex(SkillPackageStore.sha256(manifest)));
+        results.accept(proof(),success);assertEquals(1,count("economy_skill_result_receipt"));
+        assertEquals(1,app.successfulReceipts(ACTOR.tenantId(),ACTOR.clientId(),i.getInstallationId()));
+        assertEquals(0,app.successfulReceipts(ACTOR.tenantId(),ACTOR.clientId(),i.getCommandId()));
+        assertEquals(0,app.successfulReceipts(ACTOR.tenantId(),"client-a",i.getInstallationId()));
+        assertEquals(0,app.successfulReceipts(ACTOR.tenantId(),ACTOR.clientId(),i.getInstallationId().toUpperCase(Locale.ROOT)));
+        var identities=mock(AgentIdentityService.class);
+        when(identities.requireCanonicalAgentIdInScope(ACTOR.tenantId(),ACTOR.clientId(),ACTOR.ownerJiacn(),AGENT)).thenReturn(AGENT);
+        var descriptors=new InstalledSkillDescriptorService(identities,market,app,provider(new SkillPackages(packageRoot)));
+        var descriptor=descriptors.read(new SkillCapabilityLookup.Scope(ACTOR.tenantId(),ACTOR.clientId(),ACTOR.ownerJiacn(),AGENT)).skills().getFirst();
+        assertTrue(descriptor.verified()); assertEquals(success.get("manifestSha256"),descriptor.manifestSha256());
+        assertEquals("pdf-export",descriptor.skillKey());
+        var tampered=new LinkedHashMap<>(success);tampered.put("manifestSha256","0".repeat(64));
+        assertThrows(SkillMarketplaceException.class,()->results.accept(proof(),tampered));
+        // New service/process with cold package cache still replays the immutable receipt after object retirement.
+        java.nio.file.Files.delete(packageRoot.resolve(HexFormat.of().formatHex(SkillPackageStore.sha256(packageBytes))+".zip"));
+        var cold=new SkillInstallResultService(market,app,commandsForResults,service,versions,authentication,
+                provider(new SkillPackages(packageRoot)),transactionManagerForResults);
+        assertEquals(results.accept(proof(),success),cold.accept(proof(),success));
+        assertEquals("ACTIVE",service.order(ACTOR,i.getOrderId()).get("status"));
+        assertEquals(receipt,service.purchase(ACTOR,idem,body,false));assertEquals(100000000L,wallet());
     }
     @Test void paidPurchaseInstallsCapturesAndReplaysOriginalReceipt() {
         var body=purchaseBody("spv_repo_test_1_0_0");String idem=uuid();var receipt=service.purchase(ACTOR,idem,body,false);
@@ -562,6 +626,6 @@ class SkillMarketplaceRealTransactionTest {
         return count;
     }
     @SuppressWarnings("unchecked") static <T> ObjectProvider<T> provider(T value) {
-        ObjectProvider<T> p=mock(ObjectProvider.class);when(p.getIfAvailable()).thenReturn(value);when(p.getObject()).thenReturn(value);return p;
+        ObjectProvider<T> p=mock(ObjectProvider.class);when(p.getIfAvailable()).thenReturn(value);when(p.getObject()).thenReturn(value);when(p.getIfUnique()).thenReturn(value);return p;
     }
 }

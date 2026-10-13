@@ -33,6 +33,43 @@ class ChatSelectedOutputFinalizationServiceTest {
     }
 
     @Test
+    void noncommittedExecutionLinkNeverReadsSourceOrStartsPromotion() {
+        for (String state:java.util.Arrays.asList("RUNNING","RECEIVED","QUEUED","FAILED",
+                "CANCELLED","OUTPUT_STAGING","",null)) {
+            Fixture f=new Fixture();f.sourceReady();f.advanceByArguments();
+            when(f.steps.findLink("0","owner-1","client-1","step-1")).thenReturn(
+                    new ChatInteractionStepStore.ExecutionLink("intent-1","0","owner-1","client-1",
+                            "step-1","exec-1",state,2,1,2));
+            var receipt=f.service.submit(f.scope,"task-1",Fixture.KEY,f.command());
+            assertEquals("failed",receipt.state(),state);assertEquals("PROMOTING",receipt.stage(),state);
+            assertEquals("FINALIZATION_SOURCE_UNAVAILABLE",receipt.errorCode(),state);assertFalse(receipt.retryable());
+            verify(f.store,never()).source(anyString(),anyString(),anyString(),anyString(),anyLong(),
+                    anyString(),anyString(),anyString());
+            verifyNoInteractions(f.executions);verify(f.agent,never()).prepare(any(),any());
+            verify(f.agent,never()).submit(any(),anyString(),anyString(),anyString());
+            verify(f.agent,never()).accept(any(),anyString(),anyString(),anyString());
+        }
+    }
+
+    @Test
+    void committedLinkScopeAndImmutableBindingDriftRemainRejectedBeforeSourceRead() {
+        for (String drift:List.of("missing","tenant","owner","client","step","intent","execution")) {
+            Fixture f=new Fixture();f.sourceReady();f.advanceByArguments();
+            var link="missing".equals(drift)?null:new ChatInteractionStepStore.ExecutionLink(
+                    "intent".equals(drift)?"other-intent":"intent-1","tenant".equals(drift)?"other-tenant":"0",
+                    "owner".equals(drift)?"other-owner":"owner-1","client".equals(drift)?"other-client":"client-1",
+                    "step".equals(drift)?"other-step":"step-1","execution".equals(drift)?"other-execution":"exec-1",
+                    "OUTPUT_COMMITTED",2,1,2);
+            when(f.steps.findLink("0","owner-1","client-1","step-1")).thenReturn(link);
+            var receipt=f.service.submit(f.scope,"task-1",Fixture.KEY,f.command());
+            assertEquals("FINALIZATION_SOURCE_UNAVAILABLE",receipt.errorCode(),drift);assertFalse(receipt.retryable());
+            verify(f.store,never()).source(anyString(),anyString(),anyString(),anyString(),anyLong(),
+                    anyString(),anyString(),anyString());
+            verifyNoInteractions(f.executions);verify(f.agent,never()).prepare(any(),any());
+        }
+    }
+
+    @Test
     void committedReplayWinsBeforeObsoleteGenerationAssignmentGrantOrBytesChecks() {
         Fixture f=new Fixture();f.advanceByArguments();
         when(f.agent.reconcile(any(),eq("task-1"),anyString(),anyString())).thenAnswer(i->
@@ -82,14 +119,18 @@ class ChatSelectedOutputFinalizationServiceTest {
 
     @Test
     void exactBytesHashMimeAndLengthAreRecheckedNotTrustedFromBrowserOrProjection() {
-        Fixture f=new Fixture();f.sourceReady();f.advanceByArguments();
-        when(f.agent.reconcile(any(),eq("task-1"),anyString(),anyString())).thenThrow(
-                new AgentSelectedOutputFinalizationException(AgentSelectedOutputFinalizationException.Reason.NOT_FOUND,"absent"));
-        when(f.executions.readConversationOutput(any(),eq("task-1"),eq("run-1"),eq("out-1")))
-                .thenReturn(new PersonalWorkspaceExecutionService.ConversationOutput("exec-1","out-1","chosen.png",
-                        "image/jpeg",f.hash,f.bytes.length,f.bytes));
-        var receipt=f.service.submit(f.scope,"task-1",Fixture.KEY,f.command());
-        assertEquals("FINALIZATION_SOURCE_UNAVAILABLE",receipt.errorCode());verify(f.agent,never()).prepare(any(),any());
+        for (String drift:List.of("mime","hash","length","bytes","execution","output","missing")) {
+            Fixture f=new Fixture();f.sourceReady();f.advanceByArguments();
+            var output="missing".equals(drift)?null:new PersonalWorkspaceExecutionService.ConversationOutput(
+                    "execution".equals(drift)?"other-exec":"exec-1","output".equals(drift)?"other-out":"out-1","chosen.png",
+                    "mime".equals(drift)?"image/jpeg":"image/png","hash".equals(drift)?"a".repeat(64):f.hash,
+                    "length".equals(drift)?f.bytes.length+1:f.bytes.length,
+                    "bytes".equals(drift)?"forged".getBytes(StandardCharsets.UTF_8):f.bytes);
+            when(f.executions.readConversationOutput(any(),eq("task-1"),eq("run-1"),eq("out-1"))).thenReturn(output);
+            var receipt=f.service.submit(f.scope,"task-1",Fixture.KEY,f.command());
+            assertEquals("FINALIZATION_SOURCE_UNAVAILABLE",receipt.errorCode(),drift);assertFalse(receipt.retryable());
+            verify(f.agent,never()).prepare(any(),any());
+        }
     }
 
 
@@ -362,14 +403,14 @@ class ChatSelectedOutputFinalizationServiceTest {
                     new AgentSelectedOutputFinalizationException(AgentSelectedOutputFinalizationException.Reason.NOT_FOUND,"absent"));
             var request=new ChatDeliberationService.RequestView("req-1","1","100","4","9","OUTPUT_COMMITTED","2",
                     List.of(),List.of(new ChatDeliberationService.StepView("step-1","1","task-1","7","agent-1",
-                    "EXECUTE","OUTPUT_COMMITTED","3","intent-1","exec-1","RUNNING")));
+                    "EXECUTE","OUTPUT_COMMITTED","3","intent-1","exec-1","OUTPUT_COMMITTED")));
             when(deliberations.getRequest("0","owner-1","client-1","req-1")).thenReturn(request);
             var step=new ChatInteractionStepStore.Step("step-1","0","owner-1","client-1","req-1",1,1,"100",4,
                     "task-1",7,"grant-1",2,"agent-1","EXECUTE","OUTPUT_COMMITTED",3,"digest",1,2);
             when(steps.findSteps("0","owner-1","client-1","req-1",1)).thenReturn(List.of(step));
             when(steps.findLink("0","owner-1","client-1","step-1")).thenReturn(
                     new ChatInteractionStepStore.ExecutionLink("intent-1","0","owner-1","client-1","step-1",
-                            "exec-1","RUNNING",2,1,2));
+                            "exec-1","OUTPUT_COMMITTED",2,1,2));
             when(store.source(anyString(),anyString(),anyString(),eq("100"),eq(4L),eq("req-1"),eq("step-1"),eq("out-1")))
                     .thenReturn(new ChatSelectedOutputFinalizationStore.SourceFact(4,"exec-1","run-1","image/png",hash,bytes.length));
             when(executions.readConversationOutput(any(),eq("task-1"),eq("run-1"),eq("out-1")))

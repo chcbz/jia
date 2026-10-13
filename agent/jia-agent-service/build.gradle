@@ -21,6 +21,8 @@ dependencies {
     implementation project(':common:jia-common-service')
     implementation libs.spring.rabbit
     implementation libs.jackson.databind
+    implementation 'com.networknt:json-schema-validator:1.5.9'
+    implementation 'org.jruby.joni:joni:2.2.6'
     // Keep the workspace document runtime on one POI generation. POI 3.14
     // combined with xmlbeans/full schemas from POI 5.4 fails at runtime with
     // XmlOptions.put(Object) and CTPoint2D.setX(long) NoSuchMethodError. The
@@ -686,6 +688,9 @@ def managedHostingRegressionSourceSet = sourceSets.create('managedHostingRegress
         include 'cn/jia/agent/hosting/UnixManagedHostingProvisionerTest.java'
         include 'cn/jia/agent/hosting/ManagedHostingCredentialsTest.java'
         include 'cn/jia/agent/hosting/HostingRentApplicationServiceTest.java'
+        include 'cn/jia/agent/hosting/HostingRentReprovisionTransactionTest.java'
+        include 'cn/jia/agent/service/AgentPersonaProvisioningServiceTest.java'
+        include 'cn/jia/agent/service/impl/AgentRuntimeV1ServiceImplTest.java'
         include 'cn/jia/agent/hosting/HostingRentReconcilerTest.java'
         include 'cn/jia/agent/config/AgentHostingRentConfigurationTest.java'
     }
@@ -704,7 +709,7 @@ tasks.register('managedHostingRegression', Test) {
     maxHeapSize = '256m'
     jvmArgs '-XX:MaxMetaspaceSize=160m', '-Xss256k'
     group = 'verification'
-    description = 'Runs isolated managed-hosting owner ACL, credential and readiness regressions.'
+    description = 'Runs isolated Runtime-v1 managed-hosting ACL, exact installation linkage, admission and readiness regressions.'
     dependsOn tasks.named(managedHostingRegressionSourceSet.classesTaskName)
     testClassesDirs = managedHostingRegressionSourceSet.output.classesDirs
     classpath = managedHostingRegressionSourceSet.runtimeClasspath
@@ -1097,4 +1102,31 @@ tasks.register('initialCancellation', Test) {
     classpath = initialCancellationSourceSet.runtimeClasspath
     useJUnitPlatform()
     maxParallelForks = 1
+}
+
+// JYT-SKILL-SE2-20261013: manifest/schema fixture contract, isolated from historical test debt.
+def skillManifestContractSourceSet = sourceSets.create('skillManifestContract') {
+    java.setSrcDirs(['src/skillManifestContract/java'])
+    resources.setSrcDirs(['src/skillManifestContract/resources'])
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(skillManifestContractSourceSet.implementationConfigurationName) {
+    extendsFrom configurations.implementation
+}
+configurations.named(skillManifestContractSourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.runtimeOnly
+}
+dependencies {
+    add(skillManifestContractSourceSet.implementationConfigurationName, libs.junit.jupiter)
+    add(skillManifestContractSourceSet.runtimeOnlyConfigurationName, 'org.junit.platform:junit-platform-launcher:6.0.1')
+}
+tasks.register('skillManifestContract', Test) {
+    group = 'verification'
+    description = 'Strict executable manifest and Draft2020-12 cross-language fixture contract.'
+    dependsOn tasks.named(skillManifestContractSourceSet.classesTaskName)
+    testClassesDirs = skillManifestContractSourceSet.output.classesDirs
+    classpath = skillManifestContractSourceSet.runtimeClasspath
+    useJUnitPlatform()
+    testLogging { events 'passed', 'failed'; exceptionFormat 'full' }
 }

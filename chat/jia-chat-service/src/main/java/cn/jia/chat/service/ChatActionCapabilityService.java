@@ -22,6 +22,97 @@ public final class ChatActionCapabilityService {
     private final ControlledImageProviderAuthorityLookup authorities;
     private final boolean inspectionEnabled;
     private final boolean executionEnabled;
+    private final boolean textExecutionEnabled;
+    private static final com.fasterxml.jackson.databind.ObjectMapper SKILL_JSON = new com.fasterxml.jackson.databind.ObjectMapper();
+    private cn.jia.agent.service.InstalledSkillDescriptorLookup installedSkills;
+    private cn.jia.agent.service.SkillCapabilityLookup skillRuntimes;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setInstalledSkillCapabilities(cn.jia.agent.service.InstalledSkillDescriptorLookup installed,
+            cn.jia.agent.service.SkillCapabilityLookup runtimes) {
+        installedSkills = Objects.requireNonNull(installed); skillRuntimes = Objects.requireNonNull(runtimes);
+    }
+
+    /** Installation/runtime observation, NOT availableActions or a task authorization grant.
+     * I16/I18 must separately re-admit the selected skill under the current task/assignment. */
+    public record SkillCandidate(String skillKey, String skillVersion, String title,
+            String state, String reasonCode, String metadataJson) { }
+    public record InstalledCatalog(String catalogRevision, List<SkillCandidate> items) {
+        public InstalledCatalog { items = List.copyOf(items); }
+    }
+    public InstalledCatalog inspectInstalledSkills(Scope scope,
+            cn.jia.agent.service.AgentManagedSessionLookup.SessionFence expectedFence) {
+        Objects.requireNonNull(scope);
+        cn.jia.agent.service.SkillCapabilityLookup.validateFence(expectedFence);
+        if(installedSkills==null||skillRuntimes==null)
+            throw new cn.jia.agent.service.InstalledSkillDescriptorLookup.SourceUnavailable();
+        var key=new cn.jia.agent.service.SkillCapabilityLookup.Scope(scope.tenantId(),scope.clientId(),
+                scope.ownerJiacn(),scope.targetAgentId());
+        var descriptors=installedSkills.read(key);
+        var runtime=Objects.requireNonNull(skillRuntimes.lookup(key,expectedFence));
+        var results=new ArrayList<SkillCandidate>();
+        var counts=new java.util.HashMap<List<String>,Integer>();
+        for(var descriptor:descriptors.skills())
+            counts.merge(List.of(descriptor.skillKey(),descriptor.skillVersion()),1,Integer::sum);
+        for(var descriptor:descriptors.skills()) {
+            String reason=descriptor.reasonCode();
+            String title=descriptor.skillKey(); String metadata=null;
+            String runner=null; boolean requiresBinding=false;
+            if(descriptor.verified()) {
+                try {
+                    var manifest=SKILL_JSON.readTree(descriptor.manifestJson());
+                    title=manifest.path("title").asText(descriptor.skillKey()); runner=manifest.path("runner").asText();
+                    requiresBinding="provider-operation".equals(runner)||manifest.path("requirements").has("providerAlias");
+                    // Allowlist: no entrypoint, installation, host, binding or internal package paths.
+                    var publicMetadata=SKILL_JSON.createObjectNode();
+                    for(String field:List.of("description","parametersSchema","inputs","outputs","costInfo"))
+                        publicMetadata.set(field,manifest.get(field));
+                    metadata=publicMetadata.toString();
+                } catch(java.io.IOException invalid) {
+                    throw new cn.jia.agent.service.InstalledSkillDescriptorLookup.SourceUnavailable(invalid);
+                }
+            } else if(reason==null) reason="SKILL_INSTALLATION_EVIDENCE_INVALID";
+            if(counts.get(List.of(descriptor.skillKey(),descriptor.skillVersion()))!=1)
+                reason="SKILL_INSTALLATION_AMBIGUOUS";
+            if(reason==null && runtime.state()!=cn.jia.agent.service.SkillCapabilityLookup.State.AVAILABLE)
+                reason="SKILL_RUNTIME_"+runtime.state().name();
+            if(reason==null) {
+                var reports=runtime.catalog().skills().stream().filter(r->descriptor.skillKey().equals(r.skillKey())
+                        && descriptor.skillVersion().equals(r.skillVersion())).toList();
+                if(reports.size()!=1) reason="SKILL_RUNTIME_NOT_DECLARED";
+                else {
+                    var report=reports.getFirst();
+                    if(!Objects.equals(descriptor.runtimeInstallationId(),runtime.fence().runtimeInstallationId())
+                            || !Objects.equals(descriptor.runtimeHostId(),runtime.fence().hostId())
+                            || !Objects.equals(descriptor.packageSha256(),report.packageSha256())
+                            || !Objects.equals(descriptor.manifestSha256(),report.manifestSha256())
+                            || !Objects.equals(runner,report.runner())) reason="SKILL_RUNTIME_BINDING_MISMATCH";
+                    else if(report.readiness()!=cn.jia.agent.service.SkillCapabilityLookup.Readiness.READY)
+                        reason=report.reasonCode()==null?"SKILL_RUNTIME_UNAVAILABLE":report.reasonCode();
+                    else if(report.reasonCode()!=null||report.toolchainDigest()==null
+                            || (requiresBinding&&report.bindingRevision()==null))
+                        reason="SKILL_RUNTIME_EVIDENCE_INVALID";
+                }
+            }
+            results.add(new SkillCandidate(descriptor.skillKey(),descriptor.skillVersion(),title,
+                    reason==null?"RUNTIME_READY":"UNAVAILABLE",reason,metadata));
+        }
+        // Fence/live directory is rechecked after the join. No old READY survives a reconnect.
+        if(runtime.state()==cn.jia.agent.service.SkillCapabilityLookup.State.AVAILABLE
+                && !runtime.equals(skillRuntimes.lookup(key,expectedFence))) {
+            results.replaceAll(item->new SkillCandidate(item.skillKey(),item.skillVersion(),item.title(),
+                    "UNAVAILABLE","SKILL_RUNTIME_CHANGED",item.metadataJson()));
+            return new InstalledCatalog(null,results);
+        }
+        return new InstalledCatalog(runtime.catalog()==null?null:runtime.catalog().catalogRevision(),results);
+    }
+
+    private cn.jia.agent.service.NativeTextFileRuntimeLookup textFiles;
+    private cn.jia.agent.service.PersonalWorkspaceExecutionService workspaceExecutions;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setTextFileCapabilities(cn.jia.agent.service.NativeTextFileRuntimeLookup lookup,
+            cn.jia.agent.service.PersonalWorkspaceExecutionService executions) {
+        this.textFiles = lookup; this.workspaceExecutions = executions;
+    }
 
     public ChatActionCapabilityService(TypedInspectionSessionRegistry inspections,
             ObjectProvider<ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup> executions,
@@ -35,6 +126,7 @@ public final class ChatActionCapabilityService {
         this.authorities = Objects.requireNonNull(authorities);
         this.inspectionEnabled = inspectionEnabled;
         this.executionEnabled = bridgeEnabled && providerEnabled && executionEnabled;
+        this.textExecutionEnabled = executionEnabled;
     }
 
     /** Catalogue entries contain authoritative mediaType/contentMimeType metadata, never bytes. */
@@ -62,6 +154,11 @@ public final class ChatActionCapabilityService {
             }
         }
         if (executionEnabled) appendImageAdapter(scope, actions);
+        if (textExecutionEnabled && catalog.isEmpty() && textFiles != null && workspaceExecutions != null
+                && workspaceExecutions.capabilities().allowedMimeTypes().contains("text/plain")
+                && textFiles.ready(new cn.jia.agent.service.NativeTextFileRuntimeLookup.Scope(
+                        scope.tenantId(),scope.clientId(),scope.ownerJiacn(),scope.targetAgentId())))
+            actions.add(action("generate-text-file", "EXECUTE", "GENERATE_TEXT_FILE", List.of(), 0, 0));
         return List.copyOf(actions);
     }
 

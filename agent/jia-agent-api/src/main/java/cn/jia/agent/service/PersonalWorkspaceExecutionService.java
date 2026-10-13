@@ -8,6 +8,19 @@ public interface PersonalWorkspaceExecutionService {
     ExecutionView create(OwnerScope scope, CreateCommand command, String idempotencyKey);
     /** Trusted Agent/Chat application entry only: no browser-provided authority, no Provider invocation. */
     ExecutionView createConversation(OwnerScope scope, ConversationCreate command);
+    /** Stable owner-scoped identity for the zero-input text action and its immutable Chat link. */
+    static String textFileExecutionId(OwnerScope scope, String intentId) {
+        try {
+            var digest = java.security.MessageDigest.getInstance("SHA-256");
+            for (String value : List.of("conversation-text-file-v1", scope.tenantId(), scope.clientId(),
+                    scope.ownerJiacn(), intentId)) {
+                byte[] bytes = value.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                digest.update(java.nio.ByteBuffer.allocate(4).putInt(bytes.length).array());
+                digest.update(bytes);
+            }
+            return "pwe_" + java.util.HexFormat.of().formatHex(digest.digest()).substring(0, 60);
+        } catch (java.security.NoSuchAlgorithmException impossible) { throw new IllegalStateException(impossible); }
+    }
     /** Trusted Chat consumer obtains exact bytes only after owner/grant re-admission; not a public URL. */
     ConversationOutput readConversationOutput(OwnerScope scope, String taskId, String runId, String outputId);
     /** Committed conversation-only outputs whose bytes were checked under the same owner/grant fence. */

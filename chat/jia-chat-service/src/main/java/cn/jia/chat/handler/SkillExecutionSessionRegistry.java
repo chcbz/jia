@@ -1,0 +1,56 @@
+package cn.jia.chat.handler;
+
+import cn.jia.agent.service.AgentManagedSessionLookup.SessionFence;
+import cn.jia.agent.service.SkillCapabilityLookup;
+import org.springframework.stereotype.Component;
+
+import java.util.Objects;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.BooleanSupplier;
+
+/** Transient live directory only. Registration caller supplies installation-derived scope/fence
+ * and a live-binding predicate, never identities or permissions taken from the skill report.
+ * The actual authenticated WS registration adapter is a separate integration step. */
+@Component
+public final class SkillExecutionSessionRegistry implements SkillCapabilityLookup {
+    private record Key(String sessionId, String agentId) { }
+    private record Entry(Key key, Scope scope, SessionFence fence, Catalog catalog, BooleanSupplier current) { }
+    private final ConcurrentHashMap<Key, Entry> entries = new ConcurrentHashMap<>();
+
+    /** Null catalog records absence/invalidity and replaces any previously valid directory. */
+    public void register(String sessionId, Scope trustedScope, SessionFence trustedFence,
+            Catalog catalog, BooleanSupplier currentBinding) {
+        if (sessionId == null || sessionId.isBlank() || !sessionId.equals(sessionId.strip())
+                || sessionId.codePointCount(0, sessionId.length()) > 128
+                || sessionId.codePoints().anyMatch(Character::isISOControl))
+            throw new IllegalArgumentException("Invalid skill session ID");
+        Objects.requireNonNull(trustedScope); SkillCapabilityLookup.validateFence(trustedFence);
+        var key = new Key(sessionId, trustedScope.agentId());
+        entries.put(key, new Entry(key, trustedScope, trustedFence, catalog,
+                Objects.requireNonNull(currentBinding)));
+    }
+
+    public void remove(String sessionId) {
+        if (sessionId != null) entries.entrySet().removeIf(e -> sessionId.equals(e.getKey().sessionId()));
+    }
+
+    @Override public View lookup(Scope scope, SessionFence expectedFence) {
+        Objects.requireNonNull(scope); SkillCapabilityLookup.validateFence(expectedFence);
+        Entry selected = null;
+        for (var entry : entries.values()) {
+            if (!entry.scope().equals(scope) || !current(entry)) continue;
+            if (selected != null) return View.unavailable(State.AMBIGUOUS);
+            selected = entry;
+        }
+        if (selected == null) return View.unavailable(State.DISCONNECTED);
+        if (!selected.fence().equals(expectedFence) || !current(selected) || entries.get(selected.key()) != selected)
+            return View.unavailable(State.FENCED);
+        if (selected.catalog() == null) return View.unavailable(State.INVALID_DECLARATION);
+        return new View(State.AVAILABLE, selected.key().sessionId(), selected.fence(), selected.catalog());
+    }
+
+    private static boolean current(Entry entry) {
+        try { return entry.current().getAsBoolean(); }
+        catch (RuntimeException unavailable) { return false; }
+    }
+}

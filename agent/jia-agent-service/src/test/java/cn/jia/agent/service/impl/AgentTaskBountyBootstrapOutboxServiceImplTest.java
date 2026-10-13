@@ -312,6 +312,22 @@ class AgentTaskBountyBootstrapOutboxServiceImplTest {
         }
 
         @Test
+        void textFileGrantReadsBackWithoutReassigningOrWeakeningIntegrity() {
+            var operations=List.of("DELIBERATE", "GENERATE_TEXT_FILE", "INSPECT_INPUTS");
+            ReadFixture fixture=new ReadFixture(operations,"DELIBERATE",true,3L);
+            var result=fixture.service.read(scope(),"task-1","original-key");
+            assertEquals(operations,result.permittedOperations());
+            assertEquals(0,fixture.grants.writeCalls);
+            assertEquals(0,fixture.bootstraps.writeCalls);
+            for (String invalid:List.of("[\"DELIBERATE\",\"GENERATE_TEXT_FILE\",\"GENERATE_TEXT_FILE\"]",
+                    "[\"DELIBERATE\",\"GENERATE_TEXT_FILE\",\"UNKNOWN_OPERATION\"]")) {
+                fixture.grants.grant.setPermittedOperationsJson(invalid);
+                assertReadReason(AgentTaskDeliberationOperationReadService.ReadException.Reason.INTEGRITY_ERROR,
+                        ()->fixture.service.read(scope(),"task-1","original-key"));
+            }
+        }
+
+        @Test
         void mysqlJsonObjectOrderAndWhitespacePreserveExactReferenceAndAuthority() {
             ReadFixture fixture = new ReadFixture(List.of("EDIT_IMAGE", "GENERATE_IMAGE"),
                     "GENERATE_IMAGE", true, 2L);

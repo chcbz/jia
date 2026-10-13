@@ -50,7 +50,7 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
     static final String ASSIGN_HASH_DOMAIN = "ASSIGN_AND_START";
     static final String INITIAL_OPERATION_HASH_DOMAIN = "ASSIGN_AND_START_INITIAL_OPERATION_V1";
     private static final Set<String> OPERATIONS = Set.of(
-            "DELIBERATE", "INSPECT_INPUTS", "GENERATE_IMAGE", "EDIT_IMAGE", "GENERATE_AUDIO", "EDIT_AUDIO");
+            "DELIBERATE", "INSPECT_INPUTS", "GENERATE_TEXT_FILE", "GENERATE_IMAGE", "EDIT_IMAGE", "GENERATE_AUDIO", "EDIT_AUDIO");
     private static final Set<String> PURPOSES = Set.of("INPUT", "REFERENCE");
     private static final int MAX_INPUTS = 32;
     private static final long MAX_SAFE_INTEGER = 9_007_199_254_740_991L;
@@ -131,7 +131,7 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
                 request.setWorkflowVersion(2); request.setBusinessAction(ACTION);
                 request.setAgentId(canonicalAgent); request.setExpectedTaskVersion(expectedTaskVersion);
                 request.setRequirementRevision(requirementRevision);
-                request.setRequestedOperations(List.of("DELIBERATE","INSPECT_INPUTS"));
+                request.setRequestedOperations(List.of("DELIBERATE","INSPECT_INPUTS","GENERATE_TEXT_FILE"));
                 request.setInitialOperation("DELIBERATE"); request.setInputRefs(inputs);
                 ValidAssign valid=validateAssign(scope,taskId,key,request);
                 return assignLocked(scope,valid,canonicalAgent,hashAssign(valid,canonicalAgent),actionId,root);

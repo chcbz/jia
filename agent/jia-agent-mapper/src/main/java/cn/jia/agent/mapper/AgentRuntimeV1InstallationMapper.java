@@ -3,11 +3,22 @@ package cn.jia.agent.mapper;
 import cn.jia.agent.entity.AgentRuntimeV1InstallationEntity;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import org.apache.ibatis.annotations.Param;
+import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 
 /** Exact-scope, compare-and-set persistence for Runtime v1 installations. */
 public interface AgentRuntimeV1InstallationMapper extends BaseMapper<AgentRuntimeV1InstallationEntity> {
+    /** Unique installation ID serializes concurrent retries; never overwrites the winner's authority. */
+    @Insert("""
+            INSERT INTO agent_runtime_v1_installation(installation_id,canonical_agent_id,manifest_version,
+                manifest_sha256,enrollment_secret_hash,enrollment_expires_at,status,version,tenant_id,client_id)
+            VALUES(#{installationId},#{canonicalAgentId},#{manifestVersion},#{manifestSha256},
+                #{enrollmentSecretHash},#{enrollmentExpiresAt},'PENDING',0,#{tenantId},#{clientId})
+            ON DUPLICATE KEY UPDATE installation_id=installation_id
+            """)
+    int insertCandidateIfAbsent(AgentRuntimeV1InstallationEntity candidate);
+
     @Select("""
             SELECT * FROM agent_runtime_v1_installation
              WHERE installation_id=#{installationId}

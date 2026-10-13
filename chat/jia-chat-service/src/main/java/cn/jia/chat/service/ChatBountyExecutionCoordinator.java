@@ -123,8 +123,9 @@ public class ChatBountyExecutionCoordinator {
                     || !Objects.equals(exact.clientId(),step.clientId())
                     || !Objects.equals(exact.ownerJiacn(),step.ownerJiacn())
                     || !Objects.equals(exact.taskId(),step.taskId())
-                    || !Objects.equals(inputs.getFirst().content(),exact.title()+
-                            (exact.description()==null || exact.description().isEmpty()?"":"\n\n"+exact.description())))
+                    || exact.revision()!=revision
+                    || !Objects.equals(inputs.getFirst().content(),ChatBountyRequirementContent.render(
+                            exact.title(),exact.description())))
                 throw new IllegalStateException("Exact requirement snapshot changed");
             inputDigest=sha(CanonicalContextJson.write(Map.of("requirementHash",exact.sha256(),
                     "referenceHash",text(metadata,"referenceSummarySha256"),"taskId",step.taskId(),

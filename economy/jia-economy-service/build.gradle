@@ -23,6 +23,7 @@ def economyHostingRegressionSourceSet = sourceSets.create('economyHostingRegress
         include 'cn/jia/economy/config/EconomyPreviewConfigurationTest.java'
         include 'cn/jia/economy/config/EconomyHostingRentSchemaInitializerMySqlTest.java'
         include 'cn/jia/economy/config/EconomyMySqlTestFixture.java'
+        include 'cn/jia/economy/service/impl/HostingRentLedgerServiceRealTransactionTest.java'
     }
     resources.srcDir 'src/test/resources'
     compileClasspath += sourceSets.main.output

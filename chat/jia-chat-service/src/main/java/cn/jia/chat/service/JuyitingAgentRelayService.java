@@ -12,10 +12,14 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.HashSet;
+import java.util.Objects;
+import java.util.Set;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -99,14 +103,113 @@ public class JuyitingAgentRelayService {
                 .map(dispatch -> buildAgentDeliveryEventJson(
                         conversationId, dispatch.targetAgentId(), false, dispatch))
                 .toList();
-        Flux<String> durableEvents = chatConversationEventBroker.stream(
-                        conversationId, generation,
-                        () -> chatConversationService.isLiveGeneration(
-                                admissionScope, conversationId, generation))
-                .filter(event -> event.contains("\"requestId\":\"" + admission.requestId() + "\""));
+        Flux<String> durableEvents = requestScopedEvents(
+                admissionScope, admission, tenantId, ownerJiacn, ownerClientId,
+                conversationId, generation);
         return new JuyitingAgentRelayResult(true, Mono.just(true),
                 Flux.fromIterable(accepted).concatWith(durableEvents));
     }
+
+    /** One POST owns one buffer; the independent conversation events stream stays live. */
+    private Flux<String> requestScopedEvents(UserAdmissionScope admissionScope,
+            ChatDeliberationService.Admission admission,
+            String tenantId, String ownerJiacn, String clientId, String conversationId, long generation) {
+        return Flux.using(() -> {
+                    ChatConversationEventBroker.LiveSubscription subscription =
+                            chatConversationEventBroker.subscribeBuffered(conversationId, generation,
+                                    () -> chatConversationService.isLiveGeneration(
+                                            admissionScope, conversationId, generation));
+                    if (subscription == null) throw new IllegalStateException("Conversation stream unavailable");
+                    return subscription;
+                }, subscription -> readRequestTerminal(
+                        admission, tenantId, ownerJiacn, clientId, conversationId, generation)
+                        .flatMapMany(terminal -> terminal ? Flux.empty() : subscription.flux()
+                                .filter(event -> matchesRequestEvent(event, admission,
+                                        tenantId, ownerJiacn, clientId, conversationId, generation))
+                                // Each blocking transaction finishes before the next event is examined.
+                                .concatMap(event -> readRequestTerminal(admission, tenantId, ownerJiacn,
+                                                clientId, conversationId, generation)
+                                        .map(done -> new RequestFrame(event, done)), 1)
+                                .takeUntil(RequestFrame::terminal)
+                                .map(RequestFrame::payload)),
+                ChatConversationEventBroker.LiveSubscription::close)
+                .subscribeOn(Schedulers.boundedElastic());
+    }
+
+    private Mono<Boolean> readRequestTerminal(ChatDeliberationService.Admission admission,
+            String tenantId, String ownerJiacn, String clientId, String conversationId, long generation) {
+        return Mono.fromCallable(() -> {
+            // Never recover identity from a scheduler thread's ThreadLocal.
+            ChatDeliberationService.RequestView view =
+                    deliberationService.getRequest(tenantId, ownerJiacn, clientId, admission.requestId());
+            String revision = Long.toString(admission.requestRevision());
+            String expectedGeneration = Long.toString(generation);
+            if (view == null || !Objects.equals(conversationId, admission.conversationId())
+                    || generation != admission.conversationGeneration()
+                    || !Objects.equals(admission.requestId(), view.requestId())
+                    || !revision.equals(view.requestRevision())
+                    || !conversationId.equals(view.conversationId())
+                    || !expectedGeneration.equals(view.conversationGeneration())) {
+                throw new IllegalStateException("Request scope unavailable");
+            }
+            // This completion rule is only for CHAT/INSPECT. Typed EXECUTE owns a different
+            // lifecycle: even terminal CHAT turns must not settle its execution-state stream.
+            if (view.steps() == null || view.steps().stream().anyMatch(step -> step == null
+                    || !("CHAT".equals(step.kind()) || "INSPECT".equals(step.kind())))) return false;
+            if (view.turns() == null || view.turns().isEmpty() || admission.dispatches().isEmpty()) return false;
+            Set<String> seen = new HashSet<>();
+            boolean allTerminal = true;
+            for (ChatDeliberationService.TurnView turn : view.turns()) {
+                if (turn == null || turn.turnId() == null || !seen.add(turn.turnId())
+                        || !Objects.equals(view.requestId(), turn.requestId())
+                        || !revision.equals(turn.requestRevision())
+                        || !conversationId.equals(turn.conversationId())
+                        || !expectedGeneration.equals(turn.conversationGeneration())) {
+                    throw new IllegalStateException("Request turn scope unavailable");
+                }
+                allTerminal &= turn.state() != null && TERMINAL_TURN_STATES.contains(turn.state());
+            }
+            for (ChatDeliberationService.Dispatch dispatch : admission.dispatches()) {
+                if (!seen.contains(dispatch.turnId())) return false;
+                if (view.turns().stream().noneMatch(turn -> dispatch.turnId().equals(turn.turnId())
+                        && Objects.equals(dispatch.targetAgentId(), turn.targetAgentId()))) {
+                    throw new IllegalStateException("Request turn target unavailable");
+                }
+            }
+            return view.state() != null && TERMINAL_REQUEST_STATES.contains(view.state()) && allTerminal;
+        }).subscribeOn(Schedulers.boundedElastic());
+    }
+
+    private boolean matchesRequestEvent(String json, ChatDeliberationService.Admission admission,
+            String tenantId, String ownerJiacn, String clientId, String conversationId, long generation) {
+        try {
+            Map<?, ?> event = JsonUtil.getMapper().readValue(json, Map.class);
+            return event != null && admission.requestId().equals(event.get("requestId"))
+                    && optionalEventFieldMatches(event, "conversationId", conversationId)
+                    && optionalEventFieldMatches(event, "conversationGeneration", Long.toString(generation))
+                    && optionalEventFieldMatches(event, "requestRevision", Long.toString(admission.requestRevision()))
+                    && optionalEventFieldMatches(event, "tenantId", tenantId)
+                    && optionalEventFieldMatches(event, "ownerJiacn", ownerJiacn)
+                    && optionalEventFieldMatches(event, "clientId", clientId);
+        } catch (Exception malformed) {
+            return false;
+        }
+    }
+
+    private boolean optionalEventFieldMatches(Map<?, ?> event, String field, String expected) {
+        if (!event.containsKey(field)) return true;
+        Object value = event.get(field);
+        if (expected.equals(value)) return true;
+        // Identity strings are byte-exact; only decimal version fields admit integral JSON numbers.
+        return ("conversationGeneration".equals(field) || "requestRevision".equals(field))
+                && (value instanceof Long || value instanceof Integer) && expected.equals(value.toString());
+    }
+
+    private static final Set<String> TERMINAL_REQUEST_STATES =
+            Set.of("COMPLETED", "FAILED", "CANCELLED", "PARTIAL");
+    private static final Set<String> TERMINAL_TURN_STATES =
+            Set.of("FINAL_PERSISTED", "PUBLISHED", "FAILED", "CANCELLED");
+    private record RequestFrame(String payload, boolean terminal) { }
 
     public String selectedAgentId(ChatMessageDTO chatMessage) {
         JuyitingConversationScope scope = scopeService.resolve(chatMessage);

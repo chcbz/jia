@@ -11,7 +11,6 @@ import cn.jia.agent.service.impl.AgentServiceImpl.AgentBizException;
 import cn.jia.core.util.StringUtil;
 import org.springframework.stereotype.Service;
 
-import java.nio.file.Path;
 import java.util.List;
 import java.util.Objects;
 
@@ -168,31 +167,26 @@ public class AgentPersonaProvisioningService {
         AgentRuntimeDTO agent = agentService.bindPersona(
                 scope.tenantId(), scope.clientId(), scope.ownerJiacn(), personaCode);
         String profileId = personaCode.strip().toLowerCase().replaceAll("[^a-z0-9_-]", "-");
-        String agentName = StringUtil.isBlank(agent.getName()) ? personaCode : agent.getName();
-        String personaName = !StringUtil.isBlank(agent.getTitle()) ? agent.getTitle()
-                : !StringUtil.isBlank(agent.getPersonaName()) ? agent.getPersonaName() : agentName;
-        String workdir = Path.of("/home/isp/apps/codex-ws-agent").toAbsolutePath().normalize().toString();
         AgentPersonaBindResultDTO result = new AgentPersonaBindResultDTO();
         result.setAgent(agent);
         result.setMode("local");
         result.setAgentId(agent.getAgentId());
         result.setProfileId(profileId);
-        result.setWorkdir(workdir);
-        result.setMessage("已入名册；浏览器响应不提供凭证，请通过受信任的带外流程配置专用 API key");
-        result.setEnvExample("WS_URL=wss://<service>/ws/agent/channel\nOPENCLAW_API_KEY=<key>"
-                + "\nDEFAULT_CODEX_PROFILE=" + profileId
-                + "\nCODEX_PROFILES_FILE=$PWD/codex-profiles.conf");
-        result.setProfileExample("""
-                [agent.%s]
-                agentId=%s
-                codexWorkdir=%s
-                agentName=%s
-                personaName=%s
-                isDefault=true
-                """.formatted(profileId, agent.getAgentId(), workdir,
-                agentName, personaName).stripTrailing());
-        result.setCommands(List.of("Install codex-ws-agent from the trusted package",
-                "Configure a dedicated key out of band"));
+        result.setMessage("本地绑定仅提供 Runtime v1 自托管准备信息；不会创建 installation 或返回凭证。");
+        result.setEnvExample(null);
+        result.setProfileExample(null);
+        AgentPersonaBindResultDTO.RuntimeSetup runtimeSetup =
+                new AgentPersonaBindResultDTO.RuntimeSetup();
+        runtimeSetup.setRuntimeProtocolVersion("v1");
+        runtimeSetup.setTenantId(scope.tenantId());
+        runtimeSetup.setClientId(scope.clientId());
+        runtimeSetup.setCanonicalAgentId(agent.getAgentId());
+        runtimeSetup.setManifestVersion("1");
+        runtimeSetup.setInstallationCreatePath("/agent/runtime/v1/installations");
+        runtimeSetup.setGuideUrl("https://gitee.com/chcbz/isp-install/blob/develop/docs/cyf-agent-runtime-v1-self-host.md");
+        result.setRuntimeSetup(runtimeSetup);
+        result.setCommands(List.of("Prepare Runtime v1 enrollment materials on the target host",
+                "Review the self-hosting guide and explicitly register the installation in the web console"));
         return result;
     }
 
