@@ -19,6 +19,8 @@ import cn.jia.economy.service.impl.EconomyPostingServiceImpl;
 import cn.jia.oauth.entity.OauthApiKeyEntity;
 import cn.jia.oauth.service.ApiKeyService;
 import org.junit.jupiter.api.*;
+import org.junit.jupiter.api.io.TempDir;
+import java.nio.file.Path;
 import org.mybatis.spring.*;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.core.io.ByteArrayResource;
@@ -78,6 +80,7 @@ class SkillMarketplaceRealTransactionTest {
             "redrive_guard               TINYINT GENERATED ALWAYS AS (IF(settlement_state IN ('SOURCE_REQUEUED','NOT_ACQUIRED'),NULL,1)) STORED";
     private static final String H2_REDRIVE_GUARD=
             "redrive_guard               TINYINT GENERATED ALWAYS AS (CASE WHEN settlement_state IN ('SOURCE_REQUEUED','NOT_ACQUIRED') THEN NULL ELSE 1 END)";
+    @TempDir Path packageRoot;
     private Connection schemaConnection;
     private JdbcTemplate jdbc;
     private EconomySkillMarketplaceMapper market;
@@ -147,7 +150,7 @@ class SkillMarketplaceRealTransactionTest {
         when(transport.allowsDispatch(ACTOR.tenantId(),ACTOR.clientId())).thenReturn(true);
         var commands=new AgentCommandTransportDaoImpl(sql.getMapper(AgentCommandTransportMapper.class));
         AgentCommandTransportWriter writer=new AgentCommandTransportWriterImpl(commands,transport,agents,mock(AgentTaskCollaborationAccessService.class),manager);
-        var packages=new SkillPackages(); keys=mock(ApiKeyService.class);
+        var packages=new SkillPackages(packageRoot); keys=mock(ApiKeyService.class);
         key=new OauthApiKeyEntity();key.setId("key-1");key.setJiacn(ACTOR.ownerJiacn());key.setClientId(ACTOR.clientId());key.setTenantId(ACTOR.tenantId());key.setStatus(1);
         when(keys.get("key-1")).thenReturn(key);
         credentialMapper=spy(sql.getMapper(EconomySkillCredentialMapper.class));
@@ -259,6 +262,34 @@ class SkillMarketplaceRealTransactionTest {
                 "SELECT * FROM agent_command_operation_audit WHERE operation_id='audit-op-1'"));
         assertEquals(1,jdbc.queryForObject(
                 "SELECT COUNT(*) FROM agent_command_operation_audit WHERE operation_id='audit-op-1'",Integer.class));
+    }
+    @Test void dynamicallyStoredApprovedPackageUsesRealPurchaseAndInstallTransactions() throws Exception {
+        var buffer=new java.io.ByteArrayOutputStream();
+        try(var zip=new java.util.zip.ZipOutputStream(buffer)) {
+            zip.putNextEntry(new java.util.zip.ZipEntry("SKILL.md"));
+            zip.write("---\nname: pdf-export\ndescription: export pdf\n---\nExport a PDF.\n".getBytes(StandardCharsets.UTF_8));
+            zip.closeEntry();
+        }
+        byte[] packageBytes=buffer.toByteArray();new SkillPackageStore(packageRoot).publish(packageBytes);
+        var seed=new PlatformSkillPackageCatalog().products().getFirst();
+        market.insertProduct(new SkillProductEntity().setProductId("sp_dynamic_pdf").setSellerType("SYSTEM").setSellerId("SKILL_STORE")
+                .setName("Dynamic PDF").setDescription("not classpath").setStatus("DRAFT").setVersion(1L)
+                .setTenantId(ACTOR.tenantId()).setClientId(ACTOR.clientId()).setCreateTime(1L).setUpdateTime(1L));
+        market.insertProductVersion(new SkillProductVersionEntity().setProductVersionId("spv_dynamic_pdf_1").setProductId("sp_dynamic_pdf")
+                .setVersionSequence(1L).setSkillKey("pdf-export").setSkillVersion("1.0.0").setPriceMicro(0L)
+                .setPackageSha256(SkillPackageStore.sha256(packageBytes)).setPackageSize((long)packageBytes.length)
+                .setApprovedPermissionsManifest(seed.approvedPermissionsManifest()).setApprovedPermissionsSha256(seed.approvedPermissionsSha256())
+                .setDeploymentRestriction("NONE").setReviewStatus("APPROVED").setTenantId(ACTOR.tenantId()).setClientId(ACTOR.clientId()).setCreateTime(1L));
+        assertEquals(1,market.publishProductVersion(ACTOR.tenantId(),ACTOR.clientId(),"sp_dynamic_pdf","spv_dynamic_pdf_1",1,2));
+        var body=purchaseBody("spv_dynamic_pdf_1");String idem=uuid();var receipt=service.purchase(ACTOR,idem,body,false);
+        var i=installation();sent(i);assertArrayEquals(packageBytes,results.packageBytes(proof(),i.getInstallationId()));
+        // Exact approved lookup is scope-isolated and does not depend on the product's current pointer.
+        assertNull(market.selectApprovedProductVersion(ACTOR.tenantId(),"other-client","spv_dynamic_pdf_1"));
+        jdbc.update("UPDATE economy_skill_product SET current_product_version_id='a-later-version',version=3 WHERE product_id='sp_dynamic_pdf'");
+        assertArrayEquals(packageBytes,results.packageBytes(proof(),i.getInstallationId()));
+        var success=result(i,"SUCCEEDED",null);results.accept(proof(),success);
+        assertEquals("ACTIVE",service.order(ACTOR,i.getOrderId()).get("status"));
+        assertEquals(receipt,service.purchase(ACTOR,idem,body,false));assertEquals(100000000L,wallet());
     }
     @Test void paidPurchaseInstallsCapturesAndReplaysOriginalReceipt() {
         var body=purchaseBody("spv_repo_test_1_0_0");String idem=uuid();var receipt=service.purchase(ACTOR,idem,body,false);

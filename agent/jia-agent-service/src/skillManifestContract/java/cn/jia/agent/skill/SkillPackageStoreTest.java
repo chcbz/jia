@@ -22,7 +22,8 @@ class SkillPackageStoreTest {
     @Test void concurrentPublicationDoesNotReplaceObject() throws Exception {
         var store=new SkillPackageStore(root);
         try(var workers=Executors.newFixedThreadPool(3)) {
-            var jobs=workers.invokeAll(Collections.nCopies(6,()->store.publish(bytes)));
+            Callable<String> publish=()->store.publish(bytes);
+            var jobs=workers.invokeAll(Collections.nCopies(6,publish));
             String key=jobs.getFirst().get(); for(var job:jobs) assertEquals(key,job.get());
             assertArrayEquals(bytes,store.read(SkillPackageStore.sha256(bytes),bytes.length));
         }
