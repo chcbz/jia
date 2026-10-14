@@ -1,4 +1,6 @@
 dependencies {
+    // Strict metadata/request codecs intentionally use Jackson2, independently of networknt3/Jackson3.
+    implementation 'com.fasterxml.jackson.core:jackson-databind:2.20.1'
     // action-v4 reuses the same standard codec/dialect as verified skill packages.
     implementation('com.networknt:json-schema-validator') { version { strictly '3.0.1' } }
 	api project(':common:jia-common-core')
