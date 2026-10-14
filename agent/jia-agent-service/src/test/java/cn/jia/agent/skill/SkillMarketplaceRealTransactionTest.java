@@ -372,9 +372,9 @@ class SkillMarketplaceRealTransactionTest {
         assertEquals("INSTALLING",service.order(ACTOR,i.getOrderId()).get("status"));assertEquals(reserved,wallet());
         jdbc.update("UPDATE agent_command_delivery SET update_time=?,next_retry_at=?",System.currentTimeMillis()-70000,System.currentTimeMillis()-1);
         jdbc.update("UPDATE agent_outbox_event SET update_time=?,next_retry_at=?",System.currentTimeMillis()-70000,System.currentTimeMillis()-1);
-        when(sessions.dispatch(anyString(),anyString(),anyString(),any(),any())).thenAnswer(call->{
+        doAnswer(call->{
             assertArrayEquals(wire,call.getArgument(4));return AgentRawCommandDispatchResult.sent(1,1);
-        });
+        }).when(sessions).dispatch(anyString(),anyString(),anyString(),any(),any());
         recovery.recover();assertEquals("SENT",jdbc.queryForObject("SELECT status FROM agent_command_delivery",String.class));
         assertEquals(i.getMessageId(),jdbc.queryForObject("SELECT active_message_id FROM agent_command_delivery",String.class));
         assertEquals(1,jdbc.queryForObject("SELECT active_attempt FROM agent_command_delivery",Integer.class));
