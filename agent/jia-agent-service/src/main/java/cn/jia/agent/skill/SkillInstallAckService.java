@@ -58,8 +58,10 @@ public final class SkillInstallAckService {
                     && ack.taskId().equals(order.getOrderId()) && ack.commandId().equals(install.getCommandId())
                     && ack.registeredAgentId().equals(install.getTargetAgentId())
                     && ack.correlationId().equals(install.getMessageId()) && ack.workItemId()==null);
-            SkillMarketplaceService.requireBinding(app.deliveryBinding(ack.tenantId(),ack.clientId(),install.getInstallationId()),
-                    ack.registeredAgentId(),proof);
+            try {
+                SkillMarketplaceService.requireBinding(app.deliveryBinding(ack.tenantId(),ack.clientId(),install.getInstallationId()),
+                        ack.registeredAgentId(),proof);
+            } catch(SkillMarketplaceException rejected) { throw new AgentCommandAckRejectedException("SKILL_NATIVE_ACK_REJECTED"); }
             var d=commands.lockDeliveryByCommand(ack.tenantId(),ack.clientId(),ack.commandId());
             check(d!=null && d.getId()!=null && d.getId()>0 && d.getVersion()!=null && d.getVersion()>=0
                     && ack.tenantId().equals(d.getTenantId()) && ack.clientId().equals(d.getClientId())

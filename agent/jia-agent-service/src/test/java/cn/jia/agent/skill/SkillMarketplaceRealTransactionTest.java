@@ -111,7 +111,7 @@ public class SkillMarketplaceRealTransactionTest {
     private AgentCommandRecoveryDao ackCommands;
 
 
-    @BeforeEach void setup() throws Exception {
+    @BeforeEach protected void setup() throws Exception {
         var ds=fixtureDataSource();
         jdbc=new JdbcTemplate(ds); var manager=new DataSourceTransactionManager(ds); tx=new TransactionTemplate(manager);
         // H2 2.4.240 constant-IN expressions retain their DDL SessionLocal comparator.
@@ -188,7 +188,7 @@ public class SkillMarketplaceRealTransactionTest {
                 .setCurrency("SILVER").setBalanceMicro(100000000L).setAllowNegative(0).setStatus("ACTIVE").setVersion(0L)
                 .setTenantId(ACTOR.tenantId()).setClientId(ACTOR.clientId()).setCreateTime(1L).setUpdateTime(1L));
     }
-    @AfterEach void tearDown() throws SQLException {
+    @AfterEach protected void tearDown() throws SQLException {
         try {
             if(jdbc!=null && !mysqlFixture()) jdbc.execute("DROP ALL OBJECTS"); // This fixture's UUID-owned H2 only.
         } finally {
@@ -227,7 +227,7 @@ public class SkillMarketplaceRealTransactionTest {
         when(sessions.dispatch(anyString(),anyString(),anyString(),any(),any())).thenReturn(AgentRawCommandDispatchResult.sent(1,1));
         recovery.recover();
     }
-    @Test void nativeSkillAckReceivedStartedDownloadAndRealResultActivateWithoutBroker() {
+    @Test public void nativeSkillAckReceivedStartedDownloadAndRealResultActivateWithoutBroker() {
         service.purchase(ACTOR,uuid(),purchaseBody("spv_repo_test_1_0_0"),false);var i=installation();drainNative();
         byte[] wire=jdbc.queryForObject("SELECT wire_payload FROM agent_outbox_event",byte[].class);
         var received=nativeAck(i,"RECEIVED",null);assertEquals(AgentCommandAckResult.Kind.ADVANCED,received.kind());
