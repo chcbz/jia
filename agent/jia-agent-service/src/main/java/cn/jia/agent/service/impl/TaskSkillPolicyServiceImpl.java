@@ -33,7 +33,6 @@ public final class TaskSkillPolicyServiceImpl implements TaskSkillPolicyService 
     @Override public Snapshot read(SkillCapabilityLookup.Scope scope,String taskId) {
         if(scope==null||taskId==null||!taskId.matches("[A-Za-z0-9][A-Za-z0-9._:-]{0,99}"))throw new IllegalArgumentException();
         try {
-            if(!scope.agentId().equals(identities.requireCanonicalAgentIdInScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),scope.agentId())))throw missing();
             var task=tasks.findByTaskIdInOwnerScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),taskId);
             if(task==null)throw missing();
             if(!scope.tenantId().equals(task.getTenantId())||!scope.clientId().equals(task.getClientId())
@@ -58,13 +57,21 @@ public final class TaskSkillPolicyServiceImpl implements TaskSkillPolicyService 
             AgentRuntimeAuthenticationService.Proof proof;
             try {proof=runtimes.currentRegisteredProof(scope.tenantId(),scope.clientId(),scope.agentId());}
             catch(IllegalArgumentException offline){return denied("RUNTIME_UNAVAILABLE",revision);}
-            if(!scope.ownerJiacn().equals(proof.scope().ownerJiacn()))return denied("RUNTIME_FENCED",revision);
-            return new Snapshot(true,null,revision,new AgentManagedSessionLookup.SessionFence(proof.installationId(),proof.hostId(),proof.scope().runtimeInstanceId(),proof.sessionGeneration()));
+            // Task ownership and Agent ownership are independent. Only the native proof owns
+            // the runtime subject; a delegated task cannot borrow its owner's installation.
+            if(proof==null||proof.scope()==null||!scope.tenantId().equals(proof.scope().tenantId())
+                    ||!scope.clientId().equals(proof.scope().clientId())||!scope.agentId().equals(proof.scope().agentId()))
+                return denied("RUNTIME_FENCED",revision);
+            var runtimeScope=new SkillCapabilityLookup.Scope(proof.scope().tenantId(),proof.scope().clientId(),
+                    proof.scope().ownerJiacn(),proof.scope().agentId());
+            if(!scope.agentId().equals(identities.requireCanonicalAgentIdInScope(runtimeScope.tenantId(),
+                    runtimeScope.clientId(),runtimeScope.ownerJiacn(),runtimeScope.agentId())))throw integrity();
+            return new Snapshot(true,null,revision,new AgentManagedSessionLookup.SessionFence(proof.installationId(),proof.hostId(),proof.scope().runtimeInstanceId(),proof.sessionGeneration()),runtimeScope);
         } catch(Failure known){throw known;}
         catch(AgentTaskCollaborationException|AgentServiceImpl.AgentBizException denied){throw missing();}
         catch(RuntimeException unavailable){throw new Failure(Failure.Reason.SOURCE_UNAVAILABLE,unavailable);}
     }
-    private static Snapshot denied(String code,long revision){return new Snapshot(false,code,revision,null);}
+    private static Snapshot denied(String code,long revision){return new Snapshot(false,code,revision,null,null);}
     private static Failure missing(){return new Failure(Failure.Reason.NOT_FOUND);}
     private static Failure integrity(){return new Failure(Failure.Reason.INTEGRITY_ERROR);}
 }

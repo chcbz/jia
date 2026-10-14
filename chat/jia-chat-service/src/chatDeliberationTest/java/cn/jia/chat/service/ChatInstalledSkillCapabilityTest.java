@@ -113,16 +113,47 @@ class ChatInstalledSkillCapabilityTest {
     }
 
     @Test void taskPolicyNotRuntimeReadyDecidesCallabilityAndUnknownCostIsNotZero() {
-        ready();when(policy.read(key,"task")).thenReturn(new TaskSkillPolicyService.Snapshot(false,"TASK_SKILL_POLICY_DENIED",4,fence));
+        ready();when(policy.read(key,"task")).thenReturn(new TaskSkillPolicyService.Snapshot(false,"TASK_SKILL_POLICY_DENIED",4,fence,key));
         var blocked=service.taskCatalog(scope,"task");assertTrue(blocked.items().stream().allMatch(x->"UNAVAILABLE".equals(x.get("state"))));
         assertEquals(java.util.Map.of("mode","UNKNOWN"),blocked.items().getFirst().get("costInfo"));
-        when(policy.read(key,"task")).thenReturn(new TaskSkillPolicyService.Snapshot(true,null,4,fence));
+        when(policy.read(key,"task")).thenReturn(new TaskSkillPolicyService.Snapshot(true,null,4,fence,key));
         assertTrue(service.taskCatalog(scope,"task").items().stream().allMatch(x->"CALLABLE".equals(x.get("state"))));
         assertFalse(service.taskCatalog(scope,"task").toString().contains("private/path"));
     }
     @Test void taskPolicyReplacementNeverKeepsOldCallable() {
-        ready();when(policy.read(key,"task")).thenReturn(new TaskSkillPolicyService.Snapshot(true,null,4,fence),
-                new TaskSkillPolicyService.Snapshot(false,"TASK_SKILL_POLICY_DENIED",5,fence));
+        ready();when(policy.read(key,"task")).thenReturn(new TaskSkillPolicyService.Snapshot(true,null,4,fence,key),
+                new TaskSkillPolicyService.Snapshot(false,"TASK_SKILL_POLICY_DENIED",5,fence,key));
         assertTrue(service.taskCatalog(scope,"task").items().stream().allMatch(x->"SKILL_TASK_POLICY_CHANGED".equals(x.get("reasonCode"))));
     }
+    @Test void delegatedTaskCatalogReadsActualAgentInstallationNotTaskOwnerInstallation() {
+        var delegated=new SkillCapabilityLookup.Scope("0","client","agent-owner","agent");
+        when(policy.read(key,"task")).thenReturn(new TaskSkillPolicyService.Snapshot(true,null,4,fence,delegated));
+        when(installed.read(delegated)).thenReturn(new InstalledSkillDescriptorLookup.Snapshot(List.of(descriptor("text-file"))));
+        when(runtime.lookup(delegated,fence)).thenReturn(view(List.of(report("text-file"))));
+        var result=service.taskCatalog(scope,"task");assertEquals(1,result.items().size());
+        assertEquals("CALLABLE",result.items().getFirst().get("state"));
+        assertFalse(result.toString().contains("agent-owner"));
+        verify(installed,never()).read(key);verify(runtime,never()).lookup(eq(key),any());
+    }
+    @Test void noDelegationDoesNotExposeOtherAgentsInstalledSkillList() {
+        when(policy.read(key,"task")).thenReturn(new TaskSkillPolicyService.Snapshot(false,"TASK_GRANT_MISSING",0,null,null));
+        assertTrue(service.taskCatalog(scope,"task").items().isEmpty());
+        assertTrue(service.available(scope,"task",List.of()).isEmpty());
+        verifyNoInteractions(installed,runtime);
+    }
+    @Test void changedAgentSubjectCannotKeepPreviouslyCallableEvenWhenFenceIsIdentical() {
+        ready();var changed=new SkillCapabilityLookup.Scope("0","client","agent-owner","agent");
+        when(policy.read(key,"task")).thenReturn(new TaskSkillPolicyService.Snapshot(true,null,4,fence,key),
+                new TaskSkillPolicyService.Snapshot(true,null,4,fence,changed));
+        var result=service.taskCatalog(scope,"task");assertFalse(result.items().isEmpty());
+        assertTrue(result.items().stream().allMatch(x->"SKILL_TASK_POLICY_CHANGED".equals(x.get("reasonCode"))));
+    }
+    @Test void taskPolicyCannotSelectDifferentAgentOrClientForInstallationJoin() {
+        var foreign=new SkillCapabilityLookup.Scope("0","other-client","agent-owner","agent");
+        when(policy.read(key,"task")).thenReturn(new TaskSkillPolicyService.Snapshot(true,null,4,fence,foreign));
+        assertEquals(TaskSkillPolicyService.Failure.Reason.INTEGRITY_ERROR,
+                assertThrows(TaskSkillPolicyService.Failure.class,()->service.taskCatalog(scope,"task")).reason());
+        verifyNoInteractions(installed,runtime);
+    }
+
 }

@@ -64,7 +64,7 @@ public class SkillExecutionServiceTest {
         manifest.put("inputs",Map.of("minItems",0,"maxItems",32,"acceptedMimeTypes",List.of("image/png")));manifest.put("parametersSchema",Map.of("$schema",SkillManifestCodec.DIALECT,"type","object","additionalProperties",false,"properties",Map.of()));
         when(installed.read(any())).thenReturn(new InstalledSkillDescriptorLookup.Snapshot(List.of(new InstalledSkillDescriptorLookup.Descriptor("analysis","1.0.0","install",HASH,HASH,json(manifest),"rti_"+"1".repeat(32),"host",null))));
         var sessionFence=new AgentManagedSessionLookup.SessionFence("rti_"+"1".repeat(32),"host","runtime",2);
-        when(policy.read(any(),eq("task"))).thenReturn(new TaskSkillPolicyService.Snapshot(true,null,7,sessionFence));
+        when(policy.read(any(),eq("task"))).thenReturn(new TaskSkillPolicyService.Snapshot(true,null,7,sessionFence,new SkillCapabilityLookup.Scope("0","client","owner","agent")));
         when(capabilities.lookup(any(),eq(sessionFence))).thenReturn(new SkillCapabilityLookup.View(SkillCapabilityLookup.State.AVAILABLE,"session",sessionFence,new SkillCapabilityLookup.Catalog("1",List.of(new SkillCapabilityLookup.RuntimeSkill("analysis","1.0.0",HASH,HASH,"native-model",SkillCapabilityLookup.Readiness.READY,null,HASH,null)))));
         var snapshot=snapshot();String digest=sha(json(snapshot));
         execution=new PersonalWorkspaceExecutionEntity().setExecutionId("exec").setTaskId("task").setRunId("run").setConversationId("42").setTargetAgentId("agent").setOwnerJiacn("owner")

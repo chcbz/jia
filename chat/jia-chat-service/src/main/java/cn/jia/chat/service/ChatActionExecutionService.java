@@ -49,8 +49,12 @@ public class ChatActionExecutionService implements ChatActionDispatchService.Exe
         if(org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive())
             throw new InstalledSkillDescriptorLookup.SourceUnavailable();
         var scope=action.outcome().scope();
-        installed.read(new SkillCapabilityLookup.Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),
-                (String)action.validated().binding().get("targetAgentId")));
+        var taskScope=new SkillCapabilityLookup.Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),
+                (String)action.validated().binding().get("targetAgentId"));
+        var policy=policies.read(taskScope,action.outcome().taskId());
+        if(!policy.allowed()||policy.runtimeScope()==null)throw new ChatActionDispatchService.Rejected();
+        requireRuntimeTarget(taskScope,policy.runtimeScope());
+        installed.read(policy.runtimeScope());
     }
 
     @Override
@@ -118,21 +122,25 @@ public class ChatActionExecutionService implements ChatActionDispatchService.Exe
             AgentTaskExecutionGrantService.Admission baseline) {
         var parent=action.outcome();var scope=parent.scope();String target=(String)action.validated().binding().get("targetAgentId");
         var key=new SkillCapabilityLookup.Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),target);
+        var policy=policies.read(key,parent.taskId());
+        if(!policy.allowed()||policy.fence()==null||policy.runtimeScope()==null||policy.assignmentRevision()!=parent.assignmentRevision())throw new ChatActionDispatchService.Rejected();
+        requireRuntimeTarget(key,policy.runtimeScope());
+        var runtimeKey=policy.runtimeScope();
         var selected=capability.skill();
-        var descriptors=installed.read(key).skills().stream().filter(d->selected.skillKey().equals(d.skillKey())
+        var descriptors=installed.read(runtimeKey).skills().stream().filter(d->selected.skillKey().equals(d.skillKey())
                 &&selected.skillVersion().equals(d.skillVersion())).toList();
         if(descriptors.size()!=1)throw new ChatActionDispatchService.Rejected();var descriptor=descriptors.getFirst();
         if(!descriptor.verified()||!selected.packageSha256().equals(descriptor.packageSha256())
                 ||!selected.manifestSha256().equals(descriptor.manifestSha256()))throw new ChatActionDispatchService.Rejected();
         var manifest=ChatSkillSnapshotJson.object(descriptor.manifestJson());
-        var policy=policies.read(key,parent.taskId());
-        if(!policy.allowed()||policy.fence()==null||policy.assignmentRevision()!=parent.assignmentRevision())throw new ChatActionDispatchService.Rejected();
-        var runtime=runtimes.lookup(key,policy.fence());
+        var runtime=runtimes.lookup(runtimeKey,policy.fence());
         if(runtime==null||runtime.state()!=SkillCapabilityLookup.State.AVAILABLE)throw new ChatActionDispatchService.Rejected();
         var reports=runtime.catalog().skills().stream().filter(d->selected.skillKey().equals(d.skillKey())&&selected.skillVersion().equals(d.skillVersion())).toList();
         if(reports.size()!=1)throw new ChatActionDispatchService.Rejected();var report=reports.getFirst();
         if(report.readiness()!=SkillCapabilityLookup.Readiness.READY||!selected.packageSha256().equals(report.packageSha256())
                 ||!selected.manifestSha256().equals(report.manifestSha256()))throw new ChatActionDispatchService.Rejected();
+        if(!policy.equals(policies.read(key,parent.taskId()))||!runtime.equals(runtimes.lookup(runtimeKey,policy.fence())))
+            throw new ChatActionDispatchService.Rejected();
         var inputs=new ArrayList<Map<String,Object>>();
         for(var source:catalog) {
             var input=new LinkedHashMap<String,Object>();
@@ -157,6 +165,11 @@ public class ChatActionExecutionService implements ChatActionDispatchService.Exe
         snapshot.put("costInfo",manifest.getOrDefault("costInfo",Map.of("mode","UNKNOWN")));
         // No producer/replaces is inferred from an uploaded input. Output lineage comes only from committed results.
         return snapshot;
+    }
+
+    private static void requireRuntimeTarget(SkillCapabilityLookup.Scope task,SkillCapabilityLookup.Scope runtime) {
+        if(!task.tenantId().equals(runtime.tenantId())||!task.clientId().equals(runtime.clientId())
+                ||!task.agentId().equals(runtime.agentId()))throw new ChatActionDispatchService.Rejected();
     }
 
     private void requireReplay(ChatActionFinalService.BoundAction action,ChatTypedDeliberationStore.Admission prior,

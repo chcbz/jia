@@ -107,11 +107,22 @@ public final class ChatActionCapabilityService {
     public TaskCatalog taskCatalog(Scope scope, String taskId) {
         var key=new cn.jia.agent.service.SkillCapabilityLookup.Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),scope.targetAgentId());
         var policy=policies.read(key,taskId);
+        return taskCatalog(scope,taskId,policy);
+    }
+    private TaskCatalog taskCatalog(Scope scope,String taskId,cn.jia.agent.service.TaskSkillPolicyService.Snapshot policy) {
+        var key=new cn.jia.agent.service.SkillCapabilityLookup.Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),scope.targetAgentId());
+        // No assignment/grant means no right to enumerate another Agent's installed packages.
+        if(policy.runtimeScope()==null) return new TaskCatalog(null,List.of());
+        var runtimeKey=policy.runtimeScope();
+        if(!scope.tenantId().equals(runtimeKey.tenantId())||!scope.clientId().equals(runtimeKey.clientId())
+                ||!scope.targetAgentId().equals(runtimeKey.agentId()))
+            throw new cn.jia.agent.service.TaskSkillPolicyService.Failure(cn.jia.agent.service.TaskSkillPolicyService.Failure.Reason.INTEGRITY_ERROR);
+        var runtimeScope=new Scope(runtimeKey.tenantId(),runtimeKey.ownerJiacn(),runtimeKey.clientId(),runtimeKey.agentId());
         InstalledCatalog observed;
-        if(policy.fence()!=null) observed=inspectInstalledSkills(scope,policy.fence());
+        if(policy.fence()!=null) observed=inspectInstalledSkills(runtimeScope,policy.fence());
         else {
             var list=new ArrayList<SkillCandidate>();
-            for(var d:installedSkills.read(key).skills()) {
+            for(var d:installedSkills.read(runtimeKey).skills()) {
                 String title=d.skillKey(),metadata=null;
                 if(d.verified()) try {
                     var m=SKILL_JSON.readTree(d.manifestJson());title=m.path("title").asText(d.skillKey());
@@ -139,9 +150,12 @@ public final class ChatActionCapabilityService {
     }
     public List<Map<String,Object>> available(Scope scope, String taskId, List<Map<String,Object>> catalog) {
         var key=new cn.jia.agent.service.SkillCapabilityLookup.Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),scope.targetAgentId());
-        var installed=installedSkills.read(key);
-        var task=taskCatalog(scope,taskId);
-        if(!installed.equals(installedSkills.read(key)))return List.of();
+        var policy=policies.read(key,taskId);
+        if(!policy.allowed()||policy.runtimeScope()==null)return List.of();
+        var task=taskCatalog(scope,taskId,policy);
+        var runtimeKey=policy.runtimeScope();
+        var installed=installedSkills.read(runtimeKey);
+        if(!policy.equals(policies.read(key,taskId))||!installed.equals(installedSkills.read(runtimeKey)))return List.of();
         var callable=task.items().stream().filter(x->"CALLABLE".equals(x.get("state"))).toList();
         var actions=new ArrayList<Map<String,Object>>();
         for(var item:callable) {

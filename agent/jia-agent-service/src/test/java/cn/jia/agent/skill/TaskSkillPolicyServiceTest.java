@@ -33,4 +33,33 @@ class TaskSkillPolicyServiceTest {
     @Test void missingObjectIs404ButReadFailureIs503() {when(tasks.findByTaskIdInOwnerScope("0","client","owner","task")).thenReturn(null);assertEquals(TaskSkillPolicyService.Failure.Reason.NOT_FOUND,assertThrows(TaskSkillPolicyService.Failure.class,()->service.read(scope,"task")).reason());when(tasks.findByTaskIdInOwnerScope("0","client","owner","task")).thenThrow(new IllegalStateException("read unavailable"));assertEquals(TaskSkillPolicyService.Failure.Reason.SOURCE_UNAVAILABLE,assertThrows(TaskSkillPolicyService.Failure.class,()->service.read(scope,"task")).reason());}
     @Test void reassignmentRevocationAndMissingSkillOperationReject() {when(grants.latestAssignmentEventJson("0","client","owner","task")).thenReturn("{\"resultVersion\":9}");assertEquals("ASSIGNMENT_EPOCH_UNPROVEN",service.read(scope,"task").reasonCode());when(grants.latestAssignmentEventJson("0","client","owner","task")).thenReturn("{\"resultVersion\":7}");grant.setState("REVOKED");assertEquals("TASK_GRANT_STALE",service.read(scope,"task").reasonCode());grant.setState("ACTIVE").setPermittedOperationsJson("[\"DELIBERATE\"]");assertEquals("SKILL_BASELINE_REQUIRED",service.read(scope,"task").reasonCode());}
     @Test void offlineIsDeniedAndNotSourceSuccess() {when(runtime.currentRegisteredProof("0","client","agent")).thenThrow(new IllegalArgumentException("offline"));assertEquals("RUNTIME_UNAVAILABLE",service.read(scope,"task").reasonCode());}
+    @Test void delegatedTaskUsesAuthenticatedAgentOwnerNotTaskOwner() {
+        when(runtime.currentRegisteredProof("0","client","agent")).thenReturn(new AgentRuntimeAuthenticationService.Proof(
+                new AgentRuntimeAuthentication.Scope("0","client","agent-owner","agent","runtime"),"installation","host",3,"a".repeat(64),4,3));
+        when(identity.requireCanonicalAgentIdInScope("0","client","agent-owner","agent")).thenReturn("agent");
+        var result=service.read(scope,"task");assertTrue(result.allowed());
+        assertEquals(new SkillCapabilityLookup.Scope("0","client","agent-owner","agent"),result.runtimeScope());
+        verify(identity,never()).requireCanonicalAgentIdInScope("0","client","owner","agent");
+        verify(identity).requireCanonicalAgentIdInScope("0","client","agent-owner","agent");
+    }
+    @Test void unassignedTaskAndMissingGrantNeverProbeExternalRuntimeOrIdentity() {
+        task.setAssignedAgentId("different-agent");assertEquals("TASK_NOT_ASSIGNED",service.read(scope,"task").reasonCode());
+        task.setAssignedAgentId("agent");when(grants.findActiveByTask("0","client","owner","task")).thenReturn(null);
+        assertEquals("TASK_GRANT_MISSING",service.read(scope,"task").reasonCode());
+        verifyNoInteractions(runtime,identity);
+    }
+    @Test void nativeProofMustStillMatchTenantClientAndSelectedAgent() {
+        for(var foreign:java.util.List.of(new AgentRuntimeAuthentication.Scope("other","client","agent-owner","agent","runtime"),
+                new AgentRuntimeAuthentication.Scope("0","other","agent-owner","agent","runtime"),
+                new AgentRuntimeAuthentication.Scope("0","client","agent-owner","other-agent","runtime"))) {
+            when(runtime.currentRegisteredProof("0","client","agent")).thenReturn(new AgentRuntimeAuthenticationService.Proof(foreign,"installation","host",3,"a".repeat(64),4,3));
+            var result=service.read(scope,"task");assertFalse(result.allowed());assertEquals("RUNTIME_FENCED",result.reasonCode());assertNull(result.runtimeScope());
+        }
+        verifyNoInteractions(identity);
+    }
+    @Test void allowedSnapshotCannotOmitNativeSubjectOrFence() {
+        assertThrows(IllegalArgumentException.class,()->new TaskSkillPolicyService.Snapshot(true,null,7,null,null));
+        assertThrows(NullPointerException.class,()->new TaskSkillPolicyService.Snapshot(true,null,7,null,scope));
+    }
+
 }
