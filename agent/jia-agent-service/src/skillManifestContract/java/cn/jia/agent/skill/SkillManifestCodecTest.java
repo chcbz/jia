@@ -30,6 +30,12 @@ class SkillManifestCodecTest {
             if (c.path("expected").asBoolean()) assertDoesNotThrow(action); else assertThrows(SkillMarketplaceException.class, action);
         }));
     }
+    @Test void usesProductionSchemaGenerationAndKeepsStrictTypes() throws Exception {
+        var schema = new ObjectMapper().readTree("{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"integer\"}");
+        assertEquals(com.networknt.schema.Schema.class, codec.compileSchema(schema).getClass());
+        assertEquals(1, codec.validateParameters(schema, "1".getBytes(StandardCharsets.UTF_8)).asInt());
+        assertThrows(SkillMarketplaceException.class, () -> codec.validateParameters(schema, "\"1\"".getBytes(StandardCharsets.UTF_8)));
+    }
     @Test void instructionOnly() { assertNull(codec.parse(null, "notes", "1.0.0")); }
     @Test void costAndOriginalHash() throws Exception {
         for (var c : fixtures().get("cases")) if (c.path("id").asText().equals("bad-cost-only")) {
