@@ -48,7 +48,13 @@ public class SkillNativeResultMySqlTest extends SkillNativeAckMySqlTest {
             var receipts=sent.stream().filter(x->"work.result.receipt".equals(x.get("type"))).toList();
             if(receipts.isEmpty()) throw new IllegalArgumentException("WS_RESULT_REJECTED");
             assertEquals(1,receipts.size(),"result must durably commit through actual WS branch");
-            @SuppressWarnings("unchecked") Map<String,Object> receipt=(Map<String,Object>)receipts.getFirst().get("data");
+            // Production sendEvent flattens business fields; only transport metadata varies on replay.
+            Map<String,Object> receipt=new LinkedHashMap<>(receipts.getFirst());
+            assertEquals("work.result.receipt",receipt.remove("type"));
+            assertEquals("agent",receipt.remove("channel"));
+            assertInstanceOf(Number.class,receipt.remove("timestamp"));
+            assertEquals("work.result.receipt",receipt.get("messageType"));
+            assertEquals(body.get("messageId"),receipt.get("correlationId"));
             assertEquals(body.get("installationId"),receipt.get("installationId"));assertEquals("ACCEPTED",receipt.get("receiptStatus"));return receipt;
         } catch(Exception e) { throw new IllegalStateException(e); }
     }
