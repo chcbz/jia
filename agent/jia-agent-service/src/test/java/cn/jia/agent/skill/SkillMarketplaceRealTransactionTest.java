@@ -211,12 +211,12 @@ public class SkillMarketplaceRealTransactionTest {
         var generic=mock(AgentCommandAckService.class);
         var boundary=new cn.jia.agent.service.impl.AgentRuntimeV1ServiceImpl(mock(AgentRuntimeV1InstallationDao.class),
                 mock(AgentIdentityService.class),mock(AgentIdentityRegistryDao.class),provider(generic),authentication,provider(nativeAcks));
-        when(authentication.verify(any())).thenAnswer(call->{
+        doAnswer(call->{
             cn.jia.agent.security.AgentRuntimeAuthenticationFilter.SessionHeaders h=call.getArgument(0);
             if(h.sessionGeneration()!=proof().sessionGeneration() || !h.installationId().equals(proof().installationId())
                     || !h.runtimeInstanceId().equals(proof().scope().runtimeInstanceId())) throw new IllegalArgumentException("STALE_NATIVE_FENCE");
             return proof();
-        });
+        }).when(authentication).verify(any());
         var p=proof();
         var request=new AgentRuntimeV1AckRequest(i.getMessageId(),i.getOrderId(),i.getCommandId(),i.getOrderId(),null,
                 ACTOR.tenantId(),ACTOR.clientId(),AGENT,null,null,status,p.installationId(),p.hostId(),p.scope().runtimeInstanceId(),p.sessionGeneration(),deliveryVersion);
@@ -319,14 +319,14 @@ public class SkillMarketplaceRealTransactionTest {
                     insertRedriveGuardRow(operation+"-active",group,"PENDING","PENDING");
                     DataAccessException update=assertThrows(DataAccessException.class,()->jdbc.update(
                             "UPDATE agent_command_redrive_operation SET settlement_state='PENDING' WHERE operation_id=?",operation));
-                    assertEquals("23505",((SQLException)update.getMostSpecificCause()).getSQLState());
+                    assertEquals(mysqlFixture()?"23000":"23505",((SQLException)update.getMostSpecificCause()).getSQLState());
                     assertEquals(2,jdbc.queryForObject("SELECT COUNT(*) FROM agent_command_redrive_operation "
                             +"WHERE delivery_id=? AND redrive_guard IS NULL",Integer.class,group));
                 } else {
                     assertEquals(1,((Number)row.get("redrive_guard")).intValue());
                     DataAccessException duplicate=assertThrows(DataAccessException.class,
                             ()->insertRedriveGuardRow(operation+"-duplicate",group,outcome,settlement));
-                    assertEquals("23505",((SQLException)duplicate.getMostSpecificCause()).getSQLState());
+                    assertEquals(mysqlFixture()?"23000":"23505",((SQLException)duplicate.getMostSpecificCause()).getSQLState());
                 }
                 assertEquals(1,jdbc.queryForObject("SELECT COUNT(*) FROM agent_command_redrive_operation "
                         +"WHERE delivery_id=? AND redrive_guard=1",Integer.class,group));
