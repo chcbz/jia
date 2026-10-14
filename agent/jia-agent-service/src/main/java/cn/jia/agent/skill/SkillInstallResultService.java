@@ -167,7 +167,7 @@ public final class SkillInstallResultService {
                 && i.getOrderId().equals(d.getTaskId()) && i.getTargetAgentId().equals(d.getTargetAgentId())
                 && i.getMessageId().equals(d.getActiveMessageId()) && i.getAttempt().equals(d.getActiveAttempt())
                 && d.getStatus()!=null && Set.of("CONSUMED","SENT","RECEIVED","STARTED","SUCCEEDED","FAILED","WAITING_AGENT","RETRY","EXPIRED").contains(d.getStatus())
-                && (!download || d.getExpiresAt()!=null && d.getExpiresAt()>System.currentTimeMillis()
+                && (!download || d.getExpiresAt()!=null
                     && Set.of("CONSUMED","SENT","RECEIVED","STARTED").contains(d.getStatus())),403,"SKILL_DELIVERY_FENCED");
     }
     static void validateEnvelope(Map<String,Object> b,SkillInstallationEntity i) {

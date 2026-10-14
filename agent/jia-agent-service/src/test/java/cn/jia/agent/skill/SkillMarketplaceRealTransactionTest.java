@@ -208,6 +208,9 @@ public class SkillMarketplaceRealTransactionTest {
         return results.acceptNative(proof,wire);
     }
     private AgentCommandAckResult nativeAck(SkillInstallationEntity i,String status,Long deliveryVersion) {
+        return nativeAckAt(i,status,deliveryVersion,System.currentTimeMillis());
+    }
+    private AgentCommandAckResult nativeAckAt(SkillInstallationEntity i,String status,Long deliveryVersion,long now) {
         var generic=mock(AgentCommandAckService.class);
         var boundary=new cn.jia.agent.service.impl.AgentRuntimeV1ServiceImpl(mock(AgentRuntimeV1InstallationDao.class),
                 mock(AgentIdentityService.class),mock(AgentIdentityRegistryDao.class),provider(generic),authentication,provider(nativeAcks));
@@ -220,12 +223,28 @@ public class SkillMarketplaceRealTransactionTest {
         var p=proof();
         var request=new AgentRuntimeV1AckRequest(i.getMessageId(),i.getOrderId(),i.getCommandId(),i.getOrderId(),null,
                 ACTOR.tenantId(),ACTOR.clientId(),AGENT,null,null,status,p.installationId(),p.hostId(),p.scope().runtimeInstanceId(),p.sessionGeneration(),deliveryVersion);
-        var result=boundary.acknowledge("rts1_fixture_only",i.getMessageId(),request,System.currentTimeMillis());
+        var result=boundary.acknowledge("rts1_fixture_only",i.getMessageId(),request,now);
         verifyNoInteractions(generic); return result;
     }
     private void drainNative() {
         when(sessions.dispatch(anyString(),anyString(),anyString(),any(),any())).thenReturn(AgentRawCommandDispatchResult.sent(1,1));
         recovery.recover();
+    }
+    @Test void nativeSkillInstallRemainsAuthorizedAfterInvitationHintButRejectsInactiveOrder() {
+        service.purchase(ACTOR,uuid(),purchaseBody("spv_repo_test_1_0_0"),false);var i=installation();drainNative();
+        long future=System.currentTimeMillis()+7200000;
+        var ack=nativeAckAt(i,"RECEIVED",null,future);
+        nativeAckAt(i,"STARTED",ack.deliveryVersion(),future);
+        var delivery=jdbc.queryForObject("SELECT expires_at FROM agent_command_delivery",Long.class);
+        assertTrue(delivery<future);
+        var d=new cn.jia.agent.entity.AgentCommandDeliveryEntity();
+        d.setTenantId(ACTOR.tenantId());d.setClientId(ACTOR.clientId());d.setOwnerJiacn(proof().scope().ownerJiacn());
+        d.setCommandId(i.getCommandId()).setCommandType("SKILL_INSTALL").setTaskId(i.getOrderId())
+            .setTargetAgentId(AGENT).setActiveMessageId(i.getMessageId()).setActiveAttempt(i.getAttempt()).setStatus("STARTED").setExpiresAt(1L);
+        SkillInstallResultService.requireCurrentDelivery(i,d,proof().scope().ownerJiacn(),true);
+        jdbc.update("UPDATE economy_skill_order SET status='UNKNOWN' WHERE order_id=?",i.getOrderId());
+        assertThrows(RuntimeException.class,()->results.packageBytes(proof(),i.getInstallationId()));
+        assertThrows(RuntimeException.class,()->nativeAckAt(i,"STARTED",null,future));
     }
     @Test public void nativeSkillAckReceivedStartedDownloadAndRealResultActivateWithoutBroker() {
         service.purchase(ACTOR,uuid(),purchaseBody("spv_repo_test_1_0_0"),false);var i=installation();drainNative();

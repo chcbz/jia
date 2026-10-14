@@ -15,7 +15,7 @@ import static cn.jia.agent.skill.SkillMarketplaceService.one;
 
 /** The existing bounded recovery scheduler drains ORIGINAL committed outbox bytes over WS.
  * No broker ACK is fabricated. Same-message replay is safe only through the real Runtime
- * installation idempotence. Unknown sends/expired commands hold funds pending reconciliation. */
+ * installation idempotence. Original live orders remain recoverable without an artificial task-invitation deadline. */
 @Service
 @ConditionalOnProperty(prefix="economy.skill.marketplace",name="enabled",havingValue="true")
 public final class SkillInstallRecoveryService {
@@ -48,7 +48,7 @@ public final class SkillInstallRecoveryService {
                     && hint.getOwnerJiacn()!=null && hint.getOwnerJiacn().equals(d.getOwnerJiacn())
                     && hint.getCommandId().equals(d.getCommandId()) && hint.getTargetAgentId().equals(d.getTargetAgentId())
                     && hint.getTaskId().equals(d.getTaskId()) && "SKILL_INSTALL".equals(d.getCommandType())
-                    && d.getExpiresAt()!=null && d.getExpiresAt()>now,409,"SKILL_DELIVERY_FENCED");
+                    && d.getExpiresAt()!=null,409,"SKILL_DELIVERY_FENCED");
             if(d.getLeaseUntil()!=null && d.getLeaseUntil()>now) return null;
             if(d.getNextRetryAt()!=null && d.getNextRetryAt()>now) return null;
             require(Set.of("PENDING","SENT","WAITING_AGENT","RETRY","CONSUMED").contains(d.getStatus()),409,"SKILL_DELIVERY_FENCED");
@@ -75,10 +75,9 @@ public final class SkillInstallRecoveryService {
             var rows=dao.lockActiveOutboxes(d.getTenantId(),d.getClientId(),d.getId(),d.getActiveMessageId());
             require(rows!=null && rows.size()==1,409,"SKILL_DELIVERY_FENCED");var o=rows.getFirst();validate(current,o);
             require(claim.outboxId().equals(o.getId()) && claim.owner().equals(o.getLeaseOwner()),409,"SKILL_DELIVERY_FENCED");
-            boolean expired=current.getExpiresAt()<=finish;
-            String status=expired?"EXPIRED":sent?"SENT":"RETRY";
-            Long retry=expired?null:finish+(sent?60000:30000);
-            String error=expired?"SKILL_WS_EXPIRED":sent?"SKILL_WS_SENT":"SKILL_WS_SEND_UNCERTAIN";
+            String status=sent?"SENT":"RETRY";
+            Long retry=finish+(sent?60000:30000);
+            String error=sent?"SKILL_WS_SENT":"SKILL_WS_SEND_UNCERTAIN";
             one(mapper.finishDelivery(current,claim.owner(),status,retry,error,finish));
             one(mapper.finishOutbox(o,claim.owner(),status,retry,error,finish));return null;
         });

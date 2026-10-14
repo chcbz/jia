@@ -44,10 +44,20 @@ class SkillInstallRecoveryServiceTest {
         o.setWirePayloadHash(AgentCommandCanonicalCodec.sha256(o.getWirePayload()));d.setOwnerJiacn("another-owner");
         assertThrows(SkillMarketplaceException.class,()->service.recover(d,now));verifyNoInteractions(dispatch);
     }
-    @Test void rejectsForeignDestinationAndExpiredCommand() {
+    @Test void rejectsForeignDestinationAndModifiedExpiry() {
         fixture();o.setDestination("rabbit-command");assertThrows(SkillMarketplaceException.class,()->service.recover(d,now));
         o.setDestination(SkillInstallCommandWriter.DESTINATION);d.setExpiresAt(now);assertThrows(SkillMarketplaceException.class,()->service.recover(d,now));
         verifyNoInteractions(dispatch);
+    }
+    @Test void invitationHintDoesNotCancelOriginalRecovery() {
+        fixture();long later=now+7200000;
+        when(mapper.claimDelivery(eq(d),anyString(),anyLong(),eq(later))).thenReturn(1);
+        when(mapper.claimOutbox(eq(o),anyString(),anyLong(),eq(later))).thenReturn(1);
+        when(dispatch.dispatch(anyString(),anyString(),anyString(),anyString(),anyString(),anyString(),any())).thenAnswer(call->{
+            assertArrayEquals(o.getWirePayload(),call.getArgument(6));d.setLeaseOwner("superseded");return AgentRawCommandDispatchResult.sent(1,1);
+        });
+        service.recover(d,later);verify(dispatch).dispatch(eq("0"),eq("c"),eq("owner-a"),eq("o"),eq("a"),eq(d.getCommandId()),any());
+        assertEquals(1,d.getActiveAttempt());assertEquals("message",d.getActiveMessageId());
     }
     @Test void currentLeaseOrNotDueDoesNotClaimOrSend() {
         fixture();d.setLeaseOwner("other").setLeaseUntil(now+100);service.recover(d,now);

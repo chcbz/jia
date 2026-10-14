@@ -9,7 +9,7 @@ public interface AgentSkillInstallRecoveryMapper {
           ON CAST(i.tenant_id AS BINARY)=CAST(d.tenant_id AS BINARY)
           AND CAST(i.client_id AS BINARY)=CAST(d.client_id AS BINARY)
           AND CAST(i.command_id AS BINARY)=CAST(d.command_id AS BINARY)
-        WHERE d.command_type='SKILL_INSTALL' AND i.status='INSTALLING' AND d.expires_at>#{now}
+        WHERE d.command_type='SKILL_INSTALL' AND i.status='INSTALLING'
           AND d.status IN ('PENDING','WAITING_AGENT','SENT','RETRY','CONSUMED')
           AND (d.next_retry_at IS NULL OR d.next_retry_at<=#{now})
           AND (d.lease_until IS NULL OR d.lease_until<=#{now})
@@ -28,7 +28,7 @@ public interface AgentSkillInstallRecoveryMapper {
           AND CAST(owner_jiacn AS BINARY)=CAST(#{d.ownerJiacn} AS BINARY)
           AND CAST(active_message_id AS BINARY)=CAST(#{d.activeMessageId} AS BINARY)
           AND active_attempt=#{d.activeAttempt} AND version=#{d.version} AND version<9223372036854775805
-          AND status=#{d.status} AND expires_at>#{now}
+          AND status=#{d.status}
           AND (lease_until IS NULL OR lease_until<=#{now})
         """)
     int claimDelivery(@Param("d") AgentCommandDeliveryEntity d,@Param("owner") String owner,@Param("until") long until,@Param("now") long now);
@@ -40,7 +40,7 @@ public interface AgentSkillInstallRecoveryMapper {
           AND CAST(destination AS BINARY)=CAST('agent.skill-install.ws.v1' AS BINARY)
           AND delivery_id=#{o.deliveryId} AND CAST(message_id AS BINARY)=CAST(#{o.messageId} AS BINARY)
           AND active_attempt=#{o.activeAttempt} AND version=#{o.version} AND version<9223372036854775805
-          AND status=#{o.status} AND expires_at>#{now}
+          AND status=#{o.status}
           AND (lease_until IS NULL OR lease_until<=#{now})
         """)
     int claimOutbox(@Param("o") AgentOutboxEventEntity o,@Param("owner") String owner,@Param("until") long until,@Param("now") long now);

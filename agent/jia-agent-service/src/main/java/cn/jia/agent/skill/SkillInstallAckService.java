@@ -82,8 +82,9 @@ public final class SkillInstallAckService {
                     && Set.of("SENT","RECEIVED","STARTED","SUCCEEDED","FAILED","REJECTED").contains(d.getStatus());
             check(inFlight || settled);
             boolean prior=ack.ackStatus().equals(d.getStatus());
-            check(now<d.getExpiresAt() || "STARTED".equals(d.getStatus()) && TERMINAL.contains(ack.ackStatus())
-                    || prior && TERMINAL.contains(d.getStatus()));
+            // Skill installation is governed by the original live order, not the task-invitation delivery hint.
+            check(prior && TERMINAL.contains(d.getStatus()) || TERMINAL.contains(ack.ackStatus())
+                    || "INSTALLING".equals(order.getStatus()) && "INSTALLING".equals(install.getStatus()));
             if(prior) return new AgentCommandAckResult(AgentCommandAckResult.Kind.PRIOR,d.getStatus(),d.getVersion());
             boolean allowed=switch(d.getStatus()) {
                 case "CONSUMED","SENT" -> Set.of("RECEIVED","REJECTED").contains(ack.ackStatus());
