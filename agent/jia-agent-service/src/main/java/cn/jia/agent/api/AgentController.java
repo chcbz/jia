@@ -298,7 +298,13 @@ public class AgentController {
 
     @GetMapping("/{agentId}")
     public Object get(@PathVariable String agentId) {
-        return JsonResult.success(agentService.get(agentId));
+        var result = agentService.get(agentId);
+        if (skillRoster != null && result != null) {
+            skillRoster.project(
+                    org.springframework.security.core.context.SecurityContextHolder.getContext()
+                            .getAuthentication(), List.of(result));
+        }
+        return JsonResult.success(result);
     }
 
     @PutMapping("/{agentId}/status")
