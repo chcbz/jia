@@ -322,14 +322,14 @@ class AgentWebSocketRawCommandDispatchTest extends BaseMockTest {
         var proof=UnifiedRuntimeTestSupport.install(session);
         Map<String,Object> body=Map.of("messageType","work.result","resultType","SKILL_INSTALL_RESULT",
                 "messageId","durable-result","targetAgentId","agent-1","runtimeInstanceId","original-executing-boot");
-        when(results.accept(org.mockito.ArgumentMatchers.eq(proof),org.mockito.ArgumentMatchers.eq(body)))
+        when(results.acceptNative(org.mockito.ArgumentMatchers.eq(proof),org.mockito.ArgumentMatchers.eq(body)))
                 .thenReturn(Map.of("receiptStatus","ACCEPTED","correlationId","durable-result"));
         UnifiedRuntimeTestSupport.deliver(handler,session,new TextMessage(new tools.jackson.databind.ObjectMapper().writeValueAsString(body)));
-        verify(results).accept(proof,body);
+        verify(results).acceptNative(proof,body);
         assertEquals("original-executing-boot",body.get("runtimeInstanceId"));
         currentChannels.put("0|client-a|agent-1","replacement-socket");
         UnifiedRuntimeTestSupport.deliver(handler,session,new TextMessage(new tools.jackson.databind.ObjectMapper().writeValueAsString(body)));
-        verify(results,org.mockito.Mockito.times(1)).accept(proof,body);
+        verify(results,org.mockito.Mockito.times(1)).acceptNative(proof,body);
     }
 
     private AgentWebSocketHandler handler() {

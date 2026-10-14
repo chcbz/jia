@@ -117,7 +117,7 @@ class AgentRuntimeCanonicalDispatchProjectionTest {
         ObjectProvider<AgentCommandAckService> provider=mock(ObjectProvider.class);
         when(provider.getIfAvailable()).thenReturn(f.service);
         return new AgentRuntimeV1ServiceImpl(mock(AgentRuntimeV1InstallationDao.class),mock(AgentIdentityService.class),
-                mock(AgentIdentityRegistryDao.class),provider,auth);
+                mock(AgentIdentityRegistryDao.class),provider,auth,mock(ObjectProvider.class));
     }
     @Test void actualE05FirstHttpAckCommitsD06WithOriginalKeysAtFrozenClock() throws Exception {
         var c=contract(); var raw=json.readTree(rawBytes());

@@ -450,3 +450,27 @@ tasks.register('mmdExecutionTermination', Test) {
     classpath = mmdExecutionTerminationSourceSet.runtimeClasspath
     useJUnitPlatform()
 }
+
+// Exact native skill WS ingress -> durable MySQL ACTIVE/receipt, no production fixture.
+def nativeSkillResultSourceSet = sourceSets.create('nativeSkillResultRegression') {
+    java.srcDirs('src/nativeSkillResultTest/java', '../../agent/jia-agent-service/src/test/java')
+    java.include 'cn/jia/chat/handler/SkillNativeResultMySqlTest.java'
+    java.include 'cn/jia/agent/skill/SkillMarketplaceRealTransactionTest.java'
+    java.include 'cn/jia/agent/skill/SkillNativeAckMySqlTest.java'
+    java.include 'cn/jia/agent/skill/SkillExecutionMapperRealTransactionTest.java'
+    java.include 'cn/jia/agent/skill/SkillAuditMutationRejectTrigger.java'
+    resources.srcDir '../../agent/jia-agent-service/src/test/resources'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(nativeSkillResultSourceSet.implementationConfigurationName) { extendsFrom configurations.testImplementation }
+configurations.named(nativeSkillResultSourceSet.runtimeOnlyConfigurationName) { extendsFrom configurations.testRuntimeOnly }
+dependencies { add(nativeSkillResultSourceSet.implementationConfigurationName, 'com.h2database:h2') }
+tasks.register('nativeSkillResultRegression', Test) {
+    dependsOn tasks.named(nativeSkillResultSourceSet.classesTaskName)
+    testClassesDirs = nativeSkillResultSourceSet.output.classesDirs
+    classpath = nativeSkillResultSourceSet.runtimeClasspath
+    useJUnitPlatform()
+    maxParallelForks = 1
+    filter { includeTestsMatching 'cn.jia.chat.handler.SkillNativeResultMySqlTest.nativeSkillAckReceivedStartedDownloadAndRealResultActivateWithoutBroker' }
+}

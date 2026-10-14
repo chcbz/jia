@@ -966,7 +966,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
     }
 
     private void handleSkillInstallResult(WebSocketSession session,Map<String,Object> payload) {
-        String agent=sessionAgentId(session), tenant=sessionJiacn(session), client=sessionClientId(session);
+        String agent=sessionAgentId(session), tenant=sessionTenantId(session), client=sessionClientId(session);
         if (skillResults==null || !validExactDispatchId(agent,100)
                 || !successfullyRegisteredAgentIds(session.getId()).contains(agent)
                 || !validExactDispatchId(tenant,50) || !validExactDispatchId(client,50)
@@ -977,7 +977,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             sendProtocolError(session,payload,"SKILL_RESULT_REJECTED","Skill result identity unavailable"); return;
         }
         try {
-            Map<String,Object> receipt=withSessionMutationFence(session, () -> skillResults.accept(sessionProof(session),payload));
+            Map<String,Object> receipt=withSessionMutationFence(session, () -> skillResults.acceptNative(sessionProof(session),payload));
             sendEvent(session,"work.result.receipt",receipt); // accept() returns only after durable commit
         } catch (RuntimeException failure) {
             sendProtocolError(session,payload,"SKILL_RESULT_REJECTED","Skill result could not be committed");

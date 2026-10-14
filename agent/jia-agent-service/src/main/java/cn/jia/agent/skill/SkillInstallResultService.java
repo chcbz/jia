@@ -34,6 +34,21 @@ public final class SkillInstallResultService {
         this.market=market;this.app=app;this.commands=commands;this.skills=skills;this.versions=versions;
         this.authentication=authentication;this.packages=packages;this.tx=new TransactionTemplate(manager);
     }
+    /** Current channel proof is checked separately from immutable result evidence.
+     * runtimeInstanceId is the historical executing boot, installationId the product install. */
+    public Map<String,Object> acceptNative(AgentRuntimeAuthenticationService.Proof proof,Map<String,Object> wire) {
+        require(proof!=null,403,"SKILL_RESULT_REJECTED");
+        Map<String,Object> transport=Map.of("tenantId",proof.scope().tenantId(),"clientId",proof.scope().clientId(),
+                "canonicalAgentId",proof.scope().agentId(),"hostId",proof.hostId(),"runtimeInstallationId",proof.installationId());
+        for(var field:transport.entrySet())
+            require(!wire.containsKey(field.getKey()) || field.getValue().equals(wire.get(field.getKey())),403,"SKILL_RESULT_REJECTED");
+        Object generation=wire.get("sessionGeneration");
+        require(!wire.containsKey("sessionGeneration") || (generation instanceof Integer || generation instanceof Long)
+                && ((Number)generation).longValue()==proof.sessionGeneration(),403,"SKILL_RESULT_REJECTED");
+        Map<String,Object> business=new LinkedHashMap<>(wire);
+        transport.keySet().forEach(business::remove);business.remove("sessionGeneration");
+        return accept(proof,business);
+    }
     public Map<String,Object> accept(AgentRuntimeAuthenticationService.Proof proof,Map<String,Object> body) {
         require(proof!=null && "0".equals(proof.scope().tenantId()),403,"SKILL_RESULT_REJECTED");
         String tenant=proof.scope().tenantId(),client=proof.scope().clientId(),registeredAgent=proof.scope().agentId();
@@ -172,6 +187,10 @@ public final class SkillInstallResultService {
                 :expected.manifestSha256().equals(body.get("manifestSha256")),409,"SKILL_MANIFEST_BINDING_MISMATCH");
     }
     static byte[] resultHash(Map<String,Object> body) {
+        require(Set.of("schemaVersion","messageType","messageId","resultType","commandId","attempt","fencingToken",
+                "deliveryEpoch","orderId","installationId","targetAgentId","sourceAgentId","agentId","runtimeInstanceId",
+                "productVersionId","status","packageDigest","skillKey","skillVersion","installedAt","failureCode","manifestSha256")
+                .containsAll(body.keySet()),400,"BAD_REQUEST");
         Map<String,String> values=new TreeMap<>();
         for(var e:body.entrySet()) {
             Object v=e.getValue();
