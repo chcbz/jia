@@ -2,10 +2,8 @@ package cn.jia.agent.skill;
 import cn.jia.agent.dao.AgentCommandRecoveryDao;
 import cn.jia.agent.mapper.AgentSkillInstallRecoveryMapper;
 import cn.jia.agent.entity.*;
-import cn.jia.agent.service.AgentCommandInboxService;
-import cn.jia.agent.config.AgentRabbitSafetyGate;
 import cn.jia.agent.service.impl.AgentCommandCanonicalCodec;
-import org.springframework.beans.factory.ObjectProvider;
+import cn.jia.economy.config.EconomyPreviewGate;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
@@ -15,82 +13,92 @@ import java.util.*;
 import static cn.jia.agent.skill.SkillMarketplaceException.require;
 import static cn.jia.agent.skill.SkillMarketplaceService.one;
 
-/** Bounded recovery from the ORIGINAL committed outbox through the existing durable inbox.
- * An expired/ambiguous command holds funds; it is never presumed safe to refund. */
+/** The existing bounded recovery scheduler drains ORIGINAL committed outbox bytes over WS.
+ * No broker ACK is fabricated. Same-message replay is safe only through the real Runtime
+ * installation idempotence. Unknown sends/expired commands hold funds pending reconciliation. */
 @Service
 @ConditionalOnProperty(prefix="economy.skill.marketplace",name="enabled",havingValue="true")
 public final class SkillInstallRecoveryService {
     private final AgentSkillInstallRecoveryMapper mapper;
     private final AgentCommandRecoveryDao dao;
-    private final ObjectProvider<AgentCommandInboxService> inbox;
-    private final ObjectProvider<AgentRabbitSafetyGate> gate;
+    private final EconomyPreviewGate preview;
     private final SkillInstallDispatchService dispatch;
     private final TransactionTemplate tx;
-    private final String owner="skill-recovery-"+UUID.randomUUID();
     public SkillInstallRecoveryService(AgentSkillInstallRecoveryMapper mapper,AgentCommandRecoveryDao dao,
-            ObjectProvider<AgentCommandInboxService> inbox,ObjectProvider<AgentRabbitSafetyGate> gate,
-            SkillInstallDispatchService dispatch,PlatformTransactionManager manager) {
-        this.mapper=mapper;this.dao=dao;this.inbox=inbox;this.gate=gate;this.dispatch=dispatch;tx=new TransactionTemplate(manager);
+            EconomyPreviewGate preview,SkillInstallDispatchService dispatch,PlatformTransactionManager manager) {
+        this.mapper=mapper;this.dao=dao;this.preview=preview;this.dispatch=dispatch;tx=new TransactionTemplate(manager);
     }
     @Scheduled(fixedDelayString="${economy.skill.marketplace.recovery-delay-ms:5000}")
     public void recover() {
-        if(inbox.getIfAvailable()==null || gate.getIfAvailable()==null || !gate.getObject().rabbitDispatchEnabled()) return;
         long now=System.currentTimeMillis();
         for(var candidate:mapper.candidates(now,now-60000)) {
-            if(!gate.getObject().allowsDispatch(candidate.getTenantId(),candidate.getClientId())) continue;
+            if(!preview.allows(candidate.getTenantId(),candidate.getClientId())) continue;
             try { recover(candidate,now); } catch(RuntimeException rejected) {
-                // Remains durable for the next bounded scan. Never log wire/secret or infer a refund.
-                org.slf4j.LoggerFactory.getLogger(getClass()).warn("Skill same-wire recovery deferred");
+                org.slf4j.LoggerFactory.getLogger(getClass()).warn("Skill same-wire WS recovery deferred");
             }
         }
     }
     void recover(AgentCommandDeliveryEntity hint,long now) {
-        AgentInboxMessage message=tx.execute(s->{
+        require("0".equals(hint.getTenantId()) && preview.allows(hint.getTenantId(),hint.getClientId()),403,"SKILL_DELIVERY_FENCED");
+        String owner="skill-ws-"+UUID.randomUUID();
+        Claim claim=tx.execute(s->{
             var d=dao.lockDelivery(hint.getTenantId(),hint.getClientId(),hint.getId());
-            require(d!=null && "0".equals(d.getTenantId()) && "0".equals(hint.getTenantId())
-                    && hint.getClientId().equals(d.getClientId()) && hint.getOwnerJiacn()!=null
-                    && hint.getOwnerJiacn().equals(d.getOwnerJiacn())
+            require(d!=null && Objects.equals(hint.getTenantId(),d.getTenantId()) && Objects.equals(hint.getClientId(),d.getClientId())
+                    && hint.getOwnerJiacn()!=null && hint.getOwnerJiacn().equals(d.getOwnerJiacn())
                     && hint.getCommandId().equals(d.getCommandId()) && hint.getTargetAgentId().equals(d.getTargetAgentId())
                     && hint.getTaskId().equals(d.getTaskId()) && "SKILL_INSTALL".equals(d.getCommandType())
-                    && d.getExpiresAt()>now+1,409,"SKILL_DELIVERY_FENCED");
+                    && d.getExpiresAt()!=null && d.getExpiresAt()>now,409,"SKILL_DELIVERY_FENCED");
+            if(d.getLeaseUntil()!=null && d.getLeaseUntil()>now) return null;
+            if(d.getNextRetryAt()!=null && d.getNextRetryAt()>now) return null;
+            require(Set.of("PENDING","SENT","WAITING_AGENT","RETRY","CONSUMED").contains(d.getStatus()),409,"SKILL_DELIVERY_FENCED");
+            if(!"PENDING".equals(d.getStatus()) && d.getUpdateTime()>now-60000) return null;
             var rows=dao.lockActiveOutboxes(d.getTenantId(),d.getClientId(),d.getId(),d.getActiveMessageId());
             require(rows!=null && rows.size()==1,409,"SKILL_DELIVERY_FENCED");var o=rows.getFirst();
-            var i=dao.lockInbox(d.getTenantId(),d.getClientId(),AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1,d.getActiveMessageId());
-            require(i!=null && "PUBLISHED".equals(o.getStatus()) && "ACK".equals(o.getPublisherConfirmStatus())
-                    && "NOT_RETURNED".equals(o.getMandatoryReturnStatus()) && o.getConfirmedAt()!=null && o.getPublishedAt()!=null
-                    && d.getId().equals(o.getDeliveryId()) && d.getId().equals(i.getDeliveryId())
-                    && o.getEventId().equals(i.getEventId()) && d.getCommandId().equals(o.getCommandId())
-                    && d.getCommandId().equals(i.getCommandId()) && d.getActiveMessageId().equals(i.getMessageId())
-                    && d.getActiveMessageId().equals(o.getMessageId()) && d.getActiveAttempt().equals(o.getActiveAttempt())
-                    && d.getExpiresAt().equals(i.getExpiresAt()) && d.getExpiresAt().equals(o.getExpiresAt())
-                    && Arrays.equals(o.getWirePayload(),i.getWirePayload())
-                    && Arrays.equals(AgentCommandCanonicalCodec.sha256(o.getWirePayload()),o.getWirePayloadHash())
-                    && Arrays.equals(o.getWirePayloadHash(),i.getWirePayloadHash()),409,"SKILL_DELIVERY_FENCED");
-            var draft=AgentCommandCanonicalCodec.decodeBusinessBytes(d.getCommandPayload());
-            require("0".equals(draft.tenantId()) && d.getClientId().equals(draft.clientId())
-                    && d.getOwnerJiacn().equals(draft.ownerJiacn()) && d.getCommandId().equals(draft.commandId())
-                    && d.getTaskId().equals(draft.taskId()) && d.getTargetAgentId().equals(draft.targetAgentId())
-                    && Arrays.equals(AgentCommandCanonicalCodec.sha256(d.getCommandPayload()),d.getCommandPayloadHash())
-                    && Arrays.equals(o.getWirePayload(),AgentCommandCanonicalCodec.wireBytes(draft,d.getActiveMessageId(),d.getActiveAttempt())),409,"SKILL_DELIVERY_FENCED");
-            if("WAITING_AGENT".equals(d.getStatus()) || "SENT".equals(d.getStatus())) {
-                require(d.getUpdateTime()<=now-60000 && ("WAITING_AGENT".equals(d.getStatus())?
-                        "WAITING_AGENT".equals(i.getStatus()) && "WAITING_AGENT".equals(i.getResultStatus()):
-                        "PROCESSED".equals(i.getStatus()) && "SENT".equals(i.getResultStatus())),409,"SKILL_DELIVERY_FENCED");
-                one(mapper.retryDelivery(d,now,now+1));one(mapper.retryInbox(i,now,now+1));
-            } else require("RETRY".equals(d.getStatus()) || "CONSUMED".equals(d.getStatus()),409,"SKILL_DELIVERY_FENCED");
-            return new AgentInboxMessage(AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1,d.getTenantId(),d.getClientId(),
-                    d.getActiveMessageId(),o.getEventId(),d.getCommandId(),d.getId(),o.getWirePayload());
+            validate(d,o);
+            if(o.getLeaseUntil()!=null && o.getLeaseUntil()>now) return null;
+            require(Set.of("PENDING","SENT","RETRY","CLAIMED").contains(o.getStatus()),409,"SKILL_DELIVERY_FENCED");
+            long until=now+60000;
+            one(mapper.claimDelivery(d,owner,until,now));one(mapper.claimOutbox(o,owner,until,now));
+            return new Claim(d,o.getId(),owner,o.getWirePayload().clone());
         });
-        var claim=inbox.getObject().claim(message,owner,System.currentTimeMillis(),60000);
-        if(claim.kind()!=AgentInboxClaim.Kind.ACQUIRED) return;
+        if(claim==null) return;
         AgentRawCommandDispatchResult result;
-        try { result=dispatch.dispatch(hint.getTenantId(),hint.getClientId(),hint.getOwnerJiacn(),hint.getTaskId(),hint.getTargetAgentId(),hint.getCommandId(),message.rawWireBytes()); }
+        var d=claim.delivery();
+        try { result=dispatch.dispatch(d.getTenantId(),d.getClientId(),d.getOwnerJiacn(),d.getTaskId(),d.getTargetAgentId(),d.getCommandId(),claim.wire()); }
         catch(RuntimeException unknown) { result=AgentRawCommandDispatchResult.sendFailed(1); }
+        boolean sent=result.status()==AgentRawCommandDispatchResult.Status.SENT;
         long finish=System.currentTimeMillis();
-        AgentInboxDisposition disposition;
-        if(result.status()==AgentRawCommandDispatchResult.Status.SENT) disposition=AgentInboxDisposition.sent();
-        else if(finish+30000>=claim.token().expiresAt()) disposition=new AgentInboxDisposition(AgentInboxDisposition.Type.EXPIRED,null,"MESSAGE_EXPIRED");
-        else disposition=new AgentInboxDisposition(AgentInboxDisposition.Type.RETRY,finish+30000,"SKILL_SAME_WIRE_RECOVERY");
-        inbox.getObject().complete(claim.token(),disposition,finish);
+        tx.execute(s->{
+            var current=dao.lockDelivery(d.getTenantId(),d.getClientId(),d.getId());
+            if(current==null || !claim.owner().equals(current.getLeaseOwner())) return null; // superseded lease owns completion
+            var rows=dao.lockActiveOutboxes(d.getTenantId(),d.getClientId(),d.getId(),d.getActiveMessageId());
+            require(rows!=null && rows.size()==1,409,"SKILL_DELIVERY_FENCED");var o=rows.getFirst();validate(current,o);
+            require(claim.outboxId().equals(o.getId()) && claim.owner().equals(o.getLeaseOwner()),409,"SKILL_DELIVERY_FENCED");
+            boolean expired=current.getExpiresAt()<=finish;
+            String status=expired?"EXPIRED":sent?"SENT":"RETRY";
+            Long retry=expired?null:finish+(sent?60000:30000);
+            String error=expired?"SKILL_WS_EXPIRED":sent?"SKILL_WS_SENT":"SKILL_WS_SEND_UNCERTAIN";
+            one(mapper.finishDelivery(current,claim.owner(),status,retry,error,finish));
+            one(mapper.finishOutbox(o,claim.owner(),status,retry,error,finish));return null;
+        });
     }
+    static void validate(AgentCommandDeliveryEntity d,AgentOutboxEventEntity o) {
+        require(SkillInstallCommandWriter.DESTINATION.equals(o.getDestination())
+                && d.getTenantId().equals(o.getTenantId()) && d.getClientId().equals(o.getClientId())
+                && "skill-order".equals(o.getAggregateType()) && d.getTaskId().equals(o.getAggregateId())
+                && d.getTargetAgentId().equals(o.getRoutingKey()) && d.getId().equals(o.getDeliveryId())
+                && d.getCommandId().equals(o.getCommandId()) && d.getActiveMessageId().equals(o.getMessageId())
+                && d.getActiveAttempt().equals(o.getActiveAttempt()) && d.getExpiresAt().equals(o.getExpiresAt())
+                && "NONE".equals(o.getPublisherConfirmStatus()) && "NONE".equals(o.getMandatoryReturnStatus())
+                && o.getConfirmedAt()==null && o.getPublishedAt()==null
+                && Arrays.equals(AgentCommandCanonicalCodec.sha256(o.getWirePayload()),o.getWirePayloadHash())
+                && Arrays.equals(AgentCommandCanonicalCodec.sha256(d.getCommandPayload()),d.getCommandPayloadHash()),409,"SKILL_DELIVERY_FENCED");
+        var draft=AgentCommandCanonicalCodec.decodeBusinessBytes(d.getCommandPayload());
+        require("SKILL_INSTALL".equals(draft.commandType()) && d.getTenantId().equals(draft.tenantId()) && d.getClientId().equals(draft.clientId())
+                && d.getOwnerJiacn().equals(draft.ownerJiacn()) && d.getCommandId().equals(draft.commandId())
+                && d.getTaskId().equals(draft.taskId()) && d.getTargetAgentId().equals(draft.targetAgentId())
+                && d.getExpiresAt().equals(draft.expiresAt())
+                && Arrays.equals(o.getWirePayload(),AgentCommandCanonicalCodec.wireBytes(draft,d.getActiveMessageId(),d.getActiveAttempt())),409,"SKILL_DELIVERY_FENCED");
+    }
+    private record Claim(AgentCommandDeliveryEntity delivery,Long outboxId,String owner,byte[] wire) {}
 }

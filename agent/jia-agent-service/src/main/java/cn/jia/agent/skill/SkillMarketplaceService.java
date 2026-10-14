@@ -1,10 +1,8 @@
 package cn.jia.agent.skill;
 
-import cn.jia.agent.config.AgentRabbitSafetyGate;
 import cn.jia.agent.dao.AgentRuntimeDao;
 import cn.jia.agent.entity.*;
 import cn.jia.agent.hosting.HostingRentHttp;
-import cn.jia.agent.service.AgentCommandTransportWriter;
 import cn.jia.agent.service.impl.AgentCommandCanonicalCodec;
 import cn.jia.agent.service.AgentManagedSessionLookup;
 import cn.jia.economy.common.*;
@@ -23,7 +21,7 @@ import java.util.*;
 import static cn.jia.agent.skill.SkillMarketplaceException.require;
 
 /** Money admission, command intent and pending entitlement share one REQUIRED transaction.
- * The existing committed outbox publisher owns all network I/O and crash recovery. */
+ * The existing committed WS outbox dispatcher owns all network I/O and crash recovery. */
 @Service
 public final class SkillMarketplaceService {
     private final EconomySkillMarketplaceMapper market;
@@ -33,26 +31,25 @@ public final class SkillMarketplaceService {
     private final EconomyPreviewGate preview;
     private final SkillAgentVersions versions;
     private final AgentRuntimeDao runtimes;
-    private final ObjectProvider<AgentCommandTransportWriter> writer;
-    private final ObjectProvider<AgentRabbitSafetyGate> transportGate;
+    private final ObjectProvider<SkillInstallCommandWriter> writer;
     private final ObjectProvider<SkillPackages> packages;
     private final ObjectProvider<AgentRuntimeAuthenticationService> authentication;
     private final TransactionTemplate tx;
     private final ObjectProvider<AgentManagedSessionLookup> sessions;
     public SkillMarketplaceService(EconomySkillMarketplaceMapper market,EconomySkillApplicationMapper application,
             EconomyLedgerMapper ledger,EconomyPostingService posting,EconomyPreviewGate preview,
-            SkillAgentVersions versions,AgentRuntimeDao runtimes,ObjectProvider<AgentCommandTransportWriter> writer,
-            ObjectProvider<AgentRabbitSafetyGate> transportGate,ObjectProvider<SkillPackages> packages,
+            SkillAgentVersions versions,AgentRuntimeDao runtimes,ObjectProvider<SkillInstallCommandWriter> writer,
+            ObjectProvider<SkillPackages> packages,
             ObjectProvider<AgentRuntimeAuthenticationService> authentication,ObjectProvider<AgentManagedSessionLookup> sessions,PlatformTransactionManager manager) {
         this.market=market; this.application=application; this.ledger=ledger; this.posting=posting;
         this.preview=preview; this.versions=versions; this.runtimes=runtimes; this.writer=writer;
-        this.transportGate=transportGate; this.packages=packages; this.authentication=authentication; this.tx=new TransactionTemplate(manager);this.sessions=sessions;
+        this.packages=packages; this.authentication=authentication; this.tx=new TransactionTemplate(manager);this.sessions=sessions;
     }
     public boolean available(HostingRentHttp.Actor a) {
-        var gate=transportGate.getIfAvailable();
+        var transport=writer.getIfAvailable();
         return versions.enabled() && preview.allows(a.tenantId(),a.clientId()) && packages.getIfAvailable()!=null
-                && writer.getIfAvailable()!=null && authentication.getIfAvailable()!=null && sessions.getIfAvailable()!=null && gate!=null
-                && gate.rabbitDispatchEnabled() && gate.allowsDispatch(a.tenantId(),a.clientId());
+                && transport!=null && transport.allows(a.tenantId(),a.clientId())
+                && authentication.getIfAvailable()!=null && sessions.getIfAvailable()!=null;
     }
     public Map<String,Object> capabilities(HostingRentHttp.Actor a) {
         return Map.of("economyPreviewEnabled",preview.allows(a.tenantId(),a.clientId()),
