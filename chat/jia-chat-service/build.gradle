@@ -465,7 +465,14 @@ def nativeSkillResultSourceSet = sourceSets.create('nativeSkillResultRegression'
 }
 configurations.named(nativeSkillResultSourceSet.implementationConfigurationName) { extendsFrom configurations.testImplementation }
 configurations.named(nativeSkillResultSourceSet.runtimeOnlyConfigurationName) { extendsFrom configurations.testRuntimeOnly }
-dependencies { add(nativeSkillResultSourceSet.implementationConfigurationName, 'com.h2database:h2') }
+dependencies {
+    add(nativeSkillResultSourceSet.implementationConfigurationName, 'com.h2database:h2')
+    // The shared real transaction fixture uses economy types directly; keep these
+    // dependencies confined to this verification source set, not production API.
+    add(nativeSkillResultSourceSet.implementationConfigurationName, project(':economy:jia-economy-api'))
+    add(nativeSkillResultSourceSet.implementationConfigurationName, project(':economy:jia-economy-mapper'))
+    add(nativeSkillResultSourceSet.implementationConfigurationName, project(':economy:jia-economy-service'))
+}
 tasks.register('nativeSkillResultRegression', Test) {
     dependsOn tasks.named(nativeSkillResultSourceSet.classesTaskName)
     testClassesDirs = nativeSkillResultSourceSet.output.classesDirs
