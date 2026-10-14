@@ -61,6 +61,7 @@ class SkillInstallTransportMySqlTest {
         pending();byte[] wire=jdbc.queryForObject("SELECT wire_payload FROM agent_outbox_event",byte[].class);
         when(dispatch.dispatch(anyString(),anyString(),anyString(),anyString(),anyString(),anyString(),any())).thenAnswer(call->{
             assertFalse(org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive());
+            assertEquals("Owner-A",call.getArgument(2));assertEquals("Client-A",call.getArgument(1));
             assertArrayEquals(wire,call.getArgument(6));return AgentRawCommandDispatchResult.sent(1,1);
         });
         recovery.recover();assertEquals("SENT",jdbc.queryForObject("SELECT status FROM agent_command_delivery",String.class));

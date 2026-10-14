@@ -34,7 +34,8 @@ public final class SkillInstallRecoveryService {
         for(var candidate:mapper.candidates(now,now-60000)) {
             if(!preview.allows(candidate.getTenantId(),candidate.getClientId())) continue;
             try { recover(candidate,now); } catch(RuntimeException rejected) {
-                org.slf4j.LoggerFactory.getLogger(getClass()).warn("Skill same-wire WS recovery deferred");
+                org.slf4j.LoggerFactory.getLogger(getClass()).warn("Skill same-wire WS recovery deferred: {}",
+                        rejected instanceof SkillMarketplaceException known ? known.code() : "SKILL_STATE_UNAVAILABLE");
             }
         }
     }

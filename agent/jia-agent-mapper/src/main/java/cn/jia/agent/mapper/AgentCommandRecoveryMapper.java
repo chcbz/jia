@@ -15,7 +15,7 @@ import java.util.List;
 /** D06 mapper. Discovery is unlocked; every mutation follows delivery -> active outbox -> Inbox locks. */
 public interface AgentCommandRecoveryMapper {
     String DELIVERY_COLUMNS = """
-            id, command_id, task_id, work_item_id, target_agent_id, command_type,
+            id, command_id, owner_jiacn, task_id, work_item_id, target_agent_id, command_type,
             command_payload, command_payload_hash, status, attempt_count,
             next_retry_at, lease_owner, lease_until, active_message_id, active_attempt,
             expires_at, last_error, version, replay_parent_message_id,

@@ -27,7 +27,7 @@ public interface AgentSkillInstallRecoveryMapper {
           AND CAST(command_id AS BINARY)=CAST(#{d.commandId} AS BINARY)
           AND CAST(owner_jiacn AS BINARY)=CAST(#{d.ownerJiacn} AS BINARY)
           AND CAST(active_message_id AS BINARY)=CAST(#{d.activeMessageId} AS BINARY)
-          AND active_attempt=#{d.activeAttempt} AND version=#{d.version} AND version<9223372036854775806
+          AND active_attempt=#{d.activeAttempt} AND version=#{d.version} AND version<9223372036854775805
           AND status=#{d.status} AND expires_at>#{now}
           AND (lease_until IS NULL OR lease_until<=#{now})
         """)
@@ -39,7 +39,7 @@ public interface AgentSkillInstallRecoveryMapper {
           AND CAST(client_id AS BINARY)=CAST(#{o.clientId} AS BINARY)
           AND CAST(destination AS BINARY)=CAST('agent.skill-install.ws.v1' AS BINARY)
           AND delivery_id=#{o.deliveryId} AND CAST(message_id AS BINARY)=CAST(#{o.messageId} AS BINARY)
-          AND active_attempt=#{o.activeAttempt} AND version=#{o.version} AND version<9223372036854775806
+          AND active_attempt=#{o.activeAttempt} AND version=#{o.version} AND version<9223372036854775805
           AND status=#{o.status} AND expires_at>#{now}
           AND (lease_until IS NULL OR lease_until<=#{now})
         """)
