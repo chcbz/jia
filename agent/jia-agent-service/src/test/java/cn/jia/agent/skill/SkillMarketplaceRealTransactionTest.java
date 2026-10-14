@@ -242,7 +242,8 @@ public class SkillMarketplaceRealTransactionTest {
         d.setCommandId(i.getCommandId()).setCommandType("SKILL_INSTALL").setTaskId(i.getOrderId())
             .setTargetAgentId(AGENT).setActiveMessageId(i.getMessageId()).setActiveAttempt(i.getAttempt()).setStatus("STARTED").setExpiresAt(1L);
         SkillInstallResultService.requireCurrentDelivery(i,d,proof().scope().ownerJiacn(),true);
-        jdbc.update("UPDATE economy_skill_order SET status='UNKNOWN' WHERE order_id=?",i.getOrderId());
+        acceptNativeResult(proof(),result(i,"FAILED","SKILL_DOWNLOAD_FORBIDDEN"));
+        assertEquals("REFUNDED",service.order(ACTOR,i.getOrderId()).get("status"));
         assertThrows(RuntimeException.class,()->results.packageBytes(proof(),i.getInstallationId()));
         assertThrows(RuntimeException.class,()->nativeAckAt(i,"STARTED",null,future));
     }
