@@ -35,7 +35,7 @@ public interface SkillExecutionService {
             List<InputReceipt> inputReceipts) { }
     record ResultReceipt(String manifestId,String state,String phase,String resultDigest) { }
     ResultReceipt commitResult(RuntimeScope scope,String taskId,String runId,String manifestId,ResultCommit command);
-    record ResultView(String executionId,String state,String phase,String lastErrorCode,String snapshotDigest,
+    record ResultView(String executionId,String state,String phase,String lastErrorCode,String snapshotDigest,long executionStateVersion,
             Map<String,Object> resultManifest) { }
     ResultView result(OwnerScope scope,String executionId);
     /** Called by committed Chat projection in its mandatory transaction; not a runtime success claim. */

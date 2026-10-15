@@ -75,7 +75,7 @@ public final class ChatTypedDeliberationWire {
     }
 
     public static DiscussionCommand parse(Map<String, Object> body) {
-        if (body == null || !BODY_KEYS.equals(body.keySet()) || !semanticVersion(body.get("schemaVersion"),2)) throw invalid();
+        if (body == null || !BODY_KEYS.equals(body.keySet()) || !semanticVersion(body.get("schemaVersion"),3)) throw invalid();
         String materialScope=text(body.get("materialScope"),30);
         if(!Set.of("TASK_DEFAULT","EXPLICIT","NONE").contains(materialScope))throw invalid();
         String intent = text(body.get("intent"), 30);
@@ -93,7 +93,7 @@ public final class ChatTypedDeliberationWire {
         List<SourceSelector> selectors = new ArrayList<>();
         Set<SourceSelector> uniqueSelectors = new HashSet<>();
         for (Object item : raw) {
-            SourceSelector value = selector(item);
+            SourceSelector value = publicSelector(item);
             if (!uniqueSelectors.add(value)) throw invalid();
             selectors.add(value);
         }
@@ -106,6 +106,16 @@ public final class ChatTypedDeliberationWire {
         }
         return new DiscussionCommand(intent, taskId, assignment, content, parent, parentVersion,
                 pending, pendingVersion, selectors, materialScope);
+    }
+
+    /** Public digest names stop here; immutable source snapshots retain their original keys. */
+    private static SourceSelector publicSelector(Object raw) {
+        if (raw instanceof Map<?,?> map && "EXECUTION_RESULT".equals(map.get("kind"))) {
+            if (!map.keySet().equals(Set.of("kind", "executionId", "resultSha256"))) throw invalid();
+            return selector(Map.of("kind", "EXECUTION_RESULT", "executionId", text(map.get("executionId"),100),
+                    "resultDigest", text(map.get("resultSha256"),64)));
+        }
+        return selector(raw);
     }
 
     public static Map<String, Object> selectorMap(SourceSelector value) {

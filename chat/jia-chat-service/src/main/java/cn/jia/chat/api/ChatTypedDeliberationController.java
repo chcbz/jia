@@ -66,7 +66,7 @@ public final class ChatTypedDeliberationController {
                 identity.sender().clientId(),conversationId,generation);
         var value=typed.read(storeScope,requestId,request.turns().getFirst().turnId(),revision);
         return ResponseEntity.ok().cacheControl(CacheControl.noStore()).header("X-Content-Type-Options","nosniff")
-                .body(JsonResult.success(value));
+                .body(JsonResult.success(ChatTypedOutcomeWire.project(value, "CHAT")));
     }
 
     @ExceptionHandler(ChatDeliberationException.class)

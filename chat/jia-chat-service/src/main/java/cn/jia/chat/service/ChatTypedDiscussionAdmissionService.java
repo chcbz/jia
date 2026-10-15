@@ -165,7 +165,7 @@ public class ChatTypedDiscussionAdmissionService {
         List<String> turns=parseStrings(row.turnIdsJson());
         if(turns.size()!=1||!ADMISSION_STATE.equals(row.state())||row.stateVersion()!=ADMISSION_STATE_VERSION)
             throw persistence("Stored typed receipt is invalid");
-        return new ChatTypedDeliberationWire.Accepted(2,row.intent(),row.requestId(),
+        return new ChatTypedDeliberationWire.Accepted(3,row.intent(),row.requestId(),
                 Long.toString(row.userMessageId()),turns,row.state(),Long.toString(row.stateVersion()),Long.toString(row.eventCursor()),
                 "/chat/requests/"+row.requestId(),"/chat/conversations/"+row.scope().conversationId()+"/requests/"+row.requestId()+"/typed-outcome",replay,row.pendingQuestionId());
     }

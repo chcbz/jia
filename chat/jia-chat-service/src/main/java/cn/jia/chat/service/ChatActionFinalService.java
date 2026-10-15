@@ -259,7 +259,7 @@ public class ChatActionFinalService {
                 || !canonical(actionPayload(parent, v)).equals(canonical(parse(event.getPayloadJson()))))
             throw persistence("Action progress identity is inconsistent");
         var childAdmission = store.findAdmissionByKey(scope, actionId, false);
-        String state, childId = null, route = null, childVersion = null, executionId=null, phase=null, resultDigest=null;
+        String state, childId = null, route = null, childVersion = null, executionId=null, phase=null, resultDigest=null, executionStateVersion=null;
         if (childAdmission == null) {
             state = switch (event.getStatus()) {
                 case "READY", "RETRY", "CLAIMED" -> "QUEUED";
@@ -298,6 +298,8 @@ public class ChatActionFinalService {
             executionId=link.executionId();
             var resultView=skills.result(new PersonalWorkspaceExecutionService.OwnerScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn()),executionId);
             if(resultView==null||!executionId.equals(resultView.executionId()))throw persistence("Skill result lineage differs");
+            if(resultView.executionStateVersion()<0)throw persistence("Skill state version invalid");
+            executionStateVersion=Long.toString(resultView.executionStateVersion());
             phase=resultView.phase();
             resultDigest=resultView.resultManifest()==null?null:(String)resultView.resultManifest().get("resultDigest");
             if(resultDigest!=null&&!resultDigest.matches("[0-9a-f]{64}"))throw persistence("Skill result digest invalid");
@@ -318,7 +320,7 @@ public class ChatActionFinalService {
         }
         var result = new LinkedHashMap<String, Object>(); result.put("actionRequestId", actionId);
         result.put("state", state); result.put("dispatchVersion", Long.toString(event.getVersion()));
-        result.put("executionId",executionId);result.put("phase",phase);result.put("resultDigest",resultDigest);
+        result.put("executionId",executionId);result.put("executionStateVersion",executionStateVersion);result.put("phase",phase);result.put("resultDigest",resultDigest);
         result.put("childRequestId", childId); result.put("childRoute", route); result.put("childStateVersion", childVersion);
         return Collections.unmodifiableMap(result);
     }

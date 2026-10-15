@@ -88,7 +88,7 @@ public final class ChatTypedInspectionController {
         Object value = inspection.read(storeScope, requestId,
                 request.turns().getFirst().turnId(), decimal(request.requestRevision()));
         return ResponseEntity.ok().cacheControl(CacheControl.noStore())
-                .header("X-Content-Type-Options", "nosniff").body(JsonResult.success(value));
+                .header("X-Content-Type-Options", "nosniff").body(JsonResult.success(ChatTypedOutcomeWire.project(value, "INSPECT")));
     }
 
     @ExceptionHandler(ChatDeliberationException.class)

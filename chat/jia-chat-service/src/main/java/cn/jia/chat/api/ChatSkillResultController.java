@@ -46,10 +46,11 @@ public final class ChatSkillResultController {
             """,tenant,sender.clientId(),sender.jiacn(),executionId,conversationId,conversation.getLifecycleGeneration(),conversation.getTaskId());
         if(rows.size()!=1)throw missing();var chain=rows.getFirst();var view=skills.result(owner,executionId);if(view==null||!executionId.equals(view.executionId()))throw missing();
         boolean complete="COMPLETE".equals(view.phase());
-        if(complete&&!("RESULT_COMMITTED".equals(chain.get("step_state"))&&"RESULT_COMMITTED".equals(chain.get("link_state"))&&"RESULT_COMMITTED".equals(chain.get("request_state"))))throw unavailable();
-        var body=new LinkedHashMap<String,Object>();body.put("schemaVersion",1);body.put("conversationId",conversationId);body.put("conversationGeneration",Long.toString(conversation.getLifecycleGeneration()));
+        if(complete&&!("RESULT_COMMITTED".equals(view.state())&&view.resultManifest()!=null&&"RESULT_COMMITTED".equals(chain.get("step_state"))&&"RESULT_COMMITTED".equals(chain.get("link_state"))&&"RESULT_COMMITTED".equals(chain.get("request_state"))))throw unavailable();
+        var body=new LinkedHashMap<String,Object>();body.put("schemaVersion",2);body.put("conversationId",conversationId);body.put("conversationGeneration",Long.toString(conversation.getLifecycleGeneration()));
         body.put("taskId",conversation.getTaskId());body.put("requestId",chain.get("request_id"));body.put("stepId",chain.get("step_id"));body.put("executionId",executionId);
-        body.put("state",view.state());body.put("phase",view.phase());body.put("resultDigest",view.resultManifest()==null?null:view.resultManifest().get("resultDigest"));body.put("data",view.resultManifest()==null?null:view.resultManifest().get("data"));
+        if(view.executionStateVersion()<0)throw unavailable();body.put("executionStateVersion",Long.toString(view.executionStateVersion()));
+        body.put("state",view.state());body.put("phase",view.phase());body.put("resultSha256",view.resultManifest()==null?null:view.resultManifest().get("resultDigest"));body.put("data",!complete||view.resultManifest()==null?null:view.resultManifest().get("data"));
         Object outputs=List.of();if(view.resultManifest()!=null) {
             var manifest=view.resultManifest();var digest=new LinkedHashMap<>(manifest);digest.remove("manifestId");digest.remove("resultDigest");
             if(!ChatSkillSnapshotJson.sha(digest).equals(manifest.get("resultDigest")))throw unavailable();

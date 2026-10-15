@@ -3166,7 +3166,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         if(execution==null||!Objects.equals(4,execution.getExecutionProtocolVersion()))throw failure(Reason.NOT_FOUND);
         requireSkillConversationAccess(scope,execution);var skill=skillRow(scope,executionId,false);
         if(Set.of("ARCHIVING","COMPLETE").contains(skill.getPhase())&&!"RESULT_COMMITTED".equals(execution.getExecutionState()))throw failure(Reason.TASK_CONFLICT);
-        return new cn.jia.agent.service.SkillExecutionService.ResultView(executionId,execution.getExecutionState(),skill.getPhase(),skill.getLastErrorCode(),skill.getSnapshotSha256(),skill.getResultManifestJson()==null?null:skillMap(skill.getResultManifestJson()));
+        return new cn.jia.agent.service.SkillExecutionService.ResultView(executionId,execution.getExecutionState(),skill.getPhase(),skill.getLastErrorCode(),skill.getSnapshotSha256(),skill.getVersion(),skill.getResultManifestJson()==null?null:skillMap(skill.getResultManifestJson()));
     }
     @Override @Transactional(propagation=org.springframework.transaction.annotation.Propagation.MANDATORY,rollbackFor=Exception.class)
     public void markProjected(OwnerScope scope,String executionId,String expectedResultDigest) {
