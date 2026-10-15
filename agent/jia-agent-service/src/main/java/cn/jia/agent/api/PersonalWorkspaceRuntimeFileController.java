@@ -43,7 +43,7 @@ public class PersonalWorkspaceRuntimeFileController {
     @GetMapping(value = "/workspace-executions/commands", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<cn.jia.core.entity.JsonResult<RuntimeQueueView>> queuedCommands(HttpServletRequest request, Authentication authentication) {
         requireNoQuery(request);
-        var queue=new RuntimeQueueView(service.runtimeQueuedCommands(scope(authentication), 16));
+        var queue=new RuntimeQueueView(service.runtimeQueuedCommands(scope(authentication), 16).stream().map(WorkspaceExecutionWire::from).toList());
         return cn.jia.core.config.ApiJsonResponses.success(json(runtimeAuthentication.withNativeFence(authentication,()->queue)));
     }
 
@@ -60,10 +60,10 @@ public class PersonalWorkspaceRuntimeFileController {
     }
 
     @GetMapping(value = "/{taskId}/runs/{runId}/inputs", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<cn.jia.core.entity.JsonResult<List<PersonalWorkspaceExecutionService.RuntimeInput>>> inputs(@PathVariable String taskId,
+    public ResponseEntity<cn.jia.core.entity.JsonResult<List<WorkspaceExecutionWire.Input>>> inputs(@PathVariable String taskId,
             @PathVariable String runId, HttpServletRequest request, Authentication authentication) {
         requireNoQuery(request);
-        var inputs=service.runtimeInputs(scope(authentication), taskId, runId);
+        var inputs=service.runtimeInputs(scope(authentication), taskId, runId).stream().map(WorkspaceExecutionWire::from).toList();
         return cn.jia.core.config.ApiJsonResponses.success(json(runtimeAuthentication.withNativeFence(authentication,()->inputs)));
     }
     @GetMapping("/{taskId}/runs/{runId}/inputs/{inputRef}/content")
@@ -108,14 +108,14 @@ public class PersonalWorkspaceRuntimeFileController {
     }
     @PostMapping(value = "/{taskId}/runs/{runId}/failure", consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<cn.jia.core.entity.JsonResult<PersonalWorkspaceExecutionService.ExecutionView>> failure(@PathVariable String taskId,
+    public ResponseEntity<cn.jia.core.entity.JsonResult<WorkspaceExecutionWire.Execution>> failure(@PathVariable String taskId,
             @PathVariable String runId, @RequestBody JsonRequest<FailureRequest> protocolRequest, HttpServletRequest servletRequest,
             Authentication authentication) {
         FailureRequest request = protocolRequest == null ? null : protocolRequest.data();
         requireNoQuery(servletRequest);
         if (request == null || request.code() == null) throw new RequestFailure();
         return cn.jia.core.config.ApiJsonResponses.success(json(runtimeAuthentication.withNativeFence(authentication, () ->
-                service.fail(scope(authentication), taskId, runId, request.code()))));
+                service.fail(scope(authentication), taskId, runId, request.code()))), WorkspaceExecutionWire::from);
     }
     @ExceptionHandler(PersonalWorkspaceExecutionService.Failure.class)
     public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> failure(PersonalWorkspaceExecutionService.Failure ignored) { return error(HttpStatus.NOT_FOUND,"RUNTIME_FILE_NOT_FOUND","Runtime file access is unavailable"); }
@@ -138,7 +138,7 @@ public class PersonalWorkspaceRuntimeFileController {
     private static String safe(String value){return value==null?"output.bin":value.replaceAll("[\\\\/:*?\"<>|\\p{Cntrl}]","_").replaceAll("^\\.+","").trim();}
     private static <T> ResponseEntity<T> json(T body){return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL,CACHE_CONTROL).contentType(MediaType.APPLICATION_JSON).body(body);}
     private static ResponseEntity<cn.jia.core.entity.JsonResult<Void>> error(HttpStatus status,String code,String message){return ResponseEntity.status(status).header(HttpHeaders.CACHE_CONTROL,CACHE_CONTROL).contentType(new MediaType(MediaType.APPLICATION_JSON,StandardCharsets.UTF_8)).body(cn.jia.core.entity.JsonResult.<Void>failure(code,message));}
-    public record RuntimeQueueView(List<PersonalWorkspaceExecutionService.RuntimeQueuedCommand> items) { }
+    public record RuntimeQueueView(List<cn.jia.core.entity.ProtocolMessage<java.util.Map<String,Object>>> items) { }
     public record CommitRequest(List<CommitOutput> outputs) { }
     public record CommitOutput(String outputId,String sha256,String byteLength) { }
     public record StartRequest(String commandId, String messageId) { }

@@ -146,7 +146,7 @@ public class AgentTaskFormalDeliveryController {
 
     @PostMapping(value = "/{taskId}/formal-deliveries/{deliveryId}/rework-executions",
             consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<cn.jia.core.entity.JsonResult<PersonalWorkspaceExecutionService.ExecutionView>> createReworkExecution(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<WorkspaceExecutionWire.Execution>> createReworkExecution(
             @PathVariable String taskId, @PathVariable String deliveryId,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             HttpServletRequest request, Authentication authentication) {
@@ -160,7 +160,7 @@ public class AgentTaskFormalDeliveryController {
                         scope.tenantId(), scope.clientId(), scope.ownerJiacn()), command, key);
         return cn.jia.core.config.ApiJsonResponses.success(ResponseEntity.status(HttpStatus.ACCEPTED)
                 .header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
-                .contentType(MediaType.APPLICATION_JSON).body(view));
+                .contentType(MediaType.APPLICATION_JSON).body(view), WorkspaceExecutionWire::from);
     }
 
     @ExceptionHandler(AuthenticationFailure.class)

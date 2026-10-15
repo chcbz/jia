@@ -43,17 +43,17 @@ public class PersonalWorkspaceExecutionController {
 
     @PostMapping(value = "/executions", consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<cn.jia.core.entity.JsonResult<PersonalWorkspaceExecutionService.ExecutionView>> create(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<WorkspaceExecutionWire.Execution>> create(
             @RequestBody JsonRequest<CreateRequest> protocolRequest, @RequestHeader(value = "Idempotency-Key", required = false) String key,
             Authentication authentication) {
         CreateRequest request = protocolRequest == null ? null : protocolRequest.data();
-        if (request == null || request.inputs() == null) throw new RequestFailure();
+        if (request == null || request.inputs() == null || request.inputs().stream().anyMatch(Objects::isNull)) throw new RequestFailure();
         PersonalWorkspaceExecutionService.ExecutionView view = service.create(scope(authentication),
                 new PersonalWorkspaceExecutionService.CreateCommand(request.conversationId(), request.targetAgentId(),
                         request.taskId(), request.instruction(), request.outputContentMimeType(), request.inputs().stream()
                         .map(input -> new PersonalWorkspaceExecutionService.InputSelection(input.fileId(), version(input.version())))
                         .toList()), key);
-        return cn.jia.core.config.ApiJsonResponses.success(ResponseEntity.status(HttpStatus.ACCEPTED).header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL).body(view));
+        return cn.jia.core.config.ApiJsonResponses.success(ResponseEntity.status(HttpStatus.ACCEPTED).header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL).body(view), WorkspaceExecutionWire::from);
     }
 
     @GetMapping(value = "/executions", produces = MediaType.APPLICATION_JSON_VALUE)
@@ -70,27 +70,27 @@ public class PersonalWorkspaceExecutionController {
     }
 
     @GetMapping(value = "/executions/request", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<cn.jia.core.entity.JsonResult<PersonalWorkspaceExecutionService.ExecutionView>> request(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<WorkspaceExecutionWire.Execution>> request(
             @RequestHeader(value = "Idempotency-Key", required = false) String key,
             Authentication authentication) {
         if (!valid(key, 100)) throw new RequestFailure();
-        return cn.jia.core.config.ApiJsonResponses.success(ok(service.getByIdempotencyKey(scope(authentication), key)));
+        return cn.jia.core.config.ApiJsonResponses.success(ok(service.getByIdempotencyKey(scope(authentication), key)), WorkspaceExecutionWire::from);
     }
 
     @GetMapping(value = "/executions/{executionId}", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<cn.jia.core.entity.JsonResult<PersonalWorkspaceExecutionService.ExecutionView>> get(@PathVariable String executionId,
+    public ResponseEntity<cn.jia.core.entity.JsonResult<WorkspaceExecutionWire.Execution>> get(@PathVariable String executionId,
             Authentication authentication) {
-        return cn.jia.core.config.ApiJsonResponses.success(ok(service.get(scope(authentication), executionId)));
+        return cn.jia.core.config.ApiJsonResponses.success(ok(service.get(scope(authentication), executionId)), WorkspaceExecutionWire::from);
     }
 
     @PostMapping(value = "/executions/{executionId}/revoke-inputs", consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<cn.jia.core.entity.JsonResult<PersonalWorkspaceExecutionService.ExecutionView>> revoke(@PathVariable String executionId,
+    public ResponseEntity<cn.jia.core.entity.JsonResult<WorkspaceExecutionWire.Execution>> revoke(@PathVariable String executionId,
             @RequestBody JsonRequest<RevokeRequest> protocolRequest, @RequestHeader(value = "Idempotency-Key", required = false) String key,
             Authentication authentication) {
         RevokeRequest request = protocolRequest == null ? null : protocolRequest.data();
         if (request == null) throw new RequestFailure();
-        return cn.jia.core.config.ApiJsonResponses.success(ok(service.revokeInputs(scope(authentication), executionId, decimal(request.expectedGrantRevision()), key)));
+        return cn.jia.core.config.ApiJsonResponses.success(ok(service.revokeInputs(scope(authentication), executionId, decimal(request.expectedGrantRevision()), key)), WorkspaceExecutionWire::from);
     }
 
     @ExceptionHandler(PersonalWorkspaceExecutionService.Failure.class)

@@ -330,14 +330,14 @@ public final class PersonalWorkspaceConversationRuntimeController {
 
     @PostMapping(value="/{taskId}/runs/{runId}/conversation/failure",consumes=MediaType.APPLICATION_JSON_VALUE,
             produces=MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<cn.jia.core.entity.JsonResult<PersonalWorkspaceExecutionService.ExecutionView>> failure(@PathVariable String taskId,
+    public ResponseEntity<cn.jia.core.entity.JsonResult<WorkspaceExecutionWire.Execution>> failure(@PathVariable String taskId,
             @PathVariable String runId,@RequestBody JsonRequest<FailRequest> protocolRequest,HttpServletRequest request,
             Authentication authentication) {
         FailRequest body = protocolRequest == null ? null : protocolRequest.data();
         noQuery(request);
         if (body==null || body.code()==null) throw new BadRequest();
         return cn.jia.core.config.ApiJsonResponses.success(ok(runtimeAuthentication.withNativeFence(authentication, () ->
-                executions.failConversation(scope(authentication),taskId,runId,fence(body.fence()),body.code()))));
+                executions.failConversation(scope(authentication),taskId,runId,fence(body.fence()),body.code()))), WorkspaceExecutionWire::from);
     }
 
     @ExceptionHandler(ControlledStartFailure.class)
