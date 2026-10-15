@@ -49,7 +49,7 @@ public class HallPrivateMarkController {
         return HallRequestDraftController.error(status,"HALL_MARK_"+failure.reason().name(),
                 "Private mark request is unavailable",status==HttpStatus.SERVICE_UNAVAILABLE,failure.safeDetails());
     }
-    @ExceptionHandler({HallRequestDraftController.RequestFailure.class,IllegalArgumentException.class})
+    @ExceptionHandler({HallRequestDraftController.RequestFailure.class,IllegalArgumentException.class,org.springframework.http.converter.HttpMessageNotReadableException.class})
     public ResponseEntity<cn.jia.core.entity.JsonResult<HallRequestDraftController.FailureDetails>> malformed(Exception ignored) {
         return failure(new HallRequestDraftService.Failure(HallRequestDraftService.Reason.BAD_REQUEST));
     }
