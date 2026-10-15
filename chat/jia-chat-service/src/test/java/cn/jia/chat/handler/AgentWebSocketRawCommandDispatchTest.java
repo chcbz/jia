@@ -46,7 +46,7 @@ class AgentWebSocketRawCommandDispatchTest extends BaseMockTest {
     @Mock ChatConversationEventBroker eventBroker;
 
     @Test
-    void rawCommandGoesOnlyToCurrentExactChannelWithoutWrappingOrReserialization()
+    void rawCommandGoesOnlyToCurrentExactChannelWithPublicProjection()
             throws Exception {
         WebSocketSession exactOne = session("exact-1", "tenant-a", "client-a", "agent-1");
         WebSocketSession exactTwo = session("exact-2", "tenant-a", "client-a", "agent-1");
@@ -72,8 +72,7 @@ class AgentWebSocketRawCommandDispatchTest extends BaseMockTest {
         ArgumentCaptor<TextMessage> second = ArgumentCaptor.forClass(TextMessage.class);
         verify(exactOne, never()).sendMessage(any(TextMessage.class));
         verify(exactTwo).sendMessage(second.capture());
-        assertArrayEquals(raw, second.getValue().getPayload().getBytes(StandardCharsets.UTF_8));
-        assertEquals(new String(raw, StandardCharsets.UTF_8), second.getValue().getPayload());
+        assertPublicCommand(raw, second.getValue().getPayload());
         verify(crossTenant, never()).sendMessage(any(TextMessage.class));
         verify(crossClient, never()).sendMessage(any(TextMessage.class));
         verify(otherAgent, never()).sendMessage(any(TextMessage.class));
@@ -81,7 +80,7 @@ class AgentWebSocketRawCommandDispatchTest extends BaseMockTest {
 
 
     @Test
-    void hallTaskInviteCompatibilityBytesRemainExactThroughRawDispatch()
+    void hallTaskInviteFactsPreservedThroughPublicProjection()
             throws Exception {
         WebSocketSession exact = session(
                 "task-invite-compat", "0", "client-a", "agent-1");
@@ -107,9 +106,9 @@ class AgentWebSocketRawCommandDispatchTest extends BaseMockTest {
         assertEquals(AgentRawCommandDispatchResult.Status.SENT, result.status());
         ArgumentCaptor<TextMessage> sent = ArgumentCaptor.forClass(TextMessage.class);
         verify(exact).sendMessage(sent.capture());
-        assertArrayEquals(raw, sent.getValue().getPayload().getBytes(StandardCharsets.UTF_8));
+        assertPublicCommand(raw, sent.getValue().getPayload());
         String wire = sent.getValue().getPayload();
-        assertTrue(wire.contains("\"type\":\"agent_direct_message\""));
+        assertFalse(wire.contains("\"type\":\"agent_direct_message\""));
         assertTrue(wire.contains("\"agentId\":\"agent-1\""));
         assertTrue(wire.contains("\"actionType\":\"task_briefing\""));
         assertTrue(wire.contains("\"content\":\"Read the task briefing\""));
@@ -118,7 +117,7 @@ class AgentWebSocketRawCommandDispatchTest extends BaseMockTest {
     }
 
     @Test
-    void existingD05HallTaskInviteBytesRemainExactWithoutCompatibilityWrapper()
+    void existingD05HallTaskInviteFactsPreservedWithoutLegacyWrapper()
             throws Exception {
         WebSocketSession exact = session(
                 "task-invite-d05", "tenant-a", "client-a", "agent-1");
@@ -133,7 +132,7 @@ class AgentWebSocketRawCommandDispatchTest extends BaseMockTest {
         assertEquals(AgentRawCommandDispatchResult.Status.SENT, result.status());
         ArgumentCaptor<TextMessage> sent = ArgumentCaptor.forClass(TextMessage.class);
         verify(exact).sendMessage(sent.capture());
-        assertArrayEquals(raw, sent.getValue().getPayload().getBytes(StandardCharsets.UTF_8));
+        assertPublicCommand(raw, sent.getValue().getPayload());
         assertFalse(sent.getValue().getPayload().contains("\"type\""));
         assertTrue(sent.getValue().getPayload().contains("\"intentId\":\"intent-d05\""));
     }
@@ -233,7 +232,7 @@ class AgentWebSocketRawCommandDispatchTest extends BaseMockTest {
         verify(failing, never()).sendMessage(any(TextMessage.class));
         ArgumentCaptor<TextMessage> sent = ArgumentCaptor.forClass(TextMessage.class);
         verify(succeeding).sendMessage(sent.capture());
-        assertArrayEquals(raw, sent.getValue().getPayload().getBytes(StandardCharsets.UTF_8));
+        assertPublicCommand(raw, sent.getValue().getPayload());
     }
 
     @Test
@@ -308,7 +307,7 @@ class AgentWebSocketRawCommandDispatchTest extends BaseMockTest {
         org.mockito.Mockito.clearInvocations(old,current);
         assertEquals(AgentRawCommandDispatchResult.Status.SENT,handler.dispatchManagedSkill("0","client-a","agent-1",fence,raw).status());
         var sent=ArgumentCaptor.forClass(TextMessage.class);verify(current).sendMessage(sent.capture());
-        assertArrayEquals(raw,sent.getValue().asBytes());verify(old,never()).sendMessage(any(TextMessage.class));
+        assertPublicCommand(raw,sent.getValue().getPayload());verify(old,never()).sendMessage(any(TextMessage.class));
         var foreign=new cn.jia.agent.service.AgentManagedSessionLookup.SessionFence(fence.runtimeInstallationId(),"other-host",fence.runtimeInstanceId(),fence.sessionGeneration());
         assertEquals(AgentRawCommandDispatchResult.Status.OFFLINE,handler.dispatchManagedSkill("0","client-a","agent-1",foreign,raw).status());
     }
@@ -400,4 +399,14 @@ class AgentWebSocketRawCommandDispatchTest extends BaseMockTest {
                 + "\"expiresAt\":2000000,\"payload\":{\"instruction\":\"执行🔥\"}}")
                 .getBytes(StandardCharsets.UTF_8);
     }
+    private static void assertPublicCommand(byte[] original,String actual) throws Exception {
+        var mapper=tools.jackson.databind.json.JsonMapper.builder().build();
+        var before=mapper.readTree(original); var after=mapper.readTree(actual);
+        assertEquals(1,after.path("protocolVersion").asInt());assertEquals("command.dispatch",after.path("messageType").asText());
+        assertEquals(before.path("messageId").asText(),after.path("messageId").asText());
+        assertEquals(before.path("taskId"),after.path("data").path("taskId"));
+        assertEquals(before.path("targetAgentId"),after.path("data").path("targetAgentId"));
+        assertEquals(before.path("payload"),after.path("data").path("payload"));
+    }
+
 }

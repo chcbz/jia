@@ -83,8 +83,12 @@ public class ChatBountyMediaController {
 
     public record AssetRef(String assetId, String revision) { }
     public record OutputReplacement(String requestId, String stepId, String outputId, String sha256) { }
-    public record OutputItem(String outputId, String contentMimeType, String sha256, long byteLength,
+    public record OutputItem(String outputId, String contentMimeType, String sha256, String byteLength,
             String previewUrl, String downloadUrl, AssetRef assetRef, OutputReplacement replaces) {
+        public OutputItem(String outputId, String contentMimeType, String sha256, long byteLength,
+                String previewUrl, String downloadUrl, AssetRef assetRef, OutputReplacement replaces) {
+            this(outputId,contentMimeType,sha256,Long.toString(byteLength),previewUrl,downloadUrl,assetRef,replaces);
+        }
         public OutputItem(String outputId, String contentMimeType, String sha256, long byteLength,
                 String previewUrl, String downloadUrl, AssetRef assetRef) {
             this(outputId,contentMimeType,sha256,byteLength,previewUrl,downloadUrl,assetRef,null);

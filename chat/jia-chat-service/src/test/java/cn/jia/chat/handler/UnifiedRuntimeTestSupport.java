@@ -55,7 +55,11 @@ final class UnifiedRuntimeTestSupport {
             var mapper = new ObjectMapper();
             Map<String, Object> payload = mapper.readValue(wire, new TypeReference<HashMap<String, Object>>() { });
             if ("agent.register".equals(payload.get("type")) || "agent.register".equals(payload.get("messageType"))) {
-                registrationProof(session, payload); wire = mapper.writeValueAsString(payload);
+                registrationProof(session, payload);
+            }
+            if (!payload.containsKey("protocolVersion")) {
+                Object type=payload.getOrDefault("messageType",payload.get("type"));
+                if(type instanceof String value) wire=mapper.writeValueAsString(cn.jia.agent.common.AgentMessageWire.event(value,payload,null));
             }
         } catch (RuntimeException malformed) { /* preserve malformed-wire test bytes */ }
         handler.handleTextMessage(session, new TextMessage(wire));
