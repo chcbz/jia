@@ -1,0 +1,1759 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "CYF target contracts: 16 finance HTTP operations, design only",
+  "definitions": {
+    "D0": {
+      "type": "string",
+      "pattern": "^(?:0|[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6]|9223372036854775807)$"
+    },
+    "D1": {
+      "type": "string",
+      "pattern": "^(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6]|9223372036854775807)$"
+    },
+    "H": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "T": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "Id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "Text": {
+      "type": "string"
+    },
+    "Money": {
+      "type": "object",
+      "properties": {
+        "amountMinor": {
+          "$ref": "#/definitions/D0"
+        },
+        "currency": {
+          "const": "SILVER"
+        }
+      },
+      "required": [
+        "amountMinor",
+        "currency"
+      ],
+      "additionalProperties": false
+    },
+    "PositiveMoney": {
+      "type": "object",
+      "properties": {
+        "amountMinor": {
+          "$ref": "#/definitions/D1"
+        },
+        "currency": {
+          "const": "SILVER"
+        }
+      },
+      "required": [
+        "amountMinor",
+        "currency"
+      ],
+      "additionalProperties": false
+    },
+    "Permissions": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "maxItems": 32,
+      "uniqueItems": true
+    },
+    "Capabilities": {
+      "type": "object",
+      "properties": {
+        "economyPreviewEnabled": {
+          "type": "boolean"
+        },
+        "skillMarketplaceEnabled": {
+          "type": "boolean"
+        },
+        "principalScopeSha256": {
+          "$ref": "#/definitions/H"
+        }
+      },
+      "required": [
+        "economyPreviewEnabled",
+        "skillMarketplaceEnabled",
+        "principalScopeSha256"
+      ],
+      "additionalProperties": false
+    },
+    "Product": {
+      "type": "object",
+      "properties": {
+        "productId": {
+          "$ref": "#/definitions/Id"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "productVersionId": {
+          "$ref": "#/definitions/Id"
+        },
+        "skillKey": {
+          "$ref": "#/definitions/Id"
+        },
+        "skillVersion": {
+          "$ref": "#/definitions/Id"
+        },
+        "price": {
+          "$ref": "#/definitions/Money"
+        },
+        "permissions": {
+          "$ref": "#/definitions/Permissions"
+        },
+        "canPurchase": {
+          "type": "boolean"
+        },
+        "denialReason": {
+          "anyOf": [
+            {
+              "const": "SKILL_ADMIN_REQUIRED"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "deploymentRestriction": {
+          "enum": [
+            "NONE",
+            "ADMIN_ONLY"
+          ]
+        }
+      },
+      "required": [
+        "productId",
+        "name",
+        "description",
+        "productVersionId",
+        "skillKey",
+        "skillVersion",
+        "price",
+        "permissions",
+        "canPurchase",
+        "denialReason",
+        "deploymentRestriction"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "canPurchase": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "denialReason": {
+                "const": null
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "denialReason": {
+                "const": "SKILL_ADMIN_REQUIRED"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "QuoteRequest": {
+      "type": "object",
+      "properties": {
+        "productVersionId": {
+          "$ref": "#/definitions/Id"
+        },
+        "targetAgentId": {
+          "$ref": "#/definitions/Id"
+        },
+        "expectedAgentVersion": {
+          "$ref": "#/definitions/D1"
+        }
+      },
+      "required": [
+        "productVersionId",
+        "targetAgentId",
+        "expectedAgentVersion"
+      ],
+      "additionalProperties": false
+    },
+    "Purchase": {
+      "type": "object",
+      "properties": {
+        "productVersionId": {
+          "$ref": "#/definitions/Id"
+        },
+        "targetAgentId": {
+          "$ref": "#/definitions/Id"
+        },
+        "expectedAgentVersion": {
+          "$ref": "#/definitions/D1"
+        },
+        "quoteId": {
+          "$ref": "#/definitions/Id"
+        },
+        "expectedPrice": {
+          "$ref": "#/definitions/Money"
+        },
+        "approvedPermissions": {
+          "$ref": "#/definitions/Permissions"
+        }
+      },
+      "required": [
+        "productVersionId",
+        "targetAgentId",
+        "expectedAgentVersion",
+        "quoteId",
+        "expectedPrice",
+        "approvedPermissions"
+      ],
+      "additionalProperties": false
+    },
+    "Quote": {
+      "type": "object",
+      "properties": {
+        "productVersionId": {
+          "$ref": "#/definitions/Id"
+        },
+        "targetAgentId": {
+          "$ref": "#/definitions/Id"
+        },
+        "expectedAgentVersion": {
+          "$ref": "#/definitions/D1"
+        },
+        "quoteId": {
+          "$ref": "#/definitions/Id"
+        },
+        "price": {
+          "$ref": "#/definitions/Money"
+        },
+        "expiresAt": {
+          "$ref": "#/definitions/T"
+        }
+      },
+      "required": [
+        "productVersionId",
+        "targetAgentId",
+        "expectedAgentVersion",
+        "quoteId",
+        "price",
+        "expiresAt"
+      ],
+      "additionalProperties": false
+    },
+    "Order": {
+      "type": "object",
+      "properties": {
+        "productVersionId": {
+          "$ref": "#/definitions/Id"
+        },
+        "targetAgentId": {
+          "$ref": "#/definitions/Id"
+        },
+        "expectedAgentVersion": {
+          "$ref": "#/definitions/D1"
+        },
+        "orderId": {
+          "$ref": "#/definitions/Id"
+        },
+        "status": {
+          "enum": [
+            "FUNDS_HELD",
+            "INSTALLING",
+            "ACTIVE",
+            "REFUNDED"
+          ]
+        }
+      },
+      "required": [
+        "productVersionId",
+        "targetAgentId",
+        "expectedAgentVersion",
+        "orderId",
+        "status"
+      ],
+      "additionalProperties": false
+    },
+    "Entitlement": {
+      "type": "object",
+      "properties": {
+        "entitlementId": {
+          "$ref": "#/definitions/Id"
+        },
+        "targetAgentId": {
+          "$ref": "#/definitions/Id"
+        },
+        "orderId": {
+          "$ref": "#/definitions/Id"
+        },
+        "skillInstallationId": {
+          "$ref": "#/definitions/Id"
+        },
+        "productVersionId": {
+          "$ref": "#/definitions/Id"
+        },
+        "skillKey": {
+          "$ref": "#/definitions/Id"
+        },
+        "skillVersion": {
+          "$ref": "#/definitions/Id"
+        },
+        "status": {
+          "enum": [
+            "PENDING_INSTALLATION",
+            "ACTIVE",
+            "FAILED"
+          ]
+        },
+        "permissionGrantVersion": {
+          "$ref": "#/definitions/D0"
+        }
+      },
+      "required": [
+        "entitlementId",
+        "targetAgentId",
+        "orderId",
+        "skillInstallationId",
+        "productVersionId",
+        "skillKey",
+        "skillVersion",
+        "status",
+        "permissionGrantVersion"
+      ],
+      "additionalProperties": false
+    },
+    "PreviewCapabilities": {
+      "type": "object",
+      "properties": {
+        "contractVersion": {
+          "const": "economy-readonly-v2"
+        },
+        "mode": {
+          "const": "READ_ONLY_PREVIEW"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "principalScopeSha256": {
+          "$ref": "#/definitions/H"
+        },
+        "features": {
+          "type": "object",
+          "properties": {
+            "wallet": {
+              "type": "boolean"
+            },
+            "ledger": {
+              "type": "boolean"
+            },
+            "catalog": {
+              "type": "boolean"
+            },
+            "installationStatus": {
+              "type": "boolean"
+            },
+            "hostingPlan": {
+              "type": "boolean"
+            },
+            "hostingLease": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "wallet",
+            "ledger",
+            "catalog",
+            "installationStatus",
+            "hostingPlan",
+            "hostingLease"
+          ],
+          "additionalProperties": false
+        },
+        "actions": {
+          "type": "object",
+          "properties": {
+            "estimate": {
+              "type": "boolean"
+            },
+            "issue": {
+              "const": false
+            },
+            "purchase": {
+              "const": false
+            },
+            "settle": {
+              "const": false
+            },
+            "refund": {
+              "const": false
+            },
+            "install": {
+              "const": false
+            },
+            "hostingActivate": {
+              "const": false
+            },
+            "hostingRenew": {
+              "const": false
+            }
+          },
+          "required": [
+            "estimate",
+            "issue",
+            "purchase",
+            "settle",
+            "refund",
+            "install",
+            "hostingActivate",
+            "hostingRenew"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "contractVersion",
+        "mode",
+        "enabled",
+        "principalScopeSha256",
+        "features",
+        "actions"
+      ],
+      "additionalProperties": false
+    },
+    "Wallet": {
+      "type": "object",
+      "properties": {
+        "currency": {
+          "const": "SILVER"
+        },
+        "available": {
+          "$ref": "#/definitions/Money"
+        },
+        "held": {
+          "$ref": "#/definitions/Money"
+        },
+        "version": {
+          "$ref": "#/definitions/D0"
+        }
+      },
+      "required": [
+        "currency",
+        "available",
+        "held",
+        "version"
+      ],
+      "additionalProperties": false
+    },
+    "LedgerItem": {
+      "type": "object",
+      "properties": {
+        "transactionId": {
+          "$ref": "#/definitions/Id"
+        },
+        "entryId": {
+          "$ref": "#/definitions/Id"
+        },
+        "businessType": {
+          "$ref": "#/definitions/Id"
+        },
+        "businessRef": {
+          "$ref": "#/definitions/Id"
+        },
+        "direction": {
+          "enum": [
+            "CREDIT",
+            "DEBIT"
+          ]
+        },
+        "amount": {
+          "$ref": "#/definitions/PositiveMoney"
+        },
+        "status": {
+          "const": "POSTED"
+        },
+        "postedAt": {
+          "$ref": "#/definitions/T"
+        }
+      },
+      "required": [
+        "transactionId",
+        "entryId",
+        "businessType",
+        "businessRef",
+        "direction",
+        "amount",
+        "status",
+        "postedAt"
+      ],
+      "additionalProperties": false
+    },
+    "LedgerPage": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/LedgerItem"
+          }
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{22}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hasMore": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "items",
+        "nextCursor",
+        "hasMore"
+      ],
+      "additionalProperties": false
+    },
+    "PreviewProduct": {
+      "type": "object",
+      "properties": {
+        "productId": {
+          "$ref": "#/definitions/Id"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "description": {
+          "type": "string"
+        },
+        "productVersionId": {
+          "$ref": "#/definitions/Id"
+        },
+        "skillKey": {
+          "$ref": "#/definitions/Id"
+        },
+        "skillVersion": {
+          "$ref": "#/definitions/Id"
+        },
+        "price": {
+          "$ref": "#/definitions/Money"
+        },
+        "permissions": {
+          "$ref": "#/definitions/Permissions"
+        },
+        "deploymentRestriction": {
+          "enum": [
+            "NONE",
+            "ADMIN_ONLY"
+          ]
+        },
+        "priceSource": {
+          "const": "CATALOG"
+        },
+        "purchaseAllowed": {
+          "const": false
+        }
+      },
+      "required": [
+        "productId",
+        "name",
+        "description",
+        "productVersionId",
+        "skillKey",
+        "skillVersion",
+        "price",
+        "permissions",
+        "deploymentRestriction",
+        "priceSource",
+        "purchaseAllowed"
+      ],
+      "additionalProperties": false
+    },
+    "ProductPage": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PreviewProduct"
+          }
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^offset:(0|[1-9][0-9]*)$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hasMore": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "items",
+        "nextCursor",
+        "hasMore"
+      ],
+      "additionalProperties": false
+    },
+    "PreviewEntitlement": {
+      "type": "object",
+      "properties": {
+        "entitlementId": {
+          "$ref": "#/definitions/Id"
+        },
+        "orderId": {
+          "$ref": "#/definitions/Id"
+        },
+        "skillInstallationId": {
+          "$ref": "#/definitions/Id"
+        },
+        "productVersionId": {
+          "$ref": "#/definitions/Id"
+        },
+        "skillKey": {
+          "$ref": "#/definitions/Id"
+        },
+        "skillVersion": {
+          "$ref": "#/definitions/Id"
+        },
+        "status": {
+          "enum": [
+            "PENDING_INSTALLATION",
+            "ACTIVE",
+            "FAILED"
+          ]
+        },
+        "permissionGrantVersion": {
+          "$ref": "#/definitions/D0"
+        }
+      },
+      "required": [
+        "entitlementId",
+        "orderId",
+        "skillInstallationId",
+        "productVersionId",
+        "skillKey",
+        "skillVersion",
+        "status",
+        "permissionGrantVersion"
+      ],
+      "additionalProperties": false
+    },
+    "InstallationEvidence": {
+      "type": "object",
+      "properties": {
+        "skillInstallationId": {
+          "$ref": "#/definitions/Id"
+        },
+        "skillKey": {
+          "$ref": "#/definitions/Id"
+        },
+        "skillVersion": {
+          "$ref": "#/definitions/Id"
+        },
+        "status": {
+          "enum": [
+            "VERIFIED_INSTALLED",
+            "UNCONFIRMED"
+          ]
+        },
+        "evidenceKind": {
+          "enum": [
+            "PERSISTED_INSTALL_RESULT",
+            "NO_PERSISTED_INSTALLATION",
+            "PERSISTED_INSTALLATION_UNVERIFIED"
+          ]
+        },
+        "verifiedAt": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/T"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "skillInstallationId",
+        "skillKey",
+        "skillVersion",
+        "status",
+        "evidenceKind",
+        "verifiedAt"
+      ],
+      "additionalProperties": false
+    },
+    "AgentSkills": {
+      "type": "object",
+      "properties": {
+        "agentId": {
+          "$ref": "#/definitions/Id"
+        },
+        "entitlements": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PreviewEntitlement"
+          }
+        },
+        "installationEvidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/InstallationEvidence"
+          }
+        },
+        "observedAt": {
+          "$ref": "#/definitions/T"
+        }
+      },
+      "required": [
+        "agentId",
+        "entitlements",
+        "installationEvidence",
+        "observedAt"
+      ],
+      "additionalProperties": false
+    },
+    "HostingPlan": {
+      "type": "object",
+      "properties": {
+        "source": {
+          "enum": [
+            "CONFIGURATION_REFERENCE",
+            "PERSISTED_REFERENCE"
+          ]
+        },
+        "planVersion": {
+          "$ref": "#/definitions/D1"
+        },
+        "amount": {
+          "$ref": "#/definitions/PositiveMoney"
+        },
+        "periodSeconds": {
+          "$ref": "#/definitions/D1"
+        },
+        "currency": {
+          "const": "SILVER"
+        },
+        "activationAllowed": {
+          "const": false
+        }
+      },
+      "required": [
+        "source",
+        "planVersion",
+        "amount",
+        "periodSeconds",
+        "currency",
+        "activationAllowed"
+      ],
+      "additionalProperties": false
+    },
+    "Lease": {
+      "type": "object",
+      "properties": {
+        "leaseId": {
+          "$ref": "#/definitions/Id"
+        },
+        "version": {
+          "$ref": "#/definitions/D0"
+        },
+        "status": {
+          "enum": [
+            "PROVISIONING",
+            "ACTIVE",
+            "REFUNDED"
+          ]
+        },
+        "planVersion": {
+          "$ref": "#/definitions/D1"
+        },
+        "amount": {
+          "$ref": "#/definitions/PositiveMoney"
+        },
+        "periodSeconds": {
+          "$ref": "#/definitions/D1"
+        },
+        "paidFrom": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/T"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "paidThrough": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/T"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "leaseId",
+        "version",
+        "status",
+        "planVersion",
+        "amount",
+        "periodSeconds",
+        "paidFrom",
+        "paidThrough"
+      ],
+      "additionalProperties": false
+    },
+    "HostingLease": {
+      "type": "object",
+      "properties": {
+        "agentId": {
+          "$ref": "#/definitions/Id"
+        },
+        "applicability": {
+          "enum": [
+            "NOT_APPLICABLE",
+            "APPLICABLE"
+          ]
+        },
+        "lease": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Lease"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "agentId",
+        "applicability",
+        "lease"
+      ],
+      "additionalProperties": false
+    },
+    "TokenClasses": {
+      "type": "object",
+      "properties": {
+        "input": {
+          "$ref": "#/definitions/D0"
+        },
+        "cachedInput": {
+          "$ref": "#/definitions/D0"
+        },
+        "output": {
+          "$ref": "#/definitions/D0"
+        },
+        "reasoning": {
+          "$ref": "#/definitions/D0"
+        }
+      },
+      "required": [
+        "input",
+        "cachedInput",
+        "output",
+        "reasoning"
+      ],
+      "additionalProperties": false
+    },
+    "EstimateInput": {
+      "type": "object",
+      "properties": {
+        "grossBountyAmount": {
+          "$ref": "#/definitions/Money"
+        },
+        "minimumAcceptedPayout": {
+          "$ref": "#/definitions/Money"
+        },
+        "estimatedTokens": {
+          "$ref": "#/definitions/TokenClasses"
+        },
+        "worstTokens": {
+          "$ref": "#/definitions/TokenClasses"
+        }
+      },
+      "required": [
+        "grossBountyAmount",
+        "minimumAcceptedPayout",
+        "estimatedTokens",
+        "worstTokens"
+      ],
+      "additionalProperties": false
+    },
+    "BountyEstimate": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "const": "SIMULATION"
+        },
+        "charged": {
+          "const": false
+        },
+        "persisted": {
+          "const": false
+        },
+        "currency": {
+          "const": "SILVER"
+        },
+        "priceBookVersion": {
+          "$ref": "#/definitions/Id"
+        },
+        "rateProvenance": {
+          "$ref": "#/definitions/Id"
+        },
+        "estimatedTokens": {
+          "$ref": "#/definitions/TokenClasses"
+        },
+        "worstTokens": {
+          "$ref": "#/definitions/TokenClasses"
+        },
+        "estimatedCompute": {
+          "$ref": "#/definitions/Money"
+        },
+        "worstCompute": {
+          "$ref": "#/definitions/Money"
+        },
+        "platformFee": {
+          "$ref": "#/definitions/Money"
+        },
+        "estimatedAgentPayout": {
+          "$ref": "#/definitions/Money"
+        },
+        "worstAgentPayout": {
+          "$ref": "#/definitions/Money"
+        },
+        "budgetHeadroom": {
+          "$ref": "#/definitions/Money"
+        },
+        "budgetCovered": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "mode",
+        "charged",
+        "persisted",
+        "currency",
+        "priceBookVersion",
+        "rateProvenance",
+        "estimatedTokens",
+        "worstTokens",
+        "estimatedCompute",
+        "worstCompute",
+        "platformFee",
+        "estimatedAgentPayout",
+        "worstAgentPayout",
+        "budgetHeadroom",
+        "budgetCovered"
+      ],
+      "additionalProperties": false
+    },
+    "Request": {
+      "type": "object",
+      "properties": {
+        "protocolVersion": {
+          "const": 1
+        },
+        "requestId": {
+          "$ref": "#/definitions/Id"
+        },
+        "data": {}
+      },
+      "required": [
+        "protocolVersion",
+        "requestId",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "Success": {
+      "type": "object",
+      "properties": {
+        "protocolVersion": {
+          "const": 1
+        },
+        "requestId": {
+          "$ref": "#/definitions/Id"
+        },
+        "code": {
+          "const": "E0"
+        },
+        "msg": {
+          "type": "string"
+        },
+        "data": {}
+      },
+      "required": [
+        "protocolVersion",
+        "requestId",
+        "code",
+        "msg",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "Error": {
+      "type": "object",
+      "properties": {
+        "protocolVersion": {
+          "const": 1
+        },
+        "requestId": {
+          "$ref": "#/definitions/Id"
+        },
+        "code": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "const": "E0"
+          }
+        },
+        "msg": {
+          "type": "string"
+        },
+        "data": {
+          "const": null
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "requestId",
+        "code",
+        "msg",
+        "data"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "x-operations": [
+    {
+      "operationId": "SkillMarketplaceController.capabilities.GET",
+      "method": "GET",
+      "path": "/economy/capabilities",
+      "successHttpStatus": 200,
+      "successSchema": {
+        "type": "object",
+        "properties": {
+          "protocolVersion": {
+            "const": 1
+          },
+          "requestId": {
+            "$ref": "#/definitions/Id"
+          },
+          "code": {
+            "const": "E0"
+          },
+          "msg": {
+            "type": "string"
+          },
+          "data": {
+            "$ref": "#/definitions/Capabilities"
+          }
+        },
+        "required": [
+          "protocolVersion",
+          "requestId",
+          "code",
+          "msg",
+          "data"
+        ],
+        "additionalProperties": false
+      },
+      "errorSchema": {
+        "$ref": "#/definitions/Error"
+      },
+      "contractReference": "critical-contracts.md#12"
+    },
+    {
+      "operationId": "SkillMarketplaceController.catalog.GET",
+      "method": "GET",
+      "path": "/agent/skill-products",
+      "successHttpStatus": 200,
+      "successSchema": {
+        "type": "object",
+        "properties": {
+          "protocolVersion": {
+            "const": 1
+          },
+          "requestId": {
+            "$ref": "#/definitions/Id"
+          },
+          "code": {
+            "const": "E0"
+          },
+          "msg": {
+            "type": "string"
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/definitions/Product"
+            }
+          }
+        },
+        "required": [
+          "protocolVersion",
+          "requestId",
+          "code",
+          "msg",
+          "data"
+        ],
+        "additionalProperties": false
+      },
+      "errorSchema": {
+        "$ref": "#/definitions/Error"
+      },
+      "contractReference": "critical-contracts.md#12"
+    },
+    {
+      "operationId": "SkillMarketplaceController.product.GET",
+      "method": "GET",
+      "path": "/agent/skill-products/{productId}",
+      "successHttpStatus": 200,
+      "successSchema": {
+        "type": "object",
+        "properties": {
+          "protocolVersion": {
+            "const": 1
+          },
+          "requestId": {
+            "$ref": "#/definitions/Id"
+          },
+          "code": {
+            "const": "E0"
+          },
+          "msg": {
+            "type": "string"
+          },
+          "data": {
+            "$ref": "#/definitions/Product"
+          }
+        },
+        "required": [
+          "protocolVersion",
+          "requestId",
+          "code",
+          "msg",
+          "data"
+        ],
+        "additionalProperties": false
+      },
+      "errorSchema": {
+        "$ref": "#/definitions/Error"
+      },
+      "contractReference": "critical-contracts.md#12"
+    },
+    {
+      "operationId": "SkillMarketplaceController.quote.POST",
+      "method": "POST",
+      "path": "/agent/skill-orders/quotes",
+      "successHttpStatus": 200,
+      "successSchema": {
+        "type": "object",
+        "properties": {
+          "protocolVersion": {
+            "const": 1
+          },
+          "requestId": {
+            "$ref": "#/definitions/Id"
+          },
+          "code": {
+            "const": "E0"
+          },
+          "msg": {
+            "type": "string"
+          },
+          "data": {
+            "$ref": "#/definitions/Quote"
+          }
+        },
+        "required": [
+          "protocolVersion",
+          "requestId",
+          "code",
+          "msg",
+          "data"
+        ],
+        "additionalProperties": false
+      },
+      "errorSchema": {
+        "$ref": "#/definitions/Error"
+      },
+      "contractReference": "critical-contracts.md#12",
+      "requestSchema": {
+        "type": "object",
+        "properties": {
+          "protocolVersion": {
+            "const": 1
+          },
+          "requestId": {
+            "$ref": "#/definitions/Id"
+          },
+          "data": {
+            "$ref": "#/definitions/QuoteRequest"
+          }
+        },
+        "required": [
+          "protocolVersion",
+          "requestId",
+          "data"
+        ],
+        "additionalProperties": false
+      },
+      "idempotencyKey": "one lowercase canonical UUID; required"
+    },
+    {
+      "operationId": "SkillMarketplaceController.purchase.POST",
+      "method": "POST",
+      "path": "/agent/skill-orders",
+      "successHttpStatus": 200,
+      "successSchema": {
+        "type": "object",
+        "properties": {
+          "protocolVersion": {
+            "const": 1
+          },
+          "requestId": {
+            "$ref": "#/definitions/Id"
+          },
+          "code": {
+            "const": "E0"
+          },
+          "msg": {
+            "type": "string"
+          },
+          "data": {
+            "$ref": "#/definitions/Order"
+          }
+        },
+        "required": [
+          "protocolVersion",
+          "requestId",
+          "code",
+          "msg",
+          "data"
+        ],
+        "additionalProperties": false
+      },
+      "errorSchema": {
+        "$ref": "#/definitions/Error"
+      },
+      "contractReference": "critical-contracts.md#12",
+      "requestSchema": {
+        "type": "object",
+        "properties": {
+          "protocolVersion": {
+            "const": 1
+          },
+          "requestId": {
+            "$ref": "#/definitions/Id"
+          },
+          "data": {
+            "$ref": "#/definitions/Purchase"
+          }
+        },
+        "required": [
+          "protocolVersion",
+          "requestId",
+          "data"
+        ],
+        "additionalProperties": false
+      },
+      "idempotencyKey": "one lowercase canonical UUID; required"
+    },
+    {
+      "operationId": "SkillMarketplaceController.order.GET",
+      "method": "GET",
+      "path": "/agent/skill-orders/{orderId}",
+      "successHttpStatus": 200,
+      "successSchema": {
+        "type": "object",
+        "properties": {
+          "protocolVersion": {
+            "const": 1
+          },
+          "requestId": {
+            "$ref": "#/definitions/Id"
+          },
+          "code": {
+            "const": "E0"
+          },
+          "msg": {
+            "type": "string"
+          },
+          "data": {
+            "$ref": "#/definitions/Order"
+          }
+        },
+        "required": [
+          "protocolVersion",
+          "requestId",
+          "code",
+          "msg",
+          "data"
+        ],
+        "additionalProperties": false
+      },
+      "errorSchema": {
+        "$ref": "#/definitions/Error"
+      },
+      "contractReference": "critical-contracts.md#12"
+    },
+    {
+      "operationId": "SkillMarketplaceController.entitlements.GET",
+      "method": "GET",
+      "path": "/agent/{agentId}/skill-entitlements",
+      "successHttpStatus": 200,
+      "successSchema": {
+        "type": "object",
+        "properties": {
+          "protocolVersion": {
+            "const": 1
+          },
+          "requestId": {
+            "$ref": "#/definitions/Id"
+          },
+          "code": {
+            "const": "E0"
+          },
+          "msg": {
+            "type": "string"
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/definitions/Entitlement"
+            }
+          }
+        },
+        "required": [
+          "protocolVersion",
+          "requestId",
+          "code",
+          "msg",
+          "data"
+        ],
+        "additionalProperties": false
+      },
+      "errorSchema": {
+        "$ref": "#/definitions/Error"
+      },
+      "contractReference": "critical-contracts.md#12"
+    },
+    {
+      "operationId": "EconomyReadOnlyPreviewController.capabilities.GET",
+      "method": "GET",
+      "path": "/economy/preview/capabilities",
+      "successHttpStatus": 200,
+      "successSchema": {
+        "type": "object",
+        "properties": {
+          "protocolVersion": {
+            "const": 1
+          },
+          "requestId": {
+            "$ref": "#/definitions/Id"
+          },
+          "code": {
+            "const": "E0"
+          },
+          "msg": {
+            "type": "string"
+          },
+          "data": {
+            "$ref": "#/definitions/PreviewCapabilities"
+          }
+        },
+        "required": [
+          "protocolVersion",
+          "requestId",
+          "code",
+          "msg",
+          "data"
+        ],
+        "additionalProperties": false
+      },
+      "errorSchema": {
+        "$ref": "#/definitions/Error"
+      },
+      "contractReference": "critical-contracts.md#13"
+    },
+    {
+      "operationId": "EconomyReadOnlyPreviewController.wallet.GET",
+      "method": "GET",
+      "path": "/economy/preview/wallet",
+      "successHttpStatus": 200,
+      "successSchema": {
+        "type": "object",
+        "properties": {
+          "protocolVersion": {
+            "const": 1
+          },
+          "requestId": {
+            "$ref": "#/definitions/Id"
+          },
+          "code": {
+            "const": "E0"
+          },
+          "msg": {
+            "type": "string"
+          },
+          "data": {
+            "$ref": "#/definitions/Wallet"
+          }
+        },
+        "required": [
+          "protocolVersion",
+          "requestId",
+          "code",
+          "msg",
+          "data"
+        ],
+        "additionalProperties": false
+      },
+      "errorSchema": {
+        "$ref": "#/definitions/Error"
+      },
+      "contractReference": "critical-contracts.md#13"
+    },
+    {
+      "operationId": "EconomyReadOnlyPreviewController.ledger.GET",
+      "method": "GET",
+      "path": "/economy/preview/ledger",
+      "successHttpStatus": 200,
+      "successSchema": {
+        "type": "object",
+        "properties": {
+          "protocolVersion": {
+            "const": 1
+          },
+          "requestId": {
+            "$ref": "#/definitions/Id"
+          },
+          "code": {
+            "const": "E0"
+          },
+          "msg": {
+            "type": "string"
+          },
+          "data": {
+            "$ref": "#/definitions/LedgerPage"
+          }
+        },
+        "required": [
+          "protocolVersion",
+          "requestId",
+          "code",
+          "msg",
+          "data"
+        ],
+        "additionalProperties": false
+      },
+      "errorSchema": {
+        "$ref": "#/definitions/Error"
+      },
+      "contractReference": "critical-contracts.md#13"
+    },
+    {
+      "operationId": "EconomyReadOnlyPreviewController.products.GET",
+      "method": "GET",
+      "path": "/economy/preview/skill-products",
+      "successHttpStatus": 200,
+      "successSchema": {
+        "type": "object",
+        "properties": {
+          "protocolVersion": {
+            "const": 1
+          },
+          "requestId": {
+            "$ref": "#/definitions/Id"
+          },
+          "code": {
+            "const": "E0"
+          },
+          "msg": {
+            "type": "string"
+          },
+          "data": {
+            "$ref": "#/definitions/ProductPage"
+          }
+        },
+        "required": [
+          "protocolVersion",
+          "requestId",
+          "code",
+          "msg",
+          "data"
+        ],
+        "additionalProperties": false
+      },
+      "errorSchema": {
+        "$ref": "#/definitions/Error"
+      },
+      "contractReference": "critical-contracts.md#13"
+    },
+    {
+      "operationId": "EconomyReadOnlyPreviewController.product.GET",
+      "method": "GET",
+      "path": "/economy/preview/skill-products/{productId}",
+      "successHttpStatus": 200,
+      "successSchema": {
+        "type": "object",
+        "properties": {
+          "protocolVersion": {
+            "const": 1
+          },
+          "requestId": {
+            "$ref": "#/definitions/Id"
+          },
+          "code": {
+            "const": "E0"
+          },
+          "msg": {
+            "type": "string"
+          },
+          "data": {
+            "$ref": "#/definitions/PreviewProduct"
+          }
+        },
+        "required": [
+          "protocolVersion",
+          "requestId",
+          "code",
+          "msg",
+          "data"
+        ],
+        "additionalProperties": false
+      },
+      "errorSchema": {
+        "$ref": "#/definitions/Error"
+      },
+      "contractReference": "critical-contracts.md#13"
+    },
+    {
+      "operationId": "EconomyReadOnlyPreviewController.agentSkills.GET",
+      "method": "GET",
+      "path": "/economy/preview/agents/{agentId}/skills",
+      "successHttpStatus": 200,
+      "successSchema": {
+        "type": "object",
+        "properties": {
+          "protocolVersion": {
+            "const": 1
+          },
+          "requestId": {
+            "$ref": "#/definitions/Id"
+          },
+          "code": {
+            "const": "E0"
+          },
+          "msg": {
+            "type": "string"
+          },
+          "data": {
+            "$ref": "#/definitions/AgentSkills"
+          }
+        },
+        "required": [
+          "protocolVersion",
+          "requestId",
+          "code",
+          "msg",
+          "data"
+        ],
+        "additionalProperties": false
+      },
+      "errorSchema": {
+        "$ref": "#/definitions/Error"
+      },
+      "contractReference": "critical-contracts.md#13"
+    },
+    {
+      "operationId": "EconomyReadOnlyPreviewController.hostingPlan.GET",
+      "method": "GET",
+      "path": "/economy/preview/hosting-plan",
+      "successHttpStatus": 200,
+      "successSchema": {
+        "type": "object",
+        "properties": {
+          "protocolVersion": {
+            "const": 1
+          },
+          "requestId": {
+            "$ref": "#/definitions/Id"
+          },
+          "code": {
+            "const": "E0"
+          },
+          "msg": {
+            "type": "string"
+          },
+          "data": {
+            "$ref": "#/definitions/HostingPlan"
+          }
+        },
+        "required": [
+          "protocolVersion",
+          "requestId",
+          "code",
+          "msg",
+          "data"
+        ],
+        "additionalProperties": false
+      },
+      "errorSchema": {
+        "$ref": "#/definitions/Error"
+      },
+      "contractReference": "critical-contracts.md#13"
+    },
+    {
+      "operationId": "EconomyReadOnlyPreviewController.hostingLease.GET",
+      "method": "GET",
+      "path": "/economy/preview/agents/{agentId}/hosting-lease",
+      "successHttpStatus": 200,
+      "successSchema": {
+        "type": "object",
+        "properties": {
+          "protocolVersion": {
+            "const": 1
+          },
+          "requestId": {
+            "$ref": "#/definitions/Id"
+          },
+          "code": {
+            "const": "E0"
+          },
+          "msg": {
+            "type": "string"
+          },
+          "data": {
+            "$ref": "#/definitions/HostingLease"
+          }
+        },
+        "required": [
+          "protocolVersion",
+          "requestId",
+          "code",
+          "msg",
+          "data"
+        ],
+        "additionalProperties": false
+      },
+      "errorSchema": {
+        "$ref": "#/definitions/Error"
+      },
+      "contractReference": "critical-contracts.md#13"
+    },
+    {
+      "operationId": "EconomyReadOnlyPreviewController.bountyEstimate.POST",
+      "method": "POST",
+      "path": "/economy/preview/bounty-estimates",
+      "successHttpStatus": 200,
+      "successSchema": {
+        "type": "object",
+        "properties": {
+          "protocolVersion": {
+            "const": 1
+          },
+          "requestId": {
+            "$ref": "#/definitions/Id"
+          },
+          "code": {
+            "const": "E0"
+          },
+          "msg": {
+            "type": "string"
+          },
+          "data": {
+            "$ref": "#/definitions/BountyEstimate"
+          }
+        },
+        "required": [
+          "protocolVersion",
+          "requestId",
+          "code",
+          "msg",
+          "data"
+        ],
+        "additionalProperties": false
+      },
+      "errorSchema": {
+        "$ref": "#/definitions/Error"
+      },
+      "contractReference": "critical-contracts.md#13",
+      "requestSchema": {
+        "type": "object",
+        "properties": {
+          "protocolVersion": {
+            "const": 1
+          },
+          "requestId": {
+            "$ref": "#/definitions/Id"
+          },
+          "data": {
+            "$ref": "#/definitions/EstimateInput"
+          }
+        },
+        "required": [
+          "protocolVersion",
+          "requestId",
+          "data"
+        ],
+        "additionalProperties": false
+      }
+    }
+  ],
+  "x-status": "TARGET_STRUCTURE_DOCUMENTED_NOT_IMPLEMENTED",
+  "x-limitations": [
+    "JSON schema does not prove authorization, transactions, runtime call reachability, duplicate JSON keys, UTF-8 byte limits or HTTP headers.",
+    "Cross-field relations require documented semantic checks; neither generated examples nor local schema validation are application acceptance.",
+    "No legacy wire compatibility; domain monetary values map one-to-one to SILVER minor units."
+  ]
+}

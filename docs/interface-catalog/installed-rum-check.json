@@ -1,0 +1,11 @@
+{
+  "observedAt": "2026-10-14T13:46:41.600Z",
+  "scope": "installed kit entry on disk only; not live HTTP/routing, not future Flow config",
+  "index": "/home/isp/hosts/cyf/web/kit/index.html",
+  "entry": "/home/isp/hosts/cyf/web/kit/static/index-B5lfIB3D.js",
+  "indexSha256": "4a2d597e9ee97b5338ff64fb61c5bcdd012272753d767bf1274a8b5525684de5",
+  "entrySha256": "c369f756b47f7b117f6212fa426eee5edbd2920e8c742467fd5c3962f398effc",
+  "environmentHasRumEndpoint": false,
+  "bootstrapEndpointUndefined": true,
+  "applicationCodeExecuted": false
+}

@@ -1,0 +1,1015 @@
+{
+  "status": "synthetic structural fixtures; calculator outputs are not asserted",
+  "cases": [
+    {
+      "name": "SkillMarketplaceController.capabilities.GET success shape",
+      "operationId": "SkillMarketplaceController.capabilities.GET",
+      "direction": "success",
+      "valid": true,
+      "body": {
+        "protocolVersion": 1,
+        "requestId": "req-synthetic",
+        "code": "E0",
+        "msg": "ok",
+        "data": {
+          "economyPreviewEnabled": true,
+          "skillMarketplaceEnabled": true,
+          "principalScopeSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      }
+    },
+    {
+      "name": "SkillMarketplaceController.catalog.GET success shape",
+      "operationId": "SkillMarketplaceController.catalog.GET",
+      "direction": "success",
+      "valid": true,
+      "body": {
+        "protocolVersion": 1,
+        "requestId": "req-synthetic",
+        "code": "E0",
+        "msg": "ok",
+        "data": [
+          {
+            "productId": "demo-product",
+            "name": "示例技能",
+            "description": "合成验约资料",
+            "productVersionId": "demo-product-version",
+            "skillKey": "demo.skill",
+            "skillVersion": "1.0.0",
+            "price": {
+              "amountMinor": "0",
+              "currency": "SILVER"
+            },
+            "permissions": [],
+            "canPurchase": true,
+            "denialReason": null,
+            "deploymentRestriction": "NONE"
+          }
+        ]
+      }
+    },
+    {
+      "name": "SkillMarketplaceController.product.GET success shape",
+      "operationId": "SkillMarketplaceController.product.GET",
+      "direction": "success",
+      "valid": true,
+      "body": {
+        "protocolVersion": 1,
+        "requestId": "req-synthetic",
+        "code": "E0",
+        "msg": "ok",
+        "data": {
+          "productId": "demo-product",
+          "name": "示例技能",
+          "description": "合成验约资料",
+          "productVersionId": "demo-product-version",
+          "skillKey": "demo.skill",
+          "skillVersion": "1.0.0",
+          "price": {
+            "amountMinor": "0",
+            "currency": "SILVER"
+          },
+          "permissions": [],
+          "canPurchase": true,
+          "denialReason": null,
+          "deploymentRestriction": "NONE"
+        }
+      }
+    },
+    {
+      "name": "SkillMarketplaceController.quote.POST success shape",
+      "operationId": "SkillMarketplaceController.quote.POST",
+      "direction": "success",
+      "valid": true,
+      "body": {
+        "protocolVersion": 1,
+        "requestId": "req-synthetic",
+        "code": "E0",
+        "msg": "ok",
+        "data": {
+          "productVersionId": "demo-product-version",
+          "targetAgentId": "demo-agent",
+          "expectedAgentVersion": "9007199254740993",
+          "quoteId": "demo-quote",
+          "price": {
+            "amountMinor": "0",
+            "currency": "SILVER"
+          },
+          "expiresAt": 1792022400000
+        }
+      }
+    },
+    {
+      "name": "SkillMarketplaceController.quote.POST request shape",
+      "operationId": "SkillMarketplaceController.quote.POST",
+      "direction": "request",
+      "valid": true,
+      "body": {
+        "protocolVersion": 1,
+        "requestId": "req-synthetic",
+        "data": {
+          "productVersionId": "demo-product-version",
+          "targetAgentId": "demo-agent",
+          "expectedAgentVersion": "9007199254740993"
+        }
+      }
+    },
+    {
+      "name": "SkillMarketplaceController.purchase.POST success shape",
+      "operationId": "SkillMarketplaceController.purchase.POST",
+      "direction": "success",
+      "valid": true,
+      "body": {
+        "protocolVersion": 1,
+        "requestId": "req-synthetic",
+        "code": "E0",
+        "msg": "ok",
+        "data": {
+          "productVersionId": "demo-product-version",
+          "targetAgentId": "demo-agent",
+          "expectedAgentVersion": "9007199254740993",
+          "orderId": "demo-order",
+          "status": "FUNDS_HELD"
+        }
+      }
+    },
+    {
+      "name": "SkillMarketplaceController.purchase.POST request shape",
+      "operationId": "SkillMarketplaceController.purchase.POST",
+      "direction": "request",
+      "valid": true,
+      "body": {
+        "protocolVersion": 1,
+        "requestId": "req-synthetic",
+        "data": {
+          "productVersionId": "demo-product-version",
+          "targetAgentId": "demo-agent",
+          "expectedAgentVersion": "9007199254740993",
+          "quoteId": "demo-quote",
+          "expectedPrice": {
+            "amountMinor": "0",
+            "currency": "SILVER"
+          },
+          "approvedPermissions": []
+        }
+      }
+    },
+    {
+      "name": "SkillMarketplaceController.order.GET success shape",
+      "operationId": "SkillMarketplaceController.order.GET",
+      "direction": "success",
+      "valid": true,
+      "body": {
+        "protocolVersion": 1,
+        "requestId": "req-synthetic",
+        "code": "E0",
+        "msg": "ok",
+        "data": {
+          "productVersionId": "demo-product-version",
+          "targetAgentId": "demo-agent",
+          "expectedAgentVersion": "9007199254740993",
+          "orderId": "demo-order",
+          "status": "FUNDS_HELD"
+        }
+      }
+    },
+    {
+      "name": "SkillMarketplaceController.entitlements.GET success shape",
+      "operationId": "SkillMarketplaceController.entitlements.GET",
+      "direction": "success",
+      "valid": true,
+      "body": {
+        "protocolVersion": 1,
+        "requestId": "req-synthetic",
+        "code": "E0",
+        "msg": "ok",
+        "data": [
+          {
+            "entitlementId": "demo-entitlement",
+            "targetAgentId": "demo-agent",
+            "orderId": "demo-order",
+            "skillInstallationId": "demo-skill-install",
+            "productVersionId": "demo-product-version",
+            "skillKey": "demo.skill",
+            "skillVersion": "1.0.0",
+            "status": "PENDING_INSTALLATION",
+            "permissionGrantVersion": "1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "EconomyReadOnlyPreviewController.capabilities.GET success shape",
+      "operationId": "EconomyReadOnlyPreviewController.capabilities.GET",
+      "direction": "success",
+      "valid": true,
+      "body": {
+        "protocolVersion": 1,
+        "requestId": "req-synthetic",
+        "code": "E0",
+        "msg": "ok",
+        "data": {
+          "contractVersion": "economy-readonly-v2",
+          "mode": "READ_ONLY_PREVIEW",
+          "enabled": false,
+          "principalScopeSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "features": {
+            "wallet": false,
+            "ledger": false,
+            "catalog": false,
+            "installationStatus": false,
+            "hostingPlan": false,
+            "hostingLease": false
+          },
+          "actions": {
+            "estimate": false,
+            "issue": false,
+            "purchase": false,
+            "settle": false,
+            "refund": false,
+            "install": false,
+            "hostingActivate": false,
+            "hostingRenew": false
+          }
+        }
+      }
+    },
+    {
+      "name": "EconomyReadOnlyPreviewController.wallet.GET success shape",
+      "operationId": "EconomyReadOnlyPreviewController.wallet.GET",
+      "direction": "success",
+      "valid": true,
+      "body": {
+        "protocolVersion": 1,
+        "requestId": "req-synthetic",
+        "code": "E0",
+        "msg": "ok",
+        "data": {
+          "currency": "SILVER",
+          "available": {
+            "amountMinor": "0",
+            "currency": "SILVER"
+          },
+          "held": {
+            "amountMinor": "0",
+            "currency": "SILVER"
+          },
+          "version": "0"
+        }
+      }
+    },
+    {
+      "name": "EconomyReadOnlyPreviewController.ledger.GET success shape",
+      "operationId": "EconomyReadOnlyPreviewController.ledger.GET",
+      "direction": "success",
+      "valid": true,
+      "body": {
+        "protocolVersion": 1,
+        "requestId": "req-synthetic",
+        "code": "E0",
+        "msg": "ok",
+        "data": {
+          "items": [],
+          "nextCursor": null,
+          "hasMore": false
+        }
+      }
+    },
+    {
+      "name": "EconomyReadOnlyPreviewController.products.GET success shape",
+      "operationId": "EconomyReadOnlyPreviewController.products.GET",
+      "direction": "success",
+      "valid": true,
+      "body": {
+        "protocolVersion": 1,
+        "requestId": "req-synthetic",
+        "code": "E0",
+        "msg": "ok",
+        "data": {
+          "items": [
+            {
+              "productId": "demo-product",
+              "name": "示例技能",
+              "description": "合成验约资料",
+              "productVersionId": "demo-product-version",
+              "skillKey": "demo.skill",
+              "skillVersion": "1.0.0",
+              "price": {
+                "amountMinor": "0",
+                "currency": "SILVER"
+              },
+              "permissions": [],
+              "deploymentRestriction": "NONE",
+              "priceSource": "CATALOG",
+              "purchaseAllowed": false
+            }
+          ],
+          "nextCursor": null,
+          "hasMore": false
+        }
+      }
+    },
+    {
+      "name": "EconomyReadOnlyPreviewController.product.GET success shape",
+      "operationId": "EconomyReadOnlyPreviewController.product.GET",
+      "direction": "success",
+      "valid": true,
+      "body": {
+        "protocolVersion": 1,
+        "requestId": "req-synthetic",
+        "code": "E0",
+        "msg": "ok",
+        "data": {
+          "productId": "demo-product",
+          "name": "示例技能",
+          "description": "合成验约资料",
+          "productVersionId": "demo-product-version",
+          "skillKey": "demo.skill",
+          "skillVersion": "1.0.0",
+          "price": {
+            "amountMinor": "0",
+            "currency": "SILVER"
+          },
+          "permissions": [],
+          "deploymentRestriction": "NONE",
+          "priceSource": "CATALOG",
+          "purchaseAllowed": false
+        }
+      }
+    },
+    {
+      "name": "EconomyReadOnlyPreviewController.agentSkills.GET success shape",
+      "operationId": "EconomyReadOnlyPreviewController.agentSkills.GET",
+      "direction": "success",
+      "valid": true,
+      "body": {
+        "protocolVersion": 1,
+        "requestId": "req-synthetic",
+        "code": "E0",
+        "msg": "ok",
+        "data": {
+          "agentId": "demo-agent",
+          "entitlements": [],
+          "installationEvidence": [],
+          "observedAt": 1792022400000
+        }
+      }
+    },
+    {
+      "name": "EconomyReadOnlyPreviewController.hostingPlan.GET success shape",
+      "operationId": "EconomyReadOnlyPreviewController.hostingPlan.GET",
+      "direction": "success",
+      "valid": true,
+      "body": {
+        "protocolVersion": 1,
+        "requestId": "req-synthetic",
+        "code": "E0",
+        "msg": "ok",
+        "data": {
+          "source": "CONFIGURATION_REFERENCE",
+          "planVersion": "1",
+          "amount": {
+            "amountMinor": "1",
+            "currency": "SILVER"
+          },
+          "periodSeconds": "2592000",
+          "currency": "SILVER",
+          "activationAllowed": false
+        }
+      }
+    },
+    {
+      "name": "EconomyReadOnlyPreviewController.hostingLease.GET success shape",
+      "operationId": "EconomyReadOnlyPreviewController.hostingLease.GET",
+      "direction": "success",
+      "valid": true,
+      "body": {
+        "protocolVersion": 1,
+        "requestId": "req-synthetic",
+        "code": "E0",
+        "msg": "ok",
+        "data": {
+          "agentId": "demo-agent",
+          "applicability": "NOT_APPLICABLE",
+          "lease": null
+        }
+      }
+    },
+    {
+      "name": "EconomyReadOnlyPreviewController.bountyEstimate.POST success shape",
+      "operationId": "EconomyReadOnlyPreviewController.bountyEstimate.POST",
+      "direction": "success",
+      "valid": true,
+      "body": {
+        "protocolVersion": 1,
+        "requestId": "req-synthetic",
+        "code": "E0",
+        "msg": "ok",
+        "data": {
+          "estimatedCompute": {
+            "amountMinor": "0",
+            "currency": "SILVER"
+          },
+          "worstCompute": {
+            "amountMinor": "0",
+            "currency": "SILVER"
+          },
+          "platformFee": {
+            "amountMinor": "0",
+            "currency": "SILVER"
+          },
+          "estimatedAgentPayout": {
+            "amountMinor": "0",
+            "currency": "SILVER"
+          },
+          "worstAgentPayout": {
+            "amountMinor": "0",
+            "currency": "SILVER"
+          },
+          "budgetHeadroom": {
+            "amountMinor": "0",
+            "currency": "SILVER"
+          },
+          "mode": "SIMULATION",
+          "charged": false,
+          "persisted": false,
+          "currency": "SILVER",
+          "priceBookVersion": "synthetic-schema-only",
+          "rateProvenance": "synthetic-schema-only",
+          "estimatedTokens": {
+            "input": "0",
+            "cachedInput": "0",
+            "output": "0",
+            "reasoning": "0"
+          },
+          "worstTokens": {
+            "input": "0",
+            "cachedInput": "0",
+            "output": "0",
+            "reasoning": "0"
+          },
+          "budgetCovered": false
+        }
+      }
+    },
+    {
+      "name": "EconomyReadOnlyPreviewController.bountyEstimate.POST request shape",
+      "operationId": "EconomyReadOnlyPreviewController.bountyEstimate.POST",
+      "direction": "request",
+      "valid": true,
+      "body": {
+        "protocolVersion": 1,
+        "requestId": "req-synthetic",
+        "data": {
+          "grossBountyAmount": {
+            "amountMinor": "0",
+            "currency": "SILVER"
+          },
+          "minimumAcceptedPayout": {
+            "amountMinor": "0",
+            "currency": "SILVER"
+          },
+          "estimatedTokens": {
+            "input": "0",
+            "cachedInput": "0",
+            "output": "0",
+            "reasoning": "0"
+          },
+          "worstTokens": {
+            "input": "0",
+            "cachedInput": "0",
+            "output": "0",
+            "reasoning": "0"
+          }
+        }
+      }
+    },
+    {
+      "name": "reject root alias payload",
+      "operationId": "SkillMarketplaceController.purchase.POST",
+      "direction": "success",
+      "valid": false,
+      "body": {
+        "protocolVersion": 1,
+        "requestId": "req-synthetic",
+        "code": "E0",
+        "msg": "ok",
+        "data": {
+          "productVersionId": "demo-product-version",
+          "targetAgentId": "demo-agent",
+          "expectedAgentVersion": "9007199254740993",
+          "orderId": "demo-order",
+          "status": "FUNDS_HELD"
+        },
+        "payload": {}
+      }
+    },
+    {
+      "name": "reject old money field",
+      "operationId": "SkillMarketplaceController.purchase.POST",
+      "direction": "request",
+      "valid": false,
+      "body": {
+        "protocolVersion": 1,
+        "requestId": "req-synthetic",
+        "data": {
+          "productVersionId": "demo-product-version",
+          "targetAgentId": "demo-agent",
+          "expectedAgentVersion": "9007199254740993",
+          "quoteId": "demo-quote",
+          "expectedPrice": {
+            "amountMinor": "0",
+            "currency": "SILVER"
+          },
+          "approvedPermissions": [],
+          "expectedPriceMicro": "0"
+        }
+      }
+    },
+    {
+      "name": "reject wrong currency",
+      "operationId": "SkillMarketplaceController.purchase.POST",
+      "direction": "request",
+      "valid": false,
+      "body": {
+        "protocolVersion": 1,
+        "requestId": "req-synthetic",
+        "data": {
+          "productVersionId": "demo-product-version",
+          "targetAgentId": "demo-agent",
+          "expectedAgentVersion": "9007199254740993",
+          "quoteId": "demo-quote",
+          "expectedPrice": {
+            "amountMinor": "0",
+            "currency": "CNY"
+          },
+          "approvedPermissions": []
+        }
+      }
+    },
+    {
+      "name": "reject number Long",
+      "operationId": "SkillMarketplaceController.purchase.POST",
+      "direction": "request",
+      "valid": false,
+      "body": {
+        "protocolVersion": 1,
+        "requestId": "req-synthetic",
+        "data": {
+          "productVersionId": "demo-product-version",
+          "targetAgentId": "demo-agent",
+          "expectedAgentVersion": 9007199254740992,
+          "quoteId": "demo-quote",
+          "expectedPrice": {
+            "amountMinor": "0",
+            "currency": "SILVER"
+          },
+          "approvedPermissions": []
+        }
+      }
+    },
+    {
+      "name": "reject Long overflow",
+      "operationId": "SkillMarketplaceController.purchase.POST",
+      "direction": "request",
+      "valid": false,
+      "body": {
+        "protocolVersion": 1,
+        "requestId": "req-synthetic",
+        "data": {
+          "productVersionId": "demo-product-version",
+          "targetAgentId": "demo-agent",
+          "expectedAgentVersion": "9223372036854775808",
+          "quoteId": "demo-quote",
+          "expectedPrice": {
+            "amountMinor": "0",
+            "currency": "SILVER"
+          },
+          "approvedPermissions": []
+        }
+      }
+    },
+    {
+      "name": "reject decimal leading zero",
+      "operationId": "SkillMarketplaceController.purchase.POST",
+      "direction": "request",
+      "valid": false,
+      "body": {
+        "protocolVersion": 1,
+        "requestId": "req-synthetic",
+        "data": {
+          "productVersionId": "demo-product-version",
+          "targetAgentId": "demo-agent",
+          "expectedAgentVersion": "01",
+          "quoteId": "demo-quote",
+          "expectedPrice": {
+            "amountMinor": "0",
+            "currency": "SILVER"
+          },
+          "approvedPermissions": []
+        }
+      }
+    },
+    {
+      "name": "reject zero positive version",
+      "operationId": "SkillMarketplaceController.purchase.POST",
+      "direction": "request",
+      "valid": false,
+      "body": {
+        "protocolVersion": 1,
+        "requestId": "req-synthetic",
+        "data": {
+          "productVersionId": "demo-product-version",
+          "targetAgentId": "demo-agent",
+          "expectedAgentVersion": "0",
+          "quoteId": "demo-quote",
+          "expectedPrice": {
+            "amountMinor": "0",
+            "currency": "SILVER"
+          },
+          "approvedPermissions": []
+        }
+      }
+    },
+    {
+      "name": "reject boolean version",
+      "operationId": "SkillMarketplaceController.purchase.POST",
+      "direction": "request",
+      "valid": false,
+      "body": {
+        "protocolVersion": 1,
+        "requestId": "req-synthetic",
+        "data": {
+          "productVersionId": "demo-product-version",
+          "targetAgentId": "demo-agent",
+          "expectedAgentVersion": true,
+          "quoteId": "demo-quote",
+          "expectedPrice": {
+            "amountMinor": "0",
+            "currency": "SILVER"
+          },
+          "approvedPermissions": []
+        }
+      }
+    },
+    {
+      "name": "reject duplicate permission",
+      "operationId": "SkillMarketplaceController.purchase.POST",
+      "direction": "request",
+      "valid": false,
+      "body": {
+        "protocolVersion": 1,
+        "requestId": "req-synthetic",
+        "data": {
+          "productVersionId": "demo-product-version",
+          "targetAgentId": "demo-agent",
+          "expectedAgentVersion": "9007199254740993",
+          "quoteId": "demo-quote",
+          "expectedPrice": {
+            "amountMinor": "0",
+            "currency": "SILVER"
+          },
+          "approvedPermissions": [
+            "x",
+            "x"
+          ]
+        }
+      }
+    },
+    {
+      "name": "reject string timestamp",
+      "operationId": "SkillMarketplaceController.quote.POST",
+      "direction": "success",
+      "valid": false,
+      "body": {
+        "protocolVersion": 1,
+        "requestId": "req-synthetic",
+        "code": "E0",
+        "msg": "ok",
+        "data": {
+          "productVersionId": "demo-product-version",
+          "targetAgentId": "demo-agent",
+          "expectedAgentVersion": "9007199254740993",
+          "quoteId": "demo-quote",
+          "price": {
+            "amountMinor": "0",
+            "currency": "SILVER"
+          },
+          "expiresAt": "1792022400000"
+        }
+      }
+    },
+    {
+      "name": "reject unsafe timestamp",
+      "operationId": "SkillMarketplaceController.quote.POST",
+      "direction": "success",
+      "valid": false,
+      "body": {
+        "protocolVersion": 1,
+        "requestId": "req-synthetic",
+        "code": "E0",
+        "msg": "ok",
+        "data": {
+          "productVersionId": "demo-product-version",
+          "targetAgentId": "demo-agent",
+          "expectedAgentVersion": "9007199254740993",
+          "quoteId": "demo-quote",
+          "price": {
+            "amountMinor": "0",
+            "currency": "SILVER"
+          },
+          "expiresAt": 9007199254740992
+        }
+      }
+    },
+    {
+      "name": "reject missing nullable field",
+      "operationId": "SkillMarketplaceController.product.GET",
+      "direction": "success",
+      "valid": false,
+      "body": {
+        "protocolVersion": 1,
+        "requestId": "req-synthetic",
+        "code": "E0",
+        "msg": "ok",
+        "data": {
+          "productId": "demo-product",
+          "name": "示例技能",
+          "description": "合成验约资料",
+          "productVersionId": "demo-product-version",
+          "skillKey": "demo.skill",
+          "skillVersion": "1.0.0",
+          "price": {
+            "amountMinor": "0",
+            "currency": "SILVER"
+          },
+          "permissions": [],
+          "canPurchase": true,
+          "deploymentRestriction": "NONE"
+        }
+      }
+    },
+    {
+      "name": "reject canPurchase reason contradiction",
+      "operationId": "SkillMarketplaceController.product.GET",
+      "direction": "success",
+      "valid": false,
+      "body": {
+        "protocolVersion": 1,
+        "requestId": "req-synthetic",
+        "code": "E0",
+        "msg": "ok",
+        "data": {
+          "productId": "demo-product",
+          "name": "示例技能",
+          "description": "合成验约资料",
+          "productVersionId": "demo-product-version",
+          "skillKey": "demo.skill",
+          "skillVersion": "1.0.0",
+          "price": {
+            "amountMinor": "0",
+            "currency": "SILVER"
+          },
+          "permissions": [],
+          "canPurchase": true,
+          "denialReason": "SKILL_ADMIN_REQUIRED",
+          "deploymentRestriction": "NONE"
+        }
+      }
+    },
+    {
+      "name": "reject old preview version",
+      "operationId": "EconomyReadOnlyPreviewController.capabilities.GET",
+      "direction": "success",
+      "valid": false,
+      "body": {
+        "protocolVersion": 1,
+        "requestId": "req-synthetic",
+        "code": "E0",
+        "msg": "ok",
+        "data": {
+          "contractVersion": "economy-readonly-v1",
+          "mode": "READ_ONLY_PREVIEW",
+          "enabled": false,
+          "principalScopeSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "features": {
+            "wallet": false,
+            "ledger": false,
+            "catalog": false,
+            "installationStatus": false,
+            "hostingPlan": false,
+            "hostingLease": false
+          },
+          "actions": {
+            "estimate": false,
+            "issue": false,
+            "purchase": false,
+            "settle": false,
+            "refund": false,
+            "install": false,
+            "hostingActivate": false,
+            "hostingRenew": false
+          }
+        }
+      }
+    },
+    {
+      "name": "reject preview purchase privilege",
+      "operationId": "EconomyReadOnlyPreviewController.capabilities.GET",
+      "direction": "success",
+      "valid": false,
+      "body": {
+        "protocolVersion": 1,
+        "requestId": "req-synthetic",
+        "code": "E0",
+        "msg": "ok",
+        "data": {
+          "contractVersion": "economy-readonly-v2",
+          "mode": "READ_ONLY_PREVIEW",
+          "enabled": false,
+          "principalScopeSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "features": {
+            "wallet": false,
+            "ledger": false,
+            "catalog": false,
+            "installationStatus": false,
+            "hostingPlan": false,
+            "hostingLease": false
+          },
+          "actions": {
+            "estimate": false,
+            "issue": false,
+            "purchase": true,
+            "settle": false,
+            "refund": false,
+            "install": false,
+            "hostingActivate": false,
+            "hostingRenew": false
+          }
+        }
+      }
+    },
+    {
+      "name": "reject old page field",
+      "operationId": "EconomyReadOnlyPreviewController.products.GET",
+      "direction": "success",
+      "valid": false,
+      "body": {
+        "protocolVersion": 1,
+        "requestId": "req-synthetic",
+        "code": "E0",
+        "msg": "ok",
+        "data": {
+          "items": [
+            {
+              "productId": "demo-product",
+              "name": "示例技能",
+              "description": "合成验约资料",
+              "productVersionId": "demo-product-version",
+              "skillKey": "demo.skill",
+              "skillVersion": "1.0.0",
+              "price": {
+                "amountMinor": "0",
+                "currency": "SILVER"
+              },
+              "permissions": [],
+              "deploymentRestriction": "NONE",
+              "priceSource": "CATALOG",
+              "purchaseAllowed": false
+            }
+          ],
+          "nextCursor": null,
+          "hasMore": false,
+          "nextOffset": "50"
+        }
+      }
+    },
+    {
+      "name": "reject old response message",
+      "operationId": "EconomyReadOnlyPreviewController.wallet.GET",
+      "direction": "success",
+      "valid": false,
+      "body": {
+        "protocolVersion": 1,
+        "requestId": "req-synthetic",
+        "code": "E0",
+        "msg": "ok",
+        "data": {
+          "currency": "SILVER",
+          "available": {
+            "amountMinor": "0",
+            "currency": "SILVER"
+          },
+          "held": {
+            "amountMinor": "0",
+            "currency": "SILVER"
+          },
+          "version": "0"
+        },
+        "message": "ok"
+      }
+    },
+    {
+      "name": "reject unknown order state",
+      "operationId": "SkillMarketplaceController.purchase.POST",
+      "direction": "success",
+      "valid": false,
+      "body": {
+        "protocolVersion": 1,
+        "requestId": "req-synthetic",
+        "code": "E0",
+        "msg": "ok",
+        "data": {
+          "productVersionId": "demo-product-version",
+          "targetAgentId": "demo-agent",
+          "expectedAgentVersion": "9007199254740993",
+          "orderId": "demo-order",
+          "status": "SUCCEEDED"
+        }
+      }
+    },
+    {
+      "name": "reject fake estimate charge",
+      "operationId": "EconomyReadOnlyPreviewController.bountyEstimate.POST",
+      "direction": "success",
+      "valid": false,
+      "body": {
+        "protocolVersion": 1,
+        "requestId": "req-synthetic",
+        "code": "E0",
+        "msg": "ok",
+        "data": {
+          "estimatedCompute": {
+            "amountMinor": "0",
+            "currency": "SILVER"
+          },
+          "worstCompute": {
+            "amountMinor": "0",
+            "currency": "SILVER"
+          },
+          "platformFee": {
+            "amountMinor": "0",
+            "currency": "SILVER"
+          },
+          "estimatedAgentPayout": {
+            "amountMinor": "0",
+            "currency": "SILVER"
+          },
+          "worstAgentPayout": {
+            "amountMinor": "0",
+            "currency": "SILVER"
+          },
+          "budgetHeadroom": {
+            "amountMinor": "0",
+            "currency": "SILVER"
+          },
+          "mode": "SIMULATION",
+          "charged": true,
+          "persisted": false,
+          "currency": "SILVER",
+          "priceBookVersion": "synthetic-schema-only",
+          "rateProvenance": "synthetic-schema-only",
+          "estimatedTokens": {
+            "input": "0",
+            "cachedInput": "0",
+            "output": "0",
+            "reasoning": "0"
+          },
+          "worstTokens": {
+            "input": "0",
+            "cachedInput": "0",
+            "output": "0",
+            "reasoning": "0"
+          },
+          "budgetCovered": false
+        }
+      }
+    },
+    {
+      "name": "reject success without data",
+      "operationId": "SkillMarketplaceController.quote.POST",
+      "direction": "success",
+      "valid": false,
+      "body": {
+        "protocolVersion": 1,
+        "requestId": "req-synthetic",
+        "code": "E0",
+        "msg": "ok"
+      }
+    },
+    {
+      "name": "error data is null",
+      "operationId": "SkillMarketplaceController.purchase.POST",
+      "direction": "error",
+      "valid": true,
+      "httpStatus": 409,
+      "body": {
+        "protocolVersion": 1,
+        "requestId": "req-synthetic",
+        "code": "IDEMPOTENCY_CONFLICT",
+        "msg": "Operation key conflicts",
+        "data": null
+      }
+    }
+  ]
+}

@@ -1,0 +1,106 @@
+{
+  "reviewDate": "2026-10-15",
+  "standardVersion": "1.2",
+  "scope": "source classification and target route preservation; not provider protocol certification",
+  "directControllerOperations": 10,
+  "operations": [
+    {
+      "operationId": "OauthController.thirdPartyWxMp.GET",
+      "method": "GET",
+      "path": "/oauth/third-party/wxmp",
+      "source": "oauth/jia-oauth-service/src/main/java/cn/jia/oauth/api/OauthController.java",
+      "sourceSha256": "8b27bb65fe0295764f63a05cfa12b5c65c0b998e13eb83f63de001168241b7d7",
+      "proposedMode": "HTML_OR_REDIRECT",
+      "externalContractPolicy": "PROVIDER_WIRE_PRESERVED"
+    },
+    {
+      "operationId": "OauthController.thirdPartyWeiXin.GET",
+      "method": "GET",
+      "path": "/oauth/third-party/weixin",
+      "source": "oauth/jia-oauth-service/src/main/java/cn/jia/oauth/api/OauthController.java",
+      "sourceSha256": "8b27bb65fe0295764f63a05cfa12b5c65c0b998e13eb83f63de001168241b7d7",
+      "proposedMode": "HTML_OR_REDIRECT",
+      "externalContractPolicy": "PROVIDER_WIRE_PRESERVED"
+    },
+    {
+      "operationId": "OauthController.thirdPartyWeiBo.GET",
+      "method": "GET",
+      "path": "/oauth/third-party/weibo",
+      "source": "oauth/jia-oauth-service/src/main/java/cn/jia/oauth/api/OauthController.java",
+      "sourceSha256": "8b27bb65fe0295764f63a05cfa12b5c65c0b998e13eb83f63de001168241b7d7",
+      "proposedMode": "HTML_OR_REDIRECT",
+      "externalContractPolicy": "PROVIDER_WIRE_PRESERVED"
+    },
+    {
+      "operationId": "OauthController.thirdPartyGithub.GET",
+      "method": "GET",
+      "path": "/oauth/third-party/github",
+      "source": "oauth/jia-oauth-service/src/main/java/cn/jia/oauth/api/OauthController.java",
+      "sourceSha256": "8b27bb65fe0295764f63a05cfa12b5c65c0b998e13eb83f63de001168241b7d7",
+      "proposedMode": "HTML_OR_REDIRECT",
+      "externalContractPolicy": "PROVIDER_WIRE_PRESERVED"
+    },
+    {
+      "operationId": "SmsController.receive.GET",
+      "method": "GET",
+      "path": "/sms/receive",
+      "source": "sms/jia-sms-service/src/main/java/cn/jia/sms/api/SmsController.java",
+      "sourceSha256": "1114019e5a1963634d5e0bab1563feba28006ad34c386c8d2c12dafe806d3924",
+      "proposedMode": "EXTERNAL_CALLBACK",
+      "externalContractPolicy": "PROVIDER_WIRE_PRESERVED"
+    },
+    {
+      "operationId": "WxMpController.checkSignature.GET",
+      "method": "GET",
+      "path": "/wx/mp/checksignature",
+      "source": "wx/jia-wx-service/src/main/java/cn/jia/wx/api/WxMpController.java",
+      "sourceSha256": "e66371cadfd5073ba7e8b1c904dc39de20335e01087470fe779abf1229b059cc",
+      "proposedMode": "EXTERNAL_CALLBACK",
+      "externalContractPolicy": "PROVIDER_WIRE_PRESERVED"
+    },
+    {
+      "operationId": "WxMpController.receiveMsg.POST",
+      "method": "POST",
+      "path": "/wx/mp/checksignature",
+      "source": "wx/jia-wx-service/src/main/java/cn/jia/wx/api/WxMpController.java",
+      "sourceSha256": "e66371cadfd5073ba7e8b1c904dc39de20335e01087470fe779abf1229b059cc",
+      "proposedMode": "EXTERNAL_CALLBACK",
+      "externalContractPolicy": "PROVIDER_WIRE_PRESERVED"
+    },
+    {
+      "operationId": "WxPayController.parseOrderNotifyResult.POST",
+      "method": "POST",
+      "path": "/wx/pay/parseOrderNotifyResult",
+      "source": "wx/jia-wx-service/src/main/java/cn/jia/wx/api/WxPayController.java",
+      "sourceSha256": "0d8fb74f030dfe4032196658ba0843ea6b05071a4d2ebc5c0394b628c32970cd",
+      "proposedMode": "EXTERNAL_CALLBACK",
+      "externalContractPolicy": "PROVIDER_WIRE_PRESERVED"
+    },
+    {
+      "operationId": "WxPayController.parseRefundNotifyResult.POST",
+      "method": "POST",
+      "path": "/wx/pay/parseRefundNotifyResult",
+      "source": "wx/jia-wx-service/src/main/java/cn/jia/wx/api/WxPayController.java",
+      "sourceSha256": "0d8fb74f030dfe4032196658ba0843ea6b05071a4d2ebc5c0394b628c32970cd",
+      "proposedMode": "EXTERNAL_CALLBACK",
+      "externalContractPolicy": "PROVIDER_WIRE_PRESERVED"
+    },
+    {
+      "operationId": "WxPayController.parseScanPayNotifyResult.POST",
+      "method": "POST",
+      "path": "/wx/pay/parseScanPayNotifyResult",
+      "source": "wx/jia-wx-service/src/main/java/cn/jia/wx/api/WxPayController.java",
+      "sourceSha256": "0d8fb74f030dfe4032196658ba0843ea6b05071a4d2ebc5c0394b628c32970cd",
+      "proposedMode": "EXTERNAL_CALLBACK",
+      "externalContractPolicy": "PROVIDER_WIRE_PRESERVED"
+    }
+  ],
+  "frameworkCandidates": [
+    {
+      "path": "/login/oauth2/code/jia-client-oidc",
+      "source": "oauth/jia-oauth-client-starter/src/main/resources/application.yml",
+      "status": "CONFIG_DECLARED_NOT_RUNTIME_VERIFIED"
+    }
+  ],
+  "wholeCallbackReviewComplete": false
+}
