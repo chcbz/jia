@@ -27,30 +27,30 @@ public class HallSubmissionController {
     }
 
     @GetMapping(value = "/submissions/request", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<cn.jia.core.entity.JsonResult<HallRequestDraftService.SubmissionReceipt>> submission(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<HallDraftWire.SubmissionReceipt>> submission(
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             HttpServletRequest request, Authentication authentication) {
         HallRequestDraftController.requireNoQuery(request);
-        return cn.jia.core.config.ApiJsonResponses.success(HallRequestDraftController.ok(service.getSubmissionByIdempotencyKey(
-                HallRequestDraftController.scope(authentication), idempotencyKey)));
+        return cn.jia.core.config.ApiJsonResponses.success(HallRequestDraftController.ok(HallDraftWire.from(service.getSubmissionByIdempotencyKey(
+                HallRequestDraftController.scope(authentication), idempotencyKey))));
     }
 
     @GetMapping(value = "/cases/{caseId}", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<cn.jia.core.entity.JsonResult<HallRequestDraftService.CaseView>> caseView(@PathVariable String caseId,
+    public ResponseEntity<cn.jia.core.entity.JsonResult<HallDraftWire.CaseView>> caseView(@PathVariable String caseId,
             HttpServletRequest request, Authentication authentication) {
         HallRequestDraftController.requireNoQuery(request);
-        return cn.jia.core.config.ApiJsonResponses.success(HallRequestDraftController.ok(service.getCase(
-                HallRequestDraftController.scope(authentication), caseId)));
+        return cn.jia.core.config.ApiJsonResponses.success(HallRequestDraftController.ok(HallDraftWire.from(service.getCase(
+                HallRequestDraftController.scope(authentication), caseId))));
     }
 
     @GetMapping(value = "/executions/{executionId}/results",
             produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<cn.jia.core.entity.JsonResult<HallRequestDraftService.ExecutionResultsView>> executionResults(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<HallDraftWire.ExecutionResultsView>> executionResults(
             @PathVariable String executionId, HttpServletRequest request,
             Authentication authentication) {
         HallRequestDraftController.requireNoQuery(request);
-        return cn.jia.core.config.ApiJsonResponses.success(HallRequestDraftController.ok(service.getExecutionResults(
-                HallRequestDraftController.scope(authentication), executionId)));
+        return cn.jia.core.config.ApiJsonResponses.success(HallRequestDraftController.ok(HallDraftWire.from(service.getExecutionResults(
+                HallRequestDraftController.scope(authentication), executionId))));
     }
 
     @ExceptionHandler(HallRequestDraftController.AuthenticationFailure.class)

@@ -133,25 +133,8 @@ public final class AgentTaskSelectedOutputFinalizationController {
         }catch(RequestFailure e){throw e;}catch(Exception e){throw new RequestFailure();}
     }
     private static byte[] read(HttpServletRequest request){
-        try(InputStream in=new java.io.ByteArrayInputStream(cn.jia.core.config.ApiJsonInput.readData(request));ByteArrayOutputStream out=new ByteArrayOutputStream(Math.min(MAX_BODY,8192))){
-            boolean inString=false,escaped=false,pendingWhitespace=false;int value;
-            while((value=in.read())>=0){
-                if(!inString&&(value==' '||value=='\t'||value=='\r'||value=='\n')){
-                    pendingWhitespace=true;continue;
-                }
-                if(pendingWhitespace){writeBounded(out,' ');pendingWhitespace=false;}
-                writeBounded(out,value);
-                if(inString){
-                    if(escaped)escaped=false;
-                    else if(value=='\\')escaped=true;
-                    else if(value=='"')inString=false;
-                }else if(value=='"')inString=true;
-            }
-            if(out.size()==0||inString||escaped)throw new RequestFailure();return out.toByteArray();
-        }catch(RequestFailure e){throw e;}catch(Exception e){throw new RequestFailure();}
-    }
-    private static void writeBounded(ByteArrayOutputStream out,int value){
-        if(out.size()>=MAX_BODY)throw new RequestFailure();out.write(value);
+        try { return cn.jia.core.config.ApiJsonInput.readData(request, MAX_BODY, true); }
+        catch(RequestFailure e){throw e;}catch(Exception e){throw new RequestFailure();}
     }
     private static int derivedMaxBody(){
         String root="{\"expectedTaskVersion\":\"9007199254740991\",\"expectedAssignmentRevision\":\"9007199254740991\","

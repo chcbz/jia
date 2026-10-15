@@ -34,7 +34,9 @@ class HallRequestDraftControllerTest {
     @BeforeEach
     void setUp() {
         service = org.mockito.Mockito.mock(HallRequestDraftService.class);
-        mvc = MockMvcBuilders.standaloneSetup(new HallRequestDraftController(service)).build();
+        mvc = MockMvcBuilders.standaloneSetup(new HallRequestDraftController(service))
+                .setControllerAdvice(new cn.jia.core.config.ApiEnvelopeAdvice(),new cn.jia.core.config.ExceptionHandlerAdvice())
+                .addFilters(new cn.jia.core.filter.RequestIdFilter()).build();
     }
 
     @Test
@@ -45,21 +47,21 @@ class HallRequestDraftControllerTest {
                         .principal(jwt("owner-a", "client-a"))
                         .header("Idempotency-Key", "create-key")
                         .contentType("application/json")
-                        .content("""
+                        .content(q("""
                                 {"kind":"CREATE","originRef":"map","title":"方案",
                                  "instruction":"私密正文","targetAgentId":null,
                                  "outputMime":"application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                                  "inputs":[]}
-                                """))
+                                """)))
                 .andExpect(status().isCreated())
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
                 .andExpect(content().contentType("application/json"))
-                .andExpect(jsonPath("$.draftId").value("hdr_1"))
-                .andExpect(jsonPath("$.revision").value(1))
-                .andExpect(jsonPath("$.kind").value("CREATE"))
-                .andExpect(jsonPath("$.editableFields.title").value("方案"))
-                .andExpect(jsonPath("$.sourceSummary.originRef").value("map"))
-                .andExpect(jsonPath("$.submissionRef").doesNotExist());
+                .andExpect(jsonPath("$.data.draftId").value("hdr_1"))
+                .andExpect(jsonPath("$.data.revision").value("1"))
+                .andExpect(jsonPath("$.data.kind").value("CREATE"))
+                .andExpect(jsonPath("$.data.editableFields.title").value("方案"))
+                .andExpect(jsonPath("$.data.sourceSummary.originRef").value("map"))
+                .andExpect(jsonPath("$.data.submissionRef").doesNotExist());
 
         ArgumentCaptor<HallRequestDraftService.OwnerScope> scope = ArgumentCaptor.forClass(
                 HallRequestDraftService.OwnerScope.class);
@@ -86,12 +88,12 @@ class HallRequestDraftControllerTest {
         mvc.perform(get("/agent/hall/drafts?cursor=opaque-cursor").principal(jwt()))
                 .andExpect(status().isOk())
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
-                .andExpect(jsonPath("$.items[0].draftId").value("hdr_2"))
-                .andExpect(jsonPath("$.items[0].title").value("摘要标题"))
-                .andExpect(jsonPath("$.items[0].instruction").doesNotExist())
-                .andExpect(jsonPath("$.items[0].inputs").doesNotExist())
-                .andExpect(jsonPath("$.items[0].editableFields").doesNotExist())
-                .andExpect(jsonPath("$.nextCursor").value("next-cursor"));
+                .andExpect(jsonPath("$.data.items[0].draftId").value("hdr_2"))
+                .andExpect(jsonPath("$.data.items[0].title").value("摘要标题"))
+                .andExpect(jsonPath("$.data.items[0].instruction").doesNotExist())
+                .andExpect(jsonPath("$.data.items[0].inputs").doesNotExist())
+                .andExpect(jsonPath("$.data.items[0].editableFields").doesNotExist())
+                .andExpect(jsonPath("$.data.nextCursor").value("next-cursor"));
     }
 
     @Test
@@ -103,17 +105,17 @@ class HallRequestDraftControllerTest {
         mvc.perform(put("/agent/hall/drafts/hdr_1").principal(jwt())
                         .header(HttpHeaders.IF_MATCH, "\"3\"")
                         .contentType("application/json")
-                        .content("{\"title\":\"new\",\"instruction\":\"body\",\"inputs\":[]}"))
+                        .content(q("{\"title\":\"new\",\"instruction\":\"body\",\"inputs\":[]}")))
                 .andExpect(status().isPreconditionFailed())
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
                 .andExpect(jsonPath("$.code").value("HALL_DRAFT_REVISION_CHANGED"))
-                .andExpect(jsonPath("$.retryable").value(false));
+                .andExpect(jsonPath("$.data.retryable").value(false));
 
         for (String malformed : List.of("3", "W/\"3\"", "\"0\"", "\"03\"", "\"x\"")) {
             mvc.perform(put("/agent/hall/drafts/hdr_1").principal(jwt())
                             .header(HttpHeaders.IF_MATCH, malformed)
                             .contentType("application/json")
-                            .content("{\"title\":\"x\",\"instruction\":\"y\",\"inputs\":[]}"))
+                            .content(q("{\"title\":\"x\",\"instruction\":\"y\",\"inputs\":[]}")))
                     .andExpect(status().isBadRequest())
                     .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
         }
@@ -124,12 +126,12 @@ class HallRequestDraftControllerTest {
         List<String> bodies = List.of(
                 "{\"kind\":\"CREATE\",\"originRef\":\"map\",\"inputs\":[],\"ownerJiacn\":\"victim\"}",
                 "{\"kind\":\"CREATE\",\"kind\":\"TASK_ACTION\",\"originRef\":\"map\",\"inputs\":[]}",
-                "{\"kind\":\"CREATE\",\"originRef\":\"map\",\"inputs\":[{\"fileId\":\"f1\",\"version\":\"1\"}]}"
+                "{\"kind\":\"CREATE\",\"originRef\":\"map\",\"inputs\":[{\"fileId\":\"f1\",\"version\":1}]}"
         );
         for (String body : bodies) {
             mvc.perform(post("/agent/hall/drafts").principal(jwt())
                             .header("Idempotency-Key", "key")
-                            .contentType("application/json").content(body))
+                            .contentType("application/json").content(q(body)))
                     .andExpect(status().isBadRequest())
                     .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
         }
@@ -137,18 +139,18 @@ class HallRequestDraftControllerTest {
     }
 
     @Test
-    void discardRequiresNumericExpectedRevisionAndPreservesIdempotencyKey() throws Exception {
+    void discardRequiresDecimalStringExpectedRevisionAndPreservesIdempotencyKey() throws Exception {
         when(service.discard(any(), eq("hdr_1"), eq(7L), eq("discard-key")))
                 .thenReturn(view("hdr_1", 8, "DISCARDED"));
 
         mvc.perform(post("/agent/hall/drafts/hdr_1/discard").principal(jwt())
                         .header("Idempotency-Key", "discard-key")
                         .contentType("application/json")
-                        .content("{\"expectedRevision\":7}"))
+                        .content(q("{\"expectedRevision\":\"7\"}")))
                 .andExpect(status().isOk())
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
-                .andExpect(jsonPath("$.state").value("DISCARDED"))
-                .andExpect(jsonPath("$.revision").value(8));
+                .andExpect(jsonPath("$.data.state").value("DISCARDED"))
+                .andExpect(jsonPath("$.data.revision").value("8"));
 
         verify(service).discard(new HallRequestDraftService.OwnerScope("0", "client-a", "owner-a"),
                 "hdr_1", 7, "discard-key");
@@ -164,12 +166,12 @@ class HallRequestDraftControllerTest {
         mvc.perform(post("/agent/hall/drafts").principal(jwt())
                         .header("Idempotency-Key", "source-key")
                         .contentType("application/json")
-                        .content("{\"kind\":\"CREATE\",\"originRef\":\"files\",\"inputs\":[]}"))
+                        .content(q("{\"kind\":\"CREATE\",\"originRef\":\"files\",\"inputs\":[]}")))
                 .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.code").value("HALL_DRAFT_SOURCE_UNAVAILABLE"))
-                .andExpect(jsonPath("$.details.field").value("inputs"))
-                .andExpect(jsonPath("$.details.sourceType").value("FILE"))
-                .andExpect(jsonPath("$.traceId").isString());
+                .andExpect(jsonPath("$.data.details.field").value("inputs"))
+                .andExpect(jsonPath("$.data.details.sourceType").value("FILE"))
+                .andExpect(jsonPath("$.data.traceId").isString());
     }
 
     @Test
@@ -194,14 +196,14 @@ class HallRequestDraftControllerTest {
         mvc.perform(post("/agent/hall/drafts/hdr_1/submit").principal(jwt())
                         .header("Idempotency-Key", "submit-key")
                         .contentType("application/json")
-                        .content("{\"expectedRevision\":3,\"authorizationAcknowledgement\":true}"))
+                        .content(q("{\"expectedRevision\":3,\"authorizationAcknowledgement\":true}")))
                 .andExpect(status().isAccepted())
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
-                .andExpect(jsonPath("$.ref.sourceType").value("PRIVATE_CASE"))
-                .andExpect(jsonPath("$.ref.sourceId").value("hpc_1"))
-                .andExpect(jsonPath("$.execution.executionId").value("pwe_1"))
-                .andExpect(jsonPath("$.task").doesNotExist())
-                .andExpect(jsonPath("$.submittedAt").value(1_790_000_000_000L));
+                .andExpect(jsonPath("$.data.ref.sourceType").value("PRIVATE_CASE"))
+                .andExpect(jsonPath("$.data.ref.sourceId").value("hpc_1"))
+                .andExpect(jsonPath("$.data.execution.executionId").value("pwe_1"))
+                .andExpect(jsonPath("$.data.task").doesNotExist())
+                .andExpect(jsonPath("$.data.submittedAt").value(1_790_000_000_000L));
         verify(service).submit(new HallRequestDraftService.OwnerScope("0", "client-a", "owner-a"),
                 "hdr_1", 3, true, "submit-key");
 
@@ -209,13 +211,15 @@ class HallRequestDraftControllerTest {
                 "{\"expectedRevision\":3,\"authorizationAcknowledgement\":1}")) {
             mvc.perform(post("/agent/hall/drafts/hdr_1/submit").principal(jwt())
                             .header("Idempotency-Key", "other-key")
-                            .contentType("application/json").content(body))
+                            .contentType("application/json").content(q(body)))
                     .andExpect(status().isBadRequest());
         }
         mvc.perform(post("/agent/hall/drafts/hdr_1/run").principal(jwt())
-                        .contentType("application/json").content("{}"))
+                        .contentType("application/json").content(q("{}")))
                 .andExpect(status().isNotFound());
     }
+
+    private static String q(String body) { return "{\"protocolVersion\":1,\"requestId\":\"draft-test\",\"data\":"+body+"}"; }
 
     private static HallRequestDraftService.DraftView view(String id, long revision, String state) {
         return new HallRequestDraftService.DraftView(id, revision, state, 1_790_000_000_000L,
