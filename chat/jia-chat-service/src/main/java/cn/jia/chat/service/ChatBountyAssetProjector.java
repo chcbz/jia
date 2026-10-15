@@ -126,10 +126,10 @@ public class ChatBountyAssetProjector {
         if (repairLink && !request.state().equals(execution.state())) return 0;
         if (!Set.of("OUTPUT_COMMITTED","RESULT_COMMITTED").contains(execution.state())) return projectFailure(candidate, request, step, execution.state());
         cn.jia.agent.service.SkillExecutionService.ResultView resultView=generic?skills.result(scope,candidate.executionId()):null;
-        Map<String,Object> manifest=generic?verifiedResult(resultView,candidate.executionId()):null;
+        Map<String,Object> manifest=generic?ChatSkillResultFacts.verifiedResult(resultView,candidate.executionId()):null;
         List<PersonalWorkspaceExecutionService.ConversationOutputInfo> outputs = executions.listConversationOutputs(scope, step.taskId(), execution.runId());
         if(outputs==null||outputs.size()>128||!generic&&outputs.isEmpty())throw new IllegalStateException("Committed output catalogue unavailable");
-        if(generic)verifyArtifacts(manifest,outputs);
+        if(generic)ChatSkillResultFacts.verifyArtifacts(manifest,outputs);
         // Runtime grant/root locks are acquired above. Other writers follow root -> conversation.
         ChatConversationEntity live = conversations.lockScopedById(candidate.ownerJiacn(),
                 candidate.clientId(), request.conversationId());
@@ -261,26 +261,6 @@ public class ChatBountyAssetProjector {
         return count;
     }
 
-    static Map<String,Object> verifiedResult(cn.jia.agent.service.SkillExecutionService.ResultView view,String executionId) {
-        if(view==null||!executionId.equals(view.executionId())||!"RESULT_COMMITTED".equals(view.state())
-                ||!Set.of("ARCHIVING","COMPLETE").contains(view.phase())||view.resultManifest()==null)throw new IllegalStateException("Result not committed");
-        var manifest=view.resultManifest();
-        if(!manifest.keySet().equals(Set.of("schemaVersion","data","artifacts","inputReceipts","resultDigest","manifestId"))
-                ||!Integer.valueOf(1).equals(manifest.get("schemaVersion"))||!(manifest.get("artifacts") instanceof List<?>)||!(manifest.get("inputReceipts") instanceof List<?>))throw new IllegalStateException("Invalid result manifest");
-        var preimage=new java.util.LinkedHashMap<>(manifest);preimage.remove("resultDigest");preimage.remove("manifestId");
-        if(!ChatSkillSnapshotJson.sha(preimage).equals(manifest.get("resultDigest")))throw new IllegalStateException("Result digest mismatch");return manifest;
-    }
-    static void verifyArtifacts(Map<String,Object> manifest,List<PersonalWorkspaceExecutionService.ConversationOutputInfo> outputs) {
-        var artifacts=(List<?>)manifest.get("artifacts");if(artifacts.size()!=outputs.size())throw new IllegalStateException("Result artifact count mismatch");
-        var seen=new java.util.HashSet<String>();
-        for(Object value:artifacts) {
-            if(!(value instanceof Map<?,?> item)||!item.keySet().equals(Set.of("outputId","sha256","byteLength"))
-                    ||!(item.get("outputId") instanceof String id)||!seen.add(id))throw new IllegalStateException("Invalid artifact");
-            var actual=outputs.stream().filter(o->id.equals(o.outputId())).toList();
-            if(actual.size()!=1||!item.get("sha256").equals(actual.getFirst().sha256())
-                    ||!item.get("byteLength").toString().equals(Long.toString(actual.getFirst().byteLength())))throw new IllegalStateException("Artifact lineage mismatch");
-        }
-    }
     /** One deterministic data message for data-only or data+files. No empty asset and no inferred replacement. */
     private int projectData(Candidate c,ChatDeliberationService.RequestView request,ChatDeliberationService.StepView step,
             ChatConversationEntity live,Map<String,Object> manifest,boolean repair) {

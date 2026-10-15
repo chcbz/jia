@@ -107,19 +107,16 @@ class AgentTaskSelectedOutputFinalizationControllerTest {
     }
 
     private static String textBody(String id){
-        return "{\"expectedTaskVersion\":7,\"expectedAssignmentRevision\":7,\"conversationId\":\"100\",\"summary\":\"accept\",\"selectedOutputs\":[{"
+        return "{\"expectedTaskVersion\":\"7\",\"expectedAssignmentRevision\":\"7\",\"conversationId\":\"100\",\"summary\":\"accept\",\"selectedOutputs\":[{"
                 +"\"requestId\":\"req-1\",\"sha256\":\""+"a".repeat(64)+"\",\"title\":\"Text\",\"purpose\":\"final\","
-                +"\"messageSource\":{\"turnId\":\"turn-1\",\"messageId\":\""+id+"\",\"snapshotId\":\"snapshot-1\",\"finalDigest\":\"sha256:"+"b".repeat(64)+"\"}}]}";
+                +"\"messageSource\":{\"turnId\":\"turn-1\",\"messageId\":\""+id+"\",\"snapshotId\":\"snapshot-1\",\"finalSha256\":\""+"b".repeat(64)+"\"}}]}";
     }
     @Test void completedTextHasExactRealMessageSourceUnionAndStringLongId() throws Exception {
         var response=controller.submit("task-1","12345678",request(textBody("9223372036854775807")),authentication);
-        var output=response.getBody().getData().selectedOutputs().getFirst();
-        assertNull(output.stepId());assertNull(output.outputId());assertEquals("9223372036854775807",output.messageSource().messageId());
-        var mapper=new tools.jackson.databind.ObjectMapper();var json=mapper.valueToTree(output);
-        assertEquals(5,json.size());assertFalse(json.has("stepId"));assertFalse(json.has("outputId"));assertEquals(4,json.get("messageSource").size());
-        var original=response.getBody().getData().selectedOutputs().getFirst();
-        var media=new ChatSelectedOutputFinalizationService.Selection(original.requestId(),"step-1","out-1",original.sha256(),original.title(),original.purpose());
-        assertEquals(6,mapper.valueToTree(media).size());assertFalse(mapper.valueToTree(media).has("messageSource"));
+        var output=(java.util.Map<?,?>)((List<?>)response.getBody().getData().get("selectedOutputs")).getFirst();
+        assertFalse(output.containsKey("stepId"));assertFalse(output.containsKey("outputId"));
+        var message=(java.util.Map<?,?>)output.get("messageSource");assertEquals("9223372036854775807",message.get("messageId"));
+        assertEquals("b".repeat(64),message.get("finalSha256"));assertEquals(5,output.size());assertEquals(4,message.size());
     }
     @Test void textUnionRejectsMixedAuthorityUnknownFieldsNullAndNoncanonicalOrOverflowMessageIds(){
         for(String id:List.of("0","09","-1","9223372036854775808"))assertThrows(RuntimeException.class,
@@ -127,7 +124,7 @@ class AgentTaskSelectedOutputFinalizationControllerTest {
         for(String body:List.of(textBody("9").replace("\"messageSource\":{","\"outputId\":\"fake\",\"messageSource\":{") ,
                 textBody("9").replace("\"turnId\":\"turn-1\"","\"turnId\":\"turn-1\",\"executionId\":\"fake\""),
                 textBody("9").replace("\"messageId\":\"9\"","\"messageId\":9"),
-                textBody("9").replace("\"finalDigest\":\"sha256:","\"finalDigest\":\"sha255:"),
+                textBody("9").replace("\"finalSha256\":\"","\"finalSha256\":\"BAD"),
                 textBody("9").replace("\"turnId\":\"turn-1\"","\"turnId\":null"),
                 textBody("9").replace("\"messageId\":\"9\"","\"messageId\":\"9\",\"messageId\":\"10\"")))
             assertThrows(RuntimeException.class,()->controller.submit("task-1","12345678",request(body),authentication));
@@ -136,10 +133,10 @@ class AgentTaskSelectedOutputFinalizationControllerTest {
 
     private static MockHttpServletRequest request(String json){
         MockHttpServletRequest request=new MockHttpServletRequest("POST","/agent/tasks/task-1/finalizations");
-        request.setContentType("application/json");request.setContent(json.getBytes(StandardCharsets.UTF_8));return request;
+        request.setContentType("application/json");request.setContent(("{\"protocolVersion\":1,\"requestId\":\"http-test\",\"data\":"+json+"}").getBytes(StandardCharsets.UTF_8));return request;
     }
     private static String minimalBody(String version){
-        return "{\"expectedTaskVersion\":"+version+",\"expectedAssignmentRevision\":0,"
+        return "{\"expectedTaskVersion\":\""+version+"\",\"expectedAssignmentRevision\":\"0\","
                 +"\"conversationId\":\"100\",\"summary\":\"accept\",\"selectedOutputs\":[{"
                 +"\"requestId\":\"req-1\",\"stepId\":\"step-1\",\"outputId\":\"out-1\","
                 +"\"sha256\":\""+"a".repeat(64)+"\",\"title\":\"title\",\"purpose\":\"final\"}]}";
@@ -147,8 +144,8 @@ class AgentTaskSelectedOutputFinalizationControllerTest {
     private static String maxEscapedBody(String version){
         String escaped="\\u4e2d";
         StringBuilder body=new StringBuilder(AgentTaskSelectedOutputFinalizationController.MAX_BODY);
-        body.append("{\"expectedTaskVersion\":").append(version)
-                .append(",\"expectedAssignmentRevision\":9007199254740991,\"conversationId\":\"")
+        body.append("{\"expectedTaskVersion\":\"").append(version)
+                .append("\",\"expectedAssignmentRevision\":\"9007199254740991\",\"conversationId\":\"")
                 .append("c".repeat(100)).append("\",\"summary\":\"").append(escaped.repeat(4000))
                 .append("\",\"selectedOutputs\":[");
         for(int i=0;i<99;i++){

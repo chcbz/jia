@@ -34,6 +34,10 @@ public final class ChatSelectedOutputFinalizationService {
     private final AgentSelectedOutputFinalizationService agent;
     private final ChatCompletedMessageSourceService messages;
     private final AgentTaskExecutionGrantService grants;
+    private cn.jia.agent.service.SkillExecutionService skills;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setSkills(cn.jia.agent.service.SkillExecutionService skills) {this.skills=Objects.requireNonNull(skills);}
+
 
     public ChatSelectedOutputFinalizationService(ChatSelectedOutputFinalizationStore store,
             ChatDeliberationService deliberations,ChatInteractionStepStore steps,
@@ -162,15 +166,17 @@ public final class ChatSelectedOutputFinalizationService {
             }
             if(request==null || !selected.requestId().equals(request.requestId())
                     || !valid.command().conversationId().equals(request.conversationId())
-                    || !"OUTPUT_COMMITTED".equals(request.state()) || request.steps()==null)
+                    || !Set.of("OUTPUT_COMMITTED","RESULT_COMMITTED").contains(request.state()) || request.steps()==null)
                 throw sourceUnavailable();
+            boolean skillResult="RESULT_COMMITTED".equals(request.state());
+            String committed=request.state();
             long requestGeneration=decimal(request.conversationGeneration());
             long revision=positiveDecimal(request.requestRevision());
             ChatDeliberationService.StepView stepView=request.steps().stream()
                     .filter(v->v!=null && selected.stepId().equals(v.stepId())).findFirst()
                     .orElseThrow(ChatSelectedOutputFinalizationService::sourceUnavailable);
             if(!valid.taskId().equals(stepView.taskId()) || !"EXECUTE".equals(stepView.kind())
-                    || !"OUTPUT_COMMITTED".equals(stepView.state())
+                    || !committed.equals(stepView.state())
                     || valid.command().expectedAssignmentRevision()!=decimal(stepView.assignmentRevision())
                     || stepView.executionId()==null || stepView.executionIntentId()==null
                     || stepView.targetAgentId()==null) throw sourceUnavailable();
@@ -189,18 +195,35 @@ public final class ChatSelectedOutputFinalizationService {
                     || persisted.conversationGeneration()!=requestGeneration || !valid.taskId().equals(persisted.taskId())
                     || persisted.assignmentRevision()!=valid.command().expectedAssignmentRevision()
                     || !stepView.targetAgentId().equals(persisted.targetAgentId())
-                    || !"EXECUTE".equals(persisted.kind()) || !"OUTPUT_COMMITTED".equals(persisted.state())
+                    || !"EXECUTE".equals(persisted.kind()) || !committed.equals(persisted.state())
                     || persisted.grantId()==null || persisted.grantVersion()<1
                     || link==null || !scopeExact(scope,link.tenantId(),link.ownerJiacn(),link.clientId())
                     || !selected.stepId().equals(link.stepId())
                     || !stepView.executionIntentId().equals(link.executionIntentId())
-                    || !stepView.executionId().equals(link.executionId()) || !"OUTPUT_COMMITTED".equals(link.state()))
+                    || !stepView.executionId().equals(link.executionId()) || !committed.equals(link.state()))
                 throw sourceUnavailable();
             var source=store.source(scope.tenantId(),scope.ownerJiacn(),scope.clientId(),valid.command().conversationId(),
                     requestGeneration,selected.requestId(),selected.stepId(),selected.outputId());
             if(source==null || source.generation()!=requestGeneration
                     || !stepView.executionId().equals(source.executionId())
                     || !selected.sha256().equals(source.sha256()))throw sourceUnavailable();
+            if(skillResult) {
+                if(skills==null)throw sourceUnavailable();
+                var execution=executions.get(owner,source.executionId());
+                if(execution==null||!"CONVERSATION".equals(execution.executionMode())||!committed.equals(execution.state())
+                        ||!source.executionId().equals(execution.executionId())||!source.runId().equals(execution.runId())
+                        ||!valid.taskId().equals(execution.taskId())||!valid.command().conversationId().equals(execution.conversationId())
+                        ||!persisted.targetAgentId().equals(execution.targetAgentId()))throw sourceUnavailable();
+                var view=skills.result(owner,source.executionId());
+                if(view==null||!"COMPLETE".equals(view.phase()))throw sourceUnavailable();
+                var manifest=ChatSkillResultFacts.verifiedResult(view,source.executionId());
+                var outputs=executions.listConversationOutputs(owner,valid.taskId(),source.runId());
+                if(outputs==null)throw sourceUnavailable();
+                ChatSkillResultFacts.verifyArtifacts(manifest,outputs);
+                var matches=outputs.stream().filter(o->selected.outputId().equals(o.outputId())).toList();
+                if(matches.size()!=1||!source.executionId().equals(matches.getFirst().executionId())
+                        ||!source.sha256().equals(matches.getFirst().sha256())||source.byteLength()!=matches.getFirst().byteLength())throw sourceUnavailable();
+            }
             PersonalWorkspaceExecutionService.ConversationOutput output;
             try {
                 output=executions.readConversationOutput(owner,valid.taskId(),source.runId(),selected.outputId());

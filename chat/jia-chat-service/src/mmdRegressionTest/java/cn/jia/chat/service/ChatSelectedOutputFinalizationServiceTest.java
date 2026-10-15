@@ -338,15 +338,16 @@ class ChatSelectedOutputFinalizationServiceTest {
         when(identities.resolve(nullable(cn.jia.core.context.EsContext.class))).thenReturn(
                 new ServerResolvedSender("user","Owner","owner","client",DisplayNameSource.JIACN));
         var controller=new cn.jia.chat.api.AgentTaskSelectedOutputFinalizationController(service,identities,tenants);
-        String json=cn.jia.core.util.JsonUtil.toJson(java.util.Map.of("expectedTaskVersion",7,"expectedAssignmentRevision",3,
+        String json=cn.jia.core.util.JsonUtil.toJson(java.util.Map.of("expectedTaskVersion","7","expectedAssignmentRevision","3",
                 "conversationId","42","summary","accept","selectedOutputs",List.of(java.util.Map.of("requestId","request",
-                        "sha256",source.command.sha256(),"title","Text","purpose","final","messageSource",source.command.messageSource()))));
+                        "sha256",source.command.sha256(),"title","Text","purpose","final","messageSource",java.util.Map.of("turnId",source.command.messageSource().turnId(),"messageId",source.command.messageSource().messageId(),"snapshotId",source.command.messageSource().snapshotId(),"finalSha256",source.command.messageSource().finalDigest().substring(7))))));
+        json="{\"protocolVersion\":1,\"requestId\":\"http-test\",\"data\":"+json+"}";
         var request=new org.springframework.mock.web.MockHttpServletRequest("POST","/agent/tasks/task/finalizations");
         request.setContentType("application/json");request.setContent(json.getBytes(StandardCharsets.UTF_8));
         var response=controller.submit("task","original-key",request,authentication);
         assertEquals(org.springframework.http.HttpStatus.OK,response.getStatusCode());
-        assertEquals("TASK_COMPLETED",response.getBody().getData().stage());
-        assertEquals(source.command.messageSource(),response.getBody().getData().selectedOutputs().getFirst().messageSource());
+        assertEquals("TASK_COMPLETED",response.getBody().getData().get("stage"));
+        assertEquals(source.command.messageSource().finalDigest().substring(7),((java.util.Map<?,?>)((java.util.Map<?,?>)((List<?>)response.getBody().getData().get("selectedOutputs")).getFirst()).get("messageSource")).get("finalSha256"));
         int writes=jdbc.writes;
         var recovered=controller.byRequest("task","original-key",new org.springframework.mock.web.MockHttpServletRequest(),authentication);
         assertEquals(response.getBody().getData(),recovered.getBody().getData());
@@ -356,6 +357,29 @@ class ChatSelectedOutputFinalizationServiceTest {
         assertEquals(writes,jdbc.writes);
         verify(source.messages,times(1)).find("0","owner","client","task","42",1,9);
         verify(agent,times(1)).prepare(any(),any());verifyNoInteractions(steps,execution,source.sessions);
+    }
+
+    @Test void skillCompleteFinalizationRequiresExactManifestAndAllCommittedFacts() {
+        for(String drift:List.of("none","archiving","hash","length","missing","mixed-link","wrong-run")) {
+            Fixture f=new Fixture();f.sourceReady("RESULT_COMMITTED");f.agentHappy();f.advanceByArguments();
+            var skills=mock(cn.jia.agent.service.SkillExecutionService.class);f.service.setSkills(skills);
+            when(f.executions.get(any(),eq("exec-1"))).thenReturn(new PersonalWorkspaceExecutionService.ExecutionView(
+                    "exec-1","task-1","wrong-run".equals(drift)?"other":"run-1","100","agent-1","RESULT_COMMITTED",null,null,2,
+                    "image/png",List.of(),null,"CONVERSATION",null,null,null));
+            var manifest=new java.util.LinkedHashMap<String,Object>();manifest.put("schemaVersion",1);manifest.put("data",null);
+            manifest.put("inputReceipts",List.of());manifest.put("artifacts","missing".equals(drift)?List.of():List.of(java.util.Map.of(
+                    "outputId","out-1","sha256",f.hash,"byteLength","length".equals(drift)?999L:(long)f.bytes.length)));
+            String hash=ChatSkillSnapshotJson.sha(manifest);manifest.put("manifestId","manifest");manifest.put("resultDigest","hash".equals(drift)?"a".repeat(64):hash);
+            when(skills.result(any(),eq("exec-1"))).thenReturn(new cn.jia.agent.service.SkillExecutionService.ResultView(
+                    "exec-1","RESULT_COMMITTED","archiving".equals(drift)?"ARCHIVING":"COMPLETE",null,"b".repeat(64),5,manifest));
+            when(f.executions.listConversationOutputs(any(),eq("task-1"),eq("run-1"))).thenReturn(List.of(
+                    new PersonalWorkspaceExecutionService.ConversationOutputInfo("exec-1","out-1","image/png",f.hash,f.bytes.length)));
+            if("mixed-link".equals(drift))when(f.steps.findLink("0","owner-1","client-1","step-1")).thenReturn(
+                    new ChatInteractionStepStore.ExecutionLink("intent-1","0","owner-1","client-1","step-1","exec-1","OUTPUT_COMMITTED",2,1,2));
+            var receipt=f.service.submit(f.scope,"task-1",Fixture.KEY,f.command());
+            if("none".equals(drift)){assertEquals("completed",receipt.state());verify(f.agent).prepare(any(),any());}
+            else {assertEquals("failed",receipt.state(),drift);verify(f.agent,never()).prepare(any(),any());}
+        }
     }
 
     private static AgentSelectedOutputFinalizationService.PromotionView view(String operation,String stage,
@@ -398,19 +422,20 @@ class ChatSelectedOutputFinalizationServiceTest {
         ChatSelectedOutputFinalizationService.Command command(){
             return new ChatSelectedOutputFinalizationService.Command(7,7,"100","accept it",List.of(selection));
         }
-        void sourceReady(){
+        void sourceReady(){sourceReady("OUTPUT_COMMITTED");}
+        void sourceReady(String committed){
             when(agent.reconcile(any(),eq("task-1"),anyString(),anyString())).thenThrow(
                     new AgentSelectedOutputFinalizationException(AgentSelectedOutputFinalizationException.Reason.NOT_FOUND,"absent"));
-            var request=new ChatDeliberationService.RequestView("req-1","1","100","4","9","OUTPUT_COMMITTED","2",
+            var request=new ChatDeliberationService.RequestView("req-1","1","100","4","9",committed,"2",
                     List.of(),List.of(new ChatDeliberationService.StepView("step-1","1","task-1","7","agent-1",
-                    "EXECUTE","OUTPUT_COMMITTED","3","intent-1","exec-1","OUTPUT_COMMITTED")));
+                    "EXECUTE",committed,"3","intent-1","exec-1",committed)));
             when(deliberations.getRequest("0","owner-1","client-1","req-1")).thenReturn(request);
             var step=new ChatInteractionStepStore.Step("step-1","0","owner-1","client-1","req-1",1,1,"100",4,
-                    "task-1",7,"grant-1",2,"agent-1","EXECUTE","OUTPUT_COMMITTED",3,"digest",1,2);
+                    "task-1",7,"grant-1",2,"agent-1","EXECUTE",committed,3,"digest",1,2);
             when(steps.findSteps("0","owner-1","client-1","req-1",1)).thenReturn(List.of(step));
             when(steps.findLink("0","owner-1","client-1","step-1")).thenReturn(
                     new ChatInteractionStepStore.ExecutionLink("intent-1","0","owner-1","client-1","step-1",
-                            "exec-1","OUTPUT_COMMITTED",2,1,2));
+                            "exec-1",committed,2,1,2));
             when(store.source(anyString(),anyString(),anyString(),eq("100"),eq(4L),eq("req-1"),eq("step-1"),eq("out-1")))
                     .thenReturn(new ChatSelectedOutputFinalizationStore.SourceFact(4,"exec-1","run-1","image/png",hash,bytes.length));
             when(executions.readConversationOutput(any(),eq("task-1"),eq("run-1"),eq("out-1")))
