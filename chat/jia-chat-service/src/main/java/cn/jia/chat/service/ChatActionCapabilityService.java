@@ -11,6 +11,7 @@ import java.util.Set;
 /** Current adapter facts only: this projection never grants authority or invokes a tool. */
 @Service
 public final class ChatActionCapabilityService {
+    private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(ChatActionCapabilityService.class);
     public record Scope(String tenantId, String ownerJiacn, String clientId, String targetAgentId) { }
     private static final com.fasterxml.jackson.databind.ObjectMapper SKILL_JSON = new com.fasterxml.jackson.databind.ObjectMapper();
     private cn.jia.agent.service.InstalledSkillDescriptorLookup installedSkills;
@@ -112,7 +113,11 @@ public final class ChatActionCapabilityService {
     private TaskCatalog taskCatalog(Scope scope,String taskId,cn.jia.agent.service.TaskSkillPolicyService.Snapshot policy) {
         var key=new cn.jia.agent.service.SkillCapabilityLookup.Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),scope.targetAgentId());
         // No assignment/grant means no right to enumerate another Agent's installed packages.
-        if(policy.runtimeScope()==null) return new TaskCatalog(null,List.of());
+        if(policy.runtimeScope()==null) {
+            LOG.info("Task skill catalog denied: taskId={} agentId={} reason={}",
+                    taskId, scope.targetAgentId(), policy.reasonCode());
+            return new TaskCatalog(null,List.of());
+        }
         var runtimeKey=policy.runtimeScope();
         if(!scope.tenantId().equals(runtimeKey.tenantId())||!scope.clientId().equals(runtimeKey.clientId())
                 ||!scope.targetAgentId().equals(runtimeKey.agentId()))
@@ -135,6 +140,8 @@ public final class ChatActionCapabilityService {
             }
             observed=new InstalledCatalog(null,list);
         }
+        if (observed.items().isEmpty()) LOG.info("Task skill catalog has no installation descriptors: taskId={} agentId={} catalogPresent={}",
+                taskId, scope.targetAgentId(), observed.catalogRevision()!=null);
         var items=new ArrayList<Map<String,Object>>();
         boolean stable=policy.equals(policies.read(key,taskId));
         for(var item:observed.items()) {

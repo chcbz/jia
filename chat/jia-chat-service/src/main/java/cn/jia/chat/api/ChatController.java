@@ -558,7 +558,7 @@ public class ChatController {
         return JsonResult.success(requireDeliberationService().cancelTurn(
                 requireAuthenticatedTenant(authentication), requireIdentityPart(EsContextHolder.getContext().getJiacn()),
                 requireIdentityPart(EsContextHolder.getContext().getClientId()), turnId,
-                cancellation == null ? null : cancellation.getExpectedStateVersion(),
+                cancellation == null ? null : parseExpectedStateVersion(cancellation.getExpectedStateVersion()),
                 cancellation == null ? null : cancellation.getReason()));
     }
 
@@ -794,6 +794,15 @@ public class ChatController {
         if (!value.startsWith(prefix) || !value.substring(prefix.length()).matches("0|[1-9][0-9]*"))
             throw new ChatDeliberationException(ChatDeliberationException.Reason.INVALID_REQUEST, "Invalid event cursor");
         return value.substring(prefix.length());
+    }
+
+    static Long parseExpectedStateVersion(String value) {
+        if (value == null) return null;
+        if (!value.matches("0|[1-9][0-9]*")) throw new ChatDeliberationException(
+                ChatDeliberationException.Reason.INVALID_REQUEST, "Invalid expectedStateVersion");
+        try { return Long.parseLong(value); }
+        catch (NumberFormatException overflow) { throw new ChatDeliberationException(
+                ChatDeliberationException.Reason.INVALID_REQUEST, "Invalid expectedStateVersion"); }
     }
 
     private long parseEventCursor(String value) {
