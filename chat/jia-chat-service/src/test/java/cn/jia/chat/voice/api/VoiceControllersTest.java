@@ -142,7 +142,7 @@ class VoiceControllersTest {
         VoiceRequestValidator validator = new VoiceRequestValidator();
         VoiceException error = assertThrows(VoiceException.class,
                 () -> validator.synthesis(new VoiceSynthesisRequest(
-                                REQUEST_ID, "林冲\uD83D", "juyiting-default", "mp3"),
+                                REQUEST_ID, "林冲\uD83D", "juyiting-default", "mp3")),
                         properties().getSynthesis()));
 
         assertEquals(VoiceErrorCode.INVALID_REQUEST, error.error());
@@ -155,7 +155,7 @@ class VoiceControllersTest {
         VoiceRequestValidator validator = new VoiceRequestValidator();
         VoiceException error = assertThrows(VoiceException.class,
                 () -> validator.synthesis(new VoiceSynthesisRequest(
-                                REQUEST_ID, "林冲\uDE00", "juyiting-default", "mp3"),
+                                REQUEST_ID, "林冲\uDE00", "juyiting-default", "mp3")),
                         properties().getSynthesis()));
 
         assertEquals(VoiceErrorCode.INVALID_REQUEST, error.error());
@@ -188,8 +188,8 @@ class VoiceControllersTest {
         SpeechSynthesisController controller = new SpeechSynthesisController(
                 new VoiceIdentityResolver(), new VoiceRequestValidator(), properties, service);
 
-        ResponseEntity<byte[]> response = controller.synthesize(new VoiceSynthesisRequest(
-                REQUEST_ID, "林冲领命。", "juyiting-default", "mp3"),
+        ResponseEntity<byte[]> response = controller.synthesize(new cn.jia.core.entity.JsonRequest<>(1, "test-request", new VoiceSynthesisRequest(
+                REQUEST_ID, "林冲领命。", "juyiting-default", "mp3")),
                 jwt("tenant", "client", "subject"));
 
         assertEquals(200, response.getStatusCode().value());
@@ -211,8 +211,8 @@ class VoiceControllersTest {
         SpeechSynthesisController controller = new SpeechSynthesisController(
                 new VoiceIdentityResolver(), new VoiceRequestValidator(), properties, service);
 
-        ResponseEntity<byte[]> response = controller.synthesize(new VoiceSynthesisRequest(
-                        REQUEST_ID, "林冲领命。", "juyiting-default", "wav"),
+        ResponseEntity<byte[]> response = controller.synthesize(new cn.jia.core.entity.JsonRequest<>(1, "test-request", new VoiceSynthesisRequest(
+                        REQUEST_ID, "林冲领命。", "juyiting-default", "wav")),
                 jwt("tenant", "client", "subject"));
 
         assertEquals("audio/wav", response.getHeaders().getContentType().toString());
@@ -239,13 +239,13 @@ class VoiceControllersTest {
         ResponseEntity<JsonResult<VoiceErrorData>> response = handler.voice(
                 VoiceException.of(VoiceErrorCode.TOO_LONG, REQUEST_ID));
         assertEquals(422, response.getStatusCode().value());
-        assertEquals(422, response.getBody().getStatus());
+        assertEquals(1, response.getBody().getProtocolVersion());
         assertEquals("VOICE_TOO_LONG", response.getBody().getCode());
         assertEquals(REQUEST_ID, response.getBody().getData().requestId());
 
         ResponseEntity<JsonResult<VoiceErrorData>> malformed = handler.malformedMultipart();
         assertEquals(400, malformed.getStatusCode().value());
-        assertEquals(400, malformed.getBody().getStatus());
+        assertEquals(1, malformed.getBody().getProtocolVersion());
         assertEquals(null, malformed.getBody().getData().requestId());
     }
 

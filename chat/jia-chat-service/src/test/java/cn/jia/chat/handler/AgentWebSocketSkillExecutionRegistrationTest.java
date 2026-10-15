@@ -41,51 +41,51 @@ class AgentWebSocketSkillExecutionRegistrationTest {
             if (frame.contains("agent_registered")) assertEquals(State.DISCONNECTED, registry.lookup(scope, fence).state());
             f.frames.add(frame); return null;
         }).when(f.session).sendMessage(any());
-        register(f, SkillExecutionDeclarationTest.catalog());
+        register(f, SkillExecutionFixtures.catalog());
         assertEquals(State.AVAILABLE, registry.lookup(scope, fence).state());
         assertEquals(2, registry.lookup(scope, fence).catalog().skills().size());
         assertEquals(State.DISCONNECTED, registry.lookup(new Scope(TENANT, CLIENT, "foreign-owner", AGENT), fence).state());
         assertEquals(State.FENCED, registry.lookup(scope, new SessionFence(fence.runtimeInstallationId(), "foreign-host", "runtime-a", 1)).state());
     }
     @Test void missingOrMalformedReportReplacesPriorDirectoryWithoutDisruptingOtherRegistration() throws Exception {
-        var f = fixture(); register(f, SkillExecutionDeclarationTest.catalog());
+        var f = fixture(); register(f, SkillExecutionFixtures.catalog());
         register(f, null); assertEquals(State.INVALID_DECLARATION, registry.lookup(scope, fence).state());
-        register(f, SkillExecutionDeclarationTest.catalog());
-        var report = SkillExecutionDeclarationTest.catalog(); report.put("ownerJiacn", "foreign-owner"); register(f, report);
+        register(f, SkillExecutionFixtures.catalog());
+        var report = SkillExecutionFixtures.catalog(); report.put("ownerJiacn", "foreign-owner"); register(f, report);
         assertEquals(State.INVALID_DECLARATION, registry.lookup(scope, fence).state());
         assertTrue(f.frames.stream().anyMatch(frame -> frame.contains("agent_registered")));
     }
     @Test void duplicateJsonKeysRejectAndRemovePriorDirectoryWithoutNormalizingThemAway() throws Exception {
-        var f = fixture(); register(f, SkillExecutionDeclarationTest.catalog());
-        String duplicated = wire(f, SkillExecutionDeclarationTest.catalog()).replace("\"catalogRevision\":\"7\"", "\"catalogRevision\":\"7\",\"catalogRevision\":\"8\"");
+        var f = fixture(); register(f, SkillExecutionFixtures.catalog());
+        String duplicated = wire(f, SkillExecutionFixtures.catalog()).replace("\"catalogRevision\":\"7\"", "\"catalogRevision\":\"7\",\"catalogRevision\":\"8\"");
         assertTrue(duplicated.contains("\"catalogRevision\":\"8\""));
         f.handler.handleTextMessage(f.session, new TextMessage(duplicated));
         assertEquals(State.DISCONNECTED, registry.lookup(scope, fence).state());
         assertTrue(f.frames.stream().anyMatch(frame -> frame.contains("AGENT_REGISTRATION_INVALID")));
     }
     @Test void failedAuthenticationOrReceiptDeliveryNeverRetainsPriorDirectory() throws Exception {
-        var f = fixture(); register(f, SkillExecutionDeclarationTest.catalog());
+        var f = fixture(); register(f, SkillExecutionFixtures.catalog());
         when(f.auth.bind(anyString(), any(AgentRuntimeAuthenticationService.Proof.class), any()))
                 .thenThrow(new IllegalArgumentException("private"));
-        register(f, SkillExecutionDeclarationTest.catalog()); assertEquals(State.DISCONNECTED, registry.lookup(scope, fence).state());
-        f = fixture(); register(f, SkillExecutionDeclarationTest.catalog());
+        register(f, SkillExecutionFixtures.catalog()); assertEquals(State.DISCONNECTED, registry.lookup(scope, fence).state());
+        f = fixture(); register(f, SkillExecutionFixtures.catalog());
         doThrow(new java.io.IOException("private")).when(f.session).sendMessage(any());
-        register(f, SkillExecutionDeclarationTest.catalog()); assertEquals(State.DISCONNECTED, registry.lookup(scope, fence).state());
+        register(f, SkillExecutionFixtures.catalog()); assertEquals(State.DISCONNECTED, registry.lookup(scope, fence).state());
     }
     @Test void disconnectUnhealthyStateAndRevokedBindingNeverReturnCachedFacts() throws Exception {
-        var f = fixture(); register(f, SkillExecutionDeclarationTest.catalog());
+        var f = fixture(); register(f, SkillExecutionFixtures.catalog());
         when(f.auth.isCurrentBinding(any(), any(), any(), any(), any(), any())).thenReturn(false);
         assertEquals(State.DISCONNECTED, registry.lookup(scope, fence).state());
         when(f.auth.isCurrentBinding(any(), any(), any(), any(), any(), any())).thenReturn(true);
         f.handler.afterConnectionClosed(f.session, CloseStatus.NORMAL);
         assertEquals(State.DISCONNECTED, registry.lookup(scope, fence).state());
-        register(f, SkillExecutionDeclarationTest.catalog());
-        String unhealthy = wire(f, SkillExecutionDeclarationTest.catalog()).replace("\"durableStateHealthy\":true", "\"durableStateHealthy\":false");
+        register(f, SkillExecutionFixtures.catalog());
+        String unhealthy = wire(f, SkillExecutionFixtures.catalog()).replace("\"durableStateHealthy\":true", "\"durableStateHealthy\":false");
         f.handler.handleTextMessage(f.session, new TextMessage(unhealthy));
         assertEquals(State.DISCONNECTED, registry.lookup(scope, fence).state());
     }
     @Test void presenceCannotReplaceDirectoryOrGrantReadiness() throws Exception {
-        var f = fixture(); register(f, SkillExecutionDeclarationTest.catalog());
+        var f = fixture(); register(f, SkillExecutionFixtures.catalog());
         var runtime = new cn.jia.agent.entity.AgentRuntimeDTO(); runtime.setAgentId(AGENT); runtime.setStatus("online");
         when(f.service.updateStatus(eq(AGENT), any())).thenReturn(runtime);
         String wire = wire(f, Map.of("forged", true)).replace("agent.register", "agent.presence");

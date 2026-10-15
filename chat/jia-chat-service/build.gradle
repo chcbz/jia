@@ -102,7 +102,10 @@ tasks.register('bf08FormalFlow', Test) {
 }
 
 // T10/T11/T15 focused P0 slice; avoids compiling unrelated historical chat tests on low-disk hosts.
+// Shared catalog fixture is compiled in both existing suites, not copied or excluded.
+sourceSets.test.java.srcDir 'src/sharedTest/java'
 def chatDeliberationSourceSet = sourceSets.create('chatDeliberation') {
+    java.srcDir 'src/sharedTest/java'
     java.srcDir 'src/chatDeliberationTest/java'
     resources.srcDir 'src/chatDeliberationTest/resources'
     compileClasspath += sourceSets.main.output

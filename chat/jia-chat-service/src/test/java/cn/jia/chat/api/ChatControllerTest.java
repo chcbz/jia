@@ -259,7 +259,7 @@ class ChatControllerTest extends BaseMockTest {
         ChatMessageDTO stop = new ChatMessageDTO();
         stop.setConversationId("77");
 
-        assertThrows(AgentTaskThreadException.class, () -> controller.stopStream(stop));
+        assertThrows(AgentTaskThreadException.class, () -> controller.stopStream(new cn.jia.core.entity.JsonRequest<>(1, "test-request", stop)));
         assertThrows(AgentTaskThreadException.class, () -> controller.conversationEvents("77"));
 
         verify(redisService, never()).publishSignal("77");
@@ -398,7 +398,7 @@ class ChatControllerTest extends BaseMockTest {
         page.setOrderBy("update_time desc");
         page.setSearch(search);
 
-        controller.listConversations(page);
+        controller.listConversations(new cn.jia.core.entity.JsonRequest<>(1, "test-request", page));
 
         ArgumentCaptor<ChatConversationEntity> searchCaptor = ArgumentCaptor.forClass(ChatConversationEntity.class);
         verify(chatConversationService).findPage(searchCaptor.capture(), eq(1), eq(1), eq("update_time desc"));
