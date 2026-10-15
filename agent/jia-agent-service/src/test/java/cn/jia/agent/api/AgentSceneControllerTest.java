@@ -78,7 +78,7 @@ class AgentSceneControllerTest {
                         "\"code\":\"SCENE_EVENTS_DISABLED\"")));
         mvc.perform(get("/agent/scenes/juyiting-main/snapshot"))
                 .andExpect(status().isOk())
-                .andExpect(content().string(org.hamcrest.Matchers.containsString("\"sceneVersion\":7")));
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("\"sceneVersion\":\"7\"")));
         mvc.perform(post("/agent/scenes/juyiting-main/phases")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(validPhaseJson()))
@@ -314,7 +314,7 @@ class AgentSceneControllerTest {
     }
 
     private MockMvc mvc(AgentSceneService service, AgentSceneFeatureFlags flags) {
-        return MockMvcBuilders.standaloneSetup(new AgentSceneController(service, flags)).build();
+        return MockMvcBuilders.standaloneSetup(new AgentSceneController(service, flags)).setControllerAdvice(new cn.jia.core.config.ApiRequestEnvelopeAdvice(), new cn.jia.core.config.ApiEnvelopeAdvice()).addFilters(new cn.jia.core.filter.RequestIdFilter()).build();
     }
 
     private MvcResult completeAsync(MvcResult initial, MockMvc mvc) throws Exception {
@@ -353,7 +353,7 @@ class AgentSceneControllerTest {
 
     private String validPhaseJson() {
         return """
-                {"reportId":"report-1","agentId":"agent-songjiang","stateVersion":"3",
+                {"protocolVersion":1,"requestId":"test-request","data":{"reportId":"report-1","agentId":"agent-songjiang","stateVersion":"3",
                  "phase":"arrived","regionId":"council-table","occurredAt":1234}}
                 """;
     }
