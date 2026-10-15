@@ -60,9 +60,7 @@ public class KefuController {
         }
         example.setClientId(EsContextHolder.getContext().getClientId());
         PageInfo<KefuFaqEntity> list = kefuFaqService.findPage(example, page.getPageNum(), page.getPageSize(), page.getOrderBy());
-        JsonResultPage<KefuFaqEntity> result = new JsonResultPage<>(list.getList());
-        result.setPageNum(list.getPageNum());
-        result.setTotal(list.getTotal());
+        JsonResultPage<KefuFaqEntity> result = JsonResultPage.page(list.getList(), list.getPageNum(), list.getPageSize(), list.getTotal());
         return result;
     }
 
@@ -142,9 +140,7 @@ public class KefuController {
         example.setClientId(EsContextHolder.getContext().getClientId());
         PageInfo<KefuMessageEntity> list =
                 kefuMessageService.findPage(example, page.getPageNum(), page.getPageSize(), page.getOrderBy());
-        JsonResultPage<KefuMessageEntity> result = new JsonResultPage<>(list.getList());
-        result.setPageNum(list.getPageNum());
-        result.setTotal(list.getTotal());
+        JsonResultPage<KefuMessageEntity> result = JsonResultPage.page(list.getList(), list.getPageNum(), list.getPageSize(), list.getTotal());
         return result;
     }
 

@@ -99,9 +99,7 @@ public class PermsController {
     public Object list(@RequestBody JsonRequestPage<PermsEntity> page) {
         PermsEntity action = Optional.ofNullable(page.getSearch()).orElse(new PermsEntity());
         PageInfo<PermsEntity> actionList = permsService.findPage(action, page.getPageNum(), page.getPageSize(), page.getOrderBy());
-        JsonResultPage<PermsEntity> result = new JsonResultPage<>(actionList.getList());
-        result.setPageNum(actionList.getPageNum());
-        result.setTotal(actionList.getTotal());
+        JsonResultPage<PermsEntity> result = JsonResultPage.page(actionList.getList(), actionList.getPageNum(), actionList.getPageSize(), actionList.getTotal());
         return result;
     }
 }

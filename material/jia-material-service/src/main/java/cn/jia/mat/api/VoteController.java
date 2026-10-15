@@ -80,9 +80,7 @@ public class VoteController {
 	public Object list(@RequestBody JsonRequestPage<MatVoteReqVO> page) {
 		MatVoteReqVO example = Optional.ofNullable(page.getSearch()).orElse(new MatVoteReqVO());
 		PageInfo<MatVoteEntity> voteList = voteService.list(page.getPageNum(), page.getPageSize(), example, page.getOrderBy());
-		JsonResultPage<MatVoteEntity> result = new JsonResultPage<>(voteList.getList());
-		result.setPageNum(voteList.getPageNum());
-		result.setTotal(voteList.getTotal());
+		JsonResultPage<MatVoteEntity> result = JsonResultPage.page(voteList.getList(), voteList.getPageNum(), voteList.getPageSize(), voteList.getTotal());
 		return result;
 	}
 	

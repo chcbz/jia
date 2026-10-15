@@ -174,9 +174,7 @@ public class SmsController {
         SmsSendVO example = Optional.ofNullable(page.getSearch()).orElse(new SmsSendVO());
         example.setClientId(EsContextHolder.getContext().getClientId());
         PageInfo<SmsSendEntity> list = smsService.listSend(example, page.getPageNum(), page.getPageSize(), page.getOrderBy());
-        JsonResultPage<SmsSendEntity> result = new JsonResultPage<>(list.getList());
-        result.setPageNum(list.getPageNum());
-        result.setTotal(list.getTotal());
+        JsonResultPage<SmsSendEntity> result = JsonResultPage.page(list.getList(), list.getPageNum(), list.getPageSize(), list.getTotal());
         return result;
     }
 
@@ -263,9 +261,7 @@ public class SmsController {
     public Object listReply(@RequestBody JsonRequestPage<SmsReplyEntity> page, HttpServletRequest request) {
         SmsReplyEntity example = Optional.ofNullable(page.getSearch()).orElse(new SmsReplyEntity());
         PageInfo<SmsReplyEntity> list = smsService.listReply(example, page.getPageNum(), page.getPageSize(), page.getOrderBy());
-        JsonResultPage<SmsReplyEntity> result = new JsonResultPage<>(list.getList());
-        result.setPageNum(list.getPageNum());
-        result.setTotal(list.getTotal());
+        JsonResultPage<SmsReplyEntity> result = JsonResultPage.page(list.getList(), list.getPageNum(), list.getPageSize(), list.getTotal());
         return result;
     }
 
@@ -364,9 +360,7 @@ public class SmsController {
         SmsTemplateVO example = Optional.ofNullable(page.getSearch()).orElse(new SmsTemplateVO());
         example.setClientId(EsContextHolder.getContext().getClientId());
         PageInfo<SmsTemplateEntity> list = smsService.listTemplate(example, page.getPageNum(), page.getPageSize(), page.getOrderBy());
-        JsonResultPage<SmsTemplateEntity> result = new JsonResultPage<>(list.getList());
-        result.setPageNum(list.getPageNum());
-        result.setTotal(list.getTotal());
+        JsonResultPage<SmsTemplateEntity> result = JsonResultPage.page(list.getList(), list.getPageNum(), list.getPageSize(), list.getTotal());
         return result;
     }
 

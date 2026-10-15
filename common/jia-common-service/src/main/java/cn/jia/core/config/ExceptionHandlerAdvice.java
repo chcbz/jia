@@ -79,7 +79,6 @@ public class ExceptionHandlerAdvice {
         JsonResult<Object> result = new JsonResult<>();
         result.setMsg(ErrCodeHolder.getMessage(EsErrorConstants.UNAUTHORIZED));
         result.setCode(EsErrorConstants.UNAUTHORIZED.getCode());
-        result.setStatus(HttpStatus.UNAUTHORIZED.value());
         return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(result);
     }
 
@@ -89,7 +88,6 @@ public class ExceptionHandlerAdvice {
         JsonResult<Object> result = new JsonResult<>();
         result.setMsg(ErrCodeHolder.getMessage(EsErrorConstants.NOT_FOUND));
         result.setCode(EsErrorConstants.NOT_FOUND.getCode());
-        result.setStatus(HttpStatus.NOT_FOUND.value());
         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(result);
     }
 

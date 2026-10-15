@@ -51,9 +51,7 @@ public class CmsController {
         CmsTableEntity example = page.getSearch() == null ? new CmsTableEntity() : page.getSearch();
         example.setClientId(clientId);
         PageInfo<CmsTableEntity> cmsList = cmsService.listTable(example, page.getPageNum(), page.getPageSize(), page.getOrderBy());
-        JsonResultPage<CmsTableEntity> result = new JsonResultPage<>(cmsList.getList());
-        result.setPageNum(cmsList.getPageNum());
-        result.setTotal(cmsList.getTotal());
+        JsonResultPage<CmsTableEntity> result = JsonResultPage.page(cmsList.getList(), cmsList.getPageNum(), cmsList.getPageSize(), cmsList.getTotal());
         return result;
     }
 
@@ -120,9 +118,7 @@ public class CmsController {
         EsSecurityHandler.checkClientId(request);
         CmsColumnEntity example = page.getSearch();
         PageInfo<CmsColumnEntity> cmsList = cmsService.listColumn(example, page.getPageNum(), page.getPageSize(), page.getOrderBy());
-        JsonResultPage<CmsColumnEntity> result = new JsonResultPage<>(cmsList.getList());
-        result.setPageNum(cmsList.getPageNum());
-        result.setTotal(cmsList.getTotal());
+        JsonResultPage<CmsColumnEntity> result = JsonResultPage.page(cmsList.getList(), cmsList.getPageNum(), cmsList.getPageSize(), cmsList.getTotal());
         return result;
     }
 
@@ -232,9 +228,7 @@ public class CmsController {
         CmsConfigEntity config = cmsService.selectConfig(clientId);
         example.setName("cms_" + config.getTablePrefix() + "_" + example.getName());
         PageInfo<Map<String, Object>> cmsList = cmsService.listRow(example, page.getPageNum(), page.getPageSize(), page.getOrderBy());
-        JsonResultPage<Map<String, Object>> result = new JsonResultPage<>(cmsList.getList());
-        result.setPageNum(cmsList.getPageNum());
-        result.setTotal(cmsList.getTotal());
+        JsonResultPage<Map<String, Object>> result = JsonResultPage.page(cmsList.getList(), cmsList.getPageNum(), cmsList.getPageSize(), cmsList.getTotal());
         return result;
     }
 

@@ -92,7 +92,7 @@ public class LdapController {
         for (LdapUser u : userList) {
             u.setUserPassword("***".getBytes());
         }
-        return JsonResult.success(userList);
+        return JsonResultPage.page(userList, 1, Math.max(1, userList.size()), userList.size());
     }
 
     /**
@@ -160,9 +160,7 @@ public class LdapController {
         for (LdapUser u : userList) {
             u.setUserPassword("***".getBytes());
         }
-        JsonResultPage<LdapUser> result = new JsonResultPage<>(userList);
-        result.setTotal((long) userList.size());
-        return result;
+        return JsonResultPage.page(userList, 1, Math.max(1, userList.size()), userList.size());
     }
 
     /**
@@ -185,9 +183,7 @@ public class LdapController {
     @GetMapping(value = "/usergroup/findAll")
     public Object userGroupFindAll() {
         List<LdapUserGroupDTO> userGroupList = ldapUserGroupService.findAll();
-        JsonResultPage<LdapUserGroupDTO> result = new JsonResultPage<>(userGroupList);
-        result.setTotal((long) userGroupList.size());
-        return result;
+        return JsonResultPage.page(userGroupList, 1, Math.max(1, userGroupList.size()), userGroupList.size());
     }
 
     /**

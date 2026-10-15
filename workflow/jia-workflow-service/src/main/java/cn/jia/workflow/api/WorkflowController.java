@@ -79,9 +79,7 @@ public class WorkflowController {
             deployment.put("deploymentTime", d.getDeploymentTime());
             deployments.add(deployment);
         }
-        JsonResultPage<Map<String, Object>> result = new JsonResultPage<>(deployments);
-        result.setPageNum(list.getPageNum());
-        result.setTotal(list.getTotal());
+        JsonResultPage<Map<String, Object>> result = JsonResultPage.page(deployments, list.getPageNum(), list.getPageSize(), list.getTotal());
         return result;
     }
 
@@ -180,9 +178,7 @@ public class WorkflowController {
             deployment.put("stateCode", d.isSuspended() ? SuspensionState.SUSPENDED.getStateCode() : SuspensionState.ACTIVE.getStateCode());
             deployments.add(deployment);
         }
-        JsonResultPage<Map<String, Object>> result = new JsonResultPage<>(deployments);
-        result.setPageNum(list.getPageNum());
-        result.setTotal(list.getTotal());
+        JsonResultPage<Map<String, Object>> result = JsonResultPage.page(deployments, list.getPageNum(), list.getPageSize(), list.getTotal());
         return result;
     }
 
@@ -320,9 +316,7 @@ public class WorkflowController {
             t.put("definitionName", pd.getName());
             tasks.add(t);
         }
-        JsonResultPage<Map<String, Object>> result = new JsonResultPage<>(tasks);
-        result.setPageNum(taskList.getPageNum());
-        result.setTotal(taskList.getTotal());
+        JsonResultPage<Map<String, Object>> result = JsonResultPage.page(tasks, taskList.getPageNum(), taskList.getPageSize(), taskList.getTotal());
         return result;
     }
 
@@ -355,9 +349,7 @@ public class WorkflowController {
             t.put("definitionName", pi.getProcessDefinitionName());
             tasks.add(t);
         }
-        JsonResultPage<Map<String, Object>> result = new JsonResultPage<>(tasks);
-        result.setPageNum(taskList.getPageNum());
-        result.setTotal(taskList.getTotal());
+        JsonResultPage<Map<String, Object>> result = JsonResultPage.page(tasks, taskList.getPageNum(), taskList.getPageSize(), taskList.getTotal());
         return result;
     }
 
@@ -396,9 +388,7 @@ public class WorkflowController {
             t.put("variables", vars);
             tasks.add(t);
         }
-        JsonResultPage<Map<String, Object>> result = new JsonResultPage<>(tasks);
-        result.setPageNum(taskList.getPageNum());
-        result.setTotal(taskList.getTotal());
+        JsonResultPage<Map<String, Object>> result = JsonResultPage.page(tasks, taskList.getPageNum(), taskList.getPageSize(), taskList.getTotal());
         return result;
     }
 
@@ -446,9 +436,7 @@ public class WorkflowController {
 
             instances.add(t);
         }
-        JsonResultPage<Map<String, Object>> result = new JsonResultPage<>(instances);
-        result.setPageNum(instanceList.getPageNum());
-        result.setTotal(instanceList.getTotal());
+        JsonResultPage<Map<String, Object>> result = JsonResultPage.page(instances, instanceList.getPageNum(), instanceList.getPageSize(), instanceList.getTotal());
         return result;
     }
 

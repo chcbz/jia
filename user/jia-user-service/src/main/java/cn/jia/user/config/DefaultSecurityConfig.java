@@ -113,9 +113,9 @@ public class DefaultSecurityConfig {
                         exceptionHandling.defaultAuthenticationEntryPointFor((request, response, authException) -> {
                             log.warn(authException.getMessage(), authException);
                             JsonResult<Object> result = new JsonResult<>();
-                            result.setMsg(authException.getMessage());
+                            result.setMsg("Authentication required");
                             result.setCode(EsErrorConstants.UNAUTHORIZED.getCode());
-                            result.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                            result.setRequestId(cn.jia.core.filter.RequestIdFilter.current(request));
                             response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
                             response.setCharacterEncoding(StandardCharsets.UTF_8.toString());
                             response.setContentType(MediaType.APPLICATION_JSON_VALUE);

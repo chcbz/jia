@@ -686,9 +686,7 @@ public class AgentController {
     }
 
     private <T> JsonResultPage<T> page(PageInfo<T> pageInfo) {
-        JsonResultPage<T> result = JsonResultPage.success(pageInfo.getList());
-        result.setPageNum(pageInfo.getPageNum());
-        result.setTotal(pageInfo.getTotal());
+        JsonResultPage<T> result = JsonResultPage.page(pageInfo.getList(), pageInfo.getPageNum(), pageInfo.getPageSize(), pageInfo.getTotal());
         return result;
     }
 }

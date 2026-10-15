@@ -136,9 +136,7 @@ public class MsgController {
 	public Object list(@RequestBody JsonRequestPage<MsgEntity> page) {
 		MsgEntity example = Optional.ofNullable(page.getSearch()).orElse(new MsgEntity());
 		PageInfo<MsgEntity> msgList = msgService.findPage(example, page.getPageNum(), page.getPageSize(), page.getOrderBy());
-		JsonResultPage<MsgEntity> result = new JsonResultPage<>(msgList.getList());
-		result.setPageNum(msgList.getPageNum());
-		result.setTotal(msgList.getTotal());
+		JsonResultPage<MsgEntity> result = JsonResultPage.page(msgList.getList(), msgList.getPageNum(), msgList.getPageSize(), msgList.getTotal());
 		return result;
 	}
 	

@@ -50,9 +50,7 @@ public class IspController {
         IspServerEntity example = Optional.ofNullable(page.getSearch()).orElse(new IspServerEntity());
         example.setClientId(clientId);
         PageInfo<IspServerEntity> ispList = ispService.listServer(example, page.getPageNum(), page.getPageSize(), page.getOrderBy());
-        JsonResultPage<IspServerEntity> result = new JsonResultPage<>(ispList.getList());
-        result.setPageNum(ispList.getPageNum());
-        result.setTotal(ispList.getTotal());
+        JsonResultPage<IspServerEntity> result = JsonResultPage.page(ispList.getList(), ispList.getPageNum(), ispList.getPageSize(), ispList.getTotal());
         return result;
     }
 

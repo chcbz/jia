@@ -736,9 +736,7 @@ public class WxPayController {
 		PayInfoEntity example = Optional.ofNullable(page.getSearch()).orElse(new PayInfoEntity());
 		example.setClientId(EsContextHolder.getContext().getClientId());
 		PageInfo<PayInfoEntity> list = payInfoService.findPage(example, page.getPageNum(), page.getPageSize(), page.getOrderBy());
-		JsonResultPage<PayInfoEntity> result = new JsonResultPage<>(list.getList());
-		result.setPageNum(list.getPageNum());
-		result.setTotal(list.getTotal());
+		JsonResultPage<PayInfoEntity> result = JsonResultPage.page(list.getList(), list.getPageNum(), list.getPageSize(), list.getTotal());
 		return result;
 	}
 }

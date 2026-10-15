@@ -135,9 +135,7 @@ public class NewsController {
 //			news.setBodyurl(material_url +"/"+news.getBodyurl());
 //			return news;
 //		}).collect(Collectors.toList());
-		JsonResultPage<MatNewsEntity> result = new JsonResultPage<>(newsList.getList());
-		result.setPageNum(newsList.getPageNum());
-		result.setTotal(newsList.getTotal());
+		JsonResultPage<MatNewsEntity> result = JsonResultPage.page(newsList.getList(), newsList.getPageNum(), newsList.getPageSize(), newsList.getTotal());
 		return result;
 	}
 

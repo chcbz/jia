@@ -43,9 +43,7 @@ public class CarController {
 		CarBrandEntity example = Optional.ofNullable(page.getSearch()).orElse(new CarBrandEntity());
 		example.setClientId(clientId);
 		PageInfo<CarBrandEntity> carList = carService.listBrand(example, page.getPageNum(), page.getPageSize(), page.getOrderBy());
-		JsonResultPage<CarBrandEntity> result = new JsonResultPage<>(carList.getList());
-		result.setPageNum(carList.getPageNum());
-		result.setTotal(carList.getTotal());
+		JsonResultPage<CarBrandEntity> result = JsonResultPage.page(carList.getList(), carList.getPageNum(), carList.getPageSize(), carList.getTotal());
 		return result;
 	}
 	
@@ -111,9 +109,7 @@ public class CarController {
 		EsSecurityHandler.checkClientId(request);
 		CarBrandAudiEntity example = Optional.ofNullable(page.getSearch()).orElse(new CarBrandAudiEntity());
 		PageInfo<CarBrandAudiEntity> carList = carService.listBrandAudi(example, page.getPageNum(), page.getPageSize(), page.getOrderBy());
-		JsonResultPage<CarBrandAudiEntity> result = new JsonResultPage<>(carList.getList());
-		result.setPageNum(carList.getPageNum());
-		result.setTotal(carList.getTotal());
+		JsonResultPage<CarBrandAudiEntity> result = JsonResultPage.page(carList.getList(), carList.getPageNum(), carList.getPageSize(), carList.getTotal());
 		return result;
 	}
 	
@@ -179,9 +175,7 @@ public class CarController {
 		EsSecurityHandler.checkClientId(request);
 		CarBrandVersionEntity example = Optional.ofNullable(page.getSearch()).orElse(new CarBrandVersionEntity());
 		PageInfo<CarBrandVersionEntity> carList = carService.listBrandVersion(example, page.getPageNum(), page.getPageSize(), page.getOrderBy());
-		JsonResultPage<CarBrandVersionEntity> result = new JsonResultPage<>(carList.getList());
-		result.setPageNum(carList.getPageNum());
-		result.setTotal(carList.getTotal());
+		JsonResultPage<CarBrandVersionEntity> result = JsonResultPage.page(carList.getList(), carList.getPageNum(), carList.getPageSize(), carList.getTotal());
 		return result;
 	}
 	
@@ -247,9 +241,7 @@ public class CarController {
 		EsSecurityHandler.checkClientId(request);
 		CarBrandMfEntity example = Optional.ofNullable(page.getSearch()).orElse(new CarBrandMfEntity());
 		PageInfo<CarBrandMfEntity> carList = carService.listBrandMf(example, page.getPageNum(), page.getPageSize(), page.getOrderBy());
-		JsonResultPage<CarBrandMfEntity> result = new JsonResultPage<>(carList.getList());
-		result.setPageNum(carList.getPageNum());
-		result.setTotal(carList.getTotal());
+		JsonResultPage<CarBrandMfEntity> result = JsonResultPage.page(carList.getList(), carList.getPageNum(), carList.getPageSize(), carList.getTotal());
 		return result;
 	}
 	

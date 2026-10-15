@@ -128,9 +128,7 @@ public class MediaController {
                             MatConstants.MODULE_URL_MATERIAL) + "/" + media.getUrl());
                     return mediaResVO;
                 }).collect(Collectors.toList());
-        JsonResultPage<MatMediaResVO> result = new JsonResultPage<>(medias);
-        result.setPageNum(mediaList.getPageNum());
-        result.setTotal(mediaList.getTotal());
+        JsonResultPage<MatMediaResVO> result = JsonResultPage.page(medias, mediaList.getPageNum(), mediaList.getPageSize(), mediaList.getTotal());
         return result;
     }
 

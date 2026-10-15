@@ -820,9 +820,7 @@ public class ChatController {
                 page.getPageSize(), 
                 page.getOrderBy()
         );
-        JsonResultPage<ChatConversationEntity> result = new JsonResultPage<>(pageInfo.getList());
-        result.setPageNum(pageInfo.getPageNum());
-        result.setTotal(pageInfo.getTotal());
+        JsonResultPage<ChatConversationEntity> result = JsonResultPage.page(pageInfo.getList(), pageInfo.getPageNum(), pageInfo.getPageSize(), pageInfo.getTotal());
         return result;
     }
 

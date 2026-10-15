@@ -129,9 +129,7 @@ public class UserController {
         UserEntity user = Optional.ofNullable(page.getSearch()).orElse(new UserEntity());
         ValidUtil.assertNotNull(user);
         PageInfo<RoleEntity> roleList = roleService.listByUserId(user.getId(), page.getPageNum(), page.getPageSize(), null);
-        JsonResultPage<RoleEntity> result = new JsonResultPage<>(roleList.getList());
-        result.setPageNum(roleList.getPageNum());
-        result.setTotal(roleList.getTotal());
+        JsonResultPage<RoleEntity> result = JsonResultPage.page(roleList.getList(), roleList.getPageNum(), roleList.getPageSize(), roleList.getTotal());
         return result;
     }
 
@@ -249,9 +247,7 @@ public class UserController {
             userVO.setPassword("******");
             userVOList.add(userVO);
         }
-        JsonResultPage<UserVO> result = new JsonResultPage<>(userVOList);
-        result.setPageNum(userList.getPageNum());
-        result.setTotal(userList.getTotal());
+        JsonResultPage<UserVO> result = JsonResultPage.page(userVOList, userList.getPageNum(), userList.getPageSize(), userList.getTotal());
         return result;
     }
 
@@ -270,9 +266,7 @@ public class UserController {
         for (UserEntity u : userList.getList()) {
             u.setPassword("******");
         }
-        JsonResultPage<UserEntity> result = new JsonResultPage<>(userList.getList());
-        result.setPageNum(userList.getPageNum());
-        result.setTotal(userList.getTotal());
+        JsonResultPage<UserEntity> result = JsonResultPage.page(userList.getList(), userList.getPageNum(), userList.getPageSize(), userList.getTotal());
         return result;
     }
 

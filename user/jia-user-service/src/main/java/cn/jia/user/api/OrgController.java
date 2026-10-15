@@ -119,9 +119,7 @@ public class OrgController {
 		UserVO example = Optional.ofNullable(page.getSearch()).orElse(new UserVO());
 		ValidUtil.assertNotNull(example, UserErrorConstants.PARAMETER_INCORRECT.getCode());
 		PageInfo<UserEntity> userList = userService.listByOrgId(example.getOrgId(), page.getPageNum(), page.getPageSize(), page.getOrderBy());
-		JsonResultPage<UserEntity> result = new JsonResultPage<>(userList.getList());
-		result.setPageNum(userList.getPageNum());
-		result.setTotal(userList.getTotal());
+		JsonResultPage<UserEntity> result = JsonResultPage.page(userList.getList(), userList.getPageNum(), userList.getPageSize(), userList.getTotal());
 		return result;
 	}
 
@@ -170,9 +168,7 @@ public class OrgController {
 	public Object list(@RequestBody JsonRequestPage<OrgEntity> page) {
 		String orderBy = page.getOrderBy();
 		PageInfo<OrgEntity> orgList = orgService.list(page.getPageNum(), page.getPageSize(), orderBy);
-		JsonResultPage<OrgEntity> result = new JsonResultPage<>(orgList.getList());
-		result.setPageNum(orgList.getPageNum());
-		result.setTotal(orgList.getTotal());
+		JsonResultPage<OrgEntity> result = JsonResultPage.page(orgList.getList(), orgList.getPageNum(), orgList.getPageSize(), orgList.getTotal());
 		return result;
 	}
 
@@ -187,9 +183,7 @@ public class OrgController {
 		OrgEntity org = Optional.ofNullable(page.getSearch()).orElse(new OrgEntity());
 		String orderBy = page.getOrderBy();
 		PageInfo<OrgEntity> orgList = orgService.listSub(org.getId(), page.getPageNum(), page.getPageSize(), orderBy);
-		JsonResultPage<OrgEntity> result = new JsonResultPage<>(orgList.getList());
-		result.setPageNum(orgList.getPageNum());
-		result.setTotal(orgList.getTotal());
+		JsonResultPage<OrgEntity> result = JsonResultPage.page(orgList.getList(), orgList.getPageNum(), orgList.getPageSize(), orgList.getTotal());
 		return result;
 	}
 

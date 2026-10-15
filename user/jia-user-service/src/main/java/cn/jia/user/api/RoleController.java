@@ -61,9 +61,7 @@ public class RoleController {
 		RoleEntity role = Optional.ofNullable(page.getSearch()).orElse(new RoleEntity());
 		ValidUtil.assertNotNull(role, UserErrorConstants.PARAMETER_INCORRECT.getCode());
 		PageInfo<UserEntity> userList = userService.listByRoleId(role.getId(), page.getPageNum(), page.getPageSize(), page.getOrderBy());
-		JsonResultPage<UserEntity> result = new JsonResultPage<>(userList.getList());
-		result.setPageNum(userList.getPageNum());
-		result.setTotal(userList.getTotal());
+		JsonResultPage<UserEntity> result = JsonResultPage.page(userList.getList(), userList.getPageNum(), userList.getPageSize(), userList.getTotal());
 		return result;
 	}
 
@@ -80,9 +78,7 @@ public class RoleController {
 		PermsVO permsVO = new PermsVO();
 		permsVO.setIdList(permsList.getList().stream().map(PermsRelEntity::getPermsId).collect(Collectors.toList()));
 		List<PermsEntity> list = permsService.findList(permsVO);
-		JsonResultPage<PermsEntity> result = new JsonResultPage<>(list);
-		result.setPageNum(permsList.getPageNum());
-		result.setTotal(permsList.getTotal());
+		JsonResultPage<PermsEntity> result = JsonResultPage.page(list, permsList.getPageNum(), permsList.getPageSize(), permsList.getTotal());
 		return result;
 	}
 
@@ -132,9 +128,7 @@ public class RoleController {
 	public Object list(@RequestBody JsonRequestPage<RoleEntity> page) {
 		RoleEntity example = Optional.ofNullable(page.getSearch()).orElse(new RoleEntity());
 		PageInfo<RoleEntity> roleList = roleService.findPage(example, page.getPageNum(), page.getPageSize(), page.getOrderBy());
-		JsonResultPage<RoleEntity> result = new JsonResultPage<>(roleList.getList());
-		result.setPageNum(roleList.getPageNum());
-		result.setTotal(roleList.getTotal());
+		JsonResultPage<RoleEntity> result = JsonResultPage.page(roleList.getList(), roleList.getPageNum(), roleList.getPageSize(), roleList.getTotal());
 		return result;
 	}
 

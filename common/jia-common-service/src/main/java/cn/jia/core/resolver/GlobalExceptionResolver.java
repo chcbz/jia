@@ -86,7 +86,10 @@ public class GlobalExceptionResolver extends ExceptionHandlerExceptionResolver {
                         errorCode = esException.getMessageKey();
                 		msg = EsHandler.getMessage(request, esException.getMessageKey(), esException.getArgs());
                 	}
-                    handleResponseError(new JsonResult<>(null, "ERROR: " + msg, errorCode, status), request, response);
+                    response.setStatus(status);
+                    JsonResult<Object> error = new JsonResult<>(null, "Request failed", errorCode);
+                    error.setRequestId(cn.jia.core.filter.RequestIdFilter.current(request));
+                    handleResponseError(error, request, response);
                     return new ModelAndView();
                 }
                 return handleResponseBody(returnValue, request, response);

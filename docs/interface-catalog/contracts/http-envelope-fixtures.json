@@ -1,0 +1,150 @@
+{
+  "standardVersion": "1.2",
+  "protocolVersion": 1,
+  "cases": [
+    {
+      "name": "empty-success",
+      "text": "{\"protocolVersion\": 1, \"requestId\": \"req_test_1\", \"code\": \"E0\", \"msg\": \"ok\", \"data\": null}",
+      "status": 200,
+      "requestId": "req_test_1",
+      "valid": true,
+      "errorCode": null
+    },
+    {
+      "name": "large-total-as-string",
+      "text": "{\"protocolVersion\": 1, \"requestId\": \"req_test_1\", \"code\": \"E0\", \"msg\": \"ok\", \"data\": {\"items\": [], \"pageNum\": 1, \"pageSize\": 100, \"total\": \"9007199254740993\"}}",
+      "status": 200,
+      "requestId": "req_test_1",
+      "valid": true,
+      "errorCode": null
+    },
+    {
+      "name": "business-data",
+      "text": "{\"protocolVersion\": 1, \"requestId\": \"req_test_1\", \"code\": \"E0\", \"msg\": \"ok\", \"data\": {\"nested\": {\"data\": \"business data, not another envelope\"}}}",
+      "status": 200,
+      "requestId": "req_test_1",
+      "valid": true,
+      "errorCode": null
+    },
+    {
+      "name": "forbidden",
+      "text": "{\"protocolVersion\": 1, \"requestId\": \"req_test_1\", \"code\": \"E403\", \"msg\": \"Forbidden\", \"data\": null}",
+      "status": 403,
+      "requestId": "req_test_1",
+      "valid": false,
+      "errorCode": "E403"
+    },
+    {
+      "name": "missing-data",
+      "text": "{\"protocolVersion\": 1, \"requestId\": \"req_test_1\", \"code\": \"E0\", \"msg\": \"ok\"}",
+      "status": 200,
+      "requestId": "req_test_1",
+      "valid": false,
+      "errorCode": "PROTOCOL_INVALID_RESPONSE"
+    },
+    {
+      "name": "extra-field",
+      "text": "{\"protocolVersion\": 1, \"requestId\": \"req_test_1\", \"code\": \"E0\", \"msg\": \"ok\", \"data\": null,\"status\":200}",
+      "status": 200,
+      "requestId": "req_test_1",
+      "valid": false,
+      "errorCode": "PROTOCOL_INVALID_RESPONSE"
+    },
+    {
+      "name": "duplicate-root",
+      "text": "{\"protocolVersion\": 1, \"requestId\": \"req_test_1\", \"code\": \"E0\", \"msg\": \"ok\", \"data\": null,\"code\":\"E0\"}",
+      "status": 200,
+      "requestId": "req_test_1",
+      "valid": false,
+      "errorCode": "PROTOCOL_INVALID_RESPONSE"
+    },
+    {
+      "name": "escaped-duplicate",
+      "text": "{\"protocolVersion\": 1, \"requestId\": \"req_test_1\", \"code\": \"E0\", \"msg\": \"ok\", \"data\": null,\"co\\u0064e\":\"E0\"}",
+      "status": 200,
+      "requestId": "req_test_1",
+      "valid": false,
+      "errorCode": "PROTOCOL_INVALID_RESPONSE"
+    },
+    {
+      "name": "duplicate-nested",
+      "text": "{\"protocolVersion\": 1, \"requestId\": \"req_test_1\", \"code\": \"E0\", \"msg\": \"ok\", \"data\": {\"x\":1,\"x\":2}}",
+      "status": 200,
+      "requestId": "req_test_1",
+      "valid": false,
+      "errorCode": "PROTOCOL_INVALID_RESPONSE"
+    },
+    {
+      "name": "trailing-json",
+      "text": "{\"protocolVersion\": 1, \"requestId\": \"req_test_1\", \"code\": \"E0\", \"msg\": \"ok\", \"data\": null} {}",
+      "status": 200,
+      "requestId": "req_test_1",
+      "valid": false,
+      "errorCode": "PROTOCOL_INVALID_RESPONSE"
+    },
+    {
+      "name": "unsafe-number",
+      "text": "{\"protocolVersion\": 1, \"requestId\": \"req_test_1\", \"code\": \"E0\", \"msg\": \"ok\", \"data\": 9007199254740993}",
+      "status": 200,
+      "requestId": "req_test_1",
+      "valid": false,
+      "errorCode": "PROTOCOL_INVALID_RESPONSE"
+    },
+    {
+      "name": "legacy",
+      "text": "{\"code\":\"E0\",\"data\":null}",
+      "status": 200,
+      "requestId": "req_test_1",
+      "valid": false,
+      "errorCode": "PROTOCOL_INVALID_RESPONSE"
+    },
+    {
+      "name": "wrong-version",
+      "text": "{\"protocolVersion\": 2, \"requestId\": \"req_test_1\", \"code\": \"E0\", \"msg\": \"ok\", \"data\": null}",
+      "status": 200,
+      "requestId": "req_test_1",
+      "valid": false,
+      "errorCode": "PROTOCOL_INVALID_RESPONSE"
+    },
+    {
+      "name": "fractional-version",
+      "text": "{\"protocolVersion\": 1.5, \"requestId\": \"req_test_1\", \"code\": \"E0\", \"msg\": \"ok\", \"data\": null}",
+      "status": 200,
+      "requestId": "req_test_1",
+      "valid": false,
+      "errorCode": "PROTOCOL_INVALID_RESPONSE"
+    },
+    {
+      "name": "wrong-id",
+      "text": "{\"protocolVersion\": 1, \"requestId\": \"req_other\", \"code\": \"E0\", \"msg\": \"ok\", \"data\": null}",
+      "status": 200,
+      "requestId": "req_test_1",
+      "valid": false,
+      "errorCode": "PROTOCOL_INVALID_RESPONSE"
+    },
+    {
+      "name": "non-json",
+      "text": "<html>Bad Gateway</html>",
+      "status": 200,
+      "requestId": "req_test_1",
+      "valid": false,
+      "errorCode": "PROTOCOL_INVALID_RESPONSE"
+    },
+    {
+      "name": "failure-http-success-code",
+      "text": "{\"protocolVersion\": 1, \"requestId\": \"req_test_1\", \"code\": \"E0\", \"msg\": \"ok\", \"data\": null}",
+      "status": 500,
+      "requestId": "req_test_1",
+      "valid": false,
+      "errorCode": "PROTOCOL_INVALID_RESPONSE"
+    },
+    {
+      "name": "success-http-failure-code",
+      "text": "{\"protocolVersion\": 1, \"requestId\": \"req_test_1\", \"code\": \"E003\", \"msg\": \"ok\", \"data\": null}",
+      "status": 200,
+      "requestId": "req_test_1",
+      "valid": false,
+      "errorCode": "PROTOCOL_INVALID_RESPONSE"
+    }
+  ]
+}

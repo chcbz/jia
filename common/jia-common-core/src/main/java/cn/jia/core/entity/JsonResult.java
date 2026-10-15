@@ -25,18 +25,15 @@ public class JsonResult<T> extends Result {
 	@Serial
 	private static final long serialVersionUID = 7880907731807860636L;
 
-	/**
-	 * 请求状态
-	 */
-	private int status = 200;
+    /** Version and request correlation are HTTP boundary metadata. */
+    @Setter(lombok.AccessLevel.NONE)
+    private final int protocolVersion = 1;
 
-	private String location;
+    @JsonInclude(Include.ALWAYS)
+    private String requestId;
 
-    // EsHandler.jsonValueToString(data);
-    /**
-	 * 数据
-	 */
-	private T data;
+    @JsonInclude(Include.ALWAYS)
+    private T data;
 
     public JsonResult() {
 		super();
@@ -54,12 +51,6 @@ public class JsonResult<T> extends Result {
 		super.setCode(code);
 	}
 
-	public JsonResult(T data, String message, String code, int status) {
-		this.data = data;
-		this.status = status;
-		super.setMsg(message);
-		super.setCode(code);
-	}
 
 	/**
 	 * 成功返回数据和消息
@@ -145,6 +136,6 @@ public class JsonResult<T> extends Result {
 
 	@Override
 	public String toString() {
-		return "JsonResult {status=" + status + ", location=" + location + ", data=" + data + "}";
+		return "JsonResult {protocolVersion=" + protocolVersion + ", requestId=" + requestId + "}";
 	}
 }

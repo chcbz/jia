@@ -9,7 +9,6 @@ import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
 import java.util.UUID;
-import java.util.regex.Pattern;
 
 /**
  * Establishes a bounded request correlation ID at the servlet boundary.
@@ -21,7 +20,6 @@ public final class RequestIdFilter extends OncePerRequestFilter {
     public static final String MDC_REQUEST_ID_KEY = "request_id";
     public static final String MDC_TRACE_ID_KEY = "trace_id";
 
-    private static final Pattern VALID_REQUEST_ID = Pattern.compile("[A-Za-z0-9._-]{8,128}");
 
     @Override
     protected boolean shouldNotFilterAsyncDispatch() {
@@ -49,7 +47,7 @@ public final class RequestIdFilter extends OncePerRequestFilter {
         try {
             filterChain.doFilter(request, response);
         } finally {
-            response.setHeader(HEADER_NAME, requestId);
+            response.setHeader(HEADER_NAME, current(request));
             restoreMdcValue(MDC_REQUEST_ID_KEY, previousRequestId);
             restoreMdcValue(MDC_TRACE_ID_KEY, previousTraceId);
         }
@@ -66,8 +64,24 @@ public final class RequestIdFilter extends OncePerRequestFilter {
         return requestId;
     }
 
-    private static boolean isValid(String value) {
-        return value != null && VALID_REQUEST_ID.matcher(value).matches();
+    public static boolean isValid(String value) {
+        return value != null && !value.isBlank() && value.codePoints().noneMatch(Character::isISOControl);
+    }
+
+    /** Reuses the same correlation on normal, error and asynchronous dispatch. */
+    public static String current(HttpServletRequest request) {
+        Object stored = request.getAttribute(REQUEST_ID_ATTRIBUTE);
+        if (stored instanceof String value && isValid(value)) return value;
+        String supplied = request.getHeader(HEADER_NAME);
+        String value = isValid(supplied) ? supplied : UUID.randomUUID().toString();
+        request.setAttribute(REQUEST_ID_ATTRIBUTE, value);
+        return value;
+    }
+
+    public static void accept(HttpServletRequest request, String value) {
+        if (!isValid(value)) throw new IllegalArgumentException("PROTOCOL_INVALID_ENVELOPE");
+        request.setAttribute(REQUEST_ID_ATTRIBUTE, value);
+        MDC.put(MDC_REQUEST_ID_KEY, value);
     }
 
     private static String availableTraceId() {

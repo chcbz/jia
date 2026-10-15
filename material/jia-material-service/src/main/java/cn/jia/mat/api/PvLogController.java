@@ -103,9 +103,7 @@ public class PvLogController {
         MatPvLogEntity example = page.getSearch() == null ? new MatPvLogEntity() : page.getSearch();
         example.setClientId(EsContextHolder.getContext().getClientId());
 		PageInfo<MatPvLogEntity> pageViewLogList = pvLogService.findPage(example, page.getPageNum(), page.getPageSize(), page.getOrderBy());
-		JsonResultPage<MatPvLogEntity> result = new JsonResultPage<>(pageViewLogList.getList());
-		result.setPageNum(pageViewLogList.getPageNum());
-		result.setTotal(pageViewLogList.getTotal());
+		JsonResultPage<MatPvLogEntity> result = JsonResultPage.page(pageViewLogList.getList(), pageViewLogList.getPageNum(), pageViewLogList.getPageSize(), pageViewLogList.getTotal());
 		return result;
 	}
 }

@@ -1115,9 +1115,7 @@ public class WxMpController {
         MpInfoVO example = Optional.ofNullable(page.getSearch()).orElse(new MpInfoVO());
         example.setClientId(EsContextHolder.getContext().getClientId());
         PageInfo<MpInfoEntity> list = mpInfoService.findPage(example, page.getPageNum(), page.getPageSize(), page.getOrderBy());
-        JsonResultPage<MpInfoEntity> result = new JsonResultPage<>(list.getList());
-        result.setPageNum(list.getPageNum());
-        result.setTotal(list.getTotal());
+        JsonResultPage<MpInfoEntity> result = JsonResultPage.page(list.getList(), list.getPageNum(), list.getPageSize(), list.getTotal());
         return result;
     }
 
