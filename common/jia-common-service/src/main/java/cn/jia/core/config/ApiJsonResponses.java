@@ -17,6 +17,9 @@ public final class ApiJsonResponses {
         }
         return new ResponseEntity<>(JsonResult.success(response.getBody()), response.getHeaders(), status);
     }
+    public static <T, U> ResponseEntity<JsonResult<U>> success(ResponseEntity<T> response, java.util.function.Function<T, U> project) {
+        return success(new ResponseEntity<>(project.apply(response.getBody()), response.getHeaders(), response.getStatusCode()));
+    }
     /** Keep already validated snapshot bytes unchanged inside data; budgets apply to those bytes. */
     public static byte[] rawJsonSuccess(byte[] data, jakarta.servlet.http.HttpServletRequest request) {
         String id = cn.jia.core.filter.RequestIdFilter.current(request);

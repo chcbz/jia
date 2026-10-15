@@ -82,6 +82,24 @@ public class PersonalWorkspaceServiceImpl implements PersonalWorkspaceService {
         return new PersonalWorkspaceViews.FileDetailView(view(file),latest,versions,List.of(),List.of());
     }
     @Override public List<PersonalWorkspaceViews.VersionView> versions(Scope scope,String fileId){ file(scope,fileId); return dao.listVersions(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),fileId,100).stream().map(this::version).toList(); }
+    @Override public PersonalWorkspaceViews.VersionPage versionsPage(Scope scope, String fileId, String cursor) {
+        file(scope, fileId);
+        Integer before = null;
+        if (cursor != null) {
+            try {
+                byte[] decoded = Base64.getUrlDecoder().decode(cursor);
+                if (!Base64.getUrlEncoder().withoutPadding().encodeToString(decoded).equals(cursor)) bad();
+                String[] parts = new String(decoded, StandardCharsets.UTF_8).split("\\n", -1);
+                if (parts.length != 2 || !fileId.equals(parts[0]) || !parts[1].matches("[1-9][0-9]*")) bad();
+                before = Integer.valueOf(parts[1]);
+            } catch (IllegalArgumentException invalid) { bad(); }
+        }
+        var rows = dao.listVersionsBefore(scope.tenantId(), scope.clientId(), scope.ownerJiacn(), fileId, before);
+        boolean more = rows.size() > 100;
+        if (more) rows = rows.subList(0, 100);
+        String next = more ? Base64.getUrlEncoder().withoutPadding().encodeToString((fileId + "\n" + rows.getLast().getVersion()).getBytes(StandardCharsets.UTF_8)) : null;
+        return new PersonalWorkspaceViews.VersionPage(rows.stream().map(this::version).toList(), next, more);
+    }
     @Override public PersonalWorkspaceViews.UploadView create(Scope scope,UploadCommand command){
         validateScope(scope); ValidUpload valid=validate(command); String requestHash=hash("CREATE",valid);
         PersonalWorkspaceWriteService.Claim claim=writes.claim(writeScope(scope),"CREATE",valid.key(),requestHash);

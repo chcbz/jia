@@ -14,6 +14,7 @@ public final class PersonalWorkspaceViews {
             String previewState) { }
     public record Capabilities(String upload, String read, String edit, String preview, String download) { }
     public record ListView(List<FileView> items, String nextCursor) { }
+    public record VersionPage(List<VersionView> items, String nextCursor, boolean hasMore) { }
     public record FileDetailView(FileView file, VersionView latestVersion,
             List<VersionView> versions, List<Object> relations, List<Object> derivation) { }
     public record OperationView(String operationId, String state, String fileId,

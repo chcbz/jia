@@ -8,6 +8,7 @@ import cn.jia.agent.entity.PersonalWorkspaceViews.PreviewView;
 import cn.jia.agent.entity.PersonalWorkspaceViews.UploadView;
 import cn.jia.agent.entity.PersonalWorkspaceViews.UsageView;
 import cn.jia.agent.entity.PersonalWorkspaceViews.VersionView;
+import cn.jia.agent.entity.PersonalWorkspaceViews.VersionPage;
 
 import java.util.List;
 
@@ -16,6 +17,7 @@ public interface PersonalWorkspaceService {
     ListView list(Scope scope, ListQuery query);
     FileDetailView get(Scope scope, String fileId);
     List<VersionView> versions(Scope scope, String fileId);
+    VersionPage versionsPage(Scope scope, String fileId, String cursor);
     UploadView create(Scope scope, UploadCommand command);
     /** Trusted server-side archive of an already authorized, immutable conversation asset.
      * Callers must verify the source's owner/conversation and committed bytes before invoking.

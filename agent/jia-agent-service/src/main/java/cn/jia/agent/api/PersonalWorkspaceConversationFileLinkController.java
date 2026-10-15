@@ -41,16 +41,16 @@ public class PersonalWorkspaceConversationFileLinkController {
     }
 
     @GetMapping(value = "/{conversationId}/file-links", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<cn.jia.core.entity.JsonResult<PersonalWorkspaceConversationLinkService.LinkListView>> list(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<PersonalWorkspaceWire.ConversationLinkListView>> list(
             @PathVariable String conversationId, @RequestParam(required = false) String cursor,
             Authentication authentication) {
         PersonalWorkspaceConversationLinkService.Scope scope = scope(authentication);
-        return cn.jia.core.config.ApiJsonResponses.success(json(service.list(scope, conversationId, cursor)));
+        return cn.jia.core.config.ApiJsonResponses.success(json(service.list(scope, conversationId, cursor)), PersonalWorkspaceWire::from);
     }
 
     @PostMapping(value = "/{conversationId}/file-links", consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<cn.jia.core.entity.JsonResult<PersonalWorkspaceConversationLinkService.LinkView>> create(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<PersonalWorkspaceWire.ConversationLinkView>> create(
             @PathVariable String conversationId, @RequestBody(required = false) JsonRequest<Map<String, Object>> protocolRequest,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             Authentication authentication) {
@@ -62,12 +62,12 @@ public class PersonalWorkspaceConversationFileLinkController {
         return cn.jia.core.config.ApiJsonResponses.success(ResponseEntity.status(HttpStatus.CREATED)
                 .header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
                 .eTag(PersonalWorkspaceConversationLinkServiceImpl.etag(link))
-                .contentType(MediaType.APPLICATION_JSON).body(link));
+                .contentType(MediaType.APPLICATION_JSON).body(link), PersonalWorkspaceWire::from);
     }
 
     @DeleteMapping(value = "/{conversationId}/file-links/{relationId}",
             produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<cn.jia.core.entity.JsonResult<PersonalWorkspaceConversationLinkService.DetachView>> detach(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<PersonalWorkspaceWire.ConversationDetachView>> detach(
             @PathVariable String conversationId, @PathVariable String relationId,
             @RequestHeader(value = HttpHeaders.IF_MATCH, required = false) String ifMatch,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
@@ -77,7 +77,7 @@ public class PersonalWorkspaceConversationFileLinkController {
                 scope, conversationId, relationId, ifMatch, idempotencyKey);
         return cn.jia.core.config.ApiJsonResponses.success(ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
                 .eTag(PersonalWorkspaceConversationLinkServiceImpl.etag(result.link()))
-                .contentType(MediaType.APPLICATION_JSON).body(result));
+                .contentType(MediaType.APPLICATION_JSON).body(result), PersonalWorkspaceWire::from);
     }
 
     @ExceptionHandler(AuthenticationFailure.class)
@@ -142,12 +142,11 @@ public class PersonalWorkspaceConversationFileLinkController {
         if (body == null || !body.keySet().equals(Set.of("fileId", "version", "role"))
                 || !(body.get("fileId") instanceof String fileId)
                 || !(body.get("role") instanceof String role)
-                || !(body.get("version") instanceof Number rawVersion)) {
+                || !(body.get("version") instanceof String rawVersion)) {
             throw new IllegalArgumentException("body");
         }
-        long version = rawVersion.longValue();
-        if (version < 1 || version > Integer.MAX_VALUE
-                || rawVersion.doubleValue() != (double) version) {
+        long version = AgentRuntimeWire.version(rawVersion, true);
+        if (version < 1 || version > Integer.MAX_VALUE) {
             throw new IllegalArgumentException("version");
         }
         return new PersonalWorkspaceConversationLinkService.CreateCommand(
