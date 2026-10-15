@@ -52,6 +52,7 @@ public final class UnixManagedHostingProvisioner implements ManagedHostingProvis
     @Override public boolean probeCapabilities(String tenantId, String clientId, String ownerJiacn) {
         outsideTransaction();
         if (!availableFor(tenantId, clientId, ownerJiacn)) return false;
+        String requestId = java.util.UUID.randomUUID().toString();
         try {
             var request = new LinkedHashMap<String, Object>();
             request.put("protocol", PROTOCOL); request.put("method", "capabilities");
