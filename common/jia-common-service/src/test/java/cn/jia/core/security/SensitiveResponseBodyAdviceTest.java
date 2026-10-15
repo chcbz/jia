@@ -30,6 +30,26 @@ class SensitiveResponseBodyAdviceTest {
     }
 
     @Test
+    void preservesHallRefsAndActionsWhileRedactingNestedSecrets() throws Exception {
+        SensitiveResponseBodyAdvice advice = new SensitiveResponseBodyAdvice(new SensitiveResponseProperties());
+        Map<String, Object> item = Map.of("ref", Map.of("type", "TASK", "id", "458"),
+                "status", Map.of("value", "open"), "allowedActions", java.util.List.of("OPEN_TASK"),
+                "details", Map.of("password", "do-not-expose"));
+        JsonResult<?> body = JsonResult.success(Map.of("sections", Map.of("recent", Map.of(
+                "partitions", Map.of("task", Map.of("items", java.util.List.of(item)))))));
+        Map<?, ?> result = (Map<?, ?>) advice.beforeBodyWrite(body, methodParameter("normal"),
+                MediaType.APPLICATION_JSON, null, null, null);
+        for (String key : java.util.List.of("data", "sections", "recent", "partitions", "task")) {
+            result = (Map<?, ?>) result.get(key);
+        }
+        Map<?, ?> actual = (Map<?, ?>) ((java.util.List<?>) result.get("items")).getFirst();
+        assertEquals(item.get("ref"), actual.get("ref"));
+        assertEquals(item.get("status"), actual.get("status"));
+        assertEquals(item.get("allowedActions"), actual.get("allowedActions"));
+        assertNull(((Map<?, ?>) actual.get("details")).get("password"));
+    }
+
+    @Test
     void leavesBodyUnchangedWhenDisabled() throws Exception {
         SensitiveResponseProperties properties = new SensitiveResponseProperties();
         properties.setEnabled(false);

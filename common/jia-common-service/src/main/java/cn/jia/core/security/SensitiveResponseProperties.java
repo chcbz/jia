@@ -14,7 +14,10 @@ public class SensitiveResponseProperties {
     private boolean auditOnly = false;
     private boolean failOpen = true;
     private boolean maskDisplayFields = false;
-    private int maxDepth = 8;
+    // Hall overview carries envelope/data/sections/partition/items before its
+    // business refs; depth 8 truncates those refs and allowedActions to null.
+    // Keep bounded traversal and all redaction rules, including nested secrets.
+    private int maxDepth = 16;
     private Set<String> dropFields = new LinkedHashSet<>(SensitiveSanitizeConfig.defaults().getSecretFields());
     private Set<String> maskFields = new LinkedHashSet<>(SensitiveSanitizeConfig.defaults().getMaskFields());
     private List<String> textRedactionPatterns = SensitiveSanitizeConfig.defaults().getTextRedactionPatterns();
