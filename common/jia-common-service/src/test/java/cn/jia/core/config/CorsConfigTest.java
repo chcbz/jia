@@ -26,7 +26,7 @@ class CorsConfigTest {
         assertEquals(List.of("authorization", "content-type", "idempotency-key", "if-match", "last-event-id", "x-request-id"),
                 cors.checkHeaders(List.of("authorization", "content-type", "idempotency-key", "if-match", "last-event-id", "x-request-id")));
         assertTrue(cors.getAllowedMethods().containsAll(List.of("POST", "PATCH", "OPTIONS")));
-        assertEquals(List.of("ETag"), cors.getExposedHeaders());
+        assertEquals(List.of("ETag", "X-Request-Id"), cors.getExposedHeaders());
         assertEquals(Boolean.TRUE, cors.getAllowCredentials());
         assertEquals(Ordered.HIGHEST_PRECEDENCE,
                 config.corsFilterFilterRegistrationBean().getOrder());
@@ -43,11 +43,13 @@ class CorsConfigTest {
             var http = (jakarta.servlet.http.HttpServletResponse) res;
             http.setStatus(201);
             http.setHeader("ETag", "\"rel_1:1\"");
+            http.setHeader("X-Request-Id", "cors-correlation");
         });
         assertEquals(201, response.getStatus());
         assertEquals("https://kit.chaoyoufan.cn", response.getHeader("Access-Control-Allow-Origin"));
-        assertEquals("ETag", response.getHeader("Access-Control-Expose-Headers"));
+        assertEquals("ETag, X-Request-Id", response.getHeader("Access-Control-Expose-Headers"));
         assertEquals("\"rel_1:1\"", response.getHeader("ETag"));
+        assertEquals("cors-correlation", response.getHeader("X-Request-Id"));
 
         var untrusted = new MockHttpServletRequest("POST", "/agent/tasks/396/file-links");
         untrusted.addHeader("Origin", "https://untrusted.example");

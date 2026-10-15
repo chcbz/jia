@@ -39,7 +39,7 @@ public class CorsConfig {
         corsConfiguration.setAllowedMethods(nonblank(allowedMethods));
         // Task/conversation link mutations return an ETag used by the browser to verify
         // the persisted revision before treating a 201 as a confirmed association.
-        corsConfiguration.setExposedHeaders(List.of("ETag"));
+        corsConfiguration.setExposedHeaders(List.of("ETag", "X-Request-Id"));
         corsConfiguration.setAllowCredentials(true);
         return corsConfiguration;
     }
