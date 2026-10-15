@@ -165,7 +165,7 @@ public class ChatController {
      * @param chatMessage 包含用户消息和会话ID的DTO对象
      * @return 返回包含AI回复内容的流
      */
-    @RequestMapping(value = "/stream", method = RequestMethod.POST, produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    @RequestMapping(value = "/stream", method = RequestMethod.POST, produces = MediaType.TEXT_EVENT_STREAM_VALUE + ";charset=UTF-8")
     public Flux<String> handleChat(@RequestBody cn.jia.core.entity.JsonRequest<ChatMessageDTO> protocolRequest,
             @RequestHeader(name = "Idempotency-Key", required = false) String idempotencyKey) {
         return handleChatInternal(protocolRequest.data(), idempotencyKey)
