@@ -120,10 +120,10 @@ public class ArchiveQuestionSseService {
         this.completionExecutor = Objects.requireNonNull(completionExecutor, "completionExecutor");
     }
 
-    public SseEmitter open(ArchiveOwnerScope owner, String questionId, long cursor) {
+    public SseEmitter open(ArchiveOwnerScope owner, String questionId, long cursor, String requestId) {
         ManagedSseEmitter emitter = new ManagedSseEmitter(SSE_TIMEOUT_MILLIS);
         try {
-            subscribe(owner, questionId, cursor, new EmitterSink(emitter));
+            subscribe(owner, questionId, cursor, new EmitterSink(emitter, requestId));
             return emitter;
         } catch (Throwable failure) {
             emitter.cancel();
@@ -535,7 +535,8 @@ public class ArchiveQuestionSseService {
 
     static final class EmitterSink implements Sink {
         private final ManagedSseEmitter emitter;
-        EmitterSink(ManagedSseEmitter emitter) { this.emitter = emitter; }
+        private final String requestId;
+        EmitterSink(ManagedSseEmitter emitter, String requestId) { this.emitter = emitter; this.requestId = requestId; }
         void setCompletionReservation(CompletionReservation reservation) {
             emitter.setCompletionReservation(reservation);
         }
@@ -546,16 +547,25 @@ public class ArchiveQuestionSseService {
             emitter.onError(ignored -> emitter.cancelFromContainer());
         }
         @Override public boolean persisted(ArchiveQuestionEventDTO dto) {
-            return emitter.sendIfOpen(SseEmitter.event().id(dto.sequence()).name(dto.type())
-                    .data(dto, MediaType.APPLICATION_JSON));
+            String id = "archive:question:" + dto.questionId() + ":" + dto.sequence();
+            String type = "archive.question.event";
+            long occurredAt = java.time.Instant.parse(dto.occurredAt()).toEpochMilli();
+            if (occurredAt < -8640000000000000L || occurredAt > 8640000000000000L)
+                throw new IllegalArgumentException("Event timestamp outside supported epoch range");
+            Map<String, Object> data = Map.of("schemaVersion", dto.schemaVersion(), "questionId", dto.questionId(),
+                    "sequence", dto.sequence(), "type", dto.type(), "occurredAt", occurredAt, "payload", dto.payload());
+            var message = cn.jia.core.entity.ProtocolMessage.event(requestId, type, id, data);
+            return emitter.sendIfOpen(SseEmitter.event().id(id).name(type).data(message, MediaType.APPLICATION_JSON));
         }
         @Override public boolean resync(String questionId) {
             Map<String, Object> data = new LinkedHashMap<>();
             data.put("schemaVersion", 1);
             data.put("questionId", questionId);
             data.put("type", "resync_required");
-            return emitter.sendIfOpen(SseEmitter.event().name("resync_required")
-                    .data(data, MediaType.APPLICATION_JSON));
+            String type = "archive.question.resync.required";
+            String id = "archive:question:" + questionId + ":resync:" + java.util.UUID.randomUUID();
+            var message = cn.jia.core.entity.ProtocolMessage.event(requestId, type, id, data);
+            return emitter.sendIfOpen(SseEmitter.event().id(id).name(type).data(message, MediaType.APPLICATION_JSON));
         }
         @Override public boolean heartbeat() {
             return emitter.sendIfOpen(SseEmitter.event().comment("heartbeat"));

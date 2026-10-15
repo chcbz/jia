@@ -82,7 +82,7 @@ class ArchiveQuestionControllerTest {
         verify(service, never()).get(any(), any());
         verify(service, never()).create(any(), any(), any(), any(), any());
         verify(service, never()).retry(any(), any(), any(), any(), any());
-        verify(streams, never()).open(any(), any(), anyLong());
+        verify(streams, never()).open(any(), any(), anyLong(), any());
     }
 
     @Test
@@ -106,18 +106,18 @@ class ArchiveQuestionControllerTest {
         JwtAuthenticationToken valid = jwt(Map.of("jiacn", "owner-a", "client_id", "client-a"));
         ArchiveQuestionController disabled = new ArchiveQuestionController(service, streams, disabledPolicy());
         for (String invalid : List.of("", "01", "-1", "+1", " 1", "1.0", "1e2", "9223372036854775808")) {
-            var response = disabled.events(ID, invalid, valid);
+            var response = disabled.events(ID, invalid, valid, mock(HttpServletRequest.class));
             assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode(), invalid);
             assertEquals("INVALID_EVENT_CURSOR", ((JsonResult<?>) response.getBody()).getCode());
         }
-        assertEquals(HttpStatus.NOT_FOUND, disabled.events(ID, null, valid).getStatusCode());
-        verify(streams, never()).open(any(), any(), anyLong());
+        assertEquals(HttpStatus.NOT_FOUND, disabled.events(ID, null, valid, mock(HttpServletRequest.class)).getStatusCode());
+        verify(streams, never()).open(any(), any(), anyLong(), any());
 
         ArchiveQuestionController enabled = new ArchiveQuestionController(service, streams, enabledPolicy());
         SseEmitter emitter = new SseEmitter();
-        when(streams.open(any(), org.mockito.ArgumentMatchers.eq(ID), org.mockito.ArgumentMatchers.eq(Long.MAX_VALUE)))
+        when(streams.open(any(), org.mockito.ArgumentMatchers.eq(ID), org.mockito.ArgumentMatchers.eq(Long.MAX_VALUE), any()))
                 .thenReturn(emitter);
-        var response = enabled.events(ID, Long.toString(Long.MAX_VALUE), valid);
+        var response = enabled.events(ID, "archive:question:" + ID + ":" + Long.MAX_VALUE, valid, mock(HttpServletRequest.class));
         assertEquals(HttpStatus.OK, response.getStatusCode());
         assertEquals(emitter, response.getBody());
     }
@@ -144,9 +144,9 @@ class ArchiveQuestionControllerTest {
                 new ArchivePersonalDataException(429, "QUESTION_RATE_LIMITED", "limited"));
         assertEquals(HttpStatus.TOO_MANY_REQUESTS,
                 controller.create(ID, "create", "{}".getBytes(StandardCharsets.UTF_8), request, valid).getStatusCode());
-        when(streams.open(any(), any(), anyLong())).thenThrow(
+        when(streams.open(any(), any(), anyLong(), any())).thenThrow(
                 new ArchivePersonalDataException(404, "ARCHIVE_RESOURCE_NOT_FOUND", "hidden"));
-        assertEquals(HttpStatus.NOT_FOUND, controller.events(ID, "0", valid).getStatusCode());
+        assertEquals(HttpStatus.NOT_FOUND, controller.events(ID, "archive:question:" + ID + ":0", valid, mock(HttpServletRequest.class)).getStatusCode());
     }
 
     private JwtAuthenticationToken jwt(Map<String, Object> claims) {
