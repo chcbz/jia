@@ -179,12 +179,13 @@ public final class PersonalWorkspaceConversationRuntimeController {
 
     @PostMapping(value="/{taskId}/runs/{runId}/conversation/outputs/{outputId}/content",
             consumes=MediaType.MULTIPART_FORM_DATA_VALUE,produces=MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<cn.jia.core.entity.JsonResult<PersonalWorkspaceExecutionService.StagedOutput>> stage(@PathVariable String taskId,
+    public ResponseEntity<cn.jia.core.entity.JsonResult<StagedOutputResponse>> stage(@PathVariable String taskId,
             @PathVariable String runId,@PathVariable String outputId,@RequestParam("file") MultipartFile file,
             @RequestParam("version") String version,@RequestParam("token") String token,
-            @RequestParam("sha256") String sha256,@RequestParam("length") String length,
+            @RequestParam("sha256") String sha256,@RequestParam("byteLength") String length,
             HttpServletRequest request,Authentication authentication) throws IOException {
         noQueryString(request);
+        if(!request.getParameterMap().keySet().equals(Set.of("version","token","sha256","byteLength")))throw new BadRequest();
         var fence=fence(version,token);
         if (file==null || sha256==null || !sha256.matches("[0-9a-f]{64}")
                 || length==null || !length.matches("0|[1-9][0-9]*")) throw new BadRequest();
@@ -192,7 +193,7 @@ public final class PersonalWorkspaceConversationRuntimeController {
         // Check declared content before any storage side effect; service rechecks the fence under root lock.
         if (!length.equals(Long.toString(bytes.length)) || !sha256.equals(digest(bytes))) throw new BadRequest();
         return cn.jia.core.config.ApiJsonResponses.success(created(executions.stageConversationOutput(scope(authentication),taskId,runId,fence,
-                outputId,file.getOriginalFilename(),file.getContentType(),bytes)));
+                outputId,file.getOriginalFilename(),file.getContentType(),bytes)), StagedOutputResponse::from);
     }
 
     @PostMapping(value="/{taskId}/runs/{runId}/conversation/output-commits/{manifestId}",
@@ -357,7 +358,8 @@ public final class PersonalWorkspaceConversationRuntimeController {
         return error(HttpStatus.NOT_FOUND,"CONVERSATION_EXECUTION_UNAVAILABLE");
     }
     @ExceptionHandler({BadRequest.class,IllegalArgumentException.class,IOException.class,
-            org.springframework.http.converter.HttpMessageNotReadableException.class})
+            org.springframework.http.converter.HttpMessageNotReadableException.class,
+            org.springframework.web.bind.MissingServletRequestParameterException.class})
     public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> malformed(Exception ignored) { return error(HttpStatus.BAD_REQUEST,"BAD_REQUEST"); }
     @ExceptionHandler(Exception.class)
     public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> unexpected(Exception ignored) {
@@ -476,6 +478,11 @@ public final class PersonalWorkspaceConversationRuntimeController {
     private static long decimalLength(String value) {
         if(value==null||!value.matches("0|[1-9][0-9]{0,18}"))throw new BadRequest();
         try{return Long.parseLong(value);}catch(NumberFormatException invalid){throw new BadRequest();}
+    }
+    public record StagedOutputResponse(String outputId,String sha256,String byteLength,String state) {
+        static StagedOutputResponse from(PersonalWorkspaceExecutionService.StagedOutput value) {
+            return new StagedOutputResponse(value.outputId(),value.sha256(),Long.toString(value.byteLength()),value.state());
+        }
     }
     public record EffectReceiptResponse(int schemaVersion,String disposition,String status,String providerRequestId,String resultSha256) {
         static EffectReceiptResponse from(cn.jia.agent.service.SkillExecutionService.EffectReceipt value) {

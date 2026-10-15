@@ -101,4 +101,21 @@ class ConversationLeaseWireHttpTest {
         call("/result-commits/manifest",data.replace("\"9007199254740993\"","1")).andExpect(status().isBadRequest());
     }
 
+    @Test void multipartStageUsesByteLengthAndKeepsBytesAndLeaseProof() throws Exception {
+        byte[] bytes="中文成果".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        String sha=java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes));
+        when(executions.stageConversationOutput(any(),eq("task"),eq("run"),any(),eq("output_1"),any(),any(),any()))
+                .thenReturn(new PersonalWorkspaceExecutionService.StagedOutput("output_1",sha,bytes.length,"STAGED"));
+        var file=new org.springframework.mock.web.MockMultipartFile("file","result.txt","text/plain",bytes);
+        mvc.perform(multipart(BASE+"/outputs/output_1/content").file(file).principal(auth)
+                .param("version","9007199254740993").param("token",TOKEN).param("sha256",sha).param("byteLength",Integer.toString(bytes.length))
+                .header("X-Request-Id","lease-test"))
+                .andExpect(status().isCreated()).andExpect(jsonPath("$.data.byteLength").value(Integer.toString(bytes.length)));
+        verify(executions).stageConversationOutput(any(),eq("task"),eq("run"),eq(new PersonalWorkspaceExecutionService.ConversationFence(9007199254740993L,TOKEN)),
+                eq("output_1"),eq("result.txt"),eq("text/plain"),org.mockito.AdditionalMatchers.aryEq(bytes));
+        mvc.perform(multipart(BASE+"/outputs/output_1/content").file(file).principal(auth)
+                .param("version","1").param("token",TOKEN).param("sha256",sha).param("length",Integer.toString(bytes.length)))
+                .andExpect(status().isBadRequest());
+    }
+
 }
