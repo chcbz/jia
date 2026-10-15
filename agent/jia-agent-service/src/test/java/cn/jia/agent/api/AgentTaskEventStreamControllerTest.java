@@ -235,7 +235,7 @@ class AgentTaskEventStreamControllerTest extends BaseMockTest {
         verifyNoInteractions(replayService);
     }
 
-    @ParameterizedTest
+    @ParameterizedTest(name = "{displayName} [{index}] {arguments}")
     @ValueSource(strings = {"", " ", "00", "01", "+1", "-1", "1.0", "1e3",
             "١", "9223372036854775808", "10000000000000000000", "1,2"})
     void strictRawCursorGrammarRejectsEveryNonCanonicalForm(String cursor)
@@ -250,7 +250,7 @@ class AgentTaskEventStreamControllerTest extends BaseMockTest {
         verifyNoInteractions(replayService);
     }
 
-    @ParameterizedTest
+    @ParameterizedTest(name = "{displayName} [{index}] {arguments}")
     @ValueSource(strings = {"", " ", "00", "01", "+1", "-1", "1.0", "1e3",
             "١", "9223372036854775808", "10000000000000000000", "1,2"})
     void strictRawHeaderCursorGrammarRejectsEveryNonCanonicalForm(String cursor)
@@ -329,7 +329,7 @@ class AgentTaskEventStreamControllerTest extends BaseMockTest {
         verify(replayService).replay(SCOPE, Long.MAX_VALUE);
     }
 
-    @ParameterizedTest
+    @ParameterizedTest(name = "{displayName} [{index}] {arguments}")
     @EnumSource(ResyncReason.class)
     void eachResyncWritesOneCorrelatedEnvelopeThenDisposesAndCloses(ResyncReason reason)
             throws Exception {
