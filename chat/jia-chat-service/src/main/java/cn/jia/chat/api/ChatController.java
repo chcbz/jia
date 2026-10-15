@@ -166,10 +166,11 @@ public class ChatController {
      * @return 返回包含AI回复内容的流
      */
     @RequestMapping(value = "/stream", method = RequestMethod.POST, produces = MediaType.TEXT_EVENT_STREAM_VALUE + ";charset=UTF-8")
-    public Flux<String> handleChat(@RequestBody cn.jia.core.entity.JsonRequest<ChatMessageDTO> protocolRequest,
+    public Flux<cn.jia.core.entity.ProtocolMessage<Map<String, Object>>> handleChat(
+            @RequestBody cn.jia.core.entity.JsonRequest<ChatMessageDTO> protocolRequest,
             @RequestHeader(name = "Idempotency-Key", required = false) String idempotencyKey) {
         return handleChatInternal(protocolRequest.data(), idempotencyKey)
-                .map(frame -> ChatStreamWire.encode(protocolRequest.requestId(), frame));
+                .map(frame -> ChatStreamWire.message(protocolRequest.requestId(), frame));
     }
 
     private Flux<String> handleChatInternal(ChatMessageDTO chatMessage, String idempotencyKey) {

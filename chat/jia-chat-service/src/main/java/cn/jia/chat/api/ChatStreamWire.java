@@ -1,7 +1,6 @@
 package cn.jia.chat.api;
 
 import cn.jia.core.entity.ProtocolMessage;
-import cn.jia.core.util.JsonUtil;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -18,7 +17,7 @@ final class ChatStreamWire {
 
     private ChatStreamWire() { }
 
-    static String encode(String requestId, String privateFrame) {
+    static ProtocolMessage<Map<String, Object>> message(String requestId, String privateFrame) {
         final Map<String, Object> data;
         try {
             data = JSON.readValue(privateFrame, new TypeReference<LinkedHashMap<String, Object>>() { });
@@ -46,6 +45,6 @@ final class ChatStreamWire {
         else type = "chat.stream.event";
         String messageId = data.get("eventId") instanceof String eventId && !eventId.isBlank()
                 ? eventId : UUID.randomUUID().toString();
-        return JsonUtil.toJson(ProtocolMessage.event(requestId, type, messageId, data));
+        return ProtocolMessage.event(requestId, type, messageId, data);
     }
 }
