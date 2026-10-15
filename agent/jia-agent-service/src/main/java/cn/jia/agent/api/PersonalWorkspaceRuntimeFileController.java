@@ -79,13 +79,13 @@ public class PersonalWorkspaceRuntimeFileController {
     }
     @PostMapping(value = "/{taskId}/runs/{runId}/outputs/{outputId}/content", consumes = MediaType.MULTIPART_FORM_DATA_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<cn.jia.core.entity.JsonResult<PersonalWorkspaceExecutionService.StagedOutput>> stage(@PathVariable String taskId,
+    public ResponseEntity<cn.jia.core.entity.JsonResult<NativeOutputWire.StagedOutputResponse>> stage(@PathVariable String taskId,
             @PathVariable String runId, @PathVariable String outputId, @RequestParam("file") MultipartFile file,
             @RequestParam("taskId") String declaredTaskId, @RequestParam("runId") String declaredRunId,
             @RequestParam("outputId") String declaredOutputId, @RequestParam("sha256") String declaredSha256,
-            @RequestParam("length") String declaredLength, HttpServletRequest request,
+            @RequestParam("byteLength") String declaredLength, HttpServletRequest request,
             Authentication authentication) throws IOException {
-        requireNoQueryString(request); if(file==null || !taskId.equals(declaredTaskId) || !runId.equals(declaredRunId)
+        requireNoQueryString(request); if(!request.getParameterMap().keySet().equals(java.util.Set.of("taskId","runId","outputId","sha256","byteLength")) || file==null || !taskId.equals(declaredTaskId) || !runId.equals(declaredRunId)
                 || !outputId.equals(declaredOutputId) || !declaredSha256.matches("[0-9a-f]{64}")
                 || !declaredLength.matches("0|[1-9][0-9]*")) throw new RequestFailure();
         byte[] bytes=file.getBytes();
@@ -93,18 +93,18 @@ public class PersonalWorkspaceRuntimeFileController {
             throw new RequestFailure();
         PersonalWorkspaceExecutionService.StagedOutput staged = service.stageOutput(scope(authentication),taskId,runId,outputId,file.getOriginalFilename(),file.getContentType(),bytes);
         if (!declaredSha256.equals(staged.sha256()) || !declaredLength.equals(Long.toString(staged.byteLength()))) throw new RequestFailure();
-        return cn.jia.core.config.ApiJsonResponses.success(ResponseEntity.status(HttpStatus.CREATED).header(HttpHeaders.CACHE_CONTROL,CACHE_CONTROL).body(staged));
+        return cn.jia.core.config.ApiJsonResponses.success(ResponseEntity.status(HttpStatus.CREATED).header(HttpHeaders.CACHE_CONTROL,CACHE_CONTROL).body(staged), NativeOutputWire.StagedOutputResponse::from);
     }
     @PostMapping(value = "/{taskId}/runs/{runId}/output-commits/{manifestId}", consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<cn.jia.core.entity.JsonResult<PersonalWorkspaceExecutionService.CommitView>> commit(@PathVariable String taskId,
+    public ResponseEntity<cn.jia.core.entity.JsonResult<NativeOutputWire.CommitResponse>> commit(@PathVariable String taskId,
             @PathVariable String runId, @PathVariable String manifestId, @RequestBody JsonRequest<CommitRequest> protocolRequest,
             HttpServletRequest servletRequest, Authentication authentication) {
         CommitRequest request = protocolRequest == null ? null : protocolRequest.data();
         requireNoQuery(servletRequest); if(request==null||request.outputs()==null||request.outputs().size()!=1)throw new RequestFailure();
-        CommitOutput output=request.outputs().getFirst(); if(output==null||output.outputId()==null||output.sha256()==null||output.length()==null||!output.sha256().matches("[0-9a-f]{64}")||output.length()<0)throw new RequestFailure();
+        CommitOutput output=request.outputs().getFirst(); if(output==null||output.outputId()==null||output.sha256()==null||output.byteLength()==null||!output.sha256().matches("[0-9a-f]{64}"))throw new RequestFailure();
         return cn.jia.core.config.ApiJsonResponses.success(json(service.commitOutputs(scope(authentication),taskId,runId,manifestId,List.of(
-                new PersonalWorkspaceExecutionService.OutputDeclaration(output.outputId(), output.sha256(), output.length())))));
+                new PersonalWorkspaceExecutionService.OutputDeclaration(output.outputId(), output.sha256(), NativeOutputWire.byteLength(output.byteLength()))))), NativeOutputWire.CommitResponse::from);
     }
     @PostMapping(value = "/{taskId}/runs/{runId}/failure", consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE)
@@ -119,7 +119,7 @@ public class PersonalWorkspaceRuntimeFileController {
     }
     @ExceptionHandler(PersonalWorkspaceExecutionService.Failure.class)
     public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> failure(PersonalWorkspaceExecutionService.Failure ignored) { return error(HttpStatus.NOT_FOUND,"RUNTIME_FILE_NOT_FOUND","Runtime file access is unavailable"); }
-    @ExceptionHandler({RequestFailure.class,IllegalArgumentException.class,IOException.class})
+    @ExceptionHandler({RequestFailure.class,IllegalArgumentException.class,IOException.class,org.springframework.http.converter.HttpMessageNotReadableException.class,org.springframework.web.bind.MissingServletRequestParameterException.class})
     public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> malformed(Exception ignored) { return error(HttpStatus.BAD_REQUEST,"BAD_REQUEST","Invalid runtime file request"); }
     @ExceptionHandler(Exception.class)
     public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> unexpected(Exception ignored) { return error(HttpStatus.SERVICE_UNAVAILABLE,"RUNTIME_FILE_UNAVAILABLE","Runtime file access is temporarily unavailable"); }
@@ -140,7 +140,7 @@ public class PersonalWorkspaceRuntimeFileController {
     private static ResponseEntity<cn.jia.core.entity.JsonResult<Void>> error(HttpStatus status,String code,String message){return ResponseEntity.status(status).header(HttpHeaders.CACHE_CONTROL,CACHE_CONTROL).contentType(new MediaType(MediaType.APPLICATION_JSON,StandardCharsets.UTF_8)).body(cn.jia.core.entity.JsonResult.<Void>failure(code,message));}
     public record RuntimeQueueView(List<PersonalWorkspaceExecutionService.RuntimeQueuedCommand> items) { }
     public record CommitRequest(List<CommitOutput> outputs) { }
-    public record CommitOutput(String outputId,String sha256,Long length) { }
+    public record CommitOutput(String outputId,String sha256,String byteLength) { }
     public record StartRequest(String commandId, String messageId) { }
     public record FailureRequest(String code) { }
     public record ErrorBody(String code,String message) { }

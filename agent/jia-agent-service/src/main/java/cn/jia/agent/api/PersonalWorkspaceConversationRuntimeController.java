@@ -179,7 +179,7 @@ public final class PersonalWorkspaceConversationRuntimeController {
 
     @PostMapping(value="/{taskId}/runs/{runId}/conversation/outputs/{outputId}/content",
             consumes=MediaType.MULTIPART_FORM_DATA_VALUE,produces=MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<cn.jia.core.entity.JsonResult<StagedOutputResponse>> stage(@PathVariable String taskId,
+    public ResponseEntity<cn.jia.core.entity.JsonResult<NativeOutputWire.StagedOutputResponse>> stage(@PathVariable String taskId,
             @PathVariable String runId,@PathVariable String outputId,@RequestParam("file") MultipartFile file,
             @RequestParam("version") String version,@RequestParam("token") String token,
             @RequestParam("sha256") String sha256,@RequestParam("byteLength") String length,
@@ -193,12 +193,12 @@ public final class PersonalWorkspaceConversationRuntimeController {
         // Check declared content before any storage side effect; service rechecks the fence under root lock.
         if (!length.equals(Long.toString(bytes.length)) || !sha256.equals(digest(bytes))) throw new BadRequest();
         return cn.jia.core.config.ApiJsonResponses.success(created(executions.stageConversationOutput(scope(authentication),taskId,runId,fence,
-                outputId,file.getOriginalFilename(),file.getContentType(),bytes)), StagedOutputResponse::from);
+                outputId,file.getOriginalFilename(),file.getContentType(),bytes)), NativeOutputWire.StagedOutputResponse::from);
     }
 
     @PostMapping(value="/{taskId}/runs/{runId}/conversation/output-commits/{manifestId}",
             consumes=MediaType.APPLICATION_JSON_VALUE,produces=MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<cn.jia.core.entity.JsonResult<CommitResponse>> commit(@PathVariable String taskId,
+    public ResponseEntity<cn.jia.core.entity.JsonResult<NativeOutputWire.CommitResponse>> commit(@PathVariable String taskId,
             @PathVariable String runId,@PathVariable String manifestId,@RequestBody JsonRequest<CommitRequest> protocolRequest,
             HttpServletRequest request,Authentication authentication) {
         CommitRequest body = protocolRequest == null ? null : protocolRequest.data();
@@ -210,7 +210,7 @@ public final class PersonalWorkspaceConversationRuntimeController {
             throw new BadRequest();
         return cn.jia.core.config.ApiJsonResponses.success(ok(executions.commitConversationOutput(scope(authentication),taskId,runId,
                 fence(body.fence()),manifestId,List.of(new PersonalWorkspaceExecutionService.OutputDeclaration(
-                        item.outputId(),item.sha256(),decimalLength(item.byteLength()))))), CommitResponse::from);
+                        item.outputId(),item.sha256(),decimalLength(item.byteLength()))))), NativeOutputWire.CommitResponse::from);
     }
 
     public ResponseEntity<PersonalWorkspaceExecutionService.CommitView> recoverStaged(
@@ -478,23 +478,6 @@ public final class PersonalWorkspaceConversationRuntimeController {
     private static long decimalLength(String value) {
         if(value==null||!value.matches("0|[1-9][0-9]{0,18}"))throw new BadRequest();
         try{return Long.parseLong(value);}catch(NumberFormatException invalid){throw new BadRequest();}
-    }
-    public record CommitItemResponse(String outputId,String fileId,String fileVersion,String sha256,
-            String contentMimeType,String byteLength) {
-        static CommitItemResponse from(PersonalWorkspaceExecutionService.CommitItem value) {
-            return new CommitItemResponse(value.outputId(),value.fileId(),value.fileVersion()==null?null:Integer.toString(value.fileVersion()),
-                    value.sha256(),value.contentMimeType(),Long.toString(value.byteLength()));
-        }
-    }
-    public record CommitResponse(String manifestId,String state,List<CommitItemResponse> items) {
-        static CommitResponse from(PersonalWorkspaceExecutionService.CommitView value) {
-            return new CommitResponse(value.manifestId(),value.state(),value.items().stream().map(CommitItemResponse::from).toList());
-        }
-    }
-    public record StagedOutputResponse(String outputId,String sha256,String byteLength,String state) {
-        static StagedOutputResponse from(PersonalWorkspaceExecutionService.StagedOutput value) {
-            return new StagedOutputResponse(value.outputId(),value.sha256(),Long.toString(value.byteLength()),value.state());
-        }
     }
     public record EffectReceiptResponse(int schemaVersion,String disposition,String status,String providerRequestId,String resultSha256) {
         static EffectReceiptResponse from(cn.jia.agent.service.SkillExecutionService.EffectReceipt value) {

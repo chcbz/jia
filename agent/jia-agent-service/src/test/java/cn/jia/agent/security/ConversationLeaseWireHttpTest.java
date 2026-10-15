@@ -39,7 +39,7 @@ class ConversationLeaseWireHttpTest {
         converters.add(new StringHttpMessageConverter(java.nio.charset.StandardCharsets.UTF_8));
         converters.add(new JacksonJsonHttpMessageConverter());
         new ApiEnvelopeJsonConfig().extendMessageConverters(converters);
-        mvc=MockMvcBuilders.standaloneSetup(new PersonalWorkspaceConversationRuntimeController(executions,nativeAuth))
+        mvc=MockMvcBuilders.standaloneSetup(new PersonalWorkspaceConversationRuntimeController(executions,nativeAuth),new cn.jia.agent.api.PersonalWorkspaceRuntimeFileController(executions,nativeAuth))
                 .setControllerAdvice(new ApiEnvelopeAdvice(),new ApiRequestEnvelopeAdvice(),new ExceptionHandlerAdvice())
                 .setMessageConverters(converters.toArray(HttpMessageConverter[]::new))
                 .addFilters(new RequestIdFilter()).build();
@@ -130,6 +130,32 @@ class ConversationLeaseWireHttpTest {
         call("/output-commits/manifest",data.replace("byteLength","length")).andExpect(status().isBadRequest());
         call("/output-commits/manifest",data.replace("\"9007199254740993\"","1")).andExpect(status().isBadRequest());
         call("/output-commits/manifest",data.replace("9007199254740993","9223372036854775808")).andExpect(status().isBadRequest());
+    }
+
+    @Test void workspaceOutputCommitUsesSameWireProjection() throws Exception {
+        when(executions.commitOutputs(any(),eq("task"),eq("run"),eq("manifest"),any()))
+                .thenReturn(new PersonalWorkspaceExecutionService.CommitView("manifest","COMMITTED",List.of(
+                        new PersonalWorkspaceExecutionService.CommitItem("output_1","file",3,"b".repeat(64),"text/plain",12L))));
+        String data="{\"outputs\":[{\"outputId\":\"output_1\",\"sha256\":\""+"b".repeat(64)+"\",\"byteLength\":\"12\"}]}";
+        mvc.perform(post("/internal/agent/tasks/task/runs/run/output-commits/manifest").principal(auth).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"protocolVersion\":1,\"requestId\":\"test\",\"data\":"+data+"}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data.items[0].fileVersion").value("3"))
+                .andExpect(jsonPath("$.data.items[0].byteLength").value("12"));
+        verify(executions).commitOutputs(any(),eq("task"),eq("run"),eq("manifest"),argThat(items->items.getFirst().byteLength()==12L));
+    }
+    @Test void workspaceMultipartUsesByteLengthAndRejectsLegacyParameter() throws Exception {
+        byte[] bytes="abc".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        String sha=java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes));
+        when(executions.stageOutput(any(),eq("task"),eq("run"),eq("output_1"),any(),any(),any()))
+                .thenReturn(new PersonalWorkspaceExecutionService.StagedOutput("output_1",sha,3L,"STAGED"));
+        var file=new org.springframework.mock.web.MockMultipartFile("file","result.txt","text/plain",bytes);
+        for(String field:List.of("byteLength","length")) {
+            var result=mvc.perform(multipart("/internal/agent/tasks/task/runs/run/outputs/output_1/content").file(file).principal(auth)
+                .param("taskId","task").param("runId","run").param("outputId","output_1").param("sha256",sha).param(field,"3"));
+            if(field.equals("byteLength"))result.andExpect(status().isCreated()).andExpect(jsonPath("$.data.byteLength").value("3"));
+            else result.andExpect(status().isBadRequest());
+        }
+        verify(executions,times(1)).stageOutput(any(),eq("task"),eq("run"),eq("output_1"),any(),any(),any());
     }
 
 }
