@@ -89,7 +89,7 @@ public class AgentTaskEventStreamController {
         }
 
         ManagedSseEmitter emitter = new ManagedSseEmitter(SSE_TIMEOUT_MILLIS);
-        StreamConnection connection = new StreamConnection(emitter, subject);
+        StreamConnection connection = new StreamConnection(emitter, subject, cn.jia.core.filter.RequestIdFilter.current(request));
         connection.start(source);
         return ResponseEntity.ok()
                 .header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL_VALUE)
@@ -147,7 +147,7 @@ public class AgentTaskEventStreamController {
         String queryCursor = singleOptionalQuery(request, "sinceVersion");
         String headerCursor = singleOptionalHeader(request, "Last-Event-ID");
         long query = queryCursor == null ? 0L : parseCursor(queryCursor);
-        long header = headerCursor == null ? 0L : parseCursor(headerCursor);
+        long header = headerCursor == null ? 0L : parseEventId(taskId, headerCursor);
         return new RawRequest(actorAgentId, Math.max(query, header));
     }
 
@@ -182,6 +182,13 @@ public class AgentTaskEventStreamController {
             throw badRequest();
         }
         return values.get(0);
+    }
+
+    static String eventId(String taskId, String version) { return "task:" + taskId + ":" + version; }
+    private static long parseEventId(String taskId, String id) {
+        String prefix = "task:" + taskId + ":";
+        if (!id.startsWith(prefix)) throw badRequest();
+        return parseCursor(id.substring(prefix.length()));
     }
 
     private static long parseCursor(String value) {
@@ -297,8 +304,11 @@ public class AgentTaskEventStreamController {
         private final AtomicBoolean sendAttempted = new AtomicBoolean();
         private final AtomicReference<Disposable> subscription = new AtomicReference<>();
 
+        private final String requestId;
+
         StreamConnection(
-                ManagedSseEmitter emitter, AuthorizedSubject subject) {
+                ManagedSseEmitter emitter, AuthorizedSubject subject, String requestId) {
+            this.requestId = requestId;
             this.emitter = emitter;
             this.subject = subject;
             emitter.setCleanup(this::externalTermination);
@@ -334,12 +344,12 @@ public class AgentTaskEventStreamController {
                     }
                     AgentTaskEventProjection.Frame frame =
                             AgentTaskEventProjection.project(subject, signal);
-                    SseEmitter.SseEventBuilder builder = SseEmitter.event()
-                            .name(frame.eventName());
-                    if (frame.id() != null) {
-                        builder.id(frame.id());
-                    }
-                    builder.data(frame.data(), MediaType.APPLICATION_JSON);
+                    String type = AgentTaskEventProjection.RESYNC_REQUIRED.equals(frame.eventName()) ? "task.resync.required" : "task.event";
+                    String id = frame.id()==null ? "task:"+subject.taskId()+":resync:"+java.util.UUID.randomUUID()
+                            : eventId(subject.taskId(),frame.id());
+                    var message = cn.jia.core.entity.ProtocolMessage.event(requestId,type,id,frame.data());
+                    SseEmitter.SseEventBuilder builder = SseEmitter.event().name(type).id(id)
+                            .data(message, MediaType.APPLICATION_JSON);
                     sendAttempted.set(true);
                     emitter.send(builder);
                     if (frame.terminal() && terminal.compareAndSet(false, true)) {
