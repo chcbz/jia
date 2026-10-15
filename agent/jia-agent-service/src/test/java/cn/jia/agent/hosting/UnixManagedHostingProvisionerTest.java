@@ -152,17 +152,34 @@ class UnixManagedHostingProvisionerTest {
     }
     @Test void liveCapabilitiesProbeIsTransactionExternalExactScopedAndFailClosed() throws Exception {
         var adapter = adapter();
-        doAnswer(call -> { var response = new LinkedHashMap<String,Object>(call.getArgument(0)); response.put("hostId", "fixture-host"); response.put("available", true); return response; }).when(adapter).exchange(anyMap());
+        doAnswer(call -> { var response = new LinkedHashMap<String,Object>(call.getArgument(0)); response.put("hostId", "fixture-host"); response.put("available", true); return response; }).when(adapter).exchange(anyMap(), anyString());
         assertTrue(adapter.probeCapabilities("0", "fixture-client", "fixture-owner"));
         assertFalse(adapter.probeCapabilities("other", "fixture-client", "fixture-owner"));
         assertFalse(adapter.probeCapabilities("0", "fixture-client", "*"));
-        doThrow(new java.net.SocketTimeoutException("absent")).when(adapter).exchange(anyMap());
+        doThrow(new java.net.SocketTimeoutException("absent")).when(adapter).exchange(anyMap(), anyString());
         assertFalse(adapter.probeCapabilities("0", "fixture-client", "fixture-owner"));
         TransactionSynchronizationManager.setActualTransactionActive(true);
         try {
             assertThrows(IllegalStateException.class, () -> adapter.probeCapabilities("0", "fixture-client", "fixture-owner"));
             assertThrows(IllegalStateException.class, () -> adapter.prepareAndObserve(preparation()));
         } finally { TransactionSynchronizationManager.clear(); }
+    }
+    @Test void publicHostingMessageProjectsWithoutChangingPrivateManifest() throws Exception {
+        var data = UnixManagedHostingProvisioner.hostingData(frame("ensureRequest"));
+        assertEquals("1", data.get("provisionGeneration"));
+        assertTrue(data.containsKey("runtimeInstallationId")); assertTrue(data.containsKey("validUntilAt"));
+        for (String forbidden : Set.of("protocol", "method", "installationId", "validUntil")) assertFalse(data.containsKey(forbidden));
+        var request = cn.jia.core.entity.ProtocolMessage.event("request", "hosting.observe", "message", data);
+        var responseData = UnixManagedHostingProvisioner.hostingData(frame("readyResponse"));
+        responseData.put("sessionGeneration", "1");
+        var reply = new LinkedHashMap<String,Object>();
+        reply.put("protocolVersion", 1); reply.put("requestId", "request"); reply.put("messageType", "hosting.observe.result");
+        reply.put("messageId", "reply"); reply.put("correlationId", "message"); reply.put("code", "E0"); reply.put("msg", "ok"); reply.put("data", responseData);
+        assertEquals(wire(frame("readyResponse")), wire(UnixManagedHostingProvisioner.hostingResponse(request, reply)));
+        reply.put("correlationId", "wrong"); assertThrows(java.io.IOException.class, () -> UnixManagedHostingProvisioner.hostingResponse(request, reply));
+        reply.put("correlationId", "message"); responseData.put("sessionGeneration", 1);
+        assertThrows(java.io.IOException.class, () -> UnixManagedHostingProvisioner.hostingResponse(request, reply));
+        assertThrows(java.io.IOException.class, () -> UnixManagedHostingProvisioner.hostingResponse(request, frame("readyResponse")));
     }
     /** Real Java transport/decoder -> Runtime UDS/control/journal. Native API and executor remain synthetic. */
     @Test @EnabledOnOs(OS.LINUX)

@@ -189,7 +189,7 @@ public final class UnixManagedHostingProvisioner implements ManagedHostingProvis
     Map<String, Object> exchange(Map<String, Object> request) throws IOException {
         return exchange(request, java.util.UUID.randomUUID().toString());
     }
-    private Map<String, Object> exchange(Map<String, Object> request, String requestId) throws IOException {
+    Map<String, Object> exchange(Map<String, Object> request, String requestId) throws IOException {
         outsideTransaction();
         Path socket = Path.of(config.socketPath());
         validateSocket(socket, config.runnerUid(), config.socketGroupGid());
