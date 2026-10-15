@@ -70,7 +70,7 @@ class AgentControllerTest {
                 "0", "Client-A", "task-001", request)).thenReturn(recommendation);
 
         Object raw = controller.recommendTaskTeam(
-                "task-001", request, jwt("Owner-A", "Client-A"));
+                "task-001", new cn.jia.core.entity.JsonRequest<>(1, "test-request", request), jwt("Owner-A", "Client-A"));
 
         ResponseEntity<?> response = assertInstanceOf(ResponseEntity.class, raw);
         assertEquals("private, no-store",
@@ -101,7 +101,7 @@ class AgentControllerTest {
         for (Authentication authentication : invalid) {
             AgentBizException failure = assertThrows(AgentBizException.class,
                     () -> controller.recommendTaskTeam(
-                            "task-001", request, authentication));
+                            "task-001", new cn.jia.core.entity.JsonRequest<>(1, "test-request", request), authentication));
             assertEquals(cn.jia.agent.common.AgentErrorConstants.AGENT_FORBIDDEN,
                     failure.getCode());
         }

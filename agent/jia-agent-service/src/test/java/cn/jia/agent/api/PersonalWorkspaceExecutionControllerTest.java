@@ -51,10 +51,10 @@ class PersonalWorkspaceExecutionControllerTest {
 
         assertEquals(HttpStatus.OK, response.getStatusCode());
         assertEquals("private, no-store", response.getHeaders().getFirst(HttpHeaders.CACHE_CONTROL));
-        assertEquals(List.of(PersonalWorkspaceExecutionProperties.DOCX), response.getBody().allowedMimeTypes());
+        assertEquals(List.of(PersonalWorkspaceExecutionProperties.DOCX), response.getBody().getData().allowedMimeTypes());
         assertEquals(List.of("application/pdf", PersonalWorkspaceExecutionProperties.DOCX),
-                response.getBody().inputMimeTypes());
-        assertEquals(true, response.getBody().generationEnabled());
+                response.getBody().getData().inputMimeTypes());
+        assertEquals(true, response.getBody().getData().generationEnabled());
         verify(service).capabilities();
     }
 
@@ -63,13 +63,13 @@ class PersonalWorkspaceExecutionControllerTest {
         PersonalWorkspaceExecutionService.ExecutionView accepted = executionView("pwe_1");
         when(service.create(any(), any(), eq("create-key"))).thenReturn(accepted);
 
-        var response = controller.create(new PersonalWorkspaceExecutionController.CreateRequest(null, "agent-a", null,
-                "生成项目介绍文档", PersonalWorkspaceExecutionProperties.DOCX, List.of()), "create-key", jwt());
+        var response = controller.create(new cn.jia.core.entity.JsonRequest<>(1, "test-request", new PersonalWorkspaceExecutionController.CreateRequest(null, "agent-a", null,
+                "生成项目介绍文档", PersonalWorkspaceExecutionProperties.DOCX, List.of())), "create-key", jwt());
 
         assertEquals(HttpStatus.ACCEPTED, response.getStatusCode());
         assertEquals("private, no-store", response.getHeaders().getFirst(HttpHeaders.CACHE_CONTROL));
-        assertEquals("pwe_1", response.getBody().executionId());
-        assertEquals(List.of(), response.getBody().inputs());
+        assertEquals("pwe_1", response.getBody().getData().executionId());
+        assertEquals(List.of(), response.getBody().getData().inputs());
         ArgumentCaptor<PersonalWorkspaceExecutionService.OwnerScope> scope = ArgumentCaptor.forClass(
                 PersonalWorkspaceExecutionService.OwnerScope.class);
         ArgumentCaptor<PersonalWorkspaceExecutionService.CreateCommand> command = ArgumentCaptor.forClass(

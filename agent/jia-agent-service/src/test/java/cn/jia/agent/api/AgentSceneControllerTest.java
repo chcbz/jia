@@ -97,7 +97,7 @@ class AgentSceneControllerTest {
         assertEquals("/{sceneId}/snapshot", snapshot.getAnnotation(GetMapping.class).value()[0]);
 
         Method events = AgentSceneController.class.getMethod(
-                "events", String.class, Long.class, String.class);
+                "events", String.class, String.class, String.class, jakarta.servlet.http.HttpServletRequest.class);
         GetMapping eventsMapping = events.getAnnotation(GetMapping.class);
         assertEquals("/{sceneId}/events", eventsMapping.value()[0]);
         assertEquals(MediaType.TEXT_EVENT_STREAM_VALUE, eventsMapping.produces()[0]);
@@ -105,7 +105,7 @@ class AgentSceneControllerTest {
         assertEquals("sinceVersion", sinceVersion.name());
 
         Method phase = AgentSceneController.class.getMethod(
-                "phase", String.class, AgentScenePhaseReportDTO.class);
+                "phase", String.class, cn.jia.core.entity.JsonRequest.class);
         assertEquals("/{sceneId}/phases", phase.getAnnotation(PostMapping.class).value()[0]);
     }
 
@@ -125,7 +125,7 @@ class AgentSceneControllerTest {
         assertEquals(200, result.getResponse().getStatus());
         assertTrue(result.getResponse().getContentType().startsWith(MediaType.TEXT_EVENT_STREAM_VALUE));
         String body = result.getResponse().getContentAsString(StandardCharsets.UTF_8);
-        assertTrue(body.matches("(?s)^id: ?129\\r?\\nevent: ?agent-scene-state-updated\\r?\\n"
+        assertTrue(body.matches("(?s)^id: ?scene:juyiting-main:129\\r?\\nevent: ?scene.event\\r?\\n"
                 + "data: ?\\{.*}\\r?\\n\\r?\\n$"), body);
         assertEquals(1, body.lines().filter(line -> line.startsWith("data:")).count(), body);
         assertTrue(body.contains("agent-songjiang"), body);
@@ -149,19 +149,19 @@ class AgentSceneControllerTest {
                 .andExpect(request().asyncStarted()).andReturn(), mvc);
 
         MvcResult fromHeader = completeAsync(mvc.perform(get("/agent/scenes/juyiting-main/events")
-                .header("Last-Event-ID", "7"))
+                .header("Last-Event-ID", "scene:juyiting-main:7"))
                 .andExpect(request().asyncStarted()).andReturn(), mvc);
         String headerBody = fromHeader.getResponse().getContentAsString(StandardCharsets.UTF_8);
-        assertTrue(headerBody.matches("(?s)^id: ?512\\r?\\nevent: ?resync-required\\r?\\ndata: ?\\{.*}"
+        assertTrue(headerBody.matches("(?s)^id: ?scene:juyiting-main:512\\r?\\nevent: ?scene.resync.required\\r?\\ndata: ?\\{.*}"
                 + "\\r?\\n\\r?\\n$"), headerBody);
 
         completeAsync(mvc.perform(get("/agent/scenes/juyiting-main/events")
                 .param("sinceVersion", "4")
-                .header("Last-Event-ID", "12"))
+                .header("Last-Event-ID", "scene:juyiting-main:12"))
                 .andExpect(request().asyncStarted()).andReturn(), mvc);
         completeAsync(mvc.perform(get("/agent/scenes/juyiting-main/events")
                 .param("sinceVersion", "9")
-                .header("Last-Event-ID", "7"))
+                .header("Last-Event-ID", "scene:juyiting-main:7"))
                 .andExpect(request().asyncStarted()).andReturn(), mvc);
         verify(service).events("juyiting-main", 4L);
         verify(service).events("juyiting-main", 7L);
@@ -185,13 +185,13 @@ class AgentSceneControllerTest {
 
         mvc.perform(get("/agent/scenes/juyiting-main/snapshot"))
                 .andExpect(status().isOk())
-                .andExpect(content().string(org.hamcrest.Matchers.containsString("\"sceneVersion\":4")));
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("\"sceneVersion\":\"4\"")));
         mvc.perform(post("/agent/scenes/juyiting-main/phases")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"reportId":" report-1 ","agentId":" agent-songjiang ",
-                                 "stateVersion":3,"phase":"arrived","regionId":" council-table ",
-                                 "occurredAt":1234}
+                                {"protocolVersion":1,"requestId":"test-request","data":{"reportId":" report-1 ","agentId":" agent-songjiang ",
+                                 "stateVersion":"3","phase":"arrived","regionId":" council-table ",
+                                 "occurredAt":1234}}
                                 """))
                 .andExpect(status().isOk())
                 .andExpect(content().string(org.hamcrest.Matchers.containsString("\"result\":\"accepted\"")));
@@ -222,13 +222,13 @@ class AgentSceneControllerTest {
                 .header("Last-Event-ID", "token-secret-invalid")).andReturn(), 400);
         assertSafeError(mvc.perform(get("/agent/scenes/juyiting-main/events")
                 .param("sinceVersion", "token-secret-not-a-number")
-                .header("Last-Event-ID", "7")).andReturn(), 400);
+                .header("Last-Event-ID", "scene:juyiting-main:7")).andReturn(), 400);
         assertSafeError(mvc.perform(get("/agent/scenes/juyiting-main/events")
                 .param("sinceVersion", "7")
                 .header("Last-Event-ID", "-2")).andReturn(), 400);
         assertSafeError(mvc.perform(get("/agent/scenes/juyiting-main/events")
                 .param("sinceVersion", "-1")
-                .header("Last-Event-ID", "7")).andReturn(), 400);
+                .header("Last-Event-ID", "scene:juyiting-main:7")).andReturn(), 400);
         assertSafeError(mvc.perform(post("/agent/scenes/juyiting-main/phases")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"token\":\"token-secret\",broken}"))
@@ -258,7 +258,7 @@ class AgentSceneControllerTest {
         when(service.events("juyiting-main", 0L))
                 .thenReturn(Flux.<AgentSceneEventDTO>never().doOnCancel(() -> cancelled.set(true)));
 
-        SseEmitter emitter = controller.events("juyiting-main", null, null);
+        SseEmitter emitter = controller.events("juyiting-main", null, null, new org.springframework.mock.web.MockHttpServletRequest());
 
         assertNotNull(emitter.getTimeout());
         assertTrue(emitter.getTimeout() > 0 && emitter.getTimeout() <= 60_000L);
@@ -353,8 +353,8 @@ class AgentSceneControllerTest {
 
     private String validPhaseJson() {
         return """
-                {"reportId":"report-1","agentId":"agent-songjiang","stateVersion":3,
-                 "phase":"arrived","regionId":"council-table","occurredAt":1234}
+                {"reportId":"report-1","agentId":"agent-songjiang","stateVersion":"3",
+                 "phase":"arrived","regionId":"council-table","occurredAt":1234}}
                 """;
     }
 

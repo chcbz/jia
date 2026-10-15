@@ -24,7 +24,7 @@ class AgentTaskExecutionGrantControllerTest {
         AgentController controller=new AgentController(legacy,mock(AbilityEvaluationService.class));
         controller.setTaskExecutionGrants(grants); AgentTaskAssignDTO request=new AgentTaskAssignDTO(); request.setAgentId("agent-1");
         assertNull(request.getInitialOperation());
-        controller.assignTask("task-1",request,null,null);
+        controller.assignTask("task-1",new cn.jia.core.entity.JsonRequest<>(1, "test-request", request),null,null);
         verify(legacy).assignTask("task-1",request); verifyNoInteractions(grants);
     }
 
@@ -39,7 +39,7 @@ class AgentTaskExecutionGrantControllerTest {
 
             AgentTaskExecutionGrantException failure=assertThrows(
                     AgentTaskExecutionGrantException.class,
-                    () -> controller.assignTask("task-1",request,"key-selector",null),selector);
+                    () -> controller.assignTask("task-1",new cn.jia.core.entity.JsonRequest<>(1, "test-request", request),"key-selector",null),selector);
 
             assertEquals(AgentTaskExecutionGrantException.Reason.UNAUTHENTICATED,
                     failure.reason(),selector);
@@ -63,7 +63,7 @@ class AgentTaskExecutionGrantControllerTest {
 
             AgentTaskExecutionGrantException failure=assertThrows(
                     AgentTaskExecutionGrantException.class,
-                    () -> controller.assignTask("task-1",request,"key-selector",
+                    () -> controller.assignTask("task-1",new cn.jia.core.entity.JsonRequest<>(1, "test-request", request),"key-selector",
                             jwt("owner","client")),selector);
 
             assertSame(rejected,failure,selector);
@@ -79,7 +79,7 @@ class AgentTaskExecutionGrantControllerTest {
         AgentService legacy=mock(AgentService.class); AgentTaskExecutionGrantService grants=mock(AgentTaskExecutionGrantService.class);
         AgentController controller=new AgentController(legacy,mock(AbilityEvaluationService.class)); controller.setTaskExecutionGrants(grants);
         AgentTaskExecutionGrantException failure=assertThrows(AgentTaskExecutionGrantException.class,
-                () -> controller.assignTask("task-1",request(),"key-1",null));
+                () -> controller.assignTask("task-1",new cn.jia.core.entity.JsonRequest<>(1, "test-request", request()),"key-1",null));
         assertEquals(AgentTaskExecutionGrantException.Reason.UNAUTHENTICATED,failure.reason());
         verifyNoInteractions(legacy,grants);
     }
@@ -91,7 +91,7 @@ class AgentTaskExecutionGrantControllerTest {
         controller.setTaskExecutionGrants(grants); AgentTaskAssignDTO request=request();
         when(grants.assignAndGrant(any(),eq("task-1"),eq("key-1"),same(request)))
                 .thenReturn(new AgentTaskExecutionGrantDTO().setGrantId("grant-1"));
-        Object raw=controller.assignTask("task-1",request,"key-1",jwt("owner","client"));
+        Object raw=controller.assignTask("task-1",new cn.jia.core.entity.JsonRequest<>(1, "test-request", request),"key-1",jwt("owner","client"));
         assertInstanceOf(ResponseEntity.class,raw);
         verify(grants).assignAndGrant(new AgentTaskExecutionGrantService.Scope("0","client","owner"),
                 "task-1","key-1",request);

@@ -978,7 +978,7 @@ class AgentRuntimeSecurityIntegrationTest {
         var controller=new PersonalWorkspaceRuntimeFileController(workspaceExecutions,auth);
         var request=new org.springframework.mock.web.MockHttpServletRequest("POST","/internal/agent/tasks/task-a/runs/run-a/failure");
         assertThrows(RuntimeException.class,()->controller.failure("task-a","run-a",
-                new PersonalWorkspaceRuntimeFileController.FailureRequest("OUTPUT_MISSING"),request,admitted));
+                new cn.jia.core.entity.JsonRequest<>(1, "test-request", new PersonalWorkspaceRuntimeFileController.FailureRequest("OUTPUT_MISSING")),request,admitted));
         verifyNoInteractions(workspaceExecutions);
     }
 

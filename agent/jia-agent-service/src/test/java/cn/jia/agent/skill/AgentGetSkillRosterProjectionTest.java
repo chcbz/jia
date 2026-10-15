@@ -95,7 +95,7 @@ class AgentGetSkillRosterProjectionTest {
         when(agents.listRoster(null, null, 1, 50)).thenReturn(new PageInfo<>(List.of(listed)));
 
         getRow();
-        controller.roster(new AgentRosterSearchDTO());
+        controller.roster(new cn.jia.core.entity.JsonRequest<>(1, "test-request", new AgentRosterSearchDTO()));
 
         assertEquals(single.getVersion(), listed.getVersion());
         assertEquals(single.getBoundToMe(), listed.getBoundToMe());

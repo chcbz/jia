@@ -555,6 +555,15 @@ class PersonalWorkspaceServiceImplTest {
         }
 
         @Override
+        public List<PersonalWorkspaceVersionEntity> listVersionsBefore(String tenantId, String clientId,
+                String ownerJiacn, String fileId, Integer beforeVersion) {
+            return versions.values().stream().filter(v -> scope(v, tenantId, clientId, ownerJiacn))
+                    .filter(v -> fileId.equals(v.getFileId()) && (beforeVersion==null || v.getVersion()<beforeVersion))
+                    .sorted(Comparator.comparing(PersonalWorkspaceVersionEntity::getVersion).reversed())
+                    .limit(101).map(InMemoryDao::copy).toList();
+        }
+
+        @Override
         public void insertVersion(PersonalWorkspaceVersionEntity entity) {
             events.add("dao.insertVersion");
             VersionKey key = versionKey(entity);
