@@ -168,7 +168,8 @@ public class ChatController {
     @RequestMapping(value = "/stream", method = RequestMethod.POST, produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public Flux<String> handleChat(@RequestBody cn.jia.core.entity.JsonRequest<ChatMessageDTO> protocolRequest,
             @RequestHeader(name = "Idempotency-Key", required = false) String idempotencyKey) {
-        return handleChatInternal(protocolRequest == null ? null : protocolRequest.data(), idempotencyKey);
+        return handleChatInternal(protocolRequest.data(), idempotencyKey)
+                .map(frame -> ChatStreamWire.encode(protocolRequest.requestId(), frame));
     }
 
     private Flux<String> handleChatInternal(ChatMessageDTO chatMessage, String idempotencyKey) {
@@ -480,7 +481,7 @@ public class ChatController {
                 .call().content();
         chatConversationService.updateOwnedTitle(
                 ownerJiacn, ownerClientId, conversationId, title, 1);
-        return Flux.just("{\"t\": \"" + title + "\"}");
+        return Flux.just(JsonUtil.toJson(Map.of("t", title)));
     }
 
     private String requireIdentityPart(String value) {
