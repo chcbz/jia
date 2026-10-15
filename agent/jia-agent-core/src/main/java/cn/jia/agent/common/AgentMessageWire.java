@@ -21,7 +21,8 @@ public final class AgentMessageWire {
         Map.entry("chat_dispatch_acknowledged","chat.dispatch.receipt"),Map.entry("agent_message","chat.message"),
         Map.entry("agent_message_delta","chat.message.delta"),Map.entry("agent_message_saved","chat.message.receipt"),
         Map.entry("agent_direct_message","chat.message"),Map.entry("task_event","task.event"));
-    private static final Set<String> LONGS = Set.of("sessionGeneration","requestRevision","conversationGeneration","deltaSeq","sequence","grantRevision","deliveryEpoch","fencingToken");
+    private static final Set<String> TIMES = Set.of("issuedAt","sentAt","occurredAt","expiresAt");
+    private static final Set<String> LONGS = Set.of("sessionGeneration","requestRevision","conversationGeneration","deltaSeq","sequence","grantRevision","deliveryEpoch","fencingToken","eventSequence","eventVersion","finalSeq");
     public static String type(String type) { return TYPES.getOrDefault(type,type); }
     private static String text(Object value) {
         if (!(value instanceof String text) || text.isBlank() || text.codePoints().anyMatch(Character::isISOControl))
@@ -63,6 +64,7 @@ public final class AgentMessageWire {
         if(data.containsKey("sessionGeneration"))data.put("sessionGeneration",decimal(data.get("sessionGeneration")));
         for(String field:LONGS)if(!field.equals("sessionGeneration")&&data.containsKey(field)&&!(data.get(field) instanceof String))
             throw new IllegalArgumentException("Non-string revision");
+        for(String field:TIMES)if(data.containsKey(field)&&(!(data.get(field) instanceof Integer||data.get(field) instanceof Long)||((Number)data.get(field)).longValue()<0||((Number)data.get(field)).longValue()>9007199254740991L))throw new IllegalArgumentException("Invalid public time");
         data.put("messageType",type);data.put("messageId",message.messageId());
         if(!"SKILL_INSTALL_RESULT".equals(data.get("resultType")))data.putIfAbsent("requestId",message.requestId());
         if(message.correlationId()!=null)data.put("correlationId",message.correlationId());
@@ -92,6 +94,7 @@ public final class AgentMessageWire {
         } else if(receipt&&data.get("correlationId") instanceof String value)correlation=value;
         if(correlation!=null){data.remove("correlationId");code=data.remove("code") instanceof String value?value:"E0";msg=data.remove("message") instanceof String value?value:"ok";}
         if(data.containsKey("timestamp")){Object at=data.remove("timestamp");data.putIfAbsent("occurredAt",at);}
+        for(String field:TIMES)if(data.get(field) instanceof String value){long at=decimal(value);if(at>9007199254740991L)throw new IllegalArgumentException("Invalid time");data.put(field,at);}
         for(String field:LONGS)if(data.get(field) instanceof Number n)data.put(field,Long.toString(n.longValue()));
         boolean skill="SKILL_INSTALL_RESULT".equals(data.get("resultType"))||"SKILL_INSTALL".equals(data.get("commandType"));
         if(skill&&data.containsKey("packageDigest")) {

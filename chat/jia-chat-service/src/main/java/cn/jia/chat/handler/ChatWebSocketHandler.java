@@ -1,97 +1,75 @@
 package cn.jia.chat.handler;
 
+import cn.jia.core.entity.ProtocolMessage;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
+import reactor.core.Disposable;
+import reactor.core.Disposables;
 import reactor.core.publisher.Flux;
-import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
+import tools.jackson.core.StreamReadFeature;
 import tools.jackson.core.type.TypeReference;
-import tools.jackson.databind.ObjectMapper;
-
+import tools.jackson.databind.DeserializationFeature;
+import tools.jackson.databind.json.JsonMapper;
 import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
-import lombok.extern.slf4j.Slf4j;
 
-@Slf4j
+/** Authenticated, subject-isolated chat stream; no provider frames escape this boundary. */
 public class ChatWebSocketHandler extends TextWebSocketHandler {
-    private static final TypeReference<Map<String, String>> MESSAGE_TYPE = new TypeReference<>() {
-    };
-
-    private final Map<String, WebSocketSession> sessions = new ConcurrentHashMap<>();
+    private static final TypeReference<Map<String,Object>> MESSAGE = new TypeReference<>() { };
+    private static final JsonMapper JSON=JsonMapper.builder().enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
+            .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS).build();
+    private final Map<String,WebSocketSession> sessions=new ConcurrentHashMap<>();
+    private final Map<String,Disposable.Composite> streams=new ConcurrentHashMap<>();
     private final ChatClient chatClient;
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    public ChatWebSocketHandler(ChatClient chatClient){this.chatClient=chatClient;}
 
-    public ChatWebSocketHandler(ChatClient chatClient) {
-        this.chatClient = chatClient;
+    @Override protected void handleTextMessage(WebSocketSession session,TextMessage text) throws Exception {
+        if(session.getPrincipal()==null||session.getPrincipal().getName()==null||!sessions.containsKey(session.getId())){
+            session.close(CloseStatus.POLICY_VIOLATION);return;
+        }
+        ProtocolMessage<Object> request;
+        try {
+            request=ProtocolMessage.decode(JSON.readValue(text.getPayload(),MESSAGE));
+            if(!request.messageType().equals("chat.message")||request.correlationId()!=null||!(request.data() instanceof Map<?,?> data)
+                    ||!data.keySet().equals(Set.of("conversationId","content"))||!(data.get("conversationId") instanceof String id)||id.isBlank()
+                    ||!(data.get("content") instanceof String content)||content.isBlank())throw new IllegalArgumentException("Invalid chat request");
+        } catch(Exception invalid){send(session,ProtocolMessage.event(UUID.randomUUID().toString(),"protocol.error",UUID.randomUUID().toString(),Map.of("reasonCode","MESSAGE_INVALID")));return;}
+        var data=(Map<?,?>)request.data();String id=(String)data.get("conversationId"),content=(String)data.get("content");
+        // This transport does not load workspace/chat DB resources. Its model memory must
+        // never be selected globally by an untrusted conversationId shared by another user.
+        String memoryId="ws:"+UUID.nameUUIDFromBytes((session.getPrincipal().getName()+"\0"+id).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        var lifecycle=Flux.defer(()->{
+            send(session,reply(request,"chat.stream.started","E0",Map.of("conversationId",id)));
+            return chatClient.prompt(content).advisors(a->a.param(ChatMemory.CONVERSATION_ID,memoryId)).stream().content();
+        }).doOnNext(chunk->send(session,reply(request,"chat.stream.delta","E0",Map.of("conversationId",id,"content",chunk))))
+                .doOnComplete(()->send(session,reply(request,"chat.stream.completed","E0",Map.of("conversationId",id))))
+                .doOnError(error->send(session,reply(request,"chat.stream.error","CHAT_STREAM_FAILED",Map.of("conversationId",id))));
+        Disposable.Composite owned=streams.get(session.getId());
+        if(owned!=null)owned.add(lifecycle.subscribeOn(Schedulers.boundedElastic()).subscribe(ignored->{},error->{}));
     }
-
-    @Override
-    protected void handleTextMessage(WebSocketSession session, TextMessage message) throws Exception {
-        Map<String, String> payload = objectMapper.readValue(message.getPayload(), MESSAGE_TYPE);
-        String conversationId = payload.get("conversationId");
-        String question = payload.get("content");
-
-        Flux<String> responseFlux = chatClient.prompt(question)
-                .advisors(advisor -> advisor.param(ChatMemory.CONVERSATION_ID, conversationId))
-                .stream()
-                .content();
-
-        responseFlux
-            .concatMap(content -> {
-                try {
-                    return Mono.fromCallable(() -> {
-                        synchronized (session) {
-                            session.sendMessage(new TextMessage(content));
-                        }
-                        return content;
-                    }).onErrorResume(error -> {
-                        log.error("Error sending WebSocket message", error);
-                        return Mono.empty();
-                    });
-                } catch (Exception e) {
-                    log.error("Error processing content", e);
-                    return Mono.empty();
-                }
-            })
-            .doOnComplete(() -> {
-                try {
-                    synchronized (session) {
-                        session.sendMessage(new TextMessage("[EOM]"));
-                    }
-                } catch (Exception e) {
-                    log.error("Error broadcasting message to all sessions", e);
-                }
-            })
-            .doOnError(error -> log.error("Error processing WebSocket chat response", error))
-            .subscribeOn(Schedulers.boundedElastic())
-            .subscribe();
+    private ProtocolMessage<?> reply(ProtocolMessage<?> request,String type,String code,Object data){
+        return ProtocolMessage.reply(request,type,UUID.randomUUID().toString(),code,code.equals("E0")?"ok":"Chat stream failed",data);
     }
-
-    @Override
-    public void afterConnectionEstablished(WebSocketSession session) throws Exception {
-        sessions.put(session.getId(), session);
+    private void send(WebSocketSession session,ProtocolMessage<?> message){
+        try {synchronized(session){if(session.isOpen())session.sendMessage(new TextMessage(JSON.writeValueAsString(message)));}}
+        catch(Exception failure){throw new IllegalStateException("Chat transport failed",failure);}
     }
-
-    @Override
-    public void afterConnectionClosed(WebSocketSession session, CloseStatus status) throws Exception {
-        sessions.remove(session.getId());
+    @Override public void afterConnectionEstablished(WebSocketSession session) throws Exception {
+        if(session.getPrincipal()==null||session.getPrincipal().getName()==null){session.close(CloseStatus.POLICY_VIOLATION);return;}
+        sessions.put(session.getId(),session);streams.put(session.getId(),Disposables.composite());
     }
-
-    public void sendMessageToAll(String message) {
-        sessions.values().forEach(session -> {
-            try {
-                if (session.isOpen()) {
-                    synchronized (session) {
-                        session.sendMessage(new TextMessage(message));
-                    }
-                }
-            } catch (Exception e) {
-                log.error("Error sending broadcast message", e);
-            }
-        });
+    @Override public void afterConnectionClosed(WebSocketSession session,CloseStatus status){
+        sessions.remove(session.getId());var owned=streams.remove(session.getId());if(owned!=null)owned.dispose();
+    }
+    public void sendMessageToAll(String content){
+        String id=UUID.randomUUID().toString();var message=ProtocolMessage.event(id,"chat.message",id,Map.of("content",content));
+        sessions.values().forEach(session->send(session,message));
     }
 }

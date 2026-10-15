@@ -89,7 +89,7 @@ class AgentWebSocketSkillExecutionRegistrationTest {
         var runtime = new cn.jia.agent.entity.AgentRuntimeDTO(); runtime.setAgentId(AGENT); runtime.setStatus("online");
         when(f.service.updateStatus(eq(AGENT), any())).thenReturn(runtime);
         String wire = wire(f, Map.of("forged", true)).replace("agent.register", "agent.presence");
-        wire = wire.substring(0, wire.length()-1)+",\"status\":\"online\"}";
+        var root=json.readTree(wire); ((tools.jackson.databind.node.ObjectNode)root.get("data")).put("status","online"); wire=json.writeValueAsString(root);
         f.handler.handleTextMessage(f.session, new TextMessage(wire));
         assertEquals("7", registry.lookup(scope, fence).catalog().catalogRevision());
     }

@@ -260,7 +260,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         connected.put("agentId", Optional.ofNullable(sessionAgentId(session)).orElse(""));
         putIfPresent(connected, "runtimeInstanceId", sessionRuntimeInstanceId(session));
         connected.put("supportedProtocolVersions", new int[] {AgentProtocolConstants.VERSION_1});
-        connected.put("legacyProtocolEnabled", true);
+        connected.put("legacyProtocolEnabled", false);
         connected.put("capabilities", new String[] {AgentProtocolConstants.TYPE_PROTOCOL_HELLO,
                 AgentProtocolConstants.TYPE_CHAT_STREAM, AgentProtocolConstants.TYPE_CHAT_STOP,
                 AgentProtocolConstants.TYPE_PING, AgentProtocolConstants.TYPE_AGENT_REGISTER,
@@ -288,7 +288,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             var business=cn.jia.agent.common.AgentMessageWire.business(envelope);
             handlePrivateMessage(session,new TextMessage(STRICT_RAW_COMMAND_JSON.writeValueAsString(business)));
         } catch(Exception malformed) {
-            if(skillExecutionSessions!=null)skillExecutionSessions.remove(session.getId());
+            if(skillExecutionSessions!=null && java.util.regex.Pattern.compile("\"messageType\"\\s*:\\s*\"agent\\.register\"").matcher(message.getPayload()).find())skillExecutionSessions.remove(session.getId());
             sendProtocolError(session,Map.of(),"MESSAGE_INVALID","Invalid protocol message");
         } finally { incomingWire.remove(); }
     }
@@ -2541,7 +2541,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             Map<String, Object> wire = new LinkedHashMap<>(outbound);
             negotiated = entry.getValue().negotiatedProfile(route, decision);
             wire.put("targetCapability", negotiated);
-            delivered = sendEvent(session, AgentProtocolConstants.LEGACY_AGENT_DIRECT_MESSAGE, wire) || delivered;
+            delivered = sendEvent(session, AgentProtocolConstants.TYPE_CHAT_MESSAGE, wire) || delivered;
         }
         CapabilityDispatchStatus status = eligible.values().stream().allMatch(AgentRuntimeCapabilities::modern)
                 ? CapabilityDispatchStatus.READY : CapabilityDispatchStatus.LEGACY_COMPATIBLE;
@@ -2584,7 +2584,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                 "capabilityContractVersion", 1, "policy", ready.frozenDeclaration());
         Map<String, Object> wire = new LinkedHashMap<>(outbound);
         wire.put("targetCapability", negotiated);
-        boolean delivered = sendEvent(selected, AgentProtocolConstants.LEGACY_AGENT_DIRECT_MESSAGE, wire, true);
+        boolean delivered = sendEvent(selected, AgentProtocolConstants.TYPE_CHAT_MESSAGE, wire, true);
         return new CapabilityDispatchResult(CapabilityDispatchStatus.READY, delivered, negotiated);
     }
 
@@ -2643,9 +2643,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             }
         }
 
-        String outerType = directCompatibilityType(messageType)
-                ? AgentProtocolConstants.LEGACY_AGENT_DIRECT_MESSAGE
-                : safeCanonicalOutboundType(messageType);
+        String outerType = safeCanonicalOutboundType(messageType);
         if (outerType == null) {
             log.warn("Refusing unsafe Agent direct delivery, agentId={}, messageType={}", agentId, messageType);
             return false;
@@ -2724,11 +2722,6 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         } finally {
             EsContextHolder.setContext(originalContext);
         }
-    }
-
-    private boolean directCompatibilityType(String messageType) {
-        return AgentProtocolConstants.TYPE_CHAT_MESSAGE.equals(messageType)
-                || AgentProtocolConstants.TYPE_COMMAND_DISPATCH.equals(messageType);
     }
 
     private String safeCanonicalOutboundType(String messageType) {
