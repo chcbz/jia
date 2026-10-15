@@ -41,16 +41,16 @@ public class PersonalWorkspaceConversationFileLinkController {
     }
 
     @GetMapping(value = "/{conversationId}/file-links", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<PersonalWorkspaceConversationLinkService.LinkListView> list(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<PersonalWorkspaceConversationLinkService.LinkListView>> list(
             @PathVariable String conversationId, @RequestParam(required = false) String cursor,
             Authentication authentication) {
         PersonalWorkspaceConversationLinkService.Scope scope = scope(authentication);
-        return json(service.list(scope, conversationId, cursor));
+        return cn.jia.core.config.ApiJsonResponses.success(json(service.list(scope, conversationId, cursor)));
     }
 
     @PostMapping(value = "/{conversationId}/file-links", consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<PersonalWorkspaceConversationLinkService.LinkView> create(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<PersonalWorkspaceConversationLinkService.LinkView>> create(
             @PathVariable String conversationId, @RequestBody(required = false) JsonRequest<Map<String, Object>> protocolRequest,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             Authentication authentication) {
@@ -59,15 +59,15 @@ public class PersonalWorkspaceConversationFileLinkController {
         PersonalWorkspaceConversationLinkService.CreateCommand command =
                 createCommand(body, idempotencyKey);
         PersonalWorkspaceConversationLinkService.LinkView link = service.create(scope, conversationId, command);
-        return ResponseEntity.status(HttpStatus.CREATED)
+        return cn.jia.core.config.ApiJsonResponses.success(ResponseEntity.status(HttpStatus.CREATED)
                 .header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
                 .eTag(PersonalWorkspaceConversationLinkServiceImpl.etag(link))
-                .contentType(MediaType.APPLICATION_JSON).body(link);
+                .contentType(MediaType.APPLICATION_JSON).body(link));
     }
 
     @DeleteMapping(value = "/{conversationId}/file-links/{relationId}",
             produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<PersonalWorkspaceConversationLinkService.DetachView> detach(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<PersonalWorkspaceConversationLinkService.DetachView>> detach(
             @PathVariable String conversationId, @PathVariable String relationId,
             @RequestHeader(value = HttpHeaders.IF_MATCH, required = false) String ifMatch,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
@@ -75,13 +75,13 @@ public class PersonalWorkspaceConversationFileLinkController {
         PersonalWorkspaceConversationLinkService.Scope scope = scope(authentication);
         PersonalWorkspaceConversationLinkService.DetachView result = service.detach(
                 scope, conversationId, relationId, ifMatch, idempotencyKey);
-        return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
+        return cn.jia.core.config.ApiJsonResponses.success(ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
                 .eTag(PersonalWorkspaceConversationLinkServiceImpl.etag(result.link()))
-                .contentType(MediaType.APPLICATION_JSON).body(result);
+                .contentType(MediaType.APPLICATION_JSON).body(result));
     }
 
     @ExceptionHandler(AuthenticationFailure.class)
-    public ResponseEntity<ErrorBody> authentication(AuthenticationFailure failure) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> authentication(AuthenticationFailure failure) {
         return error(failure.forbidden ? HttpStatus.FORBIDDEN : HttpStatus.UNAUTHORIZED,
                 failure.forbidden ? "CONVERSATION_FILE_LINK_FORBIDDEN" : "UNAUTHENTICATED",
                 failure.forbidden ? "Conversation file link scope is unavailable"
@@ -89,7 +89,7 @@ public class PersonalWorkspaceConversationFileLinkController {
     }
 
     @ExceptionHandler(PersonalWorkspaceConversationLinkService.Failure.class)
-    public ResponseEntity<ErrorBody> failure(PersonalWorkspaceConversationLinkService.Failure failure) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> failure(PersonalWorkspaceConversationLinkService.Failure failure) {
         return switch (failure.getReason()) {
             case BAD_REQUEST -> error(HttpStatus.BAD_REQUEST, "BAD_REQUEST",
                     "Invalid conversation file link request");
@@ -111,12 +111,12 @@ public class PersonalWorkspaceConversationFileLinkController {
 
     @ExceptionHandler({IllegalArgumentException.class,
             org.springframework.http.converter.HttpMessageNotReadableException.class})
-    public ResponseEntity<ErrorBody> malformed(Exception ignored) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> malformed(Exception ignored) {
         return error(HttpStatus.BAD_REQUEST, "BAD_REQUEST", "Invalid conversation file link request");
     }
 
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<ErrorBody> unexpected(Exception failure, HttpServletRequest request) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> unexpected(Exception failure, HttpServletRequest request) {
         log.error("Conversation file link request failed: uri={}", request.getRequestURI(), failure);
         return error(HttpStatus.SERVICE_UNAVAILABLE, "CONVERSATION_FILE_LINK_UNAVAILABLE",
                 "Conversation file links are temporarily unavailable");
@@ -165,11 +165,11 @@ public class PersonalWorkspaceConversationFileLinkController {
                 .contentType(MediaType.APPLICATION_JSON).body(body);
     }
 
-    private static ResponseEntity<ErrorBody> error(
+    private static ResponseEntity<cn.jia.core.entity.JsonResult<Void>> error(
             HttpStatus status, String code, String message) {
         return ResponseEntity.status(status).header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
                 .contentType(new MediaType(MediaType.APPLICATION_JSON, StandardCharsets.UTF_8))
-                .body(new ErrorBody(code, message));
+                .body(cn.jia.core.entity.JsonResult.<Void>failure(code, message));
     }
 
     public record ErrorBody(String code, String message) { }

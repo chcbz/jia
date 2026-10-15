@@ -146,24 +146,24 @@ public class AgentCommandOperationsController {
     }
 
     @ExceptionHandler(AuthenticationFailure.class)
-    public ResponseEntity<ErrorBody> authentication(AuthenticationFailure failure) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> authentication(AuthenticationFailure failure) {
         return error(failure.forbidden ? HttpStatus.FORBIDDEN : HttpStatus.UNAUTHORIZED,
                 failure.forbidden ? "COMMAND_OPS_FORBIDDEN" : "COMMAND_OPS_UNAUTHENTICATED",
                 "Command operations access is unavailable");
     }
 
     @ExceptionHandler(RequestFailure.class)
-    public ResponseEntity<ErrorBody> badRequest(RequestFailure ignored) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> badRequest(RequestFailure ignored) {
         return error(HttpStatus.BAD_REQUEST, "BAD_REQUEST", "Invalid command operations request");
     }
 
     @ExceptionHandler(HttpMessageNotReadableException.class)
-    public ResponseEntity<ErrorBody> unreadableBody(HttpMessageNotReadableException ignored) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> unreadableBody(HttpMessageNotReadableException ignored) {
         return error(HttpStatus.BAD_REQUEST, "BAD_REQUEST", "Invalid command operations request");
     }
 
     @ExceptionHandler(AgentCommandOperationsException.class)
-    public ResponseEntity<ErrorBody> operationFailure(AgentCommandOperationsException failure) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> operationFailure(AgentCommandOperationsException failure) {
         return switch (failure.reason()) {
             case NOT_FOUND_OR_FORBIDDEN -> error(HttpStatus.NOT_FOUND,
                     "COMMAND_OPERATION_NOT_FOUND", "Command operation source is unavailable");
@@ -179,7 +179,7 @@ public class AgentCommandOperationsController {
     }
 
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<ErrorBody> unexpected(Exception ignored, HttpServletRequest request) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> unexpected(Exception ignored, HttpServletRequest request) {
         log.error("Privileged command operation failed: uri={}", request.getRequestURI());
         return error(HttpStatus.SERVICE_UNAVAILABLE,
                 "COMMAND_OPERATION_FAILED", "Command operation did not complete");
@@ -376,9 +376,9 @@ public class AgentCommandOperationsController {
         return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL).body(body);
     }
 
-    private ResponseEntity<ErrorBody> error(HttpStatus status, String code, String message) {
+    private ResponseEntity<cn.jia.core.entity.JsonResult<Void>> error(HttpStatus status, String code, String message) {
         return ResponseEntity.status(status).header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
-                .contentType(MediaType.APPLICATION_JSON).body(new ErrorBody(code, message));
+                .contentType(MediaType.APPLICATION_JSON).body(cn.jia.core.entity.JsonResult.<Void>failure(code, message));
     }
 
     public record OperationBody(

@@ -52,11 +52,11 @@ public class AgentCommandOperationsCapabilitiesController {
     }
 
     @ExceptionHandler(AuthenticationFailure.class)
-    public ResponseEntity<ErrorBody> authentication(AuthenticationFailure failure) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> authentication(AuthenticationFailure failure) {
         return ResponseEntity.status(failure.forbidden ? HttpStatus.FORBIDDEN : HttpStatus.UNAUTHORIZED)
                 .header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
                 .contentType(MediaType.APPLICATION_JSON)
-                .body(new ErrorBody(
+                .body(cn.jia.core.entity.JsonResult.<Void>failure(
                         failure.forbidden ? "COMMAND_OPS_FORBIDDEN" : "COMMAND_OPS_UNAUTHENTICATED",
                         "Command operations access is unavailable"));
     }

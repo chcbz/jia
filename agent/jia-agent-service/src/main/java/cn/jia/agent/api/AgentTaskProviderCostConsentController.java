@@ -78,21 +78,21 @@ public final class AgentTaskProviderCostConsentController {
     }
 
     @GetMapping(value="/{consentId}",produces=MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<AgentTaskProviderCostConsentDTO> get(@PathVariable String taskId,
+    public ResponseEntity<cn.jia.core.entity.JsonResult<AgentTaskProviderCostConsentDTO>> get(@PathVariable String taskId,
             @PathVariable String consentId,HttpServletRequest request,
             Authentication authentication) {
         AgentTaskProviderCostConsentService.Scope scope=scope(authentication);
         requirePath(taskId); requirePath(consentId); requireNoQuery(request);
-        return ok(consents.get(scope,taskId,consentId));
+        return cn.jia.core.config.ApiJsonResponses.success(ok(consents.get(scope,taskId,consentId)));
     }
 
     @GetMapping(value="/request",produces=MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<AgentTaskProviderCostConsentDTO> request(@PathVariable String taskId,
+    public ResponseEntity<cn.jia.core.entity.JsonResult<AgentTaskProviderCostConsentDTO>> request(@PathVariable String taskId,
             @RequestHeader(value="Idempotency-Key",required=false) String key,
             HttpServletRequest request,Authentication authentication) {
         AgentTaskProviderCostConsentService.Scope scope=scope(authentication);
         requirePath(taskId); requireSingleKeyAndNoQuery(request,key);
-        return ok(consents.getByIdempotencyKey(scope,taskId,key));
+        return cn.jia.core.config.ApiJsonResponses.success(ok(consents.getByIdempotencyKey(scope,taskId,key)));
     }
 
     // Retired latest-contract write: history remains read-only; skills register fees, never authorize them.
@@ -113,13 +113,13 @@ public final class AgentTaskProviderCostConsentController {
     }
 
     @ExceptionHandler(AuthenticationFailure.class)
-    public ResponseEntity<ErrorBody> authentication(AuthenticationFailure failure) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> authentication(AuthenticationFailure failure) {
         return error(failure.forbidden?HttpStatus.FORBIDDEN:HttpStatus.UNAUTHORIZED,
                 failure.forbidden?"PROVIDER_CONSENT_FORBIDDEN":"UNAUTHENTICATED",
                 failure.forbidden?"Provider consent scope is unavailable":"Authentication is required");
     }
     @ExceptionHandler(AgentTaskProviderCostConsentService.Failure.class)
-    public ResponseEntity<ErrorBody> failure(AgentTaskProviderCostConsentService.Failure failure) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> failure(AgentTaskProviderCostConsentService.Failure failure) {
         return switch(failure.reason()) {
             case BAD_REQUEST -> error(HttpStatus.BAD_REQUEST,"BAD_REQUEST","Invalid provider consent request");
             case FORBIDDEN -> error(HttpStatus.FORBIDDEN,"PROVIDER_CONSENT_FORBIDDEN","Provider consent is not permitted");
@@ -130,11 +130,11 @@ public final class AgentTaskProviderCostConsentController {
     }
     @ExceptionHandler({InvalidRequest.class,
             org.springframework.http.converter.HttpMessageNotReadableException.class})
-    public ResponseEntity<ErrorBody> malformed(Exception ignored) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> malformed(Exception ignored) {
         return error(HttpStatus.BAD_REQUEST,"BAD_REQUEST","Invalid provider consent request");
     }
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<ErrorBody> unexpected(Exception failure) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> unexpected(Exception failure) {
         log.error("Provider consent failed: type={}",failure.getClass().getName());
         return error(HttpStatus.SERVICE_UNAVAILABLE,"PROVIDER_CONSENT_UNAVAILABLE",
                 "Provider consent source is temporarily unavailable");
@@ -259,9 +259,9 @@ public final class AgentTaskProviderCostConsentController {
             AgentTaskProviderCostConsentService.Reason reason) {
         return new AgentTaskProviderCostConsentService.Failure(reason);
     }
-    private static ResponseEntity<ErrorBody> error(HttpStatus status,String code,String message) {
+    private static ResponseEntity<cn.jia.core.entity.JsonResult<Void>> error(HttpStatus status,String code,String message) {
         return ResponseEntity.status(status).header(HttpHeaders.CACHE_CONTROL,CACHE_CONTROL)
-                .contentType(MediaType.APPLICATION_JSON).body(new ErrorBody(code,message));
+                .contentType(MediaType.APPLICATION_JSON).body(cn.jia.core.entity.JsonResult.<Void>failure(code,message));
     }
     public record ErrorBody(String code,String message) { }
     private static final class InvalidRequest extends RuntimeException { }

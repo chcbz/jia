@@ -52,58 +52,58 @@ public class HallRequestDraftController {
     }
 
     @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<HallRequestDraftService.DraftView> create(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<HallRequestDraftService.DraftView>> create(
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             HttpServletRequest request, Authentication authentication) {
         requireNoQuery(request);
         CreateRequest body = parse(readBounded(request), CreateRequest.class);
         HallRequestDraftService.DraftView view = service.create(scope(authentication), command(body),
                 idempotencyKey);
-        return ResponseEntity.status(HttpStatus.CREATED)
+        return cn.jia.core.config.ApiJsonResponses.success(ResponseEntity.status(HttpStatus.CREATED)
                 .header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
-                .contentType(MediaType.APPLICATION_JSON).body(view);
+                .contentType(MediaType.APPLICATION_JSON).body(view));
     }
 
     @GetMapping(value = "/{draftId}", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<HallRequestDraftService.DraftView> get(@PathVariable String draftId,
+    public ResponseEntity<cn.jia.core.entity.JsonResult<HallRequestDraftService.DraftView>> get(@PathVariable String draftId,
             HttpServletRequest request, Authentication authentication) {
         requireNoQuery(request);
-        return ok(service.get(scope(authentication), draftId));
+        return cn.jia.core.config.ApiJsonResponses.success(ok(service.get(scope(authentication), draftId)));
     }
 
     @GetMapping(produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<HallRequestDraftService.DraftPage> list(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<HallRequestDraftService.DraftPage>> list(
             @RequestParam(required = false) String cursor,
             HttpServletRequest request, Authentication authentication) {
         requireOnlyCursorQuery(request);
-        return ok(service.list(scope(authentication), cursor));
+        return cn.jia.core.config.ApiJsonResponses.success(ok(service.list(scope(authentication), cursor)));
     }
 
     @PutMapping(value = "/{draftId}", consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<HallRequestDraftService.DraftView> replace(@PathVariable String draftId,
+    public ResponseEntity<cn.jia.core.entity.JsonResult<HallRequestDraftService.DraftView>> replace(@PathVariable String draftId,
             @RequestHeader(value = HttpHeaders.IF_MATCH, required = false) String ifMatch,
             HttpServletRequest request, Authentication authentication) {
         requireNoQuery(request);
         ReplaceRequest body = parse(readBounded(request), ReplaceRequest.class);
-        return ok(service.replace(scope(authentication), draftId, revision(ifMatch), editable(body)));
+        return cn.jia.core.config.ApiJsonResponses.success(ok(service.replace(scope(authentication), draftId, revision(ifMatch), editable(body))));
     }
 
     @PostMapping(value = "/{draftId}/discard", consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<HallRequestDraftService.DraftView> discard(@PathVariable String draftId,
+    public ResponseEntity<cn.jia.core.entity.JsonResult<HallRequestDraftService.DraftView>> discard(@PathVariable String draftId,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             HttpServletRequest request, Authentication authentication) {
         requireNoQuery(request);
         DiscardRequest body = parse(readBounded(request), DiscardRequest.class);
         if (body.expectedRevision() == null) throw new RequestFailure();
-        return ok(service.discard(scope(authentication), draftId, body.expectedRevision(),
-                idempotencyKey));
+        return cn.jia.core.config.ApiJsonResponses.success(ok(service.discard(scope(authentication), draftId, body.expectedRevision(),
+                idempotencyKey)));
     }
 
     @PostMapping(value = "/{draftId}/submit", consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<HallRequestDraftService.SubmissionReceipt> submit(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<HallRequestDraftService.SubmissionReceipt>> submit(
             @PathVariable String draftId,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             HttpServletRequest request, Authentication authentication) {
@@ -114,20 +114,20 @@ public class HallRequestDraftController {
         }
         HallRequestDraftService.SubmissionReceipt receipt = service.submit(scope(authentication),
                 draftId, body.expectedRevision(), body.authorizationAcknowledgement(), idempotencyKey);
-        return ResponseEntity.status(HttpStatus.ACCEPTED)
+        return cn.jia.core.config.ApiJsonResponses.success(ResponseEntity.status(HttpStatus.ACCEPTED)
                 .header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
-                .contentType(MediaType.APPLICATION_JSON).body(receipt);
+                .contentType(MediaType.APPLICATION_JSON).body(receipt));
     }
 
     @ExceptionHandler(AuthenticationFailure.class)
-    public ResponseEntity<ErrorBody> authentication(AuthenticationFailure failure) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<FailureDetails>> authentication(AuthenticationFailure failure) {
         return error(failure.forbidden ? HttpStatus.FORBIDDEN : HttpStatus.UNAUTHORIZED,
                 failure.forbidden ? "HALL_DRAFT_FORBIDDEN" : "HALL_DRAFT_UNAUTHENTICATED",
                 "Hall draft access is unavailable", false, Map.of());
     }
 
     @ExceptionHandler(HallRequestDraftService.Failure.class)
-    public ResponseEntity<ErrorBody> failure(HallRequestDraftService.Failure failure) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<FailureDetails>> failure(HallRequestDraftService.Failure failure) {
         return switch (failure.reason()) {
             case BAD_REQUEST -> error(HttpStatus.BAD_REQUEST, "HALL_DRAFT_BAD_REQUEST",
                     "Invalid Hall draft request", false, failure.safeDetails());
@@ -156,13 +156,13 @@ public class HallRequestDraftController {
     }
 
     @ExceptionHandler({RequestFailure.class, IllegalArgumentException.class})
-    public ResponseEntity<ErrorBody> malformed(Exception ignored) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<FailureDetails>> malformed(Exception ignored) {
         return error(HttpStatus.BAD_REQUEST, "HALL_DRAFT_BAD_REQUEST",
                 "Invalid Hall draft request", false, Map.of());
     }
 
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<ErrorBody> unexpected(Exception ignored) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<FailureDetails>> unexpected(Exception ignored) {
         return error(HttpStatus.SERVICE_UNAVAILABLE, "HALL_DRAFT_STORAGE_UNAVAILABLE",
                 "Hall draft storage is temporarily unavailable", true, Map.of());
     }
@@ -284,12 +284,12 @@ public class HallRequestDraftController {
                 .contentType(MediaType.APPLICATION_JSON).body(body);
     }
 
-    static ResponseEntity<ErrorBody> error(HttpStatus status, String code, String message,
+    static ResponseEntity<cn.jia.core.entity.JsonResult<FailureDetails>> error(HttpStatus status, String code, String message,
             boolean retryable, Map<String, String> details) {
+        var result = cn.jia.core.entity.JsonResult.<FailureDetails>failure(code, message);
+        result.setData(new FailureDetails(retryable, details == null || details.isEmpty() ? null : Map.copyOf(details)));
         return ResponseEntity.status(status).header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
-                .contentType(new MediaType(MediaType.APPLICATION_JSON, StandardCharsets.UTF_8))
-                .body(new ErrorBody(code, message, UUID.randomUUID().toString(), retryable,
-                        details == null || details.isEmpty() ? null : Map.copyOf(details)));
+                .contentType(new MediaType(MediaType.APPLICATION_JSON, StandardCharsets.UTF_8)).body(result);
     }
 
     public record CreateRequest(String kind, String originRef, SourceRefRequest sourceRef,
@@ -304,6 +304,7 @@ public class HallRequestDraftController {
     public record SourceRefRequest(String sourceType, String sourceId, Integer version) { }
     public record SourceOutputRefRequest(String executionId, String outputId,
             String fileId, Integer fileVersion) { }
+    public record FailureDetails(boolean retryable, Map<String, String> details) { }
     public record ErrorBody(String code, String message, String traceId,
             boolean retryable, Map<String, String> details) { }
 

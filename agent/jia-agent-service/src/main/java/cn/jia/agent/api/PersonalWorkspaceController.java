@@ -54,58 +54,58 @@ public class PersonalWorkspaceController {
     public PersonalWorkspaceController(PersonalWorkspaceService service) { this.service = Objects.requireNonNull(service, "service"); }
 
     @GetMapping(value = "/files", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<PersonalWorkspaceViews.ListView> list(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<PersonalWorkspaceViews.ListView>> list(
             @RequestParam(required = false) String q, @RequestParam(required = false) String mediaFamily,
             @RequestParam(required = false) String state, @RequestParam(required = false) String cursor,
             Authentication authentication) {
-        return json(service.list(scope(authentication), new PersonalWorkspaceService.ListQuery(q, mediaFamily, state, cursor)));
+        return cn.jia.core.config.ApiJsonResponses.success(json(service.list(scope(authentication), new PersonalWorkspaceService.ListQuery(q, mediaFamily, state, cursor))));
     }
     @PostMapping(value = "/files", consumes = MediaType.MULTIPART_FORM_DATA_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<PersonalWorkspaceViews.UploadView> create(@RequestParam("file") MultipartFile file,
+    public ResponseEntity<cn.jia.core.entity.JsonResult<PersonalWorkspaceViews.UploadView>> create(@RequestParam("file") MultipartFile file,
             @RequestParam(required = false) String displayName, @RequestHeader("Idempotency-Key") String key,
             Authentication authentication) throws IOException {
         PersonalWorkspaceViews.UploadView view = service.create(scope(authentication), upload(file, displayName, key));
-        return ResponseEntity.status(HttpStatus.CREATED).header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL).body(view);
+        return cn.jia.core.config.ApiJsonResponses.success(ResponseEntity.status(HttpStatus.CREATED).header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL).body(view));
     }
     @GetMapping(value = "/files/{fileId}", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<PersonalWorkspaceViews.FileDetailView> get(@PathVariable String fileId, Authentication authentication) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<PersonalWorkspaceViews.FileDetailView>> get(@PathVariable String fileId, Authentication authentication) {
         PersonalWorkspaceViews.FileDetailView view = service.get(scope(authentication), fileId);
-        return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL).eTag(etag(view.file())).body(view);
+        return cn.jia.core.config.ApiJsonResponses.success(ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL).eTag(etag(view.file())).body(view));
     }
     @PatchMapping(value = "/files/{fileId}", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<PersonalWorkspaceViews.FileView> rename(@PathVariable String fileId,
+    public ResponseEntity<cn.jia.core.entity.JsonResult<PersonalWorkspaceViews.FileView>> rename(@PathVariable String fileId,
             @RequestBody JsonRequest<RenameRequest> protocolRequest, @RequestHeader(value = HttpHeaders.IF_MATCH, required = false) String ifMatch,
             @RequestHeader("Idempotency-Key") String key, Authentication authentication) {
         RenameRequest body = protocolRequest == null ? null : protocolRequest.data();
         PersonalWorkspaceViews.FileView view = service.rename(scope(authentication), fileId, body == null ? null : body.displayName(), ifMatch, new PersonalWorkspaceService.Idempotency(key));
-        return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL).eTag(etag(view)).body(view);
+        return cn.jia.core.config.ApiJsonResponses.success(ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL).eTag(etag(view)).body(view));
     }
     @GetMapping(value = "/files/{fileId}/versions", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<Map<String, Object>> versions(@PathVariable String fileId, Authentication authentication) {
-        return json(Map.of("items", service.versions(scope(authentication), fileId), "nextCursor", null));
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Map<String, Object>>> versions(@PathVariable String fileId, Authentication authentication) {
+        return cn.jia.core.config.ApiJsonResponses.success(json(Map.of("items", service.versions(scope(authentication), fileId), "nextCursor", null)));
     }
     @PostMapping(value = "/files/{fileId}/versions", consumes = MediaType.MULTIPART_FORM_DATA_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<PersonalWorkspaceViews.UploadView> append(@PathVariable String fileId,
+    public ResponseEntity<cn.jia.core.entity.JsonResult<PersonalWorkspaceViews.UploadView>> append(@PathVariable String fileId,
             @RequestParam("file") MultipartFile file, @RequestParam(required = false) String displayName,
             @RequestParam("expectedPreviousVersion") String expectedPreviousVersion,
             @RequestHeader("Idempotency-Key") String key, Authentication authentication) throws IOException {
         PersonalWorkspaceViews.UploadView view = service.appendVersion(scope(authentication), fileId,
                 upload(file, displayName, key), version(expectedPreviousVersion));
-        return ResponseEntity.status(HttpStatus.CREATED).header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL).body(view);
+        return cn.jia.core.config.ApiJsonResponses.success(ResponseEntity.status(HttpStatus.CREATED).header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL).body(view));
     }
     @GetMapping("/files/{fileId}/versions/{version}/content")
     public ResponseEntity<byte[]> content(@PathVariable String fileId, @PathVariable String version, Authentication authentication) {
         return binary(service.readContent(scope(authentication), fileId, version(version)), true);
     }
     @GetMapping(value = "/files/{fileId}/versions/{version}/preview", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<PersonalWorkspaceViews.PreviewView> preview(@PathVariable String fileId,
+    public ResponseEntity<cn.jia.core.entity.JsonResult<PersonalWorkspaceViews.PreviewView>> preview(@PathVariable String fileId,
             @PathVariable String version, HttpServletRequest request,
             Authentication authentication) {
         PersonalWorkspaceService.Scope authenticatedScope = scope(authentication);
         boolean partsView = requirePartsView(request);
         PersonalWorkspaceViews.PreviewView rendered =
                 service.preview(authenticatedScope, fileId, version(version));
-        return json(partsView ? rendered : legacyPreview(rendered));
+        return cn.jia.core.config.ApiJsonResponses.success(json(partsView ? rendered : legacyPreview(rendered)));
     }
     @GetMapping("/files/{fileId}/versions/{version}/preview/parts/{partId}")
     public ResponseEntity<byte[]> previewPart(@PathVariable String fileId, @PathVariable String version,
@@ -113,29 +113,29 @@ public class PersonalWorkspaceController {
         return binary(service.readPreviewPart(scope(authentication), fileId, version(version), partId), false);
     }
     @GetMapping(value = "/files/{fileId}/usage", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<PersonalWorkspaceViews.UsageView> usage(@PathVariable String fileId, Authentication authentication) {
-        return json(service.usage(scope(authentication), fileId));
+    public ResponseEntity<cn.jia.core.entity.JsonResult<PersonalWorkspaceViews.UsageView>> usage(@PathVariable String fileId, Authentication authentication) {
+        return cn.jia.core.config.ApiJsonResponses.success(json(service.usage(scope(authentication), fileId)));
     }
     @PostMapping(value = "/files/{fileId}/trash", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<PersonalWorkspaceViews.FileView> trash(@PathVariable String fileId, @RequestBody JsonRequest<TrashRequest> protocolRequest,
+    public ResponseEntity<cn.jia.core.entity.JsonResult<PersonalWorkspaceViews.FileView>> trash(@PathVariable String fileId, @RequestBody JsonRequest<TrashRequest> protocolRequest,
             @RequestHeader(value = HttpHeaders.IF_MATCH, required = false) String ifMatch,
             @RequestHeader("Idempotency-Key") String key, Authentication authentication) {
         TrashRequest body = protocolRequest == null ? null : protocolRequest.data();
         PersonalWorkspaceViews.FileView view=service.trash(scope(authentication),fileId,body==null?-1:body.impactRevision(),body!=null&&body.acknowledgeExistingReferences(),ifMatch,new PersonalWorkspaceService.Idempotency(key));
-        return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL,CACHE_CONTROL).eTag(etag(view)).body(view);
+        return cn.jia.core.config.ApiJsonResponses.success(ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL,CACHE_CONTROL).eTag(etag(view)).body(view));
     }
     @PostMapping(value = "/files/{fileId}/restore", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<PersonalWorkspaceViews.FileView> restore(@PathVariable String fileId,
+    public ResponseEntity<cn.jia.core.entity.JsonResult<PersonalWorkspaceViews.FileView>> restore(@PathVariable String fileId,
             @RequestHeader(value = HttpHeaders.IF_MATCH, required = false) String ifMatch,
             @RequestHeader("Idempotency-Key") String key, Authentication authentication) {
         PersonalWorkspaceViews.FileView view=service.restore(scope(authentication),fileId,ifMatch,new PersonalWorkspaceService.Idempotency(key));
-        return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL,CACHE_CONTROL).eTag(etag(view)).body(view);
+        return cn.jia.core.config.ApiJsonResponses.success(ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL,CACHE_CONTROL).eTag(etag(view)).body(view));
     }
     @GetMapping(value = "/operations/{operationId}", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<PersonalWorkspaceViews.OperationView> operation(@PathVariable String operationId, Authentication authentication) { return json(service.operation(scope(authentication),operationId)); }
+    public ResponseEntity<cn.jia.core.entity.JsonResult<PersonalWorkspaceViews.OperationView>> operation(@PathVariable String operationId, Authentication authentication) { return cn.jia.core.config.ApiJsonResponses.success(json(service.operation(scope(authentication),operationId))); }
 
     @ExceptionHandler(PersonalWorkspaceException.class)
-    public ResponseEntity<ErrorBody> failure(PersonalWorkspaceException failure) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> failure(PersonalWorkspaceException failure) {
         return switch (failure.getReason()) {
             case BAD_REQUEST -> error(HttpStatus.BAD_REQUEST, "BAD_REQUEST", "Invalid personal workspace request");
             case NOT_FOUND -> error(HttpStatus.NOT_FOUND, "FILE_NOT_FOUND", "File is unavailable");
@@ -150,9 +150,9 @@ public class PersonalWorkspaceController {
         };
     }
     @ExceptionHandler({IOException.class, IllegalArgumentException.class})
-    public ResponseEntity<ErrorBody> malformed(Exception ignored) { return error(HttpStatus.BAD_REQUEST,"BAD_REQUEST","Invalid personal workspace request"); }
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> malformed(Exception ignored) { return error(HttpStatus.BAD_REQUEST,"BAD_REQUEST","Invalid personal workspace request"); }
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<ErrorBody> unexpected(Exception failure, HttpServletRequest request) { log.error("Personal workspace request failed: uri={}",request.getRequestURI(),failure); return error(HttpStatus.SERVICE_UNAVAILABLE,"WORKSPACE_UNAVAILABLE","Personal workspace is temporarily unavailable"); }
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> unexpected(Exception failure, HttpServletRequest request) { log.error("Personal workspace request failed: uri={}",request.getRequestURI(),failure); return error(HttpStatus.SERVICE_UNAVAILABLE,"WORKSPACE_UNAVAILABLE","Personal workspace is temporarily unavailable"); }
 
     private static boolean requirePartsView(HttpServletRequest request) {
         if (request.getParameterMap().isEmpty()) return false;
@@ -212,7 +212,7 @@ public class PersonalWorkspaceController {
     }
     private static String safeFilename(String name){return name.replaceAll("[\\\\/:*?\"<>|\\p{Cntrl}]","_").replaceAll("^\\.+","").trim();}
     private static <T> ResponseEntity<T> json(T body){return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL,CACHE_CONTROL).contentType(MediaType.APPLICATION_JSON).body(body);}
-    private static ResponseEntity<ErrorBody> error(HttpStatus status,String code,String message){return ResponseEntity.status(status).header(HttpHeaders.CACHE_CONTROL,CACHE_CONTROL).contentType(new MediaType(MediaType.APPLICATION_JSON,StandardCharsets.UTF_8)).body(new ErrorBody(code,message));}
+    private static ResponseEntity<cn.jia.core.entity.JsonResult<Void>> error(HttpStatus status,String code,String message){return ResponseEntity.status(status).header(HttpHeaders.CACHE_CONTROL,CACHE_CONTROL).contentType(new MediaType(MediaType.APPLICATION_JSON,StandardCharsets.UTF_8)).body(cn.jia.core.entity.JsonResult.<Void>failure(code,message));}
     private static String etag(PersonalWorkspaceViews.FileView view){return "\""+view.fileId()+":"+view.metadataRevision()+"\"";}
     private static boolean valid(String v,int max){return v!=null&&!v.isBlank()&&v.equals(v.strip())&&v.codePointCount(0,v.length())<=max&&!v.chars().anyMatch(Character::isISOControl);}
     public record RenameRequest(String displayName) { }

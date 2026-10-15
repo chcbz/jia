@@ -16,7 +16,7 @@ import java.util.TreeSet;
 public class OAuthResourceIdentityController {
 
     @GetMapping("/resource")
-    public ResponseEntity<OAuthResourceIdentityDTO> resource(Authentication authentication) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<OAuthResourceIdentityDTO>> resource(Authentication authentication) {
         try {
             if (!(authentication instanceof JwtAuthenticationToken jwtAuthentication) ||
                     !authentication.isAuthenticated()) {
@@ -30,9 +30,9 @@ public class OAuthResourceIdentityController {
                     optionalString(jwt, "username"),
                     optionalString(jwt, "jiacn"),
                     scopes(jwt));
-            return ResponseEntity.ok(identity);
+            return cn.jia.core.config.ApiJsonResponses.success(ResponseEntity.ok(identity));
         } catch (InvalidIdentityClaimsException ignored) {
-            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+            return cn.jia.core.config.ApiJsonResponses.success(ResponseEntity.status(HttpStatus.UNAUTHORIZED).build());
         }
     }
 

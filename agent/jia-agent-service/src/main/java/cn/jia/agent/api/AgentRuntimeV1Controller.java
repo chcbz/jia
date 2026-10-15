@@ -40,21 +40,21 @@ public class AgentRuntimeV1Controller {
     private final AgentRuntimeV1Service runtime;
 
     @PostMapping("/installations")
-    public ResponseEntity<JsonResult<AgentRuntimeV1InstallationView>> create(
-            @RequestBody JsonRequest<AgentRuntimeV1InstallationRequest> protocolRequest, Authentication authentication,
+    public ResponseEntity<JsonResult<AgentRuntimeWire.InstallationView>> create(
+            @RequestBody JsonRequest<AgentRuntimeWire.InstallationRequest> protocolRequest, Authentication authentication,
             HttpServletRequest servletRequest) {
-        AgentRuntimeV1InstallationRequest request = protocolRequest == null ? null : protocolRequest.data();
+        AgentRuntimeV1InstallationRequest request = protocolRequest == null || protocolRequest.data() == null ? null : protocolRequest.data().internal();
         rejectLegacyApiKey(servletRequest);
         var scope = AgentController.requireJwtScope(authentication);
-        return ok(runtime.create(scope.tenantId(), scope.clientId(), scope.ownerJiacn(), request, now()));
+        return ok(AgentRuntimeWire.InstallationView.from(runtime.create(scope.tenantId(), scope.clientId(), scope.ownerJiacn(), request, now())));
     }
 
     @GetMapping("/installations/{installationId}")
-    public ResponseEntity<JsonResult<AgentRuntimeV1InstallationView>> status(
+    public ResponseEntity<JsonResult<AgentRuntimeWire.InstallationView>> status(
             @PathVariable String installationId, Authentication authentication, HttpServletRequest servletRequest) {
         rejectLegacyApiKey(servletRequest);
         var scope = AgentController.requireJwtScope(authentication);
-        return ok(runtime.status(scope.tenantId(), scope.clientId(), scope.ownerJiacn(), installationId));
+        return ok(AgentRuntimeWire.InstallationView.from(runtime.status(scope.tenantId(), scope.clientId(), scope.ownerJiacn(), installationId)));
     }
 
     @PostMapping("/installations/{installationId}/revoke")
@@ -68,38 +68,38 @@ public class AgentRuntimeV1Controller {
 
     @cn.jia.core.security.AllowSensitiveOutput(reason = "Installer-only enrollment credential response; never exposed through InstallationView or logs")
     @PostMapping("/enroll")
-    public ResponseEntity<JsonResult<AgentRuntimeV1EnrollmentResult>> enroll(
-            @RequestBody JsonRequest<AgentRuntimeV1EnrollmentRequest> protocolRequest, HttpServletRequest servletRequest) {
-        AgentRuntimeV1EnrollmentRequest request = protocolRequest == null ? null : protocolRequest.data();
+    public ResponseEntity<JsonResult<AgentRuntimeWire.EnrollmentResult>> enroll(
+            @RequestBody JsonRequest<AgentRuntimeWire.EnrollmentRequest> protocolRequest, HttpServletRequest servletRequest) {
+        AgentRuntimeV1EnrollmentRequest request = protocolRequest == null || protocolRequest.data() == null ? null : protocolRequest.data().internal();
         rejectNativeClient(servletRequest);
         // Installer-only authorization response; never embed secrets in InstallationView.
-        return ok(runtime.enroll(request, now()));
+        return ok(AgentRuntimeWire.EnrollmentResult.from(runtime.enroll(request, now())));
     }
 
     @cn.jia.core.security.AllowSensitiveOutput(reason = "Installation-Bearer-authorized independent Runtime session credential response with no-store caching")
     @PostMapping("/session")
-    public ResponseEntity<JsonResult<AgentRuntimeV1SessionResponse>> session(
+    public ResponseEntity<JsonResult<AgentRuntimeWire.SessionResponse>> session(
             @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorization,
-            @RequestBody JsonRequest<AgentRuntimeV1SessionRequest> protocolRequest, HttpServletRequest servletRequest) {
-        AgentRuntimeV1SessionRequest request = protocolRequest == null ? null : protocolRequest.data();
+            @RequestBody JsonRequest<AgentRuntimeWire.SessionRequest> protocolRequest, HttpServletRequest servletRequest) {
+        AgentRuntimeV1SessionRequest request = protocolRequest == null || protocolRequest.data() == null ? null : protocolRequest.data().internal();
         rejectNativeClient(servletRequest);
-        return ok(runtime.session(bearer(authorization), request, now()));
+        return ok(AgentRuntimeWire.SessionResponse.from(runtime.session(bearer(authorization), request, now())));
     }
 
     @PostMapping("/heartbeat")
-    public ResponseEntity<JsonResult<AgentRuntimeV1InstallationView>> heartbeat(
+    public ResponseEntity<JsonResult<AgentRuntimeWire.InstallationView>> heartbeat(
             @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorization,
-            @RequestBody JsonRequest<AgentRuntimeV1RuntimeRequest> protocolRequest, HttpServletRequest servletRequest) {
-        AgentRuntimeV1RuntimeRequest request = protocolRequest == null ? null : protocolRequest.data();
+            @RequestBody JsonRequest<AgentRuntimeWire.RuntimeRequest> protocolRequest, HttpServletRequest servletRequest) {
+        AgentRuntimeV1RuntimeRequest request = protocolRequest == null || protocolRequest.data() == null ? null : protocolRequest.data().internal();
         rejectNativeClient(servletRequest);
-        return ok(runtime.heartbeat(bearer(authorization), request, now()));
+        return ok(AgentRuntimeWire.InstallationView.from(runtime.heartbeat(bearer(authorization), request, now())));
     }
 
     @PostMapping("/commands/{messageId}/acks")
-    public ResponseEntity<JsonResult<AgentCommandAckResult>> acknowledge(@PathVariable String messageId,
+    public ResponseEntity<JsonResult<AgentRuntimeWire.AckResult>> acknowledge(@PathVariable String messageId,
             @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorization,
-            @RequestBody JsonRequest<AgentRuntimeV1AckRequest> protocolRequest, HttpServletRequest servletRequest) {
-        AgentRuntimeV1AckRequest request = protocolRequest == null ? null : protocolRequest.data();
+            @RequestBody JsonRequest<AgentRuntimeWire.AckRequest> protocolRequest, HttpServletRequest servletRequest) {
+        AgentRuntimeV1AckRequest request = protocolRequest == null || protocolRequest.data() == null ? null : protocolRequest.data().internal();
         rejectLegacyApiKey(servletRequest);
         var headers = AgentRuntimeAuthenticationFilter.sessionHeaders(servletRequest);
         if (request == null || !java.util.Objects.equals(headers.agentId(), request.canonicalAgentId())
@@ -109,7 +109,7 @@ public class AgentRuntimeV1Controller {
                 || headers.sessionGeneration() != request.sessionGeneration()) {
             throw new AgentBizException("AGENT_FORBIDDEN", "Runtime ACK rejected");
         }
-        return ok(runtime.acknowledge(headers.token(), messageId, request, now()));
+        return ok(AgentRuntimeWire.AckResult.from(runtime.acknowledge(headers.token(), messageId, request, now())));
     }
 
     @ExceptionHandler({AgentBizException.class, AgentCommandAckRejectedException.class})

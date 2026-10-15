@@ -89,4 +89,27 @@ class ApiEnvelopeBoundaryTest {
         }
     }
 
+
+    @Test void explicitResponseAdapterPreservesMetadataAndRejectsDoubleWrapping() {
+        var raw = org.springframework.http.ResponseEntity.status(201).eTag("\"7\"").body(java.util.Map.of("data", "business"));
+        var response = ApiJsonResponses.success(raw);
+        org.junit.jupiter.api.Assertions.assertEquals(201, response.getStatusCode().value());
+        org.junit.jupiter.api.Assertions.assertEquals("\"7\"", response.getHeaders().getETag());
+        org.junit.jupiter.api.Assertions.assertEquals(raw.getBody(), response.getBody().getData());
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalStateException.class,
+                () -> ApiJsonResponses.success(org.springframework.http.ResponseEntity.ok(JsonResult.success())));
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalStateException.class,
+                () -> ApiJsonResponses.success(org.springframework.http.ResponseEntity.status(403).body("denied")));
+    }
+    @Test void rawResponseKeepsCanonicalBytesInsideData() {
+        var request = new org.springframework.mock.web.MockHttpServletRequest();
+        RequestIdFilter.accept(request, "raw-response");
+        String data = "{ \"name\":\"图片\", \"decimal\":1.00 }";
+        byte[] result = ApiJsonResponses.rawJsonSuccess(data.getBytes(java.nio.charset.StandardCharsets.UTF_8), request);
+        String text = new String(result, java.nio.charset.StandardCharsets.UTF_8);
+        org.junit.jupiter.api.Assertions.assertTrue(text.endsWith("\"data\":" + data + "}"));
+        var decoded = tools.jackson.databind.json.JsonMapper.builder().build().readTree(result);
+        org.junit.jupiter.api.Assertions.assertEquals("raw-response", decoded.get("requestId").asString());
+        org.junit.jupiter.api.Assertions.assertEquals("图片", decoded.get("data").get("name").asString());
+    }
 }

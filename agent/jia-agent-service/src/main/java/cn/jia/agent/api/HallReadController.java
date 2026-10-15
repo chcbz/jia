@@ -22,15 +22,15 @@ public class HallReadController {
     public HallReadController(HallReadService service) { this.service = Objects.requireNonNull(service); }
 
     @GetMapping(value = "/overview", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<HallReadService.Overview> overview(HttpServletRequest request,
+    public ResponseEntity<cn.jia.core.entity.JsonResult<HallReadService.Overview>> overview(HttpServletRequest request,
             Authentication authentication) {
         var scope = HallRequestDraftController.scope(authentication);
         HallRequestDraftController.requireNoQuery(request);
-        return HallRequestDraftController.ok(service.overview(scope));
+        return cn.jia.core.config.ApiJsonResponses.success(HallRequestDraftController.ok(service.overview(scope)));
     }
 
     @GetMapping(value = "/items", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<HallReadService.Items> items(@RequestParam(required = false) String kind,
+    public ResponseEntity<cn.jia.core.entity.JsonResult<HallReadService.Items>> items(@RequestParam(required = false) String kind,
             @RequestParam(required = false) String view, @RequestParam(required = false) String q,
             @RequestParam(required = false) String cursor, HttpServletRequest request,
             Authentication authentication) {
@@ -40,18 +40,18 @@ public class HallReadController {
                 || request.getParameterMap().values().stream().anyMatch(v -> v.length != 1)) {
             throw new HallRequestDraftController.RequestFailure();
         }
-        return HallRequestDraftController.ok(service.items(scope, kind, view, q, cursor));
+        return cn.jia.core.config.ApiJsonResponses.success(HallRequestDraftController.ok(service.items(scope, kind, view, q, cursor)));
     }
 
     @ExceptionHandler(HallRequestDraftController.AuthenticationFailure.class)
-    public ResponseEntity<HallRequestDraftController.ErrorBody> authentication(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<HallRequestDraftController.FailureDetails>> authentication(
             HallRequestDraftController.AuthenticationFailure failure) {
         return HallRequestDraftController.error(failure.forbidden ? HttpStatus.FORBIDDEN : HttpStatus.UNAUTHORIZED,
                 failure.forbidden ? "HALL_FORBIDDEN" : "HALL_UNAUTHENTICATED",
                 "Hall access is unavailable", false, Map.of());
     }
     @ExceptionHandler(HallReadService.Failure.class)
-    public ResponseEntity<HallRequestDraftController.ErrorBody> failure(HallReadService.Failure failure) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<HallRequestDraftController.FailureDetails>> failure(HallReadService.Failure failure) {
         if (failure.reason() == HallReadService.Reason.VIEW_UNAVAILABLE) {
             return HallRequestDraftController.error(HttpStatus.UNPROCESSABLE_ENTITY,
                     "HALL_READ_VIEW_UNAVAILABLE", "Private archive marks are not available", false, Map.of());
@@ -59,12 +59,12 @@ public class HallReadController {
         return malformed(failure);
     }
     @ExceptionHandler({HallRequestDraftController.RequestFailure.class, IllegalArgumentException.class})
-    public ResponseEntity<HallRequestDraftController.ErrorBody> malformed(Exception ignored) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<HallRequestDraftController.FailureDetails>> malformed(Exception ignored) {
         return HallRequestDraftController.error(HttpStatus.BAD_REQUEST, "HALL_READ_BAD_REQUEST",
                 "Invalid Hall read request", false, Map.of());
     }
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<HallRequestDraftController.ErrorBody> unexpected(Exception ignored) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<HallRequestDraftController.FailureDetails>> unexpected(Exception ignored) {
         return HallRequestDraftController.error(HttpStatus.SERVICE_UNAVAILABLE, "HALL_READ_UNAVAILABLE",
                 "Hall read is temporarily unavailable", true, Map.of());
     }

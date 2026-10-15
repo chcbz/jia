@@ -59,7 +59,7 @@ public final class AgentTaskCreationOperationController {
 
     @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<AgentTaskCreationOperationService.Receipt> create(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<AgentTaskCreationOperationService.Receipt>> create(
             @cn.jia.core.annotation.ApiJsonData @RequestBody(required = false) String rawBody,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             HttpServletRequest request, Authentication authentication) {
@@ -72,25 +72,25 @@ public final class AgentTaskCreationOperationController {
             throw new AgentTaskCreationOperationService.Failure(
                     AgentTaskCreationOperationService.Reason.UNAVAILABLE);
         }
-        return ResponseEntity.status(result.replay() ? HttpStatus.OK : HttpStatus.CREATED)
+        return cn.jia.core.config.ApiJsonResponses.success(ResponseEntity.status(result.replay() ? HttpStatus.OK : HttpStatus.CREATED)
                 .header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
-                .contentType(MediaType.APPLICATION_JSON).body(result.receipt());
+                .contentType(MediaType.APPLICATION_JSON).body(result.receipt()));
     }
 
     @GetMapping(value = "/request", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<AgentTaskCreationOperationService.Receipt> request(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<AgentTaskCreationOperationService.Receipt>> request(
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             HttpServletRequest request, Authentication authentication) {
         AgentTaskCreationOperationService.Scope scope = scope(authentication);
         requireSingleKeyAndNoQuery(request, idempotencyKey);
-        return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
+        return cn.jia.core.config.ApiJsonResponses.success(ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
                 .contentType(MediaType.APPLICATION_JSON)
-                .body(operations.getByIdempotencyKey(scope, idempotencyKey));
+                .body(operations.getByIdempotencyKey(scope, idempotencyKey)));
     }
 
     @PostMapping(value = "/v2", consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<AgentTaskCreationOperationService.MaterialsReceipt> createV2(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<AgentTaskCreationOperationService.MaterialsReceipt>> createV2(
             @cn.jia.core.annotation.ApiJsonData @RequestBody(required = false) String rawBody,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             HttpServletRequest request, Authentication authentication) {
@@ -99,20 +99,20 @@ public final class AgentTaskCreationOperationController {
         var result = operations.create(scope, idempotencyKey, command(rawBody, 2));
         if (result == null) throw new AgentTaskCreationOperationService.Failure(
                 AgentTaskCreationOperationService.Reason.UNAVAILABLE);
-        return ResponseEntity.status(result.replay() ? HttpStatus.OK : HttpStatus.CREATED)
+        return cn.jia.core.config.ApiJsonResponses.success(ResponseEntity.status(result.replay() ? HttpStatus.OK : HttpStatus.CREATED)
                 .header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
-                .contentType(MediaType.APPLICATION_JSON).body(materialsReceipt(result.receipt()));
+                .contentType(MediaType.APPLICATION_JSON).body(materialsReceipt(result.receipt())));
     }
 
     @GetMapping(value = "/v2/request", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<AgentTaskCreationOperationService.MaterialsReceipt> requestV2(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<AgentTaskCreationOperationService.MaterialsReceipt>> requestV2(
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             HttpServletRequest request, Authentication authentication) {
         AgentTaskCreationOperationService.Scope scope = scope(authentication);
         requireSingleKeyAndNoQuery(request, idempotencyKey);
-        return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
+        return cn.jia.core.config.ApiJsonResponses.success(ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
                 .contentType(MediaType.APPLICATION_JSON)
-                .body(materialsReceipt(operations.getByIdempotencyKey(scope, idempotencyKey, 2)));
+                .body(materialsReceipt(operations.getByIdempotencyKey(scope, idempotencyKey, 2))));
     }
 
     private static AgentTaskCreationOperationService.MaterialsReceipt materialsReceipt(
@@ -129,7 +129,7 @@ public final class AgentTaskCreationOperationController {
     }
 
     @ExceptionHandler(AuthenticationFailure.class)
-    public ResponseEntity<ErrorBody> authentication(AuthenticationFailure failure) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> authentication(AuthenticationFailure failure) {
         return error(failure.forbidden ? HttpStatus.FORBIDDEN : HttpStatus.UNAUTHORIZED,
                 failure.forbidden ? "TASK_CREATION_FORBIDDEN" : "UNAUTHENTICATED",
                 failure.forbidden ? "Task creation scope is unavailable"
@@ -137,7 +137,7 @@ public final class AgentTaskCreationOperationController {
     }
 
     @ExceptionHandler(AgentTaskCreationOperationService.Failure.class)
-    public ResponseEntity<ErrorBody> failure(AgentTaskCreationOperationService.Failure failure) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> failure(AgentTaskCreationOperationService.Failure failure) {
         return switch (failure.reason()) {
             case BAD_REQUEST -> error(HttpStatus.BAD_REQUEST, "BAD_REQUEST",
                     "Invalid task creation request");
@@ -154,12 +154,12 @@ public final class AgentTaskCreationOperationController {
 
     @ExceptionHandler({InvalidRequest.class,
             org.springframework.http.converter.HttpMessageNotReadableException.class})
-    public ResponseEntity<ErrorBody> malformed(Exception ignored) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> malformed(Exception ignored) {
         return error(HttpStatus.BAD_REQUEST, "BAD_REQUEST", "Invalid task creation request");
     }
 
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<ErrorBody> unexpected(Exception failure) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> unexpected(Exception failure) {
         log.error("Task creation operation failed: type={}", failure.getClass().getName());
         return error(HttpStatus.SERVICE_UNAVAILABLE, "TASK_CREATION_UNAVAILABLE",
                 "Task creation is temporarily unavailable");
@@ -327,11 +327,11 @@ public final class AgentTaskCreationOperationController {
         return false;
     }
 
-    private static ResponseEntity<ErrorBody> error(
+    private static ResponseEntity<cn.jia.core.entity.JsonResult<Void>> error(
             HttpStatus status, String code, String message) {
         return ResponseEntity.status(status).header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
                 .contentType(new MediaType(MediaType.APPLICATION_JSON, StandardCharsets.UTF_8))
-                .body(new ErrorBody(code, message));
+                .body(cn.jia.core.entity.JsonResult.<Void>failure(code, message));
     }
 
     public record ErrorBody(String code, String message) { }

@@ -31,47 +31,47 @@ public class AgentCollaborationRequestController {
 
     @PostMapping(value = "/requests", consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<AgentCollaborationRequestService.RequestView> submit(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<AgentCollaborationRequestService.RequestView>> submit(
             @RequestHeader(value = "Idempotency-Key", required = false) String key,
             HttpServletRequest request, Authentication authentication) {
         HallRequestDraftController.requireNoQuery(request);
         CreateRequest body = HallRequestDraftController.parse(
                 HallRequestDraftController.readBounded(request), CreateRequest.class);
         if (body == null || body.inputs() == null) throw new RequestFailure();
-        return ResponseEntity.status(HttpStatus.ACCEPTED).header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
+        return cn.jia.core.config.ApiJsonResponses.success(ResponseEntity.status(HttpStatus.ACCEPTED).header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
                 .contentType(MediaType.APPLICATION_JSON).body(service.submit(scope(authentication),
                         new AgentCollaborationRequestService.RequestCommand(body.conversationId(),
                                 body.targetAgentId(), body.instruction(), body.outputContentMimeType(),
                                 body.inputs().stream().map(input -> {
                                     if (input == null || input.version() == null) throw new RequestFailure();
                                     return new AgentCollaborationRequestService.InputSelection(input.fileId(), input.version());
-                                }).toList()), key));
+                                }).toList()), key)));
     }
 
     @GetMapping(value = "/requests/{requestId}", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<AgentCollaborationRequestService.RequestView> get(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<AgentCollaborationRequestService.RequestView>> get(
             @PathVariable String requestId, HttpServletRequest request, Authentication authentication) {
         HallRequestDraftController.requireNoQuery(request);
-        return ok(service.get(scope(authentication), requestId));
+        return cn.jia.core.config.ApiJsonResponses.success(ok(service.get(scope(authentication), requestId)));
     }
 
     @GetMapping(value = "/requests/request", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<AgentCollaborationRequestService.RequestView> request(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<AgentCollaborationRequestService.RequestView>> request(
             @RequestHeader(value = "Idempotency-Key", required = false) String key,
             HttpServletRequest request, Authentication authentication) {
         HallRequestDraftController.requireNoQuery(request);
-        return ok(service.getByIdempotencyKey(scope(authentication), key));
+        return cn.jia.core.config.ApiJsonResponses.success(ok(service.getByIdempotencyKey(scope(authentication), key)));
     }
 
     @ExceptionHandler(HallRequestDraftController.AuthenticationFailure.class)
-    public ResponseEntity<ErrorBody> authentication(HallRequestDraftController.AuthenticationFailure failure) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> authentication(HallRequestDraftController.AuthenticationFailure failure) {
         return error(failure.forbidden ? HttpStatus.FORBIDDEN : HttpStatus.UNAUTHORIZED,
                 failure.forbidden ? "COLLABORATION_FORBIDDEN" : "COLLABORATION_UNAUTHENTICATED",
                 "Collaboration access is unavailable");
     }
 
     @ExceptionHandler(AgentCollaborationRequestService.Failure.class)
-    public ResponseEntity<ErrorBody> failure(AgentCollaborationRequestService.Failure failure) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> failure(AgentCollaborationRequestService.Failure failure) {
         return switch (failure.reason()) {
             case BAD_REQUEST -> error(HttpStatus.BAD_REQUEST, "COLLABORATION_BAD_REQUEST",
                     "Invalid collaboration request");
@@ -90,12 +90,12 @@ public class AgentCollaborationRequestController {
 
     @ExceptionHandler({HallRequestDraftController.RequestFailure.class, RequestFailure.class,
             IllegalArgumentException.class})
-    public ResponseEntity<ErrorBody> malformed(Exception ignored) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> malformed(Exception ignored) {
         return error(HttpStatus.BAD_REQUEST, "COLLABORATION_BAD_REQUEST", "Invalid collaboration request");
     }
 
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<ErrorBody> unexpected(Exception ignored) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> unexpected(Exception ignored) {
         return error(HttpStatus.SERVICE_UNAVAILABLE, "COLLABORATION_UNAVAILABLE",
                 "Collaboration is temporarily unavailable");
     }
@@ -109,9 +109,9 @@ public class AgentCollaborationRequestController {
         return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
                 .contentType(MediaType.APPLICATION_JSON).body(body);
     }
-    private static ResponseEntity<ErrorBody> error(HttpStatus status, String code, String message) {
+    private static ResponseEntity<cn.jia.core.entity.JsonResult<Void>> error(HttpStatus status, String code, String message) {
         return ResponseEntity.status(status).header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
-                .contentType(MediaType.APPLICATION_JSON).body(new ErrorBody(code, message));
+                .contentType(MediaType.APPLICATION_JSON).body(cn.jia.core.entity.JsonResult.<Void>failure(code, message));
     }
 
     public record CreateRequest(String conversationId, String targetAgentId, String instruction,

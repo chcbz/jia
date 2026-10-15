@@ -65,40 +65,40 @@ public final class PersonalWorkspaceConversationRuntimeController {
     }
 
     @GetMapping(value="/conversation-executions/commands",produces=MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<ConversationQueue> commands(HttpServletRequest request,Authentication authentication) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<ConversationQueue>> commands(HttpServletRequest request,Authentication authentication) {
         noQuery(request);
         var queue=new ConversationQueue(executions.runtimeConversationCommandViews(scope(authentication),16));
-        return ok(runtimeAuthentication.withNativeFence(authentication,()->queue));
+        return cn.jia.core.config.ApiJsonResponses.success(ok(runtimeAuthentication.withNativeFence(authentication,()->queue)));
     }
 
     @GetMapping(value="/conversation-executions/controlled-image-v3-commands",produces=MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<ConversationQueueV3> controlledV3Commands(HttpServletRequest request,Authentication authentication) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<ConversationQueueV3>> controlledV3Commands(HttpServletRequest request,Authentication authentication) {
         noQuery(request);
         var queue=new ConversationQueueV3(executions.runtimeControlledImageV3Commands(scope(authentication),16));
-        return ok(runtimeAuthentication.withNativeFence(authentication,()->queue));
+        return cn.jia.core.config.ApiJsonResponses.success(ok(runtimeAuthentication.withNativeFence(authentication,()->queue)));
     }
 
     @PostMapping(value="/{taskId}/runs/{runId}/conversation/lease",consumes=MediaType.APPLICATION_JSON_VALUE,
             produces=MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<PersonalWorkspaceExecutionService.ConversationLease> claim(@PathVariable String taskId,
+    public ResponseEntity<cn.jia.core.entity.JsonResult<PersonalWorkspaceExecutionService.ConversationLease>> claim(@PathVariable String taskId,
             @PathVariable String runId,@RequestBody JsonRequest<ClaimRequest> protocolRequest,HttpServletRequest request,
             Authentication authentication) {
         ClaimRequest claim = protocolRequest == null ? null : protocolRequest.data();
         noQuery(request);
         if (claim==null || claim.commandId()==null || claim.messageId()==null) throw new BadRequest();
-        return ok(runtimeAuthentication.withNativeFence(authentication, () ->
-                executions.claimConversationStart(scope(authentication),taskId,runId,claim.commandId(),claim.messageId())));
+        return cn.jia.core.config.ApiJsonResponses.success(ok(runtimeAuthentication.withNativeFence(authentication, () ->
+                executions.claimConversationStart(scope(authentication),taskId,runId,claim.commandId(),claim.messageId()))));
     }
 
     @PostMapping(value="/{taskId}/runs/{runId}/conversation/lease/renew",consumes=MediaType.APPLICATION_JSON_VALUE,
             produces=MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<PersonalWorkspaceExecutionService.ConversationLease> renew(@PathVariable String taskId,
+    public ResponseEntity<cn.jia.core.entity.JsonResult<PersonalWorkspaceExecutionService.ConversationLease>> renew(@PathVariable String taskId,
             @PathVariable String runId,@RequestBody JsonRequest<FenceRequest> protocolRequest,HttpServletRequest servletRequest,
             Authentication authentication) {
         FenceRequest request = protocolRequest == null ? null : protocolRequest.data();
         noQuery(servletRequest);
-        return ok(runtimeAuthentication.withNativeFence(authentication, () ->
-                executions.renewConversationLease(scope(authentication),taskId,runId,fence(request))));
+        return cn.jia.core.config.ApiJsonResponses.success(ok(runtimeAuthentication.withNativeFence(authentication, () ->
+                executions.renewConversationLease(scope(authentication),taskId,runId,fence(request)))));
     }
 
     // Retired latest skill contract: no provider-start/inspection-v3 execution writes.
@@ -150,13 +150,13 @@ public final class PersonalWorkspaceConversationRuntimeController {
 
     @PostMapping(value="/{taskId}/runs/{runId}/conversation/inputs",consumes=MediaType.APPLICATION_JSON_VALUE,
             produces=MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<cn.jia.agent.service.SkillExecutionService.Inputs> inputs(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<cn.jia.agent.service.SkillExecutionService.Inputs>> inputs(
             @PathVariable String taskId,@PathVariable String runId,@RequestBody JsonRequest<FenceRequest> protocolRequest,
             HttpServletRequest request,Authentication authentication) {
         FenceRequest fence = protocolRequest == null ? null : protocolRequest.data();
         noQuery(request);
         var inputs=skillCall(()->skills().inputs(scope(authentication),taskId,runId,fence(fence)));
-        return ok(runtimeAuthentication.withNativeFence(authentication,()->inputs));
+        return cn.jia.core.config.ApiJsonResponses.success(ok(runtimeAuthentication.withNativeFence(authentication,()->inputs)));
     }
 
     @PostMapping(value="/{taskId}/runs/{runId}/conversation/inputs/{inputRef}/content",
@@ -178,7 +178,7 @@ public final class PersonalWorkspaceConversationRuntimeController {
 
     @PostMapping(value="/{taskId}/runs/{runId}/conversation/outputs/{outputId}/content",
             consumes=MediaType.MULTIPART_FORM_DATA_VALUE,produces=MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<PersonalWorkspaceExecutionService.StagedOutput> stage(@PathVariable String taskId,
+    public ResponseEntity<cn.jia.core.entity.JsonResult<PersonalWorkspaceExecutionService.StagedOutput>> stage(@PathVariable String taskId,
             @PathVariable String runId,@PathVariable String outputId,@RequestParam("file") MultipartFile file,
             @RequestParam("version") String version,@RequestParam("token") String token,
             @RequestParam("sha256") String sha256,@RequestParam("length") String length,
@@ -190,13 +190,13 @@ public final class PersonalWorkspaceConversationRuntimeController {
         byte[] bytes=file.getBytes();
         // Check declared content before any storage side effect; service rechecks the fence under root lock.
         if (!length.equals(Long.toString(bytes.length)) || !sha256.equals(digest(bytes))) throw new BadRequest();
-        return created(executions.stageConversationOutput(scope(authentication),taskId,runId,fence,
-                outputId,file.getOriginalFilename(),file.getContentType(),bytes));
+        return cn.jia.core.config.ApiJsonResponses.success(created(executions.stageConversationOutput(scope(authentication),taskId,runId,fence,
+                outputId,file.getOriginalFilename(),file.getContentType(),bytes)));
     }
 
     @PostMapping(value="/{taskId}/runs/{runId}/conversation/output-commits/{manifestId}",
             consumes=MediaType.APPLICATION_JSON_VALUE,produces=MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<PersonalWorkspaceExecutionService.CommitView> commit(@PathVariable String taskId,
+    public ResponseEntity<cn.jia.core.entity.JsonResult<PersonalWorkspaceExecutionService.CommitView>> commit(@PathVariable String taskId,
             @PathVariable String runId,@PathVariable String manifestId,@RequestBody JsonRequest<CommitRequest> protocolRequest,
             HttpServletRequest request,Authentication authentication) {
         CommitRequest body = protocolRequest == null ? null : protocolRequest.data();
@@ -206,9 +206,9 @@ public final class PersonalWorkspaceConversationRuntimeController {
         if (item==null || item.outputId()==null || item.sha256()==null
                 || !item.sha256().matches("[0-9a-f]{64}") || item.length()==null || item.length()<0)
             throw new BadRequest();
-        return ok(executions.commitConversationOutput(scope(authentication),taskId,runId,
+        return cn.jia.core.config.ApiJsonResponses.success(ok(executions.commitConversationOutput(scope(authentication),taskId,runId,
                 fence(body.fence()),manifestId,List.of(new PersonalWorkspaceExecutionService.OutputDeclaration(
-                        item.outputId(),item.sha256(),item.length()))));
+                        item.outputId(),item.sha256(),item.length())))));
     }
 
     public ResponseEntity<PersonalWorkspaceExecutionService.CommitView> recoverStaged(
@@ -283,44 +283,44 @@ public final class PersonalWorkspaceConversationRuntimeController {
         }catch(RuntimeException invalid){throw new BadRequest();}
     }
     @PostMapping(value="/{taskId}/runs/{runId}/conversation/effects/{effectId}/start",consumes=MediaType.APPLICATION_JSON_VALUE,produces=MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<cn.jia.agent.service.SkillExecutionService.EffectReceipt> skillEffectStart(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<cn.jia.agent.service.SkillExecutionService.EffectReceipt>> skillEffectStart(
             @PathVariable String taskId,@PathVariable String runId,@PathVariable String effectId,@cn.jia.core.annotation.ApiJsonData @RequestBody String raw,HttpServletRequest request,Authentication authentication) {
         noQuery(request);var command=skillBody(raw,Set.of("executionId","snapshotDigest","fence","effectDigest","providerBindingRevision"),cn.jia.agent.service.SkillExecutionService.EffectStart.class);
-        return ok(skillCall(()->runtimeAuthentication.withNativeFence(authentication,()->skills().startEffect(scope(authentication),taskId,runId,effectId,command))));
+        return cn.jia.core.config.ApiJsonResponses.success(ok(skillCall(()->runtimeAuthentication.withNativeFence(authentication,()->skills().startEffect(scope(authentication),taskId,runId,effectId,command)))));
     }
     @PostMapping(value="/{taskId}/runs/{runId}/conversation/effects/{effectId}/result",consumes=MediaType.APPLICATION_JSON_VALUE,produces=MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<cn.jia.agent.service.SkillExecutionService.EffectReceipt> skillEffectResult(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<cn.jia.agent.service.SkillExecutionService.EffectReceipt>> skillEffectResult(
             @PathVariable String taskId,@PathVariable String runId,@PathVariable String effectId,@cn.jia.core.annotation.ApiJsonData @RequestBody String raw,HttpServletRequest request,Authentication authentication) {
         noQuery(request);var command=skillBody(raw,Set.of("executionId","snapshotDigest","fence","effectDigest","providerBindingRevision","status","providerRequestId","resultDigest"),cn.jia.agent.service.SkillExecutionService.EffectResult.class);
-        return ok(skillCall(()->runtimeAuthentication.withNativeFence(authentication,()->skills().recordEffect(scope(authentication),taskId,runId,effectId,command))));
+        return cn.jia.core.config.ApiJsonResponses.success(ok(skillCall(()->runtimeAuthentication.withNativeFence(authentication,()->skills().recordEffect(scope(authentication),taskId,runId,effectId,command)))));
     }
     @PostMapping(value="/{taskId}/runs/{runId}/conversation/resume",consumes=MediaType.APPLICATION_JSON_VALUE,produces=MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<cn.jia.agent.service.SkillExecutionService.ResumeReceipt> skillResume(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<cn.jia.agent.service.SkillExecutionService.ResumeReceipt>> skillResume(
             @PathVariable String taskId,@PathVariable String runId,@cn.jia.core.annotation.ApiJsonData @RequestBody String raw,HttpServletRequest request,Authentication authentication) {
         noQuery(request);var command=skillBody(raw,Set.of("executionId","snapshotDigest"),cn.jia.agent.service.SkillExecutionService.Resume.class);
-        return ok(skillCall(()->runtimeAuthentication.withNativeFence(authentication,()->skills().resume(scope(authentication),taskId,runId,command))));
+        return cn.jia.core.config.ApiJsonResponses.success(ok(skillCall(()->runtimeAuthentication.withNativeFence(authentication,()->skills().resume(scope(authentication),taskId,runId,command)))));
     }
     @PostMapping(value="/{taskId}/runs/{runId}/conversation/result-commits/{manifestId}",consumes=MediaType.APPLICATION_JSON_VALUE,produces=MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<cn.jia.agent.service.SkillExecutionService.ResultReceipt> skillResultCommit(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<cn.jia.agent.service.SkillExecutionService.ResultReceipt>> skillResultCommit(
             @PathVariable String taskId,@PathVariable String runId,@PathVariable String manifestId,@cn.jia.core.annotation.ApiJsonData @RequestBody String raw,HttpServletRequest request,Authentication authentication) {
         noQuery(request);var command=skillBody(raw,Set.of("fence","snapshotDigest","data","artifacts","inputReceipts"),cn.jia.agent.service.SkillExecutionService.ResultCommit.class);
-        return ok(skillCall(()->skills().commitResult(scope(authentication),taskId,runId,manifestId,command)));
+        return cn.jia.core.config.ApiJsonResponses.success(ok(skillCall(()->skills().commitResult(scope(authentication),taskId,runId,manifestId,command))));
     }
 
     @PostMapping(value="/{taskId}/runs/{runId}/conversation/failure",consumes=MediaType.APPLICATION_JSON_VALUE,
             produces=MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<PersonalWorkspaceExecutionService.ExecutionView> failure(@PathVariable String taskId,
+    public ResponseEntity<cn.jia.core.entity.JsonResult<PersonalWorkspaceExecutionService.ExecutionView>> failure(@PathVariable String taskId,
             @PathVariable String runId,@RequestBody JsonRequest<FailRequest> protocolRequest,HttpServletRequest request,
             Authentication authentication) {
         FailRequest body = protocolRequest == null ? null : protocolRequest.data();
         noQuery(request);
         if (body==null || body.code()==null) throw new BadRequest();
-        return ok(runtimeAuthentication.withNativeFence(authentication, () ->
-                executions.failConversation(scope(authentication),taskId,runId,fence(body.fence()),body.code())));
+        return cn.jia.core.config.ApiJsonResponses.success(ok(runtimeAuthentication.withNativeFence(authentication, () ->
+                executions.failConversation(scope(authentication),taskId,runId,fence(body.fence()),body.code()))));
     }
 
     @ExceptionHandler(ControlledStartFailure.class)
-    public ResponseEntity<ErrorBody> controlledUnavailable(ControlledStartFailure wrapped) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> controlledUnavailable(ControlledStartFailure wrapped) {
         return switch (wrapped.failure.getReason()) {
             case BAD_REQUEST -> error(HttpStatus.BAD_REQUEST,"BAD_REQUEST");
             case NOT_FOUND -> error(HttpStatus.NOT_FOUND,"CONVERSATION_EXECUTION_UNAVAILABLE");
@@ -333,13 +333,13 @@ public final class PersonalWorkspaceConversationRuntimeController {
     }
     /** Preserve the pre-v2 runtime error contract for every existing endpoint. */
     @ExceptionHandler(PersonalWorkspaceExecutionService.Failure.class)
-    public ResponseEntity<ErrorBody> unavailable(PersonalWorkspaceExecutionService.Failure ignored) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> unavailable(PersonalWorkspaceExecutionService.Failure ignored) {
         return error(HttpStatus.NOT_FOUND,"CONVERSATION_EXECUTION_UNAVAILABLE");
     }
     @ExceptionHandler({BadRequest.class,IllegalArgumentException.class,IOException.class})
-    public ResponseEntity<ErrorBody> malformed(Exception ignored) { return error(HttpStatus.BAD_REQUEST,"BAD_REQUEST"); }
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> malformed(Exception ignored) { return error(HttpStatus.BAD_REQUEST,"BAD_REQUEST"); }
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<ErrorBody> unexpected(Exception ignored) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> unexpected(Exception ignored) {
         return error(HttpStatus.SERVICE_UNAVAILABLE,"CONVERSATION_EXECUTION_UNAVAILABLE");
     }
 
@@ -445,10 +445,10 @@ public final class PersonalWorkspaceConversationRuntimeController {
     private static <T> ResponseEntity<T> created(T body) { return ResponseEntity.status(HttpStatus.CREATED)
             .header(HttpHeaders.CACHE_CONTROL,CACHE_CONTROL).header("X-Content-Type-Options","nosniff")
             .contentType(MediaType.APPLICATION_JSON).body(body); }
-    private static ResponseEntity<ErrorBody> error(HttpStatus status,String code) {
+    private static ResponseEntity<cn.jia.core.entity.JsonResult<Void>> error(HttpStatus status,String code) {
         return ResponseEntity.status(status).header(HttpHeaders.CACHE_CONTROL,CACHE_CONTROL)
                 .contentType(new MediaType(MediaType.APPLICATION_JSON,StandardCharsets.UTF_8))
-                .body(new ErrorBody(code,"Native conversation execution unavailable"));
+                .body(cn.jia.core.entity.JsonResult.<Void>failure(code,"Native conversation execution unavailable"));
     }
     public record ConversationQueue(List<? extends PersonalWorkspaceExecutionService.ConversationCommandView> items) { }
     public record ConversationQueueV3(List<PersonalWorkspaceExecutionService.ControlledConversationRuntimeCommandV3> items) { }

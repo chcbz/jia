@@ -99,7 +99,7 @@ public class AgentTaskEventStreamController {
     }
 
     @ExceptionHandler(StreamAuthenticationException.class)
-    public ResponseEntity<StreamError> handleAuthentication(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> handleAuthentication(
             StreamAuthenticationException exception) {
         HttpStatus status = exception.forbidden
                 ? HttpStatus.FORBIDDEN : HttpStatus.UNAUTHORIZED;
@@ -110,12 +110,12 @@ public class AgentTaskEventStreamController {
     }
 
     @ExceptionHandler(StreamRequestException.class)
-    public ResponseEntity<StreamError> handleBadRequest(StreamRequestException ignored) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> handleBadRequest(StreamRequestException ignored) {
         return error(HttpStatus.BAD_REQUEST, "BAD_REQUEST", "Invalid task event request");
     }
 
     @ExceptionHandler(AgentTaskWorkspaceException.class)
-    public ResponseEntity<StreamError> handleWorkspaceFailure(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> handleWorkspaceFailure(
             AgentTaskWorkspaceException exception) {
         if (exception.getReason()
                 == AgentTaskWorkspaceException.Reason.NOT_FOUND_OR_FORBIDDEN) {
@@ -128,13 +128,13 @@ public class AgentTaskEventStreamController {
     }
 
     @ExceptionHandler(StreamUnavailableException.class)
-    public ResponseEntity<StreamError> handleUnavailable(StreamUnavailableException ignored) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> handleUnavailable(StreamUnavailableException ignored) {
         log.error("Task event stream failed: reason=unavailable");
         return unavailableResponse();
     }
 
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<StreamError> handleUnexpected(Exception ignored) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> handleUnexpected(Exception ignored) {
         log.error("Task event stream failed: reason=unexpected");
         return unavailableResponse();
     }
@@ -244,17 +244,17 @@ public class AgentTaskEventStreamController {
         return Character.isWhitespace(codePoint) || Character.isSpaceChar(codePoint);
     }
 
-    private static ResponseEntity<StreamError> unavailableResponse() {
+    private static ResponseEntity<cn.jia.core.entity.JsonResult<Void>> unavailableResponse() {
         return error(HttpStatus.SERVICE_UNAVAILABLE, "TASK_EVENTS_UNAVAILABLE",
                 "Task event stream is temporarily unavailable");
     }
 
-    private static ResponseEntity<StreamError> error(
+    private static ResponseEntity<cn.jia.core.entity.JsonResult<Void>> error(
             HttpStatus status, String code, String message) {
         return ResponseEntity.status(status)
                 .header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL_VALUE)
                 .contentType(new MediaType(MediaType.APPLICATION_JSON, StandardCharsets.UTF_8))
-                .body(new StreamError(code, message));
+                .body(cn.jia.core.entity.JsonResult.<Void>failure(code, message));
     }
 
     private static StreamRequestException badRequest() {

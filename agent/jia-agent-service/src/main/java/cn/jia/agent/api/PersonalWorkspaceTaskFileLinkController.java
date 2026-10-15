@@ -41,16 +41,16 @@ public class PersonalWorkspaceTaskFileLinkController {
     }
 
     @GetMapping(value = "/{taskId}/file-links", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<PersonalWorkspaceTaskLinkService.LinkListView> list(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<PersonalWorkspaceTaskLinkService.LinkListView>> list(
             @PathVariable String taskId, @RequestParam(required = false) String cursor,
             Authentication authentication) {
         PersonalWorkspaceTaskLinkService.Scope scope = scope(authentication);
-        return json(service.list(scope, taskId, cursor));
+        return cn.jia.core.config.ApiJsonResponses.success(json(service.list(scope, taskId, cursor)));
     }
 
     @PostMapping(value = "/{taskId}/file-links", consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<PersonalWorkspaceTaskLinkService.LinkView> create(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<PersonalWorkspaceTaskLinkService.LinkView>> create(
             @PathVariable String taskId, @RequestBody(required = false) JsonRequest<Map<String, Object>> protocolRequest,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             Authentication authentication) {
@@ -59,15 +59,15 @@ public class PersonalWorkspaceTaskFileLinkController {
         PersonalWorkspaceTaskLinkService.CreateCommand command =
                 createCommand(body, idempotencyKey);
         PersonalWorkspaceTaskLinkService.LinkView link = service.create(scope, taskId, command);
-        return ResponseEntity.status(HttpStatus.CREATED)
+        return cn.jia.core.config.ApiJsonResponses.success(ResponseEntity.status(HttpStatus.CREATED)
                 .header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
                 .eTag(PersonalWorkspaceTaskLinkServiceImpl.etag(link))
-                .contentType(MediaType.APPLICATION_JSON).body(link);
+                .contentType(MediaType.APPLICATION_JSON).body(link));
     }
 
     @DeleteMapping(value = "/{taskId}/file-links/{relationId}",
             produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<PersonalWorkspaceTaskLinkService.DetachView> detach(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<PersonalWorkspaceTaskLinkService.DetachView>> detach(
             @PathVariable String taskId, @PathVariable String relationId,
             @RequestHeader(value = HttpHeaders.IF_MATCH, required = false) String ifMatch,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
@@ -75,13 +75,13 @@ public class PersonalWorkspaceTaskFileLinkController {
         PersonalWorkspaceTaskLinkService.Scope scope = scope(authentication);
         PersonalWorkspaceTaskLinkService.DetachView result = service.detach(
                 scope, taskId, relationId, ifMatch, idempotencyKey);
-        return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
+        return cn.jia.core.config.ApiJsonResponses.success(ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
                 .eTag(PersonalWorkspaceTaskLinkServiceImpl.etag(result.link()))
-                .contentType(MediaType.APPLICATION_JSON).body(result);
+                .contentType(MediaType.APPLICATION_JSON).body(result));
     }
 
     @ExceptionHandler(AuthenticationFailure.class)
-    public ResponseEntity<ErrorBody> authentication(AuthenticationFailure failure) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> authentication(AuthenticationFailure failure) {
         return error(failure.forbidden ? HttpStatus.FORBIDDEN : HttpStatus.UNAUTHORIZED,
                 failure.forbidden ? "TASK_FILE_LINK_FORBIDDEN" : "UNAUTHENTICATED",
                 failure.forbidden ? "Task file link scope is unavailable"
@@ -89,7 +89,7 @@ public class PersonalWorkspaceTaskFileLinkController {
     }
 
     @ExceptionHandler(PersonalWorkspaceTaskLinkService.Failure.class)
-    public ResponseEntity<ErrorBody> failure(PersonalWorkspaceTaskLinkService.Failure failure) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> failure(PersonalWorkspaceTaskLinkService.Failure failure) {
         return switch (failure.getReason()) {
             case BAD_REQUEST -> error(HttpStatus.BAD_REQUEST, "BAD_REQUEST",
                     "Invalid task file link request");
@@ -111,12 +111,12 @@ public class PersonalWorkspaceTaskFileLinkController {
 
     @ExceptionHandler({IllegalArgumentException.class,
             org.springframework.http.converter.HttpMessageNotReadableException.class})
-    public ResponseEntity<ErrorBody> malformed(Exception ignored) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> malformed(Exception ignored) {
         return error(HttpStatus.BAD_REQUEST, "BAD_REQUEST", "Invalid task file link request");
     }
 
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<ErrorBody> unexpected(Exception failure, HttpServletRequest request) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> unexpected(Exception failure, HttpServletRequest request) {
         log.error("Task file link request failed: uri={}", request.getRequestURI(), failure);
         return error(HttpStatus.SERVICE_UNAVAILABLE, "TASK_FILE_LINK_UNAVAILABLE",
                 "Task file links are temporarily unavailable");
@@ -165,11 +165,11 @@ public class PersonalWorkspaceTaskFileLinkController {
                 .contentType(MediaType.APPLICATION_JSON).body(body);
     }
 
-    private static ResponseEntity<ErrorBody> error(
+    private static ResponseEntity<cn.jia.core.entity.JsonResult<Void>> error(
             HttpStatus status, String code, String message) {
         return ResponseEntity.status(status).header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
                 .contentType(new MediaType(MediaType.APPLICATION_JSON, StandardCharsets.UTF_8))
-                .body(new ErrorBody(code, message));
+                .body(cn.jia.core.entity.JsonResult.<Void>failure(code, message));
     }
 
     public record ErrorBody(String code, String message) { }

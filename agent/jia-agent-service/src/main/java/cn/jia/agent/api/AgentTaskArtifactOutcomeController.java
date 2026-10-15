@@ -87,7 +87,7 @@ public class AgentTaskArtifactOutcomeController {
     @PostMapping(value = "/{taskId}/artifact-outcomes/accept",
             consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<AgentTaskArtifactOutcomeResponse> accept(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<AgentTaskArtifactOutcomeResponse>> accept(
             @PathVariable String taskId,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             HttpServletRequest request,
@@ -102,15 +102,15 @@ public class AgentTaskArtifactOutcomeController {
         AgentTaskArtifactOutcomeViewDTO accepted = outcomeService.accept(
                 scope.tenantId(), scope.clientId(), scope.ownerJiacn(), taskId, scope.actorAgentId(), command);
         AgentTaskArtifactRefDTO expected = command.getAcceptedArtifact();
-        return ok(requireAcceptedResponse(accepted, taskId, null,
+        return cn.jia.core.config.ApiJsonResponses.success(ok(requireAcceptedResponse(accepted, taskId, null,
                 new ExpectedArtifact(expected.getArtifactId(), expected.getArtifactVersion(),
                         expected.getExpectedOutcomeVersion() + 1),
-                decisionId, scope.actorAgentId()));
+                decisionId, scope.actorAgentId())));
     }
 
     @GetMapping(value = "/{taskId}/artifact-outcomes/accepted",
             produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<List<AgentTaskArtifactOutcomeResponse>> accepted(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<List<AgentTaskArtifactOutcomeResponse>>> accepted(
             @PathVariable String taskId,
             HttpServletRequest request,
             Authentication authentication) {
@@ -135,11 +135,11 @@ public class AgentTaskArtifactOutcomeController {
             }
             response.add(item);
         }
-        return ok(List.copyOf(response));
+        return cn.jia.core.config.ApiJsonResponses.success(ok(List.copyOf(response)));
     }
 
     @ExceptionHandler(AuthenticationFailure.class)
-    public ResponseEntity<ErrorBody> authentication(AuthenticationFailure failure) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> authentication(AuthenticationFailure failure) {
         return error(failure.forbidden ? HttpStatus.FORBIDDEN : HttpStatus.UNAUTHORIZED,
                 failure.forbidden
                         ? "ARTIFACT_OUTCOME_FORBIDDEN"
@@ -148,17 +148,17 @@ public class AgentTaskArtifactOutcomeController {
     }
 
     @ExceptionHandler(RequestFailure.class)
-    public ResponseEntity<ErrorBody> badRequest(RequestFailure ignored) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> badRequest(RequestFailure ignored) {
         return error(HttpStatus.BAD_REQUEST, "BAD_REQUEST", "Invalid artifact outcome request");
     }
 
     @ExceptionHandler(FeatureUnavailable.class)
-    public ResponseEntity<ErrorBody> featureUnavailable(FeatureUnavailable ignored) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> featureUnavailable(FeatureUnavailable ignored) {
         return unavailable();
     }
 
     @ExceptionHandler(AgentTaskCollaborationException.class)
-    public ResponseEntity<ErrorBody> collaborationFailure(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> collaborationFailure(
             AgentTaskCollaborationException failure) {
         return switch (failure.getReason()) {
             case INVALID_REQUEST -> error(HttpStatus.BAD_REQUEST,
@@ -175,7 +175,7 @@ public class AgentTaskArtifactOutcomeController {
     }
 
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<ErrorBody> unexpected(Exception ignored) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> unexpected(Exception ignored) {
         log.error("Artifact outcome HTTP request failed");
         return unavailable();
     }
@@ -441,18 +441,18 @@ public class AgentTaskArtifactOutcomeController {
                 .body(body);
     }
 
-    private static ResponseEntity<ErrorBody> unavailable() {
+    private static ResponseEntity<cn.jia.core.entity.JsonResult<Void>> unavailable() {
         return error(HttpStatus.SERVICE_UNAVAILABLE,
                 "ARTIFACT_OUTCOME_UNAVAILABLE",
                 "Artifact outcome service is temporarily unavailable");
     }
 
-    private static ResponseEntity<ErrorBody> error(
+    private static ResponseEntity<cn.jia.core.entity.JsonResult<Void>> error(
             HttpStatus status, String code, String message) {
         return ResponseEntity.status(status)
                 .header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
                 .contentType(new MediaType(MediaType.APPLICATION_JSON, StandardCharsets.UTF_8))
-                .body(new ErrorBody(code, message));
+                .body(cn.jia.core.entity.JsonResult.<Void>failure(code, message));
     }
 
     private record Scope(String tenantId, String clientId, String ownerJiacn, String actorAgentId) {

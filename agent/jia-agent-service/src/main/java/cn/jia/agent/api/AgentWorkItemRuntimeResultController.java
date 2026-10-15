@@ -50,7 +50,7 @@ public class AgentWorkItemRuntimeResultController {
 
     @AllowSensitiveOutput(reason = "Exact authenticated E05 producer original business result, never installation credentials")
     @PostMapping(value = "/result-commit", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<AgentWorkItemResultCommitViewDTO> commit(@PathVariable String taskId,
+    public ResponseEntity<cn.jia.core.entity.JsonResult<AgentWorkItemResultCommitViewDTO>> commit(@PathVariable String taskId,
             @PathVariable String workItemId, @PathVariable String reassignmentId, @PathVariable String commandId,
             HttpServletRequest request, Authentication principal) {
         var scope = scope(principal, request, taskId, workItemId, reassignmentId, commandId);
@@ -60,47 +60,47 @@ public class AgentWorkItemRuntimeResultController {
             throw new Forbidden();
         var prior = authentication.withNativeFence(principal, () -> results.preflightRuntimeResult(scope.tenantId(),
                 scope.clientId(), scope.ownerJiacn(), taskId, workItemId, scope.agentId(), reassignmentId, commandId, command));
-        if (prior != null) return ok(prior);
+        if (prior != null) return cn.jia.core.config.ApiJsonResponses.success(ok(prior));
         var prepared = results.prepareRuntimeResult(scope.tenantId(), scope.clientId(), scope.ownerJiacn(), taskId,
                 workItemId, scope.agentId(), reassignmentId, commandId, command);
-        return ok(authentication.withNativeFence(principal, () -> results.commitPreparedRuntimeResult(scope.tenantId(),
-                scope.clientId(), scope.ownerJiacn(), taskId, workItemId, scope.agentId(), reassignmentId, commandId, prepared)));
+        return cn.jia.core.config.ApiJsonResponses.success(ok(authentication.withNativeFence(principal, () -> results.commitPreparedRuntimeResult(scope.tenantId(),
+                scope.clientId(), scope.ownerJiacn(), taskId, workItemId, scope.agentId(), reassignmentId, commandId, prepared))));
     }
 
     @AllowSensitiveOutput(reason = "Exact authenticated E05 producer uniquely proved persisted original result readback")
     @GetMapping(value = "/result-commit", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<AgentWorkItemResultCommitViewDTO> readResult(@PathVariable String taskId,
+    public ResponseEntity<cn.jia.core.entity.JsonResult<AgentWorkItemResultCommitViewDTO>> readResult(@PathVariable String taskId,
             @PathVariable String workItemId, @PathVariable String reassignmentId, @PathVariable String commandId,
             HttpServletRequest request, Authentication principal) {
         var scope = scope(principal, request, taskId, workItemId, reassignmentId, commandId);
         requireNoBody(request);
-        return ok(authentication.withNativeFence(principal, () -> results.readRuntimeResult(scope.tenantId(),
-                scope.clientId(), scope.ownerJiacn(), taskId, workItemId, scope.agentId(), reassignmentId, commandId)));
+        return cn.jia.core.config.ApiJsonResponses.success(ok(authentication.withNativeFence(principal, () -> results.readRuntimeResult(scope.tenantId(),
+                scope.clientId(), scope.ownerJiacn(), taskId, workItemId, scope.agentId(), reassignmentId, commandId))));
     }
 
     @AllowSensitiveOutput(reason = "Exact authenticated E05 target original receipt live lease credential and confirmed version readback")
     @GetMapping(value = "/lease", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<AgentWorkItemReassignmentLeaseDTO> readLease(@PathVariable String taskId,
+    public ResponseEntity<cn.jia.core.entity.JsonResult<AgentWorkItemReassignmentLeaseDTO>> readLease(@PathVariable String taskId,
             @PathVariable String workItemId, @PathVariable String reassignmentId, @PathVariable String commandId,
             HttpServletRequest request, Authentication principal) {
         var scope = scope(principal, request, taskId, workItemId, reassignmentId, commandId);
         requireNoBody(request);
-        return ok(authentication.withNativeFence(principal, () -> reassignments.readCurrentRuntimeLease(scope.tenantId(),
-                scope.clientId(), scope.ownerJiacn(), scope.agentId(), taskId, workItemId, reassignmentId, commandId)));
+        return cn.jia.core.config.ApiJsonResponses.success(ok(authentication.withNativeFence(principal, () -> reassignments.readCurrentRuntimeLease(scope.tenantId(),
+                scope.clientId(), scope.ownerJiacn(), scope.agentId(), taskId, workItemId, reassignmentId, commandId))));
     }
 
     @ExceptionHandler(Forbidden.class)
-    public ResponseEntity<ErrorBody> forbidden(Forbidden ignored) { return error(HttpStatus.FORBIDDEN, "WORK_ITEM_RESULT_FORBIDDEN"); }
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> forbidden(Forbidden ignored) { return error(HttpStatus.FORBIDDEN, "WORK_ITEM_RESULT_FORBIDDEN"); }
     @ExceptionHandler({BadRequest.class, IOException.class})
-    public ResponseEntity<ErrorBody> malformed(Exception ignored) { return error(HttpStatus.BAD_REQUEST, "BAD_REQUEST"); }
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> malformed(Exception ignored) { return error(HttpStatus.BAD_REQUEST, "BAD_REQUEST"); }
     @ExceptionHandler(AgentWorkItemResultCommitService.RuntimeFailure.class)
-    public ResponseEntity<ErrorBody> recovery(AgentWorkItemResultCommitService.RuntimeFailure failure) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> recovery(AgentWorkItemResultCommitService.RuntimeFailure failure) {
         return failure.getReason() == AgentWorkItemResultCommitService.RuntimeFailureReason.NOT_FOUND
                 ? error(HttpStatus.NOT_FOUND, "WORK_ITEM_RESULT_NOT_FOUND")
                 : error(HttpStatus.CONFLICT, "WORK_ITEM_RESULT_RECOVERY_REQUIRED");
     }
     @ExceptionHandler(AgentTaskCollaborationException.class)
-    public ResponseEntity<ErrorBody> artifact(AgentTaskCollaborationException failure) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> artifact(AgentTaskCollaborationException failure) {
         return switch (failure.getReason()) {
             case INVALID_REQUEST -> error(HttpStatus.BAD_REQUEST, "BAD_REQUEST");
             case FORBIDDEN -> error(HttpStatus.FORBIDDEN, "WORK_ITEM_RESULT_FORBIDDEN");
@@ -110,7 +110,7 @@ public class AgentWorkItemRuntimeResultController {
         };
     }
     @ExceptionHandler(AgentTaskStateException.class)
-    public ResponseEntity<ErrorBody> lease(AgentTaskStateException failure) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> lease(AgentTaskStateException failure) {
         return switch (failure.getReason()) {
             case INVALID_REQUEST -> error(HttpStatus.BAD_REQUEST, "BAD_REQUEST");
             case NOT_FOUND -> error(HttpStatus.NOT_FOUND, "WORK_ITEM_RESULT_NOT_FOUND");
@@ -119,7 +119,7 @@ public class AgentWorkItemRuntimeResultController {
         };
     }
     @ExceptionHandler(AgentWorkItemReassignmentException.class)
-    public ResponseEntity<ErrorBody> source(AgentWorkItemReassignmentException failure, HttpServletRequest request) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> source(AgentWorkItemReassignmentException failure, HttpServletRequest request) {
         boolean leaseRead = request.getRequestURI().endsWith("/lease");
         return switch (failure.getReason()) {
             case INVALID_REQUEST -> error(HttpStatus.BAD_REQUEST, "BAD_REQUEST");
@@ -130,13 +130,13 @@ public class AgentWorkItemRuntimeResultController {
         };
     }
     @ExceptionHandler(IllegalArgumentException.class)
-    public ResponseEntity<ErrorBody> retired(IllegalArgumentException failure) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> retired(IllegalArgumentException failure) {
         return "AGENT_RUNTIME_UNAUTHENTICATED".equals(failure.getMessage())
                 ? error(HttpStatus.UNAUTHORIZED, "AGENT_RUNTIME_UNAUTHENTICATED")
                 : error(HttpStatus.SERVICE_UNAVAILABLE, "WORK_ITEM_RESULT_UNAVAILABLE");
     }
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<ErrorBody> unavailable(Exception ignored) { return error(HttpStatus.SERVICE_UNAVAILABLE, "WORK_ITEM_RESULT_UNAVAILABLE"); }
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> unavailable(Exception ignored) { return error(HttpStatus.SERVICE_UNAVAILABLE, "WORK_ITEM_RESULT_UNAVAILABLE"); }
 
     private static AgentRuntimeAuthentication.Scope scope(Authentication principal, HttpServletRequest request, String... ids) {
         if (request == null || request.getQueryString() != null || !request.getParameterMap().isEmpty()) throw new Forbidden();
@@ -163,9 +163,9 @@ public class AgentWorkItemRuntimeResultController {
         return value.isIntegralNumber() && value.canConvertToLong() && value.longValue() >= 0 && value.longValue() <= max;
     }
     private static <T> ResponseEntity<T> ok(T body) { return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL).body(body); }
-    private static ResponseEntity<ErrorBody> error(HttpStatus status, String code) {
+    private static ResponseEntity<cn.jia.core.entity.JsonResult<Void>> error(HttpStatus status, String code) {
         return ResponseEntity.status(status).header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
-                .body(new ErrorBody(code, "Runtime work item result is unavailable"));
+                .body(cn.jia.core.entity.JsonResult.<Void>failure(code, "Runtime work item result is unavailable"));
     }
     public record ErrorBody(String code, String message) { }
     private static final class Forbidden extends RuntimeException { }

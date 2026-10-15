@@ -35,26 +35,26 @@ public class ConversationDeliverableController {
     }
 
     @GetMapping(value = "/{conversationId}/deliverables", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<ConversationDeliverableReadAdapter.Page> list(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<ConversationDeliverableReadAdapter.Page>> list(
             @PathVariable String conversationId,
             HttpServletRequest request,
             Authentication authentication) {
         ConversationDeliverableReadAdapter.Scope scope = requireJwtScope(authentication);
         int limit = requireLimit(request);
-        return ResponseEntity.ok()
+        return cn.jia.core.config.ApiJsonResponses.success(ResponseEntity.ok()
                 .header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
-                .body(deliverables.list(scope, conversationId, limit));
+                .body(deliverables.list(scope, conversationId, limit)));
     }
 
     @ExceptionHandler(AuthenticationFailure.class)
-    public ResponseEntity<ErrorBody> authentication(AuthenticationFailure failure) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> authentication(AuthenticationFailure failure) {
         return error(failure.forbidden ? HttpStatus.FORBIDDEN : HttpStatus.UNAUTHORIZED,
                 failure.forbidden ? "CONVERSATION_DELIVERABLE_FORBIDDEN"
                         : "CONVERSATION_DELIVERABLE_UNAUTHENTICATED");
     }
 
     @ExceptionHandler(ConversationDeliverableReadAdapter.Failure.class)
-    public ResponseEntity<ErrorBody> deliverableFailure(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> deliverableFailure(
             ConversationDeliverableReadAdapter.Failure failure) {
         return switch (failure.reason()) {
             case BAD_REQUEST -> error(HttpStatus.BAD_REQUEST, "BAD_REQUEST");
@@ -64,12 +64,12 @@ public class ConversationDeliverableController {
     }
 
     @ExceptionHandler(RequestFailure.class)
-    public ResponseEntity<ErrorBody> badRequest(RequestFailure ignored) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> badRequest(RequestFailure ignored) {
         return error(HttpStatus.BAD_REQUEST, "BAD_REQUEST");
     }
 
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<ErrorBody> unexpected(Exception ignored, HttpServletRequest request) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> unexpected(Exception ignored, HttpServletRequest request) {
         log.error("Conversation deliverable read failed: uri={}", request.getRequestURI());
         return unavailable();
     }
@@ -146,15 +146,15 @@ public class ConversationDeliverableController {
         return Character.isWhitespace(codePoint) || Character.isSpaceChar(codePoint);
     }
 
-    private static ResponseEntity<ErrorBody> unavailable() {
+    private static ResponseEntity<cn.jia.core.entity.JsonResult<Void>> unavailable() {
         return error(HttpStatus.SERVICE_UNAVAILABLE, "CONVERSATION_DELIVERABLE_UNAVAILABLE");
     }
 
-    private static ResponseEntity<ErrorBody> error(HttpStatus status, String code) {
+    private static ResponseEntity<cn.jia.core.entity.JsonResult<Void>> error(HttpStatus status, String code) {
         return ResponseEntity.status(status)
                 .header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
                 .contentType(new MediaType(MediaType.APPLICATION_JSON, StandardCharsets.UTF_8))
-                .body(new ErrorBody(code, "Conversation deliverables are unavailable"));
+                .body(cn.jia.core.entity.JsonResult.<Void>failure(code, "Conversation deliverables are unavailable"));
     }
 
     public record ErrorBody(String code, String message) { }
