@@ -59,7 +59,7 @@ public final class AgentTaskCreationOperationController {
 
     @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<cn.jia.core.entity.JsonResult<AgentTaskCreationOperationService.Receipt>> create(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<CreationReceipt>> create(
             @cn.jia.core.annotation.ApiJsonData @RequestBody(required = false) String rawBody,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             HttpServletRequest request, Authentication authentication) {
@@ -74,23 +74,23 @@ public final class AgentTaskCreationOperationController {
         }
         return cn.jia.core.config.ApiJsonResponses.success(ResponseEntity.status(result.replay() ? HttpStatus.OK : HttpStatus.CREATED)
                 .header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
-                .contentType(MediaType.APPLICATION_JSON).body(result.receipt()));
+                .contentType(MediaType.APPLICATION_JSON).body(creationReceipt(result.receipt())));
     }
 
     @GetMapping(value = "/request", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<cn.jia.core.entity.JsonResult<AgentTaskCreationOperationService.Receipt>> request(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<CreationReceipt>> request(
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             HttpServletRequest request, Authentication authentication) {
         AgentTaskCreationOperationService.Scope scope = scope(authentication);
         requireSingleKeyAndNoQuery(request, idempotencyKey);
         return cn.jia.core.config.ApiJsonResponses.success(ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
                 .contentType(MediaType.APPLICATION_JSON)
-                .body(operations.getByIdempotencyKey(scope, idempotencyKey)));
+                .body(creationReceipt(operations.getByIdempotencyKey(scope, idempotencyKey))));
     }
 
     @PostMapping(value = "/v2", consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<cn.jia.core.entity.JsonResult<AgentTaskCreationOperationService.MaterialsReceipt>> createV2(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<MaterialsReceipt>> createV2(
             @cn.jia.core.annotation.ApiJsonData @RequestBody(required = false) String rawBody,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             HttpServletRequest request, Authentication authentication) {
@@ -105,7 +105,7 @@ public final class AgentTaskCreationOperationController {
     }
 
     @GetMapping(value = "/v2/request", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<cn.jia.core.entity.JsonResult<AgentTaskCreationOperationService.MaterialsReceipt>> requestV2(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<MaterialsReceipt>> requestV2(
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             HttpServletRequest request, Authentication authentication) {
         AgentTaskCreationOperationService.Scope scope = scope(authentication);
@@ -115,17 +115,16 @@ public final class AgentTaskCreationOperationController {
                 .body(materialsReceipt(operations.getByIdempotencyKey(scope, idempotencyKey, 2))));
     }
 
-    private static AgentTaskCreationOperationService.MaterialsReceipt materialsReceipt(
+    private static MaterialsReceipt materialsReceipt(
             AgentTaskCreationOperationService.Receipt receipt) {
         if (receipt == null || receipt.schemaVersion() != 2
                 || receipt.inputRefs().stream().anyMatch(ref -> !"INPUT".equals(ref.purpose()))) {
             throw new AgentTaskCreationOperationService.Failure(
                     AgentTaskCreationOperationService.Reason.UNAVAILABLE);
         }
-        return new AgentTaskCreationOperationService.MaterialsReceipt(2, receipt.operationId(),
-                receipt.taskId(), receipt.requirementRevision(), receipt.state(),
-                receipt.inputRefs().stream().map(ref -> new AgentTaskCreationOperationService.Attachment(
-                        ref.fileId(), ref.version())).toList(), receipt.task());
+        return new MaterialsReceipt(2, receipt.operationId(),
+                receipt.taskId(), Long.toString(receipt.requirementRevision()), receipt.state(),
+                receipt.inputRefs().stream().map(ref -> new Attachment(ref.fileId(), Integer.toString(ref.version()))).toList(), receipt.task());
     }
 
     @ExceptionHandler(AuthenticationFailure.class)
@@ -228,13 +227,12 @@ public final class AgentTaskCreationOperationController {
         for (JsonNode item : value) {
             if (!item.isObject() || !fieldNames(item).equals(REFERENCE_FIELDS)
                     || !item.get("fileId").isTextual()
-                    || !item.get("version").isIntegralNumber()
-                    || !item.get("version").canConvertToInt()
+                    || !item.get("version").isTextual()
                     || !item.get("purpose").isTextual()) {
                 throw new InvalidRequest();
             }
             String fileId = item.get("fileId").textValue();
-            int version = item.get("version").intValue();
+            int version = fileVersion(item.get("version"));
             String purpose = item.get("purpose").textValue();
             if (version < 1 || !"REFERENCE".equals(purpose)
                     || !selected.add(fileId + "\u0000" + version + "\u0000" + purpose)) {
@@ -255,10 +253,9 @@ public final class AgentTaskCreationOperationController {
         for (JsonNode item : value) {
             if (!item.isObject() || !fieldNames(item).equals(ATTACHMENT_FIELDS)
                     || !item.get("fileId").isTextual()
-                    || !item.get("version").isIntegralNumber()
-                    || !item.get("version").canConvertToInt()) throw new InvalidRequest();
+                    || !item.get("version").isTextual()) throw new InvalidRequest();
             String fileId = item.get("fileId").textValue();
-            int version = item.get("version").intValue();
+            int version = fileVersion(item.get("version"));
             if (version < 1 || !selected.add(fileId + "\u0000" + version)) throw new InvalidRequest();
             attachments.add(new AgentTaskCreationOperationService.InputReference(fileId, version, "INPUT"));
         }
@@ -334,6 +331,20 @@ public final class AgentTaskCreationOperationController {
                 .body(cn.jia.core.entity.JsonResult.<Void>failure(code, message));
     }
 
+    private static int fileVersion(JsonNode value) {
+        if(value==null||!value.isTextual()||!value.textValue().matches("[1-9][0-9]{0,9}"))throw new InvalidRequest();
+        try{return Integer.parseInt(value.textValue());}catch(NumberFormatException invalid){throw new InvalidRequest();}
+    }
+    public record Reference(String fileId,String version,String purpose) { }
+    public record Attachment(String fileId,String version) { }
+    public record CreationReceipt(int schemaVersion,String operationId,String taskId,String requirementRevision,
+            String state,List<Reference> inputRefs,cn.jia.agent.entity.AgentTaskDTO task) { }
+    public record MaterialsReceipt(int schemaVersion,String operationId,String taskId,String requirementRevision,
+            String state,List<Attachment> attachments,cn.jia.agent.entity.AgentTaskDTO task) { }
+    private static CreationReceipt creationReceipt(AgentTaskCreationOperationService.Receipt value) {
+        return new CreationReceipt(value.schemaVersion(),value.operationId(),value.taskId(),Long.toString(value.requirementRevision()),value.state(),
+                value.inputRefs().stream().map(ref->new Reference(ref.fileId(),Integer.toString(ref.version()),ref.purpose())).toList(),value.task());
+    }
     public record ErrorBody(String code, String message) { }
     private static final class InvalidRequest extends RuntimeException { }
     private static final class AuthenticationFailure extends RuntimeException {

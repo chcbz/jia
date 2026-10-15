@@ -55,7 +55,7 @@ public final class ChatConversationArchiveController {
     }
 
     @PostMapping("/{conversationId}/archive-operations")
-    public ResponseEntity<JsonResult<ChatConversationArchiveService.Receipt>> archive(
+    public ResponseEntity<JsonResult<ArchiveReceipt>> archive(
             @PathVariable String conversationId,
             @RequestHeader("Idempotency-Key") String idempotencyKey,
             @RequestBody JsonRequest<Map<String, Object>> protocolRequest, Authentication authentication) {
@@ -67,16 +67,16 @@ public final class ChatConversationArchiveController {
         HttpStatus status = Set.of("pending", "saving").contains(receipt.state())
                 ? HttpStatus.ACCEPTED : HttpStatus.OK;
         return ResponseEntity.status(status).cacheControl(CacheControl.noStore())
-                .header("X-Content-Type-Options", "nosniff").body(JsonResult.success(receipt));
+                .header("X-Content-Type-Options", "nosniff").body(JsonResult.success(archiveReceipt(receipt)));
     }
 
     @GetMapping("/{conversationId}/archive-operations/{operationId}")
-    public ResponseEntity<JsonResult<ChatConversationArchiveService.Receipt>> status(
+    public ResponseEntity<JsonResult<ArchiveReceipt>> status(
             @PathVariable String conversationId, @PathVariable String operationId,
             Authentication authentication) {
         var receipt = archives.get(scope(authentication), conversationId, operationId);
         return ResponseEntity.ok().cacheControl(CacheControl.noStore())
-                .header("X-Content-Type-Options", "nosniff").body(JsonResult.success(receipt));
+                .header("X-Content-Type-Options", "nosniff").body(JsonResult.success(archiveReceipt(receipt)));
     }
 
     private ChatConversationArchiveStore.Scope scope(Authentication authentication) {
@@ -130,24 +130,17 @@ public final class ChatConversationArchiveController {
     }
 
     private static long positiveLong(Object value) {
-        try {
-            if (value instanceof String text && text.matches("[1-9][0-9]*"))
-                return Long.parseLong(text);
-            if (value instanceof Byte || value instanceof Short || value instanceof Integer
-                    || value instanceof Long || value instanceof BigInteger) {
-                long parsed = new BigInteger(String.valueOf(value)).longValueExact();
-                if (parsed > 0) return parsed;
-            }
-            if (value instanceof BigDecimal decimal && decimal.scale() <= 0) {
-                long parsed = decimal.longValueExact();
-                if (parsed > 0) return parsed;
-            }
-        } catch (ArithmeticException | NumberFormatException ignored) {
-            // Invalid shape is collapsed below.
-        }
-        throw invalid();
+        if(!(value instanceof String text)||!text.matches("[1-9][0-9]{0,18}"))throw invalid();
+        try{return Long.parseLong(text);}catch(NumberFormatException invalid){throw invalid();}
     }
-
+    public record ArchiveItem(String sourceKind,String assetId,String revision,
+            ChatConversationArchiveService.TextSelectionReceipt textSelection,String state,String fileId,String version,String errorCode,String message) { }
+    public record ArchiveReceipt(String operationId,String state,String revision,java.util.List<ArchiveItem> items) { }
+    private static ArchiveReceipt archiveReceipt(ChatConversationArchiveService.Receipt value) {
+        return new ArchiveReceipt(value.operationId(),value.state(),value.revision(),value.items().stream().map(item->new ArchiveItem(
+                item.sourceKind(),item.assetId(),item.revision(),item.textSelection(),item.state(),item.fileId(),
+                item.version()==null?null:Integer.toString(item.version()),item.errorCode(),item.message())).toList());
+    }
 
     private static int nonNegativeInt(Object value) {
         try {
