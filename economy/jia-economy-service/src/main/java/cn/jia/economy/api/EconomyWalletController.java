@@ -2,6 +2,7 @@ package cn.jia.economy.api;
 
 import cn.jia.economy.common.EconomyConstants;
 import cn.jia.economy.common.MicroSilver;
+import cn.jia.economy.common.Money;
 import cn.jia.economy.config.EconomyPreviewGate;
 import cn.jia.economy.entity.EconomyWalletLedgerRow;
 import cn.jia.economy.exception.EconomyPostingException;
@@ -64,17 +65,17 @@ public final class EconomyWalletController {
     }
 
     @GetMapping(value = "/wallet", produces = MediaType.APPLICATION_JSON_VALUE)
-    public WalletResponse wallet(HttpServletRequest request, Authentication authentication) {
+    public cn.jia.core.entity.JsonResult<WalletResponse> wallet(HttpServletRequest request, Authentication authentication) {
         requireNoQuery(request);
         Subject subject = requireSubject(authentication);
         requirePreviewScope(subject.scope());
         EconomyWalletService.WalletSnapshot snapshot = walletService.wallet(subject.scope(), subject.actorId());
-        return new WalletResponse(EconomyConstants.CURRENCY_SILVER, MicroSilver.format(snapshot.availableMicro()),
-                MicroSilver.format(snapshot.heldMicro()), Long.toString(snapshot.version()));
+        return cn.jia.core.entity.JsonResult.success(new WalletResponse(EconomyConstants.CURRENCY_SILVER, Money.silver(snapshot.availableMicro()),
+                Money.silver(snapshot.heldMicro()), Long.toString(snapshot.version())));
     }
 
     @GetMapping(value = "/ledger", produces = MediaType.APPLICATION_JSON_VALUE)
-    public LedgerResponse ledger(HttpServletRequest request, Authentication authentication) {
+    public cn.jia.core.entity.JsonResult<LedgerResponse> ledger(HttpServletRequest request, Authentication authentication) {
         Subject subject = requireSubject(authentication);
         requirePreviewScope(subject.scope());
         Query query = parseLedgerQuery(request);
@@ -82,12 +83,12 @@ public final class EconomyWalletController {
                 subject.scope(), subject.actorId(), query.cursor(), query.limit());
         List<LedgerItemResponse> items = new ArrayList<>(page.rows().size());
         for (EconomyWalletLedgerRow row : page.rows()) items.add(toLedgerItem(row));
-        return new LedgerResponse(List.copyOf(items), encodeCursor(page.nextCursor()));
+        return cn.jia.core.entity.JsonResult.success(new LedgerResponse(List.copyOf(items), encodeCursor(page.nextCursor()), page.nextCursor() != null));
     }
 
     @PostMapping(value = "/onboarding-grant", consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE)
-    public OnboardingGrantResponse claimOnboardingGrant(@cn.jia.core.annotation.ApiJsonData @RequestBody byte[] rawBody,
+    public cn.jia.core.entity.JsonResult<OnboardingGrantResponse> claimOnboardingGrant(@cn.jia.core.annotation.ApiJsonData @RequestBody byte[] rawBody,
             HttpServletRequest request, Authentication authentication) {
         requireNoQuery(request);
         requireEmptyObject(rawBody);
@@ -95,13 +96,13 @@ public final class EconomyWalletController {
         requirePreviewScope(subject.scope());
         EconomyWalletService.OnboardingGrantReceipt receipt =
                 walletService.claimOnboardingGrant(subject.scope(), subject.actorId());
-        return new OnboardingGrantResponse(receipt.transactionId(), receipt.status(),
-                MicroSilver.format(receipt.amountMicro()), receipt.campaignRef());
+        return cn.jia.core.entity.JsonResult.success(new OnboardingGrantResponse(receipt.transactionId(), receipt.status(),
+                Money.silver(receipt.amountMicro()), receipt.campaignRef()));
     }
 
     @PostMapping(value = "/preview/issuances", consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE)
-    public IssuanceResponse issue(@cn.jia.core.annotation.ApiJsonData @RequestBody byte[] rawBody, HttpServletRequest request,
+    public cn.jia.core.entity.JsonResult<IssuanceResponse> issue(@cn.jia.core.annotation.ApiJsonData @RequestBody byte[] rawBody, HttpServletRequest request,
             Authentication authentication) {
         requireNoQuery(request);
         Subject subject = requireSubject(authentication);
@@ -113,21 +114,21 @@ public final class EconomyWalletController {
         byte[] requestHash = requestHash(subject, body);
         EconomyPostingResult result = walletService.issue(subject.scope(), subject.actorId(), idempotencyKey,
                 requestHash, body.amountMicro(), body.campaignRef());
-        return new IssuanceResponse(result.transactionId(), result.status(), MicroSilver.format(body.amountMicro()));
+        return cn.jia.core.entity.JsonResult.success(new IssuanceResponse(result.transactionId(), result.status(), Money.silver(body.amountMicro())));
     }
 
     @ExceptionHandler(EconomyRequestException.class)
-    public ResponseEntity<EconomyError> requestFailure(EconomyRequestException exception) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<EconomyErrorDetails>> requestFailure(EconomyRequestException exception) {
         return error(exception.status, exception.code, exception.getMessage(), false);
     }
 
     @ExceptionHandler(HttpMessageNotReadableException.class)
-    public ResponseEntity<EconomyError> unreadableBody(HttpMessageNotReadableException ignored) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<EconomyErrorDetails>> unreadableBody(HttpMessageNotReadableException ignored) {
         return error(HttpStatus.BAD_REQUEST, "BAD_REQUEST", "Invalid economy request", false);
     }
 
     @ExceptionHandler(EconomyPostingException.class)
-    public ResponseEntity<EconomyError> postingFailure(EconomyPostingException exception) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<EconomyErrorDetails>> postingFailure(EconomyPostingException exception) {
         return switch (exception.reason()) {
             case FEATURE_DISABLED -> error(HttpStatus.FORBIDDEN, "ECONOMY_PREVIEW_DISABLED",
                     "Economy preview is disabled for this request", false);
@@ -144,7 +145,7 @@ public final class EconomyWalletController {
     }
 
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<EconomyError> unexpectedFailure(Exception ignored) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<EconomyErrorDetails>> unexpectedFailure(Exception ignored) {
         return error(HttpStatus.SERVICE_UNAVAILABLE, "ECONOMY_UNAVAILABLE",
                 "Economy service is temporarily unavailable", true);
     }
@@ -178,14 +179,14 @@ public final class EconomyWalletController {
     }
 
     private static Query parseLedgerQuery(HttpServletRequest request) {
-        Set<String> allowed = Set.of("cursor", "limit");
+        Set<String> allowed = Set.of("cursor", "pageSize");
         for (String name : request.getParameterMap().keySet()) {
             if (!allowed.contains(name) || request.getParameterValues(name) == null
                     || request.getParameterValues(name).length != 1) throw badRequest();
         }
         String[] cursorValues = request.getParameterValues("cursor");
         String cursorValue = cursorValues == null ? null : cursorValues[0];
-        String[] limitValues = request.getParameterValues("limit");
+        String[] limitValues = request.getParameterValues("pageSize");
         int limit = DEFAULT_LIMIT;
         if (limitValues != null) {
             String raw = limitValues[0];
@@ -225,11 +226,15 @@ public final class EconomyWalletController {
         try {
             JsonNode root = STRICT_JSON.readTree(rawBody);
             if (root == null || !root.isObject() || root.size() != 2
-                    || !root.has("amountMicro") || !root.has("campaignRef")
-                    || !root.get("amountMicro").isTextual() || !root.get("campaignRef").isTextual()) {
+                    || !root.has("amount") || !root.has("campaignRef")
+                    || !root.get("amount").isObject() || !root.get("campaignRef").isTextual()) {
                 throw badRequest();
             }
-            String amount = root.get("amountMicro").textValue();
+            JsonNode money = root.get("amount");
+            if (money.size() != 2 || !money.has("amountMinor") || !money.has("currency")
+                    || !money.get("amountMinor").isTextual() || !money.get("currency").isTextual()
+                    || !EconomyConstants.CURRENCY_SILVER.equals(money.get("currency").textValue())) throw badRequest();
+            String amount = money.get("amountMinor").textValue();
             String campaign = root.get("campaignRef").textValue();
             long parsed = MicroSilver.parseUnsigned(amount);
             if (parsed == 0 || !validExact(campaign, 100)) throw badRequest();
@@ -279,8 +284,8 @@ public final class EconomyWalletController {
                     "wallet ledger amount is invalid", exception);
         }
         return new LedgerItemResponse(row.getTransactionId(), row.getEntryId(), row.getBusinessType(),
-                row.getBusinessRef(), direction, MicroSilver.format(amount), row.getStatus(),
-                Long.toString(row.getPostedAt()));
+                row.getBusinessRef(), direction, Money.silver(amount), row.getStatus(),
+                row.getPostedAt());
     }
 
     private static String encodeCursor(EconomyWalletService.Cursor cursor) {
@@ -344,11 +349,12 @@ public final class EconomyWalletController {
                 "Economy preview is disabled for this request");
     }
 
-    private static ResponseEntity<EconomyError> error(
+    private static ResponseEntity<cn.jia.core.entity.JsonResult<EconomyErrorDetails>> error(
             HttpStatus status, String code, String message, boolean retryable) {
+        var result = cn.jia.core.entity.JsonResult.<EconomyErrorDetails>failure(code, message);
+        result.setData(new EconomyErrorDetails(retryable, null));
         return ResponseEntity.status(status).header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL_VALUE)
-                .contentType(new MediaType(MediaType.APPLICATION_JSON, StandardCharsets.UTF_8))
-                .body(new EconomyError(code, message, retryable, null));
+                .contentType(new MediaType(MediaType.APPLICATION_JSON, StandardCharsets.UTF_8)).body(result);
     }
 
     private record Subject(EconomyScope scope, String actorId) {
@@ -360,24 +366,24 @@ public final class EconomyWalletController {
     private record IssuanceRequest(long amountMicro, String campaignRef) {
     }
 
-    public record WalletResponse(String currency, String availableMicro, String heldMicro, String version) {
+    public record WalletResponse(String currency, Money available, Money held, String version) {
     }
 
-    public record LedgerResponse(List<LedgerItemResponse> items, String nextCursor) {
+    public record LedgerResponse(List<LedgerItemResponse> items, String nextCursor, boolean hasMore) {
     }
 
     public record LedgerItemResponse(String transactionId, String entryId, String businessType, String businessRef,
-                                     String direction, String amountMicro, String status, String postedAt) {
+                                     String direction, Money amount, String status, long postedAt) {
     }
 
-    public record IssuanceResponse(String transactionId, String status, String amountMicro) {
+    public record IssuanceResponse(String transactionId, String status, Money amount) {
     }
 
     public record OnboardingGrantResponse(
-            String transactionId, String status, String amountMicro, String campaignRef) {
+            String transactionId, String status, Money amount, String campaignRef) {
     }
 
-    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public record EconomyErrorDetails(boolean retryable, String currentVersion) { }
     public record EconomyError(String code, String message, boolean retryable, String currentVersion) {
     }
 

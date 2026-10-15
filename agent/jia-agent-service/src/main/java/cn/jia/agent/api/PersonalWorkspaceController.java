@@ -5,7 +5,6 @@ import cn.jia.core.entity.JsonRequest;
 import cn.jia.agent.entity.PersonalWorkspaceViews;
 import cn.jia.agent.exception.PersonalWorkspaceException;
 import cn.jia.agent.service.PersonalWorkspaceService;
-import cn.jia.agent.service.impl.PersonalWorkspacePreviewRenderer;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ContentDisposition;
@@ -105,7 +104,7 @@ public class PersonalWorkspaceController {
             @PathVariable String version, HttpServletRequest request,
             Authentication authentication) {
         PersonalWorkspaceService.Scope authenticatedScope = scope(authentication);
-        boolean partsView = requirePartsView(request);
+        requirePartsView(request);
         PersonalWorkspaceViews.PreviewView rendered =
                 service.preview(authenticatedScope, fileId, version(version));
         return cn.jia.core.config.ApiJsonResponses.success(json(rendered));
@@ -168,18 +167,6 @@ public class PersonalWorkspaceController {
             throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.BAD_REQUEST);
         }
         return true;
-    }
-
-    private static PersonalWorkspaceViews.PreviewView legacyPreview(
-            PersonalWorkspaceViews.PreviewView rendered) {
-        if (!"READY".equals(rendered.state())) return rendered;
-        PersonalWorkspaceViews.PreviewPart content = rendered.parts().stream()
-                .filter(part -> PersonalWorkspacePreviewRenderer.CONTENT_PART_ID.equals(part.partId()))
-                .findFirst()
-                .orElseThrow(() -> new PersonalWorkspaceException(
-                        PersonalWorkspaceException.Reason.STORAGE_CORRUPT));
-        return new PersonalWorkspaceViews.PreviewView(rendered.state(), List.of(content),
-                rendered.partial(), rendered.reason());
     }
 
     private PersonalWorkspaceService.Scope scope(Authentication authentication) {

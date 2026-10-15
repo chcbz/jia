@@ -102,12 +102,12 @@ public class OrgController {
 	 */
 	@PreAuthorize("hasAuthority('org-get_name')")
 	@RequestMapping(value = "/get/name", method = RequestMethod.GET)
-	public String findNameById(@RequestParam(name = "id") Long id) throws Exception {
+	public cn.jia.core.entity.JsonResult<String> findNameById(@RequestParam(name = "id") Long id) throws Exception {
 		OrgEntity org = orgService.get(id);
 		if(org == null) {
 			throw new EsRuntimeException(UserErrorConstants.DATA_NOT_FOUND);
 		}
-		return org.getName();
+		return cn.jia.core.entity.JsonResult.success(org.getName());
 	}
 
 	/**

@@ -83,9 +83,9 @@ public class WxPayController {
 	 * @throws Exception 异常
 	 */
 	@GetMapping("/queryOrder")
-	public WxPayOrderQueryResult queryOrder(@RequestParam(required = false) String transactionId,
+	public cn.jia.core.entity.JsonResult<WxPayOrderQueryResult> queryOrder(@RequestParam(required = false) String transactionId,
 			@RequestParam(required = false) String outTradeNo, HttpServletRequest request) throws Exception {
-		return payInfoService.findWxPayService(request).queryOrder(transactionId, outTradeNo);
+		return cn.jia.core.entity.JsonResult.success(payInfoService.findWxPayService(request).queryOrder(transactionId, outTradeNo));
 	}
 
 	/**
@@ -105,9 +105,9 @@ public class WxPayController {
 	 * @throws Exception 异常
 	 */
 	@org.springframework.web.bind.annotation.PostMapping("/closeOrder/{outTradeNo}")
-	public WxPayOrderCloseResult closeOrder(@PathVariable String outTradeNo, HttpServletRequest request) throws Exception {
+	public cn.jia.core.entity.JsonResult<WxPayOrderCloseResult> closeOrder(@PathVariable String outTradeNo, HttpServletRequest request) throws Exception {
 		try {
-			return payInfoService.findWxPayService(request).closeOrder(outTradeNo);
+			return cn.jia.core.entity.JsonResult.success(payInfoService.findWxPayService(request).closeOrder(outTradeNo));
 		} catch (WxPayException e) {
 			e.printStackTrace();
 			throw new RuntimeException(e);
@@ -116,9 +116,9 @@ public class WxPayController {
 	}
 
 	@PostMapping("/createOrder")
-	public <T> T createOrder(@RequestBody JsonRequest<WxPayUnifiedOrderRequest> protocolRequest, HttpServletRequest req) throws Exception {
+	public <T> cn.jia.core.entity.JsonResult<T> createOrder(@RequestBody JsonRequest<WxPayUnifiedOrderRequest> protocolRequest, HttpServletRequest req) throws Exception {
         WxPayUnifiedOrderRequest request = protocolRequest == null ? null : protocolRequest.data();
-		return payInfoService.findWxPayService(req).createOrder(request);
+		return cn.jia.core.entity.JsonResult.success(payInfoService.findWxPayService(req).createOrder(request));
 	}
 
 	/**
@@ -133,7 +133,7 @@ public class WxPayController {
 	 */
 	@SuppressWarnings("unchecked")
 	@org.springframework.web.bind.annotation.PostMapping("/createOrder/product")
-	public <T> T createOrder(@RequestParam(required = false) String productId, @RequestParam(required = false) String jiacn,
+	public <T> cn.jia.core.entity.JsonResult<T> createOrder(@RequestParam(required = false) String productId, @RequestParam(required = false) String jiacn,
 							 @RequestParam(required = false) String outTradeNo, @RequestParam String tradeType,
 							 HttpServletRequest request) throws Exception {
 		WxPayService wxPayService = payInfoService.findWxPayService(request);
@@ -172,10 +172,10 @@ public class WxPayController {
 		String nonceStr = String.valueOf(System.currentTimeMillis());
 		switch (order.getTradeType()) {
 			case WxPayConstants.TradeType.MWEB -> {
-				return (T) new WxPayMwebOrderResult(unifiedOrderResult.getMwebUrl());
+				return cn.jia.core.entity.JsonResult.success((T) new WxPayMwebOrderResult(unifiedOrderResult.getMwebUrl()));
 			}
 			case WxPayConstants.TradeType.NATIVE -> {
-				return (T) new WxPayNativeOrderResult(unifiedOrderResult.getCodeURL());
+				return cn.jia.core.entity.JsonResult.success((T) new WxPayNativeOrderResult(unifiedOrderResult.getCodeURL()));
 			}
 			case WxPayConstants.TradeType.APP -> {
 				// APP支付绑定的是微信开放平台上的账号，APPID为开放平台上绑定APP后发放的参数
@@ -210,7 +210,7 @@ public class WxPayController {
 						.timeStamp(timestamp)
 						.nonceStr(nonceStr)
 						.build();
-				return (T) result;
+				return cn.jia.core.entity.JsonResult.success((T) result);
 			}
 			case WxPayConstants.TradeType.JSAPI -> {
 				String signType = WxPayConstants.SignType.MD5;
@@ -229,7 +229,7 @@ public class WxPayController {
 
 				payResult.setPaySign(SignUtils.createSign(payResult, signType, wxPayService.getConfig().getMchKey(),
 						null));
-				return (T) payResult;
+				return cn.jia.core.entity.JsonResult.success((T) payResult);
 			}
 			default -> {
 				throw new WxPayException("该交易类型暂不支持");
@@ -247,9 +247,9 @@ public class WxPayController {
 	 * @throws Exception 异常
 	 */
 	@PostMapping("/unifiedOrder")
-	public WxPayUnifiedOrderResult unifiedOrder(@RequestBody JsonRequest<WxPayUnifiedOrderRequest> protocolRequest, HttpServletRequest req) throws Exception {
+	public cn.jia.core.entity.JsonResult<WxPayUnifiedOrderResult> unifiedOrder(@RequestBody JsonRequest<WxPayUnifiedOrderRequest> protocolRequest, HttpServletRequest req) throws Exception {
         WxPayUnifiedOrderRequest request = protocolRequest == null ? null : protocolRequest.data();
-		return payInfoService.findWxPayService(req).unifiedOrder(request);
+		return cn.jia.core.entity.JsonResult.success(payInfoService.findWxPayService(req).unifiedOrder(request));
 	}
 
 	/**
@@ -262,7 +262,7 @@ public class WxPayController {
 	 * @throws Exception 异常信息
 	 */
 	@org.springframework.web.bind.annotation.PostMapping("/unifiedOrder/product")
-	public WxPayUnifiedOrderResult unifiedOrder(@RequestParam String productId, @RequestParam String openid,
+	public cn.jia.core.entity.JsonResult<WxPayUnifiedOrderResult> unifiedOrder(@RequestParam String productId, @RequestParam String openid,
 			@RequestParam String tradeType, HttpServletRequest request) throws Exception {
         WxPayService wxPayService = payInfoService.findWxPayService(request);
 		PayOrderParseVO payOrderParseVO = new PayOrderParseVO();
@@ -290,7 +290,7 @@ public class WxPayController {
         //保存预支付信息
         payOrder.setPrepayId(orderResult.getPrepayId());
         payOrderService.create(payOrder);
-		return orderResult;
+		return cn.jia.core.entity.JsonResult.success(orderResult);
 	}
 
 	/**
@@ -306,9 +306,9 @@ public class WxPayController {
 	 * @throws Exception 异常
 	 */
 	@PostMapping("/refund")
-	public WxPayRefundResult refund(@RequestBody JsonRequest<WxPayRefundRequest> protocolRequest, HttpServletRequest req) throws Exception {
+	public cn.jia.core.entity.JsonResult<WxPayRefundResult> refund(@RequestBody JsonRequest<WxPayRefundRequest> protocolRequest, HttpServletRequest req) throws Exception {
         WxPayRefundRequest request = protocolRequest == null ? null : protocolRequest.data();
-		return payInfoService.findWxPayService(req).refund(request);
+		return cn.jia.core.entity.JsonResult.success(payInfoService.findWxPayService(req).refund(request));
 	}
 
 	/**
@@ -335,10 +335,10 @@ public class WxPayController {
 	 * @throws Exception 异常
 	 */
 	@GetMapping("/refundQuery")
-	public WxPayRefundQueryResult refundQuery(@RequestParam(required = false) String transactionId,
+	public cn.jia.core.entity.JsonResult<WxPayRefundQueryResult> refundQuery(@RequestParam(required = false) String transactionId,
 											  @RequestParam(required = false) String outTradeNo, @RequestParam(required = false) String outRefundNo,
 											  @RequestParam(required = false) String refundId, HttpServletRequest request) throws Exception {
-		return payInfoService.findWxPayService(request).refundQuery(transactionId, outTradeNo, outRefundNo, refundId);
+		return cn.jia.core.entity.JsonResult.success(payInfoService.findWxPayService(request).refundQuery(transactionId, outTradeNo, outRefundNo, refundId));
 	}
 
 	/**
@@ -440,9 +440,9 @@ public class WxPayController {
 	 * @throws Exception 异常
 	 */
 	@PostMapping("/sendRedpack")
-	public WxPaySendRedpackResult sendRedpack(@RequestBody JsonRequest<WxPaySendRedpackRequest> protocolRequest, HttpServletRequest req) throws Exception {
+	public cn.jia.core.entity.JsonResult<WxPaySendRedpackResult> sendRedpack(@RequestBody JsonRequest<WxPaySendRedpackRequest> protocolRequest, HttpServletRequest req) throws Exception {
         WxPaySendRedpackRequest request = protocolRequest == null ? null : protocolRequest.data();
-		return payInfoService.findWxPayService(req).getRedpackService().sendRedpack(request);
+		return cn.jia.core.entity.JsonResult.success(payInfoService.findWxPayService(req).getRedpackService().sendRedpack(request));
 	}
 
 	/**
@@ -459,8 +459,8 @@ public class WxPayController {
 	 * @throws Exception 异常
 	 */
 	@GetMapping("/queryRedpack/{mchBillNo}")
-	public WxPayRedpackQueryResult queryRedpack(@PathVariable String mchBillNo, HttpServletRequest request) throws Exception {
-		return payInfoService.findWxPayService(request).getRedpackService().queryRedpack(mchBillNo);
+	public cn.jia.core.entity.JsonResult<WxPayRedpackQueryResult> queryRedpack(@PathVariable String mchBillNo, HttpServletRequest request) throws Exception {
+		return cn.jia.core.entity.JsonResult.success(payInfoService.findWxPayService(request).getRedpackService().queryRedpack(mchBillNo));
 	}
 
 	/**
@@ -478,9 +478,9 @@ public class WxPayController {
 	 * @throws Exception 异常
 	 */
 	@PostMapping("/entPay")
-	public EntPayResult entPay(@RequestBody JsonRequest<EntPayRequest> protocolRequest, HttpServletRequest req) throws Exception {
+	public cn.jia.core.entity.JsonResult<EntPayResult> entPay(@RequestBody JsonRequest<EntPayRequest> protocolRequest, HttpServletRequest req) throws Exception {
         EntPayRequest request = protocolRequest == null ? null : protocolRequest.data();
-		return payInfoService.findWxPayService(req).getEntPayService().entPay(request);
+		return cn.jia.core.entity.JsonResult.success(payInfoService.findWxPayService(req).getEntPayService().entPay(request));
 	}
 
 	/**
@@ -496,8 +496,8 @@ public class WxPayController {
 	 * @throws Exception 异常
 	 */
 	@GetMapping("/queryEntPay/{partnerTradeNo}")
-	public EntPayQueryResult queryEntPay(@PathVariable String partnerTradeNo, HttpServletRequest request) throws Exception {
-		return payInfoService.findWxPayService(request).getEntPayService().queryEntPay(partnerTradeNo);
+	public cn.jia.core.entity.JsonResult<EntPayQueryResult> queryEntPay(@PathVariable String partnerTradeNo, HttpServletRequest request) throws Exception {
+		return cn.jia.core.entity.JsonResult.success(payInfoService.findWxPayService(request).getEntPayService().queryEntPay(partnerTradeNo));
 	}
 
 	/**
@@ -619,9 +619,9 @@ public class WxPayController {
 	 * @throws Exception 异常
 	 */
 	@GetMapping("/downloadBill")
-	public WxPayBillResult downloadBill(@RequestParam String billDate, @RequestParam String billType,
+	public cn.jia.core.entity.JsonResult<WxPayBillResult> downloadBill(@RequestParam String billDate, @RequestParam String billType,
 										@RequestParam String tarType, @RequestParam String deviceInfo, HttpServletRequest request) throws Exception {
-		return payInfoService.findWxPayService(request).downloadBill(billDate, billType, tarType, deviceInfo);
+		return cn.jia.core.entity.JsonResult.success(payInfoService.findWxPayService(request).downloadBill(billDate, billType, tarType, deviceInfo));
 	}
 
 	/**
@@ -638,9 +638,9 @@ public class WxPayController {
 	 * @throws Exception 异常
 	 */
 	@PostMapping("/micropay")
-	public WxPayMicropayResult micropay(@RequestBody JsonRequest<WxPayMicropayRequest> protocolRequest, HttpServletRequest req) throws Exception {
+	public cn.jia.core.entity.JsonResult<WxPayMicropayResult> micropay(@RequestBody JsonRequest<WxPayMicropayRequest> protocolRequest, HttpServletRequest req) throws Exception {
         WxPayMicropayRequest request = protocolRequest == null ? null : protocolRequest.data();
-		return payInfoService.findWxPayService(req).micropay(request);
+		return cn.jia.core.entity.JsonResult.success(payInfoService.findWxPayService(req).micropay(request));
 	}
 
 	/**
@@ -657,39 +657,39 @@ public class WxPayController {
 	 * @throws Exception 异常
 	 */
 	@PostMapping("/reverseOrder")
-	public WxPayOrderReverseResult reverseOrder(@RequestBody JsonRequest<WxPayOrderReverseRequest> protocolRequest, HttpServletRequest req) throws Exception {
+	public cn.jia.core.entity.JsonResult<WxPayOrderReverseResult> reverseOrder(@RequestBody JsonRequest<WxPayOrderReverseRequest> protocolRequest, HttpServletRequest req) throws Exception {
         WxPayOrderReverseRequest request = protocolRequest == null ? null : protocolRequest.data();
-		return payInfoService.findWxPayService(req).reverseOrder(request);
+		return cn.jia.core.entity.JsonResult.success(payInfoService.findWxPayService(req).reverseOrder(request));
 	}
 
 	@GetMapping("/getSandboxSignKey")
-	public String getSandboxSignKey(HttpServletRequest request) throws Exception {
-		return payInfoService.findWxPayService(request).getSandboxSignKey();
+	public cn.jia.core.entity.JsonResult<String> getSandboxSignKey(HttpServletRequest request) throws Exception {
+		return cn.jia.core.entity.JsonResult.success(payInfoService.findWxPayService(request).getSandboxSignKey());
 	}
 
 	@PostMapping("/sendCoupon")
-	public WxPayCouponSendResult sendCoupon(@RequestBody JsonRequest<WxPayCouponSendRequest> protocolRequest, HttpServletRequest req) throws Exception {
+	public cn.jia.core.entity.JsonResult<WxPayCouponSendResult> sendCoupon(@RequestBody JsonRequest<WxPayCouponSendRequest> protocolRequest, HttpServletRequest req) throws Exception {
         WxPayCouponSendRequest request = protocolRequest == null ? null : protocolRequest.data();
-		return payInfoService.findWxPayService(req).sendCoupon(request);
+		return cn.jia.core.entity.JsonResult.success(payInfoService.findWxPayService(req).sendCoupon(request));
 	}
 
 	@PostMapping("/queryCouponStock")
-	public WxPayCouponStockQueryResult queryCouponStock(@RequestBody JsonRequest<WxPayCouponStockQueryRequest> protocolRequest, HttpServletRequest req)
+	public cn.jia.core.entity.JsonResult<WxPayCouponStockQueryResult> queryCouponStock(@RequestBody JsonRequest<WxPayCouponStockQueryRequest> protocolRequest, HttpServletRequest req)
 			throws Exception {
         WxPayCouponStockQueryRequest request = protocolRequest == null ? null : protocolRequest.data();
-		return payInfoService.findWxPayService(req).queryCouponStock(request);
+		return cn.jia.core.entity.JsonResult.success(payInfoService.findWxPayService(req).queryCouponStock(request));
 	}
 
 	@PostMapping("/queryCouponInfo")
-	public WxPayCouponInfoQueryResult queryCouponInfo(@RequestBody JsonRequest<WxPayCouponInfoQueryRequest> protocolRequest, HttpServletRequest req)
+	public cn.jia.core.entity.JsonResult<WxPayCouponInfoQueryResult> queryCouponInfo(@RequestBody JsonRequest<WxPayCouponInfoQueryRequest> protocolRequest, HttpServletRequest req)
 			throws Exception {
         WxPayCouponInfoQueryRequest request = protocolRequest == null ? null : protocolRequest.data();
-		return payInfoService.findWxPayService(req).queryCouponInfo(request);
+		return cn.jia.core.entity.JsonResult.success(payInfoService.findWxPayService(req).queryCouponInfo(request));
 	}
 
 	@PostMapping("/queryComment")
-	public String queryComment(Date beginDate, Date endDate, Integer offset, Integer limit) {
-		return this.queryComment(beginDate, endDate, offset, limit);
+	public cn.jia.core.entity.JsonResult<String> queryComment(Date beginDate, Date endDate, Integer offset, Integer limit) {
+		return cn.jia.core.entity.JsonResult.success(this.queryComment(beginDate, endDate, offset, limit));
 	}
 
 	/**

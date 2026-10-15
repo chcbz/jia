@@ -110,13 +110,13 @@ public class UserController {
      */
     @PreAuthorize("hasAuthority('user-get_name')")
     @RequestMapping(value = "/get/name", method = RequestMethod.GET)
-    public String findNameById(@RequestParam(name = "id") Long id) {
+    public cn.jia.core.entity.JsonResult<String> findNameById(@RequestParam(name = "id") Long id) {
         UserEntity user = userService.get(id);
         String name = "";
         if (user != null) {
             name = user.getNickname();
         }
-        return name;
+        return cn.jia.core.entity.JsonResult.success(name);
     }
 
     /**

@@ -359,8 +359,8 @@ public class LoginController {
      * @return 用户信息
      */
     @RequestMapping(value = "/user", method = RequestMethod.GET)
-    public Principal info(Principal user) {
-        return user;
+    public cn.jia.core.entity.JsonResult<Principal> info(Principal user) {
+        return cn.jia.core.entity.JsonResult.success(user);
     }
 
     @GetMapping(value = "/user/info")
