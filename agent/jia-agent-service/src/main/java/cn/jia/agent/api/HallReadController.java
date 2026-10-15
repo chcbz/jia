@@ -22,15 +22,15 @@ public class HallReadController {
     public HallReadController(HallReadService service) { this.service = Objects.requireNonNull(service); }
 
     @GetMapping(value = "/overview", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<cn.jia.core.entity.JsonResult<HallReadService.Overview>> overview(HttpServletRequest request,
+    public ResponseEntity<cn.jia.core.entity.JsonResult<HallReadWire.Overview>> overview(HttpServletRequest request,
             Authentication authentication) {
         var scope = HallRequestDraftController.scope(authentication);
         HallRequestDraftController.requireNoQuery(request);
-        return cn.jia.core.config.ApiJsonResponses.success(HallRequestDraftController.ok(service.overview(scope)));
+        return cn.jia.core.config.ApiJsonResponses.success(HallRequestDraftController.ok(HallReadWire.from(service.overview(scope))));
     }
 
     @GetMapping(value = "/items", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<cn.jia.core.entity.JsonResult<HallReadService.Items>> items(@RequestParam(required = false) String kind,
+    public ResponseEntity<cn.jia.core.entity.JsonResult<HallReadWire.Items>> items(@RequestParam(required = false) String kind,
             @RequestParam(required = false) String view, @RequestParam(required = false) String q,
             @RequestParam(required = false) String cursor, HttpServletRequest request,
             Authentication authentication) {
@@ -40,7 +40,7 @@ public class HallReadController {
                 || request.getParameterMap().values().stream().anyMatch(v -> v.length != 1)) {
             throw new HallRequestDraftController.RequestFailure();
         }
-        return cn.jia.core.config.ApiJsonResponses.success(HallRequestDraftController.ok(service.items(scope, kind, view, q, cursor)));
+        return cn.jia.core.config.ApiJsonResponses.success(HallRequestDraftController.ok(HallReadWire.from(service.items(scope, kind, view, q, cursor))));
     }
 
     @ExceptionHandler(HallRequestDraftController.AuthenticationFailure.class)

@@ -102,7 +102,7 @@ public final class AgentHostingRentController {
     public Object rentFailure(RuntimeException failure) { return HostingRentErrors.response(failure); }
 
     private Object success(Object data) {
-        return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL).body(JsonResult.success(data));
+        return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL).body(JsonResult.success(EconomyOperationWire.hosting(data)));
     }
 
     @ExceptionHandler(AuthenticationFailure.class)

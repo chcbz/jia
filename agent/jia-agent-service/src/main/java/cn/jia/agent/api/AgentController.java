@@ -208,7 +208,7 @@ public class AgentController {
                         HostingRentHttp.key(servletRequest), body);
                 return ResponseEntity.accepted()
                         .header(HttpHeaders.CACHE_CONTROL, "private, no-store")
-                        .body(JsonResult.success(receipt));
+                        .body(JsonResult.success(EconomyOperationWire.hosting(receipt)));
             } catch (RuntimeException failure) {
                 return HostingRentErrors.response(failure);
             }
@@ -396,8 +396,8 @@ public class AgentController {
         AgentTaskQuoteRequestDTO request = protocolRequest == null ? null : protocolRequest.data();
         FundedBountyActor actor = requireMoneyActor(authentication);
         FundedBountyQuoteClaimService service = requireFundedBountyQuoteClaimService();
-        return JsonResult.success(service.quote(actor, idempotencyKey,
-                FundedBountyRequestDigest.quote(taskId, request), taskId, request));
+        return JsonResult.success(EconomyOperationWire.from(service.quote(actor, idempotencyKey,
+                FundedBountyRequestDigest.quote(taskId, request), taskId, request)));
     }
 
     @PostMapping("/tasks/{taskId}/claim")
@@ -408,8 +408,8 @@ public class AgentController {
         AgentTaskClaimRequestDTO request = protocolRequest == null ? null : protocolRequest.data();
         FundedBountyActor actor = requireMoneyActor(authentication);
         FundedBountyQuoteClaimService service = requireFundedBountyQuoteClaimService();
-        return JsonResult.success(service.claim(actor, idempotencyKey,
-                FundedBountyRequestDigest.claim(taskId, request), taskId, request));
+        return JsonResult.success(EconomyOperationWire.from(service.claim(actor, idempotencyKey,
+                FundedBountyRequestDigest.claim(taskId, request), taskId, request)));
     }
 
     @PostMapping("/tasks/{taskId}/assign")

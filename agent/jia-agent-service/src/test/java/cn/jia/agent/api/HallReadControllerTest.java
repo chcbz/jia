@@ -22,7 +22,7 @@ class HallReadControllerTest {
     @BeforeEach void setUp() {
         service = mock(HallReadService.class);
         mvc = MockMvcBuilders.standaloneSetup(new HallReadController(service))
-                .addFilters(new HallRequestDraftCacheControlFilter()).build();
+                .setControllerAdvice(new cn.jia.core.config.ApiEnvelopeAdvice(),new cn.jia.core.config.ExceptionHandlerAdvice()).addFilters(new cn.jia.core.filter.RequestIdFilter(),new HallRequestDraftCacheControlFilter()).build();
     }
     @Test void overviewContractHasExplicitSourceFailuresAndNullCount() throws Exception {
         var source = new HallReadService.SourceStatus("error", "HALL_SOURCE_UNAVAILABLE");
@@ -33,10 +33,10 @@ class HallReadControllerTest {
                         Map.of("recent", Map.of("private", source), "needsAction", Map.of("private", source)), 1000));
         mvc.perform(get("/agent/hall/overview").principal(jwt("owner-a", "client-a")))
                 .andExpect(status().isOk()).andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
-                .andExpect(jsonPath("$.schemaVersion").value(1))
-                .andExpect(jsonPath("$.sections.recent.partitions.private.status").value("error"))
-                .andExpect(jsonPath("$.sourceStatus.recent.private.errorCode").value("HALL_SOURCE_UNAVAILABLE"))
-                .andExpect(jsonPath("$.sections.recent.partitions.private.count").value(org.hamcrest.Matchers.nullValue()));
+                .andExpect(jsonPath("$.data.schemaVersion").value(1))
+                .andExpect(jsonPath("$.data.sections.recent.partitions.private.status").value("error"))
+                .andExpect(jsonPath("$.data.sourceStatus.recent.private.errorCode").value("HALL_SOURCE_UNAVAILABLE"))
+                .andExpect(jsonPath("$.data.sections.recent.partitions.private.count").value(org.hamcrest.Matchers.nullValue()));
     }
     @Test void authScopeAndUnknownOrDuplicateQueryParametersAreRejected() throws Exception {
         mvc.perform(get("/agent/hall/overview")).andExpect(status().isUnauthorized())
@@ -56,8 +56,8 @@ class HallReadControllerTest {
                         Map.of("private",new HallReadService.SourceStatus("complete",null)),1000));
         mvc.perform(get("/agent/hall/items?kind=private&view=archive").principal(jwt("owner-a", "client-a")))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.view").value("archive"))
-                .andExpect(jsonPath("$.section.partitions.private.status").value("complete"));
+                .andExpect(jsonPath("$.data.view").value("archive"))
+                .andExpect(jsonPath("$.data.section.partitions.private.status").value("complete"));
         verify(service).items(scope, "private", "archive", null, null);
     }
     @Test void jwtClaimsWithoutAuthenticationCannotReadOverviewOrItems() throws Exception {
