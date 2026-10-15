@@ -67,7 +67,8 @@ public final class PersonalWorkspaceConversationRuntimeController {
     @GetMapping(value="/conversation-executions/commands",produces=MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<cn.jia.core.entity.JsonResult<ConversationQueue>> commands(HttpServletRequest request,Authentication authentication) {
         noQuery(request);
-        var queue=new ConversationQueue(executions.runtimeConversationCommandViews(scope(authentication),16));
+        var queue=new ConversationQueue(executions.runtimeConversationCommandViews(scope(authentication),16).stream()
+                .map(value->value instanceof cn.jia.agent.service.SkillExecutionService.Command skill?SkillCommandResponse.from(skill):value).toList());
         return cn.jia.core.config.ApiJsonResponses.success(ok(runtimeAuthentication.withNativeFence(authentication,()->queue)));
     }
 
@@ -282,32 +283,48 @@ public final class PersonalWorkspaceConversationRuntimeController {
                 // Explicit wire-to-domain projection; the service still owns a Java long fence.
                 ((tools.jackson.databind.node.ObjectNode) fence).put("version",trustedFence.version());
             }
-            return STRICT_JSON.treeToValue(body,type);
+            var projected=(tools.jackson.databind.node.ObjectNode)body;
+            for(var entry:java.util.Map.of("snapshotSha256","snapshotDigest","effectSha256","effectDigest","resultSha256","resultDigest").entrySet()) {
+                if(!projected.has(entry.getKey()))continue;
+                JsonNode value=projected.remove(entry.getKey());
+                if(!("resultSha256".equals(entry.getKey()) && value.isNull())
+                        && (!text(value)||!value.textValue().matches("[a-f0-9]{64}")))throw new BadRequest();
+                projected.set(entry.getValue(),value);
+            }
+            if(projected.has("artifacts")) {
+                var artifacts=projected.get("artifacts");if(!artifacts.isArray())throw new BadRequest();
+                for(var artifact:artifacts) {
+                    if(!artifact.isObject()||!fields(artifact).equals(Set.of("outputId","sha256","byteLength"))
+                            ||!text(artifact.get("byteLength")))throw new BadRequest();
+                    ((tools.jackson.databind.node.ObjectNode)artifact).put("byteLength",decimalLength(artifact.get("byteLength").textValue()));
+                }
+            }
+            return STRICT_JSON.treeToValue(projected,type);
         }catch(RuntimeException invalid){throw new BadRequest();}
     }
     @PostMapping(value="/{taskId}/runs/{runId}/conversation/effects/{effectId}/start",consumes=MediaType.APPLICATION_JSON_VALUE,produces=MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<cn.jia.core.entity.JsonResult<cn.jia.agent.service.SkillExecutionService.EffectReceipt>> skillEffectStart(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<EffectReceiptResponse>> skillEffectStart(
             @PathVariable String taskId,@PathVariable String runId,@PathVariable String effectId,@cn.jia.core.annotation.ApiJsonData @RequestBody String raw,HttpServletRequest request,Authentication authentication) {
-        noQuery(request);var command=skillBody(raw,Set.of("executionId","snapshotDigest","fence","effectDigest","providerBindingRevision"),cn.jia.agent.service.SkillExecutionService.EffectStart.class);
-        return cn.jia.core.config.ApiJsonResponses.success(ok(skillCall(()->runtimeAuthentication.withNativeFence(authentication,()->skills().startEffect(scope(authentication),taskId,runId,effectId,command)))));
+        noQuery(request);var command=skillBody(raw,Set.of("executionId","snapshotSha256","fence","effectSha256","providerBindingRevision"),cn.jia.agent.service.SkillExecutionService.EffectStart.class);
+        return cn.jia.core.config.ApiJsonResponses.success(ok(skillCall(()->runtimeAuthentication.withNativeFence(authentication,()->skills().startEffect(scope(authentication),taskId,runId,effectId,command)))), EffectReceiptResponse::from);
     }
     @PostMapping(value="/{taskId}/runs/{runId}/conversation/effects/{effectId}/result",consumes=MediaType.APPLICATION_JSON_VALUE,produces=MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<cn.jia.core.entity.JsonResult<cn.jia.agent.service.SkillExecutionService.EffectReceipt>> skillEffectResult(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<EffectReceiptResponse>> skillEffectResult(
             @PathVariable String taskId,@PathVariable String runId,@PathVariable String effectId,@cn.jia.core.annotation.ApiJsonData @RequestBody String raw,HttpServletRequest request,Authentication authentication) {
-        noQuery(request);var command=skillBody(raw,Set.of("executionId","snapshotDigest","fence","effectDigest","providerBindingRevision","status","providerRequestId","resultDigest"),cn.jia.agent.service.SkillExecutionService.EffectResult.class);
-        return cn.jia.core.config.ApiJsonResponses.success(ok(skillCall(()->runtimeAuthentication.withNativeFence(authentication,()->skills().recordEffect(scope(authentication),taskId,runId,effectId,command)))));
+        noQuery(request);var command=skillBody(raw,Set.of("executionId","snapshotSha256","fence","effectSha256","providerBindingRevision","status","providerRequestId","resultSha256"),cn.jia.agent.service.SkillExecutionService.EffectResult.class);
+        return cn.jia.core.config.ApiJsonResponses.success(ok(skillCall(()->runtimeAuthentication.withNativeFence(authentication,()->skills().recordEffect(scope(authentication),taskId,runId,effectId,command)))), EffectReceiptResponse::from);
     }
     @PostMapping(value="/{taskId}/runs/{runId}/conversation/resume",consumes=MediaType.APPLICATION_JSON_VALUE,produces=MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<cn.jia.core.entity.JsonResult<ResumeResponse>> skillResume(
             @PathVariable String taskId,@PathVariable String runId,@cn.jia.core.annotation.ApiJsonData @RequestBody String raw,HttpServletRequest request,Authentication authentication) {
-        noQuery(request);var command=skillBody(raw,Set.of("executionId","snapshotDigest"),cn.jia.agent.service.SkillExecutionService.Resume.class);
+        noQuery(request);var command=skillBody(raw,Set.of("executionId","snapshotSha256"),cn.jia.agent.service.SkillExecutionService.Resume.class);
         return cn.jia.core.config.ApiJsonResponses.success(ok(skillCall(()->runtimeAuthentication.withNativeFence(authentication,()->skills().resume(scope(authentication),taskId,runId,command)))), ResumeResponse::from);
     }
     @PostMapping(value="/{taskId}/runs/{runId}/conversation/result-commits/{manifestId}",consumes=MediaType.APPLICATION_JSON_VALUE,produces=MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<cn.jia.core.entity.JsonResult<cn.jia.agent.service.SkillExecutionService.ResultReceipt>> skillResultCommit(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<ResultReceiptResponse>> skillResultCommit(
             @PathVariable String taskId,@PathVariable String runId,@PathVariable String manifestId,@cn.jia.core.annotation.ApiJsonData @RequestBody String raw,HttpServletRequest request,Authentication authentication) {
-        noQuery(request);var command=skillBody(raw,Set.of("fence","snapshotDigest","data","artifacts","inputReceipts"),cn.jia.agent.service.SkillExecutionService.ResultCommit.class);
-        return cn.jia.core.config.ApiJsonResponses.success(ok(skillCall(()->skills().commitResult(scope(authentication),taskId,runId,manifestId,command))));
+        noQuery(request);var command=skillBody(raw,Set.of("fence","snapshotSha256","data","artifacts","inputReceipts"),cn.jia.agent.service.SkillExecutionService.ResultCommit.class);
+        return cn.jia.core.config.ApiJsonResponses.success(ok(skillCall(()->skills().commitResult(scope(authentication),taskId,runId,manifestId,command))), ResultReceiptResponse::from);
     }
 
     @PostMapping(value="/{taskId}/runs/{runId}/conversation/failure",consumes=MediaType.APPLICATION_JSON_VALUE,
@@ -454,8 +471,31 @@ public final class PersonalWorkspaceConversationRuntimeController {
                 .contentType(new MediaType(MediaType.APPLICATION_JSON,StandardCharsets.UTF_8))
                 .body(cn.jia.core.entity.JsonResult.<Void>failure(code,"Native conversation execution unavailable"));
     }
-    public record ConversationQueue(List<? extends PersonalWorkspaceExecutionService.ConversationCommandView> items) { }
+    public record ConversationQueue(List<?> items) { }
     public record ConversationQueueV3(List<PersonalWorkspaceExecutionService.ControlledConversationRuntimeCommandV3> items) { }
+    private static long decimalLength(String value) {
+        if(value==null||!value.matches("0|[1-9][0-9]{0,18}"))throw new BadRequest();
+        try{return Long.parseLong(value);}catch(NumberFormatException invalid){throw new BadRequest();}
+    }
+    public record EffectReceiptResponse(int schemaVersion,String disposition,String status,String providerRequestId,String resultSha256) {
+        static EffectReceiptResponse from(cn.jia.agent.service.SkillExecutionService.EffectReceipt value) {
+            return new EffectReceiptResponse(value.schemaVersion(),value.disposition(),value.status(),value.providerRequestId(),value.resultDigest());
+        }
+    }
+    public record ResultReceiptResponse(String manifestId,String state,String phase,String resultSha256) {
+        static ResultReceiptResponse from(cn.jia.agent.service.SkillExecutionService.ResultReceipt value) {
+            return new ResultReceiptResponse(value.manifestId(),value.state(),value.phase(),value.resultDigest());
+        }
+    }
+    public record SkillCommandResponse(int executionProtocolVersion,String executionId,String taskId,String runId,
+            String conversationId,String conversationGeneration,String commandId,String messageId,cn.jia.agent.service.SkillExecutionService.Skill skill,
+            String snapshotSha256,java.util.Map<String,Object> parameters,String instruction,List<String> inputRefs,java.util.Map<String,Object> outputs) {
+        static SkillCommandResponse from(cn.jia.agent.service.SkillExecutionService.Command value) {
+            return new SkillCommandResponse(value.executionProtocolVersion(),value.executionId(),value.taskId(),value.runId(),
+                    value.conversationId(),value.conversationGeneration(),value.commandId(),value.messageId(),value.skill(),
+                    value.snapshotDigest(),value.parameters(),value.instruction(),value.inputRefs(),value.outputs());
+        }
+    }
     public record ClaimRequest(String commandId,String messageId) { }
     public record FenceRequest(String version,String token) { }
     public record LeaseResponse(String executionId,String version,String token,long expiresAt) {
@@ -463,11 +503,17 @@ public final class PersonalWorkspaceConversationRuntimeController {
             return new LeaseResponse(lease.executionId(),Long.toString(lease.version()),lease.token(),lease.expiresAt());
         }
     }
-    public record InputsResponse(int schemaVersion,String executionId,String leaseVersion,String snapshotDigest,
+    public record InputsResponse(int schemaVersion,String executionId,String leaseVersion,String snapshotSha256,
             boolean noReferencedMaterials,List<java.util.Map<String,Object>> inputs) {
         static InputsResponse from(cn.jia.agent.service.SkillExecutionService.Inputs value) {
             return new InputsResponse(value.schemaVersion(),value.executionId(),Long.toString(value.leaseVersion()),
-                    value.snapshotDigest(),value.noReferencedMaterials(),value.inputs());
+                    value.snapshotDigest(),value.noReferencedMaterials(),value.inputs().stream().map(input->{
+                        var wire=new java.util.LinkedHashMap<String,Object>(input);
+                        Object length=wire.get("byteLength");
+                        if(length instanceof Long || length instanceof Integer) wire.put("byteLength",Long.toString(((Number)length).longValue()));
+                        else if(!(length instanceof String text)||!text.matches("0|[1-9][0-9]*"))throw new IllegalStateException("Invalid private input length");
+                        return java.util.Map.copyOf(wire);
+                    }).toList());
         }
     }
     public record ResumeResponse(LeaseResponse lease,String phase,List<String> allowedWork,java.util.Map<String,Object> resultManifest) {

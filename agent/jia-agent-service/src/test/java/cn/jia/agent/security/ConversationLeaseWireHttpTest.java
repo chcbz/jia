@@ -75,17 +75,30 @@ class ConversationLeaseWireHttpTest {
         call("/inputs","{\"version\":\"9007199254740993\",\"token\":\""+TOKEN+"\"}")
                 .andExpect(status().isOk()).andExpect(jsonPath("$.data.leaseVersion").value("9007199254740993"));
         when(skills.resume(any(),eq("task"),eq("run"),any())).thenReturn(new SkillExecutionService.ResumeReceipt(lease(9007199254740993L),"RUNNING",List.of("EXECUTE"),null));
-        call("/resume","{\"executionId\":\"execution\",\"snapshotDigest\":\""+"a".repeat(64)+"\"}")
+        call("/resume","{\"executionId\":\"execution\",\"snapshotSha256\":\""+"a".repeat(64)+"\"}")
                 .andExpect(status().isOk()).andExpect(jsonPath("$.data.lease.version").value("9007199254740993"));
     }
     @Test void rawEffectFenceIsProjectedWithoutChangingItsDomainLong() throws Exception {
         when(skills.startEffect(any(),eq("task"),eq("run"),eq("effect"),any()))
                 .thenReturn(new SkillExecutionService.EffectReceipt(1,"NEW","START_RECORDED",null,null));
-        String fields="\"executionId\":\"execution\",\"snapshotDigest\":\""+"a".repeat(64)+"\",\"effectDigest\":\""+"b".repeat(64)+"\",\"providerBindingRevision\":\"0\",";
+        String fields="\"executionId\":\"execution\",\"snapshotSha256\":\""+"a".repeat(64)+"\",\"effectSha256\":\""+"b".repeat(64)+"\",\"providerBindingRevision\":\"0\",";
         call("/effects/effect/start","{"+fields+"\"fence\":{\"version\":\"9007199254740993\",\"token\":\""+TOKEN+"\"}}")
                 .andExpect(status().isOk());
         verify(skills).startEffect(any(),eq("task"),eq("run"),eq("effect"),argThat(value->value.fence().version()==9007199254740993L));
         call("/effects/effect/start","{"+fields+"\"fence\":{\"version\":1,\"token\":\""+TOKEN+"\"}}")
                 .andExpect(status().isBadRequest());
     }
+    @Test void hashNamesAndArtifactLengthsProjectToUnchangedServiceFacts() throws Exception {
+        when(skills.commitResult(any(),eq("task"),eq("run"),eq("manifest"),any()))
+                .thenReturn(new SkillExecutionService.ResultReceipt("manifest","RESULT_COMMITTED","ARCHIVING","c".repeat(64)));
+        String data="{\"fence\":{\"version\":\"1\",\"token\":\""+TOKEN+"\"},\"snapshotSha256\":\""+"a".repeat(64)+"\","
+                +"\"data\":null,\"inputReceipts\":[],\"artifacts\":[{\"outputId\":\"output_1\",\"sha256\":\""+"b".repeat(64)+"\",\"byteLength\":\"9007199254740993\"}]}";
+        call("/result-commits/manifest",data).andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.resultSha256").value("c".repeat(64))).andExpect(jsonPath("$.data.resultDigest").doesNotExist());
+        verify(skills).commitResult(any(),eq("task"),eq("run"),eq("manifest"),argThat(value->
+                value.snapshotDigest().equals("a".repeat(64))&&value.artifacts().getFirst().byteLength()==9007199254740993L));
+        call("/result-commits/manifest",data.replace("snapshotSha256","snapshotDigest")).andExpect(status().isBadRequest());
+        call("/result-commits/manifest",data.replace("\"9007199254740993\"","1")).andExpect(status().isBadRequest());
+    }
+
 }
