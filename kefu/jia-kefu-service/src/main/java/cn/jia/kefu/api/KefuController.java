@@ -119,7 +119,7 @@ public class KefuController {
      * @return 处理结果
      */
     @PreAuthorize("hasAuthority('kefu-faq_delete')")
-    @RequestMapping(value = "/faq/delete", method = RequestMethod.GET)
+    @RequestMapping(value = "/faq/delete", method = RequestMethod.DELETE)
     public Object deleteFaq(@RequestParam(name = "id") Long id) throws Exception {
         KefuFaqEntity record = kefuFaqService.get(id);
         if (record == null || !Objects.equals(EsContextHolder.getContext().getClientId(), record.getClientId())) {
@@ -208,7 +208,7 @@ public class KefuController {
      * @return 处理结果
      */
     @PreAuthorize("hasAuthority('kefu-message_delete')")
-    @RequestMapping(value = "/message/delete", method = RequestMethod.GET)
+    @RequestMapping(value = "/message/delete", method = RequestMethod.DELETE)
     public Object deleteMessage(@RequestParam(name = "id") Long id) throws Exception {
         KefuMessageEntity record = kefuMessageService.get(id);
         if (record == null || !Objects.equals(EsContextHolder.getContext().getClientId(), record.getClientId())) {

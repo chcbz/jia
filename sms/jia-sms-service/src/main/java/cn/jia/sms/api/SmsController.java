@@ -52,7 +52,7 @@ public class SmsController {
      * @return 校验结果
      * @throws Exception 校验过程中可能抛出的异常
      */
-    @RequestMapping(value = "/validate", method = RequestMethod.GET)
+    @RequestMapping(value = "/validate", method = RequestMethod.POST)
     public Object validateSmsCode(@RequestParam String phone, @RequestParam Integer smsType, @RequestParam String smsCode) throws Exception {
         SmsCodeEntity code = smsService.selectSmsCodeNoUsed(phone, smsType);
         if (code == null || !smsCode.equals(code.getSmsCode())) {
@@ -71,7 +71,7 @@ public class SmsController {
      * @return 验证码内容
      * @throws Exception 获取过程中可能抛出的异常
      */
-    @RequestMapping(value = "/use", method = RequestMethod.GET)
+    @RequestMapping(value = "/use", method = RequestMethod.POST)
     public Object useSmsCode(@RequestParam String phone, @RequestParam Integer smsType) throws Exception {
         SmsCodeEntity code = smsService.selectSmsCodeNoUsed(phone, smsType);
         if (code == null) {
@@ -91,7 +91,7 @@ public class SmsController {
      * @return 最新生成的验证码
      * @throws Exception 生成或发送过程中可能抛出的异常
      */
-    @RequestMapping(value = "/gen", method = RequestMethod.GET)
+    @RequestMapping(value = "/gen", method = RequestMethod.POST)
     public Object gen(@RequestParam String phone, @RequestParam Integer smsType,
                       @RequestParam(value = "templateId", required = false) String templateId) throws Exception {
         //检查是否还有额度
@@ -349,7 +349,7 @@ public class SmsController {
      * @param templateId 模板ID
      * @return 删除结果
      */
-    @RequestMapping(value = "/template/delete", method = RequestMethod.GET)
+    @RequestMapping(value = "/template/delete", method = RequestMethod.DELETE)
     public Object deleteTemplate(@RequestParam(name = "templateId") String templateId) {
         smsService.deleteTemplate(templateId);
         return JsonResult.success();
@@ -381,7 +381,7 @@ public class SmsController {
      * @param money  金额
      * @return 购买结果
      */
-    @RequestMapping(value = "/buy", method = RequestMethod.GET)
+    @RequestMapping(value = "/buy", method = RequestMethod.POST)
     public Object buy(@RequestParam Integer number, @RequestParam Double money) {
         smsService.buy(number, money);
         return JsonResult.success();

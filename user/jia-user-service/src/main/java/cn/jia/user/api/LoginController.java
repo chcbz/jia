@@ -175,7 +175,7 @@ public class LoginController {
      * @return 最新生成的验证码
      * @throws Exception 生成或发送过程中可能抛出的异常
      */
-    @RequestMapping(value = "sms/gen", method = RequestMethod.GET)
+    @RequestMapping(value = "sms/gen", method = RequestMethod.POST)
     @ResponseBody
     public Object gen(@RequestParam String phone, @RequestParam Integer smsType, HttpServletRequest request) throws Exception {
         //检查是否还有额度
@@ -400,7 +400,7 @@ public class LoginController {
      * @param newPassword 新密码
      * @return 处理结果
      */
-    @GetMapping(value = "/user/password/change")
+    @org.springframework.web.bind.annotation.PostMapping(value = "/user/password/change")
     @ResponseBody
     public Object changePassword(@RequestParam String oldPassword, @RequestParam String newPassword) {
         LdapUser u = ldapUserService.findByUid(EsContextHolder.getContext().getUsername());

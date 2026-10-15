@@ -105,7 +105,7 @@ public class IspController {
      * @param id 服务器ID
      * @return 删除结果
      */
-    @RequestMapping(value = "/server/delete", method = RequestMethod.GET)
+    @RequestMapping(value = "/server/delete", method = RequestMethod.DELETE)
     public Object deleteServer(@RequestParam(name = "id") Long id) {
         ispService.deleteServer(id);
         return JsonResult.success();
@@ -118,13 +118,13 @@ public class IspController {
      * @param domain 域名
      * @return 刷新结果
      */
-    @RequestMapping(value = "/server/ssl/refresh", method = RequestMethod.GET)
+    @RequestMapping(value = "/server/ssl/refresh", method = RequestMethod.POST)
     public Object refreshSSL(@RequestParam Long id, @RequestParam String domain) {
 
         return JsonResult.success();
     }
 
-    @RequestMapping(value = "/domain/record/delete", method = RequestMethod.GET)
+    @RequestMapping(value = "/domain/record/delete", method = RequestMethod.DELETE)
     public Object refreshSSL(@RequestParam String name, @RequestParam String domain) {
 
         return JsonResult.success();
@@ -163,7 +163,7 @@ public class IspController {
      * @throws Exception 更新过程中可能抛出的异常
      */
     @SuppressWarnings("unchecked")
-    @RequestMapping("/dns/update_record")
+    @RequestMapping(method = org.springframework.web.bind.annotation.RequestMethod.POST, value = "/dns/update_record")
     public Object updateDnsRecord(@RequestParam String name, HttpServletRequest request) throws Exception {
         IspServerEntity ispServer = new IspServerEntity();
         ispServer.setServerName(name);

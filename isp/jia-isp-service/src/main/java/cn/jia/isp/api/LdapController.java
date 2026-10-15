@@ -146,7 +146,7 @@ public class LdapController {
      * @param uid 用户ID
      * @return 处理结果
      */
-    @GetMapping(value = "/user/delete")
+    @org.springframework.web.bind.annotation.DeleteMapping(value = "/user/delete")
     public Object userDelete(@RequestParam(name = "uid") String uid) {
         LdapUser user = new LdapUser();
         user.setUid(uid);
@@ -292,7 +292,7 @@ public class LdapController {
      * @param cn 用户组ID
      * @return 处理结果
      */
-    @GetMapping(value = "/usergroup/delete")
+    @org.springframework.web.bind.annotation.DeleteMapping(value = "/usergroup/delete")
     public Object userGroupDelete(@RequestParam(name = "cn") String cn) {
         LdapUserGroup userGroup = new LdapUserGroup();
         userGroup.setCn(cn);

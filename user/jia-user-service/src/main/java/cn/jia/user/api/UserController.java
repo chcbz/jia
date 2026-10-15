@@ -286,7 +286,7 @@ public class UserController {
      * @return 修改结果
      */
     @PreAuthorize("hasAuthority('user-point_change')")
-    @RequestMapping(value = "/point/change", method = RequestMethod.GET)
+    @RequestMapping(value = "/point/change", method = RequestMethod.POST)
     public Object changePoint(@RequestParam("jiacn") String jiacn, @RequestParam("num") int num) {
         userService.changePoint(jiacn, num);
         return JsonResult.success();
@@ -365,7 +365,7 @@ public class UserController {
      * @throws EsRuntimeException 如果修改密码失败，则抛出异常
      */
     @PreAuthorize("hasAuthority('user-password_change')")
-    @RequestMapping(value = "/password/change", method = RequestMethod.GET)
+    @RequestMapping(value = "/password/change", method = RequestMethod.POST)
     public Object changePassword(@RequestParam Long userId, @RequestParam String oldPassword,
                                  @RequestParam String newPassword) {
         userService.changePassword(userId, oldPassword, newPassword);
@@ -381,7 +381,7 @@ public class UserController {
      * @return 操作结果
      * @throws EsRuntimeException 如果重置密码失败，则抛出异常
      */
-    @RequestMapping(value = "/password/reset", method = RequestMethod.GET)
+    @RequestMapping(value = "/password/reset", method = RequestMethod.POST)
     public Object resetPassword(@RequestParam String phone, @RequestParam String smsCode,
                                 @RequestParam String newPassword) {
         SmsCodeEntity smsCodeNoUsed =
@@ -424,7 +424,7 @@ public class UserController {
      * @throws EsRuntimeException 如果用户不存在或修改失败，则抛出异常
      */
     @PreAuthorize("hasAuthority('user-position_change')")
-    @RequestMapping(value = "/position/change", method = RequestMethod.GET)
+    @RequestMapping(value = "/position/change", method = RequestMethod.POST)
     public Object changePosition(@RequestParam(name = "position") Long position) {
         UserEntity user = userService.findByUsername(EsContextHolder.getContext().getUsername());
         if (user == null) {

@@ -63,7 +63,7 @@ public class PhraseController {
 	 * @param id 短语ID
 	 * @return 处理结果
 	 */
-	@GetMapping(value = "/delete")
+	@org.springframework.web.bind.annotation.DeleteMapping(value = "/delete")
 	public Object delete(@RequestParam(name = "id") Long id) throws Exception {
 		MatPhraseEntity phrase = phraseService.get(id);
 		if(phrase == null) {
@@ -104,7 +104,7 @@ public class PhraseController {
 	 * @param id 短语ID
 	 * @return 处理结果
 	 */
-	@GetMapping(value = "/read")
+	@org.springframework.web.bind.annotation.PostMapping(value = "/read")
 	public Object read(@RequestParam Long id) {
 		phraseService.read(id);
 		return JsonResult.success();

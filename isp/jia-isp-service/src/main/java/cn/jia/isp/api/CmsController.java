@@ -105,7 +105,7 @@ public class CmsController {
      * @param id 表格ID
      * @return 删除结果
      */
-    @RequestMapping(value = "/table/delete", method = RequestMethod.GET)
+    @RequestMapping(value = "/table/delete", method = RequestMethod.DELETE)
     public Object deleteTable(@RequestParam(name = "id") Long id) {
         cmsService.deleteTable(id);
         return JsonResult.success();
@@ -175,7 +175,7 @@ public class CmsController {
      * @param id 数据列ID
      * @return 删除结果
      */
-    @RequestMapping(value = "/column/delete", method = RequestMethod.GET)
+    @RequestMapping(value = "/column/delete", method = RequestMethod.DELETE)
     public Object deleteColumn(@RequestParam(name = "id") Long id) {
         cmsService.deleteColumn(id);
         return JsonResult.success();

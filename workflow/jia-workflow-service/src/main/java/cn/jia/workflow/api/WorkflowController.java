@@ -150,7 +150,7 @@ public class WorkflowController {
      * @param id
      * @return
      */
-    @RequestMapping(value = "/deployment/delete", method = RequestMethod.GET)
+    @RequestMapping(value = "/deployment/delete", method = RequestMethod.DELETE)
     public Object deleteDeployment(@RequestParam String id) {
         workflowService.deleteDeployment(id);
         return JsonResult.success();
@@ -240,7 +240,7 @@ public class WorkflowController {
      * @param id
      * @return
      */
-    @RequestMapping(value = "/definition/activate", method = RequestMethod.GET)
+    @RequestMapping(value = "/definition/activate", method = RequestMethod.POST)
     public Object activateDefinition(@RequestParam String id) {
         workflowService.activateProcessDefinition(id);
         return JsonResult.success();
@@ -252,7 +252,7 @@ public class WorkflowController {
      * @param id
      * @return
      */
-    @RequestMapping(value = "/definition/suspend", method = RequestMethod.GET)
+    @RequestMapping(value = "/definition/suspend", method = RequestMethod.POST)
     public Object suspendDefinition(@RequestParam String id) {
         workflowService.suspendProcessDefinition(id);
         return JsonResult.success();
@@ -485,7 +485,7 @@ public class WorkflowController {
      * @param taskId 任务ID
      * @param userId 被委托人
      */
-    @GetMapping(value = "/task/delegate")
+    @org.springframework.web.bind.annotation.PostMapping(value = "/task/delegate")
     public Object delegateTask(@RequestParam String taskId, @RequestParam String userId) {
         workflowService.delegateTask(taskId, userId);
         return JsonResult.success();
@@ -497,7 +497,7 @@ public class WorkflowController {
      * @param taskId 任务ID
      * @param userId 认领人ID
      */
-    @GetMapping(value = "/task/claim")
+    @org.springframework.web.bind.annotation.PostMapping(value = "/task/claim")
     public Object claimTask(String taskId, String userId) {
         workflowService.claimTask(taskId, userId);
         return JsonResult.success();
@@ -510,7 +510,7 @@ public class WorkflowController {
      * @param userId
      * @return
      */
-    @GetMapping(value = "/task/assign")
+    @org.springframework.web.bind.annotation.PostMapping(value = "/task/assign")
     public Object setAssignee(String taskId, String userId) {
         workflowService.setAssignee(taskId, userId);
         return JsonResult.success();

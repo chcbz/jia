@@ -168,7 +168,10 @@ public class ChatController {
     @RequestMapping(value = "/stream", method = RequestMethod.POST, produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public Flux<String> handleChat(@RequestBody cn.jia.core.entity.JsonRequest<ChatMessageDTO> protocolRequest,
             @RequestHeader(name = "Idempotency-Key", required = false) String idempotencyKey) {
-        ChatMessageDTO chatMessage = protocolRequest == null ? null : protocolRequest.data();
+        return handleChatInternal(protocolRequest == null ? null : protocolRequest.data(), idempotencyKey);
+    }
+
+    private Flux<String> handleChatInternal(ChatMessageDTO chatMessage, String idempotencyKey) {
         bindIdempotencyKey(chatMessage, idempotencyKey);
         // Reject execute/unknown hints before creating or mutating any conversation.
         InteractionRoute route = interactionRouter.routeStream(chatMessage);
@@ -648,7 +651,7 @@ public class ChatController {
 
     /** Direct-call compatibility for focused unit tests and internal callers without HTTP headers. */
     public Flux<String> handleChat(ChatMessageDTO chatMessage) {
-        return handleChat(chatMessage, null);
+        return handleChatInternal(chatMessage, null);
     }
 
     private void bindIdempotencyKey(ChatMessageDTO message, String headerValue) {

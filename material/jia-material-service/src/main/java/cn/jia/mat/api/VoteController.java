@@ -70,7 +70,7 @@ public class VoteController {
 	 * @param id
 	 * @return
 	 */
-	@GetMapping(value = "/delete")
+	@org.springframework.web.bind.annotation.DeleteMapping(value = "/delete")
 	public Object delete(@RequestParam(name = "id") Long id) {
 		voteService.delete(id);
 		return JsonResult.success();

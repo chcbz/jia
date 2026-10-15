@@ -65,7 +65,7 @@ public class TipController {
 	 * @param id 打赏ID
 	 * @return 处理结果
 	 */
-	@GetMapping(value = "/delete")
+	@org.springframework.web.bind.annotation.DeleteMapping(value = "/delete")
 	public Object delete(@RequestParam(name = "id") Long id) throws Exception {
 		MatTipEntity tip = tipService.get(id);
 		if(tip == null) {

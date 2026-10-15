@@ -699,7 +699,7 @@ public class WxMpController {
      * @return
      * @throws Exception
      */
-    @RequestMapping("/menu/create")
+    @RequestMapping(method = org.springframework.web.bind.annotation.RequestMethod.POST, value = "/menu/create")
     public Object menuCreate(@cn.jia.core.annotation.ApiJsonData @RequestBody String menu, HttpServletRequest request) throws Exception {
         JsonElement menuPayload = JsonParser.parseString(menu);
         String menuJson = menuPayload.isJsonPrimitive() ? menuPayload.getAsString() : menu;
@@ -714,7 +714,7 @@ public class WxMpController {
      * @return
      * @throws Exception
      */
-    @RequestMapping("/menu/get")
+    @RequestMapping(method = org.springframework.web.bind.annotation.RequestMethod.GET, value = "/menu/get")
     public Object menuGet(HttpServletRequest request) throws Exception {
         return JsonResult.success(mpInfoService.findWxMpService(request).getMenuService().menuGet());
     }
@@ -726,7 +726,7 @@ public class WxMpController {
      * @return
      * @throws Exception
      */
-    @RequestMapping("/menu/delete")
+    @RequestMapping(method = org.springframework.web.bind.annotation.RequestMethod.DELETE, value = "/menu/delete")
     public Object menuDelete(HttpServletRequest request) throws Exception {
         mpInfoService.findWxMpService(request).getMenuService().menuDelete();
         return JsonResult.success();
@@ -740,7 +740,7 @@ public class WxMpController {
      * @return
      * @throws Exception
      */
-    @RequestMapping("/user/get")
+    @RequestMapping(method = org.springframework.web.bind.annotation.RequestMethod.GET, value = "/user/get")
     public Object userGet(@RequestParam(value = "next_openid", required = false) String nextOpenid, HttpServletRequest request) throws Exception {
         return JsonResult.success(mpInfoService.findWxMpService(request).getUserService().userList(nextOpenid));
     }
@@ -753,7 +753,7 @@ public class WxMpController {
      * @return
      * @throws Exception
      */
-    @RequestMapping("/user/info/batchget")
+    @RequestMapping(method = org.springframework.web.bind.annotation.RequestMethod.POST, value = "/user/info/batchget")
     public Object userInfoBatchGet(@RequestBody JsonRequest<List<String>> protocolRequest, HttpServletRequest request) throws Exception {
         List<String> openids = protocolRequest == null ? null : protocolRequest.data();
         return JsonResult.success(mpInfoService.findWxMpService(request).getUserService().userInfoList(openids));
@@ -766,7 +766,7 @@ public class WxMpController {
      * @return
      * @throws Exception
      */
-    @RequestMapping("/user/sync")
+    @RequestMapping(method = org.springframework.web.bind.annotation.RequestMethod.POST, value = "/user/sync")
     public Object userSync(HttpServletRequest request) throws Exception {
         WxMpService wxMpService = mpInfoService.findWxMpService(request);
         String wxAppId = wxMpService.getWxMpConfigStorage().getAppId();
@@ -819,7 +819,7 @@ public class WxMpController {
      * @return
      * @throws Exception
      */
-    @RequestMapping("/oauth2/authorize_url")
+    @RequestMapping(method = org.springframework.web.bind.annotation.RequestMethod.GET, value = "/oauth2/authorize_url")
     public Object oauth2Authorize(@RequestParam("redirect_uri") String redirectUri, @RequestParam("scope") String scope,
                                   @RequestParam("state") String state, HttpServletRequest request) throws Exception {
         return JsonResult.success(mpInfoService.findWxMpService(request).getOAuth2Service().buildAuthorizationUrl(redirectUri,
@@ -834,7 +834,7 @@ public class WxMpController {
      * @return
      * @throws Exception
      */
-    @RequestMapping("/oauth2/access_token")
+    @RequestMapping(method = org.springframework.web.bind.annotation.RequestMethod.POST, value = "/oauth2/access_token")
     public Object oauth2AccessToken(@RequestParam("code") String code, HttpServletRequest request) throws Exception {
         return JsonResult.success(mpInfoService.findWxMpService(request).getOAuth2Service().getAccessToken(code));
     }
@@ -849,7 +849,7 @@ public class WxMpController {
      * @return
      * @throws Exception
      */
-    @RequestMapping("/oauth2/userinfo")
+    @RequestMapping(method = org.springframework.web.bind.annotation.RequestMethod.POST, value = "/oauth2/userinfo")
     public Object oauth2Userinfo(@RequestParam("access_token") String accessToken,
                                  @RequestParam("openid") String openId,
 								 @RequestParam("lang") String lang, HttpServletRequest request)
@@ -868,7 +868,7 @@ public class WxMpController {
      * @return
      * @throws Exception
      */
-    @RequestMapping("/oauth2/refresh_token")
+    @RequestMapping(method = org.springframework.web.bind.annotation.RequestMethod.POST, value = "/oauth2/refresh_token")
     public Object oauth2RefreshToken(@RequestParam("refresh_token") String refreshToken, HttpServletRequest request)
             throws Exception {
         return JsonResult.success(mpInfoService.findWxMpService(request).getOAuth2Service().refreshAccessToken(refreshToken));
@@ -883,7 +883,7 @@ public class WxMpController {
      * @return
      * @throws Exception
      */
-    @RequestMapping("/oauth2/auth")
+    @RequestMapping(method = org.springframework.web.bind.annotation.RequestMethod.POST, value = "/oauth2/auth")
     public Object oauth2ValidateAccessToken(@RequestParam("access_token") String accessToken,
                                             @RequestParam("openid") String openId, HttpServletRequest request) throws Exception {
         WxOAuth2AccessToken oAuth2AccessToken = new WxOAuth2AccessToken();
@@ -900,7 +900,7 @@ public class WxMpController {
      * @return 签名信息
      * @throws Exception 异常
      */
-    @RequestMapping("/jsapi/signature")
+    @RequestMapping(method = org.springframework.web.bind.annotation.RequestMethod.POST, value = "/jsapi/signature")
     public Object createJsapiSignature(@RequestParam("url") String url, HttpServletRequest request) throws Exception {
         return JsonResult.success(mpInfoService.findWxMpService(request).createJsapiSignature(url));
     }
@@ -912,7 +912,7 @@ public class WxMpController {
      * @return
      * @throws Exception
      */
-    @RequestMapping("/customservice/getkflist")
+    @RequestMapping(method = org.springframework.web.bind.annotation.RequestMethod.GET, value = "/customservice/getkflist")
     public Object getkflist(HttpServletRequest request) throws Exception {
         return JsonResult.success(mpInfoService.findWxMpService(request).getKefuService().kfList());
     }
@@ -924,7 +924,7 @@ public class WxMpController {
      * @return
      * @throws Exception
      */
-    @RequestMapping("/customservice/kfsession/getwaitcase")
+    @RequestMapping(method = org.springframework.web.bind.annotation.RequestMethod.GET, value = "/customservice/kfsession/getwaitcase")
     public Object getwaitcase(HttpServletRequest request) throws Exception {
         return JsonResult.success(mpInfoService.findWxMpService(request).getKefuService().kfSessionGetWaitCase().getKfSessionWaitCaseList());
     }
@@ -937,7 +937,7 @@ public class WxMpController {
      * @return
      * @throws Exception
      */
-    @RequestMapping("/message/custom/send")
+    @RequestMapping(method = org.springframework.web.bind.annotation.RequestMethod.POST, value = "/message/custom/send")
     public Object customMessageSend(@RequestBody JsonRequest<WxMpKefuMessage> protocolRequest, HttpServletRequest request) throws Exception {
         WxMpKefuMessage message = protocolRequest == null ? null : protocolRequest.data();
         return JsonResult.success(mpInfoService.findWxMpService(request).getKefuService().sendKefuMessage(message));
@@ -951,7 +951,7 @@ public class WxMpController {
      * @return
      * @throws Exception
      */
-    @RequestMapping("/message/template/send")
+    @RequestMapping(method = org.springframework.web.bind.annotation.RequestMethod.POST, value = "/message/template/send")
     public Object templateMessageSend(@RequestBody JsonRequest<WxMpTemplateMessage> protocolRequest, HttpServletRequest request) throws Exception {
         WxMpTemplateMessage templateMessage = protocolRequest == null ? null : protocolRequest.data();
         return JsonResult.success(mpInfoService.findWxMpService(request).getTemplateMsgService().sendTemplateMsg(templateMessage));
@@ -967,7 +967,7 @@ public class WxMpController {
      * @return
      * @throws Exception
      */
-    @RequestMapping("/material/batchget")
+    @RequestMapping(method = org.springframework.web.bind.annotation.RequestMethod.POST, value = "/material/batchget")
     public Object materialBatchGet(@RequestParam("type") String type, @RequestParam("offset") Integer offset,
                                    @RequestParam("count") Integer count, HttpServletRequest request) throws Exception {
         if (WxConsts.MaterialType.NEWS.equals(type)) {
@@ -986,7 +986,7 @@ public class WxMpController {
      * @return
      * @throws Exception
      */
-    @RequestMapping("/material/add_news")
+    @RequestMapping(method = org.springframework.web.bind.annotation.RequestMethod.POST, value = "/material/add_news")
     public Object materialAddNews(@RequestBody JsonRequest<WxMpMaterialNews> protocolRequest, HttpServletRequest request) throws Exception {
         WxMpMaterialNews news = protocolRequest == null ? null : protocolRequest.data();
         for (WxMpNewsArticle article : news.getArticles()) {
@@ -1038,7 +1038,7 @@ public class WxMpController {
      * @return
      * @throws Exception
      */
-    @RequestMapping("/material/add_material")
+    @RequestMapping(method = org.springframework.web.bind.annotation.RequestMethod.POST, value = "/material/add_material")
     public Object materialAdd(@RequestPart(required = false, value = "file") MultipartFile file, @RequestParam(value = "type") String type,
                               HttpServletRequest request) throws Exception {
         WxMpMaterial material = new WxMpMaterial();
@@ -1105,7 +1105,7 @@ public class WxMpController {
      * @param id
      * @return
      */
-    @RequestMapping(value = "/info/delete", method = RequestMethod.GET)
+    @RequestMapping(value = "/info/delete", method = RequestMethod.DELETE)
     public Object deleteMpInfo(@RequestParam(name = "id") Long id) {
         mpInfoService.delete(id);
         return JsonResult.success();

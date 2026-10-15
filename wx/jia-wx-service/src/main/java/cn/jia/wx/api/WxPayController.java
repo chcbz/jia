@@ -104,7 +104,7 @@ public class WxPayController {
 	 *            商户系统内部的订单号
 	 * @throws Exception 异常
 	 */
-	@GetMapping("/closeOrder/{outTradeNo}")
+	@org.springframework.web.bind.annotation.PostMapping("/closeOrder/{outTradeNo}")
 	public WxPayOrderCloseResult closeOrder(@PathVariable String outTradeNo, HttpServletRequest request) throws Exception {
 		try {
 			return payInfoService.findWxPayService(request).closeOrder(outTradeNo);
@@ -132,7 +132,7 @@ public class WxPayController {
 	 * @throws Exception 异常信息
 	 */
 	@SuppressWarnings("unchecked")
-	@GetMapping("/createOrder")
+	@org.springframework.web.bind.annotation.PostMapping("/createOrder/product")
 	public <T> T createOrder(@RequestParam(required = false) String productId, @RequestParam(required = false) String jiacn,
 							 @RequestParam(required = false) String outTradeNo, @RequestParam String tradeType,
 							 HttpServletRequest request) throws Exception {
@@ -261,7 +261,7 @@ public class WxPayController {
 	 * @return 预支付信息
 	 * @throws Exception 异常信息
 	 */
-	@GetMapping("/unifiedOrder")
+	@org.springframework.web.bind.annotation.PostMapping("/unifiedOrder/product")
 	public WxPayUnifiedOrderResult unifiedOrder(@RequestParam String productId, @RequestParam String openid,
 			@RequestParam String tradeType, HttpServletRequest request) throws Exception {
         WxPayService wxPayService = payInfoService.findWxPayService(request);
@@ -735,7 +735,7 @@ public class WxPayController {
 	 * @param id 支付平台ID
 	 * @return 删除结果
 	 */
-	@RequestMapping(value = "/info/delete", method = RequestMethod.GET)
+	@RequestMapping(value = "/info/delete", method = RequestMethod.DELETE)
 	public Object deletePayInfo(@RequestParam(name = "id") Long id) {
 		payInfoService.delete(id);
 		return JsonResult.success();

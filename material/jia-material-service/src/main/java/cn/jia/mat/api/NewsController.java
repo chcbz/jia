@@ -119,7 +119,7 @@ public class NewsController {
 	 * @param id 图文ID
 	 * @return 处理结果
 	 */
-	@GetMapping(value = "/delete")
+	@org.springframework.web.bind.annotation.DeleteMapping(value = "/delete")
 	public Object delete(@RequestParam(name = "id") Long id) {
 		newsService.delete(id);
 		return JsonResult.success();
@@ -153,7 +153,7 @@ public class NewsController {
 	 * @return 处理结果
 	 * @throws Exception 异常信息
 	 */
-	@GetMapping(value = "/send")
+	@org.springframework.web.bind.annotation.PostMapping(value = "/send")
 	public Object send(@RequestParam(name = "jiacn") String jiacn, @RequestParam(name = "type") Integer type,
 					   @RequestParam(name = "id") Long id,
 					   @RequestParam(value="wxappid", required=false) String wxAppId) throws Exception {

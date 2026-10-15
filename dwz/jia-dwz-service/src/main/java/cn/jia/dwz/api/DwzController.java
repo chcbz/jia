@@ -90,7 +90,7 @@ public class DwzController {
      * @param uri 链接编码
      * @return 长链接
      */
-    @RequestMapping(value = "/restore", method = RequestMethod.GET)
+    @RequestMapping(value = "/restore", method = RequestMethod.POST)
     @ResponseBody
     public Object restore(@RequestParam(name = "uri") String uri) {
         DwzRecordEntity record = dwzService.view(uri);

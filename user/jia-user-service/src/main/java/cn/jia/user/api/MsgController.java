@@ -56,7 +56,7 @@ public class MsgController {
 	 * @return 结果
 	 */
 //	@PreAuthorize("hasAuthority('msg-read')")
-	@RequestMapping(value = "/read", method = RequestMethod.GET)
+	@RequestMapping(value = "/read", method = RequestMethod.POST)
 	public Object read(@RequestParam(name = "id") Long id) {
 		MsgEntity msg = new MsgEntity();
 		msg.setId(id);
@@ -71,7 +71,7 @@ public class MsgController {
 	 * @param id 消息ID
 	 * @return 结果
 	 */
-	@RequestMapping(value = "/unread", method = RequestMethod.GET)
+	@RequestMapping(value = "/unread", method = RequestMethod.POST)
 	public Object unread(@RequestParam(name = "id") Long id) {
 		MsgEntity msg = new MsgEntity();
 		msg.setId(id);
@@ -86,7 +86,7 @@ public class MsgController {
 	 * @param userId 用户ID
 	 * @return 结果
 	 */
-	@RequestMapping(value = "/readall", method = RequestMethod.GET)
+	@RequestMapping(value = "/readall", method = RequestMethod.POST)
 	public Object readAll(@RequestParam(name = "userId") Long userId) {
 		msgService.readAll(userId);
 		return JsonResult.success();
@@ -111,7 +111,7 @@ public class MsgController {
 	 * @param id 消息ID
 	 * @return 结果
 	 */
-	@RequestMapping(value = "/recycle", method = RequestMethod.GET)
+	@RequestMapping(value = "/recycle", method = RequestMethod.POST)
 	public Object recycle(@RequestParam(name = "id") Long id) {
 		msgService.recycle(id);
 		return JsonResult.success();
@@ -123,7 +123,7 @@ public class MsgController {
 	 * @param id 消息ID
 	 * @return 结果
 	 */
-	@RequestMapping(value = "/restore", method = RequestMethod.GET)
+	@RequestMapping(value = "/restore", method = RequestMethod.POST)
 	public Object restore(@RequestParam(name = "id") Long id) {
 		msgService.restore(id);
 		return JsonResult.success();

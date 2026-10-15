@@ -109,7 +109,7 @@ public class DictController {
      *
      * @return
      */
-    @RequestMapping(value = "/cleanCache", method = RequestMethod.GET)
+    @RequestMapping(value = "/cleanCache", method = RequestMethod.POST)
     public Object cleanCache() {
         List<DictEntity> dictList = dictService.selectAll(LocaleContextHolder.getLocale().toString());
         if (CollectionUtil.isNotNullOrEmpty(dictList)) {

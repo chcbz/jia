@@ -106,7 +106,7 @@ public class MediaController {
      * @param id 媒体ID
      * @return 删除结果
      */
-    @GetMapping(value = "/delete")
+    @org.springframework.web.bind.annotation.DeleteMapping(value = "/delete")
     public Object delete(@RequestParam(name = "id") Long id) {
         MatMediaEntity media = mediaService.get(id);
         EsHandler.assertNotNull(media);

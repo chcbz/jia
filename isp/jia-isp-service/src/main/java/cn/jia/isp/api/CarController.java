@@ -93,7 +93,7 @@ public class CarController {
 	 * @param id 品牌ID
 	 * @return 处理结果
 	 */
-	@RequestMapping(value = "/brand/delete", method = RequestMethod.GET)
+	@RequestMapping(value = "/brand/delete", method = RequestMethod.DELETE)
 	public Object deleteBrand(@RequestParam(name = "id") Long id) throws Exception {
 		CarBrandEntity record = carService.findBrand(id);
 		if(record == null || !Objects.equals(EsContextHolder.getContext().getClientId(), record.getClientId())) {
@@ -162,7 +162,7 @@ public class CarController {
 	 * @param id 系列ID
 	 * @return 处理结果
 	 */
-	@RequestMapping(value = "/brandAudi/delete", method = RequestMethod.GET)
+	@RequestMapping(value = "/brandAudi/delete", method = RequestMethod.DELETE)
 	public Object deleteBrandAudi(@RequestParam(name = "id") Long id) throws Exception {
 		CarBrandAudiEntity record = carService.findBrandAudi(id);
 		if(record == null || !Objects.equals(EsContextHolder.getContext().getClientId(), record.getClientId())) {
@@ -231,7 +231,7 @@ public class CarController {
 	 * @param id 车型ID
 	 * @return 处理结果
 	 */
-	@RequestMapping(value = "/brandVersion/delete", method = RequestMethod.GET)
+	@RequestMapping(value = "/brandVersion/delete", method = RequestMethod.DELETE)
 	public Object deleteBrandVersion(@RequestParam(name = "id") Long id) throws Exception {
 		CarBrandVersionEntity record = carService.findBrandVersion(id);
 		if(record == null || !Objects.equals(EsContextHolder.getContext().getClientId(), record.getClientId())) {
@@ -300,7 +300,7 @@ public class CarController {
 	 * @param id 制造商ID
 	 * @return 处理结果
 	 */
-	@RequestMapping(value = "/brandMf/delete", method = RequestMethod.GET)
+	@RequestMapping(value = "/brandMf/delete", method = RequestMethod.DELETE)
 	public Object deleteBrandMf(@RequestParam(name = "id") Long id) throws Exception {
 		CarBrandMfEntity record = carService.findBrandMf(id);
 		if(record == null || !Objects.equals(EsContextHolder.getContext().getClientId(), record.getClientId())) {
