@@ -118,4 +118,18 @@ class ConversationLeaseWireHttpTest {
                 .andExpect(status().isBadRequest());
     }
 
+    @Test void outputCommitUsesStringLengthsWithoutChangingDomainManifest() throws Exception {
+        when(executions.commitConversationOutput(any(),eq("task"),eq("run"),any(),eq("manifest"),any()))
+                .thenReturn(new PersonalWorkspaceExecutionService.CommitView("manifest","COMMITTED",List.of(
+                        new PersonalWorkspaceExecutionService.CommitItem("output_1",null,null,"b".repeat(64),"text/plain",9007199254740993L))));
+        String data="{\"fence\":{\"version\":\"1\",\"token\":\""+TOKEN+"\"},\"outputs\":[{\"outputId\":\"output_1\",\"sha256\":\""+"b".repeat(64)+"\",\"byteLength\":\"9007199254740993\"}]}";
+        call("/output-commits/manifest",data).andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items[0].byteLength").value("9007199254740993"))
+                .andExpect(jsonPath("$.data.items[0].fileVersion").isEmpty());
+        verify(executions).commitConversationOutput(any(),eq("task"),eq("run"),any(),eq("manifest"),argThat(items->items.getFirst().byteLength()==9007199254740993L));
+        call("/output-commits/manifest",data.replace("byteLength","length")).andExpect(status().isBadRequest());
+        call("/output-commits/manifest",data.replace("\"9007199254740993\"","1")).andExpect(status().isBadRequest());
+        call("/output-commits/manifest",data.replace("9007199254740993","9223372036854775808")).andExpect(status().isBadRequest());
+    }
+
 }

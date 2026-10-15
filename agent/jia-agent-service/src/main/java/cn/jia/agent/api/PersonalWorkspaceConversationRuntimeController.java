@@ -198,7 +198,7 @@ public final class PersonalWorkspaceConversationRuntimeController {
 
     @PostMapping(value="/{taskId}/runs/{runId}/conversation/output-commits/{manifestId}",
             consumes=MediaType.APPLICATION_JSON_VALUE,produces=MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<cn.jia.core.entity.JsonResult<PersonalWorkspaceExecutionService.CommitView>> commit(@PathVariable String taskId,
+    public ResponseEntity<cn.jia.core.entity.JsonResult<CommitResponse>> commit(@PathVariable String taskId,
             @PathVariable String runId,@PathVariable String manifestId,@RequestBody JsonRequest<CommitRequest> protocolRequest,
             HttpServletRequest request,Authentication authentication) {
         CommitRequest body = protocolRequest == null ? null : protocolRequest.data();
@@ -206,11 +206,11 @@ public final class PersonalWorkspaceConversationRuntimeController {
         if (body==null || body.outputs()==null || body.outputs().size()!=1) throw new BadRequest();
         var item=body.outputs().getFirst();
         if (item==null || item.outputId()==null || item.sha256()==null
-                || !item.sha256().matches("[0-9a-f]{64}") || item.length()==null || item.length()<0)
+                || !item.sha256().matches("[0-9a-f]{64}") || item.byteLength()==null)
             throw new BadRequest();
         return cn.jia.core.config.ApiJsonResponses.success(ok(executions.commitConversationOutput(scope(authentication),taskId,runId,
                 fence(body.fence()),manifestId,List.of(new PersonalWorkspaceExecutionService.OutputDeclaration(
-                        item.outputId(),item.sha256(),item.length())))));
+                        item.outputId(),item.sha256(),decimalLength(item.byteLength()))))), CommitResponse::from);
     }
 
     public ResponseEntity<PersonalWorkspaceExecutionService.CommitView> recoverStaged(
@@ -479,6 +479,18 @@ public final class PersonalWorkspaceConversationRuntimeController {
         if(value==null||!value.matches("0|[1-9][0-9]{0,18}"))throw new BadRequest();
         try{return Long.parseLong(value);}catch(NumberFormatException invalid){throw new BadRequest();}
     }
+    public record CommitItemResponse(String outputId,String fileId,String fileVersion,String sha256,
+            String contentMimeType,String byteLength) {
+        static CommitItemResponse from(PersonalWorkspaceExecutionService.CommitItem value) {
+            return new CommitItemResponse(value.outputId(),value.fileId(),value.fileVersion()==null?null:Integer.toString(value.fileVersion()),
+                    value.sha256(),value.contentMimeType(),Long.toString(value.byteLength()));
+        }
+    }
+    public record CommitResponse(String manifestId,String state,List<CommitItemResponse> items) {
+        static CommitResponse from(PersonalWorkspaceExecutionService.CommitView value) {
+            return new CommitResponse(value.manifestId(),value.state(),value.items().stream().map(CommitItemResponse::from).toList());
+        }
+    }
     public record StagedOutputResponse(String outputId,String sha256,String byteLength,String state) {
         static StagedOutputResponse from(PersonalWorkspaceExecutionService.StagedOutput value) {
             return new StagedOutputResponse(value.outputId(),value.sha256(),Long.toString(value.byteLength()),value.state());
@@ -530,7 +542,8 @@ public final class PersonalWorkspaceConversationRuntimeController {
         }
     }
     public record CommitItem(String outputId,String sha256,Long length) { }
-    public record CommitRequest(FenceRequest fence,List<CommitItem> outputs) { }
+    public record CommitOutput(String outputId,String sha256,String byteLength) { }
+    public record CommitRequest(FenceRequest fence,List<CommitOutput> outputs) { }
     public record ResultRecoveryRequest(Integer schemaVersion,String executionId,String commandId,
             String messageId,String inputSnapshotDigest,List<CommitItem> outputs) { }
     public record FailRequest(FenceRequest fence,String code) { }
