@@ -1,4 +1,5 @@
 dependencies {
+    implementation project(':common:jia-common-core')
     implementation(libs.spring.boot.starter.oauth2.client)
     implementation(libs.spring.boot.starter.web)
     testImplementation project(':common:jia-common-test')

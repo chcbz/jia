@@ -689,7 +689,7 @@ public class WxPayController {
 
 	@PostMapping("/queryComment")
 	public cn.jia.core.entity.JsonResult<String> queryComment(Date beginDate, Date endDate, Integer offset, Integer limit) {
-		return cn.jia.core.entity.JsonResult.success(this.queryComment(beginDate, endDate, offset, limit));
+		return this.queryComment(beginDate, endDate, offset, limit);
 	}
 
 	/**
