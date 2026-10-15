@@ -44,6 +44,11 @@ public class HallRequestDraftController {
             .enable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
             .enable(DeserializationFeature.FAIL_ON_NULL_FOR_PRIMITIVES)
             .disable(MapperFeature.ALLOW_COERCION_OF_SCALARS)
+            .withCoercionConfig(tools.jackson.databind.type.LogicalType.Textual, config -> {
+                for (var shape : List.of(tools.jackson.databind.cfg.CoercionInputShape.Integer,
+                        tools.jackson.databind.cfg.CoercionInputShape.Float, tools.jackson.databind.cfg.CoercionInputShape.Boolean))
+                    config.setCoercion(shape, tools.jackson.databind.cfg.CoercionAction.Fail);
+            })
             .build();
     private final HallRequestDraftService service;
 

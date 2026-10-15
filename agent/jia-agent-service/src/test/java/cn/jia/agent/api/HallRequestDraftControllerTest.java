@@ -171,7 +171,7 @@ class HallRequestDraftControllerTest {
                 .andExpect(jsonPath("$.code").value("HALL_DRAFT_SOURCE_UNAVAILABLE"))
                 .andExpect(jsonPath("$.data.details.field").value("inputs"))
                 .andExpect(jsonPath("$.data.details.sourceType").value("FILE"))
-                .andExpect(jsonPath("$.data.traceId").isString());
+                .andExpect(jsonPath("$.requestId").value("draft-test"));
     }
 
     @Test
