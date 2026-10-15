@@ -1,6 +1,7 @@
 package cn.jia.core.entity;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 import org.junit.jupiter.api.Test;
 import java.util.List;
 import java.util.Set;
@@ -8,14 +9,14 @@ import java.util.HashSet;
 import static org.junit.jupiter.api.Assertions.*;
 
 class JsonEnvelopeSerializationTest {
-    private final ObjectMapper mapper = new ObjectMapper();
+    private final ObjectMapper mapper = JsonMapper.builder().build();
 
     @Test void successAlwaysContainsExactlyFiveFieldsIncludingNullData() throws Exception {
         JsonResult<Object> result = JsonResult.success();
         result.setRequestId("req_test_1");
         var wire = mapper.readTree(mapper.writeValueAsBytes(result));
         Set<String> keys = new HashSet<>();
-        wire.fieldNames().forEachRemaining(keys::add);
+        keys.addAll(wire.propertyNames());
         assertEquals(Set.of("protocolVersion", "requestId", "code", "msg", "data"), keys);
         assertEquals(1, wire.get("protocolVersion").intValue());
         assertTrue(wire.get("data").isNull());

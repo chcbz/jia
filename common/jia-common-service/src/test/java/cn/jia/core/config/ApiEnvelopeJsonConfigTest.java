@@ -1,13 +1,14 @@
 package cn.jia.core.config;
 
 import cn.jia.core.entity.JsonRequest;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ApiEnvelopeJsonConfigTest {
     record Input(String id, int count) {}
-    private final ObjectMapper original = new ObjectMapper();
+    private final JsonMapper original = JsonMapper.builder().build();
     private final ObjectMapper strict = ApiEnvelopeJsonConfig.strictMapper(original);
 
     @Test void typedRequestRetainsGenericType() throws Exception {

@@ -2,10 +2,11 @@ package cn.jia.core.config;
 
 import cn.jia.core.entity.JsonRequest;
 import cn.jia.core.filter.RequestIdFilter;
-import com.fasterxml.jackson.core.JsonParser;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.DeserializationFeature;
+import tools.jackson.core.StreamReadFeature;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.databind.DeserializationFeature;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -25,9 +26,9 @@ import org.springframework.web.servlet.mvc.method.annotation.RequestBodyAdviceAd
 /** Only typed CYF requests use this parser; provider callbacks never opt in. */
 @ControllerAdvice
 public final class ApiRequestEnvelopeAdvice extends RequestBodyAdviceAdapter {
-    private final ObjectMapper mapper = new ObjectMapper()
-            .enable(JsonParser.Feature.STRICT_DUPLICATE_DETECTION)
-            .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
+    private final ObjectMapper mapper = JsonMapper.builder()
+            .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
+            .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS).build();
 
     @Override
     public boolean supports(MethodParameter parameter, Type type, Class<? extends HttpMessageConverter<?>> converter) {
@@ -41,11 +42,11 @@ public final class ApiRequestEnvelopeAdvice extends RequestBodyAdviceAdapter {
         JsonNode root;
         try {
             root = mapper.readTree(bytes);
-        } catch (IOException exception) {
+        } catch (RuntimeException exception) {
             throw invalid("PROTOCOL_INVALID_ENVELOPE", input);
         }
         Set<String> fields = new HashSet<>();
-        if (root != null && root.isObject()) root.fieldNames().forEachRemaining(fields::add);
+        if (root != null && root.isObject()) fields.addAll(root.propertyNames());
         if (!fields.equals(Set.of("protocolVersion", "requestId", "data"))) throw invalid("PROTOCOL_INVALID_ENVELOPE", input);
         if (!root.get("protocolVersion").isIntegralNumber() || !root.get("protocolVersion").canConvertToInt()
                 || root.get("protocolVersion").intValue() != 1) throw invalid("PROTOCOL_UNSUPPORTED_VERSION", input);
