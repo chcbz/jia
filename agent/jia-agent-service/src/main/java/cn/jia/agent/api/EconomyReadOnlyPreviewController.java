@@ -54,7 +54,7 @@ public final class EconomyReadOnlyPreviewController {
             HttpServletRequest request) {
         Principal principal = principal(authentication);
         noQuery(request);
-        return ok(preview.capabilities(principal));
+        return ok(EconomyPreviewWire.from(preview.capabilities(principal)));
     }
 
     @GetMapping(value = "/wallet", produces = MediaType.APPLICATION_JSON_VALUE)
@@ -62,7 +62,7 @@ public final class EconomyReadOnlyPreviewController {
             HttpServletRequest request) {
         Principal principal = principal(authentication);
         noQuery(request);
-        return ok(preview.wallet(principal));
+        return ok(EconomyPreviewWire.from(preview.wallet(principal)));
     }
 
     @GetMapping(value = "/ledger", produces = MediaType.APPLICATION_JSON_VALUE)
@@ -70,7 +70,7 @@ public final class EconomyReadOnlyPreviewController {
             HttpServletRequest request) {
         Principal principal = principal(authentication);
         Query query = ledgerQuery(request);
-        return ok(preview.ledger(principal, query.cursor(), query.limit()));
+        return ok(EconomyPreviewWire.from(preview.ledger(principal, query.cursor(), query.limit())));
     }
 
     @GetMapping(value = "/skill-products", produces = MediaType.APPLICATION_JSON_VALUE)
@@ -78,7 +78,7 @@ public final class EconomyReadOnlyPreviewController {
             HttpServletRequest request) {
         Principal principal = principal(authentication);
         PageQuery query = pageQuery(request);
-        return ok(preview.products(principal, query.offset(), query.limit()));
+        return ok(EconomyPreviewWire.from(preview.products(principal, query.offset(), query.limit())));
     }
 
     @GetMapping(value = "/skill-products/{productId}", produces = MediaType.APPLICATION_JSON_VALUE)
@@ -87,7 +87,7 @@ public final class EconomyReadOnlyPreviewController {
         Principal principal = principal(authentication);
         noQuery(request);
         exactRequestId(productId);
-        return ok(preview.product(principal, productId));
+        return ok(EconomyPreviewWire.from(preview.product(principal, productId)));
     }
 
     @GetMapping(value = "/agents/{agentId}/skills", produces = MediaType.APPLICATION_JSON_VALUE)
@@ -96,7 +96,7 @@ public final class EconomyReadOnlyPreviewController {
         Principal principal = principal(authentication);
         noQuery(request);
         exactRequestId(agentId);
-        return ok(preview.agentSkills(principal, agentId));
+        return ok(EconomyPreviewWire.from(preview.agentSkills(principal, agentId)));
     }
 
     @GetMapping(value = "/hosting-plan", produces = MediaType.APPLICATION_JSON_VALUE)
@@ -104,7 +104,7 @@ public final class EconomyReadOnlyPreviewController {
             HttpServletRequest request) {
         Principal principal = principal(authentication);
         noQuery(request);
-        return ok(preview.hostingPlan(principal));
+        return ok(EconomyPreviewWire.from(preview.hostingPlan(principal)));
     }
 
     @GetMapping(value = "/agents/{agentId}/hosting-lease", produces = MediaType.APPLICATION_JSON_VALUE)
@@ -113,7 +113,7 @@ public final class EconomyReadOnlyPreviewController {
         Principal principal = principal(authentication);
         noQuery(request);
         exactRequestId(agentId);
-        return ok(preview.hostingLease(principal, agentId));
+        return ok(EconomyPreviewWire.from(preview.hostingLease(principal, agentId)));
     }
 
     @PostMapping(value = "/bounty-estimates", consumes = MediaType.APPLICATION_JSON_VALUE,
@@ -122,7 +122,7 @@ public final class EconomyReadOnlyPreviewController {
             Authentication authentication, HttpServletRequest request) {
         Principal principal = principal(authentication);
         noQuery(request);
-        return ok(preview.estimate(principal, estimate(body)));
+        return ok(EconomyPreviewWire.from(preview.estimate(principal, estimate(body))));
     }
 
     @ExceptionHandler(EconomyReadOnlyPreviewException.class)
@@ -167,18 +167,20 @@ public final class EconomyReadOnlyPreviewController {
     }
 
     private static Query ledgerQuery(HttpServletRequest request) {
-        exactQueryNames(request, Set.of("cursor", "limit"));
+        exactQueryNames(request, Set.of("cursor", "pageSize"));
         String cursor = singleQuery(request, "cursor");
-        String limit = singleQuery(request, "limit");
+        String limit = singleQuery(request, "pageSize");
         return new Query(cursor == null ? null : EconomyReadOnlyPreviewService.decodeCursor(cursor),
                 limit == null ? DEFAULT_LIMIT : boundedPositive(limit));
     }
 
     private static PageQuery pageQuery(HttpServletRequest request) {
-        exactQueryNames(request, Set.of("offset", "limit"));
-        String offset = singleQuery(request, "offset");
-        String limit = singleQuery(request, "limit");
-        int parsedOffset = offset == null ? 0 : nonNegativeInt(offset);
+        exactQueryNames(request, Set.of("cursor", "pageSize"));
+        String cursor = singleQuery(request, "cursor");
+        String limit = singleQuery(request, "pageSize");
+        int parsedOffset;
+        try { parsedOffset = EconomyPreviewWire.productOffset(cursor); }
+        catch (IllegalArgumentException invalid) { throw badRequest(); }
         int parsedLimit = limit == null ? DEFAULT_LIMIT : boundedPositive(limit);
         try {
             Math.addExact(parsedOffset, parsedLimit);
@@ -224,16 +226,22 @@ public final class EconomyReadOnlyPreviewController {
         try {
             JsonNode root = STRICT_JSON.readTree(raw);
             if (root == null || !root.isObject() || root.size() != 4
-                    || !root.has("grossBountyAmountMicro") || !root.has("minimumAcceptedPayoutMicro")
+                    || !root.has("grossBountyAmount") || !root.has("minimumAcceptedPayout")
                     || !root.has("estimatedTokens") || !root.has("worstTokens")) throw badRequest();
-            return new EstimateInput(decimal(root.get("grossBountyAmountMicro")),
-                    decimal(root.get("minimumAcceptedPayoutMicro")),
+            return new EstimateInput(money(root.get("grossBountyAmount")),
+                    money(root.get("minimumAcceptedPayout")),
                     tokens(root.get("estimatedTokens")), tokens(root.get("worstTokens")));
         } catch (EconomyReadOnlyPreviewException exception) {
             throw exception;
         } catch (Exception exception) {
             throw badRequest();
         }
+    }
+
+    private static long money(JsonNode value) {
+        if (value==null || !value.isObject() || value.size()!=2 || !value.has("amountMinor") || !value.has("currency")
+                || !value.get("currency").isTextual() || !"SILVER".equals(value.get("currency").textValue())) throw badRequest();
+        return decimal(value.get("amountMinor"));
     }
 
     private static ParsedTokens tokens(JsonNode node) {

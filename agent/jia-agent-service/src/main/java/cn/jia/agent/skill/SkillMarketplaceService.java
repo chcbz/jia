@@ -53,7 +53,7 @@ public final class SkillMarketplaceService {
     }
     public Map<String,Object> capabilities(HostingRentHttp.Actor a) {
         return Map.of("economyPreviewEnabled",preview.allows(a.tenantId(),a.clientId()),
-                "skillMarketplaceEnabled",available(a),"principalScopeFingerprint",HexFormat.of().formatHex(
+                "skillMarketplaceEnabled",available(a),"principalScopeSha256",HexFormat.of().formatHex(
                         HostingRentHttp.hash("economy-principal-scope-v1",Map.of("actor",a.actorId(),"tenant",a.tenantId(),"client",a.clientId()))));
     }
     private void enabled(HostingRentHttp.Actor a) { require(available(a),503,"SKILL_MARKETPLACE_DISABLED"); }
@@ -75,7 +75,7 @@ public final class SkillMarketplaceService {
         Map<String,Object> dto=new LinkedHashMap<>();
         dto.put("productId",p.getProductId()); dto.put("name",p.getName()); dto.put("description",p.getDescription());
         dto.put("productVersionId",v.getProductVersionId()); dto.put("skillKey",v.getSkillKey()); dto.put("skillVersion",v.getSkillVersion());
-        dto.put("priceMicro",v.getPriceMicro().toString()); dto.put("permissions",SkillMarketplaceHttp.permissions(v.getApprovedPermissionsManifest()));
+        dto.put("price",cn.jia.economy.common.Money.silver(v.getPriceMicro())); dto.put("permissions",SkillMarketplaceHttp.permissions(v.getApprovedPermissionsManifest()));
         boolean allowed=admin || "NONE".equals(v.getDeploymentRestriction());
         dto.put("canPurchase",allowed); dto.put("denialReason",allowed?null:"SKILL_ADMIN_REQUIRED");
         dto.put("deploymentRestriction",v.getDeploymentRestriction()); return dto;
@@ -242,7 +242,7 @@ public final class SkillMarketplaceService {
             return market.selectEntitlementsByAgent(a.tenantId(),a.clientId(),agentId).stream().map(e->{
                 Map<String,Object> d=new LinkedHashMap<>();
                 d.put("entitlementId",e.getEntitlementId()); d.put("targetAgentId",e.getTargetAgentId()); d.put("orderId",e.getOrderId());
-                d.put("installationId",e.getInstallationId()); d.put("productVersionId",e.getProductVersionId());
+                d.put("skillInstallationId",e.getInstallationId()); d.put("productVersionId",e.getProductVersionId());
                 d.put("skillKey",e.getSkillKey()); d.put("skillVersion",e.getSkillVersion()); d.put("status",e.getStatus());
                 d.put("permissionGrantVersion",e.getPermissionGrantVersion().toString()); return d;
             }).toList();
@@ -277,7 +277,7 @@ public final class SkillMarketplaceService {
     static EconomyAccountKey availableAccount(String actor) { return new EconomyAccountKey("SILVER",EconomyAccountOwnerType.USER,actor,EconomyAccountPurpose.AVAILABLE); }
     static Map<String,Object> quoteDto(SkillPurchaseQuoteEntity q) {
         return Map.of("quoteId",q.getQuoteId(),"productVersionId",q.getProductVersionId(),"targetAgentId",q.getTargetAgentId(),
-                "expectedAgentVersion",q.getExpectedAgentVersion().toString(),"priceMicro",q.getExpectedPriceMicro().toString(),"expiresAt",q.getExpiresAt().toString());
+                "expectedAgentVersion",q.getExpectedAgentVersion().toString(),"price",cn.jia.economy.common.Money.silver(q.getExpectedPriceMicro()),"expiresAt",q.getExpiresAt());
     }
     static Map<String,Object> orderDto(SkillOrderEntity o,String status) {
         return Map.of("orderId",o.getOrderId(),"productVersionId",o.getProductVersionId(),"targetAgentId",o.getTargetAgentId(),

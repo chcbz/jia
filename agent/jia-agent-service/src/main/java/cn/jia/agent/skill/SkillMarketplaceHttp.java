@@ -16,7 +16,7 @@ public final class SkillMarketplaceHttp {
         require(raw!=null && raw.length>0 && raw.length<=8192,400,"BAD_REQUEST");
         try {
             Map<String,Object> node=JSON.readValue(raw,new TypeReference<Map<String,Object>>(){});
-            Set<String> fields=purchase?Set.of("quoteId","productVersionId","targetAgentId","expectedPriceMicro","expectedAgentVersion","approvedPermissions")
+            Set<String> fields=purchase?Set.of("quoteId","productVersionId","targetAgentId","expectedPrice","expectedAgentVersion","approvedPermissions")
                     :Set.of("productVersionId","targetAgentId","expectedAgentVersion");
             require(node!=null && node.keySet().equals(fields),400,"BAD_REQUEST");
             Map<String,String> out=new TreeMap<>();
@@ -32,6 +32,14 @@ public final class SkillMarketplaceHttp {
                         require(seen.add(text),400,"BAD_REQUEST"); approved.add(text);
                     }
                     approved.sort(String::compareTo); out.put(name,JSON.writeValueAsString(approved));
+                } else if (name.equals("expectedPrice")) {
+                    require(value instanceof Map<?,?>,400,"BAD_REQUEST");
+                    Map<?,?> money=(Map<?,?>)value;
+                    require(money.keySet().equals(Set.of("amountMinor","currency")) && "SILVER".equals(money.get("currency")),400,"BAD_REQUEST");
+                    require(money.get("amountMinor") instanceof String,400,"BAD_REQUEST");
+                    String amount=(String)money.get("amountMinor");
+                    require(amount.matches("0|[1-9][0-9]{0,18}"),400,"BAD_REQUEST"); Long.parseLong(amount);
+                    out.put("expectedPriceMicro",amount); // original business hash and ledger units are unchanged
                 } else {
                     require(value instanceof String,400,"BAD_REQUEST");
                     String text=(String)value; HostingRentHttp.exact(text,100); out.put(name,text);
