@@ -33,6 +33,7 @@ class ChatStreamHttpTest {
     private JuyitingAgentRelayService relay;
     private MockMvc mvc;
     private ChatClient model;
+    private RedisService redis;
 
     @BeforeEach void setUp() {
         var conversations = mock(ChatConversationService.class);
@@ -41,7 +42,7 @@ class ChatStreamHttpTest {
         conversation.setTenantId("0"); conversation.setClientId("client");
         when(conversations.get("42")).thenReturn(conversation);
         when(conversations.isLiveGeneration("owner", "client", "42", 1L)).thenReturn(true);
-        var redis = mock(RedisService.class);
+        redis = mock(RedisService.class);
         when(redis.subscribeToChannel("42")).thenReturn(Flux.never());
         var identity = mock(HumanSenderIdentityResolver.class);
         when(identity.resolve(any())).thenReturn(new ServerResolvedSender("user", "Owner", "owner", "client", DisplayNameSource.JIACN));
@@ -60,11 +61,13 @@ class ChatStreamHttpTest {
         frames(Flux.just("{\"v\":\"中文\\n\\\"quoted\\\"\"}",
                 "{\"requestId\":\"durable\",\"eventId\":\"stable-event\",\"eventVersion\":\"9007199254740993\",\"occurredAt\":\"1000\"}"));
         var wire = read();
-        assertEquals(4, wire.size()); // first reference + two relay frames + final reference
-        assertEquals("chat.stream.delta", wire.get(1).get("messageType"));
-        assertEquals("中文\n\"quoted\"", ((Map<?, ?>) wire.get(1).get("data")).get("v"));
-        assertEquals("stable-event", wire.get(2).get("messageId"));
-        var data = (Map<?, ?>) wire.get(2).get("data");
+        assertEquals(6, wire.size()); // lifecycle + first reference + two relay frames + final reference
+        assertEquals("chat.stream.started", wire.getFirst().get("messageType"));
+        assertEquals("chat.stream.completed", wire.getLast().get("messageType"));
+        assertEquals("chat.stream.delta", wire.get(2).get("messageType"));
+        assertEquals("中文\n\"quoted\"", ((Map<?, ?>) wire.get(2).get("data")).get("v"));
+        assertEquals("stable-event", wire.get(3).get("messageId"));
+        var data = (Map<?, ?>) wire.get(3).get("data");
         assertEquals("durable", data.get("requestId"));
         assertEquals("9007199254740993", data.get("eventVersion"));
         assertEquals(1000, data.get("occurredAt"));
@@ -75,6 +78,20 @@ class ChatStreamHttpTest {
         var wire = read();
         assertEquals("chat.stream.error", wire.getLast().get("messageType"));
         assertFalse(JsonUtil.toJson(wire).contains("secret"));
+        assertTrue(wire.stream().noneMatch(frame -> "chat.stream.completed".equals(frame.get("messageType"))));
+    }
+    @Test void explicitRelayDenialStopsBeforeAnyCompletedTail() throws Exception {
+        frames(Flux.just("{\"error\":\"scope mismatch\",\"conversationId\":\"42\"}"));
+        var wire = read();
+        assertEquals("chat.stream.error", wire.getLast().get("messageType"));
+        assertTrue(wire.stream().noneMatch(frame -> "chat.stream.completed".equals(frame.get("messageType"))));
+    }
+    @Test void cancellationDoesNotInventACompletedFrame() throws Exception {
+        var cancellation = reactor.core.publisher.Sinks.<String>one();
+        when(redis.subscribeToChannel("42")).thenReturn(cancellation.asMono().flux());
+        frames(Flux.defer(() -> { cancellation.tryEmitValue("stop"); return Flux.never(); }));
+        var wire = read();
+        assertEquals("chat.stream.started", wire.getFirst().get("messageType"));
         assertTrue(wire.stream().noneMatch(frame -> "chat.stream.completed".equals(frame.get("messageType"))));
     }
     private void frames(Flux<String> stream) {

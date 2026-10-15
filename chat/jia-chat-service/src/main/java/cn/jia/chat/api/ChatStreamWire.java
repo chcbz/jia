@@ -38,7 +38,9 @@ final class ChatStreamWire {
             type = "chat.stream.error";
             // Internal exception text may contain provider/SQL credentials. Keep it out of public frames.
             data.put("error", "Stream processing failed");
-        } else if (data.containsKey("v")) type = "chat.stream.delta";
+        } else if ("stream_started".equals(data.get("type"))) type = "chat.stream.started";
+        else if ("stream_completed".equals(data.get("type"))) type = "chat.stream.completed";
+        else if (data.containsKey("v")) type = "chat.stream.delta";
         else if (data.containsKey("t")) type = "chat.stream.title";
         else if ("agent_message".equals(data.get("type"))) type = "chat.message";
         else if ("agent_message_delta".equals(data.get("type"))) type = "chat.message.delta";

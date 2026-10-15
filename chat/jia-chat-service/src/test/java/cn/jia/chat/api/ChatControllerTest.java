@@ -636,7 +636,7 @@ class ChatControllerTest extends BaseMockTest {
             List<String> frames = controller.handleChat(request).collectList().block(Duration.ofSeconds(2));
             assertTrue(frames.getFirst().contains("\"conversationId\":\"1001\""));
             assertEquals(1, frames.stream().filter(frame -> frame.contains("final-" + id)).count());
-            assertTrue(frames.get(frames.size() - 2).contains("final-" + id));
+            assertTrue(frames.get(frames.size() - 3).contains("final-" + id));
             assertEquals(2, reads.get(id).get());
         }
         verify(chatDeliberationService, org.mockito.Mockito.times(2)).admit(eq("0"), any(), eq("1001"), eq(1L), any(), any(), any(), any());
@@ -661,9 +661,9 @@ class ChatControllerTest extends BaseMockTest {
         ChatMessageDTO request = new ChatMessageDTO();
         request.setConversationId("1001"); request.setContent("普通聊天"); request.setConversationType("normal");
         List<String> frames = controller.handleChat(request).collectList().block(Duration.ofSeconds(2));
-        assertEquals(3, frames.size());
-        assertTrue(frames.get(0).contains("第一块"));
-        assertTrue(frames.get(1).contains("第二块"));
+        assertEquals(5, frames.size());
+        assertTrue(frames.get(1).contains("第一块"));
+        assertTrue(frames.get(2).contains("第二块"));
         assertTrue(frames.getLast().contains("normal"));
         verify(chatDeliberationService, never()).getRequest(anyString(), anyString(), anyString(), anyString());
         verify(chatDeliberationService, never()).admit(anyString(), any(), anyString(), org.mockito.ArgumentMatchers.anyLong(), any(), any(), any(), any());
@@ -686,7 +686,7 @@ class ChatControllerTest extends BaseMockTest {
         request.setConversationType("juyiting"); request.setConversationScopeType("public");
         request.setConversationScopeKey("public"); request.setTargetAgentIds(List.of("agent-wuyong"));
         List<String> frames = controller.handleChat(request).collectList().block(Duration.ofSeconds(2));
-        assertEquals(3, frames.size());
+        assertEquals(4, frames.size());
         assertTrue(frames.getLast().contains("error"));
         assertTrue(frames.getFirst().contains("1001"));
         verify(chatDeliberationService, org.mockito.Mockito.times(1)).admit(eq("0"), any(), eq("1001"), eq(1L), any(), any(), any(), any());

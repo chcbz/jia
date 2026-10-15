@@ -170,7 +170,8 @@ public class ChatController {
             @RequestBody cn.jia.core.entity.JsonRequest<ChatMessageDTO> protocolRequest,
             @RequestHeader(name = "Idempotency-Key", required = false) String idempotencyKey) {
         return handleChatInternal(protocolRequest.data(), idempotencyKey)
-                .map(frame -> ChatStreamWire.message(protocolRequest.requestId(), frame));
+                .map(frame -> ChatStreamWire.message(protocolRequest.requestId(), frame))
+                .takeUntil(message -> "chat.stream.error".equals(message.messageType()));
     }
 
     private Flux<String> handleChatInternal(ChatMessageDTO chatMessage, String idempotencyKey) {
@@ -205,12 +206,18 @@ public class ChatController {
                 ? Flux.just("{\"conversationId\":\"" + escapeJson(conversationId)
                         + "\",\"conversationType\":\"" + CONVERSATION_TYPE_JUYITING + "\"}")
                 : Flux.empty();
-        Flux<String> backendStream = conversationReference.concatWith(agentDelivery.stream())
+        Flux<String> started = Flux.just(JsonUtil.toJson(Map.of("type", "stream_started",
+                "conversationId", conversationId, "conversationType", resolveConversationType(conversation))));
+        Flux<String> backendStream = started.concatWith(conversationReference).concatWith(agentDelivery.stream())
                 .concatWith(aiStream)
                 .concatWith(Flux.defer(() -> Flux.just("{\"conversationId\": \"" + conversationId + "\", \"conversationType\": \"" + resolveConversationType(conversation) + "\"}")))
                 .concatWith(Flux.defer(() -> handleSummary(
                         needSummary, chatMessage.getContent(), summary.toString(),
                         conversationId, ownerJiacn, ownerClientId)))
+                // This means the HTTP stream completed, not that an asynchronously delivered Agent turn succeeded.
+                // Put it BEFORE cancellation/deletion operators: a cancelled stream must never gain a success tail.
+                .concatWith(Flux.defer(() -> Flux.just(JsonUtil.toJson(Map.of("type", "stream_completed",
+                        "conversationId", conversationId, "conversationType", resolveConversationType(conversation))))))
                 .takeUntilOther(cancelSignal)
                 .takeUntilOther(chatConversationEventBroker.deletionSignal(
                         conversationId, generation,
