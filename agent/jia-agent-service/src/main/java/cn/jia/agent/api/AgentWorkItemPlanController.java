@@ -57,7 +57,7 @@ public class AgentWorkItemPlanController {
             consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<AgentWorkItemPlanViewDTO> suggest(
             @PathVariable String taskId,
-            @RequestBody byte[] body,
+            @cn.jia.core.annotation.ApiJsonData @RequestBody byte[] body,
             HttpServletRequest request,
             Authentication authentication) {
         Scope scope = requireJwtScope(authentication);
@@ -74,7 +74,7 @@ public class AgentWorkItemPlanController {
     public ResponseEntity<AgentWorkItemPlanViewDTO> confirm(
             @PathVariable String taskId,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
-            @RequestBody byte[] body,
+            @cn.jia.core.annotation.ApiJsonData @RequestBody byte[] body,
             HttpServletRequest request,
             Authentication authentication) {
         Scope scope = requireJwtScope(authentication);

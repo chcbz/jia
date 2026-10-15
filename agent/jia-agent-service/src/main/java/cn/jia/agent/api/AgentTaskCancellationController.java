@@ -50,15 +50,16 @@ public class AgentTaskCancellationController {
         long version;
         try {
             // Bounded request, no free-form reason/identity/lease/credential payload accepted.
-            byte[] bytes=request.getInputStream().readNBytes(1025);
+            byte[] bytes=cn.jia.core.config.ApiJsonInput.readData(request);
             if (bytes.length>1024) throw badRequest();
             JsonNode root=JSON.readTree(bytes);
             JsonNode expected=root==null ? null : root.get("expectedTaskVersion");
             if (root==null || !root.isObject() || root.size()!=1 || expected==null
-                    || !expected.isIntegralNumber() || !expected.canConvertToLong()) throw badRequest();
-            version=expected.longValue();
+                    || !expected.isString() || !expected.asString().matches("0|[1-9][0-9]*")) throw badRequest();
+            version=Long.parseLong(expected.asString());
             if (version<0 || version==Long.MAX_VALUE) throw badRequest();
-        } catch (Exception failure) { throw badRequest(); }
+        } catch (org.springframework.http.converter.HttpMessageNotReadableException protocol) { throw protocol; }
+        catch (Exception failure) { throw badRequest(); }
         var receipt=service.cancel("0",client,owner,actor,taskId,version);
         if (receipt==null || !taskId.equals(receipt.taskId()) || !"cancelled".equals(receipt.status())
                 || receipt.taskVersion()<0) {

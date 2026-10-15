@@ -700,7 +700,7 @@ public class WxMpController {
      * @throws Exception
      */
     @RequestMapping("/menu/create")
-    public Object menuCreate(@RequestBody String menu, HttpServletRequest request) throws Exception {
+    public Object menuCreate(@cn.jia.core.annotation.ApiJsonData @RequestBody String menu, HttpServletRequest request) throws Exception {
         JsonElement menuPayload = JsonParser.parseString(menu);
         String menuJson = menuPayload.isJsonPrimitive() ? menuPayload.getAsString() : menu;
         mpInfoService.findWxMpService(request).getMenuService().menuCreate(menuJson);

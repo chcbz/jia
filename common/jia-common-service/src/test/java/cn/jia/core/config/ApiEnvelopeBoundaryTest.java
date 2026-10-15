@@ -23,6 +23,9 @@ class ApiEnvelopeBoundaryTest {
         @PostMapping("/test/protocol") JsonResult<Input> echo(@RequestBody JsonRequest<Input> request) {
             return JsonResult.success(request.data());
         }
+        @PostMapping("/test/raw") JsonResult<String> raw(@cn.jia.core.annotation.ApiJsonData @RequestBody byte[] data) {
+            return JsonResult.success(new String(data, java.nio.charset.StandardCharsets.UTF_8));
+        }
         @GetMapping("/test/fail") JsonResult<Void> fail() { throw new IllegalStateException("private diagnostic"); }
         @GetMapping("/test/forbidden") JsonResult<Void> forbidden() { throw new org.springframework.security.access.AccessDeniedException("private"); }
         @GetMapping("/sms/receive") String external() { throw new IllegalStateException("provider failure"); }
@@ -30,6 +33,7 @@ class ApiEnvelopeBoundaryTest {
     private MockMvc mvc;
     @BeforeEach void setup() {
         List<HttpMessageConverter<?>> converters = new ArrayList<>();
+        converters.add(new org.springframework.http.converter.ByteArrayHttpMessageConverter());
         converters.add(new JacksonJsonHttpMessageConverter());
         new ApiEnvelopeJsonConfig().extendMessageConverters(converters);
         mvc = MockMvcBuilders.standaloneSetup(new Endpoints())
@@ -70,4 +74,19 @@ class ApiEnvelopeBoundaryTest {
                 .andExpect(status().isOk()).andExpect(jsonPath("$.protocolVersion").doesNotExist())
                 .andExpect(jsonPath("$.requestId").doesNotExist()).andExpect(jsonPath("$.status").value(200));
     }
+    @Test void rawAdapterPreservesOriginalDataBytesAndCorrelation() throws Exception {
+        String data = "{ \"name\":\"图片\", \"n\":1.00 }";
+        mvc.perform(post("/test/raw").contentType(MediaType.APPLICATION_JSON).content(body("raw-id", data)))
+                .andExpect(status().isOk()).andExpect(header().string("X-Request-Id", "raw-id"))
+                .andExpect(jsonPath("$.data").value(data));
+    }
+    @Test void decoderPreservesEachJsonValueWithoutReserializing() {
+        for (String data : List.of("{ \"图片\" : [1, true] }", "[ 1, null, \"文\" ]", "\"文\\n字\"", "null", "true", "123", "1.00", "-1.2e+3")) {
+            byte[] bytes = body("r", data).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            var input = new org.springframework.http.server.ServletServerHttpRequest(new org.springframework.mock.web.MockHttpServletRequest());
+            var decoded = ApiJsonInput.decode(bytes, input);
+            org.junit.jupiter.api.Assertions.assertArrayEquals(data.getBytes(java.nio.charset.StandardCharsets.UTF_8), decoded.data(), data);
+        }
+    }
+
 }

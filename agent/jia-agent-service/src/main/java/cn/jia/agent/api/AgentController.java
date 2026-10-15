@@ -187,7 +187,7 @@ public class AgentController {
 
     @PostMapping("/personas/{personaCode}/bind")
     public Object bindPersonaHttp(@PathVariable String personaCode, Authentication authentication,
-            HttpServletRequest servletRequest, @RequestBody(required = false) byte[] rawBody) {
+            HttpServletRequest servletRequest, @cn.jia.core.annotation.ApiJsonData @RequestBody(required = false) byte[] rawBody) {
         if (rawBody == null || rawBody.length == 0
                 || "null".equals(new String(rawBody, StandardCharsets.UTF_8).strip())) {
             return bindPersona(personaCode, null, authentication);

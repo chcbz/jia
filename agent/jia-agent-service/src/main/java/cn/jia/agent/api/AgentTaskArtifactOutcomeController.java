@@ -266,34 +266,11 @@ public class AgentTaskArtifactOutcomeController {
     }
 
     private static byte[] readBounded(HttpServletRequest request) {
-        long declaredLength = request.getContentLengthLong();
-        if (declaredLength == 0 || declaredLength > MAX_BODY_BYTES) {
-            throw new RequestFailure();
-        }
-        int initialSize = declaredLength > 0
-                ? (int) Math.min(declaredLength, BODY_BUFFER_BYTES)
-                : BODY_BUFFER_BYTES;
-        try (ByteArrayOutputStream result = new ByteArrayOutputStream(initialSize)) {
-            byte[] buffer = new byte[BODY_BUFFER_BYTES];
-            int total = 0;
-            int count;
-            while ((count = request.getInputStream().read(buffer)) != -1) {
-                if (count == 0) {
-                    continue;
-                }
-                if (count > MAX_BODY_BYTES - total) {
-                    throw new RequestFailure();
-                }
-                result.write(buffer, 0, count);
-                total += count;
-            }
-            if (total == 0) {
-                throw new RequestFailure();
-            }
-            return result.toByteArray();
-        } catch (RequestFailure failure) {
-            throw failure;
-        } catch (IOException failure) {
+        try {
+            byte[] data = cn.jia.core.config.ApiJsonInput.readData(request);
+            if (data.length == 0 || data.length > MAX_BODY_BYTES) throw new RequestFailure();
+            return data;
+        } catch (IOException unreadable) {
             throw new RequestFailure();
         }
     }

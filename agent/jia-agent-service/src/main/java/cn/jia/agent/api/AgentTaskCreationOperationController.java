@@ -60,7 +60,7 @@ public final class AgentTaskCreationOperationController {
     @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<AgentTaskCreationOperationService.Receipt> create(
-            @RequestBody(required = false) String rawBody,
+            @cn.jia.core.annotation.ApiJsonData @RequestBody(required = false) String rawBody,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             HttpServletRequest request, Authentication authentication) {
         AgentTaskCreationOperationService.Scope scope = scope(authentication);
@@ -91,7 +91,7 @@ public final class AgentTaskCreationOperationController {
     @PostMapping(value = "/v2", consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<AgentTaskCreationOperationService.MaterialsReceipt> createV2(
-            @RequestBody(required = false) String rawBody,
+            @cn.jia.core.annotation.ApiJsonData @RequestBody(required = false) String rawBody,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             HttpServletRequest request, Authentication authentication) {
         AgentTaskCreationOperationService.Scope scope = scope(authentication);

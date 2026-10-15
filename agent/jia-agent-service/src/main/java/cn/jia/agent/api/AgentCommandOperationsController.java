@@ -112,7 +112,7 @@ public class AgentCommandOperationsController {
     public ResponseEntity<?> redriveV1(
             @PathVariable String deliveryId,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
-            @RequestBody byte[] rawBody,
+            @cn.jia.core.annotation.ApiJsonData @RequestBody byte[] rawBody,
             Authentication authentication) {
         Scope scope = requireScope(authentication, AUTHORITY_REDRIVE, false);
         OperationBody body = requireBody(rawBody);
@@ -125,7 +125,7 @@ public class AgentCommandOperationsController {
             consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<?> redrive(
             @PathVariable String deliveryId,
-            @RequestBody byte[] rawBody,
+            @cn.jia.core.annotation.ApiJsonData @RequestBody byte[] rawBody,
             Authentication authentication) {
         Scope scope = requireScope(authentication, AUTHORITY_REDRIVE, false);
         OperationBody body = requireBody(rawBody);
@@ -137,7 +137,7 @@ public class AgentCommandOperationsController {
             consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<?> reissue(
             @PathVariable String deliveryId,
-            @RequestBody byte[] rawBody,
+            @cn.jia.core.annotation.ApiJsonData @RequestBody byte[] rawBody,
             Authentication authentication) {
         Scope scope = requireScope(authentication, AUTHORITY_REISSUE, true);
         OperationBody body = requireBody(rawBody);

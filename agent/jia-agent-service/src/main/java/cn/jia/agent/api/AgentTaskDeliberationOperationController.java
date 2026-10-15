@@ -78,7 +78,7 @@ public final class AgentTaskDeliberationOperationController {
     public ResponseEntity<JsonResult<AssignmentOperationView>> point(
             @PathVariable String taskId,
             @RequestHeader(name = "Idempotency-Key", required = false) String idempotencyKey,
-            @RequestBody(required = false) String rawBody,
+            @cn.jia.core.annotation.ApiJsonData @RequestBody(required = false) String rawBody,
             HttpServletRequest request, Authentication authentication) {
         var scope = requireOwnerJwt(authentication);
         requireRequest(taskId, idempotencyKey, request);

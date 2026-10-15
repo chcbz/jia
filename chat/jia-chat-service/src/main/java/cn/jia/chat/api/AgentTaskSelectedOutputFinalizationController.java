@@ -133,7 +133,7 @@ public final class AgentTaskSelectedOutputFinalizationController {
         }catch(RequestFailure e){throw e;}catch(Exception e){throw new RequestFailure();}
     }
     private static byte[] read(HttpServletRequest request){
-        try(InputStream in=request.getInputStream();ByteArrayOutputStream out=new ByteArrayOutputStream(Math.min(MAX_BODY,8192))){
+        try(InputStream in=new java.io.ByteArrayInputStream(cn.jia.core.config.ApiJsonInput.readData(request));ByteArrayOutputStream out=new ByteArrayOutputStream(Math.min(MAX_BODY,8192))){
             boolean inString=false,escaped=false,pendingWhitespace=false;int value;
             while((value=in.read())>=0){
                 if(!inString&&(value==' '||value=='\t'||value=='\r'||value=='\n')){

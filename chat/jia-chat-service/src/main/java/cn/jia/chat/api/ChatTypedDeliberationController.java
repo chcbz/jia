@@ -47,7 +47,7 @@ public final class ChatTypedDeliberationController {
     @PostMapping("/{conversationId}/interactions/discussion")
     public ResponseEntity<JsonResult<ChatTypedDeliberationWire.Accepted>> discuss(
             @PathVariable String conversationId,@RequestHeader("Idempotency-Key") String key,
-            @RequestBody(required=false) String rawBody,Authentication authentication) {
+            @cn.jia.core.annotation.ApiJsonData @RequestBody(required=false) String rawBody,Authentication authentication) {
         if(!exact(key,100))throw invalid();Scope scope=scope(authentication);
         var receipt=admissions.admit(scope.tenantId(),scope.sender(),conversationId,key,
                 ChatTypedDeliberationWire.parse(rawBody));

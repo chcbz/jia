@@ -166,8 +166,9 @@ public class ChatController {
      * @return 返回包含AI回复内容的流
      */
     @RequestMapping(value = "/stream", method = RequestMethod.POST, produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public Flux<String> handleChat(@RequestBody ChatMessageDTO chatMessage,
+    public Flux<String> handleChat(@RequestBody cn.jia.core.entity.JsonRequest<ChatMessageDTO> protocolRequest,
             @RequestHeader(name = "Idempotency-Key", required = false) String idempotencyKey) {
+        ChatMessageDTO chatMessage = protocolRequest == null ? null : protocolRequest.data();
         bindIdempotencyKey(chatMessage, idempotencyKey);
         // Reject execute/unknown hints before creating or mutating any conversation.
         InteractionRoute route = interactionRouter.routeStream(chatMessage);

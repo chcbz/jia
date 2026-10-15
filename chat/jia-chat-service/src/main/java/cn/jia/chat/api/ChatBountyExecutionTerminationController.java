@@ -47,7 +47,7 @@ public final class ChatBountyExecutionTerminationController {
     @PostMapping
     public ResponseEntity<JsonResult<Receipt>> abandon(@PathVariable String conversationId,
             @PathVariable String requestId,@RequestHeader("Idempotency-Key") String key,
-            @RequestBody(required=false) String body,Authentication authentication) {
+            @cn.jia.core.annotation.ApiJsonData @RequestBody(required=false) String body,Authentication authentication) {
         Scope scope=scope(authentication,conversationId);
         return ok(service.abandon(scope,requestId,key,parse(body)));
     }

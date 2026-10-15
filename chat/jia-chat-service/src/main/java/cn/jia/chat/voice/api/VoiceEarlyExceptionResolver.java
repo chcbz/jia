@@ -55,9 +55,11 @@ public final class VoiceEarlyExceptionResolver implements HandlerExceptionResolv
             return null;
         }
         JsonResult<VoiceErrorData> result = new JsonResult<>(
-                new VoiceErrorData(null), error.message(), error.code(), error.status().value());
+                new VoiceErrorData(null), error.message(), error.code());
         try {
-            byte[] body = objectMapper.writeValueAsBytes(result);
+            result.setRequestId(cn.jia.core.filter.RequestIdFilter.current(request));
+        response.setHeader(cn.jia.core.filter.RequestIdFilter.HEADER_NAME, result.getRequestId());
+        byte[] body = objectMapper.writeValueAsBytes(result);
             response.setStatus(error.status().value());
             response.setContentType(MediaType.APPLICATION_JSON_VALUE);
             response.setCharacterEncoding(StandardCharsets.UTF_8.name());

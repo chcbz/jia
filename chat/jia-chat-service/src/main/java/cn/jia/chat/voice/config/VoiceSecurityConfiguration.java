@@ -42,9 +42,9 @@ public class VoiceSecurityConfiguration {
                 })
                 .exceptionHandling(errors -> errors
                         .authenticationEntryPoint((request, response, exception) ->
-                                unauthorized(response, objectMapper))
+                                unauthorized(request, response, objectMapper))
                         .accessDeniedHandler((request, response, exception) ->
-                                unauthorized(response, objectMapper)))
+                                unauthorized(request, response, objectMapper)))
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .securityContext(context -> context.securityContextRepository(
                         new NullSecurityContextRepository()))
@@ -54,16 +54,18 @@ public class VoiceSecurityConfiguration {
             http.oauth2ResourceServer(oauth2 -> oauth2
                     .jwt(jwt -> jwt.decoder(jwtDecoder))
                     .authenticationEntryPoint((request, response, exception) ->
-                            unauthorized(response, objectMapper)));
+                            unauthorized(request, response, objectMapper)));
         }
         return http.build();
     }
 
-    private static void unauthorized(HttpServletResponse response, ObjectMapper objectMapper)
+    private static void unauthorized(jakarta.servlet.http.HttpServletRequest request, HttpServletResponse response, ObjectMapper objectMapper)
             throws java.io.IOException {
         VoiceErrorCode error = VoiceErrorCode.UNAUTHORIZED;
         JsonResult<VoiceErrorData> body = new JsonResult<>(
-                new VoiceErrorData(null), error.message(), error.code(), error.status().value());
+                new VoiceErrorData(null), error.message(), error.code());
+        body.setRequestId(cn.jia.core.filter.RequestIdFilter.current(request));
+        response.setHeader(cn.jia.core.filter.RequestIdFilter.HEADER_NAME, body.getRequestId());
         response.setStatus(error.status().value());
         response.setCharacterEncoding(StandardCharsets.UTF_8.name());
         response.setContentType(MediaType.APPLICATION_JSON_VALUE);

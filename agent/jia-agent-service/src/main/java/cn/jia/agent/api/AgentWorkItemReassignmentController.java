@@ -253,25 +253,10 @@ public class AgentWorkItemReassignmentController {
     }
 
     private static byte[] readBounded(HttpServletRequest request) {
-        long declaredLength = request.getContentLengthLong();
-        if (declaredLength == 0 || declaredLength > MAX_BODY_BYTES) {
-            throw new RequestFailure();
-        }
-        int initial = declaredLength > 0 ? (int) declaredLength : 1024;
-        try (ByteArrayOutputStream output = new ByteArrayOutputStream(initial)) {
-            byte[] buffer = new byte[4096];
-            int total = 0;
-            int count;
-            while ((count = request.getInputStream().read(buffer)) != -1) {
-                if (count == 0) continue;
-                if (count > MAX_BODY_BYTES - total) throw new RequestFailure();
-                output.write(buffer, 0, count);
-                total += count;
-            }
-            if (total == 0) throw new RequestFailure();
-            return output.toByteArray();
-        } catch (RequestFailure known) {
-            throw known;
+        try {
+            byte[] data = cn.jia.core.config.ApiJsonInput.readData(request);
+            if (data.length == 0 || data.length > MAX_BODY_BYTES) throw new RequestFailure();
+            return data;
         } catch (IOException unreadable) {
             throw new RequestFailure();
         }

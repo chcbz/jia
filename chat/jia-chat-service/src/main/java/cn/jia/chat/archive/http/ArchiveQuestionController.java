@@ -50,7 +50,7 @@ public class ArchiveQuestionController {
     @PutMapping("/{questionId}")
     public ResponseEntity<?> create(@PathVariable String questionId,
                                     @RequestHeader(value = "Idempotency-Key", required = false) String key,
-                                    @RequestBody(required = false) byte[] body,
+                                    @cn.jia.core.annotation.ApiJsonData @RequestBody(required = false) byte[] body,
                                     HttpServletRequest request, Authentication authentication) {
         Authorization authorization = authorize(authentication);
         if (authorization.error() != null) return authorization.error();
@@ -97,7 +97,7 @@ public class ArchiveQuestionController {
     @PostMapping("/{questionId}/retry")
     public ResponseEntity<?> retry(@PathVariable String questionId,
                                    @RequestHeader(value = "Idempotency-Key", required = false) String key,
-                                   @RequestBody(required = false) byte[] body,
+                                   @cn.jia.core.annotation.ApiJsonData @RequestBody(required = false) byte[] body,
                                    HttpServletRequest request, Authentication authentication) {
         Authorization authorization = authorize(authentication);
         if (authorization.error() != null) return authorization.error();

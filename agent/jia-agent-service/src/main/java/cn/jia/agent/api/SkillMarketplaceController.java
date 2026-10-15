@@ -26,11 +26,11 @@ public final class SkillMarketplaceController {
         HostingRentHttp.noQuery(request); return ok(skills.detail(HostingRentHttp.actor(auth),productId,admin(auth)));
     }
     @PostMapping(value="/agent/skill-orders/quotes",consumes=MediaType.APPLICATION_JSON_VALUE)
-    public Object quote(Authentication auth,HttpServletRequest request,@RequestBody byte[] body) {
+    public Object quote(Authentication auth,HttpServletRequest request,@cn.jia.core.annotation.ApiJsonData @RequestBody byte[] body) {
         return ok(skills.quote(HostingRentHttp.actor(auth),HostingRentHttp.key(request),SkillMarketplaceHttp.body(body,false),admin(auth)));
     }
     @PostMapping(value="/agent/skill-orders",consumes=MediaType.APPLICATION_JSON_VALUE)
-    public Object purchase(Authentication auth,HttpServletRequest request,@RequestBody byte[] body) {
+    public Object purchase(Authentication auth,HttpServletRequest request,@cn.jia.core.annotation.ApiJsonData @RequestBody byte[] body) {
         return ok(skills.purchase(HostingRentHttp.actor(auth),HostingRentHttp.key(request),SkillMarketplaceHttp.body(body,true),admin(auth)));
     }
     @GetMapping("/agent/skill-orders/{orderId}")

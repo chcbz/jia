@@ -57,7 +57,7 @@ public class ArchivePersonalDataController {
     @PutMapping("/progress/{editionId}")
     public ResponseEntity<?> putProgress(@PathVariable String editionId,
                                          @RequestHeader(value = "Idempotency-Key", required = false) String key,
-                                         @RequestBody(required = false) byte[] body,
+                                         @cn.jia.core.annotation.ApiJsonData @RequestBody(required = false) byte[] body,
                                          HttpServletRequest request,
                                          Authentication authentication) {
         Authorization authorization = authorize(authentication);
@@ -92,7 +92,7 @@ public class ArchivePersonalDataController {
     @PutMapping("/bookmarks/{bookmarkId}")
     public ResponseEntity<?> putBookmark(@PathVariable String bookmarkId,
                                          @RequestHeader(value = "Idempotency-Key", required = false) String key,
-                                         @RequestBody(required = false) byte[] body,
+                                         @cn.jia.core.annotation.ApiJsonData @RequestBody(required = false) byte[] body,
                                          HttpServletRequest request,
                                          Authentication authentication) {
         Authorization authorization = authorize(authentication);
@@ -146,7 +146,7 @@ public class ArchivePersonalDataController {
     @PutMapping("/notes/{noteId}")
     public ResponseEntity<?> putNote(@PathVariable String noteId,
                                      @RequestHeader(value = "Idempotency-Key", required = false) String key,
-                                     @RequestBody(required = false) byte[] body,
+                                     @cn.jia.core.annotation.ApiJsonData @RequestBody(required = false) byte[] body,
                                      HttpServletRequest request,
                                      Authentication authentication) {
         Authorization authorization = authorize(authentication);

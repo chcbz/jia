@@ -162,8 +162,9 @@ public final class PersonalWorkspaceConversationRuntimeController {
     @PostMapping(value="/{taskId}/runs/{runId}/conversation/inputs/{inputRef}/content",
             consumes=MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<byte[]> inputContent(@PathVariable String taskId,@PathVariable String runId,
-            @PathVariable String inputRef,@RequestBody FenceRequest fence,
+            @PathVariable String inputRef,@RequestBody cn.jia.core.entity.JsonRequest<FenceRequest> protocolRequest,
             HttpServletRequest request,Authentication authentication) {
+        FenceRequest fence = protocolRequest == null ? null : protocolRequest.data();
         noQuery(request);
         var loaded=skillCall(()->skills().inputContent(scope(authentication),taskId,runId,inputRef,fence(fence)));
         var content=runtimeAuthentication.withNativeFence(authentication,()->loaded);
@@ -283,25 +284,25 @@ public final class PersonalWorkspaceConversationRuntimeController {
     }
     @PostMapping(value="/{taskId}/runs/{runId}/conversation/effects/{effectId}/start",consumes=MediaType.APPLICATION_JSON_VALUE,produces=MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<cn.jia.agent.service.SkillExecutionService.EffectReceipt> skillEffectStart(
-            @PathVariable String taskId,@PathVariable String runId,@PathVariable String effectId,@RequestBody String raw,HttpServletRequest request,Authentication authentication) {
+            @PathVariable String taskId,@PathVariable String runId,@PathVariable String effectId,@cn.jia.core.annotation.ApiJsonData @RequestBody String raw,HttpServletRequest request,Authentication authentication) {
         noQuery(request);var command=skillBody(raw,Set.of("executionId","snapshotDigest","fence","effectDigest","providerBindingRevision"),cn.jia.agent.service.SkillExecutionService.EffectStart.class);
         return ok(skillCall(()->runtimeAuthentication.withNativeFence(authentication,()->skills().startEffect(scope(authentication),taskId,runId,effectId,command))));
     }
     @PostMapping(value="/{taskId}/runs/{runId}/conversation/effects/{effectId}/result",consumes=MediaType.APPLICATION_JSON_VALUE,produces=MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<cn.jia.agent.service.SkillExecutionService.EffectReceipt> skillEffectResult(
-            @PathVariable String taskId,@PathVariable String runId,@PathVariable String effectId,@RequestBody String raw,HttpServletRequest request,Authentication authentication) {
+            @PathVariable String taskId,@PathVariable String runId,@PathVariable String effectId,@cn.jia.core.annotation.ApiJsonData @RequestBody String raw,HttpServletRequest request,Authentication authentication) {
         noQuery(request);var command=skillBody(raw,Set.of("executionId","snapshotDigest","fence","effectDigest","providerBindingRevision","status","providerRequestId","resultDigest"),cn.jia.agent.service.SkillExecutionService.EffectResult.class);
         return ok(skillCall(()->runtimeAuthentication.withNativeFence(authentication,()->skills().recordEffect(scope(authentication),taskId,runId,effectId,command))));
     }
     @PostMapping(value="/{taskId}/runs/{runId}/conversation/resume",consumes=MediaType.APPLICATION_JSON_VALUE,produces=MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<cn.jia.agent.service.SkillExecutionService.ResumeReceipt> skillResume(
-            @PathVariable String taskId,@PathVariable String runId,@RequestBody String raw,HttpServletRequest request,Authentication authentication) {
+            @PathVariable String taskId,@PathVariable String runId,@cn.jia.core.annotation.ApiJsonData @RequestBody String raw,HttpServletRequest request,Authentication authentication) {
         noQuery(request);var command=skillBody(raw,Set.of("executionId","snapshotDigest"),cn.jia.agent.service.SkillExecutionService.Resume.class);
         return ok(skillCall(()->runtimeAuthentication.withNativeFence(authentication,()->skills().resume(scope(authentication),taskId,runId,command))));
     }
     @PostMapping(value="/{taskId}/runs/{runId}/conversation/result-commits/{manifestId}",consumes=MediaType.APPLICATION_JSON_VALUE,produces=MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<cn.jia.agent.service.SkillExecutionService.ResultReceipt> skillResultCommit(
-            @PathVariable String taskId,@PathVariable String runId,@PathVariable String manifestId,@RequestBody String raw,HttpServletRequest request,Authentication authentication) {
+            @PathVariable String taskId,@PathVariable String runId,@PathVariable String manifestId,@cn.jia.core.annotation.ApiJsonData @RequestBody String raw,HttpServletRequest request,Authentication authentication) {
         noQuery(request);var command=skillBody(raw,Set.of("fence","snapshotDigest","data","artifacts","inputReceipts"),cn.jia.agent.service.SkillExecutionService.ResultCommit.class);
         return ok(skillCall(()->skills().commitResult(scope(authentication),taskId,runId,manifestId,command)));
     }

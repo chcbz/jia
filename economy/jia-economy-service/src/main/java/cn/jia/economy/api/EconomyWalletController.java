@@ -87,7 +87,7 @@ public final class EconomyWalletController {
 
     @PostMapping(value = "/onboarding-grant", consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE)
-    public OnboardingGrantResponse claimOnboardingGrant(@RequestBody byte[] rawBody,
+    public OnboardingGrantResponse claimOnboardingGrant(@cn.jia.core.annotation.ApiJsonData @RequestBody byte[] rawBody,
             HttpServletRequest request, Authentication authentication) {
         requireNoQuery(request);
         requireEmptyObject(rawBody);
@@ -101,7 +101,7 @@ public final class EconomyWalletController {
 
     @PostMapping(value = "/preview/issuances", consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE)
-    public IssuanceResponse issue(@RequestBody byte[] rawBody, HttpServletRequest request,
+    public IssuanceResponse issue(@cn.jia.core.annotation.ApiJsonData @RequestBody byte[] rawBody, HttpServletRequest request,
             Authentication authentication) {
         requireNoQuery(request);
         Subject subject = requireSubject(authentication);

@@ -118,7 +118,7 @@ public final class EconomyReadOnlyPreviewController {
 
     @PostMapping(value = "/bounty-estimates", consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<JsonResult<Object>> bountyEstimate(@RequestBody byte[] body,
+    public ResponseEntity<JsonResult<Object>> bountyEstimate(@cn.jia.core.annotation.ApiJsonData @RequestBody byte[] body,
             Authentication authentication, HttpServletRequest request) {
         Principal principal = principal(authentication);
         noQuery(request);
