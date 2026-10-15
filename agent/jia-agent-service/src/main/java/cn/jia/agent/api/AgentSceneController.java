@@ -48,10 +48,10 @@ public class AgentSceneController {
     private final AgentSceneFeatureFlags featureFlags;
 
     @GetMapping("/{sceneId}/snapshot")
-    public JsonResult<AgentSceneSnapshotDTO> snapshot(@PathVariable String sceneId) {
+    public JsonResult<AgentSceneWire.Snapshot> snapshot(@PathVariable String sceneId) {
         String requiredSceneId = requireSceneId(sceneId);
         try {
-            return JsonResult.success(sceneService.snapshot(requiredSceneId));
+            return JsonResult.success(AgentSceneWire.from(sceneService.snapshot(requiredSceneId)));
         } catch (IllegalArgumentException exception) {
             throw new SceneServiceValidationException();
         }
@@ -60,10 +60,10 @@ public class AgentSceneController {
     @GetMapping(value = "/{sceneId}/events", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter events(
             @PathVariable String sceneId,
-            @RequestParam(name = "sinceVersion", required = false) Long sinceVersion,
-            @RequestHeader(name = "Last-Event-ID", required = false) String lastEventId) {
+            @RequestParam(name = "sinceVersion", required = false) String sinceVersion,
+            @RequestHeader(name = "Last-Event-ID", required = false) String lastEventId, jakarta.servlet.http.HttpServletRequest servletRequest) {
         String requiredSceneId = requireSceneId(sceneId);
-        long resumeAfter = resolveResumeVersion(sinceVersion, lastEventId);
+        long resumeAfter = resolveResumeVersion(requiredSceneId, sinceVersion, lastEventId);
         if (!featureFlags.sceneEventsEnabled()) {
             throw new SceneEventsDisabledException();
         }
@@ -76,18 +76,18 @@ public class AgentSceneController {
         if (events == null) {
             throw new SceneStreamException();
         }
-        return bridge(events);
+        return bridge(events, requiredSceneId, cn.jia.core.filter.RequestIdFilter.current(servletRequest));
     }
 
     @PostMapping("/{sceneId}/phases")
-    public JsonResult<AgentScenePhaseResultDTO> phase(
+    public JsonResult<AgentSceneWire.PhaseResult> phase(
             @PathVariable String sceneId,
-            @RequestBody(required = false) JsonRequest<AgentScenePhaseReportDTO> protocolRequest) {
-        AgentScenePhaseReportDTO request = protocolRequest == null ? null : protocolRequest.data();
+            @RequestBody(required = false) JsonRequest<AgentSceneWire.PhaseInput> protocolRequest) {
+        AgentScenePhaseReportDTO request = protocolRequest == null || protocolRequest.data()==null ? null : protocolRequest.data().internal();
         String requiredSceneId = requireSceneId(sceneId);
         AgentScenePhaseReportDTO safeRequest = requirePhaseReport(request);
         try {
-            return JsonResult.success(sceneService.reportPhase(requiredSceneId, safeRequest));
+            return JsonResult.success(AgentSceneWire.from(sceneService.reportPhase(requiredSceneId, safeRequest)));
         } catch (IllegalArgumentException exception) {
             throw new SceneServiceValidationException();
         }
@@ -132,7 +132,7 @@ public class AgentSceneController {
                 "SCENE_ERROR", "Scene request failed");
     }
 
-    private SseEmitter bridge(Flux<AgentSceneEventDTO> source) {
+    private SseEmitter bridge(Flux<AgentSceneEventDTO> source, String sceneId, String requestId) {
         ManagedSseEmitter emitter = new ManagedSseEmitter(SSE_TIMEOUT_MILLIS);
         AtomicReference<Disposable> subscription = new AtomicReference<>();
         AtomicBoolean terminated = new AtomicBoolean();
@@ -150,7 +150,7 @@ public class AgentSceneController {
         emitter.onError(error -> cleanup.run());
 
         Disposable disposable = source.subscribe(
-                event -> send(emitter, event),
+                event -> send(emitter, event, sceneId, requestId),
                 error -> emitter.completeWithError(safeStreamError(error)),
                 emitter::complete);
         if (!subscription.compareAndSet(null, disposable) || terminated.get()) {
@@ -160,14 +160,14 @@ public class AgentSceneController {
         return emitter;
     }
 
-    private void send(ManagedSseEmitter emitter, AgentSceneEventDTO source) {
+    private void send(ManagedSseEmitter emitter, AgentSceneEventDTO source, String sceneId, String requestId) {
         AgentSceneEventDTO event;
         try {
             event = safeEvent(source);
-            emitter.send(SseEmitter.event()
-                    .id(String.valueOf(event.getSceneVersion()))
-                    .name(event.getEventType())
-                    .data(event, MediaType.APPLICATION_JSON));
+            String type = "resync-required".equals(event.getEventType()) ? "scene.resync.required" : "scene.event";
+            String id = "scene:"+sceneId+":"+event.getSceneVersion();
+            var message=cn.jia.core.entity.ProtocolMessage.event(requestId,type,id,AgentSceneWire.from(event));
+            emitter.send(SseEmitter.event().id(id).name(type).data(message, MediaType.APPLICATION_JSON));
         } catch (IOException | RuntimeException exception) {
             emitter.completeWithError(new SceneStreamException());
         }
@@ -199,31 +199,17 @@ public class AgentSceneController {
         return safe;
     }
 
-    private static long resolveResumeVersion(Long sinceVersion, String lastEventId) {
-        if (sinceVersion != null) {
-            if (sinceVersion < 0) {
-                throw new SceneRequestException("sinceVersion must be nonnegative");
-            }
-        }
-        Long headerVersion = null;
-        if (lastEventId != null) {
-            headerVersion = parseLastEventId(lastEventId);
-        }
-        long queryCursor = sinceVersion == null ? 0L : sinceVersion;
-        long headerCursor = headerVersion == null ? 0L : headerVersion;
-        return Math.max(queryCursor, headerCursor);
+    private static long resolveResumeVersion(String sceneId, String sinceVersion, String lastEventId) {
+        long query = sinceVersion==null ? 0 : parseVersion(sinceVersion);
+        String prefix="scene:"+sceneId+":";
+        if (lastEventId!=null && !lastEventId.startsWith(prefix)) throw new SceneRequestException("Invalid scene cursor scope");
+        long header = lastEventId==null ? 0 : parseVersion(lastEventId.substring(prefix.length()));
+        return Math.max(query,header);
     }
-
-    private static long parseLastEventId(String lastEventId) {
-        String normalized = lastEventId.trim();
-        if (normalized.isEmpty() || !normalized.matches("[0-9]+")) {
-            throw new SceneRequestException("Last-Event-ID must be a nonnegative version");
-        }
-        try {
-            return Long.parseLong(normalized);
-        } catch (NumberFormatException exception) {
-            throw new SceneRequestException("Last-Event-ID must be a nonnegative version");
-        }
+    private static long parseVersion(String value) {
+        if (!value.matches("0|[1-9][0-9]*")) throw new SceneRequestException("Invalid scene version");
+        try { return Long.parseLong(value); }
+        catch (NumberFormatException invalid) { throw new SceneRequestException("Invalid scene version"); }
     }
 
     private static AgentScenePhaseReportDTO requirePhaseReport(AgentScenePhaseReportDTO source) {
