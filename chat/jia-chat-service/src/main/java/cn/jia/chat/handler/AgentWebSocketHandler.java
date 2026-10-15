@@ -275,8 +275,26 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         sendEvent(session, "connected", connected);
     }
 
+    private final ThreadLocal<cn.jia.core.entity.ProtocolMessage<java.util.Map<String,Object>>> incomingWire = new ThreadLocal<>();
+
     @Override
     protected void handleTextMessage(WebSocketSession session, TextMessage message) {
+        try {
+            var envelope=cn.jia.agent.common.AgentMessageWire.decode(STRICT_RAW_COMMAND_JSON.readValue(message.getPayload(),MESSAGE_TYPE));
+            // Current transport identity is independent of an immutable result's executing boot.
+            if(envelope.data().containsKey("runtimeInstanceId")&&!sessionProof(session).scope().runtimeInstanceId().equals(envelope.data().get("runtimeInstanceId")))
+                throw new IllegalArgumentException("Runtime proof mismatch");
+            incomingWire.set(envelope);
+            var business=cn.jia.agent.common.AgentMessageWire.business(envelope);
+            handlePrivateMessage(session,new TextMessage(STRICT_RAW_COMMAND_JSON.writeValueAsString(business)));
+        } catch(Exception malformed) {
+            if(skillExecutionSessions!=null)skillExecutionSessions.remove(session.getId());
+            sendProtocolError(session,Map.of(),"MESSAGE_INVALID","Invalid protocol message");
+        } finally { incomingWire.remove(); }
+    }
+
+    /** Receives only an explicitly projected, strictly decoded public message. */
+    private void handlePrivateMessage(WebSocketSession session, TextMessage message) {
         Map<String, Object> payload = Map.of();
         try {
             if (runtimeAuthentication == null) throw new IllegalArgumentException("Runtime authority unavailable");
@@ -428,7 +446,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         event.put("schemaVersion", AgentProtocolConstants.VERSION_1);
         event.put("messageType", AgentProtocolConstants.TYPE_PROTOCOL_HELLO);
         event.put("supportedProtocolVersions", new int[] {AgentProtocolConstants.VERSION_1});
-        event.put("legacyProtocolEnabled", true);
+        event.put("legacyProtocolEnabled", false);
         event.put("executionTriggerType", AgentProtocolConstants.TYPE_COMMAND_DISPATCH);
         event.put("taskEventExecutionTrigger", false);
         sendEvent(session, "protocol_hello", event);
@@ -1817,24 +1835,14 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         if (!session.isOpen()) {
             return false;
         }
-        Map<String, Object> event = new HashMap<>();
-        if (payload != null) {
-            event.putAll(payload);
-        }
-        event.put("type", type);
-        event.put("channel", CHANNEL);
-        if (event.containsKey("sentAt")) {
-            event.put("timestamp", event.get("sentAt"));
-        } else {
-            event.putIfAbsent("timestamp", System.currentTimeMillis());
-        }
         try {
             synchronized (session) {
                 // Authenticated INSPECT facts and selectors are integrity-bound protocol data.
                 // The logging sanitizer truncates deep maps and redacts DATA strings, which
                 // changes contextHash and makes root/payload copies conflict. Never log this wire.
-                String wireJson = preserveAuthenticatedInspectionContext
-                        ? JsonUtil.toJson(event) : JsonUtil.toSafeJson(event);
+                var envelope=cn.jia.agent.common.AgentMessageWire.event(type,payload,incomingWire.get());
+                // Logging sanitization must never alter transmitted DTO bytes or signatures.
+                String wireJson = STRICT_RAW_COMMAND_JSON.writeValueAsString(envelope);
                 session.sendMessage(new TextMessage(wireJson));
             }
             return true;
@@ -2078,7 +2086,9 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                 if (!exactCommandSessionReady(selected, tenantId, clientId, targetAgentId, commandType)) {
                     return AgentRawCommandDispatchResult.offline();
                 }
-                selected.sendMessage(new TextMessage(raw));
+                var privateCommand=STRICT_RAW_COMMAND_JSON.readValue(raw,MESSAGE_TYPE);
+                var command=cn.jia.agent.common.AgentMessageWire.event("command.dispatch",privateCommand,null);
+                selected.sendMessage(new TextMessage(STRICT_RAW_COMMAND_JSON.writeValueAsString(command)));
             }
             return AgentRawCommandDispatchResult.sent(1, 1); // transport only, NOT a D06 commit receipt
         } catch (Exception sendFailure) {
@@ -2900,7 +2910,9 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         try {
             synchronized(selected) {
                 if(!matchesManagedSkill(selected,tenant,client,agent,fence)) return AgentRawCommandDispatchResult.offline();
-                selected.sendMessage(new TextMessage(raw));
+                var privateCommand=STRICT_RAW_COMMAND_JSON.readValue(raw,MESSAGE_TYPE);
+                var command=cn.jia.agent.common.AgentMessageWire.event("command.dispatch",privateCommand,null);
+                selected.sendMessage(new TextMessage(STRICT_RAW_COMMAND_JSON.writeValueAsString(command)));
             }
             return AgentRawCommandDispatchResult.sent(1,1);
         } catch(Exception failure) { return AgentRawCommandDispatchResult.sendFailed(1); }

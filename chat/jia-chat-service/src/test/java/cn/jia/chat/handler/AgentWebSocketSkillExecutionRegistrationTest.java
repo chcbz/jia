@@ -30,7 +30,7 @@ class AgentWebSocketSkillExecutionRegistrationTest {
         UnifiedRuntimeTestSupport.registrationProof(f.session, payload);
         payload.put("durableStateHealthy", true); payload.put("readyCommandTypes", List.of());
         if (report != null) payload.put("skillExecution", report);
-        return json.writeValueAsString(payload);
+        return json.writeValueAsString(cn.jia.agent.common.AgentMessageWire.event("agent.register",payload,null));
     }
     void register(Fixture f, Object report) { f.handler.handleTextMessage(f.session, new TextMessage(wire(f, report))); }
 
@@ -38,7 +38,7 @@ class AgentWebSocketSkillExecutionRegistrationTest {
         var f = fixture();
         doAnswer(inv -> {
             String frame = ((TextMessage)inv.getArgument(0)).getPayload();
-            if (frame.contains("agent_registered")) assertEquals(State.DISCONNECTED, registry.lookup(scope, fence).state());
+            if (frame.contains("agent.registered")) assertEquals(State.DISCONNECTED, registry.lookup(scope, fence).state());
             f.frames.add(frame); return null;
         }).when(f.session).sendMessage(any());
         register(f, SkillExecutionFixtures.catalog());
@@ -53,7 +53,7 @@ class AgentWebSocketSkillExecutionRegistrationTest {
         register(f, SkillExecutionFixtures.catalog());
         var report = SkillExecutionFixtures.catalog(); report.put("ownerJiacn", "foreign-owner"); register(f, report);
         assertEquals(State.INVALID_DECLARATION, registry.lookup(scope, fence).state());
-        assertTrue(f.frames.stream().anyMatch(frame -> frame.contains("agent_registered")));
+        assertTrue(f.frames.stream().anyMatch(frame -> frame.contains("agent.registered")));
     }
     @Test void duplicateJsonKeysRejectAndRemovePriorDirectoryWithoutNormalizingThemAway() throws Exception {
         var f = fixture(); register(f, SkillExecutionFixtures.catalog());
@@ -61,7 +61,7 @@ class AgentWebSocketSkillExecutionRegistrationTest {
         assertTrue(duplicated.contains("\"catalogRevision\":\"8\""));
         f.handler.handleTextMessage(f.session, new TextMessage(duplicated));
         assertEquals(State.DISCONNECTED, registry.lookup(scope, fence).state());
-        assertTrue(f.frames.stream().anyMatch(frame -> frame.contains("AGENT_REGISTRATION_INVALID")));
+        assertTrue(f.frames.stream().anyMatch(frame -> frame.contains("MESSAGE_INVALID")));
     }
     @Test void failedAuthenticationOrReceiptDeliveryNeverRetainsPriorDirectory() throws Exception {
         var f = fixture(); register(f, SkillExecutionFixtures.catalog());
