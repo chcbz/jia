@@ -339,7 +339,8 @@ public final class PersonalWorkspaceConversationRuntimeController {
     public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> unavailable(PersonalWorkspaceExecutionService.Failure ignored) {
         return error(HttpStatus.NOT_FOUND,"CONVERSATION_EXECUTION_UNAVAILABLE");
     }
-    @ExceptionHandler({BadRequest.class,IllegalArgumentException.class,IOException.class})
+    @ExceptionHandler({BadRequest.class,IllegalArgumentException.class,IOException.class,
+            org.springframework.http.converter.HttpMessageNotReadableException.class})
     public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> malformed(Exception ignored) { return error(HttpStatus.BAD_REQUEST,"BAD_REQUEST"); }
     @ExceptionHandler(Exception.class)
     public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> unexpected(Exception ignored) {
