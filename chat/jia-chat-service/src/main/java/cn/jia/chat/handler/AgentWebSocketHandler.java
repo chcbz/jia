@@ -1857,7 +1857,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
     public void publishAgentStatus(String clientId, String ownerJiacn, AgentRuntimeDTO agent) {
         Map<String, Object> payload = new HashMap<>();
         payload.put("clientId", clientId);
-        payload.put("tenantId", ownerJiacn);
+        payload.put("ownerJiacn", ownerJiacn);
         payload.put("agentId", agent.getAgentId());
         payload.put("status", agent.getStatus());
         payload.put("errorMessage", agent.getErrorMessage());
@@ -1917,7 +1917,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             List<AgentCapabilityDTO> capabilities) {
         Map<String, Object> payload = new HashMap<>();
         payload.put("clientId", clientId);
-        payload.put("tenantId", ownerJiacn);
+        payload.put("ownerJiacn", ownerJiacn);
         payload.put("agents", Optional.ofNullable(capabilities).orElseGet(List::of));
         payload.put("updatedAt", System.currentTimeMillis());
         broadcastEventToScope(clientId, ownerJiacn, "agent_capability_index", payload);
@@ -2044,8 +2044,14 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         }
         sessions.values().stream()
                 .filter(session -> clientId.equals(sessionClientId(session))
-                        && ownerJiacn.equals(sessionJiacn(session)))
-                .forEach(session -> sendEvent(session, type, payload));
+                        && ownerJiacn.equals(sessionJiacn(session))
+                        && validExactDispatchId(sessionTenantId(session), 50))
+                .forEach(session -> {
+                    // Owner and tenant are distinct authenticated scopes. Never infer one from the other.
+                    Map<String, Object> scoped = new HashMap<>(payload);
+                    scoped.put("tenantId", sessionTenantId(session));
+                    sendEvent(session, type, scoped);
+                });
     }
 
     @Override

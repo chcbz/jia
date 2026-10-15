@@ -17,7 +17,7 @@ public final class AgentMessageWire {
         Map.entry("started","chat.stream.started"),Map.entry("delta","chat.stream.delta"),
         Map.entry("done","chat.stream.completed"),Map.entry("stopped","chat.stream.stopped"),
         Map.entry("agent_registered","agent.registered"),Map.entry("agent_capability_index","agent.capability.index"),
-        Map.entry("agent_status_updated","agent.status.updated"),Map.entry("task_reported","task.report.receipt"),
+        Map.entry("agent_status","agent.status"),Map.entry("agent_status_updated","agent.status.updated"),Map.entry("task_reported","task.report.receipt"),
         Map.entry("chat_dispatch_acknowledged","chat.dispatch.receipt"),Map.entry("agent_message","chat.message"),
         Map.entry("agent_message_delta","chat.message.delta"),Map.entry("agent_message_saved","chat.message.receipt"),
         Map.entry("agent_direct_message","chat.message"),Map.entry("task_event","task.event"));
@@ -83,6 +83,8 @@ public final class AgentMessageWire {
         var data=new LinkedHashMap<String,Object>();if(body!=null)data.putAll(body);
         String canonical=type(privateType);
         if("agent_direct_message".equals(privateType)&&data.get("messageType") instanceof String declared)canonical=type(declared);
+        // Persisted chat identity is business data, never the transport message/correlation identity.
+        if ("chat.message.receipt".equals(canonical)) rename(data,"messageId","persistedMessageId");
         data.remove("messageType");data.remove("type");data.remove("channel");
         String id=data.remove("messageId") instanceof String value?value:UUID.randomUUID().toString();
         String requestId=data.get("requestId") instanceof String value?value:id;

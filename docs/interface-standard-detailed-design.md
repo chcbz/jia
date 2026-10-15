@@ -141,9 +141,10 @@ A `chat/jia-chat-service/src/main/java/cn/jia/chat/handler/AgentWebSocketHandler
 | connected / protocol_hello / protocol_error | connection.established / protocol.hello / protocol.error | 握手DTO、能力DTO或安全错误详情；错误若回复某消息须correlationId |
 | ping / pong | connection.ping / connection.pong | ping请求，pong回复关联ping.messageId；不靠timestamp关联 |
 | started / delta / done / stopped | chat.stream.started / chat.stream.delta / chat.stream.completed / chat.stream.stopped | 保留流标识、片段、序号、终态；消息是否操作回复由具体事件schema固定 |
+| agent_status | agent.status | 独立状态广播；ownerJiacn与tenantId分离，tenantId从已认证接收会话取值，不触发注册或业务执行 |
 | agent_registered / agent_capability_index / agent_status_updated | agent.registered / agent.capability.index / agent.status.updated | 原业务字段移data，长期代际转字符串 |
 | task_reported / chat_dispatch_acknowledged | task.report.receipt / chat.dispatch.receipt | 事务提交后成功回执，correlationId绑定提交消息 |
-| agent_message / agent_message_delta / agent_message_saved | chat.message / chat.message.delta / chat.message.receipt | 消息保存回执不是执行成功；message.receipt关联发送消息 |
+| agent_message / agent_message_delta / agent_message_saved | chat.message / chat.message.delta / chat.message.receipt | 消息保存回执不是执行成功；correlationId关联发送消息，数据库消息ID为data.persistedMessageId，不占用信封messageId |
 | work.result.receipt / work.report.receipt | 同名 | 不再外套旧type；根code/msg区分本次处理成功失败 |
 | 已规范点分messageType（command.dispatch、task.event等） | 保留已有点分常量值 | 删除并行type/actionType协议别名；业务动作枚举在data明确声明，不是根别名 |
 | error | protocol.error或该操作失败回复 | 有可解析请求时回复原操作；不能把所有业务失败硬换protocol.error |

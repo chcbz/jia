@@ -7,6 +7,21 @@ import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 class AgentMessageWireTest {
+    @Test void savedChatReceiptSeparatesDatabaseIdFromTransportCorrelation() {
+        var original = ProtocolMessage.event("request", "chat.message", "final-message", Map.of());
+        var wire = AgentMessageWire.event("agent_message_saved", Map.of("messageId", "123", "turnId", "turn", "duplicate", true), original);
+        assertEquals("123", wire.data().get("persistedMessageId"));
+        assertFalse(wire.data().containsKey("messageId"));
+        assertEquals("final-message", wire.correlationId());
+        assertNotEquals("123", wire.messageId());
+    }
+    @Test void statusBroadcastIsAnEventNotAPresenceReceipt() {
+        var wire = AgentMessageWire.event("agent_status", Map.of("agentId", "agent", "tenantId", "0", "ownerJiacn", "owner"), null);
+        assertEquals("agent.status", wire.messageType());
+        assertNull(wire.correlationId());
+        assertNull(wire.code());
+        assertEquals("0", wire.data().get("tenantId"));
+    }
     @Test void publicRegistrationIsExplicitAndProofLongIsExact() {
         var privateBody=new LinkedHashMap<String,Object>(Map.of("schemaVersion",1,"messageType","agent.register","messageId","m",
                 "installationId","rti_1","sessionGeneration",9007199254740993L,"runtimeInstanceId","boot"));

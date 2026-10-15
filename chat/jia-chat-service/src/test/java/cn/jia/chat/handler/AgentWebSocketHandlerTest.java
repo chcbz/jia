@@ -307,7 +307,18 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         handler.publishAgentStatus("client-a", "tenant-a", runtime);
         handler.publishCapabilityIndex("client-a", "tenant-a", List.of(capability));
 
-        verify(matching, org.mockito.Mockito.times(2)).sendMessage(any(TextMessage.class));
+        ArgumentCaptor<TextMessage> broadcasts = ArgumentCaptor.forClass(TextMessage.class);
+        verify(matching, org.mockito.Mockito.times(2)).sendMessage(broadcasts.capture());
+        Set<String> types = new java.util.HashSet<>();
+        for (TextMessage broadcast : broadcasts.getAllValues()) {
+            Map<String, Object> wire = new ObjectMapper().readValue(broadcast.getPayload(), new TypeReference<Map<String, Object>>() { });
+            types.add((String) wire.get("messageType"));
+            Map<?, ?> data = (Map<?, ?>) wire.get("data");
+            assertEquals("0", data.get("tenantId"));
+            assertEquals("tenant-a", data.get("ownerJiacn"));
+            assertEquals("client-a", data.get("clientId"));
+        }
+        assertEquals(Set.of("agent.status", "agent.capability.index"), types);
         verify(crossTenant, never()).sendMessage(any(TextMessage.class));
         verify(crossClient, never()).sendMessage(any(TextMessage.class));
     }
