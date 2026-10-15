@@ -142,7 +142,7 @@ class VoiceControllersTest {
         VoiceRequestValidator validator = new VoiceRequestValidator();
         VoiceException error = assertThrows(VoiceException.class,
                 () -> validator.synthesis(new VoiceSynthesisRequest(
-                                REQUEST_ID, "林冲\uD83D", "juyiting-default", "mp3")),
+                                REQUEST_ID, "林冲\uD83D", "juyiting-default", "mp3"),
                         properties().getSynthesis()));
 
         assertEquals(VoiceErrorCode.INVALID_REQUEST, error.error());
@@ -155,7 +155,7 @@ class VoiceControllersTest {
         VoiceRequestValidator validator = new VoiceRequestValidator();
         VoiceException error = assertThrows(VoiceException.class,
                 () -> validator.synthesis(new VoiceSynthesisRequest(
-                                REQUEST_ID, "林冲\uDE00", "juyiting-default", "mp3")),
+                                REQUEST_ID, "林冲\uDE00", "juyiting-default", "mp3"),
                         properties().getSynthesis()));
 
         assertEquals(VoiceErrorCode.INVALID_REQUEST, error.error());
