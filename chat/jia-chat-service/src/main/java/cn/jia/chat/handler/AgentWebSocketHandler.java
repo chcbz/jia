@@ -895,7 +895,16 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                 event.put("typedInspection", typedInspection.frozenReceipt());
             }
             stage = "runtime_bind";
-            event.put("runtimeAuth", runtimeAuthentication.bind(session.getId(), sessionProof(session), session::isOpen));
+            var runtimeReceipt = runtimeAuthentication.bind(session.getId(), sessionProof(session), session::isOpen);
+            // The network codec projects maps, not service records. Keep this explicit
+            // so nested installation identity/version use the same public wire contract.
+            event.put("runtimeAuth", Map.of(
+                    "scheme", runtimeReceipt.scheme(), "tenantId", runtimeReceipt.tenantId(),
+                    "clientId", runtimeReceipt.clientId(), "ownerJiacn", runtimeReceipt.ownerJiacn(),
+                    "agentId", runtimeReceipt.agentId(), "runtimeInstanceId", runtimeReceipt.runtimeInstanceId(),
+                    "installationId", runtimeReceipt.installationId(), "hostId", runtimeReceipt.hostId(),
+                    "sessionGeneration", runtimeReceipt.sessionGeneration(),
+                    "contextPackEnabled", runtimeReceipt.contextPackEnabled()));
             stage = "registration_receipt";
             if (!sendEvent(session, "agent_registered", event)) {
                 if (runtimeAuthentication != null) runtimeAuthentication.disconnect(session.getId());

@@ -50,7 +50,7 @@ class ChatCancelWireHttpTest {
     @AfterEach void clear() { EsContextHolder.clearContext(); }
     private org.springframework.test.web.servlet.ResultActions call(String data) throws Exception {
         var auth = new JwtAuthenticationToken(Jwt.withTokenValue("test").header("alg", "none")
-                .claim("sub", "owner").claim("jiacn", "owner").claim("client_id", "client").claim("tenant_id", "0").build());
+                .claim("sub", "owner").claim("jiacn", "owner").claim("client_id", "client").claim("tenant_id", "0").build(), List.of());
         return mvc.perform(post("/chat/turns/turn/cancel").principal(auth).contentType(MediaType.APPLICATION_JSON)
                 .header("X-Request-Id", "cancel-wire-test")
                 .content("{\"protocolVersion\":1,\"requestId\":\"cancel-wire-test\",\"data\":" + data + "}"));

@@ -47,6 +47,23 @@ class AgentWebSocketSkillExecutionRegistrationTest {
         assertEquals(State.DISCONNECTED, registry.lookup(new Scope(TENANT, CLIENT, "foreign-owner", AGENT), fence).state());
         assertEquals(State.FENCED, registry.lookup(scope, new SessionFence(fence.runtimeInstallationId(), "foreign-host", "runtime-a", 1)).state());
     }
+    @Test void actualAuthenticationRecordIsProjectedBeforeRegistrationReceiptSerialization() throws Exception {
+        var f = fixture();
+        when(f.auth.bind(eq("socket-a"), any(AgentRuntimeAuthenticationService.Proof.class), any()))
+                .thenReturn(new AgentRuntimeAuthenticationService.Receipt("native-runtime-v1", TENANT, CLIENT, OWNER,
+                        AGENT, "runtime-a", UnifiedRuntimeTestSupport.INSTALLATION, "host-1", 9007199254740993L, true));
+        register(f, SkillExecutionFixtures.catalog());
+        var frames = f.frames.stream().map(json::readTree)
+                .filter(frame -> "agent.registered".equals(frame.path("messageType").asText())).toList();
+        assertEquals(1, frames.size());
+        var auth = frames.getFirst().path("data").path("runtimeAuth");
+        assertEquals(UnifiedRuntimeTestSupport.INSTALLATION, auth.path("runtimeInstallationId").asText());
+        assertFalse(auth.has("installationId"));
+        assertTrue(auth.path("sessionGeneration").isTextual());
+        assertEquals("9007199254740993", auth.path("sessionGeneration").asText());
+        assertEquals(OWNER, auth.path("ownerJiacn").asText());
+        assertFalse(auth.has("tokenDigest")); assertFalse(auth.has("sessionToken"));
+    }
     @Test void missingOrMalformedReportReplacesPriorDirectoryWithoutDisruptingOtherRegistration() throws Exception {
         var f = fixture(); register(f, SkillExecutionFixtures.catalog());
         register(f, null); assertEquals(State.INVALID_DECLARATION, registry.lookup(scope, fence).state());
