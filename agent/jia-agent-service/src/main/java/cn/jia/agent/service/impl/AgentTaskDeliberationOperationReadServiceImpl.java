@@ -43,7 +43,7 @@ public final class AgentTaskDeliberationOperationReadServiceImpl
             .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS).build();
     private static final String ACTION_PREFIX = "ASSIGN_AND_START:";
     private static final Set<String> OPERATIONS = Set.of(
-            "DELIBERATE", "INSPECT_INPUTS", "GENERATE_TEXT_FILE", "GENERATE_IMAGE", "EDIT_IMAGE", "GENERATE_AUDIO", "EDIT_AUDIO");
+            "DELIBERATE", "EXECUTE_SKILL", "INSPECT_INPUTS", "GENERATE_TEXT_FILE", "GENERATE_IMAGE", "EDIT_IMAGE", "GENERATE_AUDIO", "EDIT_AUDIO");
     private static final Set<String> PURPOSES = Set.of("INPUT", "REFERENCE");
     private static final Set<String> GRANT_STATES = Set.of("ACTIVE", "REVOKED", "SUPERSEDED");
     private static final Set<String> BOOTSTRAP_STATES = Set.of(
@@ -164,7 +164,6 @@ public final class AgentTaskDeliberationOperationReadServiceImpl
                     || !Objects.equals(key, grant.getIdempotencyKey())
                     || !Objects.equals(scope.ownerJiacn(), grant.getIssuedBy())
                     || !"MMD_U1_V1".equals(grant.getPolicyRevision())
-                    || !"NO_TOOLS_V1".equals(grant.getPermittedToolPolicyRef())
                     || !Boolean.FALSE.equals(grant.getAllowOwnTaskDerivedAssets())
                     || grant.getRequirementRevision() == null || grant.getRequirementRevision() < 1
                     || grant.getAssignmentRevision() == null || grant.getAssignmentRevision() < 0
@@ -177,6 +176,8 @@ public final class AgentTaskDeliberationOperationReadServiceImpl
             exactPersisted(grant.getGrantId(), 100);
             exactPersisted(grant.getTargetAgentId(), 100);
             List<String> operations = readOperations(grant.getPermittedOperationsJson());
+            String expectedToolPolicy = operations.contains("EXECUTE_SKILL") ? "SKILLS_V1" : "NO_TOOLS_V1";
+            if (!expectedToolPolicy.equals(grant.getPermittedToolPolicyRef())) throw integrity();
             List<InputSummary> inputs = readInputs(grant.getInputScopeJson());
             return new GrantFacts(operations, inputs);
         } catch (IntegrityFailure failure) {

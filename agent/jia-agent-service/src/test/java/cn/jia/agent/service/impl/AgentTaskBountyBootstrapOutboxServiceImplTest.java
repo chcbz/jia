@@ -312,6 +312,26 @@ class AgentTaskBountyBootstrapOutboxServiceImplTest {
         }
 
         @Test
+        void ordinarySkillDeliberationReadsBackAndRejectsMismatchedToolPolicies() {
+            var operations = List.of("DELIBERATE", "EXECUTE_SKILL");
+            ReadFixture fixture = new ReadFixture(operations, "DELIBERATE", true, 3L);
+            fixture.grants.grant.setPermittedToolPolicyRef("SKILLS_V1");
+            var result = fixture.service.read(scope(), "task-1", "original-key");
+            assertEquals(operations, result.permittedOperations());
+            assertEquals("DELIBERATE", result.initialOperation());
+            assertTrue(result.currentAssignment());
+            assertEquals(0, fixture.grants.writeCalls);
+            assertEquals(0, fixture.bootstraps.writeCalls);
+            fixture.grants.grant.setPermittedToolPolicyRef("NO_TOOLS_V1");
+            assertReadReason(AgentTaskDeliberationOperationReadService.ReadException.Reason.INTEGRITY_ERROR,
+                    () -> fixture.service.read(scope(), "task-1", "original-key"));
+            ReadFixture noSkill = new ReadFixture();
+            noSkill.grants.grant.setPermittedToolPolicyRef("SKILLS_V1");
+            assertReadReason(AgentTaskDeliberationOperationReadService.ReadException.Reason.INTEGRITY_ERROR,
+                    () -> noSkill.service.read(scope(), "task-1", "original-key"));
+        }
+
+        @Test
         void textFileGrantReadsBackWithoutReassigningOrWeakeningIntegrity() {
             var operations=List.of("DELIBERATE", "GENERATE_TEXT_FILE", "INSPECT_INPUTS");
             ReadFixture fixture=new ReadFixture(operations,"DELIBERATE",true,3L);
