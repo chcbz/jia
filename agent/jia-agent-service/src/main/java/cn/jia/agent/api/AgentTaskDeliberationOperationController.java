@@ -269,7 +269,7 @@ public final class AgentTaskDeliberationOperationController {
     private static ResponseEntity<JsonResult<Void>> error(
             HttpStatus status, String code, String message) {
         JsonResult<Void> body = JsonResult.failure(code, message);
-        body.setStatus(status.value());
+
         return ResponseEntity.status(status).header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
                 .contentType(new MediaType(MediaType.APPLICATION_JSON, StandardCharsets.UTF_8))
                 .body(body);

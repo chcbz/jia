@@ -146,7 +146,7 @@ public class ArchiveController {
 
     private ResponseEntity<JsonResult<?>> error(HttpStatus status, String code, String message) {
         JsonResult<Void> result = JsonResult.failure(code, message);
-        result.setStatus(status.value());
+
         return ResponseEntity.status(status)
                 .header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
                 .body(result);

@@ -105,7 +105,7 @@ public final class ChatBountyExecutionTerminationController {
 
     private static ResponseEntity<JsonResult<Void>> error(HttpStatus status,String code) {
         JsonResult<Void> result=JsonResult.failure(code,"Execution abandonment is unavailable");
-        result.setStatus(status.value());
+
         return ResponseEntity.status(status).cacheControl(CacheControl.noStore())
                 .header("X-Content-Type-Options","nosniff").body(result);
     }

@@ -187,7 +187,7 @@ public final class ChatConversationArchiveController {
         String message = status == HttpStatus.NOT_FOUND
                 ? "Conversation archive source is unavailable" : failure.getMessage();
         JsonResult<Void> result = JsonResult.failure(code, message);
-        result.setStatus(status.value());
+
         return ResponseEntity.status(status).cacheControl(CacheControl.noStore())
                 .header("X-Content-Type-Options", "nosniff").body(result);
     }

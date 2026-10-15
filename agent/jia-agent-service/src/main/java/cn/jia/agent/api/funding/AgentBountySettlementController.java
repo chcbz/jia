@@ -49,7 +49,7 @@ public class AgentBountySettlementController {
     @ExceptionHandler(FundedBountyException.class)
     public ResponseEntity<JsonResult<Void>> rejected(FundedBountyException failure) {
         JsonResult<Void> result = JsonResult.failure(failure.code(), failure.getMessage());
-        result.setStatus(failure.status().value());
+
         return ResponseEntity.status(failure.status()).header("Cache-Control", "private, no-store").body(result);
     }
 

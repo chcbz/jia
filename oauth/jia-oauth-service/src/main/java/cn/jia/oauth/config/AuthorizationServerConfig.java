@@ -64,7 +64,7 @@ public class AuthorizationServerConfig {
                             JsonResult<Object> result = new JsonResult<>();
                             result.setMsg(authException.getMessage());
                             result.setCode(EsErrorConstants.UNAUTHORIZED.getCode());
-                            result.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+
                             response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
                             response.setCharacterEncoding(StandardCharsets.UTF_8.toString());
                             response.setContentType(MediaType.APPLICATION_JSON_VALUE);

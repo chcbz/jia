@@ -114,7 +114,7 @@ public class ChatBountyInteractionV3Controller {
             case NOT_FOUND_OR_FORBIDDEN->"NOT_FOUND_OR_FORBIDDEN";case CONFLICT->"CONFLICT";
             case PERSISTENCE_ERROR->"UNAVAILABLE";};
         JsonResult<Void> body=JsonResult.failure("BOUNTY_FOLLOWUP_V3_"+suffix,
-                status==HttpStatus.NOT_FOUND?"Bounty follow-up is unavailable":message);body.setStatus(status.value());
+                status==HttpStatus.NOT_FOUND?"Bounty follow-up is unavailable":message);
         return ResponseEntity.status(status).header(HttpHeaders.CACHE_CONTROL,CACHE).body(body);
     }
 }

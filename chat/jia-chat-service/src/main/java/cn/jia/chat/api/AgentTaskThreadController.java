@@ -99,7 +99,7 @@ public class AgentTaskThreadController {
     private ResponseEntity<JsonResult<Void>> error(
             HttpStatus status, String code, String message) {
         JsonResult<Void> result = JsonResult.failure(code, message);
-        result.setStatus(status.value());
+
         return ResponseEntity.status(status).body(result);
     }
 

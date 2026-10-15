@@ -66,6 +66,12 @@ public final class AgentTaskSelectedOutputFinalizationController {
         Scope scope=scope(authentication);identifier(taskId,100);idempotencyKey(key);noQuery(request);
         var receipt=service.submit(scope.value(),taskId,key,parse(read(request)));
         HttpStatus status="completed".equals(receipt.state())?HttpStatus.OK:"failed".equals(receipt.state())?failureStatus(receipt.errorCode()):HttpStatus.ACCEPTED;
+        if (status.isError()) {
+            String code = receipt.errorCode() == null ? "FINALIZATION_INTERNAL_ERROR" : receipt.errorCode();
+            return ResponseEntity.status(status).cacheControl(CacheControl.noStore())
+                    .header("X-Content-Type-Options", "nosniff")
+                    .body(JsonResult.<ChatSelectedOutputFinalizationService.Receipt>failure(code, "Finalization failed"));
+        }
         return response(status,receipt);
     }
 
@@ -176,7 +182,7 @@ public final class AgentTaskSelectedOutputFinalizationController {
     private static HttpStatus failureStatus(String code){if(code==null)return HttpStatus.INTERNAL_SERVER_ERROR;if(code.contains("BAD_REQUEST"))return HttpStatus.BAD_REQUEST;if(code.contains("NOT_FOUND")||code.contains("SOURCE_UNAVAILABLE"))return HttpStatus.NOT_FOUND;if(code.contains("CONFLICT")||code.contains("GRANT_CHANGED")
                 ||"FINALIZATION_DELIVERY_CHANGES_REQUESTED".equals(code))return HttpStatus.CONFLICT;if(code.contains("STORAGE"))return HttpStatus.SERVICE_UNAVAILABLE;return HttpStatus.INTERNAL_SERVER_ERROR;}
     private static <T> ResponseEntity<JsonResult<T>> response(HttpStatus status,T value){return ResponseEntity.status(status).cacheControl(CacheControl.noStore()).header("X-Content-Type-Options","nosniff").body(JsonResult.success(value));}
-    private static ResponseEntity<JsonResult<Void>> error(HttpStatus status,String code,String message){JsonResult<Void> body=JsonResult.failure(code,message);body.setStatus(status.value());return ResponseEntity.status(status).header(HttpHeaders.CACHE_CONTROL,"private, no-store").body(body);}
+    private static ResponseEntity<JsonResult<Void>> error(HttpStatus status,String code,String message){JsonResult<Void> body=JsonResult.failure(code,message);return ResponseEntity.status(status).header(HttpHeaders.CACHE_CONTROL,"private, no-store").body(body);}
     private record Scope(ChatSelectedOutputFinalizationService.Scope value) { }
     private static final class RequestFailure extends RuntimeException { }
 }

@@ -1,0 +1,73 @@
+package cn.jia.core.config;
+
+import cn.jia.core.entity.JsonRequest;
+import cn.jia.core.entity.JsonResult;
+import cn.jia.core.filter.RequestIdFilter;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.http.MediaType;
+import org.springframework.http.converter.HttpMessageConverter;
+import org.springframework.http.converter.json.JacksonJsonHttpMessageConverter;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.springframework.web.bind.annotation.*;
+import java.util.ArrayList;
+import java.util.List;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
+
+class ApiEnvelopeBoundaryTest {
+    record Input(String name, int count) {}
+    @RestController
+    static class Endpoints {
+        @PostMapping("/test/protocol") JsonResult<Input> echo(@RequestBody JsonRequest<Input> request) {
+            return JsonResult.success(request.data());
+        }
+        @GetMapping("/test/fail") JsonResult<Void> fail() { throw new IllegalStateException("private diagnostic"); }
+        @GetMapping("/test/forbidden") JsonResult<Void> forbidden() { throw new org.springframework.security.access.AccessDeniedException("private"); }
+        @GetMapping("/sms/receive") String external() { throw new IllegalStateException("provider failure"); }
+    }
+    private MockMvc mvc;
+    @BeforeEach void setup() {
+        List<HttpMessageConverter<?>> converters = new ArrayList<>();
+        converters.add(new JacksonJsonHttpMessageConverter());
+        new ApiEnvelopeJsonConfig().extendMessageConverters(converters);
+        mvc = MockMvcBuilders.standaloneSetup(new Endpoints())
+                .setControllerAdvice(new ApiEnvelopeAdvice(), new ApiRequestEnvelopeAdvice(), new ExceptionHandlerAdvice())
+                .setMessageConverters(converters.toArray(HttpMessageConverter[]::new))
+                .addFilters(new RequestIdFilter()).build();
+    }
+    private String body(String id, String data) {
+        return "{\"protocolVersion\":1,\"requestId\":\"" + id + "\",\"data\":" + data + "}";
+    }
+    @Test void acceptsBodyIdAndDoesNotOverwriteItInFilterFinally() throws Exception {
+        mvc.perform(post("/test/protocol").contentType(MediaType.APPLICATION_JSON).content(body("r", "{\"name\":\"x\",\"count\":1}")))
+                .andExpect(status().isOk()).andExpect(header().string("X-Request-Id", "r"))
+                .andExpect(jsonPath("$.requestId").value("r")).andExpect(jsonPath("$.code").value("E0"))
+                .andExpect(jsonPath("$.data.name").value("x")).andExpect(jsonPath("$.status").doesNotExist());
+    }
+    @Test void rejectsHeaderBodyMismatch() throws Exception {
+        mvc.perform(post("/test/protocol").header("X-Request-Id", "header").contentType(MediaType.APPLICATION_JSON).content(body("body", "null")))
+                .andExpect(status().isBadRequest()).andExpect(jsonPath("$.requestId").value("header"))
+                .andExpect(jsonPath("$.code").value("PROTOCOL_REQUEST_ID_MISMATCH"));
+    }
+    @Test void rejectsDuplicateKeysMissingDataAndCoercion() throws Exception {
+        for (String value : List.of(body("r", "{\"name\":\"x\",\"count\":1,\"count\":2}"),
+                "{\"protocolVersion\":1,\"requestId\":\"r\"}", body("r", "{\"name\":\"x\",\"count\":\"1\"}"))) {
+            mvc.perform(post("/test/protocol").contentType(MediaType.APPLICATION_JSON).content(value))
+                    .andExpect(status().isBadRequest()).andExpect(jsonPath("$.protocolVersion").value(1));
+        }
+    }
+    @Test void mapsErrorsToRealHttpStatusesWithoutLeakingExceptionText() throws Exception {
+        mvc.perform(get("/test/fail").header("X-Request-Id", "r"))
+                .andExpect(status().isInternalServerError()).andExpect(jsonPath("$.requestId").value("r"))
+                .andExpect(content().string(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("private diagnostic"))));
+        mvc.perform(get("/test/forbidden"))
+                .andExpect(status().isForbidden()).andExpect(jsonPath("$.code").value("E403"));
+    }
+    @Test void externalCallbackFallbackDoesNotAdoptTheSelfJsonEnvelope() throws Exception {
+        mvc.perform(get("/sms/receive"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.protocolVersion").doesNotExist())
+                .andExpect(jsonPath("$.requestId").doesNotExist()).andExpect(jsonPath("$.status").value(200));
+    }
+}

@@ -46,4 +46,20 @@ class JsonEnvelopeSerializationTest {
         assertThrows(IllegalArgumentException.class, () -> new JsonRequest<>(1, "r\nx", null));
         assertDoesNotThrow(() -> new JsonRequest<>(1, "r", null));
     }
+    @Test void actualSerializerAgreesWithSharedCrossLanguageFixtures() throws Exception {
+        var fixture = mapper.readTree(java.nio.file.Files.readAllBytes(java.nio.file.Path.of(
+                "../../docs/interface-catalog/contracts/http-envelope-fixtures.json")));
+        var examples = java.util.Map.<String, JsonResult<?>>of(
+                "empty-success", JsonResult.success(),
+                "large-total-as-string", JsonResultPage.page(List.of(), 1, 100, 9007199254740993L),
+                "business-data", JsonResult.success(java.util.Map.of("nested", java.util.Map.of("data", "business data, not another envelope"))),
+                "forbidden", JsonResult.failure("E403", "Forbidden"));
+        for (var item : fixture.get("cases")) {
+            JsonResult<?> actual = examples.get(item.get("name").asString());
+            if (actual == null) continue;
+            actual.setRequestId("req_test_1");
+            assertEquals(mapper.readTree(item.get("text").asString()), mapper.readTree(mapper.writeValueAsBytes(actual)));
+        }
+    }
+
 }

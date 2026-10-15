@@ -48,7 +48,7 @@ public final class TaskSkillCapabilityController {
     public ResponseEntity<JsonResult<Void>> unavailable(RuntimeException error) {return failure(HttpStatus.SERVICE_UNAVAILABLE);}
     private static ResponseEntity<JsonResult<Void>> failure(HttpStatus status) {
         var result=JsonResult.<Void>failure("SKILL_CAPABILITIES_"+status.value(),status==HttpStatus.NOT_FOUND?"Task is unavailable":"Skill directory is unavailable");
-        result.setStatus(status.value());return ResponseEntity.status(status).cacheControl(CacheControl.noStore()).header("X-Content-Type-Options","nosniff").body(result);
+        return ResponseEntity.status(status).cacheControl(CacheControl.noStore()).header("X-Content-Type-Options","nosniff").body(result);
     }
     private static ChatDeliberationException missing(){return new ChatDeliberationException(ChatDeliberationException.Reason.NOT_FOUND_OR_FORBIDDEN,"Task is unavailable");}
     private static boolean exact(String s){return s!=null&&!s.isBlank()&&s.equals(s.strip())&&s.length()<=100&&s.codePoints().noneMatch(Character::isISOControl);}

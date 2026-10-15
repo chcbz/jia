@@ -218,7 +218,7 @@ public final class ControlledImagePointAndStartController {
     }
     private static ResponseEntity<JsonResult<Void>> error(HttpStatus status,String code) {
         JsonResult<Void> body=JsonResult.failure(code,"Controlled image bridge request unavailable");
-        body.setStatus(status.value());
+
         return ResponseEntity.status(status).header(HttpHeaders.CACHE_CONTROL,CACHE)
                 .header("X-Content-Type-Options","nosniff")
                 .contentType(new MediaType(MediaType.APPLICATION_JSON,StandardCharsets.UTF_8)).body(body);

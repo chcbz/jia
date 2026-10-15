@@ -195,7 +195,7 @@ public final class AgentHostingRentController {
 
     private static ResponseEntity<JsonResult<Void>> error(HttpStatus status, String code, String message) {
         JsonResult<Void> result = JsonResult.failure(code, message);
-        result.setStatus(status.value());
+
         return ResponseEntity.status(status)
                 .header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
                 .contentType(new MediaType(MediaType.APPLICATION_JSON, StandardCharsets.UTF_8))

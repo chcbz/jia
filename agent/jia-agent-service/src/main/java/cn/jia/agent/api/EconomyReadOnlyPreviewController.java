@@ -6,8 +6,6 @@ import cn.jia.agent.preview.EconomyReadOnlyPreviewDtos.Principal;
 import cn.jia.agent.preview.EconomyReadOnlyPreviewException;
 import cn.jia.agent.preview.EconomyReadOnlyPreviewService;
 import cn.jia.core.entity.JsonResult;
-import com.fasterxml.jackson.annotation.JsonIgnore;
-import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -52,7 +50,7 @@ public final class EconomyReadOnlyPreviewController {
     }
 
     @GetMapping(value = "/capabilities", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<PreviewResult<Object>> capabilities(Authentication authentication,
+    public ResponseEntity<JsonResult<Object>> capabilities(Authentication authentication,
             HttpServletRequest request) {
         Principal principal = principal(authentication);
         noQuery(request);
@@ -60,7 +58,7 @@ public final class EconomyReadOnlyPreviewController {
     }
 
     @GetMapping(value = "/wallet", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<PreviewResult<Object>> wallet(Authentication authentication,
+    public ResponseEntity<JsonResult<Object>> wallet(Authentication authentication,
             HttpServletRequest request) {
         Principal principal = principal(authentication);
         noQuery(request);
@@ -68,7 +66,7 @@ public final class EconomyReadOnlyPreviewController {
     }
 
     @GetMapping(value = "/ledger", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<PreviewResult<Object>> ledger(Authentication authentication,
+    public ResponseEntity<JsonResult<Object>> ledger(Authentication authentication,
             HttpServletRequest request) {
         Principal principal = principal(authentication);
         Query query = ledgerQuery(request);
@@ -76,7 +74,7 @@ public final class EconomyReadOnlyPreviewController {
     }
 
     @GetMapping(value = "/skill-products", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<PreviewResult<Object>> products(Authentication authentication,
+    public ResponseEntity<JsonResult<Object>> products(Authentication authentication,
             HttpServletRequest request) {
         Principal principal = principal(authentication);
         PageQuery query = pageQuery(request);
@@ -84,7 +82,7 @@ public final class EconomyReadOnlyPreviewController {
     }
 
     @GetMapping(value = "/skill-products/{productId}", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<PreviewResult<Object>> product(@PathVariable String productId,
+    public ResponseEntity<JsonResult<Object>> product(@PathVariable String productId,
             Authentication authentication, HttpServletRequest request) {
         Principal principal = principal(authentication);
         noQuery(request);
@@ -93,7 +91,7 @@ public final class EconomyReadOnlyPreviewController {
     }
 
     @GetMapping(value = "/agents/{agentId}/skills", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<PreviewResult<Object>> agentSkills(@PathVariable String agentId,
+    public ResponseEntity<JsonResult<Object>> agentSkills(@PathVariable String agentId,
             Authentication authentication, HttpServletRequest request) {
         Principal principal = principal(authentication);
         noQuery(request);
@@ -102,7 +100,7 @@ public final class EconomyReadOnlyPreviewController {
     }
 
     @GetMapping(value = "/hosting-plan", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<PreviewResult<Object>> hostingPlan(Authentication authentication,
+    public ResponseEntity<JsonResult<Object>> hostingPlan(Authentication authentication,
             HttpServletRequest request) {
         Principal principal = principal(authentication);
         noQuery(request);
@@ -110,7 +108,7 @@ public final class EconomyReadOnlyPreviewController {
     }
 
     @GetMapping(value = "/agents/{agentId}/hosting-lease", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<PreviewResult<Object>> hostingLease(@PathVariable String agentId,
+    public ResponseEntity<JsonResult<Object>> hostingLease(@PathVariable String agentId,
             Authentication authentication, HttpServletRequest request) {
         Principal principal = principal(authentication);
         noQuery(request);
@@ -120,7 +118,7 @@ public final class EconomyReadOnlyPreviewController {
 
     @PostMapping(value = "/bounty-estimates", consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<PreviewResult<Object>> bountyEstimate(@RequestBody byte[] body,
+    public ResponseEntity<JsonResult<Object>> bountyEstimate(@RequestBody byte[] body,
             Authentication authentication, HttpServletRequest request) {
         Principal principal = principal(authentication);
         noQuery(request);
@@ -128,17 +126,17 @@ public final class EconomyReadOnlyPreviewController {
     }
 
     @ExceptionHandler(EconomyReadOnlyPreviewException.class)
-    public ResponseEntity<PreviewResult<Object>> previewFailure(EconomyReadOnlyPreviewException exception) {
+    public ResponseEntity<JsonResult<Object>> previewFailure(EconomyReadOnlyPreviewException exception) {
         return failure(exception.status(), exception.code(), exception.getMessage());
     }
 
     @ExceptionHandler(HttpMessageNotReadableException.class)
-    public ResponseEntity<PreviewResult<Object>> unreadable(HttpMessageNotReadableException ignored) {
+    public ResponseEntity<JsonResult<Object>> unreadable(HttpMessageNotReadableException ignored) {
         return failure(HttpStatus.BAD_REQUEST, "PREVIEW_BAD_REQUEST", "Invalid preview request");
     }
 
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<PreviewResult<Object>> unexpected(Exception ignored) {
+    public ResponseEntity<JsonResult<Object>> unexpected(Exception ignored) {
         return failure(HttpStatus.SERVICE_UNAVAILABLE, "PREVIEW_DATA_UNAVAILABLE",
                 "Preview data is unavailable");
     }
@@ -266,42 +264,21 @@ public final class EconomyReadOnlyPreviewController {
         return EconomyReadOnlyPreviewService.badRequest();
     }
 
-    private static ResponseEntity<PreviewResult<Object>> ok(Object data) {
-        PreviewResult<Object> body = new PreviewResult<>();
+    private static ResponseEntity<JsonResult<Object>> ok(Object data) {
+        JsonResult<Object> body = new JsonResult<>();
         body.setCode("E0");
-        body.setMsg(null);
+        body.setMsg("ok");
         body.setData(data);
         return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
                 .contentType(new MediaType(MediaType.APPLICATION_JSON, StandardCharsets.UTF_8)).body(body);
     }
 
-    private static ResponseEntity<PreviewResult<Object>> failure(HttpStatus status, String code, String message) {
-        PreviewResult<Object> body = new PreviewResult<>();
+    private static ResponseEntity<JsonResult<Object>> failure(HttpStatus status, String code, String message) {
+        JsonResult<Object> body = new JsonResult<>();
         body.setCode(code);
         body.setMsg(message);
         return ResponseEntity.status(status).header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
                 .contentType(new MediaType(MediaType.APPLICATION_JSON, StandardCharsets.UTF_8)).body(body);
-    }
-
-    /** JsonResult wire with the v1 contract's `message` name instead of the legacy `msg` name. */
-    public static final class PreviewResult<T> extends JsonResult<T> {
-        @Override
-        @JsonProperty("message")
-        public String getMsg() {
-            return super.getMsg();
-        }
-
-        @Override
-        @JsonIgnore
-        public int getStatus() {
-            return super.getStatus();
-        }
-
-        @Override
-        @JsonIgnore
-        public String getLocation() {
-            return super.getLocation();
-        }
     }
 
     private record Query(EconomyReadOnlyPreviewService.Cursor cursor, int limit) { }

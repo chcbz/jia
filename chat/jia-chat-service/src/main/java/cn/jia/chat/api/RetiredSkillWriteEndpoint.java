@@ -10,7 +10,7 @@ final class RetiredSkillWriteEndpoint {
     private RetiredSkillWriteEndpoint() { }
     static <T> ResponseEntity<JsonResult<T>> response() {
         JsonResult<T> result = JsonResult.failure("LEGACY_SKILL_WRITE_RETIRED", "Use the current task discussion skill contract");
-        result.setStatus(HttpStatus.GONE.value());
+
         return ResponseEntity.status(HttpStatus.GONE).cacheControl(CacheControl.noStore())
                 .header("X-Content-Type-Options", "nosniff").body(result);
     }

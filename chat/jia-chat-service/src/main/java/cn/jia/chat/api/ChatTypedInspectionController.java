@@ -106,7 +106,7 @@ public final class ChatTypedInspectionController {
         JsonResult<Void> result = JsonResult.failure("TYPED_INSPECTION_" + failure.reason(),
                 status == HttpStatus.NOT_FOUND
                         ? "Typed inspection is unavailable" : failure.getMessage());
-        result.setStatus(status.value());
+
         return ResponseEntity.status(status).cacheControl(CacheControl.noStore())
                 .header("X-Content-Type-Options", "nosniff").body(result);
     }
@@ -115,7 +115,7 @@ public final class ChatTypedInspectionController {
     public ResponseEntity<JsonResult<Void>> runtime(RuntimeException failure) {
         JsonResult<Void> result = JsonResult.failure("TYPED_INSPECTION_UNAVAILABLE",
                 "Typed inspection is temporarily unavailable");
-        result.setStatus(503);
+
         return ResponseEntity.status(503).cacheControl(CacheControl.noStore())
                 .header("X-Content-Type-Options", "nosniff").body(result);
     }

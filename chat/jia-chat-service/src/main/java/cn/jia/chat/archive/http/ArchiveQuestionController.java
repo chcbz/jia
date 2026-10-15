@@ -186,7 +186,7 @@ public class ArchiveQuestionController {
     private ResponseEntity<JsonResult<?>> error(HttpStatus status, String code, String message, String currentVersion) {
         JsonResult<Object> result = JsonResult.failure(code, message);
         if (currentVersion != null) result.setData(Map.of("currentVersion", currentVersion));
-        result.setStatus(status.value());
+
         return ResponseEntity.status(status).contentType(MediaType.APPLICATION_JSON)
                 .header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL).body(result);
     }

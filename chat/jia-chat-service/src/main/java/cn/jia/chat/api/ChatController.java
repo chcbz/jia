@@ -148,7 +148,7 @@ public class ChatController {
 
     private static final PromptTemplate SUMMARY_PROMPT_TEMPLATE = new PromptTemplate("""
             帮我根据下面对话内容，输出15字以内的问题意图概述，需要名词开头。
-            
+
             问：
             -------------------------------------------------
             {question}
@@ -394,7 +394,7 @@ public class ChatController {
         String ownerJiacn = sender.jiacn();
         String ownerClientId = sender.clientId();
         String filterExpression = "metadata.jiacn == '" + ownerJiacn + "' AND role == 'ASSISTANT'";
-        
+
         return chatClient.prompt(
                         Prompt.builder().messages(UserMessage.builder().text(chatMessage.getContent()).build()).build())
                 .advisors(advisor -> advisor
@@ -821,9 +821,9 @@ public class ChatController {
         // conversationType can be passed directly in the search entity
         // e.g. {"search": {"conversationType": "juyiting"}}
         PageInfo<ChatConversationEntity> pageInfo = chatConversationService.findPage(
-                page.getSearch(), 
-                page.getPageNum(), 
-                page.getPageSize(), 
+                page.getSearch(),
+                page.getPageNum(),
+                page.getPageSize(),
                 page.getOrderBy()
         );
         JsonResultPage<ChatConversationEntity> result = JsonResultPage.page(pageInfo.getList(), pageInfo.getPageNum(), pageInfo.getPageSize(), pageInfo.getTotal());
@@ -956,7 +956,7 @@ public class ChatController {
         JsonResult<Void> result = JsonResult.failure(code,
                 failure.reason() == ChatDeliberationException.Reason.NOT_FOUND_OR_FORBIDDEN
                         ? "Chat request is unavailable" : failure.getMessage());
-        result.setStatus(status.value());
+
         return ResponseEntity.status(status).contentType(MediaType.APPLICATION_JSON).body(result);
     }
 
@@ -964,7 +964,7 @@ public class ChatController {
     public ResponseEntity<JsonResult<Void>> handleReservedTaskThreadAccess() {
         JsonResult<Void> result = JsonResult.failure(
                 "CONVERSATION_NOT_FOUND", "Conversation is not available");
-        result.setStatus(HttpStatus.NOT_FOUND.value());
+
         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(result);
     }
 

@@ -68,7 +68,7 @@ public final class AgentInspectionInputController {
         JsonResult<Void> result = JsonResult.failure("INSPECTION_INPUT_" + failure.reason(),
                 status == HttpStatus.NOT_FOUND
                         ? "Inspection input is unavailable" : failure.getMessage());
-        result.setStatus(status.value());
+
         return ResponseEntity.status(status).cacheControl(CacheControl.noStore())
                 .header("X-Content-Type-Options", "nosniff").body(result);
     }
@@ -80,7 +80,7 @@ public final class AgentInspectionInputController {
                         ? "AGENT_RUNTIME_UNAUTHENTICATED" : "AGENT_RUNTIME_FORBIDDEN",
                 failure.status == HttpStatus.UNAUTHORIZED
                         ? "Runtime authentication is required" : "Runtime authentication is forbidden");
-        result.setStatus(failure.status.value());
+
         return ResponseEntity.status(failure.status).cacheControl(CacheControl.noStore())
                 .header("X-Content-Type-Options", "nosniff").body(result);
     }
@@ -90,7 +90,7 @@ public final class AgentInspectionInputController {
     public ResponseEntity<JsonResult<Void>> runtime(RuntimeException failure) {
         JsonResult<Void> result = JsonResult.failure("INSPECTION_INPUT_UNAVAILABLE",
                 "Inspection input is temporarily unavailable");
-        result.setStatus(HttpStatus.SERVICE_UNAVAILABLE.value());
+
         return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).cacheControl(CacheControl.noStore())
                 .header("X-Content-Type-Options", "nosniff").body(result);
     }

@@ -74,14 +74,14 @@ public final class ChatTypedDeliberationController {
         case INVALID_REQUEST,INVALID_ROUTE,GAP->HttpStatus.BAD_REQUEST;case NOT_FOUND_OR_FORBIDDEN->HttpStatus.NOT_FOUND;
         case CONFLICT->HttpStatus.CONFLICT;case PERSISTENCE_ERROR->HttpStatus.SERVICE_UNAVAILABLE;};
         String message=status==HttpStatus.NOT_FOUND?"Typed discussion is unavailable":failure.getMessage();
-        JsonResult<Void> result=JsonResult.failure("TYPED_DELIBERATION_"+failure.reason(),message);result.setStatus(status.value());
+        JsonResult<Void> result=JsonResult.failure("TYPED_DELIBERATION_"+failure.reason(),message);
         return ResponseEntity.status(status).cacheControl(CacheControl.noStore()).header("X-Content-Type-Options","nosniff").body(result);}
 
     @ExceptionHandler(RuntimeException.class)
     public ResponseEntity<JsonResult<Void>> unavailable(RuntimeException failure) {
         JsonResult<Void> result=JsonResult.failure("TYPED_DELIBERATION_UNAVAILABLE",
                 "Typed discussion is temporarily unavailable");
-        result.setStatus(HttpStatus.SERVICE_UNAVAILABLE.value());
+
         return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).cacheControl(CacheControl.noStore())
                 .header("X-Content-Type-Options","nosniff").body(result);
     }

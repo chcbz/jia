@@ -117,14 +117,14 @@ public class AgentRuntimeV1Controller {
         // D06 detailed reasons remain internal; both explicit rejection types use
         // the same scope-hiding response. Never log reason/request/body/proof data.
         JsonResult<Void> result = JsonResult.failure("AGENT_FORBIDDEN", "Runtime v1 request rejected");
-        result.setStatus(HttpStatus.FORBIDDEN.value());
+
         return ResponseEntity.status(HttpStatus.FORBIDDEN).header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL).body(result);
     }
 
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<JsonResult<Void>> invalid(IllegalArgumentException ignored) {
         JsonResult<Void> result = JsonResult.failure("BAD_REQUEST", "Runtime v1 request rejected");
-        result.setStatus(HttpStatus.BAD_REQUEST.value());
+
         return ResponseEntity.badRequest().header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL).body(result);
     }
 

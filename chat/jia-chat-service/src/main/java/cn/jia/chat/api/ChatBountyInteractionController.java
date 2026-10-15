@@ -86,7 +86,7 @@ public class ChatBountyInteractionController {
         };
         var result = JsonResult.<Void>failure("BOUNTY_INTERACTION_" + error.reason(),
                 status == HttpStatus.NOT_FOUND ? "Bounty discussion is unavailable" : error.getMessage());
-        result.setStatus(status.value());
+
         return ResponseEntity.status(status).body(result);
     }
 
@@ -96,14 +96,14 @@ public class ChatBountyInteractionController {
         HttpStatus status = HttpStatus.valueOf(error.status());
         var result = JsonResult.<Void>failure("BOUNTY_INTERACTION_AUTHORIZATION_" + error.reason(),
                 "Task authorization is unavailable for this operation");
-        result.setStatus(status.value());
+
         return ResponseEntity.status(status).body(result);
     }
     @ExceptionHandler(ControlledImageFollowupAuthorityService.Failure.class)
     public ResponseEntity<JsonResult<Void>> v3AuthorityError(ControlledImageFollowupAuthorityService.Failure error) {
         HttpStatus status=switch(error.reason()){case BAD_REQUEST->HttpStatus.BAD_REQUEST;case NOT_FOUND_OR_FORBIDDEN->HttpStatus.NOT_FOUND;case CONFLICT->HttpStatus.CONFLICT;case UNAVAILABLE->HttpStatus.SERVICE_UNAVAILABLE;};
         String code=switch(error.reason()){case BAD_REQUEST->"INVALID_REQUEST";case NOT_FOUND_OR_FORBIDDEN->"NOT_FOUND_OR_FORBIDDEN";case CONFLICT->"CONFLICT";case UNAVAILABLE->"UNAVAILABLE";};
-        var result=JsonResult.<Void>failure("BOUNTY_FOLLOWUP_V3_"+code,status==HttpStatus.NOT_FOUND?"Bounty follow-up is unavailable":"Bounty follow-up request failed");result.setStatus(status.value());return ResponseEntity.status(status).header(HttpHeaders.CACHE_CONTROL,"private, no-store").body(result);
+        var result=JsonResult.<Void>failure("BOUNTY_FOLLOWUP_V3_"+code,status==HttpStatus.NOT_FOUND?"Bounty follow-up is unavailable":"Bounty follow-up request failed");return ResponseEntity.status(status).header(HttpHeaders.CACHE_CONTROL,"private, no-store").body(result);
     }
 
 }

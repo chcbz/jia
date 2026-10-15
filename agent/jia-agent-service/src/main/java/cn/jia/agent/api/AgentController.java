@@ -529,7 +529,7 @@ public class AgentController {
         log.warn("Funded bounty request rejected: uri={}, code={}, retryable={}",
                 request.getRequestURI(), exception.code(), exception.retryable());
         JsonResult<Void> result = JsonResult.failure(exception.code(), exception.getMessage());
-        result.setStatus(exception.status().value());
+
         return ResponseEntity.status(exception.status())
                 .header(HttpHeaders.CACHE_CONTROL, "private, no-store")
                 .body(result);
@@ -541,7 +541,7 @@ public class AgentController {
         log.warn("Agent hosting rent request rejected: uri={}, code={}",
                 request.getRequestURI(), e.code());
         JsonResult<Void> result = JsonResult.failure(e.code(), e.getMessage());
-        result.setStatus(HttpStatus.SERVICE_UNAVAILABLE.value());
+
         return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
                 .header(HttpHeaders.CACHE_CONTROL, "private, no-store")
                 .body(result);
@@ -553,7 +553,7 @@ public class AgentController {
         log.warn("Task execution grant request rejected: uri={}, code={}",
                 request.getRequestURI(), exception.code());
         JsonResult<Void> result = JsonResult.failure(exception.code(), exception.getMessage());
-        result.setStatus(exception.status());
+
         return ResponseEntity.status(exception.status())
                 .header(HttpHeaders.CACHE_CONTROL, "private, no-store").body(result);
     }
@@ -563,7 +563,7 @@ public class AgentController {
         log.warn("Agent API request rejected: uri={}, code={}, message={}",
                 request.getRequestURI(), e.getCode(), e.getMessage());
         JsonResult<Void> result = JsonResult.failure(e.getCode(), e.getMessage());
-        result.setStatus(409);
+
         return result;
     }
 
@@ -571,7 +571,7 @@ public class AgentController {
     public JsonResult<Void> handleIllegalArgumentException(IllegalArgumentException e, HttpServletRequest request) {
         log.warn("Agent API request invalid: uri={}, message={}", request.getRequestURI(), e.getMessage());
         JsonResult<Void> result = JsonResult.failure("BAD_REQUEST", e.getMessage());
-        result.setStatus(400);
+
         return result;
     }
 
@@ -579,7 +579,7 @@ public class AgentController {
     public JsonResult<Void> handleException(Exception e) {
         log.error("Agent API error", e);
         JsonResult<Void> result = JsonResult.failure("AGENT_ERROR", e.getMessage());
-        result.setStatus(500);
+
         return result;
     }
 
