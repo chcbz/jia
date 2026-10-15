@@ -1,5 +1,7 @@
 package cn.jia.agent.api;
 
+import cn.jia.core.entity.JsonRequest;
+
 import cn.jia.agent.entity.AgentCommandAckResult;
 import cn.jia.agent.entity.AgentCommandAckRejectedException;
 import cn.jia.agent.entity.AgentRuntimeV1AckRequest;
@@ -39,8 +41,9 @@ public class AgentRuntimeV1Controller {
 
     @PostMapping("/installations")
     public ResponseEntity<JsonResult<AgentRuntimeV1InstallationView>> create(
-            @RequestBody AgentRuntimeV1InstallationRequest request, Authentication authentication,
+            @RequestBody JsonRequest<AgentRuntimeV1InstallationRequest> protocolRequest, Authentication authentication,
             HttpServletRequest servletRequest) {
+        AgentRuntimeV1InstallationRequest request = protocolRequest == null ? null : protocolRequest.data();
         rejectLegacyApiKey(servletRequest);
         var scope = AgentController.requireJwtScope(authentication);
         return ok(runtime.create(scope.tenantId(), scope.clientId(), scope.ownerJiacn(), request, now()));
@@ -66,7 +69,8 @@ public class AgentRuntimeV1Controller {
     @cn.jia.core.security.AllowSensitiveOutput(reason = "Installer-only enrollment credential response; never exposed through InstallationView or logs")
     @PostMapping("/enroll")
     public ResponseEntity<JsonResult<AgentRuntimeV1EnrollmentResult>> enroll(
-            @RequestBody AgentRuntimeV1EnrollmentRequest request, HttpServletRequest servletRequest) {
+            @RequestBody JsonRequest<AgentRuntimeV1EnrollmentRequest> protocolRequest, HttpServletRequest servletRequest) {
+        AgentRuntimeV1EnrollmentRequest request = protocolRequest == null ? null : protocolRequest.data();
         rejectNativeClient(servletRequest);
         // Installer-only authorization response; never embed secrets in InstallationView.
         return ok(runtime.enroll(request, now()));
@@ -76,7 +80,8 @@ public class AgentRuntimeV1Controller {
     @PostMapping("/session")
     public ResponseEntity<JsonResult<AgentRuntimeV1SessionResponse>> session(
             @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorization,
-            @RequestBody AgentRuntimeV1SessionRequest request, HttpServletRequest servletRequest) {
+            @RequestBody JsonRequest<AgentRuntimeV1SessionRequest> protocolRequest, HttpServletRequest servletRequest) {
+        AgentRuntimeV1SessionRequest request = protocolRequest == null ? null : protocolRequest.data();
         rejectNativeClient(servletRequest);
         return ok(runtime.session(bearer(authorization), request, now()));
     }
@@ -84,7 +89,8 @@ public class AgentRuntimeV1Controller {
     @PostMapping("/heartbeat")
     public ResponseEntity<JsonResult<AgentRuntimeV1InstallationView>> heartbeat(
             @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorization,
-            @RequestBody AgentRuntimeV1RuntimeRequest request, HttpServletRequest servletRequest) {
+            @RequestBody JsonRequest<AgentRuntimeV1RuntimeRequest> protocolRequest, HttpServletRequest servletRequest) {
+        AgentRuntimeV1RuntimeRequest request = protocolRequest == null ? null : protocolRequest.data();
         rejectNativeClient(servletRequest);
         return ok(runtime.heartbeat(bearer(authorization), request, now()));
     }
@@ -92,7 +98,8 @@ public class AgentRuntimeV1Controller {
     @PostMapping("/commands/{messageId}/acks")
     public ResponseEntity<JsonResult<AgentCommandAckResult>> acknowledge(@PathVariable String messageId,
             @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorization,
-            @RequestBody AgentRuntimeV1AckRequest request, HttpServletRequest servletRequest) {
+            @RequestBody JsonRequest<AgentRuntimeV1AckRequest> protocolRequest, HttpServletRequest servletRequest) {
+        AgentRuntimeV1AckRequest request = protocolRequest == null ? null : protocolRequest.data();
         rejectLegacyApiKey(servletRequest);
         var headers = AgentRuntimeAuthenticationFilter.sessionHeaders(servletRequest);
         if (request == null || !java.util.Objects.equals(headers.agentId(), request.canonicalAgentId())

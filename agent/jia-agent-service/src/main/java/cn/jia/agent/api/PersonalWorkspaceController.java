@@ -1,5 +1,7 @@
 package cn.jia.agent.api;
 
+import cn.jia.core.entity.JsonRequest;
+
 import cn.jia.agent.entity.PersonalWorkspaceViews;
 import cn.jia.agent.exception.PersonalWorkspaceException;
 import cn.jia.agent.service.PersonalWorkspaceService;
@@ -72,8 +74,9 @@ public class PersonalWorkspaceController {
     }
     @PatchMapping(value = "/files/{fileId}", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<PersonalWorkspaceViews.FileView> rename(@PathVariable String fileId,
-            @RequestBody RenameRequest body, @RequestHeader(value = HttpHeaders.IF_MATCH, required = false) String ifMatch,
+            @RequestBody JsonRequest<RenameRequest> protocolRequest, @RequestHeader(value = HttpHeaders.IF_MATCH, required = false) String ifMatch,
             @RequestHeader("Idempotency-Key") String key, Authentication authentication) {
+        RenameRequest body = protocolRequest == null ? null : protocolRequest.data();
         PersonalWorkspaceViews.FileView view = service.rename(scope(authentication), fileId, body == null ? null : body.displayName(), ifMatch, new PersonalWorkspaceService.Idempotency(key));
         return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL).eTag(etag(view)).body(view);
     }
@@ -114,9 +117,10 @@ public class PersonalWorkspaceController {
         return json(service.usage(scope(authentication), fileId));
     }
     @PostMapping(value = "/files/{fileId}/trash", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<PersonalWorkspaceViews.FileView> trash(@PathVariable String fileId, @RequestBody TrashRequest body,
+    public ResponseEntity<PersonalWorkspaceViews.FileView> trash(@PathVariable String fileId, @RequestBody JsonRequest<TrashRequest> protocolRequest,
             @RequestHeader(value = HttpHeaders.IF_MATCH, required = false) String ifMatch,
             @RequestHeader("Idempotency-Key") String key, Authentication authentication) {
+        TrashRequest body = protocolRequest == null ? null : protocolRequest.data();
         PersonalWorkspaceViews.FileView view=service.trash(scope(authentication),fileId,body==null?-1:body.impactRevision(),body!=null&&body.acknowledgeExistingReferences(),ifMatch,new PersonalWorkspaceService.Idempotency(key));
         return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL,CACHE_CONTROL).eTag(etag(view)).body(view);
     }

@@ -1,5 +1,7 @@
 package cn.jia.isp.api;
 
+import cn.jia.core.entity.JsonRequest;
+
 import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.entity.JsonResult;
 import cn.jia.core.entity.JsonResultPage;
@@ -84,7 +86,8 @@ public class LdapController {
      * @return 用户信息
      */
     @PostMapping(value = "/user/search")
-    public Object userSearch(@RequestBody LdapUser user) {
+    public Object userSearch(@RequestBody JsonRequest<LdapUser> protocolRequest) {
+        LdapUser user = protocolRequest == null ? null : protocolRequest.data();
         List<LdapUser> userList = ldapUserService.search(user);
         if (CollectionUtil.isNullOrEmpty(userList)) {
             throw new EsRuntimeException(IspErrorConstants.USER_NOT_EXIST);
@@ -102,7 +105,8 @@ public class LdapController {
      * @return 处理结果
      */
     @PostMapping(value = "/user/create")
-    public Object userCreate(@RequestBody LdapUser user) throws Exception {
+    public Object userCreate(@RequestBody JsonRequest<LdapUser> protocolRequest) throws Exception {
+        LdapUser user = protocolRequest == null ? null : protocolRequest.data();
         List<LdapUser> userList = ldapUserService.search(user);
         if (CollectionUtil.isNullOrEmpty(userList)) {
             user = ldapUserService.create(user);
@@ -128,7 +132,8 @@ public class LdapController {
      * @return 处理结果
      */
     @PostMapping(value = "/user/update")
-    public Object userUpdate(@RequestBody LdapUser user) {
+    public Object userUpdate(@RequestBody JsonRequest<LdapUser> protocolRequest) {
+        LdapUser user = protocolRequest == null ? null : protocolRequest.data();
         LdapUser upUser = ldapUserService.findByUid(user.getUid());
         BeanUtil.copyPropertiesIgnoreNull(user, upUser);
         ldapUserService.modifyLdapUser(upUser);
@@ -193,7 +198,8 @@ public class LdapController {
      * @return 处理结果
      */
     @PostMapping(value = "/usergroup/create")
-    public Object userGroupCreate(@RequestBody LdapUserGroupDTO userGroup) throws Exception {
+    public Object userGroupCreate(@RequestBody JsonRequest<LdapUserGroupDTO> protocolRequest) throws Exception {
+        LdapUserGroupDTO userGroup = protocolRequest == null ? null : protocolRequest.data();
         LdapContextSource contextSource = (LdapContextSource) ldapTemplate.getContextSource();
         Name baseDn = contextSource.getBaseLdapName();
         Set<Name> member = new HashSet<>();
@@ -221,7 +227,8 @@ public class LdapController {
      * @return 处理结果
      */
     @PostMapping(value = "/usergroup/update")
-    public Object userGroupUpdate(@RequestBody LdapUserGroup userGroup) {
+    public Object userGroupUpdate(@RequestBody JsonRequest<LdapUserGroup> protocolRequest) {
+        LdapUserGroup userGroup = protocolRequest == null ? null : protocolRequest.data();
         LdapUserGroup upUserGroup = ldapUserGroupService.findByCn(userGroup.getCn());
         ValidUtil.assertNotNull(upUserGroup, IspErrorConstants.DATA_NOT_FOUND);
         BeanUtil.copyPropertiesIgnoreNull(userGroup, upUserGroup);
@@ -236,7 +243,8 @@ public class LdapController {
      * @return 处理结果
      */
     @PostMapping(value = "/usergroup/member/add")
-    public Object userGroupMemberAdd(@RequestBody LdapUserGroupDTO userGroup) throws Exception {
+    public Object userGroupMemberAdd(@RequestBody JsonRequest<LdapUserGroupDTO> protocolRequest) throws Exception {
+        LdapUserGroupDTO userGroup = protocolRequest == null ? null : protocolRequest.data();
         LdapUserGroup upUserGroup = ldapUserGroupService.findByCn(userGroup.getCn());
 
         LdapContextSource contextSource = (LdapContextSource) ldapTemplate.getContextSource();
@@ -261,7 +269,8 @@ public class LdapController {
      * @return 处理结果
      */
     @PostMapping(value = "/usergroup/member/delete")
-    public Object userGroupMemberDelete(@RequestBody LdapUserGroupDTO userGroup) throws Exception {
+    public Object userGroupMemberDelete(@RequestBody JsonRequest<LdapUserGroupDTO> protocolRequest) throws Exception {
+        LdapUserGroupDTO userGroup = protocolRequest == null ? null : protocolRequest.data();
         LdapUserGroup upUserGroup = ldapUserGroupService.findByCn(userGroup.getCn());
         LdapContextSource contextSource = (LdapContextSource) ldapTemplate.getContextSource();
         Name baseDn = contextSource.getBaseLdapName();

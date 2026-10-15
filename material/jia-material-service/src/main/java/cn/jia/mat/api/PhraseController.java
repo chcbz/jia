@@ -1,5 +1,7 @@
 package cn.jia.mat.api;
 
+import cn.jia.core.entity.JsonRequest;
+
 import cn.jia.core.entity.JsonResult;
 import cn.jia.core.exception.EsRuntimeException;
 import cn.jia.mat.common.MatErrorConstants;
@@ -38,7 +40,8 @@ public class PhraseController {
 	 * @return 短语信息
 	 */
 	@PostMapping(value = "/create")
-	public Object create(@RequestBody MatPhraseEntity phrase) throws Exception {
+	public Object create(@RequestBody JsonRequest<MatPhraseEntity> protocolRequest) throws Exception {
+        MatPhraseEntity phrase = protocolRequest == null ? null : protocolRequest.data();
 		phraseService.create(phrase);
 		return JsonResult.success();
 	}
@@ -49,7 +52,8 @@ public class PhraseController {
 	 * @return 短语信息
 	 */
 	@PostMapping(value = "/update")
-	public Object update(@RequestBody MatPhraseEntity phrase) {
+	public Object update(@RequestBody JsonRequest<MatPhraseEntity> protocolRequest) {
+        MatPhraseEntity phrase = protocolRequest == null ? null : protocolRequest.data();
 		phraseService.update(phrase);
 		return JsonResult.success();
 	}
@@ -74,7 +78,8 @@ public class PhraseController {
 	 * @return 短语列表
 	 */
 	@PostMapping(value = "/get/random")
-	public Object getRandom(@RequestBody MatPhraseEntity example) {
+	public Object getRandom(@RequestBody JsonRequest<MatPhraseEntity> protocolRequest) {
+        MatPhraseEntity example = protocolRequest == null ? null : protocolRequest.data();
 		MatPhraseEntity phrase = phraseService.findRandom(example);
 		if(phrase == null) {
 			throw new EsRuntimeException(MatErrorConstants.MEDIA_NOT_EXIST);
@@ -88,7 +93,8 @@ public class PhraseController {
 	 * @return 处理结果
 	 */
 	@PostMapping(value = "/vote")
-	public Object vote(@RequestBody MatPhraseVoteEntity vote) {
+	public Object vote(@RequestBody JsonRequest<MatPhraseVoteEntity> protocolRequest) {
+        MatPhraseVoteEntity vote = protocolRequest == null ? null : protocolRequest.data();
 		phraseService.vote(vote);
 		return JsonResult.success();
 	}

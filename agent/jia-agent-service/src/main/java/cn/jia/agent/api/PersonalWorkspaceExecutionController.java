@@ -1,5 +1,7 @@
 package cn.jia.agent.api;
 
+import cn.jia.core.entity.JsonRequest;
+
 import cn.jia.agent.service.PersonalWorkspaceExecutionService;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.HttpHeaders;
@@ -42,8 +44,9 @@ public class PersonalWorkspaceExecutionController {
     @PostMapping(value = "/executions", consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<PersonalWorkspaceExecutionService.ExecutionView> create(
-            @RequestBody CreateRequest request, @RequestHeader(value = "Idempotency-Key", required = false) String key,
+            @RequestBody JsonRequest<CreateRequest> protocolRequest, @RequestHeader(value = "Idempotency-Key", required = false) String key,
             Authentication authentication) {
+        CreateRequest request = protocolRequest == null ? null : protocolRequest.data();
         if (request == null || request.inputs() == null) throw new RequestFailure();
         PersonalWorkspaceExecutionService.ExecutionView view = service.create(scope(authentication),
                 new PersonalWorkspaceExecutionService.CreateCommand(request.conversationId(), request.targetAgentId(),
@@ -83,8 +86,9 @@ public class PersonalWorkspaceExecutionController {
     @PostMapping(value = "/executions/{executionId}/revoke-inputs", consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<PersonalWorkspaceExecutionService.ExecutionView> revoke(@PathVariable String executionId,
-            @RequestBody RevokeRequest request, @RequestHeader(value = "Idempotency-Key", required = false) String key,
+            @RequestBody JsonRequest<RevokeRequest> protocolRequest, @RequestHeader(value = "Idempotency-Key", required = false) String key,
             Authentication authentication) {
+        RevokeRequest request = protocolRequest == null ? null : protocolRequest.data();
         if (request == null) throw new RequestFailure();
         return ok(service.revokeInputs(scope(authentication), executionId, decimal(request.expectedGrantRevision()), key));
     }

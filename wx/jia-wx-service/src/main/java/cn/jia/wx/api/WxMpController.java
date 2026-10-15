@@ -1,5 +1,7 @@
 package cn.jia.wx.api;
 
+import cn.jia.core.entity.JsonRequest;
+
 import cn.jia.base.service.DictService;
 import cn.jia.core.common.EsConstants;
 import cn.jia.core.common.EsHandler;
@@ -752,7 +754,8 @@ public class WxMpController {
      * @throws Exception
      */
     @RequestMapping("/user/info/batchget")
-    public Object userInfoBatchGet(@RequestBody List<String> openids, HttpServletRequest request) throws Exception {
+    public Object userInfoBatchGet(@RequestBody JsonRequest<List<String>> protocolRequest, HttpServletRequest request) throws Exception {
+        List<String> openids = protocolRequest == null ? null : protocolRequest.data();
         return JsonResult.success(mpInfoService.findWxMpService(request).getUserService().userInfoList(openids));
     }
 
@@ -935,7 +938,8 @@ public class WxMpController {
      * @throws Exception
      */
     @RequestMapping("/message/custom/send")
-    public Object customMessageSend(@RequestBody WxMpKefuMessage message, HttpServletRequest request) throws Exception {
+    public Object customMessageSend(@RequestBody JsonRequest<WxMpKefuMessage> protocolRequest, HttpServletRequest request) throws Exception {
+        WxMpKefuMessage message = protocolRequest == null ? null : protocolRequest.data();
         return JsonResult.success(mpInfoService.findWxMpService(request).getKefuService().sendKefuMessage(message));
     }
 
@@ -948,7 +952,8 @@ public class WxMpController {
      * @throws Exception
      */
     @RequestMapping("/message/template/send")
-    public Object templateMessageSend(@RequestBody WxMpTemplateMessage templateMessage, HttpServletRequest request) throws Exception {
+    public Object templateMessageSend(@RequestBody JsonRequest<WxMpTemplateMessage> protocolRequest, HttpServletRequest request) throws Exception {
+        WxMpTemplateMessage templateMessage = protocolRequest == null ? null : protocolRequest.data();
         return JsonResult.success(mpInfoService.findWxMpService(request).getTemplateMsgService().sendTemplateMsg(templateMessage));
     }
 
@@ -982,7 +987,8 @@ public class WxMpController {
      * @throws Exception
      */
     @RequestMapping("/material/add_news")
-    public Object materialAddNews(@RequestBody WxMpMaterialNews news, HttpServletRequest request) throws Exception {
+    public Object materialAddNews(@RequestBody JsonRequest<WxMpMaterialNews> protocolRequest, HttpServletRequest request) throws Exception {
+        WxMpMaterialNews news = protocolRequest == null ? null : protocolRequest.data();
         for (WxMpNewsArticle article : news.getArticles()) {
             article.setContent(thsrc(article.getContent(), 0, request));
         }
@@ -1073,7 +1079,8 @@ public class WxMpController {
      * @return
      */
     @RequestMapping(value = "/info/create", method = RequestMethod.POST)
-    public Object createMpInfo(@RequestBody MpInfoEntity info) {
+    public Object createMpInfo(@RequestBody JsonRequest<MpInfoEntity> protocolRequest) {
+        MpInfoEntity info = protocolRequest == null ? null : protocolRequest.data();
         info.setClientId(EsContextHolder.getContext().getClientId());
         mpInfoService.create(info);
         return JsonResult.success(info);
@@ -1086,7 +1093,8 @@ public class WxMpController {
      * @return
      */
     @RequestMapping(value = "/info/update", method = RequestMethod.POST)
-    public Object updateMpInfo(@RequestBody MpInfoEntity info) {
+    public Object updateMpInfo(@RequestBody JsonRequest<MpInfoEntity> protocolRequest) {
+        MpInfoEntity info = protocolRequest == null ? null : protocolRequest.data();
         mpInfoService.update(info);
         return JsonResult.success(info);
     }
@@ -1111,7 +1119,8 @@ public class WxMpController {
      * @return
      */
     @RequestMapping(value = "/info/list", method = RequestMethod.POST)
-    public Object listMpInfo(@RequestBody JsonRequestPage<MpInfoVO> page, HttpServletRequest request) {
+    public Object listMpInfo(@RequestBody JsonRequest<JsonRequestPage<MpInfoVO>> protocolRequest, HttpServletRequest request) {
+        JsonRequestPage<MpInfoVO> page = protocolRequest == null ? null : protocolRequest.data();
         MpInfoVO example = Optional.ofNullable(page.getSearch()).orElse(new MpInfoVO());
         example.setClientId(EsContextHolder.getContext().getClientId());
         PageInfo<MpInfoEntity> list = mpInfoService.findPage(example, page.getPageNum(), page.getPageSize(), page.getOrderBy());

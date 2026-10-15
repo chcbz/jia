@@ -1,5 +1,7 @@
 package cn.jia.agent.api;
 
+import cn.jia.core.entity.JsonRequest;
+
 import cn.jia.agent.common.AgentErrorConstants;
 import cn.jia.agent.entity.AbilityCompareRequestDTO;
 import cn.jia.agent.entity.AbilityEvaluationRequestDTO;
@@ -150,7 +152,8 @@ public class AgentController {
     }
 
     @PostMapping("/register")
-    public Object register(@RequestBody AgentRegisterDTO request) {
+    public Object register(@RequestBody JsonRequest<AgentRegisterDTO> protocolRequest) {
+        AgentRegisterDTO request = protocolRequest == null ? null : protocolRequest.data();
         return JsonResult.success(agentService.register(request));
     }
 
@@ -287,7 +290,8 @@ public class AgentController {
     }
 
     @PostMapping("/roster")
-    public Object roster(@RequestBody AgentRosterSearchDTO request) {
+    public Object roster(@RequestBody JsonRequest<AgentRosterSearchDTO> protocolRequest) {
+        AgentRosterSearchDTO request = protocolRequest == null ? null : protocolRequest.data();
         int pageNum = request.getPageNum() == null ? 1 : request.getPageNum();
         int pageSize = request.getPageSize() == null ? 50 : request.getPageSize();
         var result=agentService.listRoster(request.getStatus(), request.getAbility(), pageNum, pageSize);
@@ -308,7 +312,8 @@ public class AgentController {
     }
 
     @PutMapping("/{agentId}/status")
-    public Object updateStatus(@PathVariable String agentId, @RequestBody AgentStatusDTO request) {
+    public Object updateStatus(@PathVariable String agentId, @RequestBody JsonRequest<AgentStatusDTO> protocolRequest) {
+        AgentStatusDTO request = protocolRequest == null ? null : protocolRequest.data();
         return JsonResult.success(agentService.updateStatus(agentId, request));
     }
 
@@ -328,7 +333,8 @@ public class AgentController {
     }
 
     @PostMapping("/dialogue")
-    public Object dialogue(@RequestBody DialogueRequestDTO request) {
+    public Object dialogue(@RequestBody JsonRequest<DialogueRequestDTO> protocolRequest) {
+        DialogueRequestDTO request = protocolRequest == null ? null : protocolRequest.data();
         return JsonResult.success(agentService.generateDialogue(request));
     }
 
@@ -338,19 +344,22 @@ public class AgentController {
     }
 
     @PostMapping("/tasks/search")
-    public Object searchTasks(@RequestBody AgentTaskSearchDTO request) {
+    public Object searchTasks(@RequestBody JsonRequest<AgentTaskSearchDTO> protocolRequest) {
+        AgentTaskSearchDTO request = protocolRequest == null ? null : protocolRequest.data();
         return page(agentService.searchTasks(request));
     }
 
     @PostMapping("/tasks/status-counts")
-    public Object countTasksByStatus(@RequestBody AgentTaskSearchDTO request) {
+    public Object countTasksByStatus(@RequestBody JsonRequest<AgentTaskSearchDTO> protocolRequest) {
+        AgentTaskSearchDTO request = protocolRequest == null ? null : protocolRequest.data();
         return JsonResult.success(agentService.countTasksByStatus(request));
     }
 
     @PostMapping("/tasks")
-    public Object createTask(@RequestBody AgentTaskCreateDTO request,
+    public Object createTask(@RequestBody JsonRequest<AgentTaskCreateDTO> protocolRequest,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             Authentication authentication) {
+        AgentTaskCreateDTO request = protocolRequest == null ? null : protocolRequest.data();
         if (!hasFundingFields(request)) {
             return JsonResult.success(agentService.createTask(request));
         }
@@ -367,9 +376,10 @@ public class AgentController {
 
     @PostMapping("/tasks/{taskId}/funding/cancel")
     public Object cancelTaskFunding(@PathVariable String taskId,
-            @RequestBody AgentTaskFundingCancelDTO request,
+            @RequestBody JsonRequest<AgentTaskFundingCancelDTO> protocolRequest,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             Authentication authentication) {
+        AgentTaskFundingCancelDTO request = protocolRequest == null ? null : protocolRequest.data();
         FundedBountyActor actor = requireMoneyActor(authentication);
         FundedBountyService service = requireFundedBountyService();
         String expected = request == null ? null : request.getExpectedTaskVersion();
@@ -380,9 +390,10 @@ public class AgentController {
 
     @PostMapping("/tasks/{taskId}/quotes")
     public Object quoteTask(@PathVariable String taskId,
-            @RequestBody AgentTaskQuoteRequestDTO request,
+            @RequestBody JsonRequest<AgentTaskQuoteRequestDTO> protocolRequest,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             Authentication authentication) {
+        AgentTaskQuoteRequestDTO request = protocolRequest == null ? null : protocolRequest.data();
         FundedBountyActor actor = requireMoneyActor(authentication);
         FundedBountyQuoteClaimService service = requireFundedBountyQuoteClaimService();
         return JsonResult.success(service.quote(actor, idempotencyKey,
@@ -391,9 +402,10 @@ public class AgentController {
 
     @PostMapping("/tasks/{taskId}/claim")
     public Object claimTask(@PathVariable String taskId,
-            @RequestBody AgentTaskClaimRequestDTO request,
+            @RequestBody JsonRequest<AgentTaskClaimRequestDTO> protocolRequest,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             Authentication authentication) {
+        AgentTaskClaimRequestDTO request = protocolRequest == null ? null : protocolRequest.data();
         FundedBountyActor actor = requireMoneyActor(authentication);
         FundedBountyQuoteClaimService service = requireFundedBountyQuoteClaimService();
         return JsonResult.success(service.claim(actor, idempotencyKey,
@@ -401,9 +413,10 @@ public class AgentController {
     }
 
     @PostMapping("/tasks/{taskId}/assign")
-    public Object assignTask(@PathVariable String taskId, @RequestBody AgentTaskAssignDTO request,
+    public Object assignTask(@PathVariable String taskId, @RequestBody JsonRequest<AgentTaskAssignDTO> protocolRequest,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             Authentication authentication) {
+        AgentTaskAssignDTO request = protocolRequest == null ? null : protocolRequest.data();
         if (!hasV2GrantFields(request)) {
             return JsonResult.success(agentService.assignTask(taskId, request));
         }
@@ -416,7 +429,8 @@ public class AgentController {
     @PostMapping("/tasks/{taskId}/execution-authorizations/{grantId}/revoke")
     public Object revokeTaskExecutionGrant(@PathVariable String taskId, @PathVariable String grantId,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
-            @RequestBody AgentTaskExecutionGrantRevokeDTO request, Authentication authentication) {
+            @RequestBody JsonRequest<AgentTaskExecutionGrantRevokeDTO> protocolRequest, Authentication authentication) {
+        AgentTaskExecutionGrantRevokeDTO request = protocolRequest == null ? null : protocolRequest.data();
         if (request == null || request.getExpectedVersion() == null) {
             throw new AgentTaskExecutionGrantException(
                     AgentTaskExecutionGrantException.Reason.BAD_REQUEST,
@@ -437,8 +451,9 @@ public class AgentController {
     @PostMapping("/tasks/{taskId}/team-recommendation")
     public Object recommendTaskTeam(
             @PathVariable String taskId,
-            @RequestBody AgentTaskTeamRecommendationRequestDTO request,
+            @RequestBody JsonRequest<AgentTaskTeamRecommendationRequestDTO> protocolRequest,
             Authentication authentication) {
+        AgentTaskTeamRecommendationRequestDTO request = protocolRequest == null ? null : protocolRequest.data();
         AgentHostedBindingTransaction.Scope scope = requireJwtScope(authentication);
         AgentTaskTeamRecommendationDTO recommendation = agentService.recommendTaskTeam(
                 scope.tenantId(), scope.clientId(), taskId, request);
@@ -448,17 +463,20 @@ public class AgentController {
     }
 
     @PostMapping("/tasks/{taskId}/auto-assign")
-    public Object autoAssignTask(@PathVariable String taskId, @RequestBody(required = false) AgentTaskAssignDTO request) {
+    public Object autoAssignTask(@PathVariable String taskId, @RequestBody(required = false) JsonRequest<AgentTaskAssignDTO> protocolRequest) {
+        AgentTaskAssignDTO request = protocolRequest == null ? null : protocolRequest.data();
         return JsonResult.success(agentService.autoAssignTask(taskId, request == null ? new AgentTaskAssignDTO() : request));
     }
 
     @PostMapping("/tasks/{taskId}/report")
-    public Object reportTask(@PathVariable String taskId, @RequestBody AgentTaskReportDTO request) {
+    public Object reportTask(@PathVariable String taskId, @RequestBody JsonRequest<AgentTaskReportDTO> protocolRequest) {
+        AgentTaskReportDTO request = protocolRequest == null ? null : protocolRequest.data();
         return JsonResult.success(agentService.reportTask(taskId, request));
     }
 
     @PostMapping("/tasks/{taskId}/notes")
-    public Object addTaskNote(@PathVariable String taskId, @RequestBody AgentTaskNoteDTO request) {
+    public Object addTaskNote(@PathVariable String taskId, @RequestBody JsonRequest<AgentTaskNoteDTO> protocolRequest) {
+        AgentTaskNoteDTO request = protocolRequest == null ? null : protocolRequest.data();
         return JsonResult.success(agentService.addTaskNote(taskId, request));
     }
 
@@ -473,12 +491,14 @@ public class AgentController {
     }
 
     @PostMapping("/evaluate")
-    public Object evaluate(@RequestBody AbilityEvaluationRequestDTO request) {
+    public Object evaluate(@RequestBody JsonRequest<AbilityEvaluationRequestDTO> protocolRequest) {
+        AbilityEvaluationRequestDTO request = protocolRequest == null ? null : protocolRequest.data();
         return JsonResult.success(abilityEvaluationService.evaluate(request));
     }
 
     @PostMapping("/compare")
-    public Object compare(@RequestBody AbilityCompareRequestDTO request) {
+    public Object compare(@RequestBody JsonRequest<AbilityCompareRequestDTO> protocolRequest) {
+        AbilityCompareRequestDTO request = protocolRequest == null ? null : protocolRequest.data();
         return JsonResult.success(abilityEvaluationService.compare(request));
     }
 

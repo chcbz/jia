@@ -1,5 +1,7 @@
 package cn.jia.mat.api;
 
+import cn.jia.core.entity.JsonRequest;
+
 import cn.jia.base.service.DictService;
 import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.entity.JsonRequestPage;
@@ -94,7 +96,8 @@ public class NewsController {
 	 * @return 图文信息
 	 */
 	@PostMapping(value = "/create")
-	public Object create(@RequestBody MatNewsEntity news) {
+	public Object create(@RequestBody JsonRequest<MatNewsEntity> protocolRequest) {
+        MatNewsEntity news = protocolRequest == null ? null : protocolRequest.data();
 		newsService.create(news);
 		return JsonResult.success(news);
 	}
@@ -105,7 +108,8 @@ public class NewsController {
 	 * @return 图文信息
 	 */
 	@PostMapping(value = "/update")
-	public Object update(@RequestBody MatNewsEntity news) {
+	public Object update(@RequestBody JsonRequest<MatNewsEntity> protocolRequest) {
+        MatNewsEntity news = protocolRequest == null ? null : protocolRequest.data();
 		newsService.update(news);
 		return JsonResult.success();
 	}
@@ -126,7 +130,8 @@ public class NewsController {
 	 * @return 图文列表
 	 */
 	@PostMapping(value = "/list")
-	public Object list(@RequestBody JsonRequestPage<MatNewsReqVO> page) {
+	public Object list(@RequestBody JsonRequest<JsonRequestPage<MatNewsReqVO>> protocolRequest) {
+        JsonRequestPage<MatNewsReqVO> page = protocolRequest == null ? null : protocolRequest.data();
 		MatNewsReqVO example = Optional.ofNullable(page.getSearch()).orElse(new MatNewsReqVO());
 		PageInfo<MatNewsEntity> newsList = newsService.findPage(example, page.getPageNum(), page.getPageSize(), page.getOrderBy());
 //		String material_url = dictService.getValue(Constants.DICT_TYPE_MODULE_URL, Constants.MODULE_URL_MATERIAL);

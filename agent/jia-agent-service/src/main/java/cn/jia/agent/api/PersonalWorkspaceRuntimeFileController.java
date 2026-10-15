@@ -1,5 +1,7 @@
 package cn.jia.agent.api;
 
+import cn.jia.core.entity.JsonRequest;
+
 import cn.jia.agent.security.AgentRuntimeAuthentication;
 import cn.jia.agent.security.AgentRuntimeAuthenticationService;
 import cn.jia.agent.service.PersonalWorkspaceExecutionService;
@@ -48,8 +50,9 @@ public class PersonalWorkspaceRuntimeFileController {
     @PostMapping(value = "/{taskId}/runs/{runId}/start", consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<PersonalWorkspaceExecutionService.RuntimeStartView> start(@PathVariable String taskId,
-            @PathVariable String runId, @RequestBody StartRequest request, HttpServletRequest servletRequest,
+            @PathVariable String runId, @RequestBody JsonRequest<StartRequest> protocolRequest, HttpServletRequest servletRequest,
             Authentication authentication) {
+        StartRequest request = protocolRequest == null ? null : protocolRequest.data();
         requireNoQuery(servletRequest);
         if (request == null || request.commandId() == null || request.messageId() == null) throw new RequestFailure();
         return json(runtimeAuthentication.withNativeFence(authentication, () ->
@@ -95,8 +98,9 @@ public class PersonalWorkspaceRuntimeFileController {
     @PostMapping(value = "/{taskId}/runs/{runId}/output-commits/{manifestId}", consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<PersonalWorkspaceExecutionService.CommitView> commit(@PathVariable String taskId,
-            @PathVariable String runId, @PathVariable String manifestId, @RequestBody CommitRequest request,
+            @PathVariable String runId, @PathVariable String manifestId, @RequestBody JsonRequest<CommitRequest> protocolRequest,
             HttpServletRequest servletRequest, Authentication authentication) {
+        CommitRequest request = protocolRequest == null ? null : protocolRequest.data();
         requireNoQuery(servletRequest); if(request==null||request.outputs()==null||request.outputs().size()!=1)throw new RequestFailure();
         CommitOutput output=request.outputs().getFirst(); if(output==null||output.outputId()==null||output.sha256()==null||output.length()==null||!output.sha256().matches("[0-9a-f]{64}")||output.length()<0)throw new RequestFailure();
         return json(service.commitOutputs(scope(authentication),taskId,runId,manifestId,List.of(
@@ -105,8 +109,9 @@ public class PersonalWorkspaceRuntimeFileController {
     @PostMapping(value = "/{taskId}/runs/{runId}/failure", consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<PersonalWorkspaceExecutionService.ExecutionView> failure(@PathVariable String taskId,
-            @PathVariable String runId, @RequestBody FailureRequest request, HttpServletRequest servletRequest,
+            @PathVariable String runId, @RequestBody JsonRequest<FailureRequest> protocolRequest, HttpServletRequest servletRequest,
             Authentication authentication) {
+        FailureRequest request = protocolRequest == null ? null : protocolRequest.data();
         requireNoQuery(servletRequest);
         if (request == null || request.code() == null) throw new RequestFailure();
         return json(runtimeAuthentication.withNativeFence(authentication, () ->

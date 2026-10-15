@@ -1,5 +1,7 @@
 package cn.jia.dwz.api;
 
+import cn.jia.core.entity.JsonRequest;
+
 import cn.jia.core.entity.JsonRequestPage;
 import cn.jia.core.entity.JsonResult;
 import cn.jia.core.entity.JsonResultPage;
@@ -76,7 +78,8 @@ public class DwzController {
      */
     @RequestMapping(value = "/gen", method = RequestMethod.POST)
     @ResponseBody
-    public Object gen(@RequestBody DwzRecordEntity record) {
+    public Object gen(@RequestBody JsonRequest<DwzRecordEntity> protocolRequest) {
+        DwzRecordEntity record = protocolRequest == null ? null : protocolRequest.data();
         String uri = dwzService.gen(record.getJiacn(), record.getOrig(), record.getExpireTime());
         return JsonResult.success(uri);
     }
@@ -102,7 +105,8 @@ public class DwzController {
      */
     @RequestMapping(value = "/update", method = RequestMethod.POST)
     @ResponseBody
-    public Object update(@RequestBody DwzRecordEntity record) {
+    public Object update(@RequestBody JsonRequest<DwzRecordEntity> protocolRequest) {
+        DwzRecordEntity record = protocolRequest == null ? null : protocolRequest.data();
         dwzService.update(record);
         return JsonResult.success(record);
     }
@@ -128,7 +132,8 @@ public class DwzController {
      */
     @RequestMapping(value = "/list", method = RequestMethod.POST)
     @ResponseBody
-    public Object list(@RequestBody JsonRequestPage<DwzRecordEntity> page) {
+    public Object list(@RequestBody JsonRequest<JsonRequestPage<DwzRecordEntity>> protocolRequest) {
+        JsonRequestPage<DwzRecordEntity> page = protocolRequest == null ? null : protocolRequest.data();
         PageInfo<DwzRecordEntity> list = dwzService.findPage(page.getSearch(), page.getPageNum(), page.getPageSize(), page.getOrderBy());
         JsonResultPage<DwzRecordEntity> result = JsonResultPage.page(list.getList(), list.getPageNum(), list.getPageSize(), list.getTotal());
         return result;

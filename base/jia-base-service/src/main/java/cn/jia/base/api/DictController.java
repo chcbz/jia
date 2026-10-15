@@ -1,5 +1,7 @@
 package cn.jia.base.api;
 
+import cn.jia.core.entity.JsonRequest;
+
 import cn.jia.base.entity.DictEntity;
 import cn.jia.base.service.impl.DictServiceImpl;
 import cn.jia.core.entity.JsonRequestPage;
@@ -43,7 +45,8 @@ public class DictController {
      */
     @PreAuthorize("hasAuthority('dict-create')")
     @RequestMapping(value = "/create", method = RequestMethod.POST)
-    public Object create(@RequestBody DictEntity dict) {
+    public Object create(@RequestBody JsonRequest<DictEntity> protocolRequest) {
+        DictEntity dict = protocolRequest == null ? null : protocolRequest.data();
         dictService.create(dict);
         return JsonResult.success();
     }
@@ -56,7 +59,8 @@ public class DictController {
      */
     @PreAuthorize("hasAuthority('dict-update')")
     @RequestMapping(value = "/update", method = RequestMethod.POST)
-    public Object update(@RequestBody DictEntity dict) {
+    public Object update(@RequestBody JsonRequest<DictEntity> protocolRequest) {
+        DictEntity dict = protocolRequest == null ? null : protocolRequest.data();
         dictService.update(dict);
         return JsonResult.success();
     }
@@ -69,7 +73,8 @@ public class DictController {
      */
     @PreAuthorize("hasAuthority('dict-list')")
     @RequestMapping(value = "/list", method = RequestMethod.POST)
-    public Object list(@RequestBody JsonRequestPage<DictEntity> page) {
+    public Object list(@RequestBody JsonRequest<JsonRequestPage<DictEntity>> protocolRequest) {
+        JsonRequestPage<DictEntity> page = protocolRequest == null ? null : protocolRequest.data();
         PageInfo<DictEntity> dictList = dictService.findPage(page.getSearch(), page.getPageNum(), page.getPageSize(), page.getOrderBy());
         JsonResultPage<DictEntity> result = JsonResultPage.page(dictList.getList(), dictList.getPageNum(), dictList.getPageSize(), dictList.getTotal());
         return result;

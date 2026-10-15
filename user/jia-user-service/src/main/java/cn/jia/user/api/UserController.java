@@ -1,5 +1,7 @@
 package cn.jia.user.api;
 
+import cn.jia.core.entity.JsonRequest;
+
 import cn.jia.core.common.EsConstants;
 import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.entity.JsonRequestPage;
@@ -125,7 +127,8 @@ public class UserController {
      */
     @PreAuthorize("hasAuthority('user-get_roles')")
     @RequestMapping(value = "/get/roles", method = RequestMethod.POST)
-    public Object findRoles(@RequestBody JsonRequestPage<UserEntity> page) {
+    public Object findRoles(@RequestBody JsonRequest<JsonRequestPage<UserEntity>> protocolRequest) {
+        JsonRequestPage<UserEntity> page = protocolRequest == null ? null : protocolRequest.data();
         UserEntity user = Optional.ofNullable(page.getSearch()).orElse(new UserEntity());
         ValidUtil.assertNotNull(user);
         PageInfo<RoleEntity> roleList = roleService.listByUserId(user.getId(), page.getPageNum(), page.getPageSize(), null);
@@ -179,7 +182,8 @@ public class UserController {
      */
     @PreAuthorize("hasAuthority('user-create')")
     @RequestMapping(value = "/create", method = RequestMethod.POST)
-    public Object create(@RequestBody UserEntity user) throws Exception {
+    public Object create(@RequestBody JsonRequest<UserEntity> protocolRequest) throws Exception {
+        UserEntity user = protocolRequest == null ? null : protocolRequest.data();
         userService.create(user);
         return JsonResult.success(user);
     }
@@ -192,7 +196,8 @@ public class UserController {
      */
     @PreAuthorize("hasAuthority('user-update')")
     @RequestMapping(value = "/update", method = RequestMethod.POST)
-    public Object update(@RequestBody UserEntity user) {
+    public Object update(@RequestBody JsonRequest<UserEntity> protocolRequest) {
+        UserEntity user = protocolRequest == null ? null : protocolRequest.data();
         userService.update(user);
         return JsonResult.success(user);
     }
@@ -205,7 +210,8 @@ public class UserController {
      */
     @PreAuthorize("hasAuthority('user-sync')")
     @RequestMapping(value = "/sync", method = RequestMethod.POST)
-    public Object sync(@RequestBody List<UserEntity> userList) {
+    public Object sync(@RequestBody JsonRequest<List<UserEntity>> protocolRequest) {
+        List<UserEntity> userList = protocolRequest == null ? null : protocolRequest.data();
         userService.sync(userList);
         return JsonResult.success();
     }
@@ -231,7 +237,8 @@ public class UserController {
      */
     @PreAuthorize("hasAuthority('user-list')")
     @RequestMapping(value = "/list", method = RequestMethod.POST)
-    public Object list(@RequestBody JsonRequestPage<UserVO> page) {
+    public Object list(@RequestBody JsonRequest<JsonRequestPage<UserVO>> protocolRequest) {
+        JsonRequestPage<UserVO> page = protocolRequest == null ? null : protocolRequest.data();
         PageInfo<UserEntity> userList = userService.findListPage(page.getSearch(), page.getPageNum(),
                 page.getPageSize(), page.getOrderBy());
         List<Long> userIds = userList.getList().stream().map(UserEntity::getId).toList();
@@ -259,7 +266,8 @@ public class UserController {
      */
     @PreAuthorize("hasAuthority('user-search')")
     @RequestMapping(value = "/search", method = RequestMethod.POST)
-    public Object search(@RequestBody JsonRequestPage<UserEntity> page) {
+    public Object search(@RequestBody JsonRequest<JsonRequestPage<UserEntity>> protocolRequest) {
+        JsonRequestPage<UserEntity> page = protocolRequest == null ? null : protocolRequest.data();
         String orderBy = page.getOrderBy();
         PageInfo<UserEntity> userList = userService.search(page.getSearch(), page.getPageNum(), page.getPageSize(), orderBy);
         //隐藏密码
@@ -292,7 +300,8 @@ public class UserController {
      */
     @PreAuthorize("hasAuthority('user-role_change')")
     @RequestMapping(value = "/role/change", method = RequestMethod.POST)
-    public Object changeRole(@RequestBody UserVO user) {
+    public Object changeRole(@RequestBody JsonRequest<UserVO> protocolRequest) {
+        UserVO user = protocolRequest == null ? null : protocolRequest.data();
         userService.changeRole(user);
         return JsonResult.success();
     }
@@ -305,7 +314,8 @@ public class UserController {
      */
     @PreAuthorize("hasAuthority('user-group_change')")
     @RequestMapping(value = "/group/change", method = RequestMethod.POST)
-    public Object changeGroup(@RequestBody UserVO user) {
+    public Object changeGroup(@RequestBody JsonRequest<UserVO> protocolRequest) {
+        UserVO user = protocolRequest == null ? null : protocolRequest.data();
         userService.changeGroup(user);
         return JsonResult.success();
     }
@@ -318,7 +328,8 @@ public class UserController {
      */
     @PreAuthorize("hasAuthority('user-org_change')")
     @RequestMapping(value = "/org/change", method = RequestMethod.POST)
-    public Object changeOrg(@RequestBody UserVO user) {
+    public Object changeOrg(@RequestBody JsonRequest<UserVO> protocolRequest) {
+        UserVO user = protocolRequest == null ? null : protocolRequest.data();
         userService.changeOrg(user);
         userService.setDefaultOrg(user.getId());
         return JsonResult.success();

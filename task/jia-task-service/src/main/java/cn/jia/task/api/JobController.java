@@ -1,5 +1,7 @@
 package cn.jia.task.api;
 
+import cn.jia.core.entity.JsonRequest;
+
 import cn.jia.core.entity.JsonResult;
 import cn.jia.task.executor.JobExecutor;
 import cn.jia.task.job.JobHandler;
@@ -70,7 +72,8 @@ public class JobController {
      */
     @PreAuthorize("hasAuthority('job-execute')")
     @PostMapping("/execute")
-    public Object execute(@RequestBody JobExecuteRequest request) {
+    public Object execute(@RequestBody JsonRequest<JobExecuteRequest> protocolRequest) {
+        JobExecuteRequest request = protocolRequest == null ? null : protocolRequest.data();
         if (request.getName() == null || request.getName().trim().isEmpty()) {
             return JsonResult.failure("400", "Job name is required");
         }
@@ -86,7 +89,8 @@ public class JobController {
      */
     @PreAuthorize("hasAuthority('job-execute')")
     @PostMapping("/execute/async")
-    public Object executeAsync(@RequestBody JobExecuteRequest request) {
+    public Object executeAsync(@RequestBody JsonRequest<JobExecuteRequest> protocolRequest) {
+        JobExecuteRequest request = protocolRequest == null ? null : protocolRequest.data();
         if (request.getName() == null || request.getName().trim().isEmpty()) {
             return JsonResult.failure("400", "Job name is required");
         }

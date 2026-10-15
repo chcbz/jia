@@ -1,5 +1,7 @@
 package cn.jia.kefu.api;
 
+import cn.jia.core.entity.JsonRequest;
+
 import cn.jia.core.annotation.SysPermission;
 import cn.jia.core.common.EsConstants;
 import cn.jia.core.config.SpringContextHolder;
@@ -53,7 +55,8 @@ public class KefuController {
      */
     @PreAuthorize("hasAuthority('kefu-faq_list')")
     @RequestMapping(value = "/faq/list", method = RequestMethod.POST)
-    public Object listFaq(@RequestBody JsonRequestPage<KefuFaqEntity> page) {
+    public Object listFaq(@RequestBody JsonRequest<JsonRequestPage<KefuFaqEntity>> protocolRequest) {
+        JsonRequestPage<KefuFaqEntity> page = protocolRequest == null ? null : protocolRequest.data();
         KefuFaqEntity example = page.getSearch();
         if (example == null) {
             example = new KefuFaqEntity();
@@ -88,7 +91,8 @@ public class KefuController {
      */
     @PreAuthorize("hasAuthority('kefu-faq_create')")
     @RequestMapping(value = "/faq/create", method = RequestMethod.POST)
-    public Object createFaq(@RequestBody KefuFaqEntity record) {
+    public Object createFaq(@RequestBody JsonRequest<KefuFaqEntity> protocolRequest) {
+        KefuFaqEntity record = protocolRequest == null ? null : protocolRequest.data();
         record.setClientId(EsContextHolder.getContext().getClientId());
         kefuFaqService.create(record);
         return JsonResult.success(record);
@@ -102,7 +106,8 @@ public class KefuController {
      */
     @PreAuthorize("hasAuthority('kefu-faq_update')")
     @RequestMapping(value = "/faq/update", method = RequestMethod.POST)
-    public Object updateFaq(@RequestBody KefuFaqEntity record) {
+    public Object updateFaq(@RequestBody JsonRequest<KefuFaqEntity> protocolRequest) {
+        KefuFaqEntity record = protocolRequest == null ? null : protocolRequest.data();
         kefuFaqService.update(record);
         return JsonResult.success(record);
     }
@@ -132,7 +137,8 @@ public class KefuController {
      */
     @PreAuthorize("hasAuthority('kefu-message_list')")
     @RequestMapping(value = "/message/list", method = RequestMethod.POST)
-    public Object listMessage(@RequestBody JsonRequestPage<KefuMessageEntity> page) {
+    public Object listMessage(@RequestBody JsonRequest<JsonRequestPage<KefuMessageEntity>> protocolRequest) {
+        JsonRequestPage<KefuMessageEntity> page = protocolRequest == null ? null : protocolRequest.data();
         KefuMessageEntity example = page.getSearch();
         if (example == null) {
             example = new KefuMessageEntity();
@@ -189,7 +195,8 @@ public class KefuController {
      */
     @PreAuthorize("hasAuthority('kefu-message_update')")
     @RequestMapping(value = "/message/update", method = RequestMethod.POST)
-    public Object updateMessage(@RequestBody KefuMessageEntity record) {
+    public Object updateMessage(@RequestBody JsonRequest<KefuMessageEntity> protocolRequest) {
+        KefuMessageEntity record = protocolRequest == null ? null : protocolRequest.data();
         kefuMessageService.update(record);
         return JsonResult.success(record);
     }

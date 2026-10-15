@@ -1,5 +1,7 @@
 package cn.jia.user.api;
 
+import cn.jia.core.entity.JsonRequest;
+
 import cn.jia.core.entity.JsonRequestPage;
 import cn.jia.core.entity.JsonResult;
 import cn.jia.core.entity.JsonResultPage;
@@ -41,7 +43,8 @@ public class MsgController {
 	 */
 	@PreAuthorize("hasAuthority('msg-create')")
 	@RequestMapping(value = "/create", method = RequestMethod.POST)
-	public Object create(@RequestBody MsgEntity msg) {
+	public Object create(@RequestBody JsonRequest<MsgEntity> protocolRequest) {
+        MsgEntity msg = protocolRequest == null ? null : protocolRequest.data();
 		msgService.create(msg);
 		return JsonResult.success();
 	}
@@ -133,7 +136,8 @@ public class MsgController {
 	 */
 //	@PreAuthorize("hasAuthority('msg-list')")
 	@RequestMapping(value = "/list", method = RequestMethod.POST)
-	public Object list(@RequestBody JsonRequestPage<MsgEntity> page) {
+	public Object list(@RequestBody JsonRequest<JsonRequestPage<MsgEntity>> protocolRequest) {
+        JsonRequestPage<MsgEntity> page = protocolRequest == null ? null : protocolRequest.data();
 		MsgEntity example = Optional.ofNullable(page.getSearch()).orElse(new MsgEntity());
 		PageInfo<MsgEntity> msgList = msgService.findPage(example, page.getPageNum(), page.getPageSize(), page.getOrderBy());
 		JsonResultPage<MsgEntity> result = JsonResultPage.page(msgList.getList(), msgList.getPageNum(), msgList.getPageSize(), msgList.getTotal());

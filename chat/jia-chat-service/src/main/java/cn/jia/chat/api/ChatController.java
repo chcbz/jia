@@ -1,5 +1,7 @@
 package cn.jia.chat.api;
 
+import cn.jia.core.entity.JsonRequest;
+
 import cn.jia.chat.serialization.ExactWireIds;
 
 import cn.jia.chat.advisor.DatabaseChatMemoryAdvisor;
@@ -537,7 +539,8 @@ public class ChatController {
 
     @RequestMapping(value = "/turns/{turnId}/cancel", method = RequestMethod.POST)
     public Object cancelChatTurn(@org.springframework.web.bind.annotation.PathVariable String turnId,
-            @RequestBody(required = false) ChatCancelDTO cancellation, Authentication authentication) {
+            @RequestBody(required = false) JsonRequest<ChatCancelDTO> protocolRequest, Authentication authentication) {
+        ChatCancelDTO cancellation = protocolRequest == null ? null : protocolRequest.data();
         return JsonResult.success(requireDeliberationService().cancelTurn(
                 requireAuthenticatedTenant(authentication), requireIdentityPart(EsContextHolder.getContext().getJiacn()),
                 requireIdentityPart(EsContextHolder.getContext().getClientId()), turnId,
@@ -549,7 +552,8 @@ public class ChatController {
     public Object cancelPendingChatTurns(
             @org.springframework.web.bind.annotation.PathVariable String requestId,
             @RequestParam(name = "allPending", required = false) Boolean allPending,
-            @RequestBody(required = false) ChatCancelDTO cancellation, Authentication authentication) {
+            @RequestBody(required = false) JsonRequest<ChatCancelDTO> protocolRequest, Authentication authentication) {
+        ChatCancelDTO cancellation = protocolRequest == null ? null : protocolRequest.data();
         boolean cancelAll = Boolean.TRUE.equals(allPending)
                 || cancellation != null && Boolean.TRUE.equals(cancellation.getAllPending());
         List<String> selected = cancellation == null ? null : cancellation.getTurnIds();
@@ -576,7 +580,8 @@ public class ChatController {
     }
 
     @RequestMapping(value = "/stop_stream", method = RequestMethod.POST)
-    public Object stopStream(@RequestBody ChatMessageDTO chatMessage) {
+    public Object stopStream(@RequestBody JsonRequest<ChatMessageDTO> protocolRequest) {
+        ChatMessageDTO chatMessage = protocolRequest == null ? null : protocolRequest.data();
         requireGenericConversationAccess(chatMessage.getConversationId());
         redisService.publishSignal(chatMessage.getConversationId()).subscribe();
         return JsonResult.success();
@@ -811,7 +816,8 @@ public class ChatController {
     }
 
     @RequestMapping(value = "/conversation/list", method = RequestMethod.POST)
-    public Object listConversations(@RequestBody JsonRequestPage<ChatConversationEntity> page) {
+    public Object listConversations(@RequestBody JsonRequest<JsonRequestPage<ChatConversationEntity>> protocolRequest) {
+        JsonRequestPage<ChatConversationEntity> page = protocolRequest == null ? null : protocolRequest.data();
         // conversationType can be passed directly in the search entity
         // e.g. {"search": {"conversationType": "juyiting"}}
         PageInfo<ChatConversationEntity> pageInfo = chatConversationService.findPage(
@@ -825,13 +831,15 @@ public class ChatController {
     }
 
     @RequestMapping(value = "/conversation/update", method = RequestMethod.POST)
-    public Object updateConversation(@RequestBody ChatConversationEntity entity) {
+    public Object updateConversation(@RequestBody JsonRequest<ChatConversationEntity> protocolRequest) {
+        ChatConversationEntity entity = protocolRequest == null ? null : protocolRequest.data();
         chatConversationService.update(entity);
         return JsonResult.success();
     }
 
     @RequestMapping(value = "/library/search", method = RequestMethod.POST)
-    public Object searchLibrary(@RequestBody LibrarySearchRequest request) {
+    public Object searchLibrary(@RequestBody JsonRequest<LibrarySearchRequest> protocolRequest) {
+        LibrarySearchRequest request = protocolRequest == null ? null : protocolRequest.data();
         if (request == null || StringUtil.isBlank(request.getKeyword())) {
             return JsonResult.success(List.of());
         }
@@ -859,7 +867,8 @@ public class ChatController {
     }
 
     @RequestMapping(value = "/library/documents", method = RequestMethod.POST)
-    public Object saveLibraryDocument(@RequestBody LibraryDocumentRequest request) {
+    public Object saveLibraryDocument(@RequestBody JsonRequest<LibraryDocumentRequest> protocolRequest) {
+        LibraryDocumentRequest request = protocolRequest == null ? null : protocolRequest.data();
         if (request == null || StringUtil.isBlank(request.getContent())) {
             return JsonResult.failure("LIBRARY_DOCUMENT_EMPTY", "library document content is required");
         }

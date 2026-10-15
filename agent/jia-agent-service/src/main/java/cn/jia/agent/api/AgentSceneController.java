@@ -1,5 +1,7 @@
 package cn.jia.agent.api;
 
+import cn.jia.core.entity.JsonRequest;
+
 import cn.jia.agent.common.AgentSceneConstants;
 import cn.jia.agent.config.AgentSceneFeatureFlags;
 import cn.jia.agent.entity.AgentSceneEventDTO;
@@ -80,7 +82,8 @@ public class AgentSceneController {
     @PostMapping("/{sceneId}/phases")
     public JsonResult<AgentScenePhaseResultDTO> phase(
             @PathVariable String sceneId,
-            @RequestBody(required = false) AgentScenePhaseReportDTO request) {
+            @RequestBody(required = false) JsonRequest<AgentScenePhaseReportDTO> protocolRequest) {
+        AgentScenePhaseReportDTO request = protocolRequest == null ? null : protocolRequest.data();
         String requiredSceneId = requireSceneId(sceneId);
         AgentScenePhaseReportDTO safeRequest = requirePhaseReport(request);
         try {

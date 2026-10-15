@@ -1,5 +1,7 @@
 package cn.jia.sms.api;
 
+import cn.jia.core.entity.JsonRequest;
+
 import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.entity.JsonRequestPage;
 import cn.jia.core.entity.JsonResult;
@@ -170,7 +172,8 @@ public class SmsController {
      * @return 短信发送记录列表
      */
     @RequestMapping(value = "/send/list", method = RequestMethod.POST)
-    public Object listSend(@RequestBody JsonRequestPage<SmsSendVO> page, HttpServletRequest request) {
+    public Object listSend(@RequestBody JsonRequest<JsonRequestPage<SmsSendVO>> protocolRequest, HttpServletRequest request) {
+        JsonRequestPage<SmsSendVO> page = protocolRequest == null ? null : protocolRequest.data();
         SmsSendVO example = Optional.ofNullable(page.getSearch()).orElse(new SmsSendVO());
         example.setClientId(EsContextHolder.getContext().getClientId());
         PageInfo<SmsSendEntity> list = smsService.listSend(example, page.getPageNum(), page.getPageSize(), page.getOrderBy());
@@ -187,7 +190,8 @@ public class SmsController {
      */
     @RequestMapping(value = "/sendBatch", method = RequestMethod.POST)
     @ResponseBody
-    public Object sendSmsBatch(@RequestBody List<SmsBatchRecord> records) {
+    public Object sendSmsBatch(@RequestBody JsonRequest<List<SmsBatchRecord>> protocolRequest) {
+        List<SmsBatchRecord> records = protocolRequest == null ? null : protocolRequest.data();
         //检查是否还有额度
         SmsConfigEntity config = smsService.selectConfig(EsContextHolder.getContext().getClientId());
         if (config == null || config.getRemain() < records.size()) {
@@ -258,7 +262,8 @@ public class SmsController {
      * @return 短信回复列表
      */
     @RequestMapping(value = "/reply/list", method = RequestMethod.POST)
-    public Object listReply(@RequestBody JsonRequestPage<SmsReplyEntity> page, HttpServletRequest request) {
+    public Object listReply(@RequestBody JsonRequest<JsonRequestPage<SmsReplyEntity>> protocolRequest, HttpServletRequest request) {
+        JsonRequestPage<SmsReplyEntity> page = protocolRequest == null ? null : protocolRequest.data();
         SmsReplyEntity example = Optional.ofNullable(page.getSearch()).orElse(new SmsReplyEntity());
         PageInfo<SmsReplyEntity> list = smsService.listReply(example, page.getPageNum(), page.getPageSize(), page.getOrderBy());
         JsonResultPage<SmsReplyEntity> result = JsonResultPage.page(list.getList(), list.getPageNum(), list.getPageSize(), list.getTotal());
@@ -285,7 +290,8 @@ public class SmsController {
      * @return 更新后的配置信息
      */
     @RequestMapping(value = "/config/update", method = RequestMethod.POST)
-    public Object updateConfig(@RequestBody SmsConfigEntity config) {
+    public Object updateConfig(@RequestBody JsonRequest<SmsConfigEntity> protocolRequest) {
+        SmsConfigEntity config = protocolRequest == null ? null : protocolRequest.data();
         config.setClientId(EsContextHolder.getContext().getClientId());
         smsService.updateConfig(config);
         return JsonResult.success(config);
@@ -316,7 +322,8 @@ public class SmsController {
      * @return 创建成功的短信模板信息
      */
     @RequestMapping(value = "/template/create", method = RequestMethod.POST)
-    public Object createTemplate(@RequestBody SmsTemplateEntity sms) {
+    public Object createTemplate(@RequestBody JsonRequest<SmsTemplateEntity> protocolRequest) {
+        SmsTemplateEntity sms = protocolRequest == null ? null : protocolRequest.data();
         smsService.createTemplate(sms);
         return JsonResult.success(sms);
     }
@@ -329,7 +336,8 @@ public class SmsController {
      * @return 更新后的短信模板信息
      */
     @RequestMapping(value = "/template/update", method = RequestMethod.POST)
-    public Object updateTemplate(@RequestBody SmsTemplateEntity sms) {
+    public Object updateTemplate(@RequestBody JsonRequest<SmsTemplateEntity> protocolRequest) {
+        SmsTemplateEntity sms = protocolRequest == null ? null : protocolRequest.data();
         smsService.updateTemplate(sms);
         return JsonResult.success(sms);
     }
@@ -356,7 +364,8 @@ public class SmsController {
      * @return 短信模板列表
      */
     @RequestMapping(value = "/template/list", method = RequestMethod.POST)
-    public Object listTemplate(@RequestBody JsonRequestPage<SmsTemplateVO> page, HttpServletRequest request) {
+    public Object listTemplate(@RequestBody JsonRequest<JsonRequestPage<SmsTemplateVO>> protocolRequest, HttpServletRequest request) {
+        JsonRequestPage<SmsTemplateVO> page = protocolRequest == null ? null : protocolRequest.data();
         SmsTemplateVO example = Optional.ofNullable(page.getSearch()).orElse(new SmsTemplateVO());
         example.setClientId(EsContextHolder.getContext().getClientId());
         PageInfo<SmsTemplateEntity> list = smsService.listTemplate(example, page.getPageNum(), page.getPageSize(), page.getOrderBy());

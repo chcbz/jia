@@ -1,5 +1,7 @@
 package cn.jia.chat.api;
 
+import cn.jia.core.entity.JsonRequest;
+
 import cn.jia.chat.archive.conversation.ChatConversationArchiveException;
 import cn.jia.chat.archive.conversation.ChatConversationArchiveService;
 import cn.jia.chat.archive.conversation.ChatConversationArchiveStore;
@@ -56,7 +58,8 @@ public final class ChatConversationArchiveController {
     public ResponseEntity<JsonResult<ChatConversationArchiveService.Receipt>> archive(
             @PathVariable String conversationId,
             @RequestHeader("Idempotency-Key") String idempotencyKey,
-            @RequestBody Map<String, Object> body, Authentication authentication) {
+            @RequestBody JsonRequest<Map<String, Object>> protocolRequest, Authentication authentication) {
+        Map<String, Object> body = protocolRequest == null ? null : protocolRequest.data();
         Parsed parsed = parse(body);
         if (idempotencyKey == null || !idempotencyKey.matches("[A-Za-z0-9._~:/+\\-]{8,160}"))
             throw invalid();

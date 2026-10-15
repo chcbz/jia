@@ -1,5 +1,7 @@
 package cn.jia.agent.api;
 
+import cn.jia.core.entity.JsonRequest;
+
 import cn.jia.agent.security.AgentRuntimeAuthentication;
 import cn.jia.agent.security.AgentRuntimeAuthenticationService;
 import cn.jia.core.security.AllowSensitiveOutput;
@@ -79,8 +81,9 @@ public final class PersonalWorkspaceConversationRuntimeController {
     @PostMapping(value="/{taskId}/runs/{runId}/conversation/lease",consumes=MediaType.APPLICATION_JSON_VALUE,
             produces=MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<PersonalWorkspaceExecutionService.ConversationLease> claim(@PathVariable String taskId,
-            @PathVariable String runId,@RequestBody ClaimRequest claim,HttpServletRequest request,
+            @PathVariable String runId,@RequestBody JsonRequest<ClaimRequest> protocolRequest,HttpServletRequest request,
             Authentication authentication) {
+        ClaimRequest claim = protocolRequest == null ? null : protocolRequest.data();
         noQuery(request);
         if (claim==null || claim.commandId()==null || claim.messageId()==null) throw new BadRequest();
         return ok(runtimeAuthentication.withNativeFence(authentication, () ->
@@ -90,8 +93,9 @@ public final class PersonalWorkspaceConversationRuntimeController {
     @PostMapping(value="/{taskId}/runs/{runId}/conversation/lease/renew",consumes=MediaType.APPLICATION_JSON_VALUE,
             produces=MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<PersonalWorkspaceExecutionService.ConversationLease> renew(@PathVariable String taskId,
-            @PathVariable String runId,@RequestBody FenceRequest request,HttpServletRequest servletRequest,
+            @PathVariable String runId,@RequestBody JsonRequest<FenceRequest> protocolRequest,HttpServletRequest servletRequest,
             Authentication authentication) {
+        FenceRequest request = protocolRequest == null ? null : protocolRequest.data();
         noQuery(servletRequest);
         return ok(runtimeAuthentication.withNativeFence(authentication, () ->
                 executions.renewConversationLease(scope(authentication),taskId,runId,fence(request))));
@@ -147,8 +151,9 @@ public final class PersonalWorkspaceConversationRuntimeController {
     @PostMapping(value="/{taskId}/runs/{runId}/conversation/inputs",consumes=MediaType.APPLICATION_JSON_VALUE,
             produces=MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<cn.jia.agent.service.SkillExecutionService.Inputs> inputs(
-            @PathVariable String taskId,@PathVariable String runId,@RequestBody FenceRequest fence,
+            @PathVariable String taskId,@PathVariable String runId,@RequestBody JsonRequest<FenceRequest> protocolRequest,
             HttpServletRequest request,Authentication authentication) {
+        FenceRequest fence = protocolRequest == null ? null : protocolRequest.data();
         noQuery(request);
         var inputs=skillCall(()->skills().inputs(scope(authentication),taskId,runId,fence(fence)));
         return ok(runtimeAuthentication.withNativeFence(authentication,()->inputs));
@@ -191,8 +196,9 @@ public final class PersonalWorkspaceConversationRuntimeController {
     @PostMapping(value="/{taskId}/runs/{runId}/conversation/output-commits/{manifestId}",
             consumes=MediaType.APPLICATION_JSON_VALUE,produces=MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<PersonalWorkspaceExecutionService.CommitView> commit(@PathVariable String taskId,
-            @PathVariable String runId,@PathVariable String manifestId,@RequestBody CommitRequest body,
+            @PathVariable String runId,@PathVariable String manifestId,@RequestBody JsonRequest<CommitRequest> protocolRequest,
             HttpServletRequest request,Authentication authentication) {
+        CommitRequest body = protocolRequest == null ? null : protocolRequest.data();
         noQuery(request);
         if (body==null || body.outputs()==null || body.outputs().size()!=1) throw new BadRequest();
         var item=body.outputs().getFirst();
@@ -303,8 +309,9 @@ public final class PersonalWorkspaceConversationRuntimeController {
     @PostMapping(value="/{taskId}/runs/{runId}/conversation/failure",consumes=MediaType.APPLICATION_JSON_VALUE,
             produces=MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<PersonalWorkspaceExecutionService.ExecutionView> failure(@PathVariable String taskId,
-            @PathVariable String runId,@RequestBody FailRequest body,HttpServletRequest request,
+            @PathVariable String runId,@RequestBody JsonRequest<FailRequest> protocolRequest,HttpServletRequest request,
             Authentication authentication) {
+        FailRequest body = protocolRequest == null ? null : protocolRequest.data();
         noQuery(request);
         if (body==null || body.code()==null) throw new BadRequest();
         return ok(runtimeAuthentication.withNativeFence(authentication, () ->

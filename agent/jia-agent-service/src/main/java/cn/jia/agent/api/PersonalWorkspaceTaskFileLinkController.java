@@ -1,5 +1,7 @@
 package cn.jia.agent.api;
 
+import cn.jia.core.entity.JsonRequest;
+
 import cn.jia.agent.service.PersonalWorkspaceTaskLinkService;
 import cn.jia.agent.service.impl.PersonalWorkspaceTaskLinkServiceImpl;
 import jakarta.servlet.http.HttpServletRequest;
@@ -49,9 +51,10 @@ public class PersonalWorkspaceTaskFileLinkController {
     @PostMapping(value = "/{taskId}/file-links", consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<PersonalWorkspaceTaskLinkService.LinkView> create(
-            @PathVariable String taskId, @RequestBody(required = false) Map<String, Object> body,
+            @PathVariable String taskId, @RequestBody(required = false) JsonRequest<Map<String, Object>> protocolRequest,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             Authentication authentication) {
+        Map<String, Object> body = protocolRequest == null ? null : protocolRequest.data();
         PersonalWorkspaceTaskLinkService.Scope scope = scope(authentication);
         PersonalWorkspaceTaskLinkService.CreateCommand command =
                 createCommand(body, idempotencyKey);

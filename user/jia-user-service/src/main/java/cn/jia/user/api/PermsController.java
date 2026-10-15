@@ -1,5 +1,7 @@
 package cn.jia.user.api;
 
+import cn.jia.core.entity.JsonRequest;
+
 import cn.jia.core.entity.JsonRequestPage;
 import cn.jia.core.entity.JsonResult;
 import cn.jia.core.entity.JsonResultPage;
@@ -45,7 +47,8 @@ public class PermsController {
      */
     @PreAuthorize("hasAuthority('action-create')")
     @RequestMapping(value = "/create", method = RequestMethod.POST)
-    public Object create(@RequestBody PermsEntity action) {
+    public Object create(@RequestBody JsonRequest<PermsEntity> protocolRequest) {
+        PermsEntity action = protocolRequest == null ? null : protocolRequest.data();
         permsService.create(action);
         return JsonResult.success();
     }
@@ -58,7 +61,8 @@ public class PermsController {
      */
     @PreAuthorize("hasAuthority('action-update')")
     @RequestMapping(value = "/update", method = RequestMethod.POST)
-    public Object update(@RequestBody PermsEntity action) {
+    public Object update(@RequestBody JsonRequest<PermsEntity> protocolRequest) {
+        PermsEntity action = protocolRequest == null ? null : protocolRequest.data();
         permsService.update(action);
         return JsonResult.success();
     }
@@ -71,7 +75,8 @@ public class PermsController {
      */
     @PreAuthorize("hasAuthority('action-refresh')")
     @RequestMapping(value = "/refresh", method = RequestMethod.POST)
-    public Object refresh(@RequestBody List<PermsEntity> actionList) {
+    public Object refresh(@RequestBody JsonRequest<List<PermsEntity>> protocolRequest) {
+        List<PermsEntity> actionList = protocolRequest == null ? null : protocolRequest.data();
         permsService.refresh(actionList);
         return JsonResult.success();
     }
@@ -96,7 +101,8 @@ public class PermsController {
      */
     /*@PreAuthorize("hasAuthority('action-list')")*/
     @RequestMapping(value = "/list", method = RequestMethod.POST)
-    public Object list(@RequestBody JsonRequestPage<PermsEntity> page) {
+    public Object list(@RequestBody JsonRequest<JsonRequestPage<PermsEntity>> protocolRequest) {
+        JsonRequestPage<PermsEntity> page = protocolRequest == null ? null : protocolRequest.data();
         PermsEntity action = Optional.ofNullable(page.getSearch()).orElse(new PermsEntity());
         PageInfo<PermsEntity> actionList = permsService.findPage(action, page.getPageNum(), page.getPageSize(), page.getOrderBy());
         JsonResultPage<PermsEntity> result = JsonResultPage.page(actionList.getList(), actionList.getPageNum(), actionList.getPageSize(), actionList.getTotal());

@@ -1,5 +1,7 @@
 package cn.jia.isp.api;
 
+import cn.jia.core.entity.JsonRequest;
+
 import cn.jia.core.common.EsSecurityHandler;
 import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.entity.JsonRequestPage;
@@ -45,7 +47,8 @@ public class IspController {
      * @return 服务器列表信息
      */
     @RequestMapping(value = "/server/list", method = RequestMethod.POST)
-    public Object listServer(@RequestBody JsonRequestPage<IspServerEntity> page, HttpServletRequest request) {
+    public Object listServer(@RequestBody JsonRequest<JsonRequestPage<IspServerEntity>> protocolRequest, HttpServletRequest request) {
+        JsonRequestPage<IspServerEntity> page = protocolRequest == null ? null : protocolRequest.data();
         String clientId = EsSecurityHandler.checkClientId(request);
         IspServerEntity example = Optional.ofNullable(page.getSearch()).orElse(new IspServerEntity());
         example.setClientId(clientId);
@@ -76,7 +79,8 @@ public class IspController {
      * @return 创建结果
      */
     @RequestMapping(value = "/server/create", method = RequestMethod.POST)
-    public Object createServer(@RequestBody IspServerEntity record) {
+    public Object createServer(@RequestBody JsonRequest<IspServerEntity> protocolRequest) {
+        IspServerEntity record = protocolRequest == null ? null : protocolRequest.data();
         record.setClientId(EsContextHolder.getContext().getClientId());
         ispService.createServer(record);
         return JsonResult.success();
@@ -89,7 +93,8 @@ public class IspController {
      * @return 更新结果
      */
     @RequestMapping(value = "/server/update", method = RequestMethod.POST)
-    public Object updateServer(@RequestBody IspServerEntity record) throws Exception {
+    public Object updateServer(@RequestBody JsonRequest<IspServerEntity> protocolRequest) throws Exception {
+        IspServerEntity record = protocolRequest == null ? null : protocolRequest.data();
         ispService.updateServer(record);
         return JsonResult.success(record);
     }

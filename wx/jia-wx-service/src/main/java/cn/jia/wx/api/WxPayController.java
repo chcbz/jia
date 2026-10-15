@@ -1,5 +1,7 @@
 package cn.jia.wx.api;
 
+import cn.jia.core.entity.JsonRequest;
+
 import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.entity.JsonRequestPage;
 import cn.jia.core.entity.JsonResult;
@@ -114,7 +116,8 @@ public class WxPayController {
 	}
 
 	@PostMapping("/createOrder")
-	public <T> T createOrder(@RequestBody WxPayUnifiedOrderRequest request, HttpServletRequest req) throws Exception {
+	public <T> T createOrder(@RequestBody JsonRequest<WxPayUnifiedOrderRequest> protocolRequest, HttpServletRequest req) throws Exception {
+        WxPayUnifiedOrderRequest request = protocolRequest == null ? null : protocolRequest.data();
 		return payInfoService.findWxPayService(req).createOrder(request);
 	}
 
@@ -244,7 +247,8 @@ public class WxPayController {
 	 * @throws Exception 异常
 	 */
 	@PostMapping("/unifiedOrder")
-	public WxPayUnifiedOrderResult unifiedOrder(@RequestBody WxPayUnifiedOrderRequest request, HttpServletRequest req) throws Exception {
+	public WxPayUnifiedOrderResult unifiedOrder(@RequestBody JsonRequest<WxPayUnifiedOrderRequest> protocolRequest, HttpServletRequest req) throws Exception {
+        WxPayUnifiedOrderRequest request = protocolRequest == null ? null : protocolRequest.data();
 		return payInfoService.findWxPayService(req).unifiedOrder(request);
 	}
 
@@ -302,7 +306,8 @@ public class WxPayController {
 	 * @throws Exception 异常
 	 */
 	@PostMapping("/refund")
-	public WxPayRefundResult refund(@RequestBody WxPayRefundRequest request, HttpServletRequest req) throws Exception {
+	public WxPayRefundResult refund(@RequestBody JsonRequest<WxPayRefundRequest> protocolRequest, HttpServletRequest req) throws Exception {
+        WxPayRefundRequest request = protocolRequest == null ? null : protocolRequest.data();
 		return payInfoService.findWxPayService(req).refund(request);
 	}
 
@@ -435,7 +440,8 @@ public class WxPayController {
 	 * @throws Exception 异常
 	 */
 	@PostMapping("/sendRedpack")
-	public WxPaySendRedpackResult sendRedpack(@RequestBody WxPaySendRedpackRequest request, HttpServletRequest req) throws Exception {
+	public WxPaySendRedpackResult sendRedpack(@RequestBody JsonRequest<WxPaySendRedpackRequest> protocolRequest, HttpServletRequest req) throws Exception {
+        WxPaySendRedpackRequest request = protocolRequest == null ? null : protocolRequest.data();
 		return payInfoService.findWxPayService(req).getRedpackService().sendRedpack(request);
 	}
 
@@ -472,7 +478,8 @@ public class WxPayController {
 	 * @throws Exception 异常
 	 */
 	@PostMapping("/entPay")
-	public EntPayResult entPay(@RequestBody EntPayRequest request, HttpServletRequest req) throws Exception {
+	public EntPayResult entPay(@RequestBody JsonRequest<EntPayRequest> protocolRequest, HttpServletRequest req) throws Exception {
+        EntPayRequest request = protocolRequest == null ? null : protocolRequest.data();
 		return payInfoService.findWxPayService(req).getEntPayService().entPay(request);
 	}
 
@@ -580,7 +587,8 @@ public class WxPayController {
 	 * @throws Exception 异常
 	 */
 	@PostMapping("/report")
-	public void report(@RequestBody WxPayReportRequest request, HttpServletRequest req) throws Exception {
+	public void report(@RequestBody JsonRequest<WxPayReportRequest> protocolRequest, HttpServletRequest req) throws Exception {
+        WxPayReportRequest request = protocolRequest == null ? null : protocolRequest.data();
 		payInfoService.findWxPayService(req).report(request);
 	}
 
@@ -630,7 +638,8 @@ public class WxPayController {
 	 * @throws Exception 异常
 	 */
 	@PostMapping("/micropay")
-	public WxPayMicropayResult micropay(@RequestBody WxPayMicropayRequest request, HttpServletRequest req) throws Exception {
+	public WxPayMicropayResult micropay(@RequestBody JsonRequest<WxPayMicropayRequest> protocolRequest, HttpServletRequest req) throws Exception {
+        WxPayMicropayRequest request = protocolRequest == null ? null : protocolRequest.data();
 		return payInfoService.findWxPayService(req).micropay(request);
 	}
 
@@ -648,7 +657,8 @@ public class WxPayController {
 	 * @throws Exception 异常
 	 */
 	@PostMapping("/reverseOrder")
-	public WxPayOrderReverseResult reverseOrder(@RequestBody WxPayOrderReverseRequest request, HttpServletRequest req) throws Exception {
+	public WxPayOrderReverseResult reverseOrder(@RequestBody JsonRequest<WxPayOrderReverseRequest> protocolRequest, HttpServletRequest req) throws Exception {
+        WxPayOrderReverseRequest request = protocolRequest == null ? null : protocolRequest.data();
 		return payInfoService.findWxPayService(req).reverseOrder(request);
 	}
 
@@ -658,19 +668,22 @@ public class WxPayController {
 	}
 
 	@PostMapping("/sendCoupon")
-	public WxPayCouponSendResult sendCoupon(@RequestBody WxPayCouponSendRequest request, HttpServletRequest req) throws Exception {
+	public WxPayCouponSendResult sendCoupon(@RequestBody JsonRequest<WxPayCouponSendRequest> protocolRequest, HttpServletRequest req) throws Exception {
+        WxPayCouponSendRequest request = protocolRequest == null ? null : protocolRequest.data();
 		return payInfoService.findWxPayService(req).sendCoupon(request);
 	}
 
 	@PostMapping("/queryCouponStock")
-	public WxPayCouponStockQueryResult queryCouponStock(@RequestBody WxPayCouponStockQueryRequest request, HttpServletRequest req)
+	public WxPayCouponStockQueryResult queryCouponStock(@RequestBody JsonRequest<WxPayCouponStockQueryRequest> protocolRequest, HttpServletRequest req)
 			throws Exception {
+        WxPayCouponStockQueryRequest request = protocolRequest == null ? null : protocolRequest.data();
 		return payInfoService.findWxPayService(req).queryCouponStock(request);
 	}
 
 	@PostMapping("/queryCouponInfo")
-	public WxPayCouponInfoQueryResult queryCouponInfo(@RequestBody WxPayCouponInfoQueryRequest request, HttpServletRequest req)
+	public WxPayCouponInfoQueryResult queryCouponInfo(@RequestBody JsonRequest<WxPayCouponInfoQueryRequest> protocolRequest, HttpServletRequest req)
 			throws Exception {
+        WxPayCouponInfoQueryRequest request = protocolRequest == null ? null : protocolRequest.data();
 		return payInfoService.findWxPayService(req).queryCouponInfo(request);
 	}
 
@@ -699,7 +712,8 @@ public class WxPayController {
 	 * @return 支付平台信息
 	 */
 	@RequestMapping(value = "/info/create", method = RequestMethod.POST)
-	public Object createPayInfo(@RequestBody PayInfoEntity info) {
+	public Object createPayInfo(@RequestBody JsonRequest<PayInfoEntity> protocolRequest) {
+        PayInfoEntity info = protocolRequest == null ? null : protocolRequest.data();
 		payInfoService.create(info);
 		return JsonResult.success(info);
 	}
@@ -710,7 +724,8 @@ public class WxPayController {
 	 * @return 修改后支付平台信息
 	 */
 	@RequestMapping(value = "/info/update", method = RequestMethod.POST)
-	public Object updatePayInfo(@RequestBody PayInfoEntity info) {
+	public Object updatePayInfo(@RequestBody JsonRequest<PayInfoEntity> protocolRequest) {
+        PayInfoEntity info = protocolRequest == null ? null : protocolRequest.data();
 		payInfoService.update(info);
 		return JsonResult.success(info);
 	}
@@ -732,7 +747,8 @@ public class WxPayController {
 	 * @return 支付平台列表
 	 */
 	@RequestMapping(value = "/info/list", method = RequestMethod.POST)
-	public Object listPayInfo(@RequestBody JsonRequestPage<PayInfoEntity> page) {
+	public Object listPayInfo(@RequestBody JsonRequest<JsonRequestPage<PayInfoEntity>> protocolRequest) {
+        JsonRequestPage<PayInfoEntity> page = protocolRequest == null ? null : protocolRequest.data();
 		PayInfoEntity example = Optional.ofNullable(page.getSearch()).orElse(new PayInfoEntity());
 		example.setClientId(EsContextHolder.getContext().getClientId());
 		PageInfo<PayInfoEntity> list = payInfoService.findPage(example, page.getPageNum(), page.getPageSize(), page.getOrderBy());

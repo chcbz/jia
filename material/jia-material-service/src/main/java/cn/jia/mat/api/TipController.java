@@ -1,5 +1,7 @@
 package cn.jia.mat.api;
 
+import cn.jia.core.entity.JsonRequest;
+
 import cn.jia.core.entity.JsonRequestPage;
 import cn.jia.core.entity.JsonResult;
 import cn.jia.core.entity.JsonResultPage;
@@ -40,7 +42,8 @@ public class TipController {
 	 * @return 打赏信息
 	 */
 	@PostMapping(value = "/create")
-	public Object create(@RequestBody MatTipEntity tip) {
+	public Object create(@RequestBody JsonRequest<MatTipEntity> protocolRequest) {
+        MatTipEntity tip = protocolRequest == null ? null : protocolRequest.data();
 		tipService.create(tip);
 		return JsonResult.success(tip);
 	}
@@ -51,7 +54,8 @@ public class TipController {
 	 * @return 打赏信息
 	 */
 	@PostMapping(value = "/update")
-	public Object update(@RequestBody MatTipEntity tip) {
+	public Object update(@RequestBody JsonRequest<MatTipEntity> protocolRequest) {
+        MatTipEntity tip = protocolRequest == null ? null : protocolRequest.data();
 		tipService.update(tip);
 		return JsonResult.success(tip);
 	}
@@ -76,7 +80,8 @@ public class TipController {
 	 * @return 打赏信息
 	 */
 	@PostMapping(value = "/list")
-	public Object list(@RequestBody JsonRequestPage<MatTipEntity> page) {
+	public Object list(@RequestBody JsonRequest<JsonRequestPage<MatTipEntity>> protocolRequest) {
+        JsonRequestPage<MatTipEntity> page = protocolRequest == null ? null : protocolRequest.data();
 		PageInfo<MatTipEntity> list = tipService.findPage(page.getSearch(), page.getPageNum(), page.getPageSize(), page.getOrderBy());
 		JsonResultPage<MatTipEntity> result = JsonResultPage.page(list.getList(), list.getPageNum(), list.getPageSize(), list.getTotal());
 		return result;
