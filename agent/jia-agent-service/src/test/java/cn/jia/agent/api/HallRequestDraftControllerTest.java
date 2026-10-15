@@ -196,7 +196,7 @@ class HallRequestDraftControllerTest {
         mvc.perform(post("/agent/hall/drafts/hdr_1/submit").principal(jwt())
                         .header("Idempotency-Key", "submit-key")
                         .contentType("application/json")
-                        .content(q("{\"expectedRevision\":3,\"authorizationAcknowledgement\":true}")))
+                        .content(q("{\"expectedRevision\":\"3\",\"authorizationAcknowledgement\":true}")))
                 .andExpect(status().isAccepted())
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
                 .andExpect(jsonPath("$.data.ref.sourceType").value("PRIVATE_CASE"))
