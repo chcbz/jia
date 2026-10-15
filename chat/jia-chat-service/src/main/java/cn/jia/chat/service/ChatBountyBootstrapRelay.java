@@ -100,6 +100,7 @@ public class ChatBountyBootstrapRelay implements SmartLifecycle, AutoCloseable {
                 claim.tenantId(), claim.clientId(), claim.ownerJiacn());
         ChatBountyBootstrapAdmissionService.Admission result;
         try {
+            admission.prepare(claim); // immutable package I/O before the transactional admission
             result = admission.admit(claim); // transactional commit before the acknowledgement below
         } catch (ChatTypedDeliberationContextService.RuntimeNotReadyException awaiting) {
             // Admission has rolled back. Release this exact lease through the existing durable

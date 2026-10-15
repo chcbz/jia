@@ -72,6 +72,13 @@ public class ChatBountyBootstrapAdmissionService {
      * requirement and the active grant are re-verified before Chat writes. The discussion's row
      * lock serializes this request with other bootstrap/legacy discussion creation.
      */
+    public void prepare(AgentTaskBountyBootstrapClaimDTO claim) {
+        if (claim != null && "DELIBERATE".equals(claim.permittedOperation())) {
+            typedDiscussion.prepareBootstrap(new cn.jia.agent.service.SkillCapabilityLookup.Scope(
+                    claim.tenantId(), claim.clientId(), claim.ownerJiacn(), claim.targetAgentId()));
+        }
+    }
+
     @Transactional(rollbackFor = Exception.class)
     public Admission admit(AgentTaskBountyBootstrapClaimDTO claim) {
         if (claim == null || !"0".equals(claim.tenantId())
@@ -135,7 +142,7 @@ public class ChatBountyBootstrapAdmissionService {
             // ensure() acquired this same task root/binding before the conversation lock.
             String key = stable("mmd-initial-discuss", claim.tenantId(), claim.clientId(),
                     claim.ownerJiacn(), claim.taskId(), claim.sourceBusinessActionId());
-            var admitted = typedDiscussion.admit(claim.tenantId(), new ServerResolvedSender(
+            var admitted = typedDiscussion.admitPreparedBootstrap(claim.tenantId(), new ServerResolvedSender(
                     ServerResolvedSender.USER_TYPE, claim.ownerJiacn(), claim.ownerJiacn(),
                     claim.clientId(), DisplayNameSource.JIACN), discussion.conversationId(), key, command);
             if (admitted == null || !"ADMITTED".equals(admitted.state())

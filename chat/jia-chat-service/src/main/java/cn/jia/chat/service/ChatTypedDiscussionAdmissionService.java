@@ -61,6 +61,29 @@ public class ChatTypedDiscussionAdmissionService {
     @Transactional(propagation=org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
     public ChatTypedDeliberationWire.Accepted admit(String tenantId, ServerResolvedSender sender,
             String conversationId, String idempotencyKey, ChatTypedDeliberationWire.DiscussionCommand command) {
+        return admitInternal(tenantId, sender, conversationId, idempotencyKey, command, true);
+    }
+
+    /** Internal relay preflight only: immutable packages, before task/Chat row locks. */
+    public void prepareBootstrap(cn.jia.agent.service.SkillCapabilityLookup.Scope scope) {
+        if (org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive())
+            throw persistence("Bootstrap package preparation requires no active transaction");
+        if (packagePreparation == null) throw persistence("Skill package preparation is unavailable");
+        packagePreparation.prepare(scope);
+    }
+
+    /** Keep the new conversation and initial turn in the bootstrap transaction. */
+    @Transactional(propagation=org.springframework.transaction.annotation.Propagation.MANDATORY)
+    public ChatTypedDeliberationWire.Accepted admitPreparedBootstrap(String tenantId, ServerResolvedSender sender,
+            String conversationId, String idempotencyKey, ChatTypedDeliberationWire.DiscussionCommand command) {
+        if (!org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive())
+            throw persistence("Bootstrap admission requires an active transaction");
+        return admitInternal(tenantId, sender, conversationId, idempotencyKey, command, false);
+    }
+
+    private ChatTypedDeliberationWire.Accepted admitInternal(String tenantId, ServerResolvedSender sender,
+            String conversationId, String idempotencyKey, ChatTypedDeliberationWire.DiscussionCommand command,
+            boolean preparePackages) {
         if(!"0".equals(tenantId)||sender==null||!ServerResolvedSender.USER_TYPE.equals(sender.type())
                 ||!exact(sender.jiacn(),50)||!exact(sender.clientId(),50)||!exact(conversationId,100)
                 ||!exact(idempotencyKey,100)||command==null)throw invalid();
@@ -73,7 +96,7 @@ public class ChatTypedDiscussionAdmissionService {
                 ||!command.taskId().equals(locator.getTaskId()))throw unavailable();
         var locatorScope=new ChatTypedDeliberationStore.Scope(tenantId,owner,client,conversationId,locator.getLifecycleGeneration());
         var known=typed.store().findAdmissionByKey(locatorScope,idempotencyKey,false);
-        if(known==null) {
+        if(known==null && preparePackages) {
             var targets=scopes.parsePersistedTargetAgentIds(locator.getTargetAgentIds());if(targets.size()!=1)throw unavailable();
             if(packagePreparation==null)throw persistence("Skill package preparation is unavailable");
             packagePreparation.prepare(new cn.jia.agent.service.SkillCapabilityLookup.Scope(tenantId,client,owner,targets.getFirst()));
