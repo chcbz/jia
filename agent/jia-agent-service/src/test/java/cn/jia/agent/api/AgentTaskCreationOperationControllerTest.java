@@ -100,8 +100,9 @@ class AgentTaskCreationOperationControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
                 .andReturn();
-        assertEquals(json.readTree(replay.getResponse().getContentAsString()),
-                json.readTree(read.getResponse().getContentAsString()));
+        assertEquals(json.readTree(replay.getResponse().getContentAsString()).get("data"),
+                json.readTree(read.getResponse().getContentAsString()).get("data"));
+        assertEquals(read.getResponse().getHeader("X-Request-Id"), json.readTree(read.getResponse().getContentAsString()).path("requestId").asText());
 
         var command = org.mockito.ArgumentCaptor.forClass(
                 AgentTaskCreationOperationService.CreateCommand.class);
