@@ -35,7 +35,7 @@ class ChatCompletedMessageSourceServiceTest {
                         "typedDeliberation",Map.of("schemaVersion",4,"availableSources",List.of(),"inspectedSourceRefIds",List.of(),
                                 "availableActions",List.of(Map.of("actionId","write-document","kind","EXECUTE","operation","EXECUTE_SKILL",
                                         "skill",Map.of("skillKey","write-document","skillVersion","1","packageSha256","a".repeat(64),"manifestSha256","b".repeat(64)),
-                                        "parametersSchema",Map.of("type","object","properties",Map.of(),"additionalProperties",false),
+                                        "parametersSchema",Map.of("$schema","https://json-schema.org/draft/2020-12/schema","type","object","properties",Map.of(),"additionalProperties",false),
                                         "inputMimeTypes",List.of("text/plain"),"minSources",0,"maxSources",32,"outputMimeTypes",List.of("text/plain")))))));
         final ChatActionFinalService finals=new ChatActionFinalService(store,dao,sessions);
         final ChatCompletedMessageSourceService service=new ChatCompletedMessageSourceService(deliberations,store,finals,messages);
