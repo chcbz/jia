@@ -61,7 +61,11 @@ class ChatConversationEventsHttpTest {
     @AfterEach void clear() { EsContextHolder.clearContext(); }
 
     @Test void replayAndReadyAreSingleEncodedWithDurableTypeScopeAndCursor() throws Exception {
+        when(events.replayEventsThrough("0","owner","client","42",3,0,7,500))
+                .thenReturn(List.of(event(7,"interaction.state_changed",JsonUtil.toJson(Map.of(
+                        "requestId","request","state","PLANNING","content","中文\n\"标题\"")))));
         String body=read(null);
+        assertEquals("中文\n\"标题\"", payloads(body).getFirst().get("content"));
         assertFalse(body.contains("data:data:"),body);
         assertFalse(body.contains("data:id:"),body);
         assertTrue(body.contains("id:conversation:42:7"),body);
@@ -124,7 +128,7 @@ class ChatConversationEventsHttpTest {
         var pending=mvc.perform(request).andExpect(request().asyncStarted()).andReturn();
         pending.getAsyncResult(5000);
         return mvc.perform(asyncDispatch(pending)).andExpect(status().isOk())
-                .andExpect(content().contentTypeCompatibleWith(MediaType.TEXT_EVENT_STREAM)).andReturn().getResponse().getContentAsString();
+                .andExpect(content().contentTypeCompatibleWith(MediaType.TEXT_EVENT_STREAM)).andReturn().getResponse().getContentAsString(java.nio.charset.StandardCharsets.UTF_8);
     }
     private static List<Map> payloads(String body) {
         return body.lines().filter(line->line.startsWith("data:")).map(line->{

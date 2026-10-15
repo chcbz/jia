@@ -15,6 +15,7 @@ import cn.jia.core.context.EsContext;
 import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.entity.JsonRequestPage;
 import cn.jia.core.entity.JsonResult;
+import cn.jia.core.entity.ProtocolMessage;
 import cn.jia.core.entity.JsonResultPage;
 import cn.jia.core.redis.RedisService;
 import cn.jia.core.util.StringUtil;
@@ -678,7 +679,7 @@ public class ChatController {
     }
 
     @RequestMapping(value = "/conversation/events", method = RequestMethod.GET, produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public Flux<ServerSentEvent<String>> conversationEvents(@RequestParam(name = "id") String id,
+    public Flux<ServerSentEvent<ProtocolMessage<Map<String, Object>>>> conversationEvents(@RequestParam(name = "id") String id,
             @RequestParam(name = "cursor", required = false) String cursor,
             @RequestHeader(name = "Last-Event-ID", required = false) String lastEventId,
             Authentication authentication, jakarta.servlet.http.HttpServletRequest servletRequest) {
@@ -712,20 +713,20 @@ public class ChatController {
                 throw new ChatDeliberationException(ChatDeliberationException.Reason.INVALID_REQUEST,
                         "Event cursor is ahead of the conversation watermark");
             }
-            List<ServerSentEvent<String>> replay = loadReplayThrough(service, tenantId, ownerJiacn, ownerClientId,
+            List<ServerSentEvent<ProtocolMessage<Map<String, Object>>>> replay = loadReplayThrough(service, tenantId, ownerJiacn, ownerClientId,
                     id, generation, after, watermark, requestId);
             AtomicLong deliveredSequence = new AtomicLong(watermark);
-            Flux<ServerSentEvent<String>> catchUpThenLive = liveSubscription.flux()
+            Flux<ServerSentEvent<ProtocolMessage<Map<String, Object>>>> catchUpThenLive = liveSubscription.flux()
                     .concatMap(json -> durableCatchUp(service, tenantId, ownerJiacn, ownerClientId,
                             id, generation, deliveredSequence, json, requestId));
             // MVC owns SSE framing; preframed Strings are encoded again as data:data:/data:id:.
             String readyType = "conversation.stream.ready";
             String readyId = "conversation:" + id + ":ready:" + java.util.UUID.randomUUID();
-            ServerSentEvent<String> ready = ServerSentEvent.builder(JsonUtil.toJson(
-                    cn.jia.core.entity.ProtocolMessage.event(requestId, readyType, readyId, Map.of(
+            ServerSentEvent<ProtocolMessage<Map<String, Object>>> ready = ServerSentEvent.builder(
+                    ProtocolMessage.event(requestId, readyType, readyId, Map.<String, Object>of(
                     "type", "stream_ready", "conversationId", id, "cursor", Long.toString(watermark),
-                    "nextCursor", Long.toString(watermark))))).id(readyId).event(readyType).build();
-            Flux<ServerSentEvent<String>> stream = Flux.fromIterable(replay).concatWithValues(ready).concatWith(catchUpThenLive)
+                    "nextCursor", Long.toString(watermark)))).id(readyId).event(readyType).build();
+            Flux<ServerSentEvent<ProtocolMessage<Map<String, Object>>>> stream = Flux.fromIterable(replay).concatWithValues(ready).concatWith(catchUpThenLive)
                     .doFinally(ignored -> liveSubscription.close());
             return ChatStreamPolicy.firstFrame(ChatStreamPolicy.bounded(stream));
         } catch (RuntimeException failure) {
@@ -747,7 +748,7 @@ public class ChatController {
                 .map(event -> "data: " + event + "\n\n")));
     }
 
-    private List<ServerSentEvent<String>> loadReplayThrough(ChatDeliberationService service, String tenantId,
+    private List<ServerSentEvent<ProtocolMessage<Map<String, Object>>>> loadReplayThrough(ChatDeliberationService service, String tenantId,
             String ownerJiacn, String clientId, String conversationId, long generation,
             long after, long watermark, String requestId) {
         try {
@@ -762,13 +763,13 @@ public class ChatController {
         }
     }
 
-    private Flux<ServerSentEvent<String>> durableCatchUp(ChatDeliberationService service, String tenantId,
+    private Flux<ServerSentEvent<ProtocolMessage<Map<String, Object>>>> durableCatchUp(ChatDeliberationService service, String tenantId,
             String ownerJiacn, String clientId, String conversationId, long generation,
             AtomicLong deliveredSequence, String liveJson, String requestId) {
         long signalled = eventSequence(liveJson);
         long current = deliveredSequence.get();
         if (signalled <= current) return Flux.empty();
-        List<ServerSentEvent<String>> recovered = loadReplayThrough(service, tenantId, ownerJiacn, clientId,
+        List<ServerSentEvent<ProtocolMessage<Map<String, Object>>>> recovered = loadReplayThrough(service, tenantId, ownerJiacn, clientId,
                 conversationId, generation, current, signalled, requestId);
         if (!recovered.isEmpty()) deliveredSequence.set(signalled);
         return Flux.fromIterable(recovered);
@@ -821,7 +822,7 @@ public class ChatController {
     }
 
     @SuppressWarnings("unchecked")
-    private ServerSentEvent<String> sseStoredEvent(cn.jia.chat.deliberation.ChatConversationEventEntity stored, String requestId) {
+    private ServerSentEvent<ProtocolMessage<Map<String, Object>>> sseStoredEvent(cn.jia.chat.deliberation.ChatConversationEventEntity stored, String requestId) {
         try {
             Map<String,Object> event = JsonUtil.getMapper().readValue(stored.getPayloadJson(), Map.class);
             // Routing metadata is authoritative from the owner-scoped journal row, not its payload.
@@ -834,8 +835,8 @@ public class ChatController {
             event.put("occurredAt", stored.getOccurredAt());
             String type = "conversation.event";
             String messageId = "conversation:" + stored.getConversationId() + ":" + stored.getEventSequence();
-            return ServerSentEvent.builder(JsonUtil.toJson(cn.jia.core.entity.ProtocolMessage.event(
-                    requestId, type, messageId, event))).id(messageId).event(type).build();
+            return ServerSentEvent.builder(ProtocolMessage.event(
+                    requestId, type, messageId, event)).id(messageId).event(type).build();
         } catch (Exception invalid) {
             throw new ChatDeliberationException(ChatDeliberationException.Reason.PERSISTENCE_ERROR,
                     "Stored chat event is invalid");
