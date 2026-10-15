@@ -64,12 +64,12 @@ class ChatConversationEventsHttpTest {
         String body=read(null);
         assertFalse(body.contains("data:data:"),body);
         assertFalse(body.contains("data:id:"),body);
-        assertTrue(body.contains("id:7"),body);
+        assertTrue(body.contains("id:conversation:42:7"),body);
         var data=payloads(body);assertEquals(2,data.size());
         assertEquals("interaction.state_changed",data.get(0).get("type"));
         assertEquals("42",data.get(0).get("conversationId"));
         assertEquals("3",data.get(0).get("conversationGeneration"));
-        assertEquals("7",data.get(0).get("eventSequence"));
+        assertEquals("7",data.get(0).get("eventSequence")); assertEquals(1000, data.get(0).get("occurredAt"));
         assertEquals("stream_ready",data.get(1).get("type"));assertEquals("7",data.get(1).get("nextCursor"));
         verify(subscription).close();
     }
@@ -81,7 +81,7 @@ class ChatConversationEventsHttpTest {
         String body=read("7");assertFalse(body.contains("data:data:"),body);
         var data=payloads(body);assertEquals(2,data.size());assertEquals("stream_ready",data.get(0).get("type"));
         assertEquals("agent_message",data.get(1).get("type"));assertEquals("8",data.get(1).get("eventSequence"));
-        assertTrue(body.contains("id:8"),body);assertFalse(body.contains("id:7"),body);
+        assertTrue(body.contains("id:conversation:42:8"),body);assertFalse(body.contains("id:conversation:42:7"),body);
         assertEquals("ready",((Map<?,?>)((List<?>)data.get(1).get("parts")).getFirst()).get("state"));
         verify(events,never()).replayEventsThrough("0","owner","client","42",3,0,7,500);
     }
@@ -98,7 +98,7 @@ class ChatConversationEventsHttpTest {
         assertEquals("3",event.get("conversationGeneration"));
         assertEquals("9007199254740993",event.get("eventSequence"));
         assertEquals("9007199254740993",event.get("eventVersion"));
-        assertTrue(body.contains("id:9007199254740993"),body);
+        assertTrue(body.contains("id:conversation:42:9007199254740993"),body);
     }
 
     @Test void explicitSseAcceptStillGetsReadableNonSuccessJsonForDeniedIdentity() throws Exception {
@@ -109,17 +109,31 @@ class ChatConversationEventsHttpTest {
         verifyNoInteractions(events);
     }
 
+    @Test void legacyAndCrossConversationResumeIdsAreRejectedBeforeReplay() throws Exception {
+        for(String id:List.of("7","conversation:foreign:7","conversation:42:01","conversation:42:9223372036854775808")) {
+            mvc.perform(get("/chat/conversation/events").param("id","42").header("Last-Event-ID",id)
+                    .principal(jwt("0")).accept(MediaType.TEXT_EVENT_STREAM)).andExpect(status().isBadRequest());
+        }
+        verifyNoInteractions(events);
+    }
+
     private String read(String cursor) throws Exception {
         var request=get("/chat/conversation/events").param("id","42").principal(jwt("0"))
-                .accept(MediaType.TEXT_EVENT_STREAM);
-        if(cursor!=null)request.header("Last-Event-ID",cursor);
+                .header("X-Request-Id", "conversation-test").accept(MediaType.TEXT_EVENT_STREAM);
+        if(cursor!=null)request.header("Last-Event-ID","conversation:42:"+cursor);
         var pending=mvc.perform(request).andExpect(request().asyncStarted()).andReturn();
         pending.getAsyncResult(5000);
         return mvc.perform(asyncDispatch(pending)).andExpect(status().isOk())
                 .andExpect(content().contentTypeCompatibleWith(MediaType.TEXT_EVENT_STREAM)).andReturn().getResponse().getContentAsString();
     }
     private static List<Map> payloads(String body) {
-        return body.lines().filter(line->line.startsWith("data:")).map(line->JsonUtil.getMapper().readValue(line.substring(5).stripLeading(),Map.class)).toList();
+        return body.lines().filter(line->line.startsWith("data:")).map(line->{
+            Map message=JsonUtil.getMapper().readValue(line.substring(5).stripLeading(),Map.class);
+            assertEquals(java.util.Set.of("protocolVersion","requestId","messageType","messageId","data"),message.keySet());
+            assertEquals(1,message.get("protocolVersion")); assertEquals("conversation-test",message.get("requestId"));
+            assertTrue(body.contains("event:"+message.get("messageType"))); assertTrue(body.contains("id:"+message.get("messageId")));
+            return (Map)message.get("data");
+        }).toList();
     }
     private static ChatConversationEventEntity event(long sequence,String type,String payload) {
         return new ChatConversationEventEntity().setEventId("event-"+sequence).setEventSequence(sequence)

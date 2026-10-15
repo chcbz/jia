@@ -672,7 +672,8 @@ public class ChatController {
     public Flux<ServerSentEvent<String>> conversationEvents(@RequestParam(name = "id") String id,
             @RequestParam(name = "cursor", required = false) String cursor,
             @RequestHeader(name = "Last-Event-ID", required = false) String lastEventId,
-            Authentication authentication) {
+            Authentication authentication, jakarta.servlet.http.HttpServletRequest servletRequest) {
+        String requestId = cn.jia.core.filter.RequestIdFilter.current(servletRequest);
         ChatConversationEntity conversation = chatConversationService.get(id);
         long generation = lifecycleGeneration(conversation);
         String ownerJiacn = requireIdentityPart(EsContextHolder.getContext().getJiacn());
@@ -683,7 +684,7 @@ public class ChatController {
                     "Chat request is unavailable");
         }
         long queryCursor = parseEventCursor(cursor);
-        long headerCursor = parseEventCursor(lastEventId);
+        long headerCursor = parseEventCursor(scopedConversationCursor(id, lastEventId));
         if (cursor != null && !cursor.isBlank() && lastEventId != null && !lastEventId.isBlank()
                 && queryCursor != headerCursor) {
             throw new ChatDeliberationException(ChatDeliberationException.Reason.INVALID_REQUEST,
@@ -703,15 +704,18 @@ public class ChatController {
                         "Event cursor is ahead of the conversation watermark");
             }
             List<ServerSentEvent<String>> replay = loadReplayThrough(service, tenantId, ownerJiacn, ownerClientId,
-                    id, generation, after, watermark);
+                    id, generation, after, watermark, requestId);
             AtomicLong deliveredSequence = new AtomicLong(watermark);
             Flux<ServerSentEvent<String>> catchUpThenLive = liveSubscription.flux()
                     .concatMap(json -> durableCatchUp(service, tenantId, ownerJiacn, ownerClientId,
-                            id, generation, deliveredSequence, json));
+                            id, generation, deliveredSequence, json, requestId));
             // MVC owns SSE framing; preframed Strings are encoded again as data:data:/data:id:.
-            ServerSentEvent<String> ready = ServerSentEvent.builder(JsonUtil.toSafeJson(Map.of(
-                    "type", "stream_ready", "cursor", Long.toString(watermark),
-                    "nextCursor", Long.toString(watermark)))).build();
+            String readyType = "conversation.stream.ready";
+            String readyId = "conversation:" + id + ":ready:" + java.util.UUID.randomUUID();
+            ServerSentEvent<String> ready = ServerSentEvent.builder(JsonUtil.toJson(
+                    cn.jia.core.entity.ProtocolMessage.event(requestId, readyType, readyId, Map.of(
+                    "type", "stream_ready", "conversationId", id, "cursor", Long.toString(watermark),
+                    "nextCursor", Long.toString(watermark))))).id(readyId).event(readyType).build();
             Flux<ServerSentEvent<String>> stream = Flux.fromIterable(replay).concatWithValues(ready).concatWith(catchUpThenLive)
                     .doFinally(ignored -> liveSubscription.close());
             return ChatStreamPolicy.firstFrame(ChatStreamPolicy.bounded(stream));
@@ -736,13 +740,13 @@ public class ChatController {
 
     private List<ServerSentEvent<String>> loadReplayThrough(ChatDeliberationService service, String tenantId,
             String ownerJiacn, String clientId, String conversationId, long generation,
-            long after, long watermark) {
+            long after, long watermark, String requestId) {
         try {
             return ChatConversationReplayPager.load(after, watermark, 500,
                             (pageCursor, through, limit) -> service.replayEventsThrough(tenantId, ownerJiacn,
                                     clientId, conversationId, generation, pageCursor, through, limit),
                             cn.jia.chat.deliberation.ChatConversationEventEntity::getEventSequence)
-                    .stream().map(this::sseStoredEvent).toList();
+                    .stream().map(event -> sseStoredEvent(event, requestId)).toList();
         } catch (IllegalArgumentException | IllegalStateException invalid) {
             throw new ChatDeliberationException(ChatDeliberationException.Reason.PERSISTENCE_ERROR,
                     "Stored chat event replay is invalid");
@@ -751,12 +755,12 @@ public class ChatController {
 
     private Flux<ServerSentEvent<String>> durableCatchUp(ChatDeliberationService service, String tenantId,
             String ownerJiacn, String clientId, String conversationId, long generation,
-            AtomicLong deliveredSequence, String liveJson) {
+            AtomicLong deliveredSequence, String liveJson, String requestId) {
         long signalled = eventSequence(liveJson);
         long current = deliveredSequence.get();
         if (signalled <= current) return Flux.empty();
         List<ServerSentEvent<String>> recovered = loadReplayThrough(service, tenantId, ownerJiacn, clientId,
-                conversationId, generation, current, signalled);
+                conversationId, generation, current, signalled, requestId);
         if (!recovered.isEmpty()) deliveredSequence.set(signalled);
         return Flux.fromIterable(recovered);
     }
@@ -772,6 +776,14 @@ public class ChatController {
             throw new ChatDeliberationException(ChatDeliberationException.Reason.PERSISTENCE_ERROR,
                     "Live chat event sequence is invalid");
         }
+    }
+
+    private String scopedConversationCursor(String conversationId, String value) {
+        if (value == null) return null;
+        String prefix = "conversation:" + conversationId + ":";
+        if (!value.startsWith(prefix) || !value.substring(prefix.length()).matches("0|[1-9][0-9]*"))
+            throw new ChatDeliberationException(ChatDeliberationException.Reason.INVALID_REQUEST, "Invalid event cursor");
+        return value.substring(prefix.length());
     }
 
     private long parseEventCursor(String value) {
@@ -800,7 +812,7 @@ public class ChatController {
     }
 
     @SuppressWarnings("unchecked")
-    private ServerSentEvent<String> sseStoredEvent(cn.jia.chat.deliberation.ChatConversationEventEntity stored) {
+    private ServerSentEvent<String> sseStoredEvent(cn.jia.chat.deliberation.ChatConversationEventEntity stored, String requestId) {
         try {
             Map<String,Object> event = JsonUtil.getMapper().readValue(stored.getPayloadJson(), Map.class);
             // Routing metadata is authoritative from the owner-scoped journal row, not its payload.
@@ -810,9 +822,11 @@ public class ChatController {
             event.put("eventId", stored.getEventId());
             event.put("eventSequence", Long.toString(stored.getEventSequence()));
             event.put("eventVersion", Long.toString(stored.getEventVersion()));
-            event.put("occurredAt", Long.toString(stored.getOccurredAt()));
-            return ServerSentEvent.builder(JsonUtil.toSafeJson(event))
-                    .id(Long.toString(stored.getEventSequence())).build();
+            event.put("occurredAt", stored.getOccurredAt());
+            String type = "conversation.event";
+            String messageId = "conversation:" + stored.getConversationId() + ":" + stored.getEventSequence();
+            return ServerSentEvent.builder(JsonUtil.toJson(cn.jia.core.entity.ProtocolMessage.event(
+                    requestId, type, messageId, event))).id(messageId).event(type).build();
         } catch (Exception invalid) {
             throw new ChatDeliberationException(ChatDeliberationException.Reason.PERSISTENCE_ERROR,
                     "Stored chat event is invalid");
