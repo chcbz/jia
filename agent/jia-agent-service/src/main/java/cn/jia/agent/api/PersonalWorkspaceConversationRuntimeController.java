@@ -80,25 +80,25 @@ public final class PersonalWorkspaceConversationRuntimeController {
 
     @PostMapping(value="/{taskId}/runs/{runId}/conversation/lease",consumes=MediaType.APPLICATION_JSON_VALUE,
             produces=MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<cn.jia.core.entity.JsonResult<PersonalWorkspaceExecutionService.ConversationLease>> claim(@PathVariable String taskId,
+    public ResponseEntity<cn.jia.core.entity.JsonResult<LeaseResponse>> claim(@PathVariable String taskId,
             @PathVariable String runId,@RequestBody JsonRequest<ClaimRequest> protocolRequest,HttpServletRequest request,
             Authentication authentication) {
         ClaimRequest claim = protocolRequest == null ? null : protocolRequest.data();
         noQuery(request);
         if (claim==null || claim.commandId()==null || claim.messageId()==null) throw new BadRequest();
         return cn.jia.core.config.ApiJsonResponses.success(ok(runtimeAuthentication.withNativeFence(authentication, () ->
-                executions.claimConversationStart(scope(authentication),taskId,runId,claim.commandId(),claim.messageId()))));
+                executions.claimConversationStart(scope(authentication),taskId,runId,claim.commandId(),claim.messageId()))), LeaseResponse::from);
     }
 
     @PostMapping(value="/{taskId}/runs/{runId}/conversation/lease/renew",consumes=MediaType.APPLICATION_JSON_VALUE,
             produces=MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<cn.jia.core.entity.JsonResult<PersonalWorkspaceExecutionService.ConversationLease>> renew(@PathVariable String taskId,
+    public ResponseEntity<cn.jia.core.entity.JsonResult<LeaseResponse>> renew(@PathVariable String taskId,
             @PathVariable String runId,@RequestBody JsonRequest<FenceRequest> protocolRequest,HttpServletRequest servletRequest,
             Authentication authentication) {
         FenceRequest request = protocolRequest == null ? null : protocolRequest.data();
         noQuery(servletRequest);
         return cn.jia.core.config.ApiJsonResponses.success(ok(runtimeAuthentication.withNativeFence(authentication, () ->
-                executions.renewConversationLease(scope(authentication),taskId,runId,fence(request)))));
+                executions.renewConversationLease(scope(authentication),taskId,runId,fence(request)))), LeaseResponse::from);
     }
 
     // Retired latest skill contract: no provider-start/inspection-v3 execution writes.
@@ -150,13 +150,13 @@ public final class PersonalWorkspaceConversationRuntimeController {
 
     @PostMapping(value="/{taskId}/runs/{runId}/conversation/inputs",consumes=MediaType.APPLICATION_JSON_VALUE,
             produces=MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<cn.jia.core.entity.JsonResult<cn.jia.agent.service.SkillExecutionService.Inputs>> inputs(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<InputsResponse>> inputs(
             @PathVariable String taskId,@PathVariable String runId,@RequestBody JsonRequest<FenceRequest> protocolRequest,
             HttpServletRequest request,Authentication authentication) {
         FenceRequest fence = protocolRequest == null ? null : protocolRequest.data();
         noQuery(request);
         var inputs=skillCall(()->skills().inputs(scope(authentication),taskId,runId,fence(fence)));
-        return cn.jia.core.config.ApiJsonResponses.success(ok(runtimeAuthentication.withNativeFence(authentication,()->inputs)));
+        return cn.jia.core.config.ApiJsonResponses.success(ok(runtimeAuthentication.withNativeFence(authentication,()->inputs)), InputsResponse::from);
     }
 
     @PostMapping(value="/{taskId}/runs/{runId}/conversation/inputs/{inputRef}/content",
@@ -277,7 +277,10 @@ public final class PersonalWorkspaceConversationRuntimeController {
             if(body==null||!body.isObject()||!fields(body).equals(required))throw new BadRequest();
             if(body.has("fence")) {
                 var fence=body.get("fence");if(fence==null||!fence.isObject()||!fields(fence).equals(FENCE_FIELDS)
-                    ||!safeIntegral(fence.get("version"),1)||!text(fence.get("token")))throw new BadRequest();
+                    ||!text(fence.get("version"))||!text(fence.get("token")))throw new BadRequest();
+                var trustedFence=fence(fence.get("version").textValue(),fence.get("token").textValue());
+                // Explicit wire-to-domain projection; the service still owns a Java long fence.
+                ((tools.jackson.databind.node.ObjectNode) fence).put("version",trustedFence.version());
             }
             return STRICT_JSON.treeToValue(body,type);
         }catch(RuntimeException invalid){throw new BadRequest();}
@@ -295,10 +298,10 @@ public final class PersonalWorkspaceConversationRuntimeController {
         return cn.jia.core.config.ApiJsonResponses.success(ok(skillCall(()->runtimeAuthentication.withNativeFence(authentication,()->skills().recordEffect(scope(authentication),taskId,runId,effectId,command)))));
     }
     @PostMapping(value="/{taskId}/runs/{runId}/conversation/resume",consumes=MediaType.APPLICATION_JSON_VALUE,produces=MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<cn.jia.core.entity.JsonResult<cn.jia.agent.service.SkillExecutionService.ResumeReceipt>> skillResume(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<ResumeResponse>> skillResume(
             @PathVariable String taskId,@PathVariable String runId,@cn.jia.core.annotation.ApiJsonData @RequestBody String raw,HttpServletRequest request,Authentication authentication) {
         noQuery(request);var command=skillBody(raw,Set.of("executionId","snapshotDigest"),cn.jia.agent.service.SkillExecutionService.Resume.class);
-        return cn.jia.core.config.ApiJsonResponses.success(ok(skillCall(()->runtimeAuthentication.withNativeFence(authentication,()->skills().resume(scope(authentication),taskId,runId,command)))));
+        return cn.jia.core.config.ApiJsonResponses.success(ok(skillCall(()->runtimeAuthentication.withNativeFence(authentication,()->skills().resume(scope(authentication),taskId,runId,command)))), ResumeResponse::from);
     }
     @PostMapping(value="/{taskId}/runs/{runId}/conversation/result-commits/{manifestId}",consumes=MediaType.APPLICATION_JSON_VALUE,produces=MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<cn.jia.core.entity.JsonResult<cn.jia.agent.service.SkillExecutionService.ResultReceipt>> skillResultCommit(
@@ -421,7 +424,7 @@ public final class PersonalWorkspaceConversationRuntimeController {
     }
     private static PersonalWorkspaceExecutionService.ConversationFence fence(FenceRequest value) {
         if (value==null) throw new BadRequest();
-        return fence(Long.toString(value.version()),value.token());
+        return fence(value.version(),value.token());
     }
     private static PersonalWorkspaceExecutionService.ConversationFence fence(String version,String token) {
         if (version==null || !version.matches("[1-9][0-9]{0,18}") || token==null
@@ -453,7 +456,25 @@ public final class PersonalWorkspaceConversationRuntimeController {
     public record ConversationQueue(List<? extends PersonalWorkspaceExecutionService.ConversationCommandView> items) { }
     public record ConversationQueueV3(List<PersonalWorkspaceExecutionService.ControlledConversationRuntimeCommandV3> items) { }
     public record ClaimRequest(String commandId,String messageId) { }
-    public record FenceRequest(long version,String token) { }
+    public record FenceRequest(String version,String token) { }
+    public record LeaseResponse(String executionId,String version,String token,long expiresAt) {
+        static LeaseResponse from(PersonalWorkspaceExecutionService.ConversationLease lease) {
+            return new LeaseResponse(lease.executionId(),Long.toString(lease.version()),lease.token(),lease.expiresAt());
+        }
+    }
+    public record InputsResponse(int schemaVersion,String executionId,String leaseVersion,String snapshotDigest,
+            boolean noReferencedMaterials,List<java.util.Map<String,Object>> inputs) {
+        static InputsResponse from(cn.jia.agent.service.SkillExecutionService.Inputs value) {
+            return new InputsResponse(value.schemaVersion(),value.executionId(),Long.toString(value.leaseVersion()),
+                    value.snapshotDigest(),value.noReferencedMaterials(),value.inputs());
+        }
+    }
+    public record ResumeResponse(LeaseResponse lease,String phase,List<String> allowedWork,java.util.Map<String,Object> resultManifest) {
+        static ResumeResponse from(cn.jia.agent.service.SkillExecutionService.ResumeReceipt value) {
+            return new ResumeResponse(value.lease()==null?null:LeaseResponse.from(value.lease()),
+                    value.phase(),value.allowedWork(),value.resultManifest());
+        }
+    }
     public record CommitItem(String outputId,String sha256,Long length) { }
     public record CommitRequest(FenceRequest fence,List<CommitItem> outputs) { }
     public record ResultRecoveryRequest(Integer schemaVersion,String executionId,String commandId,
