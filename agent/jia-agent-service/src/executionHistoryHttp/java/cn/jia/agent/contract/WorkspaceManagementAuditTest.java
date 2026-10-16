@@ -335,7 +335,18 @@ class WorkspaceManagementAuditTest {
     static HttpResponse<String> send(HttpClient c,String url,String method,String token,String body,Map<String,String> headers)throws Exception {
         var b=HttpRequest.newBuilder(URI.create(url)).method(method,body==null?HttpRequest.BodyPublishers.noBody():HttpRequest.BodyPublishers.ofString(body));
         if(token!=null)b.header("Authorization","Bearer "+token);if(body!=null)b.header("Content-Type","application/json");headers.forEach(b::header);
-        return c.send(b.build(),HttpResponse.BodyHandlers.ofString());
+        var response = c.send(b.build(),HttpResponse.BodyHandlers.ofString());
+        var requestIds = response.headers().allValues("X-Request-Id");
+        assertEquals(1, requestIds.size(), "Raw request-id cardinality: " + method + " " + url);
+        if (response.headers().firstValue("Content-Type").orElse("").contains("application/json")) {
+            var envelope = JSON.readTree(response.body());
+            assertEquals(requestIds.getFirst(), envelope.path("requestId").asText(),
+                    "Raw response header must match the JSON envelope");
+        }
+        observed("raw-response-" + response.statusCode(), "f13-evidence",
+                Map.of("method", method, "path", URI.create(url).getPath(),
+                        "status", response.statusCode(), "headers", response.headers().map()));
+        return response;
     }
     @SuppressWarnings("unchecked") static String token(AnnotationConfigWebApplicationContext app,long uid,String client,long epoch)throws Exception {
         var source=(JWKSource<SecurityContext>)app.getBean("jwkSource");var keys=source.get(new JWKSelector(new JWKMatcher.Builder().keyType(KeyType.RSA).build()),null);var key=(RSAKey)keys.getFirst();
