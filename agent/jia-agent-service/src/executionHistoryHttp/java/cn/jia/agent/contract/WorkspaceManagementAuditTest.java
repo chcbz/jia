@@ -159,6 +159,18 @@ class WorkspaceManagementAuditTest {
                 new PersonalWorkspaceSchemaInitializer(jdbc).afterPropertiesSet();
                 new PersonalWorkspaceTaskLinkSchemaInitializer(jdbc).afterPropertiesSet();
                 new PersonalWorkspaceConversationLinkSchemaInitializer(jdbc).afterPropertiesSet();
+                // Provision the current execution catalog from production migrations. The base
+                // initializer alone currently references protocol_version before installing v3;
+                // that pre-existing cold-bootstrap defect is not patched by this workspace task.
+                var schema = new org.springframework.jdbc.datasource.init.ResourceDatabasePopulator();
+                for (String migration : List.of("v1_11-executions", "v1_13-execution-output-mime",
+                        "v1_17-text-output-mime", "v1_13-execution-terminal-state", "v1_13-task-execution",
+                        "v1_13-task-publication", "v1_14-conversation-execution", "v1_14-conversation-output",
+                        "v1_15-conversation-lease", "v1_16-conversation-provider-start")) {
+                    schema.addScript(new org.springframework.core.io.ClassPathResource("db/agent-personal-workspace-"+migration+".sql"));
+                }
+                schema.execute(Objects.requireNonNull(jdbc.getDataSource()));
+                new ControlledImageFollowupV3SchemaInitializer(jdbc).afterPropertiesSet();
                 new PersonalWorkspaceExecutionSchemaInitializer(jdbc).afterPropertiesSet();
                 jdbc.execute("CREATE TABLE agent_task_meta (task_id VARCHAR(100) PRIMARY KEY,tenant_id VARCHAR(50),client_id VARCHAR(50),owner_jiacn VARCHAR(50)) ENGINE=InnoDB");
                 for(int i=0;i<105;i++) jdbc.update("INSERT INTO agent_task_meta VALUES (?,'0','client-a','owner-a')","task-"+i);
