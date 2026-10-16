@@ -72,17 +72,17 @@ class PersonalWorkspaceControllerPreviewTest {
         mvc.perform(get("/agent/personal-workspace/files/{fileId}/versions/{version}/preview",
                         FILE, 1).principal(jwt()))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.parts.length()").value(1))
-                .andExpect(jsonPath("$.parts[0].partId").value("content"))
-                .andExpect(jsonPath("$.parts[0].contentMimeType").value("text/plain"));
+                .andExpect(jsonPath("$.data.parts.length()").value(3))
+                .andExpect(jsonPath("$.data.parts[0].partId").value("slide-1"))
+                .andExpect(jsonPath("$.data.parts[0].contentMimeType").value("image/png"));
 
         mvc.perform(get("/agent/personal-workspace/files/{fileId}/versions/{version}/preview",
                         FILE, 1).queryParam("view", "parts").principal(jwt()))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.parts.length()").value(3))
-                .andExpect(jsonPath("$.parts[0].partId").value("slide-1"))
-                .andExpect(jsonPath("$.parts[1].partId").value("slide-2"))
-                .andExpect(jsonPath("$.parts[2].partId").value("content"));
+                .andExpect(jsonPath("$.data.parts.length()").value(3))
+                .andExpect(jsonPath("$.data.parts[0].partId").value("slide-1"))
+                .andExpect(jsonPath("$.data.parts[1].partId").value("slide-2"))
+                .andExpect(jsonPath("$.data.parts[2].partId").value("content"));
 
         mvc.perform(get("/agent/personal-workspace/files/{fileId}/versions/{version}/preview",
                         FILE, 1).queryParam("view", "legacy").principal(jwt()))
