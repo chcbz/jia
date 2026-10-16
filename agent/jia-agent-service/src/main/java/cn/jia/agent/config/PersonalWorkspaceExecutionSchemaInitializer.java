@@ -213,11 +213,12 @@ public final class PersonalWorkspaceExecutionSchemaInitializer implements Initia
         if (present == 0) jdbc.execute(taskExecutionMigrationStatement());
         else if (present != 5) throw new IllegalStateException("Task execution schema is partial");
     }
-    private void verifyTaskExecution() {
+    void verifyTaskExecution() {
         Integer invalid=jdbc.queryForObject("""
                 SELECT COUNT(*) FROM agent_personal_workspace_execution
                  WHERE execution_mode NOT IN ('PRIVATE','TASK','CONVERSATION')
-                    OR execution_state NOT IN ('QUEUED','INPUTS_REVOKED','OUTPUT_STAGED','OUTPUT_COMMITTED','FAILED')
+                    OR execution_state NOT IN ('QUEUED','INPUTS_REVOKED','OUTPUT_STAGED','OUTPUT_COMMITTED','RESULT_COMMITTED','FAILED')
+                    OR (execution_state='RESULT_COMMITTED' AND (execution_protocol_version IS NULL OR execution_protocol_version<>4))
                     OR (execution_mode='PRIVATE' AND (work_item_id IS NOT NULL OR lease_token IS NOT NULL
                         OR lease_work_item_version IS NOT NULL OR lease_expires_at IS NOT NULL))
                     OR (execution_mode='TASK' AND (work_item_id IS NULL OR lease_token IS NULL
