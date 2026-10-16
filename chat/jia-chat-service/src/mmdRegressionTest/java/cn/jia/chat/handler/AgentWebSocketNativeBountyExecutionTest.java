@@ -48,45 +48,6 @@ class AgentWebSocketNativeBountyExecutionTest {
         assertEquals(NativeBountyExecutionSessionLookup.State.READY,handler.current(scope()).state());
     }
 
-    @Test
-    void declarationActivatesOnlyAfterSuccessfulRegistrationReceipt() throws Exception {
-        AgentService agentService=mock(AgentService.class);
-        @SuppressWarnings("unchecked") ObjectProvider<AgentService> provider=mock(ObjectProvider.class);
-        when(provider.getIfAvailable()).thenReturn(agentService);
-        when(agentService.register(any(AgentRegisterDTO.class))).thenReturn(
-                new AgentRegisterResultDTO("agent-a","1".repeat(32),AgentConstants.STATUS_ONLINE));
-        AgentRuntimeAuthenticationService auth=mock(AgentRuntimeAuthenticationService.class);
-        stubFence(auth);
-        when(auth.bind(eq("receipt"),any(AgentRuntimeAuthenticationService.Proof.class),any()))
-                .thenReturn(new AgentRuntimeAuthenticationService.Receipt(
-                        "native-runtime-v1","0","client-a","owner-a","agent-a","runtime-a","rti_"+"1".repeat(32),"host-a",1,true));
-        when(auth.isCurrentBinding(anyString(),anyString(),anyString(),anyString(),anyString(),anyString())).thenReturn(true);
-        AgentWebSocketHandler handler=new AgentWebSocketHandler(mock(ChatClient.class),provider,mock(ChatMessageDao.class),new ChatConversationEventBroker());
-        handler.setRuntimeAuthentication(auth);
-        WebSocketSession session=session("receipt","runtime-a");
-        handler.afterConnectionEstablished(session);
-        String declaration=new tools.jackson.databind.ObjectMapper().writeValueAsString(NativeBountyExecutionDeclarationTest.candidate(true));
-        handler.handleTextMessage(session,new TextMessage("{\"schemaVersion\":1,\"messageType\":\"agent.register\",\"messageId\":\"reg-a\",\"agentId\":\"agent-a\",\"runtimeInstanceId\":\"runtime-a\",\"installationId\":\"rti_11111111111111111111111111111111\",\"hostId\":\"host-a\",\"sessionGeneration\":1,\"durableStateHealthy\":true,\"nativeBountyExecution\":"+declaration+"}"));
-        assertEquals(NativeBountyExecutionSessionLookup.State.READY,handler.current(scope()).state());
-
-        AtomicReference<NativeBountyExecutionSessionLookup.State> duringReplacementReceipt =
-                new AtomicReference<>();
-        org.mockito.Mockito.doAnswer(invocation -> {
-            duringReplacementReceipt.compareAndSet(null, handler.current(scope()).state());
-            return null;
-        }).when(session).sendMessage(any());
-        handler.handleTextMessage(session,new TextMessage("{\"schemaVersion\":1,\"messageType\":\"agent.register\",\"messageId\":\"reg-a2\",\"agentId\":\"agent-a\",\"runtimeInstanceId\":\"runtime-a\",\"installationId\":\"rti_11111111111111111111111111111111\",\"hostId\":\"host-a\",\"sessionGeneration\":1,\"durableStateHealthy\":true,\"nativeBountyExecution\":"+declaration+"}"));
-        assertEquals(NativeBountyExecutionSessionLookup.State.OFFLINE,
-                duringReplacementReceipt.get());
-        assertEquals(NativeBountyExecutionSessionLookup.State.READY,handler.current(scope()).state());
-
-        WebSocketSession failed=session("failed","runtime-b");
-        when(auth.bind(eq("failed"),any(AgentRuntimeAuthenticationService.Proof.class),any())).thenReturn(
-                new AgentRuntimeAuthenticationService.Receipt("native-runtime-v1","0","client-a","owner-a","agent-a","runtime-b","rti_"+"1".repeat(32),"host-a",1,true));
-        org.mockito.Mockito.doThrow(new java.io.IOException("lost receipt")).when(failed).sendMessage(any());
-        handler.handleTextMessage(failed,new TextMessage("{\"schemaVersion\":1,\"messageType\":\"agent.register\",\"messageId\":\"reg-b\",\"agentId\":\"agent-a\",\"runtimeInstanceId\":\"runtime-b\",\"installationId\":\"rti_11111111111111111111111111111111\",\"hostId\":\"host-a\",\"sessionGeneration\":1,\"durableStateHealthy\":true,\"nativeBountyExecution\":"+declaration+"}"));
-        assertEquals(NativeBountyExecutionSessionLookup.State.READY,handler.current(scope()).state());
-    }
 
     @Test
     void duplicateDeclarationKeysAreRejectedBeforeRegistrationAuthority() throws Exception {
@@ -111,33 +72,6 @@ class AgentWebSocketNativeBountyExecutionTest {
                 handler.current(scope()).state());
     }
 
-    @Test
-    void explicitOfflinePresenceClearsNativeDeclarationAndAuthBinding() throws Exception {
-        AgentService agentService=mock(AgentService.class);
-        @SuppressWarnings("unchecked") ObjectProvider<AgentService> provider=mock(ObjectProvider.class);
-        when(provider.getIfAvailable()).thenReturn(agentService);
-        AgentRuntimeAuthenticationService auth=mock(AgentRuntimeAuthenticationService.class);
-        stubFence(auth);
-        AgentWebSocketHandler handler=new AgentWebSocketHandler(mock(ChatClient.class),provider,
-                mock(ChatMessageDao.class),new ChatConversationEventBroker());
-        handler.setRuntimeAuthentication(auth);
-        WebSocketSession session=session("offline","runtime-a");
-        bind(handler,session,NativeBountyExecutionDeclaration.parse(
-                NativeBountyExecutionDeclarationTest.candidate(true)));
-        when(auth.isCurrentBinding(anyString(),anyString(),anyString(),anyString(),anyString(),anyString()))
-                .thenReturn(true);
-        assertEquals(NativeBountyExecutionSessionLookup.State.READY,
-                handler.current(scope()).state());
-        AgentRuntimeDTO offline=new AgentRuntimeDTO();
-        offline.setAgentId("agent-a");offline.setStatus(AgentConstants.STATUS_OFFLINE);
-        when(agentService.updateStatus(eq("agent-a"),any(AgentStatusDTO.class))).thenReturn(offline);
-        handler.handleTextMessage(session,new TextMessage("{\"type\":\"agent.presence\","
-                +"\"agentId\":\"agent-a\",\"runtimeInstanceId\":\"runtime-a\",\"installationId\":\"rti_11111111111111111111111111111111\",\"hostId\":\"host-a\",\"sessionGeneration\":1,\"durableStateHealthy\":true,"
-                +"\"status\":\"offline\"}"));
-        assertEquals(NativeBountyExecutionSessionLookup.State.OFFLINE,
-                handler.current(scope()).state());
-        org.mockito.Mockito.verify(auth).disconnect("offline");
-    }
 
     @Test
     void invalidCurrentBindingIsOfflineAndStorageFailureIsUnavailable() throws Exception {

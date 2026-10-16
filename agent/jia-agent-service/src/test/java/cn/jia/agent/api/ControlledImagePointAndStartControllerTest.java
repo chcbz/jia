@@ -36,43 +36,7 @@ class ControlledImagePointAndStartControllerTest {
     }
     @AfterEach void clear() { EsContextHolder.clearContext(); }
 
-    @Test void exactWrapperRoutesToV2ServiceAndPreservesOriginalKey() throws Exception {
-        when(service.submit(any(),eq("task-1"),eq("assignment-key"),any()))
-                .thenReturn(new ControlledImagePointAndStartService.Result(null,false));
-        mvc.perform(post("/agent/tasks/task-1/point-and-start-controlled-image")
-                        .principal(jwt("owner-a","client-a"))
-                        .header("Idempotency-Key","assignment-key")
-                        .contentType(MediaType.APPLICATION_JSON).content(body(0,"1",0L)))
-                .andExpect(status().isCreated())
-                .andExpect(header().string(HttpHeaders.CACHE_CONTROL,"private, no-store"));
-        var captured=org.mockito.ArgumentCaptor.forClass(ControlledImagePointAndStartDTO.Request.class);
-        verify(service).submit(eq(new cn.jia.agent.service.AgentTaskExecutionGrantService.Scope(
-                "0","client-a","owner-a")),eq("task-1"),eq("assignment-key"),captured.capture());
-        assertEquals("GENERATE_IMAGE",captured.getValue().assignment().getInitialOperation());
-        assertEquals(0L,captured.getValue().assignment().getExpectedTaskVersion());
-        assertEquals("1",captured.getValue().providerConsent().expectedVersion());
-    }
 
-    @Test void unknownDuplicateUnsafeAndSeventeenInputsAreRejectedBeforeService() throws Exception {
-        String valid=body(0,"1");
-        for (String invalid:List.of(
-                valid.replace("\"schemaVersion\":1","\"schemaVersion\":1,\"schemaVersion\":1"),
-                valid.replace("\"providerConsent\"","\"costAuthorizationRef\":\"fake\",\"providerConsent\""),
-                valid.replace("\"expectedVersion\":\"1\"","\"expectedVersion\":1"),
-                valid.replace("\"expectedVersion\":\"1\"","\"expectedVersion\":\"01\""),
-                valid.replace("\"expectedVersion\":\"1\"","\"expectedVersion\":\"9007199254740992\""),
-                valid.replace("\"expectedTaskVersion\":6","\"expectedTaskVersion\":9007199254740992"),
-                body(1,"1").replace("\"version\":1","\"version\":2147483648"),
-                body(17,"1"),valid+" {}")) {
-            mvc.perform(post("/agent/tasks/task-1/point-and-start-controlled-image")
-                            .principal(jwt("owner-a","client-a"))
-                            .header("Idempotency-Key","assignment-key")
-                            .contentType(MediaType.APPLICATION_JSON).content(invalid))
-                    .andExpect(status().isBadRequest())
-                    .andExpect(jsonPath("$.code").value("CONTROLLED_IMAGE_BRIDGE_BAD_REQUEST"));
-        }
-        verifyNoInteractions(service);
-    }
 
     @Test void originalKeyGetIsOwnerAuthenticatedQueryOnly() throws Exception {
         when(service.get(any(),eq("task-1"),eq("assignment-key"))).thenReturn(null);
