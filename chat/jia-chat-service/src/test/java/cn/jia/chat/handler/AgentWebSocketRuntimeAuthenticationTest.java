@@ -28,15 +28,16 @@ class AgentWebSocketRuntimeAuthenticationTest {
                 "native-runtime-v1", TENANT, CLIENT, OWNER, AGENT, "runtime-a", UnifiedRuntimeTestSupport.INSTALLATION, "host-1", 1, true));
         f.register();
         var receipt = f.frames.stream().map(text -> JsonUtil.getMapper().readTree(text))
-                .filter(node -> "agent_registered".equals(node.path("type").textValue())).findFirst().orElseThrow();
+                .filter(node -> "agent.registered".equals(node.path("messageType").asText())).findFirst().orElseThrow();
         assertFalse(receipt.has("token"));
         assertFalse(receipt.has("sessionToken"));
-        assertEquals("reg-a", receipt.path("messageId").textValue());
-        assertEquals("runtime-a", receipt.path("runtimeInstanceId").textValue());
-        assertEquals(TENANT, receipt.path("runtimeAuth").path("tenantId").textValue());
-        assertEquals(CLIENT, receipt.path("runtimeAuth").path("clientId").textValue());
-        assertEquals(OWNER, receipt.path("runtimeAuth").path("ownerJiacn").textValue());
-        assertEquals(AGENT, receipt.path("runtimeAuth").path("agentId").textValue());
+        assertEquals("reg-a", receipt.path("correlationId").textValue());
+        assertNotEquals("reg-a", receipt.path("messageId").textValue());
+        assertEquals("runtime-a", receipt.path("data").path("runtimeInstanceId").textValue());
+        assertEquals(TENANT, receipt.path("data").path("runtimeAuth").path("tenantId").textValue());
+        assertEquals(CLIENT, receipt.path("data").path("runtimeAuth").path("clientId").textValue());
+        assertEquals(OWNER, receipt.path("data").path("runtimeAuth").path("ownerJiacn").textValue());
+        assertEquals(AGENT, receipt.path("data").path("runtimeAuth").path("agentId").textValue());
         assertFalse(receipt.toString().contains("key-a"));
         verify(f.auth).bind(eq("socket-a"), any(AgentRuntimeAuthenticationService.Proof.class), any());
         f.handler.afterConnectionClosed(f.session, CloseStatus.NORMAL);
@@ -50,7 +51,7 @@ class AgentWebSocketRuntimeAuthenticationTest {
         f.register();
         assertFalse(String.join("", f.frames).contains(TOKEN));
         assertFalse(String.join("", f.frames).contains("secret-raw-auth-detail"));
-        assertFalse(String.join("", f.frames).contains("agent_registered"));
+        assertFalse(String.join("", f.frames).contains("agent.registered"));
         assertTrue(String.join("", f.frames).contains("AGENT_REGISTRATION_UNAVAILABLE"));
         verify(f.auth, atLeastOnce()).disconnect("socket-a");
     }
@@ -75,7 +76,7 @@ class AgentWebSocketRuntimeAuthenticationTest {
 
         verify(f.service).register(any(AgentRegisterDTO.class));
         verify(f.auth).bind(eq("socket-a"), any(AgentRuntimeAuthenticationService.Proof.class), any());
-        assertTrue(String.join("", f.frames).contains("agent_registered"));
+        assertTrue(String.join("", f.frames).contains("agent.registered"));
         assertTrue(String.join("", f.frames).contains("runtimeAuth"));
     }
 
@@ -83,11 +84,11 @@ class AgentWebSocketRuntimeAuthenticationTest {
         Fixture f = new Fixture(false);
         var runtime = new cn.jia.agent.entity.AgentRuntimeDTO(); runtime.setAgentId(AGENT); runtime.setStatus("offline");
         when(f.service.updateStatus(eq(AGENT), any())).thenReturn(runtime);
-        f.handler.handleTextMessage(f.session, new TextMessage("{\"schemaVersion\":1,\"messageType\":\"agent.presence\","
+        UnifiedRuntimeTestSupport.deliver(f.handler, f.session, new TextMessage("{\"schemaVersion\":1,\"messageType\":\"agent.presence\","
                 + "\"messageId\":\"offline-a\",\"agentId\":\"" + AGENT
                 + "\",\"runtimeInstanceId\":\"runtime-a\",\"status\":\"offline\"}"));
         verify(f.auth).disconnect("socket-a");
-        assertTrue(String.join("", f.frames).contains("agent_status_updated"));
+        assertTrue(String.join("", f.frames).contains("agent.status.updated"));
     }
 
     @Test void wrongRuntimeIdentityInvalidatesSessionAndNeverRegisters() throws Exception {

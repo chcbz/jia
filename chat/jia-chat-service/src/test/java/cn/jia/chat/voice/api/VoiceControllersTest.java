@@ -263,23 +263,23 @@ class VoiceControllersTest {
         mvc.perform(post("/chat/speech/synthesis")
                         .principal(jwt("tenant", "client", "subject"))
                         .contentType("application/json")
-                        .content("{\"requestId\":\"" + REQUEST_ID
+                        .content("{\"protocolVersion\":1,\"requestId\":\"" + REQUEST_ID + "\",\"data\":{\"requestId\":\"" + REQUEST_ID
                                 + "\",\"text\":\"ok\","
                                 + "\"voice\":\"juyiting-default\","
-                                + "\"format\":\"mp3\",\"provider\":\"forged\"}"))
+                                + "\"format\":\"mp3\",\"provider\":\"forged\"}}"))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.protocolVersion").value(1))
                 .andExpect(jsonPath("$.code").value("VOICE_INVALID_REQUEST"))
                 .andExpect(jsonPath("$.data.requestId").value(REQUEST_ID));
 
         mvc.perform(post("/chat/speech/synthesis")
                         .contentType("application/json")
-                        .content("{\"requestId\":\"" + REQUEST_ID
+                        .content("{\"protocolVersion\":1,\"requestId\":\"" + REQUEST_ID + "\",\"data\":{\"requestId\":\"" + REQUEST_ID
                                 + "\",\"text\":\"ok\","
                                 + "\"voice\":\"juyiting-default\","
-                                + "\"format\":\"mp3\"}"))
+                                + "\"format\":\"mp3\"}}"))
                 .andExpect(status().isUnauthorized())
-                .andExpect(jsonPath("$.status").value(401))
+                .andExpect(jsonPath("$.protocolVersion").value(1))
                 .andExpect(jsonPath("$.code").value("VOICE_UNAUTHORIZED"))
                 .andExpect(jsonPath("$.data.requestId").doesNotExist());
         verify(service, never()).synthesize(any(), any());
