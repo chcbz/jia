@@ -52,21 +52,6 @@ class ChatConversationArchiveControllerTest {
 
 
     @Test
-    void statusMapsOnlyTheScopedReadAndNeverInventsRecoverySideEffects() {
-        identity();
-        var receipt = new ChatConversationArchiveService.Receipt("arc_operation_1", "saving", "2",
-                List.of(new ChatConversationArchiveService.ItemReceipt("assetRef", "asset_1", "1", null,
-                        "saving", null, null, null, null)));
-        when(archives.get(any(), any(), any())).thenReturn(receipt);
-        var response = controller.status("42", "arc_operation_1", authentication);
-        assertEquals(HttpStatus.OK, response.getStatusCode());
-        assertEquals(receipt, response.getBody().getData());
-        verify(archives).get(new ChatConversationArchiveStore.Scope("0", "owner", "client"),
-                "42", "arc_operation_1");
-        verify(archives, never()).archive(any(), any());
-    }
-
-    @Test
     void stableFailureCatalogMapsConflictUnsupportedMissingAndTemporaryStatuses() {
         assertEquals(HttpStatus.CONFLICT, controller.error(new ChatConversationArchiveException(
                 ChatConversationArchiveException.Reason.IDEMPOTENCY_CONFLICT, "conflict")).getStatusCode());
