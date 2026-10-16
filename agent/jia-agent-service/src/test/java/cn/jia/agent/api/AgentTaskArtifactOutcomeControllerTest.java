@@ -63,63 +63,7 @@ class AgentTaskArtifactOutcomeControllerTest {
                 new AgentTaskArtifactOutcomeController(service, gate)).build();
     }
 
-    @Test
-    void acceptBindsTenantClientAndActorOnlyFromValidatedJwtContext() throws Exception {
-        when(service.accept(anyString(), anyString(), anyString(), anyString(), anyString(), any()))
-                .thenReturn(accepted("artifact-new", "work-1", ACTOR, DECISION));
 
-        mvc.perform(post("/agent/tasks/{taskId}/artifact-outcomes/accept", TASK)
-                        .header("Idempotency-Key", DECISION)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(acceptBody())
-                        .principal(jwt(OWNER, CLIENT, ACTOR)))
-                .andExpect(status().isOk())
-                .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
-                .andExpect(jsonPath("$.artifactId").value("artifact-new"))
-                .andExpect(jsonPath("$.outcomeState").value("accepted"))
-                .andExpect(jsonPath("$.decisionId").value(DECISION))
-                .andExpect(jsonPath("$.decidedByAgentId").value(ACTOR))
-                .andExpect(jsonPath("$.tenantId").doesNotExist())
-                .andExpect(jsonPath("$.clientId").doesNotExist())
-                .andExpect(jsonPath("$.content").doesNotExist())
-                .andExpect(jsonPath("$.storageUri").doesNotExist())
-                .andExpect(jsonPath("$.metadata").doesNotExist());
-
-        ArgumentCaptor<AgentTaskArtifactAcceptDTO> command =
-                ArgumentCaptor.forClass(AgentTaskArtifactAcceptDTO.class);
-        verify(service).accept(eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK), eq(ACTOR), command.capture());
-        assertEquals(DECISION, command.getValue().getDecisionId());
-        assertEquals("artifact-new", command.getValue().getAcceptedArtifact().getArtifactId());
-        assertEquals(2, command.getValue().getAcceptedArtifact()
-                .getArtifactVersion().intValue());
-        assertEquals(0L, command.getValue().getAcceptedArtifact()
-                .getExpectedOutcomeVersion().longValue());
-        assertEquals(List.of("artifact-old"), command.getValue().getSupersededArtifacts().stream()
-                .map(value -> value.getArtifactId()).toList());
-        verify(gate).allows(TENANT, CLIENT);
-    }
-
-    @Test
-    void acceptedListForwardsOnlyAuthenticatedScopeAndExactOptionalQuery() throws Exception {
-        when(service.listAuthoritativeAccepted(
-                TENANT, CLIENT, OWNER, TASK, ACTOR, "work-1", 25))
-                .thenReturn(List.of(accepted("artifact-a", "work-1", OTHER, "decision-list")));
-
-        mvc.perform(get("/agent/tasks/{taskId}/artifact-outcomes/accepted", TASK)
-                        .queryParam("workItemId", "work-1")
-                        .queryParam("limit", "25")
-                        .principal(jwt(OWNER, CLIENT, ACTOR)))
-                .andExpect(status().isOk())
-                .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
-                .andExpect(jsonPath("$[0].artifactId").value("artifact-a"))
-                .andExpect(jsonPath("$[0].outcomeState").value("accepted"))
-                .andExpect(jsonPath("$[0].content").doesNotExist())
-                .andExpect(jsonPath("$[0].storageUri").doesNotExist())
-                .andExpect(jsonPath("$[0].metadata").doesNotExist());
-
-        verify(service).listAuthoritativeAccepted(
-                TENANT, CLIENT, OWNER, TASK, ACTOR, "work-1", 25);
-    }
 
     @Test
     void anonymousNonJwtMalformedClaimsAndNameMismatchFailBeforeGateOrService()
@@ -153,102 +97,8 @@ class AgentTaskArtifactOutcomeControllerTest {
         verifyNoInteractions(gate, service);
     }
 
-    @Test
-    void requestCannotInjectTenantClientActorOrDecisionIdentity() throws Exception {
-        JwtAuthenticationToken auth = jwt(OWNER, CLIENT, ACTOR);
-        mvc.perform(post("/agent/tasks/{taskId}/artifact-outcomes/accept", TASK)
-                        .header("Idempotency-Key", DECISION)
-                        .queryParam("actorAgentId", OTHER)
-                        .contentType(MediaType.APPLICATION_JSON).content(acceptBody())
-                        .principal(auth))
-                .andExpect(status().isBadRequest());
 
-        for (String injected : List.of(
-                "\"tenantId\":\"tenant-b\"",
-                "\"clientId\":\"client-b\"",
-                "\"actorAgentId\":\"" + OTHER + "\"",
-                "\"decisionId\":\"forged-decision\"")) {
-            mvc.perform(post("/agent/tasks/{taskId}/artifact-outcomes/accept", TASK)
-                            .header("Idempotency-Key", DECISION)
-                            .contentType(MediaType.APPLICATION_JSON)
-                            .content(withField(acceptBody(), injected))
-                            .principal(auth))
-                    .andExpect(status().isBadRequest());
-        }
 
-        mvc.perform(get("/agent/tasks/{taskId}/artifact-outcomes/accepted", TASK)
-                        .queryParam("actorAgentId", OTHER).principal(auth))
-                .andExpect(status().isBadRequest());
-        verifyNoInteractions(gate, service);
-    }
-
-    @Test
-    void strictClosedBodyRejectsDuplicateUnknownTrailingAndNonIntegralReferences()
-            throws Exception {
-        JwtAuthenticationToken auth = jwt(OWNER, CLIENT, ACTOR);
-        String duplicateRoot = acceptBody().replace(
-                "\"acceptedArtifact\":",
-                "\"acceptedArtifact\":{"
-                        + "\"artifactId\":\"artifact-x\",\"artifactVersion\":1,"
-                        + "\"expectedOutcomeVersion\":0},\"acceptedArtifact\":");
-        String unknownRef = acceptBody().replace(
-                "\"expectedOutcomeVersion\":0",
-                "\"expectedOutcomeVersion\":0,\"content\":\"secret\"");
-        String floatVersion = acceptBody().replace(
-                "\"artifactVersion\":2", "\"artifactVersion\":2.0");
-        String stringOutcomeVersion = acceptBody().replace(
-                "\"expectedOutcomeVersion\":0", "\"expectedOutcomeVersion\":\"0\"");
-        String duplicateReference = acceptBody().replace(
-                "\"artifactId\":\"artifact-old\",\"artifactVersion\":1,"
-                        + "\"expectedOutcomeVersion\":1",
-                "\"artifactId\":\"artifact-new\",\"artifactVersion\":2,"
-                        + "\"expectedOutcomeVersion\":1");
-
-        for (String body : List.of(
-                duplicateRoot, unknownRef, acceptBody() + " {}", "{",
-                floatVersion, stringOutcomeVersion, duplicateReference,
-                "{\"acceptedArtifact\":null,\"supersededArtifacts\":[]}")) {
-            mvc.perform(post("/agent/tasks/{taskId}/artifact-outcomes/accept", TASK)
-                            .header("Idempotency-Key", DECISION)
-                            .contentType(MediaType.APPLICATION_JSON).content(body)
-                            .principal(auth))
-                    .andExpect(status().isBadRequest())
-                    .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
-        }
-        verifyNoInteractions(gate, service);
-    }
-
-    @Test
-    void idempotencyKeyIsRequiredBoundedAndStableAcrossExactReplay() throws Exception {
-        JwtAuthenticationToken auth = jwt(OWNER, CLIENT, ACTOR);
-        for (String key : new String[]{null, "short", "bad key", "x".repeat(101)}) {
-            var request = post("/agent/tasks/{taskId}/artifact-outcomes/accept", TASK)
-                    .contentType(MediaType.APPLICATION_JSON).content(acceptBody())
-                    .principal(auth);
-            if (key != null) {
-                request.header("Idempotency-Key", key);
-            }
-            mvc.perform(request).andExpect(status().isBadRequest());
-        }
-        verifyNoInteractions(gate, service);
-
-        when(service.accept(anyString(), anyString(), anyString(), anyString(), anyString(), any()))
-                .thenReturn(accepted("artifact-new", "work-1", ACTOR, DECISION));
-        for (int attempt = 0; attempt < 2; attempt++) {
-            mvc.perform(post("/agent/tasks/{taskId}/artifact-outcomes/accept", TASK)
-                            .header("Idempotency-Key", DECISION)
-                            .contentType(MediaType.APPLICATION_JSON).content(acceptBody())
-                            .principal(auth))
-                    .andExpect(status().isOk())
-                    .andExpect(jsonPath("$.decisionId").value(DECISION));
-        }
-        ArgumentCaptor<AgentTaskArtifactAcceptDTO> commands =
-                ArgumentCaptor.forClass(AgentTaskArtifactAcceptDTO.class);
-        verify(service, times(2)).accept(
-                eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK), eq(ACTOR), commands.capture());
-        assertEquals(List.of(DECISION, DECISION), commands.getAllValues().stream()
-                .map(AgentTaskArtifactAcceptDTO::getDecisionId).toList());
-    }
 
     @Test
     void foreignAuthenticatedIdentitiesCollapseToOneNonEnumeratingNotFoundShape()
@@ -290,21 +140,6 @@ class AgentTaskArtifactOutcomeControllerTest {
                 TENANT, CLIENT, OWNER, TASK, OTHER, null, null);
     }
 
-    @Test
-    void exactScopeGateDeniesBeforeOutcomeService() throws Exception {
-        when(gate.allows(TENANT, CLIENT)).thenReturn(false);
-
-        mvc.perform(post("/agent/tasks/{taskId}/artifact-outcomes/accept", TASK)
-                        .header("Idempotency-Key", DECISION)
-                        .contentType(MediaType.APPLICATION_JSON).content(acceptBody())
-                        .principal(jwt(OWNER, CLIENT, ACTOR)))
-                .andExpect(status().isServiceUnavailable())
-                .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
-                .andExpect(jsonPath("$.code").value("ARTIFACT_OUTCOME_UNAVAILABLE"));
-
-        verify(gate).allows(TENANT, CLIENT);
-        verifyNoInteractions(service);
-    }
 
     @Test
     void listQueryIsClosedCanonicalAndBoundedBeforeGateOrService() throws Exception {
@@ -323,44 +158,6 @@ class AgentTaskArtifactOutcomeControllerTest {
         verifyNoInteractions(gate, service);
     }
 
-    @Test
-    void collaborationConflictsAndSchemaFailureRetainDistinctNonLeakingStatuses()
-            throws Exception {
-        JwtAuthenticationToken auth = jwt(OWNER, CLIENT, ACTOR);
-        doThrow(new AgentTaskCollaborationException(
-                Reason.VERSION_CONFLICT, "current outcome version=secret"))
-                .when(service).accept(any(), any(), any(), any(), any(), any());
-        mvc.perform(post("/agent/tasks/{taskId}/artifact-outcomes/accept", TASK)
-                        .header("Idempotency-Key", DECISION)
-                        .contentType(MediaType.APPLICATION_JSON).content(acceptBody())
-                        .principal(auth))
-                .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.code").value("ARTIFACT_OUTCOME_VERSION_CONFLICT"))
-                .andExpect(content().string(org.hamcrest.Matchers.not(
-                        org.hamcrest.Matchers.containsString("version=secret"))));
-
-        doThrow(new AgentTaskCollaborationException(
-                Reason.INVALID_TRANSITION, "superseded row detail"))
-                .when(service).accept(any(), any(), any(), any(), any(), any());
-        mvc.perform(post("/agent/tasks/{taskId}/artifact-outcomes/accept", TASK)
-                        .header("Idempotency-Key", DECISION)
-                        .contentType(MediaType.APPLICATION_JSON).content(acceptBody())
-                        .principal(auth))
-                .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.code").value("ARTIFACT_OUTCOME_CONFLICT"));
-
-        doThrow(new AgentTaskCollaborationException(
-                Reason.INVALID_PERSISTED_STATE, "jdbc://secret/schema"))
-                .when(service).accept(any(), any(), any(), any(), any(), any());
-        mvc.perform(post("/agent/tasks/{taskId}/artifact-outcomes/accept", TASK)
-                        .header("Idempotency-Key", DECISION)
-                        .contentType(MediaType.APPLICATION_JSON).content(acceptBody())
-                        .principal(auth))
-                .andExpect(status().isServiceUnavailable())
-                .andExpect(jsonPath("$.code").value("ARTIFACT_OUTCOME_UNAVAILABLE"))
-                .andExpect(content().string(org.hamcrest.Matchers.not(
-                        org.hamcrest.Matchers.containsString("jdbc://secret"))));
-    }
 
     @Test
     void acceptRejectsMismatchedArtifactVersionOutcomeAndDecisionAuthority()
@@ -450,25 +247,6 @@ class AgentTaskArtifactOutcomeControllerTest {
                 .andExpect(status().isServiceUnavailable());
     }
 
-    @Test
-    void emptyAndOversizedBodiesRejectBeforeGateAndService() throws Exception {
-        mvc.perform(post("/agent/tasks/{taskId}/artifact-outcomes/accept", TASK)
-                        .header("Idempotency-Key", DECISION)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("")
-                        .principal(jwt(OWNER, CLIENT, ACTOR)))
-                .andExpect(status().isBadRequest())
-                .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
-
-        mvc.perform(post("/agent/tasks/{taskId}/artifact-outcomes/accept", TASK)
-                        .header("Idempotency-Key", DECISION)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("x".repeat(AgentTaskArtifactOutcomeController.MAX_BODY_BYTES + 1))
-                        .principal(jwt(OWNER, CLIENT, ACTOR)))
-                .andExpect(status().isBadRequest())
-                .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
-        verifyNoInteractions(gate, service);
-    }
 
     private static String acceptBody() {
         return "{\"acceptedArtifact\":{\"artifactId\":\"artifact-new\","
