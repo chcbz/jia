@@ -866,3 +866,9 @@ tasks.register('skillManifestContract', Test) {
     useJUnitPlatform()
     testLogging { events 'passed', 'failed'; exceptionFormat 'full' }
 }
+
+// Workspace audit fixture uses the production resource security chain, not a test-only filter.
+dependencies {
+    add(executionHistoryHttpSourceSet.implementationConfigurationName, project(':oauth:jia-oauth-resource'))
+    add(executionHistoryHttpSourceSet.implementationConfigurationName, project(':user:jia-user-api'))
+}
