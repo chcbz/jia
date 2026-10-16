@@ -209,7 +209,7 @@ class PersonalWorkspaceConversationExecutionTest {
                 eq("agent"),eq("GENERATE_IMAGE"),eq(true))).thenReturn(
                 new AgentTaskExecutionGrantService.Admission("grant-1",1,7,
                         "agent","GENERATE_IMAGE",true,List.of(granted)));
-        var file=new PersonalWorkspaceFileEntity().setFileId("file-1").setState("ACTIVE");
+        var file=new PersonalWorkspaceFileEntity().setFileId("file-1").setState("ACTIVE").setMetadataRevision(7L);
         var version=new PersonalWorkspaceVersionEntity().setFileId("file-1").setVersion(1)
                 .setOriginalFilename("bird.png").setContentMimeType("image/png")
                 .setByteLength(100L).setContentHash("a".repeat(64)).setStorageUri("owner-private/object");
@@ -224,6 +224,11 @@ class PersonalWorkspaceConversationExecutionTest {
                 && "owner-private/object".equals(input.getStorageUri())
                 && "a".repeat(64).equals(input.getContentHash()) && "0".equals(input.getTenantId())
                 && "client".equals(input.getClientId()) && "owner".equals(input.getOwnerJiacn())));
+        assertEquals(8L,file.getMetadataRevision());
+        var order=inOrder(workspace,rows);
+        order.verify(workspace).lockFile("0","client","owner","file-1");
+        order.verify(rows).insertInput(any());
+        order.verify(workspace).updateFile(file);
         verifyNoInteractions(writes);
     }
 

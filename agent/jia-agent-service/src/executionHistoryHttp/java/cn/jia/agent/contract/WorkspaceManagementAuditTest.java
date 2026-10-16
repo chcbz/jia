@@ -279,6 +279,19 @@ class WorkspaceManagementAuditTest {
                 assertTrue(keys.contains("COMMITTED"));
                 assertTrue(keys.stream().allMatch(k->k.equals("COMMITTED")||k.equals("PROCESSING")));
                 observed("mysql-same-key-race-fresh-transaction","regression-pass",keys);
+                // All seven claim callers share the same scope/hash replay contract.
+                var claimService=app.getBean(PersonalWorkspaceWriteService.class);
+                var claimScope=new PersonalWorkspaceWriteService.Scope("0","client-a","owner-a");
+                for(String operationType:List.of("CREATE","APPEND","RENAME","TRASH","RESTORE","ARCHIVE_ASSET","ARCHIVE_TEXT")) {
+                    String claimKey="claim-path-"+operationType;
+                    var first=claimService.claim(claimScope,operationType,claimKey,"a".repeat(64));
+                    var replay=claimService.claim(claimScope,operationType,claimKey,"a".repeat(64));
+                    assertTrue(first.claimed());assertFalse(replay.claimed());
+                    assertEquals(first.operation().getOperationId(),replay.operation().getOperationId());
+                    var conflict=assertThrows(PersonalWorkspaceException.class,()->claimService.claim(claimScope,operationType,claimKey,"b".repeat(64)));
+                    assertEquals(PersonalWorkspaceException.Reason.IDEMPOTENCY_CONFLICT,conflict.getReason());
+                }
+                observed("seven-operation-claim-replay-and-conflict","regression-pass",7);
                 // Strong-CAS recycle/restore and old byte snapshots are exercised on a dedicated synthetic file.
                 String browserId=second.file().fileId();String browserPath="/agent/personal-workspace/files/"+browserId;
                 var rawHeaders=send(client,origin+browserPath,"GET",owner,null,Map.of());observed("raw-file-headers","f13-evidence",rawHeaders.headers().map());
