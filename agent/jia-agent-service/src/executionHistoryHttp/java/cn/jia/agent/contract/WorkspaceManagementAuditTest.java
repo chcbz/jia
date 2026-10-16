@@ -163,8 +163,7 @@ class WorkspaceManagementAuditTest {
                 // initializer alone currently references protocol_version before installing v3;
                 // that pre-existing cold-bootstrap defect is not patched by this workspace task.
                 var schema = new org.springframework.jdbc.datasource.init.ResourceDatabasePopulator();
-                for (String migration : List.of("v1_11-executions", "v1_13-execution-output-mime",
-                        "v1_17-text-output-mime", "v1_13-execution-terminal-state", "v1_13-task-execution",
+                for (String migration : List.of("v1_11-executions", "v1_13-task-execution",
                         "v1_13-task-publication", "v1_14-conversation-execution", "v1_14-conversation-output",
                         "v1_15-conversation-lease", "v1_16-conversation-provider-start")) {
                     schema.addScript(new org.springframework.core.io.ClassPathResource("db/agent-personal-workspace-"+migration+".sql"));
