@@ -46,8 +46,8 @@ class RequestIdFilterTest {
     }
 
     @Test
-    void acceptsBoundaryLengthIdsAndRestoresFinalResponseHeader() throws Exception {
-        for (String requestId : new String[]{"a".repeat(8), "b".repeat(128)}) {
+    void acceptsControlFreeIdsAndRestoresFinalResponseHeader() throws Exception {
+        for (String requestId : new String[]{"short", "has space", "bad/character", "a".repeat(8), "b".repeat(128), "c".repeat(129)}) {
             MockHttpServletRequest request = new MockHttpServletRequest();
             request.addHeader(RequestIdFilter.HEADER_NAME, requestId);
             MockHttpServletResponse response = new MockHttpServletResponse();
@@ -62,7 +62,7 @@ class RequestIdFilterTest {
 
     @Test
     void generatesNewIdForInvalidClientValues() throws Exception {
-        for (String invalid : new String[]{null, "short", "has space", "bad/character", "a".repeat(129)}) {
+        for (String invalid : new String[]{null, "", " ", "bad\ncharacter", "bad\rcharacter", "bad\tcharacter"}) {
             MockHttpServletRequest request = new MockHttpServletRequest();
             if (invalid != null) {
                 request.addHeader(RequestIdFilter.HEADER_NAME, invalid);
