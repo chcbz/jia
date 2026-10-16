@@ -452,13 +452,18 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                     if (!sameReferences(command.references(),authorized.inputs())) throw failure(Reason.GRANT_REVOKED);
                     try { executions.insert(row); }
                     catch (DuplicateKeyException collision) { throw failure(Reason.TASK_CONFLICT); }
+                    // Keep root -> sorted file ordering, including multiple versions of one file.
+                    // Controlled admission has already acquired these same locks; reentrant current
+                    // reads also avoid publishing an old snapshot's revision after admission writes.
+                    Map<String, PersonalWorkspaceFileEntity> referenceFiles = new LinkedHashMap<>();
+                    for (String fileId : command.references().stream().map(ref -> ref.fileId()).distinct().sorted().toList()) {
+                        var lockedFile = workspace.lockFile(scope.tenantId(), scope.clientId(), scope.ownerJiacn(), fileId);
+                        if (lockedFile == null || !"ACTIVE".equals(lockedFile.getState())) throw failure(Reason.GRANT_REVOKED);
+                        referenceFiles.put(fileId, lockedFile);
+                    }
                     int index=0;
                     for (var ref:command.references()) {
-                        // admitControlled already locked canonical files in deterministic order.
-                        // Legacy native create keeps its historical file-lock path.
-                        var file=command.controlledImage()
-                                ? workspace.findFile(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),ref.fileId())
-                                : workspace.lockFile(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),ref.fileId());
+                        var file = referenceFiles.get(ref.fileId());
                         var version=workspace.findVersion(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),
                                 ref.fileId(),ref.version());
                         if (file==null || !"ACTIVE".equals(file.getState()) || version==null
@@ -475,6 +480,10 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                                 .setContentHash(ref.contentHash()).setStorageUri(version.getStorageUri())
                                 .setGrantState("ACTIVE").setCreatedAt(now).setRevokedAt(null);
                         scoped(input,scope);executions.insertInput(input);
+                    }
+                    for (var file : referenceFiles.values()) {
+                        file.setMetadataRevision(Math.addExact(file.getMetadataRevision(), 1L));
+                        workspace.updateFile(file);
                     }
                     if(controlledProtocol==3) {
                         int sourceOrdinal=0;long sourceCreatedAt=row.getCreatedAt();

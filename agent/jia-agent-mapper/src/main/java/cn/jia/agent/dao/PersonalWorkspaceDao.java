@@ -8,6 +8,9 @@ import java.util.List;
 
 /** Strict owner-scoped persistence boundary for personal uploads. */
 public interface PersonalWorkspaceDao {
+    record UsageSnapshot(String fileId, long impactRevision, long taskReferences,
+            long conversationReferences, long activeInputGrants) { }
+    UsageSnapshot findUsage(String tenantId, String clientId, String ownerJiacn, String fileId);
     PersonalWorkspaceFileEntity findFile(String tenantId, String clientId, String ownerJiacn, String fileId);
     PersonalWorkspaceFileEntity lockFile(String tenantId, String clientId, String ownerJiacn, String fileId);
     List<PersonalWorkspaceFileEntity> listFiles(String tenantId, String clientId, String ownerJiacn,

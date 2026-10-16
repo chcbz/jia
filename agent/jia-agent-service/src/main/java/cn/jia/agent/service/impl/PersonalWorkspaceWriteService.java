@@ -1,7 +1,6 @@
 package cn.jia.agent.service.impl;
 
 import cn.jia.agent.dao.PersonalWorkspaceDao;
-import cn.jia.agent.dao.PersonalWorkspaceTaskLinkDao;
 import cn.jia.agent.entity.PersonalWorkspaceFileEntity;
 import cn.jia.agent.entity.PersonalWorkspaceOperationEntity;
 import cn.jia.agent.entity.PersonalWorkspaceVersionEntity;
@@ -12,38 +11,27 @@ import org.springframework.dao.DuplicateKeyException;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.UUID;
 
 /** Keeps short database transactions separate from private filesystem writes. */
 @Named
 public class PersonalWorkspaceWriteService {
     private final PersonalWorkspaceDao dao;
-    private final PersonalWorkspaceTaskLinkDao taskLinks;
+    private final PersonalWorkspaceOperationClaimTx claimTx;
     @Inject public PersonalWorkspaceWriteService(PersonalWorkspaceDao dao,
-            PersonalWorkspaceTaskLinkDao taskLinks) {
-        this.dao = dao; this.taskLinks = taskLinks;
+            PersonalWorkspaceOperationClaimTx claimTx) {
+        this.dao = dao;
+        this.claimTx = claimTx;
     }
-    /** Compatibility constructor for narrow isolated unit fixtures. */
-    public PersonalWorkspaceWriteService(PersonalWorkspaceDao dao) { this(dao, null); }
 
-    @Transactional(propagation = Propagation.REQUIRES_NEW, rollbackFor = Exception.class)
+    /** Leave the failed INSERT transaction before looking up the competing operation. */
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public Claim claim(Scope scope, String type, String key, String requestHash) {
-        PersonalWorkspaceOperationEntity existing = dao.findOperationByIdempotency(
-                scope.tenantId(), scope.clientId(), scope.ownerJiacn(), type, key);
-        if (existing != null) return existingClaim(existing, requestHash);
-        PersonalWorkspaceOperationEntity operation = new PersonalWorkspaceOperationEntity()
-                .setOperationId("pwo_" + UUID.randomUUID().toString().replace("-", ""))
-                .setOwnerJiacn(scope.ownerJiacn()).setOperationType(type).setIdempotencyKey(key)
-                .setRequestHash(requestHash).setState("PROCESSING").setCreatedAt(System.currentTimeMillis());
-        // BaseEntity fluent setters are typed to BaseEntity, so scope fields must be applied after
-        // the concrete operation chain rather than changing the local variable's static type.
-        operation.setTenantId(scope.tenantId());
-        operation.setClientId(scope.clientId());
-        try { dao.insertOperation(operation); return new Claim(operation, true); }
-        catch (DuplicateKeyException raced) {
-            existing = dao.findOperationByIdempotency(scope.tenantId(), scope.clientId(), scope.ownerJiacn(), type, key);
+        try {
+            return claimTx.claimOnce(scope, type, key, requestHash);
+        } catch (DuplicateKeyException raced) {
+            var existing = claimTx.findAfterRace(scope, type, key);
             if (existing == null) throw raced;
-            return existingClaim(existing, requestHash);
+            return PersonalWorkspaceOperationClaimTx.existingClaim(existing, requestHash);
         }
     }
 
@@ -62,7 +50,8 @@ public class PersonalWorkspaceWriteService {
         if (file.getLatestVersion() == null || file.getLatestVersion() != expectedPreviousVersion) {
             throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.VERSION_CONFLICT);
         }
-        dao.insertVersion(version); file.setLatestVersion(version.getVersion()); dao.updateFile(file);
+        dao.insertVersion(version); file.setLatestVersion(version.getVersion())
+                .setMetadataRevision(Math.addExact(file.getMetadataRevision(), 1L)); dao.updateFile(file);
         complete(operation, fileId, version.getVersion()); return file;
     }
 
@@ -98,11 +87,7 @@ public class PersonalWorkspaceWriteService {
         if (impactRevision != file.getMetadataRevision() || !acknowledgeExistingReferences) {
             throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.METADATA_CHANGED);
         }
-        // Task-link writes lock this same file row before adding/removing an ACTIVE reference.
-        // Therefore this query observes a stable acknowledgement set until this transaction commits.
-        if (taskLinks != null) {
-            taskLinks.listActiveByFile(scope.tenantId(), scope.clientId(), scope.ownerJiacn(), fileId, 100);
-        }
+        // All reference/grant writers serialize on this file row and advance its revision.
         file.setState("TRASHED").setMetadataRevision(file.getMetadataRevision() + 1L); dao.updateFile(file);
         complete(operation, fileId, file.getLatestVersion()); return file;
     }
@@ -123,10 +108,6 @@ public class PersonalWorkspaceWriteService {
         }
     }
 
-    private Claim existingClaim(PersonalWorkspaceOperationEntity existing, String requestHash) {
-        if (!requestHash.equals(existing.getRequestHash())) throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.IDEMPOTENCY_CONFLICT);
-        return new Claim(existing, false);
-    }
     private void requireProcessing(Scope scope, PersonalWorkspaceOperationEntity operation) {
         PersonalWorkspaceOperationEntity current = dao.findOperation(scope.tenantId(), scope.clientId(), scope.ownerJiacn(), operation.getOperationId());
         if (current == null) throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.NOT_FOUND);

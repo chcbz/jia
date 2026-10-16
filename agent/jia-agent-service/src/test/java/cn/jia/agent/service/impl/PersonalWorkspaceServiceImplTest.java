@@ -421,7 +421,7 @@ class PersonalWorkspaceServiceImplTest {
         private final InMemoryDao dao = new InMemoryDao(events);
         private final RecordingStorage storage = new RecordingStorage(events);
         private final PersonalWorkspaceService service = new PersonalWorkspaceServiceImpl(
-                dao, storage, new PersonalWorkspaceWriteService(dao));
+                dao, storage, new PersonalWorkspaceWriteService(dao, new cn.jia.agent.service.impl.PersonalWorkspaceOperationClaimTx(dao)));
     }
 
     private static final class RecordingStorage implements PersonalWorkspaceStorage {
@@ -475,6 +475,11 @@ class PersonalWorkspaceServiceImplTest {
     }
 
     private static final class InMemoryDao implements PersonalWorkspaceDao {
+        @Override public UsageSnapshot findUsage(String tenantId, String clientId, String ownerJiacn, String fileId) {
+            var file = findFile(tenantId, clientId, ownerJiacn, fileId);
+            return file == null ? null : new UsageSnapshot(fileId, file.getMetadataRevision(), 0, 0, 0);
+        }
+
         private final List<String> events;
         private final AtomicLong ids = new AtomicLong();
         private final Map<FileKey, PersonalWorkspaceFileEntity> files = new LinkedHashMap<>();

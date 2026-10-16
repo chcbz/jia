@@ -28,8 +28,16 @@ class PersonalWorkspaceWriteServiceTest {
         assertNull(create.getAnnotation(Transactional.class));
         assertNull(append.getAnnotation(Transactional.class));
 
-        assertTransaction("claim", Propagation.REQUIRES_NEW,
+        var claim = PersonalWorkspaceWriteService.class.getMethod("claim",
                 PersonalWorkspaceWriteService.Scope.class, String.class, String.class, String.class);
+        assertEquals(Propagation.NOT_SUPPORTED, claim.getAnnotation(Transactional.class).propagation());
+        var claimOnce = PersonalWorkspaceOperationClaimTx.class.getMethod("claimOnce",
+                PersonalWorkspaceWriteService.Scope.class, String.class, String.class, String.class);
+        assertEquals(Propagation.REQUIRES_NEW, claimOnce.getAnnotation(Transactional.class).propagation());
+        assertArrayEquals(new Class<?>[] {Exception.class}, claimOnce.getAnnotation(Transactional.class).rollbackFor());
+        var afterRace = PersonalWorkspaceOperationClaimTx.class.getMethod("findAfterRace",
+                PersonalWorkspaceWriteService.Scope.class, String.class, String.class);
+        assertEquals(Propagation.REQUIRES_NEW, afterRace.getAnnotation(Transactional.class).propagation());
         assertTransaction("fail", Propagation.REQUIRES_NEW,
                 PersonalWorkspaceWriteService.Scope.class,
                 PersonalWorkspaceOperationEntity.class, String.class);

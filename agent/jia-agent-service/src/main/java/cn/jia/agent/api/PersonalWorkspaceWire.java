@@ -18,8 +18,13 @@ public final class PersonalWorkspaceWire {
     public static OperationView from(PersonalWorkspaceViews.OperationView v) { return v == null ? null : new OperationView(v.operationId(), v.state(), v.fileId(), v.fileVersion() == null ? null : v.fileVersion().toString(), v.errorCode()); }
     public record UploadView(OperationView operation, FileView file, VersionView version) { }
     public static UploadView from(PersonalWorkspaceViews.UploadView v) { return v == null ? null : new UploadView(from(v.operation()), from(v.file()), from(v.version())); }
-    public record UsageView(String impactRevision, List<TaskReferenceView> taskReferences, List<Object> activeExecutions) { }
-    public static UsageView from(PersonalWorkspaceViews.UsageView v) { return v == null ? null : new UsageView(String.valueOf(v.impactRevision()), v.taskReferences().stream().map(PersonalWorkspaceWire::from).toList(), v.activeExecutions()); }
+    public record UsageCounts(String taskReferences, String conversationReferences, String activeInputGrants) { }
+    public record UsageView(String fileId, String impactRevision, UsageCounts counts) { }
+    public static UsageView from(PersonalWorkspaceViews.UsageView v) {
+        return v == null ? null : new UsageView(v.fileId(), String.valueOf(v.impactRevision()),
+                new UsageCounts(String.valueOf(v.counts().taskReferences()),
+                        String.valueOf(v.counts().conversationReferences()), String.valueOf(v.counts().activeInputGrants())));
+    }
     public record TaskReferenceView(String taskId, String relationId, String version, String role, String relationRevision, long createdAt) { }
     public static TaskReferenceView from(PersonalWorkspaceViews.TaskReferenceView v) { return v == null ? null : new TaskReferenceView(v.taskId(), v.relationId(), String.valueOf(v.version()), v.role(), String.valueOf(v.relationRevision()), v.createdAt()); }
     public record ConversationLinkView(String relationId, String conversationId, String fileId, String version, String role, String state, String relationRevision, long createdAt) { }

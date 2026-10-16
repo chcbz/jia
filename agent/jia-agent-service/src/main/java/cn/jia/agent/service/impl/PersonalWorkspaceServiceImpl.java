@@ -1,8 +1,6 @@
 package cn.jia.agent.service.impl;
 
 import cn.jia.agent.dao.PersonalWorkspaceDao;
-import cn.jia.agent.dao.PersonalWorkspaceTaskLinkDao;
-import cn.jia.agent.dao.PersonalWorkspaceExecutionDao;
 import cn.jia.agent.entity.PersonalWorkspaceFileEntity;
 import cn.jia.agent.entity.PersonalWorkspaceOperationEntity;
 import cn.jia.agent.entity.PersonalWorkspaceVersionEntity;
@@ -52,19 +50,11 @@ public class PersonalWorkspaceServiceImpl implements PersonalWorkspaceService {
     private final PersonalWorkspaceDao dao;
     private final PersonalWorkspaceStorage storage;
     private final PersonalWorkspaceWriteService writes;
-    private final PersonalWorkspaceTaskLinkDao taskLinks;
-    private final PersonalWorkspaceExecutionDao executionDao;
     private final PersonalWorkspacePreviewRenderer previewRenderer = new PersonalWorkspacePreviewRenderer();
 
     @Inject public PersonalWorkspaceServiceImpl(PersonalWorkspaceDao dao, PersonalWorkspaceStorage storage,
-            PersonalWorkspaceWriteService writes, PersonalWorkspaceTaskLinkDao taskLinks,
-            PersonalWorkspaceExecutionDao executionDao) {
-        this.dao=dao; this.storage=storage; this.writes=writes; this.taskLinks=taskLinks; this.executionDao=executionDao;
-    }
-    /** Compatibility constructor for narrow isolated unit fixtures. */
-    public PersonalWorkspaceServiceImpl(PersonalWorkspaceDao dao, PersonalWorkspaceStorage storage,
             PersonalWorkspaceWriteService writes) {
-        this(dao, storage, writes, null, null);
+        this.dao=dao; this.storage=storage; this.writes=writes;
     }
 
     @Override public PersonalWorkspaceViews.ListView list(Scope scope, ListQuery query) {
@@ -244,17 +234,14 @@ public class PersonalWorkspaceServiceImpl implements PersonalWorkspaceService {
         }
     }
     @Override public PersonalWorkspaceViews.UsageView usage(Scope scope,String fileId){
-        PersonalWorkspaceFileEntity f=file(scope,fileId);
-        List<PersonalWorkspaceViews.TaskReferenceView> references=taskLinks==null?List.of():taskLinks
-                .listActiveByFile(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),fileId,100)
-                .stream().map(link->new PersonalWorkspaceViews.TaskReferenceView(link.getTaskId(),
-                        link.getRelationId(),link.getFileVersion(),link.getLinkRole(),
-                        link.getRelationRevision(),link.getCreatedAt())).toList();
-        List<Object> activeExecutions=executionDao==null?List.of():executionDao
-                .listActiveExecutionIdsByFile(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),fileId,100)
-                .stream().map(executionId -> (Object) new ActiveExecutionView(executionId)).toList();
-        return new PersonalWorkspaceViews.UsageView(f.getMetadataRevision(),references,activeExecutions);
+        validateScope(scope); id(fileId,"fileId",100);
+        var snapshot = dao.findUsage(scope.tenantId(), scope.clientId(), scope.ownerJiacn(), fileId);
+        if (snapshot == null) throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.NOT_FOUND);
+        return new PersonalWorkspaceViews.UsageView(snapshot.fileId(), snapshot.impactRevision(),
+                new PersonalWorkspaceViews.UsageCounts(snapshot.taskReferences(),
+                        snapshot.conversationReferences(), snapshot.activeInputGrants()));
     }
+
     @Override public PersonalWorkspaceViews.OperationView operation(Scope scope,String operationId){validateScope(scope);PersonalWorkspaceOperationEntity o=dao.findOperation(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),operationId);if(o==null)throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.NOT_FOUND);return operation(o);}
 
     private LoadedPreview renderPreview(Scope scope,String fileId,int version){return renderPreview(scope,versionEntity(scope,fileId,version));}
@@ -300,7 +287,6 @@ public class PersonalWorkspaceServiceImpl implements PersonalWorkspaceService {
     private static String cursor(PersonalWorkspaceFileEntity f){return Base64.getUrlEncoder().withoutPadding().encodeToString((f.getCreatedAt()+"\n"+f.getFileId()).getBytes(StandardCharsets.UTF_8));}
     private static Cursor parseCursor(String value){if(value==null||value.isBlank())return null;try{String s=new String(Base64.getUrlDecoder().decode(value),StandardCharsets.UTF_8);String[]p=s.split("\\n",-1);if(p.length!=2)bad();long t=Long.parseLong(p[0]);id(p[1],"cursor",100);return new Cursor(t,p[1]);}catch(IllegalArgumentException e){bad();return null;}}
     private static void bad(){throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.BAD_REQUEST);}
-    public record ActiveExecutionView(String executionId) { }
     private record LoadedPreview(PersonalWorkspaceVersionEntity version,PersonalWorkspacePreviewRenderer.RenderedPreview rendered) { }
     private record ValidUpload(String key,String displayName,String filename,String mime,byte[] content) { }
     private record Cursor(long createdAt,String fileId) { }

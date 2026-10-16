@@ -29,6 +29,10 @@ public class PersonalWorkspaceDaoImpl implements PersonalWorkspaceDao {
         this.operations = Objects.requireNonNull(operations, "operations");
     }
 
+    @Override public UsageSnapshot findUsage(String tenantId, String clientId, String ownerJiacn, String fileId) {
+        requireScope(tenantId, clientId, ownerJiacn); requireId(fileId, "fileId", 100);
+        return files.selectUsage(tenantId, clientId, ownerJiacn, fileId);
+    }
     @Override public PersonalWorkspaceFileEntity findFile(String tenantId, String clientId,
             String ownerJiacn, String fileId) {
         requireScope(tenantId, clientId, ownerJiacn); requireId(fileId, "fileId", 100);
