@@ -801,6 +801,18 @@ dependencies {
     add(executionHistoryHttpSourceSet.runtimeOnlyConfigurationName, 'org.junit.platform:junit-platform-launcher:6.0.1')
     add(executionHistoryHttpSourceSet.runtimeOnlyConfigurationName, libs.mysql)
 }
+// Real HTTP contract tests must use the application's resolved dependency versions,
+// not the smaller service graph (which can select a different Servlet response implementation).
+// Resolve consistently rather than hardcoding a Spring upgrade in this test fixture.
+gradle.projectsEvaluated {
+    def applicationRuntime = project(':starter').configurations.runtimeClasspath
+    configurations.named(executionHistoryHttpSourceSet.compileClasspathConfigurationName) {
+        shouldResolveConsistentlyWith(applicationRuntime)
+    }
+    configurations.named(executionHistoryHttpSourceSet.runtimeClasspathConfigurationName) {
+        shouldResolveConsistentlyWith(applicationRuntime)
+    }
+}
 tasks.register('executionHistoryHttp', Test) {
     group = 'verification'
     description = 'Real loopback HTTP/JWT/production service/MyBatis/private MySQL/shared frontend contract.'
