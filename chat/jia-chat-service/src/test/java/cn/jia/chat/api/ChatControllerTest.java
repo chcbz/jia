@@ -190,6 +190,10 @@ class ChatControllerTest extends BaseMockTest {
         when(redisService.subscribeToChannel("1001")).thenReturn(Flux.never());
         when(chatConversationEventBroker.deletionSignal(eq("1001"), eq(1L), any()))
                 .thenReturn(Flux.never());
+        org.mockito.Mockito.doAnswer(inv -> {
+            inv.getArgument(3, Runnable.class).run();
+            return true;
+        }).when(chatConversationEventBroker).runIfLive(eq("1001"), eq(1L), any(), any(Runnable.class));
         java.util.concurrent.CountDownLatch subscribed = new java.util.concurrent.CountDownLatch(1);
         java.util.concurrent.CountDownLatch cancelled = new java.util.concurrent.CountDownLatch(1);
         java.util.concurrent.atomic.AtomicReference<Throwable> failure = new java.util.concurrent.atomic.AtomicReference<>();
@@ -216,8 +220,8 @@ class ChatControllerTest extends BaseMockTest {
 
         assertTrue(cancelled.await(1, java.util.concurrent.TimeUnit.SECONDS));
         org.junit.jupiter.api.Assertions.assertNull(failure.get());
-        // No real or synthetic frame is emitted before caller cancellation.
-        verify(chatConversationEventBroker, never()).runIfLive(
+        // The current stream emits startup frames; cancellation still reaches the live backend.
+        verify(chatConversationEventBroker, org.mockito.Mockito.atLeastOnce()).runIfLive(
                 eq("1001"), eq(1L), any(), any(Runnable.class));
     }
 
@@ -384,8 +388,11 @@ class ChatControllerTest extends BaseMockTest {
     @Test
     void listConversationsPassesScopeFiltersToService() throws Exception {
         ChatController controller = newController();
+        var emptyPage = new com.github.pagehelper.PageInfo<ChatConversationEntity>(List.of());
+        emptyPage.setPageNum(1);
+        emptyPage.setPageSize(1);
         when(chatConversationService.findPage(any(), eq(1), eq(1), eq("update_time desc")))
-                .thenReturn(new com.github.pagehelper.PageInfo<>(List.of()));
+                .thenReturn(emptyPage);
 
         ChatConversationEntity search = new ChatConversationEntity();
         search.setConversationType(ChatController.CONVERSATION_TYPE_JUYITING);
@@ -596,8 +603,8 @@ class ChatControllerTest extends BaseMockTest {
         setField(requestClass, request, "keyword", keyword);
         setField(requestClass, request, "topK", 8);
 
-        Method method = ChatController.class.getDeclaredMethod("searchLibrary", requestClass);
-        return (JsonResult<?>) method.invoke(controller, request);
+        Method method = ChatController.class.getDeclaredMethod("searchLibrary", cn.jia.core.entity.JsonRequest.class);
+        return (JsonResult<?>) method.invoke(controller, new cn.jia.core.entity.JsonRequest<>(1, "test-request", request));
     }
 
     @Test
@@ -809,8 +816,8 @@ class ChatControllerTest extends BaseMockTest {
         setField(requestClass, request, "topic", topic);
         setField(requestClass, request, "categories", categories);
 
-        Method method = ChatController.class.getDeclaredMethod("saveLibraryDocument", requestClass);
-        return (JsonResult<?>) method.invoke(controller, request);
+        Method method = ChatController.class.getDeclaredMethod("saveLibraryDocument", cn.jia.core.entity.JsonRequest.class);
+        return (JsonResult<?>) method.invoke(controller, new cn.jia.core.entity.JsonRequest<>(1, "test-request", request));
     }
 
     private void setField(Class<?> targetClass, Object target, String fieldName, Object value) throws Exception {

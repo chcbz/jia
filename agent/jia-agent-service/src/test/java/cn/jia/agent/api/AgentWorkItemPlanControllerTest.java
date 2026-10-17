@@ -58,7 +58,7 @@ class AgentWorkItemPlanControllerTest {
                         .principal(jwt("Tenant-A", "Client-A")))
                 .andExpect(status().isOk())
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
-                .andExpect(jsonPath("$.confirmationRequired").value(true));
+                .andExpect(jsonPath("$.data.confirmationRequired").value(true));
 
         var request = org.mockito.ArgumentCaptor.forClass(
                 AgentWorkItemPlanSuggestRequestDTO.class);
@@ -168,8 +168,8 @@ class AgentWorkItemPlanControllerTest {
                         .principal(jwt("tenant-a", "client-a")))
                 .andExpect(status().isOk())
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
-                .andExpect(jsonPath("$.confirmed").value(true))
-                .andExpect(jsonPath("$.idempotentReplay").value(true));
+                .andExpect(jsonPath("$.data.confirmed").value(true))
+                .andExpect(jsonPath("$.data.idempotentReplay").value(true));
 
         verify(service).confirm(org.mockito.ArgumentMatchers.eq("0"),
                 org.mockito.ArgumentMatchers.eq("client-a"),

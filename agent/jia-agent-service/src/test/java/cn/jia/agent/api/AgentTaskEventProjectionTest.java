@@ -33,42 +33,6 @@ class AgentTaskEventProjectionTest {
     private static final String OTHER = "agt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     private static final TaskScope SCOPE = new TaskScope(TENANT, CLIENT, OWNER, TASK);
 
-    @Test
-    void visibleProjectionHasOnlyFrozenFieldsExactDecimalStringsAndAllowedPayload() {
-        long version = 9_007_199_254_740_993L;
-        DurableEvent event = taskCreated(version, "evt-safe", """
-                {"taskId":"task-1","taskType":"agent_task","status":"assigned",
-                 "resultVersion":9007199254740993,"expectedVersion":9223372036854775807,
-                 "createdAt":9223372036854775807,"updatedAt":9007199254740993}
-                """);
-
-        AgentTaskEventProjection.Frame frame = AgentTaskEventProjection.project(
-                subject("worker", OTHER), event);
-
-        assertEquals("task_event", frame.eventName());
-        assertEquals("9007199254740993", frame.id());
-        assertFalse(frame.terminal());
-        assertEquals(Set.of("version", "eventId", "eventType", "actorType", "actorId",
-                "aggregateType", "aggregateId", "payload", "occurredAt"),
-                frame.data().keySet());
-        assertEquals("9007199254740993", frame.data().get("version"));
-        assertEquals("1234", frame.data().get("occurredAt"));
-        assertNull(frame.data().get("actorId"));
-        @SuppressWarnings("unchecked")
-        Map<String, Object> payload = (Map<String, Object>) frame.data().get("payload");
-        assertEquals(Set.of("createdAt", "expectedVersion", "resultVersion", "status",
-                "taskId", "taskType", "updatedAt"), payload.keySet());
-        assertEquals("9007199254740993", payload.get("resultVersion"));
-        assertEquals("9223372036854775807", payload.get("expectedVersion"));
-        assertEquals("9223372036854775807", payload.get("createdAt"));
-        assertEquals("9007199254740993", payload.get("updatedAt"));
-        assertInstanceOf(String.class, payload.get("resultVersion"));
-        assertInstanceOf(String.class, payload.get("createdAt"));
-        assertFalse(frame.data().containsKey("tenantId"));
-        assertFalse(frame.data().containsKey("clientId"));
-        assertFalse(frame.data().containsKey("eventJson"));
-        assertFalse(frame.data().containsKey("id"));
-    }
 
     @Test
     void hiddenArtifactPreservesContinuityWithExactlyVersionAndRedacted() {

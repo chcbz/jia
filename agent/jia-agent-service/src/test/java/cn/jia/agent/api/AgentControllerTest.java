@@ -79,7 +79,7 @@ class AgentControllerTest {
                 "0", "Client-A", "task-001", request);
         Method method = AgentController.class.getDeclaredMethod(
                 "recommendTaskTeam", String.class,
-                AgentTaskTeamRecommendationRequestDTO.class, Authentication.class);
+                cn.jia.core.entity.JsonRequest.class, Authentication.class);
         assertArrayEquals(new String[]{"/tasks/{taskId}/team-recommendation"},
                 method.getAnnotation(PostMapping.class).value());
         assertNull(method.getAnnotation(AllowSensitiveOutput.class));

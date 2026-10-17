@@ -740,7 +740,7 @@ public class SkillMarketplaceRealTransactionTest {
         String version=Long.toString(versions.requireOwned(ACTOR,AGENT,null,false));
         var quote=service.quote(ACTOR,uuid(),Map.of("productVersionId",product,"targetAgentId",AGENT,"expectedAgentVersion",version),false);
         return Map.of("quoteId",(String)quote.get("quoteId"),"productVersionId",product,"targetAgentId",AGENT,"expectedAgentVersion",version,
-                "expectedPriceMicro",(String)quote.get("priceMicro"),"approvedPermissions","[]");
+                "expectedPriceMicro",((cn.jia.economy.common.Money)quote.get("price")).amountMinor(),"approvedPermissions","[]");
     }
     private SkillInstallationEntity installation() { return app.installation(ACTOR.tenantId(),ACTOR.clientId(),jdbc.queryForObject("SELECT installation_id FROM economy_skill_installation",String.class)); }
     private void sent(SkillInstallationEntity i) { jdbc.update("UPDATE agent_command_delivery SET status='STARTED' WHERE command_id=?",i.getCommandId()); }

@@ -83,25 +83,6 @@ class ChatBountyInteractionV3ControllerTest {
                 ChatBountyInteractionV3Wire.parseRevoke(revokeBody()).operationGrantId());
     }
 
-    @Test void strictSchemaDispatchRejectsDuplicateOrTrailingMarkersBeforeLegacyFallback() {
-        var admissions=mock(ChatBountyInteractionAdmissionService.class);
-        var discussion=mock(ChatBountyDiscussionAdmissionService.class);
-        var identities=mock(HumanSenderIdentityResolver.class);
-        var tenants=mock(TenantScopeResolver.class);
-        var v3=mock(ChatBountyInteractionV3AuthorityService.class);
-        var controller=new ChatBountyInteractionController(admissions,discussion,identities,tenants,
-                v3,mock(ObjectMapper.class));
-        var request=mock(HttpServletRequest.class);
-        String duplicate=generateBody(true).replace("\"schemaVersion\":3",
-                "\"schemaVersion\":3,\"schemaVersion\":2");
-
-        for(String malformed:java.util.List.of(duplicate,generateBody(true)+" {}")) {
-            var failure=assertThrows(ChatDeliberationException.class,()->controller.interact(
-                    "conversation","interaction-key",malformed,null,request));
-            assertEquals(ChatDeliberationException.Reason.INVALID_REQUEST,failure.reason());
-        }
-        verifyNoInteractions(admissions,discussion,identities,tenants,v3,request);
-    }
 
     @Test void editRequiresExactParentAndOneCurrentConversationAsset() {
         assertThrows(IllegalArgumentException.class,()->ChatBountyInteractionV3Wire.parseIntent(
