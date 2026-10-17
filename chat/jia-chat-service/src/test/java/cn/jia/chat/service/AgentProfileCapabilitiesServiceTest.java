@@ -50,7 +50,7 @@ class AgentProfileCapabilitiesServiceTest {
     }
     @Test void readyNeedsExactTrustedProofAndNoTaskGrant() {
         var proof = new AgentRuntimeAuthenticationService.Proof(new AgentRuntimeAuthentication.Scope("0", "client", "owner", "agent", "runtime"), "installation", "host", 1, "a".repeat(64), 1, 1);
-        when(runtimes.currentRegisteredProof("0", "client", "agent")).thenReturn(proof);
+        doReturn(proof).when(runtimes).currentRegisteredProof("0", "client", "agent");
         when(capabilities.inspectInstalledSkills(eq(scope), any())).thenReturn(new ChatActionCapabilityService.InstalledCatalog("999999999999999999999", List.of(candidate(true, "RUNTIME_READY", null))));
         var result = service.read(actor, "agent"); assertEquals("RUNTIME_READY", result.skills().items().getFirst().runtimeState());
         assertEquals("999999999999999999999", result.skills().catalogRevision());
@@ -71,9 +71,9 @@ class AgentProfileCapabilitiesServiceTest {
         offline(candidate(true, "UNAVAILABLE", "PROVIDER_NEW_REASON")); assertTrue(service.read(actor, "agent").skills().items().getFirst().installationVerified());
     }
     @Test void proofScopeMismatchAndObservationIllegalArgumentAreNotTreatedAsOffline() {
-        when(runtimes.currentRegisteredProof("0", "client", "agent")).thenReturn(new AgentRuntimeAuthenticationService.Proof(new AgentRuntimeAuthentication.Scope("0", "client", "other-owner", "agent", "runtime"), "installation", "host", 1, "a".repeat(64), 1, 1));
+        doReturn(new AgentRuntimeAuthenticationService.Proof(new AgentRuntimeAuthentication.Scope("0", "client", "other-owner", "agent", "runtime"), "installation", "host", 1, "a".repeat(64), 1, 1)).when(runtimes).currentRegisteredProof("0", "client", "agent");
         assertThrows(IllegalStateException.class, () -> service.read(actor, "agent")); verifyNoInteractions(capabilities);
-        when(runtimes.currentRegisteredProof("0", "client", "agent")).thenThrow(new IllegalArgumentException("missing"));
+        doThrow(new IllegalArgumentException("missing")).when(runtimes).currentRegisteredProof("0", "client", "agent");
         when(capabilities.inspectInstalledSkillsWithoutRuntime(scope)).thenThrow(new IllegalArgumentException("bad directory"));
         assertThrows(IllegalArgumentException.class, () -> service.read(actor, "agent"));
     }

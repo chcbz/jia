@@ -75,11 +75,11 @@ class AgentProfileCapabilitiesControllerTest {
         verifyNoInteractions(profiles);
     }
     @Test void ownerRejectionAgentRejectionAndInfrastructureHaveDistinctSafeStatuses() throws Exception {
-        when(profiles.read(any(), any())).thenThrow(new HostingRentApplicationException(403, "private owner detail"));
+        doThrow(new HostingRentApplicationException(403, "private owner detail")).when(profiles).read(any(), any());
         mvc.perform(get("/agent/agent/profile-capabilities").principal(login)).andExpect(status().isNotFound());
-        when(profiles.read(any(), any())).thenThrow(new AgentServiceImpl.AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN, "secret"));
+        doThrow(new AgentServiceImpl.AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN, "secret")).when(profiles).read(any(), any());
         mvc.perform(get("/agent/agent/profile-capabilities").principal(login)).andExpect(status().isNotFound());
-        when(profiles.read(any(), any())).thenThrow(new IllegalStateException("secret database path"));
+        doThrow(new IllegalStateException("secret database path")).when(profiles).read(any(), any());
         mvc.perform(get("/agent/agent/profile-capabilities").principal(login)).andExpect(status().isServiceUnavailable())
                 .andExpect(jsonPath("$.code").value("AGENT_PROFILE_UNAVAILABLE")).andExpect(jsonPath("$.data").isEmpty())
                 .andExpect(content().string(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("secret"))));
