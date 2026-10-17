@@ -25,20 +25,30 @@ public final class ChatActionCapabilityService {
     /** Installation/runtime observation, NOT availableActions or a task authorization grant.
      * I16/I18 must separately re-admit the selected skill under the current task/assignment. */
     public record SkillCandidate(String skillKey, String skillVersion, String title,
-            String state, String reasonCode, String metadataJson) { }
+            String state, String reasonCode, String metadataJson, boolean installationVerified) { }
     public record InstalledCatalog(String catalogRevision, List<SkillCandidate> items) {
         public InstalledCatalog { items = List.copyOf(items); }
     }
     public InstalledCatalog inspectInstalledSkills(Scope scope,
             cn.jia.agent.service.AgentManagedSessionLookup.SessionFence expectedFence) {
-        Objects.requireNonNull(scope);
         cn.jia.agent.service.SkillCapabilityLookup.validateFence(expectedFence);
-        if(installedSkills==null||skillRuntimes==null)
+        return observeInstalledSkills(scope, expectedFence);
+    }
+
+    /** Owner-only profile observation without a trusted live runtime; never creates a fence. */
+    public InstalledCatalog inspectInstalledSkillsWithoutRuntime(Scope scope) {
+        return observeInstalledSkills(scope, null);
+    }
+
+    private InstalledCatalog observeInstalledSkills(Scope scope,
+            cn.jia.agent.service.AgentManagedSessionLookup.SessionFence expectedFence) {
+        Objects.requireNonNull(scope);
+        if(installedSkills==null||(expectedFence!=null&&skillRuntimes==null))
             throw new cn.jia.agent.service.InstalledSkillDescriptorLookup.SourceUnavailable();
         var key=new cn.jia.agent.service.SkillCapabilityLookup.Scope(scope.tenantId(),scope.clientId(),
                 scope.ownerJiacn(),scope.targetAgentId());
         var descriptors=installedSkills.read(key);
-        var runtime=Objects.requireNonNull(skillRuntimes.lookup(key,expectedFence));
+        var runtime=expectedFence==null?null:Objects.requireNonNull(skillRuntimes.lookup(key,expectedFence));
         var results=new ArrayList<SkillCandidate>();
         var counts=new java.util.HashMap<List<String>,Integer>();
         for(var descriptor:descriptors.skills())
@@ -63,6 +73,7 @@ public final class ChatActionCapabilityService {
             } else if(reason==null) reason="SKILL_INSTALLATION_EVIDENCE_INVALID";
             if(counts.get(List.of(descriptor.skillKey(),descriptor.skillVersion()))!=1)
                 reason="SKILL_INSTALLATION_AMBIGUOUS";
+            if(reason==null && runtime==null) reason="SKILL_RUNTIME_UNAVAILABLE";
             if(reason==null && runtime.state()!=cn.jia.agent.service.SkillCapabilityLookup.State.AVAILABLE)
                 reason="SKILL_RUNTIME_"+runtime.state().name();
             if(reason==null) {
@@ -84,16 +95,17 @@ public final class ChatActionCapabilityService {
                 }
             }
             results.add(new SkillCandidate(descriptor.skillKey(),descriptor.skillVersion(),title,
-                    reason==null?"RUNTIME_READY":"UNAVAILABLE",reason,metadata));
+                    reason==null?"RUNTIME_READY":"UNAVAILABLE",reason,metadata,
+                    descriptor.verified()&&counts.get(List.of(descriptor.skillKey(),descriptor.skillVersion()))==1));
         }
         // Fence/live directory is rechecked after the join. No old READY survives a reconnect.
-        if(runtime.state()==cn.jia.agent.service.SkillCapabilityLookup.State.AVAILABLE
+        if(runtime!=null&&runtime.state()==cn.jia.agent.service.SkillCapabilityLookup.State.AVAILABLE
                 && !runtime.equals(skillRuntimes.lookup(key,expectedFence))) {
             results.replaceAll(item->new SkillCandidate(item.skillKey(),item.skillVersion(),item.title(),
-                    "UNAVAILABLE","SKILL_RUNTIME_CHANGED",item.metadataJson()));
+                    "UNAVAILABLE","SKILL_RUNTIME_CHANGED",item.metadataJson(),item.installationVerified()));
             return new InstalledCatalog(null,results);
         }
-        return new InstalledCatalog(runtime.catalog()==null?null:runtime.catalog().catalogRevision(),results);
+        return new InstalledCatalog(runtime==null||runtime.catalog()==null?null:runtime.catalog().catalogRevision(),results);
     }
 
     private final cn.jia.agent.service.TaskSkillPolicyService policies;
@@ -136,7 +148,7 @@ public final class ChatActionCapabilityService {
                     metadata=publicMetadata.toString();
                 } catch(java.io.IOException malformed) {throw new cn.jia.agent.service.InstalledSkillDescriptorLookup.SourceUnavailable(malformed);}
                 list.add(new SkillCandidate(d.skillKey(),d.skillVersion(),title,"UNAVAILABLE",
-                        d.reasonCode()!=null?d.reasonCode():"SKILL_RUNTIME_UNAVAILABLE",metadata));
+                        d.reasonCode()!=null?d.reasonCode():"SKILL_RUNTIME_UNAVAILABLE",metadata,d.verified()));
             }
             observed=new InstalledCatalog(null,list);
         }

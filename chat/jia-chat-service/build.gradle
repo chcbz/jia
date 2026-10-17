@@ -41,6 +41,8 @@ dependencies {
 	testImplementation project(':agent:jia-agent-service')
 	testImplementation project(':agent:jia-agent-mapper')
 	testImplementation project(':oauth:jia-oauth-api')
+    // Exercise the actual browser JWT chain for the private profile GET, not a mocked principal only.
+    testImplementation project(':oauth:jia-oauth-resource')
 	testImplementation libs.spring.ai.starter.mcp.client
 	testImplementation "org.springframework.ai:spring-ai-starter-model-openai:${libs.versions.spring.ai.asProvider().get()}"
 	testImplementation libs.spring.boot.starter.websocket
