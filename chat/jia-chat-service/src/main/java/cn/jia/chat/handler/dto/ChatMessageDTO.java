@@ -25,7 +25,9 @@ public class ChatMessageDTO {
     private Boolean forceNewConversation;
     /** Stable client idempotency identity. Old clients may omit it. */
     private String requestId;
-    /** Monotonic request body revision; defaults to 1. */
+    /** Positive decimal string on the wire; keep the internal revision exact as a Long. */
+    @tools.jackson.databind.annotation.JsonDeserialize(using = ChatRequestRevisionDeserializer.class)
+    @tools.jackson.databind.annotation.JsonSerialize(using = cn.jia.chat.serialization.ExactLongIdSerializer.class)
     private Long requestRevision;
     /** Untrusted routing hint. Only chat and inspect are accepted by /chat/stream. */
     private String interactionHint;

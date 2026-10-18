@@ -51,7 +51,13 @@ class ChatStreamHttpTest {
         var controller = new ChatController(model, conversations, redis, mock(ChatClient.Builder.class),
                 new ChatConversationEventBroker(), mock(BuiltinHallAgentSupport.class), mock(JuyitingConversationScopeService.class),
                 relay, mock(MemoryRepository.class), mock(AgentTaskThreadMemoryGuard.class), identity);
-        mvc = MockMvcBuilders.standaloneSetup(controller).addFilters(new RequestIdFilter()).build();
+        var converters = new java.util.ArrayList<org.springframework.http.converter.HttpMessageConverter<?>>();
+        converters.add(new org.springframework.http.converter.json.JacksonJsonHttpMessageConverter());
+        new cn.jia.core.config.ApiEnvelopeJsonConfig().extendMessageConverters(converters);
+        mvc = MockMvcBuilders.standaloneSetup(controller)
+                .setMessageConverters(converters.toArray(org.springframework.http.converter.HttpMessageConverter<?>[]::new))
+                .setControllerAdvice(new cn.jia.core.config.ApiRequestEnvelopeAdvice(), new cn.jia.core.config.ExceptionHandlerAdvice())
+                .addFilters(new RequestIdFilter()).build();
         var scope = new EsContext(); scope.setTenantId("0"); scope.setJiacn("owner"); scope.setClientId("client");
         EsContextHolder.setContext(scope);
     }
@@ -94,11 +100,32 @@ class ChatStreamHttpTest {
         assertEquals("chat.stream.started", wire.getFirst().get("messageType"));
         assertTrue(wire.stream().noneMatch(frame -> "chat.stream.completed".equals(frame.get("messageType"))));
     }
+    @Test void rejectsNonCanonicalRevisionBeforeRelay() throws Exception {
+        for (String value : List.of("1", "1.0", "true", "\"01\"", "\"0\"", "\"-1\"",
+                "\"+1\"", "\" 1\"", "\"1.0\"", "\"9223372036854775808\"", "{}", "[]")) {
+            String input = "{\"protocolVersion\":1,\"requestId\":\"transport\",\"data\":{\"content\":\"hello\","
+                    + "\"conversationId\":\"42\",\"conversationType\":\"juyiting\",\"requestRevision\":" + value + "}}";
+            mvc.perform(post("/chat/stream").contentType(MediaType.APPLICATION_JSON)
+                    .header("X-Request-Id", "transport").content(input))
+                    .andExpect(status().isBadRequest());
+        }
+        verifyNoInteractions(relay, model, redis);
+    }
+
+    @Test void revisionRoundTripPreservesLargeExactValue() {
+        var input = new cn.jia.chat.handler.dto.ChatMessageDTO();
+        input.setRequestRevision(Long.MAX_VALUE);
+        String json = JsonUtil.getMapper().writeValueAsString(input);
+        assertTrue(json.contains("\"requestRevision\":\"9223372036854775807\""));
+        assertEquals(Long.MAX_VALUE, JsonUtil.getMapper().readValue(json,
+                cn.jia.chat.handler.dto.ChatMessageDTO.class).getRequestRevision());
+    }
+
     private void frames(Flux<String> stream) {
         when(relay.relay(any(), eq("42"), any(), any())).thenReturn(new JuyitingAgentRelayResult(true, Mono.just(true), stream));
     }
     private List<Map> read() throws Exception {
-        String requestJson = "{\"protocolVersion\":1,\"requestId\":\"transport\",\"data\":{\"content\":\"hello\",\"conversationId\":\"42\",\"conversationType\":\"juyiting\"}}";
+        String requestJson = "{\"protocolVersion\":1,\"requestId\":\"transport\",\"data\":{\"content\":\"hello\",\"conversationId\":\"42\",\"conversationType\":\"juyiting\",\"requestRevision\":\"1\"}}";
         var pending = mvc.perform(post("/chat/stream").contentType(MediaType.APPLICATION_JSON)
                 .header("X-Request-Id", "transport").content(requestJson).accept(MediaType.TEXT_EVENT_STREAM))
                 .andExpect(request().asyncStarted()).andReturn();
