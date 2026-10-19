@@ -13,7 +13,7 @@ public interface HallReadService {
     record TargetAgent(String agentId) { }
     record ItemSummary(Ref ref, String title, Status status, TargetAgent targetAgent,
                        String nextAction, List<String> allowedActions, long updatedAt,
-                       PersonalMark personalMark, Review review) { }
+                       PersonalMark personalMark, Review review, String phase) { }
     record PersonalMark(long revision, boolean archived, HallPrivateMarkService.ResultRef viewedResultRef) { }
     record Review(String code, String deliveryId, String workItemId, String deliveryVersion, String taskVersion) { }
     /** count is unknown (null); complete means the source query succeeded, not end-of-pagination. */

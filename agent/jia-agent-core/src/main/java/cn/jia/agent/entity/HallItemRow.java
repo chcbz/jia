@@ -14,6 +14,7 @@ public class HallItemRow {
     private String sourceId;
     private String title;
     private String state;
+    private String phase;
     private String targetAgentId;
     private Long updatedAt;
     private String executionId;

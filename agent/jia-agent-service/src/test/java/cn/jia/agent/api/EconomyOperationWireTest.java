@@ -50,7 +50,7 @@ class EconomyOperationWireTest {
     @Test void hallReadMarkUsesExactDecimalRevisionWithoutChangingStoredView() {
         var input = new HallReadService.ItemSummary(new HallReadService.Ref("PRIVATE_CASE","case"),"title",
                 new HallReadService.Status("QUEUED","PERSISTED",100),null,"VIEW",java.util.List.of("VIEW"),100,
-                new HallReadService.PersonalMark(9007199254740993L,true,null),null);
+                new HallReadService.PersonalMark(9007199254740993L,true,null),null,null);
         var value = json.readTree(json.writeValueAsString(HallReadWire.from(input)));
         assertEquals("9007199254740993",value.get("personalMark").get("revision").asText());
         assertTrue(value.get("personalMark").get("viewedResultRef").isNull());

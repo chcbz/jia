@@ -15,7 +15,7 @@ final class HallReadWire {
     @JsonInclude(JsonInclude.Include.ALWAYS)
     record ItemSummary(HallReadService.Ref ref, String title, HallReadService.Status status,
                        HallReadService.TargetAgent targetAgent, String nextAction, List<String> allowedActions,
-                       long updatedAt, PersonalMark personalMark, HallReadService.Review review) { }
+                       long updatedAt, PersonalMark personalMark, HallReadService.Review review, String phase) { }
     @JsonInclude(JsonInclude.Include.ALWAYS)
     record Partition(List<ItemSummary> items, String status, String nextCursor, String count, String errorCode) { }
     record Section(String status, Map<String, Partition> partitions) { }
@@ -26,7 +26,7 @@ final class HallReadWire {
     static ItemSummary from(HallReadService.ItemSummary v) {
         var mark = v.personalMark();
         return new ItemSummary(v.ref(),v.title(),v.status(),v.targetAgent(),v.nextAction(),v.allowedActions(),v.updatedAt(),
-                mark == null ? null : new PersonalMark(Long.toString(mark.revision()),mark.archived(),mark.viewedResultRef()),v.review());
+                mark == null ? null : new PersonalMark(Long.toString(mark.revision()),mark.archived(),mark.viewedResultRef()),v.review(),v.phase());
     }
     static Section from(HallReadService.Section v) {
         Map<String, Partition> partitions = new LinkedHashMap<>();

@@ -42,10 +42,18 @@ class HallReadMapperContractTest {
         assertTrue(review.contains("CAST(ownw.owner_jiacn AS BINARY)"));
         assertTrue(review.contains("w.lease_token IS NULL"));
         assertTrue(review.contains("agent_task_formal_delivery_item"));
-        assertFalse(sql.contains("QUEUED")); assertFalse(sql.contains("completed'"));
+        assertFalse(sql.contains("QUEUED")); assertFalse(sql.contains("CAST('completed' AS BINARY)"));
         assertTrue(sql.contains("CAST(p.jiacn AS BINARY)"));
         assertTrue(HallReadSql.page(Map.of("kind", "task", "view", "archive")).contains("CAST('archived' AS BINARY)"));
         assertThrows(IllegalArgumentException.class,
                 () -> HallReadSql.page(Map.of("kind", "draft", "view", "archive")));
     }
+    @Test void overviewUsesExactlyTheBoardPhaseExpressionAndDisabledSchemaNeverQueriesDelivery() {
+        String active=HallReadSql.page(Map.of("kind","task","view","recent","formalEnabled",true));
+        assertTrue(active.contains(AgentTaskPhaseSql.PHASE.replace("task.","t.").replace("&gt;",">")));
+        assertTrue(active.contains(" AS phase")); assertFalse(active.contains("&gt;"));
+        String disabled=HallReadSql.page(Map.of("kind","task","view","recent","formalEnabled",false));
+        assertFalse(disabled.contains("agent_task_formal_delivery")); assertTrue(disabled.contains("ELSE 'UNKNOWN' END AS phase"));
+    }
+
 }

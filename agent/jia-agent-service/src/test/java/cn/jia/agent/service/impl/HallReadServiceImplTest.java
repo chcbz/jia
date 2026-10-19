@@ -116,7 +116,7 @@ class HallReadServiceImplTest {
         assertEquals(2,item.personalMark().revision()); assertTrue(item.personalMark().archived());
         assertEquals("fixed",item.personalMark().viewedResultRef().manifestId()); assertNull(item.review());
         service = new HallReadServiceImpl(dao,()->1000L,true);
-        var task = row("TASK","task","reviewing",9).setReviewReady(true).setDeliveryId("delivery")
+        var task = row("TASK","task","reviewing",9).setPhase("PENDING_ACCEPTANCE").setReviewReady(true).setDeliveryId("delivery")
                 .setWorkItemId("work").setDeliveryVersion(0L).setTaskVersion(4L);
         when(dao.page("0","client-a","owner-a","task","needsAction","",null,null,null,21)).thenReturn(List.of(task));
         var partition = service.items(SCOPE,"task","needsAction",null,null).section().partitions().get("task");
@@ -125,11 +125,15 @@ class HallReadServiceImplTest {
         assertNull(item.personalMark()); assertEquals(List.of("OPEN_TASK"),item.allowedActions());
         task.setReviewReady(false);
         assertEquals("error",service.items(SCOPE,"task","needsAction",null,null).section().status());
+        task.setPhase("UNKNOWN").setReviewReady(true);
+        var unknown=service.items(SCOPE,"task","needsAction",null,null).section().partitions().get("task");
+        assertEquals("complete",unknown.status()); assertEquals("UNKNOWN",unknown.items().getFirst().phase());
+        assertNull(unknown.items().getFirst().review());
     }
 
     private static HallItemRow row(String type, String id, String state, long time) {
         return new HallItemRow().setTenantId("0").setClientId("client-a").setOwnerJiacn("owner-a")
-                .setSourceType(type).setSourceId(id).setTitle("name").setState(state).setUpdatedAt(time)
+                .setSourceType(type).setPhase("TASK".equals(type)?"UNKNOWN":null).setSourceId(id).setTitle("name").setState(state).setUpdatedAt(time)
                 .setExecutionId(id).setMarkRevision(0L).setArchived(false);
     }
     private static void assertBad(Runnable call) {

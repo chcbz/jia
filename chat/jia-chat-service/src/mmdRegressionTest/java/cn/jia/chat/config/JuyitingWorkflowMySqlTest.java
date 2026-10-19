@@ -104,6 +104,7 @@ class JuyitingWorkflowMySqlTest {
         var manager=new DataSourceTransactionManager(source);
         tx=new TransactionTemplate(manager);
         app=new AnnotationConfigApplicationContext();
+        app.getEnvironment().getPropertySources().addFirst(new org.springframework.core.env.MapPropertySource("owned-test-gates",Map.of("chat.delivery-review.enabled","true")));
         app.register(Transactions.class);
         app.registerBean("transactionManager",DataSourceTransactionManager.class,()->manager);
         app.registerBean(ChatTaskDeliveryReviewStore.class,()->new ChatTaskDeliveryReviewStore(jdbc));
@@ -341,7 +342,8 @@ class JuyitingWorkflowMySqlTest {
         jdbc.update("INSERT INTO agent_task_formal_delivery VALUES('0','client','1005','second','submitted',0,2)");
         jdbc.update("INSERT INTO agent_task_formal_delivery VALUES('0','client','1007','second','changes_requested',0,2)");
         // Case-folding and padding at the default source-table collation must not widen authority.
-        for(String wrong:List.of("OWNER","owner ")) jdbc.update("INSERT INTO agent_task_meta(tenant_id,client_id,owner_jiacn,task_id,reward_status,task_version) VALUES('0','client',?,?,'completed',7)",wrong,"foreign-"+wrong);
+        int foreignId=0;
+        for(String wrong:List.of("OWNER","owner ")) jdbc.update("INSERT INTO agent_task_meta(tenant_id,client_id,owner_jiacn,task_id,reward_status,task_version) VALUES('0','client',?,?,'completed',7)",wrong,"foreign-"+(foreignId++));
         var config=new com.baomidou.mybatisplus.core.MybatisConfiguration(); config.setMapUnderscoreToCamelCase(true);
         config.setEnvironment(new org.apache.ibatis.mapping.Environment("owned-review-mysql",new org.mybatis.spring.transaction.SpringManagedTransactionFactory(),jdbc.getDataSource()));
         config.addMapper(cn.jia.agent.mapper.AgentTaskMetaMapper.class);
@@ -363,6 +365,22 @@ class JuyitingWorkflowMySqlTest {
             assertEquals(count,mapper.searchPageExactInScope("0","client","owner",null,null,"检索目标",0,99,phase).size());
         }
         assertEquals(0,mapper.countSearchExactInScope("0","CLIENT","owner",null,null,null,null));
+        // The overview is an independent keyset source, but TASK phases must have one classifier.
+        jdbc.execute("ALTER TABLE task_plan ADD tenant_id VARCHAR(50) NOT NULL DEFAULT '0'");
+        jdbc.execute("ALTER TABLE agent_task_formal_delivery ADD id BIGINT NOT NULL AUTO_INCREMENT UNIQUE, ADD work_item_id VARCHAR(100), ADD reviewed_at BIGINT, ADD review_reason TEXT, ADD manifest_artifact_id VARCHAR(100), ADD manifest_artifact_version INT DEFAULT 1, ADD submitted_at BIGINT DEFAULT 1");
+        jdbc.update("UPDATE agent_task_formal_delivery SET work_item_id=CONCAT('work-',task_id),manifest_artifact_id=CONCAT('manifest-',task_id)");
+        jdbc.execute("CREATE TABLE agent_task_work_item(tenant_id VARCHAR(50),client_id VARCHAR(50),owner_jiacn VARCHAR(50),task_id VARCHAR(100),work_item_id VARCHAR(100),status VARCHAR(32),result_artifact_id VARCHAR(100),version BIGINT,lease_token VARCHAR(100),lease_until BIGINT)");
+        jdbc.update("INSERT INTO agent_task_work_item SELECT DISTINCT tenant_id,client_id,'owner',task_id,work_item_id,'submitted',manifest_artifact_id,0,NULL,NULL FROM agent_task_formal_delivery");
+        jdbc.execute("CREATE TABLE agent_task_formal_delivery_item(tenant_id VARCHAR(50),client_id VARCHAR(50),delivery_id VARCHAR(100))");
+        jdbc.update("INSERT INTO agent_task_formal_delivery_item SELECT DISTINCT tenant_id,client_id,delivery_id FROM agent_task_formal_delivery");
+        config.addMapper(cn.jia.agent.mapper.HallReadMapper.class);
+        var hall=new org.mybatis.spring.SqlSessionTemplate(new org.apache.ibatis.session.SqlSessionFactoryBuilder().build(config)).getMapper(cn.jia.agent.mapper.HallReadMapper.class);
+        var summaries=hall.page("0","client","owner","task","recent","",null,null,null,99,true);
+        var overviewPhases=new HashMap<String,String>();summaries.forEach(row->overviewPhases.put(row.getSourceId(),row.getPhase()));
+        assertEquals(expected,overviewPhases);
+        var unknown=summaries.stream().filter(row->"1005".equals(row.getSourceId())).findFirst().orElseThrow();
+        assertEquals("UNKNOWN",unknown.getPhase()); // two submitted batches cannot be promoted by overview's latest-only join.
+
     }
     private static void await(CyclicBarrier gate) { try { gate.await(); } catch(Exception failure) {throw new IllegalStateException(failure);} }
     private static <T> List<T> concurrent(Supplier<T> body) throws Exception {
