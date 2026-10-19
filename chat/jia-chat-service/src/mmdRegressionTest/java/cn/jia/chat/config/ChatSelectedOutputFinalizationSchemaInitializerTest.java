@@ -14,6 +14,8 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.never;
 
 class ChatSelectedOutputFinalizationSchemaInitializerTest {
     @Test
@@ -79,8 +81,8 @@ class ChatSelectedOutputFinalizationSchemaInitializerTest {
     }
 
     @Test
-    void actualRepairedMysqlCheckDefinitionsAreAcceptedDespiteCaseInsensitiveMetadataLabels() throws Exception {
-        invokeChecks(actualCheckRows(1,null,null));
+    void submissionDefinitionsAreAcceptedAndHistoricalMysqlSnapshotIsUpgradeOnly() throws Exception {
+        invokeChecks(submissionCheckRows());
     }
 
     @Test
@@ -127,6 +129,36 @@ class ChatSelectedOutputFinalizationSchemaInitializerTest {
         assertFalse(upgrade.contains("UPDATE "));assertFalse(upgrade.contains("DROP "));
     }
 
+    @Test void knownPredecessorIsUpgradedButTargetIsNoOpAndUnknownDriftFailsBeforeDdl() throws Exception {
+        var old=mock(JdbcTemplate.class);
+        when(old.queryForList(anyString())).thenReturn(actualCheckRows(1,null,null));
+        ChatSelectedOutputFinalizationSchemaInitializer.upgradeSubmissionChecks(old);
+        verify(old).execute(org.mockito.ArgumentMatchers.contains("ALTER TABLE chat_selected_output_finalization"));
+        var current=mock(JdbcTemplate.class);
+        when(current.queryForList(anyString())).thenReturn(submissionCheckRows());
+        ChatSelectedOutputFinalizationSchemaInitializer.upgradeSubmissionChecks(current);
+        verify(current,never()).execute(anyString());
+        for(var rows:List.of(actualCheckRows(0,null,null),actualCheckRows(1,"chk_csof_terminal","1=1"),List.<Map<String,Object>>of())) {
+            var drift=mock(JdbcTemplate.class);when(drift.queryForList(anyString())).thenReturn(rows);
+            assertThrows(IllegalStateException.class,()->ChatSelectedOutputFinalizationSchemaInitializer.upgradeSubmissionChecks(drift));
+            verify(drift,never()).execute(anyString());
+        }
+    }
+
+    // Target canonical expression derived from predecessor, not claimed as a new MySQL capture.
+    private static List<Map<String,Object>> submissionCheckRows() throws Exception {
+        var rows=actualCheckRows(1,null,null);
+        for(var row:rows) {
+            String name=(String)row.get("CONSTRAINT_NAME");String value=(String)row.get("CHECK_CLAUSE");
+            if(value!=null)value=value.replace("\\'", "'");
+            if("chk_csof_progress".equals(name))value=value.replace("_utf8mb4'submitted',_utf8mb4'changes_requested'",
+                    "_utf8mb4'submitted',_utf8mb4'accepted',_utf8mb4'changes_requested'");
+            if("chk_csof_terminal".equals(name)) value="(((`state` = _utf8mb4'completed') and (`stage` = _utf8mb4'SUBMITTED') and (`delivery_id` is not null) and (`delivery_state` is not null) and (`delivery_state` in (_utf8mb4'submitted',_utf8mb4'accepted',_utf8mb4'changes_requested')) and (`error_code` is null) and (`retryable` = 0)) or "+value.substring(1);
+            row.put("CHECK_CLAUSE",value);
+        }
+        return rows;
+    }
+
     private static String clause(int snapshot,String check) throws Exception {
         try(var in=new org.springframework.core.io.ClassPathResource("mmd-finalization-schema-checks-mysql8021.json").getInputStream()){
             return new tools.jackson.databind.ObjectMapper().readTree(in).get("snapshots").get(snapshot)
@@ -167,6 +199,7 @@ class ChatSelectedOutputFinalizationSchemaInitializerTest {
             indexes.put("PRIMARY",List.of("tenant_id","owner_jiacn","client_id","operation_id"));
             indexes.put("uk_csof_request",List.of("tenant_id","owner_jiacn","client_id","task_id","idempotency_key"));
             indexes.put("idx_csof_task",List.of("tenant_id","owner_jiacn","client_id","task_id","updated_at"));
+            indexes.put("idx_csof_delivery",List.of("tenant_id","owner_jiacn","client_id","task_id","delivery_id"));
         }else{
             indexes.put("PRIMARY",List.of("tenant_id","owner_jiacn","client_id","operation_id","item_order"));
             indexes.put("uk_csofi_source",List.of("tenant_id","owner_jiacn","client_id","operation_id","request_id","step_id","output_id"));

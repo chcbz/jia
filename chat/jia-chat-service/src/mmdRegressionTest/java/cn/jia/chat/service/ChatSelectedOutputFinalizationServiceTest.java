@@ -23,9 +23,9 @@ class ChatSelectedOutputFinalizationServiceTest {
     void actualHappyPathPreservesExactOrderedSelectionAcrossAllDurablePhases() {
         Fixture f=new Fixture();f.sourceReady();f.agentHappy();f.advanceByArguments();
         var receipt=f.service.submit(f.scope,"task-1",Fixture.KEY,f.command());
-        assertEquals("completed",receipt.state());assertEquals("TASK_COMPLETED",receipt.stage());
-        assertEquals("accepted",receipt.deliveryState());assertEquals("completed",receipt.taskState());
-        assertEquals("10",receipt.taskVersion());assertEquals(f.command().selectedOutputs(),receipt.selectedOutputs());
+        assertEquals("completed",receipt.state());assertEquals("SUBMITTED",receipt.stage());
+        assertEquals("submitted",receipt.deliveryState());assertEquals("reviewing",receipt.taskState());
+        assertEquals("9",receipt.taskVersion());assertEquals(f.command().selectedOutputs(),receipt.selectedOutputs());
         verify(f.agent).prepare(any(),argThat(v->v.outputs().size()==1
                 && v.outputs().getFirst().bytes().length==f.bytes.length
                 && "exec-1".equals(v.outputs().getFirst().executionId())
@@ -47,7 +47,6 @@ class ChatSelectedOutputFinalizationServiceTest {
                     anyString(),anyString(),anyString());
             verifyNoInteractions(f.executions);verify(f.agent,never()).prepare(any(),any());
             verify(f.agent,never()).submit(any(),anyString(),anyString(),anyString());
-            verify(f.agent,never()).accept(any(),anyString(),anyString(),anyString());
         }
     }
 
@@ -94,13 +93,10 @@ class ChatSelectedOutputFinalizationServiceTest {
             });
             when(f.agent.submit(any(),eq("task-1"),anyString(),anyString())).thenAnswer(i->
                     view(i.getArgument(2),"SUBMITTED","delivery-1","submitted","reviewing",9));
-            when(f.agent.accept(any(),eq("task-1"),anyString(),anyString())).thenAnswer(i->
-                    view(i.getArgument(2),"TASK_COMPLETED","delivery-1","accepted","completed",10));
             assertEquals("completed",f.service.submit(f.scope,"task-1",Fixture.KEY,f.command()).state(),recovered);
             verifyNoInteractions(f.deliberations,f.steps,f.executions);
             verify(f.agent,never()).prepare(any(),any());
             if(!"READY_TO_SUBMIT".equals(recovered))verify(f.agent,never()).submit(any(),anyString(),anyString(),anyString());
-            if("TASK_COMPLETED".equals(recovered))verify(f.agent,never()).accept(any(),anyString(),anyString(),anyString());
         }
     }
 
@@ -135,25 +131,14 @@ class ChatSelectedOutputFinalizationServiceTest {
 
 
     @Test
-    void changesRequestedRaceDuringAcceptanceKeepsMonotonicStageAndTruthfulDomainState(){
+    void historicalPendingAcceptanceIsReadOnlyAndCannotResumeAutomaticDecision() {
         Fixture f=new Fixture();f.advanceByArguments();
-        var accepting=new ChatSelectedOutputFinalizationStore.Operation("op-1","task-1",Fixture.KEY,"b".repeat(64),
+        f.resumeAt(new ChatSelectedOutputFinalizationStore.Operation("op-1","task-1",Fixture.KEY,"b".repeat(64),
                 "100",7,7,"accept it","pending","ACCEPTING",5,"delivery-1","submitted","reviewing",9,
-                null,false,f.selections);
-        // Preserve the real deterministic operation identity/digest emitted by submit. A static
-        // op-1 here would fail validateView before exercising the intended acceptance race.
-        f.resumeAt(accepting);
-        when(f.agent.reconcile(any(),eq("task-1"),anyString(),anyString())).thenAnswer(i->
-                view(i.getArgument(2),"SUBMITTED","delivery-1","changes_requested","running",10));
-        var receipt=f.service.submit(f.scope,"task-1",Fixture.KEY,f.command());
-        assertEquals("failed",receipt.state());assertEquals("ACCEPTING",receipt.stage());
-        assertEquals("changes_requested",receipt.deliveryState());
-        assertEquals("FINALIZATION_DELIVERY_CHANGES_REQUESTED",receipt.errorCode());
-        assertEquals("running",receipt.taskState());assertEquals("10",receipt.taskVersion());
-        verify(f.agent,never()).accept(any(),anyString(),anyString(),anyString());
-        verifyNoInteractions(f.deliberations,f.steps,f.executions);
-        verify(f.store).advance(anyString(),anyString(),anyString(),any(),eq("pending"),eq("ACCEPTING"),
-                eq("delivery-1"),eq("changes_requested"),eq("running"),eq(10L),isNull(),eq(false));
+                null,false,f.selections));
+        assertThrows(ChatSelectedOutputFinalizationStore.Conflict.class,
+                ()->f.service.submit(f.scope,"task-1",Fixture.KEY,f.command()));
+        verifyNoInteractions(f.agent,f.deliberations,f.steps,f.executions);
     }
 
     @Test
@@ -162,10 +147,9 @@ class ChatSelectedOutputFinalizationServiceTest {
         when(f.agent.reconcile(any(),eq("task-1"),anyString(),anyString())).thenAnswer(i->
                 view(i.getArgument(2),"SUBMITTED","delivery-1","changes_requested","running",10));
         var receipt=f.service.submit(f.scope,"task-1",Fixture.KEY,f.command());
-        assertEquals("failed",receipt.state());assertEquals("SUBMITTED",receipt.stage());
+        assertEquals("completed",receipt.state());assertEquals("SUBMITTED",receipt.stage());
         assertEquals("changes_requested",receipt.deliveryState());
-        assertEquals("FINALIZATION_DELIVERY_CHANGES_REQUESTED",receipt.errorCode());
-        verify(f.agent,never()).accept(any(),anyString(),anyString(),anyString());
+        assertNull(receipt.errorCode());
     }
 
 
@@ -181,7 +165,6 @@ class ChatSelectedOutputFinalizationServiceTest {
         var receipt=f.service.submit(f.scope,"task-1",Fixture.KEY,f.command());
         assertEquals("failed",receipt.state());assertEquals("SUBMITTED",receipt.stage());
         assertEquals("FINALIZATION_INTERNAL_ERROR",receipt.errorCode());assertTrue(receipt.retryable());
-        verify(f.agent,never()).accept(any(),anyString(),anyString(),anyString());
         verify(f.store,never()).advance(anyString(),anyString(),anyString(),any(),eq("pending"),anyString(),
                 nullable(String.class),nullable(String.class),anyString(),anyLong(),nullable(String.class),anyBoolean());
     }
@@ -330,8 +313,6 @@ class ChatSelectedOutputFinalizationServiceTest {
         });
         when(agent.submit(any(),eq("task"),anyString(),anyString())).thenAnswer(i->
                 new AgentSelectedOutputFinalizationService.PromotionView(i.getArgument(2),"task","SUBMITTED","delivery","submitted","reviewing",9));
-        when(agent.accept(any(),eq("task"),anyString(),anyString())).thenAnswer(i->
-                new AgentSelectedOutputFinalizationService.PromotionView(i.getArgument(2),"task","TASK_COMPLETED","delivery","accepted","completed",10));
         var identities=mock(HumanSenderIdentityResolver.class);var tenants=mock(TenantScopeResolver.class);
         var authentication=mock(org.springframework.security.core.Authentication.class);
         when(tenants.resolve(authentication)).thenReturn("0");
@@ -346,7 +327,7 @@ class ChatSelectedOutputFinalizationServiceTest {
         request.setContentType("application/json");request.setContent(json.getBytes(StandardCharsets.UTF_8));
         var response=controller.submit("task","original-key",request,authentication);
         assertEquals(org.springframework.http.HttpStatus.OK,response.getStatusCode());
-        assertEquals("TASK_COMPLETED",response.getBody().getData().get("stage"));
+        assertEquals("SUBMITTED",response.getBody().getData().get("stage"));
         assertEquals(source.command.messageSource().finalDigest().substring(7),((java.util.Map<?,?>)((java.util.Map<?,?>)((List<?>)response.getBody().getData().get("selectedOutputs")).getFirst()).get("messageSource")).get("finalSha256"));
         int writes=jdbc.writes;
         var recovered=controller.byRequest("task","original-key",new org.springframework.mock.web.MockHttpServletRequest(),authentication);
@@ -447,8 +428,6 @@ class ChatSelectedOutputFinalizationServiceTest {
                 return view(c.operationId(),"READY_TO_SUBMIT",null,null,"running",8);});
             when(agent.submit(any(),eq("task-1"),anyString(),anyString())).thenAnswer(i->
                     view(i.getArgument(2),"SUBMITTED","delivery-1","submitted","reviewing",9));
-            when(agent.accept(any(),eq("task-1"),anyString(),anyString())).thenAnswer(i->
-                    view(i.getArgument(2),"TASK_COMPLETED","delivery-1","accepted","completed",10));
         }
         void resumeAt(ChatSelectedOutputFinalizationStore.Operation checkpoint){
             when(store.create(anyString(),anyString(),anyString(),anyString(),eq("task-1"),eq(KEY),anyString(),

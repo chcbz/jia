@@ -287,7 +287,9 @@ public class HallRequestDraftServiceImpl implements HallRequestDraftService {
             case "REVISION" -> submitRevision(scope, current, fields, idempotencyKey, submittedAt);
             case "TASK_ACTION" -> submitTaskAction(scope, current, fields, idempotencyKey);
             case "TASK_CREATE" -> {
-                TaskReference task = taskCreation.create(scope, fields.title(), fields.instruction());
+                String creationKey = "hall-task-" + hash(scope.tenantId(), scope.clientId(), scope.ownerJiacn(),
+                        draftId, idempotencyKey, Long.toString(expectedRevision));
+                TaskReference task = taskCreation.create(scope, creationKey, fields.title(), fields.instruction(), fields.inputs());
                 if (task == null || !safePersistedId(task.taskId(), 100)) throw failure(Reason.STORAGE_UNAVAILABLE);
                 yield new SubmissionWork(null, new SubmissionReference("TASK", task.taskId()), null);
             }
@@ -622,13 +624,8 @@ public class HallRequestDraftServiceImpl implements HallRequestDraftService {
     private void requireTaskCreate(HallRequestDraftEntity row, EditableFields fields) {
         if (taskCreation == null) throw failure(Reason.SUBMISSION_UNAVAILABLE);
         if (fields.title() == null || fields.title().isBlank()) throw failure(Reason.BAD_REQUEST);
-        // Existing taskPlanFor uses String.substring(0,30/200), not a new product-size gate.
-        if (fields.title().length() > 30 || (fields.instruction() != null && fields.instruction().length() > 200)) {
-            throw sourceUnavailable("title/instruction", "TASK_CREATE");
-        }
         if (fields.targetAgentId() != null) throw sourceUnavailable("targetAgentId", "TASK_CREATE");
         if (fields.outputMime() != null) throw sourceUnavailable("outputMime", "TASK_CREATE");
-        if (!fields.inputs().isEmpty()) throw sourceUnavailable("inputs", "TASK_CREATE");
         if (row.getSourceType() != null) throw sourceUnavailable("sourceRef", "TASK_CREATE");
         if (row.getConversationId() != null) throw sourceUnavailable("conversationId", "TASK_CREATE");
     }

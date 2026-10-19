@@ -80,6 +80,7 @@ public final class ChatSelectedOutputFinalizationService {
         requirePersistedReceipt(operation);
         if("completed".equals(operation.state())||("failed".equals(operation.state())&&!operation.retryable()))
             return receipt(operation);
+        if ("ACCEPTING".equals(operation.stage())) throw new ChatSelectedOutputFinalizationStore.Conflict();
         try {
             // A durable Agent commit wins before any now-stale source/version validation.
             try {
@@ -89,7 +90,6 @@ public final class ChatSelectedOutputFinalizationService {
                 if(!"PROMOTING".equals(operation.stage()))throw absent;
             }
             if("completed".equals(operation.state()))return receipt(operation);
-            if("changes_requested".equals(operation.deliveryState()))return changesRequested(scope,operation);
             if("PROMOTING".equals(operation.stage())) {
                 Resolved resolved=resolve(scope,valid);
                 var prepared=agent.prepare(agentScope(scope),new AgentSelectedOutputFinalizationService.PrepareCommand(
@@ -100,14 +100,6 @@ public final class ChatSelectedOutputFinalizationService {
             }
             if("READY_TO_SUBMIT".equals(operation.stage()))
                 operation=apply(scope,operation,agent.submit(agentScope(scope),taskId,operationId,immutable));
-            if("changes_requested".equals(operation.deliveryState()))return changesRequested(scope,operation);
-            if("SUBMITTED".equals(operation.stage()))
-                operation=store.advance(scope.tenantId(),scope.ownerJiacn(),scope.clientId(),operation,
-                        "pending","ACCEPTING",operation.deliveryId(),operation.deliveryState(),operation.taskState(),
-                        operation.taskVersion(),null,false);
-            if("ACCEPTING".equals(operation.stage()))
-                operation=apply(scope,operation,agent.accept(agentScope(scope),taskId,operationId,immutable));
-            if("changes_requested".equals(operation.deliveryState()))return changesRequested(scope,operation);
             return receipt(operation);
         } catch(RuntimeException failure) {
             if(failure instanceof ChatSelectedOutputFinalizationStore.Conflict)throw failure;
@@ -254,15 +246,9 @@ public final class ChatSelectedOutputFinalizationService {
         validateView(current,view);
         int currentRank=stageRank(current.stage()),incomingRank=stageRank(view.stage());
         if(incomingRank<currentRank) {
-            if("SUBMITTED".equals(view.stage())&&"changes_requested".equals(view.deliveryState())
-                    &&currentRank<=stageRank("ACCEPTING")) {
-                requireNonRegressingProjection(current,view);
-                return store.advance(scope.tenantId(),scope.ownerJiacn(),scope.clientId(),current,"pending",current.stage(),
-                        view.deliveryId(),view.deliveryState(),view.taskState(),view.taskVersion(),null,false);
-            }
             return current;
         }
-        String state="TASK_COMPLETED".equals(view.stage())?"completed":"pending";
+        String state=("SUBMITTED".equals(view.stage()) || "TASK_COMPLETED".equals(view.stage()))?"completed":"pending";
         if(incomingRank==currentRank) {
             requireNonRegressingProjection(current,view);
             if(sameProjection(current,state,view))return current;
@@ -282,8 +268,7 @@ public final class ChatSelectedOutputFinalizationService {
             return;
         }
         if("SUBMITTED".equals(view.stage())) {
-            if(view.deliveryId()==null || !("submitted".equals(view.deliveryState())
-                    || "changes_requested".equals(view.deliveryState())))
+            if(view.deliveryId()==null || !Set.of("submitted","accepted","changes_requested").contains(view.deliveryState()))
                 throw projectionInvalid();
             return;
         }
@@ -303,14 +288,6 @@ public final class ChatSelectedOutputFinalizationService {
                     && !"changes_requested".equals(incoming.deliveryState()))
                 || ("completed".equals(current.taskState()) && !"completed".equals(incoming.taskState())))
             throw projectionInvalid();
-    }
-    private Receipt changesRequested(Scope scope,ChatSelectedOutputFinalizationStore.Operation operation) {
-        if(!("failed".equals(operation.state())&&!operation.retryable()
-                &&"FINALIZATION_DELIVERY_CHANGES_REQUESTED".equals(operation.errorCode())))
-            operation=store.advance(scope.tenantId(),scope.ownerJiacn(),scope.clientId(),operation,
-                    "failed",operation.stage(),operation.deliveryId(),operation.deliveryState(),operation.taskState(),
-                    operation.taskVersion(),"FINALIZATION_DELIVERY_CHANGES_REQUESTED",false);
-        return receipt(operation);
     }
     private static boolean sameProjection(ChatSelectedOutputFinalizationStore.Operation current,String state,
             AgentSelectedOutputFinalizationService.PromotionView view) {
@@ -353,16 +330,20 @@ public final class ChatSelectedOutputFinalizationService {
                         v.requestId(),v.stepId(),v.outputId(),v.sha256(),v.title(),v.purpose(),v.messageSource())).toList());
         if(!expected.equals(row.digest()))throw persistence();
         boolean terminal="completed".equals(row.state());
-        if(terminal!=("TASK_COMPLETED".equals(row.stage())&&row.deliveryId()!=null
+        boolean submissionComplete="SUBMITTED".equals(row.stage())&&row.deliveryId()!=null
+                &&Set.of("submitted","accepted","changes_requested").contains(row.deliveryState())
+                &&row.errorCode()==null&&!row.retryable();
+        boolean historicalAcceptance="TASK_COMPLETED".equals(row.stage())&&row.deliveryId()!=null
                 &&"accepted".equals(row.deliveryState())&&"completed".equals(row.taskState())
-                &&row.errorCode()==null&&!row.retryable()))throw persistence();
+                &&row.errorCode()==null&&!row.retryable();
+        if(terminal && !(submissionComplete||historicalAcceptance))throw persistence();
+        if(!terminal && "TASK_COMPLETED".equals(row.stage()))throw persistence();
         if("pending".equals(row.state())&&(row.errorCode()!=null||row.retryable()))throw persistence();
         if("failed".equals(row.state())&&(row.errorCode()==null||row.errorCode().isBlank()))throw persistence();
         if(List.of("PROMOTING","READY_TO_SUBMIT").contains(row.stage())
                 &&(row.deliveryId()!=null||row.deliveryState()!=null))throw persistence();
         if(List.of("SUBMITTED","ACCEPTING").contains(row.stage())) {
-            if(row.deliveryId()==null||!("submitted".equals(row.deliveryState())
-                    || "changes_requested".equals(row.deliveryState())))throw persistence();
+            if(row.deliveryId()==null||!Set.of("submitted","accepted","changes_requested").contains(row.deliveryState()))throw persistence();
         }
         if(row.deliveryId()!=null)persistedId(row.deliveryId(),100);
     }

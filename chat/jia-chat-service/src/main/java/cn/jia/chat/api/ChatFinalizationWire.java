@@ -23,8 +23,10 @@ public final class ChatFinalizationWire {
             case "cancelled"->"CANCELLED";case "archived"->"ARCHIVED";default->throw invalid();};
         out.put("deliveryId",r.deliveryId());out.put("deliveryState",delivery);out.put("taskState",task);
         out.put("taskVersion",decimal(r.taskVersion(),false));out.put("errorCode",r.errorCode());out.put("retryable",r.retryable());
-        if("COMPLETED".equals(state)!= "TASK_COMPLETED".equals(r.stage()))throw invalid();
-        if("COMPLETED".equals(state)&&(!"ACCEPTED".equals(delivery)||!"COMPLETED".equals(task)||r.deliveryId()==null||r.errorCode()!=null||r.retryable()))throw invalid();
+        boolean historical="TASK_COMPLETED".equals(r.stage());
+        if(historical && (!"COMPLETED".equals(state)||!"ACCEPTED".equals(delivery)||!"COMPLETED".equals(task)))throw invalid();
+        if("COMPLETED".equals(state)&&(!Set.of("SUBMITTED","TASK_COMPLETED").contains(r.stage())
+                ||r.deliveryId()==null||delivery==null||r.errorCode()!=null||r.retryable()))throw invalid();
         if("FAILED".equals(state)&&(r.errorCode()==null||!ERRORS.contains(r.errorCode())))throw invalid();
         return Collections.unmodifiableMap(out);
     }

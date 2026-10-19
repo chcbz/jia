@@ -9,7 +9,6 @@ import java.util.List;
 public interface AgentSelectedOutputFinalizationService {
     PromotionView prepare(Scope scope, PrepareCommand command);
     PromotionView submit(Scope scope, String taskId, String operationId, String immutableDigest);
-    PromotionView accept(Scope scope, String taskId, String operationId, String immutableDigest);
     PromotionView reconcile(Scope scope, String taskId, String operationId, String immutableDigest);
 
     record Scope(String tenantId, String clientId, String ownerJiacn) { }

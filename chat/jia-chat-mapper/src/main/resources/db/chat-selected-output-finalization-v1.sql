@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS chat_selected_output_finalization (
   PRIMARY KEY (tenant_id,owner_jiacn,client_id,operation_id),
   UNIQUE KEY uk_csof_request (tenant_id,owner_jiacn,client_id,task_id,idempotency_key),
   KEY idx_csof_task (tenant_id,owner_jiacn,client_id,task_id,updated_at),
+  KEY idx_csof_delivery (tenant_id,owner_jiacn,client_id,task_id,delivery_id),
   CONSTRAINT chk_csof_versions CHECK (expected_task_version BETWEEN 0 AND 9007199254740991
     AND expected_assignment_revision BETWEEN 0 AND 9007199254740991
     AND state_version>0 AND task_version BETWEEN 0 AND 9007199254740991),
@@ -36,15 +37,18 @@ CREATE TABLE IF NOT EXISTS chat_selected_output_finalization (
   CONSTRAINT chk_csof_progress CHECK ((stage IN ('PROMOTING','READY_TO_SUBMIT')
       AND delivery_id IS NULL AND delivery_state IS NULL)
     OR (stage='SUBMITTED' AND delivery_id IS NOT NULL AND delivery_state IS NOT NULL
-      AND delivery_state IN ('submitted','changes_requested'))
+      AND delivery_state IN ('submitted','accepted','changes_requested'))
     OR (stage='ACCEPTING' AND delivery_id IS NOT NULL AND delivery_state IS NOT NULL
-      AND delivery_state IN ('submitted','changes_requested'))
+      AND delivery_state IN ('submitted','accepted','changes_requested'))
     OR (stage='TASK_COMPLETED' AND delivery_id IS NOT NULL AND delivery_state IS NOT NULL
       AND delivery_state='accepted')),
   CONSTRAINT chk_csof_outcome CHECK ((state='pending' AND error_code IS NULL AND retryable=0)
     OR (state='failed' AND error_code IS NOT NULL)
     OR (state='completed' AND error_code IS NULL AND retryable=0)),
-  CONSTRAINT chk_csof_terminal CHECK ((state='completed' AND stage='TASK_COMPLETED' AND delivery_id IS NOT NULL
+  CONSTRAINT chk_csof_terminal CHECK ((state='completed' AND stage='SUBMITTED' AND delivery_id IS NOT NULL
+    AND delivery_state IS NOT NULL AND delivery_state IN ('submitted','accepted','changes_requested')
+    AND error_code IS NULL AND retryable=0)
+    OR (state='completed' AND stage='TASK_COMPLETED' AND delivery_id IS NOT NULL
     AND delivery_state IS NOT NULL AND delivery_state='accepted'
     AND task_state='completed' AND error_code IS NULL AND retryable=0)
     OR (state<>'completed' AND stage<>'TASK_COMPLETED'))

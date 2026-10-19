@@ -2,7 +2,6 @@ package cn.jia.agent.service.impl;
 
 import cn.jia.agent.entity.AgentTaskArtifactPublishDTO;
 import cn.jia.agent.entity.AgentTaskArtifactViewDTO;
-import cn.jia.agent.entity.AgentTaskFormalDeliveryDecisionDTO;
 import cn.jia.agent.entity.AgentTaskFormalDeliveryItemDTO;
 import cn.jia.agent.entity.AgentTaskFormalDeliverySubmitDTO;
 import cn.jia.agent.entity.AgentTaskFormalDeliveryViewDTO;
@@ -16,7 +15,6 @@ import cn.jia.agent.service.AgentSelectedOutputFinalizationService;
 import cn.jia.agent.service.AgentTaskArtifactService;
 import cn.jia.agent.service.AgentTaskExecutionGrantException;
 import cn.jia.agent.service.AgentTaskExecutionGrantService;
-import cn.jia.agent.service.AgentTaskFormalDeliveryDecisionService;
 import cn.jia.agent.service.AgentTaskFormalDeliveryReadService;
 import cn.jia.agent.service.AgentTaskFormalDeliveryService;
 import cn.jia.agent.service.AgentTaskMutationTransaction;
@@ -57,7 +55,6 @@ public final class AgentSelectedOutputFinalizationServiceImpl implements AgentSe
     private final AgentTaskArtifactService artifacts;
     private final AgentTaskFormalDeliveryService submissions;
     private final AgentTaskFormalDeliveryReadService reads;
-    private final AgentTaskFormalDeliveryDecisionService decisions;
     private final ObjectMapper json;
 
     @Inject
@@ -66,12 +63,12 @@ public final class AgentSelectedOutputFinalizationServiceImpl implements AgentSe
             AgentWorkItemLeaseService leases, AgentTaskStateService taskStates,
             AgentTaskArtifactService artifacts, AgentTaskFormalDeliveryService submissions,
             AgentTaskFormalDeliveryReadService reads,
-            AgentTaskFormalDeliveryDecisionService decisions, ObjectMapper json) {
+            ObjectMapper json) {
         this.jdbc=Objects.requireNonNull(jdbc); this.transactions=Objects.requireNonNull(transactions);
         this.grants=Objects.requireNonNull(grants); this.leases=Objects.requireNonNull(leases);
         this.taskStates=Objects.requireNonNull(taskStates); this.artifacts=Objects.requireNonNull(artifacts);
         this.submissions=Objects.requireNonNull(submissions); this.reads=Objects.requireNonNull(reads);
-        this.decisions=Objects.requireNonNull(decisions); this.json=Objects.requireNonNull(json);
+        this.json=Objects.requireNonNull(json);
     }
 
     @Override
@@ -126,42 +123,6 @@ public final class AgentSelectedOutputFinalizationServiceImpl implements AgentSe
     }
 
     @Override
-    public PromotionView accept(Scope scope,String taskId,String operationId,String immutableDigest) {
-        validateLookup(scope,taskId,operationId,immutableDigest);
-        PromotionView committed=committedView(scope,taskId,operationId,immutableDigest);
-        if (committed!=null && "accepted".equals(committed.deliveryState())) return committed;
-        return transactions.executeWithLockedTaskRootInOwnerScope(scope.tenantId(),scope.clientId(),
-                scope.ownerJiacn(),taskId,root -> acceptLocked(scope,taskId,operationId,immutableDigest));
-    }
-
-    private PromotionView acceptLocked(Scope scope,String taskId,String operationId,String digest) {
-        PromotionView committed=committedView(scope,taskId,operationId,digest);
-        if (committed!=null && "accepted".equals(committed.deliveryState())) return committed;
-        Authority row=requireAuthority(scope,taskId,operationId,digest,true);
-        AgentTaskFormalDeliveryViewDTO delivery=findDelivery(scope,taskId,row.deliveryId());
-        if (delivery==null) throw conflict("Formal delivery has not been submitted");
-        if ("changes_requested".equals(delivery.getState())) {
-            TaskFact task=task(scope,taskId);
-            return new PromotionView(operationId,taskId,"SUBMITTED",row.deliveryId(),
-                    "changes_requested",task.state(),task.version());
-        }
-        if (!"accepted".equals(delivery.getState())) {
-            if (!"submitted".equals(delivery.getState()))throw conflict("Formal delivery is no longer acceptable");
-            AgentTaskFormalDeliveryDecisionDTO command=new AgentTaskFormalDeliveryDecisionDTO();
-            command.setDeliveryId(row.deliveryId()); command.setExpectedTaskVersion(delivery.getTaskVersion());
-            command.setExpectedDeliveryVersion(delivery.getDeliveryVersion()); command.setDecision("accepted");
-            delivery=collaboration(() -> decisions.decide(
-                    scope.tenantId(),scope.clientId(),taskId,scope.ownerJiacn(),command));
-        }
-        requireDelivery(delivery,row.deliveryId(),taskId,"accepted");
-        TaskFact task=task(scope,taskId);
-        if (!"completed".equals(task.state())) throw persistence("Accepted delivery did not complete task",null);
-        markAccepted(scope,row);
-        return new PromotionView(operationId,taskId,"TASK_COMPLETED",row.deliveryId(),
-                "accepted",task.state(),task.version());
-    }
-
-    @Override
     public PromotionView reconcile(Scope scope,String taskId,String operationId,String immutableDigest) {
         validateLookup(scope,taskId,operationId,immutableDigest);
         PromotionView committed=committedView(scope,taskId,operationId,immutableDigest);
@@ -201,7 +162,7 @@ public final class AgentSelectedOutputFinalizationServiceImpl implements AgentSe
                 row=requireAuthority(scope,taskId,operationId,digest,false);
             }
             if (!"ACCEPTED".equals(row.phase())) markAccepted(scope,row);
-            return new PromotionView(operationId,taskId,"TASK_COMPLETED",row.deliveryId(),
+            return new PromotionView(operationId,taskId,"SUBMITTED",row.deliveryId(),
                     "accepted",task.state(),task.version());
         }
         if ("ACCEPTED".equals(row.phase()))

@@ -46,21 +46,19 @@ class HallRequestDraftTaskCreateTest {
                 });
         when(drafts.find("0", "c", "o", "d")).thenAnswer(i -> submitted.get());
         var task = new HallRequestDraftService.TaskReference("42", "0");
-        when(creation.create(SCOPE, "title", "body")).thenReturn(task); when(creation.get(SCOPE, "42")).thenReturn(task);
+        when(creation.create(eq(SCOPE), matches("hall-task-[0-9a-f]{64}"), eq("title"), eq("body"), eq(List.of()))).thenReturn(task); when(creation.get(SCOPE, "42")).thenReturn(task);
         var receipt = service.submit(SCOPE, "d", 1, true, "key");
         assertNull(receipt.execution()); assertEquals(task, receipt.task()); assertEquals("TASK", receipt.ref().sourceType());
         assertEquals(receipt, service.submit(SCOPE, "d", 1, true, "key"));
         assertEquals(receipt, service.getSubmissionByIdempotencyKey(SCOPE, "key"));
-        verify(creation).create(SCOPE, "title", "body"); verifyNoInteractions(cases, executions);
+        verify(creation).create(eq(SCOPE), matches("hall-task-[0-9a-f]{64}"), eq("title"), eq("body"), eq(List.of())); verifyNoInteractions(cases, executions);
         assertReason(HallRequestDraftService.Reason.IDEMPOTENCY_CONFLICT,
                 () -> service.submit(SCOPE, "other", 1, true, "key"));
     }
-    @Test void unsupportedExecutionFieldsAndLossyTextFailBeforeReservation() {
+    @Test void unsupportedExecutionFieldsFailBeforeReservation() {
         editing.setTargetAgentId("agent");
         assertReason(HallRequestDraftService.Reason.SOURCE_UNAVAILABLE, () -> service.submit(SCOPE, "d", 1, true, "key"));
         editing.setTargetAgentId(null).setOutputMime(PersonalWorkspaceExecutionProperties.DOCX);
-        assertReason(HallRequestDraftService.Reason.SOURCE_UNAVAILABLE, () -> service.submit(SCOPE, "d", 1, true, "key"));
-        editing.setOutputMime(null).setTitle("t".repeat(31));
         assertReason(HallRequestDraftService.Reason.SOURCE_UNAVAILABLE, () -> service.submit(SCOPE, "d", 1, true, "key"));
         verify(drafts, never()).reserveSubmitIntent(any(), any(), any(), any(), anyLong(), any(), any(), anyLong());
         verifyNoInteractions(creation, cases, executions);
@@ -72,7 +70,7 @@ class HallRequestDraftTaskCreateTest {
     }
     @Test void taskFailureDoesNotMarkSubmissionAndCorruptExecutionOnTaskReceiptFailsClosed() {
         when(drafts.reserveSubmitIntent(eq("0"), eq("c"), eq("o"), eq("d"), eq(1L), eq("key"), anyString(), eq(1000L))).thenReturn(1);
-        when(creation.create(SCOPE, "title", "body")).thenThrow(new HallRequestDraftService.Failure(HallRequestDraftService.Reason.STORAGE_UNAVAILABLE));
+        when(creation.create(eq(SCOPE), matches("hall-task-[0-9a-f]{64}"), eq("title"), eq("body"), eq(List.of()))).thenThrow(new HallRequestDraftService.Failure(HallRequestDraftService.Reason.STORAGE_UNAVAILABLE));
         assertReason(HallRequestDraftService.Reason.STORAGE_UNAVAILABLE, () -> service.submit(SCOPE, "d", 1, true, "key"));
         verify(drafts, never()).markSubmitted(any(), any(), any(), any(), anyLong(), any(), any(), any(), any(), any(), anyLong());
         editing.setState("SUBMITTED").setSubmissionRef("42").setSubmitKey("key").setSubmitHash("hash").setSubmittedExecutionId("foreign");

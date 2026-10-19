@@ -33,7 +33,7 @@ import static org.mockito.Mockito.*;
 
 class AgentSelectedOutputFinalizationServiceImplTest {
     @Test
-    void actualHappyPathAtomicallyClaimsStartsPublishesSubmitsAndOwnerAcceptsWithoutLeakingToken() {
+    void actualHappyPathClaimsStartsPublishesAndSubmitsWithoutAcceptingOrLeakingToken() {
         Fixture f=new Fixture();
         var ready=f.service.prepare(f.scope,f.command("run-1"));
         assertEquals("READY_TO_SUBMIT",ready.stage());assertNull(ready.deliveryId());
@@ -41,9 +41,9 @@ class AgentSelectedOutputFinalizationServiceImplTest {
         var submitted=f.service.submit(f.scope,"task-1","op-1",f.digest);
         assertEquals("submitted",submitted.deliveryState());assertEquals("SUBMITTED",submitted.stage());
         assertNull(f.jdbc.leaseToken);
-        var completed=f.service.accept(f.scope,"task-1","op-1",f.digest);
-        assertEquals("TASK_COMPLETED",completed.stage());assertEquals("accepted",completed.deliveryState());
-        assertEquals("completed",completed.taskState());
+        var replay=f.service.reconcile(f.scope,"task-1","op-1",f.digest);
+        assertEquals("SUBMITTED",replay.stage());assertEquals("submitted",replay.deliveryState());
+        assertEquals("reviewing",replay.taskState());
         verify(f.leases).claim(anyString(),anyString(),anyString(),anyString(),eq("work-1"),any());
         verify(f.leases).start(anyString(),anyString(),anyString(),anyString(),eq("work-1"),any());
         verify(f.leases,never()).heartbeat(anyString(),anyString(),anyString(),anyString(),anyString(),any());
@@ -51,7 +51,7 @@ class AgentSelectedOutputFinalizationServiceImplTest {
         verify(f.artifacts,times(2)).publish(eq("0"),eq("client-1"),eq("owner-1"),eq("task-1"),eq("agent-1"),artifact.capture());
         assertTrue(artifact.getAllValues().stream().allMatch(v->"agent-1".equals(v.getProducerAgentId())));
         verify(f.submissions).submit(eq("0"),eq("client-1"),eq("owner-1"),eq("task-1"),eq("agent-1"),any());
-        verify(f.decisions).decide(eq("0"),eq("client-1"),eq("task-1"),eq("owner-1"),any());
+        verifyNoInteractions(f.decisions);
     }
 
     @Test
@@ -128,9 +128,9 @@ class AgentSelectedOutputFinalizationServiceImplTest {
         assertFalse(f.publishedManifest.get().contains("stepId"));assertFalse(f.publishedManifest.get().contains("executionId"));assertFalse(f.publishedManifest.get().contains("outputId"));
         assertFalse(f.publishedManifest.get().contains("\"runId\""));
         assertEquals("SUBMITTED",f.service.submit(f.scope,"task-1","op-1",command.immutableDigest()).stage());
-        assertEquals("TASK_COMPLETED",f.service.accept(f.scope,"task-1","op-1",command.immutableDigest()).stage());
+        assertEquals("SUBMITTED",f.service.reconcile(f.scope,"task-1","op-1",command.immutableDigest()).stage());
         verify(f.leases).claim(anyString(),anyString(),anyString(),anyString(),eq("work-1"),any());
-        verify(f.decisions).decide(eq("0"),eq("client-1"),eq("task-1"),eq("owner-1"),any());
+        verifyNoInteractions(f.decisions);
     }
     @Test void completedMessageCannotCarryFabricatedExecutionAuthority() {
         Fixture f=new Fixture(); var real=text("9",f.bytes);
@@ -236,7 +236,7 @@ class AgentSelectedOutputFinalizationServiceImplTest {
                 AgentTaskFormalDeliveryViewDTO v=formal(jdbc.deliveryId,"accepted",10,1);delivery.set(v);
                 jdbc.taskState="completed";jdbc.taskVersion=10;return v;});
             service=new AgentSelectedOutputFinalizationServiceImpl(jdbc,transactions,grants,leases,states,
-                    artifacts,submissions,reads,decisions,new ObjectMapper());
+                    artifacts,submissions,reads,new ObjectMapper());
         }
         AgentSelectedOutputFinalizationService.PrepareCommand command(String runId){
             return new AgentSelectedOutputFinalizationService.PrepareCommand("op-1","task-1",7,7,"100",3,

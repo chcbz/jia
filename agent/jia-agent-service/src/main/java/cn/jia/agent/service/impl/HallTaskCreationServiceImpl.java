@@ -1,10 +1,8 @@
 package cn.jia.agent.service.impl;
 
 import cn.jia.agent.dao.AgentTaskMetaDao;
-import cn.jia.agent.entity.AgentTaskCreateDTO;
-import cn.jia.agent.entity.AgentTaskDTO;
 import cn.jia.agent.entity.AgentTaskMetaEntity;
-import cn.jia.agent.service.AgentService;
+import cn.jia.agent.service.AgentTaskCreationOperationService;
 import cn.jia.agent.service.HallRequestDraftService;
 import cn.jia.agent.service.HallTaskCreationService;
 import cn.jia.task.entity.TaskPlanEntity;
@@ -25,13 +23,13 @@ import java.util.Objects;
 /** Joins the Hall draft transaction -> existing task-root reservation -> task plan/items/event. */
 @Named
 public class HallTaskCreationServiceImpl implements HallTaskCreationService {
-    private final AgentService agents;
+    private final AgentTaskCreationOperationService creations;
     private final AgentTaskMetaDao tasks;
     private final ObjectProvider<TaskService> taskServices;
 
-    public HallTaskCreationServiceImpl(AgentService agents, AgentTaskMetaDao tasks,
+    public HallTaskCreationServiceImpl(AgentTaskCreationOperationService creations, AgentTaskMetaDao tasks,
             ObjectProvider<TaskService> taskServices) {
-        this.agents = Objects.requireNonNull(agents);
+        this.creations = Objects.requireNonNull(creations);
         this.tasks = Objects.requireNonNull(tasks);
         this.taskServices = Objects.requireNonNull(taskServices);
     }
@@ -39,7 +37,7 @@ public class HallTaskCreationServiceImpl implements HallTaskCreationService {
     @Override
     @Transactional(propagation = Propagation.MANDATORY, rollbackFor = Exception.class)
     public HallRequestDraftService.TaskReference create(HallRequestDraftService.OwnerScope scope,
-            String title, String description) {
+            String creationKey, String title, String description, List<HallRequestDraftService.InputSelection> inputs) {
         authenticated(scope);
         var context = EsContextHolder.getContext();
         if (context == null || !scope.ownerJiacn().equals(context.getJiacn())
@@ -49,24 +47,43 @@ public class HallTaskCreationServiceImpl implements HallTaskCreationService {
         }
         if (!TransactionSynchronizationManager.isActualTransactionActive()
                 || TransactionSynchronizationManager.isCurrentTransactionReadOnly()) throw storage();
-        // Evidence: AgentService.taskPlanFor truncates UTF-16 to 30/200; task_plan has those widths.
-        // Reject lossy mapping, rather than silently changing the confirmed request.
-        if (title == null || title.isBlank() || title.length() > 30
-                || (description != null && description.length() > 200)) {
-            throw new HallRequestDraftService.Failure(HallRequestDraftService.Reason.SOURCE_UNAVAILABLE,
-                    Map.of("field", "title/instruction", "sourceType", "TASK_CREATE"));
+        if (title == null || title.isBlank() || title.length() > 200
+                || (description != null && description.length() > 20000) || inputs == null) {
+            throw new HallRequestDraftService.Failure(HallRequestDraftService.Reason.BAD_REQUEST);
         }
-        TaskService plans = requirePlans(); // no metadata-only optional-service fallback for Hall
-        AgentTaskCreateDTO request = new AgentTaskCreateDTO();
-        request.setTitle(title); request.setDescription(description);
-        request.setRequiredAbilities(List.of());
-        // No reward, funding, assignment, skill payment or execution intent is inferred.
-        AgentTaskDTO created = agents.createTask(request);
-        if (created == null || created.getId() == null) throw storage();
-        HallRequestDraftService.TaskReference ref = get(scope, created.getId());
-        TaskPlanEntity plan = ownedPlan(plans, scope, created.getId());
-        if (!title.equals(plan.getName()) || !Objects.equals(description, plan.getDescription())
-                || plan.getAmount() != null) throw storage();
+        TaskService plans = requirePlans();
+        var refs = inputs.stream().map(input -> new AgentTaskCreationOperationService.InputReference(
+                input.fileId(), input.version(), "INPUT"))
+                .sorted((left,right) -> {
+                    int file=java.util.Arrays.compareUnsigned(
+                            left.fileId().getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                            right.fileId().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                    return file!=0?file:Integer.compare(left.version(),right.version());
+                }).toList();
+        AgentTaskCreationOperationService.Result result;
+        try {
+            result = creations.create(new AgentTaskCreationOperationService.Scope(
+                    scope.tenantId(), scope.clientId(), scope.ownerJiacn()), creationKey,
+                    new AgentTaskCreationOperationService.CreateCommand(2, title, true, description,
+                            true, List.of(), true, null, refs));
+        } catch (AgentTaskCreationOperationService.Failure failure) {
+            throw new HallRequestDraftService.Failure(switch (failure.reason()) {
+                case BAD_REQUEST -> HallRequestDraftService.Reason.BAD_REQUEST;
+                case IDEMPOTENCY_CONFLICT -> HallRequestDraftService.Reason.IDEMPOTENCY_CONFLICT;
+                case NOT_FOUND, FORBIDDEN -> HallRequestDraftService.Reason.SOURCE_UNAVAILABLE;
+                case UNAVAILABLE -> HallRequestDraftService.Reason.STORAGE_UNAVAILABLE;
+            });
+        }
+        var receipt = result == null ? null : result.receipt();
+        if (receipt == null || receipt.schemaVersion() != 2 || receipt.taskId() == null
+                || !"COMMITTED".equals(receipt.state()) || receipt.requirementRevision() != 1
+                || receipt.task() == null || !receipt.taskId().equals(receipt.task().getId())
+                || !refs.equals(receipt.inputRefs())) throw storage();
+        HallRequestDraftService.TaskReference ref = get(scope, receipt.taskId());
+        TaskPlanEntity plan = ownedPlan(plans, scope, receipt.taskId());
+        // The immutable v2 requirement snapshot owns full text/materials. The
+        // task-plan's existing short summary is not the confirmed instruction.
+        if (plan.getAmount() != null) throw storage();
         return ref;
     }
 
