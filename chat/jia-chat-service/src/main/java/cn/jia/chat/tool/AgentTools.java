@@ -4,6 +4,7 @@ import cn.jia.agent.entity.AgentCapabilityDTO;
 import cn.jia.agent.entity.AgentRuntimeDTO;
 import cn.jia.agent.entity.AgentTaskAssignDTO;
 import cn.jia.agent.entity.AgentTaskCreateDTO;
+import cn.jia.agent.entity.AgentTaskCountsDTO;
 import cn.jia.agent.entity.AgentTaskDTO;
 import cn.jia.agent.entity.AgentTaskNoteDTO;
 import cn.jia.agent.entity.AgentTaskReportDTO;
@@ -152,8 +153,8 @@ public class AgentTools {
         return agentService.getStats(agentId);
     }
 
-    @Tool(name = "countTasksByStatus", description = "按状态统计各智能体的任务数量")
-    public Map<String, Long> countTasksByStatus() {
+    @Tool(name = "countTasksByStatus", description = "按当前用户事项阶段和原始状态统计数量，数量为十进制字符串")
+    public AgentTaskCountsDTO countTasksByStatus() {
         return agentService.countTasksByStatus(new AgentTaskSearchDTO());
     }
 }
