@@ -11,7 +11,8 @@ class ChatTaskDeliveryReviewServiceTest {
     final Accept command = new Accept("delivery", 7, 0, 1, "a".repeat(64));
     final ChatTaskDeliveryReviewStore store = mock(ChatTaskDeliveryReviewStore.class);
     final ChatTaskDeliveryReviewTransaction tx = mock(ChatTaskDeliveryReviewTransaction.class);
-    final ChatTaskDeliveryReviewService service = new ChatTaskDeliveryReviewService(store, tx);
+    final ChatSelectedOutputFinalizationStore roots = mock(ChatSelectedOutputFinalizationStore.class);
+    final ChatTaskDeliveryReviewService service = new ChatTaskDeliveryReviewService(store, tx, roots);
     ChatTaskDeliveryReviewStore.Operation operation(String state, String json) {
         return new ChatTaskDeliveryReviewStore.Operation("review_1", "task", "review-key", ChatDeliveryReviewContract.requestDigest(command), "delivery", state, "PROCESSING".equals(state)?1:2, json);
     }
@@ -27,6 +28,29 @@ class ChatTaskDeliveryReviewServiceTest {
         reset(tx); when(store.byKey(scope,"task","review-key",false)).thenReturn(operation("COMMITTED",ChatDeliveryReviewContract.json(committed())));
         when(store.require(scope,"task","review_1",false)).thenReturn(operation("COMMITTED",ChatDeliveryReviewContract.json(committed())));
         assertEquals(committed(),service.byKey(scope,"task","review-key")); assertEquals(committed(),service.byOperation(scope,"task","review_1")); verifyNoInteractions(tx);
+    }
+    @Test void terminalReadsReauthorizeCurrentRootBeforeLookingUpThePersistedReceipt() {
+        when(store.byKey(scope,"task","review-key",false)).thenReturn(operation("COMMITTED",ChatDeliveryReviewContract.json(committed())));
+        when(store.require(scope,"task","review_1",false)).thenReturn(operation("COMMITTED",ChatDeliveryReviewContract.json(committed())));
+        assertEquals(committed(),service.byKey(scope,"task","review-key"));
+        assertEquals(committed(),service.byOperation(scope,"task","review_1"));
+        var order=inOrder(roots,store);
+        order.verify(roots).task("0","owner","client","task");
+        order.verify(store).byKey(scope,"task","review-key",false);
+        order.verify(roots).task("0","owner","client","task");
+        order.verify(store).require(scope,"task","review_1",false);
+        verifyNoInteractions(tx);
+    }
+    @Test void revokedOrMissingRootCannotReadATerminalOperationOrRunADecision() {
+        when(roots.task("0","owner","client","task")).thenThrow(new ChatSelectedOutputFinalizationStore.Missing());
+        assertThrows(Missing.class,()->service.byKey(scope,"task","review-key"));
+        assertThrows(Missing.class,()->service.byOperation(scope,"task","review_1"));
+        verifyNoInteractions(store,tx);
+    }
+    @Test void rootReadFailureIsNotConfusedWithOperationAbsence() {
+        when(roots.task("0","owner","client","task")).thenThrow(new org.springframework.dao.DataAccessResourceFailureException("database unavailable"));
+        assertThrows(org.springframework.dao.DataAccessResourceFailureException.class,()->service.byKey(scope,"task","review-key"));
+        verifyNoInteractions(store,tx);
     }
     @Test void conflictIsRejectedAfterRollbackButTransientFailureRetainsRecoverableIntent() {
         when(tx.admit(scope,"task","review-key",command)).thenReturn(operation("PROCESSING",null));

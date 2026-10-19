@@ -11,6 +11,8 @@ import java.util.List;
 
 @Data
 public class AgentTaskDTO implements Serializable {
+    private String phase;
+
     @Serial
     private static final long serialVersionUID = 1L;
 

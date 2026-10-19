@@ -33,6 +33,7 @@ import cn.jia.agent.entity.AgentTaskAssignDTO;
 import cn.jia.agent.entity.AgentTaskAssigneeDTO;
 import cn.jia.agent.entity.AgentTaskCreateDTO;
 import cn.jia.agent.entity.AgentTaskDTO;
+import cn.jia.agent.entity.AgentTaskCountsDTO;
 import cn.jia.agent.entity.AgentTaskMemberEntity;
 import cn.jia.agent.entity.AgentTaskMetaEntity;
 import cn.jia.agent.entity.AgentTaskNoteDTO;
@@ -833,6 +834,7 @@ public class AgentServiceImpl implements AgentService {
     public PageInfo<AgentTaskDTO> searchTasks(AgentTaskSearchDTO request) {
         TaskSearchScope scope = authenticatedTaskSearchScope("search");
         AgentTaskSearchDTO filters = request == null ? new AgentTaskSearchDTO() : request;
+        validateTaskPhaseFilter(filters);
         int pageNum = Math.max(Optional.ofNullable(filters.getPageNum()).orElse(1), 1);
         int pageSize = Math.min(Math.max(
                 Optional.ofNullable(filters.getPageSize()).orElse(20), 1),
@@ -843,7 +845,7 @@ public class AgentServiceImpl implements AgentService {
 
         long total = agentTaskMetaDao.countSearch(
                 scope.tenantId(), scope.clientId(), scope.ownerJiacn(),
-                filters.getStatus(), filters.getAbility(), keyword);
+                filters.getStatus(), filters.getAbility(), keyword, filters.getPhase());
         require(total >= 0, "Persisted task search total is invalid");
         // The normal bounty board must remain usable while the unpublished economy
         // preview (and its additive tables) is disabled. Only an active preview service
@@ -853,10 +855,10 @@ public class AgentServiceImpl implements AgentService {
                 : Optional.ofNullable(fundingProjectionEnabled
                         ? agentTaskMetaDao.searchPageWithFunding(
                                 scope.tenantId(), scope.clientId(), scope.ownerJiacn(),
-                                filters.getStatus(), filters.getAbility(), keyword, offset, pageSize)
+                                filters.getStatus(), filters.getAbility(), keyword, offset, pageSize, filters.getPhase())
                         : agentTaskMetaDao.searchPage(
                                 scope.tenantId(), scope.clientId(), scope.ownerJiacn(),
-                                filters.getStatus(), filters.getAbility(), keyword, offset, pageSize))
+                                filters.getStatus(), filters.getAbility(), keyword, offset, pageSize, filters.getPhase()))
                         .orElseGet(Collections::emptyList);
         require(rows.size() <= pageSize,
                 "Persisted task search page exceeds the requested bound");
@@ -890,37 +892,46 @@ public class AgentServiceImpl implements AgentService {
         return page;
     }
 
+    private static final List<String> TASK_PHASES = List.of("PENDING_ASSIGNMENT", "IN_PROGRESS",
+            "PENDING_ACCEPTANCE", "COMPLETED", "HISTORY", "UNKNOWN");
+
+    private void validateTaskPhaseFilter(AgentTaskSearchDTO filters) {
+        require(filters.getPhase() == null || TASK_PHASES.contains(filters.getPhase()), "Unknown task phase");
+        require(filters.getPhase() == null || filters.getStatus() == null,
+                "Task phase and raw status are mutually exclusive");
+    }
+
     @Override
-    public Map<String, Long> countTasksByStatus(AgentTaskSearchDTO request) {
+    public AgentTaskCountsDTO countTasksByStatus(AgentTaskSearchDTO request) {
         TaskSearchScope scope = authenticatedTaskSearchScope("count");
         AgentTaskSearchDTO filters = request == null ? new AgentTaskSearchDTO() : request;
-        Map<String, Long> counts = new LinkedHashMap<>();
-        counts.put("total", 0L);
-        List.of(AgentConstants.TASK_STATUS_OPEN, AgentConstants.TASK_STATUS_ASSIGNED,
-                AgentConstants.TASK_STATUS_RUNNING, AgentConstants.TASK_STATUS_COMPLETED,
-                AgentConstants.TASK_STATUS_FAILED, AgentConstants.TASK_STATUS_ARCHIVED)
-                .forEach(status -> counts.put(status, 0L));
-
-        List<AgentTaskStatusCountRow> rows = Optional.ofNullable(
-                agentTaskMetaDao.countSearchByStatus(
-                        scope.tenantId(), scope.clientId(), scope.ownerJiacn(),
-                        filters.getAbility(), filters.getKeyword()))
+        validateTaskPhaseFilter(filters);
+        Map<String, Long> phases = new LinkedHashMap<>();
+        TASK_PHASES.forEach(phase -> phases.put(phase, 0L));
+        Map<String, Long> raw = new LinkedHashMap<>();
+        List.of("open", "planning", "assigned", "running", "blocked", "reviewing", "completed",
+                "failed", "cancelled", "archived", "UNKNOWN").forEach(status -> raw.put(status, 0L));
+        String keyword = StringUtil.isBlank(filters.getKeyword()) ? null : filters.getKeyword().trim();
+        List<AgentTaskStatusCountRow> rows = Optional.ofNullable(agentTaskMetaDao.countSearchByStatus(
+                scope.tenantId(), scope.clientId(), scope.ownerJiacn(), filters.getAbility(), keyword))
                 .orElseGet(Collections::emptyList);
         long total = 0L;
         for (AgentTaskStatusCountRow row : rows) {
-            require(row != null
-                            && Objects.equals(scope.tenantId(), row.getTenantId())
+            require(row != null && Objects.equals(scope.tenantId(), row.getTenantId())
                             && Objects.equals(scope.clientId(), row.getClientId())
                             && Objects.equals(scope.ownerJiacn(), row.getOwnerJiacn())
-                            && isExactStoredText(row.getStatus(), 20)
+                            && isExactStoredText(row.getStatus(), 20) && TASK_PHASES.contains(row.getPhase())
                             && row.getTaskCount() != null && row.getTaskCount() >= 0,
-                    "Persisted task status count is outside the authenticated scope");
+                    "Persisted task phase count is outside the authenticated scope or invalid");
             total = Math.addExact(total, row.getTaskCount());
-            counts.put(row.getStatus(), Math.addExact(
-                    counts.getOrDefault(row.getStatus(), 0L), row.getTaskCount()));
+            raw.merge(row.getStatus(), row.getTaskCount(), Math::addExact);
+            phases.merge(row.getPhase(), row.getTaskCount(), Math::addExact);
         }
-        counts.put("total", total);
-        return counts;
+        raw.put("total", total); phases.put("total", total);
+        Map<String, String> rawStrings = new LinkedHashMap<>(), phaseStrings = new LinkedHashMap<>();
+        raw.forEach((key, count) -> rawStrings.put(key, Long.toString(count)));
+        phases.forEach((key, count) -> phaseStrings.put(key, Long.toString(count)));
+        return new AgentTaskCountsDTO(Map.copyOf(phaseStrings), Map.copyOf(rawStrings));
     }
 
     private TaskSearchScope authenticatedTaskSearchScope(String operation) {
@@ -2712,6 +2723,8 @@ public class AgentServiceImpl implements AgentService {
                 ? row.getTaskId() : row.getPlanTitle());
         dto.setDescription(row.getPlanDescription());
         dto.setStatus(row.getRewardStatus());
+        require(TASK_PHASES.contains(row.getPhase()), "Persisted task phase is invalid");
+        dto.setPhase(row.getPhase());
         dto.setRequiredAbilities(parseList(row.getRequiredAbilities()));
         dto.setReward(row.getReward() == null ? row.getPlanReward() : row.getReward());
         List<String> exactAgentIds = assignedAgentIds == null

@@ -9,6 +9,7 @@ import cn.jia.agent.entity.AgentStatusDTO;
 import cn.jia.agent.entity.AgentTaskAssignDTO;
 import cn.jia.agent.entity.AgentTaskCreateDTO;
 import cn.jia.agent.entity.AgentTaskDTO;
+import cn.jia.agent.entity.AgentTaskCountsDTO;
 import cn.jia.agent.entity.AgentTaskNoteDTO;
 import cn.jia.agent.entity.AgentTaskReportDTO;
 import cn.jia.agent.entity.AgentTaskRecommendationDTO;
@@ -58,7 +59,7 @@ public interface AgentService {
 
     PageInfo<AgentTaskDTO> searchTasks(AgentTaskSearchDTO request);
 
-    Map<String, Long> countTasksByStatus(AgentTaskSearchDTO request);
+    AgentTaskCountsDTO countTasksByStatus(AgentTaskSearchDTO request);
 
     AgentTaskDTO createTask(AgentTaskCreateDTO request);
 
