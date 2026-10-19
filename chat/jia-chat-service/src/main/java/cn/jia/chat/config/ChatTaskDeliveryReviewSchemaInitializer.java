@@ -88,7 +88,7 @@ public final class ChatTaskDeliveryReviewSchemaInitializer implements Initializi
     }
     static Map<String, String> columns(String ddl) {
         var result = new LinkedHashMap<String, String>();
-        var matcher = Pattern.compile("(?m)^ ([a-z_]+) (VARCHAR\\([0-9]+\\)|CHAR\\([0-9]+\\)|MEDIUMTEXT|BIGINT)([^,\\n]*)[,\\n]").matcher(ddl);
+        var matcher = Pattern.compile("(?m)^ ([a-z][a-z0-9_]*) (VARCHAR\\([0-9]+\\)|CHAR\\([0-9]+\\)|MEDIUMTEXT|BIGINT)([^,\\n]*)[,\\n]").matcher(ddl);
         while (matcher.find()) {
             String tail = matcher.group(3), type = matcher.group(2).toLowerCase(Locale.ROOT);
             var collation = Pattern.compile("COLLATE ([a-z0-9_]+)").matcher(tail);
