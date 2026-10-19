@@ -382,6 +382,172 @@ class JuyitingWorkflowMySqlTest {
         assertEquals("UNKNOWN",unknown.getPhase()); // two submitted batches cannot be promoted by overview's latest-only join.
 
     }
+    /** Actual Chat review transaction -> actual Agent decision -> actual MyBatis DAOs/event writer.
+     * The only fabricated inputs are the isolated seed rows. No mocked decision, lock or receipt. */
+    private DomainReview domainReview() throws Exception {
+        initialize();
+        jdbc.execute("DROP TABLE agent_task_formal_delivery");
+        jdbc.execute("DROP TABLE agent_task_meta");
+        for (String table : List.of("agent_task_meta", "agent_task_member", "agent_task_work_item", "agent_task_event"))
+            jdbc.execute(productionTable(table));
+        for (String sql : resource("db/agent-task-formal-delivery-r2.sql").split(";"))
+            if (!sql.isBlank()) jdbc.execute(sql);
+        jdbc.update("INSERT INTO agent_task_meta(tenant_id,client_id,owner_jiacn,task_id,reward_status,task_version,assigned_agent_id) VALUES('0','client','owner','task','reviewing',7,'wuyong')");
+        jdbc.update("INSERT INTO agent_task_member(tenant_id,client_id,owner_jiacn,task_id,agent_id,member_role,member_status,version) VALUES('0','client','owner','task','wuyong','worker','working',0)");
+        jdbc.update("INSERT INTO agent_task_work_item(tenant_id,client_id,owner_jiacn,task_id,work_item_id,title,work_type,assignee_agent_id,status,result_artifact_id,submitted_at,version) VALUES('0','client','owner','task','work','本轮成果','document','wuyong','submitted','manifest',1,0)");
+        jdbc.update("INSERT INTO agent_task_formal_delivery(tenant_id,client_id,task_id,work_item_id,delivery_id,revision,producer_agent_id,run_id,summary,state,submission_digest,manifest_artifact_id,manifest_artifact_version,submitted_at,version) VALUES('0','client','task','work','delivery',1,'wuyong','run','本轮成果','submitted',?,'manifest',1,1,0)","f".repeat(64));
+        jdbc.update("INSERT INTO agent_task_formal_delivery_item(tenant_id,client_id,delivery_id,artifact_id,artifact_version,content_hash,purpose,item_order) VALUES('0','client','delivery','result',1,?,'RESULT',0),('0','client','delivery','manifest',1,?,'MANIFEST',1)","a".repeat(64),"b".repeat(64));
+        // Exact committed workspace provenance used by the production source read projection.
+        jdbc.execute("CREATE TABLE agent_personal_workspace_execution(tenant_id VARCHAR(50),client_id VARCHAR(50),owner_jiacn VARCHAR(50),execution_id VARCHAR(100),task_id VARCHAR(100))");
+        jdbc.execute("CREATE TABLE agent_personal_workspace_execution_output(tenant_id VARCHAR(50),client_id VARCHAR(50),owner_jiacn VARCHAR(50),execution_id VARCHAR(100),workspace_file_id VARCHAR(100),workspace_file_version INT,formal_delivery_id VARCHAR(100),artifact_id VARCHAR(100),artifact_version INT,content_hash CHAR(64),output_state VARCHAR(24),publication_state VARCHAR(24))");
+        jdbc.update("INSERT INTO agent_personal_workspace_execution VALUES('0','client','owner','execution','task')");
+        jdbc.update("INSERT INTO agent_personal_workspace_execution_output VALUES('0','client','owner','execution','file',1,'delivery','result',1,?,'COMMITTED','PUBLISHED')","a".repeat(64));
+        return new DomainReview();
+    }
+    private static String productionTable(String table) throws Exception {
+        var found=new ArrayList<String>();
+        var resources=JuyitingWorkflowMySqlTest.class.getClassLoader().getResources("db/schema.sql");
+        var pattern=java.util.regex.Pattern.compile("(?s)CREATE TABLE IF NOT EXISTS "+table+"\\s*\\(.*?\\) ENGINE=.*?;");
+        while(resources.hasMoreElements()) try(var stream=resources.nextElement().openStream()) {
+            var matcher=pattern.matcher(new String(stream.readAllBytes(),StandardCharsets.UTF_8));
+            while(matcher.find()) found.add(matcher.group());
+        }
+        assertEquals(1,found.size(),"Expected exactly one production DDL for "+table);
+        return found.getFirst();
+    }
+    private final class DomainReview implements AutoCloseable {
+        final AnnotationConfigApplicationContext context=new AnnotationConfigApplicationContext();
+        final cn.jia.chat.service.ChatTaskDeliveryReviewTransaction transaction;
+        final cn.jia.agent.service.AgentTaskFormalDeliveryDecisionService decisions;
+        final Accept command;
+        DomainReview() throws Exception {
+            var manager=app.getBean(DataSourceTransactionManager.class);
+            var config=new com.baomidou.mybatisplus.core.MybatisConfiguration();
+            config.setMapUnderscoreToCamelCase(true);
+            config.addMapper(cn.jia.agent.mapper.AgentTaskMetaMapper.class);
+            config.addMapper(cn.jia.agent.mapper.AgentTaskMemberMapper.class);
+            config.addMapper(cn.jia.agent.mapper.AgentTaskWorkItemMapper.class);
+            config.addMapper(cn.jia.agent.mapper.AgentTaskFormalDeliveryMapper.class);
+            config.addMapper(cn.jia.agent.mapper.AgentTaskEventMapper.class);
+            var factory=new com.baomidou.mybatisplus.extension.spring.MybatisSqlSessionFactoryBean();
+            factory.setDataSource(jdbc.getDataSource()); factory.setConfiguration(config);
+            var global=new com.baomidou.mybatisplus.core.config.GlobalConfig();
+            global.setIdentifierGenerator(new com.baomidou.mybatisplus.core.incrementer.DefaultIdentifierGenerator());
+            factory.setGlobalConfig(global);
+            var sql=new org.mybatis.spring.SqlSessionTemplate(Objects.requireNonNull(factory.getObject()));
+            var roots=new cn.jia.agent.dao.impl.AgentTaskMetaDaoImpl();
+            org.springframework.test.util.ReflectionTestUtils.setField(roots,"baseMapper",sql.getMapper(cn.jia.agent.mapper.AgentTaskMetaMapper.class));
+            var events=new cn.jia.agent.dao.impl.AgentTaskEventDaoImpl();
+            org.springframework.test.util.ReflectionTestUtils.setField(events,"baseMapper",sql.getMapper(cn.jia.agent.mapper.AgentTaskEventMapper.class));
+            var members=new cn.jia.agent.dao.impl.AgentTaskMemberDaoImpl(sql.getMapper(cn.jia.agent.mapper.AgentTaskMemberMapper.class));
+            var work=new cn.jia.agent.dao.impl.AgentTaskWorkItemDaoImpl(sql.getMapper(cn.jia.agent.mapper.AgentTaskWorkItemMapper.class));
+            var deliveries=new cn.jia.agent.dao.impl.AgentTaskFormalDeliveryDaoImpl(sql.getMapper(cn.jia.agent.mapper.AgentTaskFormalDeliveryMapper.class));
+            var locks=new cn.jia.agent.service.impl.AgentTaskMutationTransactionImpl(roots,manager);
+            context.setParent(app); context.register(Transactions.class);
+            context.registerBean(cn.jia.agent.service.AgentTaskEventBroker.class,cn.jia.agent.service.AgentTaskEventBroker::new);
+            context.registerBean(cn.jia.agent.service.AgentTaskEventAfterCommitPublisher.class,()->new cn.jia.agent.service.AgentTaskEventAfterCommitPublisher(context.getBean(cn.jia.agent.service.AgentTaskEventBroker.class),manager));
+            context.registerBean(cn.jia.agent.service.AgentTaskEventWriter.class,()->new cn.jia.agent.service.impl.AgentTaskEventWriterImpl(events,manager,context.getBean(cn.jia.agent.service.AgentTaskEventAfterCommitPublisher.class)));
+            context.registerBean(cn.jia.agent.service.AgentTaskFormalDeliveryDecisionService.class,()->new cn.jia.agent.service.impl.AgentTaskFormalDeliveryDecisionServiceImpl(deliveries,roots,members,work,locks,context.getBean(cn.jia.agent.service.AgentTaskEventWriter.class)));
+            context.registerBean(cn.jia.agent.service.AgentTaskFormalDeliveryReadService.class,()->new cn.jia.agent.service.impl.AgentTaskFormalDeliveryReadServiceImpl(deliveries,roots,work));
+            context.registerBean(cn.jia.chat.service.ChatTaskDeliveryReviewReadService.class,()->new cn.jia.chat.service.ChatTaskDeliveryReviewReadService(jdbc,context.getBean(cn.jia.agent.service.AgentTaskFormalDeliveryReadService.class),promotions));
+            context.registerBean(cn.jia.chat.service.ChatTaskDeliveryReviewTransaction.class,()->new cn.jia.chat.service.ChatTaskDeliveryReviewTransaction(locks,reviews,context.getBean(cn.jia.agent.service.AgentTaskFormalDeliveryReadService.class),context.getBean(cn.jia.agent.service.AgentTaskFormalDeliveryDecisionService.class),context.getBean(cn.jia.chat.service.ChatTaskDeliveryReviewReadService.class)));
+            context.refresh();
+            transaction=context.getBean(cn.jia.chat.service.ChatTaskDeliveryReviewTransaction.class);
+            decisions=context.getBean(cn.jia.agent.service.AgentTaskFormalDeliveryDecisionService.class);
+            assertTrue(AopUtils.isAopProxy(transaction)); assertTrue(AopUtils.isAopProxy(decisions));
+            var batch=context.getBean(cn.jia.chat.service.ChatTaskDeliveryReviewReadService.class).read(OWNER,"task").currentDelivery();
+            assertEquals(List.of("VIEW","ACCEPT","REQUEST_CHANGES"),batch.allowedActions());
+            command=new Accept("delivery",7,0,1,batch.batchSha256());
+        }
+        public void close() {context.close();}
+        void acceptedOnce() {
+            assertEquals("completed",jdbc.queryForObject("SELECT reward_status FROM agent_task_meta",String.class));
+            assertEquals(8,jdbc.queryForObject("SELECT task_version FROM agent_task_meta",Integer.class));
+            assertEquals("accepted",jdbc.queryForObject("SELECT state FROM agent_task_formal_delivery",String.class));
+            assertEquals(1,jdbc.queryForObject("SELECT version FROM agent_task_formal_delivery",Integer.class));
+            assertEquals("completed",jdbc.queryForObject("SELECT status FROM agent_task_work_item",String.class));
+            assertEquals("done",jdbc.queryForObject("SELECT member_status FROM agent_task_member",String.class));
+            assertEquals(4,jdbc.queryForObject("SELECT COUNT(*) FROM agent_task_event",Integer.class));
+            assertEquals(4,jdbc.queryForObject("SELECT current_event_version FROM agent_task_meta",Integer.class));
+            assertEquals(1,jdbc.queryForObject("SELECT COUNT(*) FROM chat_task_delivery_review_operation WHERE state='COMMITTED' AND state_version=2",Integer.class));
+        }
+    }
+    @Test void actualDomainAcceptanceCommitsAllAggregatesEventsAndReceiptExactlyOnce() throws Exception {
+        try(var domain=domainReview()) {
+            var admitted=domain.transaction.admit(OWNER,"task","review-key",domain.command);
+            var receipt=domain.transaction.commit(OWNER,"task",admitted.operationId(),domain.command);
+            assertEquals("COMMITTED",receipt.state()); assertEquals("COMPLETED",receipt.taskState());
+            domain.acceptedOnce();
+            assertEquals(receipt,domain.transaction.commit(OWNER,"task",admitted.operationId(),domain.command));
+            assertEquals(receipt,ChatTaskDeliveryReviewStore.committedReceipt(domain.transaction.admit(OWNER,"task","review-key",domain.command)));
+            domain.acceptedOnce();
+        }
+    }
+    @Test void actualDomainDecisionAndAllEventsRollbackEvenWhenFailureOccursAfterReceiptWrite() throws Exception {
+        try(var domain=domainReview()) {
+            var admitted=domain.transaction.admit(OWNER,"task","review-key",domain.command);
+            assertThrows(IllegalStateException.class,()->inTransaction(()->{
+                domain.transaction.commit(OWNER,"task",admitted.operationId(),domain.command);
+                assertEquals(4,jdbc.queryForObject("SELECT COUNT(*) FROM agent_task_event",Integer.class));
+                assertEquals("COMMITTED",reviews.require(OWNER,"task",admitted.operationId(),false).state());
+                throw new IllegalStateException("owned failure after real receipt write");
+            }));
+            assertEquals("reviewing",jdbc.queryForObject("SELECT reward_status FROM agent_task_meta",String.class));
+            assertEquals(7,jdbc.queryForObject("SELECT task_version FROM agent_task_meta",Integer.class));
+            assertEquals("submitted",jdbc.queryForObject("SELECT state FROM agent_task_formal_delivery",String.class));
+            assertEquals("submitted",jdbc.queryForObject("SELECT status FROM agent_task_work_item",String.class));
+            assertEquals("working",jdbc.queryForObject("SELECT member_status FROM agent_task_member",String.class));
+            assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM agent_task_event",Integer.class));
+            assertEquals(0,jdbc.queryForObject("SELECT current_event_version FROM agent_task_meta",Integer.class));
+            assertEquals("PROCESSING",reviews.require(OWNER,"task",admitted.operationId(),false).state());
+            assertNull(reviews.require(OWNER,"task",admitted.operationId(),false).receiptJson());
+            domain.transaction.commit(OWNER,"task",admitted.operationId(),domain.command);
+            domain.acceptedOnce();
+        }
+    }
+    @Test void actualDomainReceiptStorageFailureRollsBackDecisionEventsAndAllowsSameKeyRecovery() throws Exception {
+        try(var domain=domainReview()) {
+            var admitted=domain.transaction.admit(OWNER,"task","review-key",domain.command);
+            jdbc.execute("CREATE TRIGGER owned_review_receipt_failure BEFORE UPDATE ON chat_task_delivery_review_operation FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='owned receipt storage failure'");
+            assertThrows(DataAccessException.class,()->domain.transaction.commit(OWNER,"task",admitted.operationId(),domain.command));
+            assertEquals("reviewing",jdbc.queryForObject("SELECT reward_status FROM agent_task_meta",String.class));
+            assertEquals("submitted",jdbc.queryForObject("SELECT state FROM agent_task_formal_delivery",String.class));
+            assertEquals("submitted",jdbc.queryForObject("SELECT status FROM agent_task_work_item",String.class));
+            assertEquals("working",jdbc.queryForObject("SELECT member_status FROM agent_task_member",String.class));
+            assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM agent_task_event",Integer.class));
+            assertEquals("PROCESSING",reviews.require(OWNER,"task",admitted.operationId(),false).state());
+            assertNull(reviews.require(OWNER,"task",admitted.operationId(),false).receiptJson());
+            jdbc.execute("DROP TRIGGER owned_review_receipt_failure");
+            assertEquals(admitted.operationId(),domain.transaction.admit(OWNER,"task","review-key",domain.command).operationId());
+            domain.transaction.commit(OWNER,"task",admitted.operationId(),domain.command); domain.acceptedOnce();
+        }
+    }
+    @Test void actualDomainConcurrentSameOperationHasOneDecisionAndOneEventSequence() throws Exception {
+        try(var domain=domainReview()) {
+            var admitted=domain.transaction.admit(OWNER,"task","review-key",domain.command);
+            var receipts=concurrent(()->domain.transaction.commit(OWNER,"task",admitted.operationId(),domain.command));
+            assertEquals(receipts.getFirst(),receipts.get(1)); domain.acceptedOnce();
+        }
+    }
+    @Test void actualDomainChangesRequestedWinsAgainstStaleAcceptanceWithoutMutatingOriginalArtifacts() throws Exception {
+        try(var domain=domainReview()) {
+            var admitted=domain.transaction.admit(OWNER,"task","review-key",domain.command);
+            var artifacts=jdbc.queryForList("SELECT * FROM agent_task_formal_delivery_item ORDER BY item_order");
+            var change=new cn.jia.agent.entity.AgentTaskFormalDeliveryDecisionDTO();
+            change.setDeliveryId("delivery"); change.setExpectedTaskVersion(7L); change.setExpectedDeliveryVersion(0L);
+            change.setDecision("changes_requested"); change.setReviewReason("仅修改第一段，保留其余内容");
+            assertEquals("changes_requested",domain.decisions.decide("0","client","task","owner",change).getState());
+            assertThrows(ChatDeliveryReviewContract.Conflict.class,()->domain.transaction.commit(OWNER,"task",admitted.operationId(),domain.command));
+            assertEquals("running",jdbc.queryForObject("SELECT reward_status FROM agent_task_meta",String.class));
+            assertEquals("ready",jdbc.queryForObject("SELECT status FROM agent_task_work_item",String.class));
+            assertNull(jdbc.queryForObject("SELECT result_artifact_id FROM agent_task_work_item",String.class));
+            assertNull(jdbc.queryForObject("SELECT lease_token FROM agent_task_work_item",String.class));
+            assertEquals(artifacts,jdbc.queryForList("SELECT * FROM agent_task_formal_delivery_item ORDER BY item_order"));
+            assertEquals("PROCESSING",reviews.require(OWNER,"task",admitted.operationId(),false).state());
+            assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM agent_task_event WHERE event_type='FORMAL_DELIVERY_ACCEPTED'",Integer.class));
+        }
+    }
+
     private static void await(CyclicBarrier gate) { try { gate.await(); } catch(Exception failure) {throw new IllegalStateException(failure);} }
     private static <T> List<T> concurrent(Supplier<T> body) throws Exception {
         var pool=Executors.newFixedThreadPool(2);
