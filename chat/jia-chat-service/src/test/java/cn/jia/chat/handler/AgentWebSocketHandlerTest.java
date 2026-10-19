@@ -1170,6 +1170,12 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
                 {"type":"agent.message","requestId":"req-1","turnId":"turn-1","dispatchId":"dispatch-1","conversationId":"1001","conversationGeneration":"1","contextSnapshotId":"snapshot-1","contextHash":"sha256:ctx","agentId":"agent-001","senderName":"宋江","agentName":"林冲","content":"final"}
                 """));
 
+        ArgumentCaptor<TextMessage> finalReceipt = ArgumentCaptor.forClass(TextMessage.class);
+        verify(session, org.mockito.Mockito.atLeastOnce()).sendMessage(finalReceipt.capture());
+        List<String> outbound = finalReceipt.getAllValues().stream().map(TextMessage::getPayload).toList();
+        assertFalse(outbound.stream().anyMatch(wire -> wire.contains("\"messageType\":\"protocol.error\"")),
+                () -> "Durable callback rejected before service invocation: " + outbound);
+
         ArgumentCaptor<ServerResolvedAgentSender> deltaSender =
                 ArgumentCaptor.forClass(ServerResolvedAgentSender.class);
         verify(deliberation).acceptDelta(eq("0"), eq("juyiting"), eq("jia_client"), eq("1001"),
@@ -1182,15 +1188,13 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
                 eq("snapshot-1"), eq("sha256:ctx"), eq("final"),
                 org.mockito.ArgumentMatchers.<Integer>isNull(), org.mockito.ArgumentMatchers.<String>isNull(),
                 org.mockito.ArgumentMatchers.<String>isNull(), finalSender.capture());
-        ArgumentCaptor<TextMessage> finalReceipt = ArgumentCaptor.forClass(TextMessage.class);
-        verify(session, org.mockito.Mockito.atLeastOnce()).sendMessage(finalReceipt.capture());
-        Map<String, Object> saved = finalReceipt.getAllValues().stream()
-                .map(TextMessage::getPayload)
-                .map(wire -> new ObjectMapper().readValue(wire, new TypeReference<Map<String, Object>>() { }))
-                .filter(event -> "agent_message_saved".equals(event.get("type")))
-                .findFirst().orElseThrow(() -> new AssertionError("Missing persisted final receipt"));
+        Map<String, Object> receipt = findOutboundEnvelope(finalReceipt.getAllValues(), "chat.message.receipt");
+        assertEquals(1, receipt.get("protocolVersion"));
+        assertEquals("req-1", receipt.get("requestId"));
+        assertEquals("E0", receipt.get("code"));
+        Map<?, ?> saved = (Map<?, ?>) receipt.get("data");
         assertEquals("turn-1", saved.get("turnId"));
-        assertEquals("501", saved.get("messageId"));
+        assertEquals("501", saved.get("persistedMessageId"));
         assertEquals("evt-final", saved.get("eventId"));
         assertEquals(false, saved.get("duplicate"));
         verify(chatConversationService, never()).appendOwnedMessage(any(), any(), any(),
