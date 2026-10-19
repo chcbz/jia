@@ -1161,13 +1161,13 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         handler.setChatDeliberationService(deliberation);
         handler.afterConnectionEstablished(session);
         UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
-                {"type":"agent.register","requestId":"reg-1","agentId":"agent-001","name":"Wu Yong"}
+                {"schemaVersion":1,"type":"agent.register","runtimeInstanceId":"runtime-1","messageId":"register-message-1","requestId":"reg-1","agentId":"agent-001","name":"Wu Yong"}
                 """));
         UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
-                {"type":"agent.message.delta","requestId":"req-1","turnId":"turn-1","dispatchId":"dispatch-1","conversationId":"1001","conversationGeneration":"1","contextSnapshotId":"snapshot-1","contextHash":"sha256:ctx","deltaSeq":"1","agentId":"agent-001","senderName":"宋江","agentName":"林冲","content":%s}
+                {"schemaVersion":1,"type":"chat.message.delta","runtimeInstanceId":"runtime-1","messageId":"delta-message-1","requestId":"req-1","turnId":"turn-1","dispatchId":"dispatch-1","conversationId":"1001","conversationGeneration":"1","contextSnapshotId":"snapshot-1","contextHash":"sha256:ctx","deltaSeq":"1","agentId":"agent-001","senderName":"宋江","agentName":"林冲","content":%s}
                 """.formatted(new ObjectMapper().writeValueAsString(deltaContent))));
         UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
-                {"type":"agent.message","requestId":"req-1","turnId":"turn-1","dispatchId":"dispatch-1","conversationId":"1001","conversationGeneration":"1","contextSnapshotId":"snapshot-1","contextHash":"sha256:ctx","agentId":"agent-001","senderName":"宋江","agentName":"林冲","content":"final"}
+                {"schemaVersion":1,"type":"chat.message","runtimeInstanceId":"runtime-1","messageId":"final-message-1","requestId":"req-1","turnId":"turn-1","dispatchId":"dispatch-1","conversationId":"1001","conversationGeneration":"1","contextSnapshotId":"snapshot-1","contextHash":"sha256:ctx","agentId":"agent-001","senderName":"宋江","agentName":"林冲","content":"final"}
                 """));
 
         ArgumentCaptor<TextMessage> finalReceipt = ArgumentCaptor.forClass(TextMessage.class);
@@ -1188,10 +1188,14 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
                 eq("snapshot-1"), eq("sha256:ctx"), eq("final"),
                 org.mockito.ArgumentMatchers.<Integer>isNull(), org.mockito.ArgumentMatchers.<String>isNull(),
                 org.mockito.ArgumentMatchers.<String>isNull(), finalSender.capture());
+        Map<String, Object> registration = findOutboundEnvelope(finalReceipt.getAllValues(), "agent.registered");
+        assertEquals("reg-1", registration.get("requestId"));
+        assertEquals("register-message-1", registration.get("correlationId"));
         Map<String, Object> receipt = findOutboundEnvelope(finalReceipt.getAllValues(), "chat.message.receipt");
         assertEquals(1, receipt.get("protocolVersion"));
         assertEquals("req-1", receipt.get("requestId"));
         assertEquals("E0", receipt.get("code"));
+        assertEquals("final-message-1", receipt.get("correlationId"));
         Map<?, ?> saved = (Map<?, ?>) receipt.get("data");
         assertEquals("turn-1", saved.get("turnId"));
         assertEquals("501", saved.get("persistedMessageId"));

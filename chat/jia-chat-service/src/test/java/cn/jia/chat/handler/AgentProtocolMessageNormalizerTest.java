@@ -113,29 +113,40 @@ class AgentProtocolMessageNormalizerTest {
     }
 
     @Test
-    void rejectsConflictingMessageIdAliasesWithinAndAcrossLayers() {
-        assertProtocolError("ENVELOPE_FIELD_CONFLICT", Map.of(
-                "type", "agent.message",
-                "messageId", "message-outer",
-                "payload", Map.of("requestId", "message-inner")));
-
-        assertProtocolError("ENVELOPE_FIELD_CONFLICT", Map.of(
-                "type", "agent.message",
-                "messageId", "message-1",
-                "requestId", "request-2"));
+    void keepsRequestAndMessageIdentityIndependent() {
+        for (String messageType : new String[]{AgentProtocolConstants.TYPE_AGENT_REGISTER,
+                AgentProtocolConstants.TYPE_CHAT_MESSAGE, AgentProtocolConstants.TYPE_CHAT_MESSAGE_DELTA}) {
+            var normalized = normalizer.normalizeInbound(Map.of(
+                    "schemaVersion", AgentProtocolConstants.VERSION_1,
+                    "messageType", messageType, "runtimeInstanceId", "runtime-1",
+                    "messageId", "message-1", "requestId", "request-2"));
+            assertEquals("message-1", normalized.envelope().getMessageId());
+            assertEquals("request-2", normalized.payload().get("requestId"));
+        }
+        var acrossLayers = normalizer.normalizeInbound(Map.of(
+                "schemaVersion", AgentProtocolConstants.VERSION_1,
+                "messageType", AgentProtocolConstants.TYPE_CHAT_MESSAGE,
+                "messageId", "message-1", "payload", Map.of("requestId", "request-2")));
+        assertEquals("message-1", acrossLayers.envelope().getMessageId());
+        assertEquals("request-2", acrossLayers.payload().get("requestId"));
     }
 
     @Test
-    void acceptsMatchingMessageIdAliasesWithinAndAcrossLayers() {
-        AgentProtocolMessageNormalizer.NormalizedMessage normalized = normalizer.normalizeInbound(Map.of(
-                "type", "agent.message",
-                "messageId", "message-1",
-                "requestId", "message-1",
-                "payload", Map.of(
-                        "messageId", "message-1",
-                        "requestId", "message-1")));
+    void rejectsConflictingCopiesOfEachIdentityAcrossLayers() {
+        for (String field : new String[]{"messageId", "requestId"}) {
+            assertProtocolError("ENVELOPE_FIELD_CONFLICT", Map.of(
+                    "schemaVersion", AgentProtocolConstants.VERSION_1,
+                    "messageType", AgentProtocolConstants.TYPE_CHAT_MESSAGE,
+                    field, "outer", "payload", Map.of(field, "inner")));
+        }
+    }
 
-        assertEquals("message-1", normalized.envelope().getMessageId());
+    @Test
+    void requestIdCannotSubstituteForMissingMessageId() {
+        assertProtocolError("MESSAGE_ID_REQUIRED", Map.of(
+                "schemaVersion", AgentProtocolConstants.VERSION_1,
+                "messageType", AgentProtocolConstants.TYPE_CHAT_MESSAGE,
+                "requestId", "request-1"));
     }
 
     @Test

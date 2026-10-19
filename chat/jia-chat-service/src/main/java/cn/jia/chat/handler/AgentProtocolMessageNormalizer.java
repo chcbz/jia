@@ -60,8 +60,8 @@ public class AgentProtocolMessageNormalizer {
         AgentProtocolEnvelopeDTO envelope = new AgentProtocolEnvelopeDTO();
         envelope.setSchemaVersion(schemaVersion);
         envelope.setMessageType(canonicalType);
-        envelope.setMessageId(hasDurableTurnBinding(raw, body)
-                ? value(raw, body, "messageId") : value(raw, body, "messageId", "requestId"));
+        // Operation correlation and transport message identity are independent (interface standard v1.2).
+        envelope.setMessageId(value(raw, body, "messageId"));
         envelope.setCommandId(value(raw, body, "commandId"));
         envelope.setCorrelationId(value(raw, body, "correlationId"));
         envelope.setCausationId(value(raw, body, "causationId"));
@@ -100,26 +100,13 @@ public class AgentProtocolMessageNormalizer {
         }
         validateCanonicalAgentAliases(raw);
         validateCanonicalAgentAliases(body);
-        if (!hasDurableTurnBinding(raw, body)) {
-            validateAliasGroupWithinLayer(raw, "messageId", "messageId", "requestId");
-            validateAliasGroupWithinLayer(body, "messageId", "messageId", "requestId");
-        }
         validateAliasGroupWithinLayer(raw, "targetAgentId", "targetAgentId", "receiverAgentId");
         validateAliasGroupWithinLayer(body, "targetAgentId", "targetAgentId", "receiverAgentId");
         validateAliasGroupWithinLayer(raw, "sentAt", "sentAt", "timestamp");
         validateAliasGroupWithinLayer(body, "sentAt", "sentAt", "timestamp");
-        if (!hasDurableTurnBinding(raw, body)) {
-            validateAliasGroupAcrossLayers(raw, body, "messageId", "messageId", "requestId");
-        }
         validateAliasGroupAcrossLayers(raw, body, "sourceAgentId", "agentId", "sourceAgentId");
         validateAliasGroupAcrossLayers(raw, body, "targetAgentId", "targetAgentId", "receiverAgentId");
         validateAliasGroupAcrossLayers(raw, body, "sentAt", "sentAt", "timestamp");
-    }
-
-    private boolean hasDurableTurnBinding(Map<String, Object> raw, Map<String, Object> body) {
-        return raw.containsKey("turnId") || body.containsKey("turnId")
-                || raw.containsKey("dispatchId") || body.containsKey("dispatchId")
-                || raw.containsKey("contextSnapshotId") || body.containsKey("contextSnapshotId");
     }
 
     private void validateDeclaredSchemaVersion(Map<String, Object> layer) {
