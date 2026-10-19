@@ -18,10 +18,12 @@ public final class ChatTypedOutcomeWire {
                 || version.intValue()<1 || version.intValue()>4
                 || !Set.of("CHAT","INSPECT").contains(route)) throw invalid();
         var result = select(source, "conversationId", "conversationGeneration", "requestId", "requestRevision", "turnId", "state");
-        result.put("schemaVersion", 5); result.put("route", route);
+        result.put("schemaVersion", 6); result.put("route", route);
         result.put("outcome", source.get("outcome") == null ? null : outcome(map(source.get("outcome")), version.intValue()));
         result.put("inspection", source.get("inspection") == null ? null : inspection(map(source.get("inspection"))));
         result.put("actionProgress", source.get("actionProgress") == null ? null : progress(map(source.get("actionProgress"))));
+        result.put("submissionProgress", source.get("submissionProgress") == null ? null : select(map(source.get("submissionProgress")),
+                "eventId","operationId","state","dispatchVersion","operationStateVersion","deliveryId","errorCode","retryable"));
         return Collections.unmodifiableMap(result);
     }
 

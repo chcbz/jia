@@ -249,6 +249,8 @@ public class ChatActionFinalService {
         view.put("inspection", inspection == null ? null : inspectionView(inspection, validated));
         view.put("actionProgress", includeProgress && row != null && "ACTION_REQUEST".equals(row.kind())
                 ? actionProgress(row, validated, admission) : null);
+        view.put("submissionProgress", includeProgress && row != null && submissions != null
+                ? submissions.read(row,validated) : null);
         return Collections.unmodifiableMap(view);
     }
 

@@ -1,0 +1,387 @@
+{
+  "schemaVersion": 1,
+  "kind": "TARGET_CONTRACT_DESIGN_NOT_RUNTIME_EVIDENCE",
+  "date": "2026-10-18",
+  "allDataSynthetic": true,
+  "batchDigestVector": {
+    "items": [
+      [
+        "artifact_manifest",
+        "1",
+        "99d35512273e0bf7ceb7a67b0ec97805a5c6cfb2b30a8852e5c452c6cf6a108f",
+        "manifest"
+      ],
+      [
+        "artifact_text",
+        "1",
+        "5c9df06d7bab36422a3204bcf4af382ee5e076269f6dd6dde62c0678d0e0b2bb",
+        "正式文本"
+      ]
+    ],
+    "canonicalUtf8": "[\"hall-delivery-batch-v1\",\"task_fixture\",\"delivery_fixture\",\"0\",[[\"artifact_manifest\",\"1\",\"99d35512273e0bf7ceb7a67b0ec97805a5c6cfb2b30a8852e5c452c6cf6a108f\",\"manifest\"],[\"artifact_text\",\"1\",\"5c9df06d7bab36422a3204bcf4af382ee5e076269f6dd6dde62c0678d0e0b2bb\",\"正式文本\"]]]",
+    "expectedSha256": "a7847d54b1184c597c29084c5be98aaddea12660cc19e621d9b916ae0fccf4e3"
+  },
+  "http": {
+    "method": "POST",
+    "path": "/agent/tasks/task_fixture/delivery-review-operations",
+    "headers": {
+      "Idempotency-Key": "review-fixture-0001",
+      "X-Request-Id": "request_fixture"
+    }
+  },
+  "acceptRequest": {
+    "protocolVersion": 1,
+    "requestId": "request_fixture",
+    "data": {
+      "schemaVersion": 1,
+      "deliveryId": "delivery_fixture",
+      "expectedTaskVersion": "7",
+      "expectedDeliveryVersion": "0",
+      "expectedAssignmentRevision": "1",
+      "batchSha256": "a7847d54b1184c597c29084c5be98aaddea12660cc19e621d9b916ae0fccf4e3",
+      "decision": "ACCEPT",
+      "conversationId": null,
+      "conversationGeneration": null,
+      "instruction": null,
+      "sourceSelectors": []
+    }
+  },
+  "acceptResponse": {
+    "protocolVersion": 1,
+    "requestId": "request_fixture",
+    "code": "E0",
+    "msg": "OK",
+    "data": {
+      "schemaVersion": 1,
+      "operationId": "review_fixture_accept",
+      "taskId": "task_fixture",
+      "deliveryId": "delivery_fixture",
+      "decision": "ACCEPT",
+      "state": "COMMITTED",
+      "stateVersion": "2",
+      "taskState": "COMPLETED",
+      "taskVersion": "8",
+      "deliveryState": "ACCEPTED",
+      "deliveryVersion": "1",
+      "requestId": null,
+      "conversationId": null,
+      "errorCode": null,
+      "retryable": false,
+      "sourceRequestId": null
+    }
+  },
+  "conflictResponse": {
+    "httpStatus": 409,
+    "body": {
+      "protocolVersion": 1,
+      "requestId": "request_fixture",
+      "code": "DELIVERY_REVIEW_CONFLICT",
+      "msg": "交付版本已变化，请核对当前成果。",
+      "data": null
+    }
+  },
+  "phaseCases": [
+    {
+      "rawStatus": "open",
+      "phase": "PENDING_ASSIGNMENT"
+    },
+    {
+      "rawStatus": "planning",
+      "phase": "IN_PROGRESS"
+    },
+    {
+      "rawStatus": "assigned",
+      "phase": "IN_PROGRESS"
+    },
+    {
+      "rawStatus": "running",
+      "phase": "IN_PROGRESS"
+    },
+    {
+      "rawStatus": "blocked",
+      "phase": "IN_PROGRESS"
+    },
+    {
+      "rawStatus": "reviewing",
+      "phase": "PENDING_ACCEPTANCE"
+    },
+    {
+      "rawStatus": "completed",
+      "phase": "COMPLETED"
+    },
+    {
+      "rawStatus": "failed",
+      "phase": "HISTORY"
+    },
+    {
+      "rawStatus": "cancelled",
+      "phase": "HISTORY"
+    },
+    {
+      "rawStatus": "archived",
+      "phase": "HISTORY"
+    },
+    {
+      "rawStatus": "unexpected",
+      "phase": "UNKNOWN"
+    }
+  ],
+  "negativeCases": [
+    {
+      "mutation": "expectedTaskVersion = 7 (number)",
+      "expected": "400"
+    },
+    {
+      "mutation": "expectedTaskVersion = \"01\"",
+      "expected": "400"
+    },
+    {
+      "mutation": "expectedTaskVersion = \"9223372036854775808\"",
+      "expected": "400"
+    },
+    {
+      "mutation": "unknown body field ownerJiacn",
+      "expected": "400"
+    },
+    {
+      "mutation": "ACCEPT with non-null instruction",
+      "expected": "400"
+    },
+    {
+      "mutation": "REQUEST_CHANGES with null conversationId",
+      "expected": "400"
+    },
+    {
+      "mutation": "batchSha256 differs from server recomputation",
+      "expected": "409"
+    },
+    {
+      "mutation": "same Idempotency-Key, different instruction",
+      "expected": "409"
+    },
+    {
+      "mutation": "network failure after COMMITTED",
+      "expected": "UNKNOWN then GET same operation; no new key"
+    },
+    {
+      "mutation": "reviewing root with no valid current delivery",
+      "expected": "UNKNOWN and no ACCEPT"
+    },
+    {
+      "mutation": "COMPLETED+SUBMITTED finalization receipt",
+      "expected": "submission success only; no task-completed event"
+    }
+  ],
+  "reviewRequestDigestVectors": [
+    {
+      "request": "acceptRequest",
+      "canonicalUtf8": "[\"hall-delivery-review-v1\",1,\"delivery_fixture\",\"7\",\"0\",\"1\",\"a7847d54b1184c597c29084c5be98aaddea12660cc19e621d9b916ae0fccf4e3\",\"ACCEPT\",null,null,null,[]]",
+      "expectedSha256": "e3d8d68026202becc64441ce25de001e90ff1c0faaa8773fcbb7f2b73e76e299"
+    }
+  ],
+  "promotionV2DigestVector": {
+    "taskId": "task_fixture",
+    "expectedTaskVersion": "8",
+    "expectedAssignmentRevision": "1",
+    "conversationId": "conversation_fixture",
+    "summary": "本轮成果",
+    "items": [
+      {
+        "sourceKind": "FORMAL_ARTIFACT",
+        "requestId": null,
+        "stepId": null,
+        "outputId": null,
+        "sha256": "1c9f1836a83af1cf5e6308ff413bb1f1a7906793087699b163d5abfe3e9cb5c4",
+        "title": "保留成果",
+        "purpose": "正式文本",
+        "turnId": null,
+        "messageId": null,
+        "snapshotId": null,
+        "finalDigest": null,
+        "sourceDeliveryId": "delivery_parent",
+        "sourceArtifactId": "artifact_parent",
+        "sourceArtifactVersion": "1"
+      }
+    ],
+    "encodedHex": "00000000000000234d4d445f53454c45435445445f4f55545055545f46494e414c495a4154494f4e5f5632000000000000000c7461736b5f66697874757265000000000000000800000000000000010000000000000014636f6e766572736174696f6e5f66697874757265000000000000000ce69cace8bdaee68890e69e9c0000000000000001000000000000000f464f524d414c5f4152544946414354ffffffffffffffffffffffffffffffffffffffffffffffff000000000000004031633966313833366138336166316366356536333038666634313362623166316137393036373933303837363939623136336435616266653365396362356334000000000000000ce4bf9de79599e68890e69e9c000000000000000ce6ada3e5bc8fe69687e69cacffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff000000000000000f64656c69766572795f706172656e74000000000000000f61727469666163745f706172656e740000000000000001",
+    "expectedSha256": "785fdd85e5cf24f05d8dd82ca4c40b99025162c12d83f329aea3c92a2cbe3d3d"
+  },
+  "contextResponse": {
+    "protocolVersion": 1,
+    "requestId": "request_fixture",
+    "code": "E0",
+    "msg": "OK",
+    "data": {
+      "schemaVersion": 1,
+      "taskId": "task_fixture",
+      "taskVersion": "7",
+      "taskState": "REVIEWING",
+      "assignmentRevision": "1",
+      "currentDelivery": {
+        "deliveryId": "delivery_fixture",
+        "deliveryVersion": "0",
+        "state": "SUBMITTED",
+        "batchSha256": "a7847d54b1184c597c29084c5be98aaddea12660cc19e621d9b916ae0fccf4e3",
+        "summary": "本轮两项交付（含manifest）",
+        "submittedAt": 1792252800000,
+        "items": [
+          {
+            "artifactId": "artifact_manifest",
+            "artifactVersion": "1",
+            "contentHash": "99d35512273e0bf7ceb7a67b0ec97805a5c6cfb2b30a8852e5c452c6cf6a108f",
+            "purpose": "manifest",
+            "displayRole": "MANIFEST",
+            "source": null,
+            "unavailableReason": null
+          },
+          {
+            "artifactId": "artifact_text",
+            "artifactVersion": "1",
+            "contentHash": "5c9df06d7bab36422a3204bcf4af382ee5e076269f6dd6dde62c0678d0e0b2bb",
+            "purpose": "正式文本",
+            "displayRole": "RESULT",
+            "source": {
+              "kind": "COMPLETED_MESSAGE",
+              "requestId": "source_request_fixture",
+              "messageSource": {
+                "turnId": "turn_fixture",
+                "messageId": "123",
+                "snapshotId": "snapshot_fixture",
+                "finalSha256": "570edc86090923ed273565ec591292cd8f77fae07795dd219bae7bcd6cf567bb"
+              }
+            },
+            "unavailableReason": null
+          }
+        ],
+        "allowedActions": [
+          "VIEW",
+          "ACCEPT",
+          "REQUEST_CHANGES"
+        ]
+      },
+      "history": [],
+      "pendingOperation": null
+    }
+  },
+  "readOperations": [
+    {
+      "method": "GET",
+      "path": "/agent/tasks/task_fixture/delivery-review-context",
+      "hasBusinessSideEffect": false
+    },
+    {
+      "method": "GET",
+      "path": "/agent/tasks/task_fixture/delivery-review-operations/request",
+      "headers": {
+        "Idempotency-Key": "review-fixture-0001"
+      },
+      "successResponseRef": "acceptResponse",
+      "hasBusinessSideEffect": false
+    },
+    {
+      "method": "GET",
+      "path": "/agent/tasks/task_fixture/delivery-review-operations/review_fixture_accept",
+      "successResponseRef": "acceptResponse",
+      "hasBusinessSideEffect": false
+    }
+  ],
+  "naturalRevisionCases": [
+    {
+      "input": "把时间改成明天，重新生成",
+      "referenceRequired": false,
+      "expectedIntent": "REQUEST_CHANGES",
+      "expectedPhaseAfterCommit": "进行中"
+    },
+    {
+      "input": "改成明天会不会更好？",
+      "expectedIntent": "CLARIFY",
+      "expectedPhase": "待验收"
+    },
+    {
+      "input": "这个结果怎么理解？",
+      "withReference": true,
+      "expectedIntent": "DISCUSSION",
+      "expectedPhase": "待验收"
+    },
+    {
+      "input": "可以",
+      "expectedIntent": "DISCUSSION",
+      "mustNotAccept": true
+    }
+  ],
+  "naturalRevisionInvariants": [
+    "source message persisted once",
+    "server freezes current batch at message admission",
+    "immutable parent request; deterministic child request reuses original USER; no second message",
+    "ambiguous target/stale batch cannot silently rebase",
+    "Agent has no ACCEPT authority",
+    "model semantic judgment remains fallible; no keyword production classifier"
+  ],
+  "rejectedPublicRevisionRequest": {
+    "protocolVersion": 1,
+    "requestId": "request_fixture",
+    "data": {
+      "schemaVersion": 1,
+      "deliveryId": "delivery_fixture",
+      "expectedTaskVersion": "7",
+      "expectedDeliveryVersion": "0",
+      "expectedAssignmentRevision": "1",
+      "batchSha256": "a7847d54b1184c597c29084c5be98aaddea12660cc19e621d9b916ae0fccf4e3",
+      "decision": "REQUEST_CHANGES",
+      "conversationId": "conversation_fixture",
+      "conversationGeneration": "1",
+      "instruction": "请把集合时间提前10分钟。\n保留其他安排。",
+      "sourceSelectors": []
+    }
+  },
+  "rejectedPublicRevisionExpected": {
+    "httpStatus": 400,
+    "errorCode": "DELIVERY_REVIEW_BAD_REQUEST",
+    "reason": "REQUEST_CHANGES is internal trusted-final only"
+  },
+  "internalRevisionReceiptQueryResponse": {
+    "protocolVersion": 1,
+    "requestId": "request_fixture",
+    "code": "E0",
+    "msg": "OK",
+    "data": {
+      "schemaVersion": 1,
+      "operationId": "review_fixture_request_changes",
+      "taskId": "task_fixture",
+      "deliveryId": "delivery_fixture",
+      "decision": "REQUEST_CHANGES",
+      "state": "COMMITTED",
+      "stateVersion": "2",
+      "taskState": "RUNNING",
+      "taskVersion": "8",
+      "deliveryState": "CHANGES_REQUESTED",
+      "deliveryVersion": "1",
+      "requestId": "discussion_child_fixture",
+      "conversationId": "conversation_fixture",
+      "errorCode": null,
+      "retryable": false,
+      "sourceRequestId": "discussion_parent_fixture"
+    }
+  },
+  "v5RevisionOutcome": {
+    "schemaVersion": 5,
+    "kind": "REVISION_REQUEST",
+    "text": "将按要求调整时间。",
+    "clarification": null,
+    "action": null,
+    "deliverable": false,
+    "deliveryRelation": null,
+    "revision": {
+      "instruction": "请把集合时间提前10分钟。\n保留其他安排。",
+      "targetArtifactIds": [
+        "artifact_text"
+      ]
+    }
+  },
+  "messageRevisionDigestVector": {
+    "canonicalUtf8": "[\"hall-message-review-v1\",\"task_fixture\",\"discussion_parent_fixture\",\"100\",\"parent_outcome_fixture\",\"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\"delivery_fixture\",\"0\",\"a7847d54b1184c597c29084c5be98aaddea12660cc19e621d9b916ae0fccf4e3\",[\"artifact_text\"],\"请把集合时间提前10分钟。\\n保留其他安排。\"]",
+    "expectedSha256": "21354f98d9a2ab8326bb538206255bd1073c694ef81f4af37a38018cc02e017e",
+    "scope": "synthetic design vector; not production serializer evidence"
+  },
+  "sourceReviewRevision": "v5 target contract; public ACCEPT only; immutable parent + linked child"
+}

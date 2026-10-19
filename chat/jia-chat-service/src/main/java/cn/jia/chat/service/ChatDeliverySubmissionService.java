@@ -183,6 +183,64 @@ public class ChatDeliverySubmissionService {
         if(!outbox.dead(claim,failure.code(),System.currentTimeMillis()))throw storage();
     }
 
+    /** Mutable, read-only submission facts. The caller has already verified this actual final;
+     * never call load()/consume() here (load itself uses the ordinary final reader). */
+    @Transactional(readOnly=true)
+    public Map<String,Object> read(ChatTypedDeliberationStore.Outcome row,ChatActionFinalValidator.ValidatedFinal validated) {
+        if(row==null || validated==null || !"ANSWER".equals(validated.interactionOutcome().kind())
+                || !Boolean.TRUE.equals(validated.interactionOutcome().deliverable()) || !"CHAT".equals(validated.binding().get("route")))return null;
+        if(!row.finalDigest().equals(validated.finalDigest()) || !row.turnId().equals(validated.binding().get("turnId")))throw storage();
+        var scope=row.scope();String key=eventId(row);
+        var event=dao.findOutboxById(scope.tenantId(),scope.ownerJiacn(),scope.clientId(),key);
+        if(event==null)return null; // Pre-cutover history is audit only, not an invitation to create an event.
+        if(!scope.tenantId().equals(event.getTenantId()) || !scope.ownerJiacn().equals(event.getOwnerJiacn())
+                || !scope.clientId().equals(event.getClientId()) || !key.equals(event.getEventId()) || !row.turnId().equals(event.getTurnId())
+                || !Objects.equals(validated.binding().get("dispatchId"),event.getDispatchId()) || !EVENT.equals(event.getEventType())
+                || event.getVersion()==null || event.getVersion()<0 || event.getStatus()==null || !Set.of("READY","CLAIMED","RETRY","SENT","DEAD").contains(event.getStatus()))throw storage();
+        try {
+            if(!CanonicalContextJson.write(payload(row,(String)validated.binding().get("targetAgentId"))).equals(CanonicalContextJson.write(parse(event.getPayloadJson()))))throw storage();
+        }catch(Rejected malformed) {throw storage();}
+        operations.task(scope.tenantId(),scope.ownerJiacn(),scope.clientId(),row.taskId()); // Current root owner, including historical operation reads.
+        var operation=operations.findByKey(scope.tenantId(),scope.ownerJiacn(),scope.clientId(),row.taskId(),key);
+        String state="PENDING",deliveryId=null,error=null,operationId=null,operationVersion=null;boolean retryable=false;
+        if(operation!=null) {
+            operationId=ChatSelectedOutputFinalizationService.operationId(new ChatSelectedOutputFinalizationService.Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn()),row.taskId(),key);
+            if(!operationId.equals(operation.operationId()) || !row.taskId().equals(operation.taskId()) || !key.equals(operation.key())
+                    || !scope.conversationId().equals(operation.conversationId()) || row.assignmentRevision()!=operation.expectedAssignmentRevision()
+                    || operation.stateVersion()<1 || operation.selections()==null || operation.selections().isEmpty())throw storage();
+            String digest=SelectedOutputFinalizationDigest.request(row.taskId(),operation.expectedTaskVersion(),operation.expectedAssignmentRevision(),
+                    operation.conversationId(),operation.summary(),operation.selections().stream().map(i->new SelectedOutputFinalizationDigest.Selection(
+                            i.requestId(),i.stepId(),i.outputId(),i.sha256(),i.title(),i.purpose(),i.messageSource())).toList());
+            if(!digest.equals(operation.digest()))throw storage();
+            operationVersion=Long.toString(operation.stateVersion());
+            switch(operation.state()) {
+                case "completed" -> {
+                    if(!"SUBMITTED".equals(operation.stage()) || operation.deliveryId()==null || operation.deliveryId().isBlank()
+                            || operation.deliveryState()==null || !Set.of("submitted","accepted","changes_requested").contains(operation.deliveryState())
+                            || operation.errorCode()!=null || operation.retryable() || "DEAD".equals(event.getStatus()))throw storage();
+                    state="COMPLETED";deliveryId=operation.deliveryId();
+                }
+                case "failed" -> {
+                    if(operation.errorCode()==null)throw storage();
+                    if(!operation.retryable()) {state="FAILED";error=publicError(operation.errorCode());}
+                    else retryable=true;
+                }
+                case "pending" -> {if(operation.errorCode()!=null)throw storage();}
+                default -> throw storage();
+            }
+        }
+        if("SENT".equals(event.getStatus()) && !"COMPLETED".equals(state))throw storage();
+        if("DEAD".equals(event.getStatus())) {state="FAILED";error=publicError(event.getLastError());retryable=false;}
+        var result=new LinkedHashMap<String,Object>();result.put("eventId",key);result.put("operationId",operationId);result.put("state",state);
+        result.put("dispatchVersion",Long.toString(event.getVersion()));result.put("operationStateVersion",operationVersion);
+        result.put("deliveryId",deliveryId);result.put("errorCode",error);result.put("retryable",retryable);
+        return Collections.unmodifiableMap(result);
+    }
+    private static String publicError(String reason) {
+        return reason!=null && Set.of("DELIVERY_SOURCE_UNAVAILABLE","DELIVERY_REVIEW_REQUIRED","DELIVERY_TASK_CHANGED","DELIVERY_ASSIGNMENT_CHANGED",
+                "DELIVERY_CONVERSATION_CHANGED","DELIVERY_OPERATION_CONFLICT").contains(reason)?reason:"DELIVERY_SUBMISSION_REJECTED";
+    }
+
     /** Fixed text references or exact byte-backed outputs only. Formal-artifact retention is
      * supplied by the separately specified v2 promotion branch, never guessed from history here. */
     List<ChatSelectedOutputFinalizationStore.Selection> selections(Candidate candidate) {

@@ -183,4 +183,61 @@ class ChatDeliverySubmissionServiceTest {
         var selected=service.selections(new ChatDeliverySubmissionService.Candidate(row,admission,"agent",List.of(target))).getFirst();
         assertEquals("execute",selected.requestId());assertEquals("step",selected.stepId());assertEquals("output",selected.outputId());assertNull(selected.messageSource());verifyNoInteractions(typed,dao);
     }
+    void readable() {
+        event.setStatus("READY");when(dao.findOutboxById("0","owner","client",key)).thenReturn(event);
+        when(operations.task("0","owner","client","task")).thenReturn(new ChatSelectedOutputFinalizationStore.TaskFact("running",8));
+    }
+    ChatSelectedOutputFinalizationStore.Operation readableOperation(String state,boolean retryable,String error) {
+        var o=operation(7);var selection=o.selections().getFirst();
+        String hash=cn.jia.agent.service.SelectedOutputFinalizationDigest.request("task",7,1,"123",o.summary(),List.of(
+                new cn.jia.agent.service.SelectedOutputFinalizationDigest.Selection(selection.requestId(),selection.stepId(),selection.outputId(),selection.sha256(),selection.title(),selection.purpose(),selection.messageSource())));
+        var result=new ChatSelectedOutputFinalizationStore.Operation(o.operationId(),o.taskId(),o.key(),hash,o.conversationId(),7,1,o.summary(),state,
+                "completed".equals(state)?"SUBMITTED":"PROMOTING",9007199254740993L,"completed".equals(state)?"delivery":null,"completed".equals(state)?"submitted":null,
+                "running",8,error,retryable,o.selections());
+        when(operations.findByKey("0","owner","client","task",key)).thenReturn(result);return result;
+    }
+    @Test void progressIsReadOnlyAndOrdinaryOrPreCutoverHistoryDoesNotCreateEvents() throws Exception {
+        assertNull(service.read(row,validated("ANSWER",false)));assertNull(service.read(row,validated("ANSWER",true)));
+        verifyNoInteractions(submissions,outbox,tasks,bindings,conversations,contexts,operations,finals);
+        assertTrue(ChatDeliverySubmissionService.class.getMethod("read",ChatTypedDeliberationStore.Outcome.class,
+                ChatActionFinalValidator.ValidatedFinal.class).getAnnotation(Transactional.class).readOnly());
+    }
+    @Test void progressOfQueuedEventDoesNotClaimResumeOrPublishAnything() {
+        readable();var p=service.read(row,validated("ANSWER",true));assertEquals("PENDING",p.get("state"));assertEquals(key,p.get("eventId"));
+        assertEquals("0",p.get("dispatchVersion"));assertNull(p.get("operationId"));assertNull(p.get("operationStateVersion"));assertNull(p.get("errorCode"));assertEquals(false,p.get("retryable"));
+        verify(operations).task("0","owner","client","task");verifyNoInteractions(submissions,outbox,tasks,finals);
+    }
+    @Test void progressOfRejectionBeforeOperationExistsPreservesPublicReasonNotInfrastructureText() {
+        readable();event.setStatus("DEAD").setLastError("DELIVERY_REVIEW_REQUIRED");
+        assertEquals("DELIVERY_REVIEW_REQUIRED",service.read(row,validated("ANSWER",true)).get("errorCode"));
+        event.setLastError("storage failure /private/path?token=DO_NOT_EXPOSE");var p=service.read(row,validated("ANSWER",true));
+        assertEquals("FAILED",p.get("state"));assertEquals("DELIVERY_SUBMISSION_REJECTED",p.get("errorCode"));assertNull(p.get("deliveryId"));assertEquals(false,p.get("retryable"));
+        verifyNoInteractions(submissions,outbox,finals);
+    }
+    @Test void progressCompletedCommitIsVisibleBeforeAckButNeverMeansAcceptance() {
+        readable();var operation=readableOperation("completed",false,null);var p=service.read(row,validated("ANSWER",true));
+        assertEquals("COMPLETED",p.get("state"));assertEquals("delivery",p.get("deliveryId"));assertEquals(operation.operationId(),p.get("operationId"));
+        assertEquals("9007199254740993",p.get("operationStateVersion"));assertNull(p.get("errorCode"));assertFalse(p.containsKey("taskState"));
+        verifyNoInteractions(submissions,outbox,tasks,finals);
+    }
+    @Test void progressNeverConvertsTransportFailureOrLostRootAuthorizationToAFakeRejection() {
+        readable();when(operations.findByKey(any(),any(),any(),any(),any())).thenThrow(new IllegalStateException("database unavailable"));
+        assertThrows(IllegalStateException.class,()->service.read(row,validated("ANSWER",true)));
+        when(operations.task(any(),any(),any(),any())).thenThrow(new ChatSelectedOutputFinalizationStore.Missing());
+        assertThrows(ChatSelectedOutputFinalizationStore.Missing.class,()->service.read(row,validated("ANSWER",true)));verifyNoInteractions(outbox,submissions);
+    }
+    @Test void progressFailsClosedOnMissingReceiptWrongEventOrChangedFrozenCommand() {
+        readable();event.setStatus("SENT");assertThrows(IllegalStateException.class,()->service.read(row,validated("ANSWER",true)));
+        event.setStatus("READY").setOwnerJiacn("foreign");assertThrows(IllegalStateException.class,()->service.read(row,validated("ANSWER",true)));
+        event.setOwnerJiacn("owner");when(operations.findByKey(any(),any(),any(),any(),any())).thenReturn(operation(7));
+        assertThrows(IllegalStateException.class,()->service.read(row,validated("ANSWER",true)));
+        event.setPayloadJson(event.getPayloadJson().replace("\"schemaVersion\":1","\"schemaVersion\":1,\"schemaVersion\":1"));
+        assertThrows(IllegalStateException.class,()->service.read(row,validated("ANSWER",true)));verifyNoInteractions(submissions,outbox,finals);
+    }
+    @Test void progressSeparatesRetryableFailureFromPermanentFailureAndRejectsSuccessDeadContradiction() {
+        readable();readableOperation("failed",true,"STORAGE_UNAVAILABLE");var p=service.read(row,validated("ANSWER",true));
+        assertEquals("PENDING",p.get("state"));assertEquals(true,p.get("retryable"));assertNull(p.get("errorCode"));
+        readableOperation("failed",false,"GRANT_REVOKED");p=service.read(row,validated("ANSWER",true));assertEquals("FAILED",p.get("state"));assertEquals(false,p.get("retryable"));
+        readableOperation("completed",false,null);event.setStatus("DEAD");assertThrows(IllegalStateException.class,()->service.read(row,validated("ANSWER",true)));
+    }
 }

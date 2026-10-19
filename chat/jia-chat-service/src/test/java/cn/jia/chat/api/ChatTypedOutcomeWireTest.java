@@ -11,10 +11,10 @@ class ChatTypedOutcomeWireTest {
         outcome.put("assistantMessageId","9223372036854775807");outcome.put("finalDigest","sha256:"+HASH);outcome.put("kind","ANSWER");outcome.put("text","图片中的红色汽车\n保留原文");outcome.put("clarification",null);
         var view=new LinkedHashMap<String,Object>();view.put("schemaVersion",version);view.put("conversationId","c");view.put("conversationGeneration","1");view.put("requestId","r");view.put("requestRevision","1");view.put("turnId","turn");view.put("state","READY");view.put("outcome",outcome);return view;
     }
-    @Test void displayFiveDoesNotAlterCanonicalFacts() {
+    @Test void displaySixDoesNotAlterCanonicalFacts() {
         for(int version=1;version<=4;version++) {
             var source=fixture(version);var before=source.toString();var wire=ChatTypedOutcomeWire.project(source,"CHAT");
-            assertEquals(5,wire.get("schemaVersion"));assertEquals(11,wire.size());
+            assertEquals(6,wire.get("schemaVersion"));assertEquals(12,wire.size());assertNull(wire.get("submissionProgress"));
             var outcome=(Map<?,?>)wire.get("outcome");assertEquals(version,outcome.get("outcomeContractVersion"));assertEquals(HASH,outcome.get("finalSha256"));
             assertEquals(14,outcome.size());assertTrue(outcome.containsKey("proposal"));assertNull(outcome.get("deliverable"));assertNull(outcome.get("messageSource"));
             assertEquals(before,source.toString());assertFalse(outcome.containsKey("finalDigest"));
@@ -26,6 +26,12 @@ class ChatTypedOutcomeWireTest {
         progress.put("executionId","e");progress.put("executionStateVersion","9007199254740993");progress.put("phase","RESULT_READY");progress.put("resultDigest",HASH);source.put("actionProgress",progress);
         var result=(Map<?,?>)ChatTypedOutcomeWire.project(source,"CHAT").get("actionProgress");assertEquals("9007199254740993",result.get("executionStateVersion"));assertEquals(HASH,result.get("resultSha256"));
         progress.put("resultDigest","sha256:"+HASH);assertThrows(RuntimeException.class,()->ChatTypedOutcomeWire.project(source,"CHAT"));
+    }
+    @Test void submissionProgressIsSeparateFromImmutableOutcomeAndDoesNotExposeIntentOrCredentials() {
+        var source=fixture(4);var p=new LinkedHashMap<String,Object>();p.put("eventId","delivery-submit-"+HASH);p.put("operationId",null);p.put("state","FAILED");
+        p.put("dispatchVersion","9007199254740993");p.put("operationStateVersion",null);p.put("deliveryId",null);p.put("errorCode","DELIVERY_REVIEW_REQUIRED");p.put("retryable",false);
+        source.put("submissionProgress",p);var wire=ChatTypedOutcomeWire.project(source,"CHAT");assertEquals(p,wire.get("submissionProgress"));
+        p.remove("dispatchVersion");assertThrows(RuntimeException.class,()->ChatTypedOutcomeWire.project(source,"CHAT"));
     }
     @Test void discussionAcceptsOnlyPublicSchemaAndPreservesInternalSelector() {
         var data=new LinkedHashMap<String,Object>();data.put("schemaVersion",3);data.put("materialScope","EXPLICIT");data.put("intent","DISCUSSION");data.put("taskId","t");data.put("expectedAssignmentRevision","0");data.put("content","图片\n"+"字".repeat(5000));
