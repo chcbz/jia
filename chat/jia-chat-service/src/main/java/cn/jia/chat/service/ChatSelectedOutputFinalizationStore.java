@@ -14,15 +14,26 @@ public class ChatSelectedOutputFinalizationStore {
     public ChatSelectedOutputFinalizationStore(JdbcTemplate jdbc){this.jdbc=Objects.requireNonNull(jdbc);}
 
     public record Selection(String requestId,String stepId,String outputId,String sha256,String title,String purpose,
-            SelectedOutputFinalizationDigest.MessageSource messageSource) {
+            SelectedOutputFinalizationDigest.MessageSource messageSource,SelectedOutputFinalizationDigest.FormalArtifactSource formalArtifactSource) {
+        public Selection(String requestId,String stepId,String outputId,String sha256,String title,String purpose,SelectedOutputFinalizationDigest.MessageSource messageSource) {
+            this(requestId,stepId,outputId,sha256,title,purpose,messageSource,null);
+        }
         public Selection(String requestId,String stepId,String outputId,String sha256,String title,String purpose){
-            this(requestId,stepId,outputId,sha256,title,purpose,null);
+            this(requestId,stepId,outputId,sha256,title,purpose,null,null);
         }
     }
     public record Operation(String operationId,String taskId,String key,String digest,String conversationId,
             long expectedTaskVersion,long expectedAssignmentRevision,String summary,String state,String stage,
             long stateVersion,String deliveryId,String deliveryState,String taskState,long taskVersion,
-            String errorCode,boolean retryable,List<Selection> selections) { }
+            String errorCode,boolean retryable,List<Selection> selections,int contractVersion) {
+        public Operation(String operationId,String taskId,String key,String digest,String conversationId,
+                long expectedTaskVersion,long expectedAssignmentRevision,String summary,String state,String stage,
+                long stateVersion,String deliveryId,String deliveryState,String taskState,long taskVersion,
+                String errorCode,boolean retryable,List<Selection> selections) {
+            this(operationId,taskId,key,digest,conversationId,expectedTaskVersion,expectedAssignmentRevision,summary,state,stage,
+                    stateVersion,deliveryId,deliveryState,taskState,taskVersion,errorCode,retryable,selections,2);
+        }
+    }
     public record TaskFact(String state,long version) { }
     public record SourceFact(long generation,String executionId,String runId,String mime,String sha256,long byteLength) { }
 
@@ -31,7 +42,7 @@ public class ChatSelectedOutputFinalizationStore {
             String digest,String conversationId,long expectedTaskVersion,long expectedAssignmentRevision,
             String summary,List<Selection> selections) {
         Operation existing=findByKey(tenant,owner,client,taskId,key);
-        if(existing!=null){if(!digest.equals(existing.digest()))throw new Conflict();return existing;}
+        if(existing!=null){if(existing.contractVersion()!=2 || !digest.equals(existing.digest()))throw new Conflict();return existing;}
         TaskFact task=task(tenant,owner,client,taskId);
         long now=System.currentTimeMillis();
         try {
@@ -39,22 +50,25 @@ public class ChatSelectedOutputFinalizationStore {
                 INSERT INTO chat_selected_output_finalization
                 (operation_id,tenant_id,owner_jiacn,client_id,task_id,idempotency_key,request_digest,
                  conversation_id,expected_task_version,expected_assignment_revision,summary,state,stage,
-                 state_version,task_state,task_version,retryable,created_at,updated_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,'pending','PROMOTING',1,?,?,0,?,?)
+                 state_version,task_state,task_version,retryable,created_at,updated_at,contract_version)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,'pending','PROMOTING',1,?,?,0,?,?,2)
                 """,operationId,tenant,owner,client,taskId,key,digest,conversationId,expectedTaskVersion,
                     expectedAssignmentRevision,summary,task.state(),task.version(),now,now)!=1)throw new Persistence();
             for(int i=0;i<selections.size();i++){Selection s=selections.get(i);
                 if(jdbc.update("""
                     INSERT INTO chat_selected_output_finalization_item
                     (tenant_id,owner_jiacn,client_id,operation_id,item_order,request_id,step_id,output_id,sha256,title,purpose,
-                     source_kind,turn_id,message_id,snapshot_id,final_digest)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                    """,tenant,owner,client,operationId,i,s.requestId(),s.stepId(),s.outputId(),s.sha256(),s.title(),s.purpose(),s.messageSource()==null?"OUTPUT":"COMPLETED_MESSAGE",
+                     source_kind,turn_id,message_id,snapshot_id,final_digest,source_delivery_id,source_artifact_id,source_artifact_version)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    """,tenant,owner,client,operationId,i,s.requestId(),s.stepId(),s.outputId(),s.sha256(),s.title(),s.purpose(),s.formalArtifactSource()!=null?"FORMAL_ARTIFACT":s.messageSource()==null?"OUTPUT":"COMPLETED_MESSAGE",
                     s.messageSource()==null?null:s.messageSource().turnId(),s.messageSource()==null?null:s.messageSource().messageId(),
-                    s.messageSource()==null?null:s.messageSource().snapshotId(),s.messageSource()==null?null:s.messageSource().finalDigest())!=1)throw new Persistence();}
+                    s.messageSource()==null?null:s.messageSource().snapshotId(),s.messageSource()==null?null:s.messageSource().finalDigest(),
+                    s.formalArtifactSource()==null?null:s.formalArtifactSource().sourceDeliveryId(),
+                    s.formalArtifactSource()==null?null:s.formalArtifactSource().sourceArtifactId(),
+                    s.formalArtifactSource()==null?null:s.formalArtifactSource().sourceArtifactVersion())!=1)throw new Persistence();}
         } catch(org.springframework.dao.DuplicateKeyException race){
             Operation replay=findByKey(tenant,owner,client,taskId,key);
-            if(replay==null||!digest.equals(replay.digest()))throw new Conflict();return replay;
+            if(replay==null||replay.contractVersion()!=2||!digest.equals(replay.digest()))throw new Conflict();return replay;
         }
         return requireByOperation(tenant,owner,client,taskId,operationId);
     }
@@ -62,6 +76,7 @@ public class ChatSelectedOutputFinalizationStore {
     @Transactional(rollbackFor=Exception.class)
     public Operation advance(String tenant,String owner,String client,Operation expected,String state,String stage,
             String deliveryId,String deliveryState,String taskState,long taskVersion,String errorCode,boolean retryable){
+        if(expected.contractVersion()!=2)throw new Conflict();
         int n=jdbc.update("""
             UPDATE chat_selected_output_finalization SET state=?,stage=?,state_version=state_version+1,
              delivery_id=?,delivery_state=?,task_state=?,task_version=?,error_code=?,retryable=?,updated_at=?
@@ -120,12 +135,12 @@ public class ChatSelectedOutputFinalizationStore {
         List<Operation> base=jdbc.query("""
             SELECT o.operation_id,o.task_id,o.idempotency_key,o.request_digest,o.conversation_id,
              o.expected_task_version,o.expected_assignment_revision,o.summary,o.state,o.stage,o.state_version,
-             o.delivery_id,o.delivery_state,o.task_state,o.task_version,o.error_code,o.retryable
+             o.delivery_id,o.delivery_state,o.task_state,o.task_version,o.error_code,o.retryable,o.contract_version
             FROM chat_selected_output_finalization o
             """+where,(rs,n)->new Operation(rs.getString(1),rs.getString(2),rs.getString(3),rs.getString(4),
                 rs.getString(5),rs.getLong(6),rs.getLong(7),rs.getString(8),rs.getString(9),rs.getString(10),
                 rs.getLong(11),rs.getString(12),rs.getString(13),rs.getString(14),rs.getLong(15),rs.getString(16),
-                rs.getBoolean(17),List.of()),args);
+                rs.getBoolean(17),List.of(),rs.getInt(18)),args);
         if(base.isEmpty())return base;
         if(base.size()!=1)throw new Persistence();
         Operation row=base.getFirst();
@@ -134,23 +149,28 @@ public class ChatSelectedOutputFinalizationStore {
         return List.of(new Operation(row.operationId(),row.taskId(),row.key(),row.digest(),row.conversationId(),
                 row.expectedTaskVersion(),row.expectedAssignmentRevision(),row.summary(),row.state(),row.stage(),
                 row.stateVersion(),row.deliveryId(),row.deliveryState(),row.taskState(),row.taskVersion(),
-                row.errorCode(),row.retryable(),selections));
+                row.errorCode(),row.retryable(),selections,row.contractVersion()));
     }
     private List<Selection> items(String operationId,Object[] scopeArgs){
         String tenant=(String)scopeArgs[0],owner=(String)scopeArgs[1],client=(String)scopeArgs[2];
         record Ordered(int order,Selection selection) { }
         List<Ordered> rows=jdbc.query("""
-            SELECT item_order,request_id,step_id,output_id,sha256,title,purpose,source_kind,turn_id,message_id,snapshot_id,final_digest
+            SELECT item_order,request_id,step_id,output_id,sha256,title,purpose,source_kind,turn_id,message_id,snapshot_id,final_digest,source_delivery_id,source_artifact_id,source_artifact_version
             FROM chat_selected_output_finalization_item WHERE BINARY tenant_id=BINARY ?
              AND BINARY owner_jiacn=BINARY ? AND BINARY client_id=BINARY ? AND BINARY operation_id=BINARY ?
             ORDER BY item_order
             """,(rs,n)->new Ordered(rs.getInt(1),new Selection(rs.getString(2),rs.getString(3),rs.getString(4),
-                    rs.getString(5),rs.getString(6),rs.getString(7),messageSource(rs))),tenant,owner,client,operationId);
+                    rs.getString(5),rs.getString(6),rs.getString(7),messageSource(rs),formalSource(rs))),tenant,owner,client,operationId);
         for(int index=0;index<rows.size();index++)if(rows.get(index).order()!=index)throw new Persistence();
         return rows.stream().map(Ordered::selection).toList();
     }
     private static SelectedOutputFinalizationDigest.MessageSource messageSource(java.sql.ResultSet rs) throws java.sql.SQLException {
         String kind=rs.getString(8),turn=rs.getString(9),message=rs.getString(10),snapshot=rs.getString(11),digest=rs.getString(12);
+        if("FORMAL_ARTIFACT".equals(kind)) {
+            if(rs.getString(2)!=null || rs.getString(3)!=null || rs.getString(4)!=null || turn!=null || message!=null || snapshot!=null || digest!=null)throw new Persistence();
+            return null;
+        }
+        if(rs.getString(13)!=null || rs.getString(14)!=null || rs.getObject(15)!=null || rs.getString(2)==null)throw new Persistence();
         if("OUTPUT".equals(kind)) {
             if(rs.getString(3)==null || rs.getString(4)==null || turn!=null || message!=null || snapshot!=null || digest!=null)throw new Persistence();
             return null;
@@ -158,6 +178,13 @@ public class ChatSelectedOutputFinalizationStore {
         if(!"COMPLETED_MESSAGE".equals(kind) || rs.getString(3)!=null || rs.getString(4)!=null
                 || turn==null || message==null || snapshot==null || digest==null)throw new Persistence();
         return new SelectedOutputFinalizationDigest.MessageSource(turn,message,snapshot,digest);
+    }
+    private static SelectedOutputFinalizationDigest.FormalArtifactSource formalSource(java.sql.ResultSet rs) throws java.sql.SQLException {
+        if(!"FORMAL_ARTIFACT".equals(rs.getString(8)))return null;
+        try {
+            if(rs.getObject(15)==null)throw new Persistence();
+            return new SelectedOutputFinalizationDigest.FormalArtifactSource(rs.getString(13),rs.getString(14),rs.getInt(15));
+        }catch(IllegalArgumentException invalid) {throw new Persistence();}
     }
     private static Operation one(List<Operation> rows){if(rows.size()>1)throw new Persistence();return rows.isEmpty()?null:rows.getFirst();}
     public static final class Missing extends RuntimeException { }

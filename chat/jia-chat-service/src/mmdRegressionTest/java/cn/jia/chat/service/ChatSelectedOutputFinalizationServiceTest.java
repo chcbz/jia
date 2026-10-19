@@ -19,6 +19,39 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 class ChatSelectedOutputFinalizationServiceTest {
+    @Test void publicBrowserPathCannotInjectTrustedFormalSourceEvenWithAValidHash() {
+        Fixture f=new Fixture();var formal=new SelectedOutputFinalizationDigest.FormalArtifactSource("old-delivery","old-artifact",2);
+        var command=new ChatSelectedOutputFinalizationService.Command(7,7,"100","submit",List.of(
+                new ChatSelectedOutputFinalizationService.Selection(null,null,null,f.hash,"Retained","final",null,formal)));
+        assertThrows(IllegalArgumentException.class,()->f.service.submit(f.scope,"task-1",Fixture.KEY,command));
+        verifyNoInteractions(f.store,f.deliberations,f.steps,f.executions,f.agent,f.messages,f.grants);
+    }
+    @Test void oldContractIsReadableWithoutReplayingOrMutatingPendingOperation() {
+        Fixture f=new Fixture();String digest=SelectedOutputFinalizationDigest.request("task-1",7,7,"100","accept it",List.of(
+                new SelectedOutputFinalizationDigest.Selection("req-1","step-1","out-1",f.hash,"Chosen","final")));
+        var row=new ChatSelectedOutputFinalizationStore.Operation("op-1","task-1",Fixture.KEY,digest,"100",7,7,"accept it",
+                "pending","PROMOTING",1,null,null,"assigned",7,null,false,f.selections,1);
+        when(f.store.findByKey("0","owner-1","client-1","task-1",Fixture.KEY)).thenReturn(row);
+        assertEquals("pending",f.service.getByKey(f.scope,"task-1",Fixture.KEY).state());
+        assertThrows(ChatSelectedOutputFinalizationStore.Conflict.class,()->f.service.submit(f.scope,"task-1",Fixture.KEY,f.command()));
+        verify(f.store,never()).create(anyString(),anyString(),anyString(),anyString(),anyString(),anyString(),anyString(),anyString(),anyLong(),anyLong(),anyString(),anyList());
+        verify(f.store,never()).advance(anyString(),anyString(),anyString(),any(),anyString(),anyString(),any(),any(),anyString(),anyLong(),any(),anyBoolean());
+        verifyNoInteractions(f.deliberations,f.steps,f.executions,f.agent,f.messages,f.grants);
+    }
+    @Test void trustedFormalSourceReadRetainsFixedVersionAndUsesV2DigestWithoutResolveOrWrite() {
+        Fixture f=new Fixture();var formal=new SelectedOutputFinalizationDigest.FormalArtifactSource("old-delivery","old-artifact",2);
+        var sources=List.of(new ChatSelectedOutputFinalizationStore.Selection(null,null,null,f.hash,"Retained","final",null,formal));
+        String digest=SelectedOutputFinalizationDigest.requestV2("task-1",7,7,"100","submit",List.of(
+                new SelectedOutputFinalizationDigest.Selection(null,null,null,f.hash,"Retained","final",null,formal)));
+        var row=new ChatSelectedOutputFinalizationStore.Operation("op-1","task-1",Fixture.KEY,digest,"100",7,7,"submit",
+                "completed","SUBMITTED",2,"delivery-1","submitted","reviewing",9,null,false,sources,2);
+        when(f.store.findByKey("0","owner-1","client-1","task-1",Fixture.KEY)).thenReturn(row);
+        var receipt=f.service.getByKey(f.scope,"task-1",Fixture.KEY);
+        assertEquals(formal,receipt.selectedOutputs().getFirst().formalArtifactSource());assertNull(receipt.selectedOutputs().getFirst().requestId());
+        verifyNoInteractions(f.deliberations,f.steps,f.executions,f.agent,f.messages,f.grants);
+        verify(f.store).findByKey("0","owner-1","client-1","task-1",Fixture.KEY);verifyNoMoreInteractions(f.store);
+    }
+
     @Test
     void actualHappyPathPreservesExactOrderedSelectionAcrossAllDurablePhases() {
         Fixture f=new Fixture();f.sourceReady();f.agentHappy();f.advanceByArguments();
@@ -267,7 +300,7 @@ class ChatSelectedOutputFinalizationServiceTest {
         var command=new ChatSelectedOutputFinalizationService.Command(7,7,"100","accept it",List.of(text));
         var receipt=f.service.submit(f.scope,"task-1",Fixture.KEY,command);assertEquals(List.of(text),receipt.selectedOutputs());
         verifyNoInteractions(f.messages,f.grants,f.executions,f.steps,f.deliberations);
-        var row=new ChatSelectedOutputFinalizationStore.Operation(receipt.operationId(),"task-1",Fixture.KEY,SelectedOutputFinalizationDigest.request("task-1",7,7,"100","accept it",List.of(
+        var row=new ChatSelectedOutputFinalizationStore.Operation(receipt.operationId(),"task-1",Fixture.KEY,SelectedOutputFinalizationDigest.requestV2("task-1",7,7,"100","accept it",List.of(
                         new SelectedOutputFinalizationDigest.Selection(text.requestId(),null,null,text.sha256(),text.title(),text.purpose(),text.messageSource()))),"100",7,7,
                 "accept it","completed","TASK_COMPLETED",3,"delivery-1","accepted","completed",12,null,false,List.of(
                 new ChatSelectedOutputFinalizationStore.Selection(text.requestId(),null,null,text.sha256(),text.title(),text.purpose(),text.messageSource())));
@@ -388,7 +421,7 @@ class ChatSelectedOutputFinalizationServiceTest {
         final List<ChatSelectedOutputFinalizationStore.Selection> selections=List.of(
                 new ChatSelectedOutputFinalizationStore.Selection("req-1","step-1","out-1",hash,"Chosen","final"));
         final ChatSelectedOutputFinalizationStore.Operation initial=new ChatSelectedOutputFinalizationStore.Operation(
-                "op-1","task-1",KEY,SelectedOutputFinalizationDigest.request("task-1",7,7,"100","accept it",List.of(
+                "op-1","task-1",KEY,SelectedOutputFinalizationDigest.requestV2("task-1",7,7,"100","accept it",List.of(
                         new SelectedOutputFinalizationDigest.Selection("req-1","step-1","out-1",hash,"Chosen","final"))),"100",7,7,"accept it","pending","PROMOTING",1,
                 null,null,"assigned",7,null,false,selections);
         Fixture(){

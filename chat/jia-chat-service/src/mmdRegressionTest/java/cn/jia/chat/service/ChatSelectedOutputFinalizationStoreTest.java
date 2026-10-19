@@ -18,7 +18,7 @@ class ChatSelectedOutputFinalizationStoreTest {
             if(sql.contains("INSERT INTO chat_selected_output_finalization_item")){items.add(args.clone());return 1;}
             if(sql.contains("INSERT INTO chat_selected_output_finalization")){
                 operation=new Object[]{args[0],args[4],args[5],args[6],args[7],args[8],args[9],args[10],"pending","PROMOTING",1L,
-                        null,null,args[11],args[12],null,false};return 1;
+                        null,null,args[11],args[12],null,false,2};return 1;
             }
             if(sql.contains("UPDATE chat_selected_output_finalization SET")){
                 operation[8]=args[0];operation[9]=args[1];operation[10]=((Number)operation[10]).longValue()+1;
@@ -36,7 +36,7 @@ class ChatSelectedOutputFinalizationStoreTest {
                 if(!Arrays.equals(Arrays.copyOf(args,3),new Object[]{"0","owner","client"}))return List.of();
                 if(sql.contains("FROM chat_selected_output_finalization_item")){
                     List<T> result=new ArrayList<>();for(Object[] item:items){
-                        Object[] values=new Object[]{item[4],item[5],item[6],item[7],item[8],item[9],item[10],item[11],item[12],item[13],item[14],item[15]};
+                        Object[] values=new Object[]{item[4],item[5],item[6],item[7],item[8],item[9],item[10],item[11],item[12],item[13],item[14],item[15],item[16],item[17],item[18]};
                         result.add(mapper.mapRow(row(values),result.size()));
                     }return result;
                 }
@@ -49,6 +49,7 @@ class ChatSelectedOutputFinalizationStoreTest {
             when(rs.getString(anyInt())).thenAnswer(i->{Object v=values[(Integer)i.getArgument(0)-1];return v==null?null:v.toString();});
             when(rs.getLong(anyInt())).thenAnswer(i->((Number)values[(Integer)i.getArgument(0)-1]).longValue());
             when(rs.getInt(anyInt())).thenAnswer(i->((Number)values[(Integer)i.getArgument(0)-1]).intValue());
+            when(rs.getObject(anyInt())).thenAnswer(i->values[(Integer)i.getArgument(0)-1]);
             when(rs.getBoolean(anyInt())).thenAnswer(i->values[(Integer)i.getArgument(0)-1]);return rs;
         }
     }
@@ -71,6 +72,40 @@ class ChatSelectedOutputFinalizationStoreTest {
         assertThrows(ChatSelectedOutputFinalizationStore.Conflict.class,()->restarted.create("0","owner","client","operation","task",
                 "original-key","e".repeat(64),"42",7,3,"accept",selections()));assertEquals(3,jdbc.writes);
         assertNull(restarted.findByKey("0","another","client","task","original-key"));
+    }
+    @Test void fixedFormalVersionsRoundTripInExactOrderAndV1CannotBeMutated() {
+        MemoryJdbc jdbc=new MemoryJdbc();var store=new ChatSelectedOutputFinalizationStore(jdbc);
+        var fixed=new ChatSelectedOutputFinalizationStore.Selection(null,null,null,"c".repeat(64),"Retained","final",null,
+                new SelectedOutputFinalizationDigest.FormalArtifactSource("old-delivery","old-artifact",2));
+        var items=List.of(fixed,selections().getFirst(),selections().getLast());
+        var row=store.create("0","owner","client","operation","task","original-key","d".repeat(64),"42",7,3,"submit",items);
+        assertEquals(2,row.contractVersion());assertEquals(items,row.selections());assertEquals(4,jdbc.writes);
+        assertEquals("FORMAL_ARTIFACT",jdbc.items.getFirst()[11]);assertNull(jdbc.items.getFirst()[5]);
+        assertEquals(items,new ChatSelectedOutputFinalizationStore(jdbc).findByKey("0","owner","client","task","original-key").selections());
+        jdbc.operation[17]=1;var historical=store.findByKey("0","owner","client","task","original-key");
+        assertEquals(1,historical.contractVersion());
+        assertThrows(ChatSelectedOutputFinalizationStore.Conflict.class,()->store.create("0","owner","client","operation","task","original-key","d".repeat(64),"42",7,3,"submit",items));
+        assertThrows(ChatSelectedOutputFinalizationStore.Conflict.class,()->store.advance("0","owner","client",historical,"pending","READY_TO_SUBMIT",null,null,"running",8,null,false));
+        assertEquals(4,jdbc.writes);
+    }
+    @Test void persistedFormalSourceCannotLoseOrMixAnyFixedReference() {
+        for(String drift:List.of("delivery","artifact","version","zero","request","message","output")) {
+            MemoryJdbc jdbc=new MemoryJdbc();var store=new ChatSelectedOutputFinalizationStore(jdbc);
+            var fixed=new ChatSelectedOutputFinalizationStore.Selection(null,null,null,"c".repeat(64),"Retained","final",null,
+                    new SelectedOutputFinalizationDigest.FormalArtifactSource("old-delivery","old-artifact",2));
+            store.create("0","owner","client","operation","task","original-key","d".repeat(64),"42",7,3,"submit",List.of(fixed));
+            var item=jdbc.items.getFirst();
+            switch(drift) {
+                case "delivery" -> item[16]=null;
+                case "artifact" -> item[17]=null;
+                case "version" -> item[18]=null;
+                case "zero" -> item[18]=0;
+                case "request" -> item[5]="forged-request";
+                case "message" -> item[13]="9";
+                case "output" -> item[7]="forged-output";
+            }
+            assertThrows(ChatSelectedOutputFinalizationStore.Persistence.class,()->store.findByKey("0","owner","client","task","original-key"),drift);
+        }
     }
     @Test void persistedUnknownOrHybridSourceAndMissingTextRefsFailClosedInsteadOfDroppingText(){
         for(String kind:List.of("unknown","OUTPUT","hybrid","missing")){

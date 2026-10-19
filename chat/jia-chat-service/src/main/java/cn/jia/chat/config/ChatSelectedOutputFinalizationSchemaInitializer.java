@@ -99,13 +99,89 @@ public final class ChatSelectedOutputFinalizationSchemaInitializer implements In
             JdbcTemplate locked=new JdbcTemplate(new SingleConnectionDataSource(connection,true));
             Integer acquired=locked.queryForObject("SELECT GET_LOCK('cyf:chat:selected-output-finalization:v1',-1)",Integer.class);
             if(!Integer.valueOf(1).equals(acquired))throw new IllegalStateException("Finalization schema lock unavailable");
-            try {for(String statement:ddl())locked.execute(statement);upgradeSubmissionChecks(locked);upgradeDeliveryIndex(locked);validate(locked);}
+            try {for(String statement:ddl())locked.execute(statement);upgradeSubmissionChecks(locked);upgradeDeliveryIndex(locked);validate(locked);upgradeV2(locked);validateV2(locked);}
             finally {
                 Integer released=locked.queryForObject("SELECT RELEASE_LOCK('cyf:chat:selected-output-finalization:v1')",Integer.class);
                 if(!Integer.valueOf(1).equals(released))throw new IllegalStateException("Finalization schema lock lost");
             }
             return null;
         });
+    }
+
+    /** Preflight both tables before any v2 DDL. Each table ALTER is atomic and independently restartable. */
+    static void upgradeV2(JdbcTemplate jdbc) {
+        String operations=TABLES.getFirst(),items=TABLES.get(1);
+        var columns=columnTypes(jdbc,operations);
+        boolean upgradeContract=!columns.containsKey("contract_version");
+        if(upgradeContract) {
+            if(checkExpressions(jdbc,operations).containsKey("chk_csof_contract"))throw new IllegalStateException("Orphan finalization contract CHECK");
+        } else validateContract(jdbc,columns);
+        var actual=columnTypes(jdbc,items);
+        var formal=List.of("source_delivery_id","source_artifact_id","source_artifact_version");
+        long present=formal.stream().filter(actual::containsKey).count();
+        boolean upgradeSource=present==0;
+        if(upgradeSource) {
+            if(!"varchar(100)|NO|utf8mb4_0900_bin".equals(actual.get("request_id")))throw new IllegalStateException("Finalization predecessor request column drift");
+            String predecessor=resource("db/chat-selected-output-finalization-completed-message-v1.sql");
+            var expected=ChatTaskDeliveryReviewSchemaInitializer.checks(predecessor).get("chk_csofi_source");
+            if(!Objects.equals(expected,checkExpressions(jdbc,items).get("chk_csofi_source")))throw new IllegalStateException("Finalization predecessor source CHECK drift");
+            if(!formalIndex(jdbc).isEmpty())throw new IllegalStateException("Orphan finalization fixed-source index");
+        } else {
+            if(present!=formal.size())throw new IllegalStateException("Partial finalization formal-source schema");
+            validateSource(jdbc,actual);
+        }
+        if(upgradeContract)executeUpgrade(jdbc,"db/chat-selected-output-finalization-contract-v2.sql",operations);
+        if(upgradeSource)executeUpgrade(jdbc,"db/chat-selected-output-finalization-formal-source-v2.sql",items);
+    }
+    static void validateV2(JdbcTemplate jdbc) {
+        validateContract(jdbc,columnTypes(jdbc,TABLES.getFirst()));
+        validateSource(jdbc,columnTypes(jdbc,TABLES.get(1)));
+    }
+    private static void validateContract(JdbcTemplate jdbc,Map<String,String> columns) {
+        if(!"smallint|NO|null".equals(columns.get("contract_version")))throw new IllegalStateException("Finalization contract column drift");
+        validateV2Check(jdbc,0,"chk_csof_contract");
+    }
+    private static void validateSource(JdbcTemplate jdbc,Map<String,String> item) {
+        for(String key:List.of("request_id","source_delivery_id","source_artifact_id"))
+            if(!"varchar(100)|YES|utf8mb4_0900_bin".equals(item.get(key)))throw new IllegalStateException("Finalization fixed-source column drift: "+key);
+        if(!"int|YES|null".equals(item.get("source_artifact_version")))throw new IllegalStateException("Finalization source version drift");
+        validateV2Check(jdbc,1,"chk_csofi_source");
+        if(!formalIndex(jdbc).equals(List.of("tenant_id","owner_jiacn","client_id","operation_id","source_delivery_id","source_artifact_id","source_artifact_version")))throw new IllegalStateException("Finalization fixed-source index order drift");
+    }
+    private static void validateV2Check(JdbcTemplate jdbc,int index,String name) {
+        var expected=ChatTaskDeliveryReviewSchemaInitializer.checks(ddl().get(index)).get(name);
+        if(expected==null || !expected.equals(checkExpressions(jdbc,TABLES.get(index)).get(name)))throw new IllegalStateException("Finalization v2 CHECK drift: "+name);
+    }
+    private static List<String> formalIndex(JdbcTemplate jdbc) {
+        List<String> keys=new ArrayList<>();
+        for(var row:jdbc.queryForList("SELECT column_name,non_unique,sub_part FROM information_schema.statistics WHERE table_schema=DATABASE() AND table_name=? AND index_name='uk_csofi_formal' ORDER BY seq_in_index",TABLES.get(1))) {
+            if(number(row,"non_unique")!=0 || value(row,"sub_part")!=null)throw new IllegalStateException("Finalization fixed-source unique index drift");
+            keys.add(lower(row,"column_name"));
+        }
+        return keys;
+    }
+    private static Map<String,String> columnTypes(JdbcTemplate jdbc,String table) {
+        var result=new LinkedHashMap<String,String>();
+        for(var row:jdbc.queryForList("SELECT column_name,column_type,is_nullable,collation_name FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name=?",table))
+            result.put(lower(row,"column_name"),lower(row,"column_type")+"|"+text(row,"is_nullable")+"|"+lower(row,"collation_name"));
+        return result;
+    }
+    private static Map<String,String> checkExpressions(JdbcTemplate jdbc,String table) {
+        var result=new LinkedHashMap<String,String>();
+        for(var row:jdbc.queryForList("SELECT t.constraint_name,c.check_clause,t.enforced FROM information_schema.table_constraints t JOIN information_schema.check_constraints c ON c.constraint_schema=t.constraint_schema AND c.constraint_name=t.constraint_name WHERE t.table_schema=DATABASE() AND t.table_name=? AND t.constraint_type='CHECK'",table)) {
+            if(!"YES".equalsIgnoreCase(text(row,"enforced")) || text(row,"check_clause")==null)throw new IllegalStateException("Finalization CHECK not enforced");
+            result.put(text(row,"constraint_name"),ChatTaskDeliveryReviewSchemaInitializer.expression(text(row,"check_clause")));
+        }
+        return result;
+    }
+    private static String resource(String name) {
+        try {return new ClassPathResource(name).getContentAsString(StandardCharsets.UTF_8).lines().filter(l->!l.stripLeading().startsWith("--")).reduce("",(a,b)->a+b+'\n').strip();}
+        catch(java.io.IOException failure) {throw new IllegalStateException("Finalization upgrade unavailable",failure);}
+    }
+    private static void executeUpgrade(JdbcTemplate jdbc,String resource,String table) {
+        String sql=resource(resource);
+        if(!sql.startsWith("ALTER TABLE "+table+"\n") || !sql.endsWith(";") || sql.substring(0,sql.length()-1).contains(";"))throw new IllegalStateException("Unexpected finalization upgrade");
+        jdbc.execute(sql);
     }
 
     // Only the exact known predecessor is eligible for this semantic upgrade.

@@ -35,7 +35,12 @@ public final class ChatFinalizationWire {
             "FINALIZATION_STORAGE_UNAVAILABLE","FINALIZATION_PERSISTENCE_ERROR","FINALIZATION_INTERNAL_ERROR");
     private static Map<String,Object> selection(ChatSelectedOutputFinalizationService.Selection s) {
         var out=new LinkedHashMap<String,Object>();out.put("requestId",s.requestId());out.put("sha256",s.sha256());out.put("title",s.title());out.put("purpose",s.purpose());
-        if(s.messageSource()==null){out.put("stepId",s.stepId());out.put("outputId",s.outputId());}
+        if(s.formalArtifactSource()!=null) {
+            var formal=s.formalArtifactSource();
+            if(s.messageSource()!=null || s.requestId()!=null || s.stepId()!=null || s.outputId()!=null)throw invalid();
+            out.remove("requestId");out.put("formalArtifactSource",Map.of("sourceDeliveryId",formal.sourceDeliveryId(),
+                    "sourceArtifactId",formal.sourceArtifactId(),"sourceArtifactVersion",Integer.toString(formal.sourceArtifactVersion())));
+        } else if(s.messageSource()==null){out.put("stepId",s.stepId());out.put("outputId",s.outputId());}
         else {var m=s.messageSource();if(m.finalDigest()==null||!m.finalDigest().matches("sha256:[0-9a-f]{64}"))throw invalid();
             out.put("messageSource",Map.of("turnId",m.turnId(),"messageId",m.messageId(),"snapshotId",m.snapshotId(),"finalSha256",m.finalDigest().substring(7)));}
         return out;

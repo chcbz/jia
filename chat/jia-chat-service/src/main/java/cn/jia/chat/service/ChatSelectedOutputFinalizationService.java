@@ -51,9 +51,14 @@ public final class ChatSelectedOutputFinalizationService {
     public record Scope(String tenantId,String clientId,String ownerJiacn) { }
     public record Selection(String requestId,@JsonInclude(JsonInclude.Include.NON_NULL) String stepId,
             @JsonInclude(JsonInclude.Include.NON_NULL) String outputId,String sha256,String title,String purpose,
-            @JsonInclude(JsonInclude.Include.NON_NULL) SelectedOutputFinalizationDigest.MessageSource messageSource) {
+            @JsonInclude(JsonInclude.Include.NON_NULL) SelectedOutputFinalizationDigest.MessageSource messageSource,
+            @JsonInclude(JsonInclude.Include.NON_NULL) SelectedOutputFinalizationDigest.FormalArtifactSource formalArtifactSource) {
+        public Selection(String requestId,String stepId,String outputId,String sha256,String title,String purpose,
+                SelectedOutputFinalizationDigest.MessageSource messageSource) {
+            this(requestId,stepId,outputId,sha256,title,purpose,messageSource,null);
+        }
         public Selection(String requestId,String stepId,String outputId,String sha256,String title,String purpose) {
-            this(requestId,stepId,outputId,sha256,title,purpose,null);
+            this(requestId,stepId,outputId,sha256,title,purpose,null,null);
         }
     }
     public record Command(long expectedTaskVersion,long expectedAssignmentRevision,String conversationId,
@@ -66,8 +71,11 @@ public final class ChatSelectedOutputFinalizationService {
 
     public Receipt submit(Scope scope,String taskId,String key,Command command){
         Valid valid=validate(scope,taskId,key,command);
+        // v1 is immutable read-only history, not a second active producer contract.
+        var prior=store.findByKey(scope.tenantId(),scope.ownerJiacn(),scope.clientId(),taskId,key);
+        if(prior!=null && prior.contractVersion()!=2)throw new ChatSelectedOutputFinalizationStore.Conflict();
         String operationId=operationId(scope,taskId,key);
-        String immutable=SelectedOutputFinalizationDigest.request(taskId,command.expectedTaskVersion(),
+        String immutable=SelectedOutputFinalizationDigest.requestV2(taskId,command.expectedTaskVersion(),
                 command.expectedAssignmentRevision(),command.conversationId(),command.summary(),
                 command.selectedOutputs().stream().map(s->new SelectedOutputFinalizationDigest.Selection(
                         s.requestId(),s.stepId(),s.outputId(),s.sha256(),s.title(),s.purpose(),s.messageSource())).toList());
@@ -302,10 +310,10 @@ public final class ChatSelectedOutputFinalizationService {
         requirePersistedReceipt(row);
         return new Receipt(row.operationId(),row.taskId(),row.conversationId(),row.state(),Long.toString(row.stateVersion()),
                 row.stage(),Long.toString(row.expectedTaskVersion()),Long.toString(row.expectedAssignmentRevision()),
-                row.selections().stream().map(s->new Selection(s.requestId(),s.stepId(),s.outputId(),s.sha256(),s.title(),s.purpose(),s.messageSource())).toList(),
+                row.selections().stream().map(s->new Selection(s.requestId(),s.stepId(),s.outputId(),s.sha256(),s.title(),s.purpose(),s.messageSource(),s.formalArtifactSource())).toList(),
                 row.deliveryId(),row.deliveryState(),row.taskState(),Long.toString(row.taskVersion()),row.errorCode(),row.retryable());
     }
-    private static void requirePersistedReceipt(ChatSelectedOutputFinalizationStore.Operation row) {
+    static void requirePersistedReceipt(ChatSelectedOutputFinalizationStore.Operation row) {
         if(row==null)throw persistence();
         persistedId(row.operationId(),100);persistedId(row.taskId(),100);persistedId(row.conversationId(),100);
         if(row.digest()==null||!row.digest().matches("[0-9a-f]{64}")||row.stateVersion()<1
@@ -319,15 +327,25 @@ public final class ChatSelectedOutputFinalizationService {
         Set<String> sources=new LinkedHashSet<>();
         for(var selected:row.selections()) {
             if(selected==null)throw persistence();
-            persistedId(selected.requestId(),100);
-            try{sourceReference(selected.stepId(),selected.outputId(),selected.messageSource());}catch(IllegalArgumentException invalid){throw persistence();}
+            if(selected.formalArtifactSource()!=null) {
+                if(row.contractVersion()!=2 || selected.requestId()!=null || selected.stepId()!=null || selected.outputId()!=null || selected.messageSource()!=null)throw persistence();
+            } else {
+                persistedId(selected.requestId(),100);
+                try{sourceReference(selected.stepId(),selected.outputId(),selected.messageSource());}catch(IllegalArgumentException invalid){throw persistence();}
+            }
             if(selected.sha256()==null||!selected.sha256().matches("[0-9a-f]{64}"))throw persistence();
             persistedText(selected.title(),255);persistedText(selected.purpose(),255);
-            if(!sources.add(sourceKey(selected.requestId(),selected.stepId(),selected.outputId(),selected.messageSource())))throw persistence();
+            String source=selected.formalArtifactSource()==null?sourceKey(selected.requestId(),selected.stepId(),selected.outputId(),selected.messageSource()):
+                    "FORMAL_ARTIFACT\0"+selected.formalArtifactSource().sourceDeliveryId()+"\0"+selected.formalArtifactSource().sourceArtifactId()+"\0"+selected.formalArtifactSource().sourceArtifactVersion();
+            if(!sources.add(source))throw persistence();
         }
-        String expected=SelectedOutputFinalizationDigest.request(row.taskId(),row.expectedTaskVersion(),row.expectedAssignmentRevision(),
-                row.conversationId(),row.summary(),row.selections().stream().map(v->new SelectedOutputFinalizationDigest.Selection(
-                        v.requestId(),v.stepId(),v.outputId(),v.sha256(),v.title(),v.purpose(),v.messageSource())).toList());
+        if(row.contractVersion()!=1 && row.contractVersion()!=2)throw persistence();
+        var selections=row.selections().stream().map(v->new SelectedOutputFinalizationDigest.Selection(
+                v.requestId(),v.stepId(),v.outputId(),v.sha256(),v.title(),v.purpose(),v.messageSource(),v.formalArtifactSource())).toList();
+        String expected=row.contractVersion()==1?SelectedOutputFinalizationDigest.request(row.taskId(),row.expectedTaskVersion(),
+                row.expectedAssignmentRevision(),row.conversationId(),row.summary(),selections):
+                SelectedOutputFinalizationDigest.requestV2(row.taskId(),row.expectedTaskVersion(),row.expectedAssignmentRevision(),
+                        row.conversationId(),row.summary(),selections);
         if(!expected.equals(row.digest()))throw persistence();
         boolean terminal="completed".equals(row.state());
         boolean submissionComplete="SUBMITTED".equals(row.stage())&&row.deliveryId()!=null
@@ -355,7 +373,7 @@ public final class ChatSelectedOutputFinalizationService {
         id(c.conversationId(),100);text(c.summary(),4000);
         if(c.selectedOutputs()==null||c.selectedOutputs().isEmpty()||c.selectedOutputs().size()>99)throw bad();
         Set<String> sources=new LinkedHashSet<>();
-        for(Selection s:c.selectedOutputs()){if(s==null)throw bad();id(s.requestId(),100);sourceReference(s.stepId(),s.outputId(),s.messageSource());
+        for(Selection s:c.selectedOutputs()){if(s==null || s.formalArtifactSource()!=null)throw bad();id(s.requestId(),100);sourceReference(s.stepId(),s.outputId(),s.messageSource());
             if(s.sha256()==null||!s.sha256().matches("[0-9a-f]{64}"))throw bad();text(s.title(),255);text(s.purpose(),255);
             if(!sources.add(sourceKey(s.requestId(),s.stepId(),s.outputId(),s.messageSource())))throw bad();}
         return new Valid(taskId,c);

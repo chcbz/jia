@@ -50,13 +50,31 @@ public final class AgentSelectedOutputFinalizationSchemaInitializer implements I
             JdbcTemplate locked=new JdbcTemplate(new SingleConnectionDataSource(connection,true));
             Integer acquired=locked.queryForObject("SELECT GET_LOCK('cyf:agent:selected-output-finalization:v1',-1)",Integer.class);
             if(!Integer.valueOf(1).equals(acquired))throw new IllegalStateException("Selected-output finalization schema lock unavailable");
-            try{locked.execute(ddl());validate(locked);}
+            try{locked.execute(ddl());validate(locked);upgradeV2(locked);validateV2(locked);}
             finally{
                 Integer released=locked.queryForObject("SELECT RELEASE_LOCK('cyf:agent:selected-output-finalization:v1')",Integer.class);
                 if(!Integer.valueOf(1).equals(released))throw new IllegalStateException("Selected-output finalization schema lock lost");
             }
             return null;
         });
+    }
+
+    static void upgradeV2(JdbcTemplate jdbc) {
+        Integer count=jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name=? AND column_name='contract_version'",Integer.class,TABLE);
+        if(Integer.valueOf(1).equals(count))return;
+        if(!Integer.valueOf(0).equals(count))throw new IllegalStateException("Finalization contract metadata unavailable");
+        try {
+            String sql=new ClassPathResource("db/agent-selected-output-finalization-contract-v2.sql").getContentAsString(StandardCharsets.UTF_8).lines()
+                    .filter(l->!l.stripLeading().startsWith("--")).reduce("",(a,b)->a+b+'\n').strip();
+            if(!sql.startsWith("ALTER TABLE "+TABLE+"\n") || !sql.endsWith(";") || sql.substring(0,sql.length()-1).contains(";"))throw new IllegalStateException("Unexpected finalization contract upgrade");
+            jdbc.execute(sql);
+        }catch(java.io.IOException failure) {throw new IllegalStateException("Finalization contract upgrade unavailable",failure);}
+    }
+    static void validateV2(JdbcTemplate jdbc) {
+        var columns=jdbc.queryForList("SELECT column_type,is_nullable FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name=? AND column_name='contract_version'",TABLE);
+        if(columns.size()!=1 || !"smallint".equals(lower(columns.getFirst(),"column_type")) || !"NO".equals(text(columns.getFirst(),"is_nullable")))throw new IllegalStateException("Finalization contract version column drift");
+        var checks=jdbc.queryForList("SELECT c.check_clause,t.enforced FROM information_schema.table_constraints t JOIN information_schema.check_constraints c ON c.constraint_schema=t.constraint_schema AND c.constraint_name=t.constraint_name WHERE t.table_schema=DATABASE() AND t.table_name=? AND t.constraint_name='chk_asof_contract'",TABLE);
+        if(checks.size()!=1 || !"YES".equalsIgnoreCase(text(checks.getFirst(),"enforced")) || !"(contract_versionin(1,2))".equals(compactCheckExpression(text(checks.getFirst(),"check_clause"))))throw new IllegalStateException("Finalization contract version CHECK drift");
     }
 
     private static void validate(JdbcTemplate jdbc){

@@ -100,6 +100,7 @@ public class ChatTaskDeliveryReviewReadService {
         if (promoted.size() > 1) throw new Conflict();
         if (promoted.size() == 1) {
             var p = promoted.getFirst(); var operation = submissions.findByOperation(s.tenantId(),s.ownerJiacn(),s.clientId(),task,p.operation());
+            if(operation!=null)ChatSelectedOutputFinalizationService.requirePersistedReceipt(operation);
             if (operation != null && delivery.getDeliveryId().equals(operation.deliveryId()) && p.manifest().equals(delivery.getManifestArtifactId())) {
                 JsonNode facts;
                 try { facts = JSON.readTree(p.facts()); } catch (Exception failure) { throw new Storage(failure); }
@@ -117,7 +118,11 @@ public class ChatTaskDeliveryReviewReadService {
                     var source=operation.selections().get(i);
                     if (!source.sha256().equals(item.getContentHash()) || !source.purpose().equals(item.getPurpose())) throw new Conflict();
                     Object value;
-                    if (source.messageSource()!=null) {
+                    if (source.formalArtifactSource()!=null) {
+                        var f=source.formalArtifactSource();
+                        value=Map.of("kind","FORMAL_ARTIFACT","sourceDeliveryId",f.sourceDeliveryId(),
+                                "sourceArtifactId",f.sourceArtifactId(),"sourceArtifactVersion",Integer.toString(f.sourceArtifactVersion()));
+                    } else if (source.messageSource()!=null) {
                         var m=source.messageSource();
                         if (m.finalDigest()==null || !m.finalDigest().matches("sha256:[0-9a-f]{64}")) throw new Conflict();
                         value=Map.of("kind","COMPLETED_MESSAGE","requestId",source.requestId(),"messageSource",Map.of(

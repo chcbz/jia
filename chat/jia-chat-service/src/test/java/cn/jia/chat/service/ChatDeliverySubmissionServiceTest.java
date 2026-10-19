@@ -160,6 +160,16 @@ class ChatDeliverySubmissionServiceTest {
         consumer();when(operations.findByKey("0","owner","client","task",key)).thenReturn(operation(7));receipt("failed","PROMOTING",null,"TEMPORARY",true);
         assertThrows(IllegalStateException.class,()->service.consume(claim));verify(outbox,never()).sent(any(),anyLong());verify(outbox,never()).dead(any(),any(),anyLong());
     }
+    @Test void historicalV1OperationIsNeverResumedByNewDeliveryEventWorker() {
+        consumer();var current=operation(7);
+        var old=new ChatSelectedOutputFinalizationStore.Operation(current.operationId(),current.taskId(),current.key(),current.digest(),current.conversationId(),
+                current.expectedTaskVersion(),current.expectedAssignmentRevision(),current.summary(),current.state(),current.stage(),current.stateVersion(),
+                current.deliveryId(),current.deliveryState(),current.taskState(),current.taskVersion(),current.errorCode(),current.retryable(),current.selections(),1);
+        when(operations.findByKey("0","owner","client","task",key)).thenReturn(old);
+        assertEquals("DELIVERY_CONTRACT_CHANGED",assertThrows(ChatDeliverySubmissionService.Rejected.class,()->service.consume(claim)).code());
+        verifyNoInteractions(submissions,outbox,contexts,bindings,conversations,reviews);
+        verify(operations,never()).create(anyString(),anyString(),anyString(),anyString(),anyString(),anyString(),anyString(),anyString(),anyLong(),anyLong(),anyString(),anyList());
+    }
     @Test void confirmedPromotionFailureIsRecordedWithFencedDead() {
         consumer();when(operations.findByKey("0","owner","client","task",key)).thenReturn(operation(7));receipt("failed","PROMOTING",null,"SOURCE_UNAVAILABLE",false);
         when(outbox.dead(eq(claim),eq("SOURCE_UNAVAILABLE"),anyLong())).thenReturn(true);service.consume(claim);verify(outbox).dead(eq(claim),eq("SOURCE_UNAVAILABLE"),anyLong());
@@ -189,7 +199,7 @@ class ChatDeliverySubmissionServiceTest {
     }
     ChatSelectedOutputFinalizationStore.Operation readableOperation(String state,boolean retryable,String error) {
         var o=operation(7);var selection=o.selections().getFirst();
-        String hash=cn.jia.agent.service.SelectedOutputFinalizationDigest.request("task",7,1,"123",o.summary(),List.of(
+        String hash=cn.jia.agent.service.SelectedOutputFinalizationDigest.requestV2("task",7,1,"123",o.summary(),List.of(
                 new cn.jia.agent.service.SelectedOutputFinalizationDigest.Selection(selection.requestId(),selection.stepId(),selection.outputId(),selection.sha256(),selection.title(),selection.purpose(),selection.messageSource())));
         var result=new ChatSelectedOutputFinalizationStore.Operation(o.operationId(),o.taskId(),o.key(),hash,o.conversationId(),7,1,o.summary(),state,
                 "completed".equals(state)?"SUBMITTED":"PROMOTING",9007199254740993L,"completed".equals(state)?"delivery":null,"completed".equals(state)?"submitted":null,

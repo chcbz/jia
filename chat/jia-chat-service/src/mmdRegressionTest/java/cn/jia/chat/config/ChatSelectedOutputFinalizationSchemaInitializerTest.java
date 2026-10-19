@@ -145,6 +145,79 @@ class ChatSelectedOutputFinalizationSchemaInitializerTest {
         }
     }
 
+    static final class V2Jdbc extends JdbcTemplate {
+        boolean contract,source;String drift;final List<String> writes=new ArrayList<>();
+        @Override public int update(String sql,Object...args){throw new AssertionError("No data rewriting");}
+        @Override public void execute(String sql){
+            writes.add(sql);
+            if(sql.startsWith("ALTER TABLE chat_selected_output_finalization_item\n"))source=true;
+            else if(sql.startsWith("ALTER TABLE chat_selected_output_finalization\n"))contract=true;
+            else throw new AssertionError(sql);
+        }
+        @Override public List<Map<String,Object>> queryForList(String sql,Object...args){
+            boolean item=args.length>0 && args[0].equals("chat_selected_output_finalization_item");
+            if(sql.contains("information_schema.columns")) {
+                List<Map<String,Object>> result=new ArrayList<>();
+                if(!item) {if(contract)result.add(column("contract_version","contract-type".equals(drift)?"int":"smallint","NO",null));return result;}
+                result.add(column("request_id","varchar(100)",source?"YES":"NO","utf8mb4_0900_bin"));
+                if(source || "partial".equals(drift))result.add(column("source_delivery_id","varchar(100)","YES","source-collation".equals(drift)?"utf8mb4_general_ci":"utf8mb4_0900_bin"));
+                if(source) {result.add(column("source_artifact_id","varchar(100)","YES","utf8mb4_0900_bin"));
+                    result.add(column("source_artifact_version","source-type".equals(drift)?"bigint":"int","YES",null));}
+                return result;
+            }
+            if(sql.contains("information_schema.check_constraints")) {
+                String ddl=ChatSelectedOutputFinalizationSchemaInitializer.ddl().get(item?1:0);
+                if(item && !source)try {ddl=new org.springframework.core.io.ClassPathResource("db/chat-selected-output-finalization-completed-message-v1.sql").getContentAsString(java.nio.charset.StandardCharsets.UTF_8);}catch(Exception e){throw new AssertionError(e);}
+                var clauses=ChatTaskDeliveryReviewSchemaInitializer.checks(ddl);List<Map<String,Object>> result=new ArrayList<>();
+                String name=item?"chk_csofi_source":"chk_csof_contract";
+                if(item || contract || "orphan-contract".equals(drift))result.add(Map.of("constraint_name",name,"check_clause",
+                        "check".equals(drift)&&item?"1=1":extractCheck(ddl,name),"enforced","unenforced".equals(drift)&&item?"NO":"YES"));
+                return result;
+            }
+            if(sql.contains("information_schema.statistics")) {
+                if(!source && !"orphan-index".equals(drift))return List.of();
+                List<Map<String,Object>> result=new ArrayList<>();
+                for(String key:List.of("tenant_id","owner_jiacn","client_id","operation_id","source_delivery_id","source_artifact_id","source_artifact_version")) {
+                    var row=new LinkedHashMap<String,Object>();row.put("column_name","index-order".equals(drift)&&key.equals("tenant_id")?"client_id":key);
+                    row.put("non_unique","index-unique".equals(drift)?1:0);row.put("sub_part","index-prefix".equals(drift)?16:null);result.add(row);
+                }
+                return result;
+            }
+            throw new AssertionError(sql);
+        }
+        static Map<String,Object> column(String name,String type,String nullable,String collation) {
+            var row=new LinkedHashMap<String,Object>();row.put("column_name",name);row.put("column_type",type);row.put("is_nullable",nullable);row.put("collation_name",collation);return row;
+        }
+        static String extractCheck(String ddl,String name) {
+            // Return an actual SQL expression, never the normalized Boolean-tree representation.
+            String marker="CONSTRAINT "+name+" CHECK ";int start=ddl.indexOf(marker)+marker.length();
+            int depth=0;boolean quote=false;
+            for(int i=start;i<ddl.length();i++) {char c=ddl.charAt(i);if(c=='\'')quote=!quote;if(quote)continue;
+                if(c=='(')depth++;else if(c==')' && --depth==0)return ddl.substring(start,i+1);}
+            throw new AssertionError(name);
+        }
+    }
+    @Test void v2FreshKnownUpgradeRepeatAndRestartAreDeterministicWithoutRewritingOldDigests() {
+        for(boolean contract:List.of(false,true))for(boolean source:List.of(false,true)) {
+            var jdbc=new V2Jdbc();jdbc.contract=contract;jdbc.source=source;
+            ChatSelectedOutputFinalizationSchemaInitializer.upgradeV2(jdbc);
+            ChatSelectedOutputFinalizationSchemaInitializer.validateV2(jdbc);
+            assertEquals((contract?0:1)+(source?0:1),jdbc.writes.size());
+            int writes=jdbc.writes.size();ChatSelectedOutputFinalizationSchemaInitializer.upgradeV2(jdbc);
+            ChatSelectedOutputFinalizationSchemaInitializer.validateV2(jdbc);assertEquals(writes,jdbc.writes.size());
+            for(String sql:jdbc.writes)assertFalse(sql.contains("UPDATE "));
+        }
+    }
+    @Test void v2PreflightsBothTablesAndRejectsPartialUnknownOrWeakenedShapesBeforeEitherAlter() {
+        for(String drift:List.of("partial","orphan-contract","orphan-index","check","unenforced","contract-type","source-type","source-collation","index-order","index-unique","index-prefix")) {
+            var jdbc=new V2Jdbc();jdbc.drift=drift;
+            jdbc.contract="contract-type".equals(drift);
+            jdbc.source=List.of("source-type","source-collation","index-order","index-unique","index-prefix").contains(drift);
+            assertThrows(IllegalStateException.class,()->ChatSelectedOutputFinalizationSchemaInitializer.upgradeV2(jdbc),drift);
+            assertTrue(jdbc.writes.isEmpty(),drift);
+        }
+    }
+
     // Target canonical expression derived from predecessor, not claimed as a new MySQL capture.
     private static List<Map<String,Object>> submissionCheckRows() throws Exception {
         var rows=actualCheckRows(1,null,null);

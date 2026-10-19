@@ -112,6 +112,28 @@ class AgentSelectedOutputFinalizationSchemaInitializerTest {
         assertThrows(IllegalStateException.class,()->invokeChecks(rows));
     }
 
+    @Test void contractV2UpgradeIsAdditiveAndRepeatDoesNotChangeHistoricalContractValues() {
+        var old=mock(JdbcTemplate.class);
+        when(old.queryForObject(anyString(),org.mockito.ArgumentMatchers.eq(Integer.class),org.mockito.ArgumentMatchers.eq("agent_selected_output_finalization"))).thenReturn(0);
+        AgentSelectedOutputFinalizationSchemaInitializer.upgradeV2(old);
+        org.mockito.Mockito.verify(old).execute(org.mockito.ArgumentMatchers.contains("ADD COLUMN contract_version SMALLINT NOT NULL DEFAULT 1"));
+        var current=mock(JdbcTemplate.class);
+        when(current.queryForObject(anyString(),org.mockito.ArgumentMatchers.eq(Integer.class),org.mockito.ArgumentMatchers.eq("agent_selected_output_finalization"))).thenReturn(1);
+        AgentSelectedOutputFinalizationSchemaInitializer.upgradeV2(current);org.mockito.Mockito.verify(current,org.mockito.Mockito.never()).execute(anyString());
+    }
+    @Test void contractV2RequiresSmallintNotNullAndExactEnforcedVersionCheck() {
+        for(String drift:List.of("none","type","nullable","check","unenforced")) {
+            var jdbc=mock(JdbcTemplate.class);
+            when(jdbc.queryForList(org.mockito.ArgumentMatchers.contains("information_schema.columns"),any(Object[].class)))
+                    .thenReturn(List.of(Map.of("column_type","type".equals(drift)?"int":"smallint","is_nullable","nullable".equals(drift)?"YES":"NO")));
+            when(jdbc.queryForList(org.mockito.ArgumentMatchers.contains("information_schema.table_constraints"),any(Object[].class)))
+                    .thenReturn(List.of(Map.of("check_clause","check".equals(drift)?"(contract_version in (1,2)) OR 1=1":"(`contract_version` in (1,2))",
+                            "enforced","unenforced".equals(drift)?"NO":"YES")));
+            if("none".equals(drift))AgentSelectedOutputFinalizationSchemaInitializer.validateV2(jdbc);
+            else assertThrows(IllegalStateException.class,()->AgentSelectedOutputFinalizationSchemaInitializer.validateV2(jdbc),drift);
+        }
+    }
+
     private static String clause(int snapshot,String check) throws Exception {
         try(var in=new org.springframework.core.io.ClassPathResource("mmd-finalization-schema-checks-mysql8021.json").getInputStream()){
             return new tools.jackson.databind.ObjectMapper().readTree(in).get("snapshots").get(snapshot)

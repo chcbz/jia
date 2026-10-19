@@ -41,6 +41,28 @@ class ChatTaskDeliveryReviewReadServiceTest {
         assertEquals(java.util.Map.of("kind","WORKSPACE_FILE","fileId","file-1","version","1"),result.getFirst().source());
         assertFalse(ChatDeliveryReviewContract.json(result).contains("storageUri"));
     }
+    @Test void retainedSourceProjectionUsesPersistedV2DigestAndExactHistoricalVersion() throws Exception {
+        var batch=batch();var result=batch.getItems().getFirst();var manifest=batch.getItems().getLast();
+        var source=new cn.jia.agent.service.SelectedOutputFinalizationDigest.FormalArtifactSource("old-delivery","old-artifact",2);
+        var selected=new ChatSelectedOutputFinalizationStore.Selection(null,null,null,result.getContentHash(),"Retained",result.getPurpose(),null,source);
+        String digest=cn.jia.agent.service.SelectedOutputFinalizationDigest.requestV2("task_fixture",7,1,"123","submit",List.of(
+                new cn.jia.agent.service.SelectedOutputFinalizationDigest.Selection(null,null,null,result.getContentHash(),"Retained",result.getPurpose(),null,source)));
+        var operation=new ChatSelectedOutputFinalizationStore.Operation("op","task_fixture","original-key",digest,"123",7,1,"submit","completed","SUBMITTED",2,
+                batch.getDeliveryId(),"submitted","reviewing",9,null,false,List.of(selected),2);
+        when(submissions.findByOperation("0","owner","client","task_fixture","op")).thenReturn(operation);
+        when(jdbc.query(contains("FROM agent_selected_output_finalization"),any(RowMapper.class),any(Object[].class))).thenAnswer(i->{
+            RowMapper<?> mapper=i.getArgument(1);ResultSet row=mock(ResultSet.class);
+            when(row.getString(1)).thenReturn("op");when(row.getString(2)).thenReturn(batch.getManifestArtifactId());
+            when(row.getString(3)).thenReturn(ChatDeliveryReviewContract.json(List.of(
+                    java.util.Map.of("id",result.getArtifactId(),"version",result.getArtifactVersion(),"hash",result.getContentHash(),"purpose",result.getPurpose()),
+                    java.util.Map.of("id",manifest.getArtifactId(),"version",manifest.getArtifactVersion(),"hash",manifest.getContentHash(),"purpose",manifest.getPurpose()))));
+            return List.of(mapper.mapRow(row,0));
+        });
+        var items=reads.sourceItems(scope,"task_fixture",batch);
+        assertEquals(java.util.Map.of("kind","FORMAL_ARTIFACT","sourceDeliveryId","old-delivery","sourceArtifactId","old-artifact","sourceArtifactVersion","2"),items.getFirst().source());
+        assertTrue(ChatTaskDeliveryReviewReadService.sourcesComplete(items));
+        assertNull(items.getLast().source());assertFalse(ChatDeliveryReviewContract.json(items).contains("requestId"));
+    }
     @Test void countBoundaryCannotSilentlyTruncateFormalHistory() {
         when(submissions.task("0","owner","client","task_fixture")).thenReturn(new ChatSelectedOutputFinalizationStore.TaskFact("reviewing",7));
         when(jdbc.queryForObject(contains("COUNT(*)"),eq(Long.class),eq("0"),eq("client"),eq("task_fixture"))).thenReturn(101L);

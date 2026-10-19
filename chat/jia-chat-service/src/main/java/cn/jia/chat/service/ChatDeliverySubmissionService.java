@@ -133,7 +133,10 @@ public class ChatDeliverySubmissionService {
         // a later task version or different retained set is never silently substituted.
         var operation=tasks.executeWithLockedTaskRootInOwnerScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),row.taskId(),root->{
             var existing=operations.findByKey(scope.tenantId(),scope.ownerJiacn(),scope.clientId(),row.taskId(),key);
-            if(existing!=null)return existing;
+            if(existing!=null) {
+                if(existing.contractVersion()!=2)throw rejected("DELIVERY_CONTRACT_CHANGED");
+                return existing;
+            }
             if(contexts.require(scope,row.requestId(),row.requestRevision())!=null)throw rejected("DELIVERY_REVIEW_REQUIRED");
             if(root.getRewardStatus()==null || !Set.of("planning","assigned","running","blocked").contains(root.getRewardStatus())
                     || root.getTaskVersion()==null || !candidate.targetAgentId().equals(root.getAssignedAgentId()))throw rejected("DELIVERY_TASK_CHANGED");
@@ -158,15 +161,15 @@ public class ChatDeliverySubmissionService {
             var locked=outbox.requireActiveClaim(claim,System.currentTimeMillis());
             if(!candidate.equals(load(locked)))throw rejected("DELIVERY_SOURCE_UNAVAILABLE");
             String summary="本轮议事成果";
-            String digest=SelectedOutputFinalizationDigest.request(row.taskId(),root.getTaskVersion(),row.assignmentRevision(),scope.conversationId(),summary,
-                    selections.stream().map(s->new SelectedOutputFinalizationDigest.Selection(s.requestId(),s.stepId(),s.outputId(),s.sha256(),s.title(),s.purpose(),s.messageSource())).toList());
+            String digest=SelectedOutputFinalizationDigest.requestV2(row.taskId(),root.getTaskVersion(),row.assignmentRevision(),scope.conversationId(),summary,
+                    selections.stream().map(s->new SelectedOutputFinalizationDigest.Selection(s.requestId(),s.stepId(),s.outputId(),s.sha256(),s.title(),s.purpose(),s.messageSource(),s.formalArtifactSource())).toList());
             return operations.create(scope.tenantId(),scope.ownerJiacn(),scope.clientId(),ChatSelectedOutputFinalizationService.operationId(new ChatSelectedOutputFinalizationService.Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn()),row.taskId(),key),row.taskId(),key,digest,
                     scope.conversationId(),root.getTaskVersion(),row.assignmentRevision(),summary,selections);
         });
         if(!claim.active())throw storage();
         var command=new ChatSelectedOutputFinalizationService.Command(operation.expectedTaskVersion(),operation.expectedAssignmentRevision(),
                 operation.conversationId(),operation.summary(),operation.selections().stream().map(s->new ChatSelectedOutputFinalizationService.Selection(
-                        s.requestId(),s.stepId(),s.outputId(),s.sha256(),s.title(),s.purpose(),s.messageSource())).toList());
+                        s.requestId(),s.stepId(),s.outputId(),s.sha256(),s.title(),s.purpose(),s.messageSource(),s.formalArtifactSource())).toList());
         // Existing promotion checks bytes, current owner/grant/lease and reconciles a prior durable
         // commit before stale-source checks. It submits; it never accepts.
         var receipt=submissions.submit(new ChatSelectedOutputFinalizationService.Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn()),row.taskId(),key,command);
@@ -208,9 +211,12 @@ public class ChatDeliverySubmissionService {
             if(!operationId.equals(operation.operationId()) || !row.taskId().equals(operation.taskId()) || !key.equals(operation.key())
                     || !scope.conversationId().equals(operation.conversationId()) || row.assignmentRevision()!=operation.expectedAssignmentRevision()
                     || operation.stateVersion()<1 || operation.selections()==null || operation.selections().isEmpty())throw storage();
-            String digest=SelectedOutputFinalizationDigest.request(row.taskId(),operation.expectedTaskVersion(),operation.expectedAssignmentRevision(),
-                    operation.conversationId(),operation.summary(),operation.selections().stream().map(i->new SelectedOutputFinalizationDigest.Selection(
-                            i.requestId(),i.stepId(),i.outputId(),i.sha256(),i.title(),i.purpose(),i.messageSource())).toList());
+            if(operation.contractVersion()!=1 && operation.contractVersion()!=2)throw storage();
+            var frozen=operation.selections().stream().map(s->new SelectedOutputFinalizationDigest.Selection(s.requestId(),s.stepId(),s.outputId(),
+                    s.sha256(),s.title(),s.purpose(),s.messageSource(),s.formalArtifactSource())).toList();
+            String digest=operation.contractVersion()==1?SelectedOutputFinalizationDigest.request(row.taskId(),operation.expectedTaskVersion(),operation.expectedAssignmentRevision(),
+                    operation.conversationId(),operation.summary(),frozen):SelectedOutputFinalizationDigest.requestV2(row.taskId(),operation.expectedTaskVersion(),operation.expectedAssignmentRevision(),
+                    operation.conversationId(),operation.summary(),frozen);
             if(!digest.equals(operation.digest()))throw storage();
             operationVersion=Long.toString(operation.stateVersion());
             switch(operation.state()) {
