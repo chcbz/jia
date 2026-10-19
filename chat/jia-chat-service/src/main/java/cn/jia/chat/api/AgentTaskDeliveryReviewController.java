@@ -3,6 +3,8 @@ package cn.jia.chat.api;
 import cn.jia.chat.service.ChatDeliveryReviewContract;
 import cn.jia.chat.service.ChatDeliveryReviewContract.*;
 import cn.jia.chat.service.ChatTaskDeliveryReviewService;
+import cn.jia.chat.service.ChatTaskDeliveryReviewReadService;
+import cn.jia.chat.service.ChatSelectedOutputFinalizationStore;
 import cn.jia.chat.service.HumanSenderIdentityResolver;
 import cn.jia.chat.service.ServerResolvedSender;
 import cn.jia.chat.service.TenantScopeResolver;
@@ -23,10 +25,11 @@ import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.databind.json.JsonMapper;
 
 @RestController
-@RequestMapping("/agent/tasks/{taskId}/delivery-review-operations")
+@RequestMapping("/agent/tasks/{taskId}")
 @ConditionalOnProperty(prefix = "chat.delivery-review", name = "enabled", havingValue = "true")
 public final class AgentTaskDeliveryReviewController {
     private final ChatTaskDeliveryReviewService service;
+    private final ChatTaskDeliveryReviewReadService reads;
     private final HumanSenderIdentityResolver identities;
     private final TenantScopeResolver tenants;
     // Derived from the ACCEPT-only schema: <=100 escaped ID units, five decimal values,
@@ -34,10 +37,10 @@ public final class AgentTaskDeliveryReviewController {
     static final int MAX_BODY = 2 * (6 * 100 + 5 * 19 + 64 + 512) + 1;
     private static final JsonMapper JSON = JsonMapper.builder().enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
             .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS).build();
-    public AgentTaskDeliveryReviewController(ChatTaskDeliveryReviewService service, HumanSenderIdentityResolver identities, TenantScopeResolver tenants) {
-        this.service = service; this.identities = identities; this.tenants = tenants;
+    public AgentTaskDeliveryReviewController(ChatTaskDeliveryReviewService service, HumanSenderIdentityResolver identities, TenantScopeResolver tenants, ChatTaskDeliveryReviewReadService reads) {
+        this.service = service; this.reads = reads; this.identities = identities; this.tenants = tenants;
     }
-    @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
+    @PostMapping(value = "/delivery-review-operations", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<JsonResult<Receipt>> accept(@PathVariable String taskId,
             @RequestHeader(value = "Idempotency-Key", required = false) String key,
             HttpServletRequest request, Authentication authentication) {
@@ -49,16 +52,23 @@ public final class AgentTaskDeliveryReviewController {
         if ("REJECTED".equals(receipt.state())) return response(status(receipt.errorCode()), JsonResult.failure(receipt.errorCode(), "Delivery review rejected"));
         return response("COMMITTED".equals(receipt.state()) ? HttpStatus.OK : HttpStatus.ACCEPTED, JsonResult.success(receipt));
     }
-    @GetMapping(value = "/request", produces = MediaType.APPLICATION_JSON_VALUE)
+    @GetMapping(value = "/delivery-review-operations/request", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<JsonResult<Receipt>> byKey(@PathVariable String taskId,
             @RequestHeader(value = "Idempotency-Key", required = false) String key, HttpServletRequest request, Authentication authentication) {
         noQuery(request); return response(HttpStatus.OK, JsonResult.success(service.byKey(scope(authentication), taskId, key)));
     }
-    @GetMapping(value = "/{operationId}", produces = MediaType.APPLICATION_JSON_VALUE)
+    @GetMapping(value = "/delivery-review-operations/{operationId}", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<JsonResult<Receipt>> byOperation(@PathVariable String taskId, @PathVariable String operationId,
             HttpServletRequest request, Authentication authentication) {
         noQuery(request); return response(HttpStatus.OK, JsonResult.success(service.byOperation(scope(authentication), taskId, operationId)));
     }
+    @GetMapping(value = "/delivery-review-context", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<JsonResult<ChatTaskDeliveryReviewReadService.Context>> context(@PathVariable String taskId,
+            HttpServletRequest request, Authentication authentication) {
+        noQuery(request); return response(HttpStatus.OK, JsonResult.success(reads.read(scope(authentication), taskId)));
+    }
+    @ExceptionHandler(ChatSelectedOutputFinalizationStore.Missing.class)
+    public ResponseEntity<JsonResult<Void>> rootMissing() { return missing(); }
     @ExceptionHandler(BadRequest.class) public ResponseEntity<JsonResult<Void>> bad() { return error(HttpStatus.BAD_REQUEST, "DELIVERY_REVIEW_BAD_REQUEST"); }
     @ExceptionHandler(Missing.class) public ResponseEntity<JsonResult<Void>> missing() { return error(HttpStatus.NOT_FOUND, "DELIVERY_REVIEW_NOT_FOUND"); }
     @ExceptionHandler(Conflict.class) public ResponseEntity<JsonResult<Void>> conflict() { return error(HttpStatus.CONFLICT, "DELIVERY_REVIEW_CONFLICT"); }

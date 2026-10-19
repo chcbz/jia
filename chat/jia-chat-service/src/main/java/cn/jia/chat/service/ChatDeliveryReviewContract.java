@@ -92,7 +92,22 @@ public final class ChatDeliveryReviewContract {
         try { return JSON.writeValueAsString(value); } catch (Exception failure) { throw new Storage(failure); }
     }
     public static Receipt receipt(String json) {
-        try { return JSON.readValue(json, Receipt.class); } catch (Exception failure) { throw new Storage(failure); }
+        try {
+            JsonNode node=JSON.readTree(json);
+            var fields=Set.of("schemaVersion","operationId","taskId","deliveryId","decision","state","stateVersion",
+                    "taskState","taskVersion","deliveryState","deliveryVersion","requestId","sourceRequestId","conversationId","errorCode","retryable");
+            if(node==null || !node.isObject() || node.size()!=fields.size() || fields.stream().anyMatch(f->!node.has(f))) throw new BadRequest();
+            var value=JSON.treeToValue(node,Receipt.class);
+            id(value.operationId(),100); id(value.taskId(),100); id(value.deliveryId(),100);
+            if(value.schemaVersion()!=1 || !"ACCEPT".equals(value.decision()) || !Set.of("COMMITTED","REJECTED").contains(value.state())
+                    || version(node,"stateVersion")<2 || !Set.of("OPEN","PLANNING","ASSIGNED","RUNNING","BLOCKED","REVIEWING","COMPLETED","FAILED","CANCELLED","ARCHIVED").contains(value.taskState())
+                    || !Set.of("SUBMITTED","ACCEPTED","CHANGES_REQUESTED").contains(value.deliveryState())
+                    || !node.get("retryable").isBoolean() || value.retryable() || value.requestId()!=null || value.sourceRequestId()!=null || value.conversationId()!=null) throw new BadRequest();
+            version(node,"taskVersion"); version(node,"deliveryVersion");
+            if("COMMITTED".equals(value.state()) ? !"COMPLETED".equals(value.taskState()) || !"ACCEPTED".equals(value.deliveryState()) || value.errorCode()!=null
+                    : value.errorCode()==null || !value.errorCode().matches("DELIVERY_[A-Z_]+")) throw new BadRequest();
+            return value;
+        } catch (Exception failure) { throw new Storage(failure); }
     }
     public static String sha(String value) {
         try { return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8))); }
@@ -124,5 +139,6 @@ public final class ChatDeliveryReviewContract {
     public static final class Conflict extends RuntimeException { }
     public static final class IdempotencyConflict extends RuntimeException { }
     public static final class Missing extends RuntimeException { }
+    public static final class SourceUnavailable extends RuntimeException { }
     public static final class Storage extends RuntimeException { public Storage(Throwable cause) { super(cause); } }
 }

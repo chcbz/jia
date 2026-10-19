@@ -23,7 +23,7 @@ class AgentTaskDeliveryReviewControllerTest {
     @BeforeEach void ready() {
         when(tenants.resolve(auth)).thenReturn("0");
         when(identities.resolve(nullable(EsContext.class))).thenReturn(new ServerResolvedSender("user","Owner","owner","client",DisplayNameSource.JIACN));
-        mvc=MockMvcBuilders.standaloneSetup(new AgentTaskDeliveryReviewController(service,identities,tenants))
+        mvc=MockMvcBuilders.standaloneSetup(new AgentTaskDeliveryReviewController(service,identities,tenants,mock(ChatTaskDeliveryReviewReadService.class)))
                 .setControllerAdvice(new cn.jia.core.config.ApiEnvelopeAdvice(),new cn.jia.core.config.ExceptionHandlerAdvice())
                 .addFilters(new cn.jia.core.filter.RequestIdFilter()).build();
     }

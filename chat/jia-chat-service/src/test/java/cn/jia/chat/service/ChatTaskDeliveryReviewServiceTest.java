@@ -13,7 +13,7 @@ class ChatTaskDeliveryReviewServiceTest {
     final ChatTaskDeliveryReviewTransaction tx = mock(ChatTaskDeliveryReviewTransaction.class);
     final ChatTaskDeliveryReviewService service = new ChatTaskDeliveryReviewService(store, tx);
     ChatTaskDeliveryReviewStore.Operation operation(String state, String json) {
-        return new ChatTaskDeliveryReviewStore.Operation("review_1", "task", "review-key", ChatDeliveryReviewContract.requestDigest(command), "delivery", state, 1, json);
+        return new ChatTaskDeliveryReviewStore.Operation("review_1", "task", "review-key", ChatDeliveryReviewContract.requestDigest(command), "delivery", state, "PROCESSING".equals(state)?1:2, json);
     }
     Receipt committed() { return new Receipt(1,"review_1","task","delivery","ACCEPT","COMMITTED","2","COMPLETED","8","ACCEPTED","1",null,null,null,null,false); }
     @Test void sameKeyReplayReturnsImmutableReceiptWithoutReevaluatingVersionsOrDeciding() {

@@ -92,6 +92,13 @@ public class ChatTaskDeliveryReviewStore {
             """, (r, n) -> r.getLong(1), s.tenantId(), s.clientId(), s.ownerJiacn(), task);
         if (rows.size() != 1) throw new Conflict(); return rows.getFirst();
     }
+    public static Receipt committedReceipt(Operation operation) {
+        Receipt value=ChatDeliveryReviewContract.receipt(operation.receiptJson());
+        if (!operation.operationId().equals(value.operationId()) || !operation.taskId().equals(value.taskId())
+                || !operation.deliveryId().equals(value.deliveryId()) || !operation.state().equals(value.state())
+                || !Long.toString(operation.stateVersion()).equals(value.stateVersion())) throw new Conflict();
+        return value;
+    }
     public static void requireDigest(Operation operation, String digest) {
         if (!operation.digest().equals(digest)) throw new IdempotencyConflict();
     }

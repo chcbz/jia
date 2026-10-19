@@ -19,8 +19,9 @@ public final class ChatTaskDeliveryReviewService {
     public Receipt accept(Scope scope, String task, String key, Accept command) {
         ChatDeliveryReviewContract.id(task, 100); ChatDeliveryReviewContract.key(key); Objects.requireNonNull(command);
         var operation = transactions.admit(scope, task, key, command);
-        if (!"PROCESSING".equals(operation.state())) return ChatDeliveryReviewContract.receipt(operation.receiptJson());
+        if (!"PROCESSING".equals(operation.state())) return ChatTaskDeliveryReviewStore.committedReceipt(operation);
         try { return transactions.commit(scope, task, operation.operationId(), command); }
+        catch (SourceUnavailable unavailable) { return transactions.reject(scope, task, operation.operationId(), command, "DELIVERY_SOURCE_UNAVAILABLE"); }
         catch (Conflict conflict) { return transactions.reject(scope, task, operation.operationId(), command, "DELIVERY_REVIEW_CONFLICT"); }
         catch (AgentTaskCollaborationException rejected) {
             String code = switch (rejected.getReason()) {
@@ -44,7 +45,7 @@ public final class ChatTaskDeliveryReviewService {
         return receipt(scope, store.require(scope, task, operationId, false));
     }
     private Receipt receipt(Scope scope, ChatTaskDeliveryReviewStore.Operation operation) {
-        if (!"PROCESSING".equals(operation.state())) return ChatDeliveryReviewContract.receipt(operation.receiptJson());
+        if (!"PROCESSING".equals(operation.state())) return ChatTaskDeliveryReviewStore.committedReceipt(operation);
         return store.progress(scope, operation);
     }
 }
