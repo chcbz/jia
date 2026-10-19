@@ -43,7 +43,8 @@ public class ChatDeliverySubmissionService {
     private final ObjectProvider<ChatActionFinalService> finals;
     private final ChatTypedReviewContextStore contexts;
     private final ChatSelectedOutputFinalizationStore operations;
-    private final ChatSelectedOutputFinalizationService submissions;
+    // Resolve only in outbox delivery, never while wiring the final/admission graph.
+    private final ObjectProvider<ChatSelectedOutputFinalizationService> submissions;
     private final ChatTaskDeliveryReviewReadService reviews;
     private final AgentTaskMutationTransaction tasks;
     private final ChatBountyBindingStore bindings;
@@ -53,7 +54,7 @@ public class ChatDeliverySubmissionService {
 
     public ChatDeliverySubmissionService(ChatDeliberationDao dao,ChatTypedDeliberationStore typed,
             ObjectProvider<ChatActionFinalService> finals,ChatTypedReviewContextStore contexts,
-            ChatSelectedOutputFinalizationStore operations,ChatSelectedOutputFinalizationService submissions,
+            ChatSelectedOutputFinalizationStore operations,ObjectProvider<ChatSelectedOutputFinalizationService> submissions,
             ChatTaskDeliveryReviewReadService reviews,AgentTaskMutationTransaction tasks,ChatBountyBindingStore bindings,
             ChatConversationDao conversations,JuyitingConversationScopeService conversationScopes,ChatDeliberationOutboxService outbox) {
         this.dao=Objects.requireNonNull(dao);this.typed=Objects.requireNonNull(typed);this.finals=Objects.requireNonNull(finals);
@@ -184,7 +185,8 @@ public class ChatDeliverySubmissionService {
         // commit before stale-source checks. It submits; it never accepts.
         var submitScope=new ChatSelectedOutputFinalizationService.Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn());
         var lineage=retention==null?null:retention.lineage(scope,row.taskId(),row.requestId());
-        var receipt=lineage==null?submissions.submit(submitScope,row.taskId(),key,command):submissions.submitRevision(submitScope,row.taskId(),key,command,lineage);
+        var submissionService=submissions.getObject();
+        var receipt=lineage==null?submissionService.submit(submitScope,row.taskId(),key,command):submissionService.submitRevision(submitScope,row.taskId(),key,command,lineage);
         if(!operation.operationId().equals(receipt.operationId()))throw storage();
         if("completed".equals(receipt.state()) && "SUBMITTED".equals(receipt.stage()) && Set.of("submitted","accepted","changes_requested").contains(receipt.deliveryState())
                 && receipt.deliveryId()!=null) {

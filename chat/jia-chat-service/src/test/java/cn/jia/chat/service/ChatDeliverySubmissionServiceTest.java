@@ -46,7 +46,9 @@ class ChatDeliverySubmissionServiceTest {
     final ChatDeliverySubmissionService service;
     @SuppressWarnings("unchecked") ChatDeliverySubmissionServiceTest() {
         ObjectProvider<ChatActionFinalService> provider=mock(ObjectProvider.class);when(provider.getObject()).thenReturn(finals);
-        service=spy(new ChatDeliverySubmissionService(dao,typed,provider,contexts,operations,submissions,reviews,tasks,bindings,conversations,scopes,outbox));
+        ObjectProvider<ChatSelectedOutputFinalizationService> submissionProvider=mock(ObjectProvider.class);
+        when(submissionProvider.getObject()).thenReturn(submissions);
+        service=spy(new ChatDeliverySubmissionService(dao,typed,provider,contexts,operations,submissionProvider,reviews,tasks,bindings,conversations,scopes,outbox));
     }
     ChatTurnEntity turn() {
         return new ChatTurnEntity().setTenantId("0").setOwnerJiacn("owner").setClientId("client").setConversationId("123").setConversationGeneration(1L)
