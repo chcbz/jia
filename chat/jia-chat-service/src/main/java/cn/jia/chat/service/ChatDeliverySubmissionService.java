@@ -133,7 +133,7 @@ public class ChatDeliverySubmissionService {
     }
 
     @Transactional(propagation=Propagation.NOT_SUPPORTED)
-    public void consume(ChatDeliberationOutboxService.Claim claim) {
+    public cn.jia.chat.deliberation.ChatConversationEventEntity consume(ChatDeliberationOutboxService.Claim claim) {
         Candidate candidate=load(claim.row());
         var row=candidate.outcome();var scope=row.scope();String key=claim.row().getEventId();
         // REQUIRED root transaction freezes the FIRST command once. Restarts load it unchanged;
@@ -192,16 +192,17 @@ public class ChatDeliverySubmissionService {
         if(!operation.operationId().equals(receipt.operationId()))throw storage();
         if("completed".equals(receipt.state()) && "SUBMITTED".equals(receipt.stage()) && Set.of("submitted","accepted","changes_requested").contains(receipt.deliveryState())
                 && receipt.deliveryId()!=null) {
-            tasks.executeWithLockedTaskRootInOwnerScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),row.taskId(),root->{
+            return tasks.executeWithLockedTaskRootInOwnerScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),row.taskId(),root->{
                 long now=System.currentTimeMillis();
                 // Event and settlement commit together. Consumers re-read the immutable final plus
                 // mutable submission projection; the hint itself is not acceptance authority.
-                deliberation.getObject().persistDeliverySubmissionCompleted(row,key,receipt.deliveryId(),now);
+                var event=deliberation.getObject().persistDeliverySubmissionCompleted(row,key,receipt.deliveryId(),now);
                 if(!outbox.sent(claim,now))throw storage();
-                return null;
+                return event;
             });
         } else if("failed".equals(receipt.state()) && !receipt.retryable()) {
             if(!outbox.dead(claim,receipt.errorCode()==null?"DELIVERY_SUBMISSION_REJECTED":receipt.errorCode(),System.currentTimeMillis()))throw storage();
+            return null;
         } else throw storage(); // Retain the original event/key for transient retry; no version/key regeneration.
     }
 

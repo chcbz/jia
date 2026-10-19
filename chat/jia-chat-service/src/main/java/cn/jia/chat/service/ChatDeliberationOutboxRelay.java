@@ -192,7 +192,7 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
                     try {outbox.renew(claim,System.currentTimeMillis(),leaseMillis);}
                     catch(RuntimeException failure) {claim.invalidate();}
                 },heartbeatMillis,heartbeatMillis,TimeUnit.MILLISECONDS);
-                try {submissions.consume(claim);}
+                try {publishPersistedEvent(submissions.consume(claim));}
                 catch(ChatDeliverySubmissionService.Rejected rejected) {submissions.reject(claim,rejected);}
                 finally {heartbeat.cancel(false);}
             }

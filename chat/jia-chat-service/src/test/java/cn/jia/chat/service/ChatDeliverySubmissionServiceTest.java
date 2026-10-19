@@ -148,7 +148,10 @@ class ChatDeliverySubmissionServiceTest {
     }
     @Test void missingContextIsRetryableNotNullBasis() {consumer();when(contexts.require(scope,"request",1)).thenThrow(new IllegalStateException("missing"));assertThrows(IllegalStateException.class,()->service.consume(claim));verifyNoInteractions(submissions);}
     @Test void freezeThenSubmitThenAckNeverCallsAcceptance() {
-        current();receipt("completed","SUBMITTED","submitted",null,false);when(outbox.sent(eq(claim),anyLong())).thenReturn(true);service.consume(claim);
+        current();receipt("completed","SUBMITTED","submitted",null,false);when(outbox.sent(eq(claim),anyLong())).thenReturn(true);
+        var completedEvent=new ChatConversationEventEntity().setEventType("delivery_submission_completed");
+        when(deliberation.persistDeliverySubmissionCompleted(eq(row),eq(key),eq("delivery"),anyLong())).thenReturn(completedEvent);
+        assertSame(completedEvent,service.consume(claim));
         var order=inOrder(operations,outbox,submissions,deliberation);order.verify(outbox).requireActiveClaim(eq(claim),anyLong());
         order.verify(operations).create(eq("0"),eq("owner"),eq("client"),eq(operation(7).operationId()),eq("task"),eq(key),anyString(),eq("123"),eq(7L),eq(1L),eq("本轮议事成果"),anyList());
         order.verify(submissions).submit(any(),eq("task"),eq(key),any());
