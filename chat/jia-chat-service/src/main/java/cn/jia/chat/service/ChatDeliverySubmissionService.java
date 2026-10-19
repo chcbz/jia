@@ -51,18 +51,20 @@ public class ChatDeliverySubmissionService {
     private final ChatConversationDao conversations;
     private final JuyitingConversationScopeService conversationScopes;
     private final ChatDeliberationOutboxService outbox;
+    private final ObjectProvider<ChatDeliberationService> deliberation;
 
     public ChatDeliverySubmissionService(ChatDeliberationDao dao,ChatTypedDeliberationStore typed,
             ObjectProvider<ChatActionFinalService> finals,ChatTypedReviewContextStore contexts,
             ChatSelectedOutputFinalizationStore operations,ObjectProvider<ChatSelectedOutputFinalizationService> submissions,
             ChatTaskDeliveryReviewReadService reviews,AgentTaskMutationTransaction tasks,ChatBountyBindingStore bindings,
-            ChatConversationDao conversations,JuyitingConversationScopeService conversationScopes,ChatDeliberationOutboxService outbox) {
+            ChatConversationDao conversations,JuyitingConversationScopeService conversationScopes,ChatDeliberationOutboxService outbox,
+            ObjectProvider<ChatDeliberationService> deliberation) {
         this.dao=Objects.requireNonNull(dao);this.typed=Objects.requireNonNull(typed);this.finals=Objects.requireNonNull(finals);
         this.contexts=Objects.requireNonNull(contexts);this.operations=Objects.requireNonNull(operations);
         this.submissions=Objects.requireNonNull(submissions);this.reviews=Objects.requireNonNull(reviews);
         this.tasks=Objects.requireNonNull(tasks);this.bindings=Objects.requireNonNull(bindings);
         this.conversations=Objects.requireNonNull(conversations);this.conversationScopes=Objects.requireNonNull(conversationScopes);
-        this.outbox=Objects.requireNonNull(outbox);
+        this.outbox=Objects.requireNonNull(outbox);this.deliberation=Objects.requireNonNull(deliberation);
     }
     private ChatFormalDeliveryRetentionService retention;
     @org.springframework.beans.factory.annotation.Autowired(required=false)
@@ -190,7 +192,14 @@ public class ChatDeliverySubmissionService {
         if(!operation.operationId().equals(receipt.operationId()))throw storage();
         if("completed".equals(receipt.state()) && "SUBMITTED".equals(receipt.stage()) && Set.of("submitted","accepted","changes_requested").contains(receipt.deliveryState())
                 && receipt.deliveryId()!=null) {
-            if(!outbox.sent(claim,System.currentTimeMillis()))throw storage();
+            tasks.executeWithLockedTaskRootInOwnerScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),row.taskId(),root->{
+                long now=System.currentTimeMillis();
+                // Event and settlement commit together. Consumers re-read the immutable final plus
+                // mutable submission projection; the hint itself is not acceptance authority.
+                deliberation.getObject().persistDeliverySubmissionCompleted(row,key,receipt.deliveryId(),now);
+                if(!outbox.sent(claim,now))throw storage();
+                return null;
+            });
         } else if("failed".equals(receipt.state()) && !receipt.retryable()) {
             if(!outbox.dead(claim,receipt.errorCode()==null?"DELIVERY_SUBMISSION_REJECTED":receipt.errorCode(),System.currentTimeMillis()))throw storage();
         } else throw storage(); // Retain the original event/key for transient retry; no version/key regeneration.

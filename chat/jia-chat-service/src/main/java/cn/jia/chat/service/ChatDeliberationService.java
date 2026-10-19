@@ -937,6 +937,21 @@ public class ChatDeliberationService {
                 "actionRequestId", actionId, "parentOutcomeId", parent.outcomeId()), now);
     }
 
+    @Transactional(propagation = Propagation.MANDATORY, rollbackFor = Exception.class)
+    public ChatConversationEventEntity persistDeliverySubmissionCompleted(
+            cn.jia.chat.deliberation.ChatTypedDeliberationStore.Outcome outcome,
+            String submissionId, String deliveryId, long now) {
+        var scope = outcome.scope();
+        var turn = requireLockedTurn(scope.tenantId(), scope.ownerJiacn(), scope.clientId(), outcome.turnId());
+        if (!outcome.finalDigest().equals(turn.getFinalDigest())
+                || !scope.conversationId().equals(turn.getConversationId())
+                || !java.util.Objects.equals(scope.conversationGeneration(), turn.getConversationGeneration())
+                || !outcome.requestId().equals(turn.getRequestId())) throw conflict("Delivery final changed");
+        return persistEvent(turn, stableId("evt", submissionId, "DELIVERY_SUBMISSION_COMPLETED"),
+                "delivery_submission_completed", Map.of("parentOutcomeId", outcome.outcomeId(),
+                        "submissionId", submissionId, "deliveryId", deliveryId), now);
+    }
+
     public ChatConversationEventEntity persistTypedQuestionAnswered(ChatTurnEntity turn,
             String pendingQuestionId, long stateVersion, String replyRequestId,
             String parentOutcomeId, long now) {

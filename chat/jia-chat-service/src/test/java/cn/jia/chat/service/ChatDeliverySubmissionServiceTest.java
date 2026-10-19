@@ -29,6 +29,7 @@ class ChatDeliverySubmissionServiceTest {
     final ChatBountyBindingStore bindings=mock(ChatBountyBindingStore.class);
     final ChatConversationDao conversations=mock(ChatConversationDao.class);
     final JuyitingConversationScopeService scopes=mock(JuyitingConversationScopeService.class);
+    final ChatDeliberationService deliberation=mock(ChatDeliberationService.class);
     final ChatDeliberationOutboxService outbox=mock(ChatDeliberationOutboxService.class);
     final ChatTypedDeliberationStore.Scope scope=new ChatTypedDeliberationStore.Scope("0","owner","client","123",1);
     final String digest="sha256:"+"a".repeat(64);
@@ -48,7 +49,8 @@ class ChatDeliverySubmissionServiceTest {
         ObjectProvider<ChatActionFinalService> provider=mock(ObjectProvider.class);when(provider.getObject()).thenReturn(finals);
         ObjectProvider<ChatSelectedOutputFinalizationService> submissionProvider=mock(ObjectProvider.class);
         when(submissionProvider.getObject()).thenReturn(submissions);
-        service=spy(new ChatDeliverySubmissionService(dao,typed,provider,contexts,operations,submissionProvider,reviews,tasks,bindings,conversations,scopes,outbox));
+        ObjectProvider<ChatDeliberationService> events=mock(ObjectProvider.class);when(events.getObject()).thenReturn(deliberation);
+        service=spy(new ChatDeliverySubmissionService(dao,typed,provider,contexts,operations,submissionProvider,reviews,tasks,bindings,conversations,scopes,outbox,events));
     }
     ChatTurnEntity turn() {
         return new ChatTurnEntity().setTenantId("0").setOwnerJiacn("owner").setClientId("client").setConversationId("123").setConversationGeneration(1L)
@@ -147,9 +149,11 @@ class ChatDeliverySubmissionServiceTest {
     @Test void missingContextIsRetryableNotNullBasis() {consumer();when(contexts.require(scope,"request",1)).thenThrow(new IllegalStateException("missing"));assertThrows(IllegalStateException.class,()->service.consume(claim));verifyNoInteractions(submissions);}
     @Test void freezeThenSubmitThenAckNeverCallsAcceptance() {
         current();receipt("completed","SUBMITTED","submitted",null,false);when(outbox.sent(eq(claim),anyLong())).thenReturn(true);service.consume(claim);
-        var order=inOrder(operations,outbox,submissions);order.verify(outbox).requireActiveClaim(eq(claim),anyLong());
+        var order=inOrder(operations,outbox,submissions,deliberation);order.verify(outbox).requireActiveClaim(eq(claim),anyLong());
         order.verify(operations).create(eq("0"),eq("owner"),eq("client"),eq(operation(7).operationId()),eq("task"),eq(key),anyString(),eq("123"),eq(7L),eq(1L),eq("本轮议事成果"),anyList());
-        order.verify(submissions).submit(any(),eq("task"),eq(key),any());order.verify(outbox).sent(eq(claim),anyLong());
+        order.verify(submissions).submit(any(),eq("task"),eq(key),any());
+        order.verify(deliberation).persistDeliverySubmissionCompleted(eq(row),eq(key),eq("delivery"),anyLong());
+        order.verify(outbox).sent(eq(claim),anyLong());
     }
     @Test void restartReusesOriginalVersionAndSelectionsEvenIfTaskNowCompleted() {
         consumer();root("completed",99);when(operations.findByKey("0","owner","client","task",key)).thenReturn(operation(7));

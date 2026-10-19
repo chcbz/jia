@@ -433,7 +433,7 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
         try{return transactions.executeWithLockedTaskRootInOwnerScope(scope.tenantId(),scope.clientId(),
                 scope.ownerJiacn(),taskId,root->{
             if(root==null||root.getTaskVersion()==null||root.getTaskVersion()<0
-                    ||!("assigned".equals(root.getRewardStatus()) || "running".equals(root.getRewardStatus()))
+                    ||!("assigned".equals(root.getRewardStatus()) || "running".equals(root.getRewardStatus()) || "reviewing".equals(root.getRewardStatus()))
                     ||!same(targetAgentId,root.getAssignedAgentId()))throw conflict("Task is not current for follow-up");
             AgentTaskExecutionGrantEntity active=grants.findActiveByTask(scope.tenantId(),scope.clientId(),
                     scope.ownerJiacn(),taskId);

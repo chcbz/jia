@@ -67,6 +67,19 @@ class AgentTaskExecutionGrantServiceImplTest {
                 new DirectTransaction(root),new ObjectMapper(),requirementSnapshots);
     }
 
+    @Test void pendingReviewAllowsReadOnlyDiscussionContextWithoutGrantingImageExecution() {
+        when(links.list("0","client","owner","task-1",null,null,33)).thenReturn(List.of());
+        var grant=service.assignForDeliberation(scope(),"task-1","review-context","agent-1",0,1);
+        root.setRewardStatus("reviewing");
+        var context=service.currentFollowupContext(scope(),"task-1","agent-1");
+        assertEquals(grant.getAssignmentRevision(),context.assignmentRevision());
+        assertEquals(root.getTaskVersion(),context.taskVersion());
+        assertThrows(AgentTaskExecutionGrantException.class,()->service.admit(scope(),"task-1",grant.getGrantId(),
+                grant.getGrantVersion(),grant.getAssignmentRevision(),"agent-1","GENERATE_IMAGE",true));
+        root.setRewardStatus("completed");
+        assertThrows(AgentTaskExecutionGrantException.class,()->service.currentFollowupContext(scope(),"task-1","agent-1"));
+    }
+
     @Test
     void pointWithoutMaterialsCreatesDeliberationNotImageOrPaidAuthority() {
         when(links.list("0","client","owner","task-1",null,null,33)).thenReturn(List.of());
