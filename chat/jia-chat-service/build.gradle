@@ -115,6 +115,7 @@ def mmdU3FinalizationSourceSet = sourceSets.create('mmdU3Finalization') {
         include 'cn/jia/chat/service/ChatSelectedOutputFinalizationStoreTest.java'
         include 'cn/jia/chat/api/AgentTaskSelectedOutputFinalizationControllerTest.java'
         include 'cn/jia/chat/config/ChatSelectedOutputFinalizationSchemaInitializerTest.java'
+        include 'cn/jia/chat/config/JuyitingWorkflowMySqlTest.java'
     }
     resources.srcDir 'src/mmdRegressionTest/resources'
     compileClasspath += sourceSets.main.output
