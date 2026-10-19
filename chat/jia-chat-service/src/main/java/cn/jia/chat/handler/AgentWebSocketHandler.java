@@ -1373,7 +1373,9 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         if (agentId == null) {
             return;
         }
-        if (conversationId == null || conversationId.isBlank() || content == null || content.isBlank()) {
+        // Whitespace is a real streamed token with its own deltaSeq. Dropping it
+        // creates a false gap on the next chunk; empty chunks remain invalid.
+        if (conversationId == null || conversationId.isBlank() || content == null || content.isEmpty()) {
             return;
         }
         if (registeredAgentIds.isEmpty() || agentId == null || !registeredAgentIds.contains(agentId)) {

@@ -38,6 +38,8 @@ import reactor.core.publisher.Flux;
 import cn.jia.test.BaseMockTest;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.springframework.ai.chat.client.ChatClient;
@@ -1121,8 +1123,9 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         verify(agentService, never()).reportTask(any(String.class), any(AgentTaskReportDTO.class));
     }
 
-    @Test
-    void durableAgentCallbacksUseAuthenticatedRuntimeIdentityInsteadOfPayloadNames() throws Exception {
+    @ParameterizedTest
+    @ValueSource(strings = {"delta", " ", "\n", "\t", " \n "})
+    void durableAgentCallbacksUseAuthenticatedRuntimeIdentityInsteadOfPayloadNames(String deltaContent) throws Exception {
         stubAgentSession("session-durable-identity", "agent-001");
         when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
         when(agentService.register(any(AgentRegisterDTO.class)))
@@ -1161,8 +1164,8 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
                 {"type":"agent.register","requestId":"reg-1","agentId":"agent-001","name":"Wu Yong"}
                 """));
         UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
-                {"type":"agent.message.delta","requestId":"req-1","turnId":"turn-1","dispatchId":"dispatch-1","conversationId":"1001","conversationGeneration":"1","contextSnapshotId":"snapshot-1","contextHash":"sha256:ctx","deltaSeq":"1","agentId":"agent-001","senderName":"宋江","agentName":"林冲","content":"delta"}
-                """));
+                {"type":"agent.message.delta","requestId":"req-1","turnId":"turn-1","dispatchId":"dispatch-1","conversationId":"1001","conversationGeneration":"1","contextSnapshotId":"snapshot-1","contextHash":"sha256:ctx","deltaSeq":"1","agentId":"agent-001","senderName":"宋江","agentName":"林冲","content":%s}
+                """.formatted(new ObjectMapper().writeValueAsString(deltaContent))));
         UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
                 {"type":"agent.message","requestId":"req-1","turnId":"turn-1","dispatchId":"dispatch-1","conversationId":"1001","conversationGeneration":"1","contextSnapshotId":"snapshot-1","contextHash":"sha256:ctx","agentId":"agent-001","senderName":"宋江","agentName":"林冲","content":"final"}
                 """));
@@ -1171,7 +1174,7 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
                 ArgumentCaptor.forClass(ServerResolvedAgentSender.class);
         verify(deliberation).acceptDelta(eq("0"), eq("juyiting"), eq("jia_client"), eq("1001"),
                 eq(1L), eq("agent-001"), eq("req-1"), eq("turn-1"), eq("dispatch-1"),
-                eq("snapshot-1"), eq("sha256:ctx"), eq(1L), eq("delta"), deltaSender.capture());
+                eq("snapshot-1"), eq("sha256:ctx"), eq(1L), eq(deltaContent), deltaSender.capture());
         ArgumentCaptor<ServerResolvedAgentSender> finalSender =
                 ArgumentCaptor.forClass(ServerResolvedAgentSender.class);
         verify(deliberation).persistFinal(eq("0"), eq("juyiting"), eq("jia_client"), eq("1001"),
