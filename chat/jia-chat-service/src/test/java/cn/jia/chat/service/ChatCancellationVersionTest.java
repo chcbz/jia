@@ -24,7 +24,7 @@ class ChatCancellationVersionTest {
         return new ChatTurnEntity().setTenantId("0").setOwnerJiacn("owner").setClientId("client")
                 .setConversationId("1001").setConversationGeneration(1L).setRequestId("request")
                 .setRequestRevision(1L).setTurnId("turn").setDispatchId("dispatch")
-                .setContextSnapshotId("snapshot").setTargetAgentId("agent").setRoute("CHAT")
+                .setSnapshotId("snapshot").setTargetAgentId("agent").setRoute("CHAT")
                 .setState("STREAMING").setStateVersion(7L).setLastDeltaSeq(4L)
                 .setCreatedAt(100L).setUpdatedAt(200L);
     }
