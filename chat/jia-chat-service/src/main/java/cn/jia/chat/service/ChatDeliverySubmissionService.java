@@ -63,6 +63,10 @@ public class ChatDeliverySubmissionService {
         this.conversations=Objects.requireNonNull(conversations);this.conversationScopes=Objects.requireNonNull(conversationScopes);
         this.outbox=Objects.requireNonNull(outbox);
     }
+    private ChatFormalDeliveryRetentionService retention;
+    @org.springframework.beans.factory.annotation.Autowired(required=false)
+    public void setRetention(ChatFormalDeliveryRetentionService value) {retention=Objects.requireNonNull(value);}
+
     public record Candidate(ChatTypedDeliberationStore.Outcome outcome,ChatTypedDeliberationStore.Admission admission,
             String targetAgentId,List<Map<String,Object>> targets) {
         public Candidate {targets=targets.stream().map(Map::copyOf).toList();}
@@ -158,6 +162,12 @@ public class ChatDeliverySubmissionService {
             if(!Long.toString(root.getTaskVersion()).equals(review.taskVersion()) || !row.taskId().equals(review.taskId())
                     || !Long.toString(row.assignmentRevision()).equals(review.assignmentRevision()))throw rejected("DELIVERY_ASSIGNMENT_CHANGED");
             var selections=selections(candidate);
+            var lineage=retention==null?null:retention.lineage(scope,row.taskId(),row.requestId());
+            if(lineage!=null) {
+                try {retention.requireReplacementProof(scope,row.taskId(),lineage,selections);}
+                catch(ChatDeliveryReviewContract.SourceUnavailable invalid) {throw rejected("DELIVERY_SOURCE_UNAVAILABLE");}
+                selections=retention.retain(lineage,selections);
+            }
             var locked=outbox.requireActiveClaim(claim,System.currentTimeMillis());
             if(!candidate.equals(load(locked)))throw rejected("DELIVERY_SOURCE_UNAVAILABLE");
             String summary="本轮议事成果";
@@ -172,7 +182,9 @@ public class ChatDeliverySubmissionService {
                         s.requestId(),s.stepId(),s.outputId(),s.sha256(),s.title(),s.purpose(),s.messageSource(),s.formalArtifactSource())).toList());
         // Existing promotion checks bytes, current owner/grant/lease and reconciles a prior durable
         // commit before stale-source checks. It submits; it never accepts.
-        var receipt=submissions.submit(new ChatSelectedOutputFinalizationService.Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn()),row.taskId(),key,command);
+        var submitScope=new ChatSelectedOutputFinalizationService.Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn());
+        var lineage=retention==null?null:retention.lineage(scope,row.taskId(),row.requestId());
+        var receipt=lineage==null?submissions.submit(submitScope,row.taskId(),key,command):submissions.submitRevision(submitScope,row.taskId(),key,command,lineage);
         if(!operation.operationId().equals(receipt.operationId()))throw storage();
         if("completed".equals(receipt.state()) && "SUBMITTED".equals(receipt.stage()) && Set.of("submitted","accepted","changes_requested").contains(receipt.deliveryState())
                 && receipt.deliveryId()!=null) {
@@ -283,7 +295,7 @@ public class ChatDeliverySubmissionService {
             for(String value:List.of(row.scope().tenantId(),row.scope().clientId(),row.scope().ownerJiacn(),row.turnId(),row.finalDigest())) {
                 byte[] bytes=value.getBytes(StandardCharsets.UTF_8);digest.update(ByteBuffer.allocate(8).putLong(bytes.length).array());digest.update(bytes);
             }
-            return "delivery-submit-"+HexFormat.of().formatHex(digest.digest());
+            return "delivery-submit-"+HexFormat.of().formatHex(digest.digest()).substring(0,48);
         } catch(NoSuchAlgorithmException impossible) {throw new IllegalStateException(impossible);}
     }
     static Map<String,Object> payload(ChatTypedDeliberationStore.Outcome row,String target) {

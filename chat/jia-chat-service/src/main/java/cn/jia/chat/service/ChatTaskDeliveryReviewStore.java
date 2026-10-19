@@ -41,6 +41,50 @@ public class ChatTaskDeliveryReviewStore {
         }
         return require(scope, task, id, false);
     }
+    @Transactional(propagation=org.springframework.transaction.annotation.Propagation.MANDATORY,rollbackFor=Exception.class)
+    public Operation admitRevision(ChatDeliveryRevisionService.BoundRevision bound) {
+        var parent=bound.parent().outcome();var owner=parent.scope();
+        var scope=new Scope(owner.tenantId(),owner.clientId(),owner.ownerJiacn());
+        String key=ChatDeliveryRevisionService.eventId(parent),digest=ChatDeliveryRevisionService.digest(bound);
+        var prior=byKey(scope,parent.taskId(),key,true);
+        if(prior!=null){requireDigest(prior,digest);return prior;}
+        String id="review_"+ChatDeliveryReviewContract.sha(ChatDeliveryReviewContract.json(List.of(
+                "hall-review-operation-v1",scope.tenantId(),scope.ownerJiacn(),scope.clientId(),parent.taskId(),key)));
+        long now=System.currentTimeMillis();var revision=bound.parent().validated().interactionOutcome().revision();
+        jdbc.update("""
+            INSERT INTO chat_task_delivery_review_operation
+             (tenant_id,owner_jiacn,client_id,operation_id,task_id,delivery_id,idempotency_key,request_sha256,
+              batch_sha256,request_json,decision,state,state_version,origin,source_request_id,source_message_id,
+              parent_outcome_id,parent_final_digest,target_artifact_ids_json,created_at,updated_at)
+             VALUES (?,?,?,?,?,?,?,?,?,?,'REQUEST_CHANGES','PROCESSING',1,'MESSAGE_REVISION',?,?,?,?,?,?,?)
+            """,scope.tenantId(),scope.ownerJiacn(),scope.clientId(),id,parent.taskId(),bound.basis().deliveryId(),key,digest,
+                bound.basis().batchSha256(),ChatDeliveryReviewContract.json(java.util.Map.of("basis",bound.basis(),"revision",revision)),
+                parent.requestId(),Long.toString(bound.parent().admission().userMessageId()),parent.outcomeId(),parent.finalDigest(),
+                ChatDeliveryReviewContract.json(revision.targetArtifactIds()),now,now);
+        return require(scope,parent.taskId(),id,true);
+    }
+    @Transactional(propagation=org.springframework.transaction.annotation.Propagation.MANDATORY,rollbackFor=Exception.class)
+    public void bindRevisionChild(Scope scope,Operation operation,String child) {
+        if(jdbc.update("""
+            UPDATE chat_task_delivery_review_operation SET child_request_id=? WHERE BINARY tenant_id=BINARY ?
+             AND BINARY owner_jiacn=BINARY ? AND BINARY client_id=BINARY ? AND BINARY operation_id=BINARY ?
+             AND state='PROCESSING' AND state_version=? AND origin='MESSAGE_REVISION' AND child_request_id IS NULL
+            """,child,scope.tenantId(),scope.ownerJiacn(),scope.clientId(),operation.operationId(),operation.stateVersion())!=1)throw new Conflict();
+    }
+    /** Terminal audit only after the owner-scoped root is unavailable. No task/delivery mutation.
+     * Null domain projections explicitly mean unavailable, never guessed from the frozen basis. */
+    @Transactional(rollbackFor=Exception.class)
+    public void rejectUnavailableRevision(ChatDeliveryRevisionService.BoundRevision bound,
+            ChatDeliberationOutboxService outbox,ChatDeliberationOutboxService.Claim claim,String code) {
+        var row=bound.parent().outcome();var s=row.scope();var owner=new Scope(s.tenantId(),s.clientId(),s.ownerJiacn());
+        var op=admitRevision(bound);
+        if("PROCESSING".equals(op.state()))settle(owner,op,new Receipt(1,op.operationId(),row.taskId(),bound.basis().deliveryId(),
+                "REQUEST_CHANGES","REJECTED",Long.toString(op.stateVersion()+1),null,null,null,null,
+                null,row.requestId(),s.conversationId(),code,false));
+        else committedReceipt(op);
+        long now=System.currentTimeMillis();outbox.requireActiveClaim(claim,now);
+        if(!outbox.sent(claim,now))throw new IllegalStateException("DELIVERY_REVISION_CLAIM_LOST");
+    }
     public Operation byKey(Scope scope, String task, String key, boolean lock) {
         return one("idempotency_key", scope, task, key, lock);
     }

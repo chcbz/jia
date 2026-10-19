@@ -20,7 +20,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
-/** Default-off, additive-only MySQL8 readiness gate for typed deliberation v3. */
+/** Default-off, additive-only MySQL8 readiness gate for typed deliberation v5. */
 @Component
 public final class ChatTypedDeliberationSchemaInitializer implements ApplicationRunner {
     /** INITIALIZING includes the interval before ApplicationRunner is invoked. */
@@ -36,7 +36,8 @@ public final class ChatTypedDeliberationSchemaInitializer implements Application
     private static final Map<String, ForeignKey> FOREIGN_KEYS = expectedForeignKeys();
     private static final String KIND_CHECK = "chk_chat_typed_outcome_kind";
     private static final String PREVIOUS_KIND = "kind IN ('ANSWER','CLARIFY','EXECUTION_PROPOSAL')";
-    private static final String ACTION_KIND = "kind IN ('ANSWER','CLARIFY','EXECUTION_PROPOSAL','ACTION_REQUEST')";
+    private static final String V4_KIND = "kind IN ('ANSWER','CLARIFY','EXECUTION_PROPOSAL','ACTION_REQUEST')";
+    private static final String ACTION_KIND = "kind IN ('ANSWER','CLARIFY','EXECUTION_PROPOSAL','ACTION_REQUEST','REVISION_REQUEST')";
     private static final Map<String, String> CHECKS = expectedChecks();
 
     private final JdbcTemplate jdbc;
@@ -265,7 +266,8 @@ public final class ChatTypedDeliberationSchemaInitializer implements Application
             String found = normalizeAtomicParentheses(stripOuterParentheses(actual.get(entry.getKey())));
             if (!wanted.equals(found)) {
                 if (allowPreviousKind && KIND_CHECK.equals(entry.getKey())
-                        && normalizeAtomicParentheses(stripOuterParentheses(canonicalCheck(PREVIOUS_KIND))).equals(found))
+                        && (normalizeAtomicParentheses(stripOuterParentheses(canonicalCheck(PREVIOUS_KIND))).equals(found)
+                        || normalizeAtomicParentheses(stripOuterParentheses(canonicalCheck(V4_KIND))).equals(found)))
                     previousKind = true;
                 else throw drift(entry.getKey());
             }

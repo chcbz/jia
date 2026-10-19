@@ -122,13 +122,25 @@ public final class ChatTypedDeliberationContextService {
         }
         catalog.sort(Comparator.comparing(value -> (String)value.get("sourceRefId")));
         available.sort(Comparator.comparing(value -> (String)value.get("sourceRefId")));
-        Map<String,Object> facts=new LinkedHashMap<>(); facts.put("schemaVersion",4);
+        Map<String,Object> facts=new LinkedHashMap<>(); facts.put("schemaVersion",5);
         facts.put("availableSources",List.copyOf(available));
         facts.put("inspectedSourceRefIds",List.of());
         facts.put("availableActions",capabilities.available(new ChatActionCapabilityService.Scope(
                 scope.tenantId(),scope.ownerJiacn(),scope.clientId(),targetAgentId),taskId,List.copyOf(catalog)));
         ChatActionOutcomeContract.facts(facts);
         return new Context(Map.copyOf(facts),CanonicalContextJson.write(catalog),normalized,ready.frozenDeclaration());
+    }
+
+    Context withFormalRevisionSources(Scope scope,String task,String target,Context context,List<Map<String,Object>> formal) {
+        var catalog=new ArrayList<Map<String,Object>>(parseCatalog(context.sourceCatalogJson()));
+        catalog.addAll(formal);catalog.sort(Comparator.comparing(x->(String)x.get("sourceRefId")));
+        if(catalog.stream().map(x->x.get("sourceRefId")).distinct().count()!=catalog.size())throw invalid();
+        var facts=new LinkedHashMap<String,Object>(context.facts());
+        facts.put("availableSources",catalog.stream().map(x->Map.of("sourceRefId",x.get("sourceRefId"),
+                "kind",x.get("sourceKind"),"mediaType",x.get("mediaType"),"contentMimeType",x.get("contentMimeType"))).toList());
+        facts.put("availableActions",capabilities.available(new ChatActionCapabilityService.Scope(scope.tenantId(),scope.ownerJiacn(),scope.clientId(),target),task,catalog));
+        ChatActionOutcomeContract.facts(facts);
+        return new Context(facts,CanonicalContextJson.write(catalog),context.selectors(),context.frozenDeclaration());
     }
 
     @SuppressWarnings("unchecked")

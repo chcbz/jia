@@ -27,7 +27,7 @@ class ChatReviewContextAdmissionTest {
     final ServerResolvedSender sender=new ServerResolvedSender("user","测试","owner","client",DisplayNameSource.JIACN);
     final JuyitingConversationScope scope=new JuyitingConversationScope("bounty","task:task_fixture","task_fixture","agent",List.of("agent"),List.of("agent"));
     final ChatMessageDTO input=new ChatMessageDTO();
-    final Map<String,Object> facts=Map.of("schemaVersion",4,"availableActions",List.of(),"availableSources",List.of(),"inspectedSourceRefIds",List.of());
+    final Map<String,Object> facts=Map.of("schemaVersion",5,"availableActions",List.of(),"availableSources",List.of(),"inspectedSourceRefIds",List.of());
     ChatReviewContextAdmissionTest() {
         service.setReviewContexts(review);
         var conversation=new ChatConversationEntity().setId(123L).setJiacn("owner").setConversationType("juyiting").setConversationScopeType("bounty")

@@ -99,12 +99,24 @@ public final class ChatDeliveryReviewContract {
             if(node==null || !node.isObject() || node.size()!=fields.size() || fields.stream().anyMatch(f->!node.has(f))) throw new BadRequest();
             var value=JSON.treeToValue(node,Receipt.class);
             id(value.operationId(),100); id(value.taskId(),100); id(value.deliveryId(),100);
-            if(value.schemaVersion()!=1 || !"ACCEPT".equals(value.decision()) || !Set.of("COMMITTED","REJECTED").contains(value.state())
-                    || version(node,"stateVersion")<2 || !Set.of("OPEN","PLANNING","ASSIGNED","RUNNING","BLOCKED","REVIEWING","COMPLETED","FAILED","CANCELLED","ARCHIVED").contains(value.taskState())
-                    || !Set.of("SUBMITTED","ACCEPTED","CHANGES_REQUESTED").contains(value.deliveryState())
-                    || !node.get("retryable").isBoolean() || value.retryable() || value.requestId()!=null || value.sourceRequestId()!=null || value.conversationId()!=null) throw new BadRequest();
-            version(node,"taskVersion"); version(node,"deliveryVersion");
-            if("COMMITTED".equals(value.state()) ? !"COMPLETED".equals(value.taskState()) || !"ACCEPTED".equals(value.deliveryState()) || value.errorCode()!=null
+            boolean unavailableRevision="REQUEST_CHANGES".equals(value.decision()) && "REJECTED".equals(value.state());
+            boolean absentTask=unavailableRevision && value.taskState()==null && value.taskVersion()==null;
+            boolean absentDelivery=unavailableRevision && value.deliveryState()==null && value.deliveryVersion()==null;
+            if(value.schemaVersion()!=1 || !Set.of("ACCEPT","REQUEST_CHANGES").contains(value.decision()) || !Set.of("COMMITTED","REJECTED").contains(value.state())
+                    || version(node,"stateVersion")<2 || (!absentTask && (value.taskState()==null || !Set.of("OPEN","PLANNING","ASSIGNED","RUNNING","BLOCKED","REVIEWING","COMPLETED","FAILED","CANCELLED","ARCHIVED").contains(value.taskState())))
+                    || (!absentDelivery && (value.deliveryState()==null || !Set.of("SUBMITTED","ACCEPTED","CHANGES_REQUESTED").contains(value.deliveryState())))
+                    || !node.get("retryable").isBoolean() || value.retryable()) throw new BadRequest();
+            if(!absentTask)version(node,"taskVersion"); if(!absentDelivery)version(node,"deliveryVersion");
+            if("ACCEPT".equals(value.decision())) {
+                if(value.requestId()!=null || value.sourceRequestId()!=null || value.conversationId()!=null)throw new BadRequest();
+                if("COMMITTED".equals(value.state()) && (!"COMPLETED".equals(value.taskState()) || !"ACCEPTED".equals(value.deliveryState())))throw new BadRequest();
+            } else {
+                id(value.sourceRequestId(),100);id(value.conversationId(),100);
+                if("COMMITTED".equals(value.state())) {id(value.requestId(),100);
+                    if(!"RUNNING".equals(value.taskState()) || !"CHANGES_REQUESTED".equals(value.deliveryState()) || value.requestId().equals(value.sourceRequestId()))throw new BadRequest();
+                } else if(value.requestId()!=null)throw new BadRequest();
+            }
+            if("COMMITTED".equals(value.state()) ? value.errorCode()!=null
                     : value.errorCode()==null || !value.errorCode().matches("DELIVERY_[A-Z_]+")) throw new BadRequest();
             return value;
         } catch (Exception failure) { throw new Storage(failure); }

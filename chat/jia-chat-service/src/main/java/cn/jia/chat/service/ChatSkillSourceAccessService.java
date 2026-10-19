@@ -14,6 +14,12 @@ import java.util.*;
 /** Chat-owned exact lineage/current-read adapter. No format-specific permission or fee branch. */
 @Service
 public final class ChatSkillSourceAccessService implements SkillSourceAccessService {
+    private org.springframework.beans.factory.ObjectProvider<ChatFormalDeliveryRetentionService> formalSources;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setFormalSources(org.springframework.beans.factory.ObjectProvider<ChatFormalDeliveryRetentionService> value) {formalSources=value;}
+    private ChatFormalDeliveryRetentionService formalSources() {
+        var service=formalSources==null?null:formalSources.getIfAvailable();if(service==null)throw missing();return service;
+    }
     private final ChatConversationDao conversations;
     private final JuyitingConversationScopeService scopes;
     private final ChatConversationArchiveStore archive;
@@ -39,6 +45,8 @@ public final class ChatSkillSourceAccessService implements SkillSourceAccessServ
             var content=result(scope,task,conversation,generation,identity);
             if(!"application/json".equals(input.get("contentMimeType"))||content.length!=decimal(input.get("byteLength"))
                     ||!sha(content).equals(input.get("sha256")))throw missing();
+        }else if("FORMAL_ARTIFACT".equals(kind)) {
+            formalSources().authorizeRevisionMaterial(scope,task,conversation,generation,input);
         }else throw missing();
     }
     @Override public PersonalWorkspaceExecutionService.RuntimeContent read(PersonalWorkspaceExecutionService.OwnerScope scope,
@@ -55,6 +63,9 @@ public final class ChatSkillSourceAccessService implements SkillSourceAccessServ
             if(output==null||!s.executionId().equals(output.executionId())||!s.outputId().equals(output.outputId())
                     ||!s.contentMimeType().equals(output.contentMimeType())||!s.sha256().equals(output.sha256())||s.byteLength()!=output.byteLength())throw missing();
             bytes=output.bytes();filename=output.originalFilename();
+        }else if("FORMAL_ARTIFACT".equals(input.get("sourceKind"))) {
+            var content=formalSources().readRevisionMaterial(scope,task,conversation,generation,input);
+            bytes=content.bytes();filename="formal-artifact";
         }else {bytes=result(scope,task,conversation,generation,identity);filename="execution-result.json";}
         if(bytes==null||bytes.length!=decimal(input.get("byteLength"))||!sha(bytes).equals(input.get("sha256")))throw conflict();
         // Recheck current ACL and retention after storage I/O, without holding a Runtime installation lock.

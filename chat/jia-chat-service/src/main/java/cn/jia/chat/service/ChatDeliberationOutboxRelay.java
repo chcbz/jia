@@ -56,6 +56,9 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
     @Autowired(required = false)
     public void setActions(ChatActionDispatchService actions) { this.actions = actions; }
 
+    private ChatDeliveryRevisionService revisions;
+    @Autowired(required=false) public void setRevisions(ChatDeliveryRevisionService service) {revisions=service;}
+
     private ChatDeliverySubmissionService submissions;
     @Autowired(required=false)
     public void setDeliverySubmissions(ChatDeliverySubmissionService service) {this.submissions=service;}
@@ -172,6 +175,14 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
                 try { actions.consume(claim); }
                 catch (ChatActionDispatchService.Rejected stale) { actions.reject(claim); }
                 // Other exceptions retain normal fenced retry; no deadline/attempt count turns them into failure.
+            }
+            case ChatDeliveryRevisionService.EVENT -> {
+                if(revisions==null)throw new IllegalStateException("Revision service unavailable");
+                ScheduledFuture<?> heartbeat=ensureScheduler().scheduleAtFixedRate(()->{
+                    try {outbox.renew(claim,System.currentTimeMillis(),leaseMillis);}
+                    catch(RuntimeException failure) {claim.invalidate();}
+                },heartbeatMillis,heartbeatMillis,TimeUnit.MILLISECONDS);
+                try {revisions.consume(claim);} finally {heartbeat.cancel(false);}
             }
             case ChatDeliverySubmissionService.EVENT -> {
                 if(submissions==null)throw new IllegalStateException("Delivery submission service is unavailable");

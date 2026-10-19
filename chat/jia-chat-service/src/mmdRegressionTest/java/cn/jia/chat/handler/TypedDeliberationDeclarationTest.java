@@ -9,10 +9,10 @@ import static org.junit.jupiter.api.Assertions.*;
 class TypedDeliberationDeclarationTest {
     static Map<String,Object> declaration(String state) {
         Map<String,Object> value=new LinkedHashMap<>();
-        value.put("schemaVersion",4);value.put("state",state);
-        value.put("carrier","CHAT_MESSAGE_FINAL_SIDECAR_V4");
+        value.put("schemaVersion",5);value.put("state",state);
+        value.put("carrier","CHAT_MESSAGE_FINAL_SIDECAR_V5");
         value.put("referenceModes",List.of("NONE","AVAILABLE"));
-        value.put("outcomeKinds",List.of("ANSWER","CLARIFY","ACTION_REQUEST"));
+        value.put("outcomeKinds",List.of("ANSWER","CLARIFY","ACTION_REQUEST","REVISION_REQUEST"));
         value.put("engine","CODEX_APP_SERVER_NATIVE_OUTPUT_SCHEMA");
         value.put("strictNoToolsVerified",false);value.put("toolPolicy","read-only-constrained");
         return value;
@@ -36,7 +36,7 @@ class TypedDeliberationDeclarationTest {
         Map<String,Object> weakened=declaration("READY");weakened.put("strictNoToolsVerified",true);
         assertEquals(TypedDeliberationDeclaration.State.UNSUPPORTED,TypedDeliberationDeclaration.parse(weakened).state());
     }
-    @Test void v4NativeDeclarationSurvivesRealSessionRegistryIntoOriginalChatMaterialFacts() {
+    @Test void v5NativeDeclarationSurvivesRealSessionRegistryIntoOriginalChatMaterialFacts() {
         var profile=Map.<String,Object>of("schemaVersion",1,"supportedInputs",List.of(Map.of("mediaKind","image","mimeType","image/png","carrier","LOCAL_IMAGE","carrierContractDigest","sha256:"+"a".repeat(64))));
         var declaration=declaration("READY");declaration.put("materialsInput",profile);
         var sessions=new TypedDeliberationSessionRegistry();sessions.register("session","0","owner","client","agent",declaration);

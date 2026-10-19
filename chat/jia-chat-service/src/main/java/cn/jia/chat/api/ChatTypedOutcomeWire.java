@@ -15,13 +15,15 @@ public final class ChatTypedOutcomeWire {
     public static Map<String,Object> project(Object verified, String route) {
         var source = JSON.convertValue(verified, OBJECT);
         if (source == null || !(source.get("schemaVersion") instanceof Number version)
-                || version.intValue()<1 || version.intValue()>4
+                || version.intValue()<1 || version.intValue()>5
                 || !Set.of("CHAT","INSPECT").contains(route)) throw invalid();
         var result = select(source, "conversationId", "conversationGeneration", "requestId", "requestRevision", "turnId", "state");
         result.put("schemaVersion", 6); result.put("route", route);
         result.put("outcome", source.get("outcome") == null ? null : outcome(map(source.get("outcome")), version.intValue()));
         result.put("inspection", source.get("inspection") == null ? null : inspection(map(source.get("inspection"))));
         result.put("actionProgress", source.get("actionProgress") == null ? null : progress(map(source.get("actionProgress"))));
+        result.put("reviewProgress", source.get("reviewProgress")==null?null:select(map(source.get("reviewProgress")),
+                "operationId","state","stateVersion","sourceRequestId","childRequestId","childState","childStateVersion"));
         result.put("submissionProgress", source.get("submissionProgress") == null ? null : select(map(source.get("submissionProgress")),
                 "eventId","operationId","state","dispatchVersion","operationStateVersion","deliveryId","errorCode","retryable"));
         return Collections.unmodifiableMap(result);
@@ -36,6 +38,7 @@ public final class ChatTypedOutcomeWire {
         else {var action = select(map(old.get("action")), "actionRequestId", "actionId", "instruction", "sourceRefIds");
             action.put("parameters", map(old.get("action")).get("parameters")); out.put("action", action);}
         out.put("deliverable", old.get("deliverable"));
+        out.put("revision",old.get("revision")==null?null:select(map(old.get("revision")),"instruction","targetArtifactIds"));
         if (old.get("messageSource") == null) out.put("messageSource", null);
         else {var value=map(old.get("messageSource"));var message=select(value,"turnId","messageId","snapshotId");
             message.put("finalSha256",hash(value.get("finalDigest")));out.put("messageSource",message);}

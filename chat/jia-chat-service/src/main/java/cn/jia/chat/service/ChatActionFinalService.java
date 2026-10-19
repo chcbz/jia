@@ -21,7 +21,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
-/** One action-v4 final store for CHAT. Action events contain references, not execution authority. */
+/** One action-v5 final store for CHAT. Action events contain references, not execution authority. */
 @Service
 public class ChatActionFinalService {
     public static final String ACTION_EVENT = "ACTION_REQUESTED";
@@ -44,6 +44,8 @@ public class ChatActionFinalService {
     }
 
     private HistoricalChatActionReader historical;
+    private HistoricalV4ChatActionReader historicalV4;
+    @Autowired public void setHistoricalV4Reader(HistoricalV4ChatActionReader reader) {historicalV4=Objects.requireNonNull(reader);}
     private cn.jia.agent.service.SkillExecutionService skills;
     @Autowired public void setSkillResults(cn.jia.agent.service.SkillExecutionService service) {skills=Objects.requireNonNull(service);}
     @Autowired public void setHistoricalReader(HistoricalChatActionReader reader) {historical=Objects.requireNonNull(reader);}
@@ -59,19 +61,36 @@ public class ChatActionFinalService {
     @Autowired(required=false)
     public void setDeliverySubmissions(ChatDeliverySubmissionService service) {this.submissions=Objects.requireNonNull(service);}
 
-    static boolean isV4(Map<String, Object> facts) {
+    private ChatDeliveryRevisionService revisions;
+    @Autowired(required=false) public void setRevisions(ChatDeliveryRevisionService value) {revisions=Objects.requireNonNull(value);}
+
+    private ChatTypedReviewContextStore reviewContexts;
+    @Autowired(required=false) public void setReviewContextStore(ChatTypedReviewContextStore value) {reviewContexts=Objects.requireNonNull(value);}
+
+    private ChatDeliveryRevisionContract.Basis reviewBasis(Map<String,Object> facts, ChatTypedDeliberationStore.Scope scope,
+            ChatTypedDeliberationStore.Admission admission) {
+        if (!facts.containsKey("reviewBasis")) return null; // Gate-off snapshots have no review authority.
+        var basis=ChatDeliveryRevisionContract.basisJson(canonical(facts.get("reviewBasis")));
+        if(reviewContexts==null || !Objects.equals(basis,reviewContexts.require(scope,admission.requestId(),admission.requestRevision())))
+            throw persistence("Review basis differs from immutable admission");
+        if(basis!=null && (!admission.taskId().equals(basis.taskId()) || !Long.toString(admission.userMessageId()).equals(basis.sourceMessageId())
+                || !Long.toString(admission.assignmentRevision()).equals(basis.assignmentRevision()))) throw persistence("Review basis provenance differs");
+        return basis;
+    }
+
+    static boolean isV5(Map<String, Object> facts) {
         if (facts.containsKey("typedDeliberation") && facts.containsKey("typedInspection"))
             throw persistence("Snapshot has conflicting typed contracts");
         Object value = facts.get("typedDeliberation");
         if (facts.containsKey("typedInspection")) value = map(facts.get("typedInspection")).get("discussionFacts");
-        return value instanceof Map<?, ?> typed && Integer.valueOf(4).equals(typed.get("schemaVersion"));
+        return value instanceof Map<?, ?> typed && Integer.valueOf(5).equals(typed.get("schemaVersion"));
     }
 
     public Prepared prepare(ChatTurnEntity turn, ChatContextSnapshotEntity snapshot, String content,
             Integer version, String rawOutcome, String rawReceipt) {
         verifySnapshot(turn, snapshot);
         Map<String, Object> facts = parse(snapshot.getFactsManifestJson());
-        if (!isV4(facts)) throw invalid("Action final requires v4 snapshot facts");
+        if (!isV5(facts)) throw invalid("Action final requires v5 snapshot facts");
         var scope = scope(turn);
         var admission = requireAdmission(scope, turn.getRequestId(), turn.getTurnId(), turn.getRequestRevision());
         String taskId = taskId(facts);
@@ -91,7 +110,7 @@ public class ChatActionFinalService {
         ChatActionFinalValidator.ValidatedFinal validated;
         try {
             validated = ChatActionFinalValidator.validateJson(binding(turn, taskId), typed, authority,
-                    content, version, rawOutcome, rawReceipt);
+                    content, version, rawOutcome, rawReceipt, reviewBasis(facts,scope,admission));
         } catch (IllegalArgumentException bad) { throw invalid(bad.getMessage()); }
         if ("CHAT".equals(turn.getRoute())) verifyCatalog(scope, admission.sourceCatalogJson(), validated.dispatchFacts());
         verifyDeliveryRelation(scope,admission,facts,validated);
@@ -118,7 +137,7 @@ public class ChatActionFinalService {
     public Map<String, Object> persist(Prepared p, long messageId, long now) {
         if (p.existing() != null) return projection(p.existing(), p.validated());
         var v = p.validated(); var union = v.interactionOutcome(); String id = outcomeId(p);
-        var stored = new LinkedHashMap<String, Object>(); stored.put("schemaVersion", 4);
+        var stored = new LinkedHashMap<String, Object>(); stored.put("schemaVersion", 5);
         stored.put("interactionOutcome", ChatActionFinalValidator.outcomeMap(union));
         stored.put("inspectionInputReceipt", v.inspectionInputReceipt() == null ? null
                 : TypedInspectionFinalValidator.receiptMap(v.inspectionInputReceipt()));
@@ -135,6 +154,10 @@ public class ChatActionFinalService {
                 throw persistence("Unable to persist action clarification");
         }
         if ("ACTION_REQUEST".equals(union.kind())) persistActionEvent(row, v, now);
+        if ("REVISION_REQUEST".equals(union.kind())) {
+            if(revisions==null)throw persistence("Revision consumer unavailable");
+            revisions.enqueue(row,v,now);
+        }
         if (submissions != null && "ANSWER".equals(union.kind()) && Boolean.TRUE.equals(union.deliverable()))
             submissions.enqueue(row, v, now);
         return projection(row, v);
@@ -143,7 +166,7 @@ public class ChatActionFinalService {
     private static Map<String, Object> actionPayload(ChatTypedDeliberationStore.Outcome row,
             ChatActionFinalValidator.ValidatedFinal v) {
         Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("schemaVersion", 4); payload.put("conversationId", row.scope().conversationId());
+        payload.put("schemaVersion", 5); payload.put("conversationId", row.scope().conversationId());
         payload.put("conversationGeneration", Long.toString(row.scope().conversationGeneration()));
         payload.put("requestId", row.requestId()); payload.put("requestRevision", Long.toString(row.requestRevision()));
         payload.put("turnId", row.turnId()); payload.put("outcomeId", row.outcomeId());
@@ -183,12 +206,43 @@ public class ChatActionFinalService {
         if ("INSPECT".equals(turn.getRoute())) inputAuthority = authority(
                 ChatTypedInspectionContextService.inspection(admission.sourceCatalogJson()));
         var validated = ChatActionFinalValidator.validateJson(parse(row.bindingJson()), parse(row.factsJson()),
-                inputAuthority, row.text(), 4, canonical(stored.get("interactionOutcome")),
-                stored.get("inspectionInputReceipt") == null ? null : canonical(stored.get("inspectionInputReceipt")));
+                inputAuthority, row.text(), 5, canonical(stored.get("interactionOutcome")),
+                stored.get("inspectionInputReceipt") == null ? null : canonical(stored.get("inspectionInputReceipt")),
+                reviewBasis(parse(actionSnapshot.getFactsManifestJson()),scope,admission));
         if (!ChatActionFinalValidator.actionEventId(validated).equals(event.getEventId())
                 || !canonical(actionPayload(row, validated)).equals(canonical(parse(event.getPayloadJson()))))
             throw persistence("Action event differs from immutable final");
         return new BoundAction(row, admission, validated);
+    }
+
+    /** Reconstruct trusted revision authority solely from immutable server rows. */
+    @Transactional(readOnly=true)
+    public ChatDeliveryRevisionService.BoundRevision loadRevision(ChatDispatchOutboxEntity event) {
+        if(event==null || !ChatDeliveryRevisionService.EVENT.equals(event.getEventType()))throw unavailable();
+        var turn=dao.findTurn(event.getTenantId(),event.getOwnerJiacn(),event.getClientId(),event.getTurnId());
+        if(turn==null || !"CHAT".equals(turn.getRoute()) || !Objects.equals(event.getDispatchId(),turn.getDispatchId())
+                || !Set.of("FINAL_PERSISTED","PUBLISHED").contains(turn.getState()))throw unavailable();
+        var scope=scope(turn);var row=store.findOutcomeByTurn(scope,turn.getTurnId(),false);
+        var admission=requireAdmission(scope,turn.getRequestId(),turn.getTurnId(),turn.getRequestRevision());
+        if(row==null || !"REVISION_REQUEST".equals(row.kind()) || !scope.equals(row.scope())
+                || !Objects.equals(turn.getFinalDigest(),row.finalDigest()) || !Objects.equals(turn.getFinalMessageId(),row.assistantMessageId()))throw unavailable();
+        var snapshot=dao.findSnapshot(scope.tenantId(),scope.ownerJiacn(),scope.clientId(),turn.getSnapshotId());
+        verifySnapshot(turn,snapshot);var facts=parse(snapshot.getFactsManifestJson());
+        var basis=reviewBasis(facts,scope,admission);var stored=parse(row.outcomeJson());
+        var validated=ChatActionFinalValidator.validateJson(binding(turn,row.taskId()),discussion(facts,"CHAT"),
+                ChatMaterialsInputContract.authority(facts.get("materialsInput")),row.text(),5,
+                canonical(stored.get("interactionOutcome")),null,basis);
+        if(!row.finalDigest().equals(validated.finalDigest()) || !"REVISION_REQUEST".equals(validated.interactionOutcome().kind())
+                || !row.requestId().equals(turn.getRequestId()) || row.requestRevision()!=turn.getRequestRevision()
+                || !admission.taskId().equals(row.taskId()) || admission.assignmentRevision()!=row.assignmentRevision()
+                || !row.bindingJson().equals(canonical(validated.binding()))
+                || !row.factsJson().equals(canonical(ChatActionFinalValidator.factsMap(validated.dispatchFacts())))
+                || !row.sourceCatalogJson().equals(admission.sourceCatalogJson()))throw unavailable();
+        verifyCatalog(scope,admission.sourceCatalogJson(),validated.dispatchFacts());
+        var bound=new ChatDeliveryRevisionService.BoundRevision(new BoundAction(row,admission,validated),basis);
+        if(!ChatDeliveryRevisionService.eventId(row).equals(event.getEventId())
+                || !canonical(ChatDeliveryRevisionService.payload(row)).equals(canonical(parse(event.getPayloadJson()))))throw unavailable();
+        return bound;
     }
 
     /** Returns null only for old immutable contracts; no legacy proposal is promoted to an action. */
@@ -212,7 +266,10 @@ public class ChatActionFinalService {
         var snapshot = dao.findSnapshot(scope.tenantId(), scope.ownerJiacn(), scope.clientId(), turn.getSnapshotId());
         verifySnapshot(turn, snapshot);
         Map<String, Object> facts = parse(snapshot.getFactsManifestJson());
-        if (!isV4(facts)) return historical==null?null:historical.readIfV3(scope,requestId,turnId,revision,expectedRoute);
+        if (!isV5(facts)) {
+            var old=historicalV4==null?null:historicalV4.readIfV4(scope,requestId,turnId,revision,expectedRoute);
+            return old!=null?old:historical==null?null:historical.readIfV3(scope,requestId,turnId,revision,expectedRoute);
+        }
         var admission = requireAdmission(scope, requestId, turnId, revision);
         if (!admission.taskId().equals(taskId(facts))) throw persistence("Action admission task differs from snapshot");
         var typed = discussion(facts, expectedRoute);
@@ -228,12 +285,12 @@ public class ChatActionFinalService {
                     || admission.assignmentRevision() != row.assignmentRevision()) throw persistence("Stored action identity differs");
             var stored = parse(row.outcomeJson());
             if (!stored.keySet().equals(Set.of("schemaVersion", "interactionOutcome", "inspectionInputReceipt"))
-                    || !Integer.valueOf(4).equals(stored.get("schemaVersion"))) throw persistence("Stored action final is invalid");
+                    || !Integer.valueOf(5).equals(stored.get("schemaVersion"))) throw persistence("Stored action final is invalid");
             try {
                 validated = ChatActionFinalValidator.validateJson(binding(turn, admission.taskId()), typed,
-                        inspection == null ? ChatMaterialsInputContract.authority(facts.get("materialsInput")) : authority(inspection), row.text(), 4,
+                        inspection == null ? ChatMaterialsInputContract.authority(facts.get("materialsInput")) : authority(inspection), row.text(), 5,
                         canonical(stored.get("interactionOutcome")), stored.get("inspectionInputReceipt") == null
-                                ? null : canonical(stored.get("inspectionInputReceipt")));
+                                ? null : canonical(stored.get("inspectionInputReceipt")),reviewBasis(facts,scope,admission));
             } catch (IllegalArgumentException invalid) { throw persistence("Stored action final is invalid"); }
             if (!row.finalDigest().equals(validated.finalDigest()) || !row.kind().equals(validated.interactionOutcome().kind())
                     || !row.bindingJson().equals(canonical(validated.binding()))
@@ -242,13 +299,14 @@ public class ChatActionFinalService {
             verifyDeliveryRelation(scope,admission,facts,validated,verifyTargets);
             outcome = projection(row, validated);
         } else if (turn.getFinalDigest() != null) throw persistence("Action final transaction is incomplete");
-        var view = new LinkedHashMap<String, Object>(); view.put("schemaVersion", 4); view.put("route", expectedRoute);
+        var view = new LinkedHashMap<String, Object>(); view.put("schemaVersion", 5); view.put("route", expectedRoute);
         view.put("conversationId", scope.conversationId()); view.put("conversationGeneration", Long.toString(scope.conversationGeneration()));
         view.put("requestId", requestId); view.put("requestRevision", Long.toString(revision)); view.put("turnId", turnId);
         view.put("state", row == null ? "PENDING" : "READY"); view.put("outcome", outcome);
         view.put("inspection", inspection == null ? null : inspectionView(inspection, validated));
         view.put("actionProgress", includeProgress && row != null && "ACTION_REQUEST".equals(row.kind())
                 ? actionProgress(row, validated, admission) : null);
+        view.put("reviewProgress", includeProgress && row!=null && revisions!=null ? revisions.read(row):null);
         view.put("submissionProgress", includeProgress && row != null && submissions != null
                 ? submissions.read(row,validated) : null);
         return Collections.unmodifiableMap(view);
@@ -577,7 +635,7 @@ public class ChatActionFinalService {
     }
 
     private Map<String, Object> projection(ChatTypedDeliberationStore.Outcome row, ChatActionFinalValidator.ValidatedFinal v) {
-        var view = new LinkedHashMap<String, Object>(); view.put("outcomeContractVersion", 4);
+        var view = new LinkedHashMap<String, Object>(); view.put("outcomeContractVersion", 5);
         view.put("outcomeId", row.outcomeId()); view.put("taskId", row.taskId());
         view.put("assignmentRevision", Long.toString(row.assignmentRevision()));
         view.put("assistantMessageId", Long.toString(row.assistantMessageId())); view.put("finalDigest", row.finalDigest());
@@ -609,6 +667,8 @@ public class ChatActionFinalService {
                     "actionId", a.actionId(), "instruction", a.instruction(), "sourceRefIds", a.sourceRefIds(), "parameters", a.parameters());
         }
         view.put("clarification", clarification == null ? null : Collections.unmodifiableMap(clarification)); view.put("action", action);
+        view.put("revision",v.interactionOutcome().revision()==null?null:Map.of("instruction",v.interactionOutcome().revision().instruction(),
+                "targetArtifactIds",v.interactionOutcome().revision().targetArtifactIds()));
         return Collections.unmodifiableMap(view);
     }
 

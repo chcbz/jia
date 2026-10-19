@@ -2516,3 +2516,12 @@ public ResponseEntity<ConversationDeliverableReadAdapter.Page> list( @PathVariab
 列表、分页总数及 `POST /agent/tasks/status-counts` 共用固定 tenant、认证 client/owner、ability及完整 keyword（任务ID、标题、描述、本领、承办名称）谓词。阶段只读派生，不新增root状态：open→待点将；planning/assigned/running/blocked→进行中；completed→已完成；failed/cancelled/archived→历史。reviewing必须恰有一个当前submitted正式交付且不存在更新revision，否则UNKNOWN；非终态却残留submitted也UNKNOWN。终态根事实优先。此阶段不是可写权限，ACCEPT仍必须核对完整review-context、版本、来源及幂等操作。
 
 计数成功业务data固定为 `{phaseCounts,rawStatusCounts}`；两者均有 `total`，所有计数为非负规范十进制 **string**（可大于JS安全整数），没有当前页兜底。phaseCounts固定六个阶段键；rawStatusCounts含原始状态，未知/null持久状态不伪造open。计数忽略当前选中阶段，scope/ability/keyword与列表相同；失败不是0。旧裸数值map不再作为新UI协议。该候选不得单独发布到仍消费旧计数结构的Web。
+
+
+#### 概览TASK阶段同步（2026-10-19候选，未上线）
+
+核对源码 `77de508b6a75e1ecb49bd5eda3a369558ae83aac`，覆盖 `HallReadSql` / `HallReadService.ItemSummary` / `HallReadWire` 以及 Web `8ad9be0098e1f7d848ade2f610270448d02116fe` 的概览消费者。`GET /agent/hall/overview` 和 `GET /agent/hall/items` 的TASK条目新增显式 `phase`，取值与上节六阶段相同；其他来源返回null。来源仍为互相独立的keyset partition，不新增全局统计。
+
+TASK概览和事项分页/阶段计数复用同一 `AgentTaskPhaseSql.PHASE`。`review` 仅在 `phase=PENDING_ACCEPTANCE` 且真实reviewReady完整时返回；多个submitted、最新交付矛盾等即使latest-only join取到一个批次，也必须UNKNOWN且review=null。正式schema关闭时不访问正式交付表，根终态保留COMPLETED/HISTORY，其余UNKNOWN。
+
+此字段仅为只读展示，不是验收授权。Web对缺失/非法/矛盾phase隔离TASK来源错误；不把reviewing自行提升为可验收，UNKNOWN只读核对。真实MyBatis/MySQL逐项对照及正式Flow180通过，线上部署未发生，部署后的身份/ACL及真实页面核验不由该证据替代。

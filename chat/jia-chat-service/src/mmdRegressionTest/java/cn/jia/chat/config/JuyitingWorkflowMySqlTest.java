@@ -36,7 +36,9 @@ import java.util.concurrent.*;
 import java.util.function.Supplier;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.*;
+import cn.jia.chat.service.*;
+import cn.jia.chat.deliberation.*;
 
 /** Real MySQL, production schema initializers/stores and Spring transactions. No Provider or production target. */
 @EnabledIfEnvironmentVariable(named="CYF_REVIEW_MYSQLD", matches=".+")
@@ -420,6 +422,8 @@ class JuyitingWorkflowMySqlTest {
         final cn.jia.chat.service.ChatTaskDeliveryReviewTransaction transaction;
         final cn.jia.agent.service.AgentTaskFormalDeliveryDecisionService decisions;
         final Accept command;
+        final org.mybatis.spring.SqlSessionTemplate sql;
+        final cn.jia.agent.service.AgentTaskMutationTransaction locks;
         DomainReview() throws Exception {
             var manager=app.getBean(DataSourceTransactionManager.class);
             var config=new com.baomidou.mybatisplus.core.MybatisConfiguration();
@@ -429,12 +433,15 @@ class JuyitingWorkflowMySqlTest {
             config.addMapper(cn.jia.agent.mapper.AgentTaskWorkItemMapper.class);
             config.addMapper(cn.jia.agent.mapper.AgentTaskFormalDeliveryMapper.class);
             config.addMapper(cn.jia.agent.mapper.AgentTaskEventMapper.class);
+            config.addMapper(ChatDeliberationMapper.class);
+            config.addMapper(cn.jia.chat.mapper.ChatConversationMapper.class);
+            config.addMapper(cn.jia.chat.mapper.ChatMessageMapper.class);
             var factory=new com.baomidou.mybatisplus.extension.spring.MybatisSqlSessionFactoryBean();
             factory.setDataSource(jdbc.getDataSource()); factory.setConfiguration(config);
             var global=new com.baomidou.mybatisplus.core.config.GlobalConfig();
             global.setIdentifierGenerator(new com.baomidou.mybatisplus.core.incrementer.DefaultIdentifierGenerator());
             factory.setGlobalConfig(global);
-            var sql=new org.mybatis.spring.SqlSessionTemplate(Objects.requireNonNull(factory.getObject()));
+            sql=new org.mybatis.spring.SqlSessionTemplate(Objects.requireNonNull(factory.getObject()));
             var roots=new cn.jia.agent.dao.impl.AgentTaskMetaDaoImpl();
             org.springframework.test.util.ReflectionTestUtils.setField(roots,"baseMapper",sql.getMapper(cn.jia.agent.mapper.AgentTaskMetaMapper.class));
             var events=new cn.jia.agent.dao.impl.AgentTaskEventDaoImpl();
@@ -442,7 +449,7 @@ class JuyitingWorkflowMySqlTest {
             var members=new cn.jia.agent.dao.impl.AgentTaskMemberDaoImpl(sql.getMapper(cn.jia.agent.mapper.AgentTaskMemberMapper.class));
             var work=new cn.jia.agent.dao.impl.AgentTaskWorkItemDaoImpl(sql.getMapper(cn.jia.agent.mapper.AgentTaskWorkItemMapper.class));
             var deliveries=new cn.jia.agent.dao.impl.AgentTaskFormalDeliveryDaoImpl(sql.getMapper(cn.jia.agent.mapper.AgentTaskFormalDeliveryMapper.class));
-            var locks=new cn.jia.agent.service.impl.AgentTaskMutationTransactionImpl(roots,manager);
+            locks=new cn.jia.agent.service.impl.AgentTaskMutationTransactionImpl(roots,manager);
             context.setParent(app); context.register(Transactions.class);
             context.registerBean(cn.jia.agent.service.AgentTaskEventBroker.class,cn.jia.agent.service.AgentTaskEventBroker::new);
             context.registerBean(cn.jia.agent.service.AgentTaskEventAfterCommitPublisher.class,()->new cn.jia.agent.service.AgentTaskEventAfterCommitPublisher(context.getBean(cn.jia.agent.service.AgentTaskEventBroker.class),manager));
@@ -548,6 +555,180 @@ class JuyitingWorkflowMySqlTest {
         }
     }
 
+
+    /** Real consumer, real continuation/admission, real DAOs and domain transaction.
+     * Only the already-validated model final and external capability/catalog reads are seeded. */
+    private final class RevisionHarness implements AutoCloseable {
+        final DomainReview domain;
+        final AnnotationConfigApplicationContext context=new AnnotationConfigApplicationContext();
+        final ChatDeliberationDao dao;
+        final ChatTypedDeliberationStore typed;
+        final ChatDeliberationService deliberation;
+        final ChatDeliberationOutboxService outbox;
+        final ChatDeliveryRevisionService revisions;
+        final ChatDeliveryRevisionService.BoundRevision bound;
+        final ChatDispatchOutboxEntity event;
+        final ChatDeliberationOutboxService.Claim claim;
+        final ChatTypedDeliberationStore.Scope owner=new ChatTypedDeliberationStore.Scope("0","owner","client","7",1);
+        RevisionHarness() throws Exception {
+            domain=domainReview();
+            jdbc.execute("DROP TABLE chat_typed_review_context");jdbc.execute("DROP TABLE chat_request");
+            jdbc.execute("DROP TABLE chat_message");jdbc.execute("DROP TABLE chat_conversation");
+            for(String sql:resource("contracts/revision-chat-tables.sql").split(";"))if(!sql.isBlank())jdbc.execute(sql);
+            for(String file:List.of("db/chat-deliberation-schema.sql","db/chat-typed-deliberation-schema-v1.sql","db/chat-typed-review-context-v1.sql"))
+                for(String sql:resource(file).split(";"))if(!sql.isBlank())jdbc.execute(sql);
+            jdbc.update("INSERT INTO chat_conversation(id,tenant_id,jiacn,client_id,conversation_type,conversation_scope_type,conversation_scope_key,task_id,target_agent_ids,lifecycle_generation) VALUES(7,'0','owner','client','juyiting','bounty','task:task','task','[\"wuyong\"]',1)");
+            jdbc.update("INSERT INTO chat_bounty_binding VALUES('0','owner','client','task',7,1,1,1)");
+            dao=new ChatDeliberationDaoImpl(domain.sql.getMapper(ChatDeliberationMapper.class));
+            typed=new JdbcChatTypedDeliberationStore(jdbc);
+            var conversations=new cn.jia.chat.dao.impl.ChatConversationDaoImpl();
+            org.springframework.test.util.ReflectionTestUtils.setField(conversations,"baseMapper",domain.sql.getMapper(cn.jia.chat.mapper.ChatConversationMapper.class));
+            var messages=new cn.jia.chat.dao.impl.ChatMessageDaoImpl();
+            org.springframework.test.util.ReflectionTestUtils.setField(messages,"baseMapper",domain.sql.getMapper(cn.jia.chat.mapper.ChatMessageMapper.class));
+            var agents=mock(cn.jia.agent.service.AgentService.class);
+            when(agents.getTask("task")).thenAnswer(call->{var task=new cn.jia.agent.entity.AgentTaskDTO();task.setId("task");task.setTitle("修改验收测试");
+                task.setTenantId("0");task.setClientId("client");task.setAssignedAgentId("wuyong");
+                task.setStatus(jdbc.queryForObject("SELECT reward_status FROM agent_task_meta",String.class));
+                task.setTaskVersion(jdbc.queryForObject("SELECT task_version FROM agent_task_meta",String.class));return task;});
+            var facts=Map.<String,Object>of("schemaVersion",5,"availableActions",List.of(),"availableSources",List.of(),"inspectedSourceRefIds",List.of());
+            var frozen=new ChatTypedDeliberationContextService.Context(facts,"[]",List.of(),Map.of());
+            var contexts=mock(ChatTypedDeliberationContextService.class,call->switch(call.getMethod().getName()) {
+                case "resolve","withFormalRevisionSources" -> frozen;
+                default -> RETURNS_DEFAULTS.answer(call);
+            });
+            var finals=mock(ChatActionFinalService.class);
+            var retained=mock(ChatFormalDeliveryRetentionService.class);when(retained.prepareRevisionSources(any())).thenReturn(List.of());
+            context.setParent(domain.context);context.register(Transactions.class);
+            context.registerBean(ChatInteractionStepStore.class,()->mock(ChatInteractionStepStore.class));
+            var finalProvider=new org.springframework.beans.factory.support.StaticListableBeanFactory();
+            finalProvider.addBean("frozenFinal",finals);
+            context.registerBean(ChatFormalDeliveryRetentionService.class,()->retained);
+            context.registerBean(ChatTypedReviewContextService.class,()->new ChatTypedReviewContextService(
+                    domain.context.getBean(ChatTaskDeliveryReviewReadService.class),app.getBean(ChatTypedReviewContextStore.class),typed));
+            context.registerBean(ChatDeliberationService.class,()->new ChatDeliberationService(dao,conversations,messages,agents));
+            context.registerBean(ChatDeliberationOutboxService.class,()->new ChatDeliberationOutboxService(dao));
+            context.registerBean(ChatDeliveryRevisionService.class,()->new ChatDeliveryRevisionService(dao,
+                    finalProvider.getBeanProvider(ChatActionFinalService.class),context.getBeanProvider(ChatDeliberationService.class),reviews,typed,
+                    domain.locks,domain.context.getBean(cn.jia.agent.service.AgentTaskFormalDeliveryReadService.class),domain.decisions,
+                    new ChatBountyBindingStore(jdbc),conversations,new JuyitingConversationScopeService(null,agents),contexts,
+                    mock(ChatSkillPackagePreparationService.class),context.getBean(ChatDeliberationOutboxService.class)));
+            context.refresh();deliberation=context.getBean(ChatDeliberationService.class);outbox=context.getBean(ChatDeliberationOutboxService.class);
+            revisions=context.getBean(ChatDeliveryRevisionService.class);
+            assertTrue(AopUtils.isAopProxy(deliberation));assertTrue(AopUtils.isAopProxy(revisions));assertTrue(AopUtils.isAopProxy(outbox));
+            var input=new cn.jia.chat.handler.dto.ChatMessageDTO();input.setRequestId("parent");input.setRequestRevision(1L);input.setContent("请修改第一段");
+            var admitted=deliberation.admit("0",new ServerResolvedSender("user","测试","owner","client",DisplayNameSource.JIACN),"7",1,
+                    new JuyitingConversationScope("bounty","task:task","task","wuyong",List.of("wuyong"),List.of("wuyong")),
+                    InteractionRoute.CHAT,input,null,facts,Map.of("intent","DISCUSSION"));
+            var turn=dao.findTurnsByRequest("0","owner","client","parent").getFirst();
+            var basis=app.getBean(ChatTypedReviewContextStore.class).require(owner,"parent",1);
+            var binding=new LinkedHashMap<String,Object>();binding.put("tenantId","0");binding.put("ownerJiacn","owner");binding.put("clientId","client");
+            binding.put("conversationId","7");binding.put("conversationGeneration","1");binding.put("requestId","parent");binding.put("requestRevision","1");
+            binding.put("turnId",turn.getTurnId());binding.put("dispatchId",turn.getDispatchId());binding.put("snapshotId",turn.getSnapshotId());
+            binding.put("contextDigest",turn.getContextDigest());binding.put("targetAgentId","wuyong");binding.put("route","CHAT");binding.put("taskId","task");
+            var union=new LinkedHashMap<String,Object>();union.put("schemaVersion",5);union.put("kind","REVISION_REQUEST");union.put("text","按要求修改");
+            union.put("clarification",null);union.put("action",null);union.put("deliverable",false);union.put("deliveryRelation",null);
+            union.put("revision",Map.of("instruction","请修改第一段","targetArtifactIds",List.of("result")));
+            var validated=ChatActionFinalValidator.validateJson(binding,facts,null,"按要求修改",5,ChatDeliveryReviewContract.json(union),null,basis);
+            var row=new ChatTypedDeliberationStore.Outcome("parent-outcome",owner,"parent",1,turn.getTurnId(),"task",1,101,
+                    validated.finalDigest(),"REVISION_REQUEST","按要求修改",CanonicalContextJson.write(binding),CanonicalContextJson.write(facts),
+                    CanonicalContextJson.write(Map.of("interactionOutcome",union)),"[]",System.currentTimeMillis());
+            var admission=new ChatTypedDeliberationStore.Admission("parent-admission",owner,"parent-key","sha256:"+"a".repeat(64),"sha256:"+"b".repeat(64),"DISCUSSION","task",1,null,null,
+                    "parent",1,Long.parseLong(admitted.userMessageId()),CanonicalContextJson.write(List.of(turn.getTurnId())),"[]","ADMITTED",0,0,System.currentTimeMillis());
+            bound=new ChatDeliveryRevisionService.BoundRevision(new ChatActionFinalService.BoundAction(row,admission,validated),basis);
+            when(finals.loadRevision(any())).thenReturn(bound);
+            inTransaction(()->{typed.insertAdmission(admission);typed.insertOutcome(row);
+                jdbc.update("UPDATE chat_turn SET state='FINAL_PERSISTED',final_digest=?,final_message_id=101 WHERE turn_id=?",row.finalDigest(),turn.getTurnId());
+                revisions.enqueue(row,validated,System.currentTimeMillis());return null;});
+            event=dao.findOutboxById("0","owner","client",ChatDeliveryRevisionService.eventId(row));
+            assertEquals(64,event.getEventId().length());claim=outbox.claim(event,"owned-worker",System.currentTimeMillis(),120000);
+            assertNotNull(claim);
+        }
+        void consume() {revisions.consume(claim);}
+        void committedOnce() {
+            assertEquals("running",jdbc.queryForObject("SELECT reward_status FROM agent_task_meta",String.class));
+            assertEquals("changes_requested",jdbc.queryForObject("SELECT state FROM agent_task_formal_delivery",String.class));
+            assertEquals(1,jdbc.queryForObject("SELECT COUNT(*) FROM chat_message WHERE message_type='USER'",Integer.class));
+            assertEquals(2,jdbc.queryForObject("SELECT COUNT(*) FROM chat_request",Integer.class));
+            assertEquals(2,jdbc.queryForObject("SELECT COUNT(*) FROM chat_typed_admission",Integer.class));
+            assertEquals(2,jdbc.queryForObject("SELECT COUNT(*) FROM chat_dispatch_outbox WHERE event_type='DISPATCH'",Integer.class));
+            assertEquals("SENT",dao.findOutboxById("0","owner","client",event.getEventId()).getStatus());
+            var op=reviews.byKey(OWNER,"task",event.getEventId(),false);assertEquals("COMMITTED",op.state());
+            var receipt=ChatTaskDeliveryReviewStore.committedReceipt(op);
+            assertEquals(admittedUser(),dao.findRequest("0","owner","client",receipt.requestId()).getUserMessageId());
+            assertNull(app.getBean(ChatTypedReviewContextStore.class).require(owner,receipt.requestId(),1));
+            assertEquals(bound.parent().outcome().finalDigest(),typed.findOutcome(owner,"parent-outcome",false).finalDigest());
+        }
+        Long admittedUser(){return dao.findRequest("0","owner","client","parent").getUserMessageId();}
+        public void close(){context.close();domain.close();}
+    }
+    @Test void naturalRevisionActuallyCommitsDecisionChildOriginalUserReceiptAndFencedAckTogether() throws Exception {
+        try(var r=new RevisionHarness()) {r.consume();r.committedOnce();
+            assertEquals("COMMITTED",r.revisions.read(r.bound.parent().outcome()).get("state"));
+            assertNull(r.outbox.claim(r.event,"second-worker",System.currentTimeMillis(),1000));
+        }
+    }
+    @Test void naturalRevisionReceiptFailureRollsBackDomainChildDispatchAndAckThenSameEventRecovers() throws Exception {
+        try(var r=new RevisionHarness()) {
+            jdbc.execute("CREATE TRIGGER owned_revision_receipt_failure BEFORE UPDATE ON chat_task_delivery_review_operation FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='owned revision receipt failure'");
+            assertThrows(DataAccessException.class,r::consume);
+            assertEquals("reviewing",jdbc.queryForObject("SELECT reward_status FROM agent_task_meta",String.class));
+            assertEquals("submitted",jdbc.queryForObject("SELECT state FROM agent_task_formal_delivery",String.class));
+            assertEquals(1,jdbc.queryForObject("SELECT COUNT(*) FROM chat_request",Integer.class));
+            assertEquals(1,jdbc.queryForObject("SELECT COUNT(*) FROM chat_typed_admission",Integer.class));
+            assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM chat_task_delivery_review_operation",Integer.class));
+            assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM agent_task_event",Integer.class));
+            assertEquals("CLAIMED",r.dao.findOutboxById("0","owner","client",r.event.getEventId()).getStatus());assertTrue(r.claim.active());
+            jdbc.execute("DROP TRIGGER owned_revision_receipt_failure");r.consume();r.committedOnce();
+        }
+    }
+    @Test void acceptedBatchRejectsQueuedNaturalRevisionWithoutCreatingAChild() throws Exception {
+        try(var r=new RevisionHarness()) {
+            var op=r.domain.transaction.admit(OWNER,"task","accept-first",r.domain.command);
+            r.domain.transaction.commit(OWNER,"task",op.operationId(),r.domain.command);r.consume();
+            assertEquals("COMPLETED",ChatTaskDeliveryReviewStore.committedReceipt(reviews.require(OWNER,"task",op.operationId(),false)).taskState());
+            assertEquals("REJECTED",r.revisions.read(r.bound.parent().outcome()).get("state"));
+            assertEquals(1,jdbc.queryForObject("SELECT COUNT(*) FROM chat_request",Integer.class));
+            assertEquals("SENT",r.dao.findOutboxById("0","owner","client",r.event.getEventId()).getStatus());
+        }
+    }
+    @Test void missingTaskRejectsQueuedRevisionWithExplicitlyUnavailableDomainProjection() throws Exception {
+        try(var r=new RevisionHarness()) {
+            jdbc.update("DELETE FROM agent_task_meta");r.consume();
+            var receipt=ChatTaskDeliveryReviewStore.committedReceipt(reviews.byKey(OWNER,"task",r.event.getEventId(),false));
+            assertEquals("REJECTED",receipt.state());assertNull(receipt.taskState());assertNull(receipt.deliveryState());
+            assertEquals("SENT",r.dao.findOutboxById("0","owner","client",r.event.getEventId()).getStatus());
+        }
+    }
+
+
+    @Test void naturalRevisionAndAcceptanceCompeteWithExactlyOneDomainWinner() throws Exception {
+        try(var r=new RevisionHarness()) {
+            var accepted=r.domain.transaction.admit(OWNER,"task","concurrent-accept",r.domain.command);
+            var pool=Executors.newFixedThreadPool(2);var gate=new CyclicBarrier(2);
+            try {
+                var a=pool.submit(()->{await(gate);try {r.domain.transaction.commit(OWNER,"task",accepted.operationId(),r.domain.command);return true;}
+                    catch(ChatDeliveryReviewContract.Conflict conflict){return false;}});
+                var b=pool.submit(()->{await(gate);r.consume();return true;});
+                boolean acceptanceWon=a.get();assertTrue(b.get());
+                var revision=reviews.byKey(OWNER,"task",r.event.getEventId(),false);
+                assertEquals(acceptanceWon?"REJECTED":"COMMITTED",revision.state());
+                assertEquals(acceptanceWon?"completed":"running",jdbc.queryForObject("SELECT reward_status FROM agent_task_meta",String.class));
+                assertEquals(acceptanceWon?1:2,jdbc.queryForObject("SELECT COUNT(*) FROM chat_request",Integer.class));
+                assertEquals(1,jdbc.queryForObject("SELECT COUNT(*) FROM chat_message WHERE message_type='USER'",Integer.class));
+            } finally {pool.shutdown();assertTrue(pool.awaitTermination(30,TimeUnit.SECONDS));}
+        }
+    }
+    @Test void losingOutboxFenceRollsBackSuccessfulDecisionAndChildReceipt() throws Exception {
+        try(var r=new RevisionHarness()) {
+            jdbc.update("UPDATE chat_dispatch_outbox SET fencing_token=fencing_token+1,lease_owner='new-worker',version=version+1 WHERE event_id=?",r.event.getEventId());
+            assertThrows(IllegalStateException.class,r::consume);
+            assertEquals("reviewing",jdbc.queryForObject("SELECT reward_status FROM agent_task_meta",String.class));
+            assertEquals("submitted",jdbc.queryForObject("SELECT state FROM agent_task_formal_delivery",String.class));
+            assertEquals(1,jdbc.queryForObject("SELECT COUNT(*) FROM chat_request",Integer.class));
+            assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM chat_task_delivery_review_operation",Integer.class));
+            assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM agent_task_event",Integer.class));
+        }
+    }
     private static void await(CyclicBarrier gate) { try { gate.await(); } catch(Exception failure) {throw new IllegalStateException(failure);} }
     private static <T> List<T> concurrent(Supplier<T> body) throws Exception {
         var pool=Executors.newFixedThreadPool(2);

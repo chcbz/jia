@@ -137,6 +137,13 @@ public class ChatTypedDiscussionAdmissionService {
                     command.taskId(),command.materialScope(),selectors,inherited);
             var context=contexts.resolve(new ChatTypedDeliberationContextService.Scope(tenantId,owner,client,conversationId,generation),
                     command.taskId(),targets.getFirst(),selectors);
+            if(parent.outcome()!=null) {
+                var formal=ChatTypedDeliberationContextService.parseCatalog(parent.outcome().sourceCatalogJson()).stream()
+                        .filter(x->"FORMAL_ARTIFACT".equals(x.get("sourceKind"))).toList();
+                if(!formal.isEmpty())context=contexts.withFormalRevisionSources(
+                        new ChatTypedDeliberationContextService.Scope(tenantId,owner,client,conversationId,generation),
+                        command.taskId(),targets.getFirst(),context,formal);
+            }
             String requestDigest=requestDigest(command,context.sourceCatalogJson());
             String requestId=stable("mmd-typed-request",tenantId,client,owner,conversationId,idempotencyKey);
             ChatMessageDTO input=new ChatMessageDTO();input.setConversationId(conversationId);input.setConversationType("juyiting");
@@ -268,7 +275,7 @@ public class ChatTypedDiscussionAdmissionService {
         m.put("sourceSelectors",c.sourceSelectors().stream().map(ChatTypedDeliberationWire::selectorMap).toList());return m;
     }
     @SuppressWarnings("unchecked") private static List<String> parseStrings(String json){try{Object v=JsonUtil.getMapper().readValue(json,List.class);if(v instanceof List<?> l&&l.stream().allMatch(String.class::isInstance))return(List<String>)l;}catch(Exception ignored){}throw persistence("Stored typed receipt is invalid");}
-    @SuppressWarnings("unchecked") private static List<ChatTypedDeliberationWire.SourceSelector> selectors(String json){List<Map<String,Object>> rows=ChatTypedDeliberationContextService.parseCatalog(json);List<ChatTypedDeliberationWire.SourceSelector> r=new ArrayList<>();for(var row:rows){Map<String,Object> m=(Map<String,Object>)row.get("selector");r.add(ChatTypedDeliberationWire.selector(m));}return List.copyOf(r);}
+    @SuppressWarnings("unchecked") private static List<ChatTypedDeliberationWire.SourceSelector> selectors(String json){List<Map<String,Object>> rows=ChatTypedDeliberationContextService.parseCatalog(json);List<ChatTypedDeliberationWire.SourceSelector> r=new ArrayList<>();for(var row:rows){if(!row.containsKey("selector"))continue;Map<String,Object> m=(Map<String,Object>)row.get("selector");r.add(ChatTypedDeliberationWire.selector(m));}return List.copyOf(r);}
     private record Parent(ChatTypedDeliberationStore.Outcome outcome,ChatTypedDeliberationStore.PendingQuestion pending){}
     private static boolean exact(String v,int max){return v!=null&&!v.isBlank()&&v.equals(v.strip())&&v.codePointCount(0,v.length())<=max&&v.codePoints().noneMatch(Character::isISOControl);}
     private static String stable(String prefix,String...parts){return prefix.substring(0,Math.min(prefix.length(),20))+"_"+sha256(String.join("\0",parts)).substring(0,40);}

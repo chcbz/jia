@@ -55,8 +55,8 @@ class ChatDeliverySubmissionServiceTest {
     }
     ChatActionFinalValidator.ValidatedFinal validated(String kind,boolean deliverable) {
         return new ChatActionFinalValidator.ValidatedFinal(Map.of("route","CHAT","turnId","turn","dispatchId","dispatch","targetAgentId","agent","snapshotId","snapshot"),
-                new ChatActionOutcomeContract.Facts(4,List.of(),List.of(),List.of()),row.text(),
-                new ChatActionOutcomeContract.Outcome(4,kind,row.text(),null,null,deliverable),null,"{}",digest);
+                new ChatActionOutcomeContract.Facts(5,List.of(),List.of(),List.of()),row.text(),
+                new ChatActionOutcomeContract.Outcome(5,kind,row.text(),null,null,deliverable),null,"{}",digest);
     }
     ChatSelectedOutputFinalizationStore.Operation operation(long expected) {
         return new ChatSelectedOutputFinalizationStore.Operation(ChatSelectedOutputFinalizationService.operationId(new ChatSelectedOutputFinalizationService.Scope("0","client","owner"),"task",key),
@@ -123,7 +123,7 @@ class ChatDeliverySubmissionServiceTest {
     @Test void eventIdentityBindsScopeAndExactFinalNotAmbiguousConcatenation() {
         assertEquals(key,ChatDeliverySubmissionService.eventId(row));
         var other=new ChatTypedDeliberationStore.Outcome("outcome",new ChatTypedDeliberationStore.Scope("0","other","client","123",1),"request",1,"turn","task",1,101,digest,"ANSWER","本轮成果","{}","{}","{}","[]",1);
-        assertNotEquals(key,ChatDeliverySubmissionService.eventId(other));assertTrue(key.matches("delivery-submit-[0-9a-f]{64}"));
+        assertNotEquals(key,ChatDeliverySubmissionService.eventId(other));assertTrue(key.matches("delivery-submit-[0-9a-f]{48}"));
     }
     @Test void loadRebuildsActualImmutableFinalAndNeverAcceptsCopiedPayloadAuthority() {loader();assertEquals(candidate,service.load(event));verify(finals).readActionIfPresent(scope,"request","turn",1,"CHAT");}
     @Test void forgedUnknownOrDuplicateEventFieldsAreRejected() {

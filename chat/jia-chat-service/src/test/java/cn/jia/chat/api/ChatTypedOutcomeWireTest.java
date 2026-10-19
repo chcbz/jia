@@ -12,11 +12,11 @@ class ChatTypedOutcomeWireTest {
         var view=new LinkedHashMap<String,Object>();view.put("schemaVersion",version);view.put("conversationId","c");view.put("conversationGeneration","1");view.put("requestId","r");view.put("requestRevision","1");view.put("turnId","turn");view.put("state","READY");view.put("outcome",outcome);return view;
     }
     @Test void displaySixDoesNotAlterCanonicalFacts() {
-        for(int version=1;version<=4;version++) {
+        for(int version=1;version<=5;version++) {
             var source=fixture(version);var before=source.toString();var wire=ChatTypedOutcomeWire.project(source,"CHAT");
-            assertEquals(6,wire.get("schemaVersion"));assertEquals(12,wire.size());assertNull(wire.get("submissionProgress"));
+            assertEquals(6,wire.get("schemaVersion"));assertEquals(13,wire.size());assertNull(wire.get("submissionProgress"));
             var outcome=(Map<?,?>)wire.get("outcome");assertEquals(version,outcome.get("outcomeContractVersion"));assertEquals(HASH,outcome.get("finalSha256"));
-            assertEquals(14,outcome.size());assertTrue(outcome.containsKey("proposal"));assertNull(outcome.get("deliverable"));assertNull(outcome.get("messageSource"));
+            assertEquals(15,outcome.size());assertTrue(outcome.containsKey("proposal"));assertNull(outcome.get("deliverable"));assertNull(outcome.get("messageSource"));
             assertEquals(before,source.toString());assertFalse(outcome.containsKey("finalDigest"));
         }
     }
@@ -28,7 +28,7 @@ class ChatTypedOutcomeWireTest {
         progress.put("resultDigest","sha256:"+HASH);assertThrows(RuntimeException.class,()->ChatTypedOutcomeWire.project(source,"CHAT"));
     }
     @Test void submissionProgressIsSeparateFromImmutableOutcomeAndDoesNotExposeIntentOrCredentials() {
-        var source=fixture(4);var p=new LinkedHashMap<String,Object>();p.put("eventId","delivery-submit-"+HASH);p.put("operationId",null);p.put("state","FAILED");
+        var source=fixture(4);var p=new LinkedHashMap<String,Object>();p.put("eventId","delivery-submit-"+HASH.substring(0,48));p.put("operationId",null);p.put("state","FAILED");
         p.put("dispatchVersion","9007199254740993");p.put("operationStateVersion",null);p.put("deliveryId",null);p.put("errorCode","DELIVERY_REVIEW_REQUIRED");p.put("retryable",false);
         source.put("submissionProgress",p);var wire=ChatTypedOutcomeWire.project(source,"CHAT");assertEquals(p,wire.get("submissionProgress"));
         p.remove("dispatchVersion");assertThrows(RuntimeException.class,()->ChatTypedOutcomeWire.project(source,"CHAT"));

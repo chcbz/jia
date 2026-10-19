@@ -36,10 +36,10 @@ class ChatActionDispatchReviewGuardTest {
         var row=new ChatTypedDeliberationStore.Outcome("outcome",scope,"request",1,"turn","task",1,100,"sha256:"+"a".repeat(64),
                 "ACTION_REQUEST","处理","{}","{}","{}","[]",1);
         var capability=new ChatActionOutcomeContract.Capability("execute","EXECUTE","EXECUTE_SKILL",null,Map.of(),List.of(),0,0,List.of());
-        var union=new ChatActionOutcomeContract.Outcome(4,"ACTION_REQUEST","处理",null,
+        var union=new ChatActionOutcomeContract.Outcome(5,"ACTION_REQUEST","处理",null,
                 new ChatActionOutcomeContract.Action("execute","处理",List.of(),Map.of()));
         var valid=new ChatActionFinalValidator.ValidatedFinal(Map.of("targetAgentId","agent","dispatchId","dispatch"),
-                new ChatActionOutcomeContract.Facts(4,List.of(capability),List.of(),List.of()),"处理",union,null,"{}",row.finalDigest());
+                new ChatActionOutcomeContract.Facts(5,List.of(capability),List.of(),List.of()),"处理",union,null,"{}",row.finalDigest());
         return new ChatActionFinalService.BoundAction(row,null,valid);
     }
     void root(String state) {

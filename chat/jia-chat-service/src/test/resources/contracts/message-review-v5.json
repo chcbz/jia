@@ -1,0 +1,68 @@
+{
+  "basis": {
+    "taskId": "task_fixture",
+    "taskVersion": "7",
+    "assignmentRevision": "1",
+    "deliveryId": "delivery_fixture",
+    "deliveryVersion": "0",
+    "batchSha256": "a7847d54b1184c597c29084c5be98aaddea12660cc19e621d9b916ae0fccf4e3",
+    "sourceMessageId": "100",
+    "sourceRequestId": "discussion_parent_fixture",
+    "items": [
+      {
+        "artifactId": "artifact_manifest",
+        "artifactVersion": "1",
+        "contentHash": "99d35512273e0bf7ceb7a67b0ec97805a5c6cfb2b30a8852e5c452c6cf6a108f",
+        "purpose": "manifest",
+        "displayRole": "MANIFEST"
+      },
+      {
+        "artifactId": "artifact_text",
+        "artifactVersion": "1",
+        "contentHash": "5c9df06d7bab36422a3204bcf4af382ee5e076269f6dd6dde62c0678d0e0b2bb",
+        "purpose": "正式文本",
+        "displayRole": "RESULT"
+      }
+    ]
+  },
+  "binding": {
+    "tenantId": "0",
+    "ownerJiacn": "owner",
+    "clientId": "client",
+    "conversationId": "7",
+    "conversationGeneration": "1",
+    "requestId": "discussion_parent_fixture",
+    "requestRevision": "1",
+    "turnId": "turn",
+    "dispatchId": "dispatch",
+    "snapshotId": "snapshot",
+    "contextDigest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "targetAgentId": "wuyong",
+    "route": "CHAT",
+    "taskId": "task_fixture"
+  },
+  "facts": {
+    "schemaVersion": 5,
+    "availableActions": [],
+    "availableSources": [],
+    "inspectedSourceRefIds": []
+  },
+  "outcome": {
+    "schemaVersion": 5,
+    "kind": "REVISION_REQUEST",
+    "text": "将按要求调整时间。",
+    "clarification": null,
+    "action": null,
+    "deliverable": false,
+    "deliveryRelation": null,
+    "revision": {
+      "instruction": "请把集合时间提前10分钟。\n保留其他安排。",
+      "targetArtifactIds": [
+        "artifact_text"
+      ]
+    }
+  },
+  "parentOutcomeId": "parent_outcome_fixture",
+  "parentFinalDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+  "expectedRevisionDigest": "21354f98d9a2ab8326bb538206255bd1073c694ef81f4af37a38018cc02e017e"
+}

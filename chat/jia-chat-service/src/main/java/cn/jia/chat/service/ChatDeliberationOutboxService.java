@@ -89,9 +89,19 @@ public class ChatDeliberationOutboxService {
             ChatDispatchOutboxEntity row = lockCurrent(claim);
             boolean updated = dao.settleOutbox(row, status, availableAt, error, sentAt, now) == 1;
             if (updated) {
-                claim.settled = true;
-                claim.row.setStatus(status).setAvailableAt(availableAt).setLastError(error).setSentAt(sentAt)
-                        .setLeaseOwner(null).setLeaseUntil(null).setVersion(row.getVersion() + 1).setUpdatedAt(now);
+                Runnable committed=()-> {synchronized(claim) {
+                    claim.settled = true;
+                    claim.row.setStatus(status).setAvailableAt(availableAt).setLastError(error).setSentAt(sentAt)
+                            .setLeaseOwner(null).setLeaseUntil(null).setVersion(row.getVersion()+1).setUpdatedAt(now);
+                }};
+                // A surrounding review transaction may still roll back after the fenced SQL.
+                // Never make the in-memory claim terminal before the database commit.
+                if(org.springframework.transaction.support.TransactionSynchronizationManager.isSynchronizationActive()) {
+                    org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(
+                        new org.springframework.transaction.support.TransactionSynchronization() {
+                            @Override public void afterCommit() {committed.run();}
+                        });
+                } else committed.run();
             }
             return updated;
         }

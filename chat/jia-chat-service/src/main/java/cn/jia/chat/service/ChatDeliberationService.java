@@ -190,6 +190,32 @@ public class ChatDeliberationService {
                 InteractionRoute.INSPECT, input, null, null, null, inspection, user, lineage);
     }
 
+    /** Trusted message revision continuation: fresh CHAT request, immutable parent, same real USER. */
+    @Transactional(propagation=Propagation.MANDATORY,rollbackFor=Exception.class)
+    public Admission admitDeliveryRevisionContinuation(ChatDeliveryRevisionService.BoundRevision revision,
+            String operationId,ChatTypedDeliberationContextService.Context context,JuyitingConversationScope scope) {
+        var parent=revision.parent().outcome();var owner=parent.scope();var user=requireActionUser(revision.parent());
+        String requestId=deliveryRevisionRequestId(owner,operationId);
+        var lineage=Map.<String,Object>of("origin","DELIVERY_REVISION","parentRequestId",parent.requestId(),
+                "parentOutcomeId",parent.outcomeId(),"parentFinalDigest",parent.finalDigest(),"reviewOperationId",operationId,
+                "originalUserMessageId",Long.toString(user.getId()),
+                "verifiedDeliveryBasis",ChatDeliveryRevisionContract.basisMap(revision.basis()),
+                "targetArtifactIds",revision.parent().validated().interactionOutcome().revision().targetArtifactIds());
+        var input=new ChatMessageDTO();input.setRequestId(requestId);input.setRequestRevision(1L);
+        input.setContent(user.getContent());input.setConversationId(owner.conversationId());
+        var sender=new ServerResolvedSender("user",user.getSenderName(),owner.ownerJiacn(),owner.clientId(),DisplayNameSource.FALLBACK);
+        var admissionFacts=new LinkedHashMap<String,Object>();admissionFacts.put("schemaVersion",2);
+        admissionFacts.put("intent","DISCUSSION");admissionFacts.put("materialScope","EXPLICIT");
+        admissionFacts.put("sourceSelectors",context.selectors().stream().map(cn.jia.chat.api.ChatTypedDeliberationWire::selectorMap).toList());
+        admissionFacts.put("nativeMaterials",ChatMaterialsInputContract.candidates(context.frozenDeclaration(),
+                ChatTypedDeliberationContextService.parseCatalog(context.sourceCatalogJson())));
+        return admitTrusted(owner.tenantId(),sender,owner.conversationId(),owner.conversationGeneration(),scope,
+                InteractionRoute.CHAT,input,null,context.facts(),admissionFacts,null,user,lineage);
+    }
+    static String deliveryRevisionRequestId(ChatTypedDeliberationStore.Scope scope,String operationId) {
+        return "delivery-revision_"+sha256(String.join("\0",scope.tenantId(),scope.ownerJiacn(),scope.clientId(),operationId)).substring(0,40);
+    }
+
     /** Both action routes reuse the immutable original USER; an Agent instruction is never consent. */
     @Transactional(propagation = Propagation.MANDATORY, rollbackFor = Exception.class)
     public ChatMessageEntity requireActionUser(ChatActionFinalService.BoundAction action) {
@@ -569,7 +595,7 @@ public class ChatDeliberationService {
         ChatTypedDeliberationService.Prepared typedPrepared = null;
         ChatTypedInspectionService.Prepared inspectionPrepared = null;
         ChatActionFinalService.Prepared actionPrepared = null;
-        if (ChatActionFinalService.isV4(finalFacts)) {
+        if (ChatActionFinalService.isV5(finalFacts)) {
             if (actionFinals == null) throw persistence("Action final service is unavailable");
             actionPrepared = actionFinals.prepare(turn, finalSnapshot, safeContent, outcomeContractVersion,
                     rawInteractionOutcomeJson, rawInspectionInputReceiptJson);

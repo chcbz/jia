@@ -32,7 +32,7 @@ class ChatCompletedMessageSourceServiceTest {
                 .setTenantId("0").setOwnerJiacn("owner").setClientId("client").setConversationId("42").setConversationGeneration(1L)
                 .setRequestId("request").setRequestRevision(1L).setTargetAgentId("agent").setRoute("CHAT")
                 .setContextDigest("sha256:"+"a".repeat(64)).setFactsManifestJson(CanonicalContextJson.write(Map.of("task",Map.of("id","task"),
-                        "typedDeliberation",Map.of("schemaVersion",4,"availableSources",List.of(),"inspectedSourceRefIds",List.of(),
+                        "typedDeliberation",Map.of("schemaVersion",5,"availableSources",List.of(),"inspectedSourceRefIds",List.of(),
                                 "availableActions",List.of(Map.of("actionId","write-document","kind","EXECUTE","operation","EXECUTE_SKILL",
                                         "skill",Map.of("skillKey","write-document","skillVersion","1","packageSha256","a".repeat(64),"manifestSha256","b".repeat(64)),
                                         "parametersSchema",Map.of("$schema","https://json-schema.org/draft/2020-12/schema","type","object","properties",Map.of(),"additionalProperties",false),
@@ -54,11 +54,11 @@ class ChatCompletedMessageSourceServiceTest {
             when(dao.findOutboxById(eq("0"),eq("owner"),eq("client"),anyString())).thenAnswer(i->event.get());
             when(dao.findTurn("0","owner","client","turn")).thenReturn(turn);
             when(dao.findSnapshot("0","owner","client","snapshot")).thenReturn(snapshot);
-            var raw=new LinkedHashMap<String,Object>();raw.put("schemaVersion",4);raw.put("kind",kind);raw.put("text",TEXT);
-            if(deliverable!=null) raw.put("deliverable",deliverable);
+            var raw=new LinkedHashMap<String,Object>();raw.put("schemaVersion",5);raw.put("kind",kind);raw.put("text",TEXT);
+            raw.put("deliverable",Boolean.TRUE.equals(deliverable));raw.put("deliveryRelation",null);raw.put("revision",null);
             raw.put("clarification","CLARIFY".equals(kind)?Map.of("question","用途？","requiredFacts",List.of("用途")):null);
             raw.put("action","ACTION_REQUEST".equals(kind)?Map.of("actionId","write-document","instruction","整理","sourceRefIds",List.of(),"parameters",Map.of()):null);
-            var prepared=finals.prepare(turn,snapshot,TEXT,4,CanonicalContextJson.write(raw),null);
+            var prepared=finals.prepare(turn,snapshot,TEXT,5,CanonicalContextJson.write(raw),null);
             finals.persist(prepared,9,12);turn.setFinalMessageId(9L).setFinalDigest(prepared.validated().finalDigest());
             when(deliberations.getRequest("0","owner","client","request")).thenReturn(request("COMPLETED","FINAL_PERSISTED","9"));
             var metadata=Map.of("requestId","request","turnId","turn","contextSnapshotId","snapshot","finalDigest",row.get().finalDigest(),

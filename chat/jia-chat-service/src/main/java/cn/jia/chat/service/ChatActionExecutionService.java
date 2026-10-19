@@ -145,7 +145,7 @@ public class ChatActionExecutionService implements ChatActionDispatchService.Exe
         for(var source:catalog) {
             var input=new LinkedHashMap<String,Object>();
             String kind=(String)source.get("sourceKind");if("TASK_WORKSPACE_FILE".equals(kind))kind="TASK_LINKED_WORKSPACE_VERSION";
-            if(!List.of("TASK_LINKED_WORKSPACE_VERSION","CURRENT_CONVERSATION_ASSET","EXECUTION_RESULT").contains(kind))throw conflict();
+            if(!List.of("TASK_LINKED_WORKSPACE_VERSION","CURRENT_CONVERSATION_ASSET","EXECUTION_RESULT","FORMAL_ARTIFACT").contains(kind))throw conflict();
             input.put("sourceKind",kind);input.put("sourceIdentity",source.get("sourceIdentity"));
             input.put("inputRef",source.get("sourceRefId"));input.put("contentMimeType",source.get("contentMimeType"));
             input.put("byteLength",source.get("byteLength"));input.put("sha256",source.get("contentHash"));inputs.add(input);

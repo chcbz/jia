@@ -14,9 +14,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-/** Unified v4 planning DATA. Validation never grants authority or starts an execution. */
+/** Unified v5 planning DATA. Validation never grants authority or starts an execution. */
 public final class ChatActionOutcomeContract {
-    public static final int VERSION = 4;
+    public static final int VERSION = 5;
     private static final ObjectMapper JSON = JsonMapper.builder()
             .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
             .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS).build();
@@ -52,20 +52,30 @@ public final class ChatActionOutcomeContract {
         }
     }
     public record Outcome(int schemaVersion, String kind, String text, Clarification clarification, Action action,
-            @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL) Boolean deliverable,
-            @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL) DeliveryRelation deliveryRelation) {
+            Boolean deliverable, DeliveryRelation deliveryRelation, ChatDeliveryRevisionContract.Revision revision) {
         public Outcome(int schemaVersion, String kind, String text, Clarification clarification, Action action) {
-            this(schemaVersion,kind,text,clarification,action,null,null);
+            this(schemaVersion,kind,text,clarification,action,false,null,null);
         }
         public Outcome(int schemaVersion, String kind, String text, Clarification clarification, Action action, Boolean deliverable) {
-            this(schemaVersion,kind,text,clarification,action,deliverable,null);
+            this(schemaVersion,kind,text,clarification,action,deliverable,null,null);
+        }
+        public Outcome(int schemaVersion, String kind, String text, Clarification clarification, Action action,
+                Boolean deliverable, DeliveryRelation relation) {
+            this(schemaVersion,kind,text,clarification,action,deliverable,relation,null);
         }
     }
 
     public static Facts facts(Object value) { return factsNode(JSON.valueToTree(value)); }
     public static Facts factsJson(String value) { return factsNode(parse(value)); }
-    public static Outcome outcomeJson(String raw, Facts facts) { return outcomeNode(parse(raw), facts); }
-    public static Outcome outcome(Object raw, Facts facts) { return outcomeNode(JSON.valueToTree(raw), facts); }
+    public static Outcome outcomeJson(String raw, Facts facts) { return outcomeNode(parse(raw), facts, null); }
+    public static Outcome outcome(Object raw, Facts facts) { return outcomeNode(JSON.valueToTree(raw), facts, null); }
+
+    public static Outcome outcomeJson(String raw, Facts facts, ChatDeliveryRevisionContract.Basis basis) {
+        return outcomeNode(parse(raw), facts, basis);
+    }
+    public static Outcome outcome(Object raw, Facts facts, ChatDeliveryRevisionContract.Basis basis) {
+        return outcomeNode(JSON.valueToTree(raw), facts, basis);
+    }
 
     private static Facts factsNode(JsonNode raw) {
         exact(raw, "ACTION_FACTS_INVALID", "schemaVersion", "availableActions", "availableSources", "inspectedSourceRefIds");
@@ -79,7 +89,7 @@ public final class ChatActionOutcomeContract {
             String kind = string(source.get("kind"), true, "ACTION_SOURCES_INVALID");
             String media = string(source.get("mediaType"), true, "ACTION_SOURCES_INVALID");
             String mime = mime(source.get("contentMimeType"), "ACTION_SOURCES_INVALID");
-            if (!ids.add(id) || !Set.of("TASK_WORKSPACE_FILE", "CURRENT_CONVERSATION_ASSET", "EXECUTION_RESULT").contains(kind)
+            if (!ids.add(id) || !Set.of("TASK_WORKSPACE_FILE", "CURRENT_CONVERSATION_ASSET", "EXECUTION_RESULT", "FORMAL_ARTIFACT").contains(kind)
                     || !MEDIA.contains(media)) throw invalid("ACTION_SOURCES_INVALID");
             sources.add(new Source(id, kind, media, mime));
         }
@@ -114,11 +124,12 @@ public final class ChatActionOutcomeContract {
         return new Facts(VERSION, capabilities, sources, inspected);
     }
 
-    private static Outcome outcomeNode(JsonNode value, Facts suppliedFacts) {
+    private static Outcome outcomeNode(JsonNode value, Facts suppliedFacts, ChatDeliveryRevisionContract.Basis basis) {
         // Do not trust a caller-constructed record more than a parsed JSON fact set.
         Facts facts = facts(suppliedFacts);
-        List<String> keys = new ArrayList<>(List.of("schemaVersion","kind","text","clarification","action"));
+        List<String> keys = new ArrayList<>(List.of("schemaVersion","kind","text","clarification","action","revision"));
         Boolean deliverable = null; DeliveryRelation relation = null;
+        if (value == null || !value.has("deliverable") || !value.has("deliveryRelation")) throw invalid("ACTION_OUTCOME_INVALID");
         if (value != null && value.isObject() && value.has("deliverable")) {
             keys.add("deliverable");
             if (!value.get("deliverable").isBoolean()) throw invalid("ACTION_OUTCOME_INVALID");
@@ -150,7 +161,11 @@ public final class ChatActionOutcomeContract {
         if (integer(value.get("schemaVersion"), "ACTION_OUTCOME_INVALID") != VERSION) throw invalid("ACTION_OUTCOME_INVALID");
         String kind = string(value.get("kind"), true, "ACTION_OUTCOME_INVALID");
         String text = string(value.get("text"), false, "ACTION_OUTCOME_INVALID");
+        if (basis != null && (Boolean.TRUE.equals(deliverable) || relation != null || "ACTION_REQUEST".equals(kind)))
+            throw invalid("ACTION_REVIEW_REQUIRED");
         Clarification clarification = null; Action action = null;
+        ChatDeliveryRevisionContract.Revision revision = null;
+        if (!"REVISION_REQUEST".equals(kind) && !value.get("revision").isNull()) throw invalid("ACTION_OUTCOME_UNION_INVALID");
         switch (kind) {
             case "ANSWER" -> {
                 if (!value.get("clarification").isNull() || !value.get("action").isNull()) throw invalid("ACTION_OUTCOME_UNION_INVALID");
@@ -181,6 +196,11 @@ public final class ChatActionOutcomeContract {
                 validateParameters(descriptor.parametersSchema(), parameters);
                 action = new Action(id, instruction, selected, object(parameters, "ACTION_PARAMETERS_INVALID"));
             }
+            case "REVISION_REQUEST" -> {
+                if (!value.get("clarification").isNull() || !value.get("action").isNull()
+                        || Boolean.TRUE.equals(deliverable) || relation != null) throw invalid("ACTION_OUTCOME_UNION_INVALID");
+                revision = ChatDeliveryRevisionContract.revision(value.get("revision"), basis);
+            }
             default -> throw invalid("ACTION_OUTCOME_KIND_INVALID");
         }
         if (Boolean.TRUE.equals(deliverable) && !"ANSWER".equals(kind)) throw invalid("ACTION_OUTCOME_UNION_INVALID");
@@ -194,7 +214,7 @@ public final class ChatActionOutcomeContract {
                     || !Set.of("APPEND","RESET").contains(relation.mode()) || relation.targetOutcomeId()!=null)
                 throw invalid("ACTION_DELIVERY_RELATION_INVALID");
         }
-        return new Outcome(VERSION, kind, text, clarification, action, deliverable, relation);
+        return new Outcome(VERSION, kind, text, clarification, action, deliverable, relation, revision);
     }
 
     // Reuse the installed-package codec's standard Draft 2020-12 validator and ref policy.

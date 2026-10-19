@@ -2891,7 +2891,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
             if(link==null||!"ACTIVE".equals(link.getLinkState())||file==null||!"ACTIVE".equals(file.getState())||version==null
                     ||!same(version.getContentHash(),skillString(input,"sha256"))||!Objects.equals(version.getByteLength(),skillLong(input.get("byteLength")))
                     ||!same(version.getContentMimeType(),skillString(input,"contentMimeType")))throw failure(Reason.GRANT_REVOKED);
-        }else if(Set.of("CURRENT_CONVERSATION_ASSET","EXECUTION_RESULT").contains(kind)) {
+        }else if(Set.of("CURRENT_CONVERSATION_ASSET","EXECUTION_RESULT","FORMAL_ARTIFACT").contains(kind)) {
             if(skillSourceAccess==null)throw failure(Reason.CAPABILITY_UNAVAILABLE);
             var snapshot=skillMap(skillRow(scope,execution.getExecutionId(),false).getSnapshotJson());
             skillSourceAccess.requireAuthorized(scope,execution.getTaskId(),execution.getConversationId(),skillLong(snapshot.get("conversationGeneration")),input);
