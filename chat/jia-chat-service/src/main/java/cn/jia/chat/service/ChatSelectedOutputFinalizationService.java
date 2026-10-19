@@ -66,7 +66,7 @@ public final class ChatSelectedOutputFinalizationService {
 
     public Receipt submit(Scope scope,String taskId,String key,Command command){
         Valid valid=validate(scope,taskId,key,command);
-        String operationId="fin_"+digest("operation\n"+wire(scope)+"\n"+taskId+"\n"+key);
+        String operationId=operationId(scope,taskId,key);
         String immutable=SelectedOutputFinalizationDigest.request(taskId,command.expectedTaskVersion(),
                 command.expectedAssignmentRevision(),command.conversationId(),command.summary(),
                 command.selectedOutputs().stream().map(s->new SelectedOutputFinalizationDigest.Selection(
@@ -373,6 +373,9 @@ public final class ChatSelectedOutputFinalizationService {
     }
     private static boolean scopeExact(Scope scope,String tenant,String owner,String client){
         return scope.tenantId().equals(tenant)&&scope.ownerJiacn().equals(owner)&&scope.clientId().equals(client);
+    }
+    static String operationId(Scope scope,String taskId,String key) {
+        return "fin_"+digest("operation\n"+wire(scope)+"\n"+taskId+"\n"+key);
     }
     private static String wire(Scope s){return s.tenantId()+"\0"+s.ownerJiacn()+"\0"+s.clientId();}
     private static AgentSelectedOutputFinalizationService.Scope agentScope(Scope s){

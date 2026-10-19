@@ -55,6 +55,10 @@ public class ChatActionFinalService {
         this.deliverySteps=Objects.requireNonNull(steps);this.deliveryExecutions=Objects.requireNonNull(executions);
     }
 
+    private ChatDeliverySubmissionService submissions;
+    @Autowired(required=false)
+    public void setDeliverySubmissions(ChatDeliverySubmissionService service) {this.submissions=Objects.requireNonNull(service);}
+
     static boolean isV4(Map<String, Object> facts) {
         if (facts.containsKey("typedDeliberation") && facts.containsKey("typedInspection"))
             throw persistence("Snapshot has conflicting typed contracts");
@@ -131,6 +135,8 @@ public class ChatActionFinalService {
                 throw persistence("Unable to persist action clarification");
         }
         if ("ACTION_REQUEST".equals(union.kind())) persistActionEvent(row, v, now);
+        if (submissions != null && "ANSWER".equals(union.kind()) && Boolean.TRUE.equals(union.deliverable()))
+            submissions.enqueue(row, v, now);
         return projection(row, v);
     }
 

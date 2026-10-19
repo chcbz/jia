@@ -56,6 +56,10 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
     @Autowired(required = false)
     public void setActions(ChatActionDispatchService actions) { this.actions = actions; }
 
+    private ChatDeliverySubmissionService submissions;
+    @Autowired(required=false)
+    public void setDeliverySubmissions(ChatDeliverySubmissionService service) {this.submissions=service;}
+
     private final String leaseOwner = ChatDeliberationOutboxService.leaseOwner();
     private final long leaseMillis;
     private final long heartbeatMillis;
@@ -168,6 +172,18 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
                 try { actions.consume(claim); }
                 catch (ChatActionDispatchService.Rejected stale) { actions.reject(claim); }
                 // Other exceptions retain normal fenced retry; no deadline/attempt count turns them into failure.
+            }
+            case ChatDeliverySubmissionService.EVENT -> {
+                if(submissions==null)throw new IllegalStateException("Delivery submission service is unavailable");
+                // Source/promotion I/O may outlive one lease. Heartbeat renewal never changes a
+                // business deadline and a lost claim cannot ACK another worker's submission.
+                ScheduledFuture<?> heartbeat=ensureScheduler().scheduleAtFixedRate(()->{
+                    try {outbox.renew(claim,System.currentTimeMillis(),leaseMillis);}
+                    catch(RuntimeException failure) {claim.invalidate();}
+                },heartbeatMillis,heartbeatMillis,TimeUnit.MILLISECONDS);
+                try {submissions.consume(claim);}
+                catch(ChatDeliverySubmissionService.Rejected rejected) {submissions.reject(claim,rejected);}
+                finally {heartbeat.cancel(false);}
             }
             default -> outbox.dead(claim, "UNSUPPORTED_EVENT_TYPE", System.currentTimeMillis());
         }

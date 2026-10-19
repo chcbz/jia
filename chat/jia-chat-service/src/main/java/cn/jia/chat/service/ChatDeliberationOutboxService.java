@@ -174,5 +174,7 @@ public class ChatDeliberationOutboxService {
         public ChatDispatchOutboxEntity row() { return row; }
         public boolean recoveredStaleLease() { return recoveredStaleLease; }
         public synchronized boolean active() { return !lost && !settled; }
+        /** A renewal transport failure has an unknown server result; this worker must stop settling. */
+        public synchronized void invalidate() { lost = true; }
     }
 }
