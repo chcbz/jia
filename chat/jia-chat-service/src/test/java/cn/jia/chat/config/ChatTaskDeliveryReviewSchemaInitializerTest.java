@@ -22,4 +22,13 @@ class ChatTaskDeliveryReviewSchemaInitializerTest {
                 ChatTaskDeliveryReviewSchemaInitializer.expression("a=1 OR (b=2 AND c=3)"));
         assertNotEquals(ChatTaskDeliveryReviewSchemaInitializer.expression("a='ACCEPT'"), ChatTaskDeliveryReviewSchemaInitializer.expression("a='accept'"));
     }
+    @Test void actualMysqlEscapedMetadataPreservesAllCheckSemantics() {
+        var expected=ChatTaskDeliveryReviewSchemaInitializer.expression("(state='ACCEPT' OR state='REJECT') AND version>0");
+        assertEquals(expected,ChatTaskDeliveryReviewSchemaInitializer.metadataExpression(
+                "((`state` = _utf8mb4\\'ACCEPT\\') or (`state` = _utf8mb4\\'REJECT\\')) and (`version` > 0)"));
+        for(String changed:java.util.List.of("state='accept' OR state='REJECT' AND version>0",
+                "(state='ACCEPT' OR state='REJECT') AND version>=0", "1=1 OR ((state='ACCEPT' OR state='REJECT') AND version>0)"))
+            assertNotEquals(expected,ChatTaskDeliveryReviewSchemaInitializer.metadataExpression(changed.replace("'","\\'")));
+    }
+
 }

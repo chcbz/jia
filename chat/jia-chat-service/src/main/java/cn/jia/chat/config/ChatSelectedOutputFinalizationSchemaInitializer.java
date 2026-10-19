@@ -171,7 +171,7 @@ public final class ChatSelectedOutputFinalizationSchemaInitializer implements In
         var result=new LinkedHashMap<String,String>();
         for(var row:jdbc.queryForList("SELECT t.constraint_name,c.check_clause,t.enforced FROM information_schema.table_constraints t JOIN information_schema.check_constraints c ON c.constraint_schema=t.constraint_schema AND c.constraint_name=t.constraint_name WHERE t.table_schema=DATABASE() AND t.table_name=? AND t.constraint_type='CHECK'",table)) {
             if(!"YES".equalsIgnoreCase(text(row,"enforced")) || text(row,"check_clause")==null)throw new IllegalStateException("Finalization CHECK not enforced");
-            result.put(text(row,"constraint_name"),ChatTaskDeliveryReviewSchemaInitializer.expression(text(row,"check_clause")));
+            result.put(text(row,"constraint_name"),ChatTaskDeliveryReviewSchemaInitializer.metadataExpression(text(row,"check_clause")));
         }
         return result;
     }

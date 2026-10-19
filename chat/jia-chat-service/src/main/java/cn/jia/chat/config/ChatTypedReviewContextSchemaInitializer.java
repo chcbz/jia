@@ -66,7 +66,7 @@ public final class ChatTypedReviewContextSchemaInitializer implements Initializi
              WHERE t.table_schema=DATABASE() AND t.table_name='chat_typed_review_context' AND t.constraint_type='CHECK'
             """)) {
             if(!"YES".equals(text(row,"enforced")))throw drift();
-            checks.put(text(row,"constraint_name"),ChatTaskDeliveryReviewSchemaInitializer.expression(text(row,"check_clause")));
+            checks.put(text(row,"constraint_name"),ChatTaskDeliveryReviewSchemaInitializer.metadataExpression(text(row,"check_clause")));
         }
         if(!ChatTaskDeliveryReviewSchemaInitializer.checks(ddl()).equals(checks))throw drift();
         Map<String,String> indexes=new LinkedHashMap<>();

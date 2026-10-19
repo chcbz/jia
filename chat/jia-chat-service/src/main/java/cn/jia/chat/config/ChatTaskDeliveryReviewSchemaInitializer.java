@@ -69,7 +69,7 @@ public final class ChatTaskDeliveryReviewSchemaInitializer implements Initializi
                 WHERE t.table_schema=DATABASE() AND t.table_name='chat_task_delivery_review_operation' AND t.constraint_type='CHECK'
                 """)) {
             if (!"YES".equalsIgnoreCase(text(row,"enforced"))) throw new IllegalStateException("Review check is not enforced");
-            installed.put(text(row,"constraint_name"), expression(text(row,"check_clause")));
+            installed.put(text(row,"constraint_name"), metadataExpression(text(row,"check_clause")));
         }
         if (!checks.equals(installed)) throw new IllegalStateException("Review check definition drift");
         Map<String, String> indexes = new LinkedHashMap<>();
@@ -107,6 +107,18 @@ public final class ChatTaskDeliveryReviewSchemaInitializer implements Initializi
             result.put(matcher.group(1), expression(ddl.substring(begin, end + 1)));
         }
         return result;
+    }
+    /** MySQL 8.0.21 CHECK_CLAUSE escapes its SQL source; decode that metadata layer only.
+     * Do not apply this decoding to source DDL or erase literal content/grouping. */
+    static String metadataExpression(String value) {
+        StringBuilder sql = new StringBuilder();
+        for (int i=0;i<value.length();i++) {
+            char c=value.charAt(i);
+            if (c=='\\' && i+1<value.length() && (value.charAt(i+1)=='\\' || value.charAt(i+1)=='\''))
+                c=value.charAt(++i);
+            sql.append(c);
+        }
+        return expression(sql.toString());
     }
     /** Compare Boolean trees, not punctuation-stripped strings: OR/AND grouping is security relevant. */
     static String expression(String value) {
