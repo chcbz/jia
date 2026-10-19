@@ -2508,3 +2508,11 @@ public ResponseEntity<ConversationDeliverableReadAdapter.Page> list( @PathVariab
 - 目标封装规则：自有JSON按公共信封；现行@RequestBody业务参数移至data；path/query/header位置不变；返回值为统一data中的业务DTO。外部协议/视图出口须人工分类，不能直接按本条批量改。
 - 未核定：嵌套DTO完整约束、实际认证链/资源ACL、全部错误码/状态、幂等持久键、实际消费者与条件装配。**此条不作为可发布完整契约**；关键链人工定义优先见上述链接。
 
+
+### 聚义厅事项阶段读模型（2026-10-19 实施候选，未上线）
+
+本节沿用统一接口规范 v1.2；源码实现与部署状态分开。`POST /agent/tasks/search` 的业务 data 新增可选 `phase`：`PENDING_ASSIGNMENT|IN_PROGRESS|PENDING_ACCEPTANCE|COMPLETED|HISTORY|UNKNOWN`，不能与非 null `status` 同传，非法值/冲突返回400。`status`仅保留原始状态诊断用途。分页不变；每项新增 `phase`，原始 `status`不变。按ID读取的原详情DTO允许 `phase=null`，不把它当已核对的验收权限。
+
+列表、分页总数及 `POST /agent/tasks/status-counts` 共用固定 tenant、认证 client/owner、ability及完整 keyword（任务ID、标题、描述、本领、承办名称）谓词。阶段只读派生，不新增root状态：open→待点将；planning/assigned/running/blocked→进行中；completed→已完成；failed/cancelled/archived→历史。reviewing必须恰有一个当前submitted正式交付且不存在更新revision，否则UNKNOWN；非终态却残留submitted也UNKNOWN。终态根事实优先。此阶段不是可写权限，ACCEPT仍必须核对完整review-context、版本、来源及幂等操作。
+
+计数成功业务data固定为 `{phaseCounts,rawStatusCounts}`；两者均有 `total`，所有计数为非负规范十进制 **string**（可大于JS安全整数），没有当前页兜底。phaseCounts固定六个阶段键；rawStatusCounts含原始状态，未知/null持久状态不伪造open。计数忽略当前选中阶段，scope/ability/keyword与列表相同；失败不是0。旧裸数值map不再作为新UI协议。该候选不得单独发布到仍消费旧计数结构的Web。
