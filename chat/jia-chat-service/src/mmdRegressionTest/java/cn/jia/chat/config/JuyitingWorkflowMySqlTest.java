@@ -600,6 +600,8 @@ class JuyitingWorkflowMySqlTest {
             var retained=mock(ChatFormalDeliveryRetentionService.class);when(retained.prepareRevisionSources(any())).thenReturn(List.of());
             context.setParent(domain.context);context.register(Transactions.class);
             context.registerBean(ChatInteractionStepStore.class,()->mock(ChatInteractionStepStore.class));
+            // This harness exercises revision admission, not external material finalization.
+            context.registerBean(ChatMaterialsInputService.class,()->mock(ChatMaterialsInputService.class));
             var finalProvider=new org.springframework.beans.factory.support.StaticListableBeanFactory();
             finalProvider.addBean("frozenFinal",finals);
             context.registerBean(ChatFormalDeliveryRetentionService.class,()->retained);
