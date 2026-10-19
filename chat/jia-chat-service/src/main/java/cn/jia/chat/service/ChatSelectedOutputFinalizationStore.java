@@ -54,7 +54,16 @@ public class ChatSelectedOutputFinalizationStore {
                 VALUES (?,?,?,?,?,?,?,?,?,?,?,'pending','PROMOTING',1,?,?,0,?,?,2)
                 """,operationId,tenant,owner,client,taskId,key,digest,conversationId,expectedTaskVersion,
                     expectedAssignmentRevision,summary,task.state(),task.version(),now,now)!=1)throw new Persistence();
-            for(int i=0;i<selections.size();i++){Selection s=selections.get(i);
+        } catch(org.springframework.dao.DuplicateKeyException race){
+            // A consistent read may be pinned before the concurrent winner committed.
+            // Locking reads of BOTH authority and items observe the same committed winner.
+            Operation replay=one(readRows("""
+                WHERE BINARY o.tenant_id=BINARY ? AND BINARY o.owner_jiacn=BINARY ? AND BINARY o.client_id=BINARY ?
+                  AND BINARY o.task_id=BINARY ? AND BINARY o.idempotency_key=BINARY ?
+                """,true,tenant,owner,client,taskId,key));
+            if(replay==null||replay.contractVersion()!=2||!digest.equals(replay.digest()))throw new Conflict();return replay;
+        }
+        for(int i=0;i<selections.size();i++){Selection s=selections.get(i);
                 if(jdbc.update("""
                     INSERT INTO chat_selected_output_finalization_item
                     (tenant_id,owner_jiacn,client_id,operation_id,item_order,request_id,step_id,output_id,sha256,title,purpose,
@@ -66,10 +75,6 @@ public class ChatSelectedOutputFinalizationStore {
                     s.formalArtifactSource()==null?null:s.formalArtifactSource().sourceDeliveryId(),
                     s.formalArtifactSource()==null?null:s.formalArtifactSource().sourceArtifactId(),
                     s.formalArtifactSource()==null?null:s.formalArtifactSource().sourceArtifactVersion())!=1)throw new Persistence();}
-        } catch(org.springframework.dao.DuplicateKeyException race){
-            Operation replay=findByKey(tenant,owner,client,taskId,key);
-            if(replay==null||replay.contractVersion()!=2||!digest.equals(replay.digest()))throw new Conflict();return replay;
-        }
         return requireByOperation(tenant,owner,client,taskId,operationId);
     }
 
@@ -132,26 +137,29 @@ public class ChatSelectedOutputFinalizationStore {
     }
 
     private List<Operation> rows(String where,Object...args){
+        return readRows(where,false,args);
+    }
+    private List<Operation> readRows(String where,boolean lock,Object...args){
         List<Operation> base=jdbc.query("""
             SELECT o.operation_id,o.task_id,o.idempotency_key,o.request_digest,o.conversation_id,
              o.expected_task_version,o.expected_assignment_revision,o.summary,o.state,o.stage,o.state_version,
              o.delivery_id,o.delivery_state,o.task_state,o.task_version,o.error_code,o.retryable,o.contract_version
             FROM chat_selected_output_finalization o
-            """+where,(rs,n)->new Operation(rs.getString(1),rs.getString(2),rs.getString(3),rs.getString(4),
+            """+where+(lock?" FOR UPDATE":""),(rs,n)->new Operation(rs.getString(1),rs.getString(2),rs.getString(3),rs.getString(4),
                 rs.getString(5),rs.getLong(6),rs.getLong(7),rs.getString(8),rs.getString(9),rs.getString(10),
                 rs.getLong(11),rs.getString(12),rs.getString(13),rs.getString(14),rs.getLong(15),rs.getString(16),
                 rs.getBoolean(17),List.of(),rs.getInt(18)),args);
         if(base.isEmpty())return base;
         if(base.size()!=1)throw new Persistence();
         Operation row=base.getFirst();
-        List<Selection> selections=items(row.operationId(),args);
+        List<Selection> selections=items(row.operationId(),args,lock);
         if(selections.isEmpty()||selections.size()>99)throw new Persistence();
         return List.of(new Operation(row.operationId(),row.taskId(),row.key(),row.digest(),row.conversationId(),
                 row.expectedTaskVersion(),row.expectedAssignmentRevision(),row.summary(),row.state(),row.stage(),
                 row.stateVersion(),row.deliveryId(),row.deliveryState(),row.taskState(),row.taskVersion(),
                 row.errorCode(),row.retryable(),selections,row.contractVersion()));
     }
-    private List<Selection> items(String operationId,Object[] scopeArgs){
+    private List<Selection> items(String operationId,Object[] scopeArgs,boolean lock){
         String tenant=(String)scopeArgs[0],owner=(String)scopeArgs[1],client=(String)scopeArgs[2];
         record Ordered(int order,Selection selection) { }
         List<Ordered> rows=jdbc.query("""
@@ -159,7 +167,7 @@ public class ChatSelectedOutputFinalizationStore {
             FROM chat_selected_output_finalization_item WHERE BINARY tenant_id=BINARY ?
              AND BINARY owner_jiacn=BINARY ? AND BINARY client_id=BINARY ? AND BINARY operation_id=BINARY ?
             ORDER BY item_order
-            """,(rs,n)->new Ordered(rs.getInt(1),new Selection(rs.getString(2),rs.getString(3),rs.getString(4),
+            """+(lock?" FOR UPDATE":""),(rs,n)->new Ordered(rs.getInt(1),new Selection(rs.getString(2),rs.getString(3),rs.getString(4),
                     rs.getString(5),rs.getString(6),rs.getString(7),messageSource(rs),formalSource(rs))),tenant,owner,client,operationId);
         for(int index=0;index<rows.size();index++)if(rows.get(index).order()!=index)throw new Persistence();
         return rows.stream().map(Ordered::selection).toList();

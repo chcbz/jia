@@ -13,10 +13,14 @@ import static org.mockito.ArgumentMatchers.*;
 class ChatSelectedOutputFinalizationStoreTest {
     static final class MemoryJdbc extends JdbcTemplate {
         Object[] operation;final List<Object[]> items=new ArrayList<>();int writes;
+        boolean duplicateItem,parentRace,hideSnapshot; final List<String> queries=new ArrayList<>();
         @Override public int update(String sql,Object...args){
             writes++;
-            if(sql.contains("INSERT INTO chat_selected_output_finalization_item")){items.add(args.clone());return 1;}
+            if(sql.contains("INSERT INTO chat_selected_output_finalization_item")){
+                if(duplicateItem&&!items.isEmpty())throw new org.springframework.dao.DuplicateKeyException("duplicate selected source");
+                items.add(args.clone());return 1;}
             if(sql.contains("INSERT INTO chat_selected_output_finalization")){
+                if(parentRace)throw new org.springframework.dao.DuplicateKeyException("concurrent operation winner");
                 operation=new Object[]{args[0],args[4],args[5],args[6],args[7],args[8],args[9],args[10],"pending","PROMOTING",1L,
                         null,null,args[11],args[12],null,false,2};return 1;
             }
@@ -29,10 +33,12 @@ class ChatSelectedOutputFinalizationStoreTest {
         }
         @Override public <T> List<T> query(String sql,RowMapper<T> mapper,Object...args){
             try {
+                queries.add(sql);
                 if(sql.contains("FROM agent_task_meta")){
                     ResultSet rs=mock(ResultSet.class);when(rs.getString(1)).thenReturn("assigned");when(rs.getLong(2)).thenReturn(7L);
                     return List.of(mapper.mapRow(rs,0));
                 }
+                if(hideSnapshot&&!sql.contains("FOR UPDATE"))return List.of();
                 if(!Arrays.equals(Arrays.copyOf(args,3),new Object[]{"0","owner","client"}))return List.of();
                 if(sql.contains("FROM chat_selected_output_finalization_item")){
                     List<T> result=new ArrayList<>();for(Object[] item:items){
@@ -106,6 +112,20 @@ class ChatSelectedOutputFinalizationStoreTest {
             }
             assertThrows(ChatSelectedOutputFinalizationStore.Persistence.class,()->store.findByKey("0","owner","client","task","original-key"),drift);
         }
+    }
+    @Test void duplicateChildSourceIsNotMistakenForAnOperationReplay() {
+        MemoryJdbc jdbc=new MemoryJdbc();jdbc.duplicateItem=true;
+        assertThrows(org.springframework.dao.DuplicateKeyException.class,()->create(new ChatSelectedOutputFinalizationStore(jdbc)));
+        // Rollback is proved separately against the Spring proxy and real MySQL.
+        assertEquals(3,jdbc.writes);
+    }
+    @Test void concurrentWinnerIsRecoveredWithCurrentReadsOfAuthorityAndEveryItem() {
+        MemoryJdbc jdbc=new MemoryJdbc();var original=create(new ChatSelectedOutputFinalizationStore(jdbc));
+        jdbc.parentRace=true;jdbc.hideSnapshot=true;jdbc.queries.clear();
+        assertEquals(original,create(new ChatSelectedOutputFinalizationStore(jdbc)));
+        assertTrue(jdbc.queries.stream().anyMatch(q->q.contains("FROM chat_selected_output_finalization o")&&q.contains("FOR UPDATE")));
+        assertTrue(jdbc.queries.stream().anyMatch(q->q.contains("FROM chat_selected_output_finalization_item")&&q.contains("FOR UPDATE")));
+        assertEquals(4,jdbc.writes);
     }
     @Test void persistedUnknownOrHybridSourceAndMissingTextRefsFailClosedInsteadOfDroppingText(){
         for(String kind:List.of("unknown","OUTPUT","hybrid","missing")){

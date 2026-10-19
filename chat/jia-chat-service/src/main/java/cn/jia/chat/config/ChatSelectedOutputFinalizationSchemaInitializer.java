@@ -150,7 +150,8 @@ public final class ChatSelectedOutputFinalizationSchemaInitializer implements In
     }
     private static void validateV2Check(JdbcTemplate jdbc,int index,String name) {
         var expected=ChatTaskDeliveryReviewSchemaInitializer.checks(ddl().get(index)).get(name);
-        if(expected==null || !expected.equals(checkExpressions(jdbc,TABLES.get(index)).get(name)))throw new IllegalStateException("Finalization v2 CHECK drift: "+name);
+        var actual=checkExpressions(jdbc,TABLES.get(index)).get(name);
+        if(expected==null || !expected.equals(actual))throw new IllegalStateException("Finalization v2 CHECK drift: "+name+" expected="+expected+" actual="+actual);
     }
     private static List<String> formalIndex(JdbcTemplate jdbc) {
         List<String> keys=new ArrayList<>();

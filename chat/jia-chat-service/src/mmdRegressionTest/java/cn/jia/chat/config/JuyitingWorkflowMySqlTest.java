@@ -108,6 +108,7 @@ class JuyitingWorkflowMySqlTest {
         app.registerBean("transactionManager",DataSourceTransactionManager.class,()->manager);
         app.registerBean(ChatTaskDeliveryReviewStore.class,()->new ChatTaskDeliveryReviewStore(jdbc));
         app.registerBean(ChatSelectedOutputFinalizationStore.class,()->new ChatSelectedOutputFinalizationStore(jdbc));
+        app.registerBean(cn.jia.chat.service.ChatTypedReviewContextStore.class,()->new cn.jia.chat.service.ChatTypedReviewContextStore(jdbc));
         app.refresh();
         reviews=app.getBean(ChatTaskDeliveryReviewStore.class);
         promotions=app.getBean(ChatSelectedOutputFinalizationStore.class);
@@ -130,6 +131,7 @@ class JuyitingWorkflowMySqlTest {
         jdbc.update("INSERT INTO agent_task_execution_grant VALUES ('0','client','owner','task','ACTIVE',1)");
         jdbc.execute("CREATE TABLE chat_conversation_asset (tenant_id VARCHAR(50),owner_jiacn VARCHAR(50),client_id VARCHAR(50),conversation_id VARCHAR(100),conversation_generation BIGINT,request_id VARCHAR(100),step_id VARCHAR(100),execution_id VARCHAR(100),run_id VARCHAR(100),output_id VARCHAR(100),content_mime_type VARCHAR(127),sha256 CHAR(64),byte_length BIGINT)");
         jdbc.execute("CREATE TABLE chat_conversation (id BIGINT,tenant_id VARCHAR(50),jiacn VARCHAR(50),client_id VARCHAR(50),deleted_at BIGINT,lifecycle_generation BIGINT,task_id VARCHAR(100),conversation_type VARCHAR(32),conversation_scope_type VARCHAR(32),conversation_scope_key VARCHAR(100))");
+        jdbc.execute("CREATE TABLE chat_request (tenant_id VARCHAR(50) COLLATE utf8mb4_0900_bin NOT NULL,owner_jiacn VARCHAR(50) COLLATE utf8mb4_0900_bin NOT NULL,client_id VARCHAR(50) COLLATE utf8mb4_0900_bin NOT NULL,request_id VARCHAR(100) COLLATE utf8mb4_0900_bin NOT NULL,request_revision BIGINT NOT NULL,user_message_id BIGINT NOT NULL,conversation_id VARCHAR(100),conversation_generation BIGINT,PRIMARY KEY(tenant_id,owner_jiacn,client_id,request_id,request_revision)) ENGINE=InnoDB");
         jdbc.execute("CREATE TABLE chat_message (id BIGINT,tenant_id VARCHAR(50),jiacn VARCHAR(50),client_id VARCHAR(50),conversation_id VARCHAR(100),content MEDIUMTEXT,metadata MEDIUMTEXT,message_type VARCHAR(32),sender_type VARCHAR(32))");
     }
     private ChatSelectedOutputFinalizationSchemaInitializer chatSchema() {
@@ -139,6 +141,7 @@ class JuyitingWorkflowMySqlTest {
         chatSchema().afterPropertiesSet();
         new AgentSelectedOutputFinalizationSchemaInitializer(jdbc).afterPropertiesSet();
         new ChatTaskDeliveryReviewSchemaInitializer(jdbc,mock(ChatSchemaReadiness.class)).afterPropertiesSet();
+        new ChatTypedReviewContextSchemaInitializer(jdbc,mock(ChatDeliberationSchemaInitializer.class),true).afterPropertiesSet();
     }
     private static String resource(String path) {
         try { return new ClassPathResource(path).getContentAsString(StandardCharsets.UTF_8).lines()
@@ -147,7 +150,7 @@ class JuyitingWorkflowMySqlTest {
     }
     private void execute(String path) { jdbc.execute(resource(path)); }
     private String definition(String table) { return (String)jdbc.queryForMap("SHOW CREATE TABLE "+table).get("Create Table"); }
-    private String allDefinitions() { return String.join("\n",List.of("chat_selected_output_finalization","chat_selected_output_finalization_item","agent_selected_output_finalization","chat_task_delivery_review_operation").stream().map(this::definition).toList()); }
+    private String allDefinitions() { return String.join("\n",List.of("chat_selected_output_finalization","chat_selected_output_finalization_item","agent_selected_output_finalization","chat_task_delivery_review_operation","chat_typed_review_context").stream().map(this::definition).toList()); }
     private <T> T inTransaction(Supplier<T> body) { return tx.execute(status->body.get()); }
     private void rootLock() { assertEquals(7,jdbc.queryForObject("SELECT task_version FROM agent_task_meta WHERE BINARY tenant_id=BINARY '0' AND BINARY client_id=BINARY 'client' AND BINARY owner_jiacn=BINARY 'owner' AND BINARY task_id=BINARY 'task' FOR UPDATE",Integer.class)); }
     private Receipt committed(ChatTaskDeliveryReviewStore.Operation op) {
@@ -283,6 +286,83 @@ class JuyitingWorkflowMySqlTest {
         jdbc.update("INSERT INTO chat_task_delivery_review_operation(tenant_id,owner_jiacn,client_id,operation_id,task_id,delivery_id,idempotency_key,request_sha256,batch_sha256,request_json,decision,state,state_version,origin,source_request_id,source_message_id,parent_outcome_id,parent_final_digest,target_artifact_ids_json,created_at,updated_at) VALUES('0','owner','client','revision','task','delivery','revision-key',?,?,'{}','REQUEST_CHANGES','PROCESSING',1,'MESSAGE_REVISION','original-request','123','outcome',?,'[\"artifact\"]',1,1)","a".repeat(64),"b".repeat(64),"sha256:"+"c".repeat(64));
         assertThrows(DataAccessException.class,()->jdbc.update("UPDATE chat_task_delivery_review_operation SET state='COMMITTED',receipt_json='{}',state_version=2 WHERE operation_id='revision'"));
         assertEquals("PROCESSING",jdbc.queryForObject("SELECT state FROM chat_task_delivery_review_operation",String.class));
+    }
+    @Test void frozenReviewBasisRequiresRealParentAndSameSpringTransactionAndNeverInitializesOnRead() throws Exception {
+        assertThrows(IllegalStateException.class,()->new ChatTypedReviewContextSchemaInitializer(jdbc,mock(ChatDeliberationSchemaInitializer.class),false).afterPropertiesSet());
+        assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='chat_typed_review_context'",Integer.class));
+        initialize();
+        var contexts=app.getBean(cn.jia.chat.service.ChatTypedReviewContextStore.class);
+        var scope=new cn.jia.chat.deliberation.ChatTypedDeliberationStore.Scope("0","owner","client","42",7);
+        assertTrue(AopUtils.isAopProxy(contexts));
+        assertThrows(IllegalTransactionStateException.class,()->contexts.insert(scope,"request",1,null,1));
+        assertThrows(IllegalStateException.class,()->contexts.require(scope,"request",1));
+        assertThrows(DataAccessException.class,()->inTransaction(()->{contexts.insert(scope,"request",1,null,1);return null;}));
+        assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM chat_typed_review_context",Integer.class));
+        assertThrows(IllegalStateException.class,()->inTransaction(()->{
+            jdbc.update("INSERT INTO chat_request VALUES('0','owner','client','rollback',1,123,'42',7)");
+            contexts.insert(scope,"rollback",1,null,1); throw new IllegalStateException("after both rows");
+        }));
+        assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM chat_request",Integer.class));
+        assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM chat_typed_review_context",Integer.class));
+        inTransaction(()->{
+            jdbc.update("INSERT INTO chat_request VALUES('0','owner','client','request',1,123,'42',7)");
+            contexts.insert(scope,"request",1,null,1); return null;
+        });
+        String original=jdbc.queryForMap("SELECT * FROM chat_typed_review_context").toString();
+        assertNull(contexts.require(scope,"request",1));
+        assertThrows(DataAccessException.class,()->inTransaction(()->{contexts.insert(scope,"request",1,null,2);return null;}));
+        assertThrows(IllegalStateException.class,()->contexts.require(new cn.jia.chat.deliberation.ChatTypedDeliberationStore.Scope("0","owner","client","42",8),"request",1));
+        assertEquals(original,jdbc.queryForMap("SELECT * FROM chat_typed_review_context").toString());
+        assertThrows(DataAccessException.class,()->jdbc.update("UPDATE chat_typed_review_context SET basis_json='[]'"));
+        assertThrows(DataAccessException.class,()->jdbc.update("DELETE FROM chat_request WHERE request_id='request'"));
+    }
+    @Test void realMapperPageFilterAndGroupedTotalsShareTheSamePhaseAndExactOwnerScope() throws Exception {
+        initialize();
+        jdbc.execute("ALTER TABLE agent_task_meta ADD id BIGINT NOT NULL AUTO_INCREMENT UNIQUE, ADD required_abilities TEXT, ADD assigned_agent_id VARCHAR(100), ADD reward DECIMAL(18,2), ADD assigned_at BIGINT, ADD started_at BIGINT, ADD completed_at BIGINT, ADD failure_reason TEXT, ADD create_time BIGINT DEFAULT 1, ADD update_time BIGINT DEFAULT 1");
+        jdbc.execute("ALTER TABLE agent_task_meta CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci");
+        jdbc.execute("ALTER TABLE agent_task_formal_delivery ADD revision BIGINT NOT NULL DEFAULT 1");
+        jdbc.execute("CREATE TABLE task_plan(id BIGINT,jiacn VARCHAR(50),client_id VARCHAR(50),name VARCHAR(100),description TEXT,amount DECIMAL(18,2),create_time BIGINT,update_time BIGINT)");
+        // The actual mapper's keyword expression includes these owner-scoped collaborators.
+        jdbc.execute("CREATE TABLE agent_task_member(id BIGINT,tenant_id VARCHAR(50),client_id VARCHAR(50),owner_jiacn VARCHAR(50),task_id VARCHAR(100),agent_id VARCHAR(100),member_role VARCHAR(24),member_status VARCHAR(24))");
+        jdbc.execute("CREATE TABLE agent_runtime(tenant_id VARCHAR(50),client_id VARCHAR(50),owner_jiacn VARCHAR(50),agent_id VARCHAR(100),name VARCHAR(100))");
+        jdbc.update("DELETE FROM agent_task_meta"); jdbc.update("DELETE FROM agent_task_formal_delivery");
+        var expected=new LinkedHashMap<String,String>();
+        expected.put("1001","PENDING_ASSIGNMENT"); expected.put("1002","IN_PROGRESS");
+        expected.put("1003","PENDING_ACCEPTANCE"); expected.put("1004","COMPLETED");
+        expected.put("1005","UNKNOWN"); expected.put("1006","UNKNOWN");
+        expected.put("1007","UNKNOWN"); expected.put("1008","UNKNOWN"); expected.put("1009","HISTORY");
+        var statuses=List.of("open","assigned","reviewing","completed","reviewing","running","reviewing","REVIEWING","cancelled");
+        int index=0;
+        for(var item:expected.entrySet()) {
+            jdbc.update("INSERT INTO agent_task_meta(tenant_id,client_id,owner_jiacn,task_id,reward_status,task_version,required_abilities) VALUES('0','client','owner',?,?,7,'[\"writing\"]')",item.getKey(),statuses.get(index++));
+            jdbc.update("INSERT INTO task_plan(id,jiacn,client_id,name,description,amount,create_time,update_time) VALUES(?,'owner','client','检索目标','说明',0,1,1)",Long.parseLong(item.getKey()));
+        }
+        for(String id:List.of("1003","1005","1006","1007")) jdbc.update("INSERT INTO agent_task_formal_delivery VALUES('0','client',?,'first','submitted',0,1)",id);
+        jdbc.update("INSERT INTO agent_task_formal_delivery VALUES('0','client','1005','second','submitted',0,2)");
+        jdbc.update("INSERT INTO agent_task_formal_delivery VALUES('0','client','1007','second','changes_requested',0,2)");
+        // Case-folding and padding at the default source-table collation must not widen authority.
+        for(String wrong:List.of("OWNER","owner ")) jdbc.update("INSERT INTO agent_task_meta(tenant_id,client_id,owner_jiacn,task_id,reward_status,task_version) VALUES('0','client',?,?,'completed',7)",wrong,"foreign-"+wrong);
+        var config=new com.baomidou.mybatisplus.core.MybatisConfiguration(); config.setMapUnderscoreToCamelCase(true);
+        config.setEnvironment(new org.apache.ibatis.mapping.Environment("owned-review-mysql",new org.mybatis.spring.transaction.SpringManagedTransactionFactory(),jdbc.getDataSource()));
+        config.addMapper(cn.jia.agent.mapper.AgentTaskMetaMapper.class);
+        var mapper=new org.mybatis.spring.SqlSessionTemplate(new org.apache.ibatis.session.SqlSessionFactoryBuilder().build(config)).getMapper(cn.jia.agent.mapper.AgentTaskMetaMapper.class);
+        assertEquals(9,mapper.countSearchExactInScope("0","client","owner",null,null,null,null));
+        assertEquals(9,mapper.countSearchExactInScope("0","client","owner",null,null,"检索目标",null));
+        var actual=new LinkedHashMap<String,String>();
+        for(int offset=0;offset<9;offset+=2) for(var row:mapper.searchPageExactInScope("0","client","owner",null,null,"检索目标",offset,2,null)) {
+            assertNull(actual.put(row.getTaskId(),row.getPhase()),"pagination duplicated an item");
+        }
+        assertEquals(expected,actual);
+        var grouped=mapper.countSearchByStatusExactInScope("0","client","owner",null,"检索目标",null);
+        assertEquals(9,grouped.stream().mapToLong(cn.jia.agent.mapper.AgentTaskStatusCountRow::getTaskCount).sum());
+        var counts=new HashMap<String,Long>();grouped.forEach(row->counts.merge(row.getPhase(),row.getTaskCount(),Long::sum));
+        for(var phase:List.of("PENDING_ASSIGNMENT","IN_PROGRESS","PENDING_ACCEPTANCE","COMPLETED","HISTORY","UNKNOWN")) {
+            long count=expected.values().stream().filter(phase::equals).count();
+            assertEquals(count,counts.get(phase));
+            assertEquals(count,mapper.countSearchExactInScope("0","client","owner",null,null,"检索目标",phase));
+            assertEquals(count,mapper.searchPageExactInScope("0","client","owner",null,null,"检索目标",0,99,phase).size());
+        }
+        assertEquals(0,mapper.countSearchExactInScope("0","CLIENT","owner",null,null,null,null));
     }
     private static void await(CyclicBarrier gate) { try { gate.await(); } catch(Exception failure) {throw new IllegalStateException(failure);} }
     private static <T> List<T> concurrent(Supplier<T> body) throws Exception {
