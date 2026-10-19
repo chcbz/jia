@@ -86,7 +86,8 @@ public final class ChatTaskDeliveryReviewSchemaInitializer implements Initializi
                 "uk_ctdro_source","0:tenant_id,owner_jiacn,client_id,task_id,source_request_id,decision",
                 "idx_ctdro_delivery","1:tenant_id,owner_jiacn,client_id,task_id,delivery_id,updated_at").equals(indexes)) throw new IllegalStateException("Review index drift");
     }
-    static Map<String, String> columns(String ddl) {
+    static Map<String, String> columns(String ddl) { return columns(ddl, 23); }
+    static Map<String, String> columns(String ddl, int expectedCount) {
         var result = new LinkedHashMap<String, String>();
         var matcher = Pattern.compile("(?m)^ ([a-z][a-z0-9_]*) (VARCHAR\\([0-9]+\\)|CHAR\\([0-9]+\\)|MEDIUMTEXT|BIGINT)([^,\\n]*)[,\\n]").matcher(ddl);
         while (matcher.find()) {
@@ -95,7 +96,7 @@ public final class ChatTaskDeliveryReviewSchemaInitializer implements Initializi
             String coll = collation.find() ? collation.group(1) : (type.equals("mediumtext") ? "utf8mb4_0900_bin" : "null");
             result.put(matcher.group(1), type + "|" + (tail.contains("NOT NULL") ? "NO" : "YES") + "|" + coll);
         }
-        if (result.size() != 23) throw new IllegalStateException("Review column declaration mismatch");
+        if (result.size() != expectedCount) throw new IllegalStateException("Review column declaration mismatch");
         return result;
     }
     static Map<String, String> checks(String ddl) {

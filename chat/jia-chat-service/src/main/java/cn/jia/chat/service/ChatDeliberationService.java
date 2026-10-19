@@ -12,6 +12,7 @@ import cn.jia.chat.deliberation.ChatDispatchOutboxEntity;
 import cn.jia.chat.deliberation.ChatInteractionStepStore;
 import cn.jia.chat.deliberation.ChatRequestEntity;
 import cn.jia.chat.deliberation.ChatTurnEntity;
+import cn.jia.chat.deliberation.ChatTypedDeliberationStore;
 import cn.jia.chat.deliberation.InteractionRoute;
 import cn.jia.chat.entity.ChatConversationEntity;
 import cn.jia.chat.entity.ChatMessageEntity;
@@ -92,6 +93,10 @@ public class ChatDeliberationService {
     public void setInspectionAuthority(ChatInspectionAuthorityService inspectionAuthority) {
         this.inspectionAuthority = inspectionAuthority;
     }
+
+    private ChatTypedReviewContextService reviewContexts;
+    @Autowired(required=false)
+    public void setReviewContexts(ChatTypedReviewContextService value) { this.reviewContexts=Objects.requireNonNull(value); }
 
     public ChatDeliberationService(ChatDeliberationDao dao, ChatConversationDao conversationDao,
             ChatMessageDao messageDao, AgentService agentService) {
@@ -343,6 +348,17 @@ public class ChatDeliberationService {
             throw persistence("Unable to persist chat request");
         }
 
+        // Freeze before dispatch/final, in this same USER/request transaction. Gate remains default-off.
+        ChatDeliveryRevisionContract.Basis reviewBasis = null;
+        boolean freezeReview = reviewContexts != null && route == InteractionRoute.CHAT && trustedTypedFacts != null;
+        if (freezeReview) {
+            if (task == null || task.getTaskVersion() == null || trustedTypedAdmission == null) throw unavailable();
+            String clarificationParent = "CLARIFICATION_REPLY".equals(trustedTypedAdmission.get("intent"))
+                    ? (String) trustedTypedAdmission.get("parentOutcomeId") : null;
+            reviewBasis = reviewContexts.freeze(new ChatTypedDeliberationStore.Scope(tenantId,ownerJiacn,clientId,
+                    conversationId,expectedGeneration),scope.taskId(),task.getTaskVersion(),requestId,revision,
+                    userMessage.getId(),clarificationParent,now);
+        }
         List<Dispatch> dispatches = new ArrayList<>();
         for (String targetAgentId : scope.targetAgentIds()) {
             String turnId = stableId("turn", tenantId, ownerJiacn, clientId, requestId, targetAgentId);
@@ -367,6 +383,7 @@ public class ChatDeliberationService {
                             conversationId,expectedGeneration,scope.taskId(),requestId,turnId,targetAgentId);
                     if(materials!=null)typedFacts.put("materialsInput",materials);
                 }
+                if (freezeReview) typedFacts.put("reviewBasis", ChatDeliveryRevisionContract.basisMap(reviewBasis));
                 if (continuationFacts != null) typedFacts.put("actionContinuation", continuationFacts);
                 facts = java.util.Collections.unmodifiableMap(new LinkedHashMap<>(typedFacts));
             }

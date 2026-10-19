@@ -53,10 +53,15 @@ public class ChatActionDispatchService {
         this.dao=dao; this.outbox=outbox; this.executors=executors;
     }
 
+    private ChatTypedReviewContextService reviewContexts;
+    @org.springframework.beans.factory.annotation.Autowired(required=false)
+    public void setReviewContexts(ChatTypedReviewContextService value) { reviewContexts=Objects.requireNonNull(value); }
+
     @Transactional(propagation=org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
     public void consume(ChatDeliberationOutboxService.Claim claim) {
         var initial = finals.loadAction(claim.row());
         var parent = initial.outcome(); var scope = parent.scope();
+        if (reviewContexts != null) reviewContexts.requireActionAllowed(initial);
         var executor=executors.getIfUnique();
         if(executor==null)throw new IllegalStateException("Skill execution adapter is unavailable");
         // No root/conversation/outbox lock across immutable package I/O. Replay skips preparation entirely.
@@ -65,7 +70,8 @@ public class ChatActionDispatchService {
         tasks.executeWithLockedTaskRootInOwnerScope(scope.tenantId(), scope.clientId(), scope.ownerJiacn(), parent.taskId(), root -> {
             var binding = bindings.lock(new ChatBountyBindingStore.Scope(scope.tenantId(), scope.ownerJiacn(), scope.clientId()), parent.taskId());
             String target = (String) initial.validated().binding().get("targetAgentId");
-            if (root == null || root.getTaskVersion() == null || root.getTaskVersion() < parent.assignmentRevision()
+            if (root == null || root.getRewardStatus() == null || !java.util.Set.of("planning","assigned","running","blocked").contains(root.getRewardStatus())
+                    || root.getTaskVersion() == null || root.getTaskVersion() < parent.assignmentRevision()
                     || !target.equals(root.getAssignedAgentId()) || binding == null || binding.conversationId() == null
                     || !scope.conversationId().equals(Long.toString(binding.conversationId()))
                     || parent.assignmentRevision() != binding.assignmentRevision()) throw new Rejected();
@@ -82,6 +88,7 @@ public class ChatActionDispatchService {
             var locked = outbox.requireActiveClaim(claim, System.currentTimeMillis());
             var action = finals.loadAction(locked);
             if (!initial.equals(action)) throw conflict("Action final changed");
+            if (reviewContexts != null) reviewContexts.requireActionAllowed(action);
             var capability = action.validated().dispatchFacts().availableActions().stream().filter(c -> c.actionId().equals(
                     action.validated().interactionOutcome().action().actionId())).findFirst().orElseThrow();
             if(!"EXECUTE".equals(capability.kind())||!"EXECUTE_SKILL".equals(capability.operation()))throw new Rejected();
