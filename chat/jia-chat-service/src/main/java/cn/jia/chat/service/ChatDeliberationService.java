@@ -626,6 +626,9 @@ public class ChatDeliberationService {
         if (dao.persistFinal(turn, finalDigest, message.getId(), now) != 1) {
             throw conflict("Concurrent final state change");
         }
+        turn.setState(ChatDeliberationStates.FINAL_PERSISTED).setFinalDigest(finalDigest)
+                .setFinalMessageId(message.getId()).setUpdatedAt(now)
+                .setStateVersion(turn.getStateVersion() + 1);
         String finalEventId = stableId("evt", dispatchId, "FINAL_PERSISTED");
         Map<String, Object> finalPayload = new LinkedHashMap<>();
         finalPayload.put("content", safeContent);
@@ -649,6 +652,8 @@ public class ChatDeliberationService {
         outboxPayload.put("eventSequence", Long.toString(finalEvent.getEventSequence()));
         outboxPayload.put("eventVersion", Long.toString(finalEvent.getEventVersion()));
         outboxPayload.put("finalDigest", finalDigest);
+        outboxPayload.put("state", turn.getState());
+        outboxPayload.put("stateVersion", Long.toString(turn.getStateVersion()));
         if (actionPersisted != null) outboxPayload.put("typedOutcome", actionPersisted);
         if (typedPersisted != null) outboxPayload.put("typedOutcome", typedPersisted.eventView());
         if (inspectionPersisted != null) outboxPayload.put("typedOutcome", inspectionPersisted.eventView());
@@ -659,9 +664,6 @@ public class ChatDeliberationService {
                 .setStatus("READY").setPayloadJson(CanonicalContextJson.write(outboxPayload)).setVersion(0L).setAvailableAt(now)
                 .setAttemptCount(0).setFencingToken(0L).setCreatedAt(now).setUpdatedAt(now);
         if (dao.insertOutbox(outbox) != 1) throw persistence("Unable to persist final event");
-        turn.setState(ChatDeliberationStates.FINAL_PERSISTED).setFinalDigest(finalDigest)
-                .setFinalMessageId(message.getId()).setUpdatedAt(now)
-                .setStateVersion(turn.getStateVersion() + 1);
         refreshAggregate(tenantId, ownerJiacn, clientId, turn.getRequestId(), now);
         return new FinalResult(FinalStatus.PERSISTED, message.getId(),
                 Long.toString(request.getUserMessageId()), finalEventId, turn, finalEvent);
@@ -818,6 +820,8 @@ public class ChatDeliberationService {
         if (dao.updateTurnState(turn, ChatDeliberationStates.CANCELLED, reason, now) != 1) {
             throw conflict("Concurrent cancellation");
         }
+        turn.setState(ChatDeliberationStates.CANCELLED).setTerminalReason(reason)
+                .setUpdatedAt(now).setStateVersion(turn.getStateVersion() + 1);
         ChatDispatchOutboxEntity cancel = new ChatDispatchOutboxEntity()
                 .setEventId(stableId("evt", turn.getDispatchId(), "CANCEL_REQUESTED"))
                 .setTenantId(turn.getTenantId()).setOwnerJiacn(turn.getOwnerJiacn()).setClientId(turn.getClientId())
@@ -835,8 +839,6 @@ public class ChatDeliberationService {
         persistEvent(turn, stableId("evt", turn.getDispatchId(), "CANCEL_REQUESTED"),
                 "cancel_requested", Map.of("reason", reason), now);
         if (dao.insertOutbox(cancel) != 1) throw persistence("Unable to persist cancellation event");
-        turn.setState(ChatDeliberationStates.CANCELLED).setTerminalReason(reason)
-                .setUpdatedAt(now).setStateVersion(turn.getStateVersion() + 1);
     }
 
     private ChatConversationEventEntity persistEvent(ChatTurnEntity turn, String eventId,
@@ -851,6 +853,11 @@ public class ChatDeliberationService {
         wire.put("contextSnapshotId", turn.getSnapshotId());
         wire.put("route", turn.getRoute());
         wire.putAll(payload);
+        if (List.of("agent_message_delta", "agent_message", "resync_required", "cancel_requested").contains(eventType)) {
+            // Snapshot the committed turn projection, not the journal sequence or a nested resource version.
+            wire.put("state", turn.getState());
+            wire.put("stateVersion", Long.toString(turn.getStateVersion()));
+        }
         ChatConversationEventEntity event = new ChatConversationEventEntity()
                 .setEventId(eventId).setTenantId(turn.getTenantId()).setOwnerJiacn(turn.getOwnerJiacn())
                 .setClientId(turn.getClientId()).setConversationId(turn.getConversationId())
