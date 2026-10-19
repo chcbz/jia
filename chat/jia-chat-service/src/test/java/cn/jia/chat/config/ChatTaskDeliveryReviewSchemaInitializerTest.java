@@ -1,0 +1,23 @@
+package cn.jia.chat.config;
+
+import org.junit.jupiter.api.Test;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+class ChatTaskDeliveryReviewSchemaInitializerTest {
+    @Test void freshSchemaIncludesAllImmutableMessageLineageAndScopedUniqueness() {
+        String ddl = ChatTaskDeliveryReviewSchemaInitializer.ddl();
+        var columns = ChatTaskDeliveryReviewSchemaInitializer.columns(ddl);
+        assertEquals(23,columns.size()); assertEquals("varchar(100)|YES|utf8mb4_0900_bin",columns.get("child_request_id"));
+        assertTrue(ddl.contains("uk_ctdro_source (tenant_id,owner_jiacn,client_id,task_id,source_request_id,decision)"));
+        assertEquals(8,ChatTaskDeliveryReviewSchemaInitializer.checks(ddl).size());
+        assertTrue(ChatTaskDeliveryReviewSchemaInitializer.checks(ddl).get("chk_ctdro_origin").contains("child_request_idisnotnull"));
+    }
+    @Test void booleanComparisonAllowsServerFormattingButNeverLosesAndOrGroupingOrLiteralCase() {
+        assertEquals(ChatTaskDeliveryReviewSchemaInitializer.expression("a = 'A' AND b > 0 AND c IS NULL"),
+                ChatTaskDeliveryReviewSchemaInitializer.expression("((`a` = _utf8mb4'A') and ((`b` > 0) and (`c` is null)))"));
+        assertNotEquals(ChatTaskDeliveryReviewSchemaInitializer.expression("(a=1 OR b=2) AND c=3"),
+                ChatTaskDeliveryReviewSchemaInitializer.expression("a=1 OR (b=2 AND c=3)"));
+        assertNotEquals(ChatTaskDeliveryReviewSchemaInitializer.expression("a='ACCEPT'"), ChatTaskDeliveryReviewSchemaInitializer.expression("a='accept'"));
+    }
+}

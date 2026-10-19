@@ -27,7 +27,9 @@ class HallSubmissionControllerTest {
     @BeforeEach
     void setUp() {
         service = org.mockito.Mockito.mock(HallRequestDraftService.class);
-        mvc = MockMvcBuilders.standaloneSetup(new HallSubmissionController(service)).build();
+        mvc = MockMvcBuilders.standaloneSetup(new HallSubmissionController(service))
+                .setControllerAdvice(new cn.jia.core.config.ApiEnvelopeAdvice(), new cn.jia.core.config.ExceptionHandlerAdvice())
+                .addFilters(new cn.jia.core.filter.RequestIdFilter()).build();
     }
 
     @Test
