@@ -377,4 +377,18 @@ class LogServiceImplTest extends BaseMockTest {
     private String stringValue(String value) {
         return value == null ? "" : value;
     }
+    @Test void longDiscussionUrisFitExistingColumnWithoutCollidingOrWritingRawSecrets() throws Exception {
+        setIdentity("Jia-Capture", "alice");
+        String uri = "/chat/conversations/1760458006512/requests/mmd-typed-request_" + "a".repeat(40) + "/typed-outcome";
+        String captured = logService.captureLog(new EsRequestWrapper(new MockHttpServletRequest("GET", uri))).getUri();
+        String digest = java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
+                .digest(uri.getBytes(StandardCharsets.UTF_8)));
+        assertEquals(100, captured.length());
+        assertEquals(uri.substring(0, 28) + "#sha256:" + digest, captured);
+        String other = logService.captureLog(new EsRequestWrapper(new MockHttpServletRequest("GET", uri + "2"))).getUri();
+        assertFalse(captured.equals(other));
+        String exact = "/" + "a".repeat(99);
+        assertEquals(exact, logService.captureLog(new EsRequestWrapper(new MockHttpServletRequest("GET", exact))).getUri());
+        verify(logDao, never()).insert(any());
+    }
 }

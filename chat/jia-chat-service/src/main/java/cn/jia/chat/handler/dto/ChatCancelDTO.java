@@ -8,6 +8,7 @@ import java.util.List;
 @Data
 public class ChatCancelDTO {
     private String expectedStateVersion;
+    private String expectedLastDeltaSeq;
     private String reason;
     private Boolean allPending;
     private List<String> turnIds;

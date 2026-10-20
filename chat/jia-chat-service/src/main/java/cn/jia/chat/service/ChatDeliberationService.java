@@ -729,11 +729,23 @@ public class ChatDeliberationService {
     @Transactional(rollbackFor = Exception.class)
     public TurnView cancelTurn(String tenantId, String ownerJiacn, String clientId, String turnId,
             Long expectedStateVersion, String reason) {
+        return cancelTurn(tenantId, ownerJiacn, clientId, turnId, expectedStateVersion, null, reason);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public TurnView cancelTurn(String tenantId, String ownerJiacn, String clientId, String turnId,
+            Long expectedStateVersion, Long expectedLastDeltaSeq, String reason) {
+        if (expectedLastDeltaSeq != null && (expectedStateVersion == null || expectedLastDeltaSeq < 0)) {
+            throw invalid("Delta checkpoint requires a state version");
+        }
         ChatTurnEntity visible = requireVisibleTurn(tenantId, ownerJiacn, clientId, turnId);
         requireLockedConversation(tenantId, ownerJiacn, clientId, visible.getConversationId(), visible.getConversationGeneration());
         ChatTurnEntity turn = requireLockedTurn(tenantId, ownerJiacn, clientId, turnId);
         if (!terminal(turn.getState())) {
-            if (expectedStateVersion != null && !expectedStateVersion.equals(turn.getStateVersion())) {
+            if (expectedLastDeltaSeq != null && expectedStateVersion.equals(turn.getStateVersion())
+                    && !expectedLastDeltaSeq.equals(turn.getLastDeltaSeq())) throw conflict("Turn delta checkpoint changed");
+            if (expectedStateVersion != null && !expectedStateVersion.equals(turn.getStateVersion())
+                    && !onlyStreamingDeltasAdvanced(turn, expectedStateVersion, expectedLastDeltaSeq)) {
                 throw conflict("Turn state version changed");
             }
             long now = System.currentTimeMillis();
@@ -741,6 +753,14 @@ public class ChatDeliberationService {
             refreshAggregate(tenantId, ownerJiacn, clientId, turn.getRequestId(), now);
         }
         return turnView(turn);
+    }
+
+    private boolean onlyStreamingDeltasAdvanced(ChatTurnEntity turn, long expectedVersion, Long expectedDelta) {
+        // A user stops the same turn, not a particular token. Never forgive a non-delta mutation.
+        Long version = turn.getStateVersion(), delta = turn.getLastDeltaSeq();
+        return "STREAMING".equals(turn.getState()) && expectedDelta != null && expectedVersion >= 0
+                && version != null && delta != null && version > expectedVersion && delta > expectedDelta
+                && version - expectedVersion == delta - expectedDelta;
     }
 
     @Transactional(rollbackFor = Exception.class)
@@ -785,6 +805,36 @@ public class ChatDeliberationService {
         }
         turn.setState(ChatDeliberationStates.PUBLISHED).setUpdatedAt(now)
                 .setStateVersion(turn.getStateVersion() + 1);
+    }
+
+    /** Only definite model-contract rejection is terminal; transport/acceptance uncertainty is not. */
+    public static boolean isInvalidAgentOutcome(String reason) {
+        return reason != null && Set.of("ACTION_OUTCOME_INVALID", "ACTION_OUTCOME_UNION_INVALID",
+                "ACTION_OUTCOME_KIND_INVALID", "ACTION_DELIVERY_PARENT_INVALID", "ACTION_DELIVERY_TARGET_INVALID",
+                "ACTION_SELECTION_INVALID", "ACTION_PARAMETERS_INVALID").contains(reason);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public ChatConversationEventEntity failInvalidAgentOutcome(String tenantId, String ownerJiacn, String clientId,
+            String agentId, String dispatchId, String messageId, String reason) {
+        if (!isInvalidAgentOutcome(reason)) throw invalid("Not a definite model outcome rejection");
+        ChatDispatchOutboxEntity dispatch = dao.findOutboxById(tenantId, ownerJiacn, clientId, messageId);
+        if (dispatch == null || !Objects.equals(dispatchId, dispatch.getDispatchId())) throw unavailable();
+        ChatTurnEntity visible = requireVisibleTurn(tenantId, ownerJiacn, clientId, dispatch.getTurnId());
+        requireLockedConversation(tenantId, ownerJiacn, clientId, visible.getConversationId(), visible.getConversationGeneration());
+        ChatTurnEntity turn = requireLockedTurn(tenantId, ownerJiacn, clientId, visible.getTurnId());
+        if (!Objects.equals(agentId, turn.getTargetAgentId()) || !Objects.equals(dispatchId, turn.getDispatchId()))
+            throw unavailable();
+        if (terminal(turn.getState())) return null;
+        long now = System.currentTimeMillis();
+        if (dao.updateTurnState(turn, ChatDeliberationStates.FAILED, reason, now) != 1)
+            throw conflict("Concurrent outcome rejection state change");
+        turn.setState(ChatDeliberationStates.FAILED).setTerminalReason(reason)
+                .setStateVersion(turn.getStateVersion() + 1).setUpdatedAt(now);
+        ChatConversationEventEntity event = persistEvent(turn, stableId("evt", dispatchId, "MODEL_OUTCOME_REJECTED"),
+                "resync_required", Map.of("reason", reason), now);
+        refreshAggregate(tenantId, ownerJiacn, clientId, turn.getRequestId(), now);
+        return event;
     }
 
     @Transactional(rollbackFor = Exception.class)

@@ -58,7 +58,7 @@ class ChatCancelWireHttpTest {
     @Test void canonicalDecimalIsConvertedWithoutPrecisionLoss() throws Exception {
         for (String value : List.of("0", "3", "9007199254740993", "9223372036854775807")) {
             call("{\"expectedStateVersion\":\"" + value + "\"}").andExpect(status().isOk());
-            verify(service).cancelTurn("0", "owner", "client", "turn", Long.valueOf(value), null);
+            verify(service).cancelTurn("0", "owner", "client", "turn", Long.valueOf(value), null, null);
         }
     }
     @Test void malformedOrNumericVersionNeverReachesMutation() throws Exception {
@@ -67,13 +67,22 @@ class ChatCancelWireHttpTest {
         verifyNoInteractions(service);
     }
     @Test void staleVersionStillReturnsConflict() throws Exception {
-        when(service.cancelTurn("0", "owner", "client", "turn", 3L, null))
+        when(service.cancelTurn("0", "owner", "client", "turn", 3L, null, null))
                 .thenThrow(new ChatDeliberationException(ChatDeliberationException.Reason.CONFLICT, "Turn state version changed"));
         call("{\"expectedStateVersion\":\"3\"}").andExpect(status().isConflict());
     }
     @Test void optionalVersionRemainsOptional() throws Exception {
         assertNull(ChatController.parseExpectedStateVersion(null));
         call("{}").andExpect(status().isOk());
-        verify(service).cancelTurn("0", "owner", "client", "turn", null, null);
+        verify(service).cancelTurn("0", "owner", "client", "turn", null, null, null);
+    }
+    @Test void deltaCheckpointUsesExactDecimalAndRejectsNumericValues() throws Exception {
+        call("{\"expectedStateVersion\":\"9007199254740993\",\"expectedLastDeltaSeq\":\"9007199254740990\"}")
+                .andExpect(status().isOk());
+        verify(service).cancelTurn("0", "owner", "client", "turn", 9007199254740993L, 9007199254740990L, null);
+        reset(service);
+        for (String value : List.of("3", "\"03\"", "\"-1\"", "\"9223372036854775808\""))
+            call("{\"expectedStateVersion\":\"7\",\"expectedLastDeltaSeq\":" + value + "}").andExpect(status().isBadRequest());
+        verifyNoInteractions(service);
     }
 }

@@ -56,7 +56,7 @@ public class LogServiceImpl extends BaseServiceImpl<LogDao, LogEntity> implement
     public LogEntity captureLog(EsRequestWrapper esRequestWrapper) {
         LogEntity logEntity = new LogEntity();
         logEntity.setIp(sanitizePersistedText(HttpUtil.getIpAddr(esRequestWrapper)));
-        logEntity.setUri(sanitizePersistedText(esRequestWrapper.getRequestURI()));
+        logEntity.setUri(boundedAuditUri(sanitizePersistedText(esRequestWrapper.getRequestURI())));
         logEntity.setMethod(sanitizePersistedText(esRequestWrapper.getMethod()));
         logEntity.setUserAgent(sanitizePersistedText(esRequestWrapper.getHeader("user-agent")));
         logEntity.setHeader(sanitizeHeaders(esRequestWrapper));
@@ -64,6 +64,19 @@ public class LogServiceImpl extends BaseServiceImpl<LogDao, LogEntity> implement
         logEntity.setJiacn(sanitizePersistedText(EsContextHolder.getContext().getJiacn()));
         logEntity.setUsername(sanitizePersistedText(EsContextHolder.getContext().getUsername()));
         return logEntity;
+    }
+
+    // core_log.uri is VARCHAR(100). Long typed-outcome/review routes must not drop the whole record.
+    // Hash only the already-sanitized URI; never persist credentials or silently conflate long routes.
+    private static String boundedAuditUri(String uri) {
+        if (uri == null || uri.codePointCount(0, uri.length()) <= 100) return uri;
+        try {
+            String digest = java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(uri.getBytes(StandardCharsets.UTF_8)));
+            return uri.substring(0, uri.offsetByCodePoints(0, 28)) + "#sha256:" + digest;
+        } catch (java.security.NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException("SHA-256 unavailable", impossible);
+        }
     }
 
     @Override

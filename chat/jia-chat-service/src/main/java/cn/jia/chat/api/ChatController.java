@@ -559,6 +559,7 @@ public class ChatController {
                 requireAuthenticatedTenant(authentication), requireIdentityPart(EsContextHolder.getContext().getJiacn()),
                 requireIdentityPart(EsContextHolder.getContext().getClientId()), turnId,
                 cancellation == null ? null : parseExpectedStateVersion(cancellation.getExpectedStateVersion()),
+                cancellation == null ? null : parseExpectedStateVersion(cancellation.getExpectedLastDeltaSeq()),
                 cancellation == null ? null : cancellation.getReason()));
     }
 

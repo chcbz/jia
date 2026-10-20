@@ -1210,6 +1210,15 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         String dispatchId = strictString(payload.get("dispatchId"));
         String messageId = strictString(payload.get("messageId"));
         try {
+            String rejection = strictString(payload.get("errorCode"));
+            if ("recovery_required".equals(payload.get("status"))
+                    && ChatDeliberationService.isInvalidAgentOutcome(rejection)) {
+                if (chatDeliberationService == null) throw new IllegalStateException("Turn service unavailable");
+                var rejectedEvent = withSessionMutationFence(session, () -> chatDeliberationService.failInvalidAgentOutcome(
+                        sessionTenantId(session), sessionJiacn(session), sessionClientId(session),
+                        agentId, dispatchId, messageId, rejection));
+                publishStoredConversationEvent(rejectedEvent);
+            }
             boolean acknowledged = withSessionMutationFence(session, () -> chatDeliberationOutboxService.acknowledgeHostedDispatch(
                     sessionTenantId(session), sessionJiacn(session), sessionClientId(session),
                     agentId, dispatchId, messageId, System.currentTimeMillis()));
