@@ -50,6 +50,30 @@ class SensitiveResponseBodyAdviceTest {
     }
 
     @Test
+    void sanitizedQueuedProtocolEventsRetainClosedRootAndRedactPayload() throws Exception {
+        var event = cn.jia.core.entity.ProtocolMessage.event("request", "command.dispatch", "message",
+                Map.of("instruction", "safe", "password", "secret"));
+        var reply = cn.jia.core.entity.ProtocolMessage.reply(event, "command.receipt", "reply", "E0", "ok", null);
+        var body = JsonResult.success(Map.of("items", java.util.List.of(event, reply)));
+        var advice = new SensitiveResponseBodyAdvice(new SensitiveResponseProperties());
+        Object sanitized = advice.beforeBodyWrite(body, methodParameter("normal"), MediaType.APPLICATION_JSON,
+                null, null, null);
+        var mapper = tools.jackson.databind.json.JsonMapper.builder().build();
+        var items = mapper.readTree(mapper.writeValueAsString(sanitized)).path("data").path("items");
+        assertEquals(5, items.get(0).size());
+        org.junit.jupiter.api.Assertions.assertFalse(items.get(0).has("correlationId"));
+        org.junit.jupiter.api.Assertions.assertFalse(items.get(0).has("code"));
+        org.junit.jupiter.api.Assertions.assertFalse(items.get(0).has("msg"));
+        org.junit.jupiter.api.Assertions.assertTrue(items.get(0).path("data").path("password").isNull());
+        assertEquals("safe", items.get(0).path("data").path("instruction").asText());
+        assertEquals(8, items.get(1).size());
+        assertEquals("message", items.get(1).path("correlationId").asText());
+        org.junit.jupiter.api.Assertions.assertTrue(items.get(1).has("data"));
+        org.junit.jupiter.api.Assertions.assertTrue(items.get(1).path("data").isNull());
+        assertEquals("secret", event.data().get("password"));
+    }
+
+    @Test
     void leavesBodyUnchangedWhenDisabled() throws Exception {
         SensitiveResponseProperties properties = new SensitiveResponseProperties();
         properties.setEnabled(false);
@@ -95,6 +119,33 @@ class SensitiveResponseBodyAdviceTest {
                 null, null, null);
 
         assertSame(body, result);
+    }
+
+    @Test
+    void queueEventSurvivesActualHttpAdviceAndJacksonConverter() throws Exception {
+        var mvc = org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(new QueueController())
+                .setControllerAdvice(new SensitiveResponseBodyAdvice(new SensitiveResponseProperties()))
+                .setMessageConverters(new org.springframework.http.converter.json.JacksonJsonHttpMessageConverter())
+                .build();
+        var response = mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/queue"))
+                .andReturn().getResponse();
+        assertEquals(200, response.getStatus());
+        var item = tools.jackson.databind.json.JsonMapper.builder().build()
+                .readTree(response.getContentAsString()).path("data").path("items").get(0);
+        assertEquals(5, item.size());
+        assertEquals("command.dispatch", item.path("messageType").asText());
+        org.junit.jupiter.api.Assertions.assertTrue(item.path("data").path("password").isNull());
+        org.junit.jupiter.api.Assertions.assertFalse(item.has("correlationId"));
+    }
+
+    @org.springframework.web.bind.annotation.RestController
+    static class QueueController {
+        @org.springframework.web.bind.annotation.GetMapping("/queue")
+        public JsonResult<?> queue() {
+            return JsonResult.success(Map.of("items", java.util.List.of(
+                    cn.jia.core.entity.ProtocolMessage.event("request", "command.dispatch", "message",
+                            Map.of("password", "secret", "instruction", "safe")))));
+        }
     }
 
     private MethodParameter methodParameter(String methodName) throws NoSuchMethodException {
