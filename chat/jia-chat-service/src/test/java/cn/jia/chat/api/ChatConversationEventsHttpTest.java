@@ -19,6 +19,11 @@ import org.springframework.security.oauth2.server.resource.authentication.JwtAut
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.BaseSubscriber;
+import org.reactivestreams.Subscription;
+import org.springframework.mock.web.MockHttpServletRequest;
+import java.util.ArrayList;
+import java.util.stream.LongStream;
 
 import java.time.Instant;
 import java.util.List;
@@ -36,6 +41,7 @@ class ChatConversationEventsHttpTest {
     private ChatConversationEventBroker broker;
     private ChatConversationEventBroker.LiveSubscription subscription;
     private MockMvc mvc;
+    private ChatController controller;
 
     @BeforeEach void setUp() {
         var conversations=mock(ChatConversationService.class);
@@ -50,7 +56,7 @@ class ChatConversationEventsHttpTest {
         when(events.eventHighWatermark("0","owner","client","42",3)).thenReturn(7L);
         when(events.replayEventsThrough("0","owner","client","42",3,0,7,500))
                 .thenReturn(List.of(event(7,"interaction.state_changed","{\"requestId\":\"request\",\"state\":\"PLANNING\"}")));
-        var controller=new ChatController(mock(ChatClient.class),conversations,mock(RedisService.class),
+        controller=new ChatController(mock(ChatClient.class),conversations,mock(RedisService.class),
                 mock(ChatClient.Builder.class),broker,mock(BuiltinHallAgentSupport.class),
                 mock(JuyitingConversationScopeService.class),mock(JuyitingAgentRelayService.class),
                 mock(MemoryRepository.class),mock(AgentTaskThreadMemoryGuard.class),mock(HumanSenderIdentityResolver.class));
@@ -119,6 +125,87 @@ class ChatConversationEventsHttpTest {
                     .principal(jwt("0")).accept(MediaType.TEXT_EVENT_STREAM)).andExpect(status().isBadRequest());
         }
         verifyNoInteractions(events);
+    }
+
+    @Test void largeReplayRespectsSlowSubscriberDemandWithoutOverflow() {
+        var replay = LongStream.rangeClosed(1, 128)
+                .mapToObj(i -> event(i, "agent_message", "{}")).toList();
+        when(events.eventHighWatermark("0", "owner", "client", "42", 3)).thenReturn(128L);
+        when(events.replayEventsThrough("0", "owner", "client", "42", 3, 0, 128, 500))
+                .thenReturn(replay);
+        var received = new ArrayList<String>();
+        var failures = new ArrayList<Throwable>();
+        var subscriber = demandSubscriber(received, failures);
+        controller.conversationEvents("42", null, null, jwt("0"), new MockHttpServletRequest())
+                .map(frame -> frame.id()).subscribe(subscriber);
+        assertTrue(received.isEmpty(), "No downstream demand yet");
+        assertTrue(failures.isEmpty(), failures.toString());
+        verify(subscription, never()).close();
+        for (int i = 1; i <= 128; i++) {
+            subscriber.request(1);
+            assertEquals(i, received.size());
+            assertEquals("conversation:42:" + i, received.get(i - 1));
+        }
+        subscriber.request(1);
+        assertEquals(129, received.size());
+        assertTrue(received.getLast().startsWith("conversation:42:ready:"));
+        assertTrue(failures.isEmpty(), failures.toString());
+        verify(subscription).close();
+    }
+
+    @Test void largeDurableLiveCatchUpAlsoRespectsDemandAndReleasesOnCancel() {
+        when(subscription.flux()).thenReturn(Flux.just("{\"eventSequence\":\"135\"}").concatWith(Flux.never()));
+        when(events.replayEventsThrough("0", "owner", "client", "42", 3, 7, 135, 500))
+                .thenReturn(LongStream.rangeClosed(8, 135)
+                        .mapToObj(i -> event(i, "agent_message", "{}")).toList());
+        var received = new ArrayList<String>();
+        var failures = new ArrayList<Throwable>();
+        var subscriber = demandSubscriber(received, failures);
+        controller.conversationEvents("42", null, "conversation:42:7", jwt("0"), new MockHttpServletRequest())
+                .map(frame -> frame.id()).subscribe(subscriber);
+        subscriber.request(1);
+        assertEquals(1, received.size());
+        assertTrue(received.getFirst().startsWith("conversation:42:ready:"));
+        for (int i = 8; i <= 135; i++) {
+            subscriber.request(1);
+            assertEquals(i - 6, received.size());
+            assertEquals("conversation:42:" + i, received.getLast());
+        }
+        assertTrue(failures.isEmpty(), failures.toString());
+        verify(subscription, never()).close();
+        subscriber.cancel();
+        verify(subscription).close();
+    }
+
+    @Test void largeReplayIsCompletelyEncodedByMvcBeforeReady() throws Exception {
+        when(events.eventHighWatermark("0", "owner", "client", "42", 3)).thenReturn(128L);
+        when(events.replayEventsThrough("0", "owner", "client", "42", 3, 0, 128, 500))
+                .thenReturn(LongStream.rangeClosed(1, 128)
+                        .mapToObj(i -> event(i, "agent_message", "{}")).toList());
+        var data = payloads(read(null));
+        assertEquals(129, data.size());
+        for (int i = 1; i <= 128; i++) {
+            assertEquals(Integer.toString(i), data.get(i - 1).get("eventSequence"));
+        }
+        assertEquals("stream_ready", data.getLast().get("type"));
+        assertEquals("128", data.getLast().get("nextCursor"));
+        verify(subscription).close();
+    }
+
+    @Test void cancellationBeforeReplayDemandClosesLiveSubscription() {
+        var subscriber = demandSubscriber(new ArrayList<>(), new ArrayList<>());
+        controller.conversationEvents("42", null, null, jwt("0"), new MockHttpServletRequest())
+                .map(frame -> frame.id()).subscribe(subscriber);
+        subscriber.cancel();
+        verify(subscription).close();
+    }
+
+    private static BaseSubscriber<String> demandSubscriber(List<String> received, List<Throwable> failures) {
+        return new BaseSubscriber<>() {
+            @Override protected void hookOnSubscribe(Subscription ignored) { /* Wait for explicit demand. */ }
+            @Override protected void hookOnNext(String value) { received.add(value); }
+            @Override protected void hookOnError(Throwable failure) { failures.add(failure); }
+        };
     }
 
     private String read(String cursor) throws Exception {

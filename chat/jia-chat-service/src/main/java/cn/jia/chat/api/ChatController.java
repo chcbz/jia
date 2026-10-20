@@ -729,7 +729,11 @@ public class ChatController {
                     "nextCursor", Long.toString(watermark)))).id(readyId).event(readyType).build();
             Flux<ServerSentEvent<ProtocolMessage<Map<String, Object>>>> stream = Flux.fromIterable(replay).concatWithValues(ready).concatWith(catchUpThenLive)
                     .doFinally(ignored -> liveSubscription.close());
-            return ChatStreamPolicy.firstFrame(ChatStreamPolicy.bounded(stream));
+            // Durable replay/catch-up already honor downstream demand. An eager
+            // onBackpressureBuffer here requests the entire history and overflows
+            // before MVC can drain it. Only the broker's live hint queue is bounded;
+            // missing live hints are recovered from the durable event sequence.
+            return ChatStreamPolicy.firstFrame(stream);
         } catch (RuntimeException failure) {
             liveSubscription.close();
             throw failure;
