@@ -98,14 +98,17 @@ public class DefaultSummaryGenerator implements SummaryGenerator {
             String content = chatModel.call(promptText);
 
             if (!StringUtils.hasText(content)) {
-                return "{}";
+                throw new IllegalStateException("Summary provider returned empty content");
             }
 
-            JsonUtil.jsonToMap(content);
+            Object summary = JsonUtil.jsonToMap(content).get("summary");
+            if (!(summary instanceof String text) || !StringUtils.hasText(text)) {
+                throw new IllegalStateException("Summary provider returned no usable summary");
+            }
             return content;
         } catch (Exception e) {
             log.error("Failed to summarize conversation", e);
-            return createSimpleConversationSummary(messages);
+            throw new IllegalStateException("Memory summary generation failed", e);
         }
     }
 
@@ -122,14 +125,17 @@ public class DefaultSummaryGenerator implements SummaryGenerator {
             String content = chatModel.call(promptText);
 
             if (!StringUtils.hasText(content)) {
-                return "{}";
+                throw new IllegalStateException("Summary provider returned empty content");
             }
 
-            JsonUtil.jsonToMap(content);
+            Object summary = JsonUtil.jsonToMap(content).get("summary");
+            if (!(summary instanceof String text) || !StringUtils.hasText(text)) {
+                throw new IllegalStateException("Summary provider returned no usable summary");
+            }
             return content;
         } catch (Exception e) {
             log.error("Failed to generate daily summary", e);
-            return createSimpleDailySummary(conversationSummaries, jiacn, date);
+            throw new IllegalStateException("Memory summary generation failed", e);
         }
     }
 
@@ -146,14 +152,17 @@ public class DefaultSummaryGenerator implements SummaryGenerator {
             String content = chatModel.call(promptText);
 
             if (!StringUtils.hasText(content)) {
-                return "{}";
+                throw new IllegalStateException("Summary provider returned empty content");
             }
 
-            JsonUtil.jsonToMap(content);
+            Object summary = JsonUtil.jsonToMap(content).get("summary");
+            if (!(summary instanceof String text) || !StringUtils.hasText(text)) {
+                throw new IllegalStateException("Summary provider returned no usable summary");
+            }
             return content;
         } catch (Exception e) {
             log.error("Failed to generate weekly summary", e);
-            return createSimpleWeeklySummary(dailySummaries, jiacn, weekStartDate);
+            throw new IllegalStateException("Memory summary generation failed", e);
         }
     }
 
@@ -170,54 +179,18 @@ public class DefaultSummaryGenerator implements SummaryGenerator {
             String content = chatModel.call(promptText);
 
             if (!StringUtils.hasText(content)) {
-                return "{}";
+                throw new IllegalStateException("Summary provider returned empty content");
             }
 
-            JsonUtil.jsonToMap(content);
+            Object summary = JsonUtil.jsonToMap(content).get("summary");
+            if (!(summary instanceof String text) || !StringUtils.hasText(text)) {
+                throw new IllegalStateException("Summary provider returned no usable summary");
+            }
             return content;
         } catch (Exception e) {
             log.error("Failed to generate monthly summary", e);
-            return createSimpleMonthlySummary(weeklySummaries, jiacn, month);
+            throw new IllegalStateException("Memory summary generation failed", e);
         }
     }
 
-    private String createSimpleConversationSummary(List<ChatMessageEntity> messages) {
-        try {
-            int userCount = (int) messages.stream()
-                    .filter(m -> "USER".equals(m.getMessageType()))
-                    .count();
-            int assistantCount = (int) messages.stream()
-                    .filter(m -> "ASSISTANT".equals(m.getMessageType()))
-                    .count();
-
-            String firstContent = messages.get(0).getContent();
-            String truncated = firstContent.length() > 100
-                    ? firstContent.substring(0, 100) + "..."
-                    : firstContent;
-
-            return String.format(
-                    "{\"summary\":\"对话包含%d条用户消息和%d条AI回复，消息：%s\",\"topic\":\"对话\",\"keyPoints\":[],\"userPreferences\":[],\"categories\":[\"general\"]}",
-                    userCount, assistantCount, truncated);
-        } catch (Exception e) {
-            return "{}";
-        }
-    }
-
-    private String createSimpleDailySummary(List<String> conversationSummaries, String jiacn, String date) {
-        return String.format(
-                "{\"summary\":\"用户%s共进行了%d次对话\",\"categories\":[\"general\"],\"preferences\":[],\"trends\":[]}",
-                date, conversationSummaries.size());
-    }
-
-    private String createSimpleWeeklySummary(List<String> dailySummaries, String jiacn, String weekStartDate) {
-        return String.format(
-                "{\"summary\":\"本周共生成%d条日汇总\",\"categories\":[\"general\"],\"highlights\":[],\"insights\":[]}",
-                dailySummaries.size());
-    }
-
-    private String createSimpleMonthlySummary(List<String> weeklySummaries, String jiacn, String month) {
-        return String.format(
-                "{\"summary\":\"本月共生成%d条周汇总\",\"categories\":[\"general\"],\"trends\":[],\"achievements\":[]}",
-                weeklySummaries.size());
-    }
 }

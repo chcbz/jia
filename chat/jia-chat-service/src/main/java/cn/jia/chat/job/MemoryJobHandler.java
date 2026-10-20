@@ -4,6 +4,8 @@ import cn.jia.chat.service.LongTermMemoryService;
 import cn.jia.core.lock.IDistributedLock;
 import cn.jia.core.lock.ILock;
 import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.beans.factory.annotation.Qualifier;
+import java.util.concurrent.Executor;
 import cn.jia.task.job.JobContext;
 import cn.jia.task.job.JobHandler;
 import lombok.extern.slf4j.Slf4j;
@@ -48,10 +50,22 @@ public class MemoryJobHandler implements JobHandler {
     @Autowired
     private IDistributedLock distributedLock;
 
+    @Autowired
+    @Qualifier("taskExecutor")
+    private Executor taskExecutor;
+
     @Scheduled(cron = "${chat.memory.job.sync-cron:0 0 * * * ?}")
-    public void scheduledSync() throws Exception {
-        execute(JobContext.builder().jobId("memory-sync-" + java.util.UUID.randomUUID())
-                .jobName(JOB_NAME).group(GROUP).triggerTime(System.currentTimeMillis()).build());
+    public void scheduledSync() {
+        // Do not hold the shared scheduler thread while providers and Elasticsearch are working.
+        JobContext context = JobContext.builder().jobId("memory-sync-" + java.util.UUID.randomUUID())
+                .jobName(JOB_NAME).group(GROUP).triggerTime(System.currentTimeMillis()).build();
+        taskExecutor.execute(() -> {
+            try {
+                execute(context);
+            } catch (Exception failure) {
+                log.error("Scheduled memory sync failed; pending snapshots retained", failure);
+            }
+        });
     }
 
     @Override

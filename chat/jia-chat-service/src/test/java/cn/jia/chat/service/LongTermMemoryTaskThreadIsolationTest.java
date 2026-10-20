@@ -182,14 +182,16 @@ class LongTermMemoryTaskThreadIsolationTest extends BaseMockTest {
         LongTermMemoryService sync = mock(LongTermMemoryService.class);
         ReflectionTestUtils.setField(handler, "longTermMemoryService", sync);
         ReflectionTestUtils.setField(handler, "distributedLock", locks);
+        ReflectionTestUtils.setField(handler, "taskExecutor", (java.util.concurrent.Executor) Runnable::run);
         when(locks.tryLock("chat:memory:sync-job", 0)).thenReturn(new ILock("job-lock", locks));
         doThrow(new IllegalStateException("index unavailable")).when(sync).syncPendingConversations();
-        assertThrows(IllegalStateException.class, handler::scheduledSync);
-        verify(locks).unLock("job-lock");
+        handler.scheduledSync();
+        assertThrows(IllegalStateException.class, () -> handler.execute(new cn.jia.task.job.JobContext()));
+        verify(locks, times(2)).unLock("job-lock");
         assertFalse(handler.isParallel());
         assertNotNull(MemoryJobHandler.class.getMethod("scheduledSync").getAnnotation(Scheduled.class));
         when(locks.tryLock("chat:memory:sync-job", 0)).thenReturn(null);
         assertTrue(handler.execute(new cn.jia.task.job.JobContext()).startsWith("SKIPPED:"));
-        verify(sync, times(1)).syncPendingConversations();
+        verify(sync, times(2)).syncPendingConversations();
     }
 }
