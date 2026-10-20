@@ -106,17 +106,24 @@ public class ChatMessageDaoImpl extends BaseDaoImpl<ChatMessageMapper, ChatMessa
     }
 
     @Override
-    public List<String> findPendingConversationIds(String syncStatus, int limit) {
-        LambdaQueryWrapper<ChatMessageEntity> wrapper = new LambdaQueryWrapper<>();
-        wrapper.eq(ChatMessageEntity::getTenantId, SINGLE_TENANT)
-                .eq(ChatMessageEntity::getSyncStatus, syncStatus)
-                .orderByAsc(ChatMessageEntity::getCreateTime)
-                .last("LIMIT " + limit);
-        List<ChatMessageEntity> list = baseMapper.selectList(wrapper);
-        if (list != null && !list.isEmpty()) {
-            return list.stream().map(ChatMessageEntity::getConversationId).distinct().toList();
+    public List<String> findPendingConversationIds(String syncStatus, int limit, long afterId) {
+        requireLimit(limit);
+        if (afterId < 0 || !"PENDING".equals(syncStatus)) {
+            throw new IllegalArgumentException("Invalid memory scan cursor/status");
         }
-        return Collections.emptyList();
+        return baseMapper.findPendingMemoryConversations(syncStatus, limit, afterId);
+    }
+
+    @Override
+    public int markMemorySnapshotSynced(String ownerJiacn, String clientId,
+            String conversationId, List<Long> messageIds) {
+        requireScope(ownerJiacn, clientId);
+        long id = parseConversationId(conversationId);
+        if (messageIds == null || messageIds.isEmpty()
+                || messageIds.stream().anyMatch(value -> value == null || value <= 0)) {
+            throw new IllegalArgumentException("A non-empty persisted message snapshot is required");
+        }
+        return baseMapper.markMemorySnapshotSynced(ownerJiacn, clientId, conversationId, id, messageIds);
     }
 
     @Override

@@ -164,6 +164,34 @@ class JuyitingWorkflowMySqlTest {
         return promotions.create("0","owner","client",id,"task",key,"b".repeat(64),"42",7,1,"新一轮",selections);
     }
 
+    @Test void memoryScanAndSnapshotUpdateRespectExactLiveOwnersOnRealMySql() {
+        jdbc.execute("ALTER TABLE chat_message ADD sync_status VARCHAR(20)");
+        jdbc.update("INSERT INTO chat_conversation(id,tenant_id,jiacn,client_id,lifecycle_generation) VALUES(88,'0','owner','client',0),(99,'0','other','client',0),(100,'0','owner','client',0),(101,'0','owner','client',0)");
+        jdbc.update("UPDATE chat_conversation SET deleted_at=1 WHERE id=100");
+        jdbc.update("INSERT INTO chat_message(id,tenant_id,jiacn,client_id,conversation_id,message_type,sync_status) VALUES(1,'0','owner','client','88','USER','PENDING'),(2,'0','owner','client','88','ASSISTANT','PENDING'),(3,'0','OWNER','client','88','USER','PENDING'),(4,'0','owner','client ','88','USER','PENDING'),(5,'0','owner','client','88 ','USER','PENDING'),(6,'0','other','client','99','USER','PENDING'),(7,'0','owner','client','100','USER','PENDING'),(8,'0','owner','client','101','SYSTEM','PENDING')");
+        var config = new com.baomidou.mybatisplus.core.MybatisConfiguration();
+        config.setEnvironment(new org.apache.ibatis.mapping.Environment("owned-memory-mysql",
+                new org.mybatis.spring.transaction.SpringManagedTransactionFactory(), jdbc.getDataSource()));
+        config.addMapper(cn.jia.chat.mapper.ChatMessageMapper.class);
+        var mapper = new org.mybatis.spring.SqlSessionTemplate(
+                new org.apache.ibatis.session.SqlSessionFactoryBuilder().build(config))
+                .getMapper(cn.jia.chat.mapper.ChatMessageMapper.class);
+        assertEquals(List.of("88"), mapper.findPendingMemoryConversations("PENDING", 1, 0));
+        assertEquals(List.of("99"), mapper.findPendingMemoryConversations("PENDING", 10, 88));
+        assertEquals(List.of(), mapper.findPendingMemoryConversations("PENDING", 10, 99));
+        // The newly appended id=2 and poisoned rows are deliberately absent from the captured snapshot.
+        assertEquals(1, inTransaction(() -> mapper.markMemorySnapshotSynced("owner", "client", "88", 88, List.of(1L, 3L, 4L, 5L))));
+        assertEquals("PENDING", jdbc.queryForObject("SELECT sync_status FROM chat_message WHERE id=2", String.class));
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM chat_message WHERE sync_status='SYNCED'", Integer.class));
+        assertEquals(0, mapper.markMemorySnapshotSynced("other", "client", "88", 88, List.of(2L)));
+        assertEquals(0, mapper.markMemorySnapshotSynced("owner", "client", "100", 100, List.of(7L)));
+        assertThrows(IllegalStateException.class, () -> inTransaction(() -> {
+            assertEquals(1, mapper.markMemorySnapshotSynced("owner", "client", "88", 88, List.of(2L)));
+            throw new IllegalStateException("rollback fixture");
+        }));
+        assertEquals("PENDING", jdbc.queryForObject("SELECT sync_status FROM chat_message WHERE id=2", String.class));
+    }
+
     @Test void freshAndRepeatInitializersUseRealMySqlCheckMetadata() throws Exception {
         initialize(); String before=allDefinitions(); initialize(); assertEquals(before,allDefinitions());
         assertEquals("YES",jdbc.queryForObject("SELECT enforced FROM information_schema.table_constraints WHERE table_schema=DATABASE() AND constraint_name='chk_csofi_source'",String.class));

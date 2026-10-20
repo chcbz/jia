@@ -1,6 +1,15 @@
 package cn.jia.chat.service.impl;
 
 import cn.jia.chat.dao.ChatMessageDao;
+import cn.jia.chat.dao.ChatConversationDao;
+import cn.jia.chat.entity.ChatConversationEntity;
+import cn.jia.core.lock.IDistributedLock;
+import cn.jia.core.lock.ILock;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
+import java.nio.charset.StandardCharsets;
+import java.util.Objects;
+import java.util.UUID;
 import cn.jia.chat.entity.ChatMessageEntity;
 import cn.jia.chat.entity.AgentTaskThreadConstants;
 import cn.jia.chat.memory.MemoryDocument;
@@ -39,6 +48,15 @@ public class LongTermMemoryServiceImpl implements LongTermMemoryService {
     private ChatMessageDao chatMessageDao;
 
     @Autowired
+    private ChatConversationDao chatConversationDao;
+
+    @Autowired
+    private IDistributedLock distributedLock;
+
+    @Autowired
+    private PlatformTransactionManager transactionManager;
+
+    @Autowired
     private SummaryGenerator summaryGenerator;
 
     @Autowired
@@ -73,80 +91,118 @@ public class LongTermMemoryServiceImpl implements LongTermMemoryService {
 
     @Override
     public void syncConversation(String conversationId) {
-        if (!StringUtils.hasText(conversationId)) {
-            log.warn("Skipping sync: conversationId is empty");
-            return;
-        }
-        try {
-            log.info("Starting maintenance sync for conversation: {}", conversationId);
+        long numericId = requireConversationId(conversationId);
+        try (ILock ignored = distributedLock.lock("chat:memory:conversation:" + numericId)) {
             if (taskThreadMemoryGuard.isProtectedConversation(conversationId)) {
                 chatMessageDao.updateSyncStatusByConversationId(
                         conversationId, AgentTaskThreadConstants.MEMORY_SYNC_EXCLUDED);
-                log.info("Excluded task-thread conversation from legacy memory sync: {}", conversationId);
                 return;
             }
-            syncMessages(conversationId,
-                    chatMessageDao.findByConversationIdForMaintenance(conversationId));
-        } catch (Exception e) {
-            log.error("Failed to sync conversation: {}", conversationId, e);
-            throw new RuntimeException("Sync conversation failed: " + conversationId, e);
+            // Parent is the trusted source of identity, never the first message in an unscoped read.
+            ChatConversationEntity parent = chatConversationDao.selectById(numericId);
+            if (parent == null || parent.getDeletedAt() != null || !"0".equals(parent.getTenantId())) {
+                return;
+            }
+            syncOwnedSnapshot(parent.getJiacn(), parent.getClientId(), conversationId);
         }
     }
 
     @Override
-    public void syncOwnedConversation(
-            String ownerJiacn, String clientId, String conversationId) {
-        try {
-            log.info("Starting authenticated sync for conversation: {}", conversationId);
-            syncMessages(conversationId, chatConversationService.findOwnedMessages(
-                    ownerJiacn, clientId, conversationId));
-        } catch (Exception e) {
-            log.error("Failed authenticated sync for conversation: {}", conversationId, e);
-            throw new RuntimeException("Sync conversation failed: " + conversationId, e);
+    public void syncOwnedConversation(String ownerJiacn, String clientId, String conversationId) {
+        long numericId = requireConversationId(conversationId);
+        try (ILock ignored = distributedLock.lock("chat:memory:conversation:" + numericId)) {
+            syncOwnedSnapshot(ownerJiacn, clientId, conversationId);
         }
     }
 
-    private void syncMessages(String conversationId, List<ChatMessageEntity> messages) {
-        if (messages == null || messages.isEmpty()) {
-            log.warn("No messages found for conversation: {}", conversationId);
-            chatMessageDao.updateSyncStatusByConversationId(conversationId, SYNC_STATUS_SYNCED);
+    private void syncOwnedSnapshot(String owner, String client, String conversationId) {
+        ChatConversationEntity parent = chatConversationDao.findScopedById(owner, client, conversationId);
+        if (parent == null || parent.getDeletedAt() != null || !"0".equals(parent.getTenantId())
+                || !Objects.equals(owner, parent.getJiacn()) || !Objects.equals(client, parent.getClientId())
+                || !StringUtils.hasText(owner) || !StringUtils.hasText(client)) {
+            throw new IllegalStateException("Memory source conversation is not live or owned");
+        }
+        if (taskThreadMemoryGuard.isProtectedConversation(conversationId)) {
+            throw new IllegalStateException("Task threads are excluded from account memory");
+        }
+        List<ChatMessageEntity> messages = chatConversationService.findOwnedMessages(owner, client, conversationId);
+        for (ChatMessageEntity message : messages) {
+            if (message == null || message.getId() == null || message.getId() <= 0
+                    || !owner.equals(message.getJiacn()) || !client.equals(message.getClientId())
+                    || !"0".equals(message.getTenantId()) || !conversationId.equals(message.getConversationId())) {
+                throw new IllegalStateException("Memory message snapshot identity mismatch");
+            }
+        }
+        List<ChatMessageEntity> snapshot = messages.stream()
+                .filter(m -> "USER".equals(m.getMessageType()) || "ASSISTANT".equals(m.getMessageType()))
+                .filter(m -> !AgentTaskThreadConstants.MEMORY_SYNC_EXCLUDED.equals(m.getSyncStatus()))
+                .toList();
+        List<Long> pendingIds = snapshot.stream().filter(m -> SYNC_STATUS_PENDING.equals(m.getSyncStatus()))
+                .map(ChatMessageEntity::getId).toList();
+        if (pendingIds.isEmpty()) {
             return;
         }
-        String summary = summaryGenerator.summarizeConversation(messages);
-        String jiacn = messages.getFirst().getJiacn();
         MemoryDocument document = new MemoryDocument();
-        document.setJiacn(jiacn);
+        // One account/client/conversation snapshot overwrites itself on retry after an ES/DB partial failure.
+        String snapshotKey = owner + "\0" + client + "\0" + conversationId + "\0"
+                + snapshot.stream().map(m -> Long.toString(m.getId())).sorted().toList();
+        document.setId("conversation-" + UUID.nameUUIDFromBytes(snapshotKey.getBytes(StandardCharsets.UTF_8)));
+        document.setJiacn(owner);
         document.setConversationId(conversationId);
-        document.setContent(summary);
+        document.setContent(summaryGenerator.summarizeConversation(snapshot));
         document.setSummaryType(SUMMARY_TYPE_CONVERSATION);
         document.setTimestamp(System.currentTimeMillis());
-        memoryRepository.save(document);
-        chatMessageDao.updateSyncStatusByConversationId(conversationId, SYNC_STATUS_SYNCED);
-        log.info("Successfully synced conversation: {}", conversationId);
+        // Both model calls happen outside the database lock/transaction.
+        document.setEmbedding(memoryRepository.generateEmbedding(document.getContent()));
+        new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
+            ChatConversationEntity locked = chatConversationDao.lockScopedById(owner, client, conversationId);
+            if (locked == null || locked.getDeletedAt() != null
+                    || !Objects.equals(parent.getLifecycleGeneration(), locked.getLifecycleGeneration())
+                    || taskThreadMemoryGuard.isProtectedConversation(conversationId)) {
+                throw new IllegalStateException("Memory source changed during summarization");
+            }
+            memoryRepository.savePrepared(document);
+            int updated = chatMessageDao.markMemorySnapshotSynced(owner, client, conversationId, pendingIds);
+            if (updated != pendingIds.size()) {
+                throw new IllegalStateException("Memory snapshot status update was incomplete");
+            }
+        });
+    }
+
+    private long requireConversationId(String value) {
+        long id = Long.parseLong(value);
+        if (id <= 0 || !Long.toString(id).equals(value)) {
+            throw new IllegalArgumentException("Canonical conversationId required");
+        }
+        return id;
     }
 
     @Override
     public void syncPendingConversations() {
-        log.info("Starting sync pending conversations...");
-
-        int totalProcessed = 0;
-        List<String> pendingConversationIds;
-
-        do {
-            pendingConversationIds = chatMessageDao.findPendingConversationIds(SYNC_STATUS_PENDING, batchSize);
-
-            for (String conversationId : pendingConversationIds) {
+        long afterId = 0;
+        boolean failed = false;
+        while (true) {
+            List<String> ids = chatMessageDao.findPendingConversationIds(SYNC_STATUS_PENDING, batchSize, afterId);
+            if (ids.isEmpty()) {
+                break;
+            }
+            for (String id : ids) {
+                long numericId = requireConversationId(id);
+                if (numericId <= afterId) {
+                    throw new IllegalStateException("Memory scan cursor did not advance");
+                }
+                afterId = numericId;
                 try {
-                    syncConversation(conversationId);
-                    totalProcessed++;
-                } catch (Exception e) {
-                    log.error("Failed to sync conversation: {}", conversationId, e);
-                    // 继续处理下一个会话
+                    syncConversation(id);
+                } catch (RuntimeException exception) {
+                    failed = true;
+                    log.error("Memory sync failed; preserving pending snapshot, conversationId={}", id, exception);
                 }
             }
-        } while (!pendingConversationIds.isEmpty());
-
-        log.info("Sync pending conversations completed. Total processed: {}", totalProcessed);
+        }
+        if (failed) {
+            throw new IllegalStateException("Memory sync failed for some conversations; pending snapshots retained");
+        }
     }
 
     @Override
@@ -161,6 +217,7 @@ public class LongTermMemoryServiceImpl implements LongTermMemoryService {
             LocalDate today = LocalDate.now();
             String dateStr = today.toString();
 
+            boolean failed = false;
             for (String jiacn : activeJiacns) {
                 try {
                     // 获取该用户近窗口期的会话摘要
@@ -172,6 +229,8 @@ public class LongTermMemoryServiceImpl implements LongTermMemoryService {
 
                         // 写入向量库
                         MemoryDocument document = new MemoryDocument();
+                        document.setId("daily-" + UUID.nameUUIDFromBytes(
+                                (jiacn + "\0" + dateStr).getBytes(StandardCharsets.UTF_8)));
                         document.setJiacn(jiacn);
                         document.setContent(dailySummary);
                         document.setSummaryType("daily_summary");
@@ -184,14 +243,18 @@ public class LongTermMemoryServiceImpl implements LongTermMemoryService {
                         log.debug("Generated daily summary for user: {}", jiacn);
                     }
                 } catch (Exception e) {
+                    failed = true;
                     log.error("Failed to generate daily summary for user: {}", jiacn, e);
                     // 继续处理下一个用户
                 }
             }
 
+            if (failed) {
+                throw new IllegalStateException("daily memory summary failed for some owners");
+            }
             log.info("Generate daily summary completed. Processed {} users", activeJiacns.size());
         } catch (Exception e) {
-            log.error("Failed to generate daily summary", e);
+            throw new IllegalStateException("Failed to generate daily summary", e);
         }
     }
 
@@ -209,6 +272,7 @@ public class LongTermMemoryServiceImpl implements LongTermMemoryService {
 
             List<String> activeJiacns = chatMessageDao.findActiveJiacns(sinceTime);
 
+            boolean failed = false;
             for (String jiacn : activeJiacns) {
                 try {
                     // 获取该用户近窗口期的日汇总
@@ -220,6 +284,8 @@ public class LongTermMemoryServiceImpl implements LongTermMemoryService {
 
                         // 写入向量库
                         MemoryDocument document = new MemoryDocument();
+                        document.setId("weekly-" + UUID.nameUUIDFromBytes(
+                                (jiacn + "\0" + weekStartStr).getBytes(StandardCharsets.UTF_8)));
                         document.setJiacn(jiacn);
                         document.setContent(weeklySummary);
                         document.setSummaryType("weekly_summary");
@@ -232,13 +298,17 @@ public class LongTermMemoryServiceImpl implements LongTermMemoryService {
                         log.debug("Generated weekly summary for user: {}", jiacn);
                     }
                 } catch (Exception e) {
+                    failed = true;
                     log.error("Failed to generate weekly summary for user: {}", jiacn, e);
                 }
             }
 
+            if (failed) {
+                throw new IllegalStateException("weekly memory summary failed for some owners");
+            }
             log.info("Generate weekly summary completed");
         } catch (Exception e) {
-            log.error("Failed to generate weekly summary", e);
+            throw new IllegalStateException("Failed to generate weekly summary", e);
         }
     }
 
@@ -256,6 +326,7 @@ public class LongTermMemoryServiceImpl implements LongTermMemoryService {
 
             List<String> activeJiacns = chatMessageDao.findActiveJiacns(sinceTime);
 
+            boolean failed = false;
             for (String jiacn : activeJiacns) {
                 try {
                     // 获取该用户近窗口期的周汇总
@@ -267,6 +338,8 @@ public class LongTermMemoryServiceImpl implements LongTermMemoryService {
 
                         // 写入向量库
                         MemoryDocument document = new MemoryDocument();
+                        document.setId("monthly-" + UUID.nameUUIDFromBytes(
+                                (jiacn + "\0" + monthStr).getBytes(StandardCharsets.UTF_8)));
                         document.setJiacn(jiacn);
                         document.setContent(monthlySummary);
                         document.setSummaryType("monthly_summary");
@@ -279,13 +352,17 @@ public class LongTermMemoryServiceImpl implements LongTermMemoryService {
                         log.debug("Generated monthly summary for user: {}", jiacn);
                     }
                 } catch (Exception e) {
+                    failed = true;
                     log.error("Failed to generate monthly summary for user: {}", jiacn, e);
                 }
             }
 
+            if (failed) {
+                throw new IllegalStateException("monthly memory summary failed for some owners");
+            }
             log.info("Generate monthly summary completed");
         } catch (Exception e) {
-            log.error("Failed to generate monthly summary", e);
+            throw new IllegalStateException("Failed to generate monthly summary", e);
         }
     }
 

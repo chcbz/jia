@@ -898,8 +898,8 @@ public class ChatController {
                             topK,
                             threshold));
         } catch (Exception e) {
-            log.warn("Library search failed, return empty results. jiacn={}, keyword={}", jiacn, request.getKeyword(), e);
-            return JsonResult.success(List.of());
+            log.warn("Library search unavailable", e);
+            return JsonResult.failure("LIBRARY_SEARCH_UNAVAILABLE", "案卷检索暂不可用，请稍后重试");
         }
         String sourceType = Optional.ofNullable(request.getSourceType()).orElse("");
         return JsonResult.success(documents.stream()

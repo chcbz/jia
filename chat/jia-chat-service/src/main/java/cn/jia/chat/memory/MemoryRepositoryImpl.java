@@ -37,6 +37,9 @@ public class MemoryRepositoryImpl implements MemoryRepository {
     @Autowired
     private EmbeddingModel embeddingModel;
 
+    @Autowired
+    private cn.jia.chat.service.impl.AgentTaskThreadMemoryGuard taskThreadMemoryGuard;
+
     @Value("${chat.memory.vector-index:chat_memory}")
     private String indexName;
     
@@ -54,17 +57,31 @@ public class MemoryRepositoryImpl implements MemoryRepository {
         if (document == null) {
             return;
         }
-        
+        requireOwner(document.getJiacn());
+        // Public write paths always generate their own vector, ignoring any caller-supplied vector.
+        document.setEmbedding(generateEmbeddingArray(document.getContent()));
+        savePrepared(document);
+    }
+
+    @Override
+    public void savePrepared(MemoryDocument document) {
+        Objects.requireNonNull(document, "document");
+        requireOwner(document.getJiacn());
+        if (!StringUtils.hasText(document.getContent())) {
+            throw new IllegalArgumentException("Memory content must not be blank");
+        }
+        validateEmbedding(document.getEmbedding());
         try {
-            // 生成嵌入向量
-            float[] embedding = generateEmbeddingArray(document.getContent());
-            document.setEmbedding(embedding);
+            if (!StringUtils.hasText(document.getId())) {
+                document.setId(UUID.randomUUID().toString());
+            }
             document.setTimestamp(document.getTimestamp() != null ? document.getTimestamp() : System.currentTimeMillis());
 
             Map<String, Object> docMap = convertToMap(document);
 
             IndexRequest<Map<String, Object>> request = IndexRequest.of(builder -> builder
                     .index(indexName)
+                    .id(document.getId())
                     .document(docMap)
             );
 
@@ -89,6 +106,7 @@ public class MemoryRepositoryImpl implements MemoryRepository {
     @Override
     public List<MemoryDocument> searchWithConversationBoost(String jiacn, String userMessage,
             String currentConversationId, int topK, double similarityThreshold) {
+        requireOwner(jiacn);
         try {
             LocalDate currentDay = LocalDate.now();
             long currentDayStart = currentDay.toEpochDay() * 24 * 60 * 60 * 1000L;
@@ -102,12 +120,8 @@ public class MemoryRepositoryImpl implements MemoryRepository {
             SearchRequest searchRequest = SearchRequest.of(builder -> builder
                 .index(indexName)
                 .size(topK)
-                .query(q -> q
-                    .bool(b -> b
-                        .filter(f -> f.term(t -> t.field("jiacn.keyword").value(jiacn)))
-                    )
-                )
                 .knn(k -> k
+                    .filter(f -> f.term(t -> t.field("jiacn").value(jiacn)))
                     .field("embedding")
                     .queryVector(toFloatList(queryVector))
                     .k(topK)
@@ -120,8 +134,9 @@ public class MemoryRepositoryImpl implements MemoryRepository {
             List<MemoryDocument> results = new ArrayList<>();
             for (Hit<Map> hit : response.hits().hits()) {
                 Map<String, Object> source = hit.source();
-                if (source != null) {
+                if (source != null && jiacn.equals(source.get("jiacn"))) {
                     MemoryDocument doc = convertFromMap(source);
+                    doc.setId(hit.id());
                     doc.setScore(hit.score());
                     
                     // 应用会话权重（需要在客户端处理，因为权重依赖文档字段值）
@@ -159,16 +174,14 @@ public class MemoryRepositoryImpl implements MemoryRepository {
 
     @Override
     public List<MemoryDocument> search(String jiacn, float[] queryVector, int topK) {
+        requireOwner(jiacn);
+        validateEmbedding(queryVector);
         try {
             SearchRequest searchRequest = SearchRequest.of(builder -> builder
                 .index(indexName)
                 .size(topK)
-                .query(q -> q
-                    .bool(b -> b
-                        .filter(f -> f.term(t -> t.field("jiacn.keyword").value(jiacn)))
-                    )
-                )
                 .knn(k -> k
+                    .filter(f -> f.term(t -> t.field("jiacn").value(jiacn)))
                     .field("embedding")
                     .queryVector(toFloatList(queryVector))
                     .k(topK)
@@ -179,9 +192,10 @@ public class MemoryRepositoryImpl implements MemoryRepository {
             SearchResponse<Map> response = elasticsearchClient.search(searchRequest, Map.class);
 
             return response.hits().hits().stream()
-                .filter(hit -> hit.source() != null)
+                .filter(hit -> hit.source() != null && jiacn.equals(hit.source().get("jiacn")))
                 .map(hit -> {
                     MemoryDocument doc = convertFromMap(hit.source());
+                    doc.setId(hit.id());
                     doc.setScore(hit.score());
                     return doc;
                 })
@@ -208,6 +222,7 @@ public class MemoryRepositoryImpl implements MemoryRepository {
     }
 
     private List<String> findSummariesByTypeAndJiacn(String jiacn, String summaryType, long sinceTime) {
+        requireOwner(jiacn);
         try {
             SearchRequest searchRequest = SearchRequest.of(builder -> builder
                 .index(indexName)
@@ -215,8 +230,8 @@ public class MemoryRepositoryImpl implements MemoryRepository {
                 .sort(s -> s.field(f -> f.field("timestamp").order(co.elastic.clients.elasticsearch._types.SortOrder.Desc)))
                 .query(q -> q
                     .bool(b -> b
-                        .must(m -> m.term(t -> t.field("jiacn.keyword").value(jiacn)))
-                        .must(m -> m.term(t -> t.field("summary_type.keyword").value(summaryType)))
+                        .must(m -> m.term(t -> t.field("jiacn").value(jiacn)))
+                        .must(m -> m.term(t -> t.field("summary_type").value(summaryType)))
                         .must(m -> m.range(r -> r.number(n -> n.field("timestamp").gte((double) sinceTime))))
                     )
                 )
@@ -225,13 +240,18 @@ public class MemoryRepositoryImpl implements MemoryRepository {
             SearchResponse<Map> response = elasticsearchClient.search(searchRequest, Map.class);
 
             return response.hits().hits().stream()
-                .filter(hit -> hit.source() != null)
+                .filter(hit -> hit.source() != null
+                        && jiacn.equals(hit.source().get("jiacn"))
+                        && summaryType.equals(hit.source().get("summary_type")))
+                .filter(hit -> !"conversation".equals(summaryType)
+                        || !taskThreadMemoryGuard.isProtectedConversation(
+                                (String) hit.source().get("conversation_id")))
                 .map(hit -> (String) hit.source().get("content"))
                 .filter(Objects::nonNull)
                 .collect(Collectors.toList());
         } catch (Exception e) {
             log.error("Failed to find summaries", e);
-            return Collections.emptyList();
+            throw new IllegalStateException("Memory summaries unavailable", e);
         }
     }
 
@@ -243,7 +263,7 @@ public class MemoryRepositoryImpl implements MemoryRepository {
                 .query(q -> q
                     .bool(b -> b
                         .must(m -> m.range(r -> r.number(n -> n.field("timestamp").lt((double) beforeTime))))
-                        .must(m -> m.term(t -> t.field("summary_type.keyword").value("conversation")))
+                        .must(m -> m.term(t -> t.field("summary_type").value("conversation")))
                     )
                 )
             );
@@ -266,7 +286,7 @@ public class MemoryRepositoryImpl implements MemoryRepository {
                     .terms(t -> t.field("timestamp").size(10000))
                 )
                 .query(q -> q
-                    .term(t -> t.field("summary_type.keyword").value(summaryType))
+                    .term(t -> t.field("summary_type").value(summaryType))
                 )
             );
 
@@ -279,12 +299,13 @@ public class MemoryRepositoryImpl implements MemoryRepository {
 
     @Override
     public long countByJiacn(String jiacn) {
+        requireOwner(jiacn);
         try {
             SearchRequest searchRequest = SearchRequest.of(builder -> builder
                 .index(indexName)
                 .size(0)
                 .query(q -> q
-                    .term(t -> t.field("jiacn.keyword").value(jiacn))
+                    .term(t -> t.field("jiacn").value(jiacn))
                 )
             );
 
@@ -307,44 +328,34 @@ public class MemoryRepositoryImpl implements MemoryRepository {
      */
     private float[] generateEmbeddingArray(String text) {
         if (!StringUtils.hasText(text)) {
-            return new float[0];
+            throw new IllegalArgumentException("Memory content must not be blank");
         }
-        try {
-            // 使用 String 调用 embed 方法
-            float[] embedding = embeddingModel.embed(text);
-            if (embedding.length > 0) {
-                return embedding;
-            }
-        } catch (Exception e) {
-            log.warn("Failed to generate embedding using EmbeddingModel, falling back to hash-based embedding", e);
-        }
-        // 降级方案：使用 hash 作为种子生成伪向量
-        return generateFallbackEmbedding(text);
+        // A failed provider must not produce a successful write with random vectors.
+        float[] embedding = embeddingModel.embed(text);
+        validateEmbedding(embedding);
+        return embedding;
     }
 
-    /**
-     * 降级方案：使用 hash 作为种子生成伪向量
-     */
-    private float[] generateFallbackEmbedding(String text) {
-        int dimension = embeddingDimension;
-        float[] embedding = new float[dimension];
-        int seed = text.hashCode();
-        Random random = new Random(seed);
-        for (int i = 0; i < dimension; i++) {
-            embedding[i] = random.nextFloat() * 2 - 1;  // 生成 [-1, 1] 范围内的值
+    private void requireOwner(String jiacn) {
+        if (!StringUtils.hasText(jiacn)) {
+            throw new IllegalArgumentException("Memory owner is required");
         }
-        // 归一化
-        float norm = 0;
-        for (float v : embedding) {
-            norm += v * v;
+    }
+
+    private void validateEmbedding(float[] embedding) {
+        if (embedding == null || embedding.length != embeddingDimension) {
+            throw new IllegalStateException("Embedding dimension does not match memory index");
         }
-        norm = (float) Math.sqrt(norm);
-        if (norm > 0) {
-            for (int i = 0; i < dimension; i++) {
-                embedding[i] /= norm;
+        double norm = 0;
+        for (float value : embedding) {
+            if (!Float.isFinite(value)) {
+                throw new IllegalStateException("Embedding contains non-finite values");
             }
+            norm += (double) value * value;
         }
-        return embedding;
+        if (norm == 0) {
+            throw new IllegalStateException("Embedding must not be a zero vector");
+        }
     }
 
     private List<Float> toFloatList(float[] floatArray) {

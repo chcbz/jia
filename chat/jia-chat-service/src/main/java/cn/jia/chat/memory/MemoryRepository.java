@@ -19,6 +19,9 @@ public interface MemoryRepository {
      */
     void save(MemoryDocument document);
 
+    /** Internal sync boundary: vector generated before acquiring the parent DB lock. */
+    void savePrepared(MemoryDocument document);
+
     /**
      * 保存记忆文档列表
      *

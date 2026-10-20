@@ -551,7 +551,7 @@ class ChatControllerTest extends BaseMockTest {
     }
 
     @Test
-    void searchLibraryReturnsEmptyResultsWhenMemorySearchFails() throws Exception {
+    void searchLibraryReturnsExplicitFailureWhenMemorySearchFails() throws Exception {
         EsContext context = new EsContext();
         context.setJiacn("tester");
         EsContextHolder.setContext(context);
@@ -563,8 +563,8 @@ class ChatControllerTest extends BaseMockTest {
 
         JsonResult<?> result = invokeSearchLibrary(controller, "宋江");
 
-        assertEquals("E0", result.getCode());
-        assertEquals(List.of(), result.getData());
+        assertEquals("LIBRARY_SEARCH_UNAVAILABLE", result.getCode());
+        assertEquals(null, result.getData());
     }
 
     @Test
