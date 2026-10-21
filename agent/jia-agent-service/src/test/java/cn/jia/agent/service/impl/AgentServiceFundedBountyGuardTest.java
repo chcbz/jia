@@ -98,9 +98,16 @@ class AgentServiceFundedBountyGuardTest {
         @SuppressWarnings("unchecked") ObjectProvider<TaskService> tasks = mock(ObjectProvider.class);
         @SuppressWarnings("unchecked") ObjectProvider<ApiKeyService> keys = mock(ObjectProvider.class);
         @SuppressWarnings("unchecked") ObjectProvider<AgentSceneService> scenes = mock(ObjectProvider.class);
+        var context = new cn.jia.core.context.EsContext();
+        context.setClientId("client-a"); context.setJiacn("owner-a");
+        cn.jia.core.context.EsContextHolder.setContext(context);
+        var taskDao = mock(AgentTaskMetaDao.class);
+        var task = new cn.jia.agent.entity.AgentTaskMetaEntity();
+        task.setTenantId("0"); task.setClientId("client-a"); task.setOwnerJiacn("owner-a"); task.setTaskId("task-1");
+        when(taskDao.findByTaskIdInOwnerScope("0", "client-a", "owner-a", "task-1")).thenReturn(task);
         AgentServiceImpl service = new AgentServiceImpl(mock(AgentRuntimeDao.class),
                 mock(AgentIdentityService.class), mock(AgentPersonaDao.class),
-                mock(AgentPersonaBindingDao.class), mock(AgentTaskMetaDao.class),
+                mock(AgentPersonaBindingDao.class), taskDao,
                 mock(AgentTaskMemberDao.class), legacy, mock(AgentTaskNoteDao.class),
                 mock(DialogueTemplateDao.class), mock(ObjectProvider.class), tasks, keys, scenes,
                 new AgentScopePublicationCoordinator(), new AgentSceneFeatureFlags(false, false),

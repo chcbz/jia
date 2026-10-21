@@ -670,8 +670,7 @@ class PersonalWorkspaceConversationExecutionTest {
         }
         // The production mapper rejects a different data owner unless a persisted grant
         // explicitly binds this executor. This fixture has no grant for foreign-task.
-        when(rows.findForRuntime("0","client","owner","agent","foreign-task","foreign-run"))
-                .thenReturn(null);
+        doReturn(null).when(rows).findForRuntime("0","client","owner","agent","foreign-task","foreign-run");
         execution.setCreatedAt(104L);
         var page=new java.util.ArrayList<>(foreignRows);
         page.add(execution);

@@ -47,6 +47,8 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.clearInvocations;
 
 /** Focused owner/runtime queue contract; database mapper tests retain SQL exactness coverage. */
 class PersonalWorkspaceExecutionServiceImplTest {
@@ -740,6 +742,8 @@ class PersonalWorkspaceExecutionServiceImplTest {
         when(executions.findByTaskRun("0", "client-a", "owner-a", "task-1", "pwe_run_1"))
                 .thenReturn(execution);
 
+        // Separate mapper lookup: do not model authorization by invoking the data DAO.
+        doReturn(execution).when(executions).findForRuntime("0", "client-a", "owner-a", "agent-a", "task-1", "pwe_run_1");
         var receipt = service.start(
                 RUNTIME, "task-1", "pwe_run_1", startCommand(), startMessage());
 
@@ -752,6 +756,9 @@ class PersonalWorkspaceExecutionServiceImplTest {
     @Test
     void nativeStartLocksTaskBeforeExecutionAndTransitionsOnlyTheExactAssignedTask() throws Exception {
         var f = startFixture("assigned");
+        var authorized = executions.findByTaskRun("0", "client-a", "owner-a", "task-1", "pwe_run_1");
+        doReturn(authorized).when(executions).findForRuntime("0", "client-a", "owner-a", "agent-a", "task-1", "pwe_run_1");
+        clearInvocations(executions);
         var receipt = service.start(RUNTIME, "task-1", "pwe_run_1", startCommand(), startMessage());
         assertEquals("STARTED", receipt.state());
         ArgumentCaptor<AgentTaskStateTransitionDTO> change = ArgumentCaptor.forClass(AgentTaskStateTransitionDTO.class);
