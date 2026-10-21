@@ -36,7 +36,8 @@ public class ChatCompletedMessageSourceService {
     public record Resolved(long generation, String targetAgentId, long assignmentRevision,
             AgentSelectedOutputFinalizationService.SourceOutput output) { }
 
-    @Transactional(readOnly=true)
+    // A text result may retain media ancestors; final verification must keep its task/output locks.
+    @Transactional(rollbackFor=Exception.class)
     public Resolved resolve(ChatSelectedOutputFinalizationService.Scope owner, Command command) {
         validate(owner,command);
         try {

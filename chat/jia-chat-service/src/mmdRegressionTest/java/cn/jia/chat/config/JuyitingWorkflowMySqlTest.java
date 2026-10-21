@@ -125,6 +125,62 @@ class JuyitingWorkflowMySqlTest {
             admin.execute("DROP DATABASE `"+database+"`");
         }
     }
+    // Real MySQL + the production method transaction metadata. The DAO seam probes the
+    // same FOR UPDATE requirement used by media-source authorization, not a mocked transaction.
+    private <T> T lockingReadProxy(T target) {
+        var interceptor = new org.springframework.transaction.interceptor.TransactionInterceptor();
+        interceptor.setTransactionManager(app.getBean(DataSourceTransactionManager.class));
+        interceptor.setTransactionAttributeSource(new org.springframework.transaction.annotation.AnnotationTransactionAttributeSource());
+        interceptor.afterPropertiesSet();
+        var factory = new org.springframework.aop.framework.ProxyFactory(target);
+        factory.setProxyTargetClass(true); factory.addAdvice(interceptor);
+        @SuppressWarnings("unchecked") T proxy = (T) factory.getProxy();
+        return proxy;
+    }
+    private void probeMediaRootLock() {
+        assertTrue(org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive());
+        assertEquals(7L, jdbc.queryForObject("SELECT task_version FROM agent_task_meta WHERE tenant_id='0' AND client_id='client' AND owner_jiacn='owner' AND task_id='task' FOR UPDATE", Long.class));
+        assertFalse(org.springframework.transaction.support.TransactionSynchronizationManager.isCurrentTransactionReadOnly());
+        jdbc.update("UPDATE agent_task_meta SET task_version=8 WHERE tenant_id='0' AND client_id='client' AND task_id='task'");
+    }
+    @Test void directFinalReadAndActionDispatchAllowMediaLocksAndRollbackOnFailure() {
+        for (boolean actionDispatch : List.of(false, true)) {
+            var dao = mock(ChatDeliberationDao.class);
+            var marker = new IllegalStateException("owned media lock probe rollback");
+            when(dao.findTurn("0", "owner", "client", "turn")).thenAnswer(call -> {
+                probeMediaRootLock(); throw marker;
+            });
+            var reader = lockingReadProxy(new ChatActionFinalService(mock(ChatTypedDeliberationStore.class), dao,
+                    mock(cn.jia.chat.handler.TypedInspectionSessionRegistry.class)));
+            assertSame(marker, assertThrows(IllegalStateException.class, () -> {
+                if (actionDispatch) reader.loadAction(new ChatDispatchOutboxEntity().setEventType(ChatActionFinalService.ACTION_EVENT)
+                        .setTenantId("0").setOwnerJiacn("owner").setClientId("client").setTurnId("turn"));
+                else reader.readActionIfPresent(new ChatTypedDeliberationStore.Scope("0","owner","client","42",1),"request","turn",1,"CHAT");
+            }));
+            assertEquals(7L, jdbc.queryForObject("SELECT task_version FROM agent_task_meta WHERE task_id='task'", Long.class));
+        }
+    }
+    @Test void mixedTextSourceReaderDoesNotForceMediaAncestorLocksIntoReadOnlyTransaction() {
+        var deliberations = mock(ChatDeliberationService.class);
+        var marker = new IllegalStateException("owned mixed source rollback");
+        when(deliberations.getRequest("0", "owner", "client", "request")).thenAnswer(call -> {
+            probeMediaRootLock(); throw marker;
+        });
+        var reader = lockingReadProxy(new ChatCompletedMessageSourceService(deliberations,
+                mock(ChatTypedDeliberationStore.class), mock(ChatActionFinalService.class), mock(ChatCompletedMessageSourceStore.class)));
+        var command = new ChatCompletedMessageSourceService.Command("task","42",1,"request",
+                new cn.jia.agent.service.SelectedOutputFinalizationDigest.MessageSource("turn","9","snapshot","sha256:"+"a".repeat(64)),
+                "b".repeat(64),"Text","final");
+        assertSame(marker, assertThrows(IllegalStateException.class, () -> reader.resolve(
+                new ChatSelectedOutputFinalizationService.Scope("0","client","owner"), command)));
+        assertEquals(7L, jdbc.queryForObject("SELECT task_version FROM agent_task_meta WHERE task_id='task'", Long.class));
+    }
+    @Test void mysqlReadOnlyTransactionReallyRejectsMediaAuthorizationForUpdate() {
+        var readOnly = new TransactionTemplate(app.getBean(DataSourceTransactionManager.class));
+        readOnly.setReadOnly(true);
+        assertThrows(DataAccessException.class, () -> readOnly.execute(status ->
+                jdbc.queryForObject("SELECT task_version FROM agent_task_meta WHERE task_id='task' FOR UPDATE", Long.class)));
+    }
     private void createSourceTables() {
         jdbc.execute("CREATE TABLE agent_task_meta (tenant_id VARCHAR(50),client_id VARCHAR(50),owner_jiacn VARCHAR(50),task_id VARCHAR(100),reward_status VARCHAR(32),task_version BIGINT,PRIMARY KEY(tenant_id,client_id,task_id)) ENGINE=InnoDB");
         jdbc.update("INSERT INTO agent_task_meta VALUES ('0','client','owner','task','reviewing',7)");

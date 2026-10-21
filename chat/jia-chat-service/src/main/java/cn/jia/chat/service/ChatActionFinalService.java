@@ -184,8 +184,9 @@ public class ChatActionFinalService {
         if (dao.insertOutbox(event) != 1) throw persistence("Unable to persist action event");
     }
 
-    /** Validate the durable event against the actual immutable final, not copied event instructions. */
-    @Transactional(readOnly = true)
+    /** Validate the durable event against the actual immutable final, not copied event instructions.
+     * Retained media validation uses the existing task/output locks, even though no business data is written. */
+    @Transactional(rollbackFor = Exception.class)
     public BoundAction loadAction(ChatDispatchOutboxEntity event) {
         if (event == null || !ACTION_EVENT.equals(event.getEventType())) throw unavailable();
         var turn = dao.findTurn(event.getTenantId(), event.getOwnerJiacn(), event.getClientId(), event.getTurnId());
@@ -245,8 +246,9 @@ public class ChatActionFinalService {
         return bound;
     }
 
-    /** Returns null only for old immutable contracts; no legacy proposal is promoted to an action. */
-    @Transactional(readOnly = true)
+    /** Returns null only for old immutable contracts; no legacy proposal is promoted to an action.
+     * Media lineage verification joins REQUIRED task/output locking; READ ONLY forbids those locks in MySQL. */
+    @Transactional(rollbackFor = Exception.class)
     public Map<String, Object> readActionIfPresent(ChatTypedDeliberationStore.Scope scope, String requestId,
             String turnId, long revision, String expectedRoute) {
         return read(scope, requestId, turnId, revision, expectedRoute, true);
