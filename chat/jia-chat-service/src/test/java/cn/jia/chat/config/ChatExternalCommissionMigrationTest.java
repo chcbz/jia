@@ -17,6 +17,8 @@ class ChatExternalCommissionMigrationTest {
         assertTrue(sql.contains("ADD COLUMN task_grant_id VARCHAR(100)"));
         assertTrue(sql.contains("ADD COLUMN task_grant_version BIGINT DEFAULT NULL"));
         assertTrue(sql.contains("CREATE INDEX idx_chat_outbox_dispatch"));
+        assertTrue(sql.contains("ADD COLUMN task_assignment_revision BIGINT DEFAULT NULL"));
+        assertTrue(sql.contains("ADD COLUMN task_requirement_revision BIGINT DEFAULT NULL"));
         assertTrue(sql.contains("CHAT_HISTORICAL_GRANT_REFERENCE_UNPROVEN"));
         String executable=sql.replaceAll("(?m)--[^\\r\\n]*", "").toUpperCase(java.util.Locale.ROOT);
         assertFalse(executable.contains("UPDATE "));

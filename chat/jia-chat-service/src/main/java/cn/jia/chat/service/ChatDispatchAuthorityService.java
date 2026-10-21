@@ -107,12 +107,20 @@ public class ChatDispatchAuthorityService {
             return new Binding(row,turn,row.getOwnerJiacn());
         if (!(taskId instanceof String task) || task.isBlank() || row.getTaskGrantId()==null
                 || row.getTaskGrantVersion()==null || row.getTaskGrantVersion()<1) throw denied();
-        if (!(payload.get("factsManifest") instanceof Map<?,?> facts)
-                || !(facts.get("taskAuthority") instanceof Map<?,?> frozen)
-                || !Objects.equals(row.getTaskGrantId(),frozen.get("grantId"))
-                || !Objects.equals(Long.toString(row.getTaskGrantVersion()),frozen.get("grantVersion"))
-                || !(frozen.get("assignmentRevision") instanceof String revision)
-                || !revision.matches("0|[1-9][0-9]*")) throw denied();
+        if (row.getTaskAssignmentRevision()==null || row.getTaskAssignmentRevision()<0
+                || row.getTaskRequirementRevision()==null || row.getTaskRequirementRevision()<1) throw denied();
+        long revision=row.getTaskAssignmentRevision();
+        long requirement=row.getTaskRequirementRevision();
+        // New dispatches duplicate this tuple in their context. Historical backfill changes only
+        // these authority columns, proven from immutable admission/bootstrap; never the old hash.
+        if (!(payload.get("factsManifest") instanceof Map<?,?> facts)) throw denied();
+        if (facts.containsKey("taskAuthority")) {
+            if (!(facts.get("taskAuthority") instanceof Map<?,?> frozen)
+                    || !Objects.equals(row.getTaskGrantId(),frozen.get("grantId"))
+                    || !Objects.equals(Long.toString(row.getTaskGrantVersion()),frozen.get("grantVersion"))
+                    || !Objects.equals(Long.toString(revision),frozen.get("assignmentRevision"))
+                    || !Objects.equals(Long.toString(requirement),frozen.get("requirementRevision"))) throw denied();
+        }
         // Validate this original grant, never resolve a current replacement for an old dispatch.
         TaskAssigneeAuthorityService.Target target;
         try {
@@ -121,17 +129,15 @@ public class ChatDispatchAuthorityService {
             if (requireActive) {
                 var scope=new AgentTaskExecutionGrantService.Scope(row.getTenantId(),row.getClientId(),row.getOwnerJiacn());
                 if ("INSPECT".equals(turn.getRoute())) {
-                    grants.admit(scope,task,row.getTaskGrantId(),row.getTaskGrantVersion(),Long.parseLong(revision),
+                    grants.admit(scope,task,row.getTaskGrantId(),row.getTaskGrantVersion(),revision,
                             turn.getTargetAgentId(),"INSPECT_INPUTS",false);
                 } else {
-                    if (!(frozen.get("requirementRevision") instanceof String requirement)
-                            || !requirement.matches("[1-9][0-9]*")) throw denied();
                     // Discussion is not an EXECUTE/DELIBERATE operation. Revalidate the exact saved
                     // baseline under A's root, without requiring a permission absent from skill grants.
                     tasks.executeWithLockedTaskRootInOwnerScope(row.getTenantId(),row.getClientId(),row.getOwnerJiacn(),task,root -> {
                         if (root==null || root.getTaskVersion()==null || "cancelled".equals(root.getRewardStatus())) throw denied();
                         return grants.admitFollowupBaseline(scope,task,row.getTaskGrantId(),row.getTaskGrantVersion(),
-                                root.getTaskVersion(),Long.parseLong(revision),Long.parseLong(requirement),turn.getTargetAgentId());
+                                root.getTaskVersion(),revision,requirement,turn.getTargetAgentId());
                     });
                 }
             }

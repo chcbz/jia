@@ -21,7 +21,8 @@ class ChatDispatchAuthorityServiceTest {
     final ChatDispatchAuthorityService service=new ChatDispatchAuthorityService(mapper,dao,targets,grants,tasks);
     final ChatDispatchOutboxEntity row=new ChatDispatchOutboxEntity().setTenantId("0").setClientId("client")
             .setOwnerJiacn("A").setEventId("event").setDispatchId("dispatch").setTurnId("turn")
-            .setEventType("DISPATCH").setTaskGrantId("grant-original").setTaskGrantVersion(3L);
+            .setEventType("DISPATCH").setTaskGrantId("grant-original").setTaskGrantVersion(3L)
+            .setTaskAssignmentRevision(7L).setTaskRequirementRevision(2L);
     final ChatTurnEntity turn=new ChatTurnEntity().setTenantId("0").setClientId("client").setOwnerJiacn("A")
             .setTurnId("turn").setDispatchId("dispatch").setConversationId("42").setConversationGeneration(2L)
             .setTargetAgentId("agent-B").setRoute("CHAT").setRequestId("request");
@@ -143,6 +144,19 @@ class ChatDispatchAuthorityServiceTest {
         when(mapper.findOriginalGrantForStop("0","client","A","task-A","grant-original"))
                 .thenReturn(new ChatDispatchAuthorityMapper.StopGrant(5L,"REVOKED","agent-B"));
         assertThrows(ChatDeliberationException.class,()->service.outgoing(stop));
+    }
+
+    @Test void provenHistoricalAuthorityDoesNotRewriteOriginalContextOrResolveCurrentGrant() {
+        String original=CanonicalContextJson.write(Map.of("targetAgentId","agent-B","conversationId","42",
+                "conversationScopeType","bounty","taskId","task-A","factsManifest",Map.of("schemaVersion","2")));
+        row.setPayloadJson(original);
+        assertEquals("B",service.incoming("0","client","B","agent-B","dispatch").executorOwner());
+        assertEquals(original,row.getPayloadJson());
+        verify(grants).admitFollowupBaseline(new AgentTaskExecutionGrantService.Scope("0","client","A"),
+                "task-A","grant-original",3,12,7,2,"agent-B");
+        verifyNoMoreInteractions(grants);
+        row.setTaskAssignmentRevision(null);
+        assertThrows(ChatDeliberationException.class,()->service.outgoing(row));
     }
 
 }

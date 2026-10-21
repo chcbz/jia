@@ -123,7 +123,7 @@ public class ChatDeliberationSchemaInitializer implements ApplicationRunner {
         for (var entry : COLUMNS.get(table).entrySet()) {
             if (!actualColumns.containsKey(entry.getKey())) {
                 if ("chat_dispatch_outbox".equals(table)
-                        && ("task_grant_id".equals(entry.getKey()) || "task_grant_version".equals(entry.getKey())))
+                        && List.of("task_grant_id","task_grant_version","task_assignment_revision","task_requirement_revision").contains(entry.getKey()))
                     throw new IllegalStateException("Apply explicit chat-external-commission-v1-migration.sql before startup");
                 String ddl = entry.getValue().ddl();
                 if ("chat_dispatch_outbox".equals(table)
@@ -455,6 +455,7 @@ public class ChatDeliberationSchemaInitializer implements ApplicationRunner {
                 c("owner_jiacn",v(50,false)), c("client_id",v(50,false)), c("turn_id",v(64,false)),
                 c("dispatch_id",v(64,false)), c("event_type",v(30,false)), c("status",v(30,false)),
                 c("task_grant_id",v(100,true)), c("task_grant_version",b(true,null)),
+                c("task_assignment_revision",b(true,null)), c("task_requirement_revision",b(true,null)),
                 c("payload_json",txt("mediumtext",false)), c("version",b(false,"0")),
                 c("available_at",b(true,null)), c("lease_owner",v(100,true)), c("lease_until",b(true,null)),
                 c("attempt_count",i(false,"0")), c("fencing_token",b(false,"0")), c("last_error",v(500,true)),

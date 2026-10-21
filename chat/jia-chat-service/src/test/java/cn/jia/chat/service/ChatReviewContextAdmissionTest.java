@@ -57,6 +57,8 @@ class ChatReviewContextAdmissionTest {
         order.verify(dao).insertOutbox(outbox.capture());
         assertEquals("grant",outbox.getValue().getTaskGrantId());
         assertEquals(1L,outbox.getValue().getTaskGrantVersion());
+        assertEquals(7L,outbox.getValue().getTaskAssignmentRevision());
+        assertEquals(2L,outbox.getValue().getTaskRequirementRevision());
         var frozen=ChatDeliveryRevisionContractTest.JSON.readTree(snapshot.getValue().getFactsManifestJson()).get("taskAuthority");
         assertEquals("grant",frozen.get("grantId").asText());
         assertEquals("1",frozen.get("grantVersion").asText());

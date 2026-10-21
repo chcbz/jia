@@ -85,6 +85,8 @@ CREATE TABLE IF NOT EXISTS chat_dispatch_outbox (
   event_type VARCHAR(30) NOT NULL,
   task_grant_id VARCHAR(100) DEFAULT NULL,
   task_grant_version BIGINT DEFAULT NULL,
+  task_assignment_revision BIGINT DEFAULT NULL,
+  task_requirement_revision BIGINT DEFAULT NULL,
   status VARCHAR(30) NOT NULL,
   payload_json MEDIUMTEXT NOT NULL,
   version BIGINT NOT NULL DEFAULT 0,

@@ -461,7 +461,8 @@ public class ChatDeliberationService {
                     .setStatus("READY").setPayloadJson(CanonicalContextJson.write(eventPayload))
                     .setVersion(0L).setAvailableAt(now).setAttemptCount(0).setFencingToken(0L)
                     .setCreatedAt(now).setUpdatedAt(now);
-            if (taskGrant != null) outbox.setTaskGrantId(taskGrant.grantId()).setTaskGrantVersion(taskGrant.grantVersion());
+            if (taskGrant != null) outbox.setTaskGrantId(taskGrant.grantId()).setTaskGrantVersion(taskGrant.grantVersion())
+                    .setTaskAssignmentRevision(taskGrant.assignmentRevision()).setTaskRequirementRevision(taskGrant.requirementRevision());
             if (dao.insertSnapshot(snapshot) != 1 || dao.insertTurn(turn) != 1 || dao.insertOutbox(outbox) != 1) {
                 throw persistence("Unable to persist chat turn admission");
             }

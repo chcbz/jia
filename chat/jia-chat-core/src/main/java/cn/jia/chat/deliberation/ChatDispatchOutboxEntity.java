@@ -20,6 +20,8 @@ public class ChatDispatchOutboxEntity {
     private String eventType;
     private String taskGrantId;
     private Long taskGrantVersion;
+    private Long taskAssignmentRevision;
+    private Long taskRequirementRevision;
     private String status;
     private String payloadJson;
     private Long version;
