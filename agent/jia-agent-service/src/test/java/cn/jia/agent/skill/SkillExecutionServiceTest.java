@@ -46,6 +46,7 @@ public class SkillExecutionServiceTest {
         var runtimes=mock(AgentRuntimeDao.class);var agent=new AgentRuntimeEntity().setAgentId("agent").setOwnerJiacn("owner");agent.setTenantId("0");agent.setClientId("client");
         when(runtimes.findCandidateRosterByOwner("client","owner")).thenReturn(List.of(agent));
         service=new PersonalWorkspaceExecutionServiceImpl(pwe,mock(PersonalWorkspaceDao.class),mock(PersonalWorkspaceTaskLinkDao.class),runtimes,storage,mock(PersonalWorkspaceWriteService.class),new PersonalWorkspaceExecutionProperties(List.of("image/png","text/plain")));
+        wireAssigneeFixture(service,pwe);
         service.setSkillExecutionDependencies(attachments,installed,capabilities,policy);
         var root=new AgentTaskMetaEntity().setTaskId("task").setAssignedAgentId("agent").setTaskVersion(7L).setOwnerJiacn("owner");root.setTenantId("0");root.setClientId("client");
         var transactions=mock(AgentTaskMutationTransaction.class);
@@ -87,6 +88,41 @@ public class SkillExecutionServiceTest {
     SkillExecutionService.EffectStart start(){return new SkillExecutionService.EffectStart("exec",skill.getSnapshotSha256(),fence,HASH,null);}
     SkillExecutionService.EffectResult effect(String status,String id,String result){return new SkillExecutionService.EffectResult("exec",skill.getSnapshotSha256(),fence,HASH,null,status,id,result);}
     SkillExecutionService.ResultCommit dataResult(){return new SkillExecutionService.ResultCommit(fence,skill.getSnapshotSha256(),Map.of("answer","识别结果"),List.of(),List.of());}
+    @Test void delegatedRuntimeUsesProviderIdentityAndTaskOwnersDataThroughResultCommit() throws Exception {
+        var provider = new RuntimeScope("0", "client", "provider", "agent", "runtime");
+        var principal = org.springframework.beans.BeanUtils.instantiateClass(
+                AgentRuntimeAuthentication.class.getDeclaredConstructor(AgentRuntimeAuthentication.Scope.class),
+                new AgentRuntimeAuthentication.Scope("0", "client", "provider", "agent", "runtime"));
+        principal.setDetails(new AgentRuntimeAuthenticationService.Proof(principal.getPrincipal(),
+                "rti_"+"1".repeat(32), "host", 2, "b".repeat(64), 8, 2));
+        SecurityContextHolder.getContext().setAuthentication(principal);
+        var assignees = mock(TaskAssigneeAuthorityService.class);
+        var target = new TaskAssigneeAuthorityService.Target("0", "client", "provider", "agent", 2, 1L);
+        when(assignees.resolveForAssignment("0", "client", "owner", "agent")).thenReturn(target);
+        when(assignees.requireGrantTarget("0", "client", "owner", "task", "grant", 1)).thenReturn(target);
+        service.setAssigneeAuthority(assignees);
+        when(pwe.findForRuntime("0", "client", "provider", "agent", "task", "run")).thenReturn(execution);
+        var session = new AgentManagedSessionLookup.SessionFence("rti_"+"1".repeat(32), "host", "runtime", 2);
+        var providerCatalog = new SkillCapabilityLookup.Scope("0", "client", "provider", "agent");
+        when(policy.read(any(), eq("task"))).thenReturn(new TaskSkillPolicyService.Snapshot(true, null, 7, session, providerCatalog));
+        assertEquals("NEW", service.startEffect(provider, "task", "run", "generate", start()).disposition());
+        service.recordEffect(provider, "task", "run", "generate", effect("SUCCEEDED", "request", HASH));
+        var receipt = service.commitResult(provider, "task", "run", "manifest", dataResult());
+        assertEquals("RESULT_COMMITTED", receipt.state());
+        assertEquals("owner", execution.getOwnerJiacn());
+        assertEquals("owner", skill.getOwnerJiacn());
+        verify(installed, atLeastOnce()).read(providerCatalog);
+        verify(capabilities, atLeastOnce()).lookup(providerCatalog, session);
+        verify(capabilities, never()).lookup(new SkillCapabilityLookup.Scope("0", "client", "owner", "agent"), session);
+        verify(attachments, never()).lock("0", "client", "provider", "exec");
+        verify(assignees, atLeastOnce()).requireGrantTarget("0", "client", "owner", "task", "grant", 1);
+        // The task owner cannot impersonate the provider even though it owns the task data.
+        assertThrows(Failure.class, () -> service.resume(runtime, "task", "run",
+                new SkillExecutionService.Resume("exec", skill.getSnapshotSha256())));
+        assertThrows(Failure.class, () -> service.resume(new RuntimeScope("0", "foreign", "provider", "agent", "runtime"),
+                "task", "run", new SkillExecutionService.Resume("exec", skill.getSnapshotSha256())));
+    }
+
     @Test void effectIsNewOnceAndReplayDoesNotRecheckProviderOrInstallation() {
         assertEquals("NEW",service.startEffect(runtime,"task","run","generate",start()).disposition());
         clearInvocations(installed);assertEquals("RECORDED",service.startEffect(runtime,"task","run","generate",start()).disposition());verifyNoInteractions(installed);
@@ -174,5 +210,19 @@ public class SkillExecutionServiceTest {
         var input=new LinkedHashMap<String,Object>();input.put("inputRef","source");input.put("sourceKind","TASK_LINKED_WORKSPACE_VERSION");input.put("sha256",HASH);input.put("byteLength",1);input.put("contentMimeType","image/png");input.put("sourceIdentity",Map.of("fileId","file","version",1,"purpose","REFERENCE"));
         var snap=snapshot();snap.put("inputs",List.of(input));snap.put("sourceSnapshotDigest",sha(json(List.of(input))));skill.setSnapshotJson(json(snap)).setSnapshotSha256(sha(json(snap)));
         assertThrows(Failure.class,()->service.commitResult(runtime,"task","run","manifest",new SkillExecutionService.ResultCommit(fence,skill.getSnapshotSha256(),Map.of("answer","bird"),List.of(),List.of(new SkillExecutionService.InputReceipt("source",HASH,"local-file","DELIVERED")))));
+    }
+
+    /** Existing fixture has one authenticated owner. Cross-owner fixtures supply explicit grant authority separately. */
+    private static void wireAssigneeFixture(cn.jia.agent.service.PersonalWorkspaceExecutionService instance,
+            cn.jia.agent.dao.PersonalWorkspaceExecutionDao rows) {
+        var service=(cn.jia.agent.service.impl.PersonalWorkspaceExecutionServiceImpl)instance;
+        var authority=org.mockito.Mockito.mock(cn.jia.agent.service.TaskAssigneeAuthorityService.class);
+        org.mockito.Mockito.when(authority.resolveForAssignment(org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString()))
+            .thenAnswer(i->new cn.jia.agent.service.TaskAssigneeAuthorityService.Target(i.getArgument(0),i.getArgument(1),i.getArgument(2),i.getArgument(3),1L,null));
+        org.mockito.Mockito.when(authority.requireGrantTarget(org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyLong()))
+            .thenAnswer(i->new cn.jia.agent.service.TaskAssigneeAuthorityService.Target(i.getArgument(0),i.getArgument(1),i.getArgument(2),"agent",1L,null));
+        service.setAssigneeAuthority(authority);
+        org.mockito.Mockito.when(rows.findForRuntime(org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString()))
+            .thenAnswer(i->rows.findByTaskRun(i.getArgument(0),i.getArgument(1),i.getArgument(2),i.getArgument(4),i.getArgument(5)));
     }
 }

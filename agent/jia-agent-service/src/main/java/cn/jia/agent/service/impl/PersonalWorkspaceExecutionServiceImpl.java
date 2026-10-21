@@ -162,7 +162,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         var authentication=SecurityContextHolder.getContext().getAuthentication();
         if (!(authentication instanceof AgentRuntimeAuthentication) || runtimeAuthentication==null)
             throw failure(Reason.NOT_FOUND);
-        var expected=new AgentRuntimeAuthentication.Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),
+        var expected=new AgentRuntimeAuthentication.Scope(scope.tenantId(),scope.clientId(),scope.executorOwnerJiacn(),
                 scope.agentId(),scope.runtimeInstanceId());
         if (!expected.equals(AgentRuntimeAuthenticationService.requireProof(authentication).scope()))
             throw failure(Reason.NOT_FOUND);
@@ -377,10 +377,11 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                             requireConversationGrant(scope,prior,"NEW_EXECUTION",null);
                         return view(scope,prior);
                     }
-                    requireOwnedTarget(scope,valid.targetAgentId());
+                    var target=assigneeAuthority.requireGrantTarget(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),
+                            valid.taskId(),command.grantId(),command.grantVersion());
                     if (textFile && (textFiles == null || !textFiles.ready(
                             new cn.jia.agent.service.NativeTextFileRuntimeLookup.Scope(scope.tenantId(),scope.clientId(),
-                                    scope.ownerJiacn(),valid.targetAgentId())))) throw failure(Reason.CAPABILITY_UNAVAILABLE);
+                                    target.ownerJiacn(),valid.targetAgentId())))) throw failure(Reason.CAPABILITY_UNAVAILABLE);
                     try {
                         var conversation=conversationAccess.requireAccessible(
                                 new WorkspaceConversationAccessService.Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn()),
@@ -907,8 +908,9 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     }
 
     @Override
-    public RuntimeStartView start(RuntimeScope scope, String taskId, String runId,
+    public RuntimeStartView start(RuntimeScope authenticatedScope, String taskId, String runId,
             String commandId, String messageId) {
+        final RuntimeScope scope=executionScope(authenticatedScope,taskId,runId);
         // Keep this lookup outside a method-level transaction. TASK start must let the canonical
         // task-root mutation own the complete root -> execution -> state/event transaction.
         PersonalWorkspaceExecutionEntity candidate = runtimeExecution(scope, taskId, runId, false);
@@ -980,14 +982,14 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                         || !"QUEUED".equals(candidate.getExecutionState())
                         || !same(candidate.getTenantId(),scope.tenantId())
                         || !same(candidate.getClientId(),scope.clientId())
-                        || !same(candidate.getOwnerJiacn(),scope.ownerJiacn())
                         || !same(candidate.getTargetAgentId(),scope.agentId())) continue;
                 try {
                     // Materialize immutable package metadata before acquiring the task lock. The
                     // locked skillCommand repeats authority/fence checks; this read is not a grant.
+                    final RuntimeScope taskScope=executionScope(scope,candidate.getTaskId(),candidate.getRunId());
                     if(Objects.equals(4,candidate.getExecutionProtocolVersion()))
-                        prepareSkillCatalog(skillOwner(scope),scope.agentId());
-                    result.add(withConversationRoot(scope,candidate.getTaskId(),candidate.getRunId(),false,
+                        prepareSkillCatalog(skillOwner(taskScope),scope.agentId());
+                    result.add(withConversationRoot(taskScope,candidate.getTaskId(),candidate.getRunId(),false,
                             execution -> {
                                 if (!same(candidate.getExecutionId(),execution.getExecutionId()))
                                     throw failure(Reason.NOT_FOUND);
@@ -1034,15 +1036,15 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                         || !"QUEUED".equals(candidate.getExecutionState())
                         || !same(candidate.getTenantId(),scope.tenantId())
                         || !same(candidate.getClientId(),scope.clientId())
-                        || !same(candidate.getOwnerJiacn(),scope.ownerJiacn())
                         || !same(candidate.getTargetAgentId(),scope.agentId())) continue;
                 try {
                     // Materialize immutable package metadata before acquiring the task lock. The
                     // locked skillCommand repeats authority/fence checks; this read is not a grant.
+                    final RuntimeScope taskScope=executionScope(scope,candidate.getTaskId(),candidate.getRunId());
                     if(Objects.equals(4,candidate.getExecutionProtocolVersion()))
-                        prepareSkillCatalog(skillOwner(scope),scope.agentId());
-                    result.add(withConversationRoot(scope,candidate.getTaskId(),candidate.getRunId(),false,
-                            execution -> commandView(scope,candidate,execution)));
+                        prepareSkillCatalog(skillOwner(taskScope),scope.agentId());
+                    result.add(withConversationRoot(taskScope,candidate.getTaskId(),candidate.getRunId(),false,
+                            execution -> commandView(taskScope,candidate,execution)));
                 } catch (Failure stale) {
                     if (stale.getReason()!=Reason.NOT_FOUND && stale.getReason()!=Reason.GRANT_REVOKED
                             && stale.getReason()!=Reason.TASK_CONFLICT) throw stale;
@@ -1166,7 +1168,8 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
 
     @Override
     @Transactional(rollbackFor=Exception.class)
-    public ConversationInputSnapshotV3 conversationInputsV3(RuntimeScope scope,String taskId,String runId,ConversationFence fence){
+    public ConversationInputSnapshotV3 conversationInputsV3(RuntimeScope authenticatedScope,String taskId,String runId,ConversationFence fence){
+        final RuntimeScope scope=executionScope(authenticatedScope,taskId,runId);
         requireConversationExecutionEnabled();if(followupAuthority==null||followupSources==null)throw failure(Reason.CAPABILITY_UNAVAILABLE);
         return withConversationRoot(scope,taskId,runId,true,execution->{requireConversationFence(scope,execution,fence,false);if(!Objects.equals(3,execution.getExecutionProtocolVersion()))throw failure(Reason.NOT_FOUND);
             var authority=followupAuthority.runtimeAuthority(new ControlledImageFollowupAuthorityService.RuntimeScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),scope.agentId(),scope.runtimeInstanceId()),taskId,runId,v3ReadPurpose(execution));
@@ -1177,7 +1180,8 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     }
 
     @Override
-    public ControlledProviderStartReceiptV3 beginControlledConversationProviderStartV3(RuntimeScope scope,String taskId,String runId,ControlledProviderStartV3 command){
+    public ControlledProviderStartReceiptV3 beginControlledConversationProviderStartV3(RuntimeScope authenticatedScope,String taskId,String runId,ControlledProviderStartV3 command){
+        final RuntimeScope scope=executionScope(authenticatedScope,taskId,runId);
         requireConversationExecutionEnabled();validateRuntimeScope(scope);if(followupAuthority==null||command==null||command.schemaVersion()!=3||command.fence()==null||command.providerExecution()==null)throw failure(Reason.BAD_REQUEST);
         var candidate=runtimeExecution(scope,taskId,runId,false);if(!Objects.equals(3,candidate.getExecutionProtocolVersion())||!same(candidate.getExecutionId(),command.executionId()))throw failure(Reason.NOT_FOUND);requireStartCommand(candidate,command.commandId(),command.messageId());
         // Private storage may perform external I/O. Validate the immutable, content-addressed bytes
@@ -1291,8 +1295,9 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     /** Root -> grant -> execution FOR UPDATE; one native claim per unexpired lease. No provider calls. */
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public ConversationLease claimConversationStart(RuntimeScope scope, String taskId, String runId,
+    public ConversationLease claimConversationStart(RuntimeScope authenticatedScope, String taskId, String runId,
             String commandId, String messageId) {
+        final RuntimeScope scope=executionScope(authenticatedScope,taskId,runId);
         requireConversationExecutionEnabled();
         var candidate=runtimeExecution(scope,taskId,runId,false);
         if (!"CONVERSATION".equals(candidate.getExecutionMode())) throw failure(Reason.NOT_FOUND);
@@ -1328,8 +1333,9 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public ConversationLease renewConversationLease(RuntimeScope scope, String taskId, String runId,
+    public ConversationLease renewConversationLease(RuntimeScope authenticatedScope, String taskId, String runId,
             ConversationFence fence) {
+        final RuntimeScope scope=executionScope(authenticatedScope,taskId,runId);
         requireConversationExecutionEnabled();
         return withConversationRoot(scope,taskId,runId,true,execution -> {
             requireConversationFence(scope,execution,fence,false);
@@ -1343,8 +1349,9 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
      * is outcome-unknown: neither the same lease nor a fresh runtime may pay twice. */
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public void beginConversationProviderStart(RuntimeScope scope, String taskId, String runId,
+    public void beginConversationProviderStart(RuntimeScope authenticatedScope, String taskId, String runId,
             ConversationFence fence) {
+        final RuntimeScope scope=executionScope(authenticatedScope,taskId,runId);
         requireConversationExecutionEnabled();
         withConversationRoot(scope,taskId,runId,true,execution -> {
             requireConversationFence(scope,execution,fence,false);
@@ -1361,8 +1368,9 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     }
 
     @Override
-    public ControlledProviderStartReceipt beginControlledConversationProviderStart(RuntimeScope scope,
+    public ControlledProviderStartReceipt beginControlledConversationProviderStart(RuntimeScope authenticatedScope,
             String taskId,String runId,ControlledProviderStart command) {
+        final RuntimeScope scope=executionScope(authenticatedScope,taskId,runId);
         requireConversationExecutionEnabled();validateRuntimeScope(scope);id(taskId,"taskId",100);id(runId,"runId",100);
         if(command==null||command.schemaVersion()!=2||command.providerExecution()==null||command.fence()==null
                 ||!safeId(command.executionId(),100)||!safeId(command.commandId(),100)||!safeId(command.messageId(),100))
@@ -1558,8 +1566,9 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     /** The no-reference fact comes from persisted execution inputs, never inbox/model text. */
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public ConversationInputSnapshot conversationInputs(RuntimeScope scope, String taskId, String runId,
+    public ConversationInputSnapshot conversationInputs(RuntimeScope authenticatedScope, String taskId, String runId,
             ConversationFence fence) {
+        final RuntimeScope scope=executionScope(authenticatedScope,taskId,runId);
         requireConversationExecutionEnabled();
         return withConversationRoot(scope, taskId, runId, true, execution -> {
             requireConversationFence(scope, execution, fence, false);
@@ -1572,8 +1581,9 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     }
 
     @Override
-    public RuntimeContent conversationInputContent(RuntimeScope scope, String taskId, String runId,
+    public RuntimeContent conversationInputContent(RuntimeScope authenticatedScope, String taskId, String runId,
             ConversationFence fence, String inputRef) {
+        final RuntimeScope scope=executionScope(authenticatedScope,taskId,runId);
         requireConversationExecutionEnabled();id(inputRef,"inputRef",100);
         if(Objects.equals(4,runtimeExecution(scope,taskId,runId,false).getExecutionProtocolVersion()))return inputContent(scope,taskId,runId,inputRef,fence);
         return withConversationRoot(scope,taskId,runId,true,execution -> {
@@ -1597,8 +1607,9 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     }
 
     @Override
-    public StagedOutput stageConversationOutput(RuntimeScope scope, String taskId, String runId,
+    public StagedOutput stageConversationOutput(RuntimeScope authenticatedScope, String taskId, String runId,
             ConversationFence fence, String outputId, String filename, String mimeType, byte[] content) {
+        final RuntimeScope scope=executionScope(authenticatedScope,taskId,runId);
         requireConversationExecutionEnabled(); nativeAuthentication(scope);
         byte[] immutable=content==null?null:content.clone();
         // Original root/ACL/consumed START and lease are checked before storage, and again
@@ -1627,8 +1638,9 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     }
 
     @Override
-    public CommitView commitConversationOutput(RuntimeScope scope, String taskId, String runId,
+    public CommitView commitConversationOutput(RuntimeScope authenticatedScope, String taskId, String runId,
             ConversationFence fence, String manifestId, List<OutputDeclaration> outputs) {
+        final RuntimeScope scope=executionScope(authenticatedScope,taskId,runId);
         requireConversationExecutionEnabled();id(manifestId,"manifestId",100);validateManifest(outputs);
         if(Objects.equals(4,runtimeExecution(scope,taskId,runId,false,true).getExecutionProtocolVersion()))throw failure(Reason.NOT_FOUND);
         nativeAuthentication(scope); var immutable=List.copyOf(outputs);
@@ -1650,15 +1662,17 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
 
     /** Existing immutable server bytes only: no expired START fence is renewed or reused. */
     @Override
-    public CommitView recoverStagedConversationOutput(RuntimeScope scope, String taskId, String runId,
+    public CommitView recoverStagedConversationOutput(RuntimeScope authenticatedScope, String taskId, String runId,
             String manifestId, ConversationResultRecovery command) {
+        final RuntimeScope scope=executionScope(authenticatedScope,taskId,runId);
         return recoverConversationResult(scope,taskId,runId,manifestId,command,null,null,null);
     }
 
     @Override
-    public CommitView recoverConversationOutput(RuntimeScope scope, String taskId, String runId,
+    public CommitView recoverConversationOutput(RuntimeScope authenticatedScope, String taskId, String runId,
             String manifestId, ConversationResultRecovery command, String filename,
             String contentMimeType, byte[] content) {
+        final RuntimeScope scope=executionScope(authenticatedScope,taskId,runId);
         if (content==null || content.length==0) throw failure(Reason.BAD_REQUEST);
         return recoverConversationResult(scope,taskId,runId,manifestId,command,filename,contentMimeType,content.clone());
     }
@@ -1799,8 +1813,9 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public ExecutionView failConversation(RuntimeScope scope, String taskId, String runId,
+    public ExecutionView failConversation(RuntimeScope authenticatedScope, String taskId, String runId,
             ConversationFence fence, String code) {
+        final RuntimeScope scope=executionScope(authenticatedScope,taskId,runId);
         requireConversationExecutionEnabled();runtimeFailureCode(code);
         return withConversationRoot(scope,taskId,runId,true,false,true,"FAILURE",execution -> {
             requireConversationFence(scope,execution,fence,"FAILED".equals(execution.getExecutionState()));
@@ -1845,7 +1860,8 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public List<RuntimeInput> runtimeInputs(RuntimeScope scope, String taskId, String runId) {
+    public List<RuntimeInput> runtimeInputs(RuntimeScope authenticatedScope, String taskId, String runId) {
+        final RuntimeScope scope=executionScope(authenticatedScope,taskId,runId);
         PersonalWorkspaceExecutionEntity candidate = runtimeExecution(scope, taskId, runId, false);
         if ("CONVERSATION".equals(candidate.getExecutionMode())) throw failure(Reason.CAPABILITY_UNAVAILABLE);
         return runtimeInputs(new OwnerScope(scope.tenantId(), scope.clientId(), scope.ownerJiacn()), candidate.getExecutionId());
@@ -1876,7 +1892,8 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public RuntimeContent runtimeInputContent(RuntimeScope scope, String taskId, String runId, String inputRef) {
+    public RuntimeContent runtimeInputContent(RuntimeScope authenticatedScope, String taskId, String runId, String inputRef) {
+        final RuntimeScope scope=executionScope(authenticatedScope,taskId,runId);
         PersonalWorkspaceExecutionEntity candidate=runtimeExecution(scope,taskId,runId,false);
         if ("CONVERSATION".equals(candidate.getExecutionMode())) throw failure(Reason.CAPABILITY_UNAVAILABLE);
         return inputContent(scope,runtimeExecution(scope,taskId,runId,true),inputRef);
@@ -1896,8 +1913,9 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     }
 
     @Override
-    public StagedOutput stageOutput(RuntimeScope scope, String taskId, String runId, String outputId,
+    public StagedOutput stageOutput(RuntimeScope authenticatedScope, String taskId, String runId, String outputId,
             String originalFilename, String contentMimeType, byte[] content) {
+        final RuntimeScope scope=executionScope(authenticatedScope,taskId,runId);
         var candidate=runtimeExecution(scope,taskId,runId,false);
         if ("CONVERSATION".equals(candidate.getExecutionMode())) throw failure(Reason.CAPABILITY_UNAVAILABLE);
         byte[] immutable=content==null?null:content.clone();
@@ -1986,8 +2004,9 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     }
 
     @Override
-    public CommitView commitOutputs(RuntimeScope scope, String taskId, String runId, String manifestId,
+    public CommitView commitOutputs(RuntimeScope authenticatedScope, String taskId, String runId, String manifestId,
             List<OutputDeclaration> declarations) {
+        final RuntimeScope scope=executionScope(authenticatedScope,taskId,runId);
         validateRuntimeScope(scope); id(taskId, "taskId", 100); id(runId, "runId", 100);
         id(manifestId, "manifestId", 100); validateManifest(declarations);
         // Read only enough to choose the lock hierarchy. TASK publication always starts from the
@@ -2359,7 +2378,8 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public ExecutionView fail(RuntimeScope scope, String taskId, String runId, String code) {
+    public ExecutionView fail(RuntimeScope authenticatedScope, String taskId, String runId, String code) {
+        final RuntimeScope scope=executionScope(authenticatedScope,taskId,runId);
         runtimeFailureCode(code); validateRuntimeScope(scope); id(taskId, "taskId", 100); id(runId, "runId", 100);
         // Do not take an execution lock before releasing the authoritative task-root lease.
         PersonalWorkspaceExecutionEntity candidate = executions.findByTaskRun(scope.tenantId(), scope.clientId(),
@@ -2391,6 +2411,31 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                 .setFailureMessage(RUNTIME_FAILURE_MESSAGE).setFailedAt(System.currentTimeMillis());
         executions.update(execution);
         return view(new OwnerScope(scope.tenantId(), scope.clientId(), scope.ownerJiacn()), execution);
+    }
+
+    private cn.jia.agent.service.TaskAssigneeAuthorityService assigneeAuthority;
+    @Autowired public void setAssigneeAuthority(cn.jia.agent.service.TaskAssigneeAuthorityService authority) {
+        this.assigneeAuthority=Objects.requireNonNull(authority);
+    }
+    private RuntimeScope executionScope(RuntimeScope authenticated,String taskId,String runId) {
+        validateRuntimeScope(authenticated);
+        var candidate=executions.findForRuntime(authenticated.tenantId(),authenticated.clientId(),
+                authenticated.executorOwnerJiacn(),authenticated.agentId(),taskId,runId);
+        if(candidate==null) throw failure(Reason.NOT_FOUND);
+        if("CONVERSATION".equals(candidate.getExecutionMode())) {
+            if(candidate.getTaskGrantId()==null || candidate.getTaskGrantVersion()==null) throw failure(Reason.NOT_FOUND);
+            final cn.jia.agent.service.TaskAssigneeAuthorityService.Target target;
+            try {
+                target=assigneeAuthority.requireGrantTarget(candidate.getTenantId(),candidate.getClientId(),
+                        candidate.getOwnerJiacn(),candidate.getTaskId(),candidate.getTaskGrantId(),candidate.getTaskGrantVersion());
+            } catch (cn.jia.agent.service.AgentTaskExecutionGrantException | AgentServiceImpl.AgentBizException unavailable) {
+                throw failure(Reason.NOT_FOUND);
+            }
+            if(!same(target.ownerJiacn(),authenticated.executorOwnerJiacn())
+                    || !same(target.agentId(),authenticated.agentId())) throw failure(Reason.NOT_FOUND);
+        } else if(!same(candidate.getOwnerJiacn(),authenticated.executorOwnerJiacn())) throw failure(Reason.NOT_FOUND);
+        return new RuntimeScope(authenticated.tenantId(),authenticated.clientId(),candidate.getOwnerJiacn(),
+                authenticated.agentId(),authenticated.runtimeInstanceId(),authenticated.executorOwnerJiacn());
     }
 
     private PersonalWorkspaceExecutionEntity runtimeExecution(RuntimeScope scope, String taskId, String runId,
@@ -2757,7 +2802,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         return Set.copyOf(allowed);
     }
     private static void validateOwnerScope(OwnerScope scope) { if(scope==null||!"0".equals(scope.tenantId()))throw failure(Reason.BAD_REQUEST); id(scope.clientId(),"clientId",50);id(scope.ownerJiacn(),"owner",50);if("0".equals(scope.ownerJiacn()))throw failure(Reason.BAD_REQUEST); }
-    private static void validateRuntimeScope(RuntimeScope scope) { if(scope==null||!"0".equals(scope.tenantId()))throw failure(Reason.NOT_FOUND); id(scope.clientId(),"clientId",50);id(scope.ownerJiacn(),"owner",50);id(scope.agentId(),"agentId",100);id(scope.runtimeInstanceId(),"runtimeInstanceId",100);if("0".equals(scope.ownerJiacn()))throw failure(Reason.NOT_FOUND); }
+    private static void validateRuntimeScope(RuntimeScope scope) { if(scope==null||!"0".equals(scope.tenantId()))throw failure(Reason.NOT_FOUND); id(scope.clientId(),"clientId",50);id(scope.ownerJiacn(),"owner",50);id(scope.executorOwnerJiacn(),"executorOwner",50);id(scope.agentId(),"agentId",100);id(scope.runtimeInstanceId(),"runtimeInstanceId",100);if("0".equals(scope.ownerJiacn()))throw failure(Reason.NOT_FOUND); }
     private static void validateIdempotency(String key) { id(key,"Idempotency-Key",100); }
     private static void id(String value,String name,int max) { if(value==null||value.isBlank()||!value.equals(value.strip())||value.codePointCount(0,value.length())>max||value.chars().anyMatch(Character::isISOControl))throw failure(Reason.BAD_REQUEST); }
     private static String optional(String value,int max) { if(value==null)return null;id(value,"optional",max);return value; }
@@ -2834,13 +2879,16 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     }
     private void prepareSkillCatalog(OwnerScope scope,String agent) {
         if(installedSkills==null)throw failure(Reason.CAPABILITY_UNAVAILABLE);
+        var executor=assigneeAuthority.resolveForAssignment(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),agent);
         installedSkills.read(new cn.jia.agent.service.SkillCapabilityLookup.Scope(
-                scope.tenantId(),scope.clientId(),scope.ownerJiacn(),agent));
+                scope.tenantId(),scope.clientId(),executor.ownerJiacn(),agent));
     }
     private Map<String,Object> verifiedSkillDescriptor(OwnerScope scope,String agent,Map<String,Object> snapshot,boolean runtimeRequired) {
         var selected=skillObject(snapshot.get("skill"));var key=skillString(selected,"key");var version=skillString(selected,"version");
         var capScope=new cn.jia.agent.service.SkillCapabilityLookup.Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),agent);
-        var descriptors=installedSkills.read(capScope).skills().stream().filter(d->key.equals(d.skillKey())&&version.equals(d.skillVersion())).toList();
+        var executor=assigneeAuthority.resolveForAssignment(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),agent);
+        var runtimeScope=new cn.jia.agent.service.SkillCapabilityLookup.Scope(scope.tenantId(),scope.clientId(),executor.ownerJiacn(),agent);
+        var descriptors=installedSkills.read(runtimeScope).skills().stream().filter(d->key.equals(d.skillKey())&&version.equals(d.skillVersion())).toList();
         if(descriptors.size()!=1)throw failure(Reason.CAPABILITY_UNAVAILABLE);
         var descriptor=descriptors.getFirst();
         if(!descriptor.verified()||!same(descriptor.packageSha256(),skillString(selected,"packageSha256"))
@@ -2859,7 +2907,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         if(runtimeRequired) {
             var policy=skillPolicy.read(capScope,skillString(snapshot,"taskId"));
             if(!policy.allowed())throw failure(Reason.CAPABILITY_UNAVAILABLE);
-            var catalog=skillCapabilities.lookup(capScope,policy.fence());
+            var catalog=skillCapabilities.lookup(policy.runtimeScope(),policy.fence());
             if(catalog.state()!=cn.jia.agent.service.SkillCapabilityLookup.State.AVAILABLE)throw failure(Reason.CAPABILITY_UNAVAILABLE);
             if(!same(descriptor.runtimeInstallationId(),policy.fence().runtimeInstallationId())||!same(descriptor.runtimeHostId(),policy.fence().hostId()))throw failure(Reason.CAPABILITY_UNAVAILABLE);
             var facts=catalog.catalog().skills().stream().filter(d->key.equals(d.skillKey())&&version.equals(d.skillVersion())).toList();
@@ -2873,7 +2921,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                 if(!same(skillString(requirement,"providerAlias"),skillString(binding,"alias"))||!same(fact.bindingRevision(),skillString(binding,"revision")))throw failure(Reason.CAPABILITY_UNAVAILABLE);
             }else if(snapshot.get("providerBinding")!=null)throw failure(Reason.BAD_REQUEST);
             // Read live lookup again after descriptor processing; a generation/config replacement fails closed.
-            var fresh=skillCapabilities.lookup(capScope,policy.fence());
+            var fresh=skillCapabilities.lookup(policy.runtimeScope(),policy.fence());
             if(!catalog.equals(fresh))throw failure(Reason.CAPABILITY_UNAVAILABLE);
         }
         return manifest;
@@ -2928,7 +2976,8 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                 var frozen=skillRow(scope,executionId,false);if(!same(frozen.getSnapshotSha256(),digest))throw failure(Reason.IDEMPOTENCY_CONFLICT);
                 requireSkillConversationAccess(scope,prior);return skillCreation(prior,frozen);
             }
-            requireOwnedTarget(scope,command.targetAgentId());
+            assigneeAuthority.requireGrantTarget(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),
+                    command.taskId(),command.grantId(),command.grantVersion());
             var row=new PersonalWorkspaceExecutionEntity().setExecutionId(executionId).setOwnerJiacn(scope.ownerJiacn()).setTaskId(command.taskId()).setRunId(runId)
                 .setExecutionMode("CONVERSATION").setConversationId(command.conversationId()).setTargetAgentId(command.targetAgentId()).setInstruction(instruction)
                 .setOutputContentMimeType(null).setExecutionState("QUEUED").setExecutionProtocolVersion(4).setGrantRevision(1L)
@@ -2965,7 +3014,8 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
             skillObject(snapshot.get("parameters")),execution.getInstruction(),skillInputs(snapshot).stream().map(i->skillString(i,"inputRef")).toList(),skillObject(snapshot.get("outputs")));
     }
     @Override
-    public cn.jia.agent.service.SkillExecutionService.Inputs inputs(RuntimeScope scope,String taskId,String runId,ConversationFence fence) {
+    public cn.jia.agent.service.SkillExecutionService.Inputs inputs(RuntimeScope authenticatedScope,String taskId,String runId,ConversationFence fence) {
+        final RuntimeScope scope=executionScope(authenticatedScope,taskId,runId);
         requireSkillEnabled();nativeAuthentication(scope);
         return withConversationRoot(scope,taskId,runId,true,execution->{
             if(!Objects.equals(4,execution.getExecutionProtocolVersion()))throw failure(Reason.NOT_FOUND);
@@ -2977,7 +3027,8 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     }
     private record SkillInputPreparation(String executionId,String snapshotDigest,Map<String,Object> input,long generation,String storageUri,String filename) { }
     @Override
-    public RuntimeContent inputContent(RuntimeScope scope,String taskId,String runId,String inputRef,ConversationFence fence) {
+    public RuntimeContent inputContent(RuntimeScope authenticatedScope,String taskId,String runId,String inputRef,ConversationFence fence) {
+        final RuntimeScope scope=executionScope(authenticatedScope,taskId,runId);
         requireSkillEnabled();nativeAuthentication(scope);id(inputRef,"inputRef",100);
         var prepared=withConversationRoot(scope,taskId,runId,true,execution->{
             if(!Objects.equals(4,execution.getExecutionProtocolVersion()))throw failure(Reason.NOT_FOUND);
@@ -3011,7 +3062,8 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         return snapshot.get("providerBinding")==null?null:skillString(skillObject(snapshot.get("providerBinding")),"revision");
     }
     @Override
-    public cn.jia.agent.service.SkillExecutionService.EffectReceipt startEffect(RuntimeScope scope,String taskId,String runId,String effectId,cn.jia.agent.service.SkillExecutionService.EffectStart command) {
+    public cn.jia.agent.service.SkillExecutionService.EffectReceipt startEffect(RuntimeScope authenticatedScope,String taskId,String runId,String effectId,cn.jia.agent.service.SkillExecutionService.EffectStart command) {
+        final RuntimeScope scope=executionScope(authenticatedScope,taskId,runId);
         requireSkillEnabled();nativeAuthentication(scope);id(effectId,"effectId",100);
         if(command==null||!sha(command.effectDigest()))throw failure(Reason.BAD_REQUEST);
         // A cold process must prepare bytes outside the native/task transaction. Replays skip
@@ -3050,7 +3102,8 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         return new cn.jia.agent.service.SkillExecutionService.EffectReceipt(1,disposition,skillString(effect,"status"),(String)effect.get("providerRequestId"),(String)effect.get("resultDigest"));
     }
     @Override @Transactional(rollbackFor=Exception.class)
-    public cn.jia.agent.service.SkillExecutionService.EffectReceipt recordEffect(RuntimeScope scope,String taskId,String runId,String effectId,cn.jia.agent.service.SkillExecutionService.EffectResult command) {
+    public cn.jia.agent.service.SkillExecutionService.EffectReceipt recordEffect(RuntimeScope authenticatedScope,String taskId,String runId,String effectId,cn.jia.agent.service.SkillExecutionService.EffectResult command) {
+        final RuntimeScope scope=executionScope(authenticatedScope,taskId,runId);
         requireSkillEnabled();nativeAuthentication(scope);id(effectId,"effectId",100);
         if(command==null||command.status()==null||!sha(command.effectDigest())||!Set.of("ACCEPTED","SUCCEEDED","FAILED","UNKNOWN").contains(command.status())
                 ||command.resultDigest()!=null&&!sha(command.resultDigest())||"SUCCEEDED".equals(command.status())&&command.resultDigest()==null)throw failure(Reason.BAD_REQUEST);
@@ -3072,7 +3125,8 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         }));
     }
     @Override @Transactional(rollbackFor=Exception.class)
-    public cn.jia.agent.service.SkillExecutionService.ResumeReceipt resume(RuntimeScope scope,String taskId,String runId,cn.jia.agent.service.SkillExecutionService.Resume command) {
+    public cn.jia.agent.service.SkillExecutionService.ResumeReceipt resume(RuntimeScope authenticatedScope,String taskId,String runId,cn.jia.agent.service.SkillExecutionService.Resume command) {
+        final RuntimeScope scope=executionScope(authenticatedScope,taskId,runId);
         requireSkillEnabled();nativeAuthentication(scope);if(command==null)throw failure(Reason.BAD_REQUEST);
         return nativeMutation(scope,()->withConversationRoot(scope,taskId,runId,true,true,false,execution->{
             if(!Objects.equals(4,execution.getExecutionProtocolVersion()))throw failure(Reason.NOT_FOUND);
@@ -3100,7 +3154,8 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         }));
     }
     @Override
-    public cn.jia.agent.service.SkillExecutionService.ResultReceipt commitResult(RuntimeScope scope,String taskId,String runId,String manifestId,cn.jia.agent.service.SkillExecutionService.ResultCommit command) {
+    public cn.jia.agent.service.SkillExecutionService.ResultReceipt commitResult(RuntimeScope authenticatedScope,String taskId,String runId,String manifestId,cn.jia.agent.service.SkillExecutionService.ResultCommit command) {
+        final RuntimeScope scope=executionScope(authenticatedScope,taskId,runId);
         requireSkillEnabled();nativeAuthentication(scope);id(manifestId,"manifestId",100);
         if(command==null||command.artifacts()==null||command.inputReceipts()==null||command.inputReceipts().size()>32||command.artifacts().size()>128||!sha(command.snapshotDigest()))throw failure(Reason.BAD_REQUEST);
         var artifactIds=new LinkedHashSet<String>();for(var output:command.artifacts()) {

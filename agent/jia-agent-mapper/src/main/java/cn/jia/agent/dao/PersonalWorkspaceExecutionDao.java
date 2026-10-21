@@ -8,6 +8,9 @@ import java.util.List;
 
 /** Exact owner-scoped persistence boundary for private execution grants and output receipts. */
 public interface PersonalWorkspaceExecutionDao {
+    PersonalWorkspaceExecutionEntity findForRuntime(String tenantId,String clientId,String executorOwner,
+            String agentId,String taskId,String runId);
+
     PersonalWorkspaceExecutionEntity find(String tenantId, String clientId, String ownerJiacn,
             String executionId);
     PersonalWorkspaceExecutionEntity findByIdempotency(String tenantId, String clientId,

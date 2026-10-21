@@ -784,8 +784,8 @@ public class AgentServiceImpl implements AgentService {
                     .toList();
         }
         List<AgentTaskMetaEntity> legacyTasks = Optional.ofNullable(
-                agentTaskMetaDao.findByAgentId(
-                        tenantId, clientId, agentId, TASK_MEMBERSHIP_SNAPSHOT_LIMIT))
+                agentTaskMetaDao.findByAgentInOwnerScope(
+                        tenantId, clientId, ownerJiacn, agentId, TASK_MEMBERSHIP_SNAPSHOT_LIMIT))
                 .orElseGet(Collections::emptyList);
         require(legacyTasks.size() < TASK_MEMBERSHIP_SNAPSHOT_LIMIT,
                 "Legacy Agent task snapshot exceeds the safe limit");
@@ -1160,9 +1160,18 @@ public class AgentServiceImpl implements AgentService {
         return task;
     }
 
+    private cn.jia.agent.service.AgentExternalServicePolicyService externalServicePolicies;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setExternalServicePolicies(cn.jia.agent.service.AgentExternalServicePolicyService policies) {
+        this.externalServicePolicies=Objects.requireNonNull(policies);
+    }
+
     @Override
     public AgentTaskDTO getTask(String taskId) {
-        return toTaskDTO(requireTask(taskId));
+        var result=toTaskDTO(requireTask(taskId));
+        result.setAssignedTarget(externalServicePolicies.assignedTarget(
+                new cn.jia.agent.service.AgentTaskExecutionGrantService.Scope(SINGLE_TENANT_ID,resolveCurrentClientId(),resolveCurrentJiacn()),taskId));
+        return result;
     }
 
     @Override
@@ -1326,21 +1335,32 @@ public class AgentServiceImpl implements AgentService {
         AgentTaskDTO task = getTask(taskId);
         String clientId = resolveCurrentClientId();
         String ownerJiacn = resolveCurrentJiacn();
-        List<AgentRuntimeEntity> candidates = Optional.ofNullable(agentRuntimeDao
-                .findCandidateRosterByOwner(clientId, ownerJiacn))
-                .orElseGet(Collections::emptyList);
-        return candidates.stream()
-                .map(agent -> evaluateTaskCandidate(task, agent))
-                .sorted((left, right) -> {
-                    int eligibility = Boolean.compare(Boolean.TRUE.equals(right.getEligible()),
-                            Boolean.TRUE.equals(left.getEligible()));
-                    if (eligibility != 0) return eligibility;
-                    // Stream sorting is stable: preserve the existing roster order on score ties.
-                    // Reordering tied candidates changes legacy team/leader assignment semantics.
-                    return Integer.compare(right.getScore(), left.getScore());
-                })
-                .limit(5)
-                .toList();
+        var scope=new cn.jia.agent.service.AgentTaskExecutionGrantService.Scope(SINGLE_TENANT_ID,clientId,ownerJiacn);
+        List<AgentTaskRecommendationDTO> recommendations=new ArrayList<>();
+        String after=null;
+        do {
+            var page=externalServicePolicies.candidates(scope,taskId,after,100);
+            for(var candidate:page.items()) {
+                var runtime=agentRuntimeDao.findByAgentId(candidate.agentId());
+                if(runtime==null) continue;
+                if (!Objects.equals(runtime.getClientId(), clientId)) continue;
+                var recommendation=candidate.isMine()
+                        ? buildTaskRecommendation(task,runtime,clientId,ownerJiacn)
+                        : buildTaskRecommendation(task,toRuntimeDTO(runtime,clientId,ownerJiacn,RuntimeBatchEnrichment.empty()));
+                recommendation.setEligible(true); recommendation.setExclusionReasons(List.of());
+                // Candidate authority is shared; recommendation never exposes another customer's work.
+                if(!candidate.isMine()) {
+                    var agent=recommendation.getAgent();
+                    agent.setOwnerJiacn(null); agent.setEndpoint(null); agent.setCurrentTaskId(null);
+                    agent.setCurrentTaskTitle(null); agent.setLastSeenAt(null); agent.setErrorMessage(null); agent.setStats(null);
+                    var capability=recommendation.getCapability();
+                    capability.setCurrentTaskId(null); capability.setCurrentTaskTitle(null);
+                }
+                recommendations.add(recommendation);
+            }
+            after=page.nextAfterAgentId();
+        } while(after!=null);
+        return recommendations.stream().sorted(java.util.Comparator.comparing(AgentTaskRecommendationDTO::getScore).reversed()).limit(5).toList();
     }
 
     @Override
@@ -1588,7 +1608,14 @@ public class AgentServiceImpl implements AgentService {
         requireTask(taskId);
         requireLegacyAssignmentAllowed(SINGLE_TENANT_ID, resolveCurrentClientId(), taskId, true, 1);
         AgentTaskDTO task = getTask(taskId);
-        List<AgentTaskRecommendationDTO> recommendations = recommendTaskAssignees(taskId);
+        // Legacy team auto-assignment remains owner-only; external single-agent delegation
+        // uses point-and-deliberate, which persists the shared execution grant.
+        List<AgentTaskRecommendationDTO> recommendations = Optional.ofNullable(agentRuntimeDao
+                .findCandidateRosterByOwner(resolveCurrentClientId(), resolveCurrentJiacn()))
+                .orElseGet(Collections::emptyList).stream().map(agent -> evaluateTaskCandidate(task, agent))
+                .sorted(java.util.Comparator.comparing(AgentTaskRecommendationDTO::getEligible).reversed()
+                        .thenComparing(java.util.Comparator.comparing(AgentTaskRecommendationDTO::getScore).reversed()))
+                .limit(5).toList();
         List<String> selectedAgentIds = selectAutoAssignAgentIds(task, recommendations);
         require(!selectedAgentIds.isEmpty(), "No available agent can accept this task");
 
@@ -2439,8 +2466,8 @@ public class AgentServiceImpl implements AgentService {
         String clientId = entity.getClientId();
         List<AgentTaskMetaEntity> tasks = StringUtil.isBlank(ownerJiacn) || StringUtil.isBlank(clientId)
                 ? List.of()
-                : Optional.ofNullable(agentTaskMetaDao.findByAgentId(
-                        tenantId, clientId, entity.getAgentId(), TASK_MEMBERSHIP_SNAPSHOT_LIMIT))
+                : Optional.ofNullable(agentTaskMetaDao.findByAgentInOwnerScope(
+                        tenantId, clientId, ownerJiacn, entity.getAgentId(), TASK_MEMBERSHIP_SNAPSHOT_LIMIT))
                         .orElseGet(Collections::emptyList);
         require(tasks.size() < TASK_MEMBERSHIP_SNAPSHOT_LIMIT,
                 "Agent task statistics snapshot exceeds the safe limit");
@@ -2531,7 +2558,10 @@ public class AgentServiceImpl implements AgentService {
     private AgentTaskRecommendationDTO buildTaskRecommendation(
             AgentTaskDTO task, AgentRuntimeEntity entity,
             String clientId, String ownerJiacn) {
-        AgentRuntimeDTO agent = toRuntimeDTO(entity, clientId, ownerJiacn);
+        return buildTaskRecommendation(task, toRuntimeDTO(entity, clientId, ownerJiacn));
+    }
+
+    private AgentTaskRecommendationDTO buildTaskRecommendation(AgentTaskDTO task, AgentRuntimeDTO agent) {
         AgentCapabilityDTO capability = toCapabilityDTO(agent);
         List<String> required = Optional.ofNullable(task.getRequiredAbilities()).orElseGet(Collections::emptyList);
         List<String> matchedAbilities = matchedAbilities(required, capability.getAbilities());

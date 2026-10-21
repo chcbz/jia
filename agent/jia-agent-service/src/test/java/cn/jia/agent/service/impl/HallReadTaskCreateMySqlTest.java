@@ -129,6 +129,7 @@ class HallReadTaskCreateMySqlTest {
                 provider(events), provider((TaskService) taskService), provider(), provider(),
                 new AgentScopePublicationCoordinator(), new AgentSceneFeatureFlags(false, false),
                 new AgentTaskMutationTransactionImpl(tasks, transactionManager), writer);
+        rawAgents.setExternalServicePolicies(org.mockito.Mockito.mock(cn.jia.agent.service.AgentExternalServicePolicyService.class));
         var requirements = new AgentTaskRequirementSnapshotServiceImpl(jdbc,
                 new AgentTaskMutationTransactionImpl(tasks, transactionManager));
         rawAgents.setRequirementSnapshots(requirements);

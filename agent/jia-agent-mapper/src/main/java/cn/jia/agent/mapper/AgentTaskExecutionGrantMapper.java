@@ -9,7 +9,7 @@ import org.apache.ibatis.annotations.Update;
 public interface AgentTaskExecutionGrantMapper extends BaseMapper<AgentTaskExecutionGrantEntity> {
     String COLUMNS = """
             id,grant_id,owner_jiacn,task_id,requirement_revision,assignment_revision,
-            target_agent_id,permitted_operations_json,permitted_tool_policy_ref,input_scope_json,
+            target_agent_id,executor_owner_jiacn,executor_binding_id,external_policy_revision,permitted_operations_json,permitted_tool_policy_ref,input_scope_json,
             allow_own_task_derived_assets,cost_authorization_ref,source_business_action_id,
             idempotency_key,request_hash,policy_revision,grant_version,state,issued_by,
             created_at,revoked_at,revoke_idempotency_key,revoke_request_hash,

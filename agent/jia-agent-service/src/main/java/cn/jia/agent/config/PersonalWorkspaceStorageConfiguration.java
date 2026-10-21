@@ -15,6 +15,12 @@ import java.util.LinkedHashSet;
 @EnableConfigurationProperties({PersonalWorkspaceStorageProperties.class, PersonalWorkspaceExecutionProperties.class})
 public class PersonalWorkspaceStorageConfiguration {
     @Bean
+    @ConditionalOnProperty(prefix = "agent.personal-workspace-storage", name = "enabled", havingValue = "true")
+    public AgentExternalServicePolicySchemaInitializer agentExternalServicePolicySchemaInitializer(JdbcTemplate jdbcTemplate) {
+        return new AgentExternalServicePolicySchemaInitializer(jdbcTemplate);
+    }
+
+    @Bean
     public PersonalWorkspaceStorage personalWorkspaceStorage(PersonalWorkspaceStorageProperties properties) {
         if (!properties.enabled()) return new DisabledPersonalWorkspaceStorage();
         if (properties.rootDirectory() == null || properties.rootDirectory().isBlank()

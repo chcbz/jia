@@ -105,6 +105,7 @@ class AgentServiceFundedBountyGuardTest {
                 mock(DialogueTemplateDao.class), mock(ObjectProvider.class), tasks, keys, scenes,
                 new AgentScopePublicationCoordinator(), new AgentSceneFeatureFlags(false, false),
                 mutation, mock(AgentTaskEventWriter.class));
+        service.setExternalServicePolicies(org.mockito.Mockito.mock(cn.jia.agent.service.AgentExternalServicePolicyService.class));
         FundedBountyLegacyGuard guard = mock(FundedBountyLegacyGuard.class);
         @SuppressWarnings("unchecked") ObjectProvider<FundedBountyLegacyGuard> provider = mock(ObjectProvider.class);
         when(provider.getIfAvailable(org.mockito.ArgumentMatchers.any())).thenReturn(guard);

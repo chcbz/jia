@@ -70,6 +70,7 @@ class ControlledImageConversationStartTest {
         when(storage.maxContentBytes()).thenReturn(10_000_000L);
         service=new PersonalWorkspaceExecutionServiceImpl(executions,workspace,taskLinks,runtimes,storage,writes,
                 new PersonalWorkspaceExecutionProperties(List.of("image/png")));
+        wireAssigneeFixture(service,executions);
         service.setConversationAdmission(grants,transactions);
         var principal=org.springframework.beans.BeanUtils.instantiateClass(AgentRuntimeAuthentication.class.getDeclaredConstructor(AgentRuntimeAuthentication.Scope.class),new AgentRuntimeAuthentication.Scope("0","client","owner","agent","runtime"));
         principal.setDetails(new AgentRuntimeAuthenticationService.Proof(principal.getPrincipal(),
@@ -586,5 +587,19 @@ class ControlledImageConversationStartTest {
     private static String sha(byte[] value) {
         try { return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value)); }
         catch (Exception impossible) { throw new IllegalStateException(impossible); }
+    }
+
+    /** Existing fixture has one authenticated owner. Cross-owner fixtures supply explicit grant authority separately. */
+    private static void wireAssigneeFixture(cn.jia.agent.service.PersonalWorkspaceExecutionService instance,
+            cn.jia.agent.dao.PersonalWorkspaceExecutionDao rows) {
+        var service=(cn.jia.agent.service.impl.PersonalWorkspaceExecutionServiceImpl)instance;
+        var authority=org.mockito.Mockito.mock(cn.jia.agent.service.TaskAssigneeAuthorityService.class);
+        org.mockito.Mockito.when(authority.resolveForAssignment(org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString()))
+            .thenAnswer(i->new cn.jia.agent.service.TaskAssigneeAuthorityService.Target(i.getArgument(0),i.getArgument(1),i.getArgument(2),i.getArgument(3),1L,null));
+        org.mockito.Mockito.when(authority.requireGrantTarget(org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyLong()))
+            .thenAnswer(i->new cn.jia.agent.service.TaskAssigneeAuthorityService.Target(i.getArgument(0),i.getArgument(1),i.getArgument(2),"agent",1L,null));
+        service.setAssigneeAuthority(authority);
+        org.mockito.Mockito.when(rows.findForRuntime(org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString()))
+            .thenAnswer(i->rows.findByTaskRun(i.getArgument(0),i.getArgument(1),i.getArgument(2),i.getArgument(4),i.getArgument(5)));
     }
 }

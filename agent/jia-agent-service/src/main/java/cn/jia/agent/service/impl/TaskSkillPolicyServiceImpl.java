@@ -15,6 +15,9 @@ import java.util.Objects;
 /** Read-only policy: assigned/running tasks are not tested with unassigned-only point policy. */
 @Named
 public final class TaskSkillPolicyServiceImpl implements TaskSkillPolicyService {
+    private TaskAssigneeAuthorityService assigneeAuthority;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setAssigneeAuthority(TaskAssigneeAuthorityService authority) { this.assigneeAuthority=Objects.requireNonNull(authority); }
     private final AgentTaskMetaDao tasks;
     private final AgentTaskExecutionGrantDao grants;
     private final AgentIdentityService identities;
@@ -62,6 +65,9 @@ public final class TaskSkillPolicyServiceImpl implements TaskSkillPolicyService 
             if(proof==null||proof.scope()==null||!scope.tenantId().equals(proof.scope().tenantId())
                     ||!scope.clientId().equals(proof.scope().clientId())||!scope.agentId().equals(proof.scope().agentId()))
                 return denied("RUNTIME_FENCED",revision);
+            var target=assigneeAuthority.requireGrantTarget(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),
+                    taskId,grant.getGrantId(),grant.getGrantVersion());
+            if(!target.ownerJiacn().equals(proof.scope().ownerJiacn())) throw integrity();
             var runtimeScope=new SkillCapabilityLookup.Scope(proof.scope().tenantId(),proof.scope().clientId(),
                     proof.scope().ownerJiacn(),proof.scope().agentId());
             if(!scope.agentId().equals(identities.requireCanonicalAgentIdInScope(runtimeScope.tenantId(),

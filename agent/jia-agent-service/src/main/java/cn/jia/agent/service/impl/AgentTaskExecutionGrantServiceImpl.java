@@ -65,6 +65,12 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
     private final AgentTaskMutationTransaction transactions;
     private final ObjectMapper json;
     private ControlledImageGrantAuthority controlledAuthority;
+    private cn.jia.agent.service.TaskAssigneeAuthorityService assigneeAuthority;
+    @Autowired
+    public void setAssigneeAuthority(cn.jia.agent.service.TaskAssigneeAuthorityService authority) {
+        this.assigneeAuthority=Objects.requireNonNull(authority);
+    }
+
 
     @Autowired(required = false)
     public void setControlledAuthority(ControlledImageGrantAuthority authority) {
@@ -113,8 +119,7 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
         exact(targetAgentId,"targetAgentId",100);
         if (expectedTaskVersion<0 || expectedTaskVersion==Long.MAX_VALUE || requirementRevision<1)
             throw bad("Expected task/requirement revision is invalid");
-        String canonicalAgent=legacyAssignments.resolveAgentId(scope.tenantId(),scope.clientId(),
-                scope.ownerJiacn(),targetAgentId);
+        String canonicalAgent=targetAgentId; // canonical candidate ID; authority checked under the task root
         String actionId="ASSIGN_AND_START:"+key;
         try {
             return transactions.executeWithLockedTaskRootInOwnerScope(scope.tenantId(),scope.clientId(),
@@ -243,11 +248,19 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
         }
 
         AtomicReference<List<InputSnapshot>> snapshot = new AtomicReference<>();
+        AtomicReference<cn.jia.agent.service.TaskAssigneeAuthorityService.Target> target = new AtomicReference<>();
         AgentLegacyTaskCompatibilityService.AssignOutcome assignment =
                 legacyAssignments.assignResolvedVersionedWithLockedTask(scope.tenantId(),
                         scope.clientId(),scope.ownerJiacn(),valid.taskId(),List.of(canonicalAgent),
-                        false,valid.expectedTaskVersion(),(task,agentIds) -> snapshot.set(
-                                validateAndSnapshotInputs(scope,valid.taskId(),valid.inputs())),root);
+                        false,valid.expectedTaskVersion(),new AgentLegacyTaskCompatibilityService.AssignmentPrecommitValidator() {
+                            public void beforeIdentityLock(AgentTaskMetaEntity task,List<String> agentIds) {
+                                target.set(assigneeAuthority.lockForAssignment(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),canonicalAgent));
+                            }
+                            public String identityOwner(String taskOwner) { return target.get().ownerJiacn(); }
+                            public void validate(AgentTaskMetaEntity task,List<String> agentIds) {
+                                snapshot.set(validateAndSnapshotInputs(scope,valid.taskId(),valid.inputs()));
+                            }
+                        },root);
         long assignmentRevision = assignment.changed()
                 ? Math.addExact(valid.expectedTaskVersion(),1L) : valid.expectedTaskVersion();
         if (snapshot.get() == null) throw invalidState("Grant input snapshot was not produced");
@@ -268,6 +281,8 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
         entity.setOwnerJiacn(scope.ownerJiacn()).setTaskId(valid.taskId())
                 .setRequirementRevision(valid.requirementRevision())
                 .setAssignmentRevision(assignmentRevision).setTargetAgentId(canonicalAgent)
+                .setExecutorOwnerJiacn(target.get().ownerJiacn()).setExecutorBindingId(target.get().bindingId())
+                .setExternalPolicyRevision(target.get().externalPolicyRevision())
                 .setPermittedOperationsJson(write(valid.operations()))
                 .setPermittedToolPolicyRef(valid.operations().contains("EXECUTE_SKILL")?"SKILLS_V1":TOOL_POLICY).setInputScopeJson(write(snapshot.get()))
                 .setAllowOwnTaskDerivedAssets(false).setCostAuthorizationRef(null)
@@ -449,8 +464,10 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
                     ||!Objects.equals(active.getRequirementRevision(),locked.getRequirementRevision()))
                 throw conflict("Baseline grant changed");
             requireAssignmentEpoch(scope,taskId,locked.getAssignmentRevision(),root);
+            var executor=assigneeAuthority.requireGrantTarget(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),
+                    taskId,locked.getGrantId(),locked.getGrantVersion());
             if(!List.of(targetAgentId).equals(identities.lockActiveCanonicalAgentIdsInScope(
-                    scope.tenantId(),scope.clientId(),scope.ownerJiacn(),List.of(targetAgentId))))throw notFound();
+                    scope.tenantId(),scope.clientId(),executor.ownerJiacn(),List.of(targetAgentId))))throw notFound();
             var requirement=requirementSnapshots.requireCurrent(scope,taskId,locked.getRequirementRevision());
             if(requirement==null||requirement.revision()!=locked.getRequirementRevision())
                 throw conflict("Current requirement changed");
@@ -865,7 +882,9 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
             var next=new AgentTaskExecutionGrantEntity();next.setTenantId(scope.tenantId());next.setClientId(scope.clientId());
             next.setGrantId("grant_"+identity.substring(0,32)).setOwnerJiacn(scope.ownerJiacn()).setTaskId(taskId)
                 .setRequirementRevision(current.getRequirementRevision()).setAssignmentRevision(assignmentRevision)
-                .setTargetAgentId(targetAgentId).setPermittedOperationsJson(write(List.of("DELIBERATE","EXECUTE_SKILL")))
+                .setTargetAgentId(targetAgentId).setExecutorOwnerJiacn(current.getExecutorOwnerJiacn())
+                .setExecutorBindingId(current.getExecutorBindingId()).setExternalPolicyRevision(current.getExternalPolicyRevision())
+                .setPermittedOperationsJson(write(List.of("DELIBERATE","EXECUTE_SKILL")))
                 .setPermittedToolPolicyRef("SKILLS_V1").setInputScopeJson(current.getInputScopeJson())
                 .setAllowOwnTaskDerivedAssets(true).setCostAuthorizationRef(null)
                 .setSourceBusinessActionId("SKILL_BASELINE:"+identity).setIdempotencyKey("skill_"+identity)
@@ -901,8 +920,10 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
 
     private void lockTargetAndPersistedInputs(Scope scope,String taskId,String targetAgentId,
             AgentTaskExecutionGrantEntity observed) {
+        var executor=assigneeAuthority.requireGrantTarget(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),
+                taskId,observed.getGrantId(),observed.getGrantVersion());
         List<String> locked=identities.lockActiveCanonicalAgentIdsInScope(scope.tenantId(),
-                scope.clientId(),scope.ownerJiacn(),List.of(targetAgentId));
+                scope.clientId(),executor.ownerJiacn(),List.of(targetAgentId));
         if (!List.of(targetAgentId).equals(locked) || !same(targetAgentId,observed.getTargetAgentId())) throw notFound();
         for (InputSnapshot input:readInputs(observed.getInputScopeJson())) {
             PersonalWorkspaceFileEntity file=workspace.lockFile(scope.tenantId(),scope.clientId(),

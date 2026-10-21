@@ -236,6 +236,29 @@ public interface AgentTaskMetaMapper extends BaseMapper<AgentTaskMetaEntity> {
             @Param("limit") int limit);
 
     @Select("""
+            SELECT *
+            FROM agent_task_meta
+            WHERE tenant_id = #{tenantId}
+              AND client_id = #{clientId}
+              AND BINARY owner_jiacn = BINARY #{ownerJiacn}
+              AND assigned_agent_id = #{agentId}
+              AND CAST(tenant_id AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200))
+              AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
+              AND CAST(client_id AS BINARY(200)) = CAST(#{clientId} AS BINARY(200))
+              AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{clientId})
+              AND CAST(assigned_agent_id AS BINARY(400)) = CAST(#{agentId} AS BINARY(400))
+              AND OCTET_LENGTH(assigned_agent_id) = OCTET_LENGTH(#{agentId})
+            ORDER BY update_time DESC, task_id ASC, id ASC
+            LIMIT #{limit}
+            """)
+    List<AgentTaskMetaEntity> selectByAgentInOwnerScope(
+            @Param("tenantId") String tenantId,
+            @Param("clientId") String clientId,
+            @Param("ownerJiacn") String ownerJiacn,
+            @Param("agentId") String agentId,
+            @Param("limit") int limit);
+
+    @Select("""
             <script>
             SELECT task.tenant_id AS tenantId,
                    task.client_id AS clientId,

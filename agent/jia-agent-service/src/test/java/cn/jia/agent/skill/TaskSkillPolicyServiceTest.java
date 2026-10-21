@@ -17,9 +17,13 @@ class TaskSkillPolicyServiceTest {
     final AgentTaskRequirementSnapshotService requirements=mock(AgentTaskRequirementSnapshotService.class);
     final AgentRuntimeAuthenticationService runtime=mock(AgentRuntimeAuthenticationService.class);
     final SkillCapabilityLookup.Scope scope=new SkillCapabilityLookup.Scope("0","client","owner","agent");
+    final TaskAssigneeAuthorityService authority=mock(TaskAssigneeAuthorityService.class);
     AgentTaskMetaEntity task;AgentTaskExecutionGrantEntity grant;TaskSkillPolicyServiceImpl service;
     @BeforeEach void setup() {
         service=new TaskSkillPolicyServiceImpl(tasks,grants,identity,requirements,runtime);
+        service.setAssigneeAuthority(authority);
+        when(authority.requireGrantTarget("0","client","owner","task","grant",1))
+                .thenReturn(new TaskAssigneeAuthorityService.Target("0","client","owner","agent",1,null));
         task=new AgentTaskMetaEntity().setTaskId("task").setOwnerJiacn("owner").setAssignedAgentId("agent").setTaskVersion(8L).setRewardStatus("assigned");task.setTenantId("0");task.setClientId("client");
         grant=new AgentTaskExecutionGrantEntity().setGrantId("grant").setTaskId("task").setOwnerJiacn("owner").setTargetAgentId("agent").setState("ACTIVE").setAssignmentRevision(7L).setGrantVersion(1L).setRequirementRevision(1L).setPermittedOperationsJson("[\"DELIBERATE\",\"EXECUTE_SKILL\"]").setPermittedToolPolicyRef("SKILLS_V1");grant.setTenantId("0");grant.setClientId("client");
         when(identity.requireCanonicalAgentIdInScope("0","client","owner","agent")).thenReturn("agent");when(tasks.findByTaskIdInOwnerScope("0","client","owner","task")).thenReturn(task);when(grants.findActiveByTask("0","client","owner","task")).thenReturn(grant);when(grants.latestAssignmentEventJson("0","client","owner","task")).thenReturn("{\"resultVersion\":7}");
@@ -34,6 +38,8 @@ class TaskSkillPolicyServiceTest {
     @Test void reassignmentRevocationAndMissingSkillOperationReject() {when(grants.latestAssignmentEventJson("0","client","owner","task")).thenReturn("{\"resultVersion\":9}");assertEquals("ASSIGNMENT_EPOCH_UNPROVEN",service.read(scope,"task").reasonCode());when(grants.latestAssignmentEventJson("0","client","owner","task")).thenReturn("{\"resultVersion\":7}");grant.setState("REVOKED");assertEquals("TASK_GRANT_STALE",service.read(scope,"task").reasonCode());grant.setState("ACTIVE").setPermittedOperationsJson("[\"DELIBERATE\"]");assertEquals("SKILL_BASELINE_REQUIRED",service.read(scope,"task").reasonCode());}
     @Test void offlineIsDeniedAndNotSourceSuccess() {when(runtime.currentRegisteredProof("0","client","agent")).thenThrow(new IllegalArgumentException("offline"));assertEquals("RUNTIME_UNAVAILABLE",service.read(scope,"task").reasonCode());}
     @Test void delegatedTaskUsesAuthenticatedAgentOwnerNotTaskOwner() {
+        when(authority.requireGrantTarget("0","client","owner","task","grant",1))
+                .thenReturn(new TaskAssigneeAuthorityService.Target("0","client","agent-owner","agent",2,1L));
         when(runtime.currentRegisteredProof("0","client","agent")).thenReturn(new AgentRuntimeAuthenticationService.Proof(
                 new AgentRuntimeAuthentication.Scope("0","client","agent-owner","agent","runtime"),"installation","host",3,"a".repeat(64),4,3));
         when(identity.requireCanonicalAgentIdInScope("0","client","agent-owner","agent")).thenReturn("agent");

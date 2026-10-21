@@ -318,6 +318,7 @@ class AgentIdentityRuntimeRealTransactionTest {
                 new AgentScopePublicationCoordinator(),
                 new AgentSceneFeatureFlags(false, false),
                 mock(AgentTaskMutationTransaction.class), mock(AgentTaskEventWriter.class));
+        raw.setExternalServicePolicies(org.mockito.Mockito.mock(cn.jia.agent.service.AgentExternalServicePolicyService.class));
         return transactionalProxy(raw, AgentService.class);
     }
 

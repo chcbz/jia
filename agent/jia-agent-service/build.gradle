@@ -456,6 +456,8 @@ tasks.register('managedHostingRegression', Test) {
 def mmdU1GrantSourceSet = sourceSets.create('mmdU1Grant') {
     java {
         srcDir 'src/test/java'
+        include 'cn/jia/agent/service/impl/TaskAssigneeAuthorityServiceImplTest.java'
+        include 'cn/jia/agent/service/impl/AgentExternalServicePolicyServiceImplTest.java'
         include 'cn/jia/agent/service/impl/AgentTaskExecutionGrantServiceImplTest.java'
         include 'cn/jia/agent/api/AgentTaskExecutionGrantControllerTest.java'
         include 'cn/jia/agent/config/AgentTaskExecutionGrantSchemaContractTest.java'

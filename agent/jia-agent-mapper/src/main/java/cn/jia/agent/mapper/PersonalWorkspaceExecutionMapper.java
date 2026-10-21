@@ -7,6 +7,22 @@ import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 
 public interface PersonalWorkspaceExecutionMapper extends BaseMapper<PersonalWorkspaceExecutionEntity> {
+    @Select("""
+        SELECT e.* FROM agent_personal_workspace_execution e
+        WHERE BINARY e.tenant_id=BINARY #{tenantId} AND BINARY e.client_id=BINARY #{clientId}
+          AND BINARY e.target_agent_id=BINARY #{agentId} AND BINARY e.task_id=BINARY #{taskId}
+          AND BINARY e.run_id=BINARY #{runId}
+          AND ((e.execution_mode='CONVERSATION' AND EXISTS (
+            SELECT 1 FROM agent_task_execution_grant g WHERE g.tenant_id=e.tenant_id AND g.client_id=e.client_id
+              AND g.owner_jiacn=e.owner_jiacn AND g.task_id=e.task_id AND g.grant_id=e.task_grant_id
+              AND g.grant_version=e.task_grant_version AND g.target_agent_id=e.target_agent_id
+              AND BINARY g.executor_owner_jiacn=BINARY #{executorOwner}))
+            OR (e.execution_mode IN ('PRIVATE','TASK') AND BINARY e.owner_jiacn=BINARY #{executorOwner}))
+        """)
+    PersonalWorkspaceExecutionEntity findForRuntime(@Param("tenantId") String tenantId,
+        @Param("clientId") String clientId,@Param("executorOwner") String executorOwner,
+        @Param("agentId") String agentId,@Param("taskId") String taskId,@Param("runId") String runId);
+
 
     @Select("""
             SELECT COUNT(*)
@@ -87,7 +103,7 @@ public interface PersonalWorkspaceExecutionMapper extends BaseMapper<PersonalWor
     @Select("""
             <script>
             SELECT * FROM agent_personal_workspace_execution
-             WHERE tenant_id=#{tenantId} AND client_id=#{clientId} AND owner_jiacn=#{ownerJiacn}
+             WHERE tenant_id=#{tenantId} AND client_id=#{clientId}
                AND target_agent_id=#{targetAgentId} AND execution_state='QUEUED'
                AND execution_mode='CONVERSATION'
                AND (execution_protocol_version&lt;&gt;4 OR EXISTS (
@@ -105,8 +121,15 @@ public interface PersonalWorkspaceExecutionMapper extends BaseMapper<PersonalWor
                AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(#{tenantId})
                AND CAST(client_id AS BINARY)=CAST(#{clientId} AS BINARY)
                AND OCTET_LENGTH(client_id)=OCTET_LENGTH(#{clientId})
-               AND CAST(owner_jiacn AS BINARY)=CAST(#{ownerJiacn} AS BINARY)
-               AND OCTET_LENGTH(owner_jiacn)=OCTET_LENGTH(#{ownerJiacn})
+               AND EXISTS (SELECT 1 FROM agent_task_execution_grant g
+                   WHERE g.tenant_id=agent_personal_workspace_execution.tenant_id
+                     AND g.client_id=agent_personal_workspace_execution.client_id
+                     AND g.owner_jiacn=agent_personal_workspace_execution.owner_jiacn
+                     AND g.task_id=agent_personal_workspace_execution.task_id
+                     AND g.grant_id=agent_personal_workspace_execution.task_grant_id
+                     AND g.grant_version=agent_personal_workspace_execution.task_grant_version
+                     AND g.target_agent_id=agent_personal_workspace_execution.target_agent_id
+                     AND BINARY g.executor_owner_jiacn=BINARY #{ownerJiacn})
                AND CAST(target_agent_id AS BINARY)=CAST(#{targetAgentId} AS BINARY)
                AND OCTET_LENGTH(target_agent_id)=OCTET_LENGTH(#{targetAgentId})
                AND CAST(execution_mode AS BINARY)=CAST('CONVERSATION' AS BINARY)

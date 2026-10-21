@@ -39,9 +39,15 @@ class AgentTaskExecutionGrantServiceImplTest {
     private final AgentTaskRequirementSnapshotService requirementSnapshots = mock(AgentTaskRequirementSnapshotService.class);
     private final AgentTaskMetaEntity root = new AgentTaskMetaEntity();
     private AgentTaskExecutionGrantServiceImpl service;
+    private final cn.jia.agent.service.TaskAssigneeAuthorityService authority=mock(cn.jia.agent.service.TaskAssigneeAuthorityService.class);
+
 
     @BeforeEach
     void setUp() {
+        when(authority.lockForAssignment(eq("0"),eq("client"),eq("owner"),anyString()))
+                .thenAnswer(i->new cn.jia.agent.service.TaskAssigneeAuthorityService.Target("0","client","owner",i.getArgument(3),1L,null));
+        when(authority.requireGrantTarget(eq("0"),eq("client"),eq("owner"),anyString(),anyString(),anyLong()))
+                .thenReturn(new cn.jia.agent.service.TaskAssigneeAuthorityService.Target("0","client","owner","agent-1",1L,null));
         root.setTenantId("0"); root.setClientId("client"); root.setOwnerJiacn("owner");
         root.setTaskId("task-1"); root.setTaskVersion(0L); root.setCurrentEventVersion(0L);
         root.setRewardStatus("open");
@@ -56,6 +62,7 @@ class AgentTaskExecutionGrantServiceImplTest {
                 anyString(),anyList(),eq(false),anyLong(),any(),same(root))).thenAnswer(invocation -> {
             long expected=invocation.getArgument(6);
             AgentLegacyTaskCompatibilityService.AssignmentPrecommitValidator validator=invocation.getArgument(7);
+            validator.beforeIdentityLock(root,List.of("agent-1"));
             validator.validate(root,List.of("agent-1"));
             boolean changed=root.getAssignedAgentId()==null;
             root.setTaskVersion(changed ? expected+1 : expected); root.setAssignedAgentId("agent-1");
@@ -65,6 +72,20 @@ class AgentTaskExecutionGrantServiceImplTest {
         });
         service=new AgentTaskExecutionGrantServiceImpl(grants,bootstraps,links,workspace,legacy,identities,
                 new DirectTransaction(root),new ObjectMapper(),requirementSnapshots);
+        service.setAssigneeAuthority(authority);
+    }
+
+    @Test void externalGrantFreezesExecutorAndStillCreatesOriginalAutomaticBootstrap() {
+        when(links.list("0","client","owner","task-1",null,null,33)).thenReturn(List.of());
+        when(authority.lockForAssignment("0","client","owner","agent-1"))
+                .thenReturn(new cn.jia.agent.service.TaskAssigneeAuthorityService.Target("0","client","provider","agent-1",7L,2L));
+        service.assignForDeliberation(scope(),"task-1","external","agent-1",0,1);
+        var row=grants.byAction.values().iterator().next();
+        assertEquals("owner",row.getOwnerJiacn());assertEquals("provider",row.getExecutorOwnerJiacn());
+        assertEquals(7L,row.getExecutorBindingId());assertEquals(2L,row.getExternalPolicyRevision());
+        assertEquals("DELIBERATE",bootstraps.byAction.values().iterator().next().getPermittedOperation());
+        service.assignForDeliberation(scope(),"task-1","external","agent-1",0,1);
+        verify(authority,times(1)).lockForAssignment("0","client","owner","agent-1");
     }
 
     @Test void pendingReviewAllowsReadOnlyDiscussionContextWithoutGrantingImageExecution() {
@@ -208,6 +229,7 @@ class AgentTaskExecutionGrantServiceImplTest {
         when(links.list("0","client","owner","task-1",null,null,33)).thenReturn(List.of());
         service=new AgentTaskExecutionGrantServiceImpl(grants,bootstraps,links,workspace,legacy,identities,
                 new RollbackTransaction(root,grants,bootstraps),new ObjectMapper(),requirementSnapshots);
+        service.setAssigneeAuthority(authority);
         bootstraps.failInsert=true;
         assertThrows(IllegalStateException.class,
                 ()->service.assignForDeliberation(scope(),"task-1","point-rollback","agent-1",0,1));
@@ -413,6 +435,7 @@ class AgentTaskExecutionGrantServiceImplTest {
         bootstraps.failInsert=true;
         service=new AgentTaskExecutionGrantServiceImpl(grants,bootstraps,links,workspace,legacy,identities,
                 new RollbackTransaction(root,grants,bootstraps),new ObjectMapper(),requirementSnapshots);
+        service.setAssigneeAuthority(authority);
         assertThrows(IllegalStateException.class,
                 () -> service.assignAndGrant(scope(),"task-1","key-rollback",request()));
         assertNull(root.getAssignedAgentId());

@@ -136,6 +136,7 @@ class AgentServiceTaskEventRealTransactionTest {
                 new AgentScopePublicationCoordinator(),
                 new AgentSceneFeatureFlags(false, false),
                 mutationTransaction, eventWriter);
+        raw.setExternalServicePolicies(org.mockito.Mockito.mock(cn.jia.agent.service.AgentExternalServicePolicyService.class));
         raw.setRequirementSnapshots(new AgentTaskRequirementSnapshotServiceImpl(jdbc,mutationTransaction));
         service = transactionalProxy(raw);
     }

@@ -82,6 +82,7 @@ class PersonalWorkspaceExecutionServiceImplTest {
         service = new PersonalWorkspaceExecutionServiceImpl(executions, workspace,
                 taskLinks, runtimes, storage, writes,
                 new PersonalWorkspaceExecutionProperties(List.of(PersonalWorkspaceExecutionProperties.DOCX)));
+        wireAssigneeFixture(service,executions);
         var principal=org.springframework.beans.BeanUtils.instantiateClass(
                 cn.jia.agent.security.AgentRuntimeAuthentication.class.getDeclaredConstructor(cn.jia.agent.security.AgentRuntimeAuthentication.Scope.class),
                 new cn.jia.agent.security.AgentRuntimeAuthentication.Scope("0","client-a","owner-a","agent-a","runtime-a"));
@@ -303,6 +304,7 @@ class PersonalWorkspaceExecutionServiceImplTest {
         service = new PersonalWorkspaceExecutionServiceImpl(executions, mock(PersonalWorkspaceDao.class),
                 mock(PersonalWorkspaceTaskLinkDao.class), mock(AgentRuntimeDao.class), storage, writes,
                 new PersonalWorkspaceExecutionProperties(List.of(PPTX)));
+        wireAssigneeFixture(service,executions);
         PersonalWorkspaceExecutionEntity accepted = execution("pwe_multi", "agent-a", "QUEUED");
         accepted.setOutputContentMimeType(PPTX);
         when(executions.listQueuedByTarget("0", "client-a", "owner-a", "agent-a", 16)).thenReturn(List.of(accepted));
@@ -335,6 +337,7 @@ class PersonalWorkspaceExecutionServiceImplTest {
                 mock(PersonalWorkspaceDao.class), mock(PersonalWorkspaceTaskLinkDao.class),
                 mock(AgentRuntimeDao.class), unavailableStorage, writes,
                 new PersonalWorkspaceExecutionProperties(List.of(PersonalWorkspaceExecutionProperties.DOCX)));
+        wireAssigneeFixture(unavailable,executions);
         assertEquals(List.of(), unavailable.capabilities().allowedMimeTypes());
         assertEquals(List.of(), unavailable.capabilities().inputMimeTypes());
         assertFalse(unavailable.capabilities().generationEnabled());
@@ -918,6 +921,7 @@ class PersonalWorkspaceExecutionServiceImplTest {
         service = new PersonalWorkspaceExecutionServiceImpl(executions, workspace,
                 taskLinks, runtimes, storage, writes,
                 new PersonalWorkspaceExecutionProperties(List.of(PDF)));
+        wireAssigneeFixture(service,executions);
         configureTaskCreate(mock(WorkspaceConversationAccessService.class),
                 mock(AgentTaskWorkItemDao.class), mock(AgentWorkItemLeaseService.class));
         var formalDao = mock(cn.jia.agent.dao.AgentTaskFormalDeliveryDao.class);
@@ -1139,5 +1143,19 @@ class PersonalWorkspaceExecutionServiceImplTest {
         } catch (java.security.NoSuchAlgorithmException unavailable) {
             throw new IllegalStateException("SHA-256 is required for workspace fixture hashes", unavailable);
         }
+    }
+
+    /** Existing fixture has one authenticated owner. Cross-owner fixtures supply explicit grant authority separately. */
+    private static void wireAssigneeFixture(cn.jia.agent.service.PersonalWorkspaceExecutionService instance,
+            cn.jia.agent.dao.PersonalWorkspaceExecutionDao rows) {
+        var service=(cn.jia.agent.service.impl.PersonalWorkspaceExecutionServiceImpl)instance;
+        var authority=org.mockito.Mockito.mock(cn.jia.agent.service.TaskAssigneeAuthorityService.class);
+        org.mockito.Mockito.when(authority.resolveForAssignment(org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString()))
+            .thenAnswer(i->new cn.jia.agent.service.TaskAssigneeAuthorityService.Target(i.getArgument(0),i.getArgument(1),i.getArgument(2),i.getArgument(3),1L,null));
+        org.mockito.Mockito.when(authority.requireGrantTarget(org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyLong()))
+            .thenAnswer(i->new cn.jia.agent.service.TaskAssigneeAuthorityService.Target(i.getArgument(0),i.getArgument(1),i.getArgument(2),"agent",1L,null));
+        service.setAssigneeAuthority(authority);
+        org.mockito.Mockito.when(rows.findForRuntime(org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString()))
+            .thenAnswer(i->rows.findByTaskRun(i.getArgument(0),i.getArgument(1),i.getArgument(2),i.getArgument(4),i.getArgument(5)));
     }
 }

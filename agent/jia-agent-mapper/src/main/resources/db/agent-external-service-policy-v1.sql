@@ -1,0 +1,20 @@
+CREATE TABLE IF NOT EXISTS agent_external_service_policy (
+ id BIGINT NOT NULL AUTO_INCREMENT,
+ tenant_id VARCHAR(50) COLLATE utf8mb4_0900_bin NOT NULL,
+ client_id VARCHAR(50) COLLATE utf8mb4_0900_bin NOT NULL,
+ provider_owner_jiacn VARCHAR(50) COLLATE utf8mb4_0900_bin NOT NULL,
+ agent_id VARCHAR(100) COLLATE utf8mb4_0900_bin NOT NULL,
+ binding_id BIGINT NOT NULL,
+ revision BIGINT NOT NULL,
+ expected_revision BIGINT NOT NULL,
+ enabled BOOLEAN NOT NULL,
+ idempotency_key VARCHAR(100) COLLATE utf8mb4_0900_bin NOT NULL,
+ request_hash CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+ created_at BIGINT NOT NULL,
+ PRIMARY KEY (id),
+ UNIQUE KEY uk_external_policy_revision (tenant_id,client_id,agent_id,binding_id,revision),
+ UNIQUE KEY uk_external_policy_request (tenant_id,client_id,provider_owner_jiacn,idempotency_key),
+ CONSTRAINT chk_external_policy_revision CHECK (expected_revision>=0 AND revision=expected_revision+1),
+ CONSTRAINT chk_external_policy_enabled CHECK (enabled IN (0,1)),
+ CONSTRAINT chk_external_policy_binding CHECK (binding_id>0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;

@@ -206,6 +206,15 @@ public class AgentTaskMetaDaoImpl extends BaseDaoImpl<AgentTaskMetaMapper, Agent
     }
 
     @Override
+    public List<AgentTaskMetaEntity> findByAgentInOwnerScope(String tenantId, String clientId,
+            String ownerJiacn, String agentId, int limit) {
+        requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
+        requireExactId(agentId, "agentId", 100);
+        return baseMapper.selectByAgentInOwnerScope(tenantId, clientId, ownerJiacn, agentId,
+                TaskCollaborationDaoSupport.boundedLimit(limit));
+    }
+
+    @Override
     public List<AgentTaskStatsRow> findStatsByAgents(List<AgentTaskStatsScope> scopes) {
         if (scopes == null || scopes.isEmpty()) {
             return List.of();
