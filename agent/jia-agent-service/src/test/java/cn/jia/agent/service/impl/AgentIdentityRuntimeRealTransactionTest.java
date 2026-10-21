@@ -65,7 +65,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
@@ -139,15 +139,22 @@ class AgentIdentityRuntimeRealTransactionTest {
         AgentRegisterDTO request = new AgentRegisterDTO();
         request.setAgentId(bound.getAgentId());
         request.setEndpoint("wss://agent/one");
+        // Registration cannot create/rotate credentials: an authenticated unified session
+        // must already have claimed this exact runtime. Model that persisted boundary.
+        assertThrows(AgentServiceImpl.AgentBizException.class, () -> agentService.register(request));
+        assertEquals("PROVISIONED", jdbc.queryForObject("SELECT lifecycle_status FROM agent_identity_registry", String.class));
+        jdbc.update("UPDATE agent_runtime SET tenant_id='0', runtime_installation_id='install-a', "
+                + "runtime_host_id='host-a', runtime_instance_id='runtime-a', runtime_session_generation=1, token_hash='urs1:synthetic'");
         AgentRegisterResultDTO first = agentService.register(request);
-        String firstToken = first.getToken();
+        assertNull(first.getToken());
         assertEquals(bound.getAgentId(), first.getAgentId());
         assertEquals("ACTIVE", jdbc.queryForObject(
                 "SELECT lifecycle_status FROM agent_identity_registry", String.class));
 
         AgentRegisterResultDTO repeated = agentService.register(request);
         assertEquals(bound.getAgentId(), repeated.getAgentId());
-        assertNotEquals(firstToken, repeated.getToken());
+        assertNull(repeated.getToken());
+        assertEquals("urs1:synthetic", jdbc.queryForObject("SELECT token_hash FROM agent_runtime", String.class));
         assertEquals(1, count("SELECT COUNT(*) FROM agent_runtime"));
         assertEquals(1, count("SELECT COUNT(*) FROM agent_identity_registry"));
     }
@@ -446,6 +453,8 @@ class AgentIdentityRuntimeRealTransactionTest {
                     name VARCHAR(100) NOT NULL, avatar VARCHAR(500), owner_jiacn VARCHAR_IGNORECASE(50),
                     persona_code VARCHAR(50), persona_name VARCHAR(50), binding_id BIGINT,
                     abilities CLOB, endpoint VARCHAR(500), token_hash VARCHAR(200),
+                    runtime_installation_id VARCHAR(100), runtime_host_id VARCHAR(100),
+                    runtime_instance_id VARCHAR(100), runtime_session_generation BIGINT,
                     status VARCHAR(20) NOT NULL, current_task_id VARCHAR(100),
                     current_task_title VARCHAR(200), last_seen_at BIGINT, error_message VARCHAR(1000),
                     create_time BIGINT, update_time BIGINT,
