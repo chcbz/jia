@@ -444,7 +444,7 @@ class AgentExternalServicePolicyMySqlTest {
         persistExternalGrant();
         assertEquals(B, authority.requireTaskAgent("0", "client-a", "task-owner", "task-a", B, true));
         assertEquals(B, authority.requireTaskAgent("0", "client-a", "task-owner", "task-a", B, false));
-        jdbc.update("UPDATE agent_task_execution_grant SET state='REVOKED',grant_version=2 WHERE grant_id='grant-a'");
+        jdbc.update("UPDATE agent_task_execution_grant SET state='REVOKED',grant_version=2,revoked_at=2,revoke_idempotency_key='revoke-fixture',revoke_request_hash=REPEAT('a',64) WHERE grant_id='grant-a'");
         assertEquals(B, authority.requireTaskAgent("0", "client-a", "task-owner", "task-a", B, false));
         assertThrows(AgentTaskExecutionGrantException.class,
                 () -> authority.requireTaskAgent("0", "client-a", "task-owner", "task-a", B, true));
