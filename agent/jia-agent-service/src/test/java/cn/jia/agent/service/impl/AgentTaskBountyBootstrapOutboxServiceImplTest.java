@@ -904,6 +904,7 @@ class AgentTaskBountyBootstrapOutboxServiceImplTest {
             this.grant = grant;
             this.active = grant;
         }
+        @Override public AgentTaskExecutionGrantEntity findLatestByTaskAgent(String t,String c,String o,String task,String agent){throw new AssertionError();}
         @Override public AgentTaskExecutionGrantEntity findByActionForUpdate(
                 String t, String c, String o, String action) {
             order.add("grant-action");

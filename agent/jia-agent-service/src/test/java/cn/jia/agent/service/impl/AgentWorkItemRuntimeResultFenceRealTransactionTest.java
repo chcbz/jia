@@ -93,7 +93,7 @@ class AgentWorkItemRuntimeResultFenceRealTransactionTest {
         var agents=mock(AgentService.class);
         when(agents.requireApiKeyOwnedAgentForUpdate(anyString(),anyString(),anyString())).thenAnswer(inv->{var row=new AgentRuntimeDTO();row.setAgentId(inv.getArgument(2));row.setStatus("online");return row;});
         // Explicit identity authority on the raw B04 service (proxy construction must not hide its mandatory setter).
-        var rawLease=new AgentWorkItemLeaseServiceImpl(memberDao,workDao,roots,writer,()->NOW,()->TOKEN,900_000);rawLease.setIdentityService(identities);leases=proxy(rawLease,AgentWorkItemLeaseService.class);
+        var rawLease=new AgentWorkItemLeaseServiceImpl(memberDao,workDao,roots,writer,()->NOW,()->TOKEN,900_000);rawLease.setAssigneeAuthority(new TaskAssigneeAuthorityServiceImpl(org.mockito.Mockito.mock(cn.jia.agent.dao.AgentExternalServicePolicyDao.class), identities, org.mockito.Mockito.mock(cn.jia.agent.dao.AgentTaskExecutionGrantDao.class)));leases=proxy(rawLease,AgentWorkItemLeaseService.class);
         var transport=new AgentCommandTransportWriter() {
             @Override public AgentCommandTransportWriteResult write(AgentCommandDraft draft){throw new UnsupportedOperationException();}
             @Override public AgentCommandTransportWriteResult writeAuthorizedHall(AgentCommandDraft draft,String actor){

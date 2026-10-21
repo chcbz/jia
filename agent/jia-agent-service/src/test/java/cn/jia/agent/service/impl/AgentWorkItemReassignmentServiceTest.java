@@ -337,7 +337,7 @@ class AgentWorkItemReassignmentServiceTest {
     private AgentWorkItemLeaseServiceImpl actualLease(AgentIdentityService authority) {
         var actual = new AgentWorkItemLeaseServiceImpl(memberDao, workItemDao, new InlineTransaction(root),
                 eventWriter, () -> NOW, () -> NEW_TOKEN, 900_000);
-        actual.setIdentityService(authority);
+        actual.setAssigneeAuthority(new TaskAssigneeAuthorityServiceImpl(org.mockito.Mockito.mock(cn.jia.agent.dao.AgentExternalServicePolicyDao.class), authority, org.mockito.Mockito.mock(cn.jia.agent.dao.AgentTaskExecutionGrantDao.class)));
         return actual;
     }
 

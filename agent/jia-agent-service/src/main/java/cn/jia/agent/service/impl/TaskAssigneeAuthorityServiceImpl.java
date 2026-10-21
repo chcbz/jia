@@ -53,6 +53,34 @@ public final class TaskAssigneeAuthorityServiceImpl implements TaskAssigneeAutho
                 identity.getBindingId(),identity.getCanonicalAgentId());
         return target(identity,grant.getExternalPolicyRevision());
     }
+    @Override public String requireTaskAgent(String tenant, String client, String owner,
+            String task, String agent, boolean active) {
+        var grant = grants.findLatestByTaskAgent(tenant, client, owner, task, agent);
+        if (grant == null) {
+            // Existing owner-local collaboration can have no execution grant. This path never
+            // admits an external Agent and does not repair an incomplete persisted grant.
+            return active ? identities.requireCanonicalAgentIdInScope(tenant, client, owner, agent)
+                    : identities.requirePersistedCanonicalAgentIdInScope(tenant, client, owner, agent);
+        }
+        if (!Objects.equals(tenant, grant.getTenantId()) || !Objects.equals(client, grant.getClientId())
+                || !Objects.equals(owner, grant.getOwnerJiacn()) || !Objects.equals(task, grant.getTaskId())
+                || !Objects.equals(agent, grant.getTargetAgentId())
+                || grant.getExecutorOwnerJiacn() == null || grant.getExecutorOwnerJiacn().isBlank()
+                || grant.getExecutorBindingId() == null || grant.getExecutorBindingId() <= 0) throw missing();
+        if (active) {
+            var current = grants.findActiveByTask(tenant, client, owner, task);
+            if (!"ACTIVE".equals(grant.getState()) || current == null
+                    || grant.getGrantId() == null || !grant.getGrantId().equals(current.getGrantId())
+                    || grant.getGrantVersion() == null || grant.getGrantVersion() < 1
+                    || !Objects.equals(grant.getGrantVersion(), current.getGrantVersion())) throw missing();
+            return requireGrantTarget(tenant, client, owner, task,
+                    grant.getGrantId(), grant.getGrantVersion()).agentId();
+        }
+        // Historical canonical validation is not live authorization; revoked bindings must
+        // remain inspectable so expiry and aggregation can consume the persisted snapshot.
+        return identities.requirePersistedCanonicalAgentIdInScope(
+                tenant, client, grant.getExecutorOwnerJiacn(), agent);
+    }
     private AgentIdentityRegistryEntity identity(String tenant,String client,String agent) {
         if (tenant==null || client==null || agent==null) throw missing();
         var i=policies.identity(tenant,client,agent);

@@ -72,6 +72,17 @@ public interface AgentTaskExecutionGrantMapper extends BaseMapper<AgentTaskExecu
             @Param("clientId") String clientId, @Param("ownerJiacn") String ownerJiacn,
             @Param("taskId") String taskId, @Param("grantId") String grantId);
 
+    @Select("SELECT " + COLUMNS + " FROM agent_task_execution_grant"
+            + " WHERE tenant_id=#{tenantId} AND client_id=#{clientId} AND owner_jiacn=#{ownerJiacn}"
+            + " AND task_id=#{taskId} AND target_agent_id=#{agentId}" + EXACT_SCOPE + EXACT_TASK + """
+              AND CAST(target_agent_id AS BINARY)=CAST(#{agentId} AS BINARY)
+              AND OCTET_LENGTH(target_agent_id)=OCTET_LENGTH(#{agentId})
+              ORDER BY assignment_revision DESC, created_at DESC, id DESC LIMIT 1
+            """)
+    AgentTaskExecutionGrantEntity selectLatestByTaskAgent(@Param("tenantId") String tenantId,
+            @Param("clientId") String clientId, @Param("ownerJiacn") String ownerJiacn,
+            @Param("taskId") String taskId, @Param("agentId") String agentId);
+
     @Select("SELECT event_json FROM agent_task_event"
             + " WHERE tenant_id=#{tenantId} AND client_id=#{clientId} AND owner_jiacn=#{ownerJiacn}"
             + " AND task_id=#{taskId} AND event_type='TASK_ASSIGNED'" + EXACT_SCOPE + EXACT_TASK + """

@@ -123,7 +123,7 @@ class AgentLegacyTaskIdentityRaceRealTransactionTest {
                 AgentIdentityService.class);
         pausingIdentityService = pausingIdentityProxy(identityService);
         aggregationService = transactionalInterfaceProxy(
-                new AgentTaskAggregationServiceImpl(taskMetaDao, identityService,
+                new AgentTaskAggregationServiceImpl(taskMetaDao, new TaskAssigneeAuthorityServiceImpl(org.mockito.Mockito.mock(cn.jia.agent.dao.AgentExternalServicePolicyDao.class), identityService, org.mockito.Mockito.mock(cn.jia.agent.dao.AgentTaskExecutionGrantDao.class)),
                         new AgentTaskAggregationCalculator(), () -> 2_000L),
                 AgentTaskAggregationService.class);
         AgentTaskMutationTransaction mutationTransaction =

@@ -267,7 +267,7 @@ class AgentTaskWorkItemParentGateMySqlTest {
                 org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyString()))
                 .thenAnswer(invocation -> invocation.getArgument(3));
         return transactionalProxy(new AgentTaskAggregationServiceImpl(
-                taskMetaDao, identityService,
+                taskMetaDao, new TaskAssigneeAuthorityServiceImpl(org.mockito.Mockito.mock(cn.jia.agent.dao.AgentExternalServicePolicyDao.class), identityService, org.mockito.Mockito.mock(cn.jia.agent.dao.AgentTaskExecutionGrantDao.class)),
                 new AgentTaskAggregationCalculator(), () -> 1_000L),
                 transactionManager);
     }

@@ -732,6 +732,7 @@ class AgentTaskExecutionGrantServiceImplTest {
         private final Map<String,AgentTaskExecutionGrantEntity> byAction=new LinkedHashMap<>();
         private final Map<String,AgentTaskExecutionGrantEntity> byId=new LinkedHashMap<>();
         private Long latestAssignedVersion=1L;
+        @Override public AgentTaskExecutionGrantEntity findLatestByTaskAgent(String t,String c,String o,String task,String agent){return byId.values().stream().filter(g->t.equals(g.getTenantId())&&c.equals(g.getClientId())&&o.equals(g.getOwnerJiacn())&&task.equals(g.getTaskId())&&agent.equals(g.getTargetAgentId())).max(java.util.Comparator.comparing(AgentTaskExecutionGrantEntity::getAssignmentRevision)).orElse(null);}
         @Override public AgentTaskExecutionGrantEntity findByActionForUpdate(String t,String c,String o,String a){return byAction.get(a);}
         @Override public AgentTaskExecutionGrantEntity findByGrantForUpdate(String t,String c,String o,String task,String id){return byId.get(id);}
         @Override public AgentTaskExecutionGrantEntity findActiveByTask(String t,String c,String o,String task){return byId.values().stream().filter(g->task.equals(g.getTaskId())&&"ACTIVE".equals(g.getState())).findFirst().orElse(null);}

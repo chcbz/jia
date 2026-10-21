@@ -440,6 +440,20 @@ class AgentExternalServicePolicyMySqlTest {
             lockTask(); insertGrant(authority.lockForAssignment("0", "client-a", "task-owner", B));
         });
     }
+    @Test void taskParticipantIdentityUsesFrozenProviderThroughRealGrantMapper() {
+        persistExternalGrant();
+        assertEquals(B, authority.requireTaskAgent("0", "client-a", "task-owner", "task-a", B, true));
+        assertEquals(B, authority.requireTaskAgent("0", "client-a", "task-owner", "task-a", B, false));
+        jdbc.update("UPDATE agent_task_execution_grant SET state='REVOKED',grant_version=2 WHERE grant_id='grant-a'");
+        assertEquals(B, authority.requireTaskAgent("0", "client-a", "task-owner", "task-a", B, false));
+        assertThrows(AgentTaskExecutionGrantException.class,
+                () -> authority.requireTaskAgent("0", "client-a", "task-owner", "task-a", B, true));
+        assertThrows(RuntimeException.class,
+                () -> authority.requireTaskAgent("0", "client-a", "task-owner", "TASK-A", B, false));
+        assertThrows(RuntimeException.class,
+                () -> authority.requireTaskAgent("0", "client-a", "third-owner", "task-a", B, false));
+    }
+
     private void seedExecution(String run, String mode, String target, String grant, Long version) {
         jdbc.update("""
                 INSERT INTO agent_personal_workspace_execution

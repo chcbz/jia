@@ -76,7 +76,7 @@ class AgentWorkItemLeaseServiceImplTest extends BaseMockTest {
             org.mockito.Mockito.lenient().when(identityAuthority.requirePersistedCanonicalAgentIdInScope(
                     TENANT, CLIENT, OWNER, canonical)).thenReturn(canonical);
         }
-        service.setIdentityService(identityAuthority);
+        service.setAssigneeAuthority(new TaskAssigneeAuthorityServiceImpl(org.mockito.Mockito.mock(cn.jia.agent.dao.AgentExternalServicePolicyDao.class), identityAuthority, org.mockito.Mockito.mock(cn.jia.agent.dao.AgentTaskExecutionGrantDao.class)));
         lenient().when(memberDao.findByTaskAndAgent(TENANT, CLIENT, OWNER, TASK, AGENT))
                 .thenReturn(member(AGENT, "accepted"));
     }
@@ -104,6 +104,28 @@ class AgentWorkItemLeaseServiceImplTest extends BaseMockTest {
         assertEquals("preserve-description", update.getValue().getDescription());
         assertEquals(AGENT, update.getValue().getAssigneeAgentId());
         assertEquals(1, update.getValue().getAttemptCount(), "claim does not consume an attempt");
+    }
+
+    @Test
+    void crossOwnerClaimKeepsTaskScopeWhileCanonicalIdentityUsesProvider() {
+        var grants = org.mockito.Mockito.mock(cn.jia.agent.dao.AgentTaskExecutionGrantDao.class);
+        var policies = org.mockito.Mockito.mock(cn.jia.agent.dao.AgentExternalServicePolicyDao.class);
+        var identities = org.mockito.Mockito.mock(cn.jia.agent.service.AgentIdentityService.class);
+        var g = new cn.jia.agent.entity.AgentTaskExecutionGrantEntity().setGrantId("grant-external")
+                .setGrantVersion(1L).setState("ACTIVE").setTaskId(TASK).setOwnerJiacn(OWNER)
+                .setTargetAgentId(AGENT).setExecutorOwnerJiacn("provider-b").setExecutorBindingId(9L);
+        g.setTenantId(TENANT); g.setClientId(CLIENT);
+        var i = new cn.jia.agent.entity.AgentIdentityRegistryEntity().setCanonicalAgentId(AGENT)
+                .setCanonicalType("OPAQUE").setOwnerJiacn("provider-b").setBindingId(9L).setLifecycleStatus("ACTIVE");
+        i.setTenantId(TENANT); i.setClientId(CLIENT);
+        when(grants.findLatestByTaskAgent(TENANT,CLIENT,OWNER,TASK,AGENT)).thenReturn(g);
+        when(grants.findActiveByTask(TENANT,CLIENT,OWNER,TASK)).thenReturn(g);
+        when(grants.findByGrant(TENANT,CLIENT,OWNER,TASK,"grant-external")).thenReturn(g);
+        when(policies.identity(TENANT,CLIENT,AGENT)).thenReturn(i);
+        service.setAssigneeAuthority(new TaskAssigneeAuthorityServiceImpl(policies,identities,grants));
+        claimReadyUsesScopedCasAndPreservesCompleteSnapshot();
+        verify(identities).requireActiveIdentityForBinding(TENANT,CLIENT,"provider-b",9L,AGENT);
+        verify(policies,never()).latestForUpdate(any(),any(),any(),anyLong());
     }
 
     @Test
