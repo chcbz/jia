@@ -458,6 +458,8 @@ def mmdU1GrantSourceSet = sourceSets.create('mmdU1Grant') {
         srcDir 'src/test/java'
         include 'cn/jia/agent/service/impl/TaskAssigneeAuthorityServiceImplTest.java'
         include 'cn/jia/agent/service/impl/AgentExternalServicePolicyServiceImplTest.java'
+        include 'cn/jia/agent/api/AgentExternalServicePolicyControllerTest.java'
+        include 'cn/jia/agent/service/impl/AgentExternalServicePolicyMySqlTest.java'
         include 'cn/jia/agent/service/impl/AgentTaskExecutionGrantServiceImplTest.java'
         include 'cn/jia/agent/api/AgentTaskExecutionGrantControllerTest.java'
         include 'cn/jia/agent/config/AgentTaskExecutionGrantSchemaContractTest.java'
