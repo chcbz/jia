@@ -55,6 +55,11 @@ public final class AgentExternalServicePolicyController {
         return ResponseEntity.status(failure.status()).header(HttpHeaders.CACHE_CONTROL,"private, no-store")
                 .body(JsonResult.failure(failure.code(),failure.getMessage()));
     }
+    @ExceptionHandler({org.springframework.web.method.annotation.MethodArgumentTypeMismatchException.class,
+            org.springframework.web.bind.MissingRequestHeaderException.class})
+    public ResponseEntity<?> invalidHttpArgument(Exception invalid) {
+        return failure(bad());
+    }
     @ExceptionHandler(org.springframework.dao.DuplicateKeyException.class)
     public ResponseEntity<?> duplicate(org.springframework.dao.DuplicateKeyException failure) {
         return failure(new AgentTaskExecutionGrantException(AgentTaskExecutionGrantException.Reason.IDEMPOTENCY_CONFLICT,"Policy operation conflicts with a committed request"));

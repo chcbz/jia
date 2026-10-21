@@ -588,7 +588,11 @@ class PersonalWorkspaceConversationExecutionTest {
         assertTrue(sql.contains("created_at &gt; #{afterCreatedAt}"));
         assertTrue(sql.contains("CAST(execution_id AS BINARY) &gt; CAST(#{afterExecutionId} AS BINARY)"));
         assertTrue(sql.contains("<if test='afterCreatedAt != null and afterExecutionId != null'>"));
-        for (String key:List.of("tenant_id","client_id","owner_jiacn","target_agent_id","execution_mode")) {
+        assertTrue(sql.contains("g.owner_jiacn=agent_personal_workspace_execution.owner_jiacn"));
+        assertTrue(sql.contains("g.grant_id=agent_personal_workspace_execution.task_grant_id"));
+        assertTrue(sql.contains("g.grant_version=agent_personal_workspace_execution.task_grant_version"));
+        assertTrue(sql.contains("BINARY g.executor_owner_jiacn=BINARY #{ownerJiacn}"));
+        for (String key:List.of("tenant_id","client_id","target_agent_id","execution_mode")) {
             assertTrue(sql.contains("CAST("+key+" AS BINARY)"),key);
             assertTrue(sql.contains("OCTET_LENGTH("+key+")"),key);
         }
@@ -664,6 +668,10 @@ class PersonalWorkspaceConversationExecutionTest {
             row.setOwnerJiacn(i==2 ? "other-owner" : "owner");
             foreignRows.add(row);
         }
+        // The production mapper rejects a different data owner unless a persisted grant
+        // explicitly binds this executor. This fixture has no grant for foreign-task.
+        when(rows.findForRuntime("0","client","owner","agent","foreign-task","foreign-run"))
+                .thenReturn(null);
         execution.setCreatedAt(104L);
         var page=new java.util.ArrayList<>(foreignRows);
         page.add(execution);
