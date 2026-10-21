@@ -1,6 +1,10 @@
 package cn.jia.chat.service;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Nested;
+import cn.jia.chat.deliberation.*;
+import cn.jia.chat.handler.TypedInspectionSessionRegistry;
+import static org.mockito.Mockito.*;
 import tools.jackson.databind.json.JsonMapper;
 import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
@@ -72,4 +76,103 @@ class ChatActionOutcomeV5Test {
         assertThrows(IllegalArgumentException.class,()->ChatActionOutcomeContract.outcome(value,facts,ChatDeliveryRevisionContract.basis(fixture().get("basis"))));
     }
 
+    /** Real final reconstruction/receipt validator; only persistence is mocked. */
+    @Nested class PersistedRevisionReplay {
+        final ChatTypedDeliberationStore store=mock(ChatTypedDeliberationStore.class);
+        final ChatDeliberationDao dao=mock(ChatDeliberationDao.class);
+        final ChatTypedReviewContextStore reviews=mock(ChatTypedReviewContextStore.class);
+        final ChatActionFinalService service=new ChatActionFinalService(store,dao,mock(TypedInspectionSessionRegistry.class));
+        final ChatTypedDeliberationStore.Scope scope=new ChatTypedDeliberationStore.Scope("0","owner","client","7",1);
+        ChatTypedDeliberationStore.Outcome row;
+        ChatDispatchOutboxEntity event;
+        Map<String,Object> stored, receipt;
+        ChatActionFinalValidator.ValidatedFinal original;
+
+        @SuppressWarnings("unchecked") void arrange(boolean material) {
+            var f=new ChatActionOutcomeV5Test().fixture();
+            var binding=(Map<String,Object>)f.get("binding");
+            var basis=ChatDeliveryRevisionContract.basis(f.get("basis"));
+            var outcome=(Map<String,Object>)f.get("outcome");
+            var facts=new LinkedHashMap<String,Object>((Map<String,Object>)f.get("facts"));
+            var snapshotFacts=new LinkedHashMap<String,Object>();
+            List<Map<String,Object>> catalog=List.of();
+            receipt=null;
+            if(material) {
+                var source=new LinkedHashMap<String,Object>();
+                source.put("sourceKind","TASK_WORKSPACE_FILE");source.put("mediaType","image");
+                source.put("contentMimeType","image/png");source.put("contentHash","a".repeat(64));source.put("byteLength","12");
+                source.put("sourceIdentity",Map.of("kind","TASK_WORKSPACE_FILE","fileId","file","fileVersion","1"));
+                var context=new ChatTypedDeliberationContextService.Scope("0","owner","client","7",1);
+                String ref=ChatTypedDeliberationContextService.sourceRefId(context,source);source.put("sourceRefId",ref);
+                catalog=List.of(source);
+                facts.put("availableSources",List.of(Map.of("sourceRefId",ref,"kind","TASK_WORKSPACE_FILE","mediaType","image","contentMimeType","image/png")));
+                var manifestSource=Map.of("sourceRefId",ref,"sha256","a".repeat(64),"byteLength","12",
+                        "mimeType","image/png","carrier","LOCAL_IMAGE","carrierContractDigest","sha256:"+"b".repeat(64));
+                var materials=Map.of("authorizationId","materials_fixture","manifestDigest","sha256:"+"c".repeat(64),
+                        "manifest",Map.of("sources",List.of(manifestSource)));
+                snapshotFacts.put("materialsInput",materials);
+                receipt=new LinkedHashMap<>();receipt.put("schemaVersion",1);receipt.put("authorizationId","materials_fixture");
+                receipt.put("manifestDigest","sha256:"+"c".repeat(64));
+                receipt.put("sources",List.of(Map.of("sourceRefId",ref,"sha256","a".repeat(64),"byteLength","12",
+                        "carrier","LOCAL_IMAGE","contributionDigest","sha256:"+"d".repeat(64))));
+                String digest="sha256:"+ChatDeliveryReviewContract.sha(CanonicalContextJson.write(receipt));
+                receipt.put("inputDigest",digest);receipt.put("engineThreadId","engine-thread");receipt.put("engineTurnId","engine-turn");
+            }
+            snapshotFacts.put("typedDeliberation",facts);snapshotFacts.put("reviewBasis",f.get("basis"));
+            original=ChatActionFinalValidator.validateJson(binding,facts,ChatMaterialsInputContract.authority(snapshotFacts.get("materialsInput")),
+                    (String)outcome.get("text"),5,CanonicalContextJson.write(outcome),receipt==null?null:CanonicalContextJson.write(receipt),basis);
+            String request=basis.sourceRequestId(), task=basis.taskId(), catalogJson=CanonicalContextJson.write(catalog);
+            var admission=new ChatTypedDeliberationStore.Admission("admission",scope,"key","sha256:"+"1".repeat(64),"sha256:"+"1".repeat(64),
+                    "DISCUSSION",task,1,null,null,request,1,100,"[\"turn\"]",catalogJson,"ADMITTED",0,0,1);
+            stored=new LinkedHashMap<>();stored.put("schemaVersion",5);stored.put("interactionOutcome",outcome);stored.put("inspectionInputReceipt",receipt);
+            row=new ChatTypedDeliberationStore.Outcome("outcome",scope,request,1,"turn",task,1,101,original.finalDigest(),"REVISION_REQUEST",original.content(),
+                    CanonicalContextJson.write(original.binding()),CanonicalContextJson.write(ChatActionFinalValidator.factsMap(original.dispatchFacts())),
+                    CanonicalContextJson.write(stored),catalogJson,1);
+            var turn=new ChatTurnEntity().setTenantId("0").setOwnerJiacn("owner").setClientId("client").setConversationId("7").setConversationGeneration(1L)
+                    .setRequestId(request).setRequestRevision(1L).setTurnId("turn").setDispatchId("dispatch").setSnapshotId("snapshot")
+                    .setContextDigest((String)binding.get("contextDigest")).setTargetAgentId("wuyong").setRoute("CHAT").setState("PUBLISHED")
+                    .setFinalMessageId(101L).setFinalDigest(original.finalDigest());
+            var snapshot=new ChatContextSnapshotEntity().setTenantId("0").setOwnerJiacn("owner").setClientId("client").setConversationId("7").setConversationGeneration(1L)
+                    .setRequestId(request).setRequestRevision(1L).setSnapshotId("snapshot").setContextDigest(turn.getContextDigest())
+                    .setTargetAgentId("wuyong").setRoute("CHAT").setFactsManifestJson(CanonicalContextJson.write(snapshotFacts));
+            event=new ChatDispatchOutboxEntity().setEventId(ChatDeliveryRevisionService.eventId(row)).setEventType(ChatDeliveryRevisionService.EVENT)
+                    .setTenantId("0").setOwnerJiacn("owner").setClientId("client").setTurnId("turn").setDispatchId("dispatch")
+                    .setPayloadJson(CanonicalContextJson.write(ChatDeliveryRevisionService.payload(row)));
+            service.setReviewContextStore(reviews);when(reviews.require(scope,request,1)).thenReturn(basis);
+            when(dao.findTurn("0","owner","client","turn")).thenReturn(turn);
+            when(dao.findSnapshot("0","owner","client","snapshot")).thenReturn(snapshot);
+            when(store.findAdmissionByRequest(scope,request)).thenReturn(admission);installStored();
+        }
+        void installStored() {
+            var r=row;
+            row=new ChatTypedDeliberationStore.Outcome(r.outcomeId(),r.scope(),r.requestId(),r.requestRevision(),r.turnId(),r.taskId(),r.assignmentRevision(),
+                    r.assistantMessageId(),r.finalDigest(),r.kind(),r.text(),r.bindingJson(),r.factsJson(),CanonicalContextJson.write(stored),r.sourceCatalogJson(),r.createdAt());
+            when(store.findOutcomeByTurn(scope,"turn",false)).thenReturn(row);
+        }
+        @Test void revisionWithNativeMaterialReplaysExactPersistedReceiptAndDigest() {
+            arrange(true);var loaded=service.loadRevision(event);
+            assertEquals(original.finalDigest(),loaded.parent().validated().finalDigest());
+            assertEquals(original.inspectionInputReceipt(),loaded.parent().validated().inspectionInputReceipt());
+            assertEquals("REVISION_REQUEST",loaded.parent().validated().interactionOutcome().kind());
+        }
+        @Test void noMaterialRevisionStillReplaysWithoutInventingReceipt() {
+            arrange(false);assertNull(service.loadRevision(event).parent().validated().inspectionInputReceipt());
+        }
+        @Test void missingNativeReceiptIsRejectedRatherThanBypassed() {
+            arrange(true);stored.put("inspectionInputReceipt",null);installStored();assertThrows(RuntimeException.class,()->service.loadRevision(event));
+        }
+        @Test void alteredSourceProofIsRejected() {
+            arrange(true);receipt.put("inputDigest","sha256:"+"0".repeat(64));installStored();assertThrows(RuntimeException.class,()->service.loadRevision(event));
+        }
+        @Test void validButDifferentReceiptStillFailsImmutableFinalDigest() {
+            arrange(true);receipt.put("engineTurnId","other-turn");installStored();assertThrows(RuntimeException.class,()->service.loadRevision(event));
+        }
+        @Test void storedEnvelopeVersionAndUnknownFieldsAreNotSilentlyAccepted() {
+            arrange(true);stored.put("schemaVersion",4);installStored();assertThrows(RuntimeException.class,()->service.loadRevision(event));
+            stored.put("schemaVersion",5);stored.put("unexpected",true);installStored();assertThrows(RuntimeException.class,()->service.loadRevision(event));
+        }
+        @Test void copiedEventCannotChangePayloadOrIdentity() {
+            arrange(true);event.setPayloadJson("{}");assertThrows(RuntimeException.class,()->service.loadRevision(event));
+        }
+    }
 }

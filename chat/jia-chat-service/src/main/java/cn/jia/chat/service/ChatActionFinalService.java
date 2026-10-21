@@ -230,9 +230,14 @@ public class ChatActionFinalService {
         var snapshot=dao.findSnapshot(scope.tenantId(),scope.ownerJiacn(),scope.clientId(),turn.getSnapshotId());
         verifySnapshot(turn,snapshot);var facts=parse(snapshot.getFactsManifestJson());
         var basis=reviewBasis(facts,scope,admission);var stored=parse(row.outcomeJson());
+        if (!stored.keySet().equals(Set.of("schemaVersion", "interactionOutcome", "inspectionInputReceipt"))
+                || !Integer.valueOf(5).equals(stored.get("schemaVersion"))) throw persistence("Stored revision final is invalid");
+        // A revision may carry the same native-material proof as its original CHAT final.
+        // Replay that exact receipt; dropping it rejects valid finals and changes their digest.
         var validated=ChatActionFinalValidator.validateJson(binding(turn,row.taskId()),discussion(facts,"CHAT"),
                 ChatMaterialsInputContract.authority(facts.get("materialsInput")),row.text(),5,
-                canonical(stored.get("interactionOutcome")),null,basis);
+                canonical(stored.get("interactionOutcome")),stored.get("inspectionInputReceipt") == null
+                        ? null : canonical(stored.get("inspectionInputReceipt")),basis);
         if(!row.finalDigest().equals(validated.finalDigest()) || !"REVISION_REQUEST".equals(validated.interactionOutcome().kind())
                 || !row.requestId().equals(turn.getRequestId()) || row.requestRevision()!=turn.getRequestRevision()
                 || !admission.taskId().equals(row.taskId()) || admission.assignmentRevision()!=row.assignmentRevision()
