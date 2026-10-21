@@ -765,4 +765,28 @@ class JuyitingWorkflowMySqlTest {
         try { var a=pool.submit(body::get); var b=pool.submit(body::get); return List.of(a.get(),b.get()); }
         finally {pool.shutdown(); assertTrue(pool.awaitTermination(30,TimeUnit.SECONDS));}
     }
+    @Test void existingV5KindCheckMigratesOnlyUnderExplicitPermissionAndPreservesRows() throws Exception {
+        try(var r=new RevisionHarness();var connection=jdbc.getDataSource().getConnection()) {
+            var locked=new JdbcTemplate(new org.springframework.jdbc.datasource.SingleConnectionDataSource(connection,true));
+            assertEquals(1,locked.queryForObject("SELECT GET_LOCK(?,0)",Integer.class,ChatTypedDeliberationSchemaInitializer.LOCK));
+            try {
+                ChatTypedDeliberationSchemaInitializer.validateCatalog(locked);
+                int count=locked.queryForObject("SELECT COUNT(*) FROM chat_typed_outcome",Integer.class);
+                String old="kind IN ('ANSWER','CLARIFY','EXECUTION_PROPOSAL','ACTION_REQUEST','REVISION_REQUEST')";
+                locked.execute("ALTER TABLE chat_typed_outcome DROP CHECK chk_chat_typed_outcome_kind, ADD CONSTRAINT chk_chat_typed_outcome_kind CHECK ("+old+")");
+                assertFalse(ChatTypedDeliberationSchemaInitializer.ensureActionCatalog(locked,false));
+                assertEquals(count,locked.queryForObject("SELECT COUNT(*) FROM chat_typed_outcome",Integer.class));
+                assertTrue(ChatTypedDeliberationSchemaInitializer.ensureActionCatalog(locked,true));
+                assertTrue(ChatTypedDeliberationSchemaInitializer.ensureActionCatalog(locked,true));
+                ChatTypedDeliberationSchemaInitializer.validateCatalog(locked);
+                assertEquals(count,locked.queryForObject("SELECT COUNT(*) FROM chat_typed_outcome",Integer.class));
+                locked.execute("ALTER TABLE chat_typed_outcome DROP CHECK chk_chat_typed_outcome_kind, ADD CONSTRAINT chk_chat_typed_outcome_kind CHECK ("+old+")");
+                locked.execute("ALTER TABLE chat_typed_outcome DROP CHECK chk_chat_typed_outcome_generation");
+                assertThrows(IllegalStateException.class,()->ChatTypedDeliberationSchemaInitializer.ensureActionCatalog(locked,true));
+                String kind=locked.queryForObject("SELECT CHECK_CLAUSE FROM information_schema.check_constraints WHERE constraint_schema=DATABASE() AND constraint_name='chk_chat_typed_outcome_kind'",String.class);
+                assertFalse(kind.contains("SUBMISSION_REQUEST"));
+            } finally { locked.queryForObject("SELECT RELEASE_LOCK(?)",Integer.class,ChatTypedDeliberationSchemaInitializer.LOCK); }
+        }
+    }
+
 }
