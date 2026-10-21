@@ -1,0 +1,38 @@
+{
+  "facts": {
+    "schemaVersion": 5,
+    "availableActions": [],
+    "availableSources": [],
+    "inspectedSourceRefIds": []
+  },
+  "parent": {
+    "outcomeId": "media-parent",
+    "finalDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "targets": [
+    {
+      "outcomeId": "media-parent",
+      "finalDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "outputSource": {
+        "requestId": "execution-request",
+        "stepId": "execution-step",
+        "outputId": "file-1",
+        "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      }
+    }
+  ],
+  "outcome": {
+    "schemaVersion": 5,
+    "kind": "SUBMISSION_REQUEST",
+    "text": "提交已完成的成果。",
+    "clarification": null,
+    "action": null,
+    "deliverable": false,
+    "deliveryRelation": {
+      "mode": "SUBMIT",
+      "parentOutcomeId": "media-parent",
+      "parentFinalDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "revision": null
+  }
+}

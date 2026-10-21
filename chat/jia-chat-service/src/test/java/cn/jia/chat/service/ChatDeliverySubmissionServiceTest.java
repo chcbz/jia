@@ -259,4 +259,23 @@ class ChatDeliverySubmissionServiceTest {
         readableOperation("failed",false,"GRANT_REVOKED");p=service.read(row,validated("ANSWER",true));assertEquals("FAILED",p.get("state"));assertEquals(false,p.get("retryable"));
         readableOperation("completed",false,null);event.setStatus("DEAD");assertThrows(IllegalStateException.class,()->service.read(row,validated("ANSWER",true)));
     }
+    @Test void explicitExistingDeliveryEmitsOnceWithoutManufacturingTextOrExecutingTools() {
+        var actual=new ChatActionFinalService(typed,dao,mock(cn.jia.chat.handler.TypedInspectionSessionRegistry.class));
+        actual.setDeliverySubmissions(service);when(typed.insertOutcome(any())).thenReturn(1);when(dao.insertOutbox(any())).thenReturn(1);
+        var base=validated("SUBMISSION_REQUEST",false);
+        var union=new ChatActionOutcomeContract.Outcome(5,"SUBMISSION_REQUEST","提交已有成果",null,null,false,
+                new ChatActionOutcomeContract.DeliveryRelation("SUBMIT","media-parent",digest));
+        var finalValue=new ChatActionFinalValidator.ValidatedFinal(base.binding(),base.dispatchFacts(),union.text(),union,null,"{}",digest);
+        actual.persist(new ChatActionFinalService.Prepared(finalValue,scope,admission,null),101,10);
+        var saved=ArgumentCaptor.forClass(ChatTypedDeliberationStore.Outcome.class);verify(typed).insertOutcome(saved.capture());
+        assertEquals("SUBMISSION_REQUEST",saved.getValue().kind());
+        actual.persist(new ChatActionFinalService.Prepared(finalValue,scope,admission,saved.getValue()),101,10);
+        verify(dao,times(1)).insertOutbox(any());verifyNoInteractions(submissions);
+        var targets=List.<Map<String,Object>>of(Map.of("outcomeId","media-parent","finalDigest",digest,
+                "outputSource",Map.of("requestId","source-request","stepId","source-step","outputId","source-file","sha256","b".repeat(64))));
+        var selected=service.selections(new ChatDeliverySubmissionService.Candidate(saved.getValue(),admission,"agent",targets));
+        assertEquals(1,selected.size());assertNull(selected.getFirst().messageSource());
+        assertEquals("source-file",selected.getFirst().outputId());assertEquals("b".repeat(64),selected.getFirst().sha256());
+    }
+
 }

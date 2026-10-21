@@ -144,7 +144,7 @@ public final class ChatActionOutcomeContract {
                 String mode=string(raw.get("mode"),true,"ACTION_DELIVERY_RELATION_INVALID");
                 String parent=string(raw.get("parentOutcomeId"),true,"ACTION_DELIVERY_RELATION_INVALID");
                 String digest=string(raw.get("parentFinalDigest"),true,"ACTION_DELIVERY_RELATION_INVALID");
-                if (!Set.of("APPEND","REPLACE","RESET").contains(mode)
+                if (!Set.of("APPEND","REPLACE","RESET","SUBMIT").contains(mode)
                         || !parent.matches("[A-Za-z0-9][A-Za-z0-9._:-]{0,99}")
                         || !digest.matches("sha256:[0-9a-f]{64}")) throw invalid("ACTION_DELIVERY_RELATION_INVALID");
                 String target=null,targetDigest=null;
@@ -167,6 +167,11 @@ public final class ChatActionOutcomeContract {
         ChatDeliveryRevisionContract.Revision revision = null;
         if (!"REVISION_REQUEST".equals(kind) && !value.get("revision").isNull()) throw invalid("ACTION_OUTCOME_UNION_INVALID");
         switch (kind) {
+            case "SUBMISSION_REQUEST" -> {
+                if (!value.get("clarification").isNull() || !value.get("action").isNull()
+                        || !Boolean.FALSE.equals(deliverable) || relation == null || !"SUBMIT".equals(relation.mode())
+                        || relation.targetOutcomeId() != null) throw invalid("ACTION_OUTCOME_UNION_INVALID");
+            }
             case "ANSWER" -> {
                 if (!value.get("clarification").isNull() || !value.get("action").isNull()) throw invalid("ACTION_OUTCOME_UNION_INVALID");
             }
@@ -206,7 +211,8 @@ public final class ChatActionOutcomeContract {
         if (Boolean.TRUE.equals(deliverable) && !"ANSWER".equals(kind)) throw invalid("ACTION_OUTCOME_UNION_INVALID");
         // EXECUTE intent relates its future byte-backed batch, never ACTION_REQUEST prose.
         // Batch replacement still uses the existing exact output edit lineage, not this relation.
-        if (relation != null && !Boolean.TRUE.equals(deliverable)) {
+        if (relation != null && "SUBMIT".equals(relation.mode()) && !"SUBMISSION_REQUEST".equals(kind)) throw invalid("ACTION_DELIVERY_RELATION_INVALID");
+        if (relation != null && !Boolean.TRUE.equals(deliverable) && !"SUBMISSION_REQUEST".equals(kind)) {
             String selectedAction=action==null?null:action.actionId();
             var descriptor=facts.availableActions().stream()
                     .filter(item->item.actionId().equals(selectedAction)).findFirst().orElse(null);

@@ -213,7 +213,7 @@ public class ChatTypedDiscussionAdmissionService {
             if(!command.taskId().equals(row.taskId())||!scope.equals(row.scope())
                     ||!inherited.get("finalDigest").equals(row.finalDigest()))throw unavailable();
         } else if(!"DISCUSSION".equals(command.intent()))return null;
-        if(!java.util.Set.of("ANSWER","ACTION_REQUEST").contains(row.kind())){if(inherited!=null)throw unavailable();return null;}
+        if(!java.util.Set.of("ANSWER","ACTION_REQUEST","SUBMISSION_REQUEST").contains(row.kind())){if(inherited!=null)throw unavailable();return null;}
         var turn=events.findTurn(scope.tenantId(),scope.ownerJiacn(),scope.clientId(),row.turnId());
         if(turn==null||!"CHAT".equals(turn.getRoute())
                 ||!("FINAL_PERSISTED".equals(turn.getState())||"PUBLISHED".equals(turn.getState()))
@@ -231,6 +231,7 @@ public class ChatTypedDiscussionAdmissionService {
             }
             finals.deliveryTargets(scope,basis);return basis;
         }
+        if("SUBMISSION_REQUEST".equals(row.kind())) { finals.deliveryTargets(scope,basis); return basis; }
         if(inherited!=null&&!Boolean.TRUE.equals(view.get("deliverable")))throw unavailable();
         return Boolean.TRUE.equals(view.get("deliverable"))?basis:null;
     }

@@ -50,4 +50,26 @@ class ChatActionOutcomeV5Test {
         assertThrows(ChatDeliveryReviewContract.Storage.class,()->ChatDeliveryReviewContract.receipt(
                 ChatDeliveryReviewContract.json(receipt).replace("REQUEST_CHANGES","ACCEPT")));
     }
+    @SuppressWarnings("unchecked") @Test void existingResultSubmissionIsNotTextOrExecution() throws Exception {
+        Map<String,Object> f;
+        try(var stream=getClass().getResourceAsStream("/contracts/existing-delivery-submit-v5.json")) {f=JSON.readValue(stream,Map.class);}
+        var facts=ChatActionOutcomeContract.facts(f.get("facts"));
+        var value=(Map<String,Object>)f.get("outcome");
+        var parsed=ChatActionOutcomeContract.outcome(value,facts);
+        assertEquals("SUBMISSION_REQUEST",parsed.kind());assertEquals(false,parsed.deliverable());assertNull(parsed.action());
+        assertEquals(value,ChatActionFinalValidator.outcomeMap(parsed));
+        for(String mode:List.of("APPEND","REPLACE","RESET")) {
+            var bad=new LinkedHashMap<>(value);var relation=new LinkedHashMap<>((Map<String,Object>)value.get("deliveryRelation"));
+            relation.put("mode",mode);bad.put("deliveryRelation",relation);
+            assertThrows(IllegalArgumentException.class,()->ChatActionOutcomeContract.outcome(bad,facts));
+        }
+        var bad=new LinkedHashMap<>(value);bad.put("deliverable",true);
+        assertThrows(IllegalArgumentException.class,()->ChatActionOutcomeContract.outcome(bad,facts));
+        bad.put("deliverable",false);bad.put("kind","ANSWER");
+        assertThrows(IllegalArgumentException.class,()->ChatActionOutcomeContract.outcome(bad,facts));
+        bad.put("kind","SUBMISSION_REQUEST");bad.put("deliveryRelation",null);
+        assertThrows(IllegalArgumentException.class,()->ChatActionOutcomeContract.outcome(bad,facts));
+        assertThrows(IllegalArgumentException.class,()->ChatActionOutcomeContract.outcome(value,facts,ChatDeliveryRevisionContract.basis(fixture().get("basis"))));
+    }
+
 }

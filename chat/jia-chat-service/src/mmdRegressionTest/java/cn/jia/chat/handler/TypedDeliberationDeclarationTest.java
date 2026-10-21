@@ -12,7 +12,7 @@ class TypedDeliberationDeclarationTest {
         value.put("schemaVersion",5);value.put("state",state);
         value.put("carrier","CHAT_MESSAGE_FINAL_SIDECAR_V5");
         value.put("referenceModes",List.of("NONE","AVAILABLE"));
-        value.put("outcomeKinds",List.of("ANSWER","CLARIFY","ACTION_REQUEST","REVISION_REQUEST"));
+        value.put("outcomeKinds",List.of("ANSWER","CLARIFY","ACTION_REQUEST","REVISION_REQUEST","SUBMISSION_REQUEST"));
         value.put("engine","CODEX_APP_SERVER_NATIVE_OUTPUT_SCHEMA");
         value.put("strictNoToolsVerified",false);value.put("toolPolicy","read-only-constrained");
         return value;

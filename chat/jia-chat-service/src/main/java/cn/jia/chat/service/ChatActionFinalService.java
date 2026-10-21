@@ -158,7 +158,7 @@ public class ChatActionFinalService {
             if(revisions==null)throw persistence("Revision consumer unavailable");
             revisions.enqueue(row,v,now);
         }
-        if (submissions != null && "ANSWER".equals(union.kind()) && Boolean.TRUE.equals(union.deliverable()))
+        if (submissions != null && ("SUBMISSION_REQUEST".equals(union.kind()) || "ANSWER".equals(union.kind()) && Boolean.TRUE.equals(union.deliverable())))
             submissions.enqueue(row, v, now);
         return projection(row, v);
     }
@@ -479,14 +479,14 @@ public class ChatActionFinalService {
         } else throw invalid("ACTION_DELIVERY_PARENT_INVALID");
         var parent=store.findOutcome(scope,relation.parentOutcomeId(),false);
         if(parent==null||!scope.equals(parent.scope())||!admission.taskId().equals(parent.taskId())
-                ||parent.assignmentRevision()!=admission.assignmentRevision()||!Set.of("ANSWER","ACTION_REQUEST").contains(parent.kind())
+                ||parent.assignmentRevision()!=admission.assignmentRevision()||!Set.of("ANSWER","ACTION_REQUEST","SUBMISSION_REQUEST").contains(parent.kind())
                 ||!relation.parentFinalDigest().equals(parent.finalDigest())
                 ||admission.requestId().equals(parent.requestId()))throw unavailable();
         var stored=parse(parent.outcomeJson());
         if("ANSWER".equals(parent.kind())&&!Boolean.TRUE.equals(map(stored.get("interactionOutcome")).get("deliverable")))throw unavailable();
         if("REPLACE".equals(relation.mode())&&relation.targetOutcomeId()==null&&"ACTION_REQUEST".equals(parent.kind()))
             throw invalid("ACTION_DELIVERY_TARGET_INVALID"); // Text may replace only an exact retained text, not a whole media batch.
-        if(verifyTargets&&(relation.targetOutcomeId()!=null||"ACTION_REQUEST".equals(parent.kind()))) {
+        if(verifyTargets&&(relation.targetOutcomeId()!=null||"ACTION_REQUEST".equals(parent.kind())||"SUBMIT".equals(relation.mode())||"SUBMISSION_REQUEST".equals(parent.kind()))) {
             var retained=deliveryTargets(scope,basis);
             if(!canonical(retained).equals(canonical(facts.get("deliveryTargets"))))throw invalid("ACTION_DELIVERY_TARGET_INVALID");
             if(relation.targetOutcomeId()!=null)verifyTargetAdvertisement(facts,relation,retained);
@@ -506,7 +506,7 @@ public class ChatActionFinalService {
         while(true) {
             if(!visited.add(id))throw unavailable();
             var row=store.findOutcome(scope,id,false);
-            if(row==null||!scope.equals(row.scope())||!digest.equals(row.finalDigest())||!Set.of("ANSWER","ACTION_REQUEST").contains(row.kind()))throw unavailable();
+            if(row==null||!scope.equals(row.scope())||!digest.equals(row.finalDigest())||!Set.of("ANSWER","ACTION_REQUEST","SUBMISSION_REQUEST").contains(row.kind()))throw unavailable();
             if(task==null){task=row.taskId();assignment=row.assignmentRevision();}
             if(!task.equals(row.taskId())||assignment!=row.assignmentRevision())throw unavailable();
             var turn=dao.findTurn(scope.tenantId(),scope.ownerJiacn(),scope.clientId(),row.turnId());
@@ -517,7 +517,8 @@ public class ChatActionFinalService {
             if("ANSWER".equals(row.kind())) {
                 if(!Boolean.TRUE.equals(text.get("deliverable")))throw unavailable();
                 items.put(row.outcomeId(),List.of(Map.of("outcomeId",text.get("outcomeId"),"finalDigest",text.get("finalDigest"),"text",text.get("text"))));
-            } else items.put(row.outcomeId(),executionDeliveryTargets(scope,row,turn,view));
+            } else if ("SUBMISSION_REQUEST".equals(row.kind())) items.put(row.outcomeId(),List.of());
+            else items.put(row.outcomeId(),executionDeliveryTargets(scope,row,turn,view));
             chain.add(text);
             if(!text.containsKey("deliveryRelation"))break;
             var relation=map(text.get("deliveryRelation"));
@@ -530,6 +531,9 @@ public class ChatActionFinalService {
             if(!text.containsKey("deliveryRelation")){if(additions.stream().anyMatch(x->x.containsKey("replaces")))throw unavailable();retained.addAll(additions);continue;}
             var relation=map(text.get("deliveryRelation"));
             switch((String)relation.get("mode")) {
+                case "SUBMIT" -> {
+                    if (!"SUBMISSION_REQUEST".equals(text.get("kind")) || !additions.isEmpty() || retained.isEmpty()) throw unavailable();
+                }
                 case "APPEND" -> applyExecutionReplacements(retained,additions,false);
                 case "RESET" -> applyExecutionReplacements(retained,additions,true);
                 case "REPLACE" -> {

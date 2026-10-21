@@ -12,7 +12,7 @@ public final class TypedDeliberationDeclaration {
     private static final Set<String> KEYS = Set.of("schemaVersion", "state", "carrier",
             "referenceModes", "outcomeKinds", "engine", "strictNoToolsVerified", "toolPolicy");
     private static final List<String> MODES = List.of("NONE", "AVAILABLE");
-    private static final List<String> KINDS = List.of("ANSWER", "CLARIFY", "ACTION_REQUEST", "REVISION_REQUEST");
+    private static final List<String> KINDS = List.of("ANSWER", "CLARIFY", "ACTION_REQUEST", "REVISION_REQUEST", "SUBMISSION_REQUEST");
     private static final String CARRIER = "CHAT_MESSAGE_FINAL_SIDECAR_V5";
     private static final String ENGINE = "CODEX_APP_SERVER_NATIVE_OUTPUT_SCHEMA";
     private static final String TOOL_POLICY = "read-only-constrained";

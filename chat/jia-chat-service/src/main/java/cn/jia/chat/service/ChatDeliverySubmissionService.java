@@ -35,6 +35,10 @@ import java.util.Set;
 @Service
 @ConditionalOnProperty(prefix="chat",name={"delivery-review.enabled","selected-output-finalization.enabled"},havingValue="true")
 public class ChatDeliverySubmissionService {
+    private static boolean submissionKind(String kind, Object deliverable) {
+        return "ANSWER".equals(kind) && Boolean.TRUE.equals(deliverable)
+                || "SUBMISSION_REQUEST".equals(kind) && Boolean.FALSE.equals(deliverable);
+    }
     public static final String EVENT="DELIVERY_REQUESTED";
     private static final JsonMapper JSON=JsonMapper.builder().enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
             .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS).build();
@@ -84,7 +88,7 @@ public class ChatDeliverySubmissionService {
     @Transactional(propagation=Propagation.MANDATORY,rollbackFor=Exception.class)
     public void enqueue(ChatTypedDeliberationStore.Outcome row,ChatActionFinalValidator.ValidatedFinal validated,long now) {
         var union=validated.interactionOutcome();
-        if(!"ANSWER".equals(union.kind()) || !Boolean.TRUE.equals(union.deliverable())
+        if(!submissionKind(union.kind(), union.deliverable())
                 || !"CHAT".equals(validated.binding().get("route")) || !row.finalDigest().equals(validated.finalDigest())
                 || !row.turnId().equals(validated.binding().get("turnId")))throw new IllegalArgumentException("DELIVERY_CANDIDATE_INVALID");
         var event=new ChatDispatchOutboxEntity().setEventId(eventId(row)).setTenantId(row.scope().tenantId())
@@ -116,8 +120,8 @@ public class ChatDeliverySubmissionService {
         var view=finals.getObject().readActionIfPresent(scope,turn.getRequestId(),turn.getTurnId(),turn.getRequestRevision(),"CHAT");
         var row=typed.findOutcomeByTurn(scope,turn.getTurnId(),false);
         if(view==null || !"READY".equals(view.get("state")) || !(view.get("outcome") instanceof Map<?,?> outcome)
-                || !"ANSWER".equals(outcome.get("kind")) || !Boolean.TRUE.equals(outcome.get("deliverable")) || row==null
-                || !scope.equals(row.scope()) || !"ANSWER".equals(row.kind()) || !row.requestId().equals(turn.getRequestId())
+                || !submissionKind((String)outcome.get("kind"), outcome.get("deliverable")) || row==null
+                || !scope.equals(row.scope()) || !Objects.equals(row.kind(),outcome.get("kind")) || !row.requestId().equals(turn.getRequestId())
                 || row.requestRevision()!=turn.getRequestRevision() || !row.outcomeId().equals(outcome.get("outcomeId"))
                 || !row.finalDigest().equals(turn.getFinalDigest()) || !row.finalDigest().equals(outcome.get("finalDigest"))
                 || !eventId(row).equals(event.getEventId())
@@ -214,8 +218,7 @@ public class ChatDeliverySubmissionService {
      * never call load()/consume() here (load itself uses the ordinary final reader). */
     @Transactional(readOnly=true)
     public Map<String,Object> read(ChatTypedDeliberationStore.Outcome row,ChatActionFinalValidator.ValidatedFinal validated) {
-        if(row==null || validated==null || !"ANSWER".equals(validated.interactionOutcome().kind())
-                || !Boolean.TRUE.equals(validated.interactionOutcome().deliverable()) || !"CHAT".equals(validated.binding().get("route")))return null;
+        if(row==null || validated==null || !submissionKind(validated.interactionOutcome().kind(), validated.interactionOutcome().deliverable()) || !"CHAT".equals(validated.binding().get("route")))return null;
         if(!row.finalDigest().equals(validated.finalDigest()) || !row.turnId().equals(validated.binding().get("turnId")))throw storage();
         var scope=row.scope();String key=eventId(row);
         var event=dao.findOutboxById(scope.tenantId(),scope.ownerJiacn(),scope.clientId(),key);
