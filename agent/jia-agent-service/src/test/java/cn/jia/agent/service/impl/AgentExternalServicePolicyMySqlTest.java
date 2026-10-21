@@ -10,10 +10,13 @@ import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.config.GlobalConfig;
 import com.baomidou.mybatisplus.core.incrementer.DefaultIdentifierGenerator;
 import com.baomidou.mybatisplus.extension.spring.MybatisSqlSessionFactoryBean;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
+import org.junit.jupiter.api.io.TempDir;
 import org.mybatis.spring.SqlSessionTemplate;
 import org.springframework.aop.framework.ProxyFactory;
 import org.springframework.core.io.ByteArrayResource;
@@ -27,7 +30,13 @@ import org.springframework.transaction.interceptor.TransactionInterceptor;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.lang.reflect.Field;
+import java.net.InetAddress;
+import java.net.ServerSocket;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.sql.DriverManager;
+import java.sql.SQLException;
 import java.util.*;
 import java.util.concurrent.*;
 
@@ -35,17 +44,21 @@ import static cn.jia.agent.service.AgentTaskExecutionGrantException.Reason.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 /** Real InnoDB/production mappers and transaction proxies, no mocked locks or DAOs.
- * Reuses HallReadTaskCreateMySqlTest's acknowledged isolated fixture environment;
- * skips only when its URL is absent. No mysqld runner or production connection fallback.
+ * Reuses JuyitingWorkflowMySqlTest's CYF_REVIEW_MYSQLD owned-instance pattern inline,
+ * without inheriting another source set's fixture. No external JDBC fallback or runner.
  */
-@EnabledIfEnvironmentVariable(named = "JYT_UX_B01B_MYSQL_URL", matches = ".+")
+@EnabledIfEnvironmentVariable(named = "CYF_REVIEW_MYSQLD", matches = ".+")
 class AgentExternalServicePolicyMySqlTest {
     private static final String A = "agt_" + "a".repeat(32);
     private static final String B = "agt_" + "b".repeat(32);
     private static final String C = "agt_" + "c".repeat(32);
     private static final AgentTaskExecutionGrantService.Scope TASK_OWNER = scope("client-a", "task-owner");
     private static final AgentTaskExecutionGrantService.Scope PROVIDER = scope("client-a", "provider");
-    private JdbcTemplate admin, jdbc;
+    @TempDir static Path scratch;
+    private static Process initializationProcess, databaseProcess;
+    private static String baseUrl;
+    private static JdbcTemplate admin;
+    private JdbcTemplate jdbc;
     private String namespace, database;
     private boolean createdDatabase;
     private DataSourceTransactionManager transactions;
@@ -53,22 +66,77 @@ class AgentExternalServicePolicyMySqlTest {
     private TaskAssigneeAuthorityService authority;
     private AgentIdentityService identities;
     private long providerBinding;
+    private PersonalWorkspaceExecutionMapper executions;
+
+    @BeforeAll static void startOwnedDatabase() throws Exception {
+        Path executable = Path.of(System.getenv("CYF_REVIEW_MYSQLD")).toRealPath();
+        assertTrue(Files.isExecutable(executable));
+        Path data = Files.createDirectory(scratch.resolve("data"));
+        Path log = scratch.resolve("mysql.log");
+        String user = System.getProperty("user.name");
+        try {
+            initializationProcess = new ProcessBuilder(executable.toString(), "--no-defaults", "--initialize-insecure",
+                    "--user=" + user, "--datadir=" + data, "--basedir=" + executable.getParent().getParent())
+                    .redirectErrorStream(true).redirectOutput(log.toFile()).start();
+            assertEquals(0, initializationProcess.waitFor(), () -> "Owned MySQL init failed: " + read(log));
+            initializationProcess = null;
+            int port;
+            do { try (var socket = new ServerSocket(0, 0, InetAddress.getByName("127.0.0.1"))) { port = socket.getLocalPort(); } }
+            while (port == 3306 || port == 33060);
+            databaseProcess = new ProcessBuilder(executable.toString(), "--no-defaults", "--user=" + user,
+                    "--datadir=" + data, "--basedir=" + executable.getParent().getParent(),
+                    "--socket=" + scratch.resolve("mysql.sock"), "--pid-file=" + scratch.resolve("mysql.pid"),
+                    "--port=" + port, "--bind-address=127.0.0.1", "--mysqlx=OFF", "--skip-log-bin",
+                    "--innodb-buffer-pool-size=67108864")
+                    .redirectErrorStream(true).redirectOutput(ProcessBuilder.Redirect.appendTo(log.toFile())).start();
+            baseUrl = "jdbc:mysql://127.0.0.1:" + port + "/mysql?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC";
+            Class.forName("com.mysql.cj.jdbc.Driver");
+            while (true) {
+                assertTrue(databaseProcess.isAlive(), () -> "Owned MySQL exited: " + read(log));
+                try (var connection = DriverManager.getConnection(baseUrl, "root", "")) {
+                    assertTrue(connection.getMetaData().getDatabaseProductVersion().startsWith("8.0.21"));
+                    break;
+                } catch (SQLException notReady) { Thread.sleep(100); }
+            }
+            admin = new JdbcTemplate(dataSource(baseUrl, "root", ""));
+            System.out.println("CYF_EXTERNAL_POLICY_MYSQL owned=true version=" + admin.queryForObject("SELECT VERSION()", String.class));
+        } catch (Throwable failure) {
+            try { stopOwnedDatabase(); } catch (Throwable cleanup) { failure.addSuppressed(cleanup); }
+            throw failure;
+        }
+    }
+
+    @AfterAll static void stopOwnedDatabase() throws Exception {
+        // Only handles returned by this test's ProcessBuilder; never kill by name, PID file or port.
+        try { stopOwnedProcess(databaseProcess); }
+        finally {
+            databaseProcess = null;
+            try { stopOwnedProcess(initializationProcess); }
+            finally { initializationProcess = null; admin = null; }
+        }
+    }
+    private static void stopOwnedProcess(Process process) throws InterruptedException {
+        if (process == null) return;
+        process.destroy();
+        try { process.waitFor(); }
+        catch (InterruptedException interrupted) {
+            process.destroyForcibly();
+            try { process.waitFor(); } finally { Thread.currentThread().interrupt(); }
+            throw interrupted;
+        }
+    }
+    private static String read(Path file) {
+        try { return Files.readString(file); }
+        catch (Exception failure) { return failure.getClass().getSimpleName(); }
+    }
 
     @BeforeEach void setUp() throws Exception {
-        String url = required("JYT_UX_B01B_MYSQL_URL"), user = required("JYT_UX_B01B_MYSQL_USER");
-        String password = System.getenv("JYT_UX_B01B_MYSQL_PASSWORD");
-        String prefix = required("JYT_UX_B01B_MYSQL_DATABASE_PREFIX");
-        if (password == null || !url.startsWith("jdbc:mysql://") || !prefix.matches("[A-Za-z0-9_]{1,20}")
-                || !"true".equals(required("JYT_UX_B01B_MYSQL_ISOLATED_FIXTURE"))) {
-            throw new IllegalStateException("Acknowledged isolated MySQL fixture required");
-        }
-        namespace = prefix + "_external_policy_"; database = namespace + UUID.randomUUID().toString().replace("-", "").substring(0, 12);
-        admin = new JdbcTemplate(dataSource(url, user, password));
-        assertNotNull(admin.queryForObject("SELECT VERSION()", String.class));
+        namespace = "cyf_external_policy_"; database = namespace + UUID.randomUUID().toString().replace("-", "");
+        assertNotNull(admin);
         assertEquals(0, admin.queryForObject("SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name=?", Integer.class, database));
         admin.execute("CREATE DATABASE `" + database + "` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin");
         createdDatabase = true;
-        var source = dataSource(databaseUrl(url, database), user, password);
+        var source = dataSource(databaseUrl(baseUrl, database), "root", "");
         jdbc = new JdbcTemplate(source); transactions = new DataSourceTransactionManager(source);
         // Reuse the two production identity CREATE statements, not the following legacy migration/procedures.
         String identityDdl = new ClassPathResource("db/agent-identity-schema.sql").getContentAsString(StandardCharsets.UTF_8);
@@ -82,10 +150,11 @@ class AgentExternalServicePolicyMySqlTest {
         MybatisConfiguration configuration = new MybatisConfiguration(); configuration.setMapUnderscoreToCamelCase(true);
         for (Class<?> mapper : List.of(AgentIdentityRegistryMapper.class, AgentIdentityAliasMapper.class,
                 AgentPersonaBindingMapper.class, AgentExternalServicePolicyMapper.class, AgentTaskMetaMapper.class,
-                AgentTaskExecutionGrantMapper.class, AgentRuntimeMapper.class)) configuration.addMapper(mapper);
+                AgentTaskExecutionGrantMapper.class, AgentRuntimeMapper.class, PersonalWorkspaceExecutionMapper.class)) configuration.addMapper(mapper);
         GlobalConfig global = new GlobalConfig(); global.setIdentifierGenerator(new DefaultIdentifierGenerator()); global.setBanner(false);
         var factory = new MybatisSqlSessionFactoryBean(); factory.setDataSource(source); factory.setConfiguration(configuration); factory.setGlobalConfig(global);
         var sql = new SqlSessionTemplate(Objects.requireNonNull(factory.getObject()));
+        executions = sql.getMapper(PersonalWorkspaceExecutionMapper.class);
         var registry = wire(new AgentIdentityRegistryDaoImpl(), sql.getMapper(AgentIdentityRegistryMapper.class));
         var aliases = wire(new AgentIdentityAliasDaoImpl(), sql.getMapper(AgentIdentityAliasMapper.class));
         var bindings = wire(new AgentPersonaBindingDaoImpl(), sql.getMapper(AgentPersonaBindingMapper.class));
@@ -300,6 +369,85 @@ class AgentExternalServicePolicyMySqlTest {
         assertEquals(2, policyCount());
     }
 
+    @Test void runtimeConversationLookupUsesFrozenExecutorNotExecutionDataOwner() {
+        persistExternalGrant();
+        seedExecution("conversation", "CONVERSATION", B, "grant-a", 1L);
+        var found = executions.findForRuntime("0", "client-a", "provider", B, "task-a", "conversation");
+        assertNotNull(found);
+        assertEquals("execution-conversation", found.getExecutionId());
+        assertEquals("task-owner", found.getOwnerJiacn(), "data ownership must stay A while executor is B");
+        assertEquals("grant-a", found.getTaskGrantId());
+        for (String actor : List.of("task-owner", "third-owner", "PROVIDER", "provider ")) {
+            assertNull(executions.findForRuntime("0", "client-a", actor, B, "task-a", "conversation"), actor);
+        }
+        assertNull(executions.findForRuntime("1", "client-a", "provider", B, "task-a", "conversation"));
+        for (String client : List.of("other-client", "CLIENT-A", "client-a ")) {
+            assertNull(executions.findForRuntime("0", client, "provider", B, "task-a", "conversation"));
+        }
+        assertNull(executions.findForRuntime("0", "client-a", "provider", A, "task-a", "conversation"));
+        assertNull(executions.findForRuntime("0", "client-a", "provider", B, "other-task", "conversation"));
+        assertNull(executions.findForRuntime("0", "client-a", "provider", B, "task-a", "other-run"));
+        assertNull(executions.findForRuntime("0", "client-a", "provider", B, "task-a ", "conversation"));
+        assertNull(executions.findForRuntime("0", "client-a", "provider", B, "task-a", "conversation "));
+    }
+
+    @Test void runtimeConversationLookupRequiresExactPersistedGrantBindingAndVersion() {
+        persistExternalGrant(); seedExecution("conversation", "CONVERSATION", B, "grant-a", 1L);
+        for (String mutation : List.of("task_grant_version=2", "task_grant_id='missing'", "task_grant_id=NULL",
+                "owner_jiacn='third-owner'", "execution_mode='UNKNOWN'")) {
+            new TransactionTemplate(transactions).executeWithoutResult(status -> {
+                jdbc.update("UPDATE agent_personal_workspace_execution SET " + mutation + " WHERE execution_id='execution-conversation'");
+                assertNull(executions.findForRuntime("0", "client-a", "provider", B, "task-a", "conversation"), mutation);
+                status.setRollbackOnly();
+            });
+        }
+        for (String mutation : List.of("grant_version=2", "owner_jiacn='third-owner'", "target_agent_id='another-target'",
+                "client_id='other-client'", "task_id='another-task'")) {
+            new TransactionTemplate(transactions).executeWithoutResult(status -> {
+                jdbc.update("UPDATE agent_task_execution_grant SET " + mutation + " WHERE grant_id='grant-a'");
+                assertNull(executions.findForRuntime("0", "client-a", "provider", B, "task-a", "conversation"), mutation);
+                status.setRollbackOnly();
+            });
+        }
+        assertNotNull(executions.findForRuntime("0", "client-a", "provider", B, "task-a", "conversation"));
+        jdbc.update("DELETE FROM agent_task_execution_grant WHERE grant_id='grant-a'");
+        assertNull(executions.findForRuntime("0", "client-a", "provider", B, "task-a", "conversation"));
+        assertNull(executions.findForRuntime("0", "client-a", "task-owner", B, "task-a", "conversation"));
+    }
+
+    @Test void privateAndTaskRuntimeLookupsRemainOwnerOnlyEvenWithForeignExecutorGrant() {
+        persistExternalGrant();
+        for (String mode : List.of("PRIVATE", "TASK")) {
+            // Genuine own execution does not require a conversation grant.
+            seedExecution(mode, mode, A, null, null);
+            var owned = executions.findForRuntime("0", "client-a", "task-owner", A, "task-a", mode);
+            assertNotNull(owned); assertEquals(mode, owned.getExecutionMode());
+            for (String actor : List.of("provider", "third-owner", "TASK-OWNER", "task-owner ")) {
+                assertNull(executions.findForRuntime("0", "client-a", actor, A, "task-a", mode));
+            }
+            assertNull(executions.findForRuntime("1", "client-a", "task-owner", A, "task-a", mode));
+            assertNull(executions.findForRuntime("0", "other-client", "task-owner", A, "task-a", mode));
+            // Even a matching B-target grant cannot widen PRIVATE/TASK to its executor.
+            seedExecution(mode + "-foreign-grant", mode, B, "grant-a", 1L);
+            assertNull(executions.findForRuntime("0", "client-a", "provider", B, "task-a", mode + "-foreign-grant"));
+            assertNotNull(executions.findForRuntime("0", "client-a", "task-owner", B, "task-a", mode + "-foreign-grant"));
+        }
+    }
+
+    private void persistExternalGrant() {
+        policies.write(PROVIDER, B, "open-runtime", true, 0);
+        new TransactionTemplate(transactions).executeWithoutResult(status -> {
+            lockTask(); insertGrant(authority.lockForAssignment("0", "client-a", "task-owner", B));
+        });
+    }
+    private void seedExecution(String run, String mode, String target, String grant, Long version) {
+        jdbc.update("""
+                INSERT INTO agent_personal_workspace_execution
+                  (execution_id,tenant_id,client_id,owner_jiacn,task_id,run_id,execution_mode,target_agent_id,task_grant_id,task_grant_version)
+                VALUES (?,'0','client-a','task-owner','task-a',?,?,?,?,?)
+                """, "execution-" + run, run, mode, target, grant, version);
+    }
+
     private Object raceWrite(CountDownLatch start, String key, boolean enabled) {
         await(start);
         try { return policies.write(PROVIDER, B, key, enabled, 0); }
@@ -361,6 +509,16 @@ class AgentExternalServicePolicyMySqlTest {
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin
                 """);
         jdbc.execute("""
+                CREATE TABLE agent_personal_workspace_execution (
+                  id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY, execution_id VARCHAR(100) NOT NULL,
+                  tenant_id VARCHAR(50) NOT NULL, client_id VARCHAR(50) NOT NULL, owner_jiacn VARCHAR(50) NOT NULL,
+                  task_id VARCHAR(100) NOT NULL, run_id VARCHAR(100) NOT NULL, execution_mode VARCHAR(32) NOT NULL,
+                  target_agent_id VARCHAR(100) NOT NULL, task_grant_id VARCHAR(100), task_grant_version BIGINT,
+                  UNIQUE KEY uk_fixture_execution (tenant_id,client_id,owner_jiacn,execution_id),
+                  UNIQUE KEY uk_fixture_run (tenant_id,client_id,owner_jiacn,task_id,run_id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin
+                """);
+        jdbc.execute("""
                 CREATE TABLE agent_runtime (
                   id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY, agent_id VARCHAR(100) NOT NULL,
                   name VARCHAR(100), owner_jiacn VARCHAR(50), binding_id BIGINT, status VARCHAR(20),
@@ -397,6 +555,5 @@ class AgentExternalServicePolicyMySqlTest {
         String suffix = query < 0 ? "" : url.substring(query); int path = head.indexOf('/', "jdbc:mysql://".length());
         return (path < 0 ? head + "/" : head.substring(0, path + 1)) + database + suffix;
     }
-    private static String required(String name) { String value = System.getenv(name); if (value == null || value.isBlank()) throw new IllegalStateException("Missing " + name); return value; }
     private static AgentTaskExecutionGrantService.Scope scope(String client, String owner) { return new AgentTaskExecutionGrantService.Scope("0", client, owner); }
 }
