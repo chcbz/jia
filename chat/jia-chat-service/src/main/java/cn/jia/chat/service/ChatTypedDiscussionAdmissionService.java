@@ -27,6 +27,9 @@ import java.util.Objects;
 /** Task-root-first admission for natural typed discussion and durable clarification replies. */
 @Service
 public class ChatTypedDiscussionAdmissionService {
+    private cn.jia.chat.service.ChatDispatchAuthorityService dispatchAuthority;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setDispatchAuthority(cn.jia.chat.service.ChatDispatchAuthorityService value) { dispatchAuthority=value; }
     private static final String ADMISSION_STATE = "ADMITTED";
     private static final long ADMISSION_STATE_VERSION = 0L;
 
@@ -99,7 +102,8 @@ public class ChatTypedDiscussionAdmissionService {
         if(known==null && preparePackages) {
             var targets=scopes.parsePersistedTargetAgentIds(locator.getTargetAgentIds());if(targets.size()!=1)throw unavailable();
             if(packagePreparation==null)throw persistence("Skill package preparation is unavailable");
-            packagePreparation.prepare(new cn.jia.agent.service.SkillCapabilityLookup.Scope(tenantId,client,owner,targets.getFirst()));
+            var executor=dispatchAuthority.admissionTarget(tenantId,owner,client,command.taskId(),targets.getFirst());
+            packagePreparation.prepare(new cn.jia.agent.service.SkillCapabilityLookup.Scope(tenantId,client,executor.ownerJiacn(),targets.getFirst()));
         }
         return taskMutations.executeWithLockedTaskRootInOwnerScope(tenantId,client,owner,command.taskId(),root->{
             ChatBountyBindingStore.Binding binding;

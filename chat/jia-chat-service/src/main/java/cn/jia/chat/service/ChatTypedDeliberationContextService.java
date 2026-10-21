@@ -24,6 +24,9 @@ import java.util.Set;
 /** Builds server-trusted typed facts and an independently persisted private source catalogue. */
 @Service
 public final class ChatTypedDeliberationContextService {
+    private ChatDispatchAuthorityService dispatchAuthority;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setDispatchAuthority(ChatDispatchAuthorityService value) { dispatchAuthority=value; }
     public record Scope(String tenantId, String ownerJiacn, String clientId,
             String conversationId, long conversationGeneration) { }
     public record Context(Map<String,Object> facts, String sourceCatalogJson,
@@ -94,10 +97,11 @@ public final class ChatTypedDeliberationContextService {
         exact(scope.tenantId(),50); exact(scope.ownerJiacn(),50); exact(scope.clientId(),50);
         exact(scope.conversationId(),100); exact(taskId,100); exact(targetAgentId,100);
         if (scope.conversationGeneration()<1 || requested==null || requested.size()>32) throw invalid();
+        var executor=dispatchAuthority.admissionTarget(scope.tenantId(),scope.ownerJiacn(),scope.clientId(),taskId,targetAgentId);
         TypedDeliberationSessionRegistry.Ready ready;
         try {
             ready=sessions.requireSingleReady(new TypedDeliberationSessionRegistry.Scope(
-                    scope.tenantId(),scope.ownerJiacn(),scope.clientId()),targetAgentId);
+                    scope.tenantId(),executor.ownerJiacn(),scope.clientId()),targetAgentId);
         } catch (TypedDeliberationSessionRegistry.RuntimeNotReadyException awaiting) {
             throw new RuntimeNotReadyException(awaiting);
         } catch (IllegalStateException unavailable) {

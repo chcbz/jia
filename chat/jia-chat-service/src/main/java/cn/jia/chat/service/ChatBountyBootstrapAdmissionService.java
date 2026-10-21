@@ -36,6 +36,9 @@ import java.util.Set;
  */
 @Service
 public class ChatBountyBootstrapAdmissionService {
+    private cn.jia.chat.service.ChatDispatchAuthorityService dispatchAuthority;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setDispatchAuthority(cn.jia.chat.service.ChatDispatchAuthorityService value) { dispatchAuthority=value; }
     private static final Set<String> OPERATIONS = Set.of("DELIBERATE", "INSPECT_INPUTS", "GENERATE_IMAGE",
             "EDIT_IMAGE", "GENERATE_AUDIO", "EDIT_AUDIO");
     private final AgentTaskRequirementSnapshotService requirements;
@@ -74,8 +77,10 @@ public class ChatBountyBootstrapAdmissionService {
      */
     public void prepare(AgentTaskBountyBootstrapClaimDTO claim) {
         if (claim != null && "DELIBERATE".equals(claim.permittedOperation())) {
+            var target=dispatchAuthority.grantTarget(claim.tenantId(),claim.ownerJiacn(),claim.clientId(),
+                    claim.taskId(),claim.grantId(),claim.grantVersion());
             typedDiscussion.prepareBootstrap(new cn.jia.agent.service.SkillCapabilityLookup.Scope(
-                    claim.tenantId(), claim.clientId(), claim.ownerJiacn(), claim.targetAgentId()));
+                    claim.tenantId(), claim.clientId(), target.ownerJiacn(), claim.targetAgentId()));
         }
     }
 

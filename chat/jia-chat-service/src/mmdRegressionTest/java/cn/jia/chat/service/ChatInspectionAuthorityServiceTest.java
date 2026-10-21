@@ -47,6 +47,13 @@ class ChatInspectionAuthorityServiceTest {
                 .setTargetAgentId("agent-current").setRoute("INSPECT");
         when(deliberation.findRequest("0", "owner", "client", "request-1")).thenReturn(request);
         when(deliberation.findTurn("0", "owner", "client", "turn-1")).thenReturn(turn);
+        turn.setOwnerJiacn("owner").setClientId("client").setTenantId("0");
+        var authority=mock(ChatDispatchAuthorityService.class);
+        when(authority.incomingTurn("0","client","owner","agent-foreign","turn-1"))
+                .thenThrow(new ChatDeliberationException(ChatDeliberationException.Reason.NOT_FOUND_OR_FORBIDDEN,"unavailable"));
+        when(authority.incomingTurn("0","client","owner","agent-current","turn-1"))
+                .thenReturn(new ChatDispatchAuthorityService.Binding(null,turn,"owner"));
+        service.setDispatchAuthority(authority);
         ChatDeliberationException foreign = assertThrows(ChatDeliberationException.class,
                 () -> service.read(runtime("agent-foreign"), "request-1", "turn-1", "source_1", digest()));
         assertEquals(ChatDeliberationException.Reason.NOT_FOUND_OR_FORBIDDEN, foreign.reason());

@@ -133,7 +133,12 @@ class ChatTypedInspectionSpringTransactionTest {
                             ChatDeliberationException.Reason.CONFLICT, "revoked");
                 });
 
+        turn.setOwnerJiacn("owner").setClientId("client").setTenantId("0");
+        var dispatchAuthority=mock(ChatDispatchAuthorityService.class);
+        when(dispatchAuthority.incomingTurn("0","client","owner","agent","turn"))
+                .thenReturn(new ChatDispatchAuthorityService.Binding(null,turn,"owner"));
         try (AnnotationConfigApplicationContext context = context(source)) {
+            context.registerBean(ChatDispatchAuthorityService.class,()->dispatchAuthority);
             context.registerBean(ChatInspectionAuthorityService.class, () -> new ChatInspectionAuthorityService(
                     tasks, mock(ChatBountyBindingStore.class), mock(ChatConversationDao.class), deliberation,
                     typed, mock(TypedInspectionSessionRegistry.class),

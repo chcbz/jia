@@ -18,6 +18,8 @@ public class ChatDispatchOutboxEntity {
     private String turnId;
     private String dispatchId;
     private String eventType;
+    private String taskGrantId;
+    private Long taskGrantVersion;
     private String status;
     private String payloadJson;
     private Long version;

@@ -68,6 +68,8 @@ public class ChatDeliberationService {
     @Autowired public void setMaterialsAuthority(ChatMaterialsInputService service) {materialsAuthority=service;}
     private ChatInspectionAuthorityService inspectionAuthority;
     private ChatActionFinalService actionFinals;
+    private ChatDispatchAuthorityService dispatchAuthority;
+    @Autowired public void setDispatchAuthority(ChatDispatchAuthorityService value) { dispatchAuthority=value; }
 
     @Autowired(required = false)
     public void setActionFinals(ChatActionFinalService actionFinals) { this.actionFinals = actionFinals; }
@@ -294,6 +296,14 @@ public class ChatDeliberationService {
         if (revision < 1) throw invalid("requestRevision must be positive");
         input.setRequestRevision(revision);
 
+        // Acquire task/grant authority before conversation/turn locks. Replays keep their saved input.
+        var knownRequest = dao.findRequest(tenantId,ownerJiacn,clientId,requestId);
+        var taskGrant = !"bounty".equals(scope.scopeType()) || scope.authoritativeAgentIds().size()>1
+                || scope.targetAgentIds().size()>1 || knownRequest != null ? null :
+                requireDispatchAuthority().admission(tenantId,ownerJiacn,clientId,scope.taskId(),scope.targetAgentId());
+        if (taskGrant != null && (taskGrant.requirementRevision()==null || taskGrant.requirementRevision()<1
+                || scope.targetAgentIds().size()!=1
+                || !scope.targetAgentId().equals(taskGrant.targetAgentId()))) throw unavailable();
         ChatConversationEntity conversation = requireLockedConversation(
                 tenantId, ownerJiacn, clientId, conversationId, expectedGeneration);
         requireConversationScope(conversation, scope);
@@ -413,6 +423,14 @@ public class ChatDeliberationService {
                 if (continuationFacts != null) typedFacts.put("actionContinuation", continuationFacts);
                 facts = java.util.Collections.unmodifiableMap(new LinkedHashMap<>(typedFacts));
             }
+            if (taskGrant != null) {
+                var boundFacts = new LinkedHashMap<>(facts);
+                boundFacts.put("taskAuthority", Map.of("grantId", taskGrant.grantId(),
+                        "grantVersion", Long.toString(taskGrant.grantVersion()),
+                        "assignmentRevision", Long.toString(taskGrant.assignmentRevision()),
+                        "requirementRevision", Long.toString(taskGrant.requirementRevision())));
+                facts = java.util.Collections.unmodifiableMap(boundFacts);
+            }
             String sourceJson = CanonicalContextJson.write(sourceVector);
             String factsJson = CanonicalContextJson.write(facts);
             String contextDigest = contextDigest(sourceVector, facts);
@@ -443,6 +461,7 @@ public class ChatDeliberationService {
                     .setStatus("READY").setPayloadJson(CanonicalContextJson.write(eventPayload))
                     .setVersion(0L).setAvailableAt(now).setAttemptCount(0).setFencingToken(0L)
                     .setCreatedAt(now).setUpdatedAt(now);
+            if (taskGrant != null) outbox.setTaskGrantId(taskGrant.grantId()).setTaskGrantVersion(taskGrant.grantVersion());
             if (dao.insertSnapshot(snapshot) != 1 || dao.insertTurn(turn) != 1 || dao.insertOutbox(outbox) != 1) {
                 throw persistence("Unable to persist chat turn admission");
             }
@@ -474,12 +493,12 @@ public class ChatDeliberationService {
             String snapshotId, String contextDigest, long deltaSeq, String content,
             ServerResolvedAgentSender sender) {
         if (deltaSeq < 1 || content == null || content.isEmpty()) throw invalid("Invalid delta");
+        ServerResolvedAgentSender trustedSender = requireAgentSender(sender, agentId, ownerJiacn, clientId, tenantId, dispatchId);
         ChatTurnEntity visible = requireVisibleTurn(tenantId, ownerJiacn, clientId, turnId);
         requireLockedConversation(tenantId, ownerJiacn, clientId, visible.getConversationId(), visible.getConversationGeneration());
         ChatTurnEntity turn = requireLockedTurn(tenantId, ownerJiacn, clientId, turnId);
         requireCallbackBinding(turn, tenantId, ownerJiacn, clientId, conversationId, conversationGeneration,
                 agentId, requestId, dispatchId, snapshotId, contextDigest);
-        ServerResolvedAgentSender trustedSender = requireAgentSender(sender, agentId, ownerJiacn, clientId);
         String deltaDigest = "sha256:" + sha256(content);
         long last = Optional.ofNullable(turn.getLastDeltaSeq()).orElse(0L);
         if (deltaSeq <= last) {
@@ -555,6 +574,7 @@ public class ChatDeliberationService {
             String snapshotId, String contextDigest, String content, Integer outcomeContractVersion,
             String rawInteractionOutcomeJson, String rawInspectionInputReceiptJson,
             ServerResolvedAgentSender sender) {
+        requireAgentSender(sender, agentId, ownerJiacn, clientId, tenantId, dispatchId);
         String safeContent = requireContent(content);
         ChatTurnEntity visible = requireVisibleTurn(tenantId, ownerJiacn, clientId, turnId);
         if (InteractionRoute.INSPECT.name().equals(visible.getRoute())) {
@@ -585,7 +605,7 @@ public class ChatDeliberationService {
         ChatTurnEntity turn = requireLockedTurn(tenantId, ownerJiacn, clientId, turnId);
         requireCallbackBinding(turn, tenantId, ownerJiacn, clientId, conversationId, conversationGeneration,
                 agentId, requestId, dispatchId, snapshotId, contextDigest);
-        ServerResolvedAgentSender trustedSender = requireAgentSender(sender, agentId, ownerJiacn, clientId);
+        ServerResolvedAgentSender trustedSender = requireAgentSender(sender, agentId, ownerJiacn, clientId, tenantId, dispatchId);
         ChatContextSnapshotEntity finalSnapshot = dao.findSnapshot(tenantId, ownerJiacn, clientId, snapshotId);
         if (finalSnapshot == null) throw unavailable();
         Map<String, Object> finalFacts = parseJsonMap(finalSnapshot.getFactsManifestJson());
@@ -815,11 +835,13 @@ public class ChatDeliberationService {
     }
 
     @Transactional(rollbackFor = Exception.class)
-    public ChatConversationEventEntity failInvalidAgentOutcome(String tenantId, String ownerJiacn, String clientId,
+    public ChatConversationEventEntity failInvalidAgentOutcome(String tenantId, String executorOwner, String clientId,
             String agentId, String dispatchId, String messageId, String reason) {
         if (!isInvalidAgentOutcome(reason)) throw invalid("Not a definite model outcome rejection");
+        String ownerJiacn=requireDispatchAuthority().incoming(tenantId,clientId,executorOwner,agentId,dispatchId).turn().getOwnerJiacn();
         ChatDispatchOutboxEntity dispatch = dao.findOutboxById(tenantId, ownerJiacn, clientId, messageId);
         if (dispatch == null || !Objects.equals(dispatchId, dispatch.getDispatchId())) throw unavailable();
+        requireDispatchAuthority().outgoing(dispatch);
         ChatTurnEntity visible = requireVisibleTurn(tenantId, ownerJiacn, clientId, dispatch.getTurnId());
         requireLockedConversation(tenantId, ownerJiacn, clientId, visible.getConversationId(), visible.getConversationGeneration());
         ChatTurnEntity turn = requireLockedTurn(tenantId, ownerJiacn, clientId, visible.getTurnId());
@@ -906,6 +928,11 @@ public class ChatDeliberationService {
             String key, Class<?> type) {
         Object value = source.get(key);
         if (type.isInstance(value)) target.put(key, value);
+    }
+
+    private ChatDispatchAuthorityService requireDispatchAuthority() {
+        if (dispatchAuthority == null) throw unavailable();
+        return dispatchAuthority;
     }
 
     private void cancelLockedTurn(ChatTurnEntity turn, String reason, long now) {
@@ -1785,10 +1812,14 @@ public class ChatDeliberationService {
     }
 
     private ServerResolvedAgentSender requireAgentSender(ServerResolvedAgentSender sender,
-            String agentId, String ownerJiacn, String clientId) {
+            String agentId, String ownerJiacn, String clientId, String tenantId, String dispatchId) {
+        var binding = requireDispatchAuthority().incoming(tenantId, clientId,
+                sender == null ? null : sender.jiacn(), agentId, dispatchId);
+        if (!Objects.equals(ownerJiacn, binding.turn().getOwnerJiacn())) throw unavailable();
+        String expectedOwner = binding.executorOwner();
         if (sender == null || !ServerResolvedAgentSender.AGENT_TYPE.equals(sender.type())
                 || !Objects.equals(agentId, sender.agentId())
-                || !Objects.equals(ownerJiacn, sender.jiacn())
+                || !Objects.equals(expectedOwner, sender.jiacn())
                 || !Objects.equals(clientId, sender.clientId())) {
             throw unavailable();
         }

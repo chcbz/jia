@@ -17,6 +17,9 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class ChatDeliberationOutboxService {
     private final ChatDeliberationDao dao;
+    private ChatDispatchAuthorityService dispatchAuthority;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setDispatchAuthority(ChatDispatchAuthorityService value) { dispatchAuthority=value; }
 
     @Transactional(readOnly = true)
     public List<ChatDispatchOutboxEntity> discover(long now, int limit) {
@@ -109,10 +112,12 @@ public class ChatDeliberationOutboxService {
 
     /** Durable receiver acknowledgement for chat dispatch. Stable messageId is the outbox event id. */
     @Transactional(rollbackFor = Exception.class)
-    public boolean acknowledgeHostedDispatch(String tenantId, String ownerJiacn, String clientId,
+    public boolean acknowledgeHostedDispatch(String tenantId, String executorOwner, String clientId,
             String agentId, String dispatchId, String messageId, long now) {
-        requireExact(tenantId, 50); requireExact(ownerJiacn, 50); requireExact(clientId, 50);
+        requireExact(tenantId, 50); requireExact(executorOwner, 50); requireExact(clientId, 50);
         requireExact(agentId, 100); requireExact(dispatchId, 64); requireExact(messageId, 64);
+        if (dispatchAuthority == null) throw new IllegalStateException("Dispatch authority unavailable");
+        String ownerJiacn=dispatchAuthority.incoming(tenantId,clientId,executorOwner,agentId,dispatchId).turn().getOwnerJiacn();
         ChatDispatchOutboxEntity row = dao.lockOutboxByDispatch(tenantId, ownerJiacn, clientId, dispatchId);
         if (row == null || !dispatchId.equals(row.getDispatchId()) || !messageId.equals(row.getEventId())) return false;
         if (!agentId.equals(targetAgent(row))) return false;
@@ -122,10 +127,12 @@ public class ChatDeliberationOutboxService {
     }
 
     @Transactional(rollbackFor = Exception.class)
-    public boolean acknowledgeHostedReceipt(String tenantId, String ownerJiacn, String clientId,
+    public boolean acknowledgeHostedReceipt(String tenantId, String executorOwner, String clientId,
             String agentId, String dispatchId, long now) {
-        requireExact(tenantId, 50); requireExact(ownerJiacn, 50); requireExact(clientId, 50);
+        requireExact(tenantId, 50); requireExact(executorOwner, 50); requireExact(clientId, 50);
         requireExact(agentId, 100); requireExact(dispatchId, 64);
+        if (dispatchAuthority == null) throw new IllegalStateException("Dispatch authority unavailable");
+        String ownerJiacn=dispatchAuthority.incoming(tenantId,clientId,executorOwner,agentId,dispatchId).turn().getOwnerJiacn();
         ChatDispatchOutboxEntity row = dao.lockOutboxByDispatch(tenantId, ownerJiacn, clientId, dispatchId);
         if (row == null || !agentId.equals(targetAgent(row)) || "DEAD".equals(row.getStatus())) return false;
         if ("SENT".equals(row.getStatus())) return true;

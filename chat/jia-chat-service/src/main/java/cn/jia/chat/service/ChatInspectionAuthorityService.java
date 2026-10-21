@@ -31,6 +31,9 @@ import java.util.function.Supplier;
 /** Linearizable current-authority boundary for INSPECT bytes and late finals. */
 @Service
 public class ChatInspectionAuthorityService {
+    private ChatDispatchAuthorityService dispatchAuthority;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setDispatchAuthority(ChatDispatchAuthorityService value) { dispatchAuthority=value; }
     private static final Set<String> ACTIVE_TURN_STATES = Set.of(
             ChatDeliberationStates.RECEIVED, ChatDeliberationStates.QUEUED,
             ChatDeliberationStates.DISPATCHED, ChatDeliberationStates.STREAMING,
@@ -86,10 +89,10 @@ public class ChatInspectionAuthorityService {
                 || suppliedManifestDigest == null
                 || !suppliedManifestDigest.matches("sha256:[0-9a-f]{64}")) throw unavailable();
 
-        ChatRequestEntity request = deliberation.findRequest(
-                runtime.tenantId(), runtime.ownerJiacn(), runtime.clientId(), requestId);
-        ChatTurnEntity locator = deliberation.findTurn(
-                runtime.tenantId(), runtime.ownerJiacn(), runtime.clientId(), turnId);
+        var bound=dispatchAuthority.incomingTurn(runtime.tenantId(),runtime.clientId(),runtime.ownerJiacn(),runtime.agentId(),turnId);
+        ChatTurnEntity locator=bound.turn();
+        String taskOwner=locator.getOwnerJiacn();
+        ChatRequestEntity request=deliberation.findRequest(runtime.tenantId(),taskOwner,runtime.clientId(),requestId);
         if (request == null || locator == null || !requestId.equals(locator.getRequestId())
                 || !Objects.equals(request.getRequestRevision(), locator.getRequestRevision())
                 || !Objects.equals(request.getConversationId(), locator.getConversationId())
@@ -98,7 +101,7 @@ public class ChatInspectionAuthorityService {
                 || !"INSPECT".equals(locator.getRoute())) throw unavailable();
 
         ChatTypedDeliberationStore.Scope scope = new ChatTypedDeliberationStore.Scope(
-                runtime.tenantId(), runtime.ownerJiacn(), runtime.clientId(),
+                runtime.tenantId(), taskOwner, runtime.clientId(),
                 request.getConversationId(), request.getConversationGeneration());
         ChatTypedDeliberationStore.Admission admission = typed.findAdmissionByRequest(scope, requestId);
         if (admission == null) throw unavailable();
@@ -106,7 +109,7 @@ public class ChatInspectionAuthorityService {
                 admission.sourceCatalogJson());
         String taskId = admission.taskId();
         return tasks.executeWithLockedTaskRootInOwnerScope(runtime.tenantId(), runtime.clientId(),
-                runtime.ownerJiacn(), taskId, root -> {
+                taskOwner, taskId, root -> {
                     Locked locked = lockAndVerify(scope, admission, locator, inspection,
                             root == null ? null : root.getAssignedAgentId(),
                             root == null ? null : root.getTaskVersion(), runtime.agentId(),
@@ -262,7 +265,7 @@ public class ChatInspectionAuthorityService {
         try {
             TypedInspectionSessionRegistry.Ready ready = sessions.requireSingleReady(
                     new TypedInspectionSessionRegistry.Scope(
-                            scope.tenantId(), scope.ownerJiacn(), scope.clientId()), expectedAgent);
+                            scope.tenantId(), dispatchAuthority.forTurn(turn).executorOwner(), scope.clientId()), expectedAgent);
             if (!CanonicalContextJson.write(profile).equals(
                     CanonicalContextJson.write(ready.manifestProfile()))) {
                 throw conflict("Inspection profile changed");

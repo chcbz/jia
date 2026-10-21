@@ -60,10 +60,10 @@ public interface ChatDeliberationMapper {
 
     @Insert("""
             INSERT INTO chat_dispatch_outbox
-              (event_id,tenant_id,owner_jiacn,client_id,turn_id,dispatch_id,event_type,status,payload_json,
+              (event_id,tenant_id,owner_jiacn,client_id,turn_id,dispatch_id,event_type,task_grant_id,task_grant_version,status,payload_json,
                version,available_at,lease_owner,lease_until,attempt_count,fencing_token,last_error,sent_at,created_at,updated_at)
             VALUES
-              (#{eventId},#{tenantId},#{ownerJiacn},#{clientId},#{turnId},#{dispatchId},#{eventType},#{status},
+              (#{eventId},#{tenantId},#{ownerJiacn},#{clientId},#{turnId},#{dispatchId},#{eventType},#{taskGrantId},#{taskGrantVersion},#{status},
                #{payloadJson},#{version},#{availableAt},#{leaseOwner},#{leaseUntil},#{attemptCount},#{fencingToken},
                #{lastError},#{sentAt},#{createdAt},#{updatedAt})
             """)

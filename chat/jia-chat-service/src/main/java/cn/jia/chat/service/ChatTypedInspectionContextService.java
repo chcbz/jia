@@ -25,6 +25,9 @@ import java.util.Set;
 /** Builds the immutable server-owned INSPECT manifest; no locator or secret enters the snapshot. */
 @Service
 public final class ChatTypedInspectionContextService {
+    private ChatDispatchAuthorityService dispatchAuthority;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setDispatchAuthority(ChatDispatchAuthorityService value) { dispatchAuthority=value; }
     private static final Set<String> ENVELOPE_KEYS = Set.of(
             "schemaVersion", "contract", "purpose", "typedInspection");
     private static final Set<String> INSPECTION_KEYS = Set.of(
@@ -86,10 +89,11 @@ public final class ChatTypedInspectionContextService {
         if (!enabled) throw unavailable("Typed inspection is disabled");
         validate(scope);
         if (requested == null || requested.isEmpty() || requested.size() > 32) throw invalid();
+        var executor=dispatchAuthority.admissionTarget(scope.tenantId(),scope.ownerJiacn(),scope.clientId(),scope.taskId(),scope.targetAgentId());
         TypedInspectionSessionRegistry.Ready ready;
         try {
             ready = sessions.requireSingleReady(new TypedInspectionSessionRegistry.Scope(
-                    scope.tenantId(), scope.ownerJiacn(), scope.clientId()), scope.targetAgentId());
+                    scope.tenantId(), executor.ownerJiacn(), scope.clientId()), scope.targetAgentId());
         } catch (IllegalStateException unavailable) {
             throw unavailable("Typed inspection runtime is unavailable");
         }

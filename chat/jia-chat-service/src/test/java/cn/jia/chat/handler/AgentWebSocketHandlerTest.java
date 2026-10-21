@@ -1132,11 +1132,11 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
                 .thenReturn(new AgentRegisterResultDTO("agent-001", "token-001", AgentConstants.STATUS_ONLINE));
         when(agentService.get("agent-001")).thenReturn(runtime("agent-001", "Wu Yong"));
         ChatConversationEntity conversation = new ChatConversationEntity()
-                .setId(1001L).setJiacn("juyiting").setConversationType("juyiting")
+                .setId(1001L).setJiacn("task-owner-A").setConversationType("juyiting")
                 .setConversationScopeType("public").setConversationScopeKey("public")
                 .setTargetAgentIds("[\"agent-001\"]").setLifecycleGeneration(1L);
         conversation.setTenantId("0"); conversation.setClientId("jia_client");
-        when(chatConversationService.getOwned("juyiting", "jia_client", "1001"))
+        when(chatConversationService.getOwned("task-owner-A", "jia_client", "1001"))
                 .thenReturn(conversation);
         ChatDeliberationService deliberation = org.mockito.Mockito.mock(ChatDeliberationService.class);
         when(deliberation.acceptDelta(anyString(), anyString(), anyString(), anyString(),
@@ -1159,6 +1159,13 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
                 chatMessageDao, chatConversationEventBroker));
         handler.setChatConversationService(chatConversationService);
         handler.setChatDeliberationService(deliberation);
+        var dispatchAuthority=org.mockito.Mockito.mock(cn.jia.chat.service.ChatDispatchAuthorityService.class);
+        var boundTurn=new cn.jia.chat.deliberation.ChatTurnEntity().setTenantId("0").setOwnerJiacn("task-owner-A")
+                .setClientId("jia_client").setTargetAgentId("agent-001").setTurnId("turn-1").setRequestId("req-1")
+                .setDispatchId("dispatch-1").setConversationId("1001").setConversationGeneration(1L);
+        when(dispatchAuthority.incoming("0","jia_client","juyiting","agent-001","dispatch-1"))
+                .thenReturn(new cn.jia.chat.service.ChatDispatchAuthorityService.Binding(null,boundTurn,"juyiting"));
+        handler.setChatDispatchAuthority(dispatchAuthority);
         handler.afterConnectionEstablished(session);
         UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
                 {"schemaVersion":1,"type":"agent.register","runtimeInstanceId":"runtime-1","messageId":"register-message-1","requestId":"reg-1","agentId":"agent-001","name":"Wu Yong"}
@@ -1178,12 +1185,12 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
 
         ArgumentCaptor<ServerResolvedAgentSender> deltaSender =
                 ArgumentCaptor.forClass(ServerResolvedAgentSender.class);
-        verify(deliberation).acceptDelta(eq("0"), eq("juyiting"), eq("jia_client"), eq("1001"),
+        verify(deliberation).acceptDelta(eq("0"), eq("task-owner-A"), eq("jia_client"), eq("1001"),
                 eq(1L), eq("agent-001"), eq("req-1"), eq("turn-1"), eq("dispatch-1"),
                 eq("snapshot-1"), eq("sha256:ctx"), eq(1L), eq(deltaContent), deltaSender.capture());
         ArgumentCaptor<ServerResolvedAgentSender> finalSender =
                 ArgumentCaptor.forClass(ServerResolvedAgentSender.class);
-        verify(deliberation).persistFinal(eq("0"), eq("juyiting"), eq("jia_client"), eq("1001"),
+        verify(deliberation).persistFinal(eq("0"), eq("task-owner-A"), eq("jia_client"), eq("1001"),
                 eq(1L), eq("agent-001"), eq("req-1"), eq("turn-1"), eq("dispatch-1"),
                 eq("snapshot-1"), eq("sha256:ctx"), eq("final"),
                 org.mockito.ArgumentMatchers.<Integer>isNull(), org.mockito.ArgumentMatchers.<String>isNull(),

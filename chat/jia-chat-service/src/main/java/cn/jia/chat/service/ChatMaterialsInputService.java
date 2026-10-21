@@ -12,6 +12,9 @@ import java.util.function.Supplier;
 /** Current owner/task/turn native-material authorization, within the original CHAT round. */
 @Service
 public class ChatMaterialsInputService {
+    private ChatDispatchAuthorityService dispatchAuthority;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setDispatchAuthority(ChatDispatchAuthorityService value) { dispatchAuthority=value; }
     private final ChatDeliberationDao dao;
     private final ChatTypedDeliberationStore store;
     private final AgentTaskMutationTransaction tasks;
@@ -24,10 +27,10 @@ public class ChatMaterialsInputService {
     }
     public PersonalWorkspaceExecutionService.RuntimeContent read(AgentRuntimeAuthentication.Scope runtime,String requestId,String turnId,String sourceId,String digest) {
         if(runtime==null||digest==null||!digest.matches("sha256:[0-9a-f]{64}"))throw missing();
-        var turn=dao.findTurn(runtime.tenantId(),runtime.ownerJiacn(),runtime.clientId(),turnId);
+        var turn=dispatchAuthority.incomingTurn(runtime.tenantId(),runtime.clientId(),runtime.ownerJiacn(),runtime.agentId(),turnId).turn();
         if(turn==null||!requestId.equals(turn.getRequestId())||!runtime.agentId().equals(turn.getTargetAgentId())||!"CHAT".equals(turn.getRoute()))throw missing();
         var prepared=withAuthority(turn,digest,false,()->input(turn,sourceId));
-        var owner=new PersonalWorkspaceExecutionService.OwnerScope(runtime.tenantId(),runtime.clientId(),runtime.ownerJiacn());
+        var owner=new PersonalWorkspaceExecutionService.OwnerScope(turn.getTenantId(),turn.getClientId(),turn.getOwnerJiacn());
         var content=sources.read(owner,prepared.taskId(),turn.getConversationId(),turn.getConversationGeneration(),prepared.input());
         withAuthority(turn,digest,false,()-> {var current=input(turn,sourceId);if(!current.equals(prepared))throw missing();return null;});
         return content;
@@ -40,8 +43,7 @@ public class ChatMaterialsInputService {
         var scope=scope(locator);var admission=store.findAdmissionByRequest(scope,locator.getRequestId());if(admission==null)throw missing();
         return tasks.executeWithLockedTaskRootInOwnerScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),admission.taskId(),root-> {
             if(root==null||!locator.getTargetAgentId().equals(root.getAssignedAgentId()))throw missing();
-            grants.resolveAndAdmit(new cn.jia.agent.service.AgentTaskExecutionGrantService.Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn()),
-                    admission.taskId(),admission.assignmentRevision(),locator.getTargetAgentId(),"DELIBERATE",false);
+            dispatchAuthority.forTurn(locator);
             sources.conversation(owner(scope),admission.taskId(),scope.conversationId(),scope.conversationGeneration());
             var request=dao.findRequest(scope.tenantId(),scope.ownerJiacn(),scope.clientId(),locator.getRequestId());
             var turn=dao.findTurn(scope.tenantId(),scope.ownerJiacn(),scope.clientId(),locator.getTurnId());
@@ -62,7 +64,7 @@ public class ChatMaterialsInputService {
         });
     }
     private Object nativeCandidates(ChatTypedDeliberationStore.Admission admission,ChatTurnEntity turn) {
-        var registered=sessions.requireSingleReady(new TypedDeliberationSessionRegistry.Scope(turn.getTenantId(),turn.getOwnerJiacn(),turn.getClientId()),turn.getTargetAgentId());
+        var registered=sessions.requireSingleReady(new TypedDeliberationSessionRegistry.Scope(turn.getTenantId(),dispatchAuthority.forTurn(turn).executorOwner(),turn.getClientId()),turn.getTargetAgentId());
         return ChatMaterialsInputContract.candidates(registered.frozenDeclaration(),ChatTypedDeliberationContextService.parseCatalog(admission.sourceCatalogJson()));
     }
     private record Input(String taskId,Map<String,Object> input) { }

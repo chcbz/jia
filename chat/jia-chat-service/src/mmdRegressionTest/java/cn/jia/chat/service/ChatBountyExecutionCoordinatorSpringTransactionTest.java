@@ -147,6 +147,11 @@ class ChatBountyExecutionCoordinatorSpringTransactionTest {
                 mock(PersonalWorkspaceDao.class),mock(AgentLegacyTaskCompatibilityService.class),identities,
                 mutations,new ObjectMapper(),requirements);
         grantService.setControlledAuthority(authority);
+        var targetAuthority=mock(cn.jia.agent.service.TaskAssigneeAuthorityService.class);
+        when(targetAuthority.requireGrantTarget("0","client","owner","task","grant",1L))
+                .thenReturn(new cn.jia.agent.service.TaskAssigneeAuthorityService.Target(
+                        "0","client",grant.getExecutorOwnerJiacn(),"agent",grant.getExecutorBindingId(),null));
+        grantService.setAssigneeAuthority(targetAuthority);
 
         var target=new ChatBountyExecutionCoordinator(reads,steps,requests,conversations,grantService,
                 requirements,executions,new ObjectMapper());
@@ -267,6 +272,11 @@ class ChatBountyExecutionCoordinatorSpringTransactionTest {
                 mock(PersonalWorkspaceDao.class),mock(AgentLegacyTaskCompatibilityService.class),identities,
                 mutations,new ObjectMapper(),requirements);
         grantService.setControlledAuthority(authority);
+        var targetAuthority=mock(cn.jia.agent.service.TaskAssigneeAuthorityService.class);
+        when(targetAuthority.requireGrantTarget("0","client","owner","task","grant",1L))
+                .thenReturn(new cn.jia.agent.service.TaskAssigneeAuthorityService.Target(
+                        "0","client",grant.getExecutorOwnerJiacn(),"agent",grant.getExecutorBindingId(),null));
+        grantService.setAssigneeAuthority(targetAuthority);
         when(executions.createConversation(any(),any())).thenReturn(
                 new PersonalWorkspaceExecutionService.ExecutionView("execution","task","run","42",
                         "agent","QUEUED",null,null,1,"image/png",List.of(),null,
@@ -391,6 +401,7 @@ class ChatBountyExecutionCoordinatorSpringTransactionTest {
 
     private static AgentTaskExecutionGrantEntity grant() {
         var value=new AgentTaskExecutionGrantEntity().setGrantId("grant").setOwnerJiacn("owner")
+                .setExecutorOwnerJiacn("owner").setExecutorBindingId(19L).setExternalPolicyRevision(null)
                 .setTaskId("task").setRequirementRevision(1L).setAssignmentRevision(2L)
                 .setTargetAgentId("agent").setPermittedOperationsJson("[\"GENERATE_IMAGE\"]")
                 .setInputScopeJson("[]").setCostAuthorizationRef(

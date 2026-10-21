@@ -691,6 +691,12 @@ class JuyitingWorkflowMySqlTest {
             context.registerBean(ChatFormalDeliveryRetentionService.class,()->retained);
             context.registerBean(ChatTypedReviewContextService.class,()->new ChatTypedReviewContextService(
                     domain.context.getBean(ChatTaskDeliveryReviewReadService.class),app.getBean(ChatTypedReviewContextStore.class),typed));
+            var dispatchAuthority=mock(ChatDispatchAuthorityService.class);
+            when(dispatchAuthority.admission("0","owner","client","task","wuyong")).thenReturn(
+                    new cn.jia.agent.service.AgentTaskExecutionGrantService.Admission("revision-grant",1,1,"wuyong",null,false,List.of(),null,null,1L,1L,"a".repeat(64),null,null));
+            when(dispatchAuthority.incoming(anyString(),anyString(),anyString(),anyString(),anyString()))
+                    .thenAnswer(call -> new ChatDispatchAuthorityService.Binding(null,null,call.getArgument(2)));
+            context.registerBean(ChatDispatchAuthorityService.class,()->dispatchAuthority);
             context.registerBean(ChatDeliberationService.class,()->new ChatDeliberationService(dao,conversations,messages,agents));
             context.registerBean(ChatDeliberationOutboxService.class,()->new ChatDeliberationOutboxService(dao));
             context.registerBean(ChatDeliveryRevisionService.class,()->new ChatDeliveryRevisionService(dao,

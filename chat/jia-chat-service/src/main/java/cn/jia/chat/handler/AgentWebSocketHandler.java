@@ -150,6 +150,8 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         this.chatDeliberationService = service;
     }
     private ChatDeliberationOutboxService chatDeliberationOutboxService;
+    private cn.jia.chat.service.ChatDispatchAuthorityService chatDispatchAuthority;
+    @Autowired public void setChatDispatchAuthority(cn.jia.chat.service.ChatDispatchAuthorityService value) { chatDispatchAuthority=value; }
     private TypedDeliberationSessionRegistry typedDeliberationSessions;
     private TypedInspectionSessionRegistry typedInspectionSessions;
     private NativeTextFileSessionRegistry nativeTextFileSessions;
@@ -1265,13 +1267,13 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             return;
         }
 
-        String jiacn = sessionJiacn(session);
         String clientId = sessionClientId(session);
-        ChatConversationEntity conversation = requireOwnedConversation(session, payload, conversationId);
+        ChatConversationEntity conversation = requireCallbackConversation(session, payload, conversationId, agentId);
         if (conversation == null || !requireConversationAgentScope(
                 session, payload, conversation, agentId)) {
             return;
         }
+        String jiacn = conversation.getJiacn();
         String conversationType = Optional.ofNullable(conversation.getConversationType()).orElse("normal");
         long generation = lifecycleGeneration(conversation);
         ServerResolvedAgentSender sender = resolveAgentSender(session, payload, agentId);
@@ -1391,11 +1393,12 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             return;
         }
 
-        ChatConversationEntity conversation = requireOwnedConversation(session, payload, conversationId);
+        ChatConversationEntity conversation = requireCallbackConversation(session, payload, conversationId, agentId);
         if (conversation == null || !requireConversationAgentScope(
                 session, payload, conversation, agentId)) {
             return;
         }
+        String jiacn = conversation.getJiacn();
         String conversationType = Optional.ofNullable(conversation.getConversationType()).orElse("normal");
         long generation = lifecycleGeneration(conversation);
         ServerResolvedAgentSender sender = resolveAgentSender(session, payload, agentId);
@@ -1419,7 +1422,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             ChatDeliberationService.DeltaResult result;
             try {
                 result = withSessionMutationFence(session, () -> chatDeliberationService.acceptDelta(
-                        sessionTenantId(session), sessionJiacn(session), sessionClientId(session),
+                        sessionTenantId(session), jiacn, sessionClientId(session),
                         conversationId, generation, agentId,
                         asString(payload.get("requestId")), asString(payload.get("turnId")),
                         asString(payload.get("dispatchId")), contextValue(payload, "contextSnapshotId"),
@@ -1648,6 +1651,13 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         if (!expectedScopeKey.equals(scopeKey)) {
             return denyConversationAgentScope(session, payload);
         }
+        if (hasDurableTurnBinding(payload)) {
+            try {
+                var bound = callbackBinding(session, agentId, strictString(payload.get("dispatchId")));
+                return conversation.getJiacn().equals(bound.turn().getOwnerJiacn())
+                        && conversation.getId().toString().equals(bound.turn().getConversationId());
+            } catch (RuntimeException denied) { return denyConversationAgentScope(session, payload); }
+        }
         // The WebSocket jiacn is the owner, not the task tenant (always "0").
         // The persisted conversation and the receiving session were matched above.
         Set<String> authoritativeMembers = resolveConversationTaskMembers(
@@ -1759,6 +1769,33 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         return generation;
     }
 
+    private cn.jia.chat.service.ChatDispatchAuthorityService.Binding callbackBinding(
+            WebSocketSession session, String agentId, String dispatchId) {
+        if (chatDispatchAuthority == null) throw new IllegalStateException("Dispatch authority unavailable");
+        return chatDispatchAuthority.incoming(sessionTenantId(session),sessionClientId(session),
+                sessionJiacn(session),agentId,dispatchId);
+    }
+
+    private ChatConversationEntity requireCallbackConversation(WebSocketSession session,
+            Map<String,Object> payload, String conversationId, String agentId) {
+        if (!hasDurableTurnBinding(payload)) return requireOwnedConversation(session,payload,conversationId);
+        try {
+            var bound=callbackBinding(session,agentId,strictString(payload.get("dispatchId")));
+            var turn=bound.turn();
+            if (!Objects.equals(conversationId,turn.getConversationId())
+                    || !Objects.equals(payload.get("requestId"),turn.getRequestId())
+                    || !Objects.equals(payload.get("turnId"),turn.getTurnId())
+                    || !Objects.equals(exactPositiveLong(payload.get("conversationGeneration")),turn.getConversationGeneration()))
+                throw new IllegalStateException("Dispatch binding mismatch");
+            var conversation=chatConversationService.getOwned(turn.getOwnerJiacn(),turn.getClientId(),conversationId);
+            if (!Objects.equals(sessionTenantId(session),conversation.getTenantId())) throw new IllegalStateException("Tenant mismatch");
+            return conversation;
+        } catch (RuntimeException denied) {
+            sendError(session,payload,"CONVERSATION_NOT_AVAILABLE","Conversation is not available to this dispatch");
+            return null;
+        }
+    }
+
     private ChatConversationEntity requireOwnedConversation(
             WebSocketSession session, Map<String, Object> payload, String conversationId) {
         String jiacn = sessionJiacn(session);
@@ -1803,7 +1840,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
     }
 
     private String streamKey(WebSocketSession session, String requestId, String conversationId) {
-        return session.getId() + ":" + Optional.ofNullable(requestId).orElse(conversationId);
+        return session.getId() + ":" + conversationId + ":" + Optional.ofNullable(requestId).orElse("");
     }
 
     private Map<String, Object> copyTrace(Map<String, Object> payload) {
@@ -2692,6 +2729,8 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             if (requiredTenantId != null && !requiredTenantId.equals(sessionTenantId(session))) {
                 continue;
             }
+            if (AgentProtocolConstants.TYPE_CHAT_STOP.equals(messageType)
+                    && !typedDeliberationSessionCurrent(session, agentId)) continue;
             if (requiredOwnerJiacn != null
                     && (!requiredOwnerJiacn.equals(sessionJiacn(session))
                     || !requiredClientId.equals(sessionClientId(session)))) {
