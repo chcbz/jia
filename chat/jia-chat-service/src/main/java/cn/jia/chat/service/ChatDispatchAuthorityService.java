@@ -155,6 +155,9 @@ public class ChatDispatchAuthorityService {
             // terminal version increment; identity/binding replacement still fails closed.
             target=authority.requireGrantTarget(row.getTenantId(),row.getClientId(),row.getOwnerJiacn(),
                     task,row.getTaskGrantId(),targetVersion);
+        } catch (cn.jia.agent.service.impl.AgentServiceImpl.AgentBizException rejected) {
+            if (cn.jia.agent.common.AgentErrorConstants.AGENT_FORBIDDEN.equals(rejected.getCode())) throw denied();
+            throw rejected;
         } catch (cn.jia.agent.service.AgentTaskExecutionGrantException | NumberFormatException rejected) {
             throw denied();
         }

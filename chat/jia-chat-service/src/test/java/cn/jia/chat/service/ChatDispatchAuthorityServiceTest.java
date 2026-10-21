@@ -74,11 +74,12 @@ class ChatDispatchAuthorityServiceTest {
     }
     @Test void bindingReplacementOrWrongPlatformIsRejected() {
         when(targets.requireGrantTarget("0","client","A","task-A","grant-original",3))
-                .thenThrow(new IllegalStateException("BINDING_CHANGED"));
-        assertThrows(RuntimeException.class,()->service.outgoing(row));
-        when(targets.requireGrantTarget("0","client","A","task-A","grant-original",3))
-                .thenReturn(new TaskAssigneeAuthorityService.Target("0","other","B","agent-B",19L,null));
-        assertThrows(RuntimeException.class,()->service.outgoing(row));
+                .thenThrow(new cn.jia.agent.service.impl.AgentServiceImpl.AgentBizException(
+                        cn.jia.agent.common.AgentErrorConstants.AGENT_FORBIDDEN,"BINDING_CHANGED"));
+        assertThrows(ChatDeliberationException.class,()->service.outgoing(row));
+        doReturn(new TaskAssigneeAuthorityService.Target("0","other","B","agent-B",19L,null))
+                .when(targets).requireGrantTarget("0","client","A","task-A","grant-original",3);
+        assertThrows(ChatDeliberationException.class,()->service.outgoing(row));
     }
     @Test void restartAndStopUsePersistedOriginalDispatchNotCurrentAssignment() {
         var restarted=new ChatDispatchAuthorityService(mapper,dao,targets,grants,tasks);
@@ -157,6 +158,13 @@ class ChatDispatchAuthorityServiceTest {
         verifyNoMoreInteractions(grants);
         row.setTaskAssignmentRevision(null);
         assertThrows(ChatDeliberationException.class,()->service.outgoing(row));
+    }
+
+    @Test void infrastructureFailuresAreNotTranslatedToAuthorityDenialsOrSuccess() {
+        var databaseFailure=new org.springframework.dao.DataAccessResourceFailureException("database unavailable");
+        doThrow(databaseFailure).when(targets).requireGrantTarget("0","client","A","task-A","grant-original",3);
+        assertSame(databaseFailure,assertThrows(org.springframework.dao.DataAccessResourceFailureException.class,
+                ()->service.outgoing(row)));
     }
 
 }

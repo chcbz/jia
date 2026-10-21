@@ -167,6 +167,8 @@ class AgentWebSocketCommandRecoveryTest extends BaseMockTest {
                         () -> mock(cn.jia.agent.skill.SkillInstallResultService.class))
                 .withBean(cn.jia.chat.service.ChatConversationService.class,
                         () -> mock(cn.jia.chat.service.ChatConversationService.class))
+                .withBean(cn.jia.chat.service.ChatDispatchAuthorityService.class,
+                        () -> mock(cn.jia.chat.service.ChatDispatchAuthorityService.class))
                 .withBean(ChatMessageDao.class, () -> mock(ChatMessageDao.class))
                 .withBean(ChatConversationEventBroker.class,
                         () -> mock(ChatConversationEventBroker.class))

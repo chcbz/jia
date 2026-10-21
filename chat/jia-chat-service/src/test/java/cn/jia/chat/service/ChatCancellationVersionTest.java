@@ -62,6 +62,12 @@ class ChatCancellationVersionTest {
     }
 
     private void visible(ChatTurnEntity turn) {
+        var authority=mock(ChatDispatchAuthorityService.class);
+        when(authority.incoming(anyString(),anyString(),anyString(),anyString(),anyString()))
+                .thenThrow(new ChatDeliberationException(ChatDeliberationException.Reason.NOT_FOUND_OR_FORBIDDEN,"not available"));
+        doReturn(new ChatDispatchAuthorityService.Binding(null,turn,"owner")).when(authority)
+                .incoming("0","client","owner","agent","dispatch");
+        service.setDispatchAuthority(authority);
         ChatConversationEntity conversation = new ChatConversationEntity().setLifecycleGeneration(1L);
         conversation.setTenantId("0");
         when(conversations.findScopedById("owner", "client", "1001")).thenReturn(conversation);
