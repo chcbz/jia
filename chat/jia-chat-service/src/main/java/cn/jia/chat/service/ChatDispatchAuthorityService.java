@@ -50,6 +50,7 @@ public class ChatDispatchAuthorityService {
     public record Binding(ChatDispatchOutboxEntity dispatch, ChatTurnEntity turn, String executorOwner) { }
 
     public Binding outgoing(ChatDispatchOutboxEntity candidate) {
+        if (!"DISPATCH".equals(candidate.getEventType()) && !"CANCEL_REQUESTED".equals(candidate.getEventType())) throw denied();
         var row="DISPATCH".equals(candidate.getEventType()) ? candidate : unique(mapper.findDispatch(
                 candidate.getTenantId(),candidate.getClientId(),candidate.getDispatchId()));
         if (!Objects.equals(row.getOwnerJiacn(),candidate.getOwnerJiacn())
@@ -134,8 +135,20 @@ public class ChatDispatchAuthorityService {
                     });
                 }
             }
+            long targetVersion=row.getTaskGrantVersion();
+            if (!requireActive) {
+                var saved=mapper.findOriginalGrantForStop(row.getTenantId(),row.getClientId(),row.getOwnerJiacn(),task,row.getTaskGrantId());
+                if (saved==null || saved.grantVersion()==null || !Objects.equals(saved.targetAgentId(),turn.getTargetAgentId())) throw denied();
+                boolean original=Objects.equals(saved.grantVersion(),row.getTaskGrantVersion());
+                boolean closedSuccessor=("REVOKED".equals(saved.state()) || "SUPERSEDED".equals(saved.state()))
+                        && targetVersion<Long.MAX_VALUE && saved.grantVersion()==targetVersion+1;
+                if (!original && !closedSuccessor) throw denied();
+                targetVersion=saved.grantVersion();
+            }
+            // The common authority stays strict. Only STOP may use the same grant's single
+            // terminal version increment; identity/binding replacement still fails closed.
             target=authority.requireGrantTarget(row.getTenantId(),row.getClientId(),row.getOwnerJiacn(),
-                    task,row.getTaskGrantId(),row.getTaskGrantVersion());
+                    task,row.getTaskGrantId(),targetVersion);
         } catch (cn.jia.agent.service.AgentTaskExecutionGrantException | NumberFormatException rejected) {
             throw denied();
         }

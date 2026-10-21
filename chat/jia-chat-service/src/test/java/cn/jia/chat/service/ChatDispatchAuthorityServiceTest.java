@@ -83,6 +83,8 @@ class ChatDispatchAuthorityServiceTest {
         var restarted=new ChatDispatchAuthorityService(mapper,dao,targets,grants,tasks);
         var stop=new ChatDispatchOutboxEntity().setTenantId("0").setClientId("client").setOwnerJiacn("A")
                 .setEventType("CANCEL_REQUESTED").setDispatchId("dispatch").setTurnId("turn");
+        when(mapper.findOriginalGrantForStop("0","client","A","task-A","grant-original"))
+                .thenReturn(new ChatDispatchAuthorityMapper.StopGrant(3L,"ACTIVE","agent-B"));
         assertEquals("B",restarted.outgoing(stop).executorOwner());
         verifyNoInteractions(grants); // Revocation may block work, never an original-binding stop.
         verify(targets).requireGrantTarget("0","client","A","task-A","grant-original",3);
@@ -118,6 +120,29 @@ class ChatDispatchAuthorityServiceTest {
         assertEquals("A",service.incoming("0","client","A","agent-B","dispatch").executorOwner());
         assertThrows(ChatDeliberationException.class,()->service.incoming("0","client","B","agent-B","dispatch"));
         verifyNoInteractions(targets,grants,tasks);
+    }
+
+    @Test void revokedStopUsesOnlyOriginalGrantTerminalVersionWhileIncomingRemainsStrict() {
+        var stop=new ChatDispatchOutboxEntity().setTenantId("0").setClientId("client").setOwnerJiacn("A")
+                .setEventType("CANCEL_REQUESTED").setDispatchId("dispatch").setTurnId("turn");
+        when(mapper.findOriginalGrantForStop("0","client","A","task-A","grant-original"))
+                .thenReturn(new ChatDispatchAuthorityMapper.StopGrant(4L,"REVOKED","agent-B"));
+        when(targets.requireGrantTarget("0","client","A","task-A","grant-original",3))
+                .thenThrow(new IllegalStateException("STRICT_VERSION_MISMATCH"));
+        when(targets.requireGrantTarget("0","client","A","task-A","grant-original",4))
+                .thenReturn(new TaskAssigneeAuthorityService.Target("0","client","B","agent-B",19L,null));
+        assertEquals("B",service.outgoing(stop).executorOwner());
+        verifyNoInteractions(grants,tasks);
+        assertThrows(RuntimeException.class,()->service.incoming("0","client","B","agent-B","dispatch"));
+        when(targets.requireGrantTarget("0","client","A","task-A","grant-original",4))
+                .thenThrow(new IllegalStateException("BINDING_REPLACED"));
+        assertThrows(RuntimeException.class,()->service.outgoing(stop));
+        when(mapper.findOriginalGrantForStop("0","client","A","task-A","grant-original"))
+                .thenReturn(new ChatDispatchAuthorityMapper.StopGrant(4L,"ACTIVE","agent-B"));
+        assertThrows(ChatDeliberationException.class,()->service.outgoing(stop));
+        when(mapper.findOriginalGrantForStop("0","client","A","task-A","grant-original"))
+                .thenReturn(new ChatDispatchAuthorityMapper.StopGrant(5L,"REVOKED","agent-B"));
+        assertThrows(ChatDeliberationException.class,()->service.outgoing(stop));
     }
 
 }
