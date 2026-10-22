@@ -15,7 +15,7 @@ import java.nio.charset.StandardCharsets;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** Runtime storage must reject a MIME-labelled blob unless it can reopen as that exact format. */
+/** Office/images are reopened; PDF is an opaque envelope, parsed only by browser/Agent. */
 class PersonalWorkspaceOutputFormatValidatorTest {
     @Test
     void acceptsGenuineBoundedDeliveryFormats() throws Exception {
@@ -47,6 +47,16 @@ class PersonalWorkspaceOutputFormatValidatorTest {
 
     private static byte[] jpeg() throws Exception {
         return image("jpeg");
+    }
+
+    @Test
+    void pdfBoundaryChecksOnlyTheOpaqueEnvelopeNotDocumentSemantics() {
+        assertTrue(PersonalWorkspaceOutputFormatValidator.isValid(PersonalWorkspaceOutputFormatValidator.PDF,
+                "%PDF-1.7\nopaque payload\n%%EOF\r\n".getBytes(StandardCharsets.US_ASCII)));
+        assertFalse(PersonalWorkspaceOutputFormatValidator.isValid(PersonalWorkspaceOutputFormatValidator.PDF,
+                "%PDF-1.7\ntruncated".getBytes(StandardCharsets.US_ASCII)));
+        assertFalse(PersonalWorkspaceOutputFormatValidator.isValid(PersonalWorkspaceOutputFormatValidator.PDF,
+                "%PDF-1.7\n%%EOF\ntrailing payload".getBytes(StandardCharsets.US_ASCII)));
     }
 
     private static byte[] image(String format) throws Exception {

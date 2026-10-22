@@ -49,7 +49,11 @@ class PersonalWorkspacePreviewRendererTest {
         assertReadyText(DOCX, docx(), "Word content");
         assertReadyText(PPTX, pptx(), "Slide content");
         assertReadyText(XLSX, xlsx(), "Sheet content");
-        assertReadyText(PDF, pdf(), "PDF content");
+        byte[] pdfBytes = pdf();
+        var pdfPreview = renderer.render(PDF, pdfBytes);
+        assertEquals("READY", pdfPreview.view().state());
+        assertEquals(PDF, pdfPreview.view().parts().getFirst().contentMimeType());
+        assertArrayEquals(pdfBytes, pdfPreview.bytes());
     }
 
     @Test
@@ -158,17 +162,16 @@ class PersonalWorkspacePreviewRendererTest {
     }
 
     @Test
-    void exposesPdfPagesSeparatelyWhileKeepingTheContentPart() throws Exception {
-        var preview = renderer.render(PDF, pdfWithTwoPages());
-
-        assertEquals(List.of("page-1", "page-2", "content"), preview.view().parts().stream()
-                .map(part -> part.partId()).toList());
-        assertTrue(new String(preview.partBytes("page-1"), StandardCharsets.UTF_8)
-                .contains("First PDF page"));
-        assertTrue(new String(preview.partBytes("page-2"), StandardCharsets.UTF_8)
-                .contains("Second PDF page"));
-        assertTrue(new String(preview.bytes(), StandardCharsets.UTF_8).contains("First PDF page"));
-        assertTrue(new String(preview.bytes(), StandardCharsets.UTF_8).contains("Second PDF page"));
+    void returnsOriginalPdfWithoutServerSidePageExtraction() throws Exception {
+        byte[] original = pdfWithTwoPages();
+        var preview = renderer.render(PDF, original);
+        assertEquals("READY", preview.view().state());
+        assertEquals(1, preview.view().parts().size());
+        assertEquals("content", preview.view().parts().getFirst().partId());
+        assertEquals(PDF, preview.view().parts().getFirst().contentMimeType());
+        assertArrayEquals(original, preview.bytes());
+        assertFalse(preview.view().partial());
+        assertNull(preview.view().reason());
     }
 
     @Test
@@ -376,6 +379,16 @@ class PersonalWorkspacePreviewRendererTest {
             workbook.write(output);
             return output.toByteArray();
         }
+    }
+
+    @Test
+    void pdfPreviewDoesNotParseOrModifyUntrustedDocumentBytes() {
+        byte[] opaque = "%PDF-not-a-valid-document".getBytes(StandardCharsets.US_ASCII);
+        var preview = renderer.render(PDF, opaque);
+        assertEquals("READY", preview.view().state());
+        assertArrayEquals(opaque, preview.bytes());
+        opaque[0] = '!';
+        assertEquals('%', preview.bytes()[0]);
     }
 
     private static byte[] pdf() throws Exception {

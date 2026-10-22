@@ -35,7 +35,8 @@ dependencies {
         exclude group: 'org.apache.poi', module: 'poi-ooxml-lite'
     }
     implementation libs.poi.ooxml.full
-    implementation libs.pdfbox.core
+    // PDFBox is fixture-only; no PDF parser is placed on the production runtime classpath.
+    testImplementation libs.pdfbox.core
     testImplementation project(':common:jia-common-test')
     testImplementation project(':task:jia-task-core')
     testImplementation project(':task:jia-task-api')
@@ -887,4 +888,25 @@ tasks.register('skillManifestContract', Test) {
 dependencies {
     add(executionHistoryHttpSourceSet.implementationConfigurationName, project(':oauth:jia-oauth-resource'))
     add(executionHistoryHttpSourceSet.implementationConfigurationName, project(':user:jia-user-api'))
+}
+
+// PDF-SKILL-20261022: prevent an accidental transitive PDF parser from returning
+// to the main API while retaining real PDFBox-generated test fixtures.
+def verifyPdfProcessingBoundary = tasks.register('verifyPdfProcessingBoundary') {
+    group = 'verification'
+    description = 'Ensures production service/application classpaths exclude PDFBox/pdf2dom.'
+    doLast {
+        [project, project(':starter')].each { component ->
+            def forbidden = component.configurations.runtimeClasspath.resolvedConfiguration.resolvedArtifacts.findAll {
+                it.moduleVersion.id.group in ['org.apache.pdfbox', 'net.sf.cssbox']
+            }
+            if (!forbidden.empty) {
+                throw new GradleException("PDF processing belongs in Agent/browser, not ${component.path}: " +
+                        forbidden.collect { it.moduleVersion.id }.join(', '))
+            }
+        }
+    }
+}
+tasks.withType(org.gradle.api.tasks.testing.Test).configureEach {
+    dependsOn verifyPdfProcessingBoundary
 }

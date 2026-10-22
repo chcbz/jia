@@ -1,6 +1,5 @@
 package cn.jia.agent.service.impl;
 
-import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.poi.xslf.usermodel.XMLSlideShow;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.apache.poi.xwpf.usermodel.XWPFDocument;
@@ -14,10 +13,10 @@ import java.util.Set;
  * Server-side last line of defence for private runtime outputs.
  *
  * <p>The runtime client validates its delivery before upload, but an authenticated runtime endpoint
- * must not trust a declared MIME type or filename alone. This validator parses the bounded in-memory
- * payload before it enters durable workspace storage. It intentionally does not inspect document
- * semantics: the run instruction is the semantic contract; this boundary only establishes that the
- * stored bytes are genuinely reopenable in their declared format.</p>
+ * must not trust a declared MIME type or filename alone. Office/image formats retain their existing
+ * validation. PDF is an opaque, authenticated download: only its byte envelope is checked here,
+ * never decoded or declared semantically valid. PDF parsing and extraction belong to Agent skills
+ * and browser viewing; a malformed or protected PDF can still be rejected there.</p>
  */
 final class PersonalWorkspaceOutputFormatValidator {
     static final String PNG = "image/png";
@@ -75,12 +74,19 @@ final class PersonalWorkspaceOutputFormatValidator {
         }
     }
 
-    private static boolean validPdf(byte[] content) throws IOException {
-        if (content.length < 5 || content[0] != '%' || content[1] != 'P' || content[2] != 'D'
-                || content[3] != 'F' || content[4] != '-') return false;
-        try (PDDocument document = PDDocument.load(content)) {
-            return !document.isEncrypted() && document.getNumberOfPages() > 0;
+    private static boolean validPdf(byte[] content) {
+        // Deliberately NOT a PDF parser or a reopenability/security proof. Keep the
+        // existing private attachment, nosniff, digest and version/ACL boundaries.
+        if (!hasPrefix(content, new byte[] {'%', 'P', 'D', 'F', '-'})) return false;
+        int end = content.length;
+        while (end > 0 && (content[end - 1] == ' ' || content[end - 1] == '\t'
+                || content[end - 1] == '\r' || content[end - 1] == '\n')) end--;
+        byte[] eof = new byte[] {'%', '%', 'E', 'O', 'F'};
+        if (end < 10) return false;
+        for (int i = 0; i < eof.length; i++) {
+            if (content[end - eof.length + i] != eof[i]) return false;
         }
+        return true;
     }
 
     private static boolean hasPrefix(byte[] content, byte[] prefix) {

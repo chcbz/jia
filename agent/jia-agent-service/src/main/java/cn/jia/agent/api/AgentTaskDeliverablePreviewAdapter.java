@@ -18,7 +18,7 @@ import java.util.Set;
 /**
  * Fail-closed adapter over the existing read-only workspace renderer.
  *
- * <p>Office and PDF previews are derived representations, not claims of editable or pixel-perfect
+ * <p>Office previews are derived representations; PDFs are original passive bytes, not claims of editable or pixel-perfect
  * fidelity. The adapter never evaluates formulas, runs macros, follows links, writes the source
  * artifact, or invokes a Provider.</p>
  */
@@ -35,7 +35,7 @@ final class AgentTaskDeliverablePreviewAdapter {
             "application/vnd.openxmlformats-officedocument.presentationml.presentation";
     private static final String PDF = "application/pdf";
     private static final Set<String> IMAGE_TYPES = Set.of(PNG, JPEG);
-    private static final Set<String> EXTRACTED_TEXT_TYPES = Set.of(DOCX, XLSX, PPTX, PDF);
+    private static final Set<String> EXTRACTED_TEXT_TYPES = Set.of(DOCX, XLSX, PPTX);
     private static final Set<String> SAFE_READY_REASONS = Set.of("内容已截断");
     private static final Set<String> SAFE_UNSUPPORTED_REASONS = Set.of(
             "受保护文件暂不支持预览", "该文件类型暂不支持预览");
@@ -89,7 +89,7 @@ final class AgentTaskDeliverablePreviewAdapter {
         if (legacyContent == null) {
             throw corrupt();
         }
-        requireUtf8(legacyContent);
+        if (!PDF.equals(sourceMimeType)) requireUtf8(legacyContent);
         return new Preview("READY", representation(sourceMimeType), parts, view.partial(),
                 view.reason(), rendered::partBytes);
     }
@@ -116,7 +116,8 @@ final class AgentTaskDeliverablePreviewAdapter {
             return;
         }
         if (PDF.equals(sourceMimeType)) {
-            requireIndexedPartsThenContent(parts, "page-", TEXT);
+            if (parts.size() != 1 || !CONTENT_PART_ID.equals(parts.getFirst().partId())
+                    || !PDF.equals(parts.getFirst().contentMimeType())) throw corrupt();
             return;
         }
         throw corrupt();
@@ -151,7 +152,7 @@ final class AgentTaskDeliverablePreviewAdapter {
             return "SHEET_TEXT";
         }
         if (PDF.equals(sourceMimeType)) {
-            return "PAGED_TEXT";
+            return "ORIGINAL_PDF";
         }
         if (EXTRACTED_TEXT_TYPES.contains(sourceMimeType)) {
             return "EXTRACTED_TEXT";
@@ -222,7 +223,7 @@ final class AgentTaskDeliverablePreviewAdapter {
 
         String legacyRepresentation() {
             return switch (representation) {
-                case "PAGED_IMAGE", "SHEET_TEXT", "PAGED_TEXT" -> "EXTRACTED_TEXT";
+                case "PAGED_IMAGE", "SHEET_TEXT" -> "EXTRACTED_TEXT";
                 default -> representation;
             };
         }
@@ -246,7 +247,7 @@ final class AgentTaskDeliverablePreviewAdapter {
                 requireUtf8(bytes);
             } else if (IMAGE_TYPES.contains(exactPart.contentMimeType())) {
                 requireImage(exactPart.contentMimeType(), bytes);
-            } else {
+            } else if (!PDF.equals(exactPart.contentMimeType())) {
                 throw corrupt();
             }
             return new PartContent(exactPart, bytes);

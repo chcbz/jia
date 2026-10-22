@@ -1,0 +1,87 @@
+{
+  "schemaVersion": 1,
+  "skillKey": "pdf-extract",
+  "skillVersion": "1.0.0",
+  "title": "PDF 正文读取",
+  "description": "在 Agent 无网络沙箱中按页提取已授权 PDF 的正文；不执行 OCR。",
+  "runner": "local-script",
+  "entrypoint": "main.mjs",
+  "parametersSchema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  },
+  "inputs": {
+    "minItems": 1,
+    "maxItems": 1,
+    "acceptedMimeTypes": [
+      "application/pdf"
+    ]
+  },
+  "outputs": {
+    "dataSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "status": {
+          "enum": [
+            "EXTRACTED",
+            "OCR_MAY_BE_REQUIRED",
+            "PASSWORD_REQUIRED",
+            "INVALID_PDF"
+          ]
+        },
+        "pageCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "pages": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "page",
+              "text"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "emptyPages": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "ocrPerformed": {
+          "const": false
+        }
+      },
+      "required": [
+        "status",
+        "pageCount",
+        "pages",
+        "emptyPages",
+        "ocrPerformed"
+      ],
+      "additionalProperties": false
+    },
+    "mimeTypes": [
+      "text/plain"
+    ],
+    "multiple": false,
+    "artifactsRequired": false
+  },
+  "requirements": {}
+}

@@ -1,9 +1,6 @@
 package cn.jia.agent.service.impl;
 
 import cn.jia.agent.entity.PersonalWorkspaceViews;
-import org.apache.pdfbox.pdmodel.PDDocument;
-import org.apache.pdfbox.pdmodel.encryption.InvalidPasswordException;
-import org.apache.pdfbox.text.PDFTextStripper;
 import org.apache.poi.ss.usermodel.Cell;
 import org.apache.poi.ss.usermodel.CellType;
 import org.apache.poi.ss.usermodel.DataFormatter;
@@ -86,8 +83,11 @@ public final class PersonalWorkspacePreviewRenderer {
             if (DOCX.equals(contentMimeType)) return textPreview(docx(source));
             if (PPTX.equals(contentMimeType)) return pptxPreview(source);
             if (XLSX.equals(contentMimeType)) return xlsxPreview(source);
-            if (PDF.equals(contentMimeType)) return pdfPreview(source);
-        } catch (UnsupportedPreviewException | InvalidPasswordException exception) {
+            // PDF bytes are passive private content. The browser renders the original;
+            // content extraction belongs to an installed Agent skill, never this JVM.
+            if (PDF.equals(contentMimeType)) return ready(
+                    List.of(fixedPart(CONTENT_PART_ID, PDF, source)), false);
+        } catch (UnsupportedPreviewException exception) {
             return unsupported("受保护文件暂不支持预览");
         } catch (Exception exception) {
             return failed();
@@ -457,39 +457,6 @@ public final class PersonalWorkspacePreviewRenderer {
             }
         }
         return text.build();
-    }
-
-    private static RenderedPreview pdfPreview(byte[] source) throws Exception {
-        List<RenderedPart> parts = new ArrayList<>();
-        List<String> pageTexts = new ArrayList<>();
-        int remaining = MAX_TEXT_CODE_POINTS;
-        boolean partial = false;
-        try (PDDocument document = PDDocument.load(source)) {
-            if (document.isEncrypted()) throw new UnsupportedPreviewException();
-            for (int pageIndex = 0; pageIndex < document.getNumberOfPages(); pageIndex++) {
-                if (remaining == 0) {
-                    pageTexts.add("");
-                    partial = true;
-                    continue;
-                }
-                PDFTextStripper stripper = new PDFTextStripper();
-                stripper.setSortByPosition(true);
-                stripper.setStartPage(pageIndex + 1);
-                stripper.setEndPage(pageIndex + 1);
-                SafeText pageText = cleanAndLimit(stripper.getText(document), remaining);
-                pageTexts.add(pageText.value());
-                remaining -= pageText.acceptedCodePoints();
-                partial |= pageText.truncated();
-            }
-        }
-        SafeText combined = cleanAndLimit(String.join("\n\n", pageTexts), MAX_TEXT_CODE_POINTS);
-        for (int pageIndex = 0; pageIndex < pageTexts.size(); pageIndex++) {
-            parts.add(fixedPart("page-" + (pageIndex + 1), TEXT_MIME_TYPE,
-                    pageTexts.get(pageIndex).getBytes(StandardCharsets.UTF_8)));
-        }
-        parts.add(fixedPart(CONTENT_PART_ID, TEXT_MIME_TYPE,
-                combined.value().getBytes(StandardCharsets.UTF_8)));
-        return ready(parts, partial || combined.truncated());
     }
 
     private static RenderedPreview textPreview(String extracted) {

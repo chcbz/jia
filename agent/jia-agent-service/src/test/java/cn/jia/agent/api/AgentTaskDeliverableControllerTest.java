@@ -205,11 +205,9 @@ class AgentTaskDeliverableControllerTest {
                                 new ExpectedPart("slide-2", "image/png"),
                                 new ExpectedPart("content", "text/plain")),
                         "slide-2", null, false, "Second slide preview"),
-                new PreviewCase(6, "application/pdf", pdf(), "PAGED_TEXT", "EXTRACTED_TEXT",
-                        List.of(new ExpectedPart("page-1", "text/plain"),
-                                new ExpectedPart("page-2", "text/plain"),
-                                new ExpectedPart("content", "text/plain")),
-                        "page-2", "Second PDF preview", false, "First PDF preview"));
+                new PreviewCase(6, "application/pdf", pdf(), "ORIGINAL_PDF", "ORIGINAL_PDF",
+                        List.of(new ExpectedPart("content", "application/pdf")),
+                        "content", null, true, null));
 
         for (PreviewCase sample : cases) {
             when(contentService.readContentForTaskOwner(
