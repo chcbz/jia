@@ -16,7 +16,9 @@ import java.util.Set;
  * must not trust a declared MIME type or filename alone. Office/image formats retain their existing
  * validation. PDF is an opaque, authenticated download: only its byte envelope is checked here,
  * never decoded or declared semantically valid. PDF parsing and extraction belong to Agent skills
- * and browser viewing; a malformed or protected PDF can still be rejected there.</p>
+ * and browser viewing; a malformed or protected PDF can still be rejected there.
+ * PDF-producing skills must validate their actual output before delivery; acceptance here
+ * proves neither reopenability nor instruction fulfillment.</p>
  */
 final class PersonalWorkspaceOutputFormatValidator {
     static final String PNG = "image/png";
