@@ -362,7 +362,7 @@ class ChatBountyExecutionTerminationMySqlTest {
     private void configureRuntime(WorkspaceConversationAccessService access) {
         runtime=new PersonalWorkspaceExecutionServiceImpl(executions,mock(PersonalWorkspaceDao.class),
                 mock(PersonalWorkspaceTaskLinkDao.class),mock(AgentRuntimeDao.class),
-                new FileSystemPersonalWorkspaceStorage(storage.toAbsolutePath(),1_000_000,Set.of("image/png")),
+                new FileSystemPersonalWorkspaceStorage(storage.toAbsolutePath(),1_000_000),
                 mock(PersonalWorkspaceWriteService.class),new PersonalWorkspaceExecutionProperties(List.of("image/png")));
         var grants=mock(AgentTaskExecutionGrantService.class);
         when(grants.admit(any(),eq("task"),eq("grant"),eq(1L),eq(1L),eq("agent"),eq("GENERATE_IMAGE"),eq(true)))

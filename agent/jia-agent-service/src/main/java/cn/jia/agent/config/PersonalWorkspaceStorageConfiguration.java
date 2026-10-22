@@ -9,7 +9,6 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.jdbc.core.JdbcTemplate;
 import java.nio.file.Path;
-import java.util.LinkedHashSet;
 
 @Configuration(proxyBeanMethods = false)
 @EnableConfigurationProperties({PersonalWorkspaceStorageProperties.class, PersonalWorkspaceExecutionProperties.class})
@@ -24,12 +23,11 @@ public class PersonalWorkspaceStorageConfiguration {
     public PersonalWorkspaceStorage personalWorkspaceStorage(PersonalWorkspaceStorageProperties properties) {
         if (!properties.enabled()) return new DisabledPersonalWorkspaceStorage();
         if (properties.rootDirectory() == null || properties.rootDirectory().isBlank()
-                || properties.maxContentBytes() == null || properties.maxContentBytes() < 1
-                || properties.allowedMimeTypes().isEmpty()) {
+                || properties.maxContentBytes() == null || properties.maxContentBytes() < 1) {
             throw new IllegalStateException("Invalid personal workspace storage configuration");
         }
         return new FileSystemPersonalWorkspaceStorage(Path.of(properties.rootDirectory()),
-                properties.maxContentBytes(), new LinkedHashSet<>(properties.allowedMimeTypes()));
+                properties.maxContentBytes());
     }
 
     @Bean

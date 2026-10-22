@@ -20,7 +20,6 @@ import java.nio.file.attribute.PosixFilePermission;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
-import java.util.LinkedHashSet;
 import java.util.Objects;
 import java.util.Set;
 import java.util.regex.Pattern;
@@ -33,15 +32,12 @@ public final class FileSystemPersonalWorkspaceStorage implements PersonalWorkspa
     private static final Set<PosixFilePermission> DIR_PERMS = Set.of(PosixFilePermission.OWNER_READ,
             PosixFilePermission.OWNER_WRITE, PosixFilePermission.OWNER_EXECUTE);
     private static final Set<PosixFilePermission> FILE_PERMS = Set.of(PosixFilePermission.OWNER_READ);
-    private final Path root; private final Object rootKey; private final long maximum; private final Set<String> allowed;
+    private final Path root; private final Object rootKey; private final long maximum;
 
-    public FileSystemPersonalWorkspaceStorage(Path configuredRoot, long maximum, Set<String> allowedMimeTypes) {
+    public FileSystemPersonalWorkspaceStorage(Path configuredRoot, long maximum) {
         if (configuredRoot == null || !configuredRoot.isAbsolute() || configuredRoot.normalize().getParent() == null || maximum < 1) invalid();
-        if (allowedMimeTypes == null || allowedMimeTypes.isEmpty()) invalid();
-        LinkedHashSet<String> normalized = new LinkedHashSet<>();
-        for (String mime : allowedMimeTypes) if (!validMime(mime) || !normalized.add(mime)) invalid();
         this.root = createRoot(configuredRoot.normalize()); this.rootKey = attributes(root).fileKey();
-        this.maximum = maximum; this.allowed = Set.copyOf(normalized);
+        this.maximum = maximum;
     }
 
     @Override public StoredObject store(Scope scope, byte[] content, String mimeType) {
@@ -113,7 +109,7 @@ public final class FileSystemPersonalWorkspaceStorage implements PersonalWorkspa
     private static void verifyRegular(Path p){BasicFileAttributes a=attributes(p);if(a.isSymbolicLink()||!a.isRegularFile())corrupt();}
     private static BasicFileAttributes attributes(Path p){try{return Files.readAttributes(p,BasicFileAttributes.class,LinkOption.NOFOLLOW_LINKS);}catch(IOException e){unavailable(e);return null;}}
     private static void permissions(Path p,Set<PosixFilePermission> permissions){try{Files.setPosixFilePermissions(p,permissions);}catch(IOException|UnsupportedOperationException e){unavailable(e);}}
-    private void validateMime(String mime){if(!validMime(mime)||!allowed.contains(mime))invalid();}
+    private void validateMime(String mime){if(!validMime(mime))invalid();}
     private static boolean validMime(String mime){return mime!=null&&MIME.matcher(mime).matches();}
     private static void validateScope(Scope s){if(s==null||!"0".equals(s.tenantId())||!identifier(s.clientId(),50)||!identifier(s.ownerJiacn(),50)||"0".equals(s.ownerJiacn()))invalid();}
     private static boolean identifier(String s,int max){return s!=null&&!s.isBlank()&&s.equals(s.strip())&&s.codePointCount(0,s.length())<=max&&!s.chars().anyMatch(Character::isISOControl);}

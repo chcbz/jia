@@ -185,8 +185,8 @@ public class PersonalWorkspaceController {
         if (supplied != null && !MediaType.APPLICATION_OCTET_STREAM_VALUE.equals(supplied)) return supplied;
         String filename = file.getOriginalFilename();
         int dot = filename == null ? -1 : filename.lastIndexOf('.');
-        if (dot < 0 || dot == filename.length() - 1) return supplied;
-        return FILENAME_MIME_TYPES.getOrDefault(filename.substring(dot + 1).toLowerCase(java.util.Locale.ROOT), supplied);
+        if (dot < 0 || dot == filename.length() - 1) return MediaType.APPLICATION_OCTET_STREAM_VALUE;
+        return FILENAME_MIME_TYPES.getOrDefault(filename.substring(dot + 1).toLowerCase(java.util.Locale.ROOT), MediaType.APPLICATION_OCTET_STREAM_VALUE);
     }
     private static String normalizedMime(String value) {
         if (value == null) return null;

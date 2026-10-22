@@ -42,6 +42,31 @@ class PersonalWorkspaceServiceImplTest {
             new PersonalWorkspaceService.Scope("0", "mobile", "owner-a");
 
     @Test
+    void arbitraryFormatsAndExtensionlessFilesRoundTripWithoutEnablingPreview() {
+        Fixture fixture = new Fixture();
+        String[][] cases = {{"data.custom", "application/x-custom"}, {"page.html", "text/html"},
+                {"icon.svg", "image/svg+xml"}, {"archive.zip", "application/zip"},
+                {"README", ""}, {"renamed.txt", "application/x-custom"}};
+        for (int i = 0; i < cases.length; i++) {
+            byte[] content = bytes("opaque " + i);
+            var saved = fixture.service.create(OWNER_A, upload("arbitrary-" + i, cases[i][0], cases[i][1], content));
+            String mime = cases[i][1].isEmpty() ? "application/octet-stream" : cases[i][1];
+            assertEquals(mime, saved.version().contentMimeType());
+            assertEquals("UNSUPPORTED", saved.version().previewState());
+            assertEquals("UNSUPPORTED", fixture.service.preview(OWNER_A, saved.file().fileId(), 1).state());
+            assertArrayEquals(content, fixture.service.readContent(OWNER_A, saved.file().fileId(), 1).bytes());
+            assertReason(PersonalWorkspaceException.Reason.NOT_FOUND,
+                    () -> fixture.service.readContent(OWNER_B, saved.file().fileId(), 1));
+        }
+        for (String filename : List.of("../escape", "a/b", "a\\b", ".", "..")) {
+            assertReason(PersonalWorkspaceException.Reason.BAD_REQUEST,
+                    () -> fixture.service.create(OWNER_A, upload("bad-name", filename, "application/octet-stream", bytes("x"))));
+        }
+        assertReason(PersonalWorkspaceException.Reason.BAD_REQUEST,
+                () -> fixture.service.create(OWNER_A, upload("bad-mime", "file", "text/html\r\nInjected: x", bytes("x"))));
+    }
+
+    @Test
     void commonImageUploadsPreserveOriginalBytesAndOwnerScope() {
         var formats=Map.of("jpg","image/jpeg","png","image/png","webp","image/webp","gif","image/gif",
                 "bmp","image/bmp","tiff","image/tiff","heic","image/heic","heif","image/heif","avif","image/avif");
@@ -211,12 +236,12 @@ class PersonalWorkspaceServiceImplTest {
         assertEquals(7, fixture.storage.storeCount, "archive replay must not allocate another file");
         assertEquals(5, fixture.service.list(OWNER_A,
                 new PersonalWorkspaceService.ListQuery(null, "AUDIO", null, null)).items().size());
-        assertReason(PersonalWorkspaceException.Reason.UNSUPPORTED,
-                () -> fixture.service.archiveConversationAsset(OWNER_A,
-                        new PersonalWorkspaceService.ConversationArchiveCommand(
-                                new PersonalWorkspaceService.Idempotency("save-media-mismatch"), "asset_bad", 1,
-                                sha256(bytes("unsafe")), "unsafe", "unsafe.html", "audio/mpeg", bytes("unsafe"))));
-        assertEquals(7, fixture.storage.storeCount, "mismatched extension must not reach storage");
+        var mismatched = fixture.service.archiveConversationAsset(OWNER_A,
+                new PersonalWorkspaceService.ConversationArchiveCommand(
+                        new PersonalWorkspaceService.Idempotency("save-media-mismatch"), "asset_bad", 1,
+                        sha256(bytes("opaque")), "opaque", "opaque.html", "audio/mpeg", bytes("opaque")));
+        assertEquals("audio/mpeg", mismatched.version().contentMimeType());
+        assertEquals(8, fixture.storage.storeCount, "storage must not gate on extension");
     }
 
     @Test
