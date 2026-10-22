@@ -113,7 +113,7 @@ class WorkspaceManagementAuditTest {
         @Bean PersonalWorkspaceTaskLinkDao taskDao(SqlSessionTemplate s) { return new PersonalWorkspaceTaskLinkDaoImpl(s.getMapper(PersonalWorkspaceTaskFileLinkMapper.class)); }
         @Bean PersonalWorkspaceConversationLinkDao conversationDao(SqlSessionTemplate s) { return new PersonalWorkspaceConversationLinkDaoImpl(s.getMapper(PersonalWorkspaceConversationFileLinkMapper.class)); }
         @Bean PersonalWorkspaceExecutionDao executionDao(SqlSessionTemplate s) { return new PersonalWorkspaceExecutionDaoImpl(s.getMapper(PersonalWorkspaceExecutionMapper.class),s.getMapper(PersonalWorkspaceExecutionInputMapper.class),s.getMapper(PersonalWorkspaceExecutionOutputMapper.class)); }
-        @Bean PersonalWorkspaceStorage storage() { return new FileSystemPersonalWorkspaceStorage(privateStore,1024*1024,Set.of("text/plain")); }
+        @Bean PersonalWorkspaceStorage storage() { return new FileSystemPersonalWorkspaceStorage(privateStore,1024*1024); }
         @Bean PersonalWorkspaceOperationClaimTx claims(PersonalWorkspaceDao d) { return new PersonalWorkspaceOperationClaimTx(d); }
         @Bean PersonalWorkspaceWriteService writes(PersonalWorkspaceDao d,PersonalWorkspaceOperationClaimTx claims) { return new PersonalWorkspaceWriteService(d,claims); }
         @Bean PersonalWorkspaceService workspace(PersonalWorkspaceDao d,PersonalWorkspaceStorage s,PersonalWorkspaceWriteService w,PersonalWorkspaceTaskLinkDao t,PersonalWorkspaceExecutionDao e) { return new PersonalWorkspaceServiceImpl(d,s,w); }
