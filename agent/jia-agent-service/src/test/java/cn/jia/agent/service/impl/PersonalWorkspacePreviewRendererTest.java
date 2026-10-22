@@ -5,26 +5,13 @@ import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
 import org.apache.pdfbox.pdmodel.font.PDType1Font;
 import org.apache.poi.xslf.usermodel.XMLSlideShow;
-import org.apache.poi.sl.usermodel.PictureData;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.apache.poi.xwpf.usermodel.XWPFDocument;
-import org.openxmlformats.schemas.presentationml.x2006.main.CTPicture;
 import org.junit.jupiter.api.Test;
 
-import javax.imageio.ImageIO;
-import java.awt.Dimension;
-import java.awt.geom.Rectangle2D;
-import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
-import java.io.DataOutputStream;
-import java.net.InetAddress;
-import java.net.ServerSocket;
-import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
-import java.util.zip.CRC32;
-import java.util.zip.Deflater;
-import java.util.zip.DeflaterOutputStream;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -47,7 +34,6 @@ class PersonalWorkspacePreviewRendererTest {
     @Test
     void extractsStoredOfficeAndTextPdfDocumentsWithoutMocks() throws Exception {
         assertReadyText(DOCX, docx(), "Word content");
-        assertReadyText(PPTX, pptx(), "Slide content");
         assertReadyText(XLSX, xlsx(), "Sheet content");
         byte[] pdfBytes = pdf();
         var pdfPreview = renderer.render(PDF, pdfBytes);
@@ -57,87 +43,16 @@ class PersonalWorkspacePreviewRendererTest {
     }
 
     @Test
-    void rendersEveryPowerPointSlideAsAnIsolatedPngAndKeepsLegacyTextContent() throws Exception {
-        var preview = renderer.render(PPTX, pptxWithNotesAndMaster());
-        String extracted = new String(preview.bytes(), StandardCharsets.UTF_8);
-
-        assertEquals("READY", preview.view().state());
-        assertEquals(List.of("slide-1", "slide-2", "content"), preview.view().parts().stream()
-                .map(part -> part.partId()).toList());
-        assertEquals(List.of("image/png", "image/png", "text/plain"), preview.view().parts().stream()
-                .map(part -> part.contentMimeType()).toList());
-        assertTrue(extracted.contains("First slide content"));
-        assertTrue(extracted.contains("Second slide content"));
-        assertTrue(extracted.contains("Externally linked slide text"));
-        assertFalse(extracted.contains("127.0.0.1:1"));
-        assertFalse(extracted.contains("Private speaker notes"));
-        assertFalse(extracted.contains("Master-only boilerplate"));
-
-        var firstSlide = ImageIO.read(new ByteArrayInputStream(preview.partBytes("slide-1")));
-        var secondSlide = ImageIO.read(new ByteArrayInputStream(preview.partBytes("slide-2")));
-        assertNotNull(firstSlide);
-        assertNotNull(secondSlide);
-        assertEquals(PersonalWorkspacePreviewRenderer.PPT_PREVIEW_MAX_WIDTH,
-                firstSlide.getWidth());
-        assertEquals(PersonalWorkspacePreviewRenderer.PPT_PREVIEW_MAX_HEIGHT,
-                firstSlide.getHeight());
-        assertEquals(firstSlide.getWidth(), secondSlide.getWidth());
-        assertEquals(firstSlide.getHeight(), secondSlide.getHeight());
-        assertNull(preview.partBytes("slide-3"), "an unknown part must not fall back to content");
-        assertArrayEquals(extracted.getBytes(StandardCharsets.UTF_8), preview.bytes());
-    }
-
-    @Test
-    void fitsAbnormallyLargeDeclaredSlideSizeIntoTheBoundedPreviewViewport() throws Exception {
-        var preview = renderer.render(PPTX,
-                pptxWithPageSize(new Dimension(100_000, 50_000)));
-        var image = ImageIO.read(new ByteArrayInputStream(preview.partBytes("slide-1")));
-
-        assertNotNull(image);
-        assertEquals(PersonalWorkspacePreviewRenderer.PPT_PREVIEW_MAX_WIDTH,
-                image.getWidth());
-        assertEquals(800, image.getHeight());
-        assertTrue((long) image.getWidth() * image.getHeight()
-                <= (long) PersonalWorkspacePreviewRenderer.PPT_PREVIEW_MAX_WIDTH
-                * PersonalWorkspacePreviewRenderer.PPT_PREVIEW_MAX_HEIGHT);
-    }
-
-    @Test
-    void subsamplesHighlyCompressedLargeRasterToTheBoundedPreviewCanvas() throws Exception {
-        byte[] compressedImage = monochromePng(10_000, 10_000);
-        assertTrue(compressedImage.length < 100_000,
-                "fixture must stay compressed instead of allocating a giant source bitmap");
-
-        var preview = renderer.render(PPTX, pptxWithPicture(compressedImage));
-        var image = ImageIO.read(new ByteArrayInputStream(preview.partBytes("slide-1")));
-
-        assertNotNull(image);
-        assertEquals(PersonalWorkspacePreviewRenderer.PPT_PREVIEW_MAX_WIDTH,
-                image.getWidth());
-        assertEquals(PersonalWorkspacePreviewRenderer.PPT_PREVIEW_MAX_HEIGHT,
-                image.getHeight());
-        assertTrue((long) image.getWidth() * image.getHeight()
-                <= (long) PersonalWorkspacePreviewRenderer.PPT_PREVIEW_MAX_WIDTH
-                * PersonalWorkspacePreviewRenderer.PPT_PREVIEW_MAX_HEIGHT);
-    }
-
-    @Test
-    void externalPictureRelationshipRemainsMetadataOnlyAndDoesNotOpenLoopback() throws Exception {
-        try (ServerSocket tripwire = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
-            tripwire.setSoTimeout(250);
-            String target = "http://127.0.0.1:" + tripwire.getLocalPort()
-                    + "/must-not-be-fetched.png";
-
-            var preview = renderer.render(PPTX, pptxWithExternalPicture(target));
-            var image = ImageIO.read(new ByteArrayInputStream(preview.partBytes("slide-1")));
-
-            assertNotNull(image);
-            try {
-                tripwire.accept().close();
-                throw new AssertionError(
-                        "rendering an external picture relationship made a loopback request");
-            } catch (SocketTimeoutException expected) {
-                // No connection reached the local-only tripwire.
+    void powerPointPreviewIsUnsupportedWithoutParsingOrRenderingSource() throws Exception {
+        for (byte[] source : List.of(pptx(), "not a presentation".getBytes(StandardCharsets.UTF_8))) {
+            for (String mime : List.of(PPTX, "application/vnd.ms-powerpoint")) {
+                var preview = renderer.render(mime, source);
+                assertEquals("UNSUPPORTED", preview.view().state());
+                assertEquals("该文件类型暂不支持预览", preview.view().reason());
+                assertTrue(preview.view().parts().isEmpty());
+                assertNull(preview.bytes());
+                assertNull(preview.partBytes("slide-1"));
+                assertNull(preview.partBytes("content"));
             }
         }
     }
@@ -246,119 +161,6 @@ class PersonalWorkspacePreviewRendererTest {
     private static byte[] pptx() throws Exception {
         try (XMLSlideShow slideShow = new XMLSlideShow(); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
             slideShow.createSlide().createTextBox().setText("Slide content");
-            slideShow.write(output);
-            return output.toByteArray();
-        }
-    }
-
-    private static byte[] pptxWithPageSize(Dimension pageSize) throws Exception {
-        try (XMLSlideShow slideShow = new XMLSlideShow();
-                ByteArrayOutputStream output = new ByteArrayOutputStream()) {
-            slideShow.setPageSize(pageSize);
-            slideShow.createSlide().createTextBox().setText("Bounded preview");
-            slideShow.write(output);
-            return output.toByteArray();
-        }
-    }
-
-    private static byte[] pptxWithPicture(byte[] pictureBytes) throws Exception {
-        try (XMLSlideShow slideShow = new XMLSlideShow();
-                ByteArrayOutputStream output = new ByteArrayOutputStream()) {
-            var slide = slideShow.createSlide();
-            var pictureData = slideShow.addPicture(pictureBytes, PictureData.PictureType.PNG);
-            var picture = slide.createPicture(pictureData);
-            Dimension pageSize = slideShow.getPageSize();
-            picture.setAnchor(new Rectangle2D.Double(
-                    0, 0, pageSize.getWidth(), pageSize.getHeight()));
-            slideShow.write(output);
-            return output.toByteArray();
-        }
-    }
-
-    private static byte[] pptxWithExternalPicture(String target) throws Exception {
-        try (XMLSlideShow slideShow = new XMLSlideShow();
-                ByteArrayOutputStream output = new ByteArrayOutputStream()) {
-            var slide = slideShow.createSlide();
-            var pictureData = slideShow.addPicture(monochromePng(1, 1),
-                    PictureData.PictureType.PNG);
-            var picture = slide.createPicture(pictureData);
-            picture.setAnchor(new Rectangle2D.Double(10, 10, 100, 100));
-
-            CTPicture xmlPicture = (CTPicture) picture.getXmlObject();
-            var blip = xmlPicture.getBlipFill().getBlip();
-            String embeddedRelationship = blip.getEmbed();
-            var externalRelationship = slide.getPackagePart().addExternalRelationship(
-                    target,
-                    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image");
-            blip.setLink(externalRelationship.getId());
-            blip.unsetEmbed();
-            slide.getPackagePart().removeRelationship(embeddedRelationship);
-
-            slideShow.write(output);
-            return output.toByteArray();
-        }
-    }
-
-    private static byte[] monochromePng(int width, int height) throws Exception {
-        ByteArrayOutputStream image = new ByteArrayOutputStream();
-        image.write(new byte[] {(byte) 0x89, 'P', 'N', 'G', 13, 10, 26, 10});
-        writePngHeader(image, width, height);
-
-        ByteArrayOutputStream compressed = new ByteArrayOutputStream();
-        Deflater deflater = new Deflater(Deflater.BEST_SPEED);
-        try (DeflaterOutputStream data = new DeflaterOutputStream(compressed, deflater)) {
-            byte[] row = new byte[1 + (width + 7) / 8];
-            for (int y = 0; y < height; y++) {
-                data.write(row);
-            }
-        } finally {
-            deflater.end();
-        }
-        writePngChunk(image, "IDAT", compressed.toByteArray());
-        writePngChunk(image, "IEND", new byte[0]);
-        return image.toByteArray();
-    }
-
-    private static void writePngHeader(ByteArrayOutputStream image, int width, int height)
-            throws Exception {
-        ByteArrayOutputStream header = new ByteArrayOutputStream(13);
-        try (DataOutputStream fields = new DataOutputStream(header)) {
-            fields.writeInt(width);
-            fields.writeInt(height);
-            fields.writeByte(1); // one-bit grayscale keeps the compressed fixture small
-            fields.writeByte(0);
-            fields.writeByte(0);
-            fields.writeByte(0);
-            fields.writeByte(0);
-        }
-        writePngChunk(image, "IHDR", header.toByteArray());
-    }
-
-    private static void writePngChunk(ByteArrayOutputStream image, String type, byte[] data)
-            throws Exception {
-        byte[] typeBytes = type.getBytes(StandardCharsets.US_ASCII);
-        CRC32 crc = new CRC32();
-        crc.update(typeBytes);
-        crc.update(data);
-        try (DataOutputStream output = new DataOutputStream(image)) {
-            output.writeInt(data.length);
-            output.write(typeBytes);
-            output.write(data);
-            output.writeInt((int) crc.getValue());
-            output.flush();
-        }
-    }
-
-    private static byte[] pptxWithNotesAndMaster() throws Exception {
-        try (XMLSlideShow slideShow = new XMLSlideShow(); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
-            var firstSlide = slideShow.createSlide();
-            firstSlide.createTextBox().setText("First slide content");
-            var linkedRun = firstSlide.createTextBox().addNewTextParagraph().addNewTextRun();
-            linkedRun.setText("Externally linked slide text");
-            linkedRun.createHyperlink().linkToUrl("http://127.0.0.1:1/must-not-be-fetched");
-            slideShow.createSlide().createTextBox().setText("Second slide content");
-            slideShow.getNotesSlide(firstSlide).createTextBox().setText("Private speaker notes");
-            firstSlide.getSlideMaster().createTextBox().setText("Master-only boilerplate");
             slideShow.write(output);
             return output.toByteArray();
         }

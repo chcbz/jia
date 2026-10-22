@@ -46,13 +46,16 @@ class PersonalWorkspaceServiceImplTest {
         Fixture fixture = new Fixture();
         String[][] cases = {{"data.custom", "application/x-custom"}, {"page.html", "text/html"},
                 {"icon.svg", "image/svg+xml"}, {"archive.zip", "application/zip"},
-                {"README", ""}, {"renamed.txt", "application/x-custom"}};
+                {"README", ""}, {"renamed.txt", "application/x-custom"},
+                {"deck.pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation"},
+                {"deck.ppt", "application/vnd.ms-powerpoint"}};
         for (int i = 0; i < cases.length; i++) {
             byte[] content = bytes("opaque " + i);
             var saved = fixture.service.create(OWNER_A, upload("arbitrary-" + i, cases[i][0], cases[i][1], content));
             String mime = cases[i][1].isEmpty() ? "application/octet-stream" : cases[i][1];
             assertEquals(mime, saved.version().contentMimeType());
             assertEquals("UNSUPPORTED", saved.version().previewState());
+            if (cases[i][0].startsWith("deck.")) assertEquals("UNSUPPORTED", saved.file().capabilities().preview());
             assertEquals("UNSUPPORTED", fixture.service.preview(OWNER_A, saved.file().fileId(), 1).state());
             assertArrayEquals(content, fixture.service.readContent(OWNER_A, saved.file().fileId(), 1).bytes());
             assertReason(PersonalWorkspaceException.Reason.NOT_FOUND,

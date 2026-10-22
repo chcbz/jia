@@ -200,13 +200,6 @@ class AgentTaskDeliverableControllerTest {
                                 new ExpectedPart("sheet-2", "text/plain"),
                                 new ExpectedPart("content", "text/plain")),
                         "sheet-2", "[公式未执行] =Inputs!A1*2", false, "工作表：Inputs"),
-                new PreviewCase(5,
-                        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                        pptx(), "PAGED_IMAGE", "EXTRACTED_TEXT",
-                        List.of(new ExpectedPart("slide-1", "image/png"),
-                                new ExpectedPart("slide-2", "image/png"),
-                                new ExpectedPart("content", "text/plain")),
-                        "slide-2", null, false, "Second slide preview"),
                 new PreviewCase(6, "application/pdf", pdf(), "ORIGINAL_PDF", "ORIGINAL_PDF",
                         List.of(new ExpectedPart("content", "application/pdf")),
                         "content", null, true, null));
@@ -304,6 +297,26 @@ class AgentTaskDeliverableControllerTest {
             verify(contentService, org.mockito.Mockito.times(expectedReads)).readContentForTaskOwner(
                     "0", CLIENT, TENANT, TASK, ARTIFACT, sample.version());
         }
+    }
+
+    @Test
+    void powerPointPreviewIsUnsupportedButOwnerDownloadKeepsOriginalBytes() throws Exception {
+        byte[] original = pptx();
+        String mime = "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+        when(contentService.readContentForTaskOwner("0", CLIENT, TENANT, TASK, ARTIFACT, 5))
+                .thenReturn(artifactContent(5, mime, original));
+        mvc.perform(get("/agent/tasks/{taskId}/deliverables/{artifactId}/versions/{version}/preview",
+                        TASK, ARTIFACT, 5).param("view", "parts").principal(jwt(TENANT, CLIENT, ACTOR)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.state").value("UNSUPPORTED"))
+                .andExpect(jsonPath("$.data.representation").value("UNSUPPORTED"))
+                .andExpect(jsonPath("$.data.parts.length()").value(0));
+        mvc.perform(get("/agent/tasks/{taskId}/deliverables/{artifactId}/versions/{version}/preview/parts/{partId}",
+                        TASK, ARTIFACT, 5, "slide-1").principal(jwt(TENANT, CLIENT, ACTOR)))
+                .andExpect(status().isNotFound());
+        mvc.perform(get("/agent/tasks/{taskId}/deliverables/{artifactId}/versions/{version}/content",
+                        TASK, ARTIFACT, 5).principal(jwt(TENANT, CLIENT, ACTOR)))
+                .andExpect(status().isOk()).andExpect(content().bytes(original));
     }
 
     @Test

@@ -31,11 +31,9 @@ final class AgentTaskDeliverablePreviewAdapter {
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
     private static final String XLSX =
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-    private static final String PPTX =
-            "application/vnd.openxmlformats-officedocument.presentationml.presentation";
     private static final String PDF = "application/pdf";
     private static final Set<String> IMAGE_TYPES = Set.of(PNG, JPEG);
-    private static final Set<String> EXTRACTED_TEXT_TYPES = Set.of(DOCX, XLSX, PPTX);
+    private static final Set<String> EXTRACTED_TEXT_TYPES = Set.of(DOCX, XLSX);
     private static final Set<String> SAFE_READY_REASONS = Set.of("内容已截断");
     private static final Set<String> SAFE_UNSUPPORTED_REASONS = Set.of(
             "受保护文件暂不支持预览", "该文件类型暂不支持预览");
@@ -111,10 +109,6 @@ final class AgentTaskDeliverablePreviewAdapter {
             requireIndexedPartsThenContent(parts, "sheet-", TEXT);
             return;
         }
-        if (PPTX.equals(sourceMimeType)) {
-            requireIndexedPartsThenContent(parts, "slide-", PNG);
-            return;
-        }
         if (PDF.equals(sourceMimeType)) {
             if (parts.size() != 1 || !CONTENT_PART_ID.equals(parts.getFirst().partId())
                     || !PDF.equals(parts.getFirst().contentMimeType())) throw corrupt();
@@ -144,9 +138,6 @@ final class AgentTaskDeliverablePreviewAdapter {
         }
         if (TEXT.equals(sourceMimeType)) {
             return "PLAIN_TEXT";
-        }
-        if (PPTX.equals(sourceMimeType)) {
-            return "PAGED_IMAGE";
         }
         if (XLSX.equals(sourceMimeType)) {
             return "SHEET_TEXT";
@@ -223,7 +214,7 @@ final class AgentTaskDeliverablePreviewAdapter {
 
         String legacyRepresentation() {
             return switch (representation) {
-                case "PAGED_IMAGE", "SHEET_TEXT" -> "EXTRACTED_TEXT";
+                case "SHEET_TEXT" -> "EXTRACTED_TEXT";
                 default -> representation;
             };
         }
