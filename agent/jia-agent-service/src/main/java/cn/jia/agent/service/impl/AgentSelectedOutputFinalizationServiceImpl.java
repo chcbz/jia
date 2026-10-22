@@ -48,6 +48,11 @@ import static cn.jia.agent.service.AgentSelectedOutputFinalizationException.Reas
 public final class AgentSelectedOutputFinalizationServiceImpl implements AgentSelectedOutputFinalizationService {
     private static final long LEASE_MILLIS=900_000L;
     private static final long MAX_SAFE_INTEGER=9_007_199_254_740_991L;
+    private cn.jia.agent.service.AgentTaskFormalDeliveryDecisionService decisions;
+    @Inject
+    public void setDecisions(cn.jia.agent.service.AgentTaskFormalDeliveryDecisionService value) {
+        this.decisions=Objects.requireNonNull(value);
+    }
     private final JdbcTemplate jdbc;
     private final AgentTaskMutationTransaction transactions;
     private final AgentTaskExecutionGrantService grants;
@@ -198,6 +203,26 @@ public final class AgentSelectedOutputFinalizationServiceImpl implements AgentSe
                     if (phaseAtLeast(row.phase(),"READY"))
                         return new LeaseFacts(row.workItemId(),row.leaseToken(),requiredLong(row.leaseVersion(),"lease version"));
                     admit(scope,valid);
+                    // Explicit owner selection may supersede a submitted batch. Reuse the
+                    // existing rework transition under this same root lock/transaction;
+                    // no provider execution, extra business state, or acceptance occurs here.
+                    boolean replaced=false;
+                    TaskFact before=task(scope,valid.taskId());
+                    if ("CLAIMING".equals(row.phase()) && "reviewing".equals(before.state())) {
+                        if(before.version()!=valid.expectedTaskVersion())throw conflict("Task changed before selected delivery replacement");
+                        List<AgentTaskFormalDeliveryViewDTO> pending=collaboration(() -> reads.listForTaskOwner(
+                                scope.tenantId(),scope.clientId(),scope.ownerJiacn(),valid.taskId()))
+                                .stream().filter(v->v!=null && "submitted".equals(v.getState())).toList();
+                        if(pending.size()!=1 || decisions==null)throw conflict("Current submitted batch is not available");
+                        AgentTaskFormalDeliveryViewDTO current=pending.getFirst();
+                        var decision=new cn.jia.agent.entity.AgentTaskFormalDeliveryDecisionDTO();
+                        decision.setDeliveryId(current.getDeliveryId());decision.setExpectedTaskVersion(before.version());
+                        decision.setExpectedDeliveryVersion(current.getDeliveryVersion());decision.setDecision("changes_requested");
+                        decision.setReviewReason("Owner selected a different existing output set for acceptance");
+                        var changed=collaboration(() -> decisions.decide(scope.tenantId(),scope.clientId(),valid.taskId(),scope.ownerJiacn(),decision));
+                        requireDelivery(changed,current.getDeliveryId(),valid.taskId(),"changes_requested");
+                        replaced=true;
+                    }
                     WorkFact work=singleRequiredWork(scope,valid.taskId());
                     if ("LEASED".equals(row.phase())) {
                         if (!Objects.equals(row.workItemId(),work.workItemId())
@@ -219,7 +244,7 @@ public final class AgentSelectedOutputFinalizationServiceImpl implements AgentSe
                             || (work.agentId()!=null && !valid.targetAgentId().equals(work.agentId())))
                         throw conflict("Required work item is not available for promotion");
                     TaskFact initial=task(scope,valid.taskId());
-                    if (initial.version()!=valid.expectedTaskVersion()
+                    if (initial.version()!=valid.expectedTaskVersion()+(replaced?1:0)
                             || !("assigned".equals(initial.state()) || "running".equals(initial.state())))
                         throw conflict("Task is not at the selected version");
                     AgentWorkItemLeaseCommandDTO claim=new AgentWorkItemLeaseCommandDTO();

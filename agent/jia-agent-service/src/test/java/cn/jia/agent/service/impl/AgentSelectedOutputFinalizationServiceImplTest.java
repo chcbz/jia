@@ -55,6 +55,40 @@ class AgentSelectedOutputFinalizationServiceImplTest {
     }
 
     @Test
+    void ownerSelectionReplacesSubmittedBatchThroughExistingReworkWithoutModelOrAcceptance() {
+        Fixture f=new Fixture();f.jdbc.taskState="reviewing";f.jdbc.workState="submitted";
+        f.delivery.set(formal("old-delivery","submitted",7,0));
+        when(f.decisions.decide(eq("0"),eq("client-1"),eq("task-1"),eq("owner-1"),any())).thenAnswer(i->{
+            cn.jia.agent.entity.AgentTaskFormalDeliveryDecisionDTO command=i.getArgument(4);
+            assertEquals("old-delivery",command.getDeliveryId());assertEquals(7L,command.getExpectedTaskVersion());
+            assertEquals(0L,command.getExpectedDeliveryVersion());assertEquals("changes_requested",command.getDecision());
+            f.jdbc.taskState="running";f.jdbc.taskVersion=8;f.jdbc.workState="ready";
+            var changed=formal("old-delivery","changes_requested",8,1);f.delivery.set(changed);return changed;
+        });
+        assertEquals("READY_TO_SUBMIT",f.service.prepare(f.scope,f.command("run-1")).stage());
+        assertEquals("SUBMITTED",f.service.submit(f.scope,"task-1","op-1",f.digest).stage());
+        assertEquals("SUBMITTED",f.service.reconcile(f.scope,"task-1","op-1",f.digest).stage());
+        verify(f.decisions,times(1)).decide(anyString(),anyString(),anyString(),anyString(),any());
+        verify(f.leases,times(1)).claim(anyString(),anyString(),anyString(),anyString(),anyString(),any());
+        assertEquals("reviewing",f.jdbc.taskState);
+    }
+
+    @Test
+    void staleSelectionCannotWithdrawSubmittedBatch() {
+        Fixture f=new Fixture();f.jdbc.taskState="reviewing";f.jdbc.taskVersion=8;
+        f.delivery.set(formal("old-delivery","submitted",8,0));
+        assertThrows(AgentSelectedOutputFinalizationException.class,()->f.service.prepare(f.scope,f.command("run-1")));
+        verifyNoInteractions(f.decisions,f.leases,f.artifacts,f.submissions);
+    }
+
+    @Test
+    void missingCurrentBatchCannotStartReplacement() {
+        Fixture f=new Fixture();f.jdbc.taskState="reviewing";
+        assertThrows(AgentSelectedOutputFinalizationException.class,()->f.service.prepare(f.scope,f.command("run-1")));
+        verifyNoInteractions(f.decisions,f.leases,f.artifacts,f.submissions);
+    }
+
+    @Test
     void sameBodyReplayCannotReplaceResolvedExecutionRunOrProducerFacts() {
         Fixture f=new Fixture();
         f.service.prepare(f.scope,f.command("run-1"));
@@ -333,6 +367,7 @@ class AgentSelectedOutputFinalizationServiceImplTest {
                 jdbc.taskState="completed";jdbc.taskVersion=10;return v;});
             service=new AgentSelectedOutputFinalizationServiceImpl(jdbc,transactions,grants,leases,states,
                     artifacts,submissions,reads,new ObjectMapper(),contents);
+            service.setDecisions(decisions);
         }
         AgentSelectedOutputFinalizationService.PrepareCommand command(String runId){
             return new AgentSelectedOutputFinalizationService.PrepareCommand("op-1","task-1",7,7,"100",3,
