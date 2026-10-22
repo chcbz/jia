@@ -896,17 +896,17 @@ def verifyPdfProcessingBoundary = tasks.register('verifyPdfProcessingBoundary') 
     group = 'verification'
     description = 'Ensures production service/application classpaths exclude PDFBox/pdf2dom.'
     doLast {
-        [project, project(':starter')].each { component ->
-            def forbidden = component.configurations.runtimeClasspath.resolvedConfiguration.resolvedArtifacts.findAll {
-                it.moduleVersion.id.group in ['org.apache.pdfbox', 'net.sf.cssbox']
-            }
-            if (!forbidden.empty) {
-                throw new GradleException("PDF processing belongs in Agent/browser, not ${component.path}: " +
-                        forbidden.collect { it.moduleVersion.id }.join(', '))
-            }
+        // Resolve only this project's configuration while holding its task lock.
+        // The application graph is checked by the starter-owned task below.
+        def forbidden = configurations.runtimeClasspath.resolvedConfiguration.resolvedArtifacts.findAll {
+            it.moduleVersion.id.group in ['org.apache.pdfbox', 'net.sf.cssbox']
+        }
+        if (!forbidden.empty) {
+            throw new GradleException("PDF processing belongs in Agent/browser, not ${project.path}: " +
+                    forbidden.collect { it.moduleVersion.id }.join(', '))
         }
     }
 }
 tasks.withType(org.gradle.api.tasks.testing.Test).configureEach {
-    dependsOn verifyPdfProcessingBoundary
+    dependsOn verifyPdfProcessingBoundary, ':starter:verifyPdfProcessingBoundary'
 }

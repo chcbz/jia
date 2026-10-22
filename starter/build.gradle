@@ -220,3 +220,21 @@ tasks.register('mmd29ceUpgradeWiring', Test) {
     systemProperty 'cyf.mmd29ce.repo-root', rootProject.rootDir.absolutePath
     environment 'CYF_MMD29CE_DB_PREFIX', 'mmd29ce_20261002_01a0f2bb_'
 }
+
+// PDF-SKILL-20261022: the owning project resolves its own production graph.
+// Do not resolve this configuration from another project's task (Gradle 9 lock safety).
+def verifyPdfProcessingBoundary = tasks.register('verifyPdfProcessingBoundary') {
+    group = 'verification'
+    description = 'Ensures the application runtime excludes PDFBox/pdf2dom.'
+    doLast {
+        def forbidden = configurations.runtimeClasspath.resolvedConfiguration.resolvedArtifacts.findAll {
+            it.moduleVersion.id.group in ['org.apache.pdfbox', 'net.sf.cssbox']
+        }
+        if (!forbidden.empty) {
+            throw new GradleException("PDF processing belongs in Agent/browser, not ${project.path}: " +
+                    forbidden.collect { it.moduleVersion.id }.join(', '))
+        }
+    }
+}
+tasks.withType(Test).configureEach { dependsOn verifyPdfProcessingBoundary }
+tasks.named('bootJar') { dependsOn verifyPdfProcessingBoundary }
