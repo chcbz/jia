@@ -85,15 +85,16 @@ class AgentTaskDeliverableControllerTest {
                         .principal(jwt(TENANT, CLIENT, ACTOR)))
                 .andExpect(status().isOk())
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
-                .andExpect(jsonPath("$.items[0].artifactId").value(ARTIFACT))
-                .andExpect(jsonPath("$.items[0].artifactVersion").value(3))
-                .andExpect(jsonPath("$.items[0].contentHash").value(sha256(BYTES)))
-                .andExpect(jsonPath("$.items[0].contentByteLength").value(BYTES.length))
-                .andExpect(jsonPath("$.items[0].storageUri").doesNotExist())
-                .andExpect(jsonPath("$.items[0].content").doesNotExist())
-                .andExpect(jsonPath("$.items[0].metadata").doesNotExist())
-                .andExpect(jsonPath("$.items[0].tenantId").doesNotExist())
-                .andExpect(jsonPath("$.items[0].clientId").doesNotExist());
+                .andExpect(jsonPath("$.code").value("E0"))
+                .andExpect(jsonPath("$.data.items[0].artifactId").value(ARTIFACT))
+                .andExpect(jsonPath("$.data.items[0].artifactVersion").value(3))
+                .andExpect(jsonPath("$.data.items[0].contentHash").value(sha256(BYTES)))
+                .andExpect(jsonPath("$.data.items[0].contentByteLength").value(BYTES.length))
+                .andExpect(jsonPath("$.data.items[0].storageUri").doesNotExist())
+                .andExpect(jsonPath("$.data.items[0].content").doesNotExist())
+                .andExpect(jsonPath("$.data.items[0].metadata").doesNotExist())
+                .andExpect(jsonPath("$.data.items[0].tenantId").doesNotExist())
+                .andExpect(jsonPath("$.data.items[0].clientId").doesNotExist());
 
         ArgumentCaptor<AgentTaskArtifactQueryDTO> query =
                 ArgumentCaptor.forClass(AgentTaskArtifactQueryDTO.class);
@@ -146,7 +147,8 @@ class AgentTaskDeliverableControllerTest {
         mvc.perform(get("/agent/tasks/{taskId}/deliverables", TASK)
                         .principal(jwt(TENANT, CLIENT, OTHER)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.items[0].artifactId").value(ARTIFACT));
+                .andExpect(jsonPath("$.code").value("E0"))
+                .andExpect(jsonPath("$.data.items[0].artifactId").value(ARTIFACT));
 
         when(artifactService.listForTaskOwner(eq("0"), eq(CLIENT), eq("tenant-b"), eq(TASK), any()))
                 .thenThrow(new AgentTaskCollaborationException(Reason.NOT_FOUND, "outside scope"));
@@ -222,14 +224,15 @@ class AgentTaskDeliverableControllerTest {
                     .andExpect(status().isOk())
                     .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
                     .andExpect(header().string("X-Content-Type-Options", "nosniff"))
-                    .andExpect(jsonPath("$.state").value("READY"))
-                    .andExpect(jsonPath("$.representation").value(sample.representation()))
-                    .andExpect(jsonPath("$.parts.length()").value(sample.parts().size()))
-                    .andExpect(jsonPath("$.partial").value(false))
-                    .andExpect(jsonPath("$.storageUri").doesNotExist())
-                    .andExpect(jsonPath("$.lease").doesNotExist())
-                    .andExpect(jsonPath("$.prompt").doesNotExist())
-                    .andExpect(jsonPath("$.content").doesNotExist())
+                    .andExpect(jsonPath("$.code").value("E0"))
+                    .andExpect(jsonPath("$.data.state").value("READY"))
+                    .andExpect(jsonPath("$.data.representation").value(sample.representation()))
+                    .andExpect(jsonPath("$.data.parts.length()").value(sample.parts().size()))
+                    .andExpect(jsonPath("$.data.partial").value(false))
+                    .andExpect(jsonPath("$.data.storageUri").doesNotExist())
+                    .andExpect(jsonPath("$.data.lease").doesNotExist())
+                    .andExpect(jsonPath("$.data.prompt").doesNotExist())
+                    .andExpect(jsonPath("$.data.content").doesNotExist())
                     .andReturn();
             String metadataJson = metadata.getResponse().getContentAsString();
             int previousPart = -1;
@@ -252,11 +255,11 @@ class AgentTaskDeliverableControllerTest {
                             TASK, ARTIFACT, sample.version())
                             .principal(jwt(TENANT, CLIENT, ACTOR)))
                     .andExpect(status().isOk())
-                    .andExpect(jsonPath("$.representation").value(
+                    .andExpect(jsonPath("$.data.representation").value(
                             sample.legacyRepresentation()))
-                    .andExpect(jsonPath("$.parts.length()").value(1))
-                    .andExpect(jsonPath("$.parts[0].partId").value("content"))
-                    .andExpect(jsonPath("$.parts[0].contentMimeType").value(
+                    .andExpect(jsonPath("$.data.parts.length()").value(1))
+                    .andExpect(jsonPath("$.data.parts[0].partId").value("content"))
+                    .andExpect(jsonPath("$.data.parts[0].contentMimeType").value(
                             legacyContent.mimeType()));
 
             ExpectedPart requested = sample.parts().stream()
@@ -413,10 +416,11 @@ class AgentTaskDeliverableControllerTest {
                         "/agent/tasks/{taskId}/deliverables/{artifactId}/versions/{version}/preview",
                         TASK, ARTIFACT, 7).principal(jwt(TENANT, CLIENT, ACTOR)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.state").value("UNSUPPORTED"))
-                .andExpect(jsonPath("$.representation").value("UNSUPPORTED"))
-                .andExpect(jsonPath("$.parts").isEmpty())
-                .andExpect(jsonPath("$.reason").value("该文件类型暂不支持预览"));
+                .andExpect(jsonPath("$.code").value("E0"))
+                    .andExpect(jsonPath("$.data.state").value("UNSUPPORTED"))
+                .andExpect(jsonPath("$.data.representation").value("UNSUPPORTED"))
+                .andExpect(jsonPath("$.data.parts").isEmpty())
+                .andExpect(jsonPath("$.data.reason").value("该文件类型暂不支持预览"));
 
         mvc.perform(get(
                         "/agent/tasks/{taskId}/deliverables/{artifactId}/versions/{version}"
