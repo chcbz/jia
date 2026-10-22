@@ -42,6 +42,23 @@ class PersonalWorkspaceServiceImplTest {
             new PersonalWorkspaceService.Scope("0", "mobile", "owner-a");
 
     @Test
+    void commonImageUploadsPreserveOriginalBytesAndOwnerScope() {
+        var formats=Map.of("jpg","image/jpeg","png","image/png","webp","image/webp","gif","image/gif",
+                "bmp","image/bmp","tiff","image/tiff","heic","image/heic","heif","image/heif","avif","image/avif");
+        for (var format:formats.entrySet()) {
+            Fixture fixture=new Fixture();
+            byte[] original=bytes("stored-original-"+format.getKey());
+            var command=new PersonalWorkspaceService.UploadCommand(new PersonalWorkspaceService.Idempotency("image-"+format.getKey()),
+                    "原图", "original."+format.getKey(),format.getValue(),original);
+            var created=fixture.service.create(OWNER_A,command);
+            String fileId=created.file().fileId();
+            assertArrayEquals(original,fixture.service.readContent(OWNER_A,fileId,1).bytes());
+            assertEquals(format.getValue(),fixture.service.get(OWNER_A,fileId).versions().getFirst().contentMimeType());
+            assertReason(PersonalWorkspaceException.Reason.NOT_FOUND,()->fixture.service.readContent(OWNER_B,fileId,1));
+        }
+    }
+
+    @Test
     void ownerAndClientScopeHideEveryForeignObjectBeforeStorageAccess() throws Exception {
         Fixture fixture = new Fixture();
         byte[] original = "owner-a private bytes".getBytes(StandardCharsets.UTF_8);

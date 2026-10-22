@@ -63,7 +63,7 @@ public final class PersonalWorkspacePreviewRenderer {
     static final int PPT_PREVIEW_MAX_WIDTH = 1_600;
     static final int PPT_PREVIEW_MAX_HEIGHT = 1_200;
 
-    private static final Set<String> IMAGE_MIME_TYPES = Set.of("image/png", "image/jpeg", "image/webp", "image/gif");
+    private static final Set<String> IMAGE_MIME_TYPES = Set.of("image/png", "image/jpeg", "image/webp", "image/gif", "image/bmp", "image/avif");
     private static final String DOCX =
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
     private static final String XLSX =

@@ -31,14 +31,18 @@ import java.util.UUID;
 @Named
 public class PersonalWorkspaceServiceImpl implements PersonalWorkspaceService {
     private static final Set<String> MIME_TYPES = Set.of("image/png", "image/jpeg", "image/webp", "image/gif",
+            "image/bmp", "image/tiff", "image/heic", "image/heif", "image/avif",
             "audio/mpeg", "audio/ogg", "audio/wav", "audio/mp4", "audio/webm",
             "text/plain", "application/pdf",
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             "application/vnd.openxmlformats-officedocument.presentationml.presentation");
     private static final Map<String, Set<String>> EXTENSIONS = Map.ofEntries(
-            Map.entry("image/png", Set.of(".png")), Map.entry("image/jpeg", Set.of(".jpg", ".jpeg")),
+            Map.entry("image/png", Set.of(".png")), Map.entry("image/jpeg", Set.of(".jpg", ".jpeg", ".jpe", ".jfif")),
             Map.entry("image/webp", Set.of(".webp")), Map.entry("image/gif", Set.of(".gif")),
+            Map.entry("image/bmp", Set.of(".bmp")), Map.entry("image/tiff", Set.of(".tif", ".tiff")),
+            Map.entry("image/heic", Set.of(".heic", ".heif")), Map.entry("image/heif", Set.of(".heic", ".heif")),
+            Map.entry("image/avif", Set.of(".avif")),
             Map.entry("audio/mpeg", Set.of(".mp3")), Map.entry("audio/ogg", Set.of(".ogg", ".oga")),
             Map.entry("audio/wav", Set.of(".wav")), Map.entry("audio/mp4", Set.of(".m4a", ".mp4")),
             Map.entry("audio/webm", Set.of(".webm")),
@@ -266,7 +270,7 @@ public class PersonalWorkspaceServiceImpl implements PersonalWorkspaceService {
     private static void validateScope(Scope s){if(s==null||!"0".equals(s.tenantId()))bad();id(s.clientId(),"clientId",50);id(s.ownerJiacn(),"owner",50);if("0".equals(s.ownerJiacn()))bad();}
     private static void id(String value,String name,int max){if(value==null||value.isBlank()||!value.equals(value.strip())||value.codePointCount(0,value.length())>max||value.chars().anyMatch(Character::isISOControl))bad();}
     private static void text(String value,int max){id(value,"text",max);}
-    private static String lower(String v){if(v==null)return null;String mime=v.split(";",2)[0].trim().toLowerCase(Locale.ROOT);return "image/jpg".equals(mime)?"image/jpeg":mime;}
+    private static String lower(String v){if(v==null)return null;String mime=v.split(";",2)[0].trim().toLowerCase(Locale.ROOT);return switch(mime){case "image/jpg","image/pjpeg" -> "image/jpeg";case "image/x-png" -> "image/png";case "image/x-ms-bmp" -> "image/bmp";case "image/x-tiff" -> "image/tiff";default -> mime;};}
     private static String blankToNull(String value){return value==null||value.isBlank()?null:value;}
     private static void requireStrictUtf8(byte[] bytes) {
         try {

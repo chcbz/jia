@@ -21,12 +21,19 @@ public final class ChatMaterialsInputContract {
         return Map.of("schemaVersion",1,"supportedInputs",List.copyOf(inputs));
     }
     public static Map<String,Object> candidates(Map<String,Object> registration,List<Map<String,Object>> catalog) {
-        Object raw=registration.get("materialsInput");if(raw==null)return Map.of("profile",Map.of("schemaVersion",1,"supportedInputs",List.of()),"sources",List.of());
-        var profile=declaration(raw);var selected=new ArrayList<Map<String,Object>>();
+        Object raw=registration.get("materialsInput");
+        var profile=raw==null ? Map.<String,Object>of("schemaVersion",1,"supportedInputs",List.of()) : declaration(raw);var selected=new ArrayList<Map<String,Object>>();
         for(var source:catalog)for(Object supported:(List<?>)profile.get("supportedInputs")) {
             var input=(Map<?,?>)supported;if(!source.get("contentMimeType").equals(input.get("mimeType")))continue;
             selected.add(Map.of("sourceRefId",source.get("sourceRefId"),"sourceKind",source.get("sourceKind"),"sha256",source.get("contentHash"),
                     "byteLength",source.get("byteLength"),"mimeType",source.get("contentMimeType"),"carrier",input.get("carrier"),"carrierContractDigest",input.get("carrierContractDigest")));
+        }
+        for (var source:catalog) {
+            if (source.get("contentMimeType") instanceof String mime && mime.startsWith("image/")
+                    && selected.stream().noneMatch(item -> item.get("sourceRefId").equals(source.get("sourceRefId")))) {
+                throw new ChatDeliberationException(ChatDeliberationException.Reason.INVALID_REQUEST,
+                        "已收到图片资料，但当前 Agent 不支持读取此格式（" + mime + "），请转换为支持的格式或切换 Agent。");
+            }
         }
         selected.sort(Comparator.comparing(x->(String)x.get("sourceRefId")));return Map.of("profile",profile,"sources",List.copyOf(selected));
     }
