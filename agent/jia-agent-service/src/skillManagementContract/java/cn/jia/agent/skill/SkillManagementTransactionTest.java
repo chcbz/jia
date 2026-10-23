@@ -181,7 +181,7 @@ public class SkillManagementTransactionTest {
     long wallet(){return jdbc.queryForObject("SELECT balance_micro FROM economy_account WHERE account_id='wallet'",Long.class);}
     int count(String table){return jdbc.queryForObject("SELECT COUNT(*) FROM "+table,Integer.class);}
 
-    void publishExecutable(String version,long sequence) throws Exception {
+    protected void publishExecutable(String version,long sequence) throws Exception {
         String manifest="""
             {"schemaVersion":1,"skillKey":"pdf-export","skillVersion":"%s","title":"PDF","description":"synthetic approved fixture",
              "runner":"native-model","entrypoint":"pdf.export","parametersSchema":{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object"},
@@ -202,17 +202,17 @@ public class SkillManagementTransactionTest {
             .setDeploymentRestriction("NONE").setReviewStatus("APPROVED").setTenantId("0").setClientId(ACTOR.clientId()).setCreateTime(1L));
         assertEquals(1,market.publishProductVersion("0",ACTOR.clientId(),"sp_pdf","spv_pdf_"+sequence,sequence,System.currentTimeMillis()));
     }
-    Map<String,Object> packageChange(String action,String source,String revision,String target) {
+    protected Map<String,Object> packageChange(String action,String source,String revision,String target) {
         var request=map("action",action,"agentId",AGENT,"skillKey","pdf-export","sourceSkillInstallationId",source,"targetProductVersionId",target,
             "expectedAgentVersion",Long.toString(versions.readOwned(ACTOR,AGENT)),"expectedSkillRevision",revision,"approvedPermissions",List.of());
         var q=service.quote(ACTOR,"q-"+UUID.randomUUID(),request,false);return service.create(ACTOR,AGENT,"c-"+UUID.randomUUID(),"request",creation(q,request),false);
     }
-    Map<String,Object> policyChange(String action,Map<String,Object> c) {
+    protected Map<String,Object> policyChange(String action,Map<String,Object> c) {
         return service.create(ACTOR,AGENT,"p-"+UUID.randomUUID(),"request",map("action",action,"skillKey",c.get("skillKey"),"sourceSkillInstallationId",object(c.get("target")).get("skillInstallationId"),
             "expectedAgentVersion",Long.toString(versions.readOwned(ACTOR,AGENT)),"expectedSkillRevision",c.get("skillRevision")),false);
     }
     void finishInstall(Map<String,Object> c) {report(c,"PREPARED",null);report(current(c),"APPLIED",null);catalog(current(c));}
-    SkillCapabilityLookup.Scope scope(){return new SkillCapabilityLookup.Scope("0",ACTOR.clientId(),ACTOR.ownerJiacn(),AGENT);}
+    protected SkillCapabilityLookup.Scope scope(){return new SkillCapabilityLookup.Scope("0",ACTOR.clientId(),ACTOR.ownerJiacn(),AGENT);}
     @Test void coveredUpgradePreservesExactOldTaskReferenceAndClosesAdmissionOnlyAtActivation() throws Exception {
         publishExecutable("1.0.0",1);var first=packageChange("INSTALL",null,"0","spv_pdf_1");finishInstall(first);first=current(first);
         String old=text(object(first.get("target")),"skillInstallationId");

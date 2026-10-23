@@ -31,10 +31,29 @@ public final class SkillExecutionSessionRegistry implements SkillCapabilityLooku
         var previous=watermarks.get(key);
         if(previous!=null && previous.fence().equals(trustedFence) && previous.catalog()!=null && catalog!=null) {
             int order=new java.math.BigInteger(catalog.catalogRevision()).compareTo(new java.math.BigInteger(previous.catalog().catalogRevision()));
-            if(order<0 || order==0&&!previous.catalog().equals(catalog)) throw new IllegalArgumentException("Skill catalog revision conflict");
+            if(order<0 || order==0&&!sameMeasuredFacts(previous.catalog(),catalog)) throw new IllegalArgumentException("Skill catalog revision conflict");
         }
         var entry=new Entry(key,trustedScope,trustedFence,catalog,Objects.requireNonNull(currentBinding));
         entries.put(key,entry);if(catalog!=null)watermarks.put(key,entry);
+    }
+
+    private static boolean sameMeasuredFacts(Catalog previous,Catalog next) {
+        if(previous.skills().size()!=next.skills().size())return false;
+        for(var before:previous.skills()) {
+            var matches=next.skills().stream().filter(row->Objects.equals(before.skillInstallationId(),row.skillInstallationId())
+                    &&before.skillKey().equals(row.skillKey())&&before.skillVersion().equals(row.skillVersion())).toList();
+            if(matches.size()!=1)return false;var after=matches.getFirst();
+            // Runtime revision fingerprints configuration/readiness, not the time of a
+            // repeated measurement. Accept newer observation time only; every exact
+            // installation, digest, policy, binding and readiness fact stays fenced.
+            if(before.observedAt()!=null&&(after.observedAt()==null||after.observedAt()<before.observedAt()))return false;
+            if(!withoutObservation(before).equals(withoutObservation(after)))return false;
+        }
+        return true;
+    }
+    private static RuntimeSkill withoutObservation(RuntimeSkill row) {
+        return new RuntimeSkill(row.skillKey(),row.skillVersion(),row.packageSha256(),row.manifestSha256(),row.runner(),row.readiness(),row.reasonCode(),
+                row.toolchainDigest(),row.bindingRevision(),row.skillInstallationId(),row.productVersionId(),row.kind(),row.policyRevision(),row.enabled(),null);
     }
 
     public synchronized void suspend(String sessionId) {

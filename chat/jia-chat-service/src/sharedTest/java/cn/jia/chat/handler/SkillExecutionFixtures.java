@@ -8,7 +8,7 @@ final class SkillExecutionFixtures {
         skill.put("skillKey", "image-edit"); skill.put("skillVersion", "1.0.0");
         skill.put("packageSha256", "a".repeat(64)); skill.put("manifestSha256", "b".repeat(64));
         skill.put("runner", runner); skill.put("readiness", readiness);
-        skill.put("reasonCode", "READY".equals(readiness) ? null : "SKILL_RUNNER_MISSING");
+        skill.put("reasonCode", "READY".equals(readiness) ? null : "DEPENDENCY_MISSING");
         skill.put("toolchainDigest", "READY".equals(readiness) ? "c".repeat(64) : null);
         skill.put("bindingRevision", "provider-operation".equals(runner) && "READY".equals(readiness) ? "4" : null);
         return skill;

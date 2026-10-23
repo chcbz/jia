@@ -60,6 +60,16 @@ class SkillExecutionDeclarationTest {
         two.put("skillInstallationId",one.get("skillInstallationId"));two.put("skillVersion","2.0.0");
         assertNull(SkillExecutionDeclaration.parse(report));
     }
+    @Test void unchangedFactsMayBeRemeasuredAtSameRevisionButObservationsCannotGoBackward() {
+        var registry=new SkillExecutionSessionRegistry();var scope=new cn.jia.agent.service.SkillCapabilityLookup.Scope("0","client","owner","agent");
+        var fence=new cn.jia.agent.service.AgentManagedSessionLookup.SessionFence("rti_"+"1".repeat(32),"host","runtime",1);
+        var report=catalog();var first=skill("native-model","READY");first.put("observedAt",100L);report.put("skills",List.of(first));
+        registry.register("socket",scope,fence,SkillExecutionDeclaration.parse(report),()->true);
+        var newer=new LinkedHashMap<String,Object>(first);newer.put("observedAt",101L);report.put("skills",List.of(newer));
+        registry.register("socket",scope,fence,SkillExecutionDeclaration.parse(report),()->true);
+        assertEquals(101L,registry.lookup(scope,fence).catalog().skills().getFirst().observedAt());
+        report.put("skills",List.of(first));assertThrows(IllegalArgumentException.class,()->registry.register("socket",scope,fence,SkillExecutionDeclaration.parse(report),()->true));
+    }
     @Test void sameSessionRejectsCatalogRollbackAndSameRevisionDifferentContentEvenAfterSuspension() {
         var registry=new SkillExecutionSessionRegistry();var scope=new cn.jia.agent.service.SkillCapabilityLookup.Scope("0","client","owner","agent");
         var fence=new cn.jia.agent.service.AgentManagedSessionLookup.SessionFence("rti_"+"1".repeat(32),"host","runtime",1);

@@ -468,6 +468,7 @@ tasks.register('nativeSkillResultRegression', Test) {
 def skillManagementWireSourceSet = sourceSets.create('skillManagementWire') {
     java.srcDirs('src/skillManagementContractTest/java', '../../agent/jia-agent-service/src/skillManagementContract/java')
     java.include 'cn/jia/chat/handler/SkillManagementWireMySqlTest.java'
+    java.include 'cn/jia/chat/handler/SkillManagementNodeMySqlTest.java'
     java.include 'cn/jia/agent/skill/SkillManagementTransactionTest.java'
     resources.srcDir '../../agent/jia-agent-service/src/skillManagementContract/resources'
     compileClasspath += sourceSets.main.output
@@ -486,6 +487,10 @@ tasks.register('skillManagementWire', Test) {
     classpath = skillManagementWireSourceSet.runtimeClasspath
     useJUnitPlatform()
     maxParallelForks = 1
-    filter { includeTestsMatching 'cn.jia.chat.handler.SkillManagementWireMySqlTest.firstInstallResultsAndRegistrationDriveRealCommittedClosedLoop' }
+    filter {
+        includeTestsMatching 'cn.jia.chat.handler.SkillManagementWireMySqlTest.firstInstallResultsAndRegistrationDriveRealCommittedClosedLoop'
+        includeTestsMatching 'cn.jia.chat.handler.SkillManagementNodeMySqlTest.firstInstallWithRealNodePeer'
+        includeTestsMatching 'cn.jia.chat.handler.SkillManagementNodeMySqlTest.realNodeUpgradeAndPolicyKeepOldTaskPinnedWithoutBorrowingCurrent'
+    }
     testLogging { events 'passed','failed'; exceptionFormat 'full'; showStandardStreams = true }
 }
