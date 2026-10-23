@@ -20,6 +20,7 @@ import java.util.Set;
 /** Default-off additive schema with an explicit core/deliberation readiness boundary. */
 @Component
 @ConditionalOnProperty(prefix="chat.selected-output-finalization",name="enabled",havingValue="true")
+@org.springframework.context.annotation.Profile("schema-maintenance")
 public final class ChatSelectedOutputFinalizationSchemaInitializer implements InitializingBean {
     static final String RESOURCE="db/chat-selected-output-finalization-v1.sql";
     static final List<String> TABLES=List.of("chat_selected_output_finalization","chat_selected_output_finalization_item");

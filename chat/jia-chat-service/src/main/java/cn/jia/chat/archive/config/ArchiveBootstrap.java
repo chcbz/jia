@@ -8,6 +8,7 @@ import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 
 @Component
+@org.springframework.context.annotation.Profile("schema-maintenance")
 @Order(Ordered.HIGHEST_PRECEDENCE + 100)
 public class ArchiveBootstrap implements ApplicationRunner {
     private final ArchiveReaderAccessPolicy accessPolicy;

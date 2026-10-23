@@ -14,6 +14,7 @@ import java.util.Objects;
 import java.util.Set;
 
 /** Creates only an absent grant table; partial or drifted authorization catalogs fail closed. */
+@org.springframework.context.annotation.Profile("schema-maintenance")
 public final class AgentTaskExecutionGrantSchemaInitializer implements InitializingBean {
     static final String RESOURCE = "db/agent-task-execution-grant-v1.sql";
     private static final String TABLE = "agent_task_execution_grant";

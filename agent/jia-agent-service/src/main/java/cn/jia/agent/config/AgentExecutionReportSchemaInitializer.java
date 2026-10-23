@@ -15,6 +15,7 @@ import java.util.Set;
 import java.util.Objects;
 
 /** Installs only the additive D02 report head and inbox tables. */
+@org.springframework.context.annotation.Profile("schema-maintenance")
 public final class AgentExecutionReportSchemaInitializer implements InitializingBean {
     static final String RESOURCE = "db/agent-execution-report-v1.sql";
     static final List<String> TABLES = List.of(

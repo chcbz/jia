@@ -12,6 +12,7 @@ import java.util.Map;
 import java.util.Objects;
 
 /** Additive bridge-operation catalog. Runtime flags remain disabled by default. */
+@org.springframework.context.annotation.Profile("schema-maintenance")
 public final class ControlledImageBridgeSchemaInitializer implements InitializingBean {
     static final String TABLE="agent_controlled_image_bridge_operation";
     private static final Map<String,String> CHECKS=checks();

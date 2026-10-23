@@ -11,6 +11,7 @@ import java.util.*;
 @Component
 @ConditionalOnProperty(prefix="agent.personal-workspace-storage",name="enabled",havingValue="true")
 @DependsOn("personalWorkspaceExecutionSchemaInitializer")
+@org.springframework.context.annotation.Profile("schema-maintenance")
 public final class SkillExecutionSchemaInitializer implements InitializingBean {
     private final JdbcTemplate jdbc;
     public SkillExecutionSchemaInitializer(JdbcTemplate jdbc) {this.jdbc=Objects.requireNonNull(jdbc);}

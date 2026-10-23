@@ -243,7 +243,7 @@ class Mmd29ceUpgradeWiringMySqlTest {
             Fixture fixture, OwnedRedisServer redis, boolean fullFeatureWiring) {
         redis.assertExactOwnedChildAlive();
         Map<String, Object> properties = new LinkedHashMap<>();
-        properties.put("spring.profiles.active", "mmd29ce-isolated");
+        properties.put("spring.profiles.active", "mmd29ce-isolated,schema-maintenance");
         properties.put("spring.datasource.dbUrl", fixture.jdbcUrl());
         properties.put("spring.datasource.url", fixture.jdbcUrl());
         properties.put("spring.datasource.username", fixture.user());

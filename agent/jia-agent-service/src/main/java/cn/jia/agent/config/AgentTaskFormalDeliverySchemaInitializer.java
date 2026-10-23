@@ -20,6 +20,7 @@ import java.util.Set;
  * <p>Activation is opt-in through {@code jia.agent.formal-delivery.enabled}; a partial catalog
  * fails closed instead of attempting a drift repair. It contains no backfill or data mutation.</p>
  */
+@org.springframework.context.annotation.Profile("schema-maintenance")
 public final class AgentTaskFormalDeliverySchemaInitializer implements InitializingBean {
     static final String DDL_RESOURCE = "db/agent-task-formal-delivery-r2.sql";
     static final List<String> TABLES = List.of(

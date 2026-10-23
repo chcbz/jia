@@ -21,6 +21,7 @@ import java.util.Set;
 import java.util.TreeMap;
 
 /** Fail-closed initializer and catalog validator for the exact ECO-V0-W02 five-table schema. */
+@org.springframework.context.annotation.Profile("schema-maintenance")
 public final class EconomySchemaInitializer implements InitializingBean {
     static final String DDL_RESOURCE = "db/economy-v0-foundation.sql";
     static final List<String> TABLES = List.of(

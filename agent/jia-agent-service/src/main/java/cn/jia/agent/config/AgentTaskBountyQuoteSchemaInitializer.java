@@ -18,6 +18,7 @@ import java.util.Objects;
 import java.util.Set;
 
 /** Exact additive W05 schema initializer; it never alters W04 or shared economy tables. */
+@org.springframework.context.annotation.Profile("schema-maintenance")
 public final class AgentTaskBountyQuoteSchemaInitializer implements InitializingBean {
     static final String DDL_RESOURCE = "db/agent-task-bounty-quote-v0.sql";
     static final List<String> TABLES = List.of(

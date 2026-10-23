@@ -14,6 +14,7 @@ import java.util.Locale;
 import java.util.Objects;
 
 /** Installs only additive private-execution/grant/output tables. */
+@org.springframework.context.annotation.Profile("schema-maintenance")
 public final class PersonalWorkspaceExecutionSchemaInitializer implements InitializingBean {
     static final String RESOURCE = "db/agent-personal-workspace-v1_11-executions.sql";
     static final String OUTPUT_MIME_MIGRATION_RESOURCE = "db/agent-personal-workspace-v1_13-execution-output-mime.sql";

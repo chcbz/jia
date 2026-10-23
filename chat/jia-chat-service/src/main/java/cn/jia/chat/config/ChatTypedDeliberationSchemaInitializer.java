@@ -22,10 +22,8 @@ import java.util.Set;
 
 /** Default-off, additive-only MySQL8 readiness gate for typed deliberation v5. */
 @Component
-public final class ChatTypedDeliberationSchemaInitializer implements ApplicationRunner {
-    /** INITIALIZING includes the interval before ApplicationRunner is invoked. */
-    public enum Readiness { INITIALIZING, READY, DISABLED, UNAVAILABLE, FAILED }
-
+@org.springframework.context.annotation.Profile("schema-maintenance")
+public final class ChatTypedDeliberationSchemaInitializer implements ApplicationRunner, ChatTypedDeliberationReadiness {
     static final String LOCK = "cyf:chat-deliberation:v2";
     static final String RESOURCE = "db/chat-typed-deliberation-schema-v1.sql";
     static final List<String> TABLES = List.of("chat_typed_outcome", "chat_typed_pending_question",

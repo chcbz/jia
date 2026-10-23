@@ -27,6 +27,7 @@ import java.util.Set;
 @Component
 @ConditionalOnProperty(prefix="agent.controlled-image-provider", name="followup-v3-enabled", havingValue="true")
 @DependsOn("personalWorkspaceExecutionSchemaInitializer")
+@org.springframework.context.annotation.Profile("schema-maintenance")
 public final class ControlledImageFollowupV3SchemaInitializer implements InitializingBean {
     static final String OPERATION_GRANT_TABLE = "agent_controlled_image_intent_operation_grant";
     static final String SOURCE_TABLE = "agent_controlled_image_execution_source_v3";

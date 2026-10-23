@@ -9,6 +9,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 @Configuration(proxyBeanMethods=false)
 @ConditionalOnProperty(prefix="economy.skill.marketplace",name="enabled",havingValue="true")
 public class SkillMarketplaceConfiguration {
+    @org.springframework.context.annotation.Profile("schema-maintenance")
     @Bean public EconomySkillApplicationSchemaInitializer economySkillApplicationSchemaInitializer(JdbcTemplate jdbc) {
         return new EconomySkillApplicationSchemaInitializer(jdbc);
     }

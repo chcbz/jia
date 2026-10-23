@@ -17,6 +17,7 @@ import java.util.Locale;
 @Slf4j
 @Component
 @RequiredArgsConstructor
+@org.springframework.context.annotation.Profile("schema-maintenance")
 public class AgentSchemaInitializer implements InitializingBean {
     private final JdbcTemplate jdbcTemplate;
     private Boolean h2Database;

@@ -18,6 +18,7 @@ import java.util.Set;
 import java.util.TreeMap;
 
 /** Additive private mark operation schema; partial or drifted catalogs fail closed without repair. */
+@org.springframework.context.annotation.Profile("schema-maintenance")
 public final class HallPrivateMarkSchemaInitializer implements InitializingBean {
     static final String RESOURCE = "db/hall-private-mark-v1.sql";
     static final List<String> TABLES = List.of("hall_private_mark");

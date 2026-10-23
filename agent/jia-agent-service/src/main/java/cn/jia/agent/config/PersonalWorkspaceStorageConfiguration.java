@@ -13,6 +13,7 @@ import java.nio.file.Path;
 @Configuration(proxyBeanMethods = false)
 @EnableConfigurationProperties({PersonalWorkspaceStorageProperties.class, PersonalWorkspaceExecutionProperties.class})
 public class PersonalWorkspaceStorageConfiguration {
+    @org.springframework.context.annotation.Profile("schema-maintenance")
     @Bean
     @ConditionalOnProperty(prefix = "agent.personal-workspace-storage", name = "enabled", havingValue = "true")
     public AgentExternalServicePolicySchemaInitializer agentExternalServicePolicySchemaInitializer(JdbcTemplate jdbcTemplate) {
@@ -30,18 +31,21 @@ public class PersonalWorkspaceStorageConfiguration {
                 properties.maxContentBytes());
     }
 
+    @org.springframework.context.annotation.Profile("schema-maintenance")
     @Bean
     @ConditionalOnProperty(prefix = "agent.personal-workspace-storage", name = "enabled", havingValue = "true")
     public PersonalWorkspaceSchemaInitializer personalWorkspaceSchemaInitializer(JdbcTemplate jdbcTemplate) {
         return new PersonalWorkspaceSchemaInitializer(jdbcTemplate);
     }
 
+    @org.springframework.context.annotation.Profile("schema-maintenance")
     @Bean
     @ConditionalOnProperty(prefix = "agent.personal-workspace-storage", name = "enabled", havingValue = "true")
     public PersonalWorkspaceExecutionSchemaInitializer personalWorkspaceExecutionSchemaInitializer(JdbcTemplate jdbcTemplate) {
         return new PersonalWorkspaceExecutionSchemaInitializer(jdbcTemplate);
     }
 
+    @org.springframework.context.annotation.Profile("schema-maintenance")
     @Bean
     @ConditionalOnProperty(prefix = "agent.personal-workspace-storage", name = "enabled", havingValue = "true")
     public PersonalWorkspaceTaskLinkSchemaInitializer personalWorkspaceTaskLinkSchemaInitializer(
@@ -49,24 +53,28 @@ public class PersonalWorkspaceStorageConfiguration {
         return new PersonalWorkspaceTaskLinkSchemaInitializer(jdbcTemplate);
     }
 
+    @org.springframework.context.annotation.Profile("schema-maintenance")
     @Bean
     @ConditionalOnProperty(prefix = "agent.personal-workspace-storage", name = "enabled", havingValue = "true")
     public HallRequestDraftSchemaInitializer hallRequestDraftSchemaInitializer(JdbcTemplate jdbcTemplate) {
         return new HallRequestDraftSchemaInitializer(jdbcTemplate);
     }
 
+    @org.springframework.context.annotation.Profile("schema-maintenance")
     @Bean
     @ConditionalOnProperty(prefix = "agent.personal-workspace-storage", name = "enabled", havingValue = "true")
     public HallPrivateCaseSchemaInitializer hallPrivateCaseSchemaInitializer(JdbcTemplate jdbcTemplate) {
         return new HallPrivateCaseSchemaInitializer(jdbcTemplate);
     }
 
+    @org.springframework.context.annotation.Profile("schema-maintenance")
     @Bean
     @ConditionalOnProperty(prefix = "agent.personal-workspace-storage", name = "enabled", havingValue = "true")
     public HallPrivateMarkSchemaInitializer hallPrivateMarkSchemaInitializer(JdbcTemplate jdbcTemplate) {
         return new HallPrivateMarkSchemaInitializer(jdbcTemplate);
     }
 
+    @org.springframework.context.annotation.Profile("schema-maintenance")
     @Bean
     @ConditionalOnProperty(prefix = "agent.personal-workspace-storage", name = "enabled", havingValue = "true")
     public AgentTaskExecutionGrantSchemaInitializer agentTaskExecutionGrantSchemaInitializer(
@@ -74,6 +82,7 @@ public class PersonalWorkspaceStorageConfiguration {
         return new AgentTaskExecutionGrantSchemaInitializer(jdbcTemplate);
     }
 
+    @org.springframework.context.annotation.Profile("schema-maintenance")
     @Bean
     @ConditionalOnProperty(prefix = "agent.personal-workspace-storage", name = "enabled", havingValue = "true")
     public AgentTaskBountyBootstrapOutboxSchemaInitializer agentTaskBountyBootstrapOutboxSchemaInitializer(
@@ -81,6 +90,7 @@ public class PersonalWorkspaceStorageConfiguration {
         return new AgentTaskBountyBootstrapOutboxSchemaInitializer(jdbcTemplate);
     }
 
+    @org.springframework.context.annotation.Profile("schema-maintenance")
     @Bean
     @ConditionalOnProperty(prefix = "agent.personal-workspace-storage", name = "enabled", havingValue = "true")
     public AgentTaskRequirementSnapshotSchemaInitializer agentTaskRequirementSnapshotSchemaInitializer(
@@ -88,6 +98,7 @@ public class PersonalWorkspaceStorageConfiguration {
         return new AgentTaskRequirementSnapshotSchemaInitializer(jdbcTemplate);
     }
 
+    @org.springframework.context.annotation.Profile("schema-maintenance")
     @Bean
     @ConditionalOnProperty(prefix = "agent.personal-workspace-storage", name = "enabled", havingValue = "true")
     public AgentTaskCreationOperationSchemaInitializer agentTaskCreationOperationSchemaInitializer(
@@ -95,6 +106,7 @@ public class PersonalWorkspaceStorageConfiguration {
         return new AgentTaskCreationOperationSchemaInitializer(jdbcTemplate);
     }
 
+    @org.springframework.context.annotation.Profile("schema-maintenance")
     @Bean
     @ConditionalOnProperty(prefix = "agent.personal-workspace-storage", name = "enabled", havingValue = "true")
     public PersonalWorkspaceConversationLinkSchemaInitializer personalWorkspaceConversationLinkSchemaInitializer(

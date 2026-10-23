@@ -15,6 +15,7 @@ import java.util.Locale;
 import java.util.Objects;
 
 /** Installs only the two additive 1.11 C1-B task-link tables. */
+@org.springframework.context.annotation.Profile("schema-maintenance")
 public final class PersonalWorkspaceTaskLinkSchemaInitializer implements InitializingBean {
     static final String RESOURCE = "db/agent-personal-workspace-v1_11-task-links.sql";
     static final List<String> TABLES = List.of(

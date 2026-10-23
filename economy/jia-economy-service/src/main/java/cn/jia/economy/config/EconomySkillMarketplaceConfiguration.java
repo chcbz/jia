@@ -10,6 +10,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 @Configuration(proxyBeanMethods = false)
 @EnableConfigurationProperties(EconomySkillSchemaProperties.class)
 public class EconomySkillMarketplaceConfiguration {
+    @org.springframework.context.annotation.Profile("schema-maintenance")
     @Bean
     @ConditionalOnProperty(prefix = "economy.skill.schema", name = "enabled", havingValue = "true")
     public EconomySkillSchemaInitializer economySkillSchemaInitializer(JdbcTemplate jdbcTemplate) {

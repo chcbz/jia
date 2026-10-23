@@ -20,6 +20,7 @@ import java.util.Map;
 @Slf4j
 @Component
 @RequiredArgsConstructor
+@org.springframework.context.annotation.Profile("schema-maintenance")
 public class ChatSchemaInitializer implements ApplicationRunner {
     private final JdbcTemplate jdbcTemplate;
     private Boolean h2Database;

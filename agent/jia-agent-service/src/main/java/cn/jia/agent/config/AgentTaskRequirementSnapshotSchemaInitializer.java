@@ -11,6 +11,7 @@ import java.util.Map;
 import java.util.Objects;
 
 /** Only creates an absent table; rejects drift rather than rewriting existing identity/history. */
+@org.springframework.context.annotation.Profile("schema-maintenance")
 public final class AgentTaskRequirementSnapshotSchemaInitializer implements InitializingBean {
     private static final String TABLE = "agent_task_requirement_snapshot";
     private static final Map<String, String> CHECKS = Map.of(

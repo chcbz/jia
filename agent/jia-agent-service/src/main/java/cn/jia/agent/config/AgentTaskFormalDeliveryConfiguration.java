@@ -8,6 +8,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 /** R2 schema is installed only together with the explicitly enabled HTTP feature. */
 @Configuration(proxyBeanMethods = false)
 public class AgentTaskFormalDeliveryConfiguration {
+    @org.springframework.context.annotation.Profile("schema-maintenance")
     @Bean
     @ConditionalOnProperty(prefix = "jia.agent.formal-delivery", name = "enabled", havingValue = "true")
     public AgentTaskFormalDeliverySchemaInitializer agentTaskFormalDeliverySchemaInitializer(

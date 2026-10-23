@@ -19,6 +19,7 @@ import java.util.regex.Pattern;
 /** Fresh schema includes revision lineage from day one. Unknown installed shapes fail closed. */
 @Component
 @ConditionalOnProperty(prefix = "chat.delivery-review", name = "enabled", havingValue = "true")
+@org.springframework.context.annotation.Profile("schema-maintenance")
 public final class ChatTaskDeliveryReviewSchemaInitializer implements InitializingBean {
     static final String TABLE = "chat_task_delivery_review_operation";
     static final String RESOURCE = "db/chat-task-delivery-review-v1.sql";

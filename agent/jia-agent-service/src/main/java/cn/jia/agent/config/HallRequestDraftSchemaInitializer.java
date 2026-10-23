@@ -17,6 +17,7 @@ import java.util.Set;
 import java.util.TreeMap;
 
 /** Installs the one additive DRAFT-v1 table and fails closed on partial/drifted critical catalogs. */
+@org.springframework.context.annotation.Profile("schema-maintenance")
 public final class HallRequestDraftSchemaInitializer implements InitializingBean {
     static final String RESOURCE = "db/hall-request-draft-v1.sql";
     static final String TABLE = "hall_request_draft";

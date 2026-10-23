@@ -17,6 +17,7 @@ import java.util.Map;
 /** Default-off. Fresh additive install is explicit; an existing incompatible table never gets overwritten. */
 @Component
 @ConditionalOnProperty(prefix="chat.delivery-review",name="enabled",havingValue="true")
+@org.springframework.context.annotation.Profile("schema-maintenance")
 public final class ChatTypedReviewContextSchemaInitializer implements InitializingBean {
     private final JdbcTemplate jdbc;
     private final ChatDeliberationSchemaInitializer deliberation;

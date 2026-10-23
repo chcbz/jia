@@ -17,6 +17,7 @@ import java.util.Map;
 import java.util.Set;
 
 @Component
+@org.springframework.context.annotation.Profile("schema-maintenance")
 public class ArchiveReaderDataSchemaInitializer {
     private static final String SCHEMA_RESOURCE = "db/archive-reader-data-schema.sql";
     private final JdbcTemplate jdbc;

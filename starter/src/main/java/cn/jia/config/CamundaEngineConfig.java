@@ -31,7 +31,8 @@ public class CamundaEngineConfig {
         configuration.setJdbcUrl(jdbcUrl);
         configuration.setJdbcUsername(username);
         configuration.setJdbcPassword(password);
-        configuration.setDatabaseSchemaUpdate(ProcessEngineConfiguration.DB_SCHEMA_UPDATE_TRUE);
+        // Schema installation/upgrades belong to deployment, never engine startup.
+        configuration.setDatabaseSchemaUpdate(ProcessEngineConfiguration.DB_SCHEMA_UPDATE_FALSE);
         configuration.setHistory(ProcessEngineConfiguration.HISTORY_FULL);
         configuration.setJobExecutorActivate(false);
         configuration.setSkipIsolationLevelCheck(true);

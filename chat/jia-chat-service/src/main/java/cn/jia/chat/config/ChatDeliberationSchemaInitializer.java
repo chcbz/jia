@@ -23,6 +23,7 @@ import java.util.Objects;
 /** Strict additive MySQL contract. Existing incompatible definitions are never silently repaired. */
 @Slf4j
 @Component
+@org.springframework.context.annotation.Profile("schema-maintenance")
 public class ChatDeliberationSchemaInitializer implements ApplicationRunner {
     static final List<String> TABLES = List.of(
             "chat_context_snapshot", "chat_request", "chat_turn", "chat_dispatch_outbox",

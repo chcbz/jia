@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Set;
 
 /** Only creates an absent policy table. Grant migration belongs to versioned deployment. */
+@org.springframework.context.annotation.Profile("schema-maintenance")
 public final class AgentExternalServicePolicySchemaInitializer implements InitializingBean {
     private final JdbcTemplate jdbc;
     public AgentExternalServicePolicySchemaInitializer(JdbcTemplate jdbc) { this.jdbc=jdbc; }

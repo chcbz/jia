@@ -22,6 +22,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /** Fail-closed initializer/catalog validator for the separate W09 six-table application schema. */
+@org.springframework.context.annotation.Profile("schema-maintenance")
 public final class EconomySkillApplicationSchemaInitializer implements InitializingBean {
     static final String DDL_RESOURCE = "db/economy-v0-skill-application.sql";
     static final List<String> TABLES = List.of("economy_skill_actor_root", "economy_skill_agent_version", "economy_skill_result_receipt", "economy_skill_delivery_binding", "economy_skill_managed_credential", "economy_skill_credential_operation");

@@ -20,6 +20,7 @@ import java.util.Objects;
  * Installs only the additive, owner-scoped personal workspace tables when the feature's
  * explicitly configured private store is enabled. It never touches task artifacts.
  */
+@org.springframework.context.annotation.Profile("schema-maintenance")
 public final class PersonalWorkspaceSchemaInitializer implements InitializingBean {
     static final String RESOURCE = "db/agent-personal-workspace-v1.sql";
     static final String ORIGIN_MIGRATION_RESOURCE = "db/agent-personal-workspace-v1_11-origin.sql";

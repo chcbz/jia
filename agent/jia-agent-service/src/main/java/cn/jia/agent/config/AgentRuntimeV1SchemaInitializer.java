@@ -13,6 +13,7 @@ import java.util.Locale;
 import java.util.Objects;
 
 /** Additive Runtime v1 installation schema initializer; it never backfills existing identities. */
+@org.springframework.context.annotation.Profile("schema-maintenance")
 public final class AgentRuntimeV1SchemaInitializer implements InitializingBean {
     static final String TABLE = "agent_runtime_v1_installation";
     static final String RESOURCE = "db/agent-runtime-v1-schema.sql";

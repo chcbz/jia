@@ -7,6 +7,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 /** Registers the additive Protocol v1 report receipt schema independently of workspace storage. */
 @Configuration(proxyBeanMethods = false)
 public class AgentExecutionReportSchemaConfiguration {
+    @org.springframework.context.annotation.Profile("schema-maintenance")
     @Bean
     public AgentExecutionReportSchemaInitializer agentExecutionReportSchemaInitializer(
             JdbcTemplate jdbcTemplate) {

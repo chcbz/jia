@@ -10,6 +10,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 @Configuration
 @EnableConfigurationProperties(ControlledImageProviderProperties.class)
 public class ControlledImageProviderConfiguration {
+    @org.springframework.context.annotation.Profile("schema-maintenance")
     @Bean
     @DependsOn("personalWorkspaceExecutionSchemaInitializer")
     @ConditionalOnProperty(prefix = "agent.controlled-image-provider", name = "bridge-enabled",
@@ -18,6 +19,7 @@ public class ControlledImageProviderConfiguration {
         return new ControlledImageExecutionSchemaInitializer(jdbc);
     }
 
+    @org.springframework.context.annotation.Profile("schema-maintenance")
     @Bean
     @ConditionalOnProperty(prefix = "agent.controlled-image-provider", name = "bridge-enabled",
             havingValue = "true")
@@ -25,6 +27,7 @@ public class ControlledImageProviderConfiguration {
         return new ControlledImageBridgeSchemaInitializer(jdbc);
     }
 
+    @org.springframework.context.annotation.Profile("schema-maintenance")
     @Bean
     @ConditionalOnProperty(prefix = "agent.controlled-image-provider", name = "enabled",
             havingValue = "true")

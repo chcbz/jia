@@ -5,7 +5,7 @@ import cn.jia.agent.entity.AgentTaskBountyBootstrapReconcileDTO;
 import cn.jia.agent.entity.AgentTaskBountyBootstrapReconcileDTO.Outcome;
 import cn.jia.agent.service.AgentTaskBountyBootstrapOutboxService;
 import cn.jia.agent.service.AgentTaskExecutionGrantService;
-import cn.jia.chat.config.ChatTypedDeliberationSchemaInitializer.Readiness;
+import cn.jia.chat.config.ChatTypedDeliberationReadiness.Readiness;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;

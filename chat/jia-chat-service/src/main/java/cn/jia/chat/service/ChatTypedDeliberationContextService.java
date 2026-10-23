@@ -1,7 +1,7 @@
 package cn.jia.chat.service;
 
 import cn.jia.chat.api.ChatTypedDeliberationWire;
-import cn.jia.chat.config.ChatTypedDeliberationSchemaInitializer;
+import cn.jia.chat.config.ChatTypedDeliberationReadiness;
 import cn.jia.chat.handler.TypedDeliberationSessionRegistry;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -44,7 +44,7 @@ public final class ChatTypedDeliberationContextService {
 
     private final JdbcTemplate jdbc;
     private final TypedDeliberationSessionRegistry sessions;
-    private final ChatTypedDeliberationSchemaInitializer schema;
+    private final ChatTypedDeliberationReadiness schema;
     private final boolean enabled;
     private final ChatActionCapabilityService capabilities;
     private ChatSkillSourceAccessService skillSources;
@@ -79,7 +79,7 @@ public final class ChatTypedDeliberationContextService {
 
 
     public ChatTypedDeliberationContextService(JdbcTemplate jdbc, TypedDeliberationSessionRegistry sessions,
-            ChatTypedDeliberationSchemaInitializer schema, ChatActionCapabilityService capabilities,
+            ChatTypedDeliberationReadiness schema, ChatActionCapabilityService capabilities,
             @Value("${chat.typed-deliberation.enabled:false}") boolean enabled) {
         this.jdbc=Objects.requireNonNull(jdbc); this.sessions=Objects.requireNonNull(sessions);
         this.schema=Objects.requireNonNull(schema); this.enabled=enabled;
@@ -87,8 +87,8 @@ public final class ChatTypedDeliberationContextService {
     }
 
     /** A pre-claim lifecycle gate, not an alternative to resolve's identity/source checks. */
-    public ChatTypedDeliberationSchemaInitializer.Readiness bootstrapReadiness() {
-        return enabled ? schema.readiness() : ChatTypedDeliberationSchemaInitializer.Readiness.DISABLED;
+    public ChatTypedDeliberationReadiness.Readiness bootstrapReadiness() {
+        return enabled ? schema.readiness() : ChatTypedDeliberationReadiness.Readiness.DISABLED;
     }
 
     public Context resolve(Scope scope, String taskId, String targetAgentId,

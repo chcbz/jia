@@ -16,6 +16,7 @@ import java.util.Objects;
 import java.util.Set;
 
 /** Additive, binary-scoped private authority schema. Drift fails closed. */
+@org.springframework.context.annotation.Profile("schema-maintenance")
 public final class AgentSelectedOutputFinalizationSchemaInitializer implements InitializingBean {
     static final String RESOURCE="db/agent-selected-output-finalization-v1.sql";
     private static final String TABLE="agent_selected_output_finalization";

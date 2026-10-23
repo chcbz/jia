@@ -4,7 +4,7 @@
 
 ## 数据与程序分离
 
-- 数据库 `archive_work → archive_edition → archive_chapter → archive_paragraph` 是在线事实源。在线启动只初始化/核验结构，不加载书籍文件、不导入、不对整书逐段对账。
+- 数据库 `archive_work → archive_edition → archive_chapter → archive_paragraph` 是在线事实源。在线启动不初始化/核验全量结构，不加载书籍文件、不导入、不对整书逐段对账。结构由部署维护；见 `ops/schema/README.md`。
 - 新增书籍只准备外部数据包并显式发布；无需修改 Java/Vue、重新打包或重启服务。书架查询数据库的 READY 活动版本。
 - 正文/顺序/段落/标题变化发布新 `editionId`；READY 正文不可原地修改。`workId`、版本和段落 ID 稳定；既有 work 的书名不通过导入偷偷覆盖，书名管理不是此命令功能。
 - 原整书 JSON 和书籍专属校验器仅留在 `src/test` 作为回归夹具，不进入生产库 JAR。通用程序不固定书名、来源摘要、120 回、引首或最后段落 ID。

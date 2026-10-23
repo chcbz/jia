@@ -31,6 +31,15 @@ class AgentCommandTransportSchemaInitializerTest {
                     AgentCommandTransportSchemaConfiguration.class);
 
     @Test
+    void enabledFeatureWithoutMaintenanceProfileDoesNotInstallSchema() {
+        RUNNER.withPropertyValues("agent.command-outbox.enabled=true").run(context -> {
+            assertNull(context.getStartupFailure());
+            assertTrue(context.getBeansOfType(AgentCommandTransportSchemaInitializer.class).isEmpty());
+            assertTrue(context.getBeansOfType(JdbcTemplate.class).isEmpty());
+        });
+    }
+
+    @Test
     void absentFlagRegistersNoInitializerAndRequiresNoJdbcBean() {
         RUNNER.run(context -> {
             assertNull(context.getStartupFailure());
@@ -72,7 +81,8 @@ class AgentCommandTransportSchemaInitializerTest {
     void binderTrueSpellingsRegisterInitializerAndReachD01Validation(String spelling)
             throws Exception {
         RecordingCatalogJdbcTemplate partial = partialCatalog("agent_command_delivery");
-        RUNNER.withBean(JdbcTemplate.class, () -> partial)
+        RUNNER.withPropertyValues("spring.profiles.active=schema-maintenance")
+                .withBean(JdbcTemplate.class, () -> partial)
                 .withPropertyValues("agent.command-outbox.enabled=" + spelling)
                 .run(context -> {
                     Throwable failure = context.getStartupFailure();

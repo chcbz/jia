@@ -11,6 +11,7 @@ import java.util.Map;
 import java.util.Objects;
 
 /** Additive controlled authority identity on existing conversation executions. */
+@org.springframework.context.annotation.Profile("schema-maintenance")
 public final class ControlledImageExecutionSchemaInitializer implements InitializingBean {
     /** Exact MySQL 8.0.21 CHECK_CLAUSE rendering captured from the additive v1_17 DDL. */
     private static final String EXPECTED_CHECK = "((`controlled_consent_id` is null) or ((`execution_mode` = _utf8mb4\'CONVERSATION\') and regexp_like(`controlled_consent_id`,cast(_utf8mb4\'^consent_[0-9a-f]{32}$\' as char charset binary)) and (`permitted_operation` = _utf8mb4\'GENERATE_IMAGE\') and (`output_content_mime_type` = _utf8mb4\'image/png\')))";

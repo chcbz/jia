@@ -15,6 +15,7 @@ import java.util.Objects;
 /** Adds only the four nullable fence columns; no data/identity/backfill mutation. */
 @Component
 @DependsOn("agentRuntimeV1SchemaInitializer")
+@org.springframework.context.annotation.Profile("schema-maintenance")
 public final class AgentRuntimeSessionFenceSchemaInitializer implements InitializingBean {
     static final List<String> COLUMNS = List.of("runtime_installation_id", "runtime_host_id",
             "runtime_instance_id", "runtime_session_generation");

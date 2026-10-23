@@ -12,6 +12,7 @@ import java.util.Map;
 import java.util.Objects;
 
 /** Additive-only initializer that rejects provider-consent catalog drift. */
+@org.springframework.context.annotation.Profile("schema-maintenance")
 public final class AgentTaskProviderCostConsentSchemaInitializer implements InitializingBean {
     static final String TABLE="agent_task_provider_cost_consent";
     /** Exact MySQL 8 CHECK_CLAUSE rendering for the additive DDL below. Keeping this
