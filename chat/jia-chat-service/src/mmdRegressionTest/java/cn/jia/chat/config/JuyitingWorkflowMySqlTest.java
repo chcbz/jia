@@ -193,6 +193,59 @@ class JuyitingWorkflowMySqlTest {
         jdbc.execute("CREATE TABLE chat_request (tenant_id VARCHAR(50) COLLATE utf8mb4_0900_bin NOT NULL,owner_jiacn VARCHAR(50) COLLATE utf8mb4_0900_bin NOT NULL,client_id VARCHAR(50) COLLATE utf8mb4_0900_bin NOT NULL,request_id VARCHAR(100) COLLATE utf8mb4_0900_bin NOT NULL,request_revision BIGINT NOT NULL,user_message_id BIGINT NOT NULL,conversation_id VARCHAR(100),conversation_generation BIGINT,PRIMARY KEY(tenant_id,owner_jiacn,client_id,request_id,request_revision)) ENGINE=InnoDB");
         jdbc.execute("CREATE TABLE chat_message (id BIGINT,tenant_id VARCHAR(50),jiacn VARCHAR(50),client_id VARCHAR(50),conversation_id VARCHAR(100),content MEDIUMTEXT,metadata MEDIUMTEXT,message_type VARCHAR(32),sender_type VARCHAR(32))");
     }
+    @Test void retainedOutputLookupRequiresExactLiveOwnerAndCommittedLineage() {
+        // Extend only this test's disposable schema; use the existing owned MySQL lifecycle,
+        // not the separately opted-in external archive fixture that default CI skips.
+        jdbc.execute("ALTER TABLE chat_conversation_asset ADD asset_id VARCHAR(64), ADD revision BIGINT");
+        jdbc.execute("ALTER TABLE chat_conversation ADD target_agent_ids JSON");
+        jdbc.execute("ALTER TABLE chat_request ADD aggregate_state VARCHAR(30)");
+        jdbc.execute("CREATE TABLE chat_interaction_step (step_id VARCHAR(64),tenant_id VARCHAR(50),owner_jiacn VARCHAR(50),client_id VARCHAR(50),request_id VARCHAR(100),request_revision BIGINT,conversation_id VARCHAR(100),conversation_generation BIGINT,task_id VARCHAR(100),kind VARCHAR(20),state VARCHAR(30)) ENGINE=InnoDB");
+        jdbc.execute("CREATE TABLE chat_step_execution_link (tenant_id VARCHAR(50),owner_jiacn VARCHAR(50),client_id VARCHAR(50),step_id VARCHAR(64),execution_id VARCHAR(100),state VARCHAR(30)) ENGINE=InnoDB");
+        var store = new cn.jia.chat.archive.conversation.JdbcChatConversationArchiveStore(jdbc);
+        var scope = new cn.jia.chat.archive.conversation.ChatConversationArchiveStore.Scope("0", "owner", "client");
+        Supplier<cn.jia.chat.archive.conversation.ChatConversationArchiveStore.Source> read = () ->
+                store.findAuthorizedOutputSource(scope, "42", 3, "task", "agent", "producer", "step", "output", "a".repeat(64));
+        assertNull(read.get()); // async projection not ready: no invented asset, no writes
+        jdbc.update("INSERT INTO chat_conversation VALUES (42,'0','owner','client',NULL,3,'task','juyiting','bounty','task:task','[\"agent\"]')");
+        jdbc.update("INSERT INTO chat_conversation_asset VALUES ('0','owner','client','42',3,'producer','step','execution','run','output','image/png',?,10,'asset',1)", "a".repeat(64));
+        jdbc.update("INSERT INTO chat_interaction_step VALUES ('step','0','owner','client','producer',1,'42',3,'task','EXECUTE','RESULT_COMMITTED')");
+        jdbc.update("INSERT INTO chat_step_execution_link VALUES ('0','owner','client','step','execution','RESULT_COMMITTED')");
+        jdbc.update("INSERT INTO chat_request VALUES ('0','owner','client','producer',1,100,'42',3,'RESULT_COMMITTED')");
+        assertNotNull(read.get());
+        assertEquals(store.findAuthorizedSource(scope, "42", "asset", 1, "agent"), read.get());
+        for (var wrong : List.of(new cn.jia.chat.archive.conversation.ChatConversationArchiveStore.Scope("1", "owner", "client"),
+                new cn.jia.chat.archive.conversation.ChatConversationArchiveStore.Scope("0", "ziyue", "client"),
+                new cn.jia.chat.archive.conversation.ChatConversationArchiveStore.Scope("0", "owner", "other"),
+                new cn.jia.chat.archive.conversation.ChatConversationArchiveStore.Scope("0", "owner ", "client"))) {
+            assertNull(store.findAuthorizedOutputSource(wrong, "42", 3, "task", "agent", "producer", "step", "output", "a".repeat(64)));
+        }
+        assertNull(store.findAuthorizedOutputSource(scope, "042", 3, "task", "agent", "producer", "step", "output", "a".repeat(64)));
+        assertNull(store.findAuthorizedOutputSource(scope, "42", 4, "task", "agent", "producer", "step", "output", "a".repeat(64)));
+        assertNull(store.findAuthorizedOutputSource(scope, "42", 3, "other", "agent", "producer", "step", "output", "a".repeat(64)));
+        assertNull(store.findAuthorizedOutputSource(scope, "42", 3, "task", "other", "producer", "step", "output", "a".repeat(64)));
+        assertNull(store.findAuthorizedOutputSource(scope, "42", 3, "task", null, "producer", "step", "output", "a".repeat(64)));
+        assertNull(store.findAuthorizedOutputSource(scope, "42", 3, "task", "agent", "producer ", "step", "output", "a".repeat(64)));
+        assertNull(store.findAuthorizedOutputSource(scope, "42", 3, "task", "agent", "producer", "step ", "output", "a".repeat(64)));
+        assertNull(store.findAuthorizedOutputSource(scope, "42", 3, "task", "agent", "producer", "step", "other", "a".repeat(64)));
+        assertNull(store.findAuthorizedOutputSource(scope, "42", 3, "task", "agent", "producer", "step", "output", "b".repeat(64)));
+        for (String[] damage : new String[][]{
+                {"chat_conversation", "lifecycle_generation", "4", "3"},
+                {"chat_conversation", "deleted_at", "1", null},
+                {"chat_conversation", "target_agent_ids", "[\"other\"]", "[\"agent\"]"},
+                {"chat_conversation", "target_agent_ids", "[\"agent\",\"other\"]", "[\"agent\"]"},
+                {"chat_interaction_step", "kind", "CHAT", "EXECUTE"},
+                {"chat_interaction_step", "state", "RUNNING", "RESULT_COMMITTED"},
+                {"chat_step_execution_link", "state", "RUNNING", "RESULT_COMMITTED"},
+                {"chat_step_execution_link", "execution_id", "other", "execution"},
+                {"chat_request", "aggregate_state", "RUNNING", "RESULT_COMMITTED"}}) {
+            String sql = "UPDATE " + damage[0] + " SET " + damage[1] + "=?";
+            jdbc.update(sql, damage[2]); assertNull(read.get());
+            jdbc.update(sql, damage[3]); assertNotNull(read.get());
+        }
+        jdbc.update("INSERT INTO chat_conversation_asset SELECT * FROM chat_conversation_asset");
+        assertNull(read.get()); // ambiguous projection is not resolved by picking a latest row
+    }
+
     private ChatSelectedOutputFinalizationSchemaInitializer chatSchema() {
         return new ChatSelectedOutputFinalizationSchemaInitializer(jdbc,mock(ChatSchemaReadiness.class));
     }

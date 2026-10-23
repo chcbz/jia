@@ -312,40 +312,6 @@ class ChatConversationArchiveMySqlIntegrationTest {
     }
 
     @Test
-    void retainedOutputLookupRequiresExactLiveOwnerAndCommittedLineage() {
-        assertNull(retainedOutput(OWNER, "42", 3, "task-1", "agent", "producer", "step", "output", "a".repeat(64)));
-        insertCommittedAsset();
-        assertEquals(store.findAuthorizedSource(OWNER, "42", "asset", 1, "agent"),
-                retainedOutput(OWNER, "42", 3, "task-1", "agent", "producer", "step", "output", "a".repeat(64)));
-        for (Scope wrong : new Scope[]{new Scope("1", "owner", "client"), new Scope("0", "ziyue", "client"),
-                new Scope("0", "owner", "other"), new Scope("0", "owner ", "client")}) {
-            assertNull(retainedOutput(wrong, "42", 3, "task-1", "agent", "producer", "step", "output", "a".repeat(64)));
-        }
-        assertNull(retainedOutput(OWNER, "042", 3, "task-1", "agent", "producer", "step", "output", "a".repeat(64)));
-        assertNull(retainedOutput(OWNER, "42", 4, "task-1", "agent", "producer", "step", "output", "a".repeat(64)));
-        assertNull(retainedOutput(OWNER, "42", 3, "other", "agent", "producer", "step", "output", "a".repeat(64)));
-        assertNull(retainedOutput(OWNER, "42", 3, "task-1", "other", "producer", "step", "output", "a".repeat(64)));
-        assertNull(retainedOutput(OWNER, "42", 3, "task-1", null, "producer", "step", "output", "a".repeat(64)));
-        assertNull(retainedOutput(OWNER, "42", 3, "task-1", "agent", "producer ", "step", "output", "a".repeat(64)));
-        assertNull(retainedOutput(OWNER, "42", 3, "task-1", "agent", "producer", "step ", "output", "a".repeat(64)));
-        assertNull(retainedOutput(OWNER, "42", 3, "task-1", "agent", "producer", "step", "other", "a".repeat(64)));
-        assertNull(retainedOutput(OWNER, "42", 3, "task-1", "agent", "producer", "step", "output", "b".repeat(64)));
-        jdbc.update("UPDATE chat_step_execution_link SET state='RUNNING'");
-        assertNull(retainedOutput(OWNER, "42", 3, "task-1", "agent", "producer", "step", "output", "a".repeat(64)));
-        jdbc.update("UPDATE chat_step_execution_link SET state='OUTPUT_COMMITTED'");
-        jdbc.update("UPDATE chat_conversation SET deleted_at=1");
-        assertNull(retainedOutput(OWNER, "42", 3, "task-1", "agent", "producer", "step", "output", "a".repeat(64)));
-        jdbc.update("UPDATE chat_conversation SET deleted_at=NULL");
-        jdbc.update("INSERT INTO chat_conversation_asset SELECT * FROM chat_conversation_asset");
-        assertNull(retainedOutput(OWNER, "42", 3, "task-1", "agent", "producer", "step", "output", "a".repeat(64)));
-    }
-
-    private ChatConversationArchiveStore.Source retainedOutput(Scope scope, String conversation, long generation,
-            String task, String target, String request, String step, String output, String sha256) {
-        return store.findAuthorizedOutputSource(scope, conversation, generation, task, target, request, step, output, sha256);
-    }
-
-    @Test
     void committedAssetAuthorizationRejectsEveryNonterminalLinkAndExactScopeDrift() {
         insertCommittedAsset();
         for (String state : new String[]{"RUNNING", "WAITING_ADMISSION", "FAILED", "INPUTS_REVOKED"}) {
