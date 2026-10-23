@@ -481,4 +481,6 @@ tasks.register('archiveMaintenanceTest', Test) {
     useJUnitPlatform()
     maxParallelForks = 1
     maxHeapSize = '384m'
+    def skillScript = System.getenv('CYF_ARCHIVE_SKILL_SCRIPT')
+    if (skillScript) inputs.file(skillScript)
 }
