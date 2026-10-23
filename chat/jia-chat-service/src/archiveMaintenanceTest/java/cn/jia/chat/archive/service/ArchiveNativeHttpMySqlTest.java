@@ -19,6 +19,16 @@ import cn.jia.user.dao.*;
 import cn.jia.user.dao.impl.UserInfoDaoImpl;
 import cn.jia.user.mapper.InfoMapper;
 import cn.jia.user.security.*;
+import cn.jia.oauth.config.ResourceServerConfig;
+import com.nimbusds.jose.*;
+import com.nimbusds.jose.crypto.RSASSASigner;
+import com.nimbusds.jose.jwk.*;
+import com.nimbusds.jose.jwk.source.JWKSource;
+import com.nimbusds.jose.proc.SecurityContext;
+import com.nimbusds.jwt.*;
+import java.net.URI;
+import java.net.http.*;
+import java.time.Instant;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.config.GlobalConfig;
 import com.baomidou.mybatisplus.core.incrementer.DefaultIdentifierGenerator;
@@ -55,8 +65,9 @@ import static cn.jia.agent.position.PositionSkillState.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 /** Real MySQL + production Spring/MyBatis/auth/native HTTP + actual Node Runtime installer/parser.
- * Operator actions use the service boundary. Online channel liveness is an explicit fixture binding,
- * not a real WebSocket/browser/full installed Runtime acceptance claim. No mock DAO or fake business callback. */
+ * Operator actions cover signed user JWTs via the production resource chain and real management controllers.
+ * Online channel liveness is an explicit fixture binding, not real WebSocket/browser/full installed Runtime
+ * acceptance. No mock DAO, mock JWT decoder or fake business callback. */
 class ArchiveNativeHttpMySqlTest {
     static final String TENANT="0",CLIENT="archive-native-client",OWNER="archive-owner";
     static final String AGENT="agt_"+"a".repeat(32),INSTALLATION="rti_"+"b".repeat(32);
@@ -84,6 +95,30 @@ class ArchiveNativeHttpMySqlTest {
             }
         }return bytes.toByteArray();
     }
+    @SuppressWarnings("unchecked") String token(long uid,String owner,long epoch)throws Exception {
+        var keys=((JWKSource<SecurityContext>)spring.getBean("jwkSource")).get(new JWKSelector(new JWKMatcher.Builder().keyType(KeyType.RSA).build()),null);
+        var key=(RSAKey)keys.getFirst();var claims=new JWTClaimsSet.Builder().subject("isolated-operator")
+                .claim("token_kind","user").claim("uid",Long.toString(uid)).claim("username","fixture")
+                .claim("jiacn",owner).claim("client_id",CLIENT).claim("auth_epoch",epoch)
+                .issueTime(Date.from(Instant.now())).expirationTime(Date.from(Instant.now().plusSeconds(600))).build();
+        var jwt=new SignedJWT(new JWSHeader.Builder(JWSAlgorithm.RS256).keyID(key.getKeyID()).build(),claims);
+        jwt.sign(new RSASSASigner(key));return jwt.serialize();
+    }
+    @SuppressWarnings("unchecked") Map<String,Object> operator(String method,String path,String token,String key,Object data,int expected)throws Exception {
+        var request=HttpRequest.newBuilder(URI.create("http://127.0.0.1:"+tomcat.getConnector().getLocalPort()+path));
+        if(token!=null)request.header("Authorization","Bearer "+token);
+        if(key!=null)request.header("Idempotency-Key",key);
+        String requestId=UUID.randomUUID().toString();request.header("X-Request-Id",requestId);
+        if(data==null)request.method(method,HttpRequest.BodyPublishers.noBody());
+        else request.header("Content-Type","application/json").method(method,HttpRequest.BodyPublishers.ofString(json.writeValueAsString(Map.of("protocolVersion",1,"requestId",requestId,"data",data))));
+        try(var client=HttpClient.newHttpClient()) {
+            var response=client.send(request.build(),HttpResponse.BodyHandlers.ofString());
+            assertEquals(expected,response.statusCode(),method+" "+path+" unexpected HTTP status");
+            if(expected!=200)return Map.of();
+            var envelope=json.readValue(response.body(),Map.class);assertEquals(1,envelope.get("protocolVersion"));assertEquals("E0",envelope.get("code"));
+            assertEquals(requestId,envelope.get("requestId"));return (Map<String,Object>)envelope.get("data");
+        }
+    }
     void schema(String resource)throws Exception {
         String ddl=new ClassPathResource(resource).getContentAsString(StandardCharsets.UTF_8);
         for(String sql:ddl.replaceAll("(?m)^--.*$", "").split(";"))if(!sql.isBlank())jdbc.execute(sql);
@@ -96,6 +131,7 @@ class ArchiveNativeHttpMySqlTest {
         schema("archive-maintenance/native-auth-fixture.sql");schema("db/economy-v0-skill-marketplace.sql");schema("db/agent-position-skills.sql");schema("db/archive-schema.sql");schema("db/archive-maintenance-jobs.sql");
         String authorization="rta1_"+HexFormat.of().formatHex(hash(UUID.randomUUID().toString()));String manifestHash="d".repeat(64);long now=System.currentTimeMillis();
         jdbc.update("INSERT INTO user_info VALUES(7,?,'ACTIVE',2)",OWNER);
+        jdbc.update("INSERT INTO user_info VALUES(8,'ordinary-owner','ACTIVE',2)");
         jdbc.update("INSERT INTO agent_persona_binding(id,jiacn,persona_code,agent_id,bound_at,status,tenant_id,client_id,create_time,update_time) VALUES(3,?,'archive-persona',?,?,1,?,?,?,?)",OWNER,AGENT,now,TENANT,CLIENT,now,now);
         jdbc.update("INSERT INTO agent_identity_registry(id,canonical_agent_id,canonical_type,lifecycle_status,owner_jiacn,binding_id,provisioned_at,activated_at,audit_reason,tenant_id,client_id,create_time,update_time) VALUES(2,?,'OPAQUE','ACTIVE',?,3,?,?,'ARCHIVE_ISOLATED_FIXTURE',?,?,?,?)",AGENT,OWNER,now,now,TENANT,CLIENT,now,now);
         jdbc.update("INSERT INTO agent_runtime_v1_installation(id,installation_id,canonical_agent_id,manifest_version,manifest_sha256,enrollment_secret_hash,enrollment_expires_at,enrollment_consumed_at,runtime_authorization_hash,runtime_authorization_issued_at,status,version,tenant_id,client_id,create_time,update_time) VALUES(1,?,?,'1',?,?,?,?,?,?,'ACTIVE',0,?,?,?,?)",INSTALLATION,AGENT,manifestHash,hash("unused"),now+86400000,now,hash(authorization),now,TENANT,CLIENT,now,now);
@@ -111,10 +147,17 @@ class ArchiveNativeHttpMySqlTest {
         generalVersion.setTenantId(TENANT);generalVersion.setClientId(CLIENT);generalVersion.setCreateTime(now);assertEquals(1,market.insertProductVersion(generalVersion));
         var positions=spring.getBean(PositionSkillService.class);var scope=new PositionAuthority.Scope(TENANT,CLIENT,OWNER);
         for(String p:List.of("MANAGE_POSITIONS","ARCHIVE_WRITE","ARCHIVE_PUBLISH"))jdbc.update("INSERT INTO agent_position_authority VALUES(?,?,?,?,?)",TENANT,CLIENT,OWNER,p,p.equals("MANAGE_POSITIONS")?"positions":"archive:public");
-        positions.defineSkill(scope,"skill",new Skill("archive-maintenance",SkillType.POSITION,"archive-v1"));
-        positions.defineSkill(scope,"general-skill",new Skill("archive-general",SkillType.GENERAL,"archive-general-v1"));
-        positions.configure(scope,"position",new Position("editor","Editor",2,"archive:public",true,List.of("archive-maintenance","archive-general"),0),0);
-        String appointment=positions.appoint(scope,"appoint","editor",AGENT).resultId();assertFalse(positions.read(scope).state().installations().values().iterator().next().usable());
+        String operatorToken=token(7,OWNER,2),ordinaryToken=token(8,"ordinary-owner",2);
+        operator("GET","/agent/positions/v1",null,null,null,401);
+        operator("GET","/agent/positions/v1",token(7,OWNER,1),null,null,401);
+        operator("GET","/internal/archive/v1/jobs",operatorToken,null,null,401);
+        var definition=Map.of("skillKey","archive-maintenance","type","POSITION","productVersionId","archive-v1");
+        operator("POST","/agent/positions/v1/skills",ordinaryToken,"forbidden",definition,403);
+        operator("POST","/agent/positions/v1/skills",operatorToken,"skill",definition,200);
+        operator("POST","/agent/positions/v1/skills",operatorToken,"general-skill",Map.of("skillKey","archive-general","type","GENERAL","productVersionId","archive-general-v1"),200);
+        operator("POST","/agent/positions/v1/definitions",operatorToken,"position",Map.of("positionId","editor","title","Editor","capacity",2,"resource","archive:public","allowPublish",true,"skillKeys",List.of("archive-maintenance","archive-general"),"expectedRevision","0"),200);
+        String appointment=(String)operator("POST","/agent/positions/v1/appointments",operatorToken,"appoint",Map.of("positionId","editor","agentId",AGENT),200).get("resultId");
+        assertFalse(positions.read(scope).state().installations().values().iterator().next().usable());
         String clientRoot=System.getenv("CYF_ARCHIVE_CLIENT_ROOT");assertNotNull(clientRoot);
         node=new ProcessBuilder("node",Path.of(clientRoot,"conf/codex-ws-agent/test/fixtures/archive-native-http.mjs").toString()).redirectError(root.resolve("node-private.log").toFile()).start();
         output=new BufferedReader(new InputStreamReader(node.getInputStream(),StandardCharsets.UTF_8));input=new BufferedWriter(new OutputStreamWriter(node.getOutputStream(),StandardCharsets.UTF_8));
@@ -132,7 +175,7 @@ class ArchiveNativeHttpMySqlTest {
         String sourceA="第一回 初见\n这是仓库外生成的测试文本："+UUID.randomUUID()+"。\n第二回 后续\n第二段。";
         String sourceB="# Opening\nExternal fixture "+UUID.randomUUID()+".\n# Ending\nA separate body.";
         Files.writeString(root.resolve("source-a.txt"),sourceA);Files.writeString(root.resolve("source-b.txt"),sourceB);
-        var draft=service.create(scope,"draft",new ArchiveMaintenanceService.Create(appointment,AGENT,"archive-maintenance","data-only-a","Book A","Fixture","source-a.txt","Self-authored",sourceA,ArchiveMaintenanceService.Mode.DRAFT_ONLY));
+        var draft=operator("POST","/archive/admin/v1/jobs",operatorToken,"draft",new ArchiveMaintenanceService.Create(appointment,AGENT,"archive-maintenance","data-only-a","Book A","Fixture","source-a.txt","Self-authored",sourceA,ArchiveMaintenanceService.Mode.DRAFT_ONLY),200);
         assertEquals(1,exchange(Map.of("op","RUN")).get("processed"));assertEquals("DRAFT",service.read(scope,(String)draft.get("jobId")).get("state"));assertTrue(reader.books().items().isEmpty());
         List<Map<String,Object>> published=new ArrayList<>();int n=0;
         for(String text:List.of(sourceA,sourceB)) {String work="data-only-"+(++n);var j=service.create(scope,"publish-"+n,new ArchiveMaintenanceService.Create(appointment,AGENT,"archive-maintenance",work,"Book "+n,"Fixture","external.txt","Self-authored",text,ArchiveMaintenanceService.Mode.AUTO));assertEquals(1,exchange(Map.of("op","RUN")).get("processed"));published.add(service.read(scope,(String)j.get("jobId")));assertEquals("PUBLISHED",published.getLast().get("state"));assertEquals(2,reader.catalog(work).data().activeEdition().chapters().size());}
@@ -140,6 +183,13 @@ class ArchiveNativeHttpMySqlTest {
         var healthy=service.create(scope,"healthy",new ArchiveMaintenanceService.Create(appointment,AGENT,"archive-maintenance","healthy-book","Healthy","Fixture","healthy.txt","Self-authored",sourceA,ArchiveMaintenanceService.Mode.DRAFT_ONLY));
         assertEquals(2,exchange(Map.of("op","RUN")).get("processed"));assertEquals("FAILED",service.read(scope,(String)broken.get("jobId")).get("state"));assertEquals("DRAFT",service.read(scope,(String)healthy.get("jobId")).get("state"));
         assertEquals(2,reader.books().items().size());assertEquals(List.of(401,401,401),exchange(Map.of("op","NEGATIVE","origin",origin)).get("statuses"));
+        String draftPath="/archive/admin/v1/jobs/"+draft.get("jobId");
+        operator("GET",draftPath,ordinaryToken,null,null,404);
+        jdbc.update("DELETE FROM agent_position_authority WHERE permission_key='ARCHIVE_PUBLISH'");
+        operator("POST",draftPath+"/publish",operatorToken,"manual-publish",Map.of(),403);
+        jdbc.update("INSERT INTO agent_position_authority VALUES(?,?,?,'ARCHIVE_PUBLISH','archive:public')",TENANT,CLIENT,OWNER);
+        assertEquals("PUBLISHED",operator("POST",draftPath+"/publish",operatorToken,"manual-publish",Map.of(),200).get("state"));
+        assertEquals(draft.get("jobId"),operator("GET","/archive/admin/v1/jobs/operations/request",operatorToken,"manual-publish",null,200).get("jobId"));
         var racing=new ArrayList<Map<String,Object>>();
         for(int r=0;r<2;r++)racing.add(service.create(scope,"cas-"+r,new ArchiveMaintenanceService.Create(appointment,AGENT,"archive-maintenance","native-cas","CAS","Fixture","cas.txt","Self-authored",sourceA+"\n"+r,ArchiveMaintenanceService.Mode.AUTO)));
         var independent=service.create(scope,"cas-independent",new ArchiveMaintenanceService.Create(appointment,AGENT,"archive-maintenance","native-independent","Independent","Fixture","independent.txt","Self-authored",sourceB,ArchiveMaintenanceService.Mode.AUTO));
@@ -154,7 +204,7 @@ class ArchiveNativeHttpMySqlTest {
         positions.configure(scope,"shared-position",new Position("reviewer","Reviewer",1,"archive:public",false,List.of("archive-maintenance"),0),0);
         String shared=positions.appoint(scope,"shared-appoint","reviewer",AGENT).resultId();assertEquals(0,exchange(Map.of("op","INSTALL")).get("processed"));
         var pending=service.create(scope,"pending",new ArchiveMaintenanceService.Create(appointment,AGENT,"archive-maintenance","revoked-book","Revoked","Fixture","external.txt","Self-authored",sourceA,ArchiveMaintenanceService.Mode.AUTO));
-        positions.resign(scope,"resign",appointment);assertEquals(0,exchange(Map.of("op","RUN")).get("processed"));assertEquals("WAITING",service.read(scope,(String)pending.get("jobId")).get("state"));
+        operator("POST","/agent/positions/v1/appointments/"+appointment+"/resign",operatorToken,"resign",Map.of(),200);assertEquals(0,exchange(Map.of("op","RUN")).get("processed"));assertEquals("WAITING",service.read(scope,(String)pending.get("jobId")).get("state"));
         assertEquals(0,exchange(Map.of("op","INSTALL")).get("processed"));assertTrue(Files.exists(root.resolve("codex-home/skills/archive-maintenance")));
         positions.resign(scope,"resign-shared",shared);
         assertEquals(1,exchange(Map.of("op","INSTALL")).get("processed"));assertFalse(Files.exists(root.resolve("codex-home/skills/archive-maintenance")));
@@ -183,8 +233,18 @@ class ArchiveNativeHttpMySqlTest {
     @EnableWebMvc
     @EnableWebSecurity
     @EnableTransactionManagement(proxyTargetClass = true)
-    @Import(AgentRuntimeSecurityConfiguration.class)
+    @Import({AgentRuntimeSecurityConfiguration.class,ResourceServerConfig.class})
     static class HttpConfiguration {
+        @Bean static org.springframework.beans.factory.config.BeanPostProcessor fixtureResourcePaths(){
+            return new org.springframework.beans.factory.config.BeanPostProcessor(){
+                public Object postProcessBeforeInitialization(Object bean,String name){
+                    if(name.equals("oauthResourceProperties"))new org.springframework.beans.DirectFieldAccessor(bean).setPropertyValue("uris",List.of("/agent/**","/archive/admin/**"));
+                    return bean;
+                }
+            };
+        }
+        @Bean PositionSkillController positionAdmin(PositionSkillService positions){return new PositionSkillController(positions);}
+        @Bean ArchiveMaintenanceController archiveAdmin(ArchiveMaintenanceService service){return new ArchiveMaintenanceController(service);}
         @Bean DataSource dataSource() { return source; }
         @Bean DataSourceTransactionManager transactionManager(DataSource source) { return new DataSourceTransactionManager(source); }
         @Bean SqlSessionFactory sqlSessionFactory(DataSource source) throws Exception {
