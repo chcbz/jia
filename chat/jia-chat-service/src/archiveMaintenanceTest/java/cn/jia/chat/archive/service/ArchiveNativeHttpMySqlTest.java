@@ -218,8 +218,8 @@ class ArchiveNativeHttpMySqlTest {
             return new AgentRuntimeAuthenticationService(rows, installations, registry, identity, accounts, gate);
         }
         @Bean AgentRuntimeV1Service runtime(AgentRuntimeV1InstallationDao installations, AgentIdentityService identity,
-                AgentIdentityRegistryDao registry, ObjectProvider<AgentCommandAckService> acks, AgentRuntimeAuthenticationService authentication) {
-            return new AgentRuntimeV1ServiceImpl(installations, identity, registry, acks, authentication);
+                AgentIdentityRegistryDao registry, ObjectProvider<AgentCommandAckService> acks, AgentRuntimeAuthenticationService authentication, ObjectProvider<SkillInstallAckService> skillAcks) {
+            return new AgentRuntimeV1ServiceImpl(installations, identity, registry, acks, authentication, skillAcks);
         }
         @Bean AgentRuntimeV1Controller controller(AgentRuntimeV1Service runtime) { return new AgentRuntimeV1Controller(runtime); }
         @Bean SensitiveResponseProperties sensitiveProperties() { return new SensitiveResponseProperties(); }
