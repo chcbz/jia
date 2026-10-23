@@ -465,8 +465,8 @@ tasks.register('nativeSkillResultRegression', Test) {
 
 // Position/archive production SQL against an explicitly owned isolated MySQL.
 def archiveMaintenanceSourceSet = sourceSets.create('archiveMaintenanceTest') {
-    java.srcDir 'src/archiveMaintenanceTest/java'
-    resources.srcDir 'src/archiveMaintenanceTest/resources'
+    java.setSrcDirs(['src/archiveMaintenanceTest/java'])
+    resources.setSrcDirs(['src/archiveMaintenanceTest/resources'])
     compileClasspath += sourceSets.main.output
     runtimeClasspath += output + compileClasspath
 }
