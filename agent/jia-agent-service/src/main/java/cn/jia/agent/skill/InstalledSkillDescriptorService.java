@@ -37,7 +37,7 @@ public final class InstalledSkillDescriptorService implements InstalledSkillDesc
         Objects.requireNonNull(scope);
         try {
             if(!scope.agentId().equals(identities.requireCanonicalAgentIdInScope(scope.tenantId(),scope.clientId(),
-                    scope.ownerJiacn(),scope.agentId()))) throw new SourceUnavailable();
+                    scope.ownerJiacn(),scope.agentId()))) throw new SourceUnavailable(SourceUnavailable.Reason.FORBIDDEN,null);
             var rows=Objects.requireNonNull(market.selectEntitlementsByAgent(scope.tenantId(),scope.clientId(),scope.agentId())).stream()
                     .filter(e->managed==null||managed.findAuthorization(scope.tenantId(),scope.clientId(),e.getInstallationId())==null).toList();
             var result=new ArrayList<Descriptor>();
@@ -75,6 +75,11 @@ public final class InstalledSkillDescriptorService implements InstalledSkillDesc
             }
             return new Snapshot(result);
         } catch(SourceUnavailable failure) { throw failure; }
+        catch(cn.jia.agent.service.impl.AgentServiceImpl.AgentBizException failure) {
+            var reason=cn.jia.agent.common.AgentErrorConstants.AGENT_FORBIDDEN.equals(failure.getCode())
+                    ? SourceUnavailable.Reason.FORBIDDEN : SourceUnavailable.Reason.UNAVAILABLE;
+            throw new SourceUnavailable(reason,failure);
+        }
         catch(RuntimeException failure) { throw new SourceUnavailable(failure); }
     }
     private Descriptor descriptor(SkillCapabilityLookup.Scope s,SkillEntitlementEntity e) {

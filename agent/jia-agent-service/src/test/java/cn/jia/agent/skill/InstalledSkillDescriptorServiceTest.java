@@ -106,4 +106,20 @@ class InstalledSkillDescriptorServiceTest {
         when(identities.requireCanonicalAgentIdInScope(anyString(),anyString(),anyString(),anyString())).thenReturn("foreign");
         assertThrows(InstalledSkillDescriptorLookup.SourceUnavailable.class,()->service.read(scope));verifyNoInteractions(market,app);
     }
+    @Test void revokedIdentityIsClassifiedWithoutSwallowingDependencyFailures() {
+        var denied=new cn.jia.agent.service.impl.AgentServiceImpl.AgentBizException(
+                cn.jia.agent.common.AgentErrorConstants.AGENT_FORBIDDEN,"not in scope");
+        when(identities.requireCanonicalAgentIdInScope("0","client","owner","agent")).thenThrow(denied);
+        var rejected=assertThrows(InstalledSkillDescriptorLookup.SourceUnavailable.class,()->service.read(scope));
+        assertEquals(InstalledSkillDescriptorLookup.SourceUnavailable.Reason.FORBIDDEN,rejected.reason());
+        assertSame(denied,rejected.getCause());verifyNoInteractions(market,app,packages);
+    }
+    @Test void databaseFailureIsNotMisclassifiedAsAuthorizationRejection() {
+        var failure=new org.springframework.dao.DataAccessResourceFailureException("unavailable");
+        when(identities.requireCanonicalAgentIdInScope("0","client","owner","agent")).thenThrow(failure);
+        var unavailable=assertThrows(InstalledSkillDescriptorLookup.SourceUnavailable.class,()->service.read(scope));
+        assertEquals(InstalledSkillDescriptorLookup.SourceUnavailable.Reason.UNAVAILABLE,unavailable.reason());
+        assertSame(failure,unavailable.getCause());verifyNoInteractions(market,app,packages);
+    }
+
 }
