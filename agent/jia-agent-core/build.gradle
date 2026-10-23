@@ -2,6 +2,8 @@ dependencies {
     api project(':common:jia-common-core')
     api(libs.swagger.annotations)
     api(libs.mybatis.plus.annotation)
+    testImplementation libs.junit.jupiter
+    testRuntimeOnly libs.junit.platform.launcher
     implementation libs.jackson.databind
 }
 

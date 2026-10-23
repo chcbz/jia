@@ -910,3 +910,19 @@ def verifyPdfProcessingBoundary = tasks.register('verifyPdfProcessingBoundary') 
 tasks.withType(org.gradle.api.tasks.testing.Test).configureEach {
     dependsOn verifyPdfProcessingBoundary, ':starter:verifyPdfProcessingBoundary'
 }
+
+// Explicit real-MySQL position lifecycle slice; never silently falls back to an in-memory database.
+def positionSkillsTestSourceSet = sourceSets.create('positionSkillsTest') {
+    java.srcDir 'src/positionSkillsTest/java'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(positionSkillsTestSourceSet.implementationConfigurationName) { extendsFrom configurations.testImplementation }
+configurations.named(positionSkillsTestSourceSet.runtimeOnlyConfigurationName) { extendsFrom configurations.testRuntimeOnly }
+tasks.register('positionSkillsTest', Test) {
+    group = 'verification'
+    dependsOn tasks.named(positionSkillsTestSourceSet.classesTaskName)
+    testClassesDirs = positionSkillsTestSourceSet.output.classesDirs
+    classpath = positionSkillsTestSourceSet.runtimeClasspath
+    useJUnitPlatform()
+}
