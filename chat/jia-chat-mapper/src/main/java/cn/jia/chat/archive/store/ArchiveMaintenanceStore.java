@@ -3,12 +3,10 @@ package cn.jia.chat.archive.store;
 import cn.jia.chat.archive.model.ArchiveOwnerScope;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
-import org.springframework.stereotype.Repository;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import jakarta.inject.Named;
 import java.util.List;
 
-@Repository
-@ConditionalOnProperty(prefix="agent.position-skills",name="enabled",havingValue="true")
+@Named
 public class ArchiveMaintenanceStore {
     public record Job(String id,String operationKey,String requestDigest,String agentId,String state,
             String specification,String resultManifest,String resultDigest) { }

@@ -2,13 +2,11 @@ package cn.jia.agent.position;
 
 import cn.jia.agent.service.PositionAuthority.Scope;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.stereotype.Repository;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import jakarta.inject.Named;
 import java.util.*;
 
 /** Persistence only. Scope root serializes grants, revocation, defaults and business commits across API instances. */
-@Repository
-@ConditionalOnProperty(prefix="agent.position-skills", name="enabled", havingValue="true")
+@Named
 public class PositionSkillStore {
     public record Stored(long revision, String json) { }
     public record Operation(String id, String digest, String resultId) { }
