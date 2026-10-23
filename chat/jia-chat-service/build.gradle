@@ -498,6 +498,8 @@ tasks.register('archiveMaintenanceTest', Test) {
 def archiveReaderRegressionSourceSet = sourceSets.create('archiveReaderRegression') {
     java.setSrcDirs(['src/test/java'])
     java.include 'cn/jia/chat/archive/content/ArchiveFixtureLoader.java'
+    java.include 'cn/jia/chat/archive/content/ArchiveManifestBundle.java'
+    java.include 'cn/jia/chat/archive/content/ArchiveGoldenSummary.java'
     java.include 'cn/jia/chat/archive/content/ArchiveGenericManifestTest.java'
     java.include 'cn/jia/chat/archive/content/ArchiveManifestLoaderTest.java'
     java.include 'cn/jia/chat/archive/service/ArchiveReaderServiceTest.java'
