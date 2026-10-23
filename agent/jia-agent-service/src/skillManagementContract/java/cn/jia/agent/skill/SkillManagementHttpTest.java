@@ -93,7 +93,8 @@ class SkillManagementHttpTest {
     @Test void allContractBusinessErrorsKeepTheirActualHttpStatus() throws Exception {
         var cases=SkillManagementCodecTest.JSON.readTree(SkillManagementCodecTest.resource("management-contract-v1.behavior.json")).get("errorStatus");
         for(var fields=cases.fields();fields.hasNext();) {
-            var entry=fields.next();when(service.skills(any(),anyString(),anyBoolean())).thenThrow(new SkillMarketplaceException(entry.getValue().asInt(),entry.getKey()));
+            var entry=fields.next();doThrow(new SkillMarketplaceException(entry.getValue().asInt(),entry.getKey()))
+                .when(service).skills(any(),anyString(),anyBoolean());
             mvc.perform(get("/agent/agt_demo/skills").principal(auth)).andExpect(status().is(entry.getValue().asInt())).andExpect(jsonPath("$.code").value(entry.getKey()))
                 .andExpect(header().string("Cache-Control","private, no-store"));
         }
