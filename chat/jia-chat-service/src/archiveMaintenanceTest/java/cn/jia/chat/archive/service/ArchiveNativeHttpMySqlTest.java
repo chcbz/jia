@@ -69,7 +69,7 @@ class ArchiveNativeHttpMySqlTest {
         input.write(json.writeValueAsString(request));input.newLine();input.flush();
         var future=CompletableFuture.supplyAsync(()->{try{return output.readLine();}catch(IOException e){throw new UncheckedIOException(e);}});
         String line=future.get(40,TimeUnit.SECONDS);assertNotNull(line,"Node fixture exited; inspect private stderr");
-        Map<String,Object> result=json.readValue(line,Map.class);assertNotEquals("FAILED",result.get("op"),"native fixture rejected: "+result.get("code"));return result;
+        Map<String,Object> result=json.readValue(line,Map.class);assertNotEquals("FAILED",result.get("op"),"native fixture rejected: "+result.get("code")+" / HTTP "+result.get("status"));return result;
     }
     static byte[] hash(String value)throws Exception{return hash(value.getBytes(StandardCharsets.UTF_8));}
     static byte[] hash(byte[] value)throws Exception{return MessageDigest.getInstance("SHA-256").digest(value);}

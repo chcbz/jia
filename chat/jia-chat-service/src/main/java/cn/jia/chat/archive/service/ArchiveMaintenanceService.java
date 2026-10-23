@@ -73,13 +73,17 @@ public class ArchiveMaintenanceService {
     public Map<String,Object> read(Scope scope,String id){return view(requireJob(scope,id));}
     public String draft(Scope scope,String id){var j=requireJob(scope,id);require(j.resultManifest()!=null,409,"ARCHIVE_DRAFT_NOT_READY");return j.resultManifest();}
     public List<Map<String,Object>> commands(Proof proof){
-        Scope scope=scope(proof);List<Map<String,Object>> out=new ArrayList<>();
-        for(var job:jobs.list(owner(scope))){
-            if(!job.agentId().equals(proof.scope().agentId()) || !"WAITING".equals(job.state()))continue;
-            try { out.add(authorized(proof,job,()->{var row=new LinkedHashMap<>(view(job));var s=decode(job.specification());
-                row.put("installationId",s.installationId());row.put("packageDigest",s.packageDigest());row.put("manifestSha256",s.manifestSha256());return row;})); }
-            catch(PositionSkillException denied){if(denied.status()!=403 && denied.status()!=409)throw denied;}
-        }return out;
+        return tx.required(()->{
+            Scope scope=scope(proof);List<Map<String,Object>> out=new ArrayList<>();
+            for(var job:jobs.list(owner(scope))){
+                if(!job.agentId().equals(proof.scope().agentId()) || !"WAITING".equals(job.state()))continue;
+                var spec=decode(job.specification());
+                if(!positions.authorityAvailable(scope,spec.grant()) || !installed(proof,job,spec))continue;
+                var row=new LinkedHashMap<>(view(job));row.put("installationId",spec.installationId());
+                row.put("packageDigest",spec.packageDigest());row.put("manifestSha256",spec.manifestSha256());out.add(row);
+            }
+            return out;
+        });
     }
     public Map<String,Object> source(Proof proof,String id){var job=requireJob(scope(proof),id);return authorized(proof,job,()->{
         var s=decode(job.specification());var r=s.request();
@@ -161,13 +165,16 @@ public class ArchiveMaintenanceService {
     private <T>T authorized(Proof proof,ArchiveMaintenanceStore.Job job,java.util.function.Supplier<T> action){
         var s=decode(job.specification());require(job.agentId().equals(proof.scope().agentId()),403,"ARCHIVE_AGENT_FORBIDDEN");
         return positions.withAuthority(scope(proof),s.grant(),()->{
-            var state=positions.currentState(scope(proof));
-            require(state.installations().values().stream().anyMatch(i->i.usable() && i.agentId().equals(job.agentId())
-                    && i.bindingId()==s.grant().bindingId() && PositionSkillRuntimeService.physical(i).equals(s.installationId())
-                    && Objects.equals(i.runtimeInstallationId(),proof.installationId()) && Objects.equals(i.runtimeHostId(),proof.hostId())
-                    && Objects.equals(i.packageDigest(),s.packageDigest()) && Objects.equals(i.manifestSha256(),s.manifestSha256())),403,"ARCHIVE_SKILL_REVOKED");
+            require(installed(proof,job,s),403,"ARCHIVE_SKILL_REVOKED");
             return action.get();
         });
+    }
+    private boolean installed(Proof proof,ArchiveMaintenanceStore.Job job,Specification s){
+        var state=positions.currentState(scope(proof));
+        return state.installations().values().stream().anyMatch(i->i.usable() && i.agentId().equals(job.agentId())
+                    && i.bindingId()==s.grant().bindingId() && PositionSkillRuntimeService.physical(i).equals(s.installationId())
+                    && Objects.equals(i.runtimeInstallationId(),proof.installationId()) && Objects.equals(i.runtimeHostId(),proof.hostId())
+                    && Objects.equals(i.packageDigest(),s.packageDigest()) && Objects.equals(i.manifestSha256(),s.manifestSha256()));
     }
     private ArchiveMaintenanceStore.Job requireJob(Scope s,String id){PositionSkillPolicy.key(id);var job=jobs.find(owner(s),id,false);require(job!=null,404,"ARCHIVE_JOB_NOT_FOUND");return job;}
     private Map<String,Object> view(ArchiveMaintenanceStore.Job job){

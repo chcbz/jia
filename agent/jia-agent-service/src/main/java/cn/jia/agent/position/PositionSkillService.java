@@ -88,6 +88,18 @@ public class PositionSkillService implements PositionAuthority {
     @Override public <T>T withAuthority(Scope scope,Grant grant,Supplier<T> commit) {
         scope(scope); require(grant!=null,403,"POSITION_AUTHORITY_REQUIRED");
         return tx.execute(status->{
+            validateAuthority(scope,grant);
+            return commit.get(); // The callback and revoke share the same REQUIRED DB transaction/root lock.
+        });
+    }
+    /** Read-only omission check inside the caller's transaction. A denied pending job must not mark
+     * the native poll transaction rollback-only; callback mutations still use withAuthority. */
+    public boolean authorityAvailable(Scope scope,Grant grant){
+        require(org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive(),503,"POSITION_TRANSACTION_REQUIRED");
+        try{scope(scope);require(grant!=null,403,"POSITION_AUTHORITY_REQUIRED");validateAuthority(scope,grant);return true;}
+        catch(PositionSkillException denied){if(denied.status()==403 || denied.status()==409)return false;throw denied;}
+    }
+    private void validateAuthority(Scope scope,Grant grant){
             var row=store.lock(scope,encode(PositionSkillState.empty()));
             var state=decode(row.json());
             new PositionSkillPolicy(state,PositionSkillService::id).authorize(grant.appointmentId(),grant.appointmentRevision(),
@@ -97,8 +109,6 @@ public class PositionSkillService implements PositionAuthority {
             var identity=identities.requireRegistrationIdentityInScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),grant.agentId());
             require(grant.agentId().equals(identity.getCanonicalAgentId()) && Objects.equals(identity.getBindingId(),grant.bindingId()),
                     403,"POSITION_BINDING_CHANGED");
-            return commit.get(); // The callback and revoke share the same REQUIRED DB transaction/root lock.
-        });
     }
     /** Called only inside an authenticated native fence; no user-provided scope or binding is accepted. */
     public <T>T runtimeState(Scope scope,String agentId,Function<PositionSkillPolicy,T> operation) {
