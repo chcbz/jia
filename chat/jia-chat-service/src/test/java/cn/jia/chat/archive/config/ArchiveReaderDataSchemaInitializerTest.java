@@ -37,6 +37,23 @@ class ArchiveReaderDataSchemaInitializerTest {
     }
 
     @Test
+    void progressTenantCheckKeepsDeployedNameAndRejectsRenaming() {
+        var expected = ArchiveReaderDataSchemaCatalog.expectedSnapshot();
+        var progress = expected.tables().get("archive_reader_progress");
+        var tenantCheck = progress.checks().get("chk_archive_progress_single_tenant");
+        assertNotNull(tenantCheck);
+        assertEquals("tenant_id = '0'", tenantCheck.clause());
+        assertTrue(tenantCheck.enforced());
+        var renamed = new LinkedHashMap<>(progress.checks());
+        renamed.remove("chk_archive_progress_single_tenant");
+        renamed.put("chk_archive_reader_progress_single_tenant", tenantCheck);
+        var tables = new LinkedHashMap<>(expected.tables());
+        tables.put("archive_reader_progress", progress.withChecks(renamed));
+        assertThrows(IllegalStateException.class,
+                () -> ArchiveReaderDataSchemaCatalog.validate(new ArchiveSchemaSnapshot(tables)));
+    }
+
+    @Test
     void exactSnapshotPassesAndEveryReliedUponMetadataClassFailsClosed() {
         ArchiveSchemaSnapshot expected = ArchiveReaderDataSchemaCatalog.expectedSnapshot();
         assertDoesNotThrow(() -> ArchiveReaderDataSchemaCatalog.validate(expected));
