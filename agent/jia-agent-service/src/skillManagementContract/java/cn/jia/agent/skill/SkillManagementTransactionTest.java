@@ -229,6 +229,35 @@ public class SkillManagementTransactionTest {
         assertEquals(2,service.descriptors(scope()).size()); // old exact executable remains recoverable
         assertEquals("new",service.admit(scope(),"pdf-export",newest,()->"new"));assertEquals(1,count("economy_skill_order"));assertEquals(95_000_000L,wallet());
     }
+    @Test void explicitPaidUpgradeReservesAndCapturesFullApprovedTargetPriceOnlyOnce() throws Exception {
+        publishExecutable("1.0.0",1);var first=packageChange("INSTALL",null,"0","spv_pdf_1");finishInstall(first);first=current(first);
+        publishExecutable("2.0.0",2);
+        jdbc.update("INSERT INTO economy_skill_upgrade_policy VALUES (?,?,?,?,?)","0",ACTOR.clientId(),"spv_pdf_1","spv_pdf_2","PAID");
+        var upgrade=packageChange("UPGRADE",text(object(first.get("target")),"skillInstallationId"),text(first,"skillRevision"),"spv_pdf_2");
+        assertNotNull(upgrade.get("orderId"));assertNotEquals(first.get("orderId"),upgrade.get("orderId"));
+        assertEquals("5000000",object(upgrade.get("price")).get("amountMinor"));assertEquals("HELD",upgrade.get("fundingStatus"));
+        assertEquals(90_000_000L,wallet());report(upgrade,"PREPARED",null);upgrade=current(upgrade);
+        var applied=result(upgrade,evidence(upgrade,"APPLIED",null));service.result(proof(),applied);service.result(proof(),applied);
+        catalog(current(upgrade));assertEquals("SUCCEEDED",current(upgrade).get("status"));assertEquals("CAPTURED",current(upgrade).get("fundingStatus"));
+        assertEquals(2,count("economy_skill_order"));assertEquals(90_000_000L,wallet());
+    }
+    @Test void notAllowedUpgradeCannotCreateQuoteOrderOrInstallation() throws Exception {
+        publishExecutable("1.0.0",1);var first=packageChange("INSTALL",null,"0","spv_pdf_1");finishInstall(first);first=current(first);
+        publishExecutable("2.0.0",2);jdbc.update("INSERT INTO economy_skill_upgrade_policy VALUES (?,?,?,?,?)","0",ACTOR.clientId(),"spv_pdf_1","spv_pdf_2","NOT_ALLOWED");
+        String source=text(object(first.get("target")),"skillInstallationId"),revision=text(first,"skillRevision");
+        assertEquals("SKILL_UPGRADE_NOT_ALLOWED",assertThrows(SkillMarketplaceException.class,()->packageChange("UPGRADE",source,revision,"spv_pdf_2")).code());
+        assertEquals(1,count("economy_skill_order"));assertEquals(1,count("economy_skill_installation"));assertEquals(1,count("economy_skill_management_quote"));
+        assertEquals(95_000_000L,wallet());assertEquals("still-active",service.admit(scope(),"pdf-export",source,()->"still-active"));
+    }
+    @Test void authorizedLateOldAttemptIsAuditedWithoutChangingNewAttemptOrRefunding() {
+        var first=install();var oldResult=result(first,evidence(first,"FAILED","DEPENDENCY_MISSING"));
+        service.result(proof(),oldResult);var failed=current(first);
+        var retry=service.retry(ACTOR,AGENT,text(failed,"skillChangeId"),"retry-late","retry",map("expectedChangeRevision",failed.get("changeRevision")));
+        var late=new LinkedHashMap<>(oldResult);late.put("messageId","late-old-attempt");
+        var receipt=service.result(proof(),late);assertEquals("IGNORED_STALE",object(receipt.get("data")).get("receiptStatus"));
+        assertEquals(retry,current(retry));assertEquals(70_000_000L,wallet());assertEquals(1,count("economy_skill_order"));
+        assertEquals(2,count("economy_skill_installation"));
+    }
     @Test void disableClosesApiAdmissionImmediatelyAndEnableRetryRetainsOriginalInstallation() throws Exception {
         publishExecutable("1.0.0",1);var first=packageChange("INSTALL",null,"0","spv_pdf_1");finishInstall(first);first=current(first);
         String installation=text(object(first.get("target")),"skillInstallationId");
@@ -281,6 +310,9 @@ public class SkillManagementTransactionTest {
         c=current(c);assertEquals("FAILED_FINAL",c.get("status"));assertEquals("REFUNDED",c.get("fundingStatus"));assertEquals(100_000_000L,wallet());
         var action=map("expectedChangeRevision",c.get("changeRevision"));String id=text(c,"skillChangeId");
         assertThrows(SkillMarketplaceException.class,()->service.retry(ACTOR,AGENT,id,"retry","request",action));
+        var list=service.skills(ACTOR,AGENT,false);
+        var row=((List<?>)list.get("items")).stream().map(SkillManagementCodec::object).filter(v->"repo-test".equals(v.get("skillKey"))).findFirst().orElseThrow();
+        assertTrue(((List<?>)row.get("allowedActions")).contains("INSTALL")); // confirmed failed managed facts are not unknown legacy evidence
     }
     @Test void outboxFailureRollsBackMoneyOrderInstallationAndIdempotencyAsOneTransaction() {
         var data=quoteData();var quote=service.quote(ACTOR,"quote",data,false);

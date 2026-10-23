@@ -1,6 +1,7 @@
 package cn.jia.agent.skill;
 
 import cn.jia.agent.api.SkillMarketplaceController;
+import cn.jia.agent.api.SkillPackageController;
 import cn.jia.core.config.*;
 import cn.jia.core.filter.RequestIdFilter;
 import org.junit.jupiter.api.*;
@@ -30,7 +31,7 @@ class SkillManagementHttpTest {
         var controller=new SkillMarketplaceController(legacy);controller.setManagement(service);
         List<HttpMessageConverter<?>> converters=new ArrayList<>();converters.add(new ByteArrayHttpMessageConverter());converters.add(new JacksonJsonHttpMessageConverter());
         new ApiEnvelopeJsonConfig().extendMessageConverters(converters);
-        mvc=MockMvcBuilders.standaloneSetup(controller).setControllerAdvice(new ApiEnvelopeAdvice(),new ApiRequestEnvelopeAdvice(),new ExceptionHandlerAdvice())
+        mvc=MockMvcBuilders.standaloneSetup(controller,new SkillPackageController(service)).setControllerAdvice(new ApiEnvelopeAdvice(),new ApiRequestEnvelopeAdvice(),new ExceptionHandlerAdvice())
             .setMessageConverters(converters.toArray(HttpMessageConverter[]::new)).addFilters(new RequestIdFilter()).build();
         auth=new JwtAuthenticationToken(Jwt.withTokenValue("synthetic").header("alg","none").subject("buyer").claim("client_id","sm-client").claim("jiacn","owner").build(),List.of());
     }
@@ -74,6 +75,12 @@ class SkillManagementHttpTest {
         verifyNoInteractions(service,legacy);
         when(legacy.order(any(),eq("other-order"))).thenThrow(new SkillMarketplaceException(403,"AGENT_FORBIDDEN"));
         mvc.perform(get("/agent/skill-orders/other-order").principal(auth)).andExpect(status().isForbidden());
+    }
+    @Test void packageRequiresTrustedRuntimeProofNotAnOrdinaryUserJwt() throws Exception {
+        mvc.perform(get("/internal/agent/skill-installations/si_demo/package").principal(auth))
+            .andExpect(status().isUnauthorized()).andExpect(jsonPath("$.code").value("UNAUTHENTICATED"))
+            .andExpect(header().string("Cache-Control","private, no-store"));
+        verifyNoInteractions(service);
     }
     @Test void malformedOriginalJsonNeverReachesApplication() throws Exception {
         String good=json(sample("QuoteRequest"));

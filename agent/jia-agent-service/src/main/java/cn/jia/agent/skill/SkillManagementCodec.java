@@ -64,7 +64,12 @@ public final class SkillManagementCodec {
     public static void validate(String definition,Object value) {
         var node=value instanceof JsonNode n?n:JSON.valueToTree(value);
         var schema=DEFINITIONS.computeIfAbsent(definition,name->{
-            var root=((ObjectNode)SCHEMA).deepCopy();root.put("$ref","#/definitions/"+name);
+            var root=((ObjectNode)SCHEMA).deepCopy();
+            // Each wrapper selects a different root definition. Registry caches are keyed by
+            // canonical schema URI, so sharing the frozen corpus $id would alias these roots.
+            // The checked-in corpus itself is never changed.
+            root.put("$id",SCHEMA.path("$id").asText()+"?definition="+name);
+            root.put("$ref","#/definitions/"+name);
             return REGISTRY.getSchema(root.toString(),InputFormat.JSON);
         });
         require(schema.validate(node.toString(),InputFormat.JSON).isEmpty(),400,"BAD_REQUEST");

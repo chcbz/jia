@@ -123,6 +123,8 @@ public final class SkillMarketplaceController {
             }
         } else if(error instanceof org.springframework.dao.DataAccessResourceFailureException || error instanceof org.springframework.transaction.CannotCreateTransactionException) {
             status=503;code="SKILL_STATE_UNAVAILABLE";
+        } else if(error instanceof IllegalArgumentException && "AGENT_RUNTIME_UNAUTHENTICATED".equals(error.getMessage())) {
+            status=401;code="UNAUTHENTICATED";
         } else if(error instanceof IllegalArgumentException || error instanceof org.springframework.http.converter.HttpMessageNotReadableException) {
             status=400;code="BAD_REQUEST";
         }

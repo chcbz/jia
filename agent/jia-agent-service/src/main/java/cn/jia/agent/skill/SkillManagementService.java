@@ -434,7 +434,8 @@ public final class SkillManagementService {
                 var runtime=runtime(a,agent,s,auth,catalog,connected);
                 var allowed=new ArrayList<String>(List.of("VIEW"));var denied=new ArrayList<Map<String,Object>>();
                 boolean pending=s!=null&&s.getPendingChangeId()!=null;String blocked=pending?"SKILL_CHANGE_PENDING":null;
-                boolean historical=auth==null&&market.selectEntitlementsByAgent(a.tenantId(),a.clientId(),agent).stream().anyMatch(e->skill.equals(e.getSkillKey()));
+                boolean historical=auth==null&&market.selectEntitlementsByAgent(a.tenantId(),a.clientId(),agent).stream()
+                        .anyMatch(e->skill.equals(e.getSkillKey())&&db.findAuthorization(a.tenantId(),a.clientId(),e.getInstallationId())==null);
                 if(auth==null) {
                     if(candidate!=null&&mapped&&!historical&&blocked==null&&(admin||"NONE".equals(candidate.version().getDeploymentRestriction())))allowed.add("INSTALL");
                     else denied.add(map("action","INSTALL","reasonCode",blocked!=null?blocked:!mapped?"RUNTIME_MAPPING_REQUIRED":historical?"INTEGRITY_UNPROVEN":"PUBLICATION_UNAVAILABLE"));

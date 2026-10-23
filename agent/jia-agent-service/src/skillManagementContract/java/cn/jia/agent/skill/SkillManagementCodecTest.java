@@ -31,6 +31,15 @@ class SkillManagementCodecTest {
             else assertThrows(SkillMarketplaceException.class,()->SkillManagementCodec.read(raw,definition),name);
         }
     }
+    @Test void definitionCachesNeverReuseAnotherDefinitionRoot() {
+        // Interleave incompatible roots repeatedly, after other tests may have warmed the registry.
+        for(int i=0;i<3;i++) {
+            assertDoesNotThrow(()->SkillManagementCodec.validate("Id","a-resource"));
+            assertDoesNotThrow(()->SkillManagementCodec.validate("Money",SkillManagementCodec.map("amountMinor","0","currency","SILVER")));
+            assertThrows(SkillMarketplaceException.class,()->SkillManagementCodec.validate("Money","a-resource"));
+            assertThrows(SkillMarketplaceException.class,()->SkillManagementCodec.validate("Id",SkillManagementCodec.map("amountMinor","0","currency","SILVER")));
+        }
+    }
     @Test void originalIllegalTokensCannotBeNormalizedAway() throws Exception {
         for(var c:examples().get("rawParserCases")) {
             var e=assertThrows(SkillMarketplaceException.class,()->SkillManagementCodec.read(c.get("raw").asText().getBytes(StandardCharsets.UTF_8),"Result"),c.get("name").asText());

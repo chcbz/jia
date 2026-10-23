@@ -1,6 +1,18 @@
 package cn.jia.chat.handler;
 
 import cn.jia.agent.skill.SkillManagementTransactionTest;
+import cn.jia.agent.api.SkillMarketplaceController;
+import cn.jia.agent.skill.SkillMarketplaceService;
+import cn.jia.core.config.*;
+import cn.jia.core.filter.RequestIdFilter;
+import org.springframework.http.MediaType;
+import org.springframework.http.converter.*;
+import org.springframework.http.converter.json.JacksonJsonHttpMessageConverter;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 import cn.jia.agent.security.*;
 import cn.jia.agent.service.*;
 import cn.jia.agent.entity.*;
@@ -48,12 +60,37 @@ public class SkillManagementWireMySqlTest extends SkillManagementTransactionTest
             "name","SM fixture","durableStateHealthy",true,"readyCommandTypes",List.of());if(report!=null)data.put("skillExecution",report);
         handler.accept(session,map("protocolVersion",1,"requestId","req-register","messageType","agent.register","messageId","reg-sm","data",data));
     }
+    Map<String,Object> installOverHttp() throws Exception {
+        // MockMvc substitutes servlet transport only; the management service and all SQL,
+        // posting, outbox and result consumers are the real fixture objects, not mocks.
+        var retired=mock(SkillMarketplaceService.class);
+        var controller=new SkillMarketplaceController(retired);controller.setManagement(service);
+        List<HttpMessageConverter<?>> converters=new ArrayList<>();converters.add(new ByteArrayHttpMessageConverter());converters.add(new JacksonJsonHttpMessageConverter());
+        new ApiEnvelopeJsonConfig().extendMessageConverters(converters);
+        var http=MockMvcBuilders.standaloneSetup(controller)
+            .setControllerAdvice(new ApiEnvelopeAdvice(),new ApiRequestEnvelopeAdvice(),new ExceptionHandlerAdvice())
+            .setMessageConverters(converters.toArray(HttpMessageConverter[]::new)).addFilters(new RequestIdFilter()).build();
+        var user=new JwtAuthenticationToken(Jwt.withTokenValue("synthetic").header("alg","none").subject(ACTOR.actorId())
+            .claim("client_id",ACTOR.clientId()).claim("jiacn",ACTOR.ownerJiacn()).build(),List.of());
+        var request=quoteData();
+        var quote=http.perform(post("/agent/skill-orders/quotes").principal(user).contentType(MediaType.APPLICATION_JSON)
+            .header("X-Request-Id","http-quote").header("Idempotency-Key","http-quote-key")
+            .content(bytes(map("protocolVersion",1,"requestId","http-quote","data",request))))
+            .andExpect(status().isOk()).andExpect(header().string("X-Request-Id","http-quote")).andReturn();
+        var q=object(read(quote.getResponse().getContentAsByteArray(),"QuoteResponse").get("data"));
+        var accepted=http.perform(post("/agent/"+AGENT+"/skill-changes").principal(user).contentType(MediaType.APPLICATION_JSON)
+            .header("X-Request-Id","http-create").header("Idempotency-Key","http-create-key")
+            .content(bytes(map("protocolVersion",1,"requestId","http-create","data",creation(q,request)))))
+            .andExpect(status().isAccepted()).andExpect(header().string("Cache-Control","private, no-store")).andReturn();
+        verifyNoInteractions(retired);
+        return object(read(accepted.getResponse().getContentAsByteArray(),"ChangeResponse").get("data"));
+    }
     @Test void firstInstallResultsAndRegistrationDriveRealCommittedClosedLoop() throws Exception {
         var handler=wire();var registry=new SkillExecutionSessionRegistry();handler.setSkillExecutionSessions(registry);
         when(capabilities.lookup(any(),any())).thenAnswer(call->registry.lookup(call.getArgument(0),call.getArgument(1)));
         var frames=new ArrayList<String>();var socket=socket(frames);register(handler,socket,null);
         assertTrue(frames.stream().anyMatch(f->f.contains("agent.registered")),frames.toString());
-        var c=install();recovery.recover();verify(sessions,atLeastOnce()).dispatch(anyString(),anyString(),anyString(),any(),any());
+        var c=installOverHttp();recovery.recover();verify(sessions,atLeastOnce()).dispatch(anyString(),anyString(),anyString(),any(),any());
         handler.accept(socket,result(c,evidence(c,"PREPARED",null)));c=current(c);assertEquals("ACTIVATING",c.get("status"));
         assertTrue(frames.stream().anyMatch(f->f.contains("work.result.receipt")&&f.contains("ACCEPTED")),frames.toString());
         var applied=result(c,evidence(c,"APPLIED",null));handler.accept(socket,applied);c=current(c);assertEquals("VERIFYING",c.get("status"));
