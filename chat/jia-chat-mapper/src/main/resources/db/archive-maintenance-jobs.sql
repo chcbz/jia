@@ -1,5 +1,6 @@
+-- Fresh position-skill schema; deliberately distinct from preserved D2 archive_maintenance_job.
 -- Controlled migration only. No startup DDL, content import or automatic privilege grant.
-CREATE TABLE IF NOT EXISTS archive_maintenance_job (
+CREATE TABLE IF NOT EXISTS archive_skill_maintenance_job (
  tenant_id VARCHAR(50) COLLATE utf8mb4_bin NOT NULL,
  client_id VARCHAR(50) COLLATE utf8mb4_bin NOT NULL,
  owner_jiacn VARCHAR(50) COLLATE utf8mb4_bin NOT NULL,
@@ -22,7 +23,7 @@ CREATE TABLE IF NOT EXISTS archive_maintenance_job (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
 
 -- Explicit operator publication receipt, committed atomically with the edition and active pointer.
-CREATE TABLE IF NOT EXISTS archive_maintenance_action (
+CREATE TABLE IF NOT EXISTS archive_skill_maintenance_action (
  tenant_id VARCHAR(50) COLLATE utf8mb4_bin NOT NULL,
  client_id VARCHAR(50) COLLATE utf8mb4_bin NOT NULL,
  owner_jiacn VARCHAR(50) COLLATE utf8mb4_bin NOT NULL,
