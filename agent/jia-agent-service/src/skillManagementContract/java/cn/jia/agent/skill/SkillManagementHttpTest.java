@@ -5,7 +5,7 @@ import cn.jia.agent.api.SkillPackageController;
 import cn.jia.core.config.*;
 import cn.jia.core.filter.RequestIdFilter;
 import org.junit.jupiter.api.*;
-import org.springframework.http.*;
+import org.springframework.http.MediaType;
 import org.springframework.http.converter.*;
 import org.springframework.http.converter.json.JacksonJsonHttpMessageConverter;
 import org.springframework.security.oauth2.jwt.Jwt;

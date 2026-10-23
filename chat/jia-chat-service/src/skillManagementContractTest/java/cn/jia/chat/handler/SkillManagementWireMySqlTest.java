@@ -24,6 +24,7 @@ import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.web.socket.*;
 import java.util.*;
+import java.util.function.Supplier;
 import static cn.jia.agent.skill.SkillManagementCodec.*;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -39,6 +40,12 @@ public class SkillManagementWireMySqlTest extends SkillManagementTransactionTest
     @SuppressWarnings("unchecked") Wire wire() {
         var agents=mock(AgentService.class);when(agents.register(any())).thenReturn(new AgentRegisterResultDTO(AGENT,"synthetic-token","online"));
         ObjectProvider<AgentService> provider=mock(ObjectProvider.class);when(provider.getIfAvailable()).thenReturn(agents);
+        // The SQL fixture already executes non-registration fences. Registration has its own
+        // real consumer path and must also execute the supplied operation, not return mock null.
+        when(authentication.withFence(any(),eq(true),any())).thenAnswer(call->{
+            assertEquals(proof(),call.getArgument(0));Supplier<?> operation=call.getArgument(2);
+            return tx.execute(status->operation.get());
+        });
         var handler=new Wire(provider);handler.setRuntimeAuthentication(authentication);handler.setSkillManagement(service);return handler;
     }
     WebSocketSession socket(List<String> frames) throws Exception {
@@ -55,10 +62,16 @@ public class SkillManagementWireMySqlTest extends SkillManagementTransactionTest
             "productVersionId",target.get("productVersionId"),"skillKey",c.get("skillKey"),"skillVersion",target.get("skillVersion"),"packageSha256",target.get("packageSha256"),
             "manifestSha256",null,"kind","INSTRUCTION","policyRevision",c.get("skillRevision"),"enabled",c.get("desiredEnabled"),"runner",null,"readiness","NOT_EXECUTABLE", "reasonCode",null,"toolchainDigest",null,"bindingRevision",null,"observedAt",System.currentTimeMillis())));
     }
-    void register(Wire handler,WebSocketSession session,Object report) {
-        var data=map("agentId",AGENT,"runtimeInstanceId","runtime-1","installationId",runtime.getRuntimeInstallationId(),"hostId","host-1","sessionGeneration","1",
+    void register(Wire handler,WebSocketSession session,Object report,List<String> frames) {
+        var data=map("agentId",AGENT,"runtimeInstanceId","runtime-1","runtimeInstallationId",runtime.getRuntimeInstallationId(),"hostId","host-1","sessionGeneration","1",
             "name","SM fixture","durableStateHealthy",true,"readyCommandTypes",List.of());if(report!=null)data.put("skillExecution",report);
-        handler.accept(session,map("protocolVersion",1,"requestId","req-register","messageType","agent.register","messageId","reg-sm","data",data));
+        var envelope=map("protocolVersion",1,"requestId","req-register","messageType","agent.register","messageId","reg-sm","data",data);
+        int before=frames.size();handler.accept(session,envelope);
+        var replies=frames.subList(before,frames.size());
+        assertTrue(replies.stream().anyMatch(f->"agent.registered".equals(read(f.getBytes(java.nio.charset.StandardCharsets.UTF_8),null).get("messageType"))),
+            ()->"Registration must succeed before further traffic; sent="+json(envelope)+" replies="+replies);
+        assertTrue(replies.stream().noneMatch(f->"protocol.error".equals(read(f.getBytes(java.nio.charset.StandardCharsets.UTF_8),null).get("messageType"))),
+            ()->"Registration produced an error; sent="+json(envelope)+" replies="+replies);
     }
     Map<String,Object> installOverHttp() throws Exception {
         // MockMvc substitutes servlet transport only; the management service and all SQL,
@@ -88,13 +101,13 @@ public class SkillManagementWireMySqlTest extends SkillManagementTransactionTest
     @Test void firstInstallResultsAndRegistrationDriveRealCommittedClosedLoop() throws Exception {
         var handler=wire();var registry=new SkillExecutionSessionRegistry();handler.setSkillExecutionSessions(registry);
         when(capabilities.lookup(any(),any())).thenAnswer(call->registry.lookup(call.getArgument(0),call.getArgument(1)));
-        var frames=new ArrayList<String>();var socket=socket(frames);register(handler,socket,null);
+        var frames=new ArrayList<String>();var socket=socket(frames);register(handler,socket,null,frames);
         assertTrue(frames.stream().anyMatch(f->f.contains("agent.registered")),frames.toString());
         var c=installOverHttp();recovery.recover();verify(sessions,atLeastOnce()).dispatch(anyString(),anyString(),anyString(),any(),any());
         handler.accept(socket,result(c,evidence(c,"PREPARED",null)));c=current(c);assertEquals("ACTIVATING",c.get("status"));
         assertTrue(frames.stream().anyMatch(f->f.contains("work.result.receipt")&&f.contains("ACCEPTED")),frames.toString());
         var applied=result(c,evidence(c,"APPLIED",null));handler.accept(socket,applied);c=current(c);assertEquals("VERIFYING",c.get("status"));
-        register(handler,socket,declaration(c,"2"));c=current(c);assertEquals("SUCCEEDED",c.get("status"));assertEquals(true,c.get("runtimeSynced"));
+        register(handler,socket,declaration(c,"2"),frames);c=current(c);assertEquals("SUCCEEDED",c.get("status"));assertEquals(true,c.get("runtimeSynced"));
         assertEquals("CAPTURED",c.get("fundingStatus"));assertEquals(2,jdbc.queryForObject("SELECT COUNT(*) FROM agent_outbox_event",Integer.class));
         handler.accept(socket,applied);assertEquals("SUCCEEDED",current(c).get("status"));
         assertEquals(1,jdbc.queryForObject("SELECT COUNT(*) FROM economy_skill_order",Integer.class));

@@ -80,7 +80,7 @@ public class SkillManagementNodeMySqlTest extends SkillManagementWireMySqlTest {
             when(capabilities.lookup(any(),any())).thenAnswer(call->registry.lookup(call.getArgument(0),call.getArgument(1)));
             socket=socket(frames);
             try {
-            register(handler,socket,null);
+            register(handler,socket,null,frames);
             var initialized=peer.call(map("op","init","root",nodeScratch.resolve("runtime").toAbsolutePath().toString(),
                 "apiOrigin","http://127.0.0.1","profileId","java-owned-mysql-runtime",
                 "scope",map("tenantId","0","clientId",ACTOR.clientId(),"ownerJiacn",ACTOR.ownerJiacn(),"agentId",AGENT),
@@ -107,17 +107,21 @@ public class SkillManagementNodeMySqlTest extends SkillManagementWireMySqlTest {
                     byte[] original=Base64.getDecoder().decode(text(row,"wireBase64"));int before=frames.size();
                     handler.raw(socket,new String(original,StandardCharsets.UTF_8));
                     if("result".equals(kind)) {
-                        results++;assertEquals(before+1,frames.size(),"Actual result must yield one post-commit receipt");
-                        byte[] receipt=frames.getLast().getBytes(StandardCharsets.UTF_8);var accepted=read(receipt,"ResultReceipt");
-                        assertEquals("E0",accepted.get("code"));assertEquals("ACCEPTED",object(accepted.get("data")).get("receiptStatus"));
+                        results++;assertEquals(before+1,frames.size(),()->"Actual result must yield one post-commit receipt; result="+new String(original,StandardCharsets.UTF_8)+" replies="+frames.subList(before,frames.size()));
+                        byte[] receipt=frames.getLast().getBytes(StandardCharsets.UTF_8);var accepted=read(receipt,null);
+                        assertEquals("E0",accepted.get("code"),()->"Result rejected; result="+new String(original,StandardCharsets.UTF_8)+" reply="+new String(receipt,StandardCharsets.UTF_8));
+                        validate("ResultReceipt",accepted);assertEquals("ACCEPTED",object(accepted.get("data")).get("receiptStatus"));
                         var event=read(original,"Result");assertEquals(event.get("messageId"),accepted.get("correlationId"));
                         assertEquals(1,jdbc.queryForObject("SELECT COUNT(*) FROM economy_skill_management_result WHERE message_id=?",Integer.class,event.get("messageId")));
                         committed.add(receipt);receipts++;
-                    } else assertEquals(before,frames.size(),"Valid ACK must not produce an error reply");
+                    } else {
+                        assertEquals(before,frames.size(),()->"Valid ACK must not produce an error reply; ack="+new String(original,StandardCharsets.UTF_8)+" replies="+frames.subList(before,frames.size()));
+                        read(original,"CommandAck"); // also validate the exact, unmodified peer bytes
+                    }
                 } else if("catalog".equals(kind)) {
                     var adapter=object(row.get("value"));validate("CapabilityAdapterInput",adapter);
                     assertEquals(AGENT,adapter.get("agentId"));assertEquals(runtime.getRuntimeInstallationId(),adapter.get("runtimeInstallationId"));
-                    register(handler,socket,adapter.get("skillExecution"));
+                    register(handler,socket,adapter.get("skillExecution"),frames);
                 }
             }
             // Feed the actual durable Java receipts back to the real Runtime journal.

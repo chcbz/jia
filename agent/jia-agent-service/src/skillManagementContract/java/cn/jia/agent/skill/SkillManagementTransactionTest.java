@@ -126,7 +126,11 @@ public class SkillManagementTransactionTest {
         when(agents.requireApiKeyOwnedAgent(ACTOR.clientId(),ACTOR.ownerJiacn(),AGENT)).thenReturn(dto);
         versions=new SkillAgentVersions(app,runtimes,provider(agents),owner,manager,true);
         var commands=new AgentCommandTransportDaoImpl(sql.getMapper(AgentCommandTransportMapper.class));writer=spy(new SkillInstallCommandWriter(commands,gate));
-        var packages=new SkillPackages(scratch.resolve(database+"-packages"));sessions=mock(AgentManagedSessionLookup.class);
+        // Provision this fixture's private store explicitly; production never creates it at startup.
+        Path packageRoot=Files.createDirectory(scratch.resolve(database+"-packages"),
+                java.nio.file.attribute.PosixFilePermissions.asFileAttribute(
+                        java.nio.file.attribute.PosixFilePermissions.fromString("rwx------")));
+        var packages=new SkillPackages(packageRoot);sessions=mock(AgentManagedSessionLookup.class);
         when(sessions.isReady(eq("0"),eq(ACTOR.clientId()),eq(AGENT),any())).thenReturn(true);
         when(sessions.dispatch(anyString(),anyString(),anyString(),any(),any())).thenReturn(AgentRawCommandDispatchResult.sent(1,1));
         capabilities=mock(SkillCapabilityLookup.class);when(capabilities.lookup(any(),any())).thenReturn(SkillCapabilityLookup.View.unavailable(SkillCapabilityLookup.State.DISCONNECTED));
