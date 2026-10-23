@@ -77,7 +77,7 @@ class ArchiveNativeHttpMySqlTest {
         String ddl=new ClassPathResource(resource).getContentAsString(StandardCharsets.UTF_8);
         for(String sql:ddl.replaceAll("(?m)^--.*$", "").split(";"))if(!sql.isBlank())jdbc.execute(sql);
     }
-    @Test void nativeInstallerDraftAutoHistoryAndResignationWithActualFilesystem()throws Exception {
+    @Test void nativeInstallerDraftAutoFailureAndResignationWithActualFilesystem()throws Exception {
         String base=System.getenv("CYF_POSITION_TEST_JDBC");assertNotNull(base);assertTrue(base.matches("jdbc:mysql://127\\.0\\.0\\.1:[0-9]+/mysql(?:\\?.*)?"));
         String user=System.getenv("CYF_POSITION_TEST_USER"),password=System.getenv("CYF_POSITION_TEST_PASSWORD");
         admin=new JdbcTemplate(new DriverManagerDataSource(base,user,password));database="aps_http_"+UUID.randomUUID().toString().replace("-","");admin.execute("CREATE DATABASE "+database);
@@ -88,7 +88,7 @@ class ArchiveNativeHttpMySqlTest {
         jdbc.update("INSERT INTO agent_persona_binding(id,jiacn,persona_code,agent_id,bound_at,status,tenant_id,client_id,create_time,update_time) VALUES(3,?,'archive-persona',?,?,1,?,?,?,?)",OWNER,AGENT,now,TENANT,CLIENT,now,now);
         jdbc.update("INSERT INTO agent_identity_registry(id,canonical_agent_id,canonical_type,lifecycle_status,owner_jiacn,binding_id,provisioned_at,activated_at,audit_reason,tenant_id,client_id,create_time,update_time) VALUES(2,?,'OPAQUE','ACTIVE',?,3,?,?,'ARCHIVE_ISOLATED_FIXTURE',?,?,?,?)",AGENT,OWNER,now,now,TENANT,CLIENT,now,now);
         jdbc.update("INSERT INTO agent_runtime_v1_installation(id,installation_id,canonical_agent_id,manifest_version,manifest_sha256,enrollment_secret_hash,enrollment_expires_at,enrollment_consumed_at,runtime_authorization_hash,runtime_authorization_issued_at,status,version,tenant_id,client_id,create_time,update_time) VALUES(1,?,?,'1',?,?,?,?,?,?,'ACTIVE',0,?,?,?,?)",INSTALLATION,AGENT,manifestHash,hash("unused"),now+86400000,now,hash(authorization),now,TENANT,CLIENT,now,now);
-        packageRoot=Files.createDirectory(root.resolve("packages"));
+        packageRoot=Files.createDirectory(root.resolve("packages"));Files.setPosixFilePermissions(packageRoot,java.nio.file.attribute.PosixFilePermissions.fromString("rwx------"));
         byte[] zip=Files.readAllBytes(Path.of(System.getenv("CYF_ARCHIVE_SKILL_PACKAGE")));new SkillPackageStore(packageRoot).publish(zip);
         jdbc.update("INSERT INTO economy_skill_product(product_id,name,description,status,version,tenant_id,client_id,create_time,update_time) VALUES('archive-package','Archive maintenance','Isolated approved fixture','DRAFT',1,?,?,?,?)",TENANT,CLIENT,now,now);
         startHttp();
@@ -121,6 +121,9 @@ class ArchiveNativeHttpMySqlTest {
         assertEquals(1,exchange(Map.of("op","RUN")).get("processed"));assertEquals("DRAFT",service.read(scope,(String)draft.get("jobId")).get("state"));assertTrue(reader.books().items().isEmpty());
         List<Map<String,Object>> published=new ArrayList<>();int n=0;
         for(String text:List.of(sourceA,sourceB)) {String work="data-only-"+(++n);var j=service.create(scope,"publish-"+n,new ArchiveMaintenanceService.Create(appointment,AGENT,"archive-maintenance",work,"Book "+n,"Fixture","external.txt","Self-authored",text,ArchiveMaintenanceService.Mode.AUTO));assertEquals(1,exchange(Map.of("op","RUN")).get("processed"));published.add(service.read(scope,(String)j.get("jobId")));assertEquals("PUBLISHED",published.getLast().get("state"));assertEquals(2,reader.catalog(work).data().activeEdition().chapters().size());}
+        var broken=service.create(scope,"broken",new ArchiveMaintenanceService.Create(appointment,AGENT,"archive-maintenance","broken-book","Broken","Fixture","broken.txt","Self-authored","第一回\n第二回\n",ArchiveMaintenanceService.Mode.DRAFT_ONLY));
+        var healthy=service.create(scope,"healthy",new ArchiveMaintenanceService.Create(appointment,AGENT,"archive-maintenance","healthy-book","Healthy","Fixture","healthy.txt","Self-authored",sourceA,ArchiveMaintenanceService.Mode.DRAFT_ONLY));
+        assertEquals(2,exchange(Map.of("op","RUN")).get("processed"));assertEquals("FAILED",service.read(scope,(String)broken.get("jobId")).get("state"));assertEquals("DRAFT",service.read(scope,(String)healthy.get("jobId")).get("state"));
         assertEquals(2,reader.books().items().size());assertEquals(List.of(401,401,401),exchange(Map.of("op","NEGATIVE","origin",origin)).get("statuses"));
         var pending=service.create(scope,"pending",new ArchiveMaintenanceService.Create(appointment,AGENT,"archive-maintenance","revoked-book","Revoked","Fixture","external.txt","Self-authored",sourceA,ArchiveMaintenanceService.Mode.AUTO));
         positions.resign(scope,"resign",appointment);assertEquals(0,exchange(Map.of("op","RUN")).get("processed"));assertEquals("WAITING",service.read(scope,(String)pending.get("jobId")).get("state"));

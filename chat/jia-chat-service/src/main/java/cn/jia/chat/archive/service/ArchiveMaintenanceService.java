@@ -24,7 +24,9 @@ public class ArchiveMaintenanceService {
             String author,String sourceName,String sourceRights,String sourceText,Mode mode) { }
     public record Specification(Create request,String editionId,String sourceSha256,Grant grant,
             String expectedActiveEdition,String installationId,String packageDigest,String manifestSha256) { }
-    public record Result(String manifestJson,String manifestFileSha256) { }
+    public record Result(String manifestJson,String manifestFileSha256,String errorCode) {
+        public Result(String manifestJson,String manifestFileSha256){this(manifestJson,manifestFileSha256,null);}
+    }
     private final PositionSkillService positions;
     private final AgentIdentityService identities;
     private final ArchiveMaintenanceStore jobs;
@@ -60,6 +62,11 @@ public class ArchiveMaintenanceService {
             });
         });
     }
+    /** A retry is a new idempotent job using the persisted source, never a reopened old result generation. */
+    public Map<String,Object> retry(Scope scope,String key,String id){
+        var original=requireJob(scope,id);require("FAILED".equals(original.state()),409,"ARCHIVE_JOB_NOT_FAILED");
+        return create(scope,key,decode(original.specification()).request());
+    }
     public List<Map<String,Object>> list(Scope scope){return jobs.list(owner(scope)).stream().map(this::view).toList();}
     public Map<String,Object> recover(Scope scope,String key){PositionSkillPolicy.key(key);var job=jobs.operation(owner(scope),key);require(job!=null,404,"ARCHIVE_OPERATION_NOT_FOUND");return view(job);}
     public Map<String,Object> read(Scope scope,String id){return view(requireJob(scope,id));}
@@ -85,7 +92,9 @@ public class ArchiveMaintenanceService {
         return view(job);
     }
     public Map<String,Object> complete(Proof proof,String id,Result result){
-        require(result!=null && result.manifestJson()!=null,400,"ARCHIVE_RESULT_REQUIRED");
+        require(result!=null,400,"ARCHIVE_RESULT_REQUIRED");
+        if(result.errorCode()!=null)return fail(proof,id,result);
+        require(result.manifestJson()!=null,400,"ARCHIVE_RESULT_REQUIRED");
         var bytes=result.manifestJson().getBytes(StandardCharsets.UTF_8);
         var loaded=new ArchiveManifestLoader().parseAndValidate(bytes,result.manifestFileSha256());
         var initial=requireJob(scope(proof),id);var spec=decode(initial.specification());var manifest=loaded.manifest();
@@ -111,6 +120,17 @@ public class ArchiveMaintenanceService {
             return view(jobs.find(owner(scope(proof)),id,false));
         });
     }
+    private Map<String,Object> fail(Proof proof,String id,Result result){
+        require(Set.of("ARCHIVE_SCRIPT_FAILED","ARCHIVE_SCRIPT_RESULT_INVALID").contains(result.errorCode())
+                && result.manifestJson()==null && result.manifestFileSha256()==null,400,"ARCHIVE_FAILURE_INVALID");
+        var initial=requireJob(scope(proof),id);String digest=PositionSkillService.hash("error:"+result.errorCode());
+        return authorized(proof,initial,()->{
+            var job=jobs.find(owner(scope(proof)),id,true);
+            if(!"WAITING".equals(job.state())){require("FAILED".equals(job.state()) && digest.equals(job.resultDigest()),409,"ARCHIVE_RESULT_CONFLICT");return view(job);}
+            require(jobs.fail(owner(scope(proof)),id,result.errorCode(),digest)==1,409,"ARCHIVE_RESULT_CONFLICT");
+            return view(jobs.find(owner(scope(proof)),id,false));
+        });
+    }
     private <T>T authorized(Proof proof,ArchiveMaintenanceStore.Job job,java.util.function.Supplier<T> action){
         var s=decode(job.specification());require(job.agentId().equals(proof.scope().agentId()),403,"ARCHIVE_AGENT_FORBIDDEN");
         return positions.withAuthority(scope(proof),s.grant(),()->{
@@ -128,7 +148,7 @@ public class ArchiveMaintenanceService {
         row.put("jobId",job.id());row.put("operationKey",job.operationKey());row.put("agentId",job.agentId());row.put("state",job.state());
         row.put("appointmentId",r.appointmentId());row.put("skillKey",r.skillKey());row.put("workId",r.workId());row.put("editionId",s.editionId());
         row.put("title",r.title());row.put("author",r.author());row.put("mode",r.mode());row.put("sourceName",r.sourceName());
-        row.put("sourceSha256",s.sourceSha256());row.put("resultDigest",job.resultDigest());return row;
+        row.put("sourceSha256",s.sourceSha256());row.put("resultDigest",job.resultDigest());row.put("errorCode",job.errorCode());return row;
     }
     private static void validate(Create r){
         require(r!=null && r.mode()!=null,400,"ARCHIVE_REQUEST_INVALID");

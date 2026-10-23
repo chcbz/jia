@@ -75,7 +75,10 @@ public final class PositionSkillPolicy {
     }
     public void retry(String installationId) {
         var i = installation(installationId);
-        require(i.state() == InstallState.FAILED, 409, "POSITION_INSTALLATION_NOT_FAILED");
+        // Explicit operator repair handles a replaced Runtime host or missing local files.
+        // Never reuse a previous receipt; immediately fence old jobs until a fresh install succeeds.
+        require(i.state() == InstallState.FAILED || i.desired() && i.state() == InstallState.INSTALLED,
+                409, "POSITION_INSTALLATION_NOT_RETRYABLE");
         installations.put(i.id(), new Installation(i.id(), i.agentId(), i.bindingId(), i.skillKey(), i.retained(), i.desired(),
                 i.revision() + 1, i.desired() ? InstallState.INSTALL_PENDING : InstallState.REMOVE_PENDING, null, null, null, null, null, null));
     }

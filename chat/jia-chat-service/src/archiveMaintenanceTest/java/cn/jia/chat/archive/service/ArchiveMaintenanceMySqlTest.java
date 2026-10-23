@@ -111,6 +111,19 @@ class ArchiveMaintenanceMySqlTest {
         assertThrows(PositionSkillException.class,()->service.complete(proof,(String)pending.get("jobId"),r));assertNull(content.findWork("after-revoke"));
         assertEquals("PUBLISHED",service.outcome(proof,(String)published.get("jobId")).get("state"));assertTrue(service.commands(proof).isEmpty());
     }
+    @Test void parserFailureIsDurableAndRetryCreatesOneFreshJobFromPersistedSource()throws Exception {
+        var original=job("failed","failed-book",Mode.AUTO,"第一回\n测试正文。");String id=(String)original.get("jobId");
+        var result=new Result(null,null,"ARCHIVE_SCRIPT_FAILED");var failed=service.complete(proof,id,result);
+        assertEquals("FAILED",failed.get("state"));assertEquals("ARCHIVE_SCRIPT_FAILED",failed.get("errorCode"));
+        assertEquals(failed,service.complete(proof,id,result));assertTrue(service.commands(proof).isEmpty());assertNull(content.findWork("failed-book"));
+        assertThrows(PositionSkillException.class,()->service.complete(proof,id,new Result(null,null,"SECRET_ERROR")));
+        var retry=service.retry(scope,"retry-key",id);assertNotEquals(id,retry.get("jobId"));
+        assertEquals(retry.get("jobId"),service.retry(scope,"retry-key",id).get("jobId"));
+        assertEquals(original.get("sourceSha256"),retry.get("sourceSha256"));
+        assertEquals("PUBLISHED",service.complete(proof,(String)retry.get("jobId"),parse(retry)).get("state"));
+        assertEquals("FAILED",service.read(scope,id).get("state"));
+        positions.resign(scope,"resign",appointment);assertThrows(PositionSkillException.class,()->service.retry(scope,"after-revoke",id));
+    }
     @Test void forgedAgentRuntimeAndCrossOwnerCannotReadOrCommit()throws Exception {
         var j=job("create","secure-book",Mode.AUTO,"正文。");var result=parse(j);String id=(String)j.get("jobId");
         var other=new Proof(new AgentRuntimeAuthentication.Scope("0","test-client","owner-a","forged","instance1"),"runtime1","host1",1,"test",1,1);

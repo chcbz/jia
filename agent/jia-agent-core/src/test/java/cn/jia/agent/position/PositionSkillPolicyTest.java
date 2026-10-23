@@ -79,6 +79,14 @@ class PositionSkillPolicyTest {
         p.receipt(i.id(), i.revision(), false, "a".repeat(64), "runtime1", "host1", "INSTALL_FAILED");
         p.retry(i.id()); assertEquals(2, installation(p, "read").revision()); assertFalse(installation(p, "read").usable());
     }
+    @Test void explicitReinstallInvalidatesOldReceiptWithoutInventingReadiness() {
+        var p=policy();p.appoint("editor","agent1",1);var i=installation(p,"maintain");
+        p.receipt(i.id(),i.revision(),true,"a".repeat(64),"runtime1","host1",null);
+        p.retry(i.id());var pending=installation(p,"maintain");
+        assertEquals(2,pending.revision());assertFalse(pending.usable());assertNull(pending.runtimeInstallationId());
+        assertThrows(PositionSkillException.class,()->p.receipt(i.id(),1,true,"a".repeat(64),"runtime1","host1",null));
+        p.receipt(i.id(),2,true,"b".repeat(64),"runtime2","host2",null);assertTrue(installation(p,"maintain").usable());
+    }
     @Test void resignationImmediatelyRevokesBusinessAuthorityEvenIfInstalledFilesRemain() {
         var p = policy(); var a = p.appoint("editor", "agent1", 1);
         p.authorize(a.id(), 1, 1, "agent1", 1, "book", false); p.resign(a.id());
