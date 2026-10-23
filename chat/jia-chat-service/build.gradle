@@ -466,6 +466,7 @@ tasks.register('nativeSkillResultRegression', Test) {
 // Position/archive production SQL against an explicitly owned isolated MySQL.
 def archiveMaintenanceSourceSet = sourceSets.create('archiveMaintenanceTest') {
     java.srcDir 'src/archiveMaintenanceTest/java'
+    resources.srcDir 'src/archiveMaintenanceTest/resources'
     compileClasspath += sourceSets.main.output
     runtimeClasspath += output + compileClasspath
 }
@@ -473,6 +474,9 @@ configurations.named(archiveMaintenanceSourceSet.implementationConfigurationName
 configurations.named(archiveMaintenanceSourceSet.runtimeOnlyConfigurationName) { extendsFrom configurations.testRuntimeOnly }
 dependencies {
     add(archiveMaintenanceSourceSet.implementationConfigurationName, project(':economy:jia-economy-mapper'))
+    add(archiveMaintenanceSourceSet.implementationConfigurationName, project(':user:jia-user-mapper'))
+    add(archiveMaintenanceSourceSet.implementationConfigurationName, project(':user:jia-user-service'))
+    add(archiveMaintenanceSourceSet.implementationConfigurationName, 'org.apache.tomcat.embed:tomcat-embed-core')
 }
 tasks.register('archiveMaintenanceTest', Test) {
     dependsOn tasks.named(archiveMaintenanceSourceSet.classesTaskName)
@@ -483,4 +487,8 @@ tasks.register('archiveMaintenanceTest', Test) {
     maxHeapSize = '384m'
     def skillScript = System.getenv('CYF_ARCHIVE_SKILL_SCRIPT')
     if (skillScript) inputs.file(skillScript)
+    def clientRoot = System.getenv('CYF_ARCHIVE_CLIENT_ROOT')
+    if (clientRoot) inputs.files(fileTree(clientRoot + '/conf') { exclude '**/node_modules/**' })
+    def skillPackage = System.getenv('CYF_ARCHIVE_SKILL_PACKAGE')
+    if (skillPackage) inputs.file(skillPackage)
 }
