@@ -32,11 +32,12 @@ public class SkillExecutionSchemaMySqlTest {
         // The legacy workspace initializer now reads execution_protocol_version in its
         // verification SQL, but that column is installed by the later follow-up-v3 migration.
         // Do not weaken production validation or fabricate a placeholder column in this fixture.
+        // The current base already includes output MIME (including text/plain) and all
+        // terminal-failure columns/CHECKs. Historical ALTERs for those are not fresh-install
+        // deltas; replaying them duplicates columns and schema-wide CHECK names.
+        apply("db/agent-personal-workspace-v1_11-executions.sql");
+        assertEquals(4,jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='agent_personal_workspace_execution' AND column_name IN ('output_content_mime_type','failure_code','failure_message','failed_at')",Integer.class));
         for(String resource:List.of(
-                "db/agent-personal-workspace-v1_11-executions.sql",
-                "db/agent-personal-workspace-v1_13-execution-output-mime.sql",
-                "db/agent-personal-workspace-v1_17-text-output-mime.sql",
-                "db/agent-personal-workspace-v1_13-execution-terminal-state.sql",
                 "db/agent-personal-workspace-v1_13-task-execution.sql",
                 "db/agent-personal-workspace-v1_13-task-publication.sql",
                 "db/agent-personal-workspace-v1_14-conversation-execution.sql",
@@ -51,7 +52,17 @@ public class SkillExecutionSchemaMySqlTest {
         new PersonalWorkspaceExecutionSchemaInitializer(jdbc).afterPropertiesSet();
         detector().afterPropertiesSet();
     }
-    void apply(String name) throws Exception {String sql=new ClassPathResource(name).getContentAsString(StandardCharsets.UTF_8).lines().filter(l->!l.stripLeading().startsWith("--")).reduce("",(a,b)->a+b+"\n");for(String s:sql.split(";"))if(!s.isBlank())jdbc.execute(s);}
+    void apply(String name) throws Exception {
+        String sql=new ClassPathResource(name).getContentAsString(StandardCharsets.UTF_8).lines().filter(l->!l.stripLeading().startsWith("--")).reduce("",(a,b)->a+b+"\n");
+        int ordinal=0;
+        for(String statement:sql.split(";"))if(!statement.isBlank()) {
+            ordinal++;
+            try {jdbc.execute(statement);}
+            catch(org.springframework.dao.DataAccessException failure) {
+                throw new IllegalStateException("Schema fixture DDL failed: "+name+" statement "+ordinal,failure);
+            }
+        }
+    }
     @AfterEach void cleanup(){if(database!=null&&database.matches("skill5h_[a-f0-9]{32}"))admin.execute("DROP DATABASE `"+database+"`");}
     SkillExecutionSchemaInitializer detector(){return new SkillExecutionSchemaInitializer(jdbc);}
     @Test void latestCatalogReadOnlyDetectionAndLegacyRestartAccept() {
