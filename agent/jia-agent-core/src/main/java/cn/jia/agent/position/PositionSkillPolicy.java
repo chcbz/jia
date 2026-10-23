@@ -77,10 +77,14 @@ public final class PositionSkillPolicy {
         var i = installation(installationId);
         require(i.state() == InstallState.FAILED, 409, "POSITION_INSTALLATION_NOT_FAILED");
         installations.put(i.id(), new Installation(i.id(), i.agentId(), i.bindingId(), i.skillKey(), i.retained(), i.desired(),
-                i.revision() + 1, i.desired() ? InstallState.INSTALL_PENDING : InstallState.REMOVE_PENDING, null, null, null, null));
+                i.revision() + 1, i.desired() ? InstallState.INSTALL_PENDING : InstallState.REMOVE_PENDING, null, null, null, null, null, null));
     }
     public void receipt(String installationId, long revision, boolean installed, String digest, String runtimeId,
             String hostId, String errorCode) {
+        receipt(installationId, revision, installed, digest, runtimeId, hostId, errorCode, null, null);
+    }
+    public void receipt(String installationId, long revision, boolean installed, String digest, String runtimeId,
+            String hostId, String errorCode, String packageDigest, String manifestSha256) {
         var i = installation(installationId);
         require(revision == i.revision(), 409, "POSITION_INSTALLATION_FENCED");
         require(digest != null && digest.matches("[0-9a-f]{64}"), 400, "POSITION_RECEIPT_INVALID");
@@ -95,7 +99,7 @@ public final class PositionSkillPolicy {
         require(errorCode != null || installed == i.desired(), 409, "POSITION_RECEIPT_CONFLICT");
         installations.put(i.id(), new Installation(i.id(), i.agentId(), i.bindingId(), i.skillKey(), i.retained(), i.desired(), i.revision(),
                 errorCode != null ? InstallState.FAILED : installed ? InstallState.INSTALLED : InstallState.REMOVED,
-                digest, runtimeId, hostId, errorCode));
+                digest, packageDigest, manifestSha256, runtimeId, hostId, errorCode));
     }
     public void authorize(String appointmentId, long appointmentRevision, long positionRevision,
             String agentId, long bindingId, String workId, boolean publish) {
@@ -114,7 +118,7 @@ public final class PositionSkillPolicy {
         if (old == null) {
             String id = ids.get();
             installations.put(id, new Installation(id, a.agentId(), a.bindingId(), s.key(), retained, true, 1,
-                    InstallState.INSTALL_PENDING, null, null, null, null));
+                    InstallState.INSTALL_PENDING, null, null, null, null, null, null));
         } else installations.put(old.id(), change(old, retained || old.retained(), true));
     }
     private void reconcile() {
@@ -130,7 +134,7 @@ public final class PositionSkillPolicy {
         return new Installation(i.id(), i.agentId(), i.bindingId(), i.skillKey(), retained, desired,
                 transition ? i.revision() + 1 : i.revision(),
                 transition ? desired ? InstallState.INSTALL_PENDING : InstallState.REMOVE_PENDING : i.state(),
-                transition ? null : i.receiptDigest(), transition ? null : i.runtimeInstallationId(),
+                transition ? null : i.receiptDigest(), transition ? null : i.packageDigest(), transition ? null : i.manifestSha256(), transition ? null : i.runtimeInstallationId(),
                 transition ? null : i.runtimeHostId(), transition ? null : i.errorCode());
     }
     private Installation installation(String id) {

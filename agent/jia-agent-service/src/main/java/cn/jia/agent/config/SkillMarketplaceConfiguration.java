@@ -7,8 +7,9 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.*;
 import org.springframework.jdbc.core.JdbcTemplate;
 @Configuration(proxyBeanMethods=false)
-@ConditionalOnProperty(prefix="economy.skill.marketplace",name="enabled",havingValue="true")
+@org.springframework.boot.autoconfigure.condition.ConditionalOnExpression("${economy.skill.marketplace.enabled:false} or ${agent.position-skills.enabled:false}")
 public class SkillMarketplaceConfiguration {
+    @ConditionalOnProperty(prefix="economy.skill.marketplace",name="enabled",havingValue="true")
     @org.springframework.context.annotation.Profile("schema-maintenance")
     @Bean public EconomySkillApplicationSchemaInitializer economySkillApplicationSchemaInitializer(JdbcTemplate jdbc) {
         return new EconomySkillApplicationSchemaInitializer(jdbc);

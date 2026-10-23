@@ -27,13 +27,13 @@ class PositionSkillTransactionTest {
     @BeforeEach void setup()throws Exception {
         String base=System.getenv("CYF_POSITION_TEST_JDBC");
         assertNotNull(base,"CYF_POSITION_TEST_JDBC must explicitly identify an isolated loopback test server");
-        assertTrue(base.matches("jdbc:mysql://127\.0\.0\.1:[0-9]+/mysql(?:\?.*)?"));
+        assertTrue(base.matches("jdbc:mysql://127\\.0\\.0\\.1:[0-9]+/mysql(?:\\?.*)?"));
         String user=System.getenv("CYF_POSITION_TEST_USER"),pass=System.getenv("CYF_POSITION_TEST_PASSWORD");
         admin=new JdbcTemplate(new DriverManagerDataSource(base,user,pass));
         database="aps_"+UUID.randomUUID().toString().replace("-","");admin.execute("CREATE DATABASE "+database);
         var ds=new DriverManagerDataSource(base.replace("/mysql","/"+database),user,pass);jdbc=new JdbcTemplate(ds);
         String ddl=new ClassPathResource("db/agent-position-skills.sql").getContentAsString(StandardCharsets.UTF_8);
-        for(String sql:ddl.split(";"))if(!sql.isBlank())jdbc.execute(sql);
+        for(String sql:ddl.replaceAll("(?m)^--.*$", "").split(";"))if(!sql.isBlank())jdbc.execute(sql);
         var identities=mock(AgentIdentityService.class);
         var identity=new AgentIdentityRegistryEntity().setCanonicalAgentId("agent1").setBindingId(1L);
         when(identities.requireRegistrationIdentityInScope("0","test-client","owner-a","agent1")).thenReturn(identity);

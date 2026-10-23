@@ -8,6 +8,8 @@ public interface ArchiveReaderService {
 
     ArchiveRepresentation<ArchiveCatalogDTO> catalog(String workId);
 
+    default ArchiveRepresentation<ArchiveCatalogDTO> catalogEdition(String workId,String editionId) { throw new UnsupportedOperationException(); }
+
     ArchiveRepresentation<ArchiveBlockDTO> preface(String editionId);
 
     ArchiveRepresentation<ArchiveBlockDTO> chapter(String editionId, String chapterId);

@@ -24,6 +24,9 @@ public final class InstalledSkillDescriptorService implements InstalledSkillDesc
         this.identities=Objects.requireNonNull(identities);this.market=Objects.requireNonNull(market);
         this.app=Objects.requireNonNull(app);this.packages=Objects.requireNonNull(packages);
     }
+    private cn.jia.agent.position.PositionInstalledSkills positionSkills;
+    @org.springframework.beans.factory.annotation.Autowired(required=false)
+    public void setPositionSkills(cn.jia.agent.position.PositionInstalledSkills value){this.positionSkills=value;}
     private SkillCostInfoSource costs;
     @org.springframework.beans.factory.annotation.Autowired
     public void setCostInfoSource(SkillCostInfoSource costs) {this.costs=Objects.requireNonNull(costs);}
@@ -54,6 +57,7 @@ public final class InstalledSkillDescriptorService implements InstalledSkillDesc
                         result.set(index,unavailable(original,"SKILL_INSTALLATION_CHANGED"));
                 }
             }
+            if(positionSkills!=null)result.addAll(positionSkills.read(scope));
             // Decoration changes no package/manifest identity or readiness reason. Snapshot consumers
             // retain these informational bytes at admission; a later price update does not invalidate work.
             if(costs!=null) {

@@ -33,6 +33,12 @@ public class PositionSkillService implements PositionAuthority {
         scope(scope); var row=store.read(scope);
         return new View(null,null,row==null?0:row.revision(),row==null?PositionSkillState.empty():decode(row.json()));
     }
+    /** Current (locking) read for callers already holding the native/position transaction. */
+    public PositionSkillState currentState(Scope scope) {
+        scope(scope);
+        require(org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive(),503,"POSITION_TRANSACTION_REQUIRED");
+        return decode(store.lock(scope,encode(PositionSkillState.empty())).json());
+    }
     public View recovery(Scope scope, String key) {
         scope(scope); PositionSkillPolicy.key(key);
         return tx.execute(status->{
@@ -92,6 +98,19 @@ public class PositionSkillService implements PositionAuthority {
             require(grant.agentId().equals(identity.getCanonicalAgentId()) && Objects.equals(identity.getBindingId(),grant.bindingId()),
                     403,"POSITION_BINDING_CHANGED");
             return commit.get(); // The callback and revoke share the same REQUIRED DB transaction/root lock.
+        });
+    }
+    /** Called only inside an authenticated native fence; no user-provided scope or binding is accepted. */
+    public <T>T runtimeState(Scope scope,String agentId,Function<PositionSkillPolicy,T> operation) {
+        scope(scope);
+        return tx.execute(status->{
+            var row=store.lock(scope,encode(PositionSkillState.empty()));
+            var policy=new PositionSkillPolicy(decode(row.json()),PositionSkillService::id);
+            var result=operation.apply(policy);
+            String next=encode(policy.state());
+            if(!next.equals(encode(decode(row.json()))))
+                require(store.save(scope,row.revision(),next)==1,409,"POSITION_REVISION_CONFLICT");
+            return result;
         });
     }
     private View mutate(Scope scope,String key,String action,Object request,Function<PositionSkillPolicy,String> mutation) {

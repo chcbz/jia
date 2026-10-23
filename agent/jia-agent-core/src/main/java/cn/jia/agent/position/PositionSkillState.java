@@ -17,7 +17,7 @@ public record PositionSkillState(int schemaVersion, Map<String, Skill> skills,
             boolean active, long revision) { }
     public record Installation(String id, String agentId, long bindingId, String skillKey,
             boolean retained, boolean desired, long revision, InstallState state,
-            String receiptDigest, String runtimeInstallationId, String runtimeHostId, String errorCode) {
+            String receiptDigest, String packageDigest, String manifestSha256, String runtimeInstallationId, String runtimeHostId, String errorCode) {
         public boolean usable() { return desired && state == InstallState.INSTALLED && receiptDigest != null; }
     }
     public PositionSkillState {

@@ -21,7 +21,9 @@ public final class AgentRuntimeAuthenticationFilter extends OncePerRequestFilter
         // WS and Runtime ACK/package endpoints are exclusive native lanes, even when legacy
         // API-key headers are presented: they must fail here, never fall through to old auth.
         // Elsewhere X-Agent-Id alone grants no Runtime authority; ambiguous duplicates fail closed.
-        return request.getRequestURI().matches(request.getContextPath()+"/internal/agent/chat/requests/[^/]+/turns/[^/]+/materials/inputs/[^/]+/content")
+        return request.getRequestURI().startsWith(request.getContextPath()+"/internal/archive/")
+                || request.getRequestURI().startsWith(request.getContextPath()+"/internal/agent/position-skills")
+                || request.getRequestURI().matches(request.getContextPath()+"/internal/agent/chat/requests/[^/]+/turns/[^/]+/materials/inputs/[^/]+/content")
                 || request.getRequestURI().matches(request.getContextPath() + "/internal/agent/tasks/[^/]+/work-items/[^/]+/reassignments/[^/]+/commands/[^/]+/(?:result-commit|lease)")
                 || request.getRequestURI().matches(request.getContextPath() + "/internal/agent/skill-installations/[^/]+/package")
                 || request.getRequestURI().equals(request.getContextPath() + "/ws/agent/channel")
@@ -36,7 +38,11 @@ public final class AgentRuntimeAuthenticationFilter extends OncePerRequestFilter
         String path = request.getRequestURI().substring(request.getContextPath().length());
         // No matrix parameters, encoded separators, dot-segments or alternate dispatch paths.
         String id = "[A-Za-z0-9][A-Za-z0-9._:-]{0,99}";
-        return ("GET".equals(request.getMethod()) || "POST".equals(request.getMethod()))
+        return "GET".equals(request.getMethod()) && (path.equals("/internal/archive/v1/jobs") || path.matches("/internal/archive/v1/jobs/"+id+"/(?:source|result)"))
+                || "POST".equals(request.getMethod()) && path.matches("/internal/archive/v1/jobs/"+id+"/result")
+                || "GET".equals(request.getMethod()) && (path.equals("/internal/agent/position-skills") || path.matches("/internal/agent/position-skills/"+id+"/revisions/[1-9][0-9]*/package"))
+                || ("POST".equals(request.getMethod()) || "GET".equals(request.getMethod())) && path.matches("/internal/agent/position-skills/"+id+"/receipt")
+                || ("GET".equals(request.getMethod()) || "POST".equals(request.getMethod()))
                 && path.matches("/internal/agent/tasks/" + id + "/work-items/" + id + "/reassignments/" + id
                 + "/commands/" + id + "/result-commit")
                 || "GET".equals(request.getMethod()) && path.matches("/internal/agent/tasks/" + id
