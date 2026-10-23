@@ -98,6 +98,27 @@ class ArchiveMaintenanceMySqlTest {
         var chapter=reader.chapter(old,history.activeEdition().chapters().getFirst().blockId()).data();assertEquals("旧版本正文。",chapter.paragraphs().getFirst().text());
         var modified=result.manifestJson().replace("旧版本正文。","假版本正文。");assertThrows(RuntimeException.class,()->service.complete(proof,(String)first.get("jobId"),new Result(modified,PositionSkillService.hash(modified))));
     }
+    @Test void historicalBookmarkAndNoteStayWithOriginalOwnerAndEditionAfterRevision()throws Exception {
+        var first=job("personal-first","personal-book",Mode.AUTO,"第一回\n原版本私人定位正文。");
+        service.complete(proof,(String)first.get("jobId"),parse(first));String old=(String)first.get("editionId");
+        var reader=new ArchiveReaderServiceImpl(content);var catalog=reader.catalog("personal-book").data();
+        var block=catalog.activeEdition().chapters().getFirst();var paragraph=reader.chapter(old,block.blockId()).data().paragraphs().getFirst();
+        var personal=new ArchivePersonalDataServiceImpl(new JdbcArchivePersonalDataStore(jdbc),tx);
+        var owner=new cn.jia.chat.archive.model.ArchiveOwnerScope("0","test-client","owner-a");
+        var other=new cn.jia.chat.archive.model.ArchiveOwnerScope("0","test-client","owner-b");
+        String bookmark=UUID.randomUUID().toString(),note=UUID.randomUUID().toString(),path="/archive/v1/me/bookmarks/"+bookmark;
+        var location=Map.of("editionManifestSha256",catalog.activeEdition().manifestSha256(),"blockType","CHAPTER","blockId",block.blockId(),"paragraphId",paragraph.paragraphId(),"byteOffset",0,"paragraphSha256",paragraph.sha256());
+        assertEquals(200,personal.putBookmark(owner,bookmark,path,"bookmark-create",json.writeValueAsBytes(Map.of("expectedVersion","0","editionId",old,"location",location))).status());
+        var noteBody=new LinkedHashMap<String,Object>();noteBody.put("expectedVersion","0");noteBody.put("editionId",old);noteBody.put("text","PRIVATE TEST NOTE");noteBody.put("anchor",null);
+        assertEquals(200,personal.putNote(owner,note,"/archive/v1/me/notes/"+note,"note-create",json.writeValueAsBytes(noteBody)).status());
+        var second=job("personal-second","personal-book",Mode.AUTO,"第一回\n新版不同正文。");service.complete(proof,(String)second.get("jobId"),parse(second));
+        assertEquals(1,personal.bookmarks(owner,old,null,20).items().size());assertEquals(1,personal.notes(owner,old,null,null,20).items().size());
+        assertTrue(personal.bookmarks(owner,(String)second.get("editionId"),null,20).items().isEmpty());assertTrue(personal.notes(owner,(String)second.get("editionId"),null,null,20).items().isEmpty());
+        assertTrue(personal.bookmarks(other,old,null,20).items().isEmpty());assertTrue(personal.notes(other,old,null,null,20).items().isEmpty());
+        assertEquals(200,personal.putBookmark(owner,bookmark,path,"bookmark-historical-update",json.writeValueAsBytes(Map.of("expectedVersion","1","editionId",old,"location",location))).status());
+        jdbc.update("UPDATE archive_work SET active_edition_id=NULL WHERE work_id='personal-book'");
+        assertThrows(ArchivePersonalDataException.class,()->personal.putBookmark(owner,bookmark,path,"bookmark-withdrawn",json.writeValueAsBytes(Map.of("expectedVersion","2","editionId",old,"location",location))));
+    }
     @Test void concurrentNewBookJobsUseCasAndRollbackLosingImport()throws Exception {
         var one=job("one","race-book",Mode.AUTO,"第一回\n第一份正文。");var two=job("two","race-book",Mode.AUTO,"第一回\n第二份正文。");
         var r1=parse(one);var r2=parse(two);service.complete(proof,(String)one.get("jobId"),r1);
