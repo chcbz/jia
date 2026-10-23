@@ -464,13 +464,18 @@ public final class SkillManagementService {
         if(auth==null||state==null||view==null)return map("state","UNKNOWN","reasonCode","CATALOG_UNCONFIRMED","observedAt",null,"catalogRevision",null);
         var found=view.catalog().skills().stream().filter(f->auth.getInstallationId().equals(f.skillInstallationId())).toList();
         if(found.size()!=1)return map("state","VERIFYING","reasonCode","CATALOG_UNCONFIRMED","observedAt",null,"catalogRevision",view.catalog().catalogRevision());
-        var fact=found.getFirst();var pkg=ref(auth);
-        boolean exact=auth.getRuntimeInstallationId().equals(view.fence().runtimeInstallationId())&&auth.getRuntimeHostId().equals(view.fence().hostId())
+        var fact=found.getFirst();boolean exact=exactCatalog(a,state,auth,view,fact);
+        return map("state",exact?(fact.readiness()==SkillCapabilityLookup.Readiness.UNAVAILABLE?"UNKNOWN":fact.readiness().name()):"VERSION_MISMATCH","reasonCode",exact?fact.reasonCode():"VERSION_MISMATCH",
+                "observedAt",fact.observedAt(),"catalogRevision",view.catalog().catalogRevision());
+    }
+    private boolean exactCatalog(HostingRentHttp.Actor a,SkillManagedStateEntity state,SkillInstallationAuthorizationEntity auth,
+            SkillCapabilityLookup.View view,SkillCapabilityLookup.RuntimeSkill fact) {
+        var pkg=ref(auth);
+        return auth.getInstallationId().equals(fact.skillInstallationId())
+                &&auth.getRuntimeInstallationId().equals(view.fence().runtimeInstallationId())&&auth.getRuntimeHostId().equals(view.fence().hostId())
                 &&Objects.equals(pkg.get("kind"),fact.kind())&&Objects.equals(pkg.get("productVersionId"),fact.productVersionId())&&Objects.equals(pkg.get("skillVersion"),fact.skillVersion())
                 &&Objects.equals(pkg.get("packageSha256"),fact.packageSha256())&&Objects.equals(pkg.get("manifestSha256"),fact.manifestSha256())
                 &&effectivePolicyRevision(a,state).equals(fact.policyRevision())&&Boolean.TRUE.equals(state.getDesiredEnabled())==fact.enabled();
-        return map("state",exact?(fact.readiness()==SkillCapabilityLookup.Readiness.UNAVAILABLE?"UNKNOWN":fact.readiness().name()):"VERSION_MISMATCH","reasonCode",exact?fact.reasonCode():"VERSION_MISMATCH",
-                "observedAt",fact.observedAt(),"catalogRevision",view.catalog().catalogRevision());
     }
     private String effectivePolicyRevision(HostingRentHttp.Actor a,SkillManagedStateEntity state) {
         // The accepted management fence can advance while PREPARE (or a confirmed preparation
@@ -614,9 +619,17 @@ public final class SkillManagementService {
     private void confirmCatalog(HostingRentHttp.Actor a,SkillManagedStateEntity state,SkillChangeEntity c,Map<String,Object> value) {
         if(!Set.of("VERIFYING","SUCCEEDED").contains(text(value,"status")))return;
         var auth=state.getActiveInstallationId()==null?null:db.findAuthorization(a.tenantId(),a.clientId(),state.getActiveInstallationId());
-        var live=runtime(a,c.getAgentId(),state,auth,catalog(a,c.getAgentId()),online(a,c.getAgentId()));
+        var view=catalog(a,c.getAgentId());boolean connected=online(a,c.getAgentId());
+        var live=runtime(a,c.getAgentId(),state,auth,view,connected);
         boolean instruction=auth!=null&&"INSTRUCTION".equals(ref(auth).get("kind"));
-        if(!("READY".equals(live.get("state"))||instruction&&"NOT_EXECUTABLE".equals(live.get("state"))))return;
+        // Disabling is a policy fact, not an assertion that the runner or its dependencies
+        // are ready. Exact current disabled discovery confirms synchronization even when
+        // execution readiness is degraded; API admission remains closed unconditionally.
+        boolean disabled="DISABLE".equals(value.get("action"))&&auth!=null&&connected&&view!=null
+                &&!Boolean.TRUE.equals(state.getDesiredEnabled())
+                &&view.catalog().skills().stream().filter(f->auth.getInstallationId().equals(f.skillInstallationId())).count()==1
+                &&view.catalog().skills().stream().anyMatch(f->exactCatalog(a,state,auth,view,f));
+        if(!(disabled||"READY".equals(live.get("state"))||instruction&&"NOT_EXECUTABLE".equals(live.get("state"))))return;
         state.setAdmissionEnabled(Boolean.TRUE.equals(state.getDesiredEnabled())&&!instruction).setPendingChangeId(null);
         one(db.saveState(state,state.getSkillRevision()));
         value.put("status","SUCCEEDED");value.put("runtimeSynced",true);value.put("reasonCode",null);save(c,value);

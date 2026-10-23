@@ -10,8 +10,10 @@ final class SkillExecutionDeclaration {
         try {
             SkillManagementCodec.validate("SkillExecutionDeclaration",value);
             var catalog=SkillManagementCodec.object(value);var skills=new ArrayList<SkillCapabilityLookup.RuntimeSkill>();
+            var installations=new HashSet<String>();
             for(var row:(List<?>)catalog.get("skills")) {
                 var s=SkillManagementCodec.object(row);
+                if(!installations.add((String)s.get("skillInstallationId")))return null;
                 skills.add(new SkillCapabilityLookup.RuntimeSkill((String)s.get("skillKey"),(String)s.get("skillVersion"),(String)s.get("packageSha256"),
                     (String)s.get("manifestSha256"),(String)s.get("runner"),SkillCapabilityLookup.Readiness.valueOf((String)s.get("readiness")),
                     (String)s.get("reasonCode"),(String)s.get("toolchainDigest"),(String)s.get("bindingRevision"),(String)s.get("skillInstallationId"),

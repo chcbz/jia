@@ -26,11 +26,7 @@ public interface SkillCapabilityLookup {
         }
         public RuntimeSkill {
             exact(skillKey, 64); exact(skillVersion, 64); hash(packageSha256); if (manifestSha256!=null) hash(manifestSha256);
-            if (runner!=null && !List.of("provider-operation", "local-script", "native-model").contains(runner))
-                throw new IllegalArgumentException("Unknown skill runner");
             Objects.requireNonNull(readiness);
-            if (reasonCode != null && !reasonCode.matches("[A-Z][A-Z0-9_]{0,63}"))
-                throw new IllegalArgumentException("Invalid skill reason code");
             if (toolchainDigest != null) hash(toolchainDigest);
             if (bindingRevision != null) exact(bindingRevision, 100);
             // READY is still only a report. Descriptor/dependency/binding entitlement checks
@@ -42,10 +38,14 @@ public interface SkillCapabilityLookup {
         public Catalog {
             exact(catalogRevision, 100);
             skills = List.copyOf(Objects.requireNonNull(skills));
-            var identities = new HashSet<List<String>>();
+            var identities = new HashSet<String>();
             for (var skill : skills) {
-                if (!identities.add(List.of(skill.skillKey(), skill.skillVersion())))
-                    throw new IllegalArgumentException("Ambiguous skill version in runtime catalog");
+                // Installation identity is authoritative; retry candidates may share a
+                // skill version. Never reject or pick by key/version instead of installation.
+                String identity = skill.skillInstallationId();
+                if (identity == null) identity = skill.skillKey() + "\0" + skill.skillVersion();
+                if (!identities.add(identity))
+                    throw new IllegalArgumentException("Ambiguous skill installation in runtime catalog");
             }
         }
     }

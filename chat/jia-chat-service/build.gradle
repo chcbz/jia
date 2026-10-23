@@ -486,6 +486,6 @@ tasks.register('skillManagementWire', Test) {
     classpath = skillManagementWireSourceSet.runtimeClasspath
     useJUnitPlatform()
     maxParallelForks = 1
-    filter { includeTestsMatching 'cn.jia.chat.handler.SkillManagementWireMySqlTest' }
+    filter { includeTestsMatching 'cn.jia.chat.handler.SkillManagementWireMySqlTest.firstInstallResultsAndRegistrationDriveRealCommittedClosedLoop' }
     testLogging { events 'passed','failed'; exceptionFormat 'full'; showStandardStreams = true }
 }

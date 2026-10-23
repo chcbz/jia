@@ -46,6 +46,7 @@ public final class SkillExecutionSchemaInitializer implements InitializingBean {
         for(String name:List.of("package_sha256","manifest_sha256","snapshot_sha256"))expected.put(name,new Column("char(64)","NO",null,"ascii_bin",""));
         for(String name:List.of("snapshot_json","effects_json"))expected.put(name,new Column("json","NO",null,null,""));
         expected.put("result_manifest_json",new Column("json","YES",null,null,""));
+        expected.put("task_skill_binding_json",new Column("json","YES",null,null,""));
         expected.put("last_error_code",new Column("varchar(64)","YES",null,"utf8mb4_0900_bin",""));
         expected.put("phase",new Column("varchar(24)","NO",null,"utf8mb4_0900_bin",""));
         expected.put("version",new Column("bigint","NO","0",null,""));

@@ -31,6 +31,7 @@ public class SkillExecutionServiceTest {
     final InstalledSkillDescriptorLookup installed=mock(InstalledSkillDescriptorLookup.class);
     final SkillCapabilityLookup capabilities=mock(SkillCapabilityLookup.class);
     final TaskSkillPolicyService policy=mock(TaskSkillPolicyService.class);
+    final SkillManagementService management=mock(SkillManagementService.class);
     final WorkspaceConversationAccessService conversations=mock(WorkspaceConversationAccessService.class);
     PersonalWorkspaceExecutionServiceImpl service;
     PersonalWorkspaceExecutionEntity execution;
@@ -48,6 +49,14 @@ public class SkillExecutionServiceTest {
         service=new PersonalWorkspaceExecutionServiceImpl(pwe,mock(PersonalWorkspaceDao.class),mock(PersonalWorkspaceTaskLinkDao.class),runtimes,storage,mock(PersonalWorkspaceWriteService.class),new PersonalWorkspaceExecutionProperties(List.of("image/png","text/plain")));
         wireAssigneeFixture(service,pwe);
         service.setSkillExecutionDependencies(attachments,installed,capabilities,policy);
+        service.setSkillManagement(management);
+        // This suite isolates the actual PWE consumer. SQL lock serialization is covered by
+        // SkillManagementTransactionTest, not simulated by these mocked repositories.
+        when(management.admit(any(),anyString(),anyString(),any())).thenAnswer(i->((Supplier<?>)i.getArgument(3)).get());
+        when(management.taskBinding(anyString(),anyString(),anyString(),anyString(),anyLong(),anyString(),anyString())).thenAnswer(i->
+            SkillManagementCodec.map("executionId",i.getArgument(2),"taskGrantId",i.getArgument(3),"taskGrantVersion",Long.toString(i.getArgument(4,Long.class)),
+                "agentId",i.getArgument(5),"skillKey","analysis","skillInstallationId",i.getArgument(6),"productVersionId","spv_analysis_1",
+                "skillVersion","1.0.0","packageSha256",HASH,"manifestSha256",HASH,"approvedPermissionsSha256",HASH));
         var root=new AgentTaskMetaEntity().setTaskId("task").setAssignedAgentId("agent").setTaskVersion(7L).setOwnerJiacn("owner");root.setTenantId("0");root.setClientId("client");
         var transactions=mock(AgentTaskMutationTransaction.class);
         when(transactions.executeWithLockedTaskRootInOwnerScope(eq("0"),eq("client"),eq("owner"),eq("task"),any())).thenAnswer(i->((AgentTaskMutationTransaction.LockedTaskMutation<?>)i.getArgument(4)).apply(root));
@@ -66,7 +75,7 @@ public class SkillExecutionServiceTest {
         when(installed.read(any())).thenReturn(new InstalledSkillDescriptorLookup.Snapshot(List.of(new InstalledSkillDescriptorLookup.Descriptor("analysis","1.0.0","install",HASH,HASH,json(manifest),"rti_"+"1".repeat(32),"host",null))));
         var sessionFence=new AgentManagedSessionLookup.SessionFence("rti_"+"1".repeat(32),"host","runtime",2);
         when(policy.read(any(),eq("task"))).thenReturn(new TaskSkillPolicyService.Snapshot(true,null,7,sessionFence,new SkillCapabilityLookup.Scope("0","client","owner","agent")));
-        when(capabilities.lookup(any(),eq(sessionFence))).thenReturn(new SkillCapabilityLookup.View(SkillCapabilityLookup.State.AVAILABLE,"session",sessionFence,new SkillCapabilityLookup.Catalog("1",List.of(new SkillCapabilityLookup.RuntimeSkill("analysis","1.0.0",HASH,HASH,"native-model",SkillCapabilityLookup.Readiness.READY,null,HASH,null)))));
+        when(capabilities.lookup(any(),eq(sessionFence))).thenReturn(new SkillCapabilityLookup.View(SkillCapabilityLookup.State.AVAILABLE,"session",sessionFence,new SkillCapabilityLookup.Catalog("1",List.of(new SkillCapabilityLookup.RuntimeSkill("analysis","1.0.0",HASH,HASH,"native-model",SkillCapabilityLookup.Readiness.READY,null,HASH,null,"install","spv_analysis_1","EXECUTABLE","1",true,1L)))));
         var snapshot=snapshot();String digest=sha(json(snapshot));
         execution=new PersonalWorkspaceExecutionEntity().setExecutionId("exec").setTaskId("task").setRunId("run").setConversationId("42").setTargetAgentId("agent").setOwnerJiacn("owner")
                 .setExecutionMode("CONVERSATION").setExecutionState("QUEUED").setExecutionProtocolVersion(4).setPermittedOperation("EXECUTE_SKILL").setTaskGrantId("grant").setTaskGrantVersion(1L).setAssignmentRevision(7L)
@@ -112,7 +121,9 @@ public class SkillExecutionServiceTest {
         assertEquals("owner", execution.getOwnerJiacn());
         assertEquals("owner", skill.getOwnerJiacn());
         verify(installed, atLeastOnce()).read(providerCatalog);
-        verify(capabilities, atLeastOnce()).lookup(providerCatalog, session);
+        // The task is already admitted with its exact descriptor. A new catalog may no longer
+        // expose this installation after upgrade; it must not revoke the frozen task reference.
+        verifyNoInteractions(capabilities);
         verify(capabilities, never()).lookup(new SkillCapabilityLookup.Scope("0", "client", "owner", "agent"), session);
         verify(attachments, never()).lock("0", "client", "provider", "exec");
         verify(assignees, atLeastOnce()).requireGrantTarget("0", "client", "owner", "task", "grant", 1);
@@ -129,7 +140,15 @@ public class SkillExecutionServiceTest {
         assertEquals("WAITING_PROVIDER",skill.getPhase());assertEquals(1L,skill.getVersion());
     }
     @Test void effectDigestChangeCannotReopen(){service.startEffect(runtime,"task","run","generate",start());assertThrows(Failure.class,()->service.startEffect(runtime,"task","run","generate",new SkillExecutionService.EffectStart("exec",skill.getSnapshotSha256(),fence,"b".repeat(64),null)));}
-    @Test void newEffectRequiresActualCatalogReadiness(){when(capabilities.lookup(any(),any())).thenReturn(SkillCapabilityLookup.View.unavailable(SkillCapabilityLookup.State.DISCONNECTED));assertThrows(Failure.class,()->service.startEffect(runtime,"task","run","generate",start()));verify(attachments,never()).compareAndSet(any(),anyLong(),anyString());}
+    @Test void alreadyAdmittedOldInstallationDoesNotBorrowCurrentCatalogReadiness(){
+        when(capabilities.lookup(any(),any())).thenReturn(SkillCapabilityLookup.View.unavailable(SkillCapabilityLookup.State.DISCONNECTED));
+        assertEquals("NEW",service.startEffect(runtime,"task","run","generate",start()).disposition());verifyNoInteractions(capabilities);
+    }
+    @Test void oldTaskStillRequiresItsExactAuthorizedDescriptorEvenIfCurrentCatalogIsReady(){
+        when(installed.read(any())).thenReturn(new InstalledSkillDescriptorLookup.Snapshot(List.of()));
+        assertThrows(Failure.class,()->service.startEffect(runtime,"task","run","generate",start()));
+        verify(attachments,never()).compareAndSet(any(),anyLong(),anyString());
+    }
     @Test void bindingRevisionCannotBeInvented(){assertThrows(Failure.class,()->service.startEffect(runtime,"task","run","generate",new SkillExecutionService.EffectStart("exec",skill.getSnapshotSha256(),fence,HASH,"invented")));}
     @Test void expiredAndWrongLeaseRejectEvenReplays(){service.startEffect(runtime,"task","run","generate",start());execution.setConversationLeaseExpiresAt(1L);assertThrows(Failure.class,()->service.startEffect(runtime,"task","run","generate",start()));}
     @Test void resumeTransformsLostStartReceiptToUnknownWithoutExecutionWork(){service.startEffect(runtime,"task","run","generate",start());var resume=service.resume(runtime,"task","run",new SkillExecutionService.Resume("exec",skill.getSnapshotSha256()));assertEquals("RESULT_UNKNOWN",resume.phase());assertFalse(resume.allowedWork().contains("EXECUTE"));assertEquals("UNKNOWN",service.startEffect(runtime,"task","run","generate",start()).disposition());}
@@ -159,6 +178,11 @@ public class SkillExecutionServiceTest {
         var result=service.create(owner,new SkillExecutionService.Create("action","task","42",1,"agent","grant",1,7,snapshot()));
         assertTrue(result.executionId().matches("pwe_[a-f0-9]{60}"));assertTrue(result.runId().matches("pwe_run_[a-f0-9]{64}"));assertEquals("READY",skill.getPhase());assertNull(execution.getControlledConsentId());assertEquals(4,execution.getExecutionProtocolVersion());assertNull(execution.getOutputContentMimeType());
         verify(grants).admit(any(),eq("task"),eq("grant"),eq(1L),eq(7L),eq("agent"),eq("EXECUTE_SKILL"),eq(false));
+        verify(management).admit(eq(new SkillCapabilityLookup.Scope("0","client","owner","agent")),eq("analysis"),eq("install"),any());
+        var binding=SkillManagementCodec.read(skill.getTaskSkillBindingJson().getBytes(StandardCharsets.UTF_8),"TaskSkillBinding");
+        assertEquals(result.executionId(),binding.get("executionId"));assertEquals("install",binding.get("skillInstallationId"));
+        assertEquals("grant",binding.get("taskGrantId"));assertEquals("1",binding.get("taskGrantVersion"));
+        assertFalse(skill.getSnapshotJson().contains("taskSkillBinding"));assertEquals(sha(skill.getSnapshotJson()),skill.getSnapshotSha256());
     }
     @Test void mismatchedGrantSnapshotCannotCreate(){var snapshot=snapshot();snapshot.put("taskGrant",Map.of("id","other","version",1,"assignmentRevision",7));assertThrows(Failure.class,()->service.create(owner,new SkillExecutionService.Create("action","task","42",1,"agent","grant",1,7,snapshot)));verify(pwe,never()).insert(any());}
     @Test void malformedParametersCannotCreate(){var snapshot=snapshot();snapshot.put("parameters",Map.of("unknown",true));assertThrows(RuntimeException.class,()->service.create(owner,new SkillExecutionService.Create("action","task","42",1,"agent","grant",1,7,snapshot)));verify(pwe,never()).insert(any());}

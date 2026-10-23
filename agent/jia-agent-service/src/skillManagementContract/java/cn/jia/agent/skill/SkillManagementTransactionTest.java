@@ -54,6 +54,7 @@ public class SkillManagementTransactionTest {
     protected SkillCapabilityLookup capabilities;
     protected SkillAgentVersions versions;
     protected TransactionTemplate tx;
+    private SkillExecutionDao taskAttachments;
 
     @BeforeAll static void startPrivateMysql() throws Exception {
         String configured=System.getenv("CYF_REVIEW_MYSQLD");
@@ -92,13 +93,14 @@ public class SkillManagementTransactionTest {
         admin.execute("CREATE DATABASE `"+database+"` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin");
         var ds=source(database);jdbc=new JdbcTemplate(ds);var manager=new DataSourceTransactionManager(ds);tx=new TransactionTemplate(manager);
         for(String resource:List.of("db/economy-v0-foundation.sql","db/economy-v0-skill-marketplace.sql","db/economy-v0-skill-application.sql",
-                "db/agent-command-transport-schema.sql","db/economy-skill-management-sm-c1.sql"))
+                "db/agent-command-transport-schema.sql","db/economy-skill-management-sm-c1.sql","db/agent-skill-execution-v1.sql"))
             new ResourceDatabasePopulator(new ClassPathResource(resource)).execute(ds);
         var config=new org.apache.ibatis.session.Configuration();config.setMapUnderscoreToCamelCase(true);
         for(Class<?> type:List.of(EconomySkillMarketplaceMapper.class,EconomySkillApplicationMapper.class,EconomyLedgerMapper.class,
-                EconomySkillManagementMapper.class,AgentCommandTransportMapper.class,AgentCommandRecoveryMapper.class,AgentSkillInstallRecoveryMapper.class))config.addMapper(type);
+                EconomySkillManagementMapper.class,SkillExecutionMapper.class,AgentCommandTransportMapper.class,AgentCommandRecoveryMapper.class,AgentSkillInstallRecoveryMapper.class))config.addMapper(type);
         var factory=new SqlSessionFactoryBean();factory.setDataSource(ds);factory.setConfiguration(config);
         var sql=new SqlSessionTemplate(Objects.requireNonNull(factory.getObject()));
+        taskAttachments=new SkillExecutionDaoImpl(sql.getMapper(SkillExecutionMapper.class));
         market=sql.getMapper(EconomySkillMarketplaceMapper.class);var app=sql.getMapper(EconomySkillApplicationMapper.class);
         db=sql.getMapper(EconomySkillManagementMapper.class);var ledger=sql.getMapper(EconomyLedgerMapper.class);
         var gate=new EconomyPreviewGate(new EconomyPreviewProperties(true,List.of(new EconomyPreviewProperties.AllowedScope("0",ACTOR.clientId()))));
@@ -167,8 +169,11 @@ public class SkillManagementTransactionTest {
     }
     void report(Map<String,Object> value,String outcome,String reason){service.result(proof(),result(value,evidence(value,outcome,reason)));}
     void catalog(Map<String,Object> value) {
+        catalog(value,"EXECUTABLE".equals(object(value.get("target")).get("kind"))?SkillCapabilityLookup.Readiness.READY:SkillCapabilityLookup.Readiness.NOT_EXECUTABLE);
+    }
+    void catalog(Map<String,Object> value,SkillCapabilityLookup.Readiness readiness) {
         var target=object(value.get("target"));var fact=new SkillCapabilityLookup.RuntimeSkill(text(value,"skillKey"),text(target,"skillVersion"),text(target,"packageSha256"),text(target,"manifestSha256"),"EXECUTABLE".equals(target.get("kind"))?"native-model":null,
-            "EXECUTABLE".equals(target.get("kind"))?SkillCapabilityLookup.Readiness.READY:SkillCapabilityLookup.Readiness.NOT_EXECUTABLE,null,"EXECUTABLE".equals(target.get("kind"))?"c".repeat(64):null,null,text(target,"skillInstallationId"),text(target,"productVersionId"),text(target,"kind"),text(value,"skillRevision"),Boolean.TRUE.equals(value.get("desiredEnabled")),System.currentTimeMillis());
+            readiness,null,readiness==SkillCapabilityLookup.Readiness.READY?"c".repeat(64):null,null,text(target,"skillInstallationId"),text(target,"productVersionId"),text(target,"kind"),text(value,"skillRevision"),Boolean.TRUE.equals(value.get("desiredEnabled")),System.currentTimeMillis());
         var fence=new AgentManagedSessionLookup.SessionFence(runtime.getRuntimeInstallationId(),"host-1","runtime-1",1L);
         when(capabilities.lookup(any(),any())).thenReturn(new SkillCapabilityLookup.View(SkillCapabilityLookup.State.AVAILABLE,"session-1",fence,new SkillCapabilityLookup.Catalog("1",List.of(fact))));
         service.capabilitiesChanged(proof());
@@ -270,6 +275,50 @@ public class SkillManagementTransactionTest {
         var retry=service.retry(ACTOR,AGENT,text(enable,"skillChangeId"),"enable-retry","retry",map("expectedChangeRevision",enable.get("changeRevision")));
         assertEquals(installation,object(retry.get("target")).get("skillInstallationId"));assertEquals(1,count("economy_skill_installation"));assertEquals("POLICY",command(retry).get("phase"));
         report(retry,"APPLIED",null);catalog(current(retry));assertEquals("yes",service.admit(scope(),"pdf-export",installation,()->"yes"));
+    }
+
+    @Test void disabledPolicySynchronizesDespiteMissingRunnerDependenciesWithoutRevokingOldTaskBinding() throws Exception {
+        publishExecutable("1.0.0",1);var first=packageChange("INSTALL",null,"0","spv_pdf_1");finishInstall(first);first=current(first);
+        String installation=text(object(first.get("target")),"skillInstallationId");
+        var frozen=service.admit(scope(),"pdf-export",installation,()->service.taskBinding("0",ACTOR.clientId(),"old-execution","old-grant",1,AGENT,installation));
+        var disable=policyChange("DISABLE",first);report(disable,"APPLIED",null);
+        catalog(current(disable),SkillCapabilityLookup.Readiness.DEPENDENCY_MISSING);disable=current(disable);
+        assertEquals("SUCCEEDED",disable.get("status"));assertEquals(true,disable.get("runtimeSynced"));assertEquals(false,disable.get("desiredEnabled"));
+        assertThrows(SkillMarketplaceException.class,()->service.admit(scope(),"pdf-export",installation,()->"never"));
+        assertEquals(installation,frozen.get("skillInstallationId"));assertEquals(1,service.descriptors(scope()).size());
+    }
+
+    @Test void exactTaskAttachmentCommitsAndRollsBackWithTheRealAdmissionTransaction() throws Exception {
+        publishExecutable("1.0.0",1);var first=packageChange("INSTALL",null,"0","spv_pdf_1");finishInstall(first);first=current(first);
+        String installation=text(object(first.get("target")),"skillInstallationId");var target=object(first.get("target"));
+        var snapshot=map("skill",map("installationId",installation,"packageSha256",target.get("packageSha256")),"taskGrant",map("id","grant","version",1));
+        String frozen=json(snapshot),digest=HexFormat.of().formatHex(SkillPackageStore.sha256(frozen.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        var insert=(java.util.function.Consumer<String>)(execution->{
+            var binding=service.taskBinding("0",ACTOR.clientId(),execution,"grant",1,AGENT,installation);
+            taskAttachments.insertReady(new SkillExecutionEntity().setTenantId("0").setClientId(ACTOR.clientId()).setOwnerJiacn(ACTOR.ownerJiacn())
+                .setExecutionId(execution).setSkillKey("pdf-export").setSkillVersion("1.0.0").setPackageSha256(text(target,"packageSha256"))
+                .setManifestSha256(text(target,"manifestSha256")).setSnapshotJson(frozen).setSnapshotSha256(digest).setTaskSkillBindingJson(json(binding)).setCreatedAt(1L));
+        });
+        assertThrows(IllegalStateException.class,()->service.admit(scope(),"pdf-export",installation,()->{insert.accept("exec-rolled-back");throw new IllegalStateException("synthetic task authorization failure");}));
+        assertNull(taskAttachments.find("0",ACTOR.clientId(),ACTOR.ownerJiacn(),"exec-rolled-back"));
+        service.admit(scope(),"pdf-export",installation,()->{insert.accept("exec-pinned");return null;});
+        var row=taskAttachments.find("0",ACTOR.clientId(),ACTOR.ownerJiacn(),"exec-pinned");assertNotNull(row);
+        assertEquals(digest,row.getSnapshotSha256());assertEquals(installation,read(row.getTaskSkillBindingJson().getBytes(java.nio.charset.StandardCharsets.UTF_8),"TaskSkillBinding").get("skillInstallationId"));
+        policyChange("DISABLE",first);assertEquals(row.getTaskSkillBindingJson(),taskAttachments.find("0",ACTOR.clientId(),ACTOR.ownerJiacn(),"exec-pinned").getTaskSkillBindingJson());
+        assertThrows(SkillMarketplaceException.class,()->service.admit(scope(),"pdf-export",installation,()->{insert.accept("exec-denied");return null;}));
+        assertNull(taskAttachments.find("0",ACTOR.clientId(),ACTOR.ownerJiacn(),"exec-denied"));
+        // This exercises actual admission + attachment SQL; full task-grant ACL is a separate PWE consumer test.
+    }
+    @Test void taskBindingIncrementalMigrationPreservesHistoricalSnapshotAndOnlyAttachesOnce() {
+        jdbc.execute("ALTER TABLE agent_skill_execution DROP COLUMN task_skill_binding_json");
+        jdbc.update("INSERT INTO agent_skill_execution(tenant_id,client_id,owner_jiacn,execution_id,skill_key,skill_version,package_sha256,manifest_sha256,snapshot_json,snapshot_sha256,phase,effects_json,version,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,'READY','{}',0,1,1)",
+            "0",ACTOR.clientId(),ACTOR.ownerJiacn(),"historical","pdf-export","1.0.0","a".repeat(64),"b".repeat(64),"{\"frozen\":true}","c".repeat(64));
+        new ResourceDatabasePopulator(new ClassPathResource("db/agent-skill-management-sm-c1.sql")).execute(source(database));
+        var before=taskAttachments.find("0",ACTOR.clientId(),ACTOR.ownerJiacn(),"historical");assertNull(before.getTaskSkillBindingJson());
+        assertEquals(0,taskAttachments.bindTaskSkill("0",ACTOR.clientId(),ACTOR.ownerJiacn(),"historical","d".repeat(64),0,"{}",2));
+        assertEquals(1,taskAttachments.bindTaskSkill("0",ACTOR.clientId(),ACTOR.ownerJiacn(),"historical","c".repeat(64),0,"{}",2));
+        assertEquals(0,taskAttachments.bindTaskSkill("0",ACTOR.clientId(),ACTOR.ownerJiacn(),"historical","c".repeat(64),1,"{\"different\":true}",3));
+        var after=taskAttachments.find("0",ACTOR.clientId(),ACTOR.ownerJiacn(),"historical");assertEquals(before.getSnapshotJson(),after.getSnapshotJson());assertEquals(before.getSnapshotSha256(),after.getSnapshotSha256());
     }
 
     @Test void offlineFirstInstallFlowsThroughRealOutboxPrepareActivateAppliedAndCurrentCatalog() {
