@@ -289,6 +289,23 @@ class ArchiveQuestionWorkerTest {
     }
 
     @Test
+    void anotherValidOwnerIsNotAPoisonScopeUnderCurrentAuthenticatedReaderPolicy() {
+        ArchiveQuestionProvider provider = new ArchiveClerkFallbackProvider();
+        create(provider);
+        var other = new ArchiveOwnerScope("0", OWNER.clientId(), "another-valid-owner");
+        var question = store.findQuestion(OWNER, ID, false);
+        var outbox = store.findOutbox(OWNER, ID, false);
+        store.removeQuestionAndOutbox(OWNER, ID);
+        store.setQuestion(other, question);
+        store.setOutbox(other, outbox);
+        assertTrue(worker(provider).runOnce());
+        assertEquals("SUCCEEDED", store.findQuestion(other, ID, false).status());
+        assertEquals(null, store.findQuestion(OWNER, ID, false));
+    }
+
+    // Malformed client claims below model poison rows. A different valid owner is authorized;
+    // tenant/owner equality and rollout allowlists are not the current access policy.
+    @Test
     void disabledOrOutOfScopeWorkerNeverRecoversClaimsOrInvokesProvider() {
         AtomicInteger calls = new AtomicInteger();
         ArchiveQuestionProvider provider = request -> {
@@ -303,7 +320,7 @@ class ArchiveQuestionWorkerTest {
         assertEquals(0, calls.get());
         assertEquals("QUEUED", service.get(OWNER, ID).status());
 
-        ArchiveOwnerScope malformedOwner = new ArchiveOwnerScope("owner-a", "client-a", "different-owner");
+        ArchiveOwnerScope malformedOwner = new ArchiveOwnerScope("0", "invalid*client", "different-owner");
         QuestionRecord queued = store.findQuestion(OWNER, ID, false);
         store.setQuestion(malformedOwner, new QuestionRecord(queued.rowId(), queued.questionId(), queued.editionId(),
                 queued.manifestSha256(), queued.blockType(), queued.blockId(), queued.anchorJson(),
@@ -337,7 +354,7 @@ class ArchiveQuestionWorkerTest {
         OutboxRecord baseOutbox = store.findOutbox(OWNER, ID, false);
         store.removeQuestionAndOutbox(OWNER, ID);
         for (int index = 0; index < 101; index++) {
-            ArchiveOwnerScope poison = new ArchiveOwnerScope(OWNER.tenantId(), OWNER.clientId(), "poison-" + index);
+            ArchiveOwnerScope poison = new ArchiveOwnerScope(OWNER.tenantId(), "invalid*client", "poison-" + index);
             store.setQuestion(poison, questionWith(base, ID, "QUEUED", 1));
             store.setOutbox(poison, readyOutbox(baseOutbox, ID, 1));
         }
@@ -359,7 +376,7 @@ class ArchiveQuestionWorkerTest {
         OutboxRecord baseOutbox = store.findOutbox(OWNER, ID, false);
         store.removeQuestionAndOutbox(OWNER, ID);
         for (int index = 0; index < 101; index++) {
-            ArchiveOwnerScope poison = new ArchiveOwnerScope(OWNER.tenantId(), OWNER.clientId(), "expired-" + index);
+            ArchiveOwnerScope poison = new ArchiveOwnerScope(OWNER.tenantId(), "invalid*client", "expired-" + index);
             store.setQuestion(poison, questionWith(base, ID, "RUNNING", 2));
             store.setOutbox(poison, exhaustedOutbox(baseOutbox, ID, 2, NOW.minusSeconds(2)));
         }
@@ -414,7 +431,7 @@ class ArchiveQuestionWorkerTest {
         String readyPoisonId = "623e4567-e89b-42d3-a456-426614174000";
         for (int index = 0; index < 40; index++) {
             ArchiveOwnerScope poison = new ArchiveOwnerScope(
-                    OWNER.tenantId(), OWNER.clientId(), "bounded-poison-" + index);
+                    OWNER.tenantId(), "invalid*client", "bounded-poison-" + index);
             store.setQuestion(poison, questionWith(base, expiredPoisonId, "RUNNING", 2));
             store.setOutbox(poison, exhaustedOutbox(
                     baseOutbox, expiredPoisonId, 2, NOW.minusSeconds(2)));
@@ -465,7 +482,7 @@ class ArchiveQuestionWorkerTest {
         store.setOutbox(OWNER, readyOutbox(baseOutbox, ID, 1));
         for (int index = 0; index < ArchiveQuestionWorker.CANDIDATE_BATCH - 1; index++) {
             ArchiveOwnerScope poison = new ArchiveOwnerScope(
-                    OWNER.tenantId(), OWNER.clientId(), "ready-head-" + index);
+                    OWNER.tenantId(), "invalid*client", "ready-head-" + index);
             String poisonId = String.format("%08x-0000-4000-8000-000000000000", index + 256);
             store.setQuestion(poison, questionWith(base, poisonId, "QUEUED", 1));
             store.setOutbox(poison, readyOutbox(baseOutbox, poisonId, 1));
@@ -477,7 +494,7 @@ class ArchiveQuestionWorkerTest {
         assertTrue(store.claimCandidateQueries - beforeQueries <= 1);
         assertEquals("QUEUED", store.findQuestion(OWNER, ID, false).status());
 
-        ArchiveOwnerScope tail = new ArchiveOwnerScope(OWNER.tenantId(), OWNER.clientId(), "ready-tail");
+        ArchiveOwnerScope tail = new ArchiveOwnerScope(OWNER.tenantId(), "invalid*client", "ready-tail");
         String tailId = "923e4567-e89b-42d3-a456-426614174000";
         store.setQuestion(tail, questionWith(base, tailId, "QUEUED", 1));
         store.setOutbox(tail, readyOutbox(baseOutbox, tailId, 1));
@@ -506,7 +523,7 @@ class ArchiveQuestionWorkerTest {
         store.setOutbox(OWNER, readyOutbox(baseOutbox, healthyId, 1));
         for (int index = 0; index < ArchiveQuestionWorker.CANDIDATE_BATCH - 2; index++) {
             ArchiveOwnerScope poison = new ArchiveOwnerScope(
-                    OWNER.tenantId(), OWNER.clientId(), "later-ready-" + index);
+                    OWNER.tenantId(), "invalid*client", "later-ready-" + index);
             String poisonId = String.format("%08x-0000-4000-8000-000000000000", index + 768);
             store.setQuestion(poison, questionWith(base, poisonId, "QUEUED", 1));
             store.setOutbox(poison, readyOutbox(baseOutbox, poisonId, 1));
@@ -517,7 +534,7 @@ class ArchiveQuestionWorkerTest {
         assertEquals("QUEUED", store.findQuestion(OWNER, ID, false).status());
         assertEquals("SUCCEEDED", store.findQuestion(OWNER, healthyId, false).status());
 
-        ArchiveOwnerScope tail = new ArchiveOwnerScope(OWNER.tenantId(), OWNER.clientId(), "later-tail");
+        ArchiveOwnerScope tail = new ArchiveOwnerScope(OWNER.tenantId(), "invalid*client", "later-tail");
         String tailId = "c23e4567-e89b-42d3-a456-426614174000";
         store.setQuestion(tail, questionWith(base, tailId, "QUEUED", 1));
         store.setOutbox(tail, readyOutbox(baseOutbox, tailId, 1));
@@ -537,7 +554,7 @@ class ArchiveQuestionWorkerTest {
         store.setOutbox(OWNER, exhaustedOutbox(baseOutbox, ID, 2, NOW.minusSeconds(20)));
         for (int index = 0; index < ArchiveQuestionWorker.CANDIDATE_BATCH - 1; index++) {
             ArchiveOwnerScope poison = new ArchiveOwnerScope(
-                    OWNER.tenantId(), OWNER.clientId(), "expired-head-" + index);
+                    OWNER.tenantId(), "invalid*client", "expired-head-" + index);
             String poisonId = String.format("%08x-0000-4000-8000-000000000000", index + 512);
             store.setQuestion(poison, questionWith(base, poisonId, "RUNNING", 2));
             store.setOutbox(poison, exhaustedOutbox(
@@ -550,7 +567,7 @@ class ArchiveQuestionWorkerTest {
         assertTrue(store.exhaustedCandidateQueries - beforeQueries <= 1);
         assertEquals("RUNNING", store.findQuestion(OWNER, ID, false).status());
 
-        ArchiveOwnerScope tail = new ArchiveOwnerScope(OWNER.tenantId(), OWNER.clientId(), "expired-tail");
+        ArchiveOwnerScope tail = new ArchiveOwnerScope(OWNER.tenantId(), "invalid*client", "expired-tail");
         String tailId = "a23e4567-e89b-42d3-a456-426614174000";
         store.setQuestion(tail, questionWith(base, tailId, "RUNNING", 2));
         store.setOutbox(tail, exhaustedOutbox(baseOutbox, tailId, 2, NOW.minusSeconds(1)));
@@ -574,7 +591,7 @@ class ArchiveQuestionWorkerTest {
         store.removeQuestionAndOutbox(OWNER, ID);
         for (int index = 0; index < 130; index++) {
             ArchiveOwnerScope poison = new ArchiveOwnerScope(
-                    OWNER.tenantId(), OWNER.clientId(), "deep-ready-poison-" + index);
+                    OWNER.tenantId(), "invalid*client", "deep-ready-poison-" + index);
             String poisonId = String.format("%08x-0000-4000-8000-000000000000", index + 2048);
             store.setQuestion(poison, questionWith(base, poisonId, "QUEUED", 1));
             store.setOutbox(poison, readyOutbox(baseOutbox, poisonId, 1));
@@ -589,7 +606,7 @@ class ArchiveQuestionWorkerTest {
         boolean succeeded = false;
         for (int run = 0; run < 20 && !succeeded; run++) {
             ArchiveOwnerScope tailOwner = new ArchiveOwnerScope(
-                    OWNER.tenantId(), OWNER.clientId(), "deep-ready-tail-" + run);
+                    OWNER.tenantId(), "invalid*client", "deep-ready-tail-" + run);
             String tailId = String.format("%08x-0000-4000-8000-000000000000", tail++);
             store.setQuestion(tailOwner, questionWith(base, tailId, "QUEUED", 1));
             store.setOutbox(tailOwner, readyOutbox(baseOutbox, tailId, 1));
@@ -614,7 +631,7 @@ class ArchiveQuestionWorkerTest {
         store.removeQuestionAndOutbox(OWNER, ID);
         for (int index = 0; index < 130; index++) {
             ArchiveOwnerScope poison = new ArchiveOwnerScope(
-                    OWNER.tenantId(), OWNER.clientId(), "deep-expired-poison-" + index);
+                    OWNER.tenantId(), "invalid*client", "deep-expired-poison-" + index);
             String poisonId = String.format("%08x-0000-4000-8000-000000000000", index + 6144);
             store.setQuestion(poison, questionWith(base, poisonId, "RUNNING", 2));
             store.setOutbox(poison, exhaustedOutbox(
@@ -630,7 +647,7 @@ class ArchiveQuestionWorkerTest {
         boolean finalized = false;
         for (int run = 0; run < 20 && !finalized; run++) {
             ArchiveOwnerScope tailOwner = new ArchiveOwnerScope(
-                    OWNER.tenantId(), OWNER.clientId(), "deep-expired-tail-" + run);
+                    OWNER.tenantId(), "invalid*client", "deep-expired-tail-" + run);
             String tailId = String.format("%08x-0000-4000-8000-000000000000", tail++);
             store.setQuestion(tailOwner, questionWith(base, tailId, "RUNNING", 2));
             store.setOutbox(tailOwner, exhaustedOutbox(
@@ -690,7 +707,7 @@ class ArchiveQuestionWorkerTest {
         boolean overflowDone = false;
         for (int run = 0; run < 12 && !overflowDone; run++) {
             ArchiveOwnerScope tailOwner = new ArchiveOwnerScope(
-                    OWNER.tenantId(), OWNER.clientId(), "bounded-overflow-tail-" + run);
+                    OWNER.tenantId(), "invalid*client", "bounded-overflow-tail-" + run);
             String tailId = String.format("%08x-0000-4000-8000-000000000000", 25000 + run);
             store.setQuestion(tailOwner, questionWith(base, tailId, "QUEUED", 1));
             store.setOutbox(tailOwner, readyOutbox(baseOutbox, tailId, 1));
@@ -750,7 +767,7 @@ class ArchiveQuestionWorkerTest {
         boolean recovered = false;
         for (int run = 0; run < 20 && !recovered; run++) {
             ArchiveOwnerScope tailOwner = new ArchiveOwnerScope(
-                    OWNER.tenantId(), OWNER.clientId(), "ready-hol-tail-" + run);
+                    OWNER.tenantId(), "invalid*client", "ready-hol-tail-" + run);
             String tailId = String.format("%08x-0000-4000-8000-000000000000", 31000 + run);
             store.setQuestion(tailOwner, questionWith(base, tailId, "QUEUED", 1));
             store.setOutbox(tailOwner, readyOutbox(baseOutbox, tailId, 1));
@@ -807,7 +824,7 @@ class ArchiveQuestionWorkerTest {
         boolean finalized = false;
         for (int run = 0; run < 20 && !finalized; run++) {
             ArchiveOwnerScope tailOwner = new ArchiveOwnerScope(
-                    OWNER.tenantId(), OWNER.clientId(), "expired-hol-tail-" + run);
+                    OWNER.tenantId(), "invalid*client", "expired-hol-tail-" + run);
             String tailId = String.format("%08x-0000-4000-8000-000000000000", 33000 + run);
             store.setQuestion(tailOwner, questionWith(base, tailId, "RUNNING", 2));
             store.setOutbox(tailOwner, exhaustedOutbox(
@@ -854,7 +871,7 @@ class ArchiveQuestionWorkerTest {
         List<ArchiveOwnerScope> middleOwners = new java.util.ArrayList<>();
         for (int index = 0; index < 80; index++) {
             ArchiveOwnerScope middle = new ArchiveOwnerScope(
-                    OWNER.tenantId(), OWNER.clientId(), "r9-ready-middle-" + index);
+                    OWNER.tenantId(), "invalid*client", "r9-ready-middle-" + index);
             middleOwners.add(middle);
             store.setQuestion(middle, questionWith(base, ID, "QUEUED", 1));
             store.setOutbox(middle, readyOutbox(baseOutbox, ID, 1));
@@ -863,7 +880,7 @@ class ArchiveQuestionWorkerTest {
         store.setOutbox(OWNER, readyOutbox(baseOutbox, oldThrough, 1));
         for (int index = 0; index < 14; index++) {
             ArchiveOwnerScope after = new ArchiveOwnerScope(
-                    OWNER.tenantId(), OWNER.clientId(), "r9-ready-after-old-" + index);
+                    OWNER.tenantId(), "invalid*client", "r9-ready-after-old-" + index);
             store.setQuestion(after, questionWith(base, ID, "QUEUED", 1));
             store.setOutbox(after, readyOutbox(baseOutbox, ID, 1));
         }
@@ -887,7 +904,7 @@ class ArchiveQuestionWorkerTest {
         store.setOutbox(OWNER, readyOutbox(baseOutbox, recoveredB, 1));
         for (int index = 0; index < 256; index++) {
             ArchiveOwnerScope after = new ArchiveOwnerScope(
-                    OWNER.tenantId(), OWNER.clientId(), "r9-ready-after-b-" + index);
+                    OWNER.tenantId(), "invalid*client", "r9-ready-after-b-" + index);
             store.setQuestion(after, questionWith(base, ID, "QUEUED", 1));
             store.setOutbox(after, readyOutbox(baseOutbox, ID, 1));
         }
@@ -915,7 +932,7 @@ class ArchiveQuestionWorkerTest {
         boolean recovered = false;
         for (int run = 0; run < 6 && !recovered; run++) {
             ArchiveOwnerScope tail = new ArchiveOwnerScope(
-                    OWNER.tenantId(), OWNER.clientId(), "r9-ready-tail-" + run);
+                    OWNER.tenantId(), "invalid*client", "r9-ready-tail-" + run);
             String tailId = String.format("%08x-0000-4000-8000-000000000000", 41000 + run);
             store.setQuestion(tail, questionWith(base, tailId, "QUEUED", 1));
             store.setOutbox(tail, readyOutbox(baseOutbox, tailId, 1));
@@ -959,7 +976,7 @@ class ArchiveQuestionWorkerTest {
         List<ArchiveOwnerScope> middleOwners = new java.util.ArrayList<>();
         for (int index = 0; index < 80; index++) {
             ArchiveOwnerScope middle = new ArchiveOwnerScope(
-                    OWNER.tenantId(), OWNER.clientId(), "r9-expired-middle-" + index);
+                    OWNER.tenantId(), "invalid*client", "r9-expired-middle-" + index);
             middleOwners.add(middle);
             store.setQuestion(middle, questionWith(base, ID, "RUNNING", 2));
             store.setOutbox(middle, exhaustedOutbox(baseOutbox, ID, 2, NOW.minusSeconds(20)));
@@ -968,7 +985,7 @@ class ArchiveQuestionWorkerTest {
         store.setOutbox(OWNER, exhaustedOutbox(baseOutbox, oldThrough, 2, NOW.minusSeconds(20)));
         for (int index = 0; index < 14; index++) {
             ArchiveOwnerScope after = new ArchiveOwnerScope(
-                    OWNER.tenantId(), OWNER.clientId(), "r9-expired-after-old-" + index);
+                    OWNER.tenantId(), "invalid*client", "r9-expired-after-old-" + index);
             store.setQuestion(after, questionWith(base, ID, "RUNNING", 2));
             store.setOutbox(after, exhaustedOutbox(baseOutbox, ID, 2, NOW.minusSeconds(20)));
         }
@@ -992,7 +1009,7 @@ class ArchiveQuestionWorkerTest {
         store.setOutbox(OWNER, exhaustedOutbox(baseOutbox, recoveredB, 2, NOW.minusSeconds(10)));
         for (int index = 0; index < 256; index++) {
             ArchiveOwnerScope after = new ArchiveOwnerScope(
-                    OWNER.tenantId(), OWNER.clientId(), "r9-expired-after-b-" + index);
+                    OWNER.tenantId(), "invalid*client", "r9-expired-after-b-" + index);
             store.setQuestion(after, questionWith(base, ID, "RUNNING", 2));
             store.setOutbox(after, exhaustedOutbox(baseOutbox, ID, 2, NOW.minusSeconds(9)));
         }
@@ -1020,7 +1037,7 @@ class ArchiveQuestionWorkerTest {
         boolean finalized = false;
         for (int run = 0; run < 6 && !finalized; run++) {
             ArchiveOwnerScope tail = new ArchiveOwnerScope(
-                    OWNER.tenantId(), OWNER.clientId(), "r9-expired-tail-" + run);
+                    OWNER.tenantId(), "invalid*client", "r9-expired-tail-" + run);
             String tailId = String.format("%08x-0000-4000-8000-000000000000", 43000 + run);
             store.setQuestion(tail, questionWith(base, tailId, "RUNNING", 2));
             store.setOutbox(tail, exhaustedOutbox(baseOutbox, tailId, 2, NOW.minusSeconds(1)));
@@ -1073,7 +1090,7 @@ class ArchiveQuestionWorkerTest {
         boolean expiredDone = false;
         for (int run = 0; run < 24 && (!readyDone || !expiredDone); run++) {
             ArchiveOwnerScope tailOwner = new ArchiveOwnerScope(
-                    OWNER.tenantId(), OWNER.clientId(), "permanent-tail-" + run);
+                    OWNER.tenantId(), "invalid*client", "permanent-tail-" + run);
             String tailId = String.format("%08x-0000-4000-8000-000000000000", 20000 + run);
             store.setQuestion(tailOwner, questionWith(base, tailId, "QUEUED", 1));
             store.setOutbox(tailOwner, readyOutbox(baseOutbox, tailId, 1));
@@ -1176,7 +1193,7 @@ class ArchiveQuestionWorkerTest {
         create(provider);
         QuestionRecord base = store.findQuestion(OWNER, ID, false);
         OutboxRecord baseOutbox = store.findOutbox(OWNER, ID, false);
-        ArchiveOwnerScope malformed = new ArchiveOwnerScope("owner-a", "client-a", "different-owner");
+        ArchiveOwnerScope malformed = new ArchiveOwnerScope("0", "invalid*client", "different-owner");
         store.removeQuestionAndOutbox(OWNER, ID);
         store.setQuestion(malformed, questionWith(base, ID, "RUNNING", 2));
         store.setOutbox(malformed, outboxWith(baseOutbox, ID, "LEASED", 3, NOW.minusSeconds(2)));

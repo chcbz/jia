@@ -17,12 +17,12 @@ class ArchiveRootProfileWiringTest {
                 "/task/**", "/phrase/**", "/user/**", "/kefu/**", "/tip/**", "/dwz/**",
                 "/vote/**", "/chat/**", "/agent/**", "/gift/**", "/wx/**", "/job/**",
                 "/sms/**", "/dict/**", "/point/**", "/pvlog/**", "/news/**", "/media/**",
-                "/group/**", "/role/**", "/action/**", "/org/**", "/msg/**", "/archive/**"));
+                "/group/**", "/role/**", "/action/**", "/org/**", "/msg/**", "/archive/**", "/economy/**"));
         List<String> prodLike = List.of(
                 "/task/**", "/phrase/**", "/user/**", "/kefu/**", "/tip/**", "/dwz/**",
                 "/vote/**", "/chat/**", "/gift/**", "/wx/**", "/agent/**", "/job/**",
                 "/sms/**", "/dict/**", "/point/**", "/pvlog/**", "/news/**", "/media/**",
-                "/group/**", "/role/**", "/action/**", "/org/**", "/msg/**", "/archive/**");
+                "/group/**", "/role/**", "/action/**", "/org/**", "/msg/**", "/archive/**", "/economy/**");
         assertProfile("application-prod.properties", prodLike);
         assertProfile("application-grey.properties", prodLike);
     }

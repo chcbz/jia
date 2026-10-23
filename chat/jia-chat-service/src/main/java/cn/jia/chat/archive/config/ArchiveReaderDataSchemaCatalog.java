@@ -40,7 +40,7 @@ public final class ArchiveReaderDataSchemaCatalog {
                         fk("fk_archive_progress_paragraph", List.of("edition_id", "block_id", "paragraph_id"),
                                 "archive_paragraph", List.of("edition_id", "block_id", "paragraph_id"))),
                 checks(
-                        "chk_archive_progress_single_tenant", "tenant_id = '0'",
+                        "chk_archive_reader_progress_single_tenant", "tenant_id = '0'",
                         "chk_archive_progress_state", "state in ('IN_PROGRESS','COMPLETED')",
                         "chk_archive_progress_values", "(byte_offset>=0) and (version>=1)",
                         "chk_archive_progress_completion", "((state='IN_PROGRESS') and (completed_at is null)) or ((state='COMPLETED') and (completed_at is not null))")));

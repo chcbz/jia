@@ -140,6 +140,26 @@ class ArchiveMultiBookMySqlTest {
         var validator = new ArchiveTextSelectionValidator(personalStore);
         assertEquals(paragraph.text(), transactions.required(() -> validator.reconstruct(first.manifest().editionId(), anchor)).selectedText());
         assertThrows(ArchivePersonalDataException.class, () -> transactions.required(() -> validator.reconstruct(second.manifest().editionId(), anchor)));
+        // Holding one book's write lock must not prevent another book's progress transaction.
+        var locked = new java.util.concurrent.CountDownLatch(1);
+        var release = new java.util.concurrent.CountDownLatch(1);
+        var pool = java.util.concurrent.Executors.newFixedThreadPool(2);
+        try {
+            var held = pool.submit(() -> transactions.required(() -> {
+                assertNotNull(personalStore.lockActiveEdition(first.manifest().editionId()));
+                locked.countDown();
+                try { release.await(); } catch (InterruptedException failure) {
+                    Thread.currentThread().interrupt(); throw new IllegalStateException(failure);
+                }
+                return null;
+            }));
+            assertTrue(locked.await(10, java.util.concurrent.TimeUnit.SECONDS));
+            var independent = pool.submit(() -> transactions.required(() ->
+                    personalStore.lockActiveEdition(second.manifest().editionId())));
+            assertEquals(second.manifest().editionId(), independent.get(10, java.util.concurrent.TimeUnit.SECONDS).editionId());
+            release.countDown();
+            held.get(10, java.util.concurrent.TimeUnit.SECONDS);
+        } finally { release.countDown(); pool.shutdownNow(); }
         jdbc.update("UPDATE archive_edition SET import_state='STAGING' WHERE edition_id=?", second.manifest().editionId());
         assertEquals(1, content.listPublishedBooks().size());
         assertNull(personalStore.lockActiveEdition(second.manifest().editionId()));
