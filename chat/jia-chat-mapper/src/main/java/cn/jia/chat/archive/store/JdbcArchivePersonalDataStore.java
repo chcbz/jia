@@ -58,13 +58,27 @@ public class JdbcArchivePersonalDataStore implements ArchivePersonalDataStore {
                 SELECT e.edition_id, e.manifest_sha256
                 FROM archive_work w JOIN archive_edition e
                   ON e.work_id=w.work_id AND e.edition_id=w.active_edition_id
-                WHERE w.work_id='shuihuzhuan' AND w.active_edition_id=?
+                WHERE w.active_edition_id=?
                   AND CAST(w.active_edition_id AS BINARY)=CAST(? AS BINARY)
                   AND OCTET_LENGTH(w.active_edition_id)=OCTET_LENGTH(?)
                   AND e.import_state='READY'
                 FOR UPDATE
                 """, (rs, ignored) -> new ActiveEdition(rs.getString(1), rs.getString(2)),
                 editionId, editionId, editionId));
+    }
+
+    @Override
+    public ContentPoint lockFinalContentPoint(String editionId) {
+        return first(jdbc.query("""
+                SELECT p.edition_id, e.manifest_sha256, c.block_type, p.block_id, c.reader_ordinal,
+                       p.paragraph_id, p.ordinal, p.text, p.utf8_byte_length, p.sha256
+                FROM archive_paragraph p
+                JOIN archive_chapter c ON c.edition_id=p.edition_id AND c.block_id=p.block_id
+                JOIN archive_edition e ON e.edition_id=p.edition_id
+                WHERE p.edition_id=? AND CAST(p.edition_id AS BINARY)=CAST(? AS BINARY)
+                  AND OCTET_LENGTH(p.edition_id)=OCTET_LENGTH(?) AND c.block_type='CHAPTER'
+                ORDER BY c.reader_ordinal DESC, p.ordinal DESC LIMIT 1 FOR UPDATE
+                """, pointMapper(), editionId, editionId, editionId));
     }
 
     @Override

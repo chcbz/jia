@@ -1,7 +1,6 @@
 package cn.jia.chat.archive.service;
 
 import cn.jia.chat.archive.content.ArchiveEtags;
-import cn.jia.chat.archive.content.ArchiveManifestLoader;
 import cn.jia.chat.archive.dto.ArchiveActiveEditionDTO;
 import cn.jia.chat.archive.dto.ArchiveBlockDTO;
 import cn.jia.chat.archive.dto.ArchiveBlockSummaryDTO;
@@ -32,8 +31,14 @@ public class ArchiveReaderServiceImpl implements ArchiveReaderService {
 
     @Override
     @Transactional(readOnly = true)
-    public ArchiveRepresentation<ArchiveCatalogDTO> catalog() {
-        Active active = requireActive(null);
+    public cn.jia.chat.archive.dto.ArchiveShelfDTO books() {
+        return new cn.jia.chat.archive.dto.ArchiveShelfDTO(store.listPublishedBooks());
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public ArchiveRepresentation<ArchiveCatalogDTO> catalog(String workId) {
+        Active active = requireActiveWork(workId, null);
         ArchiveEditionRecord edition = active.edition();
         CatalogBlocks blocks = catalogBlocks(edition);
         ArchiveActiveEditionDTO activeEdition = new ArchiveActiveEditionDTO(
@@ -50,7 +55,9 @@ public class ArchiveReaderServiceImpl implements ArchiveReaderService {
     @Transactional(readOnly = true)
     public ArchiveRepresentation<ArchiveBlockDTO> preface(String editionId) {
         Active active = requireActive(editionId);
-        ArchiveBlockRecord block = store.findBlock(editionId, editionId + "-preface");
+        ArchiveBlockSummaryDTO preface = catalogBlocks(active.edition()).preface();
+        if (preface == null) throw new ArchiveResourceNotFoundException();
+        ArchiveBlockRecord block = store.findBlock(editionId, preface.blockId());
         if (block == null || !"PREFACE".equals(block.blockType()) || block.readerOrdinal() != 0
                 || block.chapterNumber() != null) {
             throw new ArchiveResourceNotFoundException();
@@ -71,32 +78,36 @@ public class ArchiveReaderServiceImpl implements ArchiveReaderService {
     }
 
     private Active requireActive(String requestedEdition) {
-        ArchiveContentStore.ActiveContent activeContent =
-                store.findActiveContent(ArchiveManifestLoader.WORK_ID);
+        ArchiveEditionRecord edition = store.findEdition(requestedEdition);
+        if (edition == null) throw new ArchiveResourceNotFoundException();
+        return requireActiveWork(edition.workId(), requestedEdition);
+    }
+
+    private Active requireActiveWork(String workId, String requestedEdition) {
+        ArchiveContentStore.ActiveContent activeContent = store.findActiveContent(workId);
         if (activeContent == null || activeContent.work() == null || activeContent.edition() == null) {
             throw new ArchiveResourceNotFoundException();
         }
         ArchiveWorkRecord work = activeContent.work();
         ArchiveEditionRecord edition = activeContent.edition();
-        if (!ArchiveManifestLoader.WORK_TITLE.equals(work.title())
-                || work.activeEditionId() == null
+        if (!Objects.equals(workId, work.workId()) || work.activeEditionId() == null
                 || !Objects.equals(work.activeEditionId(), edition.editionId())
                 || (requestedEdition != null && !requestedEdition.equals(work.activeEditionId()))
-                || !"READY".equals(edition.importState())
-                || !work.workId().equals(edition.workId())
-                || !ArchiveManifestLoader.EXPECTED_MANIFEST_SHA256.equals(edition.manifestSha256())
-                || !ArchiveManifestLoader.EXPECTED_MANIFEST_FILE_SHA256.equals(edition.manifestFileSha256())
-                || !ArchiveManifestLoader.EXPECTED_SOURCE_SHA256.equals(edition.sourceSha256())
-                || edition.sourceUtf8ByteLength() != 2_716_495L
-                || edition.chapterCount() != 120 || edition.prefaceParagraphCount() != 11
-                || edition.chapterParagraphCount() != 3_666 || edition.readerParagraphCount() != 3_677
-                || edition.prefaceUtf8ByteLength() != 4_035L
-                || edition.chapterUtf8ByteLength() != 2_680_317L
-                || edition.readerUtf8ByteLength() != 2_684_352L) {
+                || !"READY".equals(edition.importState()) || !work.workId().equals(edition.workId())
+                || !digest(edition.manifestSha256()) || !digest(edition.manifestFileSha256())
+                || !digest(edition.sourceSha256()) || edition.sourceUtf8ByteLength() <= 0
+                || edition.chapterCount() < 1 || edition.prefaceParagraphCount() < 0
+                || edition.chapterParagraphCount() < 1 || edition.prefaceUtf8ByteLength() < 0
+                || (edition.prefaceParagraphCount() == 0) != (edition.prefaceUtf8ByteLength() == 0)
+                || edition.chapterUtf8ByteLength() <= 0
+                || (long) edition.readerParagraphCount() != (long) edition.prefaceParagraphCount() + edition.chapterParagraphCount()
+                || edition.readerUtf8ByteLength() != edition.prefaceUtf8ByteLength() + edition.chapterUtf8ByteLength()) {
             throw new ArchiveResourceNotFoundException();
         }
         return new Active(work, edition);
     }
+
+    private boolean digest(String value) { return value != null && value.matches("[0-9a-f]{64}"); }
 
     private CatalogBlocks catalogBlocks(ArchiveEditionRecord edition) {
         long now = System.nanoTime();
@@ -107,21 +118,28 @@ public class ArchiveReaderServiceImpl implements ArchiveReaderService {
             return current;
         }
         List<ArchiveBlockRecord> rows = store.listBlocks(edition.editionId());
-        require(rows.size() == 121, "active edition block count drift");
-        ArchiveBlockRecord preface = rows.getFirst();
-        require("PREFACE".equals(preface.blockType()) && preface.readerOrdinal() == 0,
-                "active preface drift");
-        List<ArchiveBlockSummaryDTO> chapters = rows.subList(1, rows.size()).stream()
-                .map(this::summary)
-                .toList();
-        for (int index = 0; index < chapters.size(); index++) {
-            ArchiveBlockSummaryDTO chapter = chapters.get(index);
-            require("CHAPTER".equals(chapter.blockType())
-                    && Integer.valueOf(index + 1).equals(chapter.number()),
-                    "active chapter order drift");
+        boolean hasPreface = edition.prefaceParagraphCount() > 0;
+        require(rows.size() == edition.chapterCount() + (hasPreface ? 1 : 0), "active edition block count drift");
+        ArchiveBlockRecord preface = hasPreface ? rows.getFirst() : null;
+        require(preface == null || (edition.editionId().equals(preface.editionId()) && "PREFACE".equals(preface.blockType()) && preface.readerOrdinal() == 0
+                && preface.chapterNumber() == null && preface.paragraphCount() == edition.prefaceParagraphCount()
+                && preface.utf8ByteLength() == edition.prefaceUtf8ByteLength()), "active preface drift");
+        List<ArchiveBlockRecord> chapterRows = rows.subList(hasPreface ? 1 : 0, rows.size());
+        long paragraphs = 0;
+        long bytes = 0;
+        for (int index = 0; index < chapterRows.size(); index++) {
+            ArchiveBlockRecord chapter = chapterRows.get(index);
+            require(edition.editionId().equals(chapter.editionId()) && "CHAPTER".equals(chapter.blockType())
+                    && chapter.readerOrdinal() == index + 1 && Integer.valueOf(index + 1).equals(chapter.chapterNumber())
+                    && chapter.paragraphCount() > 0 && chapter.utf8ByteLength() > 0, "active chapter order drift");
+            paragraphs += chapter.paragraphCount();
+            bytes = Math.addExact(bytes, chapter.utf8ByteLength());
         }
+        require(paragraphs == edition.chapterParagraphCount() && bytes == edition.chapterUtf8ByteLength(),
+                "active chapter metrics drift");
+        List<ArchiveBlockSummaryDTO> chapters = chapterRows.stream().map(this::summary).toList();
         CatalogBlocks loaded = new CatalogBlocks(edition.editionId(), edition.manifestSha256(),
-                now, summary(preface), chapters);
+                now, preface == null ? null : summary(preface), chapters);
         cachedCatalogBlocks = loaded;
         return loaded;
     }

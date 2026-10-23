@@ -8,9 +8,7 @@ import cn.jia.chat.archive.model.ArchiveEditionRecord;
 import cn.jia.chat.archive.model.ArchiveParagraphRecord;
 import cn.jia.chat.archive.model.ArchiveWorkRecord;
 import cn.jia.chat.archive.store.ArchiveContentStore;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DuplicateKeyException;
-import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -18,7 +16,6 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.stream.Collectors;
 
-@Component
 public class ArchiveContentImporter {
     public static final int DEFAULT_PARAGRAPH_BATCH_SIZE = 100;
 
@@ -26,7 +23,6 @@ public class ArchiveContentImporter {
     private final ArchiveTransactions transactions;
     private final int paragraphBatchSize;
 
-    @Autowired
     public ArchiveContentImporter(ArchiveContentStore store, ArchiveTransactions transactions) {
         this(store, transactions, DEFAULT_PARAGRAPH_BATCH_SIZE);
     }
@@ -44,6 +40,7 @@ public class ArchiveContentImporter {
     public void importAndActivate(ArchiveManifest manifest, String manifestFileSha256) {
         Objects.requireNonNull(manifest, "manifest");
         try {
+            new cn.jia.chat.archive.content.ArchiveManifestLoader().validate(manifest);
             ArchiveEditionRecord expectedEdition = expectedEdition(manifest, manifestFileSha256);
             if (StartupTiming.call("cyf.archive.ready-restart-transaction",
                     () -> activateExistingReady(manifest, expectedEdition))) {
@@ -224,24 +221,15 @@ public class ArchiveContentImporter {
             }
             persistedParagraphs += actualParagraphs.size();
         }
-        if (persistedParagraphs != 3_677 || persistedParagraphs != manifest.readerParagraphCount()) {
+        if (persistedParagraphs != manifest.readerParagraphCount()
+                || actualParagraphsByBlock.size() != manifestBlocks.size()) {
             throw mismatch("persisted reader paragraph count");
         }
     }
 
     private ArchiveEditionRecord expectedEdition(ArchiveManifest manifest, String manifestFileSha256) {
-        if (!cn.jia.chat.archive.content.ArchiveManifestLoader.EXPECTED_MANIFEST_FILE_SHA256
-                .equals(manifestFileSha256)
-                || !cn.jia.chat.archive.content.ArchiveManifestLoader.EDITION_ID.equals(manifest.editionId())
-                || !cn.jia.chat.archive.content.ArchiveManifestLoader.WORK_ID.equals(manifest.workId())
-                || !cn.jia.chat.archive.content.ArchiveManifestLoader.WORK_TITLE.equals(manifest.title())
-                || !cn.jia.chat.archive.content.ArchiveManifestLoader.EXPECTED_MANIFEST_SHA256
-                .equals(manifest.manifestSha256())
-                || !cn.jia.chat.archive.content.ArchiveManifestLoader.EXPECTED_SOURCE_SHA256
-                .equals(manifest.source().sha256())
-                || manifest.chapterCount() != 120 || manifest.prefaceParagraphCount() != 11
-                || manifest.chapterParagraphCount() != 3_666 || manifest.readerParagraphCount() != 3_677) {
-            throw mismatch("frozen manifest metadata");
+        if (manifestFileSha256 == null || !manifestFileSha256.matches("[0-9a-f]{64}")) {
+            throw mismatch("manifest file digest");
         }
         return new ArchiveEditionRecord(manifest.editionId(), manifest.workId(), "STAGING",
                 manifest.source().sha256(), manifest.manifestSha256(), manifestFileSha256,

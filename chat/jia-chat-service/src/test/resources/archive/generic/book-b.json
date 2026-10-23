@@ -1,0 +1,1841 @@
+{
+  "chapterCount": 121,
+  "chapterParagraphCount": 121,
+  "chapterUtf8ByteLength": 2070,
+  "chapters": [
+    {
+      "chapterId": "book-b-v1-c001",
+      "number": 1,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c001-p0001",
+          "sha256": "94869a7a62046bb5e71f914502e2818e9d7164be1a4528b869bc8828cc3711e5",
+          "text": "Sample 1 甲😊",
+          "utf8ByteLength": 16
+        }
+      ],
+      "title": "Chapter 1",
+      "utf8ByteLength": 16
+    },
+    {
+      "chapterId": "book-b-v1-c002",
+      "number": 2,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c002-p0001",
+          "sha256": "5b88a0902cfa9091a4fa058654ff31c5253f4dbbbbd247be182e890ea0adffa7",
+          "text": "Sample 2 甲😊",
+          "utf8ByteLength": 16
+        }
+      ],
+      "title": "Chapter 2",
+      "utf8ByteLength": 16
+    },
+    {
+      "chapterId": "book-b-v1-c003",
+      "number": 3,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c003-p0001",
+          "sha256": "7192e4b08ad1cde6c5b6edf2cc16fd22cbee90ba35776b6923916262c6e58202",
+          "text": "Sample 3 甲😊",
+          "utf8ByteLength": 16
+        }
+      ],
+      "title": "Chapter 3",
+      "utf8ByteLength": 16
+    },
+    {
+      "chapterId": "book-b-v1-c004",
+      "number": 4,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c004-p0001",
+          "sha256": "e1076547a600f72447e9ddcb3be590cd2e1a4be40bdbb1c02176670d279ecec4",
+          "text": "Sample 4 甲😊",
+          "utf8ByteLength": 16
+        }
+      ],
+      "title": "Chapter 4",
+      "utf8ByteLength": 16
+    },
+    {
+      "chapterId": "book-b-v1-c005",
+      "number": 5,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c005-p0001",
+          "sha256": "f7c560797ff779d1238257d34cbb72eff3c0b032bb7cdde0234c8b18f387088f",
+          "text": "Sample 5 甲😊",
+          "utf8ByteLength": 16
+        }
+      ],
+      "title": "Chapter 5",
+      "utf8ByteLength": 16
+    },
+    {
+      "chapterId": "book-b-v1-c006",
+      "number": 6,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c006-p0001",
+          "sha256": "7a0d72b23f7e4e1bd28210f73d2882955f87b3d793aba3c9596a82298e5617d0",
+          "text": "Sample 6 甲😊",
+          "utf8ByteLength": 16
+        }
+      ],
+      "title": "Chapter 6",
+      "utf8ByteLength": 16
+    },
+    {
+      "chapterId": "book-b-v1-c007",
+      "number": 7,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c007-p0001",
+          "sha256": "fa6a6764762d0bbfe70728487bf11ba1ce8fe52e9e4a2a39612b9dcb6be73859",
+          "text": "Sample 7 甲😊",
+          "utf8ByteLength": 16
+        }
+      ],
+      "title": "Chapter 7",
+      "utf8ByteLength": 16
+    },
+    {
+      "chapterId": "book-b-v1-c008",
+      "number": 8,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c008-p0001",
+          "sha256": "f8c1c5f8e655b235080b6726c7c36fe627f6206febec7e85b4a0c516db9d342b",
+          "text": "Sample 8 甲😊",
+          "utf8ByteLength": 16
+        }
+      ],
+      "title": "Chapter 8",
+      "utf8ByteLength": 16
+    },
+    {
+      "chapterId": "book-b-v1-c009",
+      "number": 9,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c009-p0001",
+          "sha256": "b81ba50bd017edcca47466391c134ba444e71ad4e6513bcf6a7a49a23cfbde36",
+          "text": "Sample 9 甲😊",
+          "utf8ByteLength": 16
+        }
+      ],
+      "title": "Chapter 9",
+      "utf8ByteLength": 16
+    },
+    {
+      "chapterId": "book-b-v1-c010",
+      "number": 10,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c010-p0001",
+          "sha256": "763ef55f428fc3d4f4d33b42440b3e48cecf8600336154e214fef8e14c661c2f",
+          "text": "Sample 10 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 10",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c011",
+      "number": 11,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c011-p0001",
+          "sha256": "da1170bb04878035075b3468f09af13364461661eef71f6a18b36d92a6223f8a",
+          "text": "Sample 11 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 11",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c012",
+      "number": 12,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c012-p0001",
+          "sha256": "c4c9cbffaa386b4f2c130d4ee05462ee06d78a7d137775977c8a72d6c2a44325",
+          "text": "Sample 12 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 12",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c013",
+      "number": 13,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c013-p0001",
+          "sha256": "3d50519c1031f07f1d2eb053bd37b994d27eda924609f3691eceffa133979fc9",
+          "text": "Sample 13 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 13",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c014",
+      "number": 14,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c014-p0001",
+          "sha256": "41b13e74512d27cfda711ee37ac1732261496883f7502d398006d5998975b451",
+          "text": "Sample 14 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 14",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c015",
+      "number": 15,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c015-p0001",
+          "sha256": "03f4927cffc04985bd98ff6e92867a542b2fdd1bd055c5c65d9d445ab671b819",
+          "text": "Sample 15 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 15",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c016",
+      "number": 16,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c016-p0001",
+          "sha256": "4faa6f9423696fd7e457574578f9cd754ddbf4e5241f3f80fa50ab9cec59098d",
+          "text": "Sample 16 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 16",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c017",
+      "number": 17,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c017-p0001",
+          "sha256": "de92d9309161347dd966f4b6f9dc7f0163050800f612c225e6196618e20a3654",
+          "text": "Sample 17 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 17",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c018",
+      "number": 18,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c018-p0001",
+          "sha256": "f6cc65390c03594c370a0dbf9b441ad50e0f0a643dc98ea093f58593d0cb798d",
+          "text": "Sample 18 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 18",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c019",
+      "number": 19,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c019-p0001",
+          "sha256": "eaa5124851fca0a4336b5b7c82d3eab2c2e7ca2bc7d443796d8b7c21e4c17bbd",
+          "text": "Sample 19 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 19",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c020",
+      "number": 20,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c020-p0001",
+          "sha256": "0748108a33ac1d4c222b32f0ab39ae1db2ea9d550d493922feb8f2e84ccf55b0",
+          "text": "Sample 20 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 20",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c021",
+      "number": 21,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c021-p0001",
+          "sha256": "2727fc9f965ef83a879a87d4676137a8de0b6b6f09cda2238a8cac31ecded20d",
+          "text": "Sample 21 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 21",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c022",
+      "number": 22,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c022-p0001",
+          "sha256": "10bc55355295ac57ffa1315893e17278670457a2190ebfe04e92fad9e8a479c1",
+          "text": "Sample 22 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 22",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c023",
+      "number": 23,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c023-p0001",
+          "sha256": "0adb25208642775c183d1dd4c249fe15babc003cc8bea333b2390d715fb2edde",
+          "text": "Sample 23 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 23",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c024",
+      "number": 24,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c024-p0001",
+          "sha256": "f9dd07054a1823df7cf9adf0e2d214289a69dffb23f5994aa6e35407f34e4f61",
+          "text": "Sample 24 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 24",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c025",
+      "number": 25,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c025-p0001",
+          "sha256": "d7478f39d4376a03290f2c437384598cf48dfa3559d43a886c27a63d600bbbaf",
+          "text": "Sample 25 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 25",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c026",
+      "number": 26,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c026-p0001",
+          "sha256": "136c5bde339629c7145b8c71e4005ce6ccc9bbe8489ca0c028f6fb3084747210",
+          "text": "Sample 26 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 26",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c027",
+      "number": 27,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c027-p0001",
+          "sha256": "7f74a32023fafd9b2a49012ddeba90fc4dca8a445a483345f56c40ddf14e51e7",
+          "text": "Sample 27 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 27",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c028",
+      "number": 28,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c028-p0001",
+          "sha256": "b7db3ceac04b436924d04b6bcf82bc37a08d144c373cea45f79fee237c8d1e44",
+          "text": "Sample 28 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 28",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c029",
+      "number": 29,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c029-p0001",
+          "sha256": "a888c8def65055b387af0f5a28c2eec7b0d1c8ae157e153c5686f8dcfb41473a",
+          "text": "Sample 29 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 29",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c030",
+      "number": 30,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c030-p0001",
+          "sha256": "84fd4c09b21d1958422fb6c87c5c911cad087d813859881c4793e4583359c012",
+          "text": "Sample 30 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 30",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c031",
+      "number": 31,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c031-p0001",
+          "sha256": "b89963c5a86cab20345da1b30fa96afd6b3b926a96ca275c51d3e75b57261a7e",
+          "text": "Sample 31 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 31",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c032",
+      "number": 32,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c032-p0001",
+          "sha256": "8529eb8a6273c4f37c93d738b7cbfb99f166235fda19d78349a680efa90f8e85",
+          "text": "Sample 32 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 32",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c033",
+      "number": 33,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c033-p0001",
+          "sha256": "3e4a3ad1962f84689012cb44a7043f7d5f46d4f7c1062621b735cc2cca00c709",
+          "text": "Sample 33 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 33",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c034",
+      "number": 34,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c034-p0001",
+          "sha256": "d0f7c9ccc53e2525d1ab5222153185ec6dd68860dfa449092afa3114f5255ccf",
+          "text": "Sample 34 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 34",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c035",
+      "number": 35,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c035-p0001",
+          "sha256": "c7f0ef499786c789a35a1bda68ac938e4d8ace12cf63ec3eb133144843968fda",
+          "text": "Sample 35 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 35",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c036",
+      "number": 36,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c036-p0001",
+          "sha256": "a790a57c3b870c5ab10c4fe35c360712d9737e3b0c2ab9c55c3a61a03b6232a0",
+          "text": "Sample 36 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 36",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c037",
+      "number": 37,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c037-p0001",
+          "sha256": "fc38b4686293ff796caa67eafc0659ea8efe00cbb5a13b1a8fd208bf6ad9da97",
+          "text": "Sample 37 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 37",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c038",
+      "number": 38,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c038-p0001",
+          "sha256": "e4044fee0584fca11eecc7dda5dcb6d011fa56abd6254c1f5a1d1aa600fd9cfa",
+          "text": "Sample 38 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 38",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c039",
+      "number": 39,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c039-p0001",
+          "sha256": "c51619055a73980dc2aea856ef113c051db6d81842b881fc37bda41ed1b6f8b1",
+          "text": "Sample 39 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 39",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c040",
+      "number": 40,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c040-p0001",
+          "sha256": "b41f6ef528ee28f8a5ce004b5fa408876d0eefc62f7bce3d377c4130a423ab71",
+          "text": "Sample 40 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 40",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c041",
+      "number": 41,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c041-p0001",
+          "sha256": "deaceb5cde9bb16fd3d39350b94dfb4cc53361b83eec4643f233faa603698e52",
+          "text": "Sample 41 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 41",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c042",
+      "number": 42,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c042-p0001",
+          "sha256": "16085abd5d1ea74976dc451f50cc5364b6549141505370e2cd930fd45f2e0677",
+          "text": "Sample 42 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 42",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c043",
+      "number": 43,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c043-p0001",
+          "sha256": "ae46edf67ff1bfb9aa3d710b225e97361991e4a9d1bfbc395ba74788e2e0a94f",
+          "text": "Sample 43 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 43",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c044",
+      "number": 44,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c044-p0001",
+          "sha256": "fb0a132741082aebc0195112d68710124957f263428c1c236a4b605911a98ddd",
+          "text": "Sample 44 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 44",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c045",
+      "number": 45,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c045-p0001",
+          "sha256": "0cec25ea70e18ab4879cc15d0708375eacdf86c8149e3b51ff0bb8fab937b6ba",
+          "text": "Sample 45 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 45",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c046",
+      "number": 46,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c046-p0001",
+          "sha256": "700053c04778c76bd8919fcd3955cf92eb2e31968b647fc09bdf8e48e6525af5",
+          "text": "Sample 46 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 46",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c047",
+      "number": 47,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c047-p0001",
+          "sha256": "afc435d6623b3447f63174ccd36e5078cef9cd937ac5c8505cb93fcc85e424ca",
+          "text": "Sample 47 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 47",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c048",
+      "number": 48,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c048-p0001",
+          "sha256": "dbb433efdb4c6bcadbba170108a1ff1ffb5983859b9406f7a3decb1805b57b73",
+          "text": "Sample 48 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 48",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c049",
+      "number": 49,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c049-p0001",
+          "sha256": "5a7b3c9ab75bdd160faa29a628b069727cc0e92104c9158c6c8bc808e31e11ed",
+          "text": "Sample 49 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 49",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c050",
+      "number": 50,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c050-p0001",
+          "sha256": "00ac3a62efe42b695d24dbfddcc0701564193bc43d3046c891520dac92a3be5f",
+          "text": "Sample 50 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 50",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c051",
+      "number": 51,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c051-p0001",
+          "sha256": "cb986bc2c69a0c1e1de6d53d92fe0b639edead1ff683326476ab28b4aa693750",
+          "text": "Sample 51 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 51",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c052",
+      "number": 52,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c052-p0001",
+          "sha256": "61af4fdcbdc15a656c0a25e45cbcdfba0938a81a015db92eaac34378cb013da8",
+          "text": "Sample 52 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 52",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c053",
+      "number": 53,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c053-p0001",
+          "sha256": "34caaa02db0f35845e4ba943c0f584bd5870796fca86c94b0ad8cacb647a5dde",
+          "text": "Sample 53 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 53",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c054",
+      "number": 54,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c054-p0001",
+          "sha256": "878cc38c5b995c51d61918963cfa4b43896121625163a280a25270f30366be35",
+          "text": "Sample 54 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 54",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c055",
+      "number": 55,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c055-p0001",
+          "sha256": "f660617a623932f29ff430792904a794723338342ab370c9fd809fbcdd23f426",
+          "text": "Sample 55 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 55",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c056",
+      "number": 56,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c056-p0001",
+          "sha256": "996adad8c07a146a1afec6fbda86a35abb7968cd9aee79a24de18b091f53354c",
+          "text": "Sample 56 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 56",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c057",
+      "number": 57,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c057-p0001",
+          "sha256": "1a05d5fff6b67005fcb0a084591ded016ae40bcc14b931ef31a0cd8aecf83586",
+          "text": "Sample 57 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 57",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c058",
+      "number": 58,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c058-p0001",
+          "sha256": "5e11c5daef98c7b406b3d0d55ce579c2961d0d647c514eb6a902390b238043b2",
+          "text": "Sample 58 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 58",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c059",
+      "number": 59,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c059-p0001",
+          "sha256": "dfcb6364db556e13c88e9648639763f79827ba5fe4c9e51cdfdb6d72a987b9dd",
+          "text": "Sample 59 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 59",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c060",
+      "number": 60,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c060-p0001",
+          "sha256": "b05ec5841d3b15b00b2ebacebce64d6a812a9964e2749b528bc5b6980db85b09",
+          "text": "Sample 60 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 60",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c061",
+      "number": 61,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c061-p0001",
+          "sha256": "844f1c30558e9897278c3d8aa1d999e8638cf8a685bbf247001433e5b0168391",
+          "text": "Sample 61 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 61",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c062",
+      "number": 62,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c062-p0001",
+          "sha256": "ffd68806ad9d9a08ca91ed845b136ac764c1d016123c5cfac073686e8a53b596",
+          "text": "Sample 62 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 62",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c063",
+      "number": 63,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c063-p0001",
+          "sha256": "f7de2aa374330a05ede637921bcc3666866c2be12b1c8ad3be682e4300b22ee1",
+          "text": "Sample 63 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 63",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c064",
+      "number": 64,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c064-p0001",
+          "sha256": "f344793b3afb2b900c1bb778d6513ec08bae90d40cd9a256ae21ca231fcecd44",
+          "text": "Sample 64 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 64",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c065",
+      "number": 65,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c065-p0001",
+          "sha256": "d55fd59395bb856449f1af40637e20ce39c1a381d0c24a5704c8a9ba60d6a691",
+          "text": "Sample 65 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 65",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c066",
+      "number": 66,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c066-p0001",
+          "sha256": "d5900e580947e851b6034d2911cf0619c54679f243e134af082a84a98cfd60d3",
+          "text": "Sample 66 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 66",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c067",
+      "number": 67,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c067-p0001",
+          "sha256": "5dbb4827b80916064216940a17c52876e18a4f3a8a9c40ccfdd9156d99cd3139",
+          "text": "Sample 67 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 67",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c068",
+      "number": 68,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c068-p0001",
+          "sha256": "522ad42ba3721f721e1ac3c478b4e95bc30e9da0af60f355168af95a0190a065",
+          "text": "Sample 68 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 68",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c069",
+      "number": 69,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c069-p0001",
+          "sha256": "d13cd9cba4a9bc7404c3ff8d1cf31ef78ac79ae3d8e40f6d6b55d432f478a05d",
+          "text": "Sample 69 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 69",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c070",
+      "number": 70,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c070-p0001",
+          "sha256": "b126927e0270c877f6d8c321e5c1e27e28f8b89f3c55fd1eb02da5faf8cfe251",
+          "text": "Sample 70 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 70",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c071",
+      "number": 71,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c071-p0001",
+          "sha256": "879483380b62e3542ebb54ec863a79cda3c2b971bab4e1f7da5c32d079ae612f",
+          "text": "Sample 71 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 71",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c072",
+      "number": 72,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c072-p0001",
+          "sha256": "46c8b1e19d8ac5e0edfcbbb97daea7fe956e088a5e582e814367ae764695fb1f",
+          "text": "Sample 72 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 72",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c073",
+      "number": 73,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c073-p0001",
+          "sha256": "71a03c4f72094a28de60f9e19b9d6bc786bc764c94abf641f70e2b596fbf4ad8",
+          "text": "Sample 73 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 73",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c074",
+      "number": 74,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c074-p0001",
+          "sha256": "e56e5db6020523fb023f0531f94c8f48e8490b45a80d05bfe1e7ac10620e89e9",
+          "text": "Sample 74 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 74",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c075",
+      "number": 75,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c075-p0001",
+          "sha256": "46e77b52b3e61a7a79fbfbe9e770437b9c73741dacb01955b6fb7ea72f601455",
+          "text": "Sample 75 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 75",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c076",
+      "number": 76,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c076-p0001",
+          "sha256": "0ffb11f5af8ecf1f51f0d353fa9363859b6c3ef580d4625b6624b883374c8839",
+          "text": "Sample 76 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 76",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c077",
+      "number": 77,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c077-p0001",
+          "sha256": "c902d023d57c38c03a197255bab004b54e8b3029f568574c4e8aa3d8ffcb661a",
+          "text": "Sample 77 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 77",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c078",
+      "number": 78,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c078-p0001",
+          "sha256": "e50864d5c672710e1e906aff6b1879550f075890ecc6582ec91f2b761bb1a985",
+          "text": "Sample 78 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 78",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c079",
+      "number": 79,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c079-p0001",
+          "sha256": "6e8ca693c811c93e4309b520738949a4920a8f19ad80c00c457c54cd4c35043e",
+          "text": "Sample 79 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 79",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c080",
+      "number": 80,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c080-p0001",
+          "sha256": "2541c329afc6a1412e98b9f8778e898e28cee5f4e459d579d775f06820e6a091",
+          "text": "Sample 80 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 80",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c081",
+      "number": 81,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c081-p0001",
+          "sha256": "5260dbc184f79477236c97d911e65ba51a8366f13b56ab6d4d62c73341eadfc1",
+          "text": "Sample 81 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 81",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c082",
+      "number": 82,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c082-p0001",
+          "sha256": "72eeab28aed265b3c800082455782147af2345ae523a8922928359fde109e83a",
+          "text": "Sample 82 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 82",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c083",
+      "number": 83,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c083-p0001",
+          "sha256": "fa65f3b4bd71ebbc0c54c91a977120e2981543e9aeae3e82beb86629ab353e6e",
+          "text": "Sample 83 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 83",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c084",
+      "number": 84,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c084-p0001",
+          "sha256": "e5084657c91885fa337186f8f67d4b0b7ba1c21e9278ecf199d274c32240c55d",
+          "text": "Sample 84 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 84",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c085",
+      "number": 85,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c085-p0001",
+          "sha256": "a58ebb0cf463dc010278900a23ee8e62877ed0842e9f895f87b2b58643d0ffe4",
+          "text": "Sample 85 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 85",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c086",
+      "number": 86,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c086-p0001",
+          "sha256": "fc2ddfba7cf20fb33c0d86e61d83dc9bfb7f1fd58aef210a618a66a24f9ffd8c",
+          "text": "Sample 86 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 86",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c087",
+      "number": 87,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c087-p0001",
+          "sha256": "650f9a7957fa677ed2f48151dbc0e748161e60649d863364f1bafc8bd1313ca3",
+          "text": "Sample 87 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 87",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c088",
+      "number": 88,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c088-p0001",
+          "sha256": "e4390f147c6f7bc7fc0c41beb6258cc431bc380ff1522807029913735c1f50f1",
+          "text": "Sample 88 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 88",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c089",
+      "number": 89,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c089-p0001",
+          "sha256": "af317e6b49c63dd84cb030d997df51ec160fe60c09c459f38fbb674035f5703c",
+          "text": "Sample 89 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 89",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c090",
+      "number": 90,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c090-p0001",
+          "sha256": "15d653053f55024ef34eb8a29fb8370a63f30c61d53e2eb191393ef478662cf8",
+          "text": "Sample 90 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 90",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c091",
+      "number": 91,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c091-p0001",
+          "sha256": "7fe6af370a13a331990a8831e99643474b3ef389ef8c13b99aacf0ac5e904964",
+          "text": "Sample 91 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 91",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c092",
+      "number": 92,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c092-p0001",
+          "sha256": "e5af84d1e8b330ecb1314b92085bb3d3196ab5bd34a71edb40b6d6e0171dfe25",
+          "text": "Sample 92 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 92",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c093",
+      "number": 93,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c093-p0001",
+          "sha256": "958169e741a9ba8f8dd6c521fe1059414d57b57c1065bd2d011fa5a43b02d901",
+          "text": "Sample 93 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 93",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c094",
+      "number": 94,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c094-p0001",
+          "sha256": "469b327ab2a0cfa88f01e0495ecedc6969b4706cccf3d3f4e9948901bf18dfba",
+          "text": "Sample 94 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 94",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c095",
+      "number": 95,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c095-p0001",
+          "sha256": "b83175def57229bfebca978ddaa3b518f388dd774fbcdb1eb40485c5bb470411",
+          "text": "Sample 95 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 95",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c096",
+      "number": 96,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c096-p0001",
+          "sha256": "00c677ba84190afffa80d61851c9256b420b37b3989f046ead00f0eb093c8f70",
+          "text": "Sample 96 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 96",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c097",
+      "number": 97,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c097-p0001",
+          "sha256": "671004ea28faf24821aa44aff62af81667a67dfbe8d4d46cd63785c67ba520f4",
+          "text": "Sample 97 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 97",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c098",
+      "number": 98,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c098-p0001",
+          "sha256": "acd0e306690968d4375369d058d769c551a154b70e2b33247e1f45d52558ec71",
+          "text": "Sample 98 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 98",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c099",
+      "number": 99,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c099-p0001",
+          "sha256": "86180d2a6db69b9767dc92d901876e210ce2ba8a1ce9f3cb894e26e94a7cbab5",
+          "text": "Sample 99 甲😊",
+          "utf8ByteLength": 17
+        }
+      ],
+      "title": "Chapter 99",
+      "utf8ByteLength": 17
+    },
+    {
+      "chapterId": "book-b-v1-c100",
+      "number": 100,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c100-p0001",
+          "sha256": "a946702a99bf216e19b36219290883143d021b74bfa67d618a9b34f6454e24e6",
+          "text": "Sample 100 甲😊",
+          "utf8ByteLength": 18
+        }
+      ],
+      "title": "Chapter 100",
+      "utf8ByteLength": 18
+    },
+    {
+      "chapterId": "book-b-v1-c101",
+      "number": 101,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c101-p0001",
+          "sha256": "257e400cd16530f13deb106e2e35aab29758d1b1e2f80397d1ddcd56ebc6ee61",
+          "text": "Sample 101 甲😊",
+          "utf8ByteLength": 18
+        }
+      ],
+      "title": "Chapter 101",
+      "utf8ByteLength": 18
+    },
+    {
+      "chapterId": "book-b-v1-c102",
+      "number": 102,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c102-p0001",
+          "sha256": "bfd11649fe2957fa2166f448ce3bfc932891bd85b58d1f704cbaff7a09043c7c",
+          "text": "Sample 102 甲😊",
+          "utf8ByteLength": 18
+        }
+      ],
+      "title": "Chapter 102",
+      "utf8ByteLength": 18
+    },
+    {
+      "chapterId": "book-b-v1-c103",
+      "number": 103,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c103-p0001",
+          "sha256": "fabfd09fa1e670d081303d2c0a7f4b9af155feecccddd67e132fbd40267576ba",
+          "text": "Sample 103 甲😊",
+          "utf8ByteLength": 18
+        }
+      ],
+      "title": "Chapter 103",
+      "utf8ByteLength": 18
+    },
+    {
+      "chapterId": "book-b-v1-c104",
+      "number": 104,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c104-p0001",
+          "sha256": "f59e4231bcd0029cbb7457794dc09f5d7573687b8d505616d4a160daeece0895",
+          "text": "Sample 104 甲😊",
+          "utf8ByteLength": 18
+        }
+      ],
+      "title": "Chapter 104",
+      "utf8ByteLength": 18
+    },
+    {
+      "chapterId": "book-b-v1-c105",
+      "number": 105,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c105-p0001",
+          "sha256": "d1d01358c35d635c3e9e62d9dae954cc3d4e2ae4a0d27b0a7a8a0e54305f1738",
+          "text": "Sample 105 甲😊",
+          "utf8ByteLength": 18
+        }
+      ],
+      "title": "Chapter 105",
+      "utf8ByteLength": 18
+    },
+    {
+      "chapterId": "book-b-v1-c106",
+      "number": 106,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c106-p0001",
+          "sha256": "7e239bcc0cef225284c8a1a95501ee55cb902d8865027e6fe648ac6943e4deac",
+          "text": "Sample 106 甲😊",
+          "utf8ByteLength": 18
+        }
+      ],
+      "title": "Chapter 106",
+      "utf8ByteLength": 18
+    },
+    {
+      "chapterId": "book-b-v1-c107",
+      "number": 107,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c107-p0001",
+          "sha256": "4b6b03dc56b238a52c498c9adf83f23c0fefbc0154bcef42f3b8a8585ea495fc",
+          "text": "Sample 107 甲😊",
+          "utf8ByteLength": 18
+        }
+      ],
+      "title": "Chapter 107",
+      "utf8ByteLength": 18
+    },
+    {
+      "chapterId": "book-b-v1-c108",
+      "number": 108,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c108-p0001",
+          "sha256": "745505b126f7ffb4eb28433694c70a89507d7814c3ec34b12f590c5ce6baab95",
+          "text": "Sample 108 甲😊",
+          "utf8ByteLength": 18
+        }
+      ],
+      "title": "Chapter 108",
+      "utf8ByteLength": 18
+    },
+    {
+      "chapterId": "book-b-v1-c109",
+      "number": 109,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c109-p0001",
+          "sha256": "eb0110160b4b8b2dd853de9e7b8e70ed7a267a6089199f122c6e5abc5b57088d",
+          "text": "Sample 109 甲😊",
+          "utf8ByteLength": 18
+        }
+      ],
+      "title": "Chapter 109",
+      "utf8ByteLength": 18
+    },
+    {
+      "chapterId": "book-b-v1-c110",
+      "number": 110,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c110-p0001",
+          "sha256": "e52a98f8de3af5d801d30821d2e26f62309f80e52a902bec951a7cd9ff0154dc",
+          "text": "Sample 110 甲😊",
+          "utf8ByteLength": 18
+        }
+      ],
+      "title": "Chapter 110",
+      "utf8ByteLength": 18
+    },
+    {
+      "chapterId": "book-b-v1-c111",
+      "number": 111,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c111-p0001",
+          "sha256": "aa10172a9bde282406f183956243118a85d8125a1a9b344183002b92fe7dc320",
+          "text": "Sample 111 甲😊",
+          "utf8ByteLength": 18
+        }
+      ],
+      "title": "Chapter 111",
+      "utf8ByteLength": 18
+    },
+    {
+      "chapterId": "book-b-v1-c112",
+      "number": 112,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c112-p0001",
+          "sha256": "54382aad9d63b99cae4916912f6fdcaac6d58f6635fabc3d605f84eb4147704c",
+          "text": "Sample 112 甲😊",
+          "utf8ByteLength": 18
+        }
+      ],
+      "title": "Chapter 112",
+      "utf8ByteLength": 18
+    },
+    {
+      "chapterId": "book-b-v1-c113",
+      "number": 113,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c113-p0001",
+          "sha256": "f4edbddc4cd4a0ff8236a3c9a183a19cb4605fdf86b456d75fae126a8dc27312",
+          "text": "Sample 113 甲😊",
+          "utf8ByteLength": 18
+        }
+      ],
+      "title": "Chapter 113",
+      "utf8ByteLength": 18
+    },
+    {
+      "chapterId": "book-b-v1-c114",
+      "number": 114,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c114-p0001",
+          "sha256": "79822f3db5f39ba617c14e9f53b7becc2c4ae590b3fe317703d219177391e35d",
+          "text": "Sample 114 甲😊",
+          "utf8ByteLength": 18
+        }
+      ],
+      "title": "Chapter 114",
+      "utf8ByteLength": 18
+    },
+    {
+      "chapterId": "book-b-v1-c115",
+      "number": 115,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c115-p0001",
+          "sha256": "117a9978ecc835aa330a981472a071001d725ff1f7af285ad37dbddbfbe88285",
+          "text": "Sample 115 甲😊",
+          "utf8ByteLength": 18
+        }
+      ],
+      "title": "Chapter 115",
+      "utf8ByteLength": 18
+    },
+    {
+      "chapterId": "book-b-v1-c116",
+      "number": 116,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c116-p0001",
+          "sha256": "afa35029840b6f6a477925f9b315adc0cc6716ace22f6c7c8221a15fe773e4d4",
+          "text": "Sample 116 甲😊",
+          "utf8ByteLength": 18
+        }
+      ],
+      "title": "Chapter 116",
+      "utf8ByteLength": 18
+    },
+    {
+      "chapterId": "book-b-v1-c117",
+      "number": 117,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c117-p0001",
+          "sha256": "103119026e12a9a424b47614052990ce9c9bc267805eee965c7b96c46e98aba1",
+          "text": "Sample 117 甲😊",
+          "utf8ByteLength": 18
+        }
+      ],
+      "title": "Chapter 117",
+      "utf8ByteLength": 18
+    },
+    {
+      "chapterId": "book-b-v1-c118",
+      "number": 118,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c118-p0001",
+          "sha256": "4450d9d74be9bf2d1f18d0d9e25b9e41293eaeffc0ad77b5252d2aa5eb6c85ea",
+          "text": "Sample 118 甲😊",
+          "utf8ByteLength": 18
+        }
+      ],
+      "title": "Chapter 118",
+      "utf8ByteLength": 18
+    },
+    {
+      "chapterId": "book-b-v1-c119",
+      "number": 119,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c119-p0001",
+          "sha256": "686b4cbf7345b8eba5257b93f3d3220a8b7c874c4c93b3f390ed6b1e7d4f08e7",
+          "text": "Sample 119 甲😊",
+          "utf8ByteLength": 18
+        }
+      ],
+      "title": "Chapter 119",
+      "utf8ByteLength": 18
+    },
+    {
+      "chapterId": "book-b-v1-c120",
+      "number": 120,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c120-p0001",
+          "sha256": "c7c431cf781c17e084273f152d16ed6f7fad8b3029cb9d528626c53bc7113e29",
+          "text": "Sample 120 甲😊",
+          "utf8ByteLength": 18
+        }
+      ],
+      "title": "Chapter 120",
+      "utf8ByteLength": 18
+    },
+    {
+      "chapterId": "book-b-v1-c121",
+      "number": 121,
+      "paragraphCount": 1,
+      "paragraphs": [
+        {
+          "paragraphId": "book-b-v1-c121-p0001",
+          "sha256": "3d8d0b949ecf0e739f14d3b859ba95a0012810843e4f69b4ad6aecb8b2721b8c",
+          "text": "Sample 121 甲😊",
+          "utf8ByteLength": 18
+        }
+      ],
+      "title": "Chapter 121",
+      "utf8ByteLength": 18
+    }
+  ],
+  "editionId": "book-b-v1",
+  "manifestSha256": "4e817ea4d904963bd9f0c0639ab16c68da7e51c56a283ab46f786b1a23eed650",
+  "preface": null,
+  "prefaceParagraphCount": 0,
+  "prefaceUtf8ByteLength": 0,
+  "readerParagraphCount": 121,
+  "readerUtf8ByteLength": 2070,
+  "schemaVersion": 1,
+  "source": {
+    "excludedNoticeLines": [],
+    "file": "book.json",
+    "page": "",
+    "sha256": "67a3955c86d18ab4cc9c8c99ad51df737def82940fc16bbc767efcad98a86a98",
+    "upstreamCommit": "",
+    "upstreamRepo": "",
+    "utf8ByteLength": 12230
+  },
+  "title": "Synthetic book-b",
+  "workId": "book-b"
+}

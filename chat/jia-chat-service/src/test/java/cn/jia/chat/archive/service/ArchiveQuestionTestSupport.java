@@ -20,6 +20,11 @@ final class ArchiveQuestionTestSupport {
     static final class Content implements ArchivePersonalDataStore {
         ActiveEdition active;
         final Map<String, ContentPoint> points = new LinkedHashMap<>();
+        @Override public ContentPoint lockFinalContentPoint(String editionId) {
+            return points.values().stream().filter(p -> p.editionId().equals(editionId))
+                    .max(java.util.Comparator.comparingInt(ContentPoint::blockOrdinal)
+                            .thenComparingInt(ContentPoint::paragraphOrdinal)).orElse(null);
+        }
         @Override public ActiveEdition lockActiveEdition(String editionId) {
             return active != null && active.editionId().equals(editionId) ? active : null;
         }

@@ -8,6 +8,7 @@ import cn.jia.chat.archive.model.ArchiveWorkRecord;
 import java.util.List;
 
 public interface ArchiveContentStore {
+    List<cn.jia.chat.archive.dto.ArchiveBookDTO> listPublishedBooks();
     void insertWork(ArchiveWorkRecord work);
     ArchiveWorkRecord findWork(String workId);
     ActiveContent findActiveContent(String workId);

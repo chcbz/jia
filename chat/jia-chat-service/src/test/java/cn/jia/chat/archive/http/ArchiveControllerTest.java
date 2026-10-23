@@ -29,20 +29,20 @@ class ArchiveControllerTest {
         ArchiveReaderService service = mock(ArchiveReaderService.class);
         ArchiveController controller = new ArchiveController(service, disabledPolicy());
 
-        var nonJwt = controller.catalog(null,
+        var nonJwt = controller.catalog("shuihuzhuan", null,
                 new UsernamePasswordAuthenticationToken("tenant-a", "n/a"));
         assertEquals(HttpStatus.UNAUTHORIZED, nonJwt.getStatusCode());
         assertEquals("AUTH_CONTEXT_INCOMPLETE", nonJwt.getBody().getCode());
 
-        var aliasesOnly = controller.catalog(null, jwt(Map.of(
+        var aliasesOnly = controller.catalog("shuihuzhuan", null, jwt(Map.of(
                 "username", "tenant-a", "sub", "tenant-a", "aud", List.of("client-a"))));
         assertEquals(HttpStatus.UNAUTHORIZED, aliasesOnly.getStatusCode());
         assertEquals("AUTH_CONTEXT_INCOMPLETE", aliasesOnly.getBody().getCode());
 
-        var disabled = controller.catalog(null, jwt(Map.of("jiacn", "tenant-a", "client_id", "client-a")));
+        var disabled = controller.catalog("shuihuzhuan", null, jwt(Map.of("jiacn", "tenant-a", "client_id", "client-a")));
         assertEquals(HttpStatus.NOT_FOUND, disabled.getStatusCode());
         assertEquals("ARCHIVE_RESOURCE_NOT_FOUND", disabled.getBody().getCode());
-        verify(service, never()).catalog();
+        verify(service, never()).catalog("shuihuzhuan");
     }
 
     @Test
@@ -51,10 +51,10 @@ class ArchiveControllerTest {
         ArchiveController controller = new ArchiveController(service, disabledPolicy());
         JwtAuthenticationToken validClaims = jwt(Map.of("jiacn", "tenant-a", "client_id", "client-a"));
 
-        var missingClaims = controller.catalog("W/\"bad tag\"", jwt(Map.of("sub", "tenant-a")));
+        var missingClaims = controller.catalog("shuihuzhuan", "W/\"bad tag\"", jwt(Map.of("sub", "tenant-a")));
         assertEquals(HttpStatus.UNAUTHORIZED, missingClaims.getStatusCode());
 
-        var catalog = controller.catalog("W/\"bad tag\"", validClaims);
+        var catalog = controller.catalog("shuihuzhuan", "W/\"bad tag\"", validClaims);
         assertEquals(HttpStatus.BAD_REQUEST, catalog.getStatusCode());
         assertEquals("INVALID_CONDITIONAL_HEADER", catalog.getBody().getCode());
 
@@ -63,7 +63,7 @@ class ArchiveControllerTest {
 
         var chapter = controller.chapter("bad edition ", "bad chapter ", "W/\"bad tag\"", validClaims);
         assertEquals(HttpStatus.BAD_REQUEST, chapter.getStatusCode());
-        verify(service, never()).catalog();
+        verify(service, never()).catalog("shuihuzhuan");
         verify(service, never()).preface(org.mockito.ArgumentMatchers.anyString());
         verify(service, never()).chapter(org.mockito.ArgumentMatchers.anyString(),
                 org.mockito.ArgumentMatchers.anyString());
@@ -74,17 +74,17 @@ class ArchiveControllerTest {
         ArchiveReaderService service = mock(ArchiveReaderService.class);
         ArchiveCatalogDTO data = mock(ArchiveCatalogDTO.class);
         String etag = "W/\"archive-catalog-json-v1-current\"";
-        when(service.catalog()).thenReturn(new ArchiveRepresentation<>(etag, data));
+        when(service.catalog("shuihuzhuan")).thenReturn(new ArchiveRepresentation<>(etag, data));
         ArchiveController controller = new ArchiveController(service, enabledPolicy());
         JwtAuthenticationToken authentication = jwt(Map.of("jiacn", "tenant-a", "client_id", "client-a"));
 
-        var ok = controller.catalog("W/\"stale\"", authentication);
+        var ok = controller.catalog("shuihuzhuan", "W/\"stale\"", authentication);
         assertEquals(HttpStatus.OK, ok.getStatusCode());
         assertEquals(etag, ok.getHeaders().getETag());
         assertEquals("private, no-store", ok.getHeaders().getCacheControl());
         assertEquals(data, ((JsonResult<?>) ok.getBody()).getData());
 
-        var notModified = controller.catalog("\"archive-catalog-json-v1-current\"", authentication);
+        var notModified = controller.catalog("shuihuzhuan", "\"archive-catalog-json-v1-current\"", authentication);
         assertEquals(HttpStatus.NOT_MODIFIED, notModified.getStatusCode());
         assertEquals(etag, notModified.getHeaders().getETag());
         assertNull(notModified.getBody());
@@ -96,7 +96,7 @@ class ArchiveControllerTest {
         ArchiveController controller = new ArchiveController(service, enabledPolicy());
         JwtAuthenticationToken authentication = jwt(Map.of("jiacn", "tenant-a", "client_id", "client-a"));
 
-        var malformed = controller.catalog("W/\"bad tag\"", authentication);
+        var malformed = controller.catalog("shuihuzhuan", "W/\"bad tag\"", authentication);
         assertEquals(HttpStatus.BAD_REQUEST, malformed.getStatusCode());
         assertEquals("INVALID_CONDITIONAL_HEADER", malformed.getBody().getCode());
 

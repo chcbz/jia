@@ -25,7 +25,7 @@ public record ArchiveManifest(
 
     public List<Block> blocksInReaderOrder() {
         List<Block> blocks = new ArrayList<>(chapterCount + 1);
-        blocks.add(preface);
+        if (preface != null) blocks.add(preface);
         blocks.addAll(chapters);
         return List.copyOf(blocks);
     }

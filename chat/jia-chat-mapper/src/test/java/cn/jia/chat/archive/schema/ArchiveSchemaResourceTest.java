@@ -26,7 +26,7 @@ class ArchiveSchemaResourceTest {
         assertTrue(sql.contains("unique key uk_archive_chapter_ordinal (edition_id, reader_ordinal)"));
         assertTrue(sql.contains("unique key uk_archive_paragraph_ordinal (edition_id, block_id, ordinal)"));
         assertTrue(sql.contains("check (import_state in ('staging', 'ready'))"));
-        assertTrue(sql.contains("check ((block_type = 'preface' and reader_ordinal = 0 and chapter_number is null) or (block_type = 'chapter' and reader_ordinal between 1 and 120 and chapter_number = reader_ordinal))"));
+        assertTrue(sql.contains("check ((block_type = 'preface' and reader_ordinal = 0 and chapter_number is null) or (block_type = 'chapter' and reader_ordinal >= 1 and chapter_number = reader_ordinal))"));
         assertFalse(sql.contains("tenant_id"));
         assertFalse(sql.contains("client_id"));
         assertFalse(sql.contains("owner_jiacn"));

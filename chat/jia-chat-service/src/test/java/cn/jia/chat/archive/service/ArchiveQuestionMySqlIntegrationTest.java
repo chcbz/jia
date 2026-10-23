@@ -6,7 +6,7 @@ import cn.jia.chat.archive.config.ArchiveSchemaInitializer;
 import cn.jia.chat.archive.content.ArchiveEtags;
 import cn.jia.chat.archive.content.ArchiveManifest;
 import cn.jia.chat.archive.content.ArchiveManifestBundle;
-import cn.jia.chat.archive.content.ArchiveManifestLoader;
+import cn.jia.chat.archive.content.ArchiveFixtureLoader;
 import cn.jia.chat.archive.model.ArchiveOwnerScope;
 import cn.jia.chat.archive.store.JdbcArchiveContentStore;
 import cn.jia.chat.archive.store.JdbcArchivePersonalDataStore;
@@ -66,7 +66,7 @@ class ArchiveQuestionMySqlIntegrationTest {
         questionSchema = new ArchiveQuestionSchemaInitializer(jdbc);
         questionSchema.initialize();
         questionSchema.initialize();
-        ArchiveManifestBundle bundle = new ArchiveManifestLoader().load();
+        ArchiveManifestBundle bundle = new ArchiveFixtureLoader().load();
         transactions = new SpringArchiveTransactions(new DataSourceTransactionManager(dataSource));
         new ArchiveContentImporter(new JdbcArchiveContentStore(jdbc), transactions, 100)
                 .importAndActivate(bundle.manifest(), bundle.manifestFileSha256());
@@ -289,11 +289,11 @@ class ArchiveQuestionMySqlIntegrationTest {
                 + second.paragraphId() + "\",\"startByte\":0,\"endByte\":" + second.utf8ByteLength()
                 + ",\"paragraphSha256\":\"" + second.sha256() + "\"}],\"selectionSha256\":\""
                 + ArchiveEtags.sha256(selected.getBytes(StandardCharsets.UTF_8)) + "\"}";
-        return ("{\"question\":\"" + question + "\",\"anchor\":" + anchor + "}")
+        return ("{\"editionId\":\"" + ArchiveFixtureLoader.EDITION_ID + "\",\"question\":\"" + question + "\",\"anchor\":" + anchor + "}")
                 .getBytes(StandardCharsets.UTF_8);
     }
     private String manifestHash() {
-        return new ArchiveManifestLoader().load().manifest().manifestSha256();
+        return new ArchiveFixtureLoader().load().manifest().manifestSha256();
     }
     private cn.jia.chat.archive.config.ArchiveQuestionAccessPolicy enabledPolicy() {
         cn.jia.chat.archive.config.ArchiveReaderProperties properties = new cn.jia.chat.archive.config.ArchiveReaderProperties();

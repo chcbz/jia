@@ -5,7 +5,7 @@ import cn.jia.chat.archive.config.ArchiveQuestionProperties;
 import cn.jia.chat.archive.config.ArchiveReaderAccessPolicy;
 import cn.jia.chat.archive.config.ArchiveReaderProperties;
 import cn.jia.chat.archive.content.ArchiveEtags;
-import cn.jia.chat.archive.content.ArchiveManifestLoader;
+import cn.jia.chat.archive.content.ArchiveFixtureLoader;
 import cn.jia.chat.archive.model.ArchiveOwnerScope;
 import cn.jia.chat.archive.store.ArchivePersonalDataStore;
 import cn.jia.chat.archive.store.ArchiveQuestionStore.OutboxRecord;
@@ -35,7 +35,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class ArchiveQuestionWorkerTest {
-    private static final String EDITION = ArchiveManifestLoader.EDITION_ID;
+    private static final String EDITION = ArchiveFixtureLoader.EDITION_ID;
     private static final String BLOCK = EDITION + "-c001";
     private static final String PARAGRAPH = BLOCK + "-p0001";
     private static final String MANIFEST = "a".repeat(64);
@@ -70,7 +70,7 @@ class ArchiveQuestionWorkerTest {
                 + "\"blockId\":\"" + BLOCK + "\",\"segments\":[{\"paragraphId\":\"" + PARAGRAPH
                 + "\",\"startByte\":0,\"endByte\":12,\"paragraphSha256\":\"" + paragraphHash
                 + "\"}],\"selectionSha256\":\"" + ArchiveEtags.sha256(bytes(text)) + "\"}";
-        body = "{\"question\":\"何谓忠义？\",\"anchor\":" + anchor + "}";
+        body = "{\"editionId\":\"" + EDITION + "\",\"question\":\"何谓忠义？\",\"anchor\":" + anchor + "}";
     }
 
     @AfterEach

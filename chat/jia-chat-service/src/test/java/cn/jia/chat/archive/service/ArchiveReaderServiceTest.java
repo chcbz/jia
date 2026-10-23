@@ -2,7 +2,7 @@ package cn.jia.chat.archive.service;
 
 import cn.jia.chat.archive.content.ArchiveEtags;
 import cn.jia.chat.archive.content.ArchiveManifest;
-import cn.jia.chat.archive.content.ArchiveManifestLoader;
+import cn.jia.chat.archive.content.ArchiveFixtureLoader;
 import cn.jia.chat.archive.dto.ArchiveBlockDTO;
 import cn.jia.chat.archive.dto.ArchiveCatalogDTO;
 import cn.jia.chat.archive.model.ArchiveBlockRecord;
@@ -26,12 +26,33 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class ArchiveReaderServiceTest {
     @Test
+    void genericBookCatalogAndFinalChapterDoNotDependOnFixtureIds() throws Exception {
+        for (String name : List.of("book-a", "book-b")) {
+            var manifest = cn.jia.chat.archive.content.ArchiveGenericManifestTest.fixture(name).manifest();
+            var store = new FixtureStore(manifest);
+            var service = new ArchiveReaderServiceImpl(store);
+            assertEquals(name, service.books().items().getFirst().workId());
+            var catalog = service.catalog(name).data();
+            assertEquals(manifest.chapterCount(), catalog.activeEdition().chapters().size());
+            if (manifest.preface() == null) {
+                assertNull(catalog.activeEdition().preface());
+                assertThrows(ArchiveResourceNotFoundException.class, () -> service.preface(manifest.editionId()));
+            }
+            var last = manifest.chapters().getLast();
+            assertEquals(last.number(), service.chapter(manifest.editionId(), last.blockId()).data().number());
+            assertThrows(ArchiveResourceNotFoundException.class, () -> service.catalog("unpublished"));
+            store.active = false;
+            assertEquals(List.of(), service.books().items());
+        }
+    }
+
+    @Test
     void catalogPrefaceAndChapterUseOrderedFrozenSemanticDtoV1() throws Exception {
-        ArchiveManifest manifest = new ArchiveManifestLoader().load().manifest();
+        ArchiveManifest manifest = new ArchiveFixtureLoader().load().manifest();
         FixtureStore store = new FixtureStore(manifest);
         ArchiveReaderServiceImpl service = new ArchiveReaderServiceImpl(store);
 
-        ArchiveRepresentation<ArchiveCatalogDTO> catalog = service.catalog();
+        ArchiveRepresentation<ArchiveCatalogDTO> catalog = service.catalog(ArchiveFixtureLoader.WORK_ID);
         assertEquals(ArchiveEtags.catalog(manifest.manifestSha256()), catalog.etag());
         assertEquals("水滸傳", catalog.data().title());
         assertEquals(120, catalog.data().activeEdition().chapters().size());
@@ -67,18 +88,18 @@ class ArchiveReaderServiceTest {
 
     @Test
     void catalogChecksActiveEditionEveryRequestButCachesOnlyBoundedBlockMetadata() {
-        ArchiveManifest manifest = new ArchiveManifestLoader().load().manifest();
+        ArchiveManifest manifest = new ArchiveFixtureLoader().load().manifest();
         FixtureStore store = new FixtureStore(manifest);
         ArchiveReaderServiceImpl service = new ArchiveReaderServiceImpl(store);
 
-        service.catalog();
-        service.catalog();
+        service.catalog(ArchiveFixtureLoader.WORK_ID);
+        service.catalog(ArchiveFixtureLoader.WORK_ID);
 
         assertEquals(2, store.activeReads);
         assertEquals(1, store.blockReads);
 
         store.active = false;
-        assertThrows(ArchiveResourceNotFoundException.class, service::catalog);
+        assertThrows(ArchiveResourceNotFoundException.class, () -> service.catalog(ArchiveFixtureLoader.WORK_ID));
         assertEquals(3, store.activeReads);
         assertEquals(1, store.blockReads);
     }
@@ -110,7 +131,7 @@ class ArchiveReaderServiceTest {
             work = new ArchiveWorkRecord(manifest.workId(), manifest.title(), manifest.editionId());
             edition = new ArchiveEditionRecord(manifest.editionId(), manifest.workId(), "READY",
                     manifest.source().sha256(), manifest.manifestSha256(),
-                    ArchiveManifestLoader.EXPECTED_MANIFEST_FILE_SHA256, manifest.source().utf8ByteLength(),
+                    ArchiveFixtureLoader.EXPECTED_MANIFEST_FILE_SHA256, manifest.source().utf8ByteLength(),
                     manifest.chapterCount(), manifest.prefaceParagraphCount(), manifest.chapterParagraphCount(),
                     manifest.readerParagraphCount(), manifest.prefaceUtf8ByteLength(),
                     manifest.chapterUtf8ByteLength(), manifest.readerUtf8ByteLength());
@@ -127,6 +148,10 @@ class ArchiveReaderServiceTest {
                     }).toList()));
         }
 
+        @Override public List<cn.jia.chat.archive.dto.ArchiveBookDTO> listPublishedBooks() {
+            return active ? List.of(new cn.jia.chat.archive.dto.ArchiveBookDTO(
+                    work.workId(), work.title(), edition.editionId(), edition.chapterCount())) : List.of();
+        }
         @Override public ArchiveWorkRecord findWork(String workId) { return work.workId().equals(workId) ? work : null; }
         @Override public ActiveContent findActiveContent(String workId) {
             activeReads++;

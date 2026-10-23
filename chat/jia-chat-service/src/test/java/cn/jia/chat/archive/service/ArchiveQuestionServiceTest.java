@@ -1,7 +1,7 @@
 package cn.jia.chat.archive.service;
 
 import cn.jia.chat.archive.content.ArchiveEtags;
-import cn.jia.chat.archive.content.ArchiveManifestLoader;
+import cn.jia.chat.archive.content.ArchiveFixtureLoader;
 import cn.jia.chat.archive.model.ArchiveOwnerScope;
 import cn.jia.chat.archive.store.ArchivePersonalDataStore;
 import cn.jia.chat.archive.store.ArchiveQuestionStore.OutboxRecord;
@@ -24,7 +24,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ArchiveQuestionServiceTest {
-    private static final String EDITION = ArchiveManifestLoader.EDITION_ID;
+    private static final String EDITION = ArchiveFixtureLoader.EDITION_ID;
     private static final String BLOCK = EDITION + "-c001";
     private static final String P1 = BLOCK + "-p0001";
     private static final String P2 = BLOCK + "-p0002";
@@ -72,6 +72,17 @@ class ArchiveQuestionServiceTest {
     }
 
     @Test
+    void questionRequiresExplicitEditionAndRejectsCrossBookAnchors() {
+        assertThrows(ArchivePersonalDataException.class, () -> service.create(OWNER, ID, path(), "missing-edition",
+                bytes("{\"question\":\"Why?\",\"anchor\":" + anchor + "}")));
+        content.active = new ArchivePersonalDataStore.ActiveEdition("another-book-v1", MANIFEST);
+        String otherBookBody = new String(body("Why?"), StandardCharsets.UTF_8)
+                .replace("\"editionId\":\"" + EDITION + "\"", "\"editionId\":\"another-book-v1\"");
+        assertThrows(ArchivePersonalDataException.class, () -> service.create(OWNER, ID, path(), "cross-book", bytes(otherBookBody)));
+        assertEquals(0, store.questionInserts);
+    }
+
+    @Test
     void createPersistsAuthoritativeMultilingualSelectionFixedResponderAndOneDispatch() {
         ArchiveMutationResult result = service.create(OWNER, ID, path(), "create-key", body("何谓忠义？"));
         assertEquals(202, result.status());
@@ -98,7 +109,7 @@ class ArchiveQuestionServiceTest {
         assertThrows(IllegalStateException.class,
                 () -> service.create(OWNER, ID, path(), "loss-key", body("何谓忠义？")));
         ArchiveMutationResult replay = service.create(OWNER, ID, path(), "loss-key", bytes(
-                "{\"anchor\":" + anchor + ",\"question\":\"何谓忠义？\"}"));
+                "{\"editionId\":\"" + EDITION + "\",\"anchor\":" + anchor + ",\"question\":\"何谓忠义？\"}"));
         assertTrue(replay.replayed());
         ArchiveMutationResult secondReplay = service.create(OWNER, ID, path(), "loss-key", body("何谓忠义？"));
         assertArrayEquals(replay.body(), secondReplay.body());
@@ -115,17 +126,17 @@ class ArchiveQuestionServiceTest {
     @Test
     void strictJsonAndRoutingLikeMembersFailBeforeMutationReservation() {
         List<String> invalid = List.of(
-                "{\"question\":\"x\",\"question\":\"x\",\"anchor\":" + anchor + "}",
-                "{\"question\":\"x\",\"anchor\":" + anchor + ",\"unknown\":1}",
-                "{\"question\":\"x\",\"anchor\":" + anchor + "} {}",
-                "{\"question\":1,\"anchor\":" + anchor + "}",
-                "{\"question\":\"x\",\"anchor\":" + anchor.replace("\"startByte\":3", "\"startByte\":3.0") + "}",
-                "{\"question\":null,\"anchor\":" + anchor + "}",
+                "{\"editionId\":\"" + EDITION + "\",\"question\":\"x\",\"question\":\"x\",\"anchor\":" + anchor + "}",
+                "{\"editionId\":\"" + EDITION + "\",\"question\":\"x\",\"anchor\":" + anchor + ",\"unknown\":1}",
+                "{\"editionId\":\"" + EDITION + "\",\"question\":\"x\",\"anchor\":" + anchor + "} {}",
+                "{\"editionId\":\"" + EDITION + "\",\"question\":1,\"anchor\":" + anchor + "}",
+                "{\"editionId\":\"" + EDITION + "\",\"question\":\"x\",\"anchor\":" + anchor.replace("\"startByte\":3", "\"startByte\":3.0") + "}",
+                "{\"editionId\":\"" + EDITION + "\",\"question\":null,\"anchor\":" + anchor + "}",
                 "{}",
-                "{\"question\":\"x\"}",
-                "{\"anchor\":" + anchor + "}",
-                "{\"question\":\"x\",\"anchor\":\"not-an-anchor\"}",
-                "{\"question\":\"\\uD800\",\"anchor\":" + anchor + "}");
+                "{\"editionId\":\"" + EDITION + "\",\"question\":\"x\"}",
+                "{\"editionId\":\"" + EDITION + "\",\"anchor\":" + anchor + "}",
+                "{\"editionId\":\"" + EDITION + "\",\"question\":\"x\",\"anchor\":\"not-an-anchor\"}",
+                "{\"editionId\":\"" + EDITION + "\",\"question\":\"\\uD800\",\"anchor\":" + anchor + "}");
         for (int index = 0; index < invalid.size(); index++) {
             byte[] candidate = bytes(invalid.get(index));
             ArchivePersonalDataException failure = assertThrows(ArchivePersonalDataException.class,
@@ -141,7 +152,7 @@ class ArchiveQuestionServiceTest {
                 "characterName", "CHARACTER_NAME", "character-name", "name", "NAME", "角色名", "吴用")) {
             ArchivePersonalDataException failure = assertThrows(ArchivePersonalDataException.class,
                     () -> service.create(OWNER, ID, path(), "route-" + routing.hashCode(), bytes(
-                            "{\"question\":\"x\",\"anchor\":" + anchor + ",\"" + routing + "\":\"吴用\"}")));
+                            "{\"editionId\":\"" + EDITION + "\",\"question\":\"x\",\"anchor\":" + anchor + ",\"" + routing + "\":\"吴用\"}")));
             assertEquals(422, failure.status());
             assertEquals("ROUTING_NOT_SUPPORTED", failure.code());
         }
@@ -152,7 +163,7 @@ class ArchiveQuestionServiceTest {
                 "{\"routing\":{\"name\":\"吴用\"}}")) {
             ArchivePersonalDataException failure = assertThrows(ArchivePersonalDataException.class,
                     () -> service.create(OWNER, ID, path(), "nested-route-" + nested.hashCode(), bytes(
-                            "{\"question\":\"x\",\"anchor\":" + anchor + ",\"extension\":" + nested + "}")));
+                            "{\"editionId\":\"" + EDITION + "\",\"question\":\"x\",\"anchor\":" + anchor + ",\"extension\":" + nested + "}")));
             assertEquals("ROUTING_NOT_SUPPORTED", failure.code());
         }
         assertEquals(0, store.mutationReservations);
@@ -165,7 +176,7 @@ class ArchiveQuestionServiceTest {
                 anchor.replace(hash("甲水泊"), "c".repeat(64)))) {
             ArchivePersonalDataException failure = assertThrows(ArchivePersonalDataException.class,
                     () -> service.create(OWNER, ID, path(), "hash-" + hashMismatch.hashCode(), bytes(
-                            "{\"question\":\"x\",\"anchor\":" + hashMismatch + "}")));
+                            "{\"editionId\":\"" + EDITION + "\",\"question\":\"x\",\"anchor\":" + hashMismatch + "}")));
             assertEquals("CONTENT_HASH_MISMATCH", failure.code());
         }
         for (String invalidAnchor : List.of(
@@ -174,7 +185,7 @@ class ArchiveQuestionServiceTest {
                 anchor.replace("\"blockType\":\"CHAPTER\"", "\"blockType\":\"PREFACE\""))) {
             ArchivePersonalDataException failure = assertThrows(ArchivePersonalDataException.class,
                     () -> service.create(OWNER, ID, path(), "shape-" + invalidAnchor.hashCode(), bytes(
-                            "{\"question\":\"x\",\"anchor\":" + invalidAnchor + "}")));
+                            "{\"editionId\":\"" + EDITION + "\",\"question\":\"x\",\"anchor\":" + invalidAnchor + "}")));
             assertEquals("INVALID_TEXT_ANCHOR", failure.code());
         }
         ArchivePersonalDataStore.ContentPoint original = content.points.get(P1);
@@ -218,7 +229,7 @@ class ArchiveQuestionServiceTest {
                 + hash(prefaceText) + "\"}],\"selectionSha256\":\"" + hash(selected) + "\"}";
         String prefaceId = "423e4567-e89b-42d3-a456-426614174000";
         service.create(OWNER, prefaceId, "/archive/v1/me/questions/" + prefaceId, "preface",
-                bytes("{\"question\":\"何谓引首？\",\"anchor\":" + prefaceAnchor + "}"));
+                bytes("{\"editionId\":\"" + EDITION + "\",\"question\":\"何谓引首？\",\"anchor\":" + prefaceAnchor + "}"));
         assertEquals(selected, service.get(OWNER, prefaceId).selectedText());
         assertEquals("PREFACE", service.get(OWNER, prefaceId).anchor().blockType());
 
@@ -229,7 +240,7 @@ class ArchiveQuestionServiceTest {
                 .replace("\"endByte\":6", "\"endByte\":9");
         ArchivePersonalDataException gap = assertThrows(ArchivePersonalDataException.class,
                 () -> service.create(OWNER, ID, path(), "non-contiguous",
-                        bytes("{\"question\":\"x\",\"anchor\":" + nonContiguous + "}")));
+                        bytes("{\"editionId\":\"" + EDITION + "\",\"question\":\"x\",\"anchor\":" + nonContiguous + "}")));
         assertEquals("INVALID_TEXT_ANCHOR", gap.code());
 
         String segment = "{\"paragraphId\":\"" + P1
@@ -242,7 +253,7 @@ class ArchiveQuestionServiceTest {
                 + "],\"selectionSha256\":\"" + "0".repeat(64) + "\"}";
         ArchivePersonalDataException count = assertThrows(ArchivePersonalDataException.class,
                 () -> service.create(OWNER, ID, path(), "too-many-segments",
-                        bytes("{\"question\":\"x\",\"anchor\":" + tooMany + "}")));
+                        bytes("{\"editionId\":\"" + EDITION + "\",\"question\":\"x\",\"anchor\":" + tooMany + "}")));
         assertEquals("INVALID_REQUEST_JSON", count.code());
     }
 
@@ -424,7 +435,7 @@ class ArchiveQuestionServiceTest {
                 code, version, sequence, NOW, null);
     }
     private String path() { return "/archive/v1/me/questions/" + ID; }
-    private byte[] body(String question) { return bytes("{\"question\":\"" + question + "\",\"anchor\":" + anchor + "}"); }
+    private byte[] body(String question) { return bytes("{\"editionId\":\"" + EDITION + "\",\"question\":\"" + question + "\",\"anchor\":" + anchor + "}"); }
     private String hash(String value) { return ArchiveEtags.sha256(bytes(value)); }
     private byte[] bytes(String value) { return value.getBytes(StandardCharsets.UTF_8); }
 }

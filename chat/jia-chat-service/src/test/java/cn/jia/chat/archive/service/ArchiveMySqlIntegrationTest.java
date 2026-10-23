@@ -2,7 +2,7 @@ package cn.jia.chat.archive.service;
 
 import cn.jia.chat.archive.config.ArchiveSchemaInitializer;
 import cn.jia.chat.archive.content.ArchiveManifestBundle;
-import cn.jia.chat.archive.content.ArchiveManifestLoader;
+import cn.jia.chat.archive.content.ArchiveFixtureLoader;
 import cn.jia.chat.archive.store.JdbcArchiveContentStore;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -65,12 +65,33 @@ class ArchiveMySqlIntegrationTest {
         JdbcArchiveContentStore store = new JdbcArchiveContentStore(jdbc);
         importer = new ArchiveContentImporter(store,
                 new SpringArchiveTransactions(new DataSourceTransactionManager(dataSource)), 100);
-        bundle = new ArchiveManifestLoader().load();
+        bundle = new ArchiveFixtureLoader().load();
     }
 
     @AfterEach
     void tearDown() {
         if (jdbc != null) clean();
+    }
+
+    @Test
+    void multiplePublishedBooksHaveIndependentActiveEditionsAndFinalPoints() throws Exception {
+        var first = cn.jia.chat.archive.content.ArchiveGenericManifestTest.fixture("book-a");
+        var second = cn.jia.chat.archive.content.ArchiveGenericManifestTest.fixture("book-b");
+        importer.importAndActivate(first.manifest(), first.manifestFileSha256());
+        importer.importAndActivate(second.manifest(), second.manifestFileSha256());
+        var content = new JdbcArchiveContentStore(jdbc);
+        assertEquals(List.of("book-a", "book-b"), content.listPublishedBooks().stream()
+                .map(cn.jia.chat.archive.dto.ArchiveBookDTO::workId).toList());
+        var personal = new cn.jia.chat.archive.store.JdbcArchivePersonalDataStore(jdbc);
+        for (var loaded : List.of(first, second)) {
+            String edition = loaded.manifest().editionId();
+            assertEquals(edition, personal.lockActiveEdition(edition).editionId());
+            assertEquals(loaded.manifest().chapters().getLast().paragraphs().getLast().paragraphId(),
+                    personal.lockFinalContentPoint(edition).paragraphId());
+        }
+        jdbc.update("UPDATE archive_edition SET import_state='STAGING' WHERE edition_id=?", second.manifest().editionId());
+        assertEquals(1, content.listPublishedBooks().size());
+        assertEquals(null, personal.lockActiveEdition(second.manifest().editionId()));
     }
 
     @Test

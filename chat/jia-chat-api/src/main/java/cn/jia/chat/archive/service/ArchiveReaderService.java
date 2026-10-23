@@ -4,7 +4,9 @@ import cn.jia.chat.archive.dto.ArchiveBlockDTO;
 import cn.jia.chat.archive.dto.ArchiveCatalogDTO;
 
 public interface ArchiveReaderService {
-    ArchiveRepresentation<ArchiveCatalogDTO> catalog();
+    cn.jia.chat.archive.dto.ArchiveShelfDTO books();
+
+    ArchiveRepresentation<ArchiveCatalogDTO> catalog(String workId);
 
     ArchiveRepresentation<ArchiveBlockDTO> preface(String editionId);
 
