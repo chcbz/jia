@@ -111,7 +111,11 @@ public class ArchiveMaintenanceService {
             if(!"WAITING".equals(job.state())){require(Objects.equals(job.resultDigest(),result.manifestFileSha256()),409,"ARCHIVE_RESULT_CONFLICT");return view(job);}
             String state="DRAFT";
             if(spec.request().mode()==Mode.AUTO){
-                publish(spec,loaded);
+                if(!publish(spec,loaded)){
+                    // A losing CAS is a terminal, recoverable job outcome, not a poison poll entry.
+                    require(jobs.fail(owner(scope(proof)),id,"ARCHIVE_EDITION_CONFLICT",result.manifestFileSha256())==1,409,"ARCHIVE_RESULT_CONFLICT");
+                    return view(jobs.find(owner(scope(proof)),id,false));
+                }
                 state="PUBLISHED";
             }
             require(jobs.complete(owner(scope(proof)),id,state,result.manifestJson(),result.manifestFileSha256())==1,409,"ARCHIVE_RESULT_CONFLICT");
@@ -135,21 +139,24 @@ public class ArchiveMaintenanceService {
                 require(state.installations().values().stream().anyMatch(i->i.usable() && i.agentId().equals(a.agentId())
                         && i.bindingId()==a.bindingId() && PositionSkillRuntimeService.physical(i).equals(spec.installationId())),403,"ARCHIVE_SKILL_REVOKED");
                 var loaded=new ArchiveManifestLoader().parseAndValidate(job.resultManifest().getBytes(StandardCharsets.UTF_8),job.resultDigest());
-                publish(spec,loaded);require(jobs.publishDraft(owner(scope),id)==1,409,"ARCHIVE_RESULT_CONFLICT");
+                require(publish(spec,loaded),409,"ARCHIVE_EDITION_CONFLICT");
+                require(jobs.publishDraft(owner(scope),id)==1,409,"ARCHIVE_RESULT_CONFLICT");
                 jobs.publicationOperation(owner(scope),key,id);return view(jobs.find(owner(scope),id,false));
             });
         });
     }
-    private void publish(Specification spec,ArchiveManifestLoader.Loaded loaded){
+    private boolean publish(Specification spec,ArchiveManifestLoader.Loaded loaded){
         var manifest=loaded.manifest();
         var work=content.lockWork(manifest.workId());
         if(work==null){
+            if(spec.expectedActiveEdition()!=null)return false;
             try{content.insertWork(new ArchiveWorkRecord(manifest.workId(),manifest.title(),null));}
             catch(DuplicateKeyException raced){/* re-read locked current row and apply CAS */}
             work=content.lockWork(manifest.workId());
         }
-        require(work!=null && Objects.equals(work.activeEditionId(),spec.expectedActiveEdition()),409,"ARCHIVE_EDITION_CONFLICT");
+        if(work==null || !Objects.equals(work.activeEditionId(),spec.expectedActiveEdition()))return false;
         new ArchiveContentImporter(content,tx).importAndActivate(manifest,loaded.manifestFileSha256());
+        return true;
     }
     private Map<String,Object> fail(Proof proof,String id,Result result){
         require(Set.of("ARCHIVE_SCRIPT_FAILED","ARCHIVE_SCRIPT_RESULT_INVALID").contains(result.errorCode())

@@ -140,6 +140,17 @@ class ArchiveNativeHttpMySqlTest {
         var healthy=service.create(scope,"healthy",new ArchiveMaintenanceService.Create(appointment,AGENT,"archive-maintenance","healthy-book","Healthy","Fixture","healthy.txt","Self-authored",sourceA,ArchiveMaintenanceService.Mode.DRAFT_ONLY));
         assertEquals(2,exchange(Map.of("op","RUN")).get("processed"));assertEquals("FAILED",service.read(scope,(String)broken.get("jobId")).get("state"));assertEquals("DRAFT",service.read(scope,(String)healthy.get("jobId")).get("state"));
         assertEquals(2,reader.books().items().size());assertEquals(List.of(401,401,401),exchange(Map.of("op","NEGATIVE","origin",origin)).get("statuses"));
+        var racing=new ArrayList<Map<String,Object>>();
+        for(int r=0;r<2;r++)racing.add(service.create(scope,"cas-"+r,new ArchiveMaintenanceService.Create(appointment,AGENT,"archive-maintenance","native-cas","CAS","Fixture","cas.txt","Self-authored",sourceA+"\n"+r,ArchiveMaintenanceService.Mode.AUTO)));
+        var independent=service.create(scope,"cas-independent",new ArchiveMaintenanceService.Create(appointment,AGENT,"archive-maintenance","native-independent","Independent","Fixture","independent.txt","Self-authored",sourceB,ArchiveMaintenanceService.Mode.AUTO));
+        assertEquals(3,exchange(Map.of("op","RUN")).get("processed"));
+        var outcomes=racing.stream().map(j->service.read(scope,(String)j.get("jobId"))).toList();
+        assertEquals(1,outcomes.stream().filter(j->"PUBLISHED".equals(j.get("state"))).count());
+        var conflict=outcomes.stream().filter(j->"FAILED".equals(j.get("state"))).findFirst().orElseThrow();
+        assertEquals("ARCHIVE_EDITION_CONFLICT",conflict.get("errorCode"));
+        assertEquals("PUBLISHED",service.read(scope,(String)independent.get("jobId")).get("state"));
+        var rebased=service.retry(scope,"cas-retry",(String)conflict.get("jobId"));assertEquals(1,exchange(Map.of("op","RUN")).get("processed"));
+        assertEquals("PUBLISHED",service.read(scope,(String)rebased.get("jobId")).get("state"));
         positions.configure(scope,"shared-position",new Position("reviewer","Reviewer",1,"archive:public",false,List.of("archive-maintenance"),0),0);
         String shared=positions.appoint(scope,"shared-appoint","reviewer",AGENT).resultId();assertEquals(0,exchange(Map.of("op","INSTALL")).get("processed"));
         var pending=service.create(scope,"pending",new ArchiveMaintenanceService.Create(appointment,AGENT,"archive-maintenance","revoked-book","Revoked","Fixture","external.txt","Self-authored",sourceA,ArchiveMaintenanceService.Mode.AUTO));

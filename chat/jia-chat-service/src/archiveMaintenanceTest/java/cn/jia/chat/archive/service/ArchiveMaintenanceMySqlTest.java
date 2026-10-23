@@ -101,8 +101,12 @@ class ArchiveMaintenanceMySqlTest {
     @Test void concurrentNewBookJobsUseCasAndRollbackLosingImport()throws Exception {
         var one=job("one","race-book",Mode.AUTO,"第一回\n第一份正文。");var two=job("two","race-book",Mode.AUTO,"第一回\n第二份正文。");
         var r1=parse(one);var r2=parse(two);service.complete(proof,(String)one.get("jobId"),r1);
-        assertThrows(PositionSkillException.class,()->service.complete(proof,(String)two.get("jobId"),r2));
-        assertEquals("WAITING",service.read(scope,(String)two.get("jobId")).get("state"));assertNull(content.findEdition((String)two.get("editionId")));
+        var failed=service.complete(proof,(String)two.get("jobId"),r2);
+        assertEquals("FAILED",failed.get("state"));assertEquals("ARCHIVE_EDITION_CONFLICT",failed.get("errorCode"));
+        assertEquals(failed,service.complete(proof,(String)two.get("jobId"),r2));
+        assertTrue(service.commands(proof).isEmpty());assertNull(content.findEdition((String)two.get("editionId")));
+        var retry=service.retry(scope,"retry-cas",(String)two.get("jobId"));
+        assertEquals("PUBLISHED",service.complete(proof,(String)retry.get("jobId"),parse(retry)).get("state"));
     }
     @Test void resignationFencesResultButCommittedReceiptRemainsRecoverable()throws Exception {
         var published=job("published","before-revoke",Mode.AUTO,"正文。");service.complete(proof,(String)published.get("jobId"),parse(published));
