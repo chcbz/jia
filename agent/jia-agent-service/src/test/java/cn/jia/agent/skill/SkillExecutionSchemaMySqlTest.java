@@ -9,6 +9,7 @@ import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.core.io.ClassPathResource;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.UUID;
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -27,12 +28,28 @@ public class SkillExecutionSchemaMySqlTest {
         assertTrue(admin.queryForObject("SELECT VERSION()",String.class).startsWith("8."));
         database="skill5h_"+UUID.randomUUID().toString().replace("-","");admin.execute("CREATE DATABASE `"+database+"` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin");
         source=new DriverManagerDataSource(url.replace("/?","/"+database+"?"),"root","");jdbc=new JdbcTemplate(source);
-        new PersonalWorkspaceExecutionSchemaInitializer(jdbc).afterPropertiesSet();
+        // Install the repository's complete catalog before invoking restart/detector checks.
+        // The legacy workspace initializer now reads execution_protocol_version in its
+        // verification SQL, but that column is installed by the later follow-up-v3 migration.
+        // Do not weaken production validation or fabricate a placeholder column in this fixture.
+        for(String resource:List.of(
+                "db/agent-personal-workspace-v1_11-executions.sql",
+                "db/agent-personal-workspace-v1_13-execution-output-mime.sql",
+                "db/agent-personal-workspace-v1_17-text-output-mime.sql",
+                "db/agent-personal-workspace-v1_13-execution-terminal-state.sql",
+                "db/agent-personal-workspace-v1_13-task-execution.sql",
+                "db/agent-personal-workspace-v1_13-task-publication.sql",
+                "db/agent-personal-workspace-v1_14-conversation-execution.sql",
+                "db/agent-personal-workspace-v1_14-conversation-output.sql",
+                "db/agent-personal-workspace-v1_15-conversation-lease.sql",
+                "db/agent-personal-workspace-v1_16-conversation-provider-start.sql"))apply(resource);
         new AgentTaskProviderCostConsentSchemaInitializer(jdbc).afterPropertiesSet();
         new ControlledImageExecutionSchemaInitializer(jdbc).afterPropertiesSet();
         new ControlledImageFollowupV3SchemaInitializer(jdbc).afterPropertiesSet();
         apply("db/economy-v0-skill-application.sql");
         apply("db/agent-skill-execution-v1.sql");apply("db/agent-personal-workspace-skill-v1.sql");
+        new PersonalWorkspaceExecutionSchemaInitializer(jdbc).afterPropertiesSet();
+        detector().afterPropertiesSet();
     }
     void apply(String name) throws Exception {String sql=new ClassPathResource(name).getContentAsString(StandardCharsets.UTF_8).lines().filter(l->!l.stripLeading().startsWith("--")).reduce("",(a,b)->a+b+"\n");for(String s:sql.split(";"))if(!s.isBlank())jdbc.execute(s);}
     @AfterEach void cleanup(){if(database!=null&&database.matches("skill5h_[a-f0-9]{32}"))admin.execute("DROP DATABASE `"+database+"`");}
