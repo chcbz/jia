@@ -14,7 +14,6 @@ import cn.jia.economy.entity.skill.*;
 import cn.jia.economy.mapper.*;
 import cn.jia.economy.service.impl.EconomyPostingServiceImpl;
 import org.junit.jupiter.api.*;
-import org.junit.jupiter.api.io.TempDir;
 import org.mybatis.spring.*;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.core.io.ClassPathResource;
@@ -23,8 +22,6 @@ import org.springframework.jdbc.datasource.*;
 import org.springframework.jdbc.datasource.init.ResourceDatabasePopulator;
 import org.springframework.transaction.support.TransactionTemplate;
 import java.nio.file.*;
-import java.net.*;
-import java.sql.*;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.function.Supplier;
@@ -33,12 +30,9 @@ import static org.mockito.Mockito.*;
 import static cn.jia.agent.skill.SkillManagementCodec.*;
 
 /** SQL, escrow, ledger, immutable authorizations and command outbox are real MySQL.
- * Only the already-authenticated identity/session boundary is stubbed explicitly. No paid IO. */
-public class SkillManagementTransactionTest {
-    @TempDir static Path scratch;
-    private static Process mysql;
-    private static String baseUrl;
-    private static JdbcTemplate admin;
+ * The default trusted identity/session fixture can be replaced by persistent proof validation
+ * for targeted consumer tests. No paid IO. */
+public class SkillManagementTransactionTest extends SkillManagementMySqlFixture {
     protected static final HostingRentHttp.Actor ACTOR=new HostingRentHttp.Actor("buyer","0","sm-client","owner");
     protected static final String AGENT="agt_sm";
     private String database;
@@ -55,53 +49,29 @@ public class SkillManagementTransactionTest {
     protected SkillAgentVersions versions;
     protected TransactionTemplate tx;
     private SkillExecutionDao taskAttachments;
-
-    @BeforeAll static void startPrivateMysql() throws Exception {
-        String configured=System.getenv("CYF_REVIEW_MYSQLD");
-        assertNotNull(configured,"Required CYF_REVIEW_MYSQLD: this suite must FAIL, never skip, if its owned fixture is unavailable");
-        Path executable=Path.of(configured).toRealPath();assertTrue(Files.isExecutable(executable));
-        Path data=Files.createDirectory(scratch.resolve("data")),log=scratch.resolve("mysql.log");
-        String user=System.getProperty("user.name");
-        var init=new ProcessBuilder(executable.toString(),"--no-defaults","--initialize-insecure","--user="+user,
-                "--datadir="+data,"--basedir="+executable.getParent().getParent()).redirectErrorStream(true).redirectOutput(log.toFile()).start();
-        try {assertEquals(0,init.waitFor(),()->readLog(log));}finally {stop(init);}
-        int port;
-        do {try(var listener=new ServerSocket(0,0,InetAddress.getByName("127.0.0.1"))){port=listener.getLocalPort();}}
-        while(Set.of(3306,10018,33060).contains(port));
-        mysql=new ProcessBuilder(executable.toString(),"--no-defaults","--user="+user,"--datadir="+data,
-            "--basedir="+executable.getParent().getParent(),"--socket="+scratch.resolve("mysql.sock"),"--pid-file="+scratch.resolve("mysql.pid"),
-            "--port="+port,"--bind-address=127.0.0.1","--mysqlx=OFF","--skip-log-bin","--innodb-buffer-pool-size=67108864")
-            .redirectErrorStream(true).redirectOutput(ProcessBuilder.Redirect.appendTo(log.toFile())).start();
-        baseUrl="jdbc:mysql://127.0.0.1:"+port+"/";
-        Class.forName("com.mysql.cj.jdbc.Driver");
-        while(true) {
-            assertTrue(mysql.isAlive(),()->readLog(log));
-            try(var connection=DriverManager.getConnection(url("mysql"),"root","")) {assertTrue(connection.isValid(1));break;}
-            catch(SQLException starting){Thread.sleep(100);}
-        }
-        admin=new JdbcTemplate(source("mysql"));
-        System.out.println("CYF_SM_C1_MYSQL owned=true port="+port+" version="+admin.queryForObject("SELECT VERSION()",String.class));
-    }
-    @AfterAll static void stopPrivateMysql() throws Exception {stop(mysql);mysql=null;admin=null;}
-    private static void stop(Process process) throws InterruptedException {if(process!=null&&process.isAlive()){process.destroy();process.waitFor();}}
-    private static String readLog(Path log) {try{return Files.readString(log);}catch(Exception e){return e.getClass().getSimpleName();}}
-    private static String url(String database){return baseUrl+database+"?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC";}
-    private static DriverManagerDataSource source(String database){return new DriverManagerDataSource(url(database),"root","");}
+    private EconomySkillApplicationMapper app;
+    private SkillMarketplaceService marketplace;
+    private SkillPackages packages;
+    private org.springframework.transaction.PlatformTransactionManager manager;
+    protected SqlSessionTemplate sql;
+    private AgentSkillInstallRecoveryMapper recoveryMapper;
+    private AgentCommandRecoveryDao recoveryDao;
+    private SkillInstallDispatchService dispatch;
 
     @BeforeEach protected void setup() throws Exception {
         database="cyf_sm_"+UUID.randomUUID().toString().replace("-","");
         admin.execute("CREATE DATABASE `"+database+"` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin");
-        var ds=source(database);jdbc=new JdbcTemplate(ds);var manager=new DataSourceTransactionManager(ds);tx=new TransactionTemplate(manager);
+        var ds=source(database);jdbc=new JdbcTemplate(ds);manager=new DataSourceTransactionManager(ds);tx=new TransactionTemplate(manager);
         for(String resource:List.of("db/economy-v0-foundation.sql","db/economy-v0-skill-marketplace.sql","db/economy-v0-skill-application.sql",
                 "db/agent-command-transport-schema.sql","db/economy-skill-management-sm-c1.sql","db/agent-skill-execution-v1.sql"))
             new ResourceDatabasePopulator(new ClassPathResource(resource)).execute(ds);
         var config=new org.apache.ibatis.session.Configuration();config.setMapUnderscoreToCamelCase(true);
         for(Class<?> type:List.of(EconomySkillMarketplaceMapper.class,EconomySkillApplicationMapper.class,EconomyLedgerMapper.class,
-                EconomySkillManagementMapper.class,SkillExecutionMapper.class,AgentCommandTransportMapper.class,AgentCommandRecoveryMapper.class,AgentSkillInstallRecoveryMapper.class))config.addMapper(type);
+                EconomySkillManagementMapper.class,SkillExecutionMapper.class,AgentCommandTransportMapper.class,AgentCommandRecoveryMapper.class,AgentSkillInstallRecoveryMapper.class,AgentOutboxRelayMapper.class))config.addMapper(type);
         var factory=new SqlSessionFactoryBean();factory.setDataSource(ds);factory.setConfiguration(config);
-        var sql=new SqlSessionTemplate(Objects.requireNonNull(factory.getObject()));
+        sql=new SqlSessionTemplate(Objects.requireNonNull(factory.getObject()));
         taskAttachments=new SkillExecutionDaoImpl(sql.getMapper(SkillExecutionMapper.class));
-        market=sql.getMapper(EconomySkillMarketplaceMapper.class);var app=sql.getMapper(EconomySkillApplicationMapper.class);
+        market=sql.getMapper(EconomySkillMarketplaceMapper.class);app=sql.getMapper(EconomySkillApplicationMapper.class);
         db=sql.getMapper(EconomySkillManagementMapper.class);var ledger=sql.getMapper(EconomyLedgerMapper.class);
         var gate=new EconomyPreviewGate(new EconomyPreviewProperties(true,List.of(new EconomyPreviewProperties.AllowedScope("0",ACTOR.clientId()))));
         var posting=new EconomyPostingServiceImpl(ledger,manager,gate);
@@ -130,14 +100,16 @@ public class SkillManagementTransactionTest {
         Path packageRoot=Files.createDirectory(scratch.resolve(database+"-packages"),
                 java.nio.file.attribute.PosixFilePermissions.asFileAttribute(
                         java.nio.file.attribute.PosixFilePermissions.fromString("rwx------")));
-        var packages=new SkillPackages(packageRoot);sessions=mock(AgentManagedSessionLookup.class);
+        packages=new SkillPackages(packageRoot);sessions=mock(AgentManagedSessionLookup.class);
         when(sessions.isReady(eq("0"),eq(ACTOR.clientId()),eq(AGENT),any())).thenReturn(true);
         when(sessions.dispatch(anyString(),anyString(),anyString(),any(),any())).thenReturn(AgentRawCommandDispatchResult.sent(1,1));
         capabilities=mock(SkillCapabilityLookup.class);when(capabilities.lookup(any(),any())).thenReturn(SkillCapabilityLookup.View.unavailable(SkillCapabilityLookup.State.DISCONNECTED));
-        var marketplace=new SkillMarketplaceService(market,app,ledger,posting,gate,versions,runtimes,provider(writer),provider(packages),provider(authentication),provider(sessions),manager);
+        marketplace=new SkillMarketplaceService(market,app,ledger,posting,gate,versions,runtimes,provider(writer),provider(packages),provider(authentication),provider(sessions),manager);
         service=new SkillManagementService(db,market,app,marketplace,versions,runtimes,installations,authentication,provider(packages),provider(writer),provider(sessions),provider(capabilities),manager);
-        var dispatch=new SkillInstallDispatchService(app,market,marketplace,versions,authentication,commands,provider(sessions),manager);dispatch.setManagement(service);
-        recovery=new SkillInstallRecoveryService(sql.getMapper(AgentSkillInstallRecoveryMapper.class),new AgentCommandRecoveryDaoImpl(sql.getMapper(AgentCommandRecoveryMapper.class)),gate,dispatch,manager);
+        dispatch=new SkillInstallDispatchService(app,market,marketplace,versions,authentication,commands,provider(sessions),manager);dispatch.setManagement(service);
+        recoveryMapper=sql.getMapper(AgentSkillInstallRecoveryMapper.class);
+        recoveryDao=new AgentCommandRecoveryDaoImpl(sql.getMapper(AgentCommandRecoveryMapper.class));
+        recovery=new SkillInstallRecoveryService(recoveryMapper,recoveryDao,gate,dispatch,manager);
         for(var p:new PlatformSkillPackageCatalog().products()) {
             market.insertProduct(new SkillProductEntity().setProductId(p.productId()).setSellerType("SYSTEM").setSellerId("SKILL_STORE").setName(p.name()).setDescription(p.description())
                 .setStatus("DRAFT").setVersion(1L).setTenantId("0").setClientId(ACTOR.clientId()).setCreateTime(1L).setUpdateTime(1L));
@@ -151,6 +123,76 @@ public class SkillManagementTransactionTest {
             .setCurrency("SILVER").setBalanceMicro(100000000L).setAllowNegative(0).setStatus("ACTIVE").setVersion(0L).setTenantId("0").setClientId(ACTOR.clientId()).setCreateTime(1L).setUpdateTime(1L));
     }
     @AfterEach void cleanup() {if(admin!=null&&database!=null&&database.matches("cyf_sm_[a-f0-9]{32}"))admin.execute("DROP DATABASE `"+database+"`");}
+    /** Replace only this test's trusted channel stub with actual persistent proof validation.
+     * Account/persona authority remains an explicit fixture; runtime/install rows and locks are SQL. */
+    protected void usePersistentAuthentication() throws Exception {
+        var ds=Objects.requireNonNull(jdbc.getDataSource());
+        // db/schema.sql exists in multiple modules. Select the actual runtime declaration,
+        // never whichever unrelated module happens to be first on a test classpath.
+        var runtimeDeclarations=new ArrayList<String>();
+        var resources=getClass().getClassLoader().getResources("db/schema.sql");
+        while(resources.hasMoreElements())try(var in=resources.nextElement().openStream()) {
+            String ddl=new String(in.readAllBytes(),java.nio.charset.StandardCharsets.UTF_8);
+            int start=ddl.indexOf("CREATE TABLE IF NOT EXISTS agent_runtime (");
+            if(start>=0)runtimeDeclarations.add(ddl.substring(start,ddl.indexOf(';',start)+1));
+        }
+        assertEquals(1,runtimeDeclarations.size(),"Exactly one production runtime schema declaration required");
+        jdbc.execute(runtimeDeclarations.getFirst());
+        for(String resource:List.of("db/agent-runtime-session-fence-v1.sql","db/agent-runtime-v1-schema.sql"))
+            new ResourceDatabasePopulator(new ClassPathResource(resource)).execute(ds);
+        for(Class<?> type:List.of(AgentRuntimeMapper.class,AgentRuntimeV1InstallationMapper.class))sql.getConfiguration().addMapper(type);
+        var rows=new AgentRuntimeDaoImpl();
+        org.springframework.test.util.ReflectionTestUtils.setField(rows,"baseMapper",sql.getMapper(AgentRuntimeMapper.class));
+        var installs=new AgentRuntimeV1InstallationDaoImpl();
+        org.springframework.test.util.ReflectionTestUtils.setField(installs,"baseMapper",sql.getMapper(AgentRuntimeV1InstallationMapper.class));
+        jdbc.update("INSERT INTO agent_runtime(agent_id,name,owner_jiacn,binding_id,token_hash,status,tenant_id,client_id,runtime_installation_id,runtime_host_id,runtime_instance_id,runtime_session_generation) VALUES (?,? ,?,7,?,'online','0',?,?,?,'runtime-1',1)",
+            AGENT,AGENT,ACTOR.ownerJiacn(),"urs1:"+proof().tokenDigest()+":1:1",ACTOR.clientId(),runtime.getRuntimeInstallationId(),"host-1");
+        jdbc.update("INSERT INTO agent_runtime_v1_installation(installation_id,canonical_agent_id,manifest_version,manifest_sha256,enrollment_secret_hash,enrollment_expires_at,status,version,tenant_id,client_id) VALUES (?,?,'1',?,?,1,'ACTIVE',0,'0',?)",
+            runtime.getRuntimeInstallationId(),AGENT,"a".repeat(64),new byte[32],ACTOR.clientId());
+        var identities=mock(AgentIdentityService.class);
+        var identity=new AgentIdentityRegistryEntity().setCanonicalAgentId(AGENT).setOwnerJiacn(ACTOR.ownerJiacn()).setBindingId(7L).setLifecycleStatus("ACTIVE");
+        identity.setTenantId("0");identity.setClientId(ACTOR.clientId());
+        when(identities.requireRegistrationIdentityInScope("0",ACTOR.clientId(),ACTOR.ownerJiacn(),AGENT)).thenReturn(identity);
+        when(identities.requireActiveIdentityForBinding("0",ACTOR.clientId(),ACTOR.ownerJiacn(),7L,AGENT)).thenReturn(identity);
+        when(identities.requireActiveBinding(identity,null)).thenReturn(new AgentPersonaBindingEntity().setId(7L));
+        when(identities.activateForFirstRegistration(identity)).thenReturn(identity);
+        var accounts=mock(cn.jia.user.security.AccountSecurityService.class);
+        when(accounts.findUniqueByExactJiacn(ACTOR.ownerJiacn())).thenReturn(Optional.of(new cn.jia.user.security.AccountSecuritySnapshot(1,ACTOR.ownerJiacn(),cn.jia.user.security.AccountState.ACTIVE,1)));
+        var authority=new AgentRuntimeAuthenticationService(rows,installs,mock(AgentIdentityRegistryDao.class),identities,accounts,
+            new cn.jia.agent.config.AgentTaskEventsGate(new cn.jia.agent.config.AgentTaskEventsProperties(true,List.of(new cn.jia.agent.config.AgentTaskEventsProperties.AllowedScope("0",ACTOR.clientId())))));
+        var advice=new org.springframework.transaction.interceptor.TransactionInterceptor();
+        advice.setTransactionManager(manager);
+        advice.setTransactionAttributeSource(new org.springframework.transaction.annotation.AnnotationTransactionAttributeSource());
+        var proxy=new org.springframework.aop.framework.ProxyFactory(authority);proxy.setProxyTargetClass(true);proxy.addAdvice(advice);
+        authentication=(AgentRuntimeAuthenticationService)proxy.getProxy();
+        var agents=mock(AgentService.class);var owner=mock(HostingRentOwnerResolver.class);
+        var dto=new AgentRuntimeDTO();dto.setAgentId(AGENT);dto.setSystemAgent(false);dto.setStatus("online");
+        when(owner.requireOwner(ACTOR)).thenReturn(ACTOR.ownerJiacn());
+        when(agents.requireApiKeyOwnedAgentForUpdate(ACTOR.clientId(),ACTOR.ownerJiacn(),AGENT)).thenReturn(dto);
+        when(agents.requireApiKeyOwnedAgent(ACTOR.clientId(),ACTOR.ownerJiacn(),AGENT)).thenReturn(dto);
+        versions=new SkillAgentVersions(app,rows,provider(agents),owner,manager,true);
+        service=new SkillManagementService(db,market,app,marketplace,versions,rows,installs,authentication,provider(packages),provider(writer),provider(sessions),provider(capabilities),manager);
+    }
+    /** Immutable snapshot of ALL relevant SQL business rows, including versions and transport leases. */
+    protected Map<String,Object> businessSnapshot() {
+        Map<String,Object> snapshot=new LinkedHashMap<>();
+        for(String table:List.of("economy_account","economy_escrow","economy_escrow_funding_lot","economy_transaction","economy_entry","economy_skill_order","economy_skill_entitlement",
+                "economy_skill_installation","economy_skill_actor_root","economy_skill_agent_version","economy_skill_managed_state","economy_skill_change","economy_skill_change_command",
+                "economy_skill_management_result","economy_skill_installation_authorization","economy_skill_management_request","economy_skill_management_quote","economy_skill_delivery_binding","economy_skill_result_receipt","agent_command_delivery","agent_outbox_event")) {
+            var rows=new ArrayList<Map<String,String>>();
+            for(var row:jdbc.queryForList("SELECT * FROM "+table+" ORDER BY 1")) {
+                Map<String,String> values=new LinkedHashMap<>();
+                row.forEach((key,value)->values.put(key,value instanceof byte[] bytes?HexFormat.of().formatHex(bytes):Objects.toString(value,null)));rows.add(values);
+            }
+            snapshot.put(table,rows);
+        }
+        return snapshot;
+    }
+    protected Map<String,Object> acknowledgement(Map<String,Object> change) {
+        var cmd=command(change);var row=db.findCommand("0",ACTOR.clientId(),text(cmd,"commandId"));
+        return map("protocolVersion",1,"requestId","req-ack","messageType","command.ack","messageId","ack_"+UUID.randomUUID(),"correlationId",row.getMessageId(),"code","E0","msg","ok",
+            "data",map("schemaVersion",2,"skillChangeId",change.get("skillChangeId"),"commandId",cmd.get("commandId"),"attempt",cmd.get("attempt"),"fencingToken",cmd.get("fencingToken"),"deliveryEpoch",cmd.get("deliveryEpoch"),"ackStatus","RECEIVED"));
+    }
     @SuppressWarnings("unchecked") static <T> ObjectProvider<T> provider(T value) {ObjectProvider<T> p=mock(ObjectProvider.class);when(p.getIfAvailable()).thenReturn(value);when(p.getObject()).thenReturn(value);return p;}
     protected AgentRuntimeAuthenticationService.Proof proof(){return new AgentRuntimeAuthenticationService.Proof(new AgentRuntimeAuthentication.Scope("0",ACTOR.clientId(),ACTOR.ownerJiacn(),AGENT,"runtime-1"),runtime.getRuntimeInstallationId(),"host-1",1L,"b".repeat(64),1L,1L);}
     protected Map<String,Object> quoteData() {return map("action","INSTALL","agentId",AGENT,"skillKey","repo-test","sourceSkillInstallationId",null,"targetProductVersionId","spv_repo_test_1_0_0",
@@ -431,4 +473,99 @@ public class SkillManagementTransactionTest {
         for(String table:List.of("economy_skill_agent_version","economy_skill_managed_state","agent_outbox_event"))assertEquals(0,count(table));
         assertThrows(RuntimeException.class,()->service.skills(new HostingRentHttp.Actor("other","0",ACTOR.clientId(),"other-owner"),AGENT,false));
     }
+    @Test void nativeRecoveryClaimAndFinishCasRejectWrongLeaseAndCaseChangedScope() {
+        install();long now=System.currentTimeMillis();var d=recoveryMapper.candidates(now,now-60000).getFirst();
+        tx.executeWithoutResult(status->{
+            assertEquals(1,recoveryMapper.claimDelivery(d,"lease-A",now+60000,now));
+            assertEquals(0,recoveryMapper.claimDelivery(d,"lease-B",now+60000,now));
+            var current=recoveryDao.lockDelivery("0",ACTOR.clientId(),d.getId());
+            assertEquals(0,recoveryMapper.finishDelivery(current,"lease-a","SENT",null,"wrong lease",now));
+            current.setClientId(ACTOR.clientId().toUpperCase(Locale.ROOT));
+            assertEquals(0,recoveryMapper.finishDelivery(current,"lease-A","SENT",null,"wrong client",now));
+            current.setClientId(ACTOR.clientId());current.setOwnerJiacn(ACTOR.ownerJiacn().toUpperCase(Locale.ROOT));
+            assertEquals(0,recoveryMapper.finishDelivery(current,"lease-A","SENT",null,"wrong owner",now));
+            current.setOwnerJiacn(ACTOR.ownerJiacn());current.setCommandId(current.getCommandId().toUpperCase(Locale.ROOT));
+            assertEquals(0,recoveryMapper.finishDelivery(current,"lease-A","SENT",null,"wrong command",now));
+            var o=recoveryDao.lockActiveOutboxes("0",ACTOR.clientId(),d.getId(),d.getActiveMessageId()).getFirst();
+            assertEquals(1,recoveryMapper.claimOutbox(o,"lease-A",now+60000,now));
+            assertEquals(0,recoveryMapper.claimOutbox(o,"lease-B",now+60000,now));
+            o=recoveryDao.lockActiveOutboxes("0",ACTOR.clientId(),d.getId(),d.getActiveMessageId()).getFirst();
+            assertEquals(0,recoveryMapper.finishOutbox(o,"lease-a","SENT",null,"wrong lease",now));
+            o.setClientId(ACTOR.clientId().toUpperCase(Locale.ROOT));
+            assertEquals(0,recoveryMapper.finishOutbox(o,"lease-A","SENT",null,"wrong scope",now));
+        });
+        assertEquals("lease-A",jdbc.queryForObject("SELECT lease_owner FROM agent_command_delivery",String.class));
+        assertEquals("lease-A",jdbc.queryForObject("SELECT lease_owner FROM agent_outbox_event",String.class));
+        assertTrue(recoveryMapper.candidates(now,now-60000).isEmpty());
+    }
+    @Test void nativeRecoveryRespectsLiveLeaseThenReclaimsExpiredLeaseWithoutMintingWireOrRabbitWork() {
+        var c=install();byte[] wire=jdbc.queryForObject("SELECT wire_payload FROM agent_outbox_event",byte[].class);
+        long now=System.currentTimeMillis();var d=recoveryMapper.candidates(now,now-60000).getFirst();
+        jdbc.update("UPDATE agent_command_delivery SET status='CONSUMED',lease_owner='prior',lease_until=?,update_time=?",now+60000,now-70000);
+        jdbc.update("UPDATE agent_outbox_event SET status='CLAIMED',lease_owner='prior',lease_until=?,update_time=?",now+60000,now-70000);
+        var before=businessSnapshot();recovery.recover(d,now);assertEquals(before,businessSnapshot());
+        verify(sessions,never()).dispatch(anyString(),anyString(),anyString(),any(),any());
+        var relay=sql.getMapper(AgentOutboxRelayMapper.class);
+        assertTrue(relay.selectDueCandidates(now+120000,25).isEmpty());assertTrue(relay.selectCorruptCandidates(now+120000,25).isEmpty());assertTrue(relay.selectStaleCandidates(now+120000,25).isEmpty());
+        jdbc.update("UPDATE agent_command_delivery SET lease_until=?",now-1);jdbc.update("UPDATE agent_outbox_event SET lease_until=?",now-1);
+        when(sessions.dispatch(anyString(),anyString(),anyString(),any(),any())).thenAnswer(call->{
+            assertFalse(org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive());
+            assertArrayEquals(wire,call.getArgument(4));return AgentRawCommandDispatchResult.sent(1,1);
+        });
+        recovery.recover(d,now);
+        assertEquals("SENT",jdbc.queryForObject("SELECT status FROM agent_command_delivery",String.class));
+        assertEquals("SENT",jdbc.queryForObject("SELECT status FROM agent_outbox_event",String.class));
+        assertEquals("NONE",jdbc.queryForObject("SELECT publisher_confirm_status FROM agent_outbox_event",String.class));
+        assertNull(jdbc.queryForObject("SELECT confirmed_at FROM agent_outbox_event",Long.class));
+        assertArrayEquals(wire,jdbc.queryForObject("SELECT wire_payload FROM agent_outbox_event",byte[].class));
+        assertEquals(1,count("economy_skill_order"));assertEquals(1,count("economy_skill_change_command"));assertEquals(70_000_000L,wallet());
+        assertEquals(c.get("attempt"),current(c).get("attempt"));
+    }
+    @Test void nativeRecoveryOutboxClaimCasLossRollsBackDeliveryLease() {
+        install();long now=System.currentTimeMillis();var hint=recoveryMapper.candidates(now,now-60000).getFirst();
+        var before=businessSnapshot();var failing=spy(recoveryMapper);
+        doReturn(0).when(failing).claimOutbox(any(),anyString(),anyLong(),anyLong());
+        var gate=new EconomyPreviewGate(new EconomyPreviewProperties(true,List.of(new EconomyPreviewProperties.AllowedScope("0",ACTOR.clientId()))));
+        var fixture=new SkillInstallRecoveryService(failing,recoveryDao,gate,dispatch,manager);
+        assertThrows(SkillMarketplaceException.class,()->fixture.recover(hint,now));
+        assertEquals(before,businessSnapshot());verify(sessions,never()).dispatch(anyString(),anyString(),anyString(),any(),any());
+    }
+    @Test void nativeAckRacingSenderCannotLetOldCompletionOverwriteReclaimedLease() {
+        var c=install();long now=System.currentTimeMillis();var hint=recoveryMapper.candidates(now,now-60000).getFirst();
+        var afterReclaim=new java.util.concurrent.atomic.AtomicReference<Map<String,Object>>();
+        when(sessions.dispatch(anyString(),anyString(),anyString(),any(),any())).thenAnswer(call->{
+            assertFalse(org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive());
+            service.acknowledge(proof(),acknowledgement(c));
+            tx.executeWithoutResult(status->{
+                long reclaim=now+120000;
+                var d=recoveryDao.lockDelivery("0",ACTOR.clientId(),hint.getId());
+                var o=recoveryDao.lockActiveOutboxes("0",ACTOR.clientId(),d.getId(),d.getActiveMessageId()).getFirst();
+                assertEquals(1,recoveryMapper.claimDelivery(d,"new-owner",reclaim+60000,reclaim));
+                assertEquals(1,recoveryMapper.claimOutbox(o,"new-owner",reclaim+60000,reclaim));
+            });
+            afterReclaim.set(businessSnapshot());return AgentRawCommandDispatchResult.sent(1,1);
+        });
+        recovery.recover(hint,now);assertNotNull(afterReclaim.get());assertEquals(afterReclaim.get(),businessSnapshot());
+        assertEquals("RECEIVED",jdbc.queryForObject("SELECT state FROM economy_skill_change_command",String.class));
+        assertEquals("new-owner",jdbc.queryForObject("SELECT lease_owner FROM agent_outbox_event",String.class));
+    }
+    @Test void preparedResultRacingSendCompletionPreservesNewPhaseAndImmutableOriginalWire() {
+        var c=install();long now=System.currentTimeMillis();var hint=recoveryMapper.candidates(now,now-60000).getFirst();
+        byte[] original=jdbc.queryForObject("SELECT wire_payload FROM agent_outbox_event",byte[].class);
+        when(sessions.dispatch(anyString(),anyString(),anyString(),any(),any())).thenAnswer(call->{
+            service.acknowledge(proof(),acknowledgement(c));report(c,"PREPARED",null);return AgentRawCommandDispatchResult.sent(1,1);
+        });
+        recovery.recover(hint,now);
+        assertEquals("ACTIVATING",current(c).get("status"));assertEquals("ACTIVATE",command(current(c)).get("phase"));
+        assertEquals(2,count("agent_outbox_event"));assertEquals(1,count("economy_skill_order"));assertEquals(70_000_000L,wallet());
+        assertArrayEquals(original,jdbc.queryForObject("SELECT wire_payload FROM agent_outbox_event WHERE command_id=?",byte[].class,hint.getCommandId()));
+        assertEquals("RESULT",jdbc.queryForObject("SELECT state FROM economy_skill_change_command WHERE command_id=?",String.class,hint.getCommandId()));
+    }
+    @Test void realMysqlGeneratedGuardsRetainExpressionsAndNullUniqueness() {
+        SkillTransportStorageAssertions.generatedGuards(jdbc,true,"0",ACTOR.clientId(),AGENT);
+    }
+    @Test void realMysqlAuditTriggersRejectUpdateAndDeleteWithoutChangingEvidence() {
+        SkillTransportStorageAssertions.immutableAudit(jdbc,"0",ACTOR.clientId(),AGENT);
+    }
+
 }

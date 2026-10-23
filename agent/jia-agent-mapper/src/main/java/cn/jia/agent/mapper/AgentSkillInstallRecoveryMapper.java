@@ -53,6 +53,8 @@ public interface AgentSkillInstallRecoveryMapper {
         WHERE id=#{d.id} AND CAST(tenant_id AS BINARY)=CAST(#{d.tenantId} AS BINARY)
           AND CAST(client_id AS BINARY)=CAST(#{d.clientId} AS BINARY) AND command_type IN ('SKILL_INSTALL','SKILL_SET_ENABLED','SKILL_RECONCILE')
           AND CAST(active_message_id AS BINARY)=CAST(#{d.activeMessageId} AS BINARY)
+          AND CAST(owner_jiacn AS BINARY)=CAST(#{d.ownerJiacn} AS BINARY)
+          AND CAST(command_id AS BINARY)=CAST(#{d.commandId} AS BINARY)
           AND active_attempt=#{d.activeAttempt} AND version=#{d.version} AND version<9223372036854775806
           AND status='CONSUMED' AND CAST(lease_owner AS BINARY)=CAST(#{owner} AS BINARY)
         """)

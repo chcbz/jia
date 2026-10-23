@@ -299,7 +299,8 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                 synchronized(session){session.sendMessage(new TextMessage(cn.jia.agent.skill.SkillManagementCodec.json(receipt)));}
             } else skillManagement.acknowledge(sessionProof(session),envelope);
         } catch(Exception failure) {
-            String code=failure instanceof cn.jia.agent.skill.SkillMarketplaceException e?e.code():"INTERNAL_ERROR";
+            String code=failure instanceof cn.jia.agent.skill.SkillMarketplaceException e?e.code():
+                    failure instanceof IllegalArgumentException&&"AGENT_RUNTIME_UNAUTHENTICATED".equals(failure.getMessage())?"UNAUTHENTICATED":"INTERNAL_ERROR";
             String request=peek.get("requestId") instanceof String id?id:"invalid";
             String message=peek.get("messageId") instanceof String id?id:"invalid";
             try {
