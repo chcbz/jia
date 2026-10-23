@@ -67,7 +67,9 @@ class SchemaStartupIsolationTest {
             context.register(ArchiveSchemaInitializer.class);
             context.refresh();
             assertNotNull(context.getBean(ArchiveSchemaInitializer.class));
-            verifyNoInteractions(jdbc);
+            // Spring invokes JdbcTemplate's own lifecycle even when no installer runs.
+            verify(jdbc).afterPropertiesSet();
+            verifyNoMoreInteractions(jdbc);
         }
     }
 
