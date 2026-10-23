@@ -51,7 +51,7 @@ public final class ChatTypedDeliberationContextService {
     @org.springframework.beans.factory.annotation.Autowired
     public void setSkillSources(ChatSkillSourceAccessService value) {skillSources=Objects.requireNonNull(value);}
 
-    /** TASK_DEFAULT is only the active task-linked directory, never all workspace/history. */
+    /** TASK_DEFAULT starts with active task-linked inputs; retained causal outputs are added separately. */
     public List<ChatTypedDeliberationWire.SourceSelector> effectiveSelectors(Scope s,String taskId,String materialScope,
             List<ChatTypedDeliberationWire.SourceSelector> explicit,List<ChatTypedDeliberationWire.SourceSelector> inherited) {
         if(!Set.of("TASK_DEFAULT","EXPLICIT","NONE").contains(materialScope)||explicit==null||inherited==null)throw invalid();
@@ -77,6 +77,48 @@ public final class ChatTypedDeliberationContextService {
         return List.copyOf(selected);
     }
 
+
+    /** Only the exact retained delivery chain is added; NONE/EXPLICIT never expand their selection. */
+    List<ChatTypedDeliberationWire.SourceSelector> withDeliverySelectors(Scope scope, String task, String target,
+            String materialScope, List<ChatTypedDeliberationWire.SourceSelector> selected,
+            List<Map<String,Object>> deliveryTargets) {
+        if (!"TASK_DEFAULT".equals(materialScope)) return selected;
+        var selectors = new java.util.LinkedHashSet<>(selected);
+        var owner = new cn.jia.agent.service.PersonalWorkspaceExecutionService.OwnerScope(
+                scope.tenantId(), scope.clientId(), scope.ownerJiacn());
+        for (var retained : deliveryTargets) {
+            if (!(retained.get("outputSource") instanceof Map<?,?> raw)) continue;
+            if (skillSources == null) throw unavailable("Skill source adapter is unavailable");
+            @SuppressWarnings("unchecked") var output = (Map<String,Object>) raw;
+            var source = skillSources.outputAsset(owner, task, scope.conversationId(), scope.conversationGeneration(), target, output);
+            selectors.add(new ChatTypedDeliberationWire.SourceSelector("CURRENT_CONVERSATION_ASSET", null, null,
+                    null, source.assetId(), Long.toString(source.assetRevision())));
+        }
+        if (selectors.size() > 32) throw new ChatDeliberationException(ChatDeliberationException.Reason.INVALID_REQUEST,
+                "More than 32 effective sources; explicitly select this message's sources");
+        return List.copyOf(selectors);
+    }
+
+    /** Model-visible lineage without exposing private locators or broadening availableSources. */
+    static List<Map<String,Object>> retainedOutputSources(Context context, List<Map<String,Object>> deliveryTargets) {
+        var bindings = new ArrayList<Map<String,Object>>();
+        var catalog = parseCatalog(context.sourceCatalogJson());
+        for (var retained : deliveryTargets) {
+            if (!(retained.get("outputSource") instanceof Map<?,?> output)) continue;
+            for (var source : catalog) {
+                if (!"CURRENT_CONVERSATION_ASSET".equals(source.get("sourceKind"))
+                        || !(source.get("sourceIdentity") instanceof Map<?,?> identity)) continue;
+                if (Objects.equals(output.get("requestId"), identity.get("producerRequestId"))
+                        && Objects.equals(output.get("stepId"), identity.get("producerStepId"))
+                        && Objects.equals(output.get("outputId"), identity.get("producerOutputId"))
+                        && Objects.equals(output.get("sha256"), source.get("contentHash"))) {
+                    bindings.add(Map.of("outcomeId", retained.get("outcomeId"), "finalDigest", retained.get("finalDigest"),
+                            "outputSource", output, "sourceRefId", source.get("sourceRefId")));
+                }
+            }
+        }
+        return List.copyOf(bindings);
+    }
 
     public ChatTypedDeliberationContextService(JdbcTemplate jdbc, TypedDeliberationSessionRegistry sessions,
             ChatTypedDeliberationReadiness schema, ChatActionCapabilityService capabilities,

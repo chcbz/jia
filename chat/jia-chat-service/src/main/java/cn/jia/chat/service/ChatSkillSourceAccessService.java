@@ -104,6 +104,21 @@ public final class ChatSkillSourceAccessService implements SkillSourceAccessServ
         if(source==null||!task.equals(source.taskId())||!conversation.equals(source.conversationId())||generation!=source.conversationGeneration())throw missing();
         return source;
     }
+    ChatConversationArchiveStore.Source outputAsset(PersonalWorkspaceExecutionService.OwnerScope scope, String task,
+            String conversationId, long generation, String target, Map<String,Object> output) {
+        if (!target.equals(conversation(scope, task, conversationId, generation))) throw missing();
+        var source = archive.findAuthorizedOutputSource(new ChatConversationArchiveStore.Scope(
+                scope.tenantId(), scope.ownerJiacn(), scope.clientId()), conversationId, generation, task, target,
+                text(output, "requestId"), text(output, "stepId"), text(output, "outputId"), text(output, "sha256"));
+        if (source == null) throw new ChatDeliberationException(ChatDeliberationException.Reason.CONFLICT,
+                "上一版成果资料尚未就绪或已不可用，请稍后重试，或明确选择本次资料；不会改用最初上传资料。");
+        if (!task.equals(source.taskId()) || !conversationId.equals(source.conversationId())
+                || generation != source.conversationGeneration() || !output.get("requestId").equals(source.requestId())
+                || !output.get("stepId").equals(source.stepId()) || !output.get("outputId").equals(source.outputId())
+                || !output.get("sha256").equals(source.sha256())) throw missing();
+        return source;
+    }
+
     static Map<String,Object> assetIdentity(ChatConversationArchiveStore.Source s) {
         return Map.ofEntries(Map.entry("kind","CURRENT_CONVERSATION_ASSET"),Map.entry("conversationId",s.conversationId()),
                 Map.entry("conversationGeneration",Long.toString(s.conversationGeneration())),Map.entry("assetId",s.assetId()),

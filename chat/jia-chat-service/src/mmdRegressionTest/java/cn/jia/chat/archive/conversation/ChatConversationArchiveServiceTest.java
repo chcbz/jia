@@ -276,6 +276,11 @@ class ChatConversationArchiveServiceTest {
     }
 
     private static final class FakeStore implements ChatConversationArchiveStore {
+        @Override public Source findAuthorizedOutputSource(Scope scope, String conversation, long generation,
+                String task, String target, String request, String step, String output, String sha256) {
+            throw new UnsupportedOperationException("Not used by archive operation tests");
+        }
+
         private final List<String> events = new ArrayList<>();
         private final Map<String, Operation> byOperation = new LinkedHashMap<>();
         private final Map<String, Source> sources = new LinkedHashMap<>();

@@ -131,6 +131,8 @@ public class ChatTypedDiscussionAdmissionService {
                 return receipt(prior,true);
             }
             Parent parent=parent(storeScope,command);
+            var deliveryBasis=deliveryParent(storeScope,command,parent);
+            var deliveryTargets=deliveryBasis==null?List.<Map<String,Object>>of():finals.deliveryTargets(storeScope,deliveryBasis);
             List<ChatTypedDeliberationWire.SourceSelector> selectors=command.sourceSelectors();
             var inherited="CLARIFICATION_REPLY".equals(command.intent())?selectors(parent.outcome().sourceCatalogJson()):List.<ChatTypedDeliberationWire.SourceSelector>of();
             // The original key was checked first: replay never upgrades a grant or discovers a new directory.
@@ -139,6 +141,8 @@ public class ChatTypedDiscussionAdmissionService {
                     command.taskId(),command.expectedAssignmentRevision(),targets.getFirst());
             selectors=contexts.effectiveSelectors(new ChatTypedDeliberationContextService.Scope(tenantId,owner,client,conversationId,generation),
                     command.taskId(),command.materialScope(),selectors,inherited);
+            if(!deliveryTargets.isEmpty())selectors=contexts.withDeliverySelectors(new ChatTypedDeliberationContextService.Scope(tenantId,owner,client,conversationId,generation),
+                    command.taskId(),targets.getFirst(),command.materialScope(),selectors,deliveryTargets);
             var context=contexts.resolve(new ChatTypedDeliberationContextService.Scope(tenantId,owner,client,conversationId,generation),
                     command.taskId(),targets.getFirst(),selectors);
             if(parent.outcome()!=null) {
@@ -155,8 +159,6 @@ public class ChatTypedDiscussionAdmissionService {
             input.setContent(command.content());input.setRequestId(requestId);input.setRequestRevision(1L);
             input.setTargetAgentId(targets.getFirst());input.setTargetAgentIds(List.copyOf(targets));
             var scope=new JuyitingConversationScope("bounty","task:"+command.taskId(),command.taskId(),targets.getFirst(),List.copyOf(targets),List.copyOf(targets));
-            var deliveryBasis=deliveryParent(storeScope,command,parent);
-            var deliveryTargets=deliveryBasis==null?List.<Map<String,Object>>of():finals.deliveryTargets(storeScope,deliveryBasis);
             var admitted=deliberation.admit(tenantId,sender,conversationId,generation,scope,
                     InteractionRoute.CHAT,input,null,context.facts(),nativeAdmissionFacts(command,context,deliveryBasis,deliveryTargets));
             List<String> turnIds=admitted.dispatches().stream().map(ChatDeliberationService.Dispatch::turnId).toList();
@@ -243,6 +245,7 @@ public class ChatTypedDiscussionAdmissionService {
     private static Map<String,Object> nativeAdmissionFacts(ChatTypedDeliberationWire.DiscussionCommand command,
             ChatTypedDeliberationContextService.Context context,Map<String,Object> deliveryBasis,List<Map<String,Object>> targets) {
         var facts=new LinkedHashMap<>(admissionFacts(command,context.selectors(),deliveryBasis,targets));
+        facts.put("retainedOutputSources",ChatTypedDeliberationContextService.retainedOutputSources(context,targets));
         facts.put("nativeMaterials",ChatMaterialsInputContract.candidates(context.frozenDeclaration(),ChatTypedDeliberationContextService.parseCatalog(context.sourceCatalogJson())));
         return java.util.Collections.unmodifiableMap(facts);
     }
