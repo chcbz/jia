@@ -86,7 +86,7 @@ class ChatSchemaReadinessLifecycleTest {
     }
 
     @Test
-    void realSpringLifecycleMakesSourcesReadyBeforeArchiveAndRunnerPhaseDoesNotRepeat() {
+    void explicitMaintenanceContextMakesSourcesReadyBeforeArchiveWithoutRepeatingRunners() {
         LifecycleState state = new LifecycleState();
 
         try (ConfigurableApplicationContext ignored = runApplication(state, false)) {
@@ -213,6 +213,7 @@ class ChatSchemaReadinessLifecycleTest {
 
     private ConfigurableApplicationContext runApplication(LifecycleState state, boolean legacy) {
         SpringApplication application = new SpringApplication(TestApplication.class);
+        application.setAdditionalProfiles("schema-maintenance");
         application.setWebApplicationType(WebApplicationType.NONE);
         application.setRegisterShutdownHook(false);
         application.setLogStartupInfo(false);
