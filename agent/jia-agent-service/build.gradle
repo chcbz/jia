@@ -926,3 +926,22 @@ tasks.register('positionSkillsTest', Test) {
     classpath = positionSkillsTestSourceSet.runtimeClasspath
     useJUnitPlatform()
 }
+
+// Exact native security lane and persistent generation regressions for position/archive integration.
+def positionSecuritySourceSet = sourceSets.create('positionSecurityTest') {
+    java.srcDir 'src/test/java'
+    java.include 'cn/jia/agent/security/AgentRuntimeSecurityIntegrationTest.java'
+    java.include 'cn/jia/agent/security/AgentRuntimePersistentSessionFenceTest.java'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(positionSecuritySourceSet.implementationConfigurationName) { extendsFrom configurations.testImplementation }
+configurations.named(positionSecuritySourceSet.runtimeOnlyConfigurationName) { extendsFrom configurations.testRuntimeOnly }
+tasks.register('positionSecurityTest', Test) {
+    dependsOn tasks.named(positionSecuritySourceSet.classesTaskName)
+    testClassesDirs = positionSecuritySourceSet.output.classesDirs
+    classpath = positionSecuritySourceSet.runtimeClasspath
+    useJUnitPlatform()
+    maxParallelForks = 1
+    maxHeapSize = '384m'
+}

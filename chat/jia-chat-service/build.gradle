@@ -462,3 +462,23 @@ tasks.register('nativeSkillResultRegression', Test) {
     maxParallelForks = 1
     filter { includeTestsMatching 'cn.jia.chat.handler.SkillNativeResultMySqlTest.nativeSkillAckReceivedStartedDownloadAndRealResultActivateWithoutBroker' }
 }
+
+// Position/archive production SQL against an explicitly owned isolated MySQL.
+def archiveMaintenanceSourceSet = sourceSets.create('archiveMaintenanceTest') {
+    java.srcDir 'src/archiveMaintenanceTest/java'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(archiveMaintenanceSourceSet.implementationConfigurationName) { extendsFrom configurations.testImplementation }
+configurations.named(archiveMaintenanceSourceSet.runtimeOnlyConfigurationName) { extendsFrom configurations.testRuntimeOnly }
+dependencies {
+    add(archiveMaintenanceSourceSet.implementationConfigurationName, project(':economy:jia-economy-mapper'))
+}
+tasks.register('archiveMaintenanceTest', Test) {
+    dependsOn tasks.named(archiveMaintenanceSourceSet.classesTaskName)
+    testClassesDirs = archiveMaintenanceSourceSet.output.classesDirs
+    classpath = archiveMaintenanceSourceSet.runtimeClasspath
+    useJUnitPlatform()
+    maxParallelForks = 1
+    maxHeapSize = '384m'
+}
