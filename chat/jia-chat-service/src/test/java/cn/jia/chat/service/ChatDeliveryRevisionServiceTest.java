@@ -61,8 +61,9 @@ class ChatDeliveryRevisionServiceTest {
         when(operations.admitRevision(bound)).thenReturn(op);
         when(operations.assignmentRevision(owner,"task_fixture")).thenReturn(1L);
         when(bindings.lock(any(),eq("task_fixture"))).thenReturn(new ChatBountyBindingStore.Binding(1,7L));
-        when(conversations.lockScopedById("owner","client","7")).thenReturn(new ChatConversationEntity()
-                .setTenantId("0").setLifecycleGeneration(1L).setTaskId("task_fixture").setTargetAgentIds("[\"wuyong\"]"));
+        var conversation=new ChatConversationEntity();conversation.setTenantId("0");
+        conversation.setLifecycleGeneration(1L);conversation.setTaskId("task_fixture");conversation.setTargetAgentIds("[\"wuyong\"]");
+        when(conversations.lockScopedById("owner","client","7")).thenReturn(conversation);
         when(scopes.parsePersistedTargetAgentIds(anyString())).thenReturn(List.of("wuyong"));
         when(retention.prepareRevisionSources(bound)).thenReturn(List.of());
         var batch=new AgentTaskFormalDeliveryViewDTO();batch.setTaskId("task_fixture");batch.setDeliveryId("delivery");
