@@ -111,6 +111,32 @@ class ArchiveMaintenanceMySqlTest {
         assertThrows(PositionSkillException.class,()->service.complete(proof,(String)pending.get("jobId"),r));assertNull(content.findWork("after-revoke"));
         assertEquals("PUBLISHED",service.outcome(proof,(String)published.get("jobId")).get("state"));assertTrue(service.commands(proof).isEmpty());
     }
+    @Test void concurrentSameKeyCreationReturnsOneJobEvenAfterRepeatableReadSnapshot()throws Exception {
+        var start=new CountDownLatch(1);var request=request("same-key-book",Mode.DRAFT_ONLY,"正文。");
+        try(var pool=Executors.newFixedThreadPool(4)){
+            var calls=new ArrayList<Future<Map<String,Object>>>();
+            for(int n=0;n<4;n++)calls.add(pool.submit(()->{start.await();return service.create(scope,"same-key",request);}));
+            start.countDown();var ids=new HashSet<Object>();for(var f:calls)ids.add(f.get(20,TimeUnit.SECONDS).get("jobId"));
+            assertEquals(1,ids.size());assertEquals(1,jdbc.queryForObject("SELECT count(*) FROM archive_maintenance_job",Integer.class));
+        }
+    }
+    @Test void explicitDraftPublicationRequiresLivePublishAuthorityAndPreservesEditionAndRecovery()throws Exception {
+        var j=job("draft-create","manual-book",Mode.DRAFT_ONLY,"第一回\n待审核正文。");String id=(String)j.get("jobId");
+        service.complete(proof,id,parse(j));jdbc.update("DELETE FROM agent_position_authority WHERE permission_key='ARCHIVE_PUBLISH'");
+        assertThrows(PositionSkillException.class,()->service.publishDraft(scope,"publish",id));assertNull(content.findWork("manual-book"));
+        jdbc.update("INSERT INTO agent_position_authority VALUES('0','test-client','owner-a','ARCHIVE_PUBLISH','archive:public')");
+        var published=service.publishDraft(scope,"publish",id);assertEquals("PUBLISHED",published.get("state"));assertEquals(j.get("editionId"),published.get("editionId"));
+        assertEquals(published,service.publishDraft(scope,"publish",id));assertEquals(published,service.recover(scope,"publish"));
+        assertThrows(PositionSkillException.class,()->job("publish","another-book",Mode.AUTO,"正文。"));
+        assertEquals(1,jdbc.queryForObject("SELECT count(*) FROM archive_maintenance_action",Integer.class));
+        positions.resign(scope,"resign",appointment);assertEquals(published,service.recover(scope,"publish"));
+    }
+    @Test void manualDraftPublicationUsesTheSameActiveEditionCasAsAuto()throws Exception {
+        var draft=job("draft","manual-race",Mode.DRAFT_ONLY,"待审核。");service.complete(proof,(String)draft.get("jobId"),parse(draft));
+        var auto=job("auto","manual-race",Mode.AUTO,"先发布。");service.complete(proof,(String)auto.get("jobId"),parse(auto));
+        assertThrows(PositionSkillException.class,()->service.publishDraft(scope,"publish",(String)draft.get("jobId")));
+        assertEquals("DRAFT",service.read(scope,(String)draft.get("jobId")).get("state"));assertEquals(0,jdbc.queryForObject("SELECT count(*) FROM archive_maintenance_action",Integer.class));
+    }
     @Test void parserFailureIsDurableAndRetryCreatesOneFreshJobFromPersistedSource()throws Exception {
         var original=job("failed","failed-book",Mode.AUTO,"第一回\n测试正文。");String id=(String)original.get("jobId");
         var result=new Result(null,null,"ARCHIVE_SCRIPT_FAILED");var failed=service.complete(proof,id,result);

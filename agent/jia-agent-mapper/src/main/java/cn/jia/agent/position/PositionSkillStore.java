@@ -32,7 +32,7 @@ public class PositionSkillStore {
                 (rs,n)->rs.getString(1),s.tenantId(),s.clientId(),s.ownerJiacn(),permission,resource).isEmpty();
     }
     public Operation operation(Scope s, String key) {
-        var rows = jdbc.query("SELECT operation_id,request_sha256,result_id FROM agent_position_operation WHERE tenant_id=? AND client_id=? AND owner_jiacn=? AND idempotency_key=?",
+        var rows = jdbc.query("SELECT operation_id,request_sha256,result_id FROM agent_position_operation WHERE tenant_id=? AND client_id=? AND owner_jiacn=? AND idempotency_key=? FOR UPDATE",
                 (rs,n)->new Operation(rs.getString(1),rs.getString(2),rs.getString(3)),s.tenantId(),s.clientId(),s.ownerJiacn(),key);
         return rows.isEmpty()?null:rows.getFirst();
     }

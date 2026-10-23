@@ -20,3 +20,16 @@ CREATE TABLE IF NOT EXISTS archive_maintenance_job (
  CHECK (state IN ('WAITING','DRAFT','PUBLISHED','FAILED')),
  CHECK (JSON_VALID(specification))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
+
+-- Explicit operator publication receipt, committed atomically with the edition and active pointer.
+CREATE TABLE IF NOT EXISTS archive_maintenance_action (
+ tenant_id VARCHAR(50) COLLATE utf8mb4_bin NOT NULL,
+ client_id VARCHAR(50) COLLATE utf8mb4_bin NOT NULL,
+ owner_jiacn VARCHAR(50) COLLATE utf8mb4_bin NOT NULL,
+ operation_key VARCHAR(100) COLLATE utf8mb4_bin NOT NULL,
+ job_id VARCHAR(100) COLLATE utf8mb4_bin NOT NULL,
+ action_key VARCHAR(20) COLLATE ascii_bin NOT NULL,
+ created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+ PRIMARY KEY(tenant_id,client_id,owner_jiacn,operation_key),
+ CHECK(action_key='PUBLISH_DRAFT')
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;

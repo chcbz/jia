@@ -47,7 +47,8 @@ public class ArchiveMaintenanceService {
             var position=state.positions().get(appointment.positionId());
             var grant=new Grant(appointment.id(),appointment.revision(),position.revision(),request.agentId(),appointment.bindingId(),request.workId(),request.mode()==Mode.AUTO);
             return positions.withAuthority(scope,grant,()->{
-                var existing=jobs.operation(owner(scope),key);
+                require(jobs.publicationOperation(owner(scope),key,true)==null,409,"ARCHIVE_IDEMPOTENCY_CONFLICT");
+                var existing=jobs.operation(owner(scope),key,true);
                 if(existing!=null){require(existing.requestDigest().equals(digest),409,"ARCHIVE_IDEMPOTENCY_CONFLICT");return view(existing);}
                 var current=positions.currentState(scope);
                 var install=current.installations().values().stream().filter(i->i.agentId().equals(request.agentId())
@@ -68,7 +69,7 @@ public class ArchiveMaintenanceService {
         return create(scope,key,decode(original.specification()).request());
     }
     public List<Map<String,Object>> list(Scope scope){return jobs.list(owner(scope)).stream().map(this::view).toList();}
-    public Map<String,Object> recover(Scope scope,String key){PositionSkillPolicy.key(key);var job=jobs.operation(owner(scope),key);require(job!=null,404,"ARCHIVE_OPERATION_NOT_FOUND");return view(job);}
+    public Map<String,Object> recover(Scope scope,String key){PositionSkillPolicy.key(key);var job=jobs.operation(owner(scope),key);if(job==null){String id=jobs.publicationOperation(owner(scope),key);if(id!=null)job=requireJob(scope,id);}require(job!=null,404,"ARCHIVE_OPERATION_NOT_FOUND");return view(job);}
     public Map<String,Object> read(Scope scope,String id){return view(requireJob(scope,id));}
     public String draft(Scope scope,String id){var j=requireJob(scope,id);require(j.resultManifest()!=null,409,"ARCHIVE_DRAFT_NOT_READY");return j.resultManifest();}
     public List<Map<String,Object>> commands(Proof proof){
@@ -106,19 +107,45 @@ public class ArchiveMaintenanceService {
             if(!"WAITING".equals(job.state())){require(Objects.equals(job.resultDigest(),result.manifestFileSha256()),409,"ARCHIVE_RESULT_CONFLICT");return view(job);}
             String state="DRAFT";
             if(spec.request().mode()==Mode.AUTO){
-                var work=content.lockWork(manifest.workId());
-                if(work==null){
-                    try{content.insertWork(new ArchiveWorkRecord(manifest.workId(),manifest.title(),null));}
-                    catch(DuplicateKeyException raced){/* re-read locked current row and apply CAS */}
-                    work=content.lockWork(manifest.workId());
-                }
-                require(work!=null && Objects.equals(work.activeEditionId(),spec.expectedActiveEdition()),409,"ARCHIVE_EDITION_CONFLICT");
-                new ArchiveContentImporter(content,tx).importAndActivate(manifest,loaded.manifestFileSha256());
+                publish(spec,loaded);
                 state="PUBLISHED";
             }
             require(jobs.complete(owner(scope(proof)),id,state,result.manifestJson(),result.manifestFileSha256())==1,409,"ARCHIVE_RESULT_CONFLICT");
             return view(jobs.find(owner(scope(proof)),id,false));
         });
+    }
+    /** User OAuth scope reaches this explicit action; the same backend grant/CAS/importer owns publication. */
+    public Map<String,Object> publishDraft(Scope scope,String key,String id){
+        PositionSkillPolicy.key(key);var initial=requireJob(scope,id);var spec=decode(initial.specification());
+        return tx.required(()->{
+            identities.lockActiveCanonicalAgentIdsInScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),List.of(initial.agentId()));
+            var state=positions.currentState(scope);var a=state.appointments().get(spec.grant().appointmentId());
+            require(a!=null && a.active() && a.bindingId()==spec.grant().bindingId(),403,"POSITION_AUTHORITY_REVOKED");
+            var position=state.positions().get(a.positionId());
+            var grant=new Grant(a.id(),a.revision(),position.revision(),a.agentId(),a.bindingId(),spec.request().workId(),true);
+            return positions.withAuthority(scope,grant,()->{
+                require(jobs.operation(owner(scope),key,true)==null,409,"ARCHIVE_IDEMPOTENCY_CONFLICT");
+                String prior=jobs.publicationOperation(owner(scope),key,true);
+                if(prior!=null){require(prior.equals(id),409,"ARCHIVE_IDEMPOTENCY_CONFLICT");return view(requireJob(scope,id));}
+                var job=jobs.find(owner(scope),id,true);require("DRAFT".equals(job.state()),409,"ARCHIVE_DRAFT_NOT_PUBLISHABLE");
+                require(state.installations().values().stream().anyMatch(i->i.usable() && i.agentId().equals(a.agentId())
+                        && i.bindingId()==a.bindingId() && PositionSkillRuntimeService.physical(i).equals(spec.installationId())),403,"ARCHIVE_SKILL_REVOKED");
+                var loaded=new ArchiveManifestLoader().parseAndValidate(job.resultManifest().getBytes(StandardCharsets.UTF_8),job.resultDigest());
+                publish(spec,loaded);require(jobs.publishDraft(owner(scope),id)==1,409,"ARCHIVE_RESULT_CONFLICT");
+                jobs.publicationOperation(owner(scope),key,id);return view(jobs.find(owner(scope),id,false));
+            });
+        });
+    }
+    private void publish(Specification spec,ArchiveManifestLoader.Loaded loaded){
+        var manifest=loaded.manifest();
+        var work=content.lockWork(manifest.workId());
+        if(work==null){
+            try{content.insertWork(new ArchiveWorkRecord(manifest.workId(),manifest.title(),null));}
+            catch(DuplicateKeyException raced){/* re-read locked current row and apply CAS */}
+            work=content.lockWork(manifest.workId());
+        }
+        require(work!=null && Objects.equals(work.activeEditionId(),spec.expectedActiveEdition()),409,"ARCHIVE_EDITION_CONFLICT");
+        new ArchiveContentImporter(content,tx).importAndActivate(manifest,loaded.manifestFileSha256());
     }
     private Map<String,Object> fail(Proof proof,String id,Result result){
         require(Set.of("ARCHIVE_SCRIPT_FAILED","ARCHIVE_SCRIPT_RESULT_INVALID").contains(result.errorCode())
