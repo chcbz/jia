@@ -462,3 +462,30 @@ tasks.register('nativeSkillResultRegression', Test) {
     maxParallelForks = 1
     filter { includeTestsMatching 'cn.jia.chat.handler.SkillNativeResultMySqlTest.nativeSkillAckReceivedStartedDownloadAndRealResultActivateWithoutBroker' }
 }
+
+// SM-C1 real WS registration/result consumer + agent-owned SQL/outbox transaction fixture.
+// Separate selector; it does not silently replace any existing regression suite.
+def skillManagementWireSourceSet = sourceSets.create('skillManagementWire') {
+    java.srcDirs('src/skillManagementContractTest/java', '../../agent/jia-agent-service/src/skillManagementContract/java')
+    java.include 'cn/jia/chat/handler/SkillManagementWireMySqlTest.java'
+    java.include 'cn/jia/agent/skill/SkillManagementTransactionTest.java'
+    resources.srcDir '../../agent/jia-agent-service/src/skillManagementContract/resources'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(skillManagementWireSourceSet.implementationConfigurationName) { extendsFrom configurations.testImplementation }
+configurations.named(skillManagementWireSourceSet.runtimeOnlyConfigurationName) { extendsFrom configurations.testRuntimeOnly }
+dependencies {
+    add(skillManagementWireSourceSet.implementationConfigurationName, project(':economy:jia-economy-api'))
+    add(skillManagementWireSourceSet.implementationConfigurationName, project(':economy:jia-economy-mapper'))
+    add(skillManagementWireSourceSet.implementationConfigurationName, project(':economy:jia-economy-service'))
+}
+tasks.register('skillManagementWire', Test) {
+    dependsOn tasks.named(skillManagementWireSourceSet.classesTaskName)
+    testClassesDirs = skillManagementWireSourceSet.output.classesDirs
+    classpath = skillManagementWireSourceSet.runtimeClasspath
+    useJUnitPlatform()
+    maxParallelForks = 1
+    filter { includeTestsMatching 'cn.jia.chat.handler.SkillManagementWireMySqlTest' }
+    testLogging { events 'passed','failed'; exceptionFormat 'full'; showStandardStreams = true }
+}

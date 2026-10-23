@@ -13,15 +13,20 @@ public interface SkillCapabilityLookup {
             exact(tenantId, 50); exact(clientId, 50); exact(ownerJiacn, 50); exact(agentId, 100);
         }
     }
-    enum Readiness { READY, UNAVAILABLE }
+    enum Readiness { READY, UNKNOWN, OFFLINE, VERIFYING, DEPENDENCY_MISSING, PROVIDER_UNBOUND, VERSION_MISMATCH, NOT_EXECUTABLE, UNAVAILABLE }
     enum State { AVAILABLE, DISCONNECTED, AMBIGUOUS, FENCED, INVALID_DECLARATION }
 
     record RuntimeSkill(String skillKey, String skillVersion, String packageSha256,
             String manifestSha256, String runner, Readiness readiness, String reasonCode,
-            String toolchainDigest, String bindingRevision) {
+            String toolchainDigest, String bindingRevision, String skillInstallationId, String productVersionId,
+            String kind, String policyRevision, boolean enabled, Long observedAt) {
+        /** Internal source constructor retained for existing non-wire unit fixtures only. */
+        public RuntimeSkill(String key,String version,String pkg,String manifest,String runner,Readiness readiness,String reason,String tool,String binding) {
+            this(key,version,pkg,manifest,runner,readiness,reason,tool,binding,null,null,"EXECUTABLE",null,true,null);
+        }
         public RuntimeSkill {
-            exact(skillKey, 64); exact(skillVersion, 64); hash(packageSha256); hash(manifestSha256);
-            if (!List.of("provider-operation", "local-script", "native-model").contains(runner))
+            exact(skillKey, 64); exact(skillVersion, 64); hash(packageSha256); if (manifestSha256!=null) hash(manifestSha256);
+            if (runner!=null && !List.of("provider-operation", "local-script", "native-model").contains(runner))
                 throw new IllegalArgumentException("Unknown skill runner");
             Objects.requireNonNull(readiness);
             if (reasonCode != null && !reasonCode.matches("[A-Z][A-Z0-9_]{0,63}"))

@@ -47,7 +47,7 @@ public final class SkillInstallRecoveryService {
             require(d!=null && Objects.equals(hint.getTenantId(),d.getTenantId()) && Objects.equals(hint.getClientId(),d.getClientId())
                     && hint.getOwnerJiacn()!=null && hint.getOwnerJiacn().equals(d.getOwnerJiacn())
                     && hint.getCommandId().equals(d.getCommandId()) && hint.getTargetAgentId().equals(d.getTargetAgentId())
-                    && hint.getTaskId().equals(d.getTaskId()) && "SKILL_INSTALL".equals(d.getCommandType())
+                    && hint.getTaskId().equals(d.getTaskId()) && Set.of("SKILL_INSTALL","SKILL_SET_ENABLED","SKILL_RECONCILE").contains(d.getCommandType())
                     && d.getExpiresAt()!=null,409,"SKILL_DELIVERY_FENCED");
             if(d.getLeaseUntil()!=null && d.getLeaseUntil()>now) return null;
             if(d.getNextRetryAt()!=null && d.getNextRetryAt()>now) return null;
@@ -85,7 +85,7 @@ public final class SkillInstallRecoveryService {
     static void validate(AgentCommandDeliveryEntity d,AgentOutboxEventEntity o) {
         require(SkillInstallCommandWriter.DESTINATION.equals(o.getDestination())
                 && d.getTenantId().equals(o.getTenantId()) && d.getClientId().equals(o.getClientId())
-                && "skill-order".equals(o.getAggregateType()) && d.getTaskId().equals(o.getAggregateId())
+                && "skill-change".equals(o.getAggregateType()) && d.getTaskId().equals(o.getAggregateId())
                 && d.getTargetAgentId().equals(o.getRoutingKey()) && d.getId().equals(o.getDeliveryId())
                 && d.getCommandId().equals(o.getCommandId()) && d.getActiveMessageId().equals(o.getMessageId())
                 && d.getActiveAttempt().equals(o.getActiveAttempt()) && d.getExpiresAt().equals(o.getExpiresAt())
@@ -93,12 +93,13 @@ public final class SkillInstallRecoveryService {
                 && o.getConfirmedAt()==null && o.getPublishedAt()==null
                 && Arrays.equals(AgentCommandCanonicalCodec.sha256(o.getWirePayload()),o.getWirePayloadHash())
                 && Arrays.equals(AgentCommandCanonicalCodec.sha256(d.getCommandPayload()),d.getCommandPayloadHash()),409,"SKILL_DELIVERY_FENCED");
-        var draft=AgentCommandCanonicalCodec.decodeBusinessBytes(d.getCommandPayload());
-        require("SKILL_INSTALL".equals(draft.commandType()) && d.getTenantId().equals(draft.tenantId()) && d.getClientId().equals(draft.clientId())
-                && d.getOwnerJiacn().equals(draft.ownerJiacn()) && d.getCommandId().equals(draft.commandId())
-                && d.getTaskId().equals(draft.taskId()) && d.getTargetAgentId().equals(draft.targetAgentId())
-                && d.getExpiresAt().equals(draft.expiresAt())
-                && Arrays.equals(o.getWirePayload(),AgentCommandCanonicalCodec.wireBytes(draft,d.getActiveMessageId(),d.getActiveAttempt())),409,"SKILL_DELIVERY_FENCED");
+        var data=SkillManagementCodec.read(d.getCommandPayload(),"CommandData");
+        var wire=SkillManagementCodec.read(o.getWirePayload(),"Command");
+        require(d.getCommandType().equals(data.get("commandType")) && d.getTenantId().equals(data.get("tenantId")) && d.getClientId().equals(data.get("clientId"))
+                && d.getOwnerJiacn().equals(data.get("ownerJiacn")) && d.getCommandId().equals(data.get("commandId"))
+                && d.getTaskId().equals(data.get("skillChangeId")) && d.getTargetAgentId().equals(data.get("agentId"))
+                && d.getActiveMessageId().equals(wire.get("messageId")) && d.getActiveAttempt().equals(data.get("attempt"))
+                && SkillManagementCodec.json(data).equals(SkillManagementCodec.json(wire.get("data"))),409,"SKILL_DELIVERY_FENCED");
     }
     private record Claim(AgentCommandDeliveryEntity delivery,Long outboxId,String owner,byte[] wire) {}
 }

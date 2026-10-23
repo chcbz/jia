@@ -1,0 +1,2613 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:cyf:skill-management:sm-c1",
+  "title": "SM-C1 target contract; not current application schema",
+  "definitions": {
+    "Id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100,
+      "pattern": "^[^\\s\\x00-\\x1f\\x7f]+(?![\\s\\S])"
+    },
+    "Text": {
+      "type": "string"
+    },
+    "Sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}(?![\\s\\S])"
+    },
+    "Revision": {
+      "type": "string",
+      "pattern": "^(?:0|[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6]|9223372036854775807)(?![\\s\\S])"
+    },
+    "PositiveRevision": {
+      "type": "string",
+      "pattern": "^(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6]|9223372036854775807)(?![\\s\\S])"
+    },
+    "Time": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "Attempt": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 2147483647
+    },
+    "SkillKey": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,63}(?![\\s\\S])"
+    },
+    "SkillVersion": {
+      "type": "string",
+      "pattern": "^[0-9A-Za-z][0-9A-Za-z.+-]{0,63}(?![\\s\\S])"
+    },
+    "Permissions": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "Money": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "amountMinor",
+        "currency"
+      ],
+      "properties": {
+        "amountMinor": {
+          "$ref": "#/definitions/Revision"
+        },
+        "currency": {
+          "const": "SILVER"
+        }
+      }
+    },
+    "Reason": {
+      "enum": [
+        "AGENT_OFFLINE",
+        "RUNTIME_MAPPING_REQUIRED",
+        "PUBLICATION_UNAVAILABLE",
+        "UPGRADE_POLICY_UNSET",
+        "UPGRADE_NOT_ALLOWED",
+        "PERMISSION_REQUIRED",
+        "SKILL_CHANGE_PENDING",
+        "DEPENDENCY_MISSING",
+        "PROVIDER_UNBOUND",
+        "VERSION_MISMATCH",
+        "NOT_EXECUTABLE",
+        "RECEIPT_UNKNOWN",
+        "PREPARATION_FAILED",
+        "PACKAGE_DIGEST_MISMATCH",
+        "ARCHIVE_INVALID",
+        "DOWNLOAD_FORBIDDEN",
+        "IDENTITY_CHANGED",
+        "ENTITLEMENT_TERMINATED",
+        "POLICY_NOT_SYNCED",
+        "CATALOG_UNCONFIRMED",
+        "STATE_UNAVAILABLE",
+        "INTEGRITY_UNPROVEN",
+        "STATE_CHANGED"
+      ]
+    },
+    "PackageRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "skillInstallationId",
+        "productVersionId",
+        "skillVersion",
+        "packageSha256",
+        "manifestSha256",
+        "byteLength",
+        "kind"
+      ],
+      "properties": {
+        "skillInstallationId": {
+          "$ref": "#/definitions/Id"
+        },
+        "productVersionId": {
+          "$ref": "#/definitions/Id"
+        },
+        "skillVersion": {
+          "$ref": "#/definitions/SkillVersion"
+        },
+        "packageSha256": {
+          "$ref": "#/definitions/Sha256"
+        },
+        "manifestSha256": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "byteLength": {
+          "$ref": "#/definitions/PositiveRevision"
+        },
+        "kind": {
+          "enum": [
+            "EXECUTABLE",
+            "INSTRUCTION"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "EXECUTABLE"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "manifestSha256": {
+                "$ref": "#/definitions/Sha256"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "INSTRUCTION"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "manifestSha256": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "VersionDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "productVersionId",
+        "skillVersion",
+        "packageSha256",
+        "manifestSha256",
+        "byteLength",
+        "kind",
+        "inputMimeTypes",
+        "requiredPermissions",
+        "requirements",
+        "changeSummary",
+        "executionCostDescription"
+      ],
+      "properties": {
+        "productVersionId": {
+          "$ref": "#/definitions/Id"
+        },
+        "skillVersion": {
+          "$ref": "#/definitions/SkillVersion"
+        },
+        "packageSha256": {
+          "$ref": "#/definitions/Sha256"
+        },
+        "manifestSha256": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "byteLength": {
+          "$ref": "#/definitions/PositiveRevision"
+        },
+        "kind": {
+          "enum": [
+            "EXECUTABLE",
+            "INSTRUCTION"
+          ]
+        },
+        "inputMimeTypes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Text"
+          }
+        },
+        "requiredPermissions": {
+          "$ref": "#/definitions/Permissions"
+        },
+        "requirements": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Text"
+          }
+        },
+        "changeSummary": {
+          "$ref": "#/definitions/Text"
+        },
+        "executionCostDescription": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Text"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "EXECUTABLE"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "manifestSha256": {
+                "$ref": "#/definitions/Sha256"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "INSTRUCTION"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "manifestSha256": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "Installed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "skillInstallationId",
+        "version"
+      ],
+      "properties": {
+        "skillInstallationId": {
+          "$ref": "#/definitions/Id"
+        },
+        "version": {
+          "$ref": "#/definitions/VersionDetails"
+        }
+      }
+    },
+    "SkillChange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "skillChangeId",
+        "agentId",
+        "skillKey",
+        "action",
+        "skillRevision",
+        "changeRevision",
+        "attempt",
+        "source",
+        "target",
+        "status",
+        "desiredEnabled",
+        "runtimeSynced",
+        "reasonCode",
+        "retryAllowed",
+        "orderId",
+        "fundingStatus",
+        "price",
+        "actorLabel",
+        "createdAt",
+        "updatedAt"
+      ],
+      "properties": {
+        "skillChangeId": {
+          "$ref": "#/definitions/Id"
+        },
+        "agentId": {
+          "$ref": "#/definitions/Id"
+        },
+        "skillKey": {
+          "$ref": "#/definitions/SkillKey"
+        },
+        "action": {
+          "enum": [
+            "INSTALL",
+            "UPGRADE",
+            "ENABLE",
+            "DISABLE"
+          ]
+        },
+        "skillRevision": {
+          "$ref": "#/definitions/PositiveRevision"
+        },
+        "changeRevision": {
+          "$ref": "#/definitions/PositiveRevision"
+        },
+        "attempt": {
+          "$ref": "#/definitions/Attempt"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PackageRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "target": {
+          "$ref": "#/definitions/PackageRef"
+        },
+        "status": {
+          "enum": [
+            "ACCEPTED",
+            "WAITING_AGENT",
+            "PREPARING",
+            "PREPARED",
+            "ACTIVATING",
+            "VERIFYING",
+            "SUCCEEDED",
+            "FAILED_RETRYABLE",
+            "FAILED_FINAL",
+            "RECOVERY_REQUIRED"
+          ]
+        },
+        "desiredEnabled": {
+          "type": "boolean"
+        },
+        "runtimeSynced": {
+          "type": "boolean"
+        },
+        "reasonCode": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Reason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "retryAllowed": {
+          "type": "boolean"
+        },
+        "orderId": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fundingStatus": {
+          "enum": [
+            "NONE",
+            "HELD",
+            "CAPTURED",
+            "REFUNDED"
+          ]
+        },
+        "price": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Money"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "actorLabel": {
+          "$ref": "#/definitions/Text"
+        },
+        "createdAt": {
+          "$ref": "#/definitions/Time"
+        },
+        "updatedAt": {
+          "$ref": "#/definitions/Time"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "INSTALL"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "source": {
+                "type": "null"
+              },
+              "price": {
+                "$ref": "#/definitions/Money"
+              },
+              "orderId": {
+                "$ref": "#/definitions/Id"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "enum": [
+                  "UPGRADE",
+                  "ENABLE",
+                  "DISABLE"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "source": {
+                "$ref": "#/definitions/PackageRef"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "enum": [
+                  "ENABLE",
+                  "DISABLE"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "price": {
+                "type": "null"
+              },
+              "orderId": {
+                "type": "null"
+              },
+              "fundingStatus": {
+                "const": "NONE"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "retryAllowed": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "status": {
+                "const": "FAILED_RETRYABLE"
+              },
+              "fundingStatus": {
+                "enum": [
+                  "NONE",
+                  "HELD"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "FAILED_RETRYABLE"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "retryAllowed": {
+                "const": true
+              },
+              "fundingStatus": {
+                "enum": [
+                  "NONE",
+                  "HELD"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "SUCCEEDED"
+              },
+              "action": {
+                "enum": [
+                  "INSTALL",
+                  "UPGRADE",
+                  "ENABLE"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "runtimeSynced": {
+                "const": true
+              }
+            }
+          }
+        }
+      ]
+    },
+    "SkillRow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "skillKey",
+        "name",
+        "description",
+        "skillRevision",
+        "installed",
+        "candidate",
+        "upgradeEligibility",
+        "desiredEnabled",
+        "admissionEnabled",
+        "runtime",
+        "allowedActions",
+        "deniedActions",
+        "latestChange"
+      ],
+      "properties": {
+        "skillKey": {
+          "$ref": "#/definitions/SkillKey"
+        },
+        "name": {
+          "$ref": "#/definitions/Text"
+        },
+        "description": {
+          "$ref": "#/definitions/Text"
+        },
+        "skillRevision": {
+          "$ref": "#/definitions/Revision"
+        },
+        "installed": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Installed"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "candidate": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/VersionDetails"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "upgradeEligibility": {
+          "enum": [
+            "NOT_APPLICABLE",
+            "COVERED",
+            "PAID",
+            "POLICY_UNSET",
+            "NOT_ALLOWED"
+          ]
+        },
+        "desiredEnabled": {
+          "type": "boolean"
+        },
+        "admissionEnabled": {
+          "type": "boolean"
+        },
+        "runtime": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "state",
+            "reasonCode",
+            "observedAt",
+            "catalogRevision"
+          ],
+          "properties": {
+            "state": {
+              "enum": [
+                "UNKNOWN",
+                "OFFLINE",
+                "VERIFYING",
+                "READY",
+                "DEPENDENCY_MISSING",
+                "PROVIDER_UNBOUND",
+                "VERSION_MISMATCH",
+                "NOT_EXECUTABLE"
+              ]
+            },
+            "reasonCode": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Reason"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "observedAt": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Time"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "catalogRevision": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Revision"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        "allowedActions": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "VIEW",
+              "INSTALL",
+              "UPGRADE",
+              "ENABLE",
+              "DISABLE",
+              "RETRY",
+              "RECONCILE"
+            ]
+          },
+          "uniqueItems": true
+        },
+        "deniedActions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action",
+              "reasonCode"
+            ],
+            "properties": {
+              "action": {
+                "enum": [
+                  "INSTALL",
+                  "UPGRADE",
+                  "ENABLE",
+                  "DISABLE",
+                  "RETRY",
+                  "RECONCILE"
+                ]
+              },
+              "reasonCode": {
+                "$ref": "#/definitions/Reason"
+              }
+            }
+          }
+        },
+        "latestChange": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SkillChange"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "SkillList": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "agentId",
+        "agentVersion",
+        "items"
+      ],
+      "properties": {
+        "agentId": {
+          "$ref": "#/definitions/Id"
+        },
+        "agentVersion": {
+          "$ref": "#/definitions/PositiveRevision"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/SkillRow"
+          }
+        }
+      }
+    },
+    "ChangeList": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "agentId",
+        "items"
+      ],
+      "properties": {
+        "agentId": {
+          "$ref": "#/definitions/Id"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/SkillChange"
+          }
+        }
+      }
+    },
+    "QuoteRequestData": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "skillKey",
+            "expectedAgentVersion",
+            "expectedSkillRevision",
+            "action",
+            "agentId",
+            "sourceSkillInstallationId",
+            "targetProductVersionId",
+            "approvedPermissions"
+          ],
+          "properties": {
+            "skillKey": {
+              "$ref": "#/definitions/SkillKey"
+            },
+            "expectedAgentVersion": {
+              "$ref": "#/definitions/PositiveRevision"
+            },
+            "expectedSkillRevision": {
+              "$ref": "#/definitions/Revision"
+            },
+            "action": {
+              "const": "INSTALL"
+            },
+            "agentId": {
+              "$ref": "#/definitions/Id"
+            },
+            "sourceSkillInstallationId": {
+              "type": "null"
+            },
+            "targetProductVersionId": {
+              "$ref": "#/definitions/Id"
+            },
+            "approvedPermissions": {
+              "$ref": "#/definitions/Permissions"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "skillKey",
+            "expectedAgentVersion",
+            "expectedSkillRevision",
+            "action",
+            "agentId",
+            "sourceSkillInstallationId",
+            "targetProductVersionId",
+            "approvedPermissions"
+          ],
+          "properties": {
+            "skillKey": {
+              "$ref": "#/definitions/SkillKey"
+            },
+            "expectedAgentVersion": {
+              "$ref": "#/definitions/PositiveRevision"
+            },
+            "expectedSkillRevision": {
+              "$ref": "#/definitions/Revision"
+            },
+            "action": {
+              "const": "UPGRADE"
+            },
+            "agentId": {
+              "$ref": "#/definitions/Id"
+            },
+            "sourceSkillInstallationId": {
+              "$ref": "#/definitions/Id"
+            },
+            "targetProductVersionId": {
+              "$ref": "#/definitions/Id"
+            },
+            "approvedPermissions": {
+              "$ref": "#/definitions/Permissions"
+            }
+          }
+        }
+      ]
+    },
+    "Quote": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "quoteId",
+        "action",
+        "agentId",
+        "skillKey",
+        "sourceSkillInstallationId",
+        "targetProductVersionId",
+        "targetSkillVersion",
+        "targetPackageSha256",
+        "expectedAgentVersion",
+        "expectedSkillRevision",
+        "approvedPermissionsSha256",
+        "price",
+        "coverage",
+        "entitlementId",
+        "expiresAt"
+      ],
+      "properties": {
+        "quoteId": {
+          "$ref": "#/definitions/Id"
+        },
+        "action": {
+          "enum": [
+            "INSTALL",
+            "UPGRADE"
+          ]
+        },
+        "agentId": {
+          "$ref": "#/definitions/Id"
+        },
+        "skillKey": {
+          "$ref": "#/definitions/SkillKey"
+        },
+        "sourceSkillInstallationId": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "targetProductVersionId": {
+          "$ref": "#/definitions/Id"
+        },
+        "targetSkillVersion": {
+          "$ref": "#/definitions/SkillVersion"
+        },
+        "targetPackageSha256": {
+          "$ref": "#/definitions/Sha256"
+        },
+        "expectedAgentVersion": {
+          "$ref": "#/definitions/PositiveRevision"
+        },
+        "expectedSkillRevision": {
+          "$ref": "#/definitions/Revision"
+        },
+        "approvedPermissionsSha256": {
+          "$ref": "#/definitions/Sha256"
+        },
+        "price": {
+          "$ref": "#/definitions/Money"
+        },
+        "coverage": {
+          "enum": [
+            "PURCHASE",
+            "ENTITLEMENT"
+          ]
+        },
+        "entitlementId": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expiresAt": {
+          "$ref": "#/definitions/Time"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "INSTALL"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "sourceSkillInstallationId": {
+                "type": "null"
+              },
+              "coverage": {
+                "const": "PURCHASE"
+              },
+              "entitlementId": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "UPGRADE"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "sourceSkillInstallationId": {
+                "$ref": "#/definitions/Id"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "coverage": {
+                "const": "ENTITLEMENT"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "action": {
+                "const": "UPGRADE"
+              },
+              "entitlementId": {
+                "$ref": "#/definitions/Id"
+              },
+              "price": {
+                "properties": {
+                  "amountMinor": {
+                    "const": "0"
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "CreateChangeData": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "skillKey",
+            "expectedAgentVersion",
+            "expectedSkillRevision",
+            "action",
+            "sourceSkillInstallationId",
+            "targetProductVersionId",
+            "quoteId",
+            "approvedPermissions",
+            "expectedPrice"
+          ],
+          "properties": {
+            "skillKey": {
+              "$ref": "#/definitions/SkillKey"
+            },
+            "expectedAgentVersion": {
+              "$ref": "#/definitions/PositiveRevision"
+            },
+            "expectedSkillRevision": {
+              "$ref": "#/definitions/Revision"
+            },
+            "action": {
+              "const": "INSTALL"
+            },
+            "sourceSkillInstallationId": {
+              "type": "null"
+            },
+            "targetProductVersionId": {
+              "$ref": "#/definitions/Id"
+            },
+            "quoteId": {
+              "$ref": "#/definitions/Id"
+            },
+            "approvedPermissions": {
+              "$ref": "#/definitions/Permissions"
+            },
+            "expectedPrice": {
+              "$ref": "#/definitions/Money"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "skillKey",
+            "expectedAgentVersion",
+            "expectedSkillRevision",
+            "action",
+            "sourceSkillInstallationId",
+            "targetProductVersionId",
+            "quoteId",
+            "approvedPermissions",
+            "expectedPrice"
+          ],
+          "properties": {
+            "skillKey": {
+              "$ref": "#/definitions/SkillKey"
+            },
+            "expectedAgentVersion": {
+              "$ref": "#/definitions/PositiveRevision"
+            },
+            "expectedSkillRevision": {
+              "$ref": "#/definitions/Revision"
+            },
+            "action": {
+              "const": "UPGRADE"
+            },
+            "sourceSkillInstallationId": {
+              "$ref": "#/definitions/Id"
+            },
+            "targetProductVersionId": {
+              "$ref": "#/definitions/Id"
+            },
+            "quoteId": {
+              "$ref": "#/definitions/Id"
+            },
+            "approvedPermissions": {
+              "$ref": "#/definitions/Permissions"
+            },
+            "expectedPrice": {
+              "$ref": "#/definitions/Money"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "skillKey",
+            "expectedAgentVersion",
+            "expectedSkillRevision",
+            "action",
+            "sourceSkillInstallationId"
+          ],
+          "properties": {
+            "skillKey": {
+              "$ref": "#/definitions/SkillKey"
+            },
+            "expectedAgentVersion": {
+              "$ref": "#/definitions/PositiveRevision"
+            },
+            "expectedSkillRevision": {
+              "$ref": "#/definitions/Revision"
+            },
+            "action": {
+              "const": "ENABLE"
+            },
+            "sourceSkillInstallationId": {
+              "$ref": "#/definitions/Id"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "skillKey",
+            "expectedAgentVersion",
+            "expectedSkillRevision",
+            "action",
+            "sourceSkillInstallationId"
+          ],
+          "properties": {
+            "skillKey": {
+              "$ref": "#/definitions/SkillKey"
+            },
+            "expectedAgentVersion": {
+              "$ref": "#/definitions/PositiveRevision"
+            },
+            "expectedSkillRevision": {
+              "$ref": "#/definitions/Revision"
+            },
+            "action": {
+              "const": "DISABLE"
+            },
+            "sourceSkillInstallationId": {
+              "$ref": "#/definitions/Id"
+            }
+          }
+        }
+      ]
+    },
+    "ChangeActionData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "expectedChangeRevision"
+      ],
+      "properties": {
+        "expectedChangeRevision": {
+          "$ref": "#/definitions/PositiveRevision"
+        }
+      }
+    },
+    "HttpRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocolVersion",
+        "requestId",
+        "data"
+      ],
+      "properties": {
+        "protocolVersion": {
+          "const": 1
+        },
+        "requestId": {
+          "$ref": "#/definitions/Id"
+        },
+        "data": {}
+      }
+    },
+    "HttpSuccess": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocolVersion",
+        "requestId",
+        "code",
+        "msg",
+        "data"
+      ],
+      "properties": {
+        "protocolVersion": {
+          "const": 1
+        },
+        "requestId": {
+          "$ref": "#/definitions/Id"
+        },
+        "code": {
+          "const": "E0"
+        },
+        "msg": {
+          "$ref": "#/definitions/Text"
+        },
+        "data": {}
+      }
+    },
+    "HttpError": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocolVersion",
+        "requestId",
+        "code",
+        "msg",
+        "data"
+      ],
+      "properties": {
+        "protocolVersion": {
+          "const": 1
+        },
+        "requestId": {
+          "$ref": "#/definitions/Id"
+        },
+        "code": {
+          "enum": [
+            "BAD_REQUEST",
+            "PROTOCOL_VERSION_UNSUPPORTED",
+            "UNAUTHENTICATED",
+            "AGENT_FORBIDDEN",
+            "RESOURCE_NOT_FOUND",
+            "IDEMPOTENCY_CONFLICT",
+            "SKILL_STATE_CONFLICT",
+            "SKILL_CHANGE_PENDING",
+            "SKILL_ALREADY_ORDERED",
+            "SKILL_VERSION_NOT_PUBLISHED",
+            "SKILL_UPGRADE_POLICY_UNSET",
+            "SKILL_UPGRADE_NOT_ALLOWED",
+            "SKILL_QUOTE_EXPIRED",
+            "SKILL_QUOTE_MISMATCH",
+            "SKILL_PERMISSIONS_MISMATCH",
+            "SKILL_RUNTIME_MAPPING_REQUIRED",
+            "SKILL_AGENT_OFFLINE",
+            "SKILL_RETRY_NOT_ALLOWED",
+            "SKILL_RESULT_CONFLICT",
+            "SKILL_DELIVERY_FENCED",
+            "INSUFFICIENT_FUNDS",
+            "SKILL_STATE_UNAVAILABLE",
+            "SKILL_DOWNLOAD_FORBIDDEN",
+            "INTERNAL_ERROR",
+            "ENDPOINT_RETIRED"
+          ]
+        },
+        "msg": {
+          "$ref": "#/definitions/Text"
+        },
+        "data": {
+          "type": "null"
+        }
+      }
+    },
+    "QuoteRequest": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/HttpRequest"
+        },
+        {
+          "properties": {
+            "data": {
+              "$ref": "#/definitions/QuoteRequestData"
+            }
+          }
+        }
+      ]
+    },
+    "CreateChangeRequest": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/HttpRequest"
+        },
+        {
+          "properties": {
+            "data": {
+              "$ref": "#/definitions/CreateChangeData"
+            }
+          }
+        }
+      ]
+    },
+    "RetryRequest": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/HttpRequest"
+        },
+        {
+          "properties": {
+            "data": {
+              "$ref": "#/definitions/ChangeActionData"
+            }
+          }
+        }
+      ]
+    },
+    "ReconcileRequest": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/HttpRequest"
+        },
+        {
+          "properties": {
+            "data": {
+              "$ref": "#/definitions/ChangeActionData"
+            }
+          }
+        }
+      ]
+    },
+    "QuoteResponse": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/HttpSuccess"
+        },
+        {
+          "properties": {
+            "data": {
+              "$ref": "#/definitions/Quote"
+            }
+          }
+        }
+      ]
+    },
+    "ChangeResponse": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/HttpSuccess"
+        },
+        {
+          "properties": {
+            "data": {
+              "$ref": "#/definitions/SkillChange"
+            }
+          }
+        }
+      ]
+    },
+    "SkillListResponse": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/HttpSuccess"
+        },
+        {
+          "properties": {
+            "data": {
+              "$ref": "#/definitions/SkillList"
+            }
+          }
+        }
+      ]
+    },
+    "ChangeListResponse": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/HttpSuccess"
+        },
+        {
+          "properties": {
+            "data": {
+              "$ref": "#/definitions/ChangeList"
+            }
+          }
+        }
+      ]
+    },
+    "CommandData": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "schemaVersion",
+            "commandId",
+            "skillChangeId",
+            "action",
+            "tenantId",
+            "clientId",
+            "ownerJiacn",
+            "agentId",
+            "runtimeInstallationId",
+            "skillKey",
+            "attempt",
+            "fencingToken",
+            "deliveryEpoch",
+            "skillRevision",
+            "source",
+            "target",
+            "approvedPermissionsSha256",
+            "desiredEnabled",
+            "issuedAt",
+            "commandSha256",
+            "phase",
+            "commandType",
+            "downloadPath"
+          ],
+          "properties": {
+            "schemaVersion": {
+              "const": 2
+            },
+            "commandId": {
+              "$ref": "#/definitions/Id"
+            },
+            "skillChangeId": {
+              "$ref": "#/definitions/Id"
+            },
+            "action": {
+              "enum": [
+                "INSTALL",
+                "UPGRADE"
+              ]
+            },
+            "tenantId": {
+              "$ref": "#/definitions/Id"
+            },
+            "clientId": {
+              "$ref": "#/definitions/Id"
+            },
+            "ownerJiacn": {
+              "$ref": "#/definitions/Id"
+            },
+            "agentId": {
+              "$ref": "#/definitions/Id"
+            },
+            "runtimeInstallationId": {
+              "$ref": "#/definitions/Id"
+            },
+            "skillKey": {
+              "$ref": "#/definitions/SkillKey"
+            },
+            "attempt": {
+              "$ref": "#/definitions/Attempt"
+            },
+            "fencingToken": {
+              "$ref": "#/definitions/PositiveRevision"
+            },
+            "deliveryEpoch": {
+              "$ref": "#/definitions/PositiveRevision"
+            },
+            "skillRevision": {
+              "$ref": "#/definitions/PositiveRevision"
+            },
+            "source": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/PackageRef"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "target": {
+              "$ref": "#/definitions/PackageRef"
+            },
+            "approvedPermissionsSha256": {
+              "$ref": "#/definitions/Sha256"
+            },
+            "desiredEnabled": {
+              "type": "boolean"
+            },
+            "issuedAt": {
+              "$ref": "#/definitions/Time"
+            },
+            "commandSha256": {
+              "$ref": "#/definitions/Sha256"
+            },
+            "phase": {
+              "const": "PREPARE"
+            },
+            "commandType": {
+              "const": "SKILL_INSTALL"
+            },
+            "downloadPath": {
+              "type": "string",
+              "pattern": "^/internal/agent/skill-installations/[^/?#\\s]+/package(?![\\s\\S])"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "schemaVersion",
+            "commandId",
+            "skillChangeId",
+            "action",
+            "tenantId",
+            "clientId",
+            "ownerJiacn",
+            "agentId",
+            "runtimeInstallationId",
+            "skillKey",
+            "attempt",
+            "fencingToken",
+            "deliveryEpoch",
+            "skillRevision",
+            "source",
+            "target",
+            "approvedPermissionsSha256",
+            "desiredEnabled",
+            "issuedAt",
+            "commandSha256",
+            "phase",
+            "commandType",
+            "preparedCommandId",
+            "preparedSha256"
+          ],
+          "properties": {
+            "schemaVersion": {
+              "const": 2
+            },
+            "commandId": {
+              "$ref": "#/definitions/Id"
+            },
+            "skillChangeId": {
+              "$ref": "#/definitions/Id"
+            },
+            "action": {
+              "enum": [
+                "INSTALL",
+                "UPGRADE"
+              ]
+            },
+            "tenantId": {
+              "$ref": "#/definitions/Id"
+            },
+            "clientId": {
+              "$ref": "#/definitions/Id"
+            },
+            "ownerJiacn": {
+              "$ref": "#/definitions/Id"
+            },
+            "agentId": {
+              "$ref": "#/definitions/Id"
+            },
+            "runtimeInstallationId": {
+              "$ref": "#/definitions/Id"
+            },
+            "skillKey": {
+              "$ref": "#/definitions/SkillKey"
+            },
+            "attempt": {
+              "$ref": "#/definitions/Attempt"
+            },
+            "fencingToken": {
+              "$ref": "#/definitions/PositiveRevision"
+            },
+            "deliveryEpoch": {
+              "$ref": "#/definitions/PositiveRevision"
+            },
+            "skillRevision": {
+              "$ref": "#/definitions/PositiveRevision"
+            },
+            "source": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/PackageRef"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "target": {
+              "$ref": "#/definitions/PackageRef"
+            },
+            "approvedPermissionsSha256": {
+              "$ref": "#/definitions/Sha256"
+            },
+            "desiredEnabled": {
+              "type": "boolean"
+            },
+            "issuedAt": {
+              "$ref": "#/definitions/Time"
+            },
+            "commandSha256": {
+              "$ref": "#/definitions/Sha256"
+            },
+            "phase": {
+              "const": "ACTIVATE"
+            },
+            "commandType": {
+              "const": "SKILL_INSTALL"
+            },
+            "preparedCommandId": {
+              "$ref": "#/definitions/Id"
+            },
+            "preparedSha256": {
+              "$ref": "#/definitions/Sha256"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "schemaVersion",
+            "commandId",
+            "skillChangeId",
+            "action",
+            "tenantId",
+            "clientId",
+            "ownerJiacn",
+            "agentId",
+            "runtimeInstallationId",
+            "skillKey",
+            "attempt",
+            "fencingToken",
+            "deliveryEpoch",
+            "skillRevision",
+            "source",
+            "target",
+            "approvedPermissionsSha256",
+            "desiredEnabled",
+            "issuedAt",
+            "commandSha256",
+            "phase",
+            "commandType"
+          ],
+          "properties": {
+            "schemaVersion": {
+              "const": 2
+            },
+            "commandId": {
+              "$ref": "#/definitions/Id"
+            },
+            "skillChangeId": {
+              "$ref": "#/definitions/Id"
+            },
+            "action": {
+              "enum": [
+                "ENABLE",
+                "DISABLE"
+              ]
+            },
+            "tenantId": {
+              "$ref": "#/definitions/Id"
+            },
+            "clientId": {
+              "$ref": "#/definitions/Id"
+            },
+            "ownerJiacn": {
+              "$ref": "#/definitions/Id"
+            },
+            "agentId": {
+              "$ref": "#/definitions/Id"
+            },
+            "runtimeInstallationId": {
+              "$ref": "#/definitions/Id"
+            },
+            "skillKey": {
+              "$ref": "#/definitions/SkillKey"
+            },
+            "attempt": {
+              "$ref": "#/definitions/Attempt"
+            },
+            "fencingToken": {
+              "$ref": "#/definitions/PositiveRevision"
+            },
+            "deliveryEpoch": {
+              "$ref": "#/definitions/PositiveRevision"
+            },
+            "skillRevision": {
+              "$ref": "#/definitions/PositiveRevision"
+            },
+            "source": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/PackageRef"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "target": {
+              "$ref": "#/definitions/PackageRef"
+            },
+            "approvedPermissionsSha256": {
+              "$ref": "#/definitions/Sha256"
+            },
+            "desiredEnabled": {
+              "type": "boolean"
+            },
+            "issuedAt": {
+              "$ref": "#/definitions/Time"
+            },
+            "commandSha256": {
+              "$ref": "#/definitions/Sha256"
+            },
+            "phase": {
+              "const": "POLICY"
+            },
+            "commandType": {
+              "const": "SKILL_SET_ENABLED"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "schemaVersion",
+            "commandId",
+            "skillChangeId",
+            "action",
+            "tenantId",
+            "clientId",
+            "ownerJiacn",
+            "agentId",
+            "runtimeInstallationId",
+            "skillKey",
+            "attempt",
+            "fencingToken",
+            "deliveryEpoch",
+            "skillRevision",
+            "source",
+            "target",
+            "approvedPermissionsSha256",
+            "desiredEnabled",
+            "issuedAt",
+            "commandSha256",
+            "phase",
+            "commandType",
+            "observedCommandId"
+          ],
+          "properties": {
+            "schemaVersion": {
+              "const": 2
+            },
+            "commandId": {
+              "$ref": "#/definitions/Id"
+            },
+            "skillChangeId": {
+              "$ref": "#/definitions/Id"
+            },
+            "action": {
+              "enum": [
+                "INSTALL",
+                "UPGRADE",
+                "ENABLE",
+                "DISABLE"
+              ]
+            },
+            "tenantId": {
+              "$ref": "#/definitions/Id"
+            },
+            "clientId": {
+              "$ref": "#/definitions/Id"
+            },
+            "ownerJiacn": {
+              "$ref": "#/definitions/Id"
+            },
+            "agentId": {
+              "$ref": "#/definitions/Id"
+            },
+            "runtimeInstallationId": {
+              "$ref": "#/definitions/Id"
+            },
+            "skillKey": {
+              "$ref": "#/definitions/SkillKey"
+            },
+            "attempt": {
+              "$ref": "#/definitions/Attempt"
+            },
+            "fencingToken": {
+              "$ref": "#/definitions/PositiveRevision"
+            },
+            "deliveryEpoch": {
+              "$ref": "#/definitions/PositiveRevision"
+            },
+            "skillRevision": {
+              "$ref": "#/definitions/PositiveRevision"
+            },
+            "source": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/PackageRef"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "target": {
+              "$ref": "#/definitions/PackageRef"
+            },
+            "approvedPermissionsSha256": {
+              "$ref": "#/definitions/Sha256"
+            },
+            "desiredEnabled": {
+              "type": "boolean"
+            },
+            "issuedAt": {
+              "$ref": "#/definitions/Time"
+            },
+            "commandSha256": {
+              "$ref": "#/definitions/Sha256"
+            },
+            "phase": {
+              "const": "READ"
+            },
+            "commandType": {
+              "const": "SKILL_RECONCILE"
+            },
+            "observedCommandId": {
+              "$ref": "#/definitions/Id"
+            }
+          }
+        }
+      ]
+    },
+    "AsyncEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocolVersion",
+        "requestId",
+        "messageType",
+        "messageId",
+        "data"
+      ],
+      "properties": {
+        "protocolVersion": {
+          "const": 1
+        },
+        "requestId": {
+          "$ref": "#/definitions/Id"
+        },
+        "messageType": {
+          "$ref": "#/definitions/Text"
+        },
+        "messageId": {
+          "$ref": "#/definitions/Id"
+        },
+        "data": {}
+      }
+    },
+    "AsyncReply": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocolVersion",
+        "requestId",
+        "messageType",
+        "messageId",
+        "correlationId",
+        "code",
+        "msg",
+        "data"
+      ],
+      "properties": {
+        "protocolVersion": {
+          "const": 1
+        },
+        "requestId": {
+          "$ref": "#/definitions/Id"
+        },
+        "messageType": {
+          "$ref": "#/definitions/Text"
+        },
+        "messageId": {
+          "$ref": "#/definitions/Id"
+        },
+        "correlationId": {
+          "$ref": "#/definitions/Id"
+        },
+        "code": {
+          "$ref": "#/definitions/Text"
+        },
+        "msg": {
+          "$ref": "#/definitions/Text"
+        },
+        "data": {}
+      }
+    },
+    "Command": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/AsyncEvent"
+        },
+        {
+          "properties": {
+            "data": {
+              "$ref": "#/definitions/CommandData"
+            }
+          }
+        },
+        {
+          "properties": {
+            "messageType": {
+              "const": "command.dispatch"
+            }
+          }
+        }
+      ]
+    },
+    "CommandAckData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "skillChangeId",
+        "commandId",
+        "attempt",
+        "fencingToken",
+        "deliveryEpoch",
+        "ackStatus"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 2
+        },
+        "skillChangeId": {
+          "$ref": "#/definitions/Id"
+        },
+        "commandId": {
+          "$ref": "#/definitions/Id"
+        },
+        "attempt": {
+          "$ref": "#/definitions/Attempt"
+        },
+        "fencingToken": {
+          "$ref": "#/definitions/PositiveRevision"
+        },
+        "deliveryEpoch": {
+          "$ref": "#/definitions/PositiveRevision"
+        },
+        "ackStatus": {
+          "const": "RECEIVED"
+        }
+      }
+    },
+    "CommandAck": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/AsyncReply"
+        },
+        {
+          "properties": {
+            "data": {
+              "$ref": "#/definitions/CommandAckData"
+            }
+          }
+        },
+        {
+          "properties": {
+            "messageType": {
+              "const": "command.ack"
+            },
+            "code": {
+              "const": "E0"
+            }
+          }
+        }
+      ]
+    },
+    "InstallEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "observedCommandId",
+        "phase",
+        "outcome",
+        "actual",
+        "appliedRevision",
+        "preparedSha256",
+        "readiness",
+        "reasonCode",
+        "observedAt"
+      ],
+      "properties": {
+        "observedCommandId": {
+          "$ref": "#/definitions/Id"
+        },
+        "phase": {
+          "enum": [
+            "PREPARE",
+            "ACTIVATE",
+            "POLICY"
+          ]
+        },
+        "outcome": {
+          "enum": [
+            "NOT_STARTED",
+            "PREPARED",
+            "APPLIED",
+            "FAILED",
+            "UNKNOWN"
+          ]
+        },
+        "actual": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PackageRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "appliedRevision": {
+          "$ref": "#/definitions/Revision"
+        },
+        "preparedSha256": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "readiness": {
+          "enum": [
+            "UNKNOWN",
+            "OFFLINE",
+            "VERIFYING",
+            "READY",
+            "DEPENDENCY_MISSING",
+            "PROVIDER_UNBOUND",
+            "VERSION_MISMATCH",
+            "NOT_EXECUTABLE"
+          ]
+        },
+        "reasonCode": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Reason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "observedAt": {
+          "$ref": "#/definitions/Time"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "phase": {
+                "const": "PREPARE"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "outcome": {
+                "enum": [
+                  "NOT_STARTED",
+                  "PREPARED",
+                  "FAILED",
+                  "UNKNOWN"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "phase": {
+                "enum": [
+                  "ACTIVATE",
+                  "POLICY"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "outcome": {
+                "enum": [
+                  "NOT_STARTED",
+                  "APPLIED",
+                  "FAILED",
+                  "UNKNOWN"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "outcome": {
+                "const": "PREPARED"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "preparedSha256": {
+                "$ref": "#/definitions/Sha256"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "outcome": {
+                "const": "APPLIED"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "actual": {
+                "$ref": "#/definitions/PackageRef"
+              },
+              "appliedRevision": {
+                "$ref": "#/definitions/PositiveRevision"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "ResultData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "resultType",
+        "skillChangeId",
+        "commandId",
+        "agentId",
+        "runtimeInstallationId",
+        "executionRuntimeInstanceId",
+        "attempt",
+        "fencingToken",
+        "deliveryEpoch",
+        "skillRevision",
+        "evidence",
+        "resultSha256"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 2
+        },
+        "resultType": {
+          "const": "SKILL_CHANGE_RESULT"
+        },
+        "skillChangeId": {
+          "$ref": "#/definitions/Id"
+        },
+        "commandId": {
+          "$ref": "#/definitions/Id"
+        },
+        "agentId": {
+          "$ref": "#/definitions/Id"
+        },
+        "runtimeInstallationId": {
+          "$ref": "#/definitions/Id"
+        },
+        "executionRuntimeInstanceId": {
+          "$ref": "#/definitions/Id"
+        },
+        "attempt": {
+          "$ref": "#/definitions/Attempt"
+        },
+        "fencingToken": {
+          "$ref": "#/definitions/PositiveRevision"
+        },
+        "deliveryEpoch": {
+          "$ref": "#/definitions/PositiveRevision"
+        },
+        "skillRevision": {
+          "$ref": "#/definitions/PositiveRevision"
+        },
+        "evidence": {
+          "$ref": "#/definitions/InstallEvidence"
+        },
+        "resultSha256": {
+          "$ref": "#/definitions/Sha256"
+        }
+      }
+    },
+    "Result": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/AsyncEvent"
+        },
+        {
+          "properties": {
+            "data": {
+              "$ref": "#/definitions/ResultData"
+            }
+          }
+        },
+        {
+          "properties": {
+            "messageType": {
+              "const": "work.result"
+            }
+          }
+        }
+      ]
+    },
+    "ResultReceiptData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "skillChangeId",
+        "commandId",
+        "attempt",
+        "receiptStatus"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 2
+        },
+        "skillChangeId": {
+          "$ref": "#/definitions/Id"
+        },
+        "commandId": {
+          "$ref": "#/definitions/Id"
+        },
+        "attempt": {
+          "$ref": "#/definitions/Attempt"
+        },
+        "receiptStatus": {
+          "enum": [
+            "ACCEPTED",
+            "IGNORED_STALE"
+          ]
+        }
+      }
+    },
+    "ResultReceipt": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/AsyncReply"
+        },
+        {
+          "properties": {
+            "data": {
+              "$ref": "#/definitions/ResultReceiptData"
+            }
+          }
+        },
+        {
+          "properties": {
+            "messageType": {
+              "const": "work.result.receipt"
+            },
+            "code": {
+              "const": "E0"
+            }
+          }
+        }
+      ]
+    },
+    "AsyncError": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocolVersion",
+        "requestId",
+        "messageType",
+        "messageId",
+        "correlationId",
+        "code",
+        "msg",
+        "data"
+      ],
+      "properties": {
+        "protocolVersion": {
+          "const": 1
+        },
+        "requestId": {
+          "$ref": "#/definitions/Id"
+        },
+        "messageType": {
+          "enum": [
+            "command.ack",
+            "work.result.receipt"
+          ]
+        },
+        "messageId": {
+          "$ref": "#/definitions/Id"
+        },
+        "correlationId": {
+          "$ref": "#/definitions/Id"
+        },
+        "code": {
+          "enum": [
+            "BAD_REQUEST",
+            "PROTOCOL_VERSION_UNSUPPORTED",
+            "UNAUTHENTICATED",
+            "AGENT_FORBIDDEN",
+            "RESOURCE_NOT_FOUND",
+            "IDEMPOTENCY_CONFLICT",
+            "SKILL_STATE_CONFLICT",
+            "SKILL_CHANGE_PENDING",
+            "SKILL_ALREADY_ORDERED",
+            "SKILL_VERSION_NOT_PUBLISHED",
+            "SKILL_UPGRADE_POLICY_UNSET",
+            "SKILL_UPGRADE_NOT_ALLOWED",
+            "SKILL_QUOTE_EXPIRED",
+            "SKILL_QUOTE_MISMATCH",
+            "SKILL_PERMISSIONS_MISMATCH",
+            "SKILL_RUNTIME_MAPPING_REQUIRED",
+            "SKILL_AGENT_OFFLINE",
+            "SKILL_RETRY_NOT_ALLOWED",
+            "SKILL_RESULT_CONFLICT",
+            "SKILL_DELIVERY_FENCED",
+            "INSUFFICIENT_FUNDS",
+            "SKILL_STATE_UNAVAILABLE",
+            "SKILL_DOWNLOAD_FORBIDDEN",
+            "INTERNAL_ERROR",
+            "ENDPOINT_RETIRED"
+          ]
+        },
+        "msg": {
+          "$ref": "#/definitions/Text"
+        },
+        "data": {
+          "type": "null"
+        }
+      }
+    },
+    "SkillCapability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "skillKey",
+        "skillInstallationId",
+        "productVersionId",
+        "skillVersion",
+        "packageSha256",
+        "manifestSha256",
+        "kind",
+        "policyRevision",
+        "enabled",
+        "runner",
+        "readiness",
+        "reasonCode",
+        "toolchainDigest",
+        "bindingRevision",
+        "observedAt"
+      ],
+      "properties": {
+        "skillKey": {
+          "$ref": "#/definitions/SkillKey"
+        },
+        "skillInstallationId": {
+          "$ref": "#/definitions/Id"
+        },
+        "productVersionId": {
+          "$ref": "#/definitions/Id"
+        },
+        "skillVersion": {
+          "$ref": "#/definitions/SkillVersion"
+        },
+        "packageSha256": {
+          "$ref": "#/definitions/Sha256"
+        },
+        "manifestSha256": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "kind": {
+          "enum": [
+            "EXECUTABLE",
+            "INSTRUCTION"
+          ]
+        },
+        "policyRevision": {
+          "$ref": "#/definitions/PositiveRevision"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "runner": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Text"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "readiness": {
+          "enum": [
+            "UNKNOWN",
+            "OFFLINE",
+            "VERIFYING",
+            "READY",
+            "DEPENDENCY_MISSING",
+            "PROVIDER_UNBOUND",
+            "VERSION_MISMATCH",
+            "NOT_EXECUTABLE"
+          ]
+        },
+        "reasonCode": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Reason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "toolchainDigest": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "bindingRevision": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Revision"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "observedAt": {
+          "$ref": "#/definitions/Time"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "EXECUTABLE"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "manifestSha256": {
+                "$ref": "#/definitions/Sha256"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "INSTRUCTION"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "manifestSha256": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "SkillExecutionDeclaration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "catalogRevision",
+        "skills"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 2
+        },
+        "catalogRevision": {
+          "$ref": "#/definitions/PositiveRevision"
+        },
+        "skills": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/SkillCapability"
+          }
+        }
+      }
+    },
+    "CapabilityAdapterInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "agentId",
+        "runtimeInstallationId",
+        "runtimeInstanceId",
+        "sessionGeneration",
+        "skillExecution"
+      ],
+      "properties": {
+        "agentId": {
+          "$ref": "#/definitions/Id"
+        },
+        "runtimeInstallationId": {
+          "$ref": "#/definitions/Id"
+        },
+        "runtimeInstanceId": {
+          "$ref": "#/definitions/Id"
+        },
+        "sessionGeneration": {
+          "$ref": "#/definitions/PositiveRevision"
+        },
+        "skillExecution": {
+          "$ref": "#/definitions/SkillExecutionDeclaration"
+        }
+      }
+    },
+    "TaskSkillBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "executionId",
+        "taskGrantId",
+        "taskGrantVersion",
+        "agentId",
+        "skillKey",
+        "skillInstallationId",
+        "productVersionId",
+        "skillVersion",
+        "packageSha256",
+        "manifestSha256",
+        "approvedPermissionsSha256"
+      ],
+      "properties": {
+        "executionId": {
+          "$ref": "#/definitions/Id"
+        },
+        "taskGrantId": {
+          "$ref": "#/definitions/Id"
+        },
+        "taskGrantVersion": {
+          "$ref": "#/definitions/PositiveRevision"
+        },
+        "agentId": {
+          "$ref": "#/definitions/Id"
+        },
+        "skillKey": {
+          "$ref": "#/definitions/SkillKey"
+        },
+        "skillInstallationId": {
+          "$ref": "#/definitions/Id"
+        },
+        "productVersionId": {
+          "$ref": "#/definitions/Id"
+        },
+        "skillVersion": {
+          "$ref": "#/definitions/SkillVersion"
+        },
+        "packageSha256": {
+          "$ref": "#/definitions/Sha256"
+        },
+        "manifestSha256": {
+          "$ref": "#/definitions/Sha256"
+        },
+        "approvedPermissionsSha256": {
+          "$ref": "#/definitions/Sha256"
+        }
+      }
+    }
+  }
+}

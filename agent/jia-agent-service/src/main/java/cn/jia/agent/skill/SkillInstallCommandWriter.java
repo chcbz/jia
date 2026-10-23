@@ -47,4 +47,28 @@ public final class SkillInstallCommandWriter {
         o.setTenantId(draft.tenantId());o.setClientId(draft.clientId());o.setCreateTime(draft.issuedAt());o.setUpdateTime(draft.issuedAt());
         one(commands.insertOutbox(o));return new AgentCommandTransportWriteResult(d.getId(),draft.commandId(),message,event,false);
     }
+    /** SM-C1 producer: exact frozen data goes into the SAME delivery/outbox, never a task wire. */
+    public AgentCommandTransportWriteResult writeManagement(cn.jia.economy.entity.skill.SkillChangeEntity change, byte[] wire,
+            cn.jia.economy.entity.skill.SkillChangeCommandEntity command, Map<String,Object> data) {
+        require(TransactionSynchronizationManager.isActualTransactionActive(),503,"SKILL_STATE_UNAVAILABLE");
+        require(allows(change.getTenantId(),change.getClientId()),403,"SKILL_DELIVERY_FENCED");
+        SkillManagementCodec.validate("Command",SkillManagementCodec.read(wire,"Command"));
+        require(commands.lockDelivery(change.getTenantId(),change.getClientId(),change.getOwnerJiacn(),command.getCommandId())==null,409,"SKILL_RESULT_CONFLICT");
+        byte[] business=SkillManagementCodec.bytes(data);long now=((Number)data.get("issuedAt")).longValue();
+        var d=new AgentCommandDeliveryEntity().setCommandId(command.getCommandId()).setOwnerJiacn(change.getOwnerJiacn())
+                .setTaskId(change.getChangeId()).setWorkItemId(null).setTargetAgentId(change.getAgentId()).setCommandType((String)data.get("commandType"))
+                .setCommandPayload(business).setCommandPayloadHash(AgentCommandCanonicalCodec.sha256(business)).setStatus("PENDING")
+                .setAttemptCount(1).setActiveMessageId(command.getMessageId()).setActiveAttempt(((Number)data.get("attempt")).intValue())
+                .setExpiresAt(Long.MAX_VALUE).setLastError("SKILL_WS_PENDING").setVersion(0L);
+        d.setTenantId(change.getTenantId());d.setClientId(change.getClientId());d.setCreateTime(now);d.setUpdateTime(now);
+        one(commands.insertDelivery(d));require(d.getId()!=null,503,"SKILL_STATE_UNAVAILABLE");
+        String event=UUID.randomUUID().toString();
+        var o=new AgentOutboxEventEntity().setEventId(event).setMessageId(command.getMessageId()).setCommandId(command.getCommandId()).setDeliveryId(d.getId())
+                .setAggregateType("skill-change").setAggregateId(change.getChangeId()).setDestination(DESTINATION).setRoutingKey(change.getAgentId())
+                .setWirePayload(wire).setWirePayloadHash(AgentCommandCanonicalCodec.sha256(wire)).setStatus("PENDING").setAttemptCount(0)
+                .setActiveAttempt(d.getActiveAttempt()).setExpiresAt(Long.MAX_VALUE).setPublisherConfirmStatus("NONE").setMandatoryReturnStatus("NONE")
+                .setLastError("SKILL_WS_PENDING").setVersion(0L);
+        o.setTenantId(change.getTenantId());o.setClientId(change.getClientId());o.setCreateTime(now);o.setUpdateTime(now);
+        one(commands.insertOutbox(o));return new AgentCommandTransportWriteResult(d.getId(),command.getCommandId(),command.getMessageId(),event,false);
+    }
 }

@@ -1,0 +1,2454 @@
+{
+  "contractVersion": "SM-C1",
+  "scope": "Synthetic target fixtures; schema validation is not producer/consumer or application acceptance",
+  "cases": [
+    {
+      "name": "quote-upgrade-request",
+      "definition": "QuoteRequest",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "data": {
+          "action": "UPGRADE",
+          "agentId": "agt_demo",
+          "skillKey": "image-edit",
+          "sourceSkillInstallationId": "si_old",
+          "targetProductVersionId": "spv_new",
+          "expectedAgentVersion": "12",
+          "expectedSkillRevision": "7",
+          "approvedPermissions": [
+            "READ_AUTHORIZED_INPUT",
+            "WRITE_TASK_RESULT"
+          ]
+        }
+      },
+      "valid": true,
+      "method": "POST",
+      "path": "/agent/skill-orders/quotes",
+      "headers": {
+        "Idempotency-Key": "key_quote",
+        "X-Request-Id": "req_demo"
+      }
+    },
+    {
+      "name": "quote-upgrade-response",
+      "definition": "QuoteResponse",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "data": {
+          "quoteId": "sq_demo",
+          "action": "UPGRADE",
+          "agentId": "agt_demo",
+          "skillKey": "image-edit",
+          "sourceSkillInstallationId": "si_old",
+          "targetProductVersionId": "spv_new",
+          "targetSkillVersion": "1.1.0",
+          "targetPackageSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+          "expectedAgentVersion": "12",
+          "expectedSkillRevision": "7",
+          "approvedPermissionsSha256": "f4016e9bd4924086fb2feec1d52b3d97575547260f13a34b8e6a94c91cab1944",
+          "price": {
+            "amountMinor": "0",
+            "currency": "SILVER"
+          },
+          "coverage": "ENTITLEMENT",
+          "entitlementId": "se_demo",
+          "expiresAt": 1792757100000
+        },
+        "code": "E0",
+        "msg": "ok"
+      },
+      "valid": true,
+      "httpStatus": 200
+    },
+    {
+      "name": "create-upgrade",
+      "definition": "CreateChangeRequest",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "data": {
+          "action": "UPGRADE",
+          "skillKey": "image-edit",
+          "sourceSkillInstallationId": "si_old",
+          "targetProductVersionId": "spv_new",
+          "expectedAgentVersion": "12",
+          "expectedSkillRevision": "7",
+          "approvedPermissions": [
+            "READ_AUTHORIZED_INPUT",
+            "WRITE_TASK_RESULT"
+          ],
+          "quoteId": "sq_demo",
+          "expectedPrice": {
+            "amountMinor": "0",
+            "currency": "SILVER"
+          }
+        }
+      },
+      "valid": true,
+      "method": "POST",
+      "path": "/agent/agt_demo/skill-changes",
+      "headers": {
+        "Idempotency-Key": "key_upgrade",
+        "X-Request-Id": "req_demo"
+      }
+    },
+    {
+      "name": "accepted-upgrade",
+      "definition": "ChangeResponse",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "data": {
+          "skillChangeId": "sc_demo",
+          "agentId": "agt_demo",
+          "skillKey": "image-edit",
+          "action": "UPGRADE",
+          "skillRevision": "8",
+          "changeRevision": "1",
+          "attempt": 1,
+          "source": {
+            "skillInstallationId": "si_old",
+            "productVersionId": "spv_old",
+            "skillVersion": "1.0.0",
+            "packageSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+            "manifestSha256": "3333333333333333333333333333333333333333333333333333333333333333",
+            "byteLength": "1024",
+            "kind": "EXECUTABLE"
+          },
+          "target": {
+            "skillInstallationId": "si_new",
+            "productVersionId": "spv_new",
+            "skillVersion": "1.1.0",
+            "packageSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "manifestSha256": "4444444444444444444444444444444444444444444444444444444444444444",
+            "byteLength": "2048",
+            "kind": "EXECUTABLE"
+          },
+          "status": "PREPARING",
+          "desiredEnabled": true,
+          "runtimeSynced": false,
+          "reasonCode": null,
+          "retryAllowed": false,
+          "orderId": null,
+          "fundingStatus": "NONE",
+          "price": {
+            "amountMinor": "0",
+            "currency": "SILVER"
+          },
+          "actorLabel": "我",
+          "createdAt": 1792756800000,
+          "updatedAt": 1792756800000
+        },
+        "code": "E0",
+        "msg": "ok"
+      },
+      "valid": true,
+      "httpStatus": 202
+    },
+    {
+      "name": "quote-install-request",
+      "definition": "QuoteRequest",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "data": {
+          "action": "INSTALL",
+          "agentId": "agt_demo",
+          "skillKey": "image-edit",
+          "sourceSkillInstallationId": null,
+          "targetProductVersionId": "spv_new",
+          "expectedAgentVersion": "12",
+          "expectedSkillRevision": "0",
+          "approvedPermissions": [
+            "READ_AUTHORIZED_INPUT",
+            "WRITE_TASK_RESULT"
+          ]
+        }
+      },
+      "valid": true
+    },
+    {
+      "name": "quote-install-response",
+      "definition": "QuoteResponse",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "data": {
+          "quoteId": "sq_demo",
+          "action": "INSTALL",
+          "agentId": "agt_demo",
+          "skillKey": "image-edit",
+          "sourceSkillInstallationId": null,
+          "targetProductVersionId": "spv_new",
+          "targetSkillVersion": "1.1.0",
+          "targetPackageSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+          "expectedAgentVersion": "12",
+          "expectedSkillRevision": "0",
+          "approvedPermissionsSha256": "f4016e9bd4924086fb2feec1d52b3d97575547260f13a34b8e6a94c91cab1944",
+          "price": {
+            "amountMinor": "0",
+            "currency": "SILVER"
+          },
+          "coverage": "PURCHASE",
+          "entitlementId": null,
+          "expiresAt": 1792757100000
+        },
+        "code": "E0",
+        "msg": "ok"
+      },
+      "valid": true,
+      "httpStatus": 200
+    },
+    {
+      "name": "create-install",
+      "definition": "CreateChangeRequest",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "data": {
+          "action": "INSTALL",
+          "skillKey": "image-edit",
+          "sourceSkillInstallationId": null,
+          "targetProductVersionId": "spv_new",
+          "expectedAgentVersion": "12",
+          "expectedSkillRevision": "0",
+          "approvedPermissions": [
+            "READ_AUTHORIZED_INPUT",
+            "WRITE_TASK_RESULT"
+          ],
+          "quoteId": "sq_demo",
+          "expectedPrice": {
+            "amountMinor": "0",
+            "currency": "SILVER"
+          }
+        }
+      },
+      "valid": true,
+      "headers": {
+        "Idempotency-Key": "key_install"
+      }
+    },
+    {
+      "name": "accepted-offline-install",
+      "definition": "ChangeResponse",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "data": {
+          "skillChangeId": "sc_install",
+          "agentId": "agt_demo",
+          "skillKey": "image-edit",
+          "action": "INSTALL",
+          "skillRevision": "1",
+          "changeRevision": "1",
+          "attempt": 1,
+          "source": null,
+          "target": {
+            "skillInstallationId": "si_new",
+            "productVersionId": "spv_new",
+            "skillVersion": "1.1.0",
+            "packageSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "manifestSha256": "4444444444444444444444444444444444444444444444444444444444444444",
+            "byteLength": "2048",
+            "kind": "EXECUTABLE"
+          },
+          "status": "WAITING_AGENT",
+          "desiredEnabled": true,
+          "runtimeSynced": false,
+          "reasonCode": "AGENT_OFFLINE",
+          "retryAllowed": false,
+          "orderId": "so_install",
+          "fundingStatus": "NONE",
+          "price": {
+            "amountMinor": "0",
+            "currency": "SILVER"
+          },
+          "actorLabel": "我",
+          "createdAt": 1792756800000,
+          "updatedAt": 1792756800000
+        },
+        "code": "E0",
+        "msg": "ok"
+      },
+      "valid": true,
+      "httpStatus": 202
+    },
+    {
+      "name": "create-enable",
+      "definition": "CreateChangeRequest",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "data": {
+          "action": "ENABLE",
+          "skillKey": "image-edit",
+          "expectedAgentVersion": "12",
+          "expectedSkillRevision": "8",
+          "sourceSkillInstallationId": "si_new"
+        }
+      },
+      "valid": true
+    },
+    {
+      "name": "create-disable",
+      "definition": "CreateChangeRequest",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "data": {
+          "action": "DISABLE",
+          "skillKey": "image-edit",
+          "expectedAgentVersion": "12",
+          "expectedSkillRevision": "8",
+          "sourceSkillInstallationId": "si_new"
+        }
+      },
+      "valid": true
+    },
+    {
+      "name": "retry",
+      "definition": "RetryRequest",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "data": {
+          "expectedChangeRevision": "3"
+        }
+      },
+      "valid": true,
+      "headers": {
+        "Idempotency-Key": "key_retry"
+      }
+    },
+    {
+      "name": "reconcile",
+      "definition": "ReconcileRequest",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "data": {
+          "expectedChangeRevision": "3"
+        }
+      },
+      "valid": true,
+      "headers": {
+        "Idempotency-Key": "key_reconcile"
+      }
+    },
+    {
+      "name": "skill-list",
+      "definition": "SkillListResponse",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "data": {
+          "agentId": "agt_demo",
+          "agentVersion": "12",
+          "items": [
+            {
+              "skillKey": "image-edit",
+              "name": "图片修改",
+              "description": "修改参考图片",
+              "skillRevision": "7",
+              "installed": {
+                "skillInstallationId": "si_old",
+                "version": {
+                  "productVersionId": "spv_old",
+                  "skillVersion": "1.0.0",
+                  "packageSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+                  "manifestSha256": "3333333333333333333333333333333333333333333333333333333333333333",
+                  "byteLength": "1024",
+                  "kind": "EXECUTABLE",
+                  "inputMimeTypes": [
+                    "image/png",
+                    "image/jpeg"
+                  ],
+                  "requiredPermissions": [
+                    "READ_AUTHORIZED_INPUT",
+                    "WRITE_TASK_RESULT"
+                  ],
+                  "requirements": [
+                    "image-toolchain"
+                  ],
+                  "changeSummary": "当前安装版",
+                  "executionCostDescription": null
+                }
+              },
+              "candidate": {
+                "productVersionId": "spv_new",
+                "skillVersion": "1.1.0",
+                "packageSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+                "manifestSha256": "4444444444444444444444444444444444444444444444444444444444444444",
+                "byteLength": "2048",
+                "kind": "EXECUTABLE",
+                "inputMimeTypes": [
+                  "image/png",
+                  "image/jpeg",
+                  "image/avif"
+                ],
+                "requiredPermissions": [
+                  "READ_AUTHORIZED_INPUT",
+                  "WRITE_TASK_RESULT"
+                ],
+                "requirements": [
+                  "image-toolchain"
+                ],
+                "changeSummary": "新增图片格式",
+                "executionCostDescription": null
+              },
+              "upgradeEligibility": "COVERED",
+              "desiredEnabled": true,
+              "admissionEnabled": true,
+              "runtime": {
+                "state": "READY",
+                "reasonCode": null,
+                "observedAt": 1792756800000,
+                "catalogRevision": "9007199254740993"
+              },
+              "allowedActions": [
+                "VIEW",
+                "UPGRADE",
+                "DISABLE"
+              ],
+              "deniedActions": [],
+              "latestChange": null
+            }
+          ]
+        },
+        "code": "E0",
+        "msg": "ok"
+      },
+      "valid": true
+    },
+    {
+      "name": "history",
+      "definition": "ChangeListResponse",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "data": {
+          "agentId": "agt_demo",
+          "items": [
+            {
+              "skillChangeId": "sc_demo",
+              "agentId": "agt_demo",
+              "skillKey": "image-edit",
+              "action": "UPGRADE",
+              "skillRevision": "8",
+              "changeRevision": "1",
+              "attempt": 1,
+              "source": {
+                "skillInstallationId": "si_old",
+                "productVersionId": "spv_old",
+                "skillVersion": "1.0.0",
+                "packageSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+                "manifestSha256": "3333333333333333333333333333333333333333333333333333333333333333",
+                "byteLength": "1024",
+                "kind": "EXECUTABLE"
+              },
+              "target": {
+                "skillInstallationId": "si_new",
+                "productVersionId": "spv_new",
+                "skillVersion": "1.1.0",
+                "packageSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+                "manifestSha256": "4444444444444444444444444444444444444444444444444444444444444444",
+                "byteLength": "2048",
+                "kind": "EXECUTABLE"
+              },
+              "status": "PREPARING",
+              "desiredEnabled": true,
+              "runtimeSynced": false,
+              "reasonCode": null,
+              "retryAllowed": false,
+              "orderId": null,
+              "fundingStatus": "NONE",
+              "price": {
+                "amountMinor": "0",
+                "currency": "SILVER"
+              },
+              "actorLabel": "我",
+              "createdAt": 1792756800000,
+              "updatedAt": 1792756800000
+            }
+          ]
+        },
+        "code": "E0",
+        "msg": "ok"
+      },
+      "valid": true
+    },
+    {
+      "name": "empty-history",
+      "definition": "ChangeListResponse",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "data": {
+          "agentId": "agt_demo",
+          "items": []
+        },
+        "code": "E0",
+        "msg": "ok"
+      },
+      "valid": true
+    },
+    {
+      "name": "prepare-command",
+      "definition": "Command",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "data": {
+          "schemaVersion": 2,
+          "commandId": "cmd_prepare",
+          "skillChangeId": "sc_demo",
+          "action": "UPGRADE",
+          "tenantId": "0",
+          "clientId": "client_demo",
+          "ownerJiacn": "owner_demo",
+          "agentId": "agt_demo",
+          "runtimeInstallationId": "rti_demo",
+          "skillKey": "image-edit",
+          "attempt": 1,
+          "fencingToken": "8",
+          "deliveryEpoch": "1",
+          "skillRevision": "8",
+          "source": {
+            "skillInstallationId": "si_old",
+            "productVersionId": "spv_old",
+            "skillVersion": "1.0.0",
+            "packageSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+            "manifestSha256": "3333333333333333333333333333333333333333333333333333333333333333",
+            "byteLength": "1024",
+            "kind": "EXECUTABLE"
+          },
+          "target": {
+            "skillInstallationId": "si_new",
+            "productVersionId": "spv_new",
+            "skillVersion": "1.1.0",
+            "packageSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "manifestSha256": "4444444444444444444444444444444444444444444444444444444444444444",
+            "byteLength": "2048",
+            "kind": "EXECUTABLE"
+          },
+          "approvedPermissionsSha256": "f4016e9bd4924086fb2feec1d52b3d97575547260f13a34b8e6a94c91cab1944",
+          "desiredEnabled": true,
+          "issuedAt": 1792756800000,
+          "phase": "PREPARE",
+          "commandType": "SKILL_INSTALL",
+          "downloadPath": "/internal/agent/skill-installations/si_new/package",
+          "commandSha256": "0325f224f8239305e940c5c7636508a46fb0982644ec05b81963401fae3d1347"
+        },
+        "messageType": "command.dispatch",
+        "messageId": "msg_prepare"
+      },
+      "valid": true
+    },
+    {
+      "name": "activate-command",
+      "definition": "Command",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "data": {
+          "schemaVersion": 2,
+          "commandId": "cmd_activate",
+          "skillChangeId": "sc_demo",
+          "action": "UPGRADE",
+          "tenantId": "0",
+          "clientId": "client_demo",
+          "ownerJiacn": "owner_demo",
+          "agentId": "agt_demo",
+          "runtimeInstallationId": "rti_demo",
+          "skillKey": "image-edit",
+          "attempt": 1,
+          "fencingToken": "8",
+          "deliveryEpoch": "1",
+          "skillRevision": "8",
+          "source": {
+            "skillInstallationId": "si_old",
+            "productVersionId": "spv_old",
+            "skillVersion": "1.0.0",
+            "packageSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+            "manifestSha256": "3333333333333333333333333333333333333333333333333333333333333333",
+            "byteLength": "1024",
+            "kind": "EXECUTABLE"
+          },
+          "target": {
+            "skillInstallationId": "si_new",
+            "productVersionId": "spv_new",
+            "skillVersion": "1.1.0",
+            "packageSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "manifestSha256": "4444444444444444444444444444444444444444444444444444444444444444",
+            "byteLength": "2048",
+            "kind": "EXECUTABLE"
+          },
+          "approvedPermissionsSha256": "f4016e9bd4924086fb2feec1d52b3d97575547260f13a34b8e6a94c91cab1944",
+          "desiredEnabled": true,
+          "issuedAt": 1792756800000,
+          "phase": "ACTIVATE",
+          "commandType": "SKILL_INSTALL",
+          "preparedCommandId": "cmd_prepare",
+          "preparedSha256": "2f34f8cc1d52ade3290dca0d3a956015f44ebc5456673fc29898dc3cc263ef09",
+          "commandSha256": "251b961864568e206d39748e40e2a9224b20c96761e20227a9e1b48803698148"
+        },
+        "messageType": "command.dispatch",
+        "messageId": "msg_activate"
+      },
+      "valid": true
+    },
+    {
+      "name": "disable-command",
+      "definition": "Command",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "data": {
+          "schemaVersion": 2,
+          "commandId": "cmd_disable",
+          "skillChangeId": "sc_disable",
+          "action": "DISABLE",
+          "tenantId": "0",
+          "clientId": "client_demo",
+          "ownerJiacn": "owner_demo",
+          "agentId": "agt_demo",
+          "runtimeInstallationId": "rti_demo",
+          "skillKey": "image-edit",
+          "attempt": 1,
+          "fencingToken": "9",
+          "deliveryEpoch": "1",
+          "skillRevision": "9",
+          "source": {
+            "skillInstallationId": "si_new",
+            "productVersionId": "spv_new",
+            "skillVersion": "1.1.0",
+            "packageSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "manifestSha256": "4444444444444444444444444444444444444444444444444444444444444444",
+            "byteLength": "2048",
+            "kind": "EXECUTABLE"
+          },
+          "target": {
+            "skillInstallationId": "si_new",
+            "productVersionId": "spv_new",
+            "skillVersion": "1.1.0",
+            "packageSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "manifestSha256": "4444444444444444444444444444444444444444444444444444444444444444",
+            "byteLength": "2048",
+            "kind": "EXECUTABLE"
+          },
+          "approvedPermissionsSha256": "f4016e9bd4924086fb2feec1d52b3d97575547260f13a34b8e6a94c91cab1944",
+          "desiredEnabled": false,
+          "issuedAt": 1792756800000,
+          "phase": "POLICY",
+          "commandType": "SKILL_SET_ENABLED",
+          "commandSha256": "553281ef2e5f734166c12313cfb6157945bf9ca94ddb933a4a1285c01eae8104"
+        },
+        "messageType": "command.dispatch",
+        "messageId": "msg_disable"
+      },
+      "valid": true
+    },
+    {
+      "name": "reconcile-command",
+      "definition": "Command",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "data": {
+          "schemaVersion": 2,
+          "commandId": "cmd_read",
+          "skillChangeId": "sc_demo",
+          "action": "UPGRADE",
+          "tenantId": "0",
+          "clientId": "client_demo",
+          "ownerJiacn": "owner_demo",
+          "agentId": "agt_demo",
+          "runtimeInstallationId": "rti_demo",
+          "skillKey": "image-edit",
+          "attempt": 1,
+          "fencingToken": "8",
+          "deliveryEpoch": "1",
+          "skillRevision": "8",
+          "source": {
+            "skillInstallationId": "si_old",
+            "productVersionId": "spv_old",
+            "skillVersion": "1.0.0",
+            "packageSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+            "manifestSha256": "3333333333333333333333333333333333333333333333333333333333333333",
+            "byteLength": "1024",
+            "kind": "EXECUTABLE"
+          },
+          "target": {
+            "skillInstallationId": "si_new",
+            "productVersionId": "spv_new",
+            "skillVersion": "1.1.0",
+            "packageSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "manifestSha256": "4444444444444444444444444444444444444444444444444444444444444444",
+            "byteLength": "2048",
+            "kind": "EXECUTABLE"
+          },
+          "approvedPermissionsSha256": "f4016e9bd4924086fb2feec1d52b3d97575547260f13a34b8e6a94c91cab1944",
+          "desiredEnabled": true,
+          "issuedAt": 1792756800000,
+          "phase": "READ",
+          "commandType": "SKILL_RECONCILE",
+          "observedCommandId": "cmd_activate",
+          "commandSha256": "eaf2e1654076e520ddacbf52fa5cefe62e1ca181e69a64ec67814cdfbf2c7bc2"
+        },
+        "messageType": "command.dispatch",
+        "messageId": "msg_read"
+      },
+      "valid": true
+    },
+    {
+      "name": "prepare-ack",
+      "definition": "CommandAck",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "data": {
+          "schemaVersion": 2,
+          "skillChangeId": "sc_demo",
+          "commandId": "cmd_prepare",
+          "attempt": 1,
+          "fencingToken": "8",
+          "deliveryEpoch": "1",
+          "ackStatus": "RECEIVED"
+        },
+        "messageType": "command.ack",
+        "messageId": "msg_ack",
+        "code": "E0",
+        "msg": "ok",
+        "correlationId": "msg_prepare"
+      },
+      "valid": true
+    },
+    {
+      "name": "prepared-result",
+      "definition": "Result",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "data": {
+          "schemaVersion": 2,
+          "resultType": "SKILL_CHANGE_RESULT",
+          "skillChangeId": "sc_demo",
+          "commandId": "cmd_prepare",
+          "agentId": "agt_demo",
+          "runtimeInstallationId": "rti_demo",
+          "executionRuntimeInstanceId": "boot_demo",
+          "attempt": 1,
+          "fencingToken": "8",
+          "deliveryEpoch": "1",
+          "skillRevision": "8",
+          "evidence": {
+            "observedCommandId": "cmd_prepare",
+            "phase": "PREPARE",
+            "outcome": "PREPARED",
+            "actual": {
+              "skillInstallationId": "si_old",
+              "productVersionId": "spv_old",
+              "skillVersion": "1.0.0",
+              "packageSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+              "manifestSha256": "3333333333333333333333333333333333333333333333333333333333333333",
+              "byteLength": "1024",
+              "kind": "EXECUTABLE"
+            },
+            "appliedRevision": "7",
+            "preparedSha256": "2f34f8cc1d52ade3290dca0d3a956015f44ebc5456673fc29898dc3cc263ef09",
+            "readiness": "READY",
+            "reasonCode": null,
+            "observedAt": 1792756800000
+          },
+          "resultSha256": "a9d8b13968fc85ab645c0cad92a815e7979241bfc3a4633782ca4bc6957309fe"
+        },
+        "messageType": "work.result",
+        "messageId": "msg_prepared"
+      },
+      "valid": true
+    },
+    {
+      "name": "activated-result",
+      "definition": "Result",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "data": {
+          "schemaVersion": 2,
+          "resultType": "SKILL_CHANGE_RESULT",
+          "skillChangeId": "sc_demo",
+          "commandId": "cmd_activate",
+          "agentId": "agt_demo",
+          "runtimeInstallationId": "rti_demo",
+          "executionRuntimeInstanceId": "boot_demo",
+          "attempt": 1,
+          "fencingToken": "8",
+          "deliveryEpoch": "1",
+          "skillRevision": "8",
+          "evidence": {
+            "observedCommandId": "cmd_activate",
+            "phase": "ACTIVATE",
+            "outcome": "APPLIED",
+            "actual": {
+              "skillInstallationId": "si_new",
+              "productVersionId": "spv_new",
+              "skillVersion": "1.1.0",
+              "packageSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+              "manifestSha256": "4444444444444444444444444444444444444444444444444444444444444444",
+              "byteLength": "2048",
+              "kind": "EXECUTABLE"
+            },
+            "appliedRevision": "8",
+            "preparedSha256": "2f34f8cc1d52ade3290dca0d3a956015f44ebc5456673fc29898dc3cc263ef09",
+            "readiness": "VERIFYING",
+            "reasonCode": null,
+            "observedAt": 1792756800000
+          },
+          "resultSha256": "8afe9bdaa3ea8a77a1c4430367c899d12db36c071ad1c4403550d7540105bbc6"
+        },
+        "messageType": "work.result",
+        "messageId": "msg_activated"
+      },
+      "valid": true
+    },
+    {
+      "name": "reconciled-result",
+      "definition": "Result",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "data": {
+          "schemaVersion": 2,
+          "resultType": "SKILL_CHANGE_RESULT",
+          "skillChangeId": "sc_demo",
+          "commandId": "cmd_read",
+          "agentId": "agt_demo",
+          "runtimeInstallationId": "rti_demo",
+          "executionRuntimeInstanceId": "boot_demo",
+          "attempt": 1,
+          "fencingToken": "8",
+          "deliveryEpoch": "1",
+          "skillRevision": "8",
+          "evidence": {
+            "observedCommandId": "cmd_activate",
+            "phase": "ACTIVATE",
+            "outcome": "APPLIED",
+            "actual": {
+              "skillInstallationId": "si_new",
+              "productVersionId": "spv_new",
+              "skillVersion": "1.1.0",
+              "packageSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+              "manifestSha256": "4444444444444444444444444444444444444444444444444444444444444444",
+              "byteLength": "2048",
+              "kind": "EXECUTABLE"
+            },
+            "appliedRevision": "8",
+            "preparedSha256": "2f34f8cc1d52ade3290dca0d3a956015f44ebc5456673fc29898dc3cc263ef09",
+            "readiness": "VERIFYING",
+            "reasonCode": null,
+            "observedAt": 1792756800000
+          },
+          "resultSha256": "ad4122be886f6a4d42da93479f485f0205472a658f1b69e4003490311390cb30"
+        },
+        "messageType": "work.result",
+        "messageId": "msg_read_result"
+      },
+      "valid": true
+    },
+    {
+      "name": "unknown-result",
+      "definition": "Result",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "data": {
+          "schemaVersion": 2,
+          "resultType": "SKILL_CHANGE_RESULT",
+          "skillChangeId": "sc_demo",
+          "commandId": "cmd_activate",
+          "agentId": "agt_demo",
+          "runtimeInstallationId": "rti_demo",
+          "executionRuntimeInstanceId": "boot_demo",
+          "attempt": 1,
+          "fencingToken": "8",
+          "deliveryEpoch": "1",
+          "skillRevision": "8",
+          "evidence": {
+            "observedCommandId": "cmd_activate",
+            "phase": "ACTIVATE",
+            "outcome": "UNKNOWN",
+            "actual": null,
+            "appliedRevision": "7",
+            "preparedSha256": null,
+            "readiness": "UNKNOWN",
+            "reasonCode": "RECEIPT_UNKNOWN",
+            "observedAt": 1792756800000
+          },
+          "resultSha256": "17e8199db9a7f5a81631ea8f313b243a70fe868d12a93c29efd9446c959f452c"
+        },
+        "messageType": "work.result",
+        "messageId": "msg_unknown"
+      },
+      "valid": true
+    },
+    {
+      "name": "preparation-failed-result",
+      "definition": "Result",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "data": {
+          "schemaVersion": 2,
+          "resultType": "SKILL_CHANGE_RESULT",
+          "skillChangeId": "sc_demo",
+          "commandId": "cmd_prepare",
+          "agentId": "agt_demo",
+          "runtimeInstallationId": "rti_demo",
+          "executionRuntimeInstanceId": "boot_demo",
+          "attempt": 1,
+          "fencingToken": "8",
+          "deliveryEpoch": "1",
+          "skillRevision": "8",
+          "evidence": {
+            "observedCommandId": "cmd_prepare",
+            "phase": "PREPARE",
+            "outcome": "FAILED",
+            "actual": {
+              "skillInstallationId": "si_old",
+              "productVersionId": "spv_old",
+              "skillVersion": "1.0.0",
+              "packageSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+              "manifestSha256": "3333333333333333333333333333333333333333333333333333333333333333",
+              "byteLength": "1024",
+              "kind": "EXECUTABLE"
+            },
+            "appliedRevision": "7",
+            "preparedSha256": null,
+            "readiness": "READY",
+            "reasonCode": "PACKAGE_DIGEST_MISMATCH",
+            "observedAt": 1792756800000
+          },
+          "resultSha256": "e6a1820dd9086f42aa992549dcfee4da268e23f729f8a319fc3ecd09078e9dcc"
+        },
+        "messageType": "work.result",
+        "messageId": "msg_failed"
+      },
+      "valid": true
+    },
+    {
+      "name": "result-receipt",
+      "definition": "ResultReceipt",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "data": {
+          "schemaVersion": 2,
+          "skillChangeId": "sc_demo",
+          "commandId": "cmd_activate",
+          "attempt": 1,
+          "receiptStatus": "ACCEPTED"
+        },
+        "messageType": "work.result.receipt",
+        "messageId": "msg_receipt",
+        "code": "E0",
+        "msg": "ok",
+        "correlationId": "msg_activated"
+      },
+      "valid": true
+    },
+    {
+      "name": "stale-result-receipt",
+      "definition": "ResultReceipt",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "data": {
+          "schemaVersion": 2,
+          "skillChangeId": "sc_demo",
+          "commandId": "cmd_activate",
+          "attempt": 1,
+          "receiptStatus": "IGNORED_STALE"
+        },
+        "messageType": "work.result.receipt",
+        "messageId": "msg_receipt_stale",
+        "code": "E0",
+        "msg": "ok",
+        "correlationId": "msg_old"
+      },
+      "valid": true
+    },
+    {
+      "name": "capability-adapter-input",
+      "definition": "CapabilityAdapterInput",
+      "value": {
+        "agentId": "agt_demo",
+        "runtimeInstallationId": "rti_demo",
+        "runtimeInstanceId": "boot_demo",
+        "sessionGeneration": "9007199254740993",
+        "skillExecution": {
+          "schemaVersion": 2,
+          "catalogRevision": "9007199254740994",
+          "skills": [
+            {
+              "skillKey": "image-edit",
+              "skillInstallationId": "si_new",
+              "productVersionId": "spv_new",
+              "skillVersion": "1.1.0",
+              "packageSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+              "manifestSha256": "4444444444444444444444444444444444444444444444444444444444444444",
+              "kind": "EXECUTABLE",
+              "policyRevision": "8",
+              "enabled": true,
+              "runner": "provider-operation",
+              "readiness": "READY",
+              "reasonCode": null,
+              "toolchainDigest": "5555555555555555555555555555555555555555555555555555555555555555",
+              "bindingRevision": "2",
+              "observedAt": 1792756800000
+            }
+          ]
+        }
+      },
+      "valid": true,
+      "note": "Validated registration boundary fragment, not a complete registration wire envelope"
+    },
+    {
+      "name": "old-task-binding",
+      "definition": "TaskSkillBinding",
+      "value": {
+        "executionId": "exec_old",
+        "taskGrantId": "grant_old",
+        "taskGrantVersion": "2",
+        "agentId": "agt_demo",
+        "skillKey": "image-edit",
+        "skillInstallationId": "si_old",
+        "productVersionId": "spv_old",
+        "skillVersion": "1.0.0",
+        "packageSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+        "manifestSha256": "3333333333333333333333333333333333333333333333333333333333333333",
+        "approvedPermissionsSha256": "f4016e9bd4924086fb2feec1d52b3d97575547260f13a34b8e6a94c91cab1944"
+      },
+      "valid": true,
+      "note": "Typed admission/executor projection, not a new HTTP endpoint"
+    },
+    {
+      "name": "error-BAD_REQUEST",
+      "definition": "HttpError",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "code": "BAD_REQUEST",
+        "msg": "操作未完成",
+        "data": null
+      },
+      "valid": true,
+      "httpStatus": 400
+    },
+    {
+      "name": "error-PROTOCOL_VERSION_UNSUPPORTED",
+      "definition": "HttpError",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "code": "PROTOCOL_VERSION_UNSUPPORTED",
+        "msg": "操作未完成",
+        "data": null
+      },
+      "valid": true,
+      "httpStatus": 400
+    },
+    {
+      "name": "error-UNAUTHENTICATED",
+      "definition": "HttpError",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "code": "UNAUTHENTICATED",
+        "msg": "操作未完成",
+        "data": null
+      },
+      "valid": true,
+      "httpStatus": 401
+    },
+    {
+      "name": "error-AGENT_FORBIDDEN",
+      "definition": "HttpError",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "code": "AGENT_FORBIDDEN",
+        "msg": "操作未完成",
+        "data": null
+      },
+      "valid": true,
+      "httpStatus": 403
+    },
+    {
+      "name": "error-RESOURCE_NOT_FOUND",
+      "definition": "HttpError",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "code": "RESOURCE_NOT_FOUND",
+        "msg": "操作未完成",
+        "data": null
+      },
+      "valid": true,
+      "httpStatus": 404
+    },
+    {
+      "name": "error-IDEMPOTENCY_CONFLICT",
+      "definition": "HttpError",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "code": "IDEMPOTENCY_CONFLICT",
+        "msg": "操作未完成",
+        "data": null
+      },
+      "valid": true,
+      "httpStatus": 409
+    },
+    {
+      "name": "error-SKILL_STATE_CONFLICT",
+      "definition": "HttpError",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "code": "SKILL_STATE_CONFLICT",
+        "msg": "操作未完成",
+        "data": null
+      },
+      "valid": true,
+      "httpStatus": 409
+    },
+    {
+      "name": "error-SKILL_CHANGE_PENDING",
+      "definition": "HttpError",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "code": "SKILL_CHANGE_PENDING",
+        "msg": "操作未完成",
+        "data": null
+      },
+      "valid": true,
+      "httpStatus": 409
+    },
+    {
+      "name": "error-SKILL_ALREADY_ORDERED",
+      "definition": "HttpError",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "code": "SKILL_ALREADY_ORDERED",
+        "msg": "操作未完成",
+        "data": null
+      },
+      "valid": true,
+      "httpStatus": 409
+    },
+    {
+      "name": "error-SKILL_VERSION_NOT_PUBLISHED",
+      "definition": "HttpError",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "code": "SKILL_VERSION_NOT_PUBLISHED",
+        "msg": "操作未完成",
+        "data": null
+      },
+      "valid": true,
+      "httpStatus": 409
+    },
+    {
+      "name": "error-SKILL_UPGRADE_POLICY_UNSET",
+      "definition": "HttpError",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "code": "SKILL_UPGRADE_POLICY_UNSET",
+        "msg": "操作未完成",
+        "data": null
+      },
+      "valid": true,
+      "httpStatus": 409
+    },
+    {
+      "name": "error-SKILL_UPGRADE_NOT_ALLOWED",
+      "definition": "HttpError",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "code": "SKILL_UPGRADE_NOT_ALLOWED",
+        "msg": "操作未完成",
+        "data": null
+      },
+      "valid": true,
+      "httpStatus": 409
+    },
+    {
+      "name": "error-SKILL_QUOTE_EXPIRED",
+      "definition": "HttpError",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "code": "SKILL_QUOTE_EXPIRED",
+        "msg": "操作未完成",
+        "data": null
+      },
+      "valid": true,
+      "httpStatus": 409
+    },
+    {
+      "name": "error-SKILL_QUOTE_MISMATCH",
+      "definition": "HttpError",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "code": "SKILL_QUOTE_MISMATCH",
+        "msg": "操作未完成",
+        "data": null
+      },
+      "valid": true,
+      "httpStatus": 409
+    },
+    {
+      "name": "error-SKILL_PERMISSIONS_MISMATCH",
+      "definition": "HttpError",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "code": "SKILL_PERMISSIONS_MISMATCH",
+        "msg": "操作未完成",
+        "data": null
+      },
+      "valid": true,
+      "httpStatus": 409
+    },
+    {
+      "name": "error-SKILL_RUNTIME_MAPPING_REQUIRED",
+      "definition": "HttpError",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "code": "SKILL_RUNTIME_MAPPING_REQUIRED",
+        "msg": "操作未完成",
+        "data": null
+      },
+      "valid": true,
+      "httpStatus": 409
+    },
+    {
+      "name": "error-SKILL_AGENT_OFFLINE",
+      "definition": "HttpError",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "code": "SKILL_AGENT_OFFLINE",
+        "msg": "操作未完成",
+        "data": null
+      },
+      "valid": true,
+      "httpStatus": 409
+    },
+    {
+      "name": "error-SKILL_RETRY_NOT_ALLOWED",
+      "definition": "HttpError",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "code": "SKILL_RETRY_NOT_ALLOWED",
+        "msg": "操作未完成",
+        "data": null
+      },
+      "valid": true,
+      "httpStatus": 409
+    },
+    {
+      "name": "error-SKILL_RESULT_CONFLICT",
+      "definition": "HttpError",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "code": "SKILL_RESULT_CONFLICT",
+        "msg": "操作未完成",
+        "data": null
+      },
+      "valid": true,
+      "httpStatus": 409
+    },
+    {
+      "name": "error-SKILL_DELIVERY_FENCED",
+      "definition": "HttpError",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "code": "SKILL_DELIVERY_FENCED",
+        "msg": "操作未完成",
+        "data": null
+      },
+      "valid": true,
+      "httpStatus": 409
+    },
+    {
+      "name": "error-INSUFFICIENT_FUNDS",
+      "definition": "HttpError",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "code": "INSUFFICIENT_FUNDS",
+        "msg": "操作未完成",
+        "data": null
+      },
+      "valid": true,
+      "httpStatus": 422
+    },
+    {
+      "name": "error-SKILL_STATE_UNAVAILABLE",
+      "definition": "HttpError",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "code": "SKILL_STATE_UNAVAILABLE",
+        "msg": "操作未完成",
+        "data": null
+      },
+      "valid": true,
+      "httpStatus": 503
+    },
+    {
+      "name": "error-SKILL_DOWNLOAD_FORBIDDEN",
+      "definition": "HttpError",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "code": "SKILL_DOWNLOAD_FORBIDDEN",
+        "msg": "操作未完成",
+        "data": null
+      },
+      "valid": true,
+      "httpStatus": 403
+    },
+    {
+      "name": "error-INTERNAL_ERROR",
+      "definition": "HttpError",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "code": "INTERNAL_ERROR",
+        "msg": "操作未完成",
+        "data": null
+      },
+      "valid": true,
+      "httpStatus": 500
+    },
+    {
+      "name": "error-ENDPOINT_RETIRED",
+      "definition": "HttpError",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "code": "ENDPOINT_RETIRED",
+        "msg": "操作未完成",
+        "data": null
+      },
+      "valid": true,
+      "httpStatus": 410
+    },
+    {
+      "name": "rejected-result",
+      "definition": "AsyncError",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "data": null,
+        "messageType": "work.result.receipt",
+        "messageId": "msg_reject",
+        "code": "SKILL_RESULT_CONFLICT",
+        "msg": "回执冲突",
+        "correlationId": "msg_bad"
+      },
+      "valid": true
+    },
+    {
+      "name": "instruction-package",
+      "definition": "PackageRef",
+      "value": {
+        "skillInstallationId": "si_instruction",
+        "productVersionId": "spv_instruction",
+        "skillVersion": "1.1.0",
+        "packageSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+        "manifestSha256": null,
+        "byteLength": "2048",
+        "kind": "INSTRUCTION"
+      },
+      "valid": true
+    },
+    {
+      "name": "disabled-api-admission-closed",
+      "definition": "ChangeResponse",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "data": {
+          "skillChangeId": "sc_disable",
+          "agentId": "agt_demo",
+          "skillKey": "image-edit",
+          "action": "DISABLE",
+          "skillRevision": "9",
+          "changeRevision": "1",
+          "attempt": 1,
+          "source": {
+            "skillInstallationId": "si_new",
+            "productVersionId": "spv_new",
+            "skillVersion": "1.1.0",
+            "packageSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "manifestSha256": "4444444444444444444444444444444444444444444444444444444444444444",
+            "byteLength": "2048",
+            "kind": "EXECUTABLE"
+          },
+          "target": {
+            "skillInstallationId": "si_new",
+            "productVersionId": "spv_new",
+            "skillVersion": "1.1.0",
+            "packageSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "manifestSha256": "4444444444444444444444444444444444444444444444444444444444444444",
+            "byteLength": "2048",
+            "kind": "EXECUTABLE"
+          },
+          "status": "SUCCEEDED",
+          "desiredEnabled": false,
+          "runtimeSynced": false,
+          "reasonCode": "POLICY_NOT_SYNCED",
+          "retryAllowed": false,
+          "orderId": null,
+          "fundingStatus": "NONE",
+          "price": null,
+          "actorLabel": "我",
+          "createdAt": 1792756800000,
+          "updatedAt": 1792756800000
+        },
+        "code": "E0",
+        "msg": "ok"
+      },
+      "valid": true,
+      "httpStatus": 202
+    },
+    {
+      "name": "retryable-upgrade",
+      "definition": "ChangeResponse",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "data": {
+          "skillChangeId": "sc_demo",
+          "agentId": "agt_demo",
+          "skillKey": "image-edit",
+          "action": "UPGRADE",
+          "skillRevision": "8",
+          "changeRevision": "3",
+          "attempt": 1,
+          "source": {
+            "skillInstallationId": "si_old",
+            "productVersionId": "spv_old",
+            "skillVersion": "1.0.0",
+            "packageSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+            "manifestSha256": "3333333333333333333333333333333333333333333333333333333333333333",
+            "byteLength": "1024",
+            "kind": "EXECUTABLE"
+          },
+          "target": {
+            "skillInstallationId": "si_new",
+            "productVersionId": "spv_new",
+            "skillVersion": "1.1.0",
+            "packageSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "manifestSha256": "4444444444444444444444444444444444444444444444444444444444444444",
+            "byteLength": "2048",
+            "kind": "EXECUTABLE"
+          },
+          "status": "FAILED_RETRYABLE",
+          "desiredEnabled": true,
+          "runtimeSynced": false,
+          "reasonCode": "PACKAGE_DIGEST_MISMATCH",
+          "retryAllowed": true,
+          "orderId": null,
+          "fundingStatus": "NONE",
+          "price": {
+            "amountMinor": "0",
+            "currency": "SILVER"
+          },
+          "actorLabel": "我",
+          "createdAt": 1792756800000,
+          "updatedAt": 1792756800000
+        },
+        "code": "E0",
+        "msg": "ok"
+      },
+      "valid": true,
+      "httpStatus": 200
+    },
+    {
+      "name": "revision-number",
+      "definition": "CreateChangeRequest",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "data": {
+          "action": "UPGRADE",
+          "skillKey": "image-edit",
+          "sourceSkillInstallationId": "si_old",
+          "targetProductVersionId": "spv_new",
+          "expectedAgentVersion": "12",
+          "expectedSkillRevision": 7,
+          "approvedPermissions": [
+            "READ_AUTHORIZED_INPUT",
+            "WRITE_TASK_RESULT"
+          ],
+          "quoteId": "sq_demo",
+          "expectedPrice": {
+            "amountMinor": "0",
+            "currency": "SILVER"
+          }
+        }
+      },
+      "valid": false
+    },
+    {
+      "name": "revision-leading-zero",
+      "definition": "CreateChangeRequest",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "data": {
+          "action": "UPGRADE",
+          "skillKey": "image-edit",
+          "sourceSkillInstallationId": "si_old",
+          "targetProductVersionId": "spv_new",
+          "expectedAgentVersion": "12",
+          "expectedSkillRevision": "07",
+          "approvedPermissions": [
+            "READ_AUTHORIZED_INPUT",
+            "WRITE_TASK_RESULT"
+          ],
+          "quoteId": "sq_demo",
+          "expectedPrice": {
+            "amountMinor": "0",
+            "currency": "SILVER"
+          }
+        }
+      },
+      "valid": false
+    },
+    {
+      "name": "body-owner",
+      "definition": "CreateChangeRequest",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "data": {
+          "action": "UPGRADE",
+          "skillKey": "image-edit",
+          "sourceSkillInstallationId": "si_old",
+          "targetProductVersionId": "spv_new",
+          "expectedAgentVersion": "12",
+          "expectedSkillRevision": "7",
+          "approvedPermissions": [
+            "READ_AUTHORIZED_INPUT",
+            "WRITE_TASK_RESULT"
+          ],
+          "quoteId": "sq_demo",
+          "expectedPrice": {
+            "amountMinor": "0",
+            "currency": "SILVER"
+          },
+          "ownerJiacn": "other"
+        }
+      },
+      "valid": false
+    },
+    {
+      "name": "duplicate-permission",
+      "definition": "CreateChangeRequest",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "data": {
+          "action": "UPGRADE",
+          "skillKey": "image-edit",
+          "sourceSkillInstallationId": "si_old",
+          "targetProductVersionId": "spv_new",
+          "expectedAgentVersion": "12",
+          "expectedSkillRevision": "7",
+          "approvedPermissions": [
+            "READ_AUTHORIZED_INPUT",
+            "WRITE_TASK_RESULT",
+            "READ_AUTHORIZED_INPUT",
+            "WRITE_TASK_RESULT"
+          ],
+          "quoteId": "sq_demo",
+          "expectedPrice": {
+            "amountMinor": "0",
+            "currency": "SILVER"
+          }
+        }
+      },
+      "valid": false
+    },
+    {
+      "name": "legacy-envelope",
+      "definition": "CreateChangeRequest",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "payload": {
+          "action": "UPGRADE",
+          "skillKey": "image-edit",
+          "sourceSkillInstallationId": "si_old",
+          "targetProductVersionId": "spv_new",
+          "expectedAgentVersion": "12",
+          "expectedSkillRevision": "7",
+          "approvedPermissions": [
+            "READ_AUTHORIZED_INPUT",
+            "WRITE_TASK_RESULT"
+          ],
+          "quoteId": "sq_demo",
+          "expectedPrice": {
+            "amountMinor": "0",
+            "currency": "SILVER"
+          }
+        }
+      },
+      "valid": false
+    },
+    {
+      "name": "unknown-protocol",
+      "definition": "CreateChangeRequest",
+      "value": {
+        "protocolVersion": 2,
+        "requestId": "req_demo",
+        "data": {
+          "action": "UPGRADE",
+          "skillKey": "image-edit",
+          "sourceSkillInstallationId": "si_old",
+          "targetProductVersionId": "spv_new",
+          "expectedAgentVersion": "12",
+          "expectedSkillRevision": "7",
+          "approvedPermissions": [
+            "READ_AUTHORIZED_INPUT",
+            "WRITE_TASK_RESULT"
+          ],
+          "quoteId": "sq_demo",
+          "expectedPrice": {
+            "amountMinor": "0",
+            "currency": "SILVER"
+          }
+        }
+      },
+      "valid": false
+    },
+    {
+      "name": "fractional-money",
+      "definition": "CreateChangeRequest",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "data": {
+          "action": "UPGRADE",
+          "skillKey": "image-edit",
+          "sourceSkillInstallationId": "si_old",
+          "targetProductVersionId": "spv_new",
+          "expectedAgentVersion": "12",
+          "expectedSkillRevision": "7",
+          "approvedPermissions": [
+            "READ_AUTHORIZED_INPUT",
+            "WRITE_TASK_RESULT"
+          ],
+          "quoteId": "sq_demo",
+          "expectedPrice": {
+            "amountMinor": "1.5",
+            "currency": "SILVER"
+          }
+        }
+      },
+      "valid": false
+    },
+    {
+      "name": "money-long-overflow",
+      "definition": "CreateChangeRequest",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "data": {
+          "action": "UPGRADE",
+          "skillKey": "image-edit",
+          "sourceSkillInstallationId": "si_old",
+          "targetProductVersionId": "spv_new",
+          "expectedAgentVersion": "12",
+          "expectedSkillRevision": "7",
+          "approvedPermissions": [
+            "READ_AUTHORIZED_INPUT",
+            "WRITE_TASK_RESULT"
+          ],
+          "quoteId": "sq_demo",
+          "expectedPrice": {
+            "amountMinor": "9223372036854775808",
+            "currency": "SILVER"
+          }
+        }
+      },
+      "valid": false
+    },
+    {
+      "name": "attempt-string",
+      "definition": "Command",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "data": {
+          "schemaVersion": 2,
+          "commandId": "cmd_disable",
+          "skillChangeId": "sc_disable",
+          "action": "DISABLE",
+          "tenantId": "0",
+          "clientId": "client_demo",
+          "ownerJiacn": "owner_demo",
+          "agentId": "agt_demo",
+          "runtimeInstallationId": "rti_demo",
+          "skillKey": "image-edit",
+          "attempt": "1",
+          "fencingToken": "9",
+          "deliveryEpoch": "1",
+          "skillRevision": "9",
+          "source": {
+            "skillInstallationId": "si_new",
+            "productVersionId": "spv_new",
+            "skillVersion": "1.1.0",
+            "packageSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "manifestSha256": "4444444444444444444444444444444444444444444444444444444444444444",
+            "byteLength": "2048",
+            "kind": "EXECUTABLE"
+          },
+          "target": {
+            "skillInstallationId": "si_new",
+            "productVersionId": "spv_new",
+            "skillVersion": "1.1.0",
+            "packageSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "manifestSha256": "4444444444444444444444444444444444444444444444444444444444444444",
+            "byteLength": "2048",
+            "kind": "EXECUTABLE"
+          },
+          "approvedPermissionsSha256": "f4016e9bd4924086fb2feec1d52b3d97575547260f13a34b8e6a94c91cab1944",
+          "desiredEnabled": false,
+          "issuedAt": 1792756800000,
+          "phase": "POLICY",
+          "commandType": "SKILL_SET_ENABLED",
+          "commandSha256": "553281ef2e5f734166c12313cfb6157945bf9ca94ddb933a4a1285c01eae8104"
+        },
+        "messageType": "command.dispatch",
+        "messageId": "msg_disable"
+      },
+      "valid": false
+    },
+    {
+      "name": "external-download-url",
+      "definition": "Command",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "data": {
+          "schemaVersion": 2,
+          "commandId": "cmd_prepare",
+          "skillChangeId": "sc_demo",
+          "action": "UPGRADE",
+          "tenantId": "0",
+          "clientId": "client_demo",
+          "ownerJiacn": "owner_demo",
+          "agentId": "agt_demo",
+          "runtimeInstallationId": "rti_demo",
+          "skillKey": "image-edit",
+          "attempt": 1,
+          "fencingToken": "8",
+          "deliveryEpoch": "1",
+          "skillRevision": "8",
+          "source": {
+            "skillInstallationId": "si_old",
+            "productVersionId": "spv_old",
+            "skillVersion": "1.0.0",
+            "packageSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+            "manifestSha256": "3333333333333333333333333333333333333333333333333333333333333333",
+            "byteLength": "1024",
+            "kind": "EXECUTABLE"
+          },
+          "target": {
+            "skillInstallationId": "si_new",
+            "productVersionId": "spv_new",
+            "skillVersion": "1.1.0",
+            "packageSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "manifestSha256": "4444444444444444444444444444444444444444444444444444444444444444",
+            "byteLength": "2048",
+            "kind": "EXECUTABLE"
+          },
+          "approvedPermissionsSha256": "f4016e9bd4924086fb2feec1d52b3d97575547260f13a34b8e6a94c91cab1944",
+          "desiredEnabled": true,
+          "issuedAt": 1792756800000,
+          "phase": "PREPARE",
+          "commandType": "SKILL_INSTALL",
+          "downloadPath": "https://untrusted.invalid/pkg",
+          "commandSha256": "0325f224f8239305e940c5c7636508a46fb0982644ec05b81963401fae3d1347"
+        },
+        "messageType": "command.dispatch",
+        "messageId": "msg_prepare"
+      },
+      "valid": false
+    },
+    {
+      "name": "prefixed-sha",
+      "definition": "Command",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "data": {
+          "schemaVersion": 2,
+          "commandId": "cmd_prepare",
+          "skillChangeId": "sc_demo",
+          "action": "UPGRADE",
+          "tenantId": "0",
+          "clientId": "client_demo",
+          "ownerJiacn": "owner_demo",
+          "agentId": "agt_demo",
+          "runtimeInstallationId": "rti_demo",
+          "skillKey": "image-edit",
+          "attempt": 1,
+          "fencingToken": "8",
+          "deliveryEpoch": "1",
+          "skillRevision": "8",
+          "source": {
+            "skillInstallationId": "si_old",
+            "productVersionId": "spv_old",
+            "skillVersion": "1.0.0",
+            "packageSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+            "manifestSha256": "3333333333333333333333333333333333333333333333333333333333333333",
+            "byteLength": "1024",
+            "kind": "EXECUTABLE"
+          },
+          "target": {
+            "skillInstallationId": "si_new",
+            "productVersionId": "spv_new",
+            "skillVersion": "1.1.0",
+            "packageSha256": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+            "manifestSha256": "4444444444444444444444444444444444444444444444444444444444444444",
+            "byteLength": "2048",
+            "kind": "EXECUTABLE"
+          },
+          "approvedPermissionsSha256": "f4016e9bd4924086fb2feec1d52b3d97575547260f13a34b8e6a94c91cab1944",
+          "desiredEnabled": true,
+          "issuedAt": 1792756800000,
+          "phase": "PREPARE",
+          "commandType": "SKILL_INSTALL",
+          "downloadPath": "/internal/agent/skill-installations/si_new/package",
+          "commandSha256": "0325f224f8239305e940c5c7636508a46fb0982644ec05b81963401fae3d1347"
+        },
+        "messageType": "command.dispatch",
+        "messageId": "msg_prepare"
+      },
+      "valid": false
+    },
+    {
+      "name": "executable-no-manifest",
+      "definition": "Command",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "data": {
+          "schemaVersion": 2,
+          "commandId": "cmd_prepare",
+          "skillChangeId": "sc_demo",
+          "action": "UPGRADE",
+          "tenantId": "0",
+          "clientId": "client_demo",
+          "ownerJiacn": "owner_demo",
+          "agentId": "agt_demo",
+          "runtimeInstallationId": "rti_demo",
+          "skillKey": "image-edit",
+          "attempt": 1,
+          "fencingToken": "8",
+          "deliveryEpoch": "1",
+          "skillRevision": "8",
+          "source": {
+            "skillInstallationId": "si_old",
+            "productVersionId": "spv_old",
+            "skillVersion": "1.0.0",
+            "packageSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+            "manifestSha256": "3333333333333333333333333333333333333333333333333333333333333333",
+            "byteLength": "1024",
+            "kind": "EXECUTABLE"
+          },
+          "target": {
+            "skillInstallationId": "si_new",
+            "productVersionId": "spv_new",
+            "skillVersion": "1.1.0",
+            "packageSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "manifestSha256": null,
+            "byteLength": "2048",
+            "kind": "EXECUTABLE"
+          },
+          "approvedPermissionsSha256": "f4016e9bd4924086fb2feec1d52b3d97575547260f13a34b8e6a94c91cab1944",
+          "desiredEnabled": true,
+          "issuedAt": 1792756800000,
+          "phase": "PREPARE",
+          "commandType": "SKILL_INSTALL",
+          "downloadPath": "/internal/agent/skill-installations/si_new/package",
+          "commandSha256": "0325f224f8239305e940c5c7636508a46fb0982644ec05b81963401fae3d1347"
+        },
+        "messageType": "command.dispatch",
+        "messageId": "msg_prepare"
+      },
+      "valid": false
+    },
+    {
+      "name": "session-generation-number",
+      "definition": "CapabilityAdapterInput",
+      "value": {
+        "agentId": "agt_demo",
+        "runtimeInstallationId": "rti_demo",
+        "runtimeInstanceId": "boot_demo",
+        "sessionGeneration": 9007199254740993,
+        "skillExecution": {
+          "schemaVersion": 2,
+          "catalogRevision": "9007199254740994",
+          "skills": [
+            {
+              "skillKey": "image-edit",
+              "skillInstallationId": "si_new",
+              "productVersionId": "spv_new",
+              "skillVersion": "1.1.0",
+              "packageSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+              "manifestSha256": "4444444444444444444444444444444444444444444444444444444444444444",
+              "kind": "EXECUTABLE",
+              "policyRevision": "8",
+              "enabled": true,
+              "runner": "provider-operation",
+              "readiness": "READY",
+              "reasonCode": null,
+              "toolchainDigest": "5555555555555555555555555555555555555555555555555555555555555555",
+              "bindingRevision": "2",
+              "observedAt": 1792756800000
+            }
+          ]
+        }
+      },
+      "valid": false
+    },
+    {
+      "name": "missing-nullable-field",
+      "definition": "ChangeResponse",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "data": {
+          "skillChangeId": "sc_demo",
+          "agentId": "agt_demo",
+          "skillKey": "image-edit",
+          "action": "UPGRADE",
+          "skillRevision": "8",
+          "changeRevision": "1",
+          "attempt": 1,
+          "target": {
+            "skillInstallationId": "si_new",
+            "productVersionId": "spv_new",
+            "skillVersion": "1.1.0",
+            "packageSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "manifestSha256": "4444444444444444444444444444444444444444444444444444444444444444",
+            "byteLength": "2048",
+            "kind": "EXECUTABLE"
+          },
+          "status": "PREPARING",
+          "desiredEnabled": true,
+          "runtimeSynced": false,
+          "reasonCode": null,
+          "retryAllowed": false,
+          "orderId": null,
+          "fundingStatus": "NONE",
+          "price": {
+            "amountMinor": "0",
+            "currency": "SILVER"
+          },
+          "actorLabel": "我",
+          "createdAt": 1792756800000,
+          "updatedAt": 1792756800000
+        },
+        "code": "E0",
+        "msg": "ok"
+      },
+      "valid": false
+    },
+    {
+      "name": "enable-carries-quote",
+      "definition": "CreateChangeRequest",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "data": {
+          "action": "ENABLE",
+          "skillKey": "image-edit",
+          "expectedAgentVersion": "12",
+          "expectedSkillRevision": "8",
+          "sourceSkillInstallationId": "si_new",
+          "quoteId": "sq_demo"
+        }
+      },
+      "valid": false
+    },
+    {
+      "name": "fake-task-for-install",
+      "definition": "Command",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "data": {
+          "schemaVersion": 2,
+          "commandId": "cmd_prepare",
+          "skillChangeId": "sc_demo",
+          "action": "UPGRADE",
+          "tenantId": "0",
+          "clientId": "client_demo",
+          "ownerJiacn": "owner_demo",
+          "agentId": "agt_demo",
+          "runtimeInstallationId": "rti_demo",
+          "skillKey": "image-edit",
+          "attempt": 1,
+          "fencingToken": "8",
+          "deliveryEpoch": "1",
+          "skillRevision": "8",
+          "source": {
+            "skillInstallationId": "si_old",
+            "productVersionId": "spv_old",
+            "skillVersion": "1.0.0",
+            "packageSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+            "manifestSha256": "3333333333333333333333333333333333333333333333333333333333333333",
+            "byteLength": "1024",
+            "kind": "EXECUTABLE"
+          },
+          "target": {
+            "skillInstallationId": "si_new",
+            "productVersionId": "spv_new",
+            "skillVersion": "1.1.0",
+            "packageSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "manifestSha256": "4444444444444444444444444444444444444444444444444444444444444444",
+            "byteLength": "2048",
+            "kind": "EXECUTABLE"
+          },
+          "approvedPermissionsSha256": "f4016e9bd4924086fb2feec1d52b3d97575547260f13a34b8e6a94c91cab1944",
+          "desiredEnabled": true,
+          "issuedAt": 1792756800000,
+          "phase": "PREPARE",
+          "commandType": "SKILL_INSTALL",
+          "downloadPath": "/internal/agent/skill-installations/si_new/package",
+          "commandSha256": "0325f224f8239305e940c5c7636508a46fb0982644ec05b81963401fae3d1347",
+          "taskId": "fake_order_task"
+        },
+        "messageType": "command.dispatch",
+        "messageId": "msg_prepare"
+      },
+      "valid": false
+    },
+    {
+      "name": "task-ttl-on-install",
+      "definition": "Command",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "data": {
+          "schemaVersion": 2,
+          "commandId": "cmd_prepare",
+          "skillChangeId": "sc_demo",
+          "action": "UPGRADE",
+          "tenantId": "0",
+          "clientId": "client_demo",
+          "ownerJiacn": "owner_demo",
+          "agentId": "agt_demo",
+          "runtimeInstallationId": "rti_demo",
+          "skillKey": "image-edit",
+          "attempt": 1,
+          "fencingToken": "8",
+          "deliveryEpoch": "1",
+          "skillRevision": "8",
+          "source": {
+            "skillInstallationId": "si_old",
+            "productVersionId": "spv_old",
+            "skillVersion": "1.0.0",
+            "packageSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+            "manifestSha256": "3333333333333333333333333333333333333333333333333333333333333333",
+            "byteLength": "1024",
+            "kind": "EXECUTABLE"
+          },
+          "target": {
+            "skillInstallationId": "si_new",
+            "productVersionId": "spv_new",
+            "skillVersion": "1.1.0",
+            "packageSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "manifestSha256": "4444444444444444444444444444444444444444444444444444444444444444",
+            "byteLength": "2048",
+            "kind": "EXECUTABLE"
+          },
+          "approvedPermissionsSha256": "f4016e9bd4924086fb2feec1d52b3d97575547260f13a34b8e6a94c91cab1944",
+          "desiredEnabled": true,
+          "issuedAt": 1792756800000,
+          "phase": "PREPARE",
+          "commandType": "SKILL_INSTALL",
+          "downloadPath": "/internal/agent/skill-installations/si_new/package",
+          "commandSha256": "0325f224f8239305e940c5c7636508a46fb0982644ec05b81963401fae3d1347",
+          "expiresAt": 1792760400000
+        },
+        "messageType": "command.dispatch",
+        "messageId": "msg_prepare"
+      },
+      "valid": false
+    },
+    {
+      "name": "timestamp-string",
+      "definition": "ChangeResponse",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "data": {
+          "skillChangeId": "sc_demo",
+          "agentId": "agt_demo",
+          "skillKey": "image-edit",
+          "action": "UPGRADE",
+          "skillRevision": "8",
+          "changeRevision": "1",
+          "attempt": 1,
+          "source": {
+            "skillInstallationId": "si_old",
+            "productVersionId": "spv_old",
+            "skillVersion": "1.0.0",
+            "packageSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+            "manifestSha256": "3333333333333333333333333333333333333333333333333333333333333333",
+            "byteLength": "1024",
+            "kind": "EXECUTABLE"
+          },
+          "target": {
+            "skillInstallationId": "si_new",
+            "productVersionId": "spv_new",
+            "skillVersion": "1.1.0",
+            "packageSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "manifestSha256": "4444444444444444444444444444444444444444444444444444444444444444",
+            "byteLength": "2048",
+            "kind": "EXECUTABLE"
+          },
+          "status": "PREPARING",
+          "desiredEnabled": true,
+          "runtimeSynced": false,
+          "reasonCode": null,
+          "retryAllowed": false,
+          "orderId": null,
+          "fundingStatus": "NONE",
+          "price": {
+            "amountMinor": "0",
+            "currency": "SILVER"
+          },
+          "actorLabel": "我",
+          "createdAt": 1792756800000,
+          "updatedAt": "1792756800000"
+        },
+        "code": "E0",
+        "msg": "ok"
+      },
+      "valid": false
+    },
+    {
+      "name": "install-claims-covered-entitlement",
+      "definition": "QuoteResponse",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "data": {
+          "quoteId": "sq_demo",
+          "action": "INSTALL",
+          "agentId": "agt_demo",
+          "skillKey": "image-edit",
+          "sourceSkillInstallationId": "si_old",
+          "targetProductVersionId": "spv_new",
+          "targetSkillVersion": "1.1.0",
+          "targetPackageSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+          "expectedAgentVersion": "12",
+          "expectedSkillRevision": "7",
+          "approvedPermissionsSha256": "f4016e9bd4924086fb2feec1d52b3d97575547260f13a34b8e6a94c91cab1944",
+          "price": {
+            "amountMinor": "0",
+            "currency": "SILVER"
+          },
+          "coverage": "ENTITLEMENT",
+          "entitlementId": "se_demo",
+          "expiresAt": 1792757100000
+        },
+        "code": "E0",
+        "msg": "ok"
+      },
+      "valid": false
+    },
+    {
+      "name": "refunded-retryable",
+      "definition": "ChangeResponse",
+      "value": {
+        "protocolVersion": 1,
+        "requestId": "req_demo",
+        "data": {
+          "skillChangeId": "sc_demo",
+          "agentId": "agt_demo",
+          "skillKey": "image-edit",
+          "action": "UPGRADE",
+          "skillRevision": "8",
+          "changeRevision": "3",
+          "attempt": 1,
+          "source": {
+            "skillInstallationId": "si_old",
+            "productVersionId": "spv_old",
+            "skillVersion": "1.0.0",
+            "packageSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+            "manifestSha256": "3333333333333333333333333333333333333333333333333333333333333333",
+            "byteLength": "1024",
+            "kind": "EXECUTABLE"
+          },
+          "target": {
+            "skillInstallationId": "si_new",
+            "productVersionId": "spv_new",
+            "skillVersion": "1.1.0",
+            "packageSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "manifestSha256": "4444444444444444444444444444444444444444444444444444444444444444",
+            "byteLength": "2048",
+            "kind": "EXECUTABLE"
+          },
+          "status": "FAILED_RETRYABLE",
+          "desiredEnabled": true,
+          "runtimeSynced": false,
+          "reasonCode": "PACKAGE_DIGEST_MISMATCH",
+          "retryAllowed": true,
+          "orderId": null,
+          "fundingStatus": "REFUNDED",
+          "price": {
+            "amountMinor": "0",
+            "currency": "SILVER"
+          },
+          "actorLabel": "我",
+          "createdAt": 1792756800000,
+          "updatedAt": 1792756800000
+        },
+        "code": "E0",
+        "msg": "ok"
+      },
+      "valid": false
+    },
+    {
+      "name": "prepare-claims-activation",
+      "definition": "InstallEvidence",
+      "value": {
+        "observedCommandId": "cmd_prepare",
+        "phase": "PREPARE",
+        "outcome": "APPLIED",
+        "actual": {
+          "skillInstallationId": "si_old",
+          "productVersionId": "spv_old",
+          "skillVersion": "1.0.0",
+          "packageSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+          "manifestSha256": "3333333333333333333333333333333333333333333333333333333333333333",
+          "byteLength": "1024",
+          "kind": "EXECUTABLE"
+        },
+        "appliedRevision": "7",
+        "preparedSha256": "2f34f8cc1d52ade3290dca0d3a956015f44ebc5456673fc29898dc3cc263ef09",
+        "readiness": "READY",
+        "reasonCode": null,
+        "observedAt": 1792756800000
+      },
+      "valid": false
+    }
+  ],
+  "rawParserCases": [
+    {
+      "name": "float-attempt-token",
+      "raw": "{\"attempt\":1.0}",
+      "expected": "BAD_REQUEST"
+    },
+    {
+      "name": "exponent-attempt-token",
+      "raw": "{\"attempt\":1e0}",
+      "expected": "BAD_REQUEST"
+    },
+    {
+      "name": "negative-zero-token",
+      "raw": "{\"attempt\":-0}",
+      "expected": "BAD_REQUEST"
+    },
+    {
+      "name": "duplicate-root-key",
+      "raw": "{\"protocolVersion\":1,\"protocolVersion\":1,\"requestId\":\"r\",\"data\":{}}",
+      "expected": "BAD_REQUEST"
+    },
+    {
+      "name": "duplicate-business-key",
+      "raw": "{\"protocolVersion\":1,\"requestId\":\"r\",\"data\":{\"action\":\"INSTALL\",\"action\":\"UPGRADE\"}}",
+      "expected": "BAD_REQUEST"
+    }
+  ],
+  "digestVectors": [
+    {
+      "domain": "cyf.skill.permissions.v1",
+      "value": [
+        "READ_AUTHORIZED_INPUT",
+        "WRITE_TASK_RESULT"
+      ],
+      "canonicalUtf8": "[\"READ_AUTHORIZED_INPUT\",\"WRITE_TASK_RESULT\"]",
+      "sha256": "f4016e9bd4924086fb2feec1d52b3d97575547260f13a34b8e6a94c91cab1944"
+    },
+    {
+      "domain": "cyf.skill.prepared.v1",
+      "value": {
+        "skillChangeId": "sc_demo",
+        "attempt": 1,
+        "source": {
+          "skillInstallationId": "si_old",
+          "productVersionId": "spv_old",
+          "skillVersion": "1.0.0",
+          "packageSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+          "manifestSha256": "3333333333333333333333333333333333333333333333333333333333333333",
+          "byteLength": "1024",
+          "kind": "EXECUTABLE"
+        },
+        "target": {
+          "skillInstallationId": "si_new",
+          "productVersionId": "spv_new",
+          "skillVersion": "1.1.0",
+          "packageSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+          "manifestSha256": "4444444444444444444444444444444444444444444444444444444444444444",
+          "byteLength": "2048",
+          "kind": "EXECUTABLE"
+        },
+        "approvedPermissionsSha256": "f4016e9bd4924086fb2feec1d52b3d97575547260f13a34b8e6a94c91cab1944"
+      },
+      "canonicalUtf8": "{\"approvedPermissionsSha256\":\"f4016e9bd4924086fb2feec1d52b3d97575547260f13a34b8e6a94c91cab1944\",\"attempt\":1,\"skillChangeId\":\"sc_demo\",\"source\":{\"byteLength\":\"1024\",\"kind\":\"EXECUTABLE\",\"manifestSha256\":\"3333333333333333333333333333333333333333333333333333333333333333\",\"packageSha256\":\"1111111111111111111111111111111111111111111111111111111111111111\",\"productVersionId\":\"spv_old\",\"skillInstallationId\":\"si_old\",\"skillVersion\":\"1.0.0\"},\"target\":{\"byteLength\":\"2048\",\"kind\":\"EXECUTABLE\",\"manifestSha256\":\"4444444444444444444444444444444444444444444444444444444444444444\",\"packageSha256\":\"2222222222222222222222222222222222222222222222222222222222222222\",\"productVersionId\":\"spv_new\",\"skillInstallationId\":\"si_new\",\"skillVersion\":\"1.1.0\"}}",
+      "sha256": "2f34f8cc1d52ade3290dca0d3a956015f44ebc5456673fc29898dc3cc263ef09"
+    },
+    {
+      "domain": "cyf.skill.command.v2",
+      "value": {
+        "schemaVersion": 2,
+        "commandId": "cmd_prepare",
+        "skillChangeId": "sc_demo",
+        "action": "UPGRADE",
+        "tenantId": "0",
+        "clientId": "client_demo",
+        "ownerJiacn": "owner_demo",
+        "agentId": "agt_demo",
+        "runtimeInstallationId": "rti_demo",
+        "skillKey": "image-edit",
+        "attempt": 1,
+        "fencingToken": "8",
+        "skillRevision": "8",
+        "source": {
+          "skillInstallationId": "si_old",
+          "productVersionId": "spv_old",
+          "skillVersion": "1.0.0",
+          "packageSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+          "manifestSha256": "3333333333333333333333333333333333333333333333333333333333333333",
+          "byteLength": "1024",
+          "kind": "EXECUTABLE"
+        },
+        "target": {
+          "skillInstallationId": "si_new",
+          "productVersionId": "spv_new",
+          "skillVersion": "1.1.0",
+          "packageSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+          "manifestSha256": "4444444444444444444444444444444444444444444444444444444444444444",
+          "byteLength": "2048",
+          "kind": "EXECUTABLE"
+        },
+        "approvedPermissionsSha256": "f4016e9bd4924086fb2feec1d52b3d97575547260f13a34b8e6a94c91cab1944",
+        "desiredEnabled": true,
+        "issuedAt": 1792756800000,
+        "phase": "PREPARE",
+        "commandType": "SKILL_INSTALL",
+        "downloadPath": "/internal/agent/skill-installations/si_new/package"
+      },
+      "canonicalUtf8": "{\"action\":\"UPGRADE\",\"agentId\":\"agt_demo\",\"approvedPermissionsSha256\":\"f4016e9bd4924086fb2feec1d52b3d97575547260f13a34b8e6a94c91cab1944\",\"attempt\":1,\"clientId\":\"client_demo\",\"commandId\":\"cmd_prepare\",\"commandType\":\"SKILL_INSTALL\",\"desiredEnabled\":true,\"downloadPath\":\"/internal/agent/skill-installations/si_new/package\",\"fencingToken\":\"8\",\"issuedAt\":1792756800000,\"ownerJiacn\":\"owner_demo\",\"phase\":\"PREPARE\",\"runtimeInstallationId\":\"rti_demo\",\"schemaVersion\":2,\"skillChangeId\":\"sc_demo\",\"skillKey\":\"image-edit\",\"skillRevision\":\"8\",\"source\":{\"byteLength\":\"1024\",\"kind\":\"EXECUTABLE\",\"manifestSha256\":\"3333333333333333333333333333333333333333333333333333333333333333\",\"packageSha256\":\"1111111111111111111111111111111111111111111111111111111111111111\",\"productVersionId\":\"spv_old\",\"skillInstallationId\":\"si_old\",\"skillVersion\":\"1.0.0\"},\"target\":{\"byteLength\":\"2048\",\"kind\":\"EXECUTABLE\",\"manifestSha256\":\"4444444444444444444444444444444444444444444444444444444444444444\",\"packageSha256\":\"2222222222222222222222222222222222222222222222222222222222222222\",\"productVersionId\":\"spv_new\",\"skillInstallationId\":\"si_new\",\"skillVersion\":\"1.1.0\"},\"tenantId\":\"0\"}",
+      "sha256": "0325f224f8239305e940c5c7636508a46fb0982644ec05b81963401fae3d1347"
+    },
+    {
+      "domain": "cyf.skill.result.v2",
+      "value": {
+        "schemaVersion": 2,
+        "resultType": "SKILL_CHANGE_RESULT",
+        "skillChangeId": "sc_demo",
+        "commandId": "cmd_prepare",
+        "agentId": "agt_demo",
+        "runtimeInstallationId": "rti_demo",
+        "executionRuntimeInstanceId": "boot_demo",
+        "attempt": 1,
+        "fencingToken": "8",
+        "deliveryEpoch": "1",
+        "skillRevision": "8",
+        "evidence": {
+          "observedCommandId": "cmd_prepare",
+          "phase": "PREPARE",
+          "outcome": "PREPARED",
+          "actual": {
+            "skillInstallationId": "si_old",
+            "productVersionId": "spv_old",
+            "skillVersion": "1.0.0",
+            "packageSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+            "manifestSha256": "3333333333333333333333333333333333333333333333333333333333333333",
+            "byteLength": "1024",
+            "kind": "EXECUTABLE"
+          },
+          "appliedRevision": "7",
+          "preparedSha256": "2f34f8cc1d52ade3290dca0d3a956015f44ebc5456673fc29898dc3cc263ef09",
+          "readiness": "READY",
+          "reasonCode": null,
+          "observedAt": 1792756800000
+        }
+      },
+      "canonicalUtf8": "{\"agentId\":\"agt_demo\",\"attempt\":1,\"commandId\":\"cmd_prepare\",\"deliveryEpoch\":\"1\",\"evidence\":{\"actual\":{\"byteLength\":\"1024\",\"kind\":\"EXECUTABLE\",\"manifestSha256\":\"3333333333333333333333333333333333333333333333333333333333333333\",\"packageSha256\":\"1111111111111111111111111111111111111111111111111111111111111111\",\"productVersionId\":\"spv_old\",\"skillInstallationId\":\"si_old\",\"skillVersion\":\"1.0.0\"},\"appliedRevision\":\"7\",\"observedAt\":1792756800000,\"observedCommandId\":\"cmd_prepare\",\"outcome\":\"PREPARED\",\"phase\":\"PREPARE\",\"preparedSha256\":\"2f34f8cc1d52ade3290dca0d3a956015f44ebc5456673fc29898dc3cc263ef09\",\"readiness\":\"READY\",\"reasonCode\":null},\"executionRuntimeInstanceId\":\"boot_demo\",\"fencingToken\":\"8\",\"resultType\":\"SKILL_CHANGE_RESULT\",\"runtimeInstallationId\":\"rti_demo\",\"schemaVersion\":2,\"skillChangeId\":\"sc_demo\",\"skillRevision\":\"8\"}",
+      "sha256": "a9d8b13968fc85ab645c0cad92a815e7979241bfc3a4633782ca4bc6957309fe"
+    },
+    {
+      "domain": "cyf.skill.request.v1",
+      "value": {
+        "method": "POST",
+        "path": "/agent/agt_demo/skill-changes",
+        "data": {
+          "action": "UPGRADE",
+          "skillKey": "image-edit",
+          "sourceSkillInstallationId": "si_old",
+          "targetProductVersionId": "spv_new",
+          "expectedAgentVersion": "12",
+          "expectedSkillRevision": "7",
+          "approvedPermissions": [
+            "READ_AUTHORIZED_INPUT",
+            "WRITE_TASK_RESULT"
+          ],
+          "quoteId": "sq_demo",
+          "expectedPrice": {
+            "amountMinor": "0",
+            "currency": "SILVER"
+          }
+        }
+      },
+      "canonicalUtf8": "{\"data\":{\"action\":\"UPGRADE\",\"approvedPermissions\":[\"READ_AUTHORIZED_INPUT\",\"WRITE_TASK_RESULT\"],\"expectedAgentVersion\":\"12\",\"expectedPrice\":{\"amountMinor\":\"0\",\"currency\":\"SILVER\"},\"expectedSkillRevision\":\"7\",\"quoteId\":\"sq_demo\",\"skillKey\":\"image-edit\",\"sourceSkillInstallationId\":\"si_old\",\"targetProductVersionId\":\"spv_new\"},\"method\":\"POST\",\"path\":\"/agent/agt_demo/skill-changes\"}",
+      "sha256": "9e47aa8c2ddd81cafbb933c8f7eae624e0adf6d6f9064b6814e868ab4e3e465a"
+    },
+    {
+      "domain": "cyf.skill.canonical.test.v1",
+      "value": {
+        "": "甲",
+        "𐀀": "乙",
+        "a": "line\nquote\"\\"
+      },
+      "canonicalUtf8": "{\"a\":\"line\\nquote\\\"\\\\\",\"\":\"甲\",\"𐀀\":\"乙\"}",
+      "sha256": "27fd9712712da660e0c2a80b1df66001d244b2e8aaefaebddcb32f7f87f1f2e4"
+    }
+  ]
+}

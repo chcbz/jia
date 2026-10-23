@@ -1,0 +1,518 @@
+{
+  "contractVersion": "SM-C1",
+  "scope": "Target behavior expectations, NOT_RUN until actual producers/consumers and services execute them",
+  "routes": [
+    {
+      "id": "listSkills",
+      "method": "GET",
+      "path": "/agent/{agentId}/skills",
+      "requestDefinition": null,
+      "responseDefinition": "SkillListResponse",
+      "httpStatus": 200,
+      "idempotencyKeyRequired": false,
+      "queryKeys": [],
+      "pathParameterDefinition": "Id",
+      "errorDefinition": "HttpError"
+    },
+    {
+      "id": "quote",
+      "method": "POST",
+      "path": "/agent/skill-orders/quotes",
+      "requestDefinition": "QuoteRequest",
+      "responseDefinition": "QuoteResponse",
+      "httpStatus": 200,
+      "idempotencyKeyRequired": true,
+      "queryKeys": [],
+      "pathParameterDefinition": "Id",
+      "errorDefinition": "HttpError"
+    },
+    {
+      "id": "createChange",
+      "method": "POST",
+      "path": "/agent/{agentId}/skill-changes",
+      "requestDefinition": "CreateChangeRequest",
+      "responseDefinition": "ChangeResponse",
+      "httpStatus": 202,
+      "idempotencyKeyRequired": true,
+      "queryKeys": [],
+      "pathParameterDefinition": "Id",
+      "errorDefinition": "HttpError"
+    },
+    {
+      "id": "listChanges",
+      "method": "GET",
+      "path": "/agent/{agentId}/skill-changes",
+      "requestDefinition": null,
+      "responseDefinition": "ChangeListResponse",
+      "httpStatus": 200,
+      "idempotencyKeyRequired": false,
+      "queryKeys": [],
+      "pathParameterDefinition": "Id",
+      "errorDefinition": "HttpError"
+    },
+    {
+      "id": "getChange",
+      "method": "GET",
+      "path": "/agent/{agentId}/skill-changes/{skillChangeId}",
+      "requestDefinition": null,
+      "responseDefinition": "ChangeResponse",
+      "httpStatus": 200,
+      "idempotencyKeyRequired": false,
+      "queryKeys": [],
+      "pathParameterDefinition": "Id",
+      "errorDefinition": "HttpError"
+    },
+    {
+      "id": "retry",
+      "method": "POST",
+      "path": "/agent/{agentId}/skill-changes/{skillChangeId}/retry",
+      "requestDefinition": "RetryRequest",
+      "responseDefinition": "ChangeResponse",
+      "httpStatus": 202,
+      "idempotencyKeyRequired": true,
+      "queryKeys": [],
+      "pathParameterDefinition": "Id",
+      "errorDefinition": "HttpError"
+    },
+    {
+      "id": "reconcile",
+      "method": "POST",
+      "path": "/agent/{agentId}/skill-changes/{skillChangeId}/reconcile",
+      "requestDefinition": "ReconcileRequest",
+      "responseDefinition": "ChangeResponse",
+      "httpStatus": 202,
+      "idempotencyKeyRequired": true,
+      "queryKeys": [],
+      "pathParameterDefinition": "Id",
+      "errorDefinition": "HttpError"
+    }
+  ],
+  "binaryDownload": {
+    "method": "GET",
+    "path": "/internal/agent/skill-installations/{skillInstallationId}/package",
+    "response": "approved immutable archive bytes",
+    "contentType": "application/octet-stream",
+    "errorsBeforeBody": "HttpError; real status",
+    "afterBodyError": "terminate transfer, never append JSON"
+  },
+  "retiredWrite": {
+    "method": "POST",
+    "path": "/agent/skill-orders",
+    "httpStatus": 410,
+    "code": "ENDPOINT_RETIRED",
+    "effective": "only after coordinated authorized migration"
+  },
+  "errorStatus": {
+    "BAD_REQUEST": 400,
+    "PROTOCOL_VERSION_UNSUPPORTED": 400,
+    "UNAUTHENTICATED": 401,
+    "AGENT_FORBIDDEN": 403,
+    "RESOURCE_NOT_FOUND": 404,
+    "INSUFFICIENT_FUNDS": 422,
+    "SKILL_STATE_UNAVAILABLE": 503,
+    "SKILL_DOWNLOAD_FORBIDDEN": 403,
+    "INTERNAL_ERROR": 500,
+    "ENDPOINT_RETIRED": 410,
+    "IDEMPOTENCY_CONFLICT": 409,
+    "SKILL_STATE_CONFLICT": 409,
+    "SKILL_CHANGE_PENDING": 409,
+    "SKILL_ALREADY_ORDERED": 409,
+    "SKILL_VERSION_NOT_PUBLISHED": 409,
+    "SKILL_UPGRADE_POLICY_UNSET": 409,
+    "SKILL_UPGRADE_NOT_ALLOWED": 409,
+    "SKILL_QUOTE_EXPIRED": 409,
+    "SKILL_QUOTE_MISMATCH": 409,
+    "SKILL_PERMISSIONS_MISMATCH": 409,
+    "SKILL_RUNTIME_MAPPING_REQUIRED": 409,
+    "SKILL_AGENT_OFFLINE": 409,
+    "SKILL_RETRY_NOT_ALLOWED": 409,
+    "SKILL_RESULT_CONFLICT": 409,
+    "SKILL_DELIVERY_FENCED": 409
+  },
+  "cases": [
+    {
+      "id": "C01",
+      "title": "首次安装闭环",
+      "given": "合法Owner，真实批准包，安装权限逐项确认",
+      "when": "quote→createChange INSTALL→PREPARE→ACTIVATE→注册接受当前目录",
+      "then": [
+        "唯一订单/安装/skillChange",
+        "202仅受理",
+        "精确目录READY后可用",
+        "安装不调用Provider或重发旧消息"
+      ],
+      "layers": [
+        "Web",
+        "API",
+        "Runtime",
+        "DB"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "C02",
+      "title": "权益覆盖升级",
+      "given": "原安装可信，目标批准且升级政策COVERED",
+      "when": "quote→UPGRADE→准备→切换→核验",
+      "then": [
+        "price=0，coverage=ENTITLEMENT，orderId=null",
+        "原权益合法且账本无第二笔购买",
+        "新请求固定新版"
+      ],
+      "layers": [
+        "Web",
+        "API",
+        "Runtime",
+        "DB"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "C03",
+      "title": "付费升级与零价商品",
+      "given": "目标PAID政策/实际价格分别为正数和0",
+      "when": "显式报价与确认；重复请求、回执重放",
+      "then": [
+        "正价只冻结/结算一次",
+        "零价合法订单不产生资金预留",
+        "不知道政策返回409 SKILL_UPGRADE_POLICY_UNSET"
+      ],
+      "layers": [
+        "Web",
+        "API",
+        "DB"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "C04",
+      "title": "权限与报价",
+      "given": "包含新增权限/报价已到期/价格变化/quote属于另一Agent",
+      "when": "分别请求quote或create",
+      "then": [
+        "未经批准不得执行",
+        "原scope与参数精确匹配",
+        "晚quote不覆盖新选择",
+        "同意运行费用不是执行前置条件"
+      ],
+      "layers": [
+        "Web",
+        "API"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "C05",
+      "title": "HTTP幂等",
+      "given": "同key同输入、同key不同目标；服务器已接纳但响应丢失",
+      "when": "重复创建、关窗刷新、显式原键重放",
+      "then": [
+        "同输入同skillChange，不重复购买",
+        "异参409 IDEMPOTENCY_CONFLICT",
+        "成功重放不因quote后来到期再次创建或丢失原资源"
+      ],
+      "layers": [
+        "Web",
+        "API",
+        "DB"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "C06",
+      "title": "离线安装",
+      "given": "Owner及持久Runtime绑定合法，无当前session",
+      "when": "接纳INSTALL，再以同Runtime身份真实重连",
+      "then": [
+        "WAITING_AGENT",
+        "同操作恢复，重连复验Owner/映射",
+        "无映射409，另一Runtime不得接收原投递"
+      ],
+      "layers": [
+        "API",
+        "Runtime",
+        "DB",
+        "Web"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "C07",
+      "title": "离线范围",
+      "given": "合法已安装技能，当前无连接",
+      "when": "提交UPGRADE/ENABLE/DISABLE",
+      "then": [
+        "UPGRADE/ENABLE:409 SKILL_AGENT_OFFLINE",
+        "DISABLE关闭新准入，成功且runtimeSynced=false",
+        "不取消已准入任务"
+      ],
+      "layers": [
+        "API",
+        "Runtime",
+        "Web"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "C08",
+      "title": "准备失败重试",
+      "given": "已证实未切换，资金/权益仍有效，FAILED_RETRYABLE",
+      "when": "两个相同retry-key并发，然后迟到原失败回执",
+      "then": [
+        "同skillChange/原目标/支付关系",
+        "attempt仅加1，新候选安装和阶段command",
+        "新skillRevision，旧回执不倒退",
+        "无重复冻结/扣款"
+      ],
+      "layers": [
+        "API",
+        "Runtime",
+        "DB"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "C09",
+      "title": "退款与过期意图",
+      "given": "已退款或原source被新合法动作改变",
+      "when": "retry原失败操作",
+      "then": [
+        "409 SKILL_RETRY_NOT_ALLOWED或SKILL_STATE_CONFLICT",
+        "不复活旧支付/权限",
+        "新的同技能写原子终结已证实未切换的旧失败资金/资格"
+      ],
+      "layers": [
+        "API",
+        "DB",
+        "Web"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "C10",
+      "title": "准备失败保旧版",
+      "given": "旧版有合法新请求，候选包坏摘要/依赖不满足",
+      "when": "PREPARE失败",
+      "then": [
+        "旧active与包未破坏",
+        "失败证据持久化",
+        "未发ACTIVATE不切换",
+        "回执不能仅凭错误码触发未知结果退款"
+      ],
+      "layers": [
+        "Runtime",
+        "API"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "C11",
+      "title": "切换未知",
+      "given": "Runtime已切换但结果丢失，API已持久激活意图",
+      "when": "查询失败→reconcile→读原marker/result",
+      "then": [
+        "RECOVERY_REQUIRED期间禁止该skill不确定新准入",
+        "只读回原事实，不再安装/切换/Provider调用",
+        "不自动退款",
+        "经当前目录核验恢复"
+      ],
+      "layers": [
+        "API",
+        "Runtime",
+        "DB",
+        "Web"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "C12",
+      "title": "重启断点",
+      "given": "PREPARED落盘/切换intent/目录交换/结果落盘四个断点",
+      "when": "分别重启自己的隔离Runtime并恢复",
+      "then": [
+        "同阶段journal+marker证据恢复",
+        "不能证明则UNKNOWN",
+        "不借重启覆盖旧任务引用或伪报成功"
+      ],
+      "layers": [
+        "Runtime",
+        "API"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "C13",
+      "title": "旧任务继续原版",
+      "given": "旧任务分别处于API已准入未投递、运行中、外部结果未知",
+      "when": "升级成功，再恢复旧任务并发新任务",
+      "then": [
+        "旧任务使用原skillInstallationId/包/manifest/权限",
+        "新任务使用新active",
+        "不重放未知外部效果",
+        "旧包不自动GC；程序app目录不变"
+      ],
+      "layers": [
+        "API",
+        "Runtime",
+        "DB"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "C14",
+      "title": "准入与切换竞态",
+      "given": "一请求申请使用旧版，同时发ACTIVATE或DISABLE",
+      "when": "并发提交并重复运行交错调度",
+      "then": [
+        "同skill锁保护准入+精确引用登记",
+        "不出现检查旧版后按新版执行",
+        "无授权窗口；其他skill不被误停"
+      ],
+      "layers": [
+        "API",
+        "Runtime",
+        "DB"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "C15",
+      "title": "启停及乱序",
+      "given": "已启用；DISABLE之后ENABLE，投递乱序",
+      "when": "先应用较新ENABLE，再到达旧DISABLE",
+      "then": [
+        "新代际不被旧命令覆盖",
+        "停用只阻止新准入，不取消已准入",
+        "ENABLE需当前包/策略/目录匹配才开放"
+      ],
+      "layers": [
+        "API",
+        "Runtime",
+        "Web"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "C16",
+      "title": "目录顺序与会话",
+      "given": "APPLIED与目录交错，旧session/大整数revision/新boot",
+      "when": "先报目录后回执，或旧boot结果通过当前通道恢复",
+      "then": [
+        "未有两份匹配事实不准入",
+        "旧session目录不能READY",
+        "原executionRuntimeInstanceId不被当前boot覆盖",
+        "代际不转JS Number"
+      ],
+      "layers": [
+        "API",
+        "Runtime",
+        "Web"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "C17",
+      "title": "身份与数据隔离",
+      "given": "另一Owner/tenant/client/Agent或外单委托人",
+      "when": "查列表/历史/包，写安装或伪造结果",
+      "then": [
+        "403/防枚举404",
+        "无订单/安装/余额副作用",
+        "响应不泄露token/内部路径/他人记录"
+      ],
+      "layers": [
+        "API",
+        "Runtime",
+        "DB",
+        "Web"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "C18",
+      "title": "说明包与可执行包",
+      "given": "INSTRUCTION manifest=null，EXECUTABLE必须有manifest",
+      "when": "分别安装、启用、能力刷新",
+      "then": [
+        "说明包NOT_EXECUTABLE且不生成执行动作",
+        "可执行包摘要缺失拒绝",
+        "不把目录文件存在当授权"
+      ],
+      "layers": [
+        "API",
+        "Runtime",
+        "Web"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "C19",
+      "title": "下载与旧消息",
+      "given": "篡改包/越权下载/任意URL/旧attempt/旧协议消息",
+      "when": "消费命令、包与回执",
+      "then": [
+        "摘要/长度/路径保护仍生效",
+        "同messageId不同摘要拒绝",
+        "迟到合法已淘汰结果仅留审计",
+        "旧wire不自动恢复执行，不套任务TTL"
+      ],
+      "layers": [
+        "API",
+        "Runtime"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "C20",
+      "title": "原型交互",
+      "given": "列表、详情、安装/升级/启停、折叠记录",
+      "when": "桌面1440及手机390/320/390×480；权限/报价/收起/Tab/Esc/关闭",
+      "then": [
+        "同入口同列表同行操作",
+        "状态真实无演示设置",
+        "准备草稿不因收起丢失",
+        "确认对象可见、焦点连续、文字可读"
+      ],
+      "layers": [
+        "Web"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "C21",
+      "title": "原始报文与共享样例",
+      "given": "同一schema/fixture/hash供Java/Web/Runtime",
+      "when": "实际serializer→完整wire→实际parser双向执行",
+      "then": [
+        "封闭字段/重复key/错误类型/非法数字/摘要前缀负例拒绝",
+        "共享期望而非各自mock协议",
+        "GET无写副作用，错误非HTTP200"
+      ],
+      "layers": [
+        "Web",
+        "API",
+        "Runtime"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "C22",
+      "title": "退役与协调切换",
+      "given": "新三端候选及原市场调用方都已准备",
+      "when": "按授权切换，尝试旧POST /agent/skill-orders",
+      "then": [
+        "旧写410，新写唯一",
+        "保留原订单账本和归档摘要",
+        "没有旧wire双解析",
+        "停机和数据迁移另有本次授权"
+      ],
+      "layers": [
+        "Web",
+        "API",
+        "Runtime",
+        "DB"
+      ],
+      "status": "NOT_RUN"
+    }
+  ]
+}

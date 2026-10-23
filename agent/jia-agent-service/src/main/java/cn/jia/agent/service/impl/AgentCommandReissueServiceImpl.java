@@ -149,7 +149,7 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
                 || !request.sourceMessageId().equals(delivery.getActiveMessageId())) {
             throw conflict("MANUAL_REISSUE_NOT_FOUND");
         }
-        if ("SKILL_INSTALL".equals(delivery.getCommandType())) throw conflict("SKILL_INSTALL_RECONCILIATION_REQUIRED");
+        if (Set.of("SKILL_INSTALL","SKILL_SET_ENABLED","SKILL_RECONCILE").contains(delivery.getCommandType())) throw conflict("SKILL_INSTALL_RECONCILIATION_REQUIRED");
         validateManualDelivery(delivery, now);
         List<AgentOutboxEventEntity> activeRows = dao.lockActiveOutboxes(
                 delivery.getTenantId(), delivery.getClientId(), delivery.getId(),
@@ -434,7 +434,7 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
         }
         // W10 installation identity is immutable. Never mint a generic task redrive attempt for it.
         // Preserve unknown escrow and permit the original durable result to reconcile.
-        if ("SKILL_INSTALL".equals(delivery.getCommandType())) return new RecoveryOutcome(false, null);
+        if (Set.of("SKILL_INSTALL","SKILL_SET_ENABLED","SKILL_RECONCILE").contains(delivery.getCommandType())) return new RecoveryOutcome(false, null);
         validateRecoverableDelivery(delivery, requireDue, now);
 
         List<AgentOutboxEventEntity> activeRows = dao.lockActiveOutboxes(

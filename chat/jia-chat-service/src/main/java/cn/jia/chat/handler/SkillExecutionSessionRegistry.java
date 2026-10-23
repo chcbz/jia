@@ -17,8 +17,10 @@ public final class SkillExecutionSessionRegistry implements SkillCapabilityLooku
     private record Entry(Key key, Scope scope, SessionFence fence, Catalog catalog, BooleanSupplier current) { }
     private final ConcurrentHashMap<Key, Entry> entries = new ConcurrentHashMap<>();
 
+    private final ConcurrentHashMap<Key,Entry> watermarks=new ConcurrentHashMap<>();
+
     /** Null catalog records absence/invalidity and replaces any previously valid directory. */
-    public void register(String sessionId, Scope trustedScope, SessionFence trustedFence,
+    public synchronized void register(String sessionId, Scope trustedScope, SessionFence trustedFence,
             Catalog catalog, BooleanSupplier currentBinding) {
         if (sessionId == null || sessionId.isBlank() || !sessionId.equals(sessionId.strip())
                 || sessionId.codePointCount(0, sessionId.length()) > 128
@@ -26,12 +28,21 @@ public final class SkillExecutionSessionRegistry implements SkillCapabilityLooku
             throw new IllegalArgumentException("Invalid skill session ID");
         Objects.requireNonNull(trustedScope); SkillCapabilityLookup.validateFence(trustedFence);
         var key = new Key(sessionId, trustedScope.agentId());
-        entries.put(key, new Entry(key, trustedScope, trustedFence, catalog,
-                Objects.requireNonNull(currentBinding)));
+        var previous=watermarks.get(key);
+        if(previous!=null && previous.fence().equals(trustedFence) && previous.catalog()!=null && catalog!=null) {
+            int order=new java.math.BigInteger(catalog.catalogRevision()).compareTo(new java.math.BigInteger(previous.catalog().catalogRevision()));
+            if(order<0 || order==0&&!previous.catalog().equals(catalog)) throw new IllegalArgumentException("Skill catalog revision conflict");
+        }
+        var entry=new Entry(key,trustedScope,trustedFence,catalog,Objects.requireNonNull(currentBinding));
+        entries.put(key,entry);if(catalog!=null)watermarks.put(key,entry);
     }
 
-    public void remove(String sessionId) {
-        if (sessionId != null) entries.entrySet().removeIf(e -> sessionId.equals(e.getKey().sessionId()));
+    public synchronized void suspend(String sessionId) {
+        if(sessionId!=null)entries.entrySet().removeIf(e->sessionId.equals(e.getKey().sessionId()));
+    }
+    public synchronized void remove(String sessionId) {
+        suspend(sessionId);
+        if(sessionId!=null)watermarks.entrySet().removeIf(e->sessionId.equals(e.getKey().sessionId()));
     }
 
     @Override public View lookup(Scope scope, SessionFence expectedFence) {

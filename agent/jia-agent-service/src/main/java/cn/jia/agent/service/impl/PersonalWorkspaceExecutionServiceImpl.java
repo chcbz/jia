@@ -2818,6 +2818,9 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     private static void scoped(cn.jia.core.entity.BaseEntity entity,OwnerScope scope){entity.setTenantId(scope.tenantId());entity.setClientId(scope.clientId());}
     private static void scoped(cn.jia.core.entity.BaseEntity entity,RuntimeScope scope){entity.setTenantId(scope.tenantId());entity.setClientId(scope.clientId());}
     private static Failure failure(Reason reason){return new Failure(reason);}
+    private cn.jia.agent.skill.SkillManagementService skillManagement;
+    @Autowired(required=false)
+    public void setSkillManagement(cn.jia.agent.skill.SkillManagementService management) {skillManagement=management;}
     private cn.jia.agent.dao.SkillExecutionDao skillExecutions;
     private cn.jia.agent.service.InstalledSkillDescriptorLookup installedSkills;
     private cn.jia.agent.service.SkillCapabilityLookup skillCapabilities;
@@ -2888,7 +2891,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         var capScope=new cn.jia.agent.service.SkillCapabilityLookup.Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),agent);
         var executor=assigneeAuthority.resolveForAssignment(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),agent);
         var runtimeScope=new cn.jia.agent.service.SkillCapabilityLookup.Scope(scope.tenantId(),scope.clientId(),executor.ownerJiacn(),agent);
-        var descriptors=installedSkills.read(runtimeScope).skills().stream().filter(d->key.equals(d.skillKey())&&version.equals(d.skillVersion())).toList();
+        var descriptors=installedSkills.read(runtimeScope).skills().stream().filter(d->key.equals(d.skillKey())&&version.equals(d.skillVersion())&&same(d.installationId(),skillString(selected,"installationId"))).toList();
         if(descriptors.size()!=1)throw failure(Reason.CAPABILITY_UNAVAILABLE);
         var descriptor=descriptors.getFirst();
         if(!descriptor.verified()||!same(descriptor.packageSha256(),skillString(selected,"packageSha256"))
@@ -2910,7 +2913,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
             var catalog=skillCapabilities.lookup(policy.runtimeScope(),policy.fence());
             if(catalog.state()!=cn.jia.agent.service.SkillCapabilityLookup.State.AVAILABLE)throw failure(Reason.CAPABILITY_UNAVAILABLE);
             if(!same(descriptor.runtimeInstallationId(),policy.fence().runtimeInstallationId())||!same(descriptor.runtimeHostId(),policy.fence().hostId()))throw failure(Reason.CAPABILITY_UNAVAILABLE);
-            var facts=catalog.catalog().skills().stream().filter(d->key.equals(d.skillKey())&&version.equals(d.skillVersion())).toList();
+            var facts=catalog.catalog().skills().stream().filter(d->key.equals(d.skillKey())&&version.equals(d.skillVersion())&&same(d.skillInstallationId(),skillString(selected,"installationId"))).toList();
             if(facts.size()!=1)throw failure(Reason.CAPABILITY_UNAVAILABLE);var fact=facts.getFirst();
             if(fact.readiness()!=cn.jia.agent.service.SkillCapabilityLookup.Readiness.READY||fact.toolchainDigest()==null
                     ||!same(fact.packageSha256(),descriptor.packageSha256())||!same(fact.manifestSha256(),descriptor.manifestSha256())
@@ -2968,7 +2971,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         String executionId="pwe_"+plainSha(seed+"\\nexecution").substring(0,60);String runId="pwe_run_"+plainSha(seed+"\\nrun");String key="skill_"+plainSha(seed);
         if(executions.findByIdempotency(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),key)==null)
             prepareSkillCatalog(scope,command.targetAgentId());
-        return taskMutations.executeWithLockedTaskRootInOwnerScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),command.taskId(),root->{
+        java.util.function.Supplier<cn.jia.agent.service.SkillExecutionService.Creation> accept=()->taskMutations.executeWithLockedTaskRootInOwnerScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),command.taskId(),root->{
             requireConversationRoot(root,scope,command.taskId(),command.targetAgentId(),command.assignmentRevision());
             var prior=executions.findByIdempotency(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),key);
             if(prior!=null) {
@@ -2990,11 +2993,19 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
             var skill=new cn.jia.agent.entity.SkillExecutionEntity().setTenantId(scope.tenantId()).setClientId(scope.clientId()).setOwnerJiacn(scope.ownerJiacn())
                 .setExecutionId(executionId).setSkillKey(skillString(selected,"key")).setSkillVersion(skillString(selected,"version"))
                 .setPackageSha256(skillString(selected,"packageSha256")).setManifestSha256(skillString(selected,"manifestSha256"))
-                .setSnapshotJson(skillJson(snapshot)).setSnapshotSha256(digest).setCreatedAt(now).setUpdatedAt(now);
+                .setSnapshotJson(skillJson(snapshot)).setSnapshotSha256(digest).setCreatedAt(now).setUpdatedAt(now)
+                .setTaskSkillBindingJson(cn.jia.agent.skill.SkillManagementCodec.json(skillManagement.taskBinding(scope.tenantId(),scope.clientId(),
+                    executionId,command.grantId(),command.grantVersion(),command.targetAgentId(),skillString(selected,"installationId"))));
             executions.insert(row);skillExecutions.insertReady(skill);
             for(var input:inputs)verifySkillInput(scope,row,input);
             return skillCreation(row,skillRow(scope,executionId,false));
         });
+        if(executions.findByIdempotency(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),key)!=null)return accept.get();
+        if(skillManagement==null)throw failure(Reason.CAPABILITY_UNAVAILABLE);
+        var executor=assigneeAuthority.resolveForAssignment(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),command.targetAgentId());
+        var selected=skillObject(snapshot.get("skill"));
+        return skillManagement.admit(new cn.jia.agent.service.SkillCapabilityLookup.Scope(scope.tenantId(),scope.clientId(),executor.ownerJiacn(),command.targetAgentId()),
+            skillString(selected,"key"),skillString(selected,"installationId"),accept);
     }
     private static cn.jia.agent.service.SkillExecutionService.Creation skillCreation(PersonalWorkspaceExecutionEntity row,cn.jia.agent.entity.SkillExecutionEntity skill) {
         return new cn.jia.agent.service.SkillExecutionService.Creation(row.getExecutionId(),row.getTaskId(),row.getRunId(),row.getConversationId(),row.getTargetAgentId(),row.getExecutionState(),skill.getSnapshotSha256());
@@ -3007,11 +3018,21 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     }
     private cn.jia.agent.service.SkillExecutionService.Command skillCommand(RuntimeScope scope,PersonalWorkspaceExecutionEntity execution) {
         var skill=skillRow(skillOwner(scope),execution.getExecutionId(),false);if(!"READY".equals(skill.getPhase()))throw failure(Reason.NOT_FOUND);
-        var snapshot=skillMap(skill.getSnapshotJson());verifiedSkillDescriptor(skillOwner(scope),scope.agentId(),snapshot,true);
+        var snapshot=skillMap(skill.getSnapshotJson());verifiedSkillDescriptor(skillOwner(scope),scope.agentId(),snapshot,false);
+        if(skill.getTaskSkillBindingJson()==null) {
+            if(skillManagement==null)throw failure(Reason.CAPABILITY_UNAVAILABLE);
+            var selected=skillObject(snapshot.get("skill"));var grant=skillObject(snapshot.get("taskGrant"));
+            String binding=cn.jia.agent.skill.SkillManagementCodec.json(skillManagement.taskBinding(scope.tenantId(),scope.clientId(),execution.getExecutionId(),
+                    skillString(grant,"id"),skillLong(grant.get("version")),scope.agentId(),skillString(selected,"installationId")));
+            if(skillExecutions.bindTaskSkill(scope.tenantId(),scope.clientId(),execution.getOwnerJiacn(),execution.getExecutionId(),skill.getSnapshotSha256(),skill.getVersion(),binding,System.currentTimeMillis())!=1)
+                throw failure(Reason.TASK_CONFLICT);
+            skill.setTaskSkillBindingJson(binding).setVersion(Math.addExact(skill.getVersion(),1));
+        }
+        cn.jia.agent.skill.SkillManagementCodec.validate("TaskSkillBinding",skillMap(skill.getTaskSkillBindingJson()));
         return new cn.jia.agent.service.SkillExecutionService.Command(4,execution.getExecutionId(),execution.getTaskId(),execution.getRunId(),execution.getConversationId(),
             Long.toString(skillLong(snapshot.get("conversationGeneration"))),"pwe_cmd_"+plainSha("command\n"+execution.getExecutionId()),"pwe_msg_"+plainSha("message\n"+execution.getExecutionId()),
             new cn.jia.agent.service.SkillExecutionService.Skill(skill.getSkillKey(),skill.getSkillVersion(),skill.getPackageSha256(),skill.getManifestSha256()),skill.getSnapshotSha256(),
-            skillObject(snapshot.get("parameters")),execution.getInstruction(),skillInputs(snapshot).stream().map(i->skillString(i,"inputRef")).toList(),skillObject(snapshot.get("outputs")));
+            skillObject(snapshot.get("parameters")),execution.getInstruction(),skillInputs(snapshot).stream().map(i->skillString(i,"inputRef")).toList(),skillObject(snapshot.get("outputs")),skillMap(skill.getTaskSkillBindingJson()));
     }
     @Override
     public cn.jia.agent.service.SkillExecutionService.Inputs inputs(RuntimeScope authenticatedScope,String taskId,String runId,ConversationFence fence) {
@@ -3085,7 +3106,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                 return skillEffectReceipt(effect,"START_RECORDED".equals(effect.get("status"))?"RECORDED":"UNKNOWN".equals(effect.get("status"))?"UNKNOWN":"KNOWN");
             }
             if(!Set.of("READY","RUNNING","WAITING_PROVIDER").contains(skill.getPhase()))throw failure(Reason.TASK_CONFLICT);
-            verifiedSkillDescriptor(skillOwner(scope),scope.agentId(),snapshot,true);
+            verifiedSkillDescriptor(skillOwner(scope),scope.agentId(),snapshot,false);
             for(var input:skillInputs(snapshot))verifySkillInput(skillOwner(scope),execution,input);
             var effect=new LinkedHashMap<String,Object>();effect.put("effectDigest",command.effectDigest());effect.put("bindingRevision",command.providerBindingRevision());
             effect.put("status","START_RECORDED");effect.put("providerRequestId",null);effect.put("providerIdempotencyKey",null);effect.put("resultDigest",null);

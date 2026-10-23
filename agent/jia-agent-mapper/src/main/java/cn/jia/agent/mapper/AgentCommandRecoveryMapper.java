@@ -41,7 +41,7 @@ public interface AgentCommandRecoveryMapper {
             FROM agent_command_delivery
             WHERE tenant_id=#{tenantId} AND client_id=#{clientId}
               AND target_agent_id=#{targetAgentId}
-              AND command_type<>'SKILL_INSTALL' AND status IN ('WAITING_AGENT','SENT') AND expires_at>#{now}
+              AND command_type NOT IN ('SKILL_INSTALL','SKILL_SET_ENABLED','SKILL_RECONCILE') AND status IN ('WAITING_AGENT','SENT') AND expires_at>#{now}
               AND id>#{afterDeliveryId}
               AND CAST(tenant_id AS BINARY)=CAST(#{tenantId} AS BINARY)
               AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(#{tenantId})
@@ -75,7 +75,7 @@ public interface AgentCommandRecoveryMapper {
                   OR (status='SENT' AND (
                       expires_at<=#{now}
                       OR (update_time<=#{sentBefore} AND expires_at>#{now})))
-              ) AND command_type<>'SKILL_INSTALL' AND id>#{afterDeliveryId}
+              ) AND command_type NOT IN ('SKILL_INSTALL','SKILL_SET_ENABLED','SKILL_RECONCILE') AND id>#{afterDeliveryId}
               AND (CAST(status AS BINARY)=CAST('WAITING_AGENT' AS BINARY)
                    OR CAST(status AS BINARY)=CAST('SENT' AS BINARY))
               AND OCTET_LENGTH(status)=CHAR_LENGTH(status)

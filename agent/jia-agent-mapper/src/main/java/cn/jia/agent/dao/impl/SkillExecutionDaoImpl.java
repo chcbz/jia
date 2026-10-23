@@ -29,6 +29,9 @@ public final class SkillExecutionDaoImpl implements SkillExecutionDao {
         return mapper.lock(tenant, client, owner, execution);
     }
 
+    public int bindTaskSkill(String tenant,String client,String owner,String execution,String snapshot,long version,String binding,long now) {
+        return mapper.bindTaskSkill(tenant,client,owner,execution,snapshot,version,binding,now);
+    }
     public boolean compareAndSet(SkillExecutionEntity row, long expectedVersion, String expectedPhase) {
         Objects.requireNonNull(row);
         if (expectedVersion < 0) throw new IllegalArgumentException("Negative skill attachment version");

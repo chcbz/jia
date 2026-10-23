@@ -15,7 +15,7 @@ public interface SkillExecutionService {
     record Command(int executionProtocolVersion,String executionId,String taskId,String runId,
             String conversationId,String conversationGeneration,String commandId,String messageId,Skill skill,
             String snapshotDigest,Map<String,Object> parameters,String instruction,List<String> inputRefs,
-            Map<String,Object> outputs) implements ConversationCommandView { }
+            Map<String,Object> outputs,Map<String,Object> taskSkillBinding) implements ConversationCommandView { }
     record EffectStart(String executionId,String snapshotDigest,ConversationFence fence,
             String effectDigest,String providerBindingRevision) { }
     record EffectResult(String executionId,String snapshotDigest,ConversationFence fence,

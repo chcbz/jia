@@ -45,6 +45,17 @@ public final class SkillAgentVersions {
             return version;
         });
     }
+    /** Query-only projection of the version the next locked write will observe; no CAS or root creation. */
+    public long readOwned(HostingRentHttp.Actor actor,String agentId) {
+        require(enabled,503,"SKILL_STATE_UNAVAILABLE");
+        var dto=agents.getObject().requireApiKeyOwnedAgent(actor.clientId(),owners.requireOwner(actor),agentId);
+        require(dto!=null&&agentId.equals(dto.getAgentId())&&!Boolean.TRUE.equals(dto.getSystemAgent()),404,"RESOURCE_NOT_FOUND");
+        var runtime=runtimes.findInScope(actor.tenantId(),actor.clientId(),agentId);
+        require(runtime!=null&&actor.ownerJiacn().equals(runtime.getOwnerJiacn()),404,"RESOURCE_NOT_FOUND");
+        var state=mapper.findVersion(actor.ownerJiacn(),actor.clientId(),agentId);
+        if(state==null)return 1;
+        return Arrays.equals(sourceHash(runtime),state.getSourceHash())?state.getVersion():Math.addExact(state.getVersion(),1);
+    }
     /** Called for every existing runtime persistence path, inside its lifecycle transaction. */
     public void observe(AgentRuntimeEntity row) {
         if(!enabled || row==null || row.getOwnerJiacn()==null || row.getBindingId()==null) return;

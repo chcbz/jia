@@ -910,3 +910,41 @@ def verifyPdfProcessingBoundary = tasks.register('verifyPdfProcessingBoundary') 
 tasks.withType(org.gradle.api.tasks.testing.Test).configureEach {
     dependsOn verifyPdfProcessingBoundary, ':starter:verifyPdfProcessingBoundary'
 }
+
+// SKILL-MANAGEMENT-API-20261023: real SM-C1 codec/HTTP/owned-MySQL transactions.
+def skillManagementContractSourceSet = sourceSets.create('skillManagementContract') {
+    java.setSrcDirs(['src/skillManagementContract/java'])
+    resources.setSrcDirs(['src/skillManagementContract/resources'])
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(skillManagementContractSourceSet.implementationConfigurationName) {
+    extendsFrom configurations.implementation
+}
+configurations.named(skillManagementContractSourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.runtimeOnly
+}
+dependencies {
+    add(skillManagementContractSourceSet.implementationConfigurationName,
+        platform("org.springframework.boot:spring-boot-dependencies:${libs.versions.spring.boot.asProvider().get()}"))
+    add(skillManagementContractSourceSet.implementationConfigurationName, libs.junit.jupiter)
+    add(skillManagementContractSourceSet.implementationConfigurationName, 'org.mockito:mockito-core')
+    add(skillManagementContractSourceSet.implementationConfigurationName, 'org.springframework:spring-test')
+    add(skillManagementContractSourceSet.implementationConfigurationName, 'org.hamcrest:hamcrest')
+    add(skillManagementContractSourceSet.implementationConfigurationName, 'org.mybatis:mybatis-spring:4.0.0')
+    add(skillManagementContractSourceSet.implementationConfigurationName, 'org.springframework.security:spring-security-oauth2-resource-server')
+    add(skillManagementContractSourceSet.implementationConfigurationName, 'org.springframework.security:spring-security-oauth2-jose')
+    add(skillManagementContractSourceSet.implementationConfigurationName, project(':oauth:jia-oauth-api'))
+    add(skillManagementContractSourceSet.runtimeOnlyConfigurationName, 'org.junit.platform:junit-platform-launcher:6.0.1')
+    add(skillManagementContractSourceSet.runtimeOnlyConfigurationName, libs.mysql)
+}
+tasks.register('skillManagementContract', Test) {
+    group = 'verification'
+    description = 'Strict SM-C1 wire, actual HTTP adapter and private MySQL transactions; never production DB.'
+    dependsOn tasks.named(skillManagementContractSourceSet.classesTaskName)
+    testClassesDirs = skillManagementContractSourceSet.output.classesDirs
+    classpath = skillManagementContractSourceSet.runtimeClasspath
+    useJUnitPlatform()
+    maxParallelForks = 1
+    testLogging { events 'passed','failed'; exceptionFormat 'full'; showStandardStreams = true }
+}

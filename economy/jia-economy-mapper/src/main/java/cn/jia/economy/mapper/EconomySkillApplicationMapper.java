@@ -14,6 +14,8 @@ public interface EconomySkillApplicationMapper {
     int ensureVersion(@Param("tenantId") String t,@Param("clientId") String c,@Param("agentId") String a,@Param("hash") byte[] hash);
     @Select("SELECT source_hash,version FROM economy_skill_agent_version WHERE " + S + " AND agent_id=#{agentId} AND OCTET_LENGTH(agent_id)=OCTET_LENGTH(#{agentId}) FOR UPDATE")
     SkillAgentVersionEntity lockVersion(@Param("tenantId") String t,@Param("clientId") String c,@Param("agentId") String a);
+    @Select("SELECT source_hash,version FROM economy_skill_agent_version WHERE "+S+" AND agent_id=#{agentId} AND OCTET_LENGTH(agent_id)=OCTET_LENGTH(#{agentId})")
+    SkillAgentVersionEntity findVersion(@Param("tenantId") String t,@Param("clientId") String c,@Param("agentId") String a);
     @Update("UPDATE economy_skill_agent_version SET version=version+1,source_hash=#{hash} WHERE " + S + " AND agent_id=#{agentId} AND OCTET_LENGTH(agent_id)=OCTET_LENGTH(#{agentId}) AND version=#{version} AND version<9223372036854775807")
     int advanceVersion(@Param("tenantId") String t,@Param("clientId") String c,@Param("agentId") String a,@Param("hash") byte[] hash,@Param("version") long v);
     /** Result message IDs differ from command IDs. Only durable successful receipts prove activation. */

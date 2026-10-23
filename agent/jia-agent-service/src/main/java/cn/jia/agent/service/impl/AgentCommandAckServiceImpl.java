@@ -60,6 +60,7 @@ public final class AgentCommandAckServiceImpl implements AgentCommandAckService 
         AgentCommandDeliveryEntity delivery = dao.lockDeliveryByCommand(
                 ack.tenantId(), ack.clientId(), ack.commandId());
         if (delivery == null) throw rejected("ACK_DELIVERY_NOT_FOUND");
+        if(Set.of("SKILL_INSTALL","SKILL_SET_ENABLED","SKILL_RECONCILE").contains(delivery.getCommandType()))throw rejected("ENDPOINT_RETIRED");
         validateDeliveryIdentity(ack, delivery);
         validateAuthoritativeExpiry(ack, delivery, now);
 
