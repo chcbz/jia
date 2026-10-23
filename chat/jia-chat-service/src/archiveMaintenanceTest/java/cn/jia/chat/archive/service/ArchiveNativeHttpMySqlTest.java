@@ -93,7 +93,7 @@ class ArchiveNativeHttpMySqlTest {
         jdbc.update("INSERT INTO economy_skill_product(product_id,name,description,status,version,tenant_id,client_id,create_time,update_time) VALUES('archive-package','Archive maintenance','Isolated approved fixture','DRAFT',1,?,?,?,?)",TENANT,CLIENT,now,now);
         startHttp();
         var market=spring.getBean(EconomySkillMarketplaceMapper.class);
-        var version=new SkillProductVersionEntity().setProductVersionId("archive-v1").setProductId("archive-package").setVersionSequence(1L).setSkillKey("archive-maintenance").setSkillVersion("1.1.0").setPriceMicro(0L).setPackageSha256(hash(zip)).setPackageSize((long)zip.length).setApprovedPermissionsManifest("[]").setApprovedPermissionsSha256(hash("[]")).setDeploymentRestriction("NONE").setReviewStatus("APPROVED");
+        var version=new SkillProductVersionEntity().setProductVersionId("archive-v1").setProductId("archive-package").setVersionSequence(1L).setSkillKey("archive-maintenance").setSkillVersion("1.1.1").setPriceMicro(0L).setPackageSha256(hash(zip)).setPackageSize((long)zip.length).setApprovedPermissionsManifest("[]").setApprovedPermissionsSha256(hash("[]")).setDeploymentRestriction("NONE").setReviewStatus("APPROVED");
         version.setTenantId(TENANT);version.setClientId(CLIENT);version.setCreateTime(now);assertEquals(1,market.insertProductVersion(version));
         var positions=spring.getBean(PositionSkillService.class);var scope=new PositionAuthority.Scope(TENANT,CLIENT,OWNER);
         for(String p:List.of("MANAGE_POSITIONS","ARCHIVE_WRITE","ARCHIVE_PUBLISH"))jdbc.update("INSERT INTO agent_position_authority VALUES(?,?,?,?,?)",TENANT,CLIENT,OWNER,p,p.equals("MANAGE_POSITIONS")?"positions":"archive:public");
@@ -111,7 +111,7 @@ class ArchiveNativeHttpMySqlTest {
         var auth=spring.getBean(AgentRuntimeAuthenticationService.class);
         var headers=new AgentRuntimeAuthenticationFilter.SessionHeaders(AGENT,INSTALLATION,"archive-host","archive-boot",Long.parseLong(h.get("X-Agent-Session-Generation")),h.get("Authorization").substring("AgentRuntime ".length()));
         var proof=auth.verify(headers);auth.bind("fixture-channel",proof,()->node.isAlive());
-        var installed=exchange(Map.of("op","INSTALL"));assertEquals(1,installed.get("processed"));assertTrue(positions.read(scope).state().installations().values().iterator().next().usable());
+        var installed=exchange(Map.of("op","INSTALL"));assertEquals(1,installed.get("processed"));assertTrue(positions.read(scope).state().installations().values().iterator().next().usable(),()->"Installation state: "+positions.read(scope).state().installations().values().iterator().next().state()+" / "+positions.read(scope).state().installations().values().iterator().next().errorCode());
         assertTrue(Files.isRegularFile(root.resolve("codex-home/skills/archive-maintenance/SKILL.md")));
         var service=spring.getBean(ArchiveMaintenanceService.class);var reader=new ArchiveReaderServiceImpl(spring.getBean(JdbcArchiveContentStore.class));
         String sourceA="第一回 初见\n这是仓库外生成的测试文本："+UUID.randomUUID()+"。\n第二回 后续\n第二段。";
