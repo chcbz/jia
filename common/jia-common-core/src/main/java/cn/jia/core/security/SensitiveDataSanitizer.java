@@ -119,7 +119,14 @@ public final class SensitiveDataSanitizer {
                 continue;
             }
             try {
-                result.put(field.getName(), applyDecision(field.get(source), decision, config, visited, depth));
+                Object fieldValue = field.get(source);
+                // A protocol event has exactly five fields. Reflection must not restore the
+                // NON_NULL reply fields that Jackson intentionally omits; payload sanitizing stays on.
+                if (source instanceof cn.jia.core.entity.ProtocolMessage<?> && fieldValue == null
+                        && Set.of("correlationId", "code", "msg").contains(field.getName())) {
+                    continue;
+                }
+                result.put(field.getName(), applyDecision(fieldValue, decision, config, visited, depth));
             } catch (IllegalAccessException e) {
                 throw new IllegalStateException("Cannot access field " + field.getName(), e);
             }

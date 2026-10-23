@@ -83,6 +83,10 @@ CREATE TABLE IF NOT EXISTS chat_dispatch_outbox (
   turn_id VARCHAR(64) NOT NULL,
   dispatch_id VARCHAR(64) NOT NULL,
   event_type VARCHAR(30) NOT NULL,
+  task_grant_id VARCHAR(100) DEFAULT NULL,
+  task_grant_version BIGINT DEFAULT NULL,
+  task_assignment_revision BIGINT DEFAULT NULL,
+  task_requirement_revision BIGINT DEFAULT NULL,
   status VARCHAR(30) NOT NULL,
   payload_json MEDIUMTEXT NOT NULL,
   version BIGINT NOT NULL DEFAULT 0,
@@ -97,6 +101,7 @@ CREATE TABLE IF NOT EXISTS chat_dispatch_outbox (
   updated_at BIGINT NOT NULL,
   PRIMARY KEY (event_id),
   UNIQUE KEY uk_chat_outbox_turn_event (turn_id, event_type),
+  KEY idx_chat_outbox_dispatch (tenant_id, client_id, dispatch_id, event_type),
   KEY idx_chat_outbox_ready
     (status, available_at, event_id),
   KEY idx_chat_outbox_scope

@@ -51,7 +51,7 @@ class PersonalWorkspaceConversationFileLinkControllerTest extends BaseMockTest {
     void authenticationPrecedesMissingIdempotencyKeyAndBodyOwnerIsRejected() throws Exception {
         mvc.perform(post("/agent/conversations/conversation-a/file-links")
                         .contentType("application/json")
-                        .content("{\"fileId\":\"file-a\",\"version\":1,\"role\":\"INPUT\"}"))
+                        .content("{\"protocolVersion\":1,\"requestId\":\"audit-http-fixture\",\"data\":{\"fileId\":\"file-a\",\"version\":\"1\",\"role\":\"INPUT\"}}"))
                 .andExpect(status().isUnauthorized())
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
         verifyNoInteractions(service);
@@ -60,7 +60,7 @@ class PersonalWorkspaceConversationFileLinkControllerTest extends BaseMockTest {
                         .principal(jwt("owner-a", "browser"))
                         .header("Idempotency-Key", "key-a")
                         .contentType("application/json")
-                        .content("{\"fileId\":\"file-a\",\"version\":1,\"role\":\"INPUT\",\"owner\":\"owner-b\"}"))
+                        .content("{\"protocolVersion\":1,\"requestId\":\"audit-http-fixture\",\"data\":{\"fileId\":\"file-a\",\"version\":\"1\",\"role\":\"INPUT\",\"owner\":\"owner-b\"}}"))
                 .andExpect(status().isBadRequest());
         verifyNoInteractions(service);
     }
@@ -75,7 +75,7 @@ class PersonalWorkspaceConversationFileLinkControllerTest extends BaseMockTest {
                         .principal(jwt("owner-a", "browser")))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value("CONVERSATION_FILE_LINK_NOT_FOUND"))
-                .andExpect(jsonPath("$.message").value("Conversation file link resource is unavailable"));
+                .andExpect(jsonPath("$.msg").value("Conversation file link resource is unavailable"));
 
         when(service.create(scope, "conversation-a", new PersonalWorkspaceConversationLinkService.CreateCommand(
                 "file-a", 1, "OUTPUT", "key-output"))).thenThrow(
@@ -85,7 +85,7 @@ class PersonalWorkspaceConversationFileLinkControllerTest extends BaseMockTest {
                         .principal(jwt("owner-a", "browser"))
                         .header("Idempotency-Key", "key-output")
                         .contentType("application/json")
-                        .content("{\"fileId\":\"file-a\",\"version\":1,\"role\":\"OUTPUT\"}"))
+                        .content("{\"protocolVersion\":1,\"requestId\":\"audit-http-fixture\",\"data\":{\"fileId\":\"file-a\",\"version\":\"1\",\"role\":\"OUTPUT\"}}"))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.code").value("OUTPUT_LINK_MANAGED_BY_EXECUTION"));
     }
@@ -104,7 +104,7 @@ class PersonalWorkspaceConversationFileLinkControllerTest extends BaseMockTest {
                         .header("Idempotency-Key", "delete-key"))
                 .andExpect(status().isOk())
                 .andExpect(header().string(HttpHeaders.ETAG, "\"rel-a:2\""))
-                .andExpect(jsonPath("$.executionSnapshotsPreserved").value(true));
+                .andExpect(jsonPath("$.data.executionSnapshotsPreserved").value(true));
         verify(service).detach(scope, "conversation-a", "rel-a", "\"rel-a:1\"", "delete-key");
         verify(service, never()).create(scope, "conversation-a", null);
     }

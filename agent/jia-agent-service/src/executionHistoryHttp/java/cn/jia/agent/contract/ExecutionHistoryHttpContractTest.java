@@ -99,7 +99,7 @@ class ExecutionHistoryHttpContractTest {
                 public StoredContent read(Scope s, String u, String h, long b, String m) { throw forbiddenCall(); }
             };
             return new PersonalWorkspaceExecutionServiceImpl(dao, workspace, links,
-                    forbidden(AgentRuntimeDao.class), storage, new PersonalWorkspaceWriteService(workspace, links),
+                    forbidden(AgentRuntimeDao.class), storage, new PersonalWorkspaceWriteService(workspace, new cn.jia.agent.service.impl.PersonalWorkspaceOperationClaimTx(workspace)),
                     new PersonalWorkspaceExecutionProperties(null));
         }
         @Bean PersonalWorkspaceExecutionController controller(PersonalWorkspaceExecutionService service) {

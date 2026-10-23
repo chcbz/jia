@@ -105,7 +105,8 @@ class VoiceTranscriptionRequestBudgetFilterTest {
     private void assertTooLarge(MockHttpServletResponse response) throws Exception {
         JsonNode json = objectMapper.readTree(response.getContentAsByteArray());
         assertEquals(413, response.getStatus());
-        assertEquals(413, json.path("status").asInt());
+        assertEquals(1, json.path("protocolVersion").asInt());
+        org.junit.jupiter.api.Assertions.assertFalse(json.has("status"));
         assertEquals("VOICE_TOO_LARGE", json.path("code").asText());
     }
 }

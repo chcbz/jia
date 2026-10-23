@@ -56,6 +56,34 @@ class ArchivePersonalDataServiceTest {
     }
 
     @Test
+    void completionUsesActualFinalParagraphForAnyEdition() {
+        String edition = "short-book-v3";
+        String block = "closing-chapter";
+        String paragraph = "closing-paragraph";
+        var original = store.points.get(PARAGRAPH);
+        store.points.clear();
+        store.active = new ArchivePersonalDataStore.ActiveEdition(edition, MANIFEST);
+        store.points.put(paragraph, new ArchivePersonalDataStore.ContentPoint(edition, MANIFEST,
+                "CHAPTER", block, 2, paragraph, 1, original.text(), original.utf8ByteLength(), paragraphHash));
+        String body = progressJson("0", original.utf8ByteLength(), MANIFEST, paragraphHash)
+                .replace(PARAGRAPH, paragraph).replace(BLOCK, block).replace("false", "true");
+        var result = service.putProgress(OWNER, edition, "/archive/v1/me/progress/" + edition, "complete-short", bytes(body));
+        assertEquals(200, result.status());
+        assertEquals("COMPLETED", store.progress.state());
+    }
+
+    @Test
+    void completionRejectsEarlierParagraphEvenAtItsLastByte() {
+        var first = store.points.get(PARAGRAPH);
+        store.points.put("later", new ArchivePersonalDataStore.ContentPoint(EDITION, MANIFEST,
+                "CHAPTER", "later-block", 2, "later", 1, first.text(), first.utf8ByteLength(), paragraphHash));
+        String body = progressJson("0", first.utf8ByteLength(), MANIFEST, paragraphHash).replace("false", "true");
+        assertThrows(ArchivePersonalDataException.class, () -> service.putProgress(
+                OWNER, EDITION, "/archive/v1/me/progress/" + EDITION, "not-final", bytes(body)));
+        assertNull(store.progress);
+    }
+
+    @Test
     void strictJsonRejectsDuplicateUnknownTrailingFloatBomAndMalformedUnicodeBeforeAnyWrite() {
         List<byte[]> invalid = List.of(
                 bytes("{\"expectedVersion\":\"0\",\"expectedVersion\":\"0\",\"location\":{},\"markCompleted\":false}"),
@@ -343,6 +371,11 @@ class ArchivePersonalDataServiceTest {
         int progressUpdates;
         long idempotencySequence;
 
+        @Override public ContentPoint lockFinalContentPoint(String editionId) {
+            return points.values().stream().filter(p -> p.editionId().equals(editionId))
+                    .max(java.util.Comparator.comparingInt(ContentPoint::blockOrdinal)
+                            .thenComparingInt(ContentPoint::paragraphOrdinal)).orElse(null);
+        }
         @Override public ActiveEdition lockActiveEdition(String editionId) {
             return active != null && active.editionId().equals(editionId) ? active : null;
         }

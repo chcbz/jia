@@ -844,8 +844,11 @@ public final class Ur06EnrollMysqlFixture {
         @Bean AgentTaskEventBroker broker() { return new AgentTaskEventBroker(); }
         @Bean AgentTaskEventAfterCommitPublisher afterCommit(AgentTaskEventBroker broker, DataSourceTransactionManager manager) { return new AgentTaskEventAfterCommitPublisher(broker, manager); }
         @Bean AgentTaskEventWriter writer(AgentTaskEventDao dao, DataSourceTransactionManager manager, AgentTaskEventAfterCommitPublisher after) { return new AgentTaskEventWriterImpl(dao, manager, after); }
-        @Bean AgentTaskAggregationService aggregation(AgentTaskMetaDao meta, AgentIdentityService identity, AgentTaskMutationTransaction mutation, AgentTaskEventWriter writer) {
-            return new AgentTaskAggregationServiceImpl(meta, identity, mutation, writer);
+        @Bean cn.jia.agent.service.TaskAssigneeAuthorityService taskAuthority(AgentIdentityService identity) {
+            return new cn.jia.agent.service.impl.TaskAssigneeAuthorityServiceImpl(org.mockito.Mockito.mock(cn.jia.agent.dao.AgentExternalServicePolicyDao.class), identity, org.mockito.Mockito.mock(cn.jia.agent.dao.AgentTaskExecutionGrantDao.class));
+        }
+        @Bean AgentTaskAggregationService aggregation(AgentTaskMetaDao meta, cn.jia.agent.service.TaskAssigneeAuthorityService authority, AgentTaskMutationTransaction mutation, AgentTaskEventWriter writer) {
+            return new AgentTaskAggregationServiceImpl(meta, authority, mutation, writer);
         }
         @Bean AgentLegacyTaskCompatibilityService legacy(AgentTaskMetaDao meta, AgentTaskMemberDao members, AgentTaskWorkItemDao items,
                 AgentTaskAggregationService aggregation, AgentIdentityService identity, AgentTaskMutationTransaction mutation, AgentTaskEventWriter writer) {

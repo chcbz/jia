@@ -33,6 +33,7 @@ import cn.jia.agent.entity.AgentTaskAssignDTO;
 import cn.jia.agent.entity.AgentTaskAssigneeDTO;
 import cn.jia.agent.entity.AgentTaskCreateDTO;
 import cn.jia.agent.entity.AgentTaskDTO;
+import cn.jia.agent.entity.AgentTaskCountsDTO;
 import cn.jia.agent.entity.AgentTaskMemberEntity;
 import cn.jia.agent.entity.AgentTaskMetaEntity;
 import cn.jia.agent.entity.AgentTaskNoteDTO;
@@ -795,8 +796,8 @@ public class AgentServiceImpl implements AgentService {
                     .toList();
         }
         List<AgentTaskMetaEntity> legacyTasks = Optional.ofNullable(
-                agentTaskMetaDao.findByAgentId(
-                        tenantId, clientId, agentId, TASK_MEMBERSHIP_SNAPSHOT_LIMIT))
+                agentTaskMetaDao.findByAgentInOwnerScope(
+                        tenantId, clientId, ownerJiacn, agentId, TASK_MEMBERSHIP_SNAPSHOT_LIMIT))
                 .orElseGet(Collections::emptyList);
         require(legacyTasks.size() < TASK_MEMBERSHIP_SNAPSHOT_LIMIT,
                 "Legacy Agent task snapshot exceeds the safe limit");
@@ -849,6 +850,7 @@ public class AgentServiceImpl implements AgentService {
     public PageInfo<AgentTaskDTO> searchTasks(AgentTaskSearchDTO request) {
         TaskSearchScope scope = authenticatedTaskSearchScope("search");
         AgentTaskSearchDTO filters = request == null ? new AgentTaskSearchDTO() : request;
+        validateTaskPhaseFilter(filters);
         int pageNum = Math.max(Optional.ofNullable(filters.getPageNum()).orElse(1), 1);
         int pageSize = Math.min(Math.max(
                 Optional.ofNullable(filters.getPageSize()).orElse(20), 1),
@@ -859,7 +861,7 @@ public class AgentServiceImpl implements AgentService {
 
         long total = agentTaskMetaDao.countSearch(
                 scope.tenantId(), scope.clientId(), scope.ownerJiacn(),
-                filters.getStatus(), filters.getAbility(), keyword);
+                filters.getStatus(), filters.getAbility(), keyword, filters.getPhase());
         require(total >= 0, "Persisted task search total is invalid");
         // The normal bounty board must remain usable while the unpublished economy
         // preview (and its additive tables) is disabled. Only an active preview service
@@ -869,10 +871,10 @@ public class AgentServiceImpl implements AgentService {
                 : Optional.ofNullable(fundingProjectionEnabled
                         ? agentTaskMetaDao.searchPageWithFunding(
                                 scope.tenantId(), scope.clientId(), scope.ownerJiacn(),
-                                filters.getStatus(), filters.getAbility(), keyword, offset, pageSize)
+                                filters.getStatus(), filters.getAbility(), keyword, offset, pageSize, filters.getPhase())
                         : agentTaskMetaDao.searchPage(
                                 scope.tenantId(), scope.clientId(), scope.ownerJiacn(),
-                                filters.getStatus(), filters.getAbility(), keyword, offset, pageSize))
+                                filters.getStatus(), filters.getAbility(), keyword, offset, pageSize, filters.getPhase()))
                         .orElseGet(Collections::emptyList);
         require(rows.size() <= pageSize,
                 "Persisted task search page exceeds the requested bound");
@@ -906,37 +908,46 @@ public class AgentServiceImpl implements AgentService {
         return page;
     }
 
+    private static final List<String> TASK_PHASES = List.of("PENDING_ASSIGNMENT", "IN_PROGRESS",
+            "PENDING_ACCEPTANCE", "COMPLETED", "HISTORY", "UNKNOWN");
+
+    private void validateTaskPhaseFilter(AgentTaskSearchDTO filters) {
+        require(filters.getPhase() == null || TASK_PHASES.contains(filters.getPhase()), "Unknown task phase");
+        require(filters.getPhase() == null || filters.getStatus() == null,
+                "Task phase and raw status are mutually exclusive");
+    }
+
     @Override
-    public Map<String, Long> countTasksByStatus(AgentTaskSearchDTO request) {
+    public AgentTaskCountsDTO countTasksByStatus(AgentTaskSearchDTO request) {
         TaskSearchScope scope = authenticatedTaskSearchScope("count");
         AgentTaskSearchDTO filters = request == null ? new AgentTaskSearchDTO() : request;
-        Map<String, Long> counts = new LinkedHashMap<>();
-        counts.put("total", 0L);
-        List.of(AgentConstants.TASK_STATUS_OPEN, AgentConstants.TASK_STATUS_ASSIGNED,
-                AgentConstants.TASK_STATUS_RUNNING, AgentConstants.TASK_STATUS_COMPLETED,
-                AgentConstants.TASK_STATUS_FAILED, AgentConstants.TASK_STATUS_ARCHIVED)
-                .forEach(status -> counts.put(status, 0L));
-
-        List<AgentTaskStatusCountRow> rows = Optional.ofNullable(
-                agentTaskMetaDao.countSearchByStatus(
-                        scope.tenantId(), scope.clientId(), scope.ownerJiacn(),
-                        filters.getAbility(), filters.getKeyword()))
+        validateTaskPhaseFilter(filters);
+        Map<String, Long> phases = new LinkedHashMap<>();
+        TASK_PHASES.forEach(phase -> phases.put(phase, 0L));
+        Map<String, Long> raw = new LinkedHashMap<>();
+        List.of("open", "planning", "assigned", "running", "blocked", "reviewing", "completed",
+                "failed", "cancelled", "archived", "UNKNOWN").forEach(status -> raw.put(status, 0L));
+        String keyword = StringUtil.isBlank(filters.getKeyword()) ? null : filters.getKeyword().trim();
+        List<AgentTaskStatusCountRow> rows = Optional.ofNullable(agentTaskMetaDao.countSearchByStatus(
+                scope.tenantId(), scope.clientId(), scope.ownerJiacn(), filters.getAbility(), keyword))
                 .orElseGet(Collections::emptyList);
         long total = 0L;
         for (AgentTaskStatusCountRow row : rows) {
-            require(row != null
-                            && Objects.equals(scope.tenantId(), row.getTenantId())
+            require(row != null && Objects.equals(scope.tenantId(), row.getTenantId())
                             && Objects.equals(scope.clientId(), row.getClientId())
                             && Objects.equals(scope.ownerJiacn(), row.getOwnerJiacn())
-                            && isExactStoredText(row.getStatus(), 20)
+                            && isExactStoredText(row.getStatus(), 20) && TASK_PHASES.contains(row.getPhase())
                             && row.getTaskCount() != null && row.getTaskCount() >= 0,
-                    "Persisted task status count is outside the authenticated scope");
+                    "Persisted task phase count is outside the authenticated scope or invalid");
             total = Math.addExact(total, row.getTaskCount());
-            counts.put(row.getStatus(), Math.addExact(
-                    counts.getOrDefault(row.getStatus(), 0L), row.getTaskCount()));
+            raw.merge(row.getStatus(), row.getTaskCount(), Math::addExact);
+            phases.merge(row.getPhase(), row.getTaskCount(), Math::addExact);
         }
-        counts.put("total", total);
-        return counts;
+        raw.put("total", total); phases.put("total", total);
+        Map<String, String> rawStrings = new LinkedHashMap<>(), phaseStrings = new LinkedHashMap<>();
+        raw.forEach((key, count) -> rawStrings.put(key, Long.toString(count)));
+        phases.forEach((key, count) -> phaseStrings.put(key, Long.toString(count)));
+        return new AgentTaskCountsDTO(Map.copyOf(phaseStrings), Map.copyOf(rawStrings));
     }
 
     private TaskSearchScope authenticatedTaskSearchScope(String operation) {
@@ -1173,9 +1184,18 @@ public class AgentServiceImpl implements AgentService {
         return task;
     }
 
+    private cn.jia.agent.service.AgentExternalServicePolicyService externalServicePolicies;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setExternalServicePolicies(cn.jia.agent.service.AgentExternalServicePolicyService policies) {
+        this.externalServicePolicies=Objects.requireNonNull(policies);
+    }
+
     @Override
     public AgentTaskDTO getTask(String taskId) {
-        return toTaskDTO(requireTask(taskId));
+        var result=toTaskDTO(requireTask(taskId));
+        result.setAssignedTarget(externalServicePolicies.assignedTarget(
+                new cn.jia.agent.service.AgentTaskExecutionGrantService.Scope(SINGLE_TENANT_ID,resolveCurrentClientId(),resolveCurrentJiacn()),taskId));
+        return result;
     }
 
     @Override
@@ -1346,26 +1366,34 @@ public class AgentServiceImpl implements AgentService {
         BusinessScope scope = requireCurrentBusinessScope();
         String clientId = scope.callerClientId();
         String ownerJiacn = scope.ownerJiacn();
-        List<AgentRuntimeEntity> candidates = Optional.ofNullable(agentRuntimeDao
-                .findCandidateRosterByOwner(scope.tenantId().value(), clientId, ownerJiacn))
-                .orElseGet(Collections::emptyList);
-        candidates.forEach(candidate -> require(candidate != null
-                        && Objects.equals(scope.tenantId().value(), candidate.getTenantId())
-                        && Objects.equals(clientId, candidate.getClientId())
-                        && Objects.equals(ownerJiacn, candidate.getOwnerJiacn()),
-                "Persisted recommendation candidate is outside the authenticated scope"));
-        return candidates.stream()
-                .map(agent -> evaluateTaskCandidate(task, agent))
-                .sorted((left, right) -> {
-                    int eligibility = Boolean.compare(Boolean.TRUE.equals(right.getEligible()),
-                            Boolean.TRUE.equals(left.getEligible()));
-                    if (eligibility != 0) return eligibility;
-                    // Stream sorting is stable: preserve the existing roster order on score ties.
-                    // Reordering tied candidates changes legacy team/leader assignment semantics.
-                    return Integer.compare(right.getScore(), left.getScore());
-                })
-                .limit(5)
-                .toList();
+        var grantScope = new cn.jia.agent.service.AgentTaskExecutionGrantService.Scope(
+                scope.tenantId().value(), clientId, ownerJiacn);
+        List<AgentTaskRecommendationDTO> recommendations=new ArrayList<>();
+        String after=null;
+        do {
+            var page=externalServicePolicies.candidates(grantScope,taskId,after,100);
+            for(var candidate:page.items()) {
+                var runtime=agentRuntimeDao.findByAgentId(candidate.agentId());
+                if(runtime==null) continue;
+                if (!Objects.equals(runtime.getTenantId(), scope.tenantId().value())
+                        || !Objects.equals(runtime.getClientId(), clientId)) continue;
+                var recommendation=candidate.isMine()
+                        ? buildTaskRecommendation(task,runtime,clientId,ownerJiacn)
+                        : buildTaskRecommendation(task,toRuntimeDTO(runtime,clientId,ownerJiacn,RuntimeBatchEnrichment.empty()));
+                recommendation.setEligible(true); recommendation.setExclusionReasons(List.of());
+                // Candidate authority is shared; recommendation never exposes another customer's work.
+                if(!candidate.isMine()) {
+                    var agent=recommendation.getAgent();
+                    agent.setOwnerJiacn(null); agent.setEndpoint(null); agent.setCurrentTaskId(null);
+                    agent.setCurrentTaskTitle(null); agent.setLastSeenAt(null); agent.setErrorMessage(null); agent.setStats(null);
+                    var capability=recommendation.getCapability();
+                    capability.setCurrentTaskId(null); capability.setCurrentTaskTitle(null);
+                }
+                recommendations.add(recommendation);
+            }
+            after=page.nextAfterAgentId();
+        } while(after!=null);
+        return recommendations.stream().sorted(java.util.Comparator.comparing(AgentTaskRecommendationDTO::getScore).reversed()).limit(5).toList();
     }
 
     @Override
@@ -1617,7 +1645,15 @@ public class AgentServiceImpl implements AgentService {
         requireLegacyAssignmentAllowed(
                 scope.tenantId().value(), scope.callerClientId(), taskId, true, 1);
         AgentTaskDTO task = getTask(taskId);
-        List<AgentTaskRecommendationDTO> recommendations = recommendTaskAssignees(taskId);
+        // Legacy team auto-assignment remains owner-only; external single-agent delegation
+        // uses point-and-deliberate, which persists the shared execution grant.
+        List<AgentTaskRecommendationDTO> recommendations = Optional.ofNullable(agentRuntimeDao
+                .findCandidateRosterByOwner(scope.tenantId().value(),
+                        scope.callerClientId(), scope.ownerJiacn()))
+                .orElseGet(Collections::emptyList).stream().map(agent -> evaluateTaskCandidate(task, agent))
+                .sorted(java.util.Comparator.comparing(AgentTaskRecommendationDTO::getEligible).reversed()
+                        .thenComparing(java.util.Comparator.comparing(AgentTaskRecommendationDTO::getScore).reversed()))
+                .limit(5).toList();
         List<String> selectedAgentIds = selectAutoAssignAgentIds(task, recommendations);
         require(!selectedAgentIds.isEmpty(), "No available agent can accept this task");
 
@@ -2545,8 +2581,8 @@ public class AgentServiceImpl implements AgentService {
             require(isExactStoredText(clientId, 50)
                             && isExactStoredText(ownerJiacn, 50),
                     "Agent runtime task statistics scope is invalid");
-            tasks = Optional.ofNullable(agentTaskMetaDao.findByAgentId(
-                            tenantId, clientId, agentId, TASK_MEMBERSHIP_SNAPSHOT_LIMIT))
+            tasks = Optional.ofNullable(agentTaskMetaDao.findByAgentInOwnerScope(
+                            tenantId, clientId, ownerJiacn, agentId, TASK_MEMBERSHIP_SNAPSHOT_LIMIT))
                     .orElseGet(Collections::emptyList);
         }
         require(tasks.size() < TASK_MEMBERSHIP_SNAPSHOT_LIMIT,
@@ -2638,7 +2674,10 @@ public class AgentServiceImpl implements AgentService {
     private AgentTaskRecommendationDTO buildTaskRecommendation(
             AgentTaskDTO task, AgentRuntimeEntity entity,
             String clientId, String ownerJiacn) {
-        AgentRuntimeDTO agent = toRuntimeDTO(entity, clientId, ownerJiacn);
+        return buildTaskRecommendation(task, toRuntimeDTO(entity, clientId, ownerJiacn));
+    }
+
+    private AgentTaskRecommendationDTO buildTaskRecommendation(AgentTaskDTO task, AgentRuntimeDTO agent) {
         AgentCapabilityDTO capability = toCapabilityDTO(agent);
         List<String> required = Optional.ofNullable(task.getRequiredAbilities()).orElseGet(Collections::emptyList);
         List<String> matchedAbilities = matchedAbilities(required, capability.getAbilities());
@@ -2830,6 +2869,8 @@ public class AgentServiceImpl implements AgentService {
                 ? row.getTaskId() : row.getPlanTitle());
         dto.setDescription(row.getPlanDescription());
         dto.setStatus(row.getRewardStatus());
+        require(TASK_PHASES.contains(row.getPhase()), "Persisted task phase is invalid");
+        dto.setPhase(row.getPhase());
         dto.setRequiredAbilities(parseList(row.getRequiredAbilities()));
         dto.setReward(row.getReward() == null ? row.getPlanReward() : row.getReward());
         List<String> exactAgentIds = assignedAgentIds == null

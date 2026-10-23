@@ -1,5 +1,7 @@
 package cn.jia.user.api;
 
+import cn.jia.core.entity.JsonRequest;
+
 import cn.jia.core.entity.JsonRequestPage;
 import cn.jia.core.entity.JsonResult;
 import cn.jia.core.entity.JsonResultPage;
@@ -53,12 +55,11 @@ public class GroupController {
 	 */
 	@PreAuthorize("hasAuthority('group-get_users')")
 	@RequestMapping(value = "/get/users", method = RequestMethod.POST)
-	public Object findUsers(@RequestBody JsonRequestPage<GroupEntity> page) {
+	public Object findUsers(@RequestBody JsonRequest<JsonRequestPage<GroupEntity>> protocolRequest) {
+        JsonRequestPage<GroupEntity> page = protocolRequest == null ? null : protocolRequest.data();
 		GroupEntity group = Optional.ofNullable(page.getSearch()).orElse(new GroupEntity());
 		PageInfo<UserEntity> userList = userService.listByGroupId(group.getId(), page.getPageNum(), page.getPageSize(), page.getOrderBy());
-		JsonResultPage<UserEntity> result = new JsonResultPage<>(userList.getList());
-		result.setPageNum(userList.getPageNum());
-		result.setTotal(userList.getTotal());
+		JsonResultPage<UserEntity> result = JsonResultPage.page(userList.getList(), userList.getPageNum(), userList.getPageSize(), userList.getTotal());
 		return result;
 	}
 
@@ -70,12 +71,11 @@ public class GroupController {
 	 */
 	@PreAuthorize("hasAuthority('group-get_roles')")
 	@RequestMapping(value = "/get/roles", method = RequestMethod.POST)
-	public Object findRoles(@RequestBody JsonRequestPage<GroupEntity> page) {
+	public Object findRoles(@RequestBody JsonRequest<JsonRequestPage<GroupEntity>> protocolRequest) {
+        JsonRequestPage<GroupEntity> page = protocolRequest == null ? null : protocolRequest.data();
 		GroupEntity group = Optional.ofNullable(page.getSearch()).orElse(new GroupEntity());
 		PageInfo<RoleEntity> roleList = roleService.listByGroupId(group.getId(), page.getPageNum(), page.getPageSize(), page.getOrderBy());
-		JsonResultPage<RoleEntity> result = new JsonResultPage<>(roleList.getList());
-		result.setPageNum(roleList.getPageNum());
-		result.setTotal(roleList.getTotal());
+		JsonResultPage<RoleEntity> result = JsonResultPage.page(roleList.getList(), roleList.getPageNum(), roleList.getPageSize(), roleList.getTotal());
 		return result;
 	}
 
@@ -87,7 +87,8 @@ public class GroupController {
 	 */
 	@PreAuthorize("hasAuthority('group-create')")
 	@RequestMapping(value = "/create", method = RequestMethod.POST)
-	public Object create(@RequestBody GroupEntity group) {
+	public Object create(@RequestBody JsonRequest<GroupEntity> protocolRequest) {
+        GroupEntity group = protocolRequest == null ? null : protocolRequest.data();
 		groupService.create(group);
 		return JsonResult.success();
 	}
@@ -100,7 +101,8 @@ public class GroupController {
 	 */
 	@PreAuthorize("hasAuthority('group-update')")
 	@RequestMapping(value = "/update", method = RequestMethod.POST)
-	public Object update(@RequestBody GroupEntity group) {
+	public Object update(@RequestBody JsonRequest<GroupEntity> protocolRequest) {
+        GroupEntity group = protocolRequest == null ? null : protocolRequest.data();
 		groupService.update(group);
 		return JsonResult.success();
 	}
@@ -125,12 +127,11 @@ public class GroupController {
 	 */
 	@PreAuthorize("hasAuthority('group-list')")
 	@RequestMapping(value = "/list", method = RequestMethod.POST)
-	public Object list(@RequestBody JsonRequestPage<GroupEntity> page) {
+	public Object list(@RequestBody JsonRequest<JsonRequestPage<GroupEntity>> protocolRequest) {
+        JsonRequestPage<GroupEntity> page = protocolRequest == null ? null : protocolRequest.data();
 		GroupEntity example = Optional.ofNullable(page.getSearch()).orElse(new GroupEntity());
 		PageInfo<GroupEntity> groupList = groupService.findPage(example, page.getPageNum(), page.getPageSize(), page.getOrderBy());
-		JsonResultPage<GroupEntity> result = new JsonResultPage<>(groupList.getList());
-		result.setPageNum(groupList.getPageNum());
-		result.setTotal(groupList.getTotal());
+		JsonResultPage<GroupEntity> result = JsonResultPage.page(groupList.getList(), groupList.getPageNum(), groupList.getPageSize(), groupList.getTotal());
 		return result;
 	}
 	
@@ -142,7 +143,8 @@ public class GroupController {
 	 */
 	@PreAuthorize("hasAuthority('group-users_add')")
 	@RequestMapping(value = "/users/add", method = RequestMethod.POST)
-	public Object userBatchAdd(@RequestBody GroupVO group) {
+	public Object userBatchAdd(@RequestBody JsonRequest<GroupVO> protocolRequest) {
+        GroupVO group = protocolRequest == null ? null : protocolRequest.data();
 		groupService.batchAddUser(group);
 		return JsonResult.success();
 	}
@@ -155,7 +157,8 @@ public class GroupController {
 	 */
 	@PreAuthorize("hasAuthority('group-users_del')")
 	@RequestMapping(value = "/users/del", method = RequestMethod.POST)
-	public Object userBatchDel(@RequestBody GroupVO group) {
+	public Object userBatchDel(@RequestBody JsonRequest<GroupVO> protocolRequest) {
+        GroupVO group = protocolRequest == null ? null : protocolRequest.data();
 		groupService.batchDelUser(group);
 		return JsonResult.success();
 	}
@@ -168,7 +171,8 @@ public class GroupController {
 	 */
 	@PreAuthorize("hasAuthority('group-role_change')")
 	@RequestMapping(value = "/role/change", method = RequestMethod.POST)
-    public Object changeRole(@RequestBody GroupVO group) {
+    public Object changeRole(@RequestBody JsonRequest<GroupVO> protocolRequest) {
+        GroupVO group = protocolRequest == null ? null : protocolRequest.data();
         groupService.changeRole(group);
         return JsonResult.success();
     }

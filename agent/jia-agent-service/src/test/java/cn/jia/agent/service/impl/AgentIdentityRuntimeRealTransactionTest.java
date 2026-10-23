@@ -65,7 +65,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
@@ -130,7 +130,7 @@ class AgentIdentityRuntimeRealTransactionTest {
 
     @Test
     void newBindFirstRegisterAndRepeatedRegisterCompleteStableLifecycle() {
-        AgentRuntimeDTO bound = agentService.bindPersona("owner-a", "client-a", "owner-a", "wuyong");
+        AgentRuntimeDTO bound = agentService.bindPersona("0", "client-a", "owner-a", "wuyong");
         assertTrue(bound.getAgentId().matches("agt_[0-9a-f]{32}"));
         assertEquals(1, count("SELECT COUNT(*) FROM agent_persona_binding"));
         assertEquals("PROVISIONED", jdbc.queryForObject(
@@ -139,15 +139,22 @@ class AgentIdentityRuntimeRealTransactionTest {
         AgentRegisterDTO request = new AgentRegisterDTO();
         request.setAgentId(bound.getAgentId());
         request.setEndpoint("wss://agent/one");
+        // Registration cannot create/rotate credentials: an authenticated unified session
+        // must already have claimed this exact runtime. Model that persisted boundary.
+        assertThrows(AgentServiceImpl.AgentBizException.class, () -> agentService.register(request));
+        assertEquals("PROVISIONED", jdbc.queryForObject("SELECT lifecycle_status FROM agent_identity_registry", String.class));
+        jdbc.update("UPDATE agent_runtime SET tenant_id='0', runtime_installation_id='install-a', "
+                + "runtime_host_id='host-a', runtime_instance_id='runtime-a', runtime_session_generation=1, token_hash='urs1:synthetic'");
         AgentRegisterResultDTO first = agentService.register(request);
-        String firstToken = first.getToken();
+        assertNull(first.getToken());
         assertEquals(bound.getAgentId(), first.getAgentId());
         assertEquals("ACTIVE", jdbc.queryForObject(
                 "SELECT lifecycle_status FROM agent_identity_registry", String.class));
 
         AgentRegisterResultDTO repeated = agentService.register(request);
         assertEquals(bound.getAgentId(), repeated.getAgentId());
-        assertNotEquals(firstToken, repeated.getToken());
+        assertNull(repeated.getToken());
+        assertEquals("urs1:synthetic", jdbc.queryForObject("SELECT token_hash FROM agent_runtime", String.class));
         assertEquals(1, count("SELECT COUNT(*) FROM agent_runtime"));
         assertEquals(1, count("SELECT COUNT(*) FROM agent_identity_registry"));
     }
@@ -170,7 +177,7 @@ class AgentIdentityRuntimeRealTransactionTest {
                 wire(new AgentPersonaDaoImpl(), mapper(AgentPersonaMapper.class)),
                 bindingDao, identityService);
 
-        assertThrows(IllegalStateException.class, () -> failing.bindPersona("owner-a", "client-a", "owner-a", "wuyong"));
+        assertThrows(IllegalStateException.class, () -> failing.bindPersona("0", "client-a", "owner-a", "wuyong"));
         assertEquals(0, count("SELECT COUNT(*) FROM agent_persona_binding"));
         assertEquals(0, count("SELECT COUNT(*) FROM agent_identity_registry"));
         assertEquals(0, count("SELECT COUNT(*) FROM agent_runtime"));
@@ -213,7 +220,7 @@ class AgentIdentityRuntimeRealTransactionTest {
                     (jiacn, persona_code, agent_id, bound_at, status,
                      tenant_id, client_id, create_time, update_time)
                 VALUES ('owner-a', 'wuyong', 'legacy-alias', 1, 1,
-                        'owner-a', 'client-a', 1, 1)
+                        '0', 'client-a', 1, 1)
                 """);
         long bindingId = jdbc.queryForObject(
                 "SELECT id FROM agent_persona_binding", Long.class);
@@ -223,7 +230,7 @@ class AgentIdentityRuntimeRealTransactionTest {
                      client_id, owner_jiacn, tenant_id, binding_id,
                      provisioned_at, activated_at, audit_reason, create_time, update_time)
                 VALUES (?, 'OPAQUE', 'ACTIVE',
-                        'client-a', 'owner-a', 'owner-a', ?, 1, 1, 'reviewed', 1, 1)
+                        'client-a', 'owner-a', '0', ?, 1, 1, 'reviewed', 1, 1)
                 """, canonical, bindingId);
         long registryId = jdbc.queryForObject(
                 "SELECT id FROM agent_identity_registry", Long.class);
@@ -233,20 +240,20 @@ class AgentIdentityRuntimeRealTransactionTest {
                      alias_status, valid_from, client_id, owner_jiacn, tenant_id,
                      audit_reason, create_time, update_time)
                 VALUES (?, ?, 'LEGACY_AGENT_ID', 'legacy-alias',
-                        'ACTIVE', 1, 'client-a', 'owner-a', 'owner-a',
+                        'ACTIVE', 1, 'client-a', 'owner-a', '0',
                         'approved', 1, 1)
                 """, registryId, canonical);
 
         assertEquals(canonical, identityService.resolveLegacyAgentIdInScope(
-                "owner-a", "client-a", "owner-a", "legacy-alias"));
+                "0", "client-a", "owner-a", "legacy-alias"));
         assertEquals(canonical, identityService.resolveAgentIdInScope(
-                "owner-a", "client-a", "owner-a", "legacy-alias"));
+                "0", "client-a", "owner-a", "legacy-alias"));
         assertThrows(AgentServiceImpl.AgentBizException.class,
                 () -> identityService.resolveLegacyAgentIdInScope(
-                        "owner-a", "client-b", "owner-a", "legacy-alias"));
+                        "0", "client-b", "owner-a", "legacy-alias"));
         assertThrows(AgentServiceImpl.AgentBizException.class,
                 () -> identityService.resolveLegacyAgentIdInScope(
-                        "owner-a", "client-a", "owner-a", "LEGACY-ALIAS"));
+                        "0", "client-a", "owner-a", "LEGACY-ALIAS"));
     }
 
     @Test
@@ -256,7 +263,7 @@ class AgentIdentityRuntimeRealTransactionTest {
                     (jiacn, persona_code, agent_id, bound_at, status,
                      tenant_id, client_id, create_time, update_time)
                 VALUES ('owner-a', 'wuyong', 'legacy-wuyong', 1, 1,
-                        'owner-a', 'client-a', 1, 1)
+                        '0', 'client-a', 1, 1)
                 """);
         long bindingId = jdbc.queryForObject(
                 "SELECT id FROM agent_persona_binding", Long.class);
@@ -266,27 +273,27 @@ class AgentIdentityRuntimeRealTransactionTest {
                      client_id, owner_jiacn, tenant_id, binding_id,
                      provisioned_at, activated_at, audit_reason, create_time, update_time)
                 VALUES ('legacy-wuyong', 'LEGACY_CANONICAL', 'ACTIVE',
-                        'client-a', 'owner-a', 'owner-a', ?, 1, 1, 'reviewed', 1, 1)
+                        'client-a', 'owner-a', '0', ?, 1, 1, 'reviewed', 1, 1)
                 """, bindingId);
 
         assertEquals("legacy-wuyong", identityService.requireCanonicalAgentIdInScope(
-                "owner-a", "client-a", "owner-a", "legacy-wuyong"));
+                "0", "client-a", "owner-a", "legacy-wuyong"));
         assertEquals("legacy-wuyong", identityService.resolveAgentIdInScope(
-                "owner-a", "client-a", "owner-a", "legacy-wuyong"));
+                "0", "client-a", "owner-a", "legacy-wuyong"));
         assertThrows(AgentServiceImpl.AgentBizException.class,
                 () -> identityService.requireCanonicalAgentIdInScope(
-                        "owner-a", "client-a", "owner-a", "LEGACY-WUYONG"));
+                        "0", "client-a", "owner-a", "LEGACY-WUYONG"));
         assertThrows(AgentServiceImpl.AgentBizException.class,
                 () -> identityService.requireCanonicalAgentIdInScope(
-                        "owner-a", "client-a", "owner-a", "legacy-wuyong\0"));
+                        "0", "client-a", "owner-a", "legacy-wuyong\0"));
         assertThrows(AgentServiceImpl.AgentBizException.class,
                 () -> identityService.requireCanonicalAgentIdInScope(
-                        "owner-a", "client-a", "owner-a", "legacy-wuyong "));
+                        "0", "client-a", "owner-a", "legacy-wuyong "));
 
         jdbc.update("UPDATE agent_identity_registry SET lifecycle_status='SUSPENDED', suspended_at=2");
         assertThrows(AgentServiceImpl.AgentBizException.class,
                 () -> identityService.requireCanonicalAgentIdInScope(
-                        "owner-a", "client-a", "owner-a", "legacy-wuyong"));
+                        "0", "client-a", "owner-a", "legacy-wuyong"));
     }
 
     private Object bindAfterBarrier(CountDownLatch ready, CountDownLatch start) {
@@ -299,7 +306,7 @@ class AgentIdentityRuntimeRealTransactionTest {
             if (!start.await(10, TimeUnit.SECONDS)) {
                 return new AssertionError("barrier timeout");
             }
-            return agentService.bindPersona("owner-a", "client-a", "owner-a", "wuyong");
+            return agentService.bindPersona("0", "client-a", "owner-a", "wuyong");
         } catch (Throwable error) {
             return error;
         } finally {
@@ -318,6 +325,7 @@ class AgentIdentityRuntimeRealTransactionTest {
                 new AgentScopePublicationCoordinator(),
                 new AgentSceneFeatureFlags(false, false),
                 mock(AgentTaskMutationTransaction.class), mock(AgentTaskEventWriter.class));
+        raw.setExternalServicePolicies(org.mockito.Mockito.mock(cn.jia.agent.service.AgentExternalServicePolicyService.class));
         return transactionalProxy(raw, AgentService.class);
     }
 
@@ -445,6 +453,8 @@ class AgentIdentityRuntimeRealTransactionTest {
                     name VARCHAR(100) NOT NULL, avatar VARCHAR(500), owner_jiacn VARCHAR_IGNORECASE(50),
                     persona_code VARCHAR(50), persona_name VARCHAR(50), binding_id BIGINT,
                     abilities CLOB, endpoint VARCHAR(500), token_hash VARCHAR(200),
+                    runtime_installation_id VARCHAR(100), runtime_host_id VARCHAR(100),
+                    runtime_instance_id VARCHAR(100), runtime_session_generation BIGINT,
                     status VARCHAR(20) NOT NULL, current_task_id VARCHAR(100),
                     current_task_title VARCHAR(200), last_seen_at BIGINT, error_message VARCHAR(1000),
                     create_time BIGINT, update_time BIGINT,

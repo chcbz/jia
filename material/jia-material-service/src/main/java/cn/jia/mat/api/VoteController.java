@@ -1,5 +1,7 @@
 package cn.jia.mat.api;
 
+import cn.jia.core.entity.JsonRequest;
+
 import cn.jia.core.entity.JsonRequestPage;
 import cn.jia.core.entity.JsonResult;
 import cn.jia.core.entity.JsonResultPage;
@@ -45,7 +47,8 @@ public class VoteController {
 	 * @return
 	 */
 	@PostMapping(value = "/create")
-	public Object create(@RequestBody MatVoteResVO vote) {
+	public Object create(@RequestBody JsonRequest<MatVoteResVO> protocolRequest) {
+        MatVoteResVO vote = protocolRequest == null ? null : protocolRequest.data();
 		voteService.create(vote);
 		return JsonResult.success(vote);
 	}
@@ -56,7 +59,8 @@ public class VoteController {
 	 * @return
 	 */
 	@PostMapping(value = "/update")
-	public Object update(@RequestBody MatVoteEntity vote) {
+	public Object update(@RequestBody JsonRequest<MatVoteEntity> protocolRequest) {
+        MatVoteEntity vote = protocolRequest == null ? null : protocolRequest.data();
 		voteService.update(vote);
 		return JsonResult.success();
 	}
@@ -66,7 +70,7 @@ public class VoteController {
 	 * @param id
 	 * @return
 	 */
-	@GetMapping(value = "/delete")
+	@org.springframework.web.bind.annotation.DeleteMapping(value = "/delete")
 	public Object delete(@RequestParam(name = "id") Long id) {
 		voteService.delete(id);
 		return JsonResult.success();
@@ -77,12 +81,11 @@ public class VoteController {
 	 * @return
 	 */
 	@PostMapping(value = "/list")
-	public Object list(@RequestBody JsonRequestPage<MatVoteReqVO> page) {
+	public Object list(@RequestBody JsonRequest<JsonRequestPage<MatVoteReqVO>> protocolRequest) {
+        JsonRequestPage<MatVoteReqVO> page = protocolRequest == null ? null : protocolRequest.data();
 		MatVoteReqVO example = Optional.ofNullable(page.getSearch()).orElse(new MatVoteReqVO());
 		PageInfo<MatVoteEntity> voteList = voteService.list(page.getPageNum(), page.getPageSize(), example, page.getOrderBy());
-		JsonResultPage<MatVoteEntity> result = new JsonResultPage<>(voteList.getList());
-		result.setPageNum(voteList.getPageNum());
-		result.setTotal(voteList.getTotal());
+		JsonResultPage<MatVoteEntity> result = JsonResultPage.page(voteList.getList(), voteList.getPageNum(), voteList.getPageSize(), voteList.getTotal());
 		return result;
 	}
 	
@@ -92,7 +95,8 @@ public class VoteController {
 	 * @return
 	 */
 	@PostMapping(value = "/get/ticks")
-	public Object findTicks(@RequestBody MatVoteTickEntity voteTick) {
+	public Object findTicks(@RequestBody JsonRequest<MatVoteTickEntity> protocolRequest) {
+        MatVoteTickEntity voteTick = protocolRequest == null ? null : protocolRequest.data();
 		List<MatVoteTickEntity> voteTickList = voteService.findTickByJiacn(voteTick);
 		return JsonResult.success(voteTickList);
 	}
@@ -115,7 +119,8 @@ public class VoteController {
 	 * @throws Exception 异常信息
 	 */
 	@PostMapping(value = "/tick")
-	public Object tick(@RequestBody MatVoteTickEntity voteTick) throws Exception {
+	public Object tick(@RequestBody JsonRequest<MatVoteTickEntity> protocolRequest) throws Exception {
+        MatVoteTickEntity voteTick = protocolRequest == null ? null : protocolRequest.data();
 		boolean tick = voteService.tick(voteTick);
 //		if(tick) {
 //			VoteQuestion voteQuestion = voteService.findQuestion(voteTick.getQuestionId());

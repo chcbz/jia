@@ -21,7 +21,8 @@ public final class AgentRuntimeAuthenticationFilter extends OncePerRequestFilter
         // WS and Runtime ACK/package endpoints are exclusive native lanes, even when legacy
         // API-key headers are presented: they must fail here, never fall through to old auth.
         // Elsewhere X-Agent-Id alone grants no Runtime authority; ambiguous duplicates fail closed.
-        return request.getRequestURI().matches(request.getContextPath() + "/internal/agent/tasks/[^/]+/work-items/[^/]+/reassignments/[^/]+/commands/[^/]+/(?:result-commit|lease)")
+        return request.getRequestURI().matches(request.getContextPath()+"/internal/agent/chat/requests/[^/]+/turns/[^/]+/materials/inputs/[^/]+/content")
+                || request.getRequestURI().matches(request.getContextPath() + "/internal/agent/tasks/[^/]+/work-items/[^/]+/reassignments/[^/]+/commands/[^/]+/(?:result-commit|lease)")
                 || request.getRequestURI().matches(request.getContextPath() + "/internal/agent/skill-installations/[^/]+/package")
                 || request.getRequestURI().equals(request.getContextPath() + "/ws/agent/channel")
                 || request.getRequestURI().startsWith(request.getContextPath() + "/agent/runtime/v1/commands/")
@@ -46,7 +47,7 @@ public final class AgentRuntimeAuthenticationFilter extends OncePerRequestFilter
                 || "GET".equals(request.getMethod()) && (path.equals("/internal/agent/tasks/conversation-executions/commands")
                 || path.equals("/internal/agent/tasks/conversation-executions/controlled-image-v3-commands"))
                 || "POST".equals(request.getMethod()) && path.matches("/internal/agent/tasks/" + id
-                + "/runs/" + id + "/conversation/(?:inputs(?:-v3|/" + id + "/content)?|lease(?:/renew)?|provider-start(?:-controlled-image(?:-v3)?)?|failure|(?:output|result)-commits/" + id
+                + "/runs/" + id + "/conversation/(?:inputs(?:-v3|/" + id + "/content)?|lease(?:/renew)?|provider-start(?:-controlled-image(?:-v3)?)?|failure|resume|effects/" + id + "/(?:start|result)|(?:output|result)-commits/" + id
                 + "|outputs/" + id + "/content)")
                 || "GET".equals(request.getMethod()) && path.equals("/internal/agent/tasks/workspace-executions/commands")
                 || "GET".equals(request.getMethod()) && path.matches("/agent/tasks/" + id + "/context-pack")
@@ -55,7 +56,7 @@ public final class AgentRuntimeAuthenticationFilter extends OncePerRequestFilter
                 || "GET".equals(request.getMethod()) && path.matches("/internal/agent/tasks/" + id
                 + "/runs/" + id + "/inputs(?:/" + id + "/content)?")
                 || "GET".equals(request.getMethod()) && path.matches("/internal/agent/chat/requests/" + id
-                + "/turns/" + id + "/inspection/inputs/" + id + "/content")
+                + "/turns/" + id + "/(?:inspection|materials)/inputs/" + id + "/content")
                 || "POST".equals(request.getMethod()) && path.matches("/internal/agent/tasks/" + id
                 + "/runs/" + id + "/outputs/" + id + "/content")
                 || "POST".equals(request.getMethod()) && path.matches("/internal/agent/tasks/" + id

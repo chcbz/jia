@@ -14,12 +14,14 @@ public class EconomyConfiguration {
         return new EconomyPreviewGate(properties);
     }
 
+    @org.springframework.context.annotation.Profile("schema-maintenance")
     @Bean
     @ConditionalOnProperty(prefix = "economy.preview", name = "enabled", havingValue = "true")
     public EconomySchemaInitializer economySchemaInitializer(JdbcTemplate jdbcTemplate) {
         return new EconomySchemaInitializer(jdbcTemplate);
     }
 
+    @org.springframework.context.annotation.Profile("schema-maintenance")
     @Bean
     @ConditionalOnProperty(prefix = "economy.hosting-rent", name = "schema-enabled", havingValue = "true")
     public EconomyHostingRentSchemaInitializer economyHostingRentSchemaInitializer(JdbcTemplate jdbcTemplate) {

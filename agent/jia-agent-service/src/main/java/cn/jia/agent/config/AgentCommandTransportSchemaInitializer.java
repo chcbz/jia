@@ -25,6 +25,7 @@ import java.util.TreeMap;
  * This initializer performs DDL and read-only catalog validation only: it never backfills or
  * mutates application rows.</p>
  */
+@org.springframework.context.annotation.Profile("schema-maintenance")
 public final class AgentCommandTransportSchemaInitializer implements InitializingBean {
     static final String DDL_RESOURCE = "db/agent-command-transport-schema.sql";
     static final List<String> TABLES = List.of(

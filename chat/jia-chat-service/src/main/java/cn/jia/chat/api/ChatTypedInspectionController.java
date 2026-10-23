@@ -53,13 +53,7 @@ public final class ChatTypedInspectionController {
     public ResponseEntity<JsonResult<ChatTypedInspectionWire.Accepted>> admit(
             @PathVariable String conversationId, @RequestBody(required = false) String raw,
             Authentication authentication, HttpServletRequest request) {
-        if (request.getQueryString() != null) throw invalid();
-        String key = singleHeader(request, IDEMPOTENCY_HEADER);
-        Scope scope = scope(authentication);
-        ChatTypedInspectionWire.Accepted value = admissions.admit(scope.tenantId(), scope.sender(),
-                conversationId, key, ChatTypedInspectionWire.parse(raw));
-        return ResponseEntity.status(HttpStatus.ACCEPTED).cacheControl(CacheControl.noStore())
-                .header("X-Content-Type-Options", "nosniff").body(JsonResult.success(value));
+        return RetiredSkillWriteEndpoint.response();
     }
 
     @GetMapping("/{conversationId}/interactions/inspection/request")
@@ -94,7 +88,7 @@ public final class ChatTypedInspectionController {
         Object value = inspection.read(storeScope, requestId,
                 request.turns().getFirst().turnId(), decimal(request.requestRevision()));
         return ResponseEntity.ok().cacheControl(CacheControl.noStore())
-                .header("X-Content-Type-Options", "nosniff").body(JsonResult.success(value));
+                .header("X-Content-Type-Options", "nosniff").body(JsonResult.success(ChatTypedOutcomeWire.project(value, "INSPECT")));
     }
 
     @ExceptionHandler(ChatDeliberationException.class)
@@ -112,7 +106,7 @@ public final class ChatTypedInspectionController {
         JsonResult<Void> result = JsonResult.failure("TYPED_INSPECTION_" + failure.reason(),
                 status == HttpStatus.NOT_FOUND
                         ? "Typed inspection is unavailable" : failure.getMessage());
-        result.setStatus(status.value());
+
         return ResponseEntity.status(status).cacheControl(CacheControl.noStore())
                 .header("X-Content-Type-Options", "nosniff").body(result);
     }
@@ -121,7 +115,7 @@ public final class ChatTypedInspectionController {
     public ResponseEntity<JsonResult<Void>> runtime(RuntimeException failure) {
         JsonResult<Void> result = JsonResult.failure("TYPED_INSPECTION_UNAVAILABLE",
                 "Typed inspection is temporarily unavailable");
-        result.setStatus(503);
+
         return ResponseEntity.status(503).cacheControl(CacheControl.noStore())
                 .header("X-Content-Type-Options", "nosniff").body(result);
     }

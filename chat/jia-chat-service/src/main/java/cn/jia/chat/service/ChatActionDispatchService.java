@@ -20,7 +20,10 @@ import java.util.Objects;
 @Service
 public class ChatActionDispatchService {
     /** Existing execution adapter must persist its own stable child under the caller's transaction. */
-    public interface Executor { String admit(ChatActionFinalService.BoundAction action); }
+    public interface Executor {
+        default void prepare(ChatActionFinalService.BoundAction action) { }
+        String admit(ChatActionFinalService.BoundAction action);
+    }
 
     /** Confirmed stale immutable request, not a transient DB/lease/runtime failure. */
     public static final class Rejected extends ChatDeliberationException {
@@ -50,14 +53,25 @@ public class ChatActionDispatchService {
         this.dao=dao; this.outbox=outbox; this.executors=executors;
     }
 
-    @Transactional(rollbackFor = Exception.class)
+    private ChatTypedReviewContextService reviewContexts;
+    @org.springframework.beans.factory.annotation.Autowired(required=false)
+    public void setReviewContexts(ChatTypedReviewContextService value) { reviewContexts=Objects.requireNonNull(value); }
+
+    @Transactional(propagation=org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
     public void consume(ChatDeliberationOutboxService.Claim claim) {
         var initial = finals.loadAction(claim.row());
         var parent = initial.outcome(); var scope = parent.scope();
+        if (reviewContexts != null) reviewContexts.requireActionAllowed(initial);
+        var executor=executors.getIfUnique();
+        if(executor==null)throw new IllegalStateException("Skill execution adapter is unavailable");
+        // No root/conversation/outbox lock across immutable package I/O. Replay skips preparation entirely.
+        if(typed.findAdmissionByKey(scope,ChatActionFinalValidator.actionEventId(initial.validated()),false)==null)
+            executor.prepare(initial);
         tasks.executeWithLockedTaskRootInOwnerScope(scope.tenantId(), scope.clientId(), scope.ownerJiacn(), parent.taskId(), root -> {
             var binding = bindings.lock(new ChatBountyBindingStore.Scope(scope.tenantId(), scope.ownerJiacn(), scope.clientId()), parent.taskId());
             String target = (String) initial.validated().binding().get("targetAgentId");
-            if (root == null || root.getTaskVersion() == null || root.getTaskVersion() < parent.assignmentRevision()
+            if (root == null || root.getRewardStatus() == null || !java.util.Set.of("planning","assigned","running","blocked").contains(root.getRewardStatus())
+                    || root.getTaskVersion() == null || root.getTaskVersion() < parent.assignmentRevision()
                     || !target.equals(root.getAssignedAgentId()) || binding == null || binding.conversationId() == null
                     || !scope.conversationId().equals(Long.toString(binding.conversationId()))
                     || parent.assignmentRevision() != binding.assignmentRevision()) throw new Rejected();
@@ -74,15 +88,11 @@ public class ChatActionDispatchService {
             var locked = outbox.requireActiveClaim(claim, System.currentTimeMillis());
             var action = finals.loadAction(locked);
             if (!initial.equals(action)) throw conflict("Action final changed");
+            if (reviewContexts != null) reviewContexts.requireActionAllowed(action);
             var capability = action.validated().dispatchFacts().availableActions().stream().filter(c -> c.actionId().equals(
                     action.validated().interactionOutcome().action().actionId())).findFirst().orElseThrow();
-            if ("INSPECT_INPUTS".equals(capability.kind())) {
-                inspect(action, target);
-            } else {
-                var executor = executors.getIfUnique();
-                if (executor == null) throw new IllegalStateException("Action execution adapter is unavailable");
-                executor.admit(action);
-            }
+            if(!"EXECUTE".equals(capability.kind())||!"EXECUTE_SKILL".equals(capability.operation()))throw new Rejected();
+            executor.admit(action);
             if (!outbox.sent(claim, System.currentTimeMillis())) throw conflict("Action outbox lease changed");
             return null;
         });
@@ -111,65 +121,6 @@ public class ChatActionDispatchService {
                 throw conflict("Rejected action lease changed");
             return null;
         });
-    }
-
-    private void inspect(ChatActionFinalService.BoundAction action, String target) {
-        var parent=action.outcome(); var scope=parent.scope();
-        String eventId=ChatActionFinalValidator.actionEventId(action.validated());
-        String requestId=ChatDeliberationService.inspectionContinuationRequestId(eventId);
-        String body=ChatDeliberationService.digest(Map.of("schemaVersion",3,"actionRequestId",eventId,
-                "parentOutcomeId",parent.outcomeId(),"parentFinalDigest",parent.finalDigest()));
-        var prior=typed.findAdmissionByKey(scope,eventId,true);
-        if (prior != null) {
-            if (!scope.equals(prior.scope()) || !eventId.equals(prior.idempotencyKey()) || !requestId.equals(prior.requestId())
-                    || !body.equals(prior.bodyDigest()) || !parent.outcomeId().equals(prior.parentOutcomeId())
-                    || !parent.taskId().equals(prior.taskId()) || prior.assignmentRevision()!=parent.assignmentRevision()
-                    || prior.userMessageId()!=action.admission().userMessageId() || prior.requestRevision()!=1
-                    || !"ADMITTED".equals(prior.state()) || prior.stateVersion()!=0 || !"DISCUSSION".equals(prior.intent()))
-                throw conflict("Action child identity changed");
-            ChatTypedInspectionContextService.parseEnvelope(prior.sourceCatalogJson());
-            var child=dao.findRequest(scope.tenantId(),scope.ownerJiacn(),scope.clientId(),requestId);
-            if (child==null || !Objects.equals(prior.userMessageId(),child.getUserMessageId())
-                    || !scope.conversationId().equals(child.getConversationId())
-                    || !Objects.equals(scope.conversationGeneration(),child.getConversationGeneration())
-                    || !Objects.equals(1L,child.getRequestRevision())) throw conflict("Action child is incomplete");
-            return; // Recovery only. Do not rebuild a live manifest or repeat any dispatch/provider call.
-        }
-        var context=inspections.resolve(new ChatTypedInspectionContextService.Scope(scope.tenantId(),scope.ownerJiacn(),scope.clientId(),
-                scope.conversationId(),scope.conversationGeneration(),parent.taskId(),parent.assignmentRevision(),requestId,1,target), selectors(action));
-        var chatScope=new JuyitingConversationScope("bounty","task:"+parent.taskId(),parent.taskId(),target,List.of(target),List.of(target));
-        var admitted=deliberation.admitInspectionContinuation(action,context,chatScope);
-        var turns=admitted.dispatches().stream().map(ChatDeliberationService.Dispatch::turnId).toList();
-        if (turns.size()!=1 || !requestId.equals(admitted.requestId())
-                || !Long.toString(action.admission().userMessageId()).equals(admitted.userMessageId())) throw conflict("Action child differs");
-        long now=System.currentTimeMillis();
-        var row=new ChatTypedDeliberationStore.Admission("action-admit_"+eventId.substring(4),scope,eventId,
-                ChatDeliberationService.digest(Map.of("bodyDigest",body,"typedInspection",context.typedInspection())),body,
-                "DISCUSSION",parent.taskId(),parent.assignmentRevision(),parent.outcomeId(),null,requestId,1,
-                action.admission().userMessageId(),CanonicalContextJson.write(turns),context.admissionEnvelopeJson(),"ADMITTED",0,
-                dao.eventHighWatermark(scope.tenantId(),scope.ownerJiacn(),scope.clientId(),scope.conversationId(),scope.conversationGeneration()),now);
-        if (typed.insertAdmission(row)!=1) throw new ChatDeliberationException(ChatDeliberationException.Reason.PERSISTENCE_ERROR,
-                "Unable to persist action child admission");
-        deliberation.persistActionStarted(action, requestId, "INSPECT", now);
-    }
-
-    @SuppressWarnings("unchecked")
-    private static List<ChatTypedInspectionWire.SourceSelector> selectors(ChatActionFinalService.BoundAction action) {
-        var catalog="CHAT".equals(action.validated().binding().get("route"))
-                ? ChatTypedDeliberationContextService.parseCatalog(action.outcome().sourceCatalogJson())
-                : ChatTypedInspectionContextService.sources(action.outcome().sourceCatalogJson());
-        var byId=new LinkedHashMap<String,Map<String,Object>>();
-        for (var entry:catalog) byId.put((String)entry.get("sourceRefId"),entry);
-        var selected=new ArrayList<ChatTypedInspectionWire.SourceSelector>();
-        for (String id:action.validated().interactionOutcome().action().sourceRefIds()) {
-            var entry=byId.get(id);
-            if (entry==null || !(entry.get("selector") instanceof Map<?,?>)) throw conflict("Action source is unavailable");
-            var m=(Map<String,Object>)entry.get("selector");
-            selected.add(ChatTypedInspectionWire.validateSelector(new ChatTypedInspectionWire.SourceSelector(
-                    (String)m.get("kind"),(String)m.get("fileId"),(String)m.get("version"),(String)m.get("purpose"),
-                    (String)m.get("assetId"),(String)m.get("assetRevision"))));
-        }
-        return List.copyOf(selected);
     }
 
     private static ChatDeliberationException conflict(String message) {

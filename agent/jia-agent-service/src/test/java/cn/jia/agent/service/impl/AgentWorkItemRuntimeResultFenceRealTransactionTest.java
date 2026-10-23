@@ -93,7 +93,7 @@ class AgentWorkItemRuntimeResultFenceRealTransactionTest {
         var agents=mock(AgentService.class);
         when(agents.requireApiKeyOwnedAgentForUpdate(anyString(),anyString(),anyString())).thenAnswer(inv->{var row=new AgentRuntimeDTO();row.setAgentId(inv.getArgument(2));row.setStatus("online");return row;});
         // Explicit identity authority on the raw B04 service (proxy construction must not hide its mandatory setter).
-        var rawLease=new AgentWorkItemLeaseServiceImpl(memberDao,workDao,roots,writer,()->NOW,()->TOKEN,900_000);rawLease.setIdentityService(identities);leases=proxy(rawLease,AgentWorkItemLeaseService.class);
+        var rawLease=new AgentWorkItemLeaseServiceImpl(memberDao,workDao,roots,writer,()->NOW,()->TOKEN,900_000);rawLease.setAssigneeAuthority(new TaskAssigneeAuthorityServiceImpl(org.mockito.Mockito.mock(cn.jia.agent.dao.AgentExternalServicePolicyDao.class), identities, org.mockito.Mockito.mock(cn.jia.agent.dao.AgentTaskExecutionGrantDao.class)));leases=proxy(rawLease,AgentWorkItemLeaseService.class);
         var transport=new AgentCommandTransportWriter() {
             @Override public AgentCommandTransportWriteResult write(AgentCommandDraft draft){throw new UnsupportedOperationException();}
             @Override public AgentCommandTransportWriteResult writeAuthorizedHall(AgentCommandDraft draft,String actor){
@@ -145,20 +145,20 @@ class AgentWorkItemRuntimeResultFenceRealTransactionTest {
         assertEquals("aad972c33165829e10aeb40674b0cb0df32a6935d4a3d3f77e5fc121761ba626",command().getArtifact().getContentHash());
         assertEquals(16L,command().getArtifact().getContentByteLength());
         var result=mvc.perform(post(path).principal(principal).contentType("application/json").content(body())).andExpect(status().isOk()).andReturn();
-        var wire=json.readTree(result.getResponse().getContentAsString());assertEquals("submitted",wire.path("status").asText());assertEquals(7L,wire.path("workItemVersion").longValue());assertFalse(wire.has("data"));
+        var envelope=json.readTree(result.getResponse().getContentAsString());assertEquals("E0",envelope.path("code").asText());assertEquals(1,envelope.path("protocolVersion").asInt());var wire=envelope.path("data");assertEquals("submitted",wire.path("status").asText());assertEquals(7L,wire.path("workItemVersion").longValue());assertTrue(wire.isObject());
         assertEquals(1,count("agent_task_artifact"));assertEquals(4,count("agent_task_event"));assertEquals(1,storage.stores.get());
         assertNull(jdbc.queryForObject("SELECT lease_token FROM agent_task_work_item",String.class));assertNull(jdbc.queryForObject("SELECT lease_until FROM agent_task_work_item",Long.class));
         var saved=jdbc.queryForObject("SELECT event_json FROM agent_task_event WHERE event_type='WORK_ITEM_SUBMITTED'",String.class);
         assertFalse(saved.contains(TOKEN));assertTrue(saved.contains(receipt.getCommandId()));assertTrue(saved.contains(receipt.getReassignmentId()));
         var replay=mvc.perform(post(path).principal(principal).contentType("application/json").content(body())).andExpect(status().isOk()).andReturn();
-        assertEquals(wire,json.readTree(replay.getResponse().getContentAsString()));assertEquals(1,storage.stores.get());assertEquals(4,count("agent_task_event"));assertEquals(1,count("agent_task_artifact"));
+        assertEquals(wire,json.readTree(replay.getResponse().getContentAsString()).path("data"));assertEquals(1,storage.stores.get());assertEquals(4,count("agent_task_event"));assertEquals(1,count("agent_task_artifact"));
         var read=controller(freshResults()).perform(get(path).principal(principal)).andExpect(status().isOk()).andReturn();
-        assertEquals(wire,json.readTree(read.getResponse().getContentAsString()));assertEquals(1,storage.stores.get());
+        assertEquals(wire,json.readTree(read.getResponse().getContentAsString()).path("data"));assertEquals(1,storage.stores.get());
         assertEquals("installation",locks.get(0));assertEquals("runtime",locks.get(1));assertEquals("task-root",locks.get(2));
     }
     @Test void originalLeaseReadbackIsReadonlyAndOldPostVersionStillConflicts() throws Exception {
         int events=count("agent_task_event");String leasePath=path.replace("/result-commit","/lease");
-        mvc.perform(get(leasePath).principal(principal)).andExpect(status().isOk()).andExpect(jsonPath("$.workItemVersion").value(6)).andExpect(jsonPath("$.leaseToken").value(TOKEN));
+        mvc.perform(get(leasePath).principal(principal)).andExpect(status().isOk()).andExpect(jsonPath("$.data.workItemVersion").value(6)).andExpect(jsonPath("$.data.leaseToken").value(TOKEN));
         assertEquals(6L,jdbc.queryForObject("SELECT version FROM agent_task_work_item",Long.class));assertEquals(events,count("agent_task_event"));assertEquals(0,storage.stores.get());
         var old=new AgentWorkItemReassignmentLeaseRequestDTO();old.setCommandId(receipt.getCommandId());old.setExpectedWorkItemVersion(5L);
         var failure=assertThrows(cn.jia.agent.exception.AgentWorkItemReassignmentException.class,()->reassignments.readLease(TENANT,CLIENT,OWNER,TARGET,TASK,WORK,receipt.getReassignmentId(),old));

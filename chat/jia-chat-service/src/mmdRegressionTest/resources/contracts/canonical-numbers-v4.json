@@ -1,0 +1,86 @@
+{
+  "schemaVersion": 1,
+  "contract": "finite IEEE754 safe-integer ECMAScript JSON.stringify, lexical UTF16 keys and array order; ids/money strings",
+  "cases": [
+    {
+      "value": 0,
+      "canonical": "0",
+      "sha256": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9"
+    },
+    {
+      "value": 0,
+      "canonical": "0",
+      "sha256": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9"
+    },
+    {
+      "value": 1,
+      "canonical": "1",
+      "sha256": "6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b"
+    },
+    {
+      "value": 1,
+      "canonical": "1",
+      "sha256": "6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b"
+    },
+    {
+      "value": 1.5,
+      "canonical": "1.5",
+      "sha256": "9f29a130438b81170b92a42650f9a94291ecad60bd47af2a3886e75f7f728725"
+    },
+    {
+      "value": 0.1,
+      "canonical": "0.1",
+      "sha256": "14be4b45f18e0d8c67b4f719b5144eee88497e413709d11d85b096d8e2346310"
+    },
+    {
+      "value": 1e-7,
+      "canonical": "1e-7",
+      "sha256": "5b33e02f2c5103a05d32f6ba9cb058294452bfbf393967f68bb30c1bdcbbab22"
+    },
+    {
+      "value": 0.000001,
+      "canonical": "0.000001",
+      "sha256": "159fb29a827ad04b260aa6c8ab6d8637f8f2b38af5c4f3cb49d6a21205e040f8"
+    },
+    {
+      "value": 1e-27,
+      "canonical": "1e-27",
+      "sha256": "26baf4828d488c0744642cf36f23d01ce4b66afd61a9a689d96e1c3f9015a3d9"
+    },
+    {
+      "value": 333333333.3333333,
+      "canonical": "333333333.3333333",
+      "sha256": "6bd9be1c141028789cc35db62f1b43e80d5d4ee24d6d542e775deb16799ff4c7"
+    },
+    {
+      "value": 9007199254740991,
+      "canonical": "9007199254740991",
+      "sha256": "f40b423c2dd95ff2b2f027e22208f438cf7242862e5e746860e697308c9add26"
+    },
+    {
+      "value": 5e-324,
+      "canonical": "5e-324",
+      "sha256": "c46e7ca1be4c8734f373a56530787288fa2058d73d07855e9247e949f811a42a"
+    },
+    {
+      "value": 1e-323,
+      "canonical": "1e-323",
+      "sha256": "5aab72c34bfe5b10611193bfa45a17e1d1e2c3a3666f5958649bbadd03bd227b"
+    },
+    {
+      "value": 2.2250738585072014e-308,
+      "canonical": "2.2250738585072014e-308",
+      "sha256": "8d51a73768cb59d15302f6b0a4c7147a04b0cce9df743b5bf50e31ab87b2d807"
+    },
+    {
+      "value": 0.000001,
+      "canonical": "0.000001",
+      "sha256": "159fb29a827ad04b260aa6c8ab6d8637f8f2b38af5c4f3cb49d6a21205e040f8"
+    },
+    {
+      "value": -1.2345678901234567,
+      "canonical": "-1.2345678901234567",
+      "sha256": "89d3352d7ab9a1ff008377b876ad4a0ef490d036e372a5d906b0110cbcaa73c6"
+    }
+  ]
+}

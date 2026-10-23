@@ -13,7 +13,7 @@ import cn.jia.agent.entity.AgentWorkItemLeaseScanDTO;
 import cn.jia.agent.exception.AgentTaskCollaborationException;
 import cn.jia.agent.exception.AgentTaskStateException;
 import cn.jia.agent.exception.AgentTaskStateException.Reason;
-import cn.jia.agent.service.AgentIdentityService;
+import cn.jia.agent.service.TaskAssigneeAuthorityService;
 import cn.jia.agent.service.AgentTaskEventWriter;
 import cn.jia.agent.service.AgentTaskMutationTransaction;
 import cn.jia.agent.service.AgentWorkItemLeaseService;
@@ -46,11 +46,11 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
     private final LongSupplier clock;
     private final Supplier<String> tokenGenerator;
     private final long maxLeaseDurationMillis;
-    private AgentIdentityService identityService;
+    private TaskAssigneeAuthorityService assigneeAuthority;
 
     @org.springframework.beans.factory.annotation.Autowired
-    public void setIdentityService(AgentIdentityService identities) {
-        this.identityService = Objects.requireNonNull(identities);
+    public void setAssigneeAuthority(TaskAssigneeAuthorityService identities) {
+        this.assigneeAuthority = Objects.requireNonNull(identities);
     }
     private cn.jia.agent.service.AgentHostingWorkAdmission hostingWorkAdmission = (tenant, client, agent) -> { };
 
@@ -123,7 +123,7 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
         return withLockedTaskRoot(tenantId, clientId, ownerJiacn, taskId, root -> {
             long now = now();
             requireActiveMember(tenantId, clientId, ownerJiacn, taskId, required.agentId());
-            requireActiveCanonicalAgent(tenantId, clientId, ownerJiacn, required.agentId());
+            requireActiveCanonicalAgent(tenantId, clientId, ownerJiacn, taskId, required.agentId());
             AgentTaskWorkItemEntity current = requireWorkItem(tenantId, clientId, ownerJiacn, taskId, workItemId);
             requireCompleteSnapshot(tenantId, clientId, ownerJiacn, current);
             requireVersion(current.getVersion(), required.expectedVersion());
@@ -406,7 +406,7 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
         requireAgentReference(required.agentId());
         long now = now();
         requireActiveMember(tenantId, clientId, ownerJiacn, taskId, required.agentId());
-        requireActiveCanonicalAgent(tenantId, clientId, ownerJiacn, required.agentId());
+        requireActiveCanonicalAgent(tenantId, clientId, ownerJiacn, taskId, required.agentId());
         AgentTaskWorkItemEntity current = requireWorkItem(
                 tenantId, clientId, ownerJiacn, taskId, workItemId);
         requireCompleteSnapshot(tenantId, clientId, ownerJiacn, current);
@@ -496,7 +496,7 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
             throw invalidPersisted("Persisted assignee is blank");
         }
         if (current.getAssigneeAgentId() != null) {
-            requirePersistedAgentReference(tenantId, clientId, ownerJiacn, current.getAssigneeAgentId());
+            requirePersistedAgentReference(tenantId, clientId, ownerJiacn, current.getTaskId(), current.getAssigneeAgentId());
         }
     }
 
@@ -714,16 +714,16 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
     }
 
     private void requireActiveCanonicalAgent(
-            String tenantId, String clientId, String ownerJiacn, String agentId) {
-        if (identityService == null) {
+            String tenantId, String clientId, String ownerJiacn, String taskId, String agentId) {
+        if (assigneeAuthority == null) {
             throw invalidPersisted("Canonical identity authority is unavailable");
         }
         final String canonical;
         try {
             // Direct ACTIVE registry + binding, never alias resolution. E05 already holds the
             // receipt-wide identity locks; this read check also works for read-only result validation.
-            canonical = identityService.requireCanonicalAgentIdInScope(
-                    tenantId, clientId, ownerJiacn, agentId);
+            canonical = assigneeAuthority.requireTaskAgent(
+                    tenantId, clientId, ownerJiacn, taskId, agentId, true);
         } catch (RuntimeException denied) {
             throw notFound();
         }
@@ -731,16 +731,16 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
     }
 
     private void requirePersistedAgentReference(
-            String tenantId, String clientId, String ownerJiacn, String agentId) {
+            String tenantId, String clientId, String ownerJiacn, String taskId, String agentId) {
         // History must be genuinely canonical, but system expiry must also reclaim revoked
         // Agents' leases. Live operations separately require ACTIVE identity and binding.
-        if (identityService == null || agentId == null || !AGENT_REFERENCE.matcher(agentId).matches()) {
+        if (assigneeAuthority == null || agentId == null || !AGENT_REFERENCE.matcher(agentId).matches()) {
             throw invalidPersisted("Persisted assignee Agent identity is invalid");
         }
         final String canonical;
         try {
-            canonical = identityService.requirePersistedCanonicalAgentIdInScope(
-                    tenantId, clientId, ownerJiacn, agentId);
+            canonical = assigneeAuthority.requireTaskAgent(
+                    tenantId, clientId, ownerJiacn, taskId, agentId, false);
         } catch (RuntimeException denied) {
             throw invalidPersisted("Persisted assignee is not a canonical identity in this scope");
         }

@@ -27,34 +27,34 @@ public class HallSubmissionController {
     }
 
     @GetMapping(value = "/submissions/request", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<HallRequestDraftService.SubmissionReceipt> submission(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<HallDraftWire.SubmissionReceipt>> submission(
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             HttpServletRequest request, Authentication authentication) {
         HallRequestDraftController.requireNoQuery(request);
-        return HallRequestDraftController.ok(service.getSubmissionByIdempotencyKey(
-                HallRequestDraftController.scope(authentication), idempotencyKey));
+        return cn.jia.core.config.ApiJsonResponses.success(HallRequestDraftController.ok(HallDraftWire.from(service.getSubmissionByIdempotencyKey(
+                HallRequestDraftController.scope(authentication), idempotencyKey))));
     }
 
     @GetMapping(value = "/cases/{caseId}", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<HallRequestDraftService.CaseView> caseView(@PathVariable String caseId,
+    public ResponseEntity<cn.jia.core.entity.JsonResult<HallDraftWire.CaseView>> caseView(@PathVariable String caseId,
             HttpServletRequest request, Authentication authentication) {
         HallRequestDraftController.requireNoQuery(request);
-        return HallRequestDraftController.ok(service.getCase(
-                HallRequestDraftController.scope(authentication), caseId));
+        return cn.jia.core.config.ApiJsonResponses.success(HallRequestDraftController.ok(HallDraftWire.from(service.getCase(
+                HallRequestDraftController.scope(authentication), caseId))));
     }
 
     @GetMapping(value = "/executions/{executionId}/results",
             produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<HallRequestDraftService.ExecutionResultsView> executionResults(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<HallDraftWire.ExecutionResultsView>> executionResults(
             @PathVariable String executionId, HttpServletRequest request,
             Authentication authentication) {
         HallRequestDraftController.requireNoQuery(request);
-        return HallRequestDraftController.ok(service.getExecutionResults(
-                HallRequestDraftController.scope(authentication), executionId));
+        return cn.jia.core.config.ApiJsonResponses.success(HallRequestDraftController.ok(HallDraftWire.from(service.getExecutionResults(
+                HallRequestDraftController.scope(authentication), executionId))));
     }
 
     @ExceptionHandler(HallRequestDraftController.AuthenticationFailure.class)
-    public ResponseEntity<HallRequestDraftController.ErrorBody> authentication(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<HallRequestDraftController.FailureDetails>> authentication(
             HallRequestDraftController.AuthenticationFailure failure) {
         return HallRequestDraftController.error(
                 failure.forbidden ? HttpStatus.FORBIDDEN : HttpStatus.UNAUTHORIZED,
@@ -64,13 +64,13 @@ public class HallSubmissionController {
 
     @ExceptionHandler({HallRequestDraftController.RequestFailure.class,
             IllegalArgumentException.class})
-    public ResponseEntity<HallRequestDraftController.ErrorBody> malformed(Exception ignored) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<HallRequestDraftController.FailureDetails>> malformed(Exception ignored) {
         return HallRequestDraftController.error(HttpStatus.BAD_REQUEST,
                 "HALL_BAD_REQUEST", "Invalid Hall request", false, Map.of());
     }
 
     @ExceptionHandler(HallRequestDraftService.Failure.class)
-    public ResponseEntity<HallRequestDraftController.ErrorBody> failure(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<HallRequestDraftController.FailureDetails>> failure(
             HallRequestDraftService.Failure failure) {
         return switch (failure.reason()) {
             case BAD_REQUEST -> HallRequestDraftController.error(HttpStatus.BAD_REQUEST,
@@ -102,7 +102,7 @@ public class HallSubmissionController {
     }
 
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<HallRequestDraftController.ErrorBody> unexpected(Exception ignored) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<HallRequestDraftController.FailureDetails>> unexpected(Exception ignored) {
         return HallRequestDraftController.error(HttpStatus.SERVICE_UNAVAILABLE,
                 "HALL_STORAGE_UNAVAILABLE", "Hall storage is temporarily unavailable",
                 true, Map.of());

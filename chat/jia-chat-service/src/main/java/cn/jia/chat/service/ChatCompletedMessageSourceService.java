@@ -36,7 +36,8 @@ public class ChatCompletedMessageSourceService {
     public record Resolved(long generation, String targetAgentId, long assignmentRevision,
             AgentSelectedOutputFinalizationService.SourceOutput output) { }
 
-    @Transactional(readOnly=true)
+    // A text result may retain media ancestors; final verification must keep its task/output locks.
+    @Transactional(rollbackFor=Exception.class)
     public Resolved resolve(ChatSelectedOutputFinalizationService.Scope owner, Command command) {
         validate(owner,command);
         try {
@@ -58,7 +59,7 @@ public class ChatCompletedMessageSourceService {
             var scope=new ChatTypedDeliberationStore.Scope(owner.tenantId(),owner.ownerJiacn(),owner.clientId(),command.conversationId(),generation);
             // Reuses the normal reader that rebuilds the final digest from actual snapshot binding,
             // outcome union, admission and source catalogue. No copied hash is ownership authority.
-            var projection=finals.readIfV3(scope,command.requestId(),source.turnId(),revision,"CHAT");
+            var projection=finals.readActionIfPresent(scope,command.requestId(),source.turnId(),revision,"CHAT");
             var outcome=outcomes.findOutcomeByTurn(scope,source.turnId(),false);
             if(projection==null || !"READY".equals(projection.get("state")) || !(projection.get("outcome") instanceof Map<?,?> view)
                     || !"ANSWER".equals(view.get("kind")) || !Boolean.TRUE.equals(view.get("deliverable")) || outcome==null || !scope.equals(outcome.scope())

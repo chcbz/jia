@@ -21,6 +21,7 @@ import java.util.List;
  */
 @Component
 @ConditionalOnProperty(prefix = "wx.daily-vote.schema", name = "install-on-startup", havingValue = "true")
+@org.springframework.context.annotation.Profile("schema-maintenance")
 public final class WxDailyVoteSchemaInitializer implements InitializingBean {
 
     static final String RESOURCE = "db/wx-daily-vote-receipt-schema-v1.sql";

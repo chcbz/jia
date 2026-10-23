@@ -157,7 +157,7 @@ class AgentTaskCollaborationServiceRealTransactionTest {
             org.mockito.Mockito.lenient().when(identityAuthority.requirePersistedCanonicalAgentIdInScope(
                     TENANT, CLIENT, OWNER, canonical)).thenReturn(canonical);
         }
-        rawLease.setIdentityService(identityAuthority);
+        rawLease.setAssigneeAuthority(new TaskAssigneeAuthorityServiceImpl(org.mockito.Mockito.mock(cn.jia.agent.dao.AgentExternalServicePolicyDao.class), identityAuthority, org.mockito.Mockito.mock(cn.jia.agent.dao.AgentTaskExecutionGrantDao.class)));
         leaseService = (AgentWorkItemLeaseService) transactionalProxy(
                 rawLease, dataSource, AgentWorkItemLeaseService.class);
         AgentWorkItemResultCommitServiceImpl rawResult = new AgentWorkItemResultCommitServiceImpl(

@@ -11,9 +11,9 @@ public class AuthenticationController {
 
     @GetMapping("/token")
     @ResponseBody
-    public OAuth2AuthorizedClient token(
+    public cn.jia.core.entity.JsonResult<OAuth2AuthorizedClient> token(
             @RegisteredOAuth2AuthorizedClient OAuth2AuthorizedClient oAuth2AuthorizedClient) {
         //通过OAuth2AuthorizedClient对象获取到客户端和token令牌相关的信息，然后直接返回给前端页面
-        return oAuth2AuthorizedClient;
+        return cn.jia.core.entity.JsonResult.success(oAuth2AuthorizedClient);
     }
 }

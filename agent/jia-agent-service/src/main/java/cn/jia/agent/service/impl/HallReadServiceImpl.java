@@ -142,12 +142,12 @@ public class HallReadServiceImpl implements HallReadService {
         PersonalMark mark = Set.of("PRIVATE_CASE", "LEGACY_EXECUTION").contains(row.getSourceType())
                 ? new PersonalMark(row.getMarkRevision() == null ? 0 : row.getMarkRevision(), Boolean.TRUE.equals(row.getArchived()),
                     row.getViewedExecutionId() == null ? null : new HallPrivateMarkService.ResultRef(row.getViewedExecutionId(), row.getViewedManifestId())) : null;
-        Review review = "TASK".equals(row.getSourceType()) && Boolean.TRUE.equals(row.getReviewReady())
+        Review review = "TASK".equals(row.getSourceType()) && "PENDING_ACCEPTANCE".equals(row.getPhase()) && Boolean.TRUE.equals(row.getReviewReady())
                 ? new Review("FORMAL_DELIVERY_SUBMITTED", row.getDeliveryId(), row.getWorkItemId(),
                     Long.toString(row.getDeliveryVersion()), Long.toString(row.getTaskVersion())) : null;
         return new ItemSummary(new Ref(row.getSourceType(), row.getSourceId()), row.getTitle(),
                 new Status(row.getState(), evidence, asOf), row.getTargetAgentId() == null ? null
-                    : new TargetAgent(row.getTargetAgentId()), action, actions, row.getUpdatedAt(), mark, review);
+                    : new TargetAgent(row.getTargetAgentId()), action, actions, row.getUpdatedAt(), mark, review, "TASK".equals(row.getSourceType()) ? row.getPhase() : null);
     }
 
     private void validate(OwnerScope scope, String kind, String view, HallItemRow row) {
@@ -178,8 +178,10 @@ public class HallReadServiceImpl implements HallReadService {
                         && !row.getExecutionId().equals(row.getViewedExecutionId())))) throw new IllegalStateException();
         }
         if ("task".equals(kind)) {
+            if (!Set.of("PENDING_ASSIGNMENT","IN_PROGRESS","PENDING_ACCEPTANCE","COMPLETED","HISTORY","UNKNOWN").contains(Objects.toString(row.getPhase(),""))) throw new IllegalStateException();
+            if ("PENDING_ACCEPTANCE".equals(row.getPhase()) && (!"reviewing".equals(row.getState()) || !Boolean.TRUE.equals(row.getReviewReady()))) throw new IllegalStateException();
             if ("archive".equals(view) != "archived".equals(row.getState())) throw new IllegalStateException();
-            if (formalEnabled && "reviewing".equals(row.getState()) && !Boolean.TRUE.equals(row.getReviewReady())) throw new IllegalStateException();
+            if (formalEnabled && "reviewing".equals(row.getState()) && !Boolean.TRUE.equals(row.getReviewReady()) && !"UNKNOWN".equals(row.getPhase())) throw new IllegalStateException();
             if (Boolean.TRUE.equals(row.getReviewReady()) && (!"reviewing".equals(row.getState())
                     || !id(row.getDeliveryId(), 100) || !id(row.getWorkItemId(), 100)
                     || row.getDeliveryVersion() == null || row.getDeliveryVersion() < 0

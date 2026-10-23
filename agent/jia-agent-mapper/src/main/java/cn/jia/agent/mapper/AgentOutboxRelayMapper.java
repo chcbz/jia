@@ -111,6 +111,7 @@ public interface AgentOutboxRelayMapper {
             FROM agent_outbox_event o
             WHERE """ + EXACT_SCOPE + """
               AND """ + REQUIRED_V2 + """
+              AND CAST(o.destination AS BINARY)<>CAST('agent.skill-install.ws.v1' AS BINARY)
               AND ((o.status='PENDING' AND (o.next_retry_at IS NULL OR o.next_retry_at<=#{now}))
                 OR (o.status='RETRY' AND o.next_retry_at IS NOT NULL AND o.next_retry_at<=#{now})
                 OR (o.status='CLAIMED' AND o.lease_until IS NOT NULL AND o.lease_until<=#{now}))
@@ -134,6 +135,7 @@ public interface AgentOutboxRelayMapper {
             FROM agent_outbox_event o
             WHERE """ + EXACT_SCOPE + """
               AND """ + REQUIRED_V2 + """
+              AND CAST(o.destination AS BINARY)<>CAST('agent.skill-install.ws.v1' AS BINARY)
               AND ((o.status='PENDING' AND (o.next_retry_at IS NULL OR o.next_retry_at<=#{now}))
                 OR (o.status='RETRY' AND o.next_retry_at IS NOT NULL AND o.next_retry_at<=#{now}))
               AND o.delivery_id>0 AND o.version<9223372036854775806
@@ -153,6 +155,7 @@ public interface AgentOutboxRelayMapper {
             FROM agent_outbox_event o
             WHERE """ + EXACT_SCOPE + """
               AND """ + REQUIRED_V2 + """
+              AND CAST(o.destination AS BINARY)<>CAST('agent.skill-install.ws.v1' AS BINARY)
               AND o.status='CLAIMED' AND o.lease_until IS NOT NULL AND o.lease_until<=#{now}
               AND o.delivery_id>0 AND o.version<9223372036854775806
               AND """ + ASSOCIATED_DELIVERY + """

@@ -1,5 +1,7 @@
 package cn.jia.user.api;
 
+import cn.jia.core.entity.JsonRequest;
+
 import cn.jia.core.entity.JsonRequestPage;
 import cn.jia.core.entity.JsonResult;
 import cn.jia.core.entity.JsonResultPage;
@@ -41,7 +43,8 @@ public class MsgController {
 	 */
 	@PreAuthorize("hasAuthority('msg-create')")
 	@RequestMapping(value = "/create", method = RequestMethod.POST)
-	public Object create(@RequestBody MsgEntity msg) {
+	public Object create(@RequestBody JsonRequest<MsgEntity> protocolRequest) {
+        MsgEntity msg = protocolRequest == null ? null : protocolRequest.data();
 		msgService.create(msg);
 		return JsonResult.success();
 	}
@@ -53,7 +56,7 @@ public class MsgController {
 	 * @return 结果
 	 */
 //	@PreAuthorize("hasAuthority('msg-read')")
-	@RequestMapping(value = "/read", method = RequestMethod.GET)
+	@RequestMapping(value = "/read", method = RequestMethod.POST)
 	public Object read(@RequestParam(name = "id") Long id) {
 		MsgEntity msg = new MsgEntity();
 		msg.setId(id);
@@ -68,7 +71,7 @@ public class MsgController {
 	 * @param id 消息ID
 	 * @return 结果
 	 */
-	@RequestMapping(value = "/unread", method = RequestMethod.GET)
+	@RequestMapping(value = "/unread", method = RequestMethod.POST)
 	public Object unread(@RequestParam(name = "id") Long id) {
 		MsgEntity msg = new MsgEntity();
 		msg.setId(id);
@@ -83,7 +86,7 @@ public class MsgController {
 	 * @param userId 用户ID
 	 * @return 结果
 	 */
-	@RequestMapping(value = "/readall", method = RequestMethod.GET)
+	@RequestMapping(value = "/readall", method = RequestMethod.POST)
 	public Object readAll(@RequestParam(name = "userId") Long userId) {
 		msgService.readAll(userId);
 		return JsonResult.success();
@@ -108,7 +111,7 @@ public class MsgController {
 	 * @param id 消息ID
 	 * @return 结果
 	 */
-	@RequestMapping(value = "/recycle", method = RequestMethod.GET)
+	@RequestMapping(value = "/recycle", method = RequestMethod.POST)
 	public Object recycle(@RequestParam(name = "id") Long id) {
 		msgService.recycle(id);
 		return JsonResult.success();
@@ -120,7 +123,7 @@ public class MsgController {
 	 * @param id 消息ID
 	 * @return 结果
 	 */
-	@RequestMapping(value = "/restore", method = RequestMethod.GET)
+	@RequestMapping(value = "/restore", method = RequestMethod.POST)
 	public Object restore(@RequestParam(name = "id") Long id) {
 		msgService.restore(id);
 		return JsonResult.success();
@@ -133,12 +136,11 @@ public class MsgController {
 	 */
 //	@PreAuthorize("hasAuthority('msg-list')")
 	@RequestMapping(value = "/list", method = RequestMethod.POST)
-	public Object list(@RequestBody JsonRequestPage<MsgEntity> page) {
+	public Object list(@RequestBody JsonRequest<JsonRequestPage<MsgEntity>> protocolRequest) {
+        JsonRequestPage<MsgEntity> page = protocolRequest == null ? null : protocolRequest.data();
 		MsgEntity example = Optional.ofNullable(page.getSearch()).orElse(new MsgEntity());
 		PageInfo<MsgEntity> msgList = msgService.findPage(example, page.getPageNum(), page.getPageSize(), page.getOrderBy());
-		JsonResultPage<MsgEntity> result = new JsonResultPage<>(msgList.getList());
-		result.setPageNum(msgList.getPageNum());
-		result.setTotal(msgList.getTotal());
+		JsonResultPage<MsgEntity> result = JsonResultPage.page(msgList.getList(), msgList.getPageNum(), msgList.getPageSize(), msgList.getTotal());
 		return result;
 	}
 	

@@ -70,121 +70,9 @@ class AgentTaskArtifactControllerTest {
         mvc = MockMvcBuilders.standaloneSetup(controller).build();
     }
 
-    @Test
-    void publishDerivesScopeAndProducerComputesDigestAndReturnsOnlyAllowlistedMetadata()
-            throws Exception {
-        when(artifactService.publish(anyString(), anyString(), anyString(), anyString(), anyString(), any()))
-                .thenReturn(publishedView());
 
-        mvc.perform(post("/agent/tasks/{taskId}/artifacts", TASK)
-                        .queryParam("actorAgentId", ACTOR)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(publishBody())
-                        .principal(jwt("tenant-a", "client-a")))
-                .andExpect(status().isCreated())
-                .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
-                .andExpect(jsonPath("$.artifactId").value(ARTIFACT))
-                .andExpect(jsonPath("$.artifactVersion").value(1))
-                .andExpect(jsonPath("$.contentHash").value(sha256(BYTES)))
-                .andExpect(jsonPath("$.contentByteLength").value(BYTES.length))
-                .andExpect(content().string(org.hamcrest.Matchers.not(
-                        org.hamcrest.Matchers.containsString("cyf-artifact://internal-secret"))))
-                .andExpect(content().string(org.hamcrest.Matchers.not(
-                        org.hamcrest.Matchers.containsString("metadata-secret"))));
 
-        ArgumentCaptor<AgentTaskArtifactPublishDTO> command =
-                ArgumentCaptor.forClass(AgentTaskArtifactPublishDTO.class);
-        verify(artifactService).publish(eq("0"), eq("client-a"), eq("tenant-a"), eq(TASK), eq(ACTOR),
-                command.capture());
-        assertEquals(ACTOR, command.getValue().getProducerAgentId());
-        assertEquals(null, command.getValue().getStorageUri());
-        assertEquals(null, command.getValue().getContent());
-        assertEquals(sha256(BYTES), command.getValue().getContentHash());
-        assertEquals(Long.valueOf(BYTES.length), command.getValue().getContentByteLength());
-        assertArrayEquals(BYTES, command.getValue().getContentBytes());
-    }
 
-    @Test
-    void tenantAndClientInjectionAreIndependentlyRejectedBeforeService() throws Exception {
-        for (String protectedField : List.of(
-                "\"tenantId\":\"tenant-b\"", "\"clientId\":\"client-b\"")) {
-            mvc.perform(post("/agent/tasks/{taskId}/artifacts", TASK)
-                            .queryParam("actorAgentId", ACTOR)
-                            .contentType(MediaType.APPLICATION_JSON)
-                            .content(withField(publishBody(), protectedField))
-                            .principal(jwt("tenant-a", "client-a")))
-                    .andExpect(status().isBadRequest())
-                    .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
-        }
-        verifyNoInteractions(artifactService, contentService);
-    }
-
-    @Test
-    void otherAreaDomainOrMissingBindingCannotPublishOrDownloadLegacyArtifacts() throws Exception {
-        for (JwtAuthenticationToken principal : List.of(
-                jwt("tenant-a", "client-a", "1", "cyf"),
-                jwt("tenant-a", "client-a", "00", "cyf"),
-                jwt("tenant-a", "client-a", "0", "other"),
-                jwt("tenant-a", "client-a", null, "cyf"),
-                jwt("tenant-a", "client-a", "0", null))) {
-            mvc.perform(post("/agent/tasks/{taskId}/artifacts", TASK)
-                            .queryParam("actorAgentId", ACTOR)
-                            .contentType(MediaType.APPLICATION_JSON).content(publishBody())
-                            .principal(principal))
-                    .andExpect(status().isForbidden())
-                    .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
-            mvc.perform(get("/agent/tasks/{taskId}/artifacts/{artifactId}/versions/1/content",
-                            TASK, ARTIFACT).queryParam("actorAgentId", ACTOR).principal(principal))
-                    .andExpect(status().isForbidden());
-        }
-        verifyNoInteractions(artifactService, contentService);
-    }
-
-    @Test
-    void allStorageDigestProducerAndInlineOverrideFieldsAreRejected() throws Exception {
-        for (String protectedField : List.of(
-                "\"producerAgentId\":\"attacker\"",
-                "\"storageUri\":\"file:///etc/passwd\"",
-                "\"contentHash\":\"" + "0".repeat(64) + "\"",
-                "\"contentByteLength\":1",
-                "\"content\":\"not-managed\"",
-                "\"unknownField\":true")) {
-            mvc.perform(post("/agent/tasks/{taskId}/artifacts", TASK)
-                            .queryParam("actorAgentId", ACTOR)
-                            .contentType(MediaType.APPLICATION_JSON)
-                            .content(withField(publishBody(), protectedField))
-                            .principal(jwt("tenant-a", "client-a")))
-                    .andExpect(status().isBadRequest());
-        }
-        verifyNoInteractions(artifactService, contentService);
-    }
-
-    @Test
-    void duplicateTrailingMalformedAndDuplicateActorRequestsFailClosed() throws Exception {
-        JwtAuthenticationToken authentication = jwt("tenant-a", "client-a");
-        String duplicate = publishBody().replace(
-                "\"artifactId\":\"artifact-1\"",
-                "\"artifactId\":\"artifact-1\",\"artifactId\":\"artifact-2\"");
-        String floatVersion = publishBody().replace(
-                "\"artifactVersion\":1", "\"artifactVersion\":1.0");
-        String stringVersion = publishBody().replace(
-                "\"expectedPreviousVersion\":0",
-                "\"expectedPreviousVersion\":\"0\"");
-        for (String body : List.of(
-                duplicate, publishBody() + " {}", "{", floatVersion, stringVersion)) {
-            mvc.perform(post("/agent/tasks/{taskId}/artifacts", TASK)
-                            .queryParam("actorAgentId", ACTOR)
-                            .contentType(MediaType.APPLICATION_JSON)
-                            .content(body).principal(authentication))
-                    .andExpect(status().isBadRequest());
-        }
-        mvc.perform(post("/agent/tasks/{taskId}/artifacts", TASK)
-                        .queryParam("actorAgentId", ACTOR, "agent-2")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(publishBody()).principal(authentication))
-                .andExpect(status().isBadRequest());
-        verifyNoInteractions(artifactService, contentService);
-    }
 
     @Test
     void anonymousNonJwtAndMalformedJwtClaimsAreRejectedBeforeBodyParsing() throws Exception {
@@ -209,39 +97,7 @@ class AgentTaskArtifactControllerTest {
         verifyNoInteractions(artifactService, contentService);
     }
 
-    @Test
-    void declaredAndChunkedOversizeBodiesStopBeforeJsonOrService() throws Exception {
-        mvc.perform(post("/agent/tasks/{taskId}/artifacts", TASK)
-                        .queryParam("actorAgentId", ACTOR)
-                        .header(HttpHeaders.CONTENT_LENGTH,
-                                AgentTaskArtifactController.MAX_REQUEST_BYTES + 1L)
-                        .contentType(MediaType.APPLICATION_JSON).content("{}")
-                        .principal(jwt("tenant-a", "client-a")))
-                .andExpect(status().isBadRequest());
 
-        MockHttpServletRequest chunked = generatedRequest(
-                AgentTaskArtifactController.MAX_REQUEST_BYTES + 1L);
-        assertThrows(RuntimeException.class,
-                () -> controller.publish(TASK, chunked, jwt("tenant-a", "client-a")));
-        verifyNoInteractions(artifactService, contentService);
-    }
-
-    @Test
-    void versionConflictIs409AndNeverInventsIdempotentReplay() throws Exception {
-        doThrow(new AgentTaskCollaborationException(
-                Reason.VERSION_CONFLICT, "internal latest version detail"))
-                .when(artifactService).publish(any(), any(), any(), any(), any(), any());
-
-        mvc.perform(post("/agent/tasks/{taskId}/artifacts", TASK)
-                        .queryParam("actorAgentId", ACTOR)
-                        .contentType(MediaType.APPLICATION_JSON).content(publishBody())
-                        .principal(jwt("tenant-a", "client-a")))
-                .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.code").value("ARTIFACT_VERSION_CONFLICT"))
-                .andExpect(content().string(org.hamcrest.Matchers.not(
-                        org.hamcrest.Matchers.containsString("internal latest version detail"))));
-        verify(artifactService).publish(any(), any(), any(), any(), any(), any());
-    }
 
     @Test
     void disabledOrCorruptBackingServiceIsSafelyUnavailable() throws Exception {

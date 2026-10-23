@@ -64,7 +64,7 @@ public final class AgentHostingRentController {
             @PathVariable String personaCode,
             Authentication authentication,
             HttpServletRequest request,
-            @RequestBody(required = false) byte[] rawBody) {
+            @cn.jia.core.annotation.ApiJsonData @RequestBody(required = false) byte[] rawBody) {
         HostingRentAdmissionService.Principal principal = requirePrincipal(authentication);
         requireNoQuery(request);
         if (application == null) {
@@ -84,7 +84,7 @@ public final class AgentHostingRentController {
 
     @PostMapping(value = "/hosting-leases/{leaseId}/renewal-quotes", consumes = MediaType.APPLICATION_JSON_VALUE)
     public Object renewalQuote(@PathVariable String leaseId, Authentication authentication,
-            HttpServletRequest request, @RequestBody byte[] body) {
+            HttpServletRequest request, @cn.jia.core.annotation.ApiJsonData @RequestBody byte[] body) {
         return success(application.renewalQuote(HostingRentHttp.actor(authentication), leaseId,
                 HostingRentHttp.key(request), HostingRentHttp.body(body,
                         Set.of("agentId", "expectedLeaseVersion"), Set.of())));
@@ -92,7 +92,7 @@ public final class AgentHostingRentController {
 
     @PostMapping(value = "/hosting-leases/{leaseId}/renewals", consumes = MediaType.APPLICATION_JSON_VALUE)
     public Object renew(@PathVariable String leaseId, Authentication authentication,
-            HttpServletRequest request, @RequestBody byte[] body) {
+            HttpServletRequest request, @cn.jia.core.annotation.ApiJsonData @RequestBody byte[] body) {
         return success(application.renew(HostingRentHttp.actor(authentication), leaseId,
                 HostingRentHttp.key(request), HostingRentHttp.body(body, Set.of("agentId", "quoteId",
                         "expectedLeaseVersion", "expectedPlanVersion", "expectedAmountMicro", "expectedPeriodSeconds"), Set.of())));
@@ -102,7 +102,7 @@ public final class AgentHostingRentController {
     public Object rentFailure(RuntimeException failure) { return HostingRentErrors.response(failure); }
 
     private Object success(Object data) {
-        return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL).body(JsonResult.success(data));
+        return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL).body(JsonResult.success(EconomyOperationWire.hosting(data)));
     }
 
     @ExceptionHandler(AuthenticationFailure.class)
@@ -195,7 +195,7 @@ public final class AgentHostingRentController {
 
     private static ResponseEntity<JsonResult<Void>> error(HttpStatus status, String code, String message) {
         JsonResult<Void> result = JsonResult.failure(code, message);
-        result.setStatus(status.value());
+
         return ResponseEntity.status(status)
                 .header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
                 .contentType(new MediaType(MediaType.APPLICATION_JSON, StandardCharsets.UTF_8))

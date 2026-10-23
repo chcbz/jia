@@ -22,6 +22,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /** Fail-closed initializer/catalog validator for the separate W09 six-table application schema. */
+@org.springframework.context.annotation.Profile("schema-maintenance")
 public final class EconomySkillApplicationSchemaInitializer implements InitializingBean {
     static final String DDL_RESOURCE = "db/economy-v0-skill-application.sql";
     static final List<String> TABLES = List.of("economy_skill_actor_root", "economy_skill_agent_version", "economy_skill_result_receipt", "economy_skill_delivery_binding", "economy_skill_managed_credential", "economy_skill_credential_operation");
@@ -350,6 +351,13 @@ public final class EconomySkillApplicationSchemaInitializer implements Initializ
         if (!List.copyOf(result.keySet()).equals(TABLES)) {
             throw new IllegalStateException("ECO-V0 skill DDL table order drift: " + result.keySet());
         }
+        // Latest authority query index is installed explicitly with the skill protocol migration.
+        // Do not accept a partial/unknown index catalog or silently repair it at startup.
+        var receipt=result.get("economy_skill_result_receipt");
+        var indexes=new LinkedHashMap<String,IndexSpec>(receipt.indexes());
+        String name="idx_skill_receipt_installation_scope";
+        indexes.put(name,new IndexSpec(name,false,List.of("tenant_id","client_id","installation_id","outcome")));
+        result.put(receipt.name(),new TableSpec(receipt.name(),receipt.columns(),Map.copyOf(indexes),receipt.foreignKeys(),receipt.checks()));
         return Map.copyOf(result);
     }
 

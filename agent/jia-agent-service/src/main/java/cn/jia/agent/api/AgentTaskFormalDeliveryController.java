@@ -91,7 +91,7 @@ public class AgentTaskFormalDeliveryController {
     }
 
     @GetMapping(value = "/{taskId}/formal-deliveries", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<FormalDeliveryListResponse> list(@PathVariable String taskId,
+    public ResponseEntity<cn.jia.core.entity.JsonResult<FormalDeliveryListResponse>> list(@PathVariable String taskId,
             HttpServletRequest request, Authentication authentication) {
         Scope scope = requireJwtScope(authentication);
         requireExact(taskId, 100);
@@ -108,12 +108,12 @@ public class AgentTaskFormalDeliveryController {
             previousRevision = response.revision();
             items.add(response);
         }
-        return ok(new FormalDeliveryListResponse(List.copyOf(items)));
+        return cn.jia.core.config.ApiJsonResponses.success(ok(new FormalDeliveryListResponse(List.copyOf(items))));
     }
 
     @PostMapping(value = "/{taskId}/formal-deliveries", consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<FormalDeliveryResponse> submit(@PathVariable String taskId,
+    public ResponseEntity<cn.jia.core.entity.JsonResult<FormalDeliveryResponse>> submit(@PathVariable String taskId,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             HttpServletRequest request, Authentication authentication) {
         Scope scope = requireJwtScope(authentication);
@@ -124,12 +124,12 @@ public class AgentTaskFormalDeliveryController {
         AgentTaskFormalDeliverySubmitDTO command = parseSubmit(readBounded(request), deliveryId);
         AgentTaskFormalDeliveryViewDTO view = submissionService.submit(scope.tenantId(),
                 scope.clientId(), scope.ownerJiacn(), taskId, scope.actorId(), command);
-        return ok(response(view, taskId, Long.MAX_VALUE));
+        return cn.jia.core.config.ApiJsonResponses.success(ok(response(view, taskId, Long.MAX_VALUE)));
     }
 
     @PostMapping(value = "/{taskId}/formal-deliveries/{deliveryId}/decision",
             consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<FormalDeliveryResponse> decide(@PathVariable String taskId,
+    public ResponseEntity<cn.jia.core.entity.JsonResult<FormalDeliveryResponse>> decide(@PathVariable String taskId,
             @PathVariable String deliveryId,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             HttpServletRequest request, Authentication authentication) {
@@ -141,12 +141,12 @@ public class AgentTaskFormalDeliveryController {
         AgentTaskFormalDeliveryDecisionDTO command = parseDecision(readBounded(request), deliveryId);
         AgentTaskFormalDeliveryViewDTO view = decisionService.decide(scope.tenantId(),
                 scope.clientId(), taskId, scope.ownerJiacn(), command);
-        return ok(response(view, taskId, Long.MAX_VALUE));
+        return cn.jia.core.config.ApiJsonResponses.success(ok(response(view, taskId, Long.MAX_VALUE)));
     }
 
     @PostMapping(value = "/{taskId}/formal-deliveries/{deliveryId}/rework-executions",
             consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<PersonalWorkspaceExecutionService.ExecutionView> createReworkExecution(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<WorkspaceExecutionWire.Execution>> createReworkExecution(
             @PathVariable String taskId, @PathVariable String deliveryId,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             HttpServletRequest request, Authentication authentication) {
@@ -158,25 +158,25 @@ public class AgentTaskFormalDeliveryController {
         PersonalWorkspaceExecutionService.ExecutionView view = reworkService.create(
                 new PersonalWorkspaceExecutionService.OwnerScope(
                         scope.tenantId(), scope.clientId(), scope.ownerJiacn()), command, key);
-        return ResponseEntity.status(HttpStatus.ACCEPTED)
+        return cn.jia.core.config.ApiJsonResponses.success(ResponseEntity.status(HttpStatus.ACCEPTED)
                 .header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
-                .contentType(MediaType.APPLICATION_JSON).body(view);
+                .contentType(MediaType.APPLICATION_JSON).body(view), WorkspaceExecutionWire::from);
     }
 
     @ExceptionHandler(AuthenticationFailure.class)
-    public ResponseEntity<ErrorBody> authentication(AuthenticationFailure failure) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> authentication(AuthenticationFailure failure) {
         return error(failure.forbidden ? HttpStatus.FORBIDDEN : HttpStatus.UNAUTHORIZED,
                 failure.forbidden ? "FORMAL_DELIVERY_FORBIDDEN" : "FORMAL_DELIVERY_UNAUTHENTICATED",
                 "Formal delivery access is unavailable");
     }
 
     @ExceptionHandler(RequestFailure.class)
-    public ResponseEntity<ErrorBody> badRequest(RequestFailure ignored) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> badRequest(RequestFailure ignored) {
         return error(HttpStatus.BAD_REQUEST, "BAD_REQUEST", "Invalid formal delivery request");
     }
 
     @ExceptionHandler(PersonalWorkspaceExecutionService.Failure.class)
-    public ResponseEntity<ErrorBody> reworkFailure(PersonalWorkspaceExecutionService.Failure failure) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> reworkFailure(PersonalWorkspaceExecutionService.Failure failure) {
         return switch (failure.getReason()) {
             case BAD_REQUEST -> error(HttpStatus.BAD_REQUEST,
                     "BAD_REQUEST", "Invalid formal delivery rework request");
@@ -193,7 +193,7 @@ public class AgentTaskFormalDeliveryController {
     }
 
     @ExceptionHandler(AgentTaskCollaborationException.class)
-    public ResponseEntity<ErrorBody> collaborationFailure(AgentTaskCollaborationException failure) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> collaborationFailure(AgentTaskCollaborationException failure) {
         return switch (failure.getReason()) {
             case INVALID_REQUEST -> error(HttpStatus.BAD_REQUEST,
                     "BAD_REQUEST", "Invalid formal delivery request");
@@ -206,7 +206,7 @@ public class AgentTaskFormalDeliveryController {
     }
 
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<ErrorBody> unexpected(Exception ignored, HttpServletRequest request) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> unexpected(Exception ignored, HttpServletRequest request) {
         log.error("Formal delivery HTTP request failed: uri={}", request.getRequestURI());
         return unavailable();
     }
@@ -532,15 +532,15 @@ public class AgentTaskFormalDeliveryController {
                 .contentType(MediaType.APPLICATION_JSON).body(body);
     }
 
-    private static ResponseEntity<ErrorBody> unavailable() {
+    private static ResponseEntity<cn.jia.core.entity.JsonResult<Void>> unavailable() {
         return error(HttpStatus.SERVICE_UNAVAILABLE, "FORMAL_DELIVERY_UNAVAILABLE",
                 "Formal delivery is temporarily unavailable");
     }
 
-    private static ResponseEntity<ErrorBody> error(HttpStatus status, String code, String message) {
+    private static ResponseEntity<cn.jia.core.entity.JsonResult<Void>> error(HttpStatus status, String code, String message) {
         return ResponseEntity.status(status).header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
                 .contentType(new MediaType(MediaType.APPLICATION_JSON, StandardCharsets.UTF_8))
-                .body(new ErrorBody(code, message));
+                .body(cn.jia.core.entity.JsonResult.<Void>failure(code, message));
     }
 
     private record Scope(String tenantId, String clientId, String ownerJiacn, String actorId) { }

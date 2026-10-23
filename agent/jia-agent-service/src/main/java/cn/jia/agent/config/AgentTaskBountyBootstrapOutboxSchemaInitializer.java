@@ -15,6 +15,7 @@ import java.util.Objects;
 import java.util.Set;
 
 /** Creates only an absent bootstrap table; any partial or drifted catalog fails closed. */
+@org.springframework.context.annotation.Profile("schema-maintenance")
 public final class AgentTaskBountyBootstrapOutboxSchemaInitializer implements InitializingBean {
     static final String RESOURCE = "db/agent-task-bounty-bootstrap-outbox-v1.sql";
     static final String TABLE = "agent_task_bounty_bootstrap_outbox";

@@ -6,11 +6,13 @@ import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.networknt.schema.JsonSchema;
-import com.networknt.schema.JsonSchemaFactory;
+import com.networknt.schema.Schema;
+import com.networknt.schema.InputFormat;
+import com.networknt.schema.SchemaRegistry;
 import com.networknt.schema.SchemaLocation;
-import com.networknt.schema.SchemaValidatorsConfig;
-import com.networknt.schema.SpecVersion;
+import com.networknt.schema.SchemaRegistryConfig;
+import com.networknt.schema.regex.JoniRegularExpressionFactory;
+import com.networknt.schema.SpecificationVersion;
 
 import java.io.IOException;
 import java.math.BigDecimal;
@@ -37,26 +39,24 @@ public final class SkillManifestCodec {
     private static final Set<String> SINGLE = Set.of("items contains additionalProperties propertyNames not if then else unevaluatedItems unevaluatedProperties contentSchema".split(" "));
     private static final Set<String> LIST = Set.of("allOf anyOf oneOf prefixItems".split(" "));
     private static final Set<String> MAP = Set.of("$defs properties patternProperties dependentSchemas".split(" "));
-    private final JsonSchemaFactory factory;
-    private final SchemaValidatorsConfig config;
-    private final JsonSchema manifestSchema;
-    private final JsonSchema metaSchema;
+    private final SchemaRegistry factory;
+    private final Schema manifestSchema;
+    private final Schema metaSchema;
 
     public SkillManifestCodec() {
-        config = new SchemaValidatorsConfig();
-        config.setTypeLoose(false);
-        config.setEcma262Validator(true);
-        config.setFormatAssertionsEnabled(false);
-        factory = JsonSchemaFactory.getInstance(SpecVersion.VersionFlag.V202012, builder ->
-                builder.schemaLoaders(loaders -> loaders.add(iri -> {
-                    // Built-in Draft2020-12 resources only; never fall through to HTTP/file loaders.
-                    require(iri.toString().startsWith("classpath:draft/2020-12/"), "SKILL_SCHEMA_REF_FORBIDDEN");
-                    return null;
-                })));
-        metaSchema = factory.getSchema(SchemaLocation.of(DIALECT), config);
+        var config = SchemaRegistryConfig.builder()
+                .typeLoose(false)
+                .regularExpressionFactory(JoniRegularExpressionFactory.getInstance())
+                .formatAssertionsEnabled(false).build();
+        factory = SchemaRegistry.withDefaultDialect(SpecificationVersion.DRAFT_2020_12, builder ->
+                builder.schemaRegistryConfig(config).schemaLoader(loaders -> loaders
+                        .fetchRemoteResources(false)
+                        .allow(iri -> iri.toString().startsWith("https://json-schema.org/draft/2020-12/")
+                                || iri.toString().startsWith("classpath:draft/2020-12/"))));
+        metaSchema = factory.getSchema(SchemaLocation.of(DIALECT));
         try (var input = SkillManifestCodec.class.getResourceAsStream("skill-manifest-v1.schema.json")) {
             require(input != null, "SKILL_MANIFEST_SCHEMA_MISSING");
-            manifestSchema = factory.getSchema(JSON.readTree(input), config);
+            manifestSchema = factory.getSchema(JSON.readTree(input).toString(), InputFormat.JSON);
         } catch (IOException e) { throw failure("SKILL_MANIFEST_SCHEMA_MISSING"); }
     }
 
@@ -74,7 +74,7 @@ public final class SkillManifestCodec {
         var document = parseJson(bytes);
         require(document.isObject(), "SKILL_MANIFEST_INVALID");
         var executable = ((ObjectNode) document).deepCopy(); executable.remove("costInfo");
-        require(manifestSchema.validate(executable).isEmpty(), "SKILL_MANIFEST_INVALID");
+        require(manifestSchema.validate(executable.toString(), InputFormat.JSON).isEmpty(), "SKILL_MANIFEST_INVALID");
         require(document.path("skillKey").asText().equals(skillKey)
                 && document.path("skillVersion").asText().equals(skillVersion), "SKILL_IDENTITY_MISMATCH");
         require(validEntrypoint(document.path("entrypoint").asText()), "SKILL_ENTRYPOINT_INVALID");
@@ -91,12 +91,14 @@ public final class SkillManifestCodec {
         return new Manifest(normalized, sha256(bytes));
     }
 
-    public JsonSchema compileSchema(JsonNode schema) {
+    // The schema library uses Jackson3; its string API preserves our strict Jackson2 metadata boundary.
+    // Duplicate-key/Unicode/portable-number checks run before this serialization; original package hashes never change.
+    public Schema compileSchema(JsonNode schema) {
         require(schema != null && schema.isObject() && DIALECT.equals(schema.path("$schema").asText()), "SKILL_SCHEMA_DIALECT");
         checkPortableNumbers(schema); checkSchemaPolicy(schema);
         try {
-            require(metaSchema.validate(schema).isEmpty(), "SKILL_SCHEMA_INVALID");
-            var compiled = factory.getSchema(schema.deepCopy(), config);
+            require(metaSchema.validate(schema.toString(), InputFormat.JSON).isEmpty(), "SKILL_SCHEMA_INVALID");
+            var compiled = factory.getSchema(schema.toString(), InputFormat.JSON);
             compiled.initializeValidators(); // Resolve local refs now, not after admission.
             return compiled;
         } catch (SkillMarketplaceException e) { throw e; }
@@ -105,7 +107,7 @@ public final class SkillManifestCodec {
 
     public JsonNode validateParameters(JsonNode schema, byte[] bytes) {
         var value = parseJson(bytes); checkPortableNumbers(value);
-        require(compileSchema(schema).validate(value).isEmpty(), "SKILL_PARAMETERS_INVALID");
+        require(compileSchema(schema).validate(value.toString(), InputFormat.JSON).isEmpty(), "SKILL_PARAMETERS_INVALID");
         return value;
     }
 

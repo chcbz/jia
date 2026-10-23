@@ -22,6 +22,7 @@ import java.util.Set;
 import java.util.TreeMap;
 
 /** Exact, additive W04 catalog initializer. It never rewrites task or economy foundation tables. */
+@org.springframework.context.annotation.Profile("schema-maintenance")
 public final class AgentTaskFundingSchemaInitializer implements InitializingBean {
     static final String DDL_RESOURCE = "db/agent-task-funding-v0.sql";
     static final List<String> TABLES = List.of("agent_task_funding_operation", "agent_task_funding");

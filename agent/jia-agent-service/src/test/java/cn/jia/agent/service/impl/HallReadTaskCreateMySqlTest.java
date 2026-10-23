@@ -100,12 +100,14 @@ class HallReadTaskCreateMySqlTest {
         new HallPrivateCaseSchemaInitializer(jdbc).afterPropertiesSet();
         new HallPrivateMarkSchemaInitializer(jdbc).afterPropertiesSet();
         new ResourceDatabasePopulator(new ClassPathResource("db/hall-b02-task-read-fixture.sql")).execute(source);
+        new cn.jia.agent.config.AgentTaskCreationOperationSchemaInitializer(jdbc).afterPropertiesSet();
+        new cn.jia.agent.config.AgentTaskRequirementSnapshotSchemaInitializer(jdbc).afterPropertiesSet();
         identity(OWNER);
         MybatisConfiguration configuration = new MybatisConfiguration(); configuration.setMapUnderscoreToCamelCase(true);
         for (Class<?> mapper : List.of(HallRequestDraftMapper.class, HallPrivateCaseMapper.class,
                 HallCaseExecutionMapper.class, HallReadMapper.class, HallPrivateMarkMapper.class,
                 PersonalWorkspaceExecutionMapper.class, AgentTaskMetaMapper.class,
-                AgentTaskEventMapper.class, TaskPlanMapper.class, TaskItemMapper.class)) configuration.addMapper(mapper);
+                AgentTaskEventMapper.class, AgentTaskCreationOperationMapper.class, TaskPlanMapper.class, TaskItemMapper.class)) configuration.addMapper(mapper);
         GlobalConfig global = new GlobalConfig(); global.setIdentifierGenerator(new DefaultIdentifierGenerator());
         MybatisSqlSessionFactoryBean bean = new MybatisSqlSessionFactoryBean(); bean.setDataSource(source);
         bean.setConfiguration(configuration); bean.setGlobalConfig(global);
@@ -127,8 +129,17 @@ class HallReadTaskCreateMySqlTest {
                 provider(events), provider((TaskService) taskService), provider(), provider(),
                 new AgentScopePublicationCoordinator(), new AgentSceneFeatureFlags(false, false),
                 new AgentTaskMutationTransactionImpl(tasks, transactionManager), writer);
+        rawAgents.setExternalServicePolicies(org.mockito.Mockito.mock(cn.jia.agent.service.AgentExternalServicePolicyService.class));
+        var requirements = new AgentTaskRequirementSnapshotServiceImpl(jdbc,
+                new AgentTaskMutationTransactionImpl(tasks, transactionManager));
+        rawAgents.setRequirementSnapshots(requirements);
         AgentService agents = proxy(rawAgents, AgentService.class);
-        HallTaskCreationService creation = proxy(new HallTaskCreationServiceImpl(agents, tasks, provider((TaskService) taskService)), HallTaskCreationService.class);
+        var creations = proxy(new AgentTaskCreationOperationServiceImpl(
+                new AgentTaskCreationOperationDaoImpl(template.getMapper(AgentTaskCreationOperationMapper.class)),
+                agents, requirements, mock(PersonalWorkspaceTaskLinkService.class),
+                mock(PersonalWorkspaceTaskLinkDao.class), mock(PersonalWorkspaceDao.class),
+                new tools.jackson.databind.ObjectMapper()), AgentTaskCreationOperationService.class);
+        HallTaskCreationService creation = proxy(new HallTaskCreationServiceImpl(creations, tasks, provider((TaskService) taskService)), HallTaskCreationService.class);
         drafts = spy(new HallRequestDraftDaoImpl(template.getMapper(HallRequestDraftMapper.class)));
         failReceipt = new AtomicBoolean();
         doAnswer(invocation -> failReceipt.get() ? 0 : invocation.callRealMethod()).when(drafts)

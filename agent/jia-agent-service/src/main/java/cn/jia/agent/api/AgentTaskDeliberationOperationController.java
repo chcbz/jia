@@ -68,7 +68,7 @@ public final class AgentTaskDeliberationOperationController {
         requireRequest(taskId, idempotencyKey, request);
         AgentTaskDeliberationOperationReadService.Operation operation =
                 operations.read(scope, taskId, idempotencyKey);
-        AssignmentOperationView body = view(operation, taskId);
+        AssignmentOperationView body = view(operation, taskId, 1);
         return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
                 .contentType(MediaType.APPLICATION_JSON).body(JsonResult.success(body));
     }
@@ -78,7 +78,7 @@ public final class AgentTaskDeliberationOperationController {
     public ResponseEntity<JsonResult<AssignmentOperationView>> point(
             @PathVariable String taskId,
             @RequestHeader(name = "Idempotency-Key", required = false) String idempotencyKey,
-            @RequestBody(required = false) String rawBody,
+            @cn.jia.core.annotation.ApiJsonData @RequestBody(required = false) String rawBody,
             HttpServletRequest request, Authentication authentication) {
         var scope = requireOwnerJwt(authentication);
         requireRequest(taskId, idempotencyKey, request);
@@ -108,7 +108,7 @@ public final class AgentTaskDeliberationOperationController {
                     "Operation is not a point-and-deliberate request");
         }
         return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
-                .contentType(MediaType.APPLICATION_JSON).body(JsonResult.success(view(operation, taskId)));
+                .contentType(MediaType.APPLICATION_JSON).body(JsonResult.success(view(operation, taskId, 2)));
     }
 
     private static void requireRequest(String taskId, String idempotencyKey, HttpServletRequest request) {
@@ -190,7 +190,7 @@ public final class AgentTaskDeliberationOperationController {
     }
 
     private static AssignmentOperationView view(
-            AgentTaskDeliberationOperationReadService.Operation value, String taskId) {
+            AgentTaskDeliberationOperationReadService.Operation value, String taskId, int schemaVersion) {
         if (value == null || !Objects.equals(taskId, value.taskId())
                 || value.requirementRevision() < 1 || value.assignmentRevision() < 0
                 || value.taskVersion() < 0 || value.grantVersion() < 1
@@ -200,9 +200,9 @@ public final class AgentTaskDeliberationOperationController {
                     AgentTaskDeliberationOperationReadService.ReadException.Reason.INTEGRITY_ERROR);
         }
         List<InputView> inputs = value.inputs().stream().map(input -> new InputView(
-                input.fileId(), input.version(), input.purpose(), input.contentMimeType(),
+                input.fileId(), Integer.toString(input.version()), input.purpose(), input.contentMimeType(),
                 Long.toString(input.byteLength()), input.contentHash())).toList();
-        return new AssignmentOperationView(1, value.taskId(), value.targetAgentId(),
+        return new AssignmentOperationView(schemaVersion, value.taskId(), value.targetAgentId(),
                 Long.toString(value.requirementRevision()),
                 Long.toString(value.assignmentRevision()), Long.toString(value.taskVersion()),
                 value.grantId(), Long.toString(value.grantVersion()), value.grantState(),
@@ -269,7 +269,7 @@ public final class AgentTaskDeliberationOperationController {
     private static ResponseEntity<JsonResult<Void>> error(
             HttpStatus status, String code, String message) {
         JsonResult<Void> body = JsonResult.failure(code, message);
-        body.setStatus(status.value());
+
         return ResponseEntity.status(status).header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
                 .contentType(new MediaType(MediaType.APPLICATION_JSON, StandardCharsets.UTF_8))
                 .body(body);
@@ -289,7 +289,7 @@ public final class AgentTaskDeliberationOperationController {
             String conversationId, String initialRequestId, boolean currentAssignment) { }
 
     @JsonInclude(JsonInclude.Include.ALWAYS)
-    public record InputView(String fileId, int version, String purpose, String contentMimeType,
+    public record InputView(String fileId, String version, String purpose, String contentMimeType,
             String byteLength, String contentHash) { }
 
     private static final class AuthenticationFailure extends RuntimeException { }

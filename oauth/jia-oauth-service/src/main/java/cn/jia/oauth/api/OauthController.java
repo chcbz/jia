@@ -1,5 +1,7 @@
 package cn.jia.oauth.api;
 
+import cn.jia.core.entity.JsonRequest;
+
 import cn.jia.core.context.EsContext;
 import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.entity.JsonResult;
@@ -573,7 +575,8 @@ public class OauthController {
      */
     @RequestMapping(value = "/client/update", method = RequestMethod.POST)
     @ResponseBody
-    public Object updateClient(@RequestBody OauthClientEntity client) {
+    public Object updateClient(@RequestBody JsonRequest<OauthClientEntity> protocolRequest) {
+        OauthClientEntity client = protocolRequest == null ? null : protocolRequest.data();
         String clientId = EsContextHolder.getContext().getClientId();
         log.info("更新客户端信息，client_id: {}", clientId);
         client.setClientId(clientId);

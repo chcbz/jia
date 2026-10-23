@@ -61,6 +61,7 @@ class PersonalWorkspaceConversationExecutionTest {
         service=new PersonalWorkspaceExecutionServiceImpl(rows,workspace,
                 mock(PersonalWorkspaceTaskLinkDao.class),runtimes,storage,writes,
                 new PersonalWorkspaceExecutionProperties(List.of("image/png","text/plain")));
+        wireAssigneeFixture(service,rows);
         service.setConversationAdmission(grants,transactions);
         principal(RUNTIME);
         var authentication=mock(AgentRuntimeAuthenticationService.class);
@@ -209,7 +210,7 @@ class PersonalWorkspaceConversationExecutionTest {
                 eq("agent"),eq("GENERATE_IMAGE"),eq(true))).thenReturn(
                 new AgentTaskExecutionGrantService.Admission("grant-1",1,7,
                         "agent","GENERATE_IMAGE",true,List.of(granted)));
-        var file=new PersonalWorkspaceFileEntity().setFileId("file-1").setState("ACTIVE");
+        var file=new PersonalWorkspaceFileEntity().setFileId("file-1").setState("ACTIVE").setMetadataRevision(7L);
         var version=new PersonalWorkspaceVersionEntity().setFileId("file-1").setVersion(1)
                 .setOriginalFilename("bird.png").setContentMimeType("image/png")
                 .setByteLength(100L).setContentHash("a".repeat(64)).setStorageUri("owner-private/object");
@@ -224,6 +225,11 @@ class PersonalWorkspaceConversationExecutionTest {
                 && "owner-private/object".equals(input.getStorageUri())
                 && "a".repeat(64).equals(input.getContentHash()) && "0".equals(input.getTenantId())
                 && "client".equals(input.getClientId()) && "owner".equals(input.getOwnerJiacn())));
+        assertEquals(8L,file.getMetadataRevision());
+        var order=inOrder(workspace,rows);
+        order.verify(workspace).lockFile("0","client","owner","file-1");
+        order.verify(rows).insertInput(any());
+        order.verify(workspace).updateFile(file);
         verifyNoInteractions(writes);
     }
 
@@ -582,7 +588,11 @@ class PersonalWorkspaceConversationExecutionTest {
         assertTrue(sql.contains("created_at &gt; #{afterCreatedAt}"));
         assertTrue(sql.contains("CAST(execution_id AS BINARY) &gt; CAST(#{afterExecutionId} AS BINARY)"));
         assertTrue(sql.contains("<if test='afterCreatedAt != null and afterExecutionId != null'>"));
-        for (String key:List.of("tenant_id","client_id","owner_jiacn","target_agent_id","execution_mode")) {
+        assertTrue(sql.contains("g.owner_jiacn=agent_personal_workspace_execution.owner_jiacn"));
+        assertTrue(sql.contains("g.grant_id=agent_personal_workspace_execution.task_grant_id"));
+        assertTrue(sql.contains("g.grant_version=agent_personal_workspace_execution.task_grant_version"));
+        assertTrue(sql.contains("BINARY g.executor_owner_jiacn=BINARY #{ownerJiacn}"));
+        for (String key:List.of("tenant_id","client_id","target_agent_id","execution_mode")) {
             assertTrue(sql.contains("CAST("+key+" AS BINARY)"),key);
             assertTrue(sql.contains("OCTET_LENGTH("+key+")"),key);
         }
@@ -658,6 +668,9 @@ class PersonalWorkspaceConversationExecutionTest {
             row.setOwnerJiacn(i==2 ? "other-owner" : "owner");
             foreignRows.add(row);
         }
+        // The production mapper rejects a different data owner unless a persisted grant
+        // explicitly binds this executor. This fixture has no grant for foreign-task.
+        doReturn(null).when(rows).findForRuntime("0","client","owner","agent","foreign-task","foreign-run");
         execution.setCreatedAt(104L);
         var page=new java.util.ArrayList<>(foreignRows);
         page.add(execution);
@@ -983,5 +996,19 @@ class PersonalWorkspaceConversationExecutionTest {
     private static String sha(byte[] bytes) {
         try { return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes)); }
         catch (Exception impossible) { throw new IllegalStateException(impossible); }
+    }
+
+    /** Existing fixture has one authenticated owner. Cross-owner fixtures supply explicit grant authority separately. */
+    private static void wireAssigneeFixture(cn.jia.agent.service.PersonalWorkspaceExecutionService instance,
+            cn.jia.agent.dao.PersonalWorkspaceExecutionDao rows) {
+        var service=(cn.jia.agent.service.impl.PersonalWorkspaceExecutionServiceImpl)instance;
+        var authority=org.mockito.Mockito.mock(cn.jia.agent.service.TaskAssigneeAuthorityService.class);
+        org.mockito.Mockito.when(authority.resolveForAssignment(org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString()))
+            .thenAnswer(i->new cn.jia.agent.service.TaskAssigneeAuthorityService.Target(i.getArgument(0),i.getArgument(1),i.getArgument(2),i.getArgument(3),1L,null));
+        org.mockito.Mockito.when(authority.requireGrantTarget(org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyLong()))
+            .thenAnswer(i->new cn.jia.agent.service.TaskAssigneeAuthorityService.Target(i.getArgument(0),i.getArgument(1),i.getArgument(2),"agent",1L,null));
+        service.setAssigneeAuthority(authority);
+        org.mockito.Mockito.when(rows.findForRuntime(org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString()))
+            .thenAnswer(i->rows.findByTaskRun(i.getArgument(0),i.getArgument(1),i.getArgument(2),i.getArgument(4),i.getArgument(5)));
     }
 }

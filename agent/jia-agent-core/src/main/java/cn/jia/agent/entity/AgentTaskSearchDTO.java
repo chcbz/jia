@@ -7,6 +7,8 @@ import java.io.Serializable;
 
 @Data
 public class AgentTaskSearchDTO implements Serializable {
+    private String phase;
+
     @Serial
     private static final long serialVersionUID = 1L;
 

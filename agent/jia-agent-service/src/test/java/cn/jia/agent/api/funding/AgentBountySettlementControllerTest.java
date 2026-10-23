@@ -36,7 +36,7 @@ class AgentBountySettlementControllerTest {
         };
         StaticListableBeanFactory beans = new StaticListableBeanFactory(); beans.addBean("settlement", boundary);
         AgentBountySettlementController controller = new AgentBountySettlementController(beans.getBeanProvider(FundedBountySettlementService.class));
-        var response = controller.complete("task", Map.of("expectedTaskVersion", "1", "actualComputeMicro", "1"), KEY, jwt("sub", "Tenant", "Client"));
+        var response = controller.complete("task", new cn.jia.core.entity.JsonRequest<>(1, "test-request", Map.of("expectedTaskVersion", "1", "actualComputeMicro", "1")), KEY, jwt("sub", "Tenant", "Client"));
         assertEquals(HttpStatus.OK, response.getStatusCode());
         assertEquals("private, no-store", response.getHeaders().getFirst("Cache-Control"));
         assertEquals(new FundedBountyActor("Tenant", "Client", "Tenant", "sub"), actor.get());
@@ -47,7 +47,7 @@ class AgentBountySettlementControllerTest {
                 Map.of("expectedTaskVersion", "1", "actualComputeMicro", "1", "platformFeeMicro", "0"),
                 Map.of("expectedTaskVersion", "1", "actualComputeMicro", "1", "agentId", "another"))) {
             assertEquals(HttpStatus.BAD_REQUEST, assertThrows(FundedBountyException.class,
-                    () -> controller.complete("task", body, KEY, jwt("sub", "Tenant", "Client"))).status());
+                    () -> controller.complete("task", new cn.jia.core.entity.JsonRequest<>(1, "test-request", body), KEY, jwt("sub", "Tenant", "Client"))).status());
         }
     }
 

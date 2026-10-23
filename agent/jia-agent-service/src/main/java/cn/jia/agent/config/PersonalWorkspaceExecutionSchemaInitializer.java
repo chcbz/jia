@@ -14,6 +14,7 @@ import java.util.Locale;
 import java.util.Objects;
 
 /** Installs only additive private-execution/grant/output tables. */
+@org.springframework.context.annotation.Profile("schema-maintenance")
 public final class PersonalWorkspaceExecutionSchemaInitializer implements InitializingBean {
     static final String RESOURCE = "db/agent-personal-workspace-v1_11-executions.sql";
     static final String OUTPUT_MIME_MIGRATION_RESOURCE = "db/agent-personal-workspace-v1_13-execution-output-mime.sql";
@@ -119,6 +120,7 @@ public final class PersonalWorkspaceExecutionSchemaInitializer implements Initia
     }
     void migrateTextOutputMime() {
         String actual=enforcedMimeCheck();
+        if (actual.equals(canonicalMimeCheck(SkillExecutionSchemaInitializer.MIME_CATALOG_CHECK))) return;
         String required=canonicalMimeCheck("output_content_mime_type in ("+OUTPUT_MIMES+")");
         if (actual.equals(required)) return;
         if (!actual.equals(canonicalMimeCheck("output_content_mime_type in ("+DOCUMENT_MIMES+")")))
@@ -158,9 +160,22 @@ public final class PersonalWorkspaceExecutionSchemaInitializer implements Initia
         else if (present != 3) throw new IllegalStateException("Execution terminal-state schema is partial");
     }
     private void verifyTerminalState() {
+        if (hasSkillProtocol()) { verifySkillTerminalState(); return; }
         Integer invalid=jdbc.queryForObject("""
                 SELECT COUNT(*) FROM agent_personal_workspace_execution
                  WHERE execution_state NOT IN ('QUEUED','INPUTS_REVOKED','OUTPUT_COMMITTED','FAILED')
+                    OR (execution_state='FAILED' AND (failure_code IS NULL
+                        OR failure_code <> 'AGENT_DELIVERY_FAILED' OR failure_message IS NULL OR failed_at IS NULL))
+                    OR (execution_state<>'FAILED' AND (failure_code IS NOT NULL
+                        OR failure_message IS NOT NULL OR failed_at IS NOT NULL))
+                """, Integer.class);
+        if (invalid == null || invalid != 0) throw new IllegalStateException("Execution terminal-state schema is invalid");
+    }
+    private void verifySkillTerminalState() {
+        Integer invalid=jdbc.queryForObject("""
+                SELECT COUNT(*) FROM agent_personal_workspace_execution
+                 WHERE execution_state NOT IN ('QUEUED','INPUTS_REVOKED','OUTPUT_COMMITTED','RESULT_COMMITTED','FAILED')
+                    OR (execution_state='RESULT_COMMITTED' AND (execution_protocol_version IS NULL OR execution_protocol_version<>4))
                     OR (execution_state='FAILED' AND (failure_code IS NULL
                         OR failure_code <> 'AGENT_DELIVERY_FAILED' OR failure_message IS NULL OR failed_at IS NULL))
                     OR (execution_state<>'FAILED' AND (failure_code IS NOT NULL
@@ -199,11 +214,12 @@ public final class PersonalWorkspaceExecutionSchemaInitializer implements Initia
         if (present == 0) jdbc.execute(taskExecutionMigrationStatement());
         else if (present != 5) throw new IllegalStateException("Task execution schema is partial");
     }
-    private void verifyTaskExecution() {
+    void verifyTaskExecution() {
         Integer invalid=jdbc.queryForObject("""
                 SELECT COUNT(*) FROM agent_personal_workspace_execution
                  WHERE execution_mode NOT IN ('PRIVATE','TASK','CONVERSATION')
-                    OR execution_state NOT IN ('QUEUED','INPUTS_REVOKED','OUTPUT_STAGED','OUTPUT_COMMITTED','FAILED')
+                    OR execution_state NOT IN ('QUEUED','INPUTS_REVOKED','OUTPUT_STAGED','OUTPUT_COMMITTED','RESULT_COMMITTED','FAILED')
+                    OR (execution_state='RESULT_COMMITTED' AND (execution_protocol_version IS NULL OR execution_protocol_version<>4))
                     OR (execution_mode='PRIVATE' AND (work_item_id IS NOT NULL OR lease_token IS NOT NULL
                         OR lease_work_item_version IS NOT NULL OR lease_expires_at IS NOT NULL))
                     OR (execution_mode='TASK' AND (work_item_id IS NULL OR lease_token IS NULL
@@ -423,6 +439,7 @@ public final class PersonalWorkspaceExecutionSchemaInitializer implements Initia
     }
 
     private void verifyOutputMime() {
+        if (hasSkillProtocol()) { verifySkillOutputMime(); return; }
         Integer invalid=jdbc.queryForObject("""
                 SELECT COUNT(*) FROM agent_personal_workspace_execution
                  WHERE output_content_mime_type IS NULL
@@ -432,6 +449,22 @@ public final class PersonalWorkspaceExecutionSchemaInitializer implements Initia
                       'application/vnd.openxmlformats-officedocument.presentationml.presentation','text/plain')
                 """, Integer.class);
         if (invalid == null || invalid != 0) throw new IllegalStateException("Execution output MIME schema is invalid");
+    }
+    private void verifySkillOutputMime() {
+        Integer invalid=jdbc.queryForObject("""
+                SELECT COUNT(*) FROM agent_personal_workspace_execution
+                 WHERE (output_content_mime_type IS NULL
+                    OR output_content_mime_type NOT IN ('image/png','image/jpeg','application/pdf',
+                      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                      'application/vnd.openxmlformats-officedocument.presentationml.presentation','text/plain'))
+                   AND (execution_protocol_version IS NULL OR execution_protocol_version<>4)
+                """, Integer.class);
+        if (invalid == null || invalid != 0) throw new IllegalStateException("Execution output MIME schema is invalid");
+    }
+    private boolean hasSkillProtocol() {
+        Integer count=jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='agent_personal_workspace_execution' AND column_name='execution_protocol_version'",Integer.class);
+        return Objects.equals(count,1);
     }
     private List<String> presentTables() { return jdbc.queryForList("""
             SELECT table_name FROM information_schema.tables WHERE table_schema=DATABASE()

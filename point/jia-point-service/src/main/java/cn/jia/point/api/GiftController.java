@@ -1,5 +1,7 @@
 package cn.jia.point.api;
 
+import cn.jia.core.entity.JsonRequest;
+
 import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.entity.JsonRequestPage;
 import cn.jia.core.entity.JsonResult;
@@ -45,7 +47,8 @@ public class GiftController {
 	 */
 	@PreAuthorize("hasAuthority('gift-create')")
 	@RequestMapping(value = "/create", method = RequestMethod.POST)
-	public Object create(@RequestBody PointGiftEntity gift) {
+	public Object create(@RequestBody JsonRequest<PointGiftEntity> protocolRequest) {
+        PointGiftEntity gift = protocolRequest == null ? null : protocolRequest.data();
 		giftService.create(gift);
 		return JsonResult.success();
 	}
@@ -57,7 +60,8 @@ public class GiftController {
 	 */
 	@PreAuthorize("hasAuthority('gift-update')")
 	@RequestMapping(value = "/update", method = RequestMethod.POST)
-	public Object update(@RequestBody PointGiftEntity gift) {
+	public Object update(@RequestBody JsonRequest<PointGiftEntity> protocolRequest) {
+        PointGiftEntity gift = protocolRequest == null ? null : protocolRequest.data();
 		giftService.update(gift);
 		return JsonResult.success();
 	}
@@ -80,11 +84,10 @@ public class GiftController {
 	 */
 //	@PreAuthorize("hasAuthority('gift-list')")
 	@RequestMapping(value = "/list", method = RequestMethod.POST)
-	public Object list(@RequestBody JsonRequestPage<PointGiftVO> page) {
+	public Object list(@RequestBody JsonRequest<JsonRequestPage<PointGiftVO>> protocolRequest) {
+        JsonRequestPage<PointGiftVO> page = protocolRequest == null ? null : protocolRequest.data();
 		PageInfo<PointGiftEntity> giftList = giftService.list(page.getPageNum(), page.getPageSize(), page.getSearch(), page.getOrderBy());
-		JsonResultPage<PointGiftEntity> result = new JsonResultPage<>(giftList.getList());
-		result.setPageNum(giftList.getPageNum());
-		result.setTotal(giftList.getTotal());
+		JsonResultPage<PointGiftEntity> result = JsonResultPage.page(giftList.getList(), giftList.getPageNum(), giftList.getPageSize(), giftList.getTotal());
 		return result;
 	}
 	
@@ -96,7 +99,8 @@ public class GiftController {
 	 */
 //	@PreAuthorize("hasAuthority('gift-usage_add')")
 	@RequestMapping(value = "/usage/add", method = RequestMethod.POST)
-	public Object usageAdd(@RequestBody PointGiftUsageEntity giftUsage, HttpServletRequest request) throws Exception {
+	public Object usageAdd(@RequestBody JsonRequest<PointGiftUsageEntity> protocolRequest, HttpServletRequest request) throws Exception {
+        PointGiftUsageEntity giftUsage = protocolRequest == null ? null : protocolRequest.data();
 		String clientId = EsContextHolder.getContext().getClientId();
 		giftUsage.setClientId(clientId);
 		giftService.usage(giftUsage);
@@ -137,11 +141,10 @@ public class GiftController {
 	 */
 //	@PreAuthorize("hasAuthority('gift-usage_list_gift')")
 	@RequestMapping(value = "/usage/list/gift/{giftId}", method = RequestMethod.POST)
-	public Object usageListByGift(@RequestBody JsonRequestPage<PointGiftUsageEntity> page, @PathVariable Long giftId) {
+	public Object usageListByGift(@RequestBody JsonRequest<JsonRequestPage<PointGiftUsageEntity>> protocolRequest, @PathVariable Long giftId) {
+        JsonRequestPage<PointGiftUsageEntity> page = protocolRequest == null ? null : protocolRequest.data();
 		PageInfo<PointGiftUsageEntity> usageList = giftService.usageListByGift(page.getPageNum(), page.getPageSize(), giftId, page.getOrderBy());
-		JsonResultPage<PointGiftUsageEntity> result = new JsonResultPage<>(usageList.getList());
-		result.setPageNum(usageList.getPageNum());
-		result.setTotal(usageList.getTotal());
+		JsonResultPage<PointGiftUsageEntity> result = JsonResultPage.page(usageList.getList(), usageList.getPageNum(), usageList.getPageSize(), usageList.getTotal());
 		return result;
 	}
 	
@@ -153,11 +156,10 @@ public class GiftController {
 	 */
 //	@PreAuthorize("hasAuthority('gift-usage_list_user')")
 	@RequestMapping(value = "/usage/list/user/{user}", method = RequestMethod.POST)
-	public Object usageListByUser(@RequestBody JsonRequestPage<PointGiftUsageEntity> page, @PathVariable String user) {
+	public Object usageListByUser(@RequestBody JsonRequest<JsonRequestPage<PointGiftUsageEntity>> protocolRequest, @PathVariable String user) {
+        JsonRequestPage<PointGiftUsageEntity> page = protocolRequest == null ? null : protocolRequest.data();
 		PageInfo<PointGiftUsageEntity> usageList = giftService.usageListByUser(page.getPageNum(), page.getPageSize(), user, page.getOrderBy());
-		JsonResultPage<PointGiftUsageEntity> result = new JsonResultPage<>(usageList.getList());
-		result.setPageNum(usageList.getPageNum());
-		result.setTotal(usageList.getTotal());
+		JsonResultPage<PointGiftUsageEntity> result = JsonResultPage.page(usageList.getList(), usageList.getPageNum(), usageList.getPageSize(), usageList.getTotal());
 		return result;
 	}
 	

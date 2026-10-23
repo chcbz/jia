@@ -89,6 +89,9 @@ class PersonalWorkspaceControlledImageV3ResultMySqlTest {
         new AgentTaskProviderCostConsentSchemaInitializer(jdbc).afterPropertiesSet();
         new ControlledImageExecutionSchemaInitializer(jdbc).afterPropertiesSet();
         new ControlledImageFollowupV3SchemaInitializer(jdbc).afterPropertiesSet();
+        // Persisted authority fixture for the real runtime lookup SQL; grant lifecycle is a collaborator here.
+        jdbc.execute("CREATE TABLE agent_task_execution_grant (tenant_id VARCHAR(50), client_id VARCHAR(50), owner_jiacn VARCHAR(50), task_id VARCHAR(100), grant_id VARCHAR(100), grant_version BIGINT, target_agent_id VARCHAR(100), executor_owner_jiacn VARCHAR(50)) ENGINE=InnoDB");
+        jdbc.update("INSERT INTO agent_task_execution_grant VALUES ('0','client','owner','task','grant',1,'agent','owner')");
         rows=executionDao(dataSource);
         transactions=new TransactionTemplate(new DataSourceTransactionManager(dataSource));
         configureService();
@@ -370,7 +373,7 @@ class PersonalWorkspaceControlledImageV3ResultMySqlTest {
 
     private void configureService() {
         PersonalWorkspaceStorage storage=new FileSystemPersonalWorkspaceStorage(
-                storageRoot.toAbsolutePath(),1_000_000,Set.of("image/png"));
+                storageRoot.toAbsolutePath(),1_000_000);
         service=new PersonalWorkspaceExecutionServiceImpl(rows,mock(cn.jia.agent.dao.PersonalWorkspaceDao.class),
                 mock(cn.jia.agent.dao.PersonalWorkspaceTaskLinkDao.class),
                 mock(cn.jia.agent.dao.AgentRuntimeDao.class),storage,mock(PersonalWorkspaceWriteService.class),
@@ -384,6 +387,10 @@ class PersonalWorkspaceControlledImageV3ResultMySqlTest {
             return result;
         }));
         service.setRuntimeAuthentication(auth);
+        var assignees=mock(cn.jia.agent.service.TaskAssigneeAuthorityService.class);
+        when(assignees.requireGrantTarget("0","client","owner","task","grant",1L))
+                .thenReturn(new cn.jia.agent.service.TaskAssigneeAuthorityService.Target("0","client","owner","agent",1L,null));
+        service.setAssigneeAuthority(assignees);
         AgentTaskMutationTransaction taskTransactions=mock(AgentTaskMutationTransaction.class);
         when(taskTransactions.executeWithLockedTaskRootInOwnerScope(eq("0"),eq("client"),eq("owner"),
                 eq("task"),any())).thenAnswer(invocation -> {

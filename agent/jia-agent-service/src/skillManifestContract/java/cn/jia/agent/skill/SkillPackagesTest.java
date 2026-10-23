@@ -54,11 +54,16 @@ class SkillPackagesTest {
         assertEquals(0L,first.product().priceMicro());assertEquals(5L,second.product().priceMicro());
         byte[] copy=first.bytes();copy[0]^=1;assertArrayEquals(bytes,packages.prepare(approved(bytes)).bytes());
     }
-    @Test void transactionPreparationForbiddenButFactRevalidationDoesNotReadFiles() throws Exception {
+    @Test void coldTransactionPreparationForbiddenButPreparedMetadataReadsNoFiles() throws Exception {
         byte[] bytes=archive("ready");var store=new SkillPackageStore(root);String key=store.publish(bytes);var packages=new SkillPackages(root);
         var v=approved(bytes);var prepared=packages.prepare(v);Files.delete(root.resolve(key+".zip"));
         TransactionSynchronizationManager.setActualTransactionActive(true);
-        try { assertThrows(SkillMarketplaceException.class,()->packages.prepare(v)); assertDoesNotThrow(()->SkillPackages.revalidate(v,prepared)); }
+        try {
+            assertThrows(SkillMarketplaceException.class,()->new SkillPackages(root).prepare(v));
+            assertArrayEquals(bytes,packages.prepare(v).bytes());
+            assertDoesNotThrow(()->SkillPackages.revalidate(v,prepared));
+            assertThrows(SkillMarketplaceException.class,()->packages.prepare(v.setReviewStatus("REJECTED")));
+        }
         finally { TransactionSynchronizationManager.setActualTransactionActive(false); }
     }
     @Test void approvedFactDriftRejectedInsideTransaction() {

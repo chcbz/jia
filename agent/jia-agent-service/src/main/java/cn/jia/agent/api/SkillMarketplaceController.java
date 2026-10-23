@@ -26,11 +26,11 @@ public final class SkillMarketplaceController {
         HostingRentHttp.noQuery(request); return ok(skills.detail(HostingRentHttp.actor(auth),productId,admin(auth)));
     }
     @PostMapping(value="/agent/skill-orders/quotes",consumes=MediaType.APPLICATION_JSON_VALUE)
-    public Object quote(Authentication auth,HttpServletRequest request,@RequestBody byte[] body) {
+    public Object quote(Authentication auth,HttpServletRequest request,@cn.jia.core.annotation.ApiJsonData @RequestBody byte[] body) {
         return ok(skills.quote(HostingRentHttp.actor(auth),HostingRentHttp.key(request),SkillMarketplaceHttp.body(body,false),admin(auth)));
     }
     @PostMapping(value="/agent/skill-orders",consumes=MediaType.APPLICATION_JSON_VALUE)
-    public Object purchase(Authentication auth,HttpServletRequest request,@RequestBody byte[] body) {
+    public Object purchase(Authentication auth,HttpServletRequest request,@cn.jia.core.annotation.ApiJsonData @RequestBody byte[] body) {
         return ok(skills.purchase(HostingRentHttp.actor(auth),HostingRentHttp.key(request),SkillMarketplaceHttp.body(body,true),admin(auth)));
     }
     @GetMapping("/agent/skill-orders/{orderId}")
@@ -52,7 +52,15 @@ public final class SkillMarketplaceController {
         else if(error instanceof HostingRentApplicationException e) {
             status=e.status(); code=status==401?"UNAUTHENTICATED":status==400?"BAD_REQUEST":"AGENT_OWNER_UNPROVEN";
         } else if(error instanceof EconomyPostingException e) {
-            code=e.reason().name(); status="INSUFFICIENT_FUNDS".equals(code)?422:409;
+            code=e.reason().name();
+            status=switch(code) {
+                case "FEATURE_DISABLED" -> 403;
+                case "INVALID_COMMAND","IMBALANCED_TRANSACTION","JOURNAL_CORRUPT" -> 500;
+                case "AMOUNT_RANGE_EXCEEDED","INSUFFICIENT_FUNDS" -> 422;
+                case "ACCOUNT_NOT_FOUND","ACCOUNT_NOT_ACTIVE","IDEMPOTENCY_CONFLICT","JOURNAL_ID_CONFLICT","CONCURRENCY_CONFLICT","ESCROW_CONFLICT" -> 409;
+                default -> 500;
+            };
+            if ("FEATURE_DISABLED".equals(code)) code="ECONOMY_PREVIEW_DISABLED";
         } else if(error instanceof IllegalArgumentException || error instanceof org.springframework.http.converter.HttpMessageNotReadableException) {
             status=400;code="BAD_REQUEST";
         }

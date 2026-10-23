@@ -196,7 +196,7 @@ class AgentLegacyTaskCompatibilityRealDatabaseTest {
                 new AgentTaskMutationTransactionImpl(taskMetaDao, transactionManager);
         AgentTaskAggregationService aggregationService = transactionalInterfaceProxy(
                 new AgentTaskAggregationServiceImpl(
-                        taskMetaDao, identityService, mutationTransaction, eventWriter,
+                        taskMetaDao, new TaskAssigneeAuthorityServiceImpl(org.mockito.Mockito.mock(cn.jia.agent.dao.AgentExternalServicePolicyDao.class), identityService, org.mockito.Mockito.mock(cn.jia.agent.dao.AgentTaskExecutionGrantDao.class)), mutationTransaction, eventWriter,
                         new AgentTaskAggregationCalculator(), () -> 1_100L),
                 AgentTaskAggregationService.class);
         service = transactionalClassProxy(new AgentLegacyTaskCompatibilityService(

@@ -5,7 +5,7 @@ import cn.jia.agent.entity.AgentTaskBountyBootstrapReconcileDTO;
 import cn.jia.agent.entity.AgentTaskBountyBootstrapReconcileDTO.Outcome;
 import cn.jia.agent.service.AgentTaskBountyBootstrapOutboxService;
 import cn.jia.agent.service.AgentTaskExecutionGrantService;
-import cn.jia.chat.config.ChatTypedDeliberationSchemaInitializer.Readiness;
+import cn.jia.chat.config.ChatTypedDeliberationReadiness.Readiness;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -100,6 +100,7 @@ public class ChatBountyBootstrapRelay implements SmartLifecycle, AutoCloseable {
                 claim.tenantId(), claim.clientId(), claim.ownerJiacn());
         ChatBountyBootstrapAdmissionService.Admission result;
         try {
+            admission.prepare(claim); // immutable package I/O before the transactional admission
             result = admission.admit(claim); // transactional commit before the acknowledgement below
         } catch (ChatTypedDeliberationContextService.RuntimeNotReadyException awaiting) {
             // Admission has rolled back. Release this exact lease through the existing durable

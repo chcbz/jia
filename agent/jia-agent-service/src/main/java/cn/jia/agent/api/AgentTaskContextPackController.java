@@ -82,12 +82,13 @@ public class AgentTaskContextPackController {
         // Retain F01's original snapshot isolation. Re-fence only the delivery of its
         // already generated/validated bytes, not all source reads or the servlet chain.
         if (authentication instanceof AgentRuntimeAuthentication) {
-            return runtimeAuthentication.withNativeFence(authentication, () -> response(body));
+            return runtimeAuthentication.withNativeFence(authentication, () -> response(body, request));
         }
-        return response(body);
+        return response(body, request);
     }
 
-    private static ResponseEntity<byte[]> response(byte[] body) {
+    private static ResponseEntity<byte[]> response(byte[] body, HttpServletRequest request) {
+        body = cn.jia.core.config.ApiJsonResponses.rawJsonSuccess(body, request);
         return ResponseEntity.ok()
                 .header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL_VALUE)
                 .contentType(MediaType.APPLICATION_JSON)
@@ -96,7 +97,7 @@ public class AgentTaskContextPackController {
     }
 
     @ExceptionHandler(ContextPackAuthenticationException.class)
-    public ResponseEntity<ContextPackError> handleAuthentication(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> handleAuthentication(
             ContextPackAuthenticationException exception) {
         HttpStatus status = exception.forbidden ? HttpStatus.FORBIDDEN : HttpStatus.UNAUTHORIZED;
         return error(status,
@@ -106,12 +107,12 @@ public class AgentTaskContextPackController {
     }
 
     @ExceptionHandler(ContextPackRequestException.class)
-    public ResponseEntity<ContextPackError> handleBadRequest(Exception ignored) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> handleBadRequest(Exception ignored) {
         return error(HttpStatus.BAD_REQUEST, "BAD_REQUEST", "Invalid Context Pack request");
     }
 
     @ExceptionHandler(AgentTaskContextPackException.class)
-    public ResponseEntity<ContextPackError> handleContextFailure(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> handleContextFailure(
             AgentTaskContextPackException exception) {
         return switch (exception.getReason()) {
             case NOT_FOUND_OR_FORBIDDEN -> {
@@ -130,7 +131,7 @@ public class AgentTaskContextPackController {
     }
 
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<ContextPackError> handleUnexpected(Exception ignored) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> handleUnexpected(Exception ignored) {
         log.error("Context Pack request failed: reason=unexpected");
         return error(HttpStatus.SERVICE_UNAVAILABLE, "TASK_CONTEXT_PACK_UNAVAILABLE",
                 "Task Context Pack is temporarily unavailable");
@@ -258,12 +259,12 @@ public class AgentTaskContextPackController {
         return Character.isWhitespace(codePoint) || Character.isSpaceChar(codePoint);
     }
 
-    private static ResponseEntity<ContextPackError> error(
+    private static ResponseEntity<cn.jia.core.entity.JsonResult<Void>> error(
             HttpStatus status, String code, String message) {
         return ResponseEntity.status(status)
                 .header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL_VALUE)
                 .contentType(new MediaType(MediaType.APPLICATION_JSON, StandardCharsets.UTF_8))
-                .body(new ContextPackError(code, message));
+                .body(cn.jia.core.entity.JsonResult.<Void>failure(code, message));
     }
 
     private record Scope(String tenantId, String clientId, String ownerJiacn, String actorAgentId) {

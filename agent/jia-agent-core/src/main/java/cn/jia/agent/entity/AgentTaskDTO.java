@@ -11,6 +11,8 @@ import java.util.List;
 
 @Data
 public class AgentTaskDTO implements Serializable {
+    private String phase;
+
     @Serial
     private static final long serialVersionUID = 1L;
 
@@ -23,6 +25,7 @@ public class AgentTaskDTO implements Serializable {
     private List<String> requiredAbilities;
     private Integer reward;
     private String assignedAgentId;
+    private AgentTaskTargetSummaryDTO assignedTarget;
     private String assignedAgentName;
     /** Optional exact-scoped coordinator projection; never inferred from assignees. */
     private String coordinatorAgentId;

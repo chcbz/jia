@@ -24,6 +24,9 @@ public class AgentTaskExecutionGrantEntity extends BaseEntity {
     private Long requirementRevision;
     private Long assignmentRevision;
     private String targetAgentId;
+    private String executorOwnerJiacn;
+    private Long executorBindingId;
+    private Long externalPolicyRevision;
     private String permittedOperationsJson;
     private String permittedToolPolicyRef;
     private String inputScopeJson;

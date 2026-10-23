@@ -17,6 +17,14 @@ import static org.mockito.Mockito.*;
 final class UnifiedRuntimeTestSupport {
     static final String INSTALLATION = "rti_" + "1".repeat(32);
     static void stub(AgentRuntimeAuthenticationService auth) {
+        lenient().doAnswer(inv -> {
+            var proof = inv.getArgument(1, AgentRuntimeAuthenticationService.Proof.class);
+            var scope = proof.scope();
+            return new AgentRuntimeAuthenticationService.Receipt("native-runtime-v1", scope.tenantId(),
+                    scope.clientId(), scope.ownerJiacn(), scope.agentId(), scope.runtimeInstanceId(),
+                    proof.installationId(), proof.hostId(), proof.sessionGeneration(), true);
+        }).when(auth).bind(anyString(), any(AgentRuntimeAuthenticationService.Proof.class), notNull());
+
         // Match actual proof/callback values only. Stubbing an override must not run
         // the previous answer with Mockito's null matcher placeholders.
         lenient().doAnswer(inv -> ((Supplier<?>) inv.getArgument(2)).get())
@@ -55,7 +63,11 @@ final class UnifiedRuntimeTestSupport {
             var mapper = new ObjectMapper();
             Map<String, Object> payload = mapper.readValue(wire, new TypeReference<HashMap<String, Object>>() { });
             if ("agent.register".equals(payload.get("type")) || "agent.register".equals(payload.get("messageType"))) {
-                registrationProof(session, payload); wire = mapper.writeValueAsString(payload);
+                registrationProof(session, payload);
+            }
+            if (!payload.containsKey("protocolVersion")) {
+                Object type=payload.getOrDefault("messageType",payload.get("type"));
+                if(type instanceof String value) wire=mapper.writeValueAsString(cn.jia.agent.common.AgentMessageWire.event(value,payload,null));
             }
         } catch (RuntimeException malformed) { /* preserve malformed-wire test bytes */ }
         handler.handleTextMessage(session, new TextMessage(wire));

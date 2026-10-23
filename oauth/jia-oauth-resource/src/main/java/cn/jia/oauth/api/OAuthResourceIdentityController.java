@@ -21,7 +21,7 @@ public class OAuthResourceIdentityController {
     private static final Pattern EPOCH = Pattern.compile("0|[1-9][0-9]{0,18}");
 
     @GetMapping("/resource")
-    public ResponseEntity<OAuthResourceIdentityDTO> resource(Authentication authentication) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<OAuthResourceIdentityDTO>> resource(Authentication authentication) {
         try {
             if (!(authentication instanceof JwtAuthenticationToken jwtAuthentication) ||
                     !authentication.isAuthenticated()) {
@@ -44,9 +44,10 @@ public class OAuthResourceIdentityController {
                     tenant.tenantSessionEpoch(),
                     tenant.membershipRevision(),
                     tenant.clientTenantGrantRevision());
-            return ResponseEntity.ok().header("Cache-Control", "no-store").body(identity);
+            return cn.jia.core.config.ApiJsonResponses.success(
+                    ResponseEntity.ok().header("Cache-Control", "no-store").body(identity));
         } catch (InvalidIdentityClaimsException ignored) {
-            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+            return cn.jia.core.config.ApiJsonResponses.success(ResponseEntity.status(HttpStatus.UNAUTHORIZED).build());
         }
     }
 

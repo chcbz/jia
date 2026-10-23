@@ -57,7 +57,7 @@ public class ArchivePersonalDataController {
     @PutMapping("/progress/{editionId}")
     public ResponseEntity<?> putProgress(@PathVariable String editionId,
                                          @RequestHeader(value = "Idempotency-Key", required = false) String key,
-                                         @RequestBody(required = false) byte[] body,
+                                         @cn.jia.core.annotation.ApiJsonData @RequestBody(required = false) byte[] body,
                                          HttpServletRequest request,
                                          Authentication authentication) {
         Authorization authorization = authorize(authentication);
@@ -92,7 +92,7 @@ public class ArchivePersonalDataController {
     @PutMapping("/bookmarks/{bookmarkId}")
     public ResponseEntity<?> putBookmark(@PathVariable String bookmarkId,
                                          @RequestHeader(value = "Idempotency-Key", required = false) String key,
-                                         @RequestBody(required = false) byte[] body,
+                                         @cn.jia.core.annotation.ApiJsonData @RequestBody(required = false) byte[] body,
                                          HttpServletRequest request,
                                          Authentication authentication) {
         Authorization authorization = authorize(authentication);
@@ -146,7 +146,7 @@ public class ArchivePersonalDataController {
     @PutMapping("/notes/{noteId}")
     public ResponseEntity<?> putNote(@PathVariable String noteId,
                                      @RequestHeader(value = "Idempotency-Key", required = false) String key,
-                                     @RequestBody(required = false) byte[] body,
+                                     @cn.jia.core.annotation.ApiJsonData @RequestBody(required = false) byte[] body,
                                      HttpServletRequest request,
                                      Authentication authentication) {
         Authorization authorization = authorize(authentication);
@@ -276,7 +276,7 @@ public class ArchivePersonalDataController {
     private ResponseEntity<JsonResult<?>> error(HttpStatus status, String code, String message, String currentVersion) {
         JsonResult<Object> result = JsonResult.failure(code, message);
         if (currentVersion != null) result.setData(Map.of("currentVersion", currentVersion));
-        result.setStatus(status.value());
+
         return ResponseEntity.status(status).header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL).body(result);
     }
 

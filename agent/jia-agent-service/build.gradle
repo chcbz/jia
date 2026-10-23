@@ -1,6 +1,8 @@
 def poiOoxmlRuntimeVersion = libs.versions.poi.ooxml.full.get()
 
 dependencies {
+    // Strict metadata/request codecs intentionally use Jackson2, independently of networknt3/Jackson3.
+    implementation 'com.fasterxml.jackson.core:jackson-databind:2.20.1'
     api project(':agent:jia-agent-api')
     implementation project(':chat:jia-chat-api')
     implementation project(':economy:jia-economy-api')
@@ -21,7 +23,7 @@ dependencies {
     implementation project(':common:jia-common-service')
     implementation libs.spring.rabbit
     implementation libs.jackson.databind
-    implementation 'com.networknt:json-schema-validator:1.5.9'
+    implementation 'com.networknt:json-schema-validator:3.0.1'
     implementation 'org.jruby.joni:joni:2.2.6'
     // Keep the workspace document runtime on one POI generation. POI 3.14
     // combined with xmlbeans/full schemas from POI 5.4 fails at runtime with
@@ -33,7 +35,8 @@ dependencies {
         exclude group: 'org.apache.poi', module: 'poi-ooxml-lite'
     }
     implementation libs.poi.ooxml.full
-    implementation libs.pdfbox.core
+    // PDFBox is fixture-only; no PDF parser is placed on the production runtime classpath.
+    testImplementation libs.pdfbox.core
     testImplementation project(':common:jia-common-test')
     testImplementation project(':task:jia-task-core')
     testImplementation project(':task:jia-task-api')
@@ -720,6 +723,10 @@ tasks.register('managedHostingRegression', Test) {
 def mmdU1GrantSourceSet = sourceSets.create('mmdU1Grant') {
     java {
         srcDir 'src/test/java'
+        include 'cn/jia/agent/service/impl/TaskAssigneeAuthorityServiceImplTest.java'
+        include 'cn/jia/agent/service/impl/AgentExternalServicePolicyServiceImplTest.java'
+        include 'cn/jia/agent/api/AgentExternalServicePolicyControllerTest.java'
+        include 'cn/jia/agent/service/impl/AgentExternalServicePolicyMySqlTest.java'
         include 'cn/jia/agent/service/impl/AgentTaskExecutionGrantServiceImplTest.java'
         include 'cn/jia/agent/api/AgentTaskExecutionGrantControllerTest.java'
         include 'cn/jia/agent/config/AgentTaskExecutionGrantSchemaContractTest.java'
@@ -1065,6 +1072,18 @@ dependencies {
     add(executionHistoryHttpSourceSet.runtimeOnlyConfigurationName, 'org.junit.platform:junit-platform-launcher:6.0.1')
     add(executionHistoryHttpSourceSet.runtimeOnlyConfigurationName, libs.mysql)
 }
+// Real HTTP contract tests must use the application's resolved dependency versions,
+// not the smaller service graph (which can select a different Servlet response implementation).
+// Resolve consistently rather than hardcoding a Spring upgrade in this test fixture.
+gradle.projectsEvaluated {
+    def applicationRuntime = project(':starter').configurations.runtimeClasspath
+    configurations.named(executionHistoryHttpSourceSet.compileClasspathConfigurationName) {
+        shouldResolveConsistentlyWith(applicationRuntime)
+    }
+    configurations.named(executionHistoryHttpSourceSet.runtimeClasspathConfigurationName) {
+        shouldResolveConsistentlyWith(applicationRuntime)
+    }
+}
 tasks.register('executionHistoryHttp', Test) {
     group = 'verification'
     description = 'Real loopback HTTP/JWT/production service/MyBatis/private MySQL/shared frontend contract.'
@@ -1129,4 +1148,31 @@ tasks.register('skillManifestContract', Test) {
     classpath = skillManifestContractSourceSet.runtimeClasspath
     useJUnitPlatform()
     testLogging { events 'passed', 'failed'; exceptionFormat 'full' }
+}
+
+// Workspace audit fixture uses the production resource security chain, not a test-only filter.
+dependencies {
+    add(executionHistoryHttpSourceSet.implementationConfigurationName, project(':oauth:jia-oauth-resource'))
+    add(executionHistoryHttpSourceSet.implementationConfigurationName, project(':user:jia-user-api'))
+}
+
+// PDF-SKILL-20261022: prevent an accidental transitive PDF parser from returning
+// to the main API while retaining real PDFBox-generated test fixtures.
+def verifyPdfProcessingBoundary = tasks.register('verifyPdfProcessingBoundary') {
+    group = 'verification'
+    description = 'Ensures production service/application classpaths exclude PDFBox/pdf2dom.'
+    doLast {
+        // Resolve only this project's configuration while holding its task lock.
+        // The application graph is checked by the starter-owned task below.
+        def forbidden = configurations.runtimeClasspath.resolvedConfiguration.resolvedArtifacts.findAll {
+            it.moduleVersion.id.group in ['org.apache.pdfbox', 'net.sf.cssbox']
+        }
+        if (!forbidden.empty) {
+            throw new GradleException("PDF processing belongs in Agent/browser, not ${project.path}: " +
+                    forbidden.collect { it.moduleVersion.id }.join(', '))
+        }
+    }
+}
+tasks.withType(org.gradle.api.tasks.testing.Test).configureEach {
+    dependsOn verifyPdfProcessingBoundary, ':starter:verifyPdfProcessingBoundary'
 }

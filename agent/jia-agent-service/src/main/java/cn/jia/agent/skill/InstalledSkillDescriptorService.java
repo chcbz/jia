@@ -24,6 +24,9 @@ public final class InstalledSkillDescriptorService implements InstalledSkillDesc
         this.identities=Objects.requireNonNull(identities);this.market=Objects.requireNonNull(market);
         this.app=Objects.requireNonNull(app);this.packages=Objects.requireNonNull(packages);
     }
+    private SkillCostInfoSource costs;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setCostInfoSource(SkillCostInfoSource costs) {this.costs=Objects.requireNonNull(costs);}
     @Override public Snapshot read(SkillCapabilityLookup.Scope scope) {
         Objects.requireNonNull(scope);
         try {
@@ -49,6 +52,17 @@ public final class InstalledSkillDescriptorService implements InstalledSkillDesc
                     var original=rows.get(index); var observed=byId.getOrDefault(original.getEntitlementId(),List.of());
                     if(observed.size()!=1||!original.equals(observed.getFirst()))
                         result.set(index,unavailable(original,"SKILL_INSTALLATION_CHANGED"));
+                }
+            }
+            // Decoration changes no package/manifest identity or readiness reason. Snapshot consumers
+            // retain these informational bytes at admission; a later price update does not invalidate work.
+            if(costs!=null) {
+                var config=costs.read();
+                for(int index=0;index<result.size();index++) {
+                    var d=result.get(index);if(!d.verified())continue;
+                    result.set(index,new Descriptor(d.skillKey(),d.skillVersion(),d.installationId(),d.packageSha256(),
+                            d.manifestSha256(),costs.decorate(config,scope.agentId(),d.manifestJson()),
+                            d.runtimeInstallationId(),d.runtimeHostId(),d.reasonCode()));
                 }
             }
             return new Snapshot(result);

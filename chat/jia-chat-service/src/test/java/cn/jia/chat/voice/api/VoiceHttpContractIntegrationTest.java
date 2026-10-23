@@ -308,7 +308,7 @@ class VoiceHttpContractIntegrationTest {
     @Test
     void higherPriorityVoiceAdviceDoesNotChangeNonVoiceGlobalErrors() throws Exception {
         HttpResult response = send("/non-voice/error", null, new byte[0], false);
-        assertEquals(200, response.status());
+        assertEquals(500, response.status());
         assertFalse(json(response).path("code").asText().startsWith("VOICE_"));
 
         HttpResult unsupported = send("/non-voice/json-only", "text/plain",
@@ -432,7 +432,8 @@ class VoiceHttpContractIntegrationTest {
     private void assertError(HttpResult response, int status, String code) throws Exception {
         JsonNode json = json(response);
         assertEquals(status, response.status(), response.bodyText());
-        assertEquals(status, json.path("status").asInt(), response.bodyText());
+        assertEquals(1, json.path("protocolVersion").asInt(), response.bodyText());
+        assertFalse(json.has("status"), response.bodyText());
         assertEquals(code, json.path("code").asText(), response.bodyText());
         assertTrue(json.has("data"), response.bodyText());
     }
@@ -442,8 +443,8 @@ class VoiceHttpContractIntegrationTest {
     }
 
     private byte[] synthesisJson(String text) {
-        return ("{\"requestId\":\"" + REQUEST_ID + "\",\"text\":\"" + text
-                + "\",\"voice\":\"juyiting-default\",\"format\":\"mp3\"}")
+        return ("{\"protocolVersion\":1,\"requestId\":\"" + REQUEST_ID + "\",\"data\":{\"requestId\":\"" + REQUEST_ID + "\",\"text\":\"" + text
+                + "\",\"voice\":\"juyiting-default\",\"format\":\"mp3\"}}")
                 .getBytes(StandardCharsets.UTF_8);
     }
 

@@ -8,6 +8,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 
 @Configuration(proxyBeanMethods=false)
 public class AgentSelectedOutputFinalizationConfiguration {
+    @org.springframework.context.annotation.Profile("schema-maintenance")
     @Bean
     @DependsOn("agentTaskFormalDeliverySchemaInitializer")
     @ConditionalOnProperty(prefix="jia.agent.selected-output-finalization",name="enabled",havingValue="true")

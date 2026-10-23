@@ -1,5 +1,7 @@
 package cn.jia.user.api;
 
+import cn.jia.core.entity.JsonRequest;
+
 import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.entity.JsonRequestPage;
 import cn.jia.core.entity.JsonResult;
@@ -57,13 +59,12 @@ public class RoleController {
 	 */
 	@PreAuthorize("hasAuthority('role-get_users')")
 	@RequestMapping(value = "/get/users", method = RequestMethod.POST)
-	public Object findUsers(@RequestBody JsonRequestPage<RoleEntity> page) {
+	public Object findUsers(@RequestBody JsonRequest<JsonRequestPage<RoleEntity>> protocolRequest) {
+        JsonRequestPage<RoleEntity> page = protocolRequest == null ? null : protocolRequest.data();
 		RoleEntity role = Optional.ofNullable(page.getSearch()).orElse(new RoleEntity());
 		ValidUtil.assertNotNull(role, UserErrorConstants.PARAMETER_INCORRECT.getCode());
 		PageInfo<UserEntity> userList = userService.listByRoleId(role.getId(), page.getPageNum(), page.getPageSize(), page.getOrderBy());
-		JsonResultPage<UserEntity> result = new JsonResultPage<>(userList.getList());
-		result.setPageNum(userList.getPageNum());
-		result.setTotal(userList.getTotal());
+		JsonResultPage<UserEntity> result = JsonResultPage.page(userList.getList(), userList.getPageNum(), userList.getPageSize(), userList.getTotal());
 		return result;
 	}
 
@@ -74,15 +75,14 @@ public class RoleController {
 	 */
 	@PreAuthorize("hasAuthority('role-get_perms')")
 	@RequestMapping(value = "/get/perms", method = RequestMethod.POST)
-	public Object findPerms(@RequestBody JsonRequestPage<RoleEntity> page) {
+	public Object findPerms(@RequestBody JsonRequest<JsonRequestPage<RoleEntity>> protocolRequest) {
+        JsonRequestPage<RoleEntity> page = protocolRequest == null ? null : protocolRequest.data();
 		RoleEntity role = Optional.ofNullable(page.getSearch()).orElse(new RoleEntity());
 		PageInfo<PermsRelEntity> permsList = roleService.listPerms(role.getId(), page.getPageNum(), page.getPageSize(), page.getOrderBy());
 		PermsVO permsVO = new PermsVO();
 		permsVO.setIdList(permsList.getList().stream().map(PermsRelEntity::getPermsId).collect(Collectors.toList()));
 		List<PermsEntity> list = permsService.findList(permsVO);
-		JsonResultPage<PermsEntity> result = new JsonResultPage<>(list);
-		result.setPageNum(permsList.getPageNum());
-		result.setTotal(permsList.getTotal());
+		JsonResultPage<PermsEntity> result = JsonResultPage.page(list, permsList.getPageNum(), permsList.getPageSize(), permsList.getTotal());
 		return result;
 	}
 
@@ -93,7 +93,8 @@ public class RoleController {
 	 */
 	@PreAuthorize("hasAuthority('role-create')")
 	@RequestMapping(value = "/create", method = RequestMethod.POST)
-	public Object create(@RequestBody RoleEntity role) {
+	public Object create(@RequestBody JsonRequest<RoleEntity> protocolRequest) {
+        RoleEntity role = protocolRequest == null ? null : protocolRequest.data();
 		roleService.create(role);
 		return JsonResult.success();
 	}
@@ -105,7 +106,8 @@ public class RoleController {
 	 */
 	@PreAuthorize("hasAuthority('role-update')")
 	@RequestMapping(value = "/update", method = RequestMethod.POST)
-	public Object update(@RequestBody RoleEntity role) {
+	public Object update(@RequestBody JsonRequest<RoleEntity> protocolRequest) {
+        RoleEntity role = protocolRequest == null ? null : protocolRequest.data();
 		roleService.update(role);
 		return JsonResult.success();
 	}
@@ -129,12 +131,11 @@ public class RoleController {
 	 */
 	@PreAuthorize("hasAuthority('role-list')")
 	@RequestMapping(value = "/list", method = RequestMethod.POST)
-	public Object list(@RequestBody JsonRequestPage<RoleEntity> page) {
+	public Object list(@RequestBody JsonRequest<JsonRequestPage<RoleEntity>> protocolRequest) {
+        JsonRequestPage<RoleEntity> page = protocolRequest == null ? null : protocolRequest.data();
 		RoleEntity example = Optional.ofNullable(page.getSearch()).orElse(new RoleEntity());
 		PageInfo<RoleEntity> roleList = roleService.findPage(example, page.getPageNum(), page.getPageSize(), page.getOrderBy());
-		JsonResultPage<RoleEntity> result = new JsonResultPage<>(roleList.getList());
-		result.setPageNum(roleList.getPageNum());
-		result.setTotal(roleList.getTotal());
+		JsonResultPage<RoleEntity> result = JsonResultPage.page(roleList.getList(), roleList.getPageNum(), roleList.getPageSize(), roleList.getTotal());
 		return result;
 	}
 
@@ -145,7 +146,8 @@ public class RoleController {
 	 */
 	@PreAuthorize("hasAuthority('role-perms_change')")
 	@RequestMapping(value = "/perms/change", method = RequestMethod.POST)
-	public Object changePerms(@RequestBody RoleVO role) {
+	public Object changePerms(@RequestBody JsonRequest<RoleVO> protocolRequest) {
+        RoleVO role = protocolRequest == null ? null : protocolRequest.data();
 		roleService.changePerms(role);
 		return JsonResult.success();
 	}
@@ -157,7 +159,8 @@ public class RoleController {
 	 */
 	@PreAuthorize("hasAuthority('role-users_add')")
 	@RequestMapping(value = "/users/add", method = RequestMethod.POST)
-	public Object userBatchAdd(@RequestBody RoleVO role) {
+	public Object userBatchAdd(@RequestBody JsonRequest<RoleVO> protocolRequest) {
+        RoleVO role = protocolRequest == null ? null : protocolRequest.data();
 		role.setClientId(EsContextHolder.getContext().getClientId());
 		roleService.batchAddUser(role);
 		return JsonResult.success();
@@ -170,7 +173,8 @@ public class RoleController {
 	 */
 	@PreAuthorize("hasAuthority('role-users_del')")
 	@RequestMapping(value = "/users/del", method = RequestMethod.POST)
-	public Object userBatchDel(@RequestBody RoleVO role) {
+	public Object userBatchDel(@RequestBody JsonRequest<RoleVO> protocolRequest) {
+        RoleVO role = protocolRequest == null ? null : protocolRequest.data();
 		role.setClientId(EsContextHolder.getContext().getClientId());
 		roleService.batchDelUser(role);
 		return JsonResult.success();

@@ -45,6 +45,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -125,27 +126,27 @@ class AgentTaskEventStreamControllerTest extends BaseMockTest {
         assertTrue(result.getResponse().getContentType()
                 .startsWith(MediaType.TEXT_EVENT_STREAM_VALUE));
         String body = result.getResponse().getContentAsString(StandardCharsets.UTF_8);
-        assertTrue(body.matches("(?s)^event: ?task_event\\r?\\n"
-                + "id: ?9007199254740993\\r?\\n"
+        assertTrue(body.matches("(?s)^event: ?task.event\\r?\\n"
+                + "id: ?task:"+TASK+":9007199254740993\\r?\\n"
                 + "data: ?\\{.*}\\r?\\n\\r?\\n$"), body);
         assertTrue(body.contains("\"version\":\"9007199254740993\""), body);
-        assertTrue(body.contains("\"occurredAt\":\"1234\""), body);
+        assertTrue(body.contains("\"occurredAt\":1234"), body);
         assertTrue(body.contains("\"resultVersion\":\"9007199254740993\""), body);
         assertTrue(body.contains("\"expectedVersion\":\"9223372036854775807\""), body);
-        assertTrue(body.contains("\"createdAt\":\"9223372036854775807\""), body);
-        assertTrue(body.contains("\"updatedAt\":\"9007199254740993\""), body);
+        assertTrue(body.contains("\"createdAt\":1791594000000"), body);
+        assertTrue(body.contains("\"updatedAt\":1791594001000"), body);
         assertFalse(body.contains("\"resultVersion\":9007199254740993"), body);
-        assertFalse(body.contains("\"createdAt\":9223372036854775807"), body);
+        assertFalse(body.contains("\"createdAt\":\"1791594000000\""), body);
         Map<?, ?> wireData = wireData(body);
         assertEquals("9007199254740993", wirePayload(wireData).get("resultVersion"));
         assertEquals("9223372036854775807", wirePayload(wireData).get("expectedVersion"));
-        assertEquals("9223372036854775807", wirePayload(wireData).get("createdAt"));
-        assertEquals("9007199254740993", wirePayload(wireData).get("updatedAt"));
+        assertEquals(1791594000000L, wirePayload(wireData).get("createdAt"));
+        assertEquals(1791594001000L, wirePayload(wireData).get("updatedAt"));
         String roundTripJson = JsonUtil.getMapper().writeValueAsString(wireData);
         Map<?, ?> roundTrip = JsonUtil.getMapper().readValue(roundTripJson, Map.class);
         assertEquals(wirePayload(wireData), wirePayload(roundTrip));
         assertInstanceOf(String.class, wirePayload(roundTrip).get("resultVersion"));
-        assertInstanceOf(String.class, wirePayload(roundTrip).get("createdAt"));
+        assertInstanceOf(Long.class, wirePayload(roundTrip).get("createdAt"));
         assertFalse(body.contains(OWNER), body);
         assertFalse(body.contains(CLIENT), body);
         assertFalse(body.contains("eventJson"), body);
@@ -234,7 +235,7 @@ class AgentTaskEventStreamControllerTest extends BaseMockTest {
         verifyNoInteractions(replayService);
     }
 
-    @ParameterizedTest
+    @ParameterizedTest(name = "{displayName} [{index}] {arguments}")
     @ValueSource(strings = {"", " ", "00", "01", "+1", "-1", "1.0", "1e3",
             "١", "9223372036854775808", "10000000000000000000", "1,2"})
     void strictRawCursorGrammarRejectsEveryNonCanonicalForm(String cursor)
@@ -249,7 +250,7 @@ class AgentTaskEventStreamControllerTest extends BaseMockTest {
         verifyNoInteractions(replayService);
     }
 
-    @ParameterizedTest
+    @ParameterizedTest(name = "{displayName} [{index}] {arguments}")
     @ValueSource(strings = {"", " ", "00", "01", "+1", "-1", "1.0", "1e3",
             "١", "9223372036854775808", "10000000000000000000", "1,2"})
     void strictRawHeaderCursorGrammarRejectsEveryNonCanonicalForm(String cursor)
@@ -316,21 +317,21 @@ class AgentTaskEventStreamControllerTest extends BaseMockTest {
         complete(mvc.perform(get("/agent/tasks/{taskId}/events", TASK)
                 .queryParam("actorAgentId", ACTOR)
                 .queryParam("sinceVersion", "9007199254740993")
-                .header("Last-Event-ID", "7").principal(auth))
+                .header("Last-Event-ID", "task:"+TASK+":7").principal(auth))
                 .andExpect(request().asyncStarted()).andReturn());
         complete(mvc.perform(get("/agent/tasks/{taskId}/events", TASK)
                 .queryParam("actorAgentId", ACTOR)
                 .queryParam("sinceVersion", "7")
-                .header("Last-Event-ID", "9223372036854775807").principal(auth))
+                .header("Last-Event-ID", "task:"+TASK+":9223372036854775807").principal(auth))
                 .andExpect(request().asyncStarted()).andReturn());
 
         verify(replayService).replay(SCOPE, 9_007_199_254_740_993L);
         verify(replayService).replay(SCOPE, Long.MAX_VALUE);
     }
 
-    @ParameterizedTest
+    @ParameterizedTest(name = "{displayName} [{index}] {arguments}")
     @EnumSource(ResyncReason.class)
-    void eachResyncWritesOneNoIdFrameThenDisposesAndCloses(ResyncReason reason)
+    void eachResyncWritesOneCorrelatedEnvelopeThenDisposesAndCloses(ResyncReason reason)
             throws Exception {
         AtomicInteger cancellations = new AtomicInteger();
         when(replayService.replay(SCOPE, 0L)).thenReturn(Flux.concat(
@@ -343,9 +344,9 @@ class AgentTaskEventStreamControllerTest extends BaseMockTest {
                 .andExpect(request().asyncStarted()).andReturn());
         String body = result.getResponse().getContentAsString(StandardCharsets.UTF_8);
         assertEquals(1, body.lines().filter(line -> line.startsWith("event:")).count(), body);
-        assertTrue(body.startsWith("event:resync_required")
-                || body.startsWith("event: resync_required"), body);
-        assertFalse(body.lines().anyMatch(line -> line.startsWith("id:")), body);
+        assertTrue(body.startsWith("event:task.resync.required")
+                || body.startsWith("event: task.resync.required"), body);
+        assertTrue(body.lines().anyMatch(line -> line.startsWith("id:task:"+TASK+":resync:")), body);
         assertTrue(body.contains("\"currentVersion\":\"42\""), body);
         assertTrue(body.contains("\"reason\":\""
                 + reason.name().toLowerCase(java.util.Locale.ROOT) + "\""), body);
@@ -367,8 +368,8 @@ class AgentTaskEventStreamControllerTest extends BaseMockTest {
                 .principal(authenticate(OWNER, CLIENT)))
                 .andExpect(request().asyncStarted()).andReturn());
         String body = result.getResponse().getContentAsString(StandardCharsets.UTF_8);
-        assertTrue(body.contains("id:5") || body.contains("id: 5"), body);
-        assertFalse(body.contains("id:6") || body.contains("id: 6"), body);
+        assertTrue(body.contains("id:task:"+TASK+":5") || body.contains("id: task:"+TASK+":5"), body);
+        assertFalse(body.contains("id:task:"+TASK+":6") || body.contains("id: task:"+TASK+":6"), body);
         assertEquals(1, body.lines().filter(line -> line.startsWith("event:")).count(), body);
         assertEquals(1, cancellations.get());
     }
@@ -461,7 +462,7 @@ class AgentTaskEventStreamControllerTest extends BaseMockTest {
         AgentTaskEventStreamController.ManagedSseEmitter emitter =
                 new AgentTaskEventStreamController.ManagedSseEmitter(30_000L);
         AgentTaskEventStreamController.StreamConnection connection =
-                new AgentTaskEventStreamController.StreamConnection(emitter, subject());
+                new AgentTaskEventStreamController.StreamConnection(emitter, subject(), "test-request");
         connection.start(Flux.<ReplaySignal>never().doOnCancel(cancel::incrementAndGet));
         emitter.complete();
         emitter.complete();
@@ -472,7 +473,7 @@ class AgentTaskEventStreamControllerTest extends BaseMockTest {
         AgentTaskEventStreamController.ManagedSseEmitter timeoutEmitter =
                 new AgentTaskEventStreamController.ManagedSseEmitter(30_000L);
         AgentTaskEventStreamController.StreamConnection timeoutConnection =
-                new AgentTaskEventStreamController.StreamConnection(timeoutEmitter, subject());
+                new AgentTaskEventStreamController.StreamConnection(timeoutEmitter, subject(), "test-request");
         timeoutConnection.start(Flux.<ReplaySignal>never()
                 .doOnCancel(timeoutCancel::incrementAndGet));
         timeoutConnection.timeout();
@@ -482,7 +483,7 @@ class AgentTaskEventStreamControllerTest extends BaseMockTest {
         AtomicInteger sendCancel = new AtomicInteger();
         PartialWriteFailingEmitter failing = new PartialWriteFailingEmitter();
         AgentTaskEventStreamController.StreamConnection failingConnection =
-                new AgentTaskEventStreamController.StreamConnection(failing, subject());
+                new AgentTaskEventStreamController.StreamConnection(failing, subject(), "test-request");
         failingConnection.start(Flux.concat(Flux.just(taskCreated(1L), taskCreated(2L)),
                 Flux.<ReplaySignal>never()).doOnCancel(sendCancel::incrementAndGet));
         assertEquals(1, failing.sendCount);
@@ -499,7 +500,7 @@ class AgentTaskEventStreamControllerTest extends BaseMockTest {
         AtomicInteger cancellations = new AtomicInteger();
         BlockingEmitter emitter = new BlockingEmitter();
         AgentTaskEventStreamController.StreamConnection connection =
-                new AgentTaskEventStreamController.StreamConnection(emitter, subject());
+                new AgentTaskEventStreamController.StreamConnection(emitter, subject(), "test-request");
         Sinks.Many<ReplaySignal> sink = Sinks.many().multicast().directBestEffort();
         connection.start(sink.asFlux().doOnCancel(cancellations::incrementAndGet));
 
@@ -563,7 +564,11 @@ class AgentTaskEventStreamControllerTest extends BaseMockTest {
         if (data.startsWith(" ")) {
             data = data.substring(1);
         }
-        return JsonUtil.getMapper().readValue(data, Map.class);
+        Map<?,?> message = JsonUtil.getMapper().readValue(data, Map.class);
+        assertEquals(Set.of("protocolVersion","requestId","messageType","messageId","data"),message.keySet());
+        assertEquals(1,message.get("protocolVersion"));
+        assertTrue(body.contains("id:"+message.get("messageId")) || body.contains("id: "+message.get("messageId")));
+        return assertInstanceOf(Map.class,message.get("data"));
     }
 
     private static Map<?, ?> wirePayload(Map<?, ?> wireData) {
@@ -598,8 +603,8 @@ class AgentTaskEventStreamControllerTest extends BaseMockTest {
                 + "\"status\":\"assigned\","
                 + "\"resultVersion\":9007199254740993,"
                 + "\"expectedVersion\":9223372036854775807,"
-                + "\"createdAt\":9223372036854775807,"
-                + "\"updatedAt\":9007199254740993}";
+                + "\"createdAt\":1791594000000,"
+                + "\"updatedAt\":1791594001000}";
     }
 
     private static DurableEvent taskCreated(long version) {

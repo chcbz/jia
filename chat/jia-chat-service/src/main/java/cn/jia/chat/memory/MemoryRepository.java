@@ -35,6 +35,11 @@ public interface MemoryRepository {
         throw new IllegalStateException("Versioned conversation memory storage is unavailable");
     }
 
+    /** Internal sync boundary: vector generated before acquiring the parent DB lock. */
+    default void savePrepared(MemoryDocument document) {
+        throw new IllegalStateException("Unscoped prepared memory storage is unavailable");
+    }
+
     /**
      * 保存记忆文档列表
      *

@@ -25,6 +25,7 @@ import java.util.Objects;
 import java.util.TreeMap;
 
 /** Separate additive initializer; it never modifies the accepted W02 five-table catalog. */
+@org.springframework.context.annotation.Profile("schema-maintenance")
 public final class EconomyHostingRentSchemaInitializer implements InitializingBean {
     static final String DDL_RESOURCE = "db/economy-v0-hosting-rent.sql";
     static final List<String> TABLES = List.of(

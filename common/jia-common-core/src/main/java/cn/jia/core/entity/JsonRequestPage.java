@@ -2,7 +2,6 @@ package cn.jia.core.entity;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonInclude.Include;
-import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.Getter;
 import lombok.Setter;
 import lombok.ToString;
@@ -28,7 +27,6 @@ public class JsonRequestPage<T>{
     private Integer pageSize = DEFAULT_PAGE_SIZE;
     
     private T search;
-	@JsonProperty("extra_search")
     private String extraSearch;
 
     /** 排序字段 */

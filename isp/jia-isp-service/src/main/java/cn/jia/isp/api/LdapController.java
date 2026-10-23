@@ -1,5 +1,7 @@
 package cn.jia.isp.api;
 
+import cn.jia.core.entity.JsonRequest;
+
 import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.entity.JsonResult;
 import cn.jia.core.entity.JsonResultPage;
@@ -84,7 +86,8 @@ public class LdapController {
      * @return 用户信息
      */
     @PostMapping(value = "/user/search")
-    public Object userSearch(@RequestBody LdapUser user) {
+    public Object userSearch(@RequestBody JsonRequest<LdapUser> protocolRequest) {
+        LdapUser user = protocolRequest == null ? null : protocolRequest.data();
         List<LdapUser> userList = ldapUserService.search(user);
         if (CollectionUtil.isNullOrEmpty(userList)) {
             throw new EsRuntimeException(IspErrorConstants.USER_NOT_EXIST);
@@ -92,7 +95,7 @@ public class LdapController {
         for (LdapUser u : userList) {
             u.setUserPassword("***".getBytes());
         }
-        return JsonResult.success(userList);
+        return JsonResultPage.page(userList, 1, Math.max(1, userList.size()), userList.size());
     }
 
     /**
@@ -102,7 +105,8 @@ public class LdapController {
      * @return 处理结果
      */
     @PostMapping(value = "/user/create")
-    public Object userCreate(@RequestBody LdapUser user) throws Exception {
+    public Object userCreate(@RequestBody JsonRequest<LdapUser> protocolRequest) throws Exception {
+        LdapUser user = protocolRequest == null ? null : protocolRequest.data();
         List<LdapUser> userList = ldapUserService.search(user);
         if (CollectionUtil.isNullOrEmpty(userList)) {
             user = ldapUserService.create(user);
@@ -128,7 +132,8 @@ public class LdapController {
      * @return 处理结果
      */
     @PostMapping(value = "/user/update")
-    public Object userUpdate(@RequestBody LdapUser user) {
+    public Object userUpdate(@RequestBody JsonRequest<LdapUser> protocolRequest) {
+        LdapUser user = protocolRequest == null ? null : protocolRequest.data();
         LdapUser upUser = ldapUserService.findByUid(user.getUid());
         BeanUtil.copyPropertiesIgnoreNull(user, upUser);
         ldapUserService.modifyLdapUser(upUser);
@@ -141,7 +146,7 @@ public class LdapController {
      * @param uid 用户ID
      * @return 处理结果
      */
-    @GetMapping(value = "/user/delete")
+    @org.springframework.web.bind.annotation.DeleteMapping(value = "/user/delete")
     public Object userDelete(@RequestParam(name = "uid") String uid) {
         LdapUser user = new LdapUser();
         user.setUid(uid);
@@ -160,9 +165,7 @@ public class LdapController {
         for (LdapUser u : userList) {
             u.setUserPassword("***".getBytes());
         }
-        JsonResultPage<LdapUser> result = new JsonResultPage<>(userList);
-        result.setTotal((long) userList.size());
-        return result;
+        return JsonResultPage.page(userList, 1, Math.max(1, userList.size()), userList.size());
     }
 
     /**
@@ -185,9 +188,7 @@ public class LdapController {
     @GetMapping(value = "/usergroup/findAll")
     public Object userGroupFindAll() {
         List<LdapUserGroupDTO> userGroupList = ldapUserGroupService.findAll();
-        JsonResultPage<LdapUserGroupDTO> result = new JsonResultPage<>(userGroupList);
-        result.setTotal((long) userGroupList.size());
-        return result;
+        return JsonResultPage.page(userGroupList, 1, Math.max(1, userGroupList.size()), userGroupList.size());
     }
 
     /**
@@ -197,7 +198,8 @@ public class LdapController {
      * @return 处理结果
      */
     @PostMapping(value = "/usergroup/create")
-    public Object userGroupCreate(@RequestBody LdapUserGroupDTO userGroup) throws Exception {
+    public Object userGroupCreate(@RequestBody JsonRequest<LdapUserGroupDTO> protocolRequest) throws Exception {
+        LdapUserGroupDTO userGroup = protocolRequest == null ? null : protocolRequest.data();
         LdapContextSource contextSource = (LdapContextSource) ldapTemplate.getContextSource();
         Name baseDn = contextSource.getBaseLdapName();
         Set<Name> member = new HashSet<>();
@@ -225,7 +227,8 @@ public class LdapController {
      * @return 处理结果
      */
     @PostMapping(value = "/usergroup/update")
-    public Object userGroupUpdate(@RequestBody LdapUserGroup userGroup) {
+    public Object userGroupUpdate(@RequestBody JsonRequest<LdapUserGroup> protocolRequest) {
+        LdapUserGroup userGroup = protocolRequest == null ? null : protocolRequest.data();
         LdapUserGroup upUserGroup = ldapUserGroupService.findByCn(userGroup.getCn());
         ValidUtil.assertNotNull(upUserGroup, IspErrorConstants.DATA_NOT_FOUND);
         BeanUtil.copyPropertiesIgnoreNull(userGroup, upUserGroup);
@@ -240,7 +243,8 @@ public class LdapController {
      * @return 处理结果
      */
     @PostMapping(value = "/usergroup/member/add")
-    public Object userGroupMemberAdd(@RequestBody LdapUserGroupDTO userGroup) throws Exception {
+    public Object userGroupMemberAdd(@RequestBody JsonRequest<LdapUserGroupDTO> protocolRequest) throws Exception {
+        LdapUserGroupDTO userGroup = protocolRequest == null ? null : protocolRequest.data();
         LdapUserGroup upUserGroup = ldapUserGroupService.findByCn(userGroup.getCn());
 
         LdapContextSource contextSource = (LdapContextSource) ldapTemplate.getContextSource();
@@ -265,7 +269,8 @@ public class LdapController {
      * @return 处理结果
      */
     @PostMapping(value = "/usergroup/member/delete")
-    public Object userGroupMemberDelete(@RequestBody LdapUserGroupDTO userGroup) throws Exception {
+    public Object userGroupMemberDelete(@RequestBody JsonRequest<LdapUserGroupDTO> protocolRequest) throws Exception {
+        LdapUserGroupDTO userGroup = protocolRequest == null ? null : protocolRequest.data();
         LdapUserGroup upUserGroup = ldapUserGroupService.findByCn(userGroup.getCn());
         LdapContextSource contextSource = (LdapContextSource) ldapTemplate.getContextSource();
         Name baseDn = contextSource.getBaseLdapName();
@@ -287,7 +292,7 @@ public class LdapController {
      * @param cn 用户组ID
      * @return 处理结果
      */
-    @GetMapping(value = "/usergroup/delete")
+    @org.springframework.web.bind.annotation.DeleteMapping(value = "/usergroup/delete")
     public Object userGroupDelete(@RequestParam(name = "cn") String cn) {
         LdapUserGroup userGroup = new LdapUserGroup();
         userGroup.setCn(cn);

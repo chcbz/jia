@@ -14,7 +14,7 @@ public final class SkillManagedCredentialController {
     public SkillManagedCredentialController(SkillManagedCredentials credentials,SkillMarketplaceController errors) { this.credentials=credentials;this.errors=errors; }
     @cn.jia.core.security.AllowSensitiveOutput(reason="Explicit one-time exact-Agent credential issuance; no secret replay")
     @PostMapping(value="/agent/{agentId}/skill-install-credentials",consumes=MediaType.APPLICATION_JSON_VALUE)
-    public Object rotate(@PathVariable String agentId,Authentication auth,HttpServletRequest request,@RequestBody byte[] raw) {
+    public Object rotate(@PathVariable String agentId,Authentication auth,HttpServletRequest request,@cn.jia.core.annotation.ApiJsonData @RequestBody byte[] raw) {
         var actor=HostingRentHttp.actor(auth);String key=HostingRentHttp.key(request);
         var body=HostingRentHttp.body(raw,Set.of("expectedAgentVersion"),Set.of());
         long version=HostingRentHttp.positive(body.get("expectedAgentVersion"));

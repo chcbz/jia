@@ -167,6 +167,8 @@ class AgentWebSocketCommandRecoveryTest extends BaseMockTest {
                         () -> mock(cn.jia.agent.skill.SkillInstallResultService.class))
                 .withBean(cn.jia.chat.service.ChatConversationService.class,
                         () -> mock(cn.jia.chat.service.ChatConversationService.class))
+                .withBean(cn.jia.chat.service.ChatDispatchAuthorityService.class,
+                        () -> mock(cn.jia.chat.service.ChatDispatchAuthorityService.class))
                 .withBean(ChatMessageDao.class, () -> mock(ChatMessageDao.class))
                 .withBean(ChatConversationEventBroker.class,
                         () -> mock(ChatConversationEventBroker.class))
@@ -220,11 +222,14 @@ class AgentWebSocketCommandRecoveryTest extends BaseMockTest {
                     wire, new tools.jackson.core.type.TypeReference<Map<String, Object>>() { });
             // Transport proof is checked before WS ACK routing or durable lookup.
             assertEquals("SESSION_PROOF_MISMATCH", rejected.get("code"));
-            assertEquals("Runtime message proof rejected", rejected.get("message"));
+            assertEquals("Runtime message proof rejected", rejected.get("msg"));
             assertEquals("protocol.error", rejected.get("messageType"));
             assertFalse(rejected.containsKey("tenantId") || rejected.containsKey("receiverAgentId")
                     || rejected.containsKey("payload"));
-            rejected.remove("timestamp");
+            rejected.remove("requestId");
+            rejected.remove("messageId");
+            rejected.remove("correlationId");
+            if (rejected.get("data") instanceof Map<?, ?> data) data.remove("occurredAt");
             rejections.add(rejected);
         }
         assertEquals(rejections.get(0), rejections.get(1));

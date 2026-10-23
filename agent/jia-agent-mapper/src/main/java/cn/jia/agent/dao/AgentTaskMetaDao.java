@@ -74,18 +74,20 @@ public interface AgentTaskMetaDao extends IBaseDao<AgentTaskMetaEntity> {
     List<AgentTaskMetaEntity> findByAgentId(
             String tenantId, String clientId, String agentId, int limit);
 
+    List<AgentTaskMetaEntity> findByAgentInOwnerScope(String tenantId, String clientId, String ownerJiacn, String agentId, int limit);
+
     List<AgentTaskStatsRow> findStatsByAgents(List<AgentTaskStatsScope> scopes);
 
     long countSearch(String tenantId, String clientId, String ownerJiacn, String status,
-            String ability, String keyword);
+            String ability, String keyword, String phase);
 
     List<AgentTaskSearchRow> searchPage(
             String tenantId, String clientId, String ownerJiacn, String status,
-            String ability, String keyword, long offset, int limit);
+            String ability, String keyword, long offset, int limit, String phase);
 
     List<AgentTaskSearchRow> searchPageWithFunding(
             String tenantId, String clientId, String ownerJiacn, String status,
-            String ability, String keyword, long offset, int limit);
+            String ability, String keyword, long offset, int limit, String phase);
 
     List<AgentTaskMemberEntity> findSearchMembers(
             String tenantId, String clientId, String ownerJiacn, List<String> taskIds);

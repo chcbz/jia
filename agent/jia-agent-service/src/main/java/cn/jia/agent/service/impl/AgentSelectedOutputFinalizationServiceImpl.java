@@ -2,7 +2,6 @@ package cn.jia.agent.service.impl;
 
 import cn.jia.agent.entity.AgentTaskArtifactPublishDTO;
 import cn.jia.agent.entity.AgentTaskArtifactViewDTO;
-import cn.jia.agent.entity.AgentTaskFormalDeliveryDecisionDTO;
 import cn.jia.agent.entity.AgentTaskFormalDeliveryItemDTO;
 import cn.jia.agent.entity.AgentTaskFormalDeliverySubmitDTO;
 import cn.jia.agent.entity.AgentTaskFormalDeliveryViewDTO;
@@ -14,9 +13,9 @@ import cn.jia.agent.exception.AgentTaskCollaborationException;
 import cn.jia.agent.service.AgentSelectedOutputFinalizationException;
 import cn.jia.agent.service.AgentSelectedOutputFinalizationService;
 import cn.jia.agent.service.AgentTaskArtifactService;
+import cn.jia.agent.service.AgentTaskArtifactContentService;
 import cn.jia.agent.service.AgentTaskExecutionGrantException;
 import cn.jia.agent.service.AgentTaskExecutionGrantService;
-import cn.jia.agent.service.AgentTaskFormalDeliveryDecisionService;
 import cn.jia.agent.service.AgentTaskFormalDeliveryReadService;
 import cn.jia.agent.service.AgentTaskFormalDeliveryService;
 import cn.jia.agent.service.AgentTaskMutationTransaction;
@@ -49,6 +48,11 @@ import static cn.jia.agent.service.AgentSelectedOutputFinalizationException.Reas
 public final class AgentSelectedOutputFinalizationServiceImpl implements AgentSelectedOutputFinalizationService {
     private static final long LEASE_MILLIS=900_000L;
     private static final long MAX_SAFE_INTEGER=9_007_199_254_740_991L;
+    private cn.jia.agent.service.AgentTaskFormalDeliveryDecisionService decisions;
+    @Inject
+    public void setDecisions(cn.jia.agent.service.AgentTaskFormalDeliveryDecisionService value) {
+        this.decisions=Objects.requireNonNull(value);
+    }
     private final JdbcTemplate jdbc;
     private final AgentTaskMutationTransaction transactions;
     private final AgentTaskExecutionGrantService grants;
@@ -57,8 +61,8 @@ public final class AgentSelectedOutputFinalizationServiceImpl implements AgentSe
     private final AgentTaskArtifactService artifacts;
     private final AgentTaskFormalDeliveryService submissions;
     private final AgentTaskFormalDeliveryReadService reads;
-    private final AgentTaskFormalDeliveryDecisionService decisions;
     private final ObjectMapper json;
+    private final AgentTaskArtifactContentService contents;
 
     @Inject
     public AgentSelectedOutputFinalizationServiceImpl(JdbcTemplate jdbc,
@@ -66,12 +70,13 @@ public final class AgentSelectedOutputFinalizationServiceImpl implements AgentSe
             AgentWorkItemLeaseService leases, AgentTaskStateService taskStates,
             AgentTaskArtifactService artifacts, AgentTaskFormalDeliveryService submissions,
             AgentTaskFormalDeliveryReadService reads,
-            AgentTaskFormalDeliveryDecisionService decisions, ObjectMapper json) {
+            ObjectMapper json,AgentTaskArtifactContentService contents) {
         this.jdbc=Objects.requireNonNull(jdbc); this.transactions=Objects.requireNonNull(transactions);
         this.grants=Objects.requireNonNull(grants); this.leases=Objects.requireNonNull(leases);
         this.taskStates=Objects.requireNonNull(taskStates); this.artifacts=Objects.requireNonNull(artifacts);
         this.submissions=Objects.requireNonNull(submissions); this.reads=Objects.requireNonNull(reads);
-        this.decisions=Objects.requireNonNull(decisions); this.json=Objects.requireNonNull(json);
+        this.json=Objects.requireNonNull(json);
+        this.contents=Objects.requireNonNull(contents);
     }
 
     @Override
@@ -85,6 +90,7 @@ public final class AgentSelectedOutputFinalizationServiceImpl implements AgentSe
             if (phaseAtLeast(existing.phase(),"READY"))
                 return reconcile(scope,valid.taskId(),valid.operationId(),valid.immutableDigest());
         }
+        for(SourceOutput output:valid.outputs())if(output.formalArtifactSource()!=null)verifyFormalSource(scope,valid.taskId(),output);
         LeaseFacts lease=reserveLease(scope,valid);
         Authority reserved=requireAuthority(scope,valid.taskId(),valid.operationId(),valid.immutableDigest(),false);
         if (phaseAtLeast(reserved.phase(),"READY"))
@@ -108,6 +114,7 @@ public final class AgentSelectedOutputFinalizationServiceImpl implements AgentSe
         if (committed!=null) return committed;
         Authority row=requireAuthority(scope,taskId,operationId,digest,true);
         if (!"READY".equals(row.phase())) throw conflict("Promotion is not ready for formal submission");
+        requireCurrent(row);
         admit(scope,row);
         List<ArtifactFact> facts=readFacts(row);
         TaskFact task=task(scope,taskId);
@@ -126,47 +133,12 @@ public final class AgentSelectedOutputFinalizationServiceImpl implements AgentSe
     }
 
     @Override
-    public PromotionView accept(Scope scope,String taskId,String operationId,String immutableDigest) {
-        validateLookup(scope,taskId,operationId,immutableDigest);
-        PromotionView committed=committedView(scope,taskId,operationId,immutableDigest);
-        if (committed!=null && "accepted".equals(committed.deliveryState())) return committed;
-        return transactions.executeWithLockedTaskRootInOwnerScope(scope.tenantId(),scope.clientId(),
-                scope.ownerJiacn(),taskId,root -> acceptLocked(scope,taskId,operationId,immutableDigest));
-    }
-
-    private PromotionView acceptLocked(Scope scope,String taskId,String operationId,String digest) {
-        PromotionView committed=committedView(scope,taskId,operationId,digest);
-        if (committed!=null && "accepted".equals(committed.deliveryState())) return committed;
-        Authority row=requireAuthority(scope,taskId,operationId,digest,true);
-        AgentTaskFormalDeliveryViewDTO delivery=findDelivery(scope,taskId,row.deliveryId());
-        if (delivery==null) throw conflict("Formal delivery has not been submitted");
-        if ("changes_requested".equals(delivery.getState())) {
-            TaskFact task=task(scope,taskId);
-            return new PromotionView(operationId,taskId,"SUBMITTED",row.deliveryId(),
-                    "changes_requested",task.state(),task.version());
-        }
-        if (!"accepted".equals(delivery.getState())) {
-            if (!"submitted".equals(delivery.getState()))throw conflict("Formal delivery is no longer acceptable");
-            AgentTaskFormalDeliveryDecisionDTO command=new AgentTaskFormalDeliveryDecisionDTO();
-            command.setDeliveryId(row.deliveryId()); command.setExpectedTaskVersion(delivery.getTaskVersion());
-            command.setExpectedDeliveryVersion(delivery.getDeliveryVersion()); command.setDecision("accepted");
-            delivery=collaboration(() -> decisions.decide(
-                    scope.tenantId(),scope.clientId(),taskId,scope.ownerJiacn(),command));
-        }
-        requireDelivery(delivery,row.deliveryId(),taskId,"accepted");
-        TaskFact task=task(scope,taskId);
-        if (!"completed".equals(task.state())) throw persistence("Accepted delivery did not complete task",null);
-        markAccepted(scope,row);
-        return new PromotionView(operationId,taskId,"TASK_COMPLETED",row.deliveryId(),
-                "accepted",task.state(),task.version());
-    }
-
-    @Override
     public PromotionView reconcile(Scope scope,String taskId,String operationId,String immutableDigest) {
         validateLookup(scope,taskId,operationId,immutableDigest);
         PromotionView committed=committedView(scope,taskId,operationId,immutableDigest);
         if (committed!=null) return committed;
         Authority row=requireAuthority(scope,taskId,operationId,immutableDigest,false);
+        requireCurrent(row);
         TaskFact task=task(scope,taskId);
         return switch(row.phase()) {
             case "CLAIMING","LEASED" -> new PromotionView(operationId,taskId,"PROMOTING",null,null,
@@ -189,10 +161,17 @@ public final class AgentSelectedOutputFinalizationServiceImpl implements AgentSe
                 throw persistence("Promotion phase has no formal delivery",null);
             return null;
         }
+        if(!taskId.equals(delivery.getTaskId()))throw persistence("Formal delivery task differs",null);
         String state=delivery.getState();
         if (!List.of("submitted","accepted","changes_requested").contains(state))
             throw persistence("Unknown formal delivery state",null);
         TaskFact task=task(scope,taskId);
+        if(row.contractVersion()==1) {
+            // Old frozen digests are audit-only. Never repair, re-claim, or resume a v1 writer.
+            if(!List.of("SUBMITTED","ACCEPTED").contains(row.phase()))throw conflict("Historical promotion is read only");
+            return new PromotionView(operationId,taskId,"SUBMITTED",row.deliveryId(),state,task.state(),task.version());
+        }
+        requireCurrent(row);
         if ("accepted".equals(state)) {
             if (!"completed".equals(task.state()))
                 throw persistence("Accepted delivery did not complete task",null);
@@ -201,7 +180,7 @@ public final class AgentSelectedOutputFinalizationServiceImpl implements AgentSe
                 row=requireAuthority(scope,taskId,operationId,digest,false);
             }
             if (!"ACCEPTED".equals(row.phase())) markAccepted(scope,row);
-            return new PromotionView(operationId,taskId,"TASK_COMPLETED",row.deliveryId(),
+            return new PromotionView(operationId,taskId,"SUBMITTED",row.deliveryId(),
                     "accepted",task.state(),task.version());
         }
         if ("ACCEPTED".equals(row.phase()))
@@ -224,6 +203,26 @@ public final class AgentSelectedOutputFinalizationServiceImpl implements AgentSe
                     if (phaseAtLeast(row.phase(),"READY"))
                         return new LeaseFacts(row.workItemId(),row.leaseToken(),requiredLong(row.leaseVersion(),"lease version"));
                     admit(scope,valid);
+                    // Explicit owner selection may supersede a submitted batch. Reuse the
+                    // existing rework transition under this same root lock/transaction;
+                    // no provider execution, extra business state, or acceptance occurs here.
+                    boolean replaced=false;
+                    TaskFact before=task(scope,valid.taskId());
+                    if ("CLAIMING".equals(row.phase()) && "reviewing".equals(before.state())) {
+                        if(before.version()!=valid.expectedTaskVersion())throw conflict("Task changed before selected delivery replacement");
+                        List<AgentTaskFormalDeliveryViewDTO> pending=collaboration(() -> reads.listForTaskOwner(
+                                scope.tenantId(),scope.clientId(),scope.ownerJiacn(),valid.taskId()))
+                                .stream().filter(v->v!=null && "submitted".equals(v.getState())).toList();
+                        if(pending.size()!=1 || decisions==null)throw conflict("Current submitted batch is not available");
+                        AgentTaskFormalDeliveryViewDTO current=pending.getFirst();
+                        var decision=new cn.jia.agent.entity.AgentTaskFormalDeliveryDecisionDTO();
+                        decision.setDeliveryId(current.getDeliveryId());decision.setExpectedTaskVersion(before.version());
+                        decision.setExpectedDeliveryVersion(current.getDeliveryVersion());decision.setDecision("changes_requested");
+                        decision.setReviewReason("Owner selected a different existing output set for acceptance");
+                        var changed=collaboration(() -> decisions.decide(scope.tenantId(),scope.clientId(),valid.taskId(),scope.ownerJiacn(),decision));
+                        requireDelivery(changed,current.getDeliveryId(),valid.taskId(),"changes_requested");
+                        replaced=true;
+                    }
                     WorkFact work=singleRequiredWork(scope,valid.taskId());
                     if ("LEASED".equals(row.phase())) {
                         if (!Objects.equals(row.workItemId(),work.workItemId())
@@ -245,7 +244,7 @@ public final class AgentSelectedOutputFinalizationServiceImpl implements AgentSe
                             || (work.agentId()!=null && !valid.targetAgentId().equals(work.agentId())))
                         throw conflict("Required work item is not available for promotion");
                     TaskFact initial=task(scope,valid.taskId());
-                    if (initial.version()!=valid.expectedTaskVersion()
+                    if (initial.version()!=valid.expectedTaskVersion()+(replaced?1:0)
                             || !("assigned".equals(initial.state()) || "running".equals(initial.state())))
                         throw conflict("Task is not at the selected version");
                     AgentWorkItemLeaseCommandDTO claim=new AgentWorkItemLeaseCommandDTO();
@@ -309,9 +308,36 @@ public final class AgentSelectedOutputFinalizationServiceImpl implements AgentSe
             throw persistence("Task start returned an invalid snapshot",null);
     }
 
+    private static void requireCurrent(Authority row) {
+        if(row.contractVersion()!=2)throw conflict("Historical promotion is read only");
+    }
+
+    /** Re-read the exact authorized historical bytes before publishing into a new operation.
+     * Old work-item/run/lease/storage authority is never reused. The Chat caller must additionally
+     * bind this fixed source to its committed message-revision lineage. */
+    private void verifyFormalSource(Scope scope,String taskId,SourceOutput output) {
+        var source=output.formalArtifactSource();
+        var batch=findDelivery(scope,taskId,source.sourceDeliveryId());
+        if(batch==null || !taskId.equals(batch.getTaskId()) || !"changes_requested".equals(batch.getState()) || batch.getItems()==null
+                || source.sourceArtifactId().equals(batch.getManifestArtifactId()))throw conflict("Formal source is not a revised result");
+        var items=batch.getItems().stream().filter(i->i!=null && source.sourceArtifactId().equals(i.getArtifactId())).toList();
+        if(items.size()!=1 || !Integer.valueOf(source.sourceArtifactVersion()).equals(items.getFirst().getArtifactVersion())
+                || !output.sha256().equals(items.getFirst().getContentHash()) || !output.purpose().equals(items.getFirst().getPurpose()))
+            throw conflict("Formal source differs from exact original batch");
+        var bytes=collaboration(()->contents.readContentForTaskOwner(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),taskId,
+                source.sourceArtifactId(),source.sourceArtifactVersion()));
+        if(bytes==null || !source.sourceArtifactId().equals(bytes.getArtifactId())
+                || !Integer.valueOf(source.sourceArtifactVersion()).equals(bytes.getArtifactVersion())
+                || !output.sha256().equals(bytes.getContentHash()) || !Objects.equals(output.byteLength(),bytes.getContentByteLength())
+                || !output.contentMimeType().equals(bytes.getContentMimeType()) || bytes.getContent()==null
+                || !java.util.Arrays.equals(output.bytes(),bytes.getContent()) || !output.sha256().equals(sha256(bytes.getContent())))
+            throw conflict("Formal source bytes changed or unavailable");
+    }
+
     private List<ArtifactFact> publishAll(Scope scope,Valid valid,String workItemId) {
         List<ArtifactFact> result=new ArrayList<>(); int index=0;
         for (SourceOutput output:valid.outputs()) {
+            if(output.formalArtifactSource()!=null)verifyFormalSource(scope,valid.taskId(),output);
             String id=artifactId(valid.operationId(),index++);
             result.add(publish(scope,valid,workItemId,id,"document",output.title(),output.purpose(),
                     output.contentMimeType(),output.sha256(),output.byteLength(),output.bytes()));
@@ -363,20 +389,24 @@ public final class AgentSelectedOutputFinalizationServiceImpl implements AgentSe
 
     private String manifest(Valid valid) {
         try {
-            Map<String,Object> root=new LinkedHashMap<>(); root.put("schemaVersion",1);
+            Map<String,Object> root=new LinkedHashMap<>(); root.put("schemaVersion",2);
             root.put("operationId",valid.operationId()); root.put("taskId",valid.taskId());
             root.put("conversationId",valid.conversationId()); root.put("conversationGeneration",valid.conversationGeneration());
             root.put("summary",valid.summary());
             List<Map<String,Object>> selected=new ArrayList<>();
             for (SourceOutput output:valid.outputs()) {
                 Map<String,Object> item=new LinkedHashMap<>();
-                item.put("requestId",output.requestId());
-                if (output.messageSource() == null) {
+                if(output.formalArtifactSource()!=null) {
+                    var formal=output.formalArtifactSource();
+                    item.put("sourceKind","FORMAL_ARTIFACT");item.put("sourceDeliveryId",formal.sourceDeliveryId());
+                    item.put("sourceArtifactId",formal.sourceArtifactId());item.put("sourceArtifactVersion",Integer.toString(formal.sourceArtifactVersion()));
+                } else if (output.messageSource() == null) {
+                    item.put("sourceKind","OUTPUT");item.put("requestId",output.requestId());
                     item.put("stepId",output.stepId());
                     item.put("executionId",output.executionId()); item.put("runId",output.runId());
                     item.put("outputId",output.outputId());
                 } else {
-                    item.put("sourceKind","COMPLETED_MESSAGE");
+                    item.put("sourceKind","COMPLETED_MESSAGE");item.put("requestId",output.requestId());
                     item.put("turnId",output.messageSource().turnId());
                     item.put("messageId",output.messageSource().messageId());
                     item.put("snapshotId",output.messageSource().snapshotId());
@@ -414,10 +444,15 @@ public final class AgentSelectedOutputFinalizationServiceImpl implements AgentSe
         var seen=new java.util.HashSet<String>();
         for (SourceOutput output:command.outputs()) {
             if (output==null) throw bad("Output is required");
-            id(output.requestId(),100);
+            if(output.formalArtifactSource()==null)id(output.requestId(),100);
             text(output.title(),255); text(output.purpose(),255);
             String sourceKey;
-            if (output.messageSource() == null) {
+            if(output.formalArtifactSource()!=null) {
+                var formal=output.formalArtifactSource();
+                if(output.messageSource()!=null || output.requestId()!=null || output.stepId()!=null || output.executionId()!=null
+                        || output.runId()!=null || output.outputId()!=null)throw bad("Mixed formal artifact source");
+                sourceKey="FORMAL_ARTIFACT\0"+formal.sourceDeliveryId()+"\0"+formal.sourceArtifactId()+"\0"+formal.sourceArtifactVersion();
+            } else if (output.messageSource() == null) {
                 id(output.stepId(),100); id(output.executionId(),100); id(output.runId(),100); id(output.outputId(),100);
                 sourceKey=output.requestId()+"\0"+output.stepId()+"\0"+output.outputId();
             } else {
@@ -441,10 +476,10 @@ public final class AgentSelectedOutputFinalizationServiceImpl implements AgentSe
                     || !seen.add(sourceKey))
                 throw bad("Invalid selected output");
         }
-        String expectedDigest=SelectedOutputFinalizationDigest.request(command.taskId(),command.expectedTaskVersion(),
+        String expectedDigest=SelectedOutputFinalizationDigest.requestV2(command.taskId(),command.expectedTaskVersion(),
                 command.expectedAssignmentRevision(),command.conversationId(),command.summary(),command.outputs().stream()
                 .map(o->new SelectedOutputFinalizationDigest.Selection(o.requestId(),o.stepId(),o.outputId(),
-                        o.sha256(),o.title(),o.purpose(),o.messageSource())).toList());
+                        o.sha256(),o.title(),o.purpose(),o.messageSource(),o.formalArtifactSource())).toList());
         if (!expectedDigest.equals(command.immutableDigest())) throw bad("Immutable digest mismatch");
         String sourceDigest=sourceDigest(command.outputs());
         String suffix=sha256((scope.tenantId()+"\n"+scope.clientId()+"\n"+scope.ownerJiacn()+"\n"+command.operationId())
@@ -464,8 +499,8 @@ public final class AgentSelectedOutputFinalizationServiceImpl implements AgentSe
                 (operation_id,tenant_id,client_id,owner_jiacn,task_id,immutable_digest,source_facts_digest,
                  expected_task_version,expected_assignment_revision,conversation_id,conversation_generation,
                  target_agent_id,grant_id,grant_version,run_id,summary,delivery_id,manifest_artifact_id,
-                 phase,version,created_at,updated_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'CLAIMING',0,?,?)
+                 phase,version,created_at,updated_at,contract_version)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'CLAIMING',0,?,?,2)
                 """,v.operationId(),scope.tenantId(),scope.clientId(),scope.ownerJiacn(),v.taskId(),v.immutableDigest(),
                 v.sourceDigest(),v.expectedTaskVersion(),v.assignmentRevision(),v.conversationId(),v.conversationGeneration(),
                 v.targetAgentId(),v.grantId(),v.grantVersion(),v.runId(),v.summary(),v.deliveryId(),v.manifestArtifactId(),now,now);
@@ -524,14 +559,14 @@ public final class AgentSelectedOutputFinalizationServiceImpl implements AgentSe
                 SELECT operation_id,task_id,immutable_digest,source_facts_digest,expected_task_version,
                  expected_assignment_revision,conversation_id,conversation_generation,target_agent_id,grant_id,
                  grant_version,work_item_id,run_id,summary,lease_token,lease_work_item_version,delivery_id,
-                 manifest_artifact_id,artifact_facts_json,phase,created_at,updated_at
+                 manifest_artifact_id,artifact_facts_json,phase,created_at,updated_at,contract_version
                 FROM agent_selected_output_finalization WHERE BINARY tenant_id=BINARY ? AND BINARY client_id=BINARY ?
                  AND BINARY owner_jiacn=BINARY ? AND BINARY task_id=BINARY ? AND BINARY operation_id=BINARY ?
                 """+(lock?" FOR UPDATE":""),(rs,n)->new Authority(rs.getString(1),rs.getString(2),rs.getString(3),
                 rs.getString(4),rs.getLong(5),rs.getLong(6),rs.getString(7),rs.getLong(8),rs.getString(9),
                 rs.getString(10),rs.getLong(11),rs.getString(12),rs.getString(13),rs.getString(14),
                 rs.getString(15),(Long)rs.getObject(16),rs.getString(17),rs.getString(18),rs.getString(19),
-                rs.getString(20),rs.getLong(21),rs.getLong(22)),scope.tenantId(),scope.clientId(),
+                rs.getString(20),rs.getLong(21),rs.getLong(22),rs.getInt(23)),scope.tenantId(),scope.clientId(),
                 scope.ownerJiacn(),taskId,operationId);
         if (rows.size()>1) throw persistence("Ambiguous promotion authority",null);
         return rows.isEmpty()?null:rows.getFirst();
@@ -586,7 +621,7 @@ public final class AgentSelectedOutputFinalizationServiceImpl implements AgentSe
     }
 
     private void requireReplay(Authority row,Valid v) {
-        if (row==null || !v.immutableDigest().equals(row.digest()) || !v.sourceDigest().equals(row.sourceDigest())
+        if (row==null || row.contractVersion()!=2 || !v.immutableDigest().equals(row.digest()) || !v.sourceDigest().equals(row.sourceDigest())
                 || !v.taskId().equals(row.taskId()) || v.expectedTaskVersion()!=row.expectedTaskVersion()
                 || v.assignmentRevision()!=row.assignmentRevision() || !v.conversationId().equals(row.conversationId())
                 || v.conversationGeneration()!=row.conversationGeneration()
@@ -620,18 +655,19 @@ public final class AgentSelectedOutputFinalizationServiceImpl implements AgentSe
     private static String sourceDigest(List<SourceOutput> outputs) {
         try {
             MessageDigest digest=MessageDigest.getInstance("SHA-256");
-            digest.update("MMD_SELECTED_OUTPUT_SOURCE_V1".getBytes(StandardCharsets.UTF_8));
+            digest.update("MMD_SELECTED_OUTPUT_SOURCE_V2".getBytes(StandardCharsets.UTF_8));
             put(digest,outputs.size());
             for (SourceOutput output:outputs) {
+                put(digest,output.formalArtifactSource()!=null?"FORMAL_ARTIFACT":output.messageSource()!=null?"COMPLETED_MESSAGE":"OUTPUT");
                 put(digest,output.requestId()); put(digest,output.stepId()); put(digest,output.executionId());
                 put(digest,output.runId()); put(digest,output.outputId()); put(digest,output.sha256());
                 put(digest,output.contentMimeType()); put(digest,output.byteLength());
                 put(digest,output.title()); put(digest,output.purpose());
-                if (output.messageSource()!=null) {
-                    put(digest,"COMPLETED_MESSAGE"); put(digest,output.messageSource().turnId());
-                    put(digest,output.messageSource().messageId()); put(digest,output.messageSource().snapshotId());
-                    put(digest,output.messageSource().finalDigest());
-                }
+                var message=output.messageSource();var formal=output.formalArtifactSource();
+                put(digest,message==null?null:message.turnId());put(digest,message==null?null:message.messageId());
+                put(digest,message==null?null:message.snapshotId());put(digest,message==null?null:message.finalDigest());
+                put(digest,formal==null?null:formal.sourceDeliveryId());put(digest,formal==null?null:formal.sourceArtifactId());
+                put(digest,formal==null?-1L:formal.sourceArtifactVersion());
             }
             return HexFormat.of().formatHex(digest.digest());
         } catch (NoSuchAlgorithmException impossible) { throw new IllegalStateException(impossible); }
@@ -698,7 +734,7 @@ public final class AgentSelectedOutputFinalizationServiceImpl implements AgentSe
             long expectedTaskVersion,long assignmentRevision,String conversationId,long conversationGeneration,
             String targetAgentId,String grantId,long grantVersion,String workItemId,String runId,String summary,
             String leaseToken,Long leaseVersion,String deliveryId,String manifestArtifactId,String factsJson,
-            String phase,long createdAt,long updatedAt) { }
+            String phase,long createdAt,long updatedAt,int contractVersion) { }
     private record WorkFact(String workItemId,String state,String agentId,String token,Long leaseUntil,long version,long updatedAt) { }
     private record TaskFact(String state,long version) { }
     private record LeaseFacts(String workItemId,String token,long version) { }

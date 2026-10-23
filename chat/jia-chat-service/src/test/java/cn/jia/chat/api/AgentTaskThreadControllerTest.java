@@ -34,7 +34,7 @@ class AgentTaskThreadControllerTest extends BaseMockTest {
         request.setTitle("team");
 
         new AgentTaskThreadController(service)
-                .getOrCreateTeamThread("task-1", request);
+                .getOrCreateTeamThread("task-1", new cn.jia.core.entity.JsonRequest<>(1, "test-request", request));
 
         verify(service).getOrCreateTeamThread(
                 "0", "client-a", "tenant-a", "task-1",

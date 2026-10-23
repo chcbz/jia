@@ -50,6 +50,7 @@ public class AgentRuntimeV1ServiceImpl implements AgentRuntimeV1Service {
     private final AgentIdentityRegistryDao identityRegistry;
     private final ObjectProvider<AgentCommandAckService> commandAcks;
     private final AgentRuntimeAuthenticationService sessions;
+    private final ObjectProvider<cn.jia.agent.skill.SkillInstallAckService> skillAcks;
 
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -214,15 +215,21 @@ public class AgentRuntimeV1ServiceImpl implements AgentRuntimeV1Service {
         if (!Objects.equals(proof.scope().tenantId(), request.tenantId())
                 || !Objects.equals(proof.scope().clientId(), request.clientId())) throw forbidden("Runtime ACK rejected");
         return sessions.withFence(proof, false, () -> {
-            AgentCommandAckService ackService = commandAcks.getIfAvailable();
-            if (ackService == null) throw forbidden("Runtime v1 command ACK is unavailable");
             String senderMessageId = "rta_" + HexFormat.of().formatHex(digest(
                     proof.installationId() + "|" + pathMessageId + "|" + request.correlationId()
                             + "|" + request.status())).substring(0, 32);
-            AgentCommandAckResult result = ackService.acknowledge(new AgentCommandAck(
+            AgentCommandAck ack = new AgentCommandAck(
                     proof.scope().tenantId(), proof.scope().clientId(), proof.scope().agentId(),
                     senderMessageId, pathMessageId, request.commandId(), request.taskId(), request.workItemId(),
-                    request.status(), now), now);
+                    request.status(), now);
+            var skillAckService = skillAcks.getIfAvailable();
+            AgentCommandAckResult result = skillAckService == null ? null
+                    : skillAckService.acknowledgeIfSkill(proof, ack, now);
+            if (result == null) {
+                AgentCommandAckService ackService = commandAcks.getIfAvailable();
+                if (ackService == null) throw forbidden("Runtime v1 command ACK is unavailable");
+                result = ackService.acknowledge(ack, now);
+            }
             if (result == null || result.kind() == null || !request.status().equals(result.status())
                     || result.deliveryVersion() <= 0
                     || request.deliveryVersion() != null && (result.deliveryVersion() < request.deliveryVersion()

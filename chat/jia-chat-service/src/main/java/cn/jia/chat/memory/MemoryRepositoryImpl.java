@@ -561,44 +561,34 @@ public class MemoryRepositoryImpl implements MemoryRepository {
      */
     private float[] generateEmbeddingArray(String text) {
         if (!StringUtils.hasText(text)) {
-            return new float[0];
+            throw new IllegalArgumentException("Memory content must not be blank");
         }
-        try {
-            // 使用 String 调用 embed 方法
-            float[] embedding = embeddingModel.embed(text);
-            if (embedding.length > 0) {
-                return embedding;
-            }
-        } catch (Exception e) {
-            log.warn("Failed to generate embedding using EmbeddingModel, falling back to hash-based embedding", e);
-        }
-        // 降级方案：使用 hash 作为种子生成伪向量
-        return generateFallbackEmbedding(text);
+        // A failed provider must not produce a successful write with random vectors.
+        float[] embedding = embeddingModel.embed(text);
+        validateEmbedding(embedding);
+        return embedding;
     }
 
-    /**
-     * 降级方案：使用 hash 作为种子生成伪向量
-     */
-    private float[] generateFallbackEmbedding(String text) {
-        int dimension = embeddingDimension;
-        float[] embedding = new float[dimension];
-        int seed = text.hashCode();
-        Random random = new Random(seed);
-        for (int i = 0; i < dimension; i++) {
-            embedding[i] = random.nextFloat() * 2 - 1;  // 生成 [-1, 1] 范围内的值
+    private void requireOwner(String jiacn) {
+        if (!StringUtils.hasText(jiacn)) {
+            throw new IllegalArgumentException("Memory owner is required");
         }
-        // 归一化
-        float norm = 0;
-        for (float v : embedding) {
-            norm += v * v;
+    }
+
+    private void validateEmbedding(float[] embedding) {
+        if (embedding == null || embedding.length != embeddingDimension) {
+            throw new IllegalStateException("Embedding dimension does not match memory index");
         }
-        norm = (float) Math.sqrt(norm);
-        if (norm > 0) {
-            for (int i = 0; i < dimension; i++) {
-                embedding[i] /= norm;
+        double norm = 0;
+        for (float value : embedding) {
+            if (!Float.isFinite(value)) {
+                throw new IllegalStateException("Embedding contains non-finite values");
             }
+            norm += (double) value * value;
         }
-        return embedding;
+        if (norm == 0) {
+            throw new IllegalStateException("Embedding must not be a zero vector");
+        }
     }
 
     private List<Float> toFloatList(float[] floatArray) {

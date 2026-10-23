@@ -18,18 +18,19 @@ import static org.mockito.Mockito.verify;
 
 class ArchiveBootstrapTest {
     @Test
-    void enabledBootstrapCreatesBothSchemasBeforeContentImportSideEffects() {
+    void enabledBootstrapOnlyInitializesSchemas() {
         ArchiveSchemaInitializer h02 = mock(ArchiveSchemaInitializer.class);
         ArchiveReaderDataSchemaInitializer h03 = mock(ArchiveReaderDataSchemaInitializer.class);
         ArchiveContentImporter importer = mock(ArchiveContentImporter.class);
-        ArchiveBootstrap bootstrap = new ArchiveBootstrap(enabledPolicy(), h02, h03, importer);
+        ArchiveBootstrap bootstrap = new ArchiveBootstrap(enabledPolicy(), h02, h03);
 
         bootstrap.run(mock(ApplicationArguments.class));
 
-        InOrder order = inOrder(h02, h03, importer);
+        InOrder order = inOrder(h02, h03);
         order.verify(h02).initialize();
         order.verify(h03).initialize();
-        order.verify(importer).importAndActivate(any(), anyString());
+        verify(importer, never()).importAndActivate(any(), anyString());
+        order.verifyNoMoreInteractions();
     }
 
     @Test
@@ -38,7 +39,7 @@ class ArchiveBootstrapTest {
         ArchiveReaderDataSchemaInitializer h03 = mock(ArchiveReaderDataSchemaInitializer.class);
         ArchiveContentImporter importer = mock(ArchiveContentImporter.class);
         doThrow(new IllegalStateException("h03 drift")).when(h03).initialize();
-        ArchiveBootstrap bootstrap = new ArchiveBootstrap(enabledPolicy(), h02, h03, importer);
+        ArchiveBootstrap bootstrap = new ArchiveBootstrap(enabledPolicy(), h02, h03);
 
         assertThrows(IllegalStateException.class,
                 () -> bootstrap.run(mock(ApplicationArguments.class)));
@@ -53,7 +54,7 @@ class ArchiveBootstrapTest {
         ArchiveSchemaInitializer h02 = mock(ArchiveSchemaInitializer.class);
         ArchiveReaderDataSchemaInitializer h03 = mock(ArchiveReaderDataSchemaInitializer.class);
         ArchiveContentImporter importer = mock(ArchiveContentImporter.class);
-        new ArchiveBootstrap(ArchiveReaderAccessPolicy.from(new ArchiveReaderProperties()), h02, h03, importer)
+        new ArchiveBootstrap(ArchiveReaderAccessPolicy.from(new ArchiveReaderProperties()), h02, h03)
                 .run(mock(ApplicationArguments.class));
         verify(h02, never()).initialize();
         verify(h03, never()).initialize();

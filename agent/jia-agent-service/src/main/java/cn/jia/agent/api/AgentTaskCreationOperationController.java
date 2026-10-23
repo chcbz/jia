@@ -59,8 +59,8 @@ public final class AgentTaskCreationOperationController {
 
     @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<AgentTaskCreationOperationService.Receipt> create(
-            @RequestBody(required = false) String rawBody,
+    public ResponseEntity<cn.jia.core.entity.JsonResult<CreationReceipt>> create(
+            @cn.jia.core.annotation.ApiJsonData @RequestBody(required = false) String rawBody,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             HttpServletRequest request, Authentication authentication) {
         AgentTaskCreationOperationService.Scope scope = scope(authentication);
@@ -72,26 +72,26 @@ public final class AgentTaskCreationOperationController {
             throw new AgentTaskCreationOperationService.Failure(
                     AgentTaskCreationOperationService.Reason.UNAVAILABLE);
         }
-        return ResponseEntity.status(result.replay() ? HttpStatus.OK : HttpStatus.CREATED)
+        return cn.jia.core.config.ApiJsonResponses.success(ResponseEntity.status(result.replay() ? HttpStatus.OK : HttpStatus.CREATED)
                 .header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
-                .contentType(MediaType.APPLICATION_JSON).body(result.receipt());
+                .contentType(MediaType.APPLICATION_JSON).body(creationReceipt(result.receipt())));
     }
 
     @GetMapping(value = "/request", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<AgentTaskCreationOperationService.Receipt> request(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<CreationReceipt>> request(
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             HttpServletRequest request, Authentication authentication) {
         AgentTaskCreationOperationService.Scope scope = scope(authentication);
         requireSingleKeyAndNoQuery(request, idempotencyKey);
-        return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
+        return cn.jia.core.config.ApiJsonResponses.success(ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
                 .contentType(MediaType.APPLICATION_JSON)
-                .body(operations.getByIdempotencyKey(scope, idempotencyKey));
+                .body(creationReceipt(operations.getByIdempotencyKey(scope, idempotencyKey))));
     }
 
     @PostMapping(value = "/v2", consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<AgentTaskCreationOperationService.MaterialsReceipt> createV2(
-            @RequestBody(required = false) String rawBody,
+    public ResponseEntity<cn.jia.core.entity.JsonResult<MaterialsReceipt>> createV2(
+            @cn.jia.core.annotation.ApiJsonData @RequestBody(required = false) String rawBody,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             HttpServletRequest request, Authentication authentication) {
         AgentTaskCreationOperationService.Scope scope = scope(authentication);
@@ -99,37 +99,36 @@ public final class AgentTaskCreationOperationController {
         var result = operations.create(scope, idempotencyKey, command(rawBody, 2));
         if (result == null) throw new AgentTaskCreationOperationService.Failure(
                 AgentTaskCreationOperationService.Reason.UNAVAILABLE);
-        return ResponseEntity.status(result.replay() ? HttpStatus.OK : HttpStatus.CREATED)
+        return cn.jia.core.config.ApiJsonResponses.success(ResponseEntity.status(result.replay() ? HttpStatus.OK : HttpStatus.CREATED)
                 .header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
-                .contentType(MediaType.APPLICATION_JSON).body(materialsReceipt(result.receipt()));
+                .contentType(MediaType.APPLICATION_JSON).body(materialsReceipt(result.receipt())));
     }
 
     @GetMapping(value = "/v2/request", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<AgentTaskCreationOperationService.MaterialsReceipt> requestV2(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<MaterialsReceipt>> requestV2(
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             HttpServletRequest request, Authentication authentication) {
         AgentTaskCreationOperationService.Scope scope = scope(authentication);
         requireSingleKeyAndNoQuery(request, idempotencyKey);
-        return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
+        return cn.jia.core.config.ApiJsonResponses.success(ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
                 .contentType(MediaType.APPLICATION_JSON)
-                .body(materialsReceipt(operations.getByIdempotencyKey(scope, idempotencyKey, 2)));
+                .body(materialsReceipt(operations.getByIdempotencyKey(scope, idempotencyKey, 2))));
     }
 
-    private static AgentTaskCreationOperationService.MaterialsReceipt materialsReceipt(
+    private static MaterialsReceipt materialsReceipt(
             AgentTaskCreationOperationService.Receipt receipt) {
         if (receipt == null || receipt.schemaVersion() != 2
                 || receipt.inputRefs().stream().anyMatch(ref -> !"INPUT".equals(ref.purpose()))) {
             throw new AgentTaskCreationOperationService.Failure(
                     AgentTaskCreationOperationService.Reason.UNAVAILABLE);
         }
-        return new AgentTaskCreationOperationService.MaterialsReceipt(2, receipt.operationId(),
-                receipt.taskId(), receipt.requirementRevision(), receipt.state(),
-                receipt.inputRefs().stream().map(ref -> new AgentTaskCreationOperationService.Attachment(
-                        ref.fileId(), ref.version())).toList(), receipt.task());
+        return new MaterialsReceipt(2, receipt.operationId(),
+                receipt.taskId(), Long.toString(receipt.requirementRevision()), receipt.state(),
+                receipt.inputRefs().stream().map(ref -> new Attachment(ref.fileId(), Integer.toString(ref.version()))).toList(), receipt.task());
     }
 
     @ExceptionHandler(AuthenticationFailure.class)
-    public ResponseEntity<ErrorBody> authentication(AuthenticationFailure failure) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> authentication(AuthenticationFailure failure) {
         return error(failure.forbidden ? HttpStatus.FORBIDDEN : HttpStatus.UNAUTHORIZED,
                 failure.forbidden ? "TASK_CREATION_FORBIDDEN" : "UNAUTHENTICATED",
                 failure.forbidden ? "Task creation scope is unavailable"
@@ -137,7 +136,7 @@ public final class AgentTaskCreationOperationController {
     }
 
     @ExceptionHandler(AgentTaskCreationOperationService.Failure.class)
-    public ResponseEntity<ErrorBody> failure(AgentTaskCreationOperationService.Failure failure) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> failure(AgentTaskCreationOperationService.Failure failure) {
         return switch (failure.reason()) {
             case BAD_REQUEST -> error(HttpStatus.BAD_REQUEST, "BAD_REQUEST",
                     "Invalid task creation request");
@@ -154,12 +153,12 @@ public final class AgentTaskCreationOperationController {
 
     @ExceptionHandler({InvalidRequest.class,
             org.springframework.http.converter.HttpMessageNotReadableException.class})
-    public ResponseEntity<ErrorBody> malformed(Exception ignored) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> malformed(Exception ignored) {
         return error(HttpStatus.BAD_REQUEST, "BAD_REQUEST", "Invalid task creation request");
     }
 
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<ErrorBody> unexpected(Exception failure) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> unexpected(Exception failure) {
         log.error("Task creation operation failed: type={}", failure.getClass().getName());
         return error(HttpStatus.SERVICE_UNAVAILABLE, "TASK_CREATION_UNAVAILABLE",
                 "Task creation is temporarily unavailable");
@@ -228,13 +227,12 @@ public final class AgentTaskCreationOperationController {
         for (JsonNode item : value) {
             if (!item.isObject() || !fieldNames(item).equals(REFERENCE_FIELDS)
                     || !item.get("fileId").isTextual()
-                    || !item.get("version").isIntegralNumber()
-                    || !item.get("version").canConvertToInt()
+                    || !item.get("version").isTextual()
                     || !item.get("purpose").isTextual()) {
                 throw new InvalidRequest();
             }
             String fileId = item.get("fileId").textValue();
-            int version = item.get("version").intValue();
+            int version = fileVersion(item.get("version"));
             String purpose = item.get("purpose").textValue();
             if (version < 1 || !"REFERENCE".equals(purpose)
                     || !selected.add(fileId + "\u0000" + version + "\u0000" + purpose)) {
@@ -255,10 +253,9 @@ public final class AgentTaskCreationOperationController {
         for (JsonNode item : value) {
             if (!item.isObject() || !fieldNames(item).equals(ATTACHMENT_FIELDS)
                     || !item.get("fileId").isTextual()
-                    || !item.get("version").isIntegralNumber()
-                    || !item.get("version").canConvertToInt()) throw new InvalidRequest();
+                    || !item.get("version").isTextual()) throw new InvalidRequest();
             String fileId = item.get("fileId").textValue();
-            int version = item.get("version").intValue();
+            int version = fileVersion(item.get("version"));
             if (version < 1 || !selected.add(fileId + "\u0000" + version)) throw new InvalidRequest();
             attachments.add(new AgentTaskCreationOperationService.InputReference(fileId, version, "INPUT"));
         }
@@ -327,13 +324,27 @@ public final class AgentTaskCreationOperationController {
         return false;
     }
 
-    private static ResponseEntity<ErrorBody> error(
+    private static ResponseEntity<cn.jia.core.entity.JsonResult<Void>> error(
             HttpStatus status, String code, String message) {
         return ResponseEntity.status(status).header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
                 .contentType(new MediaType(MediaType.APPLICATION_JSON, StandardCharsets.UTF_8))
-                .body(new ErrorBody(code, message));
+                .body(cn.jia.core.entity.JsonResult.<Void>failure(code, message));
     }
 
+    private static int fileVersion(JsonNode value) {
+        if(value==null||!value.isTextual()||!value.textValue().matches("[1-9][0-9]{0,9}"))throw new InvalidRequest();
+        try{return Integer.parseInt(value.textValue());}catch(NumberFormatException invalid){throw new InvalidRequest();}
+    }
+    public record Reference(String fileId,String version,String purpose) { }
+    public record Attachment(String fileId,String version) { }
+    public record CreationReceipt(int schemaVersion,String operationId,String taskId,String requirementRevision,
+            String state,List<Reference> inputRefs,cn.jia.agent.entity.AgentTaskDTO task) { }
+    public record MaterialsReceipt(int schemaVersion,String operationId,String taskId,String requirementRevision,
+            String state,List<Attachment> attachments,cn.jia.agent.entity.AgentTaskDTO task) { }
+    private static CreationReceipt creationReceipt(AgentTaskCreationOperationService.Receipt value) {
+        return new CreationReceipt(value.schemaVersion(),value.operationId(),value.taskId(),Long.toString(value.requirementRevision()),value.state(),
+                value.inputRefs().stream().map(ref->new Reference(ref.fileId(),Integer.toString(ref.version()),ref.purpose())).toList(),value.task());
+    }
     public record ErrorBody(String code, String message) { }
     private static final class InvalidRequest extends RuntimeException { }
     private static final class AuthenticationFailure extends RuntimeException {

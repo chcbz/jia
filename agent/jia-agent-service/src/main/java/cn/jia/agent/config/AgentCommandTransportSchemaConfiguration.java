@@ -8,6 +8,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 /** Registers D01 schema access only while the command outbox boundary is explicitly enabled. */
 @Configuration(proxyBeanMethods = false)
 public class AgentCommandTransportSchemaConfiguration {
+    @org.springframework.context.annotation.Profile("schema-maintenance")
     @Bean
     @Conditional(AgentCommandLegacyTransportSchemaEnabledCondition.class)
     public AgentCommandTransportSchemaInitializer agentCommandTransportSchemaInitializer(

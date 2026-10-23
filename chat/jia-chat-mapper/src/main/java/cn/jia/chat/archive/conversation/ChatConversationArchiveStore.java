@@ -48,6 +48,10 @@ public interface ChatConversationArchiveStore {
         return findAuthorizedSource(scope,conversationId,assetId,assetRevision,targetAgentId);
     }
 
+    /** Read-only lookup of an already projected output; never creates an asset or scans history. */
+    Source findAuthorizedOutputSource(Scope scope, String conversationId, long generation, String taskId,
+            String targetAgentId, String requestId, String stepId, String outputId, String sha256);
+
     /** Resolves and locks one complete persisted message inside the exact live owner/conversation scope. */
     TextSource findAuthorizedTextSourceForUpdate(Scope scope, String conversationId, long messageId);
 

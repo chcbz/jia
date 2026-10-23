@@ -51,16 +51,14 @@ public class ChatBountyInteractionV3Controller {
     public ResponseEntity<JsonResult<ChatBountyInteractionV3Wire.PreviewData>> preview(
             @PathVariable String conversationId,@RequestHeader("Idempotency-Key") String interactionKey,
             @RequestBody(required=false) String raw,Authentication authentication,HttpServletRequest request) {
-        noQuery(request);var intent=parseIntent(raw,false);var value=service.preview(tenants.resolve(authentication),
-                sender(),conversationId,interactionKey,intent);return ok(value);
+        return RetiredSkillWriteEndpoint.response();
     }
 
     @PostMapping("/{conversationId}/interactions/provider-consents")
     public ResponseEntity<JsonResult<cn.jia.agent.entity.ControlledImageFollowupAuthorityDTO>> issue(
             @PathVariable String conversationId,@RequestHeader("Idempotency-Key") String issueKey,
             @RequestBody(required=false) String raw,Authentication authentication,HttpServletRequest request) {
-        noQuery(request);var issue=parseIssue(raw);var value=service.issue(tenants.resolve(authentication),
-                sender(),conversationId,issueKey,issue);return ok(value);
+        return RetiredSkillWriteEndpoint.response();
     }
 
     @GetMapping("/{conversationId}/interactions/provider-consents/request")
@@ -75,8 +73,7 @@ public class ChatBountyInteractionV3Controller {
             @PathVariable String conversationId,@PathVariable String consentId,
             @RequestHeader("Idempotency-Key") String revokeKey,@RequestBody(required=false) String raw,
             Authentication authentication,HttpServletRequest request) {
-        noQuery(request);var body=parseRevoke(raw);return ok(service.revoke(tenants.resolve(authentication),
-                sender(),conversationId,consentId,revokeKey,body));
+        return RetiredSkillWriteEndpoint.response();
     }
 
     @GetMapping("/{conversationId}/interactions/request")
@@ -117,7 +114,7 @@ public class ChatBountyInteractionV3Controller {
             case NOT_FOUND_OR_FORBIDDEN->"NOT_FOUND_OR_FORBIDDEN";case CONFLICT->"CONFLICT";
             case PERSISTENCE_ERROR->"UNAVAILABLE";};
         JsonResult<Void> body=JsonResult.failure("BOUNTY_FOLLOWUP_V3_"+suffix,
-                status==HttpStatus.NOT_FOUND?"Bounty follow-up is unavailable":message);body.setStatus(status.value());
+                status==HttpStatus.NOT_FOUND?"Bounty follow-up is unavailable":message);
         return ResponseEntity.status(status).header(HttpHeaders.CACHE_CONTROL,CACHE).body(body);
     }
 }

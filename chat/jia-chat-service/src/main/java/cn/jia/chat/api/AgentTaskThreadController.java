@@ -1,5 +1,7 @@
 package cn.jia.chat.api;
 
+import cn.jia.core.entity.JsonRequest;
+
 import cn.jia.chat.entity.AgentTaskThreadCreateDTO;
 import cn.jia.chat.entity.AgentTaskThreadMessageCreateDTO;
 import cn.jia.chat.exception.AgentTaskThreadException;
@@ -28,7 +30,8 @@ public class AgentTaskThreadController {
     @PostMapping("/{taskId}/team")
     public Object getOrCreateTeamThread(
             @PathVariable String taskId,
-            @RequestBody(required = false) AgentTaskThreadCreateDTO request) {
+            @RequestBody(required = false) JsonRequest<AgentTaskThreadCreateDTO> protocolRequest) {
+        AgentTaskThreadCreateDTO request = protocolRequest == null ? null : protocolRequest.data();
         AgentTaskThreadCreateDTO safe = request == null ? new AgentTaskThreadCreateDTO() : request;
         Scope scope = currentScope();
         return JsonResult.success(taskThreadService.getOrCreateTeamThread(
@@ -48,7 +51,8 @@ public class AgentTaskThreadController {
     @PostMapping("/{taskId}/team/messages")
     public Object appendTeamMessage(
             @PathVariable String taskId,
-            @RequestBody(required = false) AgentTaskThreadMessageCreateDTO request) {
+            @RequestBody(required = false) JsonRequest<AgentTaskThreadMessageCreateDTO> protocolRequest) {
+        AgentTaskThreadMessageCreateDTO request = protocolRequest == null ? null : protocolRequest.data();
         Scope scope = currentScope();
         return JsonResult.success(taskThreadService.appendTeamMessage(
                 scope.tenantId(), scope.clientId(), scope.ownerJiacn(), taskId, request));
@@ -95,7 +99,7 @@ public class AgentTaskThreadController {
     private ResponseEntity<JsonResult<Void>> error(
             HttpStatus status, String code, String message) {
         JsonResult<Void> result = JsonResult.failure(code, message);
-        result.setStatus(status.value());
+
         return ResponseEntity.status(status).body(result);
     }
 

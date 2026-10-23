@@ -1,5 +1,7 @@
 package cn.jia.mat.api;
 
+import cn.jia.core.entity.JsonRequest;
+
 import cn.jia.base.service.DictService;
 import cn.jia.core.common.EsHandler;
 import cn.jia.core.entity.JsonRequestPage;
@@ -78,7 +80,8 @@ public class MediaController {
      * @return 创建结果
      */
     @PostMapping(value = "/create")
-    public Object create(@RequestBody MatMediaEntity media) {
+    public Object create(@RequestBody JsonRequest<MatMediaEntity> protocolRequest) {
+        MatMediaEntity media = protocolRequest == null ? null : protocolRequest.data();
         MatMediaEntity mediaEntity = mediaService.create(media);
         EsHandler.assertNotNull(mediaEntity);
         return JsonResult.success(mediaEntity);
@@ -91,7 +94,8 @@ public class MediaController {
      * @return 更新结果
      */
     @PostMapping(value = "/update")
-    public Object update(@RequestBody MatMediaEntity media) {
+    public Object update(@RequestBody JsonRequest<MatMediaEntity> protocolRequest) {
+        MatMediaEntity media = protocolRequest == null ? null : protocolRequest.data();
         mediaService.update(media);
         return JsonResult.success(media);
     }
@@ -102,7 +106,7 @@ public class MediaController {
      * @param id 媒体ID
      * @return 删除结果
      */
-    @GetMapping(value = "/delete")
+    @org.springframework.web.bind.annotation.DeleteMapping(value = "/delete")
     public Object delete(@RequestParam(name = "id") Long id) {
         MatMediaEntity media = mediaService.get(id);
         EsHandler.assertNotNull(media);
@@ -118,7 +122,8 @@ public class MediaController {
      * @return 媒体信息
      */
     @PostMapping(value = "/list")
-    public Object list(@RequestBody JsonRequestPage<MatMediaReqVO> page) {
+    public Object list(@RequestBody JsonRequest<JsonRequestPage<MatMediaReqVO>> protocolRequest) {
+        JsonRequestPage<MatMediaReqVO> page = protocolRequest == null ? null : protocolRequest.data();
         MatMediaReqVO example = Optional.ofNullable(page.getSearch()).orElse(new MatMediaReqVO());
         PageInfo<MatMediaEntity> mediaList = mediaService.findPage(example, page.getPageNum(), page.getPageSize(), page.getOrderBy());
         List<MatMediaResVO> medias =
@@ -128,9 +133,7 @@ public class MediaController {
                             MatConstants.MODULE_URL_MATERIAL) + "/" + media.getUrl());
                     return mediaResVO;
                 }).collect(Collectors.toList());
-        JsonResultPage<MatMediaResVO> result = new JsonResultPage<>(medias);
-        result.setPageNum(mediaList.getPageNum());
-        result.setTotal(mediaList.getTotal());
+        JsonResultPage<MatMediaResVO> result = JsonResultPage.page(medias, mediaList.getPageNum(), mediaList.getPageSize(), mediaList.getTotal());
         return result;
     }
 

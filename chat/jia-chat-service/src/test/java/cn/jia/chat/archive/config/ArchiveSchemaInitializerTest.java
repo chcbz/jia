@@ -92,10 +92,10 @@ class ArchiveSchemaInitializerTest {
         var tables = new LinkedHashMap<>(expected.tables());
         tables.put("archive_edition", withChecks(expected.tables().get("archive_edition"),
                 "chk_archive_edition_counts",
-                "((`chapter_count` = 120) and (`preface_paragraph_count` >= 1) and "
+                "((`chapter_count` >= 1) and (`preface_paragraph_count` >= 0) and "
                         + "(`chapter_paragraph_count` >= 1) and (`reader_paragraph_count` = "
                         + "(`preface_paragraph_count` + `chapter_paragraph_count`)) and "
-                        + "(`source_utf8_byte_length` > 0) and (`preface_utf8_byte_length` > 0) and "
+                        + "(`source_utf8_byte_length` > 0) and (`preface_utf8_byte_length` >= 0) and "
                         + "(`chapter_utf8_byte_length` > 0) and (`reader_utf8_byte_length` = "
                         + "(`preface_utf8_byte_length` + `chapter_utf8_byte_length`)))",
                 "chk_archive_edition_state",
@@ -106,7 +106,7 @@ class ArchiveSchemaInitializerTest {
                 "chk_archive_chapter_shape",
                 "(((`block_type` = _utf8mb4\\'PREFACE\\') and (`reader_ordinal` = 0) and "
                         + "(`chapter_number` is null)) or ((`block_type` = _utf8mb4\\'CHAPTER\\') and "
-                        + "(`reader_ordinal` between 1 and 120) and "
+                        + "(`reader_ordinal` >= 1) and "
                         + "(`chapter_number` = `reader_ordinal`)))"));
         tables.put("archive_paragraph", withChecks(expected.tables().get("archive_paragraph"),
                 "chk_archive_paragraph_metrics",

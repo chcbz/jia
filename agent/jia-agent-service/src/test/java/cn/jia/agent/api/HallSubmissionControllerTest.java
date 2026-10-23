@@ -27,7 +27,9 @@ class HallSubmissionControllerTest {
     @BeforeEach
     void setUp() {
         service = org.mockito.Mockito.mock(HallRequestDraftService.class);
-        mvc = MockMvcBuilders.standaloneSetup(new HallSubmissionController(service)).build();
+        mvc = MockMvcBuilders.standaloneSetup(new HallSubmissionController(service))
+                .setControllerAdvice(new cn.jia.core.config.ApiEnvelopeAdvice(), new cn.jia.core.config.ExceptionHandlerAdvice())
+                .addFilters(new cn.jia.core.filter.RequestIdFilter()).build();
     }
 
     @Test
@@ -39,11 +41,14 @@ class HallSubmissionControllerTest {
         when(service.getSubmissionByIdempotencyKey(scope, "task-submit")).thenReturn(receipt);
         mvc.perform(get("/agent/hall/submissions/request").principal(jwt()).header("Idempotency-Key", "task-submit"))
                 .andExpect(status().isOk())
+                .andExpect(jsonPath("$.protocolVersion").value(1))
+                .andExpect(jsonPath("$.code").value("E0"))
+                .andExpect(jsonPath("$.requestId").isNotEmpty())
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
-                .andExpect(jsonPath("$.ref.sourceType").value("TASK"))
-                .andExpect(jsonPath("$.task.taskId").value("42"))
-                .andExpect(jsonPath("$.task.taskVersion").value("0"))
-                .andExpect(jsonPath("$.execution").value(org.hamcrest.Matchers.nullValue()));
+                .andExpect(jsonPath("$.data.ref.sourceType").value("TASK"))
+                .andExpect(jsonPath("$.data.task.taskId").value("42"))
+                .andExpect(jsonPath("$.data.task.taskVersion").value("0"))
+                .andExpect(jsonPath("$.data.execution").value(org.hamcrest.Matchers.nullValue()));
     }
 
     @Test
@@ -57,11 +62,14 @@ class HallSubmissionControllerTest {
         mvc.perform(get("/agent/hall/submissions/request").principal(jwt())
                         .header("Idempotency-Key", "submit-key"))
                 .andExpect(status().isOk())
+                .andExpect(jsonPath("$.protocolVersion").value(1))
+                .andExpect(jsonPath("$.code").value("E0"))
+                .andExpect(jsonPath("$.requestId").isNotEmpty())
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
-                .andExpect(jsonPath("$.ref.sourceType").value("TASK"))
-                .andExpect(jsonPath("$.ref.sourceId").value("task-1"))
-                .andExpect(jsonPath("$.execution.executionMode").value("TASK"))
-                .andExpect(jsonPath("$.submittedAt").value(1_790_000_000_000L));
+                .andExpect(jsonPath("$.data.ref.sourceType").value("TASK"))
+                .andExpect(jsonPath("$.data.ref.sourceId").value("task-1"))
+                .andExpect(jsonPath("$.data.execution.executionMode").value("TASK"))
+                .andExpect(jsonPath("$.data.submittedAt").value(1_790_000_000_000L));
         verify(service).getSubmissionByIdempotencyKey(scope, "submit-key");
     }
 
@@ -80,12 +88,15 @@ class HallSubmissionControllerTest {
 
         mvc.perform(get("/agent/hall/cases/hpc_1").principal(jwt()))
                 .andExpect(status().isOk())
+                .andExpect(jsonPath("$.protocolVersion").value(1))
+                .andExpect(jsonPath("$.code").value("E0"))
+                .andExpect(jsonPath("$.requestId").isNotEmpty())
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
-                .andExpect(jsonPath("$.caseId").value("hpc_1"))
-                .andExpect(jsonPath("$.revision").value(2))
-                .andExpect(jsonPath("$.executions[1].parentExecutionId").value("execution-1"))
-                .andExpect(jsonPath("$.executions[1].sourceOutputRef.outputId").value("output-1"))
-                .andExpect(jsonPath("$.allowedActions[1]").value("CREATE_REVISION"));
+                .andExpect(jsonPath("$.data.caseId").value("hpc_1"))
+                .andExpect(jsonPath("$.data.revision").value("2"))
+                .andExpect(jsonPath("$.data.executions[1].parentExecutionId").value("execution-1"))
+                .andExpect(jsonPath("$.data.executions[1].sourceOutputRef.outputId").value("output-1"))
+                .andExpect(jsonPath("$.data.allowedActions[1]").value("CREATE_REVISION"));
     }
 
     @Test
@@ -117,13 +128,16 @@ class HallSubmissionControllerTest {
 
         mvc.perform(get("/agent/hall/executions/execution-1/results").principal(jwt()))
                 .andExpect(status().isOk())
+                .andExpect(jsonPath("$.protocolVersion").value(1))
+                .andExpect(jsonPath("$.code").value("E0"))
+                .andExpect(jsonPath("$.requestId").isNotEmpty())
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
-                .andExpect(jsonPath("$.executionId").value("execution-1"))
-                .andExpect(jsonPath("$.manifestId").value("pwe_m_manifest"))
-                .andExpect(jsonPath("$.items[0].fileId").value("file-1"))
-                .andExpect(jsonPath("$.items[0].fileVersion").value(1))
-                .andExpect(jsonPath("$.items[0].availability").value("AVAILABLE"))
-                .andExpect(jsonPath("$.items[0].storageUri").doesNotExist());
+                .andExpect(jsonPath("$.data.executionId").value("execution-1"))
+                .andExpect(jsonPath("$.data.manifestId").value("pwe_m_manifest"))
+                .andExpect(jsonPath("$.data.items[0].fileId").value("file-1"))
+                .andExpect(jsonPath("$.data.items[0].fileVersion").value("1"))
+                .andExpect(jsonPath("$.data.items[0].availability").value("AVAILABLE"))
+                .andExpect(jsonPath("$.data.items[0].storageUri").doesNotExist());
         verify(service).getExecutionResults(scope, "execution-1");
 
         mvc.perform(get("/agent/hall/executions/execution-1/results?fileId=victim")

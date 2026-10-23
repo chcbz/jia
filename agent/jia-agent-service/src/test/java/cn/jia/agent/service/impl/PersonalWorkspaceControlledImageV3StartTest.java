@@ -185,6 +185,8 @@ class PersonalWorkspaceControlledImageV3StartTest {
    execution=new PersonalWorkspaceExecutionEntity().setExecutionId("execution").setTaskId("task").setRunId("run")
      .setConversationId("conversation").setTargetAgentId(AGENT).setExecutionMode("CONVERSATION").setExecutionState("QUEUED")
      .setExecutionProtocolVersion(3).setPermittedOperation("GENERATE_IMAGE").setRuntimeInputSnapshotDigest(digest);
+   execution.setTenantId("0"); execution.setClientId("client"); execution.setOwnerJiacn("owner");
+   execution.setTaskGrantId("grant").setTaskGrantVersion(1L);
    when(executions.findByTaskRun("0","client","owner","task","run")).thenReturn(execution);
    sources=mock(ControlledImageExecutionSourceV3Dao.class);
    when(sources.list("0","client","owner","execution")).thenReturn(List.of(source));
@@ -198,6 +200,7 @@ class PersonalWorkspaceControlledImageV3StartTest {
    });
    service=new PersonalWorkspaceExecutionServiceImpl(executions,workspace,links,rows,storage,mock(PersonalWorkspaceWriteService.class),
      new PersonalWorkspaceExecutionProperties(List.of("image/png")));
+        wireAssigneeFixture(service,executions);
    service.setRuntimeAuthentication((AgentRuntimeAuthenticationService)proxy.getProxy());
    service.setControlledImageFollowupV3(authority,sources);
    ReflectionTestUtils.setField(service,"conversationExecutionEnabled",true);
@@ -239,4 +242,18 @@ class PersonalWorkspaceControlledImageV3StartTest {
   }
   static String sha(byte[] value) throws Exception { return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value)); }
  }
+
+    /** Existing fixture has one authenticated owner. Cross-owner fixtures supply explicit grant authority separately. */
+    private static void wireAssigneeFixture(cn.jia.agent.service.PersonalWorkspaceExecutionService instance,
+            cn.jia.agent.dao.PersonalWorkspaceExecutionDao rows) {
+        var service=(cn.jia.agent.service.impl.PersonalWorkspaceExecutionServiceImpl)instance;
+        var authority=org.mockito.Mockito.mock(cn.jia.agent.service.TaskAssigneeAuthorityService.class);
+        org.mockito.Mockito.when(authority.resolveForAssignment(org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString()))
+            .thenAnswer(i->new cn.jia.agent.service.TaskAssigneeAuthorityService.Target(i.getArgument(0),i.getArgument(1),i.getArgument(2),i.getArgument(3),1L,null));
+        org.mockito.Mockito.when(authority.requireGrantTarget(org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyLong()))
+            .thenAnswer(i->new cn.jia.agent.service.TaskAssigneeAuthorityService.Target(i.getArgument(0),i.getArgument(1),i.getArgument(2),StartFixture.AGENT,1L,null));
+        service.setAssigneeAuthority(authority);
+        org.mockito.Mockito.when(rows.findForRuntime(org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString()))
+            .thenAnswer(i->rows.findByTaskRun(i.getArgument(0),i.getArgument(1),i.getArgument(2),i.getArgument(4),i.getArgument(5)));
+    }
 }

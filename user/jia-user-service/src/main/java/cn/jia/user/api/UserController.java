@@ -1,5 +1,7 @@
 package cn.jia.user.api;
 
+import cn.jia.core.entity.JsonRequest;
+
 import cn.jia.core.common.EsConstants;
 import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.entity.JsonRequestPage;
@@ -108,13 +110,13 @@ public class UserController {
      */
     @PreAuthorize("hasAuthority('user-get_name')")
     @RequestMapping(value = "/get/name", method = RequestMethod.GET)
-    public String findNameById(@RequestParam(name = "id") Long id) {
+    public cn.jia.core.entity.JsonResult<String> findNameById(@RequestParam(name = "id") Long id) {
         UserEntity user = userService.get(id);
         String name = "";
         if (user != null) {
             name = user.getNickname();
         }
-        return name;
+        return cn.jia.core.entity.JsonResult.success(name);
     }
 
     /**
@@ -125,13 +127,12 @@ public class UserController {
      */
     @PreAuthorize("hasAuthority('user-get_roles')")
     @RequestMapping(value = "/get/roles", method = RequestMethod.POST)
-    public Object findRoles(@RequestBody JsonRequestPage<UserEntity> page) {
+    public Object findRoles(@RequestBody JsonRequest<JsonRequestPage<UserEntity>> protocolRequest) {
+        JsonRequestPage<UserEntity> page = protocolRequest == null ? null : protocolRequest.data();
         UserEntity user = Optional.ofNullable(page.getSearch()).orElse(new UserEntity());
         ValidUtil.assertNotNull(user);
         PageInfo<RoleEntity> roleList = roleService.listByUserId(user.getId(), page.getPageNum(), page.getPageSize(), null);
-        JsonResultPage<RoleEntity> result = new JsonResultPage<>(roleList.getList());
-        result.setPageNum(roleList.getPageNum());
-        result.setTotal(roleList.getTotal());
+        JsonResultPage<RoleEntity> result = JsonResultPage.page(roleList.getList(), roleList.getPageNum(), roleList.getPageSize(), roleList.getTotal());
         return result;
     }
 
@@ -181,7 +182,8 @@ public class UserController {
      */
     @PreAuthorize("hasAuthority('user-create')")
     @RequestMapping(value = "/create", method = RequestMethod.POST)
-    public Object create(@RequestBody UserEntity user) throws Exception {
+    public Object create(@RequestBody JsonRequest<UserEntity> protocolRequest) throws Exception {
+        UserEntity user = protocolRequest == null ? null : protocolRequest.data();
         userService.create(user);
         return JsonResult.success(user);
     }
@@ -194,7 +196,8 @@ public class UserController {
      */
     @PreAuthorize("hasAuthority('user-update')")
     @RequestMapping(value = "/update", method = RequestMethod.POST)
-    public Object update(@RequestBody UserEntity user) {
+    public Object update(@RequestBody JsonRequest<UserEntity> protocolRequest) {
+        UserEntity user = protocolRequest == null ? null : protocolRequest.data();
         userService.update(user);
         return JsonResult.success(user);
     }
@@ -207,7 +210,8 @@ public class UserController {
      */
     @PreAuthorize("hasAuthority('user-sync')")
     @RequestMapping(value = "/sync", method = RequestMethod.POST)
-    public Object sync(@RequestBody List<UserEntity> userList) {
+    public Object sync(@RequestBody JsonRequest<List<UserEntity>> protocolRequest) {
+        List<UserEntity> userList = protocolRequest == null ? null : protocolRequest.data();
         userService.sync(userList);
         return JsonResult.success();
     }
@@ -233,7 +237,8 @@ public class UserController {
      */
     @PreAuthorize("hasAuthority('user-list')")
     @RequestMapping(value = "/list", method = RequestMethod.POST)
-    public Object list(@RequestBody JsonRequestPage<UserVO> page) {
+    public Object list(@RequestBody JsonRequest<JsonRequestPage<UserVO>> protocolRequest) {
+        JsonRequestPage<UserVO> page = protocolRequest == null ? null : protocolRequest.data();
         PageInfo<UserEntity> userList = userService.findListPage(page.getSearch(), page.getPageNum(),
                 page.getPageSize(), page.getOrderBy());
         List<Long> userIds = userList.getList().stream().map(UserEntity::getId).toList();
@@ -249,9 +254,7 @@ public class UserController {
             userVO.setPassword("******");
             userVOList.add(userVO);
         }
-        JsonResultPage<UserVO> result = new JsonResultPage<>(userVOList);
-        result.setPageNum(userList.getPageNum());
-        result.setTotal(userList.getTotal());
+        JsonResultPage<UserVO> result = JsonResultPage.page(userVOList, userList.getPageNum(), userList.getPageSize(), userList.getTotal());
         return result;
     }
 
@@ -263,16 +266,15 @@ public class UserController {
      */
     @PreAuthorize("hasAuthority('user-search')")
     @RequestMapping(value = "/search", method = RequestMethod.POST)
-    public Object search(@RequestBody JsonRequestPage<UserEntity> page) {
+    public Object search(@RequestBody JsonRequest<JsonRequestPage<UserEntity>> protocolRequest) {
+        JsonRequestPage<UserEntity> page = protocolRequest == null ? null : protocolRequest.data();
         String orderBy = page.getOrderBy();
         PageInfo<UserEntity> userList = userService.search(page.getSearch(), page.getPageNum(), page.getPageSize(), orderBy);
         //隐藏密码
         for (UserEntity u : userList.getList()) {
             u.setPassword("******");
         }
-        JsonResultPage<UserEntity> result = new JsonResultPage<>(userList.getList());
-        result.setPageNum(userList.getPageNum());
-        result.setTotal(userList.getTotal());
+        JsonResultPage<UserEntity> result = JsonResultPage.page(userList.getList(), userList.getPageNum(), userList.getPageSize(), userList.getTotal());
         return result;
     }
 
@@ -284,7 +286,7 @@ public class UserController {
      * @return 修改结果
      */
     @PreAuthorize("hasAuthority('user-point_change')")
-    @RequestMapping(value = "/point/change", method = RequestMethod.GET)
+    @RequestMapping(value = "/point/change", method = RequestMethod.POST)
     public Object changePoint(@RequestParam("jiacn") String jiacn, @RequestParam("num") int num) {
         userService.changePoint(jiacn, num);
         return JsonResult.success();
@@ -298,7 +300,8 @@ public class UserController {
      */
     @PreAuthorize("hasAuthority('user-role_change')")
     @RequestMapping(value = "/role/change", method = RequestMethod.POST)
-    public Object changeRole(@RequestBody UserVO user) {
+    public Object changeRole(@RequestBody JsonRequest<UserVO> protocolRequest) {
+        UserVO user = protocolRequest == null ? null : protocolRequest.data();
         userService.changeRole(user);
         return JsonResult.success();
     }
@@ -311,7 +314,8 @@ public class UserController {
      */
     @PreAuthorize("hasAuthority('user-group_change')")
     @RequestMapping(value = "/group/change", method = RequestMethod.POST)
-    public Object changeGroup(@RequestBody UserVO user) {
+    public Object changeGroup(@RequestBody JsonRequest<UserVO> protocolRequest) {
+        UserVO user = protocolRequest == null ? null : protocolRequest.data();
         userService.changeGroup(user);
         return JsonResult.success();
     }
@@ -324,7 +328,8 @@ public class UserController {
      */
     @PreAuthorize("hasAuthority('user-org_change')")
     @RequestMapping(value = "/org/change", method = RequestMethod.POST)
-    public Object changeOrg(@RequestBody UserVO user) {
+    public Object changeOrg(@RequestBody JsonRequest<UserVO> protocolRequest) {
+        UserVO user = protocolRequest == null ? null : protocolRequest.data();
         userService.changeOrg(user);
         userService.setDefaultOrg(user.getId());
         return JsonResult.success();
@@ -360,7 +365,7 @@ public class UserController {
      * @throws EsRuntimeException 如果修改密码失败，则抛出异常
      */
     @PreAuthorize("hasAuthority('user-password_change')")
-    @RequestMapping(value = "/password/change", method = RequestMethod.GET)
+    @RequestMapping(value = "/password/change", method = RequestMethod.POST)
     public Object changePassword(@RequestParam Long userId, @RequestParam String oldPassword,
                                  @RequestParam String newPassword) {
         userService.changePassword(userId, oldPassword, newPassword);
@@ -376,7 +381,7 @@ public class UserController {
      * @return 操作结果
      * @throws EsRuntimeException 如果重置密码失败，则抛出异常
      */
-    @RequestMapping(value = "/password/reset", method = RequestMethod.GET)
+    @RequestMapping(value = "/password/reset", method = RequestMethod.POST)
     public Object resetPassword(@RequestParam String phone, @RequestParam String smsCode,
                                 @RequestParam String newPassword) {
         SmsCodeEntity smsCodeNoUsed =
@@ -419,7 +424,7 @@ public class UserController {
      * @throws EsRuntimeException 如果用户不存在或修改失败，则抛出异常
      */
     @PreAuthorize("hasAuthority('user-position_change')")
-    @RequestMapping(value = "/position/change", method = RequestMethod.GET)
+    @RequestMapping(value = "/position/change", method = RequestMethod.POST)
     public Object changePosition(@RequestParam(name = "position") Long position) {
         UserEntity user = userService.findByUsername(EsContextHolder.getContext().getUsername());
         if (user == null) {

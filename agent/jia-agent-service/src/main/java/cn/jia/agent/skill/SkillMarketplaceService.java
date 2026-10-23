@@ -1,10 +1,8 @@
 package cn.jia.agent.skill;
 
-import cn.jia.agent.config.AgentRabbitSafetyGate;
 import cn.jia.agent.dao.AgentRuntimeDao;
 import cn.jia.agent.entity.*;
 import cn.jia.agent.hosting.HostingRentHttp;
-import cn.jia.agent.service.AgentCommandTransportWriter;
 import cn.jia.agent.service.impl.AgentCommandCanonicalCodec;
 import cn.jia.agent.service.AgentManagedSessionLookup;
 import cn.jia.economy.common.*;
@@ -23,7 +21,7 @@ import java.util.*;
 import static cn.jia.agent.skill.SkillMarketplaceException.require;
 
 /** Money admission, command intent and pending entitlement share one REQUIRED transaction.
- * The existing committed outbox publisher owns all network I/O and crash recovery. */
+ * The existing committed WS outbox dispatcher owns all network I/O and crash recovery. */
 @Service
 public final class SkillMarketplaceService {
     private final EconomySkillMarketplaceMapper market;
@@ -33,30 +31,29 @@ public final class SkillMarketplaceService {
     private final EconomyPreviewGate preview;
     private final SkillAgentVersions versions;
     private final AgentRuntimeDao runtimes;
-    private final ObjectProvider<AgentCommandTransportWriter> writer;
-    private final ObjectProvider<AgentRabbitSafetyGate> transportGate;
+    private final ObjectProvider<SkillInstallCommandWriter> writer;
     private final ObjectProvider<SkillPackages> packages;
     private final ObjectProvider<AgentRuntimeAuthenticationService> authentication;
     private final TransactionTemplate tx;
     private final ObjectProvider<AgentManagedSessionLookup> sessions;
     public SkillMarketplaceService(EconomySkillMarketplaceMapper market,EconomySkillApplicationMapper application,
             EconomyLedgerMapper ledger,EconomyPostingService posting,EconomyPreviewGate preview,
-            SkillAgentVersions versions,AgentRuntimeDao runtimes,ObjectProvider<AgentCommandTransportWriter> writer,
-            ObjectProvider<AgentRabbitSafetyGate> transportGate,ObjectProvider<SkillPackages> packages,
+            SkillAgentVersions versions,AgentRuntimeDao runtimes,ObjectProvider<SkillInstallCommandWriter> writer,
+            ObjectProvider<SkillPackages> packages,
             ObjectProvider<AgentRuntimeAuthenticationService> authentication,ObjectProvider<AgentManagedSessionLookup> sessions,PlatformTransactionManager manager) {
         this.market=market; this.application=application; this.ledger=ledger; this.posting=posting;
         this.preview=preview; this.versions=versions; this.runtimes=runtimes; this.writer=writer;
-        this.transportGate=transportGate; this.packages=packages; this.authentication=authentication; this.tx=new TransactionTemplate(manager);this.sessions=sessions;
+        this.packages=packages; this.authentication=authentication; this.tx=new TransactionTemplate(manager);this.sessions=sessions;
     }
     public boolean available(HostingRentHttp.Actor a) {
-        var gate=transportGate.getIfAvailable();
+        var transport=writer.getIfAvailable();
         return versions.enabled() && preview.allows(a.tenantId(),a.clientId()) && packages.getIfAvailable()!=null
-                && writer.getIfAvailable()!=null && authentication.getIfAvailable()!=null && sessions.getIfAvailable()!=null && gate!=null
-                && gate.rabbitDispatchEnabled() && gate.allowsDispatch(a.tenantId(),a.clientId());
+                && transport!=null && transport.allows(a.tenantId(),a.clientId())
+                && authentication.getIfAvailable()!=null && sessions.getIfAvailable()!=null;
     }
     public Map<String,Object> capabilities(HostingRentHttp.Actor a) {
         return Map.of("economyPreviewEnabled",preview.allows(a.tenantId(),a.clientId()),
-                "skillMarketplaceEnabled",available(a),"principalScopeFingerprint",HexFormat.of().formatHex(
+                "skillMarketplaceEnabled",available(a),"principalScopeSha256",HexFormat.of().formatHex(
                         HostingRentHttp.hash("economy-principal-scope-v1",Map.of("actor",a.actorId(),"tenant",a.tenantId(),"client",a.clientId()))));
     }
     private void enabled(HostingRentHttp.Actor a) { require(available(a),503,"SKILL_MARKETPLACE_DISABLED"); }
@@ -78,7 +75,7 @@ public final class SkillMarketplaceService {
         Map<String,Object> dto=new LinkedHashMap<>();
         dto.put("productId",p.getProductId()); dto.put("name",p.getName()); dto.put("description",p.getDescription());
         dto.put("productVersionId",v.getProductVersionId()); dto.put("skillKey",v.getSkillKey()); dto.put("skillVersion",v.getSkillVersion());
-        dto.put("priceMicro",v.getPriceMicro().toString()); dto.put("permissions",SkillMarketplaceHttp.permissions(v.getApprovedPermissionsManifest()));
+        dto.put("price",cn.jia.economy.common.Money.silver(v.getPriceMicro())); dto.put("permissions",SkillMarketplaceHttp.permissions(v.getApprovedPermissionsManifest()));
         boolean allowed=admin || "NONE".equals(v.getDeploymentRestriction());
         dto.put("canPurchase",allowed); dto.put("denialReason",allowed?null:"SKILL_ADMIN_REQUIRED");
         dto.put("deploymentRestriction",v.getDeploymentRestriction()); return dto;
@@ -245,7 +242,7 @@ public final class SkillMarketplaceService {
             return market.selectEntitlementsByAgent(a.tenantId(),a.clientId(),agentId).stream().map(e->{
                 Map<String,Object> d=new LinkedHashMap<>();
                 d.put("entitlementId",e.getEntitlementId()); d.put("targetAgentId",e.getTargetAgentId()); d.put("orderId",e.getOrderId());
-                d.put("installationId",e.getInstallationId()); d.put("productVersionId",e.getProductVersionId());
+                d.put("skillInstallationId",e.getInstallationId()); d.put("productVersionId",e.getProductVersionId());
                 d.put("skillKey",e.getSkillKey()); d.put("skillVersion",e.getSkillVersion()); d.put("status",e.getStatus());
                 d.put("permissionGrantVersion",e.getPermissionGrantVersion().toString()); return d;
             }).toList();
@@ -280,7 +277,7 @@ public final class SkillMarketplaceService {
     static EconomyAccountKey availableAccount(String actor) { return new EconomyAccountKey("SILVER",EconomyAccountOwnerType.USER,actor,EconomyAccountPurpose.AVAILABLE); }
     static Map<String,Object> quoteDto(SkillPurchaseQuoteEntity q) {
         return Map.of("quoteId",q.getQuoteId(),"productVersionId",q.getProductVersionId(),"targetAgentId",q.getTargetAgentId(),
-                "expectedAgentVersion",q.getExpectedAgentVersion().toString(),"priceMicro",q.getExpectedPriceMicro().toString(),"expiresAt",q.getExpiresAt().toString());
+                "expectedAgentVersion",q.getExpectedAgentVersion().toString(),"price",cn.jia.economy.common.Money.silver(q.getExpectedPriceMicro()),"expiresAt",q.getExpiresAt());
     }
     static Map<String,Object> orderDto(SkillOrderEntity o,String status) {
         return Map.of("orderId",o.getOrderId(),"productVersionId",o.getProductVersionId(),"targetAgentId",o.getTargetAgentId(),

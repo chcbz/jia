@@ -51,10 +51,10 @@ class PersonalWorkspaceExecutionControllerTest {
 
         assertEquals(HttpStatus.OK, response.getStatusCode());
         assertEquals("private, no-store", response.getHeaders().getFirst(HttpHeaders.CACHE_CONTROL));
-        assertEquals(List.of(PersonalWorkspaceExecutionProperties.DOCX), response.getBody().allowedMimeTypes());
+        assertEquals(List.of(PersonalWorkspaceExecutionProperties.DOCX), response.getBody().getData().allowedMimeTypes());
         assertEquals(List.of("application/pdf", PersonalWorkspaceExecutionProperties.DOCX),
-                response.getBody().inputMimeTypes());
-        assertEquals(true, response.getBody().generationEnabled());
+                response.getBody().getData().inputMimeTypes());
+        assertEquals(true, response.getBody().getData().generationEnabled());
         verify(service).capabilities();
     }
 
@@ -63,13 +63,13 @@ class PersonalWorkspaceExecutionControllerTest {
         PersonalWorkspaceExecutionService.ExecutionView accepted = executionView("pwe_1");
         when(service.create(any(), any(), eq("create-key"))).thenReturn(accepted);
 
-        var response = controller.create(new PersonalWorkspaceExecutionController.CreateRequest(null, "agent-a", null,
-                "生成项目介绍文档", PersonalWorkspaceExecutionProperties.DOCX, List.of()), "create-key", jwt());
+        var response = controller.create(new cn.jia.core.entity.JsonRequest<>(1, "test-request", new PersonalWorkspaceExecutionController.CreateRequest(null, "agent-a", null,
+                "生成项目介绍文档", PersonalWorkspaceExecutionProperties.DOCX, List.of())), "create-key", jwt());
 
         assertEquals(HttpStatus.ACCEPTED, response.getStatusCode());
         assertEquals("private, no-store", response.getHeaders().getFirst(HttpHeaders.CACHE_CONTROL));
-        assertEquals("pwe_1", response.getBody().executionId());
-        assertEquals(List.of(), response.getBody().inputs());
+        assertEquals("pwe_1", response.getBody().getData().executionId());
+        assertEquals(List.of(), response.getBody().getData().inputs());
         ArgumentCaptor<PersonalWorkspaceExecutionService.OwnerScope> scope = ArgumentCaptor.forClass(
                 PersonalWorkspaceExecutionService.OwnerScope.class);
         ArgumentCaptor<PersonalWorkspaceExecutionService.CreateCommand> command = ArgumentCaptor.forClass(
@@ -95,18 +95,18 @@ class PersonalWorkspaceExecutionControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
                 .andExpect(content().contentType("application/json"))
-                .andExpect(jsonPath("$.items[0].executionId").value(summary.executionId()))
-                .andExpect(jsonPath("$.items[0].targetAgentId").value("agent-a"))
-                .andExpect(jsonPath("$.items[0].state").value("QUEUED"))
-                .andExpect(jsonPath("$.items[0].outputContentMimeType")
+                .andExpect(jsonPath("$.data.items[0].executionId").value(summary.executionId()))
+                .andExpect(jsonPath("$.data.items[0].targetAgentId").value("agent-a"))
+                .andExpect(jsonPath("$.data.items[0].state").value("QUEUED"))
+                .andExpect(jsonPath("$.data.items[0].outputContentMimeType")
                         .value(PersonalWorkspaceExecutionProperties.DOCX))
-                .andExpect(jsonPath("$.items[0].createdAt").value(summary.createdAt()))
-                .andExpect(jsonPath("$.items[0].instruction").doesNotExist())
-                .andExpect(jsonPath("$.items[0].inputs").doesNotExist())
-                .andExpect(jsonPath("$.items[0].runtimeCommand").doesNotExist())
-                .andExpect(jsonPath("$.items[0].leaseToken").doesNotExist())
-                .andExpect(jsonPath("$.nextCursor.createdAt").value(summary.createdAt()))
-                .andExpect(jsonPath("$.nextCursor.executionId").value(summary.executionId()));
+                .andExpect(jsonPath("$.data.items[0].createdAt").value(summary.createdAt()))
+                .andExpect(jsonPath("$.data.items[0].instruction").doesNotExist())
+                .andExpect(jsonPath("$.data.items[0].inputs").doesNotExist())
+                .andExpect(jsonPath("$.data.items[0].runtimeCommand").doesNotExist())
+                .andExpect(jsonPath("$.data.items[0].leaseToken").doesNotExist())
+                .andExpect(jsonPath("$.data.nextCursor.createdAt").value(summary.createdAt()))
+                .andExpect(jsonPath("$.data.nextCursor.executionId").value(summary.executionId()));
     }
 
     @Test
@@ -178,7 +178,7 @@ class PersonalWorkspaceExecutionControllerTest {
                         .header("Idempotency-Key", "paid-create-key").principal(jwt()))
                 .andExpect(status().isOk())
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
-                .andExpect(jsonPath("$.executionId").value("pwe_existing"));
+                .andExpect(jsonPath("$.data.executionId").value("pwe_existing"));
 
         verify(service).getByIdempotencyKey(owner, "paid-create-key");
         verify(service, never()).get(any(), eq("request"));

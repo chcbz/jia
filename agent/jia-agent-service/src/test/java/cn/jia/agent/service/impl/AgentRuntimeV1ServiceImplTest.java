@@ -34,7 +34,7 @@ class AgentRuntimeV1ServiceImplTest {
         when(provider.getIfAvailable()).thenReturn(acks);
         registry = mock(cn.jia.agent.dao.AgentIdentityRegistryDao.class);
         sessions = mock(cn.jia.agent.security.AgentRuntimeAuthenticationService.class);
-        service = new AgentRuntimeV1ServiceImpl(installations, identities, registry, provider, sessions);
+        service = new AgentRuntimeV1ServiceImpl(installations, identities, registry, provider, sessions, mock(ObjectProvider.class));
     }
 
     @Test void webCreationStoresOnlyProvidedDigestAndReturnsRedactedView() {

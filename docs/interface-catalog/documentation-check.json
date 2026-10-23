@@ -1,0 +1,13 @@
+{
+  "date": "2026-10-14",
+  "scope": "documentation-only",
+  "sourceCommit": "7e2d07a05b9e9b18461e97abcff44642504320ff",
+  "sourceOperationsChecked": 596,
+  "designRoutesChecked": 69,
+  "markdownFilesChecked": 22,
+  "jsonExamplesChecked": 3,
+  "localLinksChecked": 69,
+  "applicationTestsRun": false,
+  "productionQueried": false,
+  "result": "PASS"
+}

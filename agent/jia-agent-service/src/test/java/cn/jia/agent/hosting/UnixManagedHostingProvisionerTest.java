@@ -152,17 +152,34 @@ class UnixManagedHostingProvisionerTest {
     }
     @Test void liveCapabilitiesProbeIsTransactionExternalExactScopedAndFailClosed() throws Exception {
         var adapter = adapter();
-        doAnswer(call -> { var response = new LinkedHashMap<String,Object>(call.getArgument(0)); response.put("hostId", "fixture-host"); response.put("available", true); return response; }).when(adapter).exchange(anyMap());
+        doAnswer(call -> { var response = new LinkedHashMap<String,Object>(call.getArgument(0)); response.put("hostId", "fixture-host"); response.put("available", true); return response; }).when(adapter).exchange(anyMap(), anyString());
         assertTrue(adapter.probeCapabilities("0", "fixture-client", "fixture-owner"));
         assertFalse(adapter.probeCapabilities("other", "fixture-client", "fixture-owner"));
         assertFalse(adapter.probeCapabilities("0", "fixture-client", "*"));
-        doThrow(new java.net.SocketTimeoutException("absent")).when(adapter).exchange(anyMap());
+        doThrow(new java.net.SocketTimeoutException("absent")).when(adapter).exchange(anyMap(), anyString());
         assertFalse(adapter.probeCapabilities("0", "fixture-client", "fixture-owner"));
         TransactionSynchronizationManager.setActualTransactionActive(true);
         try {
             assertThrows(IllegalStateException.class, () -> adapter.probeCapabilities("0", "fixture-client", "fixture-owner"));
             assertThrows(IllegalStateException.class, () -> adapter.prepareAndObserve(preparation()));
         } finally { TransactionSynchronizationManager.clear(); }
+    }
+    @Test void publicHostingMessageProjectsWithoutChangingPrivateManifest() throws Exception {
+        var data = UnixManagedHostingProvisioner.hostingData(frame("ensureRequest"));
+        assertEquals("1", data.get("provisionGeneration"));
+        assertTrue(data.containsKey("runtimeInstallationId")); assertTrue(data.containsKey("validUntilAt"));
+        for (String forbidden : Set.of("protocol", "method", "installationId", "validUntil")) assertFalse(data.containsKey(forbidden));
+        var request = cn.jia.core.entity.ProtocolMessage.event("request", "hosting.observe", "message", data);
+        var responseData = UnixManagedHostingProvisioner.hostingData(frame("readyResponse"));
+        responseData.put("sessionGeneration", String.valueOf(frame("readyResponse").get("sessionGeneration")));
+        var reply = new LinkedHashMap<String,Object>();
+        reply.put("protocolVersion", 1); reply.put("requestId", "request"); reply.put("messageType", "hosting.observe.result");
+        reply.put("messageId", "reply"); reply.put("correlationId", "message"); reply.put("code", "E0"); reply.put("msg", "ok"); reply.put("data", responseData);
+        assertEquals(wire(frame("readyResponse")), wire(UnixManagedHostingProvisioner.hostingResponse(request, reply)));
+        reply.put("correlationId", "wrong"); assertThrows(java.io.IOException.class, () -> UnixManagedHostingProvisioner.hostingResponse(request, reply));
+        reply.put("correlationId", "message"); responseData.put("sessionGeneration", 1);
+        assertThrows(java.io.IOException.class, () -> UnixManagedHostingProvisioner.hostingResponse(request, reply));
+        assertThrows(java.io.IOException.class, () -> UnixManagedHostingProvisioner.hostingResponse(request, frame("readyResponse")));
     }
     /** Real Java transport/decoder -> Runtime UDS/control/journal. Native API and executor remain synthetic. */
     @Test @EnabledOnOs(OS.LINUX)
@@ -176,6 +193,7 @@ class UnixManagedHostingProvisionerTest {
         Process child = new ProcessBuilder(node, script.toString()).directory(source.toFile())
                 .redirectError(ProcessBuilder.Redirect.INHERIT).start();
         var output = new java.io.BufferedReader(new java.io.InputStreamReader(child.getInputStream(), java.nio.charset.StandardCharsets.UTF_8));
+        Throwable originalFailure = null;
         try {
             var handshake = new java.util.concurrent.FutureTask<String>(output::readLine);
             Thread.ofVirtual().start(handshake);
@@ -224,15 +242,18 @@ class UnixManagedHostingProvisionerTest {
             assertEquals(ManagedHostingProvisioner.Outcome.UNKNOWN, real.prepareAndObserve(initial).outcome());
             expectedSession.set(1); // stale independent API registration cannot authenticate current free READY
             assertEquals(ManagedHostingProvisioner.Outcome.UNKNOWN, real.prepareAndObserve(free).outcome());
+        } catch (Exception | AssertionError failure) {
+            originalFailure = failure; throw failure;
         } finally {
             child.getOutputStream().close(); // EOF asks this fixture to close its own journal/socket/host/private roots
             if (!child.waitFor(10, TimeUnit.SECONDS)) {
                 child.destroy();
                 if (!child.waitFor(5, TimeUnit.SECONDS)) child.destroyForcibly(); // exact child only, never peer processes
-                fail("Owned Runtime fixture failed graceful shutdown");
+                if (originalFailure == null) fail("Owned Runtime fixture failed graceful shutdown");
+                originalFailure.addSuppressed(new AssertionError("Owned Runtime fixture failed graceful shutdown"));
             }
             output.close(); // after child exit, also unblocks any timed-out handshake reader
-            assertEquals(0, child.exitValue(), "Runtime fixture cleanup");
+            if (originalFailure == null) assertEquals(0, child.exitValue(), "Runtime fixture cleanup");
         }
     }
     private ManagedHostingProvisioner.Observation pollFixtureReady(UnixManagedHostingProvisioner adapter,
@@ -266,11 +287,16 @@ class UnixManagedHostingProvisionerTest {
                         }
                         input.flip(); byte[] data = new byte[input.remaining()]; input.get(data);
                         assertFalse(new String(data, java.nio.charset.StandardCharsets.UTF_8).contains("apiKey"));
-                        var output = ByteBuffer.wrap((JSON.writeValueAsString(frame("readyResponse")) + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                        var inbound = JSON.readValue(data, new TypeReference<Map<String,Object>>() {});
+                        var result = UnixManagedHostingProvisioner.hostingData(frame("readyResponse"));
+                        result.put("sessionGeneration", String.valueOf(result.get("sessionGeneration")));
+                        var response = Map.of("protocolVersion", 1, "requestId", inbound.get("requestId"), "messageType", "hosting.observe.result",
+                                "messageId", "reply", "correlationId", inbound.get("messageId"), "code", "E0", "msg", "ok", "data", result);
+                        var output = ByteBuffer.wrap((JSON.writeValueAsString(response) + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
                         while (output.hasRemaining()) channel.write(output); return true;
                     }
                 });
-                assertEquals(frame("readyResponse"), adapter(socket, uid, gid, "fixture-owner").exchange(UnixManagedHostingProvisioner.request(preparation(), "observe", candidate())));
+                assertEquals(wire(frame("readyResponse")), wire(adapter(socket, uid, gid, "fixture-owner").exchange(UnixManagedHostingProvisioner.request(preparation(), "observe", candidate()))));
                 assertTrue(served.get(5, TimeUnit.SECONDS));
             }
             Files.setPosixFilePermissions(socket, PosixFilePermissions.fromString("rw-rw-rw-"));

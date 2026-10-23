@@ -218,7 +218,7 @@ public class AgentLegacyTaskCompatibilityService {
         validateLockedTask(task, tenantId, clientId, taskId);
         precommitValidator.beforeIdentityLock(task, agentIds);
         List<String> lockedAgentIds = identityService.lockActiveCanonicalAgentIdsInScope(
-                tenantId, clientId, ownerJiacn, agentIds);
+                tenantId, clientId, precommitValidator.identityOwner(ownerJiacn), agentIds);
         if (!agentIds.equals(lockedAgentIds)) {
             throw forbidden();
         }
@@ -1310,6 +1310,9 @@ public class AgentLegacyTaskCompatibilityService {
 
     @FunctionalInterface
     public interface AssignmentPrecommitValidator {
+        /** A trusted grant writer may resolve a distinct executor; ordinary callers retain owner scope. */
+        default String identityOwner(String taskOwner) { return taskOwner; }
+
         /** Called with the task root locked, before any canonical identity/runtime lock. */
         default void beforeIdentityLock(AgentTaskMetaEntity task, List<String> agentIds) {
         }

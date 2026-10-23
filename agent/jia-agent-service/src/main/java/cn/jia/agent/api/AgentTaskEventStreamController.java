@@ -89,7 +89,7 @@ public class AgentTaskEventStreamController {
         }
 
         ManagedSseEmitter emitter = new ManagedSseEmitter(SSE_TIMEOUT_MILLIS);
-        StreamConnection connection = new StreamConnection(emitter, subject);
+        StreamConnection connection = new StreamConnection(emitter, subject, cn.jia.core.filter.RequestIdFilter.current(request));
         connection.start(source);
         return ResponseEntity.ok()
                 .header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL_VALUE)
@@ -99,7 +99,7 @@ public class AgentTaskEventStreamController {
     }
 
     @ExceptionHandler(StreamAuthenticationException.class)
-    public ResponseEntity<StreamError> handleAuthentication(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> handleAuthentication(
             StreamAuthenticationException exception) {
         HttpStatus status = exception.forbidden
                 ? HttpStatus.FORBIDDEN : HttpStatus.UNAUTHORIZED;
@@ -110,12 +110,12 @@ public class AgentTaskEventStreamController {
     }
 
     @ExceptionHandler(StreamRequestException.class)
-    public ResponseEntity<StreamError> handleBadRequest(StreamRequestException ignored) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> handleBadRequest(StreamRequestException ignored) {
         return error(HttpStatus.BAD_REQUEST, "BAD_REQUEST", "Invalid task event request");
     }
 
     @ExceptionHandler(AgentTaskWorkspaceException.class)
-    public ResponseEntity<StreamError> handleWorkspaceFailure(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> handleWorkspaceFailure(
             AgentTaskWorkspaceException exception) {
         if (exception.getReason()
                 == AgentTaskWorkspaceException.Reason.NOT_FOUND_OR_FORBIDDEN) {
@@ -128,13 +128,13 @@ public class AgentTaskEventStreamController {
     }
 
     @ExceptionHandler(StreamUnavailableException.class)
-    public ResponseEntity<StreamError> handleUnavailable(StreamUnavailableException ignored) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> handleUnavailable(StreamUnavailableException ignored) {
         log.error("Task event stream failed: reason=unavailable");
         return unavailableResponse();
     }
 
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<StreamError> handleUnexpected(Exception ignored) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> handleUnexpected(Exception ignored) {
         log.error("Task event stream failed: reason=unexpected");
         return unavailableResponse();
     }
@@ -147,7 +147,7 @@ public class AgentTaskEventStreamController {
         String queryCursor = singleOptionalQuery(request, "sinceVersion");
         String headerCursor = singleOptionalHeader(request, "Last-Event-ID");
         long query = queryCursor == null ? 0L : parseCursor(queryCursor);
-        long header = headerCursor == null ? 0L : parseCursor(headerCursor);
+        long header = headerCursor == null ? 0L : parseEventId(taskId, headerCursor);
         return new RawRequest(actorAgentId, Math.max(query, header));
     }
 
@@ -182,6 +182,13 @@ public class AgentTaskEventStreamController {
             throw badRequest();
         }
         return values.get(0);
+    }
+
+    static String eventId(String taskId, String version) { return "task:" + taskId + ":" + version; }
+    private static long parseEventId(String taskId, String id) {
+        String prefix = "task:" + taskId + ":";
+        if (!id.startsWith(prefix)) throw badRequest();
+        return parseCursor(id.substring(prefix.length()));
     }
 
     private static long parseCursor(String value) {
@@ -244,17 +251,17 @@ public class AgentTaskEventStreamController {
         return Character.isWhitespace(codePoint) || Character.isSpaceChar(codePoint);
     }
 
-    private static ResponseEntity<StreamError> unavailableResponse() {
+    private static ResponseEntity<cn.jia.core.entity.JsonResult<Void>> unavailableResponse() {
         return error(HttpStatus.SERVICE_UNAVAILABLE, "TASK_EVENTS_UNAVAILABLE",
                 "Task event stream is temporarily unavailable");
     }
 
-    private static ResponseEntity<StreamError> error(
+    private static ResponseEntity<cn.jia.core.entity.JsonResult<Void>> error(
             HttpStatus status, String code, String message) {
         return ResponseEntity.status(status)
                 .header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL_VALUE)
                 .contentType(new MediaType(MediaType.APPLICATION_JSON, StandardCharsets.UTF_8))
-                .body(new StreamError(code, message));
+                .body(cn.jia.core.entity.JsonResult.<Void>failure(code, message));
     }
 
     private static StreamRequestException badRequest() {
@@ -297,8 +304,11 @@ public class AgentTaskEventStreamController {
         private final AtomicBoolean sendAttempted = new AtomicBoolean();
         private final AtomicReference<Disposable> subscription = new AtomicReference<>();
 
+        private final String requestId;
+
         StreamConnection(
-                ManagedSseEmitter emitter, AuthorizedSubject subject) {
+                ManagedSseEmitter emitter, AuthorizedSubject subject, String requestId) {
+            this.requestId = requestId;
             this.emitter = emitter;
             this.subject = subject;
             emitter.setCleanup(this::externalTermination);
@@ -334,12 +344,12 @@ public class AgentTaskEventStreamController {
                     }
                     AgentTaskEventProjection.Frame frame =
                             AgentTaskEventProjection.project(subject, signal);
-                    SseEmitter.SseEventBuilder builder = SseEmitter.event()
-                            .name(frame.eventName());
-                    if (frame.id() != null) {
-                        builder.id(frame.id());
-                    }
-                    builder.data(frame.data(), MediaType.APPLICATION_JSON);
+                    String type = AgentTaskEventProjection.RESYNC_REQUIRED.equals(frame.eventName()) ? "task.resync.required" : "task.event";
+                    String id = frame.id()==null ? "task:"+subject.taskId()+":resync:"+java.util.UUID.randomUUID()
+                            : eventId(subject.taskId(),frame.id());
+                    var message = cn.jia.core.entity.ProtocolMessage.event(requestId,type,id,frame.data());
+                    SseEmitter.SseEventBuilder builder = SseEmitter.event().name(type).id(id)
+                            .data(message, MediaType.APPLICATION_JSON);
                     sendAttempted.set(true);
                     emitter.send(builder);
                     if (frame.terminal() && terminal.compareAndSet(false, true)) {

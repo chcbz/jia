@@ -54,7 +54,7 @@ public final class ControlledImagePointAndStartController {
         this.bridge=Objects.requireNonNull(bridge);
     }
 
-    @PostMapping(consumes=MediaType.APPLICATION_JSON_VALUE,produces=MediaType.APPLICATION_JSON_VALUE)
+    // Retired latest-contract write: history remains read-only; skills register fees, never authorize them.
     public ResponseEntity<JsonResult<ControlledImagePointAndStartDTO.Receipt>> submit(
             @PathVariable String taskId,
             @RequestHeader(value="Idempotency-Key",required=false) String key,
@@ -218,7 +218,7 @@ public final class ControlledImagePointAndStartController {
     }
     private static ResponseEntity<JsonResult<Void>> error(HttpStatus status,String code) {
         JsonResult<Void> body=JsonResult.failure(code,"Controlled image bridge request unavailable");
-        body.setStatus(status.value());
+
         return ResponseEntity.status(status).header(HttpHeaders.CACHE_CONTROL,CACHE)
                 .header("X-Content-Type-Options","nosniff")
                 .contentType(new MediaType(MediaType.APPLICATION_JSON,StandardCharsets.UTF_8)).body(body);

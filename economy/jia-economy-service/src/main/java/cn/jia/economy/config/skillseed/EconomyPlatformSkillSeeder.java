@@ -85,10 +85,15 @@ public final class EconomyPlatformSkillSeeder implements InitializingBean {
                     expected.productVersionId(), 1L, clock.getAsLong()),
                     "publish platform skill product " + expected.productId());
         } else if ("PUBLISHED".equals(product.getStatus())) {
-            if (!expected.productVersionId().equals(product.getCurrentProductVersionId())
-                    || !Long.valueOf(2L).equals(product.getVersion())) {
-                throw incompatible("published product pointer", expected.productId());
-            }
+            if (product.getVersion()==null || product.getVersion()<2 || product.getCurrentProductVersionId()==null)
+                throw incompatible("published product pointer",expected.productId());
+            // A later trusted publication owns the pointer. Seed never rolls it back to bundled v1.
+            SkillProductVersionEntity current=mapper.selectApprovedProductVersionForUpdate(scope.tenantId(),scope.clientId(),product.getCurrentProductVersionId());
+            if(current==null || !expected.productId().equals(current.getProductId())
+                    || !expected.skillKey().equals(current.getSkillKey()) || current.getVersionSequence()==null
+                    || current.getVersionSequence()<1 || !"APPROVED".equals(current.getReviewStatus())
+                    || !scope.tenantId().equals(current.getTenantId()) || !scope.clientId().equals(current.getClientId()))
+                throw incompatible("published product pointer",expected.productId());
         } else {
             throw incompatible("product status", expected.productId());
         }

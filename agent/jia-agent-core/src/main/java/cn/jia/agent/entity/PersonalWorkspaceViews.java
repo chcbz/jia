@@ -14,13 +14,14 @@ public final class PersonalWorkspaceViews {
             String previewState) { }
     public record Capabilities(String upload, String read, String edit, String preview, String download) { }
     public record ListView(List<FileView> items, String nextCursor) { }
+    public record VersionPage(List<VersionView> items, String nextCursor, boolean hasMore) { }
     public record FileDetailView(FileView file, VersionView latestVersion,
             List<VersionView> versions, List<Object> relations, List<Object> derivation) { }
     public record OperationView(String operationId, String state, String fileId,
             Integer fileVersion, String errorCode) { }
     public record UploadView(OperationView operation, FileView file, VersionView version) { }
-    public record UsageView(long impactRevision, List<TaskReferenceView> taskReferences,
-            List<Object> activeExecutions) { }
+    public record UsageView(String fileId, long impactRevision, UsageCounts counts) { }
+    public record UsageCounts(long taskReferences, long conversationReferences, long activeInputGrants) { }
     public record TaskReferenceView(String taskId, String relationId, int version, String role,
             long relationRevision, long createdAt) { }
     public record PreviewView(String state, List<PreviewPart> parts, boolean partial, String reason) { }

@@ -107,6 +107,43 @@ public interface ChatMessageMapper extends BaseMapper<ChatMessageEntity> {
                           THEN 0 ELSE 1 END = 1)
             """;
 
+    /** Only live, exactly owned user/assistant messages can enter automatic memory. */
+    @Select("""
+            SELECT CAST(c.id AS CHAR) FROM chat_conversation c
+            JOIN chat_message m ON m.conversation_id = CAST(c.id AS CHAR)
+              AND CAST(m.conversation_id AS BINARY) = CAST(CAST(c.id AS CHAR) AS BINARY)
+              AND OCTET_LENGTH(m.conversation_id) = OCTET_LENGTH(CAST(c.id AS CHAR))
+            WHERE c.deleted_at IS NULL AND c.tenant_id = '0'
+              AND CAST(c.tenant_id AS BINARY) = CAST('0' AS BINARY)
+              AND OCTET_LENGTH(c.tenant_id) = 1
+              AND c.id > #{afterId}
+              AND m.sync_status = #{syncStatus}
+              AND m.message_type IN ('USER', 'ASSISTANT')
+            """ + EXACT_MESSAGE_OWNER_SCOPE + """
+            GROUP BY c.id ORDER BY c.id ASC LIMIT #{limit}
+            """)
+    List<String> findPendingMemoryConversations(@Param("syncStatus") String syncStatus,
+            @Param("limit") int limit, @Param("afterId") long afterId);
+
+    /** Called with the live parent locked; never marks messages appended after the snapshot. */
+    @Update("""
+            <script>
+            UPDATE chat_message m JOIN chat_conversation c ON c.id = #{numericConversationId}
+            SET m.sync_status = 'SYNCED'
+            WHERE m.sync_status = 'PENDING'
+            """ + EXACT_MESSAGE_CONVERSATION_SCOPE + LIVE_CONVERSATION_OWNER_SCOPE
+            + EXACT_MESSAGE_OWNER_SCOPE + """
+              AND m.id IN
+              <foreach collection="messageIds" item="messageId" open="(" separator="," close=")">
+                #{messageId}
+              </foreach>
+            </script>
+            """)
+    int markMemorySnapshotSynced(@Param("ownerJiacn") String ownerJiacn,
+            @Param("clientId") String clientId, @Param("conversationId") String conversationId,
+            @Param("numericConversationId") long numericConversationId,
+            @Param("messageIds") List<Long> messageIds);
+
     @Select("""
             SELECT m.*
             FROM chat_message m

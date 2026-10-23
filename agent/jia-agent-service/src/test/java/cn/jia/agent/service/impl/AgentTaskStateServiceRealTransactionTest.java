@@ -475,6 +475,8 @@ class AgentTaskStateServiceRealTransactionTest {
                             "execution lock must participate in the task-root transaction");
                     return execution;
                 });
+        org.mockito.Mockito.when(executions.findForRuntime(TENANT, CLIENT, OWNER, AGENT_ID, TASK_ID, "run-a"))
+                .thenAnswer(i -> executions.findByTaskRun(TENANT, CLIENT, OWNER, TASK_ID, "run-a"));
         var rawService = new PersonalWorkspaceExecutionServiceImpl(executions,
                 org.mockito.Mockito.mock(cn.jia.agent.dao.PersonalWorkspaceDao.class),
                 org.mockito.Mockito.mock(cn.jia.agent.dao.PersonalWorkspaceTaskLinkDao.class),

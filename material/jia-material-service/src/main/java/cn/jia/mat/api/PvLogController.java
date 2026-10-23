@@ -1,5 +1,7 @@
 package cn.jia.mat.api;
 
+import cn.jia.core.entity.JsonRequest;
+
 import cn.jia.core.annotation.SysPermission;
 import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.entity.JsonRequestPage;
@@ -55,7 +57,8 @@ public class PvLogController {
 	 */
 	@PreAuthorize("hasAuthority('pvlog-create')")
 	@RequestMapping(value = "/create", method = RequestMethod.POST)
-	public Object create(@RequestBody MatPvLogEntity pageViewLog, HttpServletRequest request) {
+	public Object create(@RequestBody JsonRequest<MatPvLogEntity> protocolRequest, HttpServletRequest request) {
+        MatPvLogEntity pageViewLog = protocolRequest == null ? null : protocolRequest.data();
 		if(StringUtil.isNotBlank(pageViewLog.getJiacn())) {
 			UserEntity user = userService.findByJiacn(pageViewLog.getJiacn());
 			if(user != null) {
@@ -76,7 +79,8 @@ public class PvLogController {
 	 */
 	@PreAuthorize("hasAuthority('pvlog-update')")
 	@RequestMapping(value = "/update", method = RequestMethod.POST)
-	public Object update(@RequestBody MatPvLogEntity pageViewLog) {
+	public Object update(@RequestBody JsonRequest<MatPvLogEntity> protocolRequest) {
+        MatPvLogEntity pageViewLog = protocolRequest == null ? null : protocolRequest.data();
 		pvLogService.update(pageViewLog);
 		return JsonResult.success();
 	}
@@ -99,13 +103,12 @@ public class PvLogController {
 	 */
 	@PreAuthorize("hasAuthority('pvlog-list')")
 	@RequestMapping(value = "/list", method = RequestMethod.POST)
-	public Object list(@RequestBody JsonRequestPage<MatPvLogEntity> page) {
+	public Object list(@RequestBody JsonRequest<JsonRequestPage<MatPvLogEntity>> protocolRequest) {
+        JsonRequestPage<MatPvLogEntity> page = protocolRequest == null ? null : protocolRequest.data();
         MatPvLogEntity example = page.getSearch() == null ? new MatPvLogEntity() : page.getSearch();
         example.setClientId(EsContextHolder.getContext().getClientId());
 		PageInfo<MatPvLogEntity> pageViewLogList = pvLogService.findPage(example, page.getPageNum(), page.getPageSize(), page.getOrderBy());
-		JsonResultPage<MatPvLogEntity> result = new JsonResultPage<>(pageViewLogList.getList());
-		result.setPageNum(pageViewLogList.getPageNum());
-		result.setTotal(pageViewLogList.getTotal());
+		JsonResultPage<MatPvLogEntity> result = JsonResultPage.page(pageViewLogList.getList(), pageViewLogList.getPageNum(), pageViewLogList.getPageSize(), pageViewLogList.getTotal());
 		return result;
 	}
 }

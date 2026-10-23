@@ -76,7 +76,7 @@ public class ApiKeyAuthorizationConfig {
         JsonResult<Object> result = new JsonResult<>();
         result.setMsg(authException.getMessage());
         result.setCode(EsErrorConstants.UNAUTHORIZED.getCode());
-        result.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+
         response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
         response.setCharacterEncoding(StandardCharsets.UTF_8.name());
         response.setContentType(MediaType.APPLICATION_JSON_VALUE);

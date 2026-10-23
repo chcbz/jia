@@ -1,8 +1,6 @@
 package cn.jia.agent.service.impl;
 
 import cn.jia.agent.dao.PersonalWorkspaceDao;
-import cn.jia.agent.dao.PersonalWorkspaceTaskLinkDao;
-import cn.jia.agent.dao.PersonalWorkspaceExecutionDao;
 import cn.jia.agent.entity.PersonalWorkspaceFileEntity;
 import cn.jia.agent.entity.PersonalWorkspaceOperationEntity;
 import cn.jia.agent.entity.PersonalWorkspaceVersionEntity;
@@ -24,7 +22,6 @@ import java.util.Base64;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
@@ -32,39 +29,21 @@ import java.util.UUID;
 /** Owner-scoped workspace API; browser-created files are marked with USER_UPLOAD provenance. */
 @Named
 public class PersonalWorkspaceServiceImpl implements PersonalWorkspaceService {
-    private static final Set<String> MIME_TYPES = Set.of("image/png", "image/jpeg", "image/webp", "image/gif",
+    private static final Set<String> PREVIEW_MIME_TYPES = Set.of("image/png", "image/jpeg", "image/webp", "image/gif",
+            "image/bmp", "image/tiff", "image/heic", "image/heif", "image/avif",
             "audio/mpeg", "audio/ogg", "audio/wav", "audio/mp4", "audio/webm",
             "text/plain", "application/pdf",
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            "application/vnd.openxmlformats-officedocument.presentationml.presentation");
-    private static final Map<String, Set<String>> EXTENSIONS = Map.ofEntries(
-            Map.entry("image/png", Set.of(".png")), Map.entry("image/jpeg", Set.of(".jpg", ".jpeg")),
-            Map.entry("image/webp", Set.of(".webp")), Map.entry("image/gif", Set.of(".gif")),
-            Map.entry("audio/mpeg", Set.of(".mp3")), Map.entry("audio/ogg", Set.of(".ogg", ".oga")),
-            Map.entry("audio/wav", Set.of(".wav")), Map.entry("audio/mp4", Set.of(".m4a", ".mp4")),
-            Map.entry("audio/webm", Set.of(".webm")),
-            Map.entry("text/plain", Set.of(".txt")), Map.entry("application/pdf", Set.of(".pdf")),
-            Map.entry("application/vnd.openxmlformats-officedocument.wordprocessingml.document", Set.of(".docx")),
-            Map.entry("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", Set.of(".xlsx")),
-            Map.entry("application/vnd.openxmlformats-officedocument.presentationml.presentation", Set.of(".pptx")));
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
     private static final int PAGE_SIZE = 50;
     private final PersonalWorkspaceDao dao;
     private final PersonalWorkspaceStorage storage;
     private final PersonalWorkspaceWriteService writes;
-    private final PersonalWorkspaceTaskLinkDao taskLinks;
-    private final PersonalWorkspaceExecutionDao executionDao;
     private final PersonalWorkspacePreviewRenderer previewRenderer = new PersonalWorkspacePreviewRenderer();
 
     @Inject public PersonalWorkspaceServiceImpl(PersonalWorkspaceDao dao, PersonalWorkspaceStorage storage,
-            PersonalWorkspaceWriteService writes, PersonalWorkspaceTaskLinkDao taskLinks,
-            PersonalWorkspaceExecutionDao executionDao) {
-        this.dao=dao; this.storage=storage; this.writes=writes; this.taskLinks=taskLinks; this.executionDao=executionDao;
-    }
-    /** Compatibility constructor for narrow isolated unit fixtures. */
-    public PersonalWorkspaceServiceImpl(PersonalWorkspaceDao dao, PersonalWorkspaceStorage storage,
             PersonalWorkspaceWriteService writes) {
-        this(dao, storage, writes, null, null);
+        this.dao=dao; this.storage=storage; this.writes=writes;
     }
 
     @Override public PersonalWorkspaceViews.ListView list(Scope scope, ListQuery query) {
@@ -82,6 +61,24 @@ public class PersonalWorkspaceServiceImpl implements PersonalWorkspaceService {
         return new PersonalWorkspaceViews.FileDetailView(view(file),latest,versions,List.of(),List.of());
     }
     @Override public List<PersonalWorkspaceViews.VersionView> versions(Scope scope,String fileId){ file(scope,fileId); return dao.listVersions(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),fileId,100).stream().map(this::version).toList(); }
+    @Override public PersonalWorkspaceViews.VersionPage versionsPage(Scope scope, String fileId, String cursor) {
+        file(scope, fileId);
+        Integer before = null;
+        if (cursor != null) {
+            try {
+                byte[] decoded = Base64.getUrlDecoder().decode(cursor);
+                if (!Base64.getUrlEncoder().withoutPadding().encodeToString(decoded).equals(cursor)) bad();
+                String[] parts = new String(decoded, StandardCharsets.UTF_8).split("\\n", -1);
+                if (parts.length != 2 || !fileId.equals(parts[0]) || !parts[1].matches("[1-9][0-9]*")) bad();
+                before = Integer.valueOf(parts[1]);
+            } catch (IllegalArgumentException invalid) { bad(); }
+        }
+        var rows = dao.listVersionsBefore(scope.tenantId(), scope.clientId(), scope.ownerJiacn(), fileId, before);
+        boolean more = rows.size() > 100;
+        if (more) rows = rows.subList(0, 100);
+        String next = more ? Base64.getUrlEncoder().withoutPadding().encodeToString((fileId + "\n" + rows.getLast().getVersion()).getBytes(StandardCharsets.UTF_8)) : null;
+        return new PersonalWorkspaceViews.VersionPage(rows.stream().map(this::version).toList(), next, more);
+    }
     @Override public PersonalWorkspaceViews.UploadView create(Scope scope,UploadCommand command){
         validateScope(scope); ValidUpload valid=validate(command); String requestHash=hash("CREATE",valid);
         PersonalWorkspaceWriteService.Claim claim=writes.claim(writeScope(scope),"CREATE",valid.key(),requestHash);
@@ -226,17 +223,14 @@ public class PersonalWorkspaceServiceImpl implements PersonalWorkspaceService {
         }
     }
     @Override public PersonalWorkspaceViews.UsageView usage(Scope scope,String fileId){
-        PersonalWorkspaceFileEntity f=file(scope,fileId);
-        List<PersonalWorkspaceViews.TaskReferenceView> references=taskLinks==null?List.of():taskLinks
-                .listActiveByFile(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),fileId,100)
-                .stream().map(link->new PersonalWorkspaceViews.TaskReferenceView(link.getTaskId(),
-                        link.getRelationId(),link.getFileVersion(),link.getLinkRole(),
-                        link.getRelationRevision(),link.getCreatedAt())).toList();
-        List<Object> activeExecutions=executionDao==null?List.of():executionDao
-                .listActiveExecutionIdsByFile(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),fileId,100)
-                .stream().map(executionId -> (Object) new ActiveExecutionView(executionId)).toList();
-        return new PersonalWorkspaceViews.UsageView(f.getMetadataRevision(),references,activeExecutions);
+        validateScope(scope); id(fileId,"fileId",100);
+        var snapshot = dao.findUsage(scope.tenantId(), scope.clientId(), scope.ownerJiacn(), fileId);
+        if (snapshot == null) throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.NOT_FOUND);
+        return new PersonalWorkspaceViews.UsageView(snapshot.fileId(), snapshot.impactRevision(),
+                new PersonalWorkspaceViews.UsageCounts(snapshot.taskReferences(),
+                        snapshot.conversationReferences(), snapshot.activeInputGrants()));
     }
+
     @Override public PersonalWorkspaceViews.OperationView operation(Scope scope,String operationId){validateScope(scope);PersonalWorkspaceOperationEntity o=dao.findOperation(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),operationId);if(o==null)throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.NOT_FOUND);return operation(o);}
 
     private LoadedPreview renderPreview(Scope scope,String fileId,int version){return renderPreview(scope,versionEntity(scope,fileId,version));}
@@ -249,19 +243,19 @@ public class PersonalWorkspaceServiceImpl implements PersonalWorkspaceService {
     private PersonalWorkspaceFileEntity file(Scope s,String id){validateScope(s);id(id,"fileId",100);PersonalWorkspaceFileEntity f=dao.findFile(s.tenantId(),s.clientId(),s.ownerJiacn(),id);if(f==null)throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.NOT_FOUND);return f;}
     private PersonalWorkspaceVersionEntity versionEntity(Scope s,String id,int n){file(s,id);if(n<1)bad();PersonalWorkspaceVersionEntity v=dao.findVersion(s.tenantId(),s.clientId(),s.ownerJiacn(),id,n);if(v==null)throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.NOT_FOUND);return v;}
     private PersonalWorkspaceViews.FileView view(PersonalWorkspaceFileEntity f){return new PersonalWorkspaceViews.FileView(f.getFileId(),f.getSourceKind(),f.getOriginKind(),f.getDisplayName(),f.getMediaFamily(),f.getState(),f.getMetadataRevision(),f.getLatestVersion(),f.getCreatedAt(),new PersonalWorkspaceViews.Capabilities("AVAILABLE","AVAILABLE","UNVERIFIED",previewCapability(f),"AVAILABLE"));}
-    private static String previewCapability(PersonalWorkspaceFileEntity f){return Set.of("IMAGE","AUDIO","TEXT","DOCUMENT","SPREADSHEET","PRESENTATION","PDF").contains(f.getMediaFamily())?"AVAILABLE":"UNSUPPORTED";}
-    private PersonalWorkspaceViews.VersionView version(PersonalWorkspaceVersionEntity v){return new PersonalWorkspaceViews.VersionView(v.getFileId(),v.getVersion(),v.getOriginalFilename(),v.getContentMimeType(),v.getByteLength(),v.getContentHash(),v.getCreatedAt(),MIME_TYPES.contains(v.getContentMimeType())?"READY":"UNSUPPORTED");}
+    private static String previewCapability(PersonalWorkspaceFileEntity f){return Set.of("IMAGE","AUDIO","TEXT","DOCUMENT","SPREADSHEET","PDF").contains(f.getMediaFamily())?"AVAILABLE":"UNSUPPORTED";}
+    private PersonalWorkspaceViews.VersionView version(PersonalWorkspaceVersionEntity v){return new PersonalWorkspaceViews.VersionView(v.getFileId(),v.getVersion(),v.getOriginalFilename(),v.getContentMimeType(),v.getByteLength(),v.getContentHash(),v.getCreatedAt(),PREVIEW_MIME_TYPES.contains(v.getContentMimeType())?"READY":"UNSUPPORTED");}
     private static PersonalWorkspaceViews.OperationView operation(PersonalWorkspaceOperationEntity o){return new PersonalWorkspaceViews.OperationView(o.getOperationId(),o.getState(),o.getFileId(),o.getFileVersion(),o.getErrorCode());}
     private static PersonalWorkspaceWriteService.Scope writeScope(Scope s){return new PersonalWorkspaceWriteService.Scope(s.tenantId(),s.clientId(),s.ownerJiacn());}
     private static PersonalWorkspaceStorage.Scope storageScope(Scope s){return new PersonalWorkspaceStorage.Scope(s.tenantId(),s.clientId(),s.ownerJiacn());}
-    private static ValidUpload validate(UploadCommand c){if(c==null)bad();String key=key(c.idempotency());String mime=lower(c.contentMimeType());if(!MIME_TYPES.contains(mime))throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.UNSUPPORTED);String name=filename(c.originalFilename(),mime);String display=blankToNull(c.displayName());if(display==null)display=name;text(display,255);byte[] bytes=c.content();if(bytes==null||bytes.length==0)bad();return new ValidUpload(key,display,name,mime,bytes);}
-    private static String filename(String raw,String mime){text(raw,255);String base=raw.replace('\\','/');if(base.contains("/"))bad();Set<String> extensions=EXTENSIONS.get(mime);String normalized=base.toLowerCase(Locale.ROOT);if(extensions==null||extensions.stream().noneMatch(normalized::endsWith))throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.UNSUPPORTED);return base;}
-    private static String family(String mime){if(mime.startsWith("image/"))return "IMAGE";if(mime.startsWith("audio/"))return "AUDIO";if("text/plain".equals(mime))return "TEXT";if("application/pdf".equals(mime))return "PDF";if(mime.contains("spreadsheet"))return "SPREADSHEET";if(mime.contains("presentation"))return "PRESENTATION";return "DOCUMENT";}
+    private static ValidUpload validate(UploadCommand c){if(c==null)bad();String key=key(c.idempotency());String mime=lower(c.contentMimeType());if(mime==null||mime.isBlank())mime="application/octet-stream";if(!mime.matches("[a-z0-9][a-z0-9!#$&^_.+-]{0,63}/[a-z0-9][a-z0-9!#$&^_.+-]{0,63}"))bad();String name=filename(c.originalFilename());String display=blankToNull(c.displayName());if(display==null)display=name;text(display,255);byte[] bytes=c.content();if(bytes==null||bytes.length==0)bad();return new ValidUpload(key,display,name,mime,bytes);}
+    private static String filename(String raw){text(raw,255);if(raw.contains("/")||raw.indexOf('\\')>=0||raw.equals(".")||raw.equals(".."))bad();return raw;}
+    private static String family(String mime){if(mime.startsWith("image/"))return "IMAGE";if(mime.startsWith("audio/"))return "AUDIO";if("text/plain".equals(mime))return "TEXT";if("application/pdf".equals(mime))return "PDF";if(mime.contains("spreadsheet"))return "SPREADSHEET";if(mime.contains("presentation")||"application/vnd.ms-powerpoint".equals(mime))return "PRESENTATION";return "DOCUMENT";}
     private static String key(Idempotency i){if(i==null)bad();id(i.key(),"Idempotency-Key",100);return i.key();}
     private static void validateScope(Scope s){if(s==null||!"0".equals(s.tenantId()))bad();id(s.clientId(),"clientId",50);id(s.ownerJiacn(),"owner",50);if("0".equals(s.ownerJiacn()))bad();}
     private static void id(String value,String name,int max){if(value==null||value.isBlank()||!value.equals(value.strip())||value.codePointCount(0,value.length())>max||value.chars().anyMatch(Character::isISOControl))bad();}
     private static void text(String value,int max){id(value,"text",max);}
-    private static String lower(String v){if(v==null)return null;String mime=v.split(";",2)[0].trim().toLowerCase(Locale.ROOT);return "image/jpg".equals(mime)?"image/jpeg":mime;}
+    private static String lower(String v){if(v==null)return null;String mime=v.split(";",2)[0].trim().toLowerCase(Locale.ROOT);return switch(mime){case "image/jpg","image/pjpeg" -> "image/jpeg";case "image/x-png" -> "image/png";case "image/x-ms-bmp" -> "image/bmp";case "image/x-tiff" -> "image/tiff";default -> mime;};}
     private static String blankToNull(String value){return value==null||value.isBlank()?null:value;}
     private static void requireStrictUtf8(byte[] bytes) {
         try {
@@ -282,7 +276,6 @@ public class PersonalWorkspaceServiceImpl implements PersonalWorkspaceService {
     private static String cursor(PersonalWorkspaceFileEntity f){return Base64.getUrlEncoder().withoutPadding().encodeToString((f.getCreatedAt()+"\n"+f.getFileId()).getBytes(StandardCharsets.UTF_8));}
     private static Cursor parseCursor(String value){if(value==null||value.isBlank())return null;try{String s=new String(Base64.getUrlDecoder().decode(value),StandardCharsets.UTF_8);String[]p=s.split("\\n",-1);if(p.length!=2)bad();long t=Long.parseLong(p[0]);id(p[1],"cursor",100);return new Cursor(t,p[1]);}catch(IllegalArgumentException e){bad();return null;}}
     private static void bad(){throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.BAD_REQUEST);}
-    public record ActiveExecutionView(String executionId) { }
     private record LoadedPreview(PersonalWorkspaceVersionEntity version,PersonalWorkspacePreviewRenderer.RenderedPreview rendered) { }
     private record ValidUpload(String key,String displayName,String filename,String mime,byte[] content) { }
     private record Cursor(long createdAt,String fileId) { }

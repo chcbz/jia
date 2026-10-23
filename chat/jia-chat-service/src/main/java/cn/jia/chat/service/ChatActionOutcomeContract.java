@@ -14,19 +14,24 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-/** Unified v3 planning DATA. Validation never grants authority or starts an execution. */
+/** Unified v5 planning DATA. Validation never grants authority or starts an execution. */
 public final class ChatActionOutcomeContract {
-    public static final int VERSION = 3;
+    public static final int VERSION = 5;
     private static final ObjectMapper JSON = JsonMapper.builder()
             .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
             .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS).build();
     private static final Set<String> MEDIA = Set.of("text", "image", "audio", "file");
     private ChatActionOutcomeContract() { }
 
-    public record Source(String sourceRefId, String kind, String mediaType) { }
-    public record Capability(String actionId, String kind, String operation,
-            List<String> inputMediaTypes, int minSources, int maxSources) {
-        public Capability { inputMediaTypes = List.copyOf(inputMediaTypes); }
+    public record Source(String sourceRefId, String kind, String mediaType, String contentMimeType) { }
+    public record Skill(String skillKey, String skillVersion, String packageSha256, String manifestSha256) { }
+    public record Capability(String actionId, String kind, String operation, Skill skill,
+            Map<String, Object> parametersSchema, List<String> inputMimeTypes, int minSources,
+            int maxSources, List<String> outputMimeTypes) {
+        public Capability {
+            parametersSchema = immutableObject(parametersSchema);
+            inputMimeTypes = List.copyOf(inputMimeTypes); outputMimeTypes = List.copyOf(outputMimeTypes);
+        }
     }
     public record Facts(int schemaVersion, List<Capability> availableActions,
             List<Source> availableSources, List<String> inspectedSourceRefIds) {
@@ -36,8 +41,8 @@ public final class ChatActionOutcomeContract {
     public record Clarification(String question, List<String> requiredFacts) {
         public Clarification { requiredFacts = List.copyOf(requiredFacts); }
     }
-    public record Action(String actionId, String instruction, List<String> sourceRefIds) {
-        public Action { sourceRefIds = List.copyOf(sourceRefIds); }
+    public record Action(String actionId, String instruction, List<String> sourceRefIds, Map<String, Object> parameters) {
+        public Action { sourceRefIds = List.copyOf(sourceRefIds); parameters = immutableObject(parameters); }
     }
     public record DeliveryRelation(String mode, String parentOutcomeId, String parentFinalDigest,
             @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL) String targetOutcomeId,
@@ -47,20 +52,30 @@ public final class ChatActionOutcomeContract {
         }
     }
     public record Outcome(int schemaVersion, String kind, String text, Clarification clarification, Action action,
-            @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL) Boolean deliverable,
-            @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL) DeliveryRelation deliveryRelation) {
+            Boolean deliverable, DeliveryRelation deliveryRelation, ChatDeliveryRevisionContract.Revision revision) {
         public Outcome(int schemaVersion, String kind, String text, Clarification clarification, Action action) {
-            this(schemaVersion,kind,text,clarification,action,null,null);
+            this(schemaVersion,kind,text,clarification,action,false,null,null);
         }
         public Outcome(int schemaVersion, String kind, String text, Clarification clarification, Action action, Boolean deliverable) {
-            this(schemaVersion,kind,text,clarification,action,deliverable,null);
+            this(schemaVersion,kind,text,clarification,action,deliverable,null,null);
+        }
+        public Outcome(int schemaVersion, String kind, String text, Clarification clarification, Action action,
+                Boolean deliverable, DeliveryRelation relation) {
+            this(schemaVersion,kind,text,clarification,action,deliverable,relation,null);
         }
     }
 
     public static Facts facts(Object value) { return factsNode(JSON.valueToTree(value)); }
     public static Facts factsJson(String value) { return factsNode(parse(value)); }
-    public static Outcome outcomeJson(String raw, Facts facts) { return outcomeNode(parse(raw), facts); }
-    public static Outcome outcome(Object raw, Facts facts) { return outcomeNode(JSON.valueToTree(raw), facts); }
+    public static Outcome outcomeJson(String raw, Facts facts) { return outcomeNode(parse(raw), facts, null); }
+    public static Outcome outcome(Object raw, Facts facts) { return outcomeNode(JSON.valueToTree(raw), facts, null); }
+
+    public static Outcome outcomeJson(String raw, Facts facts, ChatDeliveryRevisionContract.Basis basis) {
+        return outcomeNode(parse(raw), facts, basis);
+    }
+    public static Outcome outcome(Object raw, Facts facts, ChatDeliveryRevisionContract.Basis basis) {
+        return outcomeNode(JSON.valueToTree(raw), facts, basis);
+    }
 
     private static Facts factsNode(JsonNode raw) {
         exact(raw, "ACTION_FACTS_INVALID", "schemaVersion", "availableActions", "availableSources", "inspectedSourceRefIds");
@@ -69,39 +84,52 @@ public final class ChatActionOutcomeContract {
         if (rawSources.size() > 32) throw invalid("ACTION_SOURCES_INVALID");
         List<Source> sources = new ArrayList<>(); Set<String> ids = new HashSet<>();
         for (var source : rawSources) {
-            exact(source, "ACTION_SOURCES_INVALID", "sourceRefId", "kind", "mediaType");
+            exact(source, "ACTION_SOURCES_INVALID", "sourceRefId", "kind", "mediaType", "contentMimeType");
             String id = string(source.get("sourceRefId"), true, "ACTION_SOURCES_INVALID");
             String kind = string(source.get("kind"), true, "ACTION_SOURCES_INVALID");
             String media = string(source.get("mediaType"), true, "ACTION_SOURCES_INVALID");
-            if (!ids.add(id) || !Set.of("TASK_WORKSPACE_FILE", "CURRENT_CONVERSATION_ASSET").contains(kind)
+            String mime = mime(source.get("contentMimeType"), "ACTION_SOURCES_INVALID");
+            if (!ids.add(id) || !Set.of("TASK_WORKSPACE_FILE", "CURRENT_CONVERSATION_ASSET", "EXECUTION_RESULT", "FORMAL_ARTIFACT").contains(kind)
                     || !MEDIA.contains(media)) throw invalid("ACTION_SOURCES_INVALID");
-            sources.add(new Source(id, kind, media));
+            sources.add(new Source(id, kind, media, mime));
         }
         List<String> inspected = strings(raw.get("inspectedSourceRefIds"), true, "ACTION_INSPECTED_SOURCES_INVALID");
         if (!ids.containsAll(inspected)) throw invalid("ACTION_INSPECTED_SOURCES_INVALID");
         List<Capability> capabilities = new ArrayList<>(); Set<String> actionIds = new HashSet<>();
         for (var action : array(raw.get("availableActions"), "ACTION_CAPABILITIES_INVALID")) {
             String error = "ACTION_CAPABILITIES_INVALID";
-            exact(action, error, "actionId", "kind", "operation", "inputMediaTypes", "minSources", "maxSources");
+            exact(action, error, "actionId", "kind", "operation", "skill", "parametersSchema",
+                    "inputMimeTypes", "minSources", "maxSources", "outputMimeTypes");
             String id = string(action.get("actionId"), true, error);
             String kind = string(action.get("kind"), true, error);
             String operation = string(action.get("operation"), true, error);
-            List<String> media = strings(action.get("inputMediaTypes"), true, error);
+            var rawSkill = action.get("skill");
+            exact(rawSkill, error, "skillKey", "skillVersion", "packageSha256", "manifestSha256");
+            String key = string(rawSkill.get("skillKey"), true, error);
+            String version = string(rawSkill.get("skillVersion"), true, error);
+            String packageHash = hash(rawSkill.get("packageSha256"), error);
+            String manifestHash = hash(rawSkill.get("manifestSha256"), error);
+            if (!key.matches("[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
+                    || !version.matches("[A-Za-z0-9][A-Za-z0-9._+-]{0,63}")) throw invalid(error);
+            var schema = action.get("parametersSchema");
+            validateSchema(schema);
+            List<String> mimeTypes = mimeTypes(action.get("inputMimeTypes"), error);
+            List<String> outputs = mimeTypes(action.get("outputMimeTypes"), error);
             int min = integer(action.get("minSources"), error), max = integer(action.get("maxSources"), error);
-            if (!actionIds.add(id) || !Set.of("INSPECT_INPUTS", "EXECUTE").contains(kind) || !MEDIA.containsAll(media)
-                    || min < 0 || max < min || max > 32 || (max > 0 && media.isEmpty())
-                    || ("INSPECT_INPUTS".equals(kind) && (!"INSPECT_INPUTS".equals(operation) || min < 1))
-                    || ("EXECUTE".equals(kind) && "INSPECT_INPUTS".equals(operation))) throw invalid(error);
-            capabilities.add(new Capability(id, kind, operation, media, min, max));
+            if (!actionIds.add(id) || !"EXECUTE".equals(kind) || !"EXECUTE_SKILL".equals(operation)
+                    || min < 0 || max < min || max > 32 || (max > 0 && mimeTypes.isEmpty())) throw invalid(error);
+            capabilities.add(new Capability(id, kind, operation, new Skill(key, version, packageHash, manifestHash),
+                    object(schema, error), mimeTypes, min, max, outputs));
         }
         return new Facts(VERSION, capabilities, sources, inspected);
     }
 
-    private static Outcome outcomeNode(JsonNode value, Facts suppliedFacts) {
+    private static Outcome outcomeNode(JsonNode value, Facts suppliedFacts, ChatDeliveryRevisionContract.Basis basis) {
         // Do not trust a caller-constructed record more than a parsed JSON fact set.
         Facts facts = facts(suppliedFacts);
-        List<String> keys = new ArrayList<>(List.of("schemaVersion","kind","text","clarification","action"));
+        List<String> keys = new ArrayList<>(List.of("schemaVersion","kind","text","clarification","action","revision"));
         Boolean deliverable = null; DeliveryRelation relation = null;
+        if (value == null || !value.has("deliverable") || !value.has("deliveryRelation")) throw invalid("ACTION_OUTCOME_INVALID");
         if (value != null && value.isObject() && value.has("deliverable")) {
             keys.add("deliverable");
             if (!value.get("deliverable").isBoolean()) throw invalid("ACTION_OUTCOME_INVALID");
@@ -116,7 +144,7 @@ public final class ChatActionOutcomeContract {
                 String mode=string(raw.get("mode"),true,"ACTION_DELIVERY_RELATION_INVALID");
                 String parent=string(raw.get("parentOutcomeId"),true,"ACTION_DELIVERY_RELATION_INVALID");
                 String digest=string(raw.get("parentFinalDigest"),true,"ACTION_DELIVERY_RELATION_INVALID");
-                if (!Set.of("APPEND","REPLACE","RESET").contains(mode)
+                if (!Set.of("APPEND","REPLACE","RESET","SUBMIT").contains(mode)
                         || !parent.matches("[A-Za-z0-9][A-Za-z0-9._:-]{0,99}")
                         || !digest.matches("sha256:[0-9a-f]{64}")) throw invalid("ACTION_DELIVERY_RELATION_INVALID");
                 String target=null,targetDigest=null;
@@ -133,8 +161,17 @@ public final class ChatActionOutcomeContract {
         if (integer(value.get("schemaVersion"), "ACTION_OUTCOME_INVALID") != VERSION) throw invalid("ACTION_OUTCOME_INVALID");
         String kind = string(value.get("kind"), true, "ACTION_OUTCOME_INVALID");
         String text = string(value.get("text"), false, "ACTION_OUTCOME_INVALID");
+        if (basis != null && (Boolean.TRUE.equals(deliverable) || relation != null || "ACTION_REQUEST".equals(kind)))
+            throw invalid("ACTION_REVIEW_REQUIRED");
         Clarification clarification = null; Action action = null;
+        ChatDeliveryRevisionContract.Revision revision = null;
+        if (!"REVISION_REQUEST".equals(kind) && !value.get("revision").isNull()) throw invalid("ACTION_OUTCOME_UNION_INVALID");
         switch (kind) {
+            case "SUBMISSION_REQUEST" -> {
+                if (!value.get("clarification").isNull() || !value.get("action").isNull()
+                        || !Boolean.FALSE.equals(deliverable) || relation == null || !"SUBMIT".equals(relation.mode())
+                        || relation.targetOutcomeId() != null) throw invalid("ACTION_OUTCOME_UNION_INVALID");
+            }
             case "ANSWER" -> {
                 if (!value.get("clarification").isNull() || !value.get("action").isNull()) throw invalid("ACTION_OUTCOME_UNION_INVALID");
             }
@@ -149,7 +186,7 @@ public final class ChatActionOutcomeContract {
             }
             case "ACTION_REQUEST" -> {
                 if (!value.get("clarification").isNull()) throw invalid("ACTION_OUTCOME_UNION_INVALID");
-                var a = value.get("action"); exact(a, "ACTION_OUTCOME_UNION_INVALID", "actionId", "instruction", "sourceRefIds");
+                var a = value.get("action"); exact(a, "ACTION_OUTCOME_UNION_INVALID", "actionId", "instruction", "sourceRefIds", "parameters");
                 String id = string(a.get("actionId"), true, "ACTION_NOT_ADVERTISED");
                 String instruction = string(a.get("instruction"), false, "ACTION_OUTCOME_UNION_INVALID");
                 var descriptor = facts.availableActions().stream().filter(item -> item.actionId().equals(id)).findFirst()
@@ -158,15 +195,24 @@ public final class ChatActionOutcomeContract {
                 Map<String, Source> catalog = new LinkedHashMap<>(); facts.availableSources().forEach(s -> catalog.put(s.sourceRefId(), s));
                 if (selected.size() < descriptor.minSources() || selected.size() > descriptor.maxSources()
                         || selected.stream().anyMatch(ref -> !catalog.containsKey(ref)
-                        || !descriptor.inputMediaTypes().contains(catalog.get(ref).mediaType()))) throw invalid("ACTION_SELECTION_INVALID");
-                action = new Action(id, instruction, selected);
+                        || !descriptor.inputMimeTypes().contains(catalog.get(ref).contentMimeType()))) throw invalid("ACTION_SELECTION_INVALID");
+                var parameters = a.get("parameters");
+                if (parameters == null || !parameters.isObject()) throw invalid("ACTION_PARAMETERS_INVALID");
+                validateParameters(descriptor.parametersSchema(), parameters);
+                action = new Action(id, instruction, selected, object(parameters, "ACTION_PARAMETERS_INVALID"));
+            }
+            case "REVISION_REQUEST" -> {
+                if (!value.get("clarification").isNull() || !value.get("action").isNull()
+                        || Boolean.TRUE.equals(deliverable) || relation != null) throw invalid("ACTION_OUTCOME_UNION_INVALID");
+                revision = ChatDeliveryRevisionContract.revision(value.get("revision"), basis);
             }
             default -> throw invalid("ACTION_OUTCOME_KIND_INVALID");
         }
         if (Boolean.TRUE.equals(deliverable) && !"ANSWER".equals(kind)) throw invalid("ACTION_OUTCOME_UNION_INVALID");
         // EXECUTE intent relates its future byte-backed batch, never ACTION_REQUEST prose.
         // Batch replacement still uses the existing exact output edit lineage, not this relation.
-        if (relation != null && !Boolean.TRUE.equals(deliverable)) {
+        if (relation != null && "SUBMIT".equals(relation.mode()) && !"SUBMISSION_REQUEST".equals(kind)) throw invalid("ACTION_DELIVERY_RELATION_INVALID");
+        if (relation != null && !Boolean.TRUE.equals(deliverable) && !"SUBMISSION_REQUEST".equals(kind)) {
             String selectedAction=action==null?null:action.actionId();
             var descriptor=facts.availableActions().stream()
                     .filter(item->item.actionId().equals(selectedAction)).findFirst().orElse(null);
@@ -174,7 +220,57 @@ public final class ChatActionOutcomeContract {
                     || !Set.of("APPEND","RESET").contains(relation.mode()) || relation.targetOutcomeId()!=null)
                 throw invalid("ACTION_DELIVERY_RELATION_INVALID");
         }
-        return new Outcome(VERSION, kind, text, clarification, action, deliverable, relation);
+        return new Outcome(VERSION, kind, text, clarification, action, deliverable, relation, revision);
+    }
+
+    // Reuse the installed-package codec's standard Draft 2020-12 validator and ref policy.
+    // This is structural validation, never a task grant or Runtime-ready check.
+    private static final class SchemaCodec {
+        static final cn.jia.agent.skill.SkillManifestCodec INSTANCE = new cn.jia.agent.skill.SkillManifestCodec();
+    }
+    private static void validateSchema(JsonNode schema) {
+        try { SchemaCodec.INSTANCE.compileSchema(SchemaCodec.INSTANCE.parseJson(JSON.writeValueAsBytes(schema))); }
+        catch (RuntimeException failure) { throw invalid("ACTION_PARAMETERS_SCHEMA_INVALID"); }
+    }
+    private static void validateParameters(Map<String, Object> schema, JsonNode parameters) {
+        try { SchemaCodec.INSTANCE.validateParameters(SchemaCodec.INSTANCE.parseJson(JSON.writeValueAsBytes(schema)),
+                JSON.writeValueAsBytes(parameters)); }
+        catch (RuntimeException failure) { throw invalid("ACTION_PARAMETERS_INVALID"); }
+    }
+    private static String hash(JsonNode raw, String error) {
+        String value = string(raw, true, error);
+        if (!value.matches("[0-9a-f]{64}")) throw invalid(error);
+        return value;
+    }
+    private static String mime(JsonNode raw, String error) {
+        String value = string(raw, true, error);
+        if (!value.matches("[a-z0-9.+-]+/[a-z0-9.+-]+")) throw invalid(error);
+        return value;
+    }
+    private static List<String> mimeTypes(JsonNode raw, String error) {
+        var values = strings(raw, true, error);
+        for (String value : values) if (!value.matches("[a-z0-9.+-]+/[a-z0-9.+-]+")) throw invalid(error);
+        return values;
+    }
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> object(JsonNode raw, String error) {
+        if (raw == null || !raw.isObject()) throw invalid(error);
+        return immutableObject(JSON.convertValue(raw, Map.class));
+    }
+    @SuppressWarnings("unchecked")
+    private static Object immutable(Object value) {
+        if (value instanceof Map<?, ?> map) {
+            var copy = new LinkedHashMap<String, Object>();
+            map.forEach((key, item) -> copy.put((String) key, immutable(item)));
+            return java.util.Collections.unmodifiableMap(copy);
+        }
+        if (value instanceof List<?> list) return java.util.Collections.unmodifiableList(list.stream()
+                .map(ChatActionOutcomeContract::immutable).toList());
+        return value;
+    }
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> immutableObject(Map<String, Object> value) {
+        return (Map<String, Object>) immutable(value);
     }
 
     private static JsonNode parse(String value) {

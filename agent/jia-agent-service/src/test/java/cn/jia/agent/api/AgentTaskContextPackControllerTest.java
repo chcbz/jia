@@ -70,10 +70,10 @@ class AgentTaskContextPackControllerTest extends BaseMockTest {
                         .queryParam("expectedVersion", "9").principal(jwt(ACTOR)))
                 .andExpect(status().isOk())
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
-                .andExpect(jsonPath("$.provenance.tenantId").value("0"))
-                .andExpect(jsonPath("$.provenance.clientId").value("client-a"))
-                .andExpect(jsonPath("$.provenance.taskId").value(TASK))
-                .andExpect(jsonPath("$.provenance.actorAgentId").value(ACTOR));
+                .andExpect(jsonPath("$.data.provenance.tenantId").value("0"))
+                .andExpect(jsonPath("$.data.provenance.clientId").value("client-a"))
+                .andExpect(jsonPath("$.data.provenance.taskId").value(TASK))
+                .andExpect(jsonPath("$.data.provenance.actorAgentId").value(ACTOR));
         verify(service).generate("0", "client-a", "tenant-a", TASK, ACTOR, "9");
     }
 
@@ -86,7 +86,7 @@ class AgentTaskContextPackControllerTest extends BaseMockTest {
                             .queryParam("expectedVersion", "9")
                             .principal(jwtClaims(owner, "client-a", ACTOR, ACTOR)))
                     .andExpect(status().isOk())
-                    .andExpect(jsonPath("$.provenance.tenantId").value("0"));
+                    .andExpect(jsonPath("$.data.provenance.tenantId").value("0"));
             verify(service).generate("0", "client-a", owner, TASK, ACTOR, "9");
         }
     }
@@ -99,7 +99,7 @@ class AgentTaskContextPackControllerTest extends BaseMockTest {
             mvc.perform(get("/agent/tasks/{taskId}/context-pack", TASK)
                             .queryParam("expectedVersion", version).principal(jwt(ACTOR)))
                     .andExpect(status().isOk())
-                    .andExpect(jsonPath("$.provenance.currentEventVersion").value(version));
+                    .andExpect(jsonPath("$.data.provenance.currentEventVersion").value(version));
             verify(service).generate("0", "client-a", "tenant-a", TASK, ACTOR, version);
         }
     }
@@ -276,7 +276,7 @@ class AgentTaskContextPackControllerTest extends BaseMockTest {
                 .andExpect(status().isServiceUnavailable())
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
                 .andExpect(jsonPath("$.code").value("TASK_CONTEXT_PACK_UNAVAILABLE"))
-                .andExpect(jsonPath("$.provenance").doesNotExist())
+                .andExpect(jsonPath("$.data.provenance").doesNotExist())
                 .andExpect(content().string(not(containsString("foreign-raw-secret"))));
     }
 

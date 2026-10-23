@@ -19,6 +19,7 @@ import java.util.Set;
 import java.util.TreeMap;
 
 /** Additive B01B case/lineage schema; partial or drifted catalogs fail closed without repair. */
+@org.springframework.context.annotation.Profile("schema-maintenance")
 public final class HallPrivateCaseSchemaInitializer implements InitializingBean {
     static final String RESOURCE = "db/hall-private-case-v1.sql";
     static final List<String> TABLES = List.of("hall_private_case", "hall_case_execution");

@@ -14,6 +14,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.nio.charset.StandardCharsets;
@@ -31,8 +32,18 @@ public class ArchiveController {
         this.accessPolicy = Objects.requireNonNull(accessPolicy, "accessPolicy");
     }
 
+    @GetMapping("/works")
+    public ResponseEntity<JsonResult<?>> works(Authentication authentication) {
+        Authorization authorization = authorize(authentication);
+        if (authorization.error() != null) return authorization.error();
+        if (!accessPolicy.allows(authorization.tenantId(), authorization.clientId())) return notFound();
+        return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
+                .body(JsonResult.success(readerService.books()));
+    }
+
     @GetMapping("/catalog")
     public ResponseEntity<JsonResult<?>> catalog(
+            @RequestParam String workId,
             @RequestHeader(value = HttpHeaders.IF_NONE_MATCH, required = false) String ifNoneMatch,
             Authentication authentication) {
         Authorization authorization = authorize(authentication);
@@ -41,7 +52,8 @@ public class ArchiveController {
         if (conditionalError != null) return conditionalError;
         if (!accessPolicy.allows(authorization.tenantId(), authorization.clientId())) return notFound();
         try {
-            return render(ifNoneMatch, readerService.catalog());
+            if (!validIdentifier(workId, 64)) return notFound();
+            return render(ifNoneMatch, readerService.catalog(workId));
         } catch (ArchiveResourceNotFoundException unavailable) {
             return notFound();
         }
@@ -146,7 +158,7 @@ public class ArchiveController {
 
     private ResponseEntity<JsonResult<?>> error(HttpStatus status, String code, String message) {
         JsonResult<Void> result = JsonResult.failure(code, message);
-        result.setStatus(status.value());
+
         return ResponseEntity.status(status)
                 .header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
                 .body(result);

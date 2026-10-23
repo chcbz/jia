@@ -12,23 +12,26 @@ public final class TypedDeliberationDeclaration {
     private static final Set<String> KEYS = Set.of("schemaVersion", "state", "carrier",
             "referenceModes", "outcomeKinds", "engine", "strictNoToolsVerified", "toolPolicy");
     private static final List<String> MODES = List.of("NONE", "AVAILABLE");
-    private static final List<String> KINDS = List.of("ANSWER", "CLARIFY", "ACTION_REQUEST");
-    private static final String CARRIER = "CHAT_MESSAGE_FINAL_SIDECAR_V3";
+    private static final List<String> KINDS = List.of("ANSWER", "CLARIFY", "ACTION_REQUEST", "REVISION_REQUEST", "SUBMISSION_REQUEST");
+    private static final String CARRIER = "CHAT_MESSAGE_FINAL_SIDECAR_V5";
     private static final String ENGINE = "CODEX_APP_SERVER_NATIVE_OUTPUT_SCHEMA";
     private static final String TOOL_POLICY = "read-only-constrained";
 
     private final State state;
+    private final Map<String,Object> materials;
 
-    private TypedDeliberationDeclaration(State state) { this.state = state; }
+    private TypedDeliberationDeclaration(State state) { this(state,null); }
+
+    private TypedDeliberationDeclaration(State state,Map<String,Object> materials) {this.state=state;this.materials=materials;}
 
     public static TypedDeliberationDeclaration parse(Object raw) {
         if (raw == null) return new TypedDeliberationDeclaration(State.UNDECLARED);
         try {
             if (!(raw instanceof Map<?, ?> candidate)
                     || !candidate.keySet().stream().allMatch(String.class::isInstance)
-                    || !candidate.keySet().equals(KEYS)) throw invalid();
+                    || !(candidate.keySet().equals(KEYS)||candidate.keySet().equals(withMaterialsKeys()))) throw invalid();
             @SuppressWarnings("unchecked") Map<String, Object> value = (Map<String, Object>) candidate;
-            exactInteger(value.get("schemaVersion"), 3);
+            exactInteger(value.get("schemaVersion"), 5);
             String state = exactText(value.get("state"));
             if (!Set.of("READY", "UNAVAILABLE").contains(state)) throw invalid();
             exact(value.get("carrier"), CARRIER);
@@ -37,7 +40,7 @@ public final class TypedDeliberationDeclaration {
             exact(value.get("engine"), ENGINE);
             if (!(value.get("strictNoToolsVerified") instanceof Boolean verified) || verified) throw invalid();
             exact(value.get("toolPolicy"), TOOL_POLICY);
-            return new TypedDeliberationDeclaration(State.valueOf(state));
+            return new TypedDeliberationDeclaration(State.valueOf(state),value.containsKey("materialsInput")?cn.jia.chat.service.ChatMaterialsInputContract.declaration(value.get("materialsInput")):null);
         } catch (RuntimeException invalid) {
             return new TypedDeliberationDeclaration(State.UNSUPPORTED);
         }
@@ -50,7 +53,7 @@ public final class TypedDeliberationDeclaration {
     }
     public Map<String, Object> frozenReceipt() {
         Map<String, Object> value = new LinkedHashMap<>();
-        value.put("schemaVersion", 3);
+        value.put("schemaVersion", 5);
         value.put("state", state.name());
         value.put("carrier", CARRIER);
         value.put("referenceModes", MODES);
@@ -58,9 +61,11 @@ public final class TypedDeliberationDeclaration {
         value.put("engine", ENGINE);
         value.put("strictNoToolsVerified", false);
         value.put("toolPolicy", TOOL_POLICY);
+        if(materials!=null)value.put("materialsInput",materials);
         return Map.copyOf(value);
     }
 
+    private static Set<String> withMaterialsKeys() {var keys=new java.util.HashSet<>(KEYS);keys.add("materialsInput");return Set.copyOf(keys);}
     private static void exactInteger(Object value, int expected) {
         if (!(value instanceof Byte || value instanceof Short || value instanceof Integer || value instanceof Long)
                 || ((Number) value).longValue() != expected) throw invalid();

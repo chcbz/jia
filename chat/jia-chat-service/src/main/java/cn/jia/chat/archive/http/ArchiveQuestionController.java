@@ -50,7 +50,7 @@ public class ArchiveQuestionController {
     @PutMapping("/{questionId}")
     public ResponseEntity<?> create(@PathVariable String questionId,
                                     @RequestHeader(value = "Idempotency-Key", required = false) String key,
-                                    @RequestBody(required = false) byte[] body,
+                                    @cn.jia.core.annotation.ApiJsonData @RequestBody(required = false) byte[] body,
                                     HttpServletRequest request, Authentication authentication) {
         Authorization authorization = authorize(authentication);
         if (authorization.error() != null) return authorization.error();
@@ -78,15 +78,16 @@ public class ArchiveQuestionController {
     @GetMapping(value = "/{questionId}/events", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public ResponseEntity<?> events(@PathVariable String questionId,
                                     @RequestHeader(value = "Last-Event-ID", required = false) String lastEventId,
-                                    Authentication authentication) {
+                                    Authentication authentication, HttpServletRequest request) {
         Authorization authorization = authorize(authentication);
         if (authorization.error() != null) return authorization.error();
         if (!lowercaseUuid(questionId)) return notFound();
-        Long cursor = eventCursor(lastEventId);
+        Long cursor = eventCursor(questionId, lastEventId);
         if (cursor == null) return invalidEventCursor();
         if (!allowed(authorization.owner())) return notFound();
         try {
-            SseEmitter emitter = streams.open(authorization.owner(), questionId, cursor);
+            SseEmitter emitter = streams.open(authorization.owner(), questionId, cursor,
+                    cn.jia.core.filter.RequestIdFilter.current(request));
             return ResponseEntity.ok().contentType(MediaType.TEXT_EVENT_STREAM)
                     .header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL).body(emitter);
         } catch (ArchivePersonalDataException failure) {
@@ -97,7 +98,7 @@ public class ArchiveQuestionController {
     @PostMapping("/{questionId}/retry")
     public ResponseEntity<?> retry(@PathVariable String questionId,
                                    @RequestHeader(value = "Idempotency-Key", required = false) String key,
-                                   @RequestBody(required = false) byte[] body,
+                                   @cn.jia.core.annotation.ApiJsonData @RequestBody(required = false) byte[] body,
                                    HttpServletRequest request, Authentication authentication) {
         Authorization authorization = authorize(authentication);
         if (authorization.error() != null) return authorization.error();
@@ -144,8 +145,11 @@ public class ArchiveQuestionController {
         return null;
     }
 
-    private Long eventCursor(String value) {
+    private Long eventCursor(String questionId, String value) {
         if (value == null) return 0L;
+        String prefix = "archive:question:" + questionId + ":";
+        if (!value.startsWith(prefix)) return null;
+        value = value.substring(prefix.length());
         if (!value.matches("0|[1-9][0-9]{0,18}")) return null;
         try {
             long parsed = Long.parseLong(value);
@@ -186,7 +190,7 @@ public class ArchiveQuestionController {
     private ResponseEntity<JsonResult<?>> error(HttpStatus status, String code, String message, String currentVersion) {
         JsonResult<Object> result = JsonResult.failure(code, message);
         if (currentVersion != null) result.setData(Map.of("currentVersion", currentVersion));
-        result.setStatus(status.value());
+
         return ResponseEntity.status(status).contentType(MediaType.APPLICATION_JSON)
                 .header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL).body(result);
     }

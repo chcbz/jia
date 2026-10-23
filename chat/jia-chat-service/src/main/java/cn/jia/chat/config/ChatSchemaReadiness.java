@@ -7,6 +7,7 @@ import org.springframework.stereotype.Component;
  * Successful source initializers are not repeated; failed or partial attempts remain retryable.
  */
 @Component
+@org.springframework.context.annotation.Profile("schema-maintenance")
 public final class ChatSchemaReadiness {
     private final ChatSchemaInitializer chatSchema;
     private final ChatDeliberationSchemaInitializer deliberationSchema;

@@ -72,7 +72,7 @@ public class AgentTaskArtifactController {
     @PostMapping(value = "/{taskId}/artifacts",
             consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<AgentTaskArtifactPublishResponse> publish(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<AgentTaskArtifactPublishResponse>> publish(
             @PathVariable String taskId,
             HttpServletRequest request,
             Authentication authentication) {
@@ -105,11 +105,11 @@ public class AgentTaskArtifactController {
 
         AgentTaskArtifactViewDTO published = artifactService.publish(
                 scope.tenantId(), scope.clientId(), scope.ownerJiacn(), taskId, actorAgentId, command);
-        return ResponseEntity.status(HttpStatus.CREATED)
+        return cn.jia.core.config.ApiJsonResponses.success(ResponseEntity.status(HttpStatus.CREATED)
                 .header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(publicationResponse(
-                        published, taskId, actorAgentId, command, content.length));
+                        published, taskId, actorAgentId, command, content.length)));
     }
 
     @GetMapping(value = "/{taskId}/artifacts/{artifactId}/versions/{artifactVersion}/content")
@@ -139,19 +139,19 @@ public class AgentTaskArtifactController {
     }
 
     @ExceptionHandler(AuthenticationFailure.class)
-    public ResponseEntity<ErrorBody> authentication(AuthenticationFailure failure) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> authentication(AuthenticationFailure failure) {
         return error(failure.forbidden ? HttpStatus.FORBIDDEN : HttpStatus.UNAUTHORIZED,
                 failure.forbidden ? "ARTIFACT_FORBIDDEN" : "ARTIFACT_UNAUTHENTICATED",
                 "Artifact access is unavailable");
     }
 
     @ExceptionHandler(RequestFailure.class)
-    public ResponseEntity<ErrorBody> badRequest(Exception ignored) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> badRequest(Exception ignored) {
         return error(HttpStatus.BAD_REQUEST, "BAD_REQUEST", "Invalid artifact request");
     }
 
     @ExceptionHandler(AgentTaskCollaborationException.class)
-    public ResponseEntity<ErrorBody> collaborationFailure(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> collaborationFailure(
             AgentTaskCollaborationException failure) {
         return switch (failure.getReason()) {
             case INVALID_REQUEST -> error(HttpStatus.BAD_REQUEST,
@@ -169,7 +169,7 @@ public class AgentTaskArtifactController {
     }
 
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<ErrorBody> unexpected(Exception ignored, HttpServletRequest request) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> unexpected(Exception ignored, HttpServletRequest request) {
         log.error("Artifact HTTP request failed: uri={}", request.getRequestURI());
         return error(HttpStatus.SERVICE_UNAVAILABLE,
                 "ARTIFACT_UNAVAILABLE", "Artifact service is temporarily unavailable");
@@ -223,34 +223,11 @@ public class AgentTaskArtifactController {
     }
 
     private static byte[] readBounded(HttpServletRequest request) {
-        long declaredLength = request.getContentLengthLong();
-        if (declaredLength == 0 || declaredLength > MAX_REQUEST_BYTES) {
-            throw new RequestFailure();
-        }
-        int initialSize = declaredLength > 0
-                ? (int) Math.min(declaredLength, MAX_INITIAL_BODY_BUFFER_BYTES)
-                : COPY_BUFFER_BYTES;
-        try (ByteArrayOutputStream result = new ByteArrayOutputStream(initialSize)) {
-            byte[] buffer = new byte[COPY_BUFFER_BYTES];
-            int total = 0;
-            int count;
-            while ((count = request.getInputStream().read(buffer)) != -1) {
-                if (count == 0) {
-                    continue;
-                }
-                if (count > MAX_REQUEST_BYTES - total) {
-                    throw new RequestFailure();
-                }
-                result.write(buffer, 0, count);
-                total += count;
-            }
-            if (total == 0) {
-                throw new RequestFailure();
-            }
-            return result.toByteArray();
-        } catch (RequestFailure failure) {
-            throw failure;
-        } catch (IOException failure) {
+        try {
+            byte[] data = cn.jia.core.config.ApiJsonInput.readData(request);
+            if (data.length == 0 || data.length > MAX_REQUEST_BYTES) throw new RequestFailure();
+            return data;
+        } catch (IOException unreadable) {
             throw new RequestFailure();
         }
     }
@@ -368,12 +345,12 @@ public class AgentTaskArtifactController {
         return Character.isWhitespace(codePoint) || Character.isSpaceChar(codePoint);
     }
 
-    private static ResponseEntity<ErrorBody> error(
+    private static ResponseEntity<cn.jia.core.entity.JsonResult<Void>> error(
             HttpStatus status, String code, String message) {
         return ResponseEntity.status(status)
                 .header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
                 .contentType(new MediaType(MediaType.APPLICATION_JSON, StandardCharsets.UTF_8))
-                .body(new ErrorBody(code, message));
+                .body(cn.jia.core.entity.JsonResult.<Void>failure(code, message));
     }
 
     private record Scope(String tenantId, String clientId, String ownerJiacn) {

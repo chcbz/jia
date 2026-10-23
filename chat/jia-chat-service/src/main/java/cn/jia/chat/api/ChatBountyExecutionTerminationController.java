@@ -47,7 +47,7 @@ public final class ChatBountyExecutionTerminationController {
     @PostMapping
     public ResponseEntity<JsonResult<Receipt>> abandon(@PathVariable String conversationId,
             @PathVariable String requestId,@RequestHeader("Idempotency-Key") String key,
-            @RequestBody(required=false) String body,Authentication authentication) {
+            @cn.jia.core.annotation.ApiJsonData @RequestBody(required=false) String body,Authentication authentication) {
         Scope scope=scope(authentication,conversationId);
         return ok(service.abandon(scope,requestId,key,parse(body)));
     }
@@ -105,7 +105,7 @@ public final class ChatBountyExecutionTerminationController {
 
     private static ResponseEntity<JsonResult<Void>> error(HttpStatus status,String code) {
         JsonResult<Void> result=JsonResult.failure(code,"Execution abandonment is unavailable");
-        result.setStatus(status.value());
+
         return ResponseEntity.status(status).cacheControl(CacheControl.noStore())
                 .header("X-Content-Type-Options","nosniff").body(result);
     }

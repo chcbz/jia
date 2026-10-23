@@ -169,6 +169,8 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         this.chatDeliberationService = service;
     }
     private ChatDeliberationOutboxService chatDeliberationOutboxService;
+    private cn.jia.chat.service.ChatDispatchAuthorityService chatDispatchAuthority;
+    @Autowired public void setChatDispatchAuthority(cn.jia.chat.service.ChatDispatchAuthorityService value) { chatDispatchAuthority=value; }
     private TypedDeliberationSessionRegistry typedDeliberationSessions;
     private TypedInspectionSessionRegistry typedInspectionSessions;
     private NativeTextFileSessionRegistry nativeTextFileSessions;
@@ -281,13 +283,8 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         connected.put("channel", CHANNEL);
         connected.put("agentId", Optional.ofNullable(sessionAgentId(session)).orElse(""));
         putIfPresent(connected, "runtimeInstanceId", sessionRuntimeInstanceId(session));
-        connected.put("supportedProtocolVersions", supportedProtocolVersions(session));
-        connected.put("legacyProtocolEnabled", true);
-        if (supportedProtocolVersions(session).length == 2) {
-            connected.put("commandV2DeduplicationContract",
-                    AgentCommandV2RuntimeGateway.DEDUPLICATION_CONTRACT);
-            connected.put("commandV2Delivery", "at-least-once");
-        }
+        connected.put("supportedProtocolVersions", new int[] {AgentProtocolConstants.VERSION_1});
+        connected.put("legacyProtocolEnabled", false);
         connected.put("capabilities", new String[] {AgentProtocolConstants.TYPE_PROTOCOL_HELLO,
                 AgentProtocolConstants.TYPE_CHAT_STREAM, AgentProtocolConstants.TYPE_CHAT_STOP,
                 AgentProtocolConstants.TYPE_PING, AgentProtocolConstants.TYPE_AGENT_REGISTER,
@@ -302,24 +299,26 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         sendEvent(session, "connected", connected);
     }
 
+    private final ThreadLocal<cn.jia.core.entity.ProtocolMessage<java.util.Map<String,Object>>> incomingWire = new ThreadLocal<>();
+
     @Override
     protected void handleTextMessage(WebSocketSession session, TextMessage message) {
-        // Installation sessions have no V2 registration credential. Never let the
-        // unfinished additive adapter intercept their ordinary protocol messages.
-        if (hasV2RegistrationProof(session) && registrationV2 != null) {
-            try {
-                if (registrationV2.intercept(session,
-                        AgentRuntimeV2WebSocketAdapter.originalText(message.getPayload()), raw -> {
-                            try { sendWithSessionGate(session, raw); }
-                            catch (Exception unavailable) {
-                                throw new IllegalStateException("registration response unavailable", unavailable);
-                            }
-                        })) return;
-            } catch (IllegalArgumentException malformed) {
-                AgentRuntimeV2WebSocketAdapter.malformedText(session);
-                return;
-            }
-        }
+        try {
+            var envelope=cn.jia.agent.common.AgentMessageWire.decode(STRICT_RAW_COMMAND_JSON.readValue(message.getPayload(),MESSAGE_TYPE));
+            // Current transport identity is independent of an immutable result's executing boot.
+            if(envelope.data().containsKey("runtimeInstanceId")&&!sessionProof(session).scope().runtimeInstanceId().equals(envelope.data().get("runtimeInstanceId")))
+                throw new IllegalArgumentException("Runtime proof mismatch");
+            incomingWire.set(envelope);
+            var business=cn.jia.agent.common.AgentMessageWire.business(envelope);
+            handlePrivateMessage(session,new TextMessage(STRICT_RAW_COMMAND_JSON.writeValueAsString(business)));
+        } catch(Exception malformed) {
+            if(skillExecutionSessions!=null && java.util.regex.Pattern.compile("\"messageType\"\\s*:\\s*\"agent\\.register\"").matcher(message.getPayload()).find())skillExecutionSessions.remove(session.getId());
+            sendProtocolError(session,Map.of(),"MESSAGE_INVALID","Invalid protocol message");
+        } finally { incomingWire.remove(); }
+    }
+
+    /** Receives only an explicitly projected, strictly decoded public message. */
+    private void handlePrivateMessage(WebSocketSession session, TextMessage message) {
         Map<String, Object> payload = Map.of();
         try {
             if (runtimeAuthentication == null) throw new IllegalArgumentException("Runtime authority unavailable");
@@ -482,13 +481,8 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         Map<String, Object> event = copyTrace(payload);
         event.put("schemaVersion", AgentProtocolConstants.VERSION_1);
         event.put("messageType", AgentProtocolConstants.TYPE_PROTOCOL_HELLO);
-        event.put("supportedProtocolVersions", supportedProtocolVersions(session));
-        event.put("legacyProtocolEnabled", true);
-        if (supportedProtocolVersions(session).length == 2) {
-            event.put("commandV2DeduplicationContract",
-                    AgentCommandV2RuntimeGateway.DEDUPLICATION_CONTRACT);
-            event.put("commandV2Delivery", "at-least-once");
-        }
+        event.put("supportedProtocolVersions", new int[] {AgentProtocolConstants.VERSION_1});
+        event.put("legacyProtocolEnabled", false);
         event.put("executionTriggerType", AgentProtocolConstants.TYPE_COMMAND_DISPATCH);
         event.put("taskEventExecutionTrigger", false);
         sendEvent(session, "protocol_hello", event);
@@ -937,7 +931,16 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                 event.put("typedInspection", typedInspection.frozenReceipt());
             }
             stage = "runtime_bind";
-            event.put("runtimeAuth", runtimeAuthentication.bind(session.getId(), sessionProof(session), session::isOpen));
+            var runtimeReceipt = runtimeAuthentication.bind(session.getId(), sessionProof(session), session::isOpen);
+            // The network codec projects maps, not service records. Keep this explicit
+            // so nested installation identity/version use the same public wire contract.
+            event.put("runtimeAuth", Map.of(
+                    "scheme", runtimeReceipt.scheme(), "tenantId", runtimeReceipt.tenantId(),
+                    "clientId", runtimeReceipt.clientId(), "ownerJiacn", runtimeReceipt.ownerJiacn(),
+                    "agentId", runtimeReceipt.agentId(), "runtimeInstanceId", runtimeReceipt.runtimeInstanceId(),
+                    "installationId", runtimeReceipt.installationId(), "hostId", runtimeReceipt.hostId(),
+                    "sessionGeneration", runtimeReceipt.sessionGeneration(),
+                    "contextPackEnabled", runtimeReceipt.contextPackEnabled()));
             stage = "registration_receipt";
             if (!sendEvent(session, "agent_registered", event)) {
                 if (runtimeAuthentication != null) runtimeAuthentication.disconnect(session.getId());
@@ -1026,7 +1029,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
     }
 
     private void handleSkillInstallResult(WebSocketSession session,Map<String,Object> payload) {
-        String agent=sessionAgentId(session), tenant=sessionJiacn(session), client=sessionClientId(session);
+        String agent=sessionAgentId(session), tenant=sessionTenantId(session), client=sessionClientId(session);
         if (skillResults==null || !validExactDispatchId(agent,100)
                 || !successfullyRegisteredAgentIds(session.getId()).contains(agent)
                 || !validExactDispatchId(tenant,50) || !validExactDispatchId(client,50)
@@ -1037,7 +1040,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             sendProtocolError(session,payload,"SKILL_RESULT_REJECTED","Skill result identity unavailable"); return;
         }
         try {
-            Map<String,Object> receipt=withSessionMutationFence(session, () -> skillResults.accept(sessionProof(session),payload));
+            Map<String,Object> receipt=withSessionMutationFence(session, () -> skillResults.acceptNative(sessionProof(session),payload));
             sendEvent(session,"work.result.receipt",receipt); // accept() returns only after durable commit
         } catch (RuntimeException failure) {
             sendProtocolError(session,payload,"SKILL_RESULT_REJECTED","Skill result could not be committed");
@@ -1243,6 +1246,15 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         String dispatchId = strictString(payload.get("dispatchId"));
         String messageId = strictString(payload.get("messageId"));
         try {
+            String rejection = strictString(payload.get("errorCode"));
+            if ("recovery_required".equals(payload.get("status"))
+                    && ChatDeliberationService.isInvalidAgentOutcome(rejection)) {
+                if (chatDeliberationService == null) throw new IllegalStateException("Turn service unavailable");
+                var rejectedEvent = withSessionMutationFence(session, () -> chatDeliberationService.failInvalidAgentOutcome(
+                        sessionTenantId(session), sessionJiacn(session), sessionClientId(session),
+                        agentId, dispatchId, messageId, rejection));
+                publishStoredConversationEvent(rejectedEvent);
+            }
             boolean acknowledged = withSessionMutationFence(session, () -> chatDeliberationOutboxService.acknowledgeHostedDispatch(
                     sessionTenantId(session), sessionJiacn(session), sessionClientId(session),
                     agentId, dispatchId, messageId, System.currentTimeMillis()));
@@ -1289,13 +1301,13 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             return;
         }
 
-        String jiacn = sessionJiacn(session);
         String clientId = sessionClientId(session);
-        ChatConversationEntity conversation = requireOwnedConversation(session, payload, conversationId);
+        ChatConversationEntity conversation = requireCallbackConversation(session, payload, conversationId, agentId);
         if (conversation == null || !requireConversationAgentScope(
                 session, payload, conversation, agentId)) {
             return;
         }
+        String jiacn = conversation.getJiacn();
         String conversationType = Optional.ofNullable(conversation.getConversationType()).orElse("normal");
         long generation = lifecycleGeneration(conversation);
         ServerResolvedAgentSender sender = resolveAgentSender(session, payload, agentId);
@@ -1406,18 +1418,21 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         if (agentId == null) {
             return;
         }
-        if (conversationId == null || conversationId.isBlank() || content == null || content.isBlank()) {
+        // Whitespace is a real streamed token with its own deltaSeq. Dropping it
+        // creates a false gap on the next chunk; empty chunks remain invalid.
+        if (conversationId == null || conversationId.isBlank() || content == null || content.isEmpty()) {
             return;
         }
         if (registeredAgentIds.isEmpty() || agentId == null || !registeredAgentIds.contains(agentId)) {
             return;
         }
 
-        ChatConversationEntity conversation = requireOwnedConversation(session, payload, conversationId);
+        ChatConversationEntity conversation = requireCallbackConversation(session, payload, conversationId, agentId);
         if (conversation == null || !requireConversationAgentScope(
                 session, payload, conversation, agentId)) {
             return;
         }
+        String jiacn = conversation.getJiacn();
         String conversationType = Optional.ofNullable(conversation.getConversationType()).orElse("normal");
         long generation = lifecycleGeneration(conversation);
         ServerResolvedAgentSender sender = resolveAgentSender(session, payload, agentId);
@@ -1441,7 +1456,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             ChatDeliberationService.DeltaResult result;
             try {
                 result = withSessionMutationFence(session, () -> chatDeliberationService.acceptDelta(
-                        sessionTenantId(session), sessionJiacn(session), sessionClientId(session),
+                        sessionTenantId(session), jiacn, sessionClientId(session),
                         conversationId, generation, agentId,
                         asString(payload.get("requestId")), asString(payload.get("turnId")),
                         asString(payload.get("dispatchId")), contextValue(payload, "contextSnapshotId"),
@@ -1514,9 +1529,9 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             }
             strict.put("outcomeContractVersion", 2);
             strict.put("__typedRawInspectionInputReceiptJson", receipt.toString());
-        } else if (semanticInteger(version, 3)) {
+        } else if (semanticInteger(version, 5)) {
             if (receipt != null && !receipt.isObject()) throw new IllegalArgumentException("invalid inspection receipt");
-            strict.put("outcomeContractVersion", 3);
+            strict.put("outcomeContractVersion", 5);
             if (receipt != null) strict.put("__typedRawInspectionInputReceiptJson", receipt.toString());
         } else {
             throw new IllegalArgumentException("invalid typed sidecar version");
@@ -1530,7 +1545,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         if (value instanceof Byte || value instanceof Short
                 || value instanceof Integer || value instanceof Long) {
             int version = ((Number) value).intValue();
-            return version == 1 || version == 2 || version == 3 ? version : null;
+            return version == 1 || version == 2 || version == 5 ? version : null;
         }
         return null;
     }
@@ -1670,6 +1685,13 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         if (!expectedScopeKey.equals(scopeKey)) {
             return denyConversationAgentScope(session, payload);
         }
+        if (hasDurableTurnBinding(payload)) {
+            try {
+                var bound = callbackBinding(session, agentId, strictString(payload.get("dispatchId")));
+                return conversation.getJiacn().equals(bound.turn().getOwnerJiacn())
+                        && conversation.getId().toString().equals(bound.turn().getConversationId());
+            } catch (RuntimeException denied) { return denyConversationAgentScope(session, payload); }
+        }
         // The WebSocket jiacn is the owner, not the task tenant (always "0").
         // The persisted conversation and the receiving session were matched above.
         Set<String> authoritativeMembers = resolveConversationTaskMembers(
@@ -1781,6 +1803,33 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         return generation;
     }
 
+    private cn.jia.chat.service.ChatDispatchAuthorityService.Binding callbackBinding(
+            WebSocketSession session, String agentId, String dispatchId) {
+        if (chatDispatchAuthority == null) throw new IllegalStateException("Dispatch authority unavailable");
+        return chatDispatchAuthority.incoming(sessionTenantId(session),sessionClientId(session),
+                sessionJiacn(session),agentId,dispatchId);
+    }
+
+    private ChatConversationEntity requireCallbackConversation(WebSocketSession session,
+            Map<String,Object> payload, String conversationId, String agentId) {
+        if (!hasDurableTurnBinding(payload)) return requireOwnedConversation(session,payload,conversationId);
+        try {
+            var bound=callbackBinding(session,agentId,strictString(payload.get("dispatchId")));
+            var turn=bound.turn();
+            if (!Objects.equals(conversationId,turn.getConversationId())
+                    || !Objects.equals(payload.get("requestId"),turn.getRequestId())
+                    || !Objects.equals(payload.get("turnId"),turn.getTurnId())
+                    || !Objects.equals(exactPositiveLong(payload.get("conversationGeneration")),turn.getConversationGeneration()))
+                throw new IllegalStateException("Dispatch binding mismatch");
+            var conversation=chatConversationService.getOwned(turn.getOwnerJiacn(),turn.getClientId(),conversationId);
+            if (!Objects.equals(sessionTenantId(session),conversation.getTenantId())) throw new IllegalStateException("Tenant mismatch");
+            return conversation;
+        } catch (RuntimeException denied) {
+            sendError(session,payload,"CONVERSATION_NOT_AVAILABLE","Conversation is not available to this dispatch");
+            return null;
+        }
+    }
+
     private ChatConversationEntity requireOwnedConversation(
             WebSocketSession session, Map<String, Object> payload, String conversationId) {
         String jiacn = sessionJiacn(session);
@@ -1825,7 +1874,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
     }
 
     private String streamKey(WebSocketSession session, String requestId, String conversationId) {
-        return session.getId() + ":" + Optional.ofNullable(requestId).orElse(conversationId);
+        return session.getId() + ":" + conversationId + ":" + Optional.ofNullable(requestId).orElse("");
     }
 
     private Map<String, Object> copyTrace(Map<String, Object> payload) {
@@ -1877,20 +1926,10 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         if (!session.isOpen()) {
             return false;
         }
-        Map<String, Object> event = new HashMap<>();
-        if (payload != null) {
-            event.putAll(payload);
-        }
-        event.put("type", type);
-        event.put("channel", CHANNEL);
-        if (event.containsKey("sentAt")) {
-            event.put("timestamp", event.get("sentAt"));
-        } else {
-            event.putIfAbsent("timestamp", System.currentTimeMillis());
-        }
         try {
-            String wireJson = preserveAuthenticatedInspectionContext
-                    ? JsonUtil.toJson(event) : JsonUtil.toSafeJson(event);
+            // Authenticated protocol data must be serialized without the logging sanitizer.
+            var envelope = cn.jia.agent.common.AgentMessageWire.event(type, payload, incomingWire.get());
+            String wireJson = STRICT_RAW_COMMAND_JSON.writeValueAsString(envelope);
             return sendWithSessionGate(session, new TextMessage(wireJson));
         } catch (Exception e) {
             if ("agent_registered".equals(type)) log.error("AGENT_REGISTRATION_DELIVERY_UNAVAILABLE");
@@ -1903,7 +1942,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
     public void publishAgentStatus(String clientId, String ownerJiacn, AgentRuntimeDTO agent) {
         Map<String, Object> payload = new HashMap<>();
         payload.put("clientId", clientId);
-        payload.put("tenantId", ownerJiacn);
+        payload.put("ownerJiacn", ownerJiacn);
         payload.put("agentId", agent.getAgentId());
         payload.put("status", agent.getStatus());
         payload.put("errorMessage", agent.getErrorMessage());
@@ -1963,7 +2002,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             List<AgentCapabilityDTO> capabilities) {
         Map<String, Object> payload = new HashMap<>();
         payload.put("clientId", clientId);
-        payload.put("tenantId", ownerJiacn);
+        payload.put("ownerJiacn", ownerJiacn);
         payload.put("agents", Optional.ofNullable(capabilities).orElseGet(List::of));
         payload.put("updatedAt", System.currentTimeMillis());
         broadcastEventToScope(clientId, ownerJiacn, "agent_capability_index", payload);
@@ -2090,8 +2129,14 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         }
         sessions.values().stream()
                 .filter(session -> clientId.equals(sessionClientId(session))
-                        && ownerJiacn.equals(sessionJiacn(session)))
-                .forEach(session -> sendEvent(session, type, payload));
+                        && ownerJiacn.equals(sessionJiacn(session))
+                        && validExactDispatchId(sessionTenantId(session), 50))
+                .forEach(session -> {
+                    // Owner and tenant are distinct authenticated scopes. Never infer one from the other.
+                    Map<String, Object> scoped = new HashMap<>(payload);
+                    scoped.put("tenantId", sessionTenantId(session));
+                    sendEvent(session, type, scoped);
+                });
     }
 
     @Override
@@ -2132,8 +2177,12 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                 if (!exactCommandSessionReady(selected, tenantId, clientId, targetAgentId, commandType)) {
                     return AgentRawCommandDispatchResult.offline();
                 }
-                return sendWithSessionGate(selected, new TextMessage(raw),
-                        () -> exactCommandSessionReady(selected, tenantId, clientId, targetAgentId, commandType));
+                var privateCommand=STRICT_RAW_COMMAND_JSON.readValue(raw,MESSAGE_TYPE);
+                var command=cn.jia.agent.common.AgentMessageWire.event("command.dispatch",privateCommand,null);
+                return sendWithSessionGate(selected,
+                        new TextMessage(STRICT_RAW_COMMAND_JSON.writeValueAsString(command)),
+                        () -> exactCommandSessionReady(
+                                selected, tenantId, clientId, targetAgentId, commandType));
             }
         } catch (Exception sendFailure) {
             log.warn("Exact-scope raw Agent command WebSocket send failed");
@@ -2674,7 +2723,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             Map<String, Object> wire = new LinkedHashMap<>(outbound);
             negotiated = entry.getValue().negotiatedProfile(route, decision);
             wire.put("targetCapability", negotiated);
-            delivered = sendEvent(session, AgentProtocolConstants.LEGACY_AGENT_DIRECT_MESSAGE, wire) || delivered;
+            delivered = sendEvent(session, AgentProtocolConstants.TYPE_CHAT_MESSAGE, wire) || delivered;
         }
         CapabilityDispatchStatus status = eligible.values().stream().allMatch(AgentRuntimeCapabilities::modern)
                 ? CapabilityDispatchStatus.READY : CapabilityDispatchStatus.LEGACY_COMPATIBLE;
@@ -2717,7 +2766,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                 "capabilityContractVersion", 1, "policy", ready.frozenDeclaration());
         Map<String, Object> wire = new LinkedHashMap<>(outbound);
         wire.put("targetCapability", negotiated);
-        boolean delivered = sendEvent(selected, AgentProtocolConstants.LEGACY_AGENT_DIRECT_MESSAGE, wire, true);
+        boolean delivered = sendEvent(selected, AgentProtocolConstants.TYPE_CHAT_MESSAGE, wire, true);
         return new CapabilityDispatchResult(CapabilityDispatchStatus.READY, delivered, negotiated);
     }
 
@@ -2776,9 +2825,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             }
         }
 
-        String outerType = directCompatibilityType(messageType)
-                ? AgentProtocolConstants.LEGACY_AGENT_DIRECT_MESSAGE
-                : safeCanonicalOutboundType(messageType);
+        String outerType = safeCanonicalOutboundType(messageType);
         if (outerType == null) {
             log.warn("Refusing unsafe Agent direct delivery, agentId={}, messageType={}", agentId, messageType);
             return false;
@@ -2801,6 +2848,8 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             if (requiredTenantId != null && !requiredTenantId.equals(sessionTenantId(session))) {
                 continue;
             }
+            if (AgentProtocolConstants.TYPE_CHAT_STOP.equals(messageType)
+                    && !typedDeliberationSessionCurrent(session, agentId)) continue;
             if (requiredOwnerJiacn != null
                     && (!requiredOwnerJiacn.equals(sessionJiacn(session))
                     || !requiredClientId.equals(sessionClientId(session)))) {
@@ -2857,11 +2906,6 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         } finally {
             EsContextHolder.setContext(originalContext);
         }
-    }
-
-    private boolean directCompatibilityType(String messageType) {
-        return AgentProtocolConstants.TYPE_CHAT_MESSAGE.equals(messageType)
-                || AgentProtocolConstants.TYPE_COMMAND_DISPATCH.equals(messageType);
     }
 
     private String safeCanonicalOutboundType(String messageType) {
@@ -3043,7 +3087,10 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         try {
             synchronized(selected) {
                 if(!matchesManagedSkill(selected,tenant,client,agent,fence)) return AgentRawCommandDispatchResult.offline();
-                return sendWithSessionGate(selected, new TextMessage(raw),
+                var privateCommand=STRICT_RAW_COMMAND_JSON.readValue(raw,MESSAGE_TYPE);
+                var command=cn.jia.agent.common.AgentMessageWire.event("command.dispatch",privateCommand,null);
+                return sendWithSessionGate(selected,
+                        new TextMessage(STRICT_RAW_COMMAND_JSON.writeValueAsString(command)),
                         () -> matchesManagedSkill(selected,tenant,client,agent,fence));
             }
         } catch(Exception failure) { return AgentRawCommandDispatchResult.sendFailed(1); }

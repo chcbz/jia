@@ -107,7 +107,7 @@ public class ChatBountyRequestIndexController {
                     default -> "Bounty request index is unavailable";
                 };
         JsonResult<Void> result = JsonResult.failure("BOUNTY_REQUEST_INDEX_" + failure.reason(), message);
-        result.setStatus(status.value());
+
         return response(status, result);
     }
 

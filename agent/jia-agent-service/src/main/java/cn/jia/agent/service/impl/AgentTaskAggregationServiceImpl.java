@@ -11,7 +11,7 @@ import cn.jia.agent.entity.AgentTaskMetaEntity;
 import cn.jia.agent.entity.AgentTaskWorkItemEntity;
 import cn.jia.agent.exception.AgentTaskStateException;
 import cn.jia.agent.exception.AgentTaskStateException.Reason;
-import cn.jia.agent.service.AgentIdentityService;
+import cn.jia.agent.service.TaskAssigneeAuthorityService;
 import cn.jia.agent.service.AgentTaskAggregationService;
 import cn.jia.agent.service.AgentTaskEventWriter;
 import cn.jia.agent.service.AgentTaskMutationTransaction;
@@ -32,7 +32,7 @@ import java.util.function.LongSupplier;
 public class AgentTaskAggregationServiceImpl implements AgentTaskAggregationService {
     private static final int MAX_LEASE_TOKEN_LENGTH = 100;
     private final AgentTaskMetaDao taskMetaDao;
-    private final AgentIdentityService identityService;
+    private final TaskAssigneeAuthorityService assigneeAuthority;
     private final AgentTaskAggregationCalculator calculator;
     private final AgentTaskMutationTransaction mutationTransaction;
     private final AgentTaskEventWriter eventWriter;
@@ -40,27 +40,27 @@ public class AgentTaskAggregationServiceImpl implements AgentTaskAggregationServ
 
     @Inject
     public AgentTaskAggregationServiceImpl(
-            AgentTaskMetaDao taskMetaDao, AgentIdentityService identityService,
+            AgentTaskMetaDao taskMetaDao, TaskAssigneeAuthorityService assigneeAuthority,
             AgentTaskMutationTransaction mutationTransaction, AgentTaskEventWriter eventWriter) {
-        this(taskMetaDao, identityService, mutationTransaction, eventWriter,
+        this(taskMetaDao, assigneeAuthority, mutationTransaction, eventWriter,
                 new AgentTaskAggregationCalculator(), System::currentTimeMillis);
     }
 
     AgentTaskAggregationServiceImpl(
             AgentTaskMetaDao taskMetaDao,
-            AgentIdentityService identityService,
+            TaskAssigneeAuthorityService assigneeAuthority,
             AgentTaskAggregationCalculator calculator,
             LongSupplier clock) {
-        this(taskMetaDao, identityService, directTransaction(taskMetaDao), command -> null,
+        this(taskMetaDao, assigneeAuthority, directTransaction(taskMetaDao), command -> null,
                 calculator, clock);
     }
 
     AgentTaskAggregationServiceImpl(
-            AgentTaskMetaDao taskMetaDao, AgentIdentityService identityService,
+            AgentTaskMetaDao taskMetaDao, TaskAssigneeAuthorityService assigneeAuthority,
             AgentTaskMutationTransaction mutationTransaction, AgentTaskEventWriter eventWriter,
             AgentTaskAggregationCalculator calculator, LongSupplier clock) {
         this.taskMetaDao = Objects.requireNonNull(taskMetaDao, "taskMetaDao");
-        this.identityService = Objects.requireNonNull(identityService, "identityService");
+        this.assigneeAuthority = Objects.requireNonNull(assigneeAuthority, "assigneeAuthority");
         this.mutationTransaction = Objects.requireNonNull(mutationTransaction, "mutationTransaction");
         this.eventWriter = Objects.requireNonNull(eventWriter, "eventWriter");
         this.calculator = Objects.requireNonNull(calculator, "calculator");
@@ -223,7 +223,7 @@ public class AgentTaskAggregationServiceImpl implements AgentTaskAggregationServ
         if (member == null || !tenantId.equals(member.getTenantId())
                 || !clientId.equals(member.getClientId())
                 || !taskId.equals(member.getTaskId())
-                || !isCanonicalStoredAgentId(tenantId, clientId, ownerJiacn, member.getAgentId())) {
+                || !isCanonicalStoredAgentId(tenantId, clientId, ownerJiacn, taskId, member.getAgentId())) {
             throw invalidPersisted("Persisted member identity does not match the aggregate scope");
         }
         try {
@@ -269,7 +269,7 @@ public class AgentTaskAggregationServiceImpl implements AgentTaskAggregationServ
                 || status == AgentTaskWorkItemStatus.RUNNING;
         boolean hasAssignee = item.getAssigneeAgentId() != null;
         boolean canonicalAssignee = !hasAssignee || isCanonicalStoredAgentId(
-                tenantId, clientId, ownerJiacn, item.getAssigneeAgentId());
+                tenantId, clientId, ownerJiacn, taskId, item.getAssigneeAgentId());
         if (activeLeaseStatus) {
             if (!hasAssignee || !canonicalAssignee
                     || !isExactStoredText(item.getLeaseToken(), MAX_LEASE_TOKEN_LENGTH)
@@ -295,15 +295,15 @@ public class AgentTaskAggregationServiceImpl implements AgentTaskAggregationServ
     }
 
     private boolean isCanonicalStoredAgentId(
-            String tenantId, String clientId, String ownerJiacn, String agentId) {
+            String tenantId, String clientId, String ownerJiacn, String taskId, String agentId) {
         if (agentId == null || agentId.isEmpty() || agentId.length() > 100
                 || !agentId.equals(agentId.strip())
                 || agentId.chars().anyMatch(Character::isISOControl)) {
             return false;
         }
         try {
-            return agentId.equals(identityService.requirePersistedCanonicalAgentIdInScope(
-                    tenantId, clientId, ownerJiacn, agentId));
+            return agentId.equals(assigneeAuthority.requireTaskAgent(
+                    tenantId, clientId, ownerJiacn, taskId, agentId, false));
         } catch (RuntimeException ignored) {
             return false;
         }

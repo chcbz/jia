@@ -1,5 +1,7 @@
 package cn.jia.workflow.api;
 
+import cn.jia.core.entity.JsonRequest;
+
 import cn.jia.core.common.EsHandler;
 import cn.jia.core.entity.JsonRequestPage;
 import cn.jia.core.entity.JsonResult;
@@ -67,7 +69,8 @@ public class WorkflowController {
      * @return
      */
     @RequestMapping(value = "/deployment/list", method = RequestMethod.POST)
-    public Object getDeployment(@RequestBody JsonRequestPage<DeploymentExample> page) {
+    public Object getDeployment(@RequestBody JsonRequest<JsonRequestPage<DeploymentExample>> protocolRequest) {
+        JsonRequestPage<DeploymentExample> page = protocolRequest == null ? null : protocolRequest.data();
         DeploymentExample example = Optional.ofNullable(page.getSearch()).orElse(new DeploymentExample());
         String orderBy = page.getOrderBy();
         Page<Deployment> list = workflowService.getDeployment(example, page.getPageNum(), page.getPageSize(), orderBy);
@@ -79,9 +82,7 @@ public class WorkflowController {
             deployment.put("deploymentTime", d.getDeploymentTime());
             deployments.add(deployment);
         }
-        JsonResultPage<Map<String, Object>> result = new JsonResultPage<>(deployments);
-        result.setPageNum(list.getPageNum());
-        result.setTotal(list.getTotal());
+        JsonResultPage<Map<String, Object>> result = JsonResultPage.page(deployments, list.getPageNum(), list.getPageSize(), list.getTotal());
         return result;
     }
 
@@ -149,7 +150,7 @@ public class WorkflowController {
      * @param id
      * @return
      */
-    @RequestMapping(value = "/deployment/delete", method = RequestMethod.GET)
+    @RequestMapping(value = "/deployment/delete", method = RequestMethod.DELETE)
     public Object deleteDeployment(@RequestParam String id) {
         workflowService.deleteDeployment(id);
         return JsonResult.success();
@@ -162,7 +163,8 @@ public class WorkflowController {
      * @return
      */
     @RequestMapping(value = "/definition/list", method = RequestMethod.POST)
-    public Object getDefinition(@RequestBody JsonRequestPage<ProcessDefinitionExample> page) {
+    public Object getDefinition(@RequestBody JsonRequest<JsonRequestPage<ProcessDefinitionExample>> protocolRequest) {
+        JsonRequestPage<ProcessDefinitionExample> page = protocolRequest == null ? null : protocolRequest.data();
         ProcessDefinitionExample example = Optional.ofNullable(page.getSearch()).orElse(new ProcessDefinitionExample());
         String orderBy = page.getOrderBy();
         Page<ProcessDefinition> list = workflowService.getProcessDefinition(example, page.getPageNum(), page.getPageSize(), orderBy);
@@ -180,9 +182,7 @@ public class WorkflowController {
             deployment.put("stateCode", d.isSuspended() ? SuspensionState.SUSPENDED.getStateCode() : SuspensionState.ACTIVE.getStateCode());
             deployments.add(deployment);
         }
-        JsonResultPage<Map<String, Object>> result = new JsonResultPage<>(deployments);
-        result.setPageNum(list.getPageNum());
-        result.setTotal(list.getTotal());
+        JsonResultPage<Map<String, Object>> result = JsonResultPage.page(deployments, list.getPageNum(), list.getPageSize(), list.getTotal());
         return result;
     }
 
@@ -240,7 +240,7 @@ public class WorkflowController {
      * @param id
      * @return
      */
-    @RequestMapping(value = "/definition/activate", method = RequestMethod.GET)
+    @RequestMapping(value = "/definition/activate", method = RequestMethod.POST)
     public Object activateDefinition(@RequestParam String id) {
         workflowService.activateProcessDefinition(id);
         return JsonResult.success();
@@ -252,7 +252,7 @@ public class WorkflowController {
      * @param id
      * @return
      */
-    @RequestMapping(value = "/definition/suspend", method = RequestMethod.GET)
+    @RequestMapping(value = "/definition/suspend", method = RequestMethod.POST)
     public Object suspendDefinition(@RequestParam String id) {
         workflowService.suspendProcessDefinition(id);
         return JsonResult.success();
@@ -269,7 +269,8 @@ public class WorkflowController {
     @PostMapping(value = "/start/{processDefinitionKey}/{businessKey}")
     public Object startProcess(@PathVariable String processDefinitionKey, 
 							   @PathVariable String businessKey, 
-							   @RequestBody Map<String, Object> variables) {
+							   @RequestBody JsonRequest<Map<String, Object>> protocolRequest) {
+        Map<String, Object> variables = protocolRequest == null ? null : protocolRequest.data();
         variables.put("businessKey", businessKey);
         workflowService.startProcess(processDefinitionKey, businessKey, variables);
         return JsonResult.success();
@@ -295,7 +296,8 @@ public class WorkflowController {
      * @return
      */
     @PostMapping(value = "/list/wait")
-    public Object listWait(@RequestBody JsonRequestPage<TaskExample> page) {
+    public Object listWait(@RequestBody JsonRequest<JsonRequestPage<TaskExample>> protocolRequest) {
+        JsonRequestPage<TaskExample> page = protocolRequest == null ? null : protocolRequest.data();
         TaskExample example = Optional.ofNullable(page.getSearch()).orElse(new TaskExample());
         String orderBy = page.getOrderBy();
         Page<Task> taskList = workflowService.getTasks(example, page.getPageNum(), page.getPageSize(), orderBy);
@@ -320,9 +322,7 @@ public class WorkflowController {
             t.put("definitionName", pd.getName());
             tasks.add(t);
         }
-        JsonResultPage<Map<String, Object>> result = new JsonResultPage<>(tasks);
-        result.setPageNum(taskList.getPageNum());
-        result.setTotal(taskList.getTotal());
+        JsonResultPage<Map<String, Object>> result = JsonResultPage.page(tasks, taskList.getPageNum(), taskList.getPageSize(), taskList.getTotal());
         return result;
     }
 
@@ -333,7 +333,8 @@ public class WorkflowController {
      * @return
      */
     @PostMapping(value = "/list/history")
-    public Object listHistory(@RequestBody JsonRequestPage<TaskExample> page) {
+    public Object listHistory(@RequestBody JsonRequest<JsonRequestPage<TaskExample>> protocolRequest) {
+        JsonRequestPage<TaskExample> page = protocolRequest == null ? null : protocolRequest.data();
         TaskExample example = Optional.ofNullable(page.getSearch()).orElse(new TaskExample());
         String orderBy = page.getOrderBy();
         Page<HistoricTaskInstance> taskList = workflowService.getHistorys(example, page.getPageNum(), page.getPageSize(), orderBy);
@@ -355,9 +356,7 @@ public class WorkflowController {
             t.put("definitionName", pi.getProcessDefinitionName());
             tasks.add(t);
         }
-        JsonResultPage<Map<String, Object>> result = new JsonResultPage<>(tasks);
-        result.setPageNum(taskList.getPageNum());
-        result.setTotal(taskList.getTotal());
+        JsonResultPage<Map<String, Object>> result = JsonResultPage.page(tasks, taskList.getPageNum(), taskList.getPageSize(), taskList.getTotal());
         return result;
     }
 
@@ -368,7 +367,8 @@ public class WorkflowController {
      * @return
      */
     @PostMapping(value = "/list/process")
-    public Object listHistoryByBusinessKey(@RequestBody JsonRequestPage<String> page) {
+    public Object listHistoryByBusinessKey(@RequestBody JsonRequest<JsonRequestPage<String>> protocolRequest) {
+        JsonRequestPage<String> page = protocolRequest == null ? null : protocolRequest.data();
         String orderBy = page.getOrderBy();
         Page<HistoricTaskInstance> taskList =
                 workflowService.getHistorysByBusinessKey(page.getSearch(), page.getPageNum(), page.getPageSize(), orderBy);
@@ -396,9 +396,7 @@ public class WorkflowController {
             t.put("variables", vars);
             tasks.add(t);
         }
-        JsonResultPage<Map<String, Object>> result = new JsonResultPage<>(tasks);
-        result.setPageNum(taskList.getPageNum());
-        result.setTotal(taskList.getTotal());
+        JsonResultPage<Map<String, Object>> result = JsonResultPage.page(tasks, taskList.getPageNum(), taskList.getPageSize(), taskList.getTotal());
         return result;
     }
 
@@ -410,7 +408,8 @@ public class WorkflowController {
      * @return
      */
     @PostMapping(value = "/list/my")
-    public Object listHistoricProcessInstances(@RequestBody JsonRequestPage<ProcessInstanceExample> page, HttpServletRequest request) {
+    public Object listHistoricProcessInstances(@RequestBody JsonRequest<JsonRequestPage<ProcessInstanceExample>> protocolRequest, HttpServletRequest request) {
+        JsonRequestPage<ProcessInstanceExample> page = protocolRequest == null ? null : protocolRequest.data();
         ProcessInstanceExample example = Optional.ofNullable(page.getSearch()).orElse(new ProcessInstanceExample());
         String orderBy = page.getOrderBy();
         Page<HistoricProcessInstance> instanceList =
@@ -446,9 +445,7 @@ public class WorkflowController {
 
             instances.add(t);
         }
-        JsonResultPage<Map<String, Object>> result = new JsonResultPage<>(instances);
-        result.setPageNum(instanceList.getPageNum());
-        result.setTotal(instanceList.getTotal());
+        JsonResultPage<Map<String, Object>> result = JsonResultPage.page(instances, instanceList.getPageNum(), instanceList.getPageSize(), instanceList.getTotal());
         return result;
     }
 
@@ -460,7 +457,8 @@ public class WorkflowController {
      */
     @SuppressWarnings("unchecked")
     @PostMapping(value = "/complete/{taskId}")
-    public Object complete(@PathVariable String taskId, @RequestBody Map<String, Object> data) {
+    public Object complete(@PathVariable String taskId, @RequestBody JsonRequest<Map<String, Object>> protocolRequest) {
+        Map<String, Object> data = protocolRequest == null ? null : protocolRequest.data();
         Task task = workflowService.getTaskById(taskId);
         if (task == null) {
             throw new EsRuntimeException(EsErrorConstants.DATA_NOT_FOUND);
@@ -487,7 +485,7 @@ public class WorkflowController {
      * @param taskId 任务ID
      * @param userId 被委托人
      */
-    @GetMapping(value = "/task/delegate")
+    @org.springframework.web.bind.annotation.PostMapping(value = "/task/delegate")
     public Object delegateTask(@RequestParam String taskId, @RequestParam String userId) {
         workflowService.delegateTask(taskId, userId);
         return JsonResult.success();
@@ -499,7 +497,7 @@ public class WorkflowController {
      * @param taskId 任务ID
      * @param userId 认领人ID
      */
-    @GetMapping(value = "/task/claim")
+    @org.springframework.web.bind.annotation.PostMapping(value = "/task/claim")
     public Object claimTask(String taskId, String userId) {
         workflowService.claimTask(taskId, userId);
         return JsonResult.success();
@@ -512,7 +510,7 @@ public class WorkflowController {
      * @param userId
      * @return
      */
-    @GetMapping(value = "/task/assign")
+    @org.springframework.web.bind.annotation.PostMapping(value = "/task/assign")
     public Object setAssignee(String taskId, String userId) {
         workflowService.setAssignee(taskId, userId);
         return JsonResult.success();

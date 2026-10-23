@@ -13,6 +13,7 @@ import java.util.Objects;
 import java.util.Set;
 
 /** Additive-only initializer that rejects creation-operation catalog drift. */
+@org.springframework.context.annotation.Profile("schema-maintenance")
 public final class AgentTaskCreationOperationSchemaInitializer implements InitializingBean {
     static final String TABLE = "agent_task_creation_operation";
     private static final Map<String, String> REQUIRED_CHECK_EXPRESSIONS = Map.ofEntries(

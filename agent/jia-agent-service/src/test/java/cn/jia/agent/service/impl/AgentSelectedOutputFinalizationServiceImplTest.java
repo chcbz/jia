@@ -33,7 +33,7 @@ import static org.mockito.Mockito.*;
 
 class AgentSelectedOutputFinalizationServiceImplTest {
     @Test
-    void actualHappyPathAtomicallyClaimsStartsPublishesSubmitsAndOwnerAcceptsWithoutLeakingToken() {
+    void actualHappyPathClaimsStartsPublishesAndSubmitsWithoutAcceptingOrLeakingToken() {
         Fixture f=new Fixture();
         var ready=f.service.prepare(f.scope,f.command("run-1"));
         assertEquals("READY_TO_SUBMIT",ready.stage());assertNull(ready.deliveryId());
@@ -41,9 +41,9 @@ class AgentSelectedOutputFinalizationServiceImplTest {
         var submitted=f.service.submit(f.scope,"task-1","op-1",f.digest);
         assertEquals("submitted",submitted.deliveryState());assertEquals("SUBMITTED",submitted.stage());
         assertNull(f.jdbc.leaseToken);
-        var completed=f.service.accept(f.scope,"task-1","op-1",f.digest);
-        assertEquals("TASK_COMPLETED",completed.stage());assertEquals("accepted",completed.deliveryState());
-        assertEquals("completed",completed.taskState());
+        var replay=f.service.reconcile(f.scope,"task-1","op-1",f.digest);
+        assertEquals("SUBMITTED",replay.stage());assertEquals("submitted",replay.deliveryState());
+        assertEquals("reviewing",replay.taskState());
         verify(f.leases).claim(anyString(),anyString(),anyString(),anyString(),eq("work-1"),any());
         verify(f.leases).start(anyString(),anyString(),anyString(),anyString(),eq("work-1"),any());
         verify(f.leases,never()).heartbeat(anyString(),anyString(),anyString(),anyString(),anyString(),any());
@@ -51,7 +51,41 @@ class AgentSelectedOutputFinalizationServiceImplTest {
         verify(f.artifacts,times(2)).publish(eq("0"),eq("client-1"),eq("owner-1"),eq("task-1"),eq("agent-1"),artifact.capture());
         assertTrue(artifact.getAllValues().stream().allMatch(v->"agent-1".equals(v.getProducerAgentId())));
         verify(f.submissions).submit(eq("0"),eq("client-1"),eq("owner-1"),eq("task-1"),eq("agent-1"),any());
-        verify(f.decisions).decide(eq("0"),eq("client-1"),eq("task-1"),eq("owner-1"),any());
+        verifyNoInteractions(f.decisions);
+    }
+
+    @Test
+    void ownerSelectionReplacesSubmittedBatchThroughExistingReworkWithoutModelOrAcceptance() {
+        Fixture f=new Fixture();f.jdbc.taskState="reviewing";f.jdbc.workState="submitted";
+        f.delivery.set(formal("old-delivery","submitted",7,0));
+        when(f.decisions.decide(eq("0"),eq("client-1"),eq("task-1"),eq("owner-1"),any())).thenAnswer(i->{
+            cn.jia.agent.entity.AgentTaskFormalDeliveryDecisionDTO command=i.getArgument(4);
+            assertEquals("old-delivery",command.getDeliveryId());assertEquals(7L,command.getExpectedTaskVersion());
+            assertEquals(0L,command.getExpectedDeliveryVersion());assertEquals("changes_requested",command.getDecision());
+            f.jdbc.taskState="running";f.jdbc.taskVersion=8;f.jdbc.workState="ready";
+            var changed=formal("old-delivery","changes_requested",8,1);f.delivery.set(changed);return changed;
+        });
+        assertEquals("READY_TO_SUBMIT",f.service.prepare(f.scope,f.command("run-1")).stage());
+        assertEquals("SUBMITTED",f.service.submit(f.scope,"task-1","op-1",f.digest).stage());
+        assertEquals("SUBMITTED",f.service.reconcile(f.scope,"task-1","op-1",f.digest).stage());
+        verify(f.decisions,times(1)).decide(anyString(),anyString(),anyString(),anyString(),any());
+        verify(f.leases,times(1)).claim(anyString(),anyString(),anyString(),anyString(),anyString(),any());
+        assertEquals("reviewing",f.jdbc.taskState);
+    }
+
+    @Test
+    void staleSelectionCannotWithdrawSubmittedBatch() {
+        Fixture f=new Fixture();f.jdbc.taskState="reviewing";f.jdbc.taskVersion=8;
+        f.delivery.set(formal("old-delivery","submitted",8,0));
+        assertThrows(AgentSelectedOutputFinalizationException.class,()->f.service.prepare(f.scope,f.command("run-1")));
+        verifyNoInteractions(f.decisions,f.leases,f.artifacts,f.submissions);
+    }
+
+    @Test
+    void missingCurrentBatchCannotStartReplacement() {
+        Fixture f=new Fixture();f.jdbc.taskState="reviewing";
+        assertThrows(AgentSelectedOutputFinalizationException.class,()->f.service.prepare(f.scope,f.command("run-1")));
+        verifyNoInteractions(f.decisions,f.leases,f.artifacts,f.submissions);
     }
 
     @Test
@@ -105,11 +139,16 @@ class AgentSelectedOutputFinalizationServiceImplTest {
 
     private static AgentSelectedOutputFinalizationService.PrepareCommand selected(Fixture f,
             List<AgentSelectedOutputFinalizationService.SourceOutput> outputs) {
-        String digest=SelectedOutputFinalizationDigest.request("task-1",7,7,"100","Owner selected this output",
+        String digest=SelectedOutputFinalizationDigest.requestV2("task-1",7,7,"100","Owner selected this output",
                 outputs.stream().map(o->new SelectedOutputFinalizationDigest.Selection(o.requestId(),o.stepId(),o.outputId(),
-                        o.sha256(),o.title(),o.purpose(),o.messageSource())).toList());
+                        o.sha256(),o.title(),o.purpose(),o.messageSource(),o.formalArtifactSource())).toList());
         return new AgentSelectedOutputFinalizationService.PrepareCommand("op-1","task-1",7,7,"100",3,
                 "agent-1","grant-1",2,"Owner selected this output",digest,outputs);
+    }
+    private static AgentSelectedOutputFinalizationService.PrepareCommand unchecked(Fixture f,
+            List<AgentSelectedOutputFinalizationService.SourceOutput> outputs) {
+        return new AgentSelectedOutputFinalizationService.PrepareCommand("op-1","task-1",7,7,"100",3,
+                "agent-1","grant-1",2,"Owner selected this output",f.digest,outputs);
     }
     private static SelectedOutputFinalizationDigest.MessageSource message(String id) {
         return new SelectedOutputFinalizationDigest.MessageSource("turn-1",id,"snapshot-1","sha256:"+"a".repeat(64));
@@ -128,33 +167,33 @@ class AgentSelectedOutputFinalizationServiceImplTest {
         assertFalse(f.publishedManifest.get().contains("stepId"));assertFalse(f.publishedManifest.get().contains("executionId"));assertFalse(f.publishedManifest.get().contains("outputId"));
         assertFalse(f.publishedManifest.get().contains("\"runId\""));
         assertEquals("SUBMITTED",f.service.submit(f.scope,"task-1","op-1",command.immutableDigest()).stage());
-        assertEquals("TASK_COMPLETED",f.service.accept(f.scope,"task-1","op-1",command.immutableDigest()).stage());
+        assertEquals("SUBMITTED",f.service.reconcile(f.scope,"task-1","op-1",command.immutableDigest()).stage());
         verify(f.leases).claim(anyString(),anyString(),anyString(),anyString(),eq("work-1"),any());
-        verify(f.decisions).decide(eq("0"),eq("client-1"),eq("task-1"),eq("owner-1"),any());
+        verifyNoInteractions(f.decisions);
     }
     @Test void completedMessageCannotCarryFabricatedExecutionAuthority() {
         Fixture f=new Fixture(); var real=text("9",f.bytes);
         var forged=new AgentSelectedOutputFinalizationService.SourceOutput(real.requestId(),real.stepId(),"fake-execution",
                 "fake-run","fake-output",real.sha256(),real.contentMimeType(),real.byteLength(),real.title(),real.purpose(),
                 real.bytes(),real.messageSource());
-        assertThrows(AgentSelectedOutputFinalizationException.class,()->f.service.prepare(f.scope,selected(f,List.of(forged))));
+        assertThrows(AgentSelectedOutputFinalizationException.class,()->f.service.prepare(f.scope,unchecked(f,List.of(forged))));
         verifyNoInteractions(f.grants,f.leases,f.artifacts);assertNull(f.jdbc.phase);
     }
     @Test void invalidTextReferencesAndUtf8FailBeforeAnyPromotion() {
         for(String id:List.of("0","09","-1","9223372036854775808","99999999999999999999")) {
             Fixture f=new Fixture();var output=text(id,f.bytes);
-            assertThrows(AgentSelectedOutputFinalizationException.class,()->f.service.prepare(f.scope,selected(f,List.of(output))));
+            assertThrows(AgentSelectedOutputFinalizationException.class,()->f.service.prepare(f.scope,unchecked(f,List.of(output))));
             verifyNoInteractions(f.grants,f.leases,f.artifacts);
         }
         for(byte[] bytes:List.of(new byte[]{(byte)0xc3,0x28},"  \n".getBytes(java.nio.charset.StandardCharsets.UTF_8))) {
             Fixture f=new Fixture();var output=text("9",bytes);
-            assertThrows(AgentSelectedOutputFinalizationException.class,()->f.service.prepare(f.scope,selected(f,List.of(output))));
+            assertThrows(AgentSelectedOutputFinalizationException.class,()->f.service.prepare(f.scope,unchecked(f,List.of(output))));
             verifyNoInteractions(f.grants,f.leases,f.artifacts);
         }
     }
     @Test void duplicateTextSourcesFailAndMixedTextAndMediaRetainBothSources() {
         Fixture f=new Fixture();var output=text("9",f.bytes);
-        assertThrows(AgentSelectedOutputFinalizationException.class,()->f.service.prepare(f.scope,selected(f,List.of(output,output))));
+        assertThrows(AgentSelectedOutputFinalizationException.class,()->f.service.prepare(f.scope,unchecked(f,List.of(output,output))));
         verifyNoInteractions(f.grants,f.leases,f.artifacts);
         var mixed=selected(f,List.of(output,f.command("run-1").outputs().getFirst()));
         assertEquals("READY_TO_SUBMIT",f.service.prepare(f.scope,mixed).stage());
@@ -167,8 +206,12 @@ class AgentSelectedOutputFinalizationServiceImplTest {
         assertThrows(AgentSelectedOutputFinalizationException.class,()->f.service.prepare(f.scope,selected(f,List.of(text("10",f.bytes)))));
         verify(f.leases,times(1)).claim(anyString(),anyString(),anyString(),anyString(),anyString(),any());
     }
-    @Test void originalMediaDigestRemainsByteExact() {
-        assertEquals("491dfdc59d2609557394df265ad68a3570138d8156c5dff016701a2ea199d601",new Fixture().digest);
+    @Test void historicalMediaDigestRemainsByteExactButIsNotTheNewWriter() {
+        Fixture f=new Fixture();
+        String old=SelectedOutputFinalizationDigest.request("task-1",7,7,"100","Owner selected this output",List.of(
+                new SelectedOutputFinalizationDigest.Selection("req-1","step-1","out-1",f.hash,"Hero","final")));
+        assertEquals("491dfdc59d2609557394df265ad68a3570138d8156c5dff016701a2ea199d601",old);
+        assertNotEquals(old,f.digest);
     }
 
     @Test void textMimeHashAndLengthAreNotBrowserAuthority() {
@@ -177,9 +220,95 @@ class AgentSelectedOutputFinalizationServiceImplTest {
             var forged=new AgentSelectedOutputFinalizationService.SourceOutput(real.requestId(),"step".equals(changed)?"made-up-step":null,
                     null,null,null,"hash".equals(changed)?"0".repeat(64):real.sha256(),"mime".equals(changed)?"image/png":real.contentMimeType(),
                     "length".equals(changed)?real.byteLength()+1:real.byteLength(),real.title(),real.purpose(),real.bytes(),real.messageSource());
-            assertThrows(AgentSelectedOutputFinalizationException.class,()->f.service.prepare(f.scope,selected(f,List.of(forged))));
+            assertThrows(AgentSelectedOutputFinalizationException.class,()->f.service.prepare(f.scope,unchecked(f,List.of(forged))));
             verifyNoInteractions(f.grants,f.leases,f.artifacts);
         }
+    }
+
+    private static List<AgentSelectedOutputFinalizationService.SourceOutput> retained(Fixture f) {
+        var first=AgentSelectedOutputFinalizationService.SourceOutput.formalArtifact(
+                new SelectedOutputFinalizationDigest.FormalArtifactSource("old-delivery","old-first",2),
+                f.hash,"image/png","Retained first","final",f.bytes);
+        var second=AgentSelectedOutputFinalizationService.SourceOutput.formalArtifact(
+                new SelectedOutputFinalizationDigest.FormalArtifactSource("old-delivery","old-second",7),
+                f.hash,"image/png","Retained second","final",f.bytes);
+        var batch=formal("old-delivery","changes_requested",7,1);batch.setManifestArtifactId("old-manifest");
+        batch.setItems(List.of(sourceItem("old-first",2,f.hash),sourceItem("old-second",7,f.hash)));
+        when(f.reads.listForTaskOwner("0","client-1","owner-1","task-1"))
+                .thenAnswer(i->f.delivery.get()==null?List.of(batch):List.of(batch,f.delivery.get()));
+        when(f.contents.readContentForTaskOwner(eq("0"),eq("client-1"),eq("owner-1"),eq("task-1"),anyString(),anyInt()))
+                .thenAnswer(i->new cn.jia.agent.entity.AgentTaskArtifactContentDTO(i.getArgument(4),i.getArgument(5),
+                        f.hash,(long)f.bytes.length,"image/png",f.bytes));
+        return List.of(first,second);
+    }
+    private static cn.jia.agent.entity.AgentTaskFormalDeliveryItemDTO sourceItem(String id,int version,String hash) {
+        var item=new cn.jia.agent.entity.AgentTaskFormalDeliveryItemDTO();item.setArtifactId(id);
+        item.setArtifactVersion(version);item.setContentHash(hash);item.setPurpose("final");return item;
+    }
+    @Test void threeResultsReplaceOnlyOneAndRepublishTwoExactHistoricalVersionsIntoFreshAuthority() throws Exception {
+        Fixture f=new Fixture();var old=retained(f);
+        var command=selected(f,List.of(old.get(0),text("9",f.bytes),old.get(1)));
+        assertEquals("READY_TO_SUBMIT",f.service.prepare(f.scope,command).stage());
+        var manifest=new ObjectMapper().readTree(f.publishedManifest.get());assertEquals(2,manifest.path("schemaVersion").intValue());
+        assertEquals("FORMAL_ARTIFACT",manifest.path("selectedOutputs").path(0).path("sourceKind").textValue());
+        assertEquals("2",manifest.path("selectedOutputs").path(0).path("sourceArtifactVersion").textValue());
+        assertEquals("7",manifest.path("selectedOutputs").path(2).path("sourceArtifactVersion").textValue());
+        assertFalse(manifest.path("selectedOutputs").path(0).has("requestId"));
+        verify(f.contents,times(2)).readContentForTaskOwner("0","client-1","owner-1","task-1","old-first",2);
+        verify(f.contents,times(2)).readContentForTaskOwner("0","client-1","owner-1","task-1","old-second",7);
+        assertEquals("SUBMITTED",f.service.submit(f.scope,"task-1","op-1",command.immutableDigest()).stage());
+        verify(f.artifacts,times(4)).publish(anyString(),anyString(),anyString(),anyString(),eq("agent-1"),any());
+        verify(f.leases,times(1)).claim(anyString(),anyString(),anyString(),anyString(),eq("work-1"),any());
+        verifyNoInteractions(f.decisions);
+    }
+    @Test void fixedHistoricalSourceRejectsScopeBatchStateManifestVersionHashPurposeOrBytesBeforeNewLease() {
+        for(String drift:List.of("absent","task","state","manifest","version","hash","purpose","bytes","mime","length","denied")) {
+            Fixture f=new Fixture();var selected=retained(f);var source=selected.getFirst();
+            var batch=formal("old-delivery","changes_requested",7,1);batch.setManifestArtifactId("old-manifest");
+            var item=sourceItem("old-first",2,f.hash);batch.setItems(List.of(item));
+            switch(drift) {
+                case "task" -> batch.setTaskId("another-task");
+                case "state" -> batch.setState("submitted");
+                case "manifest" -> batch.setManifestArtifactId("old-first");
+                case "version" -> item.setArtifactVersion(3);
+                case "hash" -> item.setContentHash("0".repeat(64));
+                case "purpose" -> item.setPurpose("other");
+            }
+            when(f.reads.listForTaskOwner("0","client-1","owner-1","task-1"))
+                    .thenReturn("absent".equals(drift)?List.of():List.of(batch));
+            if("denied".equals(drift))when(f.contents.readContentForTaskOwner("0","client-1","owner-1","task-1","old-first",2))
+                    .thenThrow(new AgentTaskCollaborationException(AgentTaskCollaborationException.Reason.FORBIDDEN,"private-source-detail"));
+            else if(List.of("bytes","mime","length").contains(drift))
+                when(f.contents.readContentForTaskOwner("0","client-1","owner-1","task-1","old-first",2))
+                    .thenReturn(new cn.jia.agent.entity.AgentTaskArtifactContentDTO("old-first",2,f.hash,
+                            (long)f.bytes.length+("length".equals(drift)?1:0),"mime".equals(drift)?"text/plain":"image/png",
+                            "bytes".equals(drift)?new byte[]{1,2}:f.bytes));
+            var error=assertThrows(AgentSelectedOutputFinalizationException.class,()->f.service.prepare(f.scope,selected(f,List.of(source))),drift);
+            assertFalse(error.getMessage().contains("private-source-detail"));
+            verifyNoInteractions(f.grants,f.leases,f.artifacts,f.submissions,f.decisions);assertNull(f.jdbc.phase);
+        }
+    }
+    @Test void sourceIsReauthorizedBeforePublicationNotOnlyDuringInitialResolution() {
+        Fixture f=new Fixture();var source=retained(f).getFirst();
+        when(f.contents.readContentForTaskOwner("0","client-1","owner-1","task-1","old-first",2))
+                .thenReturn(new cn.jia.agent.entity.AgentTaskArtifactContentDTO("old-first",2,f.hash,(long)f.bytes.length,"image/png",f.bytes))
+                .thenThrow(new AgentTaskCollaborationException(AgentTaskCollaborationException.Reason.FORBIDDEN,"revoked"));
+        assertThrows(AgentSelectedOutputFinalizationException.class,()->f.service.prepare(f.scope,selected(f,List.of(source))));
+        verify(f.leases).claim(anyString(),anyString(),anyString(),anyString(),anyString(),any());
+        verify(f.artifacts,never()).publish(anyString(),anyString(),anyString(),anyString(),anyString(),any());
+        verifyNoInteractions(f.submissions,f.decisions);
+    }
+    @Test void oldPendingContractNeverResumesAndCommittedHistoryDoesNotRepairOrAccept() {
+        Fixture f=new Fixture();f.service.prepare(f.scope,f.command("run-1"));f.jdbc.contractVersion=1;
+        int writes=f.jdbc.writes;clearInvocations(f.grants,f.leases,f.artifacts,f.submissions);
+        assertThrows(AgentSelectedOutputFinalizationException.class,()->f.service.reconcile(f.scope,"task-1","op-1",f.digest));
+        assertThrows(AgentSelectedOutputFinalizationException.class,()->f.service.submit(f.scope,"task-1","op-1",f.digest));
+        assertThrows(AgentSelectedOutputFinalizationException.class,()->f.service.prepare(f.scope,f.command("run-1")));
+        assertEquals(writes,f.jdbc.writes);verifyNoInteractions(f.grants,f.leases,f.artifacts,f.submissions,f.decisions);
+        f.jdbc.phase="SUBMITTED";f.delivery.set(formal(f.jdbc.deliveryId,"accepted",10,1));
+        assertEquals("accepted",f.service.reconcile(f.scope,"task-1","op-1",f.digest).deliveryState());
+        assertEquals("SUBMITTED",f.jdbc.phase);assertEquals(writes,f.jdbc.writes);
+        verifyNoInteractions(f.grants,f.leases,f.artifacts,f.submissions,f.decisions);
     }
 
     static final class Fixture {
@@ -188,6 +317,7 @@ class AgentSelectedOutputFinalizationServiceImplTest {
         final AgentTaskExecutionGrantService grants=mock(AgentTaskExecutionGrantService.class);
         final AgentWorkItemLeaseService leases=mock(AgentWorkItemLeaseService.class);
         final AgentTaskStateService states=mock(AgentTaskStateService.class);
+        final cn.jia.agent.service.AgentTaskArtifactContentService contents=mock(cn.jia.agent.service.AgentTaskArtifactContentService.class);
         final AgentTaskArtifactService artifacts=mock(AgentTaskArtifactService.class);
         final AgentTaskFormalDeliveryService submissions=mock(AgentTaskFormalDeliveryService.class);
         final AgentTaskFormalDeliveryReadService reads=mock(AgentTaskFormalDeliveryReadService.class);
@@ -197,7 +327,7 @@ class AgentSelectedOutputFinalizationServiceImplTest {
                 new AgentSelectedOutputFinalizationService.Scope("0","client-1","owner-1");
         final byte[] bytes="selected bytes".getBytes(java.nio.charset.StandardCharsets.UTF_8);
         final String hash=sha(bytes);
-        final String digest=SelectedOutputFinalizationDigest.request("task-1",7,7,"100",
+        final String digest=SelectedOutputFinalizationDigest.requestV2("task-1",7,7,"100",
                 "Owner selected this output",List.of(new SelectedOutputFinalizationDigest.Selection(
                         "req-1","step-1","out-1",hash,"Hero","final")));
         final AtomicReference<AgentTaskFormalDeliveryViewDTO> delivery=new AtomicReference<>();
@@ -236,7 +366,8 @@ class AgentSelectedOutputFinalizationServiceImplTest {
                 AgentTaskFormalDeliveryViewDTO v=formal(jdbc.deliveryId,"accepted",10,1);delivery.set(v);
                 jdbc.taskState="completed";jdbc.taskVersion=10;return v;});
             service=new AgentSelectedOutputFinalizationServiceImpl(jdbc,transactions,grants,leases,states,
-                    artifacts,submissions,reads,decisions,new ObjectMapper());
+                    artifacts,submissions,reads,new ObjectMapper(),contents);
+            service.setDecisions(decisions);
         }
         AgentSelectedOutputFinalizationService.PrepareCommand command(String runId){
             return new AgentSelectedOutputFinalizationService.PrepareCommand("op-1","task-1",7,7,"100",3,
@@ -275,9 +406,11 @@ class AgentSelectedOutputFinalizationServiceImplTest {
     static final class FakeJdbc extends JdbcTemplate {
         String phase,digest,sourceDigest,operationId,taskId,conversationId,target,grant,runId,deliveryId,manifest,summary;
         String workItem,leaseToken,workToken;Long leaseVersion;String facts;long created;long generation;
+        int contractVersion=2;int writes;
         String taskState="assigned";long taskVersion=7;String workState="ready";long workVersion=3;
         void clearAuthority(){phase=null;digest=null;sourceDigest=null;operationId=null;taskId=null;}
         @Override public int update(String sql,Object...args){
+            writes++;
             if(sql.contains("INSERT INTO agent_selected_output_finalization")){
                 operationId=(String)args[0];taskId=(String)args[4];digest=(String)args[5];sourceDigest=(String)args[6];
                 conversationId=(String)args[9];generation=(Long)args[10];target=(String)args[11];grant=(String)args[12];
@@ -303,7 +436,7 @@ class AgentSelectedOutputFinalizationServiceImplTest {
                 when(rs.getString(15)).thenReturn(leaseToken);when(rs.getObject(16)).thenReturn(leaseVersion);
                 when(rs.getString(17)).thenReturn(deliveryId);when(rs.getString(18)).thenReturn(manifest);
                 when(rs.getString(19)).thenReturn(facts);when(rs.getString(20)).thenReturn(phase);
-                when(rs.getLong(21)).thenReturn(created);when(rs.getLong(22)).thenReturn(created);
+                when(rs.getLong(21)).thenReturn(created);when(rs.getLong(22)).thenReturn(created);when(rs.getInt(23)).thenReturn(contractVersion);
                 return List.of(mapper.mapRow(rs,0));}
             if(sql.contains("FROM agent_task_work_item")){
                 when(rs.getString(1)).thenReturn("work-1");when(rs.getString(2)).thenReturn(workState);

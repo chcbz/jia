@@ -5,6 +5,7 @@ CREATE TABLE IF NOT EXISTS agent_selected_output_finalization (
   client_id VARCHAR(50) COLLATE utf8mb4_0900_bin NOT NULL,
   owner_jiacn VARCHAR(50) COLLATE utf8mb4_0900_bin NOT NULL,
   task_id VARCHAR(100) COLLATE utf8mb4_0900_bin NOT NULL,
+  contract_version SMALLINT NOT NULL DEFAULT 1,
   immutable_digest CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   source_facts_digest CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   expected_task_version BIGINT NOT NULL,
@@ -29,6 +30,7 @@ CREATE TABLE IF NOT EXISTS agent_selected_output_finalization (
   PRIMARY KEY (tenant_id,client_id,owner_jiacn,operation_id),
   UNIQUE KEY uk_asof_delivery (tenant_id,client_id,owner_jiacn,delivery_id),
   KEY idx_asof_task (tenant_id,client_id,owner_jiacn,task_id,phase),
+  CONSTRAINT chk_asof_contract CHECK (contract_version IN (1,2)),
   CONSTRAINT chk_asof_versions CHECK (expected_task_version BETWEEN 0 AND 9007199254740991
     AND expected_assignment_revision BETWEEN 0 AND 9007199254740991
     AND conversation_generation BETWEEN 1 AND 9007199254740991

@@ -55,9 +55,9 @@ public class AgentWorkItemPlanController {
 
     @PostMapping(value = "/{taskId}/work-item-plans/suggest",
             consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<AgentWorkItemPlanViewDTO> suggest(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<AgentWorkItemPlanViewDTO>> suggest(
             @PathVariable String taskId,
-            @RequestBody byte[] body,
+            @cn.jia.core.annotation.ApiJsonData @RequestBody byte[] body,
             HttpServletRequest request,
             Authentication authentication) {
         Scope scope = requireJwtScope(authentication);
@@ -65,16 +65,16 @@ public class AgentWorkItemPlanController {
         requireExact(taskId, 100);
         AgentWorkItemPlanSuggestRequestDTO command = parse(
                 body, AgentWorkItemPlanSuggestRequestDTO.class);
-        return ok(planService.suggest(
-                scope.tenantId(), scope.clientId(), scope.ownerJiacn(), taskId, actorAgentId, command));
+        return cn.jia.core.config.ApiJsonResponses.success(ok(planService.suggest(
+                scope.tenantId(), scope.clientId(), scope.ownerJiacn(), taskId, actorAgentId, command)));
     }
 
     @PostMapping(value = "/{taskId}/work-item-plans/confirm",
             consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<AgentWorkItemPlanViewDTO> confirm(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<AgentWorkItemPlanViewDTO>> confirm(
             @PathVariable String taskId,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
-            @RequestBody byte[] body,
+            @cn.jia.core.annotation.ApiJsonData @RequestBody byte[] body,
             HttpServletRequest request,
             Authentication authentication) {
         Scope scope = requireJwtScope(authentication);
@@ -83,24 +83,24 @@ public class AgentWorkItemPlanController {
         requireIdempotencyKey(idempotencyKey);
         AgentWorkItemPlanConfirmRequestDTO command = parse(
                 body, AgentWorkItemPlanConfirmRequestDTO.class);
-        return ok(planService.confirm(scope.tenantId(), scope.clientId(), scope.ownerJiacn(), taskId,
-                actorAgentId, idempotencyKey, command));
+        return cn.jia.core.config.ApiJsonResponses.success(ok(planService.confirm(scope.tenantId(), scope.clientId(), scope.ownerJiacn(), taskId,
+                actorAgentId, idempotencyKey, command)));
     }
 
     @ExceptionHandler(AuthenticationFailure.class)
-    public ResponseEntity<ErrorBody> authentication(AuthenticationFailure failure) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> authentication(AuthenticationFailure failure) {
         return error(failure.forbidden ? HttpStatus.FORBIDDEN : HttpStatus.UNAUTHORIZED,
                 failure.forbidden ? "WORK_ITEM_PLAN_FORBIDDEN" : "WORK_ITEM_PLAN_UNAUTHENTICATED",
                 "Work item planning access is unavailable");
     }
 
     @ExceptionHandler(RequestFailure.class)
-    public ResponseEntity<ErrorBody> badRequest(RequestFailure ignored) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> badRequest(RequestFailure ignored) {
         return error(HttpStatus.BAD_REQUEST, "BAD_REQUEST", "Invalid work item plan request");
     }
 
     @ExceptionHandler(AgentWorkItemPlanException.class)
-    public ResponseEntity<ErrorBody> planFailure(AgentWorkItemPlanException failure) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> planFailure(AgentWorkItemPlanException failure) {
         return switch (failure.getReason()) {
             case INVALID_REQUEST -> error(HttpStatus.BAD_REQUEST,
                     "BAD_REQUEST", "Invalid work item plan request");
@@ -116,7 +116,7 @@ public class AgentWorkItemPlanController {
     }
 
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<ErrorBody> unexpected(Exception ignored, HttpServletRequest request) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> unexpected(Exception ignored, HttpServletRequest request) {
         log.error("Work item plan request failed: uri={}", request.getRequestURI());
         return error(HttpStatus.SERVICE_UNAVAILABLE,
                 "WORK_ITEM_PLAN_UNAVAILABLE", "Work item planning is temporarily unavailable");
@@ -208,12 +208,12 @@ public class AgentWorkItemPlanController {
         return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL).body(body);
     }
 
-    private static ResponseEntity<ErrorBody> error(
+    private static ResponseEntity<cn.jia.core.entity.JsonResult<Void>> error(
             HttpStatus status, String code, String message) {
         return ResponseEntity.status(status)
                 .header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
                 .contentType(new MediaType(MediaType.APPLICATION_JSON, StandardCharsets.UTF_8))
-                .body(new ErrorBody(code, message));
+                .body(cn.jia.core.entity.JsonResult.<Void>failure(code, message));
     }
 
     private record Scope(String tenantId, String clientId, String ownerJiacn) {

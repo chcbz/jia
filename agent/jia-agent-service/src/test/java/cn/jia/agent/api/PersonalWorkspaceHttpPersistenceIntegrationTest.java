@@ -134,27 +134,27 @@ class PersonalWorkspaceHttpPersistenceIntegrationTest {
         MvcResult created = upload("/agent/personal-workspace/files", "create-key", VERSION_ONE, null)
                 .andExpect(status().isCreated())
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
-                .andExpect(jsonPath("$.operation.state").value("COMMITTED"))
-                .andExpect(jsonPath("$.file.latestVersion").value(1))
-                .andExpect(jsonPath("$.version.version").value(1))
-                .andExpect(jsonPath("$.version.originalFilename").value("report:Q1.txt"))
-                .andExpect(jsonPath("$.version.sha256").value(sha256(VERSION_ONE)))
-                .andExpect(jsonPath("$.version.storageUri").doesNotExist())
-                .andExpect(jsonPath("$.storageUri").doesNotExist())
+                .andExpect(jsonPath("$.data.operation.state").value("COMMITTED"))
+                .andExpect(jsonPath("$.data.file.latestVersion").value("1"))
+                .andExpect(jsonPath("$.data.version.version").value("1"))
+                .andExpect(jsonPath("$.data.version.originalFilename").value("report:Q1.txt"))
+                .andExpect(jsonPath("$.data.version.sha256").value(sha256(VERSION_ONE)))
+                .andExpect(jsonPath("$.data.version.storageUri").doesNotExist())
+                .andExpect(jsonPath("$.data.storageUri").doesNotExist())
                 .andReturn();
         JsonNode first = JsonUtil.getMapper().readTree(created.getResponse().getContentAsByteArray());
-        String fileId = first.at("/file/fileId").asText();
-        String operationId = first.at("/operation/operationId").asText();
+        String fileId = first.at("/data/file/fileId").asText();
+        String operationId = first.at("/data/operation/operationId").asText();
         assertFalse(created.getResponse().getContentAsString().contains(temporaryDirectory.toString()));
         assertEquals(1, storage.storeCalls());
 
         MvcResult replayed = upload("/agent/personal-workspace/files", "create-key", VERSION_ONE, null)
                 .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.operation.operationId").value(operationId))
-                .andExpect(jsonPath("$.file.fileId").value(fileId))
-                .andExpect(jsonPath("$.version.version").value(1))
+                .andExpect(jsonPath("$.data.operation.operationId").value(operationId))
+                .andExpect(jsonPath("$.data.file.fileId").value(fileId))
+                .andExpect(jsonPath("$.data.version.version").value("1"))
                 .andReturn();
-        assertEquals(first, JsonUtil.getMapper().readTree(replayed.getResponse().getContentAsByteArray()));
+        assertEquals(first.path("data"), JsonUtil.getMapper().readTree(replayed.getResponse().getContentAsByteArray()).path("data"));
         assertEquals(1, storage.storeCalls(), "an idempotent replay must not write storage again");
         assertCounts(1, 1, 1);
 
@@ -171,11 +171,11 @@ class PersonalWorkspaceHttpPersistenceIntegrationTest {
         upload("/agent/personal-workspace/files/" + fileId + "/versions",
                 "append-key", VERSION_TWO, "1")
                 .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.file.fileId").value(fileId))
-                .andExpect(jsonPath("$.file.latestVersion").value(2))
-                .andExpect(jsonPath("$.version.version").value(2))
-                .andExpect(jsonPath("$.version.sha256").value(sha256(VERSION_TWO)))
-                .andExpect(jsonPath("$.version.storageUri").doesNotExist());
+                .andExpect(jsonPath("$.data.file.fileId").value(fileId))
+                .andExpect(jsonPath("$.data.file.latestVersion").value("2"))
+                .andExpect(jsonPath("$.data.version.version").value("2"))
+                .andExpect(jsonPath("$.data.version.sha256").value(sha256(VERSION_TWO)))
+                .andExpect(jsonPath("$.data.version.storageUri").doesNotExist());
         assertEquals(2, storage.storeCalls());
         assertCounts(1, 2, 2);
 
@@ -206,7 +206,7 @@ class PersonalWorkspaceHttpPersistenceIntegrationTest {
                 .andExpect(status().isCreated())
                 .andReturn();
         String fileId = JsonUtil.getMapper().readTree(created.getResponse().getContentAsByteArray())
-                .at("/file/fileId").asText();
+                .at("/data/file/fileId").asText();
         String persistedStorageUri = jdbc.queryForObject(
                 "SELECT storage_uri FROM agent_personal_workspace_file_version WHERE file_id=? AND version=1",
                 String.class, fileId);
@@ -225,9 +225,9 @@ class PersonalWorkspaceHttpPersistenceIntegrationTest {
                         fileId, 1).principal(jwt(OWNER, CLIENT)))
                 .andExpect(status().isOk())
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
-                .andExpect(jsonPath("$.state").value("READY"))
-                .andExpect(jsonPath("$.parts[0].partId").value("content"))
-                .andExpect(jsonPath("$.storageUri").doesNotExist());
+                .andExpect(jsonPath("$.data.state").value("READY"))
+                .andExpect(jsonPath("$.data.parts[0].partId").value("content"))
+                .andExpect(jsonPath("$.data.storageUri").doesNotExist());
         assertEquals(1, storage.readCalls(), "authorized preview reads the immutable object once");
     }
 
@@ -289,8 +289,7 @@ class PersonalWorkspaceHttpPersistenceIntegrationTest {
     private CountingStorage newStorage() {
         return new CountingStorage(new FileSystemPersonalWorkspaceStorage(
                 temporaryDirectory.resolve("private-workspace").toAbsolutePath(),
-                1024 * 1024,
-                Set.of(MIME)));
+                1024 * 1024));
     }
 
     private MockMvc controller(DataSource dataSource) {
@@ -298,7 +297,12 @@ class PersonalWorkspaceHttpPersistenceIntegrationTest {
         TransactionInterceptor transactions = new TransactionInterceptor();
         transactions.setTransactionManager(transactionManager);
         transactions.setTransactionAttributeSource(new AnnotationTransactionAttributeSource());
-        PersonalWorkspaceWriteService rawWrites = new PersonalWorkspaceWriteService(dao);
+        var rawClaim = new cn.jia.agent.service.impl.PersonalWorkspaceOperationClaimTx(dao);
+        ProxyFactory claimProxy = new ProxyFactory(rawClaim);
+        claimProxy.setProxyTargetClass(true);
+        claimProxy.addAdvice(transactions);
+        PersonalWorkspaceWriteService rawWrites = new PersonalWorkspaceWriteService(dao,
+                (cn.jia.agent.service.impl.PersonalWorkspaceOperationClaimTx) claimProxy.getProxy());
         ProxyFactory proxyFactory = new ProxyFactory(rawWrites);
         proxyFactory.setProxyTargetClass(true);
         proxyFactory.addAdvice(transactions);

@@ -57,8 +57,8 @@ class UserEntitySecurityBoundaryTest {
         assertHidden(objectMapper.writeValueAsString(JsonResult.success(entity)));
         assertHidden(objectMapper.writeValueAsString(view));
         assertHidden(objectMapper.writeValueAsString(JsonResult.success(view)));
-        assertHidden(objectMapper.writeValueAsString(new JsonResultPage<>(List.of(entity))));
-        assertHidden(objectMapper.writeValueAsString(new JsonResultPage<>(List.of(view))));
+        assertHidden(objectMapper.writeValueAsString(JsonResultPage.page(List.of(entity), 1, 100, 1)));
+        assertHidden(objectMapper.writeValueAsString(JsonResultPage.page(List.of(view), 1, 100, 1)));
     }
 
     private static void assertNeverWritten(String fieldName) throws Exception {

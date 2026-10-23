@@ -61,6 +61,7 @@ public class AgentTaskWorkspaceController {
             throw new AgentTaskWorkspaceException(
                     AgentTaskWorkspaceException.Reason.SNAPSHOT_UNAVAILABLE);
         }
+        body = cn.jia.core.config.ApiJsonResponses.rawJsonSuccess(body, request);
         return ResponseEntity.ok()
                 .header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL_VALUE)
                 .contentType(MediaType.APPLICATION_JSON)
@@ -69,7 +70,7 @@ public class AgentTaskWorkspaceController {
     }
 
     @ExceptionHandler(WorkspaceAuthenticationException.class)
-    public ResponseEntity<WorkspaceError> handleAuthentication(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> handleAuthentication(
             WorkspaceAuthenticationException exception) {
         HttpStatus status = exception.forbidden ? HttpStatus.FORBIDDEN : HttpStatus.UNAUTHORIZED;
         return error(status, exception.forbidden ? "WORKSPACE_FORBIDDEN" : "WORKSPACE_UNAUTHENTICATED",
@@ -80,12 +81,12 @@ public class AgentTaskWorkspaceController {
     @ExceptionHandler({WorkspaceRequestException.class,
             MissingServletRequestParameterException.class,
             MethodArgumentTypeMismatchException.class})
-    public ResponseEntity<WorkspaceError> handleBadRequest(Exception ignored) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> handleBadRequest(Exception ignored) {
         return error(HttpStatus.BAD_REQUEST, "BAD_REQUEST", "Invalid workspace request");
     }
 
     @ExceptionHandler(AgentTaskWorkspaceException.class)
-    public ResponseEntity<WorkspaceError> handleWorkspaceFailure(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> handleWorkspaceFailure(
             AgentTaskWorkspaceException exception) {
         if (exception.getReason()
                 == AgentTaskWorkspaceException.Reason.NOT_FOUND_OR_FORBIDDEN) {
@@ -99,7 +100,7 @@ public class AgentTaskWorkspaceController {
     }
 
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<WorkspaceError> handleUnexpected(Exception ignored) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> handleUnexpected(Exception ignored) {
         log.error("Workspace request failed: reason=unexpected");
         return error(HttpStatus.SERVICE_UNAVAILABLE, "TASK_WORKSPACE_UNAVAILABLE",
                 "Task workspace snapshot is temporarily unavailable");
@@ -167,12 +168,12 @@ public class AgentTaskWorkspaceController {
         return Character.isWhitespace(codePoint) || Character.isSpaceChar(codePoint);
     }
 
-    private static ResponseEntity<WorkspaceError> error(
+    private static ResponseEntity<cn.jia.core.entity.JsonResult<Void>> error(
             HttpStatus status, String code, String message) {
         return ResponseEntity.status(status)
                 .header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL_VALUE)
                 .contentType(new MediaType(MediaType.APPLICATION_JSON, StandardCharsets.UTF_8))
-                .body(new WorkspaceError(code, message));
+                .body(cn.jia.core.entity.JsonResult.<Void>failure(code, message));
     }
 
     private record Scope(String jiacn, String clientId) {

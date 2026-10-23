@@ -46,7 +46,7 @@ class JuyitingActionControllerTest extends BaseMockTest {
         JuyitingActionController controller = new JuyitingActionController(dispatcher);
 
         JsonResult<HallActionDispatchResult> result = controller.dispatch(
-                "intent-1", "agent-caller", request,
+                "intent-1", "agent-caller", new cn.jia.core.entity.JsonRequest<>(1, "test-request", request),
                 jwt("tenant-a", "client-a"));
 
         assertEquals("intent-1", request.getIntentId());
@@ -67,7 +67,7 @@ class JuyitingActionControllerTest extends BaseMockTest {
         JuyitingActionController controller = new JuyitingActionController(dispatcher);
 
         JsonResult<HallActionDispatchResult> result = controller.dispatch(
-                "intent-2", null, request, jwt("tenant-a", "client-a"));
+                "intent-2", null, new cn.jia.core.entity.JsonRequest<>(1, "test-request", request), jwt("tenant-a", "client-a"));
 
         verify(dispatcher).dispatch(request,
                 new HallTrustedCaller("0", "client-a", "tenant-a", null));
@@ -82,7 +82,7 @@ class JuyitingActionControllerTest extends BaseMockTest {
         JuyitingActionController controller = new JuyitingActionController(dispatcher);
 
         JsonResult<HallActionDispatchResult> result = controller.dispatch(
-                "intent-path", "agent-caller", request,
+                "intent-path", "agent-caller", new cn.jia.core.entity.JsonRequest<>(1, "test-request", request),
                 jwt("tenant-a", "client-a"));
 
         assertEquals("failed", result.getData().getStatus());
@@ -100,7 +100,7 @@ class JuyitingActionControllerTest extends BaseMockTest {
                         "request is not authorized or valid"));
         JuyitingActionController controller = new JuyitingActionController(dispatcher);
 
-        controller.dispatch("intent-3", "agent-caller", request, null);
+        controller.dispatch("intent-3", "agent-caller", new cn.jia.core.entity.JsonRequest<>(1, "test-request", request), null);
 
         verify(dispatcher).dispatch(request, null);
     }

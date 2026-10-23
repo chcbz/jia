@@ -32,7 +32,7 @@ public class AgentTaskCancellationController {
 
     @PostMapping(value="/{taskId}/cancel", consumes=MediaType.APPLICATION_JSON_VALUE,
             produces=MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<AgentTaskCancellationService.Receipt> cancel(@PathVariable String taskId,
+    public ResponseEntity<cn.jia.core.entity.JsonResult<CancellationReceipt>> cancel(@PathVariable String taskId,
             HttpServletRequest request, Authentication authentication) {
         if (!(authentication instanceof JwtAuthenticationToken jwt) || !authentication.isAuthenticated()) {
             throw new AuthenticationFailure(false);
@@ -50,32 +50,33 @@ public class AgentTaskCancellationController {
         long version;
         try {
             // Bounded request, no free-form reason/identity/lease/credential payload accepted.
-            byte[] bytes=request.getInputStream().readNBytes(1025);
+            byte[] bytes=cn.jia.core.config.ApiJsonInput.readData(request);
             if (bytes.length>1024) throw badRequest();
             JsonNode root=JSON.readTree(bytes);
             JsonNode expected=root==null ? null : root.get("expectedTaskVersion");
             if (root==null || !root.isObject() || root.size()!=1 || expected==null
-                    || !expected.isIntegralNumber() || !expected.canConvertToLong()) throw badRequest();
-            version=expected.longValue();
+                    || !expected.isString() || !expected.asString().matches("0|[1-9][0-9]*")) throw badRequest();
+            version=Long.parseLong(expected.asString());
             if (version<0 || version==Long.MAX_VALUE) throw badRequest();
-        } catch (Exception failure) { throw badRequest(); }
+        } catch (org.springframework.http.converter.HttpMessageNotReadableException protocol) { throw protocol; }
+        catch (Exception failure) { throw badRequest(); }
         var receipt=service.cancel("0",client,owner,actor,taskId,version);
         if (receipt==null || !taskId.equals(receipt.taskId()) || !"cancelled".equals(receipt.status())
                 || receipt.taskVersion()<0) {
             throw new IllegalStateException("Invalid cancellation receipt");
         }
-        return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL,"private, no-store").body(receipt);
+        return cn.jia.core.config.ApiJsonResponses.success(ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL,"private, no-store").body(new CancellationReceipt(receipt.taskId(), receipt.status(), Long.toString(receipt.taskVersion()))));
     }
 
     @ExceptionHandler(AuthenticationFailure.class)
-    public ResponseEntity<Error> authentication(AuthenticationFailure failure) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> authentication(AuthenticationFailure failure) {
         return error(failure.forbidden ? HttpStatus.FORBIDDEN : HttpStatus.UNAUTHORIZED,
                 failure.forbidden ? "CANCEL_FORBIDDEN" : "CANCEL_UNAUTHENTICATED");
     }
     @ExceptionHandler(RequestFailure.class)
-    public ResponseEntity<Error> badRequest(RequestFailure ignored) { return error(HttpStatus.BAD_REQUEST,"BAD_REQUEST"); }
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> badRequest(RequestFailure ignored) { return error(HttpStatus.BAD_REQUEST,"BAD_REQUEST"); }
     @ExceptionHandler(AgentTaskStateException.class)
-    public ResponseEntity<Error> state(AgentTaskStateException failure) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> state(AgentTaskStateException failure) {
         return switch (failure.getReason()) {
             case INVALID_REQUEST -> error(HttpStatus.BAD_REQUEST,"BAD_REQUEST");
             case NOT_FOUND -> error(HttpStatus.NOT_FOUND,"TASK_NOT_FOUND");
@@ -86,14 +87,14 @@ public class AgentTaskCancellationController {
         };
     }
     @ExceptionHandler(AgentTaskCollaborationException.class)
-    public ResponseEntity<Error> collaboration(AgentTaskCollaborationException failure) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> collaboration(AgentTaskCollaborationException failure) {
         return error(failure.getReason()==AgentTaskCollaborationException.Reason.NOT_FOUND
                 ? HttpStatus.NOT_FOUND : HttpStatus.SERVICE_UNAVAILABLE,
                 failure.getReason()==AgentTaskCollaborationException.Reason.NOT_FOUND
                         ? "TASK_NOT_FOUND" : "CANCEL_UNAVAILABLE");
     }
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<Error> unexpected(Exception ignored) { return error(HttpStatus.SERVICE_UNAVAILABLE,"CANCEL_UNAVAILABLE"); }
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> unexpected(Exception ignored) { return error(HttpStatus.SERVICE_UNAVAILABLE,"CANCEL_UNAVAILABLE"); }
     private static String claim(JwtAuthenticationToken jwt,String key,int max) {
         Object value=jwt.getToken().getClaims().get(key);
         if (!(value instanceof String text) || !exact(text,max)) throw new AuthenticationFailure(true);
@@ -104,10 +105,11 @@ public class AgentTaskCancellationController {
                 && text.chars().noneMatch(Character::isISOControl);
     }
     private static RequestFailure badRequest() { return new RequestFailure(); }
-    private static ResponseEntity<Error> error(HttpStatus status,String code) {
+    private static ResponseEntity<cn.jia.core.entity.JsonResult<Void>> error(HttpStatus status,String code) {
         return ResponseEntity.status(status).header(HttpHeaders.CACHE_CONTROL,"private, no-store")
-                .body(new Error(code,"Task cancellation request was not accepted"));
+                .body(cn.jia.core.entity.JsonResult.<Void>failure(code,"Task cancellation request was not accepted"));
     }
+    public record CancellationReceipt(String taskId, String status, String taskVersion) { }
     public record Error(String code,String message) { }
     private static final class RequestFailure extends RuntimeException { }
     private static final class AuthenticationFailure extends RuntimeException {

@@ -161,8 +161,24 @@ public class ChatMessageDaoImpl extends BaseDaoImpl<ChatMessageMapper, ChatMessa
     }
 
     @Override
-    public List<String> findPendingConversationIds(String syncStatus, int limit) {
-        return findPendingConversationIds(syncStatus, List.of(), limit);
+    public List<String> findPendingConversationIds(String syncStatus, int limit, long afterId) {
+        requireLimit(limit);
+        if (afterId < 0 || !"PENDING".equals(syncStatus)) {
+            throw new IllegalArgumentException("Invalid memory scan cursor/status");
+        }
+        return baseMapper.findPendingMemoryConversations(syncStatus, limit, afterId);
+    }
+
+    @Override
+    public int markMemorySnapshotSynced(String ownerJiacn, String clientId,
+            String conversationId, List<Long> messageIds) {
+        requireScope(ownerJiacn, clientId);
+        long id = parseConversationId(conversationId);
+        if (messageIds == null || messageIds.isEmpty()
+                || messageIds.stream().anyMatch(value -> value == null || value <= 0)) {
+            throw new IllegalArgumentException("A non-empty persisted message snapshot is required");
+        }
+        return baseMapper.markMemorySnapshotSynced(ownerJiacn, clientId, conversationId, id, messageIds);
     }
 
     @Override

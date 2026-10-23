@@ -78,7 +78,7 @@ public class SessionRevocationController {
         JsonResult<Void> result = new JsonResult<>();
         result.setCode(code);
         result.setMsg(message);
-        result.setStatus(HttpStatus.CONFLICT.value());
+
         return ResponseEntity.status(HttpStatus.CONFLICT).body(result);
     }
 }

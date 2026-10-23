@@ -17,6 +17,9 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class ChatDeliberationOutboxService {
     private final ChatDeliberationDao dao;
+    private ChatDispatchAuthorityService dispatchAuthority;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setDispatchAuthority(ChatDispatchAuthorityService value) { dispatchAuthority=value; }
 
     @Transactional(readOnly = true)
     public List<ChatDispatchOutboxEntity> discover(long now, int limit) {
@@ -89,9 +92,19 @@ public class ChatDeliberationOutboxService {
             ChatDispatchOutboxEntity row = lockCurrent(claim);
             boolean updated = dao.settleOutbox(row, status, availableAt, error, sentAt, now) == 1;
             if (updated) {
-                claim.settled = true;
-                claim.row.setStatus(status).setAvailableAt(availableAt).setLastError(error).setSentAt(sentAt)
-                        .setLeaseOwner(null).setLeaseUntil(null).setVersion(row.getVersion() + 1).setUpdatedAt(now);
+                Runnable committed=()-> {synchronized(claim) {
+                    claim.settled = true;
+                    claim.row.setStatus(status).setAvailableAt(availableAt).setLastError(error).setSentAt(sentAt)
+                            .setLeaseOwner(null).setLeaseUntil(null).setVersion(row.getVersion()+1).setUpdatedAt(now);
+                }};
+                // A surrounding review transaction may still roll back after the fenced SQL.
+                // Never make the in-memory claim terminal before the database commit.
+                if(org.springframework.transaction.support.TransactionSynchronizationManager.isSynchronizationActive()) {
+                    org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(
+                        new org.springframework.transaction.support.TransactionSynchronization() {
+                            @Override public void afterCommit() {committed.run();}
+                        });
+                } else committed.run();
             }
             return updated;
         }
@@ -99,10 +112,12 @@ public class ChatDeliberationOutboxService {
 
     /** Durable receiver acknowledgement for chat dispatch. Stable messageId is the outbox event id. */
     @Transactional(rollbackFor = Exception.class)
-    public boolean acknowledgeHostedDispatch(String tenantId, String ownerJiacn, String clientId,
+    public boolean acknowledgeHostedDispatch(String tenantId, String executorOwner, String clientId,
             String agentId, String dispatchId, String messageId, long now) {
-        requireExact(tenantId, 50); requireExact(ownerJiacn, 50); requireExact(clientId, 50);
+        requireExact(tenantId, 50); requireExact(executorOwner, 50); requireExact(clientId, 50);
         requireExact(agentId, 100); requireExact(dispatchId, 64); requireExact(messageId, 64);
+        if (dispatchAuthority == null) throw new IllegalStateException("Dispatch authority unavailable");
+        String ownerJiacn=dispatchAuthority.incoming(tenantId,clientId,executorOwner,agentId,dispatchId).turn().getOwnerJiacn();
         ChatDispatchOutboxEntity row = dao.lockOutboxByDispatch(tenantId, ownerJiacn, clientId, dispatchId);
         if (row == null || !dispatchId.equals(row.getDispatchId()) || !messageId.equals(row.getEventId())) return false;
         if (!agentId.equals(targetAgent(row))) return false;
@@ -112,10 +127,12 @@ public class ChatDeliberationOutboxService {
     }
 
     @Transactional(rollbackFor = Exception.class)
-    public boolean acknowledgeHostedReceipt(String tenantId, String ownerJiacn, String clientId,
+    public boolean acknowledgeHostedReceipt(String tenantId, String executorOwner, String clientId,
             String agentId, String dispatchId, long now) {
-        requireExact(tenantId, 50); requireExact(ownerJiacn, 50); requireExact(clientId, 50);
+        requireExact(tenantId, 50); requireExact(executorOwner, 50); requireExact(clientId, 50);
         requireExact(agentId, 100); requireExact(dispatchId, 64);
+        if (dispatchAuthority == null) throw new IllegalStateException("Dispatch authority unavailable");
+        String ownerJiacn=dispatchAuthority.incoming(tenantId,clientId,executorOwner,agentId,dispatchId).turn().getOwnerJiacn();
         ChatDispatchOutboxEntity row = dao.lockOutboxByDispatch(tenantId, ownerJiacn, clientId, dispatchId);
         if (row == null || !agentId.equals(targetAgent(row)) || "DEAD".equals(row.getStatus())) return false;
         if ("SENT".equals(row.getStatus())) return true;
@@ -174,5 +191,7 @@ public class ChatDeliberationOutboxService {
         public ChatDispatchOutboxEntity row() { return row; }
         public boolean recoveredStaleLease() { return recoveredStaleLease; }
         public synchronized boolean active() { return !lost && !settled; }
+        /** A renewal transport failure has an unknown server result; this worker must stop settling. */
+        public synchronized void invalidate() { lost = true; }
     }
 }

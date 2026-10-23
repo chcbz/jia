@@ -24,7 +24,7 @@ public class VoiceExceptionHandler {
         VoiceErrorCode error = exception.error();
         JsonResult<VoiceErrorData> result = new JsonResult<>(
                 new VoiceErrorData(exception.requestId()),
-                error.message(), error.code(), error.status().value());
+                error.message(), error.code());
         log.warn("Voice request failed code={} status={}", error.code(), error.status().value());
         return ResponseEntity.status(error.status()).body(result);
     }
@@ -73,7 +73,7 @@ public class VoiceExceptionHandler {
     private static ResponseEntity<JsonResult<VoiceErrorData>> response(
             VoiceErrorCode error, String requestId) {
         JsonResult<VoiceErrorData> result = new JsonResult<>(
-                new VoiceErrorData(requestId), error.message(), error.code(), error.status().value());
+                new VoiceErrorData(requestId), error.message(), error.code());
         return ResponseEntity.status(error.status()).body(result);
     }
 }

@@ -312,7 +312,7 @@ public class EconomyReadOnlyPreviewService {
                 || row.getDescription() == null || !exact(row.getProductVersionId(), 100)
                 || !exact(row.getSkillKey(), 100) || !exact(row.getSkillVersion(), 100)
                 || row.getPriceMicro() == null || row.getPriceMicro() < 0
-                || !exact(row.getDeploymentRestriction(), 20)) {
+                || !Set.of("NONE", "ADMIN_ONLY").contains(row.getDeploymentRestriction())) {
             throw unavailable("Skill product row is invalid");
         }
         return new Product(row.getProductId(), row.getName(), row.getDescription(),

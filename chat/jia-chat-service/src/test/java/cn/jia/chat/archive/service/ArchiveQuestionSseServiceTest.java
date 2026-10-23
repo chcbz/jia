@@ -451,14 +451,14 @@ class ArchiveQuestionSseServiceTest {
         CompletionBlockingEmitter secondEmitter = new CompletionBlockingEmitter(twoEntered, release);
         CompletionBlockingEmitter thirdEmitter = new CompletionBlockingEmitter(new CountDownLatch(1), release);
         ArchiveQuestionSseService.StreamHandle first = service.subscribe(OWNER, firstId, 0,
-                new ArchiveQuestionSseService.EmitterSink(firstEmitter));
+                new ArchiveQuestionSseService.EmitterSink(firstEmitter, "archive-test"));
         ArchiveQuestionSseService.StreamHandle second = service.subscribe(OWNER, secondId, 0,
-                new ArchiveQuestionSseService.EmitterSink(secondEmitter));
+                new ArchiveQuestionSseService.EmitterSink(secondEmitter, "archive-test"));
         assertEquals(2, service.pendingCompletions(),
                 "completion permits are bound to accepted stream lifecycles, not close-time races");
         ArchivePersonalDataException rejected = assertThrows(ArchivePersonalDataException.class,
                 () -> service.subscribe(OWNER, thirdId, 0,
-                        new ArchiveQuestionSseService.EmitterSink(thirdEmitter)));
+                        new ArchiveQuestionSseService.EmitterSink(thirdEmitter, "archive-test")));
         assertEquals(429, rejected.status());
         assertEquals(0, thirdEmitter.transportCalls.get(),
                 "capacity rejection occurs before a transport is accepted");
@@ -473,7 +473,7 @@ class ArchiveQuestionSseServiceTest {
         assertEquals(1, secondEmitter.transportCalls.get());
 
         ArchiveQuestionSseService.StreamHandle third = service.subscribe(OWNER, thirdId, 0,
-                new ArchiveQuestionSseService.EmitterSink(thirdEmitter));
+                new ArchiveQuestionSseService.EmitterSink(thirdEmitter, "archive-test"));
         assertEquals(1, service.pendingCompletions());
         third.close();
         assertTrue(await(() -> thirdEmitter.transportCalls.get() == 1, Duration.ofSeconds(2)));
@@ -497,7 +497,7 @@ class ArchiveQuestionSseServiceTest {
         CountDownLatch sendEntered = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
         BlockingManagedEmitter emitter = new BlockingManagedEmitter(sendEntered, release);
-        service.subscribe(OWNER, ID, 0, new ArchiveQuestionSseService.EmitterSink(emitter));
+        service.subscribe(OWNER, ID, 0, new ArchiveQuestionSseService.EmitterSink(emitter, "archive-test"));
         replay.runAll();
         assertTrue(sendEntered.await(2, TimeUnit.SECONDS));
 
@@ -539,7 +539,7 @@ class ArchiveQuestionSseServiceTest {
         question(0);
         CompletionBlockingEmitter emitter = new CompletionBlockingEmitter(
                 new CountDownLatch(1), new CountDownLatch(0));
-        ArchiveQuestionSseService.EmitterSink sink = new ArchiveQuestionSseService.EmitterSink(emitter);
+        ArchiveQuestionSseService.EmitterSink sink = new ArchiveQuestionSseService.EmitterSink(emitter, "archive-test");
         AtomicReference<ArchiveQuestionSseService.StreamHandle> accepted = new AtomicReference<>();
         AtomicReference<Throwable> subscribeFailure = new AtomicReference<>();
         Thread subscriber = new Thread(() -> {

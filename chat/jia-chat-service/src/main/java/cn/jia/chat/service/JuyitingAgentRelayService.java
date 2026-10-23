@@ -218,6 +218,11 @@ public class JuyitingAgentRelayService {
 
     private Optional<String> forbiddenOwnedRosterTarget(
             UserAdmissionScope admission, JuyitingConversationScope scope, String ownerJiacn, String ownerClientId) {
+        // Transactional admission freezes the exact task grant for new requests and restores
+        // the original receipt for replay. An owned-roster preflight would wrongly reject B
+        // or re-authorize an old request against today's assignment.
+        if ("bounty".equals(scope.scopeType()) && scope.targetAgentIds().size()==1
+                && scope.authoritativeAgentIds().size()<=1) return Optional.empty();
         for (String agentId : scope.targetAgentIds()) {
             if (builtinHallAgentSupport.isBuiltinAgent(agentId)) {
                 continue;

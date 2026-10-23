@@ -88,7 +88,7 @@ public final class AgentTaskControlledImageCapabilityController {
     }
     private static void id(String value,int max){if(value==null||!value.matches("[A-Za-z0-9][A-Za-z0-9._:-]{0,"+(max-1)+"}"))throw new BadRequest();}
     private static boolean valid(String value,int max){return value!=null&&!value.isBlank()&&value.equals(value.strip())&&value.length()<=max&&value.chars().noneMatch(Character::isISOControl);}
-    private static ResponseEntity<JsonResult<Void>> error(HttpStatus status,String code){var body=JsonResult.<Void>failure(code,"Controlled image capability unavailable");body.setStatus(status.value());return ResponseEntity.status(status).header(HttpHeaders.CACHE_CONTROL,CACHE).header("X-Content-Type-Options","nosniff").contentType(new MediaType(MediaType.APPLICATION_JSON,StandardCharsets.UTF_8)).body(body);}
+    private static ResponseEntity<JsonResult<Void>> error(HttpStatus status,String code){var body=JsonResult.<Void>failure(code,"Controlled image capability unavailable");return ResponseEntity.status(status).header(HttpHeaders.CACHE_CONTROL,CACHE).header("X-Content-Type-Options","nosniff").contentType(new MediaType(MediaType.APPLICATION_JSON,StandardCharsets.UTF_8)).body(body);}
     private static final class AuthenticationFailure extends RuntimeException {
         private final boolean forbidden;
         private AuthenticationFailure(boolean forbidden) { this.forbidden=forbidden; }

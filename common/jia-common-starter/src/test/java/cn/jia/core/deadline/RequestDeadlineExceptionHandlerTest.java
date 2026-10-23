@@ -31,7 +31,8 @@ class RequestDeadlineExceptionHandlerTest {
         assertEquals("request-deadline-01", response.getHeaders().getFirst(RequestIdFilter.HEADER_NAME));
         JsonResult<TimeoutErrorContract> body = response.getBody();
         assertNotNull(body);
-        assertEquals(504, body.getStatus());
+        assertEquals(1, body.getProtocolVersion());
+        assertEquals("request-deadline-01", body.getRequestId());
         assertEquals("E504", body.getCode());
         assertEquals("请求处理超时", body.getMsg());
         assertEquals(new TimeoutErrorContract(
@@ -50,7 +51,8 @@ class RequestDeadlineExceptionHandlerTest {
 
         assertEquals(503, response.getStatusCode().value());
         assertNotNull(body);
-        assertEquals(503, body.getStatus());
+        assertEquals(1, body.getProtocolVersion());
+        assertEquals("request-dependency-01", body.getRequestId());
         assertEquals("E503_DEPENDENCY", body.getCode());
         assertEquals("依赖服务不可用", body.getMsg());
         assertEquals("DEPENDENCY_UNAVAILABLE", body.getData().failure());
@@ -72,7 +74,7 @@ class RequestDeadlineExceptionHandlerTest {
     @Test
     void replacesUntrustedRequestIdWithBoundedGeneratedCorrelation() {
         MockHttpServletRequest request = new MockHttpServletRequest();
-        String malicious = "secret token with spaces and /path";
+        String malicious = "secret\r\nInjected: value";
         request.setAttribute(RequestIdFilter.REQUEST_ID_ATTRIBUTE, malicious);
 
         var response = handler.handle(

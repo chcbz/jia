@@ -37,11 +37,11 @@ class PersonalWorkspaceRuntimeFileControllerTest {
                 .thenReturn(failed);
 
         var response = controller.failure("pwe_task_1", "pwe_run_1",
-                new PersonalWorkspaceRuntimeFileController.FailureRequest("OUTPUT_MISSING"), request, authentication);
+                new cn.jia.core.entity.JsonRequest<>(1, "test-request", new PersonalWorkspaceRuntimeFileController.FailureRequest("OUTPUT_MISSING")), request, authentication);
 
         assertEquals(HttpStatus.OK, response.getStatusCode());
         assertEquals("private, no-store", response.getHeaders().getCacheControl());
-        assertEquals("FAILED", response.getBody().state());
+        assertEquals("FAILED", response.getBody().getData().state());
         verify(service).fail(new PersonalWorkspaceExecutionService.RuntimeScope("0", "client-a", "owner-a",
                 "agent-a", "runtime-a"), "pwe_task_1", "pwe_run_1", "OUTPUT_MISSING");
     }

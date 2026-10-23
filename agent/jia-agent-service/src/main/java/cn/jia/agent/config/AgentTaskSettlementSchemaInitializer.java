@@ -14,6 +14,7 @@ import java.util.Locale;
 import java.util.Map;
 
 /** W06 single-table exact catalog. One tx-bound callback connection also holds the startup lock. */
+@org.springframework.context.annotation.Profile("schema-maintenance")
 public final class AgentTaskSettlementSchemaInitializer implements InitializingBean {
     static final String TABLE = "agent_task_bounty_settlement";
     static final String RESOURCE = "db/agent-task-bounty-settlement-v0.sql";

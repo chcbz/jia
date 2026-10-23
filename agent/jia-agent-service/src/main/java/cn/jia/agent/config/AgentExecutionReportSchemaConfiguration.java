@@ -9,6 +9,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 @Configuration(proxyBeanMethods = false)
 @Profile("!local-test-area")
 public class AgentExecutionReportSchemaConfiguration {
+    @org.springframework.context.annotation.Profile("schema-maintenance")
     @Bean
     public AgentExecutionReportSchemaInitializer agentExecutionReportSchemaInitializer(
             JdbcTemplate jdbcTemplate) {

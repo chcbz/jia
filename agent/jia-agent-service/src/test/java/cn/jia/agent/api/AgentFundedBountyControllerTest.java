@@ -39,7 +39,8 @@ class AgentFundedBountyControllerTest {
         AgentController controller = new AgentController(
                 legacy, mock(AbilityEvaluationService.class), mock(FundedBountyService.class));
 
-        controller.createTask(request, null, jwt("user-1", "Tenant-A", "Client-A"));
+        controller.createTask(new cn.jia.core.entity.JsonRequest<>(1, "test-request", request),
+                null, jwt("user-1", "Tenant-A", "Client-A"));
 
         verify(legacy).createTask(request);
     }
@@ -54,7 +55,7 @@ class AgentFundedBountyControllerTest {
                 legacy, mock(AbilityEvaluationService.class), mock(FundedBountyService.class));
 
         FundedBountyException failure = assertThrows(FundedBountyException.class,
-                () -> controller.createTask(request, null, null));
+                () -> controller.createTask(new cn.jia.core.entity.JsonRequest<>(1, "test-request", request), null, null));
 
         assertEquals("ECONOMY_UNAUTHENTICATED", failure.code());
         verify(legacy, never()).createTask(any());
@@ -70,9 +71,9 @@ class AgentFundedBountyControllerTest {
         AgentController controller = new AgentController(
                 legacy, mock(AbilityEvaluationService.class), funded);
 
-        controller.createTask(request, "018f0000-0000-7000-8000-000000000004",
+        controller.createTask(new cn.jia.core.entity.JsonRequest<>(1, "test-request", request), "018f0000-0000-7000-8000-000000000004",
                 jwt("user-1", "Tenant-A", "Client-A"));
-        controller.createTask(request, "018f0000-0000-7000-8000-000000000004",
+        controller.createTask(new cn.jia.core.entity.JsonRequest<>(1, "test-request", request), "018f0000-0000-7000-8000-000000000004",
                 jwt("user-1", "Tenant-A", "Client-A"));
 
         ArgumentCaptor<FundedBountyActor> actor = ArgumentCaptor.forClass(FundedBountyActor.class);
@@ -93,7 +94,7 @@ class AgentFundedBountyControllerTest {
         request.setExpectedTaskVersion("01");
 
         FundedBountyException failure = assertThrows(FundedBountyException.class,
-                () -> controller.cancelTaskFunding("task-1", request,
+                () -> controller.cancelTaskFunding("task-1", new cn.jia.core.entity.JsonRequest<>(1, "test-request", request),
                         "018f0000-0000-7000-8000-000000000005",
                         jwt("user-1", "Tenant-A", "Client-A")));
 
@@ -112,7 +113,7 @@ class AgentFundedBountyControllerTest {
         AgentController controller = new AgentController(mock(AgentService.class),
                 mock(AbilityEvaluationService.class), funded);
 
-        Object raw = controller.cancelTaskFunding("task-1", request,
+        Object raw = controller.cancelTaskFunding("task-1", new cn.jia.core.entity.JsonRequest<>(1, "test-request", request),
                 "018f0000-0000-7000-8000-000000000005",
                 jwt("user-1", "Tenant-A", "Client-A"));
 

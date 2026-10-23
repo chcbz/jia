@@ -52,9 +52,18 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
     private final ChatConversationService conversations;
     private final ChatClient chatClient;
     private ChatActionDispatchService actions;
+    private ChatDispatchAuthorityService dispatchAuthority;
+    @Autowired public void setDispatchAuthority(ChatDispatchAuthorityService value) { dispatchAuthority=value; }
 
     @Autowired(required = false)
     public void setActions(ChatActionDispatchService actions) { this.actions = actions; }
+
+    private ChatDeliveryRevisionService revisions;
+    @Autowired(required=false) public void setRevisions(ChatDeliveryRevisionService service) {revisions=service;}
+
+    private ChatDeliverySubmissionService submissions;
+    @Autowired(required=false)
+    public void setDeliverySubmissions(ChatDeliverySubmissionService service) {this.submissions=service;}
 
     private final String leaseOwner = ChatDeliberationOutboxService.leaseOwner();
     private final long leaseMillis;
@@ -169,6 +178,26 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
                 catch (ChatActionDispatchService.Rejected stale) { actions.reject(claim); }
                 // Other exceptions retain normal fenced retry; no deadline/attempt count turns them into failure.
             }
+            case ChatDeliveryRevisionService.EVENT -> {
+                if(revisions==null)throw new IllegalStateException("Revision service unavailable");
+                ScheduledFuture<?> heartbeat=ensureScheduler().scheduleAtFixedRate(()->{
+                    try {outbox.renew(claim,System.currentTimeMillis(),leaseMillis);}
+                    catch(RuntimeException failure) {claim.invalidate();}
+                },heartbeatMillis,heartbeatMillis,TimeUnit.MILLISECONDS);
+                try {revisions.consume(claim);} finally {heartbeat.cancel(false);}
+            }
+            case ChatDeliverySubmissionService.EVENT -> {
+                if(submissions==null)throw new IllegalStateException("Delivery submission service is unavailable");
+                // Source/promotion I/O may outlive one lease. Heartbeat renewal never changes a
+                // business deadline and a lost claim cannot ACK another worker's submission.
+                ScheduledFuture<?> heartbeat=ensureScheduler().scheduleAtFixedRate(()->{
+                    try {outbox.renew(claim,System.currentTimeMillis(),leaseMillis);}
+                    catch(RuntimeException failure) {claim.invalidate();}
+                },heartbeatMillis,heartbeatMillis,TimeUnit.MILLISECONDS);
+                try {publishPersistedEvent(submissions.consume(claim));}
+                catch(ChatDeliverySubmissionService.Rejected rejected) {submissions.reject(claim,rejected);}
+                finally {heartbeat.cancel(false);}
+            }
             default -> outbox.dead(claim, "UNSUPPORTED_EVENT_TYPE", System.currentTimeMillis());
         }
     }
@@ -219,12 +248,14 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
         }
         String conversationId = text(p, "conversationId");
         long generation = decimal(p, "conversationGeneration");
+        if (dispatchAuthority == null) throw new IllegalStateException("Dispatch authority unavailable");
+        var binding = dispatchAuthority.outgoing(row);
         Map<String,Object> wire = hostedWire(row, p);
         AtomicReference<AgentWebSocketHandler.CapabilityDispatchResult> dispatch = new AtomicReference<>();
         boolean live = broker.runIfLive(conversationId, generation,
                 () -> conversations.isLiveGeneration(row.getOwnerJiacn(), row.getClientId(), conversationId, generation),
                 () -> dispatch.set(sockets.sendNegotiatedChatMessageToAgent(
-                        row.getTenantId(), row.getOwnerJiacn(), row.getClientId(), agentId, route, wire)));
+                        row.getTenantId(), binding.executorOwner(), row.getClientId(), agentId, route, wire)));
         if (!live) {
             outbox.dead(claim, "CONVERSATION_DELETED_OR_GENERATION_STALE", System.currentTimeMillis());
             return;
@@ -418,7 +449,11 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
         Map<String,Object> wire=new HashMap<>(); wire.put("schemaVersion",AgentProtocolConstants.VERSION_1);
         wire.put("messageType",AgentProtocolConstants.TYPE_CHAT_STOP); wire.put("requestId",text(p,"requestId"));
         wire.put("turnId",row.getTurnId()); wire.put("dispatchId",row.getDispatchId()); wire.put("targetAgentId",agentId);
-        boolean sent=sockets.sendDirectMessageToAgent(row.getTenantId(),row.getOwnerJiacn(),row.getClientId(),agentId,wire);
+        if (dispatchAuthority == null) throw new IllegalStateException("Dispatch authority unavailable");
+        var binding=dispatchAuthority.outgoing(row);
+        for (String key : List.of("tenantId", "clientId", "ownerJiacn", "conversationId", "conversationGeneration"))
+            wire.put(key,p.get(key));
+        boolean sent=sockets.sendDirectMessageToAgent(row.getTenantId(),binding.executorOwner(),row.getClientId(),agentId,wire);
         if(sent) outbox.sent(claim,System.currentTimeMillis()); else outbox.retry(claim,"AGENT_OFFLINE",System.currentTimeMillis());
     }
 

@@ -1,5 +1,7 @@
 package cn.jia.agent.api;
 
+import cn.jia.core.entity.JsonRequest;
+
 import cn.jia.agent.security.AgentRuntimeAuthentication;
 import cn.jia.agent.security.AgentRuntimeAuthenticationService;
 import cn.jia.agent.service.PersonalWorkspaceExecutionService;
@@ -39,29 +41,30 @@ public class PersonalWorkspaceRuntimeFileController {
     }
 
     @GetMapping(value = "/workspace-executions/commands", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<RuntimeQueueView> queuedCommands(HttpServletRequest request, Authentication authentication) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<RuntimeQueueView>> queuedCommands(HttpServletRequest request, Authentication authentication) {
         requireNoQuery(request);
-        var queue=new RuntimeQueueView(service.runtimeQueuedCommands(scope(authentication), 16));
-        return json(runtimeAuthentication.withNativeFence(authentication,()->queue));
+        var queue=new RuntimeQueueView(service.runtimeQueuedCommands(scope(authentication), 16).stream().map(WorkspaceExecutionWire::from).toList());
+        return cn.jia.core.config.ApiJsonResponses.success(json(runtimeAuthentication.withNativeFence(authentication,()->queue)));
     }
 
     @PostMapping(value = "/{taskId}/runs/{runId}/start", consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<PersonalWorkspaceExecutionService.RuntimeStartView> start(@PathVariable String taskId,
-            @PathVariable String runId, @RequestBody StartRequest request, HttpServletRequest servletRequest,
+    public ResponseEntity<cn.jia.core.entity.JsonResult<PersonalWorkspaceExecutionService.RuntimeStartView>> start(@PathVariable String taskId,
+            @PathVariable String runId, @RequestBody JsonRequest<StartRequest> protocolRequest, HttpServletRequest servletRequest,
             Authentication authentication) {
+        StartRequest request = protocolRequest == null ? null : protocolRequest.data();
         requireNoQuery(servletRequest);
         if (request == null || request.commandId() == null || request.messageId() == null) throw new RequestFailure();
-        return json(runtimeAuthentication.withNativeFence(authentication, () ->
-                service.start(scope(authentication), taskId, runId, request.commandId(), request.messageId())));
+        return cn.jia.core.config.ApiJsonResponses.success(json(runtimeAuthentication.withNativeFence(authentication, () ->
+                service.start(scope(authentication), taskId, runId, request.commandId(), request.messageId()))));
     }
 
     @GetMapping(value = "/{taskId}/runs/{runId}/inputs", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<List<PersonalWorkspaceExecutionService.RuntimeInput>> inputs(@PathVariable String taskId,
+    public ResponseEntity<cn.jia.core.entity.JsonResult<List<WorkspaceExecutionWire.Input>>> inputs(@PathVariable String taskId,
             @PathVariable String runId, HttpServletRequest request, Authentication authentication) {
         requireNoQuery(request);
-        var inputs=service.runtimeInputs(scope(authentication), taskId, runId);
-        return json(runtimeAuthentication.withNativeFence(authentication,()->inputs));
+        var inputs=service.runtimeInputs(scope(authentication), taskId, runId).stream().map(WorkspaceExecutionWire::from).toList();
+        return cn.jia.core.config.ApiJsonResponses.success(json(runtimeAuthentication.withNativeFence(authentication,()->inputs)));
     }
     @GetMapping("/{taskId}/runs/{runId}/inputs/{inputRef}/content")
     public ResponseEntity<byte[]> content(@PathVariable String taskId, @PathVariable String runId,
@@ -76,13 +79,13 @@ public class PersonalWorkspaceRuntimeFileController {
     }
     @PostMapping(value = "/{taskId}/runs/{runId}/outputs/{outputId}/content", consumes = MediaType.MULTIPART_FORM_DATA_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<PersonalWorkspaceExecutionService.StagedOutput> stage(@PathVariable String taskId,
+    public ResponseEntity<cn.jia.core.entity.JsonResult<NativeOutputWire.StagedOutputResponse>> stage(@PathVariable String taskId,
             @PathVariable String runId, @PathVariable String outputId, @RequestParam("file") MultipartFile file,
             @RequestParam("taskId") String declaredTaskId, @RequestParam("runId") String declaredRunId,
             @RequestParam("outputId") String declaredOutputId, @RequestParam("sha256") String declaredSha256,
-            @RequestParam("length") String declaredLength, HttpServletRequest request,
+            @RequestParam("byteLength") String declaredLength, HttpServletRequest request,
             Authentication authentication) throws IOException {
-        requireNoQueryString(request); if(file==null || !taskId.equals(declaredTaskId) || !runId.equals(declaredRunId)
+        requireNoQueryString(request); if(!request.getParameterMap().keySet().equals(java.util.Set.of("taskId","runId","outputId","sha256","byteLength")) || file==null || !taskId.equals(declaredTaskId) || !runId.equals(declaredRunId)
                 || !outputId.equals(declaredOutputId) || !declaredSha256.matches("[0-9a-f]{64}")
                 || !declaredLength.matches("0|[1-9][0-9]*")) throw new RequestFailure();
         byte[] bytes=file.getBytes();
@@ -90,34 +93,36 @@ public class PersonalWorkspaceRuntimeFileController {
             throw new RequestFailure();
         PersonalWorkspaceExecutionService.StagedOutput staged = service.stageOutput(scope(authentication),taskId,runId,outputId,file.getOriginalFilename(),file.getContentType(),bytes);
         if (!declaredSha256.equals(staged.sha256()) || !declaredLength.equals(Long.toString(staged.byteLength()))) throw new RequestFailure();
-        return ResponseEntity.status(HttpStatus.CREATED).header(HttpHeaders.CACHE_CONTROL,CACHE_CONTROL).body(staged);
+        return cn.jia.core.config.ApiJsonResponses.success(ResponseEntity.status(HttpStatus.CREATED).header(HttpHeaders.CACHE_CONTROL,CACHE_CONTROL).body(staged), NativeOutputWire.StagedOutputResponse::from);
     }
     @PostMapping(value = "/{taskId}/runs/{runId}/output-commits/{manifestId}", consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<PersonalWorkspaceExecutionService.CommitView> commit(@PathVariable String taskId,
-            @PathVariable String runId, @PathVariable String manifestId, @RequestBody CommitRequest request,
+    public ResponseEntity<cn.jia.core.entity.JsonResult<NativeOutputWire.CommitResponse>> commit(@PathVariable String taskId,
+            @PathVariable String runId, @PathVariable String manifestId, @RequestBody JsonRequest<CommitRequest> protocolRequest,
             HttpServletRequest servletRequest, Authentication authentication) {
+        CommitRequest request = protocolRequest == null ? null : protocolRequest.data();
         requireNoQuery(servletRequest); if(request==null||request.outputs()==null||request.outputs().size()!=1)throw new RequestFailure();
-        CommitOutput output=request.outputs().getFirst(); if(output==null||output.outputId()==null||output.sha256()==null||output.length()==null||!output.sha256().matches("[0-9a-f]{64}")||output.length()<0)throw new RequestFailure();
-        return json(service.commitOutputs(scope(authentication),taskId,runId,manifestId,List.of(
-                new PersonalWorkspaceExecutionService.OutputDeclaration(output.outputId(), output.sha256(), output.length()))));
+        CommitOutput output=request.outputs().getFirst(); if(output==null||output.outputId()==null||output.sha256()==null||output.byteLength()==null||!output.sha256().matches("[0-9a-f]{64}"))throw new RequestFailure();
+        return cn.jia.core.config.ApiJsonResponses.success(json(service.commitOutputs(scope(authentication),taskId,runId,manifestId,List.of(
+                new PersonalWorkspaceExecutionService.OutputDeclaration(output.outputId(), output.sha256(), NativeOutputWire.byteLength(output.byteLength()))))), NativeOutputWire.CommitResponse::from);
     }
     @PostMapping(value = "/{taskId}/runs/{runId}/failure", consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<PersonalWorkspaceExecutionService.ExecutionView> failure(@PathVariable String taskId,
-            @PathVariable String runId, @RequestBody FailureRequest request, HttpServletRequest servletRequest,
+    public ResponseEntity<cn.jia.core.entity.JsonResult<WorkspaceExecutionWire.Execution>> failure(@PathVariable String taskId,
+            @PathVariable String runId, @RequestBody JsonRequest<FailureRequest> protocolRequest, HttpServletRequest servletRequest,
             Authentication authentication) {
+        FailureRequest request = protocolRequest == null ? null : protocolRequest.data();
         requireNoQuery(servletRequest);
         if (request == null || request.code() == null) throw new RequestFailure();
-        return json(runtimeAuthentication.withNativeFence(authentication, () ->
-                service.fail(scope(authentication), taskId, runId, request.code())));
+        return cn.jia.core.config.ApiJsonResponses.success(json(runtimeAuthentication.withNativeFence(authentication, () ->
+                service.fail(scope(authentication), taskId, runId, request.code()))), WorkspaceExecutionWire::from);
     }
     @ExceptionHandler(PersonalWorkspaceExecutionService.Failure.class)
-    public ResponseEntity<ErrorBody> failure(PersonalWorkspaceExecutionService.Failure ignored) { return error(HttpStatus.NOT_FOUND,"RUNTIME_FILE_NOT_FOUND","Runtime file access is unavailable"); }
-    @ExceptionHandler({RequestFailure.class,IllegalArgumentException.class,IOException.class})
-    public ResponseEntity<ErrorBody> malformed(Exception ignored) { return error(HttpStatus.BAD_REQUEST,"BAD_REQUEST","Invalid runtime file request"); }
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> failure(PersonalWorkspaceExecutionService.Failure ignored) { return error(HttpStatus.NOT_FOUND,"RUNTIME_FILE_NOT_FOUND","Runtime file access is unavailable"); }
+    @ExceptionHandler({RequestFailure.class,IllegalArgumentException.class,IOException.class,org.springframework.http.converter.HttpMessageNotReadableException.class,org.springframework.web.bind.MissingServletRequestParameterException.class})
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> malformed(Exception ignored) { return error(HttpStatus.BAD_REQUEST,"BAD_REQUEST","Invalid runtime file request"); }
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<ErrorBody> unexpected(Exception ignored) { return error(HttpStatus.SERVICE_UNAVAILABLE,"RUNTIME_FILE_UNAVAILABLE","Runtime file access is temporarily unavailable"); }
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> unexpected(Exception ignored) { return error(HttpStatus.SERVICE_UNAVAILABLE,"RUNTIME_FILE_UNAVAILABLE","Runtime file access is temporarily unavailable"); }
 
     private static PersonalWorkspaceExecutionService.RuntimeScope scope(Authentication authentication) {
         if(!(authentication instanceof AgentRuntimeAuthentication runtime)||!runtime.isAuthenticated())throw new RequestFailure();
@@ -132,10 +137,10 @@ public class PersonalWorkspaceRuntimeFileController {
     }
     private static String safe(String value){return value==null?"output.bin":value.replaceAll("[\\\\/:*?\"<>|\\p{Cntrl}]","_").replaceAll("^\\.+","").trim();}
     private static <T> ResponseEntity<T> json(T body){return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL,CACHE_CONTROL).contentType(MediaType.APPLICATION_JSON).body(body);}
-    private static ResponseEntity<ErrorBody> error(HttpStatus status,String code,String message){return ResponseEntity.status(status).header(HttpHeaders.CACHE_CONTROL,CACHE_CONTROL).contentType(new MediaType(MediaType.APPLICATION_JSON,StandardCharsets.UTF_8)).body(new ErrorBody(code,message));}
-    public record RuntimeQueueView(List<PersonalWorkspaceExecutionService.RuntimeQueuedCommand> items) { }
+    private static ResponseEntity<cn.jia.core.entity.JsonResult<Void>> error(HttpStatus status,String code,String message){return ResponseEntity.status(status).header(HttpHeaders.CACHE_CONTROL,CACHE_CONTROL).contentType(new MediaType(MediaType.APPLICATION_JSON,StandardCharsets.UTF_8)).body(cn.jia.core.entity.JsonResult.<Void>failure(code,message));}
+    public record RuntimeQueueView(List<cn.jia.core.entity.ProtocolMessage<java.util.Map<String,Object>>> items) { }
     public record CommitRequest(List<CommitOutput> outputs) { }
-    public record CommitOutput(String outputId,String sha256,Long length) { }
+    public record CommitOutput(String outputId,String sha256,String byteLength) { }
     public record StartRequest(String commandId, String messageId) { }
     public record FailureRequest(String code) { }
     public record ErrorBody(String code,String message) { }

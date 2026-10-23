@@ -83,8 +83,12 @@ public class ChatBountyMediaController {
 
     public record AssetRef(String assetId, String revision) { }
     public record OutputReplacement(String requestId, String stepId, String outputId, String sha256) { }
-    public record OutputItem(String outputId, String contentMimeType, String sha256, long byteLength,
+    public record OutputItem(String outputId, String contentMimeType, String sha256, String byteLength,
             String previewUrl, String downloadUrl, AssetRef assetRef, OutputReplacement replaces) {
+        public OutputItem(String outputId, String contentMimeType, String sha256, long byteLength,
+                String previewUrl, String downloadUrl, AssetRef assetRef, OutputReplacement replaces) {
+            this(outputId,contentMimeType,sha256,Long.toString(byteLength),previewUrl,downloadUrl,assetRef,replaces);
+        }
         public OutputItem(String outputId, String contentMimeType, String sha256, long byteLength,
                 String previewUrl, String downloadUrl, AssetRef assetRef) {
             this(outputId,contentMimeType,sha256,byteLength,previewUrl,downloadUrl,assetRef,null);
@@ -106,7 +110,7 @@ public class ChatBountyMediaController {
         var allowed = authorize(requestId, stepId, authentication);
         var items = executions.listConversationOutputs(allowed.scope(), allowed.step().taskId(),
                 allowed.execution().runId());
-        if (items == null || items.isEmpty() || items.size() > 128) throw unavailable();
+        if (items == null || items.size() > 128) throw unavailable();
         var body = new java.util.ArrayList<OutputItem>(items.size());
         for (var item : items) {
             if (item == null || !allowed.execution().executionId().equals(item.executionId())
@@ -272,7 +276,7 @@ public class ChatBountyMediaController {
                 || !request.conversationId().equals(execution.conversationId())
                 || !step.targetAgentId().equals(execution.targetAgentId())
                 || !"CONVERSATION".equals(execution.executionMode())
-                || !"OUTPUT_COMMITTED".equals(execution.state()) || !safeId(execution.runId()))
+                || !java.util.Set.of("OUTPUT_COMMITTED","RESULT_COMMITTED").contains(execution.state()) || !safeId(execution.runId()))
             throw unavailable();
         return new Authorized(scope, request, step, execution);
     }

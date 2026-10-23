@@ -1,6 +1,11 @@
 package cn.jia.chat.job;
 
 import cn.jia.chat.service.LongTermMemoryService;
+import cn.jia.core.lock.IDistributedLock;
+import cn.jia.core.lock.ILock;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.beans.factory.annotation.Qualifier;
+import java.util.concurrent.Executor;
 import cn.jia.task.job.JobContext;
 import cn.jia.task.job.JobHandler;
 import lombok.extern.slf4j.Slf4j;
@@ -42,6 +47,27 @@ public class MemoryJobHandler implements JobHandler {
     @Lazy
     private LongTermMemoryService longTermMemoryService;
 
+    @Autowired
+    private IDistributedLock distributedLock;
+
+    @Autowired
+    @Qualifier("taskExecutor")
+    private Executor taskExecutor;
+
+    @Scheduled(cron = "${chat.memory.job.sync-cron:0 0 * * * ?}")
+    public void scheduledSync() {
+        // Do not hold the shared scheduler thread while providers and Elasticsearch are working.
+        JobContext context = JobContext.builder().jobId("memory-sync-" + java.util.UUID.randomUUID())
+                .jobName(JOB_NAME).group(GROUP).triggerTime(System.currentTimeMillis()).build();
+        taskExecutor.execute(() -> {
+            try {
+                execute(context);
+            } catch (Exception failure) {
+                log.error("Scheduled memory sync failed; pending snapshots retained", failure);
+            }
+        });
+    }
+
     @Override
     public String getName() {
         return JOB_NAME;
@@ -64,7 +90,7 @@ public class MemoryJobHandler implements JobHandler {
 
     @Override
     public boolean isParallel() {
-        return true;
+        return false;
     }
 
     @Override
@@ -72,7 +98,11 @@ public class MemoryJobHandler implements JobHandler {
         log.info("Starting memory sync job, jobId: {}", context.getJobId());
         long startTime = System.currentTimeMillis();
 
-        try {
+        // Shared by the scheduled and existing manual handler entry points; watchdog lease.
+        try (ILock lock = distributedLock.tryLock("chat:memory:sync-job", 0)) {
+            if (lock == null) {
+                return "SKIPPED: memory sync already running";
+            }
             // 获取当前小时
             java.time.LocalDateTime now = java.time.LocalDateTime.now();
             int hour = now.getHour();
@@ -106,7 +136,7 @@ public class MemoryJobHandler implements JobHandler {
             return result;
         } catch (Exception e) {
             log.error("Memory sync job failed", e);
-            return "FAILED: " + e.getMessage();
+            throw e;
         }
     }
 }

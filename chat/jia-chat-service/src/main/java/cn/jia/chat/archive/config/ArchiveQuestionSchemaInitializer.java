@@ -19,6 +19,7 @@ import java.util.Set;
 
 @ConditionalOnProperty(prefix = "archive.question", name = "enabled", havingValue = "true")
 @Component
+@org.springframework.context.annotation.Profile("schema-maintenance")
 public class ArchiveQuestionSchemaInitializer {
     private static final String SCHEMA_RESOURCE = "db/archive-question-schema.sql";
     private final JdbcTemplate jdbc;

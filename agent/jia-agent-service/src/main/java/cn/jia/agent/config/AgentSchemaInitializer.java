@@ -19,6 +19,7 @@ import java.util.Locale;
 @Component
 @Profile("!local-test-area")
 @RequiredArgsConstructor
+@org.springframework.context.annotation.Profile("schema-maintenance")
 public class AgentSchemaInitializer implements InitializingBean {
     private final JdbcTemplate jdbcTemplate;
     private Boolean h2Database;

@@ -23,6 +23,15 @@ class EconomySkillMarketplaceConfigurationTest {
             .withUserConfiguration(PropertiesOnly.class);
 
     @Test
+    void enabledSchemaFlagAloneDoesNotActivateMaintenanceOrRequireJdbc() {
+        CONFIGURATION_RUNNER.withPropertyValues("economy.skill.schema.enabled=true").run(context -> {
+            assertNull(context.getStartupFailure());
+            assertTrue(context.getBeansOfType(EconomySkillSchemaInitializer.class).isEmpty());
+            assertTrue(context.getBeansOfType(JdbcTemplate.class).isEmpty());
+        });
+    }
+
+    @Test
     void schemaGateDefaultsFalseAndNeedsNoJdbcBeans() {
         CONFIGURATION_RUNNER.run(context -> {
             assertNull(context.getStartupFailure());
@@ -50,7 +59,7 @@ class EconomySkillMarketplaceConfigurationTest {
 
     @Test
     void enabledSchemaWithoutJdbcFailsClosedAtWiring() {
-        CONFIGURATION_RUNNER.withPropertyValues("economy.skill.schema.enabled=true").run(context -> {
+        CONFIGURATION_RUNNER.withPropertyValues("economy.skill.schema.enabled=true", "spring.profiles.active=schema-maintenance").run(context -> {
             Throwable failure = context.getStartupFailure();
             assertNotNull(failure);
             assertTrue(messages(failure).contains("JdbcTemplate"), messages(failure));
@@ -61,7 +70,7 @@ class EconomySkillMarketplaceConfigurationTest {
     void enabledSchemaRejectsH2RatherThanSilentlyApplyingMysqlDdl() {
         CONFIGURATION_RUNNER
                 .withUserConfiguration(H2Jdbc.class)
-                .withPropertyValues("economy.skill.schema.enabled=true")
+                .withPropertyValues("economy.skill.schema.enabled=true", "spring.profiles.active=schema-maintenance")
                 .run(context -> {
                     Throwable failure = context.getStartupFailure();
                     assertNotNull(failure);

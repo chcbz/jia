@@ -21,7 +21,7 @@ public final class SkillPackages {
     public SkillPackages() { this(Path.of("/home/isp/state/cyf-skill-packages")); }
     public SkillPackages(Path root) { store = new SkillPackageStore(root); }
     public PlatformSkillPackage prepare(SkillProductVersionEntity approved) {
-        require(!TransactionSynchronizationManager.isActualTransactionActive(),503,"SKILL_PACKAGE_PREPARE_IN_TRANSACTION");
+        boolean active=TransactionSynchronizationManager.isActualTransactionActive();
         require(approved!=null && "APPROVED".equals(approved.getReviewStatus())
                 && approved.getPackageSha256()!=null && approved.getPackageSha256().length==32
                 && approved.getPackageSize()!=null && approved.getPackageSize()>0
@@ -35,7 +35,11 @@ public final class SkillPackages {
                 && approved.getDeploymentRestriction()!=null
                 && Set.of("NONE","ADMIN_ONLY").contains(approved.getDeploymentRestriction()),503,"SKILL_PACKAGE_UNAVAILABLE");
         String hex=HexFormat.of().formatHex(approved.getPackageSha256());
-        byte[] bytes=bytesByDigest.computeIfAbsent(hex,key->{
+        byte[] bytes;
+        if(active) {
+            bytes=bytesByDigest.get(hex);
+            require(bytes!=null && manifestsByDigest.containsKey(hex),503,"SKILL_PACKAGE_PREPARE_IN_TRANSACTION");
+        } else bytes=bytesByDigest.computeIfAbsent(hex,key->{
             var bundled=seed.products().stream().filter(p->Arrays.equals(p.packageSha256(),approved.getPackageSha256())).findFirst();
             return bundled.isPresent()?seed.requirePackage(bundled.get().productVersionId()).bytes()
                     :store.read(approved.getPackageSha256(),approved.getPackageSize());
@@ -49,15 +53,24 @@ public final class SkillPackages {
         return prepared;
     }
     public SkillManifestCodec.Manifest manifest(PlatformSkillPackage prepared) {
-        require(!TransactionSynchronizationManager.isActualTransactionActive(),503,"SKILL_PACKAGE_PREPARE_IN_TRANSACTION");
+        boolean active=TransactionSynchronizationManager.isActualTransactionActive();
         String digest=HexFormat.of().formatHex(prepared.product().packageSha256());
-        var descriptor=manifestsByDigest.computeIfAbsent(digest,key->Optional.ofNullable(SkillPackageDescriptor.read(prepared,manifestCodec))).orElse(null);
+        require(!active || manifestsByDigest.containsKey(digest),503,"SKILL_PACKAGE_PREPARE_IN_TRANSACTION");
+        var descriptor=(active?manifestsByDigest.get(digest):manifestsByDigest.computeIfAbsent(digest,key->Optional.ofNullable(SkillPackageDescriptor.read(prepared,manifestCodec)))).orElse(null);
         if(descriptor!=null) {
             var document=descriptor.document();
             require(prepared.product().skillKey().equals(document.path("skillKey").asText())
                     && prepared.product().skillVersion().equals(document.path("skillVersion").asText()),400,"SKILL_IDENTITY_MISMATCH");
         }
         return descriptor;
+    }
+    /** Trusted maintenance: validate archive before immutable promotion. No DB publication. */
+    public String publish(PlatformSkillPackage prepared) {
+        require(!TransactionSynchronizationManager.isActualTransactionActive(),503,"SKILL_PACKAGE_PREPARE_IN_TRANSACTION");
+        require(prepared!=null && prepared.bytes().length==prepared.product().packageSize()
+                && Arrays.equals(SkillPackageStore.sha256(prepared.bytes()),prepared.product().packageSha256()),400,"SKILL_PACKAGE_INVALID");
+        manifest(prepared);
+        return store.publish(prepared.bytes());
     }
     public static void revalidate(SkillProductVersionEntity approved,PlatformSkillPackage prepared) {
         require(approved!=null && prepared!=null && "APPROVED".equals(approved.getReviewStatus()),503,"SKILL_PACKAGE_UNAVAILABLE");

@@ -63,7 +63,7 @@ public class AgentTaskDeliverableController {
     }
 
     @GetMapping(value = "/{taskId}/deliverables", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<DeliverableListResponse> list(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<DeliverableListResponse>> list(
             @PathVariable String taskId,
             HttpServletRequest request,
             Authentication authentication) {
@@ -75,8 +75,8 @@ public class AgentTaskDeliverableController {
         AgentTaskArtifactQueryDTO serviceQuery = new AgentTaskArtifactQueryDTO();
         serviceQuery.setWorkItemId(query.workItemId());
         serviceQuery.setLimit(query.limit());
-        return ok(new DeliverableListResponse(
-                listOwnerDeliverables(scope, taskId, query, serviceQuery), null));
+        return cn.jia.core.config.ApiJsonResponses.success(ok(new DeliverableListResponse(
+                listOwnerDeliverables(scope, taskId, query, serviceQuery), null)));
     }
 
     @GetMapping(value = "/{taskId}/deliverables/{artifactId}/versions/{artifactVersion}/content")
@@ -102,7 +102,7 @@ public class AgentTaskDeliverableController {
 
     @GetMapping(value = "/{taskId}/deliverables/{artifactId}/versions/{artifactVersion}/preview",
             produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<PreviewResponse> preview(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<PreviewResponse>> preview(
             @PathVariable String taskId,
             @PathVariable String artifactId,
             @PathVariable String artifactVersion,
@@ -117,11 +117,11 @@ public class AgentTaskDeliverableController {
                 ? rendered.parts() : rendered.legacyParts();
         String representation = previewTarget.partsView()
                 ? rendered.representation() : rendered.legacyRepresentation();
-        return ok(new PreviewResponse(rendered.state(), representation,
+        return cn.jia.core.config.ApiJsonResponses.success(ok(new PreviewResponse(rendered.state(), representation,
                 visibleParts.stream()
                         .map(part -> new PreviewPartResponse(part.partId(), part.contentMimeType()))
                         .toList(),
-                rendered.partial(), rendered.reason()));
+                rendered.partial(), rendered.reason())));
     }
 
     @GetMapping(value = "/{taskId}/deliverables/{artifactId}/versions/{artifactVersion}"
@@ -159,31 +159,31 @@ public class AgentTaskDeliverableController {
     }
 
     @ExceptionHandler(AuthenticationFailure.class)
-    public ResponseEntity<ErrorBody> authentication(AuthenticationFailure failure) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> authentication(AuthenticationFailure failure) {
         return error(failure.forbidden ? HttpStatus.FORBIDDEN : HttpStatus.UNAUTHORIZED,
                 failure.forbidden ? "DELIVERABLE_FORBIDDEN" : "DELIVERABLE_UNAUTHENTICATED",
                 "Deliverable access is unavailable");
     }
 
     @ExceptionHandler(RequestFailure.class)
-    public ResponseEntity<ErrorBody> badRequest(RequestFailure ignored) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> badRequest(RequestFailure ignored) {
         return error(HttpStatus.BAD_REQUEST, "BAD_REQUEST", "Invalid deliverable request");
     }
 
     @ExceptionHandler(PreviewPartNotFound.class)
-    public ResponseEntity<ErrorBody> previewPartNotFound(PreviewPartNotFound ignored) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> previewPartNotFound(PreviewPartNotFound ignored) {
         return error(HttpStatus.NOT_FOUND, "DELIVERABLE_PREVIEW_PART_NOT_FOUND",
                 "Deliverable preview content is unavailable");
     }
 
     @ExceptionHandler(PreviewPartUnavailable.class)
-    public ResponseEntity<ErrorBody> previewPartUnavailable(PreviewPartUnavailable ignored) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> previewPartUnavailable(PreviewPartUnavailable ignored) {
         return error(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "DELIVERABLE_PREVIEW_UNSUPPORTED",
                 "Deliverable preview content is unavailable");
     }
 
     @ExceptionHandler(AgentTaskCollaborationException.class)
-    public ResponseEntity<ErrorBody> collaborationFailure(AgentTaskCollaborationException failure) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> collaborationFailure(AgentTaskCollaborationException failure) {
         return switch (failure.getReason()) {
             case NOT_FOUND, FORBIDDEN -> error(HttpStatus.NOT_FOUND,
                     "DELIVERABLE_NOT_FOUND", "Deliverable is unavailable");
@@ -194,7 +194,7 @@ public class AgentTaskDeliverableController {
     }
 
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<ErrorBody> unexpected(Exception ignored, HttpServletRequest request) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> unexpected(Exception ignored, HttpServletRequest request) {
         log.error("Task deliverable HTTP request failed: uri={}", request.getRequestURI());
         return unavailable();
     }
@@ -485,17 +485,17 @@ public class AgentTaskDeliverableController {
                 .body(body);
     }
 
-    private static ResponseEntity<ErrorBody> unavailable() {
+    private static ResponseEntity<cn.jia.core.entity.JsonResult<Void>> unavailable() {
         return error(HttpStatus.SERVICE_UNAVAILABLE,
                 "DELIVERABLE_UNAVAILABLE", "Deliverable service is temporarily unavailable");
     }
 
-    private static ResponseEntity<ErrorBody> error(HttpStatus status, String code, String message) {
+    private static ResponseEntity<cn.jia.core.entity.JsonResult<Void>> error(HttpStatus status, String code, String message) {
         return ResponseEntity.status(status)
                 .header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
                 .header("X-Content-Type-Options", NOSNIFF)
                 .contentType(new MediaType(MediaType.APPLICATION_JSON, StandardCharsets.UTF_8))
-                .body(new ErrorBody(code, message));
+                .body(cn.jia.core.entity.JsonResult.<Void>failure(code, message));
     }
 
     private record Scope(String tenantId, String clientId, String ownerJiacn) {

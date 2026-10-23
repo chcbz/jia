@@ -13,7 +13,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class ArchiveManifestLoaderTest {
     @Test
     void packagedFixtureIsByteExactCompleteAndMatchesGoldenValidators() {
-        ArchiveManifestBundle bundle = new ArchiveManifestLoader().load();
+        ArchiveManifestBundle bundle = new ArchiveFixtureLoader().load();
         ArchiveManifest manifest = bundle.manifest();
 
         assertEquals("fe2c1cfd551e29ebc70665b121bf3480d1941728d8fa0cd0fa3f68d584335210", bundle.manifestFileSha256());
@@ -43,11 +43,11 @@ class ArchiveManifestLoaderTest {
 
     @Test
     void alteredPackagedBytesAndInternalDigestAreRejected() {
-        byte[] valid = ArchiveManifestLoader.readRequiredResource(ArchiveManifestLoader.MANIFEST_RESOURCE);
+        byte[] valid = ArchiveFixtureLoader.readRequiredResource(ArchiveFixtureLoader.MANIFEST_RESOURCE);
         byte[] altered = valid.clone();
         altered[altered.length - 2] ^= 1;
         assertThrows(ArchiveContentException.class,
-                () -> new ArchiveManifestLoader().parseAndValidate(altered,
-                        ArchiveManifestLoader.readRequiredResource(ArchiveManifestLoader.GOLDEN_SUMMARY_RESOURCE)));
+                () -> new ArchiveFixtureLoader().parseAndValidate(altered,
+                        ArchiveFixtureLoader.readRequiredResource(ArchiveFixtureLoader.GOLDEN_SUMMARY_RESOURCE)));
     }
 }

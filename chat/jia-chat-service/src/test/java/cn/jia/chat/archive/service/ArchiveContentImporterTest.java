@@ -1,7 +1,7 @@
 package cn.jia.chat.archive.service;
 
 import cn.jia.chat.archive.content.ArchiveManifest;
-import cn.jia.chat.archive.content.ArchiveManifestLoader;
+import cn.jia.chat.archive.content.ArchiveFixtureLoader;
 import cn.jia.chat.archive.model.ArchiveBlockRecord;
 import cn.jia.chat.archive.model.ArchiveEditionRecord;
 import cn.jia.chat.archive.model.ArchiveParagraphRecord;
@@ -28,15 +28,30 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ArchiveContentImporterTest {
     @Test
+    void genericPackagesImportIdempotentlyWithoutFixedBookMetadata() throws Exception {
+        for (String name : List.of("book-a", "book-b")) {
+            var loaded = cn.jia.chat.archive.content.ArchiveGenericManifestTest.fixture(name);
+            var store = new MemoryStore();
+            var importer = new ArchiveContentImporter(store, store);
+            importer.importAndActivate(loaded.manifest(), loaded.manifestFileSha256());
+            int inserted = store.successfulInserts;
+            importer.importAndActivate(loaded.manifest(), loaded.manifestFileSha256());
+            assertEquals(inserted, store.successfulInserts);
+            assertEquals(loaded.manifest().editionId(), store.work.activeEditionId());
+            assertEquals(loaded.manifest().chapterCount(), store.listPublishedBooks().getFirst().chapterCount());
+        }
+    }
+
+    @Test
     void restartIsIdempotentAndMismatchNeverOverwritesPersistedText() {
-        ArchiveManifest manifest = new ArchiveManifestLoader().load().manifest();
+        ArchiveManifest manifest = new ArchiveFixtureLoader().load().manifest();
         MemoryStore store = new MemoryStore();
         ArchiveContentImporter importer = new ArchiveContentImporter(store, store, 100);
 
-        importer.importAndActivate(manifest, ArchiveManifestLoader.EXPECTED_MANIFEST_FILE_SHA256);
+        importer.importAndActivate(manifest, ArchiveFixtureLoader.EXPECTED_MANIFEST_FILE_SHA256);
         int insertsAfterFirstRun = store.successfulInserts;
         store.resetDiagnostics();
-        importer.importAndActivate(manifest, ArchiveManifestLoader.EXPECTED_MANIFEST_FILE_SHA256);
+        importer.importAndActivate(manifest, ArchiveFixtureLoader.EXPECTED_MANIFEST_FILE_SHA256);
 
         assertEquals(insertsAfterFirstRun, store.successfulInserts);
         assertEquals(0, store.insertAttempts,
@@ -56,16 +71,16 @@ class ArchiveContentImporterTest {
         store.paragraphs.put(paragraphId, tampered);
 
         assertThrows(ArchiveImportException.class,
-                () -> importer.importAndActivate(manifest, ArchiveManifestLoader.EXPECTED_MANIFEST_FILE_SHA256));
+                () -> importer.importAndActivate(manifest, ArchiveFixtureLoader.EXPECTED_MANIFEST_FILE_SHA256));
         assertEquals("tampered", store.paragraphs.get(paragraphId).text());
     }
 
     @Test
     void concurrentReadyMismatchFuturesTerminatePropagateAndReleaseTransactions() throws Exception {
-        ArchiveManifest manifest = new ArchiveManifestLoader().load().manifest();
+        ArchiveManifest manifest = new ArchiveFixtureLoader().load().manifest();
         MemoryStore store = new MemoryStore();
         ArchiveContentImporter importer = new ArchiveContentImporter(store, store, 100);
-        importer.importAndActivate(manifest, ArchiveManifestLoader.EXPECTED_MANIFEST_FILE_SHA256);
+        importer.importAndActivate(manifest, ArchiveFixtureLoader.EXPECTED_MANIFEST_FILE_SHA256);
 
         String paragraphId = manifest.chapters().getFirst().paragraphs().getFirst().paragraphId();
         ArchiveParagraphRecord original = store.paragraphs.get(paragraphId);
@@ -80,7 +95,7 @@ class ArchiveContentImporterTest {
         for (int index = 0; index < 2; index++) {
             futures.add(pool.submit(() -> {
                 start.await();
-                importer.importAndActivate(manifest, ArchiveManifestLoader.EXPECTED_MANIFEST_FILE_SHA256);
+                importer.importAndActivate(manifest, ArchiveFixtureLoader.EXPECTED_MANIFEST_FILE_SHA256);
                 return null;
             }));
         }
@@ -102,13 +117,13 @@ class ArchiveContentImporterTest {
 
     @Test
     void partialBatchRollbackLeavesPointerHiddenAndRestartConverges() {
-        ArchiveManifest manifest = new ArchiveManifestLoader().load().manifest();
+        ArchiveManifest manifest = new ArchiveFixtureLoader().load().manifest();
         MemoryStore store = new MemoryStore();
         store.failParagraphInsertAt = 150;
         ArchiveContentImporter importer = new ArchiveContentImporter(store, store, 100);
 
         assertThrows(ArchiveImportException.class,
-                () -> importer.importAndActivate(manifest, ArchiveManifestLoader.EXPECTED_MANIFEST_FILE_SHA256));
+                () -> importer.importAndActivate(manifest, ArchiveFixtureLoader.EXPECTED_MANIFEST_FILE_SHA256));
         assertNull(store.work.activeEditionId());
         assertEquals("STAGING", store.edition.importState());
         assertEquals(store.lastRolledBackParagraphCount, store.paragraphs.size(),
@@ -116,7 +131,7 @@ class ArchiveContentImporterTest {
         assertTrue(store.paragraphs.size() > 0 && store.paragraphs.size() < 149);
 
         store.failParagraphInsertAt = -1;
-        importer.importAndActivate(manifest, ArchiveManifestLoader.EXPECTED_MANIFEST_FILE_SHA256);
+        importer.importAndActivate(manifest, ArchiveFixtureLoader.EXPECTED_MANIFEST_FILE_SHA256);
         assertEquals(3677, store.paragraphs.size());
         assertEquals("READY", store.edition.importState());
         assertEquals(manifest.editionId(), store.work.activeEditionId());
@@ -124,14 +139,14 @@ class ArchiveContentImporterTest {
 
     @Test
     void activationRollbackPreservesPreviousPointerAndConcurrentRunsExposeOnlyReadyEdition() throws Exception {
-        ArchiveManifest manifest = new ArchiveManifestLoader().load().manifest();
+        ArchiveManifest manifest = new ArchiveFixtureLoader().load().manifest();
         MemoryStore store = new MemoryStore();
         store.work = new ArchiveWorkRecord(manifest.workId(), manifest.title(), "previous-edition");
         store.failActivationAfterPointerWrite = true;
         ArchiveContentImporter importer = new ArchiveContentImporter(store, store, 100);
 
         assertThrows(ArchiveImportException.class,
-                () -> importer.importAndActivate(manifest, ArchiveManifestLoader.EXPECTED_MANIFEST_FILE_SHA256));
+                () -> importer.importAndActivate(manifest, ArchiveFixtureLoader.EXPECTED_MANIFEST_FILE_SHA256));
         assertEquals("previous-edition", store.work.activeEditionId());
         assertEquals("READY", store.edition.importState());
 
@@ -143,7 +158,7 @@ class ArchiveContentImporterTest {
             pool.submit(() -> {
                 try {
                     start.await();
-                    importer.importAndActivate(manifest, ArchiveManifestLoader.EXPECTED_MANIFEST_FILE_SHA256);
+                    importer.importAndActivate(manifest, ArchiveFixtureLoader.EXPECTED_MANIFEST_FILE_SHA256);
                 } catch (Throwable failure) {
                     failures.add(failure);
                 }
@@ -172,6 +187,12 @@ class ArchiveContentImporterTest {
         private int activationMutations;
         private int activeTransactions;
 
+        @Override public List<cn.jia.chat.archive.dto.ArchiveBookDTO> listPublishedBooks() {
+            if (work == null || edition == null || !"READY".equals(edition.importState())
+                    || !edition.editionId().equals(work.activeEditionId())) return List.of();
+            return List.of(new cn.jia.chat.archive.dto.ArchiveBookDTO(
+                    work.workId(), work.title(), edition.editionId(), edition.chapterCount()));
+        }
         @Override
         public synchronized <T> T required(java.util.function.Supplier<T> action) {
             Snapshot snapshot = snapshot();

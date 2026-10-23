@@ -30,6 +30,23 @@ class SkillManifestCodecTest {
             if (c.path("expected").asBoolean()) assertDoesNotThrow(action); else assertThrows(SkillMarketplaceException.class, action);
         }));
     }
+    @Test void usesProductionSchemaGenerationAndKeepsStrictTypes() throws Exception {
+        var schema = new ObjectMapper().readTree("{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"integer\"}");
+        assertEquals(com.networknt.schema.Schema.class, codec.compileSchema(schema).getClass());
+        assertEquals(1, codec.validateParameters(schema, "1".getBytes(StandardCharsets.UTF_8)).asInt());
+        assertThrows(SkillMarketplaceException.class, () -> codec.validateParameters(schema, "\"1\"".getBytes(StandardCharsets.UTF_8)));
+    }
+    @Test void pdfSkillUsesTheSameAgentManifestWithoutApiPdfParsing() throws Exception {
+        try (var input = getClass().getResourceAsStream("/pdf-extract-manifest-v1.json")) {
+            byte[] bytes = input.readAllBytes();
+            var manifest = codec.parse(bytes, "pdf-extract", "1.0.0");
+            assertEquals("495e9f0ca235375ef531084803bffbe7bdf30440fe55297726a6781b8e35c127",
+                    manifest.manifestSha256());
+            assertEquals("local-script", manifest.document().path("runner").asText());
+            assertEquals("application/pdf", manifest.document().at("/inputs/acceptedMimeTypes/0").asText());
+            assertFalse(manifest.document().at("/outputs/artifactsRequired").asBoolean());
+        }
+    }
     @Test void instructionOnly() { assertNull(codec.parse(null, "notes", "1.0.0")); }
     @Test void costAndOriginalHash() throws Exception {
         for (var c : fixtures().get("cases")) if (c.path("id").asText().equals("bad-cost-only")) {

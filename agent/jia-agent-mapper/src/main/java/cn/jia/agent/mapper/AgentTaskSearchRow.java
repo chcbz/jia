@@ -8,6 +8,8 @@ import lombok.EqualsAndHashCode;
 @Data
 @EqualsAndHashCode(callSuper = true)
 public class AgentTaskSearchRow extends AgentTaskMetaEntity {
+    private String phase;
+
     private String planTitle;
     private String planDescription;
     private Integer planReward;

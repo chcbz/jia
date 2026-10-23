@@ -29,6 +29,10 @@ public class PersonalWorkspaceDaoImpl implements PersonalWorkspaceDao {
         this.operations = Objects.requireNonNull(operations, "operations");
     }
 
+    @Override public UsageSnapshot findUsage(String tenantId, String clientId, String ownerJiacn, String fileId) {
+        requireScope(tenantId, clientId, ownerJiacn); requireId(fileId, "fileId", 100);
+        return files.selectUsage(tenantId, clientId, ownerJiacn, fileId);
+    }
     @Override public PersonalWorkspaceFileEntity findFile(String tenantId, String clientId,
             String ownerJiacn, String fileId) {
         requireScope(tenantId, clientId, ownerJiacn); requireId(fileId, "fileId", 100);
@@ -73,7 +77,16 @@ public class PersonalWorkspaceDaoImpl implements PersonalWorkspaceDao {
         requireScope(tenantId, clientId, ownerJiacn); requireId(fileId, "fileId", 100);
         LambdaQueryWrapper<PersonalWorkspaceVersionEntity> q = versionScope(tenantId, clientId, ownerJiacn)
                 .eq(PersonalWorkspaceVersionEntity::getFileId, fileId);
-        exact(q, "file_id", fileId); return versions.selectList(q.orderByDesc(PersonalWorkspaceVersionEntity::getVersion).last("limit " + bounded(limit)));
+        exact(q, "file_id", fileId);
+        return versions.selectList(q.orderByDesc(PersonalWorkspaceVersionEntity::getVersion).last("limit " + bounded(limit)));
+    }
+    @Override public List<PersonalWorkspaceVersionEntity> listVersionsBefore(String tenantId, String clientId,
+            String ownerJiacn, String fileId, Integer beforeVersion) {
+        requireScope(tenantId, clientId, ownerJiacn); requireId(fileId, "fileId", 100);
+        LambdaQueryWrapper<PersonalWorkspaceVersionEntity> q = versionScope(tenantId, clientId, ownerJiacn)
+                .eq(PersonalWorkspaceVersionEntity::getFileId, fileId);
+        if (beforeVersion != null) q.lt(PersonalWorkspaceVersionEntity::getVersion, beforeVersion);
+        exact(q, "file_id", fileId); return versions.selectList(q.orderByDesc(PersonalWorkspaceVersionEntity::getVersion).last("limit 101"));
     }
     @Override public void insertVersion(PersonalWorkspaceVersionEntity entity) { init(entity); versions.insert(entity); }
     @Override public PersonalWorkspaceOperationEntity findOperationByIdempotency(String tenantId,

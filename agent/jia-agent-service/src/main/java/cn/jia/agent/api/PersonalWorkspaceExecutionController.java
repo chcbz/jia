@@ -1,5 +1,7 @@
 package cn.jia.agent.api;
 
+import cn.jia.core.entity.JsonRequest;
+
 import cn.jia.agent.service.PersonalWorkspaceExecutionService;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.HttpHeaders;
@@ -34,27 +36,28 @@ public class PersonalWorkspaceExecutionController {
     }
 
     @GetMapping(value = "/executions/capabilities", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<PersonalWorkspaceExecutionService.ExecutionCapabilities> capabilities(Authentication authentication) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<PersonalWorkspaceExecutionService.ExecutionCapabilities>> capabilities(Authentication authentication) {
         scope(authentication);
-        return ok(service.capabilities());
+        return cn.jia.core.config.ApiJsonResponses.success(ok(service.capabilities()));
     }
 
     @PostMapping(value = "/executions", consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<PersonalWorkspaceExecutionService.ExecutionView> create(
-            @RequestBody CreateRequest request, @RequestHeader(value = "Idempotency-Key", required = false) String key,
+    public ResponseEntity<cn.jia.core.entity.JsonResult<WorkspaceExecutionWire.Execution>> create(
+            @RequestBody JsonRequest<CreateRequest> protocolRequest, @RequestHeader(value = "Idempotency-Key", required = false) String key,
             Authentication authentication) {
-        if (request == null || request.inputs() == null) throw new RequestFailure();
+        CreateRequest request = protocolRequest == null ? null : protocolRequest.data();
+        if (request == null || request.inputs() == null || request.inputs().stream().anyMatch(Objects::isNull)) throw new RequestFailure();
         PersonalWorkspaceExecutionService.ExecutionView view = service.create(scope(authentication),
                 new PersonalWorkspaceExecutionService.CreateCommand(request.conversationId(), request.targetAgentId(),
                         request.taskId(), request.instruction(), request.outputContentMimeType(), request.inputs().stream()
                         .map(input -> new PersonalWorkspaceExecutionService.InputSelection(input.fileId(), version(input.version())))
                         .toList()), key);
-        return ResponseEntity.status(HttpStatus.ACCEPTED).header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL).body(view);
+        return cn.jia.core.config.ApiJsonResponses.success(ResponseEntity.status(HttpStatus.ACCEPTED).header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL).body(view), WorkspaceExecutionWire::from);
     }
 
     @GetMapping(value = "/executions", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<PersonalWorkspaceExecutionService.ExecutionHistoryView> list(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<PersonalWorkspaceExecutionService.ExecutionHistoryView>> list(
             @RequestParam(required = false) String limit,
             @RequestParam(required = false) String beforeCreatedAt,
             @RequestParam(required = false) String beforeExecutionId,
@@ -62,35 +65,36 @@ public class PersonalWorkspaceExecutionController {
         if ((beforeCreatedAt == null) != (beforeExecutionId == null)) throw new RequestFailure();
         Long cursorCreatedAt = beforeCreatedAt == null ? null : epochMillis(beforeCreatedAt);
         if (beforeExecutionId != null && !valid(beforeExecutionId, 100)) throw new RequestFailure();
-        return ok(service.list(scope(authentication), historyLimit(limit),
-                cursorCreatedAt, beforeExecutionId));
+        return cn.jia.core.config.ApiJsonResponses.success(ok(service.list(scope(authentication), historyLimit(limit),
+                cursorCreatedAt, beforeExecutionId)));
     }
 
     @GetMapping(value = "/executions/request", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<PersonalWorkspaceExecutionService.ExecutionView> request(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<WorkspaceExecutionWire.Execution>> request(
             @RequestHeader(value = "Idempotency-Key", required = false) String key,
             Authentication authentication) {
         if (!valid(key, 100)) throw new RequestFailure();
-        return ok(service.getByIdempotencyKey(scope(authentication), key));
+        return cn.jia.core.config.ApiJsonResponses.success(ok(service.getByIdempotencyKey(scope(authentication), key)), WorkspaceExecutionWire::from);
     }
 
     @GetMapping(value = "/executions/{executionId}", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<PersonalWorkspaceExecutionService.ExecutionView> get(@PathVariable String executionId,
+    public ResponseEntity<cn.jia.core.entity.JsonResult<WorkspaceExecutionWire.Execution>> get(@PathVariable String executionId,
             Authentication authentication) {
-        return ok(service.get(scope(authentication), executionId));
+        return cn.jia.core.config.ApiJsonResponses.success(ok(service.get(scope(authentication), executionId)), WorkspaceExecutionWire::from);
     }
 
     @PostMapping(value = "/executions/{executionId}/revoke-inputs", consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<PersonalWorkspaceExecutionService.ExecutionView> revoke(@PathVariable String executionId,
-            @RequestBody RevokeRequest request, @RequestHeader(value = "Idempotency-Key", required = false) String key,
+    public ResponseEntity<cn.jia.core.entity.JsonResult<WorkspaceExecutionWire.Execution>> revoke(@PathVariable String executionId,
+            @RequestBody JsonRequest<RevokeRequest> protocolRequest, @RequestHeader(value = "Idempotency-Key", required = false) String key,
             Authentication authentication) {
+        RevokeRequest request = protocolRequest == null ? null : protocolRequest.data();
         if (request == null) throw new RequestFailure();
-        return ok(service.revokeInputs(scope(authentication), executionId, decimal(request.expectedGrantRevision()), key));
+        return cn.jia.core.config.ApiJsonResponses.success(ok(service.revokeInputs(scope(authentication), executionId, decimal(request.expectedGrantRevision()), key)), WorkspaceExecutionWire::from);
     }
 
     @ExceptionHandler(PersonalWorkspaceExecutionService.Failure.class)
-    public ResponseEntity<ErrorBody> failure(PersonalWorkspaceExecutionService.Failure failure) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> failure(PersonalWorkspaceExecutionService.Failure failure) {
         return switch (failure.getReason()) {
             case BAD_REQUEST -> error(HttpStatus.BAD_REQUEST, "BAD_REQUEST", "Invalid execution request");
             case NOT_FOUND -> error(HttpStatus.NOT_FOUND, "EXECUTION_NOT_FOUND", "Execution is unavailable");
@@ -109,9 +113,9 @@ public class PersonalWorkspaceExecutionController {
                 "Execution access is unavailable");
     }
     @ExceptionHandler({IllegalArgumentException.class, RequestFailure.class})
-    public ResponseEntity<ErrorBody> malformed(Exception ignored) { return error(HttpStatus.BAD_REQUEST, "BAD_REQUEST", "Invalid execution request"); }
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> malformed(Exception ignored) { return error(HttpStatus.BAD_REQUEST, "BAD_REQUEST", "Invalid execution request"); }
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<ErrorBody> unexpected(Exception ignored, HttpServletRequest request) { return error(HttpStatus.SERVICE_UNAVAILABLE, "EXECUTION_UNAVAILABLE", "Execution is temporarily unavailable"); }
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> unexpected(Exception ignored, HttpServletRequest request) { return error(HttpStatus.SERVICE_UNAVAILABLE, "EXECUTION_UNAVAILABLE", "Execution is temporarily unavailable"); }
 
     private static PersonalWorkspaceExecutionService.OwnerScope scope(Authentication authentication) {
         if (!(authentication instanceof JwtAuthenticationToken jwt) || !authentication.isAuthenticated()) throw new AuthenticationFailure(false);
@@ -142,7 +146,7 @@ public class PersonalWorkspaceExecutionController {
     private static long decimal(String value) { if(value==null||!value.matches("[1-9][0-9]{0,18}"))throw new RequestFailure(); try{return Long.parseLong(value);}catch(NumberFormatException failure){throw new RequestFailure();} }
     private static boolean valid(String value,int max) { return value!=null&&!value.isBlank()&&value.equals(value.strip())&&value.codePointCount(0,value.length())<=max&&!value.chars().anyMatch(Character::isISOControl); }
     private static <T> ResponseEntity<T> ok(T body) { return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL,CACHE_CONTROL).contentType(MediaType.APPLICATION_JSON).body(body); }
-    private static ResponseEntity<ErrorBody> error(HttpStatus status,String code,String message) { return ResponseEntity.status(status).header(HttpHeaders.CACHE_CONTROL,CACHE_CONTROL).contentType(new MediaType(MediaType.APPLICATION_JSON, StandardCharsets.UTF_8)).body(new ErrorBody(code,message)); }
+    private static ResponseEntity<cn.jia.core.entity.JsonResult<Void>> error(HttpStatus status,String code,String message) { return ResponseEntity.status(status).header(HttpHeaders.CACHE_CONTROL,CACHE_CONTROL).contentType(new MediaType(MediaType.APPLICATION_JSON, StandardCharsets.UTF_8)).body(cn.jia.core.entity.JsonResult.<Void>failure(code,message)); }
     public record CreateRequest(String conversationId, String targetAgentId, String taskId, String instruction,
                                 String outputContentMimeType, List<InputRequest> inputs) { }
     public record InputRequest(String fileId, String version) { }

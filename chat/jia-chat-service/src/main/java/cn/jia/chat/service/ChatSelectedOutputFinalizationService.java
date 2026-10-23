@@ -34,6 +34,10 @@ public final class ChatSelectedOutputFinalizationService {
     private final AgentSelectedOutputFinalizationService agent;
     private final ChatCompletedMessageSourceService messages;
     private final AgentTaskExecutionGrantService grants;
+    private cn.jia.agent.service.SkillExecutionService skills;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setSkills(cn.jia.agent.service.SkillExecutionService skills) {this.skills=Objects.requireNonNull(skills);}
+
 
     public ChatSelectedOutputFinalizationService(ChatSelectedOutputFinalizationStore store,
             ChatDeliberationService deliberations,ChatInteractionStepStore steps,
@@ -47,9 +51,14 @@ public final class ChatSelectedOutputFinalizationService {
     public record Scope(String tenantId,String clientId,String ownerJiacn) { }
     public record Selection(String requestId,@JsonInclude(JsonInclude.Include.NON_NULL) String stepId,
             @JsonInclude(JsonInclude.Include.NON_NULL) String outputId,String sha256,String title,String purpose,
-            @JsonInclude(JsonInclude.Include.NON_NULL) SelectedOutputFinalizationDigest.MessageSource messageSource) {
+            @JsonInclude(JsonInclude.Include.NON_NULL) SelectedOutputFinalizationDigest.MessageSource messageSource,
+            @JsonInclude(JsonInclude.Include.NON_NULL) SelectedOutputFinalizationDigest.FormalArtifactSource formalArtifactSource) {
+        public Selection(String requestId,String stepId,String outputId,String sha256,String title,String purpose,
+                SelectedOutputFinalizationDigest.MessageSource messageSource) {
+            this(requestId,stepId,outputId,sha256,title,purpose,messageSource,null);
+        }
         public Selection(String requestId,String stepId,String outputId,String sha256,String title,String purpose) {
-            this(requestId,stepId,outputId,sha256,title,purpose,null);
+            this(requestId,stepId,outputId,sha256,title,purpose,null,null);
         }
     }
     public record Command(long expectedTaskVersion,long expectedAssignmentRevision,String conversationId,
@@ -60,22 +69,37 @@ public final class ChatSelectedOutputFinalizationService {
             String stage,String expectedTaskVersion,String expectedAssignmentRevision,List<Selection> selectedOutputs,
             String deliveryId,String deliveryState,String taskState,String taskVersion,String errorCode,boolean retryable) { }
 
+    private ChatFormalDeliveryRetentionService retention;
+    @org.springframework.beans.factory.annotation.Autowired(required=false)
+    public void setRetention(ChatFormalDeliveryRetentionService value) {retention=Objects.requireNonNull(value);}
+
     public Receipt submit(Scope scope,String taskId,String key,Command command){
-        Valid valid=validate(scope,taskId,key,command);
-        String operationId="fin_"+digest("operation\n"+wire(scope)+"\n"+taskId+"\n"+key);
-        String immutable=SelectedOutputFinalizationDigest.request(taskId,command.expectedTaskVersion(),
+        return submitInternal(scope,taskId,key,command,null);
+    }
+    /** Package-only trusted producer; browser submit always rejects FORMAL_ARTIFACT. */
+    Receipt submitRevision(Scope scope,String taskId,String key,Command command,ChatFormalDeliveryRetentionService.Lineage lineage) {
+        return submitInternal(scope,taskId,key,command,Objects.requireNonNull(lineage));
+    }
+    private Receipt submitInternal(Scope scope,String taskId,String key,Command command,ChatFormalDeliveryRetentionService.Lineage lineage) {
+        Valid valid=validate(scope,taskId,key,command,lineage!=null);
+        // v1 is immutable read-only history, not a second active producer contract.
+        var prior=store.findByKey(scope.tenantId(),scope.ownerJiacn(),scope.clientId(),taskId,key);
+        if(prior!=null && prior.contractVersion()!=2)throw new ChatSelectedOutputFinalizationStore.Conflict();
+        String operationId=operationId(scope,taskId,key);
+        String immutable=SelectedOutputFinalizationDigest.requestV2(taskId,command.expectedTaskVersion(),
                 command.expectedAssignmentRevision(),command.conversationId(),command.summary(),
                 command.selectedOutputs().stream().map(s->new SelectedOutputFinalizationDigest.Selection(
-                        s.requestId(),s.stepId(),s.outputId(),s.sha256(),s.title(),s.purpose(),s.messageSource())).toList());
+                        s.requestId(),s.stepId(),s.outputId(),s.sha256(),s.title(),s.purpose(),s.messageSource(),s.formalArtifactSource())).toList());
         List<ChatSelectedOutputFinalizationStore.Selection> rows=command.selectedOutputs().stream()
                 .map(s->new ChatSelectedOutputFinalizationStore.Selection(s.requestId(),s.stepId(),s.outputId(),
-                        s.sha256(),s.title(),s.purpose(),s.messageSource())).toList();
+                        s.sha256(),s.title(),s.purpose(),s.messageSource(),s.formalArtifactSource())).toList();
         ChatSelectedOutputFinalizationStore.Operation operation=store.create(scope.tenantId(),scope.ownerJiacn(),
                 scope.clientId(),operationId,taskId,key,immutable,command.conversationId(),
                 command.expectedTaskVersion(),command.expectedAssignmentRevision(),command.summary(),rows);
         requirePersistedReceipt(operation);
         if("completed".equals(operation.state())||("failed".equals(operation.state())&&!operation.retryable()))
             return receipt(operation);
+        if ("ACCEPTING".equals(operation.stage())) throw new ChatSelectedOutputFinalizationStore.Conflict();
         try {
             // A durable Agent commit wins before any now-stale source/version validation.
             try {
@@ -85,9 +109,8 @@ public final class ChatSelectedOutputFinalizationService {
                 if(!"PROMOTING".equals(operation.stage()))throw absent;
             }
             if("completed".equals(operation.state()))return receipt(operation);
-            if("changes_requested".equals(operation.deliveryState()))return changesRequested(scope,operation);
             if("PROMOTING".equals(operation.stage())) {
-                Resolved resolved=resolve(scope,valid);
+                Resolved resolved=resolve(scope,valid,lineage);
                 var prepared=agent.prepare(agentScope(scope),new AgentSelectedOutputFinalizationService.PrepareCommand(
                         operationId,taskId,command.expectedTaskVersion(),command.expectedAssignmentRevision(),
                         command.conversationId(),resolved.generation(),resolved.targetAgentId(),resolved.grantId(),
@@ -96,14 +119,6 @@ public final class ChatSelectedOutputFinalizationService {
             }
             if("READY_TO_SUBMIT".equals(operation.stage()))
                 operation=apply(scope,operation,agent.submit(agentScope(scope),taskId,operationId,immutable));
-            if("changes_requested".equals(operation.deliveryState()))return changesRequested(scope,operation);
-            if("SUBMITTED".equals(operation.stage()))
-                operation=store.advance(scope.tenantId(),scope.ownerJiacn(),scope.clientId(),operation,
-                        "pending","ACCEPTING",operation.deliveryId(),operation.deliveryState(),operation.taskState(),
-                        operation.taskVersion(),null,false);
-            if("ACCEPTING".equals(operation.stage()))
-                operation=apply(scope,operation,agent.accept(agentScope(scope),taskId,operationId,immutable));
-            if("changes_requested".equals(operation.deliveryState()))return changesRequested(scope,operation);
             return receipt(operation);
         } catch(RuntimeException failure) {
             if(failure instanceof ChatSelectedOutputFinalizationStore.Conflict)throw failure;
@@ -127,12 +142,28 @@ public final class ChatSelectedOutputFinalizationService {
         if(row==null)throw new ChatSelectedOutputFinalizationStore.Missing();return receipt(row);
     }
 
-    private Resolved resolve(Scope scope,Valid valid){
+    private Resolved resolve(Scope scope,Valid valid,ChatFormalDeliveryRetentionService.Lineage lineage){
         PersonalWorkspaceExecutionService.OwnerScope owner=new PersonalWorkspaceExecutionService.OwnerScope(
                 scope.tenantId(),scope.clientId(),scope.ownerJiacn());
         List<AgentSelectedOutputFinalizationService.SourceOutput> result=new ArrayList<>();
         String target=null,grant=null;long grantVersion=-1,generation=-1;
         for(Selection selected:valid.command().selectedOutputs()){
+            if(selected.formalArtifactSource()!=null) {
+                if(retention==null || lineage==null)throw sourceUnavailable();
+                var output=retention.read(scope,valid.taskId(),lineage,selected);
+                var parent=lineage.revision().parent();var parentScope=parent.outcome().scope();
+                String agentId=(String)parent.validated().binding().get("targetAgentId");
+                if(!valid.command().conversationId().equals(parentScope.conversationId())
+                        || valid.command().expectedAssignmentRevision()!=parent.outcome().assignmentRevision())throw sourceUnavailable();
+                var admitted=grants.resolveSelectedOutputPromotion(new AgentTaskExecutionGrantService.Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn()),
+                        valid.taskId(),valid.command().expectedAssignmentRevision(),agentId);
+                if(admitted==null || admitted.grantVersion()<1 || !agentId.equals(admitted.targetAgentId())
+                        || !"FINALIZE_SELECTED_OUTPUTS".equals(admitted.operation()) || admitted.paidExecutionAuthorized())throw sourceUnavailable();
+                if(target==null){target=agentId;grant=admitted.grantId();grantVersion=admitted.grantVersion();generation=parentScope.conversationGeneration();}
+                else if(!target.equals(agentId) || !grant.equals(admitted.grantId()) || grantVersion!=admitted.grantVersion()
+                        || generation!=parentScope.conversationGeneration())throw sourceUnavailable();
+                result.add(output);continue;
+            }
             if(selected.messageSource()!=null) {
                 var text=messages.resolve(scope,new ChatCompletedMessageSourceService.Command(valid.taskId(),
                         valid.command().conversationId(),valid.command().expectedAssignmentRevision(),selected.requestId(),
@@ -162,15 +193,17 @@ public final class ChatSelectedOutputFinalizationService {
             }
             if(request==null || !selected.requestId().equals(request.requestId())
                     || !valid.command().conversationId().equals(request.conversationId())
-                    || !"OUTPUT_COMMITTED".equals(request.state()) || request.steps()==null)
+                    || !Set.of("OUTPUT_COMMITTED","RESULT_COMMITTED").contains(request.state()) || request.steps()==null)
                 throw sourceUnavailable();
+            boolean skillResult="RESULT_COMMITTED".equals(request.state());
+            String committed=request.state();
             long requestGeneration=decimal(request.conversationGeneration());
             long revision=positiveDecimal(request.requestRevision());
             ChatDeliberationService.StepView stepView=request.steps().stream()
                     .filter(v->v!=null && selected.stepId().equals(v.stepId())).findFirst()
                     .orElseThrow(ChatSelectedOutputFinalizationService::sourceUnavailable);
             if(!valid.taskId().equals(stepView.taskId()) || !"EXECUTE".equals(stepView.kind())
-                    || !"OUTPUT_COMMITTED".equals(stepView.state())
+                    || !committed.equals(stepView.state())
                     || valid.command().expectedAssignmentRevision()!=decimal(stepView.assignmentRevision())
                     || stepView.executionId()==null || stepView.executionIntentId()==null
                     || stepView.targetAgentId()==null) throw sourceUnavailable();
@@ -189,18 +222,35 @@ public final class ChatSelectedOutputFinalizationService {
                     || persisted.conversationGeneration()!=requestGeneration || !valid.taskId().equals(persisted.taskId())
                     || persisted.assignmentRevision()!=valid.command().expectedAssignmentRevision()
                     || !stepView.targetAgentId().equals(persisted.targetAgentId())
-                    || !"EXECUTE".equals(persisted.kind()) || !"OUTPUT_COMMITTED".equals(persisted.state())
+                    || !"EXECUTE".equals(persisted.kind()) || !committed.equals(persisted.state())
                     || persisted.grantId()==null || persisted.grantVersion()<1
                     || link==null || !scopeExact(scope,link.tenantId(),link.ownerJiacn(),link.clientId())
                     || !selected.stepId().equals(link.stepId())
                     || !stepView.executionIntentId().equals(link.executionIntentId())
-                    || !stepView.executionId().equals(link.executionId()) || !"OUTPUT_COMMITTED".equals(link.state()))
+                    || !stepView.executionId().equals(link.executionId()) || !committed.equals(link.state()))
                 throw sourceUnavailable();
             var source=store.source(scope.tenantId(),scope.ownerJiacn(),scope.clientId(),valid.command().conversationId(),
                     requestGeneration,selected.requestId(),selected.stepId(),selected.outputId());
             if(source==null || source.generation()!=requestGeneration
                     || !stepView.executionId().equals(source.executionId())
                     || !selected.sha256().equals(source.sha256()))throw sourceUnavailable();
+            if(skillResult) {
+                if(skills==null)throw sourceUnavailable();
+                var execution=executions.get(owner,source.executionId());
+                if(execution==null||!"CONVERSATION".equals(execution.executionMode())||!committed.equals(execution.state())
+                        ||!source.executionId().equals(execution.executionId())||!source.runId().equals(execution.runId())
+                        ||!valid.taskId().equals(execution.taskId())||!valid.command().conversationId().equals(execution.conversationId())
+                        ||!persisted.targetAgentId().equals(execution.targetAgentId()))throw sourceUnavailable();
+                var view=skills.result(owner,source.executionId());
+                if(view==null||!"COMPLETE".equals(view.phase()))throw sourceUnavailable();
+                var manifest=ChatSkillResultFacts.verifiedResult(view,source.executionId());
+                var outputs=executions.listConversationOutputs(owner,valid.taskId(),source.runId());
+                if(outputs==null)throw sourceUnavailable();
+                ChatSkillResultFacts.verifyArtifacts(manifest,outputs);
+                var matches=outputs.stream().filter(o->selected.outputId().equals(o.outputId())).toList();
+                if(matches.size()!=1||!source.executionId().equals(matches.getFirst().executionId())
+                        ||!source.sha256().equals(matches.getFirst().sha256())||source.byteLength()!=matches.getFirst().byteLength())throw sourceUnavailable();
+            }
             PersonalWorkspaceExecutionService.ConversationOutput output;
             try {
                 output=executions.readConversationOutput(owner,valid.taskId(),source.runId(),selected.outputId());
@@ -231,15 +281,9 @@ public final class ChatSelectedOutputFinalizationService {
         validateView(current,view);
         int currentRank=stageRank(current.stage()),incomingRank=stageRank(view.stage());
         if(incomingRank<currentRank) {
-            if("SUBMITTED".equals(view.stage())&&"changes_requested".equals(view.deliveryState())
-                    &&currentRank<=stageRank("ACCEPTING")) {
-                requireNonRegressingProjection(current,view);
-                return store.advance(scope.tenantId(),scope.ownerJiacn(),scope.clientId(),current,"pending",current.stage(),
-                        view.deliveryId(),view.deliveryState(),view.taskState(),view.taskVersion(),null,false);
-            }
             return current;
         }
-        String state="TASK_COMPLETED".equals(view.stage())?"completed":"pending";
+        String state=("SUBMITTED".equals(view.stage()) || "TASK_COMPLETED".equals(view.stage()))?"completed":"pending";
         if(incomingRank==currentRank) {
             requireNonRegressingProjection(current,view);
             if(sameProjection(current,state,view))return current;
@@ -259,8 +303,7 @@ public final class ChatSelectedOutputFinalizationService {
             return;
         }
         if("SUBMITTED".equals(view.stage())) {
-            if(view.deliveryId()==null || !("submitted".equals(view.deliveryState())
-                    || "changes_requested".equals(view.deliveryState())))
+            if(view.deliveryId()==null || !Set.of("submitted","accepted","changes_requested").contains(view.deliveryState()))
                 throw projectionInvalid();
             return;
         }
@@ -281,14 +324,6 @@ public final class ChatSelectedOutputFinalizationService {
                 || ("completed".equals(current.taskState()) && !"completed".equals(incoming.taskState())))
             throw projectionInvalid();
     }
-    private Receipt changesRequested(Scope scope,ChatSelectedOutputFinalizationStore.Operation operation) {
-        if(!("failed".equals(operation.state())&&!operation.retryable()
-                &&"FINALIZATION_DELIVERY_CHANGES_REQUESTED".equals(operation.errorCode())))
-            operation=store.advance(scope.tenantId(),scope.ownerJiacn(),scope.clientId(),operation,
-                    "failed",operation.stage(),operation.deliveryId(),operation.deliveryState(),operation.taskState(),
-                    operation.taskVersion(),"FINALIZATION_DELIVERY_CHANGES_REQUESTED",false);
-        return receipt(operation);
-    }
     private static boolean sameProjection(ChatSelectedOutputFinalizationStore.Operation current,String state,
             AgentSelectedOutputFinalizationService.PromotionView view) {
         return state.equals(current.state()) && view.stage().equals(current.stage())
@@ -302,10 +337,10 @@ public final class ChatSelectedOutputFinalizationService {
         requirePersistedReceipt(row);
         return new Receipt(row.operationId(),row.taskId(),row.conversationId(),row.state(),Long.toString(row.stateVersion()),
                 row.stage(),Long.toString(row.expectedTaskVersion()),Long.toString(row.expectedAssignmentRevision()),
-                row.selections().stream().map(s->new Selection(s.requestId(),s.stepId(),s.outputId(),s.sha256(),s.title(),s.purpose(),s.messageSource())).toList(),
+                row.selections().stream().map(s->new Selection(s.requestId(),s.stepId(),s.outputId(),s.sha256(),s.title(),s.purpose(),s.messageSource(),s.formalArtifactSource())).toList(),
                 row.deliveryId(),row.deliveryState(),row.taskState(),Long.toString(row.taskVersion()),row.errorCode(),row.retryable());
     }
-    private static void requirePersistedReceipt(ChatSelectedOutputFinalizationStore.Operation row) {
+    static void requirePersistedReceipt(ChatSelectedOutputFinalizationStore.Operation row) {
         if(row==null)throw persistence();
         persistedId(row.operationId(),100);persistedId(row.taskId(),100);persistedId(row.conversationId(),100);
         if(row.digest()==null||!row.digest().matches("[0-9a-f]{64}")||row.stateVersion()<1
@@ -319,41 +354,58 @@ public final class ChatSelectedOutputFinalizationService {
         Set<String> sources=new LinkedHashSet<>();
         for(var selected:row.selections()) {
             if(selected==null)throw persistence();
-            persistedId(selected.requestId(),100);
-            try{sourceReference(selected.stepId(),selected.outputId(),selected.messageSource());}catch(IllegalArgumentException invalid){throw persistence();}
+            if(selected.formalArtifactSource()!=null) {
+                if(row.contractVersion()!=2 || selected.requestId()!=null || selected.stepId()!=null || selected.outputId()!=null || selected.messageSource()!=null)throw persistence();
+            } else {
+                persistedId(selected.requestId(),100);
+                try{sourceReference(selected.stepId(),selected.outputId(),selected.messageSource());}catch(IllegalArgumentException invalid){throw persistence();}
+            }
             if(selected.sha256()==null||!selected.sha256().matches("[0-9a-f]{64}"))throw persistence();
             persistedText(selected.title(),255);persistedText(selected.purpose(),255);
-            if(!sources.add(sourceKey(selected.requestId(),selected.stepId(),selected.outputId(),selected.messageSource())))throw persistence();
+            String source=selected.formalArtifactSource()==null?sourceKey(selected.requestId(),selected.stepId(),selected.outputId(),selected.messageSource()):
+                    "FORMAL_ARTIFACT\0"+selected.formalArtifactSource().sourceDeliveryId()+"\0"+selected.formalArtifactSource().sourceArtifactId()+"\0"+selected.formalArtifactSource().sourceArtifactVersion();
+            if(!sources.add(source))throw persistence();
         }
-        String expected=SelectedOutputFinalizationDigest.request(row.taskId(),row.expectedTaskVersion(),row.expectedAssignmentRevision(),
-                row.conversationId(),row.summary(),row.selections().stream().map(v->new SelectedOutputFinalizationDigest.Selection(
-                        v.requestId(),v.stepId(),v.outputId(),v.sha256(),v.title(),v.purpose(),v.messageSource())).toList());
+        if(row.contractVersion()!=1 && row.contractVersion()!=2)throw persistence();
+        var selections=row.selections().stream().map(v->new SelectedOutputFinalizationDigest.Selection(
+                v.requestId(),v.stepId(),v.outputId(),v.sha256(),v.title(),v.purpose(),v.messageSource(),v.formalArtifactSource())).toList();
+        String expected=row.contractVersion()==1?SelectedOutputFinalizationDigest.request(row.taskId(),row.expectedTaskVersion(),
+                row.expectedAssignmentRevision(),row.conversationId(),row.summary(),selections):
+                SelectedOutputFinalizationDigest.requestV2(row.taskId(),row.expectedTaskVersion(),row.expectedAssignmentRevision(),
+                        row.conversationId(),row.summary(),selections);
         if(!expected.equals(row.digest()))throw persistence();
         boolean terminal="completed".equals(row.state());
-        if(terminal!=("TASK_COMPLETED".equals(row.stage())&&row.deliveryId()!=null
+        boolean submissionComplete="SUBMITTED".equals(row.stage())&&row.deliveryId()!=null
+                &&Set.of("submitted","accepted","changes_requested").contains(row.deliveryState())
+                &&row.errorCode()==null&&!row.retryable();
+        boolean historicalAcceptance="TASK_COMPLETED".equals(row.stage())&&row.deliveryId()!=null
                 &&"accepted".equals(row.deliveryState())&&"completed".equals(row.taskState())
-                &&row.errorCode()==null&&!row.retryable()))throw persistence();
+                &&row.errorCode()==null&&!row.retryable();
+        if(terminal && !(submissionComplete||historicalAcceptance))throw persistence();
+        if(!terminal && "TASK_COMPLETED".equals(row.stage()))throw persistence();
         if("pending".equals(row.state())&&(row.errorCode()!=null||row.retryable()))throw persistence();
         if("failed".equals(row.state())&&(row.errorCode()==null||row.errorCode().isBlank()))throw persistence();
         if(List.of("PROMOTING","READY_TO_SUBMIT").contains(row.stage())
                 &&(row.deliveryId()!=null||row.deliveryState()!=null))throw persistence();
         if(List.of("SUBMITTED","ACCEPTING").contains(row.stage())) {
-            if(row.deliveryId()==null||!("submitted".equals(row.deliveryState())
-                    || "changes_requested".equals(row.deliveryState())))throw persistence();
+            if(row.deliveryId()==null||!Set.of("submitted","accepted","changes_requested").contains(row.deliveryState()))throw persistence();
         }
         if(row.deliveryId()!=null)persistedId(row.deliveryId(),100);
     }
 
-    private static Valid validate(Scope scope,String taskId,String key,Command c){
+    private static Valid validate(Scope scope,String taskId,String key,Command c,boolean trusted){
         validateScope(scope);id(taskId,100);key(key);if(c==null)throw bad();
         if(c.expectedTaskVersion()<0||c.expectedTaskVersion()>MAX_SAFE_INTEGER
                 ||c.expectedAssignmentRevision()<0||c.expectedAssignmentRevision()>MAX_SAFE_INTEGER)throw bad();
         id(c.conversationId(),100);text(c.summary(),4000);
         if(c.selectedOutputs()==null||c.selectedOutputs().isEmpty()||c.selectedOutputs().size()>99)throw bad();
         Set<String> sources=new LinkedHashSet<>();
-        for(Selection s:c.selectedOutputs()){if(s==null)throw bad();id(s.requestId(),100);sourceReference(s.stepId(),s.outputId(),s.messageSource());
+        for(Selection s:c.selectedOutputs()){if(s==null)throw bad();
+            if(s.formalArtifactSource()!=null) {
+                if(!trusted || s.requestId()!=null || s.stepId()!=null || s.outputId()!=null || s.messageSource()!=null)throw bad();
+            } else {id(s.requestId(),100);sourceReference(s.stepId(),s.outputId(),s.messageSource());}
             if(s.sha256()==null||!s.sha256().matches("[0-9a-f]{64}"))throw bad();text(s.title(),255);text(s.purpose(),255);
-            if(!sources.add(sourceKey(s.requestId(),s.stepId(),s.outputId(),s.messageSource())))throw bad();}
+            if(!sources.add(s.formalArtifactSource()==null?sourceKey(s.requestId(),s.stepId(),s.outputId(),s.messageSource()):"FORMAL_ARTIFACT\0"+s.formalArtifactSource()))throw bad();}
         return new Valid(taskId,c);
     }
     private static void sourceReference(String step,String output,SelectedOutputFinalizationDigest.MessageSource source){
@@ -370,6 +422,9 @@ public final class ChatSelectedOutputFinalizationService {
     private static boolean scopeExact(Scope scope,String tenant,String owner,String client){
         return scope.tenantId().equals(tenant)&&scope.ownerJiacn().equals(owner)&&scope.clientId().equals(client);
     }
+    static String operationId(Scope scope,String taskId,String key) {
+        return "fin_"+digest("operation\n"+wire(scope)+"\n"+taskId+"\n"+key);
+    }
     private static String wire(Scope s){return s.tenantId()+"\0"+s.ownerJiacn()+"\0"+s.clientId();}
     private static AgentSelectedOutputFinalizationService.Scope agentScope(Scope s){
         return new AgentSelectedOutputFinalizationService.Scope(s.tenantId(),s.clientId(),s.ownerJiacn());
@@ -379,6 +434,7 @@ public final class ChatSelectedOutputFinalizationService {
             return new Failure(a.reason().code(),a.reason().retryable());
         if(e instanceof AgentTaskExecutionGrantException grant)
             return new Failure("FINALIZATION_GRANT_CHANGED",false);
+        if(e instanceof ChatDeliveryReviewContract.SourceUnavailable)return new Failure("FINALIZATION_SOURCE_UNAVAILABLE",false);
         if(e instanceof SourceUnavailable)return new Failure("FINALIZATION_SOURCE_UNAVAILABLE",false);
         if(e instanceof PersonalWorkspaceExecutionService.Failure f)
             return f.getReason()==PersonalWorkspaceExecutionService.Reason.STORAGE_UNAVAILABLE

@@ -1,9 +1,15 @@
 package cn.jia.sms.websocket;
 
 import cn.jia.core.common.EsSecurityHandler;
-import cn.jia.core.entity.JsonResult;
+import cn.jia.core.entity.ProtocolMessage;
+import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
+import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.core.StreamReadFeature;
+import tools.jackson.databind.DeserializationFeature;
+import tools.jackson.core.type.TypeReference;
 import cn.jia.core.util.CollectionUtil;
-import cn.jia.core.util.JsonUtil;
 import cn.jia.core.util.StringUtil;
 import jakarta.websocket.*;
 import jakarta.websocket.server.ServerEndpoint;
@@ -23,6 +29,12 @@ import java.util.concurrent.CopyOnWriteArraySet;
 @Component
 @EqualsAndHashCode
 public class WebSocketServer {
+    private static final JsonMapper JSON=JsonMapper.builder().enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
+            .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS).build();
+    private static final TypeReference<Map<String,Object>> MESSAGE = new TypeReference<>() { };
+    private void transmit(ProtocolMessage<?> message) throws IOException { session.getBasicRemote().sendText(JSON.writeValueAsString(message)); }
+    private void event(String type,Object data) throws IOException {String id=UUID.randomUUID().toString();transmit(ProtocolMessage.event(id,type,id,data));}
+
     /**
      * 静态变量，用来记录当前在线连接数。应该把它设计成线程安全的。
      */
@@ -53,16 +65,18 @@ public class WebSocketServer {
             // 当前登录用户校验 每个用户同时只能连接一次
             WebSocketServer currentWebSocket = getCurrentWebSocket(this.loginUser);
             if (currentWebSocket != null) {
-                sendMessage(JsonUtil.toJson(JsonResult.failure("E999", "您已有连接信息，不能重复连接 !")));
+                event("sms.connection.rejected",Map.of("reasonCode","ALREADY_CONNECTED"));
+                session.close(new CloseReason(CloseReason.CloseCodes.VIOLATED_POLICY,"Already connected"));
                 return;
             }
             // 将当前websocket加入set中
             WEB_SOCKET_SET.add(this);
             addOnlineCount(); // 在线数加1
-            sendMessage(JsonUtil.toJson(JsonResult.success("连接成功！")));
+            event("sms.connection.established",Map.of("connected",true));
             log.info("有一新连接！当前在线人数为{}", getOnlineCount());
-        } catch (IOException e) {
-            log.error("websocket连接异常  : 登录人ID = {} , Exception = {}", this.loginUser, e.getMessage());
+        } catch (Exception rejected) {
+            try { session.close(new CloseReason(CloseReason.CloseCodes.VIOLATED_POLICY,"Authentication required")); } catch(IOException ignored) { }
+            log.warn("SMS WebSocket authentication failed");
         }
     }
 
@@ -88,24 +102,15 @@ public class WebSocketServer {
     @OnMessage
     public void onMessage(String message, Session session) {
         try {
-            WebSocketServer webSocketServer = null;
-            for (WebSocketServer item : WEB_SOCKET_SET) {
-                if (item.session.getId().equals(session.getId())) {
-                    webSocketServer = item;
-                }
+            if(this.session!=session||!WEB_SOCKET_SET.contains(this)||StringUtil.isEmpty(loginUser)) {
+                session.close(new CloseReason(CloseReason.CloseCodes.VIOLATED_POLICY,"Authentication required"));return;
             }
-            JsonResult<String> result = JsonResult.success("");
-            result.setMsg("reply");
-            if (webSocketServer == null) {
-                result.setData("未连接不能发送消息！");
-                this.sendMessage(JsonUtil.toJson(result));
-                return;
-            }
-            log.info("来自客户端的消息:{}", message);
-            result.setData(message);
-            this.sendMessage(JsonUtil.toJson(result));
-        } catch (IOException e) {
-            log.error("websocket发送消息异常  : 登录人ID = {} , Exception = {}", this.loginUser, e.getMessage());
+            var request=ProtocolMessage.decode(JSON.readValue(message,MESSAGE));
+            if(request.correlationId()!=null||!request.messageType().equals("sms.message")||!(request.data() instanceof Map<?,?> data)
+                    ||!data.keySet().equals(Set.of("content"))||!(data.get("content") instanceof String))throw new IllegalArgumentException("Invalid SMS message");
+            transmit(ProtocolMessage.reply(request,"sms.message.receipt",UUID.randomUUID().toString(),"E0","ok",request.data()));
+        } catch(Exception invalid) {
+            try { event("sms.protocol.error",Map.of("reasonCode","MESSAGE_INVALID")); } catch(IOException failed) { log.warn("SMS WebSocket delivery failed"); }
         }
     }
 
@@ -158,7 +163,7 @@ public class WebSocketServer {
      * @since 2017年6月1日下午2:05:36
      */
     public void sendMessage(String message) throws IOException {
-        this.session.getBasicRemote().sendText(message);
+        event("sms.message",Map.of("content",message));
         // this.session.getAsyncRemote().sendText(message);
     }
 

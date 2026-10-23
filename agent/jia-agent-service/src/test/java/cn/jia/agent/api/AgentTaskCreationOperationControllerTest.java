@@ -45,7 +45,9 @@ class AgentTaskCreationOperationControllerTest {
         operations = mock(AgentTaskCreationOperationService.class);
         json = JsonMapper.builder().build();
         mvc = MockMvcBuilders.standaloneSetup(
-                new AgentTaskCreationOperationController(operations)).build();
+                new AgentTaskCreationOperationController(operations))
+                .setControllerAdvice(new cn.jia.core.config.ApiEnvelopeAdvice(),new cn.jia.core.config.ApiRequestEnvelopeAdvice(),new cn.jia.core.config.ExceptionHandlerAdvice())
+                .addFilters(new cn.jia.core.filter.RequestIdFilter()).build();
         context("owner-a", "client-a");
     }
 
@@ -64,29 +66,29 @@ class AgentTaskCreationOperationControllerTest {
         String body = """
                 {"title":"完整🚀标题","description":null,"requiredAbilities":[],
                  "reward":null,"inputRefs":[
-                   {"fileId":"file-b","version":2,"purpose":"REFERENCE"},
-                   {"fileId":"file-a","version":1,"purpose":"REFERENCE"}]}
+                   {"fileId":"file-b","version":"2","purpose":"REFERENCE"},
+                   {"fileId":"file-a","version":"1","purpose":"REFERENCE"}]}
                 """;
 
         MvcResult initial = mvc.perform(post("/agent/tasks/creation-operations")
                         .principal(jwt("owner-a", "client-a"))
                         .header("Idempotency-Key", "creation-key")
-                        .contentType(MediaType.APPLICATION_JSON).content(body))
+                        .contentType(MediaType.APPLICATION_JSON).content(q(body)))
                 .andExpect(status().isCreated())
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
-                .andExpect(jsonPath("$.schemaVersion").value(1))
-                .andExpect(jsonPath("$.operationId").value("atco_1"))
-                .andExpect(jsonPath("$.taskId").value("42"))
-                .andExpect(jsonPath("$.requirementRevision").value(1))
-                .andExpect(jsonPath("$.state").value("COMMITTED"))
-                .andExpect(jsonPath("$.task.id").value("42"))
+                .andExpect(jsonPath("$.data.schemaVersion").value(1))
+                .andExpect(jsonPath("$.data.operationId").value("atco_1"))
+                .andExpect(jsonPath("$.data.taskId").value("42"))
+                .andExpect(jsonPath("$.data.requirementRevision").value("1"))
+                .andExpect(jsonPath("$.data.state").value("COMMITTED"))
+                .andExpect(jsonPath("$.data.task.id").value("42"))
                 .andReturn();
         assertReceiptFields(initial);
 
         MvcResult replay = mvc.perform(post("/agent/tasks/creation-operations")
                         .principal(jwt("owner-a", "client-a"))
                         .header("Idempotency-Key", "creation-key")
-                        .contentType(MediaType.APPLICATION_JSON).content(body))
+                        .contentType(MediaType.APPLICATION_JSON).content(q(body)))
                 .andExpect(status().isOk())
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
                 .andReturn();
@@ -98,8 +100,9 @@ class AgentTaskCreationOperationControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
                 .andReturn();
-        assertEquals(json.readTree(replay.getResponse().getContentAsString()),
-                json.readTree(read.getResponse().getContentAsString()));
+        assertEquals(json.readTree(replay.getResponse().getContentAsString()).get("data"),
+                json.readTree(read.getResponse().getContentAsString()).get("data"));
+        assertEquals(read.getResponse().getHeader("X-Request-Id"), json.readTree(read.getResponse().getContentAsString()).path("requestId").asText());
 
         var command = org.mockito.ArgumentCaptor.forClass(
                 AgentTaskCreationOperationService.CreateCommand.class);
@@ -124,18 +127,18 @@ class AgentTaskCreationOperationControllerTest {
         MvcResult result = mvc.perform(post("/agent/tasks/creation-operations/v2")
                         .principal(jwt("owner-a", "client-a"))
                         .header("Idempotency-Key", "v2-key")
-                        .contentType(MediaType.APPLICATION_JSON).content("""
+                        .contentType(MediaType.APPLICATION_JSON).content(q("""
                           {"title":"整理图片和音频资料", "description":"不要求生图", "attachments":[
-                            {"fileId":"file-a","version":1}, {"fileId":"file-b","version":2}]}
-                          """))
+                            {"fileId":"file-a","version":"1"}, {"fileId":"file-b","version":"2"}]}
+                          """)))
                 .andExpect(status().isCreated())
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
-                .andExpect(jsonPath("$.schemaVersion").value(2))
-                .andExpect(jsonPath("$.attachments[1].version").value(2))
-                .andExpect(jsonPath("$.attachments[0].purpose").doesNotExist())
-                .andExpect(jsonPath("$.inputRefs").doesNotExist()).andReturn();
+                .andExpect(jsonPath("$.data.schemaVersion").value(2))
+                .andExpect(jsonPath("$.data.attachments[1].version").value("2"))
+                .andExpect(jsonPath("$.data.attachments[0].purpose").doesNotExist())
+                .andExpect(jsonPath("$.data.inputRefs").doesNotExist()).andReturn();
         Set<String> names = new java.util.HashSet<>();
-        json.readTree(result.getResponse().getContentAsString()).propertyNames().forEach(names::add);
+        json.readTree(result.getResponse().getContentAsString()).get("data").propertyNames().forEach(names::add);
         assertEquals(Set.of("schemaVersion", "operationId", "taskId", "requirementRevision",
                 "state", "attachments", "task"), names);
         var command = org.mockito.ArgumentCaptor.forClass(AgentTaskCreationOperationService.CreateCommand.class);
@@ -154,14 +157,14 @@ class AgentTaskCreationOperationControllerTest {
         when(operations.getByIdempotencyKey(any(), eq("empty-v2"), eq(2))).thenReturn(empty);
         for (String body : List.of("{\"title\":\"x\"}", "{\"title\":\"x\",\"attachments\":[]}")) {
             mvc.perform(post("/agent/tasks/creation-operations/v2").principal(jwt("owner-a", "client-a"))
-                            .header("Idempotency-Key", "empty-v2").contentType(MediaType.APPLICATION_JSON).content(body))
+                            .header("Idempotency-Key", "empty-v2").contentType(MediaType.APPLICATION_JSON).content(q(body)))
                     .andExpect(status().is2xxSuccessful())
-                    .andExpect(jsonPath("$.schemaVersion").value(2))
-                    .andExpect(jsonPath("$.attachments").isEmpty());
+                    .andExpect(jsonPath("$.data.schemaVersion").value(2))
+                    .andExpect(jsonPath("$.data.attachments").isEmpty());
         }
         mvc.perform(get("/agent/tasks/creation-operations/v2/request").principal(jwt("owner-a", "client-a"))
                         .header("Idempotency-Key", "empty-v2"))
-                .andExpect(status().isOk()).andExpect(jsonPath("$.schemaVersion").value(2))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data.schemaVersion").value(2))
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
         var captured = org.mockito.ArgumentCaptor.forClass(AgentTaskCreationOperationService.CreateCommand.class);
         verify(operations, org.mockito.Mockito.times(2)).create(any(), eq("empty-v2"), captured.capture());
@@ -186,12 +189,12 @@ class AgentTaskCreationOperationControllerTest {
                 "{\"title\":\"x\",\"attachments\":[{\"fileId\":\"f\",\"version\":2147483648}]}",
                 "{\"title\":\"x\",\"attachments\":[{\"fileId\":\"f\",\"version\":1},{\"fileId\":\"f\",\"version\":1}]}")) {
             mvc.perform(post("/agent/tasks/creation-operations/v2").principal(jwt("owner-a", "client-a"))
-                            .header("Idempotency-Key", "bad").contentType(MediaType.APPLICATION_JSON).content(body))
+                            .header("Idempotency-Key", "bad").contentType(MediaType.APPLICATION_JSON).content(q(body)))
                     .andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("BAD_REQUEST"));
         }
         mvc.perform(post("/agent/tasks/creation-operations").principal(jwt("owner-a", "client-a"))
                         .header("Idempotency-Key", "legacy").contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"title\":\"x\",\"attachments\":[]}"))
+                        .content(q("{\"title\":\"x\",\"attachments\":[]}")))
                 .andExpect(status().isBadRequest());
         verify(operations, never()).create(any(), any(), any());
     }
@@ -225,7 +228,7 @@ class AgentTaskCreationOperationControllerTest {
             mvc.perform(post("/agent/tasks/creation-operations")
                             .principal(jwt("owner-a", "client-a"))
                             .header("Idempotency-Key", "bad-key")
-                            .contentType(MediaType.APPLICATION_JSON).content(body))
+                            .contentType(MediaType.APPLICATION_JSON).content(q(body)))
                     .andExpect(status().isBadRequest())
                     .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
                     .andExpect(jsonPath("$.code").value("BAD_REQUEST"));
@@ -235,7 +238,7 @@ class AgentTaskCreationOperationControllerTest {
                         .header("Idempotency-Key", "one")
                         .header("Idempotency-Key", "two")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"title\":\"x\",\"inputRefs\":[]}"))
+                        .content(q("{\"title\":\"x\",\"inputRefs\":[]}")))
                 .andExpect(status().isBadRequest());
         mvc.perform(get("/agent/tasks/creation-operations/request?owner=victim")
                         .principal(jwt("owner-a", "client-a"))
@@ -272,11 +275,13 @@ class AgentTaskCreationOperationControllerTest {
                 .andExpect(status().isNotFound())
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
                 .andExpect(jsonPath("$.code").value("TASK_CREATION_NOT_FOUND"))
-                .andExpect(jsonPath("$.message").value("Task creation operation is unavailable"));
+                .andExpect(jsonPath("$.msg").value("Task creation operation is unavailable"));
     }
 
+    private static String q(String body) { return "{\"protocolVersion\":1,\"requestId\":\"creation-test\",\"data\":"+body+"}"; }
+
     private void assertReceiptFields(MvcResult result) throws Exception {
-        JsonNode root = json.readTree(result.getResponse().getContentAsString());
+        JsonNode root = json.readTree(result.getResponse().getContentAsString()).get("data");
         Set<String> fields = new java.util.HashSet<>();
         root.propertyNames().forEach(fields::add);
         assertEquals(Set.of("schemaVersion", "operationId", "taskId", "requirementRevision",

@@ -1,5 +1,7 @@
 package cn.jia.isp.api;
 
+import cn.jia.core.entity.JsonRequest;
+
 import cn.jia.core.common.EsSecurityHandler;
 import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.entity.JsonRequestPage;
@@ -38,14 +40,13 @@ public class CarController {
 	 * @return 品牌列表
 	 */
 	@RequestMapping(value = "/list/brand", method = RequestMethod.POST)
-	public Object listBrand(@RequestBody JsonRequestPage<CarBrandEntity> page, HttpServletRequest request) {
+	public Object listBrand(@RequestBody JsonRequest<JsonRequestPage<CarBrandEntity>> protocolRequest, HttpServletRequest request) {
+        JsonRequestPage<CarBrandEntity> page = protocolRequest == null ? null : protocolRequest.data();
 		String clientId = EsSecurityHandler.checkClientId(request);
 		CarBrandEntity example = Optional.ofNullable(page.getSearch()).orElse(new CarBrandEntity());
 		example.setClientId(clientId);
 		PageInfo<CarBrandEntity> carList = carService.listBrand(example, page.getPageNum(), page.getPageSize(), page.getOrderBy());
-		JsonResultPage<CarBrandEntity> result = new JsonResultPage<>(carList.getList());
-		result.setPageNum(carList.getPageNum());
-		result.setTotal(carList.getTotal());
+		JsonResultPage<CarBrandEntity> result = JsonResultPage.page(carList.getList(), carList.getPageNum(), carList.getPageSize(), carList.getTotal());
 		return result;
 	}
 	
@@ -69,7 +70,8 @@ public class CarController {
 	 * @return 品牌信息
 	 */
 	@RequestMapping(value = "/brand/create", method = RequestMethod.POST)
-	public Object createBrand(@RequestBody CarBrandEntity record) {
+	public Object createBrand(@RequestBody JsonRequest<CarBrandEntity> protocolRequest) {
+        CarBrandEntity record = protocolRequest == null ? null : protocolRequest.data();
 		carService.createBrand(record);
 		return JsonResult.success(record);
 	}
@@ -80,7 +82,8 @@ public class CarController {
 	 * @return 品牌信息
 	 */
 	@RequestMapping(value = "/brand/update", method = RequestMethod.POST)
-	public Object updateBrand(@RequestBody CarBrandEntity record) {
+	public Object updateBrand(@RequestBody JsonRequest<CarBrandEntity> protocolRequest) {
+        CarBrandEntity record = protocolRequest == null ? null : protocolRequest.data();
 		carService.updateBrand(record);
 		return JsonResult.success(record);
 	}
@@ -90,7 +93,7 @@ public class CarController {
 	 * @param id 品牌ID
 	 * @return 处理结果
 	 */
-	@RequestMapping(value = "/brand/delete", method = RequestMethod.GET)
+	@RequestMapping(value = "/brand/delete", method = RequestMethod.DELETE)
 	public Object deleteBrand(@RequestParam(name = "id") Long id) throws Exception {
 		CarBrandEntity record = carService.findBrand(id);
 		if(record == null || !Objects.equals(EsContextHolder.getContext().getClientId(), record.getClientId())) {
@@ -107,13 +110,12 @@ public class CarController {
 	 * @return 系列列表
 	 */
 	@RequestMapping(value = "/list/brandAudi", method = RequestMethod.POST)
-	public Object listBrandAudi(@RequestBody JsonRequestPage<CarBrandAudiEntity> page, HttpServletRequest request) {
+	public Object listBrandAudi(@RequestBody JsonRequest<JsonRequestPage<CarBrandAudiEntity>> protocolRequest, HttpServletRequest request) {
+        JsonRequestPage<CarBrandAudiEntity> page = protocolRequest == null ? null : protocolRequest.data();
 		EsSecurityHandler.checkClientId(request);
 		CarBrandAudiEntity example = Optional.ofNullable(page.getSearch()).orElse(new CarBrandAudiEntity());
 		PageInfo<CarBrandAudiEntity> carList = carService.listBrandAudi(example, page.getPageNum(), page.getPageSize(), page.getOrderBy());
-		JsonResultPage<CarBrandAudiEntity> result = new JsonResultPage<>(carList.getList());
-		result.setPageNum(carList.getPageNum());
-		result.setTotal(carList.getTotal());
+		JsonResultPage<CarBrandAudiEntity> result = JsonResultPage.page(carList.getList(), carList.getPageNum(), carList.getPageSize(), carList.getTotal());
 		return result;
 	}
 	
@@ -137,7 +139,8 @@ public class CarController {
 	 * @return 系列信息
 	 */
 	@RequestMapping(value = "/brandAudi/create", method = RequestMethod.POST)
-	public Object createBrandAudi(@RequestBody CarBrandAudiEntity record) {
+	public Object createBrandAudi(@RequestBody JsonRequest<CarBrandAudiEntity> protocolRequest) {
+        CarBrandAudiEntity record = protocolRequest == null ? null : protocolRequest.data();
 		carService.createBrandAudi(record);
 		return JsonResult.success(record);
 	}
@@ -148,7 +151,8 @@ public class CarController {
 	 * @return 系列信息
 	 */
 	@RequestMapping(value = "/brandAudi/update", method = RequestMethod.POST)
-	public Object updateBrandAudi(@RequestBody CarBrandAudiEntity record) {
+	public Object updateBrandAudi(@RequestBody JsonRequest<CarBrandAudiEntity> protocolRequest) {
+        CarBrandAudiEntity record = protocolRequest == null ? null : protocolRequest.data();
 		carService.updateBrandAudi(record);
 		return JsonResult.success(record);
 	}
@@ -158,7 +162,7 @@ public class CarController {
 	 * @param id 系列ID
 	 * @return 处理结果
 	 */
-	@RequestMapping(value = "/brandAudi/delete", method = RequestMethod.GET)
+	@RequestMapping(value = "/brandAudi/delete", method = RequestMethod.DELETE)
 	public Object deleteBrandAudi(@RequestParam(name = "id") Long id) throws Exception {
 		CarBrandAudiEntity record = carService.findBrandAudi(id);
 		if(record == null || !Objects.equals(EsContextHolder.getContext().getClientId(), record.getClientId())) {
@@ -175,13 +179,12 @@ public class CarController {
 	 * @return 车型列表
 	 */
 	@RequestMapping(value = "/list/brandVersion", method = RequestMethod.POST)
-	public Object listBrandVersion(@RequestBody JsonRequestPage<CarBrandVersionEntity> page, HttpServletRequest request) {
+	public Object listBrandVersion(@RequestBody JsonRequest<JsonRequestPage<CarBrandVersionEntity>> protocolRequest, HttpServletRequest request) {
+        JsonRequestPage<CarBrandVersionEntity> page = protocolRequest == null ? null : protocolRequest.data();
 		EsSecurityHandler.checkClientId(request);
 		CarBrandVersionEntity example = Optional.ofNullable(page.getSearch()).orElse(new CarBrandVersionEntity());
 		PageInfo<CarBrandVersionEntity> carList = carService.listBrandVersion(example, page.getPageNum(), page.getPageSize(), page.getOrderBy());
-		JsonResultPage<CarBrandVersionEntity> result = new JsonResultPage<>(carList.getList());
-		result.setPageNum(carList.getPageNum());
-		result.setTotal(carList.getTotal());
+		JsonResultPage<CarBrandVersionEntity> result = JsonResultPage.page(carList.getList(), carList.getPageNum(), carList.getPageSize(), carList.getTotal());
 		return result;
 	}
 	
@@ -205,7 +208,8 @@ public class CarController {
 	 * @return 车型信息
 	 */
 	@RequestMapping(value = "/brandVersion/create", method = RequestMethod.POST)
-	public Object createBrandVersion(@RequestBody CarBrandVersionEntity record) {
+	public Object createBrandVersion(@RequestBody JsonRequest<CarBrandVersionEntity> protocolRequest) {
+        CarBrandVersionEntity record = protocolRequest == null ? null : protocolRequest.data();
 		carService.createBrandVersion(record);
 		return JsonResult.success(record);
 	}
@@ -216,7 +220,8 @@ public class CarController {
 	 * @return 车型信息
 	 */
 	@RequestMapping(value = "/brandVersion/update", method = RequestMethod.POST)
-	public Object updateBrandVersion(@RequestBody CarBrandVersionEntity record) {
+	public Object updateBrandVersion(@RequestBody JsonRequest<CarBrandVersionEntity> protocolRequest) {
+        CarBrandVersionEntity record = protocolRequest == null ? null : protocolRequest.data();
 		carService.updateBrandVersion(record);
 		return JsonResult.success(record);
 	}
@@ -226,7 +231,7 @@ public class CarController {
 	 * @param id 车型ID
 	 * @return 处理结果
 	 */
-	@RequestMapping(value = "/brandVersion/delete", method = RequestMethod.GET)
+	@RequestMapping(value = "/brandVersion/delete", method = RequestMethod.DELETE)
 	public Object deleteBrandVersion(@RequestParam(name = "id") Long id) throws Exception {
 		CarBrandVersionEntity record = carService.findBrandVersion(id);
 		if(record == null || !Objects.equals(EsContextHolder.getContext().getClientId(), record.getClientId())) {
@@ -243,13 +248,12 @@ public class CarController {
 	 * @return 制造商列表
 	 */
 	@RequestMapping(value = "/list/brandMf", method = RequestMethod.POST)
-	public Object listBrandMf(@RequestBody JsonRequestPage<CarBrandMfEntity> page, HttpServletRequest request) {
+	public Object listBrandMf(@RequestBody JsonRequest<JsonRequestPage<CarBrandMfEntity>> protocolRequest, HttpServletRequest request) {
+        JsonRequestPage<CarBrandMfEntity> page = protocolRequest == null ? null : protocolRequest.data();
 		EsSecurityHandler.checkClientId(request);
 		CarBrandMfEntity example = Optional.ofNullable(page.getSearch()).orElse(new CarBrandMfEntity());
 		PageInfo<CarBrandMfEntity> carList = carService.listBrandMf(example, page.getPageNum(), page.getPageSize(), page.getOrderBy());
-		JsonResultPage<CarBrandMfEntity> result = new JsonResultPage<>(carList.getList());
-		result.setPageNum(carList.getPageNum());
-		result.setTotal(carList.getTotal());
+		JsonResultPage<CarBrandMfEntity> result = JsonResultPage.page(carList.getList(), carList.getPageNum(), carList.getPageSize(), carList.getTotal());
 		return result;
 	}
 	
@@ -273,7 +277,8 @@ public class CarController {
 	 * @return 制造商信息
 	 */
 	@RequestMapping(value = "/brandMf/create", method = RequestMethod.POST)
-	public Object createBrandMf(@RequestBody CarBrandMfEntity record) {
+	public Object createBrandMf(@RequestBody JsonRequest<CarBrandMfEntity> protocolRequest) {
+        CarBrandMfEntity record = protocolRequest == null ? null : protocolRequest.data();
 		carService.createBrandMf(record);
 		return JsonResult.success(record);
 	}
@@ -284,7 +289,8 @@ public class CarController {
 	 * @return 制造商信息
 	 */
 	@RequestMapping(value = "/brandMf/update", method = RequestMethod.POST)
-	public Object updateBrandMf(@RequestBody CarBrandMfEntity record) {
+	public Object updateBrandMf(@RequestBody JsonRequest<CarBrandMfEntity> protocolRequest) {
+        CarBrandMfEntity record = protocolRequest == null ? null : protocolRequest.data();
 		carService.updateBrandMf(record);
 		return JsonResult.success(record);
 	}
@@ -294,7 +300,7 @@ public class CarController {
 	 * @param id 制造商ID
 	 * @return 处理结果
 	 */
-	@RequestMapping(value = "/brandMf/delete", method = RequestMethod.GET)
+	@RequestMapping(value = "/brandMf/delete", method = RequestMethod.DELETE)
 	public Object deleteBrandMf(@RequestParam(name = "id") Long id) throws Exception {
 		CarBrandMfEntity record = carService.findBrandMf(id);
 		if(record == null || !Objects.equals(EsContextHolder.getContext().getClientId(), record.getClientId())) {

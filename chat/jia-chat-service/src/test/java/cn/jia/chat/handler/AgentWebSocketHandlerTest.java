@@ -42,6 +42,8 @@ import reactor.core.publisher.Flux;
 import cn.jia.test.BaseMockTest;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.springframework.ai.chat.client.ChatClient;
@@ -313,7 +315,18 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         handler.publishAgentStatus("client-a", "tenant-a", runtime);
         handler.publishCapabilityIndex("client-a", "tenant-a", List.of(capability));
 
-        verify(matching, org.mockito.Mockito.times(2)).sendMessage(any(TextMessage.class));
+        ArgumentCaptor<TextMessage> broadcasts = ArgumentCaptor.forClass(TextMessage.class);
+        verify(matching, org.mockito.Mockito.times(2)).sendMessage(broadcasts.capture());
+        Set<String> types = new java.util.HashSet<>();
+        for (TextMessage broadcast : broadcasts.getAllValues()) {
+            Map<String, Object> wire = new ObjectMapper().readValue(broadcast.getPayload(), new TypeReference<Map<String, Object>>() { });
+            types.add((String) wire.get("messageType"));
+            Map<?, ?> data = (Map<?, ?>) wire.get("data");
+            assertEquals("0", data.get("tenantId"));
+            assertEquals("tenant-a", data.get("ownerJiacn"));
+            assertEquals("client-a", data.get("clientId"));
+        }
+        assertEquals(Set.of("agent.status", "agent.capability.index"), types);
         verify(crossTenant, never()).sendMessage(any(TextMessage.class));
         verify(crossClient, never()).sendMessage(any(TextMessage.class));
     }
@@ -1116,19 +1129,20 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         verify(agentService, never()).reportTask(any(String.class), any(AgentTaskReportDTO.class));
     }
 
-    @Test
-    void durableAgentCallbacksUseAuthenticatedRuntimeIdentityInsteadOfPayloadNames() throws Exception {
+    @ParameterizedTest
+    @ValueSource(strings = {"delta", " ", "\n", "\t", " \n "})
+    void durableAgentCallbacksUseAuthenticatedRuntimeIdentityInsteadOfPayloadNames(String deltaContent) throws Exception {
         stubAgentSession("session-durable-identity", "agent-001");
         when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
         when(agentService.register(any(AgentRegisterDTO.class)))
                 .thenReturn(new AgentRegisterResultDTO("agent-001", "token-001", AgentConstants.STATUS_ONLINE));
         when(agentService.get("agent-001")).thenReturn(runtime("agent-001", "Wu Yong"));
         ChatConversationEntity conversation = new ChatConversationEntity()
-                .setId(1001L).setJiacn("juyiting").setConversationType("juyiting")
+                .setId(1001L).setJiacn("task-owner-A").setConversationType("juyiting")
                 .setConversationScopeType("public").setConversationScopeKey("public")
                 .setTargetAgentIds("[\"agent-001\"]").setLifecycleGeneration(1L);
         conversation.setTenantId("0"); conversation.setClientId("jia_client");
-        when(chatConversationService.getOwned("juyiting", "jia_client", "1001"))
+        when(chatConversationService.getOwned("task-owner-A", "jia_client", "1001"))
                 .thenReturn(conversation);
         ChatDeliberationService deliberation = org.mockito.Mockito.mock(ChatDeliberationService.class);
         when(deliberation.acceptDelta(anyString(), anyString(), anyString(), anyString(),
@@ -1151,38 +1165,53 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
                 chatMessageDao, chatConversationEventBroker));
         handler.setChatConversationService(chatConversationService);
         handler.setChatDeliberationService(deliberation);
+        var dispatchAuthority=org.mockito.Mockito.mock(cn.jia.chat.service.ChatDispatchAuthorityService.class);
+        var boundTurn=new cn.jia.chat.deliberation.ChatTurnEntity().setTenantId("0").setOwnerJiacn("task-owner-A")
+                .setClientId("jia_client").setTargetAgentId("agent-001").setTurnId("turn-1").setRequestId("req-1")
+                .setDispatchId("dispatch-1").setConversationId("1001").setConversationGeneration(1L);
+        when(dispatchAuthority.incoming("0","jia_client","juyiting","agent-001","dispatch-1"))
+                .thenReturn(new cn.jia.chat.service.ChatDispatchAuthorityService.Binding(null,boundTurn,"juyiting"));
+        handler.setChatDispatchAuthority(dispatchAuthority);
         handler.afterConnectionEstablished(session);
         UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
-                {"type":"agent.register","requestId":"reg-1","agentId":"agent-001","name":"Wu Yong"}
+                {"schemaVersion":1,"type":"agent.register","runtimeInstanceId":"runtime-1","messageId":"register-message-1","requestId":"reg-1","agentId":"agent-001","name":"Wu Yong"}
                 """));
         UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
-                {"type":"agent.message.delta","requestId":"req-1","turnId":"turn-1","dispatchId":"dispatch-1","conversationId":"1001","conversationGeneration":"1","contextSnapshotId":"snapshot-1","contextHash":"sha256:ctx","deltaSeq":"1","agentId":"agent-001","senderName":"宋江","agentName":"林冲","content":"delta"}
-                """));
+                {"schemaVersion":1,"type":"chat.message.delta","runtimeInstanceId":"runtime-1","messageId":"delta-message-1","requestId":"req-1","turnId":"turn-1","dispatchId":"dispatch-1","conversationId":"1001","conversationGeneration":"1","contextSnapshotId":"snapshot-1","contextHash":"sha256:ctx","deltaSeq":"1","agentId":"agent-001","senderName":"宋江","agentName":"林冲","content":%s}
+                """.formatted(new ObjectMapper().writeValueAsString(deltaContent))));
         UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
-                {"type":"agent.message","requestId":"req-1","turnId":"turn-1","dispatchId":"dispatch-1","conversationId":"1001","conversationGeneration":"1","contextSnapshotId":"snapshot-1","contextHash":"sha256:ctx","agentId":"agent-001","senderName":"宋江","agentName":"林冲","content":"final"}
+                {"schemaVersion":1,"type":"chat.message","runtimeInstanceId":"runtime-1","messageId":"final-message-1","requestId":"req-1","turnId":"turn-1","dispatchId":"dispatch-1","conversationId":"1001","conversationGeneration":"1","contextSnapshotId":"snapshot-1","contextHash":"sha256:ctx","agentId":"agent-001","senderName":"宋江","agentName":"林冲","content":"final"}
                 """));
+
+        ArgumentCaptor<TextMessage> finalReceipt = ArgumentCaptor.forClass(TextMessage.class);
+        verify(session, org.mockito.Mockito.atLeastOnce()).sendMessage(finalReceipt.capture());
+        List<String> outbound = finalReceipt.getAllValues().stream().map(TextMessage::getPayload).toList();
+        assertFalse(outbound.stream().anyMatch(wire -> wire.contains("\"messageType\":\"protocol.error\"")),
+                () -> "Durable callback rejected before service invocation: " + outbound);
 
         ArgumentCaptor<ServerResolvedAgentSender> deltaSender =
                 ArgumentCaptor.forClass(ServerResolvedAgentSender.class);
-        verify(deliberation).acceptDelta(eq("0"), eq("juyiting"), eq("jia_client"), eq("1001"),
+        verify(deliberation).acceptDelta(eq("0"), eq("task-owner-A"), eq("jia_client"), eq("1001"),
                 eq(1L), eq("agent-001"), eq("req-1"), eq("turn-1"), eq("dispatch-1"),
-                eq("snapshot-1"), eq("sha256:ctx"), eq(1L), eq("delta"), deltaSender.capture());
+                eq("snapshot-1"), eq("sha256:ctx"), eq(1L), eq(deltaContent), deltaSender.capture());
         ArgumentCaptor<ServerResolvedAgentSender> finalSender =
                 ArgumentCaptor.forClass(ServerResolvedAgentSender.class);
-        verify(deliberation).persistFinal(eq("0"), eq("juyiting"), eq("jia_client"), eq("1001"),
+        verify(deliberation).persistFinal(eq("0"), eq("task-owner-A"), eq("jia_client"), eq("1001"),
                 eq(1L), eq("agent-001"), eq("req-1"), eq("turn-1"), eq("dispatch-1"),
                 eq("snapshot-1"), eq("sha256:ctx"), eq("final"),
                 org.mockito.ArgumentMatchers.<Integer>isNull(), org.mockito.ArgumentMatchers.<String>isNull(),
                 org.mockito.ArgumentMatchers.<String>isNull(), finalSender.capture());
-        ArgumentCaptor<TextMessage> finalReceipt = ArgumentCaptor.forClass(TextMessage.class);
-        verify(session, org.mockito.Mockito.atLeastOnce()).sendMessage(finalReceipt.capture());
-        Map<String, Object> saved = finalReceipt.getAllValues().stream()
-                .map(TextMessage::getPayload)
-                .map(wire -> new ObjectMapper().readValue(wire, new TypeReference<Map<String, Object>>() { }))
-                .filter(event -> "agent_message_saved".equals(event.get("type")))
-                .findFirst().orElseThrow(() -> new AssertionError("Missing persisted final receipt"));
+        Map<String, Object> registration = findOutboundEnvelope(finalReceipt.getAllValues(), "agent.registered");
+        assertEquals("reg-1", registration.get("requestId"));
+        assertEquals("register-message-1", registration.get("correlationId"));
+        Map<String, Object> receipt = findOutboundEnvelope(finalReceipt.getAllValues(), "chat.message.receipt");
+        assertEquals(1, receipt.get("protocolVersion"));
+        assertEquals("req-1", receipt.get("requestId"));
+        assertEquals("E0", receipt.get("code"));
+        assertEquals("final-message-1", receipt.get("correlationId"));
+        Map<?, ?> saved = (Map<?, ?>) receipt.get("data");
         assertEquals("turn-1", saved.get("turnId"));
-        assertEquals("501", saved.get("messageId"));
+        assertEquals("501", saved.get("persistedMessageId"));
         assertEquals("evt-final", saved.get("eventId"));
         assertEquals(false, saved.get("duplicate"));
         verify(chatConversationService, never()).appendOwnedMessage(any(), any(), any(),

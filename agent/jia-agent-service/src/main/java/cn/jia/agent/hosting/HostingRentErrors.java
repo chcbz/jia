@@ -40,7 +40,7 @@ public final class HostingRentErrors {
             }
         }
         JsonResult<Void> body = JsonResult.failure(code, code);
-        body.setStatus(status);
+
         return ResponseEntity.status(status).header(HttpHeaders.CACHE_CONTROL, "private, no-store").body(body);
     }
 }

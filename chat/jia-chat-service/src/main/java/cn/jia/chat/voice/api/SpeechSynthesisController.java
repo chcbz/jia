@@ -37,7 +37,8 @@ public class SpeechSynthesisController {
     @PostMapping(path = "/synthesis", consumes = "application/json",
             produces = {"audio/mpeg", "audio/wav"})
     public ResponseEntity<byte[]> synthesize(
-            @RequestBody VoiceSynthesisRequest rawRequest, Authentication authentication) {
+            @RequestBody cn.jia.core.entity.JsonRequest<VoiceSynthesisRequest> protocolRequest, Authentication authentication) {
+        VoiceSynthesisRequest rawRequest = protocolRequest == null ? null : protocolRequest.data();
         VoiceIdentity identity = identityResolver.resolve(authentication);
         VoiceSynthesisRequest request = validator.synthesis(rawRequest, properties.getSynthesis());
         SpeechSynthesisResult result = service.synthesize(identity, request);

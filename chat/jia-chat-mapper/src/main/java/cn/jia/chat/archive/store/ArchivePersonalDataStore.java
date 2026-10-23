@@ -6,6 +6,7 @@ import java.time.Instant;
 import java.util.List;
 
 public interface ArchivePersonalDataStore {
+    ContentPoint lockFinalContentPoint(String editionId);
     ActiveEdition lockActiveEdition(String editionId);
     ContentPoint lockContentPoint(String editionId, String blockId, String paragraphId);
     List<ContentPoint> lockBlockParagraphs(String editionId, String blockId, List<String> paragraphIds);

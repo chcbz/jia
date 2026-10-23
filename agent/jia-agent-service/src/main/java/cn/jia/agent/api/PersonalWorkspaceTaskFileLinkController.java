@@ -1,5 +1,7 @@
 package cn.jia.agent.api;
 
+import cn.jia.core.entity.JsonRequest;
+
 import cn.jia.agent.service.PersonalWorkspaceTaskLinkService;
 import cn.jia.agent.service.impl.PersonalWorkspaceTaskLinkServiceImpl;
 import jakarta.servlet.http.HttpServletRequest;
@@ -39,32 +41,33 @@ public class PersonalWorkspaceTaskFileLinkController {
     }
 
     @GetMapping(value = "/{taskId}/file-links", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<PersonalWorkspaceTaskLinkService.LinkListView> list(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<PersonalWorkspaceWire.TaskLinkListView>> list(
             @PathVariable String taskId, @RequestParam(required = false) String cursor,
             Authentication authentication) {
         PersonalWorkspaceTaskLinkService.Scope scope = scope(authentication);
-        return json(service.list(scope, taskId, cursor));
+        return cn.jia.core.config.ApiJsonResponses.success(json(service.list(scope, taskId, cursor)), PersonalWorkspaceWire::from);
     }
 
     @PostMapping(value = "/{taskId}/file-links", consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<PersonalWorkspaceTaskLinkService.LinkView> create(
-            @PathVariable String taskId, @RequestBody(required = false) Map<String, Object> body,
+    public ResponseEntity<cn.jia.core.entity.JsonResult<PersonalWorkspaceWire.TaskLinkView>> create(
+            @PathVariable String taskId, @RequestBody(required = false) JsonRequest<Map<String, Object>> protocolRequest,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             Authentication authentication) {
+        Map<String, Object> body = protocolRequest == null ? null : protocolRequest.data();
         PersonalWorkspaceTaskLinkService.Scope scope = scope(authentication);
         PersonalWorkspaceTaskLinkService.CreateCommand command =
                 createCommand(body, idempotencyKey);
         PersonalWorkspaceTaskLinkService.LinkView link = service.create(scope, taskId, command);
-        return ResponseEntity.status(HttpStatus.CREATED)
+        return cn.jia.core.config.ApiJsonResponses.success(ResponseEntity.status(HttpStatus.CREATED)
                 .header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
                 .eTag(PersonalWorkspaceTaskLinkServiceImpl.etag(link))
-                .contentType(MediaType.APPLICATION_JSON).body(link);
+                .contentType(MediaType.APPLICATION_JSON).body(link), PersonalWorkspaceWire::from);
     }
 
     @DeleteMapping(value = "/{taskId}/file-links/{relationId}",
             produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<PersonalWorkspaceTaskLinkService.DetachView> detach(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<PersonalWorkspaceWire.TaskDetachView>> detach(
             @PathVariable String taskId, @PathVariable String relationId,
             @RequestHeader(value = HttpHeaders.IF_MATCH, required = false) String ifMatch,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
@@ -72,13 +75,13 @@ public class PersonalWorkspaceTaskFileLinkController {
         PersonalWorkspaceTaskLinkService.Scope scope = scope(authentication);
         PersonalWorkspaceTaskLinkService.DetachView result = service.detach(
                 scope, taskId, relationId, ifMatch, idempotencyKey);
-        return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
+        return cn.jia.core.config.ApiJsonResponses.success(ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
                 .eTag(PersonalWorkspaceTaskLinkServiceImpl.etag(result.link()))
-                .contentType(MediaType.APPLICATION_JSON).body(result);
+                .contentType(MediaType.APPLICATION_JSON).body(result), PersonalWorkspaceWire::from);
     }
 
     @ExceptionHandler(AuthenticationFailure.class)
-    public ResponseEntity<ErrorBody> authentication(AuthenticationFailure failure) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> authentication(AuthenticationFailure failure) {
         return error(failure.forbidden ? HttpStatus.FORBIDDEN : HttpStatus.UNAUTHORIZED,
                 failure.forbidden ? "TASK_FILE_LINK_FORBIDDEN" : "UNAUTHENTICATED",
                 failure.forbidden ? "Task file link scope is unavailable"
@@ -86,7 +89,7 @@ public class PersonalWorkspaceTaskFileLinkController {
     }
 
     @ExceptionHandler(PersonalWorkspaceTaskLinkService.Failure.class)
-    public ResponseEntity<ErrorBody> failure(PersonalWorkspaceTaskLinkService.Failure failure) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> failure(PersonalWorkspaceTaskLinkService.Failure failure) {
         return switch (failure.getReason()) {
             case BAD_REQUEST -> error(HttpStatus.BAD_REQUEST, "BAD_REQUEST",
                     "Invalid task file link request");
@@ -108,12 +111,12 @@ public class PersonalWorkspaceTaskFileLinkController {
 
     @ExceptionHandler({IllegalArgumentException.class,
             org.springframework.http.converter.HttpMessageNotReadableException.class})
-    public ResponseEntity<ErrorBody> malformed(Exception ignored) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> malformed(Exception ignored) {
         return error(HttpStatus.BAD_REQUEST, "BAD_REQUEST", "Invalid task file link request");
     }
 
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<ErrorBody> unexpected(Exception failure, HttpServletRequest request) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> unexpected(Exception failure, HttpServletRequest request) {
         log.error("Task file link request failed: uri={}", request.getRequestURI(), failure);
         return error(HttpStatus.SERVICE_UNAVAILABLE, "TASK_FILE_LINK_UNAVAILABLE",
                 "Task file links are temporarily unavailable");
@@ -141,12 +144,11 @@ public class PersonalWorkspaceTaskFileLinkController {
         if (body == null || !body.keySet().equals(Set.of("fileId", "version", "role"))
                 || !(body.get("fileId") instanceof String fileId)
                 || !(body.get("role") instanceof String role)
-                || !(body.get("version") instanceof Number rawVersion)) {
+                || !(body.get("version") instanceof String rawVersion)) {
             throw new IllegalArgumentException("body");
         }
-        long version = rawVersion.longValue();
-        if (version < 1 || version > Integer.MAX_VALUE
-                || rawVersion.doubleValue() != (double) version) {
+        long version = AgentRuntimeWire.version(rawVersion, true);
+        if (version < 1 || version > Integer.MAX_VALUE) {
             throw new IllegalArgumentException("version");
         }
         return new PersonalWorkspaceTaskLinkService.CreateCommand(
@@ -164,11 +166,11 @@ public class PersonalWorkspaceTaskFileLinkController {
                 .contentType(MediaType.APPLICATION_JSON).body(body);
     }
 
-    private static ResponseEntity<ErrorBody> error(
+    private static ResponseEntity<cn.jia.core.entity.JsonResult<Void>> error(
             HttpStatus status, String code, String message) {
         return ResponseEntity.status(status).header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
                 .contentType(new MediaType(MediaType.APPLICATION_JSON, StandardCharsets.UTF_8))
-                .body(new ErrorBody(code, message));
+                .body(cn.jia.core.entity.JsonResult.<Void>failure(code, message));
     }
 
     public record ErrorBody(String code, String message) { }

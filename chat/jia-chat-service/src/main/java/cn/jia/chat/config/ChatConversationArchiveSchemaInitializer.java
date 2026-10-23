@@ -20,6 +20,7 @@ import java.util.Set;
 /** Default-off additive initializer; activation fails closed on missing source linkage or schema drift. */
 @Component
 @ConditionalOnProperty(prefix = "chat.conversation-archive", name = "enabled", havingValue = "true")
+@org.springframework.context.annotation.Profile("schema-maintenance")
 public final class ChatConversationArchiveSchemaInitializer implements InitializingBean {
     static final String RESOURCE = "db/chat-conversation-archive-schema.sql";
     static final String MIGRATION_RESOURCE =

@@ -42,6 +42,51 @@ class PersonalWorkspaceServiceImplTest {
             new PersonalWorkspaceService.Scope("0", "mobile", "owner-a");
 
     @Test
+    void arbitraryFormatsAndExtensionlessFilesRoundTripWithoutEnablingPreview() {
+        Fixture fixture = new Fixture();
+        String[][] cases = {{"data.custom", "application/x-custom"}, {"page.html", "text/html"},
+                {"icon.svg", "image/svg+xml"}, {"archive.zip", "application/zip"},
+                {"README", ""}, {"renamed.txt", "application/x-custom"},
+                {"deck.pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation"},
+                {"deck.ppt", "application/vnd.ms-powerpoint"}};
+        for (int i = 0; i < cases.length; i++) {
+            byte[] content = bytes("opaque " + i);
+            var saved = fixture.service.create(OWNER_A, upload("arbitrary-" + i, cases[i][0], cases[i][1], content));
+            String mime = cases[i][1].isEmpty() ? "application/octet-stream" : cases[i][1];
+            assertEquals(mime, saved.version().contentMimeType());
+            assertEquals("UNSUPPORTED", saved.version().previewState());
+            if (cases[i][0].startsWith("deck.")) assertEquals("UNSUPPORTED", saved.file().capabilities().preview());
+            assertEquals("UNSUPPORTED", fixture.service.preview(OWNER_A, saved.file().fileId(), 1).state());
+            assertArrayEquals(content, fixture.service.readContent(OWNER_A, saved.file().fileId(), 1).bytes());
+            assertReason(PersonalWorkspaceException.Reason.NOT_FOUND,
+                    () -> fixture.service.readContent(OWNER_B, saved.file().fileId(), 1));
+        }
+        for (String filename : List.of("../escape", "a/b", "a\\b", ".", "..")) {
+            assertReason(PersonalWorkspaceException.Reason.BAD_REQUEST,
+                    () -> fixture.service.create(OWNER_A, upload("bad-name", filename, "application/octet-stream", bytes("x"))));
+        }
+        assertReason(PersonalWorkspaceException.Reason.BAD_REQUEST,
+                () -> fixture.service.create(OWNER_A, upload("bad-mime", "file", "text/html\r\nInjected: x", bytes("x"))));
+    }
+
+    @Test
+    void commonImageUploadsPreserveOriginalBytesAndOwnerScope() {
+        var formats=Map.of("jpg","image/jpeg","png","image/png","webp","image/webp","gif","image/gif",
+                "bmp","image/bmp","tiff","image/tiff","heic","image/heic","heif","image/heif","avif","image/avif");
+        for (var format:formats.entrySet()) {
+            Fixture fixture=new Fixture();
+            byte[] original=bytes("stored-original-"+format.getKey());
+            var command=new PersonalWorkspaceService.UploadCommand(new PersonalWorkspaceService.Idempotency("image-"+format.getKey()),
+                    "原图", "original."+format.getKey(),format.getValue(),original);
+            var created=fixture.service.create(OWNER_A,command);
+            String fileId=created.file().fileId();
+            assertArrayEquals(original,fixture.service.readContent(OWNER_A,fileId,1).bytes());
+            assertEquals(format.getValue(),fixture.service.get(OWNER_A,fileId).versions().getFirst().contentMimeType());
+            assertReason(PersonalWorkspaceException.Reason.NOT_FOUND,()->fixture.service.readContent(OWNER_B,fileId,1));
+        }
+    }
+
+    @Test
     void ownerAndClientScopeHideEveryForeignObjectBeforeStorageAccess() throws Exception {
         Fixture fixture = new Fixture();
         byte[] original = "owner-a private bytes".getBytes(StandardCharsets.UTF_8);
@@ -194,12 +239,12 @@ class PersonalWorkspaceServiceImplTest {
         assertEquals(7, fixture.storage.storeCount, "archive replay must not allocate another file");
         assertEquals(5, fixture.service.list(OWNER_A,
                 new PersonalWorkspaceService.ListQuery(null, "AUDIO", null, null)).items().size());
-        assertReason(PersonalWorkspaceException.Reason.UNSUPPORTED,
-                () -> fixture.service.archiveConversationAsset(OWNER_A,
-                        new PersonalWorkspaceService.ConversationArchiveCommand(
-                                new PersonalWorkspaceService.Idempotency("save-media-mismatch"), "asset_bad", 1,
-                                sha256(bytes("unsafe")), "unsafe", "unsafe.html", "audio/mpeg", bytes("unsafe"))));
-        assertEquals(7, fixture.storage.storeCount, "mismatched extension must not reach storage");
+        var mismatched = fixture.service.archiveConversationAsset(OWNER_A,
+                new PersonalWorkspaceService.ConversationArchiveCommand(
+                        new PersonalWorkspaceService.Idempotency("save-media-mismatch"), "asset_bad", 1,
+                        sha256(bytes("opaque")), "opaque", "opaque.html", "audio/mpeg", bytes("opaque")));
+        assertEquals("audio/mpeg", mismatched.version().contentMimeType());
+        assertEquals(8, fixture.storage.storeCount, "storage must not gate on extension");
     }
 
     @Test
@@ -421,7 +466,7 @@ class PersonalWorkspaceServiceImplTest {
         private final InMemoryDao dao = new InMemoryDao(events);
         private final RecordingStorage storage = new RecordingStorage(events);
         private final PersonalWorkspaceService service = new PersonalWorkspaceServiceImpl(
-                dao, storage, new PersonalWorkspaceWriteService(dao));
+                dao, storage, new PersonalWorkspaceWriteService(dao, new cn.jia.agent.service.impl.PersonalWorkspaceOperationClaimTx(dao)));
     }
 
     private static final class RecordingStorage implements PersonalWorkspaceStorage {
@@ -475,6 +520,11 @@ class PersonalWorkspaceServiceImplTest {
     }
 
     private static final class InMemoryDao implements PersonalWorkspaceDao {
+        @Override public UsageSnapshot findUsage(String tenantId, String clientId, String ownerJiacn, String fileId) {
+            var file = findFile(tenantId, clientId, ownerJiacn, fileId);
+            return file == null ? null : new UsageSnapshot(fileId, file.getMetadataRevision(), 0, 0, 0);
+        }
+
         private final List<String> events;
         private final AtomicLong ids = new AtomicLong();
         private final Map<FileKey, PersonalWorkspaceFileEntity> files = new LinkedHashMap<>();
@@ -552,6 +602,15 @@ class PersonalWorkspaceServiceImplTest {
                     .filter(version -> fileId.equals(version.getFileId()))
                     .sorted(Comparator.comparing(PersonalWorkspaceVersionEntity::getVersion).reversed())
                     .limit(limit).map(InMemoryDao::copy).toList();
+        }
+
+        @Override
+        public List<PersonalWorkspaceVersionEntity> listVersionsBefore(String tenantId, String clientId,
+                String ownerJiacn, String fileId, Integer beforeVersion) {
+            return versions.values().stream().filter(v -> scope(v, tenantId, clientId, ownerJiacn))
+                    .filter(v -> fileId.equals(v.getFileId()) && (beforeVersion==null || v.getVersion()<beforeVersion))
+                    .sorted(Comparator.comparing(PersonalWorkspaceVersionEntity::getVersion).reversed())
+                    .limit(101).map(InMemoryDao::copy).toList();
         }
 
         @Override

@@ -150,6 +150,30 @@ public final class JdbcChatConversationArchiveStore implements ChatConversationA
         return authorizedSource(scope,conversationId,assetId,revision,targetAgentId,true);
     }
 
+    @Override
+    public Source findAuthorizedOutputSource(Scope scope, String conversationId, long generation, String taskId,
+            String targetAgentId, String requestId, String stepId, String outputId, String sha256) {
+        if (targetAgentId == null) return null;
+        // Locate only the exact immutable output. Authorization remains in the shared live-source join.
+        var matches = jdbc.query("""
+                SELECT asset_id,revision FROM chat_conversation_asset
+                WHERE tenant_id=? AND owner_jiacn=? AND client_id=? AND step_id=? AND output_id=?
+                  AND BINARY tenant_id=BINARY ? AND BINARY owner_jiacn=BINARY ? AND BINARY client_id=BINARY ?
+                  AND BINARY conversation_id=BINARY ? AND conversation_generation=?
+                  AND BINARY request_id=BINARY ? AND BINARY step_id=BINARY ?
+                  AND BINARY output_id=BINARY ? AND BINARY sha256=BINARY ?
+                """, (rs, ignored) -> new Object[]{rs.getString(1), rs.getLong(2)},
+                scope.tenantId(), scope.ownerJiacn(), scope.clientId(), stepId, outputId,
+                scope.tenantId(), scope.ownerJiacn(), scope.clientId(), conversationId, generation, requestId, stepId, outputId, sha256);
+        if (matches.size() != 1) return null;
+        var match = matches.getFirst();
+        var source = authorizedSource(scope, conversationId, (String) match[0], (Long) match[1], targetAgentId, false);
+        if (source == null || !conversationId.equals(source.conversationId()) || generation != source.conversationGeneration()
+                || !taskId.equals(source.taskId()) || !requestId.equals(source.requestId())
+                || !stepId.equals(source.stepId()) || !outputId.equals(source.outputId()) || !sha256.equals(source.sha256())) return null;
+        return source;
+    }
+
     private Source authorizedSource(Scope scope,String conversationId,String assetId,long revision,
             String targetAgentId,boolean lock) {
         String sql="""
@@ -194,9 +218,9 @@ public final class JdbcChatConversationArchiveStore implements ChatConversationA
                   AND OCTET_LENGTH(a.conversation_id)=OCTET_LENGTH(?)
                   AND a.asset_id=? AND BINARY a.asset_id=BINARY ?
                   AND OCTET_LENGTH(a.asset_id)=OCTET_LENGTH(?) AND a.revision=?
-                  AND s.kind='EXECUTE' AND s.state='OUTPUT_COMMITTED'
-                  AND l.state='OUTPUT_COMMITTED' AND l.execution_id IS NOT NULL
-                  AND r.aggregate_state='OUTPUT_COMMITTED'
+                  AND s.kind='EXECUTE' AND l.execution_id IS NOT NULL
+                  AND ((s.state='OUTPUT_COMMITTED' AND l.state='OUTPUT_COMMITTED' AND r.aggregate_state='OUTPUT_COMMITTED')
+                    OR (s.state='RESULT_COMMITTED' AND l.state='RESULT_COMMITTED' AND r.aggregate_state='RESULT_COMMITTED'))
                   AND c.conversation_type='juyiting' AND c.conversation_scope_type='bounty'
                   AND BINARY c.task_id=BINARY s.task_id
                   AND BINARY c.conversation_scope_key=BINARY CONCAT('task:',s.task_id)

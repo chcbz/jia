@@ -243,7 +243,7 @@ class Mmd29ceUpgradeWiringMySqlTest {
             Fixture fixture, OwnedRedisServer redis, boolean fullFeatureWiring) {
         redis.assertExactOwnedChildAlive();
         Map<String, Object> properties = new LinkedHashMap<>();
-        properties.put("spring.profiles.active", "mmd29ce-isolated");
+        properties.put("spring.profiles.active", "mmd29ce-isolated,schema-maintenance");
         properties.put("spring.datasource.dbUrl", fixture.jdbcUrl());
         properties.put("spring.datasource.url", fixture.jdbcUrl());
         properties.put("spring.datasource.username", fixture.user());
@@ -317,8 +317,6 @@ class Mmd29ceUpgradeWiringMySqlTest {
         properties.put("agent.personal-workspace-storage.enabled", "true");
         properties.put("agent.personal-workspace-storage.root-directory", fixture.workspace().toString());
         properties.put("agent.personal-workspace-storage.max-content-bytes", "16777216");
-        properties.put("agent.personal-workspace-storage.allowed-mime-types[0]", "image/png");
-        properties.put("agent.personal-workspace-storage.allowed-mime-types[1]", "image/jpeg");
         properties.put("jia.agent.conversation-execution.enabled", "true");
         properties.put("jia.agent.formal-delivery.enabled", "true");
         properties.put("jia.agent.selected-output-finalization.enabled", "true");

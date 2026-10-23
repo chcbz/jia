@@ -70,7 +70,8 @@ public class ArchiveQuestionServiceImpl implements ArchiveQuestionService {
         requireMutationSyntax(path, key, "/archive/v1/me/questions/" + questionId);
         ArchiveWriteJson.Parsed parsed = json.parseQuestion(body, ArchiveQuestionPutRequest.class);
         ArchiveQuestionPutRequest request = parsed.value(ArchiveQuestionPutRequest.class);
-        require(request.question() != null && request.anchor() != null,
+        require(request.editionId() != null && request.editionId().matches("[A-Za-z0-9][A-Za-z0-9._-]{0,95}")
+                        && request.question() != null && request.anchor() != null,
                 422, "INVALID_REQUEST_JSON", "Question request is incomplete");
         int questionBytes = request.question().getBytes(StandardCharsets.UTF_8).length;
         require(!request.question().isBlank() && questionBytes <= MAX_QUESTION_BYTES,
@@ -82,7 +83,7 @@ public class ArchiveQuestionServiceImpl implements ArchiveQuestionService {
             require(store.countRecentQuestions(owner, clock.instant().minus(Duration.ofMinutes(1)))
                             < RATE_LIMIT_PER_MINUTE,
                     429, "QUESTION_RATE_LIMITED", "Archive question rate limit exceeded");
-            ArchiveTextSelectionValidator.Selection selection = selectionValidator.reconstruct(request.anchor());
+            ArchiveTextSelectionValidator.Selection selection = selectionValidator.reconstruct(request.editionId(), request.anchor());
             Instant now = clock.instant();
             String anchorJson = json.canonicalValue(request.anchor());
             QuestionRecord proposed = new QuestionRecord(0, questionId, selection.editionId(),

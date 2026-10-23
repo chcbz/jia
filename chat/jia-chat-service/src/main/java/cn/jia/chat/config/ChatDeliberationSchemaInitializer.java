@@ -23,6 +23,7 @@ import java.util.Objects;
 /** Strict additive MySQL contract. Existing incompatible definitions are never silently repaired. */
 @Slf4j
 @Component
+@org.springframework.context.annotation.Profile("schema-maintenance")
 public class ChatDeliberationSchemaInitializer implements ApplicationRunner {
     static final List<String> TABLES = List.of(
             "chat_context_snapshot", "chat_request", "chat_turn", "chat_dispatch_outbox",
@@ -122,6 +123,9 @@ public class ChatDeliberationSchemaInitializer implements ApplicationRunner {
         validateExistingColumnsBeforeExpansion(table, actualColumns);
         for (var entry : COLUMNS.get(table).entrySet()) {
             if (!actualColumns.containsKey(entry.getKey())) {
+                if ("chat_dispatch_outbox".equals(table)
+                        && List.of("task_grant_id","task_grant_version","task_assignment_revision","task_requirement_revision").contains(entry.getKey()))
+                    throw new IllegalStateException("Apply explicit chat-external-commission-v1-migration.sql before startup");
                 String ddl = entry.getValue().ddl();
                 if ("chat_dispatch_outbox".equals(table)
                         && ("available_at".equals(entry.getKey()) || "attempt_count".equals(entry.getKey())
@@ -149,6 +153,8 @@ public class ChatDeliberationSchemaInitializer implements ApplicationRunner {
         for (var entry : INDEXES.get(table).entrySet()) {
             IndexDef actual = actualIndexes.get(entry.getKey());
             if (entry.getValue().equals(actual)) continue;
+            if ("idx_chat_outbox_dispatch".equals(entry.getKey()))
+                throw new IllegalStateException("Apply explicit chat-external-commission-v1-migration.sql before startup");
             if (actual != null && isLegacyReadyIndex(table, entry.getKey(), actual)) {
                 jdbc.execute("ALTER TABLE chat_dispatch_outbox ALGORITHM=INPLACE, LOCK=NONE, "
                         + "DROP INDEX idx_chat_outbox_ready, ADD INDEX idx_chat_outbox_ready "
@@ -449,6 +455,8 @@ public class ChatDeliberationSchemaInitializer implements ApplicationRunner {
         all.put("chat_dispatch_outbox", ordered(c("event_id",v(64,false)), c("tenant_id",v(50,false)),
                 c("owner_jiacn",v(50,false)), c("client_id",v(50,false)), c("turn_id",v(64,false)),
                 c("dispatch_id",v(64,false)), c("event_type",v(30,false)), c("status",v(30,false)),
+                c("task_grant_id",v(100,true)), c("task_grant_version",b(true,null)),
+                c("task_assignment_revision",b(true,null)), c("task_requirement_revision",b(true,null)),
                 c("payload_json",txt("mediumtext",false)), c("version",b(false,"0")),
                 c("available_at",b(true,null)), c("lease_owner",v(100,true)), c("lease_until",b(true,null)),
                 c("attempt_count",i(false,"0")), c("fencing_token",b(false,"0")), c("last_error",v(500,true)),
@@ -504,6 +512,7 @@ public class ChatDeliberationSchemaInitializer implements ApplicationRunner {
         all.put("chat_dispatch_outbox", Map.of("PRIMARY",ix(true,"event_id"),
                 "uk_chat_outbox_turn_event",ix(true,"turn_id","event_type"),
                 "idx_chat_outbox_ready",ix(false,"status","available_at","event_id"),
+                "idx_chat_outbox_dispatch",ix(false,"tenant_id","client_id","dispatch_id","event_type"),
                 "idx_chat_outbox_scope",ix(false,"tenant_id","owner_jiacn","client_id","turn_id","event_type")));
         all.put("chat_conversation_event", Map.of("PRIMARY",ix(true,"event_sequence"),
                 "uk_chat_conversation_event_id",ix(true,"event_id"),

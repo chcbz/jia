@@ -25,7 +25,7 @@ public class MemoryDocument {
 
     private String state;
     /**
-     * 文档ID (ES auto-generate)
+     * 稳定文档ID（写入时分配，检索使用ES命中ID）
      */
     private String id;
 

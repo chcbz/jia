@@ -146,6 +146,30 @@ class AgentTaskAggregationRealDatabaseTest {
     }
 
     @Test
+    void externalMemberAndWorkAggregateUnderTaskOwnerUsingFrozenProvider() {
+        insertTask(TASK, TENANT, "running", 0L);
+        insertMember(TASK, AGENT_A, "done");
+        insertWork(TASK, "external-work", true, "completed", 1, 3, "artifact-a", 100L);
+        jdbc.update("UPDATE agent_task_work_item SET assignee_agent_id=? WHERE work_item_id='external-work'", AGENT_A);
+        var grants = org.mockito.Mockito.mock(cn.jia.agent.dao.AgentTaskExecutionGrantDao.class);
+        var identities = org.mockito.Mockito.mock(AgentIdentityService.class);
+        var grant = new cn.jia.agent.entity.AgentTaskExecutionGrantEntity().setTaskId(TASK)
+                .setOwnerJiacn(OWNER).setTargetAgentId(AGENT_A).setExecutorOwnerJiacn("provider-b").setExecutorBindingId(9L);
+        grant.setTenantId(TENANT); grant.setClientId(CLIENT);
+        org.mockito.Mockito.when(grants.findLatestByTaskAgent(TENANT,CLIENT,OWNER,TASK,AGENT_A)).thenReturn(grant);
+        org.mockito.Mockito.when(identities.requirePersistedCanonicalAgentIdInScope(TENANT,CLIENT,"provider-b",AGENT_A)).thenReturn(AGENT_A);
+        var authority = new TaskAssigneeAuthorityServiceImpl(
+                org.mockito.Mockito.mock(cn.jia.agent.dao.AgentExternalServicePolicyDao.class), identities, grants);
+        var service = transactionalProxy(new AgentTaskAggregationServiceImpl(taskMetaDao, authority,
+                new AgentTaskMutationTransactionImpl(taskMetaDao, transactionManager), eventWriter,
+                new AgentTaskAggregationCalculator(), () -> 1_000L), AgentTaskAggregationService.class);
+        assertEquals("completed", service.aggregate(TENANT,CLIENT,OWNER,TASK,command(0L)).getStatus());
+        assertTask("completed", 1L);
+        org.mockito.Mockito.verify(identities, org.mockito.Mockito.atLeastOnce())
+                .requirePersistedCanonicalAgentIdInScope(TENANT,CLIENT,"provider-b",AGENT_A);
+    }
+
+    @Test
     void deterministicPriorityCoversReviewingBlockedAndMaxAttemptFailure() {
         insertTask(TASK, TENANT, "running", 0L);
         insertWork(TASK, "work-a", true, "submitted", 0, 3, null, null);
@@ -513,7 +537,7 @@ class AgentTaskAggregationRealDatabaseTest {
                     throw new IllegalArgumentException("identity is not registered");
                 });
         return transactionalProxy(new AgentTaskAggregationServiceImpl(
-                metaDao, identityService, new AgentTaskMutationTransactionImpl(
+                metaDao, new TaskAssigneeAuthorityServiceImpl(org.mockito.Mockito.mock(cn.jia.agent.dao.AgentExternalServicePolicyDao.class), identityService, org.mockito.Mockito.mock(cn.jia.agent.dao.AgentTaskExecutionGrantDao.class)), new AgentTaskMutationTransactionImpl(
                         metaDao, transactionManager), writer,
                 new AgentTaskAggregationCalculator(), () -> 1_000L),
                 AgentTaskAggregationService.class);

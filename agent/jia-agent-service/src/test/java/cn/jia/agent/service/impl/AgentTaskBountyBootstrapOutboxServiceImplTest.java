@@ -312,6 +312,26 @@ class AgentTaskBountyBootstrapOutboxServiceImplTest {
         }
 
         @Test
+        void ordinarySkillDeliberationReadsBackAndRejectsMismatchedToolPolicies() {
+            var operations = List.of("DELIBERATE", "EXECUTE_SKILL");
+            ReadFixture fixture = new ReadFixture(operations, "DELIBERATE", true, 3L);
+            fixture.grants.grant.setPermittedToolPolicyRef("SKILLS_V1");
+            var result = fixture.service.read(scope(), "task-1", "original-key");
+            assertEquals(operations, result.permittedOperations());
+            assertEquals("DELIBERATE", result.initialOperation());
+            assertTrue(result.currentAssignment());
+            assertEquals(0, fixture.grants.writeCalls);
+            assertEquals(0, fixture.bootstraps.writeCalls);
+            fixture.grants.grant.setPermittedToolPolicyRef("NO_TOOLS_V1");
+            assertReadReason(AgentTaskDeliberationOperationReadService.ReadException.Reason.INTEGRITY_ERROR,
+                    () -> fixture.service.read(scope(), "task-1", "original-key"));
+            ReadFixture noSkill = new ReadFixture();
+            noSkill.grants.grant.setPermittedToolPolicyRef("SKILLS_V1");
+            assertReadReason(AgentTaskDeliberationOperationReadService.ReadException.Reason.INTEGRITY_ERROR,
+                    () -> noSkill.service.read(scope(), "task-1", "original-key"));
+        }
+
+        @Test
         void textFileGrantReadsBackWithoutReassigningOrWeakeningIntegrity() {
             var operations=List.of("DELIBERATE", "GENERATE_TEXT_FILE", "INSPECT_INPUTS");
             ReadFixture fixture=new ReadFixture(operations,"DELIBERATE",true,3L);
@@ -536,7 +556,8 @@ class AgentTaskBountyBootstrapOutboxServiceImplTest {
         private AgentTaskDeliberationOperationReadService.Operation pointOperation(String initial) {
             return new AgentTaskDeliberationOperationReadService.Operation(
                     "task-1", "agent-1", 1, 1, 1, "grant-1", 1, "ACTIVE",
-                    List.of("DELIBERATE", "INSPECT_INPUTS"),List.of(),"bootstrap-1","PENDING",0,
+                    List.of("DELIBERATE", "EXECUTE_SKILL"),List.of(new AgentTaskDeliberationOperationReadService.InputSummary(
+                            "file-1", 1, "INPUT", "image/png", 7424L, "a".repeat(64))),"bootstrap-1","PENDING",0,
                     initial,null,null,true);
         }
 
@@ -550,13 +571,17 @@ class AgentTaskBountyBootstrapOutboxServiceImplTest {
                     .header("Idempotency-Key","point-key").contentType("application/json")
                     .content("{\"targetAgentId\":\"agent-1\",\"expectedTaskVersion\":\"0\",\"requirementRevision\":\"1\"}"))
                     .andExpect(status().isOk()).andExpect(header().string(HttpHeaders.CACHE_CONTROL,"private, no-store"))
+                    .andExpect(jsonPath("$.data.schemaVersion").value(2))
+                    .andExpect(jsonPath("$.data.inputs[0].version").value("1"))
                     .andExpect(jsonPath("$.data.initialOperation").value("DELIBERATE"))
                     .andExpect(jsonPath("$.data.taskVersion").value("1"));
             verify(grants).assignForDeliberation(scope(),"task-1","point-key","agent-1",0,1);
             clearInvocations(grants);
             mvc.perform(get("/agent/tasks/task-1/point-and-deliberate/request")
                     .principal(jwtToken("owner","client")).header("Idempotency-Key","point-key"))
-                    .andExpect(status().isOk());
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.data.schemaVersion").value(2))
+                    .andExpect(jsonPath("$.data.inputs[0].version").value("1"));
             verifyNoInteractions(grants);
         }
 
@@ -879,6 +904,7 @@ class AgentTaskBountyBootstrapOutboxServiceImplTest {
             this.grant = grant;
             this.active = grant;
         }
+        @Override public AgentTaskExecutionGrantEntity findLatestByTaskAgent(String t,String c,String o,String task,String agent){throw new AssertionError();}
         @Override public AgentTaskExecutionGrantEntity findByActionForUpdate(
                 String t, String c, String o, String action) {
             order.add("grant-action");

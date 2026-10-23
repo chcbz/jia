@@ -34,6 +34,11 @@ public final class AgentTaskExecutionGrantDaoImpl implements AgentTaskExecutionG
         scope(tenantId, clientId, ownerJiacn); id(taskId,"taskId",100); id(grantId,"grantId",100);
         return mapper.selectByGrant(tenantId,clientId,ownerJiacn,taskId,grantId);
     }
+    @Override public AgentTaskExecutionGrantEntity findLatestByTaskAgent(String tenantId,
+            String clientId, String ownerJiacn, String taskId, String agentId) {
+        scope(tenantId, clientId, ownerJiacn); id(taskId,"taskId",100); id(agentId,"agentId",100);
+        return mapper.selectLatestByTaskAgent(tenantId,clientId,ownerJiacn,taskId,agentId);
+    }
     @Override public String latestAssignmentEventJson(String tenantId, String clientId,
             String ownerJiacn, String taskId) {
         scope(tenantId,clientId,ownerJiacn); id(taskId,"taskId",100);

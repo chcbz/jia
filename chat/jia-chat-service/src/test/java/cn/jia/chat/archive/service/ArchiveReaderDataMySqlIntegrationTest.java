@@ -4,7 +4,7 @@ import cn.jia.chat.archive.config.ArchiveReaderDataSchemaInitializer;
 import cn.jia.chat.archive.config.ArchiveSchemaInitializer;
 import cn.jia.chat.archive.content.ArchiveManifest;
 import cn.jia.chat.archive.content.ArchiveManifestBundle;
-import cn.jia.chat.archive.content.ArchiveManifestLoader;
+import cn.jia.chat.archive.content.ArchiveFixtureLoader;
 import cn.jia.chat.archive.model.ArchiveOwnerScope;
 import cn.jia.chat.archive.store.JdbcArchiveContentStore;
 import cn.jia.chat.archive.store.JdbcArchivePersonalDataStore;
@@ -58,7 +58,7 @@ class ArchiveReaderDataMySqlIntegrationTest {
         readerDataSchema = new ArchiveReaderDataSchemaInitializer(jdbc);
         readerDataSchema.initialize();
         readerDataSchema.initialize();
-        ArchiveManifestBundle bundle = new ArchiveManifestLoader().load();
+        ArchiveManifestBundle bundle = new ArchiveFixtureLoader().load();
         new ArchiveContentImporter(new JdbcArchiveContentStore(jdbc),
                 new SpringArchiveTransactions(new DataSourceTransactionManager(dataSource)), 100)
                 .importAndActivate(bundle.manifest(), bundle.manifestFileSha256());

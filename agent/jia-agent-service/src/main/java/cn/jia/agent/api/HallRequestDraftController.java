@@ -44,6 +44,11 @@ public class HallRequestDraftController {
             .enable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
             .enable(DeserializationFeature.FAIL_ON_NULL_FOR_PRIMITIVES)
             .disable(MapperFeature.ALLOW_COERCION_OF_SCALARS)
+            .withCoercionConfig(tools.jackson.databind.type.LogicalType.Textual, config -> {
+                for (var shape : List.of(tools.jackson.databind.cfg.CoercionInputShape.Integer,
+                        tools.jackson.databind.cfg.CoercionInputShape.Float, tools.jackson.databind.cfg.CoercionInputShape.Boolean))
+                    config.setCoercion(shape, tools.jackson.databind.cfg.CoercionAction.Fail);
+            })
             .build();
     private final HallRequestDraftService service;
 
@@ -52,58 +57,58 @@ public class HallRequestDraftController {
     }
 
     @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<HallRequestDraftService.DraftView> create(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<HallDraftWire.DraftView>> create(
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             HttpServletRequest request, Authentication authentication) {
         requireNoQuery(request);
         CreateRequest body = parse(readBounded(request), CreateRequest.class);
         HallRequestDraftService.DraftView view = service.create(scope(authentication), command(body),
                 idempotencyKey);
-        return ResponseEntity.status(HttpStatus.CREATED)
+        return cn.jia.core.config.ApiJsonResponses.success(ResponseEntity.status(HttpStatus.CREATED)
                 .header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
-                .contentType(MediaType.APPLICATION_JSON).body(view);
+                .contentType(MediaType.APPLICATION_JSON).body(HallDraftWire.from(view)));
     }
 
     @GetMapping(value = "/{draftId}", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<HallRequestDraftService.DraftView> get(@PathVariable String draftId,
+    public ResponseEntity<cn.jia.core.entity.JsonResult<HallDraftWire.DraftView>> get(@PathVariable String draftId,
             HttpServletRequest request, Authentication authentication) {
         requireNoQuery(request);
-        return ok(service.get(scope(authentication), draftId));
+        return cn.jia.core.config.ApiJsonResponses.success(ok(HallDraftWire.from(service.get(scope(authentication), draftId))));
     }
 
     @GetMapping(produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<HallRequestDraftService.DraftPage> list(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<HallDraftWire.DraftPage>> list(
             @RequestParam(required = false) String cursor,
             HttpServletRequest request, Authentication authentication) {
         requireOnlyCursorQuery(request);
-        return ok(service.list(scope(authentication), cursor));
+        return cn.jia.core.config.ApiJsonResponses.success(ok(HallDraftWire.from(service.list(scope(authentication), cursor))));
     }
 
     @PutMapping(value = "/{draftId}", consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<HallRequestDraftService.DraftView> replace(@PathVariable String draftId,
+    public ResponseEntity<cn.jia.core.entity.JsonResult<HallDraftWire.DraftView>> replace(@PathVariable String draftId,
             @RequestHeader(value = HttpHeaders.IF_MATCH, required = false) String ifMatch,
             HttpServletRequest request, Authentication authentication) {
         requireNoQuery(request);
         ReplaceRequest body = parse(readBounded(request), ReplaceRequest.class);
-        return ok(service.replace(scope(authentication), draftId, revision(ifMatch), editable(body)));
+        return cn.jia.core.config.ApiJsonResponses.success(ok(HallDraftWire.from(service.replace(scope(authentication), draftId, revision(ifMatch), editable(body)))));
     }
 
     @PostMapping(value = "/{draftId}/discard", consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<HallRequestDraftService.DraftView> discard(@PathVariable String draftId,
+    public ResponseEntity<cn.jia.core.entity.JsonResult<HallDraftWire.DraftView>> discard(@PathVariable String draftId,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             HttpServletRequest request, Authentication authentication) {
         requireNoQuery(request);
         DiscardRequest body = parse(readBounded(request), DiscardRequest.class);
         if (body.expectedRevision() == null) throw new RequestFailure();
-        return ok(service.discard(scope(authentication), draftId, body.expectedRevision(),
-                idempotencyKey));
+        return cn.jia.core.config.ApiJsonResponses.success(ok(HallDraftWire.from(service.discard(scope(authentication), draftId, positiveLong(body.expectedRevision()),
+                idempotencyKey))));
     }
 
     @PostMapping(value = "/{draftId}/submit", consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<HallRequestDraftService.SubmissionReceipt> submit(
+    public ResponseEntity<cn.jia.core.entity.JsonResult<HallDraftWire.SubmissionReceipt>> submit(
             @PathVariable String draftId,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             HttpServletRequest request, Authentication authentication) {
@@ -113,21 +118,21 @@ public class HallRequestDraftController {
             throw new RequestFailure();
         }
         HallRequestDraftService.SubmissionReceipt receipt = service.submit(scope(authentication),
-                draftId, body.expectedRevision(), body.authorizationAcknowledgement(), idempotencyKey);
-        return ResponseEntity.status(HttpStatus.ACCEPTED)
+                draftId, positiveLong(body.expectedRevision()), body.authorizationAcknowledgement(), idempotencyKey);
+        return cn.jia.core.config.ApiJsonResponses.success(ResponseEntity.status(HttpStatus.ACCEPTED)
                 .header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
-                .contentType(MediaType.APPLICATION_JSON).body(receipt);
+                .contentType(MediaType.APPLICATION_JSON).body(HallDraftWire.from(receipt)));
     }
 
     @ExceptionHandler(AuthenticationFailure.class)
-    public ResponseEntity<ErrorBody> authentication(AuthenticationFailure failure) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<FailureDetails>> authentication(AuthenticationFailure failure) {
         return error(failure.forbidden ? HttpStatus.FORBIDDEN : HttpStatus.UNAUTHORIZED,
                 failure.forbidden ? "HALL_DRAFT_FORBIDDEN" : "HALL_DRAFT_UNAUTHENTICATED",
                 "Hall draft access is unavailable", false, Map.of());
     }
 
     @ExceptionHandler(HallRequestDraftService.Failure.class)
-    public ResponseEntity<ErrorBody> failure(HallRequestDraftService.Failure failure) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<FailureDetails>> failure(HallRequestDraftService.Failure failure) {
         return switch (failure.reason()) {
             case BAD_REQUEST -> error(HttpStatus.BAD_REQUEST, "HALL_DRAFT_BAD_REQUEST",
                     "Invalid Hall draft request", false, failure.safeDetails());
@@ -155,14 +160,14 @@ public class HallRequestDraftController {
         };
     }
 
-    @ExceptionHandler({RequestFailure.class, IllegalArgumentException.class})
-    public ResponseEntity<ErrorBody> malformed(Exception ignored) {
+    @ExceptionHandler({RequestFailure.class, IllegalArgumentException.class, org.springframework.http.converter.HttpMessageNotReadableException.class})
+    public ResponseEntity<cn.jia.core.entity.JsonResult<FailureDetails>> malformed(Exception ignored) {
         return error(HttpStatus.BAD_REQUEST, "HALL_DRAFT_BAD_REQUEST",
                 "Invalid Hall draft request", false, Map.of());
     }
 
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<ErrorBody> unexpected(Exception ignored) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<FailureDetails>> unexpected(Exception ignored) {
         return error(HttpStatus.SERVICE_UNAVAILABLE, "HALL_DRAFT_STORAGE_UNAVAILABLE",
                 "Hall draft storage is temporarily unavailable", true, Map.of());
     }
@@ -186,20 +191,20 @@ public class HallRequestDraftController {
         if (inputs == null) throw new RequestFailure();
         return inputs.stream().map(input -> {
             if (input == null || input.version() == null) throw new RequestFailure();
-            return new HallRequestDraftService.InputSelection(input.fileId(), input.version());
+            return new HallRequestDraftService.InputSelection(input.fileId(), positiveInt(input.version()));
         }).toList();
     }
 
     private static HallRequestDraftService.SourceRef source(SourceRefRequest source) {
         return source == null ? null : new HallRequestDraftService.SourceRef(
-                source.sourceType(), source.sourceId(), source.version());
+                source.sourceType(), source.sourceId(), source.version()==null?null:positiveInt(source.version()));
     }
 
     private static HallRequestDraftService.SourceOutputRef sourceOutput(SourceOutputRefRequest source) {
         if (source == null) return null;
         if (source.fileVersion() == null) throw new RequestFailure();
         return new HallRequestDraftService.SourceOutputRef(source.executionId(), source.outputId(),
-                source.fileId(), source.fileVersion());
+                source.fileId(), positiveInt(source.fileVersion()));
     }
 
     static HallRequestDraftService.OwnerScope scope(Authentication authentication) {
@@ -251,24 +256,8 @@ public class HallRequestDraftController {
 
     static byte[] readBounded(HttpServletRequest request) {
         if (request == null) throw new RequestFailure();
-        int declared = request.getContentLength();
-        if (declared == 0 || declared > MAX_BODY_BYTES) throw new RequestFailure();
-        try (ServletInputStream input = request.getInputStream();
-                ByteArrayOutputStream output = new ByteArrayOutputStream()) {
-            byte[] buffer = new byte[8192];
-            int total = 0;
-            for (int read; (read = input.read(buffer)) != -1;) {
-                total += read;
-                if (total > MAX_BODY_BYTES) throw new RequestFailure();
-                output.write(buffer, 0, read);
-            }
-            if (total == 0) throw new RequestFailure();
-            return output.toByteArray();
-        } catch (RequestFailure failure) {
-            throw failure;
-        } catch (IOException failure) {
-            throw new RequestFailure();
-        }
+        try { return cn.jia.core.config.ApiJsonInput.readData(request, MAX_BODY_BYTES, false); }
+        catch (IOException failure) { throw new RequestFailure(); }
     }
 
     static <T> T parse(byte[] body, Class<T> type) {
@@ -288,12 +277,12 @@ public class HallRequestDraftController {
                 .contentType(MediaType.APPLICATION_JSON).body(body);
     }
 
-    static ResponseEntity<ErrorBody> error(HttpStatus status, String code, String message,
+    static ResponseEntity<cn.jia.core.entity.JsonResult<FailureDetails>> error(HttpStatus status, String code, String message,
             boolean retryable, Map<String, String> details) {
+        var result = cn.jia.core.entity.JsonResult.<FailureDetails>failure(code, message);
+        result.setData(new FailureDetails(retryable, details == null || details.isEmpty() ? null : Map.copyOf(details)));
         return ResponseEntity.status(status).header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
-                .contentType(new MediaType(MediaType.APPLICATION_JSON, StandardCharsets.UTF_8))
-                .body(new ErrorBody(code, message, UUID.randomUUID().toString(), retryable,
-                        details == null || details.isEmpty() ? null : Map.copyOf(details)));
+                .contentType(new MediaType(MediaType.APPLICATION_JSON, StandardCharsets.UTF_8)).body(result);
     }
 
     public record CreateRequest(String kind, String originRef, SourceRefRequest sourceRef,
@@ -302,15 +291,23 @@ public class HallRequestDraftController {
             SourceOutputRefRequest sourceOutputRef) { }
     public record ReplaceRequest(String title, String instruction, String targetAgentId,
             String outputMime, List<InputRequest> inputs) { }
-    public record DiscardRequest(Long expectedRevision) { }
-    public record SubmitRequest(Long expectedRevision, Boolean authorizationAcknowledgement) { }
-    public record InputRequest(String fileId, Integer version) { }
-    public record SourceRefRequest(String sourceType, String sourceId, Integer version) { }
+    public record DiscardRequest(String expectedRevision) { }
+    public record SubmitRequest(String expectedRevision, Boolean authorizationAcknowledgement) { }
+    public record InputRequest(String fileId, String version) { }
+    public record SourceRefRequest(String sourceType, String sourceId, String version) { }
     public record SourceOutputRefRequest(String executionId, String outputId,
-            String fileId, Integer fileVersion) { }
+            String fileId, String fileVersion) { }
+    public record FailureDetails(boolean retryable, Map<String, String> details) { }
     public record ErrorBody(String code, String message, String traceId,
             boolean retryable, Map<String, String> details) { }
 
+    private static long positiveLong(String value) {
+        if (value == null || !value.matches("[1-9][0-9]*") || value.length()>19) throw new RequestFailure();
+        try { return Long.parseLong(value); } catch (NumberFormatException invalid) { throw new RequestFailure(); }
+    }
+    private static int positiveInt(String value) {
+        long parsed=positiveLong(value); if(parsed>Integer.MAX_VALUE) throw new RequestFailure(); return (int)parsed;
+    }
     static final class RequestFailure extends RuntimeException { }
     static final class AuthenticationFailure extends RuntimeException {
         final boolean forbidden;

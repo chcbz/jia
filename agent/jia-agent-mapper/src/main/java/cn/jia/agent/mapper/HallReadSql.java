@@ -128,10 +128,16 @@ public final class HallReadSql {
                 + exact("d2.task_id", "t.task_id") + scopeWithoutOwner("d2") + " ORDER BY d2.revision DESC,d2.id DESC LIMIT 1)"
                 + " LEFT JOIN agent_task_work_item w ON " + exact("w.task_id", "t.task_id")
                 + " AND " + exact("w.work_item_id", "d.work_item_id") + scope("w") : "";
+        // Shared page/count classifier, translated from XML script syntax to this SQL provider.
+        // No table lookup while the formal schema is disabled; report UNKNOWN, never guess acceptance.
+        String phase = formalEnabled ? AgentTaskPhaseSql.PHASE.replace("task.", "t.").replace("&gt;", ">")
+                : "CASE WHEN BINARY t.reward_status=BINARY 'completed' THEN 'COMPLETED' "
+                + "WHEN BINARY t.reward_status IN (BINARY 'failed',BINARY 'cancelled',BINARY 'archived') THEN 'HISTORY' "
+                + "ELSE 'UNKNOWN' END";
         String time = "GREATEST(COALESCE(t.update_time,t.create_time),COALESCE(p.update_time,p.create_time,t.update_time,t.create_time)"
                 + (formalEnabled ? ",COALESCE(d.submitted_at,0),COALESCE(d.reviewed_at,0)" : "") + ")";
         return "SELECT t.tenant_id,t.client_id,t.owner_jiacn,'TASK' AS source_type,t.task_id AS source_id,"
-                + "p.name AS title,t.reward_status AS state,t.assigned_agent_id AS target_agent_id," + time + " AS updated_at" + reviewColumns
+                + "p.name AS title,t.reward_status AS state,t.assigned_agent_id AS target_agent_id," + time + " AS updated_at," + phase + " AS phase" + reviewColumns
                 + " FROM agent_task_meta t LEFT JOIN task_plan p ON t.task_id REGEXP '^[0-9]+$' AND p.id=CAST(t.task_id AS UNSIGNED)"
                 + " AND " + exact("p.jiacn", "#{ownerJiacn}") + " AND " + exact("p.client_id", "#{clientId}")
                 + " AND " + exact("p.tenant_id", "#{tenantId}") + joins + " WHERE 1=1" + scope("t");

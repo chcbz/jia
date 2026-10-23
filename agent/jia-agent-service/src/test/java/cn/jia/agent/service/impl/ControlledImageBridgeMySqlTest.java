@@ -195,6 +195,7 @@ class ControlledImageBridgeMySqlTest {
                 .thenAnswer(invocation->{
                     AgentLegacyTaskCompatibilityService.AssignmentPrecommitValidator validator=
                             invocation.getArgument(7);
+                    validator.beforeIdentityLock(root,List.of("agent-zero"));
                     validator.validate(root,List.of("agent-zero"));
                     root.setAssignedAgentId("agent-zero").setTaskVersion(1L).setCurrentEventVersion(1L);
                     return new AgentLegacyTaskCompatibilityService.AssignOutcome(
@@ -215,6 +216,11 @@ class ControlledImageBridgeMySqlTest {
         var grants=new AgentTaskExecutionGrantServiceImpl(grantRows,bootstrapRows,
                 mock(PersonalWorkspaceTaskLinkDao.class),mock(PersonalWorkspaceDao.class),legacy,identities,
                 transactions,json,requirements);
+        var assignees=mock(cn.jia.agent.service.TaskAssigneeAuthorityService.class);
+        var target=new cn.jia.agent.service.TaskAssigneeAuthorityService.Target("0","client","owner","agent-zero",1L,null);
+        when(assignees.lockForAssignment("0","client","owner","agent-zero")).thenReturn(target);
+        when(assignees.resolveForAssignment("0","client","owner","agent-zero")).thenReturn(target);
+        grants.setAssigneeAuthority(assignees);
 
         AgentTaskProviderCostConsentDao consentRows=mysqlConsentDao();
         ControlledImageProviderOperatorPolicy policies=operatorPolicy();

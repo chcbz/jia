@@ -31,6 +31,7 @@ import java.util.concurrent.TimeUnit;
 /** Runtime hosting v1 only. No retired broker, credentials, arbitrary paths or public callback. */
 @Component
 public final class UnixManagedHostingProvisioner implements ManagedHostingProvisioner {
+    private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(UnixManagedHostingProvisioner.class);
     static final String PROTOCOL = "runtime-hosting-v1";
     private static final long MAX_SAFE_INTEGER = 9_007_199_254_740_991L;
     private static final int MAX_FRAME = 16384;
@@ -51,14 +52,18 @@ public final class UnixManagedHostingProvisioner implements ManagedHostingProvis
     @Override public boolean probeCapabilities(String tenantId, String clientId, String ownerJiacn) {
         outsideTransaction();
         if (!availableFor(tenantId, clientId, ownerJiacn)) return false;
+        String requestId = java.util.UUID.randomUUID().toString();
         try {
             var request = new LinkedHashMap<String, Object>();
             request.put("protocol", PROTOCOL); request.put("method", "capabilities");
             request.put("tenantId", tenantId); request.put("clientId", clientId); request.put("ownerJiacn", ownerJiacn);
-            var response = exchange(request);
+            var response = exchange(request, requestId);
             return response != null && response.keySet().equals(Set.of("protocol", "method", "tenantId", "clientId", "ownerJiacn", "available", "hostId"))
                     && echoes(request, response) && Boolean.TRUE.equals(response.get("available")) && exact(response.get("hostId"), 100);
-        } catch (Exception unavailable) { return false; }
+        } catch (Exception unavailable) {
+            LOG.warn("Managed capability unavailable requestId={} stage=capabilities errorCode=HOSTING_EXCHANGE_UNAVAILABLE causeClass={}", requestId, unavailable.getClass().getSimpleName());
+            return false;
+        }
     }
     @Override public Observation prepareAndObserve(Preparation p) {
         outsideTransaction();
@@ -182,10 +187,15 @@ public final class UnixManagedHostingProvisioner implements ManagedHostingProvis
     private static boolean installation(Object value) { return value instanceof String s && s.matches("rti_[0-9a-f]{32}"); }
 
     Map<String, Object> exchange(Map<String, Object> request) throws IOException {
+        return exchange(request, java.util.UUID.randomUUID().toString());
+    }
+    Map<String, Object> exchange(Map<String, Object> request, String requestId) throws IOException {
         outsideTransaction();
         Path socket = Path.of(config.socketPath());
         validateSocket(socket, config.runnerUid(), config.socketGroupGid());
-        byte[] frame = (JSON.writeValueAsString(request) + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        var message = cn.jia.core.entity.ProtocolMessage.event(requestId, "hosting." + request.get("method"),
+                java.util.UUID.randomUUID().toString(), hostingData(request));
+        byte[] frame = (JSON.writeValueAsString(message) + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8);
         if (frame.length > MAX_FRAME) throw new IOException("Managed frame too large");
         long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(config.timeoutMs());
         try (SocketChannel channel = SocketChannel.open(StandardProtocolFamily.UNIX); Selector selector = Selector.open()) {
@@ -210,7 +220,7 @@ public final class UnixManagedHostingProvisioner implements ManagedHostingProvis
                     byte value = buffer.get();
                     if (value == '\n') {
                         if (buffer.hasRemaining()) throw new IOException("Multiple managed frames");
-                        return JSON.readValue(response.toByteArray(), new TypeReference<Map<String, Object>>() { });
+                        return hostingResponse(message, JSON.readValue(response.toByteArray(), new TypeReference<Map<String, Object>>() { }));
                     }
                     if (response.size() >= MAX_FRAME) throw new IOException("Managed response too large");
                     response.write(value);
@@ -218,6 +228,40 @@ public final class UnixManagedHostingProvisioner implements ManagedHostingProvis
                 buffer.clear();
             }
         }
+    }
+    static Map<String, Object> hostingData(Map<String, Object> internal) {
+        Map<String, Object> data = new LinkedHashMap<>(internal);
+        data.remove("protocol"); data.remove("method");
+        if (data.containsKey("validUntil")) data.put("validUntilAt", data.remove("validUntil"));
+        if (data.containsKey("installationId")) data.put("runtimeInstallationId", data.remove("installationId"));
+        if (data.containsKey("provisionGeneration")) data.put("provisionGeneration", String.valueOf(data.get("provisionGeneration")));
+        return data;
+    }
+    static Map<String, Object> hostingResponse(cn.jia.core.entity.ProtocolMessage<?> request,
+            Map<String, Object> response) throws IOException {
+        if (response == null || !response.keySet().equals(Set.of("protocolVersion", "requestId", "messageType", "messageId", "correlationId", "code", "msg", "data"))
+                || !(response.get("protocolVersion") instanceof Integer version) || version != 1
+                || !request.requestId().equals(response.get("requestId"))
+                || !(request.messageType() + ".result").equals(response.get("messageType"))
+                || !request.messageId().equals(response.get("correlationId"))
+                || !(response.get("messageId") instanceof String id) || id.isBlank() || id.codePoints().anyMatch(Character::isISOControl)
+                || !(response.get("msg") instanceof String) || !"E0".equals(response.get("code"))
+                || !(response.get("data") instanceof Map<?, ?> raw)) throw new IOException("HOSTING_REPLY_INVALID_OR_REJECTED");
+        Map<String, Object> data = new LinkedHashMap<>();
+        for (var entry : raw.entrySet()) {
+            if (!(entry.getKey() instanceof String key) || Set.of("protocol", "method", "installationId", "validUntil").contains(key))
+                throw new IOException("HOSTING_REPLY_FIELD_FORBIDDEN");
+            data.put(key, entry.getValue());
+        }
+        if (data.containsKey("validUntilAt")) data.put("validUntil", data.remove("validUntilAt"));
+        if (data.containsKey("runtimeInstallationId")) data.put("installationId", data.remove("runtimeInstallationId"));
+        for (String field : new String[]{"provisionGeneration", "sessionGeneration"}) {
+            if (!data.containsKey(field)) continue;
+            if (!(data.get(field) instanceof String value) || !value.matches("[1-9][0-9]*")) throw new IOException("HOSTING_VERSION_INVALID");
+            try { data.put(field, Long.parseLong(value)); } catch (NumberFormatException invalid) { throw new IOException("HOSTING_VERSION_INVALID"); }
+        }
+        data.put("protocol", PROTOCOL); data.put("method", request.messageType().substring("hosting.".length()));
+        return data;
     }
     static void validateSocket(Path socket, long runnerUid, long trustedGid) throws IOException {
         Path parent = socket.getParent();

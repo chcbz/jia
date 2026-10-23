@@ -27,9 +27,6 @@ dependencies {
     compileOnly libs.ganymed.ssh2
     compileOnly libs.aliyun.java.sdk.core
     compileOnly libs.aliyun.java.sdk.alidns
-    compileOnly libs.pdf2dom
-    compileOnly libs.pdfbox.core
-    compileOnly libs.pdfbox.tools
     compileOnly libs.poi.scratchpad
     compileOnly libs.poi.ooxml.core
     compileOnly libs.xdocreport
@@ -69,9 +66,6 @@ dependencies {
     testImplementation libs.ganymed.ssh2
     testImplementation libs.aliyun.java.sdk.core
     testImplementation libs.aliyun.java.sdk.alidns
-    testImplementation libs.pdf2dom
-    testImplementation libs.pdfbox.core
-    testImplementation libs.pdfbox.tools
     testImplementation libs.poi.scratchpad
     testImplementation libs.poi.ooxml.core
     testImplementation libs.xdocreport

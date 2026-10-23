@@ -37,7 +37,10 @@ public interface ChatMessageDao extends IBaseDao<ChatMessageEntity> {
     /** Explicitly unscoped maintenance-only history query. Never expose through request paths. */
     List<ChatMessageEntity> findByConversationIdForMaintenance(String conversationId);
 
-    List<String> findPendingConversationIds(String syncStatus, int limit);
+    List<String> findPendingConversationIds(String syncStatus, int limit, long afterId);
+
+    int markMemorySnapshotSynced(String ownerJiacn, String clientId,
+            String conversationId, List<Long> messageIds);
 
     List<String> findPendingConversationIds(
             String syncStatus, List<String> excludedConversationIds, int limit);

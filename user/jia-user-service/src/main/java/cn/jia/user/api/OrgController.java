@@ -1,5 +1,7 @@
 package cn.jia.user.api;
 
+import cn.jia.core.entity.JsonRequest;
+
 import cn.jia.core.common.EsConstants;
 import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.entity.JsonRequestPage;
@@ -100,12 +102,12 @@ public class OrgController {
 	 */
 	@PreAuthorize("hasAuthority('org-get_name')")
 	@RequestMapping(value = "/get/name", method = RequestMethod.GET)
-	public String findNameById(@RequestParam(name = "id") Long id) throws Exception {
+	public cn.jia.core.entity.JsonResult<String> findNameById(@RequestParam(name = "id") Long id) throws Exception {
 		OrgEntity org = orgService.get(id);
 		if(org == null) {
 			throw new EsRuntimeException(UserErrorConstants.DATA_NOT_FOUND);
 		}
-		return org.getName();
+		return cn.jia.core.entity.JsonResult.success(org.getName());
 	}
 
 	/**
@@ -115,13 +117,12 @@ public class OrgController {
 	 */
 	@PreAuthorize("hasAuthority('org-get_users')")
 	@RequestMapping(value = "/get/users", method = RequestMethod.POST)
-	public Object findUsers(@RequestBody JsonRequestPage<UserVO> page) {
+	public Object findUsers(@RequestBody JsonRequest<JsonRequestPage<UserVO>> protocolRequest) {
+        JsonRequestPage<UserVO> page = protocolRequest == null ? null : protocolRequest.data();
 		UserVO example = Optional.ofNullable(page.getSearch()).orElse(new UserVO());
 		ValidUtil.assertNotNull(example, UserErrorConstants.PARAMETER_INCORRECT.getCode());
 		PageInfo<UserEntity> userList = userService.listByOrgId(example.getOrgId(), page.getPageNum(), page.getPageSize(), page.getOrderBy());
-		JsonResultPage<UserEntity> result = new JsonResultPage<>(userList.getList());
-		result.setPageNum(userList.getPageNum());
-		result.setTotal(userList.getTotal());
+		JsonResultPage<UserEntity> result = JsonResultPage.page(userList.getList(), userList.getPageNum(), userList.getPageSize(), userList.getTotal());
 		return result;
 	}
 
@@ -132,7 +133,8 @@ public class OrgController {
 	 */
 	@PreAuthorize("hasAuthority('org-create')")
 	@RequestMapping(value = "/create", method = RequestMethod.POST)
-	public Object create(@RequestBody OrgEntity org) {
+	public Object create(@RequestBody JsonRequest<OrgEntity> protocolRequest) {
+        OrgEntity org = protocolRequest == null ? null : protocolRequest.data();
 		orgService.create(org);
 		return JsonResult.success();
 	}
@@ -144,7 +146,8 @@ public class OrgController {
 	 */
 	@PreAuthorize("hasAuthority('org-update')")
 	@RequestMapping(value = "/update", method = RequestMethod.POST)
-	public Object update(@RequestBody OrgEntity org) {
+	public Object update(@RequestBody JsonRequest<OrgEntity> protocolRequest) {
+        OrgEntity org = protocolRequest == null ? null : protocolRequest.data();
 		orgService.update(org);
 		return JsonResult.success();
 	}
@@ -167,12 +170,11 @@ public class OrgController {
 	 */
 	@PreAuthorize("hasAuthority('org-list')")
 	@RequestMapping(value = "/list", method = RequestMethod.POST)
-	public Object list(@RequestBody JsonRequestPage<OrgEntity> page) {
+	public Object list(@RequestBody JsonRequest<JsonRequestPage<OrgEntity>> protocolRequest) {
+        JsonRequestPage<OrgEntity> page = protocolRequest == null ? null : protocolRequest.data();
 		String orderBy = page.getOrderBy();
 		PageInfo<OrgEntity> orgList = orgService.list(page.getPageNum(), page.getPageSize(), orderBy);
-		JsonResultPage<OrgEntity> result = new JsonResultPage<>(orgList.getList());
-		result.setPageNum(orgList.getPageNum());
-		result.setTotal(orgList.getTotal());
+		JsonResultPage<OrgEntity> result = JsonResultPage.page(orgList.getList(), orgList.getPageNum(), orgList.getPageSize(), orgList.getTotal());
 		return result;
 	}
 
@@ -183,13 +185,12 @@ public class OrgController {
 	 */
 	@PreAuthorize("hasAuthority('org-list_sub')")
 	@RequestMapping(value = "/list/sub", method = RequestMethod.POST)
-	public Object listSub(@RequestBody JsonRequestPage<OrgEntity> page) {
+	public Object listSub(@RequestBody JsonRequest<JsonRequestPage<OrgEntity>> protocolRequest) {
+        JsonRequestPage<OrgEntity> page = protocolRequest == null ? null : protocolRequest.data();
 		OrgEntity org = Optional.ofNullable(page.getSearch()).orElse(new OrgEntity());
 		String orderBy = page.getOrderBy();
 		PageInfo<OrgEntity> orgList = orgService.listSub(org.getId(), page.getPageNum(), page.getPageSize(), orderBy);
-		JsonResultPage<OrgEntity> result = new JsonResultPage<>(orgList.getList());
-		result.setPageNum(orgList.getPageNum());
-		result.setTotal(orgList.getTotal());
+		JsonResultPage<OrgEntity> result = JsonResultPage.page(orgList.getList(), orgList.getPageNum(), orgList.getPageSize(), orgList.getTotal());
 		return result;
 	}
 
@@ -200,7 +201,8 @@ public class OrgController {
 	 */
 	@PreAuthorize("hasAuthority('org-users_add')")
 	@RequestMapping(value = "/users/add", method = RequestMethod.POST)
-	public Object userBatchAdd(@RequestBody OrgVO org) {
+	public Object userBatchAdd(@RequestBody JsonRequest<OrgVO> protocolRequest) {
+        OrgVO org = protocolRequest == null ? null : protocolRequest.data();
 		orgService.batchAddUser(org);
 		// 更新用户职位
 		for(Long userId : org.getUserIds()) {
@@ -223,7 +225,8 @@ public class OrgController {
 	 */
 	@PreAuthorize("hasAuthority('org-users_del')")
 	@RequestMapping(value = "/users/del", method = RequestMethod.POST)
-	public Object userBatchDel(@RequestBody OrgVO org) {
+	public Object userBatchDel(@RequestBody JsonRequest<OrgVO> protocolRequest) {
+        OrgVO org = protocolRequest == null ? null : protocolRequest.data();
 		orgService.batchDelUser(org);
 		// 更新用户职位
 		for(Long userId : org.getUserIds()) {

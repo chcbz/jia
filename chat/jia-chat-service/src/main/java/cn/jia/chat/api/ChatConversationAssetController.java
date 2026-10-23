@@ -83,7 +83,7 @@ public class ChatConversationAssetController {
                 ? List.of() : response.getBody().getData();
         if (catalog == null || catalog.stream().noneMatch(item -> asset.outputId().equals(item.outputId())
                 && asset.mime().equals(item.contentMimeType())
-                && asset.sha256().equals(item.sha256()) && asset.byteLength() == item.byteLength()))
+                && asset.sha256().equals(item.sha256()) && Long.toString(asset.byteLength()).equals(item.byteLength())))
             throw unavailable();
     }
 

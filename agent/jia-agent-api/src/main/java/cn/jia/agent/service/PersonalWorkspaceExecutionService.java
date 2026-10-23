@@ -37,7 +37,7 @@ public interface PersonalWorkspaceExecutionService {
     /** Native runtime inbox; intentionally separate from legacy unfenced commands. */
     List<ConversationRuntimeCommand> runtimeConversationCommands(RuntimeScope scope, int limit);
     List<? extends ConversationCommandView> runtimeConversationCommandViews(RuntimeScope scope,int limit);
-    sealed interface ConversationCommandView permits ConversationRuntimeCommand,ControlledConversationRuntimeCommand,ControlledConversationRuntimeCommandV3 { }
+    sealed interface ConversationCommandView permits ConversationRuntimeCommand,ControlledConversationRuntimeCommand,ControlledConversationRuntimeCommandV3,SkillExecutionService.Command { }
     record ConversationRuntimeCommand(int schemaVersion, String taskId, String runId,
             String conversationId, String commandId, String messageId, String instruction,
             String outputContentMimeType, String outputId) implements ConversationCommandView { }
@@ -221,8 +221,14 @@ public interface PersonalWorkspaceExecutionService {
     void v2LockKnownOutcome(V2Scope scope);
 
     record OwnerScope(String tenantId, String clientId, String ownerJiacn) { }
+    /** ownerJiacn is the data scope; executorOwnerJiacn always remains the native authenticated subject.
+     * The five-argument constructor is the authentication boundary, before resolving a persisted run. */
     record RuntimeScope(String tenantId, String clientId, String ownerJiacn, String agentId,
-                        String runtimeInstanceId) { }
+                        String runtimeInstanceId, String executorOwnerJiacn) {
+        public RuntimeScope(String tenantId,String clientId,String ownerJiacn,String agentId,String runtimeInstanceId) {
+            this(tenantId,clientId,ownerJiacn,agentId,runtimeInstanceId,ownerJiacn);
+        }
+    }
     record InputSelection(String fileId, int version) { }
     record CreateCommand(String conversationId, String targetAgentId, String taskId,
             String instruction, String outputContentMimeType, List<InputSelection> inputs,

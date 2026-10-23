@@ -92,7 +92,8 @@ final class AgentTaskEventProjection {
         data.put("aggregateType", event.aggregateType());
         data.put("aggregateId", event.aggregateId());
         data.put("payload", wirePayload(payload));
-        data.put("occurredAt", Long.toString(event.occurredAt()));
+        if (event.occurredAt() < 0 || event.occurredAt() > 8_640_000_000_000_000L) throw invalid();
+        data.put("occurredAt", event.occurredAt());
         requireBounded(data);
         boolean revoke = (TaskEventType.MEMBER_LEFT.equals(event.eventType())
                 || TaskEventType.MEMBER_REJECTED.equals(event.eventType()))
@@ -139,6 +140,13 @@ final class AgentTaskEventProjection {
         LinkedHashMap<String, Object> projected = new LinkedHashMap<>();
         for (Map.Entry<String, Object> entry : payload.entrySet()) {
             Object value = entry.getValue();
+            if (Set.of("createdAt", "updatedAt").contains(entry.getKey())) {
+                final long epoch;
+                try { epoch = value instanceof String string ? Long.parseLong(string) : ((Number)value).longValue(); }
+                catch (RuntimeException invalid) { throw invalid(); }
+                if (epoch < 0 || epoch > 8_640_000_000_000_000L) throw invalid();
+                projected.put(entry.getKey(), epoch); continue;
+            }
             if (value instanceof String string) {
                 projected.put(entry.getKey(), string);
                 continue;

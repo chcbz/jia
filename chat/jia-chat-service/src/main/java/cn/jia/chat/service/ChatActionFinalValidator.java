@@ -9,7 +9,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-/** V3 final identity and byte-input proof. This pure validator never authorizes or executes an action. */
+/** V5 final identity and byte-input proof. This pure validator never authorizes or executes an action. */
 public final class ChatActionFinalValidator {
     private static final Set<String> BINDING_KEYS = Set.of("tenantId", "ownerJiacn", "clientId",
             "conversationId", "conversationGeneration", "requestId", "requestRevision", "turnId",
@@ -28,11 +28,19 @@ public final class ChatActionFinalValidator {
     public static ValidatedFinal validateJson(Map<String, Object> rawBinding, Object rawFacts,
             Object inspectionAuthority, String content, Integer outcomeContractVersion,
             String rawOutcome, String rawReceipt) {
+        return validateJson(rawBinding, rawFacts, inspectionAuthority, content, outcomeContractVersion, rawOutcome, rawReceipt, null);
+    }
+
+    public static ValidatedFinal validateJson(Map<String, Object> rawBinding, Object rawFacts,
+            Object inspectionAuthority, String content, Integer outcomeContractVersion,
+            String rawOutcome, String rawReceipt, ChatDeliveryRevisionContract.Basis basis) {
         Map<String, Object> binding = binding(rawBinding);
+        if (basis != null && (!basis.taskId().equals(binding.get("taskId"))
+                || !basis.sourceRequestId().equals(binding.get("requestId")))) throw invalid("ACTION_REVIEW_BASIS_INVALID");
         if (outcomeContractVersion == null || outcomeContractVersion != ChatActionOutcomeContract.VERSION)
             throw invalid("ACTION_FINAL_VERSION_INVALID");
         var facts = ChatActionOutcomeContract.facts(rawFacts);
-        var outcome = ChatActionOutcomeContract.outcomeJson(rawOutcome, facts);
+        var outcome = ChatActionOutcomeContract.outcomeJson(rawOutcome, facts, basis);
         if (Boolean.TRUE.equals(outcome.deliverable()) && !"CHAT".equals(binding.get("route")))
             throw invalid("ACTION_FINAL_DELIVERABLE_ROUTE_INVALID");
         if (outcome.deliveryRelation()!=null && !"CHAT".equals(binding.get("route")))
@@ -40,17 +48,17 @@ public final class ChatActionFinalValidator {
         if (content == null || content.length() > 200_000 || !content.equals(outcome.text()))
             throw invalid("ACTION_FINAL_CONTENT_MISMATCH");
         TypedInspectionFinalValidator.InspectionInputReceipt receipt = null;
-        if ("INSPECT".equals(binding.get("route"))) {
+        if (inspectionAuthority != null) {
             receipt = TypedInspectionFinalValidator.validateInputReceiptJson(inspectionAuthority,
-                    facts.availableSources().stream().map(ChatActionOutcomeContract.Source::sourceRefId).toList(),
+                    ((List<?>)((Map<?,?>)inspectionAuthority).get("sources")).stream().map(x->(String)((Map<?,?>)x).get("sourceRefId")).toList(),
                     rawReceipt);
-        } else if (inspectionAuthority != null || rawReceipt != null) {
+        } else if (rawReceipt != null) {
             throw invalid("ACTION_FINAL_UNEXPECTED_RECEIPT");
         }
         Map<String, Object> preimage = new LinkedHashMap<>();
         preimage.put("domain", "juyiting.action-final");
         preimage.put("digestSchemaVersion", 1);
-        preimage.put("outcomeContractVersion", 3);
+        preimage.put("outcomeContractVersion", 5);
         preimage.put("binding", binding);
         preimage.put("content", content);
         preimage.put("interactionOutcome", outcomeMap(outcome));
@@ -62,16 +70,18 @@ public final class ChatActionFinalValidator {
     /** Explicit JSON primitives; CanonicalContextJson intentionally does not serialize arbitrary records. */
     public static Map<String, Object> outcomeMap(ChatActionOutcomeContract.Outcome outcome) {
         Map<String, Object> value = new LinkedHashMap<>();
-        value.put("schemaVersion", 3);
+        value.put("schemaVersion", 5);
         value.put("kind", outcome.kind());
         value.put("text", outcome.text());
-        // Absence remains absence: legacy immutable finals retain their exact digest preimage.
-        if (outcome.deliverable() != null) value.put("deliverable", outcome.deliverable());
-        if (outcome.deliveryRelation() != null) value.put("deliveryRelation", relationMap(outcome.deliveryRelation()));
+        value.put("deliverable", outcome.deliverable());
+        value.put("deliveryRelation", outcome.deliveryRelation() == null ? null : relationMap(outcome.deliveryRelation()));
+        value.put("revision", outcome.revision() == null ? null : Map.of("instruction", outcome.revision().instruction(),
+                "targetArtifactIds", outcome.revision().targetArtifactIds()));
         value.put("clarification", outcome.clarification() == null ? null : Map.of(
                 "question", outcome.clarification().question(), "requiredFacts", outcome.clarification().requiredFacts()));
         value.put("action", outcome.action() == null ? null : Map.of("actionId", outcome.action().actionId(),
-                "instruction", outcome.action().instruction(), "sourceRefIds", outcome.action().sourceRefIds()));
+                "instruction", outcome.action().instruction(), "sourceRefIds", outcome.action().sourceRefIds(),
+                "parameters", outcome.action().parameters()));
         return java.util.Collections.unmodifiableMap(value);
     }
 
@@ -85,13 +95,17 @@ public final class ChatActionFinalValidator {
     }
 
     public static Map<String, Object> factsMap(ChatActionOutcomeContract.Facts facts) {
-        return Map.of("schemaVersion", 3, "availableSources", facts.availableSources().stream().map(source -> Map.of(
-                        "sourceRefId", source.sourceRefId(), "kind", source.kind(), "mediaType", source.mediaType())).toList(),
+        return Map.of("schemaVersion", 5, "availableSources", facts.availableSources().stream().map(source -> Map.of(
+                        "sourceRefId", source.sourceRefId(), "kind", source.kind(), "mediaType", source.mediaType(),
+                        "contentMimeType", source.contentMimeType())).toList(),
                 "inspectedSourceRefIds", facts.inspectedSourceRefIds(),
                 "availableActions", facts.availableActions().stream().map(action -> Map.of(
                         "actionId", action.actionId(), "kind", action.kind(), "operation", action.operation(),
-                        "inputMediaTypes", action.inputMediaTypes(), "minSources", action.minSources(),
-                        "maxSources", action.maxSources())).toList());
+                        "skill", Map.of("skillKey", action.skill().skillKey(), "skillVersion", action.skill().skillVersion(),
+                                "packageSha256", action.skill().packageSha256(), "manifestSha256", action.skill().manifestSha256()),
+                        "parametersSchema", action.parametersSchema(), "inputMimeTypes", action.inputMimeTypes(),
+                        "minSources", action.minSources(), "maxSources", action.maxSources(),
+                        "outputMimeTypes", action.outputMimeTypes())).toList());
     }
 
     /** Separate event identity, stable for retries but distinct for each immutable bound final. */
@@ -104,7 +118,7 @@ public final class ChatActionFinalValidator {
 
     private static Map<String, Object> binding(Map<String, Object> value) {
         if (value == null || !value.keySet().equals(BINDING_KEYS) || !"0".equals(value.get("tenantId"))
-                || !("CHAT".equals(value.get("route")) || "INSPECT".equals(value.get("route"))))
+                || !"CHAT".equals(value.get("route")))
             throw invalid("ACTION_FINAL_BINDING_INVALID");
         for (String key : List.of("ownerJiacn", "clientId")) identifier(value.get(key), 50);
         for (String key : List.of("requestId", "turnId", "dispatchId", "targetAgentId", "taskId"))

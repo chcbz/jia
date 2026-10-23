@@ -1,5 +1,7 @@
 package cn.jia.isp.api;
 
+import cn.jia.core.entity.JsonRequest;
+
 import cn.jia.core.common.EsConstants;
 import cn.jia.core.common.EsSecurityHandler;
 import cn.jia.core.config.SpringContextHolder;
@@ -46,14 +48,13 @@ public class CmsController {
      * @return 表格列表结果
      */
     @RequestMapping(value = "/table/list", method = RequestMethod.POST)
-    public Object listTable(@RequestBody JsonRequestPage<CmsTableEntity> page, HttpServletRequest request) {
+    public Object listTable(@RequestBody JsonRequest<JsonRequestPage<CmsTableEntity>> protocolRequest, HttpServletRequest request) {
+        JsonRequestPage<CmsTableEntity> page = protocolRequest == null ? null : protocolRequest.data();
         String clientId = EsSecurityHandler.checkClientId(request);
         CmsTableEntity example = page.getSearch() == null ? new CmsTableEntity() : page.getSearch();
         example.setClientId(clientId);
         PageInfo<CmsTableEntity> cmsList = cmsService.listTable(example, page.getPageNum(), page.getPageSize(), page.getOrderBy());
-        JsonResultPage<CmsTableEntity> result = new JsonResultPage<>(cmsList.getList());
-        result.setPageNum(cmsList.getPageNum());
-        result.setTotal(cmsList.getTotal());
+        JsonResultPage<CmsTableEntity> result = JsonResultPage.page(cmsList.getList(), cmsList.getPageNum(), cmsList.getPageSize(), cmsList.getTotal());
         return result;
     }
 
@@ -79,7 +80,8 @@ public class CmsController {
      * @return 创建结果
      */
     @RequestMapping(value = "/table/create", method = RequestMethod.POST)
-    public Object createTable(@RequestBody CmsTableDTO record) {
+    public Object createTable(@RequestBody JsonRequest<CmsTableDTO> protocolRequest) {
+        CmsTableDTO record = protocolRequest == null ? null : protocolRequest.data();
         cmsService.createTable(record);
         return JsonResult.success(record);
     }
@@ -91,7 +93,8 @@ public class CmsController {
      * @return 更新结果
      */
     @RequestMapping(value = "/table/update", method = RequestMethod.POST)
-    public Object updateTable(@RequestBody CmsTableEntity record) {
+    public Object updateTable(@RequestBody JsonRequest<CmsTableEntity> protocolRequest) {
+        CmsTableEntity record = protocolRequest == null ? null : protocolRequest.data();
         cmsService.updateTable(record);
         return JsonResult.success(record);
     }
@@ -102,7 +105,7 @@ public class CmsController {
      * @param id 表格ID
      * @return 删除结果
      */
-    @RequestMapping(value = "/table/delete", method = RequestMethod.GET)
+    @RequestMapping(value = "/table/delete", method = RequestMethod.DELETE)
     public Object deleteTable(@RequestParam(name = "id") Long id) {
         cmsService.deleteTable(id);
         return JsonResult.success();
@@ -116,13 +119,12 @@ public class CmsController {
      * @return 数据列列表结果
      */
     @RequestMapping(value = "/column/list", method = RequestMethod.POST)
-    public Object listColumn(@RequestBody JsonRequestPage<CmsColumnEntity> page, HttpServletRequest request) {
+    public Object listColumn(@RequestBody JsonRequest<JsonRequestPage<CmsColumnEntity>> protocolRequest, HttpServletRequest request) {
+        JsonRequestPage<CmsColumnEntity> page = protocolRequest == null ? null : protocolRequest.data();
         EsSecurityHandler.checkClientId(request);
         CmsColumnEntity example = page.getSearch();
         PageInfo<CmsColumnEntity> cmsList = cmsService.listColumn(example, page.getPageNum(), page.getPageSize(), page.getOrderBy());
-        JsonResultPage<CmsColumnEntity> result = new JsonResultPage<>(cmsList.getList());
-        result.setPageNum(cmsList.getPageNum());
-        result.setTotal(cmsList.getTotal());
+        JsonResultPage<CmsColumnEntity> result = JsonResultPage.page(cmsList.getList(), cmsList.getPageNum(), cmsList.getPageSize(), cmsList.getTotal());
         return result;
     }
 
@@ -148,7 +150,8 @@ public class CmsController {
      * @return 创建结果
      */
     @RequestMapping(value = "/column/create", method = RequestMethod.POST)
-    public Object createColumn(@RequestBody CmsColumnEntity record) {
+    public Object createColumn(@RequestBody JsonRequest<CmsColumnEntity> protocolRequest) {
+        CmsColumnEntity record = protocolRequest == null ? null : protocolRequest.data();
         cmsService.createColumn(record);
         return JsonResult.success(record);
     }
@@ -160,7 +163,8 @@ public class CmsController {
      * @return 更新结果
      */
     @RequestMapping(value = "/column/update", method = RequestMethod.POST)
-    public Object updateColumn(@RequestBody CmsColumnEntity record) {
+    public Object updateColumn(@RequestBody JsonRequest<CmsColumnEntity> protocolRequest) {
+        CmsColumnEntity record = protocolRequest == null ? null : protocolRequest.data();
         cmsService.updateColumn(record);
         return JsonResult.success(record);
     }
@@ -171,7 +175,7 @@ public class CmsController {
      * @param id 数据列ID
      * @return 删除结果
      */
-    @RequestMapping(value = "/column/delete", method = RequestMethod.GET)
+    @RequestMapping(value = "/column/delete", method = RequestMethod.DELETE)
     public Object deleteColumn(@RequestParam(name = "id") Long id) {
         cmsService.deleteColumn(id);
         return JsonResult.success();
@@ -195,7 +199,8 @@ public class CmsController {
      * @return 更新结果
      */
     @RequestMapping(value = "/config/update", method = RequestMethod.POST)
-    public Object updateConfig(@RequestBody CmsConfigEntity config) {
+    public Object updateConfig(@RequestBody JsonRequest<CmsConfigEntity> protocolRequest) {
+        CmsConfigEntity config = protocolRequest == null ? null : protocolRequest.data();
         config.setClientId(EsContextHolder.getContext().getClientId());
         cmsService.updateConfig(config);
         return JsonResult.success(config);
@@ -225,16 +230,15 @@ public class CmsController {
      * @return 行数据列表结果
      */
     @RequestMapping(value = "/row/list", method = RequestMethod.POST)
-    public Object listRow(@RequestBody JsonRequestPage<CmsRowExample> page, HttpServletRequest request) {
+    public Object listRow(@RequestBody JsonRequest<JsonRequestPage<CmsRowExample>> protocolRequest, HttpServletRequest request) {
+        JsonRequestPage<CmsRowExample> page = protocolRequest == null ? null : protocolRequest.data();
         String clientId = EsSecurityHandler.checkClientId(request);
         CmsRowExample example = page.getSearch() == null ? new CmsRowExample() : page.getSearch();
         example.setClientId(clientId);
         CmsConfigEntity config = cmsService.selectConfig(clientId);
         example.setName("cms_" + config.getTablePrefix() + "_" + example.getName());
         PageInfo<Map<String, Object>> cmsList = cmsService.listRow(example, page.getPageNum(), page.getPageSize(), page.getOrderBy());
-        JsonResultPage<Map<String, Object>> result = new JsonResultPage<>(cmsList.getList());
-        result.setPageNum(cmsList.getPageNum());
-        result.setTotal(cmsList.getTotal());
+        JsonResultPage<Map<String, Object>> result = JsonResultPage.page(cmsList.getList(), cmsList.getPageNum(), cmsList.getPageSize(), cmsList.getTotal());
         return result;
     }
 
@@ -245,7 +249,8 @@ public class CmsController {
      * @return 行数据信息结果
      */
     @RequestMapping(value = "/row/get", method = RequestMethod.POST)
-    public Object findRowById(@RequestBody CmsRowDTO cmsTable, HttpServletRequest request) {
+    public Object findRowById(@RequestBody JsonRequest<CmsRowDTO> protocolRequest, HttpServletRequest request) {
+        CmsRowDTO cmsTable = protocolRequest == null ? null : protocolRequest.data();
         String clientId = EsSecurityHandler.checkClientId(request);
         cmsTable.setClientId(clientId);
         CmsConfigEntity config = cmsService.selectConfig(clientId);
@@ -264,7 +269,8 @@ public class CmsController {
      * @return 新增结果
      */
     @RequestMapping(value = "/row/create", method = RequestMethod.POST)
-    public Object createRow(@RequestBody CmsRowDTO record, HttpServletRequest request) {
+    public Object createRow(@RequestBody JsonRequest<CmsRowDTO> protocolRequest, HttpServletRequest request) {
+        CmsRowDTO record = protocolRequest == null ? null : protocolRequest.data();
         String clientId = EsSecurityHandler.checkClientId(request);
         record.setClientId(clientId);
         CmsTableEntity table = cmsService.findTableByName(record.getTableName());
@@ -315,7 +321,8 @@ public class CmsController {
      * @return 返回更新后的行数据信息
      */
     @RequestMapping(value = "/row/update", method = RequestMethod.POST)
-    public Object updateRow(@RequestBody CmsRowDTO record, HttpServletRequest request) {
+    public Object updateRow(@RequestBody JsonRequest<CmsRowDTO> protocolRequest, HttpServletRequest request) {
+        CmsRowDTO record = protocolRequest == null ? null : protocolRequest.data();
         // 检查并设置客户端ID
         String clientId = EsSecurityHandler.checkClientId(request);
         record.setClientId(clientId);
@@ -403,7 +410,8 @@ public class CmsController {
      * @return 返回删除操作的结果
      */
     @RequestMapping(value = "/row/delete", method = RequestMethod.POST)
-    public Object deleteRow(@RequestBody CmsRowDTO record, HttpServletRequest request) {
+    public Object deleteRow(@RequestBody JsonRequest<CmsRowDTO> protocolRequest, HttpServletRequest request) {
+        CmsRowDTO record = protocolRequest == null ? null : protocolRequest.data();
         // 检查并设置客户端ID
         String clientId = EsSecurityHandler.checkClientId(request);
         record.setClientId(clientId);

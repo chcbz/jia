@@ -1,5 +1,7 @@
 package cn.jia.chat.api;
 
+import cn.jia.core.entity.JsonRequest;
+
 import cn.jia.chat.service.HallActionDispatchResult;
 import cn.jia.chat.service.HallActionDispatcher;
 import cn.jia.chat.service.HallActionIntent;
@@ -28,8 +30,9 @@ public class JuyitingActionController {
     public JsonResult<HallActionDispatchResult> dispatch(
             @PathVariable String intentId,
             @RequestParam(required = false) String callerAgentId,
-            @RequestBody HallActionIntent request,
+            @RequestBody JsonRequest<HallActionIntent> protocolRequest,
             Authentication authentication) {
+        HallActionIntent request = protocolRequest == null ? null : protocolRequest.data();
         if (request == null || (request.getIntentId() != null
                 && !request.getIntentId().equals(intentId))) {
             return JsonResult.success(new HallActionDispatchResult(

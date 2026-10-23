@@ -16,7 +16,7 @@ CREATE TABLE archive_reader_progress (
     created_at                TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
     updated_at                TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
     PRIMARY KEY (row_id),
-    CONSTRAINT chk_archive_reader_progress_single_tenant CHECK (tenant_id = '0'),
+    CONSTRAINT chk_archive_progress_single_tenant CHECK (tenant_id = '0'),
     UNIQUE KEY uk_archive_progress_owner_edition (tenant_id, client_id, owner_jiacn, edition_id),
     KEY idx_archive_progress_location (edition_id, block_id, paragraph_id),
     CONSTRAINT chk_archive_progress_state CHECK (state IN ('IN_PROGRESS', 'COMPLETED')),

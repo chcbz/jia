@@ -9,7 +9,7 @@ import org.apache.ibatis.annotations.Update;
 public interface AgentTaskExecutionGrantMapper extends BaseMapper<AgentTaskExecutionGrantEntity> {
     String COLUMNS = """
             id,grant_id,owner_jiacn,task_id,requirement_revision,assignment_revision,
-            target_agent_id,permitted_operations_json,permitted_tool_policy_ref,input_scope_json,
+            target_agent_id,executor_owner_jiacn,executor_binding_id,external_policy_revision,permitted_operations_json,permitted_tool_policy_ref,input_scope_json,
             allow_own_task_derived_assets,cost_authorization_ref,source_business_action_id,
             idempotency_key,request_hash,policy_revision,grant_version,state,issued_by,
             created_at,revoked_at,revoke_idempotency_key,revoke_request_hash,
@@ -71,6 +71,17 @@ public interface AgentTaskExecutionGrantMapper extends BaseMapper<AgentTaskExecu
     AgentTaskExecutionGrantEntity selectByGrant(@Param("tenantId") String tenantId,
             @Param("clientId") String clientId, @Param("ownerJiacn") String ownerJiacn,
             @Param("taskId") String taskId, @Param("grantId") String grantId);
+
+    @Select("SELECT " + COLUMNS + " FROM agent_task_execution_grant"
+            + " WHERE tenant_id=#{tenantId} AND client_id=#{clientId} AND owner_jiacn=#{ownerJiacn}"
+            + " AND task_id=#{taskId} AND target_agent_id=#{agentId}" + EXACT_SCOPE + EXACT_TASK + """
+              AND CAST(target_agent_id AS BINARY)=CAST(#{agentId} AS BINARY)
+              AND OCTET_LENGTH(target_agent_id)=OCTET_LENGTH(#{agentId})
+              ORDER BY assignment_revision DESC, created_at DESC, id DESC LIMIT 1
+            """)
+    AgentTaskExecutionGrantEntity selectLatestByTaskAgent(@Param("tenantId") String tenantId,
+            @Param("clientId") String clientId, @Param("ownerJiacn") String ownerJiacn,
+            @Param("taskId") String taskId, @Param("agentId") String agentId);
 
     @Select("SELECT event_json FROM agent_task_event"
             + " WHERE tenant_id=#{tenantId} AND client_id=#{clientId} AND owner_jiacn=#{ownerJiacn}"

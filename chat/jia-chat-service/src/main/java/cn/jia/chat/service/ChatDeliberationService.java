@@ -12,6 +12,7 @@ import cn.jia.chat.deliberation.ChatDispatchOutboxEntity;
 import cn.jia.chat.deliberation.ChatInteractionStepStore;
 import cn.jia.chat.deliberation.ChatRequestEntity;
 import cn.jia.chat.deliberation.ChatTurnEntity;
+import cn.jia.chat.deliberation.ChatTypedDeliberationStore;
 import cn.jia.chat.deliberation.InteractionRoute;
 import cn.jia.chat.entity.ChatConversationEntity;
 import cn.jia.chat.entity.ChatMessageEntity;
@@ -63,8 +64,12 @@ public class ChatDeliberationService {
     private ChatInteractionStepStore interactionSteps;
     private ChatTypedDeliberationService typedDeliberation;
     private ChatTypedInspectionService typedInspection;
+    private ChatMaterialsInputService materialsAuthority;
+    @Autowired public void setMaterialsAuthority(ChatMaterialsInputService service) {materialsAuthority=service;}
     private ChatInspectionAuthorityService inspectionAuthority;
     private ChatActionFinalService actionFinals;
+    private ChatDispatchAuthorityService dispatchAuthority;
+    @Autowired public void setDispatchAuthority(ChatDispatchAuthorityService value) { dispatchAuthority=value; }
 
     @Autowired(required = false)
     public void setActionFinals(ChatActionFinalService actionFinals) { this.actionFinals = actionFinals; }
@@ -90,6 +95,10 @@ public class ChatDeliberationService {
     public void setInspectionAuthority(ChatInspectionAuthorityService inspectionAuthority) {
         this.inspectionAuthority = inspectionAuthority;
     }
+
+    private ChatTypedReviewContextService reviewContexts;
+    @Autowired(required=false)
+    public void setReviewContexts(ChatTypedReviewContextService value) { this.reviewContexts=Objects.requireNonNull(value); }
 
     public ChatDeliberationService(ChatDeliberationDao dao, ChatConversationDao conversationDao,
             ChatMessageDao messageDao, AgentService agentService) {
@@ -183,6 +192,32 @@ public class ChatDeliberationService {
                 InteractionRoute.INSPECT, input, null, null, null, inspection, user, lineage);
     }
 
+    /** Trusted message revision continuation: fresh CHAT request, immutable parent, same real USER. */
+    @Transactional(propagation=Propagation.MANDATORY,rollbackFor=Exception.class)
+    public Admission admitDeliveryRevisionContinuation(ChatDeliveryRevisionService.BoundRevision revision,
+            String operationId,ChatTypedDeliberationContextService.Context context,JuyitingConversationScope scope) {
+        var parent=revision.parent().outcome();var owner=parent.scope();var user=requireActionUser(revision.parent());
+        String requestId=deliveryRevisionRequestId(owner,operationId);
+        var lineage=Map.<String,Object>of("origin","DELIVERY_REVISION","parentRequestId",parent.requestId(),
+                "parentOutcomeId",parent.outcomeId(),"parentFinalDigest",parent.finalDigest(),"reviewOperationId",operationId,
+                "originalUserMessageId",Long.toString(user.getId()),
+                "verifiedDeliveryBasis",ChatDeliveryRevisionContract.basisMap(revision.basis()),
+                "targetArtifactIds",revision.parent().validated().interactionOutcome().revision().targetArtifactIds());
+        var input=new ChatMessageDTO();input.setRequestId(requestId);input.setRequestRevision(1L);
+        input.setContent(user.getContent());input.setConversationId(owner.conversationId());
+        var sender=new ServerResolvedSender("user",user.getSenderName(),owner.ownerJiacn(),owner.clientId(),DisplayNameSource.FALLBACK);
+        var admissionFacts=new LinkedHashMap<String,Object>();admissionFacts.put("schemaVersion",2);
+        admissionFacts.put("intent","DISCUSSION");admissionFacts.put("materialScope","EXPLICIT");
+        admissionFacts.put("sourceSelectors",context.selectors().stream().map(cn.jia.chat.api.ChatTypedDeliberationWire::selectorMap).toList());
+        admissionFacts.put("nativeMaterials",ChatMaterialsInputContract.candidates(context.frozenDeclaration(),
+                ChatTypedDeliberationContextService.parseCatalog(context.sourceCatalogJson())));
+        return admitTrusted(owner.tenantId(),sender,owner.conversationId(),owner.conversationGeneration(),scope,
+                InteractionRoute.CHAT,input,null,context.facts(),admissionFacts,null,user,lineage);
+    }
+    static String deliveryRevisionRequestId(ChatTypedDeliberationStore.Scope scope,String operationId) {
+        return "delivery-revision_"+sha256(String.join("\0",scope.tenantId(),scope.ownerJiacn(),scope.clientId(),operationId)).substring(0,40);
+    }
+
     /** Both action routes reuse the immutable original USER; an Agent instruction is never consent. */
     @Transactional(propagation = Propagation.MANDATORY, rollbackFor = Exception.class)
     public ChatMessageEntity requireActionUser(ChatActionFinalService.BoundAction action) {
@@ -261,6 +296,14 @@ public class ChatDeliberationService {
         if (revision < 1) throw invalid("requestRevision must be positive");
         input.setRequestRevision(revision);
 
+        // Acquire task/grant authority before conversation/turn locks. Replays keep their saved input.
+        var knownRequest = dao.findRequest(tenantId,ownerJiacn,clientId,requestId);
+        var taskGrant = !"bounty".equals(scope.scopeType()) || scope.authoritativeAgentIds().size()>1
+                || scope.targetAgentIds().size()>1 || knownRequest != null ? null :
+                requireDispatchAuthority().admission(tenantId,ownerJiacn,clientId,scope.taskId(),scope.targetAgentId());
+        if (taskGrant != null && (taskGrant.requirementRevision()==null || taskGrant.requirementRevision()<1
+                || scope.targetAgentIds().size()!=1
+                || !scope.targetAgentId().equals(taskGrant.targetAgentId()))) throw unavailable();
         ChatConversationEntity conversation = requireLockedConversation(
                 tenantId, ownerJiacn, clientId, conversationId, expectedGeneration);
         requireConversationScope(conversation, scope);
@@ -341,6 +384,17 @@ public class ChatDeliberationService {
             throw persistence("Unable to persist chat request");
         }
 
+        // Freeze before dispatch/final, in this same USER/request transaction. Gate remains default-off.
+        ChatDeliveryRevisionContract.Basis reviewBasis = null;
+        boolean freezeReview = reviewContexts != null && route == InteractionRoute.CHAT && trustedTypedFacts != null;
+        if (freezeReview) {
+            if (task == null || task.getTaskVersion() == null || trustedTypedAdmission == null) throw unavailable();
+            String clarificationParent = "CLARIFICATION_REPLY".equals(trustedTypedAdmission.get("intent"))
+                    ? (String) trustedTypedAdmission.get("parentOutcomeId") : null;
+            reviewBasis = reviewContexts.freeze(new ChatTypedDeliberationStore.Scope(tenantId,ownerJiacn,clientId,
+                    conversationId,expectedGeneration),scope.taskId(),task.getTaskVersion(),requestId,revision,
+                    userMessage.getId(),clarificationParent,now);
+        }
         List<Dispatch> dispatches = new ArrayList<>();
         for (String targetAgentId : scope.targetAgentIds()) {
             String turnId = stableId("turn", tenantId, ownerJiacn, clientId, requestId, targetAgentId);
@@ -360,8 +414,22 @@ public class ChatDeliberationService {
                         java.util.Collections.unmodifiableMap(new LinkedHashMap<>(trustedTypedInspection)));
                 if (trustedTypedAdmission != null) typedFacts.put("typedDeliberationAdmission",
                         java.util.Collections.unmodifiableMap(new LinkedHashMap<>(trustedTypedAdmission)));
+                if (trustedTypedAdmission != null && trustedTypedAdmission.containsKey("nativeMaterials")) {
+                    var materials=ChatMaterialsInputContract.bind(trustedTypedAdmission.get("nativeMaterials"),tenantId,ownerJiacn,clientId,
+                            conversationId,expectedGeneration,scope.taskId(),requestId,turnId,targetAgentId);
+                    if(materials!=null)typedFacts.put("materialsInput",materials);
+                }
+                if (freezeReview) typedFacts.put("reviewBasis", ChatDeliveryRevisionContract.basisMap(reviewBasis));
                 if (continuationFacts != null) typedFacts.put("actionContinuation", continuationFacts);
                 facts = java.util.Collections.unmodifiableMap(new LinkedHashMap<>(typedFacts));
+            }
+            if (taskGrant != null) {
+                var boundFacts = new LinkedHashMap<>(facts);
+                boundFacts.put("taskAuthority", Map.of("grantId", taskGrant.grantId(),
+                        "grantVersion", Long.toString(taskGrant.grantVersion()),
+                        "assignmentRevision", Long.toString(taskGrant.assignmentRevision()),
+                        "requirementRevision", Long.toString(taskGrant.requirementRevision())));
+                facts = java.util.Collections.unmodifiableMap(boundFacts);
             }
             String sourceJson = CanonicalContextJson.write(sourceVector);
             String factsJson = CanonicalContextJson.write(facts);
@@ -393,6 +461,8 @@ public class ChatDeliberationService {
                     .setStatus("READY").setPayloadJson(CanonicalContextJson.write(eventPayload))
                     .setVersion(0L).setAvailableAt(now).setAttemptCount(0).setFencingToken(0L)
                     .setCreatedAt(now).setUpdatedAt(now);
+            if (taskGrant != null) outbox.setTaskGrantId(taskGrant.grantId()).setTaskGrantVersion(taskGrant.grantVersion())
+                    .setTaskAssignmentRevision(taskGrant.assignmentRevision()).setTaskRequirementRevision(taskGrant.requirementRevision());
             if (dao.insertSnapshot(snapshot) != 1 || dao.insertTurn(turn) != 1 || dao.insertOutbox(outbox) != 1) {
                 throw persistence("Unable to persist chat turn admission");
             }
@@ -424,12 +494,12 @@ public class ChatDeliberationService {
             String snapshotId, String contextDigest, long deltaSeq, String content,
             ServerResolvedAgentSender sender) {
         if (deltaSeq < 1 || content == null || content.isEmpty()) throw invalid("Invalid delta");
+        ServerResolvedAgentSender trustedSender = requireAgentSender(sender, agentId, ownerJiacn, clientId, tenantId, dispatchId);
         ChatTurnEntity visible = requireVisibleTurn(tenantId, ownerJiacn, clientId, turnId);
         requireLockedConversation(tenantId, ownerJiacn, clientId, visible.getConversationId(), visible.getConversationGeneration());
         ChatTurnEntity turn = requireLockedTurn(tenantId, ownerJiacn, clientId, turnId);
         requireCallbackBinding(turn, tenantId, ownerJiacn, clientId, conversationId, conversationGeneration,
                 agentId, requestId, dispatchId, snapshotId, contextDigest);
-        ServerResolvedAgentSender trustedSender = requireAgentSender(sender, agentId, ownerJiacn, clientId);
         String deltaDigest = "sha256:" + sha256(content);
         long last = Optional.ofNullable(turn.getLastDeltaSeq()).orElse(0L);
         if (deltaSeq <= last) {
@@ -505,6 +575,7 @@ public class ChatDeliberationService {
             String snapshotId, String contextDigest, String content, Integer outcomeContractVersion,
             String rawInteractionOutcomeJson, String rawInspectionInputReceiptJson,
             ServerResolvedAgentSender sender) {
+        requireAgentSender(sender, agentId, ownerJiacn, clientId, tenantId, dispatchId);
         String safeContent = requireContent(content);
         ChatTurnEntity visible = requireVisibleTurn(tenantId, ownerJiacn, clientId, turnId);
         if (InteractionRoute.INSPECT.name().equals(visible.getRoute())) {
@@ -514,7 +585,12 @@ public class ChatDeliberationService {
                     snapshotId, contextDigest, safeContent, outcomeContractVersion, rawInteractionOutcomeJson,
                     rawInspectionInputReceiptJson, sender, visible));
         }
-        if (rawInspectionInputReceiptJson != null) throw invalid("Inspection receipt is forbidden for CHAT");
+        if(InteractionRoute.CHAT.name().equals(visible.getRoute())&&materialsAuthority!=null) {
+            return materialsAuthority.withFinalAuthority(visible,()->persistFinalLocked(tenantId,ownerJiacn,clientId,conversationId,
+                    conversationGeneration,agentId,requestId,turnId,dispatchId,snapshotId,contextDigest,safeContent,outcomeContractVersion,
+                    rawInteractionOutcomeJson,rawInspectionInputReceiptJson,sender,visible));
+        }
+        if (rawInspectionInputReceiptJson != null) throw invalid("Material receipt requires trusted CHAT authority");
         return persistFinalLocked(tenantId, ownerJiacn, clientId, conversationId, conversationGeneration, agentId,
                 requestId, turnId, dispatchId, snapshotId, contextDigest, safeContent, outcomeContractVersion,
                 rawInteractionOutcomeJson, null, sender, visible);
@@ -530,7 +606,7 @@ public class ChatDeliberationService {
         ChatTurnEntity turn = requireLockedTurn(tenantId, ownerJiacn, clientId, turnId);
         requireCallbackBinding(turn, tenantId, ownerJiacn, clientId, conversationId, conversationGeneration,
                 agentId, requestId, dispatchId, snapshotId, contextDigest);
-        ServerResolvedAgentSender trustedSender = requireAgentSender(sender, agentId, ownerJiacn, clientId);
+        ServerResolvedAgentSender trustedSender = requireAgentSender(sender, agentId, ownerJiacn, clientId, tenantId, dispatchId);
         ChatContextSnapshotEntity finalSnapshot = dao.findSnapshot(tenantId, ownerJiacn, clientId, snapshotId);
         if (finalSnapshot == null) throw unavailable();
         Map<String, Object> finalFacts = parseJsonMap(finalSnapshot.getFactsManifestJson());
@@ -540,7 +616,7 @@ public class ChatDeliberationService {
         ChatTypedDeliberationService.Prepared typedPrepared = null;
         ChatTypedInspectionService.Prepared inspectionPrepared = null;
         ChatActionFinalService.Prepared actionPrepared = null;
-        if (ChatActionFinalService.isV3(finalFacts)) {
+        if (ChatActionFinalService.isV5(finalFacts)) {
             if (actionFinals == null) throw persistence("Action final service is unavailable");
             actionPrepared = actionFinals.prepare(turn, finalSnapshot, safeContent, outcomeContractVersion,
                     rawInteractionOutcomeJson, rawInspectionInputReceiptJson);
@@ -614,6 +690,9 @@ public class ChatDeliberationService {
         if (dao.persistFinal(turn, finalDigest, message.getId(), now) != 1) {
             throw conflict("Concurrent final state change");
         }
+        turn.setState(ChatDeliberationStates.FINAL_PERSISTED).setFinalDigest(finalDigest)
+                .setFinalMessageId(message.getId()).setUpdatedAt(now)
+                .setStateVersion(turn.getStateVersion() + 1);
         String finalEventId = stableId("evt", dispatchId, "FINAL_PERSISTED");
         Map<String, Object> finalPayload = new LinkedHashMap<>();
         finalPayload.put("content", safeContent);
@@ -637,6 +716,8 @@ public class ChatDeliberationService {
         outboxPayload.put("eventSequence", Long.toString(finalEvent.getEventSequence()));
         outboxPayload.put("eventVersion", Long.toString(finalEvent.getEventVersion()));
         outboxPayload.put("finalDigest", finalDigest);
+        outboxPayload.put("state", turn.getState());
+        outboxPayload.put("stateVersion", Long.toString(turn.getStateVersion()));
         if (actionPersisted != null) outboxPayload.put("typedOutcome", actionPersisted);
         if (typedPersisted != null) outboxPayload.put("typedOutcome", typedPersisted.eventView());
         if (inspectionPersisted != null) outboxPayload.put("typedOutcome", inspectionPersisted.eventView());
@@ -647,9 +728,6 @@ public class ChatDeliberationService {
                 .setStatus("READY").setPayloadJson(CanonicalContextJson.write(outboxPayload)).setVersion(0L).setAvailableAt(now)
                 .setAttemptCount(0).setFencingToken(0L).setCreatedAt(now).setUpdatedAt(now);
         if (dao.insertOutbox(outbox) != 1) throw persistence("Unable to persist final event");
-        turn.setState(ChatDeliberationStates.FINAL_PERSISTED).setFinalDigest(finalDigest)
-                .setFinalMessageId(message.getId()).setUpdatedAt(now)
-                .setStateVersion(turn.getStateVersion() + 1);
         refreshAggregate(tenantId, ownerJiacn, clientId, turn.getRequestId(), now);
         return new FinalResult(FinalStatus.PERSISTED, message.getId(),
                 Long.toString(request.getUserMessageId()), finalEventId, turn, finalEvent);
@@ -672,11 +750,23 @@ public class ChatDeliberationService {
     @Transactional(rollbackFor = Exception.class)
     public TurnView cancelTurn(String tenantId, String ownerJiacn, String clientId, String turnId,
             Long expectedStateVersion, String reason) {
+        return cancelTurn(tenantId, ownerJiacn, clientId, turnId, expectedStateVersion, null, reason);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public TurnView cancelTurn(String tenantId, String ownerJiacn, String clientId, String turnId,
+            Long expectedStateVersion, Long expectedLastDeltaSeq, String reason) {
+        if (expectedLastDeltaSeq != null && (expectedStateVersion == null || expectedLastDeltaSeq < 0)) {
+            throw invalid("Delta checkpoint requires a state version");
+        }
         ChatTurnEntity visible = requireVisibleTurn(tenantId, ownerJiacn, clientId, turnId);
         requireLockedConversation(tenantId, ownerJiacn, clientId, visible.getConversationId(), visible.getConversationGeneration());
         ChatTurnEntity turn = requireLockedTurn(tenantId, ownerJiacn, clientId, turnId);
         if (!terminal(turn.getState())) {
-            if (expectedStateVersion != null && !expectedStateVersion.equals(turn.getStateVersion())) {
+            if (expectedLastDeltaSeq != null && expectedStateVersion.equals(turn.getStateVersion())
+                    && !expectedLastDeltaSeq.equals(turn.getLastDeltaSeq())) throw conflict("Turn delta checkpoint changed");
+            if (expectedStateVersion != null && !expectedStateVersion.equals(turn.getStateVersion())
+                    && !onlyStreamingDeltasAdvanced(turn, expectedStateVersion, expectedLastDeltaSeq)) {
                 throw conflict("Turn state version changed");
             }
             long now = System.currentTimeMillis();
@@ -684,6 +774,14 @@ public class ChatDeliberationService {
             refreshAggregate(tenantId, ownerJiacn, clientId, turn.getRequestId(), now);
         }
         return turnView(turn);
+    }
+
+    private boolean onlyStreamingDeltasAdvanced(ChatTurnEntity turn, long expectedVersion, Long expectedDelta) {
+        // A user stops the same turn, not a particular token. Never forgive a non-delta mutation.
+        Long version = turn.getStateVersion(), delta = turn.getLastDeltaSeq();
+        return "STREAMING".equals(turn.getState()) && expectedDelta != null && expectedVersion >= 0
+                && version != null && delta != null && version > expectedVersion && delta > expectedDelta
+                && version - expectedVersion == delta - expectedDelta;
     }
 
     @Transactional(rollbackFor = Exception.class)
@@ -728,6 +826,38 @@ public class ChatDeliberationService {
         }
         turn.setState(ChatDeliberationStates.PUBLISHED).setUpdatedAt(now)
                 .setStateVersion(turn.getStateVersion() + 1);
+    }
+
+    /** Only definite model-contract rejection is terminal; transport/acceptance uncertainty is not. */
+    public static boolean isInvalidAgentOutcome(String reason) {
+        return reason != null && Set.of("ACTION_OUTCOME_INVALID", "ACTION_OUTCOME_UNION_INVALID",
+                "ACTION_OUTCOME_KIND_INVALID", "ACTION_DELIVERY_PARENT_INVALID", "ACTION_DELIVERY_TARGET_INVALID",
+                "ACTION_SELECTION_INVALID", "ACTION_PARAMETERS_INVALID").contains(reason);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public ChatConversationEventEntity failInvalidAgentOutcome(String tenantId, String executorOwner, String clientId,
+            String agentId, String dispatchId, String messageId, String reason) {
+        if (!isInvalidAgentOutcome(reason)) throw invalid("Not a definite model outcome rejection");
+        String ownerJiacn=requireDispatchAuthority().incoming(tenantId,clientId,executorOwner,agentId,dispatchId).turn().getOwnerJiacn();
+        ChatDispatchOutboxEntity dispatch = dao.findOutboxById(tenantId, ownerJiacn, clientId, messageId);
+        if (dispatch == null || !Objects.equals(dispatchId, dispatch.getDispatchId())) throw unavailable();
+        requireDispatchAuthority().outgoing(dispatch);
+        ChatTurnEntity visible = requireVisibleTurn(tenantId, ownerJiacn, clientId, dispatch.getTurnId());
+        requireLockedConversation(tenantId, ownerJiacn, clientId, visible.getConversationId(), visible.getConversationGeneration());
+        ChatTurnEntity turn = requireLockedTurn(tenantId, ownerJiacn, clientId, visible.getTurnId());
+        if (!Objects.equals(agentId, turn.getTargetAgentId()) || !Objects.equals(dispatchId, turn.getDispatchId()))
+            throw unavailable();
+        if (terminal(turn.getState())) return null;
+        long now = System.currentTimeMillis();
+        if (dao.updateTurnState(turn, ChatDeliberationStates.FAILED, reason, now) != 1)
+            throw conflict("Concurrent outcome rejection state change");
+        turn.setState(ChatDeliberationStates.FAILED).setTerminalReason(reason)
+                .setStateVersion(turn.getStateVersion() + 1).setUpdatedAt(now);
+        ChatConversationEventEntity event = persistEvent(turn, stableId("evt", dispatchId, "MODEL_OUTCOME_REJECTED"),
+                "resync_required", Map.of("reason", reason), now);
+        refreshAggregate(tenantId, ownerJiacn, clientId, turn.getRequestId(), now);
+        return event;
     }
 
     @Transactional(rollbackFor = Exception.class)
@@ -801,11 +931,18 @@ public class ChatDeliberationService {
         if (type.isInstance(value)) target.put(key, value);
     }
 
+    private ChatDispatchAuthorityService requireDispatchAuthority() {
+        if (dispatchAuthority == null) throw unavailable();
+        return dispatchAuthority;
+    }
+
     private void cancelLockedTurn(ChatTurnEntity turn, String reason, long now) {
         if (InteractionRoute.EXECUTE.name().equals(turn.getRoute())) throw unavailable();
         if (dao.updateTurnState(turn, ChatDeliberationStates.CANCELLED, reason, now) != 1) {
             throw conflict("Concurrent cancellation");
         }
+        turn.setState(ChatDeliberationStates.CANCELLED).setTerminalReason(reason)
+                .setUpdatedAt(now).setStateVersion(turn.getStateVersion() + 1);
         ChatDispatchOutboxEntity cancel = new ChatDispatchOutboxEntity()
                 .setEventId(stableId("evt", turn.getDispatchId(), "CANCEL_REQUESTED"))
                 .setTenantId(turn.getTenantId()).setOwnerJiacn(turn.getOwnerJiacn()).setClientId(turn.getClientId())
@@ -823,8 +960,6 @@ public class ChatDeliberationService {
         persistEvent(turn, stableId("evt", turn.getDispatchId(), "CANCEL_REQUESTED"),
                 "cancel_requested", Map.of("reason", reason), now);
         if (dao.insertOutbox(cancel) != 1) throw persistence("Unable to persist cancellation event");
-        turn.setState(ChatDeliberationStates.CANCELLED).setTerminalReason(reason)
-                .setUpdatedAt(now).setStateVersion(turn.getStateVersion() + 1);
     }
 
     private ChatConversationEventEntity persistEvent(ChatTurnEntity turn, String eventId,
@@ -839,6 +974,11 @@ public class ChatDeliberationService {
         wire.put("contextSnapshotId", turn.getSnapshotId());
         wire.put("route", turn.getRoute());
         wire.putAll(payload);
+        if (List.of("agent_message_delta", "agent_message", "resync_required", "cancel_requested").contains(eventType)) {
+            // Snapshot the committed turn projection, not the journal sequence or a nested resource version.
+            wire.put("state", turn.getState());
+            wire.put("stateVersion", Long.toString(turn.getStateVersion()));
+        }
         ChatConversationEventEntity event = new ChatConversationEventEntity()
                 .setEventId(eventId).setTenantId(turn.getTenantId()).setOwnerJiacn(turn.getOwnerJiacn())
                 .setClientId(turn.getClientId()).setConversationId(turn.getConversationId())
@@ -873,6 +1013,21 @@ public class ChatDeliberationService {
         String actionId = ChatActionFinalValidator.actionEventId(action.validated());
         return persistEvent(turn, stableId("evt", actionId, "ACTION_FAILED"), "action_failed", Map.of(
                 "actionRequestId", actionId, "parentOutcomeId", parent.outcomeId()), now);
+    }
+
+    @Transactional(propagation = Propagation.MANDATORY, rollbackFor = Exception.class)
+    public ChatConversationEventEntity persistDeliverySubmissionCompleted(
+            cn.jia.chat.deliberation.ChatTypedDeliberationStore.Outcome outcome,
+            String submissionId, String deliveryId, long now) {
+        var scope = outcome.scope();
+        var turn = requireLockedTurn(scope.tenantId(), scope.ownerJiacn(), scope.clientId(), outcome.turnId());
+        if (!outcome.finalDigest().equals(turn.getFinalDigest())
+                || !scope.conversationId().equals(turn.getConversationId())
+                || !java.util.Objects.equals(scope.conversationGeneration(), turn.getConversationGeneration())
+                || !outcome.requestId().equals(turn.getRequestId())) throw conflict("Delivery final changed");
+        return persistEvent(turn, stableId("evt", submissionId, "DELIVERY_SUBMISSION_COMPLETED"),
+                "delivery_submission_completed", Map.of("parentOutcomeId", outcome.outcomeId(),
+                        "submissionId", submissionId, "deliveryId", deliveryId), now);
     }
 
     public ChatConversationEventEntity persistTypedQuestionAnswered(ChatTurnEntity turn,
@@ -1658,10 +1813,14 @@ public class ChatDeliberationService {
     }
 
     private ServerResolvedAgentSender requireAgentSender(ServerResolvedAgentSender sender,
-            String agentId, String ownerJiacn, String clientId) {
+            String agentId, String ownerJiacn, String clientId, String tenantId, String dispatchId) {
+        var binding = requireDispatchAuthority().incoming(tenantId, clientId,
+                sender == null ? null : sender.jiacn(), agentId, dispatchId);
+        if (!Objects.equals(ownerJiacn, binding.turn().getOwnerJiacn())) throw unavailable();
+        String expectedOwner = binding.executorOwner();
         if (sender == null || !ServerResolvedAgentSender.AGENT_TYPE.equals(sender.type())
                 || !Objects.equals(agentId, sender.agentId())
-                || !Objects.equals(ownerJiacn, sender.jiacn())
+                || !Objects.equals(expectedOwner, sender.jiacn())
                 || !Objects.equals(clientId, sender.clientId())) {
             throw unavailable();
         }

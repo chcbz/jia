@@ -1,5 +1,7 @@
 package cn.jia.agent.api.funding;
 
+import cn.jia.core.entity.JsonRequest;
+
 import cn.jia.agent.entity.funding.AgentTaskFundingCompleteDTO;
 import cn.jia.agent.service.funding.FundedBountyActor;
 import cn.jia.agent.service.funding.FundedBountyException;
@@ -30,8 +32,9 @@ public class AgentBountySettlementController {
     }
 
     @PostMapping("/funding/complete")
-    public ResponseEntity<?> complete(@PathVariable String taskId, @RequestBody Map<String, Object> body,
+    public ResponseEntity<?> complete(@PathVariable String taskId, @RequestBody JsonRequest<Map<String, Object>> protocolRequest,
             @RequestHeader(value = "Idempotency-Key", required = false) String key, Authentication authentication) {
+        Map<String, Object> body = protocolRequest == null ? null : protocolRequest.data();
         FundedBountyActor actor = actor(authentication);
         // No JSON-number coercion, caller fee/recipient override, or ignored extra monetary input.
         if (body == null || !body.keySet().equals(Set.of("expectedTaskVersion", "actualComputeMicro"))
@@ -46,7 +49,7 @@ public class AgentBountySettlementController {
     @ExceptionHandler(FundedBountyException.class)
     public ResponseEntity<JsonResult<Void>> rejected(FundedBountyException failure) {
         JsonResult<Void> result = JsonResult.failure(failure.code(), failure.getMessage());
-        result.setStatus(failure.status().value());
+
         return ResponseEntity.status(failure.status()).header("Cache-Control", "private, no-store").body(result);
     }
 

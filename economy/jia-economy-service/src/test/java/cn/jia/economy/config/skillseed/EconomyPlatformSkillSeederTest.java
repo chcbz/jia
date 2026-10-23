@@ -83,6 +83,14 @@ class EconomyPlatformSkillSeederTest {
         verify(mapper, times(6)).insertProduct(any(SkillProductEntity.class));
         verify(mapper, times(6)).insertProductVersion(any(SkillProductVersionEntity.class));
         verify(mapper, times(6)).publishProductVersion(anyString(), anyString(), anyString(), anyString(), anyLong(), anyLong());
+        var first=catalog.products().getFirst();String newerId=first.productVersionId()+"_new";
+        versions.put(newerId,new SkillProductVersionEntity().setProductVersionId(newerId).setProductId(first.productId()).setVersionSequence(2L).setSkillKey(first.skillKey()).setSkillVersion("1.1.0").setReviewStatus("APPROVED").setTenantId(TENANT).setClientId(CLIENT));
+        products.get(first.productId()).setCurrentProductVersionId(newerId).setVersion(3L);
+        seeder.afterPropertiesSet();
+        assertEquals(newerId,products.get(first.productId()).getCurrentProductVersionId());
+        assertEquals(3L,products.get(first.productId()).getVersion());
+        verify(mapper, times(6)).publishProductVersion(anyString(), anyString(), anyString(), anyString(), anyLong(), anyLong());
+
     }
 
     @Test

@@ -40,18 +40,20 @@ public final class VoiceTranscriptionRequestBudgetFilter extends OncePerRequestF
             FilterChain filterChain) throws ServletException, IOException {
         long declaredLength = request.getContentLengthLong();
         if (declaredLength < 0 || declaredLength > MAX_REQUEST_BYTES) {
-            reject(response);
+            reject(request, response);
             return;
         }
         filterChain.doFilter(request, response);
     }
 
-    private void reject(HttpServletResponse response) throws IOException {
+    private void reject(HttpServletRequest request, HttpServletResponse response) throws IOException {
         VoiceErrorCode error = VoiceErrorCode.TOO_LARGE;
         JsonResult<VoiceErrorData> result = new JsonResult<>(
-                new VoiceErrorData(null), error.message(), error.code(), error.status().value());
+                new VoiceErrorData(null), error.message(), error.code());
+        result.setRequestId(cn.jia.core.filter.RequestIdFilter.current(request));
         byte[] body = objectMapper.writeValueAsBytes(result);
         response.reset();
+        response.setHeader(cn.jia.core.filter.RequestIdFilter.HEADER_NAME, result.getRequestId());
         response.setStatus(error.status().value());
         response.setContentType(MediaType.APPLICATION_JSON_VALUE);
         response.setCharacterEncoding(StandardCharsets.UTF_8.name());

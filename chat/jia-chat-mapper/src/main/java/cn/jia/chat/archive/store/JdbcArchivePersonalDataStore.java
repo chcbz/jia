@@ -54,17 +54,42 @@ public class JdbcArchivePersonalDataStore implements ArchivePersonalDataStore {
 
     @Override
     public ActiveEdition lockActiveEdition(String editionId) {
+        // Resolve the immutable parent without locking the child. All writers lock work -> edition.
+        // A lookup by active_edition_id alone would scan/lock unrelated works as the shelf grows.
+        String workId = first(jdbc.query("""
+                SELECT work_id FROM archive_edition
+                WHERE edition_id=? AND CAST(edition_id AS BINARY)=CAST(? AS BINARY)
+                  AND OCTET_LENGTH(edition_id)=OCTET_LENGTH(?)
+                """, (rs, ignored) -> rs.getString(1), editionId, editionId, editionId));
+        if (workId == null) return null;
+        String activeEdition = first(jdbc.query("""
+                SELECT active_edition_id FROM archive_work
+                WHERE work_id=? AND CAST(work_id AS BINARY)=CAST(? AS BINARY)
+                  AND OCTET_LENGTH(work_id)=OCTET_LENGTH(?) FOR UPDATE
+                """, (rs, ignored) -> rs.getString(1), workId, workId, workId));
+        if (!editionId.equals(activeEdition)) return null;
         return first(jdbc.query("""
-                SELECT e.edition_id, e.manifest_sha256
-                FROM archive_work w JOIN archive_edition e
-                  ON e.work_id=w.work_id AND e.edition_id=w.active_edition_id
-                WHERE w.work_id='shuihuzhuan' AND w.active_edition_id=?
-                  AND CAST(w.active_edition_id AS BINARY)=CAST(? AS BINARY)
-                  AND OCTET_LENGTH(w.active_edition_id)=OCTET_LENGTH(?)
-                  AND e.import_state='READY'
-                FOR UPDATE
+                SELECT edition_id, manifest_sha256 FROM archive_edition
+                WHERE edition_id=? AND CAST(edition_id AS BINARY)=CAST(? AS BINARY)
+                  AND OCTET_LENGTH(edition_id)=OCTET_LENGTH(?)
+                  AND work_id=? AND CAST(work_id AS BINARY)=CAST(? AS BINARY)
+                  AND OCTET_LENGTH(work_id)=OCTET_LENGTH(?) AND import_state='READY' FOR UPDATE
                 """, (rs, ignored) -> new ActiveEdition(rs.getString(1), rs.getString(2)),
-                editionId, editionId, editionId));
+                editionId, editionId, editionId, workId, workId, workId));
+    }
+
+    @Override
+    public ContentPoint lockFinalContentPoint(String editionId) {
+        return first(jdbc.query("""
+                SELECT p.edition_id, e.manifest_sha256, c.block_type, p.block_id, c.reader_ordinal,
+                       p.paragraph_id, p.ordinal, p.text, p.utf8_byte_length, p.sha256
+                FROM archive_paragraph p
+                JOIN archive_chapter c ON c.edition_id=p.edition_id AND c.block_id=p.block_id
+                JOIN archive_edition e ON e.edition_id=p.edition_id
+                WHERE p.edition_id=? AND CAST(p.edition_id AS BINARY)=CAST(? AS BINARY)
+                  AND OCTET_LENGTH(p.edition_id)=OCTET_LENGTH(?) AND c.block_type='CHAPTER'
+                ORDER BY c.reader_ordinal DESC, p.ordinal DESC LIMIT 1 FOR UPDATE
+                """, pointMapper(), editionId, editionId, editionId));
     }
 
     @Override

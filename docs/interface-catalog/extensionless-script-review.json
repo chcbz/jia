@@ -1,0 +1,136 @@
+{
+  "date": "2026-10-15",
+  "scope": "tracked ops/scripts extensionless shebang source only; never executed",
+  "files": [
+    {
+      "file": "ops/ci/aliyun-flow/host/cyf-api-additive-schema",
+      "sha256": "f63c8651f2b2fa2b1fdb6f1116766488dea6456908f2b9f91ba884a8cc1c8c47",
+      "classification": "FILESYSTEM_PATH_MATCH_NOT_PROVEN_NETWORK",
+      "hits": [
+        {
+          "line": 28,
+          "text": "CANONICAL_JAR = Path('/home/isp/hosts/cyf/api/cyf-api-kit.jar')"
+        }
+      ]
+    },
+    {
+      "file": "ops/ci/aliyun-flow/host/cyf-api-e05-additive-schema",
+      "sha256": "c4c59ba8b8be1992b28cd57957466d731491a02baec5b720ae2156440898f5ec",
+      "classification": "FILESYSTEM_PATH_MATCH_NOT_PROVEN_NETWORK",
+      "hits": [
+        {
+          "line": 28,
+          "text": "CANONICAL_JAR = Path('/home/isp/hosts/cyf/api/cyf-api-kit.jar')"
+        }
+      ]
+    },
+    {
+      "file": "ops/ci/aliyun-flow/host/cyf-api-flow-auto-approve-install",
+      "sha256": "cc5c1c94ec5df98e4014c45459565507f25620ac8f707c90b452766cfcfa7399",
+      "classification": "NO_MATCH_IN_BOUNDED_NETWORK_PATTERN",
+      "hits": []
+    },
+    {
+      "file": "ops/ci/aliyun-flow/host/cyf-api-flow-deploy",
+      "sha256": "21155e61ddb86c46437c47df9823348025c192f28d6a924e2d449f11b74d30c7",
+      "classification": "FILESYSTEM_PATH_MATCH_NOT_PROVEN_NETWORK",
+      "hits": [
+        {
+          "line": 1912,
+          "text": "LOCAL_CANONICAL_JAR = Path('/home/isp/hosts/cyf/api/cyf-api-kit.jar')"
+        }
+      ]
+    },
+    {
+      "file": "ops/ci/aliyun-flow/host/cyf-api-flow-install",
+      "sha256": "f0ab6e8c9f7a52def93fcb7bc395ae886b5442e89017f03ce7265ae65c32883b",
+      "classification": "FILESYSTEM_PATH_MATCH_NOT_PROVEN_NETWORK",
+      "hits": [
+        {
+          "line": 28,
+          "text": "TARGET_JAR=/home/isp/hosts/cyf/api/cyf-api-kit.jar"
+        }
+      ]
+    },
+    {
+      "file": "ops/ci/aliyun-flow/host/cyf-api-kit",
+      "sha256": "9685c35b8bff293f474d5f1684312ecff4f88d0cd6f87450ae6b433a992356c2",
+      "classification": "ACTUATOR_HEALTH_EXTERNAL_TO_596_BUSINESS_ROUTES",
+      "hits": [
+        {
+          "line": 64,
+          "text": "canonical_loopback_curl() {"
+        },
+        {
+          "line": 69,
+          "text": "/usr/bin/curl -q --noproxy '*' \"$@\""
+        },
+        {
+          "line": 87,
+          "text": "start|restart|stop|status|validate-lock-contract|validate-curl-contract) ;;"
+        },
+        {
+          "line": 90,
+          "text": "if [[ \"$ACTION\" == validate-lock-contract || \"$ACTION\" == validate-curl-contract ]]; then"
+        },
+        {
+          "line": 99,
+          "text": "[[ -x /usr/bin/curl ]] || die \"缺少可信 curl：/usr/bin/curl\""
+        },
+        {
+          "line": 101,
+          "text": "if [[ \"$ACTION\" == validate-curl-contract ]]; then"
+        },
+        {
+          "line": 105,
+          "text": "|| die \"curl 验证 URL 必须为 127.0.0.1 临时端口 /health\""
+        },
+        {
+          "line": 106,
+          "text": "(( 10#${BASH_REMATCH[1]} <= 65535 )) || die \"curl 验证端口无效\""
+        },
+        {
+          "line": 107,
+          "text": "VALIDATION_BODY=\"$(mktemp \"$VALIDATION_ROOT/.curl-body.XXXXXX\")\""
+        },
+        {
+          "line": 109,
+          "text": "VALIDATION_CODE=\"$(canonical_loopback_curl --proto '=http' --silent --show-error --max-time 5 \\"
+        },
+        {
+          "line": 111,
+          "text": "|| die \"curl 验证请求失败\""
+        },
+        {
+          "line": 112,
+          "text": "[[ \"$VALIDATION_CODE\" == 200 ]] || die \"curl 验证状态失败\""
+        },
+        {
+          "line": 113,
+          "text": "grep -qx '{\"status\":\"UP\"}' \"$VALIDATION_BODY\" || die \"curl 验证响应失败\""
+        },
+        {
+          "line": 599,
+          "text": "code=\"$(canonical_loopback_curl --silent --show-error --max-time 5 --output \"$body\" --write-out '%{http_code}' \"$HEALTH_URL\" 2>/dev/null || true)\""
+        }
+      ]
+    },
+    {
+      "file": "ops/ci/aliyun-flow/host/cyf-api-local-admit",
+      "sha256": "dd9d125d16aba553ed3a7d693fdbfcfc937af65a033572d149da03311e1b2063",
+      "classification": "NO_MATCH_IN_BOUNDED_NETWORK_PATTERN",
+      "hits": []
+    },
+    {
+      "file": "ops/ci/aliyun-flow/host/cyf-web-flow-deploy",
+      "sha256": "105a565f91ea25f3a901501453b0ae59f5e2a38dc2b5f1f8f8f568f0275c4a79",
+      "classification": "HTML_ARTIFACT_BYTES_SHA256_NOT_BUSINESS_JSON",
+      "hits": [
+        {
+          "line": 394,
+          "text": "with urllib.request.urlopen(request, timeout=ONLINE_VERIFY_TIMEOUT_SECONDS) as response:"
+        }
+      ]
+    }
+  ]
+}

@@ -36,6 +36,9 @@ import java.util.Set;
  */
 @Service
 public class ChatBountyBootstrapAdmissionService {
+    private cn.jia.chat.service.ChatDispatchAuthorityService dispatchAuthority;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setDispatchAuthority(cn.jia.chat.service.ChatDispatchAuthorityService value) { dispatchAuthority=value; }
     private static final Set<String> OPERATIONS = Set.of("DELIBERATE", "INSPECT_INPUTS", "GENERATE_IMAGE",
             "EDIT_IMAGE", "GENERATE_AUDIO", "EDIT_AUDIO");
     private final AgentTaskRequirementSnapshotService requirements;
@@ -72,6 +75,15 @@ public class ChatBountyBootstrapAdmissionService {
      * requirement and the active grant are re-verified before Chat writes. The discussion's row
      * lock serializes this request with other bootstrap/legacy discussion creation.
      */
+    public void prepare(AgentTaskBountyBootstrapClaimDTO claim) {
+        if (claim != null && "DELIBERATE".equals(claim.permittedOperation())) {
+            var target=dispatchAuthority.grantTarget(claim.tenantId(),claim.ownerJiacn(),claim.clientId(),
+                    claim.taskId(),claim.grantId(),claim.grantVersion());
+            typedDiscussion.prepareBootstrap(new cn.jia.agent.service.SkillCapabilityLookup.Scope(
+                    claim.tenantId(), claim.clientId(), target.ownerJiacn(), claim.targetAgentId()));
+        }
+    }
+
     @Transactional(rollbackFor = Exception.class)
     public Admission admit(AgentTaskBountyBootstrapClaimDTO claim) {
         if (claim == null || !"0".equals(claim.tenantId())
@@ -129,13 +141,13 @@ public class ChatBountyBootstrapAdmissionService {
                             reference.fileId(), Integer.toString(reference.version()), reference.purpose(),
                             null, null)).toList();
             var command = new ChatTypedDeliberationWire.DiscussionCommand("DISCUSSION", claim.taskId(),
-                    claim.assignmentRevision(), content, null, null, null, null, selectors);
+                    claim.assignmentRevision(), content, null, null, null, null, selectors, "TASK_DEFAULT");
             // Stable per original action. The typed admission persists the source catalogue and
             // one dispatch outbox atomically; replay returns its receipt without a second turn.
             // ensure() acquired this same task root/binding before the conversation lock.
             String key = stable("mmd-initial-discuss", claim.tenantId(), claim.clientId(),
                     claim.ownerJiacn(), claim.taskId(), claim.sourceBusinessActionId());
-            var admitted = typedDiscussion.admit(claim.tenantId(), new ServerResolvedSender(
+            var admitted = typedDiscussion.admitPreparedBootstrap(claim.tenantId(), new ServerResolvedSender(
                     ServerResolvedSender.USER_TYPE, claim.ownerJiacn(), claim.ownerJiacn(),
                     claim.clientId(), DisplayNameSource.JIACN), discussion.conversationId(), key, command);
             if (admitted == null || !"ADMITTED".equals(admitted.state())

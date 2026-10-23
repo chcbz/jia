@@ -38,6 +38,22 @@ class PersonalWorkspaceControllerPreviewTest {
     }
 
     @Test
+    void arbitraryUploadMimeIsPreservedAndUnknownMissingMimeUsesOctetStream() throws Exception {
+        String[][] cases = {{"README", null, "application/octet-stream"},
+                {"data.custom", "application/octet-stream", "application/octet-stream"},
+                {"page.html", "text/html", "text/html"}, {"renamed.mp3", "video/mp4", "video/mp4"}};
+        for (int i = 0; i < cases.length; i++) {
+            String[] item = cases[i];
+            mvc.perform(multipart("/agent/personal-workspace/files")
+                    .file(new MockMultipartFile("file", item[0], item[1], new byte[]{1, 2, 3}))
+                    .header("Idempotency-Key", "arbitrary-" + i).principal(jwt()))
+                    .andExpect(status().isCreated());
+            verify(service).create(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.argThat(
+                    command -> item[0].equals(command.originalFilename()) && item[2].equals(command.contentMimeType())));
+        }
+    }
+
+    @Test
     void uploadInfersTextMimeWhenBrowserMultipartMetadataIsMissing() throws Exception {
         PersonalWorkspaceService.Scope scope = new PersonalWorkspaceService.Scope("0", CLIENT, OWNER);
         MockMultipartFile text = new MockMultipartFile("file", "notes.txt", null,
@@ -73,17 +89,17 @@ class PersonalWorkspaceControllerPreviewTest {
         mvc.perform(get("/agent/personal-workspace/files/{fileId}/versions/{version}/preview",
                         FILE, 1).principal(jwt()))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.parts.length()").value(1))
-                .andExpect(jsonPath("$.parts[0].partId").value("content"))
-                .andExpect(jsonPath("$.parts[0].contentMimeType").value("text/plain"));
+                .andExpect(jsonPath("$.data.parts.length()").value(3))
+                .andExpect(jsonPath("$.data.parts[0].partId").value("slide-1"))
+                .andExpect(jsonPath("$.data.parts[0].contentMimeType").value("image/png"));
 
         mvc.perform(get("/agent/personal-workspace/files/{fileId}/versions/{version}/preview",
                         FILE, 1).queryParam("view", "parts").principal(jwt()))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.parts.length()").value(3))
-                .andExpect(jsonPath("$.parts[0].partId").value("slide-1"))
-                .andExpect(jsonPath("$.parts[1].partId").value("slide-2"))
-                .andExpect(jsonPath("$.parts[2].partId").value("content"));
+                .andExpect(jsonPath("$.data.parts.length()").value(3))
+                .andExpect(jsonPath("$.data.parts[0].partId").value("slide-1"))
+                .andExpect(jsonPath("$.data.parts[1].partId").value("slide-2"))
+                .andExpect(jsonPath("$.data.parts[2].partId").value("content"));
 
         mvc.perform(get("/agent/personal-workspace/files/{fileId}/versions/{version}/preview",
                         FILE, 1).queryParam("view", "legacy").principal(jwt()))
