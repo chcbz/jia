@@ -348,6 +348,11 @@ public class SkillManagementTransactionTest {
         var c=install();var first=c;report(c,"FAILED","DEPENDENCY_MISSING");c=current(c);assertEquals("FAILED_RETRYABLE",c.get("status"));assertEquals(70_000_000L,wallet());
         var action=map("expectedChangeRevision",c.get("changeRevision"));var retried=service.retry(ACTOR,AGENT,text(c,"skillChangeId"),"retry-key","retry-request",action);
         assertEquals(retried,service.retry(ACTOR,AGENT,text(c,"skillChangeId"),"retry-key","retry-request",action));
+        String changeId=text(c,"skillChangeId");var changedAction=map("expectedChangeRevision",retried.get("changeRevision"));
+        assertEquals("IDEMPOTENCY_CONFLICT",assertThrows(SkillMarketplaceException.class,
+            ()->service.retry(ACTOR,AGENT,changeId,"retry-key","request",changedAction)).code());
+        assertEquals("SKILL_STATE_CONFLICT",assertThrows(SkillMarketplaceException.class,
+            ()->service.retry(ACTOR,AGENT,changeId,"new-retry-key","request",action)).code());
         assertEquals(first.get("orderId"),retried.get("orderId"));assertEquals(2,retried.get("attempt"));assertNotEquals(object(first.get("target")).get("skillInstallationId"),object(retried.get("target")).get("skillInstallationId"));
         assertEquals(1,count("economy_skill_order"));assertEquals(2,count("economy_skill_installation"));assertEquals(70_000_000L,wallet());
     }
@@ -355,11 +360,19 @@ public class SkillManagementTransactionTest {
         var c=install();report(c,"UNKNOWN","RECEIPT_UNKNOWN");c=current(c);assertEquals("RECOVERY_REQUIRED",c.get("status"));assertEquals("HELD",c.get("fundingStatus"));
         var action=map("expectedChangeRevision",c.get("changeRevision"));String id=text(c,"skillChangeId");
         assertThrows(SkillMarketplaceException.class,()->service.retry(ACTOR,AGENT,id,"retry-key","request",action));
-        service.reconcile(ACTOR,AGENT,id,"read-1","request",action);service.reconcile(ACTOR,AGENT,id,"read-2","request",action);
+        var reconciled=service.reconcile(ACTOR,AGENT,id,"read-1","request",action);
+        assertEquals(reconciled,service.reconcile(ACTOR,AGENT,id,"read-1","replay-request",action));
+        var changedAction=map("expectedChangeRevision",Long.toString(Long.parseLong(text(c,"changeRevision"))+1));
+        assertEquals("IDEMPOTENCY_CONFLICT",assertThrows(SkillMarketplaceException.class,
+            ()->service.reconcile(ACTOR,AGENT,id,"read-1","request",changedAction)).code());
+        assertEquals("SKILL_STATE_CONFLICT",assertThrows(SkillMarketplaceException.class,
+            ()->service.reconcile(ACTOR,AGENT,id,"new-read-key","request",changedAction)).code());
+        service.reconcile(ACTOR,AGENT,id,"read-2","request",action);
         assertEquals(1,count("economy_skill_installation"));assertEquals(2,count("agent_outbox_event"));assertEquals(70_000_000L,wallet());
     }
     @Test void rejectedAuthorizationRefundsOnceAndRefundedOrderNeverRevives() {
-        var c=install();var message=result(c,evidence(c,"FAILED","ENTITLEMENT_REVOKED"));service.result(proof(),message);service.result(proof(),message);
+        var c=install();var message=result(c,evidence(c,"FAILED","ENTITLEMENT_TERMINATED"));validate("Result",message);
+        service.result(proof(),message);service.result(proof(),message);
         c=current(c);assertEquals("FAILED_FINAL",c.get("status"));assertEquals("REFUNDED",c.get("fundingStatus"));assertEquals(100_000_000L,wallet());
         var action=map("expectedChangeRevision",c.get("changeRevision"));String id=text(c,"skillChangeId");
         assertThrows(SkillMarketplaceException.class,()->service.retry(ACTOR,AGENT,id,"retry","request",action));
@@ -382,6 +395,36 @@ public class SkillManagementTransactionTest {
             var a=pool.submit(call);var b=pool.submit(call);start.countDown();assertEquals(a.get().get("skillChangeId"),b.get().get("skillChangeId"));
         }finally {pool.shutdownNow();}
         assertEquals(70_000_000L,wallet());assertEquals(1,count("economy_skill_order"));assertEquals(1,count("agent_outbox_event"));
+    }
+    @Test void acceptedQuoteAndCreateReplayPreserveCasAndIdempotencyAndOwnerBoundaries() {
+        var data=quoteData();var quote=service.quote(ACTOR,"quote",data,false);var body=creation(quote,data);
+        var accepted=service.create(ACTOR,AGENT,"accepted","first-request",body,false);
+        assertEquals(accepted,service.create(ACTOR,AGENT,"accepted","replay-request",body,false));
+        assertEquals(quote,service.quote(ACTOR,"quote",data,false)); // Original expectedAgentVersion is now stale.
+        var alteredQuote=new LinkedHashMap<>(data);alteredQuote.put("expectedAgentVersion",Long.toString(versions.readOwned(ACTOR,AGENT)));
+        assertEquals("IDEMPOTENCY_CONFLICT",assertThrows(SkillMarketplaceException.class,()->service.quote(ACTOR,"quote",alteredQuote,false)).code());
+        assertEquals("SKILL_STATE_CONFLICT",assertThrows(SkillMarketplaceException.class,()->service.quote(ACTOR,"new-quote-key",data,false)).code());
+        assertEquals("SKILL_STATE_CONFLICT",assertThrows(SkillMarketplaceException.class,
+            ()->service.create(ACTOR,AGENT,"new-key","request",body,false)).code());
+        var altered=new LinkedHashMap<>(body);altered.put("expectedAgentVersion",Long.toString(versions.readOwned(ACTOR,AGENT)));
+        assertEquals("IDEMPOTENCY_CONFLICT",assertThrows(SkillMarketplaceException.class,
+            ()->service.create(ACTOR,AGENT,"accepted","request",altered,false)).code());
+        assertThrows(RuntimeException.class,()->service.create(new HostingRentHttp.Actor(ACTOR.actorId(),"0",ACTOR.clientId(),"foreign-owner"),
+            AGENT,"accepted","request",body,false));
+        assertEquals(70_000_000L,wallet());assertEquals(1,count("economy_skill_order"));assertEquals(1,count("agent_outbox_event"));
+    }
+    @Test void terminalReasonCannotRefundUnknownPreparation() {
+        var c=install();var unknown=result(c,evidence(c,"UNKNOWN","ENTITLEMENT_TERMINATED"));validate("Result",unknown);
+        service.result(proof(),unknown);c=current(c);assertEquals("RECOVERY_REQUIRED",c.get("status"));
+        assertEquals("HELD",c.get("fundingStatus"));assertEquals(false,c.get("retryAllowed"));assertEquals(70_000_000L,wallet());
+        assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM economy_skill_order WHERE status='REFUNDED'",Integer.class));
+    }
+    @Test void terminalReasonCannotRefundUnprovenActivation() {
+        var c=install();report(c,"PREPARED",null);c=current(c);assertEquals("ACTIVATING",c.get("status"));
+        var failed=result(c,evidence(c,"FAILED","ENTITLEMENT_TERMINATED"));validate("Result",failed);
+        service.result(proof(),failed);c=current(c);assertEquals("RECOVERY_REQUIRED",c.get("status"));
+        assertEquals("HELD",c.get("fundingStatus"));assertEquals(false,c.get("retryAllowed"));assertEquals(70_000_000L,wallet());
+        assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM economy_skill_order WHERE status='REFUNDED'",Integer.class));
     }
     @Test void getQueriesDoNotCreateVersionStateOrCommandsAndCrossOwnerCannotRead() {
         var list=service.skills(ACTOR,AGENT,false);assertFalse(((List<?>)list.get("items")).isEmpty());

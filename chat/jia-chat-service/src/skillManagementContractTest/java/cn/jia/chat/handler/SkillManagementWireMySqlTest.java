@@ -42,10 +42,10 @@ public class SkillManagementWireMySqlTest extends SkillManagementTransactionTest
         ObjectProvider<AgentService> provider=mock(ObjectProvider.class);when(provider.getIfAvailable()).thenReturn(agents);
         // The SQL fixture already executes non-registration fences. Registration has its own
         // real consumer path and must also execute the supplied operation, not return mock null.
-        when(authentication.withFence(any(),eq(true),any())).thenAnswer(call->{
+        doAnswer(call->{
             assertEquals(proof(),call.getArgument(0));Supplier<?> operation=call.getArgument(2);
             return tx.execute(status->operation.get());
-        });
+        }).when(authentication).withFence(any(),eq(true),any());
         var handler=new Wire(provider);handler.setRuntimeAuthentication(authentication);handler.setSkillManagement(service);return handler;
     }
     WebSocketSession socket(List<String> frames) throws Exception {

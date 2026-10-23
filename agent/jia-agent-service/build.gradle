@@ -937,6 +937,7 @@ dependencies {
     add(skillManagementContractSourceSet.implementationConfigurationName, project(':oauth:jia-oauth-api'))
     add(skillManagementContractSourceSet.runtimeOnlyConfigurationName, 'org.junit.platform:junit-platform-launcher:6.0.1')
     add(skillManagementContractSourceSet.runtimeOnlyConfigurationName, libs.mysql)
+    add(skillManagementContractSourceSet.runtimeOnlyConfigurationName, 'com.jayway.jsonpath:json-path')
 }
 tasks.register('skillManagementContract', Test) {
     group = 'verification'

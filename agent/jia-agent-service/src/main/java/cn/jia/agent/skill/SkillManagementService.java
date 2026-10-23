@@ -63,14 +63,17 @@ public final class SkillManagementService {
             require(row!=null&&a.ownerJiacn().equals(row.getOwnerJiacn())
                     &&hint.getRuntimeInstallationId().equals(row.getRuntimeInstallationId())
                     &&hint.getRuntimeHostId().equals(row.getRuntimeHostId()),409,"SKILL_STATE_CONFLICT");
-            try {versions.requireOwned(a,agent,expected,false);}
-            catch(SkillMarketplaceException conflict) {
-                if("AGENT_VERSION_CONFLICT".equals(conflict.code()))throw new SkillMarketplaceException(409,"SKILL_STATE_CONFLICT");
-                throw conflict;
-            }
+            requireVersion(a,agent,expected);
             if(online) require(online(a,agent),409,"SKILL_AGENT_OFFLINE");
             return action.get();
         });
+    }
+    private void requireVersion(HostingRentHttp.Actor a,String agent,Long expected) {
+        try {versions.requireOwned(a,agent,expected,false);}
+        catch(SkillMarketplaceException conflict) {
+            if("AGENT_VERSION_CONFLICT".equals(conflict.code()))throw new SkillMarketplaceException(409,"SKILL_STATE_CONFLICT");
+            throw conflict;
+        }
     }
     private <T> T queryOwned(HostingRentHttp.Actor a,String agent,Supplier<T> query) {
         enabled(a);path(agent);versions.readOwned(a,agent);
@@ -166,8 +169,12 @@ public final class SkillManagementService {
             return r==null?null:decode(db.findQuote(a.tenantId(),a.clientId(),r.getResourceId()).getDtoJson(),"Quote");});
         if(replay!=null)return replay;
         var prepared=prepare(a,text(data,"targetProductVersionId"),admin);
-        return owned(a,agent,Long.valueOf(text(data,"expectedAgentVersion")),"UPGRADE".equals(data.get("action")),()->{
+        return owned(a,agent,null,false,()->{
             var prior=replay(a,"/agent/skill-orders/quotes",key,data);if(prior!=null)return decode(db.findQuote(a.tenantId(),a.clientId(),prior.getResourceId()).getDtoJson(),"Quote");
+            // Identity/ownership locks are already held. An accepted identical request wins
+            // over stale intent preconditions, including a concurrent admission of this key.
+            requireVersion(a,agent,Long.valueOf(text(data,"expectedAgentVersion")));
+            if("UPGRADE".equals(data.get("action")))require(online(a,agent),409,"SKILL_AGENT_OFFLINE");
             var state=state(a,agent,text(data,"skillKey"));intent(a,state,data);published(a,prepared);
             require(state.getSkillKey().equals(prepared.version().getSkillKey()),409,"SKILL_QUOTE_MISMATCH");
             require(json(data.get("approvedPermissions")).equals(json(prepared.details().get("requiredPermissions"))),409,"SKILL_PERMISSIONS_MISMATCH");
@@ -204,8 +211,12 @@ public final class SkillManagementService {
         if(replay!=null)return replay;
         boolean install=Set.of("INSTALL","UPGRADE").contains(text(data,"action"));
         var prepared=install?prepare(a,text(data,"targetProductVersionId"),admin):null;
-        return owned(a,agent,Long.valueOf(text(data,"expectedAgentVersion")),Set.of("UPGRADE","ENABLE").contains(text(data,"action")),()->{
+        return owned(a,agent,null,false,()->{
             var prior=replay(a,route,key,data);if(prior!=null)return visibleChange(a,agent,prior.getResourceId(),false);
+            // Recheck replay under the same actor/runtime/ownership locks BEFORE new-intent
+            // CAS and readiness. The first concurrent acceptance consumes the agent version.
+            requireVersion(a,agent,Long.valueOf(text(data,"expectedAgentVersion")));
+            if(Set.of("UPGRADE","ENABLE").contains(text(data,"action")))require(online(a,agent),409,"SKILL_AGENT_OFFLINE");
             var state=state(a,agent,text(data,"skillKey"));intent(a,state,data);
             var src=source(a,state,data.get("sourceSkillInstallationId"));
             Map<String,Object> quote=null,target,details;String permissions;String orderId=null;Long escrowVersion=null;
@@ -582,9 +593,10 @@ public final class SkillManagementService {
             // FAILED/NOT_STARTED are accepted only as determinate non-switch facts. Security and
             // entitlement denials are final; absent/unknown evidence never enters this branch.
             String reason=evidence.get("reasonCode")==null?"PREPARATION_FAILED":text(evidence,"reasonCode");
+            // Frozen public Reasons only; the no-switch phase/outcome gate above remains
+            // mandatory even for a terminal identity/entitlement diagnostic.
             boolean recoverable=("PREPARE".equals(phase)||"ENABLE".equals(value.get("action")))
-                    && !Set.of("AGENT_FORBIDDEN","PERMISSION_DENIED","PERMISSIONS_MISMATCH","SKILL_PERMISSIONS_MISMATCH",
-                        "IDENTITY_MISMATCH","RUNTIME_MAPPING_REQUIRED","ENTITLEMENT_REVOKED","AUTHORIZATION_REVOKED","PACKAGE_REVOKED").contains(reason);
+                    && !Set.of("IDENTITY_CHANGED","ENTITLEMENT_TERMINATED").contains(reason);
             value.put("status",recoverable?"FAILED_RETRYABLE":"FAILED_FINAL");value.put("retryAllowed",recoverable);value.put("reasonCode",reason);
             value.put("runtimeSynced",false);
             var failedOrder=value.get("orderId")==null?null:market.selectOrderForUpdate(a.tenantId(),a.clientId(),text(value,"orderId"));
