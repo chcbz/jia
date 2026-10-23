@@ -73,6 +73,17 @@ class ArchiveNativeHttpMySqlTest {
     }
     static byte[] hash(String value)throws Exception{return hash(value.getBytes(StandardCharsets.UTF_8));}
     static byte[] hash(byte[] value)throws Exception{return MessageDigest.getInstance("SHA-256").digest(value);}
+    // Test-only second approved skill, generated outside repositories; no production package/catalog mutation.
+    byte[] variantPackage(byte[] original,String key)throws Exception{
+        var bytes=new ByteArrayOutputStream();
+        try(var input=new java.util.zip.ZipInputStream(new ByteArrayInputStream(original));var output=new java.util.zip.ZipOutputStream(bytes)){
+            for(var entry=input.getNextEntry();entry!=null;entry=input.getNextEntry()){
+                byte[] data=input.readAllBytes();
+                if(entry.getName().equals("SKILL.md") || entry.getName().equals("manifest.json"))data=new String(data,StandardCharsets.UTF_8).replace("archive-maintenance",key).getBytes(StandardCharsets.UTF_8);
+                output.putNextEntry(new java.util.zip.ZipEntry(entry.getName()));output.write(data);output.closeEntry();
+            }
+        }return bytes.toByteArray();
+    }
     void schema(String resource)throws Exception {
         String ddl=new ClassPathResource(resource).getContentAsString(StandardCharsets.UTF_8);
         for(String sql:ddl.replaceAll("(?m)^--.*$", "").split(";"))if(!sql.isBlank())jdbc.execute(sql);
@@ -90,15 +101,19 @@ class ArchiveNativeHttpMySqlTest {
         jdbc.update("INSERT INTO agent_runtime_v1_installation(id,installation_id,canonical_agent_id,manifest_version,manifest_sha256,enrollment_secret_hash,enrollment_expires_at,enrollment_consumed_at,runtime_authorization_hash,runtime_authorization_issued_at,status,version,tenant_id,client_id,create_time,update_time) VALUES(1,?,?,'1',?,?,?,?,?,?,'ACTIVE',0,?,?,?,?)",INSTALLATION,AGENT,manifestHash,hash("unused"),now+86400000,now,hash(authorization),now,TENANT,CLIENT,now,now);
         packageRoot=Files.createDirectory(root.resolve("packages"));Files.setPosixFilePermissions(packageRoot,java.nio.file.attribute.PosixFilePermissions.fromString("rwx------"));
         byte[] zip=Files.readAllBytes(Path.of(System.getenv("CYF_ARCHIVE_SKILL_PACKAGE")));new SkillPackageStore(packageRoot).publish(zip);
+        byte[] generalZip=variantPackage(zip,"archive-general");new SkillPackageStore(packageRoot).publish(generalZip);
         jdbc.update("INSERT INTO economy_skill_product(product_id,name,description,status,version,tenant_id,client_id,create_time,update_time) VALUES('archive-package','Archive maintenance','Isolated approved fixture','DRAFT',1,?,?,?,?)",TENANT,CLIENT,now,now);
         startHttp();
         var market=spring.getBean(EconomySkillMarketplaceMapper.class);
         var version=new SkillProductVersionEntity().setProductVersionId("archive-v1").setProductId("archive-package").setVersionSequence(1L).setSkillKey("archive-maintenance").setSkillVersion("1.1.1").setPriceMicro(0L).setPackageSha256(hash(zip)).setPackageSize((long)zip.length).setApprovedPermissionsManifest("[]").setApprovedPermissionsSha256(hash("[]")).setDeploymentRestriction("NONE").setReviewStatus("APPROVED");
         version.setTenantId(TENANT);version.setClientId(CLIENT);version.setCreateTime(now);assertEquals(1,market.insertProductVersion(version));
+        var generalVersion=new SkillProductVersionEntity().setProductVersionId("archive-general-v1").setProductId("archive-package").setVersionSequence(2L).setSkillKey("archive-general").setSkillVersion("1.1.1").setPriceMicro(0L).setPackageSha256(hash(generalZip)).setPackageSize((long)generalZip.length).setApprovedPermissionsManifest("[]").setApprovedPermissionsSha256(hash("[]")).setDeploymentRestriction("NONE").setReviewStatus("APPROVED");
+        generalVersion.setTenantId(TENANT);generalVersion.setClientId(CLIENT);generalVersion.setCreateTime(now);assertEquals(1,market.insertProductVersion(generalVersion));
         var positions=spring.getBean(PositionSkillService.class);var scope=new PositionAuthority.Scope(TENANT,CLIENT,OWNER);
         for(String p:List.of("MANAGE_POSITIONS","ARCHIVE_WRITE","ARCHIVE_PUBLISH"))jdbc.update("INSERT INTO agent_position_authority VALUES(?,?,?,?,?)",TENANT,CLIENT,OWNER,p,p.equals("MANAGE_POSITIONS")?"positions":"archive:public");
         positions.defineSkill(scope,"skill",new Skill("archive-maintenance",SkillType.POSITION,"archive-v1"));
-        positions.configure(scope,"position",new Position("editor","Editor",2,"archive:public",true,List.of("archive-maintenance"),0),0);
+        positions.defineSkill(scope,"general-skill",new Skill("archive-general",SkillType.GENERAL,"archive-general-v1"));
+        positions.configure(scope,"position",new Position("editor","Editor",2,"archive:public",true,List.of("archive-maintenance","archive-general"),0),0);
         String appointment=positions.appoint(scope,"appoint","editor",AGENT).resultId();assertFalse(positions.read(scope).state().installations().values().iterator().next().usable());
         String clientRoot=System.getenv("CYF_ARCHIVE_CLIENT_ROOT");assertNotNull(clientRoot);
         node=new ProcessBuilder("node",Path.of(clientRoot,"conf/codex-ws-agent/test/fixtures/archive-native-http.mjs").toString()).redirectError(root.resolve("node-private.log").toFile()).start();
@@ -111,7 +126,7 @@ class ArchiveNativeHttpMySqlTest {
         var auth=spring.getBean(AgentRuntimeAuthenticationService.class);
         var headers=new AgentRuntimeAuthenticationFilter.SessionHeaders(AGENT,INSTALLATION,"archive-host","archive-boot",Long.parseLong(h.get("X-Agent-Session-Generation")),h.get("Authorization").substring("AgentRuntime ".length()));
         var proof=auth.verify(headers);auth.bind("fixture-channel",proof,()->node.isAlive());
-        var installed=exchange(Map.of("op","INSTALL"));assertEquals(1,installed.get("processed"));assertTrue(positions.read(scope).state().installations().values().iterator().next().usable(),()->"Installation state: "+positions.read(scope).state().installations().values().iterator().next().state()+" / "+positions.read(scope).state().installations().values().iterator().next().errorCode());
+        var installed=exchange(Map.of("op","INSTALL"));assertEquals(2,installed.get("processed"));assertTrue(positions.read(scope).state().installations().values().stream().allMatch(Installation::usable),()->"Installation states: "+positions.read(scope).state().installations().values().stream().map(i->i.state()+"/"+i.errorCode()).toList());
         assertTrue(Files.isRegularFile(root.resolve("codex-home/skills/archive-maintenance/SKILL.md")));
         var service=spring.getBean(ArchiveMaintenanceService.class);var reader=new ArchiveReaderServiceImpl(spring.getBean(JdbcArchiveContentStore.class));
         String sourceA="第一回 初见\n这是仓库外生成的测试文本："+UUID.randomUUID()+"。\n第二回 后续\n第二段。";
@@ -125,10 +140,19 @@ class ArchiveNativeHttpMySqlTest {
         var healthy=service.create(scope,"healthy",new ArchiveMaintenanceService.Create(appointment,AGENT,"archive-maintenance","healthy-book","Healthy","Fixture","healthy.txt","Self-authored",sourceA,ArchiveMaintenanceService.Mode.DRAFT_ONLY));
         assertEquals(2,exchange(Map.of("op","RUN")).get("processed"));assertEquals("FAILED",service.read(scope,(String)broken.get("jobId")).get("state"));assertEquals("DRAFT",service.read(scope,(String)healthy.get("jobId")).get("state"));
         assertEquals(2,reader.books().items().size());assertEquals(List.of(401,401,401),exchange(Map.of("op","NEGATIVE","origin",origin)).get("statuses"));
+        positions.configure(scope,"shared-position",new Position("reviewer","Reviewer",1,"archive:public",false,List.of("archive-maintenance"),0),0);
+        String shared=positions.appoint(scope,"shared-appoint","reviewer",AGENT).resultId();assertEquals(0,exchange(Map.of("op","INSTALL")).get("processed"));
         var pending=service.create(scope,"pending",new ArchiveMaintenanceService.Create(appointment,AGENT,"archive-maintenance","revoked-book","Revoked","Fixture","external.txt","Self-authored",sourceA,ArchiveMaintenanceService.Mode.AUTO));
         positions.resign(scope,"resign",appointment);assertEquals(0,exchange(Map.of("op","RUN")).get("processed"));assertEquals("WAITING",service.read(scope,(String)pending.get("jobId")).get("state"));
+        assertEquals(0,exchange(Map.of("op","INSTALL")).get("processed"));assertTrue(Files.exists(root.resolve("codex-home/skills/archive-maintenance")));
+        positions.resign(scope,"resign-shared",shared);
         assertEquals(1,exchange(Map.of("op","INSTALL")).get("processed"));assertFalse(Files.exists(root.resolve("codex-home/skills/archive-maintenance")));
-        assertEquals(InstallState.REMOVED,positions.read(scope).state().installations().values().iterator().next().state());
+        assertEquals(InstallState.REMOVED,positions.read(scope).state().installations().values().stream().filter(i->i.skillKey().equals("archive-maintenance")).findFirst().orElseThrow().state());
+        assertTrue(Files.isRegularFile(root.resolve("codex-home/skills/archive-general/SKILL.md")));
+        var retained=new PositionInstalledSkills(positions,spring.getBean(AgentIdentityService.class),market,spring.getBean(SkillPackages.class));
+        var lookupScope=new SkillCapabilityLookup.Scope(TENANT,CLIENT,OWNER,AGENT);
+        assertEquals(List.of("archive-general"),retained.read(lookupScope).stream().map(InstalledSkillDescriptorLookup.Descriptor::skillKey).toList());
+        assertEquals(1,retained.entitlements(lookupScope).size());
         assertEquals(0,jdbc.queryForObject("SELECT count(*) FROM economy_skill_order",Integer.class));
         assertEquals("STOPPED",exchange(Map.of("op","STOP")).get("op"));assertTrue(node.waitFor(10,TimeUnit.SECONDS));assertEquals(0,node.exitValue());
     }
