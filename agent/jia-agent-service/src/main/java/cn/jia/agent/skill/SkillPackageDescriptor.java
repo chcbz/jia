@@ -11,6 +11,7 @@ import static cn.jia.agent.skill.SkillMarketplaceException.require;
 /** Bounded archive metadata projection only: never extracts files or executes SKILL.md.
  * Runtime remains responsible for full ZIP path/type isolation before activation. */
 final class SkillPackageDescriptor {
+    private static final long MAX_EXPANDED_BYTES = 64L * 1024 * 1024;
     private SkillPackageDescriptor() { }
     static SkillManifestCodec.Manifest read(PlatformSkillPackage pkg,SkillManifestCodec codec) {
         Path temporary=null;
@@ -19,12 +20,12 @@ final class SkillPackageDescriptor {
                     PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------")));
             Files.write(temporary,pkg.bytes());
             try(var zip=new ZipFile(temporary.toFile())) {
-                var entries=zip.entries();Set<String> names=new HashSet<>();long expanded=0;int count=0;
+                var entries=zip.entries();Set<String> names=new HashSet<>();long expanded=0;
                 while(entries.hasMoreElements()) {
                     var entry=entries.nextElement();String name=entry.getName();
-                    require(++count<=256 && names.add(name),400,"SKILL_ARCHIVE_INVALID");
-                    require(entry.getSize()>=0 && entry.getSize()<=SkillPackageStore.MAX_PACKAGE_BYTES,400,"SKILL_ARCHIVE_INVALID");
-                    expanded+=entry.getSize();require(expanded<=64L*1024*1024,400,"SKILL_ARCHIVE_INVALID");
+                    require(names.add(name),400,"SKILL_ARCHIVE_INVALID");
+                    require(entry.getSize()>=0 && entry.getSize()<=MAX_EXPANDED_BYTES-expanded,400,"SKILL_ARCHIVE_INVALID");
+                    expanded+=entry.getSize();
                 }
                 var instructions=zip.getEntry("SKILL.md");require(instructions!=null && !instructions.isDirectory(),400,"SKILL_ARCHIVE_INVALID");
                 require(!names.contains("manifest.json/"),400,"SKILL_ARCHIVE_INVALID");
@@ -33,8 +34,10 @@ final class SkillPackageDescriptor {
                 require(!manifest.isDirectory(),400,"SKILL_ARCHIVE_INVALID");
                 byte[] bytes;
                 try(var stream=zip.getInputStream(manifest)) {
-                    bytes=stream.readNBytes(SkillPackageStore.MAX_PACKAGE_BYTES+1);
-                    require(bytes.length==manifest.getSize() && bytes.length<=SkillPackageStore.MAX_PACKAGE_BYTES,400,"SKILL_ARCHIVE_INVALID");
+                    // The validated expanded total bounds this allocation. Read the exact entry
+                    // and probe EOF separately: never add one to an int representation limit.
+                    bytes=stream.readNBytes((int)manifest.getSize());
+                    require(bytes.length==manifest.getSize() && stream.read()==-1,400,"SKILL_ARCHIVE_INVALID");
                 }
                 var descriptor=codec.parse(bytes,pkg.product().skillKey(),pkg.product().skillVersion());
                 var document=descriptor.document();
