@@ -4,15 +4,16 @@ import cn.jia.agent.common.AgentCommandAmqpContract;
 import cn.jia.agent.config.AgentRabbitTopologyManifest;
 import cn.jia.agent.entity.AgentConfirmedPublishRequest;
 import cn.jia.agent.entity.AgentRabbitPublishResult;
-import cn.jia.agent.service.AgentConfirmedRabbitPublisher;
 import com.rabbitmq.client.AMQP;
 import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.Envelope;
 import com.rabbitmq.client.GetResponse;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
-import org.springframework.amqp.rabbit.connection.Connection;
-import org.springframework.amqp.rabbit.connection.ConnectionFactory;
+import com.rabbitmq.client.Connection;
+import org.junit.jupiter.api.AfterEach;
+import java.util.ArrayList;
+import static cn.jia.agent.service.impl.AgentCommandRedriveTestFixture.TOPOLOGY;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Date;
@@ -32,6 +33,16 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class AgentCommandDlqRedriverImplTest {
+    private final List<AgentCommandDlqRedriverImpl> redrivers=new ArrayList<>();
+    @AfterEach void closeRedrivers() { redrivers.forEach(AgentCommandDlqRedriverImpl::close); }
+    private AgentCommandDlqRedriverImpl redriver(AgentCommandRedriveRawProvider provider,
+            AgentCommandRedrivePublishAttempt attempt) throws Exception {
+        when(provider.preparePublish(any(),any())).thenReturn(attempt);
+        when(attempt.closeAfterKnownOutcome()).thenReturn(true);
+        var redriver=AgentCommandRedriveTestFixture.redriver(provider,request());
+        redrivers.add(redriver);return redriver;
+    }
+
     private static final String SPRING_LISTENER_RETURN_CORRELATION =
             "spring_listener_return_correlation";
     private static final String SPRING_RETURNED_MESSAGE_CORRELATION =
@@ -42,41 +53,40 @@ class AgentCommandDlqRedriverImplTest {
             "22222222-2222-2222-2222-222222222222";
 
     @Test
-    void invalidBoundsFailBeforeBrokerAccess() {
-        ConnectionFactory factory = mock(ConnectionFactory.class);
-        AgentConfirmedRabbitPublisher publisher = mock(AgentConfirmedRabbitPublisher.class);
-        AgentCommandDlqRedriverImpl redriver = new AgentCommandDlqRedriverImpl(factory, publisher);
+    void invalidBoundsFailBeforeBrokerAccess() throws Exception {
+        AgentCommandRedriveRawProvider factory = mock(AgentCommandRedriveRawProvider.class);
+        AgentCommandRedrivePublishAttempt publisher = mock(AgentCommandRedrivePublishAttempt.class);
+        AgentCommandDlqRedriverImpl redriver = redriver(factory, publisher);
 
         assertEquals("DLQ_REDRIVE_REQUEST_INVALID",
                 redriver.redrive(request(), 99L, 1).errorCode());
         assertEquals("DLQ_REDRIVE_REQUEST_INVALID",
                 redriver.redrive(request(), 5_000L, 501).errorCode());
 
-        verify(factory, never()).createConnection();
-        verify(publisher, never()).publishPreservingHeaders(any(), any(), anyLong());
+        verify(factory, never()).openSource();
+        verify(publisher, never()).execute(anyLong());
     }
 
     @Test
     void boundedScanHoldsNonTargetAndAcksTargetOnlyAfterConfirmedExactRepublish() throws Exception {
-        ConnectionFactory factory = mock(ConnectionFactory.class);
+        AgentCommandRedriveRawProvider factory = mock(AgentCommandRedriveRawProvider.class);
         Connection connection = mock(Connection.class);
         Channel channel = mock(Channel.class);
-        AgentConfirmedRabbitPublisher publisher = mock(AgentConfirmedRabbitPublisher.class);
+        AgentCommandRedrivePublishAttempt publisher = mock(AgentCommandRedrivePublishAttempt.class);
         AgentConfirmedPublishRequest expected = request();
-        when(factory.createConnection()).thenReturn(connection);
-        when(connection.createChannel(false)).thenReturn(channel);
-        when(channel.basicGet(AgentRabbitTopologyManifest.DEAD_LETTER_QUEUE, false))
+        when(factory.openSource()).thenReturn(new AgentCommandRedriveSourceSession(connection,channel,100));
+        when(channel.basicGet(TOPOLOGY.deadLetterQueue(), false))
                 .thenReturn(response(7L, "other", expected, false))
                 .thenReturn(response(8L, expected.messageId(), expected, false));
-        when(publisher.publishPreservingHeaders(any(), any(), anyLong()))
+        when(publisher.execute(anyLong()))
                 .thenReturn(AgentRabbitPublishResult.ack());
 
-        AgentRabbitPublishResult result = new AgentCommandDlqRedriverImpl(factory, publisher)
+        AgentRabbitPublishResult result = redriver(factory, publisher)
                 .redrive(expected, 5_000L, 2);
 
         assertEquals(AgentRabbitPublishResult.Type.ACK, result.type());
         var order = inOrder(publisher, channel);
-        order.verify(publisher).publishPreservingHeaders(any(), any(), anyLong());
+        order.verify(publisher).execute(anyLong());
         order.verify(channel).basicAck(8L, false);
         verify(channel).basicNack(7L, false, true);
         verify(channel, never()).basicNack(8L, false, true);
@@ -84,34 +94,32 @@ class AgentCommandDlqRedriverImplTest {
 
     @Test
     void provenanceDriftNeverPublishesAndRequeuesBrokerMessage() throws Exception {
-        ConnectionFactory factory = mock(ConnectionFactory.class);
+        AgentCommandRedriveRawProvider factory = mock(AgentCommandRedriveRawProvider.class);
         Connection connection = mock(Connection.class);
         Channel channel = mock(Channel.class);
-        AgentConfirmedRabbitPublisher publisher = mock(AgentConfirmedRabbitPublisher.class);
+        AgentCommandRedrivePublishAttempt publisher = mock(AgentCommandRedrivePublishAttempt.class);
         AgentConfirmedPublishRequest expected = request();
-        when(factory.createConnection()).thenReturn(connection);
-        when(connection.createChannel(false)).thenReturn(channel);
-        when(channel.basicGet(AgentRabbitTopologyManifest.DEAD_LETTER_QUEUE, false))
+        when(factory.openSource()).thenReturn(new AgentCommandRedriveSourceSession(connection,channel,100));
+        when(channel.basicGet(TOPOLOGY.deadLetterQueue(), false))
                 .thenReturn(response(9L, expected.messageId(), expected, true));
 
-        AgentRabbitPublishResult result = new AgentCommandDlqRedriverImpl(factory, publisher)
+        AgentRabbitPublishResult result = redriver(factory, publisher)
                 .redrive(expected, 5_000L, 1);
 
         assertEquals("DLQ_MESSAGE_PROVENANCE_INVALID", result.errorCode());
-        verify(publisher, never()).publishPreservingHeaders(any(), any(), anyLong());
+        verify(publisher, never()).execute(anyLong());
         verify(channel).basicNack(9L, false, true);
         verify(channel, never()).basicAck(9L, false);
     }
 
     @Test
     void springTransportHeaderDriftNeverPublishesAndRequeuesBrokerMessage() throws Exception {
-        ConnectionFactory factory = mock(ConnectionFactory.class);
+        AgentCommandRedriveRawProvider factory = mock(AgentCommandRedriveRawProvider.class);
         Connection connection = mock(Connection.class);
         Channel channel = mock(Channel.class);
-        AgentConfirmedRabbitPublisher publisher = mock(AgentConfirmedRabbitPublisher.class);
+        AgentCommandRedrivePublishAttempt publisher = mock(AgentCommandRedrivePublishAttempt.class);
         AgentConfirmedPublishRequest expected = request();
-        when(factory.createConnection()).thenReturn(connection);
-        when(connection.createChannel(false)).thenReturn(channel);
+        when(factory.openSource()).thenReturn(new AgentCommandRedriveSourceSession(connection,channel,100));
 
         GetResponse valid = response(14L, expected.messageId(), expected, false);
         Map<String, Object> missing = new LinkedHashMap<>(valid.getProps().getHeaders());
@@ -124,7 +132,7 @@ class AgentCommandDlqRedriverImplTest {
         invalid.put(SPRING_LISTENER_RETURN_CORRELATION, "not-a-uuid");
         Map<String, Object> unknown = new LinkedHashMap<>(valid.getProps().getHeaders());
         unknown.put("x-unknown-header", "rejected");
-        when(channel.basicGet(AgentRabbitTopologyManifest.DEAD_LETTER_QUEUE, false))
+        when(channel.basicGet(TOPOLOGY.deadLetterQueue(), false))
                 .thenReturn(withHeaders(valid, 14L, missing))
                 .thenReturn(withHeaders(valid, 15L, partial))
                 .thenReturn(withHeaders(valid, 16L, duplicate))
@@ -133,29 +141,28 @@ class AgentCommandDlqRedriverImplTest {
 
         for (long deliveryTag = 14L; deliveryTag <= 18L; deliveryTag++) {
             assertEquals("DLQ_MESSAGE_PROVENANCE_INVALID",
-                    new AgentCommandDlqRedriverImpl(factory, publisher)
+                    redriver(factory, publisher)
                             .redrive(expected, 5_000L, 1).errorCode());
             verify(channel).basicNack(deliveryTag, false, true);
             verify(channel, never()).basicAck(deliveryTag, false);
         }
-        verify(publisher, never()).publishPreservingHeaders(any(), any(), anyLong());
+        verify(publisher, never()).execute(anyLong());
     }
 
     @Test
     void directConfirmedTerminalParkWithoutDeathHeadersIsValid() throws Exception {
-        ConnectionFactory factory = mock(ConnectionFactory.class);
+        AgentCommandRedriveRawProvider factory = mock(AgentCommandRedriveRawProvider.class);
         Connection connection = mock(Connection.class);
         Channel channel = mock(Channel.class);
-        AgentConfirmedRabbitPublisher publisher = mock(AgentConfirmedRabbitPublisher.class);
+        AgentCommandRedrivePublishAttempt publisher = mock(AgentCommandRedrivePublishAttempt.class);
         AgentConfirmedPublishRequest expected = request();
-        when(factory.createConnection()).thenReturn(connection);
-        when(connection.createChannel(false)).thenReturn(channel);
-        when(channel.basicGet(AgentRabbitTopologyManifest.DEAD_LETTER_QUEUE, false))
+        when(factory.openSource()).thenReturn(new AgentCommandRedriveSourceSession(connection,channel,100));
+        when(channel.basicGet(TOPOLOGY.deadLetterQueue(), false))
                 .thenReturn(response(10L, expected.messageId(), expected, false, false));
-        when(publisher.publishPreservingHeaders(any(), any(), anyLong()))
+        when(publisher.execute(anyLong()))
                 .thenReturn(AgentRabbitPublishResult.ack());
 
-        AgentRabbitPublishResult result = new AgentCommandDlqRedriverImpl(factory, publisher)
+        AgentRabbitPublishResult result = redriver(factory, publisher)
                 .redrive(expected, 5_000L, 1);
 
         assertEquals(AgentRabbitPublishResult.Type.ACK, result.type());
@@ -164,10 +171,10 @@ class AgentCommandDlqRedriverImplTest {
 
     @Test
     void brokerSettlementRetryHeaderIsPreservedRatherThanResetFromDatabase() throws Exception {
-        ConnectionFactory factory = mock(ConnectionFactory.class);
+        AgentCommandRedriveRawProvider factory = mock(AgentCommandRedriveRawProvider.class);
         Connection connection = mock(Connection.class);
         Channel channel = mock(Channel.class);
-        AgentConfirmedRabbitPublisher publisher = mock(AgentConfirmedRabbitPublisher.class);
+        AgentCommandRedrivePublishAttempt publisher = mock(AgentCommandRedrivePublishAttempt.class);
         AgentConfirmedPublishRequest expected = request();
         GetResponse original = response(11L, expected.messageId(), expected, false, true);
         Map<String, Object> preserved = new LinkedHashMap<>(original.getProps().getHeaders());
@@ -181,21 +188,20 @@ class AgentCommandDlqRedriverImplTest {
                 .type(original.getProps().getType()).headers(preserved).build();
         GetResponse response = new GetResponse(
                 original.getEnvelope(), properties, original.getBody(), original.getMessageCount());
-        when(factory.createConnection()).thenReturn(connection);
-        when(connection.createChannel(false)).thenReturn(channel);
-        when(channel.basicGet(AgentRabbitTopologyManifest.DEAD_LETTER_QUEUE, false))
+        when(factory.openSource()).thenReturn(new AgentCommandRedriveSourceSession(connection,channel,100));
+        when(channel.basicGet(TOPOLOGY.deadLetterQueue(), false))
                 .thenReturn(response);
-        when(publisher.publishPreservingHeaders(any(), any(), anyLong()))
+        when(publisher.execute(anyLong()))
                 .thenReturn(AgentRabbitPublishResult.ack());
 
-        new AgentCommandDlqRedriverImpl(factory, publisher).redrive(expected, 5_000L, 1);
+        redriver(factory, publisher).redrive(expected, 5_000L, 1);
 
         var requestCaptor = ArgumentCaptor.forClass(AgentConfirmedPublishRequest.class);
         @SuppressWarnings({"unchecked", "rawtypes"})
         ArgumentCaptor<Map<String, Object>> headersCaptor =
                 (ArgumentCaptor) ArgumentCaptor.forClass(Map.class);
-        verify(publisher).publishPreservingHeaders(
-                requestCaptor.capture(), headersCaptor.capture(), eq(5_000L));
+        verify(factory).preparePublish(requestCaptor.capture(), headersCaptor.capture());
+        verify(publisher).execute(anyLong());
         assertEquals(64, requestCaptor.getValue().sourceSettlementRetry());
         assertEquals(64, headersCaptor.getValue().get(
                 AgentCommandAmqpContract.HEADER_SOURCE_SETTLEMENT_RETRY));
@@ -203,17 +209,17 @@ class AgentCommandDlqRedriverImplTest {
 
     @Test
     void malformedDeathHistoryOrPublishNackNeverAcksDlqSource() throws Exception {
-        ConnectionFactory malformedFactory = mock(ConnectionFactory.class);
+        AgentCommandRedriveRawProvider malformedFactory = mock(AgentCommandRedriveRawProvider.class);
         Connection malformedConnection = mock(Connection.class);
         Channel malformedChannel = mock(Channel.class);
-        AgentConfirmedRabbitPublisher publisher = mock(AgentConfirmedRabbitPublisher.class);
+        AgentCommandRedrivePublishAttempt publisher = mock(AgentCommandRedrivePublishAttempt.class);
         AgentConfirmedPublishRequest expected = request();
         GetResponse original = response(12L, expected.messageId(), expected, false, true);
         Map<String, Object> malformedHeaders = new LinkedHashMap<>(original.getProps().getHeaders());
         malformedHeaders.put("x-death", List.of(Map.of(
                 "count", 1L, "reason", "rejected", "queue", "foreign.q",
-                "exchange", AgentRabbitTopologyManifest.MAIN_EXCHANGE,
-                "routing-keys", List.of(AgentRabbitTopologyManifest.GENERAL_ROUTING_KEY),
+                "exchange", TOPOLOGY.mainExchange(),
+                "routing-keys", List.of(TOPOLOGY.generalRoutingKey()),
                 "time", new Date(1_700_000_000_000L))));
         AMQP.BasicProperties malformedProperties = new AMQP.BasicProperties.Builder()
                 .contentType(original.getProps().getContentType())
@@ -223,34 +229,32 @@ class AgentCommandDlqRedriverImplTest {
                 .type(original.getProps().getType()).headers(malformedHeaders).build();
         GetResponse malformed = new GetResponse(
                 original.getEnvelope(), malformedProperties, original.getBody(), original.getMessageCount());
-        when(malformedFactory.createConnection()).thenReturn(malformedConnection);
-        when(malformedConnection.createChannel(false)).thenReturn(malformedChannel);
-        when(malformedChannel.basicGet(AgentRabbitTopologyManifest.DEAD_LETTER_QUEUE, false))
+        when(malformedFactory.openSource()).thenReturn(new AgentCommandRedriveSourceSession(malformedConnection,malformedChannel,100));
+        when(malformedChannel.basicGet(TOPOLOGY.deadLetterQueue(), false))
                 .thenReturn(malformed);
 
         assertEquals("DLQ_MESSAGE_PROVENANCE_INVALID",
-                new AgentCommandDlqRedriverImpl(malformedFactory, publisher)
+                redriver(malformedFactory, publisher)
                         .redrive(expected, 5_000L, 1).errorCode());
         verify(malformedChannel).basicNack(12L, false, true);
         verify(malformedChannel, never()).basicAck(12L, false);
 
-        ConnectionFactory nackFactory = mock(ConnectionFactory.class);
+        AgentCommandRedriveRawProvider nackFactory = mock(AgentCommandRedriveRawProvider.class);
         Connection nackConnection = mock(Connection.class);
         Channel nackChannel = mock(Channel.class);
-        when(nackFactory.createConnection()).thenReturn(nackConnection);
-        when(nackConnection.createChannel(false)).thenReturn(nackChannel);
-        when(nackChannel.basicGet(AgentRabbitTopologyManifest.DEAD_LETTER_QUEUE, false))
+        when(nackFactory.openSource()).thenReturn(new AgentCommandRedriveSourceSession(nackConnection,nackChannel,100));
+        when(nackChannel.basicGet(TOPOLOGY.deadLetterQueue(), false))
                 .thenReturn(response(13L, expected.messageId(), expected, false, false));
-        when(publisher.publishPreservingHeaders(any(), any(), anyLong())).thenReturn(
+        when(publisher.execute(anyLong())).thenReturn(
                 new AgentRabbitPublishResult(AgentRabbitPublishResult.Type.NACK,
                         "NACK", "NOT_RETURNED", null, null, "RABBIT_NACK"));
 
         assertEquals(AgentRabbitPublishResult.Type.NACK,
-                new AgentCommandDlqRedriverImpl(nackFactory, publisher)
+                redriver(nackFactory, publisher)
                         .redrive(expected, 5_000L, 1).type());
         verify(nackChannel).basicNack(13L, false, true);
         verify(nackChannel, never()).basicAck(13L, false);
-        verify(publisher, times(1)).publishPreservingHeaders(any(), any(), anyLong());
+        verify(publisher, times(1)).execute(anyLong());
     }
 
     private GetResponse response(
@@ -266,12 +270,12 @@ class AgentCommandDlqRedriverImplTest {
         headers.put(SPRING_RETURNED_MESSAGE_CORRELATION, RETURNED_MESSAGE_CORRELATION_ID);
         if (withDeath) {
             headers.put("x-death", List.of(Map.of(
-                    "reason", "rejected", "queue", AgentRabbitTopologyManifest.DISPATCH_QUEUE,
-                    "exchange", AgentRabbitTopologyManifest.MAIN_EXCHANGE, "count", 1L,
+                    "reason", "rejected", "queue", TOPOLOGY.dispatchQueue(),
+                    "exchange", TOPOLOGY.mainExchange(), "count", 1L,
                     "time", new Date(1_700_000_000_000L),
-                    "routing-keys", List.of(AgentRabbitTopologyManifest.GENERAL_ROUTING_KEY))));
-            headers.put("x-first-death-queue", AgentRabbitTopologyManifest.DISPATCH_QUEUE);
-            headers.put("x-first-death-exchange", AgentRabbitTopologyManifest.MAIN_EXCHANGE);
+                    "routing-keys", List.of(TOPOLOGY.generalRoutingKey()))));
+            headers.put("x-first-death-queue", TOPOLOGY.dispatchQueue());
+            headers.put("x-first-death-exchange", TOPOLOGY.mainExchange());
             headers.put("x-first-death-reason", "rejected");
         }
         AMQP.BasicProperties properties = new AMQP.BasicProperties.Builder()
@@ -281,8 +285,8 @@ class AgentCommandDlqRedriverImplTest {
                 .type(AgentCommandAmqpContract.MESSAGE_TYPE).headers(headers).build();
         byte[] body = corrupt ? "corrupt".getBytes(StandardCharsets.UTF_8) : expected.wirePayload();
         return new GetResponse(new Envelope(tag, false,
-                AgentRabbitTopologyManifest.DEAD_LETTER_EXCHANGE,
-                AgentRabbitTopologyManifest.DEAD_ROUTING_KEY), properties, body, 0);
+                TOPOLOGY.deadLetterExchange(),
+                TOPOLOGY.deadRoutingKey()), properties, body, 0);
     }
 
     private GetResponse withHeaders(GetResponse original, long deliveryTag,
@@ -299,19 +303,6 @@ class AgentCommandDlqRedriverImplTest {
     }
 
     private AgentConfirmedPublishRequest request() {
-        byte[] body = "{\"schemaVersion\":1,\"messageType\":\"command.dispatch\","
-                .concat("\"messageId\":\"11111111-1111-1111-1111-111111111111\",")
-                .concat("\"commandId\":\"cmd-1\",\"tenantId\":\"tenant-a\",")
-                .concat("\"clientId\":\"client-a\",\"taskId\":\"task-1\",")
-                .concat("\"targetAgentId\":\"agent-a\",\"commandType\":\"TASK_INVITE\",")
-                .concat("\"attempt\":1,\"expiresAt\":1700000060000,\"payload\":{}}")
-                .getBytes(StandardCharsets.UTF_8);
-        return new AgentConfirmedPublishRequest(
-                AgentRabbitTopologyManifest.MAIN_EXCHANGE,
-                AgentRabbitTopologyManifest.GENERAL_ROUTING_KEY,
-                body, AgentCommandAmqpContract.sha256(body),
-                "11111111-1111-1111-1111-111111111111", "event-1", 1L, "cmd-1",
-                "tenant-a", "client-a", "task-1", "agent-a", "TASK_INVITE", 1,
-                1_700_000_060_000L, AgentRabbitTopologyManifest.CANONICAL_SHA256, 0);
+        return AgentCommandRedriveTestFixture.request("11111111-1111-1111-1111-111111111111","event-1");
     }
 }

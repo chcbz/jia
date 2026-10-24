@@ -6,11 +6,16 @@ import cn.jia.agent.config.AgentRabbitSafetyGate;
 import cn.jia.agent.config.AgentRabbitSafetyProperties;
 import cn.jia.agent.config.AgentRabbitTopologyConfiguration;
 import cn.jia.agent.config.AgentRabbitTopologyManifest;
-import cn.jia.agent.config.AgentRabbitTopologyProvisioner;
+import cn.jia.agent.config.AgentRabbitV2TopologyProvisioner;
+import cn.jia.agent.config.AgentRabbitV2TopologyManifest;
+import static cn.jia.agent.service.impl.AgentCommandRedriveTestFixture.TOPOLOGY;
+import static cn.jia.agent.service.impl.AgentCommandRedriveTestFixture.SETTINGS;
+import static org.mockito.Mockito.*;
+import static org.mockito.ArgumentMatchers.*;
 import cn.jia.agent.config.AgentRabbitTopologyReadiness;
 import cn.jia.agent.entity.AgentConfirmedPublishRequest;
 import cn.jia.agent.entity.AgentRabbitPublishResult;
-import cn.jia.agent.service.AgentConfirmedRabbitPublisher;
+import cn.jia.agent.service.AgentCommandDlqRedriver;
 import com.rabbitmq.client.AMQP;
 import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.Connection;
@@ -89,7 +94,7 @@ class AgentCommandDlqRedriverRabbitIntegrationTest {
             "spring_returned_message_correlation", "22222222-2222-2222-2222-222222222222");
     private enum ChannelFault { SETTLEMENT_BARRIER, CLOSE }
     private static final String FIXTURE_CONTRACT = """
-            d09-rabbit-redrive-integration/v5
+            d09-rabbit-redrive-integration/v6
             runtime=/home/isp/apps/rabbitmq/sbin/rabbitmq-server
             broker=rabbitmq-3.6.11-local-isolated-second-node
             lifecycle=junit-direct-child-exact-pid-start-marker-bounded-term-force
@@ -100,25 +105,26 @@ class AgentCommandDlqRedriverRabbitIntegrationTest {
             readiness=90s-child-alive-amqp-listener-authenticated-probe-each-round
             diagnostics=pre-cleanup-console-main-sasl-crash-existence-size-tail-64k-redacted
             plugins=none-amqp-only
-            topology=d04-canonical-explicit-provision
+            topology=scoped-v2-explicit-provision
             source=basic-get-no-auto-ack
             settle=ack-only-after-confirmed-not-returned-barrier-and-close-fail-closed
             failure=return-nack-exception-timeout-requeue-settlement-uncertainty-broker-failure
             scan=bounded-non-target-requeue
-            transport=spring-mandatory-complete-distinct-uuid-source-pair-validated-stripped-fresh-pair
+            transport=raw-one-shot-mandatory-confirm-source-pair-validated-stripped-no-spring-reinsertion
             host-guard=5672-25672-listeners-pid-8150-production-tree-before-after
             cleanup=exact-child-only-owned-temp-root
             """;
     private static final String FIXTURE_SHA256 =
-            "c5d7d7781ecf61c22aec58aefcc2955e112b64947333859bcf484cfef078f8b1";
+            "6bb3170616b878e1e3d856d1be5e325c46afc1c8c7a8c56623ba724255fb6513";
     private static final AgentRabbitTopologyManifest MANIFEST =
             AgentRabbitTopologyManifest.canonical();
     private static final AtomicInteger REQUEST_SEQUENCE = new AtomicInteger();
 
     private static LocalRabbitBroker broker;
     private static CachingConnectionFactory connectionFactory;
-    private static AgentRabbitTopologyProvisioner provisioner;
-    private static AgentConfirmedRabbitPublisher confirmedPublisher;
+    private static AgentRabbitV2TopologyProvisioner provisioner;
+    private static AgentCommandRedriveRawProvider confirmedPublisher;
+    private static ConnectionFactory rawConnectionFactory;
     private static String runId;
     private static String username;
     private static String password;
@@ -161,17 +167,21 @@ class AgentCommandDlqRedriverRabbitIntegrationTest {
             admin.setExplicitDeclarationsOnly(true);
             AgentRabbitTopologyConfiguration topology =
                     new AgentRabbitTopologyConfiguration();
-            AgentRabbitTopologyReadiness readiness =
-                    topology.agentRabbitTopologyReadiness(MANIFEST);
-            provisioner = topology.agentRabbitTopologyProvisioner(
-                    MANIFEST, admin, connectionFactory, readiness);
-            provisioner.provision();
-
-            RabbitTemplate template = new RabbitTemplate(connectionFactory);
-            template.setMandatory(true);
-            template.setChannelTransacted(false);
-            confirmedPublisher = new AgentConfirmedRabbitPublisherImpl(
-                    template, allowedGate(), MANIFEST, readiness);
+            var readiness=topology.agentRabbitV2TopologyReadiness();
+            provisioner=topology.agentRabbitV2TopologyProvisioner(admin,connectionFactory,readiness);
+            provisioner.provision(TOPOLOGY);
+            rawConnectionFactory=new ConnectionFactory();
+            rawConnectionFactory.setHost("127.0.0.1"); rawConnectionFactory.setPort(mappedAmqpPort);
+            rawConnectionFactory.setUsername(username); rawConnectionFactory.setPassword(password);
+            rawConnectionFactory.setVirtualHost(virtualHost);
+            rawConnectionFactory.setAutomaticRecoveryEnabled(false);
+            rawConnectionFactory.setTopologyRecoveryEnabled(false);
+            rawConnectionFactory.setConnectionTimeout(SETTINGS.connectionTimeoutMillis());
+            rawConnectionFactory.setHandshakeTimeout(SETTINGS.handshakeTimeoutMillis());
+            rawConnectionFactory.setChannelRpcTimeout(SETTINGS.channelRpcTimeoutMillis());
+            rawConnectionFactory.setShutdownTimeout(SETTINGS.shutdownTimeoutMillis());
+            confirmedPublisher=new AgentCommandRedriveRawProviderImpl(rawConnectionFactory,SETTINGS,
+                    allowedGate(),MANIFEST,topology.agentRabbitTopologyReadiness(MANIFEST),readiness);
             System.out.printf(
                     "D09_RABBIT_FIXTURE fixtureSha256=%s topologySha256=%s "
                             + "brokerVersion=%s node=%s childPid=%d childStart=%s "
@@ -265,10 +275,10 @@ class AgentCommandDlqRedriverRabbitIntegrationTest {
 
     @BeforeEach
     void resetCanonicalTopology() throws Exception {
-        provisioner.provision();
+        provisioner.provision(TOPOLOGY);
         withChannel(channel -> {
             bindGeneralRoute(channel);
-            for (AgentRabbitTopologyManifest.QueueSpec queue : MANIFEST.queues()) {
+            for (AgentRabbitV2TopologyManifest.QueueSpec queue : TOPOLOGY.queues()) {
                 channel.queuePurge(queue.name());
             }
         });
@@ -278,7 +288,7 @@ class AgentCommandDlqRedriverRabbitIntegrationTest {
     void purgeOwnedQueuesAndRestoreBinding() throws Exception {
         withChannel(channel -> {
             bindGeneralRoute(channel);
-            for (AgentRabbitTopologyManifest.QueueSpec queue : MANIFEST.queues()) {
+            for (AgentRabbitV2TopologyManifest.QueueSpec queue : TOPOLOGY.queues()) {
                 channel.queuePurge(queue.name());
             }
         });
@@ -309,10 +319,10 @@ class AgentCommandDlqRedriverRabbitIntegrationTest {
         assertHostRabbitStateUnchanged();
 
         withChannel(channel -> {
-            for (AgentRabbitTopologyManifest.ExchangeSpec exchange : MANIFEST.exchanges()) {
+            for (AgentRabbitV2TopologyManifest.ExchangeSpec exchange : TOPOLOGY.exchanges()) {
                 channel.exchangeDeclarePassive(exchange.name());
             }
-            for (AgentRabbitTopologyManifest.QueueSpec queue : MANIFEST.queues()) {
+            for (AgentRabbitV2TopologyManifest.QueueSpec queue : TOPOLOGY.queues()) {
                 AMQP.Queue.DeclareOk declared = channel.queueDeclarePassive(queue.name());
                 assertEquals(0, declared.getMessageCount(), queue.name());
                 assertEquals(0, declared.getConsumerCount(), queue.name());
@@ -331,12 +341,12 @@ class AgentCommandDlqRedriverRabbitIntegrationTest {
                 .redrive(expected, 5_000L, 1);
 
         assertEquals(AgentRabbitPublishResult.Type.ACK, result.type());
-        assertEquals(0, queueCount(AgentRabbitTopologyManifest.DEAD_LETTER_QUEUE));
-        GetResponse republished = take(AgentRabbitTopologyManifest.DISPATCH_QUEUE, true);
+        assertEquals(0, queueCount(TOPOLOGY.deadLetterQueue()));
+        GetResponse republished = take(TOPOLOGY.dispatchQueue(), true);
         assertNotNull(republished);
-        assertEquals(AgentRabbitTopologyManifest.MAIN_EXCHANGE,
+        assertEquals(TOPOLOGY.mainExchange(),
                 republished.getEnvelope().getExchange());
-        assertEquals(AgentRabbitTopologyManifest.GENERAL_ROUTING_KEY,
+        assertEquals(TOPOLOGY.generalRoutingKey(),
                 republished.getEnvelope().getRoutingKey());
         assertArrayEquals(expected.wirePayload(), republished.getBody());
         assertArrayEquals(expected.wirePayloadHash(),
@@ -350,13 +360,13 @@ class AgentCommandDlqRedriverRabbitIntegrationTest {
         assertEquals(AgentCommandAmqpContract.MESSAGE_TYPE,
                 republished.getProps().getType());
         assertCanonicalHeadersPreserved(sourceHeaders, republished.getProps().getHeaders(),
-                SPRING_PUBLISH_TRANSPORT_HEADERS);
-        assertFreshSpringTransportHeaders(republished.getProps().getHeaders());
+                Set.of());
+        for(String name:SPRING_PUBLISH_TRANSPORT_HEADERS) assertTrue(!republished.getProps().getHeaders().containsKey(name));
         assertEquals(AgentCommandAmqpContract.hex(expected.wirePayloadHash()),
                 headerText(republished.getProps().getHeaders().get(
                         AgentCommandAmqpContract.HEADER_WIRE_SHA256)));
-        assertNull(take(AgentRabbitTopologyManifest.DISPATCH_QUEUE, true));
-        assertEquals(0, queueCount(AgentRabbitTopologyManifest.DEAD_LETTER_QUEUE));
+        assertNull(take(TOPOLOGY.dispatchQueue(), true));
+        assertEquals(0, queueCount(TOPOLOGY.deadLetterQueue()));
     }
 
     @Test
@@ -386,9 +396,9 @@ class AgentCommandDlqRedriverRabbitIntegrationTest {
                 .redrive(expected, 5_000L, 1);
 
         assertEquals(AgentRabbitPublishResult.Type.EXCEPTION, result.type());
-        assertEquals("DLQ_BROKER_FAILURE", result.errorCode());
+        assertEquals("DLQ_SOURCE_SETTLEMENT_UNCERTAIN_AFTER_PUBLISH", result.errorCode());
         assertEquals(1, barrierCalls.get());
-        assertNull(take(AgentRabbitTopologyManifest.DISPATCH_QUEUE, true));
+        assertNull(take(TOPOLOGY.dispatchQueue(), true));
     }
 
     @Test
@@ -404,9 +414,9 @@ class AgentCommandDlqRedriverRabbitIntegrationTest {
                 .redrive(expected, 5_000L, 1);
 
         assertEquals(AgentRabbitPublishResult.Type.EXCEPTION, result.type());
-        assertEquals("DLQ_BROKER_FAILURE", result.errorCode());
+        assertEquals("DLQ_SOURCE_SETTLEMENT_UNCERTAIN_AFTER_PUBLISH", result.errorCode());
         assertEquals(1, closeCalls.get());
-        assertNull(take(AgentRabbitTopologyManifest.DISPATCH_QUEUE, true));
+        assertNull(take(TOPOLOGY.dispatchQueue(), true));
     }
 
     @Test
@@ -421,8 +431,8 @@ class AgentCommandDlqRedriverRabbitIntegrationTest {
             assertEquals(AgentRabbitPublishResult.Type.RETURNED, result.type());
             assertEquals("RETURNED", result.returnStatus());
             assertEquals(Integer.valueOf(312), result.returnReplyCode());
-            assertEquals(1, queueCount(AgentRabbitTopologyManifest.DEAD_LETTER_QUEUE));
-            assertNull(take(AgentRabbitTopologyManifest.DISPATCH_QUEUE, true));
+            assertEquals(1, queueCount(TOPOLOGY.deadLetterQueue()));
+            assertNull(take(TOPOLOGY.dispatchQueue(), true));
             assertAndRemoveOnlyDlqMessage(expected);
         } finally {
             withChannel(AgentCommandDlqRedriverRabbitIntegrationTest::bindGeneralRoute);
@@ -460,7 +470,7 @@ class AgentCommandDlqRedriverRabbitIntegrationTest {
                 new IllegalStateException("broker credential detail must not escape")))
                 .redrive(thrownRequest, 5_000L, 1);
         assertEquals(AgentRabbitPublishResult.Type.EXCEPTION, thrown.type());
-        assertEquals("DLQ_BROKER_FAILURE", thrown.errorCode());
+        assertEquals("DLQ_REDRIVE_PUBLISH_ABORT_UNCONFIRMED", thrown.errorCode());
         assertAndRemoveOnlyDlqMessage(thrownRequest);
     }
 
@@ -487,21 +497,11 @@ class AgentCommandDlqRedriverRabbitIntegrationTest {
         seedDlq(nonTarget);
         seedDlq(expected);
         AtomicInteger publishes = new AtomicInteger();
-        AgentConfirmedRabbitPublisher mustNotPublish = new AgentConfirmedRabbitPublisher() {
-            @Override
-            public AgentRabbitPublishResult publish(
-                    AgentConfirmedPublishRequest request, long confirmTimeoutMillis) {
-                fail("bounded non-target scan must not publish");
-                return null;
-            }
-
-            @Override
-            public AgentRabbitPublishResult publishPreservingHeaders(
-                    AgentConfirmedPublishRequest request, Map<String, Object> preservedHeaders,
-                    long confirmTimeoutMillis) {
-                publishes.incrementAndGet();
-                fail("bounded non-target scan must not publish");
-                return null;
+        AgentCommandRedriveRawProvider mustNotPublish = new AgentCommandRedriveRawProvider() {
+            @Override public AgentCommandRedriveSourceSession openSource() throws Exception { return confirmedPublisher.openSource(); }
+            @Override public AgentCommandRedrivePublishAttempt preparePublish(
+                    AgentConfirmedPublishRequest request,Map<String,Object> headers) {
+                publishes.incrementAndGet();throw new AssertionError("bounded non-target scan must not publish");
             }
         };
 
@@ -510,79 +510,65 @@ class AgentCommandDlqRedriverRabbitIntegrationTest {
 
         assertEquals("DLQ_MESSAGE_NOT_FOUND", result.errorCode());
         assertEquals(0, publishes.get());
-        assertEquals(2, queueCount(AgentRabbitTopologyManifest.DEAD_LETTER_QUEUE));
+        assertEquals(2, queueCount(TOPOLOGY.deadLetterQueue()));
         Set<String> remaining = new LinkedHashSet<>();
-        GetResponse first = take(AgentRabbitTopologyManifest.DEAD_LETTER_QUEUE, true);
-        GetResponse second = take(AgentRabbitTopologyManifest.DEAD_LETTER_QUEUE, true);
+        GetResponse first = take(TOPOLOGY.deadLetterQueue(), true);
+        GetResponse second = take(TOPOLOGY.deadLetterQueue(), true);
         assertNotNull(first);
         assertNotNull(second);
         remaining.add(first.getProps().getMessageId());
         remaining.add(second.getProps().getMessageId());
         assertEquals(Set.of(nonTarget.messageId(), expected.messageId()), remaining);
-        assertNull(take(AgentRabbitTopologyManifest.DEAD_LETTER_QUEUE, true));
-        assertNull(take(AgentRabbitTopologyManifest.DISPATCH_QUEUE, true));
+        assertNull(take(TOPOLOGY.deadLetterQueue(), true));
+        assertNull(take(TOPOLOGY.dispatchQueue(), true));
     }
 
-    private static AgentCommandDlqRedriverImpl redriver(
-            AgentConfirmedRabbitPublisher publisher) {
-        return redriver(connectionFactory, publisher);
+    @FunctionalInterface private interface SourceFactory {
+        AgentCommandRedriveSourceSession open() throws Exception;
     }
-
-    private static AgentCommandDlqRedriverImpl redriver(
-            org.springframework.amqp.rabbit.connection.ConnectionFactory factory,
-            AgentConfirmedRabbitPublisher publisher) {
-        return new AgentCommandDlqRedriverImpl(factory, publisher);
+    private static AgentCommandDlqRedriver redriver(AgentCommandRedriveRawProvider publisher) {
+        return redriver(publisher::openSource,publisher);
     }
-
-    private static org.springframework.amqp.rabbit.connection.ConnectionFactory
-            settlementFailingConnectionFactory(
-                    ChannelFault fault, AtomicInteger faultCalls) {
-        Class<org.springframework.amqp.rabbit.connection.ConnectionFactory> factoryType =
-                org.springframework.amqp.rabbit.connection.ConnectionFactory.class;
-        return factoryType.cast(Proxy.newProxyInstance(
-                factoryType.getClassLoader(), new Class<?>[]{factoryType},
-                (proxy, method, args) -> {
-                    Object value = invokeDelegate(connectionFactory, method, args);
-                    if (value instanceof org.springframework.amqp.rabbit.connection.Connection
-                            connection) {
-                        return settlementFailingConnection(connection, fault, faultCalls);
-                    }
-                    return value;
-                }));
+    private static AgentCommandDlqRedriver redriver(SourceFactory source,AgentCommandRedriveRawProvider publisher) {
+        return (expected,timeout,limit) -> {
+            var provider=new AgentCommandRedriveRawProvider() {
+                @Override public AgentCommandRedriveSourceSession openSource() throws Exception { return source.open(); }
+                @Override public AgentCommandRedrivePublishAttempt preparePublish(
+                        AgentConfirmedPublishRequest request,Map<String,Object> headers) throws Exception {
+                    return publisher.preparePublish(request,headers);
+                }
+            };
+            try(var redriver=AgentCommandRedriveTestFixture.redriver(provider,expected)) {
+                return redriver.redrive(expected,timeout,limit);
+            }
+        };
     }
-
-    private static org.springframework.amqp.rabbit.connection.Connection
-            settlementFailingConnection(
-                    org.springframework.amqp.rabbit.connection.Connection delegate,
-                    ChannelFault fault,
-                    AtomicInteger faultCalls) {
-        Class<org.springframework.amqp.rabbit.connection.Connection> connectionType =
-                org.springframework.amqp.rabbit.connection.Connection.class;
-        return connectionType.cast(Proxy.newProxyInstance(
-                connectionType.getClassLoader(), new Class<?>[]{connectionType},
-                (proxy, method, args) -> {
-                    Object value = invokeDelegate(delegate, method, args);
-                    if (value instanceof Channel channel) {
-                        return settlementFailingChannel(channel, fault, faultCalls);
-                    }
-                    return value;
-                }));
+    private static SourceFactory settlementFailingConnectionFactory(ChannelFault fault,AtomicInteger faultCalls) {
+        return () -> {
+            Connection connection=rawConnectionFactory.newConnection("d09-fault-source");
+            try {
+                return new AgentCommandRedriveSourceSession(connection,
+                        settlementFailingChannel(connection.createChannel(),fault,faultCalls),SETTINGS.shutdownTimeoutMillis());
+            } catch(Exception failure) { connection.abort();throw failure; }
+        };
     }
 
     private static Channel settlementFailingChannel(
             Channel delegate, ChannelFault fault, AtomicInteger faultCalls) {
+        AtomicInteger passiveCalls=new AtomicInteger();
         return (Channel) Proxy.newProxyInstance(
                 Channel.class.getClassLoader(), new Class<?>[]{Channel.class},
                 (proxy, method, args) -> {
                     if (fault == ChannelFault.SETTLEMENT_BARRIER
                             && "queueDeclarePassive".equals(method.getName())
                             && args != null && args.length == 1
-                            && AgentRabbitTopologyManifest.DEAD_LETTER_QUEUE.equals(args[0])) {
+                            && TOPOLOGY.deadLetterQueue().equals(args[0])
+                            && passiveCalls.incrementAndGet()>1) {
                         faultCalls.incrementAndGet();
                         throw new IOException("synthetic D09 settlement barrier failure");
                     }
                     if (fault == ChannelFault.CLOSE && "close".equals(method.getName())
-                            && (args == null || args.length == 0)) {
+                            && args != null && args.length == 2) {
                         Object value = invokeDelegate(delegate, method, args);
                         faultCalls.incrementAndGet();
                         throw new IOException("synthetic D09 channel close failure");
@@ -600,35 +586,25 @@ class AgentCommandDlqRedriverRabbitIntegrationTest {
         }
     }
 
-    private static AgentConfirmedRabbitPublisher assertingOutcomePublisher(
-            AgentConfirmedPublishRequest expected,
-            long expectedTimeout,
-            AgentRabbitPublishResult outcome,
-            RuntimeException thrown) {
-        return new AgentConfirmedRabbitPublisher() {
-            @Override
-            public AgentRabbitPublishResult publish(
-                    AgentConfirmedPublishRequest request, long confirmTimeoutMillis) {
-                fail("D09 redrive must use the preserving publisher method");
-                return null;
-            }
-
-            @Override
-            public AgentRabbitPublishResult publishPreservingHeaders(
-                    AgentConfirmedPublishRequest request,
-                    Map<String, Object> preservedHeaders,
-                    long confirmTimeoutMillis) {
-                assertRequestIdentity(expected, request);
-                assertEquals(expectedTimeout, confirmTimeoutMillis);
-                Map<String, Object> sanitized =
-                        AgentConfirmedRabbitPublisherImpl.validatePreservedHeaders(
-                                request, preservedHeaders);
-                assertCanonicalHeadersExactly(
-                        AgentCommandAmqpContract.headers(expected), sanitized);
-                assertSourceSpringTransportHeaders(preservedHeaders,
-                        SOURCE_SPRING_TRANSPORT_HEADERS);
-                if (thrown != null) throw thrown;
-                return outcome;
+    private static AgentCommandRedriveRawProvider assertingOutcomePublisher(
+            AgentConfirmedPublishRequest expected,long expectedTimeout,
+            AgentRabbitPublishResult outcome,RuntimeException thrown) {
+        return new AgentCommandRedriveRawProvider() {
+            @Override public AgentCommandRedriveSourceSession openSource() throws Exception { return confirmedPublisher.openSource(); }
+            @Override public AgentCommandRedrivePublishAttempt preparePublish(
+                    AgentConfirmedPublishRequest request,Map<String,Object> preservedHeaders) {
+                assertRequestIdentity(expected,request);
+                var sanitized=AgentConfirmedRabbitPublisherImpl.validatePreservedHeaders(request,preservedHeaders);
+                assertCanonicalHeadersExactly(AgentCommandAmqpContract.headers(expected),sanitized);
+                assertSourceSpringTransportHeaders(preservedHeaders,SOURCE_SPRING_TRANSPORT_HEADERS);
+                var attempt=mock(AgentCommandRedrivePublishAttempt.class);
+                when(attempt.closeAfterKnownOutcome()).thenReturn(true);
+                when(attempt.execute(anyLong())).thenAnswer(call -> {
+                    long remaining=call.<Long>getArgument(0)-System.nanoTime();
+                    assertTrue(remaining>0 && remaining<=TimeUnit.MILLISECONDS.toNanos(SETTINGS.hardPublishTimeoutMillis(expectedTimeout)));
+                    if(thrown!=null)throw thrown;return outcome;
+                });
+                return attempt;
             }
         };
     }
@@ -641,7 +617,7 @@ class AgentCommandDlqRedriverRabbitIntegrationTest {
     private static Map<String, Object> seedDlq(
             AgentConfirmedPublishRequest request, Map<String, String> transportHeaders)
             throws Exception {
-        long before = queueCount(AgentRabbitTopologyManifest.DEAD_LETTER_QUEUE);
+        long before = queueCount(TOPOLOGY.deadLetterQueue());
         Map<String, Object> headers = new LinkedHashMap<>(
                 AgentCommandAmqpContract.headers(request));
         headers.putAll(transportHeaders);
@@ -656,13 +632,13 @@ class AgentCommandDlqRedriverRabbitIntegrationTest {
         withChannel(channel -> {
             channel.confirmSelect();
             channel.basicPublish(
-                    AgentRabbitTopologyManifest.DEAD_LETTER_EXCHANGE,
-                    AgentRabbitTopologyManifest.DEAD_ROUTING_KEY,
+                    TOPOLOGY.deadLetterExchange(),
+                    TOPOLOGY.deadRoutingKey(),
                     true, properties, request.wirePayload());
             channel.waitForConfirmsOrDie(5_000L);
         });
         assertEquals(before + 1,
-                queueCount(AgentRabbitTopologyManifest.DEAD_LETTER_QUEUE));
+                queueCount(TOPOLOGY.deadLetterQueue()));
         return AgentCommandAmqpContract.headers(request);
     }
 
@@ -674,8 +650,8 @@ class AgentCommandDlqRedriverRabbitIntegrationTest {
     private static void assertAndRemoveOnlyDlqMessage(
             AgentConfirmedPublishRequest expected,
             Map<String, String> expectedTransportHeaders) throws Exception {
-        assertEquals(1, queueCount(AgentRabbitTopologyManifest.DEAD_LETTER_QUEUE));
-        GetResponse source = take(AgentRabbitTopologyManifest.DEAD_LETTER_QUEUE, true);
+        assertEquals(1, queueCount(TOPOLOGY.deadLetterQueue()));
+        GetResponse source = take(TOPOLOGY.deadLetterQueue(), true);
         assertNotNull(source);
         assertEquals(expected.messageId(), source.getProps().getMessageId());
         assertArrayEquals(expected.wirePayload(), source.getBody());
@@ -684,8 +660,8 @@ class AgentCommandDlqRedriverRabbitIntegrationTest {
                 expectedTransportHeaders.keySet());
         assertSourceSpringTransportHeaders(
                 source.getProps().getHeaders(), expectedTransportHeaders);
-        assertEquals(0, queueCount(AgentRabbitTopologyManifest.DEAD_LETTER_QUEUE));
-        assertNull(take(AgentRabbitTopologyManifest.DISPATCH_QUEUE, true));
+        assertEquals(0, queueCount(TOPOLOGY.deadLetterQueue()));
+        assertNull(take(TOPOLOGY.dispatchQueue(), true));
     }
 
     private static void assertSourceSpringTransportHeaders(
@@ -721,7 +697,7 @@ class AgentCommandDlqRedriverRabbitIntegrationTest {
             Map<String, Object> expected, Map<String, Object> actual) {
         assertCanonicalHeadersPreserved(expected, actual, Set.of());
         assertEquals(expected.keySet(), actual.keySet());
-        assertEquals(13, actual.size());
+        assertEquals(expected.size(), actual.size());
     }
 
     private static void assertCanonicalHeadersPreserved(
@@ -729,7 +705,7 @@ class AgentCommandDlqRedriverRabbitIntegrationTest {
             Map<String, Object> actual,
             Set<String> expectedTransportHeaders) {
         assertNotNull(actual);
-        assertEquals(13, expected.size());
+        assertEquals(19, expected.size());
         assertTrue(actual.keySet().containsAll(expected.keySet()));
         Set<String> extraHeaders = new LinkedHashSet<>(actual.keySet());
         extraHeaders.removeAll(expected.keySet());
@@ -816,29 +792,9 @@ class AgentCommandDlqRedriverRabbitIntegrationTest {
     }
 
     private static AgentConfirmedPublishRequest request(String label) {
-        int sequence = REQUEST_SEQUENCE.incrementAndGet();
-        String messageId = UUID.nameUUIDFromBytes(
-                (runId + ":" + label + ":" + sequence).getBytes(StandardCharsets.UTF_8))
-                .toString();
-        String eventId = "evt-" + label + "-" + sequence;
-        String commandId = "cmd-" + label + "-" + sequence;
-        String taskId = "task-" + label + "-" + sequence;
-        byte[] body = ("{\"schemaVersion\":1,\"messageType\":\"command.dispatch\","
-                + "\"messageId\":\"" + messageId + "\","
-                + "\"commandId\":\"" + commandId + "\","
-                + "\"tenantId\":\"tenant-d09\",\"clientId\":\"client-d09\","
-                + "\"taskId\":\"" + taskId + "\","
-                + "\"targetAgentId\":\"agent-d09\","
-                + "\"commandType\":\"TASK_INVITE\",\"attempt\":1,"
-                + "\"expiresAt\":4000000000000,"
-                + "\"payload\":{\"opaque\":true,\"label\":\"" + label + "\"}}")
-                .getBytes(StandardCharsets.UTF_8);
-        return new AgentConfirmedPublishRequest(
-                AgentRabbitTopologyManifest.MAIN_EXCHANGE,
-                AgentRabbitTopologyManifest.GENERAL_ROUTING_KEY,
-                body, AgentCommandAmqpContract.sha256(body), messageId, eventId,
-                sequence, commandId, "tenant-d09", "client-d09", taskId, "agent-d09",
-                "TASK_INVITE", 1, 4_000_000_000_000L, MANIFEST.sha256(), 0);
+        int sequence=REQUEST_SEQUENCE.incrementAndGet();
+        String messageId=UUID.nameUUIDFromBytes((runId+":"+label+":"+sequence).getBytes(StandardCharsets.UTF_8)).toString();
+        return AgentCommandRedriveTestFixture.request(messageId,"evt-"+label+"-"+sequence);
     }
 
     private static AgentRabbitSafetyGate allowedGate() {
@@ -853,21 +809,21 @@ class AgentCommandDlqRedriverRabbitIntegrationTest {
         return new AgentRabbitSafetyGate(properties,
                 new AgentRabbitDispatchScopeProperties(List.of(
                         new AgentRabbitDispatchScopeProperties.AllowedScope(
-                                "tenant-d09", "client-d09"))));
+                                "1", "client-a"))));
     }
 
     private static void unbindGeneralRoute() throws Exception {
         withChannel(channel -> channel.queueUnbind(
-                AgentRabbitTopologyManifest.DISPATCH_QUEUE,
-                AgentRabbitTopologyManifest.MAIN_EXCHANGE,
-                AgentRabbitTopologyManifest.GENERAL_ROUTING_KEY));
+                TOPOLOGY.dispatchQueue(),
+                TOPOLOGY.mainExchange(),
+                TOPOLOGY.generalRoutingKey()));
     }
 
     private static void bindGeneralRoute(Channel channel) throws IOException {
         channel.queueBind(
-                AgentRabbitTopologyManifest.DISPATCH_QUEUE,
-                AgentRabbitTopologyManifest.MAIN_EXCHANGE,
-                AgentRabbitTopologyManifest.GENERAL_ROUTING_KEY);
+                TOPOLOGY.dispatchQueue(),
+                TOPOLOGY.mainExchange(),
+                TOPOLOGY.generalRoutingKey());
     }
 
     private static long queueCount(String queue) throws Exception {
