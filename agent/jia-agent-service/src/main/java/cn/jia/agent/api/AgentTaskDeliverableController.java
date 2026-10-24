@@ -45,7 +45,6 @@ public class AgentTaskDeliverableController {
     static final String CACHE_CONTROL = "private, no-store";
     static final String NOSNIFF = "nosniff";
     static final int MAX_LIST_LIMIT = 100;
-    static final int MAX_DOWNLOAD_BYTES = 64 * 1024 * 1024;
     private static final Set<String> LIST_QUERY_FIELDS = Set.of("workItemId", "limit");
     private static final Pattern SHA256 = Pattern.compile("[0-9a-f]{64}");
     private static final Pattern MIME = Pattern.compile(
@@ -354,7 +353,6 @@ public class AgentTaskDeliverableController {
                 || !MIME.matcher(artifact.getContentMimeType()).matches()
                 || artifact.getArtifactVersion() == null || artifact.getArtifactVersion() < 1
                 || artifact.getContentByteLength() == null || artifact.getContentByteLength() < 0
-                || artifact.getContentByteLength() > MAX_DOWNLOAD_BYTES
                 || artifact.getContentHash() == null
                 || !SHA256.matcher(artifact.getContentHash()).matches()
                 || artifact.getCreatedAt() == null || artifact.getCreatedAt() < 0) {
@@ -374,7 +372,6 @@ public class AgentTaskDeliverableController {
                 || !Objects.equals(artifactVersion, result.getArtifactVersion())
                 || result.getContentByteLength() == null
                 || result.getContentByteLength() < 0
-                || result.getContentByteLength() > MAX_DOWNLOAD_BYTES
                 || result.getContentHash() == null
                 || !SHA256.matcher(result.getContentHash()).matches()
                 || result.getContentMimeType() == null

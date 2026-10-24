@@ -46,9 +46,6 @@ import java.util.regex.Pattern;
 public class AgentTaskArtifactController {
     static final String CACHE_CONTROL = "private, no-store";
     static final String NOSNIFF = "nosniff";
-    static final int MAX_MANAGED_CONTENT_BYTES = 16 * 1024 * 1024;
-    static final int MAX_REQUEST_BYTES = 24 * 1024 * 1024;
-    static final int MAX_DOWNLOAD_BYTES = 64 * 1024 * 1024;
     private static final int COPY_BUFFER_BYTES = 8192;
     private static final int MAX_INITIAL_BODY_BUFFER_BYTES = 64 * 1024;
     private static final Pattern SHA256 = Pattern.compile("[0-9a-f]{64}");
@@ -81,7 +78,7 @@ public class AgentTaskArtifactController {
         String actorAgentId = actor(request);
         AgentTaskArtifactPublishRequest publicRequest = parseBounded(request);
         byte[] content = publicRequest.getContentBytes();
-        if (content == null || content.length > MAX_MANAGED_CONTENT_BYTES) {
+        if (content == null) {
             throw new RequestFailure();
         }
         Integer artifactVersion = jsonInteger(publicRequest.getArtifactVersion());
@@ -221,7 +218,7 @@ public class AgentTaskArtifactController {
     private static byte[] readBounded(HttpServletRequest request) {
         try {
             byte[] data = cn.jia.core.config.ApiJsonInput.readData(request);
-            if (data.length == 0 || data.length > MAX_REQUEST_BYTES) throw new RequestFailure();
+            if (data.length == 0) throw new RequestFailure();
             return data;
         } catch (IOException unreadable) {
             throw new RequestFailure();
@@ -258,7 +255,6 @@ public class AgentTaskArtifactController {
                 || !Objects.equals(artifactVersion, result.getArtifactVersion())
                 || result.getContentByteLength() == null
                 || result.getContentByteLength() < 0
-                || result.getContentByteLength() > MAX_DOWNLOAD_BYTES
                 || result.getContentHash() == null
                 || !SHA256.matcher(result.getContentHash()).matches()
                 || result.getContentMimeType() == null

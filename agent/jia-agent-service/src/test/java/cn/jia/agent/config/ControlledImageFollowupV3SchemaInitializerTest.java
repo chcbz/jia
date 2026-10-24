@@ -217,6 +217,9 @@ class ControlledImageFollowupV3SchemaInitializerTest {
                         executionChecks(true)));
 
         var extraIndexes = executionIndexes(true);
+        index(extraIndexes, "idx_observation", 1, 1, "operation_grant_id");
+        assertDoesNotThrow(() -> ControlledImageFollowupV3SchemaInitializer
+                .validateExecutionRestartCatalog(executionColumns(true), extraIndexes, executionChecks(true)));
         index(extraIndexes, "uk_pwex_operation_grant_shadow", 0, 1, "operation_grant_id");
         assertThrows(IllegalStateException.class, () -> ControlledImageFollowupV3SchemaInitializer
                 .validateExecutionRestartCatalog(executionColumns(true), extraIndexes,

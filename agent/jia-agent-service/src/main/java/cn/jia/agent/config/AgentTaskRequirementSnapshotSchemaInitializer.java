@@ -84,7 +84,9 @@ public final class AgentTaskRequirementSnapshotSchemaInitializer implements Init
         index(indexes,"uk_atrs_scope_revision",0,List.of("tenant_id","client_id","owner_jiacn","task_id","revision"));
         index(indexes,"uk_atrs_confirmation",0,List.of("tenant_id","client_id","owner_jiacn","task_id","confirmation_id"));
         index(indexes,"idx_atrs_task_latest",1,List.of("tenant_id","client_id","owner_jiacn","task_id","revision","id"));
-        if (indexes.size()!=17) throw new IllegalStateException("Snapshot extra index drift");
+        if (indexes.stream().anyMatch(row -> !java.util.Set.of("PRIMARY","uk_atrs_scope_revision","uk_atrs_confirmation","idx_atrs_task_latest").contains(row.get("index_name"))
+                && ((Number)row.get("non_unique")).intValue() != 1))
+            throw new IllegalStateException("Unexpected unique index changes write semantics");
         var checks = jdbc.queryForList("SELECT tc.constraint_name,tc.enforced,cc.check_clause "
                 + "FROM information_schema.table_constraints tc JOIN information_schema.check_constraints cc "
                 + "ON cc.constraint_catalog=tc.constraint_catalog AND cc.constraint_schema=tc.constraint_schema "

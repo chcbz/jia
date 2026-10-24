@@ -75,6 +75,7 @@ public final class ChatTypedReviewContextSchemaInitializer implements Initializi
             SELECT index_name,non_unique,column_name,seq_in_index,sub_part FROM information_schema.statistics
              WHERE table_schema=DATABASE() AND table_name='chat_typed_review_context' ORDER BY index_name,seq_in_index
             """)) {
+            if ("1".equals(text(row,"non_unique")) && !java.util.Set.of("PRIMARY").contains(text(row,"index_name"))) continue;
             if(!"null".equals(text(row,"sub_part")))throw drift();
             indexes.merge(text(row,"index_name"),text(row,"non_unique")+":"+text(row,"column_name"),(a,b)->a+","+b.substring(2));
         }

@@ -462,10 +462,10 @@ public final class ControlledImageFollowupV3SchemaInitializer implements Initial
         Map<String, String> legacyChecks = Map.of(
                 "chk_pwex_controlled_consent", LEGACY_CONTROLLED_CONSENT_CATALOG_CHECK);
         if (names(columns, "column_name").equals(legacyColumns.keySet())
-                && distinctNames(indexes, "index_name").equals(legacyIndexes.keySet())
+                && distinctNames(indexes, "index_name").containsAll(legacyIndexes.keySet())
                 && names(checks, "constraint_name").equals(legacyChecks.keySet())) {
             validateExactColumns("controlled execution legacy", columns, legacyColumns);
-            validateExactIndexCatalog("controlled execution legacy", indexes, legacyIndexes);
+            validateIndexCatalog("controlled execution legacy", indexes, legacyIndexes);
             validateExactChecks("controlled execution legacy", checks, legacyChecks);
             return;
         }
@@ -474,12 +474,12 @@ public final class ControlledImageFollowupV3SchemaInitializer implements Initial
         Map<String, Index> v3Indexes = executionRestartV3Indexes();
         Map<String, String> v3Checks = withInstalledSkillProtocolCheck(executionRestartV3Checks(), checks);
         if (!names(columns, "column_name").equals(v3Columns.keySet())
-                || !distinctNames(indexes, "index_name").equals(v3Indexes.keySet())
+                || !distinctNames(indexes, "index_name").containsAll(v3Indexes.keySet())
                 || !names(checks, "constraint_name").equals(v3Checks.keySet())) {
             throw new IllegalStateException("Controlled execution restart catalog partial or unknown");
         }
         validateExactColumns("controlled execution v3", columns, v3Columns);
-        validateExactIndexCatalog("controlled execution v3", indexes, v3Indexes);
+        validateIndexCatalog("controlled execution v3", indexes, v3Indexes);
         validateExactChecks("controlled execution v3", checks, v3Checks);
     }
 
@@ -678,9 +678,11 @@ public final class ControlledImageFollowupV3SchemaInitializer implements Initial
         return java.util.Collections.unmodifiableSet(names);
     }
 
-    private static void validateExactIndexCatalog(String table, List<Map<String, Object>> rows,
+    private static void validateIndexCatalog(String table, List<Map<String, Object>> rows,
             Map<String, Index> expected) {
-        if (!distinctNames(rows, "index_name").equals(expected.keySet())) {
+        if (!distinctNames(rows, "index_name").containsAll(expected.keySet())
+                || rows.stream().anyMatch(row -> !expected.containsKey(text(row, "index_name"))
+                    && !"1".equals(text(row, "non_unique")))) {
             throw new IllegalStateException("Controlled execution index set drift: " + table);
         }
         expected.forEach((name, index) -> validateIndexRows(table, name, index, rows));

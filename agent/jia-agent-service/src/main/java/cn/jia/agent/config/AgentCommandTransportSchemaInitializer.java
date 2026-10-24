@@ -353,7 +353,7 @@ public final class AgentCommandTransportSchemaInitializer implements Initializin
                     + " has incompatible columns: " + columns);
         }
 
-        Map<String, IndexDefinition> actualIndexes = inspectIndexes(expected.name());
+        Map<String, IndexDefinition> actualIndexes = inspectIndexes(expected.name(), expected.indexes().keySet());
         if (!expected.indexes().equals(actualIndexes)) {
             throw new IllegalStateException("D01 transport table " + expected.name()
                     + " has incompatible indexes: " + actualIndexes);
@@ -371,7 +371,7 @@ public final class AgentCommandTransportSchemaInitializer implements Initializin
         }
     }
 
-    private Map<String, IndexDefinition> inspectIndexes(String table) {
+    private Map<String, IndexDefinition> inspectIndexes(String table, Set<String> requiredNames) {
         List<IndexColumn> rows = jdbcTemplate.query("""
                 SELECT index_name, non_unique, seq_in_index, column_name,
                        sub_part, index_type, is_visible
@@ -385,6 +385,8 @@ public final class AgentCommandTransportSchemaInitializer implements Initializin
                 rs.getString("is_visible")), table);
         Map<String, List<IndexColumn>> grouped = new TreeMap<>();
         for (IndexColumn row : rows) {
+            // Extra non-unique indexes do not change write/uniqueness semantics.
+            if (!requiredNames.contains(row.name()) && row.nonUnique()) continue;
             if (row.subPart() != null
                     || !"BTREE".equalsIgnoreCase(row.indexType())
                     || !"YES".equalsIgnoreCase(row.visible())) {

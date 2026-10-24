@@ -11,6 +11,13 @@ import static org.junit.jupiter.api.Assertions.*;
 class SkillPackageStoreTest {
     @TempDir Path root;
     private final byte[] bytes="new skill package".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    @Test void packageAboveOld16MiBCapRetainsExactBytesAndDigest() {
+        byte[] large = new byte[16 * 1024 * 1024 + 1];
+        large[large.length - 1] = 42;
+        var store = new SkillPackageStore(root);
+        store.publish(large);
+        assertArrayEquals(large, store.read(SkillPackageStore.sha256(large), large.length));
+    }
     @Test void publishReadAndIdenticalReplay() throws Exception {
         var store=new SkillPackageStore(root); var hash=SkillPackageStore.sha256(bytes);
         String key=store.publish(bytes); assertEquals(HexFormat.of().formatHex(hash),key);

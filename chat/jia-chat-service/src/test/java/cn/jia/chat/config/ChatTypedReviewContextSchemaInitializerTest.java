@@ -40,6 +40,15 @@ class ChatTypedReviewContextSchemaInitializerTest {
         assertFalse(ddl.contains("ON DELETE CASCADE"));assertTrue(ddl.contains("JSON_TYPE"));
         ChatTypedReviewContextSchemaInitializer.validate(jdbc);verify(jdbc,never()).execute(anyString());
     }
+    @Test void extraReadIndexDoesNotBlockStartupButExtraUniquenessDoes() {
+        var extra = new HashMap<String,Object>();
+        extra.put("index_name", "idx_observation"); extra.put("non_unique", 1);
+        extra.put("column_name", "request_id"); extra.put("seq_in_index", 1); extra.put("sub_part", null);
+        rows.get("indexes").add(extra);
+        assertDoesNotThrow(() -> ChatTypedReviewContextSchemaInitializer.validate(jdbc));
+        extra.put("non_unique", 0);
+        assertThrows(IllegalStateException.class, () -> ChatTypedReviewContextSchemaInitializer.validate(jdbc));
+    }
     @Test void unknownColumnAndMissingChecksAreNeverSilentlyAccepted() {
         rows.get("columns").getFirst().put("collation_name","utf8mb4_0900_ai_ci");
         assertThrows(IllegalStateException.class,()->ChatTypedReviewContextSchemaInitializer.validate(jdbc));

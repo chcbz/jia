@@ -44,17 +44,22 @@
 
 其中业务封闭DTO仅保护已明确的动作/授权/签名语义，不能把本表当成“所有Object.keys长度限制都有必要”的豁免。语义版本检查不等于应用升级必须同版本；CAS revision不是程序版本。
 
-## 4. 尚未逐项裁定的存量项（不能算必要性核验通过）
+## 4. 存量五类逐项裁定（2026-10-24续核）
 
-全代码模式检索会命中普通分支、样例、常量和调用，不等于存在同数量的独立校验。以下尚未完成所有调用者/规格/负例闭合，不能宣称本轮全项目清理完成：
+本节覆盖本次库存检索命中的五类，不用“历史有测试”作为必要性理由。下表“删除”指候选源码；正式Flow、合并和安装状态另见handoff，不能把静态审计当作全业务线上验收。
 
-- Chat上下文深度/键数/键长/队列和绑定数上限，与服务端生产者及实际资源约束的对应关系。
-- 技能归档16MiB、展开64MiB、单entry与entry数上限：路径逃逸/解压炸弹防护必要，但每个数字的依据不能只写“沿用历史”。不得将尚未核实的阈值批量上调或归零。
-- 图像/语音各Provider的输入数量、编码、输出字节限制，以及当前仍加载的旧通道中的重复校验。
-- 管理列表/资金只读策略/外单/typed outcome中的其余精确字段集合：需要按读取展示与写入/签名语义分开，不机械全局替换`exact`。
-- API各业务域注解长度、数据库schema/index自检与重复边界检查，以及地图/资源构建的校验：需分别核对实际存储/算法/授权依据；全局模式检索已覆盖，逐条裁定未完成。
+| 类别 | 删除的非必要拒绝 | 保留的边界、依据及失败范围 | 实现/回归 |
+| --- | --- | --- | --- |
+| CHAT上下文 | 深度8、256字段/数组项、128字节键、256KiB快照、64KiB正文及派生envelope重复总量 | JSON类型/安全整数、循环对象、原contextHash和dispatch身份仍验证；完整事实不截断。数据嵌套迭代检查，不按嵌套层数判业务失败 | Runtime `chat-runtime.mjs`；`chat-runtime.test.mjs`含300字段/长键/40层/300KB中文及错摘要负例 |
+| CHAT调度/持久记录 | 默认256排队、默认512绑定、1024条停止索引扫描；默认inbox1024/64MiB、dedupe100000/128MiB业务硬门槛；配置上限10GB/100000等无来源数值 | 并发lane仍串行；持久ACK、原指纹、归属/锁保留。已明确配置的正整数容量作为运维选择继续在ACK前背压，未配置不补猜测值；磁盘/IO真实失败不ACK。归档保留周期不是拒收门槛，本次不删除历史证据/改变retention | `chat-runtime`、`agent-client`；原显式maxFiles=1并发背压/去重/锁测试仍保留；新增默认300任务、514绑定恢复 |
+| 技能ZIP | 压缩包默认16MiB、单entry默认16MiB、默认256entry；API存储16MiB | 下载按批准byteLength/sha核对；Java byte[]/ByteBuffer int寻址必须可表示（不是业务容量）。解压仍只在安装暂存边界保留**总展开64MiB**防zip-bomb预算，禁止路径逃逸/链接/重复与别名冲突，并核对真实展开bytes=ZIP声明。总量约束已经覆盖单entry，故不另加16MiB。64MiB是现有解压安全预算，不声称是生产物理容量或Provider限制；不能推广到原始资料存储。显式安装预算不等于默认产品规则 | `SkillPackageStore`、`skill-install-manager`；`SkillPackageStoreTest`实读写16MiB+1；Runtime真实261entry安装、展开超预算、路径/摘要原负例 |
+| 媒体通用层 | 三个通道instruction16000重复拒绝；资料快照/收件端16资料数限制；native MIME识别16MiB；图像返回16MiB；成果publish16MiB/data24MiB及下载/目录64MiB；语音结果/缓存/实时文本256KiB重复限制 | 身份/grant/原bytes/hash/长度、MIME真实解码和effect幂等仍保留；不能因预览不支持而禁止存储；下载仍核对声明长度和真实内容。MP4固定moov→trak→mdia→minf→stbl调用链不会任意递归，删除不可达depth8和传递参数；保留box范围/实际音频时长、采样计数和解码安全检查 | `conversation-*`、`controlled-image*`、`image-http-codec`、两artifact/deliverable Controller、`SpeechTranscriptionService`、`CliproxyRealtimeSessionClient`、`OpenAiCompatibleSpeechTranscriptionProvider`、`AudioDurationInspector`；native/imagegen/skill-runners、Controller/VoiceServices/Cliproxy/音频格式回归 |
+| Provider专属 | 不把Provider限额重复套到通用资料快照；不增加格式存储白名单 | Images JSON编辑边界仍16张、单image_url≤20,971,520字符：官方API参考明确规定，2026-10-24核对 `https://developers.openai.com/api/reference/resources/images/methods/edit`。仅HTTP编辑适配器负责；当前image-edit技能manifest自身单输入合同不外推到其他技能。编码魔数/PNG/base64和真实错误仍检查。语音PCM256KiB是**分块大小**，不是拒绝超过该大小的总音频 | `skill-runners/image-provider`、`controlled-image-http-executor[-v3]`、`controlled-image-v3-files`、`CliproxyRealtimeSessionClient`；image与语音真实输入/关联测试 |
+| Web只读 | 技能目录/变更列表/报价/费用嵌套字段精确数量、reasonCode封闭展示枚举；资金只读capability和接外单read/ACK多字段拒绝 | 只读投影忽略新增字段，报价金额/批准权限/expectedRevision保持原语义；写DTO仍封闭，未知动作/状态不能自动获得权限，新增reason只作展示。Money/projected package在比较和组装写请求前去掉扩展字段，避免新增metadata导致重复购买或错误CAS | `skillManagementContract`、`economyReadOnlyPreviewPolicy`、`useExternalServicePolicy`；`validation-compatibility`、`skill-market`、`juyiting-external-commission` |
+| 数据库启动 | transport、creation、requirement、provider-consent、settlement、bridge、followup、delivery-review、typed-review-context因额外**非唯一读索引**拒绝启动 | 必需索引仍验证字段/顺序/唯一性/前缀；额外UNIQUE会改变INSERT/去重事务语义仍拒绝。列类型/归属binary collation、CHECK表达式、触发器/外键和迁移基线检查保护持久状态和自动DDL，不因字段兼容移除；本次不执行生产DDL | 上述9个`*SchemaInitializer`；ProviderCostConsent/Followup/TypedReviewContext新增“额外读索引通过、额外唯一索引拒绝”；原DDL负例 |
+| API业务字段/构建资产 | 本次源码库没有`@Size/@Length/@Min/@Max`注解门禁命中；不得照上轮泛称的“注解长度”虚构修改。删除sprite编码文件/PNG64MiB大小门槛 | `task_id`/idempotency100、tenant/client/owner50等身份长度对齐SQL列，Long/版本/金额防溢出；业务写DTO封闭保护动作、批准权限和摘要，不把它推广成只读展示要求。地图tile ID/尺寸/纹理引用和sprite解码总RGBA64MiB防解码放大保留，不以压缩文件字节拒绝。Gradle分层、锁定依赖/同RunSHA、制品恢复保护按根规则保留 | Controller/业务mapper及对应DDL；`validateLayering`；Web `validate-sprites`/mapValidation与资产回归。E14显式assets测试的测量/来源合同未借此删除，release测试仍按既有profile执行 |
 
-这些是本次要求的未完成工作，不新增功能，也不是默认保留批准。所有必要性新增说明必须给具体风险和失败范围；不以新增日志、审批或统一“校验平台”代替删除重复代码。
+边界说明：身份、事务、幂等、完整性、格式可解析性/实际能力及安装恢复属于必要事实；**固定数值不是仅靠写入此文档就成为物理事实**。保留的ZIP/RGBA解码预算是对不可信压缩内容的局部安全预算，而非平台资料限额/性能SLO；本次没有测量生产最大可承载文件、没有新增配额，也不声称“任意大小必成功”。真实资源错误仍如实失败。不能以本表概括性条目批准未来新增门槛。
 
 ## 5. 验收及证据边界
 

@@ -78,6 +78,7 @@ public final class ChatTaskDeliveryReviewSchemaInitializer implements Initializi
                 SELECT index_name,non_unique,column_name,seq_in_index,sub_part FROM information_schema.statistics
                 WHERE table_schema=DATABASE() AND table_name='chat_task_delivery_review_operation' ORDER BY index_name,seq_in_index
                 """)) {
+            if ("1".equals(text(row,"non_unique")) && !java.util.Set.of("PRIMARY","uk_ctdro_key","uk_ctdro_source","idx_ctdro_delivery").contains(text(row,"index_name"))) continue;
             if (row.entrySet().stream().anyMatch(e -> e.getKey().equalsIgnoreCase("sub_part") && e.getValue() != null)) throw new IllegalStateException("Review index prefix is not allowed");
             String name = text(row,"index_name");
             indexes.merge(name, text(row,"non_unique") + ":" + text(row,"column_name"), (a,b) -> a + "," + b.substring(2));

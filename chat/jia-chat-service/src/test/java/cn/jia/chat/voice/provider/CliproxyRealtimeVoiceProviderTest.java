@@ -48,6 +48,15 @@ class CliproxyRealtimeVoiceProviderTest {
     private final ObjectMapper mapper = new ObjectMapper();
 
     @Test
+    void completeNativeTranscriptAboveOld256KiBCapIsPreserved() throws Exception {
+        FakeTransport transport = new FakeTransport(mapper, Scenario.NATIVE_TOO_LARGE);
+        CliproxyRealtimeSessionClient client = new CliproxyRealtimeSessionClient(realtimeProperties(), mapper, transport);
+        assertEquals("x".repeat(256 * 1024 + 1), client.transcribe(facade().transcription(), "gpt-realtime", new byte[]{1, 0, 2, 0}));
+        assertTrue(transport.connection.closed);
+        assertFalse(transport.connection.aborted);
+    }
+
+    @Test
     void nativeTranscriptionUsesCorrelatedAsrWithoutResponseCreate() throws Exception {
         VoiceSpeechProperties properties = realtimeProperties();
         FakeTransport transport = new FakeTransport(mapper, Scenario.NATIVE_SUCCESS);
@@ -196,12 +205,11 @@ class CliproxyRealtimeVoiceProviderTest {
     }
 
     @Test
-    void nativeTranscriptRequiresCurrentItemZeroIndexBoundedExactTerminal() {
+    void nativeTranscriptRequiresCurrentItemZeroIndexExactTerminal() {
         for (Scenario scenario : List.of(
                 Scenario.NATIVE_WRONG_ITEM,
                 Scenario.NATIVE_WRONG_INDEX,
                 Scenario.NATIVE_TERMINAL_MISMATCH,
-                Scenario.NATIVE_TOO_LARGE,
                 Scenario.NATIVE_EMPTY_TRANSCRIPT,
                 Scenario.NATIVE_DUPLICATE_TERMINAL)) {
             FakeTransport transport = new FakeTransport(mapper, scenario);
@@ -449,10 +457,10 @@ class CliproxyRealtimeVoiceProviderTest {
     }
 
     @Test
-    void synthesisTranscriptMustBeCorrelatedBoundedTerminalAndExact() {
+    void synthesisTranscriptMustBeCorrelatedTerminalAndExact() {
         for (Scenario scenario : List.of(
                 Scenario.WRONG_TRANSCRIPT_CORRELATION,
-                Scenario.TRANSCRIPT_TOO_LARGE,
+                Scenario.LONG_TRANSCRIPT_TERMINAL_MISMATCH,
                 Scenario.MISSING_TRANSCRIPT_TERMINAL,
                 Scenario.TRANSCRIPT_TERMINAL_MISMATCH)) {
             VoiceSpeechProperties properties = realtimeProperties();
@@ -709,7 +717,7 @@ class CliproxyRealtimeVoiceProviderTest {
         CHAT_AUDIO_TRANSCRIPT,
         WRAPPER_AUDIO_TRANSCRIPT,
         WRONG_TRANSCRIPT_CORRELATION,
-        TRANSCRIPT_TOO_LARGE,
+        LONG_TRANSCRIPT_TERMINAL_MISMATCH,
         MISSING_TRANSCRIPT_TERMINAL,
         TRANSCRIPT_TERMINAL_MISMATCH,
         NUMERIC_SPOKEN_TRANSCRIPT,
@@ -917,9 +925,7 @@ class CliproxyRealtimeVoiceProviderTest {
                     emitNativeDelta("林冲", pendingInputId, 0);
                     emitNativeCompleted("林冲领命", pendingInputId, 0);
                 }
-                case NATIVE_TOO_LARGE -> emitNativeDelta(
-                        "x".repeat(CliproxyRealtimeSessionClient.MAX_TEXT_CHARS + 1),
-                        pendingInputId, 0);
+                case NATIVE_TOO_LARGE -> emitNativeTranscript("x".repeat(256 * 1024 + 1));
                 case NATIVE_EMPTY_TRANSCRIPT ->
                         emitNativeCompleted("", pendingInputId, 0);
                 case NATIVE_FAILED -> emit("{\"type\":"
@@ -1021,8 +1027,8 @@ class CliproxyRealtimeVoiceProviderTest {
                 case CHAT_AUDIO_TRANSCRIPT ->
                         "好的，我明白了。接下来您需要我帮您进行什么样的协助呢？";
                 case WRAPPER_AUDIO_TRANSCRIPT -> pendingInputText;
-                case TRANSCRIPT_TOO_LARGE -> "x".repeat(
-                        CliproxyRealtimeSessionClient.MAX_TEXT_CHARS + 1);
+                case LONG_TRANSCRIPT_TERMINAL_MISMATCH -> "x".repeat(
+                        256 * 1024 + 1);
                 case NUMERIC_SPOKEN_TRANSCRIPT ->
                         "温度是负三点一四摄氏度，目标是二点五摄氏度。";
                 case NUMERIC_MIXED_TRANSCRIPT ->
@@ -1043,8 +1049,7 @@ class CliproxyRealtimeVoiceProviderTest {
                     + "\"response_id\":\"resp-1\",\"item_id\":\"" + transcriptItem + "\","
                     + "\"output_index\":0,\"content_index\":0,\"delta\":"
                     + mapper.writeValueAsString(transcript) + "}");
-            if (scenario == Scenario.WRONG_TRANSCRIPT_CORRELATION
-                    || scenario == Scenario.TRANSCRIPT_TOO_LARGE) {
+            if (scenario == Scenario.WRONG_TRANSCRIPT_CORRELATION) {
                 return;
             }
             emit(correlated("response.output_audio.done", null));

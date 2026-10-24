@@ -13,8 +13,8 @@ import static cn.jia.agent.skill.SkillMarketplaceException.require;
 /** Content-addressed local objects. A stored object is not purchase/install authorization.
  * The root is provisioned separately; no startup mkdir, URL fetching or arbitrary path input. */
 public final class SkillPackageStore {
-    // Same existing archive boundary as the Runtime installer, not a new performance deadline.
-    public static final int MAX_PACKAGE_BYTES = 16 * 1024 * 1024;
+    // ByteBuffer.allocate takes an int; this is a representation boundary, not a package quota.
+    public static final int MAX_PACKAGE_BYTES = Integer.MAX_VALUE;
     private final Path root;
     public SkillPackageStore(Path root) {
         require(root != null && root.isAbsolute() && root.normalize().equals(root),503,"SKILL_PACKAGE_STORE_INVALID");

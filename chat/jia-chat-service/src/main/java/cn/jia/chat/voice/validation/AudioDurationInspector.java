@@ -22,7 +22,6 @@ public final class AudioDurationInspector {
     private static final long MAX_METADATA_BYTES = 256L * 1024;
     // Unknown-sized live Clusters are walked once for boundaries and once for timing.
     private static final int MAX_ELEMENTS = 8_192;
-    private static final int MAX_DEPTH = 8;
     private static final int MAX_WEBM_CLUSTERS = 128;
     private static final int MAX_MP4_FRAGMENTS = 256;
     private static final int MAX_MP4_SAMPLES = 10_000;
@@ -826,7 +825,7 @@ public final class AudioDurationInspector {
         }
         boolean fragmented = !moofs.isEmpty();
         Mp4Movie movie = inspectMoov(
-                channel, moov.dataOffset, moov.end(), budget, 1,
+                channel, moov.dataOffset, moov.end(), budget,
                 fragmented, List.copyOf(allMediaExtents));
         if (!fragmented) {
             if (movie.fragmentDefaults != null || movie.audioTrack.classicDurationMs == null) {
@@ -920,9 +919,8 @@ public final class AudioDurationInspector {
     }
 
     private Mp4Movie inspectMoov(
-            FileChannel channel, long start, long end, Budget budget, int depth,
+            FileChannel channel, long start, long end, Budget budget,
             boolean fragmented, List<MediaExtent> mediaExtents) throws IOException {
-        requireDepth(depth);
         MovieHeader movieHeader = null;
         Mp4Track audioTrack = null;
         TrexDefaults fragmentDefaults = null;
@@ -938,7 +936,7 @@ public final class AudioDurationInspector {
             } else if (box.type == fourCc("trak")) {
                 tracks++;
                 Mp4Track track = inspectMp4Track(
-                        channel, box.dataOffset, box.end(), budget, depth + 1,
+                        channel, box.dataOffset, box.end(), budget,
                         fragmented, mediaExtents);
                 if (track.handler != fourCc("soun") || audioTrack != null) {
                     throw new IOException("non-audio or multiple MP4 tracks");
@@ -949,7 +947,7 @@ public final class AudioDurationInspector {
                     throw new IOException("duplicate movie extends metadata");
                 }
                 fragmentDefaults = inspectMvex(
-                        channel, box.dataOffset, box.end(), budget, depth + 1);
+                        channel, box.dataOffset, box.end(), budget);
             }
             cursor = box.end();
         }
@@ -969,9 +967,8 @@ public final class AudioDurationInspector {
     }
 
     private Mp4Track inspectMp4Track(
-            FileChannel channel, long start, long end, Budget budget, int depth,
+            FileChannel channel, long start, long end, Budget budget,
             boolean fragmented, List<MediaExtent> mediaExtents) throws IOException {
-        requireDepth(depth);
         Long trackId = null;
         MdiaInfo mdia = null;
         long cursor = start;
@@ -986,7 +983,7 @@ public final class AudioDurationInspector {
                 if (mdia != null) {
                     throw new IOException("duplicate mdia");
                 }
-                mdia = inspectMdia(channel, box.dataOffset, box.end(), budget, depth + 1);
+                mdia = inspectMdia(channel, box.dataOffset, box.end(), budget);
             }
             cursor = box.end();
         }
@@ -1029,8 +1026,7 @@ public final class AudioDurationInspector {
     }
 
     private MdiaInfo inspectMdia(
-            FileChannel channel, long start, long end, Budget budget, int depth) throws IOException {
-        requireDepth(depth);
+            FileChannel channel, long start, long end, Budget budget) throws IOException {
         Integer handler = null;
         MediaHeader mediaHeader = null;
         SampleTable sampleTable = null;
@@ -1052,7 +1048,7 @@ public final class AudioDurationInspector {
                     throw new IOException("duplicate media info");
                 }
                 sampleTable = inspectMinf(
-                        channel, box.dataOffset, box.end(), budget, depth + 1);
+                        channel, box.dataOffset, box.end(), budget);
             }
             cursor = box.end();
         }
@@ -1069,8 +1065,7 @@ public final class AudioDurationInspector {
     }
 
     private SampleTable inspectMinf(
-            FileChannel channel, long start, long end, Budget budget, int depth) throws IOException {
-        requireDepth(depth);
+            FileChannel channel, long start, long end, Budget budget) throws IOException {
         SampleTable table = null;
         long cursor = start;
         while (cursor < end) {
@@ -1079,7 +1074,7 @@ public final class AudioDurationInspector {
                 if (table != null) {
                     throw new IOException("duplicate sample table");
                 }
-                table = inspectStbl(channel, box.dataOffset, box.end(), budget, depth + 1);
+                table = inspectStbl(channel, box.dataOffset, box.end(), budget);
             }
             cursor = box.end();
         }
@@ -1090,8 +1085,7 @@ public final class AudioDurationInspector {
     }
 
     private SampleTable inspectStbl(
-            FileChannel channel, long start, long end, Budget budget, int depth) throws IOException {
-        requireDepth(depth);
+            FileChannel channel, long start, long end, Budget budget) throws IOException {
         Mp4aInfo format = null;
         TimeToSample timing = null;
         List<SampleToChunk> sampleToChunks = null;
@@ -1137,8 +1131,7 @@ public final class AudioDurationInspector {
     }
 
     private TrexDefaults inspectMvex(
-            FileChannel channel, long start, long end, Budget budget, int depth) throws IOException {
-        requireDepth(depth);
+            FileChannel channel, long start, long end, Budget budget) throws IOException {
         TrexDefaults defaults = null;
         long cursor = start;
         while (cursor < end) {
@@ -1966,13 +1959,6 @@ public final class AudioDurationInspector {
         byte[] bytes = readWithin(channel, offset, 4, limit, budget);
         return ByteBuffer.wrap(bytes).order(ByteOrder.BIG_ENDIAN).getInt();
     }
-
-    private void requireDepth(int depth) throws IOException {
-        if (depth > MAX_DEPTH) {
-            throw new IOException("MP4 depth exceeded");
-        }
-    }
-
 
     private Element readElement(
             FileChannel channel, long offset, long limit, Budget budget) throws IOException {

@@ -30,7 +30,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class OpenAiCompatibleSpeechTranscriptionProvider
         implements FileChannelSpeechTranscriptionProvider {
-    public static final int MAX_RESPONSE_BYTES = 256 * 1024;
     private final VoiceSpeechProperties properties;
     private final SpringAiOpenAiVoiceFacade openAi;
     private final ObjectMapper objectMapper;
@@ -74,7 +73,7 @@ public final class OpenAiCompatibleSpeechTranscriptionProvider
         HttpRequest httpRequest = prepareRequest(config, openAi.transcription(), request);
         HttpResponse<byte[]> response;
         try {
-            response = client.send(httpRequest, new BoundedBodyHandler(MAX_RESPONSE_BYTES));
+            response = client.send(httpRequest, HttpResponse.BodyHandlers.ofByteArray());
         } catch (HttpTimeoutException exception) {
             throw new SpeechProviderException(SpeechProviderException.FailureKind.TIMEOUT,
                     "transcription provider timeout");
@@ -82,9 +81,6 @@ public final class OpenAiCompatibleSpeechTranscriptionProvider
             Thread.currentThread().interrupt();
             throw unknown("transcription provider interrupted");
         } catch (IOException exception) {
-            if (BoundedBodyHandler.isLimitFailure(exception)) {
-                throw known();
-            }
             throw unknown("transcription provider transport failure");
         } catch (RuntimeException exception) {
             throw unknown("transcription provider transport failure");

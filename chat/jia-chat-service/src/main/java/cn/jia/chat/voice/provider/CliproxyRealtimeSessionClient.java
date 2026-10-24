@@ -35,7 +35,6 @@ final class CliproxyRealtimeSessionClient {
     static final int MAX_FRAME_CHARS = 512 * 1024;
     static final int MAX_EVENT_FRAGMENTS = 32;
     static final int MAX_EVENTS = 32_768;
-    static final int MAX_TEXT_CHARS = 256 * 1024;
     static final int MAX_BASE64_DELTA_CHARS = 1536 * 1024;
     static final int MAX_INPUT_PCM_CHUNK_BYTES = 256 * 1024;
     static final int MAX_CLIENT_ITEM_ID_CHARS = 32;
@@ -640,7 +639,7 @@ final class CliproxyRealtimeSessionClient {
                 throw protocol("realtime duplicate transcription terminal");
             }
             String delta = text(event, "delta");
-            if (delta == null || text.length() + delta.length() > MAX_TEXT_CHARS) {
+            if (delta == null) {
                 throw protocol("realtime transcript exceeded bound");
             }
             text.append(delta);
@@ -652,7 +651,7 @@ final class CliproxyRealtimeSessionClient {
                 throw protocol("realtime duplicate transcription terminal");
             }
             String completed = text(event, "transcript");
-            if (completed == null || completed.length() > MAX_TEXT_CHARS
+            if (completed == null
                     || (text.length() > 0 && !completed.contentEquals(text))) {
                 throw protocol("realtime transcript terminal mismatch");
             }
@@ -724,7 +723,7 @@ final class CliproxyRealtimeSessionClient {
             }
             requireContent(event);
             String delta = text(event, "delta");
-            if (delta == null || audioTranscript.length() + delta.length() > MAX_TEXT_CHARS) {
+            if (delta == null) {
                 throw protocol("realtime audio transcript exceeded bound");
             }
             audioTranscript.append(delta);
@@ -736,7 +735,7 @@ final class CliproxyRealtimeSessionClient {
             }
             requireContent(event);
             String completed = text(event, "transcript");
-            if (completed == null || completed.length() > MAX_TEXT_CHARS
+            if (completed == null
                     || (audioTranscript.length() > 0
                     && !completed.contentEquals(audioTranscript))
                     || !synthesisTranscriptMatches(operation.text, completed)) {

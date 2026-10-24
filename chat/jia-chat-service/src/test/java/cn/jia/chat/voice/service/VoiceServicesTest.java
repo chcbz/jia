@@ -237,7 +237,7 @@ class VoiceServicesTest {
     }
 
     @Test
-    void serializedSttClientJsonAbove256KiBFailsClosedAndReleasesExactlyOnce() {
+    void serializedSttClientJsonAbove256KiBCompletesAndReleasesExactlyOnce() {
         VoiceSpeechProperties properties = properties();
         AtomicInteger calls = new AtomicInteger();
         FakeCoordinator coordinator = new FakeCoordinator();
@@ -246,23 +246,20 @@ class VoiceServicesTest {
                         new SpeechTranscriptionResult("\"".repeat(140_000), "zh"), null),
                 coordinator, factoryReturningUploads());
 
-        VoiceException error = assertThrows(VoiceException.class,
-                () -> service.transcribe(IDENTITY, REQUEST_ID, "zh-CN", MULTIPART));
-
-        assertEquals(VoiceErrorCode.PROVIDER_ERROR, error.error());
-        assertEquals("FAILED_KNOWN", coordinator.terminal);
-        assertEquals(null, coordinator.cached);
+        var result = service.transcribe(IDENTITY, REQUEST_ID, "zh-CN", MULTIPART);
+        assertEquals("\"".repeat(140_000), result.text());
+        assertTrue(coordinator.cached.payload().length > 256 * 1024);
         assertEquals(1, calls.get());
         assertEquals(1, coordinator.admissionReleaseCalls);
     }
 
     @Test
-    void oversizedSttReplayFailsClosedAndReleasesBeforeProviderDispatch() {
+    void malformedLargeSttReplayFailsClosedAndReleasesBeforeProviderDispatch() {
         VoiceSpeechProperties properties = properties();
         AtomicInteger calls = new AtomicInteger();
         FakeCoordinator coordinator = new FakeCoordinator();
         coordinator.nextAdmitted = VoiceBeginResult.replay(new VoiceCachedResult(
-                new byte[SpeechTranscriptionService.MAX_CLIENT_JSON_BYTES + 1],
+                new byte[256 * 1024 + 1],
                 "application/json"));
         SpeechTranscriptionService service = transcriptionService(properties,
                 transcriptionProvider(calls, new SpeechTranscriptionResult("unexpected", "zh"), null),

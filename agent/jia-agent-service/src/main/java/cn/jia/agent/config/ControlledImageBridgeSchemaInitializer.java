@@ -40,7 +40,9 @@ public final class ControlledImageBridgeSchemaInitializer implements Initializin
         index(indexes,"uk_acibo_scope_consent",0,List.of("tenant_id","client_id","owner_jiacn","task_id","consent_id"));
         index(indexes,"uk_acibo_scope_grant",0,List.of("tenant_id","client_id","owner_jiacn","task_id","grant_id"));
         index(indexes,"uk_acibo_scope_operation_grant",0,List.of("tenant_id","client_id","owner_jiacn","task_id","operation_grant_id"));
-        if(indexes.size()!=21)throw new IllegalStateException("Controlled-image bridge index drift");
+        if (indexes.stream().anyMatch(row -> !java.util.Set.of("PRIMARY","uk_acibo_scope_key","uk_acibo_scope_consent","uk_acibo_scope_grant","uk_acibo_scope_operation_grant").contains(row.get("index_name"))
+                && ((Number)row.get("non_unique")).intValue() != 1))
+            throw new IllegalStateException("Unexpected unique index changes write semantics");
         validateChecks(jdbc.queryForList("SELECT tc.constraint_name,tc.enforced,cc.check_clause FROM information_schema.table_constraints tc JOIN information_schema.check_constraints cc ON cc.constraint_catalog=tc.constraint_catalog AND cc.constraint_schema=tc.constraint_schema AND cc.constraint_name=tc.constraint_name WHERE tc.constraint_schema=DATABASE() AND tc.table_name=? AND tc.constraint_type='CHECK'",TABLE));
     }
 

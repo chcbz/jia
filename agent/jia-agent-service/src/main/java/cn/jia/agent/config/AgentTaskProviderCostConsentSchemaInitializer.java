@@ -170,12 +170,13 @@ public final class AgentTaskProviderCostConsentSchemaInitializer implements Init
         }
         if (!indexRows.stream().map(row->text(row,"index_name")).distinct().collect(
                 java.util.stream.Collectors.toCollection(java.util.LinkedHashSet::new))
-                .equals(expectedIndexes.keySet())) {
+                .containsAll(expectedIndexes.keySet())) {
             throw new IllegalStateException("Provider-consent index set drift");
         }
         expectedIndexes.forEach((name,index)->index(indexRows,name,index.nonUnique(),index.columns()));
-        int expectedRows=expectedIndexes.values().stream().mapToInt(index->index.columns().size()).sum();
-        if (indexRows.size()!=expectedRows) throw new IllegalStateException("Provider-consent extra index drift");
+        if (indexRows.stream().anyMatch(row -> !expectedIndexes.containsKey(text(row,"index_name"))
+                && !"1".equals(text(row,"non_unique"))))
+            throw new IllegalStateException("Provider-consent unexpected unique index changes write semantics");
         validateChecks(checkRows,expectedChecks);
     }
 

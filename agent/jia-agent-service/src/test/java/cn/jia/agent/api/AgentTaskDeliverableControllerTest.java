@@ -75,6 +75,15 @@ class AgentTaskDeliverableControllerTest {
     }
 
     @Test
+    void listDoesNotRejectAnAuthorizedArtifactAboveTheOldDownloadQuota() throws Exception {
+        var artifact = view();
+        artifact.setContentByteLength(64L * 1024 * 1024 + 1);
+        when(artifactService.listForTaskOwner(anyString(), anyString(), anyString(), anyString(), any()))
+                .thenReturn(List.of(artifact));
+        assertEquals(200, list(jwt(TENANT, CLIENT, ACTOR)).getResponse().getStatus());
+    }
+
+    @Test
     void listBindsTenantClientAndActorOnlyFromValidatedJwtAndFiltersResponse() throws Exception {
         when(artifactService.listForTaskOwner(anyString(), anyString(), anyString(), anyString(), any()))
                 .thenReturn(List.of(view()));

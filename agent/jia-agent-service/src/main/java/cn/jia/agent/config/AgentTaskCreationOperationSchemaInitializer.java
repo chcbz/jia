@@ -116,7 +116,8 @@ public final class AgentTaskCreationOperationSchemaInitializer implements Initia
                 List.of("tenant_id", "client_id", "owner_jiacn", "operation_id"));
         index(indexes, "idx_atco_task_receipt", 1,
                 List.of("tenant_id", "client_id", "owner_jiacn", "task_id", "operation_state"));
-        if (indexes.size() != 14) {
+        if (indexes.stream().anyMatch(row -> !java.util.Set.of("PRIMARY", "uk_atco_scope_key", "uk_atco_scope_operation", "idx_atco_task_receipt").contains(row.get("index_name"))
+                && ((Number)row.get("non_unique")).intValue() != 1)) {
             throw new IllegalStateException("Creation-operation extra index drift");
         }
         List<Map<String, Object>> checks = jdbc.queryForList(

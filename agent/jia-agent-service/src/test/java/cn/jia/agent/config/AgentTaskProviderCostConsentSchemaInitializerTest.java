@@ -106,6 +106,9 @@ class AgentTaskProviderCostConsentSchemaInitializerTest {
 
         List<Map<String,Object>> extraIndex=indexRows(true);
         extraIndex.add(index("unexpected_index",1,1,"task_id"));
+        assertDoesNotThrow(() -> AgentTaskProviderCostConsentSchemaInitializer.validateCatalog(
+                columnRows(true),extraIndex,checkRows(true)));
+        extraIndex.add(index("unexpected_unique",0,1,"task_id"));
         assertThrows(IllegalStateException.class, () ->
                 AgentTaskProviderCostConsentSchemaInitializer.validateCatalog(
                         columnRows(true),extraIndex,checkRows(true)));

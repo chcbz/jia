@@ -82,6 +82,7 @@ public final class AgentTaskSettlementSchemaInitializer implements InitializingB
         for (Map<String, Object> row : jdbc.queryForList("SELECT index_name,column_name,non_unique,sub_part,"
                 + "collation,index_type,is_visible FROM information_schema.statistics "
                 + "WHERE table_schema=DATABASE() AND table_name=? ORDER BY index_name,seq_in_index", TABLE)) {
+            if ("1".equals(text(row, "non_unique")) && !java.util.Set.of("PRIMARY", "uk_bounty_settlement_task", "uk_bounty_settlement_actor_key").contains(text(row, "index_name"))) continue;
             if (!"0".equals(text(row, "non_unique")) || row.get("sub_part") != null
                     || !"A".equals(text(row, "collation")) || !"BTREE".equals(text(row, "index_type"))
                     || !"YES".equals(text(row, "is_visible"))) fail("index properties");
