@@ -207,6 +207,7 @@ class LongTermMemoryTaskThreadIsolationTest extends BaseMockTest {
         MemoryRepositoryImpl realRepository = new MemoryRepositoryImpl();
         set(realRepository, "elasticsearchClient", elasticsearchClient);
         set(realRepository, "embeddingModel", embeddingModel);
+        set(realRepository, "embeddingDimension", 2);
         set(realRepository, "memoryPublicationDao", publicationDao);
         set(realRepository, "indexName", "chat_memory");
         set(realRepository, "currentConversationWeight", 1.5d);

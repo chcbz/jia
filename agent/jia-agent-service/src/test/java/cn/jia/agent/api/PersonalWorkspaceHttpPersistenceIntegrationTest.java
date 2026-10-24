@@ -310,7 +310,17 @@ class PersonalWorkspaceHttpPersistenceIntegrationTest {
                 (PersonalWorkspaceWriteService) proxyFactory.getProxy();
         PersonalWorkspaceService service = new PersonalWorkspaceServiceImpl(
                 dao, storage, transactionalWrites);
-        return MockMvcBuilders.standaloneSetup(new PersonalWorkspaceController(service)).build();
+        return MockMvcBuilders.standaloneSetup(new PersonalWorkspaceController(service))
+                .addFilters((jakarta.servlet.Filter) (request, response, chain) -> {
+                    try {
+                        cn.jia.core.tenant.TrustedTenantContext.runWithScopeChecked(
+                                new cn.jia.core.tenant.BusinessScope(cn.jia.core.tenant.TenantId.of("0"), cn.jia.core.tenant.DataDomainId.of("cyf"), ((org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken) ((jakarta.servlet.http.HttpServletRequest) request).getUserPrincipal()).getToken().getClaimAsString("jiacn"), ((org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken) ((jakarta.servlet.http.HttpServletRequest) request).getUserPrincipal()).getToken().getClaimAsString("client_id")), () -> chain.doFilter(request, response));
+                    } catch (java.io.IOException | jakarta.servlet.ServletException failure) {
+                        throw failure;
+                    } catch (Exception failure) {
+                        throw new jakarta.servlet.ServletException(failure);
+                    }
+                }).build();
     }
 
     private void assertCounts(int files, int versions, int operations) {

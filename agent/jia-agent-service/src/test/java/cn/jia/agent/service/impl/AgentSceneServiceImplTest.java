@@ -89,7 +89,7 @@ class AgentSceneServiceImplTest extends BaseMockTest {
         setScope("owner-a", "client-a");
         eventBroker = new AgentSceneEventBroker();
         service = new AgentSceneServiceImpl(stateDao, eventDao, phaseReportDao, runtimeDao, eventBroker);
-        lenient().when(runtimeDao.findRosterByOwner("client-a", "owner-a", null, null))
+        lenient().when(runtimeDao.findRosterByOwner("0", "client-a", "owner-a", null, null))
                 .thenReturn(List.of(runtime("agent-songjiang", "songjiang", AgentConstants.STATUS_ONLINE)));
         lenient().when(stateDao.findActiveByScene(eq("0"), eq("client-a"), eq("owner-a"), eq(SCENE_ID), anyLong()))
                 .thenReturn(List.of());
@@ -126,7 +126,7 @@ class AgentSceneServiceImplTest extends BaseMockTest {
 
         InOrder order = inOrder(eventDao, runtimeDao, stateDao);
         order.verify(eventDao).nextSceneVersion("0", "client-a", "owner-a", SCENE_ID);
-        order.verify(runtimeDao).findRosterByOwner("client-a", "owner-a", null, null);
+        order.verify(runtimeDao).findRosterByOwner("0", "client-a", "owner-a", null, null);
         order.verify(stateDao).findByAgent("0", "client-a", "owner-a", SCENE_ID, "agent-songjiang");
         order.verify(stateDao).findActiveByScene(eq("0"), eq("client-a"), eq("owner-a"), eq(SCENE_ID), anyLong());
         order.verify(stateDao).upsert(eq("0"), eq("client-a"), eq("owner-a"), eq(SCENE_ID), any());
@@ -145,7 +145,7 @@ class AgentSceneServiceImplTest extends BaseMockTest {
 
         InOrder order = inOrder(eventDao, runtimeDao, stateDao);
         order.verify(eventDao).nextSceneVersion("0", "client-a", "owner-a", SCENE_ID);
-        order.verify(runtimeDao).findRosterByOwner("client-a", "owner-a", null, null);
+        order.verify(runtimeDao).findRosterByOwner("0", "client-a", "owner-a", null, null);
         order.verify(stateDao).findByAgent("0", "client-a", "owner-a", SCENE_ID, "agent-songjiang");
         ArgumentCaptor<Long> activeAt = ArgumentCaptor.forClass(Long.class);
         order.verify(stateDao).findActiveByScene(
@@ -598,7 +598,7 @@ class AgentSceneServiceImplTest extends BaseMockTest {
             assertThrows(IllegalArgumentException.class, () -> service.upsertState(SCENE_ID, invalid));
         }
         verify(eventDao, never()).nextSceneVersion(any(), any(), any(), any());
-        verify(runtimeDao, never()).findRosterByOwner(any(), any(), any(), any());
+        verify(runtimeDao, never()).findRosterByOwner(any(), any(), any(), any(), any());
         verify(stateDao, never()).findByAgent(any(), any(), any(), any(), any());
     }
 
@@ -614,13 +614,13 @@ class AgentSceneServiceImplTest extends BaseMockTest {
         assertThrows(IllegalArgumentException.class, () -> service.snapshot(SCENE_ID));
 
         verifyNoInteractions(stateDao, eventDao);
-        verify(runtimeDao, never()).findRosterByOwner(any(), any(), any(), any());
+        verify(runtimeDao, never()).findRosterByOwner(any(), any(), any(), any(), any());
     }
 
     @Test
     void isolatesEveryReadAndWriteByCurrentTenantAndClient() {
         setScope("owner-b", "client-b");
-        when(runtimeDao.findRosterByOwner("client-b", "owner-b", null, null))
+        when(runtimeDao.findRosterByOwner("0", "client-b", "owner-b", null, null))
                 .thenReturn(List.of(runtime("agent-b", "songjiang", AgentConstants.STATUS_ONLINE)));
         when(eventDao.nextSceneVersion("0", "client-b", "owner-b", SCENE_ID)).thenReturn(4L);
         when(stateDao.findActiveByScene(eq("0"), eq("client-b"), eq("owner-b"), eq(SCENE_ID), anyLong()))
@@ -630,7 +630,7 @@ class AgentSceneServiceImplTest extends BaseMockTest {
 
         service.upsertState(SCENE_ID, request("agent-b", "songjiang"));
 
-        verify(runtimeDao).findRosterByOwner("client-b", "owner-b", null, null);
+        verify(runtimeDao).findRosterByOwner("0", "client-b", "owner-b", null, null);
         verify(eventDao).nextSceneVersion("0", "client-b", "owner-b", SCENE_ID);
         verify(stateDao).findByAgent("0", "client-b", "owner-b", SCENE_ID, "agent-b");
         verify(stateDao, never()).findByAgent(eq("0"), eq("client-a"), eq("owner-a"), any(), any());
@@ -640,7 +640,7 @@ class AgentSceneServiceImplTest extends BaseMockTest {
     void rejectsPersonaConflictWithAnotherRealAgentInTheSameScopedScene() {
         AgentRuntimeEntity requester = runtime("agent-a", "songjiang", AgentConstants.STATUS_ONLINE);
         AgentRuntimeEntity conflicting = runtime("agent-b", "songjiang", AgentConstants.STATUS_BUSY);
-        when(runtimeDao.findRosterByOwner("client-a", "owner-a", null, null))
+        when(runtimeDao.findRosterByOwner("0", "client-a", "owner-a", null, null))
                 .thenReturn(List.of(requester, conflicting));
         when(stateDao.findActiveByScene(eq("0"), eq("client-a"), eq("owner-a"), eq(SCENE_ID), anyLong()))
                 .thenReturn(List.of(stateEntity("agent-b", "songjiang", 3L, null)));
@@ -670,7 +670,7 @@ class AgentSceneServiceImplTest extends BaseMockTest {
         assertEquals(List.of("agent-alpha", "agent-zeta"),
                 snapshot.getStates().stream().map(AgentSceneStateDTO::getAgentId).toList());
         verify(stateDao).findSnapshotRows(eq("0"), eq("client-a"), eq("owner-a"), eq(SCENE_ID), anyLong());
-        verify(runtimeDao, never()).findRosterByOwner(any(), any(), any(), any());
+        verify(runtimeDao, never()).findRosterByOwner(any(), any(), any(), any(), any());
         verify(eventDao, never()).findLatestSceneVersion(any(), any(), any(), any());
         verify(eventDao, never()).findCurrentSceneVersion(any(), any(), any(), any());
 

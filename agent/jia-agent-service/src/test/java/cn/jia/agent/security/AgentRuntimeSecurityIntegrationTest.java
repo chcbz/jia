@@ -737,7 +737,7 @@ class AgentRuntimeSecurityIntegrationTest {
     }
 
     @Test
-    void domainContextContainsAuthenticatedOwnerAndClientAndIsRestoredAfterRequest() throws Exception {
+    void domainContextContainsAuthenticatedOwnerAndClientAndClearsStaleContextAfterRequest() throws Exception {
         var previous = new cn.jia.core.context.EsContext();
         previous.setJiacn("cookie-owner");
         previous.setClientId("cookie-client");
@@ -749,7 +749,9 @@ class AgentRuntimeSecurityIntegrationTest {
                     .andExpect(jsonPath("$.ownerJiacn").value(OWNER_A))
                     .andExpect(jsonPath("$.contextJiacn").value(OWNER_A))
                     .andExpect(jsonPath("$.contextClientId").value(CLIENT_A));
-            assertSame(previous, EsContextHolder.getContext());
+            assertNotSame(previous, EsContextHolder.getContext());
+            assertNull(EsContextHolder.getContext().getJiacn());
+            assertNull(EsContextHolder.getContext().getClientId());
         } finally {
             EsContextHolder.clearContext();
         }

@@ -36,7 +36,19 @@ class HostingRentHttpTest {
     void setUp() {
         var controller = new AgentController(agents, mock(AbilityEvaluationService.class), provisioning);
         controller.setHostingRent(application);
-        mvc = MockMvcBuilders.standaloneSetup(controller, new AgentHostingRentController(application)).build();
+        mvc = MockMvcBuilders.standaloneSetup(controller, new AgentHostingRentController(application))
+                .addFilters((jakarta.servlet.Filter) (request, response, chain) -> {
+                    try {
+                        cn.jia.core.tenant.TrustedTenantContext.runWithScopeChecked(
+                                new cn.jia.core.tenant.BusinessScope(cn.jia.core.tenant.TenantId.of("0"),
+                                        cn.jia.core.tenant.DataDomainId.of("cyf"), "Tenant-A", "Client-A"),
+                                () -> chain.doFilter(request, response));
+                    } catch (java.io.IOException | jakarta.servlet.ServletException failure) {
+                        throw failure;
+                    } catch (Exception failure) {
+                        throw new jakarta.servlet.ServletException(failure);
+                    }
+                }).build();
     }
 
     @Test
@@ -134,11 +146,10 @@ class HostingRentHttpTest {
         mvc.perform(post(BIND).principal(jwt()).contentType(MediaType.APPLICATION_JSON)
                         .content("{\"mode\":\"local\"}"))
                 .andExpect(status().isOk());
-        var scope = new cn.jia.agent.service.AgentHostedBindingTransaction.Scope(
-                "0", "Client-A", "Tenant-A");
-        verify(provisioning, times(2)).bind(scope, "wuyong", null);
-        verify(provisioning).bind(scope, "wuyong", " ");
-        verify(provisioning, times(2)).bind(scope, "wuyong", "local");
+        var scope = new cn.jia.core.tenant.BusinessScope(
+                cn.jia.core.tenant.TenantId.of("0"), cn.jia.core.tenant.DataDomainId.of("cyf"),
+                "Tenant-A", "Client-A");
+        verify(provisioning, times(5)).bindLocal(scope, "wuyong");
         verifyNoInteractions(application, agents);
     }
 

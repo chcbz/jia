@@ -238,7 +238,7 @@ class AgentGetSkillRosterProjectionTest {
 
     private void wireProjection(boolean enabled) {
         var jwt = Jwt.withTokenValue("test-token").header("alg", "none")
-                .subject("login-sub").claim("client_id", "Client-A").claim("jiacn", "Owner-A")
+                .subject("login-sub").claim("tenant_id", "0").claim("data_domain_id", "cyf").claim("client_id", "Client-A").claim("jiacn", "Owner-A")
                 .build();
         SecurityContextHolder.getContext().setAuthentication(new JwtAuthenticationToken(jwt, List.of()));
         when(owners.requireOwner(ACTOR)).thenReturn("Owner-A");

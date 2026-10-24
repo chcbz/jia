@@ -544,3 +544,7 @@ path ID沿`[A-Za-z0-9][A-Za-z0-9._:-]{0,99}`；幂等键沿`[A-Za-z0-9][A-Za-z0-
 ### 2026-10-24 分支整合：事件写入缺失租户的异常契约
 
 核对基线：API `c40ade104b3c57a693b58a3a18b4c4faa2ee90c9`，仅覆盖 `AgentTaskEventWriterImpl.validateCommand`。租户是必需的授权/存储作用域；缺失时不得推定租户0或进入事件事务，否则可能跨域写入。`tenantId` 为 null/空或非规范十进制字符串时，本次 append 应在 DAO/事务写入前抛 `IllegalArgumentException`，不因改用 `TenantId` 值对象泄漏 `NullPointerException`，不影响其他事项。实现复用原 `requireNonBlank` 后调用 `TenantId.of`，无新增开关、协议门禁或重放。回归入口为已有 `AgentTaskEventRealTransactionTest.scopeMismatchFailClosed` 与 `commandValidationRejectsNullRequiredFields`；API280暴露异常类型回归，本次修正尚待后续Flow核验，非线上通过声明。
+
+### 2026-10-24 集成回归夹具对齐（源码候选，非上线证明）
+
+当前租户边界要求受信上下文与JWT的tenant/owner/client一致。资料HTTP、托管绑定夹具显式提供认证边界上下文，跨owner/client读取仍须失败；不修改生产授权策略。Runtime请求结束清理线程旧身份，不能恢复上个请求遗留的cookie身份；对应 `AgentRuntimeSecurityIntegrationTest`。场景查询mock使用五参数租户作用域；Runtime enrollment使用持久安装发现与授权作用域回调。真实ES冲突恢复夹具显式配置其二元素向量维度，仍保留SQL提交失败后同一winner的字节稳定重试断言。市场独占测试库补当前DAO读取的nullable scope列，不转换历史/native行，也不是生产迁移执行证据。WS ACK拒绝测试先建立实际session，保留HTTP持久ACK与不泄漏身份的断言。

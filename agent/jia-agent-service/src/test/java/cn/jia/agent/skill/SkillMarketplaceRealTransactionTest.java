@@ -118,6 +118,17 @@ public class SkillMarketplaceRealTransactionTest {
         // Keep only that schema session alive; business transactions still use independent connections.
         schemaConnection=ds.getConnection();
         for(String resource:List.of("db/economy-v0-foundation.sql","db/economy-v0-skill-marketplace.sql","db/economy-v0-skill-application.sql","db/agent-command-transport-schema.sql")) schema(resource);
+        // Nullable scope projection from the current transport migration; no native row is
+        // converted to Rabbit v2. This database is an isolated fixture, never production.
+        for (String table : List.of("agent_command_delivery", "agent_outbox_event")) {
+            for (String column : List.of("protocol_version SMALLINT", "data_domain_id VARCHAR(64)",
+                    "execution_pool_id VARCHAR(100)", "admission_epoch BIGINT",
+                    "producer_deployment_id VARCHAR(100)", "module_id VARCHAR(64)",
+                    "migration_epoch BIGINT", "claimed_deployment_id VARCHAR(100)",
+                    "claimed_worker_generation BIGINT")) {
+                jdbc.execute("ALTER TABLE " + table + " ADD COLUMN " + column + " DEFAULT NULL");
+            }
+        }
         var config=new org.apache.ibatis.session.Configuration();config.setMapUnderscoreToCamelCase(true);
         if(!mysqlFixture()) config.addInterceptor(new SkillExecutionMapperRealTransactionTest.MySqlBinaryCastAdapter());
         for(Class<?> type:List.of(EconomySkillMarketplaceMapper.class,EconomySkillApplicationMapper.class,EconomySkillCredentialMapper.class,EconomyLedgerMapper.class,AgentCommandTransportMapper.class,AgentCommandRecoveryMapper.class,AgentSkillInstallRecoveryMapper.class)) config.addMapper(type);

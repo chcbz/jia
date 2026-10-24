@@ -304,7 +304,17 @@ class AgentRuntimeV1ServiceImplTest {
     @Test void enrollmentIsSingleUseAndNeverReturnsEnrollmentMaterial() {
         String enrollmentSecret = "runtime-v1-enrollment-secret-must-not-leak";
         AgentRuntimeV1InstallationEntity pending = installation("PENDING").setEnrollmentSecretHash(sha(enrollmentSecret));
+        when(installations.findBootstrap("rti-1")).thenReturn(pending);
         when(installations.lock("rti-1")).thenReturn(pending);
+        var scope = managementScope("0", "client-a", "owner-a");
+        var identity = new cn.jia.agent.entity.AgentIdentityRegistryEntity()
+                .setCanonicalAgentId(AGENT).setOwnerJiacn("owner-a");
+        identity.setTenantId("0"); identity.setClientId("client-a");
+        when(registry.findExactByCanonicalInScope("0", "client-a", "owner-a", AGENT)).thenReturn(identity);
+        when(sessions.withPersistentInstallationScope(eq(pending), any())).thenAnswer(invocation -> {
+            java.util.function.Function<cn.jia.core.tenant.BusinessScope, ?> operation = invocation.getArgument(1);
+            return cn.jia.core.tenant.TrustedTenantContext.withScope(scope, () -> operation.apply(scope));
+        });
         when(installations.activate(eq(pending), any(byte[].class), eq(NOW))).thenReturn(1);
         var result = service.enroll(enrollment(enrollmentSecret), NOW);
         assertEquals("ACTIVE", result.installation().status());
@@ -382,9 +392,13 @@ class AgentRuntimeV1ServiceImplTest {
         when(installations.lock("rti-1")).thenReturn(row);
         for (String owner : java.util.List.of("owner-b", "OWNER-A", "owner-a ")) {
             assertThrows(AgentServiceImpl.AgentBizException.class,
-                    () -> statusWithScope("0", "client-a", owner, "rti-1"));
+                    () -> cn.jia.core.tenant.TrustedTenantContext.withScope(
+                            managementScope("0", "client-a", "owner-a"),
+                            () -> service.status("0", "client-a", owner, "rti-1")));
             assertThrows(AgentServiceImpl.AgentBizException.class,
-                    () -> revokeWithScope("0", "client-a", owner, "rti-1", NOW));
+                    () -> cn.jia.core.tenant.TrustedTenantContext.runWithScope(
+                            managementScope("0", "client-a", "owner-a"),
+                            () -> service.revoke("0", "client-a", owner, "rti-1", NOW)));
         }
         verify(installations, never()).revoke(any(), anyLong());
         verifyNoInteractions(identities, acks);
@@ -429,12 +443,12 @@ class AgentRuntimeV1ServiceImplTest {
         AgentRuntimeV1InstallationEntity installation = new AgentRuntimeV1InstallationEntity()
                 .setId(1L).setVersion(0L).setInstallationId("rti-1").setCanonicalAgentId(AGENT)
                 .setManifestVersion("1").setManifestSha256(HASH).setEnrollmentExpiresAt(10_000L).setStatus(status);
-        installation.setTenantId("tenant-a");
+        installation.setTenantId("0");
         installation.setClientId("client-a");
         return installation;
     }
     private static AgentRuntimeV1EnrollmentRequest enrollment(String secret) {
-        return new AgentRuntimeV1EnrollmentRequest("rti-1", "tenant-a", "client-a", AGENT, "1", HASH, secret);
+        return new AgentRuntimeV1EnrollmentRequest("rti-1", "0", "client-a", AGENT, "1", HASH, secret);
     }
     private static cn.jia.agent.entity.AgentRuntimeV1RuntimeRequest runtime(String tenant, String agent) {
         return new cn.jia.agent.entity.AgentRuntimeV1RuntimeRequest("rti-1", tenant, "client-a", agent, "1", HASH, "ok");

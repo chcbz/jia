@@ -117,6 +117,7 @@ class AgentWebSocketCommandRecoveryTest extends BaseMockTest {
 
     @Test
     void wsAckNeverCommitsEvenAfterSuccessfulRegistration() throws Exception {
+        handler.afterConnectionEstablished(session);
         UnifiedRuntimeTestSupport.deliver(handler, session, ackMessage("ack-before", "dispatch-1", "RECEIVED"));
         when(agentService.register(any(AgentRegisterDTO.class))).thenReturn(
                 new AgentRegisterResultDTO("agent-a", "token", AgentConstants.STATUS_ONLINE));
@@ -158,7 +159,7 @@ class AgentWebSocketCommandRecoveryTest extends BaseMockTest {
     @Test
     void flagOnSpringContextWiresActualHandlerDispatcherWithoutConstructorCycle() {
         new ApplicationContextRunner()
-                .withPropertyValues("agent.rabbit-dispatch.enabled=true")
+                .withPropertyValues("agent.rabbit-dispatch.enabled=true", "agent.rabbit-consume.enabled=true")
                 .withBean(ChatClient.class, () -> mock(ChatClient.class))
                 .withBean(AgentService.class, () -> mock(AgentService.class))
                 .withBean(cn.jia.agent.security.AgentRuntimeAuthenticationService.class,
@@ -194,6 +195,7 @@ class AgentWebSocketCommandRecoveryTest extends BaseMockTest {
 
     @Test
     void ackHiddenScopeConflictIsRejectedWithoutDurableCallOrExistenceLeak() throws Exception {
+        handler.afterConnectionEstablished(session);
         when(agentService.register(any(AgentRegisterDTO.class))).thenReturn(
                 new AgentRegisterResultDTO("agent-a", "token", AgentConstants.STATUS_ONLINE));
         UnifiedRuntimeTestSupport.deliver(handler, session, registerMessage());

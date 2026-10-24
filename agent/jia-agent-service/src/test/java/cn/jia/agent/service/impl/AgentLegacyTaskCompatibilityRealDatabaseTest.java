@@ -65,7 +65,7 @@ class AgentLegacyTaskCompatibilityRealDatabaseTest {
                     + "CASE_INSENSITIVE_IDENTIFIERS=TRUE;LOCK_TIMEOUT=10000";
     private static final String TENANT = "0";
     private static final String OWNER = "owner-a";
-    private static final String OTHER_TENANT = "tenant-b";
+    private static final String OTHER_TENANT = "1";
     private static final String CLIENT = "client-a";
     private static final String OTHER_CLIENT = "client-b";
     private static final String TASK = "task-1";

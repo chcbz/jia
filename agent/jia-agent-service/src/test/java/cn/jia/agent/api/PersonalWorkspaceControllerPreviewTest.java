@@ -34,7 +34,17 @@ class PersonalWorkspaceControllerPreviewTest {
     @BeforeEach
     void setUp() {
         service = mock(PersonalWorkspaceService.class);
-        mvc = MockMvcBuilders.standaloneSetup(new PersonalWorkspaceController(service)).build();
+        mvc = MockMvcBuilders.standaloneSetup(new PersonalWorkspaceController(service))
+                .addFilters((jakarta.servlet.Filter) (request, response, chain) -> {
+                    try {
+                        cn.jia.core.tenant.TrustedTenantContext.runWithScopeChecked(
+                                new cn.jia.core.tenant.BusinessScope(cn.jia.core.tenant.TenantId.of("0"), cn.jia.core.tenant.DataDomainId.of("cyf"), OWNER, CLIENT), () -> chain.doFilter(request, response));
+                    } catch (java.io.IOException | jakarta.servlet.ServletException failure) {
+                        throw failure;
+                    } catch (Exception failure) {
+                        throw new jakarta.servlet.ServletException(failure);
+                    }
+                }).build();
     }
 
     @Test
@@ -113,10 +123,10 @@ class PersonalWorkspaceControllerPreviewTest {
     }
 
     @Test
-    void otherAreaOrDomainCannotUploadOrReadLegacyPersonalFiles() throws Exception {
+    void claimsConflictingWithTrustedScopeCannotUploadOrReadPersonalFiles() throws Exception {
         for (JwtAuthenticationToken principal : List.of(
                 jwt("1", "cyf"), jwt("00", "cyf"), jwt("0", "other"),
-                jwt(null, "cyf"), jwt("0", null))) {
+                jwt(null, "cyf"))) {
             mvc.perform(get("/agent/personal-workspace/files").principal(principal))
                     .andExpect(status().isNotFound());
             mvc.perform(multipart("/agent/personal-workspace/files")
