@@ -471,14 +471,29 @@
             "properties": {
               "source": {
                 "type": "null"
-              },
-              "price": {
-                "$ref": "#/definitions/Money"
-              },
-              "orderId": {
-                "$ref": "#/definitions/Id"
               }
-            }
+            },
+            "allOf": [
+              {
+                "if": {
+                  "not": {
+                    "required": [
+                      "authorizationSource"
+                    ]
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "price": {
+                      "$ref": "#/definitions/Money"
+                    },
+                    "orderId": {
+                      "$ref": "#/definitions/Id"
+                    }
+                  }
+                }
+              }
+            ]
           }
         },
         {
@@ -589,6 +604,26 @@
             "properties": {
               "runtimeSynced": {
                 "const": true
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "authorizationSource"
+            ]
+          },
+          "then": {
+            "properties": {
+              "price": {
+                "type": "null"
+              },
+              "orderId": {
+                "type": "null"
+              },
+              "fundingStatus": {
+                "const": "NONE"
               }
             }
           }
