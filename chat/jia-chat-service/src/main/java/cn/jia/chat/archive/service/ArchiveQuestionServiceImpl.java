@@ -31,8 +31,6 @@ public class ArchiveQuestionServiceImpl implements ArchiveQuestionService {
     static final String RESPONDER_ID = "archive-clerk-v1";
     static final String RESPONDER_NAME = "案卷书吏";
     static final String RESPONDER_MODE = "fallback";
-    static final int MAX_QUESTION_BYTES = 8192;
-    static final int MAX_ANSWER_BYTES = 131072;
     private static final int RATE_LIMIT_PER_MINUTE = 20;
     private static final String JSON = "application/json;charset=UTF-8";
     private static final Duration RETENTION = Duration.ofDays(7);
@@ -73,9 +71,8 @@ public class ArchiveQuestionServiceImpl implements ArchiveQuestionService {
         require(request.editionId() != null && request.editionId().matches("[A-Za-z0-9][A-Za-z0-9._-]{0,95}")
                         && request.question() != null && request.anchor() != null,
                 422, "INVALID_REQUEST_JSON", "Question request is incomplete");
-        int questionBytes = request.question().getBytes(StandardCharsets.UTF_8).length;
-        require(!request.question().isBlank() && questionBytes <= MAX_QUESTION_BYTES,
-                422, "INVALID_REQUEST_JSON", "Question must be 1..8192 UTF-8 bytes");
+        require(!request.question().isBlank(),
+                422, "INVALID_REQUEST_JSON", "Question must not be blank");
         boolean providerAvailable = providerAvailable();
         return mutate(owner, questionId, "PUT", path, key, parsed.canonicalJson(), () -> {
             require(providerAvailable, 503, "QUESTION_PROVIDER_UNAVAILABLE",

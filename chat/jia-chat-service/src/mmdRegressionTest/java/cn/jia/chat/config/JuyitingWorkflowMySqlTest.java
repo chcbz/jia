@@ -315,6 +315,30 @@ class JuyitingWorkflowMySqlTest {
         jdbc.execute("ALTER TABLE chat_selected_output_finalization_item DROP CHECK chk_csofi_source, DROP INDEX uk_csofi_formal, DROP COLUMN source_delivery_id, DROP COLUMN source_artifact_id, DROP COLUMN source_artifact_version, MODIFY request_id VARCHAR(100) COLLATE utf8mb4_0900_bin NOT NULL, ADD CONSTRAINT chk_csofi_source CHECK "+check);
         jdbc.execute("ALTER TABLE agent_selected_output_finalization DROP CHECK chk_asof_contract, DROP COLUMN contract_version");
     }
+    @Test void archiveCapacityMigrationPreservesNotesAndOwnershipConstraints() {
+        var content = new cn.jia.chat.archive.config.ArchiveSchemaInitializer(jdbc);
+        var personal = new cn.jia.chat.archive.config.ArchiveReaderDataSchemaInitializer(jdbc);
+        var questions = new cn.jia.chat.archive.config.ArchiveQuestionSchemaInitializer(jdbc);
+        content.initialize(); personal.initialize(); questions.initialize();
+        jdbc.execute("ALTER TABLE archive_note ADD CONSTRAINT chk_archive_note_text_bytes CHECK (text IS NULL OR OCTET_LENGTH(text)<=20000)");
+        jdbc.execute("ALTER TABLE archive_question DROP CHECK chk_archive_question_lengths, ADD CONSTRAINT chk_archive_question_lengths CHECK (OCTET_LENGTH(selected_text) BETWEEN 1 AND 8192 AND OCTET_LENGTH(question_text) BETWEEN 1 AND 8192 AND OCTET_LENGTH(answer)<=131072)");
+        jdbc.execute("ALTER TABLE archive_question_event DROP CHECK chk_archive_question_event_payload, ADD CONSTRAINT chk_archive_question_event_payload CHECK (JSON_VALID(payload_json) AND OCTET_LENGTH(payload_json) BETWEEN 2 AND 32768)");
+        jdbc.update("INSERT INTO archive_work(work_id,title) VALUES('work','fixture')");
+        jdbc.update("INSERT INTO archive_edition(edition_id,work_id,import_state,source_sha256,manifest_sha256,manifest_file_sha256,source_utf8_byte_length,chapter_count,preface_paragraph_count,chapter_paragraph_count,reader_paragraph_count,preface_utf8_byte_length,chapter_utf8_byte_length,reader_utf8_byte_length) VALUES('edition','work','READY',?,?,?,1,1,0,1,1,0,1,1)", "a".repeat(64),"b".repeat(64),"c".repeat(64));
+        String noteId="123e4567-e89b-42d3-a456-426614174000";
+        jdbc.update("INSERT INTO archive_note(tenant_id,client_id,owner_jiacn,note_id,edition_id,state,text,version) VALUES('0','client','owner',?,'edition','ACTIVE','私人手札',1)",noteId);
+        var before=jdbc.queryForMap("SELECT * FROM archive_note WHERE note_id=?",noteId);
+        var migration = new org.springframework.jdbc.datasource.init.ResourceDatabasePopulator(
+                new ClassPathResource("db/archive-content-capacity-migration.sql"));
+        migration.execute(jdbc.getDataSource());
+        content.initialize(); personal.initialize(); questions.initialize();
+        assertEquals(before,jdbc.queryForMap("SELECT * FROM archive_note WHERE note_id=?",noteId));
+        assertEquals(1,jdbc.queryForObject("SELECT COUNT(*) FROM archive_note",Integer.class));
+        assertThrows(DataAccessException.class,()->jdbc.update("UPDATE archive_note SET tenant_id='other' WHERE note_id=?",noteId));
+        assertThrows(DataAccessException.class,()->jdbc.update("UPDATE archive_note SET version=0 WHERE note_id=?",noteId));
+        assertThrows(DataAccessException.class,()->jdbc.update("UPDATE archive_note SET text=NULL WHERE note_id=?",noteId));
+        assertThrows(DataAccessException.class,()->jdbc.update("INSERT INTO archive_note(tenant_id,client_id,owner_jiacn,note_id,edition_id,state,text,version) VALUES('0','client','owner',?,'edition','ACTIVE','duplicate',1)",noteId));
+    }
     @Test void knownUpgradePreservesV1RowsAndIsRepeatable() throws Exception {
         initialize(); downgradeKnownPredecessor();
         jdbc.update("INSERT INTO chat_selected_output_finalization(operation_id,tenant_id,owner_jiacn,client_id,task_id,idempotency_key,request_digest,conversation_id,expected_task_version,expected_assignment_revision,summary,state,stage,state_version,task_state,task_version,created_at,updated_at) VALUES('old','0','owner','client','task','old-key-1',?,'42',7,1,'历史','pending','PROMOTING',1,'reviewing',7,1,1)","f".repeat(64));

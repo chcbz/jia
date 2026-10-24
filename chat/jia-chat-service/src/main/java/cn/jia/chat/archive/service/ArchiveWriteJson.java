@@ -21,7 +21,6 @@ import java.util.ArrayList;
 import java.util.List;
 
 final class ArchiveWriteJson {
-    private static final int MAX_REQUEST_BYTES = 65_536;
     private final ObjectMapper mapper;
 
     ArchiveWriteJson() {
@@ -55,7 +54,7 @@ final class ArchiveWriteJson {
     }
 
     private Parsed parse(byte[] bytes, Class<?> type, boolean rejectRouting) {
-        if (bytes == null || bytes.length == 0 || bytes.length > MAX_REQUEST_BYTES
+        if (bytes == null || bytes.length == 0
                 || startsWithBom(bytes)) invalidJson();
         try {
             StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)

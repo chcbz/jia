@@ -60,8 +60,8 @@ final class ArchiveTextSelectionValidator {
             byte[] slice = java.util.Arrays.copyOfRange(authoritative,
                     Math.toIntExact(segment.startByte()), Math.toIntExact(segment.endByte()));
             int separatorBytes = index == 0 ? 0 : 2;
-            require(slice.length <= 8192 - total - separatorBytes,
-                    422, "INVALID_TEXT_ANCHOR", "Selected text exceeds 8192 UTF-8 bytes");
+            require(slice.length <= Integer.MAX_VALUE - total - separatorBytes,
+                    422, "INVALID_TEXT_ANCHOR", "Selected text cannot be represented as a byte array");
             total += slice.length + separatorBytes;
             slices.add(slice);
             previousOrdinal = point.paragraphOrdinal();
@@ -84,7 +84,7 @@ final class ArchiveTextSelectionValidator {
     private void requireShape(ArchiveTextAnchorDTO anchor) {
         require(anchor != null && anchor.editionManifestSha256() != null && anchor.blockType() != null
                         && anchor.blockId() != null && anchor.segments() != null
-                        && !anchor.segments().isEmpty() && anchor.segments().size() <= 16
+                        && !anchor.segments().isEmpty()
                         && anchor.selectionSha256() != null,
                 422, "INVALID_REQUEST_JSON", "Text anchor is incomplete");
         for (ArchiveAnchorSegmentDTO segment : anchor.segments()) {

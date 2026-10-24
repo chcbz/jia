@@ -160,7 +160,7 @@ class ArchiveQuestionWorkerTest {
     }
 
     @Test
-    void nonRetryableAndInvalidOversizedProviderAnswersFailFinalWithoutExposingOutput() {
+    void nonRetryableAndInvalidUnicodeProviderAnswersFailFinalWithoutExposingOutput() {
         ArchiveQuestionProvider nonRetryable = request -> {
             throw new ArchiveQuestionProviderException("QUESTION_PROVIDER_RESPONSE_INVALID", false, "bad");
         };
@@ -170,10 +170,10 @@ class ArchiveQuestionWorkerTest {
         assertEquals("", service.get(OWNER, ID).answer());
 
         resetWithNewIdNotNeeded();
-        ArchiveQuestionProvider oversized = request -> new ArchiveQuestionProvider.Answer(
-                List.of("must-not-be-exposed", "x".repeat(131073)));
-        create(oversized);
-        worker(oversized).runOnce();
+        ArchiveQuestionProvider invalidUnicode = request -> new ArchiveQuestionProvider.Answer(
+                List.of("must-not-be-exposed", "\ud800"));
+        create(invalidUnicode);
+        worker(invalidUnicode).runOnce();
         assertEquals("FAILED_FINAL", service.get(OWNER, ID).status());
         assertEquals("QUESTION_PROVIDER_RESPONSE_INVALID", service.get(OWNER, ID).lastErrorCode());
         assertEquals("", service.get(OWNER, ID).answer());

@@ -246,15 +246,15 @@ class ArchiveQuestionServiceTest {
         String segment = "{\"paragraphId\":\"" + P1
                 + "\",\"startByte\":0,\"endByte\":3,\"paragraphSha256\":\""
                 + hash("甲水泊") + "\"}";
-        String tooMany = "{\"editionManifestSha256\":\"" + MANIFEST
+        String duplicate = "{\"editionManifestSha256\":\"" + MANIFEST
                 + "\",\"blockType\":\"CHAPTER\",\"blockId\":\"" + BLOCK
-                + "\",\"segments\":[" + java.util.stream.IntStream.range(0, 17)
+                + "\",\"segments\":[" + java.util.stream.IntStream.range(0, 2)
                 .mapToObj(ignored -> segment).collect(java.util.stream.Collectors.joining(","))
                 + "],\"selectionSha256\":\"" + "0".repeat(64) + "\"}";
-        ArchivePersonalDataException count = assertThrows(ArchivePersonalDataException.class,
-                () -> service.create(OWNER, ID, path(), "too-many-segments",
-                        bytes("{\"editionId\":\"" + EDITION + "\",\"question\":\"x\",\"anchor\":" + tooMany + "}")));
-        assertEquals("INVALID_REQUEST_JSON", count.code());
+        ArchivePersonalDataException duplicateSegment = assertThrows(ArchivePersonalDataException.class,
+                () -> service.create(OWNER, ID, path(), "duplicate-segments",
+                        bytes("{\"editionId\":\"" + EDITION + "\",\"question\":\"x\",\"anchor\":" + duplicate + "}")));
+        assertEquals("INVALID_TEXT_ANCHOR", duplicateSegment.code());
     }
 
     @Test
@@ -302,22 +302,6 @@ class ArchiveQuestionServiceTest {
             assertEquals("ROUTING_NOT_SUPPORTED", routing.code());
         }
         assertEquals(0, store.mutationReservations);
-    }
-
-    @Test
-    void exactQuestionUtf8LimitSucceedsAndOneByteOverFailsWithoutReservation() {
-        String exactId = "223e4567-e89b-42d3-a456-426614174000";
-        ArchiveMutationResult exact = service.create(OWNER, exactId,
-                "/archive/v1/me/questions/" + exactId, "exact-limit", body("x".repeat(8192)));
-        assertEquals(202, exact.status());
-        int reservations = store.mutationReservations;
-        String overId = "323e4567-e89b-42d3-a456-426614174000";
-        ArchivePersonalDataException over = assertThrows(ArchivePersonalDataException.class,
-                () -> service.create(OWNER, overId, "/archive/v1/me/questions/" + overId,
-                        "over-limit", body("x".repeat(8193))));
-        assertEquals(422, over.status());
-        assertEquals("INVALID_REQUEST_JSON", over.code());
-        assertEquals(reservations, store.mutationReservations);
     }
 
     @Test

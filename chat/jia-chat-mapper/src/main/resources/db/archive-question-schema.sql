@@ -33,7 +33,7 @@ CREATE TABLE archive_question (
     CONSTRAINT chk_archive_question_status CHECK (status IN ('QUEUED', 'RUNNING', 'SUCCEEDED', 'FAILED_RETRYABLE', 'FAILED_FINAL')),
     CONSTRAINT chk_archive_question_content CHECK (edition_manifest_sha256 REGEXP '^[0-9a-f]{64}$' AND block_type IN ('PREFACE', 'CHAPTER') AND JSON_VALID(anchor_json)),
     CONSTRAINT chk_archive_question_responder CHECK (responder_id = 'archive-clerk-v1' AND responder_name = CONVERT(0xE6A188E58DB7E4B9A6E5908F USING utf8mb4) AND responder_mode = 'fallback'),
-    CONSTRAINT chk_archive_question_lengths CHECK (OCTET_LENGTH(selected_text) BETWEEN 1 AND 8192 AND OCTET_LENGTH(question_text) BETWEEN 1 AND 8192 AND OCTET_LENGTH(answer) <= 131072),
+    CONSTRAINT chk_archive_question_lengths CHECK (OCTET_LENGTH(selected_text) > 0 AND OCTET_LENGTH(question_text) > 0),
     CONSTRAINT chk_archive_question_counters CHECK (retry_count BETWEEN 0 AND 2 AND version >= 1 AND current_sequence >= 1),
     CONSTRAINT chk_archive_question_terminal CHECK (((status IN ('SUCCEEDED', 'FAILED_FINAL')) AND completed_at IS NOT NULL) OR ((status IN ('QUEUED', 'RUNNING', 'FAILED_RETRYABLE')) AND completed_at IS NULL)),
     CONSTRAINT chk_archive_question_error CHECK (((status IN ('FAILED_RETRYABLE', 'FAILED_FINAL')) AND last_error_code IS NOT NULL AND last_error_code REGEXP '^[A-Z][A-Z0-9_]{0,63}$') OR ((status IN ('QUEUED', 'RUNNING', 'SUCCEEDED')) AND last_error_code IS NULL)),
@@ -97,7 +97,7 @@ CREATE TABLE archive_question_event (
     CONSTRAINT chk_archive_question_event_id CHECK (question_id REGEXP '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'),
     CONSTRAINT chk_archive_question_event_sequence CHECK (sequence >= 1),
     CONSTRAINT chk_archive_question_event_type CHECK (event_type IN ('QUESTION_QUEUED', 'QUESTION_RUNNING', 'ANSWER_DELTA', 'QUESTION_SUCCEEDED', 'QUESTION_FAILED_RETRYABLE', 'QUESTION_FAILED_FINAL', 'QUESTION_RETRY_QUEUED')),
-    CONSTRAINT chk_archive_question_event_payload CHECK (JSON_VALID(payload_json) AND OCTET_LENGTH(payload_json) BETWEEN 2 AND 32768),
+    CONSTRAINT chk_archive_question_event_payload CHECK (JSON_VALID(payload_json) AND OCTET_LENGTH(payload_json) >= 2),
     CONSTRAINT fk_archive_question_event_question FOREIGN KEY (tenant_id, client_id, owner_jiacn, question_id)
         REFERENCES archive_question (tenant_id, client_id, owner_jiacn, question_id)
         ON UPDATE RESTRICT ON DELETE RESTRICT

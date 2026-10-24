@@ -300,13 +300,7 @@ class ArchivePersonalDataServiceTest {
                                         + "\",\"text\":\"x\",\"anchor\":" + badAnchor + "}")));
         assertEquals("CONTENT_HASH_MISMATCH", mismatch.code());
 
-        String oversized = "水".repeat(6667);
-        ArchivePersonalDataException tooLarge = assertThrows(ArchivePersonalDataException.class,
-                () -> service.putNote(OWNER, "423e4567-e89b-42d3-a456-426614174000",
-                        "/archive/v1/me/notes/423e4567-e89b-42d3-a456-426614174000", "large", bytes(
-                                "{\"expectedVersion\":\"0\",\"editionId\":\"" + EDITION
-                                        + "\",\"text\":\"" + oversized + "\",\"anchor\":null}")));
-        assertEquals("INVALID_TEXT_ANCHOR", tooLarge.code());
+
     }
 
     @Test

@@ -69,12 +69,8 @@ import java.util.regex.Pattern;
  */
 @Named
 public class AgentWorkItemPlanServiceImpl implements AgentWorkItemPlanService {
-    static final int MAX_ITEMS = 8;
     private static final int DEFAULT_MAX_ITEMS = 4;
-    private static final int MAX_OBJECTIVE_UTF8 = 8 * 1024;
-    private static final int MAX_DESCRIPTION_UTF8 = 65_535;
-    private static final int MAX_ABILITIES = 32;
-    private static final int MAX_ATTEMPTS = 10;
+    private static final int SQL_TEXT_MAX_UTF8 = 65_535;
     private static final Set<String> DEPENDENCY_MODES = Set.of("parallel", "sequential");
     private static final Set<String> WORK_TYPES = Set.of(
             "analysis", "implementation", "verification", "review",
@@ -141,10 +137,10 @@ public class AgentWorkItemPlanServiceImpl implements AgentWorkItemPlanService {
         if (request == null) {
             throw invalid("Suggestion request is required");
         }
-        requireUtf8Text(request.getObjective(), "objective", MAX_OBJECTIVE_UTF8, false);
+        requireUtf8Text(request.getObjective(), "objective", null, false);
         int maxItems = request.getMaxItems() == null ? DEFAULT_MAX_ITEMS : request.getMaxItems();
-        if (maxItems < 1 || maxItems > MAX_ITEMS) {
-            throw invalid("maxItems must be between 1 and " + MAX_ITEMS);
+        if (maxItems < 1) {
+            throw invalid("maxItems must be positive");
         }
         String dependencyMode = request.getDependencyMode() == null
                 ? "sequential" : request.getDependencyMode();
@@ -480,8 +476,8 @@ public class AgentWorkItemPlanServiceImpl implements AgentWorkItemPlanService {
     }
 
     private List<NormalizedItem> normalizeItems(List<AgentWorkItemPlanItemDTO> input) {
-        if (input == null || input.isEmpty() || input.size() > MAX_ITEMS) {
-            throw invalid("items must contain between 1 and " + MAX_ITEMS + " entries");
+        if (input == null || input.isEmpty()) {
+            throw invalid("items must not be empty");
         }
         Map<String, Integer> keyOrder = new LinkedHashMap<>();
         for (int index = 0; index < input.size(); index++) {
@@ -496,25 +492,21 @@ public class AgentWorkItemPlanServiceImpl implements AgentWorkItemPlanService {
         List<NormalizedItem> normalized = new ArrayList<>(input.size());
         for (AgentWorkItemPlanItemDTO item : input) {
             requireText(item.getTitle(), "title", 255);
-            requireUtf8Text(item.getDescription(), "description", MAX_DESCRIPTION_UTF8, true);
+            requireUtf8Text(item.getDescription(), "description", SQL_TEXT_MAX_UTF8, true);
             if (!WORK_TYPES.contains(item.getWorkType())) {
                 throw invalid("workType is not supported");
             }
             List<String> abilities = normalizeAbilities(item.getRequiredAbilities());
             int priority = item.getPriority() == null ? 0 : item.getPriority();
-            if (priority < -1000 || priority > 1000) {
-                throw invalid("priority is out of range");
-            }
             boolean required = item.getRequiredItem() == null || item.getRequiredItem();
             int maxAttempts = item.getMaxAttempts() == null ? 3 : item.getMaxAttempts();
-            if (maxAttempts < 1 || maxAttempts > MAX_ATTEMPTS) {
+            if (maxAttempts < 1) {
                 throw invalid("maxAttempts is out of range");
             }
             List<String> dependencies = item.getDependsOn() == null
                     ? List.of() : new ArrayList<>(item.getDependsOn());
-            if (dependencies.size() > MAX_ITEMS || new HashSet<>(dependencies).size()
-                    != dependencies.size()) {
-                throw invalid("dependsOn contains too many or duplicate entries");
+            if (new HashSet<>(dependencies).size() != dependencies.size()) {
+                throw invalid("dependsOn contains duplicate entries");
             }
             for (String dependency : dependencies) {
                 if (!keyOrder.containsKey(dependency) || item.getItemKey().equals(dependency)) {
@@ -531,36 +523,30 @@ public class AgentWorkItemPlanServiceImpl implements AgentWorkItemPlanService {
     }
 
     private void requireAcyclic(List<NormalizedItem> items) {
-        Map<String, NormalizedItem> byKey = new HashMap<>();
-        items.forEach(item -> byKey.put(item.itemKey(), item));
-        Set<String> visiting = new HashSet<>();
-        Set<String> visited = new HashSet<>();
+        Map<String, Integer> remaining = new HashMap<>();
+        Map<String, List<String>> dependents = new HashMap<>();
+        java.util.ArrayDeque<String> ready = new java.util.ArrayDeque<>();
         for (NormalizedItem item : items) {
-            visit(item.itemKey(), byKey, visiting, visited);
+            remaining.put(item.itemKey(), item.dependsOn().size());
+            if (item.dependsOn().isEmpty()) ready.add(item.itemKey());
+            for (String dependency : item.dependsOn()) {
+                dependents.computeIfAbsent(dependency, ignored -> new ArrayList<>()).add(item.itemKey());
+            }
         }
-    }
-
-    private void visit(String key, Map<String, NormalizedItem> byKey,
-            Set<String> visiting, Set<String> visited) {
-        if (visited.contains(key)) {
-            return;
+        int visited = 0;
+        while (!ready.isEmpty()) {
+            String key = ready.removeFirst();
+            visited++;
+            for (String dependent : dependents.getOrDefault(key, List.of())) {
+                if (remaining.compute(dependent, (ignored, count) -> count - 1) == 0) ready.add(dependent);
+            }
         }
-        if (!visiting.add(key)) {
-            throw invalid("dependsOn must not contain a cycle");
-        }
-        for (String dependency : byKey.get(key).dependsOn()) {
-            visit(dependency, byKey, visiting, visited);
-        }
-        visiting.remove(key);
-        visited.add(key);
+        if (visited != items.size()) throw invalid("dependsOn must not contain a cycle");
     }
 
     private List<String> normalizeAbilities(List<String> abilities) {
         if (abilities == null) {
             return List.of();
-        }
-        if (abilities.size() > MAX_ABILITIES) {
-            throw invalid("requiredAbilities contains too many entries");
         }
         List<String> result = new ArrayList<>(abilities.size());
         Set<String> unique = new HashSet<>();
@@ -610,6 +596,8 @@ public class AgentWorkItemPlanServiceImpl implements AgentWorkItemPlanService {
         List<String> dependencyIds = item.dependsOn().stream().map(workItemIds::get).toList();
         String abilityJson = json(item.requiredAbilities(), "requiredAbilities");
         String dependencyJson = json(dependencyIds, "dependsOn");
+        requireUtf8Text(abilityJson, "requiredAbilities", SQL_TEXT_MAX_UTF8, false);
+        requireUtf8Text(dependencyJson, "dependsOn", SQL_TEXT_MAX_UTF8, false);
         String status = dependencyIds.isEmpty()
                 ? AgentTaskWorkItemStatus.READY.value()
                 : AgentTaskWorkItemStatus.PENDING.value();
@@ -939,12 +927,12 @@ public class AgentWorkItemPlanServiceImpl implements AgentWorkItemPlanService {
         }
     }
 
-    private void requireUtf8Text(String value, String field, int maxBytes, boolean nullable) {
+    private void requireUtf8Text(String value, String field, Integer maxBytes, boolean nullable) {
         if (value == null && nullable) {
             return;
         }
         if (value == null || value.isEmpty() || hasUnpairedSurrogate(value)
-                || value.getBytes(StandardCharsets.UTF_8).length > maxBytes
+                || (maxBytes != null && value.getBytes(StandardCharsets.UTF_8).length > maxBytes)
                 || value.codePoints().allMatch(AgentWorkItemPlanServiceImpl::isPadding)
                 || value.codePoints().anyMatch(codePoint -> Character.isISOControl(codePoint)
                     && codePoint != '\n' && codePoint != '\r' && codePoint != '\t')) {

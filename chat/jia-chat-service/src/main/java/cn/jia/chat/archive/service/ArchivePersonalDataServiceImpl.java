@@ -171,8 +171,6 @@ public class ArchivePersonalDataServiceImpl implements ArchivePersonalDataServic
         require(request.expectedVersion() != null && request.editionId() != null && request.text() != null,
                 422, "INVALID_REQUEST_JSON", "Note request is incomplete");
         if (request.anchor() != null) requireAnchorShape(request.anchor());
-        require(request.text().getBytes(StandardCharsets.UTF_8).length <= 20_000,
-                422, "INVALID_TEXT_ANCHOR", "Note text exceeds 20000 UTF-8 bytes");
         long expected = ArchiveWire.decimal(request.expectedVersion(), "INVALID_VERSION");
         return mutate(owner, "PUT", path, key, parsed.canonicalJson(), () -> {
             ActiveEdition active = requireActive(request.editionId());
@@ -298,7 +296,7 @@ public class ArchivePersonalDataServiceImpl implements ArchivePersonalDataServic
     private void validateAnchor(ActiveEdition active, ArchiveTextAnchorDTO anchor) {
         require(active.manifestSha256().equals(anchor.editionManifestSha256())
                         && ("PREFACE".equals(anchor.blockType()) || "CHAPTER".equals(anchor.blockType()))
-                        && anchor.segments() != null && !anchor.segments().isEmpty() && anchor.segments().size() <= 16,
+                        && anchor.segments() != null && !anchor.segments().isEmpty(),
                 422, "INVALID_TEXT_ANCHOR", "Text anchor shape is invalid");
         require(anchor.segments().stream().allMatch(Objects::nonNull),
                 422, "INVALID_TEXT_ANCHOR", "Text anchor segment is invalid");
@@ -331,10 +329,10 @@ public class ArchivePersonalDataServiceImpl implements ArchivePersonalDataServic
             byte[] slice = java.util.Arrays.copyOfRange(bytes, Math.toIntExact(segment.startByte()),
                     Math.toIntExact(segment.endByte()));
             slices.add(slice);
-            selectedBytes += slice.length + (i == 0 ? 0 : 2);
+            selectedBytes += (long) slice.length + (i == 0 ? 0 : 2);
             previousOrdinal = point.paragraphOrdinal();
         }
-        require(selectedBytes > 0 && selectedBytes <= 8192,
+        require(selectedBytes > 0 && selectedBytes <= Integer.MAX_VALUE,
                 422, "INVALID_TEXT_ANCHOR", "Selected text byte length is invalid");
         byte[] joined = joinSlices(slices, Math.toIntExact(selectedBytes));
         require(ArchiveEtags.sha256(joined).equals(anchor.selectionSha256()),

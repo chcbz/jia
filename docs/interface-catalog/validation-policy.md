@@ -115,3 +115,13 @@ AMQP/WS同一wire重复限制128KiB无独立依据，改为与transport真实MED
 - 保留 MIME 语法防响应头注入（不是格式白名单）、实际长度/SHA-256、精确 owner/client/tenant、根inode、路径和符号链接、不可变原子存储保护；现有 `FileSystemPersonalWorkspaceStorageTest` / `PersonalWorkspaceStorageBoundaryTest` 验证隔离与篡改。删除原17字节越界拒绝断言，不新增超过旧上限的大体积正例。
 - 正式交付读取链补齐 `AgentTaskFormalDeliveryDaoImpl.listTaskDeliveries` 遗留的100条上限；limit须为正数（SQL参数含义），不再拒绝服务层完整读取。API272的真实MySQL事务回归发现此遗漏，不能把服务层单测成功当整链成功。
 - API272同时暴露3个Controller已有测试使用旧根级JSON路径；断言按当前公共R信封更新为 `$.data.*`，HTTP状态/`code`、可信身份转发及敏感字段不外泄断言继续保留。这是既有断言同步，不改变生产响应契约，也不删掉失败回归凑绿。
+
+
+### 任务拆分、Archive与托管通信续核（2026-10-24，候选未部署）
+
+核对基线API fa5e610/Web74fcd31；本节仅覆盖这些调用链，不代表全库逐项核实完成。
+- 任务拆分取消8项、能力32项、重试10次、priority ±1000及objective8KiB拒绝；默认4项、重试默认3仍是默认策略，调用方maxItems仍控制建议合并。保留非空/合法Unicode、重复键/能力/依赖、引用/DAG、正数重试、身份与事务幂等。description、required_abilities、dependency_json当前均SQL TEXT，序列化后的65535字节可表示边界必须保留，避免落库失败/截断；不是任意数量限额。DAG用迭代遍历，避免解除8项后递归栈成为隐含限制。
+- Archive取消请求64KiB、手札20000字节、选文16段/8192字节、问题8192字节、答案131072字节和事件32768字节业务额度；前端输入、快照读取、SSE及后端/DDL/catalog同步。保留同一block连续选文、UTF8边界、权威段落/选文/版本摘要、身份隔离、幂等/序列/fence/CAS、非空问题和合法非空答案；byte[]合并须可由int表示，真实资源/网络/数据库错误如实失败，不承诺任意长度均能处理。答案4096字节分块只控制传输批次，不是总量门禁。手札锚点用完整段落，不静默截前缀，不再显示旧限额提示。
+- Archive LONGTEXT不需改列；去note纯容量CHECK，question保留选文/问题非空，event保留JSON_VALID及至少2字节的有效载荷语义。受控迁移候选在chat/jia-chat-mapper/src/main/resources/db/archive-content-capacity-migration.sql，不在普通启动中自动执行。部署前按既有schema/发布锁核对旧CHECK、SHOW CREATE TABLE、备份/行数，执行后读回和initializer核验。MySQL各表ALTER独立提交，不宣称跨表原子；中断按读回事实续行。生产未迁移，不宣称旧限制已消失；回退不得截断新数据或用旧备份覆盖新事实。
+- 托管UDS取消Java重复16KiB帧限制；只读响应允许无害扩展元数据。身份/当前operation/lease/注册证明/ready时序/manifest摘要/本地socket权限/真实传输超时保留。apiKey、enrollmentSecret、engineThreadId、profileRef、commands/command等凭据或执行路由仍拒绝，不将它们视作普通元数据；manifest是实际安装授权合同，不随响应展示扩展透传执行字段。公共M关联字段必须一致，不能将无害扩展兼容变成未知命令执行。
+- 复用现有关键测试，只删失效纯容量断言或调整已有夹具；不增加“超过旧上限仍成功”的非关键正例。正式结果与源码、迁移、上线分别记录。

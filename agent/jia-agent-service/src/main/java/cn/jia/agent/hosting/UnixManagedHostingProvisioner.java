@@ -34,7 +34,8 @@ public final class UnixManagedHostingProvisioner implements ManagedHostingProvis
     private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(UnixManagedHostingProvisioner.class);
     static final String PROTOCOL = "runtime-hosting-v1";
     private static final long MAX_SAFE_INTEGER = 9_007_199_254_740_991L;
-    private static final int MAX_FRAME = 16384;
+    private static final Set<String> FORBIDDEN_RESPONSE_FIELDS = Set.of(
+            "apiKey", "enrollmentSecret", "engineThreadId", "profileRef", "commands", "command");
     private static final JsonMapper JSON = JsonMapper.builder().enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
             .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS).build();
     private final AgentHostingRentProperties rent;
@@ -58,7 +59,8 @@ public final class UnixManagedHostingProvisioner implements ManagedHostingProvis
             request.put("protocol", PROTOCOL); request.put("method", "capabilities");
             request.put("tenantId", tenantId); request.put("clientId", clientId); request.put("ownerJiacn", ownerJiacn);
             var response = exchange(request, requestId);
-            return response != null && response.keySet().equals(Set.of("protocol", "method", "tenantId", "clientId", "ownerJiacn", "available", "hostId"))
+            return response != null && response.keySet().containsAll(Set.of("protocol", "method", "tenantId", "clientId", "ownerJiacn", "available", "hostId"))
+                    && java.util.Collections.disjoint(response.keySet(), FORBIDDEN_RESPONSE_FIELDS)
                     && echoes(request, response) && Boolean.TRUE.equals(response.get("available")) && exact(response.get("hostId"), 100);
         } catch (Exception unavailable) {
             LOG.warn("Managed capability unavailable requestId={} stage=capabilities errorCode=HOSTING_EXCHANGE_UNAVAILABLE causeClass={}", requestId, unavailable.getClass().getSimpleName());
@@ -121,7 +123,8 @@ public final class UnixManagedHostingProvisioner implements ManagedHostingProvis
         var allowed = new java.util.HashSet<>(expected.keySet());
         allowed.addAll(Set.of("outcome", "installationId", "manifest", "manifestSha256", "enrollmentSecretSha256",
                 "enrollmentExpiresAt", "provisionGeneration", "hostId"));
-        if (!response.keySet().equals(allowed) || !echoes(expected, response) || !"PREPARED".equals(response.get("outcome"))
+        if (!response.keySet().containsAll(allowed)
+                || !java.util.Collections.disjoint(response.keySet(), FORBIDDEN_RESPONSE_FIELDS) || !echoes(expected, response) || !"PREPARED".equals(response.get("outcome"))
                 || !installation(response.get("installationId")) || !digest(response.get("manifestSha256"))
                 || !digest(response.get("enrollmentSecretSha256")) || integral(response.get("enrollmentExpiresAt")) <= 0
                 || integral(response.get("provisionGeneration")) <= 0 || !exact(response.get("hostId"), 100)) return null;
@@ -151,7 +154,8 @@ public final class UnixManagedHostingProvisioner implements ManagedHostingProvis
         var allowed = new java.util.HashSet<>(expected.keySet());
         allowed.addAll(Set.of("outcome", "hostId", "runtimeInstanceId", "sessionGeneration", "serviceReadyAt", "registeredAt",
                 "executorReady", "durableReady", "evidenceRef"));
-        if (!response.keySet().equals(allowed) || !echoes(expected, response) || !candidate.hostId().equals(response.get("hostId"))
+        if (!response.keySet().containsAll(allowed)
+                || !java.util.Collections.disjoint(response.keySet(), FORBIDDEN_RESPONSE_FIELDS) || !echoes(expected, response) || !candidate.hostId().equals(response.get("hostId"))
                 || !"SERVICE_READY".equals(response.get("outcome")) || !exact(response.get("runtimeInstanceId"), 100)
                 || p.agentId().equals(response.get("runtimeInstanceId")) || integral(response.get("sessionGeneration")) <= 0
                 || !Boolean.TRUE.equals(response.get("executorReady")) || !Boolean.TRUE.equals(response.get("durableReady"))
@@ -196,7 +200,6 @@ public final class UnixManagedHostingProvisioner implements ManagedHostingProvis
         var message = cn.jia.core.entity.ProtocolMessage.event(requestId, "hosting." + request.get("method"),
                 java.util.UUID.randomUUID().toString(), hostingData(request));
         byte[] frame = (JSON.writeValueAsString(message) + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        if (frame.length > MAX_FRAME) throw new IOException("Managed frame too large");
         long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(config.timeoutMs());
         try (SocketChannel channel = SocketChannel.open(StandardProtocolFamily.UNIX); Selector selector = Selector.open()) {
             channel.configureBlocking(false);
@@ -222,7 +225,6 @@ public final class UnixManagedHostingProvisioner implements ManagedHostingProvis
                         if (buffer.hasRemaining()) throw new IOException("Multiple managed frames");
                         return hostingResponse(message, JSON.readValue(response.toByteArray(), new TypeReference<Map<String, Object>>() { }));
                     }
-                    if (response.size() >= MAX_FRAME) throw new IOException("Managed response too large");
                     response.write(value);
                 }
                 buffer.clear();
@@ -239,7 +241,8 @@ public final class UnixManagedHostingProvisioner implements ManagedHostingProvis
     }
     static Map<String, Object> hostingResponse(cn.jia.core.entity.ProtocolMessage<?> request,
             Map<String, Object> response) throws IOException {
-        if (response == null || !response.keySet().equals(Set.of("protocolVersion", "requestId", "messageType", "messageId", "correlationId", "code", "msg", "data"))
+        if (response == null || !response.keySet().containsAll(Set.of("protocolVersion", "requestId", "messageType", "messageId", "correlationId", "code", "msg", "data"))
+                || !java.util.Collections.disjoint(response.keySet(), FORBIDDEN_RESPONSE_FIELDS)
                 || !(response.get("protocolVersion") instanceof Integer version) || version != 1
                 || !request.requestId().equals(response.get("requestId"))
                 || !(request.messageType() + ".result").equals(response.get("messageType"))

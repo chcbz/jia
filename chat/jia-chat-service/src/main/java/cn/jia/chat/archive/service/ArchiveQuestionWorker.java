@@ -341,15 +341,9 @@ public class ArchiveQuestionWorker {
                 failIfCurrent(heartbeat, claim, "QUESTION_PROVIDER_RESPONSE_INVALID", false);
                 return;
             }
-            int totalBytes = 0;
             StringBuilder completeAnswer = new StringBuilder();
             for (String delta : answer.deltas()) {
                 if (!validUnicode(delta)) {
-                    failIfCurrent(heartbeat, claim, "QUESTION_PROVIDER_RESPONSE_INVALID", false);
-                    return;
-                }
-                totalBytes = Math.addExact(totalBytes, delta.getBytes(StandardCharsets.UTF_8).length);
-                if (totalBytes > ArchiveQuestionServiceImpl.MAX_ANSWER_BYTES) {
                     failIfCurrent(heartbeat, claim, "QUESTION_PROVIDER_RESPONSE_INVALID", false);
                     return;
                 }
@@ -394,8 +388,6 @@ public class ArchiveQuestionWorker {
             if (question == null) return false;
             OutboxRecord outbox = store.findOutbox(claim.owner(), claim.questionId(), true);
             if (!currentLease(outbox, claim.fencingToken()) || !"RUNNING".equals(question.status())) return false;
-            require(answer.getBytes(StandardCharsets.UTF_8).length <= ArchiveQuestionServiceImpl.MAX_ANSWER_BYTES,
-                    "Persisted answer exceeds limit");
             Instant now = clock.instant();
             long version = ArchiveWire.increment(question.version());
             long finalSequence = ArchiveWire.increment(question.currentSequence(), deltas.size() + 1L);

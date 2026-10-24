@@ -88,7 +88,6 @@ CREATE TABLE archive_note (
     CONSTRAINT chk_archive_note_id CHECK (note_id REGEXP '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'),
     CONSTRAINT chk_archive_note_state CHECK (state IN ('ACTIVE', 'DELETED')),
     CONSTRAINT chk_archive_note_version CHECK (version >= 1),
-    CONSTRAINT chk_archive_note_text_bytes CHECK (text IS NULL OR OCTET_LENGTH(text) <= 20000),
     CONSTRAINT chk_archive_note_payload CHECK ((state = 'ACTIVE' AND text IS NOT NULL AND deleted_at IS NULL AND ((block_id IS NULL AND anchor_json IS NULL) OR (block_id IS NOT NULL AND anchor_json IS NOT NULL))) OR (state = 'DELETED' AND text IS NULL AND block_id IS NULL AND anchor_json IS NULL AND deleted_at IS NOT NULL)),
     CONSTRAINT fk_archive_note_edition FOREIGN KEY (edition_id) REFERENCES archive_edition (edition_id)
         ON UPDATE RESTRICT ON DELETE RESTRICT,

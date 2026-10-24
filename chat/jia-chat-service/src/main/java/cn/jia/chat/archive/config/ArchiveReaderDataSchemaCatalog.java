@@ -108,7 +108,6 @@ public final class ArchiveReaderDataSchemaCatalog {
                         "chk_archive_note_id", "regexp_like(note_id,'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$')",
                         "chk_archive_note_state", "state in ('ACTIVE','DELETED')",
                         "chk_archive_note_version", "version>=1",
-                        "chk_archive_note_text_bytes", "(text is null) or (octet_length(text)<=20000)",
                         "chk_archive_note_payload", "((state='ACTIVE') and (text is not null) and (deleted_at is null) and (((block_id is null) and (anchor_json is null)) or ((block_id is not null) and (anchor_json is not null)))) or ((state='DELETED') and (text is null) and (block_id is null) and (anchor_json is null) and (deleted_at is not null))")));
         tables.put("archive_idempotency", table(
                 columns(
