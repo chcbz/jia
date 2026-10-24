@@ -305,8 +305,9 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         var auth=db.findAuthorization("0",ACTOR.clientId(),id);
         assertTrue(Boolean.TRUE.equals(tx.execute(s->service.qualifies(scope(),auth))));
         assertEquals(id,service.admit(scope(),"pdf-export",id,()->service.taskBinding("0",ACTOR.clientId(),"exec-adopted","grant-adopted",1,AGENT,id)).get("skillInstallationId"));
-        var listed=service.skills(ACTOR,AGENT,false);assertEquals(1,((List<?>)listed.get("items")).size());
-        var item=object(((List<?>)listed.get("items")).getFirst());assertNull(item.get("latestChange"));assertTrue(((List<?>)item.get("allowedActions")).contains("DISABLE"));
+        var listed=service.skills(ACTOR,AGENT,false);
+        var matches=((List<?>)listed.get("items")).stream().map(SkillManagementCodec::object).filter(row->"pdf-export".equals(row.get("skillKey"))).toList();
+        assertEquals(1,matches.size());var item=matches.getFirst();assertNull(item.get("latestChange"));assertTrue(((List<?>)item.get("allowedActions")).contains("DISABLE"));
         assertEquals(1,count("economy_skill_order"));assertEquals(1,count("economy_skill_entitlement"));assertEquals(95_000_000L,wallet());
         assertTrue(service.descriptors(new SkillCapabilityLookup.Scope("0",ACTOR.clientId(),"wrong-owner",AGENT)).isEmpty());
         assertTrue(service.descriptors(new SkillCapabilityLookup.Scope("0","other-client",ACTOR.ownerJiacn(),AGENT)).isEmpty());
@@ -326,7 +327,11 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
             assertTrue(service.descriptors(scope()).isEmpty(),key);
         }
         jdbc.update("UPDATE economy_skill_installation_authorization SET adoption_evidence_json=?",original);
-        jdbc.update("UPDATE economy_skill_installation SET package_sha256=?",new byte[32]);assertTrue(service.descriptors(scope()).isEmpty());
+        // Mutate the untrusted projection, not the original installation's FK-protected package.
+        var changedPackage=read(jdbc.queryForObject("SELECT package_json FROM economy_skill_installation_authorization",String.class).getBytes(java.nio.charset.StandardCharsets.UTF_8),"PackageRef");
+        changedPackage.put("packageSha256","0".repeat(64));
+        var changedProof=read(original.getBytes(java.nio.charset.StandardCharsets.UTF_8),null);changedProof.put("package",changedPackage);changedProof.remove("evidenceSha256");changedProof.put("evidenceSha256",hash("cyf.skill.adoption.v1",changedProof));
+        jdbc.update("UPDATE economy_skill_installation_authorization SET package_json=?,adoption_evidence_json=?",json(changedPackage),json(changedProof));assertTrue(service.descriptors(scope()).isEmpty());
         assertEquals(beforeWallet,wallet());assertEquals(1,count("economy_skill_order"));assertEquals(0,count("economy_skill_change_command"));
     }
     @Test void historicalActiveWithoutExplicitAdoptionNeverQualifiesOrCreatesNewPurchase() throws Exception {
