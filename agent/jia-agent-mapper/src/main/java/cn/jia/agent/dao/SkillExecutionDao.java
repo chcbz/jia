@@ -7,5 +7,6 @@ public interface SkillExecutionDao {
     void insertReady(SkillExecutionEntity row);
     SkillExecutionEntity find(String tenant, String client, String owner, String execution);
     SkillExecutionEntity lock(String tenant, String client, String owner, String execution);
+    int bindTaskSkill(String tenant,String client,String owner,String execution,String snapshot,long version,String binding,long now);
     boolean compareAndSet(SkillExecutionEntity row, long expectedVersion, String expectedPhase);
 }

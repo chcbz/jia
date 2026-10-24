@@ -32,32 +32,11 @@ public final class SkillInstallDispatchService {
         this.app=app;this.market=market;this.skills=skills;this.versions=versions;this.authentication=authentication;
         this.commands=commands;this.sessions=sessions;tx=new TransactionTemplate(manager);
     }
-    public AgentRawCommandDispatchResult dispatch(String tenant,String client,String ownerJiacn,String order,String agent,String commandId,byte[] wire) {
-        require("0".equals(tenant) && ownerJiacn!=null && !ownerJiacn.isBlank() && !"0".equals(ownerJiacn),403,"SKILL_DELIVERY_FENCED");
-        require(!TransactionSynchronizationManager.isActualTransactionActive(),503,"SKILL_DISPATCH_TRANSACTION_OPEN");
-        var proof=authentication.currentRegisteredProof(tenant,client,agent);
-        authentication.withFence(proof,false,()->tx.execute(s->{
-            var hint=app.order(tenant,client,order); require(hint!=null,403,"SKILL_DELIVERY_FENCED");
-            var actor=new HostingRentHttp.Actor(hint.getBuyerId(),tenant,client,ownerJiacn);
-            require(skills.available(actor),503,"SKILL_MARKETPLACE_DISABLED");
-            skills.actorLock(actor); versions.requireOwned(actor,agent,null,true);
-            var o=market.selectOrderForUpdate(tenant,client,order);
-            var i=app.byCommand(tenant,client,commandId);
-            require(o!=null && "INSTALLING".equals(o.getStatus()) && i!=null && agent.equals(i.getTargetAgentId())
-                    && order.equals(i.getOrderId()) && "INSTALLING".equals(i.getStatus()),403,"SKILL_DELIVERY_FENCED");
-            var binding=app.deliveryBinding(tenant,client,i.getInstallationId());
-            skills.requireReady(actor,agent,proof);
-            requireBinding(binding,agent,proof);
-            var d=commands.lockDelivery(tenant,client,ownerJiacn,commandId);
-            SkillInstallResultService.requireCurrentDelivery(i,d,ownerJiacn,true);
-            var draft=AgentCommandCanonicalCodec.decodeBusinessBytes(d.getCommandPayload());
-            require("0".equals(draft.tenantId()) && client.equals(draft.clientId())
-                    && ownerJiacn.equals(draft.ownerJiacn()) && commandId.equals(draft.commandId())
-                    && order.equals(draft.taskId()) && agent.equals(draft.targetAgentId())
-                    && Arrays.equals(AgentCommandCanonicalCodec.sha256(d.getCommandPayload()),d.getCommandPayloadHash())
-                    && Arrays.equals(wire,AgentCommandProtocolSupport.wireBytes(draft,d.getActiveMessageId(),d.getActiveAttempt(),d)),403,"SKILL_DELIVERY_FENCED");
-            return null;
-        }));
-        return sessions.getObject().dispatch(tenant,client,agent,sessionFence(proof),wire);
+    private SkillManagementService management;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setManagement(SkillManagementService management) {this.management=management;}
+    public AgentRawCommandDispatchResult dispatch(String tenant,String client,String owner,String change,String agent,String commandId,byte[] wire) {
+        require(management!=null,503,"SKILL_STATE_UNAVAILABLE");
+        return management.dispatch(tenant,client,owner,change,agent,commandId,wire);
     }
 }

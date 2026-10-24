@@ -24,6 +24,12 @@ public final class InstalledSkillDescriptorService implements InstalledSkillDesc
         this.identities=Objects.requireNonNull(identities);this.market=Objects.requireNonNull(market);
         this.app=Objects.requireNonNull(app);this.packages=Objects.requireNonNull(packages);
     }
+    private SkillManagementService management;
+    private cn.jia.economy.mapper.EconomySkillManagementMapper managed;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setManagement(SkillManagementService management,cn.jia.economy.mapper.EconomySkillManagementMapper managed) {
+        this.management=management;this.managed=managed;
+    }
     private SkillCostInfoSource costs;
     @org.springframework.beans.factory.annotation.Autowired
     public void setCostInfoSource(SkillCostInfoSource costs) {this.costs=Objects.requireNonNull(costs);}
@@ -31,8 +37,9 @@ public final class InstalledSkillDescriptorService implements InstalledSkillDesc
         Objects.requireNonNull(scope);
         try {
             if(!scope.agentId().equals(identities.requireCanonicalAgentIdInScope(scope.tenantId(),scope.clientId(),
-                    scope.ownerJiacn(),scope.agentId()))) throw new SourceUnavailable();
-            var rows=Objects.requireNonNull(market.selectEntitlementsByAgent(scope.tenantId(),scope.clientId(),scope.agentId()));
+                    scope.ownerJiacn(),scope.agentId()))) throw new SourceUnavailable(SourceUnavailable.Reason.FORBIDDEN,null);
+            var rows=Objects.requireNonNull(market.selectEntitlementsByAgent(scope.tenantId(),scope.clientId(),scope.agentId())).stream()
+                    .filter(e->managed==null||managed.findAuthorization(scope.tenantId(),scope.clientId(),e.getInstallationId())==null).toList();
             var result=new ArrayList<Descriptor>();
             for(var e:rows) {
                 if(!exact(scope,e.getTenantId(),e.getClientId(),e.getTargetAgentId()) || e.getSkillKey()==null
@@ -54,6 +61,7 @@ public final class InstalledSkillDescriptorService implements InstalledSkillDesc
                         result.set(index,unavailable(original,"SKILL_INSTALLATION_CHANGED"));
                 }
             }
+            if(management!=null)result.addAll(management.descriptors(scope));
             // Decoration changes no package/manifest identity or readiness reason. Snapshot consumers
             // retain these informational bytes at admission; a later price update does not invalidate work.
             if(costs!=null) {
@@ -67,6 +75,11 @@ public final class InstalledSkillDescriptorService implements InstalledSkillDesc
             }
             return new Snapshot(result);
         } catch(SourceUnavailable failure) { throw failure; }
+        catch(cn.jia.agent.service.impl.AgentServiceImpl.AgentBizException failure) {
+            var reason=cn.jia.agent.common.AgentErrorConstants.AGENT_FORBIDDEN.equals(failure.getCode())
+                    ? SourceUnavailable.Reason.FORBIDDEN : SourceUnavailable.Reason.UNAVAILABLE;
+            throw new SourceUnavailable(reason,failure);
+        }
         catch(RuntimeException failure) { throw new SourceUnavailable(failure); }
     }
     private Descriptor descriptor(SkillCapabilityLookup.Scope s,SkillEntitlementEntity e) {

@@ -703,6 +703,7 @@ class JuyitingWorkflowMySqlTest {
         final ChatDeliberationService deliberation;
         final ChatDeliberationOutboxService outbox;
         final ChatDeliveryRevisionService revisions;
+        final ChatSkillPackagePreparationService packagePreparation=mock(ChatSkillPackagePreparationService.class);
         final ChatDeliveryRevisionService.BoundRevision bound;
         final ChatDispatchOutboxEntity event;
         final ChatDeliberationOutboxService.Claim claim;
@@ -749,6 +750,7 @@ class JuyitingWorkflowMySqlTest {
                     new cn.jia.agent.service.AgentTaskExecutionGrantService.Admission("revision-grant",1,1,"wuyong",null,false,List.of(),null,null,1L,1L,"a".repeat(64),null,null));
             when(dispatchAuthority.incoming(anyString(),anyString(),anyString(),anyString(),anyString()))
                     .thenAnswer(call -> new ChatDispatchAuthorityService.Binding(null,null,call.getArgument(2)));
+            when(dispatchAuthority.forTurn(any())).thenAnswer(call -> new ChatDispatchAuthorityService.Binding(null,call.getArgument(0),"owner"));
             context.registerBean(ChatDispatchAuthorityService.class,()->dispatchAuthority);
             context.registerBean(ChatDeliberationService.class,()->new ChatDeliberationService(dao,conversations,messages,agents));
             context.registerBean(ChatDeliberationOutboxService.class,()->new ChatDeliberationOutboxService(dao));
@@ -756,7 +758,7 @@ class JuyitingWorkflowMySqlTest {
                     finalProvider.getBeanProvider(ChatActionFinalService.class),context.getBeanProvider(ChatDeliberationService.class),reviews,typed,
                     domain.locks,domain.context.getBean(cn.jia.agent.service.AgentTaskFormalDeliveryReadService.class),domain.decisions,
                     new ChatBountyBindingStore(jdbc),conversations,new JuyitingConversationScopeService(null,agents),contexts,
-                    mock(ChatSkillPackagePreparationService.class),context.getBean(ChatDeliberationOutboxService.class)));
+                    packagePreparation,context.getBean(ChatDeliberationOutboxService.class),dispatchAuthority));
             context.refresh();deliberation=context.getBean(ChatDeliberationService.class);outbox=context.getBean(ChatDeliberationOutboxService.class);
             revisions=context.getBean(ChatDeliveryRevisionService.class);
             assertTrue(AopUtils.isAopProxy(deliberation));assertTrue(AopUtils.isAopProxy(revisions));assertTrue(AopUtils.isAopProxy(outbox));
@@ -810,6 +812,31 @@ class JuyitingWorkflowMySqlTest {
         try(var r=new RevisionHarness()) {r.consume();r.committedOnce();
             assertEquals("COMMITTED",r.revisions.read(r.bound.parent().outcome()).get("state"));
             assertNull(r.outbox.claim(r.event,"second-worker",System.currentTimeMillis(),1000));
+        }
+    }
+    @Test void crossOwnerRevisionUsesExecutorPackagesWithOriginalOwnerDatabaseWrites() throws Exception {
+        try(var r=new RevisionHarness()) {
+            var authority=r.context.getBean(ChatDispatchAuthorityService.class);
+            when(authority.forTurn(any())).thenAnswer(call->new ChatDispatchAuthorityService.Binding(null,call.getArgument(0),"external-owner"));
+            doAnswer(call->{assertFalse(org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive());return null;})
+                    .when(r.packagePreparation).prepare(any());
+            r.consume();r.committedOnce();
+            verify(r.packagePreparation).prepare(new cn.jia.agent.service.SkillCapabilityLookup.Scope("0","client","external-owner","wuyong"));
+            assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM chat_request WHERE owner_jiacn <> 'owner'",Integer.class));
+        }
+    }
+    @Test void revocationBetweenPackagePreparationAndCommitPersistsRejectionWithoutChildOrDomainChange() throws Exception {
+        try(var r=new RevisionHarness()) {
+            var authority=r.context.getBean(ChatDispatchAuthorityService.class);
+            when(authority.forTurn(any())).thenAnswer(call->new ChatDispatchAuthorityService.Binding(null,call.getArgument(0),"external-owner"))
+                    .thenThrow(new ChatDeliberationException(ChatDeliberationException.Reason.NOT_FOUND_OR_FORBIDDEN,"revoked"));
+            r.consume();
+            assertEquals("reviewing",jdbc.queryForObject("SELECT reward_status FROM agent_task_meta",String.class));
+            assertEquals("submitted",jdbc.queryForObject("SELECT state FROM agent_task_formal_delivery",String.class));
+            assertEquals(1,jdbc.queryForObject("SELECT COUNT(*) FROM chat_request",Integer.class));
+            var receipt=ChatTaskDeliveryReviewStore.committedReceipt(reviews.byKey(OWNER,"task",r.event.getEventId(),false));
+            assertEquals("REJECTED",receipt.state());assertEquals("DELIVERY_REVIEW_FORBIDDEN",receipt.errorCode());
+            assertEquals("SENT",r.dao.findOutboxById("0","owner","client",r.event.getEventId()).getStatus());
         }
     }
     @Test void naturalRevisionReceiptFailureRollsBackDomainChildDispatchAndAckThenSameEventRecovers() throws Exception {

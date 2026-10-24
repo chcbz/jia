@@ -229,6 +229,32 @@ class ControlledImageFollowupV3SchemaInitializerTest {
                         extraChecks));
     }
 
+    @Test void skillProtocolRestartAcceptsOnlyExactEnforcedCompleteCatalog() {
+        for(String drift:List.of("none","weak","missingDigestFence","unknownProtocol","unenforced","extraCheck","partialColumn","nullableProtocol","wrongDigestType","wrongIndex","weakConsent")) {
+            var columns=executionColumns(true);var checks=executionChecks(true);var indexes=executionIndexes(true);
+            var protocol=checks.stream().filter(row->"chk_pwex_execution_protocol".equals(row.get("constraint_name"))).findFirst().orElseThrow();
+            String exact=SkillExecutionSchemaInitializer.protocolCatalogCheck();
+            protocol.put("check_clause",exact);
+            switch(drift) {
+                case "weak" -> protocol.put("check_clause","1=1");
+                case "missingDigestFence" -> protocol.put("check_clause",exact.replace("(runtime_input_snapshot_digest is not null)","(1=1)"));
+                case "unknownProtocol" -> protocol.put("check_clause",exact.replace("(execution_protocol_version = 4)","(execution_protocol_version = 5)"));
+                case "unenforced" -> protocol.put("enforced","NO");
+                case "extraCheck" -> checks.add(check("chk_pwex_execution_protocol_shadow","YES","1=1"));
+                case "partialColumn" -> columns.removeLast();
+                case "nullableProtocol" -> columns.stream().filter(row->"execution_protocol_version".equals(row.get("column_name"))).findFirst().orElseThrow().put("is_nullable","YES");
+                case "wrongDigestType" -> columns.getLast().put("column_type","varchar(64)");
+                case "wrongIndex" -> indexes.getLast().put("column_name","controlled_consent_id");
+                case "weakConsent" -> checks.stream().filter(row->"chk_pwex_controlled_consent".equals(row.get("constraint_name"))).findFirst().orElseThrow().put("check_clause","1=1");
+            }
+            if(List.of("weak","missingDigestFence","unknownProtocol").contains(drift))assertNotEquals(exact,protocol.get("check_clause"),drift);
+            if(drift.equals("none"))assertDoesNotThrow(()->ControlledImageFollowupV3SchemaInitializer
+                    .validateExecutionRestartCatalog(columns,indexes,checks));
+            else assertThrows(IllegalStateException.class,()->ControlledImageFollowupV3SchemaInitializer
+                    .validateExecutionRestartCatalog(columns,indexes,checks),drift);
+        }
+    }
+
     @Test void tableCatalogRejectsMissingExtraAndReorderedColumnsBeforeAcceptingRuntime() {
         var expected=ControlledImageFollowupV3SchemaInitializer.operationGrantColumnDefinitions();
         var pristine=columns(expected);

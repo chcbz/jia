@@ -228,9 +228,10 @@ public final class ControlledImageFollowupV3SchemaInitializer implements Initial
         validateOwnedColumns(EXECUTION_TABLE, executionExtensionColumns());
         validateIndex(EXECUTION_TABLE, "uk_pwex_operation_grant", true,
                 List.of("tenant_id", "client_id", "owner_jiacn", "operation_grant_id"));
-        validateOwnedChecks(EXECUTION_TABLE, Map.of(
+        validateOwnedChecks(EXECUTION_TABLE, withInstalledSkillProtocolCheck(Map.of(
                 "chk_pwex_controlled_consent", ADDITIVE_CHECKS.get("chk_pwex_controlled_consent"),
-                "chk_pwex_execution_protocol", ADDITIVE_CHECKS.get("chk_pwex_execution_protocol")));
+                "chk_pwex_execution_protocol", ADDITIVE_CHECKS.get("chk_pwex_execution_protocol")),
+                checks(EXECUTION_TABLE)));
     }
 
     private void validateNewTable(String table, Map<String, Column> expectedColumns,
@@ -471,7 +472,7 @@ public final class ControlledImageFollowupV3SchemaInitializer implements Initial
 
         Map<String, Column> v3Columns = executionRestartV3Columns();
         Map<String, Index> v3Indexes = executionRestartV3Indexes();
-        Map<String, String> v3Checks = executionRestartV3Checks();
+        Map<String, String> v3Checks = withInstalledSkillProtocolCheck(executionRestartV3Checks(), checks);
         if (!names(columns, "column_name").equals(v3Columns.keySet())
                 || !distinctNames(indexes, "index_name").equals(v3Indexes.keySet())
                 || !names(checks, "constraint_name").equals(v3Checks.keySet())) {
@@ -480,6 +481,21 @@ public final class ControlledImageFollowupV3SchemaInitializer implements Initial
         validateExactColumns("controlled execution v3", columns, v3Columns);
         validateExactIndexCatalog("controlled execution v3", indexes, v3Indexes);
         validateExactChecks("controlled execution v3", checks, v3Checks);
+    }
+
+    /** Explicit protocol-4 installation extends exactly one V3 CHECK. Recognize only that
+     * complete expression, never a column/flag/name alone; ordinary validation still enforces
+     * exact columns, indexes, CHECK names, predicates and enforcement. No DDL is performed here. */
+    private static Map<String, String> withInstalledSkillProtocolCheck(Map<String, String> expected,
+            List<Map<String, Object>> observed) {
+        String skillCheck = SkillExecutionSchemaInitializer.protocolCatalogCheck();
+        var protocol = observed.stream().filter(row ->
+                "chk_pwex_execution_protocol".equals(text(row, "constraint_name"))).toList();
+        if (protocol.size() != 1 || !canonicalCheck(skillCheck)
+                .equals(canonicalCheck(text(protocol.getFirst(), "check_clause")))) return expected;
+        var current = new LinkedHashMap<>(expected);
+        current.put("chk_pwex_execution_protocol", skillCheck);
+        return java.util.Collections.unmodifiableMap(current);
     }
 
     static boolean isOwnedExecutionColumn(String name) {

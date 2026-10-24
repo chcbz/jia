@@ -299,15 +299,54 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         sendEvent(session, "connected", connected);
     }
 
+    private cn.jia.agent.skill.SkillManagementService skillManagement;
+    @Autowired(required=false)
+    public void setSkillManagement(cn.jia.agent.skill.SkillManagementService management) {this.skillManagement=management;}
+
+    private boolean handleManagedSkillWire(WebSocketSession session,String raw) {
+        Map<String,Object> peek;
+        try {peek=STRICT_RAW_COMMAND_JSON.readValue(raw,MESSAGE_TYPE);}catch(RuntimeException invalid){return false;}
+        Object d=peek.get("data");
+        if(!(d instanceof Map<?,?> data))return false;
+        boolean result="SKILL_CHANGE_RESULT".equals(data.get("resultType"));
+        boolean ack="command.ack".equals(peek.get("messageType"))&&data.containsKey("skillChangeId");
+        if(!result&&!ack)return false;
+        try {
+            if(skillManagement==null||!successfullyRegisteredAgentIds(session.getId()).contains(sessionAgentId(session)))
+                throw new cn.jia.agent.skill.SkillMarketplaceException(401,"UNAUTHENTICATED");
+            runtimeAuthentication.validateCurrent(sessionProof(session),true);
+            var envelope=cn.jia.agent.skill.SkillManagementCodec.read(raw.getBytes(java.nio.charset.StandardCharsets.UTF_8),result?"Result":"CommandAck");
+            if(result) {
+                var receipt=skillManagement.result(sessionProof(session),envelope);
+                synchronized(session){session.sendMessage(new TextMessage(cn.jia.agent.skill.SkillManagementCodec.json(receipt)));}
+            } else skillManagement.acknowledge(sessionProof(session),envelope);
+        } catch(Exception failure) {
+            String code=failure instanceof cn.jia.agent.skill.SkillMarketplaceException e?e.code():
+                    failure instanceof IllegalArgumentException&&"AGENT_RUNTIME_UNAUTHENTICATED".equals(failure.getMessage())?"UNAUTHENTICATED":"INTERNAL_ERROR";
+            String request=peek.get("requestId") instanceof String id?id:"invalid";
+            String message=peek.get("messageId") instanceof String id?id:"invalid";
+            try {
+                cn.jia.agent.skill.SkillManagementCodec.validate("Id",request);cn.jia.agent.skill.SkillManagementCodec.validate("Id",message);
+            } catch(RuntimeException invalid){request="invalid";message="invalid";}
+            var error=cn.jia.agent.skill.SkillManagementCodec.map("protocolVersion",1,"requestId",request,"messageType",result?"work.result.receipt":"command.ack",
+                "messageId","error_"+java.util.UUID.randomUUID().toString().replace("-",""),"correlationId",message,"code",code,"msg","Skill message rejected","data",null);
+            try {synchronized(session){session.sendMessage(new TextMessage(cn.jia.agent.skill.SkillManagementCodec.json(error)));}}
+            catch(Exception unavailable){log.warn("Skill result receipt transport unavailable");}
+        }
+        return true;
+    }
+
     private final ThreadLocal<cn.jia.core.entity.ProtocolMessage<java.util.Map<String,Object>>> incomingWire = new ThreadLocal<>();
 
     @Override
     protected void handleTextMessage(WebSocketSession session, TextMessage message) {
+        if(handleManagedSkillWire(session,message.getPayload()))return;
         try {
             var envelope=cn.jia.agent.common.AgentMessageWire.decode(STRICT_RAW_COMMAND_JSON.readValue(message.getPayload(),MESSAGE_TYPE));
             // Current transport identity is independent of an immutable result's executing boot.
             if(envelope.data().containsKey("runtimeInstanceId")&&!sessionProof(session).scope().runtimeInstanceId().equals(envelope.data().get("runtimeInstanceId")))
                 throw new IllegalArgumentException("Runtime proof mismatch");
+            if("agent.register".equals(envelope.messageType()))cn.jia.agent.skill.SkillManagementCodec.validateEmbeddedDeclaration(message.getPayload());
             incomingWire.set(envelope);
             var business=cn.jia.agent.common.AgentMessageWire.business(envelope);
             handlePrivateMessage(session,new TextMessage(STRICT_RAW_COMMAND_JSON.writeValueAsString(business)));
@@ -336,7 +375,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         // Dedicated durable skill branch BEFORE generic task normalization; never completes coding work.
         if ("SKILL_INSTALL_RESULT".equals(payload.get("resultType"))) {
             try {
-                handleSkillInstallResult(session,STRICT_RAW_COMMAND_JSON.readValue(message.getPayload(),MESSAGE_TYPE));
+                sendProtocolError(session,payload,"ENDPOINT_RETIRED","Skill result protocol retired");
             } catch (RuntimeException malformed) {
                 sendProtocolError(session,Map.of(),"SKILL_RESULT_REJECTED","Malformed skill result");
             }
@@ -869,7 +908,9 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             sessionControlledImageBountyExecution.remove(session.getId());
             sessionControlledImageV3.remove(session.getId());
             removeTypedDeliberationSession(session.getId());
-            removeTypedInspectionSession(session.getId());
+            if(typedInspectionSessions!=null)typedInspectionSessions.remove(session.getId());
+            if(nativeTextFileSessions!=null)nativeTextFileSessions.remove(session.getId());
+            if(skillExecutionSessions!=null)skillExecutionSessions.suspend(session.getId());
             stage = "registration_payload";
             Set<String> readyCommandTypes = parseReadyCommandTypes(payload.get("readyCommandTypes"));
             if (payload.containsKey("durableStateHealthy") && !(payload.get("durableStateHealthy") instanceof Boolean)) {
@@ -989,6 +1030,10 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                     new cn.jia.agent.service.AgentManagedSessionLookup.SessionFence(proof.installationId(),
                             proof.hostId(), proof.scope().runtimeInstanceId(), proof.sessionGeneration()),
                     skillExecution, () -> typedDeliberationSessionCurrent(session, result.getAgentId()));
+            if(skillManagement!=null&&skillExecution!=null) {
+                try {skillManagement.capabilitiesChanged(proof);}
+                catch(RuntimeException unavailable) {log.warn("Skill catalog confirmation deferred: {}",unavailable.getClass().getSimpleName());}
+            }
             signalRegisteredReconnect(session, result.getAgentId());
             sendCapabilityIndex(session, payload);
         } catch (Exception e) {
@@ -1025,25 +1070,6 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                     tenantId, clientId, agentId, agentId, "AGENT_RECONNECT"));
         } catch (RuntimeException failure) {
             log.warn("Agent reconnect signal was declined after successful registration");
-        }
-    }
-
-    private void handleSkillInstallResult(WebSocketSession session,Map<String,Object> payload) {
-        String agent=sessionAgentId(session), tenant=sessionTenantId(session), client=sessionClientId(session);
-        if (skillResults==null || !validExactDispatchId(agent,100)
-                || !successfullyRegisteredAgentIds(session.getId()).contains(agent)
-                || !validExactDispatchId(tenant,50) || !validExactDispatchId(client,50)
-                || declaredScopeConflict(payload,"tenantId",tenant) || declaredScopeConflict(payload,"clientId",client)
-                || !agent.equals(payload.get("targetAgentId"))
-                || sessionRuntimeInstanceId(session)==null
-                || !validExactDispatchId(strictString(payload.get("runtimeInstanceId")),100)) {
-            sendProtocolError(session,payload,"SKILL_RESULT_REJECTED","Skill result identity unavailable"); return;
-        }
-        try {
-            Map<String,Object> receipt=withSessionMutationFence(session, () -> skillResults.acceptNative(sessionProof(session),payload));
-            sendEvent(session,"work.result.receipt",receipt); // accept() returns only after durable commit
-        } catch (RuntimeException failure) {
-            sendProtocolError(session,payload,"SKILL_RESULT_REJECTED","Skill result could not be committed");
         }
     }
 

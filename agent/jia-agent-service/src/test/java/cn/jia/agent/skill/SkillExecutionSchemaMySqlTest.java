@@ -9,6 +9,7 @@ import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.core.io.ClassPathResource;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.UUID;
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -18,18 +19,50 @@ public class SkillExecutionSchemaMySqlTest {
     JdbcTemplate admin,jdbc;DriverManagerDataSource source;String database;
     @BeforeEach void setup() throws Exception {
         if(!"true".equals(System.getenv("CYF_SKILL_MYSQL_ISOLATED")))throw new IllegalStateException("Exclusive fixture required");
-        String url=System.getenv("CYF_SKILL_MYSQL_URL");admin=new JdbcTemplate(new DriverManagerDataSource(url,"root",""));
+        setupIsolated(System.getenv("CYF_SKILL_MYSQL_URL"));
+    }
+    /** Only called by the self-managed SM-C1 fixture; the standalone env guard remains unchanged. */
+    void setupIsolated(String url) throws Exception {
+        if(url==null||!url.matches("jdbc:mysql://127\\.0\\.0\\.1:[0-9]+/\\?.*"))throw new IllegalStateException("Owned loopback fixture URL required");
+        admin=new JdbcTemplate(new DriverManagerDataSource(url,"root",""));
         assertTrue(admin.queryForObject("SELECT VERSION()",String.class).startsWith("8."));
         database="skill5h_"+UUID.randomUUID().toString().replace("-","");admin.execute("CREATE DATABASE `"+database+"` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin");
         source=new DriverManagerDataSource(url.replace("/?","/"+database+"?"),"root","");jdbc=new JdbcTemplate(source);
-        new PersonalWorkspaceExecutionSchemaInitializer(jdbc).afterPropertiesSet();
+        // Install the repository's complete catalog before invoking restart/detector checks.
+        // The legacy workspace initializer now reads execution_protocol_version in its
+        // verification SQL, but that column is installed by the later follow-up-v3 migration.
+        // Do not weaken production validation or fabricate a placeholder column in this fixture.
+        // The current base already includes output MIME (including text/plain) and all
+        // terminal-failure columns/CHECKs. Historical ALTERs for those are not fresh-install
+        // deltas; replaying them duplicates columns and schema-wide CHECK names.
+        apply("db/agent-personal-workspace-v1_11-executions.sql");
+        assertEquals(4,jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='agent_personal_workspace_execution' AND column_name IN ('output_content_mime_type','failure_code','failure_message','failed_at')",Integer.class));
+        for(String resource:List.of(
+                "db/agent-personal-workspace-v1_13-task-execution.sql",
+                "db/agent-personal-workspace-v1_13-task-publication.sql",
+                "db/agent-personal-workspace-v1_14-conversation-execution.sql",
+                "db/agent-personal-workspace-v1_14-conversation-output.sql",
+                "db/agent-personal-workspace-v1_15-conversation-lease.sql",
+                "db/agent-personal-workspace-v1_16-conversation-provider-start.sql"))apply(resource);
         new AgentTaskProviderCostConsentSchemaInitializer(jdbc).afterPropertiesSet();
         new ControlledImageExecutionSchemaInitializer(jdbc).afterPropertiesSet();
         new ControlledImageFollowupV3SchemaInitializer(jdbc).afterPropertiesSet();
         apply("db/economy-v0-skill-application.sql");
         apply("db/agent-skill-execution-v1.sql");apply("db/agent-personal-workspace-skill-v1.sql");
+        new PersonalWorkspaceExecutionSchemaInitializer(jdbc).afterPropertiesSet();
+        detector().afterPropertiesSet();
     }
-    void apply(String name) throws Exception {String sql=new ClassPathResource(name).getContentAsString(StandardCharsets.UTF_8).lines().filter(l->!l.stripLeading().startsWith("--")).reduce("",(a,b)->a+b+"\n");for(String s:sql.split(";"))if(!s.isBlank())jdbc.execute(s);}
+    void apply(String name) throws Exception {
+        String sql=new ClassPathResource(name).getContentAsString(StandardCharsets.UTF_8).lines().filter(l->!l.stripLeading().startsWith("--")).reduce("",(a,b)->a+b+"\n");
+        int ordinal=0;
+        for(String statement:sql.split(";"))if(!statement.isBlank()) {
+            ordinal++;
+            try {jdbc.execute(statement);}
+            catch(org.springframework.dao.DataAccessException failure) {
+                throw new IllegalStateException("Schema fixture DDL failed: "+name+" statement "+ordinal,failure);
+            }
+        }
+    }
     @AfterEach void cleanup(){if(database!=null&&database.matches("skill5h_[a-f0-9]{32}"))admin.execute("DROP DATABASE `"+database+"`");}
     SkillExecutionSchemaInitializer detector(){return new SkillExecutionSchemaInitializer(jdbc);}
     @Test void latestCatalogReadOnlyDetectionAndLegacyRestartAccept() {
@@ -73,4 +106,33 @@ public class SkillExecutionSchemaMySqlTest {
         assertEquals(0,jdbc.update("UPDATE agent_skill_execution SET phase='RUNNING',version=version+1 WHERE execution_id='cas' AND version=0 AND phase='READY'"));
         detector().afterPropertiesSet();
     }
+    // Additional cases are executed by the non-skippable owned SM-C1 TestFactory.
+    void detectorRejectsMissingTaskBindingColumnWithoutRepair() {
+        detector().afterPropertiesSet();
+        jdbc.execute("ALTER TABLE agent_skill_execution DROP COLUMN task_skill_binding_json");
+        assertThrows(IllegalStateException.class,()->detector().afterPropertiesSet());
+        assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='agent_skill_execution' AND column_name='task_skill_binding_json'",Integer.class));
+    }
+    void detectorRejectsWrongTaskBindingTypeWithoutRepair() {
+        detector().afterPropertiesSet();
+        jdbc.execute("ALTER TABLE agent_skill_execution MODIFY task_skill_binding_json LONGTEXT NULL");
+        assertThrows(IllegalStateException.class,()->detector().afterPropertiesSet());
+        assertEquals("longtext",jdbc.queryForObject("SELECT data_type FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='agent_skill_execution' AND column_name='task_skill_binding_json'",String.class));
+    }
+    void detectorRejectsNonNullableTaskBindingWithoutRepair() {
+        detector().afterPropertiesSet();
+        jdbc.execute("ALTER TABLE agent_skill_execution MODIFY task_skill_binding_json JSON NOT NULL");
+        assertThrows(IllegalStateException.class,()->detector().afterPropertiesSet());
+        assertEquals("NO",jdbc.queryForObject("SELECT is_nullable FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='agent_skill_execution' AND column_name='task_skill_binding_json'",String.class));
+    }
+    void detectorRejectsOrphanAndMismatchedPairedStateWithoutRepair() {
+        attachment("orphan");assertThrows(IllegalStateException.class,()->detector().afterPropertiesSet());
+        assertEquals(1,jdbc.queryForObject("SELECT COUNT(*) FROM agent_skill_execution",Integer.class));
+        row("orphan",4,null,"QUEUED");detector().afterPropertiesSet();
+        jdbc.update("UPDATE agent_skill_execution SET phase='CANCELLED' WHERE execution_id='orphan'");
+        assertThrows(IllegalStateException.class,()->detector().afterPropertiesSet());
+        assertEquals("QUEUED",jdbc.queryForObject("SELECT execution_state FROM agent_personal_workspace_execution",String.class));
+        assertEquals("CANCELLED",jdbc.queryForObject("SELECT phase FROM agent_skill_execution",String.class));
+    }
+
 }

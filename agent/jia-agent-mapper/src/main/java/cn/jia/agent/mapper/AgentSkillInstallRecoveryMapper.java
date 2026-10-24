@@ -5,11 +5,14 @@ import java.util.List;
 /** Native WS discovery and lease/CAS only; no new table, command identity, attempt or refund. */
 public interface AgentSkillInstallRecoveryMapper {
     @Select("""
-        SELECT d.* FROM agent_command_delivery d JOIN economy_skill_installation i
-          ON CAST(i.tenant_id AS BINARY)=CAST(d.tenant_id AS BINARY)
-          AND CAST(i.client_id AS BINARY)=CAST(d.client_id AS BINARY)
-          AND CAST(i.command_id AS BINARY)=CAST(d.command_id AS BINARY)
-        WHERE d.command_type='SKILL_INSTALL' AND i.status='INSTALLING'
+        SELECT d.* FROM agent_command_delivery d JOIN economy_skill_change_command c
+          ON CAST(c.tenant_id AS BINARY)=CAST(d.tenant_id AS BINARY)
+          AND CAST(c.client_id AS BINARY)=CAST(d.client_id AS BINARY)
+          AND CAST(c.command_id AS BINARY)=CAST(d.command_id AS BINARY)
+        JOIN economy_skill_change ch ON ch.tenant_id=c.tenant_id AND ch.client_id=c.client_id AND ch.change_id=c.change_id
+        JOIN economy_skill_managed_state s ON s.tenant_id=ch.tenant_id AND s.client_id=ch.client_id AND s.agent_id=ch.agent_id AND s.skill_key=ch.skill_key
+        WHERE d.command_type IN ('SKILL_INSTALL','SKILL_SET_ENABLED','SKILL_RECONCILE') AND c.state IN ('PENDING','RECEIVED')
+          AND CAST(JSON_UNQUOTE(JSON_EXTRACT(c.data_json,'$.skillRevision')) AS UNSIGNED)=s.skill_revision
           AND d.status IN ('PENDING','WAITING_AGENT','SENT','RETRY','CONSUMED')
           AND (d.next_retry_at IS NULL OR d.next_retry_at<=#{now})
           AND (d.lease_until IS NULL OR d.lease_until<=#{now})
@@ -23,7 +26,7 @@ public interface AgentSkillInstallRecoveryMapper {
         UPDATE agent_command_delivery SET status='CONSUMED',lease_owner=#{owner},lease_until=#{until},
           next_retry_at=NULL,last_error='SKILL_WS_IN_FLIGHT',version=version+1,update_time=#{now}
         WHERE id=#{d.id} AND CAST(tenant_id AS BINARY)=CAST(#{d.tenantId} AS BINARY)
-          AND CAST(client_id AS BINARY)=CAST(#{d.clientId} AS BINARY) AND command_type='SKILL_INSTALL'
+          AND CAST(client_id AS BINARY)=CAST(#{d.clientId} AS BINARY) AND command_type IN ('SKILL_INSTALL','SKILL_SET_ENABLED','SKILL_RECONCILE')
           AND CAST(command_id AS BINARY)=CAST(#{d.commandId} AS BINARY)
           AND CAST(owner_jiacn AS BINARY)=CAST(#{d.ownerJiacn} AS BINARY)
           AND CAST(active_message_id AS BINARY)=CAST(#{d.activeMessageId} AS BINARY)
@@ -48,8 +51,10 @@ public interface AgentSkillInstallRecoveryMapper {
         UPDATE agent_command_delivery SET status=#{status},next_retry_at=#{retry},lease_owner=NULL,lease_until=NULL,
           last_error=#{error},version=version+1,update_time=#{now}
         WHERE id=#{d.id} AND CAST(tenant_id AS BINARY)=CAST(#{d.tenantId} AS BINARY)
-          AND CAST(client_id AS BINARY)=CAST(#{d.clientId} AS BINARY) AND command_type='SKILL_INSTALL'
+          AND CAST(client_id AS BINARY)=CAST(#{d.clientId} AS BINARY) AND command_type IN ('SKILL_INSTALL','SKILL_SET_ENABLED','SKILL_RECONCILE')
           AND CAST(active_message_id AS BINARY)=CAST(#{d.activeMessageId} AS BINARY)
+          AND CAST(owner_jiacn AS BINARY)=CAST(#{d.ownerJiacn} AS BINARY)
+          AND CAST(command_id AS BINARY)=CAST(#{d.commandId} AS BINARY)
           AND active_attempt=#{d.activeAttempt} AND version=#{d.version} AND version<9223372036854775806
           AND status='CONSUMED' AND CAST(lease_owner AS BINARY)=CAST(#{owner} AS BINARY)
         """)

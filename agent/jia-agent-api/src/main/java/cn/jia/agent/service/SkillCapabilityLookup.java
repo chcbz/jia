@@ -13,19 +13,20 @@ public interface SkillCapabilityLookup {
             exact(tenantId, 50); exact(clientId, 50); exact(ownerJiacn, 50); exact(agentId, 100);
         }
     }
-    enum Readiness { READY, UNAVAILABLE }
+    enum Readiness { READY, UNKNOWN, OFFLINE, VERIFYING, DEPENDENCY_MISSING, PROVIDER_UNBOUND, VERSION_MISMATCH, NOT_EXECUTABLE, UNAVAILABLE }
     enum State { AVAILABLE, DISCONNECTED, AMBIGUOUS, FENCED, INVALID_DECLARATION }
 
     record RuntimeSkill(String skillKey, String skillVersion, String packageSha256,
             String manifestSha256, String runner, Readiness readiness, String reasonCode,
-            String toolchainDigest, String bindingRevision) {
+            String toolchainDigest, String bindingRevision, String skillInstallationId, String productVersionId,
+            String kind, String policyRevision, boolean enabled, Long observedAt) {
+        /** Internal source constructor retained for existing non-wire unit fixtures only. */
+        public RuntimeSkill(String key,String version,String pkg,String manifest,String runner,Readiness readiness,String reason,String tool,String binding) {
+            this(key,version,pkg,manifest,runner,readiness,reason,tool,binding,null,null,"EXECUTABLE",null,true,null);
+        }
         public RuntimeSkill {
-            exact(skillKey, 64); exact(skillVersion, 64); hash(packageSha256); hash(manifestSha256);
-            if (!List.of("provider-operation", "local-script", "native-model").contains(runner))
-                throw new IllegalArgumentException("Unknown skill runner");
+            exact(skillKey, 64); exact(skillVersion, 64); hash(packageSha256); if (manifestSha256!=null) hash(manifestSha256);
             Objects.requireNonNull(readiness);
-            if (reasonCode != null && !reasonCode.matches("[A-Z][A-Z0-9_]{0,63}"))
-                throw new IllegalArgumentException("Invalid skill reason code");
             if (toolchainDigest != null) hash(toolchainDigest);
             if (bindingRevision != null) exact(bindingRevision, 100);
             // READY is still only a report. Descriptor/dependency/binding entitlement checks
@@ -37,10 +38,14 @@ public interface SkillCapabilityLookup {
         public Catalog {
             exact(catalogRevision, 100);
             skills = List.copyOf(Objects.requireNonNull(skills));
-            var identities = new HashSet<List<String>>();
+            var identities = new HashSet<String>();
             for (var skill : skills) {
-                if (!identities.add(List.of(skill.skillKey(), skill.skillVersion())))
-                    throw new IllegalArgumentException("Ambiguous skill version in runtime catalog");
+                // Installation identity is authoritative; retry candidates may share a
+                // skill version. Never reject or pick by key/version instead of installation.
+                String identity = skill.skillInstallationId();
+                if (identity == null) identity = skill.skillKey() + "\0" + skill.skillVersion();
+                if (!identities.add(identity))
+                    throw new IllegalArgumentException("Ambiguous skill installation in runtime catalog");
             }
         }
     }

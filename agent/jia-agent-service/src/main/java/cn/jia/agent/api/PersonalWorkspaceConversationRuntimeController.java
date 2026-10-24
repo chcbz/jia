@@ -491,11 +491,11 @@ public final class PersonalWorkspaceConversationRuntimeController {
     }
     public record SkillCommandResponse(int executionProtocolVersion,String executionId,String taskId,String runId,
             String conversationId,String conversationGeneration,String commandId,String messageId,cn.jia.agent.service.SkillExecutionService.Skill skill,
-            String snapshotSha256,java.util.Map<String,Object> parameters,String instruction,List<String> inputRefs,java.util.Map<String,Object> outputs) {
+            String snapshotSha256,java.util.Map<String,Object> parameters,String instruction,List<String> inputRefs,java.util.Map<String,Object> outputs,java.util.Map<String,Object> taskSkillBinding) {
         static SkillCommandResponse from(cn.jia.agent.service.SkillExecutionService.Command value) {
             return new SkillCommandResponse(value.executionProtocolVersion(),value.executionId(),value.taskId(),value.runId(),
                     value.conversationId(),value.conversationGeneration(),value.commandId(),value.messageId(),value.skill(),
-                    value.snapshotDigest(),value.parameters(),value.instruction(),value.inputRefs(),value.outputs());
+                    value.snapshotDigest(),value.parameters(),value.instruction(),value.inputRefs(),value.outputs(),value.taskSkillBinding());
         }
     }
     public record ClaimRequest(String commandId,String messageId) { }

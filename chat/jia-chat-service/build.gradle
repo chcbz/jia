@@ -494,6 +494,7 @@ def nativeSkillResultSourceSet = sourceSets.create('nativeSkillResultRegression'
     java.include 'cn/jia/agent/skill/SkillNativeAckMySqlTest.java'
     java.include 'cn/jia/agent/skill/SkillExecutionMapperRealTransactionTest.java'
     java.include 'cn/jia/agent/skill/SkillAuditMutationRejectTrigger.java'
+    java.include 'cn/jia/agent/skill/SkillTransportStorageAssertions.java'
     resources.srcDir '../../agent/jia-agent-service/src/test/resources'
     compileClasspath += sourceSets.main.output
     runtimeClasspath += output + compileClasspath
@@ -515,4 +516,43 @@ tasks.register('nativeSkillResultRegression', Test) {
     useJUnitPlatform()
     maxParallelForks = 1
     filter { includeTestsMatching 'cn.jia.chat.handler.SkillNativeResultMySqlTest.nativeSkillAckReceivedStartedDownloadAndRealResultActivateWithoutBroker' }
+}
+
+// SM-C1 real WS registration/result consumer + agent-owned SQL/outbox transaction fixture.
+// Separate selector; it does not silently replace any existing regression suite.
+def skillManagementWireSourceSet = sourceSets.create('skillManagementWire') {
+    java.srcDirs('src/skillManagementContractTest/java', '../../agent/jia-agent-service/src/skillManagementContract/java', '../../agent/jia-agent-service/src/test/java')
+    java.include 'cn/jia/chat/handler/SkillManagementWireMySqlTest.java'
+    java.include 'cn/jia/chat/handler/SkillManagementNodeMySqlTest.java'
+    java.include 'cn/jia/agent/skill/SkillManagementTransactionTest.java'
+    java.include 'cn/jia/agent/skill/SkillManagementMySqlFixture.java'
+    java.include 'cn/jia/agent/skill/SkillTransportStorageAssertions.java'
+    resources.srcDir '../../agent/jia-agent-service/src/skillManagementContract/resources'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(skillManagementWireSourceSet.implementationConfigurationName) { extendsFrom configurations.testImplementation }
+configurations.named(skillManagementWireSourceSet.runtimeOnlyConfigurationName) { extendsFrom configurations.testRuntimeOnly }
+dependencies {
+    add(skillManagementWireSourceSet.implementationConfigurationName, project(':economy:jia-economy-api'))
+    add(skillManagementWireSourceSet.implementationConfigurationName, project(':economy:jia-economy-mapper'))
+    add(skillManagementWireSourceSet.implementationConfigurationName, project(':economy:jia-economy-service'))
+}
+tasks.register('skillManagementWire', Test) {
+    dependsOn tasks.named(skillManagementWireSourceSet.classesTaskName)
+    testClassesDirs = skillManagementWireSourceSet.output.classesDirs
+    classpath = skillManagementWireSourceSet.runtimeClasspath
+    useJUnitPlatform()
+    maxParallelForks = 1
+    filter {
+        includeTestsMatching 'cn.jia.chat.handler.SkillManagementWireMySqlTest.firstInstallResultsAndRegistrationDriveRealCommittedClosedLoop'
+        includeTestsMatching 'cn.jia.chat.handler.SkillManagementWireMySqlTest.persistentProofRevocationAndRuntimeIdentityDriftRejectAckAndResultWithoutSqlMutation'
+        includeTestsMatching 'cn.jia.chat.handler.SkillManagementWireMySqlTest.currentProtocolRejectsWrongIdentityAttemptFenceEpochAndCorrelationWithNoSqlEffects'
+        includeTestsMatching 'cn.jia.chat.handler.SkillManagementWireMySqlTest.validlyRehashedContradictorySameMessageIdCannotReplaceCommittedReceiptOrFinancialFacts'
+        includeTestsMatching 'cn.jia.chat.handler.SkillManagementWireMySqlTest.persistentSqlFenceStaysLockedThroughResultCommitAndWholeTransactionRollback'
+        includeTestsMatching 'cn.jia.chat.handler.SkillManagementWireMySqlTest.currentReconnectProofMaySubmitOriginalAuthorizedEpochWithoutRewritingExecutingBoot'
+        includeTestsMatching 'cn.jia.chat.handler.SkillManagementNodeMySqlTest.firstInstallWithRealNodePeer'
+        includeTestsMatching 'cn.jia.chat.handler.SkillManagementNodeMySqlTest.realNodeUpgradeAndPolicyKeepOldTaskPinnedWithoutBorrowingCurrent'
+    }
+    testLogging { events 'passed','failed'; exceptionFormat 'full'; showStandardStreams = true }
 }

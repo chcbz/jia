@@ -29,6 +29,7 @@ public class SkillExecutionEntity implements Serializable {
     private String manifestSha256;
     @ToString.Exclude private String snapshotJson;
     private String snapshotSha256;
+    @ToString.Exclude private String taskSkillBindingJson;
     private String phase;
     @ToString.Exclude private String effectsJson;
     @ToString.Exclude private String resultManifestJson;

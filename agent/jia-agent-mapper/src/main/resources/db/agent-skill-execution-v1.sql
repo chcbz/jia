@@ -12,6 +12,7 @@ CREATE TABLE agent_skill_execution (
   manifest_sha256 CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   snapshot_json JSON NOT NULL,
   snapshot_sha256 CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  task_skill_binding_json JSON NULL,
   phase VARCHAR(24) NOT NULL,
   effects_json JSON NOT NULL,
   result_manifest_json JSON DEFAULT NULL,

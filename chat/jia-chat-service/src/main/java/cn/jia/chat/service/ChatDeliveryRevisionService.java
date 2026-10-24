@@ -45,6 +45,7 @@ public class ChatDeliveryRevisionService {
     private final ChatTypedDeliberationContextService contexts;
     private final ChatSkillPackagePreparationService packages;
     private final ChatDeliberationOutboxService outbox;
+    private final ChatDispatchAuthorityService dispatchAuthority;
     private ChatFormalDeliveryRetentionService retention;
     @org.springframework.beans.factory.annotation.Autowired
     public void setRetention(ChatFormalDeliveryRetentionService value) {retention=Objects.requireNonNull(value);}
@@ -52,10 +53,11 @@ public class ChatDeliveryRevisionService {
             ObjectProvider<ChatDeliberationService> deliberation,ChatTaskDeliveryReviewStore operations,ChatTypedDeliberationStore typed,
             AgentTaskMutationTransaction tasks,AgentTaskFormalDeliveryReadService deliveries,AgentTaskFormalDeliveryDecisionService decisions,
             ChatBountyBindingStore bindings,ChatConversationDao conversations,JuyitingConversationScopeService scopes,
-            ChatTypedDeliberationContextService contexts,ChatSkillPackagePreparationService packages,ChatDeliberationOutboxService outbox) {
+            ChatTypedDeliberationContextService contexts,ChatSkillPackagePreparationService packages,ChatDeliberationOutboxService outbox,
+            ChatDispatchAuthorityService dispatchAuthority) {
         this.dao=dao;this.finals=finals;this.deliberation=deliberation;this.operations=operations;this.typed=typed;this.tasks=tasks;
         this.deliveries=deliveries;this.decisions=decisions;this.bindings=bindings;this.conversations=conversations;this.scopes=scopes;
-        this.contexts=contexts;this.packages=packages;this.outbox=outbox;
+        this.contexts=contexts;this.packages=packages;this.outbox=outbox;this.dispatchAuthority=dispatchAuthority;
     }
     public static String eventId(ChatTypedDeliberationStore.Outcome row) {
         return "review_"+ChatDeliveryReviewContract.sha(ChatDeliveryReviewContract.json(List.of("hall-message-review-event-v1",
@@ -83,9 +85,22 @@ public class ChatDeliveryRevisionService {
     public void consume(ChatDeliberationOutboxService.Claim claim) {
         var bound=finals.getObject().loadRevision(claim.row());var row=bound.parent().outcome();var s=row.scope();
         String target=(String)bound.parent().validated().binding().get("targetAgentId");
-        // Cold package I/O is strictly outside every task/Chat/outbox lock.
-        packages.prepare(new cn.jia.agent.service.SkillCapabilityLookup.Scope(s.tenantId(),s.clientId(),s.ownerJiacn(),target));
         try {
+            // A committed/rejected replay needs no current executor or package access. Reuse its
+            // immutable receipt under the original owner root; never turn a replay into new work.
+            boolean settled=tasks.executeWithLockedTaskRootInOwnerScope(s.tenantId(),s.clientId(),s.ownerJiacn(),row.taskId(),root->{
+                var prior=operations.byKey(new ChatDeliveryReviewContract.Scope(s.tenantId(),s.clientId(),s.ownerJiacn()),
+                        row.taskId(),eventId(row),true);
+                if(prior==null)return false;
+                ChatTaskDeliveryReviewStore.requireDigest(prior,digest(bound));
+                if("PROCESSING".equals(prior.state()))return false;
+                ChatTaskDeliveryReviewStore.committedReceipt(prior);ack(claim);return true;
+            });
+            if(settled)return;
+            var executor=revisionExecutor(bound);
+            // Cold package I/O is strictly outside every task/Chat/outbox lock. The saved
+            // dispatch grant supplies B's identity; A still owns the task and its documents.
+            packages.prepare(new cn.jia.agent.service.SkillCapabilityLookup.Scope(s.tenantId(),s.clientId(),executor.executorOwner(),target));
             if(retention==null)throw new IllegalStateException("Revision source service unavailable");
             var formalSources=retention.prepareRevisionSources(bound);
             tasks.executeWithLockedTaskRootInOwnerScope(s.tenantId(),s.clientId(),s.ownerJiacn(),row.taskId(),root->{
@@ -105,6 +120,11 @@ public class ChatDeliveryRevisionService {
                 var locked=finals.getObject().loadRevision(claim.row());
                 if(!digest(bound).equals(digest(locked)))throw new ChatDeliveryReviewContract.Conflict();
                 deliberation.getObject().requireActionUser(locked.parent());
+                // Preparation is not authorization: recheck the exact parent grant under the
+                // task root before changing a delivery or admitting a child. Never resolve a
+                // replacement grant for an old queued event.
+                var currentExecutor=revisionExecutor(locked);
+                if(!executor.executorOwner().equals(currentExecutor.executorOwner()))throw new ChatDeliveryReviewContract.Conflict();
                 var submitted=deliveries.listForTaskOwner(s.tenantId(),s.clientId(),s.ownerJiacn(),row.taskId()).stream()
                         .filter(v->"submitted".equals(v.getState())).toList();
                 if(submitted.size()!=1)throw new ChatDeliveryReviewContract.Conflict();var batch=submitted.getFirst();
@@ -137,6 +157,10 @@ public class ChatDeliveryRevisionService {
                         child,row.requestId(),s.conversationId(),null,false);
                 operations.settle(owner,op,receipt);ack(claim);return null;
             });
+        } catch(cn.jia.agent.service.InstalledSkillDescriptorLookup.SourceUnavailable unavailable) {
+            if(unavailable.reason()==cn.jia.agent.service.InstalledSkillDescriptorLookup.SourceUnavailable.Reason.FORBIDDEN)
+                reject(claim,bound,"DELIVERY_REVIEW_FORBIDDEN");
+            else throw unavailable; // An unavailable dependency is not proof of revoked authority.
         } catch(ChatDeliveryReviewContract.SourceUnavailable unavailable) {reject(claim,bound,"DELIVERY_SOURCE_UNAVAILABLE");}
         catch(ChatDeliveryReviewContract.Conflict conflict) {reject(claim,bound,"DELIVERY_REVIEW_CONFLICT");}
         catch(cn.jia.agent.exception.AgentTaskCollaborationException failure) {
@@ -148,9 +172,21 @@ public class ChatDeliveryRevisionService {
             }
         } catch(ChatDeliberationException failure) {
             if(failure.reason()==ChatDeliberationException.Reason.CONFLICT)reject(claim,bound,"DELIVERY_REVIEW_CONFLICT");
-            else if(failure.reason()==ChatDeliberationException.Reason.NOT_FOUND_OR_FORBIDDEN)reject(claim,bound,"DELIVERY_SOURCE_UNAVAILABLE");
+            else if(failure.reason()==ChatDeliberationException.Reason.NOT_FOUND_OR_FORBIDDEN)reject(claim,bound,"DELIVERY_REVIEW_FORBIDDEN");
             else throw failure;
         }
+    }
+    private ChatDispatchAuthorityService.Binding revisionExecutor(BoundRevision bound) {
+        var row=bound.parent().outcome();var scope=row.scope();
+        var turn=dao.findTurn(scope.tenantId(),scope.ownerJiacn(),scope.clientId(),row.turnId());
+        if(turn==null || !row.requestId().equals(turn.getRequestId())
+                || !scope.conversationId().equals(turn.getConversationId())
+                || !Objects.equals(scope.conversationGeneration(),turn.getConversationGeneration())
+                || !row.finalDigest().equals(turn.getFinalDigest())
+                || !Objects.equals(bound.parent().validated().binding().get("dispatchId"),turn.getDispatchId())
+                || !Objects.equals(bound.parent().validated().binding().get("targetAgentId"),turn.getTargetAgentId()))
+            throw new ChatDeliberationException(ChatDeliberationException.Reason.NOT_FOUND_OR_FORBIDDEN,"Revision authority unavailable");
+        return dispatchAuthority.forTurn(turn);
     }
     private void reject(ChatDeliberationOutboxService.Claim claim,BoundRevision bound,String code) {
         var row=bound.parent().outcome();var s=row.scope();

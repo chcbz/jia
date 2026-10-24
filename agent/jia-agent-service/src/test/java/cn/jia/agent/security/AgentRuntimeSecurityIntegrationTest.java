@@ -353,7 +353,7 @@ class AgentRuntimeSecurityIntegrationTest {
 
     @Test
     void skillPackageUsesActualNativeChainAndNeverLegacyKeyOrProductInstallAsRuntimeProof() throws Exception {
-        var installs=mock(cn.jia.agent.skill.SkillInstallResultService.class);
+        var installs=mock(cn.jia.agent.skill.SkillManagementService.class);
         var controller=new cn.jia.agent.api.SkillPackageController(installs);
         var packageMvc=MockMvcBuilders.standaloneSetup(controller).addFilters(context.getBean(FilterChainProxy.class)).build();
         String path="/internal/agent/skill-installations/si_original/package";

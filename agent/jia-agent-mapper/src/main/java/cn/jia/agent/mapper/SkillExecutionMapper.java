@@ -33,14 +33,20 @@ public interface SkillExecutionMapper {
     @Insert("""
             INSERT INTO agent_skill_execution
                 (tenant_id,client_id,owner_jiacn,execution_id,skill_key,skill_version,
-                 package_sha256,manifest_sha256,snapshot_json,snapshot_sha256,
+                 package_sha256,manifest_sha256,snapshot_json,snapshot_sha256,task_skill_binding_json,
                  phase,effects_json,result_manifest_json,last_error_code,version,created_at,updated_at)
             VALUES (#{row.tenantId},#{row.clientId},#{row.ownerJiacn},#{row.executionId},
                     #{row.skillKey},#{row.skillVersion},#{row.packageSha256},#{row.manifestSha256},
-                    #{row.snapshotJson},#{row.snapshotSha256},'READY','{}',NULL,NULL,0,
+                    #{row.snapshotJson},#{row.snapshotSha256},#{row.taskSkillBindingJson},'READY','{}',NULL,NULL,0,
                     #{row.createdAt},#{row.createdAt})
             """)
     int insertReady(@Param("row") SkillExecutionEntity row);
+
+    /** One-time projection attachment only; the original admitted snapshot/hash is never rewritten. */
+    @Update("UPDATE agent_skill_execution SET task_skill_binding_json=#{binding},version=version+1,updated_at=#{now} WHERE "+EXACT_SCOPE+
+            " AND task_skill_binding_json IS NULL AND snapshot_sha256=#{snapshot} AND version=#{version}")
+    int bindTaskSkill(@Param("tenant") String tenant,@Param("client") String client,@Param("owner") String owner,@Param("execution") String execution,
+            @Param("snapshot") String snapshot,@Param("version") long version,@Param("binding") String binding,@Param("now") long now);
 
     /** Full mutable projection, version-fenced. Does not change the frozen snapshot or scope.
      * Same-phase CAS is needed for effect registration/result receipts, but never for terminals.

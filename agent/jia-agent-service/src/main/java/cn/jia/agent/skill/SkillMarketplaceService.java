@@ -248,7 +248,7 @@ public final class SkillMarketplaceService {
             }).toList();
         });
     }
-    private EconomyPostingResult reserve(HostingRentHttp.Actor a,String order,long amount,long now) {
+    EconomyPostingResult reserve(HostingRentHttp.Actor a,String order,long amount,long now) {
         if(amount==0) return null;
         var escrow=escrow(order); ensureAccount(a,escrow,now);
         return posting.post(new EconomyPostingCommand(a.scope(),a.principal(),UUID.randomUUID().toString(),

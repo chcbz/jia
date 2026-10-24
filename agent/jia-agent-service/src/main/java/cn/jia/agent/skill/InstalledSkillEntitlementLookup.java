@@ -23,6 +23,10 @@ public class InstalledSkillEntitlementLookup implements FundedBountySkillEntitle
             SkillAgentVersions versions,SkillMarketplaceService skills) {
         this.market=market;this.application=application;this.versions=versions;this.skills=skills;
     }
+    private cn.jia.economy.mapper.EconomySkillManagementMapper managed;
+    private SkillManagementService management;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setManagement(cn.jia.economy.mapper.EconomySkillManagementMapper mapper,SkillManagementService service) {managed=mapper;management=service;}
     @Override @Transactional(rollbackFor=Exception.class)
     public VerifiedSkillSnapshot lookup(FundedBountyActor actor,String agentId,List<AgentSkillRequirementDTO> requirements) {
         Objects.requireNonNull(requirements,"requirements");
@@ -33,6 +37,12 @@ public class InstalledSkillEntitlementLookup implements FundedBountySkillEntitle
         List<InstalledSkill> installed=new ArrayList<>();
         for(var e:market.selectEntitlementsByAgent(a.tenantId(),a.clientId(),agentId)) {
             if(!"ACTIVE".equals(e.getStatus())) continue;
+            var auth=managed==null?null:managed.findAuthorization(a.tenantId(),a.clientId(),e.getInstallationId());
+            if(auth!=null) {
+                if(management.qualifies(new cn.jia.agent.service.SkillCapabilityLookup.Scope(a.tenantId(),a.clientId(),a.ownerJiacn(),agentId),auth))
+                    installed.add(new InstalledSkill(e.getSkillKey(),e.getSkillVersion()));
+                continue;
+            }
             var i=application.installation(a.tenantId(),a.clientId(),e.getInstallationId());
             var o=application.order(a.tenantId(),a.clientId(),e.getOrderId());
             if(i==null || o==null || !"SUCCEEDED".equals(i.getStatus()) || !"ACTIVE".equals(o.getStatus())

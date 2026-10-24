@@ -231,61 +231,31 @@ public class SkillMarketplaceRealTransactionTest {
         recovery.recover();
     }
     @Test void nativeSkillInstallRemainsAuthorizedAfterInvitationHintButRejectsInactiveOrder() {
-        service.purchase(ACTOR,uuid(),purchaseBody("spv_repo_test_1_0_0"),false);var i=installation();drainNative();
-        long future=System.currentTimeMillis()+7200000;
-        var ack=nativeAckAt(i,"RECEIVED",null,future);
-        nativeAckAt(i,"STARTED",ack.deliveryVersion(),future);
-        var delivery=jdbc.queryForObject("SELECT expires_at FROM agent_command_delivery",Long.class);
-        assertTrue(delivery<future);
-        var d=new cn.jia.agent.entity.AgentCommandDeliveryEntity();
-        d.setTenantId(ACTOR.tenantId());d.setClientId(ACTOR.clientId());d.setOwnerJiacn(proof().scope().ownerJiacn());
-        d.setCommandId(i.getCommandId()).setCommandType("SKILL_INSTALL").setTaskId(i.getOrderId())
-            .setTargetAgentId(AGENT).setActiveMessageId(i.getMessageId()).setActiveAttempt(i.getAttempt()).setStatus("STARTED").setExpiresAt(1L);
-        SkillInstallResultService.requireCurrentDelivery(i,d,proof().scope().ownerJiacn(),true);
-        acceptNativeResult(proof(),result(i,"FAILED","SKILL_DOWNLOAD_FORBIDDEN"));
-        assertEquals("REFUNDED",service.order(ACTOR,i.getOrderId()).get("status"));
-        assertThrows(RuntimeException.class,()->results.packageBytes(proof(),i.getInstallationId()));
-        assertThrows(RuntimeException.class,()->nativeAckAt(i,"STARTED",null,future));
+        service.purchase(ACTOR,uuid(),purchaseBody("spv_repo_test_1_0_0"),false);var i=installation();
+        assertRetiredWireCannotRecover(i);
+        assertRetiredAck(i,"RECEIVED",System.currentTimeMillis()+7200000);
+        assertRetiredAck(i,"STARTED",System.currentTimeMillis()+7200000);
     }
     @Test public void nativeSkillAckReceivedStartedDownloadAndRealResultActivateWithoutBroker() {
-        service.purchase(ACTOR,uuid(),purchaseBody("spv_repo_test_1_0_0"),false);var i=installation();drainNative();
-        byte[] wire=jdbc.queryForObject("SELECT wire_payload FROM agent_outbox_event",byte[].class);
-        var received=nativeAck(i,"RECEIVED",null);assertEquals(AgentCommandAckResult.Kind.ADVANCED,received.kind());
-        assertEquals(AgentCommandAckResult.Kind.PRIOR,nativeAck(i,"RECEIVED",received.deliveryVersion()).kind());
-        var started=nativeAck(i,"STARTED",received.deliveryVersion());
-        assertEquals(i.getPackageSize().longValue(),results.packageBytes(proof(),i.getInstallationId()).length);
-        assertEquals("INSTALLING",service.order(ACTOR,i.getOrderId()).get("status"));
-        nativeAck(i,"SUCCEEDED",started.deliveryVersion());
-        assertEquals("INSTALLING",service.order(ACTOR,i.getOrderId()).get("status")); // ACK is not installation proof.
-        var body=result(i,"SUCCEEDED",null);
-        body.put("sourceAgentId",AGENT);body.put("agentId",AGENT);body.put("runtimeInstanceId","original-executing-boot");
-        var receipt=acceptNativeResult(proof(),body);
-        assertEquals("ACCEPTED",receipt.get("receiptStatus"));assertEquals("ACTIVE",service.order(ACTOR,i.getOrderId()).get("status"));
-        assertEquals("ACTIVE",service.entitlements(ACTOR,AGENT).getFirst().get("status"));
-        runtime.setRuntimeSessionGeneration(2L).setRuntimeInstanceId("authorized-reconnect");
-        assertEquals(receipt,acceptNativeResult(proof(),body));
-        var unknown=new LinkedHashMap<>(body);unknown.put("unknownBusiness",1);
-        assertThrows(RuntimeException.class,()->acceptNativeResult(proof(),unknown));
-        assertArrayEquals(wire,jdbc.queryForObject("SELECT wire_payload FROM agent_outbox_event",byte[].class));
-        assertEquals("NONE",jdbc.queryForObject("SELECT publisher_confirm_status FROM agent_outbox_event",String.class));
-        assertNull(jdbc.queryForObject("SELECT confirmed_at FROM agent_outbox_event",Long.class));
-        assertEquals(0,count("agent_consumer_inbox"));
+        // Historical selector retained for CI callers. SM-C1 success is tested by
+        // skillManagementWire; the schema-1 HTTP ACK must now be rejected, never adapted.
+        service.purchase(ACTOR,uuid(),purchaseBody("spv_repo_test_1_0_0"),false);var i=installation();
+        assertRetiredWireCannotRecover(i);
+        for(String status:List.of("RECEIVED","STARTED","SUCCEEDED","FAILED"))assertRetiredAck(i,status,System.currentTimeMillis());
+        verify(sessions,never()).dispatch(anyString(),anyString(),anyString(),any(),any());
     }
     @Test void nativeSkillAckRacingSenderSettlesOnlyOriginalLeaseAndCannotBeOverwritten() {
         service.purchase(ACTOR,uuid(),purchaseBody("spv_repo_test_1_0_0"),false);var i=installation();
-        when(sessions.dispatch(anyString(),anyString(),anyString(),any(),any())).thenAnswer(call->{
-            assertEquals("CONSUMED",jdbc.queryForObject("SELECT status FROM agent_command_delivery",String.class));
-            nativeAck(i,"RECEIVED",null);nativeAck(i,"STARTED",null);
-            assertTrue(results.packageBytes(proof(),i.getInstallationId()).length>0);
-            return AgentRawCommandDispatchResult.sent(1,1);
-        });
-        recovery.recover();assertEquals("STARTED",jdbc.queryForObject("SELECT status FROM agent_command_delivery",String.class));
-        assertEquals("SENT",jdbc.queryForObject("SELECT status FROM agent_outbox_event",String.class));
-        assertNull(jdbc.queryForObject("SELECT lease_owner FROM agent_outbox_event",String.class));
-        assertEquals("NONE",jdbc.queryForObject("SELECT publisher_confirm_status FROM agent_outbox_event",String.class));
+        assertRetiredWireCannotRecover(i);
+        jdbc.update("UPDATE agent_command_delivery SET status='CONSUMED',lease_owner='sender',lease_until=?",Long.MAX_VALUE);
+        jdbc.update("UPDATE agent_outbox_event SET status='CLAIMED',lease_owner='sender',lease_until=?",Long.MAX_VALUE);
+        assertRetiredAck(i,"RECEIVED",System.currentTimeMillis());
+        assertEquals("sender",jdbc.queryForObject("SELECT lease_owner FROM agent_outbox_event",String.class));
+        assertEquals("CLAIMED",jdbc.queryForObject("SELECT status FROM agent_outbox_event",String.class));
+        assertEquals("CONSUMED",jdbc.queryForObject("SELECT status FROM agent_command_delivery",String.class));
     }
     @Test void nativeSkillAckRejectsWrongMessageOrderAgentAndStaleProofWithoutMutation() {
-        service.purchase(ACTOR,uuid(),purchaseBody("spv_repo_test_1_0_0"),false);var i=installation();drainNative();
+        service.purchase(ACTOR,uuid(),purchaseBody("spv_repo_test_1_0_0"),false);var i=installation();
         long version=jdbc.queryForObject("SELECT version FROM agent_command_delivery",Long.class);
         for(String field:List.of("message","order","agent")) {
             var a=new AgentCommandAck(ACTOR.tenantId(),ACTOR.clientId(),field.equals("agent")?"foreign":AGENT,
@@ -296,19 +266,16 @@ public class SkillMarketplaceRealTransactionTest {
         var a=new AgentCommandAck(ACTOR.tenantId(),ACTOR.clientId(),AGENT,"ack_fixture",i.getMessageId(),i.getCommandId(),i.getOrderId(),null,"RECEIVED",System.currentTimeMillis());
         assertThrows(RuntimeException.class,()->nativeAcks.acknowledgeIfSkill(stale,a,System.currentTimeMillis()));
         assertEquals(version,jdbc.queryForObject("SELECT version FROM agent_command_delivery",Long.class));
-        assertEquals("SENT",jdbc.queryForObject("SELECT status FROM agent_command_delivery",String.class));
+        assertEquals("PENDING",jdbc.queryForObject("SELECT status FROM agent_command_delivery",String.class));
     }
     @Test void nativeSkillAckRejectsSkipAndCasLossRollsBackRacingOutbox() {
-        service.purchase(ACTOR,uuid(),purchaseBody("spv_repo_test_1_0_0"),false);var i=installation();drainNative();
-        assertThrows(RuntimeException.class,()->nativeAck(i,"STARTED",null));
+        service.purchase(ACTOR,uuid(),purchaseBody("spv_repo_test_1_0_0"),false);var i=installation();
+        assertRetiredWireCannotRecover(i);
         doReturn(0).when(ackCommands).advanceAck(any(),anyString(),any(),anyLong());
-        when(sessions.dispatch(anyString(),anyString(),anyString(),any(),any())).thenAnswer(call->{
-            assertThrows(RuntimeException.class,()->nativeAck(i,"RECEIVED",null));
-            assertEquals("CLAIMED",jdbc.queryForObject("SELECT status FROM agent_outbox_event",String.class));
-            return AgentRawCommandDispatchResult.sent(1,1);
-        });
-        jdbc.update("UPDATE agent_command_delivery SET update_time=?,next_retry_at=NULL",System.currentTimeMillis()-70000);
-        recovery.recover();assertEquals("SENT",jdbc.queryForObject("SELECT status FROM agent_command_delivery",String.class));
+        assertRetiredAck(i,"STARTED",System.currentTimeMillis());
+        assertRetiredAck(i,"RECEIVED",System.currentTimeMillis());
+        verify(ackCommands,never()).advanceAck(any(),anyString(),any(),anyLong());
+        assertEquals("PENDING",jdbc.queryForObject("SELECT status FROM agent_outbox_event",String.class));
     }
     @Test void transportGeneratedGuardAdapterRejectsDefinitionDrift() throws Exception {
         String source=new ClassPathResource(TRANSPORT_SCHEMA).getContentAsString(StandardCharsets.UTF_8);
@@ -322,72 +289,10 @@ public class SkillMarketplaceRealTransactionTest {
                 source+"\n"+MYSQL_REDRIVE_GUARD));
     }
     @Test void transportGeneratedGuardsPreserveExpressionsAndNullUniqueness() {
-        long delivery=0;
-        for(String outcome:List.of("PENDING","SUCCEEDED","FAILED")) {
-            for(String settlement:List.of("PENDING","SOURCE_ACKED","SOURCE_REQUEUED","NOT_ACQUIRED","UNKNOWN")) {
-                long group=++delivery;
-                String operation="guard-"+group;
-                insertRedriveGuardRow(operation,group,outcome,settlement);
-                Map<String,Object> row=jdbc.queryForMap(
-                        "SELECT disposition_guard,redrive_guard FROM agent_command_redrive_operation WHERE operation_id=?",operation);
-                if(outcome.equals("PENDING")) assertEquals(1,((Number)row.get("disposition_guard")).intValue());
-                else assertNull(row.get("disposition_guard"));
-                boolean released=Set.of("SOURCE_REQUEUED","NOT_ACQUIRED").contains(settlement);
-                if(released) {
-                    assertNull(row.get("redrive_guard"));
-                    insertRedriveGuardRow(operation+"-null",group,outcome,settlement);
-                    insertRedriveGuardRow(operation+"-active",group,"PENDING","PENDING");
-                    DataAccessException update=assertThrows(DataAccessException.class,()->jdbc.update(
-                            "UPDATE agent_command_redrive_operation SET settlement_state='PENDING' WHERE operation_id=?",operation));
-                    assertEquals(mysqlFixture()?"23000":"23505",((SQLException)update.getMostSpecificCause()).getSQLState());
-                    assertEquals(2,jdbc.queryForObject("SELECT COUNT(*) FROM agent_command_redrive_operation "
-                            +"WHERE delivery_id=? AND redrive_guard IS NULL",Integer.class,group));
-                } else {
-                    assertEquals(1,((Number)row.get("redrive_guard")).intValue());
-                    DataAccessException duplicate=assertThrows(DataAccessException.class,
-                            ()->insertRedriveGuardRow(operation+"-duplicate",group,outcome,settlement));
-                    assertEquals(mysqlFixture()?"23000":"23505",((SQLException)duplicate.getMostSpecificCause()).getSQLState());
-                }
-                assertEquals(1,jdbc.queryForObject("SELECT COUNT(*) FROM agent_command_redrive_operation "
-                        +"WHERE delivery_id=? AND redrive_guard=1",Integer.class,group));
-            }
-        }
-    }
-    private void insertRedriveGuardRow(String operation,long delivery,String outcome,String settlement) {
-        jdbc.update("""
-                INSERT INTO agent_command_redrive_operation
-                  (operation_id,delivery_id,task_id,target_agent_id,command_id,source_event_id,
-                   source_message_id,source_attempt,wire_hash,requester_id,reason,ticket_reference,
-                   outcome_state,settlement_state,requested_at,tenant_id,client_id,create_time,update_time)
-                VALUES(?,?,'guard-task',?,'guard-command','guard-event','guard-message',1,?,
-                       'requester','fixture guard check','ticket-guard',?,?,1,?,?,1,1)
-                """,operation,delivery,AGENT,new byte[32],outcome,settlement,ACTOR.tenantId(),ACTOR.clientId());
+        SkillTransportStorageAssertions.generatedGuards(jdbc,mysqlFixture(),ACTOR.tenantId(),ACTOR.clientId(),AGENT);
     }
     @Test void operationAuditRowsRejectUpdateAndDeleteAndRemainUnchanged() {
-        jdbc.update("""
-                INSERT INTO agent_command_operation_audit
-                  (operation_id,phase,operation_type,tenant_id,client_id,task_id,target_agent_id,
-                   source_message_id,delivery_id,requester_id,reason,ticket_reference,requested_at,
-                   outcome,created_by,created_at)
-                VALUES('audit-op-1','REQUEST','BROKER_REDRIVE',?,?,?,?,'message-1',1,
-                       'requester','fixture audit reason','ticket-1',1,'REQUESTED','creator',1)
-                """,ACTOR.tenantId(),ACTOR.clientId(),"task-1",AGENT);
-        Map<String,Object> before=jdbc.queryForMap(
-                "SELECT * FROM agent_command_operation_audit WHERE operation_id='audit-op-1'");
-
-        DataAccessException update=assertThrows(DataAccessException.class,()->jdbc.update(
-                "UPDATE agent_command_operation_audit SET outcome='FAILED' WHERE operation_id='audit-op-1'"));
-        assertTrue(update.getMostSpecificCause().getMessage().contains(
-                "D09: operation audit rows are immutable after insert"));
-        DataAccessException delete=assertThrows(DataAccessException.class,()->jdbc.update(
-                "DELETE FROM agent_command_operation_audit WHERE operation_id='audit-op-1'"));
-        assertTrue(delete.getMostSpecificCause().getMessage().contains(
-                "D09: physical delete of operation audit rows is forbidden"));
-
-        assertEquals(before,jdbc.queryForMap(
-                "SELECT * FROM agent_command_operation_audit WHERE operation_id='audit-op-1'"));
-        assertEquals(1,jdbc.queryForObject(
-                "SELECT COUNT(*) FROM agent_command_operation_audit WHERE operation_id='audit-op-1'",Integer.class));
+        SkillTransportStorageAssertions.immutableAudit(jdbc,ACTOR.tenantId(),ACTOR.clientId(),AGENT);
     }
     @Test void dynamicallyStoredApprovedPackageUsesRealPurchaseAndInstallTransactions() throws Exception {
         byte[] manifest="""
@@ -461,56 +366,34 @@ public class SkillMarketplaceRealTransactionTest {
         assertThrows(SkillMarketplaceException.class,()->results.packageBytes(proof(),i.getInstallationId()));
     }
     @Test void nativeWsPurchaseDrainsOriginalCommittedBytesWithoutRabbitAndActivatesOnlyFromTrustedResult() {
-        var body=purchaseBody("spv_repo_test_1_0_0");service.purchase(ACTOR,uuid(),body,false);var i=installation();
+        service.purchase(ACTOR,uuid(),purchaseBody("spv_repo_test_1_0_0"),false);var i=installation();
+        assertRetiredWireCannotRecover(i);
         assertTrue(service.available(ACTOR));assertFalse(service.available(new HostingRentHttp.Actor("payer-sub","0","client-a","Tenant-A")));
-        byte[] original=jdbc.queryForObject("SELECT wire_payload FROM agent_outbox_event",byte[].class);
-        assertEquals(SkillInstallCommandWriter.DESTINATION,jdbc.queryForObject("SELECT destination FROM agent_outbox_event",String.class));
-        when(sessions.dispatch(eq(ACTOR.tenantId()),eq(ACTOR.clientId()),eq(AGENT),any(),any())).thenAnswer(call->{
-            assertFalse(TransactionSynchronizationManager.isActualTransactionActive());
-            assertArrayEquals(original,call.getArgument(4));
-            assertEquals("CONSUMED",jdbc.queryForObject("SELECT status FROM agent_command_delivery",String.class));
-            assertEquals("CLAIMED",jdbc.queryForObject("SELECT status FROM agent_outbox_event",String.class));
-            return AgentRawCommandDispatchResult.sent(1,1);
-        });
-        recovery.recover();
-        assertEquals("SENT",jdbc.queryForObject("SELECT status FROM agent_command_delivery",String.class));
-        assertEquals("SENT",jdbc.queryForObject("SELECT status FROM agent_outbox_event",String.class));
         assertEquals("NONE",jdbc.queryForObject("SELECT publisher_confirm_status FROM agent_outbox_event",String.class));
         assertEquals(0,count("agent_consumer_inbox"));
-        assertEquals("INSTALLING",service.order(ACTOR,i.getOrderId()).get("status"));
-        results.accept(proof(),result(i,"SUCCEEDED",null));
-        assertEquals("ACTIVE",service.order(ACTOR,i.getOrderId()).get("status"));
-        assertTrue(recoveryMapper.candidates(System.currentTimeMillis()+120000,System.currentTimeMillis()+60000).isEmpty());
+        assertRetiredAck(i,"SUCCEEDED",System.currentTimeMillis());
     }
     @Test void nativeWsUnknownSendRecoversSameWireAndNeverRefundsOrMintsAnotherCommand() {
         service.purchase(ACTOR,uuid(),purchaseBody("spv_repo_test_1_0_0"),false);var i=installation();
-        byte[] wire=jdbc.queryForObject("SELECT wire_payload FROM agent_outbox_event",byte[].class);
-        long reserved=wallet();
-        when(sessions.dispatch(anyString(),anyString(),anyString(),any(),any())).thenThrow(new IllegalStateException("uncertain send"));
-        recovery.recover();assertEquals("RETRY",jdbc.queryForObject("SELECT status FROM agent_command_delivery",String.class));
-        assertEquals("INSTALLING",service.order(ACTOR,i.getOrderId()).get("status"));assertEquals(reserved,wallet());
-        jdbc.update("UPDATE agent_command_delivery SET update_time=?,next_retry_at=?",System.currentTimeMillis()-70000,System.currentTimeMillis()-1);
-        jdbc.update("UPDATE agent_outbox_event SET update_time=?,next_retry_at=?",System.currentTimeMillis()-70000,System.currentTimeMillis()-1);
-        doAnswer(call->{
-            assertArrayEquals(wire,call.getArgument(4));return AgentRawCommandDispatchResult.sent(1,1);
-        }).when(sessions).dispatch(anyString(),anyString(),anyString(),any(),any());
-        recovery.recover();assertEquals("SENT",jdbc.queryForObject("SELECT status FROM agent_command_delivery",String.class));
+        assertRetiredWireCannotRecover(i);
+        // Existing schema-1 rows are historical evidence, not permission to fabricate
+        // a schema-2 attempt or refund an uncertain send. New unknown/reconcile paths
+        // are covered against owned MySQL by SkillManagementTransactionTest.
+        jdbc.update("UPDATE agent_command_delivery SET status='RETRY',last_error='SKILL_WS_SEND_UNCERTAIN'");
+        assertRetiredWireCannotRecover(i);
         assertEquals(i.getMessageId(),jdbc.queryForObject("SELECT active_message_id FROM agent_command_delivery",String.class));
         assertEquals(1,jdbc.queryForObject("SELECT active_attempt FROM agent_command_delivery",Integer.class));
-        assertEquals(1,count("agent_outbox_event"));assertEquals(1,count("economy_skill_installation"));
-        assertArrayEquals(wire,jdbc.queryForObject("SELECT wire_payload FROM agent_outbox_event",byte[].class));
-        assertEquals("INSTALLING",service.order(ACTOR,i.getOrderId()).get("status"));assertEquals(reserved,wallet());
     }
     @Test void nativeWsInFlightLeasePreventsDuplicateAndReclaimsOnlyExpiredLease() {
-        service.purchase(ACTOR,uuid(),purchaseBody("spv_repo_test_1_0_0"),false);
+        service.purchase(ACTOR,uuid(),purchaseBody("spv_repo_test_1_0_0"),false);var i=installation();
         long now=System.currentTimeMillis();
         jdbc.update("UPDATE agent_command_delivery SET status='CONSUMED',lease_owner='other',lease_until=?,update_time=?",now+60000,now-70000);
         jdbc.update("UPDATE agent_outbox_event SET status='CLAIMED',lease_owner='other',lease_until=?,update_time=?",now+60000,now-70000);
-        recovery.recover();verify(sessions,never()).dispatch(anyString(),anyString(),anyString(),any(),any());
+        var d=ackCommands.lockDelivery(ACTOR.tenantId(),ACTOR.clientId(),jdbc.queryForObject("SELECT id FROM agent_command_delivery",Long.class));
+        recovery.recover(d,now);verify(sessions,never()).dispatch(anyString(),anyString(),anyString(),any(),any());
         jdbc.update("UPDATE agent_command_delivery SET lease_until=?",now-1);jdbc.update("UPDATE agent_outbox_event SET lease_until=?",now-1);
-        when(sessions.dispatch(anyString(),anyString(),anyString(),any(),any())).thenReturn(AgentRawCommandDispatchResult.sent(1,1));
-        recovery.recover();assertEquals("SENT",jdbc.queryForObject("SELECT status FROM agent_command_delivery",String.class));
-        verify(sessions,times(1)).dispatch(anyString(),anyString(),anyString(),any(),any());
+        assertRetiredWireCannotRecover(i);
+        assertEquals("other",jdbc.queryForObject("SELECT lease_owner FROM agent_outbox_event",String.class));
     }
     @Test void persistedSkillWireAndResultReplayKeepTransportAndInstallationIdentitiesDistinct() {
         var body=purchaseBody("spv_repo_test_1_0_0");String idem=uuid();
@@ -701,15 +584,14 @@ public class SkillMarketplaceRealTransactionTest {
         assertFalse(columns.stream().anyMatch(c->c.equalsIgnoreCase("api_key") || c.equalsIgnoreCase("secret")));
     }
     @Test void skillDispatchUsesDurableOrderNotTaskAclAndIoRunsAfterCommit() {
-        service.purchase(ACTOR,uuid(),purchaseBody("spv_repo_test_1_0_0"),false);var i=installation();sent(i);
+        service.purchase(ACTOR,uuid(),purchaseBody("spv_repo_test_1_0_0"),false);var i=installation();
         byte[] wire=jdbc.queryForObject("SELECT wire_payload FROM agent_outbox_event",byte[].class);
-        when(sessions.dispatch(eq(ACTOR.tenantId()),eq(ACTOR.clientId()),eq(AGENT),any(),any())).thenAnswer(x->{
-            assertFalse(TransactionSynchronizationManager.isActualTransactionActive());return AgentRawCommandDispatchResult.sent(1,1);
-        });
-        assertEquals(AgentRawCommandDispatchResult.Status.SENT,dispatch.dispatch(ACTOR.tenantId(),ACTOR.clientId(),ACTOR.ownerJiacn(), i.getOrderId(),AGENT,i.getCommandId(),wire).status());
-        byte[] tampered=wire.clone();tampered[0]='[';
-        assertThrows(SkillMarketplaceException.class,()->dispatch.dispatch(ACTOR.tenantId(),ACTOR.clientId(),ACTOR.ownerJiacn(), i.getOrderId(),AGENT,i.getCommandId(),tampered));
-        verify(sessions,times(1)).dispatch(anyString(),anyString(),anyString(),any(),any());
+        // No SM-C1 service has been installed in this historical fixture. The real
+        // dispatcher must fail closed, not fall back to the old order-based sender.
+        var unavailable=assertThrows(SkillMarketplaceException.class,()->dispatch.dispatch(ACTOR.tenantId(),ACTOR.clientId(),ACTOR.ownerJiacn(),i.getOrderId(),AGENT,i.getCommandId(),wire));
+        assertEquals(503,unavailable.status());assertEquals("SKILL_STATE_UNAVAILABLE",unavailable.code());
+        verify(sessions,never()).dispatch(anyString(),anyString(),anyString(),any(),any());
+        assertEquals("PENDING",jdbc.queryForObject("SELECT status FROM agent_command_delivery",String.class));
     }
     @Test void unmappedHistoryBlocksOnlyItsDeliveryWithoutRechargingOrReplaying() {
         var body=purchaseBody("spv_repo_test_1_0_0");String idem=uuid();
@@ -723,6 +605,27 @@ public class SkillMarketplaceRealTransactionTest {
         assertEquals(receipt,service.purchase(ACTOR,idem,body,false));
         assertEquals(1,count("economy_transaction"));assertEquals(1,count("agent_command_delivery"));
         assertEquals(70000000L,wallet());assertEquals(0,count("economy_skill_result_receipt"));
+    }
+    /** Retired wire is immutable history. It must neither send, settle money nor mint attempts.
+     * Success/lease/retry/receipt semantics now live in the real SM-C1 MySQL suite. */
+    private void assertRetiredWireCannotRecover(SkillInstallationEntity installation) {
+        byte[] wire=jdbc.queryForObject("SELECT wire_payload FROM agent_outbox_event",byte[].class);
+        long before=wallet();long version=jdbc.queryForObject("SELECT version FROM agent_command_delivery",Long.class);
+        var delivery=ackCommands.lockDelivery(ACTOR.tenantId(),ACTOR.clientId(),jdbc.queryForObject("SELECT id FROM agent_command_delivery",Long.class));
+        var error=assertThrows(SkillMarketplaceException.class,()->recovery.recover(delivery,System.currentTimeMillis()+120000));
+        assertEquals("SKILL_DELIVERY_FENCED",error.code());
+        assertArrayEquals(wire,jdbc.queryForObject("SELECT wire_payload FROM agent_outbox_event",byte[].class));
+        assertEquals(version,jdbc.queryForObject("SELECT version FROM agent_command_delivery",Long.class));
+        assertEquals(before,wallet());assertEquals("INSTALLING",service.order(ACTOR,installation.getOrderId()).get("status"));
+        assertEquals(0,count("economy_skill_result_receipt"));assertEquals(1,count("agent_command_delivery"));assertEquals(1,count("agent_outbox_event"));
+        verify(sessions,never()).dispatch(anyString(),anyString(),anyString(),any(),any());
+    }
+    private void assertRetiredAck(SkillInstallationEntity installation,String status,long now) {
+        long before=wallet();long version=jdbc.queryForObject("SELECT version FROM agent_command_delivery",Long.class);
+        var error=assertThrows(SkillMarketplaceException.class,()->nativeAckAt(installation,status,null,now));
+        assertEquals(410,error.status());assertEquals("ENDPOINT_RETIRED",error.code());
+        assertEquals(version,jdbc.queryForObject("SELECT version FROM agent_command_delivery",Long.class));assertEquals(before,wallet());
+        assertEquals("INSTALLING",service.order(ACTOR,installation.getOrderId()).get("status"));
     }
     private AgentRuntimeAuthenticationService.Proof proof() {
         return new AgentRuntimeAuthenticationService.Proof(new AgentRuntimeAuthentication.Scope(

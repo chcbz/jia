@@ -17,7 +17,15 @@ public interface InstalledSkillDescriptorLookup {
     Snapshot read(SkillCapabilityLookup.Scope scope);
 
     final class SourceUnavailable extends RuntimeException {
-        public SourceUnavailable() { super("SKILL_DESCRIPTOR_SOURCE_UNAVAILABLE"); }
-        public SourceUnavailable(Throwable cause) { super("SKILL_DESCRIPTOR_SOURCE_UNAVAILABLE", cause); }
+        public enum Reason { UNAVAILABLE, FORBIDDEN }
+        private final Reason reason;
+        public SourceUnavailable() { this(Reason.UNAVAILABLE,null); }
+        public SourceUnavailable(Throwable cause) { this(Reason.UNAVAILABLE,cause); }
+        public SourceUnavailable(Reason reason,Throwable cause) {
+            super("SKILL_DESCRIPTOR_SOURCE_UNAVAILABLE",cause);
+            this.reason=Objects.requireNonNull(reason);
+        }
+        /** Internal classification; no change to the public descriptor/error envelope. */
+        public Reason reason() { return reason; }
     }
 }
