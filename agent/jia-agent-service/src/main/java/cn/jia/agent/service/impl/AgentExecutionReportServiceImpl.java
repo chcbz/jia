@@ -281,7 +281,6 @@ public class AgentExecutionReportServiceImpl implements AgentExecutionReportServ
                 Object refs = map.get("outputStageRefs");
                 if (!(refs instanceof List<?>)) invalid();
                 List<?> list = (List<?>) refs;
-                if (list.size() > 32) invalid();
                 for (Object value : list) if (!(value instanceof String text) || !validText(text, 100)) invalid();
             }
         });

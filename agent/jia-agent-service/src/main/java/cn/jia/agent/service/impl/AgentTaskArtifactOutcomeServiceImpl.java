@@ -47,8 +47,6 @@ import java.util.function.LongSupplier;
 @Named
 @Transactional(rollbackFor = Exception.class)
 public class AgentTaskArtifactOutcomeServiceImpl implements AgentTaskArtifactOutcomeService {
-    // One decision cannot invalidate more than the existing 100-row workspace artifact window.
-    static final int MAX_SUPERSEDED_ARTIFACTS = 100;
     static final int DEFAULT_AUTHORITATIVE_LIMIT = 100;
     static final int MAX_AUTHORITATIVE_LIMIT = 100;
 
@@ -477,9 +475,6 @@ public class AgentTaskArtifactOutcomeServiceImpl implements AgentTaskArtifactOut
         ArtifactRef accepted = requireRef(command.getAcceptedArtifact(), "acceptedArtifact");
         List<AgentTaskArtifactRefDTO> supplied = command.getSupersededArtifacts() == null
                 ? List.of() : command.getSupersededArtifacts();
-        if (supplied.size() > MAX_SUPERSEDED_ARTIFACTS) {
-            throw invalid("supersededArtifacts exceeds authoritative artifact window");
-        }
         List<ArtifactRef> superseded = new ArrayList<>(supplied.size());
         Set<ArtifactKey> unique = new HashSet<>();
         unique.add(accepted.key());

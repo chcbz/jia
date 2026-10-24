@@ -1075,7 +1075,6 @@ public class ChatDeliberationService {
 
     private Set<String> normalizeTurnSelection(List<String> turnIds) {
         if (turnIds == null || turnIds.isEmpty()) return Set.of();
-        if (turnIds.size() > 32) throw invalid("Too many turnIds");
         Set<String> result = new LinkedHashSet<>();
         for (String turnId : turnIds) result.add(requireIdentity(turnId, MAX_ID));
         return Set.copyOf(result);

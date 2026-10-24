@@ -213,11 +213,11 @@ class AgentWorkItemPlanControllerTest {
     }
 
     @Test
-    void bodySizeLimitRejectsBeforeAllocationToService() throws Exception {
+    void malformedJsonRejectsBeforeCallingService() throws Exception {
         mvc.perform(post("/agent/tasks/task-1/work-item-plans/suggest")
                         .queryParam("actorAgentId", ACTOR)
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("x".repeat(AgentWorkItemPlanController.MAX_BODY_BYTES + 1))
+                        .content("not-json")
                         .principal(jwt("tenant-a", "client-a")))
                 .andExpect(status().isBadRequest());
         verify(service, never()).suggest(any(), any(), any(), any(), any(), any());

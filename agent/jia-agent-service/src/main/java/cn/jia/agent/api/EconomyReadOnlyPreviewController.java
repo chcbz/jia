@@ -222,7 +222,7 @@ public final class EconomyReadOnlyPreviewController {
     }
 
     private static EstimateInput estimate(byte[] raw) {
-        if (raw == null || raw.length == 0 || raw.length > 8192) throw badRequest();
+        if (raw == null || raw.length == 0) throw badRequest();
         try {
             JsonNode root = STRICT_JSON.readTree(raw);
             if (root == null || !root.isObject() || root.size() != 4

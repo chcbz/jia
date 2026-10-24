@@ -44,7 +44,6 @@ import java.util.Set;
 public class AgentWorkItemReassignmentController {
     static final String REASSIGN_AUTHORITY = "agent-work-item-reassign";
     static final String CACHE_CONTROL = "private, no-store";
-    static final int MAX_BODY_BYTES = 32 * 1024;
     private static final ObjectMapper STRICT_JSON = JsonMapper.builder()
             .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
             .enable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
@@ -255,7 +254,7 @@ public class AgentWorkItemReassignmentController {
     private static byte[] readBounded(HttpServletRequest request) {
         try {
             byte[] data = cn.jia.core.config.ApiJsonInput.readData(request);
-            if (data.length == 0 || data.length > MAX_BODY_BYTES) throw new RequestFailure();
+            if (data.length == 0) throw new RequestFailure();
             return data;
         } catch (IOException unreadable) {
             throw new RequestFailure();

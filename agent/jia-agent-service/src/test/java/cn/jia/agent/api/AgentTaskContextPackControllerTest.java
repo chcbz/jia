@@ -281,18 +281,6 @@ class AgentTaskContextPackControllerTest extends BaseMockTest {
     }
 
     @Test
-    void serializedResponseAboveBoundFailsClosedInsteadOfTruncating() throws Exception {
-        AgentTaskContextPackDTO result = pack("0", "client-a", "9");
-        result.getTaskDescription().getDescription().setValue(
-                "x".repeat(AgentTaskContextPackController.MAX_SERIALIZED_BYTES));
-        when(service.generate("0", "client-a", "tenant-a", TASK, ACTOR, null)).thenReturn(result);
-        mvc.perform(get("/agent/tasks/{taskId}/context-pack", TASK).principal(jwt(ACTOR)))
-                .andExpect(status().isServiceUnavailable())
-                .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
-                .andExpect(jsonPath("$.code").value("TASK_CONTEXT_PACK_UNAVAILABLE"));
-    }
-
-    @Test
     void earliestFilterAddsNoStoreBeforeSecurityResponse() throws Exception {
         AgentTaskContextPackCacheControlFilter filter = new AgentTaskContextPackCacheControlFilter();
         MockHttpServletRequest request = new MockHttpServletRequest(

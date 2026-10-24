@@ -31,7 +31,6 @@ import java.util.Map;
 @RequestMapping("/agent/tasks")
 @RequiredArgsConstructor
 public class AgentTaskWorkspaceController {
-    static final int MAX_SERIALIZED_BYTES = 4 * 1024 * 1024;
     static final String CACHE_CONTROL_VALUE = "private, no-store";
 
     private final AgentTaskWorkspaceService workspaceService;
@@ -56,10 +55,6 @@ public class AgentTaskWorkspaceController {
         } catch (Exception exception) {
             throw new AgentTaskWorkspaceException(
                     AgentTaskWorkspaceException.Reason.SNAPSHOT_UNAVAILABLE, exception);
-        }
-        if (body.length > MAX_SERIALIZED_BYTES) {
-            throw new AgentTaskWorkspaceException(
-                    AgentTaskWorkspaceException.Reason.SNAPSHOT_UNAVAILABLE);
         }
         body = cn.jia.core.config.ApiJsonResponses.rawJsonSuccess(body, request);
         return ResponseEntity.ok()

@@ -502,7 +502,6 @@ public final class FundedBountyServiceImpl implements FundedBountyService {
         if (amount <= 0) throw badRequest("grossBountyAmountMicro must be positive");
         List<AgentSkillRequirementDTO> requirements = request.getRequiredSkillRequirements();
         if (requirements == null) throw badRequest("requiredSkillRequirements is required");
-        if (requirements.size() > 64) throw badRequest("requiredSkillRequirements is too large");
         for (AgentSkillRequirementDTO requirement : requirements) {
             if (requirement == null) throw badRequest("requiredSkillRequirements contains null");
             validateId(requirement.getSkillKey(), "skillKey", 100);

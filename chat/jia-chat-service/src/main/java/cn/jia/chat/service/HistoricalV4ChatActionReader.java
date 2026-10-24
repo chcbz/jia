@@ -402,7 +402,7 @@ public class HistoricalV4ChatActionReader {
                 ||!"CONVERSATION".equals(execution.executionMode())||!"RESULT_COMMITTED".equals(execution.state())
                 ||execution.runId()==null||!execution.runId().matches("[A-Za-z0-9][A-Za-z0-9._:-]{0,99}"))throw unavailable();
         var outputs=deliveryExecutions.listConversationOutputs(owner,row.taskId(),execution.runId());
-        if(outputs==null||outputs.size()>128)throw unavailable();
+        if(outputs==null)throw unavailable();
         var seen=new java.util.HashSet<String>();var result=new java.util.ArrayList<Map<String,Object>>();
         for(var output:outputs) {
             if(output==null||!execution.executionId().equals(output.executionId())||output.outputId()==null

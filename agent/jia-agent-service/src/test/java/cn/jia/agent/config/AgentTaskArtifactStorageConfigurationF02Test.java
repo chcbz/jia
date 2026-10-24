@@ -55,18 +55,12 @@ class AgentTaskArtifactStorageConfigurationF02Test {
     }
 
     @Test
-    void enabledWithoutSafeRootOrWithEmptyAllowlistFailsStartup() {
+    void enabledWithoutSafeRootFailsStartup() {
         RUNNER.withPropertyValues("agent.task-artifact-storage.enabled=true")
                 .run(context -> assertConfigurationFailure(context.getStartupFailure()));
         RUNNER.withPropertyValues(
                         "agent.task-artifact-storage.enabled=true",
                         "agent.task-artifact-storage.root-directory=relative/path")
-                .run(context -> assertConfigurationFailure(context.getStartupFailure()));
-        RUNNER.withPropertyValues(
-                        "agent.task-artifact-storage.enabled=true",
-                        "agent.task-artifact-storage.root-directory="
-                                + temporaryDirectory.resolve("empty-mimes").toAbsolutePath(),
-                        "agent.task-artifact-storage.allowed-mime-types[0]=")
                 .run(context -> assertConfigurationFailure(context.getStartupFailure()));
     }
 

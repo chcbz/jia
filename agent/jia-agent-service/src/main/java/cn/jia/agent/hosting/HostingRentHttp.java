@@ -62,7 +62,7 @@ public final class HostingRentHttp {
     }
 
     public static Map<String, String> body(byte[] bytes, Set<String> allowed, Set<String> nullable) {
-        if (bytes == null || bytes.length == 0 || bytes.length > 4096) throw badRequest();
+        if (bytes == null || bytes.length == 0) throw badRequest();
         try {
             Map<String, Object> node = JSON.readValue(bytes, new TypeReference<Map<String, Object>>() { });
             if (node == null) throw badRequest();

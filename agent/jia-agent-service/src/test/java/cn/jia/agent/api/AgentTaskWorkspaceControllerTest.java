@@ -335,21 +335,6 @@ class AgentTaskWorkspaceControllerTest extends BaseMockTest {
     }
 
     @Test
-    void serializedResponseAboveFourMiBFails503InsteadOfTruncating() throws Exception {
-        JwtAuthenticationToken authentication = authenticate("tenant-a", "client-a");
-        AgentTaskWorkspaceDTO snapshot = snapshot("0");
-        snapshot.getTask().setRequiredAbilities("x".repeat(
-                AgentTaskWorkspaceController.MAX_SERIALIZED_BYTES));
-        when(service.snapshot("0", "client-a", "tenant-a", TASK, ACTOR)).thenReturn(snapshot);
-
-        mvc.perform(get("/agent/tasks/{taskId}/workspace", TASK)
-                        .queryParam("actorAgentId", ACTOR).principal(authentication))
-                .andExpect(status().isServiceUnavailable())
-                .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
-                .andExpect(jsonPath("$.code").value("TASK_WORKSPACE_UNAVAILABLE"));
-    }
-
-    @Test
     void earliestFilterAddsNoStoreBeforeDownstreamSecurityResponse() throws Exception {
         AgentTaskWorkspaceCacheControlFilter filter = new AgentTaskWorkspaceCacheControlFilter();
         MockHttpServletRequest request = new MockHttpServletRequest(

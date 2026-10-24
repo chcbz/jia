@@ -57,9 +57,7 @@ import java.util.Set;
 @ConditionalOnProperty(prefix = "jia.agent.formal-delivery", name = "enabled", havingValue = "true")
 public class AgentTaskFormalDeliveryController {
     static final String CACHE_CONTROL = "private, no-store";
-    static final int MAX_BODY_BYTES = 64 * 1024;
     private static final int BODY_BUFFER_BYTES = 8192;
-    private static final int MAX_ITEMS = 100;
     private static final Set<String> SUBMIT_FIELDS = Set.of("runId", "workItemId", "leaseToken",
             "expectedTaskVersion", "expectedWorkItemVersion", "summary", "manifestArtifactId",
             "manifestArtifactVersion", "items");
@@ -98,7 +96,7 @@ public class AgentTaskFormalDeliveryController {
         requireNoQuery(request);
         List<AgentTaskFormalDeliveryViewDTO> rows = readService.listForTaskOwner(
                 scope.tenantId(), scope.clientId(), scope.ownerJiacn(), taskId);
-        if (rows == null || rows.size() > MAX_ITEMS) {
+        if (rows == null) {
             throw new IllegalStateException("Formal delivery result is inconsistent");
         }
         List<FormalDeliveryResponse> items = new ArrayList<>(rows.size());
@@ -121,7 +119,7 @@ public class AgentTaskFormalDeliveryController {
         requireNoQuery(request);
         String key = requireIdempotencyKey(idempotencyKey);
         String deliveryId = deliveryId(scope, taskId, key);
-        AgentTaskFormalDeliverySubmitDTO command = parseSubmit(readBounded(request), deliveryId);
+        AgentTaskFormalDeliverySubmitDTO command = parseSubmit(readBody(request), deliveryId);
         AgentTaskFormalDeliveryViewDTO view = submissionService.submit(scope.tenantId(),
                 scope.clientId(), scope.ownerJiacn(), taskId, scope.actorId(), command);
         return cn.jia.core.config.ApiJsonResponses.success(ok(response(view, taskId, Long.MAX_VALUE)));
@@ -138,7 +136,7 @@ public class AgentTaskFormalDeliveryController {
         requireExact(deliveryId, 100);
         requireNoQuery(request);
         requireIdempotencyKey(idempotencyKey);
-        AgentTaskFormalDeliveryDecisionDTO command = parseDecision(readBounded(request), deliveryId);
+        AgentTaskFormalDeliveryDecisionDTO command = parseDecision(readBody(request), deliveryId);
         AgentTaskFormalDeliveryViewDTO view = decisionService.decide(scope.tenantId(),
                 scope.clientId(), taskId, scope.ownerJiacn(), command);
         return cn.jia.core.config.ApiJsonResponses.success(ok(response(view, taskId, Long.MAX_VALUE)));
@@ -154,7 +152,7 @@ public class AgentTaskFormalDeliveryController {
         requireExact(taskId, 100); requireExact(deliveryId, 100); requireNoQuery(request);
         String key = requireIdempotencyKey(idempotencyKey);
         AgentTaskReworkExecutionService.ReworkCommand command = parseRework(
-                readBounded(request), taskId, deliveryId);
+                readBody(request), taskId, deliveryId);
         PersonalWorkspaceExecutionService.ExecutionView view = reworkService.create(
                 new PersonalWorkspaceExecutionService.OwnerScope(
                         scope.tenantId(), scope.clientId(), scope.ownerJiacn()), command, key);
@@ -256,7 +254,7 @@ public class AgentTaskFormalDeliveryController {
         command.setManifestArtifactId(text(root, "manifestArtifactId", 100));
         command.setManifestArtifactVersion(positiveInt(root, "manifestArtifactVersion"));
         JsonNode sourceItems = root.get("items");
-        if (!sourceItems.isArray() || sourceItems.isEmpty() || sourceItems.size() > MAX_ITEMS) {
+        if (!sourceItems.isArray() || sourceItems.isEmpty()) {
             throw new RequestFailure();
         }
         List<AgentTaskFormalDeliveryItemDTO> items = new ArrayList<>(sourceItems.size());
@@ -313,7 +311,7 @@ public class AgentTaskFormalDeliveryController {
     }
 
     private static JsonNode parseDecisionObject(byte[] body) {
-        if (body == null || body.length == 0 || body.length > MAX_BODY_BYTES) {
+        if (body == null || body.length == 0) {
             throw new RequestFailure();
         }
         try {
@@ -338,7 +336,7 @@ public class AgentTaskFormalDeliveryController {
     }
 
     private static JsonNode parseObject(byte[] body, Set<String> fields) {
-        if (body == null || body.length == 0 || body.length > MAX_BODY_BYTES) {
+        if (body == null || body.length == 0) {
             throw new RequestFailure();
         }
         try {
@@ -405,7 +403,7 @@ public class AgentTaskFormalDeliveryController {
                 || view.getSubmittedAt() == null || view.getSubmittedAt() <= 0
                 || view.getTaskVersion() == null || view.getTaskVersion() < 0
                 || view.getWorkItemVersion() == null || view.getWorkItemVersion() < 0
-                || view.getItems() == null || view.getItems().isEmpty() || view.getItems().size() > MAX_ITEMS) {
+                || view.getItems() == null || view.getItems().isEmpty()) {
             throw new IllegalStateException("Formal delivery response is inconsistent");
         }
         boolean submitted = "submitted".equals(view.getState());
@@ -447,13 +445,13 @@ public class AgentTaskFormalDeliveryController {
                 || "changes_requested".equals(state);
     }
 
-    private static byte[] readBounded(HttpServletRequest request) {
+    private static byte[] readBody(HttpServletRequest request) {
         long declaredLength = request.getContentLengthLong();
-        if (declaredLength == 0 || declaredLength > MAX_BODY_BYTES) throw new RequestFailure();
+        if (declaredLength == 0) throw new RequestFailure();
         int initial = declaredLength > 0 ? (int) Math.min(declaredLength, BODY_BUFFER_BYTES)
                 : BODY_BUFFER_BYTES;
         // Cached request wrappers may return a fresh stream per access. Read one stream
-        // exactly once; reacquiring inside the loop repeats the body until the size cap.
+        // exactly once; reacquiring inside the loop repeats the body instead of reaching EOF.
         try (InputStream input = request.getInputStream();
              ByteArrayOutputStream result = new ByteArrayOutputStream(initial)) {
             byte[] buffer = new byte[BODY_BUFFER_BYTES];
@@ -461,7 +459,6 @@ public class AgentTaskFormalDeliveryController {
             int count;
             while ((count = input.read(buffer)) != -1) {
                 if (count == 0) continue;
-                if (count > MAX_BODY_BYTES - total) throw new RequestFailure();
                 result.write(buffer, 0, count);
                 total += count;
             }

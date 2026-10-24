@@ -38,7 +38,6 @@ import java.util.Set;
 @RequestMapping("/agent/tasks")
 @RequiredArgsConstructor
 public class AgentTaskContextPackController {
-    static final int MAX_SERIALIZED_BYTES = 1024 * 1024;
     static final String CACHE_CONTROL_VALUE = "private, no-store";
     private static final Set<String> QUERY_FIELDS = Set.of("expectedVersion");
 
@@ -73,10 +72,6 @@ public class AgentTaskContextPackController {
         } catch (Exception exception) {
             throw new AgentTaskContextPackException(
                     AgentTaskContextPackException.Reason.CONTEXT_UNAVAILABLE, exception);
-        }
-        if (body.length > MAX_SERIALIZED_BYTES) {
-            throw new AgentTaskContextPackException(
-                    AgentTaskContextPackException.Reason.CONTEXT_UNAVAILABLE);
         }
         requireSerializedScope(body, scope, taskId, expectedVersion);
         // Retain F01's original snapshot isolation. Re-fence only the delivery of its

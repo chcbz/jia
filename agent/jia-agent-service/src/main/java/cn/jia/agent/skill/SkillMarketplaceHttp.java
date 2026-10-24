@@ -13,7 +13,7 @@ public final class SkillMarketplaceHttp {
             .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS).build();
     private SkillMarketplaceHttp() { }
     public static Map<String,String> body(byte[] raw,boolean purchase) {
-        require(raw!=null && raw.length>0 && raw.length<=8192,400,"BAD_REQUEST");
+        require(raw!=null && raw.length>0,400,"BAD_REQUEST");
         try {
             Map<String,Object> node=JSON.readValue(raw,new TypeReference<Map<String,Object>>(){});
             Set<String> fields=purchase?Set.of("quoteId","productVersionId","targetAgentId","expectedPrice","expectedAgentVersion","approvedPermissions")
@@ -24,7 +24,7 @@ public final class SkillMarketplaceHttp {
                 Object value=node.get(name);
                 if(name.equals("approvedPermissions")) {
                     require(value instanceof List<?>,400,"BAD_REQUEST");
-                    List<?> list=(List<?>)value; require(list.size()<=32,400,"BAD_REQUEST");
+                    List<?> list=(List<?>)value;
                     Set<String> seen=new HashSet<>(); List<String> approved=new ArrayList<>();
                     for(Object item:list) {
                         require(item instanceof String,400,"BAD_REQUEST");

@@ -40,7 +40,6 @@ import java.util.Objects;
 @ConditionalOnProperty(prefix = "jia.agent.work-item-plan", name = "enabled", havingValue = "true")
 public class AgentWorkItemPlanController {
     static final String CACHE_CONTROL = "private, no-store";
-    static final int MAX_BODY_BYTES = 64 * 1024;
     private static final ObjectMapper STRICT_JSON = JsonMapper.builder()
             .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
             .enable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
@@ -159,7 +158,7 @@ public class AgentWorkItemPlanController {
     }
 
     private static <T> T parse(byte[] body, Class<T> type) {
-        if (body == null || body.length == 0 || body.length > MAX_BODY_BYTES) {
+        if (body == null || body.length == 0) {
             throw new RequestFailure();
         }
         try {

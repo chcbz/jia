@@ -324,7 +324,7 @@ public class EconomyReadOnlyPreviewService {
     private static List<String> permissions(String raw) {
         try {
             List<Object> values = JSON.readValue(raw, new TypeReference<List<Object>>() { });
-            if (values == null || values.size() > 32) throw unavailable("Skill permissions are invalid");
+            if (values == null) throw unavailable("Skill permissions are invalid");
             List<String> result = new ArrayList<>(values.size());
             Set<String> unique = new HashSet<>();
             for (Object value : values) {

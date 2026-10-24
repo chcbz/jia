@@ -49,9 +49,8 @@ public class AgentTaskCancellationController {
         }
         long version;
         try {
-            // Bounded request, no free-form reason/identity/lease/credential payload accepted.
+            // Only the version field is accepted; JSON whitespace is not a business limit.
             byte[] bytes=cn.jia.core.config.ApiJsonInput.readData(request);
-            if (bytes.length>1024) throw badRequest();
             JsonNode root=JSON.readTree(bytes);
             JsonNode expected=root==null ? null : root.get("expectedTaskVersion");
             if (root==null || !root.isObject() || root.size()!=1 || expected==null

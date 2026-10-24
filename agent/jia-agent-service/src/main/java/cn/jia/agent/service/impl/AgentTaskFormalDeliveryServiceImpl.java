@@ -46,7 +46,6 @@ import java.util.function.LongSupplier;
  */
 @Named
 public class AgentTaskFormalDeliveryServiceImpl implements AgentTaskFormalDeliveryService {
-    private static final int MAX_ITEMS = 100;
     private static final String RUNNING = "running";
     private static final String SUBMITTED = "submitted";
     private static final String REVIEWING = "reviewing";
@@ -212,8 +211,8 @@ public class AgentTaskFormalDeliveryServiceImpl implements AgentTaskFormalDelive
             throw invalid("manifestArtifactVersion must be positive");
         }
         List<AgentTaskFormalDeliveryItemDTO> source = command.getItems();
-        if (source == null || source.isEmpty() || source.size() > MAX_ITEMS) {
-            throw invalid("Formal delivery must contain between 1 and " + MAX_ITEMS + " artifacts");
+        if (source == null || source.isEmpty()) {
+            throw invalid("Formal delivery must contain at least one artifact");
         }
         List<RequiredItem> items = new ArrayList<>(source.size());
         Set<ArtifactKey> unique = new HashSet<>();

@@ -56,7 +56,6 @@ public class AgentCommandOperationsController {
     static final String CACHE_CONTROL = "private, no-store";
     private static final Set<String> OPERATION_BODY_FIELDS = Set.of(
             "taskId", "targetAgentId", "sourceMessageId", "reason", "ticketReference");
-    private static final int MAX_OPERATION_BODY_BYTES = 8 * 1024;
     private static final ObjectMapper STRICT_JSON = JsonMapper.builder()
             .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
             .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
@@ -281,7 +280,7 @@ public class AgentCommandOperationsController {
     }
 
     private OperationBody requireBody(byte[] raw) {
-        if (raw == null || raw.length == 0 || raw.length > MAX_OPERATION_BODY_BYTES) {
+        if (raw == null || raw.length == 0) {
             throw new RequestFailure();
         }
         JsonNode root;

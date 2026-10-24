@@ -22,7 +22,6 @@ import java.nio.file.attribute.PosixFilePermission;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
-import java.util.LinkedHashSet;
 import java.util.Objects;
 import java.util.Set;
 import java.util.regex.Pattern;
@@ -46,48 +45,26 @@ public final class FileSystemAgentTaskArtifactStorage implements AgentTaskArtifa
             PosixFilePermission.OWNER_EXECUTE);
     private static final Set<PosixFilePermission> FILE_PERMISSIONS = Set.of(
             PosixFilePermission.OWNER_READ);
-    private static final long MAX_CONFIGURED_BYTES = 64L * 1024L * 1024L;
     private static final int MAX_INITIAL_READ_BUFFER_BYTES = 64 * 1024;
 
     private final Path root;
     private final Object rootFileKey;
-    private final long maxContentBytes;
-    private final Set<String> allowedMimeTypes;
 
-    public FileSystemAgentTaskArtifactStorage(
-            Path root, long maxContentBytes, Set<String> allowedMimeTypes) {
+    public FileSystemAgentTaskArtifactStorage(Path root) {
         if (root == null || !root.isAbsolute() || root.normalize().getParent() == null) {
             throw invalid("Artifact storage root must be an absolute non-filesystem-root path");
-        }
-        if (maxContentBytes < 1 || maxContentBytes > MAX_CONFIGURED_BYTES) {
-            throw invalid("Artifact storage size limit is invalid");
-        }
-        if (allowedMimeTypes == null || allowedMimeTypes.isEmpty()) {
-            throw invalid("Artifact storage MIME allowlist is required");
-        }
-        LinkedHashSet<String> canonicalMimeTypes = new LinkedHashSet<>();
-        for (String mimeType : allowedMimeTypes) {
-            String canonical = requireMimeSyntax(mimeType);
-            if (!canonical.equals(mimeType) || !canonicalMimeTypes.add(canonical)) {
-                throw invalid("Artifact storage MIME allowlist is invalid");
-            }
         }
         this.root = initializeRoot(root.normalize());
         setPermissions(this.root, DIRECTORY_PERMISSIONS);
         this.rootFileKey = attributes(this.root).fileKey();
-        this.maxContentBytes = maxContentBytes;
-        this.allowedMimeTypes = Set.copyOf(canonicalMimeTypes);
     }
 
     @Override
     public StoredObject store(Scope scope, byte[] content, String mimeType) {
         requireScope(scope);
-        String canonicalMime = requireAllowedMime(mimeType);
+        String canonicalMime = requireMimeSyntax(mimeType);
         if (content == null) {
             throw invalid("Managed artifact content is required");
-        }
-        if (content.length > maxContentBytes) {
-            throw invalid("Managed artifact content exceeds the configured limit");
         }
         verifyRootIdentity();
         String scopeKey = scopeKey(scope);
@@ -129,10 +106,10 @@ public final class FileSystemAgentTaskArtifactStorage implements AgentTaskArtifa
             long expectedByteLength, String expectedMimeType) {
         requireScope(scope);
         if (!SHA256.matcher(Objects.requireNonNullElse(expectedSha256, "")).matches()
-                || expectedByteLength < 0 || expectedByteLength > maxContentBytes) {
+                || expectedByteLength < 0 || expectedByteLength > Integer.MAX_VALUE) {
             throw invalid("Managed artifact read expectations are invalid");
         }
-        String canonicalMime = requireAllowedMime(expectedMimeType);
+        String canonicalMime = requireMimeSyntax(expectedMimeType);
         verifyRootIdentity();
         UriParts parts = parseOwnedUri(storageUri);
         String exactScopeKey = scopeKey(scope);
@@ -142,7 +119,7 @@ public final class FileSystemAgentTaskArtifactStorage implements AgentTaskArtifa
         }
         Path directory = requireObjectDirectory(parts.scopeKey(), parts.contentHash());
         Path target = objectPath(directory, parts.contentHash());
-        byte[] content = readBounded(target);
+        byte[] content = readContent(target);
         String actualHash = sha256(content);
         if (!constantTimeEquals(actualHash, expectedSha256)
                 || content.length != expectedByteLength) {
@@ -295,7 +272,7 @@ public final class FileSystemAgentTaskArtifactStorage implements AgentTaskArtifa
     }
 
     private void verifyExisting(Path target, String expectedHash, long expectedLength) {
-        byte[] content = readBounded(target);
+        byte[] content = readContent(target);
         if (content.length != expectedLength
                 || !constantTimeEquals(sha256(content), expectedHash)) {
             throw corrupt("Existing managed artifact content does not match its digest");
@@ -303,13 +280,13 @@ public final class FileSystemAgentTaskArtifactStorage implements AgentTaskArtifa
         makeReadOnly(target);
     }
 
-    private byte[] readBounded(Path target) {
+    private byte[] readContent(Path target) {
         BasicFileAttributes initial = attributes(target);
         if (initial.isSymbolicLink() || !initial.isRegularFile()) {
             throw corrupt("Managed artifact object is not an immutable regular file");
         }
-        if (initial.size() > maxContentBytes) {
-            throw corrupt("Managed artifact object exceeds the configured limit");
+        if (initial.size() > Integer.MAX_VALUE) {
+            throw corrupt("Managed artifact object cannot be represented by the byte array storage API");
         }
         try (FileChannel channel = FileChannel.open(target,
                 Set.<OpenOption>of(StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS))) {
@@ -321,8 +298,8 @@ public final class FileSystemAgentTaskArtifactStorage implements AgentTaskArtifa
                 buffer.flip();
                 int count = buffer.remaining();
                 total += count;
-                if (total > maxContentBytes) {
-                    throw corrupt("Managed artifact object exceeds the configured limit");
+                if (total > Integer.MAX_VALUE) {
+                    throw corrupt("Managed artifact object cannot be represented by the byte array storage API");
                 }
                 result.write(buffer.array(), buffer.position(), count);
                 buffer.clear();
@@ -389,14 +366,6 @@ public final class FileSystemAgentTaskArtifactStorage implements AgentTaskArtifa
         } catch (IOException ignored) {
             // Private .upload-*.tmp residues are never returned and are reclaimable by prefix/age.
         }
-    }
-
-    private String requireAllowedMime(String mimeType) {
-        String canonical = requireMimeSyntax(mimeType);
-        if (!canonical.equals(mimeType) || !allowedMimeTypes.contains(canonical)) {
-            throw invalid("Managed artifact MIME type is not allowed");
-        }
-        return canonical;
     }
 
     private static String requireMimeSyntax(String mimeType) {

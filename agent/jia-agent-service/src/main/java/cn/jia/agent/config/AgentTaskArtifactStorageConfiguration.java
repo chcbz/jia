@@ -8,7 +8,6 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 import java.nio.file.Path;
-import java.util.LinkedHashSet;
 
 /** Registers either the explicit private file store or a fail-closed disabled implementation. */
 @Configuration(proxyBeanMethods = false)
@@ -26,8 +25,7 @@ public class AgentTaskArtifactStorageConfiguration {
         }
         try {
             return new FileSystemAgentTaskArtifactStorage(
-                    Path.of(properties.rootDirectory()), properties.maxContentBytes(),
-                    new LinkedHashSet<>(properties.allowedMimeTypes()));
+                    Path.of(properties.rootDirectory()));
         } catch (RuntimeException failure) {
             throw new IllegalStateException(
                     "Invalid agent.task-artifact-storage configuration", failure);

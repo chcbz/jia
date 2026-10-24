@@ -110,7 +110,7 @@ public class ChatBountyMediaController {
         var allowed = authorize(requestId, stepId, authentication);
         var items = executions.listConversationOutputs(allowed.scope(), allowed.step().taskId(),
                 allowed.execution().runId());
-        if (items == null || items.size() > 128) throw unavailable();
+        if (items == null) throw unavailable();
         var body = new java.util.ArrayList<OutputItem>(items.size());
         for (var item : items) {
             if (item == null || !allowed.execution().executionId().equals(item.executionId())

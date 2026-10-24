@@ -30,8 +30,6 @@ import java.util.Objects;
  */
 @Named
 public class AgentTaskFormalDeliveryReadServiceImpl implements AgentTaskFormalDeliveryReadService {
-    private static final int MAX_DELIVERIES = 100;
-    private static final int MAX_ITEMS = 100;
 
     private final AgentTaskFormalDeliveryDao deliveryDao;
     private final AgentTaskMetaDao taskMetaDao;
@@ -54,8 +52,8 @@ public class AgentTaskFormalDeliveryReadServiceImpl implements AgentTaskFormalDe
                 tenantId, clientId, ownerJiacn, taskId);
         requireTask(task, tenantId, clientId, ownerJiacn, taskId);
         List<AgentTaskFormalDeliveryEntity> deliveries = deliveryDao.listTaskDeliveries(
-                tenantId, clientId, taskId, MAX_DELIVERIES);
-        if (deliveries == null || deliveries.size() > MAX_DELIVERIES) {
+                tenantId, clientId, taskId, Integer.MAX_VALUE);
+        if (deliveries == null) {
             throw unavailable("Formal delivery catalog is unavailable");
         }
         List<AgentTaskFormalDeliveryViewDTO> result = new ArrayList<>(deliveries.size());
@@ -75,7 +73,7 @@ public class AgentTaskFormalDeliveryReadServiceImpl implements AgentTaskFormalDe
 
     private static AgentTaskFormalDeliveryViewDTO view(AgentTaskFormalDeliveryEntity delivery,
             List<AgentTaskFormalDeliveryItemEntity> rows, long taskVersion, long workItemVersion) {
-        if (rows == null || rows.isEmpty() || rows.size() > MAX_ITEMS) {
+        if (rows == null || rows.isEmpty()) {
             throw unavailable("Formal delivery item catalog is unavailable");
         }
         List<AgentTaskFormalDeliveryItemDTO> items = new ArrayList<>(rows.size());

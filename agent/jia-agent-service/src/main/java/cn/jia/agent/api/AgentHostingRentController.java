@@ -38,7 +38,6 @@ import java.util.Objects;
 @RequestMapping("/agent")
 public final class AgentHostingRentController {
     private static final String CACHE_CONTROL = "private, no-store";
-    private static final int MAX_BODY_BYTES = 1024;
     private static final ObjectMapper STRICT_JSON = JsonMapper.builder()
             .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
             .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
@@ -151,7 +150,7 @@ public final class AgentHostingRentController {
     }
 
     private static void requireEmptyObject(byte[] rawBody) {
-        if (rawBody == null || rawBody.length == 0 || rawBody.length > MAX_BODY_BYTES) {
+        if (rawBody == null || rawBody.length == 0) {
             throw new RequestFailure();
         }
         try {

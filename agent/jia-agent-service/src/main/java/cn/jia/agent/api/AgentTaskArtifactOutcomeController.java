@@ -54,9 +54,7 @@ import java.util.Set;
 @RequestMapping("/agent/tasks")
 public class AgentTaskArtifactOutcomeController {
     static final String CACHE_CONTROL = "private, no-store";
-    static final int MAX_BODY_BYTES = 64 * 1024;
     private static final int BODY_BUFFER_BYTES = 8192;
-    static final int MAX_SUPERSEDED_ARTIFACTS = 100;
     static final int MAX_LIST_LIMIT = 100;
 
     private static final Set<String> ACCEPT_BODY_FIELDS = Set.of(
@@ -268,7 +266,7 @@ public class AgentTaskArtifactOutcomeController {
     private static byte[] readBounded(HttpServletRequest request) {
         try {
             byte[] data = cn.jia.core.config.ApiJsonInput.readData(request);
-            if (data.length == 0 || data.length > MAX_BODY_BYTES) throw new RequestFailure();
+            if (data.length == 0) throw new RequestFailure();
             return data;
         } catch (IOException unreadable) {
             throw new RequestFailure();
@@ -276,7 +274,7 @@ public class AgentTaskArtifactOutcomeController {
     }
 
     private static AgentTaskArtifactAcceptDTO parseAccept(byte[] body, String decisionId) {
-        if (body == null || body.length == 0 || body.length > MAX_BODY_BYTES) {
+        if (body == null || body.length == 0) {
             throw new RequestFailure();
         }
         final JsonNode root;
@@ -286,8 +284,7 @@ public class AgentTaskArtifactOutcomeController {
             throw new RequestFailure();
         }
         if (!exactObject(root, ACCEPT_BODY_FIELDS)
-                || !root.get("supersededArtifacts").isArray()
-                || root.get("supersededArtifacts").size() > MAX_SUPERSEDED_ARTIFACTS) {
+                || !root.get("supersededArtifacts").isArray()) {
             throw new RequestFailure();
         }
 

@@ -66,8 +66,6 @@ class AgentTaskArtifactStorageF02Test {
     private static final String ACTOR = "agent-a";
     private static final String ARTIFACT = "artifact-a";
     private static final long NOW = 1_800_000_000_000L;
-    private static final Set<String> MIME_TYPES = Set.of(
-            "application/octet-stream", "application/json", "text/plain");
 
     @TempDir
     Path temporaryDirectory;
@@ -102,7 +100,7 @@ class AgentTaskArtifactStorageF02Test {
 
     @Test
     void fileStoreComputesDigestScopesUrisAndNeverOverwrites() throws Exception {
-        FileSystemAgentTaskArtifactStorage storage = storage(2L * 1024L * 1024L);
+        FileSystemAgentTaskArtifactStorage storage = storage();
         byte[] content = "x".repeat(300_000).getBytes(StandardCharsets.UTF_8);
         AgentTaskArtifactStorage.Scope firstScope =
                 new AgentTaskArtifactStorage.Scope(TENANT, CLIENT, OWNER, TASK);
@@ -141,7 +139,7 @@ class AgentTaskArtifactStorageF02Test {
 
     @Test
     void concurrentSameDigestPublicationCreatesExactlyOneImmutableObject() throws Exception {
-        FileSystemAgentTaskArtifactStorage storage = storage(1024 * 1024);
+        FileSystemAgentTaskArtifactStorage storage = storage();
         AgentTaskArtifactStorage.Scope scope =
                 new AgentTaskArtifactStorage.Scope(TENANT, CLIENT, OWNER, TASK);
         byte[] content = "concurrent-content".getBytes(StandardCharsets.UTF_8);
@@ -176,14 +174,10 @@ class AgentTaskArtifactStorageF02Test {
     }
 
     @Test
-    void fileStoreRejectsUnboundedMimePathAndSymlinkTampering() throws Exception {
-        FileSystemAgentTaskArtifactStorage storage = storage(16);
+    void fileStoreRejectsMalformedMimePathAndSymlinkTampering() throws Exception {
+        FileSystemAgentTaskArtifactStorage storage = storage();
         AgentTaskArtifactStorage.Scope scope =
                 new AgentTaskArtifactStorage.Scope(TENANT, CLIENT, OWNER, TASK);
-        assertEquals(AgentTaskArtifactStorageException.Reason.INVALID_REQUEST,
-                assertThrows(AgentTaskArtifactStorageException.class,
-                        () -> storage.store(scope, new byte[17], "application/octet-stream"))
-                        .getReason());
         assertEquals(AgentTaskArtifactStorageException.Reason.INVALID_REQUEST,
                 assertThrows(AgentTaskArtifactStorageException.class,
                         () -> storage.store(scope, new byte[1], "text/plain; charset=utf-8"))
@@ -224,12 +218,12 @@ class AgentTaskArtifactStorageF02Test {
         assertEquals(AgentTaskArtifactStorageException.Reason.INVALID_REQUEST,
                 assertThrows(AgentTaskArtifactStorageException.class,
                         () -> new FileSystemAgentTaskArtifactStorage(
-                                link, 1024, MIME_TYPES)).getReason());
+                                link)).getReason());
     }
 
     @Test
     void managedPublishStoresRealBytesAfterAclAndVersionLockThenReadsByExactAcl() {
-        FileSystemAgentTaskArtifactStorage realStorage = storage(1024 * 1024);
+        FileSystemAgentTaskArtifactStorage realStorage = storage();
         AgentTaskArtifactStorage storage = spy(realStorage);
         AgentTaskCollaborationServiceImpl service = service(storage);
         AgentTaskArtifactPublishDTO command = managedCommand(
@@ -274,7 +268,7 @@ class AgentTaskArtifactStorageF02Test {
     @NullSource
     @ValueSource(strings = {"owner-other", "Owner-a"})
     void publishRejectsPersistedArtifactWithMissingOrPollutedOwner(String persistedOwner) {
-        AgentTaskCollaborationServiceImpl service = service(storage(1024 * 1024));
+        AgentTaskCollaborationServiceImpl service = service(storage());
         AgentTaskArtifactPublishDTO command = managedCommand(
                 "owner scoped bytes".getBytes(StandardCharsets.UTF_8));
         AtomicReference<AgentTaskArtifactDTO> inserted = successfulArtifactPersistence();
@@ -297,7 +291,7 @@ class AgentTaskArtifactStorageF02Test {
 
     @Test
     void aclAndStaleVersionRejectBeforeAnyFilesystemWrite() {
-        AgentTaskArtifactStorage storage = spy(storage(1024));
+        AgentTaskArtifactStorage storage = spy(storage());
         AgentTaskCollaborationServiceImpl service = service(storage);
         AgentTaskArtifactPublishDTO command = managedCommand(new byte[] {1, 2, 3});
 
@@ -319,7 +313,7 @@ class AgentTaskArtifactStorageF02Test {
 
     @Test
     void declaredDigestAndLengthMismatchRejectBeforeFilesystemWrite() {
-        AgentTaskArtifactStorage storage = spy(storage(1024));
+        AgentTaskArtifactStorage storage = spy(storage());
         AgentTaskCollaborationServiceImpl service = service(storage);
         AgentTaskArtifactPublishDTO badHash = managedCommand(new byte[] {1, 2, 3});
         badHash.setContentHash("0".repeat(64));
@@ -343,7 +337,7 @@ class AgentTaskArtifactStorageF02Test {
 
     @Test
     void databaseFailureLeavesOnlyReusableImmutableOrphanAndNoDatabaseContent() throws Exception {
-        FileSystemAgentTaskArtifactStorage storage = storage(1024);
+        FileSystemAgentTaskArtifactStorage storage = storage();
         AgentTaskCollaborationServiceImpl service = service(storage);
         byte[] bytes = "orphan-safe".getBytes(StandardCharsets.UTF_8);
         AgentTaskArtifactPublishDTO command = managedCommand(bytes);
@@ -370,7 +364,7 @@ class AgentTaskArtifactStorageF02Test {
 
     @Test
     void contentReadRejectsNonMemberBeforeStorageAccess() {
-        AgentTaskArtifactStorage storage = spy(storage(1024));
+        AgentTaskArtifactStorage storage = spy(storage());
         AgentTaskCollaborationServiceImpl service = service(storage);
 
         AgentTaskCollaborationException failure = assertThrows(
@@ -385,7 +379,7 @@ class AgentTaskArtifactStorageF02Test {
 
     @Test
     void legacyExternalUriRemainsMetadataOnlyAndIsNeverFetched() {
-        AgentTaskArtifactStorage storage = spy(storage(1024));
+        AgentTaskArtifactStorage storage = spy(storage());
         AgentTaskCollaborationServiceImpl service = service(storage);
         AgentTaskArtifactEntity external = new AgentTaskArtifactEntity()
                 .setArtifactId(ARTIFACT).setTaskId(TASK).setProducerAgentId(ACTOR)
@@ -410,9 +404,9 @@ class AgentTaskArtifactStorageF02Test {
 
     private static final String MANAGED_KEY = "_cyfArtifactStorageV1";
 
-    private FileSystemAgentTaskArtifactStorage storage(long maxBytes) {
+    private FileSystemAgentTaskArtifactStorage storage() {
         return new FileSystemAgentTaskArtifactStorage(
-                temporaryDirectory.resolve("objects").toAbsolutePath(), maxBytes, MIME_TYPES);
+                temporaryDirectory.resolve("objects").toAbsolutePath());
     }
 
     private AgentTaskCollaborationServiceImpl service(AgentTaskArtifactStorage storage) {

@@ -585,7 +585,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                     if (locked==null || !same(row.getExecutionId(),locked.getExecutionId())
                             || !Set.of("OUTPUT_COMMITTED","RESULT_COMMITTED").contains(locked.getExecutionState())) throw failure(Reason.NOT_FOUND);
                     var outputs=executions.lockOutputs(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),row.getExecutionId());
-                    if (outputs==null || outputs.isEmpty()&&!Objects.equals(4,row.getExecutionProtocolVersion()) || outputs.size()>128) throw failure(Reason.NOT_FOUND);
+                    if (outputs==null || outputs.isEmpty()&&!Objects.equals(4,row.getExecutionProtocolVersion())) throw failure(Reason.NOT_FOUND);
                     var replacement=committedOutputReplacement(scope,locked,outputs.size());
                     var result=new java.util.ArrayList<ConversationOutputInfo>(outputs.size());
                     for (var output: outputs) {
@@ -1534,8 +1534,8 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                 execution,purpose,"EXISTING_RUN".equals(purpose)?null:scope.runtimeInstanceId()).inputs();
         var rows=executions.listInputs(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),
                 execution.getExecutionId());
-        int max=execution.getControlledConsentId()==null?32:16;
-        if (rows==null || rows.size()!=authorized.size() || rows.size()>max)
+        if (rows==null || rows.size()!=authorized.size()
+                || (execution.getControlledConsentId()!=null && rows.size()>16))
             throw failure(Reason.CAPABILITY_UNAVAILABLE);
         var indexed=new LinkedHashMap<String,PersonalWorkspaceExecutionInputEntity>();
         for (var input:rows) {
@@ -3177,7 +3177,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     public cn.jia.agent.service.SkillExecutionService.ResultReceipt commitResult(RuntimeScope authenticatedScope,String taskId,String runId,String manifestId,cn.jia.agent.service.SkillExecutionService.ResultCommit command) {
         final RuntimeScope scope=executionScope(authenticatedScope,taskId,runId);
         requireSkillEnabled();nativeAuthentication(scope);id(manifestId,"manifestId",100);
-        if(command==null||command.artifacts()==null||command.inputReceipts()==null||command.artifacts().size()>128||!sha(command.snapshotDigest()))throw failure(Reason.BAD_REQUEST);
+        if(command==null||command.artifacts()==null||command.inputReceipts()==null||!sha(command.snapshotDigest()))throw failure(Reason.BAD_REQUEST);
         var artifactIds=new LinkedHashSet<String>();for(var output:command.artifacts()) {
             if(output==null||!artifactIds.add(output.outputId())||!sha(output.sha256())||output.byteLength()<1||output.byteLength()>storage.maxContentBytes())throw failure(Reason.BAD_REQUEST);id(output.outputId(),"outputId",100);
         }
