@@ -484,6 +484,14 @@ class AgentWorkItemReassignmentRealTransactionTest {
         private JdbcCommandWriter(boolean failOutbox) {
             this.failOutbox = new AtomicBoolean(failOutbox);
         }
+        @Override public AgentCommandTransportWriteResult writeV2(
+                cn.jia.core.tenant.UserAdmissionScope scope, AgentCommandDraft draft) {
+            throw new AssertionError("Owner-local fixture must not enter the V2 admission lane");
+        }
+        @Override public AgentCommandTransportWriteResult writeAuthorizedHallV2(
+                cn.jia.core.tenant.UserAdmissionScope scope, AgentCommandDraft draft, String actor) {
+            throw new AssertionError("Owner-local fixture must not enter the V2 admission lane");
+        }
         @Override
         public AgentCommandTransportWriteResult write(AgentCommandDraft draft) {
             throw new UnsupportedOperationException();

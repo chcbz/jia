@@ -86,13 +86,22 @@ class SkillInstallTransportMySqlTest {
         assertThrows(SkillMarketplaceException.class,()->writer.write(draft));
     }
     @Test void rabbitDiscoveryCannotClaimNativeWsCommands() {
+        // Only this private fixture installs the V2 discovery schema. Native WS rows
+        // retain NULL protocol/scope and must not be claimed by the Rabbit lane.
+        var migrationSource=new DriverManagerDataSource(System.getenv("CYF_SKILL_MYSQL_URL").replace("/?","/"+db+"?"),"root","");
+        new ResourceDatabasePopulator(new ClassPathResource("db/agent-outbox-relay-v2-manual-20260925.sql")).execute(migrationSource);
         pending();long now=System.currentTimeMillis();
         // Mapper statement text is exercised against real MySQL, including REGEXP guards.
         var cfg=new org.apache.ibatis.session.Configuration();cfg.setMapUnderscoreToCamelCase(true);cfg.addMapper(AgentOutboxRelayMapper.class);
         var ds=new DriverManagerDataSource(System.getenv("CYF_SKILL_MYSQL_URL").replace("/?","/"+db+"?"),"root","");
         var factory=new SqlSessionFactoryBean();factory.setDataSource(ds);factory.setConfiguration(cfg);
         try { var relay=new SqlSessionTemplate(Objects.requireNonNull(factory.getObject())).getMapper(AgentOutboxRelayMapper.class);
-            assertTrue(relay.selectDueCandidates(now,25).isEmpty());assertTrue(relay.selectCorruptCandidates(now,25).isEmpty());assertTrue(relay.selectStaleCandidates(now,25).isEmpty());
+            var scope=new cn.jia.core.tenant.WorkerScope(cn.jia.core.tenant.TenantId.of("0"),
+                    cn.jia.core.tenant.DataDomainId.of("cyf"),"pool-a","deployment-a",7,11,13,"agent-command",17);
+            var scopedRelay=new cn.jia.agent.dao.impl.AgentOutboxRelayDaoImpl(relay);
+            assertTrue(scopedRelay.selectDueCandidates(scope,now,25).isEmpty());
+            assertTrue(scopedRelay.selectCorruptCandidates(scope,now,25).isEmpty());
+            assertTrue(scopedRelay.selectStaleCandidates(scope,now,25).isEmpty());
         } catch(Exception e) { throw new RuntimeException(e); }
     }
 }

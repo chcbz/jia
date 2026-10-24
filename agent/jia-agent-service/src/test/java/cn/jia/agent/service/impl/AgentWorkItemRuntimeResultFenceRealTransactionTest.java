@@ -95,6 +95,14 @@ class AgentWorkItemRuntimeResultFenceRealTransactionTest {
         // Explicit identity authority on the raw B04 service (proxy construction must not hide its mandatory setter).
         var rawLease=new AgentWorkItemLeaseServiceImpl(memberDao,workDao,roots,writer,()->NOW,()->TOKEN,900_000);rawLease.setAssigneeAuthority(new TaskAssigneeAuthorityServiceImpl(org.mockito.Mockito.mock(cn.jia.agent.dao.AgentExternalServicePolicyDao.class), identities, org.mockito.Mockito.mock(cn.jia.agent.dao.AgentTaskExecutionGrantDao.class)));leases=proxy(rawLease,AgentWorkItemLeaseService.class);
         var transport=new AgentCommandTransportWriter() {
+            @Override public AgentCommandTransportWriteResult writeV2(
+                    cn.jia.core.tenant.UserAdmissionScope scope, AgentCommandDraft draft) {
+                throw new AssertionError("Owner-local fixture must not enter the V2 admission lane");
+            }
+            @Override public AgentCommandTransportWriteResult writeAuthorizedHallV2(
+                    cn.jia.core.tenant.UserAdmissionScope scope, AgentCommandDraft draft, String actor) {
+                throw new AssertionError("Owner-local fixture must not enter the V2 admission lane");
+            }
             @Override public AgentCommandTransportWriteResult write(AgentCommandDraft draft){throw new UnsupportedOperationException();}
             @Override public AgentCommandTransportWriteResult writeAuthorizedHall(AgentCommandDraft draft,String actor){
                 insertDelivery(draft);return new AgentCommandTransportWriteResult(jdbc.queryForObject("SELECT id FROM agent_command_delivery WHERE command_id=?",Long.class,draft.commandId()),draft.commandId(),"message-e05","outbox-e05",false);

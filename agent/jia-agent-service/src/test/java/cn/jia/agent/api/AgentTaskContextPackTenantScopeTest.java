@@ -32,7 +32,8 @@ class AgentTaskContextPackTenantScopeTest {
         gate = mock(AgentTaskEventsGate.class);
         service = mock(AgentTaskContextPackService.class);
         mvc = MockMvcBuilders.standaloneSetup(
-                new AgentTaskContextPackController(service, gate)).build();
+                new AgentTaskContextPackController(service, gate,
+                        mock(cn.jia.agent.security.AgentRuntimeAuthenticationService.class))).build();
     }
 
     @Test

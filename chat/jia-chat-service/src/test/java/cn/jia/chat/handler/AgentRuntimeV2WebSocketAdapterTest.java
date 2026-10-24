@@ -8,17 +8,9 @@ import cn.jia.agent.dao.AgentRuntimeV2RegistrationStore;
 import cn.jia.agent.service.AgentRuntimeV2CapabilityReadiness;
 import cn.jia.agent.service.AgentRuntimeV2SocketGateway;
 import cn.jia.chat.config.AgentRuntimeV2WebSocketConfiguration;
-import cn.jia.chat.config.ApiKeyHandshakeInterceptor;
-import cn.jia.agent.security.AgentRuntimeV2RegistrationAuthorityResolver;
 import cn.jia.agent.security.AgentRuntimeV2RegistrationKeyRing;
-import cn.jia.agent.service.AgentService;
-import cn.jia.oauth.service.ApiKeyService;
-import cn.jia.oauth.entity.OauthApiKeyEntity;
-import cn.jia.core.context.EsContextHolder;
-import org.springframework.http.HttpHeaders;
 import org.springframework.http.server.ServerHttpRequest;
 import org.springframework.http.server.ServerHttpResponse;
-import javax.crypto.spec.SecretKeySpec;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
@@ -73,11 +65,21 @@ class AgentRuntimeV2WebSocketAdapterTest {
             when(gate.verified()).thenReturn(false);assertFalse(evidence.get(AgentRuntimeV2Readiness.Dependency.RECEIVER_DISPATCH).getAsBoolean());scheduler.poll();verifyNoInteractions(gateway,store,keys,tx);
         }
     }
-    @Test void originalEnteredHandshakeSecretCreatesTypedProofAndNoPlaintextAttribute() throws Exception {
-        String entered="test-only-entered-key",current="test-only-new-database-key";var keys=new AgentRuntimeV2RegistrationKeyRing("test-key",Map.of("test-key",new SecretKeySpec(new byte[32],"HmacSHA256")),Set.of());var resolver=new AgentRuntimeV2RegistrationAuthorityResolver(null,keys,java.time.Clock.systemUTC());
-        var apiKeys=mock(ApiKeyService.class);var agents=mock(AgentService.class);var entity=new OauthApiKeyEntity();entity.setId("managed-1");entity.setClientId("client");entity.setJiacn("owner");entity.setTenantId("1");entity.setStatus(1);entity.setApiKey(current);when(apiKeys.findByApiKey(entered)).thenReturn(entity);
-        var interceptor=new ApiKeyHandshakeInterceptor(provider(apiKeys),provider(agents));interceptor.setRegistrationProofs(resolver);var request=mock(ServerHttpRequest.class);var response=mock(ServerHttpResponse.class);var headers=new HttpHeaders();headers.set("X-API-Key",entered);headers.set("X-Agent-Id","agent");when(request.getHeaders()).thenReturn(headers);when(request.getURI()).thenReturn(java.net.URI.create("ws://test.invalid/agent"));Map<String,Object> attributes=new HashMap<>();
-        try {assertTrue(interceptor.beforeHandshake(request,response,mock(WebSocketHandler.class),attributes));var proof=(AgentRuntimeV2RegistrationContext)attributes.get(AgentRuntimeV2WebSocketAdapter.IDENTITY_ATTRIBUTE);assertEquals("API_KEY",proof.credentialKind());assertArrayEquals(AgentRuntimeV2RegistrationFingerprints.apiKeyCredential(keys.active(),"managed-1",entered),proof.credentialProof());assertFalse(Arrays.equals(AgentRuntimeV2RegistrationFingerprints.apiKeyCredential(keys.active(),"managed-1",current),proof.credentialProof()));assertFalse(attributes.values().contains(entered));assertFalse(attributes.values().contains(current));assertFalse(attributes.containsKey("apiKey"));verify(agents).requireApiKeyOwnedAgent("client","owner","agent");}finally{EsContextHolder.clearContext();}
+    @Test void retiredApiKeyHandshakeCannotCreateV2RegistrationAuthority() {
+        // Native Runtime sessions replaced API-key WebSocket onboarding on develop.
+        // A disabled V2 capability must not restore that obsolete authentication path.
+        var authentication=mock(cn.jia.agent.security.AgentRuntimeAuthenticationService.class);
+        var interceptor=new cn.jia.chat.config.AgentRuntimeHandshakeInterceptor(authentication);
+        var servlet=new org.springframework.mock.web.MockHttpServletRequest("GET","/ws/agent/channel");
+        servlet.addHeader("X-API-Key","test-only-entered-key");
+        servlet.addHeader("X-Agent-Id","agent");
+        var response=mock(ServerHttpResponse.class);
+        Map<String,Object> attributes=new HashMap<>();
+        assertFalse(interceptor.beforeHandshake(new org.springframework.http.server.ServletServerHttpRequest(servlet),
+                response,mock(WebSocketHandler.class),attributes));
+        verify(response).setStatusCode(org.springframework.http.HttpStatus.UNAUTHORIZED);
+        verifyNoInteractions(authentication);
+        assertTrue(attributes.isEmpty());
     }
     @Test void failingReadinessSupplierAndProviderAdvertiseOnlyOneAndStrictUnavailable() throws Exception {
         for(var dependency:AgentRuntimeV2Readiness.Dependency.values()){var evidence=ready();evidence.put(dependency,()->{throw new IllegalStateException("test unavailable dependency");});var service=mock(AgentRuntimeV2RegistrationService.class);var adapter=new AgentRuntimeV2WebSocketAdapter(provider(service),provider(new AgentRuntimeV2Readiness(evidence)));var session=session("failing-check");adapter.established(session);assertArrayEquals(new int[]{1},adapter.supportedProtocolVersions());adapter.intercept(session,createWire(),message->assertEquals("UNAVAILABLE",AgentRuntimeV2RegistrationCodec.decodeRejected(message.asBytes()).reasonCode()));adapter.maintainRouting();verifyNoInteractions(service);}
