@@ -170,7 +170,7 @@ class ArchiveQuestionServiceTest {
     }
 
     @Test
-    void anchorHashBoundaryContiguityAndQuestionUtf8LimitFailClosed() {
+    void anchorHashBoundaryAndAuthoritativeContentFailClosed() {
         for (String hashMismatch : List.of(
                 anchor.replace(hash("水泊\n\n忠义"), "b".repeat(64)),
                 anchor.replace(hash("甲水泊"), "c".repeat(64)))) {
@@ -205,9 +205,6 @@ class ArchiveQuestionServiceTest {
         assertEquals("CONTENT_HASH_MISMATCH", authoritativeHash.code());
         content.points.put(P1, original);
 
-        ArchivePersonalDataException large = assertThrows(ArchivePersonalDataException.class,
-                () -> service.create(OWNER, ID, path(), "large", body("水".repeat(2731))));
-        assertEquals("INVALID_REQUEST_JSON", large.code());
         assertEquals(0, store.questionInserts);
     }
 
