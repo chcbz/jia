@@ -50,8 +50,8 @@ public class ChatMessageDaoImpl extends BaseDaoImpl<ChatMessageMapper, ChatMessa
                 ? baseMapper.findExactDomainOwnedConversationMessages(
                 scope.tenantId(), scope.dataDomainId(), scope.ownerJiacn(),
                 canonicalId, numericId)
-                : baseMapper.findExactOwnedConversationMessages(
-                scope.ownerJiacn(), scope.callerClientId(), canonicalId, numericId);
+                : baseMapper.findExactOwnedConversationMessagesInTenant(
+                scope.tenantId(), scope.ownerJiacn(), scope.callerClientId(), canonicalId, numericId);
         return requireOwnedRows(rows, scope, canonicalId);
     }
 
@@ -67,8 +67,9 @@ public class ChatMessageDaoImpl extends BaseDaoImpl<ChatMessageMapper, ChatMessa
                 ? baseMapper.findExactDomainOwnedConversationMessagesWithLimit(
                 scope.tenantId(), scope.dataDomainId(), scope.ownerJiacn(),
                 canonicalId, numericId, limit)
-                : baseMapper.findExactOwnedConversationMessagesWithLimit(
-                scope.ownerJiacn(), scope.callerClientId(), canonicalId, numericId, limit);
+                : baseMapper.findExactOwnedConversationMessagesWithLimitInTenant(
+                scope.tenantId(), scope.ownerJiacn(), scope.callerClientId(), canonicalId, numericId,
+                limit);
         List<ChatMessageEntity> result = requireOwnedRows(rows, scope, canonicalId);
         Collections.reverse(result);
         return result;
@@ -84,8 +85,9 @@ public class ChatMessageDaoImpl extends BaseDaoImpl<ChatMessageMapper, ChatMessa
                 ? baseMapper.deleteExactDomainOwnedConversationMessages(
                 scope.tenantId(), scope.dataDomainId(), scope.ownerJiacn(),
                 canonicalId, numericId)
-                : baseMapper.deleteExactOwnedConversationMessages(
-                scope.ownerJiacn(), scope.callerClientId(), canonicalId, numericId);
+                : baseMapper.deleteExactOwnedConversationMessagesInTenant(
+                scope.tenantId(), scope.ownerJiacn(), scope.callerClientId(), canonicalId,
+                numericId);
     }
 
     @Override
@@ -172,7 +174,7 @@ public class ChatMessageDaoImpl extends BaseDaoImpl<ChatMessageMapper, ChatMessa
     @Override
     public int markMemorySnapshotSynced(String ownerJiacn, String clientId,
             String conversationId, List<Long> messageIds) {
-        requireScope(ownerJiacn, clientId);
+        requireScope(legacyScope(ownerJiacn, clientId));
         long id = parseConversationId(conversationId);
         if (messageIds == null || messageIds.isEmpty()
                 || messageIds.stream().anyMatch(value -> value == null || value <= 0)) {
@@ -284,8 +286,9 @@ public class ChatMessageDaoImpl extends BaseDaoImpl<ChatMessageMapper, ChatMessa
                     ? baseMapper.countContaminatedDomainOwnedConversationMessages(
                     scope.tenantId(), scope.dataDomainId(), scope.ownerJiacn(),
                     conversationId, numericId)
-                    : baseMapper.countContaminatedOwnedConversationMessages(
-                    scope.ownerJiacn(), scope.callerClientId(), conversationId, numericId);
+                    : baseMapper.countContaminatedOwnedConversationMessagesInTenant(
+                    scope.tenantId(), scope.ownerJiacn(), scope.callerClientId(), conversationId,
+                    numericId);
             if (contaminated > 0) {
                 log.warn("Ignoring out-of-scope historical message rows while returning exact-scoped conversation messages. conversationId={}, rows={}",
                         conversationId, contaminated);

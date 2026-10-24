@@ -1,5 +1,6 @@
 package cn.jia.chat.deliberation;
 
+import com.baomidou.mybatisplus.annotation.InterceptorIgnore;
 import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Options;
@@ -8,6 +9,7 @@ import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 
 import java.util.List;
+import java.util.Set;
 
 @Mapper
 public interface ChatDeliberationMapper {
@@ -202,13 +204,44 @@ public interface ChatDeliberationMapper {
             @Param("ownerJiacn") String ownerJiacn, @Param("clientId") String clientId,
             @Param("dispatchId") String dispatchId);
 
+    /**
+     * Audited worker bootstrap exception: this statement is allowed to run before one row scope
+     * exists, but its SQL is still fail-closed to the explicit process-owned tenant allowlist.
+     * No other statement on this tenant table bypasses TenantLine.
+     */
+    @InterceptorIgnore(tenantLine = "true")
     @Select("""
+            <script>
             SELECT * FROM chat_dispatch_outbox
-            WHERE ((status IN ('READY','RETRY','AWAITING_ACK') AND available_at<=#{now})
-                OR (status='CLAIMED' AND lease_until<=#{now}))
+            WHERE
+            <choose>
+              <when test="allowedTenants != null and !allowedTenants.isEmpty()">
+                tenant_id IN
+                <foreach collection="allowedTenants" item="tenantId" open="(" separator="," close=")">#{tenantId}</foreach>
+                AND (
+                <foreach collection="allowedTenants" item="tenantId" open="" separator=" OR " close="">
+                  (tenant_id=#{tenantId}
+                   AND CAST(tenant_id AS BINARY)=CAST(#{tenantId} AS BINARY)
+                   AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(#{tenantId}))
+                </foreach>
+                )
+              </when>
+              <otherwise>1=0</otherwise>
+            </choose>
+              AND ((status IN ('READY','RETRY','AWAITING_ACK') AND available_at&lt;=#{now})
+                OR (status='CLAIMED' AND lease_until&lt;=#{now}))
             ORDER BY available_at,event_id LIMIT #{limit}
+            </script>
             """)
-    List<ChatDispatchOutboxEntity> findDueOutbox(@Param("now") long now, @Param("limit") int limit);
+    List<ChatDispatchOutboxEntity> findDueOutboxInTenants(
+            @Param("allowedTenants") Set<String> allowedTenants,
+            @Param("now") long now, @Param("limit") int limit);
+
+    /** Legacy bounded bootstrap entrypoint; it remains restricted to the explicit singleton 0. */
+    @InterceptorIgnore(tenantLine = "true")
+    default List<ChatDispatchOutboxEntity> findDueOutbox(long now, int limit) {
+        return findDueOutboxInTenants(Set.of("0"), now, limit);
+    }
 
     @Select("""
             SELECT * FROM chat_conversation_event WHERE

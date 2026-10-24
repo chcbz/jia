@@ -32,7 +32,12 @@ public final class HallRequestDraftSchemaInitializer implements InitializingBean
             "PRIMARY", "uk_hall_draft_create", "uk_hall_draft_submit",
             "uk_hall_draft_discard", "idx_hall_draft_recovery");
     private static final Map<String, String> REQUIRED_CHECKS = normalizedChecks(Map.of(
-            "chk_hall_draft_tenant", "tenant_id = '0'",
+            "chk_hall_draft_tenant",
+                    "tenant_id IS NOT NULL AND regexp_like(tenant_id, "
+                    + "cast('^(0|[1-9][0-9]{0,49})$' AS char charset binary)) "
+                    + "AND NOT(regexp_like(tenant_id,"
+                    + "cast('[^0-9]' AS char charset binary))) "
+                    + "AND instr(tenant_id,char(10))=0 AND instr(tenant_id,char(13))=0",
             "chk_hall_draft_kind",
                     "kind IN ('CREATE','REVISION','TASK_CREATE','TASK_ACTION')",
             "chk_hall_draft_state", "state IN ('EDITING','SUBMITTED','DISCARDED')",
@@ -63,15 +68,24 @@ public final class HallRequestDraftSchemaInitializer implements InitializingBean
                     + "OR (state='SUBMITTED' AND submission_ref IS NOT NULL "
                     + "AND submit_key IS NOT NULL AND submit_hash IS NOT NULL)"));
     private final JdbcTemplate jdbc;
+    private final boolean validateOnly;
 
     public HallRequestDraftSchemaInitializer(JdbcTemplate jdbc) {
+        this(jdbc, false);
+    }
+
+    HallRequestDraftSchemaInitializer(JdbcTemplate jdbc, boolean validateOnly) {
         this.jdbc = Objects.requireNonNull(jdbc, "jdbc");
+        this.validateOnly = validateOnly;
     }
 
     @Override public void afterPropertiesSet() {
         requireMySql();
         List<String> present = presentTables();
-        if (present.isEmpty()) jdbc.execute(ddlStatement());
+        if (present.isEmpty()) {
+            SchemaValidationMode.requireMutationAllowed(validateOnly, "Hall request draft schema");
+            jdbc.execute(ddlStatement());
+        }
         else if (!present.equals(List.of(TABLE))) {
             throw new IllegalStateException("Hall request draft schema is partial: " + present);
         }

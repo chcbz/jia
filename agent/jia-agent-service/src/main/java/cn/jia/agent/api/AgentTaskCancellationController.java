@@ -3,7 +3,7 @@ package cn.jia.agent.api;
 import cn.jia.agent.exception.AgentTaskCollaborationException;
 import cn.jia.agent.exception.AgentTaskStateException;
 import cn.jia.agent.service.AgentTaskCancellationService;
-import cn.jia.core.security.TenantClaimPolicy;
+import cn.jia.core.tenant.TrustedTenantContext;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -37,11 +37,22 @@ public class AgentTaskCancellationController {
         if (!(authentication instanceof JwtAuthenticationToken jwt) || !authentication.isAuthenticated()) {
             throw new AuthenticationFailure(false);
         }
-        String owner=claim(jwt,"jiacn",50), client=claim(jwt,"client_id",50), actor=claim(jwt,"sub",100);
-        final String tenant;
-        try { tenant=TenantClaimPolicy.resolve(jwt.getToken().getClaims(),"0"); }
-        catch (IllegalArgumentException invalid) { throw new AuthenticationFailure(true); }
-        if (!"0".equals(tenant) || "0".equals(owner) || "0".equals(client) || !actor.equals(authentication.getName())) {
+        String tenant=claim(jwt,"tenant_id",50), owner=claim(jwt,"jiacn",50);
+        String client=claim(jwt,"client_id",50), actor=claim(jwt,"sub",100);
+        try {
+            var trusted=TrustedTenantContext.requireScope();
+            Object claimedDomain=jwt.getToken().getClaims().get("data_domain_id");
+            if (!tenant.equals(trusted.tenantId().value())
+                    || !owner.equals(trusted.ownerJiacn())
+                    || !client.equals(trusted.callerClientId())
+                    || !"cyf".equals(trusted.dataDomainId().value())
+                    || claimedDomain!=null && !trusted.dataDomainId().value().equals(claimedDomain)
+                    || "0".equals(owner) || "0".equals(client)
+                    || !actor.equals(authentication.getName())) {
+                throw new AuthenticationFailure(true);
+            }
+        } catch (RuntimeException invalid) {
+            if (invalid instanceof AuthenticationFailure failure) throw failure;
             throw new AuthenticationFailure(true);
         }
         if (!exact(taskId,100) || request.getQueryString()!=null && !request.getQueryString().isEmpty()) {
@@ -60,7 +71,7 @@ public class AgentTaskCancellationController {
             if (version<0 || version==Long.MAX_VALUE) throw badRequest();
         } catch (org.springframework.http.converter.HttpMessageNotReadableException protocol) { throw protocol; }
         catch (Exception failure) { throw badRequest(); }
-        var receipt=service.cancel("0",client,owner,actor,taskId,version);
+        var receipt=service.cancel(tenant,client,owner,actor,taskId,version);
         if (receipt==null || !taskId.equals(receipt.taskId()) || !"cancelled".equals(receipt.status())
                 || receipt.taskVersion()<0) {
             throw new IllegalStateException("Invalid cancellation receipt");

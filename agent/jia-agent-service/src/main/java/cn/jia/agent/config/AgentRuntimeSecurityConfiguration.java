@@ -2,7 +2,12 @@ package cn.jia.agent.config;
 
 import cn.jia.agent.security.AgentRuntimeAuthenticationFilter;
 import cn.jia.agent.security.AgentRuntimeAuthenticationService;
+import cn.jia.core.context.EsContextHolder;
+import cn.jia.core.tenant.TrustedTenantContext;
+import jakarta.servlet.FilterChain;
+import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.annotation.Order;
@@ -13,6 +18,10 @@ import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.security.web.context.NullSecurityContextRepository;
 import org.springframework.security.web.savedrequest.NullRequestCache;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.web.filter.OncePerRequestFilter;
+
+import java.io.IOException;
 
 @Configuration(proxyBeanMethods = false)
 public class AgentRuntimeSecurityConfiguration {
@@ -24,6 +33,8 @@ public class AgentRuntimeSecurityConfiguration {
     @Bean @Order(0)
     public SecurityFilterChain agentRuntimeV1ClientSecurityFilterChain(HttpSecurity http) throws Exception {
         http.securityMatcher(AgentRuntimeSecurityConfiguration::selectsRuntimeV1ClientLane)
+                .addFilterBefore(new RuntimeV1ClientContextCleanupFilter(),
+                        UsernamePasswordAuthenticationFilter.class)
                 .authorizeHttpRequests(a -> a.anyRequest().permitAll())
                 .csrf(AbstractHttpConfigurer::disable)
                 .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
@@ -52,5 +63,25 @@ public class AgentRuntimeSecurityConfiguration {
                 || "/agent/runtime/v1/session".equals(path)
                 || "/agent/runtime/v1/heartbeat".equals(path)) return true;
         return false;
+    }
+
+    /** Public native bootstrap requests must never inherit scope from a reused servlet thread. */
+    public static final class RuntimeV1ClientContextCleanupFilter extends OncePerRequestFilter {
+        @Override
+        protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
+                FilterChain chain) throws ServletException, IOException {
+            clearThreadState();
+            try {
+                chain.doFilter(request, response);
+            } finally {
+                clearThreadState();
+            }
+        }
+
+        private static void clearThreadState() {
+            TrustedTenantContext.clear();
+            EsContextHolder.clearContext();
+            SecurityContextHolder.clearContext();
+        }
     }
 }

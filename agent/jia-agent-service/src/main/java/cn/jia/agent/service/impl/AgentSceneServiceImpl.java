@@ -581,7 +581,8 @@ public class AgentSceneServiceImpl implements AgentSceneService {
     }
 
     private List<AgentRuntimeEntity> scopedRoster(SceneScope scope) {
-        return safeList(runtimeDao.findRosterByOwner(scope.clientId(), scope.ownerJiacn(), null, null)).stream()
+        return safeList(runtimeDao.findRosterByOwner(
+                scope.tenantId(), scope.clientId(), scope.ownerJiacn(), null, null)).stream()
                 .filter(runtime -> runtime != null
                         && scope.clientId().equals(runtime.getClientId())
                         && scope.ownerJiacn().equals(runtime.getOwnerJiacn()))

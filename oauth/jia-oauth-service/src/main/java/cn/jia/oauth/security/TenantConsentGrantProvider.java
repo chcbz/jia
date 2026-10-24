@@ -83,7 +83,6 @@ public final class TenantConsentGrantProvider implements AuthenticationProvider 
                     domain, client.getClientId(), tenant, domain);
             requireRow("SELECT tenant_id FROM core_tenant_membership WHERE tenant_id = ? AND uid = ? FOR UPDATE",
                     tenant, tenant, uid);
-            requireRow("SELECT id FROM oauth2_authorization WHERE id = ? FOR UPDATE", hint.getId(), hint.getId());
             OAuth2Authorization current = authorizations.findByToken(consent.getState(),
                     TenantAuthorizationRequestProvider.CONSENT_STATE);
             TenantAuthorizationRequestProvider.requireSessionAuthorization(session, consent.getState(), current);

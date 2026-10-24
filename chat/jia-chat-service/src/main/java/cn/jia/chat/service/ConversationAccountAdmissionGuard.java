@@ -3,14 +3,17 @@ package cn.jia.chat.service;
 import cn.jia.core.tenant.UserAdmissionScope;
 import org.springframework.jdbc.core.ConnectionCallback;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.IllegalTransactionStateException;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.AbstractPlatformTransactionManager;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import javax.sql.DataSource;
-import java.nio.charset.StandardCharsets;
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 
@@ -22,11 +25,17 @@ import java.util.Objects;
 public final class ConversationAccountAdmissionGuard {
     private final JdbcTemplate jdbc;
     private final DataSource dataSource;
+    private final TransactionTemplate existingTransactionProbe;
     private final String lockClause;
 
     public ConversationAccountAdmissionGuard(JdbcTemplate jdbc) {
         this.jdbc = Objects.requireNonNull(jdbc, "jdbc");
         this.dataSource = Objects.requireNonNull(jdbc.getDataSource(), "jdbc.dataSource");
+        DataSourceTransactionManager transactionManager = new DataSourceTransactionManager(dataSource);
+        transactionManager.setTransactionSynchronization(AbstractPlatformTransactionManager.SYNCHRONIZATION_NEVER);
+        existingTransactionProbe = new TransactionTemplate(transactionManager);
+        existingTransactionProbe.setPropagationBehavior(TransactionDefinition.PROPAGATION_MANDATORY);
+
         String database = jdbc.execute((ConnectionCallback<String>) connection ->
                 connection.getMetaData().getDatabaseProductName());
         if ("MySQL".equals(database)) {
@@ -48,6 +57,11 @@ public final class ConversationAccountAdmissionGuard {
                 || !TransactionSynchronizationManager.hasResource(dataSource)) {
             throw denied();
         }
+        try {
+            existingTransactionProbe.executeWithoutResult(status -> { });
+        } catch (IllegalTransactionStateException inactiveDataSourceTransaction) {
+            throw denied();
+        }
 
         Account account = one(jdbc.query("""
                 SELECT id,jiacn,account_state,auth_epoch FROM user_info
@@ -57,7 +71,7 @@ public final class ConversationAccountAdmissionGuard {
                 nullableEpoch(rs)), scope.userId()));
 
         if (account.id() != scope.userId()
-                || !byteExact(scope.businessScope().ownerJiacn(), account.jiacn())
+                || !exact(scope.businessScope().ownerJiacn(), account.jiacn())
                 || !"ACTIVE".equals(account.state())
                 || account.authEpoch() == null
                 || account.authEpoch() != scope.authEpoch()) {
@@ -72,9 +86,8 @@ public final class ConversationAccountAdmissionGuard {
         return rs.wasNull() ? null : value;
     }
 
-    private static boolean byteExact(String expected, String actual) {
-        return actual != null && Arrays.equals(
-                expected.getBytes(StandardCharsets.UTF_8), actual.getBytes(StandardCharsets.UTF_8));
+    private static boolean exact(String expected, String actual) {
+        return expected != null && expected.equals(actual);
     }
 
     private static <T> T one(List<T> rows) {

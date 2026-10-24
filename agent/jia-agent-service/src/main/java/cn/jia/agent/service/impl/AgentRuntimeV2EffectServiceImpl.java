@@ -46,10 +46,11 @@ public final class AgentRuntimeV2EffectServiceImpl implements AgentRuntimeV2Effe
             AgentRuntimeV2ExecutionAuthority.Snapshot live,AgentRuntimeV2RecoveryAuthority.Snapshot recovery,
             AgentRuntimeV2RegistrationContext identity,AgentRuntimeV2SocketTuple socket) { }
     private record Prepared(PersonalWorkspaceExecutionService.V2PreparedInput input,
-            PersonalWorkspaceExecutionService.V2PreparedOutput output,byte[] completeStage) {
+            PersonalWorkspaceExecutionService.V2PreparedOutput output,byte[] completeStage,
+            SkillInstallResultService.V2PreparedPackage skillPackage) {
         Prepared { completeStage=completeStage==null?null:completeStage.clone(); }
         @Override public byte[] completeStage(){return completeStage==null?null:completeStage.clone();}
-        static Prepared none(){return new Prepared(null,null,null);}
+        static Prepared none(){return new Prepared(null,null,null,null);}
     }
     /** Only this verifier can mint the once-consumed settlement capability.
      * Package visibility is an implementation seam, not a public constructor,
@@ -172,22 +173,24 @@ public final class AgentRuntimeV2EffectServiceImpl implements AgentRuntimeV2Effe
         }));
     }
     private Prepared prepare(AgentRuntimeV2RegistrationContext identity,AgentRuntimeV2SocketTuple socket,AgentRuntimeV2EffectCodec.EffectRequest request){
-        if(!(request.resource() instanceof AgentRuntimeV2EffectCodec.FileRead||request.resource() instanceof AgentRuntimeV2EffectCodec.FileStage||request.resource() instanceof AgentRuntimeV2EffectCodec.FileCommit))return Prepared.none();
-        record Plan(PersonalWorkspaceExecutionService.V2Scope scope,byte[] complete) { }
+        if(!(request.resource() instanceof AgentRuntimeV2EffectCodec.SkillRead||request.resource() instanceof AgentRuntimeV2EffectCodec.FileRead||request.resource() instanceof AgentRuntimeV2EffectCodec.FileStage||request.resource() instanceof AgentRuntimeV2EffectCodec.FileCommit))return Prepared.none();
+        record Plan(PersonalWorkspaceExecutionService.V2Scope scope,byte[] complete,SkillInstallResultService.V2PackagePlan skillPackage) { }
         var plan=retry(()->tx.execute(status->{
             var locked=lock(identity,socket,request.grant().runtimeDispatchId(),false,false);requireEffect(locked,request);
             // Effect idempotency is separate from request idempotency. A new
             // request for an already committed effect must not read storage or
             // traverse the now-terminal resource's QUEUED-only descriptor.
-            if(knownEffect(locked,request)!=null){finish(locked,request);return new Plan(null,null);}
+            if(knownEffect(locked,request)!=null){finish(locked,request);return new Plan(null,null,null);}
+            if(request.resource() instanceof AgentRuntimeV2EffectCodec.SkillRead read){var skillPackage=skills.v2PlanPackage(locked.origin(),(AgentSkillInstallPayload)draft(locked).payload(),read);finish(locked,request);return new Plan(null,null,skillPackage);}
             var scope=fileScope(locked.origin(),request.resource());var descriptor=requireFileDescriptor(locked,scope);
             if(request.resource() instanceof AgentRuntimeV2EffectCodec.FileStage stage)requireStageBound(descriptor,stage);
-            byte[] complete=request.resource() instanceof AgentRuntimeV2EffectCodec.FileStage stage?stageContent(locked,request,stage):null;finish(locked,request);return new Plan(scope,complete);
+            byte[] complete=request.resource() instanceof AgentRuntimeV2EffectCodec.FileStage stage?stageContent(locked,request,stage):null;finish(locked,request);return new Plan(scope,complete,null);
         }));outside();
+        if(plan.skillPackage()!=null)return new Prepared(null,null,null,skills.v2PreparePackage(plan.skillPackage()));
         if(plan.scope()==null)return Prepared.none();
-        if(request.resource() instanceof AgentRuntimeV2EffectCodec.FileRead read)return new Prepared(workspace.v2PrepareInput(plan.scope(),read.inputId()),null,null);
-        if(request.resource() instanceof AgentRuntimeV2EffectCodec.FileCommit)return new Prepared(null,workspace.v2PrepareCommit(plan.scope(),"output_1"),null);
-        return plan.complete()==null?Prepared.none():new Prepared(null,workspace.v2PrepareOutput(plan.scope(),plan.complete()),plan.complete());
+        if(request.resource() instanceof AgentRuntimeV2EffectCodec.FileRead read)return new Prepared(workspace.v2PrepareInput(plan.scope(),read.inputId()),null,null,null);
+        if(request.resource() instanceof AgentRuntimeV2EffectCodec.FileCommit)return new Prepared(null,workspace.v2PrepareCommit(plan.scope(),"output_1"),null,null);
+        return plan.complete()==null?Prepared.none():new Prepared(null,workspace.v2PrepareOutput(plan.scope(),plan.complete()),plan.complete(),null);
     }
     private Locked lock(AgentRuntimeV2RegistrationContext identity,AgentRuntimeV2SocketTuple socket,String dispatch,boolean historical,boolean settlement){
         var origin=new AgentRuntimeV2InternalOutboxRow(required(executionStore.hint(AgentRuntimeV2ExecutionStore.INTERNAL,row("runtime_dispatch_id",dispatch))));
@@ -230,7 +233,7 @@ public final class AgentRuntimeV2EffectServiceImpl implements AgentRuntimeV2Effe
             if(descriptor==null){check(request.effectKind()==AgentRuntimeV2EffectCodec.Kind.WORKSPACE_PREPARE);var value=(AgentRuntimeV2EffectCodec.WorkspacePrepare)request.resource();descriptor=new AgentRuntimeV2EffectCodec.DescribedResult("CODEX",null,draft.workItemId(),new AgentRuntimeV2EffectCodec.CodexDescriptor(draft.taskId(),draft.workItemId(),"legacy-codex",workspaceKey(locked.origin()),value.baseTreeSha256()));}
             return new Operation("DESCRIBED",descriptor);
         }
-        if(request.resource() instanceof AgentRuntimeV2EffectCodec.SkillRead read)return new Operation("READ",skills.v2Package(locked.origin(),(AgentSkillInstallPayload)draft.payload(),read));
+        if(request.resource() instanceof AgentRuntimeV2EffectCodec.SkillRead read)return new Operation("READ",skills.v2Package(locked.origin(),(AgentSkillInstallPayload)draft.payload(),read,prepared.skillPackage()));
         if(request.resource() instanceof AgentRuntimeV2EffectCodec.FileRead read){var scope=fileScope(locked.origin(),read);requireFileDescriptor(locked,scope);return new Operation("READ",workspace.v2Input(scope,read,prepared.input()));}
         if(request.resource() instanceof AgentRuntimeV2EffectCodec.FileStage stage){
             var scope=fileScope(locked.origin(),stage);requireStageBound(requireFileDescriptor(locked,scope),stage);byte[] complete=stageContent(locked,request,stage);check(same(complete,prepared.completeStage()));

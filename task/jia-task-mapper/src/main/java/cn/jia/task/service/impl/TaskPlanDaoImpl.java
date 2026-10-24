@@ -17,4 +17,9 @@ import jakarta.inject.Named;
 @Named
 public class TaskPlanDaoImpl extends BaseDaoImpl<TaskPlanMapper, TaskPlanEntity> implements TaskPlanDao {
 
+	@Override
+	public TaskPlanEntity findExactInOwnerScope(
+			Long id, String tenantId, String clientId, String ownerJiacn) {
+		return baseMapper.findExactInOwnerScope(id, tenantId, clientId, ownerJiacn);
+	}
 }

@@ -248,8 +248,13 @@ public class HallReadServiceImpl implements HallReadService {
         } catch (IOException | NoSuchAlgorithmException impossible) { throw new IllegalStateException(impossible); }
     }
     private static void requireScope(OwnerScope scope) {
-        if (scope == null || !"0".equals(scope.tenantId()) || !id(scope.clientId(), 50)
+        if (scope == null || scope.tenantId() == null || !id(scope.clientId(), 50)
                 || !id(scope.ownerJiacn(), 50) || "0".equals(scope.ownerJiacn())) throw bad();
+        try {
+            cn.jia.core.tenant.TenantId.of(scope.tenantId());
+        } catch (IllegalArgumentException invalidTenant) {
+            throw bad();
+        }
     }
     private static boolean id(String value, int max) {
         return value != null && !value.isBlank() && value.equals(value.strip()) && text(value, max, false);

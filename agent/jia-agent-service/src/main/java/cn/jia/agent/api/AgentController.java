@@ -231,13 +231,17 @@ public class AgentController {
 
     public Object bindPersona(String personaCode, AgentPersonaBindRequestDTO request,
             Authentication authentication) {
-        AgentHostedBindingTransaction.Scope scope = requireJwtScope(authentication);
         String mode = request == null ? "local" : request.getMode();
         if (mode != null && "server".equalsIgnoreCase(mode.strip())) {
+            requireJwtScope(authentication);
             throw new HostingRentAdmissionException(
                     HostingRentAdmissionException.Reason.HOSTING_RENT_NOT_READY);
         }
-        return JsonResult.success(requirePersonaProvisioningService().bind(scope, personaCode, mode));
+        BusinessScope scope = requireBusinessJwtScope(authentication);
+        if (mode != null && !mode.isBlank() && !"local".equalsIgnoreCase(mode.strip())) {
+            throw new IllegalArgumentException("Unsupported bind mode: " + mode);
+        }
+        return JsonResult.success(requirePersonaProvisioningService().bindLocal(scope, personaCode));
     }
 
     @PostMapping("/personas/bindings/{bindingId}/repair")

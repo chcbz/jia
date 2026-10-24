@@ -7,14 +7,13 @@ import cn.jia.user.entity.CustomUserDetails;
 import cn.jia.user.security.AccountSecurityService;
 import cn.jia.user.security.AccountSecuritySnapshot;
 import cn.jia.user.security.AccountState;
-import org.springframework.core.io.ClassPathResource;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpSession;
-import org.springframework.jdbc.datasource.init.ScriptUtils;
 import org.springframework.security.oauth2.core.AuthorizationGrantType;
 import org.springframework.security.oauth2.core.ClientAuthenticationMethod;
 import org.springframework.security.oauth2.core.OAuth2AccessToken;
 import org.springframework.security.oauth2.core.OAuth2RefreshToken;
+import org.springframework.security.oauth2.core.OAuth2Token;
 import org.springframework.security.oauth2.core.OAuth2AuthenticationException;
 import org.springframework.security.oauth2.server.authorization.context.AuthorizationServerContext;
 import org.springframework.security.oauth2.server.authorization.context.AuthorizationServerContextHolder;
@@ -46,6 +45,7 @@ import org.springframework.security.oauth2.server.authorization.authentication.O
 import org.springframework.security.oauth2.server.authorization.authentication.OAuth2RefreshTokenAuthenticationToken;
 import org.springframework.security.oauth2.server.authorization.authentication.OAuth2ClientAuthenticationToken;
 import org.springframework.security.oauth2.server.authorization.token.JwtEncodingContext;
+import org.springframework.security.oauth2.server.authorization.token.OAuth2TokenGenerator;
 import org.springframework.security.oauth2.server.authorization.client.RegisteredClient;
 import org.springframework.security.oauth2.server.authorization.settings.ClientSettings;
 import org.junit.jupiter.api.BeforeEach;
@@ -61,7 +61,6 @@ import java.lang.reflect.Modifier;
 import java.util.UUID;
 import java.security.MessageDigest;
 import java.util.Base64;
-import java.sql.Connection;
 import java.nio.charset.StandardCharsets;
 import java.security.Principal;
 import java.time.Instant;
@@ -229,19 +228,14 @@ class JdbcTenantAuthorizationRepositoryTest {
     }
 
     @Test
-    void authorizationCodeAndRefreshBindingSurviveJdbcRoundTripWithoutPersistingPassword() throws Exception {
-        try (Connection connection = jdbc.getDataSource().getConnection()) {
-            ScriptUtils.executeSqlScript(connection,
-                    new ClassPathResource("db/oauth2-authorization-manual-candidate.sql"));
-        }
+    void authorizationCodeAndRefreshKeepTenantBindingWithoutRetainingPassword() throws Exception {
         RegisteredClient client = RegisteredClient.withId("registered-web")
                 .clientId("web")
                 .clientAuthenticationMethod(ClientAuthenticationMethod.NONE)
                 .authorizationGrantType(AuthorizationGrantType.AUTHORIZATION_CODE)
                 .authorizationGrantType(AuthorizationGrantType.REFRESH_TOKEN)
                 .redirectUri("https://web.example/callback").scope("profile").build();
-        OAuth2AuthorizationService service = new AuthorizationServerConfig().authorizationService(
-                jdbc, new InMemoryRegisteredClientRepository(client));
+        OAuth2AuthorizationService service = new AuthorizationServerConfig().authorizationService();
         CustomUserDetails login = new CustomUserDetails(17, "Jia-A", 4, "alice", "sensitive-login-password",
                 AuthorityUtils.createAuthorityList("ROLE_USER"));
         seed("1", "TEST", "ENABLED");
@@ -326,9 +320,9 @@ class JdbcTenantAuthorizationRepositoryTest {
         assertEquals("1", context.getClaims().build().getClaim("tenant_id"));
         assertEquals("17", context.getClaims().build().getClaim("uid"));
 
-        byte[] persisted = jdbc.queryForObject("SELECT attributes FROM oauth2_authorization WHERE id=?",
-                (rs, row) -> rs.getBytes(1), initial.getId());
-        assertFalse(new String(persisted, StandardCharsets.UTF_8).contains("sensitive-login-password"));
+        Authentication storedLogin = fromCode.getAttribute(Principal.class.getName());
+        assertNull(storedLogin.getCredentials());
+        assertEquals("<unavailable>", ((CustomUserDetails) storedLogin.getPrincipal()).getPassword());
         AuthorizationServerSettings settings = AuthorizationServerSettings.builder()
                 .issuer("https://issuer.example").build();
         AuthorizationServerContextHolder.setContext(new AuthorizationServerContext() {
@@ -430,15 +424,10 @@ class JdbcTenantAuthorizationRepositoryTest {
 
     @Test
     void simultaneousSelectionCannotReplaceCommittedTenant() throws Exception {
-        try (Connection connection = jdbc.getDataSource().getConnection()) {
-            ScriptUtils.executeSqlScript(connection,
-                    new ClassPathResource("db/oauth2-authorization-manual-candidate.sql"));
-        }
         RegisteredClient client = RegisteredClient.withId("registered-web")
                 .clientId("web").authorizationGrantType(AuthorizationGrantType.AUTHORIZATION_CODE)
                 .redirectUri("https://web.example/callback").scope("profile").build();
-        OAuth2AuthorizationService service = new AuthorizationServerConfig().authorizationService(
-                jdbc, new InMemoryRegisteredClientRepository(client));
+        OAuth2AuthorizationService service = new AuthorizationServerConfig().authorizationService();
         CustomUserDetails login = new CustomUserDetails(17, "Jia-A", 4,
                 "alice", "not-persisted", AuthorityUtils.createAuthorityList("ROLE_USER"));
         OAuth2Authorization stage = OAuth2Authorization.withRegisteredClient(client)
@@ -487,18 +476,13 @@ class JdbcTenantAuthorizationRepositoryTest {
     @Test
     void concurrentCodeExchangeCanOnlyReturnOneAccessToken() throws Exception {
         seed("1", "TEST", "ENABLED");
-        try (Connection connection = jdbc.getDataSource().getConnection()) {
-            ScriptUtils.executeSqlScript(connection,
-                    new ClassPathResource("db/oauth2-authorization-manual-candidate.sql"));
-        }
         RegisteredClient client = RegisteredClient.withId("registered-web")
                 .clientId("web").clientSecret("{noop}secret")
                 .clientAuthenticationMethod(ClientAuthenticationMethod.CLIENT_SECRET_BASIC)
                 .authorizationGrantType(AuthorizationGrantType.AUTHORIZATION_CODE)
                 .authorizationGrantType(AuthorizationGrantType.REFRESH_TOKEN)
                 .redirectUri("https://web.example/callback").scope("profile").build();
-        OAuth2AuthorizationService service = new AuthorizationServerConfig().authorizationService(
-                jdbc, new InMemoryRegisteredClientRepository(client));
+        OAuth2AuthorizationService service = new AuthorizationServerConfig().authorizationService();
         TenantAuthorizationAttributes selected = repository.findEligibleSelection(
                 TenantId.of("1"), DataDomainId.of("cyf"), 17, "web").orElseThrow();
         CustomUserDetails login = new CustomUserDetails(17, "Jia-A", 4,
@@ -564,8 +548,7 @@ class JdbcTenantAuthorizationRepositoryTest {
             assertEquals(1L, results.stream().filter("invalid_grant"::equals).count());
             assertFalse(service.findByToken("code-parallel", new OAuth2TokenType("code"))
                     .getToken(OAuth2AuthorizationCode.class).isActive());
-            assertEquals(Integer.valueOf(1), jdbc.queryForObject(
-                    "SELECT COUNT(*) FROM oauth2_authorization", Integer.class));
+            assertNotNull(service.findById(initial.getId()));
         } finally {
             workers.shutdownNow();
         }
@@ -573,17 +556,12 @@ class JdbcTenantAuthorizationRepositoryTest {
 
     @Test
     void machineAuthenticationWithCredentialsCannotBePersisted() throws Exception {
-        try (Connection connection = jdbc.getDataSource().getConnection()) {
-            ScriptUtils.executeSqlScript(connection,
-                    new ClassPathResource("db/oauth2-authorization-manual-candidate.sql"));
-        }
         RegisteredClient machine = RegisteredClient.withId("registered-machine")
                 .clientId("machine-client")
                 .clientSecret("{noop}test-secret")
                 .clientAuthenticationMethod(ClientAuthenticationMethod.CLIENT_SECRET_BASIC)
                 .authorizationGrantType(AuthorizationGrantType.CLIENT_CREDENTIALS).scope("probe").build();
-        OAuth2AuthorizationService service = new AuthorizationServerConfig().authorizationService(
-                jdbc, new InMemoryRegisteredClientRepository(machine));
+        OAuth2AuthorizationService service = new AuthorizationServerConfig().authorizationService();
         OAuth2Authorization unsafe = OAuth2Authorization.withRegisteredClient(machine)
                 .principalName("machine-client").authorizationGrantType(AuthorizationGrantType.CLIENT_CREDENTIALS)
                 .attribute(Principal.class.getName(), new UsernamePasswordAuthenticationToken(
@@ -599,19 +577,34 @@ class JdbcTenantAuthorizationRepositoryTest {
     }
 
     @Test
-    void missingAuthorizationTableCannotFallBackToProcessLocalState() {
+    void authorizationStateNeedsNoTableAndIsNotSharedAcrossInstances() {
         RegisteredClient client = RegisteredClient.withId("registered-web")
                 .clientId("web").clientSecret("{noop}secret")
                 .clientAuthenticationMethod(ClientAuthenticationMethod.CLIENT_SECRET_BASIC)
                 .authorizationGrantType(AuthorizationGrantType.AUTHORIZATION_CODE)
                 .redirectUri("https://web.example/callback").scope("profile").build();
-        OAuth2AuthorizationService service = new AuthorizationServerConfig().authorizationService(
-                jdbc, new InMemoryRegisteredClientRepository(client));
+        OAuth2AuthorizationService service = new AuthorizationServerConfig().authorizationService();
+        CustomUserDetails user = new CustomUserDetails(17, "Jia-A", 4, "alice", "password",
+                AuthorityUtils.createAuthorityList("ROLE_USER"));
         OAuth2Authorization authorization = OAuth2Authorization.withRegisteredClient(client)
                 .principalName("alice").authorizationGrantType(AuthorizationGrantType.AUTHORIZATION_CODE)
+                .attribute(Principal.class.getName(), new UsernamePasswordAuthenticationToken(
+                        user, null, user.getAuthorities()))
+                .attribute(TenantAuthorizationAttributes.attributeName(), new TenantAuthorizationAttributes(
+                        TenantId.of("1"), DataDomainId.of("cyf"), "test",
+                        TenantAuthorizationAttributes.TenantKind.TEST, "3", "8", "4"))
                 .token(new OAuth2AuthorizationCode("code-missing-table",
                         Instant.now(), Instant.now().plusSeconds(300))).build();
-        assertThrows(DataAccessException.class, () -> service.save(authorization));
+        service.save(authorization);
+        OAuth2Authorization saved = service.findByToken("code-missing-table", new OAuth2TokenType("code"));
+        assertNotNull(saved);
+        assertEquals("1", saved.<TenantAuthorizationAttributes>getAttribute(
+                TenantAuthorizationAttributes.attributeName()).tenantId().value());
+        assertNull(new AuthorizationServerConfig().authorizationService().findById(saved.getId()));
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES "
+                + "WHERE LOWER(TABLE_NAME) = 'oauth2_authorization'", Integer.class));
+        service.remove(saved);
+        assertNull(service.findById(saved.getId()));
     }
 
 
@@ -654,18 +647,13 @@ class JdbcTenantAuthorizationRepositoryTest {
 
     private void exerciseRevocationBeforeGrant(boolean accountRevocation) throws Exception {
         seed("1", "TEST", "ENABLED");
-        try (Connection connection = jdbc.getDataSource().getConnection()) {
-            ScriptUtils.executeSqlScript(connection,
-                    new ClassPathResource("db/oauth2-authorization-manual-candidate.sql"));
-        }
         RegisteredClient client = RegisteredClient.withId("registered-web").clientId("web")
                 .clientSecret("{noop}secret")
                 .clientAuthenticationMethod(ClientAuthenticationMethod.CLIENT_SECRET_BASIC)
                 .authorizationGrantType(AuthorizationGrantType.AUTHORIZATION_CODE)
                 .authorizationGrantType(AuthorizationGrantType.REFRESH_TOKEN)
                 .redirectUri("https://web.example/callback").scope("profile").build();
-        OAuth2AuthorizationService service = new AuthorizationServerConfig().authorizationService(
-                jdbc, new InMemoryRegisteredClientRepository(client));
+        OAuth2AuthorizationService service = new AuthorizationServerConfig().authorizationService();
         CustomUserDetails user = new CustomUserDetails(17, "Jia-A", 4, "alice", "private-password",
                 AuthorityUtils.createAuthorityList("ROLE_USER"));
         OAuth2Authorization initial = OAuth2Authorization.withRegisteredClient(client)
@@ -761,10 +749,6 @@ class JdbcTenantAuthorizationRepositoryTest {
             @Override public AuthorizationServerSettings getAuthorizationServerSettings() { return settings; }
         });
         seed("1", "TEST", "ENABLED");
-        try (Connection connection = jdbc.getDataSource().getConnection()) {
-            ScriptUtils.executeSqlScript(connection,
-                    new ClassPathResource("db/oauth2-authorization-manual-candidate.sql"));
-        }
         RegisteredClient client = RegisteredClient.withId("registered-web")
                 .clientId("web").clientAuthenticationMethod(ClientAuthenticationMethod.NONE)
                 .authorizationGrantType(AuthorizationGrantType.AUTHORIZATION_CODE)
@@ -773,7 +757,7 @@ class JdbcTenantAuthorizationRepositoryTest {
                         .requireAuthorizationConsent(false).build()).build();
         var clients = new InMemoryRegisteredClientRepository(client);
         OAuth2AuthorizationService authorizations = new AuthorizationServerConfig()
-                .authorizationService(jdbc, clients);
+                .authorizationService();
         var consentService = new InMemoryOAuth2AuthorizationConsentService();
         AuthenticationProvider requestProvider = new TenantAuthorizationRequestProvider(
                 new OAuth2AuthorizationCodeRequestAuthenticationProvider(clients, authorizations, consentService),
@@ -901,5 +885,155 @@ class JdbcTenantAuthorizationRepositoryTest {
                         Set.of("profile"), Map.of()))).getError().getErrorCode());
         assertNull(authorizations.findByToken(second.getState(), TenantAuthorizationRequestProvider.CONSENT_STATE)
                 .getToken(OAuth2AuthorizationCode.class));
+    }
+
+    @Test
+    void fixedTenantCodeAndRefreshUseOnlyServerBindingWithoutAuthorizationTable() throws Exception {
+        AuthorizationServerSettings settings = AuthorizationServerSettings.builder()
+                .issuer("https://issuer.example").build();
+        AuthorizationServerContextHolder.setContext(new AuthorizationServerContext() {
+            @Override public String getIssuer() { return settings.getIssuer(); }
+            @Override public AuthorizationServerSettings getAuthorizationServerSettings() { return settings; }
+        });
+        RegisteredClient client = RegisteredClient.withId("registered-web")
+                .clientId("web").clientSecret("{noop}secret")
+                .clientAuthenticationMethod(ClientAuthenticationMethod.CLIENT_SECRET_BASIC)
+                .authorizationGrantType(AuthorizationGrantType.AUTHORIZATION_CODE)
+                .authorizationGrantType(AuthorizationGrantType.REFRESH_TOKEN)
+                .redirectUri("https://web.example/callback").scope("profile")
+                .clientSettings(ClientSettings.builder().requireAuthorizationConsent(false).build()).build();
+        var clients = new InMemoryRegisteredClientRepository(client);
+        OAuth2AuthorizationService authorizations = new AuthorizationServerConfig().authorizationService();
+        FixedTenantAuthorizationPolicy policy = fixedPolicy("1", "web");
+        var consentStore = new InMemoryOAuth2AuthorizationConsentService();
+        AuthenticationProvider requestProvider = new FixedTenantAuthorizationRequestProvider(
+                new OAuth2AuthorizationCodeRequestAuthenticationProvider(clients, authorizations, consentStore),
+                authorizations, policy);
+        AuthenticationProvider consentProvider = new FixedTenantConsentGrantProvider(
+                new OAuth2AuthorizationConsentAuthenticationProvider(clients, authorizations, consentStore),
+                authorizations, clients, policy, jdbc);
+        CustomUserDetails user = new CustomUserDetails(17, "Jia-A", 4, "alice", "not-persisted",
+                AuthorityUtils.createAuthorityList("ROLE_USER"));
+        Authentication login = new UsernamePasswordAuthenticationToken(user, null, user.getAuthorities());
+        var browser = new MockHttpServletRequest("GET", "/oauth2/authorize");
+        MockHttpSession session = (MockHttpSession) browser.getSession();
+        RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(browser));
+        String fixedVerifier = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~";
+        String fixedChallenge = Base64.getUrlEncoder().withoutPadding().encodeToString(
+                MessageDigest.getInstance("SHA-256").digest(
+                        fixedVerifier.getBytes(StandardCharsets.US_ASCII)));
+        OAuth2AuthorizationConsentAuthenticationToken consent = assertInstanceOf(
+                OAuth2AuthorizationConsentAuthenticationToken.class,
+                requestProvider.authenticate(new OAuth2AuthorizationCodeRequestAuthenticationToken(
+                        "https://issuer.example/oauth2/authorize", "web", login,
+                        "https://web.example/callback", "client-state-fixed", Set.of("profile"),
+                        Map.of("tenant_id", "0", "tenant_hint", "0",
+                                "code_challenge", fixedChallenge, "code_challenge_method", "S256"))));
+        OAuth2Authorization staged = authorizations.findByToken(
+                consent.getState(), TenantAuthorizationRequestProvider.CONSENT_STATE);
+        FixedTenantAuthorizationBinding binding = staged.getAttribute(
+                FixedTenantAuthorizationBinding.attributeName());
+        assertEquals("1", binding.tenantId().value());
+        assertEquals("web", binding.clientId());
+        assertNull(staged.getAttribute(TenantAuthorizationAttributes.attributeName()));
+        assertEquals("web", new FixedTenantConsentService(authorizations, clients, policy)
+                .view(session, consent.getState(), login).clientId());
+
+        Authentication consentResult = consentProvider.authenticate(
+                new OAuth2AuthorizationConsentAuthenticationToken(consent.getAuthorizationUri(), "web", login,
+                        consent.getState(), Set.of("profile"), Map.of("tenant_id", "0")));
+        OAuth2AuthorizationCode code = assertInstanceOf(
+                OAuth2AuthorizationCodeRequestAuthenticationToken.class, consentResult).getAuthorizationCode();
+        OAuth2Authorization persistedCode = authorizations.findByToken(code.getTokenValue(), new OAuth2TokenType("code"));
+        assertEquals(binding, persistedCode.getAttribute(FixedTenantAuthorizationBinding.attributeName()));
+
+        OAuth2TokenGenerator<OAuth2Token> generator = context -> {
+            Instant now = Instant.now();
+            if (OAuth2TokenType.ACCESS_TOKEN.equals(context.getTokenType())) {
+                return new OAuth2AccessToken(OAuth2AccessToken.TokenType.BEARER,
+                        "fixed-access-" + context.getAuthorizationGrantType().getValue(), now,
+                        now.plusSeconds(300), context.getAuthorizedScopes());
+            }
+            if (OAuth2TokenType.REFRESH_TOKEN.equals(context.getTokenType())) {
+                return new OAuth2RefreshToken("fixed-refresh", now, now.plusSeconds(600));
+            }
+            return null;
+        };
+        OAuth2ClientAuthenticationToken clientPrincipal = new OAuth2ClientAuthenticationToken(
+                client, ClientAuthenticationMethod.CLIENT_SECRET_BASIC, "secret");
+        OAuth2AccessTokenAuthenticationToken issued = assertInstanceOf(OAuth2AccessTokenAuthenticationToken.class,
+                new FixedTenantTokenGrantProvider(
+                        new OAuth2AuthorizationCodeAuthenticationProvider(authorizations, generator),
+                        authorizations, policy, jdbc).authenticate(new OAuth2AuthorizationCodeAuthenticationToken(
+                        code.getTokenValue(), clientPrincipal, "https://web.example/callback",
+                        Map.of("code_verifier", fixedVerifier))));
+        OAuth2Authorization exchanged = authorizations.findByToken(
+                issued.getRefreshToken().getTokenValue(), OAuth2TokenType.REFRESH_TOKEN);
+        assertEquals(binding, exchanged.getAttribute(FixedTenantAuthorizationBinding.attributeName()));
+
+        AccountSecurityService accounts = mock(AccountSecurityService.class);
+        when(accounts.findByUserId(17)).thenReturn(java.util.Optional.of(
+                new AccountSecuritySnapshot(17, "Jia-A", AccountState.ACTIVE, 4)));
+        JwtEncodingContext claims = JwtEncodingContext.with(
+                        JwsHeader.with(SignatureAlgorithm.RS256), JwtClaimsSet.builder().subject("alice"))
+                .registeredClient(client).principal(exchanged.getAttribute(Principal.class.getName()))
+                .authorization(exchanged).tokenType(OAuth2TokenType.ACCESS_TOKEN)
+                .authorizationGrantType(AuthorizationGrantType.REFRESH_TOKEN).build();
+        new AccountSecurityTokenCustomizer(accounts, policy).customize(claims);
+        assertEquals("1", claims.getClaims().build().getClaim("tenant_id"));
+        assertNull(claims.getClaims().build().getClaim("tenant_session_epoch"));
+        assertNull(claims.getClaims().build().getClaim("membership_revision"));
+
+        OAuth2AccessTokenAuthenticationToken refreshed = assertInstanceOf(OAuth2AccessTokenAuthenticationToken.class,
+                new FixedTenantTokenGrantProvider(
+                        new OAuth2RefreshTokenAuthenticationProvider(authorizations, generator),
+                        authorizations, policy, jdbc).authenticate(new OAuth2RefreshTokenAuthenticationToken(
+                        issued.getRefreshToken().getTokenValue(), clientPrincipal, Set.of(), Map.of())));
+        assertEquals("fixed-access-refresh_token", refreshed.getAccessToken().getTokenValue());
+
+        RegisteredClient wrong = RegisteredClient.withId("registered-other").clientId("other")
+                .clientSecret("{noop}secret").clientAuthenticationMethod(ClientAuthenticationMethod.CLIENT_SECRET_BASIC)
+                .authorizationGrantType(AuthorizationGrantType.REFRESH_TOKEN).scope("profile").build();
+        OAuth2ClientAuthenticationToken wrongPrincipal = new OAuth2ClientAuthenticationToken(
+                wrong, ClientAuthenticationMethod.CLIENT_SECRET_BASIC, "secret");
+        assertEquals("invalid_grant", assertThrows(OAuth2AuthenticationException.class,
+                () -> new FixedTenantTokenGrantProvider(
+                        new OAuth2RefreshTokenAuthenticationProvider(authorizations, generator),
+                        authorizations, policy, jdbc).authenticate(new OAuth2RefreshTokenAuthenticationToken(
+                        issued.getRefreshToken().getTokenValue(), wrongPrincipal, Set.of(), Map.of())))
+                .getError().getErrorCode());
+        assertEquals("invalid_grant", assertThrows(OAuth2AuthenticationException.class,
+                () -> new FixedTenantTokenGrantProvider(
+                        new OAuth2RefreshTokenAuthenticationProvider(authorizations, generator),
+                        authorizations, fixedPolicy("0", "web"), jdbc).authenticate(
+                        new OAuth2RefreshTokenAuthenticationToken(issued.getRefreshToken().getTokenValue(),
+                                clientPrincipal, Set.of(), Map.of())))
+                .getError().getErrorCode());
+
+        OAuth2AuthorizationRequest oldRequest = OAuth2AuthorizationRequest.authorizationCode()
+                .authorizationUri("https://issuer.example/oauth2/authorize").clientId("web")
+                .redirectUri("https://web.example/callback").scope("profile").state("old").build();
+        OAuth2Authorization oldUnbound = OAuth2Authorization.withRegisteredClient(client)
+                .principalName("alice").authorizationGrantType(AuthorizationGrantType.AUTHORIZATION_CODE)
+                .authorizedScopes(Set.of("profile"))
+                .attribute(Principal.class.getName(), login)
+                .attribute(OAuth2AuthorizationRequest.class.getName(), oldRequest)
+                .refreshToken(new OAuth2RefreshToken("old-unbound-refresh", Instant.now(),
+                        Instant.now().plusSeconds(600))).build();
+        authorizations.save(oldUnbound);
+        assertEquals("invalid_grant", assertThrows(OAuth2AuthenticationException.class,
+                () -> new FixedTenantTokenGrantProvider(
+                        new OAuth2RefreshTokenAuthenticationProvider(authorizations, generator),
+                        authorizations, policy, jdbc).authenticate(new OAuth2RefreshTokenAuthenticationToken(
+                        "old-unbound-refresh", clientPrincipal, Set.of(), Map.of())))
+                .getError().getErrorCode());
+    }
+
+    private static FixedTenantAuthorizationPolicy fixedPolicy(String tenantId, String clientId) {
+        TenantIssuanceProperties properties = new TenantIssuanceProperties();
+        properties.setAdmissionMode(TenantIssuanceProperties.Mode.FIXED_TENANT);
+        properties.setFixedTenantId(tenantId);
+        properties.setFixedClientTenants(Map.of(clientId, tenantId));
+        return FixedTenantAuthorizationPolicy.from(properties);
     }
 }

@@ -63,6 +63,16 @@ public interface ChatConversationService {
     boolean isLiveGeneration(
             String ownerJiacn, String clientId, String conversationId, long expectedGeneration);
 
+    /**
+     * Fail-closed tenant-scoped live-generation probe for trusted background workers.
+     *
+     * <p>The tenant, owner and client values must come from an already-authorized worker row,
+     * never from an untrusted event payload.</p>
+     */
+    boolean isLiveGeneration(
+            String tenantId, String ownerJiacn, String clientId,
+            String conversationId, long expectedGeneration);
+
     /** Exact owner-scoped full history read for authenticated maintenance initiated by a user. */
     List<ChatMessageEntity> findOwnedMessages(
             String ownerJiacn, String clientId, String conversationId);

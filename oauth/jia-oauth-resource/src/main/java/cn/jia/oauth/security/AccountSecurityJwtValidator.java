@@ -16,23 +16,31 @@ public final class AccountSecurityJwtValidator implements OAuth2TokenValidator<J
     private final AccountSecurityService accountSecurityService;
 
     private final TenantAuthorizationVerifier tenantAuthorizationVerifier;
-    private final boolean requireBoundIdentity;
+    private final TenantAdmissionPolicy admissionPolicy;
 
     public AccountSecurityJwtValidator(AccountSecurityService accountSecurityService) {
-        this(accountSecurityService, null, true);
+        this(accountSecurityService, null, TenantAdmissionPolicy.platformValidatorDefault(true));
     }
 
     public AccountSecurityJwtValidator(AccountSecurityService accountSecurityService,
                                        TenantAuthorizationVerifier tenantAuthorizationVerifier) {
-        this(accountSecurityService, tenantAuthorizationVerifier, true);
+        this(accountSecurityService, tenantAuthorizationVerifier,
+                TenantAdmissionPolicy.platformValidatorDefault(true));
     }
 
     public AccountSecurityJwtValidator(AccountSecurityService accountSecurityService,
                                        TenantAuthorizationVerifier tenantAuthorizationVerifier,
                                        boolean requireBoundIdentity) {
+        this(accountSecurityService, tenantAuthorizationVerifier,
+                TenantAdmissionPolicy.platformValidatorDefault(requireBoundIdentity));
+    }
+
+    public AccountSecurityJwtValidator(AccountSecurityService accountSecurityService,
+                                       TenantAuthorizationVerifier tenantAuthorizationVerifier,
+                                       TenantAdmissionPolicy admissionPolicy) {
         this.accountSecurityService = accountSecurityService;
         this.tenantAuthorizationVerifier = tenantAuthorizationVerifier;
-        this.requireBoundIdentity = requireBoundIdentity;
+        this.admissionPolicy = admissionPolicy;
     }
 
     @Override
@@ -64,10 +72,8 @@ public final class AccountSecurityJwtValidator implements OAuth2TokenValidator<J
                     && account.authEpoch() == 0;
             if (!valid) return failure();
             if (identity.tokenClass() == AccountSecurityJwtClaims.TokenClass.USER) {
-                Optional<TenantAuthorizationAttributes> bound = AccountSecurityJwtClaims.tenantBinding(jwt);
-                if (bound.isEmpty() || tenantAuthorizationVerifier == null
-                        || !tenantAuthorizationVerifier.isCurrent(bound.get(), identity.userId(),
-                        jwt.getClaim("client_id"))) {
+                if (!admissionPolicy.isCurrentUserAuthorization(jwt, identity,
+                        tenantAuthorizationVerifier)) {
                     return failure();
                 }
             } else {
@@ -75,7 +81,7 @@ public final class AccountSecurityJwtValidator implements OAuth2TokenValidator<J
                 // strict multi-area deployment must reject them. Compatibility
                 // deployments remain tenant-zero-only and preserve their
                 // existing account/auth-epoch validation until cutover.
-                if (requireBoundIdentity) return failure();
+                if (!admissionPolicy.allowsLegacyUser()) return failure();
             }
             return OAuth2TokenValidatorResult.success();
         } catch (RuntimeException exception) {

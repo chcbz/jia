@@ -1,6 +1,7 @@
 package cn.jia.agent.dao.impl;
 
 import cn.jia.agent.cache.AgentPersonaCatalogCache;
+import cn.jia.agent.config.AgentPersonaTemplateAccess;
 import cn.jia.agent.dao.AgentPersonaDao;
 import cn.jia.agent.entity.AgentPersonaEntity;
 import cn.jia.agent.mapper.AgentPersonaMapper;
@@ -19,6 +20,12 @@ import java.util.Objects;
 
 @Named
 public class AgentPersonaDaoImpl extends BaseDaoImpl<AgentPersonaMapper, AgentPersonaEntity> implements AgentPersonaDao {
+    private AgentPersonaTemplateAccess templateAccess = new AgentPersonaTemplateAccess("");
+
+    @Inject
+    public void setTemplateAccess(AgentPersonaTemplateAccess templateAccess) {
+        this.templateAccess = Objects.requireNonNull(templateAccess);
+    }
     private AgentPersonaCatalogCache catalogCache = new AgentPersonaCatalogCache();
 
     @Inject
@@ -44,7 +51,7 @@ public class AgentPersonaDaoImpl extends BaseDaoImpl<AgentPersonaMapper, AgentPe
     public AgentPersonaEntity findByNameInReadScope(
             String tenantId, String clientId, String name) {
         requireExact(name, "name");
-        return uniqueExact(findRuntimeProjection(tenantId, clientId), name, false);
+        return uniqueExact(findFullProjection(tenantId, clientId), name, false);
     }
 
     @Override
@@ -55,15 +62,21 @@ public class AgentPersonaDaoImpl extends BaseDaoImpl<AgentPersonaMapper, AgentPe
     }
 
     @Override
+    public List<AgentPersonaEntity> findFullProjection(String tenantId, String clientId) {
+        requireReadScope(tenantId, clientId);
+        return baseMapper.selectFullProjection(tenantId, clientId, templateAccess.sharedClientId());
+    }
+
+    @Override
     public List<AgentPersonaEntity> findRuntimeProjection(String tenantId, String clientId) {
         requireReadScope(tenantId, clientId);
-        return baseMapper.selectRuntimeProjection(tenantId, clientId);
+        return baseMapper.selectRuntimeProjection(tenantId, clientId, templateAccess.sharedClientId());
     }
 
     @Override
     public List<AgentPersonaEntity> findCatalogProjection(String tenantId, String clientId) {
         requireReadScope(tenantId, clientId);
-        return baseMapper.selectCatalogProjection(tenantId, clientId);
+        return baseMapper.selectCatalogProjection(tenantId, clientId, templateAccess.sharedClientId());
     }
 
     @Override
@@ -122,8 +135,8 @@ public class AgentPersonaDaoImpl extends BaseDaoImpl<AgentPersonaMapper, AgentPe
     }
 
     private void requireReadScope(String tenantId, String clientId) {
-        TenantId.of(tenantId);
         requireExact(tenantId, "tenantId");
+        TenantId.of(tenantId);
         requireExact(clientId, "clientId");
         BusinessScope trusted = TrustedTenantContext.requireScope();
         if (!"cyf".equals(trusted.dataDomainId().value())

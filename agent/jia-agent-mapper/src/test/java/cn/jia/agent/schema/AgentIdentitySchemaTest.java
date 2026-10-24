@@ -31,14 +31,16 @@ class AgentIdentitySchemaTest {
                 "lifecycle_status in ('provisioned', 'active', 'suspended', 'retired')"));
         assertTrue(registry.contains("canonical_agent_id regexp '^agt_[0-9a-f]{32}$'"));
         assertTrue(registry.contains("tenant_id = '0'"));
-        assertTrue(registry.contains("client_id is null and owner_jiacn is null and tenant_id = '0'"));
+        assertTrue(registry.contains("client_id is null and owner_jiacn is null "
+                + "and tenant_id is not null and tenant_id = '0'"));
         assertFalse(registry.contains("and tenant_id is null"));
         assertTrue(registry.contains("trim(client_id) <> ''"));
         assertTrue(registry.contains("trim(owner_jiacn) <> ''"));
+        assertCanonicalTenantPredicate(registry);
         assertTrue(registry.contains("utf8mb4_0900_bin"));
 
         assertTrue(alias.contains("chk_identity_alias_no_blank_scope"));
-        assertTrue(alias.contains("tenant_id = '0'"));
+        assertCanonicalTenantPredicate(alias);
         assertTrue(alias.contains("foreign key "
                 + "(registry_id, canonical_agent_id, client_id, owner_jiacn, tenant_id)"));
         assertTrue(alias.contains("unique key uk_identity_alias_active "
@@ -53,13 +55,22 @@ class AgentIdentitySchemaTest {
     }
 
     @Test
-    void schemaAndMigrationCreateDefinitionsStayInParity() throws IOException {
+    void activeSchemaUsesCanonicalTenantsWhileHistoricalMigrationStaysFixedZero() throws IOException {
         String schema = readResource("db/schema.sql");
         String migration = readResource("db/agent-identity-schema.sql");
         for (String table : List.of("agent_identity_registry", "agent_identity_alias")) {
-            assertEquals(compact(tableDefinition(schema, table)),
-                    compact(tableDefinition(migration, table)), table);
+            String active = compact(tableDefinition(schema, table));
+            String historical = compact(tableDefinition(migration, table));
+            assertCanonicalTenantPredicate(active);
+            assertFalse(active.equals(historical), table);
         }
+        String historicalRegistry = compact(tableDefinition(migration, "agent_identity_registry"));
+        String historicalAlias = compact(tableDefinition(migration, "agent_identity_alias"));
+        assertTrue(historicalRegistry.contains(
+                "and owner_jiacn is not null and trim(owner_jiacn) <> '' and tenant_id = '0'"));
+        assertTrue(historicalAlias.contains("chk_identity_alias_scope check (tenant_id = '0')"));
+        assertFalse(historicalRegistry.contains("regexp binary '^(0|[1-9][0-9]{0,49})$'"));
+        assertFalse(historicalAlias.contains("regexp binary '^(0|[1-9][0-9]{0,49})$'"));
 
         // Statement extraction must preserve quoted SQL and comments, not truncate a CHECK oracle.
         String prefix = "create table if not exists statement_probe (";
@@ -87,6 +98,41 @@ class AgentIdentitySchemaTest {
     }
 
     @Test
+    void manualIdentityCandidateChangesOnlyNamedChecksWithoutDataOrRelationshipMutation()
+            throws IOException {
+        String candidate = readResource(
+                "db/agent-identity-tenant-checks-manual-candidate-20261023.sql");
+        String executable = withoutLineComments(candidate);
+
+        assertEquals(3, occurrenceCount(candidate, "alter table "));
+        assertEquals(3, occurrenceCount(candidate, "drop check "));
+        assertEquals(3, occurrenceCount(candidate, "add constraint "));
+        for (String check : List.of(
+                "chk_agent_binding_single_tenant",
+                "chk_identity_registry_scope",
+                "chk_identity_alias_scope")) {
+            assertEquals(2, occurrenceCount(candidate, check), check);
+        }
+        assertTrue(candidate.contains("canonical_type = 'system'"));
+        assertTrue(candidate.contains("client_id is null"));
+        assertTrue(candidate.contains("owner_jiacn is null"));
+        assertTrue(candidate.contains("tenant_id = '0'"));
+        assertEquals(4, occurrenceCount(candidate, "tenant_id is not null"));
+        assertEquals(3, occurrenceCount(candidate,
+                "tenant_id regexp binary '^(0|[1-9][0-9]{0,49})$'"));
+        assertEquals(3, occurrenceCount(candidate,
+                "tenant_id not regexp binary '[^0-9]'"));
+        assertEquals(3, occurrenceCount(candidate, "instr(tenant_id, char(10)) = 0"));
+        assertEquals(3, occurrenceCount(candidate, "instr(tenant_id, char(13)) = 0"));
+        assertFalse(Pattern.compile("(?m)^\\s*(insert|update|delete|replace|truncate)\\b")
+                .matcher(executable).find());
+        assertFalse(Pattern.compile("(?m)^\\s*(create|drop)\\s+(index|trigger|table)\\b")
+                .matcher(executable).find());
+        assertFalse(executable.contains("foreign key"));
+        assertFalse(executable.contains("backfill"));
+    }
+
+    @Test
     void migrationContainsRealB0UpgradeAndMysql8021RepeatableTriggers() throws IOException {
         String migration = readResource("db/agent-identity-schema.sql");
         String executable = withoutLineComments(migration);
@@ -106,7 +152,8 @@ class AgentIdentitySchemaTest {
         assertFalse(migration.contains("add constraint chk_agent_binding_tenant_owner"));
         String binding = compact(tableDefinition(readResource("db/schema.sql"), "agent_persona_binding"));
         assertTrue(binding.contains("tenant_id varchar(50) not null default '0'"));
-        assertTrue(binding.contains("chk_agent_binding_single_tenant check (tenant_id = '0')"));
+        assertTrue(binding.contains("chk_agent_binding_single_tenant check ( tenant_id is not null"));
+        assertCanonicalTenantPredicate(binding);
         assertTrue(binding.contains("unique key uk_agent_binding_active_persona "
                 + "(tenant_id, client_id, active_persona_code)"));
         assertTrue(migration.contains("on agent_persona_binding (tenant_id, client_id, active_persona_code)"));
@@ -203,6 +250,14 @@ class AgentIdentitySchemaTest {
         assertTrue(binding.contains("unique key uk_agent_binding_active_persona "
                 + "(tenant_id, client_id, active_persona_code)"));
         assertTrue(binding.contains("unique key uk_agent_binding_active_agent (active_agent_id)"));
+    }
+
+    private void assertCanonicalTenantPredicate(String definition) {
+        assertTrue(definition.contains("tenant_id is not null"));
+        assertTrue(definition.contains("tenant_id regexp binary '^(0|[1-9][0-9]{0,49})$'"));
+        assertTrue(definition.contains("tenant_id not regexp binary '[^0-9]'"));
+        assertTrue(definition.contains("instr(tenant_id, char(10)) = 0"));
+        assertTrue(definition.contains("instr(tenant_id, char(13)) = 0"));
     }
 
     private String readResource(String resource) throws IOException {

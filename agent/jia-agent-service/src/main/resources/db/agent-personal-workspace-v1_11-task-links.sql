@@ -24,7 +24,12 @@ CREATE TABLE IF NOT EXISTS agent_personal_workspace_task_file_link (
     (tenant_id, client_id, owner_jiacn, task_id, created_at, relation_id),
   KEY idx_pwtl_file_usage
     (tenant_id, client_id, owner_jiacn, file_id, link_state, task_id),
-  CONSTRAINT chk_pwtl_single_tenant CHECK (tenant_id = '0'),
+  CONSTRAINT chk_pwtl_single_tenant CHECK (
+    tenant_id IS NOT NULL
+    AND tenant_id REGEXP BINARY '^(0|[1-9][0-9]{0,49})$'
+    AND tenant_id NOT REGEXP BINARY '[^0-9]'
+    AND INSTR(tenant_id, CHAR(10)) = 0
+    AND INSTR(tenant_id, CHAR(13)) = 0),
   CONSTRAINT chk_pwtl_file_version CHECK (file_version >= 1),
   CONSTRAINT chk_pwtl_revision CHECK (relation_revision >= 1),
   CONSTRAINT chk_pwtl_role CHECK (link_role IN ('INPUT','REFERENCE','OUTPUT')),
@@ -56,7 +61,12 @@ CREATE TABLE IF NOT EXISTS agent_personal_workspace_task_link_operation (
     (tenant_id, client_id, owner_jiacn, operation_id),
   KEY idx_pwtl_operation_relation
     (tenant_id, client_id, owner_jiacn, relation_id, operation_state),
-  CONSTRAINT chk_pwtl_operation_tenant CHECK (tenant_id = '0'),
+  CONSTRAINT chk_pwtl_operation_tenant CHECK (
+    tenant_id IS NOT NULL
+    AND tenant_id REGEXP BINARY '^(0|[1-9][0-9]{0,49})$'
+    AND tenant_id NOT REGEXP BINARY '[^0-9]'
+    AND INSTR(tenant_id, CHAR(10)) = 0
+    AND INSTR(tenant_id, CHAR(13)) = 0),
   CONSTRAINT chk_pwtl_operation_type CHECK (operation_type IN ('CREATE','DELETE')),
   CONSTRAINT chk_pwtl_operation_hash CHECK (
     CHAR_LENGTH(request_hash)=64 AND request_hash REGEXP BINARY '^[0-9a-f]{64}$'),

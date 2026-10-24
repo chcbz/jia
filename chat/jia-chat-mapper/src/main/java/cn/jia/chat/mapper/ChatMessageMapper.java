@@ -27,6 +27,22 @@ public interface ChatMessageMapper extends BaseMapper<ChatMessageEntity> {
               AND OCTET_LENGTH(c.client_id) = OCTET_LENGTH(#{clientId})
             """;
 
+    String LIVE_LEGACY_CONVERSATION_OWNER_SCOPE_IN_TENANT = """
+              AND c.deleted_at IS NULL
+              AND c.tenant_id = #{tenantId}
+              AND c.data_scope_mode = 'LEGACY_CLIENT'
+              AND c.jiacn = #{ownerJiacn}
+              AND c.client_id = #{clientId}
+              AND CAST(c.tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY)
+              AND OCTET_LENGTH(c.tenant_id) = OCTET_LENGTH(#{tenantId})
+              AND CAST(c.data_scope_mode AS BINARY) = CAST('LEGACY_CLIENT' AS BINARY)
+              AND OCTET_LENGTH(c.data_scope_mode) = OCTET_LENGTH('LEGACY_CLIENT')
+              AND CAST(c.jiacn AS BINARY) = CAST(#{ownerJiacn} AS BINARY)
+              AND OCTET_LENGTH(c.jiacn) = OCTET_LENGTH(#{ownerJiacn})
+              AND CAST(c.client_id AS BINARY) = CAST(#{clientId} AS BINARY)
+              AND OCTET_LENGTH(c.client_id) = OCTET_LENGTH(#{clientId})
+            """;
+
     String LIVE_DOMAIN_CONVERSATION_OWNER_SCOPE = """
               AND c.deleted_at IS NULL
               AND c.data_scope_mode = 'DOMAIN'
@@ -119,7 +135,7 @@ public interface ChatMessageMapper extends BaseMapper<ChatMessageEntity> {
               AND c.id > #{afterId}
               AND m.sync_status = #{syncStatus}
               AND m.message_type IN ('USER', 'ASSISTANT')
-            """ + EXACT_MESSAGE_OWNER_SCOPE + """
+            """ + EXACT_LEGACY_MESSAGE_OWNER_SCOPE + """
             GROUP BY c.id ORDER BY c.id ASC LIMIT #{limit}
             """)
     List<String> findPendingMemoryConversations(@Param("syncStatus") String syncStatus,
@@ -131,8 +147,8 @@ public interface ChatMessageMapper extends BaseMapper<ChatMessageEntity> {
             UPDATE chat_message m JOIN chat_conversation c ON c.id = #{numericConversationId}
             SET m.sync_status = 'SYNCED'
             WHERE m.sync_status = 'PENDING'
-            """ + EXACT_MESSAGE_CONVERSATION_SCOPE + LIVE_CONVERSATION_OWNER_SCOPE
-            + EXACT_MESSAGE_OWNER_SCOPE + """
+            """ + EXACT_MESSAGE_CONVERSATION_SCOPE + LIVE_LEGACY_CONVERSATION_OWNER_SCOPE
+            + EXACT_LEGACY_MESSAGE_OWNER_SCOPE + """
               AND m.id IN
               <foreach collection="messageIds" item="messageId" open="(" separator="," close=")">
                 #{messageId}
@@ -144,17 +160,24 @@ public interface ChatMessageMapper extends BaseMapper<ChatMessageEntity> {
             @Param("numericConversationId") long numericConversationId,
             @Param("messageIds") List<Long> messageIds);
 
+    default List<ChatMessageEntity> findExactOwnedConversationMessages(
+            String ownerJiacn, String clientId, String conversationId, Long numericConversationId) {
+        return findExactOwnedConversationMessagesInTenant(
+                "0", ownerJiacn, clientId, conversationId, numericConversationId);
+    }
+
     @Select("""
             SELECT m.*
             FROM chat_message m
             JOIN chat_conversation c ON c.id = #{numericConversationId}
             WHERE 1 = 1
             """ + EXACT_MESSAGE_CONVERSATION_SCOPE
-            + LIVE_LEGACY_CONVERSATION_OWNER_SCOPE
+            + LIVE_LEGACY_CONVERSATION_OWNER_SCOPE_IN_TENANT
             + EXACT_LEGACY_MESSAGE_OWNER_SCOPE + """
             ORDER BY m.create_time ASC, m.id ASC
             """)
-    List<ChatMessageEntity> findExactOwnedConversationMessages(
+    List<ChatMessageEntity> findExactOwnedConversationMessagesInTenant(
+            @Param("tenantId") String tenantId,
             @Param("ownerJiacn") String ownerJiacn,
             @Param("clientId") String clientId,
             @Param("conversationId") String conversationId,
@@ -177,18 +200,26 @@ public interface ChatMessageMapper extends BaseMapper<ChatMessageEntity> {
             @Param("conversationId") String conversationId,
             @Param("numericConversationId") Long numericConversationId);
 
+    default List<ChatMessageEntity> findExactOwnedConversationMessagesWithLimit(
+            String ownerJiacn, String clientId, String conversationId, Long numericConversationId,
+            int limit) {
+        return findExactOwnedConversationMessagesWithLimitInTenant(
+                "0", ownerJiacn, clientId, conversationId, numericConversationId, limit);
+    }
+
     @Select("""
             SELECT m.*
             FROM chat_message m
             JOIN chat_conversation c ON c.id = #{numericConversationId}
             WHERE 1 = 1
             """ + EXACT_MESSAGE_CONVERSATION_SCOPE
-            + LIVE_LEGACY_CONVERSATION_OWNER_SCOPE
+            + LIVE_LEGACY_CONVERSATION_OWNER_SCOPE_IN_TENANT
             + EXACT_LEGACY_MESSAGE_OWNER_SCOPE + """
             ORDER BY m.create_time DESC, m.id DESC
             LIMIT #{limit}
             """)
-    List<ChatMessageEntity> findExactOwnedConversationMessagesWithLimit(
+    List<ChatMessageEntity> findExactOwnedConversationMessagesWithLimitInTenant(
+            @Param("tenantId") String tenantId,
             @Param("ownerJiacn") String ownerJiacn,
             @Param("clientId") String clientId,
             @Param("conversationId") String conversationId,
@@ -214,13 +245,20 @@ public interface ChatMessageMapper extends BaseMapper<ChatMessageEntity> {
             @Param("numericConversationId") Long numericConversationId,
             @Param("limit") int limit);
 
+    default int countContaminatedOwnedConversationMessages(
+            String ownerJiacn, String clientId, String conversationId,
+            Long numericConversationId) {
+        return countContaminatedOwnedConversationMessagesInTenant(
+                "0", ownerJiacn, clientId, conversationId, numericConversationId);
+    }
+
     @Select("""
             SELECT COUNT(*)
             FROM chat_message m
             JOIN chat_conversation c ON c.id = #{numericConversationId}
             WHERE 1 = 1
             """ + EXACT_MESSAGE_CONVERSATION_SCOPE
-            + LIVE_LEGACY_CONVERSATION_OWNER_SCOPE + """
+            + LIVE_LEGACY_CONVERSATION_OWNER_SCOPE_IN_TENANT + """
               AND (m.jiacn IS NULL OR m.jiacn <> c.jiacn
                 OR CAST(m.jiacn AS BINARY) <> CAST(c.jiacn AS BINARY)
                 OR OCTET_LENGTH(m.jiacn) <> OCTET_LENGTH(c.jiacn)
@@ -231,7 +269,8 @@ public interface ChatMessageMapper extends BaseMapper<ChatMessageEntity> {
                 OR CAST(m.tenant_id AS BINARY) <> CAST(c.tenant_id AS BINARY)
                 OR OCTET_LENGTH(m.tenant_id) <> OCTET_LENGTH(c.tenant_id))
             """)
-    int countContaminatedOwnedConversationMessages(
+    int countContaminatedOwnedConversationMessagesInTenant(
+            @Param("tenantId") String tenantId,
             @Param("ownerJiacn") String ownerJiacn,
             @Param("clientId") String clientId,
             @Param("conversationId") String conversationId,
@@ -261,14 +300,22 @@ public interface ChatMessageMapper extends BaseMapper<ChatMessageEntity> {
             @Param("conversationId") String conversationId,
             @Param("numericConversationId") Long numericConversationId);
 
+    default int deleteExactOwnedConversationMessages(
+            String ownerJiacn, String clientId, String conversationId,
+            Long numericConversationId) {
+        return deleteExactOwnedConversationMessagesInTenant(
+                "0", ownerJiacn, clientId, conversationId, numericConversationId);
+    }
+
     @Delete("""
             DELETE m FROM chat_message m
             JOIN chat_conversation c ON c.id = #{numericConversationId}
             WHERE 1 = 1
             """ + EXACT_MESSAGE_CONVERSATION_SCOPE
-            + LIVE_LEGACY_CONVERSATION_OWNER_SCOPE
+            + LIVE_LEGACY_CONVERSATION_OWNER_SCOPE_IN_TENANT
             + EXACT_LEGACY_MESSAGE_OWNER_SCOPE)
-    int deleteExactOwnedConversationMessages(
+    int deleteExactOwnedConversationMessagesInTenant(
+            @Param("tenantId") String tenantId,
             @Param("ownerJiacn") String ownerJiacn,
             @Param("clientId") String clientId,
             @Param("conversationId") String conversationId,

@@ -556,3 +556,24 @@ tasks.register('skillManagementWire', Test) {
     }
     testLogging { events 'passed','failed'; exceptionFormat 'full'; showStandardStreams = true }
 }
+
+def startupSchemaValidationSourceSet = sourceSets.create('startupSchemaValidation') {
+    java.srcDir 'src/startupSchemaValidationTest/java'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(startupSchemaValidationSourceSet.implementationConfigurationName) {
+    extendsFrom configurations.testImplementation
+}
+configurations.named(startupSchemaValidationSourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.testRuntimeOnly
+}
+tasks.register('startupSchemaValidation', Test) {
+    group = 'verification'
+    description = 'Validates chat schema startup reads catalogs without DDL or migration DML.'
+    dependsOn tasks.named(startupSchemaValidationSourceSet.classesTaskName)
+    testClassesDirs = startupSchemaValidationSourceSet.output.classesDirs
+    classpath = startupSchemaValidationSourceSet.runtimeClasspath
+    useJUnitPlatform()
+    maxParallelForks = 1
+}

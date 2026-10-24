@@ -1,8 +1,16 @@
 package cn.jia.oauth.api;
 
+import cn.jia.core.config.ApiJsonResponses;
+import cn.jia.core.entity.JsonResult;
+import cn.jia.core.tenant.UserAdmissionScope;
+import cn.jia.oauth.config.ResourceServerConfig.TenantDeploymentProperties;
 import cn.jia.oauth.security.AccountSecurityJwtClaims;
+import cn.jia.oauth.security.TenantAdmissionPolicy;
+import cn.jia.oauth.security.UserAdmissionScopeResolver;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
@@ -20,8 +28,23 @@ public class OAuthResourceIdentityController {
     private static final Pattern DATA_DOMAIN_ID = Pattern.compile("[a-z][a-z0-9-]{0,63}");
     private static final Pattern EPOCH = Pattern.compile("0|[1-9][0-9]{0,18}");
 
+    private final TenantAdmissionPolicy admissionPolicy;
+    private final UserAdmissionScopeResolver admissionScopeResolver;
+
+    /** Standalone/legacy construction retains the existing platform response contract. */
+    public OAuthResourceIdentityController() {
+        this(new TenantDeploymentProperties(), new UserAdmissionScopeResolver());
+    }
+
+    @Autowired(required = false)
+    public OAuthResourceIdentityController(TenantDeploymentProperties properties,
+                                           UserAdmissionScopeResolver admissionScopeResolver) {
+        this.admissionPolicy = TenantAdmissionPolicy.from(properties);
+        this.admissionScopeResolver = admissionScopeResolver;
+    }
+
     @GetMapping("/resource")
-    public ResponseEntity<cn.jia.core.entity.JsonResult<OAuthResourceIdentityDTO>> resource(Authentication authentication) {
+    public ResponseEntity<JsonResult<OAuthResourceIdentityDTO>> resource(Authentication authentication) {
         try {
             if (!(authentication instanceof JwtAuthenticationToken jwtAuthentication) ||
                     !authentication.isAuthenticated()) {
@@ -29,6 +52,11 @@ public class OAuthResourceIdentityController {
             }
 
             Jwt jwt = jwtAuthentication.getToken();
+            if (admissionPolicy.isFixedTenant()) {
+                return ApiJsonResponses.success(
+                        ResponseEntity.ok().header("Cache-Control", "no-store")
+                                .body(fixedTenantIdentity(authentication, jwt)));
+            }
             TenantIdentity tenant = tenantIdentity(jwt);
             OAuthResourceIdentityDTO identity = new OAuthResourceIdentityDTO(
                     requiredString(jwt, "sub"),
@@ -44,11 +72,37 @@ public class OAuthResourceIdentityController {
                     tenant.tenantSessionEpoch(),
                     tenant.membershipRevision(),
                     tenant.clientTenantGrantRevision());
-            return cn.jia.core.config.ApiJsonResponses.success(
+            return ApiJsonResponses.success(
                     ResponseEntity.ok().header("Cache-Control", "no-store").body(identity));
         } catch (InvalidIdentityClaimsException ignored) {
-            return cn.jia.core.config.ApiJsonResponses.success(ResponseEntity.status(HttpStatus.UNAUTHORIZED).build());
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .header("Cache-Control", "no-store")
+                    .body(JsonResult.failure("E401", "Authentication required"));
         }
+    }
+
+    private OAuthResourceIdentityDTO fixedTenantIdentity(Authentication authentication, Jwt jwt) {
+        final UserAdmissionScope admission;
+        try {
+            admission = admissionScopeResolver.resolve(authentication);
+        } catch (AccessDeniedException denied) {
+            throw InvalidIdentityClaimsException.INSTANCE;
+        }
+        var business = admission.businessScope();
+        return new OAuthResourceIdentityDTO(
+                requiredString(jwt, "sub"),
+                business.callerClientId(),
+                optionalString(jwt, "username"),
+                business.ownerJiacn(),
+                scopes(jwt),
+                requiredString(jwt, "iss"),
+                business.tenantId().value(),
+                null,
+                null,
+                null,
+                null,
+                null,
+                null);
     }
 
     private static String requiredString(Jwt jwt, String claimName) {

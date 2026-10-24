@@ -2,36 +2,63 @@ package cn.jia.chat.service;
 
 import cn.jia.chat.deliberation.ChatDeliberationDao;
 import cn.jia.chat.deliberation.ChatDispatchOutboxEntity;
+import cn.jia.core.tenant.BusinessScope;
+import cn.jia.core.tenant.DataDomainId;
+import cn.jia.core.tenant.TenantId;
+import cn.jia.core.tenant.TrustedTenantContext;
 import cn.jia.core.util.JsonUtil;
-import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.annotation.Propagation;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 
 /** Short fenced transactions for the durable chat outbox relay. */
 @Service
-@RequiredArgsConstructor
 public class ChatDeliberationOutboxService {
+    private static final DataDomainId CHAT_DATA_DOMAIN = DataDomainId.of("cyf");
     private final ChatDeliberationDao dao;
+    private final ChatWorkerTenantPolicy tenantPolicy;
     private ChatDispatchAuthorityService dispatchAuthority;
     @org.springframework.beans.factory.annotation.Autowired
     public void setDispatchAuthority(ChatDispatchAuthorityService value) { dispatchAuthority=value; }
 
+    @Autowired
+    public ChatDeliberationOutboxService(
+            ChatDeliberationDao dao, ChatWorkerTenantPolicy tenantPolicy) {
+        this.dao = Objects.requireNonNull(dao, "dao");
+        this.tenantPolicy = Objects.requireNonNull(tenantPolicy, "tenantPolicy");
+    }
+
+    /** Legacy direct-construction compatibility remains restricted to tenant zero. */
+    public ChatDeliberationOutboxService(ChatDeliberationDao dao) {
+        this(dao, new ChatWorkerTenantPolicy(Set.of("0")));
+    }
+
     @Transactional(readOnly = true)
     public List<ChatDispatchOutboxEntity> discover(long now, int limit) {
-        return dao.findDueOutbox(now, Math.max(1, Math.min(limit, 32)));
+        return dao.findDueOutbox(tenantPolicy.allowedTenants(), now,
+                Math.max(1, Math.min(limit, 32))).stream()
+                .filter(row -> trustedScope(row) != null)
+                .toList();
     }
 
     @Transactional(rollbackFor = Exception.class)
     public Claim claim(ChatDispatchOutboxEntity candidate, String leaseOwner, long now, long leaseMillis) {
         if (candidate == null || leaseMillis < 1) return null;
-        ChatDispatchOutboxEntity row = dao.lockOutboxById(candidate.getTenantId(), candidate.getOwnerJiacn(),
-                candidate.getClientId(), candidate.getEventId());
-        if (row == null || terminal(row.getStatus())) return null;
+        OutboxScope expected = scopeOf(candidate);
+        if (expected == null || !tenantPolicy.allows(expected.tenantId())) return null;
+        requireTrustedScope(expected);
+        ChatDispatchOutboxEntity row = dao.lockOutboxById(expected.tenantId(), expected.ownerJiacn(),
+                expected.clientId(), expected.eventId());
+        OutboxScope locked = scopeOf(row);
+        if (locked == null || !tenantPolicy.allows(locked.tenantId())
+                || !expected.equals(locked) || terminal(row.getStatus())) return null;
         boolean staleLease = "CLAIMED".equals(row.getStatus())
                 && row.getLeaseUntil() != null && row.getLeaseUntil() <= now;
         boolean ready = ("READY".equals(row.getStatus()) || "RETRY".equals(row.getStatus())
@@ -53,12 +80,23 @@ public class ChatDeliberationOutboxService {
         if (claim == null || leaseMillis < 1) return false;
         synchronized (claim) {
             if (claim.lost || claim.settled) return false;
-            long until = Math.addExact(now, leaseMillis);
-            if (dao.renewOutbox(claim.row, until, now) != 1) {
+            if (!claimScopeAllowed(claim) || !completeLeaseIdentity(claim.row)
+                    || !activeLease(claim.row, now)) {
                 claim.lost = true;
                 return false;
             }
-            claim.row.setLeaseUntil(until).setUpdatedAt(now).setVersion(claim.row.getVersion() + 1);
+            ChatDispatchOutboxEntity row;
+            try {
+                row = lockCurrent(claim, now);
+            } catch (StaleClaimException stale) {
+                return false;
+            }
+            long until = Math.addExact(now, leaseMillis);
+            if (dao.renewOutbox(row, until, now) != 1) {
+                claim.lost = true;
+                return false;
+            }
+            claim.row.setLeaseUntil(until).setUpdatedAt(now).setVersion(row.getVersion() + 1);
             return true;
         }
     }
@@ -89,7 +127,7 @@ public class ChatDeliberationOutboxService {
         if (claim == null) return false;
         synchronized (claim) {
             if (claim.lost || claim.settled) return false;
-            ChatDispatchOutboxEntity row = lockCurrent(claim);
+            ChatDispatchOutboxEntity row = lockCurrent(claim, now);
             boolean updated = dao.settleOutbox(row, status, availableAt, error, sentAt, now) == 1;
             if (updated) {
                 Runnable committed=()-> {synchronized(claim) {
@@ -105,6 +143,8 @@ public class ChatDeliberationOutboxService {
                             @Override public void afterCommit() {committed.run();}
                         });
                 } else committed.run();
+            } else {
+                claim.lost = true;
             }
             return updated;
         }
@@ -116,10 +156,12 @@ public class ChatDeliberationOutboxService {
             String agentId, String dispatchId, String messageId, long now) {
         requireExact(tenantId, 50); requireExact(executorOwner, 50); requireExact(clientId, 50);
         requireExact(agentId, 100); requireExact(dispatchId, 64); requireExact(messageId, 64);
+        if (!tenantPolicy.allows(tenantId)) return false;
         if (dispatchAuthority == null) throw new IllegalStateException("Dispatch authority unavailable");
         String ownerJiacn=dispatchAuthority.incoming(tenantId,clientId,executorOwner,agentId,dispatchId).turn().getOwnerJiacn();
         ChatDispatchOutboxEntity row = dao.lockOutboxByDispatch(tenantId, ownerJiacn, clientId, dispatchId);
-        if (row == null || !dispatchId.equals(row.getDispatchId()) || !messageId.equals(row.getEventId())) return false;
+        if (!acknowledgementScopeMatches(row, tenantId, ownerJiacn, clientId, dispatchId)
+                || !messageId.equals(row.getEventId())) return false;
         if (!agentId.equals(targetAgent(row))) return false;
         if ("SENT".equals(row.getStatus())) return true;
         if ("DEAD".equals(row.getStatus())) return false;
@@ -131,12 +173,25 @@ public class ChatDeliberationOutboxService {
             String agentId, String dispatchId, long now) {
         requireExact(tenantId, 50); requireExact(executorOwner, 50); requireExact(clientId, 50);
         requireExact(agentId, 100); requireExact(dispatchId, 64);
+        if (!tenantPolicy.allows(tenantId)) return false;
         if (dispatchAuthority == null) throw new IllegalStateException("Dispatch authority unavailable");
         String ownerJiacn=dispatchAuthority.incoming(tenantId,clientId,executorOwner,agentId,dispatchId).turn().getOwnerJiacn();
         ChatDispatchOutboxEntity row = dao.lockOutboxByDispatch(tenantId, ownerJiacn, clientId, dispatchId);
-        if (row == null || !agentId.equals(targetAgent(row)) || "DEAD".equals(row.getStatus())) return false;
+        if (!acknowledgementScopeMatches(row, tenantId, ownerJiacn, clientId, dispatchId)
+                || !agentId.equals(targetAgent(row)) || "DEAD".equals(row.getStatus())) return false;
         if ("SENT".equals(row.getStatus())) return true;
         return dao.acknowledgeOutbox(row, now) == 1;
+    }
+
+    private boolean acknowledgementScopeMatches(ChatDispatchOutboxEntity row, String tenantId,
+            String ownerJiacn, String clientId, String dispatchId) {
+        OutboxScope scope = scopeOf(row);
+        return scope != null && tenantPolicy.allows(scope.tenantId())
+                && tenantId.equals(scope.tenantId())
+                && ownerJiacn.equals(scope.ownerJiacn())
+                && clientId.equals(scope.clientId())
+                && validExact(row.getDispatchId(), 64)
+                && dispatchId.equals(row.getDispatchId());
     }
 
     private String targetAgent(ChatDispatchOutboxEntity row) {
@@ -154,43 +209,126 @@ public class ChatDeliberationOutboxService {
     public ChatDispatchOutboxEntity requireActiveClaim(Claim claim, long now) {
         if (claim == null || !claim.active()) throw new IllegalStateException("Inactive action outbox claim");
         synchronized (claim) {
-            ChatDispatchOutboxEntity row = lockCurrent(claim);
-            if (row.getLeaseUntil() == null || row.getLeaseUntil() <= now)
-                throw new IllegalStateException("Expired action outbox claim");
-            return row;
+            return lockCurrent(claim, now);
         }
     }
 
-    private ChatDispatchOutboxEntity lockCurrent(Claim claim) {
-        ChatDispatchOutboxEntity row = dao.lockOutboxById(claim.row.getTenantId(), claim.row.getOwnerJiacn(),
-                claim.row.getClientId(), claim.row.getEventId());
-        if (row == null || !"CLAIMED".equals(row.getStatus())
-                || !claim.row.getLeaseOwner().equals(row.getLeaseOwner())
-                || !claim.row.getFencingToken().equals(row.getFencingToken())
-                || !claim.row.getVersion().equals(row.getVersion())) {
-            claim.lost = true;
-            throw new IllegalStateException("Stale chat outbox lease");
+    private ChatDispatchOutboxEntity lockCurrent(Claim claim, long now) {
+        requireClaimScope(claim);
+        if (!completeLeaseIdentity(claim.row)) {
+            throw staleClaim(claim);
+        }
+        requireTrustedScope(claim.scope);
+        OutboxScope expected = claim.scope;
+        ChatDispatchOutboxEntity row = dao.lockOutboxById(expected.tenantId(), expected.ownerJiacn(),
+                expected.clientId(), expected.eventId());
+        OutboxScope locked = scopeOf(row);
+        if (locked == null || !tenantPolicy.allows(locked.tenantId()) || !expected.equals(locked)
+                || !"CLAIMED".equals(row.getStatus()) || !completeLeaseIdentity(row)
+                || !activeLease(row, now)
+                || !Objects.equals(claim.row.getLeaseOwner(), row.getLeaseOwner())
+                || !Objects.equals(claim.row.getFencingToken(), row.getFencingToken())
+                || !Objects.equals(claim.row.getVersion(), row.getVersion())) {
+            throw staleClaim(claim);
         }
         return row;
     }
 
+    private boolean claimScopeAllowed(Claim claim) {
+        return claim.scope != null && tenantPolicy.allows(claim.scope.tenantId())
+                && claim.scope.equals(scopeOf(claim.row));
+    }
+
+    BusinessScope trustedScope(ChatDispatchOutboxEntity row) {
+        OutboxScope scope = scopeOf(row);
+        return scope == null || !tenantPolicy.allows(scope.tenantId()) ? null : businessScope(scope);
+    }
+
+    BusinessScope trustedScope(Claim claim) {
+        return claim == null || !claim.active() || !tenantPolicy.allows(claim.scope.tenantId())
+                ? null : businessScope(claim.scope);
+    }
+
+    private static BusinessScope businessScope(OutboxScope scope) {
+        try {
+            TenantId tenantId = TenantId.of(scope.tenantId());
+            if (!tenantId.value().equals(scope.tenantId())) return null;
+            return new BusinessScope(tenantId, CHAT_DATA_DOMAIN, scope.ownerJiacn(), scope.clientId());
+        } catch (RuntimeException invalidIdentity) {
+            return null;
+        }
+    }
+
+    private static void requireTrustedScope(OutboxScope expected) {
+        BusinessScope trusted = TrustedTenantContext.requireScope();
+        if (!expected.tenantId().equals(trusted.tenantId().value())
+                || !CHAT_DATA_DOMAIN.equals(trusted.dataDomainId())
+                || !expected.ownerJiacn().equals(trusted.ownerJiacn())
+                || !expected.clientId().equals(trusted.callerClientId())) {
+            throw new IllegalStateException("Trusted tenant scope does not match durable outbox identity");
+        }
+    }
+
+    private void requireClaimScope(Claim claim) {
+        if (!claimScopeAllowed(claim)) {
+            throw staleClaim(claim);
+        }
+    }
+
+    private static StaleClaimException staleClaim(Claim claim) {
+        claim.lost = true;
+        return new StaleClaimException();
+    }
+
+    private static boolean activeLease(ChatDispatchOutboxEntity row, long now) {
+        return row.getLeaseUntil() != null && row.getLeaseUntil() > now;
+    }
+
+    private static boolean completeLeaseIdentity(ChatDispatchOutboxEntity row) {
+        return row.getLeaseOwner() != null && row.getFencingToken() != null && row.getVersion() != null;
+    }
+
     private boolean terminal(String status) { return "SENT".equals(status) || "DEAD".equals(status); }
     private String bounded(String error) { String value=error==null?"DELIVERY_FAILED":error; return value.length()<=500?value:value.substring(0,500); }
+    private static OutboxScope scopeOf(ChatDispatchOutboxEntity row) {
+        if (row == null || !validExact(row.getTenantId(), 50)
+                || !validExact(row.getOwnerJiacn(), 50)
+                || !validExact(row.getClientId(), 50)
+                || !validExact(row.getEventId(), 64)) return null;
+        return new OutboxScope(row.getTenantId(), row.getOwnerJiacn(), row.getClientId(), row.getEventId());
+    }
+    private static boolean validExact(String value, int max) {
+        return value != null && !value.isBlank() && value.length() <= max && value.equals(value.strip())
+                && value.chars().noneMatch(Character::isISOControl);
+    }
     private static void requireExact(String value,int max){if(value==null||value.isBlank()||value.length()>max||!value.equals(value.strip())||value.chars().anyMatch(Character::isISOControl))throw new IllegalArgumentException("Invalid durable dispatch identity");}
+
+    private record OutboxScope(String tenantId, String ownerJiacn, String clientId, String eventId) {}
+
+    private static final class StaleClaimException extends IllegalStateException {
+        private StaleClaimException() {
+            super("Stale chat outbox lease");
+        }
+    }
 
     public static String leaseOwner() { return "chat-relay-" + UUID.randomUUID(); }
 
     public static final class Claim {
         private final ChatDispatchOutboxEntity row;
+        private final OutboxScope scope;
         private final boolean recoveredStaleLease;
         private boolean lost;
         private boolean settled;
         public Claim(ChatDispatchOutboxEntity row, boolean recoveredStaleLease) {
-            this.row = row; this.recoveredStaleLease = recoveredStaleLease;
+            this.row = row;
+            this.scope = scopeOf(row);
+            this.recoveredStaleLease = recoveredStaleLease;
         }
         public ChatDispatchOutboxEntity row() { return row; }
         public boolean recoveredStaleLease() { return recoveredStaleLease; }
-        public synchronized boolean active() { return !lost && !settled; }
+        public synchronized boolean active() {
+            return !lost && !settled && scope != null && scope.equals(scopeOf(row));
+        }
         /** A renewal transport failure has an unknown server result; this worker must stop settling. */
         public synchronized void invalidate() { lost = true; }
     }

@@ -107,7 +107,7 @@ public class PersonalWorkspaceExecutionController {
         };
     }
     @ExceptionHandler(AuthenticationFailure.class)
-    public ResponseEntity<ErrorBody> authentication(AuthenticationFailure failure) {
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> authentication(AuthenticationFailure failure) {
         return error(failure.forbidden ? HttpStatus.FORBIDDEN : HttpStatus.UNAUTHORIZED,
                 failure.forbidden ? "EXECUTION_FORBIDDEN" : "EXECUTION_UNAUTHENTICATED",
                 "Execution access is unavailable");

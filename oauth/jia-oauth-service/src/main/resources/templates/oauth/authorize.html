@@ -6,10 +6,10 @@
 	<meta name="renderer" content="webkit" />
 	<meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1" />
 	<title>登录</title>
-	<link rel="stylesheet" type="text/css"  href="css/themes/default/easyui.css"/>
-	<link rel="stylesheet" type="text/css"  href="css/themes/icon.css"/>
-	<link rel="stylesheet" type="text/css"  href="css/common.css" />
-	<link rel="stylesheet" type="text/css"  href="css/icon.css"  />
+	<link rel="stylesheet" type="text/css" th:href="@{/oauth/css/themes/default/easyui.css}" href="/oauth/css/themes/default/easyui.css"/>
+	<link rel="stylesheet" type="text/css" th:href="@{/oauth/css/themes/icon.css}" href="/oauth/css/themes/icon.css"/>
+	<link rel="stylesheet" type="text/css" th:href="@{/oauth/css/common.css}" href="/oauth/css/common.css" />
+	<link rel="stylesheet" type="text/css" th:href="@{/oauth/css/icon.css}" href="/oauth/css/icon.css" />
 	<style>
 		.aw-login-box .mod-body .content{
 		width:100%;
@@ -26,7 +26,7 @@
 <div id="wrapper">
 	<div class="aw-login-box">
 		<div class="right-bg">
-			<img th:src="@{'image/png.png'}" />
+			<img th:src="@{/oauth/image/png.png}" src="/oauth/image/png.png" alt="" />
 		</div>
 		<div class="mod-body clearfix">
 			<div class="content pull-left">
@@ -58,9 +58,9 @@
 	</div>
 </div>
 
-<script type="text/javascript" src="js/jquery.min.js"></script>
-<script type="text/javascript" src="js/jquery.easyui.min.js"></script>
-<script type="text/javascript" src="js/easyui-lang-zh_CN.js"></script>
+<script type="text/javascript" th:src="@{/oauth/js/jquery.min.js}" src="/oauth/js/jquery.min.js"></script>
+<script type="text/javascript" th:src="@{/oauth/js/jquery.easyui.min.js}" src="/oauth/js/jquery.easyui.min.js"></script>
+<script type="text/javascript" th:src="@{/oauth/js/easyui-lang-zh_CN.js}" src="/oauth/js/easyui-lang-zh_CN.js"></script>
 <script type="text/javascript">
 		$(function() {
 

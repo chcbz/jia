@@ -5,6 +5,7 @@ import cn.jia.core.datasource.DruidSource;
 import cn.jia.oauth.security.TenantAuthorizationRequestProvider;
 import cn.jia.oauth.security.TenantConsentGrantProvider;
 import cn.jia.oauth.security.TenantTokenGrantProvider;
+import cn.jia.oauth.security.TenantAuthorizationService;
 import cn.jia.oauth.security.JdbcTenantAuthorizationRepository;
 import cn.jia.oauth.service.ClientService;
 import cn.jia.user.security.AccountSecurityService;
@@ -21,7 +22,6 @@ import org.springframework.core.io.support.ResourcePropertySource;
 import org.springframework.jdbc.core.JdbcOperations;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
-import org.springframework.jdbc.datasource.init.ScriptUtils;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockServletContext;
 import org.springframework.security.authentication.ProviderManager;
@@ -68,16 +68,18 @@ class LocalTestAreaOauthDisabledTest {
     }
 
     @Test
-    void localProfileDoesNotRegisterAuthorizationOrJwksEndpoints() throws Exception {
+    void explicitDisabledOverrideDoesNotRegisterAuthorizationOrJwksEndpoints() throws Exception {
         var context = new AnnotationConfigWebApplicationContext();
         context.setServletContext(new MockServletContext());
         context.getEnvironment().getPropertySources().addFirst(
                 new ResourcePropertySource("classpath:application-local-test-area.properties"));
+        TestPropertySourceUtils.addInlinedPropertiesToEnvironment(context,
+                "cyf.oauth.authorization-server.enabled=false");
         context.register(AuthorizationServerConfig.class, Fixture.class);
         try {
             context.refresh();
             assertEquals("LOCAL_TEST", context.getEnvironment().getProperty("cyf.deployment.stage"));
-            assertEquals("1", context.getEnvironment().getProperty("cyf.tenant.allowed-tenants[0]"));
+            assertEquals("1", context.getEnvironment().getProperty("cyf.tenant.fixed-tenant-id"));
             assertEquals("conversation", context.getEnvironment().getProperty(
                     "cyf.deployment.allowed-modules[0]"));
             assertFalse(context.getEnvironment().getProperty(
@@ -112,6 +114,10 @@ class LocalTestAreaOauthDisabledTest {
                     "cyf.oauth.authorization-server.enabled=true");
             context.register(AuthorizationServerConfig.class, Fixture.class, SecurityFixture.class);
             context.refresh();
+            assertTrue(context.getBean(OAuth2AuthorizationService.class) instanceof TenantAuthorizationService);
+            assertEquals(0, context.getBean("positiveJdbcOperations", JdbcTemplate.class)
+                    .queryForObject("SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES "
+                            + "WHERE LOWER(TABLE_NAME) = 'oauth2_authorization'", Integer.class));
             var security = context.getBean(FilterChainProxy.class);
             var selectionRequest = new MockHttpServletRequest("POST", "/oauth2/tenant-selection");
             var selection = security.getFilterChains().stream().filter(candidate -> candidate.matches(selectionRequest))
@@ -176,10 +182,6 @@ class LocalTestAreaOauthDisabledTest {
         JdbcOperations positiveJdbcOperations() throws Exception {
             var dataSource = new DriverManagerDataSource("jdbc:h2:mem:central_" + java.util.UUID.randomUUID()
                     + ";MODE=MYSQL;DB_CLOSE_DELAY=-1", "sa", "");
-            try (var connection = dataSource.getConnection()) {
-                ScriptUtils.executeSqlScript(connection,
-                        new ClassPathResource("db/oauth2-authorization-manual-candidate.sql"));
-            }
             return new JdbcTemplate(dataSource);
         }
     }

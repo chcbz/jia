@@ -42,9 +42,15 @@ public final class AgentTaskBountyBootstrapOutboxSchemaInitializer implements In
             "chk_atbbo_references","chk_atbbo_state","chk_atbbo_lifecycle","chk_atbbo_time");
 
     private final JdbcTemplate jdbc;
+    private final boolean validateOnly;
 
     public AgentTaskBountyBootstrapOutboxSchemaInitializer(JdbcTemplate jdbc) {
+        this(jdbc, false);
+    }
+
+    AgentTaskBountyBootstrapOutboxSchemaInitializer(JdbcTemplate jdbc, boolean validateOnly) {
         this.jdbc = Objects.requireNonNull(jdbc, "jdbc");
+        this.validateOnly = validateOnly;
     }
 
     @Override
@@ -52,7 +58,11 @@ public final class AgentTaskBountyBootstrapOutboxSchemaInitializer implements In
         requireMySql();
         Integer present = jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.tables "
                 + "WHERE table_schema=DATABASE() AND table_name=?", Integer.class, TABLE);
-        if (present == null || present == 0) jdbc.execute(ddl());
+        if (present == null || present == 0) {
+            SchemaValidationMode.requireMutationAllowed(validateOnly,
+                    "Bounty bootstrap outbox schema");
+            jdbc.execute(ddl());
+        }
         validate();
     }
 

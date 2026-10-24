@@ -4,6 +4,7 @@ import cn.jia.core.entity.JsonRequest;
 
 import cn.jia.agent.service.PersonalWorkspaceTaskLinkService;
 import cn.jia.agent.service.impl.PersonalWorkspaceTaskLinkServiceImpl;
+import cn.jia.core.tenant.TrustedTenantContext;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpHeaders;
@@ -130,13 +131,20 @@ public class PersonalWorkspaceTaskFileLinkController {
         Map<String, Object> claims = jwt.getToken().getClaims();
         Object owner = claims.get("jiacn");
         Object client = claims.get("client_id");
-        if (!"0".equals(claims.get("tenant_id")) || !"cyf".equals(claims.get("data_domain_id")))
+        final var trusted = TrustedTenantContext.requireScope();
+        Object claimedDomain = claims.get("data_domain_id");
+        if (!trusted.tenantId().value().equals(claims.get("tenant_id"))
+                || (claimedDomain != null && !trusted.dataDomainId().value().equals(claimedDomain))
+                || !"cyf".equals(trusted.dataDomainId().value()))
             throw new AuthenticationFailure(true);
         if (!(owner instanceof String ownerJiacn) || !(client instanceof String clientId)
                 || !valid(ownerJiacn, 50) || !valid(clientId, 50) || "0".equals(ownerJiacn)) {
             throw new AuthenticationFailure(true);
         }
-        return new PersonalWorkspaceTaskLinkService.Scope("0", clientId, ownerJiacn);
+        if (!ownerJiacn.equals(trusted.ownerJiacn())
+                || !clientId.equals(trusted.callerClientId())) throw new AuthenticationFailure(true);
+        return new PersonalWorkspaceTaskLinkService.Scope(
+                trusted.tenantId().value(), clientId, ownerJiacn);
     }
 
     private static PersonalWorkspaceTaskLinkService.CreateCommand createCommand(

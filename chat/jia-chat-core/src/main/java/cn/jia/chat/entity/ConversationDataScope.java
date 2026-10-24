@@ -5,7 +5,7 @@ import cn.jia.core.tenant.BusinessScope;
 import java.util.Objects;
 
 /**
- * Exact storage scope selected only after tenant-module admission.
+ * Exact storage scope selected only after authenticated admission.
  *
  * <p>LEGACY_CLIENT preserves the historical tenant/client/owner boundary. DOMAIN
  * uses tenant/data-domain/owner as the resource boundary while retaining the caller
@@ -17,9 +17,6 @@ public record ConversationDataScope(BusinessScope businessScope, Mode mode) {
     public ConversationDataScope {
         Objects.requireNonNull(businessScope, "businessScope");
         Objects.requireNonNull(mode, "mode");
-        if (mode == Mode.LEGACY_CLIENT && !"0".equals(businessScope.tenantId().value())) {
-            throw new IllegalArgumentException("Legacy conversation scope is restricted to tenant 0");
-        }
     }
 
     public String tenantId() {

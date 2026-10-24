@@ -18,6 +18,9 @@ import cn.jia.chat.service.ChatConversationEventBroker;
 import cn.jia.core.context.EsContext;
 import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.mybatis.TenantScopeHelper;
+import cn.jia.core.tenant.BusinessScope;
+import cn.jia.core.tenant.DataDomainId;
+import cn.jia.core.tenant.TenantId;
 import cn.jia.core.tenant.UserAdmissionScope;
 import cn.jia.core.util.JsonUtil;
 import com.github.pagehelper.PageHelper;
@@ -278,13 +281,25 @@ public class ChatConversationServiceImpl implements ChatConversationService {
     @Override
     public boolean isLiveGeneration(
             String ownerJiacn, String clientId, String conversationId, long expectedGeneration) {
+        return isLiveGeneration(TenantScopeHelper.DEFAULT_TENANT,
+                ownerJiacn, clientId, conversationId, expectedGeneration);
+    }
+
+    @Override
+    public boolean isLiveGeneration(
+            String tenantId, String ownerJiacn, String clientId,
+            String conversationId, long expectedGeneration) {
         try {
             requireIdentityParts(ownerJiacn, clientId);
             if (expectedGeneration < 1) {
                 return false;
             }
+            ConversationDataScope scope = new ConversationDataScope(
+                    new BusinessScope(TenantId.of(tenantId), DataDomainId.of("cyf"),
+                            ownerJiacn, clientId),
+                    ConversationDataScope.Mode.LEGACY_CLIENT);
             return chatConversationDao.isLiveGeneration(
-                    ownerJiacn, clientId, Long.toString(parseConversationId(conversationId)),
+                    scope, Long.toString(parseConversationId(conversationId)),
                     expectedGeneration);
         } catch (RuntimeException unavailable) {
             return false;

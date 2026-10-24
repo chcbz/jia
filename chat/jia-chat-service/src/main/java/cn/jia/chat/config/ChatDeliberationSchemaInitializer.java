@@ -2,6 +2,7 @@ package cn.jia.chat.config;
 
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.core.io.ClassPathResource;
@@ -45,11 +46,23 @@ public class ChatDeliberationSchemaInitializer implements ApplicationRunner {
                     List.of("tenant_id", "owner_jiacn", "client_id", "step_id"))));
 
     private final JdbcTemplate jdbc;
+    private final boolean validateOnly;
     @Value("${cyf.chat.deliberation-schema.allow-additive-migration:false}")
     private boolean allowAdditiveMigration;
     private boolean initialized;
 
-    public ChatDeliberationSchemaInitializer(JdbcTemplate jdbc) { this.jdbc = jdbc; }
+    public ChatDeliberationSchemaInitializer(JdbcTemplate jdbc) { this(jdbc, "install"); }
+
+    @Autowired
+    public ChatDeliberationSchemaInitializer(JdbcTemplate jdbc,
+            @Value("${cyf.schema.mode:install}") String schemaMode) {
+        this.jdbc = Objects.requireNonNull(jdbc, "jdbc");
+        String normalized = schemaMode == null ? "install" : schemaMode.strip().toLowerCase(Locale.ROOT);
+        if (!normalized.equals("install") && !normalized.equals("validate") && !normalized.isEmpty()) {
+            throw new IllegalStateException("Unsupported cyf.schema.mode: " + schemaMode);
+        }
+        this.validateOnly = normalized.equals("validate");
+    }
 
     @Override
     public void run(ApplicationArguments args) throws Exception {
@@ -73,22 +86,25 @@ public class ChatDeliberationSchemaInitializer implements ApplicationRunner {
         }
     }
 
-    private void initializeWhileLocked() throws Exception {
-        String sql = new String(new ClassPathResource("db/chat-deliberation-schema.sql")
-                .getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-        for (String statement : sql.replaceAll("(?m)^--.*$", "").split(";")) {
-            if (!statement.isBlank()) jdbc.execute(statement.strip());
+    void initializeWhileLocked() throws Exception {
+        if (!validateOnly) {
+            String sql = new String(new ClassPathResource("db/chat-deliberation-schema.sql")
+                    .getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+            for (String statement : sql.replaceAll("(?m)^--.*$", "").split(";")) {
+                if (!statement.isBlank()) jdbc.execute(statement.strip());
+            }
         }
-        if (allowAdditiveMigration) recordMigrationStage("PREFLIGHT");
-        for (String table : TABLES) if (allowAdditiveMigration) addKnownMissingColumnsAndIndexes(table);
-        if (allowAdditiveMigration) backfillLegacyData();
+        boolean migrationAllowed = !validateOnly && allowAdditiveMigration;
+        if (migrationAllowed) recordMigrationStage("PREFLIGHT");
+        for (String table : TABLES) if (migrationAllowed) addKnownMissingColumnsAndIndexes(table);
+        if (migrationAllowed) backfillLegacyData();
         for (String table : TABLES) {
             validateTable(table);
             validateColumns(table);
             validateIndexes(table);
             if (FOREIGN_KEYS.containsKey(table)) validateForeignKeys(table);
         }
-        if (allowAdditiveMigration) recordMigrationStage("APPLIED");
+        if (migrationAllowed) recordMigrationStage("APPLIED");
     }
 
     private void acquireMigrationLock(Connection connection) throws SQLException {

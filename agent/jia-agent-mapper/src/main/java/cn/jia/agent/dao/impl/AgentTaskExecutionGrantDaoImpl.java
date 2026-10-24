@@ -3,6 +3,7 @@ package cn.jia.agent.dao.impl;
 import cn.jia.agent.dao.AgentTaskExecutionGrantDao;
 import cn.jia.agent.entity.AgentTaskExecutionGrantEntity;
 import cn.jia.agent.mapper.AgentTaskExecutionGrantMapper;
+import cn.jia.core.tenant.TenantId;
 import jakarta.inject.Inject;
 import jakarta.inject.Named;
 
@@ -71,7 +72,7 @@ public final class AgentTaskExecutionGrantDaoImpl implements AgentTaskExecutionG
                 idempotencyKey,requestHash,revokedAt) == 1;
     }
     private static void scope(String tenant, String client, String owner) {
-        if (!"0".equals(tenant)) throw new IllegalArgumentException("tenantId");
+        TenantId.of(tenant);
         id(client,"clientId",50); id(owner,"ownerJiacn",50);
         if ("0".equals(owner)) throw new IllegalArgumentException("ownerJiacn");
     }

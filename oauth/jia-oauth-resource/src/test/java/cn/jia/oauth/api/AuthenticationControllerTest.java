@@ -1,5 +1,9 @@
 package cn.jia.oauth.api;
 
+import cn.jia.core.entity.JsonResult;
+import cn.jia.oauth.config.ResourceServerConfig.TenantDeploymentProperties;
+import cn.jia.oauth.security.TenantAdmissionPolicy;
+import cn.jia.oauth.security.UserAdmissionScopeResolver;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.authority.AuthorityUtils;
@@ -12,6 +16,7 @@ import java.util.Map;
 import java.util.HashMap;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
 class AuthenticationControllerTest {
@@ -29,7 +34,8 @@ class AuthenticationControllerTest {
                 "access_token", "must-not-leak",
                 "arbitrary_claim", Map.of("private", true)));
 
-        ResponseEntity<OAuthResourceIdentityDTO> response = controller.resource(authenticated(jwt));
+        ResponseEntity<JsonResult<OAuthResourceIdentityDTO>> response =
+                controller.resource(authenticated(jwt));
         OAuthResourceIdentityDTO identity = successData(response);
 
         assertEquals("user-17", identity.subject());
@@ -56,7 +62,8 @@ class AuthenticationControllerTest {
 
     @Test
     void returnsTheCompleteTenantIdentityBundleWithNoStore() {
-        ResponseEntity<OAuthResourceIdentityDTO> response = controller.resource(authenticated(jwt(tenantUserClaims())));
+        ResponseEntity<JsonResult<OAuthResourceIdentityDTO>> response =
+                controller.resource(authenticated(jwt(tenantUserClaims())));
 
         OAuthResourceIdentityDTO identity = successData(response);
         assertEquals("1", identity.tenantId());
@@ -68,6 +75,52 @@ class AuthenticationControllerTest {
         assertEquals("4", identity.clientTenantGrantRevision());
         assertEquals("https://auth.example", identity.issuer());
         assertEquals("no-store", response.getHeaders().getFirst("Cache-Control"));
+    }
+
+    @Test
+    void fixedTenantReturnsOnlyTheVerifiedBasicIdentityWithoutPlatformVersions() {
+        ResponseEntity<JsonResult<OAuthResourceIdentityDTO>> response = fixedController().resource(
+                authenticated(jwt(fixedTenantUserClaims("1"))));
+
+        OAuthResourceIdentityDTO identity = successData(response);
+        assertEquals("user-17", identity.subject());
+        assertEquals("public-web", identity.clientId());
+        assertEquals("alice", identity.username());
+        assertEquals("jia-17", identity.jiacn());
+        assertEquals(List.of("openid", "write"), identity.scopes());
+        assertEquals("https://issuer.example", identity.issuer());
+        assertEquals("1", identity.tenantId());
+        assertNull(identity.dataDomainId());
+        assertNull(identity.tenantName());
+        assertNull(identity.tenantKind());
+        assertNull(identity.tenantSessionEpoch());
+        assertNull(identity.membershipRevision());
+        assertNull(identity.clientTenantGrantRevision());
+        assertEquals("no-store", response.getHeaders().getFirst("Cache-Control"));
+    }
+
+    @Test
+    void fixedTenantRejectsOtherMissingMachineAndConflictingTenantIdentity() {
+        assertUnauthorized(fixedController(), jwt(fixedTenantUserClaims("0")));
+
+        Map<String, Object> missingTenant = fixedTenantUserClaims("1");
+        missingTenant.remove("tenant_id");
+        assertUnauthorized(fixedController(), jwt(missingTenant));
+
+        assertUnauthorized(fixedController(), jwt(Map.of(
+                "token_kind", "machine",
+                "sub", "machine-client",
+                "client_id", "machine-client",
+                "tenant_id", "1",
+                "iss", "https://issuer.example")));
+
+        Map<String, Object> conflictingAlias = fixedTenantUserClaims("1");
+        conflictingAlias.put("tenantId", "0");
+        assertUnauthorized(fixedController(), jwt(conflictingAlias));
+
+        Map<String, Object> conflictingPlatformBundle = tenantUserClaims();
+        conflictingPlatformBundle.put("data_domain_id", "other");
+        assertUnauthorized(fixedController(), jwt(conflictingPlatformBundle));
     }
 
     @Test
@@ -138,7 +191,7 @@ class AuthenticationControllerTest {
     }
 
     @Test
-    void rejectsMissingBlankOrMalformedRequiredClaimsWithEmptyBody401() {
+    void rejectsMissingBlankOrMalformedRequiredClaimsWithErrorEnvelope401() {
         assertUnauthorized(jwt(Map.of("client_id", "client")));
         assertUnauthorized(jwt(Map.of("sub", "subject")));
         assertUnauthorized(jwt(Map.of("sub", " ", "client_id", "client")));
@@ -148,7 +201,7 @@ class AuthenticationControllerTest {
     }
 
     @Test
-    void rejectsBlankOrMalformedOptionalClaimsAndMalformedPresentScopeWithEmptyBody401() {
+    void rejectsBlankOrMalformedOptionalClaimsAndMalformedPresentScopeWithErrorEnvelope401() {
         assertUnauthorized(jwt(Map.of("sub", "subject", "client_id", "client", "username", " ")));
         assertUnauthorized(jwt(Map.of("sub", "subject", "client_id", "client", "jiacn", List.of("jia"))));
         assertUnauthorized(jwt(Map.of("sub", "subject", "client_id", "client", "scope", "\t")));
@@ -207,16 +260,54 @@ class AuthenticationControllerTest {
         return claims;
     }
 
+    private static Map<String, Object> fixedTenantUserClaims(String tenantId) {
+        Map<String, Object> claims = new HashMap<>();
+        claims.put("token_kind", "user");
+        claims.put("uid", "17");
+        claims.put("auth_epoch", 4L);
+        claims.put("sub", "user-17");
+        claims.put("client_id", "public-web");
+        claims.put("username", "alice");
+        claims.put("jiacn", "jia-17");
+        claims.put("scope", List.of("write", "openid", "write"));
+        claims.put("tenant_id", tenantId);
+        claims.put("iss", "https://issuer.example");
+        return claims;
+    }
+
+    private static OAuthResourceIdentityController fixedController() {
+        TenantDeploymentProperties properties = new TenantDeploymentProperties();
+        properties.setAdmissionMode(TenantAdmissionPolicy.Mode.FIXED_TENANT);
+        properties.setFixedTenantId("1");
+        TenantAdmissionPolicy policy = TenantAdmissionPolicy.from(properties);
+        return new OAuthResourceIdentityController(properties, new UserAdmissionScopeResolver(policy));
+    }
+
     private static OAuthResourceIdentityDTO successData(
-            ResponseEntity<OAuthResourceIdentityDTO> response) {
+            ResponseEntity<JsonResult<OAuthResourceIdentityDTO>> response) {
         assertEquals(200, response.getStatusCode().value());
-        return response.getBody();
+        JsonResult<OAuthResourceIdentityDTO> body = response.getBody();
+        assertNotNull(body);
+        assertEquals("E0", body.getCode());
+        assertEquals("ok", body.getMsg());
+        assertNotNull(body.getData());
+        return body.getData();
     }
 
     private void assertUnauthorized(Jwt jwt) {
-        ResponseEntity<OAuthResourceIdentityDTO> response = controller.resource(authenticated(jwt));
+        assertUnauthorized(controller, jwt);
+    }
+
+    private void assertUnauthorized(OAuthResourceIdentityController target, Jwt jwt) {
+        ResponseEntity<JsonResult<OAuthResourceIdentityDTO>> response =
+                target.resource(authenticated(jwt));
         assertEquals(401, response.getStatusCode().value());
-        assertNull(response.getBody());
+        assertEquals("no-store", response.getHeaders().getFirst("Cache-Control"));
+        assertNotNull(response.getBody());
+        assertEquals(1, response.getBody().getProtocolVersion());
+        assertEquals("E401", response.getBody().getCode());
+        assertEquals("Authentication required", response.getBody().getMsg());
+        assertNull(response.getBody().getData());
     }
 
     private static JwtAuthenticationToken authenticated(Jwt jwt) {

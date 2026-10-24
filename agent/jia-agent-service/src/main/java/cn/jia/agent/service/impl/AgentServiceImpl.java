@@ -147,6 +147,13 @@ public class AgentServiceImpl implements AgentService {
     private final AgentPersonaDao agentPersonaDao;
     private final AgentPersonaBindingDao agentPersonaBindingDao;
     private AgentPersonaCatalogCache personaCatalogCache = new AgentPersonaCatalogCache();
+    private cn.jia.agent.config.AgentPersonaTemplateAccess templateAccess =
+            new cn.jia.agent.config.AgentPersonaTemplateAccess("");
+
+    @Autowired
+    public void setTemplateAccess(cn.jia.agent.config.AgentPersonaTemplateAccess templateAccess) {
+        this.templateAccess = Objects.requireNonNull(templateAccess);
+    }
     private final AgentTaskMetaDao agentTaskMetaDao;
     private AgentTaskRequirementSnapshotService requirementSnapshots;
 
@@ -611,31 +618,32 @@ public class AgentServiceImpl implements AgentService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public AgentRuntimeDTO bindPersona(String tenantId, String clientId, String jiacn, String personaCode) {
-        AgentHostedBindingTransaction.Scope exactScope =
-                new AgentHostedBindingTransaction.Scope(tenantId, clientId, jiacn);
-        AgentPersonaEntity persona = requirePersona(personaCode);
+        BusinessScope exactScope = requirePersonaBindingScope(tenantId, clientId, jiacn);
+        AgentPersonaEntity persona = requirePersonaForBinding(exactScope, personaCode);
         if (Boolean.TRUE.equals(persona.getSystemAgent())) {
             throw new AgentBizException(AgentErrorConstants.PERSONA_NOT_BINDABLE, "System persona cannot be bound");
         }
         AgentPersonaBindingEntity bound = agentPersonaBindingDao.findActiveByTenantClientAndPersonaForUpdate(
-                exactScope.tenantId(), exactScope.clientId(), persona.getPersonaCode());
+                exactScope.tenantId().value(), exactScope.callerClientId(), persona.getPersonaCode());
         if (bound != null && !Objects.equals(exactScope.ownerJiacn(), bound.getJiacn())) {
             throw new AgentBizException(AgentErrorConstants.PERSONA_BOUND, "Persona is already bound");
         }
         if (bound != null) {
             AgentIdentityRegistryEntity identity = agentIdentityService.requireRegistrationIdentityInScope(
-                    exactScope.tenantId(), exactScope.clientId(), exactScope.ownerJiacn(), bound.getAgentId());
+                    exactScope.tenantId().value(), exactScope.callerClientId(),
+                    exactScope.ownerJiacn(), bound.getAgentId());
             agentIdentityService.requireActiveBinding(identity, null);
             AgentRuntimeEntity existing = agentRuntimeDao.findByAgentId(identity.getCanonicalAgentId());
             return existing == null
                     ? createRuntimeFromBinding(bound, identity.getCanonicalAgentId(), persona, AgentConstants.STATUS_OFFLINE)
-                    : toRuntimeDTO(requireExactRuntime(existing, identity.getCanonicalAgentId(),
-                            exactScope.clientId(), exactScope.ownerJiacn(), bound.getId()));
+                    : toRuntimeDTO(requireExactRuntime(existing, exactScope.tenantId().value(),
+                            identity.getCanonicalAgentId(), exactScope.callerClientId(),
+                            exactScope.ownerJiacn(), bound.getId()));
         }
 
         AgentPersonaBindingEntity binding = new AgentPersonaBindingEntity();
-        binding.setClientId(exactScope.clientId());
-        binding.setTenantId(exactScope.tenantId());
+        binding.setClientId(exactScope.callerClientId());
+        binding.setTenantId(exactScope.tenantId().value());
         binding.setJiacn(exactScope.ownerJiacn());
         binding.setPersonaCode(persona.getPersonaCode());
         binding.setAgentId(generateAgentId());
@@ -814,7 +822,7 @@ public class AgentServiceImpl implements AgentService {
     @Override
     public List<AgentPersonaEntity> listPersonas() {
         BusinessScope scope = requireCurrentBusinessScope();
-        return agentPersonaDao.findRuntimeProjection(
+        return agentPersonaDao.findFullProjection(
                 scope.tenantId().value(), scope.callerClientId());
     }
 
@@ -2110,6 +2118,16 @@ public class AgentServiceImpl implements AgentService {
         return persona;
     }
 
+    private AgentPersonaEntity requirePersonaForBinding(
+            BusinessScope scope, String personaCode) {
+        AgentPersonaEntity persona = agentPersonaDao.findByCodeInReadScope(
+                scope.tenantId().value(), scope.callerClientId(), personaCode);
+        if (persona == null) {
+            throw new AgentBizException(AgentErrorConstants.AGENT_NOT_FOUND, "Agent persona not found");
+        }
+        return persona;
+    }
+
     private void requireOwnedAgent(AgentRuntimeEntity agent) {
         if (agent == null) {
             throw new AgentBizException(AgentErrorConstants.AGENT_NOT_FOUND, "Agent not found");
@@ -2127,10 +2145,11 @@ public class AgentServiceImpl implements AgentService {
     private AgentRuntimeDTO createRuntimeFromBinding(AgentPersonaBindingEntity binding,
             String canonicalAgentId, AgentPersonaEntity persona, String status) {
         AgentRuntimeEntity runtime = Optional.ofNullable(agentRuntimeDao.findByAgentId(canonicalAgentId))
-                .map(existing -> requireExactRuntime(existing, canonicalAgentId,
-                        binding.getClientId(), binding.getJiacn(), binding.getId()))
+                .map(existing -> requireExactRuntime(existing, binding.getTenantId(),
+                        canonicalAgentId, binding.getClientId(), binding.getJiacn(), binding.getId()))
                 .orElseGet(AgentRuntimeEntity::new);
         runtime.setAgentId(canonicalAgentId);
+        runtime.setTenantId(binding.getTenantId());
         runtime.setName(persona.getName());
         runtime.setAvatar(persona.getAvatar());
         runtime.setPersonaCode(persona.getPersonaCode());
@@ -2405,7 +2424,8 @@ public class AgentServiceImpl implements AgentService {
         if (!("0".equals(persona.getTenantId())
                     || scope.tenantId().value().equals(persona.getTenantId()))
                 || !(persona.getClientId() == null
-                    || scope.callerClientId().equals(persona.getClientId()))
+                    || scope.callerClientId().equals(persona.getClientId())
+                    || templateAccess.isPublishedTemplate(persona.getTenantId(), persona.getClientId()))
                 || !isExactStoredText(persona.getPersonaCode(), 50)
                 || !isExactStoredText(persona.getName(), 50)) {
             throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN,
@@ -2529,6 +2549,16 @@ public class AgentServiceImpl implements AgentService {
                 || !Objects.equals(scope.ownerJiacn(), ownerJiacn)) {
             throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN,
                     "Authenticated business scope is inconsistent");
+        }
+        return scope;
+    }
+
+    private BusinessScope requirePersonaBindingScope(
+            String tenantId, String clientId, String ownerJiacn) {
+        BusinessScope scope = requireBusinessScope(tenantId, clientId, ownerJiacn);
+        if ("0".equals(scope.ownerJiacn())) {
+            throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN,
+                    "Authenticated persona binding owner is invalid");
         }
         return scope;
     }
@@ -3196,10 +3226,11 @@ public class AgentServiceImpl implements AgentService {
             String ownerJiacn, String eventType, AgentTaskDTO task, List<AgentRuntimeDTO> updatedAgents) {
         List<AgentRuntimeDTO> agents = List.copyOf(updatedAgents);
         String clientId = task.getClientId();
-        publishOptionalAfterCommit("legacy-task-report", () -> {
+        BusinessScope scope = requireCurrentBusinessScope();
+        publishOptionalAfterCommit("legacy-task-report", () -> runPublicationInScope(scope, () -> {
             publishScopedAgentSnapshots(clientId, ownerJiacn, agents);
             publishTaskEvent(eventType, task);
-        });
+        }));
     }
 
     private void publishTaskAssignmentSceneStates(
@@ -3371,7 +3402,8 @@ public class AgentServiceImpl implements AgentService {
     private void publishAgentSnapshotAfterCommit(
             String operation, String tenantId, String clientId, String ownerJiacn,
             String agentId, long bindingId) {
-        publishOptionalAfterCommit(operation, () ->
+        BusinessScope businessScope = requireBusinessScope(tenantId, clientId, ownerJiacn);
+        publishOptionalAfterCommit(operation, () -> runPublicationInScope(businessScope, () ->
                 scopePublicationCoordinator.execute(clientId, ownerJiacn, () -> {
                     AgentHostedBindingTransaction.Scope scope =
                             new AgentHostedBindingTransaction.Scope(tenantId, clientId, ownerJiacn);
@@ -3383,7 +3415,22 @@ public class AgentServiceImpl implements AgentService {
                     publishAgentSnapshots(clientId, ownerJiacn,
                             List.of(toRuntimeDTO(current, clientId, ownerJiacn)),
                             listCapabilities(clientId, ownerJiacn));
-                }));
+                })));
+    }
+
+    private void runPublicationInScope(BusinessScope scope, Runnable publication) {
+        EsContext previous = EsContextHolder.getContext();
+        EsContext publicationContext = new EsContext();
+        publicationContext.setTenantId(scope.tenantId().value());
+        publicationContext.setDataDomainId(scope.dataDomainId().value());
+        publicationContext.setClientId(scope.callerClientId());
+        publicationContext.setJiacn(scope.ownerJiacn());
+        EsContextHolder.setContext(publicationContext);
+        try {
+            TrustedTenantContext.runWithScope(scope, publication);
+        } finally {
+            EsContextHolder.setContext(previous);
+        }
     }
 
     private void publishScopedAgentSnapshots(
@@ -3566,6 +3613,15 @@ public class AgentServiceImpl implements AgentService {
                     "Agent runtime identity is not byte-exact or is outside owner scope");
         }
         return runtime;
+    }
+
+    private AgentRuntimeEntity requireExactRuntime(AgentRuntimeEntity runtime, String tenantId,
+            String canonicalAgentId, String clientId, String ownerJiacn, Long bindingId) {
+        if (!Objects.equals(tenantId, runtime.getTenantId())) {
+            throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN,
+                    "Agent runtime identity is outside tenant scope");
+        }
+        return requireExactRuntime(runtime, canonicalAgentId, clientId, ownerJiacn, bindingId);
     }
 
     private String limitLength(String value, int maxLength) {

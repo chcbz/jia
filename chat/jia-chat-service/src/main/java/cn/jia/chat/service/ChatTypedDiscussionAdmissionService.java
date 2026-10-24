@@ -9,7 +9,10 @@ import cn.jia.chat.deliberation.ChatTurnEntity;
 import cn.jia.chat.deliberation.ChatTypedDeliberationStore;
 import cn.jia.chat.deliberation.InteractionRoute;
 import cn.jia.chat.entity.ChatConversationEntity;
+import cn.jia.chat.entity.ConversationDataScope;
 import cn.jia.chat.handler.dto.ChatMessageDTO;
+import cn.jia.core.tenant.BusinessScope;
+import cn.jia.core.tenant.TrustedTenantContext;
 import cn.jia.core.util.JsonUtil;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -87,13 +90,21 @@ public class ChatTypedDiscussionAdmissionService {
     private ChatTypedDeliberationWire.Accepted admitInternal(String tenantId, ServerResolvedSender sender,
             String conversationId, String idempotencyKey, ChatTypedDeliberationWire.DiscussionCommand command,
             boolean preparePackages) {
-        if(!"0".equals(tenantId)||sender==null||!ServerResolvedSender.USER_TYPE.equals(sender.type())
+        BusinessScope trusted;
+        try { trusted=TrustedTenantContext.requireScope(); }
+        catch (IllegalStateException missing) { throw invalid(); }
+        if(sender==null||!ServerResolvedSender.USER_TYPE.equals(sender.type())
                 ||!exact(sender.jiacn(),50)||!exact(sender.clientId(),50)||!exact(conversationId,100)
-                ||!exact(idempotencyKey,100)||command==null)throw invalid();
+                ||!exact(idempotencyKey,100)||command==null
+                ||!"cyf".equals(trusted.dataDomainId().value())
+                ||!trusted.tenantId().value().equals(tenantId)
+                ||!sender.jiacn().equals(trusted.ownerJiacn())
+                ||!sender.clientId().equals(trusted.callerClientId()))throw invalid();
         String owner=sender.jiacn(),client=sender.clientId();
+        var conversationScope=new ConversationDataScope(trusted,ConversationDataScope.Mode.LEGACY_CLIENT);
         // A cold package store may perform I/O only here, before root/Chat locks and money/execution work.
         // This is merely a locator read. Every owner/assignment/ACL/key fact is rechecked under the root below.
-        var locator=conversations.findScopedById(owner,client,conversationId);
+        var locator=conversations.findScopedById(conversationScope,conversationId);
         if(locator==null||locator.getDeletedAt()!=null||locator.getLifecycleGeneration()==null||locator.getLifecycleGeneration()<1
                 ||!tenantId.equals(locator.getTenantId())||!owner.equals(locator.getJiacn())||!client.equals(locator.getClientId())
                 ||!command.taskId().equals(locator.getTaskId()))throw unavailable();
@@ -112,7 +123,7 @@ public class ChatTypedDiscussionAdmissionService {
             if(binding==null||binding.conversationId()==null||!conversationId.equals(Long.toString(binding.conversationId()))
                     ||binding.assignmentRevision()!=command.expectedAssignmentRevision()||root==null
                     ||root.getTaskVersion()==null||root.getTaskVersion()<command.expectedAssignmentRevision())throw conflict("Bounty assignment changed");
-            ChatConversationEntity conversation=conversations.lockScopedById(owner,client,conversationId);
+            ChatConversationEntity conversation=conversations.lockScopedById(conversationScope,conversationId);
             if(conversation==null||conversation.getId()==null||!conversationId.equals(Long.toString(conversation.getId()))
                     ||!tenantId.equals(conversation.getTenantId())||!client.equals(conversation.getClientId())
                     ||!owner.equals(conversation.getJiacn())||!command.taskId().equals(conversation.getTaskId())

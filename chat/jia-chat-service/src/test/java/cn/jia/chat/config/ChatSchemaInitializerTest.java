@@ -2,6 +2,7 @@ package cn.jia.chat.config;
 
 import cn.jia.test.BaseMockTest;
 import org.junit.jupiter.api.Test;
+import org.springframework.context.annotation.Profile;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import javax.sql.DataSource;
@@ -15,12 +16,19 @@ import java.util.Locale;
 import java.nio.charset.StandardCharsets;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 class ChatSchemaInitializerTest extends BaseMockTest {
+
+    @Test
+    void schemaMutationProfileRequiresMaintenanceAndExcludesLocalTestArea() {
+        assertArrayEquals(new String[] {"schema-maintenance & !local-test-area"},
+                ChatSchemaInitializer.class.getAnnotation(Profile.class).value());
+    }
 
     @Test
     void h2WithoutOptionalConversationTableSkipsChatSchemaMutation() throws Exception {

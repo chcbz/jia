@@ -1,10 +1,20 @@
 package cn.jia.oauth.api;
 
 import cn.jia.core.config.ExceptionHandlerAdvice;
+import cn.jia.core.tenant.BusinessScope;
+import cn.jia.core.tenant.DataDomainId;
+import cn.jia.core.tenant.TenantId;
+import cn.jia.core.tenant.TrustedTenantContext;
 import cn.jia.oauth.config.ResourceServerConfig;
+import cn.jia.oauth.filter.LegacyAgentTenantBoundaryFilter;
+import cn.jia.oauth.filter.TrustedTenantContextCleanupFilter;
+import cn.jia.oauth.filter.TrustedTenantContextFilter;
 import cn.jia.oauth.security.AccountSecurityJwtValidator;
+import cn.jia.oauth.security.TenantAdmissionPolicy;
 import cn.jia.oauth.security.TenantAuthorizationAttributes;
 import cn.jia.oauth.security.TenantAuthorizationVerifier;
+import cn.jia.oauth.security.TenantDeploymentTokenValidator;
+import cn.jia.oauth.security.UserAdmissionScopeResolver;
 import cn.jia.user.security.AccountSecurityService;
 import cn.jia.user.security.AccountSecuritySnapshot;
 import cn.jia.user.security.AccountState;
@@ -27,7 +37,9 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.oauth2.jwt.BadJwtException;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
+import org.springframework.security.oauth2.server.resource.web.authentication.BearerTokenAuthenticationFilter;
 import org.springframework.security.web.FilterChainProxy;
+import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
 import org.springframework.test.context.support.TestPropertySourceUtils;
 import org.springframework.test.web.servlet.MockMvc;
@@ -39,6 +51,7 @@ import org.springframework.web.context.support.AnnotationConfigWebApplicationCon
 import org.springframework.web.servlet.config.annotation.EnableWebMvc;
 
 import java.time.Instant;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -46,7 +59,9 @@ import java.util.Optional;
 import static org.hamcrest.Matchers.contains;
 import static org.hamcrest.Matchers.hasSize;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -103,17 +118,83 @@ class AuthenticationResourceSecurityTest {
     void returnsTopLevelIdentityForValidUserJwtWithoutOverDisclosure() throws Exception {
         mockMvc.perform(get("/resource").header("Authorization", "Bearer user-token"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.subject").value("user-17"))
-                .andExpect(jsonPath("$.clientId").value("public-web"))
-                .andExpect(jsonPath("$.username").value("alice"))
-                .andExpect(jsonPath("$.jiacn").value("jia-17"))
-                .andExpect(jsonPath("$.scopes", contains("openid", "profile", "write")))
-                .andExpect(jsonPath("$.tenantId").value("1"))
-                .andExpect(jsonPath("$.*", hasSize(13)))
+                .andExpect(jsonPath("$.protocolVersion").value(1))
+                .andExpect(jsonPath("$.code").value("E0"))
+                .andExpect(jsonPath("$.msg").value("ok"))
+                .andExpect(jsonPath("$.data.subject").value("user-17"))
+                .andExpect(jsonPath("$.data.clientId").value("public-web"))
+                .andExpect(jsonPath("$.data.username").value("alice"))
+                .andExpect(jsonPath("$.data.jiacn").value("jia-17"))
+                .andExpect(jsonPath("$.data.scopes", contains("openid", "profile", "write")))
+                .andExpect(jsonPath("$.data.tenantId").value("1"))
+                .andExpect(jsonPath("$.*", hasSize(5)))
+                .andExpect(jsonPath("$.data.*", hasSize(13)))
                 .andExpect(jsonPath("$.access_token").doesNotExist())
                 .andExpect(jsonPath("$.arbitrary_claim").doesNotExist())
+                .andExpect(jsonPath("$.data.access_token").doesNotExist())
+                .andExpect(jsonPath("$.data.arbitrary_claim").doesNotExist())
                 .andExpect(content().string(org.hamcrest.Matchers.not(
                         org.hamcrest.Matchers.containsString("must-not-leak"))));
+    }
+
+    @Test
+    void fixedDeploymentReturnsVerifiedBasicIdentityAndIgnoresRequestTenantSelectors()
+            throws Exception {
+        try (AnnotationConfigWebApplicationContext fixed = new AnnotationConfigWebApplicationContext()) {
+            fixed.setServletContext(new MockServletContext());
+            TestPropertySourceUtils.addInlinedPropertiesToEnvironment(fixed,
+                    "cyf.tenant.admission-mode=fixed-tenant",
+                    "cyf.tenant.fixed-tenant-id=1",
+                    "cyf.tenant.fixed-client-tenants.cyf-local=1",
+                    "spring.security.oauth2.resourceserver.jwt.issuer-uri=https://issuer.example",
+                    "spring.security.oauth2.resourceserver.jwt.jwk-set-uri=https://issuer.example/jwks");
+            fixed.register(TestApplication.class);
+            fixed.refresh();
+            MockMvc guarded = MockMvcBuilders.webAppContextSetup(fixed)
+                    .addFilters(fixed.getBean(FilterChainProxy.class)).build();
+
+            guarded.perform(get("/resource")
+                            .queryParam("tenant_id", "0")
+                            .header("X-Tenant-ID", "0")
+                            .header("Cookie", "tenant_id=0")
+                            .header("Authorization", "Bearer fixed-user-token"))
+                    .andExpect(status().isOk())
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.header()
+                            .string("Cache-Control", "no-store"))
+                    .andExpect(jsonPath("$.protocolVersion").value(1))
+                    .andExpect(jsonPath("$.code").value("E0"))
+                    .andExpect(jsonPath("$.msg").value("ok"))
+                    .andExpect(jsonPath("$.data.subject").value("user-17"))
+                    .andExpect(jsonPath("$.data.clientId").value("cyf-local"))
+                    .andExpect(jsonPath("$.data.username").value("alice"))
+                    .andExpect(jsonPath("$.data.jiacn").value("jia-17"))
+                    .andExpect(jsonPath("$.data.scopes", contains("openid", "write")))
+                    .andExpect(jsonPath("$.data.issuer").value("https://issuer.example"))
+                    .andExpect(jsonPath("$.data.tenantId").value("1"))
+                    .andExpect(jsonPath("$.data.dataDomainId").doesNotExist())
+                    .andExpect(jsonPath("$.data.tenantSessionEpoch").doesNotExist())
+                    .andExpect(jsonPath("$.data.membershipRevision").doesNotExist())
+                    .andExpect(jsonPath("$.data.clientTenantGrantRevision").doesNotExist())
+                    .andExpect(jsonPath("$.*", hasSize(5)))
+                    .andExpect(jsonPath("$.data.*", hasSize(7)));
+
+            guarded.perform(get("/chat/conversation/content")
+                            .queryParam("tenant_id", "0")
+                            .header("X-Tenant-ID", "0")
+                            .header("Cookie", "tenant_id=0")
+                            .header("Authorization", "Bearer fixed-user-token"))
+                    .andExpect(status().isOk())
+                    .andExpect(content().string("1"));
+            assertFalse(TrustedTenantContext.currentScope().isPresent());
+
+            for (String token : List.of("fixed-tenant-zero-token", "fixed-missing-tenant-token",
+                    "fixed-machine-token", "fixed-conflicting-alias-token",
+                    "fixed-conflicting-domain-token")) {
+                guarded.perform(get("/resource").header("Authorization", "Bearer " + token))
+                        .andExpect(status().isUnauthorized())
+                        .andExpect(content().string(""));
+            }
+        }
     }
 
     @Test
@@ -125,26 +206,40 @@ class AuthenticationResourceSecurityTest {
     }
 
     @Test
+    void legacyUserReceivesTenantZeroOnlyFromAccountSnapshotThroughRealResourceChain()
+            throws Exception {
+        mockMvc.perform(get("/agent/scope")
+                        .queryParam("tenant_id", "9")
+                        .header("X-Tenant-ID", "9")
+                        .header("Cookie", "tenant_id=9")
+                        .header("Authorization", "Bearer legacy-user-token"))
+                .andExpect(status().isOk())
+                .andExpect(content().string("0|cyf|Legacy-A|public-web"));
+        assertFalse(TrustedTenantContext.currentScope().isPresent());
+    }
+
+    @Test
     void returnsTopLevelIdentityForValidMachineJwtWithAbsentScope() throws Exception {
         mockMvc.perform(get("/resource").header("Authorization", "Bearer machine-token"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.subject").value("machine-client"))
-                .andExpect(jsonPath("$.clientId").value("machine-client"))
-                .andExpect(jsonPath("$.username").doesNotExist())
-                .andExpect(jsonPath("$.jiacn").doesNotExist())
-                .andExpect(jsonPath("$.scopes", hasSize(0)))
-                .andExpect(jsonPath("$.*", hasSize(3)));
+                .andExpect(jsonPath("$.code").value("E0"))
+                .andExpect(jsonPath("$.data.subject").value("machine-client"))
+                .andExpect(jsonPath("$.data.clientId").value("machine-client"))
+                .andExpect(jsonPath("$.data.username").doesNotExist())
+                .andExpect(jsonPath("$.data.jiacn").doesNotExist())
+                .andExpect(jsonPath("$.data.scopes", hasSize(0)))
+                .andExpect(jsonPath("$.data.*", hasSize(3)));
     }
 
     @Test
     void preservesExactIdentityClaimsIncludingSurroundingWhitespace() throws Exception {
         mockMvc.perform(get("/resource").header("Authorization", "Bearer exact-identity-token"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.subject").value(" user-17 "))
-                .andExpect(jsonPath("$.clientId").value(" public-web "))
-                .andExpect(jsonPath("$.username").value(" alice "))
-                .andExpect(jsonPath("$.jiacn").value(" jia-17 "))
-                .andExpect(jsonPath("$.scopes", hasSize(0)));
+                .andExpect(jsonPath("$.data.subject").value(" user-17 "))
+                .andExpect(jsonPath("$.data.clientId").value(" public-web "))
+                .andExpect(jsonPath("$.data.username").value(" alice "))
+                .andExpect(jsonPath("$.data.jiacn").value(" jia-17 "))
+                .andExpect(jsonPath("$.data.scopes", hasSize(0)));
     }
 
     @Test
@@ -238,7 +333,7 @@ class AuthenticationResourceSecurityTest {
     }
 
     @Test
-    void malformedSignedIdentityClaimsRemainEmptyBody401WithProductionAdviceRegistered()
+    void malformedCredentialsAreRejectedAtBearerBoundaryBeforeController()
             throws Exception {
         for (String token : List.of(
                 "missing-claims-token",
@@ -253,14 +348,85 @@ class AuthenticationResourceSecurityTest {
                 "nel-scope-token")) {
             mockMvc.perform(get("/resource").header("Authorization", "Bearer " + token))
                     .andExpect(status().isUnauthorized())
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.header()
+                            .string("Cache-Control", org.hamcrest.Matchers.containsString("no-store")))
                     .andExpect(content().string(""));
         }
+    }
+
+    @Test
+    void controllerRejectsInvalidIdentityWithJsonErrorInsteadOfSuccessAdapterFailure() throws Exception {
+        Jwt invalidIdentity = TestApplication.jwt("invalid-controller-identity",
+                Map.of("sub", "machine-client", "client_id", "machine-client", "scope", " "));
+        var authentication = new org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken(
+                invalidIdentity, AuthorityUtils.NO_AUTHORITIES);
+        MockMvc controllerOnly = MockMvcBuilders.standaloneSetup(new OAuthResourceIdentityController()).build();
+        controllerOnly.perform(get("/resource").principal(authentication))
+                .andExpect(status().isUnauthorized())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.header()
+                        .string("Cache-Control", "no-store"))
+                .andExpect(jsonPath("$.protocolVersion").value(1))
+                .andExpect(jsonPath("$.code").value("E401"))
+                .andExpect(jsonPath("$.msg").value("Authentication required"))
+                .andExpect(jsonPath("$.data").value(org.hamcrest.Matchers.nullValue()));
     }
 
     @Test
     void malformedJwtIsRejectedByBearerAuthentication() throws Exception {
         mockMvc.perform(get("/resource").header("Authorization", "Bearer malformed-token"))
                 .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void tenantContextFiltersHaveRealBearerOrderAndBadBearerCannotLeakStaleScope() {
+        FilterChainProxy security = context.getBean(FilterChainProxy.class);
+        assertContextFilterOrder(matchingChain(security,
+                new MockHttpServletRequest("GET", "/resource")), false);
+        assertContextFilterOrder(matchingChain(security,
+                new MockHttpServletRequest("GET", "/agent/probe")), true);
+
+        BusinessScope stale = new BusinessScope(TenantId.of("9"), DataDomainId.of("cyf"),
+                "stale-owner", "stale-client");
+        TrustedTenantContext.runWithScope(stale, () -> {
+            try {
+                mockMvc.perform(get("/resource").header("Authorization", "Bearer malformed-token"))
+                        .andExpect(status().isUnauthorized());
+            } catch (Exception exception) {
+                throw new AssertionError(exception);
+            }
+            assertFalse(TrustedTenantContext.currentScope().isPresent());
+        });
+        assertFalse(TrustedTenantContext.currentScope().isPresent());
+    }
+
+    private static SecurityFilterChain matchingChain(FilterChainProxy proxy,
+                                                      MockHttpServletRequest request) {
+        return proxy.getFilterChains().stream().filter(chain -> chain.matches(request))
+                .findFirst().orElseThrow();
+    }
+
+    private static void assertContextFilterOrder(SecurityFilterChain chain, boolean legacyBoundary) {
+        List<jakarta.servlet.Filter> filters = chain.getFilters();
+        assertEquals(1L,
+                filters.stream().filter(TrustedTenantContextCleanupFilter.class::isInstance).count());
+        assertEquals(1L, filters.stream().filter(TrustedTenantContextFilter.class::isInstance).count());
+        assertEquals(legacyBoundary ? 1L : 0L,
+                filters.stream().filter(LegacyAgentTenantBoundaryFilter.class::isInstance).count());
+        int cleanup = indexOf(filters, TrustedTenantContextCleanupFilter.class);
+        int bearer = indexOf(filters, BearerTokenAuthenticationFilter.class);
+        int binding = indexOf(filters, TrustedTenantContextFilter.class);
+        assertTrue(cleanup < bearer && bearer < binding);
+        if (legacyBoundary) {
+            assertTrue(binding < indexOf(filters, LegacyAgentTenantBoundaryFilter.class));
+        }
+    }
+
+    private static int indexOf(List<jakarta.servlet.Filter> filters,
+                               Class<? extends jakarta.servlet.Filter> type) {
+        for (int index = 0; index < filters.size(); index++) {
+            if (type.isInstance(filters.get(index))) return index;
+        }
+        return -1;
     }
 
     private static SecurityContext formLoginSecurityContext() {
@@ -277,8 +443,18 @@ class AuthenticationResourceSecurityTest {
     @Import({ResourceServerConfig.class, ExceptionHandlerAdvice.class})
     static class TestApplication {
         @Bean
-        OAuthResourceIdentityController authenticationController() {
-            return new OAuthResourceIdentityController();
+        OAuthResourceIdentityController authenticationController(
+                ResourceServerConfig.TenantDeploymentProperties properties,
+                UserAdmissionScopeResolver admissionScopeResolver) {
+            return new OAuthResourceIdentityController(properties, admissionScopeResolver);
+        }
+
+        @Bean
+        UserAdmissionScopeResolver userAdmissionScopeResolver(
+                ResourceServerConfig.TenantDeploymentProperties properties,
+                AccountSecurityService accountSecurityService) {
+            return new UserAdmissionScopeResolver(TenantAdmissionPolicy.from(properties),
+                    accountSecurityService);
         }
 
         @Bean
@@ -293,6 +469,8 @@ class AuthenticationResourceSecurityTest {
                     new AccountSecuritySnapshot(17, "jia-17", AccountState.ACTIVE, 4)));
             when(service.findByUserId(18)).thenReturn(Optional.of(
                     new AccountSecuritySnapshot(18, " jia-17 ", AccountState.ACTIVE, 2)));
+            when(service.findUniqueByExactJiacn("Legacy-A")).thenReturn(Optional.of(
+                    new AccountSecuritySnapshot(22, "Legacy-A", AccountState.ACTIVE, 0)));
             return service;
         }
 
@@ -311,7 +489,10 @@ class AuthenticationResourceSecurityTest {
 
         @Bean
         @Primary
-        JwtDecoder testJwtDecoder(AccountSecurityService accountSecurityService, TenantAuthorizationVerifier verifier) {
+        JwtDecoder testJwtDecoder(AccountSecurityService accountSecurityService,
+                                  TenantAuthorizationVerifier verifier,
+                                  ResourceServerConfig.TenantDeploymentProperties properties) {
+            TenantAdmissionPolicy admissionPolicy = TenantAdmissionPolicy.from(properties);
             return token -> {
                 Jwt jwt = switch (token) {
                 case "user-token" -> jwt(token, Map.of(
@@ -336,6 +517,9 @@ class AuthenticationResourceSecurityTest {
                 case "unbound-user-token" -> jwt(token, Map.of(
                         "token_kind", "user", "uid", "17", "jiacn", "jia-17", "username", "alice",
                         "auth_epoch", 4L, "sub", "user-17", "client_id", "public-web"));
+                case "legacy-user-token" -> jwt(token, Map.of(
+                        "jiacn", "Legacy-A", "username", "legacy", "sub", "legacy",
+                        "client_id", "public-web"));
                 case "machine-token" -> jwt(token, Map.of(
                         "token_kind", "machine",
                         "sub", "machine-client",
@@ -348,6 +532,14 @@ class AuthenticationResourceSecurityTest {
                         "client_id", " public-web ",
                         "username", " alice ",
                         "jiacn", " jia-17 "));
+                case "fixed-user-token" -> jwt(token, fixedTenantClaims("1"));
+                case "fixed-tenant-zero-token" -> jwt(token, fixedTenantClaims("0"));
+                case "fixed-missing-tenant-token" -> jwt(token, fixedTenantClaims(null));
+                case "fixed-machine-token" -> jwt(token, Map.of(
+                        "token_kind", "machine", "sub", "machine-client",
+                        "client_id", "machine-client", "iss", "https://issuer.example"));
+                case "fixed-conflicting-alias-token" -> jwt(token, fixedConflictingAliasClaims());
+                case "fixed-conflicting-domain-token" -> jwt(token, fixedConflictingDomainClaims());
                 case "missing-claims-token" -> jwt(token, Map.of("scope", "openid"));
                 case "blank-required-token" -> jwt(token, Map.of(
                         "sub", " ",
@@ -386,11 +578,45 @@ class AuthenticationResourceSecurityTest {
                         "scope", List.of("openid", "read\u0085write")));
                 default -> throw new BadJwtException("Malformed token");
                 };
-                if (new AccountSecurityJwtValidator(accountSecurityService, verifier).validate(jwt).hasErrors()) {
+                if (new AccountSecurityJwtValidator(accountSecurityService, verifier, admissionPolicy)
+                        .validate(jwt).hasErrors()
+                        || new TenantDeploymentTokenValidator(admissionPolicy).validate(jwt).hasErrors()) {
                     throw new BadJwtException("Invalid token");
                 }
                 return jwt;
             };
+        }
+
+        private static Map<String, Object> fixedTenantClaims(String tenantId) {
+            Map<String, Object> claims = new HashMap<>();
+            claims.put("token_kind", "user");
+            claims.put("uid", "17");
+            claims.put("auth_epoch", 4L);
+            claims.put("sub", "user-17");
+            claims.put("client_id", "cyf-local");
+            claims.put("username", "alice");
+            claims.put("jiacn", "jia-17");
+            claims.put("scope", List.of("write", "openid", "write"));
+            if (tenantId != null) claims.put("tenant_id", tenantId);
+            claims.put("iss", "https://issuer.example");
+            return claims;
+        }
+
+        private static Map<String, Object> fixedConflictingAliasClaims() {
+            Map<String, Object> claims = fixedTenantClaims("1");
+            claims.put("tenantId", "0");
+            return claims;
+        }
+
+        private static Map<String, Object> fixedConflictingDomainClaims() {
+            Map<String, Object> claims = fixedTenantClaims("1");
+            claims.put("data_domain_id", "other");
+            claims.put("tenant_name", "other");
+            claims.put("tenant_kind", "TEST");
+            claims.put("tenant_session_epoch", "1");
+            claims.put("membership_revision", "1");
+            claims.put("client_tenant_grant_revision", "1");
+            return claims;
         }
 
         private static Jwt jwt(String tokenValue, Map<String, Object> claims) {
@@ -427,9 +653,21 @@ class AuthenticationResourceSecurityTest {
             return "ok";
         }
 
+        @GetMapping("/agent/scope")
+        String scopeProbe() {
+            BusinessScope scope = TrustedTenantContext.requireScope();
+            return String.join("|", scope.tenantId().value(), scope.dataDomainId().value(),
+                    scope.ownerJiacn(), scope.callerClientId());
+        }
+
         @GetMapping("/chat/probe")
         String chatProbe() {
             return "ok";
+        }
+
+        @GetMapping("/chat/conversation/content")
+        String scopedConversationProbe() {
+            return TrustedTenantContext.requireTenantId().value();
         }
 
         @GetMapping("/archive/probe")

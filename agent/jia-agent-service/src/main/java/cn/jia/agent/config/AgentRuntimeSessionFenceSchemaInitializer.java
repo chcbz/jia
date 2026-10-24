@@ -1,6 +1,8 @@
 package cn.jia.agent.config;
 
 import org.springframework.beans.factory.InitializingBean;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.DependsOn;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -20,8 +22,15 @@ public final class AgentRuntimeSessionFenceSchemaInitializer implements Initiali
     static final List<String> COLUMNS = List.of("runtime_installation_id", "runtime_host_id",
             "runtime_instance_id", "runtime_session_generation");
     private final JdbcTemplate jdbc;
+    private final boolean validateOnly;
 
-    public AgentRuntimeSessionFenceSchemaInitializer(JdbcTemplate jdbc) { this.jdbc = Objects.requireNonNull(jdbc); }
+    public AgentRuntimeSessionFenceSchemaInitializer(JdbcTemplate jdbc) { this(jdbc, "install"); }
+    @Autowired
+    public AgentRuntimeSessionFenceSchemaInitializer(JdbcTemplate jdbc,
+            @Value("${cyf.schema.mode:install}") String schemaMode) {
+        this.jdbc = Objects.requireNonNull(jdbc);
+        this.validateOnly = SchemaValidationMode.isValidateOnly(schemaMode);
+    }
 
     @Override public void afterPropertiesSet() throws Exception {
         var source = Objects.requireNonNull(jdbc.getDataSource(), "Runtime fence requires JDBC");
@@ -34,6 +43,8 @@ public final class AgentRuntimeSessionFenceSchemaInitializer implements Initiali
             String name = COLUMNS.get(i);
             var rows = column(name);
             if (rows.isEmpty()) {
+                SchemaValidationMode.requireMutationAllowed(validateOnly,
+                        "Runtime fence column " + name);
                 try {
                     jdbc.execute(statements().get(i));
                 } catch (org.springframework.dao.DataAccessException failure) {

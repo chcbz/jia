@@ -1219,3 +1219,25 @@ tasks.register('skillManagementContract', Test) {
     maxParallelForks = 1
     testLogging { events 'passed','failed'; exceptionFormat 'full'; showStandardStreams = true }
 }
+
+// Shared-database local startup safety: catalog reads only, no application context or real DB.
+def startupSchemaValidationSourceSet = sourceSets.create('startupSchemaValidation') {
+    java.srcDir 'src/startupSchemaValidationTest/java'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(startupSchemaValidationSourceSet.implementationConfigurationName) {
+    extendsFrom configurations.testImplementation
+}
+configurations.named(startupSchemaValidationSourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.testRuntimeOnly
+}
+tasks.register('startupSchemaValidation', Test) {
+    group = 'verification'
+    description = 'Validates local schema startup is read-only and fails closed on missing catalogs.'
+    dependsOn tasks.named(startupSchemaValidationSourceSet.classesTaskName)
+    testClassesDirs = startupSchemaValidationSourceSet.output.classesDirs
+    classpath = startupSchemaValidationSourceSet.runtimeClasspath
+    useJUnitPlatform()
+    maxParallelForks = 1
+}

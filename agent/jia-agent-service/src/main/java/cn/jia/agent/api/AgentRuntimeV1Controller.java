@@ -45,24 +45,26 @@ public class AgentRuntimeV1Controller {
             HttpServletRequest servletRequest) {
         AgentRuntimeV1InstallationRequest request = protocolRequest == null || protocolRequest.data() == null ? null : protocolRequest.data().internal();
         rejectLegacyApiKey(servletRequest);
-        var scope = AgentController.requireJwtScope(authentication);
-        return ok(AgentRuntimeWire.InstallationView.from(runtime.create(scope.tenantId(), scope.clientId(), scope.ownerJiacn(), request, now())));
+        var scope = AgentController.requireBusinessJwtScope(authentication);
+        return ok(AgentRuntimeWire.InstallationView.from(runtime.create(
+                scope.tenantId().value(), scope.callerClientId(), scope.ownerJiacn(), request, now())));
     }
 
     @GetMapping("/installations/{installationId}")
     public ResponseEntity<JsonResult<AgentRuntimeWire.InstallationView>> status(
             @PathVariable String installationId, Authentication authentication, HttpServletRequest servletRequest) {
         rejectLegacyApiKey(servletRequest);
-        var scope = AgentController.requireJwtScope(authentication);
-        return ok(AgentRuntimeWire.InstallationView.from(runtime.status(scope.tenantId(), scope.clientId(), scope.ownerJiacn(), installationId)));
+        var scope = AgentController.requireBusinessJwtScope(authentication);
+        return ok(AgentRuntimeWire.InstallationView.from(runtime.status(
+                scope.tenantId().value(), scope.callerClientId(), scope.ownerJiacn(), installationId)));
     }
 
     @PostMapping("/installations/{installationId}/revoke")
     public ResponseEntity<JsonResult<Void>> revoke(@PathVariable String installationId,
             Authentication authentication, HttpServletRequest servletRequest) {
         rejectLegacyApiKey(servletRequest);
-        var scope = AgentController.requireJwtScope(authentication);
-        runtime.revoke(scope.tenantId(), scope.clientId(), scope.ownerJiacn(), installationId, now());
+        var scope = AgentController.requireBusinessJwtScope(authentication);
+        runtime.revoke(scope.tenantId().value(), scope.callerClientId(), scope.ownerJiacn(), installationId, now());
         return ok(null);
     }
 

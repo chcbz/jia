@@ -90,7 +90,6 @@ public final class TenantTokenGrantProvider implements AuthenticationProvider {
                     domain, clientId, tenantId, domain);
             requireRow("SELECT tenant_id FROM core_tenant_membership WHERE tenant_id = ? AND uid = ? FOR UPDATE",
                     tenantId, tenantId, uid);
-            requireRow("SELECT id FROM oauth2_authorization WHERE id = ? FOR UPDATE", hint.getId(), hint.getId());
             OAuth2Authorization current = authorizations.findByToken(token, tokenType);
             if (current == null || !hint.getId().equals(current.getId())
                     || !Objects.equals(hint.getAttribute(REVISION), current.getAttribute(REVISION))

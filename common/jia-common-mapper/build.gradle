@@ -2,7 +2,9 @@ dependencies {
     api project(':common:jia-common-api')
     api libs.pagehelper.core
     api libs.mybatis.plus.core
+    api 'com.baomidou:mybatis-plus-jsqlparser-4.9:3.5.16'
     api libs.swagger.annotations
+    implementation libs.spring.boot.autoconfigure
 }
 
 version = '1.1.2-SNAPSHOT'

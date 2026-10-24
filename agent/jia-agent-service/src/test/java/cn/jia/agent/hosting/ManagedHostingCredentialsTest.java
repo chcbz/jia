@@ -68,6 +68,11 @@ class ManagedHostingCredentialsTest {
         when(identities.requireActiveBinding(identity, null)).thenReturn(binding);
         when(runtime.ensureInstallation(anyString(), anyString(), anyString(), any(), anyLong())).thenAnswer(call -> {
             assertTrue(TransactionSynchronizationManager.isActualTransactionActive());
+            var scope = cn.jia.core.tenant.TrustedTenantContext.requireScope();
+            assertEquals(p.tenantId(), scope.tenantId().value());
+            assertEquals("cyf", scope.dataDomainId().value());
+            assertEquals(p.clientId(), scope.callerClientId());
+            assertEquals(p.ownerJiacn(), scope.ownerJiacn());
             // Reuse an actual H2 root fence; this test proves transaction/concurrency, not MySQL syntax.
             jdbc.queryForObject("SELECT id FROM installation_lock WHERE id=1 FOR UPDATE", Integer.class);
             jdbc.update("INSERT INTO effects VALUES('installation-ensure')");
@@ -82,7 +87,11 @@ class ManagedHostingCredentialsTest {
         when(rent.attachRuntimeTarget(anyString(), anyString(), anyString(), anyLong())).thenAnswer(call ->
                 jdbc.update("UPDATE free_request SET target=? WHERE id=1 AND target IS NULL", (Long)call.getArgument(3)));
     }
-    @AfterEach void close() { jdbc.execute("DROP ALL OBJECTS"); }
+    @AfterEach void close() {
+        assertTrue(cn.jia.core.tenant.TrustedTenantContext.currentScope().isEmpty());
+        cn.jia.core.tenant.TrustedTenantContext.clear();
+        jdbc.execute("DROP ALL OBJECTS");
+    }
     @Test void exactInstallationReplayAttachesOnceAndNeverCreatesReadsOrSendsLegacyKey() {
         service.ensureInstallation(p, candidate); service.ensureInstallation(p, candidate);
         assertEquals(candidate.installationId(), jdbc.queryForObject("SELECT installation FROM association", String.class));

@@ -1,6 +1,8 @@
 package cn.jia.agent.cache;
 
 import cn.jia.agent.entity.AgentPersonaEntity;
+import cn.jia.agent.config.AgentPersonaTemplateAccess;
+import jakarta.inject.Inject;
 import jakarta.inject.Named;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
@@ -32,6 +34,12 @@ import java.util.function.Supplier;
  */
 @Named
 public class AgentPersonaCatalogCache {
+    private AgentPersonaTemplateAccess templateAccess = new AgentPersonaTemplateAccess("");
+
+    @Inject
+    public void setTemplateAccess(AgentPersonaTemplateAccess templateAccess) {
+        this.templateAccess = Objects.requireNonNull(templateAccess);
+    }
     private static final long DEFAULT_TTL_NANOS = Duration.ofMinutes(1).toNanos();
     private static final int LOCK_STRIPES = 64;
 
@@ -149,7 +157,8 @@ public class AgentPersonaCatalogCache {
                 || !validExact(row.getPersonaCode(), 50)
                 || !validExact(row.getName(), 50)
                 || !("0".equals(row.getTenantId()) || scope.tenantId().equals(row.getTenantId()))
-                || !(row.getClientId() == null || scope.clientId().equals(row.getClientId()))) {
+                || !(row.getClientId() == null || scope.clientId().equals(row.getClientId())
+                    || templateAccess.isPublishedTemplate(row.getTenantId(), row.getClientId()))) {
             throw new IllegalStateException("persona catalog row is null, inactive, or outside exact scope");
         }
         return new CatalogEntry(row.getPersonaCode(), row.getRankNo(), row.getStarName(),

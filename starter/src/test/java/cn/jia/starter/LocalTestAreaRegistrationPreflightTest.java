@@ -1,28 +1,54 @@
 package cn.jia.starter;
 
+import cn.jia.core.config.CorsConfig;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.WebApplicationType;
+import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.jdbc.core.JdbcOperations;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.mock.env.MockEnvironment;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.scheduling.config.TaskManagementConfigUtils;
+import org.springframework.web.filter.CorsFilter;
 
+import javax.sql.DataSource;
+import java.sql.Connection;
+import java.sql.DatabaseMetaData;
+import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.HexFormat;
+import java.util.List;
+import java.util.Map;
+import java.util.Properties;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
 
 class LocalTestAreaRegistrationPreflightTest {
     private static final String CREDENTIAL = "a".repeat(64);
@@ -43,6 +69,7 @@ class LocalTestAreaRegistrationPreflightTest {
                 .withProperty("cyf.deployment.registration-credential", CREDENTIAL)
                 .withProperty("cyf.deployment.allow-no-business-modules", "false")
                 .withProperty("cyf.deployment.allowed-modules[0]", "conversation")
+                .withProperty("cyf.tenant.admission-mode", "platform")
                 .withProperty("cyf.tenant.require-bound-identity", "true")
                 .withProperty("cyf.tenant.allowed-tenants[0]", "1")
                 .withProperty("cyf.worker.allowed-tenants[0]", "1")
@@ -52,6 +79,7 @@ class LocalTestAreaRegistrationPreflightTest {
                 .withProperty("spring.sql.init.mode", "never")
                 .withProperty("cyf.schema.mode", "validate")
                 .withProperty("server.address", "127.0.0.1")
+                .withProperty("server.port", "10019")
                 .withProperty("economy.preview.enabled", "false")
                 .withProperty("chat.agent.tools.enabled", "false")
                 .withProperty("economy.preview.test-issuance-enabled", "false")
@@ -91,6 +119,34 @@ class LocalTestAreaRegistrationPreflightTest {
                 "jdbc:h2:mem:preflight_" + java.util.UUID.randomUUID()
                         + ";MODE=MYSQL;DB_CLOSE_DELAY=-1;INIT=CREATE SCHEMA IF NOT EXISTS LOCAL_TEST\\;SET SCHEMA LOCAL_TEST", "sa", ""));
         seed();
+    }
+
+    private void useFixedTenantMode() {
+        var source = (org.springframework.mock.env.MockPropertySource)
+                environment.getPropertySources().get("mockProperties");
+        source.getSource().remove("cyf.tenant.allowed-tenants[0]");
+        environment.withProperty("cyf.tenant.admission-mode", "fixed-tenant")
+                .withProperty("cyf.tenant.fixed-tenant-id", "1")
+                .withProperty("cyf.tenant.fixed-client-tenants.cyf-local", "1")
+                .withProperty("cyf.tenant.require-bound-identity", "false")
+                .withProperty("cyf.oauth.authorization-server.enabled", "true")
+                .withProperty("cyf.oauth.signing.enabled", "true")
+                .withProperty("cyf.oauth.signing.issuer", "http://127.0.0.1:10019")
+                .withProperty("cyf.oauth.signing.private-jwk-path",
+                        "/home/chc/.local/state/cyf-local-test-area/signing.jwk")
+                .withProperty("spring.security.oauth2.resourceserver.jwt.issuer-uri",
+                        "http://127.0.0.1:10019")
+                .withProperty("spring.security.oauth2.resourceserver.jwt.jwk-set-uri",
+                        "http://127.0.0.1:10019/oauth2/jwks")
+                .withProperty("spring.data.redis.host", "127.0.0.1")
+                .withProperty("spring.data.redis.port", "16379")
+                .withProperty("cors.allowed.origin.patterns", "http://127.0.0.1:10018")
+                .withProperty("agent.personal-workspace-storage.enabled", "true")
+                .withProperty("agent.personal-workspace-storage.root-directory",
+                        "/home/chc/.local/state/cyf-local-test-area/workspace-files")
+                .withProperty("agent.task-events.enabled", "true")
+                .withProperty("agent.task-events.allowed-scopes[0].tenant-id", "1")
+                .withProperty("agent.task-events.allowed-scopes[0].client-id", "cyf-local");
     }
 
     private void seed() throws Exception {
@@ -300,6 +356,274 @@ class LocalTestAreaRegistrationPreflightTest {
         assertDoesNotThrow(() -> LocalTestAreaRegistrationPreflight.verify(jdbc, environment, artifact));
         assertDoesNotThrow(() -> LocalTestAreaRegistrationPreflight.createAdmissionGuard(
                 jdbc, environment, artifact));
+    }
+
+    @Test
+    void fixedTenantAcceptsExactLocalScopeWithoutPlatformSql() {
+        useFixedTenantMode();
+        JdbcOperations noPlatformSql = mock(JdbcOperations.class);
+
+        assertDoesNotThrow(() -> LocalTestAreaRegistrationPreflight.verify(
+                noPlatformSql, environment, null));
+        verifyNoInteractions(noPlatformSql);
+
+        JdbcTemplate noGuardSql = mock(JdbcTemplate.class);
+        assertThrows(IllegalStateException.class,
+                () -> LocalTestAreaRegistrationPreflight.createAdmissionGuard(
+                        noGuardSql, environment, null));
+        verifyNoInteractions(noGuardSql);
+    }
+
+    @Test
+    void fixedTenantBeanAssemblyOmitsPlatformGuardAndSql() {
+        useFixedTenantMode();
+        JdbcOperations noPlatformSql = mock(JdbcOperations.class);
+        try (var context = new AnnotationConfigApplicationContext()) {
+            context.setEnvironment(environment);
+            context.registerBean(JdbcOperations.class, () -> noPlatformSql);
+            context.register(LocalTestAreaRegistrationPreflight.class);
+            context.refresh();
+            assertTrue(context.containsBean("localTestRegistration"));
+            assertFalse(context.containsBean("localTestTenantModuleAdmissionGuard"));
+        }
+        verifyNoInteractions(noPlatformSql);
+    }
+
+    @Test
+    void fixedTenantRejectsWrongTenantOrClientWithoutSql() {
+        useFixedTenantMode();
+        JdbcOperations noPlatformSql = mock(JdbcOperations.class);
+
+        environment.withProperty("cyf.tenant.fixed-tenant-id", "2");
+        assertThrows(IllegalStateException.class,
+                () -> LocalTestAreaRegistrationPreflight.verify(noPlatformSql, environment, null));
+        environment.withProperty("cyf.tenant.fixed-tenant-id", "1");
+        environment.withProperty("cyf.tenant.fixed-client-tenants.cyf-local", "2");
+        assertThrows(IllegalStateException.class,
+                () -> LocalTestAreaRegistrationPreflight.verify(noPlatformSql, environment, null));
+        environment.withProperty("cyf.tenant.fixed-client-tenants.cyf-local", "1");
+        environment.withProperty("cyf.tenant.fixed-client-tenants.other-client", "1");
+        assertThrows(IllegalStateException.class,
+                () -> LocalTestAreaRegistrationPreflight.verify(noPlatformSql, environment, null));
+        ((org.springframework.mock.env.MockPropertySource)
+                environment.getPropertySources().get("mockProperties"))
+                .getSource().remove("cyf.tenant.fixed-client-tenants.other-client");
+        environment.withProperty("cyf.worker.allowed-tenants[0]", "2");
+        assertThrows(IllegalStateException.class,
+                () -> LocalTestAreaRegistrationPreflight.verify(noPlatformSql, environment, null));
+
+        verifyNoInteractions(noPlatformSql);
+    }
+
+    @Test
+    void fixedTenantRejectsExternalPathsCorsAndUnsafeFeaturesWithoutSql() {
+        useFixedTenantMode();
+        JdbcOperations noPlatformSql = mock(JdbcOperations.class);
+
+        environment.withProperty("cyf.oauth.signing.private-jwk-path", "/tmp/signing.jwk");
+        assertThrows(IllegalStateException.class,
+                () -> LocalTestAreaRegistrationPreflight.verify(noPlatformSql, environment, null));
+        environment.withProperty("cyf.oauth.signing.private-jwk-path",
+                "/home/chc/.local/state/cyf-local-test-area/signing.jwk");
+        environment.withProperty("agent.personal-workspace-storage.root-directory", "/tmp/files");
+        assertThrows(IllegalStateException.class,
+                () -> LocalTestAreaRegistrationPreflight.verify(noPlatformSql, environment, null));
+        environment.withProperty("agent.personal-workspace-storage.root-directory",
+                "/home/chc/.local/state/cyf-local-test-area/workspace-files");
+        environment.withProperty("cors.allowed.origin.patterns", "http://localhost:10018");
+        assertThrows(IllegalStateException.class,
+                () -> LocalTestAreaRegistrationPreflight.verify(noPlatformSql, environment, null));
+        environment.withProperty("cors.allowed.origin.patterns", "http://127.0.0.1:10018");
+        environment.withProperty("agent.task-events.allowed-scopes[0].client-id", "other-client");
+        assertThrows(IllegalStateException.class,
+                () -> LocalTestAreaRegistrationPreflight.verify(noPlatformSql, environment, null));
+        environment.withProperty("agent.task-events.allowed-scopes[0].client-id", "cyf-local");
+        environment.withProperty("agent.rabbit-publish.enabled", "true");
+        assertThrows(IllegalStateException.class,
+                () -> LocalTestAreaRegistrationPreflight.verify(noPlatformSql, environment, null));
+
+        verifyNoInteractions(noPlatformSql);
+    }
+
+    @Test
+    void corsFilterAllowsOnlyCredentialedLocalUiPreflight() throws Exception {
+        try (var context = new AnnotationConfigApplicationContext()) {
+            context.getEnvironment().getPropertySources().addFirst(
+                    new org.springframework.core.env.MapPropertySource("localCors", Map.of(
+                            "cors.allowed.origin.patterns", "http://127.0.0.1:10018")));
+            context.register(CorsConfig.class);
+            context.refresh();
+
+            @SuppressWarnings("unchecked")
+            FilterRegistrationBean<CorsFilter> registration =
+                    context.getBean(FilterRegistrationBean.class);
+            CorsFilter filter = registration.getFilter();
+
+            AtomicBoolean localChainInvoked = new AtomicBoolean();
+            MockHttpServletRequest localRequest = new MockHttpServletRequest(
+                    "OPTIONS", "/oauth2/token");
+            localRequest.addHeader("Origin", "http://127.0.0.1:10018");
+            localRequest.addHeader("Access-Control-Request-Method", "POST");
+            localRequest.addHeader("Access-Control-Request-Headers",
+                    "Authorization,Content-Type");
+            MockHttpServletResponse localResponse = new MockHttpServletResponse();
+
+            filter.doFilter(localRequest, localResponse,
+                    (request, response) -> localChainInvoked.set(true));
+
+            assertEquals(200, localResponse.getStatus());
+            assertEquals("http://127.0.0.1:10018",
+                    localResponse.getHeader("Access-Control-Allow-Origin"));
+            assertEquals("true", localResponse.getHeader("Access-Control-Allow-Credentials"));
+            assertTrue(localResponse.getHeader("Access-Control-Allow-Methods").contains("POST"));
+            assertFalse(localChainInvoked.get());
+
+            AtomicBoolean externalChainInvoked = new AtomicBoolean();
+            MockHttpServletRequest externalRequest = new MockHttpServletRequest(
+                    "OPTIONS", "/oauth2/token");
+            externalRequest.addHeader("Origin", "https://evil.example");
+            externalRequest.addHeader("Access-Control-Request-Method", "POST");
+            externalRequest.addHeader("Access-Control-Request-Headers",
+                    "Authorization,Content-Type");
+            MockHttpServletResponse externalResponse = new MockHttpServletResponse();
+
+            filter.doFilter(externalRequest, externalResponse,
+                    (request, response) -> externalChainInvoked.set(true));
+
+            assertEquals(403, externalResponse.getStatus());
+            assertNull(externalResponse.getHeader("Access-Control-Allow-Origin"));
+            assertFalse(externalChainInvoked.get());
+        }
+    }
+
+    @Test
+    void fixedTenantBeforeRefreshDoesNotRequireOrQueryPlatformDatasource() {
+        useFixedTenantMode();
+        try (var context = new AnnotationConfigApplicationContext()) {
+            context.setEnvironment(environment);
+            assertDoesNotThrow(() -> new LocalTestAreaRegistrationPreflight.BeforeRefresh()
+                    .initialize(context));
+        }
+    }
+
+    @Test
+    void greyApplicationSettingsKeepLocalIsolationOverrides() {
+        JdbcTemplate unusedJdbc = mock(JdbcTemplate.class);
+        var application = new SpringApplication(GreyConfigFixture.class);
+        application.setWebApplicationType(WebApplicationType.NONE);
+        application.setDefaultProperties(Map.of(
+                "CYF_SHARED_DATABASE_URL", "jdbc:mysql://127.0.0.1:3306/jia",
+                "CYF_LOCAL_DATABASE_USER", "fixture-user",
+                "CYF_LOCAL_DATABASE_PASSWORD", "fixture-password",
+                "CYF_LOCAL_REDIS_PASSWORD", "fixture-local-redis-password",
+                "CYF_LOCAL_REGISTRATION_CREDENTIAL", "fixture-local-fixed"));
+        application.addInitializers(new LocalTestAreaRegistrationPreflight.BeforeRefresh());
+        try (var context = application.run(
+                "--spring.profiles.active=local-test-area",
+                "--spring.config.additional-location=classpath:/application-grey.properties,"
+                        + "classpath:/application-local-test-area.properties",
+                "--logging.file.name=",
+                "--logging.level.root=OFF")) {
+            var effective = context.getEnvironment();
+            assertEquals("true", effective.getProperty("jia.chat.ai.enabled"));
+            assertEquals("openai", effective.getProperty("jia.chat.ai.provider"));
+            assertEquals("openai", effective.getProperty("spring.ai.model.embedding"));
+            assertEquals("text-embedding-3-small",
+                    effective.getProperty("spring.ai.openai.embedding.model"));
+            assertEquals("false", effective.getProperty("server.ssl.enabled"));
+            assertEquals("fixture-local-redis-password", effective.getProperty("spring.data.redis.password"));
+            assertEquals("cyf-local", effective.getProperty("oauth.default.clientId"));
+            assertEquals("chat_memory_local_tenant_1", effective.getProperty("chat.memory.vector-index"));
+            assertEquals("/home/chc/.local/state/cyf-local-test-area/files",
+                    effective.getProperty("jia.file.path"));
+            assertDoesNotThrow(() -> LocalTestAreaRegistrationPreflight.verify(unusedJdbc, effective, null));
+            assertTrue(context.getBeansOfType(DataSource.class).isEmpty());
+            assertFalse(context.containsBean(TaskManagementConfigUtils.SCHEDULED_ANNOTATION_PROCESSOR_BEAN_NAME));
+        }
+        verifyNoInteractions(unusedJdbc);
+    }
+
+    @Test
+    void localProfilePropertiesDeclareExactFixedTenantBoundary() throws Exception {
+        Properties properties = new Properties();
+        try (InputStream input = getClass().getResourceAsStream(
+                "/application-local-test-area.properties")) {
+            assertTrue(input != null);
+            properties.load(input);
+        }
+        assertEquals("fixed-tenant", properties.getProperty("cyf.tenant.admission-mode"));
+        assertEquals("1", properties.getProperty("cyf.tenant.fixed-tenant-id"));
+        assertEquals("1", properties.getProperty("cyf.tenant.fixed-client-tenants.cyf-local"));
+        assertFalse(properties.containsKey("cyf.tenant.allowed-tenants[0]"));
+        assertEquals("true", properties.getProperty("cyf.tenant.mybatis.enabled"));
+        assertEquals(List.of(
+                        "task_plan", "task_item", "v_task_item",
+                        "chat_conversation", "chat_message", "chat_context_snapshot",
+                        "chat_request", "chat_turn", "chat_dispatch_outbox",
+                        "chat_conversation_event", "chat_interaction_step",
+                        "chat_step_execution_link", "chat_bounty_binding",
+                        "chat_conversation_asset", "chat_typed_outcome",
+                        "chat_typed_pending_question", "chat_typed_proposal",
+                        "chat_typed_admission", "agent_persona", "agent_persona_binding",
+                        "agent_identity_registry", "agent_identity_alias", "agent_runtime",
+                        "agent_task_meta", "agent_task_member", "agent_task_work_item",
+                        "agent_task_event", "agent_task_execution_grant", "agent_task_funding",
+                        "agent_task_funding_operation", "agent_task_provider_cost_consent",
+                        "agent_task_bounty_bootstrap_outbox", "agent_task_formal_delivery",
+                        "agent_task_request", "agent_selected_output_finalization",
+                        "agent_command_delivery", "agent_outbox_event",
+                        "agent_task_creation_operation", "agent_task_requirement_snapshot",
+                        "hall_request_draft", "agent_personal_workspace_file",
+                        "agent_personal_workspace_file_version",
+                        "agent_personal_workspace_operation",
+                        "agent_personal_workspace_execution",
+                        "agent_personal_workspace_execution_input",
+                        "agent_personal_workspace_execution_output",
+                        "agent_personal_workspace_conversation_file_link",
+                        "agent_personal_workspace_conversation_link_operation",
+                        "agent_personal_workspace_task_file_link",
+                        "agent_personal_workspace_task_link_operation",
+                        "hall_private_case", "hall_case_execution", "hall_private_mark"),
+                indexedProperties(properties, "cyf.tenant.mybatis.tenant-tables"));
+        assertEquals(List.of("user_info", "oauth_client", "user_perms_rel",
+                        "user_role_rel", "user_group_rel", "user_perms"),
+                indexedProperties(properties, "cyf.tenant.mybatis.global-tables"));
+        assertEquals("1", properties.getProperty("cyf.worker.allowed-tenants[0]"));
+        assertEquals("true", properties.getProperty("cyf.oauth.authorization-server.enabled"));
+        assertEquals("http://127.0.0.1:10019",
+                properties.getProperty("spring.security.oauth2.resourceserver.jwt.issuer-uri"));
+        assertEquals("http://127.0.0.1:10019/oauth2/jwks",
+                properties.getProperty("spring.security.oauth2.resourceserver.jwt.jwk-set-uri"));
+        assertEquals("/home/chc/.local/state/cyf-local-test-area/signing.jwk",
+                properties.getProperty("cyf.oauth.signing.private-jwk-path"));
+        assertEquals("http://127.0.0.1:10018",
+                properties.getProperty("cors.allowed.origin.patterns"));
+        assertEquals("127.0.0.1", properties.getProperty("spring.data.redis.host"));
+        assertEquals("16379", properties.getProperty("spring.data.redis.port"));
+        assertEquals("/home/chc/.local/state/cyf-local-test-area/workspace-files",
+                properties.getProperty("agent.personal-workspace-storage.root-directory"));
+        assertEquals("1", properties.getProperty("agent.task-events.allowed-scopes[0].tenant-id"));
+        assertEquals("cyf-local",
+                properties.getProperty("agent.task-events.allowed-scopes[0].client-id"));
+    }
+
+    private static List<String> indexedProperties(Properties properties, String prefix) {
+        List<String> values = new ArrayList<>();
+        for (int index = 0; ; index++) {
+            String value = properties.getProperty(prefix + "[" + index + "]");
+            if (value == null) break;
+            assertFalse(value.contains("*"), () -> "Wildcard table entry for " + prefix);
+            values.add(value);
+        }
+        String indexedPrefix = prefix + "[";
+        for (String name : properties.stringPropertyNames()) {
+            if (!name.startsWith(indexedPrefix)) continue;
+            String suffix = name.substring(indexedPrefix.length());
+            assertTrue(suffix.matches("[0-9]+\\]"), () -> "Malformed indexed property " + name);
+            int index = Integer.parseInt(suffix.substring(0, suffix.length() - 1));
+            assertTrue(index < values.size(), () -> "Non-contiguous or extra property " + name);
+        }
+        return List.copyOf(values);
     }
 
     @Test
@@ -661,6 +985,7 @@ class LocalTestAreaRegistrationPreflightTest {
         application.addInitializers(new LocalTestAreaRegistrationPreflight.BeforeRefresh());
         var failure = assertThrows(RuntimeException.class, () -> application.run(
                 "--spring.profiles.active=local-test-area",
+                "--cyf.tenant.admission-mode=platform",
                 "--spring.datasource.url=jdbc:h2:mem:must_not_connect",
                 "--logging.level.root=OFF"));
         Throwable cause = failure;
@@ -670,12 +995,18 @@ class LocalTestAreaRegistrationPreflightTest {
     }
 
     @Test
-    void localProfileDoesNotInstallMutatingDefaultSchemaInitializers() {
+    void localProfileExcludesMaintenanceInitializersWithoutDatabaseAccess() {
+        JdbcTemplate validationJdbc = mock(JdbcTemplate.class);
         try (var context = new AnnotationConfigApplicationContext()) {
             context.getEnvironment().setActiveProfiles("local-test-area");
+            context.getEnvironment().getPropertySources().addFirst(
+                    new org.springframework.core.env.MapPropertySource(
+                            "validate-only", Map.of("cyf.schema.mode", "validate")));
+            context.registerBean(JdbcTemplate.class, () -> validationJdbc);
             context.register(
                     cn.jia.agent.config.AgentSchemaInitializer.class,
                     cn.jia.agent.config.AgentRuntimeV1SchemaConfiguration.class,
+                    cn.jia.agent.config.AgentRuntimeSessionFenceSchemaInitializer.class,
                     cn.jia.agent.config.AgentExecutionReportSchemaConfiguration.class,
                     cn.jia.chat.config.ChatSchemaInitializer.class,
                     RegisteredDeploymentSchedulingConfiguration.class);
@@ -685,6 +1016,8 @@ class LocalTestAreaRegistrationPreflightTest {
             org.junit.jupiter.api.Assertions.assertTrue(
                     context.getBeansOfType(cn.jia.agent.config.AgentRuntimeV1SchemaInitializer.class).isEmpty());
             org.junit.jupiter.api.Assertions.assertTrue(
+                    context.getBeansOfType(cn.jia.agent.config.AgentRuntimeSessionFenceSchemaInitializer.class).isEmpty());
+            org.junit.jupiter.api.Assertions.assertTrue(
                     context.getBeansOfType(cn.jia.agent.config.AgentExecutionReportSchemaInitializer.class).isEmpty());
             org.junit.jupiter.api.Assertions.assertTrue(
                     context.getBeansOfType(cn.jia.chat.config.ChatSchemaInitializer.class).isEmpty());
@@ -692,6 +1025,109 @@ class LocalTestAreaRegistrationPreflightTest {
                     context.containsBean("registeredDeploymentSchedulingConfiguration"));
             org.junit.jupiter.api.Assertions.assertFalse(context.containsBean(
                     TaskManagementConfigUtils.SCHEDULED_ANNOTATION_PROCESSOR_BEAN_NAME));
+        }
+        org.mockito.Mockito.verify(validationJdbc).afterPropertiesSet();
+        org.mockito.Mockito.verifyNoMoreInteractions(validationJdbc);
+    }
+
+    @Test
+    void explicitMaintenanceProfileRetainsValidateOnlyRuntimeV1Checks() throws Exception {
+        JdbcTemplate validationJdbc = runtimeV1ValidationJdbc();
+        try (var context = new AnnotationConfigApplicationContext()) {
+            context.getEnvironment().setActiveProfiles("schema-maintenance");
+            context.getEnvironment().getPropertySources().addFirst(
+                    new org.springframework.core.env.MapPropertySource(
+                            "validate-only", Map.of("cyf.schema.mode", "validate")));
+            context.registerBean(JdbcTemplate.class, () -> validationJdbc);
+            context.register(cn.jia.agent.config.AgentRuntimeV1SchemaConfiguration.class);
+            context.refresh();
+            assertEquals(1, context.getBeansOfType(
+                    cn.jia.agent.config.AgentRuntimeV1SchemaInitializer.class).size());
+        }
+        verify(validationJdbc, org.mockito.Mockito.atLeastOnce()).getDataSource();
+        verify(validationJdbc, never()).execute(anyString());
+        verify(validationJdbc, never()).update(anyString(), any(Object[].class));
+    }
+
+    private static JdbcTemplate runtimeV1ValidationJdbc() throws Exception {
+        JdbcTemplate jdbc = mock(JdbcTemplate.class);
+        DataSource dataSource = mock(DataSource.class);
+        Connection connection = mock(Connection.class);
+        DatabaseMetaData metadata = mock(DatabaseMetaData.class);
+        when(jdbc.getDataSource()).thenReturn(dataSource);
+        when(dataSource.getConnection()).thenReturn(connection);
+        when(connection.getMetaData()).thenReturn(metadata);
+        when(metadata.getDatabaseProductName()).thenReturn("MySQL");
+        when(jdbc.queryForObject(anyString(), eq(Integer.class), any())).thenReturn(1);
+        when(jdbc.queryForMap(anyString(), any())).thenReturn(Map.of(
+                "engine", "InnoDB", "table_collation", "utf8mb4_0900_bin"));
+        when(jdbc.queryForList(anyString(), any(Object[].class))).thenAnswer(invocation -> {
+            String sql = invocation.getArgument(0);
+            if (sql.contains("information_schema.columns")) return runtimeV1Columns();
+            if (sql.contains("information_schema.statistics")) return runtimeV1Indexes();
+            if (sql.contains("information_schema.table_constraints")) return List.of(Map.of(
+                    "constraint_name", "chk_runtime_v1_status",
+                    "enforced", "YES",
+                    "check_clause", "status IN ('PENDING','ACTIVE','REVOKED','REBINDS_REQUIRED')"));
+            throw new AssertionError("Unexpected validation query: " + sql);
+        });
+        return jdbc;
+    }
+
+    private static List<Map<String, Object>> runtimeV1Columns() {
+        List<Map<String, Object>> rows = new ArrayList<>();
+        rows.add(column("id", "bigint", "NO", null, "auto_increment"));
+        rows.add(column("installation_id", "varchar(100)", "NO", "utf8mb4_0900_bin", ""));
+        rows.add(column("canonical_agent_id", "varchar(100)", "NO", "utf8mb4_0900_bin", ""));
+        rows.add(column("manifest_version", "varchar(100)", "NO", "utf8mb4_0900_bin", ""));
+        rows.add(column("manifest_sha256", "varchar(72)", "NO", "utf8mb4_0900_bin", ""));
+        rows.add(column("enrollment_secret_hash", "binary(32)", "NO", null, ""));
+        rows.add(column("enrollment_expires_at", "bigint", "NO", null, ""));
+        rows.add(column("enrollment_consumed_at", "bigint", "YES", null, ""));
+        rows.add(column("runtime_authorization_hash", "binary(32)", "YES", null, ""));
+        rows.add(column("runtime_authorization_issued_at", "bigint", "YES", null, ""));
+        rows.add(column("status", "varchar(32)", "NO", "utf8mb4_0900_bin", ""));
+        rows.add(column("last_heartbeat_at", "bigint", "YES", null, ""));
+        rows.add(column("version", "bigint", "NO", null, ""));
+        rows.add(column("tenant_id", "varchar(50)", "NO", "utf8mb4_0900_bin", ""));
+        rows.add(column("client_id", "varchar(50)", "NO", "utf8mb4_0900_bin", ""));
+        rows.add(column("create_time", "bigint", "YES", null, ""));
+        rows.add(column("update_time", "bigint", "YES", null, ""));
+        return rows;
+    }
+
+    private static Map<String, Object> column(
+            String name, String type, String nullable, String collation, String extra) {
+        Map<String, Object> row = new java.util.HashMap<>();
+        row.put("column_name", name);
+        row.put("column_type", type);
+        row.put("is_nullable", nullable);
+        row.put("collation_name", collation);
+        row.put("extra", extra);
+        return row;
+    }
+
+    private static List<Map<String, Object>> runtimeV1Indexes() {
+        List<Map<String, Object>> rows = new ArrayList<>();
+        addIndex(rows, "PRIMARY", 0, "id");
+        addIndex(rows, "idx_runtime_v1_identity", 1,
+                "tenant_id", "client_id", "canonical_agent_id", "status");
+        addIndex(rows, "idx_runtime_v1_scope", 1, "tenant_id", "client_id", "installation_id");
+        addIndex(rows, "uk_runtime_v1_authorization", 0, "runtime_authorization_hash");
+        addIndex(rows, "uk_runtime_v1_installation", 0, "installation_id");
+        return rows;
+    }
+
+    private static void addIndex(
+            List<Map<String, Object>> rows, String name, int nonUnique, String... columns) {
+        for (int index = 0; index < columns.length; index++) {
+            Map<String, Object> row = new java.util.HashMap<>();
+            row.put("index_name", name);
+            row.put("non_unique", nonUnique);
+            row.put("seq_in_index", index + 1);
+            row.put("column_name", columns[index]);
+            row.put("sub_part", null);
+            rows.add(row);
         }
     }
 
@@ -712,4 +1148,8 @@ class LocalTestAreaRegistrationPreflightTest {
     static class EarlyFixture {
         @Bean InitializingBean schemaInstallerProbe() { return () -> INITIALIZER_REACHED.set(true); }
     }
+
+    @Configuration(proxyBeanMethods = false)
+    @org.springframework.context.annotation.Import(RegisteredDeploymentSchedulingConfiguration.class)
+    static class GreyConfigFixture { }
 }

@@ -5,6 +5,8 @@ import cn.jia.agent.entity.AgentTaskWorkspaceDTO;
 import cn.jia.agent.exception.AgentTaskWorkspaceException;
 import cn.jia.agent.service.AgentTaskWorkspaceService;
 import cn.jia.core.util.JsonUtil;
+import cn.jia.core.tenant.BusinessScope;
+import cn.jia.core.tenant.TrustedTenantContext;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -44,12 +46,12 @@ public class AgentTaskWorkspaceController {
         requireRequestId(taskId, "taskId", 100);
         String actorAgentId = singleRequiredQuery(request, "actorAgentId");
         requireRequestId(actorAgentId, "actorAgentId", 100);
-        if (!taskEventsGate.allows("0", scope.clientId())) {
+        if (!taskEventsGate.allows(scope.tenantId(), scope.clientId())) {
             throw new AgentTaskWorkspaceException(
                     AgentTaskWorkspaceException.Reason.SNAPSHOT_UNAVAILABLE);
         }
         AgentTaskWorkspaceDTO snapshot = workspaceService.snapshot(
-                "0", scope.clientId(), scope.jiacn(), taskId, actorAgentId);
+                scope.tenantId(), scope.clientId(), scope.jiacn(), taskId, actorAgentId);
         byte[] body;
         try {
             body = JsonUtil.getMapper().writeValueAsBytes(snapshot);
@@ -112,7 +114,17 @@ public class AgentTaskWorkspaceController {
             throw new WorkspaceAuthenticationException(false);
         }
         Map<String, Object> claims = jwt.getToken().getClaims();
-        if (!"0".equals(claims.get("tenant_id")) || !"cyf".equals(claims.get("data_domain_id"))) {
+        final BusinessScope trusted;
+        try {
+            trusted = TrustedTenantContext.requireScope();
+        } catch (RuntimeException unavailable) {
+            throw new WorkspaceAuthenticationException(true);
+        }
+        Object claimedDomain = claims.get("data_domain_id");
+        if (!trusted.tenantId().value().equals(claims.get("tenant_id"))
+                || (claimedDomain != null
+                    && !trusted.dataDomainId().value().equals(claimedDomain))
+                || !"cyf".equals(trusted.dataDomainId().value())) {
             throw new WorkspaceAuthenticationException(true);
         }
         Object jiacn = claims.get("jiacn");
@@ -121,8 +133,12 @@ public class AgentTaskWorkspaceController {
                 || !validExact(ownerJiacn, 50) || !validExact(client, 50)) {
             throw new WorkspaceAuthenticationException(true);
         }
-        // This workspace snapshot is still a tenant-0 / client-scoped legacy read.
-        return new Scope(ownerJiacn, client);
+        if ("0".equals(ownerJiacn)
+                || !ownerJiacn.equals(trusted.ownerJiacn())
+                || !client.equals(trusted.callerClientId())) {
+            throw new WorkspaceAuthenticationException(true);
+        }
+        return new Scope(trusted.tenantId().value(), ownerJiacn, client);
     }
 
     private static String singleRequiredQuery(
@@ -176,7 +192,7 @@ public class AgentTaskWorkspaceController {
                 .body(cn.jia.core.entity.JsonResult.<Void>failure(code, message));
     }
 
-    private record Scope(String jiacn, String clientId) {
+    private record Scope(String tenantId, String jiacn, String clientId) {
     }
 
     public record WorkspaceError(String code, String message) {

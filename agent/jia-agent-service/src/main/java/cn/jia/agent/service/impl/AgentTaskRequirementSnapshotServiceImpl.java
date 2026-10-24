@@ -6,6 +6,7 @@ import cn.jia.agent.exception.AgentTaskCollaborationException;
 import cn.jia.agent.service.AgentTaskMutationTransaction;
 import cn.jia.agent.service.AgentTaskRequirementReadException;
 import cn.jia.agent.service.AgentTaskRequirementSnapshotService;
+import cn.jia.core.tenant.TenantId;
 import jakarta.inject.Inject;
 import jakarta.inject.Named;
 import org.springframework.dao.DataAccessException;
@@ -264,10 +265,11 @@ public final class AgentTaskRequirementSnapshotServiceImpl implements AgentTaskR
         }
     }
     private static void validScope(AgentTaskExecutionGrantService.Scope scope,String taskId) {
-        if (scope==null || !"0".equals(scope.tenantId()) || !exact(scope.clientId(),50)
+        if (scope==null || !exact(scope.clientId(),50)
                 || !exact(scope.ownerJiacn(),50) || "0".equals(scope.ownerJiacn())
                 || !exact(taskId,100))
             throw new IllegalArgumentException("Owner-scoped requirement key invalid");
+        TenantId.of(scope.tenantId());
     }
     private static boolean exact(String value,int max) {
         return value!=null && !value.isEmpty() && !hasUnpairedSurrogate(value)

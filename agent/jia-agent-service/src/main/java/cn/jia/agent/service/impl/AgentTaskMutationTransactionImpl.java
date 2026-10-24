@@ -5,6 +5,7 @@ import cn.jia.agent.entity.AgentTaskMetaEntity;
 import cn.jia.agent.exception.AgentTaskCollaborationException;
 import cn.jia.agent.exception.AgentTaskCollaborationException.Reason;
 import cn.jia.agent.service.AgentTaskMutationTransaction;
+import cn.jia.core.tenant.TenantId;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
@@ -180,13 +181,15 @@ public class AgentTaskMutationTransactionImpl implements AgentTaskMutationTransa
     private void requireOwnerScope(
             String tenantId, String clientId, String ownerJiacn, String taskId) {
         requireScope(tenantId, clientId, taskId);
-        if (!"0".equals(tenantId) || !isValidScopeId(ownerJiacn, 50) || "0".equals(ownerJiacn)) {
+        if (!isValidScopeId(ownerJiacn, 50) || "0".equals(ownerJiacn)) {
             throw new IllegalArgumentException("strict task owner scope is invalid");
         }
     }
 
     private void requireScope(String tenantId, String clientId, String taskId) {
-        if (!isValidScopeId(tenantId, 50)) {
+        try {
+            TenantId.of(tenantId);
+        } catch (IllegalArgumentException invalid) {
             throw new IllegalArgumentException("tenantId is invalid");
         }
         if (!isValidScopeId(clientId, 50)) {

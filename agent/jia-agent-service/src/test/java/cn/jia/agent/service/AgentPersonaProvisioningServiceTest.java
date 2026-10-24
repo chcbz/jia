@@ -7,6 +7,9 @@ import cn.jia.agent.entity.AgentRuntimeDTO;
 import cn.jia.agent.service.AgentHostedBindingTransaction.Prepared;
 import cn.jia.agent.service.AgentHostedBindingTransaction.Scope;
 import cn.jia.agent.service.impl.AgentServiceImpl.AgentBizException;
+import cn.jia.core.tenant.BusinessScope;
+import cn.jia.core.tenant.DataDomainId;
+import cn.jia.core.tenant.TenantId;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -23,12 +26,13 @@ class AgentPersonaProvisioningServiceTest {
         AgentHostedBindingTransaction transactions = mock(AgentHostedBindingTransaction.class);
         AgentHostedProfilePublisher publisher = mock(AgentHostedProfilePublisher.class);
         AgentRuntimeDTO runtime = runtime();
-        Scope nonDefaultClientScope = new Scope("0", "client-local-alt", "owner-local");
-        when(agentService.bindPersona("0", "client-local-alt", "owner-local", "wuyong"))
+        BusinessScope ordinaryScope = new BusinessScope(
+                TenantId.of("1"), DataDomainId.of("cyf"), "owner-local", "client-local-alt");
+        when(agentService.bindPersona("1", "client-local-alt", "owner-local", "wuyong"))
                 .thenReturn(runtime);
 
         var result = new AgentPersonaProvisioningService(agentService, transactions, publisher)
-                .bind(nonDefaultClientScope, "wuyong", "local");
+                .bindLocal(ordinaryScope, "wuyong");
 
         assertEquals("local", result.getMode());
         assertEquals(AGENT_ID, result.getAgentId());
@@ -41,8 +45,7 @@ class AgentPersonaProvisioningServiceTest {
         var setup = result.getRuntimeSetup();
         assertNotNull(setup);
         assertEquals("v1", setup.getRuntimeProtocolVersion());
-        // The current server Scope constructor permits only tenant 0; this does not claim multi-tenant binding.
-        assertEquals("0", setup.getTenantId());
+        assertEquals("1", setup.getTenantId());
         assertEquals("client-local-alt", setup.getClientId());
         assertEquals(AGENT_ID, setup.getCanonicalAgentId());
         assertEquals("1", setup.getManifestVersion());
@@ -51,8 +54,44 @@ class AgentPersonaProvisioningServiceTest {
                 setup.getGuideUrl());
         assertFalse(result.getCommands().toString().toLowerCase().contains("api key"));
         assertFalse(result.getCommands().toString().contains("codex-ws-agent"));
-        verify(agentService).bindPersona("0", "client-local-alt", "owner-local", "wuyong");
+        verify(agentService).bindPersona("1", "client-local-alt", "owner-local", "wuyong");
         verifyNoInteractions(transactions, publisher);
+    }
+
+    @Test
+    void hostedTenantZeroLocalCompatibilityStillUsesTheSameSafeContract() {
+        AgentService agentService = mock(AgentService.class);
+        AgentHostedBindingTransaction transactions = mock(AgentHostedBindingTransaction.class);
+        AgentHostedProfilePublisher publisher = mock(AgentHostedProfilePublisher.class);
+        when(agentService.bindPersona("0", "client-a", "owner-a", "wuyong"))
+                .thenReturn(runtime());
+
+        var result = new AgentPersonaProvisioningService(agentService, transactions, publisher)
+                .bind(SCOPE, "wuyong", null);
+
+        assertEquals("local", result.getMode());
+        assertEquals("0", result.getRuntimeSetup().getTenantId());
+        assertNull(result.getEnvExample());
+        assertNull(result.getProfileExample());
+        verifyNoInteractions(transactions, publisher);
+    }
+
+    @Test
+    void ordinaryLocalRejectsForeignDomainOrZeroOwnerBeforeAnyCollaboratorCall() {
+        AgentService agentService = mock(AgentService.class);
+        AgentHostedBindingTransaction transactions = mock(AgentHostedBindingTransaction.class);
+        AgentHostedProfilePublisher publisher = mock(AgentHostedProfilePublisher.class);
+        AgentPersonaProvisioningService service =
+                new AgentPersonaProvisioningService(agentService, transactions, publisher);
+
+        assertThrows(AgentBizException.class, () -> service.bindLocal(
+                new BusinessScope(TenantId.of("1"), DataDomainId.of("other"),
+                        "owner-local", "client-local"), "wuyong"));
+        assertThrows(AgentBizException.class, () -> service.bindLocal(
+                new BusinessScope(TenantId.of("1"), DataDomainId.of("cyf"),
+                        "0", "client-local"), "wuyong"));
+
+        verifyNoInteractions(agentService, transactions, publisher);
     }
 
     @Test

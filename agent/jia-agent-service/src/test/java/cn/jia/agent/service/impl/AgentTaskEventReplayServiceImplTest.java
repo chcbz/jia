@@ -11,6 +11,10 @@ import cn.jia.agent.service.AgentTaskEventReplayService.ReplaySignal;
 import cn.jia.agent.service.AgentTaskEventReplayService.ResyncReason;
 import cn.jia.agent.service.AgentTaskEventReplayService.ResyncRequired;
 import cn.jia.agent.service.AgentTaskEventReplayService.TaskScope;
+import cn.jia.core.tenant.BusinessScope;
+import cn.jia.core.tenant.DataDomainId;
+import cn.jia.core.tenant.TenantId;
+import cn.jia.core.tenant.TrustedTenantContext;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -66,6 +70,9 @@ class AgentTaskEventReplayServiceImplTest {
             new AgentTaskEventBroker.TaskScope(
                     SCOPE.tenantId(), SCOPE.clientId(), SCOPE.ownerJiacn(), SCOPE.taskId());
     private static final Duration VERIFY_TIMEOUT = Duration.ofSeconds(5);
+    private static final BusinessScope AUTHORITY = new BusinessScope(
+            TenantId.of(SCOPE.tenantId()), DataDomainId.of("cyf"),
+            SCOPE.ownerJiacn(), SCOPE.clientId());
 
     private TrackingBroker broker;
     private AgentTaskEventDao eventDao;
@@ -74,6 +81,11 @@ class AgentTaskEventReplayServiceImplTest {
     private ExecutorService delivery;
     private ScheduledThreadPoolExecutor timer;
     private AgentTaskEventReplayServiceImpl service;
+
+    private Flux<ReplaySignal> replay(TaskScope scope, long afterVersion) {
+        return TrustedTenantContext.withScope(AUTHORITY,
+                () -> service.replay(scope, afterVersion));
+    }
 
     @BeforeEach
     void setUp() {
@@ -104,19 +116,19 @@ class AgentTaskEventReplayServiceImplTest {
 
     @Test
     void rejectsNegativeCursorCompletesPrecreatedReplayAndRejectsNewPostCloseReplay() {
-        StepVerifier.create(service.replay(SCOPE, -1L))
+        StepVerifier.create(replay(SCOPE, -1L))
                 .expectErrorMatches(error -> error instanceof IllegalArgumentException
                         && error.getMessage().contains("negative"))
                 .verify(VERIFY_TIMEOUT);
         assertEquals(0, service.activeSubscriptionCount());
         assertEquals(0, broker.trackedLeaseCount());
 
-        Flux<ReplaySignal> createdBeforeClose = service.replay(SCOPE, 0L);
+        Flux<ReplaySignal> createdBeforeClose = replay(SCOPE, 0L);
         service.close();
         StepVerifier.create(createdBeforeClose)
                 .expectComplete()
                 .verify(VERIFY_TIMEOUT);
-        StepVerifier.create(service.replay(SCOPE, 0L))
+        StepVerifier.create(replay(SCOPE, 0L))
                 .expectErrorMatches(error -> error instanceof IllegalStateException
                         && error.getMessage().contains("closed"))
                 .verify(VERIFY_TIMEOUT);
@@ -128,7 +140,7 @@ class AgentTaskEventReplayServiceImplTest {
     void emptyInitialHistoryStaysLiveAndAllDurableReadsRunOnlyOnReplayWorker() {
         store.setCurrent(0L);
 
-        StepVerifier.create(service.replay(SCOPE, 0L))
+        StepVerifier.create(replay(SCOPE, 0L))
                 .expectSubscription()
                 .then(() -> awaitCondition(() -> store.currentCalls.get() >= 1))
                 .expectNoEvent(Duration.ofMillis(80))
@@ -147,7 +159,7 @@ class AgentTaskEventReplayServiceImplTest {
     void replaysExactEventsAcrossPagesAndSupportsProcessRestartCursor() {
         store.appendRange(1L, 5L);
 
-        StepVerifier.create(service.replay(SCOPE, 0L).take(5))
+        StepVerifier.create(replay(SCOPE, 0L).take(5))
                 .assertNext(signal -> assertDurable(signal, 1L))
                 .assertNext(signal -> assertDurable(signal, 2L))
                 .assertNext(signal -> assertDurable(signal, 3L))
@@ -157,7 +169,7 @@ class AgentTaskEventReplayServiceImplTest {
                 .verify(VERIFY_TIMEOUT);
         awaitCleaned();
 
-        StepVerifier.create(service.replay(SCOPE, 3L).take(2))
+        StepVerifier.create(replay(SCOPE, 3L).take(2))
                 .assertNext(signal -> assertDurable(signal, 4L))
                 .assertNext(signal -> assertDurable(signal, 5L))
                 .expectComplete()
@@ -186,7 +198,7 @@ class AgentTaskEventReplayServiceImplTest {
             return store.currentValue();
         };
 
-        StepVerifier.create(service.replay(SCOPE, 0L).take(1))
+        StepVerifier.create(replay(SCOPE, 0L).take(1))
                 .then(() -> {
                     await(broker.firstSubscribed);
                     await(currentReadEntered);
@@ -216,7 +228,7 @@ class AgentTaskEventReplayServiceImplTest {
             return store.defaultPage(cursor, 2);
         };
 
-        StepVerifier.create(service.replay(SCOPE, 0L).take(3))
+        StepVerifier.create(replay(SCOPE, 0L).take(3))
                 .then(() -> {
                     await(firstPageEntered);
                     store.append(3L);
@@ -236,7 +248,7 @@ class AgentTaskEventReplayServiceImplTest {
     void duplicateAndOutOfOrderWakeupsCoalesceIntoOneSerializedDurableCatchUp() {
         store.setCurrent(0L);
         List<Long> received = new CopyOnWriteArrayList<>();
-        Disposable replay = service.replay(SCOPE, 0L)
+        Disposable replay = replay(SCOPE, 0L)
                 .ofType(DurableEvent.class)
                 .map(DurableEvent::eventVersion)
                 .take(3)
@@ -263,7 +275,7 @@ class AgentTaskEventReplayServiceImplTest {
         store.setCurrent(0L);
         List<Long> received = new CopyOnWriteArrayList<>();
         CountDownLatch completed = new CountDownLatch(1);
-        service.replay(SCOPE, 0L)
+        replay(SCOPE, 0L)
                 .ofType(DurableEvent.class)
                 .map(DurableEvent::eventVersion)
                 .take(2)
@@ -293,18 +305,18 @@ class AgentTaskEventReplayServiceImplTest {
     @Test
     void cursorAheadHistoryGapAndRetentionGapHaveStableTerminalReasons() {
         store.appendRange(1L, 3L);
-        assertResync(service.replay(SCOPE, 5L), 3L, ResyncReason.CURSOR_AHEAD);
+        assertResync(replay(SCOPE, 5L), 3L, ResyncReason.CURSOR_AHEAD);
         awaitCleaned();
 
         store.clearRowsAndSetCurrent(2L);
-        assertResync(service.replay(SCOPE, 0L), 2L, ResyncReason.HISTORY_GAP);
+        assertResync(replay(SCOPE, 0L), 2L, ResyncReason.HISTORY_GAP);
         awaitCleaned();
 
         store.clearRowsAndSetCurrent(5L);
         store.put(entity(SCOPE, 3L));
         store.put(entity(SCOPE, 4L));
         store.put(entity(SCOPE, 5L));
-        assertResync(service.replay(SCOPE, 1L), 5L, ResyncReason.RETENTION_GAP);
+        assertResync(replay(SCOPE, 1L), 5L, ResyncReason.RETENTION_GAP);
         awaitCleaned();
     }
 
@@ -320,7 +332,7 @@ class AgentTaskEventReplayServiceImplTest {
         store.pageFunction = cursor -> pages.getOrDefault(cursor, List.of());
 
         StepVerifier.Step<ReplaySignal> verification =
-                StepVerifier.create(service.replay(SCOPE, 0L));
+                StepVerifier.create(replay(SCOPE, 0L));
         for (long version : emittedPrefix) {
             verification = verification.assertNext(signal -> assertDurable(signal, version));
         }
@@ -375,7 +387,7 @@ class AgentTaskEventReplayServiceImplTest {
                 ? List.of(entity(SCOPE, 1L), entity(SCOPE, 3L))
                 : List.of();
 
-        StepVerifier.create(service.replay(SCOPE, 0L), 1L)
+        StepVerifier.create(replay(SCOPE, 0L), 1L)
                 .assertNext(signal -> assertDurable(signal, 1L))
                 .then(() -> awaitCondition(() -> service.activeSubscriptionCount() == 0
                         && service.activeTimerCount() == 0
@@ -394,7 +406,7 @@ class AgentTaskEventReplayServiceImplTest {
     void zeroDemandRetainsResyncWinnerUntilLaterRequest() {
         store.setCurrent(0L);
 
-        StepVerifier.create(service.replay(SCOPE, 1L), 0L)
+        StepVerifier.create(replay(SCOPE, 1L), 0L)
                 .then(() -> awaitCondition(() -> service.activeSubscriptionCount() == 0
                         && service.activeTimerCount() == 0
                         && broker.trackedLeaseCount() == 0
@@ -419,7 +431,7 @@ class AgentTaskEventReplayServiceImplTest {
         service = new AgentTaskEventReplayServiceImpl(eventDao, broker);
         store.setCurrent(0L);
         DemandControlledSubscriber subscriber = new DemandControlledSubscriber();
-        service.replay(SCOPE, 1L).subscribe(subscriber);
+        replay(SCOPE, 1L).subscribe(subscriber);
         awaitCondition(() -> service.activeSubscriptionCount() == 0
                 && service.activeTimerCount() == 0
                 && broker.trackedLeaseCount() == 0
@@ -448,7 +460,7 @@ class AgentTaskEventReplayServiceImplTest {
             }
             store.setCurrent(0L);
             DemandControlledSubscriber subscriber = new DemandControlledSubscriber();
-            service.replay(SCOPE, 1L).subscribe(subscriber);
+            replay(SCOPE, 1L).subscribe(subscriber);
             awaitCondition(() -> service.activeSubscriptionCount() == 0
                     && service.activeTimerCount() == 0
                     && broker.trackedLeaseCount() == 0
@@ -492,7 +504,7 @@ class AgentTaskEventReplayServiceImplTest {
                 2, 2, 4, 4, Duration.ofHours(1)));
         store.appendRange(1L, 3L);
 
-        StepVerifier.create(service.replay(SCOPE, 0L))
+        StepVerifier.create(replay(SCOPE, 0L))
                 .assertNext(signal -> assertDurable(signal, 1L))
                 .assertNext(signal -> assertDurable(signal, 2L))
                 .assertNext(signal -> assertResyncSignal(
@@ -509,12 +521,12 @@ class AgentTaskEventReplayServiceImplTest {
         store.currentSupplier = () -> {
             throw new IllegalStateException("database unavailable");
         };
-        assertResync(service.replay(SCOPE, 7L),
+        assertResync(replay(SCOPE, 7L),
                 0L, ResyncReason.DURABLE_STATE_UNPROVABLE);
         awaitCleaned();
 
         store.currentSupplier = () -> -1L;
-        assertResync(service.replay(SCOPE, 0L),
+        assertResync(replay(SCOPE, 0L),
                 0L, ResyncReason.DURABLE_STATE_UNPROVABLE);
         awaitCleaned();
     }
@@ -531,7 +543,7 @@ class AgentTaskEventReplayServiceImplTest {
             return store.currentValue();
         };
         List<Long> received = new CopyOnWriteArrayList<>();
-        Disposable replay = service.replay(SCOPE, 0L)
+        Disposable replay = replay(SCOPE, 0L)
                 .ofType(DurableEvent.class)
                 .map(DurableEvent::eventVersion)
                 .take(1)
@@ -570,7 +582,7 @@ class AgentTaskEventReplayServiceImplTest {
         List<Long> received = new CopyOnWriteArrayList<>();
         AtomicReference<String> callbackThread = new AtomicReference<>();
         CountDownLatch completed = new CountDownLatch(1);
-        service.replay(SCOPE, 0L)
+        replay(SCOPE, 0L)
                 .ofType(DurableEvent.class)
                 .take(1)
                 .subscribe(event -> {
@@ -616,7 +628,7 @@ class AgentTaskEventReplayServiceImplTest {
             }
         };
 
-        service.replay(SCOPE, 0L).subscribe(subscriber);
+        replay(SCOPE, 0L).subscribe(subscriber);
         await(first);
         await(terminal);
 
@@ -652,7 +664,7 @@ class AgentTaskEventReplayServiceImplTest {
                 }
             }
         };
-        service.replay(SCOPE, 0L).subscribe(subscriber);
+        replay(SCOPE, 0L).subscribe(subscriber);
         await(callbackEntered);
 
         for (int i = 0; i < 100; i++) {
@@ -691,7 +703,7 @@ class AgentTaskEventReplayServiceImplTest {
             BaseSubscriber<ReplaySignal> subscriber = blockingSubscriber(
                     callbacksEntered, releaseCallbacks);
             blockedSubscribers.add(subscriber);
-            service.replay(SCOPE, 0L).subscribe(subscriber);
+            replay(SCOPE, 0L).subscribe(subscriber);
         }
         await(callbacksEntered);
         awaitCondition(() -> service.inFlightCatchUpCount() == 0
@@ -706,7 +718,7 @@ class AgentTaskEventReplayServiceImplTest {
         assertEquals(4, service.deliveryPermitCount());
         assertEquals(0, service.inFlightCatchUpCount());
 
-        StepVerifier.create(service.replay(SCOPE, 0L).take(1))
+        StepVerifier.create(replay(SCOPE, 0L).take(1))
                 .assertNext(signal -> assertDurable(signal, 1L))
                 .expectComplete()
                 .verify(VERIFY_TIMEOUT);
@@ -730,7 +742,7 @@ class AgentTaskEventReplayServiceImplTest {
             int expectedDeliveries = index + 1;
             BaseSubscriber<ReplaySignal> subscriber = blockingSubscriber(
                     callbacksEntered, releaseCallbacks);
-            service.replay(SCOPE, 0L).subscribe(subscriber);
+            replay(SCOPE, 0L).subscribe(subscriber);
             long expectedRemainingCallbacks = 3L - expectedDeliveries;
             awaitCondition(() -> callbacksEntered.getCount() == expectedRemainingCallbacks
                     && service.inFlightDeliveryCount() == expectedDeliveries);
@@ -746,7 +758,7 @@ class AgentTaskEventReplayServiceImplTest {
         int pendingDeliveriesAtCapacity = service.pendingDeliveryTaskCount();
         int durableReadsAtCapacity = store.currentCalls.get();
 
-        StepVerifier.create(service.replay(SCOPE, 0L))
+        StepVerifier.create(replay(SCOPE, 0L))
                 .expectErrorMatches(error -> error instanceof ReplayCapacityException
                         && error.getMessage().equals(
                                 "Task event replay capacity is exhausted"))
@@ -771,8 +783,8 @@ class AgentTaskEventReplayServiceImplTest {
     void activeSubscriptionCapFailsBeforeBrokerTimerOrWorkerAndTimerQueueConverges() {
         replaceResources(policy(Duration.ofHours(1)), resourceLimits(2, 2, 4), 2, 4, 4);
         store.setCurrent(0L);
-        Disposable first = service.replay(SCOPE, 0L).subscribe();
-        Disposable second = service.replay(SCOPE, 0L).subscribe();
+        Disposable first = replay(SCOPE, 0L).subscribe();
+        Disposable second = replay(SCOPE, 0L).subscribe();
         awaitCondition(() -> service.activeSubscriptionCount() == 2
                 && service.activeTimerCount() == 2
                 && broker.trackedLeaseCount() == 2
@@ -780,7 +792,7 @@ class AgentTaskEventReplayServiceImplTest {
                 && service.scheduledWorkerTaskCount() == 0);
         int durableReadsAtCapacity = store.currentCalls.get();
 
-        StepVerifier.create(service.replay(SCOPE, 0L))
+        StepVerifier.create(replay(SCOPE, 0L))
                 .expectError(ReplayCapacityException.class)
                 .verify(VERIFY_TIMEOUT);
 
@@ -850,7 +862,7 @@ class AgentTaskEventReplayServiceImplTest {
             }
         };
 
-        service.replay(SCOPE, 0L).subscribe(subscriber);
+        replay(SCOPE, 0L).subscribe(subscriber);
         await(callbackEntered);
         awaitCondition(() -> service.activeSubscriptionCount() == 0
                 && service.activeTimerCount() == 0
@@ -893,7 +905,7 @@ class AgentTaskEventReplayServiceImplTest {
             }
         };
 
-        Disposable replay = service.replay(SCOPE, 0L).subscribe();
+        Disposable replay = replay(SCOPE, 0L).subscribe();
         await(currentEntered);
         assertEquals(1, broker.trackedLeaseCount());
         assertEquals(1, service.activeTimerCount());
@@ -913,7 +925,7 @@ class AgentTaskEventReplayServiceImplTest {
         List<Throwable> errors = new CopyOnWriteArrayList<>();
         CountDownLatch terminal = new CountDownLatch(1);
         AtomicReference<Disposable> replay = new AtomicReference<>();
-        Thread subscriber = new Thread(() -> replay.set(service.replay(SCOPE, 0L).subscribe(
+        Thread subscriber = new Thread(() -> replay.set(replay(SCOPE, 0L).subscribe(
                 ignored -> { },
                 error -> {
                     errors.add(error);
@@ -962,7 +974,8 @@ class AgentTaskEventReplayServiceImplTest {
                 store.setCurrent(0L);
                 List<Flux<ReplaySignal>> replays = new ArrayList<>();
                 for (int index = 0; index < 25; index++) {
-                    replays.add(batchService.replay(SCOPE, 0L));
+                    replays.add(TrustedTenantContext.withScope(AUTHORITY,
+                            () -> batchService.replay(SCOPE, 0L)));
                 }
                 CountDownLatch firstWaveReady = new CountDownLatch(8);
                 CountDownLatch start = new CountDownLatch(1);
@@ -1017,7 +1030,7 @@ class AgentTaskEventReplayServiceImplTest {
         AtomicInteger completions = new AtomicInteger();
         AtomicReference<Throwable> failure = new AtomicReference<>();
         CountDownLatch terminal = new CountDownLatch(1);
-        Disposable replay = service.replay(SCOPE, 0L).subscribe(
+        Disposable replay = replay(SCOPE, 0L).subscribe(
                 ignored -> { },
                 error -> {
                     failure.set(error);
@@ -1052,7 +1065,7 @@ class AgentTaskEventReplayServiceImplTest {
             store.setCurrent(0L);
             AtomicInteger completions = new AtomicInteger();
             AtomicInteger errors = new AtomicInteger();
-            Disposable replay = service.replay(SCOPE, 0L).subscribe(
+            Disposable replay = replay(SCOPE, 0L).subscribe(
                     ignored -> { },
                     ignored -> errors.incrementAndGet(),
                     completions::incrementAndGet);
@@ -1087,7 +1100,7 @@ class AgentTaskEventReplayServiceImplTest {
         for (int iteration = 0; iteration < 12; iteration++) {
             BlockingRejectingExecutor rejecting = replaceWithRejectingDelivery();
             store.setCurrent(0L);
-            Flux<ReplaySignal> replay = service.replay(SCOPE, 0L);
+            Flux<ReplaySignal> replay = replay(SCOPE, 0L);
             service.close();
             rejecting.rejectPendingExecution();
 
@@ -1108,7 +1121,7 @@ class AgentTaskEventReplayServiceImplTest {
             AtomicInteger completions = new AtomicInteger();
             List<Throwable> errors = new CopyOnWriteArrayList<>();
             CountDownLatch terminal = new CountDownLatch(1);
-            Thread subscriber = new Thread(() -> service.replay(SCOPE, 0L).subscribe(
+            Thread subscriber = new Thread(() -> replay(SCOPE, 0L).subscribe(
                     ignored -> { },
                     error -> {
                         errors.add(error);
@@ -1142,7 +1155,7 @@ class AgentTaskEventReplayServiceImplTest {
         CountDownLatch terminal = new CountDownLatch(1);
         List<String> sequence = new CopyOnWriteArrayList<>();
         AtomicBoolean completed = new AtomicBoolean();
-        Disposable replay = service.replay(SCOPE, 0L).subscribe(signal -> {
+        Disposable replay = replay(SCOPE, 0L).subscribe(signal -> {
             assertTrue(!completed.get(), "event must never follow service-close terminal");
             long version = ((DurableEvent) signal).eventVersion();
             sequence.add("event-" + version);
@@ -1181,7 +1194,7 @@ class AgentTaskEventReplayServiceImplTest {
         CountDownLatch releaseCallback = new CountDownLatch(1);
         CountDownLatch terminal = new CountDownLatch(1);
         AtomicInteger completions = new AtomicInteger();
-        Disposable replay = service.replay(SCOPE, 0L).subscribe(ignored -> {
+        Disposable replay = replay(SCOPE, 0L).subscribe(ignored -> {
             callbackEntered.countDown();
             while (releaseCallback.getCount() > 0) {
                 try {
@@ -1225,7 +1238,7 @@ class AgentTaskEventReplayServiceImplTest {
         service = new AgentTaskEventReplayServiceImpl(eventDao, broker);
         CountDownLatch completed = new CountDownLatch(1);
         AtomicInteger completions = new AtomicInteger();
-        Disposable replay = service.replay(SCOPE, 0L).subscribe(
+        Disposable replay = replay(SCOPE, 0L).subscribe(
                 ignored -> { }, ignored -> { }, () -> {
                     completions.incrementAndGet();
                     completed.countDown();

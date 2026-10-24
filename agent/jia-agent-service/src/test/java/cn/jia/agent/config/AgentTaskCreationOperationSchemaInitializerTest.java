@@ -1,7 +1,10 @@
 package cn.jia.agent.config;
 
+import cn.jia.core.tenant.TenantId;
 import org.junit.jupiter.api.Test;
+import org.springframework.core.io.ClassPathResource;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -31,9 +34,45 @@ class AgentTaskCreationOperationSchemaInitializerTest {
                 "uk_atco_scope_key", "uk_atco_scope_operation", "chk_atco_scope",
                 "chk_atco_identity", "chk_atco_hash", "chk_atco_refs",
                 "chk_atco_receipt", "chk_atco_time", "requirement_revision=1",
-                "json_length(input_refs_json) between 0 and 32"}) {
+                "json_length(input_refs_json) between 0 and 32", "tenant_id is not null",
+                "tenant_id regexp binary '^(0|[1-9][0-9]{0,49})$'",
+                "tenant_id not regexp binary '[^0-9]'",
+                "instr(tenant_id, char(10)) = 0", "instr(tenant_id, char(13)) = 0",
+                "owner_jiacn<>'0'"}) {
             assertTrue(normalized.contains(required), required);
         }
+    }
+
+    @Test
+    void tenantCheckMatchesCanonicalJavaTenantIdBoundary() {
+        String fiftyDigits = "1" + "0".repeat(49);
+        for (String valid : List.of("0", "1", fiftyDigits)) {
+            assertEquals(valid, TenantId.of(valid).value());
+        }
+        assertThrows(NullPointerException.class, () -> TenantId.of(null));
+        for (String invalid : List.of("", "00", "01", "-1", "+1", "１２", "١",
+                " 1", "1 ", "1\t", "1\u000b", "1\u000c", "1\n2", "1\r2", "1\n",
+                "1\u0085", "1\u2028", "1\u2029",
+                "1" + "0".repeat(50))) {
+            assertThrows(IllegalArgumentException.class, () -> TenantId.of(invalid), invalid);
+        }
+    }
+
+    @Test
+    void manualCandidateIsSevenAtomicCheckOnlyAltersWithoutBackfill() throws Exception {
+        String sql = new ClassPathResource("db/agent-tenant-checks-manual-candidate-20261023.sql")
+                .getContentAsString(StandardCharsets.UTF_8);
+        String normalized = sql.replaceAll("(?m)^\\s*--.*$", " ")
+                .replaceAll("\\s+", " ").trim().toLowerCase(Locale.ROOT);
+        assertEquals(7, normalized.split(";").length);
+        assertEquals(7, count(normalized, "alter table "));
+        assertEquals(7, count(normalized, " drop check "));
+        assertEquals(7, count(normalized, " add constraint "));
+        assertFalse(normalized.contains(" insert "));
+        assertFalse(normalized.contains(" update "));
+        assertFalse(normalized.contains(" delete "));
+        assertFalse(normalized.contains(" modify column "));
+        assertTrue(sql.contains("Execution requires shared-consumer compatibility verification"));
     }
 
     @Test
@@ -46,7 +85,11 @@ class AgentTaskCreationOperationSchemaInitializerTest {
         String actual = row(actualCatalogRows(), "chk_atco_scope").get("CHECK_CLAUSE").toString();
         String canonical = AgentTaskCreationOperationSchemaInitializer
                 .canonicalCheckExpression(actual);
-        assertEquals("((tenant_id='0')and(owner_jiacn<>'0'))", canonical);
+        assertEquals("((tenant_idisnotnull)andregexp_like(tenant_id,"
+                + "cast('^(0|[1-9][0-9]{0,49})$'ascharcharsetbinary))and"
+                + "not(regexp_like(tenant_id,cast('[^0-9]'ascharcharsetbinary)))and"
+                + "(instr(tenant_id,char(10))=0)and(instr(tenant_id,char(13))=0)and"
+                + "(owner_jiacn<>'0'))", canonical);
         assertTrue(canonical.contains("<>"));
         assertTrue(canonical.startsWith("(("));
         assertTrue(canonical.endsWith("))"));
@@ -154,7 +197,13 @@ class AgentTaskCreationOperationSchemaInitializerTest {
                 "((json_type(`input_refs_json`) = _utf8mb4'ARRAY') and "
                         + "(json_length(`input_refs_json`) between 0 and 32))")));
         rows.add(check("chk_atco_scope", "YES", escaped(
-                "((`tenant_id` = _utf8mb4'0') and (`owner_jiacn` <> _utf8mb4'0'))")));
+                "((`tenant_id` is not null) and regexp_like(`tenant_id`,"
+                        + "cast(_utf8mb4'^(0|[1-9][0-9]{0,49})$' as char charset binary)) "
+                        + "and not(regexp_like(`tenant_id`,"
+                        + "cast(_utf8mb4'[^0-9]' as char charset binary))) "
+                        + "and (instr(`tenant_id`,char(10)) = 0) "
+                        + "and (instr(`tenant_id`,char(13)) = 0) "
+                        + "and (`owner_jiacn` <> _utf8mb4'0'))")));
         rows.add(check("chk_atco_time", "YES",
                 "((`created_at` > 0) and ((`completed_at` is null) "
                         + "or (`completed_at` >= `created_at`)))"));
@@ -176,5 +225,13 @@ class AgentTaskCreationOperationSchemaInitializerTest {
 
     private static String escaped(String expression) {
         return expression.replace("'", "\\'");
+    }
+
+    private static int count(String value, String needle) {
+        int count = 0;
+        for (int at = 0; (at = value.indexOf(needle, at)) >= 0; at += needle.length()) {
+            count++;
+        }
+        return count;
     }
 }

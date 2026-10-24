@@ -5,6 +5,7 @@ import cn.jia.agent.dao.AgentIdentityAliasDao;
 import cn.jia.agent.entity.AgentIdentityAliasEntity;
 import cn.jia.agent.mapper.AgentIdentityAliasMapper;
 import cn.jia.common.dao.BaseDaoImpl;
+import cn.jia.core.tenant.TenantId;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import jakarta.inject.Named;
 
@@ -54,8 +55,9 @@ public class AgentIdentityAliasDaoImpl
         requireExact(tenantId, "tenantId", 200);
         requireExact(clientId, "clientId", 200);
         requireExact(ownerJiacn, "ownerJiacn", 200);
-        if (!"0".equals(tenantId) || "0".equals(ownerJiacn)) {
-            throw new IllegalArgumentException("identity alias scope requires tenant 0 and a real owner");
+        TenantId.of(tenantId);
+        if ("0".equals(ownerJiacn)) {
+            throw new IllegalArgumentException("identity alias scope requires a real owner");
         }
     }
 

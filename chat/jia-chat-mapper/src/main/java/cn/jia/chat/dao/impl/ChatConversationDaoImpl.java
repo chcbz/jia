@@ -33,8 +33,8 @@ public class ChatConversationDaoImpl extends BaseDaoImpl<ChatConversationMapper,
         return scope.mode() == ConversationDataScope.Mode.DOMAIN
                 ? baseMapper.findExactDomainScopedById(
                 scope.tenantId(), scope.dataDomainId(), scope.ownerJiacn(), id)
-                : baseMapper.findExactScopedById(
-                scope.ownerJiacn(), scope.callerClientId(), id);
+                : baseMapper.findExactScopedByIdInTenant(
+                scope.tenantId(), scope.ownerJiacn(), scope.callerClientId(), id);
     }
 
     @Override
@@ -45,8 +45,8 @@ public class ChatConversationDaoImpl extends BaseDaoImpl<ChatConversationMapper,
         return scope.mode() == ConversationDataScope.Mode.DOMAIN
                 ? baseMapper.lockExactDomainScopedById(
                 scope.tenantId(), scope.dataDomainId(), scope.ownerJiacn(), id)
-                : baseMapper.lockExactScopedById(
-                scope.ownerJiacn(), scope.callerClientId(), id);
+                : baseMapper.lockExactScopedByIdInTenant(
+                scope.tenantId(), scope.ownerJiacn(), scope.callerClientId(), id);
     }
 
     @Override
@@ -57,8 +57,8 @@ public class ChatConversationDaoImpl extends BaseDaoImpl<ChatConversationMapper,
         return scope.mode() == ConversationDataScope.Mode.DOMAIN
                 ? baseMapper.lockExactDomainScopedByIdIncludingDeleted(
                 scope.tenantId(), scope.dataDomainId(), scope.ownerJiacn(), id)
-                : baseMapper.lockExactScopedByIdIncludingDeleted(
-                scope.ownerJiacn(), scope.callerClientId(), id);
+                : baseMapper.lockExactScopedByIdIncludingDeletedInTenant(
+                scope.tenantId(), scope.ownerJiacn(), scope.callerClientId(), id);
     }
 
     @Override
@@ -72,8 +72,8 @@ public class ChatConversationDaoImpl extends BaseDaoImpl<ChatConversationMapper,
         int deleted = scope.mode() == ConversationDataScope.Mode.DOMAIN
                 ? baseMapper.softDeleteExactDomainScopedById(
                 scope.tenantId(), scope.dataDomainId(), scope.ownerJiacn(), id, deletedAt)
-                : baseMapper.softDeleteExactScopedById(
-                scope.ownerJiacn(), scope.callerClientId(), id, deletedAt);
+                : baseMapper.softDeleteExactScopedByIdInTenant(
+                scope.tenantId(), scope.ownerJiacn(), scope.callerClientId(), id, deletedAt);
         if (deleted == 1) {
             String scopeKey = scope.mode() == ConversationDataScope.Mode.DOMAIN
                     ? scope.dataDomainId() : scope.callerClientId();
@@ -98,8 +98,8 @@ public class ChatConversationDaoImpl extends BaseDaoImpl<ChatConversationMapper,
                 ? baseMapper.updateExactDomainOwnedFields(
                 scope.tenantId(), scope.dataDomainId(), scope.ownerJiacn(), entity.getId(),
                 entity.getTitle(), entity.getStatus())
-                : baseMapper.updateExactOwnedFields(
-                scope.ownerJiacn(), scope.callerClientId(), entity.getId(),
+                : baseMapper.updateExactOwnedFieldsInTenant(
+                scope.tenantId(), scope.ownerJiacn(), scope.callerClientId(), entity.getId(),
                 entity.getTitle(), entity.getStatus());
     }
 
@@ -114,8 +114,8 @@ public class ChatConversationDaoImpl extends BaseDaoImpl<ChatConversationMapper,
         int count = scope.mode() == ConversationDataScope.Mode.DOMAIN
                 ? baseMapper.countExactDomainLiveGeneration(
                 scope.tenantId(), scope.dataDomainId(), scope.ownerJiacn(), id, expectedGeneration)
-                : baseMapper.countExactLiveGeneration(
-                scope.ownerJiacn(), scope.callerClientId(), id, expectedGeneration);
+                : baseMapper.countExactLiveGenerationInTenant(
+                scope.tenantId(), scope.ownerJiacn(), scope.callerClientId(), id, expectedGeneration);
         return count == 1;
     }
 

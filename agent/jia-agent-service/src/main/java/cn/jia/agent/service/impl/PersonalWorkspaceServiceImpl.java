@@ -8,6 +8,7 @@ import cn.jia.agent.entity.PersonalWorkspaceViews;
 import cn.jia.agent.exception.PersonalWorkspaceException;
 import cn.jia.agent.service.PersonalWorkspaceService;
 import cn.jia.agent.service.PersonalWorkspaceStorage;
+import cn.jia.core.tenant.TenantId;
 import jakarta.inject.Inject;
 import jakarta.inject.Named;
 
@@ -252,7 +253,7 @@ public class PersonalWorkspaceServiceImpl implements PersonalWorkspaceService {
     private static String filename(String raw){text(raw,255);if(raw.contains("/")||raw.indexOf('\\')>=0||raw.equals(".")||raw.equals(".."))bad();return raw;}
     private static String family(String mime){if(mime.startsWith("image/"))return "IMAGE";if(mime.startsWith("audio/"))return "AUDIO";if("text/plain".equals(mime))return "TEXT";if("application/pdf".equals(mime))return "PDF";if(mime.contains("spreadsheet"))return "SPREADSHEET";if(mime.contains("presentation")||"application/vnd.ms-powerpoint".equals(mime))return "PRESENTATION";return "DOCUMENT";}
     private static String key(Idempotency i){if(i==null)bad();id(i.key(),"Idempotency-Key",100);return i.key();}
-    private static void validateScope(Scope s){if(s==null||!"0".equals(s.tenantId()))bad();id(s.clientId(),"clientId",50);id(s.ownerJiacn(),"owner",50);if("0".equals(s.ownerJiacn()))bad();}
+    private static void validateScope(Scope s){if(s==null)bad();try{TenantId.of(s.tenantId());}catch(RuntimeException invalid){bad();}id(s.clientId(),"clientId",50);id(s.ownerJiacn(),"owner",50);if("0".equals(s.ownerJiacn()))bad();}
     private static void id(String value,String name,int max){if(value==null||value.isBlank()||!value.equals(value.strip())||value.codePointCount(0,value.length())>max||value.chars().anyMatch(Character::isISOControl))bad();}
     private static void text(String value,int max){id(value,"text",max);}
     private static String lower(String v){if(v==null)return null;String mime=v.split(";",2)[0].trim().toLowerCase(Locale.ROOT);return switch(mime){case "image/jpg","image/pjpeg" -> "image/jpeg";case "image/x-png" -> "image/png";case "image/x-ms-bmp" -> "image/bmp";case "image/x-tiff" -> "image/tiff";default -> mime;};}

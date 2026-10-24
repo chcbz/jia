@@ -23,6 +23,7 @@ import cn.jia.agent.service.AgentWorkItemDependencyService;
 import cn.jia.agent.state.AgentTaskMemberStatus;
 import cn.jia.agent.state.AgentTaskStatus;
 import cn.jia.agent.state.AgentTaskWorkItemStatus;
+import cn.jia.core.tenant.TenantId;
 import cn.jia.core.util.StringUtil;
 import jakarta.inject.Inject;
 import jakarta.inject.Named;
@@ -555,8 +556,16 @@ public class AgentTaskStateServiceImpl implements AgentTaskStateService {
 
     private void requireStrictScopeAndId(
             String tenantId, String clientId, String ownerJiacn, String id, String idName) {
-        if (!"0".equals(tenantId) || StringUtil.isBlank(clientId)
-                || StringUtil.isBlank(ownerJiacn) || "0".equals(ownerJiacn)) {
+        try {
+            TenantId.of(tenantId);
+        } catch (RuntimeException invalid) {
+            throw invalidRequest("strict task owner scope is required");
+        }
+        if (StringUtil.isBlank(clientId) || !clientId.equals(clientId.strip())
+                || clientId.chars().anyMatch(Character::isISOControl)
+                || StringUtil.isBlank(ownerJiacn) || !ownerJiacn.equals(ownerJiacn.strip())
+                || ownerJiacn.chars().anyMatch(Character::isISOControl)
+                || "0".equals(ownerJiacn)) {
             throw invalidRequest("strict task owner scope is required");
         }
         requireId(id, idName);

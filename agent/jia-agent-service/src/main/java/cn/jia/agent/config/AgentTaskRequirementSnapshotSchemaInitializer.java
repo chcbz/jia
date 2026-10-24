@@ -5,27 +5,39 @@ import org.springframework.core.io.ClassPathResource;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.nio.charset.StandardCharsets;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 /** Only creates an absent table; rejects drift rather than rewriting existing identity/history. */
 @org.springframework.context.annotation.Profile("schema-maintenance")
 public final class AgentTaskRequirementSnapshotSchemaInitializer implements InitializingBean {
     private static final String TABLE = "agent_task_requirement_snapshot";
-    private static final Map<String, String> CHECKS = Map.of(
-            "chk_atrs_scope",
-            "((`tenant_id` = _utf8mb4\\'0\\') and (`owner_jiacn` <> _utf8mb4\\'0\\'))",
-            "chk_atrs_content",
+    private static final String SCOPE_CHECK = AgentTaskFundingSchemaInitializer.normalizeCheck(
+            "tenant_id IS NOT NULL AND regexp_like(tenant_id, "
+                    + "cast('^(0|[1-9][0-9]{0,49})$' AS char charset binary)) "
+                    + "AND NOT(regexp_like(tenant_id,"
+                    + "cast('[^0-9]' AS char charset binary))) "
+                    + "AND instr(tenant_id,char(10))=0 AND instr(tenant_id,char(13))=0 "
+                    + "AND owner_jiacn<>'0'");
+    private static final String CONTENT_CHECK =
             "((`revision` >= 1) and (`task_version_at_confirmation` >= 0) and "
                     + "(char_length(`title`) > 0) and regexp_like(`content_sha256`,"
                     + "_utf8mb4\\'^[0-9a-f]{64}$\\') and (`source` in "
-                    + "(_utf8mb4\\'CREATE\\',_utf8mb4\\'RECONFIRM\\')) and (`created_at` > 0))");
+                    + "(_utf8mb4\\'CREATE\\',_utf8mb4\\'RECONFIRM\\')) and (`created_at` > 0))";
     private final JdbcTemplate jdbc;
+    private final boolean validateOnly;
 
     public AgentTaskRequirementSnapshotSchemaInitializer(JdbcTemplate jdbc) {
+        this(jdbc, false);
+    }
+
+    AgentTaskRequirementSnapshotSchemaInitializer(JdbcTemplate jdbc, boolean validateOnly) {
         this.jdbc = Objects.requireNonNull(jdbc);
+        this.validateOnly = validateOnly;
     }
 
     @Override public void afterPropertiesSet() {
@@ -36,7 +48,11 @@ public final class AgentTaskRequirementSnapshotSchemaInitializer implements Init
         } catch (Exception e) { throw new IllegalStateException("Requirement snapshot database unavailable", e); }
         Integer count = jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.tables "
                 + "WHERE table_schema=DATABASE() AND table_name=?", Integer.class, TABLE);
-        if (count == null || count == 0) jdbc.execute(ddl());
+        if (count == null || count == 0) {
+            SchemaValidationMode.requireMutationAllowed(validateOnly,
+                    "Requirement snapshot schema");
+            jdbc.execute(ddl());
+        }
         validate();
     }
 
@@ -90,14 +106,7 @@ public final class AgentTaskRequirementSnapshotSchemaInitializer implements Init
                 + "ON cc.constraint_catalog=tc.constraint_catalog AND cc.constraint_schema=tc.constraint_schema "
                 + "AND cc.constraint_name=tc.constraint_name WHERE tc.constraint_schema=DATABASE() "
                 + "AND tc.table_name=? AND tc.constraint_type='CHECK'", TABLE);
-        if (checks.size()!=CHECKS.size()) throw new IllegalStateException("Snapshot CHECK drift");
-        for (Map.Entry<String, String> expected : CHECKS.entrySet()) {
-            var row=checks.stream().filter(r -> expected.getKey().equals(r.get("constraint_name"))).findFirst()
-                    .orElseThrow(() -> new IllegalStateException("Snapshot CHECK absent: "+expected.getKey()));
-            if (!"YES".equalsIgnoreCase(Objects.toString(row.get("enforced"), ""))
-                    || !expected.getValue().equals(Objects.toString(row.get("check_clause"), "")))
-                throw new IllegalStateException("Snapshot CHECK drift: "+expected.getKey());
-        }
+        validateChecks(checks);
     }
     static void index(List<Map<String,Object>> rows,String name,int nonUnique,List<String> expected) {
         var matching=rows.stream().filter(r -> name.equals(r.get("index_name"))).toList();
@@ -110,4 +119,32 @@ public final class AgentTaskRequirementSnapshotSchemaInitializer implements Init
                 throw new IllegalStateException("Snapshot index drift: "+name);
         }
     }
+
+    static void validateChecks(List<Map<String, Object>> rows) {
+        Map<String, Check> actual = new LinkedHashMap<>();
+        for (Map<String, Object> row : rows) {
+            String name = Objects.toString(value(row, "constraint_name"), "");
+            Object clause = value(row, "check_clause");
+            if (!"YES".equalsIgnoreCase(Objects.toString(value(row, "enforced"), ""))
+                    || name.isBlank()
+                    || clause == null
+                    || actual.put(name, new Check(clause.toString())) != null) {
+                throw new IllegalStateException("Snapshot CHECK catalog is invalid");
+            }
+        }
+        if (!actual.keySet().equals(Set.of("chk_atrs_scope", "chk_atrs_content"))
+                || !SCOPE_CHECK.equals(AgentTaskFundingSchemaInitializer.normalizeCheck(
+                        actual.get("chk_atrs_scope").clause()))
+                || !CONTENT_CHECK.equals(actual.get("chk_atrs_content").clause())) {
+            throw new IllegalStateException("Snapshot CHECK drift");
+        }
+    }
+
+    private static Object value(Map<String, Object> row, String key) {
+        return row.entrySet().stream()
+                .filter(entry -> entry.getKey().equalsIgnoreCase(key))
+                .findFirst().map(Map.Entry::getValue).orElse(null);
+    }
+
+    private record Check(String clause) { }
 }

@@ -6,15 +6,23 @@ import cn.jia.agent.mapper.AgentRuntimeV1InstallationMapper;
 import cn.jia.common.dao.BaseDaoImpl;
 import jakarta.inject.Named;
 import lombok.RequiredArgsConstructor;
+import org.springframework.dao.DuplicateKeyException;
 
 @Named
 @RequiredArgsConstructor
 public class AgentRuntimeV1InstallationDaoImpl extends BaseDaoImpl<AgentRuntimeV1InstallationMapper, AgentRuntimeV1InstallationEntity>
         implements AgentRuntimeV1InstallationDao {
-    @Override public void insertCandidateIfAbsent(AgentRuntimeV1InstallationEntity candidate) { baseMapper.insertCandidateIfAbsent(candidate); }
+    @Override public void insertCandidateIfAbsent(AgentRuntimeV1InstallationEntity candidate) {
+        try {
+            baseMapper.insertCandidateIfAbsent(candidate);
+        } catch (DuplicateKeyException ignored) {
+            // The caller must lock and validate the exact persisted winner.
+        }
+    }
+    @Override public AgentRuntimeV1InstallationEntity findBootstrap(String installationId) { return baseMapper.selectBootstrapByInstallation(installationId); }
     @Override public AgentRuntimeV1InstallationEntity lock(String installationId) { return baseMapper.selectByInstallationForUpdate(installationId); }
     @Override public AgentRuntimeV1InstallationEntity findInScope(String tenantId, String clientId, String installationId) { return baseMapper.selectByInstallationInScope(tenantId, clientId, installationId); }
-    @Override public AgentRuntimeV1InstallationEntity findActiveByAuthorizationHash(byte[] hash) { return baseMapper.selectActiveByAuthorizationHash(hash); }
+    @Override public AgentRuntimeV1InstallationEntity findBootstrapActiveByAuthorizationHash(byte[] hash) { return baseMapper.selectBootstrapActiveByAuthorizationHash(hash); }
     @Override public int activate(AgentRuntimeV1InstallationEntity e, byte[] hash, long now) { return baseMapper.activateEnrollment(e.getId(), e.getVersion(), hash, now); }
     @Override public int heartbeat(AgentRuntimeV1InstallationEntity e, long now) { return baseMapper.heartbeat(e.getId(), e.getVersion(), now); }
     @Override public int revoke(AgentRuntimeV1InstallationEntity e, long now) { return baseMapper.revoke(e.getId(), e.getVersion(), now); }

@@ -34,13 +34,16 @@ class AgentPersonaDaoCacheInvalidationTest {
     void catalogProjectionAllowsCanonicalSingleTenantScope() throws Exception {
         AgentPersonaMapper mapper = mock(AgentPersonaMapper.class);
         List<AgentPersonaEntity> expected = List.of(persona("wuyong", "吴用"));
-        when(mapper.selectCatalogProjection("0", "jia_client")).thenReturn(expected);
+        when(mapper.selectCatalogProjection("0", "jia_client", "")).thenReturn(expected);
 
-        List<AgentPersonaEntity> result = dao(mapper, new AgentPersonaCatalogCache())
-                .findCatalogProjection("0", "jia_client");
+        AgentPersonaDaoImpl dao = dao(mapper, new AgentPersonaCatalogCache());
+        List<AgentPersonaEntity> result = cn.jia.core.tenant.TrustedTenantContext.withScope(
+                new cn.jia.core.tenant.BusinessScope(cn.jia.core.tenant.TenantId.of("0"),
+                        cn.jia.core.tenant.DataDomainId.of("cyf"),"owner","jia_client"),
+                () -> dao.findCatalogProjection("0", "jia_client"));
 
         assertSame(expected, result);
-        verify(mapper).selectCatalogProjection(eq("0"), eq("jia_client"));
+        verify(mapper).selectCatalogProjection(eq("0"), eq("jia_client"), eq(""));
     }
 
     @Test

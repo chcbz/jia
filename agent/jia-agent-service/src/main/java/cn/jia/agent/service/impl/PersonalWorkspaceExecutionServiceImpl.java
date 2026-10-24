@@ -2848,7 +2848,8 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         return new CommitView(manifestId, "COMMITTED", items);
     }
     private void requireOwnedTarget(OwnerScope scope, String targetAgentId) {
-        List<AgentRuntimeEntity> candidates = runtimes.findCandidateRosterByOwner(scope.clientId(), scope.ownerJiacn());
+        List<AgentRuntimeEntity> candidates = runtimes.findCandidateRosterByOwner(
+                scope.tenantId(), scope.clientId(), scope.ownerJiacn());
         boolean found = candidates != null && candidates.stream().anyMatch(candidate -> candidate != null
                 && same(candidate.getAgentId(), targetAgentId) && same(candidate.getClientId(), scope.clientId())
                 && same(candidate.getOwnerJiacn(), scope.ownerJiacn()));

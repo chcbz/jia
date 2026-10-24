@@ -4,6 +4,7 @@ import cn.jia.agent.service.AgentTaskExecutionGrantService;
 import cn.jia.agent.service.AgentTaskRequirementReadException;
 import cn.jia.agent.service.AgentTaskRequirementSnapshotService;
 import cn.jia.core.entity.JsonResult;
+import cn.jia.core.tenant.TrustedTenantContext;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
@@ -106,12 +107,22 @@ public final class AgentTaskRequirementSnapshotController {
         Map<String,Object> claims=jwt.getToken().getClaims();
         Object owner=claims.get("jiacn");
         Object client=claims.get("client_id");
-        if (!(owner instanceof String ownerJiacn) || !(client instanceof String clientId)
-                || !validExact(ownerJiacn,50) || "0".equals(ownerJiacn)
-                || !validExact(clientId,50)) {
+        final cn.jia.core.tenant.BusinessScope trusted;
+        try {
+            trusted=TrustedTenantContext.requireScope();
+        } catch (RuntimeException unavailable) {
             throw new AuthenticationFailure();
         }
-        return new AgentTaskExecutionGrantService.Scope("0",clientId,ownerJiacn);
+        if (!(owner instanceof String ownerJiacn) || !(client instanceof String clientId)
+                || !validExact(ownerJiacn,50) || "0".equals(ownerJiacn)
+                || !validExact(clientId,50)
+                || !Objects.equals(trusted.tenantId().value(),claims.get("tenant_id"))
+                || !Objects.equals(ownerJiacn,trusted.ownerJiacn())
+                || !Objects.equals(clientId,trusted.callerClientId())) {
+            throw new AuthenticationFailure();
+        }
+        return new AgentTaskExecutionGrantService.Scope(
+                trusted.tenantId().value(),clientId,ownerJiacn);
     }
 
     private static void requireExact(String value,int maxCodePoints) {

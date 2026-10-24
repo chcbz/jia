@@ -36,7 +36,6 @@ public interface AgentTaskCreationOperationMapper
               (#{operationId},#{ownerJiacn},#{idempotencyKey},#{requestHash},'PROCESSING',
                NULL,NULL,#{inputRefsJson},#{createdAt},NULL,
                #{tenantId},#{clientId},#{createdAt},#{createdAt})
-            ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id),update_time=update_time
             """)
     int reserve(@Param("tenantId") String tenantId, @Param("clientId") String clientId,
             @Param("ownerJiacn") String ownerJiacn,
@@ -51,7 +50,7 @@ public interface AgentTaskCreationOperationMapper
              WHERE tenant_id=#{tenantId} AND client_id=#{clientId}
                AND owner_jiacn=#{ownerJiacn} AND idempotency_key=#{idempotencyKey}
             """ + EXACT_SCOPE + EXACT_KEY + """
-             LIMIT 1 FOR UPDATE
+             FOR UPDATE
             """)
     AgentTaskCreationOperationEntity selectForUpdate(
             @Param("tenantId") String tenantId, @Param("clientId") String clientId,

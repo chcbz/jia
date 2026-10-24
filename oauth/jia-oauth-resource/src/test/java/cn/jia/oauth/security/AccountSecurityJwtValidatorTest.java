@@ -2,6 +2,7 @@ package cn.jia.oauth.security;
 
 import cn.jia.core.tenant.DataDomainId;
 import cn.jia.core.tenant.TenantId;
+import cn.jia.oauth.config.ResourceServerConfig.TenantDeploymentProperties;
 import cn.jia.test.BaseMockTest;
 import cn.jia.user.security.AccountSecurityService;
 import cn.jia.user.security.AccountSecuritySnapshot;
@@ -26,6 +27,107 @@ import static org.mockito.Mockito.*;
 class AccountSecurityJwtValidatorTest extends BaseMockTest {
     @Mock TenantAuthorizationVerifier tenantAuthorizationVerifier;
     @Mock AccountSecurityService service;
+
+    @Test
+    void fixedTenantAcceptsCurrentBasicUserWithoutPlatformVerifierAndBuildsBasicScope() {
+        TenantAdmissionPolicy policy = fixedTenantPolicy("1");
+        Map<String, Object> user = userClaims("17", 4L);
+        user.put("tenant_id", "1");
+        user.put("tenantId", "1");
+        user.put("tenant_claim_version", "1");
+        when(service.findByUserId(17)).thenReturn(Optional.of(active(17, "Jia-A", 4)));
+
+        assertValid(new AccountSecurityJwtValidator(service, null, policy), user);
+        assertFalse(new TenantDeploymentTokenValidator(policy).validate(jwt(user)).hasErrors());
+        var scope = new UserAdmissionScopeResolver(policy)
+                .resolve(new JwtAuthenticationToken(jwt(user), List.of()));
+
+        assertEquals("1", scope.businessScope().tenantId().value());
+        assertEquals("cyf", scope.businessScope().dataDomainId().value());
+        assertEquals("Jia-A", scope.businessScope().ownerJiacn());
+        assertEquals("web", scope.businessScope().callerClientId());
+        assertTrue(scope.platformVersions().isEmpty());
+        verifyNoInteractions(tenantAuthorizationVerifier);
+    }
+
+    @Test
+    void fixedTenantRejectsMissingForeignNonCanonicalMachineAndPartialPlatformClaims() {
+        TenantAdmissionPolicy policy = fixedTenantPolicy("1");
+        AccountSecurityJwtValidator account = new AccountSecurityJwtValidator(service, null, policy);
+        TenantDeploymentTokenValidator deployment = new TenantDeploymentTokenValidator(policy);
+        when(service.findByUserId(17)).thenReturn(Optional.of(active(17, "Jia-A", 4)));
+
+        for (String tenant : List.of("0", "01")) {
+            Map<String, Object> user = userClaims("17", 4L);
+            user.put("tenant_id", tenant);
+            assertInvalid(account, user);
+            assertTrue(deployment.validate(jwt(user)).hasErrors());
+        }
+        Map<String, Object> missing = userClaims("17", 4L);
+        assertInvalid(account, missing);
+        assertTrue(deployment.validate(jwt(missing)).hasErrors());
+
+        Map<String, Object> partial = userClaims("17", 4L);
+        partial.put("tenant_id", "1");
+        partial.put("tenant_name", "华南测试区");
+        assertInvalid(account, partial);
+        assertTrue(deployment.validate(jwt(partial)).hasErrors());
+
+        Map<String, Object> machine = claims(
+                "token_kind", "machine", "sub", "agent-client", "client_id", "agent-client");
+        assertTrue(deployment.validate(jwt(machine)).hasErrors());
+        assertThrows(AccessDeniedException.class, () -> new UserAdmissionScopeResolver(policy)
+                .resolve(new JwtAuthenticationToken(jwt(machine), List.of())));
+    }
+
+    @Test
+    void fixedTenantRejectsConflictingDomainAliasVersionAndAliasOnlyClaimsAcrossAllBoundaries() {
+        TenantAdmissionPolicy policy = fixedTenantPolicy("1");
+        AccountSecurityJwtValidator account = new AccountSecurityJwtValidator(service, null, policy);
+        TenantDeploymentTokenValidator deployment = new TenantDeploymentTokenValidator(policy);
+        UserAdmissionScopeResolver resolver = new UserAdmissionScopeResolver(policy);
+        when(service.findByUserId(17)).thenReturn(Optional.of(active(17, "Jia-A", 4)));
+
+        Map<String, Object> foreignDomain = userClaims("17", 4L);
+        foreignDomain.putAll(tenantBundle());
+        foreignDomain.put("data_domain_id", "other");
+        assertRejectedEverywhere(account, deployment, resolver, foreignDomain);
+
+        Map<String, Object> conflictingAlias = userClaims("17", 4L);
+        conflictingAlias.put("tenant_id", "1");
+        conflictingAlias.put("tenantId", "0");
+        assertRejectedEverywhere(account, deployment, resolver, conflictingAlias);
+
+        Map<String, Object> unknownVersion = userClaims("17", 4L);
+        unknownVersion.put("tenant_id", "1");
+        unknownVersion.put("tenant_claim_version", "2");
+        assertRejectedEverywhere(account, deployment, resolver, unknownVersion);
+
+        Map<String, Object> aliasOnly = userClaims("17", 4L);
+        aliasOnly.put("tenantId", "1");
+        aliasOnly.put("tenant_claim_version", "1");
+        assertRejectedEverywhere(account, deployment, resolver, aliasOnly);
+
+        Map<String, Object> nullCanonical = userClaims("17", 4L);
+        nullCanonical.put("tenant_id", null);
+        nullCanonical.put("tenantId", "1");
+        nullCanonical.put("tenant_claim_version", "1");
+        assertRejectedEverywhere(account, deployment, resolver, nullCanonical);
+    }
+
+    @Test
+    void fixedTenantStillRejectsInactiveOrRevokedAccounts() {
+        TenantAdmissionPolicy policy = fixedTenantPolicy("1");
+        Map<String, Object> user = userClaims("17", 4L);
+        user.put("tenant_id", "1");
+        AccountSecurityJwtValidator validator = new AccountSecurityJwtValidator(service, null, policy);
+
+        when(service.findByUserId(17)).thenReturn(Optional.of(
+                new AccountSecuritySnapshot(17, "Jia-A", AccountState.SUSPENDED, 4)));
+        assertInvalid(validator, user);
+        when(service.findByUserId(17)).thenReturn(Optional.of(active(17, "Jia-A", 5)));
+        assertInvalid(validator, user);
+    }
 
     @Test
     void resolvesOnlyAuthenticatedBoundUserScopeForTransactionalAdmission() {
@@ -181,6 +283,13 @@ class AccountSecurityJwtValidatorTest extends BaseMockTest {
         return new AccountSecuritySnapshot(id, jiacn, AccountState.ACTIVE, epoch);
     }
 
+    private static TenantAdmissionPolicy fixedTenantPolicy(String tenantId) {
+        TenantDeploymentProperties properties = new TenantDeploymentProperties();
+        properties.setAdmissionMode(TenantAdmissionPolicy.Mode.FIXED_TENANT);
+        properties.setFixedTenantId(tenantId);
+        return TenantAdmissionPolicy.from(properties);
+    }
+
     private static Map<String, Object> userClaims(Object uid, Object epoch) {
         return claims("token_kind", "user", "uid", uid, "jiacn", "Jia-A", "username", "alice",
                 "auth_epoch", epoch, "sub", "alice", "client_id", "web");
@@ -200,6 +309,17 @@ class AccountSecurityJwtValidatorTest extends BaseMockTest {
 
     private static void assertInvalid(AccountSecurityJwtValidator validator, Map<String, Object> claims) {
         assertTrue(validator.validate(jwt(claims)).hasErrors(), claims.toString());
+    }
+
+    private static void assertRejectedEverywhere(AccountSecurityJwtValidator account,
+                                                 TenantDeploymentTokenValidator deployment,
+                                                 UserAdmissionScopeResolver resolver,
+                                                 Map<String, Object> claims) {
+        assertInvalid(account, claims);
+        assertTrue(deployment.validate(jwt(claims)).hasErrors(), claims.toString());
+        assertThrows(AccessDeniedException.class,
+                () -> resolver.resolve(new JwtAuthenticationToken(jwt(claims), List.of())),
+                claims.toString());
     }
 
     private static Jwt jwt(Map<String, Object> claims) {

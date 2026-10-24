@@ -24,6 +24,7 @@ public final class AccountSecurityTokenCustomizer implements OAuth2TokenCustomiz
 
     private final AccountSecurityService accountSecurityService;
     private final String tenantId;
+    private final FixedTenantAuthorizationPolicy fixedTenantPolicy;
 
     public AccountSecurityTokenCustomizer(AccountSecurityService accountSecurityService) {
         this(accountSecurityService, TenantClaimPolicy.defaultSingleTenant());
@@ -40,9 +41,21 @@ public final class AccountSecurityTokenCustomizer implements OAuth2TokenCustomiz
 
     public AccountSecurityTokenCustomizer(AccountSecurityService accountSecurityService,
             JdbcTenantAuthorizationRepository repository, String tenantId) {
+        this(accountSecurityService, repository, tenantId, null);
+    }
+
+    public AccountSecurityTokenCustomizer(AccountSecurityService accountSecurityService,
+            FixedTenantAuthorizationPolicy fixedTenantPolicy) {
+        this(accountSecurityService, null, fixedTenantPolicy.fixedTenantId().value(), fixedTenantPolicy);
+    }
+
+    private AccountSecurityTokenCustomizer(AccountSecurityService accountSecurityService,
+            JdbcTenantAuthorizationRepository repository, String tenantId,
+            FixedTenantAuthorizationPolicy fixedTenantPolicy) {
         this.accountSecurityService = accountSecurityService;
         this.tenantAuthorizationRepository = repository;
         this.tenantId = TenantClaimPolicy.exact(tenantId);
+        this.fixedTenantPolicy = fixedTenantPolicy;
     }
 
     private final JdbcTenantAuthorizationRepository tenantAuthorizationRepository;
@@ -64,7 +77,9 @@ public final class AccountSecurityTokenCustomizer implements OAuth2TokenCustomiz
                         .claim("jiacn", userDetails.getJiacn())
                         .claim("username", userDetails.getUsername())
                         .claim("auth_epoch", userDetails.getLoginAuthEpoch());
-                if (tenantAuthorizationRepository != null) {
+                if (fixedTenantPolicy != null) {
+                    addFixedTenantClaims(context);
+                } else if (tenantAuthorizationRepository != null) {
                     addBoundTenantClaims(context, userDetails);
                 }
             }
@@ -77,6 +92,7 @@ public final class AccountSecurityTokenCustomizer implements OAuth2TokenCustomiz
         if (!AuthorizationGrantType.CLIENT_CREDENTIALS.equals(context.getAuthorizationGrantType())) {
             throw invalidGrant();
         }
+        if (fixedTenantPolicy != null) throw invalidGrant();
         context.getClaims().claims(claims -> {
             claims.put(TOKEN_KIND, MACHINE_TOKEN_KIND);
             claims.remove("uid");
@@ -84,6 +100,21 @@ public final class AccountSecurityTokenCustomizer implements OAuth2TokenCustomiz
             claims.remove("username");
             claims.remove("auth_epoch");
         });
+    }
+
+    private void addFixedTenantClaims(JwtEncodingContext context) {
+        OAuth2Authorization authorization = context.getAuthorization();
+        if (authorization == null
+                || authorization.getAttribute(TenantAuthorizationAttributes.attributeName()) != null) {
+            throw invalidGrant();
+        }
+        Object value = authorization.getAttribute(FixedTenantAuthorizationBinding.attributeName());
+        if (!(value instanceof FixedTenantAuthorizationBinding binding)
+                || !authorization.getRegisteredClientId().equals(context.getRegisteredClient().getId())
+                || !fixedTenantPolicy.permits(binding, context.getRegisteredClient().getClientId())) {
+            throw invalidGrant();
+        }
+        context.getClaims().claim(TenantClaimPolicy.CANONICAL_CLAIM, binding.tenantId().value());
     }
 
     private void addBoundTenantClaims(JwtEncodingContext context, CustomUserDetails userDetails) {

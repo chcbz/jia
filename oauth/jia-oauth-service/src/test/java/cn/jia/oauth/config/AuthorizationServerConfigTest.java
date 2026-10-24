@@ -6,6 +6,8 @@ import cn.jia.oauth.security.CentralSigningProperties;
 import cn.jia.oauth.security.AccountSecurityTokenCustomizer;
 import cn.jia.oauth.security.JdbcTenantAuthorizationRepository;
 import cn.jia.oauth.security.TenantAuthorizationAttributes;
+import cn.jia.oauth.security.FixedTenantAuthorizationPolicy;
+import cn.jia.oauth.security.TenantIssuanceProperties;
 import cn.jia.test.BaseMockTest;
 import cn.jia.user.entity.CustomUserDetails;
 import cn.jia.user.security.AccountSecurityService;
@@ -49,6 +51,7 @@ import org.springframework.security.oauth2.server.authorization.token.OAuth2Toke
 import java.security.Principal;
 import java.time.Instant;
 import java.util.Map;
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -109,6 +112,29 @@ class AuthorizationServerConfigTest extends BaseMockTest {
                 config.authorizationServerSettings(signing, true, true).getIssuer());
         assertEquals("https://issuer.example",
                 config.authorizationServerSettings(signing, true, false).getIssuer());
+    }
+
+    @Test
+    void fixedTenantIssuanceRequiresExactClientMappingAndCentralSigning() {
+        TenantIssuanceProperties properties = new TenantIssuanceProperties();
+        properties.setAdmissionMode(TenantIssuanceProperties.Mode.FIXED_TENANT);
+        properties.setFixedTenantId("1");
+        assertFalse(FixedTenantAuthorizationPolicy.from(properties, false).isFixedTenant());
+        assertThrows(IllegalStateException.class, () -> FixedTenantAuthorizationPolicy.from(properties));
+        properties.setFixedClientTenants(Map.of("web-client", "0"));
+        assertThrows(IllegalStateException.class, () -> FixedTenantAuthorizationPolicy.from(properties));
+        properties.setFixedClientTenants(Map.of("web-client", "1"));
+        FixedTenantAuthorizationPolicy policy = FixedTenantAuthorizationPolicy.from(properties);
+        assertEquals("1", policy.bind("web-client").tenantId().value());
+        assertThrows(OAuth2AuthenticationException.class, () -> policy.bind("other-client"));
+        var signing = new CentralSigningProperties();
+        assertThrows(IllegalStateException.class,
+                () -> new AuthorizationServerConfig().authorizationServerSettings(signing, false, true, policy));
+        properties.setRequireBoundIdentity(true);
+        assertThrows(IllegalStateException.class, () -> FixedTenantAuthorizationPolicy.from(properties));
+        properties.setRequireBoundIdentity(false);
+        properties.setAllowedTenants(List.of("1"));
+        assertThrows(IllegalStateException.class, () -> FixedTenantAuthorizationPolicy.from(properties));
     }
 
     @Test
@@ -195,7 +221,7 @@ class AuthorizationServerConfigTest extends BaseMockTest {
         assertEquals("17", claims.get("uid"));
         assertEquals("Jia-A", claims.get("jiacn"));
         assertEquals(4L, claims.get("auth_epoch"));
-        assertEquals("0", claims.get("tenant_id"));
+        assertEquals("1", claims.get("tenant_id"));
         assertEquals("1", claims.get("tenant_claim_version"));
 
         when(accountSecurityService.findByUserId(17)).thenReturn(java.util.Optional.of(

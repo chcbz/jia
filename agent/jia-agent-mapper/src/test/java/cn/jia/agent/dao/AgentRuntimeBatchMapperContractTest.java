@@ -41,7 +41,7 @@ class AgentRuntimeBatchMapperContractTest {
 
         String overlay = selectSql(AgentPersonaBindingMapper.class, "findCatalogOverlay");
         InterceptorIgnore overlayIgnore = AgentPersonaBindingMapper.class.getMethod(
-                        "findCatalogOverlay", String.class, String.class, String.class, int.class)
+                        "findCatalogOverlay", String.class, String.class, String.class, int.class, String.class)
                 .getAnnotation(InterceptorIgnore.class);
         assertTrue(overlayIgnore != null && "true".equals(overlayIgnore.tenantLine()));
         assertTrue(overlay.contains("from agent_persona_binding b"));

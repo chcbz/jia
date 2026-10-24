@@ -142,6 +142,10 @@ public interface AgentPersonaBindingMapper extends BaseMapper<AgentPersonaBindin
                  )
              AND (
                    p.client_id IS NULL
+                   OR (#{sharedClientId} <> '' AND CAST(p.tenant_id AS BINARY) = CAST('0' AS BINARY)
+                       AND OCTET_LENGTH(p.tenant_id) = 1
+                       AND CAST(p.client_id AS BINARY) = CAST(#{sharedClientId} AS BINARY)
+                       AND OCTET_LENGTH(p.client_id) = OCTET_LENGTH(#{sharedClientId}))
                    OR
                    (p.client_id = #{clientId}
                     AND CAST(p.client_id AS BINARY) = CAST(#{clientId} AS BINARY)
@@ -188,7 +192,8 @@ public interface AgentPersonaBindingMapper extends BaseMapper<AgentPersonaBindin
             @Param("tenantId") String tenantId,
             @Param("clientId") String clientId,
             @Param("ownerJiacn") String ownerJiacn,
-            @Param("activeStatus") int activeStatus);
+            @Param("activeStatus") int activeStatus,
+            @Param("sharedClientId") String sharedClientId);
 
     @Select("""
             SELECT *

@@ -11,6 +11,39 @@ import java.util.List;
 public interface AgentPersonaMapper extends BaseMapper<AgentPersonaEntity> {
     @InterceptorIgnore(tenantLine = "true")
     @Select("""
+            SELECT id, persona_code, rank_no, star_name, name, title, avatar, visual_config,
+                   abilities, personality, speaking_style, background,
+                   power, intelligence, leadership, active, system_agent,
+                   create_time, update_time, tenant_id, client_id
+            FROM agent_persona
+            WHERE (
+                    (tenant_id = '0'
+                     AND CAST(tenant_id AS BINARY) = CAST('0' AS BINARY)
+                     AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH('0'))
+                    OR
+                    (tenant_id = #{tenantId}
+                     AND CAST(tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY)
+                     AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId}))
+                  )
+              AND (
+                    client_id IS NULL
+                    OR (#{sharedClientId} <> '' AND CAST(tenant_id AS BINARY) = CAST('0' AS BINARY)
+                        AND OCTET_LENGTH(tenant_id) = 1
+                        AND CAST(client_id AS BINARY) = CAST(#{sharedClientId} AS BINARY)
+                        AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{sharedClientId}))
+                    OR
+                    (client_id = #{clientId}
+                     AND CAST(client_id AS BINARY) = CAST(#{clientId} AS BINARY)
+                     AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{clientId}))
+                  )
+            ORDER BY rank_no ASC, persona_code ASC
+            """)
+    List<AgentPersonaEntity> selectFullProjection(
+            @Param("tenantId") String tenantId, @Param("clientId") String clientId,
+            @Param("sharedClientId") String sharedClientId);
+
+    @InterceptorIgnore(tenantLine = "true")
+    @Select("""
             SELECT persona_code, rank_no, star_name, name, title, avatar, visual_config,
                    abilities, power, intelligence, leadership, system_agent,
                    tenant_id, client_id
@@ -26,6 +59,10 @@ public interface AgentPersonaMapper extends BaseMapper<AgentPersonaEntity> {
                   )
               AND (
                     client_id IS NULL
+                    OR (#{sharedClientId} <> '' AND CAST(tenant_id AS BINARY) = CAST('0' AS BINARY)
+                        AND OCTET_LENGTH(tenant_id) = 1
+                        AND CAST(client_id AS BINARY) = CAST(#{sharedClientId} AS BINARY)
+                        AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{sharedClientId}))
                     OR
                     (client_id = #{clientId}
                      AND CAST(client_id AS BINARY) = CAST(#{clientId} AS BINARY)
@@ -34,7 +71,8 @@ public interface AgentPersonaMapper extends BaseMapper<AgentPersonaEntity> {
             ORDER BY rank_no ASC, persona_code ASC
             """)
     List<AgentPersonaEntity> selectRuntimeProjection(
-            @Param("tenantId") String tenantId, @Param("clientId") String clientId);
+            @Param("tenantId") String tenantId, @Param("clientId") String clientId,
+            @Param("sharedClientId") String sharedClientId);
 
     @InterceptorIgnore(tenantLine = "true")
     @Select("""
@@ -54,6 +92,10 @@ public interface AgentPersonaMapper extends BaseMapper<AgentPersonaEntity> {
                   )
               AND (
                     client_id IS NULL
+                    OR (#{sharedClientId} <> '' AND CAST(tenant_id AS BINARY) = CAST('0' AS BINARY)
+                        AND OCTET_LENGTH(tenant_id) = 1
+                        AND CAST(client_id AS BINARY) = CAST(#{sharedClientId} AS BINARY)
+                        AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{sharedClientId}))
                     OR
                     (client_id = #{clientId}
                      AND CAST(client_id AS BINARY) = CAST(#{clientId} AS BINARY)
@@ -62,5 +104,6 @@ public interface AgentPersonaMapper extends BaseMapper<AgentPersonaEntity> {
             ORDER BY rank_no ASC, persona_code ASC
             """)
     List<AgentPersonaEntity> selectCatalogProjection(
-            @Param("tenantId") String tenantId, @Param("clientId") String clientId);
+            @Param("tenantId") String tenantId, @Param("clientId") String clientId,
+            @Param("sharedClientId") String sharedClientId);
 }

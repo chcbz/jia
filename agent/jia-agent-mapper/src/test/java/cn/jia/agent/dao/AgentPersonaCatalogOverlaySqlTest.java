@@ -61,11 +61,33 @@ class AgentPersonaCatalogOverlaySqlTest {
     }
 
     private String sql(String owner) throws Exception {
+        return sql(owner,"0","");
+    }
+
+    @Test
+    void publishedTemplateDoesNotPublishSourceClientBindingOrRuntime() throws Exception {
+        try (Connection c=fixture();Statement s=c.createStatement()) {
+            s.execute("UPDATE agent_persona SET client_id='public-source'");
+            s.execute("UPDATE agent_persona_binding SET tenant_id='1'");
+            s.execute("UPDATE agent_identity_registry SET tenant_id='1'");
+            s.execute("UPDATE agent_runtime SET tenant_id='1'");
+            s.execute("INSERT INTO agent_persona_binding VALUES (2,'0','public-source','Alice','linchong','source-agent',1)");
+            s.execute("INSERT INTO agent_runtime VALUES (2,2,'0','public-source','Alice','source-agent','[\"source-private\"]','online')");
+            try(ResultSet rows=s.executeQuery(sql("Alice","1","public-source"))) {
+                assertTrue(rows.next());assertEquals("agent-alice",rows.getString("binding_agent_id"));
+                assertEquals("[\"private-skill\"]",rows.getString("runtime_abilities"));assertFalse(rows.next());
+            }
+            try(ResultSet rows=s.executeQuery(sql("Alice","1",""))) {assertFalse(rows.next());}
+        }
+    }
+
+    private String sql(String owner,String tenant,String sharedClient) throws Exception {
         String query = String.join(" ", AgentPersonaBindingMapper.class.getMethod(
-                "findCatalogOverlay", String.class, String.class, String.class, int.class)
+                "findCatalogOverlay", String.class, String.class, String.class, int.class, String.class)
                 .getAnnotation(Select.class).value());
-        return query.replace("#{tenantId}", "'0'").replace("#{clientId}", "'client-a'")
-                .replace("#{ownerJiacn}", "'" + owner + "'").replace("#{activeStatus}", "1");
+        return query.replace("#{tenantId}", "'"+tenant+"'").replace("#{clientId}", "'client-a'")
+                .replace("#{ownerJiacn}", "'" + owner + "'").replace("#{activeStatus}", "1")
+                .replace("#{sharedClientId}", "'"+sharedClient+"'");
     }
 
     private Connection fixture() throws Exception {

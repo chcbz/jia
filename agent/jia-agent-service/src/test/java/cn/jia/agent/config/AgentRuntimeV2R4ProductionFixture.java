@@ -19,7 +19,6 @@ import cn.jia.economy.entity.EconomyAccountEntity;
 import cn.jia.economy.entity.skill.*;
 import cn.jia.economy.mapper.*;
 import cn.jia.economy.service.impl.EconomyPostingServiceImpl;
-import cn.jia.oauth.service.ApiKeyService;
 import cn.jia.core.tenant.*;
 import org.mybatis.spring.*;
 import org.springframework.beans.factory.ObjectProvider;
@@ -122,7 +121,6 @@ public final class AgentRuntimeV2R4ProductionFixture {
                 jdbc.execute("CREATE TABLE agent_task_member(id BIGINT AUTO_INCREMENT PRIMARY KEY,task_id VARCHAR(100) NOT NULL,owner_jiacn VARCHAR(50) NOT NULL,agent_id VARCHAR(100) NOT NULL,member_role VARCHAR(20) NOT NULL,member_status VARCHAR(20) NOT NULL,assignment_source VARCHAR(20),joined_at BIGINT,accepted_at BIGINT,started_at BIGINT,completed_at BIGINT,last_heartbeat_at BIGINT,failure_reason TEXT,version BIGINT NOT NULL,tenant_id VARCHAR(50) NOT NULL,client_id VARCHAR(50) NOT NULL,create_time BIGINT,update_time BIGINT,UNIQUE(tenant_id,client_id,task_id,agent_id))");
                 jdbc.execute("CREATE TABLE agent_task_work_item(id BIGINT AUTO_INCREMENT PRIMARY KEY,work_item_id VARCHAR(100) NOT NULL,task_id VARCHAR(100) NOT NULL,owner_jiacn VARCHAR(50) NOT NULL,title VARCHAR(255) NOT NULL,description TEXT,work_type VARCHAR(30) NOT NULL,required_abilities TEXT,assignee_agent_id VARCHAR(100),status VARCHAR(20) NOT NULL,priority INT NOT NULL,required_item BOOLEAN NOT NULL,dependency_json TEXT,lease_token VARCHAR(100),lease_until BIGINT,attempt_count INT NOT NULL,max_attempts INT NOT NULL,result_artifact_id VARCHAR(100),submitted_at BIGINT,completed_at BIGINT,version BIGINT NOT NULL,tenant_id VARCHAR(50) NOT NULL,client_id VARCHAR(50) NOT NULL,create_time BIGINT,update_time BIGINT,UNIQUE(tenant_id,client_id,work_item_id))");
                 jdbc.execute("CREATE TABLE agent_task_artifact(id BIGINT AUTO_INCREMENT PRIMARY KEY,artifact_id VARCHAR(100) NOT NULL,task_id VARCHAR(100) NOT NULL,owner_jiacn VARCHAR(50) NOT NULL,work_item_id VARCHAR(100),producer_agent_id VARCHAR(100) NOT NULL,artifact_type VARCHAR(30) NOT NULL,title VARCHAR(255) NOT NULL,content MEDIUMTEXT,storage_uri VARCHAR(1000),content_hash VARCHAR(128),artifact_version INT NOT NULL,visibility VARCHAR(20) NOT NULL,metadata_json TEXT,created_at BIGINT NOT NULL,tenant_id VARCHAR(50) NOT NULL,client_id VARCHAR(50) NOT NULL,create_time BIGINT,update_time BIGINT,UNIQUE(tenant_id,client_id,artifact_id,artifact_version))");
-                jdbc.execute("ALTER TABLE agent_task_event ADD owner_jiacn VARCHAR(50) NOT NULL");
                 }
                 var config=new com.baomidou.mybatisplus.core.MybatisConfiguration();config.setMapUnderscoreToCamelCase(true);
                 for(Class<?> mapper:List.of(PersonalWorkspaceExecutionMapper.class,PersonalWorkspaceExecutionInputMapper.class,PersonalWorkspaceExecutionOutputMapper.class,PersonalWorkspaceFileMapper.class,PersonalWorkspaceVersionMapper.class,PersonalWorkspaceOperationMapper.class,AgentTaskMetaMapper.class,AgentTaskMemberMapper.class,AgentTaskWorkItemMapper.class,AgentTaskArtifactMapper.class,AgentTaskFormalDeliveryMapper.class,AgentTaskEventMapper.class))config.addMapper(mapper);
@@ -194,6 +192,7 @@ public final class AgentRuntimeV2R4ProductionFixture {
         final AgentRuntimeV2ExecutionEvidenceValidator executionEvidence;
         final AgentRuntimeV2EffectMapper effectRows;
         final AgentRuntimeV2HistoricalSettlementEvidenceValidator effectEvidence;
+        final SkillInstallResultService skills=mock(SkillInstallResultService.class);
         final AgentRuntimeV2EffectServiceImpl reducer;
         final AgentRuntimeV2ExecutionServiceImpl execution;
         final FileResource file;
@@ -246,7 +245,7 @@ public final class AgentRuntimeV2R4ProductionFixture {
                 var authority=new cn.jia.agent.security.AgentRuntimeV2ExecutionAuthority(f.db,f.keys,runtimeClock);execution=new AgentRuntimeV2ExecutionServiceImpl(executionRows,authority,executionEvidence,manager,runtimeClock);
                 for(String status:List.of("RECEIVED","STARTED"))if(execution.acknowledge(identity,socket,AgentRuntimeV2ExecutionCodec.encodeAck(new AgentRuntimeV2ExecutionCodec.Ack("ack-"+status,origin().text("runtime_dispatch_id"),"msg-1",status,now))).close())throw new IllegalStateException("Fresh real file "+status+" rejected");
                 if(!f.privateMysql)new ResourceDatabasePopulator(new ByteArrayResource(AgentRuntimeV2EffectConfiguration.manualSql().replace(" ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin","").getBytes(StandardCharsets.UTF_8))).populate(schemaConnection);
-                file=new FileResource(f.dataSource,f.privateMysql);effectRows=new AgentRuntimeV2EffectMapper(jdbc);var effectValidator=new AgentRuntimeV2HistoricalSettlementEvidenceValidator(effectRows);effectEvidence=evidenceSpies?spy(effectValidator):effectValidator;reducer=new AgentRuntimeV2EffectServiceImpl(executionRows,effectRows,authority,new AgentRuntimeV2RecoveryAuthority(f.db,f.keys,effectClock),executionEvidence,effectEvidence,file.workspace,mock(SkillInstallResultService.class),manager,effectClock);
+                file=new FileResource(f.dataSource,f.privateMysql);effectRows=new AgentRuntimeV2EffectMapper(jdbc);var effectValidator=new AgentRuntimeV2HistoricalSettlementEvidenceValidator(effectRows);effectEvidence=evidenceSpies?spy(effectValidator):effectValidator;reducer=new AgentRuntimeV2EffectServiceImpl(executionRows,effectRows,authority,new AgentRuntimeV2RecoveryAuthority(f.db,f.keys,effectClock),executionEvidence,effectEvidence,file.workspace,skills,manager,effectClock);
                 if(f.privateMysql)AgentRuntimeV2PrivateMysqlFixture.verifyCatalogAndGraphs(jdbc);
             }catch(Exception|AssertionError failure){schemaConnection.close();throw failure;}
         }
@@ -333,6 +332,8 @@ public final class AgentRuntimeV2R4ProductionFixture {
         public final TransactionTemplate tx;
         public final SkillInstallResultService results;
         public final ObjectProvider<SkillPackages> resultPackages;
+        public final SkillPackages packageStore;
+        public final EconomySkillMarketplaceMapper market;
         public final SkillAgentVersions legacyVersions;
         public final AgentCommandTransportDao legacyCommands;
         public final AgentRuntimeV2InternalOutboxRow origin;
@@ -359,20 +360,18 @@ public final class AgentRuntimeV2R4ProductionFixture {
                 for(Class<?> mapper:List.of(EconomySkillMarketplaceMapper.class,EconomySkillApplicationMapper.class,EconomyLedgerMapper.class))config.addMapper(mapper);
                 var factory=new SqlSessionFactoryBean();factory.setDataSource(ds);factory.setConfiguration(config);
                 var session=new SqlSessionTemplate(Objects.requireNonNull(factory.getObject()));
-                var market=session.getMapper(EconomySkillMarketplaceMapper.class);var app=session.getMapper(EconomySkillApplicationMapper.class);var ledger=session.getMapper(EconomyLedgerMapper.class);
+                market=spy(session.getMapper(EconomySkillMarketplaceMapper.class));var app=session.getMapper(EconomySkillApplicationMapper.class);var ledger=session.getMapper(EconomyLedgerMapper.class);
                 var preview=new EconomyPreviewGate(new EconomyPreviewProperties(true,List.of(new EconomyPreviewProperties.AllowedScope("0","caller-C"))));
                 var posting=new EconomyPostingServiceImpl(ledger,manager,preview);
                 legacyVersions=mock(SkillAgentVersions.class);when(legacyVersions.enabled()).thenReturn(true);when(legacyVersions.requireOwned(any(),eq(AGENT),any(),anyBoolean())).thenReturn(1L);
-                var runtimes=mock(AgentRuntimeDao.class);var runtime=new AgentRuntimeEntity().setAgentId(AGENT).setOwnerJiacn("owner-a").setBindingId(7L).setTokenHash("setup-registration").setStatus("online");runtime.setTenantId("0");runtime.setClientId("caller-C");when(runtimes.findByAgentIdForUpdate(AGENT)).thenReturn(runtime);
+                var runtimes=mock(AgentRuntimeDao.class);var runtime=new AgentRuntimeEntity().setAgentId(AGENT).setOwnerJiacn("owner-a").setBindingId(7L).setTokenHash("setup-registration").setStatus("online");runtime.setTenantId("0");runtime.setClientId("caller-C");runtime.setRuntimeInstallationId("rti_"+"a".repeat(32));runtime.setRuntimeHostId("setup-host");runtime.setRuntimeInstanceId("setup-runtime");runtime.setRuntimeSessionGeneration(1L);when(runtimes.findByAgentIdForUpdate(AGENT)).thenReturn(runtime);when(runtimes.findInScope("0","caller-C",AGENT)).thenReturn(runtime);
                 var gate=mock(AgentRabbitSafetyGate.class);when(gate.rabbitDispatchEnabled()).thenReturn(true);when(gate.allowsDispatch("0","caller-C")).thenReturn(true);
-                var packages=new SkillPackages();
-                // This explicit legacy setup boundary is package-private in
-                // production. Do not widen it for an out-of-package fixture.
-                var credentials=mock(SkillManagedCredentials.class,invocation->"requireCurrent".equals(invocation.getMethod().getName())?"setup-key":org.mockito.Answers.RETURNS_DEFAULTS.answer(invocation));
-                var sessions=mock(AgentManagedSessionLookup.class);when(sessions.isReady(eq("0"),eq("caller-C"),eq(AGENT),eq("setup-key"),any())).thenReturn(true);
+                packageStore=spy(new SkillPackages());
+                var authentication=mock(cn.jia.agent.security.AgentRuntimeAuthenticationService.class);var proof=new cn.jia.agent.security.AgentRuntimeAuthenticationService.Proof(new cn.jia.agent.security.AgentRuntimeAuthentication.Scope("0","caller-C","owner-a",AGENT,"setup-runtime"),runtime.getRuntimeInstallationId(),runtime.getRuntimeHostId(),runtime.getRuntimeSessionGeneration(),"a".repeat(64),1L,1L);when(authentication.currentRegisteredProof("0","caller-C",AGENT)).thenReturn(proof);when(authentication.withFence(eq(proof),eq(false),any())).thenAnswer(invocation->((java.util.function.Supplier<?>)invocation.getArgument(2)).get());
+                var sessions=mock(AgentManagedSessionLookup.class);when(sessions.isReady(eq("0"),eq("caller-C"),eq(AGENT),any())).thenReturn(true);
                 var setupCommand=new java.util.concurrent.atomic.AtomicReference<AgentCommandDraft>();var writer=mock(AgentCommandTransportWriter.class);when(writer.write(any())).thenAnswer(invocation->{var command=(AgentCommandDraft)invocation.getArgument(0);setupCommand.set(command);return new AgentCommandTransportWriteResult(1L,command.commandId(),"setup-message","setup-outbox",false);});
-                var marketplace=new SkillMarketplaceService(market,app,ledger,posting,preview,legacyVersions,runtimes,provider(writer),provider(gate),provider(packages),provider(mock(ApiKeyService.class)),credentials,provider(sessions),manager);
-                legacyCommands=mock(AgentCommandTransportDao.class);resultPackages=provider(packages);results=new SkillInstallResultService(market,app,legacyCommands,marketplace,legacyVersions,runtimes,resultPackages,manager);
+                var marketplace=new SkillMarketplaceService(market,app,ledger,posting,preview,legacyVersions,runtimes,provider(writer),provider(gate),provider(packageStore),provider(authentication),provider(sessions),manager);
+                legacyCommands=mock(AgentCommandTransportDao.class);resultPackages=provider(packageStore);results=new SkillInstallResultService(market,app,legacyCommands,marketplace,legacyVersions,authentication,resultPackages,manager);
                 var product=new PlatformSkillPackageCatalog().products().stream().filter(value->"spv_repo_test_1_0_0".equals(value.productVersionId())).findFirst().orElseThrow();
                 market.insertProduct(new SkillProductEntity().setProductId(product.productId()).setSellerType("SYSTEM").setSellerId("SKILL_STORE").setName(product.name()).setDescription(product.description()).setStatus("DRAFT").setVersion(1L).setTenantId("0").setClientId("caller-C").setCreateTime(1L).setUpdateTime(1L));
                 market.insertProductVersion(new SkillProductVersionEntity().setProductVersionId(product.productVersionId()).setProductId(product.productId()).setVersionSequence(1L).setSkillKey(product.skillKey()).setSkillVersion(product.skillVersion()).setPriceMicro(product.priceMicro()).setPackageSha256(product.packageSha256()).setPackageSize(product.packageSize()).setApprovedPermissionsManifest(product.approvedPermissionsManifest()).setApprovedPermissionsSha256(product.approvedPermissionsSha256()).setDeploymentRestriction(product.deploymentRestriction()).setReviewStatus("APPROVED").setTenantId("0").setClientId("caller-C").setCreateTime(1L));
@@ -387,10 +386,12 @@ public final class AgentRuntimeV2R4ProductionFixture {
                 origin=resourceOrigin(Objects.requireNonNull(setupCommand.get()),installed.getMessageId());
                 // Setup legitimately used V1 marketplace purchase admission;
                 // V2 operations below must not consult these old fences.
-                clearInvocations(legacyVersions,legacyCommands,runtimes,credentials,sessions,writer);
+                clearInvocations(legacyVersions,legacyCommands,runtimes,authentication,sessions,writer,resultPackages,packageStore);
             } catch(Exception failure){schemaConnection.close();throw failure;}
         }
         public String result(String effect,byte[] proof,SkillInstallResultService.V2Disposition disposition,Long installedAt,long now){return tx.execute(status->results.v2Result(origin,payload,identity,effect,proof,disposition,installedAt,now));}
+        public SkillInstallResultService.V2PreparedPackage prepare(AgentRuntimeV2EffectCodec.SkillRead read){var plan=tx.execute(status->results.v2PlanPackage(origin,payload,read));return results.v2PreparePackage(plan);}
+        public AgentRuntimeV2EffectCodec.ReadResult read(AgentRuntimeV2EffectCodec.SkillRead read){var prepared=prepare(read);return tx.execute(status->results.v2Package(origin,payload,read,prepared));}
         public int count(String table){if(!Set.of("economy_transaction","economy_entry","economy_skill_result_receipt").contains(table))throw new IllegalArgumentException("fixed fixture table");return jdbc.queryForObject("SELECT COUNT(*) FROM "+table,Integer.class);}
         public long wallet(){return jdbc.queryForObject("SELECT balance_micro FROM economy_account WHERE account_id='r4-wallet'",Long.class);}
         public String status(String table){if(!Set.of("economy_skill_order","economy_skill_installation","economy_skill_entitlement").contains(table))throw new IllegalArgumentException("fixed fixture table");return jdbc.queryForObject("SELECT status FROM "+table+" WHERE tenant_id='0' AND client_id='caller-C'",String.class);}

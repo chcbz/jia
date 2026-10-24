@@ -7,6 +7,7 @@ import cn.jia.agent.entity.PersonalWorkspaceExecutionOutputEntity;
 import cn.jia.agent.mapper.PersonalWorkspaceExecutionInputMapper;
 import cn.jia.agent.mapper.PersonalWorkspaceExecutionMapper;
 import cn.jia.agent.mapper.PersonalWorkspaceExecutionOutputMapper;
+import cn.jia.core.tenant.TenantId;
 import cn.jia.core.util.DateUtil;
 import jakarta.inject.Inject;
 import jakarta.inject.Named;
@@ -167,9 +168,12 @@ public class PersonalWorkspaceExecutionDaoImpl implements PersonalWorkspaceExecu
     }
     @Override public List<String> listActiveExecutionIdsByFile(String tenantId, String clientId,
             String ownerJiacn, String fileId, int limit) {
-        scope(tenantId, clientId, ownerJiacn); id(fileId, "fileId");
-        return inputs.listActiveExecutionIdsByFile(tenantId, clientId, ownerJiacn, fileId,
+        readScope(tenantId, clientId, ownerJiacn); id(fileId, "fileId");
+        List<String> found = inputs.listActiveExecutionIdsByFile(tenantId, clientId, ownerJiacn, fileId,
                 Math.max(1, Math.min(limit, 100)));
+        if (found == null) throw new IllegalStateException("active execution projection missing");
+        found.forEach(executionId -> id(executionId, "executionId"));
+        return List.copyOf(found);
     }
     @Override public void updateInput(PersonalWorkspaceExecutionInputEntity input) { input.setUpdateTime(DateUtil.nowTime()); inputs.updateById(input); }
     @Override public PersonalWorkspaceExecutionOutputEntity lockOutput(String tenantId,
@@ -199,6 +203,10 @@ public class PersonalWorkspaceExecutionDaoImpl implements PersonalWorkspaceExecu
     private static void scope(String tenantId, String clientId, String ownerJiacn) {
         if (!"0".equals(tenantId)) throw new IllegalArgumentException("tenant");
         id(clientId, "clientId"); id(ownerJiacn, "ownerJiacn"); if ("0".equals(ownerJiacn)) throw new IllegalArgumentException("owner");
+    }
+    private static void readScope(String tenantId, String clientId, String ownerJiacn) {
+        TenantId.of(tenantId); id(clientId, "clientId"); id(ownerJiacn, "ownerJiacn");
+        if ("0".equals(ownerJiacn)) throw new IllegalArgumentException("owner");
     }
     private static void id(String value, String name) {
         if (value == null || value.isBlank() || !value.equals(value.strip()) || value.codePointCount(0, value.length()) > 100 || value.chars().anyMatch(Character::isISOControl)) throw new IllegalArgumentException(name);

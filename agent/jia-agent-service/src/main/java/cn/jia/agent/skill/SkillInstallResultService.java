@@ -6,6 +6,7 @@ import cn.jia.agent.entity.AgentRuntimeV2InternalOutboxRow;
 import cn.jia.agent.entity.AgentRuntimeV2EffectCodec;
 import cn.jia.agent.entity.AgentSkillInstallPayload;
 import cn.jia.agent.hosting.HostingRentHttp;
+import cn.jia.economy.config.skillseed.PlatformSkillPackageCatalog.PlatformSkillPackage;
 import cn.jia.economy.entity.skill.*;
 import cn.jia.economy.mapper.*;
 import cn.jia.agent.security.AgentRuntimeAuthenticationService;
@@ -175,6 +176,17 @@ public final class SkillInstallResultService {
         @Override public boolean equals(Object other){return other instanceof V2Transaction value&&datasource==value.datasource&&holder==value.holder&&connection==value.connection;}
         @Override public int hashCode(){return System.identityHashCode(datasource)^System.identityHashCode(holder)^System.identityHashCode(connection);}
     }
+    /** Opaque result of the current-authority planning transaction. The
+     * approved row is deliberately not exposed or accepted from callers. */
+    public static final class V2PackagePlan {
+        private final SkillProductVersionEntity approved;
+        private V2PackagePlan(SkillProductVersionEntity approved){this.approved=approved;}
+    }
+    /** Opaque immutable package prepared after every planning lock is gone. */
+    public static final class V2PreparedPackage {
+        private final PlatformSkillPackage prepared;
+        private V2PreparedPackage(PlatformSkillPackage prepared){this.prepared=prepared;}
+    }
     private V2Locked v2Lock(AgentRuntimeV2InternalOutboxRow origin,AgentSkillInstallPayload payload,
             AgentRuntimeV2EffectCodec.SkillIdentity identity) {
         var transaction=v2Transaction();String tenant=origin.text("tenant_id"),client=origin.text("command_caller_client_id"),owner=origin.text("owner_jiacn"),agent=origin.text("agent_id");
@@ -189,11 +201,30 @@ public final class SkillInstallResultService {
         var binding=app.deliveryBinding(tenant,client,payload.installationId());require(binding!=null,409,"SKILL_STATE_CONFLICT");
         require(transaction.equals(v2Transaction()),503,"SKILL_STATE_UNAVAILABLE");return new V2Locked(actor,order,installation,binding,transaction);
     }
-    public AgentRuntimeV2EffectCodec.ReadResult v2Package(AgentRuntimeV2InternalOutboxRow origin,
+    public V2PackagePlan v2PlanPackage(AgentRuntimeV2InternalOutboxRow origin,
             AgentSkillInstallPayload payload,AgentRuntimeV2EffectCodec.SkillRead request) {
         var locked=v2Lock(origin,payload,request.identity());
         require("INSTALLING".equals(locked.order().getStatus())&&"INSTALLING".equals(locked.installation().getStatus()),403,"SKILL_DOWNLOAD_FORBIDDEN");
-        var pkg=packages.getObject().get(payload.productVersionId());byte[] bytes=pkg.bytes();
+        var approved=market.selectApprovedProductVersionForUpdate(locked.actor().tenantId(),locked.actor().clientId(),locked.installation().getProductVersionId());
+        require(approved!=null&&payload.productVersionId().equals(approved.getProductVersionId())
+                &&payload.skillKey().equals(approved.getSkillKey())&&payload.skillVersion().equals(approved.getSkillVersion())
+                &&payload.packageSize().equals(Long.toString(approved.getPackageSize()))
+                &&payload.packageDigest().equals(digest(approved.getPackageSha256())),503,"SKILL_PACKAGE_UNAVAILABLE");
+        require(locked.transaction().equals(v2Transaction()),503,"SKILL_STATE_UNAVAILABLE");
+        return new V2PackagePlan(approved);
+    }
+    public V2PreparedPackage v2PreparePackage(V2PackagePlan plan) {
+        require(plan!=null,503,"SKILL_PACKAGE_UNAVAILABLE");
+        return new V2PreparedPackage(packages.getObject().prepare(plan.approved));
+    }
+    public AgentRuntimeV2EffectCodec.ReadResult v2Package(AgentRuntimeV2InternalOutboxRow origin,
+            AgentSkillInstallPayload payload,AgentRuntimeV2EffectCodec.SkillRead request,V2PreparedPackage prepared) {
+        var locked=v2Lock(origin,payload,request.identity());
+        require("INSTALLING".equals(locked.order().getStatus())&&"INSTALLING".equals(locked.installation().getStatus()),403,"SKILL_DOWNLOAD_FORBIDDEN");
+        require(prepared!=null&&prepared.prepared!=null,503,"SKILL_PACKAGE_UNAVAILABLE");
+        var pkg=prepared.prepared;
+        SkillPackages.revalidate(market.selectApprovedProductVersionForUpdate(locked.actor().tenantId(),locked.actor().clientId(),locked.installation().getProductVersionId()),pkg);
+        byte[] bytes=pkg.bytes();
         require(pkg.product().packageSize()==locked.installation().getPackageSize()&&Arrays.equals(pkg.product().packageSha256(),locked.installation().getPackageSha256())&&bytes.length==locked.installation().getPackageSize()&&payload.packageDigest().equals(digest(cn.jia.agent.entity.AgentRuntimeV2RegistrationFingerprints.sha256(bytes))),503,"SKILL_PACKAGE_UNAVAILABLE");
         require(request.offset()>=0&&request.length()>=0&&request.length()<=AgentRuntimeV2EffectCodec.CHUNK_CAP&&request.offset()<=bytes.length&&request.length()<=bytes.length-request.offset(),400,"BAD_REQUEST");
         byte[] chunk=Arrays.copyOfRange(bytes,Math.toIntExact(request.offset()),Math.toIntExact(request.offset()+request.length()));

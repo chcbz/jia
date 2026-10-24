@@ -4,7 +4,7 @@ import cn.jia.core.tenant.DataDomainId;
 import cn.jia.core.tenant.TenantId;
 import cn.jia.user.entity.CustomUserDetails;
 import jakarta.servlet.http.HttpSession;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.jdbc.core.JdbcOperations;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
@@ -25,8 +25,8 @@ import java.util.Objects;
 
 /** Only server-side consent state, the original browser session and a live grant may bind a region. */
 @Service
-@ConditionalOnProperty(name = "cyf.oauth.authorization-server.enabled",
-        havingValue = "true", matchIfMissing = true)
+@ConditionalOnExpression("'${cyf.oauth.authorization-server.enabled:true}' == 'true' && "
+        + "'${cyf.tenant.admission-mode:platform}' == 'platform'")
 public final class TenantSelectionService {
     private static final DataDomainId CYF = DataDomainId.of("cyf");
 
@@ -88,8 +88,6 @@ public final class TenantSelectionService {
                     CYF.value(), clientId, id, CYF.value());
             requireRow("SELECT tenant_id FROM core_tenant_membership WHERE tenant_id = ? AND uid = ? FOR UPDATE",
                     id, id, uid);
-            requireRow("SELECT id FROM oauth2_authorization WHERE id = ? FOR UPDATE",
-                    hint.authorization().getId(), hint.authorization().getId());
             AuthorizationRequest current = requireRequest(session, state, principal);
             if (!hint.authorization().getId().equals(current.authorization().getId())
                     || current.authorization().getToken(OAuth2AuthorizationCode.class) != null

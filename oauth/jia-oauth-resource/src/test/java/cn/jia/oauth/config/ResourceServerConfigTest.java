@@ -3,6 +3,7 @@ package cn.jia.oauth.config;
 import cn.jia.test.BaseMockTest;
 import cn.jia.oauth.security.TenantAuthorizationAttributes;
 import cn.jia.oauth.security.TenantAuthorizationVerifier;
+import cn.jia.oauth.security.TenantAdmissionPolicy;
 import cn.jia.user.security.AccountSecurityService;
 import cn.jia.user.security.AccountSecuritySnapshot;
 import cn.jia.user.security.AccountState;
@@ -143,6 +144,61 @@ class ResourceServerConfigTest extends BaseMockTest {
                     () -> config.jwtDecoder(keys, accountSecurityServiceProvider, tenantAuthorizationVerifierProvider, properties, trust, config.centralSigningProperties()));
         }
     }
+
+    @Test
+    void fixedTenantUsesCentralTrustAndCurrentAccountWithoutPlatformVerifier() throws Exception {
+        when(accountSecurityServiceProvider.getIfAvailable()).thenReturn(accountSecurityService);
+        when(accountSecurityService.findByUserId(17)).thenReturn(Optional.of(
+                new AccountSecuritySnapshot(17, "Jia-A", AccountState.ACTIVE, 4)));
+        when(tenantAuthorizationVerifierProvider.getIfAvailable()).thenReturn(null);
+        ResourceServerConfig config = new ResourceServerConfig();
+        JWKSource<SecurityContext> keys = config.jwkSource(config.centralSigningProperties());
+        NimbusJwtEncoder encoder = new NimbusJwtEncoder(keys);
+        var deployment = config.tenantDeploymentProperties();
+        deployment.setAdmissionMode(TenantAdmissionPolicy.Mode.FIXED_TENANT);
+        deployment.setFixedTenantId("1");
+        var trust = config.centralJwtTrustProperties();
+
+        assertThrows(IllegalStateException.class, () -> config.jwtDecoder(keys,
+                accountSecurityServiceProvider, tenantAuthorizationVerifierProvider,
+                deployment, trust, config.centralSigningProperties()));
+        try (var jwks = new PublicJwkServer(keys)) {
+            trust.setIssuerUri(ISSUER);
+            trust.setJwkSetUri(jwks.uri());
+            JwtDecoder decoder = config.jwtDecoder(keys, accountSecurityServiceProvider,
+                    tenantAuthorizationVerifierProvider, deployment, trust,
+                    config.centralSigningProperties());
+            Instant now = Instant.now();
+            assertEquals("1", decoder.decode(fixedTenantToken(encoder, now, "1", false, false))
+                    .getClaimAsString("tenant_id"));
+            for (String tenant : List.of("0", "01")) {
+                assertThrows(JwtValidationException.class,
+                        () -> decoder.decode(fixedTenantToken(encoder, now, tenant, false, false)));
+            }
+            assertThrows(JwtValidationException.class,
+                    () -> decoder.decode(fixedTenantToken(encoder, now, null, false, false)));
+            assertThrows(JwtValidationException.class,
+                    () -> decoder.decode(fixedTenantToken(encoder, now, "1", true, false)));
+            assertThrows(JwtValidationException.class,
+                    () -> decoder.decode(fixedTenantToken(encoder, now, null, false, true)));
+            verifyNoInteractions(tenantAuthorizationVerifier);
+        }
+    }
+
+    @Test
+    void fixedTenantConfigurationRejectsAmbiguousPlatformSwitches() {
+        ResourceServerConfig config = new ResourceServerConfig();
+        var deployment = config.tenantDeploymentProperties();
+        deployment.setAdmissionMode(TenantAdmissionPolicy.Mode.FIXED_TENANT);
+        assertThrows(IllegalStateException.class, () -> new cn.jia.oauth.security.TenantDeploymentTokenValidator(deployment));
+        deployment.setFixedTenantId("1");
+        deployment.setAllowedTenants(List.of("1"));
+        assertThrows(IllegalStateException.class, () -> new cn.jia.oauth.security.TenantDeploymentTokenValidator(deployment));
+        deployment.setAllowedTenants(List.of());
+        deployment.setRequireBoundIdentity(true);
+        assertThrows(IllegalStateException.class, () -> new cn.jia.oauth.security.TenantDeploymentTokenValidator(deployment));
+    }
+
     @Test
     void centralSigningKeySurvivesRestartAndOnlyItsPublicJwksVerifies(@TempDir Path directory) throws Exception {
         ResourceServerConfig config = new ResourceServerConfig();
@@ -229,6 +285,31 @@ class ResourceServerConfigTest extends BaseMockTest {
                     .claim("membership_revision", "3")
                     .claim("client_tenant_grant_revision", "4");
         }
+        JwsHeader header = JwsHeader.with(SignatureAlgorithm.RS256).build();
+        return encoder.encode(JwtEncoderParameters.from(header, claims.build())).getTokenValue();
+    }
+
+    private static String fixedTenantToken(NimbusJwtEncoder encoder, Instant now, String tenantId,
+                                           boolean partialPlatformBundle, boolean machine) {
+        JwtClaimsSet.Builder claims = JwtClaimsSet.builder()
+                .issuer(ISSUER)
+                .issuedAt(now.minusSeconds(5))
+                .expiresAt(now.plusSeconds(60));
+        if (machine) {
+            claims.subject("agent-client")
+                    .claim("client_id", "agent-client")
+                    .claim("token_kind", "machine");
+        } else {
+            claims.subject("alice")
+                    .claim("client_id", "web")
+                    .claim("token_kind", "user")
+                    .claim("uid", "17")
+                    .claim("jiacn", "Jia-A")
+                    .claim("username", "alice")
+                    .claim("auth_epoch", 4L);
+        }
+        if (tenantId != null) claims.claim("tenant_id", tenantId);
+        if (partialPlatformBundle) claims.claim("tenant_name", "华南测试区");
         JwsHeader header = JwsHeader.with(SignatureAlgorithm.RS256).build();
         return encoder.encode(JwtEncoderParameters.from(header, claims.build())).getTokenValue();
     }

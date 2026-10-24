@@ -22,17 +22,15 @@ public class AgentTaskNoteDaoImpl extends BaseDaoImpl<AgentTaskNoteMapper, Agent
     @Override
     public List<AgentTaskNoteEntity> findByTaskIdInOwnerScope(
             String tenantId, String clientId, String ownerJiacn, String taskId) {
-        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+        TaskCollaborationDaoSupport.requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
         TaskCollaborationDaoSupport.requireId(taskId, "taskId");
-        if (!"0".equals(tenantId) || ownerJiacn == null || ownerJiacn.isBlank()
-                || ownerJiacn.equals("0")) {
-            throw new IllegalArgumentException("strict task owner scope is invalid");
-        }
-        return baseMapper.selectList(new LambdaQueryWrapper<AgentTaskNoteEntity>()
-                .eq(AgentTaskNoteEntity::getTenantId, tenantId)
-                .eq(AgentTaskNoteEntity::getClientId, clientId)
-                .eq(AgentTaskNoteEntity::getOwnerJiacn, ownerJiacn)
-                .eq(AgentTaskNoteEntity::getTaskId, taskId)
+        LambdaQueryWrapper<AgentTaskNoteEntity> query =
+                new LambdaQueryWrapper<AgentTaskNoteEntity>();
+        TaskCollaborationDaoSupport.exact(query, "tenant_id", tenantId);
+        TaskCollaborationDaoSupport.exact(query, "client_id", clientId);
+        TaskCollaborationDaoSupport.exact(query, "owner_jiacn", ownerJiacn);
+        TaskCollaborationDaoSupport.exact(query, "task_id", taskId);
+        return baseMapper.selectList(query
                 .orderByAsc(AgentTaskNoteEntity::getCreatedAt)
                 .orderByAsc(AgentTaskNoteEntity::getId));
     }

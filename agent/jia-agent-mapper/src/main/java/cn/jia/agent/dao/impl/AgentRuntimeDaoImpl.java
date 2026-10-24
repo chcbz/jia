@@ -51,17 +51,21 @@ public class AgentRuntimeDaoImpl extends BaseDaoImpl<AgentRuntimeMapper, AgentRu
     }
 
     @Override
-    public List<AgentRuntimeEntity> findRosterByOwner(String clientId, String jiacn, String status, String ability) {
+    public List<AgentRuntimeEntity> findRosterByOwner(
+            String tenantId, String clientId, String jiacn, String status, String ability) {
+        requireExactId(tenantId, "tenantId");
         requireExactId(clientId, "clientId");
         requireExactId(jiacn, "jiacn");
-        return baseMapper.findActiveRosterByOwner(clientId, jiacn, status, ability);
+        return baseMapper.findActiveRosterByOwner(tenantId, clientId, jiacn, status, ability);
     }
 
     @Override
-    public List<AgentRuntimeEntity> findCandidateRosterByOwner(String clientId, String jiacn) {
+    public List<AgentRuntimeEntity> findCandidateRosterByOwner(
+            String tenantId, String clientId, String jiacn) {
+        requireExactId(tenantId, "tenantId");
         requireExactId(clientId, "clientId");
         requireExactId(jiacn, "jiacn");
-        return baseMapper.findCandidateRosterByOwner(clientId, jiacn);
+        return baseMapper.findCandidateRosterByOwner(tenantId, clientId, jiacn);
     }
 
     @Override
@@ -78,9 +82,10 @@ public class AgentRuntimeDaoImpl extends BaseDaoImpl<AgentRuntimeMapper, AgentRu
     }
 
     @Override
-    public List<AgentRuntimeEntity> findMapVisible(String clientId) {
+    public List<AgentRuntimeEntity> findMapVisible(String tenantId, String clientId) {
+        requireExactId(tenantId, "tenantId");
         requireExactId(clientId, "clientId");
-        return baseMapper.findMapVisibleByExactClient(clientId);
+        return baseMapper.findMapVisibleByExactClient(tenantId, clientId);
     }
 
     @Override

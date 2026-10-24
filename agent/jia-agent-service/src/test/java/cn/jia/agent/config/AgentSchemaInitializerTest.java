@@ -4,6 +4,7 @@ import cn.jia.test.BaseMockTest;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
+import org.springframework.context.annotation.Profile;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowCallbackHandler;
 import org.springframework.jdbc.core.RowMapper;
@@ -25,6 +26,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -41,6 +43,12 @@ import static org.mockito.Mockito.when;
 class AgentSchemaInitializerTest extends BaseMockTest {
     @Mock
     JdbcTemplate jdbcTemplate;
+
+    @Test
+    void schemaMutationProfileRequiresMaintenanceAndExcludesLocalTestArea() {
+        assertArrayEquals(new String[] {"schema-maintenance & !local-test-area"},
+                AgentSchemaInitializer.class.getAnnotation(Profile.class).value());
+    }
 
     @Test
     void hostedProfileInitializerAndFullBaselineDeclareSameFourChecks() throws Exception {
@@ -201,8 +209,20 @@ class AgentSchemaInitializerTest extends BaseMockTest {
         for (int index : List.of(0, 1)) {
             List<String> weakClauses = index == 0
                     ? List.of("status IN (0, 1, 2, 3, 4)", "status >= 0", "TRUE")
-                    : List.of("tenant_id IS NULL OR tenant_id = '0'", "tenant_id = TRIM(jiacn)",
-                            "tenant_id = '1'", "tenant_id = '0' OR TRUE", "TRUE");
+                    : List.of(
+                            "tenant_id = '0'",
+                            canonicalTenantCatalogClause().replace("tenant_id IS NOT NULL", "TRUE"),
+                            canonicalTenantCatalogClause().replace(
+                                    "^(0|[1-9][0-9]{0,49})$", "^[0-9]{1,50}$"),
+                            canonicalTenantCatalogClause().replace(
+                                    "AND NOT(REGEXP_LIKE(tenant_id,CAST('[^0-9]' AS CHAR CHARSET BINARY)))", ""),
+                            canonicalTenantCatalogClause().replace(
+                                    "AND INSTR(tenant_id,CHAR(10)) = 0", ""),
+                            canonicalTenantCatalogClause().replace(
+                                    "AND INSTR(tenant_id,CHAR(13)) = 0", ""),
+                            "tenant_id = TRIM(jiacn)",
+                            "tenant_id = '0' OR tenant_id = TRIM(jiacn)",
+                            "tenant_id = '0' OR TRUE", "TRUE");
             for (String clause : weakClauses) {
                 List<Map<String, Object>> checks = new java.util.ArrayList<>(bindingTenantChecks("MySQL"));
                 Map<String, Object> wrong = new LinkedHashMap<>(checks.get(index));
@@ -261,7 +281,8 @@ class AgentSchemaInitializerTest extends BaseMockTest {
     }
 
     @Test
-    void bindingInitializerBaselineAndMigrationDeclareSingleCanonicalTenantContract() throws Exception {
+    void bindingInitializerAndBaselineDeclareCanonicalTenantContractWhileMigrationStaysHistorical()
+            throws Exception {
         JdbcTemplate template = schemaCaptureTemplate("MySQL");
         new AgentSchemaInitializer(template).afterPropertiesSet();
         String created = executedStatements(template).stream()
@@ -271,7 +292,8 @@ class AgentSchemaInitializerTest extends BaseMockTest {
         for (String definition : List.of(created, baseline)) {
             String normalized = normalizeCatalogSql(definition);
             assertTrue(normalized.contains("tenant_id varchar(50) not null default '0'"));
-            assertTrue(normalized.contains("constraint chk_agent_binding_single_tenant check (tenant_id = '0')"));
+            assertTrue(normalized.contains("constraint chk_agent_binding_single_tenant check ( tenant_id is not null"));
+            assertCanonicalTenantPredicate(normalized);
             assertTrue(normalized.contains("constraint chk_agent_binding_status check (status in (0, 1, 2, 3))"));
             assertTrue(normalized.contains("unique key uk_agent_binding_active_persona "
                     + "(tenant_id, client_id, active_persona_code)"));
@@ -731,7 +753,8 @@ class AgentSchemaInitializerTest extends BaseMockTest {
     }
 
     @Test
-    void initializerAndSchemaResourceKeepIdentityTablesInParity() throws Exception {
+    void initializerAndActiveSchemaKeepIdentityTablesInParityWhileMigrationStaysHistorical()
+            throws Exception {
         JdbcTemplate template = schemaCaptureTemplate("MySQL");
         new AgentSchemaInitializer(template).afterPropertiesSet();
         ArgumentCaptor<String> captor = ArgumentCaptor.forClass(String.class);
@@ -747,10 +770,11 @@ class AgentSchemaInitializerTest extends BaseMockTest {
                     .findFirst().orElseThrow();
             assertEquals(normalizeSqlStructure(tableDefinition(schema, table)),
                     normalizeSqlStructure(initializerDefinition), table);
-            assertEquals(normalizeSqlStructure(tableDefinition(schema, table)),
-                    normalizeSqlStructure(tableDefinition(
-                            readResource("db/agent-identity-schema.sql"), table)), table + " migration");
         }
+        String migration = normalizeCatalogSql(readResource("db/agent-identity-schema.sql"));
+        assertTrue(migration.contains("chk_identity_alias_scope check (tenant_id = '0')"));
+        assertTrue(migration.contains("and owner_jiacn is not null and trim(owner_jiacn) <> '' and tenant_id = '0'"));
+        assertFalse(migration.contains("regexp binary '^(0|[1-9][0-9]{0,49})$'"));
     }
 
     @Test
@@ -1432,11 +1456,17 @@ class AgentSchemaInitializerTest extends BaseMockTest {
         assertTrue(error.getMessage().contains("chk_identity_registry_scope"), error.getMessage());
         assertTrue(error.getMessage().contains("incompatible definition"), error.getMessage());
 
-        for (String oldContract : List.of("system-null-tenant", "owner-tenant", "dual-tenant",
-                "alias-owner-tenant")) {
+        for (String oldContract : List.of(
+                "system-missing-not-null", "system-null-tenant",
+                "system-nonzero-tenant", "system-owner-tenant",
+                "owner-tenant", "dual-tenant", "fixed-zero-ordinary",
+                "registry-missing-not-null", "registry-leading-zero", "registry-missing-nondigit",
+                "registry-missing-lf", "registry-missing-cr", "alias-owner-tenant",
+                "alias-dual-tenant", "alias-fixed-zero", "alias-missing-not-null", "alias-leading-zero",
+                "alias-missing-nondigit", "alias-missing-lf", "alias-missing-cr")) {
             IllegalStateException rejected = assertThrows(IllegalStateException.class,
                     () -> new AgentSchemaInitializer(identityCatalogTemplate(oldContract)).afterPropertiesSet());
-            String constraint = "alias-owner-tenant".equals(oldContract)
+            String constraint = oldContract.startsWith("alias-")
                     ? "chk_identity_alias_scope" : "chk_identity_registry_scope";
             assertTrue(rejected.getMessage().contains(constraint), oldContract + ": " + rejected.getMessage());
             assertTrue(rejected.getMessage().contains("incompatible definition"), rejected.getMessage());
@@ -1562,15 +1592,48 @@ class AgentSchemaInitializerTest extends BaseMockTest {
                         String clause = original.clause();
                         if ("chk_identity_registry_scope".equals(original.name())) {
                             clause = switch (fault) {
+                                case "system-missing-not-null" -> clause.replaceFirst(
+                                        "tenant_id IS NOT NULL", "TRUE");
                                 case "system-null-tenant" -> clause.replaceFirst("tenant_id = '0'", "tenant_id IS NULL");
-                                case "owner-tenant" -> clause.replace("tenant_id = '0'", "tenant_id = TRIM(owner_jiacn)");
-                                case "dual-tenant" -> clause.replace("tenant_id = '0'",
-                                        "(tenant_id = '0' OR tenant_id = TRIM(owner_jiacn))");
+                                case "system-nonzero-tenant" -> clause.replaceFirst("tenant_id = '0'", "tenant_id = '1'");
+                                case "system-owner-tenant" -> clause.replaceFirst("tenant_id = '0'",
+                                        "tenant_id = TRIM(owner_jiacn)");
+                                case "owner-tenant" -> clause.replace("tenant_id IS NOT NULL",
+                                        "tenant_id = TRIM(owner_jiacn)");
+                                case "dual-tenant" -> clause.replace("tenant_id IS NOT NULL",
+                                        "(tenant_id IS NOT NULL OR tenant_id = TRIM(owner_jiacn))");
+                                case "fixed-zero-ordinary" -> clause.replace(
+                                        canonicalTenantCatalogClause(), "tenant_id = '0'");
+                                case "registry-missing-not-null" -> clause.replace(
+                                        "tenant_id IS NOT NULL", "TRUE");
+                                case "registry-leading-zero" -> clause.replace(
+                                        "^(0|[1-9][0-9]{0,49})$", "^[0-9]{1,50}$");
+                                case "registry-missing-nondigit" -> clause.replace(
+                                        "AND NOT(REGEXP_LIKE(tenant_id,CAST('[^0-9]' AS CHAR CHARSET BINARY)))", "");
+                                case "registry-missing-lf" -> clause.replace(
+                                        "AND INSTR(tenant_id,CHAR(10)) = 0", "");
+                                case "registry-missing-cr" -> clause.replace(
+                                        "AND INSTR(tenant_id,CHAR(13)) = 0", "");
                                 default -> clause;
                             };
                         } else if ("chk_identity_alias_scope".equals(original.name())
-                                && "alias-owner-tenant".equals(fault)) {
-                            clause = "tenant_id = TRIM(owner_jiacn)";
+                                && fault.startsWith("alias-")) {
+                            clause = switch (fault) {
+                                case "alias-owner-tenant" -> "tenant_id = TRIM(owner_jiacn)";
+                                case "alias-dual-tenant" -> "tenant_id = '0' OR tenant_id = TRIM(owner_jiacn)";
+                                case "alias-fixed-zero" -> "tenant_id = '0'";
+                                case "alias-missing-not-null" -> clause.replace(
+                                        "tenant_id IS NOT NULL", "TRUE");
+                                case "alias-leading-zero" -> clause.replace(
+                                        "^(0|[1-9][0-9]{0,49})$", "^[0-9]{1,50}$");
+                                case "alias-missing-nondigit" -> clause.replace(
+                                        "AND NOT(REGEXP_LIKE(tenant_id,CAST('[^0-9]' AS CHAR CHARSET BINARY)))", "");
+                                case "alias-missing-lf" -> clause.replace(
+                                        "AND INSTR(tenant_id,CHAR(10)) = 0", "");
+                                case "alias-missing-cr" -> clause.replace(
+                                        "AND INSTR(tenant_id,CHAR(13)) = 0", "");
+                                default -> clause;
+                            };
                         }
                         checks.set(i, new AgentSchemaInitializer.CheckDefinition(
                                 original.table(), original.name(), clause));
@@ -1617,11 +1680,12 @@ class AgentSchemaInitializerTest extends BaseMockTest {
                         ? "canonical_type = 'SYSTEM' OR tenant_id = '0'"
                         : """
                           (canonical_type = 'SYSTEM' AND client_id IS NULL
-                              AND owner_jiacn IS NULL AND tenant_id = '0')
+                              AND owner_jiacn IS NULL
+                              AND tenant_id IS NOT NULL AND tenant_id = '0')
                           OR (canonical_type <> 'SYSTEM' AND client_id IS NOT NULL
                               AND TRIM(client_id) <> '' AND owner_jiacn IS NOT NULL
-                              AND TRIM(owner_jiacn) <> '' AND tenant_id = '0')
-                          """),
+                              AND TRIM(owner_jiacn) <> '' AND %s)
+                          """.formatted(canonicalTenantCatalogClause())),
                 new AgentSchemaInitializer.CheckDefinition("agent_identity_registry",
                         "chk_identity_registry_retired", """
                         (lifecycle_status = 'RETIRED' AND retired_at IS NOT NULL)
@@ -1632,7 +1696,7 @@ class AgentSchemaInitializerTest extends BaseMockTest {
                 new AgentSchemaInitializer.CheckDefinition("agent_identity_alias",
                         "chk_identity_alias_status", "alias_status IN ('ACTIVE','REVOKED')"),
                 new AgentSchemaInitializer.CheckDefinition("agent_identity_alias",
-                        "chk_identity_alias_scope", "tenant_id = '0'"),
+                        "chk_identity_alias_scope", canonicalTenantCatalogClause()),
                 new AgentSchemaInitializer.CheckDefinition("agent_identity_alias",
                         "chk_identity_alias_no_blank_scope",
                         "TRIM(client_id) <> '' AND TRIM(owner_jiacn) <> ''"),
@@ -2080,7 +2144,27 @@ class AgentSchemaInitializerTest extends BaseMockTest {
                 Map.of("CONSTRAINT_NAME", h2 ? "CHK_AGENT_BINDING_STATUS" : "chk_agent_binding_status",
                         "ENFORCED", "YES", "CHECK_CLAUSE", h2 ? "\"STATUS\" IN (0, 1, 2, 3)" : "status IN (0, 1, 2, 3)"),
                 Map.of("CONSTRAINT_NAME", h2 ? "CHK_AGENT_BINDING_SINGLE_TENANT" : "chk_agent_binding_single_tenant",
-                        "ENFORCED", "YES", "CHECK_CLAUSE", h2 ? "\"TENANT_ID\" = '0'" : "tenant_id = '0'"));
+                        "ENFORCED", "YES", "CHECK_CLAUSE",
+                        h2 ? canonicalTenantCatalogClause().replace("tenant_id", "\"TENANT_ID\"")
+                                : canonicalTenantCatalogClause()));
+    }
+
+    private String canonicalTenantCatalogClause() {
+        return """
+                tenant_id IS NOT NULL
+                AND REGEXP_LIKE(tenant_id,CAST('^(0|[1-9][0-9]{0,49})$' AS CHAR CHARSET BINARY))
+                AND NOT(REGEXP_LIKE(tenant_id,CAST('[^0-9]' AS CHAR CHARSET BINARY)))
+                AND INSTR(tenant_id,CHAR(10)) = 0
+                AND INSTR(tenant_id,CHAR(13)) = 0
+                """.strip();
+    }
+
+    private void assertCanonicalTenantPredicate(String normalized) {
+        assertTrue(normalized.contains("tenant_id is not null"));
+        assertTrue(normalized.contains("tenant_id regexp binary '^(0|[1-9][0-9]{0,49})$'"));
+        assertTrue(normalized.contains("tenant_id not regexp binary '[^0-9]'"));
+        assertTrue(normalized.contains("instr(tenant_id, char(10)) = 0"));
+        assertTrue(normalized.contains("instr(tenant_id, char(13)) = 0"));
     }
 
     private List<Map<String, Object>> bindingTenantCatalogRows(String sql) {

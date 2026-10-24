@@ -2,6 +2,10 @@ package cn.jia.agent.security;
 
 import cn.jia.core.context.EsContext;
 import cn.jia.core.context.EsContextHolder;
+import cn.jia.core.tenant.BusinessScope;
+import cn.jia.core.tenant.DataDomainId;
+import cn.jia.core.tenant.TenantId;
+import cn.jia.core.tenant.TrustedTenantContext;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -68,6 +72,10 @@ public final class AgentRuntimeAuthenticationFilter extends OncePerRequestFilter
     @Override protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
             FilterChain chain) throws ServletException, IOException {
         response.setHeader("Cache-Control", "private, no-store");
+        // This is a top-level native lane. Never restore pooled-thread residue from another request.
+        TrustedTenantContext.clear();
+        EsContextHolder.clearContext();
+        SecurityContextHolder.clearContext();
         final AgentRuntimeAuthentication authentication;
         try {
             if (!allowed(request) || request.getHeader("Origin") != null) {
@@ -78,19 +86,28 @@ public final class AgentRuntimeAuthenticationFilter extends OncePerRequestFilter
             authentication = service.authenticate(sessionHeaders(request), !handshake && !ack);
         } catch (org.springframework.dao.DataAccessException unavailable) { reject(response, 503); return; }
         catch (RuntimeException ignored) { reject(response, 401); return; }
-        var previous = SecurityContextHolder.getContext();
         var context = SecurityContextHolder.createEmptyContext();
         context.setAuthentication(authentication);
         SecurityContextHolder.setContext(context);
-        var previousScope = EsContextHolder.getContext();
         var trustedScope = new EsContext();
         trustedScope.setTenantId(authentication.getPrincipal().tenantId());
         trustedScope.setJiacn(authentication.getPrincipal().ownerJiacn());
         trustedScope.setClientId(authentication.getPrincipal().clientId());
         EsContextHolder.setContext(trustedScope); // never inherit client cookies as domain scope
-        try { chain.doFilter(request, response); } finally {
-            EsContextHolder.setContext(previousScope);
-            SecurityContextHolder.setContext(previous);
+        BusinessScope business = new BusinessScope(
+                TenantId.of(authentication.getPrincipal().tenantId()), DataDomainId.of("cyf"),
+                authentication.getPrincipal().ownerJiacn(), authentication.getPrincipal().clientId());
+        try {
+            TrustedTenantContext.runWithScopeChecked(business,
+                    () -> chain.doFilter(request, response));
+        } catch (ServletException | IOException exception) {
+            throw exception;
+        } catch (Exception exception) {
+            throw new ServletException(exception);
+        } finally {
+            TrustedTenantContext.clear();
+            EsContextHolder.clearContext();
+            SecurityContextHolder.clearContext();
         }
     }
     /** Unified proof syntax shared by native HTTP and the WS handshake. Parsing grants no authority.

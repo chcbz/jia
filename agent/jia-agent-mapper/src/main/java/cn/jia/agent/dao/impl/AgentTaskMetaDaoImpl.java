@@ -12,6 +12,7 @@ import cn.jia.agent.mapper.AgentTaskStatsScope;
 import cn.jia.agent.mapper.AgentTaskStatusCountRow;
 import cn.jia.common.dao.BaseDaoImpl;
 import cn.jia.core.util.DateUtil;
+import cn.jia.core.tenant.TenantId;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import jakarta.inject.Named;
 
@@ -302,9 +303,10 @@ public class AgentTaskMetaDaoImpl extends BaseDaoImpl<AgentTaskMetaMapper, Agent
     private void requireStrictOwnerScope(
             String tenantId, String clientId, String ownerJiacn) {
         TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+        TenantId.of(tenantId);
         requireExactId(ownerJiacn, "ownerJiacn", 50);
-        if (!"0".equals(tenantId) || "0".equals(ownerJiacn)) {
-            throw new IllegalArgumentException("strict task owner scope requires tenant 0 and a real owner");
+        if ("0".equals(ownerJiacn)) {
+            throw new IllegalArgumentException("strict task owner scope requires a real owner");
         }
     }
 

@@ -158,6 +158,12 @@ class TenantCardA12Test {
         AgentServiceImpl service = service(personas, bindings, runtimes);
         AgentPersonaEntity publicPersona = persona("0", null, "songjiang", "宋江", true);
         AgentPersonaEntity localPersona = persona(TENANT, CLIENT, "wuyong", "吴用", false);
+        localPersona.setId(12L);
+        localPersona.setPersonality("沉着谋略");
+        localPersona.setSpeakingStyle("条分缕析");
+        localPersona.setBackground("郓城军师");
+        localPersona.setCreateTime(101L);
+        localPersona.setUpdateTime(202L);
         when(personas.findCatalogProjection(TENANT, CLIENT))
                 .thenReturn(List.of(publicPersona, localPersona));
         when(bindings.findCatalogOverlay(TENANT, CLIENT, OWNER)).thenReturn(List.of());
@@ -167,11 +173,15 @@ class TenantCardA12Test {
                 .thenReturn(List.of());
         when(personas.findByCodeInReadScope(TENANT, CLIENT, "songjiang"))
                 .thenReturn(publicPersona);
+        when(personas.findFullProjection(TENANT, CLIENT)).thenReturn(List.of(localPersona));
+        when(personas.findByNameInReadScope(TENANT, CLIENT, "吴用")).thenReturn(localPersona);
 
         List<AgentRuntimeDTO> catalog = inScope(
                 () -> service.listPersonaCatalog(TENANT, CLIENT, OWNER));
         List<AgentRuntimeDTO> map = inScope(service::listMapAgents);
         var capabilities = inScope(service::listCapabilities);
+        List<AgentPersonaEntity> fullPersonas = inScope(service::listPersonas);
+        AgentPersonaEntity fullPersona = inScope(() -> service.getPersona("吴用"));
 
         assertEquals(List.of("songjiang", "wuyong"),
                 catalog.stream().map(AgentRuntimeDTO::getPersonaCode).toList());
@@ -179,8 +189,15 @@ class TenantCardA12Test {
                 map.stream().map(AgentRuntimeDTO::getAgentId).toList());
         assertEquals(AgentConstants.BUILTIN_SONGJIANG_AGENT_ID,
                 capabilities.getFirst().getAgentId());
+        assertEquals(List.of(localPersona), fullPersonas);
+        assertEquals(localPersona, fullPersona);
+        assertEquals("沉着谋略", fullPersona.getPersonality());
+        assertEquals("条分缕析", fullPersona.getSpeakingStyle());
+        assertEquals("郓城军师", fullPersona.getBackground());
         verify(personas).findRuntimeProjection(TENANT, CLIENT);
         verify(personas).findByCodeInReadScope(TENANT, CLIENT, "songjiang");
+        verify(personas).findFullProjection(TENANT, CLIENT);
+        verify(personas).findByNameInReadScope(TENANT, CLIENT, "吴用");
 
         assertThrows(RuntimeException.class, () -> inScope(
                 () -> service.listPersonaCatalog("0", CLIENT, OWNER)));
@@ -198,11 +215,33 @@ class TenantCardA12Test {
                 .findCatalogProjection(TENANT, CLIENT));
         List<AgentPersonaEntity> runtime = inScope(() -> fixture.dao()
                 .findRuntimeProjection(TENANT, CLIENT));
+        List<AgentPersonaEntity> full = inScope(() -> fixture.dao()
+                .findFullProjection(TENANT, CLIENT));
 
         assertEquals(List.of("public-songjiang", "tenant-wuyong"),
                 catalog.stream().map(AgentPersonaEntity::getPersonaCode).toList());
         assertEquals(List.of("public-songjiang", "tenant-wuyong", "tenant-inactive"),
                 runtime.stream().map(AgentPersonaEntity::getPersonaCode).toList());
+        AgentPersonaEntity fullLocal = full.stream()
+                .filter(row -> "tenant-wuyong".equals(row.getPersonaCode()))
+                .findFirst().orElseThrow();
+        assertEquals(2L, fullLocal.getId());
+        assertEquals("天机星", fullLocal.getStarName());
+        assertEquals("智多星", fullLocal.getTitle());
+        assertEquals("wuyong.png", fullLocal.getAvatar());
+        assertEquals("{\"robe\":\"blue\"}", fullLocal.getVisualConfig());
+        assertEquals("[\"planning\"]", fullLocal.getAbilities());
+        assertEquals("沉着谋略", fullLocal.getPersonality());
+        assertEquals("条分缕析", fullLocal.getSpeakingStyle());
+        assertEquals("郓城军师", fullLocal.getBackground());
+        assertEquals(8, fullLocal.getPower());
+        assertEquals(9, fullLocal.getIntelligence());
+        assertEquals(7, fullLocal.getLeadership());
+        assertTrue(fullLocal.getActive());
+        assertEquals(101L, fullLocal.getCreateTime());
+        assertEquals(202L, fullLocal.getUpdateTime());
+        assertEquals(fullLocal, inScope(() -> fixture.dao()
+                .findByNameInReadScope(TENANT, CLIENT, "吴用")));
         assertEquals(Set.of("tenant-wuyong", "tenant-inactive", "foreign-client",
                         "case-client", "padded-client"),
                 Set.copyOf(inScope(() -> fixture.mapper().selectList(null)).stream()
@@ -211,7 +250,7 @@ class TenantCardA12Test {
 
         seedPublicPersonaOverlay(fixture.jdbc());
         var overlay = inScope(() -> fixture.bindingMapper().findCatalogOverlay(
-                TENANT, CLIENT, OWNER, AgentConstants.BINDING_STATUS_ACTIVE));
+                TENANT, CLIENT, OWNER, AgentConstants.BINDING_STATUS_ACTIVE, ""));
         assertEquals(List.of("public-linchong"),
                 overlay.stream().map(row -> row.getPersonaCode()).toList(),
                 "the actual tenant plugin must not erase the audited public-template join");
@@ -234,7 +273,7 @@ class TenantCardA12Test {
 
         inScope(() -> bindingDao.findCatalogOverlay(TENANT, CLIENT, OWNER));
         verify(bindingMapper).findCatalogOverlay(
-                TENANT, CLIENT, OWNER, AgentConstants.BINDING_STATUS_ACTIVE);
+                TENANT, CLIENT, OWNER, AgentConstants.BINDING_STATUS_ACTIVE, "");
         for (Supplier<?> rejected : List.<Supplier<?>>of(
                 () -> bindingDao.findCatalogOverlay("01", CLIENT, OWNER),
                 () -> bindingDao.findCatalogOverlay("2", CLIENT, OWNER),
@@ -362,6 +401,15 @@ class TenantCardA12Test {
         insert(jdbc, "foreign-client", 5, "异客户端", true, TENANT, "client-2", false);
         insert(jdbc, "case-client", 6, "大小写客户端", true, TENANT, "Client-1", false);
         insert(jdbc, "padded-client", 7, "填充客户端", true, TENANT, "client-1 ", false);
+        jdbc.update("""
+                UPDATE agent_persona
+                SET star_name=?, title=?, avatar=?, visual_config=?, abilities=?, personality=?,
+                    speaking_style=?, background=?, power=?, intelligence=?, leadership=?,
+                    create_time=?, update_time=?
+                WHERE persona_code=?
+                """, "天机星", "智多星", "wuyong.png", "{\"robe\":\"blue\"}",
+                "[\"planning\"]", "沉着谋略", "条分缕析", "郓城军师", 8, 9, 7,
+                101L, 202L, "tenant-wuyong");
     }
 
     private static void seedPublicPersonaOverlay(JdbcTemplate jdbc) {

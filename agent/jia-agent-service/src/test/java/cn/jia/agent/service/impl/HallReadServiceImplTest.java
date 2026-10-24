@@ -71,7 +71,8 @@ class HallReadServiceImplTest {
         assertEquals("complete", first.status()); assertNotNull(first.nextCursor());
         service.items(SCOPE, "draft", "recent", "name", first.nextCursor());
         verify(dao).page("0", "client-a", "owner-a", "draft", "recent", "name", 9L, "DRAFT", "d80", 21);
-        for (OwnerScope other : List.of(new OwnerScope("0", "other", "owner-a"), new OwnerScope("0", "client-a", "other"))) {
+        for (OwnerScope other : List.of(new OwnerScope("0", "other", "owner-a"), new OwnerScope("0", "client-a", "other"),
+                new OwnerScope("1", "client-a", "owner-a"))) {
             assertBad(() -> service.items(other, "draft", "recent", "name", first.nextCursor()));
         }
         assertBad(() -> service.items(SCOPE, "draft", "needsAction", "name", first.nextCursor()));
@@ -104,8 +105,29 @@ class HallReadServiceImplTest {
         assertBad(() -> service.items(SCOPE, "draft", "x", null, null));
         assertBad(() -> service.items(SCOPE, "draft", null, "x".repeat(201), null));
         assertBad(() -> service.items(SCOPE, "draft", null, null, "bad cursor"));
-        assertBad(() -> service.overview(new OwnerScope("1", "client-a", "owner-a")));
+        for (String tenant : List.of("01", " 1", "1 ", "-1", "1\n"))
+            assertBad(() -> service.overview(new OwnerScope(tenant, "client-a", "owner-a")));
         verifyNoInteractions(dao);
+    }
+    @Test void tenantOneOverviewAndItemsKeepExactScopeAndRejectForeignRows() {
+        var local = new OwnerScope("1", "cyf-local", "owner-a");
+        var draft = row("DRAFT", "local-draft", "EDITING", 9).setTenantId("1").setClientId("cyf-local");
+        when(dao.page("1", "cyf-local", "owner-a", "draft", "recent", "", null, null, null, 21))
+                .thenReturn(List.of(draft));
+        var recent = service.overview(local).sections().get("recent");
+        assertEquals("complete", recent.status());
+        assertEquals("local-draft", recent.partitions().get("draft").items().getFirst().ref().sourceId());
+        assertEquals("complete", service.items(local, "draft", "recent", "", null).section().status());
+        for (HallItemRow foreign : List.of(
+                row("DRAFT", "foreign", "EDITING", 9).setClientId("cyf-local"),
+                row("DRAFT", "foreign", "EDITING", 9).setTenantId("1").setClientId("other-client"),
+                row("DRAFT", "foreign", "EDITING", 9).setTenantId("1").setClientId("cyf-local").setOwnerJiacn("other-owner"))) {
+            when(dao.page("1", "cyf-local", "owner-a", "draft", "recent", "", null, null, null, 21))
+                    .thenReturn(List.of(foreign));
+            assertEquals("error", service.items(local, "draft", "recent", "", null).section().status());
+        }
+        verify(dao, never()).page(eq("0"), anyString(), anyString(), anyString(), anyString(), anyString(),
+                nullable(Long.class), nullable(String.class), nullable(String.class), anyInt());
     }
     @Test void privateMarkAndFormalReviewAreAdditiveButNeverPrivateAcceptanceActions() {
         var privateRow = row("LEGACY_EXECUTION","e","OUTPUT_COMMITTED",9)

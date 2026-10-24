@@ -137,7 +137,10 @@ class PersonalWorkspaceExecutionControllerTest {
     void missingOrMalformedJwtScopeFailsClosedBeforeHistoryLookup() throws Exception {
         mvc.perform(get("/agent/personal-workspace/executions"))
                 .andExpect(status().isUnauthorized())
-                .andExpect(jsonPath("$.code").value("EXECUTION_UNAUTHENTICATED"));
+                .andExpect(jsonPath("$.code").value("EXECUTION_UNAUTHENTICATED"))
+                .andExpect(jsonPath("$.protocolVersion").value(1))
+                .andExpect(jsonPath("$.msg").value("Execution access is unavailable"))
+                .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
         mvc.perform(get("/agent/personal-workspace/executions").principal(jwt("owner-a ", "client-a")))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.code").value("EXECUTION_FORBIDDEN"));
@@ -161,7 +164,8 @@ class PersonalWorkspaceExecutionControllerTest {
             mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
                             .post("/agent/personal-workspace/executions").principal(principal)
                             .contentType("application/json")
-                            .content("{\"targetAgentId\":\"agent-a\",\"inputs\":[]}"))
+                            .content("{\"protocolVersion\":1,\"requestId\":\"test-request\","
+                                    + "\"data\":{\"targetAgentId\":\"agent-a\",\"inputs\":[]}}"))
                     .andExpect(status().isForbidden())
                     .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
         }

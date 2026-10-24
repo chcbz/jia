@@ -16,10 +16,14 @@ import cn.jia.chat.deliberation.ChatTypedDeliberationStore;
 import cn.jia.chat.deliberation.InteractionRoute;
 import cn.jia.chat.entity.ChatConversationEntity;
 import cn.jia.chat.entity.ChatMessageEntity;
+import cn.jia.chat.entity.ConversationDataScope;
 import cn.jia.chat.handler.dto.ChatMessageDTO;
 import cn.jia.core.util.JsonUtil;
 import cn.jia.core.context.EsContext;
 import cn.jia.core.context.EsContextHolder;
+import cn.jia.core.tenant.BusinessScope;
+import cn.jia.core.tenant.DataDomainId;
+import cn.jia.core.tenant.TenantId;
 import org.springframework.stereotype.Service;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.annotation.Transactional;
@@ -1630,7 +1634,8 @@ public class ChatDeliberationService {
             String conversationId, long generation) {
         ChatConversationEntity conversation;
         try {
-            conversation = conversationDao.findScopedById(owner, client, conversationId);
+            conversation = conversationDao.findScopedById(
+                    legacyClientScope(tenantId, owner, client), conversationId);
         } catch (RuntimeException e) {
             throw unavailable();
         }
@@ -1641,11 +1646,18 @@ public class ChatDeliberationService {
             String conversationId, long generation) {
         ChatConversationEntity conversation;
         try {
-            conversation = conversationDao.lockScopedById(owner, client, conversationId);
+            conversation = conversationDao.lockScopedById(
+                    legacyClientScope(tenantId, owner, client), conversationId);
         } catch (RuntimeException e) {
             throw unavailable();
         }
         return requireConversationGeneration(conversation, tenantId, generation);
+    }
+
+    private ConversationDataScope legacyClientScope(String tenantId, String owner, String client) {
+        return new ConversationDataScope(
+                new BusinessScope(TenantId.of(tenantId), DataDomainId.of("cyf"), owner, client),
+                ConversationDataScope.Mode.LEGACY_CLIENT);
     }
 
     private ChatConversationEntity requireConversationGeneration(ChatConversationEntity conversation,
@@ -1691,7 +1703,7 @@ public class ChatDeliberationService {
     private boolean liveTurn(String tenantId, String owner, String client, ChatTurnEntity turn) {
         try {
             ChatConversationEntity conversation = conversationDao.findScopedById(
-                    owner, client, turn.getConversationId());
+                    legacyClientScope(tenantId, owner, client), turn.getConversationId());
             return conversation != null && conversation.getDeletedAt() == null
                     && Objects.equals(tenantId, conversation.getTenantId())
                     && Objects.equals(conversation.getLifecycleGeneration(), turn.getConversationGeneration());
@@ -1703,7 +1715,7 @@ public class ChatDeliberationService {
     private boolean liveRequest(String tenantId, String owner, String client, ChatRequestEntity request) {
         try {
             ChatConversationEntity conversation = conversationDao.findScopedById(
-                    owner, client, request.getConversationId());
+                    legacyClientScope(tenantId, owner, client), request.getConversationId());
             return conversation != null && conversation.getDeletedAt() == null
                     && Objects.equals(tenantId, conversation.getTenantId())
                     && Objects.equals(conversation.getLifecycleGeneration(), request.getConversationGeneration());

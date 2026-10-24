@@ -19,7 +19,7 @@ public interface AgentTaskMutationTransaction {
             String taskId,
             LockedTaskMutation<T> mutation);
 
-    /** Strict single-tenant root lock; SQL must include the authenticated owner. */
+    /** Strict tenant root lock; SQL must include the authenticated owner. */
     <T> T executeWithLockedTaskRootInOwnerScope(
             String tenantId,
             String clientId,
@@ -33,7 +33,7 @@ public interface AgentTaskMutationTransaction {
             String workItemId,
             LockedTaskMutation<T> mutation);
 
-    /** Strict single-tenant work-item-to-root lock; owner is an SQL predicate. */
+    /** Strict tenant work-item-to-root lock; owner is an SQL predicate. */
     <T> T executeWithLockedTaskRootForWorkItemInOwnerScope(
             String tenantId,
             String clientId,
@@ -48,7 +48,7 @@ public interface AgentTaskMutationTransaction {
             TaskRootReservation reservation,
             ReservedTaskMutation<T> mutation);
 
-    /** Strict single-tenant reservation and root lock; owner is an SQL predicate. */
+    /** Strict tenant reservation and root lock; owner is an SQL predicate. */
     <T> T executeAfterTaskRootReservationInOwnerScope(
             String tenantId,
             String clientId,

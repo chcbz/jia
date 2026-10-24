@@ -2,6 +2,7 @@ package cn.jia.agent.service.impl;
 
 import cn.jia.agent.exception.PersonalWorkspaceException;
 import cn.jia.agent.service.PersonalWorkspaceStorage;
+import cn.jia.core.tenant.TenantId;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -111,7 +112,7 @@ public final class FileSystemPersonalWorkspaceStorage implements PersonalWorkspa
     private static void permissions(Path p,Set<PosixFilePermission> permissions){try{Files.setPosixFilePermissions(p,permissions);}catch(IOException|UnsupportedOperationException e){unavailable(e);}}
     private void validateMime(String mime){if(!validMime(mime))invalid();}
     private static boolean validMime(String mime){return mime!=null&&MIME.matcher(mime).matches();}
-    private static void validateScope(Scope s){if(s==null||!"0".equals(s.tenantId())||!identifier(s.clientId(),50)||!identifier(s.ownerJiacn(),50)||"0".equals(s.ownerJiacn()))invalid();}
+    private static void validateScope(Scope s){if(s==null)invalid();try{TenantId.of(s.tenantId());}catch(RuntimeException invalid){invalid();}if(!identifier(s.clientId(),50)||!identifier(s.ownerJiacn(),50)||"0".equals(s.ownerJiacn()))invalid();}
     private static boolean identifier(String s,int max){return s!=null&&!s.isBlank()&&s.equals(s.strip())&&s.codePointCount(0,s.length())<=max&&!s.chars().anyMatch(Character::isISOControl);}
     private static String scopeKey(Scope scope){MessageDigest d=digest();component(d,scope.tenantId());component(d,scope.clientId());component(d,scope.ownerJiacn());return HexFormat.of().formatHex(d.digest());}
     private static void component(MessageDigest d,String value){byte[] b=value.getBytes(StandardCharsets.UTF_8);d.update(ByteBuffer.allocate(Integer.BYTES).putInt(b.length).array());d.update(b);}

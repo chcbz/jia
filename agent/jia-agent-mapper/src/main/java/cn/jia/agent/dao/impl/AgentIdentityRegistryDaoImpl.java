@@ -4,13 +4,27 @@ import cn.jia.agent.dao.AgentIdentityRegistryDao;
 import cn.jia.agent.entity.AgentIdentityRegistryEntity;
 import cn.jia.agent.mapper.AgentIdentityRegistryMapper;
 import cn.jia.common.dao.BaseDaoImpl;
+import cn.jia.core.tenant.TenantId;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import jakarta.inject.Named;
+
+import java.util.List;
 
 @Named
 public class AgentIdentityRegistryDaoImpl
         extends BaseDaoImpl<AgentIdentityRegistryMapper, AgentIdentityRegistryEntity>
         implements AgentIdentityRegistryDao {
+    @Override
+    public List<AgentIdentityRegistryEntity> findBootstrapExactByCanonical(
+            String tenantId, String clientId, String canonicalAgentId) {
+        requireExact(tenantId, "tenantId", 200);
+        TenantId.of(tenantId);
+        requireExact(clientId, "clientId", 200);
+        requireExact(canonicalAgentId, "canonicalAgentId", 400);
+        return baseMapper.selectBootstrapExactByCanonical(
+                tenantId, clientId, canonicalAgentId);
+    }
+
     @Override
     public AgentIdentityRegistryEntity findExactByCanonicalInScope(String tenantId, String clientId,
             String ownerJiacn, String canonicalAgentId) {
@@ -68,8 +82,9 @@ public class AgentIdentityRegistryDaoImpl
         requireExact(tenantId, "tenantId", 200);
         requireExact(clientId, "clientId", 200);
         requireExact(ownerJiacn, "ownerJiacn", 200);
-        if (!"0".equals(tenantId) || "0".equals(ownerJiacn)) {
-            throw new IllegalArgumentException("identity scope requires tenant 0 and a real owner");
+        TenantId.of(tenantId);
+        if ("0".equals(ownerJiacn)) {
+            throw new IllegalArgumentException("identity scope requires a real owner");
         }
     }
 

@@ -8,6 +8,10 @@ import cn.jia.agent.service.AgentPersonaProvisioningService;
 import cn.jia.agent.service.AgentService;
 import cn.jia.agent.service.impl.AgentServiceImpl.AgentBizException;
 import cn.jia.core.security.AllowSensitiveOutput;
+import cn.jia.core.tenant.BusinessScope;
+import cn.jia.core.tenant.DataDomainId;
+import cn.jia.core.tenant.TenantId;
+import cn.jia.core.tenant.TrustedTenantContext;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
@@ -25,6 +29,8 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 class AgentControllerTest {
+    private static final BusinessScope SCOPE = new BusinessScope(
+            TenantId.of("0"), DataDomainId.of("cyf"), "Owner-A", "Client-A");
     private final AgentService agentService = mock(AgentService.class);
     private final AgentPersonaProvisioningService provisioning = mock(AgentPersonaProvisioningService.class);
     private final AgentController controller = new AgentController(
@@ -43,17 +49,20 @@ class AgentControllerTest {
         AgentPersonaBindRequestDTO request = new AgentPersonaBindRequestDTO();
         request.setMode("local");
 
-        Object catalogResponse = controller.personaCatalog(auth);
-        controller.bindPersona("wuyong", request, auth);
-        controller.repairPersonaBinding(17L, auth);
-        controller.unbindPersona("wuyong", auth);
+        Object catalogResponse = TrustedTenantContext.withScope(SCOPE, () -> {
+            Object response = controller.personaCatalog(auth);
+            controller.bindPersona("wuyong", request, auth);
+            controller.repairPersonaBinding(17L, auth);
+            controller.unbindPersona("wuyong", auth);
+            return response;
+        });
 
         ResponseEntity<?> response = assertInstanceOf(ResponseEntity.class, catalogResponse);
         assertEquals("private, no-store", response.getHeaders().getFirst(HttpHeaders.CACHE_CONTROL));
         var scope = new cn.jia.agent.service.AgentHostedBindingTransaction.Scope(
                 "0", "Client-A", "Owner-A");
         verify(agentService).listPersonaCatalog("0", "Client-A", "Owner-A");
-        verify(provisioning).bind(scope, "wuyong", "local");
+        verify(provisioning).bindLocal(SCOPE, "wuyong");
         verify(provisioning).repair(scope, 17L);
         verify(provisioning).unbind(scope, "wuyong");
     }
@@ -69,8 +78,9 @@ class AgentControllerTest {
         when(agentService.recommendTaskTeam(
                 "0", "Client-A", "task-001", request)).thenReturn(recommendation);
 
-        Object raw = controller.recommendTaskTeam(
-                "task-001", new cn.jia.core.entity.JsonRequest<>(1, "test-request", request), jwt("Owner-A", "Client-A"));
+        Object raw = TrustedTenantContext.withScope(SCOPE, () -> controller.recommendTaskTeam(
+                "task-001", new cn.jia.core.entity.JsonRequest<>(1, "test-request", request),
+                jwt("Owner-A", "Client-A")));
 
         ResponseEntity<?> response = assertInstanceOf(ResponseEntity.class, raw);
         assertEquals("private, no-store",
@@ -113,8 +123,11 @@ class AgentControllerTest {
         AgentPersonaBindRequestDTO request = new AgentPersonaBindRequestDTO();
         request.setMode("server");
 
-        var failure = assertThrows(cn.jia.agent.service.HostingRentAdmissionException.class,
-                () -> controller.bindPersona("wuyong", request, jwt("owner", "client")));
+        BusinessScope scope = new BusinessScope(
+                TenantId.of("0"), DataDomainId.of("cyf"), "owner", "client");
+        var failure = TrustedTenantContext.withScope(scope, () ->
+                assertThrows(cn.jia.agent.service.HostingRentAdmissionException.class,
+                        () -> controller.bindPersona("wuyong", request, jwt("owner", "client"))));
 
         assertEquals(cn.jia.agent.service.HostingRentAdmissionException.Reason.HOSTING_RENT_NOT_READY,
                 failure.reason());
@@ -158,6 +171,7 @@ class AgentControllerTest {
 
     private static JwtAuthenticationToken jwtClaims(Object jiacn, Object clientId) {
         Jwt.Builder builder = Jwt.withTokenValue("token").header("alg", "none")
+                .claim("tenant_id", "0").claim("data_domain_id", "cyf").subject("user")
                 .issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(60));
         if (jiacn != null) builder.claim("jiacn", jiacn);
         if (clientId != null) builder.claim("client_id", clientId);

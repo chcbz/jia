@@ -1,6 +1,7 @@
 package cn.jia.chat.deliberation;
 
 import java.util.List;
+import java.util.Set;
 
 public interface ChatDeliberationDao {
     int insertSnapshot(ChatContextSnapshotEntity entity);
@@ -19,7 +20,10 @@ public interface ChatDeliberationDao {
     ChatDispatchOutboxEntity findOutboxById(String tenantId, String ownerJiacn, String clientId, String eventId);
     ChatDispatchOutboxEntity lockOutboxById(String tenantId, String ownerJiacn, String clientId, String eventId);
     ChatDispatchOutboxEntity lockOutboxByDispatch(String tenantId, String ownerJiacn, String clientId, String dispatchId);
-    List<ChatDispatchOutboxEntity> findDueOutbox(long now, int limit);
+    List<ChatDispatchOutboxEntity> findDueOutbox(Set<String> allowedTenants, long now, int limit);
+    default List<ChatDispatchOutboxEntity> findDueOutbox(long now, int limit) {
+        return findDueOutbox(Set.of("0"), now, limit);
+    }
     List<ChatConversationEventEntity> replayEvents(String tenantId, String ownerJiacn, String clientId,
             String conversationId, long generation, long afterSequence, long throughSequence, int limit);
     long eventHighWatermark(String tenantId, String ownerJiacn, String clientId,

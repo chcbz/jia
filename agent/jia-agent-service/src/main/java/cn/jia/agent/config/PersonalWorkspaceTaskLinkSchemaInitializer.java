@@ -12,7 +12,9 @@ import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
+import java.util.TreeMap;
 
 /** Installs only the two additive 1.11 C1-B task-link tables. */
 @org.springframework.context.annotation.Profile("schema-maintenance")
@@ -21,10 +23,19 @@ public final class PersonalWorkspaceTaskLinkSchemaInitializer implements Initial
     static final List<String> TABLES = List.of(
             "agent_personal_workspace_task_file_link",
             "agent_personal_workspace_task_link_operation");
+    private static final Map<String, String> REQUIRED_TENANT_CHECKS = normalizedChecks(Map.of(
+            "chk_pwtl_single_tenant", canonicalTenantCatalogCheck(),
+            "chk_pwtl_operation_tenant", canonicalTenantCatalogCheck()));
     private final JdbcTemplate jdbc;
+    private final boolean validateOnly;
 
     public PersonalWorkspaceTaskLinkSchemaInitializer(JdbcTemplate jdbc) {
+        this(jdbc, false);
+    }
+
+    PersonalWorkspaceTaskLinkSchemaInitializer(JdbcTemplate jdbc, boolean validateOnly) {
         this.jdbc = Objects.requireNonNull(jdbc, "jdbc");
+        this.validateOnly = validateOnly;
     }
 
     @Override
@@ -32,6 +43,8 @@ public final class PersonalWorkspaceTaskLinkSchemaInitializer implements Initial
         requireMySql();
         List<String> present = presentTables();
         if (present.isEmpty()) {
+            SchemaValidationMode.requireMutationAllowed(validateOnly,
+                    "Personal workspace task-link schema");
             ddlStatements().forEach(jdbc::execute);
         } else if (!present.equals(TABLES)) {
             throw new IllegalStateException("Personal workspace task-link schema is partial: " + present);
@@ -39,6 +52,21 @@ public final class PersonalWorkspaceTaskLinkSchemaInitializer implements Initial
         if (!presentTables().equals(TABLES)) {
             throw new IllegalStateException("Personal workspace task-link schema is unavailable");
         }
+        validateTenantChecks(jdbc.queryForList("""
+                SELECT tc.constraint_name,tc.enforced,cc.check_clause
+                  FROM information_schema.table_constraints tc
+                  JOIN information_schema.check_constraints cc
+                    ON cc.constraint_catalog=tc.constraint_catalog
+                   AND cc.constraint_schema=tc.constraint_schema
+                   AND cc.constraint_name=tc.constraint_name
+                 WHERE tc.table_schema=DATABASE()
+                   AND tc.table_name IN
+                     ('agent_personal_workspace_task_file_link',
+                      'agent_personal_workspace_task_link_operation')
+                   AND tc.constraint_type='CHECK'
+                   AND tc.constraint_name IN
+                     ('chk_pwtl_single_tenant','chk_pwtl_operation_tenant')
+                """));
     }
 
     static List<String> ddlStatements() {
@@ -69,6 +97,45 @@ public final class PersonalWorkspaceTaskLinkSchemaInitializer implements Initial
             }
         }
         return List.copyOf(statements);
+    }
+
+    static void validateTenantChecks(List<Map<String, Object>> rows) {
+        Map<String, String> actual = new TreeMap<>();
+        for (Map<String, Object> row : rows) {
+            String name = Objects.toString(value(row, "constraint_name"), "");
+            String clause = Objects.toString(value(row, "check_clause"), "");
+            if (!"YES".equalsIgnoreCase(Objects.toString(value(row, "enforced"), ""))
+                    || name.isBlank()
+                    || actual.put(name, AgentTaskFundingSchemaInitializer.normalizeCheck(clause))
+                            != null) {
+                throw new IllegalStateException(
+                        "Personal workspace task-link tenant CHECK catalog is invalid");
+            }
+        }
+        if (!actual.equals(REQUIRED_TENANT_CHECKS)) {
+            throw new IllegalStateException(
+                    "Personal workspace task-link tenant CHECK constraints are invalid");
+        }
+    }
+
+    private static String canonicalTenantCatalogCheck() {
+        return "tenant_id IS NOT NULL AND regexp_like(tenant_id, "
+                + "cast('^(0|[1-9][0-9]{0,49})$' AS char charset binary)) "
+                + "AND NOT(regexp_like(tenant_id,cast('[^0-9]' AS char charset binary))) "
+                + "AND instr(tenant_id,char(10))=0 AND instr(tenant_id,char(13))=0";
+    }
+
+    private static Map<String, String> normalizedChecks(Map<String, String> checks) {
+        Map<String, String> normalized = new TreeMap<>();
+        checks.forEach((name, clause) -> normalized.put(
+                name, AgentTaskFundingSchemaInitializer.normalizeCheck(clause)));
+        return Map.copyOf(normalized);
+    }
+
+    private static Object value(Map<String, Object> row, String key) {
+        return row.entrySet().stream()
+                .filter(entry -> entry.getKey().equalsIgnoreCase(key))
+                .findFirst().map(Map.Entry::getValue).orElse(null);
     }
 
     private List<String> presentTables() {

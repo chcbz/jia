@@ -8,6 +8,7 @@ import cn.jia.agent.entity.AgentRuntimeDTO;
 import cn.jia.agent.service.AgentHostedBindingTransaction.Prepared;
 import cn.jia.agent.service.AgentHostedBindingTransaction.Scope;
 import cn.jia.agent.service.impl.AgentServiceImpl.AgentBizException;
+import cn.jia.core.tenant.BusinessScope;
 import cn.jia.core.util.StringUtil;
 import org.springframework.stereotype.Service;
 
@@ -29,10 +30,21 @@ public class AgentPersonaProvisioningService {
 
     public AgentPersonaBindResultDTO bind(Scope scope, String personaCode, String mode) {
         String normalized = StringUtil.isBlank(mode) ? "local" : mode.strip().toLowerCase();
-        if ("local".equals(normalized)) return local(scope, personaCode);
+        if ("local".equals(normalized)) {
+            return local(scope.tenantId(), scope.clientId(), scope.ownerJiacn(), personaCode);
+        }
         if (!"server".equals(normalized)) throw new IllegalArgumentException("Unsupported bind mode: " + mode);
         Prepared prepared = transactions.prepareHosted(scope, personaCode);
         return advance(scope, prepared);
+    }
+
+    public AgentPersonaBindResultDTO bindLocal(BusinessScope scope, String personaCode) {
+        Objects.requireNonNull(scope, "scope");
+        if (!"cyf".equals(scope.dataDomainId().value()) || "0".equals(scope.ownerJiacn())) {
+            throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN,
+                    "Ordinary local persona scope is invalid");
+        }
+        return local(scope.tenantId().value(), scope.callerClientId(), scope.ownerJiacn(), personaCode);
     }
 
     public void unbind(Scope scope, String personaCode) {
@@ -163,9 +175,10 @@ public class AgentPersonaProvisioningService {
                 existing.profilesFile(), created, !created && existing.alreadyExists() && next.alreadyExists());
     }
 
-    private AgentPersonaBindResultDTO local(Scope scope, String personaCode) {
+    private AgentPersonaBindResultDTO local(
+            String tenantId, String clientId, String ownerJiacn, String personaCode) {
         AgentRuntimeDTO agent = agentService.bindPersona(
-                scope.tenantId(), scope.clientId(), scope.ownerJiacn(), personaCode);
+                tenantId, clientId, ownerJiacn, personaCode);
         String profileId = personaCode.strip().toLowerCase().replaceAll("[^a-z0-9_-]", "-");
         AgentPersonaBindResultDTO result = new AgentPersonaBindResultDTO();
         result.setAgent(agent);
@@ -178,8 +191,8 @@ public class AgentPersonaProvisioningService {
         AgentPersonaBindResultDTO.RuntimeSetup runtimeSetup =
                 new AgentPersonaBindResultDTO.RuntimeSetup();
         runtimeSetup.setRuntimeProtocolVersion("v1");
-        runtimeSetup.setTenantId(scope.tenantId());
-        runtimeSetup.setClientId(scope.clientId());
+        runtimeSetup.setTenantId(tenantId);
+        runtimeSetup.setClientId(clientId);
         runtimeSetup.setCanonicalAgentId(agent.getAgentId());
         runtimeSetup.setManifestVersion("1");
         runtimeSetup.setInstallationCreatePath("/agent/runtime/v1/installations");

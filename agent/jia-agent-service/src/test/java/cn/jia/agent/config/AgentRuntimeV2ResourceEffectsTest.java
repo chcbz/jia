@@ -375,7 +375,7 @@ class AgentRuntimeV2ResourceEffectsTest {
         try(var f=new AgentRuntimeV2R4ProductionFixture.CompositeFile()){
             f.file.pinnedInput();assertFalse(f.reduce(f.request(cn.jia.agent.entity.AgentRuntimeV2EffectCodec.Kind.FILE_DESCRIBE,cn.jia.agent.entity.AgentRuntimeV2EffectCodec.Phase.DESCRIBE,new cn.jia.agent.entity.AgentRuntimeV2EffectCodec.FileDescribe("task-a","item-a"),null)).close());
             var q=f.request(cn.jia.agent.entity.AgentRuntimeV2EffectCodec.Kind.FILE_INPUT_READ,cn.jia.agent.entity.AgentRuntimeV2EffectCodec.Phase.READ,new cn.jia.agent.entity.AgentRuntimeV2EffectCodec.FileRead("exec-a","task-a","item-a","run-a","input_1",0,65536),null);byte[] raw=cn.jia.agent.entity.AgentRuntimeV2EffectCodec.encode(q),response=f.reduce(q).responses().getFirst();assertTrue(response.length>98304);assertTrue(response.length<=131072);
-            f.registration.clock.value+=31000;var route=new cn.jia.agent.service.AgentRuntimeV2EffectService.TrustedRoute("r4-audit-fence","r4-audit-owner",0);clearInvocations(f.file.storage,f.file.artifactStorage,f.file.writes,f.file.artifacts,f.file.deliveries);var before=f.registration.snapshot();int writes=f.registration.jdbc.writeCalls;long sqlWrites=f.sqlMutationCalls.get();assertTrue(sqlWrites>0,"SQL mutation instrumentation observed actual fixture and producer writes");
+            f.registration.clock.value+=31000;var route=new cn.jia.agent.service.AgentRuntimeV2EffectService.TrustedRoute("r4-audit-fence","r4-audit-owner",0);clearInvocations(f.file.storage,f.file.artifactStorage,f.file.writes,f.file.artifacts,f.file.deliveries,f.skills);var before=f.registration.snapshot();int writes=f.registration.jdbc.writeCalls;long sqlWrites=f.sqlMutationCalls.get();assertTrue(sqlWrites>0,"SQL mutation instrumentation observed actual fixture and producer writes");
             var recovered=f.reducer.effect(f.identity,null,route,raw);assertFalse(recovered.close());assertArrayEquals(response,recovered.responses().getFirst());assertTrue(f.reducer.current(f.identity,null,route,response));assertEquals(before,f.registration.snapshot());assertEquals(writes,f.registration.jdbc.writeCalls);assertEquals(sqlWrites,f.sqlMutationCalls.get());
             var g=q.grant();
             for(String fault:List.of("request","dispatch","grant","run","resource","unseen")){
@@ -384,7 +384,7 @@ class AgentRuntimeV2ResourceEffectsTest {
                 var changed=new cn.jia.agent.entity.AgentRuntimeV2EffectCodec.EffectRequest(grant,fault.equals("run")?java.util.UUID.randomUUID().toString():q.runToken(),fault.equals("unseen")?"eff_"+"c".repeat(64):q.effectId(),q.effectKind(),q.phase(),resource,null);
                 assertTrue(f.reducer.effect(f.identity,null,route,cn.jia.agent.entity.AgentRuntimeV2EffectCodec.encode(changed)).close(),fault);assertEquals(before,f.registration.snapshot());assertEquals(writes,f.registration.jdbc.writeCalls);assertEquals(sqlWrites,f.sqlMutationCalls.get());
             }
-            assertTrue(f.reducer.inspect(f.identity,null,route,cn.jia.agent.entity.AgentRuntimeV2EffectCodec.encode(new cn.jia.agent.entity.AgentRuntimeV2EffectCodec.Inspect(g))).close());assertEquals(before,f.registration.snapshot());assertEquals(writes,f.registration.jdbc.writeCalls);assertEquals(sqlWrites,f.sqlMutationCalls.get());verifyNoInteractions(f.file.storage,f.file.artifactStorage,f.file.writes,f.file.artifacts,f.file.deliveries);
+            assertTrue(f.reducer.inspect(f.identity,null,route,cn.jia.agent.entity.AgentRuntimeV2EffectCodec.encode(new cn.jia.agent.entity.AgentRuntimeV2EffectCodec.Inspect(g))).close());assertEquals(before,f.registration.snapshot());assertEquals(writes,f.registration.jdbc.writeCalls);assertEquals(sqlWrites,f.sqlMutationCalls.get());verifyNoInteractions(f.file.storage,f.file.artifactStorage,f.file.writes,f.file.artifacts,f.file.deliveries,f.skills);
             f.jdbc.update("UPDATE core_deployment_tenant_grant SET allow_read=0 WHERE deployment_id='local-api-a'");before=f.registration.snapshot();writes=f.registration.jdbc.writeCalls;sqlWrites=f.sqlMutationCalls.get();assertTrue(f.reducer.effect(f.identity,null,route,raw).close());assertFalse(f.reducer.current(f.identity,null,route,response));assertEquals(before,f.registration.snapshot());assertEquals(writes,f.registration.jdbc.writeCalls);assertEquals(sqlWrites,f.sqlMutationCalls.get());
             f.jdbc.update("UPDATE core_deployment_tenant_grant SET allow_read=1 WHERE deployment_id='local-api-a'");f.jdbc.update("UPDATE oauth_api_key SET status=0");before=f.registration.snapshot();writes=f.registration.jdbc.writeCalls;sqlWrites=f.sqlMutationCalls.get();assertTrue(f.reducer.effect(f.identity,null,route,raw).close());assertFalse(f.reducer.current(f.identity,null,route,response));assertEquals(before,f.registration.snapshot());assertEquals(writes,f.registration.jdbc.writeCalls);assertEquals(sqlWrites,f.sqlMutationCalls.get());AgentRuntimeV2ExecutionSchemaGate.validateGraph(f.jdbc);
         }
@@ -413,12 +413,12 @@ class AgentRuntimeV2ResourceEffectsTest {
             String hash=cn.jia.agent.entity.AgentRuntimeV2RegistrationFingerprints.hex(cn.jia.agent.entity.AgentRuntimeV2RegistrationFingerprints.sha256(f.file.output));
             var stageResource=new cn.jia.agent.entity.AgentRuntimeV2EffectCodec.FileStage("exec-a","task-a","item-a","run-a","output_1",hash,f.file.output.length,0,f.file.output.length);var stage=f.request(cn.jia.agent.entity.AgentRuntimeV2EffectCodec.Kind.FILE_STAGE,cn.jia.agent.entity.AgentRuntimeV2EffectCodec.Phase.STAGE,stageResource,f.file.output);assertFalse(f.reduce(stage).close());
             var commit=f.request(cn.jia.agent.entity.AgentRuntimeV2EffectCodec.Kind.FILE_COMMIT,cn.jia.agent.entity.AgentRuntimeV2EffectCodec.Phase.COMMIT,f.file.commitRequest(),null);var actual=f.reduce(commit);assertFalse(actual.close());var receipt=cn.jia.agent.entity.AgentRuntimeV2EffectCodec.decodeReceipt(actual.responses().getFirst());assertEquals("COMMITTED",receipt.decision());var committed=(cn.jia.agent.entity.AgentRuntimeV2EffectCodec.CommittedResult)receipt.result();
-            byte[] first=actual.responses().getFirst();int businessEvents=f.file.count("agent_task_event");clearInvocations(f.file.storage,f.file.artifactStorage,f.file.writes,f.file.artifacts,f.file.deliveries);
+            byte[] first=actual.responses().getFirst();int businessEvents=f.file.count("agent_task_event");clearInvocations(f.file.storage,f.file.artifactStorage,f.file.writes,f.file.artifacts,f.file.deliveries,f.skills);
             var exact=f.reduce(commit);assertFalse(exact.close());assertArrayEquals(first,exact.responses().getFirst());
             for(var replayPhase:List.of(cn.jia.agent.entity.AgentRuntimeV2EffectCodec.Phase.COMMIT,cn.jia.agent.entity.AgentRuntimeV2EffectCodec.Phase.OBSERVE)){
                 var replay=f.request(cn.jia.agent.entity.AgentRuntimeV2EffectCodec.Kind.FILE_COMMIT,replayPhase,f.file.commitRequest(),null);assertEquals(commit.effectId(),replay.effectId());var result=f.reduce(replay);assertFalse(result.close());assertEquals(committed,cn.jia.agent.entity.AgentRuntimeV2EffectCodec.decodeReceipt(result.responses().getFirst()).result());
             }
-            verifyNoInteractions(f.file.storage,f.file.artifactStorage,f.file.writes,f.file.artifacts,f.file.deliveries);assertEquals(1,f.file.count("agent_personal_workspace_file"));assertEquals(2,f.file.count("agent_task_artifact"));assertEquals(1,f.file.count("agent_task_formal_delivery"));assertEquals(businessEvents,f.file.count("agent_task_event"));
+            verifyNoInteractions(f.file.storage,f.file.artifactStorage,f.file.writes,f.file.artifacts,f.file.deliveries,f.skills);assertEquals(1,f.file.count("agent_personal_workspace_file"));assertEquals(2,f.file.count("agent_task_artifact"));assertEquals(1,f.file.count("agent_task_formal_delivery"));assertEquals(businessEvents,f.file.count("agent_task_event"));
             var effect=f.jdbc.queryForMap("SELECT * FROM agent_runtime_v2_effect WHERE effect_id=?",commit.effectId());assertArrayEquals(first,(byte[])effect.get("result_wire_bytes"));assertEquals(committed.commitReceiptId(),effect.get("commit_receipt_id"));assertEquals(1,f.jdbc.queryForObject("SELECT COUNT(*) FROM agent_runtime_v2_effect_event WHERE event_kind='SERVER_COMMIT'",Integer.class));
             AgentRuntimeV2DispatchSchemaGate.validateGraph(f.jdbc);AgentRuntimeV2ExecutionSchemaGate.validateGraph(f.jdbc);assertTrue(TransactionSynchronizationManager.getResourceMap().isEmpty());
         }
@@ -516,9 +516,21 @@ class AgentRuntimeV2ResourceEffectsTest {
             var read=new cn.jia.agent.entity.AgentRuntimeV2EffectCodec.SkillRead(f.identity,0,5);
             byte[] resource=cn.jia.agent.entity.AgentRuntimeV2EffectCodec.encodeResource(cn.jia.agent.entity.AgentRuntimeV2EffectCodec.Kind.SKILL_PACKAGE_READ,cn.jia.agent.entity.AgentRuntimeV2EffectCodec.Phase.READ,read);
             assertEquals(read,cn.jia.agent.entity.AgentRuntimeV2EffectCodec.decodeResource(cn.jia.agent.entity.AgentRuntimeV2EffectCodec.Kind.SKILL_PACKAGE_READ,cn.jia.agent.entity.AgentRuntimeV2EffectCodec.Phase.READ,resource));
-            var actual=f.tx.execute(status->f.results.v2Package(f.origin,f.payload,read));assertNotNull(actual);assertEquals(5,actual.content().length);assertEquals(Long.parseLong(f.payload.packageSize()),actual.totalLength());
+            var plan=f.tx.execute(status->f.results.v2PlanPackage(f.origin,f.payload,read));verifyNoInteractions(f.resultPackages,f.packageStore);
+            var outside=new java.util.concurrent.atomic.AtomicBoolean();doAnswer(invocation->{assertFalse(TransactionSynchronizationManager.isActualTransactionActive());outside.set(true);return invocation.callRealMethod();}).when(f.packageStore).prepare(any());
+            var prepared=f.results.v2PreparePackage(plan);assertTrue(outside.get());var actual=f.tx.execute(status->f.results.v2Package(f.origin,f.payload,read,prepared));assertNotNull(actual);assertEquals(5,actual.content().length);assertEquals(Long.parseLong(f.payload.packageSize()),actual.totalLength());
             assertEquals(cn.jia.agent.entity.AgentRuntimeV2RegistrationFingerprints.hex(cn.jia.agent.entity.AgentRuntimeV2RegistrationFingerprints.sha256(actual.content())),actual.sha256());
             assertEquals(0,f.count("economy_skill_result_receipt"));assertEquals(1,f.count("economy_transaction"));assertEquals("ACTIVE",f.jdbc.queryForObject("SELECT status FROM economy_escrow",String.class));verifyNoInteractions(f.legacyCommands);
+        }
+    }
+    @Test void skillPackagePreparationRejectsAmbientTransactionAndFinalApprovalDrift() throws Exception {
+        try(var f=new AgentRuntimeV2R4ProductionFixture.SkillResource()){
+            var read=new cn.jia.agent.entity.AgentRuntimeV2EffectCodec.SkillRead(f.identity,0,5);
+            var plan=f.tx.execute(status->f.results.v2PlanPackage(f.origin,f.payload,read));
+            assertThrows(SkillMarketplaceException.class,()->f.tx.execute(status->f.results.v2PreparePackage(plan)));
+            var prepared=f.results.v2PreparePackage(plan);assertEquals(1,f.jdbc.update("UPDATE economy_skill_product_version SET price_micro=price_micro+1 WHERE tenant_id='0' AND client_id='caller-C' AND product_version_id=?",f.payload.productVersionId()));
+            assertThrows(SkillMarketplaceException.class,()->f.tx.execute(status->f.results.v2Package(f.origin,f.payload,read,prepared)));
+            assertEquals(0,f.count("economy_skill_result_receipt"));assertEquals("INSTALLING",f.status("economy_skill_order"));assertEquals("INSTALLING",f.status("economy_skill_installation"));
         }
     }
 
@@ -585,19 +597,21 @@ class AgentRuntimeV2ResourceEffectsTest {
     }
     @Test void realPackageReadRejectsAdditionalOrReplacedJdbcBindingButAcceptsLazyMyBatisSession() throws Exception {
         for(boolean replacement:List.of(false,true))try(var f=new AgentRuntimeV2R4ProductionFixture.SkillResource()){
-            var packages=f.resultPackages.getObject();var read=new cn.jia.agent.entity.AgentRuntimeV2EffectCodec.SkillRead(f.identity,0,5);
+            var read=new cn.jia.agent.entity.AgentRuntimeV2EffectCodec.SkillRead(f.identity,0,5);var prepared=f.prepare(read);
             // The positive package test above starts with only the original
             // JDBC binding and performs actual lazy MyBatis session creation.
-            assertThrows(SkillMarketplaceException.class,()->f.tx.execute(status->{
+            var tampered=new java.util.concurrent.atomic.AtomicBoolean();var originalKey=new java.util.concurrent.atomic.AtomicReference<Object>();var originalHolder=new java.util.concurrent.atomic.AtomicReference<org.springframework.jdbc.datasource.ConnectionHolder>();Object extra=new Object();
+            doAnswer(invocation->{
                 var binding=TransactionSynchronizationManager.getResourceMap().entrySet().stream().filter(entry->entry.getValue() instanceof org.springframework.jdbc.datasource.ConnectionHolder).findFirst().orElseThrow();
-                Object extra=new Object();var holder=(org.springframework.jdbc.datasource.ConnectionHolder)binding.getValue();
-                when(f.resultPackages.getObject()).thenAnswer(invocation->{
-                    if(replacement)TransactionSynchronizationManager.unbindResource(binding.getKey());
-                    TransactionSynchronizationManager.bindResource(replacement?binding.getKey():extra,new org.springframework.jdbc.datasource.ConnectionHolder(holder.getConnection()));return packages;
-                });
-                try{return f.results.v2Package(f.origin,f.payload,read);}
-                finally{TransactionSynchronizationManager.unbindResource(replacement?binding.getKey():extra);if(replacement)TransactionSynchronizationManager.bindResource(binding.getKey(),holder);}
-            }));
+                var holder=(org.springframework.jdbc.datasource.ConnectionHolder)binding.getValue();originalKey.set(binding.getKey());originalHolder.set(holder);
+                if(replacement)TransactionSynchronizationManager.unbindResource(binding.getKey());
+                TransactionSynchronizationManager.bindResource(replacement?binding.getKey():extra,new org.springframework.jdbc.datasource.ConnectionHolder(holder.getConnection()));tampered.set(true);
+                return invocation.callRealMethod();
+            }).when(f.market).selectApprovedProductVersionForUpdate("0","caller-C",f.payload.productVersionId());
+            assertThrows(SkillMarketplaceException.class,()->f.tx.execute(status->{
+                try{return f.results.v2Package(f.origin,f.payload,read,prepared);}
+                finally{if(tampered.get()){TransactionSynchronizationManager.unbindResource(replacement?originalKey.get():extra);if(replacement)TransactionSynchronizationManager.bindResource(originalKey.get(),originalHolder.get());}}
+            }),"replacement="+replacement);assertTrue(tampered.get(),"tamper hook replacement="+replacement);
             assertTrue(TransactionSynchronizationManager.getResourceMap().isEmpty());assertEquals(0,f.count("economy_skill_result_receipt"));assertEquals(1,f.count("economy_transaction"));assertEquals("INSTALLING",f.status("economy_skill_order"));
         }
     }

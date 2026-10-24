@@ -8,6 +8,11 @@ import cn.jia.chat.deliberation.ChatBountyBindingStore;
 import cn.jia.chat.deliberation.ChatDeliberationDao;
 import cn.jia.chat.deliberation.ChatTypedDeliberationStore;
 import cn.jia.chat.entity.ChatConversationEntity;
+import cn.jia.chat.entity.ConversationDataScope;
+import cn.jia.core.tenant.BusinessScope;
+import cn.jia.core.tenant.DataDomainId;
+import cn.jia.core.tenant.TenantId;
+import cn.jia.core.tenant.TrustedTenantContext;
 import org.junit.jupiter.api.Test;
 import org.springframework.aop.framework.ProxyFactory;
 import org.springframework.transaction.TransactionDefinition;
@@ -44,7 +49,7 @@ class ChatBootstrapTransactionBoundaryTest {
         var conversation = new ChatConversationEntity().setTaskId("task-1").setJiacn("owner")
                 .setLifecycleGeneration(1L);
         conversation.setTenantId("0"); conversation.setClientId("client");
-        when(conversations.findScopedById("owner", "client", "123"))
+        when(conversations.findScopedById(any(ConversationDataScope.class), eq("123")))
                 .thenAnswer(call -> manager.current.get() != null ? conversation : null);
         var reachedRoot = new IllegalStateException("reached exact scoped task root");
         doThrow(reachedRoot).when(mutations).executeWithLockedTaskRootInOwnerScope(
@@ -55,24 +60,33 @@ class ChatBootstrapTransactionBoundaryTest {
         proxy.prepareBootstrap(new SkillCapabilityLookup.Scope("0", "client", "owner", "agent-1"));
         verify(packages).prepare(new SkillCapabilityLookup.Scope("0", "client", "owner", "agent-1"));
         clearInvocations(packages);
-        new TransactionTemplate(manager).executeWithoutResult(status -> {
-            assertTrue(TransactionSynchronizationManager.isActualTransactionActive());
-            // Reproduces the old call: NOT_SUPPORTED hides the just-created conversation.
-            assertThrows(ChatDeliberationException.class,
-                    () -> proxy.admit("0", sender, "123", "original-key", command));
-            assertTrue(TransactionSynchronizationManager.isActualTransactionActive());
-            // The bootstrap-only method joins it and reaches the same authoritative root checks.
-            assertSame(reachedRoot, assertThrows(IllegalStateException.class,
-                    () -> proxy.admitPreparedBootstrap("0", sender, "123", "original-key", command)));
-            assertThrows(ChatDeliberationException.class,
-                    () -> proxy.prepareBootstrap(new SkillCapabilityLookup.Scope("0", "client", "owner", "agent-1")));
-            status.setRollbackOnly();
-        });
+        TrustedTenantContext.runWithScope(scope(), () ->
+                new TransactionTemplate(manager).executeWithoutResult(status -> {
+                    assertTrue(TransactionSynchronizationManager.isActualTransactionActive());
+                    // Reproduces the old call: NOT_SUPPORTED hides the just-created conversation.
+                    assertThrows(ChatDeliberationException.class,
+                            () -> proxy.admit("0", sender, "123", "original-key", command));
+                    assertTrue(TransactionSynchronizationManager.isActualTransactionActive());
+                    // The bootstrap-only method joins it and reaches the same authoritative root checks.
+                    assertSame(reachedRoot, assertThrows(IllegalStateException.class,
+                            () -> proxy.admitPreparedBootstrap("0", sender, "123", "original-key", command)));
+                    assertThrows(ChatDeliberationException.class,
+                            () -> proxy.prepareBootstrap(new SkillCapabilityLookup.Scope("0", "client", "owner", "agent-1")));
+                    status.setRollbackOnly();
+                }));
         assertEquals(1, manager.rollbacks);
         assertEquals(0, manager.commits);
         verifyNoInteractions(packages);
+        var readScope = org.mockito.ArgumentCaptor.forClass(ConversationDataScope.class);
+        verify(conversations, times(2)).findScopedById(readScope.capture(), eq("123"));
+        readScope.getAllValues().forEach(value -> assertEquals(scope(), value.businessScope()));
+        verify(conversations, never()).findScopedById(anyString(), anyString(), anyString());
         assertThrows(org.springframework.transaction.IllegalTransactionStateException.class,
                 () -> proxy.admitPreparedBootstrap("0", sender, "123", "original-key", command));
+    }
+
+    private static BusinessScope scope() {
+        return new BusinessScope(TenantId.of("0"), DataDomainId.of("cyf"), "owner", "client");
     }
 
     static final class TestTransactions extends AbstractPlatformTransactionManager {

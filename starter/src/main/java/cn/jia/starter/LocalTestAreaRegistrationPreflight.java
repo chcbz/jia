@@ -1,5 +1,6 @@
 package cn.jia.starter;
 
+import cn.jia.agent.config.AgentTaskEventsProperties;
 import cn.jia.core.tenant.TenantId;
 import cn.jia.core.tenant.TenantModuleAdmissionGuard;
 import org.springframework.beans.factory.SmartInitializingSingleton;
@@ -39,6 +40,10 @@ public class LocalTestAreaRegistrationPreflight {
         public void initialize(ConfigurableApplicationContext context) {
             Environment environment = context.getEnvironment();
             if (!requiresPreflight(environment)) return;
+            if (isFixedTenantMode(environment)) {
+                verify(null, environment, null);
+                return;
+            }
             String url = config(environment, "spring.datasource.url");
             if (!url.startsWith("jdbc:mysql://")) throw denied();
             String user = config(environment, "spring.datasource.username");
@@ -67,14 +72,24 @@ public class LocalTestAreaRegistrationPreflight {
     }
     /** Runtime transaction guard bound to the exact deployment registration verified at startup. */
     @Bean
+    @Conditional(PlatformAdmissionCondition.class)
     TenantModuleAdmissionGuard localTestTenantModuleAdmissionGuard(
             JdbcTemplate jdbc, Environment environment) {
         return createAdmissionGuard(
                 jdbc, environment, Path.of(System.getProperty("java.class.path")));
     }
 
+    /** Fixed-tenant mode has no platform registration row and therefore no platform guard bean. */
+    public static final class PlatformAdmissionCondition implements Condition {
+        @Override
+        public boolean matches(ConditionContext context, AnnotatedTypeMetadata metadata) {
+            return !isFixedTenantMode(context.getEnvironment());
+        }
+    }
+
     static TenantModuleAdmissionGuard createAdmissionGuard(
             JdbcTemplate jdbc, Environment environment, Path runningJar) {
+        if (isFixedTenantMode(environment)) throw denied();
         String deployment = config(environment, "cyf.deployment.id");
         Map<String, Object> registration = one(jdbc.queryForList("""
                 SELECT worker_generation, registration_revision
@@ -94,12 +109,59 @@ public class LocalTestAreaRegistrationPreflight {
     static void verify(JdbcOperations jdbc, Environment environment, Path runningJar) {
         if (!List.of(environment.getActiveProfiles()).equals(List.of("local-test-area"))) throw denied();
         if (!"LOCAL_TEST".equals(config(environment, "cyf.deployment.stage"))) throw denied();
+        if (isFixedTenantMode(environment)) {
+            verifyFixedTenant(environment);
+            return;
+        }
+        verifyPlatform(jdbc, environment, runningJar);
+    }
+
+    private static void verifyFixedTenant(Environment environment) {
+        String tenant = TenantId.of(config(environment, "cyf.tenant.fixed-tenant-id")).value();
+        if (!"1".equals(tenant)
+                || !Map.of("cyf-local", "1").equals(map(
+                        environment, "cyf.tenant.fixed-client-tenants"))
+                || !list(environment, "cyf.tenant.allowed-tenants").isEmpty()
+                || !List.of("1").equals(list(environment, "cyf.worker.allowed-tenants"))
+                || !"false".equals(config(environment, "cyf.tenant.require-bound-identity"))
+                || !"true".equals(config(environment, "cyf.oauth.authorization-server.enabled"))
+                || !"true".equals(config(environment, "cyf.oauth.signing.enabled"))
+                || !"http://127.0.0.1:10019".equals(config(
+                        environment, "cyf.oauth.signing.issuer"))
+                || !"/home/chc/.local/state/cyf-local-test-area/signing.jwk".equals(config(
+                        environment, "cyf.oauth.signing.private-jwk-path"))
+                || !"http://127.0.0.1:10019".equals(config(
+                        environment, "spring.security.oauth2.resourceserver.jwt.issuer-uri"))
+                || !"http://127.0.0.1:10019/oauth2/jwks".equals(config(
+                        environment, "spring.security.oauth2.resourceserver.jwt.jwk-set-uri"))
+                || !"127.0.0.1".equals(config(environment, "spring.data.redis.host"))
+                || !"16379".equals(config(environment, "spring.data.redis.port"))
+                || !"http://127.0.0.1:10018".equals(config(
+                        environment, "cors.allowed.origin.patterns"))
+                || !"true".equals(config(environment, "agent.personal-workspace-storage.enabled"))
+                || !"/home/chc/.local/state/cyf-local-test-area/workspace-files".equals(config(
+                        environment, "agent.personal-workspace-storage.root-directory"))
+                || !"true".equals(config(environment, "agent.task-events.enabled"))
+                || !List.of(new AgentTaskEventsProperties.AllowedScope("1", "cyf-local"))
+                    .equals(eventScopes(environment))
+                || !"never".equals(config(environment, "spring.sql.init.mode"))
+                || !"validate".equals(config(environment, "cyf.schema.mode"))
+                || !"127.0.0.1".equals(config(environment, "server.address"))
+                || !"10019".equals(config(environment, "server.port"))
+                || unsafeSideEffectEnabled(environment, true)) {
+            throw denied();
+        }
+    }
+
+    private static void verifyPlatform(
+            JdbcOperations jdbc, Environment environment, Path runningJar) {
+        if (jdbc == null) throw denied();
         if (!"true".equals(config(environment, "cyf.tenant.require-bound-identity"))
                 || !"false".equals(config(environment, "cyf.oauth.authorization-server.enabled"))
                 || !"never".equals(config(environment, "spring.sql.init.mode"))
                 || !"validate".equals(config(environment, "cyf.schema.mode"))
                 || !"127.0.0.1".equals(config(environment, "server.address"))
-                || unsafeSideEffectEnabled(environment)) throw denied();
+                || unsafeSideEffectEnabled(environment, false)) throw denied();
         List<String> tenants = list(environment, "cyf.tenant.allowed-tenants");
         if (tenants.size() != 1 || !tenants.equals(list(environment, "cyf.worker.allowed-tenants"))) {
             throw denied();
@@ -244,7 +306,8 @@ public class LocalTestAreaRegistrationPreflight {
         return ((Number) value).longValue();
     }
 
-    private static boolean unsafeSideEffectEnabled(Environment environment) {
+    private static boolean unsafeSideEffectEnabled(
+            Environment environment, boolean allowFixedLocalWorkspace) {
         return !"false".equals(config(environment, "economy.preview.enabled"))
                 || !"false".equals(config(environment, "chat.agent.tools.enabled"))
                 || !"false".equals(config(environment, "economy.preview.test-issuance-enabled"))
@@ -253,7 +316,8 @@ public class LocalTestAreaRegistrationPreflight {
                 || !"false".equals(config(environment, "economy.skill.schema.enabled"))
                 || !"false".equals(config(environment, "economy.skill.marketplace.enabled"))
                 || !"false".equals(config(environment, "economy.skill.seed.enabled"))
-                || !"false".equals(config(environment, "agent.personal-workspace-storage.enabled"))
+                || (!allowFixedLocalWorkspace
+                    && !"false".equals(config(environment, "agent.personal-workspace-storage.enabled")))
                 || !"false".equals(config(environment, "agent.command-outbox.enabled"))
                 || !"false".equals(config(environment, "jia.agent.formal-delivery.enabled"))
                 || !"false".equals(config(environment, "wx.daily-vote.schema.install-on-startup"))
@@ -261,7 +325,8 @@ public class LocalTestAreaRegistrationPreflight {
                 || !"false".equals(config(environment, "archive.question.enabled"))
                 || !"false".equals(config(environment, "user.permit.refresh.enable"))
                 || !"false".equals(config(environment, "jia.chat.service.stdio.enable"))
-                || !"false".equals(config(environment, "agent.task-events.enabled"))
+                || (!allowFixedLocalWorkspace
+                    && !"false".equals(config(environment, "agent.task-events.enabled")))
                 || !"false".equals(config(environment, "agent.rabbit-topology.enabled"))
                 || !"false".equals(config(environment, "juyiting.scene-state.enabled"))
                 || !"false".equals(config(environment, "juyiting.scene-events.enabled"))
@@ -296,6 +361,28 @@ public class LocalTestAreaRegistrationPreflight {
 
     private static List<String> list(Environment environment, String name) {
         return Binder.get(environment).bind(name, Bindable.listOf(String.class)).orElse(List.of());
+    }
+
+    private static Map<String, String> map(Environment environment, String name) {
+        return Binder.get(environment).bind(name, Bindable.mapOf(String.class, String.class))
+                .orElse(Map.of());
+    }
+
+    private static List<AgentTaskEventsProperties.AllowedScope> eventScopes(
+            Environment environment) {
+        return Binder.get(environment).bind(
+                "agent.task-events.allowed-scopes",
+                Bindable.listOf(AgentTaskEventsProperties.AllowedScope.class))
+                .orElse(List.of());
+    }
+
+    private static boolean isFixedTenantMode(Environment environment) {
+        String mode = environment.getProperty("cyf.tenant.admission-mode", "platform");
+        if (mode == null || !mode.equals(mode.strip()) || mode.contains("${")
+                || !("platform".equals(mode) || "fixed-tenant".equals(mode))) {
+            throw denied();
+        }
+        return "fixed-tenant".equals(mode);
     }
 
     private static Map<String, Object> one(List<Map<String, Object>> rows) {

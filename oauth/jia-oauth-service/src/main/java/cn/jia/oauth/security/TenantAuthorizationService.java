@@ -3,10 +3,6 @@ package cn.jia.oauth.security;
 import cn.jia.core.tenant.DataDomainId;
 import cn.jia.core.tenant.TenantId;
 import cn.jia.user.entity.CustomUserDetails;
-import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.datasource.DataSourceTransactionManager;
-import org.springframework.jdbc.core.JdbcOperations;
-import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.oauth2.core.OAuth2AuthenticationException;
@@ -15,12 +11,11 @@ import org.springframework.security.oauth2.core.OAuth2ErrorCodes;
 import org.springframework.security.oauth2.core.AuthorizationGrantType;
 import org.springframework.security.oauth2.core.OAuth2AccessToken;
 import org.springframework.security.oauth2.core.endpoint.OAuth2AuthorizationRequest;
-import org.springframework.security.oauth2.server.authorization.JdbcOAuth2AuthorizationService;
+import org.springframework.security.oauth2.server.authorization.InMemoryOAuth2AuthorizationService;
 import org.springframework.security.oauth2.server.authorization.OAuth2AuthorizationCode;
 import org.springframework.security.oauth2.server.authorization.OAuth2Authorization;
 import org.springframework.security.oauth2.server.authorization.OAuth2AuthorizationService;
 import org.springframework.security.oauth2.server.authorization.OAuth2TokenType;
-import org.springframework.security.oauth2.server.authorization.client.RegisteredClientRepository;
 
 import java.security.Principal;
 import java.util.Map;
@@ -28,10 +23,11 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * The stock JDBC codec cannot restore application records or CustomUserDetails.
- * Store only validated scalar identity and selection attributes, never credentials.
+ * Uses the original process-local Spring authorization store, without a database schema.
+ * Keeps tenant bindings immutable and rejects stale writes; credentials are not retained.
+ * Authorization codes and refresh state deliberately expire when this instance restarts.
  */
-public final class TenantJdbcAuthorizationService implements OAuth2AuthorizationService {
+public final class TenantAuthorizationService implements OAuth2AuthorizationService {
     private static final String PREFIX = "cyf.oauth.";
     private static final String REVISION = PREFIX + "authorizationRevision";
     private static final String USER_ID = PREFIX + "userId";
@@ -45,29 +41,26 @@ public final class TenantJdbcAuthorizationService implements OAuth2Authorization
     private static final String SESSION_EPOCH = PREFIX + "tenantSessionEpoch";
     private static final String MEMBER_REV = PREFIX + "membershipRevision";
     private static final String GRANT_REV = PREFIX + "clientTenantGrantRevision";
+    private static final String FIXED_VERSION = PREFIX + "fixedTenantBindingVersion";
+    private static final String FIXED_TENANT_ID = PREFIX + "fixedTenantId";
+    private static final String FIXED_CLIENT_ID = PREFIX + "fixedTenantClientId";
 
-    private final JdbcOAuth2AuthorizationService delegate;
-    private final JdbcOperations jdbc;
-    private final TransactionTemplate transactions;
-
-    public TenantJdbcAuthorizationService(JdbcOperations jdbc, RegisteredClientRepository clients) {
-        if (!(jdbc instanceof JdbcTemplate template) || template.getDataSource() == null) {
-            throw new IllegalArgumentException("Authorization JDBC requires a transactional DataSource");
-        }
-        this.jdbc = jdbc;
-        this.transactions = new TransactionTemplate(new DataSourceTransactionManager(template.getDataSource()));
-        // Join the token provider's ordered-lock transaction; a nested transaction
-        // would release the control locks before the authorization is saved.
-        this.transactions.setPropagationBehavior(org.springframework.transaction.TransactionDefinition.PROPAGATION_REQUIRED);
-        delegate = new JdbcOAuth2AuthorizationService(jdbc, clients);
-    }
+    private final OAuth2AuthorizationService delegate = new InMemoryOAuth2AuthorizationService();
 
     @Override
-    public void save(OAuth2Authorization authorization) {
+    public synchronized void save(OAuth2Authorization authorization) {
         Objects.requireNonNull(authorization, "authorization");
         OAuth2Authorization.Builder builder = OAuth2Authorization.from(authorization);
         builder.attributes(attrs -> {
             Object selected = attrs.remove(TenantAuthorizationAttributes.attributeName());
+            Object fixedSelected = attrs.remove(FixedTenantAuthorizationBinding.attributeName());
+            if (selected != null && fixedSelected != null) {
+                throw new IllegalArgumentException("Authorization cannot mix platform and fixed tenant bindings");
+            }
+            if (selected != null && attrs.containsKey(FIXED_VERSION)
+                    || fixedSelected != null && attrs.containsKey(TENANT_VERSION)) {
+                throw new IllegalArgumentException("Authorization cannot replace its tenant binding mode");
+            }
             if (selected != null) {
                 if (!(selected instanceof TenantAuthorizationAttributes tenant)) {
                     throw new IllegalArgumentException("Invalid tenant authorization binding");
@@ -80,6 +73,19 @@ public final class TenantJdbcAuthorizationService implements OAuth2Authorization
                 attrs.put(SESSION_EPOCH, tenant.tenantSessionEpoch());
                 attrs.put(MEMBER_REV, tenant.membershipRevision());
                 attrs.put(GRANT_REV, tenant.clientTenantGrantRevision());
+            }
+            if (fixedSelected != null) {
+                if (!(fixedSelected instanceof FixedTenantAuthorizationBinding fixed)) {
+                    throw new IllegalArgumentException("Invalid fixed tenant authorization binding");
+                }
+                OAuth2AuthorizationRequest request = authorization.getAttribute(
+                        OAuth2AuthorizationRequest.class.getName());
+                if (request == null || !fixed.clientId().equals(request.getClientId())) {
+                    throw new IllegalArgumentException("Fixed tenant binding does not match the OAuth client");
+                }
+                attrs.put(FIXED_VERSION, "1");
+                attrs.put(FIXED_TENANT_ID, fixed.tenantId().value());
+                attrs.put(FIXED_CLIENT_ID, fixed.clientId());
             }
             Object original = attrs.get(Principal.class.getName());
             if (original instanceof Authentication auth && auth.getPrincipal() instanceof CustomUserDetails user) {
@@ -103,44 +109,39 @@ public final class TenantJdbcAuthorizationService implements OAuth2Authorization
             } else if (attrs.containsKey(USER_ID)) {
                 throw new IllegalArgumentException("Persisted user identity requires a verified login principal");
             }
-            if (attrs.containsKey(TENANT_VERSION) && !attrs.containsKey(USER_ID)) {
+            if ((attrs.containsKey(TENANT_VERSION) || attrs.containsKey(FIXED_VERSION))
+                    && !attrs.containsKey(USER_ID)) {
                 throw new IllegalArgumentException("A bound tenant requires an authenticated user");
             }
             // A machine principal may be an Authentication carrying a credential;
-            // never hand arbitrary principals to the JDBC codec.
+            // never retain arbitrary principals in authorization state.
             if (original != null && !attrs.containsKey(USER_ID)) {
                 throw new IllegalArgumentException("Unsupported persisted user principal");
             }
         });
         OAuth2Authorization persisted = builder.build();
-        transactions.executeWithoutResult(status -> {
-            OAuth2Authorization existing = lockAuthorization(persisted.getId());
-            String expected = persisted.getAttribute(REVISION);
-            String current = existing == null ? null : existing.getAttribute(REVISION);
-            if (existing == null ? expected != null : !Objects.equals(expected, current)) {
-                throw staleAuthorization();
-            }
-            requireFrozenBinding(existing, persisted);
-            // Selection must precede issuance, not be attached to an already issued code.
-            if (AuthorizationGrantType.AUTHORIZATION_CODE.equals(persisted.getAuthorizationGrantType())
-                    && persisted.getToken(OAuth2AuthorizationCode.class) != null
-                    && !persisted.getAttributes().containsKey(TENANT_VERSION)) {
-                throw new IllegalArgumentException("An authorization code requires a selected tenant");
-            }
-            long revision = existing == null ? 0L : Math.addExact(parseRevision(current), 1L);
-            delegate.save(OAuth2Authorization.from(persisted)
-                    .attribute(REVISION, Long.toString(revision)).build());
-        });
-    }
-
-    private OAuth2Authorization lockAuthorization(String id) {
-        // This is the physical row shared by all OAuth instances. A stale
-        // grant-provider read must fail before its token is returned.
-        List<String> rows = jdbc.queryForList("SELECT id FROM oauth2_authorization WHERE id = ? FOR UPDATE",
-                String.class, id);
-        if (rows.isEmpty()) return null;
-        if (rows.size() != 1 || !id.equals(rows.get(0))) throw staleAuthorization();
-        return delegate.findById(id);
+        OAuth2Authorization existing = delegate.findById(persisted.getId());
+        String expected = persisted.getAttribute(REVISION);
+        String current = existing == null ? null : existing.getAttribute(REVISION);
+        if (existing == null ? expected != null : !Objects.equals(expected, current)) {
+            throw staleAuthorization();
+        }
+        requireFrozenBinding(existing, persisted);
+        // Selection must precede issuance, not be attached to an already issued code.
+        if (AuthorizationGrantType.AUTHORIZATION_CODE.equals(persisted.getAuthorizationGrantType())
+                && persisted.getToken(OAuth2AuthorizationCode.class) != null
+                && !persisted.getAttributes().containsKey(TENANT_VERSION)
+                && !persisted.getAttributes().containsKey(FIXED_VERSION)) {
+            throw new IllegalArgumentException("An authorization code requires a selected tenant");
+        }
+        long revision = existing == null ? 0L : Math.addExact(parseRevision(current), 1L);
+        OAuth2Authorization next = OAuth2Authorization.from(persisted)
+                .attribute(REVISION, Long.toString(revision)).build();
+        // Spring separates staged and completed authorizations internally. Remove
+        // the old entry before a transition so logout cannot expose an old code.
+        // All access to the delegate holds this service's monitor.
+        if (existing != null) delegate.remove(existing);
+        delegate.save(next);
     }
 
     private static long parseRevision(String revision) {
@@ -158,7 +159,7 @@ public final class TenantJdbcAuthorizationService implements OAuth2Authorization
         return new OAuth2AuthenticationException(new OAuth2Error(OAuth2ErrorCodes.INVALID_GRANT));
     }
 
-    /** Authorization-row serialization does not replace ordered tenant control/grant locks. */
+    /** State synchronization does not replace ordered account/client/control locks. */
     private static void requireFrozenBinding(OAuth2Authorization existing, OAuth2Authorization next) {
         if (existing == null) return;
         if (!existing.getRegisteredClientId().equals(next.getRegisteredClientId())
@@ -177,7 +178,8 @@ public final class TenantJdbcAuthorizationService implements OAuth2Authorization
                 || existing.getToken(OAuth2AccessToken.class) != null
                 || existing.getRefreshToken() != null;
         for (String key : List.of(TENANT_VERSION, TENANT_ID, DOMAIN, TENANT_NAME, TENANT_KIND,
-                SESSION_EPOCH, MEMBER_REV, GRANT_REV, USER_ID, JIACN, AUTH_EPOCH)) {
+                SESSION_EPOCH, MEMBER_REV, GRANT_REV, FIXED_VERSION, FIXED_TENANT_ID,
+                FIXED_CLIENT_ID, USER_ID, JIACN, AUTH_EPOCH)) {
             Object previous = existing.getAttribute(key);
             Object updated = next.getAttribute(key);
             if (previous != null && !previous.equals(updated)) {
@@ -190,25 +192,23 @@ public final class TenantJdbcAuthorizationService implements OAuth2Authorization
     }
 
     @Override
-    public void remove(OAuth2Authorization authorization) {
+    public synchronized void remove(OAuth2Authorization authorization) {
         Objects.requireNonNull(authorization, "authorization");
-        transactions.executeWithoutResult(status -> {
-            OAuth2Authorization current = lockAuthorization(authorization.getId());
-            if (current == null) return;
-            if (!Objects.equals(authorization.getAttribute(REVISION), current.getAttribute(REVISION))) {
-                throw staleAuthorization();
-            }
-            delegate.remove(current);
-        });
+        OAuth2Authorization current = delegate.findById(authorization.getId());
+        if (current == null) return;
+        if (!Objects.equals(authorization.getAttribute(REVISION), current.getAttribute(REVISION))) {
+            throw staleAuthorization();
+        }
+        delegate.remove(current);
     }
 
     @Override
-    public OAuth2Authorization findById(String id) {
+    public synchronized OAuth2Authorization findById(String id) {
         return restore(delegate.findById(id));
     }
 
     @Override
-    public OAuth2Authorization findByToken(String token, OAuth2TokenType type) {
+    public synchronized OAuth2Authorization findByToken(String token, OAuth2TokenType type) {
         return restore(delegate.findByToken(token, type));
     }
 
@@ -230,6 +230,20 @@ public final class TenantJdbcAuthorizationService implements OAuth2Authorization
             }
         } else if (attrs.keySet().stream().anyMatch(k -> k.startsWith(PREFIX + "tenant") || k.equals(DOMAIN))) {
             throw new IllegalStateException("Incomplete persisted tenant binding");
+        }
+        if (attrs.containsKey(FIXED_VERSION)) {
+            if (attrs.containsKey(TENANT_VERSION) || !"1".equals(attrs.get(FIXED_VERSION))) {
+                throw new IllegalStateException("Invalid fixed tenant binding version");
+            }
+            try {
+                builder.attribute(FixedTenantAuthorizationBinding.attributeName(),
+                        new FixedTenantAuthorizationBinding(TenantId.of(text(attrs, FIXED_TENANT_ID)),
+                                text(attrs, FIXED_CLIENT_ID)));
+            } catch (RuntimeException invalid) {
+                throw new IllegalStateException("Invalid persisted fixed tenant binding", invalid);
+            }
+        } else if (attrs.containsKey(FIXED_TENANT_ID) || attrs.containsKey(FIXED_CLIENT_ID)) {
+            throw new IllegalStateException("Incomplete persisted fixed tenant binding");
         }
         if (attrs.containsKey(USER_ID)) {
             Object saved = attrs.get(Principal.class.getName());

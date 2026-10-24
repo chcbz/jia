@@ -3,8 +3,10 @@ package cn.jia.agent.dao.impl;
 import cn.jia.agent.dao.AgentTaskCreationOperationDao;
 import cn.jia.agent.entity.AgentTaskCreationOperationEntity;
 import cn.jia.agent.mapper.AgentTaskCreationOperationMapper;
+import cn.jia.core.tenant.TenantId;
 import jakarta.inject.Inject;
 import jakarta.inject.Named;
+import org.springframework.dao.DuplicateKeyException;
 
 import java.util.Objects;
 
@@ -27,8 +29,12 @@ public final class AgentTaskCreationOperationDaoImpl implements AgentTaskCreatio
         hash(requestHash);
         json(inputRefsJson);
         if (createdAt <= 0) throw new IllegalArgumentException("createdAt");
-        mapper.reserve(tenantId, clientId, ownerJiacn, idempotencyKey, requestHash,
-                proposedOperationId, inputRefsJson, createdAt);
+        try {
+            mapper.reserve(tenantId, clientId, ownerJiacn, idempotencyKey, requestHash,
+                    proposedOperationId, inputRefsJson, createdAt);
+        } catch (DuplicateKeyException ignored) {
+            // Idempotent replay: the exact scoped row is locked and returned below.
+        }
         AgentTaskCreationOperationEntity row = mapper.selectForUpdate(
                 tenantId, clientId, ownerJiacn, idempotencyKey);
         if (row == null) throw new IllegalStateException("creation operation reservation missing");
@@ -60,7 +66,7 @@ public final class AgentTaskCreationOperationDaoImpl implements AgentTaskCreatio
     }
 
     private static void scope(String tenantId, String clientId, String ownerJiacn) {
-        if (!"0".equals(tenantId)) throw new IllegalArgumentException("tenantId");
+        TenantId.of(tenantId);
         id(clientId, "clientId", 50);
         id(ownerJiacn, "ownerJiacn", 50);
         if ("0".equals(ownerJiacn)) throw new IllegalArgumentException("ownerJiacn");

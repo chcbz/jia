@@ -33,12 +33,20 @@ public final class AgentTaskExecutionGrantSchemaInitializer implements Initializ
             "chk_atxg_state","chk_atxg_derived","chk_atxg_revoke","chk_atxg_time");
     private final JdbcTemplate jdbc;
     public AgentTaskExecutionGrantSchemaInitializer(JdbcTemplate jdbc) {
-        this.jdbc = Objects.requireNonNull(jdbc,"jdbc");
+        this(jdbc, false);
     }
+    AgentTaskExecutionGrantSchemaInitializer(JdbcTemplate jdbc, boolean validateOnly) {
+        this.jdbc = Objects.requireNonNull(jdbc,"jdbc");
+        this.validateOnly = validateOnly;
+    }
+    private final boolean validateOnly;
     @Override public void afterPropertiesSet() {
         requireMySql();
         Integer present = jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name=?", Integer.class, TABLE);
-        if (present == null || present == 0) jdbc.execute(ddl());
+        if (present == null || present == 0) {
+            SchemaValidationMode.requireMutationAllowed(validateOnly, "Task execution grant schema");
+            jdbc.execute(ddl());
+        }
         validate();
     }
     static String ddl() {

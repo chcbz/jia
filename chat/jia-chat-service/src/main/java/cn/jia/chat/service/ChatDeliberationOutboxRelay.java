@@ -7,6 +7,10 @@ import cn.jia.chat.deliberation.ChatDispatchOutboxEntity;
 import cn.jia.chat.deliberation.ChatTurnEntity;
 import cn.jia.chat.deliberation.InteractionRoute;
 import cn.jia.chat.handler.AgentWebSocketHandler;
+import cn.jia.core.tenant.BusinessScope;
+import cn.jia.core.tenant.DataDomainId;
+import cn.jia.core.tenant.TenantId;
+import cn.jia.core.tenant.TrustedTenantContext;
 import cn.jia.core.util.JsonUtil;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
@@ -26,6 +30,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -35,11 +40,13 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 
 /** Durable restart-scanning relay. Socket/SSE sends are optimizations; DB state remains authoritative. */
 @Slf4j
 @Component
 public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseable {
+    private static final DataDomainId CHAT_DATA_DOMAIN = DataDomainId.of("cyf");
     private static final long DEFAULT_LEASE_MILLIS = 300_000L;
     private static final long DEFAULT_HEARTBEAT_MILLIS = 30_000L;
     private static final long HOSTED_ACK_TIMEOUT_MILLIS = 30_000L;
@@ -51,6 +58,7 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
     private final ChatConversationEventBroker broker;
     private final ChatConversationService conversations;
     private final ChatClient chatClient;
+    private final ChatWorkerTenantPolicy tenantPolicy;
     private ChatActionDispatchService actions;
     private ChatDispatchAuthorityService dispatchAuthority;
     @Autowired public void setDispatchAuthority(ChatDispatchAuthorityService value) { dispatchAuthority=value; }
@@ -78,9 +86,20 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
     public ChatDeliberationOutboxRelay(ChatDeliberationOutboxService outbox,
             ChatDeliberationService deliberation, AgentWebSocketHandler sockets,
             BuiltinHallAgentSupport builtin, ChatConversationEventBroker broker,
-            ChatConversationService conversations, @Lazy ChatClient chatClient) {
+            ChatConversationService conversations, @Lazy ChatClient chatClient,
+            ChatWorkerTenantPolicy tenantPolicy) {
         this(outbox, deliberation, sockets, builtin, broker, conversations, chatClient,
-                DEFAULT_LEASE_MILLIS, DEFAULT_HEARTBEAT_MILLIS, DEFAULT_MAX_CONCURRENT_DELIVERIES);
+                tenantPolicy, DEFAULT_LEASE_MILLIS, DEFAULT_HEARTBEAT_MILLIS, DEFAULT_MAX_CONCURRENT_DELIVERIES);
+    }
+
+    /** Legacy direct-construction compatibility remains restricted to tenant zero. */
+    public ChatDeliberationOutboxRelay(ChatDeliberationOutboxService outbox,
+            ChatDeliberationService deliberation, AgentWebSocketHandler sockets,
+            BuiltinHallAgentSupport builtin, ChatConversationEventBroker broker,
+            ChatConversationService conversations, ChatClient chatClient) {
+        this(outbox, deliberation, sockets, builtin, broker, conversations, chatClient,
+                new ChatWorkerTenantPolicy(Set.of("0")), DEFAULT_LEASE_MILLIS,
+                DEFAULT_HEARTBEAT_MILLIS, DEFAULT_MAX_CONCURRENT_DELIVERIES);
     }
 
     ChatDeliberationOutboxRelay(ChatDeliberationOutboxService outbox,
@@ -89,7 +108,8 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
             ChatConversationService conversations, ChatClient chatClient,
             long leaseMillis, long heartbeatMillis) {
         this(outbox, deliberation, sockets, builtin, broker, conversations, chatClient,
-                leaseMillis, heartbeatMillis, DEFAULT_MAX_CONCURRENT_DELIVERIES);
+                new ChatWorkerTenantPolicy(Set.of("0")), leaseMillis, heartbeatMillis,
+                DEFAULT_MAX_CONCURRENT_DELIVERIES);
     }
 
     ChatDeliberationOutboxRelay(ChatDeliberationOutboxService outbox,
@@ -97,6 +117,16 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
             BuiltinHallAgentSupport builtin, ChatConversationEventBroker broker,
             ChatConversationService conversations, ChatClient chatClient,
             long leaseMillis, long heartbeatMillis, int maxConcurrentDeliveries) {
+        this(outbox, deliberation, sockets, builtin, broker, conversations, chatClient,
+                new ChatWorkerTenantPolicy(Set.of("0")), leaseMillis, heartbeatMillis, maxConcurrentDeliveries);
+    }
+
+    ChatDeliberationOutboxRelay(ChatDeliberationOutboxService outbox,
+            ChatDeliberationService deliberation, AgentWebSocketHandler sockets,
+            BuiltinHallAgentSupport builtin, ChatConversationEventBroker broker,
+            ChatConversationService conversations, ChatClient chatClient,
+            ChatWorkerTenantPolicy tenantPolicy, long leaseMillis, long heartbeatMillis,
+            int maxConcurrentDeliveries) {
         if (leaseMillis < 3 || heartbeatMillis < 1 || heartbeatMillis * 3 >= leaseMillis) {
             throw new IllegalArgumentException("Heartbeat must be materially shorter than the lease");
         }
@@ -105,7 +135,8 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
         }
         this.outbox = outbox; this.deliberation = deliberation; this.sockets = sockets;
         this.builtin = builtin; this.broker = broker; this.conversations = conversations;
-        this.chatClient = chatClient; this.leaseMillis = leaseMillis; this.heartbeatMillis = heartbeatMillis;
+        this.chatClient = chatClient; this.tenantPolicy = java.util.Objects.requireNonNull(tenantPolicy, "tenantPolicy");
+        this.leaseMillis = leaseMillis; this.heartbeatMillis = heartbeatMillis;
         this.maxConcurrentDeliveries = maxConcurrentDeliveries;
         this.deliverySlots = new Semaphore(maxConcurrentDeliveries, true);
     }
@@ -120,35 +151,54 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
     }
 
     void pollOnce() {
-        if (!running.get()) return;
-        int capacity = Math.min(8, deliverySlots.availablePermits());
-        if (capacity < 1) return;
-        long now = System.currentTimeMillis();
-        for (ChatDispatchOutboxEntity candidate : outbox.discover(now, capacity)) {
-            if (!deliverySlots.tryAcquire()) break;
-            ChatDeliberationOutboxService.Claim claim = null;
-            try {
-                claim = outbox.claim(candidate, leaseOwner, now, leaseMillis);
-                if (claim == null) {
+        TrustedTenantContext.clear();
+        try {
+            if (!running.get()) return;
+            int capacity = Math.min(8, deliverySlots.availablePermits());
+            if (capacity < 1) return;
+            long now = System.currentTimeMillis();
+            for (ChatDispatchOutboxEntity candidate : outbox.discover(now, capacity)) {
+                if (!candidateAllowed(candidate)) continue;
+                if (!deliverySlots.tryAcquire()) break;
+                ChatDeliberationOutboxService.Claim claim = null;
+                try {
+                    claim = withRowScope(candidate,
+                            () -> outbox.claim(candidate, leaseOwner, now, leaseMillis));
+                    if (claim == null) {
+                        deliverySlots.release();
+                        continue;
+                    }
+                    if (!deliveryAllowed(claim)) {
+                        deliverySlots.release();
+                        continue;
+                    }
+                    submitClaim(claim);
+                } catch (RuntimeException failure) {
                     deliverySlots.release();
-                    continue;
+                    if (claim != null) settleUnexpectedFailure(claim, candidate.getEventId(), failure);
+                    else log.warn("Durable chat outbox claim failed, eventId={}", candidate.getEventId(), failure);
                 }
-                submitClaim(claim);
-            } catch (RuntimeException failure) {
-                deliverySlots.release();
-                if (claim != null) settleUnexpectedFailure(claim, candidate.getEventId(), failure);
-                else log.warn("Durable chat outbox claim failed, eventId={}", candidate.getEventId(), failure);
             }
+        } finally {
+            TrustedTenantContext.clear();
         }
     }
 
     private void submitClaim(ChatDeliberationOutboxService.Claim claim) {
+        if (!deliveryAllowed(claim)) {
+            deliverySlots.release();
+            return;
+        }
         try {
             ensureDeliveryExecutor().execute(() -> {
+                TrustedTenantContext.clear();
                 try { deliverClaim(claim); }
                 catch (RuntimeException failure) {
                     settleUnexpectedFailure(claim, claim.row().getEventId(), failure);
-                } finally { deliverySlots.release(); }
+                } finally {
+                    TrustedTenantContext.clear();
+                    deliverySlots.release();
+                }
             });
         } catch (RuntimeException rejected) {
             deliverySlots.release();
@@ -158,14 +208,26 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
 
     private void settleUnexpectedFailure(ChatDeliberationOutboxService.Claim claim,
             String eventId, RuntimeException failure) {
+        if (!deliveryAllowed(claim)) return;
         log.warn("Durable chat outbox delivery failed, eventId={}", eventId, failure);
-        try { outbox.retry(claim, failure.getClass().getSimpleName(), System.currentTimeMillis()); }
+        try { withClaimScope(claim,
+                () -> outbox.retry(claim, failure.getClass().getSimpleName(), System.currentTimeMillis())); }
         catch (RuntimeException stale) { log.debug("Chat outbox retry lost lease", stale); }
     }
 
     private void safePoll() { try { pollOnce(); } catch (RuntimeException e) { log.warn("Chat outbox poll failed", e); } }
 
     void deliverClaim(ChatDeliberationOutboxService.Claim claim) {
+        TrustedTenantContext.clear();
+        try {
+            withClaimScope(claim, () -> deliverClaimScoped(claim));
+        } finally {
+            TrustedTenantContext.clear();
+        }
+    }
+
+    private void deliverClaimScoped(ChatDeliberationOutboxService.Claim claim) {
+        if (!deliveryAllowed(claim)) return;
         ChatDispatchOutboxEntity row = claim.row();
         Map<String,Object> payload = parse(row.getPayloadJson());
         switch (row.getEventType()) {
@@ -180,20 +242,16 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
             }
             case ChatDeliveryRevisionService.EVENT -> {
                 if(revisions==null)throw new IllegalStateException("Revision service unavailable");
-                ScheduledFuture<?> heartbeat=ensureScheduler().scheduleAtFixedRate(()->{
-                    try {outbox.renew(claim,System.currentTimeMillis(),leaseMillis);}
-                    catch(RuntimeException failure) {claim.invalidate();}
-                },heartbeatMillis,heartbeatMillis,TimeUnit.MILLISECONDS);
+                ScheduledFuture<?> heartbeat=ensureScheduler().scheduleAtFixedRate(
+                        () -> renewClaimHeartbeat(claim), heartbeatMillis, heartbeatMillis, TimeUnit.MILLISECONDS);
                 try {revisions.consume(claim);} finally {heartbeat.cancel(false);}
             }
             case ChatDeliverySubmissionService.EVENT -> {
                 if(submissions==null)throw new IllegalStateException("Delivery submission service is unavailable");
                 // Source/promotion I/O may outlive one lease. Heartbeat renewal never changes a
                 // business deadline and a lost claim cannot ACK another worker's submission.
-                ScheduledFuture<?> heartbeat=ensureScheduler().scheduleAtFixedRate(()->{
-                    try {outbox.renew(claim,System.currentTimeMillis(),leaseMillis);}
-                    catch(RuntimeException failure) {claim.invalidate();}
-                },heartbeatMillis,heartbeatMillis,TimeUnit.MILLISECONDS);
+                ScheduledFuture<?> heartbeat=ensureScheduler().scheduleAtFixedRate(
+                        () -> renewClaimHeartbeat(claim), heartbeatMillis, heartbeatMillis, TimeUnit.MILLISECONDS);
                 try {publishPersistedEvent(submissions.consume(claim));}
                 catch(ChatDeliverySubmissionService.Rejected rejected) {submissions.reject(claim,rejected);}
                 finally {heartbeat.cancel(false);}
@@ -203,6 +261,7 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
     }
 
     private void deliverDispatch(ChatDeliberationOutboxService.Claim claim, Map<String,Object> p) {
+        if (!deliveryAllowed(claim)) return;
         ChatDispatchOutboxEntity row = claim.row();
         String agentId = text(p, "targetAgentId");
         InteractionRoute route = route(p);
@@ -225,17 +284,18 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
             }
             try {
                 runBuiltinWithHeartbeat(claim, p);
-                outbox.sent(claim, System.currentTimeMillis());
+                if (deliveryAllowed(claim)) outbox.sent(claim, System.currentTimeMillis());
             } catch (BuiltinUserCancelled cancelled) {
-                outbox.sent(claim, System.currentTimeMillis());
+                if (deliveryAllowed(claim)) outbox.sent(claim, System.currentTimeMillis());
             } catch (BuiltinTerminal terminal) {
-                outbox.sent(claim, System.currentTimeMillis());
+                if (deliveryAllowed(claim)) outbox.sent(claim, System.currentTimeMillis());
             } catch (LeaseLost lost) {
                 log.warn("Builtin chat generation aborted after fenced lease renewal failed, dispatchId={}",
                         row.getDispatchId());
             } catch (RuntimeException generationFailure) {
                 // A builtin model call is never retried because that could repeat generation/finalization.
                 // Cancellation/final may win the row lock immediately before a model callback returns.
+                if (!deliveryAllowed(claim)) return;
                 if (isCancelled(row) || hasPersistedFinal(row)) {
                     outbox.sent(claim, System.currentTimeMillis());
                 } else {
@@ -253,9 +313,14 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
         Map<String,Object> wire = hostedWire(row, p);
         AtomicReference<AgentWebSocketHandler.CapabilityDispatchResult> dispatch = new AtomicReference<>();
         boolean live = broker.runIfLive(conversationId, generation,
-                () -> conversations.isLiveGeneration(row.getOwnerJiacn(), row.getClientId(), conversationId, generation),
-                () -> dispatch.set(sockets.sendNegotiatedChatMessageToAgent(
-                        row.getTenantId(), binding.executorOwner(), row.getClientId(), agentId, route, wire)));
+                () -> deliveryAllowed(claim)
+                        && conversations.isLiveGeneration(row.getTenantId(), row.getOwnerJiacn(),
+                        row.getClientId(), conversationId, generation),
+                () -> {
+                    if (deliveryAllowed(claim)) dispatch.set(sockets.sendNegotiatedChatMessageToAgent(
+                            row.getTenantId(), binding.executorOwner(), row.getClientId(), agentId, route, wire));
+                });
+        if (!deliveryAllowed(claim)) return;
         if (!live) {
             outbox.dead(claim, "CONVERSATION_DELETED_OR_GENERATION_STALE", System.currentTimeMillis());
             return;
@@ -291,6 +356,7 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
     }
 
     private void settleRecoveredBuiltin(ChatDeliberationOutboxService.Claim claim) {
+        if (!deliveryAllowed(claim)) return;
         ChatDispatchOutboxEntity row = claim.row();
         if (hasPersistedFinal(row)) {
             outbox.sent(claim, System.currentTimeMillis());
@@ -314,33 +380,44 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
     }
 
     private void runBuiltinWithHeartbeat(ChatDeliberationOutboxService.Claim claim, Map<String,Object> p) {
+        if (!deliveryAllowed(claim)) return;
         ScheduledExecutorService heartbeatScheduler = ensureScheduler();
         Sinks.One<Boolean> leaseLost = Sinks.one();
         Sinks.One<Boolean> cancelled = Sinks.one();
         AtomicReference<BuiltinStop> stop = new AtomicReference<>(BuiltinStop.NONE);
         signalTerminalTurn(claim.row(), stop, cancelled);
         ScheduledFuture<?> heartbeat = heartbeatScheduler.scheduleAtFixedRate(() -> {
-            if (stop.get() != BuiltinStop.NONE) return;
+            TrustedTenantContext.clear();
             try {
-                signalTerminalTurn(claim.row(), stop, cancelled);
-                if (stop.get() == BuiltinStop.NONE
-                        && !outbox.renew(claim, System.currentTimeMillis(), leaseMillis)) {
-                    signalLeaseLoss(stop, leaseLost);
-                }
+                withClaimScope(claim, () -> {
+                    if (stop.get() != BuiltinStop.NONE) return;
+                    if (!deliveryAllowed(claim)) {
+                        signalLeaseLoss(stop, leaseLost);
+                        return;
+                    }
+                    signalTerminalTurn(claim.row(), stop, cancelled);
+                    if (stop.get() == BuiltinStop.NONE
+                            && !outbox.renew(claim, System.currentTimeMillis(), leaseMillis)) {
+                        signalLeaseLoss(stop, leaseLost);
+                    }
+                });
             } catch (RuntimeException failure) {
                 signalLeaseLoss(stop, leaseLost);
+            } finally {
+                TrustedTenantContext.clear();
             }
         }, heartbeatMillis, heartbeatMillis, TimeUnit.MILLISECONDS);
         try {
             if (stop.get() != BuiltinStop.NONE) throwForStop(stop.get());
+            if (!deliveryAllowed(claim)) throw new LeaseLost();
             deliberation.markDispatch(claim.row().getTenantId(), claim.row().getOwnerJiacn(),
                     claim.row().getClientId(), claim.row().getTurnId(), true);
             signalTerminalTurn(claim.row(), stop, cancelled);
             if (stop.get() != BuiltinStop.NONE) throwForStop(stop.get());
-            runBuiltin(claim.row(), p, leaseLost.asMono(), cancelled, stop);
+            runBuiltin(claim, p, leaseLost.asMono(), cancelled, stop);
             signalTerminalTurn(claim.row(), stop, cancelled);
             if (stop.get() != BuiltinStop.NONE) throwForStop(stop.get());
-            if (!claim.active() || !outbox.renew(claim, System.currentTimeMillis(), leaseMillis)) throw new LeaseLost();
+            if (!deliveryAllowed(claim) || !outbox.renew(claim, System.currentTimeMillis(), leaseMillis)) throw new LeaseLost();
         } finally {
             heartbeat.cancel(true);
         }
@@ -391,8 +468,11 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
         return deliveryExecutor;
     }
 
-    private void runBuiltin(ChatDispatchOutboxEntity row, Map<String,Object> p, Mono<Boolean> leaseLost,
+    private void runBuiltin(ChatDeliberationOutboxService.Claim claim, Map<String,Object> p, Mono<Boolean> leaseLost,
             Sinks.One<Boolean> cancelled, AtomicReference<BuiltinStop> stop) {
+        if (!deliveryAllowed(claim)) throw new LeaseLost();
+        if (stop.get() != BuiltinStop.NONE) throwForStop(stop.get());
+        ChatDispatchOutboxEntity row = claim.row();
         String conversationId=text(p,"conversationId"), requestId=text(p,"requestId"), agentId=text(p,"targetAgentId");
         long generation=decimal(p,"conversationGeneration"), seqStart=0L;
         String turnId=text(p,"turnId"), dispatchId=text(p,"dispatchId"), snapshot=text(p,"contextSnapshotId"), hash=text(p,"contextHash");
@@ -400,17 +480,25 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
         ServerResolvedAgentSender sender = new ServerResolvedAgentSender(
                 ServerResolvedAgentSender.AGENT_TYPE, BuiltinHallAgentSupport.SONGJIANG_NAME,
                 row.getOwnerJiacn(), row.getClientId(), agentId);
+        Thread deliveryThread = Thread.currentThread();
         try {
             Flux<String> chunks = chatClient.prompt(buildBuiltinPrompt(text(p,"content"), p.get("factsManifest")))
                     .messages().stream().content();
             chunks.takeUntilOther(Flux.merge(leaseLost, cancelled.asMono()).next()).doOnNext(chunk -> {
-                ChatDeliberationService.DeltaResult result = deliberation.acceptDelta(row.getTenantId(), row.getOwnerJiacn(),
-                        row.getClientId(), conversationId, generation, agentId, requestId, turnId, dispatchId,
-                        snapshot, hash, seq.incrementAndGet(), chunk, sender);
-                if (result.status() == ChatDeliberationService.DeltaStatus.TERMINAL) throw new TurnCancelled();
-                if (result.status() != ChatDeliberationService.DeltaStatus.ACCEPTED) throw new IllegalStateException(result.status().name());
-                answer.append(chunk);
-                publishPersistedEvent(result.event());
+                withModelCallbackScope(claim, deliveryThread, () -> {
+                    ChatDeliberationService.DeltaResult result = deliberation.acceptDelta(
+                            row.getTenantId(), row.getOwnerJiacn(), row.getClientId(), conversationId,
+                            generation, agentId, requestId, turnId, dispatchId, snapshot, hash,
+                            seq.incrementAndGet(), chunk, sender);
+                    if (result.status() == ChatDeliberationService.DeltaStatus.TERMINAL) {
+                        throw new TurnCancelled();
+                    }
+                    if (result.status() != ChatDeliberationService.DeltaStatus.ACCEPTED) {
+                        throw new IllegalStateException(result.status().name());
+                    }
+                    answer.append(chunk);
+                    publishPersistedEvent(result.event());
+                });
             }).blockLast();
             signalTerminalTurn(row, stop, cancelled);
             if (stop.get() != BuiltinStop.NONE) throwForStop(stop.get());
@@ -444,6 +532,7 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
     }
 
     private void deliverCancel(ChatDeliberationOutboxService.Claim claim, Map<String,Object> p) {
+        if (!deliveryAllowed(claim)) return;
         ChatDispatchOutboxEntity row=claim.row(); String agentId=text(p,"targetAgentId");
         if (agentId == null || builtin.isBuiltinAgent(agentId)) { outbox.sent(claim,System.currentTimeMillis()); return; }
         Map<String,Object> wire=new HashMap<>(); wire.put("schemaVersion",AgentProtocolConstants.VERSION_1);
@@ -453,16 +542,23 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
         var binding=dispatchAuthority.outgoing(row);
         for (String key : List.of("tenantId", "clientId", "ownerJiacn", "conversationId", "conversationGeneration"))
             wire.put(key,p.get(key));
-        boolean sent=sockets.sendDirectMessageToAgent(row.getTenantId(),binding.executorOwner(),row.getClientId(),agentId,wire);
+        if (!deliveryAllowed(claim)) return;
+        boolean sent=sockets.sendDirectMessageToAgent(
+                row.getTenantId(),binding.executorOwner(),row.getClientId(),agentId,wire);
         if(sent) outbox.sent(claim,System.currentTimeMillis()); else outbox.retry(claim,"AGENT_OFFLINE",System.currentTimeMillis());
     }
 
     private void deliverFinal(ChatDeliberationOutboxService.Claim claim, Map<String,Object> p) {
+        if (!deliveryAllowed(claim)) return;
         ChatDispatchOutboxEntity row=claim.row(); String conversationId=text(p,"conversationId"); long generation=decimal(p,"conversationGeneration");
         Map<String,Object> event=new LinkedHashMap<>(p); event.put("type","agent_message");
         event.put("eventId",row.getEventId()); event.put("occurredAt",Long.toString(row.getCreatedAt()));
         boolean delivered=broker.publishIfSubscribed(conversationId,generation,
-                () -> conversations.isLiveGeneration(row.getOwnerJiacn(),row.getClientId(),conversationId,generation),event);
+                () -> deliveryAllowed(claim)
+                        && conversations.isLiveGeneration(row.getTenantId(), row.getOwnerJiacn(),
+                        row.getClientId(), conversationId, generation)
+                        && deliveryAllowed(claim),event);
+        if (!deliveryAllowed(claim)) return;
         if (!delivered) { outbox.retry(claim,"NO_ACTIVE_SSE_SUBSCRIBER",System.currentTimeMillis()); return; }
         deliberation.markPublished(row.getTenantId(),row.getOwnerJiacn(),row.getClientId(),row.getTurnId());
         outbox.sent(claim,System.currentTimeMillis());
@@ -470,11 +566,15 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
 
     private void publishPersistedEvent(ChatConversationEventEntity stored) {
         if (stored == null) return;
+        String tenantId = stored.getTenantId();
+        if (!tenantPolicy.allows(tenantId)) return;
         Map<String,Object> event=parse(stored.getPayloadJson());
         event.put("eventId",stored.getEventId()); event.put("eventSequence",Long.toString(stored.getEventSequence()));
         event.put("eventVersion",Long.toString(stored.getEventVersion())); event.put("occurredAt",Long.toString(stored.getOccurredAt()));
         broker.publishIfSubscribed(stored.getConversationId(),stored.getConversationGeneration(),
-                () -> conversations.isLiveGeneration(stored.getOwnerJiacn(),stored.getClientId(),stored.getConversationId(),stored.getConversationGeneration()), event);
+                () -> conversations.isLiveGeneration(stored.getTenantId(), stored.getOwnerJiacn(),
+                        stored.getClientId(), stored.getConversationId(), stored.getConversationGeneration())
+                        && tenantPolicy.allows(tenantId) && tenantId.equals(stored.getTenantId()), event);
     }
 
     Map<String,Object> hostedWire(ChatDispatchOutboxEntity row, Map<String,Object> p) {
@@ -534,6 +634,70 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
     }
     private String text(Map<String,Object> p,String k){Object v=p.get(k);return v==null?null:String.valueOf(v);}
     private long decimal(Map<String,Object> p,String k){try{return Long.parseLong(text(p,k));}catch(Exception e){throw new IllegalStateException("Invalid "+k);}}
+
+    private boolean candidateAllowed(ChatDispatchOutboxEntity candidate) {
+        return candidate != null && tenantPolicy.allows(candidate.getTenantId());
+    }
+
+    private boolean deliveryAllowed(ChatDeliberationOutboxService.Claim claim) {
+        return claim != null && claim.active() && canonicalScope(claim.row()) != null;
+    }
+
+    private <T> T withRowScope(ChatDispatchOutboxEntity row, Supplier<T> work) {
+        BusinessScope scope = canonicalScope(row);
+        return scope == null ? null : TrustedTenantContext.withScope(scope, work);
+    }
+
+    private void withClaimScope(ChatDeliberationOutboxService.Claim claim, Runnable work) {
+        BusinessScope scope = claim == null || !claim.active() ? null : canonicalScope(claim.row());
+        if (scope != null) TrustedTenantContext.runWithScope(scope, work);
+    }
+
+    void renewClaimHeartbeat(ChatDeliberationOutboxService.Claim claim) {
+        TrustedTenantContext.clear();
+        try {
+            withClaimScope(claim, () -> {
+                if (!outbox.renew(claim, System.currentTimeMillis(), leaseMillis)) claim.invalidate();
+            });
+        } catch (RuntimeException failure) {
+            claim.invalidate();
+        } finally {
+            TrustedTenantContext.clear();
+        }
+    }
+
+    private void withModelCallbackScope(ChatDeliberationOutboxService.Claim claim,
+            Thread deliveryThread, Runnable work) {
+        if (Thread.currentThread() == deliveryThread) {
+            withClaimScope(claim, work);
+            return;
+        }
+        TrustedTenantContext.clear();
+        try {
+            withClaimScope(claim, work);
+        } finally {
+            TrustedTenantContext.clear();
+        }
+    }
+
+    private BusinessScope canonicalScope(ChatDispatchOutboxEntity row) {
+        if (row == null || !tenantPolicy.allows(row.getTenantId())
+                || !validExact(row.getOwnerJiacn(), 50) || !validExact(row.getClientId(), 50)
+                || !validExact(row.getEventId(), 64)) return null;
+        try {
+            TenantId tenantId = TenantId.of(row.getTenantId());
+            return new BusinessScope(tenantId, CHAT_DATA_DOMAIN,
+                    row.getOwnerJiacn(), row.getClientId());
+        } catch (RuntimeException invalidIdentity) {
+            return null;
+        }
+    }
+
+    private static boolean validExact(String value, int max) {
+        return value != null && !value.isBlank() && value.length() <= max
+                && value.equals(value.strip())
+                && value.chars().noneMatch(Character::isISOControl);
+    }
 
     @Override public synchronized void stop(){
         running.set(false);

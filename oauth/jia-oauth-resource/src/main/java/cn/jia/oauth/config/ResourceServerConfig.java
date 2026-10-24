@@ -1,9 +1,13 @@
 package cn.jia.oauth.config;
 
 import cn.jia.oauth.filter.LegacyAgentTenantBoundaryFilter;
+import cn.jia.oauth.filter.TrustedTenantContextFilter;
+import cn.jia.oauth.filter.TrustedTenantContextCleanupFilter;
 import cn.jia.oauth.security.TenantDeploymentTokenValidator;
 import cn.jia.oauth.security.AccountSecurityJwtValidator;
 import cn.jia.oauth.security.TenantAuthorizationVerifier;
+import cn.jia.oauth.security.TenantAdmissionPolicy;
+import cn.jia.oauth.security.UserAdmissionScopeResolver;
 import cn.jia.oauth.security.CentralSigningProperties;
 import cn.jia.user.security.AccountSecurityService;
 import com.nimbusds.jose.jwk.JWKSet;
@@ -70,7 +74,11 @@ public class ResourceServerConfig {
     @Getter
     @Setter
     public static class TenantDeploymentProperties {
+        private TenantAdmissionPolicy.Mode admissionMode = TenantAdmissionPolicy.Mode.PLATFORM;
+        private String fixedTenantId;
+        /** Existing platform-mode compatibility switch; not valid in fixed-tenant mode. */
         private boolean requireBoundIdentity;
+        /** Existing platform-mode deployment allowlist; fixed-tenant uses fixedTenantId only. */
         private List<String> allowedTenants = new ArrayList<>();
     }
 
@@ -117,11 +125,20 @@ public class ResourceServerConfig {
 
     @Bean
     @Order(2)
-    public SecurityFilterChain oauthIdentityResourceSecurityFilterChain(HttpSecurity http) {
+    public SecurityFilterChain oauthIdentityResourceSecurityFilterChain(
+            HttpSecurity http, TenantDeploymentProperties tenantDeploymentProperties,
+            ObjectProvider<AccountSecurityService> accountSecurityServiceProvider) {
+        TenantAdmissionPolicy admissionPolicy = TenantAdmissionPolicy.from(tenantDeploymentProperties);
         http
                 .securityMatcher(PathPatternRequestMatcher.pathPattern(HttpMethod.GET, "/resource"))
                 .authorizeHttpRequests(authorize -> authorize.anyRequest().authenticated())
                 .oauth2ResourceServer(oauth2 -> oauth2.jwt(Customizer.withDefaults()))
+                .addFilterBefore(new TrustedTenantContextCleanupFilter(),
+                        BearerTokenAuthenticationFilter.class)
+                .addFilterAfter(new TrustedTenantContextFilter(
+                                new UserAdmissionScopeResolver(admissionPolicy,
+                                        accountSecurityServiceProvider.getIfAvailable()), admissionPolicy),
+                        BearerTokenAuthenticationFilter.class)
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .securityContext(context -> context
                         .securityContextRepository(new NullSecurityContextRepository()))
@@ -142,10 +159,12 @@ public class ResourceServerConfig {
             HttpSecurity http, OauthResourceProperties resourceProperties,
             ObjectProvider<AccountSecurityService> accountSecurityServiceProvider,
             TenantDeploymentProperties tenantDeploymentProperties) {
+        TenantAdmissionPolicy admissionPolicy = TenantAdmissionPolicy.from(tenantDeploymentProperties);
+        AccountSecurityService accountSecurityService = accountSecurityServiceProvider.getIfAvailable();
         List<String> resourceUris = new ArrayList<>(resourceProperties.getUris());
         // A strict deployment may supply no legacy resource URI list at all. Route
         // old tenant-zero browser APIs through the authenticated bearer + scope gate.
-        if (tenantDeploymentProperties.isRequireBoundIdentity()) {
+        if (admissionPolicy.requiresIsolatedResourceLane()) {
             for (String legacyPath : List.of("/agent", "/agent/**", "/chat", "/chat/**",
                     "/archive", "/archive/**", "/juyiting", "/juyiting/**",
                     "/task", "/task/**", "/job", "/job/**",
@@ -164,11 +183,11 @@ public class ResourceServerConfig {
         if (resourceUris.isEmpty()) {
             http.securityMatcher(request -> false);
         } else {
-            if (accountSecurityServiceProvider.getIfAvailable() == null) {
+            if (accountSecurityService == null) {
                 throw new IllegalStateException(
                         "AccountSecurityService is required when oauth.resource.uris are configured");
             }
-            if (tenantDeploymentProperties.isRequireBoundIdentity()) {
+            if (admissionPolicy.requiresIsolatedResourceLane()) {
                 // /user/** also matches /user. Preserve the existing Principal
                 // endpoint backed by form login while gating /user/... business APIs.
                 PathPatternRequestMatcher principalEndpoint =
@@ -190,8 +209,14 @@ public class ResourceServerConfig {
                         .requestMatchers("/dwz/view/**").permitAll()
                         .anyRequest().authenticated())
                 .oauth2ResourceServer(oauth2 -> oauth2.jwt(Customizer.withDefaults()))
-                .addFilterAfter(new LegacyAgentTenantBoundaryFilter(
-                        tenantDeploymentProperties.isRequireBoundIdentity()), BearerTokenAuthenticationFilter.class)
+                .addFilterBefore(new TrustedTenantContextCleanupFilter(),
+                        BearerTokenAuthenticationFilter.class)
+                .addFilterAfter(new TrustedTenantContextFilter(
+                                new UserAdmissionScopeResolver(admissionPolicy, accountSecurityService),
+                                admissionPolicy),
+                        BearerTokenAuthenticationFilter.class)
+                .addFilterAfter(new LegacyAgentTenantBoundaryFilter(admissionPolicy),
+                        TrustedTenantContextFilter.class)
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .securityContext(context -> context
                         .securityContextRepository(new RequestAttributeSecurityContextRepository()))
@@ -282,14 +307,18 @@ public class ResourceServerConfig {
                                  TenantDeploymentProperties deploymentProperties,
                                  CentralJwtTrustProperties centralTrust,
                                  CentralSigningProperties signing) {
-        TenantDeploymentTokenValidator deploymentValidator = new TenantDeploymentTokenValidator(deploymentProperties);
+        TenantAdmissionPolicy admissionPolicy = TenantAdmissionPolicy.from(deploymentProperties);
+        TenantDeploymentTokenValidator deploymentValidator = new TenantDeploymentTokenValidator(admissionPolicy);
         AccountSecurityService account = accountSecurityServiceProvider.getIfAvailable();
         TenantAuthorizationVerifier verifier = tenantAuthorizationVerifierProvider.getIfAvailable();
-        if (deploymentProperties.isRequireBoundIdentity() && (account == null || verifier == null)) {
+        if (admissionPolicy.requiresIsolatedResourceLane() && account == null) {
+            throw new IllegalStateException("Isolated tenant deployment requires current account checks");
+        }
+        if (admissionPolicy.requiresTenantAuthorizationVerifierAtStartup() && verifier == null) {
             throw new IllegalStateException("Strict tenant deployment requires current account and tenant authorization checks");
         }
         NimbusJwtDecoder decoder;
-        if (deploymentProperties.isRequireBoundIdentity()) {
+        if (admissionPolicy.requiresCentralTrust()) {
             requireCentralJwtTrust(centralTrust);
             if (signing.isEnabled() && !signing.validatedIssuer().equals(centralTrust.getIssuerUri())) {
                 throw new IllegalStateException("Central signer and resource verifier issuers must match");
@@ -299,12 +328,11 @@ public class ResourceServerConfig {
             decoder = NimbusJwtDecoder.withJwkSource(jwkSource).build();
         }
         decoder.setJwtValidator(new DelegatingOAuth2TokenValidator<>(
-                deploymentProperties.isRequireBoundIdentity()
+                admissionPolicy.requiresCentralTrust()
                         ? JwtValidators.createDefaultWithIssuer(centralTrust.getIssuerUri())
                         : signing.isEnabled() ? JwtValidators.createDefaultWithIssuer(signing.validatedIssuer())
                         : JwtValidators.createDefault(),
-                new AccountSecurityJwtValidator(account, verifier,
-                        deploymentProperties.isRequireBoundIdentity()),
+                new AccountSecurityJwtValidator(account, verifier, admissionPolicy),
                 deploymentValidator));
         return decoder;
     }

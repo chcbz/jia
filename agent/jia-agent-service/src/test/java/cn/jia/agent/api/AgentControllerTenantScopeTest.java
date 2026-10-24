@@ -6,12 +6,18 @@ import cn.jia.agent.entity.AgentTaskTeamRecommendationRequestDTO;
 import cn.jia.agent.entity.funding.AgentTaskFundingCancelDTO;
 import cn.jia.agent.hosting.HostingRentApplicationService;
 import cn.jia.agent.service.AbilityEvaluationService;
+import cn.jia.agent.service.AgentPersonaProvisioningService;
 import cn.jia.agent.service.AgentService;
 import cn.jia.agent.service.funding.FundedBountyActor;
 import cn.jia.agent.service.funding.FundedBountyException;
 import cn.jia.agent.service.funding.FundedBountyQuoteClaimService;
 import cn.jia.agent.service.funding.FundedBountyService;
 import cn.jia.agent.service.impl.AgentServiceImpl.AgentBizException;
+import cn.jia.core.entity.JsonRequest;
+import cn.jia.core.tenant.BusinessScope;
+import cn.jia.core.tenant.DataDomainId;
+import cn.jia.core.tenant.TenantId;
+import cn.jia.core.tenant.TrustedTenantContext;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -31,6 +37,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 /** Exact region binding for the two legacy owner/money actor factories only. */
@@ -57,13 +64,13 @@ class AgentControllerTenantScopeTest {
                     ownerFailure.getCode());
             assertThrows(AgentBizException.class,
                     () -> controller.recommendTaskTeam("task-1",
-                            new AgentTaskTeamRecommendationRequestDTO(), auth));
+                            new JsonRequest<>(1, "test-request", new AgentTaskTeamRecommendationRequestDTO()), auth));
             FundedBountyException createFailure = assertThrows(FundedBountyException.class,
-                    () -> controller.createTask(funded, "idempotency-key-01", auth));
+                    () -> controller.createTask(new JsonRequest<>(1, "test-request", funded), "idempotency-key-01", auth));
             assertEquals(HttpStatus.FORBIDDEN, createFailure.status());
             assertEquals("ECONOMY_FORBIDDEN", createFailure.code());
             assertThrows(FundedBountyException.class,
-                    () -> controller.cancelTaskFunding("task-1", cancel,
+                    () -> controller.cancelTaskFunding("task-1", new JsonRequest<>(1, "test-request", cancel),
                             "idempotency-key-01", auth));
             assertThrows(FundedBountyException.class,
                     () -> controller.quoteTask("task-1", null,
@@ -87,7 +94,7 @@ class AgentControllerTenantScopeTest {
                 jwtForArea("0", "other"), jwtForArea(null, "cyf"),
                 jwtForArea("0", null))) {
             AgentBizException failure = assertThrows(AgentBizException.class,
-                    () -> controller.createTask(legacy, null, auth));
+                    () -> controller.createTask(new JsonRequest<>(1, "test-request", legacy), null, auth));
             assertEquals(cn.jia.agent.common.AgentErrorConstants.AGENT_FORBIDDEN,
                     failure.getCode());
             Object result = controller.bindPersonaHttp("wuyong", auth,
@@ -103,21 +110,52 @@ class AgentControllerTenantScopeTest {
         AgentTaskCreateDTO legacy = new AgentTaskCreateDTO();
         legacy.setTitle("legacy");
         when(agent.createTask(legacy)).thenReturn(new AgentTaskDTO());
-        controller.createTask(legacy, null, jwtForArea("0", "cyf"));
+        TrustedTenantContext.runWithScope(scope("0"), () ->
+                controller.createTask(new JsonRequest<>(1, "test-request", legacy), null, jwtForArea("0", "cyf")));
         verify(agent).createTask(legacy);
     }
 
     @Test
     void exactRegionZeroUsesExistingLegacyScope() {
         JwtAuthenticationToken auth = jwtForArea("0", "cyf");
-        controller.personaCatalog(auth);
+        TrustedTenantContext.runWithScope(scope("0"), () -> {
+            controller.personaCatalog(auth);
+            AgentTaskFundingCancelDTO cancel = new AgentTaskFundingCancelDTO();
+            cancel.setExpectedTaskVersion("1");
+            controller.cancelTaskFunding("task-1", new JsonRequest<>(1, "test-request", cancel), "idempotency-key-01", auth);
+        });
         verify(agent).listPersonaCatalog("0", "client-a", "owner-a");
-
-        AgentTaskFundingCancelDTO cancel = new AgentTaskFundingCancelDTO();
-        cancel.setExpectedTaskVersion("1");
-        controller.cancelTaskFunding("task-1", cancel, "idempotency-key-01", auth);
         verify(funding).cancel(eq(new FundedBountyActor("0", "client-a", "owner-a", "user-a")),
                 eq("idempotency-key-01"), any(), eq("task-1"), eq(1L));
+    }
+
+    @Test
+    void regionOneOrdinaryLocalBindUsesBusinessScopeButHostedOperationsStayClosed() {
+        AgentPersonaProvisioningService provisioning = mock(AgentPersonaProvisioningService.class);
+        AgentController localController = new AgentController(
+                agent, mock(AbilityEvaluationService.class), provisioning);
+        JwtAuthenticationToken auth = jwtForArea("1", "cyf");
+        cn.jia.agent.entity.AgentPersonaBindRequestDTO request =
+                new cn.jia.agent.entity.AgentPersonaBindRequestDTO();
+        request.setMode("local");
+        BusinessScope scope = scope("1");
+
+        TrustedTenantContext.runWithScope(scope, () ->
+                localController.bindPersona("wuyong", request, auth));
+
+        verify(provisioning).bindLocal(scope, "wuyong");
+        TrustedTenantContext.runWithScope(scope, () -> {
+            assertThrows(AgentBizException.class,
+                    () -> localController.repairPersonaBinding(1L, auth));
+            assertThrows(AgentBizException.class,
+                    () -> localController.unbindPersona("wuyong", auth));
+        });
+        verifyNoMoreInteractions(provisioning);
+    }
+
+    private static BusinessScope scope(String tenantId) {
+        return new BusinessScope(
+                TenantId.of(tenantId), DataDomainId.of("cyf"), "owner-a", "client-a");
     }
 
     private static JwtAuthenticationToken jwtForArea(String area, String domain) {

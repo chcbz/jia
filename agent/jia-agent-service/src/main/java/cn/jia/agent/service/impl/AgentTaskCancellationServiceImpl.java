@@ -11,6 +11,7 @@ import cn.jia.agent.service.AgentTaskMutationTransaction;
 import cn.jia.agent.service.AgentTaskStateService;
 import cn.jia.agent.state.AgentTaskMemberStatus;
 import cn.jia.agent.state.AgentTaskWorkItemStatus;
+import cn.jia.core.tenant.TenantId;
 import jakarta.inject.Inject;
 import jakarta.inject.Named;
 import java.util.HashSet;
@@ -44,7 +45,9 @@ public class AgentTaskCancellationServiceImpl implements AgentTaskCancellationSe
     @Override
     public Receipt cancel(String tenant, String client, String owner, String actor,
             String taskId, long expectedTaskVersion) {
-        if (!"0".equals(tenant) || !exact(client,50) || "0".equals(client)
+        try { TenantId.of(tenant); }
+        catch (RuntimeException invalid) { throw error(INVALID_REQUEST); }
+        if (!exact(client,50) || "0".equals(client)
                 || !exact(owner,50) || "0".equals(owner) || !exact(actor,100)
                 || !exact(taskId,100) || expectedTaskVersion<0 || expectedTaskVersion==Long.MAX_VALUE) {
             throw error(INVALID_REQUEST);

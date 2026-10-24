@@ -4,7 +4,7 @@ import cn.jia.oauth.security.TenantSelectionService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -26,8 +26,8 @@ import java.util.Map;
 @Controller
 @RequestMapping("/oauth2")
 @RequiredArgsConstructor
-@ConditionalOnProperty(name = "cyf.oauth.authorization-server.enabled",
-        havingValue = "true", matchIfMissing = true)
+@ConditionalOnExpression("'${cyf.oauth.authorization-server.enabled:true}' == 'true' && "
+        + "'${cyf.tenant.admission-mode:platform}' == 'platform'")
 public class TenantSelectionController {
     private final TenantSelectionService selectionService;
 

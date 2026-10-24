@@ -4,6 +4,7 @@ import cn.jia.agent.dao.HallRequestDraftDao;
 import cn.jia.agent.entity.HallExecutionResultRow;
 import cn.jia.agent.entity.HallRequestDraftEntity;
 import cn.jia.agent.mapper.HallRequestDraftMapper;
+import cn.jia.core.tenant.TenantId;
 import jakarta.inject.Inject;
 import jakarta.inject.Named;
 
@@ -127,7 +128,7 @@ public class HallRequestDraftDaoImpl implements HallRequestDraftDao {
     }
 
     private static void scope(String tenant, String client, String owner) {
-        if (!"0".equals(tenant)) throw new IllegalArgumentException("tenantId");
+        TenantId.of(tenant);
         id(client, "clientId", 50); id(owner, "ownerJiacn", 50);
         if ("0".equals(owner)) throw new IllegalArgumentException("ownerJiacn");
     }
