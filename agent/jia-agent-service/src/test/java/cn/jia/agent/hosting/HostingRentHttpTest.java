@@ -168,6 +168,7 @@ class HostingRentHttpTest {
     }
     private JwtAuthenticationToken jwt() {
         return new JwtAuthenticationToken(Jwt.withTokenValue("fixture").header("alg", "none").subject("Login-A")
+                .claim("tenant_id", "0").claim("data_domain_id", "cyf")
                 .claim("jiacn", "Tenant-A").claim("client_id", "Client-A").build(), List.of());
     }
 }

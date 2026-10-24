@@ -322,6 +322,15 @@ class AgentCommandOperationsRealTransactionTest {
     private void createSchema() {
         jdbc.execute("""
                 CREATE TABLE agent_command_delivery(
+                  protocol_version SMALLINT DEFAULT NULL,
+                  data_domain_id VARCHAR(64) DEFAULT NULL,
+                  execution_pool_id VARCHAR(100) DEFAULT NULL,
+                  admission_epoch BIGINT DEFAULT NULL,
+                  producer_deployment_id VARCHAR(100) DEFAULT NULL,
+                  module_id VARCHAR(64) DEFAULT NULL,
+                  migration_epoch BIGINT DEFAULT NULL,
+                  claimed_deployment_id VARCHAR(100) DEFAULT NULL,
+                  claimed_worker_generation BIGINT DEFAULT NULL,
                   id BIGINT PRIMARY KEY, owner_jiacn VARCHAR(50) NOT NULL, command_id VARCHAR(100), task_id VARCHAR(100),
                   work_item_id VARCHAR(100), target_agent_id VARCHAR(100), command_type VARCHAR(64),
                   command_payload BLOB, command_payload_hash BINARY(32), status VARCHAR(32),
@@ -333,6 +342,15 @@ class AgentCommandOperationsRealTransactionTest {
                 """);
         jdbc.execute("""
                 CREATE TABLE agent_outbox_event(
+                  protocol_version SMALLINT DEFAULT NULL,
+                  data_domain_id VARCHAR(64) DEFAULT NULL,
+                  execution_pool_id VARCHAR(100) DEFAULT NULL,
+                  admission_epoch BIGINT DEFAULT NULL,
+                  producer_deployment_id VARCHAR(100) DEFAULT NULL,
+                  module_id VARCHAR(64) DEFAULT NULL,
+                  migration_epoch BIGINT DEFAULT NULL,
+                  claimed_deployment_id VARCHAR(100) DEFAULT NULL,
+                  claimed_worker_generation BIGINT DEFAULT NULL,
                   id BIGINT PRIMARY KEY, event_id VARCHAR(100), message_id VARCHAR(100), command_id VARCHAR(100),
                   delivery_id BIGINT, aggregate_type VARCHAR(30), aggregate_id VARCHAR(100),
                   destination VARCHAR(100), routing_key VARCHAR(100), wire_payload BLOB,
@@ -347,6 +365,25 @@ class AgentCommandOperationsRealTransactionTest {
                 """);
         jdbc.execute("""
                 CREATE TABLE agent_consumer_inbox(
+                  protocol_version SMALLINT DEFAULT NULL,
+                  data_domain_id VARCHAR(64) DEFAULT NULL,
+                  execution_pool_id VARCHAR(100) DEFAULT NULL,
+                  admission_epoch BIGINT DEFAULT NULL,
+                  producer_deployment_id VARCHAR(100) DEFAULT NULL,
+                  module_id VARCHAR(64) DEFAULT NULL,
+                  migration_epoch BIGINT DEFAULT NULL,
+                  claimant_deployment_id VARCHAR(100) DEFAULT NULL,
+                  claimant_worker_generation BIGINT DEFAULT NULL,
+                  claim_delivery_version BIGINT DEFAULT NULL,
+                  claim_inbox_version BIGINT DEFAULT NULL,
+                  claim_started_at BIGINT DEFAULT NULL,
+                  ack_delivery_version BIGINT DEFAULT NULL,
+                  ack_message_id VARCHAR(100) DEFAULT NULL,
+                  ack_status VARCHAR(20) DEFAULT NULL,
+                  ack_at BIGINT DEFAULT NULL,
+                  ack_agent_id VARCHAR(100) DEFAULT NULL,
+                  ack_runtime_installation_id VARCHAR(100) DEFAULT NULL,
+                  ack_runtime_instance_id VARCHAR(100) DEFAULT NULL,
                   id BIGINT PRIMARY KEY, consumer_name VARCHAR(100), message_id VARCHAR(100), event_id VARCHAR(100),
                   command_id VARCHAR(100), delivery_id BIGINT, wire_payload BLOB, wire_payload_hash BINARY(32),
                   status VARCHAR(32), result_status VARCHAR(32), attempt_count INT, next_retry_at BIGINT,

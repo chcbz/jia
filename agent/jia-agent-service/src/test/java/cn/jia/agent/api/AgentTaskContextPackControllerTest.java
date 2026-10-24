@@ -311,6 +311,7 @@ class AgentTaskContextPackControllerTest extends BaseMockTest {
     private static JwtAuthenticationToken jwtClaims(
             Object tenant, Object client, Object subject, String name) {
         Jwt.Builder builder = Jwt.withTokenValue("token").header("alg", "none")
+                .claim("tenant_id", "0").claim("data_domain_id", "cyf")
                 .issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(60));
         if (tenant != null) builder.claim("jiacn", tenant);
         if (client != null) builder.claim("client_id", client);

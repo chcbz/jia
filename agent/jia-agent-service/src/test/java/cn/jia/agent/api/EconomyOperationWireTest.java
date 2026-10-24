@@ -33,7 +33,7 @@ class EconomyOperationWireTest {
                 .setControllerAdvice(new cn.jia.core.config.ApiEnvelopeAdvice(),new cn.jia.core.config.ApiRequestEnvelopeAdvice(),new cn.jia.core.config.ExceptionHandlerAdvice())
                 .addFilters(new cn.jia.core.filter.RequestIdFilter()).build();
         var jwt = org.springframework.security.oauth2.jwt.Jwt.withTokenValue("fixture").header("alg","none")
-                .subject("owner").claim("jiacn","owner").claim("client_id","client").build();
+                .subject("owner").claim("tenant_id","0").claim("data_domain_id","cyf").claim("jiacn","owner").claim("client_id","client").build();
         var auth = new org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken(jwt);
         auth.setAuthenticated(true);
         mvc.perform(post("/agent/personas/linchong/hosting-rent/quotes").principal(auth).header("Idempotency-Key","00000000-0000-4000-8000-000000000001")

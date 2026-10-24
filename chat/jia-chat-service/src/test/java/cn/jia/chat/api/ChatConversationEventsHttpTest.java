@@ -47,7 +47,10 @@ class ChatConversationEventsHttpTest {
         var conversations=mock(ChatConversationService.class);
         var conversation=new ChatConversationEntity().setId(42L).setJiacn("owner").setLifecycleGeneration(3L);
         conversation.setTenantId("0");conversation.setClientId("client");
-        when(conversations.get("42")).thenReturn(conversation);
+        when(conversations.get(new cn.jia.core.tenant.UserAdmissionScope(
+                new cn.jia.core.tenant.BusinessScope(cn.jia.core.tenant.TenantId.of("0"),
+                        cn.jia.core.tenant.DataDomainId.of("cyf"), "owner", "client"),
+                1L, 0L, 0L, 0L, 0L), "42")).thenReturn(conversation);
         broker=mock(ChatConversationEventBroker.class);
         subscription=mock(ChatConversationEventBroker.LiveSubscription.class);
         when(broker.subscribeBuffered(eq("42"),eq(3L),any())).thenReturn(subscription);

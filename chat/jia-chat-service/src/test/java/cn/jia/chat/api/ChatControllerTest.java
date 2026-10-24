@@ -187,7 +187,7 @@ class ChatControllerTest extends BaseMockTest {
         assertTrue(chunks.getFirst().contains("\"conversationId\":\"1001\""));
         assertFalse(chunks.getFirst().contains("agentDelivery"));
         assertTrue(chunks.stream().anyMatch(item -> item.contains("\"agentDelivery\"")));
-        assertTrue(chunks.stream().anyMatch(item -> item.contains("\"conversationId\": \"1001\"")));
+        assertTrue(chunks.stream().anyMatch(item -> item.contains("\"conversationId\":\"1001\"")));
     }
 
 
@@ -379,7 +379,7 @@ class ChatControllerTest extends BaseMockTest {
         setObjectField(request, "conversationScopeKey", "task:372");
         setObjectField(request, "taskId", "372");
         setObjectField(request, "targetAgentIds", List.of("agent-wuyong", "agent-linchong"));
-        when(agentService.listTaskWritableMemberAgentIds("0", "web-client", "372"))
+        when(agentService.listTaskWritableMemberAgentIds("0", "web-client", "tester", "372"))
                 .thenReturn(List.of("agent-wuyong", "agent-linchong"));
         when(chatConversationService.create(any(UserAdmissionScope.class), any(ChatConversationEntity.class)))
                 .thenAnswer(invocation -> invocation.getArgument(1));
@@ -465,7 +465,7 @@ class ChatControllerTest extends BaseMockTest {
         setObjectField(request, "targetAgentIds", List.of("agent-linchong"));
         request.setMetadata(Map.of("participantAgentIds", List.of("agent-wuyong")));
 
-        when(agentService.listTaskWritableMemberAgentIds("0", "web-client", "372"))
+        when(agentService.listTaskWritableMemberAgentIds("0", "web-client", "tester", "372"))
                 .thenReturn(List.of("agent-wuyong"));
 
         assertThrows(AgentTaskThreadException.class,
@@ -485,7 +485,7 @@ class ChatControllerTest extends BaseMockTest {
         EsContextHolder.setContext(context);
         List<String> members = List.of("agent-wuyong", "agent-linchong");
         ChatController controller = newController();
-        when(agentService.listTaskWritableMemberAgentIds("0", "web-client", "task-7"))
+        when(agentService.listTaskWritableMemberAgentIds("0", "web-client", "tester", "task-7"))
                 .thenReturn(members);
         when(chatConversationService.create(any(UserAdmissionScope.class), any(ChatConversationEntity.class)))
                 .thenAnswer(invocation -> ((ChatConversationEntity) invocation.getArgument(1))

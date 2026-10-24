@@ -1414,6 +1414,12 @@ class AgentCommandRecoveryServiceTest {
                     delivery.getExpiresAt() <= now));
         }
 
+        // Match production's non-locking lane hint; operations records lock/write order only.
+        @Override
+        public AgentCommandDeliveryEntity findDeliveryProtocolHint(String tenantId, String clientId, long deliveryId) {
+            return delivery;
+        }
+
         @Override
         public AgentCommandDeliveryEntity lockDelivery(String tenantId, String clientId, long deliveryId) {
             operations.add("delivery");

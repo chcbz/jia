@@ -540,3 +540,7 @@ path ID沿`[A-Za-z0-9][A-Za-z0-9._:-]{0,99}`；幂等键沿`[A-Za-z0-9][A-Za-z0-
 6. 共享SSE辅助`authenticatedSse.js`的实际两调用者Chat.vue、useHallConversation.js都传GET `/chat/conversation/events?id=...`，hall额外带Last-Event-ID。绑定到原ChatController.conversationEvents，不计为三个新接口；响应body仍事件流，不能整体当R JSON解析。认证代际、清理和游标恢复保留。
 
 最早用例：新DTO+真实局部metadata回执；二页关联确认；无ETag+断流保持未知；身份切换丢弃旧响应；If-Match冲突不重发；SSE断线游标不混入JSON解包。本轮只查源码，应用用例在开发阶段执行，不因“尚未开发所以没有新测试成功”反复阻止设计收口。
+
+### 2026-10-24 分支整合：事件写入缺失租户的异常契约
+
+核对基线：API `c40ade104b3c57a693b58a3a18b4c4faa2ee90c9`，仅覆盖 `AgentTaskEventWriterImpl.validateCommand`。租户是必需的授权/存储作用域；缺失时不得推定租户0或进入事件事务，否则可能跨域写入。`tenantId` 为 null/空或非规范十进制字符串时，本次 append 应在 DAO/事务写入前抛 `IllegalArgumentException`，不因改用 `TenantId` 值对象泄漏 `NullPointerException`，不影响其他事项。实现复用原 `requireNonBlank` 后调用 `TenantId.of`，无新增开关、协议门禁或重放。回归入口为已有 `AgentTaskEventRealTransactionTest.scopeMismatchFailClosed` 与 `commandValidationRejectsNullRequiredFields`；API280暴露异常类型回归，本次修正尚待后续Flow核验，非线上通过声明。

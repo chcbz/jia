@@ -32,7 +32,8 @@ import org.springframework.amqp.core.Message;
 import org.springframework.amqp.core.MessageDeliveryMode;
 import org.springframework.amqp.core.MessageProperties;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.annotation.Conditional;
+import cn.jia.agent.config.AgentLegacyRabbitDispatchEnabledCondition;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.nio.charset.StandardCharsets;
@@ -738,11 +739,8 @@ class AgentCommandRabbitConsumerTest extends BaseMockTest {
         assertEquals(List.of(AgentRabbitTopologyManifest.DISPATCH_QUEUE),
                 List.of(listener.queues()));
         assertEquals("agentCommandListenerContainerFactory", listener.containerFactory());
-        ConditionalOnProperty gate = AgentCommandRabbitConsumer.class
-                .getAnnotation(ConditionalOnProperty.class);
-        assertEquals("agent.rabbit-dispatch", gate.prefix());
-        assertEquals(List.of("enabled"), List.of(gate.name()));
-        assertEquals("true", gate.havingValue());
+        Conditional gate = AgentCommandRabbitConsumer.class.getAnnotation(Conditional.class);
+        assertEquals(List.of(AgentLegacyRabbitDispatchEnabledCondition.class), List.of(gate.value()));
     }
 
     private AgentCommandRabbitConsumer consumer(

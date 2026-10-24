@@ -6,6 +6,10 @@ import cn.jia.chat.dao.ChatConversationDao;
 import cn.jia.chat.dao.ChatMessageDao;
 import cn.jia.chat.deliberation.*;
 import cn.jia.chat.entity.ChatConversationEntity;
+import cn.jia.chat.entity.ConversationDataScope;
+import cn.jia.core.tenant.BusinessScope;
+import cn.jia.core.tenant.TenantId;
+import cn.jia.core.tenant.DataDomainId;
 import cn.jia.chat.entity.ChatMessageEntity;
 import cn.jia.chat.handler.dto.ChatMessageDTO;
 import org.junit.jupiter.api.Test;
@@ -17,6 +21,11 @@ import static org.mockito.Mockito.*;
 
 /** Real admission code and snapshot serialization; mocks do not prove SQL rollback or concurrency. */
 class ChatReviewContextAdmissionTest {
+    private static ConversationDataScope legacyScope() {
+        return new ConversationDataScope(new BusinessScope(TenantId.of("0"),
+                DataDomainId.of("cyf"), "owner", "client"), ConversationDataScope.Mode.LEGACY_CLIENT);
+    }
+
     final ChatDeliberationDao dao=mock(ChatDeliberationDao.class);
     final ChatConversationDao conversations=mock(ChatConversationDao.class);
     final ChatMessageDao messages=mock(ChatMessageDao.class);
@@ -36,7 +45,7 @@ class ChatReviewContextAdmissionTest {
         service.setDispatchAuthority(authority);
         var conversation=new ChatConversationEntity().setId(123L).setJiacn("owner").setConversationType("juyiting").setConversationScopeType("bounty")
                 .setConversationScopeKey(scope.scopeKey()).setTaskId(scope.taskId()).setLifecycleGeneration(1L).setTargetAgentIds("[\"agent\"]");
-        conversation.setTenantId("0");conversation.setClientId("client");when(conversations.lockScopedById("owner","client","123")).thenReturn(conversation);
+        conversation.setTenantId("0");conversation.setClientId("client");when(conversations.lockScopedById(legacyScope(), "123")).thenReturn(conversation);
         when(messages.findOwnedByConversationIdWithLimit(any(),any(),any(),anyInt())).thenReturn(List.of());
         var task=new AgentTaskDTO();task.setId(scope.taskId());task.setTitle("核对");task.setStatus("reviewing");task.setTaskVersion("7");task.setAssignedAgentId("agent");
         task.setTenantId("0");task.setClientId("client");when(agents.getTask(scope.taskId())).thenReturn(task);

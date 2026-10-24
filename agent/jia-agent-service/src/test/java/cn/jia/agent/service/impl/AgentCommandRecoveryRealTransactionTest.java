@@ -830,6 +830,15 @@ class AgentCommandRecoveryRealTransactionTest {
     private void createSchema() {
         jdbc.execute("""
                 CREATE TABLE agent_command_delivery(
+                  protocol_version SMALLINT DEFAULT NULL,
+                  data_domain_id VARCHAR(64) DEFAULT NULL,
+                  execution_pool_id VARCHAR(100) DEFAULT NULL,
+                  admission_epoch BIGINT DEFAULT NULL,
+                  producer_deployment_id VARCHAR(100) DEFAULT NULL,
+                  module_id VARCHAR(64) DEFAULT NULL,
+                  migration_epoch BIGINT DEFAULT NULL,
+                  claimed_deployment_id VARCHAR(100) DEFAULT NULL,
+                  claimed_worker_generation BIGINT DEFAULT NULL,
                   id BIGINT AUTO_INCREMENT PRIMARY KEY, owner_jiacn VARCHAR(50) NOT NULL, command_id VARCHAR(100) NOT NULL,
                   task_id VARCHAR(100) NOT NULL, work_item_id VARCHAR(100), target_agent_id VARCHAR(100) NOT NULL,
                   command_type VARCHAR(64) NOT NULL, command_payload BLOB NOT NULL,
@@ -843,6 +852,15 @@ class AgentCommandRecoveryRealTransactionTest {
                 """);
         jdbc.execute("""
                 CREATE TABLE agent_outbox_event(
+                  protocol_version SMALLINT DEFAULT NULL,
+                  data_domain_id VARCHAR(64) DEFAULT NULL,
+                  execution_pool_id VARCHAR(100) DEFAULT NULL,
+                  admission_epoch BIGINT DEFAULT NULL,
+                  producer_deployment_id VARCHAR(100) DEFAULT NULL,
+                  module_id VARCHAR(64) DEFAULT NULL,
+                  migration_epoch BIGINT DEFAULT NULL,
+                  claimed_deployment_id VARCHAR(100) DEFAULT NULL,
+                  claimed_worker_generation BIGINT DEFAULT NULL,
                   id BIGINT AUTO_INCREMENT PRIMARY KEY, event_id VARCHAR(100) NOT NULL, message_id VARCHAR(100) NOT NULL,
                   command_id VARCHAR(100) NOT NULL, delivery_id BIGINT NOT NULL, aggregate_type VARCHAR(30) NOT NULL,
                   aggregate_id VARCHAR(100) NOT NULL, destination VARCHAR(100) NOT NULL, routing_key VARCHAR(100) NOT NULL,
@@ -859,6 +877,25 @@ class AgentCommandRecoveryRealTransactionTest {
         jdbc.execute("CREATE INDEX idx_outbox_message ON agent_outbox_event(tenant_id,client_id,message_id)");
         jdbc.execute("""
                 CREATE TABLE agent_consumer_inbox(
+                  protocol_version SMALLINT DEFAULT NULL,
+                  data_domain_id VARCHAR(64) DEFAULT NULL,
+                  execution_pool_id VARCHAR(100) DEFAULT NULL,
+                  admission_epoch BIGINT DEFAULT NULL,
+                  producer_deployment_id VARCHAR(100) DEFAULT NULL,
+                  module_id VARCHAR(64) DEFAULT NULL,
+                  migration_epoch BIGINT DEFAULT NULL,
+                  claimant_deployment_id VARCHAR(100) DEFAULT NULL,
+                  claimant_worker_generation BIGINT DEFAULT NULL,
+                  claim_delivery_version BIGINT DEFAULT NULL,
+                  claim_inbox_version BIGINT DEFAULT NULL,
+                  claim_started_at BIGINT DEFAULT NULL,
+                  ack_delivery_version BIGINT DEFAULT NULL,
+                  ack_message_id VARCHAR(100) DEFAULT NULL,
+                  ack_status VARCHAR(20) DEFAULT NULL,
+                  ack_at BIGINT DEFAULT NULL,
+                  ack_agent_id VARCHAR(100) DEFAULT NULL,
+                  ack_runtime_installation_id VARCHAR(100) DEFAULT NULL,
+                  ack_runtime_instance_id VARCHAR(100) DEFAULT NULL,
                   id BIGINT AUTO_INCREMENT PRIMARY KEY, consumer_name VARCHAR(100) NOT NULL, message_id VARCHAR(100) NOT NULL,
                   event_id VARCHAR(100) NOT NULL, command_id VARCHAR(100) NOT NULL, delivery_id BIGINT NOT NULL,
                   wire_payload BLOB NOT NULL, wire_payload_hash BINARY(32) NOT NULL, status VARCHAR(32) NOT NULL,
@@ -900,13 +937,16 @@ class AgentCommandRecoveryRealTransactionTest {
     private static class DelegatingDao implements AgentCommandRecoveryDao {
         private final AgentCommandRecoveryDao delegate;
         private DelegatingDao(AgentCommandRecoveryDao delegate) { this.delegate = delegate; }
-        @Override public List<AgentWaitingCommandCandidate> findReconnectCandidates(String tenantId, String clientId,
+        @Override public List<AgentWaitingCommandCandidate> findLegacyReconnectCandidates(String tenantId, String clientId,
                 String targetAgentId, long now, long afterDeliveryId, int limit) {
-            return delegate.findReconnectCandidates(tenantId, clientId, targetAgentId, now, afterDeliveryId, limit);
+            return delegate.findLegacyReconnectCandidates(tenantId, clientId, targetAgentId, now, afterDeliveryId, limit);
         }
-        @Override public List<AgentWaitingCommandCandidate> findDueCandidates(
+        @Override public List<AgentWaitingCommandCandidate> findLegacyDueCandidates(
                 long now, long sentBefore, long afterDeliveryId, int limit) {
-            return delegate.findDueCandidates(now, sentBefore, afterDeliveryId, limit);
+            return delegate.findLegacyDueCandidates(now, sentBefore, afterDeliveryId, limit);
+        }
+        @Override public AgentCommandDeliveryEntity findDeliveryProtocolHint(String tenantId, String clientId, long deliveryId) {
+            return delegate.findDeliveryProtocolHint(tenantId, clientId, deliveryId);
         }
         @Override public AgentCommandDeliveryEntity lockDelivery(String tenantId, String clientId, long deliveryId) {
             return delegate.lockDelivery(tenantId, clientId, deliveryId);

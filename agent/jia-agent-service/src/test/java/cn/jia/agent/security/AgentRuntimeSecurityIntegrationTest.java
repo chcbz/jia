@@ -185,6 +185,14 @@ class AgentRuntimeSecurityIntegrationTest {
         keys = context.getBean(ApiKeyService.class);
         installations = context.getBean(cn.jia.agent.dao.AgentRuntimeV1InstallationDao.class);
         when(installations.lock(anyString())).thenAnswer(inv -> installationRows.get(inv.getArgument(0)));
+        when(installations.findBootstrap(anyString()))
+                .thenAnswer(inv -> installationRows.get(inv.getArgument(0)));
+        when(identityRegistryDao.findBootstrapExactByCanonical(anyString(), anyString(), anyString()))
+                .thenAnswer(inv -> {
+                    var identity = persistedIdentitiesByCanonical.get(inv.getArgument(2));
+                    return identity != null && inv.getArgument(0).equals(identity.getTenantId())
+                            && inv.getArgument(1).equals(identity.getClientId()) ? List.of(identity) : List.of();
+                });
         when(installations.findInScope(anyString(), anyString(), anyString())).thenAnswer(inv -> {
             var row = installationRows.get(inv.getArgument(2));
             return row != null && inv.getArgument(0).equals(row.getTenantId()) && inv.getArgument(1).equals(row.getClientId()) ? row : null;

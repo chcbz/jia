@@ -5,6 +5,10 @@ import cn.jia.chat.dao.ChatConversationDao;
 import cn.jia.chat.dao.ChatMessageDao;
 import cn.jia.chat.deliberation.*;
 import cn.jia.chat.entity.ChatConversationEntity;
+import cn.jia.chat.entity.ConversationDataScope;
+import cn.jia.core.tenant.BusinessScope;
+import cn.jia.core.tenant.TenantId;
+import cn.jia.core.tenant.DataDomainId;
 import cn.jia.core.util.JsonUtil;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -15,6 +19,11 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 class ChatCancellationVersionTest {
+    private static ConversationDataScope legacyScope() {
+        return new ConversationDataScope(new BusinessScope(TenantId.of("0"),
+                DataDomainId.of("cyf"), "owner", "client"), ConversationDataScope.Mode.LEGACY_CLIENT);
+    }
+
     private final ChatDeliberationDao dao = mock(ChatDeliberationDao.class);
     private final ChatConversationDao conversations = mock(ChatConversationDao.class);
     private final ChatDeliberationService service = new ChatDeliberationService(
@@ -70,8 +79,8 @@ class ChatCancellationVersionTest {
         service.setDispatchAuthority(authority);
         ChatConversationEntity conversation = new ChatConversationEntity().setLifecycleGeneration(1L);
         conversation.setTenantId("0");
-        when(conversations.findScopedById("owner", "client", "1001")).thenReturn(conversation);
-        when(conversations.lockScopedById("owner", "client", "1001")).thenReturn(conversation);
+        when(conversations.findScopedById(legacyScope(), "1001")).thenReturn(conversation);
+        when(conversations.lockScopedById(legacyScope(), "1001")).thenReturn(conversation);
         when(dao.findTurn("0", "owner", "client", "turn")).thenReturn(turn);
         when(dao.lockTurn("0", "owner", "client", "turn")).thenReturn(turn);
     }

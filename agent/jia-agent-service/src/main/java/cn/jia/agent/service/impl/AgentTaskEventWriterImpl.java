@@ -120,6 +120,7 @@ public class AgentTaskEventWriterImpl implements AgentTaskEventWriter {
         if (cmd == null) {
             throw new IllegalArgumentException("command must not be null");
         }
+        requireNonBlank(cmd.getTenantId(), "tenantId", 50);
         cn.jia.core.tenant.TenantId.of(cmd.getTenantId());
         requireNonBlank(cmd.getClientId(), "clientId", 50);
         requireNonBlank(cmd.getOwnerJiacn(), "ownerJiacn", 50);
