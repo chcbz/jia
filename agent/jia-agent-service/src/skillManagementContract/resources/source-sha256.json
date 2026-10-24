@@ -2,7 +2,7 @@
   "source": "specs/juyiting-skill-execution/fixtures",
   "contractVersion": "SM-C1",
   "files": {
-    "management-contract-v1.schema.json": "9b66ef04627fc67c50fb28cfa52805df83478c89416cd9a195446159a6119f8a",
+    "management-contract-v1.schema.json": "39e5185c7efbf4fec1ac7cd6f8eda4450056f04c0a596eb4b566103cc50f398f",
     "management-contract-v1.examples.json": "b9e48e96fc431b4920af44a437097d6479a61d7c2ccb076ad6be266db133171e",
     "management-contract-v1.behavior.json": "dcd4b7ae53c539b343480fe11b639fcf47bcd6c14b100b139f10fa24302a8edf"
   }

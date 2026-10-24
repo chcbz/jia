@@ -65,7 +65,7 @@ public final class InstalledSkillDescriptorService implements InstalledSkillDesc
                 }
             }
             if(management!=null)result.addAll(management.descriptors(scope));
-            if(positionSkills!=null)result.addAll(positionSkills.read(scope));
+            // Position installs now live in the shared management descriptor source above; do not duplicate them.
             // Decoration changes no package/manifest identity or readiness reason. Snapshot consumers
             // retain these informational bytes at admission; a later price update does not invalidate work.
             if(costs!=null) {

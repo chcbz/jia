@@ -432,6 +432,30 @@
         },
         "updatedAt": {
           "$ref": "#/definitions/Time"
+        },
+        "authorizationSource": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "grantId",
+            "grantRevision",
+            "bindingId"
+          ],
+          "properties": {
+            "type": {
+              "const": "POSITION"
+            },
+            "grantId": {
+              "$ref": "#/definitions/Id"
+            },
+            "grantRevision": {
+              "$ref": "#/definitions/PositiveRevision"
+            },
+            "bindingId": {
+              "$ref": "#/definitions/PositiveRevision"
+            }
+          }
         }
       },
       "allOf": [

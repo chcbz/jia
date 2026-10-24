@@ -80,7 +80,7 @@ public final class PositionSkillPolicy {
         require(i.state() == InstallState.FAILED || i.desired() && i.state() == InstallState.INSTALLED,
                 409, "POSITION_INSTALLATION_NOT_RETRYABLE");
         installations.put(i.id(), new Installation(i.id(), i.agentId(), i.bindingId(), i.skillKey(), i.retained(), i.desired(),
-                i.revision() + 1, i.desired() ? InstallState.INSTALL_PENDING : InstallState.REMOVE_PENDING, null, null, null, null, null, null));
+                i.revision() + 1, i.desired() ? InstallState.INSTALL_PENDING : InstallState.REMOVE_PENDING, null, null, null, null, null, null, i.managedInstallationId()));
     }
     public void receipt(String installationId, long revision, boolean installed, String digest, String runtimeId,
             String hostId, String errorCode) {
@@ -102,7 +102,13 @@ public final class PositionSkillPolicy {
         require(errorCode != null || installed == i.desired(), 409, "POSITION_RECEIPT_CONFLICT");
         installations.put(i.id(), new Installation(i.id(), i.agentId(), i.bindingId(), i.skillKey(), i.retained(), i.desired(), i.revision(),
                 errorCode != null ? InstallState.FAILED : installed ? InstallState.INSTALLED : InstallState.REMOVED,
-                digest, packageDigest, manifestSha256, runtimeId, hostId, errorCode));
+                digest, packageDigest, manifestSha256, runtimeId, hostId, errorCode, i.managedInstallationId()));
+    }
+    /** Backend-only association with the shared immutable installation, never supplied by a Runtime receipt. */
+    public void bindManagedInstallation(String id,long revision,String physical) {
+        var i=installation(id);require(i.revision()==revision,409,"POSITION_INSTALLATION_FENCED");key(physical);
+        installations.put(id,new Installation(i.id(),i.agentId(),i.bindingId(),i.skillKey(),i.retained(),i.desired(),i.revision(),i.state(),
+                i.receiptDigest(),i.packageDigest(),i.manifestSha256(),i.runtimeInstallationId(),i.runtimeHostId(),i.errorCode(),physical));
     }
     public void authorize(String appointmentId, long appointmentRevision, long positionRevision,
             String agentId, long bindingId, String workId, boolean publish) {
@@ -138,7 +144,7 @@ public final class PositionSkillPolicy {
                 transition ? i.revision() + 1 : i.revision(),
                 transition ? desired ? InstallState.INSTALL_PENDING : InstallState.REMOVE_PENDING : i.state(),
                 transition ? null : i.receiptDigest(), transition ? null : i.packageDigest(), transition ? null : i.manifestSha256(), transition ? null : i.runtimeInstallationId(),
-                transition ? null : i.runtimeHostId(), transition ? null : i.errorCode());
+                transition ? null : i.runtimeHostId(), transition ? null : i.errorCode(), i.managedInstallationId());
     }
     private Installation installation(String id) {
         var i = installations.get(id); require(i != null, 404, "POSITION_INSTALLATION_NOT_FOUND"); return i;

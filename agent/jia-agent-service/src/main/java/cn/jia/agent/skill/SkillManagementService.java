@@ -47,6 +47,145 @@ public final class SkillManagementService {
         this.installations=installations;this.authentication=authentication;this.packages=packages;this.writer=writer;
         this.sessions=sessions;this.capabilities=capabilities;this.tx=new TransactionTemplate(manager);
     }
+    private org.springframework.beans.factory.ObjectProvider<cn.jia.agent.position.PositionSkillService> positionProvider;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setPositionProvider(org.springframework.beans.factory.ObjectProvider<cn.jia.agent.position.PositionSkillService> value) {positionProvider=value;}
+    private cn.jia.agent.position.PositionSkillService positions() {
+        var value=positionProvider==null?null:positionProvider.getIfAvailable();require(value!=null,503,"SKILL_STATE_UNAVAILABLE");return value;
+    }
+    private static boolean positionChange(SkillChangeEntity c) {return c!=null&&dto(c).containsKey("authorizationSource");}
+    private static cn.jia.agent.service.PositionAuthority.Scope positionScope(HostingRentHttp.Actor a) {
+        return new cn.jia.agent.service.PositionAuthority.Scope(a.tenantId(),a.clientId(),a.ownerJiacn());
+    }
+    /** Native position changes have no payer/quote/order. Runtime fence -> skill root -> position root;
+     * they never acquire the market actor lock after a native fence. Market entry points are unchanged. */
+    private <T> T ownedChange(SkillChangeEntity c,Supplier<T> operation) {
+        var actor=new HostingRentHttp.Actor(c.getActorId(),c.getTenantId(),c.getClientId(),c.getOwnerJiacn());
+        if(!positionChange(c))return owned(actor,c.getAgentId(),null,false,operation);
+        var proof=authentication.currentRegisteredProof(c.getTenantId(),c.getClientId(),c.getAgentId());
+        require(proof.scope().ownerJiacn().equals(c.getOwnerJiacn())&&proof.installationId().equals(c.getRuntimeInstallationId())
+                &&proof.hostId().equals(c.getRuntimeHostId()),409,"SKILL_DELIVERY_FENCED");
+        return tx.execute(s->authentication.withFence(proof,false,()->{
+            state(actor,c.getAgentId(),c.getSkillKey());
+            var source=object(dto(c).get("authorizationSource"));
+            var grant=positions().currentState(positionScope(actor)).installations().get(text(source,"grantId"));
+            require(grant!=null&&grant.agentId().equals(c.getAgentId())&&grant.skillKey().equals(c.getSkillKey())
+                    &&Long.toString(grant.bindingId()).equals(source.get("bindingId")),409,"SKILL_DELIVERY_FENCED");
+            // Historical results remain recordable after revocation; current admission checks the live grant below.
+            return operation.get();
+        }));
+    }
+    private boolean currentPositionSource(SkillCapabilityLookup.Scope scope,SkillInstallationAuthorizationEntity auth) {
+        var c=db.findChange(scope.tenantId(),scope.clientId(),auth.getChangeId());if(!positionChange(c))return true;
+        var runtime=runtimes.findInScope(scope.tenantId(),scope.clientId(),scope.agentId());if(runtime==null)return false;
+        var state=positions().currentState(new PositionAuthority.Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn()));
+        return state.installations().values().stream().anyMatch(i->i.agentId().equals(scope.agentId())&&i.skillKey().equals(c.getSkillKey())
+                &&Objects.equals(runtime.getBindingId(),i.bindingId())&&i.desired()&&auth.getInstallationId().equals(i.managedInstallationId()))
+                || otherMarketSource(scope,ref(auth));
+    }
+    private boolean otherMarketSource(SkillCapabilityLookup.Scope scope,Map<String,Object> target) {
+        for(var auth:db.authorizationsForAgent(scope.tenantId(),scope.clientId(),scope.agentId())) {
+            var c=db.findChange(scope.tenantId(),scope.clientId(),auth.getChangeId());
+            if(c==null||positionChange(c)||!scope.ownerJiacn().equals(c.getOwnerJiacn())
+                    ||!Objects.equals(ref(auth).get("productVersionId"),target.get("productVersionId")))continue;
+            var i=app.installation(scope.tenantId(),scope.clientId(),auth.getInstallationId());
+            if(!validInstallation(scope,auth,i,db.readEntitlement(scope.tenantId(),scope.clientId(),auth.getEntitlementId())))continue;
+            if(i.getOrderId()!=null) {var order=app.order(scope.tenantId(),scope.clientId(),i.getOrderId());if(order==null||!"ACTIVE".equals(order.getStatus()))continue;}
+            return true;
+        }
+        return false;
+    }
+    private Map<String,Object> positionCommand(SkillChangeEntity c) {
+        if(c==null||!positionChange(c))return null;
+        var command=db.findCommand(c.getTenantId(),c.getClientId(),c.getCommandId());
+        if(command==null||!Set.of("PENDING","RECEIVED","UNKNOWN").contains(command.getState()))return null;
+        if("UNKNOWN".equals(command.getState())) {
+            var reads=db.commands(c.getTenantId(),c.getClientId(),c.getChangeId()).stream().filter(r->Set.of("PENDING","RECEIVED").contains(r.getState())
+                    &&"READ".equals(decode(r.getDataJson(),"CommandData").get("phase"))).toList();
+            command=reads.isEmpty()?command(c,dto(c),c.getChangeId(),"READ",command):reads.getFirst();
+        }
+        // UNKNOWN uses READ only, never another installation attempt.
+        return map("protocolVersion",1,"requestId",command.getRequestId(),"messageType","command.dispatch",
+                "messageId",command.getMessageId(),"data",decode(command.getDataJson(),"CommandData"));
+    }
+    /** Called under the authenticated native fence. Package IO was prepared outside that transaction. */
+    public Map<String,Object> reconcilePosition(AgentRuntimeAuthenticationService.Proof proof,
+            cn.jia.agent.position.PositionSkillRuntimeService.Prepared input) {
+        var a=new HostingRentHttp.Actor(proof.scope().ownerJiacn(),proof.scope().tenantId(),proof.scope().clientId(),proof.scope().ownerJiacn());
+        var hint=input.installation();var state=state(a,proof.scope().agentId(),hint.skillKey());
+        return positions().runtimeState(positionScope(a),proof.scope().agentId(),policy->{
+            var grant=policy.state().installations().get(hint.id());var runtime=runtimes.findInScope(a.tenantId(),a.clientId(),proof.scope().agentId());
+            require(grant!=null&&grant.agentId().equals(proof.scope().agentId())&&Objects.equals(runtime.getBindingId(),grant.bindingId()),403,"AGENT_FORBIDDEN");
+            if(grant.revision()!=hint.revision()||grant.desired()!=hint.desired())return null;
+            String changeId="ps_"+hash("cyf.skill.position.change.v1",map("grantId",grant.id(),"revision",Long.toString(grant.revision()),
+                    "runtimeInstallationId",proof.installationId(),"runtimeHostId",proof.hostId()));
+            var prior=db.findChange(a.tenantId(),a.clientId(),changeId);
+            if(prior!=null) {
+                var value=dto(prior);String status=text(value,"status");
+                if(Set.of("SUCCEEDED","VERIFYING").contains(status)) {
+                    if(state.getSkillRevision().toString().equals(value.get("skillRevision")))confirmCatalog(a,state,prior,value);
+                    if(Boolean.TRUE.equals(value.get("runtimeSynced"))) {
+                        var target=object(value.get("target"));
+                        policy.bindManagedInstallation(grant.id(),grant.revision(),text(target,"skillInstallationId"));
+                        policy.receipt(grant.id(),grant.revision(),grant.desired(),hash("cyf.skill.position.outcome.v1",value),
+                                proof.installationId(),proof.hostId(),null,grant.desired()?"sha256:"+target.get("packageSha256"):null,
+                                grant.desired()?text(target,"manifestSha256"):null);
+                    }
+                } else if(Set.of("FAILED_FINAL","FAILED_RETRYABLE").contains(status)) {
+                    policy.receipt(grant.id(),grant.revision(),false,hash("cyf.skill.position.outcome.v1",value),proof.installationId(),proof.hostId(),
+                            text(value,"reasonCode"),null,null);
+                }
+                return positionCommand(prior);
+            }
+            if(state.getPendingChangeId()!=null) {
+                var pending=db.findChange(a.tenantId(),a.clientId(),state.getPendingChangeId());
+                if(pending!=null&&Set.of("VERIFYING","SUCCEEDED").contains(dto(pending).get("status")))confirmCatalog(a,state,pending,dto(pending));
+                if(state.getPendingChangeId()!=null)return positionCommand(pending);
+            }
+            var src=source(a,state,state.getActiveInstallationId());
+            var scope=new SkillCapabilityLookup.Scope(a.tenantId(),a.clientId(),a.ownerJiacn(),grant.agentId());
+            if(!grant.desired()&&(src==null||currentPositionSource(scope,src))) {
+                // No discovery view, or another live authorization still owns it. Do not delete that source's bytes.
+                policy.receipt(grant.id(),grant.revision(),false,hash("cyf.skill.position.release.v1",map("grant",grant.id(),"revision",grant.revision())),
+                        proof.installationId(),proof.hostId(),null,null,null);return null;
+            }
+            if(grant.desired()) {
+                require(input.bytes()!=null,503,"SKILL_STATE_UNAVAILABLE");
+                SkillPackages.revalidate(market.selectApprovedProductVersion(a.tenantId(),a.clientId(),input.skill().productVersionId()),input.bytes());
+                if(src!=null&&Objects.equals(ref(src).get("productVersionId"),input.skill().productVersionId())
+                        &&(!positionChange(db.findChange(a.tenantId(),a.clientId(),src.getChangeId()))
+                            ||!grant.id().equals(object(dto(db.findChange(a.tenantId(),a.clientId(),src.getChangeId())).get("authorizationSource")).get("grantId")))) {
+                    // Share the exact approved version; this does not enable a user's explicitly disabled installation.
+                    policy.bindManagedInstallation(grant.id(),grant.revision(),src.getInstallationId());
+                    if(Boolean.TRUE.equals(state.getDesiredEnabled())&&Boolean.TRUE.equals(state.getAdmissionEnabled()))
+                        policy.receipt(grant.id(),grant.revision(),true,hash("cyf.skill.position.share.v1",map("grant",grant.id(),"revision",grant.revision(),"target",ref(src))),
+                                proof.installationId(),proof.hostId(),null,"sha256:"+ref(src).get("packageSha256"),text(ref(src),"manifestSha256"));
+                    return null;
+                }
+            }
+            boolean install=grant.desired();String action=install?(src==null?"INSTALL":"UPGRADE"):"DISABLE";
+            var prepared=install?describe(market.selectApprovedProductVersion(a.tenantId(),a.clientId(),input.skill().productVersionId()),input.bytes()):null;
+            var target=install?prepared.target():ref(src);var details=install?prepared.details():decode(src.getDetailsJson(),"VersionDetails");
+            if(install)target.put("skillInstallationId","psi_"+hash("cyf.skill.position.installation.v1",changeId));
+            long revision=Math.addExact(state.getSkillRevision(),1),now=System.currentTimeMillis();
+            var source=map("type","POSITION","grantId",grant.id(),"grantRevision",Long.toString(grant.revision()),"bindingId",Long.toString(grant.bindingId()));
+            var value=map("skillChangeId",changeId,"agentId",grant.agentId(),"skillKey",grant.skillKey(),"action",action,
+                    "skillRevision",Long.toString(revision),"changeRevision","1","attempt",1,"source",src==null?null:ref(src),"target",target,
+                    "status",install?"PREPARING":"SUCCEEDED","desiredEnabled",install,"runtimeSynced",false,"reasonCode",null,"retryAllowed",false,
+                    "orderId",null,"fundingStatus","NONE","price",null,"actorLabel",a.ownerJiacn(),"createdAt",now,"updatedAt",now,"authorizationSource",source);
+            var c=new SkillChangeEntity().setTenantId(a.tenantId()).setClientId(a.clientId()).setChangeId(changeId).setAgentId(grant.agentId())
+                    .setSkillKey(grant.skillKey()).setActorId(a.actorId()).setOwnerJiacn(a.ownerJiacn()).setVersion(1L).setDtoJson(json(value))
+                    .setPermissionsJson(install?json(details.get("requiredPermissions")):src.getPermissionsJson())
+                    .setRuntimeInstallationId(proof.installationId()).setRuntimeHostId(proof.hostId()).setCreatedAt(now).setUpdatedAt(now)
+                    .setEntitlementId(install?id("se_"):src.getEntitlementId());
+            var cmd=command(c,value,changeId,install?"PREPARE":"POLICY",null);c.setCommandId(cmd.getCommandId());one(db.insertChange(c));
+            if(install)candidate(a,c,value,details,null);
+            long before=state.getSkillRevision();state.setSkillRevision(revision).setDesiredEnabled(install).setAdmissionEnabled(false).setPendingChangeId(changeId);
+            if(!install)state.setActivePolicyRevision(revision);one(db.saveState(state,before));
+            policy.bindManagedInstallation(grant.id(),grant.revision(),text(target,"skillInstallationId"));
+            validate("SkillChange",value);return positionCommand(c);
+        });
+    }
     private void enabled(HostingRentHttp.Actor a) {require(marketplace.available(a),503,"SKILL_STATE_UNAVAILABLE");}
     private <T> T owned(HostingRentHttp.Actor a,String agent,Long expected,boolean online,Supplier<T> action) {
         enabled(a);path(agent);
@@ -131,6 +270,10 @@ public final class SkillManagementService {
         require(v!=null,409,"SKILL_VERSION_NOT_PUBLISHED");
         require(admin||"NONE".equals(v.getDeploymentRestriction()),403,"AGENT_FORBIDDEN");
         var pkg=packages.getObject().prepare(v);var manifest=packages.getObject().manifest(pkg);
+        return describe(v,pkg);
+    }
+    private Prepared describe(SkillProductVersionEntity v,cn.jia.economy.config.skillseed.PlatformSkillPackageCatalog.PlatformSkillPackage pkg) {
+        var manifest=packages.getObject().manifest(pkg);
         var permissions=SkillMarketplaceHttp.permissions(v.getApprovedPermissionsManifest());
         var sorted=new ArrayList<>(permissions);sorted.sort(UTF8);require(sorted.equals(permissions),409,"SKILL_PERMISSIONS_MISMATCH");
         var target=map("skillInstallationId",id("si_"),"productVersionId",v.getProductVersionId(),"skillVersion",v.getSkillVersion(),
@@ -322,7 +465,7 @@ public final class SkillManagementService {
         validate("Command",envelope);
         var row=new SkillChangeCommandEntity().setTenantId(c.getTenantId()).setClientId(c.getClientId()).setCommandId(id).setChangeId(c.getChangeId())
                 .setRequestId(requestId).setMessageId(message).setDataJson(json(data)).setState("PENDING");
-        one(db.insertCommand(row));writer.getObject().writeManagement(c,bytes(envelope),row,data);return row;
+        one(db.insertCommand(row));if(!positionChange(c))writer.getObject().writeManagement(c,bytes(envelope),row,data);return row;
     }
     private void save(SkillChangeEntity c,Map<String,Object> value) {
         long next=Math.addExact(c.getVersion(),1);value.put("changeRevision",Long.toString(next));value.put("updatedAt",System.currentTimeMillis());validate("SkillChange",value);
@@ -507,7 +650,7 @@ public final class SkillManagementService {
         var approved=market.selectApprovedProductVersion(proof.scope().tenantId(),proof.scope().clientId(),text(object(dto(hint).get("target")),"productVersionId"));
         var prepared="APPLIED".equals(evidence.get("outcome"))?packages.getObject().prepare(approved):null;
         var actor=new HostingRentHttp.Actor(hint.getActorId(),hint.getTenantId(),hint.getClientId(),hint.getOwnerJiacn());
-        return owned(actor,hint.getAgentId(),null,false,()->authentication.withFence(proof,false,()->{
+        return ownedChange(hint,()->authentication.withFence(proof,false,()->{
             var state=state(actor,hint.getAgentId(),hint.getSkillKey());
             var c=db.lockChange(hint.getTenantId(),hint.getClientId(),hint.getChangeId());var value=dto(c);
             String message=text(envelope,"messageId"),wholeHash=hash("cyf.skill.result.message.v1",envelope);
@@ -648,11 +791,12 @@ public final class SkillManagementService {
     }
     /** Called by the existing authenticated capability registration consumer, not a new wire endpoint. */
     public void capabilitiesChanged(AgentRuntimeAuthenticationService.Proof proof) {
-        if(!versions.enabled())return;
+        if(!versions.enabled()&&(positionProvider==null||positionProvider.getIfAvailable()==null))return;
         for(var hint:db.changes(proof.scope().tenantId(),proof.scope().clientId(),proof.scope().agentId())) {
+            if(!versions.enabled()&&!positionChange(hint))continue;
             var data=dto(hint);if(!Set.of("VERIFYING","SUCCEEDED").contains(text(data,"status"))||Boolean.TRUE.equals(data.get("runtimeSynced")))continue;
             var actor=new HostingRentHttp.Actor(hint.getActorId(),hint.getTenantId(),hint.getClientId(),hint.getOwnerJiacn());
-            owned(actor,hint.getAgentId(),null,false,()->authentication.withFence(proof,false,()->{
+            ownedChange(hint,()->authentication.withFence(proof,false,()->{
                 var state=state(actor,hint.getAgentId(),hint.getSkillKey());
                 if(!state.getSkillRevision().toString().equals(data.get("skillRevision")))return null;
                 var c=db.lockChange(hint.getTenantId(),hint.getClientId(),hint.getChangeId());confirmCatalog(actor,state,c,dto(c));return null;
@@ -665,7 +809,7 @@ public final class SkillManagementService {
         require(hint!=null&&hint.getAgentId().equals(proof.scope().agentId())&&hint.getOwnerJiacn().equals(proof.scope().ownerJiacn())
                 &&hint.getRuntimeInstallationId().equals(proof.installationId())&&hint.getRuntimeHostId().equals(proof.hostId()),409,"SKILL_DELIVERY_FENCED");
         var a=new HostingRentHttp.Actor(hint.getActorId(),hint.getTenantId(),hint.getClientId(),hint.getOwnerJiacn());
-        owned(a,hint.getAgentId(),null,false,()->authentication.withFence(proof,false,()->{
+        ownedChange(hint,()->authentication.withFence(proof,false,()->{
             var state=state(a,hint.getAgentId(),hint.getSkillKey());var cmd=db.lockCommand(a.tenantId(),a.clientId(),text(data,"commandId"));
             require(cmd!=null&&hint.getChangeId().equals(cmd.getChangeId())&&cmd.getMessageId().equals(envelope.get("correlationId")),409,"SKILL_RESULT_CONFLICT");
             var original=decode(cmd.getDataJson(),"CommandData");
@@ -702,7 +846,7 @@ public final class SkillManagementService {
         require(hint!=null&&hint.getAgentId().equals(proof.scope().agentId())&&hint.getOwnerJiacn().equals(proof.scope().ownerJiacn()),403,"SKILL_DOWNLOAD_FORBIDDEN");
         var target=ref(auth);var version=market.selectApprovedProductVersion(t,client,text(target,"productVersionId"));var prepared=packages.getObject().prepare(version);
         var a=new HostingRentHttp.Actor(hint.getActorId(),t,client,hint.getOwnerJiacn());
-        return owned(a,hint.getAgentId(),null,false,()->authentication.withFence(proof,false,()->{
+        return ownedChange(hint,()->authentication.withFence(proof,false,()->{
             var state=state(a,hint.getAgentId(),hint.getSkillKey());var c=db.lockChange(t,client,hint.getChangeId());var value=dto(c);
             require(installationId.equals(object(value.get("target")).get("skillInstallationId"))&&state.getSkillRevision().toString().equals(value.get("skillRevision")),403,"SKILL_DOWNLOAD_FORBIDDEN");
             var command=db.lockCommand(t,client,c.getCommandId());var data=decode(command.getDataJson(),"CommandData");
@@ -799,6 +943,7 @@ public final class SkillManagementService {
         if(context==null||!scope.agentId().equals(context.agentId())||!scope.ownerJiacn().equals(context.ownerJiacn()))return false;
         var state=db.lockState(scope.tenantId(),scope.clientId(),scope.agentId(),context.skillKey());
         if(state==null||!Boolean.TRUE.equals(state.getDesiredEnabled())||!Boolean.TRUE.equals(state.getAdmissionEnabled())||!auth.getInstallationId().equals(state.getActiveInstallationId()))return false;
+        if(!currentPositionSource(scope,auth))return false;
         if(!validInstallation(scope,auth,app.installation(scope.tenantId(),scope.clientId(),auth.getInstallationId()),db.readEntitlement(scope.tenantId(),scope.clientId(),auth.getEntitlementId())))return false;
         var a=new HostingRentHttp.Actor(context.actorId(),scope.tenantId(),scope.clientId(),scope.ownerJiacn());
         return "READY".equals(runtime(a,scope.agentId(),state,auth,catalog(a,scope.agentId()),online(a,scope.agentId())).get("state"));
@@ -811,13 +956,15 @@ public final class SkillManagementService {
         var context=origin(auth);
         require(context!=null&&context.agentId().equals(scope.agentId())&&context.ownerJiacn().equals(scope.ownerJiacn())&&context.skillKey().equals(skill),403,"AGENT_FORBIDDEN");
         var a=new HostingRentHttp.Actor(context.actorId(),scope.tenantId(),scope.clientId(),scope.ownerJiacn());
-        return owned(a,scope.agentId(),null,true,()->{
+        var change=db.findChange(scope.tenantId(),scope.clientId(),auth.getChangeId());
+        java.util.function.Supplier<T> admission=()->{
             var state=state(a,scope.agentId(),skill);var e=db.entitlement(scope.tenantId(),scope.clientId(),auth.getEntitlementId());
             require(installationId.equals(state.getActiveInstallationId())&&Boolean.TRUE.equals(state.getDesiredEnabled())
                     &&Boolean.TRUE.equals(state.getAdmissionEnabled())&&e!=null&&"ACTIVE".equals(e.getStatus()),409,"SKILL_STATE_CONFLICT");
             var live=runtime(a,scope.agentId(),state,auth,catalog(a,scope.agentId()),true);require("READY".equals(live.get("state")),409,"SKILL_STATE_CONFLICT");
-            return taskAdmission.get();
-        });
+            require(currentPositionSource(scope,auth),403,"AGENT_FORBIDDEN");return taskAdmission.get();
+        };
+        return positionChange(change)?ownedChange(change,admission):owned(a,scope.agentId(),null,true,admission);
     }
     public Map<String,Object> taskBinding(String tenant,String client,String executionId,String grantId,long grantVersion,String agent,String installationId) {
         // Internal adapter invoked only after exact installation ownership/admission was verified.

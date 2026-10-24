@@ -22,20 +22,18 @@ public class PositionSkillRuntimeController {
         var prepared=service.prepare(PositionSkillRuntimeService.scope(proof),proof.scope().agentId());
         return authentication.withNativeFence(principal,()->ok(service.commands(proof,prepared)));
     }
-    @GetMapping("/{id}/revisions/{revision}/package") public ResponseEntity<byte[]> bytes(Authentication principal,@PathVariable String id,@PathVariable String revision){
-        var proof=authentication.requireProof(principal);
-        var prepared=service.prepare(PositionSkillRuntimeService.scope(proof),proof.scope().agentId());
-        return authentication.withNativeFence(principal,()->ResponseEntity.ok().header("Cache-Control","private, no-store")
-                .header("Content-Type","application/zip").body(service.packageBytes(proof,id,PositionSkillRuntimeService.decimal(revision),prepared)));
-    }
     @GetMapping("/{id}/receipt") public ResponseEntity<?> outcome(Authentication principal,@PathVariable String id){var proof=authentication.requireProof(principal);return authentication.withNativeFence(principal,()->ok(service.outcome(proof,id)));}
-    @PostMapping("/{id}/receipt") public ResponseEntity<?> receipt(Authentication principal,@PathVariable String id,
-            @RequestBody JsonRequest<PositionSkillRuntimeService.Receipt> request){
-        require(request!=null && request.data()!=null,400,"POSITION_RECEIPT_INVALID");var proof=authentication.requireProof(principal);
-        var prepared=service.prepareReceipt(PositionSkillRuntimeService.scope(proof),proof.scope().agentId(),id,request.data());
-        return authentication.withNativeFence(principal,()->ok(service.receipt(proof,id,request.data(),prepared)));
+    @PostMapping("/results") public ResponseEntity<?> result(Authentication principal,
+            @RequestBody JsonRequest<java.util.Map<String,Object>> request){
+        require(request!=null && request.data()!=null,400,"POSITION_RECEIPT_INVALID");
+        var proof=authentication.requireProof(principal);
+        // Shared management consumer prepares package IO before it acquires its native/skill/position locks.
+        return ok(service.managementResult(proof,request.data()));
     }
     private static ResponseEntity<?> ok(Object data){return ResponseEntity.ok().header("Cache-Control","private, no-store").body(JsonResult.success(data));}
+    @ExceptionHandler(cn.jia.agent.skill.SkillMarketplaceException.class) public ResponseEntity<?> managementReject(cn.jia.agent.skill.SkillMarketplaceException e){
+        return ResponseEntity.status(e.status()).header("Cache-Control","private, no-store").body(JsonResult.failure(e.code(),e.code()));
+    }
     @ExceptionHandler(PositionSkillException.class) public ResponseEntity<?> reject(PositionSkillException e){
         return ResponseEntity.status(e.status()).header("Cache-Control","private, no-store").body(JsonResult.failure(e.getMessage(),e.getMessage()));
     }

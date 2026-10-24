@@ -43,30 +43,22 @@ public class PositionSkillRuntimeService {
         }
         return out;
     }
+    private cn.jia.agent.skill.SkillManagementService management;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setManagement(cn.jia.agent.skill.SkillManagementService value){management=value;}
     public List<Map<String,Object>> commands(Proof proof,List<Prepared> prepared) {
-        Scope scope=scope(proof);
-        return positions.runtimeState(scope,proof.scope().agentId(),p->{
-            List<Map<String,Object>> rows=new ArrayList<>();
-            for(var item:prepared){
-                var i=current(proof,p.state(),item.installation().id());
-                if(i.revision()!=item.installation().revision() || i.desired()!=item.installation().desired())continue;
-                if(i.state()!=InstallState.INSTALL_PENDING && i.state()!=InstallState.REMOVE_PENDING)continue;
-                if(i.desired())SkillPackages.revalidate(market.selectApprovedProductVersion(scope.tenantId(),scope.clientId(),item.skill().productVersionId()),item.bytes());
-                var row=new LinkedHashMap<String,Object>();row.put("grantId",i.id());row.put("revision",Long.toString(i.revision()));
-                row.put("desired",i.desired());row.put("targetAgentId",i.agentId());row.put("skillKey",i.skillKey());
-                if(i.desired()) {
-                    var metadata=item.bytes().product();String physical=physical(i);String revision=Long.toString(i.revision());
-                    row.put("commandType","SKILL_GRANT_INSTALL");row.put("commandId",physical);row.put("messageId",physical);row.put("attempt",1);
-                    row.put("fencingToken",revision);row.put("deliveryEpoch",revision);row.put("installationId",physical);
-                    row.put("productVersionId",item.skill().productVersionId());row.put("skillVersion",metadata.skillVersion());
-                    row.put("packageSize",Long.toString(metadata.packageSize()));
-                    row.put("packageDigest","sha256:"+HexFormat.of().formatHex(metadata.packageSha256()));
-                    row.put("downloadPath","/internal/agent/position-skills/"+i.id()+"/revisions/"+revision+"/package");
-                }
-                rows.add(row);
-            }
-            return rows;
-        });
+        var rows=new ArrayList<Map<String,Object>>();
+        for(var item:prepared) {
+            var command=management.reconcilePosition(proof,item);
+            if(command!=null&&!rows.contains(command))rows.add(command);
+        }
+        return rows;
+    }
+    public Map<String,Object> managementResult(Proof proof,Map<String,Object> result) {
+        // This endpoint cannot be used to inject a user/market result into a different source.
+        var data=cn.jia.agent.skill.SkillManagementCodec.object(result.get("data"));
+        require(data.get("skillChangeId") instanceof String id&&id.startsWith("ps_"),400,"POSITION_RECEIPT_INVALID");
+        return management.result(proof,result);
     }
     public byte[] packageBytes(Proof proof,String id,long revision,List<Prepared> prepared) {
         var item=prepared.stream().filter(p->p.installation().id().equals(id) && p.installation().revision()==revision).findFirst().orElse(null);
@@ -126,6 +118,6 @@ public class PositionSkillRuntimeService {
         require(Objects.equals(identity.getBindingId(),i.bindingId()) && i.agentId().equals(identity.getCanonicalAgentId()),403,"POSITION_BINDING_CHANGED");return i;
     }
     public static Scope scope(Proof p){return new Scope(p.scope().tenantId(),p.scope().clientId(),p.scope().ownerJiacn());}
-    public static String physical(Installation i){return i.id()+"-"+i.revision();}
+    public static String physical(Installation i){return i.managedInstallationId()!=null?i.managedInstallationId():i.id()+"-"+i.revision();}
     public static long decimal(String value){require(value!=null && value.matches("[1-9][0-9]*"),400,"POSITION_REVISION_INVALID");try{return Long.parseLong(value);}catch(NumberFormatException e){throw new PositionSkillException(400,"POSITION_REVISION_INVALID");}}
 }

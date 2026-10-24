@@ -11,7 +11,7 @@ import cn.jia.agent.service.impl.*;
 import cn.jia.agent.security.*;
 import cn.jia.chat.archive.controller.*;
 import cn.jia.chat.archive.store.*;
-import cn.jia.economy.mapper.EconomySkillMarketplaceMapper;
+import cn.jia.economy.mapper.*;
 import cn.jia.economy.entity.skill.SkillProductVersionEntity;
 import cn.jia.common.dao.BaseDaoImpl;
 import cn.jia.core.security.*;
@@ -63,6 +63,8 @@ import java.util.*;
 import java.util.concurrent.*;
 import static cn.jia.agent.position.PositionSkillState.*;
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
+import static org.mockito.ArgumentMatchers.*;
 
 /** Real MySQL + production Spring/MyBatis/auth/native HTTP + actual Node Runtime installer/parser.
  * Operator actions cover signed user JWTs via the production resource chain and real management controllers.
@@ -72,6 +74,7 @@ class ArchiveNativeHttpMySqlTest {
     static final String TENANT="0",CLIENT="archive-native-client",OWNER="archive-owner";
     static final String AGENT="agt_"+"a".repeat(32),INSTALLATION="rti_"+"b".repeat(32);
     static DataSource source;static Path packageRoot;
+    static volatile SkillCapabilityLookup.View measuredCatalog=SkillCapabilityLookup.View.unavailable(SkillCapabilityLookup.State.DISCONNECTED);
     @TempDir Path root;
     final ObjectMapper json=new ObjectMapper();
     Process node;BufferedReader output;BufferedWriter input;JdbcTemplate admin,jdbc;String database;
@@ -128,7 +131,7 @@ class ArchiveNativeHttpMySqlTest {
         String user=System.getenv("CYF_POSITION_TEST_USER"),password=System.getenv("CYF_POSITION_TEST_PASSWORD");
         admin=new JdbcTemplate(new DriverManagerDataSource(base,user,password));database="aps_http_"+UUID.randomUUID().toString().replace("-","");admin.execute("CREATE DATABASE "+database);
         source=new DriverManagerDataSource(base.replace("/mysql","/"+database),user,password);jdbc=new JdbcTemplate(source);
-        schema("archive-maintenance/native-auth-fixture.sql");schema("db/economy-v0-skill-marketplace.sql");schema("db/agent-position-skills.sql");schema("db/archive-schema.sql");schema("db/archive-maintenance-jobs.sql");
+        schema("archive-maintenance/native-auth-fixture.sql");schema("db/economy-v0-skill-marketplace.sql");schema("db/economy-v0-skill-application.sql");schema("db/economy-skill-management-sm-c1.sql");schema("db/agent-position-skills.sql");schema("db/archive-schema.sql");schema("db/archive-maintenance-jobs.sql");
         String authorization="rta1_"+HexFormat.of().formatHex(hash(UUID.randomUUID().toString()));String manifestHash="d".repeat(64);long now=System.currentTimeMillis();
         jdbc.update("INSERT INTO user_info VALUES(7,?,'ACTIVE',2)",OWNER);
         jdbc.update("INSERT INTO user_info VALUES(8,'ordinary-owner','ACTIVE',2)");
@@ -162,14 +165,14 @@ class ArchiveNativeHttpMySqlTest {
         node=new ProcessBuilder("node",Path.of(clientRoot,"conf/codex-ws-agent/test/fixtures/archive-native-http.mjs").toString()).redirectError(root.resolve("node-private.log").toFile()).start();
         output=new BufferedReader(new InputStreamReader(node.getInputStream(),StandardCharsets.UTF_8));input=new BufferedWriter(new OutputStreamWriter(node.getOutputStream(),StandardCharsets.UTF_8));
         String origin="http://127.0.0.1:"+tomcat.getConnector().getLocalPort();
-        var session=exchange(Map.of("op","INIT","root",root.toString(),"origin",origin,"authorization",authorization,"manifest",Map.of("runtimeProtocolVersion","v1","manifestVersion","1","installationId",INSTALLATION,"tenantId",TENANT,"clientId",CLIENT,"canonicalAgentId",AGENT,"manifestSha256","sha256:"+manifestHash)));
+        var session=exchange(Map.of("op","INIT","ownerJiacn",OWNER,"root",root.toString(),"origin",origin,"authorization",authorization,"manifest",Map.of("runtimeProtocolVersion","v1","manifestVersion","1","installationId",INSTALLATION,"tenantId",TENANT,"clientId",CLIENT,"canonicalAgentId",AGENT,"manifestSha256","sha256:"+manifestHash)));
         Map<String,String> h=(Map<String,String>)session.get("headers");
         // Explicit fixture channel-liveness registration. Session credential and all persistent checks are real.
         jdbc.update("UPDATE agent_runtime SET status='online' WHERE agent_id=?",AGENT);
         var auth=spring.getBean(AgentRuntimeAuthenticationService.class);
         var headers=new AgentRuntimeAuthenticationFilter.SessionHeaders(AGENT,INSTALLATION,"archive-host","archive-boot",Long.parseLong(h.get("X-Agent-Session-Generation")),h.get("Authorization").substring("AgentRuntime ".length()));
         var proof=auth.verify(headers);auth.bind("fixture-channel",proof,()->node.isAlive());
-        var installed=exchange(Map.of("op","INSTALL"));assertEquals(2,installed.get("processed"));assertTrue(positions.read(scope).state().installations().values().stream().allMatch(Installation::usable),()->"Installation states: "+positions.read(scope).state().installations().values().stream().map(i->i.state()+"/"+i.errorCode()).toList());
+        var installed=installAndMeasure(proof);assertEquals(4,installed.get("processed"));assertTrue(positions.read(scope).state().installations().values().stream().allMatch(Installation::usable),()->"Installation states: "+positions.read(scope).state().installations().values().stream().map(i->i.state()+"/"+i.errorCode()).toList());
         assertTrue(Files.isRegularFile(root.resolve("codex-home/skills/archive-maintenance/SKILL.md")));
         var service=spring.getBean(ArchiveMaintenanceService.class);var reader=new ArchiveReaderServiceImpl(spring.getBean(JdbcArchiveContentStore.class));
         String sourceA="第一回 初见\n这是仓库外生成的测试文本："+UUID.randomUUID()+"。\n第二回 后续\n第二段。";
@@ -207,15 +210,30 @@ class ArchiveNativeHttpMySqlTest {
         operator("POST","/agent/positions/v1/appointments/"+appointment+"/resign",operatorToken,"resign",Map.of(),200);assertEquals(0,exchange(Map.of("op","RUN")).get("processed"));assertEquals("WAITING",service.read(scope,(String)pending.get("jobId")).get("state"));
         assertEquals(0,exchange(Map.of("op","INSTALL")).get("processed"));assertTrue(Files.exists(root.resolve("codex-home/skills/archive-maintenance")));
         positions.resign(scope,"resign-shared",shared);
-        assertEquals(1,exchange(Map.of("op","INSTALL")).get("processed"));assertFalse(Files.exists(root.resolve("codex-home/skills/archive-maintenance")));
+        assertEquals(1,installAndMeasure(proof).get("processed"));assertFalse(Files.exists(root.resolve("codex-home/skills/archive-maintenance")));
         assertEquals(InstallState.REMOVED,positions.read(scope).state().installations().values().stream().filter(i->i.skillKey().equals("archive-maintenance")).findFirst().orElseThrow().state());
         assertTrue(Files.isRegularFile(root.resolve("codex-home/skills/archive-general/SKILL.md")));
         var retained=new PositionInstalledSkills(positions,spring.getBean(AgentIdentityService.class),market,spring.getBean(SkillPackages.class));
+        retained.setManagement(spring.getBean(SkillManagementService.class),spring.getBean(EconomySkillManagementMapper.class));
         var lookupScope=new SkillCapabilityLookup.Scope(TENANT,CLIENT,OWNER,AGENT);
         assertEquals(List.of("archive-general"),retained.read(lookupScope).stream().map(InstalledSkillDescriptorLookup.Descriptor::skillKey).toList());
-        assertEquals(1,retained.entitlements(lookupScope).size());
+        assertEquals(1,new org.springframework.transaction.support.TransactionTemplate(spring.getBean(DataSourceTransactionManager.class)).execute(status->retained.entitlements(lookupScope).size()));
+        verifyNoInteractions(spring.getBean(SkillMarketplaceService.class));
         assertEquals(0,jdbc.queryForObject("SELECT count(*) FROM economy_skill_order",Integer.class));
         assertEquals("STOPPED",exchange(Map.of("op","STOP")).get("op"));assertTrue(node.waitFor(10,TimeUnit.SECONDS));assertEquals(0,node.exitValue());
+    }
+    Map<String,Object> installAndMeasure(AgentRuntimeAuthenticationService.Proof proof)throws Exception {
+        var installed=exchange(Map.of("op","INSTALL"));
+        var raw=(Map<String,Object>)installed.get("catalog");assertNotNull(raw,"Measured Runtime catalog required");
+        var mapper=new ObjectMapper();
+        var skills=((List<?>)raw.get("skills")).stream().map(row->mapper.convertValue(row,SkillCapabilityLookup.RuntimeSkill.class)).toList();
+        measuredCatalog=new SkillCapabilityLookup.View(SkillCapabilityLookup.State.AVAILABLE,"fixture-channel",
+                new AgentManagedSessionLookup.SessionFence(proof.installationId(),proof.hostId(),proof.runtimeInstanceId(),proof.sessionGeneration()),
+                new SkillCapabilityLookup.Catalog((String)raw.get("catalogRevision"),skills));
+        spring.getBean(SkillManagementService.class).capabilitiesChanged(proof);
+        // The next poll consumes the committed, measured catalog; no synthetic install receipt.
+        assertEquals(0,exchange(Map.of("op","INSTALL")).get("processed"));
+        return installed;
     }
     void startHttp()throws Exception {
         Path doc=Files.createDirectory(root.resolve("http"));tomcat=new Tomcat();tomcat.setBaseDir(doc.toString());tomcat.setHostname("127.0.0.1");tomcat.setPort(0);assertTrue(tomcat.getConnector().setProperty("address","127.0.0.1"));
@@ -252,7 +270,7 @@ class ArchiveNativeHttpMySqlTest {
             configuration.setMapUnderscoreToCamelCase(true); configuration.setLogImpl(NoLoggingImpl.class);
             for (Class<?> mapper : List.of(AgentRuntimeV1InstallationMapper.class, AgentRuntimeMapper.class,
                     AgentIdentityRegistryMapper.class, AgentIdentityAliasMapper.class, AgentPersonaBindingMapper.class,
-                    EconomySkillMarketplaceMapper.class)) configuration.addMapper(mapper);
+                    EconomySkillMarketplaceMapper.class,EconomySkillManagementMapper.class,EconomySkillApplicationMapper.class)) configuration.addMapper(mapper);
             GlobalConfig global = new GlobalConfig(); global.setBanner(false);
             global.setIdentifierGenerator(new DefaultIdentifierGenerator());
             MybatisSqlSessionFactoryBean bean = new MybatisSqlSessionFactoryBean();
@@ -324,6 +342,27 @@ class ArchiveNativeHttpMySqlTest {
         @Bean SensitiveResponseBodyAdvice sensitiveAdvice(SensitiveResponseProperties properties) { return new SensitiveResponseBodyAdvice(properties); }
 
         @Bean EconomySkillMarketplaceMapper market(SqlSessionTemplate session) { return session.getMapper(EconomySkillMarketplaceMapper.class); }
+        @Bean EconomySkillManagementMapper managementMapper(SqlSessionTemplate session) {return session.getMapper(EconomySkillManagementMapper.class);}
+        @Bean EconomySkillApplicationMapper applicationMapper(SqlSessionTemplate session) {return session.getMapper(EconomySkillApplicationMapper.class);}
+        @Bean SkillMarketplaceService marketplace() {return mock(SkillMarketplaceService.class);}
+        @Bean SkillAgentVersions versions() {return mock(SkillAgentVersions.class);}
+        @Bean AgentManagedSessionLookup sessions(AgentRuntimeAuthenticationService auth) {
+            var sessions=mock(AgentManagedSessionLookup.class);
+            when(sessions.isReady(eq(TENANT),eq(CLIENT),eq(AGENT),any())).thenAnswer(call->{
+                var proof=auth.currentRegisteredProof(TENANT,CLIENT,AGENT);
+                return new AgentManagedSessionLookup.SessionFence(proof.installationId(),proof.hostId(),proof.runtimeInstanceId(),proof.sessionGeneration()).equals(call.getArgument(3));
+            });return sessions;
+        }
+        @Bean SkillCapabilityLookup capabilities() {return (scope,fence)->measuredCatalog.state()==SkillCapabilityLookup.State.AVAILABLE && measuredCatalog.fence().equals(fence)
+                ?measuredCatalog:SkillCapabilityLookup.View.unavailable(SkillCapabilityLookup.State.DISCONNECTED);}
+        @Bean SkillManagementService management(EconomySkillManagementMapper db,EconomySkillMarketplaceMapper market,
+                EconomySkillApplicationMapper app,SkillMarketplaceService marketplace,SkillAgentVersions versions,
+                AgentRuntimeDao runtimes,AgentRuntimeV1InstallationDao installations,AgentRuntimeAuthenticationService auth,
+                ObjectProvider<SkillPackages> packages,ObjectProvider<SkillInstallCommandWriter> writer,
+                ObjectProvider<AgentManagedSessionLookup> sessions,ObjectProvider<SkillCapabilityLookup> capabilities,DataSourceTransactionManager tx) {
+            return new SkillManagementService(db,market,app,marketplace,versions,runtimes,installations,auth,packages,writer,sessions,capabilities,tx);
+        }
+        @Bean SkillPackageController skillPackageController(SkillManagementService management) {return new SkillPackageController(management);}
         @Bean JdbcTemplate jdbc(DataSource ds) { return new JdbcTemplate(ds); }
         @Bean PositionSkillStore positionStore(JdbcTemplate jdbc) { return new PositionSkillStore(jdbc); }
         @Bean PositionSkillService positions(PositionSkillStore store,AgentIdentityService ids,EconomySkillMarketplaceMapper market,DataSourceTransactionManager tx) {return new PositionSkillService(store,ids,market,tx);}
