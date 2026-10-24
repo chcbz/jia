@@ -22,7 +22,7 @@ class HallPrivateMarkControllerTest {
         service=mock(HallPrivateMarkService.class);
         mvc=MockMvcBuilders.standaloneSetup(new HallPrivateMarkController(service))
                 .setControllerAdvice(new cn.jia.core.config.ApiEnvelopeAdvice(),new cn.jia.core.config.ExceptionHandlerAdvice())
-                .addFilters(new cn.jia.core.filter.RequestIdFilter(), new HallRequestDraftCacheControlFilter()).build();
+                .addFilters(trustedBoundary(), new cn.jia.core.filter.RequestIdFilter(), new HallRequestDraftCacheControlFilter()).build();
     }
     @Test void strictMarkBodyHeaderAndJwtScopeAreForwardedWithoutTaskAuthority() throws Exception {
         when(service.mark(any(),eq("LEGACY_EXECUTION"),eq("e"),any(),eq("key")))
@@ -70,11 +70,27 @@ class HallPrivateMarkControllerTest {
     private static JwtAuthenticationToken jwt() {
         JwtAuthenticationToken authentication = new JwtAuthenticationToken(
                 Jwt.withTokenValue("fixture").header("alg","none").subject("o")
-                        .claim("jiacn","o").claim("client_id","c")
+                        .claim("tenant_id","0").claim("data_domain_id","cyf").claim("jiacn","o").claim("client_id","c")
                         .issuedAt(Instant.ofEpochSecond(1)).expiresAt(Instant.ofEpochSecond(2)).build());
         // Standalone MVC receives the post-authentication principal; no decoder/filter runs here.
         // The single-argument constructor alone intentionally does not authenticate a JWT.
         authentication.setAuthenticated(true);
         return authentication;
+    }
+
+    /** Models the authenticated fixture boundary, independent of spoofed request claims. */
+    private static jakarta.servlet.Filter trustedBoundary() {
+        return (request, response, chain) -> {
+            try {
+                cn.jia.core.tenant.TrustedTenantContext.runWithScopeChecked(
+                        new cn.jia.core.tenant.BusinessScope(cn.jia.core.tenant.TenantId.of("0"),
+                                cn.jia.core.tenant.DataDomainId.of("cyf"), "o", "c"),
+                        () -> chain.doFilter(request, response));
+            } catch (java.io.IOException | jakarta.servlet.ServletException failure) {
+                throw failure;
+            } catch (Exception failure) {
+                throw new jakarta.servlet.ServletException(failure);
+            }
+        };
     }
 }

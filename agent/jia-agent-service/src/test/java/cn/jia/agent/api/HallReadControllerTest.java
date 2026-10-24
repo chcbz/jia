@@ -22,7 +22,7 @@ class HallReadControllerTest {
     @BeforeEach void setUp() {
         service = mock(HallReadService.class);
         mvc = MockMvcBuilders.standaloneSetup(new HallReadController(service))
-                .setControllerAdvice(new cn.jia.core.config.ApiEnvelopeAdvice(),new cn.jia.core.config.ExceptionHandlerAdvice()).addFilters(new cn.jia.core.filter.RequestIdFilter(),new HallRequestDraftCacheControlFilter()).build();
+                .setControllerAdvice(new cn.jia.core.config.ApiEnvelopeAdvice(),new cn.jia.core.config.ExceptionHandlerAdvice()).addFilters(trustedBoundary(), new cn.jia.core.filter.RequestIdFilter(),new HallRequestDraftCacheControlFilter()).build();
     }
     @Test void overviewContractHasExplicitSourceFailuresAndNullCount() throws Exception {
         var source = new HallReadService.SourceStatus("error", "HALL_SOURCE_UNAVAILABLE");
@@ -74,11 +74,27 @@ class HallReadControllerTest {
     private static JwtAuthenticationToken jwt(String owner, String client) {
         JwtAuthenticationToken authentication = new JwtAuthenticationToken(
                 Jwt.withTokenValue("fixture").header("alg", "none")
-                        .subject(owner).claim("jiacn", owner).claim("client_id", client)
+                        .subject(owner).claim("tenant_id","0").claim("data_domain_id","cyf").claim("jiacn", owner).claim("client_id", client)
                         .issuedAt(Instant.ofEpochSecond(1)).expiresAt(Instant.ofEpochSecond(2)).build());
         // Standalone MVC receives the post-authentication principal; no decoder/filter runs here.
         // The single-argument constructor alone intentionally does not authenticate a JWT.
         authentication.setAuthenticated(true);
         return authentication;
+    }
+
+    /** Models the authenticated fixture boundary, independent of spoofed request claims. */
+    private static jakarta.servlet.Filter trustedBoundary() {
+        return (request, response, chain) -> {
+            try {
+                cn.jia.core.tenant.TrustedTenantContext.runWithScopeChecked(
+                        new cn.jia.core.tenant.BusinessScope(cn.jia.core.tenant.TenantId.of("0"),
+                                cn.jia.core.tenant.DataDomainId.of("cyf"), "owner-a", "client-a"),
+                        () -> chain.doFilter(request, response));
+            } catch (java.io.IOException | jakarta.servlet.ServletException failure) {
+                throw failure;
+            } catch (Exception failure) {
+                throw new jakarta.servlet.ServletException(failure);
+            }
+        };
     }
 }

@@ -36,7 +36,7 @@ class HallRequestDraftControllerTest {
         service = org.mockito.Mockito.mock(HallRequestDraftService.class);
         mvc = MockMvcBuilders.standaloneSetup(new HallRequestDraftController(service))
                 .setControllerAdvice(new cn.jia.core.config.ApiEnvelopeAdvice(),new cn.jia.core.config.ExceptionHandlerAdvice())
-                .addFilters(new cn.jia.core.filter.RequestIdFilter()).build();
+                .addFilters(trustedBoundary(), new cn.jia.core.filter.RequestIdFilter()).build();
     }
 
     @Test
@@ -186,13 +186,12 @@ class HallRequestDraftControllerTest {
     }
 
     @Test
-    void legacyDraftStoreRejectsOtherAreaAndDomainBeforeAnyReadOrWrite() throws Exception {
+    void claimsConflictingWithTrustedScopeAreRejectedBeforeAnyReadOrWrite() throws Exception {
         for (JwtAuthenticationToken principal : List.of(
                 jwt("owner-a", "client-a", "1", "cyf"),
                 jwt("owner-a", "client-a", "00", "cyf"),
                 jwt("owner-a", "client-a", "0", "other"),
-                jwt("owner-a", "client-a", null, "cyf"),
-                jwt("owner-a", "client-a", "0", null))) {
+                jwt("owner-a", "client-a", null, "cyf"))) {
             mvc.perform(get("/agent/hall/drafts").principal(principal))
                     .andExpect(status().isForbidden())
                     .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
@@ -270,5 +269,21 @@ class HallRequestDraftControllerTest {
         JwtAuthenticationToken authentication = new JwtAuthenticationToken(jwt);
         authentication.setAuthenticated(true);
         return authentication;
+    }
+
+    /** Models the authenticated fixture boundary, independent of spoofed request claims. */
+    private static jakarta.servlet.Filter trustedBoundary() {
+        return (request, response, chain) -> {
+            try {
+                cn.jia.core.tenant.TrustedTenantContext.runWithScopeChecked(
+                        new cn.jia.core.tenant.BusinessScope(cn.jia.core.tenant.TenantId.of("0"),
+                                cn.jia.core.tenant.DataDomainId.of("cyf"), "owner-a", "client-a"),
+                        () -> chain.doFilter(request, response));
+            } catch (java.io.IOException | jakarta.servlet.ServletException failure) {
+                throw failure;
+            } catch (Exception failure) {
+                throw new jakarta.servlet.ServletException(failure);
+            }
+        };
     }
 }

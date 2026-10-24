@@ -792,10 +792,15 @@ class JuyitingWorkflowMySqlTest {
                 jdbc.update("UPDATE chat_turn SET state='FINAL_PERSISTED',final_digest=?,final_message_id=101 WHERE turn_id=?",row.finalDigest(),turn.getTurnId());
                 revisions.enqueue(row,validated,System.currentTimeMillis());return null;});
             event=dao.findOutboxById("0","owner","client",ChatDeliveryRevisionService.eventId(row));
-            assertEquals(64,event.getEventId().length());claim=outbox.claim(event,"owned-worker",System.currentTimeMillis(),120000);
+            assertEquals(64,event.getEventId().length());claim=workerScope(() -> outbox.claim(event,"owned-worker",System.currentTimeMillis(),120000));
             assertNotNull(claim);
         }
-        void consume() {revisions.consume(claim);}
+        <T> T workerScope(java.util.function.Supplier<T> action) {
+            return cn.jia.core.tenant.TrustedTenantContext.withScope(
+                    new cn.jia.core.tenant.BusinessScope(cn.jia.core.tenant.TenantId.of("0"),
+                            cn.jia.core.tenant.DataDomainId.of("cyf"),"owner","client"), action);
+        }
+        void consume() {workerScope(() -> {revisions.consume(claim); return null;});}
         void committedOnce() {
             assertEquals("running",jdbc.queryForObject("SELECT reward_status FROM agent_task_meta",String.class));
             assertEquals("changes_requested",jdbc.queryForObject("SELECT state FROM agent_task_formal_delivery",String.class));
@@ -816,7 +821,7 @@ class JuyitingWorkflowMySqlTest {
     @Test void naturalRevisionActuallyCommitsDecisionChildOriginalUserReceiptAndFencedAckTogether() throws Exception {
         try(var r=new RevisionHarness()) {r.consume();r.committedOnce();
             assertEquals("COMMITTED",r.revisions.read(r.bound.parent().outcome()).get("state"));
-            assertNull(r.outbox.claim(r.event,"second-worker",System.currentTimeMillis(),1000));
+            assertNull(r.workerScope(() -> r.outbox.claim(r.event,"second-worker",System.currentTimeMillis(),1000)));
         }
     }
     @Test void crossOwnerRevisionUsesExecutorPackagesWithOriginalOwnerDatabaseWrites() throws Exception {

@@ -29,7 +29,7 @@ class HallSubmissionControllerTest {
         service = org.mockito.Mockito.mock(HallRequestDraftService.class);
         mvc = MockMvcBuilders.standaloneSetup(new HallSubmissionController(service))
                 .setControllerAdvice(new cn.jia.core.config.ApiEnvelopeAdvice(), new cn.jia.core.config.ExceptionHandlerAdvice())
-                .addFilters(new cn.jia.core.filter.RequestIdFilter()).build();
+                .addFilters(trustedBoundary(), new cn.jia.core.filter.RequestIdFilter()).build();
     }
 
     @Test
@@ -163,10 +163,26 @@ class HallSubmissionControllerTest {
 
     private static JwtAuthenticationToken jwt() {
         Jwt token = Jwt.withTokenValue("token").header("alg", "none")
-                .claim("jiacn", "owner-a").claim("client_id", "client-a")
+                .claim("tenant_id","0").claim("data_domain_id","cyf").claim("jiacn", "owner-a").claim("client_id", "client-a")
                 .issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(600)).build();
         JwtAuthenticationToken authentication = new JwtAuthenticationToken(token);
         authentication.setAuthenticated(true);
         return authentication;
+    }
+
+    /** Models the authenticated fixture boundary, independent of spoofed request claims. */
+    private static jakarta.servlet.Filter trustedBoundary() {
+        return (request, response, chain) -> {
+            try {
+                cn.jia.core.tenant.TrustedTenantContext.runWithScopeChecked(
+                        new cn.jia.core.tenant.BusinessScope(cn.jia.core.tenant.TenantId.of("0"),
+                                cn.jia.core.tenant.DataDomainId.of("cyf"), "owner-a", "client-a"),
+                        () -> chain.doFilter(request, response));
+            } catch (java.io.IOException | jakarta.servlet.ServletException failure) {
+                throw failure;
+            } catch (Exception failure) {
+                throw new jakarta.servlet.ServletException(failure);
+            }
+        };
     }
 }
