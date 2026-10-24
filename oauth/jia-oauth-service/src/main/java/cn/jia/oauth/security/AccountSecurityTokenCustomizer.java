@@ -24,15 +24,41 @@ public final class AccountSecurityTokenCustomizer implements OAuth2TokenCustomiz
 
     private final AccountSecurityService accountSecurityService;
     private final String tenantId;
+    private final FixedTenantAuthorizationPolicy fixedTenantPolicy;
 
     public AccountSecurityTokenCustomizer(AccountSecurityService accountSecurityService) {
         this(accountSecurityService, TenantClaimPolicy.defaultSingleTenant());
     }
 
     public AccountSecurityTokenCustomizer(AccountSecurityService accountSecurityService, String tenantId) {
-        this.accountSecurityService = accountSecurityService;
-        this.tenantId = TenantClaimPolicy.exact(tenantId);
+        this(accountSecurityService, null, tenantId);
     }
+
+    public AccountSecurityTokenCustomizer(AccountSecurityService accountSecurityService,
+            JdbcTenantAuthorizationRepository repository) {
+        this(accountSecurityService, repository, TenantClaimPolicy.defaultSingleTenant());
+    }
+
+    public AccountSecurityTokenCustomizer(AccountSecurityService accountSecurityService,
+            JdbcTenantAuthorizationRepository repository, String tenantId) {
+        this(accountSecurityService, repository, tenantId, null);
+    }
+
+    public AccountSecurityTokenCustomizer(AccountSecurityService accountSecurityService,
+            FixedTenantAuthorizationPolicy fixedTenantPolicy) {
+        this(accountSecurityService, null, fixedTenantPolicy.fixedTenantId().value(), fixedTenantPolicy);
+    }
+
+    private AccountSecurityTokenCustomizer(AccountSecurityService accountSecurityService,
+            JdbcTenantAuthorizationRepository repository, String tenantId,
+            FixedTenantAuthorizationPolicy fixedTenantPolicy) {
+        this.accountSecurityService = accountSecurityService;
+        this.tenantAuthorizationRepository = repository;
+        this.tenantId = TenantClaimPolicy.exact(tenantId);
+        this.fixedTenantPolicy = fixedTenantPolicy;
+    }
+
+    private final JdbcTenantAuthorizationRepository tenantAuthorizationRepository;
 
     @Override
     public void customize(JwtEncodingContext context) {
@@ -51,6 +77,11 @@ public final class AccountSecurityTokenCustomizer implements OAuth2TokenCustomiz
                         .claim("jiacn", userDetails.getJiacn())
                         .claim("username", userDetails.getUsername())
                         .claim("auth_epoch", userDetails.getLoginAuthEpoch());
+                if (fixedTenantPolicy != null) {
+                    addFixedTenantClaims(context);
+                } else if (tenantAuthorizationRepository != null) {
+                    addBoundTenantClaims(context, userDetails);
+                }
             }
             return;
         }
@@ -61,6 +92,7 @@ public final class AccountSecurityTokenCustomizer implements OAuth2TokenCustomiz
         if (!AuthorizationGrantType.CLIENT_CREDENTIALS.equals(context.getAuthorizationGrantType())) {
             throw invalidGrant();
         }
+        if (fixedTenantPolicy != null) throw invalidGrant();
         context.getClaims().claims(claims -> {
             claims.put(TOKEN_KIND, MACHINE_TOKEN_KIND);
             claims.remove("uid");
@@ -68,6 +100,54 @@ public final class AccountSecurityTokenCustomizer implements OAuth2TokenCustomiz
             claims.remove("username");
             claims.remove("auth_epoch");
         });
+    }
+
+    private void addFixedTenantClaims(JwtEncodingContext context) {
+        OAuth2Authorization authorization = context.getAuthorization();
+        if (authorization == null
+                || authorization.getAttribute(TenantAuthorizationAttributes.attributeName()) != null) {
+            throw invalidGrant();
+        }
+        Object value = authorization.getAttribute(FixedTenantAuthorizationBinding.attributeName());
+        if (!(value instanceof FixedTenantAuthorizationBinding binding)
+                || !authorization.getRegisteredClientId().equals(context.getRegisteredClient().getId())
+                || !fixedTenantPolicy.permits(binding, context.getRegisteredClient().getClientId())) {
+            throw invalidGrant();
+        }
+        context.getClaims().claim(TenantClaimPolicy.CANONICAL_CLAIM, binding.tenantId().value());
+    }
+
+    private void addBoundTenantClaims(JwtEncodingContext context, CustomUserDetails userDetails) {
+        OAuth2Authorization authorization = context.getAuthorization();
+        if (authorization == null) throw invalidGrant();
+        Object value = authorization.getAttribute(TenantAuthorizationAttributes.attributeName());
+        // An unselected authorization must never mint a user access token.
+        if (value == null) throw invalidGrant();
+        if (!(value instanceof TenantAuthorizationAttributes tenant)) {
+            throw invalidGrant();
+        }
+        // A bound authorization is immutable. Every code exchange/refresh must
+        // observe the current region, membership and client/domain grant; stale
+        // versions or unavailable control data are denied, not silently renewed.
+        try {
+            if (!authorization.getRegisteredClientId().equals(context.getRegisteredClient().getId())
+                    || !tenantAuthorizationRepository.isEligibleForIssuance(tenant, userDetails.getUserId(),
+                            context.getRegisteredClient().getClientId())) {
+                throw invalidGrant();
+            }
+        } catch (OAuth2AuthenticationException exception) {
+            throw exception;
+        } catch (RuntimeException exception) {
+            throw invalidGrant();
+        }
+        context.getClaims()
+                .claim("tenant_id", tenant.tenantId().value())
+                .claim("data_domain_id", tenant.dataDomainId().value())
+                .claim("tenant_name", tenant.tenantName())
+                .claim("tenant_kind", tenant.tenantKind().name())
+                .claim("tenant_session_epoch", tenant.tenantSessionEpoch())
+                .claim("membership_revision", tenant.membershipRevision())
+                .claim("client_tenant_grant_revision", tenant.clientTenantGrantRevision());
     }
 
     private void requireCurrentLoginPrincipal(CustomUserDetails principal) {

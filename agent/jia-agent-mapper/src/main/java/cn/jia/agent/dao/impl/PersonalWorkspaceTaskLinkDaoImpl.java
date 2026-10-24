@@ -3,8 +3,10 @@ package cn.jia.agent.dao.impl;
 import cn.jia.agent.dao.PersonalWorkspaceTaskLinkDao;
 import cn.jia.agent.entity.PersonalWorkspaceTaskFileLinkEntity;
 import cn.jia.agent.mapper.PersonalWorkspaceTaskFileLinkMapper;
+import cn.jia.core.tenant.TenantId;
 import jakarta.inject.Inject;
 import jakarta.inject.Named;
+import org.springframework.dao.DuplicateKeyException;
 
 import java.util.List;
 import java.util.Objects;
@@ -52,7 +54,7 @@ public class PersonalWorkspaceTaskLinkDaoImpl implements PersonalWorkspaceTaskLi
             String ownerJiacn, String taskId, String relationId) {
         scope(tenantId, clientId, ownerJiacn); id(taskId, "taskId", 100);
         id(relationId, "relationId", 100);
-        return mapper.selectByRelation(tenantId, clientId, ownerJiacn, taskId, relationId);
+        return checked(mapper.selectByRelation(tenantId, clientId, ownerJiacn, taskId, relationId), tenantId, clientId, ownerJiacn, taskId);
     }
 
     @Override
@@ -60,7 +62,7 @@ public class PersonalWorkspaceTaskLinkDaoImpl implements PersonalWorkspaceTaskLi
             String ownerJiacn, String taskId, String relationId) {
         scope(tenantId, clientId, ownerJiacn); id(taskId, "taskId", 100);
         id(relationId, "relationId", 100);
-        return mapper.selectByRelationForUpdate(tenantId, clientId, ownerJiacn, taskId, relationId);
+        return checked(mapper.selectByRelationForUpdate(tenantId, clientId, ownerJiacn, taskId, relationId), tenantId, clientId, ownerJiacn, taskId);
     }
 
     @Override
@@ -68,8 +70,8 @@ public class PersonalWorkspaceTaskLinkDaoImpl implements PersonalWorkspaceTaskLi
             String ownerJiacn, String taskId, String fileId, int fileVersion, String role) {
         scope(tenantId, clientId, ownerJiacn); id(taskId, "taskId", 100);
         id(fileId, "fileId", 100); version(fileVersion); id(role, "role", 20);
-        return mapper.selectBySelectionForUpdate(tenantId, clientId, ownerJiacn,
-                taskId, fileId, fileVersion, role);
+        return checked(mapper.selectBySelectionForUpdate(tenantId, clientId, ownerJiacn,
+                taskId, fileId, fileVersion, role), tenantId, clientId, ownerJiacn, taskId);
     }
 
     @Override
@@ -91,16 +93,18 @@ public class PersonalWorkspaceTaskLinkDaoImpl implements PersonalWorkspaceTaskLi
             if (beforeCreatedAt < 0) throw new IllegalArgumentException("cursor");
             id(afterRelationId, "cursor", 100);
         }
-        return mapper.selectLinks(tenantId, clientId, ownerJiacn, taskId,
+        List<PersonalWorkspaceTaskFileLinkEntity> rows = mapper.selectLinks(tenantId, clientId, ownerJiacn, taskId,
                 beforeCreatedAt, afterRelationId, Math.max(1, Math.min(limit, 100)));
+        rows.forEach(row -> checked(row, tenantId, clientId, ownerJiacn, taskId)); return rows;
     }
 
     @Override
     public List<PersonalWorkspaceTaskFileLinkEntity> listActiveByFile(String tenantId,
             String clientId, String ownerJiacn, String fileId, int limit) {
         scope(tenantId, clientId, ownerJiacn); id(fileId, "fileId", 100);
-        return mapper.selectActiveByFile(tenantId, clientId, ownerJiacn, fileId,
+        List<PersonalWorkspaceTaskFileLinkEntity> rows = mapper.selectActiveByFile(tenantId, clientId, ownerJiacn, fileId,
                 Math.max(1, Math.min(limit, 100)));
+        rows.forEach(row -> checked(row, tenantId, clientId, ownerJiacn, row.getTaskId())); return rows;
     }
 
     @Override
@@ -113,7 +117,11 @@ public class PersonalWorkspaceTaskLinkDaoImpl implements PersonalWorkspaceTaskLi
 
     @Override
     public void insert(PersonalWorkspaceTaskFileLinkEntity link) {
-        Objects.requireNonNull(link, "link").init4Creation();
+        Objects.requireNonNull(link, "link");
+        scope(link.getTenantId(), link.getClientId(), link.getOwnerJiacn());
+        id(link.getTaskId(), "taskId", 100); id(link.getFileId(), "fileId", 100);
+        id(link.getRelationId(), "relationId", 100); version(link.getFileVersion());
+        link.init4Creation();
         mapper.insert(link);
     }
 
@@ -139,11 +147,18 @@ public class PersonalWorkspaceTaskLinkDaoImpl implements PersonalWorkspaceTaskLi
         scope(tenantId, clientId, ownerJiacn); id(operationType, "operationType", 20);
         id(idempotencyKey, "idempotencyKey", 100); hash(requestHash);
         id(proposedOperationId, "operationId", 100);
-        mapper.reserveOperation(tenantId, clientId, ownerJiacn, operationType,
-                idempotencyKey, requestHash, proposedOperationId, now);
+        try {
+            mapper.reserveOperation(tenantId, clientId, ownerJiacn, operationType,
+                    idempotencyKey, requestHash, proposedOperationId, now);
+        } catch (DuplicateKeyException ignored) {
+            // Idempotent replay: the exact scoped row is locked and returned below.
+        }
         OperationRow row = mapper.selectOperationForUpdate(tenantId, clientId, ownerJiacn,
                 operationType, idempotencyKey);
         if (row == null) throw new IllegalStateException("task-link operation reservation missing");
+        if (!tenantId.equals(row.getTenantId()) || !clientId.equals(row.getClientId())
+                || !ownerJiacn.equals(row.getOwnerJiacn()))
+            throw new IllegalStateException("task-link operation scope projection mismatch");
         return row;
     }
 
@@ -157,9 +172,19 @@ public class PersonalWorkspaceTaskLinkDaoImpl implements PersonalWorkspaceTaskLi
     }
 
     private static void scope(String tenantId, String clientId, String ownerJiacn) {
-        if (!"0".equals(tenantId)) throw new IllegalArgumentException("tenantId");
+        TenantId.of(tenantId);
         id(clientId, "clientId", 50); id(ownerJiacn, "ownerJiacn", 50);
         if ("0".equals(ownerJiacn)) throw new IllegalArgumentException("ownerJiacn");
+    }
+
+    private static PersonalWorkspaceTaskFileLinkEntity checked(
+            PersonalWorkspaceTaskFileLinkEntity row, String tenantId, String clientId,
+            String ownerJiacn, String taskId) {
+        if (row != null && (!tenantId.equals(row.getTenantId()) || !clientId.equals(row.getClientId())
+                || !ownerJiacn.equals(row.getOwnerJiacn()) || !taskId.equals(row.getTaskId()))) {
+            throw new IllegalStateException("task file link scope projection mismatch");
+        }
+        return row;
     }
 
     private static void version(int value) {

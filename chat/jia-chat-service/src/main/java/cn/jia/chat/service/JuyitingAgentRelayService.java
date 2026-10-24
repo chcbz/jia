@@ -6,7 +6,7 @@ import cn.jia.chat.deliberation.InteractionRoute;
 import cn.jia.chat.handler.AgentWebSocketHandler;
 import cn.jia.chat.entity.ChatConversationEntity;
 import cn.jia.chat.handler.dto.ChatMessageDTO;
-import cn.jia.core.context.EsContextHolder;
+import cn.jia.core.tenant.UserAdmissionScope;
 import cn.jia.core.util.JsonUtil;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -39,7 +39,7 @@ public class JuyitingAgentRelayService {
     private static final String MATERIALS_UNAVAILABLE = "UNAVAILABLE";
 
     public JuyitingAgentRelayResult relay(
-            ChatMessageDTO chatMessage, String conversationId,
+            UserAdmissionScope admissionScope, ChatMessageDTO chatMessage, String conversationId,
             ServerResolvedSender sender, InteractionRoute route) {
         JuyitingConversationScope requestedScope = scopeService.resolve(chatMessage);
         if (!JuyitingConversationScopeService.CONVERSATION_TYPE_JUYITING.equals(scopeService.resolveConversationType(chatMessage))
@@ -50,15 +50,19 @@ public class JuyitingAgentRelayService {
         ServerResolvedSender trustedSender = requireTrustedSender(sender);
         String ownerJiacn = trustedSender.jiacn();
         String ownerClientId = trustedSender.clientId();
+        if (admissionScope == null
+                || !ownerJiacn.equals(admissionScope.businessScope().ownerJiacn())
+                || !ownerClientId.equals(admissionScope.businessScope().callerClientId())) {
+            throw new IllegalArgumentException("Trusted sender admission scope mismatch");
+        }
         JuyitingConversationScope scope;
         try {
             scope = scopeService.authorize(
-                    chatMessage, requestedScope, ownerJiacn, ownerClientId);
+                    chatMessage, requestedScope, admissionScope);
         } catch (RuntimeException denied) {
             return deniedScope(conversationId, requestedScope);
         }
-        ChatConversationEntity conversation = chatConversationService.getOwned(
-                ownerJiacn, ownerClientId, conversationId);
+        ChatConversationEntity conversation = chatConversationService.get(admissionScope, conversationId);
         if (!conversationMatchesScope(conversation, scope)) {
             return new JuyitingAgentRelayResult(true, Mono.just(true), Flux.just(JsonUtil.toSafeJson(Map.of(
                     "error", "conversation scope mismatch",
@@ -67,13 +71,13 @@ public class JuyitingAgentRelayService {
             ))));
         }
         long generation = lifecycleGeneration(conversation);
-        String tenantId = requireIdentityPart(EsContextHolder.getContext().getTenantId());
+        String tenantId = requireIdentityPart(admissionScope.businessScope().tenantId().value());
         if (!tenantId.equals(requireIdentityPart(conversation.getTenantId()))) {
             return deniedScope(conversationId, scope);
         }
 
         Optional<String> forbiddenTarget = forbiddenOwnedRosterTarget(
-                scope, ownerJiacn, ownerClientId);
+                admissionScope, scope, ownerJiacn, ownerClientId);
         if (forbiddenTarget.isPresent()) {
             return new JuyitingAgentRelayResult(true, Mono.just(true), Flux.just(JsonUtil.toSafeJson(Map.of(
                     "error", "target outside owned roster",
@@ -100,19 +104,21 @@ public class JuyitingAgentRelayService {
                         conversationId, dispatch.targetAgentId(), false, dispatch))
                 .toList();
         Flux<String> durableEvents = requestScopedEvents(
-                admission, tenantId, ownerJiacn, ownerClientId, conversationId, generation);
+                admissionScope, admission, tenantId, ownerJiacn, ownerClientId,
+                conversationId, generation);
         return new JuyitingAgentRelayResult(true, Mono.just(true),
                 Flux.fromIterable(accepted).concatWith(durableEvents));
     }
 
     /** One POST owns one buffer; the independent conversation events stream stays live. */
-    private Flux<String> requestScopedEvents(ChatDeliberationService.Admission admission,
+    private Flux<String> requestScopedEvents(UserAdmissionScope admissionScope,
+            ChatDeliberationService.Admission admission,
             String tenantId, String ownerJiacn, String clientId, String conversationId, long generation) {
         return Flux.using(() -> {
                     ChatConversationEventBroker.LiveSubscription subscription =
                             chatConversationEventBroker.subscribeBuffered(conversationId, generation,
                                     () -> chatConversationService.isLiveGeneration(
-                                            ownerJiacn, clientId, conversationId, generation));
+                                            admissionScope, conversationId, generation));
                     if (subscription == null) throw new IllegalStateException("Conversation stream unavailable");
                     return subscription;
                 }, subscription -> readRequestTerminal(
@@ -211,7 +217,7 @@ public class JuyitingAgentRelayService {
     }
 
     private Optional<String> forbiddenOwnedRosterTarget(
-            JuyitingConversationScope scope, String ownerJiacn, String ownerClientId) {
+            UserAdmissionScope admission, JuyitingConversationScope scope, String ownerJiacn, String ownerClientId) {
         // Transactional admission freezes the exact task grant for new requests and restores
         // the original receipt for replay. An owned-roster preflight would wrongly reject B
         // or re-authorize an old request against today's assignment.
@@ -220,6 +226,9 @@ public class JuyitingAgentRelayService {
         for (String agentId : scope.targetAgentIds()) {
             if (builtinHallAgentSupport.isBuiltinAgent(agentId)) {
                 continue;
+            }
+            if (!"0".equals(admission.businessScope().tenantId().value())) {
+                return Optional.of(agentId);
             }
             try {
                 agentService.get(agentId);

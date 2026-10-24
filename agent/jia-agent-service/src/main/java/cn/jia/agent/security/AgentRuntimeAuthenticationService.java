@@ -9,11 +9,13 @@ import cn.jia.agent.entity.AgentRuntimeV1InstallationEntity;
 import cn.jia.agent.entity.AgentRuntimeV1SessionRequest;
 import cn.jia.agent.entity.AgentRuntimeV1SessionResponse;
 import cn.jia.agent.service.AgentIdentityService;
+import cn.jia.core.tenant.BusinessScope;
+import cn.jia.core.tenant.DataDomainId;
 import cn.jia.user.security.AccountSecurityService;
 import cn.jia.user.security.AccountSecuritySnapshot;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DataAccessException;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -24,6 +26,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BooleanSupplier;
+import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.regex.Pattern;
 
@@ -40,30 +43,78 @@ public class AgentRuntimeAuthenticationService {
     private final AgentIdentityService identities;
     private final AccountSecurityService accounts;
     private final AgentTaskEventsGate gate;
+    private final AgentRuntimeTenantAdmission tenantAdmission;
+    private final AgentRuntimeTrustedScope trustedScope;
     private final Map<AgentRuntimeAuthentication.Scope, Binding> bindings = new ConcurrentHashMap<>();
+
+    @Autowired
+    public AgentRuntimeAuthenticationService(AgentRuntimeDao runtimes, AgentRuntimeV1InstallationDao installations,
+            AgentIdentityRegistryDao registry, AgentIdentityService identities,
+            AccountSecurityService accounts, AgentTaskEventsGate gate,
+            AgentRuntimeTenantAdmission tenantAdmission, AgentRuntimeTrustedScope trustedScope) {
+        this.runtimes = runtimes; this.installations = installations; this.registry = registry;
+        this.identities = identities; this.accounts = accounts; this.gate = gate;
+        this.tenantAdmission = tenantAdmission;
+        this.trustedScope = trustedScope;
+    }
 
     public AgentRuntimeAuthenticationService(AgentRuntimeDao runtimes, AgentRuntimeV1InstallationDao installations,
             AgentIdentityRegistryDao registry, AgentIdentityService identities,
             AccountSecurityService accounts, AgentTaskEventsGate gate) {
-        this.runtimes = runtimes; this.installations = installations; this.registry = registry;
-        this.identities = identities; this.accounts = accounts; this.gate = gate;
+        this(runtimes, installations, registry, identities, accounts, gate,
+                AgentRuntimeTenantAdmission.unrestrictedPlatform(), AgentRuntimeTrustedScope.lexicalOnly());
+    }
+
+    /** Runtime-v1 credential bootstrap boundary. The supplied installation must come from an
+     * exact persistent bootstrap read; its exact registry owner is the only source of authority.
+     * The callback owns the resulting root transaction and the trusted scope remains installed
+     * through commit or rollback completion. Callers must re-lock and revalidate their credential
+     * inside the callback before performing any mutation. */
+    public <T> T withPersistentInstallationScope(AgentRuntimeV1InstallationEntity installation,
+            Function<BusinessScope, T> operation) {
+        if (installation == null || operation == null
+                || !exact(installation.getTenantId(), 50)
+                || !exact(installation.getClientId(), 50)
+                || !validAgentReference(installation.getCanonicalAgentId())) throw denied();
+        tenantAdmission.requireAdmitted(installation.getTenantId(), installation.getClientId());
+        var candidates = registry.findBootstrapExactByCanonical(installation.getTenantId(),
+                installation.getClientId(), installation.getCanonicalAgentId());
+        if (candidates == null || candidates.size() != 1) throw denied();
+        var candidate = candidates.getFirst();
+        if (!Objects.equals(installation.getTenantId(), candidate.getTenantId())
+                || !Objects.equals(installation.getClientId(), candidate.getClientId())
+                || !Objects.equals(installation.getCanonicalAgentId(), candidate.getCanonicalAgentId())
+                || !exact(candidate.getOwnerJiacn(), 200) || "0".equals(candidate.getOwnerJiacn())) throw denied();
+        BusinessScope scope = businessScope(installation.getTenantId(),
+                installation.getClientId(), candidate.getOwnerJiacn());
+        return trustedScope.call(scope, () -> operation.apply(scope));
     }
 
     /** Caller holds the ACTIVE installation lock after verifying its Bearer. */
     public AgentRuntimeV1SessionResponse issue(AgentRuntimeV1InstallationEntity installation,
             AgentRuntimeV1SessionRequest request, long now) {
         if (installation == null || request == null || !"ACTIVE".equals(installation.getStatus())
-                || !"0".equals(installation.getTenantId())
                 || !exact(request.hostId(), 100) || !exact(request.runtimeInstanceId(), 100)
                 || request.runtimeInstanceId().equals(installation.getCanonicalAgentId())) throw denied();
-        // The installation binds the full subject, not an owner supplied by the caller.
-        var candidates = registry.selectByMap(Map.of("tenant_id", installation.getTenantId(),
-                "client_id", installation.getClientId(), "canonical_agent_id", installation.getCanonicalAgentId()));
+        tenantAdmission.requireAdmitted(installation.getTenantId(), installation.getClientId());
+        // Installation has no owner. Resolve the exact persisted identity before scope exists.
+        var candidates = registry.findBootstrapExactByCanonical(installation.getTenantId(),
+                installation.getClientId(), installation.getCanonicalAgentId());
         if (candidates == null || candidates.size() != 1) throw denied();
         var candidate = candidates.getFirst();
         if (!Objects.equals(installation.getTenantId(), candidate.getTenantId())
                 || !Objects.equals(installation.getClientId(), candidate.getClientId())
-                || !Objects.equals(installation.getCanonicalAgentId(), candidate.getCanonicalAgentId())) throw denied();
+                || !Objects.equals(installation.getCanonicalAgentId(), candidate.getCanonicalAgentId())
+                || !exact(candidate.getOwnerJiacn(), 200) || "0".equals(candidate.getOwnerJiacn())) throw denied();
+        BusinessScope trusted = businessScope(installation.getTenantId(),
+                installation.getClientId(), candidate.getOwnerJiacn());
+        return trustedScope.call(trusted,
+                () -> issueScoped(installation, request, now, candidate));
+    }
+
+    private AgentRuntimeV1SessionResponse issueScoped(AgentRuntimeV1InstallationEntity installation,
+            AgentRuntimeV1SessionRequest request, long now,
+            cn.jia.agent.entity.AgentIdentityRegistryEntity candidate) {
         var identity = identities.requireRegistrationIdentityInScope(installation.getTenantId(),
                 installation.getClientId(), candidate.getOwnerJiacn(), installation.getCanonicalAgentId());
         var binding = identities.requireActiveBinding(identity, null);
@@ -105,13 +156,12 @@ public class AgentRuntimeAuthenticationService {
     }
 
     /** Native proof validated without depending on a live channel: WS handshake and terminal ACK recovery. */
-    @Transactional(rollbackFor = Exception.class)
     public Proof verify(AgentRuntimeAuthenticationFilter.SessionHeaders headers) {
         if (headers == null || !validToken(headers.token()) || !validAgentReference(headers.agentId())
                 || headers.installationId() == null || !headers.installationId().matches("rti_[0-9a-f]{32}")
                 || !exact(headers.hostId(), 100) || !exact(headers.runtimeInstanceId(), 100)
                 || headers.runtimeInstanceId().equals(headers.agentId()) || headers.sessionGeneration() <= 0) throw denied();
-        var installation = installations.lock(headers.installationId());
+        var installation = installations.findBootstrap(headers.installationId());
         return verifyInstallation(headers, installation);
     }
 
@@ -120,6 +170,30 @@ public class AgentRuntimeAuthenticationService {
         if (installation == null || !"ACTIVE".equals(installation.getStatus())
                 || !headers.installationId().equals(installation.getInstallationId())
                 || !headers.agentId().equals(installation.getCanonicalAgentId())) throw denied();
+        tenantAdmission.requireAdmitted(installation.getTenantId(), installation.getClientId());
+        var candidates = registry.findBootstrapExactByCanonical(installation.getTenantId(),
+                installation.getClientId(), headers.agentId());
+        if (candidates == null || candidates.size() != 1) throw denied();
+        var identity = candidates.getFirst();
+        if (!Objects.equals(installation.getTenantId(), identity.getTenantId())
+                || !Objects.equals(installation.getClientId(), identity.getClientId())
+                || !Objects.equals(headers.agentId(), identity.getCanonicalAgentId())
+                || !exact(identity.getOwnerJiacn(), 200) || "0".equals(identity.getOwnerJiacn())) throw denied();
+        BusinessScope trusted = businessScope(installation.getTenantId(),
+                installation.getClientId(), identity.getOwnerJiacn());
+        return trustedScope.call(trusted, () -> {
+            var locked = installations.lock(headers.installationId());
+            if (locked == null || !installation.equals(locked)
+                    || !Objects.equals(installation.getTenantId(), locked.getTenantId())
+                    || !Objects.equals(installation.getClientId(), locked.getClientId())
+                    || !Objects.equals(installation.getCanonicalAgentId(), locked.getCanonicalAgentId())) throw denied();
+            return verifyScoped(headers, locked, identity);
+        });
+    }
+
+    private Proof verifyScoped(AgentRuntimeAuthenticationFilter.SessionHeaders headers,
+            AgentRuntimeV1InstallationEntity installation,
+            cn.jia.agent.entity.AgentIdentityRegistryEntity identity) {
         var row = runtimes.findInScope(installation.getTenantId(), installation.getClientId(), headers.agentId());
         if (row == null || row.getTokenHash() == null) throw denied();
         String[] verifier = row.getTokenHash().split(":", -1);
@@ -130,14 +204,13 @@ public class AgentRuntimeAuthenticationService {
         try { userId = Long.parseLong(verifier[2]); epoch = Long.parseLong(verifier[3]); }
         catch (NumberFormatException invalid) { throw denied(); }
         var proof = new Proof(new AgentRuntimeAuthentication.Scope(installation.getTenantId(), installation.getClientId(),
-                row.getOwnerJiacn(), headers.agentId(), headers.runtimeInstanceId()), installation.getInstallationId(),
+                identity.getOwnerJiacn(), headers.agentId(), headers.runtimeInstanceId()), installation.getInstallationId(),
                 headers.hostId(), headers.sessionGeneration(), verifier[1], userId, epoch);
         validateRow(proof, installation, row, false);
         return proof;
     }
 
     // Filter entry point must own the transaction: its call to verify() is a self-invocation.
-    @Transactional(rollbackFor = Exception.class)
     public AgentRuntimeAuthentication authenticate(AgentRuntimeAuthenticationFilter.SessionHeaders headers, boolean requireChannel) {
         Proof proof = verify(headers);
         if (requireChannel && !hasChannel(proof)) throw denied();
@@ -156,7 +229,6 @@ public class AgentRuntimeAuthenticationService {
 
     /** Native business commit boundary. This entry point owns a proxy transaction;
      * the internal call to withFence() must never rely on self-invocation advice. */
-    @Transactional(rollbackFor = Exception.class)
     public <T> T withNativeFence(org.springframework.security.core.Authentication authentication, Supplier<T> operation) {
         return withFence(requireProof(authentication), false, operation);
     }
@@ -216,31 +288,43 @@ public class AgentRuntimeAuthenticationService {
     }
 
     public void validateCurrent(Proof proof, boolean registered) {
-        var installation = installations.findInScope(proof.scope().tenantId(), proof.scope().clientId(), proof.installationId());
-        var row = runtimes.findInScope(proof.scope().tenantId(), proof.scope().clientId(), proof.scope().agentId());
-        validateRow(proof, installation, row, registered);
+        if (proof == null) throw denied();
+        var scope = proof.scope();
+        tenantAdmission.requireAdmitted(scope.tenantId(), scope.clientId());
+        trustedScope.call(businessScope(scope.tenantId(), scope.clientId(), scope.ownerJiacn()), () -> {
+            var installation = installations.findInScope(scope.tenantId(), scope.clientId(), proof.installationId());
+            var row = runtimes.findInScope(scope.tenantId(), scope.clientId(), scope.agentId());
+            validateRow(proof, installation, row, registered);
+            return null;
+        });
     }
 
     /** Full-scope fences remain held through the callback's joined business/D06 transaction. */
-    @Transactional(rollbackFor = Exception.class)
     public <T> T withFence(Proof proof, boolean registration, Supplier<T> operation) {
         if (proof == null) throw denied();
         var scope = proof.scope();
-        var installation = installations.lock(proof.installationId());
-        if (registration) {
-            var identity = identities.requireRegistrationIdentityInScope(scope.tenantId(), scope.clientId(), scope.ownerJiacn(), scope.agentId());
-            identities.activateForFirstRegistration(identity);
-        }
-        var row = runtimes.lockInScope(scope.tenantId(), scope.clientId(), scope.agentId());
-        validateRow(proof, installation, row, false);
-        return operation.get();
+        tenantAdmission.requireAdmitted(scope.tenantId(), scope.clientId());
+        return trustedScope.call(
+                businessScope(scope.tenantId(), scope.clientId(), scope.ownerJiacn()), () -> {
+                    var installation = installations.lock(proof.installationId());
+                    if (registration) {
+                        var identity = identities.requireRegistrationIdentityInScope(scope.tenantId(),
+                                scope.clientId(), scope.ownerJiacn(), scope.agentId());
+                        identities.activateForFirstRegistration(identity);
+                    }
+                    var row = runtimes.lockInScope(scope.tenantId(), scope.clientId(), scope.agentId());
+                    validateRow(proof, installation, row, false);
+                    return operation.get();
+                });
     }
 
     private void validateRow(Proof proof, AgentRuntimeV1InstallationEntity installation, AgentRuntimeEntity row, boolean registered) {
         var scope = proof.scope();
         String verifier = "urs1:" + proof.tokenDigest() + ":" + proof.userId() + ":" + proof.authEpoch();
         if (installation == null || row == null || !"ACTIVE".equals(installation.getStatus())
-                || !"0".equals(scope.tenantId()) || !scope.tenantId().equals(installation.getTenantId())
+                || !scope.tenantId().equals(tenantAdmission.requireAdmitted(
+                        scope.tenantId(), scope.clientId()).value())
+                || !scope.tenantId().equals(installation.getTenantId())
                 || !scope.clientId().equals(installation.getClientId()) || !scope.agentId().equals(installation.getCanonicalAgentId())
                 || !proof.installationId().equals(installation.getInstallationId())
                 || !scope.agentId().equals(row.getAgentId()) || !scope.tenantId().equals(row.getTenantId())
@@ -266,6 +350,10 @@ public class AgentRuntimeAuthenticationService {
         var account = accounts.findUniqueByExactJiacn(ownerJiacn).orElseThrow(AgentRuntimeAuthenticationService::denied);
         if (!Objects.equals(ownerJiacn, account.jiacn()) || !account.isAuthenticatable()) throw denied();
         return account;
+    }
+    private BusinessScope businessScope(String tenantId, String clientId, String ownerJiacn) {
+        return new BusinessScope(tenantAdmission.requireAdmitted(tenantId, clientId),
+                DataDomainId.of("cyf"), ownerJiacn, clientId);
     }
     static String digestHex(String value) {
         try { return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8))); }

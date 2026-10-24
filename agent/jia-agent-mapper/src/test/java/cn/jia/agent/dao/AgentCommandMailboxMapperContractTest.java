@@ -1,6 +1,7 @@
 package cn.jia.agent.dao;
 
 import cn.jia.agent.mapper.AgentCommandTransportMapper;
+import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 import org.junit.jupiter.api.Test;
@@ -16,7 +17,7 @@ class AgentCommandMailboxMapperContractTest {
     void mailboxProjectionIsExactScopedBoundedAndStable() throws Exception {
         String sql = sql("selectMailboxPage");
 
-        assertTrue(sql.contains("where d.tenant_id=#{tenantid} and d.client_id=#{clientid}"));
+        assertTrue(sql.contains("where d.tenant_id='0' and d.client_id=#{clientid}"));
         assertExactParameter(sql, "d.tenant_id", "tenantid");
         assertExactParameter(sql, "d.client_id", "clientid");
         assertExactParameter(sql, "d.target_agent_id", "targetagentid");
@@ -92,6 +93,35 @@ class AgentCommandMailboxMapperContractTest {
     }
 
     @Test
+    void legacyAndV2TransportSqlUseSeparatePhysicalSchemas() throws Exception {
+        String legacyLock = selectSql("selectDeliveryForUpdate");
+        String v2Lock = selectSql("selectDeliveryForUpdateV2");
+        String legacyOutboxLock = selectSql("selectActiveOutboxesForUpdate");
+        String legacyDeliveryInsert = insertSql("insertDelivery");
+        String v2DeliveryInsert = insertSql("insertDeliveryV2");
+        String legacyOutboxInsert = insertSql("insertOutbox");
+        String v2OutboxInsert = insertSql("insertOutboxV2");
+
+        for (String legacy : new String[] {
+                legacyLock, legacyOutboxLock, legacyDeliveryInsert, legacyOutboxInsert}) {
+            assertFalse(legacy.contains("protocol_version"), legacy);
+            assertFalse(legacy.contains("data_domain_id"), legacy);
+            assertFalse(legacy.contains("execution_pool_id"), legacy);
+        }
+        assertTrue(legacyLock.contains("tenant_id='0'"), legacyLock);
+        assertTrue(v2Lock.contains("tenant_id=#{tenantid}"), v2Lock);
+        assertTrue(v2Lock.contains("protocol_version=2"), v2Lock);
+        for (String v2 : new String[] {v2DeliveryInsert, v2OutboxInsert}) {
+            for (String column : new String[] {
+                    "protocol_version", "data_domain_id", "execution_pool_id",
+                    "admission_epoch", "producer_deployment_id", "module_id",
+                    "migration_epoch"}) {
+                assertTrue(v2.contains(column), column + ": " + v2);
+            }
+        }
+    }
+
+    @Test
     void shadowPromotionCasRequiresExactIdentityMarkerStatusAndVersion() throws Exception {
         String delivery = updateSql("promoteShadowDelivery");
         String outbox = updateSql("promoteShadowOutbox");
@@ -141,6 +171,17 @@ class AgentCommandMailboxMapperContractTest {
         Update update = method.getAnnotation(Update.class);
         if (update == null) throw new IllegalStateException(methodName + " is not @Update");
         return normalize(update.value());
+    }
+
+    private static String insertSql(String methodName) throws Exception {
+        Method method = null;
+        for (Method candidate : AgentCommandTransportMapper.class.getDeclaredMethods()) {
+            if (candidate.getName().equals(methodName)) method = candidate;
+        }
+        if (method == null) throw new NoSuchMethodException(methodName);
+        Insert insert = method.getAnnotation(Insert.class);
+        if (insert == null) throw new IllegalStateException(methodName + " is not @Insert");
+        return normalize(insert.value());
     }
 
     private static String normalize(String[] sql) {

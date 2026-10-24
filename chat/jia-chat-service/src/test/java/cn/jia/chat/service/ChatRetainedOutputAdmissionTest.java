@@ -8,11 +8,17 @@ import cn.jia.chat.api.ChatTypedDeliberationWire;
 import cn.jia.chat.dao.ChatConversationDao;
 import cn.jia.chat.deliberation.*;
 import cn.jia.chat.entity.ChatConversationEntity;
+import cn.jia.chat.entity.ConversationDataScope;
+import cn.jia.core.tenant.BusinessScope;
+import cn.jia.core.tenant.DataDomainId;
+import cn.jia.core.tenant.TenantId;
+import cn.jia.core.tenant.TrustedTenantContext;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
 import java.util.List;
 import java.util.Map;
+import java.util.function.Supplier;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -52,8 +58,8 @@ class ChatRetainedOutputAdmissionTest {
                 .setConversationScopeType("bounty").setConversationScopeKey("task:task").setTaskId("task")
                 .setLifecycleGeneration(3L).setTargetAgentIds("[\"agent\"]");
         c.setTenantId("0"); c.setClientId("client");
-        when(conversations.findScopedById("owner", "client", "42")).thenReturn(c);
-        when(conversations.lockScopedById("owner", "client", "42")).thenReturn(c);
+        when(conversations.findScopedById(any(ConversationDataScope.class), eq("42"))).thenReturn(c);
+        when(conversations.lockScopedById(any(ConversationDataScope.class), eq("42"))).thenReturn(c);
         when(scopes.parsePersistedTargetAgentIds(any())).thenReturn(List.of("agent"));
         when(bindings.lock(any(), eq("task"))).thenReturn(new ChatBountyBindingStore.Binding(7, 42L));
         when(mutations.executeWithLockedTaskRootInOwnerScope(eq("0"), eq("client"), eq("owner"), eq("task"), any()))
@@ -81,7 +87,7 @@ class ChatRetainedOutputAdmissionTest {
     }
 
     @Test void discoversBeforeFreezingPersistsExactCatalogAndReplaysWithoutRediscovery() {
-        assertFalse(service.admit("0", sender, "42", "key", command).replay());
+        assertFalse(withScope(() -> service.admit("0", sender, "42", "key", command)).replay());
         var order = inOrder(contexts, deliberation, store);
         order.verify(contexts).withDeliverySelectors(any(), eq("task"), eq("agent"), eq("TASK_DEFAULT"), eq(List.of()), eq(targets));
         order.verify(contexts).resolve(any(), eq("task"), eq("agent"), eq(List.of(selector)));
@@ -94,16 +100,29 @@ class ChatRetainedOutputAdmissionTest {
                 facts.getValue().get("retainedOutputSources"));
         when(store.findAdmissionByKey(eq(scope), eq("key"), anyBoolean())).thenReturn(saved.getValue());
         clearInvocations(contexts, finals, deliberation, packages, grants);
-        assertTrue(service.admit("0", sender, "42", "key", command).replay());
+        assertTrue(withScope(() -> service.admit("0", sender, "42", "key", command)).replay());
         verifyNoInteractions(contexts, finals, deliberation, packages, grants);
+        var readScopes = ArgumentCaptor.forClass(ConversationDataScope.class);
+        verify(conversations, times(2)).findScopedById(readScopes.capture(), eq("42"));
+        readScopes.getAllValues().forEach(value -> assertEquals(scope(), value.businessScope()));
+        verify(conversations, never()).findScopedById(anyString(), anyString(), anyString());
     }
 
     @Test void unavailableOutputDoesNotPersistAdmissionOrDispatch() {
         when(contexts.withDeliverySelectors(any(), any(), any(), any(), anyList(), anyList())).thenThrow(
                 new ChatDeliberationException(ChatDeliberationException.Reason.CONFLICT, "not ready"));
-        assertThrows(ChatDeliberationException.class, () -> service.admit("0", sender, "42", "key", command));
+        assertThrows(ChatDeliberationException.class,
+                () -> withScope(() -> service.admit("0", sender, "42", "key", command)));
         verify(contexts, never()).resolve(any(), any(), any(), anyList());
         verifyNoInteractions(deliberation);
         verify(store, never()).insertAdmission(any());
+    }
+
+    private static BusinessScope scope() {
+        return new BusinessScope(TenantId.of("0"), DataDomainId.of("cyf"), "owner", "client");
+    }
+
+    private static <T> T withScope(Supplier<T> work) {
+        return TrustedTenantContext.withScope(scope(), work);
     }
 }

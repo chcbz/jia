@@ -3,6 +3,7 @@ package cn.jia.chat.deliberation;
 import jakarta.inject.Named;
 import lombok.RequiredArgsConstructor;
 import java.util.List;
+import java.util.Set;
 
 @Named
 @RequiredArgsConstructor
@@ -24,7 +25,7 @@ public class ChatDeliberationDaoImpl implements ChatDeliberationDao {
     public ChatDispatchOutboxEntity findOutboxById(String t,String o,String c,String e){return mapper.findOutboxById(t,o,c,e);}
     public ChatDispatchOutboxEntity lockOutboxById(String t,String o,String c,String e){return mapper.lockOutboxById(t,o,c,e);}
     public ChatDispatchOutboxEntity lockOutboxByDispatch(String t,String o,String c,String d){return mapper.lockOutboxByDispatch(t,o,c,d);}
-    public List<ChatDispatchOutboxEntity> findDueOutbox(long n,int l){return mapper.findDueOutbox(n,l);}
+    public List<ChatDispatchOutboxEntity> findDueOutbox(Set<String> tenants,long n,int l){return mapper.findDueOutboxInTenants(tenants,n,l);}
     public List<ChatConversationEventEntity> replayEvents(String t,String o,String c,String id,long g,long a,long through,int l){return mapper.replayEvents(t,o,c,id,g,a,through,l);}
     public long eventHighWatermark(String t,String o,String c,String id,long g){Long value=mapper.eventHighWatermark(t,o,c,id,g);return value==null?0L:value;}
     public int acceptDelta(ChatTurnEntity t,long s,String d,long n){return mapper.acceptDelta(t.getTenantId(),t.getOwnerJiacn(),t.getClientId(),t.getTurnId(),t.getStateVersion(),ChatDeliberationStates.STREAMING,s,d,n);}

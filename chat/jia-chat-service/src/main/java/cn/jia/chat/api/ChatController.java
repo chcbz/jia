@@ -13,6 +13,11 @@ import cn.jia.chat.exception.AgentTaskThreadException;
 import cn.jia.core.util.JsonUtil;
 import cn.jia.core.context.EsContext;
 import cn.jia.core.context.EsContextHolder;
+import cn.jia.core.tenant.BusinessScope;
+import cn.jia.core.tenant.DataDomainId;
+import cn.jia.core.tenant.TenantId;
+import cn.jia.core.tenant.UserAdmissionScope;
+import cn.jia.oauth.security.UserAdmissionScopeResolver;
 import cn.jia.core.entity.JsonRequestPage;
 import cn.jia.core.entity.JsonResult;
 import cn.jia.core.entity.ProtocolMessage;
@@ -22,6 +27,7 @@ import cn.jia.core.util.StringUtil;
 import cn.jia.chat.memory.MemoryDocument;
 import cn.jia.chat.memory.MemoryRepository;
 import cn.jia.chat.service.ChatConversationService;
+import cn.jia.chat.service.ConversationLibraryService;
 import cn.jia.chat.service.ChatStreamPolicy;
 import cn.jia.chat.service.ChatDeliberationException;
 import cn.jia.chat.service.ChatDeliberationService;
@@ -42,6 +48,7 @@ import cn.jia.chat.service.impl.AgentTaskThreadMemoryGuard;
 import com.github.pagehelper.PageInfo;
 import io.micrometer.core.instrument.util.StringEscapeUtils;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.ai.chat.client.advisor.vectorstore.QuestionAnswerAdvisor;
@@ -53,6 +60,7 @@ import org.springframework.ai.chat.prompt.PromptTemplate;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
@@ -104,6 +112,8 @@ public class ChatController {
     private final JuyitingAgentRelayService juyitingAgentRelayService;
     private final MemoryRepository memoryRepository;
     private final AgentTaskThreadMemoryGuard taskThreadMemoryGuard;
+    private UserAdmissionScopeResolver userAdmissionScopeResolver;
+    private ConversationLibraryService conversationLibraryService;
     private final HumanSenderIdentityResolver humanSenderIdentityResolver;
     private InteractionRouter interactionRouter = new InteractionRouter();
     private ChatDeliberationService chatDeliberationService;
@@ -147,6 +157,19 @@ public class ChatController {
         this.humanSenderIdentityResolver = humanSenderIdentityResolver;
     }
 
+
+    @Autowired
+    void setUserAdmissionScopeResolver(
+            UserAdmissionScopeResolver userAdmissionScopeResolver) {
+        this.userAdmissionScopeResolver = userAdmissionScopeResolver;
+    }
+
+    @Autowired
+    void setConversationLibraryService(
+            ConversationLibraryService conversationLibraryService) {
+        this.conversationLibraryService = conversationLibraryService;
+    }
+
     private static final PromptTemplate SUMMARY_PROMPT_TEMPLATE = new PromptTemplate("""
             帮我根据下面对话内容，输出15字以内的问题意图概述，需要名词开头。
 
@@ -170,18 +193,24 @@ public class ChatController {
     public Flux<cn.jia.core.entity.ProtocolMessage<Map<String, Object>>> handleChat(
             @RequestBody cn.jia.core.entity.JsonRequest<ChatMessageDTO> protocolRequest,
             @RequestHeader(name = "Idempotency-Key", required = false) String idempotencyKey) {
+        if (protocolRequest == null) {
+            throw new ChatDeliberationException(
+                    ChatDeliberationException.Reason.INVALID_REQUEST,
+                    "Protocol request is required");
+        }
         return handleChatInternal(protocolRequest.data(), idempotencyKey)
                 .map(frame -> ChatStreamWire.message(protocolRequest.requestId(), frame))
                 .takeUntil(message -> "chat.stream.error".equals(message.messageType()));
     }
 
     private Flux<String> handleChatInternal(ChatMessageDTO chatMessage, String idempotencyKey) {
+        UserAdmissionScope admission = captureAdmissionScope();
         bindIdempotencyKey(chatMessage, idempotencyKey);
         // Reject execute/unknown hints before creating or mutating any conversation.
         InteractionRoute route = interactionRouter.routeStream(chatMessage);
         EsContext context = EsContextHolder.getContext();
         ServerResolvedSender sender = humanSenderIdentityResolver.resolve(context);
-        ChatConversationEntity conversation = getOrCreateConversation(chatMessage, sender);
+        ChatConversationEntity conversation = getOrCreateConversation(admission, chatMessage, sender);
         boolean needSummary = StringUtil.isBlank(conversation.getTitle());
         StringBuilder summary = new StringBuilder();
         String conversationId = String.valueOf(conversation.getId());
@@ -191,11 +220,11 @@ public class ChatController {
 
         Flux<String> cancelSignal = redisService.subscribeToChannel(conversationId);
         JuyitingAgentRelayResult agentDelivery = juyitingAgentRelayService.relay(
-                chatMessage, conversationId, sender, route);
+                admission, chatMessage, conversationId, sender, route);
         boolean skipAdvisorUserPersistence = agentDelivery.attempted();
         Flux<String> aiStream = agentDelivery.delivered().flatMapMany(delivered -> delivered
                 ? Flux.empty()
-                : createAIStream(chatMessage, conversationId, sender,
+                : createAIStream(admission, chatMessage, conversationId, sender,
                         resolveConversationType(conversation), needSummary, summary,
                         skipAdvisorUserPersistence));
 
@@ -213,7 +242,7 @@ public class ChatController {
                 .concatWith(aiStream)
                 .concatWith(Flux.defer(() -> Flux.just("{\"conversationId\": \"" + conversationId + "\", \"conversationType\": \"" + resolveConversationType(conversation) + "\"}")))
                 .concatWith(Flux.defer(() -> handleSummary(
-                        needSummary, chatMessage.getContent(), summary.toString(),
+                        admission, needSummary, chatMessage.getContent(), summary.toString(),
                         conversationId, ownerJiacn, ownerClientId)))
                 // This means the HTTP stream completed, not that an asynchronously delivered Agent turn succeeded.
                 // Put it BEFORE cancellation/deletion operators: a cancelled stream must never gain a success tail.
@@ -223,13 +252,13 @@ public class ChatController {
                 .takeUntilOther(chatConversationEventBroker.deletionSignal(
                         conversationId, generation,
                         () -> chatConversationService.isLiveGeneration(
-                                ownerJiacn, ownerClientId, conversationId, generation)))
+                                admission, conversationId, generation)))
                 .transform(ChatStreamPolicy::bounded)
                 .<String>handle((value, sink) -> {
                     boolean live = chatConversationEventBroker.runIfLive(
                             conversationId, generation,
                             () -> chatConversationService.isLiveGeneration(
-                                    ownerJiacn, ownerClientId, conversationId, generation),
+                                admission, conversationId, generation),
                             () -> sink.next(value));
                     if (!live) {
                         sink.complete();
@@ -238,7 +267,7 @@ public class ChatController {
                 .onErrorResume(error -> {
                     log.error("Error processing chat response", error);
                     return liveErrorFrame(
-                            conversation, conversationId, ownerJiacn, ownerClientId, generation,
+                            admission, conversation, conversationId, ownerJiacn, ownerClientId, generation,
                             safeStreamErrorMessage(error));
                 })
                 .doOnCancel(() -> log.debug(
@@ -250,14 +279,14 @@ public class ChatController {
     }
 
     private Flux<String> liveErrorFrame(
-            ChatConversationEntity conversation, String conversationId,
+            UserAdmissionScope admission, ChatConversationEntity conversation, String conversationId,
             String ownerJiacn, String ownerClientId, long generation, String message) {
         String payload = streamErrorJson(conversation, conversationId, message);
         return Flux.just(payload).handle((value, sink) -> {
             boolean live = chatConversationEventBroker.runIfLive(
                     conversationId, generation,
                     () -> chatConversationService.isLiveGeneration(
-                            ownerJiacn, ownerClientId, conversationId, generation),
+                                admission, conversationId, generation),
                     () -> sink.next(value));
             if (!live) {
                 sink.complete();
@@ -279,7 +308,7 @@ public class ChatController {
     }
 
     private ChatConversationEntity getOrCreateConversation(
-            ChatMessageDTO chatMessage, ServerResolvedSender sender) {
+            UserAdmissionScope admission, ChatMessageDTO chatMessage, ServerResolvedSender sender) {
         ChatConversationEntity message;
         if (StringUtil.isBlank(chatMessage.getConversationId()) || Boolean.TRUE.equals(chatMessage.getForceNewConversation())) {
             message = new ChatConversationEntity();
@@ -303,8 +332,7 @@ public class ChatController {
                     scope = juyitingConversationScopeService.authorize(
                             chatMessage,
                             juyitingConversationScopeService.resolve(chatMessage),
-                            sender.jiacn(),
-                            sender.clientId());
+                            admission);
                 } catch (RuntimeException denied) {
                     throw new AgentTaskThreadException(
                             AgentTaskThreadException.Reason.NOT_FOUND_OR_FORBIDDEN,
@@ -324,9 +352,9 @@ public class ChatController {
                                 scope.targetAgentIds()));
                 message.setLifecycleGeneration(1L);
             }
-            message = chatConversationService.create(message);
+            message = chatConversationService.create(admission, message);
         } else {
-            message = chatConversationService.get(chatMessage.getConversationId());
+            message = chatConversationService.get(admission, chatMessage.getConversationId());
         }
         return message;
     }
@@ -385,9 +413,10 @@ public class ChatController {
                 "Reserved conversation scope type");
     }
 
-    private void requireGenericConversationAccess(String conversationId) {
+    private void requireGenericConversationAccess(
+            UserAdmissionScope admission, String conversationId) {
         if (StringUtil.isNotBlank(conversationId)) {
-            chatConversationService.get(conversationId);
+            chatConversationService.get(admission, conversationId);
         }
     }
 
@@ -401,13 +430,13 @@ public class ChatController {
     }
 
     private Flux<String> createAIStream(
-            ChatMessageDTO chatMessage, String conversationId,
+            UserAdmissionScope admission, ChatMessageDTO chatMessage, String conversationId,
             ServerResolvedSender sender, String conversationType,
             boolean needSummary, StringBuilder summary,
             boolean skipAdvisorUserPersistence) {
         String ownerJiacn = sender.jiacn();
         String ownerClientId = sender.clientId();
-        String filterExpression = "metadata.jiacn == '" + ownerJiacn + "' AND role == 'ASSISTANT'";
+        String filterExpression = vectorFilterExpression(admission, ownerJiacn);
 
         return chatClient.prompt(
                         Prompt.builder().messages(UserMessage.builder().text(chatMessage.getContent()).build()).build())
@@ -415,6 +444,7 @@ public class ChatController {
                         .param(ChatMemory.CONVERSATION_ID, conversationId)
                         .param("jiacn", ownerJiacn)
                         .param("clientId", ownerClientId)
+                        .param(DatabaseChatMemoryAdvisor.USER_ADMISSION_SCOPE, admission)
                         .param("conversationType", conversationType)
                         .param(DatabaseChatMemoryAdvisor.SERVER_RESOLVED_SENDER, sender)
                         .param("selectedAgentId", Optional.ofNullable(juyitingAgentRelayService.selectedAgentId(chatMessage)).orElse(""))
@@ -480,7 +510,7 @@ public class ChatController {
     }
 
     private Flux<String> handleSummary(
-            boolean needSummary, String question, String answer, String conversationId,
+            UserAdmissionScope admission, boolean needSummary, String question, String answer, String conversationId,
             String ownerJiacn, String ownerClientId) {
         if (!needSummary || StringUtil.isBlank(answer)) {
             return Flux.empty();
@@ -489,8 +519,53 @@ public class ChatController {
                         SUMMARY_PROMPT_TEMPLATE.create(Map.of("question", question, "answer", answer)))
                 .call().content();
         chatConversationService.updateOwnedTitle(
-                ownerJiacn, ownerClientId, conversationId, title, 1);
+                admission, conversationId, title, 1);
         return Flux.just(JsonUtil.toJson(Map.of("t", title)));
+    }
+
+    private UserAdmissionScope captureAdmissionScope() {
+        if (userAdmissionScopeResolver != null) {
+            return userAdmissionScopeResolver.resolve(
+                    SecurityContextHolder.getContext().getAuthentication());
+        }
+        // Unit-test compatibility only. In the running application the resolver is
+        // mandatory and uses the signature-validated JwtAuthenticationToken.
+        EsContext context = EsContextHolder.getContext();
+        if (context == null) {
+            throw reservedTaskThreadAccess();
+        }
+        String owner = requireIdentityPart(context.getJiacn());
+        String client = requireIdentityPart(context.getClientId());
+        String tenant = StringUtil.isBlank(context.getTenantId()) ? "0" : context.getTenantId();
+        String domain = StringUtil.isBlank(context.getDataDomainId()) ? "cyf" : context.getDataDomainId();
+        return new UserAdmissionScope(
+                new BusinessScope(TenantId.of(tenant), DataDomainId.of(domain), owner, client),
+                1L, 0L, 0L, 0L, 0L);
+    }
+
+    private String vectorFilterExpression(
+            UserAdmissionScope admission, String ownerJiacn) {
+        String owner = vectorFilterLiteral(ownerJiacn);
+        if ("0".equals(admission.businessScope().tenantId().value())) {
+            return "metadata.jiacn == " + owner + " AND role == 'ASSISTANT'";
+        }
+        return "metadata.jiacn == " + owner
+                + " AND metadata.tenantId == "
+                + vectorFilterLiteral(admission.businessScope().tenantId().value())
+                + " AND metadata.dataDomainId == "
+                + vectorFilterLiteral(admission.businessScope().dataDomainId().value())
+                + " AND role == 'ASSISTANT'";
+    }
+
+    private String vectorFilterLiteral(String value) {
+        return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'";
+    }
+
+    private void requireLegacyAuxiliaryScope(UserAdmissionScope admission) {
+        if (!"0".equals(admission.businessScope().tenantId().value())
+                || !"cyf".equals(admission.businessScope().dataDomainId().value())) {
+            throw reservedTaskThreadAccess();
+        }
     }
 
     private String requireIdentityPart(String value) {
@@ -597,20 +672,21 @@ public class ChatController {
     @RequestMapping(value = "/stop_stream", method = RequestMethod.POST)
     public Object stopStream(@RequestBody JsonRequest<ChatMessageDTO> protocolRequest) {
         ChatMessageDTO chatMessage = protocolRequest == null ? null : protocolRequest.data();
-        requireGenericConversationAccess(chatMessage.getConversationId());
+        UserAdmissionScope admission = captureAdmissionScope();
+        requireGenericConversationAccess(admission, chatMessage.getConversationId());
         redisService.publishSignal(chatMessage.getConversationId()).subscribe();
         return JsonResult.success();
     }
 
     @RequestMapping(value = "/conversation/delete", method = RequestMethod.DELETE)
     public Object deleteConversation(@RequestParam(name = "id") String id) {
-        chatConversationService.deleteConversation(id);
+        chatConversationService.deleteConversation(captureAdmissionScope(), id);
         return JsonResult.success();
     }
 
     @RequestMapping(value = "/conversation/content", method = RequestMethod.GET)
     public Object getConversationContent(@RequestParam(name = "id") String id) {
-        List<ChatMessageEntity> owned = chatConversationService.findByConversationId(id);
+        List<ChatMessageEntity> owned = chatConversationService.findByConversationId(captureAdmissionScope(), id);
         var parts = owned.isEmpty() || bountyAssets == null ?
                 Map.<String, List<ChatBountyAssetProjector.Part>>of() :
                 bountyAssets.partsFor(new PersonalWorkspaceExecutionService.OwnerScope(
@@ -638,6 +714,7 @@ public class ChatController {
             Long createTime,
             Long updateTime,
             String tenantId,
+            String dataDomainId,
             String clientId,
             List<ChatBountyAssetProjector.Part> parts) {
         private static ConversationMessageResponse from(ChatMessageEntity message,
@@ -656,6 +733,7 @@ public class ChatController {
                     message.getCreateTime(),
                     message.getUpdateTime(),
                     message.getTenantId(),
+                    message.getDataDomainId(),
                     message.getClientId(), parts);
         }
     }
@@ -683,9 +761,11 @@ public class ChatController {
     public Flux<ServerSentEvent<ProtocolMessage<Map<String, Object>>>> conversationEvents(@RequestParam(name = "id") String id,
             @RequestParam(name = "cursor", required = false) String cursor,
             @RequestHeader(name = "Last-Event-ID", required = false) String lastEventId,
-            Authentication authentication, jakarta.servlet.http.HttpServletRequest servletRequest) {
+            Authentication authentication,
+            jakarta.servlet.http.HttpServletRequest servletRequest) {
         String requestId = cn.jia.core.filter.RequestIdFilter.current(servletRequest);
-        ChatConversationEntity conversation = chatConversationService.get(id);
+        UserAdmissionScope admission = captureAdmissionScope();
+        ChatConversationEntity conversation = chatConversationService.get(admission, id);
         long generation = lifecycleGeneration(conversation);
         String ownerJiacn = requireIdentityPart(EsContextHolder.getContext().getJiacn());
         String ownerClientId = requireIdentityPart(EsContextHolder.getContext().getClientId());
@@ -705,7 +785,7 @@ public class ChatController {
         ChatConversationEventBroker.LiveSubscription liveSubscription =
                 chatConversationEventBroker.subscribeBuffered(id, generation,
                         () -> chatConversationService.isLiveGeneration(
-                                ownerJiacn, ownerClientId, id, generation));
+                                admission, id, generation));
         if (liveSubscription == null) return Flux.empty();
         try {
             ChatDeliberationService service = requireDeliberationService();
@@ -742,13 +822,14 @@ public class ChatController {
 
     /** Direct-call compatibility for legacy focused tests; not an HTTP mapping. */
     public Flux<String> conversationEvents(String id) {
-        ChatConversationEntity conversation = chatConversationService.get(id);
+        UserAdmissionScope admission = captureAdmissionScope();
+        ChatConversationEntity conversation = chatConversationService.get(admission, id);
         long generation = lifecycleGeneration(conversation);
         String ownerJiacn = requireIdentityPart(EsContextHolder.getContext().getJiacn());
         String ownerClientId = requireIdentityPart(EsContextHolder.getContext().getClientId());
         return ChatStreamPolicy.firstFrame(ChatStreamPolicy.bounded(chatConversationEventBroker.stream(
                         id, generation, () -> chatConversationService.isLiveGeneration(
-                                ownerJiacn, ownerClientId, id, generation),
+                                admission, id, generation),
                         "{\"type\":\"stream_ready\"}")
                 .map(event -> "data: " + event + "\n\n")));
     }
@@ -863,7 +944,7 @@ public class ChatController {
         // conversationType can be passed directly in the search entity
         // e.g. {"search": {"conversationType": "juyiting"}}
         PageInfo<ChatConversationEntity> pageInfo = chatConversationService.findPage(
-                page.getSearch(),
+                captureAdmissionScope(), page.getSearch(),
                 page.getPageNum(),
                 page.getPageSize(),
                 page.getOrderBy()
@@ -875,28 +956,33 @@ public class ChatController {
     @RequestMapping(value = "/conversation/update", method = RequestMethod.POST)
     public Object updateConversation(@RequestBody JsonRequest<ChatConversationEntity> protocolRequest) {
         ChatConversationEntity entity = protocolRequest == null ? null : protocolRequest.data();
-        chatConversationService.update(entity);
+        chatConversationService.update(captureAdmissionScope(), entity);
         return JsonResult.success();
     }
 
     @RequestMapping(value = "/library/search", method = RequestMethod.POST)
     public Object searchLibrary(@RequestBody JsonRequest<LibrarySearchRequest> protocolRequest) {
         LibrarySearchRequest request = protocolRequest == null ? null : protocolRequest.data();
+        UserAdmissionScope admission = captureAdmissionScope();
         if (request == null || StringUtil.isBlank(request.getKeyword())) {
             return JsonResult.success(List.of());
         }
-        String jiacn = Optional.ofNullable(EsContextHolder.getContext().getJiacn()).orElse("Anonymous");
+        String jiacn = admission.businessScope().ownerJiacn();
         int topK = Optional.ofNullable(request.getTopK()).filter(value -> value > 0).orElse(8);
         double threshold = Optional.ofNullable(request.getSimilarityThreshold()).orElse(0.2D);
         List<MemoryDocument> documents;
         try {
-            documents = taskThreadMemoryGuard.excludeProtected(
-                    memoryRepository.searchWithConversationBoost(
-                            jiacn,
-                            request.getKeyword(),
-                            request.getConversationId(),
-                            topK,
-                            threshold));
+            List<MemoryDocument> found;
+            if (conversationLibraryService != null) {
+                found = conversationLibraryService.search(
+                        admission, request.getKeyword(), request.getConversationId(),
+                        topK, threshold);
+            } else {
+                requireLegacyAuxiliaryScope(admission);
+                found = memoryRepository.searchWithConversationBoost(
+                        jiacn, request.getKeyword(), request.getConversationId(), topK, threshold);
+            }
+            documents = taskThreadMemoryGuard.excludeProtected(found);
         } catch (Exception e) {
             log.warn("Library search unavailable", e);
             return JsonResult.failure("LIBRARY_SEARCH_UNAVAILABLE", "案卷检索暂不可用，请稍后重试");
@@ -911,10 +997,11 @@ public class ChatController {
     @RequestMapping(value = "/library/documents", method = RequestMethod.POST)
     public Object saveLibraryDocument(@RequestBody JsonRequest<LibraryDocumentRequest> protocolRequest) {
         LibraryDocumentRequest request = protocolRequest == null ? null : protocolRequest.data();
+        UserAdmissionScope admission = captureAdmissionScope();
         if (request == null || StringUtil.isBlank(request.getContent())) {
             return JsonResult.failure("LIBRARY_DOCUMENT_EMPTY", "library document content is required");
         }
-        String jiacn = Optional.ofNullable(EsContextHolder.getContext().getJiacn()).orElse("Anonymous");
+        String jiacn = admission.businessScope().ownerJiacn();
         String title = Optional.ofNullable(request.getTitle()).orElse("").trim();
         String content = StringUtil.isBlank(title)
                 ? request.getContent()
@@ -932,7 +1019,12 @@ public class ChatController {
         document.setTimestamp(System.currentTimeMillis());
 
         try {
-            memoryRepository.save(document);
+            if (conversationLibraryService != null) {
+                conversationLibraryService.save(admission, document);
+            } else {
+                requireLegacyAuxiliaryScope(admission);
+                memoryRepository.save(document);
+            }
         } catch (Exception e) {
             log.warn("Library document save failed. jiacn={}, title={}", jiacn, title, e);
             return JsonResult.failure("LIBRARY_DOCUMENT_SAVE_FAILED", "library document save failed");

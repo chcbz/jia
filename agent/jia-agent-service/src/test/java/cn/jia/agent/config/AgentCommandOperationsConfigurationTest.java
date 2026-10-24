@@ -1,10 +1,17 @@
 package cn.jia.agent.config;
 
 import cn.jia.agent.dao.AgentCommandOperationsDao;
+import cn.jia.agent.dao.AgentCommandRecoveryDao;
 import cn.jia.agent.mapper.AgentCommandOperationsMapper;
+import cn.jia.agent.service.AgentCommandReconnectSignal;
 import cn.jia.agent.service.AgentCommandOperationsService;
 import cn.jia.agent.service.AgentCommandReissueService;
-import cn.jia.agent.service.AgentConfirmedRabbitPublisher;
+import cn.jia.agent.service.AgentRawCommandDispatcher;
+import cn.jia.agent.service.impl.AgentCommandDualLaneReissueService;
+import cn.jia.core.tenant.DataDomainId;
+import cn.jia.core.tenant.TenantId;
+import cn.jia.core.tenant.TenantModuleAdmissionGuard;
+import cn.jia.core.tenant.WorkerScope;
 import org.junit.jupiter.api.Test;
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
@@ -57,29 +64,55 @@ class AgentCommandOperationsConfigurationTest {
     }
 
     @Test
-    void brokerRedriveRequiresScopedDispatchPublisherAndDedicatedConnectionFactory() {
+    void brokerRedriveCreatesDedicatedBoundedNonRecoveringInfrastructure() {
         String[] flags = {
                 "agent.rabbit-operations.read-enabled=true",
                 "agent.rabbit-operations.redrive-enabled=true"};
         runner(dispatchGate()).withPropertyValues(flags)
-                .run(context -> assertFailure(context.getStartupFailure(),
-                        "broker redrive requires dedicated Rabbit publish infrastructure"));
+                .run(context -> assertNotNull(context.getStartupFailure()));
 
-        runner(dispatchGate()).withBean("agentConfirmedRabbitPublisher",
-                        AgentConfirmedRabbitPublisher.class,
-                        () -> mock(AgentConfirmedRabbitPublisher.class))
-                .withPropertyValues(flags)
-                .run(context -> assertFailure(context.getStartupFailure(),
-                        "broker redrive requires dedicated Rabbit publish infrastructure"));
+        redriveRunner(dispatchGate()).withPropertyValues(flags).run(context -> {
+            assertNull(context.getStartupFailure());
+            assertTrue(context.containsBean("agentCommandRedriveOneShotRawFactory"));
+            assertTrue(context.containsBean("agentCommandRedriveRawProvider"));
+            assertFalse(context.containsBean("agentRedriveRabbitConnectionFactory"));
+            assertFalse(context.containsBean("agentRedriveRabbitTemplate"));
+            assertFalse(context.containsBean("agentRedriveConfirmedRabbitPublisher"));
+            assertTrue(context.containsBean("agentCommandRedriveRabbitSettings"));
+            com.rabbitmq.client.ConnectionFactory raw = context.getBean(
+                    "agentCommandRedriveOneShotRawFactory",
+                    com.rabbitmq.client.ConnectionFactory.class);
+            com.rabbitmq.client.ConnectionFactory canonical = context.getBean(
+                    "agentRabbitCanonicalRawConnectionFactory",
+                    com.rabbitmq.client.ConnectionFactory.class);
+            assertEquals(2_000, raw.getConnectionTimeout());
+            assertEquals(2_000, raw.getHandshakeTimeout());
+            assertEquals(2_000, raw.getChannelRpcTimeout());
+            assertEquals(1_000, raw.getShutdownTimeout());
+            assertFalse(raw.isAutomaticRecoveryEnabled());
+            assertFalse(raw.isTopologyRecoveryEnabled());
+            AgentRabbitRawConnectionFactoryBuilder builder = context.getBean(
+                    "agentRabbitRawConnectionFactoryBuilder",
+                    AgentRabbitRawConnectionFactoryBuilder.class);
+            assertEquals(builder.configurationFingerprint(canonical),
+                    builder.configurationFingerprint(raw));
+            assertEquals(1, context.getBeansOfType(
+                    AgentCommandOperationsService.class).size());
+        });
 
-        runner(outboxGate()).withBean("agentConfirmedRabbitPublisher",
-                        AgentConfirmedRabbitPublisher.class,
-                        () -> mock(AgentConfirmedRabbitPublisher.class))
-                .withBean("agentRabbitConnectionFactory", ConnectionFactory.class,
-                        () -> mock(ConnectionFactory.class))
-                .withPropertyValues(flags)
+        redriveRunner(outboxGate()).withPropertyValues(flags)
                 .run(context -> assertFailure(context.getStartupFailure(),
                         "write operations require scoped Rabbit dispatch activation"));
+    }
+
+    @Test
+    void redriveConfirmTimeoutAboveDedicatedBudgetFailsStartup() {
+        redriveRunner(dispatchGate()).withPropertyValues(
+                        "agent.rabbit-operations.read-enabled=true",
+                        "agent.rabbit-operations.redrive-enabled=true",
+                        "agent.rabbit-operations.confirm-timeout-millis=10001")
+                .run(context -> assertFailure(context.getStartupFailure(),
+                        "Invalid D09 redrive Rabbit timeout budget"));
     }
 
     @Test
@@ -98,6 +131,57 @@ class AgentCommandOperationsConfigurationTest {
                     assertNull(context.getStartupFailure());
                     assertEquals(1, context.getBeansOfType(
                             AgentCommandOperationsService.class).size());
+                });
+    }
+
+    @Test
+    void productionRecoveryAndOperationsShareOneDualLaneService() {
+        combinedRunner(dispatchGate(), true, true).run(context -> {
+            assertNull(context.getStartupFailure());
+            AgentCommandDualLaneReissueService dual = context.getBean(
+                    AgentCommandDualLaneReissueService.class);
+            assertNotNull(dual.legacyLane());
+            assertNotNull(dual.scopedLane());
+            assertEquals(1, context.getBeansOfType(AgentCommandReissueService.class).size());
+            assertTrue(context.getBean(AgentCommandReissueService.class) == dual);
+            assertEquals(1, context.getBeansOfType(
+                    AgentCommandOperationsService.class).size());
+            assertEquals(1, context.getBeansOfType(
+                    AgentCommandReconnectSignal.class).size());
+        });
+    }
+
+    @Test
+    void productionRecoveryIsLegacyOnlyWithoutAuthorityAndRejectsHalfAuthority() {
+        combinedRunner(dispatchGate(), false, false).run(context -> {
+            assertNull(context.getStartupFailure());
+            AgentCommandDualLaneReissueService dual = context.getBean(
+                    AgentCommandDualLaneReissueService.class);
+            assertNotNull(dual.legacyLane());
+            assertNull(dual.scopedLane());
+        });
+
+        combinedRunner(dispatchGate(), true, false).run(context ->
+                assertFailure(context.getStartupFailure(),
+                        "recovery worker authority is incomplete"));
+        combinedRunner(dispatchGate(), false, true).run(context ->
+                assertFailure(context.getStartupFailure(),
+                        "recovery worker authority is incomplete"));
+    }
+
+    @Test
+    void protocolV2DispatchDoesNotStartLegacyRecoveryCoordinator() {
+        recoveryRunner()
+                .withPropertyValues(
+                        "agent.rabbit-dispatch.enabled=true",
+                        "agent.rabbit-consume.enabled=false",
+                        "agent.rabbit-consume-v2.enabled=true")
+                .run(context -> {
+                    assertNull(context.getStartupFailure());
+                    assertTrue(context.getBeansOfType(
+                            AgentCommandReissueService.class).isEmpty());
+                    assertTrue(context.getBeansOfType(
+                            AgentCommandReconnectSignal.class).isEmpty());
                 });
     }
 
@@ -130,6 +214,83 @@ class AgentCommandOperationsConfigurationTest {
                         () -> mock(PlatformTransactionManager.class))
                 .withBean(AgentRabbitSafetyGate.class, () -> gate)
                 .withUserConfiguration(AgentCommandOperationsConfiguration.class);
+    }
+
+    private ApplicationContextRunner redriveRunner(AgentRabbitSafetyGate gate) {
+        AgentRabbitTopologyManifest manifest = AgentRabbitTopologyManifest.canonical();
+        return runner(gate)
+                .withBean("agentRabbitRawConnectionFactoryBuilder",
+                        AgentRabbitRawConnectionFactoryBuilder.class,
+                        AgentRabbitRawConnectionFactoryBuilder::new)
+                .withBean("agentRabbitCanonicalRawConnectionFactory",
+                        com.rabbitmq.client.ConnectionFactory.class, () ->
+                                new AgentRabbitRawConnectionFactoryBuilder().canonical(
+                                        new AgentRabbitBrokerSettings(
+                                                new AgentRabbitSafetyProperties.RabbitBroker(
+                                                        "isolated.invalid", 35672, "user",
+                                                        "secret", "/isolated"))))
+                .withBean(AgentRabbitBrokerSettings.class, () ->
+                        new AgentRabbitBrokerSettings(
+                                new AgentRabbitSafetyProperties.RabbitBroker(
+                                        "isolated.invalid", 35672, "user", "secret", "/isolated")))
+                .withBean("agentRabbitTopologyManifest", AgentRabbitTopologyManifest.class,
+                        () -> manifest)
+                .withBean("agentRabbitTopologyReadiness", AgentRabbitTopologyReadiness.class,
+                        () -> new AgentRabbitTopologyReadiness(manifest))
+                .withBean("agentRabbitV2TopologyReadiness",
+                        AgentRabbitV2TopologyReadiness.class,
+                        AgentRabbitV2TopologyReadiness::new)
+                .withBean("agentOutboxWorkerScope", WorkerScope.class, this::workerScope)
+                .withBean("agentOutboxTenantModuleAdmissionGuard",
+                        TenantModuleAdmissionGuard.class,
+                        () -> mock(TenantModuleAdmissionGuard.class));
+    }
+
+    private ApplicationContextRunner combinedRunner(
+            AgentRabbitSafetyGate gate, boolean workerScope, boolean admissionGuard) {
+        ApplicationContextRunner combined = runner(gate)
+                .withUserConfiguration(AgentCommandRecoveryConfiguration.class)
+                .withBean(AgentCommandRecoveryDao.class,
+                        () -> mock(AgentCommandRecoveryDao.class))
+                .withBean(AgentRawCommandDispatcher.class,
+                        () -> mock(AgentRawCommandDispatcher.class))
+                .withBean("agentRabbitTopologyManifest", AgentRabbitTopologyManifest.class,
+                        AgentRabbitTopologyManifest::canonical)
+                .withPropertyValues(
+                        "agent.rabbit-dispatch.enabled=true",
+                        "agent.rabbit-consume.enabled=true",
+                        "agent.rabbit-consume-v2.enabled=false",
+                        "agent.rabbit-operations.read-enabled=true",
+                        "agent.rabbit-operations.reissue-enabled=true");
+        if (workerScope) {
+            combined = combined.withBean("agentOutboxWorkerScope", WorkerScope.class,
+                    this::workerScope);
+        }
+        if (admissionGuard) {
+            combined = combined.withBean("agentOutboxTenantModuleAdmissionGuard",
+                    TenantModuleAdmissionGuard.class,
+                    () -> mock(TenantModuleAdmissionGuard.class));
+        }
+        return combined;
+    }
+
+    private ApplicationContextRunner recoveryRunner() {
+        return new ApplicationContextRunner()
+                .withUserConfiguration(AgentCommandRecoveryConfiguration.class)
+                .withBean(AgentCommandRecoveryDao.class,
+                        () -> mock(AgentCommandRecoveryDao.class))
+                .withBean(AgentRawCommandDispatcher.class,
+                        () -> mock(AgentRawCommandDispatcher.class))
+                .withBean(AgentRabbitSafetyGate.class, this::dispatchGate)
+                .withBean(PlatformTransactionManager.class,
+                        () -> mock(PlatformTransactionManager.class))
+                .withBean("agentRabbitTopologyManifest", AgentRabbitTopologyManifest.class,
+                        AgentRabbitTopologyManifest::canonical);
+    }
+
+    private WorkerScope workerScope() {
+        return new WorkerScope(TenantId.of("1"), DataDomainId.of("cyf"),
+                "pool-a", "deployment-a", 7, 11, 13, "agent-command", 17);
     }
 
     private AgentRabbitSafetyGate offGate() {

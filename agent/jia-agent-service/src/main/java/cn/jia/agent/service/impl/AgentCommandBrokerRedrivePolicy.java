@@ -2,6 +2,7 @@ package cn.jia.agent.service.impl;
 
 import cn.jia.agent.common.AgentCommandAmqpContract;
 import cn.jia.agent.config.AgentRabbitTopologyManifest;
+import cn.jia.agent.config.AgentRabbitV2TopologyManifest;
 import cn.jia.agent.entity.AgentCommandDeliveryEntity;
 import cn.jia.agent.entity.AgentCommandDraft;
 import cn.jia.agent.entity.AgentCommandRedriveOperationEntity;
@@ -10,6 +11,7 @@ import cn.jia.agent.entity.AgentCommandRedriveSettlementState;
 import cn.jia.agent.entity.AgentConfirmedPublishRequest;
 import cn.jia.agent.entity.AgentConsumerInboxEntity;
 import cn.jia.agent.entity.AgentOutboxEventEntity;
+import cn.jia.core.tenant.ProducerScope;
 
 import java.security.MessageDigest;
 import java.util.Arrays;
@@ -42,8 +44,7 @@ final class AgentCommandBrokerRedrivePolicy {
                 || !Objects.equals(active.getId(), current.getId())) {
             return Evaluation.illegal();
         }
-        if (!exactIdentity(bundle, delivery, active, route, now)
-                || !published(delivery, active)
+        if (!published(delivery, active)
                 || bundle.inbox() != null
                 || !storedHash(delivery.getCommandPayload(), delivery.getCommandPayloadHash())
                 || !storedHash(active.getWirePayload(), active.getWirePayloadHash())) {
@@ -56,6 +57,36 @@ final class AgentCommandBrokerRedrivePolicy {
         } catch (IllegalArgumentException invalid) {
             return Evaluation.illegal();
         }
+        ProducerScope producerScope;
+        byte[] canonicalWire;
+        try {
+            producerScope = AgentCommandProtocolSupport.producerScope(delivery, active);
+            canonicalWire = AgentCommandProtocolSupport.wireBytes(
+                    draft, delivery.getActiveMessageId(), delivery.getActiveAttempt(),
+                    delivery, active);
+        } catch (IllegalArgumentException invalid) {
+            return Evaluation.illegal();
+        }
+        String expectedDestination = route.destination();
+        String expectedRoutingKey = route.routingKey();
+        String expectedTopologySha256 = topologySha256;
+        if (producerScope != null) {
+            try {
+                AgentRabbitV2TopologyManifest scoped =
+                        AgentRabbitV2TopologyManifest.forScope(producerScope);
+                AgentRabbitV2TopologyManifest.PublishRoute scopedRoute =
+                        scoped.defaultCommandPublishRoute();
+                expectedDestination = scopedRoute.destination();
+                expectedRoutingKey = scopedRoute.routingKey();
+                expectedTopologySha256 = scoped.sha256();
+            } catch (IllegalArgumentException invalid) {
+                return Evaluation.illegal();
+            }
+        }
+        if (!exactIdentity(bundle, delivery, active,
+                expectedDestination, expectedRoutingKey, now)) {
+            return Evaluation.illegal();
+        }
         if (!Objects.equals(delivery.getCommandId(), draft.commandId())
                 || !Objects.equals(delivery.getTenantId(), draft.tenantId())
                 || !Objects.equals(delivery.getClientId(), draft.clientId())
@@ -64,20 +95,26 @@ final class AgentCommandBrokerRedrivePolicy {
                 || !Objects.equals(delivery.getTargetAgentId(), draft.targetAgentId())
                 || !Objects.equals(delivery.getCommandType(), draft.commandType())
                 || !Objects.equals(delivery.getExpiresAt(), draft.expiresAt())
-                || !Arrays.equals(active.getWirePayload(), AgentCommandCanonicalCodec.wireBytes(
-                        draft, delivery.getActiveMessageId(), delivery.getActiveAttempt()))) {
+                || !Arrays.equals(active.getWirePayload(), canonicalWire)) {
             return Evaluation.illegal();
         }
-        try {
-            AgentCommandAmqpContract.validate(new AgentConfirmedPublishRequest(
-                    route.destination(), route.routingKey(), active.getWirePayload(),
-                    active.getWirePayloadHash(), active.getMessageId(), active.getEventId(),
-                    delivery.getId(), delivery.getCommandId(), delivery.getTenantId(),
-                    delivery.getClientId(), delivery.getTaskId(), delivery.getTargetAgentId(),
-                    delivery.getCommandType(), delivery.getActiveAttempt(), delivery.getExpiresAt(),
-                    topologySha256, AgentCommandAmqpContract.INITIAL_SOURCE_SETTLEMENT_RETRY));
-        } catch (IllegalArgumentException invalid) {
-            return Evaluation.illegal();
+        if (producerScope != null) {
+            try {
+                AgentCommandAmqpContract.validate(new AgentConfirmedPublishRequest(
+                        expectedDestination, expectedRoutingKey, active.getWirePayload(),
+                        active.getWirePayloadHash(), active.getMessageId(), active.getEventId(),
+                        delivery.getId(), delivery.getCommandId(), delivery.getTenantId(),
+                        producerScope.dataDomainId().value(), producerScope.executionPoolId(),
+                        producerScope.admissionEpoch(), producerScope.deploymentId(),
+                        producerScope.moduleId(), producerScope.migrationEpoch(),
+                        AgentCommandAmqpContract.WIRE_VERSION, delivery.getClientId(),
+                        delivery.getTaskId(), delivery.getTargetAgentId(),
+                        delivery.getCommandType(), delivery.getActiveAttempt(), delivery.getExpiresAt(),
+                        expectedTopologySha256,
+                        AgentCommandAmqpContract.INITIAL_SOURCE_SETTLEMENT_RETRY));
+            } catch (IllegalArgumentException invalid) {
+                return Evaluation.illegal();
+            }
         }
         if (!AgentCommandAutomaticReplayProvenance.validImmediateParent(
                 delivery, active, bundle.previousAttemptOutboxes())) {
@@ -91,7 +128,7 @@ final class AgentCommandBrokerRedrivePolicy {
                 delivery.getTenantId(), delivery.getClientId(), delivery.getId(),
                 delivery.getCommandId(), delivery.getTaskId(), delivery.getTargetAgentId(),
                 delivery.getCommandType(), active.getEventId(), active.getMessageId(),
-                active.getWirePayload(), active.getWirePayloadHash(),
+                active.getWirePayload(), active.getWirePayloadHash(), producerScope,
                 delivery.getActiveAttempt(), active.getAttemptCount(), delivery.getExpiresAt(),
                 active.getPublishedAt(), updatedAt);
         if (!legalBlockingOperations(bundle.blockingRedriveOperations(), legal, ownOperationId)) {
@@ -104,7 +141,8 @@ final class AgentCommandBrokerRedrivePolicy {
             SourceBundle bundle,
             AgentCommandDeliveryEntity delivery,
             AgentOutboxEventEntity outbox,
-            AgentRabbitTopologyManifest.PublishRoute route,
+            String expectedDestination,
+            String expectedRoutingKey,
             long now) {
         return delivery.getId() != null && delivery.getId() > 0
                 && delivery.getId() == bundle.expectedDeliveryId()
@@ -127,8 +165,8 @@ final class AgentCommandBrokerRedrivePolicy {
                 && Objects.equals(delivery.getActiveMessageId(), outbox.getMessageId())
                 && Objects.equals(delivery.getTaskId(), outbox.getAggregateId())
                 && "task".equals(outbox.getAggregateType())
-                && Objects.equals(route.destination(), outbox.getDestination())
-                && Objects.equals(route.routingKey(), outbox.getRoutingKey())
+                && Objects.equals(expectedDestination, outbox.getDestination())
+                && Objects.equals(expectedRoutingKey, outbox.getRoutingKey())
                 && delivery.getActiveAttempt() != null && delivery.getActiveAttempt() > 0
                 && delivery.getExpiresAt() != null && delivery.getExpiresAt() > now
                 && Objects.equals(delivery.getActiveAttempt(), outbox.getActiveAttempt())
@@ -252,6 +290,7 @@ final class AgentCommandBrokerRedrivePolicy {
             String messageId,
             byte[] wirePayload,
             byte[] wireHash,
+            ProducerScope producerScope,
             int activeAttempt,
             int publishAttemptCount,
             long expiresAt,

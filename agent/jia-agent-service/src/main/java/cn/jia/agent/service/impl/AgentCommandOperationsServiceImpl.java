@@ -5,6 +5,7 @@ import cn.jia.agent.config.AgentCommandOperationsProperties;
 import cn.jia.agent.config.AgentRabbitActivationState;
 import cn.jia.agent.config.AgentRabbitSafetyGate;
 import cn.jia.agent.config.AgentRabbitTopologyManifest;
+import cn.jia.agent.config.AgentRabbitV2TopologyManifest;
 import cn.jia.agent.dao.AgentCommandOperationsDao;
 import cn.jia.agent.entity.AgentCommandDeliveryEntity;
 import cn.jia.agent.entity.AgentCommandDraft;
@@ -31,6 +32,7 @@ import cn.jia.agent.entity.AgentRabbitPublishResult;
 import cn.jia.agent.service.AgentCommandDlqRedriver;
 import cn.jia.agent.service.AgentCommandOperationsService;
 import cn.jia.agent.service.AgentCommandReissueService;
+import cn.jia.core.tenant.ProducerScope;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -52,8 +54,8 @@ import java.util.UUID;
 import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 
-/** D09 privileged operations plane. Rabbit publication never occurs in a database transaction. */
-public final class AgentCommandOperationsServiceImpl implements AgentCommandOperationsService {
+/** D09 privileged operations plane. Ordinary publication is transaction-free; DLQ redrive uses a short fenced publish transaction. */
+public final class AgentCommandOperationsServiceImpl implements AgentCommandOperationsService, AutoCloseable {
     private static final long MAX_CLOCK = Long.MAX_VALUE - 86_400_000L;
     private static final List<String> DELIVERY_STATUSES = List.of(
             "PENDING", "PUBLISHED", "CONSUMED", "SENT", "RECEIVED", "STARTED",
@@ -343,15 +345,8 @@ public final class AgentCommandOperationsServiceImpl implements AgentCommandOper
         assertNoDatabaseTransaction();
         AgentRabbitPublishResult publishResult;
         try {
-            AgentRabbitTopologyManifest.PublishRoute route = manifest.defaultCommandPublishRoute();
             publishResult = redriver == null ? null : redriver.redrive(
-                    new AgentConfirmedPublishRequest(
-                            route.destination(), route.routingKey(), source.wirePayload(),
-                            source.wireHash(), source.messageId(), source.eventId(),
-                            source.deliveryId(), source.commandId(), source.tenantId(),
-                            source.clientId(), source.taskId(), source.targetAgentId(),
-                            source.commandType(), source.activeAttempt(), source.expiresAt(),
-                            manifest.sha256(), AgentCommandAmqpContract.INITIAL_SOURCE_SETTLEMENT_RETRY),
+                    confirmedPublishRequest(source),
                     settings.confirmTimeoutMillis(), settings.dlqScanLimit());
         } catch (RuntimeException ignored) {
             publishResult = null;
@@ -366,6 +361,35 @@ public final class AgentCommandOperationsServiceImpl implements AgentCommandOper
         if (!succeeded) throw failure(AgentCommandOperationsException.Reason.PUBLISH_FAILED);
         return result(operationId, AgentCommandOperationType.BROKER_REDRIVE,
                 source, null, "SUCCEEDED", null, completedAt);
+    }
+
+    private AgentConfirmedPublishRequest confirmedPublishRequest(Source source) {
+        ProducerScope producerScope = source.producerScope();
+        if (producerScope == null) {
+            AgentRabbitTopologyManifest.PublishRoute route =
+                    manifest.defaultCommandPublishRoute();
+            return new AgentConfirmedPublishRequest(
+                    route.destination(), route.routingKey(), source.wirePayload(),
+                    source.wireHash(), source.messageId(), source.eventId(), source.deliveryId(),
+                    source.commandId(), source.tenantId(), source.clientId(), source.taskId(),
+                    source.targetAgentId(), source.commandType(), source.activeAttempt(),
+                    source.expiresAt(), manifest.sha256(),
+                    AgentCommandAmqpContract.INITIAL_SOURCE_SETTLEMENT_RETRY);
+        }
+        AgentRabbitV2TopologyManifest scoped =
+                AgentRabbitV2TopologyManifest.forScope(producerScope);
+        AgentRabbitV2TopologyManifest.PublishRoute route =
+                scoped.defaultCommandPublishRoute();
+        return new AgentConfirmedPublishRequest(
+                route.destination(), route.routingKey(), source.wirePayload(), source.wireHash(),
+                source.messageId(), source.eventId(), source.deliveryId(), source.commandId(),
+                source.tenantId(), producerScope.dataDomainId().value(),
+                producerScope.executionPoolId(), producerScope.admissionEpoch(),
+                producerScope.deploymentId(), producerScope.moduleId(),
+                producerScope.migrationEpoch(), AgentCommandAmqpContract.WIRE_VERSION,
+                source.clientId(), source.taskId(), source.targetAgentId(), source.commandType(),
+                source.activeAttempt(), source.expiresAt(), scoped.sha256(),
+                AgentCommandAmqpContract.INITIAL_SOURCE_SETTLEMENT_RETRY);
     }
 
     @Override
@@ -502,7 +526,6 @@ public final class AgentCommandOperationsServiceImpl implements AgentCommandOper
             AgentConsumerInboxEntity inbox,
             AgentCommandOperationRequest request,
             long now) {
-        AgentRabbitTopologyManifest.PublishRoute route = manifest.defaultCommandPublishRoute();
         if (delivery.getId() == null || delivery.getId() != request.deliveryId()
                 || !sameScope(delivery, outbox)
                 || !Objects.equals(delivery.getId(), outbox.getDeliveryId())
@@ -510,8 +533,7 @@ public final class AgentCommandOperationsServiceImpl implements AgentCommandOper
                 || !delivery.getActiveMessageId().equals(outbox.getMessageId())
                 || !delivery.getTaskId().equals(outbox.getAggregateId())
                 || !"task".equals(outbox.getAggregateType())
-                || !route.destination().equals(outbox.getDestination())
-                || !route.routingKey().equals(outbox.getRoutingKey())
+
                 || delivery.getActiveAttempt() == null || delivery.getActiveAttempt() <= 0
                 || delivery.getExpiresAt() == null
                 || !Objects.equals(delivery.getActiveAttempt(), outbox.getActiveAttempt())
@@ -538,17 +560,46 @@ public final class AgentCommandOperationsServiceImpl implements AgentCommandOper
                 || !delivery.getTargetAgentId().equals(draft.targetAgentId())
                 || !delivery.getCommandType().equals(draft.commandType())
                 || !Objects.equals(delivery.getExpiresAt(), draft.expiresAt())
-                || !Arrays.equals(outbox.getWirePayload(), AgentCommandCanonicalCodec.wireBytes(
-                        draft, delivery.getActiveMessageId(), delivery.getActiveAttempt()))
+                || !canonicalWireMatches(delivery, outbox, draft)
                 || !("DEAD".equals(delivery.getStatus())
                     || "FAILED".equals(delivery.getStatus()))) {
+            throw failure(AgentCommandOperationsException.Reason.SOURCE_FORBIDDEN);
+        }
+        ProducerScope producerScope;
+        try {
+            producerScope = AgentCommandProtocolSupport.producerScope(delivery, outbox);
+        } catch (IllegalArgumentException invalid) {
+            throw failure(AgentCommandOperationsException.Reason.SOURCE_FORBIDDEN);
+        }
+        String expectedDestination = manifest.defaultCommandPublishRoute().destination();
+        String expectedRoutingKey = manifest.defaultCommandPublishRoute().routingKey();
+        if (producerScope != null) {
+            AgentRabbitV2TopologyManifest scoped =
+                    AgentRabbitV2TopologyManifest.forScope(producerScope);
+            expectedDestination = scoped.defaultCommandPublishRoute().destination();
+            expectedRoutingKey = scoped.defaultCommandPublishRoute().routingKey();
+        }
+        if (!expectedDestination.equals(outbox.getDestination())
+                || !expectedRoutingKey.equals(outbox.getRoutingKey())) {
             throw failure(AgentCommandOperationsException.Reason.SOURCE_FORBIDDEN);
         }
         return new Source(delivery.getTenantId(), delivery.getClientId(), delivery.getId(),
                 delivery.getCommandId(), delivery.getTaskId(), delivery.getTargetAgentId(),
                 delivery.getCommandType(), outbox.getEventId(), outbox.getMessageId(),
-                outbox.getWirePayload(), outbox.getWirePayloadHash(),
+                outbox.getWirePayload(), outbox.getWirePayloadHash(), producerScope,
                 delivery.getActiveAttempt(), delivery.getExpiresAt());
+    }
+
+    private boolean canonicalWireMatches(
+            AgentCommandDeliveryEntity delivery, AgentOutboxEventEntity outbox,
+            AgentCommandDraft draft) {
+        try {
+            return Arrays.equals(outbox.getWirePayload(), AgentCommandProtocolSupport.wireBytes(
+                    draft, delivery.getActiveMessageId(), delivery.getActiveAttempt(),
+                    delivery, outbox));
+        } catch (IllegalArgumentException invalid) {
+            return false;
+        }
     }
 
     private void auditRejected(
@@ -858,8 +909,8 @@ public final class AgentCommandOperationsServiceImpl implements AgentCommandOper
         return new Source(
                 legal.tenantId(), legal.clientId(), legal.deliveryId(), legal.commandId(),
                 legal.taskId(), legal.targetAgentId(), legal.commandType(), legal.eventId(),
-                legal.messageId(), legal.wirePayload(), legal.wireHash(), legal.activeAttempt(),
-                legal.expiresAt());
+                legal.messageId(), legal.wirePayload(), legal.wireHash(), legal.producerScope(),
+                legal.activeAttempt(), legal.expiresAt());
     }
 
     private void validateBroadCandidate(
@@ -1179,6 +1230,17 @@ public final class AgentCommandOperationsServiceImpl implements AgentCommandOper
         }
     }
 
+    @Override
+    public void close() {
+        if (redriver instanceof AutoCloseable closeable) {
+            try {
+                closeable.close();
+            } catch (Exception ignored) {
+                // Dedicated redrive resources are best-effort closed during context shutdown.
+            }
+        }
+    }
+
     private AgentCommandOperationsException failure(AgentCommandOperationsException.Reason reason) {
         return new AgentCommandOperationsException(reason);
     }
@@ -1199,6 +1261,7 @@ public final class AgentCommandOperationsServiceImpl implements AgentCommandOper
             String messageId,
             byte[] wirePayload,
             byte[] wireHash,
+            ProducerScope producerScope,
             int activeAttempt,
             long expiresAt) {
         private Source {

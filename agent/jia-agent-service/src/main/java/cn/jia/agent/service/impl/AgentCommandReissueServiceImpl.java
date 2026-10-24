@@ -3,6 +3,7 @@ package cn.jia.agent.service.impl;
 import cn.jia.agent.config.AgentRabbitActivationState;
 import cn.jia.agent.config.AgentRabbitSafetyGate;
 import cn.jia.agent.config.AgentRabbitTopologyManifest;
+import cn.jia.agent.config.AgentRabbitV2TopologyManifest;
 import cn.jia.agent.dao.AgentCommandRecoveryDao;
 import cn.jia.agent.entity.AgentCommandDeliveryEntity;
 import cn.jia.agent.entity.AgentCommandManualReissueResult;
@@ -17,6 +18,9 @@ import cn.jia.agent.entity.AgentOutboxEventEntity;
 import cn.jia.agent.entity.AgentWaitingCommandCandidate;
 import cn.jia.agent.service.AgentCommandReissueService;
 import cn.jia.agent.service.AgentRawCommandDispatcher;
+import cn.jia.core.tenant.ProducerScope;
+import cn.jia.core.tenant.TenantModuleAdmissionGuard;
+import cn.jia.core.tenant.WorkerScope;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -32,7 +36,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.function.Supplier;
 
-/** D06 sole WAITING_AGENT/SENT recovery path. It never performs Rabbit or WebSocket network I/O in a transaction. */
+/** D06 durable recovery path. It never performs Rabbit or WebSocket network I/O in a transaction. */
 public final class AgentCommandReissueServiceImpl implements AgentCommandReissueService {
     public static final String REASON_AGENT_RECONNECT = "AGENT_RECONNECT";
     public static final String REASON_SCHEDULER = "WAITING_AGENT_SCHEDULER";
@@ -49,11 +53,13 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
     private final AgentCommandRecoveryDao dao;
     private final AgentRabbitSafetyGate gate;
     private final AgentRawCommandDispatcher dispatcher;
-    private final AgentRabbitTopologyManifest.PublishRoute route;
+    private final Route route;
     private final TransactionTemplate transaction;
     private final Supplier<UUID> uuidSupplier;
     private final long sentAckTimeoutMillis;
     private final AgentCommandRecoveryPolicy recoveryPolicy;
+    private final TenantModuleAdmissionGuard admissionGuard;
+    private final WorkerScope workerScope;
 
     public AgentCommandReissueServiceImpl(
             AgentCommandRecoveryDao dao,
@@ -74,6 +80,33 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
             PlatformTransactionManager transactionManager) {
         this(dao, gate, dispatcher, manifest, sentAckTimeoutMillis,
                 transactionManager, UUID::randomUUID, new AgentCommandRecoveryPolicy());
+    }
+
+    public AgentCommandReissueServiceImpl(
+            AgentCommandRecoveryDao dao,
+            AgentRabbitSafetyGate gate,
+            AgentRawCommandDispatcher dispatcher,
+            AgentRabbitTopologyManifest manifest,
+            long sentAckTimeoutMillis,
+            TenantModuleAdmissionGuard admissionGuard,
+            PlatformTransactionManager transactionManager) {
+        this(dao, gate, dispatcher, manifest, sentAckTimeoutMillis,
+                transactionManager, UUID::randomUUID, new AgentCommandRecoveryPolicy(),
+                admissionGuard, null);
+    }
+
+    public AgentCommandReissueServiceImpl(
+            AgentCommandRecoveryDao dao,
+            AgentRabbitSafetyGate gate,
+            AgentRawCommandDispatcher dispatcher,
+            AgentRabbitTopologyManifest manifest,
+            long sentAckTimeoutMillis,
+            TenantModuleAdmissionGuard admissionGuard,
+            WorkerScope workerScope,
+            PlatformTransactionManager transactionManager) {
+        this(dao, gate, dispatcher, manifest, sentAckTimeoutMillis,
+                transactionManager, UUID::randomUUID, new AgentCommandRecoveryPolicy(),
+                admissionGuard, workerScope);
     }
 
     AgentCommandReissueServiceImpl(
@@ -108,12 +141,53 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
             PlatformTransactionManager transactionManager,
             Supplier<UUID> uuidSupplier,
             AgentCommandRecoveryPolicy recoveryPolicy) {
+        this(dao, gate, dispatcher, manifest, sentAckTimeoutMillis, transactionManager,
+                uuidSupplier, recoveryPolicy, null, null);
+    }
+
+    AgentCommandReissueServiceImpl(
+            AgentCommandRecoveryDao dao,
+            AgentRabbitSafetyGate gate,
+            AgentRawCommandDispatcher dispatcher,
+            AgentRabbitTopologyManifest manifest,
+            long sentAckTimeoutMillis,
+            PlatformTransactionManager transactionManager,
+            Supplier<UUID> uuidSupplier,
+            AgentCommandRecoveryPolicy recoveryPolicy,
+            TenantModuleAdmissionGuard admissionGuard) {
+        this(dao, gate, dispatcher, manifest, sentAckTimeoutMillis, transactionManager,
+                uuidSupplier, recoveryPolicy, admissionGuard, null);
+    }
+
+    AgentCommandReissueServiceImpl(
+            AgentCommandRecoveryDao dao,
+            AgentRabbitSafetyGate gate,
+            AgentRawCommandDispatcher dispatcher,
+            AgentRabbitTopologyManifest manifest,
+            long sentAckTimeoutMillis,
+            PlatformTransactionManager transactionManager,
+            Supplier<UUID> uuidSupplier,
+            AgentCommandRecoveryPolicy recoveryPolicy,
+            TenantModuleAdmissionGuard admissionGuard,
+            WorkerScope workerScope) {
         this.dao = Objects.requireNonNull(dao, "dao");
         this.gate = Objects.requireNonNull(gate, "gate");
         this.dispatcher = Objects.requireNonNull(dispatcher, "dispatcher");
-        this.route = Objects.requireNonNull(manifest, "manifest").defaultCommandPublishRoute();
+        Objects.requireNonNull(manifest, "manifest");
+        if (workerScope == null) {
+            AgentRabbitTopologyManifest.PublishRoute legacy =
+                    manifest.defaultCommandPublishRoute();
+            this.route = new Route(legacy.destination(), legacy.routingKey());
+        } else {
+            AgentRabbitV2TopologyManifest.PublishRoute scoped =
+                    AgentRabbitV2TopologyManifest.forScope(workerScope)
+                            .defaultCommandPublishRoute();
+            this.route = new Route(scoped.destination(), scoped.routingKey());
+        }
         this.uuidSupplier = Objects.requireNonNull(uuidSupplier, "uuidSupplier");
         this.recoveryPolicy = Objects.requireNonNull(recoveryPolicy, "recoveryPolicy");
+        this.admissionGuard = admissionGuard;
+        this.workerScope = workerScope;
         if (sentAckTimeoutMillis < 1_000L || sentAckTimeoutMillis > 3_600_000L) {
             throw new IllegalArgumentException("sentAckTimeoutMillis is out of range");
         }
@@ -142,9 +216,18 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
         if (!allows(request.tenantId(), request.clientId())) {
             throw conflict("MANUAL_REISSUE_SCOPE_DISABLED");
         }
+        AgentCommandDeliveryEntity hint = dao.findDeliveryProtocolHint(
+                request.tenantId(), request.clientId(), request.deliveryId());
+        if (hint == null) throw conflict("MANUAL_REISSUE_NOT_FOUND");
+        return withProducerAdmission(hint, "MANUAL_REISSUE_ADMISSION_DENIED",
+                () -> manualReissueAdmitted(request, now, hint));
+    }
+
+    private AgentCommandManualReissueResult manualReissueAdmitted(
+            AgentCommandOperationRequest request, long now, AgentCommandDeliveryEntity hint) {
         AgentCommandDeliveryEntity delivery = dao.lockDelivery(
                 request.tenantId(), request.clientId(), request.deliveryId());
-        if (delivery == null
+        if (delivery == null || !sameProtocolHint(hint, delivery)
                 || !request.taskId().equals(delivery.getTaskId())
                 || !request.targetAgentId().equals(delivery.getTargetAgentId())
                 || !request.sourceMessageId().equals(delivery.getActiveMessageId())) {
@@ -160,10 +243,16 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
         }
         AgentOutboxEventEntity sourceOutbox = activeRows.getFirst();
         List<AgentOutboxEventEntity> previousAttempts = lockPreviousAttempts(delivery);
+        ProducerScope producerScope = requireProtocolScope(delivery, sourceOutbox,
+                "MANUAL_REISSUE_SOURCE_PROTOCOL_INVALID");
+        validatePreviousProtocol(delivery, previousAttempts, producerScope,
+                "MANUAL_REISSUE_PREVIOUS_PROTOCOL_INVALID");
+        String inboxConsumer = inboxConsumer(producerScope);
         AgentConsumerInboxEntity sourceInbox = dao.lockInbox(
                 delivery.getTenantId(), delivery.getClientId(),
-                AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1, delivery.getActiveMessageId());
-        validateManualSource(delivery, sourceOutbox, sourceInbox, previousAttempts);
+                inboxConsumer, delivery.getActiveMessageId());
+        validateManualSource(
+                delivery, sourceOutbox, sourceInbox, previousAttempts, inboxConsumer);
 
         AgentCommandDraft draft;
         try {
@@ -179,8 +268,9 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
                 recoveryScope(delivery), delivery.getActiveAttempt(),
                 requiredTransitionTime(delivery), delivery.getExpiresAt(), now),
                 "MANUAL_REISSUE_POLICY_");
-        byte[] sourceWire = AgentCommandCanonicalCodec.wireBytes(
-                draft, delivery.getActiveMessageId(), delivery.getActiveAttempt());
+        byte[] sourceWire = AgentCommandProtocolSupport.wireBytes(
+                draft, delivery.getActiveMessageId(), delivery.getActiveAttempt(),
+                delivery, sourceOutbox);
         if (!Arrays.equals(sourceWire, sourceOutbox.getWirePayload())
                 || !storedHash(sourceOutbox.getWirePayload(), sourceOutbox.getWirePayloadHash())) {
             throw conflict("SOURCE_WIRE_CANONICAL_DRIFT");
@@ -201,7 +291,10 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
                 || newEventId.equals(delivery.getCommandId())) {
             throw conflict("REISSUE_ID_COLLISION");
         }
-        byte[] newWire = AgentCommandCanonicalCodec.wireBytes(draft, newMessageId, nextAttempt);
+        byte[] newWire = producerScope == null
+                ? AgentCommandCanonicalCodec.wireBytes(draft, newMessageId, nextAttempt)
+                : AgentCommandCanonicalCodec.wireBytesV2(
+                    draft, newMessageId, delivery.getId(), nextAttempt, producerScope);
         byte[] newWireHash = AgentCommandCanonicalCodec.sha256(newWire);
         if (!allows(delivery.getTenantId(), delivery.getClientId())) {
             throw conflict("MANUAL_REISSUE_SCOPE_DISABLED");
@@ -238,6 +331,7 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
         outbox.setClientId(delivery.getClientId());
         outbox.setCreateTime(now);
         outbox.setUpdateTime(now);
+        applyReissueProtocol(outbox, delivery, producerScope);
         requireOne(dao.insertOutbox(outbox), "manual reissue outbox insert");
         if (outbox.getId() == null || outbox.getId() <= 0) {
             throw new IllegalStateException("manual reissue outbox insert did not return a generated id");
@@ -282,7 +376,8 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
             AgentCommandDeliveryEntity delivery,
             AgentOutboxEventEntity outbox,
             AgentConsumerInboxEntity inbox,
-            List<AgentOutboxEventEntity> previousAttempts) {
+            List<AgentOutboxEventEntity> previousAttempts,
+            String expectedConsumer) {
         if (outbox == null) {
             throw conflict("MANUAL_REISSUE_SOURCE_PROVENANCE_INVALID");
         }
@@ -332,7 +427,7 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
             throw conflict("MANUAL_REISSUE_SOURCE_PROVENANCE_INVALID");
         }
         if (inbox != null && (!sameScope(delivery, inbox)
-                || !AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1.equals(inbox.getConsumerName())
+                || !expectedConsumer.equals(inbox.getConsumerName())
                 || !delivery.getActiveMessageId().equals(inbox.getMessageId())
                 || !outbox.getEventId().equals(inbox.getEventId())
                 || !delivery.getCommandId().equals(inbox.getCommandId())
@@ -353,9 +448,23 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
                         scope.tenantId(), scope.clientId(), scope.targetAgentId())) {
             return new AgentCommandReissueScanResult(0, 0, 0);
         }
-        List<AgentWaitingCommandCandidate> candidates = dao.findReconnectCandidates(
-                scope.tenantId(), scope.clientId(), scope.targetAgentId(), now, 0, limit);
-        return process(candidates, scope.requestedBy(), scope.reason(), false, now, scope);
+        List<AgentWaitingCommandCandidate> candidates;
+        boolean legacyDiscovery = workerScope == null;
+        if (legacyDiscovery) {
+            if (!"0".equals(scope.tenantId())) {
+                return new AgentCommandReissueScanResult(0, 0, 0);
+            }
+            candidates = dao.findLegacyReconnectCandidates(
+                    scope.tenantId(), scope.clientId(), scope.targetAgentId(), now, 0, limit);
+        } else {
+            if (!workerScope.tenantId().value().equals(scope.tenantId())) {
+                return new AgentCommandReissueScanResult(0, 0, 0);
+            }
+            candidates = dao.findV2ReconnectCandidates(
+                    workerScope, scope.clientId(), scope.targetAgentId(), now, 0, limit);
+        }
+        return process(candidates, scope.requestedBy(), scope.reason(), false, now, scope,
+                workerScope, legacyDiscovery);
     }
 
     @Override
@@ -365,12 +474,17 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
         if (afterDeliveryId < 0) throw new IllegalArgumentException("afterDeliveryId must be non-negative");
         if (!isDispatchState()) return new AgentCommandReissueScanResult(0, 0, afterDeliveryId);
         long sentBefore = now > sentAckTimeoutMillis ? now - sentAckTimeoutMillis : 0L;
-        List<AgentWaitingCommandCandidate> candidates = dao.findDueCandidates(
-                now, sentBefore, afterDeliveryId, limit);
+        boolean legacyDiscovery = workerScope == null;
+        List<AgentWaitingCommandCandidate> candidates = legacyDiscovery
+                ? dao.findLegacyDueCandidates(now, sentBefore, afterDeliveryId, limit)
+                : dao.findV2DueCandidates(workerScope, now, sentBefore, afterDeliveryId, limit);
         if (candidates.isEmpty() && afterDeliveryId > 0) {
-            candidates = dao.findDueCandidates(now, sentBefore, 0, limit);
+            candidates = legacyDiscovery
+                    ? dao.findLegacyDueCandidates(now, sentBefore, 0, limit)
+                    : dao.findV2DueCandidates(workerScope, now, sentBefore, 0, limit);
         }
-        return process(candidates, REQUESTER_SCHEDULER, REASON_SCHEDULER, true, now, null);
+        return process(candidates, REQUESTER_SCHEDULER, REASON_SCHEDULER, true, now, null,
+                workerScope, legacyDiscovery);
     }
 
     private AgentCommandReissueScanResult process(
@@ -379,21 +493,23 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
             String reason,
             boolean requireDue,
             long now,
-            AgentCommandReconnectScope reconnectScope) {
+            AgentCommandReconnectScope reconnectScope,
+            WorkerScope discoveryScope,
+            boolean legacyDiscovery) {
         List<AgentCommandRecoveryDeferral> deferrals = new ArrayList<>();
         int examined = 0;
         int reissued = 0;
         long cursor = 0;
         for (AgentWaitingCommandCandidate candidate : safeCandidates(candidates)) {
             if (examined == 100) break; // Same bound as validated discovery limits.
+            if (!validCandidate(candidate)
+                    || !matchesDiscoveryLane(
+                            candidate, reconnectScope, discoveryScope, legacyDiscovery)) {
+                continue;
+            }
             examined++;
-            if (!validCandidate(candidate)) continue;
             cursor = Math.max(cursor, candidate.deliveryId());
-            if ((reconnectScope != null
-                        && (!reconnectScope.tenantId().equals(candidate.tenantId())
-                            || !reconnectScope.clientId().equals(candidate.clientId())
-                            || !reconnectScope.targetAgentId().equals(candidate.targetAgentId())))
-                    || !allows(candidate.tenantId(), candidate.clientId())
+            if (!allows(candidate.tenantId(), candidate.clientId())
                     || (!candidate.expiryCandidate()
                         && !dispatcher.isExactAgentConnected(
                                 candidate.tenantId(), candidate.clientId(),
@@ -414,6 +530,23 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
         return new AgentCommandReissueScanResult(examined, reissued, cursor, deferrals);
     }
 
+    private boolean matchesDiscoveryLane(
+            AgentWaitingCommandCandidate candidate,
+            AgentCommandReconnectScope reconnectScope,
+            WorkerScope discoveryScope,
+            boolean legacyDiscovery) {
+        if (legacyDiscovery) {
+            if (!"0".equals(candidate.tenantId())) return false;
+        } else if (discoveryScope == null
+                || !discoveryScope.tenantId().value().equals(candidate.tenantId())) {
+            return false;
+        }
+        return reconnectScope == null
+                || (reconnectScope.tenantId().equals(candidate.tenantId())
+                    && reconnectScope.clientId().equals(candidate.clientId())
+                    && reconnectScope.targetAgentId().equals(candidate.targetAgentId()));
+    }
+
     private RecoveryOutcome reissueLocked(
             AgentWaitingCommandCandidate candidate,
             String requestedBy,
@@ -425,9 +558,20 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
                         candidate.targetAgentId(), requestedBy, null, reason)) {
             return new RecoveryOutcome(false, null);
         }
+        AgentCommandDeliveryEntity hint = dao.findDeliveryProtocolHint(
+                candidate.tenantId(), candidate.clientId(), candidate.deliveryId());
+        if (hint == null) return new RecoveryOutcome(false, null);
+        return withProducerAdmission(hint, "AUTOMATIC_REISSUE_ADMISSION_DENIED",
+                () -> reissueAdmitted(candidate, requestedBy, reason, requireDue, now, hint));
+    }
+
+    private RecoveryOutcome reissueAdmitted(
+            AgentWaitingCommandCandidate candidate, String requestedBy, String reason,
+            boolean requireDue, long now, AgentCommandDeliveryEntity hint) {
         AgentCommandDeliveryEntity delivery = dao.lockDelivery(
                 candidate.tenantId(), candidate.clientId(), candidate.deliveryId());
-        if (delivery == null || !Objects.equals(candidate.deliveryId(), delivery.getId())
+        if (delivery == null || !sameProtocolHint(hint, delivery)
+                || !Objects.equals(candidate.deliveryId(), delivery.getId())
                 || !candidate.tenantId().equals(delivery.getTenantId())
                 || !candidate.clientId().equals(delivery.getClientId())
                 || !candidate.targetAgentId().equals(delivery.getTargetAgentId())) {
@@ -444,11 +588,16 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
         if (activeRows == null || activeRows.size() != 1) throw conflict("ACTIVE_OUTBOX_CARDINALITY");
         AgentOutboxEventEntity sourceOutbox = activeRows.getFirst();
         List<AgentOutboxEventEntity> previousAttempts = lockPreviousAttempts(delivery);
+        ProducerScope producerScope = requireProtocolScope(delivery, sourceOutbox,
+                "AUTOMATIC_REISSUE_SOURCE_PROTOCOL_INVALID");
+        validatePreviousProtocol(delivery, previousAttempts, producerScope,
+                "AUTOMATIC_REISSUE_PREVIOUS_PROTOCOL_INVALID");
+        String inboxConsumer = inboxConsumer(producerScope);
 
         AgentConsumerInboxEntity sourceInbox = dao.lockInbox(
                 delivery.getTenantId(), delivery.getClientId(),
-                AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1, delivery.getActiveMessageId());
-        validateSource(delivery, sourceOutbox, sourceInbox, previousAttempts);
+                inboxConsumer, delivery.getActiveMessageId());
+        validateSource(delivery, sourceOutbox, sourceInbox, previousAttempts, inboxConsumer);
 
         AgentCommandDraft draft;
         try {
@@ -461,8 +610,9 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
         if (!hashEquals(commandHash, delivery.getCommandPayloadHash())) {
             throw conflict("COMMAND_PAYLOAD_HASH_DRIFT");
         }
-        byte[] sourceWire = AgentCommandCanonicalCodec.wireBytes(
-                draft, delivery.getActiveMessageId(), delivery.getActiveAttempt());
+        byte[] sourceWire = AgentCommandProtocolSupport.wireBytes(
+                draft, delivery.getActiveMessageId(), delivery.getActiveAttempt(),
+                delivery, sourceOutbox);
         if (!Arrays.equals(sourceWire, sourceOutbox.getWirePayload())
                 || !hashEquals(AgentCommandCanonicalCodec.sha256(sourceWire),
                         sourceOutbox.getWirePayloadHash())) {
@@ -513,7 +663,10 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
                 || newEventId.equals(delivery.getCommandId())) {
             throw conflict("REISSUE_ID_COLLISION");
         }
-        byte[] newWire = AgentCommandCanonicalCodec.wireBytes(draft, newMessageId, nextAttempt);
+        byte[] newWire = producerScope == null
+                ? AgentCommandCanonicalCodec.wireBytes(draft, newMessageId, nextAttempt)
+                : AgentCommandCanonicalCodec.wireBytesV2(
+                    draft, newMessageId, delivery.getId(), nextAttempt, producerScope);
         byte[] newWireHash = AgentCommandCanonicalCodec.sha256(newWire);
 
         if (!allows(delivery.getTenantId(), delivery.getClientId())
@@ -555,6 +708,7 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
         outbox.setClientId(delivery.getClientId());
         outbox.setCreateTime(now);
         outbox.setUpdateTime(now);
+        applyReissueProtocol(outbox, delivery, producerScope);
         if (dao.insertOutbox(outbox) != 1) {
             throw new IllegalStateException("reissue outbox insert did not affect exactly one row");
         }
@@ -564,12 +718,90 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
         return new RecoveryOutcome(true, null);
     }
 
+    private <T> T withProducerAdmission(
+            AgentCommandDeliveryEntity hint, String deniedReason, Supplier<T> work) {
+        ProducerScope producerScope;
+        try {
+            producerScope = AgentCommandProtocolSupport.producerScopeOrLegacy(hint);
+        } catch (IllegalArgumentException invalid) {
+            throw conflict(deniedReason);
+        }
+        if (producerScope == null) return work.get();
+        if (admissionGuard == null) throw conflict(deniedReason);
+        try {
+            return admissionGuard.withProducerAdmission(
+                    producerScope, TenantModuleAdmissionGuard.Operation.WRITE, mode -> {
+                        if (mode != TenantModuleAdmissionGuard.Mode.DOMAIN) {
+                            throw conflict(deniedReason);
+                        }
+                        return work.get();
+                    });
+        } catch (RecoveryConflictException denied) {
+            throw denied;
+        } catch (RuntimeException denied) {
+            throw conflict(deniedReason);
+        }
+    }
+
+    private ProducerScope requireProtocolScope(
+            AgentCommandDeliveryEntity delivery, AgentOutboxEventEntity outbox, String reason) {
+        try {
+            return AgentCommandProtocolSupport.producerScope(delivery, outbox);
+        } catch (IllegalArgumentException invalid) {
+            throw conflict(reason);
+        }
+    }
+
+    private void validatePreviousProtocol(
+            AgentCommandDeliveryEntity delivery, List<AgentOutboxEventEntity> previousAttempts,
+            ProducerScope expected, String reason) {
+        for (AgentOutboxEventEntity previous : previousAttempts) {
+            if (!Objects.equals(expected, requireProtocolScope(delivery, previous, reason))) {
+                throw conflict(reason);
+            }
+        }
+    }
+
+    private boolean sameProtocolHint(
+            AgentCommandDeliveryEntity hint, AgentCommandDeliveryEntity locked) {
+        if (!Objects.equals(hint.getId(), locked.getId())
+                || !Objects.equals(hint.getTenantId(), locked.getTenantId())
+                || !Objects.equals(hint.getClientId(), locked.getClientId())
+                || !Objects.equals(hint.getProtocolVersion(), locked.getProtocolVersion())) {
+            return false;
+        }
+        try {
+            return Objects.equals(
+                    AgentCommandProtocolSupport.producerScopeOrLegacy(hint),
+                    AgentCommandProtocolSupport.producerScopeOrLegacy(locked));
+        } catch (IllegalArgumentException invalid) {
+            return false;
+        }
+    }
+
+    private void applyReissueProtocol(
+            AgentOutboxEventEntity outbox, AgentCommandDeliveryEntity delivery,
+            ProducerScope producerScope) {
+        if (producerScope == null) {
+            outbox.setProtocolVersion(delivery.getProtocolVersion());
+        } else {
+            AgentCommandProtocolSupport.apply(outbox, producerScope);
+        }
+    }
+
+    private String inboxConsumer(ProducerScope producerScope) {
+        return producerScope == null
+                ? AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1
+                : AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V2;
+    }
+
     private record RecoveryOutcome(boolean reissued, AgentCommandRecoveryDeferral deferral) {
     }
 
     private void validateRecoverableDelivery(
             AgentCommandDeliveryEntity delivery, boolean requireDue, long now) {
         boolean waiting = "WAITING_AGENT".equals(delivery.getStatus());
+        boolean retry = "RETRY".equals(delivery.getStatus());
         boolean sent = "SENT".equals(delivery.getStatus());
         boolean expiryValid = delivery.getExpiresAt() != null && delivery.getExpiresAt() > 0;
         boolean waitingShape = waiting && expiryValid
@@ -577,6 +809,11 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
                 && delivery.getNextRetryAt() < delivery.getExpiresAt()
                 && (!requireDue || delivery.getNextRetryAt() <= now)
                 && AGENT_OFFLINE.equals(delivery.getLastError());
+        boolean retryShape = retry && workerScope != null && expiryValid
+                && delivery.getNextRetryAt() != null && delivery.getNextRetryAt() > 0
+                && delivery.getNextRetryAt() < delivery.getExpiresAt()
+                && (!requireDue || delivery.getNextRetryAt() <= now)
+                && executionRetryError(delivery.getLastError());
         boolean sentShape = sent && expiryValid
                 && delivery.getNextRetryAt() == null
                 && delivery.getLastError() == null
@@ -586,7 +823,7 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
                 || !exact(delivery.getCommandId(), 100) || !exact(delivery.getTaskId(), 100)
                 || !exact(delivery.getTargetAgentId(), 100)
                 || !AgentCommandCanonicalCodec.isSupportedCommandType(delivery.getCommandType())
-                || (!waitingShape && !sentShape)
+                || (!waitingShape && !retryShape && !sentShape)
                 || delivery.getAttemptCount() == null || delivery.getAttemptCount() <= 0
                 || delivery.getActiveAttempt() == null || delivery.getActiveAttempt() <= 0
                 || !delivery.getAttemptCount().equals(delivery.getActiveAttempt())
@@ -612,8 +849,10 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
             AgentCommandDeliveryEntity delivery,
             AgentOutboxEventEntity outbox,
             AgentConsumerInboxEntity inbox,
-            List<AgentOutboxEventEntity> previousAttempts) {
+            List<AgentOutboxEventEntity> previousAttempts,
+            String expectedConsumer) {
         boolean waiting = "WAITING_AGENT".equals(delivery.getStatus());
+        boolean retry = "RETRY".equals(delivery.getStatus());
         boolean waitingInbox = waiting
                 && "WAITING_AGENT".equals(inbox == null ? null : inbox.getStatus())
                 && "WAITING_AGENT".equals(inbox.getResultStatus())
@@ -622,6 +861,15 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
                 && inbox.getProcessedAt() != null && inbox.getProcessedAt() > 0
                 && inbox.getNextRetryAt() > inbox.getProcessedAt()
                 && AGENT_OFFLINE.equals(inbox.getLastError());
+        boolean retryInbox = retry && workerScope != null
+                && "RETRY".equals(inbox == null ? null : inbox.getStatus())
+                && "RETRY".equals(inbox.getResultStatus())
+                && inbox.getNextRetryAt() != null
+                && inbox.getNextRetryAt().equals(delivery.getNextRetryAt())
+                && inbox.getProcessedAt() != null && inbox.getProcessedAt() > 0
+                && inbox.getNextRetryAt() > inbox.getProcessedAt()
+                && executionRetryError(inbox.getLastError())
+                && Objects.equals(inbox.getLastError(), delivery.getLastError());
         boolean sentInbox = "SENT".equals(delivery.getStatus())
                 && "PROCESSED".equals(inbox == null ? null : inbox.getStatus())
                 && "SENT".equals(inbox.getResultStatus())
@@ -655,14 +903,14 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
                 || outbox.getLastError() != null
                 || !Objects.equals(outbox.getExpiresAt(), delivery.getExpiresAt())
                 || outbox.getVersion() == null || outbox.getVersion() < 0
-                || !AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1.equals(inbox.getConsumerName())
+                || !expectedConsumer.equals(inbox.getConsumerName())
                 || !delivery.getActiveMessageId().equals(inbox.getMessageId())
                 || !outbox.getEventId().equals(inbox.getEventId())
                 || !delivery.getCommandId().equals(inbox.getCommandId())
                 || !Objects.equals(delivery.getId(), inbox.getDeliveryId())
                 || !Arrays.equals(outbox.getWirePayload(), inbox.getWirePayload())
                 || !hashEquals(outbox.getWirePayloadHash(), inbox.getWirePayloadHash())
-                || (!waitingInbox && !sentInbox)
+                || (!waitingInbox && !retryInbox && !sentInbox)
                 || inbox.getAttemptCount() == null || inbox.getAttemptCount() <= 0
                 || inbox.getActiveAttempt() == null
                 || !inbox.getActiveAttempt().equals(inbox.getAttemptCount())
@@ -688,8 +936,9 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
     private void expireLocked(
             AgentCommandDeliveryEntity delivery, AgentConsumerInboxEntity inbox, long now) {
         boolean waiting = "WAITING_AGENT".equals(delivery.getStatus());
+        boolean retry = "RETRY".equals(delivery.getStatus());
         if (delivery.getVersion() == Long.MAX_VALUE
-                || (waiting && inbox.getVersion() == Long.MAX_VALUE)) {
+                || ((waiting || retry) && inbox.getVersion() == Long.MAX_VALUE)) {
             throw conflict("EXPIRY_VERSION_EXHAUSTED");
         }
         requireOne(dao.expireDelivery(delivery, MESSAGE_EXPIRED, now),
@@ -697,7 +946,15 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
         if (waiting) {
             requireOne(dao.expireWaitingInbox(inbox, MESSAGE_EXPIRED, now),
                     "waiting Inbox expiry");
+        } else if (retry) {
+            requireOne(dao.expireRetryInbox(inbox, MESSAGE_EXPIRED, now),
+                    "retry Inbox expiry");
         }
+    }
+
+    private boolean executionRetryError(String error) {
+        return AgentCommandRabbitV2Consumer.EXECUTION_RETRYABLE.equals(error)
+                || AgentCommandRabbitV2Consumer.EXECUTION_UNCERTAIN.equals(error);
     }
 
     private AgentCommandRecoveryPolicy.Scope recoveryScope(
@@ -807,6 +1064,8 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
     private RecoveryConflictException conflict(String reason) {
         return new RecoveryConflictException(reason);
     }
+
+    private record Route(String destination, String routingKey) { }
 
     private static final class RecoveryConflictException extends RuntimeException {
         private final String reason;

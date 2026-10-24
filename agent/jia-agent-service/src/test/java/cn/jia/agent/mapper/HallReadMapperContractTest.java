@@ -7,6 +7,36 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.*;
 
 class HallReadMapperContractTest {
+    @Test void disabledFormalTaskQueryPassesTheActualTenantInterceptorWithoutLosingScope() throws Exception {
+        var policy = cn.jia.common.mybatis.TenantTablePolicy.of(
+                java.util.List.of("agent_task_meta", "task_plan"), java.util.List.of());
+        var handler = new com.baomidou.mybatisplus.extension.plugins.handler.TenantLineHandler() {
+            @Override public net.sf.jsqlparser.expression.Expression getTenantId() {
+                return new net.sf.jsqlparser.expression.StringValue(
+                        cn.jia.core.tenant.TrustedTenantContext.requireTenantId().value());
+            }
+            @Override public boolean ignoreTable(String table) { return !policy.isTenantTable(table); }
+        };
+        var constructor = Class.forName("cn.jia.common.mybatis.MysqlLockingTenantLineInnerInterceptor")
+                .getDeclaredConstructor(com.baomidou.mybatisplus.extension.plugins.handler.TenantLineHandler.class);
+        constructor.setAccessible(true);
+        var interceptor = (com.baomidou.mybatisplus.extension.plugins.inner.TenantLineInnerInterceptor) constructor.newInstance(handler);
+        Configuration configuration = new Configuration(); configuration.addMapper(HallReadMapper.class);
+        for (String tenant : java.util.List.of("0", "1")) {
+            var scope = new cn.jia.core.tenant.BusinessScope(cn.jia.core.tenant.TenantId.of(tenant),
+                    cn.jia.core.tenant.DataDomainId.of("cyf"), "owner", "client");
+            for (String view : java.util.List.of("recent", "needsAction", "archive")) {
+                var params = new HashMap<String,Object>(Map.of("tenantId",tenant,"clientId","client","ownerJiacn","owner",
+                        "kind","task","view",view,"q","","limit",21,"formalEnabled",false));
+                String sql = configuration.getMappedStatement(HallReadMapper.class.getName()+".page").getBoundSql(params).getSql();
+                String rewritten = cn.jia.core.tenant.TrustedTenantContext.withScope(scope, () -> interceptor.parserSingle(sql, null));
+                assertTrue(rewritten.contains("t.tenant_id = '"+tenant+"'"));
+                assertTrue(rewritten.contains("p.tenant_id = '"+tenant+"'"));
+                assertTrue(rewritten.contains("CAST(t.owner_jiacn AS BINARY)"));
+                assertTrue(rewritten.contains("CAST(p.client_id AS BINARY)"));
+            }
+        }
+    }
     @Test void allQueriesBindExactScopeAndDoNotSelectPrivateBodiesOrMutableClientSql() {
         Configuration configuration = new Configuration(); configuration.addMapper(HallReadMapper.class);
         for (String kind : new String[]{"private", "task", "draft"}) {
@@ -42,7 +72,8 @@ class HallReadMapperContractTest {
         assertTrue(review.contains("CAST(ownw.owner_jiacn AS BINARY)"));
         assertTrue(review.contains("w.lease_token IS NULL"));
         assertTrue(review.contains("agent_task_formal_delivery_item"));
-        assertFalse(sql.contains("QUEUED")); assertFalse(sql.contains("CAST('completed' AS BINARY)"));
+        assertFalse(sql.contains("QUEUED"));
+        assertFalse(sql.substring(sql.indexOf(") hall WHERE")).contains("CAST('completed' AS BINARY)"));
         assertTrue(sql.contains("CAST(p.jiacn AS BINARY)"));
         assertTrue(HallReadSql.page(Map.of("kind", "task", "view", "archive")).contains("CAST('archived' AS BINARY)"));
         assertThrows(IllegalArgumentException.class,

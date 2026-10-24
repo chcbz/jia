@@ -20,6 +20,13 @@ public class AgentCommandTransportDaoImpl implements AgentHallCommandTransportDa
         return mapper.selectDeliveryForUpdate(tenantId, clientId, ownerJiacn, commandId);
     }
 
+
+    @Override
+    public AgentCommandDeliveryEntity lockDeliveryV2(
+            String tenantId, String clientId, String ownerJiacn, String commandId) {
+        return mapper.selectDeliveryForUpdateV2(tenantId, clientId, ownerJiacn, commandId);
+    }
+
     @Override
     public List<AgentOutboxEventEntity> lockActiveOutboxes(
             String tenantId, String clientId, long deliveryId, String messageId) {
@@ -44,8 +51,20 @@ public class AgentCommandTransportDaoImpl implements AgentHallCommandTransportDa
         return mapper.insertDelivery(delivery);
     }
 
+
+    @Override
+    public int insertDeliveryV2(AgentCommandDeliveryEntity delivery) {
+        return mapper.insertDeliveryV2(delivery);
+    }
+
     @Override
     public int insertOutbox(AgentOutboxEventEntity outbox) {
         return mapper.insertOutbox(outbox);
+    }
+
+
+    @Override
+    public int insertOutboxV2(AgentOutboxEventEntity outbox) {
+        return mapper.insertOutboxV2(outbox);
     }
 }

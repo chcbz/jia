@@ -31,8 +31,11 @@ class EsSecurityContextFilterTest {
         cookie.setUsername("cookie-name");
         cookie.setAppcn("cookie-app");
         cookie.setClientId("cookie-client");
+        cookie.setTenantId("99");
+        cookie.setDataDomainId("other");
         SecurityContextHolder.getContext().setAuthentication(auth(Map.of(
-                "token_kind", "user", "jiacn", "Jia-A", "username", "alice", "client_id", "web")));
+                "token_kind", "user", "jiacn", "Jia-A", "username", "alice", "client_id", "web",
+                "tenant_id", "1", "data_domain_id", "cyf")));
 
         new EsSecurityContextFilter().doFilter(new MockHttpServletRequest(), new MockHttpServletResponse(),
                 (request, response) -> {
@@ -41,6 +44,8 @@ class EsSecurityContextFilterTest {
                     assertEquals("alice", current.getUsername());
                     assertEquals("web", current.getClientId());
                     assertNull(current.getAppcn());
+                    assertEquals("1", current.getTenantId());
+                    assertEquals("cyf", current.getDataDomainId());
                 });
     }
 
@@ -51,6 +56,8 @@ class EsSecurityContextFilterTest {
         cookie.setUsername("cookie-name");
         cookie.setAppcn("cookie-app");
         cookie.setClientId("cookie-client");
+        cookie.setTenantId("99");
+        cookie.setDataDomainId("cookie-domain");
         SecurityContextHolder.getContext().setAuthentication(auth(Map.of(
                 "token_kind", "machine", "sub", "agent", "client_id", "agent",
                 "tenant_id", "0", "tenant_claim_version", "1")));
@@ -62,7 +69,35 @@ class EsSecurityContextFilterTest {
                     assertNull(current.getUsername());
                     assertNull(current.getAppcn());
                     assertEquals("agent", current.getClientId());
+                    assertNull(current.getTenantId());
+                    assertNull(current.getDataDomainId());
                 });
+    }
+
+    @Test
+    void validMachineAndLegacyMachineWithoutTenantCannotInheritCookieAdmission() throws Exception {
+        for (Map<String, Object> claims : java.util.List.of(
+                Map.<String, Object>of("token_kind", "machine", "sub", "agent", "client_id", "agent"),
+                Map.<String, Object>of("sub", "agent", "client_id", "agent"))) {
+            EsContext cookie = EsContextHolder.getContext();
+            cookie.setJiacn("cookie-user");
+            cookie.setUsername("cookie-name");
+            cookie.setAppcn("cookie-app");
+            cookie.setClientId("cookie-client");
+            cookie.setTenantId("1");
+            cookie.setDataDomainId("cookie-domain");
+            SecurityContextHolder.getContext().setAuthentication(auth(claims));
+            new EsSecurityContextFilter().doFilter(new MockHttpServletRequest(), new MockHttpServletResponse(),
+                    (request, response) -> {
+                        EsContext current = EsContextHolder.getContext();
+                        assertNull(current.getJiacn());
+                        assertNull(current.getUsername());
+                        assertNull(current.getAppcn());
+                        assertNull(current.getTenantId());
+                        assertNull(current.getDataDomainId());
+                        assertEquals("agent", current.getClientId());
+                    });
+        }
     }
 
 

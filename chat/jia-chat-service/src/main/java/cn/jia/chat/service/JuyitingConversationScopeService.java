@@ -4,6 +4,7 @@ import cn.jia.agent.service.AgentService;
 import cn.jia.chat.handler.dto.ChatMessageDTO;
 import cn.jia.core.util.JsonUtil;
 import cn.jia.core.util.StringUtil;
+import cn.jia.core.tenant.UserAdmissionScope;
 import org.springframework.stereotype.Service;
 import tools.jackson.core.type.TypeReference;
 
@@ -50,24 +51,46 @@ public class JuyitingConversationScopeService {
     }
 
     /**
-     * Resolves task membership in the authenticated owner's scope. The Agent task tenant is
-     * the canonical "0", whereas the Hall caller's jiacn identifies the owner, not the tenant.
+     * Captures the exact authenticated tenant/client/owner before task ACL lookup.
+     * Display metadata and requested resource IDs cannot replace any identity part.
+     */
+    public JuyitingConversationScope authorize(
+            ChatMessageDTO chatMessage,
+            JuyitingConversationScope requested,
+            UserAdmissionScope admission) {
+        if (admission == null || requested == null
+                || !isSupportedScope(requested.scopeType())) {
+            throw denied();
+        }
+        return authorize(chatMessage, requested,
+                admission.businessScope().tenantId().value(),
+                admission.businessScope().ownerJiacn(),
+                admission.businessScope().callerClientId());
+    }
+
+    /**
+     * Legacy tenant-zero compatibility entry point. The third argument is the owner,
+     * not a tenant ID; new callers use the authenticated admission overload.
      * Caller participant metadata is intentionally ignored for authorization.
      */
     public JuyitingConversationScope authorize(
             ChatMessageDTO chatMessage,
             JuyitingConversationScope requested,
-            String tenantId,
+            String ownerJiacn,
             String clientId) {
-        if (requested == null || !isCanonicalIdentity(tenantId) || !isCanonicalIdentity(clientId)
+        return authorize(chatMessage, requested, "0", ownerJiacn, clientId);
+    }
+
+    private JuyitingConversationScope authorize(
+            ChatMessageDTO chatMessage, JuyitingConversationScope requested,
+            String tenantId, String ownerJiacn, String clientId) {
+        cn.jia.core.tenant.TenantId.of(tenantId);
+        if (requested == null || !isCanonicalIdentity(ownerJiacn) || !isCanonicalIdentity(clientId)
                 || !isSupportedScope(requested.scopeType())) {
             throw denied();
         }
 
-        boolean taskScoped = SCOPE_BOUNTY.equals(requested.scopeType())
-                || StringUtil.isNotBlank(requested.taskId())
-                || (StringUtil.isNotBlank(requested.scopeKey())
-                && requested.scopeKey().startsWith("task:"));
+        boolean taskScoped = isTaskScoped(requested);
         if (!taskScoped) {
             List<String> targets = normalizeAgentIds(requested.targetAgentIds());
             if (SCOPE_PRIVATE.equals(requested.scopeType()) && targets.size() != 1) {
@@ -83,7 +106,7 @@ public class JuyitingConversationScopeService {
         List<String> members;
         try {
             members = normalizeAuthoritativeAgentIds(
-                    agentService.listTaskWritableMemberAgentIds("0", clientId, taskId));
+                    agentService.listTaskWritableMemberAgentIds(tenantId, clientId, ownerJiacn, taskId));
         } catch (RuntimeException queryFailure) {
             throw denied();
         }
@@ -336,6 +359,13 @@ public class JuyitingConversationScopeService {
     private boolean isCanonicalIdentity(String value) {
         return value != null && !value.isBlank() && value.equals(value.strip())
                 && value.length() <= 50 && value.chars().noneMatch(Character::isISOControl);
+    }
+
+    private boolean isTaskScoped(JuyitingConversationScope requested) {
+        return requested != null && (SCOPE_BOUNTY.equals(requested.scopeType())
+                || StringUtil.isNotBlank(requested.taskId())
+                || (StringUtil.isNotBlank(requested.scopeKey())
+                && requested.scopeKey().startsWith("task:")));
     }
 
     private boolean isSupportedScope(String scopeType) {

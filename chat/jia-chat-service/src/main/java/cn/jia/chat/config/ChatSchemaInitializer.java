@@ -7,6 +7,7 @@ import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
+import org.springframework.context.annotation.Profile;
 
 import javax.sql.DataSource;
 import java.sql.Connection;
@@ -19,8 +20,8 @@ import java.util.Map;
 
 @Slf4j
 @Component
+@Profile("schema-maintenance & !local-test-area")
 @RequiredArgsConstructor
-@org.springframework.context.annotation.Profile("schema-maintenance")
 public class ChatSchemaInitializer implements ApplicationRunner {
     private final JdbcTemplate jdbcTemplate;
     private Boolean h2Database;

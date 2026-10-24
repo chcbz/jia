@@ -10,6 +10,7 @@ final class AnyAgentRabbitFlagEnabledCondition implements Condition {
             "agent.rabbit-topology.enabled",
             "agent.rabbit-publish.enabled",
             "agent.rabbit-consume.enabled",
+            "agent.rabbit-consume-v2.enabled",
             "agent.rabbit-dispatch.enabled"
     };
 

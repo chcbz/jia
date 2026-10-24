@@ -12,6 +12,8 @@ import cn.jia.agent.service.AgentTaskEventReplayService.ReplaySignal;
 import cn.jia.agent.service.AgentTaskEventReplayService.ResyncReason;
 import cn.jia.agent.service.AgentTaskEventReplayService.ResyncRequired;
 import cn.jia.agent.service.AgentTaskEventReplayService.TaskScope;
+import cn.jia.core.tenant.BusinessScope;
+import cn.jia.core.tenant.TrustedTenantContext;
 import jakarta.annotation.PreDestroy;
 import jakarta.inject.Inject;
 import jakarta.inject.Named;
@@ -126,6 +128,13 @@ public class AgentTaskEventReplayServiceImpl
     @Override
     public Flux<ReplaySignal> replay(TaskScope scope, long afterVersion) {
         TaskScope requiredScope = Objects.requireNonNull(scope, "task scope is required");
+        BusinessScope authority = TrustedTenantContext.requireScope();
+        if (!"cyf".equals(authority.dataDomainId().value())
+                || !requiredScope.tenantId().equals(authority.tenantId().value())
+                || !requiredScope.clientId().equals(authority.callerClientId())
+                || !requiredScope.ownerJiacn().equals(authority.ownerJiacn())) {
+            throw new IllegalArgumentException("task replay scope does not match trusted authority");
+        }
         if (afterVersion < 0) {
             return Flux.error(new IllegalArgumentException(
                     "afterVersion must not be negative"));
@@ -134,7 +143,7 @@ public class AgentTaskEventReplayServiceImpl
             return Flux.error(new IllegalStateException("Task event replay service is closed"));
         }
         return Flux.create(sink -> new SubscriptionState(
-                requiredScope, afterVersion, sink).start(), FluxSink.OverflowStrategy.ERROR);
+                requiredScope, authority, afterVersion, sink).start(), FluxSink.OverflowStrategy.ERROR);
     }
 
     @PreDestroy
@@ -203,6 +212,7 @@ public class AgentTaskEventReplayServiceImpl
 
     private final class SubscriptionState {
         private final TaskScope scope;
+        private final BusinessScope authority;
         private final AgentTaskEventBroker.TaskScope wakeupScope;
         private final FluxSink<ReplaySignal> sink;
         private final ArrayBlockingQueue<DurableEvent> signalQueue =
@@ -234,9 +244,11 @@ public class AgentTaskEventReplayServiceImpl
 
         private SubscriptionState(
                 TaskScope scope,
+                BusinessScope authority,
                 long initialCursor,
                 FluxSink<ReplaySignal> sink) {
             this.scope = scope;
+            this.authority = authority;
             this.wakeupScope = new AgentTaskEventBroker.TaskScope(
                     scope.tenantId(), scope.clientId(), scope.ownerJiacn(), scope.taskId());
             this.sink = sink;
@@ -398,7 +410,7 @@ public class AgentTaskEventReplayServiceImpl
                     return;
                 }
                 dirty.set(false);
-                catchUpDurable();
+                TrustedTenantContext.runWithScope(authority, this::catchUpDurable);
             } catch (TerminalReplay terminal) {
                 terminalResync(terminal.reason, terminal.currentVersion, false);
             } catch (RuntimeException durableFailure) {

@@ -141,6 +141,28 @@ class AgentTaskDeliverableControllerTest {
     }
 
     @Test
+    void otherAreaOrDomainCannotListDownloadOrPreviewLegacyDeliverables() throws Exception {
+        for (JwtAuthenticationToken principal : List.of(
+                jwtForArea("1", "cyf"), jwtForArea("00", "cyf"),
+                jwtForArea("0", "other"), jwtForArea(null, "cyf"),
+                jwtForArea("0", null))) {
+            mvc.perform(get("/agent/tasks/{taskId}/deliverables", TASK).principal(principal))
+                    .andExpect(status().isForbidden())
+                    .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
+            mvc.perform(get("/agent/tasks/{taskId}/deliverables/{artifactId}/versions/1/content",
+                            TASK, ARTIFACT).principal(principal))
+                    .andExpect(status().isForbidden());
+            mvc.perform(get("/agent/tasks/{taskId}/deliverables/{artifactId}/versions/1/preview",
+                            TASK, ARTIFACT).principal(principal))
+                    .andExpect(status().isForbidden());
+            mvc.perform(get("/agent/tasks/{taskId}/deliverables/{artifactId}/versions/1/preview/parts/content",
+                            TASK, ARTIFACT).principal(principal))
+                    .andExpect(status().isForbidden());
+        }
+        verifyNoInteractions(artifactService, contentService);
+    }
+
+    @Test
     void ownerScopeDoesNotNeedPersonaBindingAndTaskNotFoundRemainsOpaque() throws Exception {
         when(artifactService.listForTaskOwner(eq("0"), eq(CLIENT), eq(TENANT), eq(TASK), any()))
                 .thenReturn(List.of(view()));
@@ -584,10 +606,20 @@ class AgentTaskDeliverableControllerTest {
         return jwtClaims(tenant, client, actor, actor);
     }
 
+    private static JwtAuthenticationToken jwtForArea(String area, String domain) {
+        Jwt.Builder builder = Jwt.withTokenValue("token").header("alg", "none")
+                .claim("jiacn", TENANT).claim("client_id", CLIENT).claim("sub", ACTOR);
+        if (area != null) builder.claim("tenant_id", area);
+        if (domain != null) builder.claim("data_domain_id", domain);
+        return new JwtAuthenticationToken(builder.build(), List.of(), ACTOR);
+    }
+
     private static JwtAuthenticationToken jwtClaims(
             String tenant, Object client, String subject, String authenticationName) {
         Jwt token = Jwt.withTokenValue("token")
                 .header("alg", "none")
+                .claim("tenant_id", "0")
+                .claim("data_domain_id", "cyf")
                 .claim("jiacn", tenant)
                 .claim("client_id", client)
                 .claim("sub", subject)

@@ -21,6 +21,7 @@ import cn.jia.agent.state.AgentTaskRequestStatus;
 import cn.jia.agent.state.AgentTaskStatus;
 import cn.jia.agent.state.AgentTaskWorkItemStatus;
 import cn.jia.core.util.JsonUtil;
+import cn.jia.core.tenant.TenantId;
 import tools.jackson.core.StreamReadFeature;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
@@ -139,7 +140,9 @@ public class AgentTaskWorkspaceServiceImpl
 
     private Authorization authorizeRows(
             String tenantId, String clientId, String ownerJiacn, String taskId, String actorAgentId) {
-        if (!"0".equals(tenantId)) {
+        try {
+            TenantId.of(tenantId);
+        } catch (IllegalArgumentException invalidTenant) {
             throw notFound();
         }
         requireId(clientId, "clientId", 50);

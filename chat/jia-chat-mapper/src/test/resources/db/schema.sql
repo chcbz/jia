@@ -5,6 +5,7 @@ CREATE TABLE chat_conversation (
   id bigint NOT NULL AUTO_INCREMENT COMMENT '主键ID（会话ID）',
   title varchar(500) DEFAULT NULL COMMENT '会话标题',
   jiacn varchar(50) DEFAULT NULL COMMENT '用户ID（多租户标识）',
+  data_domain_id varchar(64) NOT NULL DEFAULT 'cyf' COMMENT '业务数据域',
   status int DEFAULT 0 COMMENT '会话状态（0-活跃/1-关闭）',
   conversation_type varchar(20) DEFAULT 'normal' COMMENT '会话类型（normal-普通/juyiting-聚义厅）',
   conversation_scope_type varchar(20) DEFAULT NULL COMMENT 'juyiting scope type',
@@ -14,6 +15,9 @@ CREATE TABLE chat_conversation (
   target_agent_ids varchar(2000) DEFAULT NULL COMMENT 'persisted JSON array of authorized juyiting target agent ids',
   deleted_at bigint DEFAULT NULL COMMENT 'durable deletion tombstone',
   lifecycle_generation bigint NOT NULL DEFAULT 1 COMMENT 'monotonic conversation lifecycle generation',
+  data_scope_mode varchar(20) NOT NULL DEFAULT 'LEGACY_CLIENT' COMMENT 'LEGACY_CLIENT or DOMAIN',
+  memory_published_token varchar(64) DEFAULT NULL COMMENT 'visible memory snapshot token',
+  memory_published_revision bigint DEFAULT NULL COMMENT 'visible memory ES revision',
   create_time bigint DEFAULT NULL COMMENT '创建时间戳',
   update_time bigint DEFAULT NULL COMMENT '更新时间戳',
   client_id varchar(50) DEFAULT NULL COMMENT '应用标识符',
@@ -25,7 +29,8 @@ CREATE TABLE chat_conversation (
   KEY idx_create_time (create_time),
   KEY idx_conversation_type (conversation_type),
   KEY idx_conversation_scope (conversation_type, conversation_scope_type, conversation_scope_key),
-  KEY idx_chat_conversation_live_owner (jiacn, client_id, deleted_at, lifecycle_generation, update_time)
+  KEY idx_chat_conversation_live_owner (jiacn, client_id, deleted_at, lifecycle_generation, update_time),
+  KEY idx_chat_conversation_domain_owner (tenant_id, data_domain_id, jiacn, deleted_at, lifecycle_generation, update_time)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='聊天会话表';
 
 -- 聊天消息表
@@ -40,6 +45,7 @@ CREATE TABLE chat_message (
   client_id varchar(50) DEFAULT NULL COMMENT '应用标识符',
   tenant_id varchar(50) DEFAULT '0' COMMENT '租户ID',
   jiacn varchar(50) DEFAULT NULL COMMENT '用户ID（冗余字段，便于长效记忆汇总）',
+  data_domain_id varchar(64) NOT NULL DEFAULT 'cyf' COMMENT '业务数据域',
   sync_status varchar(20) DEFAULT NULL COMMENT '同步状态（PENDING-待同步/SYNCED-已同步）',
   conversation_type varchar(20) DEFAULT NULL COMMENT '会话类型（normal-普通/juyiting-聚义厅）',
   sender_type varchar(20) DEFAULT NULL COMMENT '发送者类型（user/agent/system）',
@@ -48,8 +54,60 @@ CREATE TABLE chat_message (
   KEY idx_conversation_id (conversation_id),
   KEY idx_tenant_id (tenant_id),
   KEY idx_jiacn (jiacn),
-  KEY idx_conversation_type (conversation_type)
+  KEY idx_conversation_type (conversation_type),
+  KEY idx_chat_message_domain_owner_conversation (tenant_id, data_domain_id, jiacn, conversation_id, create_time, id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='聊天消息表';
+
+CREATE TABLE chat_memory_publication (
+  id bigint NOT NULL AUTO_INCREMENT,
+  tenant_id varchar(50) NOT NULL,
+  scope_mode varchar(20) NOT NULL,
+  scope_key varchar(64) NOT NULL,
+  owner_jiacn varchar(50) NOT NULL,
+  conversation_id varchar(100) NOT NULL,
+  lifecycle_generation bigint NOT NULL,
+  snapshot_token char(64) NOT NULL,
+  es_revision bigint NOT NULL,
+  document_id varchar(96) NOT NULL,
+  message_count int NOT NULL,
+  state varchar(20) NOT NULL,
+  summary_content longtext DEFAULT NULL,
+  embedding_bytes blob DEFAULT NULL,
+  payload_digest char(64) DEFAULT NULL,
+  published_at bigint DEFAULT NULL,
+  tombstoned_at bigint DEFAULT NULL,
+  create_time bigint NOT NULL,
+  update_time bigint NOT NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_memory_publication_token
+    (tenant_id, scope_mode, scope_key, owner_jiacn, conversation_id, lifecycle_generation, snapshot_token),
+  UNIQUE KEY uk_memory_publication_revision
+    (tenant_id, scope_mode, scope_key, owner_jiacn, conversation_id, es_revision),
+  UNIQUE KEY uk_memory_publication_document (document_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
+
+CREATE TABLE chat_memory_work (
+  id bigint NOT NULL AUTO_INCREMENT,
+  tenant_id varchar(50) NOT NULL,
+  scope_mode varchar(20) NOT NULL,
+  scope_key varchar(64) NOT NULL,
+  owner_jiacn varchar(50) NOT NULL,
+  conversation_id varchar(100) NOT NULL,
+  lifecycle_generation bigint NOT NULL,
+  state varchar(20) NOT NULL,
+  due_at bigint NOT NULL,
+  lease_owner varchar(100) DEFAULT NULL,
+  lease_until bigint DEFAULT NULL,
+  attempts int NOT NULL DEFAULT 0,
+  wake_requested tinyint(1) NOT NULL DEFAULT 0,
+  last_error varchar(1000) DEFAULT NULL,
+  create_time bigint NOT NULL,
+  update_time bigint NOT NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_memory_work_scope
+    (tenant_id, scope_mode, scope_key, owner_jiacn, conversation_id),
+  KEY idx_memory_work_claim (state, due_at, lease_until, id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
 
 -- Scoped task/shared-conversation binding
 CREATE TABLE agent_task_thread (

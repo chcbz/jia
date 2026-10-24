@@ -131,8 +131,8 @@ public final class HallReadSql {
         // Shared page/count classifier, translated from XML script syntax to this SQL provider.
         // No table lookup while the formal schema is disabled; report UNKNOWN, never guess acceptance.
         String phase = formalEnabled ? AgentTaskPhaseSql.PHASE.replace("task.", "t.").replace("&gt;", ">")
-                : "CASE WHEN BINARY t.reward_status=BINARY 'completed' THEN 'COMPLETED' "
-                + "WHEN BINARY t.reward_status IN (BINARY 'failed',BINARY 'cancelled',BINARY 'archived') THEN 'HISTORY' "
+                : "CASE WHEN CAST(t.reward_status AS BINARY)=CAST('completed' AS BINARY) THEN 'COMPLETED' "
+                + "WHEN CAST(t.reward_status AS BINARY) IN (CAST('failed' AS BINARY),CAST('cancelled' AS BINARY),CAST('archived' AS BINARY)) THEN 'HISTORY' "
                 + "ELSE 'UNKNOWN' END";
         String time = "GREATEST(COALESCE(t.update_time,t.create_time),COALESCE(p.update_time,p.create_time,t.update_time,t.create_time)"
                 + (formalEnabled ? ",COALESCE(d.submitted_at,0),COALESCE(d.reviewed_at,0)" : "") + ")";

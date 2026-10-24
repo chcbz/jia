@@ -55,15 +55,24 @@ public final class HallPrivateCaseSchemaInitializer implements InitializingBean 
                     "chk_hall_case_execution_time", "created_at>=0")));
 
     private final JdbcTemplate jdbc;
+    private final boolean validateOnly;
 
     public HallPrivateCaseSchemaInitializer(JdbcTemplate jdbc) {
+        this(jdbc, false);
+    }
+
+    HallPrivateCaseSchemaInitializer(JdbcTemplate jdbc, boolean validateOnly) {
         this.jdbc = Objects.requireNonNull(jdbc, "jdbc");
+        this.validateOnly = validateOnly;
     }
 
     @Override public void afterPropertiesSet() {
         requireMySql();
         List<String> present = presentTables();
-        if (present.isEmpty()) ddlStatements().forEach(jdbc::execute);
+        if (present.isEmpty()) {
+            SchemaValidationMode.requireMutationAllowed(validateOnly, "Hall private case schema");
+            ddlStatements().forEach(jdbc::execute);
+        }
         else if (!present.equals(TABLES)) {
             throw new IllegalStateException("Hall private case schema is partial: " + present);
         }

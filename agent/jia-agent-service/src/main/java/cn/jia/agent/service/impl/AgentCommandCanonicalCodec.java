@@ -7,6 +7,10 @@ import cn.jia.agent.entity.AgentSkillInstallPayload;
 import cn.jia.agent.entity.AgentHallCommandContext;
 import cn.jia.agent.entity.AgentHallCommandPayload;
 import cn.jia.agent.entity.AgentTaskInvitePayload;
+import cn.jia.agent.common.AgentCommandAmqpContract;
+import cn.jia.core.tenant.ProducerScope;
+import cn.jia.core.tenant.TenantId;
+import cn.jia.core.tenant.WorkerScope;
 import tools.jackson.core.StreamReadFeature;
 import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.databind.JsonNode;
@@ -65,7 +69,7 @@ public final class AgentCommandCanonicalCodec {
     public static String taskInviteCommandId(
             String tenantId, String clientId, String ownerJiacn, String taskId,
             String targetAgentId) {
-        requireSingleTenant(tenantId);
+        requireTenant(tenantId);
         requireExact(clientId, "clientId", 50);
         requireExact(ownerJiacn, "ownerJiacn", 50);
         requireExact(taskId, "taskId", 100);
@@ -80,7 +84,7 @@ public final class AgentCommandCanonicalCodec {
     public static String hallCommandId(
             String tenantId, String clientId, String ownerJiacn, String taskId,
             String targetAgentId, String intentId, String commandType) {
-        requireSingleTenant(tenantId);
+        requireTenant(tenantId);
         requireExact(clientId, "clientId", 50);
         requireExact(ownerJiacn, "ownerJiacn", 50);
         requireExact(taskId, "taskId", 100);
@@ -96,7 +100,7 @@ public final class AgentCommandCanonicalCodec {
 
     public static String skillInstallCommandId(
             String tenantId, String clientId, String ownerJiacn, String installationId) {
-        requireSingleTenant(tenantId);
+        requireTenant(tenantId);
         requireExact(clientId, "clientId", 50);
         requireExact(ownerJiacn, "ownerJiacn", 50);
         requireExact(installationId, "installationId", 100);
@@ -173,6 +177,7 @@ public final class AgentCommandCanonicalCodec {
 
     public static byte[] wireBytes(AgentCommandDraft draft, String messageId, int attempt) {
         validate(draft);
+        requireLegacyTenant(draft.tenantId());
         requireExact(messageId, "messageId", 100);
         if (attempt <= 0) throw invalid("attempt must be positive");
         StringBuilder json = new StringBuilder(2048);
@@ -184,6 +189,66 @@ public final class AgentCommandCanonicalCodec {
         string(json, "correlationId", draft.correlationId());
         string(json, "causationId", draft.causationId());
         string(json, "tenantId", draft.tenantId());
+        string(json, "clientId", draft.clientId());
+        string(json, "ownerJiacn", draft.ownerJiacn());
+        string(json, "taskId", draft.taskId());
+        nullableString(json, "workItemId", draft.workItemId());
+        string(json, "targetAgentId", draft.targetAgentId());
+        string(json, "commandType", draft.commandType());
+        if (isHallTaskInvite(draft)) taskInviteCompatibility(json, draft);
+        number(json, "issuedAt", draft.issuedAt());
+        number(json, "expiresAt", draft.expiresAt());
+        if (isHallIntentCommand(draft)) string(json, "intentId", draft.intentId());
+        number(json, "attempt", attempt);
+        if (draft.payload() instanceof AgentSkillInstallPayload p) {
+            string(json,"requestId",messageId);
+            string(json,"fencingToken","1"); string(json,"deliveryEpoch","1");
+            skillFields(json,p);
+        }
+        payload(json, draft.payload());
+        json.append('}');
+        return bounded(json);
+    }
+
+    /** Produces the strict AMQP v2 body for a trusted producer deployment scope. */
+    public static byte[] wireBytesV2(
+            AgentCommandDraft draft, String messageId, long deliveryId, int attempt,
+            WorkerScope producerScope) {
+        if (producerScope == null) throw invalid("producer scope is required");
+        return wireBytesV2(draft, messageId, deliveryId, attempt, new ProducerScope(
+                producerScope.tenantId(), producerScope.dataDomainId(),
+                producerScope.executionPoolId(), producerScope.deploymentId(),
+                producerScope.admissionEpoch(), producerScope.moduleId(),
+                producerScope.migrationEpoch()));
+    }
+
+    /** Produces the strict AMQP v2 body from persisted or transaction-locked provenance. */
+    public static byte[] wireBytesV2(
+            AgentCommandDraft draft, String messageId, long deliveryId, int attempt,
+            ProducerScope producerScope) {
+        validate(draft);
+        if (producerScope == null || !draft.tenantId().equals(producerScope.tenantId().value())) {
+            throw invalid("producer scope does not match command tenant");
+        }
+        requireExact(messageId, "messageId", 100);
+        if (deliveryId <= 0) throw invalid("deliveryId must be positive");
+        if (attempt <= 0) throw invalid("attempt must be positive");
+        StringBuilder json = new StringBuilder(2304);
+        json.append('{');
+        number(json, "schemaVersion", AgentCommandAmqpContract.WIRE_VERSION);
+        string(json, "messageType", AgentProtocolConstants.TYPE_COMMAND_DISPATCH);
+        string(json, "messageId", messageId);
+        string(json, "commandId", draft.commandId());
+        string(json, "deliveryId", AgentCommandAmqpContract.canonicalDeliveryId(deliveryId));
+        string(json, "correlationId", draft.correlationId());
+        string(json, "causationId", draft.causationId());
+        string(json, "tenantId", draft.tenantId());
+        string(json, "dataDomainId", producerScope.dataDomainId().value());
+        string(json, "executionPoolId", producerScope.executionPoolId());
+        string(json, "producerDeploymentId", producerScope.deploymentId());
+        number(json, "admissionEpoch", producerScope.admissionEpoch());
+        string(json, "moduleId", producerScope.moduleId());
+        number(json, "migrationEpoch", producerScope.migrationEpoch());
         string(json, "clientId", draft.clientId());
         string(json, "ownerJiacn", draft.ownerJiacn());
         string(json, "taskId", draft.taskId());
@@ -291,7 +356,7 @@ public final class AgentCommandCanonicalCodec {
         requireExact(draft.commandId(), "commandId", 100);
         requireExact(draft.correlationId(), "correlationId", 100);
         requireExact(draft.causationId(), "causationId", 100);
-        requireSingleTenant(draft.tenantId());
+        requireTenant(draft.tenantId());
         requireExact(draft.clientId(), "clientId", 50);
         requireExact(draft.ownerJiacn(), "ownerJiacn", 50);
         requireExact(draft.taskId(), "taskId", 100);
@@ -695,11 +760,17 @@ public final class AgentCommandCanonicalCodec {
         }
     }
 
-    private static void requireSingleTenant(String tenantId) {
-        requireExact(tenantId, "tenantId", 1);
-        if (!"0".equals(tenantId)) {
-            throw invalid("tenantId must equal 0");
+    private static void requireTenant(String tenantId) {
+        try {
+            TenantId.of(tenantId);
+        } catch (RuntimeException invalidTenant) {
+            throw invalid("tenantId must be a canonical decimal string");
         }
+    }
+
+    private static void requireLegacyTenant(String tenantId) {
+        requireTenant(tenantId);
+        if (!"0".equals(tenantId)) throw invalid("protocol v1 requires tenantId 0");
     }
 
     private static void requireExact(String value, String field, int maxChars) {

@@ -38,10 +38,19 @@ public final class PersonalWorkspaceExecutionSchemaInitializer implements Initia
     static final List<String> TABLES = List.of("agent_personal_workspace_execution",
             "agent_personal_workspace_execution_input", "agent_personal_workspace_execution_output");
     private final JdbcTemplate jdbc;
-    public PersonalWorkspaceExecutionSchemaInitializer(JdbcTemplate jdbc) { this.jdbc=Objects.requireNonNull(jdbc,"jdbc"); }
+    private final boolean validateOnly;
+    public PersonalWorkspaceExecutionSchemaInitializer(JdbcTemplate jdbc) { this(jdbc, false); }
+    PersonalWorkspaceExecutionSchemaInitializer(JdbcTemplate jdbc, boolean validateOnly) {
+        this.jdbc=Objects.requireNonNull(jdbc,"jdbc");
+        this.validateOnly=validateOnly;
+    }
     @Override public void afterPropertiesSet() {
         requireMySql(); List<String> present=presentTables();
-        if (present.isEmpty()) ddlStatements().forEach(jdbc::execute);
+        if (present.isEmpty()) {
+            SchemaValidationMode.requireMutationAllowed(validateOnly,
+                    "Personal workspace execution schema");
+            ddlStatements().forEach(jdbc::execute);
+        }
         else if (!present.equals(TABLES)) throw new IllegalStateException("Personal workspace execution schema is partial: " + present);
         if (!presentTables().equals(TABLES)) throw new IllegalStateException("Personal workspace execution schema is unavailable");
         migrateOutputMime();
@@ -91,7 +100,10 @@ public final class PersonalWorkspaceExecutionSchemaInitializer implements Initia
                  AND table_name='agent_personal_workspace_execution' AND column_name='output_content_mime_type'
                 """, Integer.class);
         if (present == null) throw new IllegalStateException("Execution output MIME schema discovery failed");
-        if (present == 0) jdbc.execute(outputMimeMigrationStatement());
+        if (present == 0) {
+            SchemaValidationMode.requireMutationAllowed(validateOnly, "Execution output MIME schema");
+            jdbc.execute(outputMimeMigrationStatement());
+        }
         else if (present != 1) throw new IllegalStateException("Execution output MIME column is ambiguous");
     }
 
@@ -156,7 +168,10 @@ public final class PersonalWorkspaceExecutionSchemaInitializer implements Initia
                  AND column_name IN ('failure_code','failure_message','failed_at')
                 """, Integer.class);
         if (present == null) throw new IllegalStateException("Execution terminal-state schema discovery failed");
-        if (present == 0) jdbc.execute(terminalStateMigrationStatement());
+        if (present == 0) {
+            SchemaValidationMode.requireMutationAllowed(validateOnly, "Execution terminal-state schema");
+            jdbc.execute(terminalStateMigrationStatement());
+        }
         else if (present != 3) throw new IllegalStateException("Execution terminal-state schema is partial");
     }
     private void verifyTerminalState() {
@@ -211,7 +226,10 @@ public final class PersonalWorkspaceExecutionSchemaInitializer implements Initia
                  AND column_name IN ('execution_mode','work_item_id','lease_token','lease_work_item_version','lease_expires_at')
                 """, Integer.class);
         if (present == null) throw new IllegalStateException("Task execution schema discovery failed");
-        if (present == 0) jdbc.execute(taskExecutionMigrationStatement());
+        if (present == 0) {
+            SchemaValidationMode.requireMutationAllowed(validateOnly, "Task execution schema");
+            jdbc.execute(taskExecutionMigrationStatement());
+        }
         else if (present != 5) throw new IllegalStateException("Task execution schema is partial");
     }
     void verifyTaskExecution() {
@@ -263,7 +281,10 @@ public final class PersonalWorkspaceExecutionSchemaInitializer implements Initia
                                      'publication_revision','publication_failure_code')
                 """, Integer.class);
         if (present == null) throw new IllegalStateException("Task publication schema discovery failed");
-        if (present == 0) jdbc.execute(taskPublicationMigrationStatement());
+        if (present == 0) {
+            SchemaValidationMode.requireMutationAllowed(validateOnly, "Task publication schema");
+            jdbc.execute(taskPublicationMigrationStatement());
+        }
         else if (present != 6) throw new IllegalStateException("Task publication schema is partial");
     }
     private void verifyTaskPublication() {
@@ -284,12 +305,18 @@ public final class PersonalWorkspaceExecutionSchemaInitializer implements Initia
     private void migrateConversationMode() {
         int executionColumns = requiredColumnCount("agent_personal_workspace_execution",
                 "'task_grant_id','task_grant_version','assignment_revision','permitted_operation'");
-        if (executionColumns == 0) jdbc.execute(conversationMigrationStatement(CONVERSATION_EXECUTION_RESOURCE,
-                "agent_personal_workspace_execution", "drop check chk_pwex_mode", "drop check chk_pwex_task_bridge"));
+        if (executionColumns == 0) {
+            SchemaValidationMode.requireMutationAllowed(validateOnly, "Conversation execution schema");
+            jdbc.execute(conversationMigrationStatement(CONVERSATION_EXECUTION_RESOURCE,
+                    "agent_personal_workspace_execution", "drop check chk_pwex_mode", "drop check chk_pwex_task_bridge"));
+        }
         else if (executionColumns != 4) throw new IllegalStateException("Conversation execution schema is partial");
         int outputColumns = requiredColumnCount("agent_personal_workspace_execution_output", "'output_purpose'");
-        if (outputColumns == 0) jdbc.execute(conversationMigrationStatement(CONVERSATION_OUTPUT_RESOURCE,
-                "agent_personal_workspace_execution_output", "drop check chk_pwexo_commit", "add constraint chk_pwexo_conversation"));
+        if (outputColumns == 0) {
+            SchemaValidationMode.requireMutationAllowed(validateOnly, "Conversation output schema");
+            jdbc.execute(conversationMigrationStatement(CONVERSATION_OUTPUT_RESOURCE,
+                    "agent_personal_workspace_execution_output", "drop check chk_pwexo_commit", "add constraint chk_pwexo_conversation"));
+        }
         else if (outputColumns != 1) throw new IllegalStateException("Conversation output schema is partial");
     }
     private int requiredColumnCount(String table, String columns) {
@@ -321,7 +348,10 @@ public final class PersonalWorkspaceExecutionSchemaInitializer implements Initia
     private void migrateConversationLease() {
         int columns=requiredColumnCount("agent_personal_workspace_execution",
                 "'conversation_lease_token','conversation_lease_runtime_id','conversation_lease_version','conversation_lease_expires_at'");
-        if (columns==0) jdbc.execute(conversationLeaseMigrationStatement());
+        if (columns==0) {
+            SchemaValidationMode.requireMutationAllowed(validateOnly, "Conversation lease schema");
+            jdbc.execute(conversationLeaseMigrationStatement());
+        }
         else if (columns!=4) throw new IllegalStateException("Conversation lease schema is partial");
     }
     static String conversationLeaseMigrationStatement() {
@@ -365,7 +395,11 @@ public final class PersonalWorkspaceExecutionSchemaInitializer implements Initia
     private void migrateConversationProviderStart() {
         int columns=requiredColumnCount("agent_personal_workspace_execution",
                 "'conversation_provider_started_at','conversation_provider_lease_version'");
-        if (columns==0) jdbc.execute(conversationProviderStartMigrationStatement());
+        if (columns==0) {
+            SchemaValidationMode.requireMutationAllowed(validateOnly,
+                    "Conversation Provider START schema");
+            jdbc.execute(conversationProviderStartMigrationStatement());
+        }
         else if (columns!=2) throw new IllegalStateException("Conversation Provider START schema is partial");
     }
     static String conversationProviderStartMigrationStatement() {

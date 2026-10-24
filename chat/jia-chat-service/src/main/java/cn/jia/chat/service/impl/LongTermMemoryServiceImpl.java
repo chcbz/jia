@@ -1,22 +1,23 @@
 package cn.jia.chat.service.impl;
 
 import cn.jia.chat.dao.ChatMessageDao;
-import cn.jia.chat.dao.ChatConversationDao;
-import cn.jia.chat.entity.ChatConversationEntity;
-import cn.jia.core.lock.IDistributedLock;
-import cn.jia.core.lock.ILock;
-import org.springframework.transaction.PlatformTransactionManager;
-import org.springframework.transaction.support.TransactionTemplate;
-import java.nio.charset.StandardCharsets;
-import java.util.Objects;
-import java.util.UUID;
-import cn.jia.chat.entity.ChatMessageEntity;
+import cn.jia.chat.dao.MemoryPublicationDao;
 import cn.jia.chat.entity.AgentTaskThreadConstants;
+import cn.jia.chat.entity.ChatConversationEntity;
+import cn.jia.chat.entity.ChatMessageEntity;
+import cn.jia.chat.entity.ConversationDataScope;
+import cn.jia.chat.entity.MemoryPublicationRecord;
+import cn.jia.chat.entity.MemoryPublicationPayload;
+import cn.jia.chat.entity.MemoryWorkItem;
 import cn.jia.chat.memory.MemoryDocument;
+import cn.jia.chat.memory.MemoryRepositoryImpl;
 import cn.jia.chat.service.ChatConversationService;
 import cn.jia.chat.service.LongTermMemoryService;
 import cn.jia.chat.service.SummaryGenerator;
 import cn.jia.core.util.DateUtil;
+import cn.jia.core.tenant.BusinessScope;
+import cn.jia.core.tenant.DataDomainId;
+import cn.jia.core.tenant.TenantId;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -24,8 +25,16 @@ import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.LocalDate;
+import java.util.HashSet;
+import java.util.HexFormat;
 import java.util.List;
+import java.util.Objects;
+import java.util.Set;
+import java.util.UUID;
 
 /**
  * <p>
@@ -43,18 +52,12 @@ public class LongTermMemoryServiceImpl implements LongTermMemoryService {
     private static final String SYNC_STATUS_PENDING = "PENDING";
     private static final String SYNC_STATUS_SYNCED = "SYNCED";
     private static final String SUMMARY_TYPE_CONVERSATION = "conversation";
+    private static final String AREA_ZERO_TENANT_ID = "0";
+    private static final String AREA_ZERO_DATA_DOMAIN_ID = "cyf";
+    private static final String MAINTENANCE_CLIENT_ID = "memory-maintenance";
 
     @Autowired
     private ChatMessageDao chatMessageDao;
-
-    @Autowired
-    private ChatConversationDao chatConversationDao;
-
-    @Autowired
-    private IDistributedLock distributedLock;
-
-    @Autowired
-    private PlatformTransactionManager transactionManager;
 
     @Autowired
     private SummaryGenerator summaryGenerator;
@@ -67,9 +70,21 @@ public class LongTermMemoryServiceImpl implements LongTermMemoryService {
 
     @Autowired
     private cn.jia.chat.memory.MemoryRepository memoryRepository;
+    @Autowired
+    private MemoryPublicationDao memoryPublicationDao;
+
+    @Autowired
+    private MemoryPublicationCommitService publicationCommitService;
+
 
     @Value("${chat.memory.batch-size:100}")
     private int batchSize;
+
+    @Value("${chat.memory.work.max-attempts:20}")
+    private int pendingMaxAttempts;
+
+    @Value("${chat.memory.work.lease-millis:60000}")
+    private long workLeaseMillis;
 
     @Value("${chat.memory.retention-days:90}")
     private int retentionDays;
@@ -91,314 +106,289 @@ public class LongTermMemoryServiceImpl implements LongTermMemoryService {
 
     @Override
     public void syncConversation(String conversationId) {
-        long numericId = requireConversationId(conversationId);
-        try (ILock ignored = distributedLock.lock("chat:memory:conversation:" + numericId)) {
-            if (taskThreadMemoryGuard.isProtectedConversation(conversationId)) {
-                chatMessageDao.updateSyncStatusByConversationId(
-                        conversationId, AgentTaskThreadConstants.MEMORY_SYNC_EXCLUDED);
-                return;
-            }
-            // Parent is the trusted source of identity, never the first message in an unscoped read.
-            ChatConversationEntity parent = chatConversationDao.selectById(numericId);
-            if (parent == null || parent.getDeletedAt() != null || !"0".equals(parent.getTenantId())) {
-                return;
-            }
-            syncOwnedSnapshot(parent.getJiacn(), parent.getClientId(), conversationId);
-        }
+        throw new IllegalStateException(
+                "Unscoped memory synchronization is disabled; use the durable scoped work queue");
     }
 
     @Override
-    public void syncOwnedConversation(String ownerJiacn, String clientId, String conversationId) {
-        long numericId = requireConversationId(conversationId);
-        try (ILock ignored = distributedLock.lock("chat:memory:conversation:" + numericId)) {
-            syncOwnedSnapshot(ownerJiacn, clientId, conversationId);
+    public void syncOwnedConversation(
+            String ownerJiacn, String clientId, String conversationId) {
+        try {
+            ChatConversationEntity conversation = chatConversationService.getOwned(
+                    ownerJiacn, clientId, conversationId);
+            ConversationDataScope scope = new ConversationDataScope(
+                    new BusinessScope(TenantId.of("0"), DataDomainId.of("cyf"),
+                            ownerJiacn, clientId),
+                    ConversationDataScope.Mode.LEGACY_CLIENT);
+            syncMessages(scope, conversationId,
+                    requireGeneration(conversation),
+                    chatMessageDao.findOwnedByConversationId(scope, conversationId),
+                    null, null);
+        } catch (Exception e) {
+            log.error("Failed authenticated sync for conversation: {}", conversationId, e);
+            throw new RuntimeException("Sync conversation failed: " + conversationId, e);
         }
     }
 
-    private void syncOwnedSnapshot(String owner, String client, String conversationId) {
-        ChatConversationEntity parent = chatConversationDao.findScopedById(owner, client, conversationId);
-        if (parent == null || parent.getDeletedAt() != null || !"0".equals(parent.getTenantId())
-                || !Objects.equals(owner, parent.getJiacn()) || !Objects.equals(client, parent.getClientId())
-                || !StringUtils.hasText(owner) || !StringUtils.hasText(client)) {
-            throw new IllegalStateException("Memory source conversation is not live or owned");
+    private void syncMessages(
+            ConversationDataScope scope, String conversationId, long generation,
+            List<ChatMessageEntity> messages, MemoryWorkItem work, String workerId) {
+        if (messages == null || messages.isEmpty()) {
+            throw new IllegalStateException(
+                    "No in-scope messages found for conversation: " + conversationId);
         }
-        if (taskThreadMemoryGuard.isProtectedConversation(conversationId)) {
-            throw new IllegalStateException("Task threads are excluded from account memory");
-        }
-        List<ChatMessageEntity> messages = chatConversationService.findOwnedMessages(owner, client, conversationId);
-        for (ChatMessageEntity message : messages) {
-            if (message == null || message.getId() == null || message.getId() <= 0
-                    || !owner.equals(message.getJiacn()) || !client.equals(message.getClientId())
-                    || !"0".equals(message.getTenantId()) || !conversationId.equals(message.getConversationId())) {
-                throw new IllegalStateException("Memory message snapshot identity mismatch");
-            }
-        }
-        List<ChatMessageEntity> snapshot = messages.stream()
-                .filter(m -> "USER".equals(m.getMessageType()) || "ASSISTANT".equals(m.getMessageType()))
-                .filter(m -> !AgentTaskThreadConstants.MEMORY_SYNC_EXCLUDED.equals(m.getSyncStatus()))
-                .toList();
-        List<Long> pendingIds = snapshot.stream().filter(m -> SYNC_STATUS_PENDING.equals(m.getSyncStatus()))
-                .map(ChatMessageEntity::getId).toList();
-        if (pendingIds.isEmpty()) {
-            return;
-        }
+        ValidatedMessageSnapshot snapshot = requireMessageBatch(
+                scope, conversationId, generation, messages);
+        long now = System.currentTimeMillis();
+        String documentId = MemoryRepositoryImpl.deterministicConversationDocumentId(
+                scope, conversationId, snapshot.token());
+        MemoryPublicationRecord publication = memoryPublicationDao.stage(
+                scope, conversationId, generation, snapshot.token(), documentId,
+                snapshot.messages().size(), now);
+        long publicationTimestamp = requirePublicationTimestamp(publication);
+        PublicationResult publicationResult = requirePublicationPayload(
+                publication, snapshot.messages());
+        publication = publicationResult.publication();
+
         MemoryDocument document = new MemoryDocument();
-        // One account/client/conversation snapshot overwrites itself on retry after an ES/DB partial failure.
-        String snapshotKey = owner + "\0" + client + "\0" + conversationId + "\0"
-                + snapshot.stream().map(m -> Long.toString(m.getId())).sorted().toList();
-        document.setId("conversation-" + UUID.nameUUIDFromBytes(snapshotKey.getBytes(StandardCharsets.UTF_8)));
-        document.setJiacn(owner);
+        document.setJiacn(scope.ownerJiacn());
         document.setConversationId(conversationId);
-        document.setContent(summaryGenerator.summarizeConversation(snapshot));
+        document.setContent(publicationResult.payload().summaryContent());
+        document.setEmbedding(publicationResult.payload().embedding());
         document.setSummaryType(SUMMARY_TYPE_CONVERSATION);
-        document.setTimestamp(System.currentTimeMillis());
-        // Both model calls happen outside the database lock/transaction.
-        document.setEmbedding(memoryRepository.generateEmbedding(document.getContent()));
-        new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
-            ChatConversationEntity locked = chatConversationDao.lockScopedById(owner, client, conversationId);
-            if (locked == null || locked.getDeletedAt() != null
-                    || !Objects.equals(parent.getLifecycleGeneration(), locked.getLifecycleGeneration())
-                    || taskThreadMemoryGuard.isProtectedConversation(conversationId)) {
-                throw new IllegalStateException("Memory source changed during summarization");
-            }
-            memoryRepository.savePrepared(document);
-            int updated = chatMessageDao.markMemorySnapshotSynced(owner, client, conversationId, pendingIds);
-            if (updated != pendingIds.size()) {
-                throw new IllegalStateException("Memory snapshot status update was incomplete");
-            }
-        });
-    }
+        document.setTimestamp(publicationTimestamp);
+        document.setSnapshotToken(snapshot.token());
+        document.setLifecycleGeneration(generation);
+        memoryRepository.saveConversationSnapshot(scope, document, publication);
 
-    private long requireConversationId(String value) {
-        long id = Long.parseLong(value);
-        if (id <= 0 || !Long.toString(id).equals(value)) {
-            throw new IllegalArgumentException("Canonical conversationId required");
-        }
-        return id;
+        publicationCommitService.commit(
+                scope, conversationId, snapshot.pendingMessageIds(), publication,
+                work, workerId, System.currentTimeMillis());
+        log.info("Published memory snapshot: conversation={}, token={}, revision={}, messages={}",
+                conversationId, snapshot.token(), publication.getEsRevision(),
+                snapshot.pendingMessageIds().size());
     }
 
     @Override
     public void syncPendingConversations() {
-        long afterId = 0;
-        boolean failed = false;
-        while (true) {
-            List<String> ids = chatMessageDao.findPendingConversationIds(SYNC_STATUS_PENDING, batchSize, afterId);
-            if (ids.isEmpty()) {
+        validateWorkConfiguration();
+        String workerId = "memory-" + UUID.randomUUID();
+        int processed = 0;
+        while (processed < batchSize) {
+            long now = System.currentTimeMillis();
+            MemoryWorkItem work = memoryPublicationDao.claimNext(
+                    workerId, now, Math.addExact(now, workLeaseMillis));
+            if (work == null) {
                 break;
             }
-            for (String id : ids) {
-                long numericId = requireConversationId(id);
-                if (numericId <= afterId) {
-                    throw new IllegalStateException("Memory scan cursor did not advance");
+            try {
+                ConversationDataScope scope = work.toConversationScope("memory-worker");
+                if (taskThreadMemoryGuard.isProtectedConversation(work.getConversationId())) {
+                    memoryPublicationDao.dead(work, workerId,
+                            "task-thread memory is excluded", System.currentTimeMillis());
+                } else {
+                    syncMessages(scope, work.getConversationId(), work.getLifecycleGeneration(),
+                            chatMessageDao.findOwnedByConversationId(
+                                    scope, work.getConversationId()),
+                            work, workerId);
                 }
-                afterId = numericId;
-                try {
-                    syncConversation(id);
-                } catch (RuntimeException exception) {
-                    failed = true;
-                    log.error("Memory sync failed; preserving pending snapshot, conversationId={}", id, exception);
+            } catch (Exception failure) {
+                long failedAt = System.currentTimeMillis();
+                String reason = failure.getClass().getSimpleName() + ": " + failure.getMessage();
+                if (work.getAttempts() != null && work.getAttempts() >= pendingMaxAttempts) {
+                    memoryPublicationDao.dead(work, workerId, reason, failedAt);
+                } else {
+                    int attempt = work.getAttempts() == null ? 1 : work.getAttempts();
+                    long backoff = Math.min(300_000L, 1_000L << Math.min(attempt - 1, 8));
+                    memoryPublicationDao.retry(work, workerId,
+                            Math.addExact(failedAt, backoff), reason, failedAt);
                 }
+                log.error("Memory work failed: conversation={}, attempt={}",
+                        work.getConversationId(), work.getAttempts(), failure);
             }
+            processed++;
         }
-        if (failed) {
-            throw new IllegalStateException("Memory sync failed for some conversations; pending snapshots retained");
-        }
+        log.info("Durable pending memory sync completed. Claimed={}", processed);
     }
-
     @Override
     public void generateDailySummary() {
-        log.info("Starting generate daily summary...");
-
-        try {
-            long windowMillis = dailyWindowDays * 24 * 60 * 60 * 1000L;
-            long sinceTime = DateUtil.nowTime() - windowMillis;
-            List<String> activeJiacns = chatMessageDao.findActiveJiacns(sinceTime);
-
-            LocalDate today = LocalDate.now();
-            String dateStr = today.toString();
-
-            boolean failed = false;
-            for (String jiacn : activeJiacns) {
-                try {
-                    // 获取该用户近窗口期的会话摘要
-                    List<String> conversationSummaries = memoryRepository.findConversationSummariesByJiacn(jiacn, sinceTime);
-
-                    if (conversationSummaries != null && !conversationSummaries.isEmpty()) {
-                        // 生成日汇总
-                        String dailySummary = summaryGenerator.generateDailySummary(conversationSummaries, jiacn, dateStr);
-
-                        // 写入向量库
-                        MemoryDocument document = new MemoryDocument();
-                        document.setId("daily-" + UUID.nameUUIDFromBytes(
-                                (jiacn + "\0" + dateStr).getBytes(StandardCharsets.UTF_8)));
-                        document.setJiacn(jiacn);
-                        document.setContent(dailySummary);
-                        document.setSummaryType("daily_summary");
-                        document.setTimestamp(DateUtil.nowTime());
-                        document.setPeriodStart(sinceTime);
-                        document.setPeriodEnd(DateUtil.nowTime());
-
-                        memoryRepository.save(document);
-
-                        log.debug("Generated daily summary for user: {}", jiacn);
-                    }
-                } catch (Exception e) {
-                    failed = true;
-                    log.error("Failed to generate daily summary for user: {}", jiacn, e);
-                    // 继续处理下一个用户
-                }
-            }
-
-            if (failed) {
-                throw new IllegalStateException("daily memory summary failed for some owners");
-            }
-            log.info("Generate daily summary completed. Processed {} users", activeJiacns.size());
-        } catch (Exception e) {
-            throw new IllegalStateException("Failed to generate daily summary", e);
-        }
+        throw aggregateSummariesDisabled();
     }
 
     @Override
     public void generateWeeklySummary() {
-        log.info("Starting generate weekly summary...");
-
-        try {
-            long lookbackMillis = weeklyLookbackDays * 24 * 60 * 60 * 1000L;
-            long sinceTime = DateUtil.nowTime() - lookbackMillis;
-
-            LocalDate today = LocalDate.now();
-            LocalDate weekStart = today.minusWeeks(1);
-            String weekStartStr = weekStart.toString();
-
-            List<String> activeJiacns = chatMessageDao.findActiveJiacns(sinceTime);
-
-            boolean failed = false;
-            for (String jiacn : activeJiacns) {
-                try {
-                    // 获取该用户近窗口期的日汇总
-                    List<String> dailySummaries = memoryRepository.findDailySummariesByJiacn(jiacn, sinceTime);
-
-                    if (dailySummaries != null && !dailySummaries.isEmpty()) {
-                        // 生成周汇总
-                        String weeklySummary = summaryGenerator.generateWeeklySummary(dailySummaries, jiacn, weekStartStr);
-
-                        // 写入向量库
-                        MemoryDocument document = new MemoryDocument();
-                        document.setId("weekly-" + UUID.nameUUIDFromBytes(
-                                (jiacn + "\0" + weekStartStr).getBytes(StandardCharsets.UTF_8)));
-                        document.setJiacn(jiacn);
-                        document.setContent(weeklySummary);
-                        document.setSummaryType("weekly_summary");
-                        document.setTimestamp(DateUtil.nowTime());
-                        document.setPeriodStart(weekStart.toEpochDay() * 24 * 60 * 60 * 1000L);
-                        document.setPeriodEnd(today.toEpochDay() * 24 * 60 * 60 * 1000L);
-
-                        memoryRepository.save(document);
-
-                        log.debug("Generated weekly summary for user: {}", jiacn);
-                    }
-                } catch (Exception e) {
-                    failed = true;
-                    log.error("Failed to generate weekly summary for user: {}", jiacn, e);
-                }
-            }
-
-            if (failed) {
-                throw new IllegalStateException("weekly memory summary failed for some owners");
-            }
-            log.info("Generate weekly summary completed");
-        } catch (Exception e) {
-            throw new IllegalStateException("Failed to generate weekly summary", e);
-        }
+        throw aggregateSummariesDisabled();
     }
 
     @Override
     public void generateMonthlySummary() {
-        log.info("Starting generate monthly summary...");
+        throw aggregateSummariesDisabled();
+    }
 
-        try {
-            long lookbackMillis = monthlyLookbackDays * 24 * 60 * 60 * 1000L;
-            long sinceTime = DateUtil.nowTime() - lookbackMillis;
+    private IllegalStateException aggregateSummariesDisabled() {
+        return new IllegalStateException(
+                "Daily/weekly/monthly memory aggregation is disabled until it is grouped by ConversationDataScope");
+    }
 
-            LocalDate today = LocalDate.now();
-            LocalDate monthStart = today.withDayOfMonth(1);
-            String monthStr = monthStart.toString().substring(0, 7);
-
-            List<String> activeJiacns = chatMessageDao.findActiveJiacns(sinceTime);
-
-            boolean failed = false;
-            for (String jiacn : activeJiacns) {
-                try {
-                    // 获取该用户近窗口期的周汇总
-                    List<String> weeklySummaries = memoryRepository.findWeeklySummariesByJiacn(jiacn, sinceTime);
-
-                    if (weeklySummaries != null && !weeklySummaries.isEmpty()) {
-                        // 生成月汇总
-                        String monthlySummary = summaryGenerator.generateMonthlySummary(weeklySummaries, jiacn, monthStr);
-
-                        // 写入向量库
-                        MemoryDocument document = new MemoryDocument();
-                        document.setId("monthly-" + UUID.nameUUIDFromBytes(
-                                (jiacn + "\0" + monthStr).getBytes(StandardCharsets.UTF_8)));
-                        document.setJiacn(jiacn);
-                        document.setContent(monthlySummary);
-                        document.setSummaryType("monthly_summary");
-                        document.setTimestamp(DateUtil.nowTime());
-                        document.setPeriodStart(monthStart.toEpochDay() * 24 * 60 * 60 * 1000L);
-                        document.setPeriodEnd(today.toEpochDay() * 24 * 60 * 60 * 1000L);
-
-                        memoryRepository.save(document);
-
-                        log.debug("Generated monthly summary for user: {}", jiacn);
-                    }
-                } catch (Exception e) {
-                    failed = true;
-                    log.error("Failed to generate monthly summary for user: {}", jiacn, e);
-                }
-            }
-
-            if (failed) {
-                throw new IllegalStateException("monthly memory summary failed for some owners");
-            }
-            log.info("Generate monthly summary completed");
-        } catch (Exception e) {
-            throw new IllegalStateException("Failed to generate monthly summary", e);
+    private ValidatedMessageSnapshot requireMessageBatch(
+            ConversationDataScope scope, String conversationId, long generation,
+            List<ChatMessageEntity> messages) {
+        Objects.requireNonNull(scope, "scope");
+        if (!StringUtils.hasText(conversationId) || generation < 1) {
+            throw new IllegalStateException("Memory source identity is unavailable");
         }
+        Set<Long> messageIds = new HashSet<>();
+        List<Long> pendingMessageIds = new java.util.ArrayList<>();
+        for (ChatMessageEntity message : messages) {
+            if (message == null
+                    || !conversationId.equals(message.getConversationId())
+                    || !scope.tenantId().equals(message.getTenantId())
+                    || !scope.ownerJiacn().equals(message.getJiacn())
+                    || (scope.mode() == ConversationDataScope.Mode.LEGACY_CLIENT
+                        && !scope.callerClientId().equals(message.getClientId()))
+                    || (scope.mode() == ConversationDataScope.Mode.DOMAIN
+                        && !scope.dataDomainId().equals(message.getDataDomainId()))) {
+                throw new IllegalStateException(
+                        "Memory source batch contains an out-of-scope message");
+            }
+            Long messageId = message.getId();
+            if (messageId == null || messageId <= 0 || !messageIds.add(messageId)) {
+                throw new IllegalStateException(
+                        "Memory source batch contains a missing or duplicate message ID");
+            }
+            if (SYNC_STATUS_PENDING.equals(message.getSyncStatus())) {
+                pendingMessageIds.add(messageId);
+            }
+        }
+        if (pendingMessageIds.isEmpty()) {
+            throw new IllegalStateException("Memory source snapshot has no pending messages");
+        }
+        return new ValidatedMessageSnapshot(
+                List.copyOf(messages), List.copyOf(pendingMessageIds),
+                snapshotToken(generation, messages));
+    }
+
+    static String snapshotToken(long generation, List<ChatMessageEntity> messages) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            updateDigest(digest, Long.toString(generation));
+            updateDigest(digest, Integer.toString(messages.size()));
+            for (ChatMessageEntity message : messages) {
+                updateDigest(digest, value(message.getId()));
+                updateDigest(digest, message.getConversationId());
+                updateDigest(digest, message.getMessageType());
+                updateDigest(digest, message.getContent());
+                updateDigest(digest, message.getMetadata());
+                updateDigest(digest, message.getJiacn());
+                updateDigest(digest, message.getTenantId());
+                updateDigest(digest, message.getDataDomainId());
+                updateDigest(digest, message.getClientId());
+                updateDigest(digest, message.getSyncStatus());
+                updateDigest(digest, message.getConversationType());
+                updateDigest(digest, message.getSenderType());
+                updateDigest(digest, message.getSenderName());
+                updateDigest(digest, value(message.getCreateTime()));
+                updateDigest(digest, value(message.getUpdateTime()));
+            }
+            return HexFormat.of().formatHex(digest.digest());
+        } catch (NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException("SHA-256 is unavailable", impossible);
+        }
+    }
+
+    private static String value(Object value) {
+        return value == null ? null : String.valueOf(value);
+    }
+
+    private static void updateDigest(MessageDigest digest, String value) {
+        if (value == null) {
+            digest.update((byte) 0xff);
+            return;
+        }
+        byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
+        digest.update((byte) (bytes.length >>> 24));
+        digest.update((byte) (bytes.length >>> 16));
+        digest.update((byte) (bytes.length >>> 8));
+        digest.update((byte) bytes.length);
+        digest.update(bytes);
+    }
+
+    private long requireGeneration(ChatConversationEntity conversation) {
+        if (conversation == null || conversation.getDeletedAt() != null
+                || conversation.getLifecycleGeneration() == null
+                || conversation.getLifecycleGeneration() < 1) {
+            throw new IllegalStateException("Conversation lifecycle generation is unavailable");
+        }
+        return conversation.getLifecycleGeneration();
+    }
+
+    private long requirePublicationTimestamp(MemoryPublicationRecord publication) {
+        if (publication == null || publication.getCreateTime() == null
+                || publication.getCreateTime() <= 0) {
+            throw new IllegalStateException(
+                    "Memory publication stable timestamp is unavailable");
+        }
+        return publication.getCreateTime();
+    }
+
+    private PublicationResult requirePublicationPayload(
+            MemoryPublicationRecord publication, List<ChatMessageEntity> messages) {
+        if (publication == null) {
+            throw new IllegalStateException("Memory publication is unavailable");
+        }
+        if ("ALLOCATED".equals(publication.getState())) {
+            if (publication.getSummaryContent() != null
+                    || publication.getEmbeddingBytes() != null
+                    || publication.getPayloadDigest() != null) {
+                throw new IllegalStateException(
+                        "Allocated memory publication contains a partial payload");
+            }
+            String summary = summaryGenerator.summarizeConversation(messages);
+            MemoryPublicationPayload candidate = MemoryPublicationPayload.generated(
+                    summary, memoryRepository.generateEmbedding(summary));
+            publication = memoryPublicationDao.bindPayload(
+                    publication, candidate, System.currentTimeMillis());
+        }
+        if (!("STAGED".equals(publication.getState())
+                || "PUBLISHED".equals(publication.getState()))) {
+            throw new IllegalStateException("Memory publication payload is not staged");
+        }
+        MemoryPublicationPayload persisted = MemoryPublicationPayload.stored(
+                publication.getSummaryContent(), publication.getEmbeddingBytes(),
+                publication.getPayloadDigest());
+        return new PublicationResult(publication, persisted);
+    }
+
+    private void validateWorkConfiguration() {
+        if (batchSize < 1 || batchSize > 500) {
+            throw new IllegalStateException("chat.memory.batch-size must be between 1 and 500");
+        }
+        if (pendingMaxAttempts < 1 || pendingMaxAttempts > 100) {
+            throw new IllegalStateException("chat.memory.work.max-attempts must be between 1 and 100");
+        }
+        if (workLeaseMillis < 1_000L || workLeaseMillis > 3_600_000L) {
+            throw new IllegalStateException("chat.memory.work.lease-millis is invalid");
+        }
+    }
+
+    private record ValidatedMessageSnapshot(
+            List<ChatMessageEntity> messages,
+            List<Long> pendingMessageIds,
+            String token) {
+    }
+
+    private record PublicationResult(
+            MemoryPublicationRecord publication, MemoryPublicationPayload payload) {
     }
 
     @Override
     public void cleanupExpiredMemories() {
-        log.info("Starting cleanup expired memories...");
-
-        try {
-            long retentionMillis = retentionDays * 24 * 60 * 60 * 1000L;
-            long beforeTime = DateUtil.nowTime() - retentionMillis;
-
-            int totalDeleted = 0;
-            List<Long> expiredMessageIds;
-
-            do {
-                // 批量删除过期消息
-                expiredMessageIds = chatMessageDao.findExpiredMessageIds(beforeTime, batchSize);
-
-                if (!expiredMessageIds.isEmpty()) {
-                    chatMessageDao.deleteBatchIds(expiredMessageIds);
-                    totalDeleted += expiredMessageIds.size();
-                    log.debug("Deleted {} expired messages", expiredMessageIds.size());
-                }
-            } while (!expiredMessageIds.isEmpty());
-
-            // 清理向量库中的过期会话摘要
-            memoryRepository.deleteExpiredDocuments(beforeTime);
-
-            log.info("Cleanup expired memories completed. Total deleted: {}", totalDeleted);
-        } catch (Exception e) {
-            log.error("Failed to cleanup expired memories", e);
-        }
+        throw new IllegalStateException(
+                "Memory retention cleanup is disabled until deletion is publication-aware and scope-grouped");
     }
 
     @Override
     public List<ChatMessageEntity> getConversationMessagesForMaintenance(String conversationId) {
-        return chatMessageDao.findByConversationIdForMaintenance(conversationId);
+        throw new IllegalStateException("Unscoped memory maintenance reads are disabled");
     }
 }

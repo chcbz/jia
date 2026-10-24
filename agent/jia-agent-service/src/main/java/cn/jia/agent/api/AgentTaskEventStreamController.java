@@ -7,6 +7,8 @@ import cn.jia.agent.service.AgentTaskEventAccessService.AuthorizedSubject;
 import cn.jia.agent.service.AgentTaskEventReplayService;
 import cn.jia.agent.service.AgentTaskEventReplayService.ReplaySignal;
 import cn.jia.agent.service.AgentTaskEventReplayService.TaskScope;
+import cn.jia.core.tenant.BusinessScope;
+import cn.jia.core.tenant.TrustedTenantContext;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpHeaders;
@@ -67,11 +69,12 @@ public class AgentTaskEventStreamController {
             Authentication authentication) {
         Scope jwt = requireJwtScope(authentication);
         RawRequest raw = requireRawRequest(taskId, request);
-        if (!taskEventsGate.allows("0", jwt.clientId())) {
+        if (!taskEventsGate.allows(jwt.tenantId(), jwt.clientId())) {
             throw unavailable();
         }
-        AuthorizedSubject subject = accessService.authorize(
-                "0", jwt.clientId(), jwt.jiacn(), taskId, raw.actorAgentId());
+        AuthorizedSubject subject = TrustedTenantContext.withScope(jwt.authority(),
+                () -> accessService.authorize(jwt.tenantId(), jwt.clientId(), jwt.jiacn(),
+                        taskId, raw.actorAgentId()));
         if (subject == null || TransactionSynchronizationManager.isActualTransactionActive()) {
             throw unavailable();
         }
@@ -80,7 +83,8 @@ public class AgentTaskEventStreamController {
         Flux<ReplaySignal> source;
         try {
             scope = new TaskScope(subject.tenantId(), subject.clientId(), subject.ownerJiacn(), subject.taskId());
-            source = replayService.replay(scope, raw.cursor());
+            source = TrustedTenantContext.withScope(jwt.authority(),
+                    () -> replayService.replay(scope, raw.cursor()));
         } catch (RuntimeException exception) {
             throw unavailable();
         }
@@ -208,13 +212,27 @@ public class AgentTaskEventStreamController {
             throw new StreamAuthenticationException(false);
         }
         Map<String, Object> claims = jwt.getToken().getClaims();
-        Object jiacn = claims.get("jiacn");
-        Object clientId = claims.get("client_id");
-        if (!(jiacn instanceof String tenant) || !(clientId instanceof String client)
-                || !validExact(tenant, 50) || !validExact(client, 50)) {
+        final BusinessScope trusted;
+        try {
+            trusted = TrustedTenantContext.requireScope();
+        } catch (RuntimeException unavailable) {
             throw new StreamAuthenticationException(true);
         }
-        return new Scope(tenant, client);
+        Object claimedDomain = claims.get("data_domain_id");
+        Object jiacn = claims.get("jiacn");
+        Object clientId = claims.get("client_id");
+        if (!(jiacn instanceof String owner) || !(clientId instanceof String client)
+                || !validExact(owner, 50) || !validExact(client, 50)
+                || "0".equals(owner)
+                || !trusted.tenantId().value().equals(claims.get("tenant_id"))
+                || (claimedDomain != null
+                    && !trusted.dataDomainId().value().equals(claimedDomain))
+                || !"cyf".equals(trusted.dataDomainId().value())
+                || !owner.equals(trusted.ownerJiacn())
+                || !client.equals(trusted.callerClientId())) {
+            throw new StreamAuthenticationException(true);
+        }
+        return new Scope(trusted.tenantId().value(), owner, client, trusted);
     }
 
     private static void requireExact(String value, int maxLength) {
@@ -272,7 +290,7 @@ public class AgentTaskEventStreamController {
         return new StreamUnavailableException();
     }
 
-    private record Scope(String jiacn, String clientId) {
+    private record Scope(String tenantId, String jiacn, String clientId, BusinessScope authority) {
     }
 
     private record RawRequest(String actorAgentId, long cursor) {

@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="zh-CN" xmlns:th="http://www.thymeleaf.org">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>选择业务区域</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 34rem; padding: 2rem 1rem; margin: auto; }
+    fieldset { border: 1px solid #ccc; border-radius: .5rem; padding: 1rem; }
+    label { display: block; padding: .65rem .25rem; }
+    button { padding: .6rem 1.25rem; margin-top: 1rem; }
+  </style>
+</head>
+<body>
+  <h1>选择业务区域</h1>
+  <p><span th:text="${clientId}">应用</span> 请求访问以下业务区域之一：</p>
+  <p th:if="${#lists.isEmpty(options)}">当前账号没有可进入的区域，请联系区域管理员。</p>
+  <form th:unless="${#lists.isEmpty(options)}" method="post" th:action="@{/oauth2/tenant-selection}">
+    <input type="hidden" name="authorizationRequestId" th:value="${state}" />
+    <input th:if="${_csrf != null}" type="hidden" th:name="${_csrf.parameterName}" th:value="${_csrf.token}" />
+    <fieldset>
+      <legend>获准区域</legend>
+      <label th:each="choice, stat : ${options}">
+        <input type="radio" name="tenantId" th:value="${choice.tenantId.value}" th:checked="${stat.first}" required />
+        <span th:text="${choice.tenantName}">区域名称</span>
+        <small th:text="${choice.tenantKind}">TEST</small>
+      </label>
+    </fieldset>
+    <button type="submit">进入所选区域</button>
+  </form>
+</body>
+</html>

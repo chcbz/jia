@@ -89,7 +89,7 @@ final class AgentCommandRabbitMessageDecoder {
         int sourceRetry = integerHeader(
                 headers, AgentCommandAmqpContract.HEADER_SOURCE_SETTLEMENT_RETRY);
 
-        if (wireVersion != AgentCommandAmqpContract.WIRE_VERSION) {
+        if (wireVersion != AgentCommandAmqpContract.LEGACY_WIRE_VERSION) {
             throw invalid("WIRE_VERSION_MISMATCH");
         }
         if (deliveryId <= 0 || activeAttempt <= 0 || expiresAt <= 0

@@ -1,6 +1,7 @@
 package cn.jia.agent.api;
 
 import cn.jia.agent.service.HallRequestDraftService;
+import cn.jia.core.tenant.TrustedTenantContext;
 import jakarta.servlet.ServletInputStream;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.HttpHeaders;
@@ -212,11 +213,20 @@ public class HallRequestDraftController {
                 || !authentication.isAuthenticated()) throw new AuthenticationFailure(false);
         Map<String, Object> claims = jwt.getToken().getClaims();
         Object owner = claims.get("jiacn"); Object client = claims.get("client_id");
+        var trusted = TrustedTenantContext.requireScope();
+        Object claimedDomain = claims.get("data_domain_id");
+        if (!trusted.tenantId().value().equals(claims.get("tenant_id"))
+                || (claimedDomain != null && !trusted.dataDomainId().value().equals(claimedDomain))
+                || !"cyf".equals(trusted.dataDomainId().value()))
+            throw new AuthenticationFailure(true);
         if (!(owner instanceof String ownerJiacn) || !(client instanceof String clientId)
                 || !identity(ownerJiacn) || !identity(clientId) || "0".equals(ownerJiacn)) {
             throw new AuthenticationFailure(true);
         }
-        return new HallRequestDraftService.OwnerScope("0", clientId, ownerJiacn);
+        if (!ownerJiacn.equals(trusted.ownerJiacn())
+                || !clientId.equals(trusted.callerClientId())) throw new AuthenticationFailure(true);
+        return new HallRequestDraftService.OwnerScope(
+                trusted.tenantId().value(), clientId, ownerJiacn);
     }
 
     private static boolean identity(String value) {

@@ -32,6 +32,10 @@ import java.util.HexFormat;
 import java.util.Objects;
 import java.util.Set;
 import java.util.regex.Pattern;
+import cn.jia.core.tenant.BusinessScope;
+import cn.jia.core.tenant.DataDomainId;
+import cn.jia.core.tenant.TenantId;
+import cn.jia.core.tenant.TrustedTenantContext;
 
 /** Runtime v1 boundary. It stores enrollment and runtime credentials as SHA-256 digests only. */
 @Service
@@ -56,7 +60,7 @@ public class AgentRuntimeV1ServiceImpl implements AgentRuntimeV1Service {
     @Transactional(rollbackFor = Exception.class)
     public AgentRuntimeV1InstallationView create(String tenantId, String clientId, String ownerJiacn,
             AgentRuntimeV1InstallationRequest request, long now) {
-        requireScope(tenantId, clientId);
+        requireManagementScope(tenantId, clientId, ownerJiacn);
         if (request == null || !installationId(request.installationId()) || !exact(request.canonicalAgentId(), 100)
                 || !exact(request.manifestVersion(), 100) || !sha256Text(request.manifestSha256())
                 || !sha256Text(request.enrollmentSecretSha256()) || request.enrollmentExpiresAt() <= now) {
@@ -81,7 +85,7 @@ public class AgentRuntimeV1ServiceImpl implements AgentRuntimeV1Service {
     @Transactional(rollbackFor = Exception.class)
     public AgentRuntimeV1InstallationView ensureInstallation(String tenantId, String clientId, String ownerJiacn,
             AgentRuntimeV1InstallationRequest request, long now) {
-        requireScope(tenantId, clientId);
+        requireManagementScope(tenantId, clientId, ownerJiacn);
         if (request == null || !installationId(request.installationId()) || !exact(request.canonicalAgentId(), 100)
                 || !"1".equals(request.manifestVersion()) || !sha256Text(request.manifestSha256())
                 || !sha256Text(request.enrollmentSecretSha256()) || request.enrollmentExpiresAt() <= 0) {
@@ -122,7 +126,7 @@ public class AgentRuntimeV1ServiceImpl implements AgentRuntimeV1Service {
 
     @Override
     public AgentRuntimeV1InstallationView status(String tenantId, String clientId, String ownerJiacn, String installationId) {
-        requireScope(tenantId, clientId);
+        requireManagementScope(tenantId, clientId, ownerJiacn);
         AgentRuntimeV1InstallationEntity installation = installations.findInScope(tenantId, clientId, installationId);
         requireInstallationOwner(installation, tenantId, clientId, ownerJiacn);
         return view(installation, null);
@@ -131,7 +135,7 @@ public class AgentRuntimeV1ServiceImpl implements AgentRuntimeV1Service {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void revoke(String tenantId, String clientId, String ownerJiacn, String installationId, long now) {
-        requireScope(tenantId, clientId);
+        requireManagementScope(tenantId, clientId, ownerJiacn);
         AgentRuntimeV1InstallationEntity installation = installations.lock(installationId);
         if (installation == null || !sameScope(installation, tenantId, clientId)
                 || installation.getVersion() == null || installation.getId() == null) {
@@ -143,58 +147,62 @@ public class AgentRuntimeV1ServiceImpl implements AgentRuntimeV1Service {
     }
 
     @Override
-    @Transactional(rollbackFor = Exception.class)
     public AgentRuntimeV1EnrollmentResult enroll(AgentRuntimeV1EnrollmentRequest request, long now) {
         if (request == null || !exact(request.installationId(), 100) || !exact(request.tenantId(), 50)
                 || !exact(request.clientId(), 50) || !exact(request.canonicalAgentId(), 100)
                 || !exact(request.manifestVersion(), 100) || !sha256Text(request.manifestSha256())
                 || !exact(request.enrollmentSecret(), 4096)) throw forbidden("Runtime v1 enrollment rejected");
-        AgentRuntimeV1InstallationEntity installation = installations.lock(request.installationId());
-        if (installation == null || !sameScope(installation, request.tenantId(), request.clientId())
-                || !request.canonicalAgentId().equals(installation.getCanonicalAgentId())
-                || !request.manifestVersion().equals(installation.getManifestVersion())
-                || !request.manifestSha256().equals(installation.getManifestSha256())
-                || !"PENDING".equals(installation.getStatus()) || installation.getEnrollmentConsumedAt() != null
-                || installation.getEnrollmentExpiresAt() == null || installation.getEnrollmentExpiresAt() <= now
-                || !MessageDigest.isEqual(digest(request.enrollmentSecret()), installation.getEnrollmentSecretHash())
-                || installation.getId() == null || installation.getVersion() == null) {
+        AgentRuntimeV1InstallationEntity bootstrap = installations.findBootstrap(request.installationId());
+        if (!validEnrollment(bootstrap, request, now)) {
             throw forbidden("Runtime v1 enrollment rejected");
         }
-        String authorization = randomAuthorization();
-        if (installations.activate(installation, digest(authorization), now) != 1) {
-            throw forbidden("Runtime v1 enrollment rejected");
-        }
-        installation.setStatus("ACTIVE").setEnrollmentConsumedAt(now).setRuntimeAuthorizationIssuedAt(now)
-                .setVersion(installation.getVersion() + 1);
-        return new AgentRuntimeV1EnrollmentResult(view(installation, null), authorization);
+        return withPersistentScope(bootstrap, scope -> {
+            AgentRuntimeV1InstallationEntity installation = installations.lock(request.installationId());
+            if (!validEnrollment(installation, request, now)) throw forbidden("Runtime v1 enrollment rejected");
+            requirePersistentOwner(installation, scope);
+            String authorization = randomAuthorization();
+            if (installations.activate(installation, digest(authorization), now) != 1) {
+                throw forbidden("Runtime v1 enrollment rejected");
+            }
+            installation.setStatus("ACTIVE").setEnrollmentConsumedAt(now).setRuntimeAuthorizationIssuedAt(now)
+                    .setVersion(installation.getVersion() + 1);
+            return new AgentRuntimeV1EnrollmentResult(view(installation, null), authorization);
+        });
     }
 
     @Override
-    @Transactional(rollbackFor = Exception.class)
     public AgentRuntimeV1SessionResponse session(String authorization, AgentRuntimeV1SessionRequest request, long now) {
-        AgentRuntimeV1InstallationEntity found = authenticate(authorization);
-        AgentRuntimeV1InstallationEntity installation = installations.lock(found.getInstallationId());
-        if (installation == null || !"ACTIVE".equals(installation.getStatus())
-                || !MessageDigest.isEqual(digest(authorization), installation.getRuntimeAuthorizationHash())
-                || request == null || !sameRuntimeIdentity(installation, request.tenantId(), request.clientId(), request.canonicalAgentId())
-                || !Objects.equals(installation.getInstallationId(), request.installationId())
-                || !Objects.equals(installation.getManifestVersion(), request.manifestVersion())
-                || !Objects.equals(installation.getManifestSha256(), request.manifestSha256())) {
-            throw forbidden("Runtime session rejected");
-        }
-        return sessions.issue(installation, request, now);
+        AgentRuntimeV1InstallationEntity bootstrap = authenticateBootstrap(authorization);
+        return withPersistentScope(bootstrap, scope -> {
+            AgentRuntimeV1InstallationEntity installation = installations.lock(bootstrap.getInstallationId());
+            if (!validRuntimeCredential(installation, authorization)
+                    || request == null || !sameRuntimeIdentity(installation, request.tenantId(), request.clientId(), request.canonicalAgentId())
+                    || !Objects.equals(installation.getInstallationId(), request.installationId())
+                    || !Objects.equals(installation.getManifestVersion(), request.manifestVersion())
+                    || !Objects.equals(installation.getManifestSha256(), request.manifestSha256())) {
+                throw forbidden("Runtime session rejected");
+            }
+            requirePersistentOwner(installation, scope);
+            return sessions.issue(installation, request, now);
+        });
     }
 
     @Override
-    @Transactional(rollbackFor = Exception.class)
     public AgentRuntimeV1InstallationView heartbeat(String authorization, AgentRuntimeV1RuntimeRequest request, long now) {
-        AgentRuntimeV1InstallationEntity installation = authenticate(authorization);
-        AgentRuntimeV1InstallationView state = runtimeView(installation, request);
-        if ("REBINDS_REQUIRED".equals(state.status())) return state;
-        if (installation.getId() == null || installation.getVersion() == null
-                || installations.heartbeat(installation, now) != 1) throw forbidden("Runtime v1 authorization rejected");
-        installation.setLastHeartbeatAt(now);
-        return view(installation, null);
+        AgentRuntimeV1InstallationEntity bootstrap = authenticateBootstrap(authorization);
+        return withPersistentScope(bootstrap, scope -> {
+            AgentRuntimeV1InstallationEntity installation = installations.lock(bootstrap.getInstallationId());
+            if (!validRuntimeCredential(installation, authorization)) {
+                throw forbidden("Runtime v1 authorization rejected");
+            }
+            requirePersistentOwner(installation, scope);
+            AgentRuntimeV1InstallationView state = runtimeView(installation, request);
+            if ("REBINDS_REQUIRED".equals(state.status())) return state;
+            if (installation.getId() == null || installation.getVersion() == null
+                    || installations.heartbeat(installation, now) != 1) throw forbidden("Runtime v1 authorization rejected");
+            installation.setLastHeartbeatAt(now).setVersion(installation.getVersion() + 1);
+            return view(installation, null);
+        });
     }
 
     @Override
@@ -240,15 +248,66 @@ public class AgentRuntimeV1ServiceImpl implements AgentRuntimeV1Service {
         });
     }
 
-    private AgentRuntimeV1InstallationEntity authenticate(String authorization) {
+    private AgentRuntimeV1InstallationEntity authenticateBootstrap(String authorization) {
         if (!exact(authorization, 4096)) throw forbidden("Runtime v1 authorization rejected");
-        AgentRuntimeV1InstallationEntity installation = installations.findActiveByAuthorizationHash(digest(authorization));
-        if (installation == null || !"ACTIVE".equals(installation.getStatus())
-                || installation.getRuntimeAuthorizationHash() == null
-                || !MessageDigest.isEqual(digest(authorization), installation.getRuntimeAuthorizationHash())) {
+        AgentRuntimeV1InstallationEntity installation =
+                installations.findBootstrapActiveByAuthorizationHash(digest(authorization));
+        if (!validRuntimeCredential(installation, authorization)) {
             throw forbidden("Runtime v1 authorization rejected");
         }
         return installation;
+    }
+
+    private <T> T withPersistentScope(AgentRuntimeV1InstallationEntity installation,
+            java.util.function.Function<BusinessScope, T> operation) {
+        try {
+            return sessions.withPersistentInstallationScope(installation, operation);
+        } catch (AgentBizException rejected) {
+            throw rejected;
+        } catch (IllegalArgumentException rejected) {
+            throw forbidden("Runtime v1 authorization rejected");
+        }
+    }
+
+    private void requirePersistentOwner(AgentRuntimeV1InstallationEntity installation,
+            BusinessScope scope) {
+        if (scope == null || installation == null
+                || !Objects.equals(installation.getTenantId(), scope.tenantId().value())
+                || !Objects.equals(installation.getClientId(), scope.callerClientId())) {
+            throw forbidden("Runtime v1 authorization rejected");
+        }
+        var identity = identityRegistry.findExactByCanonicalInScope(scope.tenantId().value(),
+                scope.callerClientId(), scope.ownerJiacn(), installation.getCanonicalAgentId());
+        if (identity == null || !Objects.equals(identity.getTenantId(), scope.tenantId().value())
+                || !Objects.equals(identity.getClientId(), scope.callerClientId())
+                || !Objects.equals(identity.getOwnerJiacn(), scope.ownerJiacn())
+                || !Objects.equals(identity.getCanonicalAgentId(), installation.getCanonicalAgentId())) {
+            throw forbidden("Runtime v1 authorization rejected");
+        }
+    }
+
+    private static boolean validEnrollment(AgentRuntimeV1InstallationEntity installation,
+            AgentRuntimeV1EnrollmentRequest request, long now) {
+        return installation != null && request != null
+                && sameScope(installation, request.tenantId(), request.clientId())
+                && Objects.equals(request.installationId(), installation.getInstallationId())
+                && Objects.equals(request.canonicalAgentId(), installation.getCanonicalAgentId())
+                && Objects.equals(request.manifestVersion(), installation.getManifestVersion())
+                && Objects.equals(request.manifestSha256(), installation.getManifestSha256())
+                && "PENDING".equals(installation.getStatus())
+                && installation.getEnrollmentConsumedAt() == null
+                && installation.getEnrollmentExpiresAt() != null
+                && installation.getEnrollmentExpiresAt() > now
+                && installation.getEnrollmentSecretHash() != null
+                && MessageDigest.isEqual(digest(request.enrollmentSecret()), installation.getEnrollmentSecretHash())
+                && installation.getId() != null && installation.getVersion() != null;
+    }
+
+    private static boolean validRuntimeCredential(AgentRuntimeV1InstallationEntity installation,
+            String authorization) {
+        return installation != null && "ACTIVE".equals(installation.getStatus())
+                && installation.getRuntimeAuthorizationHash() != null
+                && MessageDigest.isEqual(digest(authorization), installation.getRuntimeAuthorizationHash());
     }
 
     private AgentRuntimeV1InstallationView runtimeView(
@@ -275,8 +334,8 @@ public class AgentRuntimeV1ServiceImpl implements AgentRuntimeV1Service {
     private void requireInstallationOwner(AgentRuntimeV1InstallationEntity installation,
             String tenantId, String clientId, String ownerJiacn) {
         try {
-            new cn.jia.agent.service.AgentHostedBindingTransaction.Scope(tenantId, clientId, ownerJiacn);
-        } catch (IllegalArgumentException invalidScope) {
+            new BusinessScope(TenantId.of(tenantId), DataDomainId.of("cyf"), ownerJiacn, clientId);
+        } catch (RuntimeException invalidScope) {
             throw forbidden("Runtime v1 installation is unavailable");
         }
         if (!sameScope(installation, tenantId, clientId)
@@ -313,6 +372,22 @@ public class AgentRuntimeV1ServiceImpl implements AgentRuntimeV1Service {
     }
     private static void requireScope(String tenantId, String clientId) {
         if (!exact(tenantId, 50) || !exact(clientId, 50)) throw forbidden("Runtime v1 scope is invalid");
+    }
+    private static void requireManagementScope(String tenantId, String clientId,
+            String ownerJiacn) {
+        requireScope(tenantId, clientId);
+        final BusinessScope trusted;
+        try {
+            trusted = TrustedTenantContext.requireScope();
+        } catch (RuntimeException unavailable) {
+            throw forbidden("Runtime v1 scope is invalid");
+        }
+        if (!tenantId.equals(trusted.tenantId().value())
+                || !clientId.equals(trusted.callerClientId())
+                || !Objects.equals(ownerJiacn, trusted.ownerJiacn())
+                || !"cyf".equals(trusted.dataDomainId().value())) {
+            throw forbidden("Runtime v1 scope is invalid");
+        }
     }
     private static AgentBizException forbidden(String message) {
         return new AgentBizException("AGENT_FORBIDDEN", message);

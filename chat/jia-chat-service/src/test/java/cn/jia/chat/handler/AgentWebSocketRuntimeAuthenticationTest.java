@@ -121,6 +121,9 @@ class AgentWebSocketRuntimeAuthenticationTest {
             when(auth.isCurrentBinding(any(), any(), any(), any(), any(), any())).thenReturn(true);
             UnifiedRuntimeTestSupport.install(session);
             handler.setRuntimeAuthentication(auth);
+            // Delivery is allowed only for the live session installed by the socket lifecycle.
+            handler.afterConnectionEstablished(session);
+            frames.clear(); // Keep assertions scoped to the registration/presence under test.
         }
         String command() { return "{\"schemaVersion\":1,\"messageType\":\"agent.register\",\"messageId\":\"reg-a\",\"agentId\":\""
                 + AGENT + "\",\"runtimeInstanceId\":\"runtime-a\",\"name\":\"Native\"}"; }

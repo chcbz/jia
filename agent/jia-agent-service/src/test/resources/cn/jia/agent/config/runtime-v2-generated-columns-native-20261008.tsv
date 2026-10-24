@@ -1,0 +1,6 @@
+# Catalog SHA256: 996294187783dec5b98f5b096b5241424d58d585c69158615cd137dfa10ec287
+# Provenance: original command-29 post-bootstrap admin-authoritative --batch --raw, 2026-10-08.
+# CLI escaped quotes are retained bytes, NOT proof of a separately captured JDBC representation.
+# column_name	generation_expression_sha256	exact_retained_generation_expression
+live_registration_subject_sha256	82c11cc10f8865ff70635f90c98f5429022ba1a45968f12e4175dab5e27faee3	(case when ((`status` <> _utf8mb4\'REVOKED\') and (`registration_subject_sha256` is not null)) then lower(hex(`registration_subject_sha256`)) else NULL end)
+live_business_subject	fd15c9875dbc44ee0b9c45e15bfcf470cffb02a5f725327ff19e8c3e5ea77f40	(case when ((`status` <> _utf8mb4\'REVOKED\') and (`contract_version` = 2) and (`registration_subject_sha256` is not null)) then sha2(concat(lpad(length(`tenant_id`),3,_utf8mb4\'0\'),_utf8mb4\':\',`tenant_id`,lpad(length(`client_id`),3,_utf8mb4\'0\'),_utf8mb4\':\',`client_id`,lpad(length(`owner_jiacn`),3,_utf8mb4\'0\'),_utf8mb4\':\',`owner_jiacn`,lpad(length(`agent_id`),3,_utf8mb4\'0\'),_utf8mb4\':\',`agent_id`),256) else NULL end)

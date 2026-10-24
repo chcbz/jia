@@ -27,6 +27,12 @@ public class TaskServiceImpl extends BaseServiceImpl<TaskPlanDao, TaskPlanEntity
 	private TaskDetailDao taskDetailDao;
 
 	@Override
+	public TaskPlanEntity findExactInOwnerScope(
+			Long id, String tenantId, String clientId, String ownerJiacn) {
+		return baseDao.findExactInOwnerScope(id, tenantId, clientId, ownerJiacn);
+	}
+
+	@Override
 	public TaskPlanEntity create(TaskPlanEntity task) {
 		//保存任务信息
 		baseDao.insert(task);
@@ -45,12 +51,16 @@ public class TaskServiceImpl extends BaseServiceImpl<TaskPlanDao, TaskPlanEntity
 			TaskItemEntity item = new TaskItemEntity();
 			item.setPlanId(task.getId());
 			item.setStatus(TaskConstants.TASK_STATUS_ENABLE);
+			item.setTenantId(task.getTenantId());
+			item.setClientId(task.getClientId());
 			taskItemDao.insert(item);
 		} else if(TaskConstants.TASK_PERIOD_DATE.equals(task.getPeriod())) {
 			TaskItemEntity item = new TaskItemEntity();
 			item.setPlanId(task.getId());
 			item.setStatus(TaskConstants.TASK_STATUS_ENABLE);
 			item.setExecuteTime(task.getStartTime());
+			item.setTenantId(task.getTenantId());
+			item.setClientId(task.getClientId());
 			taskItemDao.insert(item);
 		} else {
 			Long time = task.getStartTime();
@@ -74,6 +84,8 @@ public class TaskServiceImpl extends BaseServiceImpl<TaskPlanDao, TaskPlanEntity
 						item.setPlanId(task.getId());
 						item.setStatus(TaskConstants.TASK_STATUS_ENABLE);
 						item.setExecuteTime(time);
+						item.setTenantId(task.getTenantId());
+						item.setClientId(task.getClientId());
 						taskItemDao.insert(item);
 					}
 					//设置下一个执行点
@@ -83,6 +95,8 @@ public class TaskServiceImpl extends BaseServiceImpl<TaskPlanDao, TaskPlanEntity
 					TaskItemEntity item = new TaskItemEntity();
 					item.setPlanId(task.getId());
 					item.setExecuteTime(time);
+					item.setTenantId(task.getTenantId());
+					item.setClientId(task.getClientId());
 					taskItemDao.insert(item);
 					//设置下一个执行点
 					//noinspection MagicConstant

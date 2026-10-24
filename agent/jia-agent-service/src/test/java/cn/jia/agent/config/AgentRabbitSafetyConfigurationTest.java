@@ -1,15 +1,20 @@
 package cn.jia.agent.config;
 
-import cn.jia.agent.dao.AgentCommandRecoveryDao;
-import cn.jia.agent.dao.AgentOutboxRelayDao;
 import cn.jia.agent.service.AgentCommandOperationsService;
-import cn.jia.agent.service.AgentRawCommandDispatcher;
+import cn.jia.core.tenant.DataDomainId;
+import cn.jia.core.tenant.TenantId;
+import cn.jia.core.tenant.WorkerScope;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Conditional;
+import org.springframework.context.annotation.Configuration;
 import org.springframework.core.env.MapPropertySource;
-import org.springframework.transaction.PlatformTransactionManager;
 
 import java.lang.reflect.Modifier;
 import java.util.Arrays;
@@ -27,12 +32,10 @@ import static org.mockito.Mockito.mock;
 
 class AgentRabbitSafetyConfigurationTest {
     private static final ApplicationContextRunner RUNNER = new ApplicationContextRunner()
-            .withBean(AgentOutboxRelayDao.class, () -> mock(AgentOutboxRelayDao.class))
-            .withBean(AgentCommandRecoveryDao.class, () -> mock(AgentCommandRecoveryDao.class))
-            .withBean(AgentRawCommandDispatcher.class, () -> mock(AgentRawCommandDispatcher.class))
-            .withBean(PlatformTransactionManager.class,
-                    () -> mock(PlatformTransactionManager.class))
-            .withUserConfiguration(AgentRabbitSafetyConfiguration.class);
+            .withUserConfiguration(SafetyGateOnlyConfiguration.class);
+    private static final ApplicationContextRunner GATE_ONLY_RUNNER =
+            new ApplicationContextRunner()
+                    .withUserConfiguration(SafetyGateOnlyConfiguration.class);
 
     @Test
     void absentConfigurationIsOffAndRegistersNoConditionalBrokerBoundary() {
@@ -81,6 +84,109 @@ class AgentRabbitSafetyConfigurationTest {
                 "agent.rabbit-consume.enabled=true"))
                 .run(context -> assertStartupFailure(context.getStartupFailure(),
                         "rabbit consume requires command outbox and topology"));
+    }
+
+    @Test
+    void consumeV2RequiresBothCommandOutboxAndTopology() {
+        GATE_ONLY_RUNNER.withPropertyValues(concat(
+                broker(),
+                "agent.rabbit-topology.enabled=true",
+                "agent.rabbit-consume-v2.enabled=true"))
+                .run(context -> assertStartupFailure(context.getStartupFailure(),
+                        "rabbit consume v2 requires command outbox and topology"));
+        GATE_ONLY_RUNNER.withPropertyValues(concat(
+                broker(),
+                "agent.command-outbox.enabled=true",
+                "agent.rabbit-consume-v2.enabled=true"))
+                .run(context -> assertStartupFailure(context.getStartupFailure(),
+                        "rabbit consume v2 requires command outbox and topology"));
+    }
+
+    @Test
+    void v2CanaryAndScopedDispatchUseExactCanonicalWorkerScopeAcl() {
+        GATE_ONLY_RUNNER.withPropertyValues(concatAll(
+                broker(), fullV2Dispatch(), workerScope(0, "1", "cyf", "pool-a")))
+                .run(context -> {
+                    assertNull(context.getStartupFailure());
+                    AgentRabbitSafetyGate gate = context.getBean(AgentRabbitSafetyGate.class);
+                    assertEquals(AgentRabbitActivationState.DISPATCH_CANARY, gate.state());
+                    assertTrue(gate.brokerRequired());
+                    assertFalse(gate.rabbitConsumeEnabled());
+                    assertTrue(gate.rabbitConsumeV2Enabled());
+                    assertEquals(1, gate.dispatchScopeCount());
+                    assertTrue(gate.allowsWorkerDispatch("1", "cyf", "pool-a"));
+                    assertTrue(gate.allowsWorkerDispatch(workerScopeValue("1", "cyf", "pool-a")));
+                    assertFalse(gate.allowsWorkerDispatch("01", "cyf", "pool-a"));
+                    assertFalse(gate.allowsWorkerDispatch("1", "Cyf", "pool-a"));
+                    assertFalse(gate.allowsWorkerDispatch("1", "cyf", "pool-b"));
+                });
+
+        GATE_ONLY_RUNNER.withPropertyValues(concatAll(
+                broker(), fullV2Dispatch(),
+                workerScope(0, "1", "cyf", "pool-a"),
+                workerScope(1, "2", "cyf", "pool-b")))
+                .run(context -> {
+                    assertNull(context.getStartupFailure());
+                    AgentRabbitSafetyGate gate = context.getBean(AgentRabbitSafetyGate.class);
+                    assertEquals(AgentRabbitActivationState.DISPATCH_SCOPED, gate.state());
+                    assertEquals(2, gate.dispatchScopeCount());
+                    assertTrue(gate.allowsWorkerDispatch("2", "cyf", "pool-b"));
+                });
+    }
+
+    @Test
+    void v2OnlyConsumptionRequiresBrokerAndExposesFrozenAccessor() {
+        GATE_ONLY_RUNNER.withPropertyValues(concat(
+                broker(),
+                "agent.command-outbox.enabled=true",
+                "agent.rabbit-topology.enabled=true",
+                "agent.rabbit-consume-v2.enabled=true"))
+                .run(context -> {
+                    assertNull(context.getStartupFailure());
+                    AgentRabbitSafetyGate gate = context.getBean(AgentRabbitSafetyGate.class);
+                    assertEquals(AgentRabbitActivationState.MQ_SHADOW, gate.state());
+                    assertTrue(gate.brokerRequired());
+                    assertTrue(gate.rabbitConsumeV2Enabled());
+                    assertFalse(gate.rabbitConsumeEnabled());
+                });
+    }
+
+    @Test
+    void legacyAndV2ConsumersAreMutuallyExclusive() {
+        GATE_ONLY_RUNNER.withPropertyValues(concatAll(
+                broker(), fullV2Dispatch(),
+                new String[] {"agent.rabbit-consume.enabled=true"},
+                workerScope(0, "1", "cyf", "pool-a")))
+                .run(context -> assertStartupFailure(context.getStartupFailure(),
+                        "legacy and protocol-v2 Rabbit consumers are mutually exclusive"));
+    }
+
+    @Test
+    void malformedWorkerAclIsIgnoredWhenDispatchDisabledAndRejectedWhenEnabled() {
+        GATE_ONLY_RUNNER.withPropertyValues(
+                        "agent.rabbit-dispatch.enabled=false",
+                        "agent.rabbit-dispatch.allowed-worker-scopes=garbage")
+                .run(context -> {
+                    assertNull(context.getStartupFailure());
+                    assertEquals(AgentRabbitActivationState.OFF,
+                            context.getBean(AgentRabbitSafetyGate.class).state());
+                    assertTrue(context.getBeansOfType(
+                            AgentRabbitDispatchScopeProperties.class).isEmpty());
+                });
+
+        assertGateFailure("unique exact tuples", concatAll(
+                broker(), fullV2Dispatch(),
+                workerScope(0, "1", "cyf", "pool-a"),
+                workerScope(1, "1", "cyf", "pool-a")));
+        assertGateFailure("agent.rabbit-dispatch", concatAll(
+                broker(), fullV2Dispatch(),
+                workerScope(1, "1", "cyf", "pool-a")));
+        assertGateFailure("exact canonical ids", concatAll(
+                broker(), fullV2Dispatch(),
+                workerScope(0, "01", "cyf", "pool-a")));
+        assertGateFailure("exact canonical ids", concatAll(
+                broker(), fullV2Dispatch(),
+                workerScope(0, "1", "cyf_internal", "pool-a")));
     }
 
     @Test
@@ -375,6 +481,7 @@ class AgentRabbitSafetyConfigurationTest {
                 "agent.rabbit-topology.enabled=false",
                 "agent.rabbit-publish.enabled=false",
                 "agent.rabbit-consume.enabled=false",
+                "agent.rabbit-consume-v2.enabled=false",
                 "agent.rabbit-dispatch.enabled=false"
         };
     }
@@ -387,6 +494,33 @@ class AgentRabbitSafetyConfigurationTest {
                 "agent.rabbit-consume.enabled=true",
                 "agent.rabbit-dispatch.enabled=true"
         };
+    }
+
+    private static String[] fullV2Dispatch() {
+        return new String[] {
+                "agent.command-outbox.enabled=true",
+                "agent.rabbit-topology.enabled=true",
+                "agent.rabbit-publish.enabled=true",
+                "agent.rabbit-consume.enabled=false",
+                "agent.rabbit-consume-v2.enabled=true",
+                "agent.rabbit-dispatch.enabled=true"
+        };
+    }
+
+    private static String[] workerScope(
+            int index, String tenant, String dataDomain, String executionPool) {
+        String prefix = "agent.rabbit-dispatch.allowed-worker-scopes[" + index + "].";
+        return new String[] {
+                prefix + "tenant-id=" + tenant,
+                prefix + "data-domain-id=" + dataDomain,
+                prefix + "execution-pool-id=" + executionPool
+        };
+    }
+
+    private static WorkerScope workerScopeValue(
+            String tenant, String dataDomain, String executionPool) {
+        return new WorkerScope(TenantId.of(tenant), DataDomainId.of(dataDomain),
+                executionPool, "deployment-a", 1L, 1L, 1L, "agent-command", 1L);
     }
 
     private static String[] broker() {
@@ -409,6 +543,17 @@ class AgentRabbitSafetyConfigurationTest {
         return concat(concat(first, second), rest);
     }
 
+    private static String[] concatAll(String[]... arrays) {
+        int size = Arrays.stream(arrays).mapToInt(array -> array.length).sum();
+        String[] result = new String[size];
+        int offset = 0;
+        for (String[] array : arrays) {
+            System.arraycopy(array, 0, result, offset, array.length);
+            offset += array.length;
+        }
+        return result;
+    }
+
     private static LegalCase legal(String name, AgentRabbitActivationState state,
             boolean brokerRequired, String... properties) {
         return new LegalCase(name, state, brokerRequired, List.of(properties));
@@ -426,6 +571,12 @@ class AgentRabbitSafetyConfigurationTest {
     private static void assertStartupFailure(Throwable failure, String expectedMessage) {
         assertNotNull(failure);
         assertTrue(failureChain(failure).contains(expectedMessage), failureChain(failure));
+    }
+
+    private static void assertGateFailure(String expectedMessage, String... properties) {
+        GATE_ONLY_RUNNER.withPropertyValues(properties)
+                .run(context -> assertStartupFailure(
+                        context.getStartupFailure(), expectedMessage));
     }
 
     private static String failureChain(Throwable failure) {
@@ -457,6 +608,39 @@ class AgentRabbitSafetyConfigurationTest {
         @Override
         public String toString() {
             return name;
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @EnableConfigurationProperties(AgentRabbitSafetyProperties.class)
+    static class SafetyGateOnlyConfiguration {
+        @Bean
+        AgentRabbitSafetyGate gate(AgentRabbitSafetyProperties properties,
+                ObjectProvider<AgentRabbitDispatchScopeProperties> scopes) {
+            return new AgentRabbitSafetyGate(properties, scopes.getIfAvailable());
+        }
+
+        @Bean
+        AgentRabbitReadiness readiness(AgentRabbitSafetyGate gate) {
+            return new AgentRabbitReadiness(gate);
+        }
+
+        @Bean(name = "agentRabbitBrokerSettings")
+        @Conditional(AnyAgentRabbitFlagEnabledCondition.class)
+        AgentRabbitBrokerSettings brokerSettings(
+                AgentRabbitSafetyProperties properties, AgentRabbitSafetyGate gate) {
+            if (!gate.brokerRequired()) {
+                throw new IllegalStateException(
+                        "M3 Rabbit broker boundary activated without gate");
+            }
+            return new AgentRabbitBrokerSettings(properties.rabbitBroker());
+        }
+
+        @Configuration(proxyBeanMethods = false)
+        @ConditionalOnProperty(prefix = "agent.rabbit-dispatch", name = "enabled",
+                havingValue = "true")
+        @EnableConfigurationProperties(AgentRabbitDispatchScopeProperties.class)
+        static class DispatchScopes {
         }
     }
 }

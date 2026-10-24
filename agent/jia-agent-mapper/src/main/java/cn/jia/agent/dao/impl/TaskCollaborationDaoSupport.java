@@ -1,6 +1,7 @@
 package cn.jia.agent.dao.impl;
 
 import cn.jia.core.entity.BaseEntity;
+import cn.jia.core.tenant.TenantId;
 import cn.jia.core.util.StringUtil;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 
@@ -15,16 +16,11 @@ final class TaskCollaborationDaoSupport {
         requireId(clientId, "clientId");
     }
 
-    /**
-     * Task facts are single-tenant records: tenant is always literal 0 while the
-     * authenticated Jia account remains the explicit, non-system owner key.
-     */
+    /** Task facts require a canonical tenant plus an explicit, non-system owner key. */
     static void requireStrictOwnerScope(String tenantId, String clientId, String ownerJiacn) {
         requireScope(tenantId, clientId);
+        TenantId.of(tenantId);
         requireId(ownerJiacn, "ownerJiacn");
-        if (!"0".equals(tenantId)) {
-            throw new IllegalArgumentException("tenantId must be literal 0");
-        }
         if ("0".equals(ownerJiacn)) {
             throw new IllegalArgumentException("ownerJiacn must be a real task owner");
         }

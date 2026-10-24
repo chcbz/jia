@@ -3,7 +3,7 @@ package cn.jia.agent.api;
 import cn.jia.agent.service.AgentTaskCreationOperationService;
 import cn.jia.core.context.EsContext;
 import cn.jia.core.context.EsContextHolder;
-import cn.jia.core.security.TenantClaimPolicy;
+import cn.jia.core.tenant.TrustedTenantContext;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpHeaders;
@@ -276,22 +276,26 @@ public final class AgentTaskCreationOperationController {
         Map<String, Object> claims = jwt.getToken().getClaims();
         Object owner = claims.get("jiacn");
         Object client = claims.get("client_id");
-        final String tenant;
         try {
-            tenant = TenantClaimPolicy.resolve(claims, "0");
-        } catch (IllegalArgumentException invalid) {
+            var trusted = TrustedTenantContext.requireScope();
+            EsContext context = EsContextHolder.getContext();
+            if (!(owner instanceof String ownerJiacn) || !(client instanceof String clientId)
+                    || !valid(ownerJiacn, 50) || "0".equals(ownerJiacn)
+                    || !valid(clientId, 50)
+                    || !Objects.equals(trusted.tenantId().value(), claims.get("tenant_id"))
+                    || !Objects.equals(ownerJiacn, trusted.ownerJiacn())
+                    || !Objects.equals(clientId, trusted.callerClientId())
+                    || context == null
+                    || !Objects.equals(ownerJiacn, context.getJiacn())
+                    || !Objects.equals(clientId, context.getClientId())) {
+                throw new AuthenticationFailure(true);
+            }
+            return new AgentTaskCreationOperationService.Scope(
+                    trusted.tenantId().value(), clientId, ownerJiacn);
+        } catch (RuntimeException invalid) {
+            if (invalid instanceof AuthenticationFailure failure) throw failure;
             throw new AuthenticationFailure(true);
         }
-        EsContext context = EsContextHolder.getContext();
-        if (!(owner instanceof String ownerJiacn) || !(client instanceof String clientId)
-                || !valid(ownerJiacn, 50) || "0".equals(ownerJiacn)
-                || !valid(clientId, 50) || !"0".equals(tenant)
-                || context == null || !"0".equals(context.getTenantId())
-                || !Objects.equals(ownerJiacn, context.getJiacn())
-                || !Objects.equals(clientId, context.getClientId())) {
-            throw new AuthenticationFailure(true);
-        }
-        return new AgentTaskCreationOperationService.Scope("0", clientId, ownerJiacn);
     }
 
     private static void requireSingleKeyAndNoQuery(

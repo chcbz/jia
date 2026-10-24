@@ -11,8 +11,11 @@ import org.springframework.context.annotation.Import;
 /** Registers the M3 startup gate and side-effect-free conditional broker boundary. */
 @Configuration(proxyBeanMethods = false)
 @EnableConfigurationProperties(AgentRabbitSafetyProperties.class)
-@Import({AgentRabbitTopologyConfiguration.class, AgentOutboxRelayConfiguration.class,
-        AgentCommandRecoveryConfiguration.class, AgentCommandOperationsConfiguration.class})
+@Import({AgentRabbitTopologyConfiguration.class,
+        AgentOutboxRelayV2SchemaConfiguration.class, AgentOutboxWorkerAuthorityConfiguration.class,
+        AgentOutboxRelayConfiguration.class,
+        AgentCommandRecoveryConfiguration.class, AgentCommandOperationsConfiguration.class,
+        AgentCommandConsumerV2Configuration.class})
 public class AgentRabbitSafetyConfiguration {
     @Bean
     public AgentRabbitSafetyGate agentRabbitSafetyGate(

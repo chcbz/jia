@@ -2,6 +2,8 @@ package cn.jia.task.mapper;
 
 import cn.jia.task.entity.TaskPlanEntity;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import org.apache.ibatis.annotations.Param;
+import org.apache.ibatis.annotations.Select;
 
 /**
  * <p>
@@ -12,5 +14,26 @@ import com.baomidou.mybatisplus.core.mapper.BaseMapper;
  * @since 2021-11-07
  */
 public interface TaskPlanMapper extends BaseMapper<TaskPlanEntity> {
+
+    @Select("""
+            SELECT *
+              FROM task_plan
+             WHERE id = #{id}
+               AND tenant_id = #{tenantId}
+               AND CAST(tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY)
+               AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
+               AND client_id = #{clientId}
+               AND CAST(client_id AS BINARY) = CAST(#{clientId} AS BINARY)
+               AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{clientId})
+               AND jiacn = #{ownerJiacn}
+               AND CAST(jiacn AS BINARY) = CAST(#{ownerJiacn} AS BINARY)
+               AND OCTET_LENGTH(jiacn) = OCTET_LENGTH(#{ownerJiacn})
+             LIMIT 1
+            """)
+    TaskPlanEntity findExactInOwnerScope(
+            @Param("id") Long id,
+            @Param("tenantId") String tenantId,
+            @Param("clientId") String clientId,
+            @Param("ownerJiacn") String ownerJiacn);
 
 }

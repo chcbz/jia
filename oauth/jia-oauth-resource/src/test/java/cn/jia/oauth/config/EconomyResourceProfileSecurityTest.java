@@ -1,6 +1,8 @@
 package cn.jia.oauth.config;
 
 import cn.jia.user.security.AccountSecurityService;
+import cn.jia.user.security.AccountSecuritySnapshot;
+import cn.jia.user.security.AccountState;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
@@ -31,11 +33,13 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Optional;
 import java.util.Properties;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -121,7 +125,10 @@ class EconomyResourceProfileSecurityTest {
 
         @Bean
         AccountSecurityService accountSecurityService() {
-            return mock(AccountSecurityService.class);
+            AccountSecurityService service = mock(AccountSecurityService.class);
+            when(service.findUniqueByExactJiacn("tenant-a")).thenReturn(Optional.of(
+                    new AccountSecuritySnapshot(1, "tenant-a", AccountState.ACTIVE, 0)));
+            return service;
         }
 
         @Bean

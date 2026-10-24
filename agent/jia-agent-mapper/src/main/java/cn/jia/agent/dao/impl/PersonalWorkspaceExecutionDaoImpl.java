@@ -7,6 +7,7 @@ import cn.jia.agent.entity.PersonalWorkspaceExecutionOutputEntity;
 import cn.jia.agent.mapper.PersonalWorkspaceExecutionInputMapper;
 import cn.jia.agent.mapper.PersonalWorkspaceExecutionMapper;
 import cn.jia.agent.mapper.PersonalWorkspaceExecutionOutputMapper;
+import cn.jia.core.tenant.TenantId;
 import cn.jia.core.util.DateUtil;
 import jakarta.inject.Inject;
 import jakarta.inject.Named;
@@ -86,6 +87,28 @@ public class PersonalWorkspaceExecutionDaoImpl implements PersonalWorkspaceExecu
         return executions.listQueuedByTarget(tenantId, clientId, ownerJiacn, targetAgentId,
                 Math.max(1, Math.min(limit, 16)));
     }
+    @Override public List<PersonalWorkspaceExecutionEntity> findTaskAssociations(String tenantId,
+            String clientId, String ownerJiacn, String taskId, String workItemId,
+            String targetAgentId) {
+        scope(tenantId, clientId, ownerJiacn); id(taskId, "taskId");
+        id(workItemId, "workItemId"); id(targetAgentId, "targetAgentId");
+        var found = executions.findTaskAssociations(tenantId, clientId, ownerJiacn,
+                taskId, workItemId, targetAgentId);
+        if (found == null || found.size() > 2) throw new IllegalStateException("invalid TASK association result");
+        for (var execution : found) {
+            if (execution == null || !Objects.equals(tenantId, execution.getTenantId())
+                    || !Objects.equals(clientId, execution.getClientId())
+                    || !Objects.equals(ownerJiacn, execution.getOwnerJiacn())
+                    || !Objects.equals(taskId, execution.getTaskId())
+                    || !Objects.equals(workItemId, execution.getWorkItemId())
+                    || !Objects.equals(targetAgentId, execution.getTargetAgentId())
+                    || !"TASK".equals(execution.getExecutionMode())) {
+                throw new IllegalStateException("TASK association scope mismatch");
+            }
+            id(execution.getExecutionId(), "executionId");
+        }
+        return List.copyOf(found);
+    }
     @Override public List<PersonalWorkspaceExecutionEntity> listQueuedConversationsByTarget(
             String tenantId, String clientId, String ownerJiacn, String targetAgentId,
             Long afterCreatedAt, String afterExecutionId, int limit) {
@@ -102,6 +125,12 @@ public class PersonalWorkspaceExecutionDaoImpl implements PersonalWorkspaceExecu
         return count==1;
     }
     @Override public void insert(PersonalWorkspaceExecutionEntity execution) { init(execution); executions.insert(execution); }
+    @Override public PersonalWorkspaceExecutionOutputEntity findOutput(String tenantId,String clientId,String ownerJiacn,String executionId,String outputId) {
+        scope(tenantId,clientId,ownerJiacn);id(executionId,"executionId");id(outputId,"outputId");
+        var found=executions.findOutputForPrecomputation(tenantId,clientId,ownerJiacn,executionId,outputId);
+        if(found==null||found.size()>1)throw new IllegalStateException("ambiguous exact output");if(found.isEmpty())return null;
+        var output=found.getFirst();if(output==null||!Objects.equals(tenantId,output.getTenantId())||!Objects.equals(clientId,output.getClientId())||!Objects.equals(ownerJiacn,output.getOwnerJiacn())||!Objects.equals(executionId,output.getExecutionId())||!Objects.equals(outputId,output.getOutputId()))throw new IllegalStateException("output scope mismatch");return output;
+    }
     @Override public void update(PersonalWorkspaceExecutionEntity execution) { execution.setUpdateTime(DateUtil.nowTime()); executions.updateById(execution); }
     @Override public boolean markControlledProviderStarted(String tenantId,String clientId,String ownerJiacn,
             String taskId,String runId,String executionId,String consentId,long leaseVersion,long startedAt) {
@@ -139,16 +168,14 @@ public class PersonalWorkspaceExecutionDaoImpl implements PersonalWorkspaceExecu
     }
     @Override public List<String> listActiveExecutionIdsByFile(String tenantId, String clientId,
             String ownerJiacn, String fileId, int limit) {
-        scope(tenantId, clientId, ownerJiacn); id(fileId, "fileId");
-        return inputs.listActiveExecutionIdsByFile(tenantId, clientId, ownerJiacn, fileId,
+        readScope(tenantId, clientId, ownerJiacn); id(fileId, "fileId");
+        List<String> found = inputs.listActiveExecutionIdsByFile(tenantId, clientId, ownerJiacn, fileId,
                 Math.max(1, Math.min(limit, 100)));
+        if (found == null) throw new IllegalStateException("active execution projection missing");
+        found.forEach(executionId -> id(executionId, "executionId"));
+        return List.copyOf(found);
     }
     @Override public void updateInput(PersonalWorkspaceExecutionInputEntity input) { input.setUpdateTime(DateUtil.nowTime()); inputs.updateById(input); }
-    @Override public PersonalWorkspaceExecutionOutputEntity findOutput(String tenantId,
-            String clientId, String ownerJiacn, String executionId, String outputId) {
-        scope(tenantId, clientId, ownerJiacn); id(executionId, "executionId"); id(outputId, "outputId");
-        return outputs.findByOutputId(tenantId, clientId, ownerJiacn, executionId, outputId);
-    }
     @Override public PersonalWorkspaceExecutionOutputEntity lockOutput(String tenantId,
             String clientId, String ownerJiacn, String executionId, String outputId) {
         scope(tenantId, clientId, ownerJiacn); id(executionId, "executionId"); id(outputId, "outputId");
@@ -176,6 +203,10 @@ public class PersonalWorkspaceExecutionDaoImpl implements PersonalWorkspaceExecu
     private static void scope(String tenantId, String clientId, String ownerJiacn) {
         if (!"0".equals(tenantId)) throw new IllegalArgumentException("tenant");
         id(clientId, "clientId"); id(ownerJiacn, "ownerJiacn"); if ("0".equals(ownerJiacn)) throw new IllegalArgumentException("owner");
+    }
+    private static void readScope(String tenantId, String clientId, String ownerJiacn) {
+        TenantId.of(tenantId); id(clientId, "clientId"); id(ownerJiacn, "ownerJiacn");
+        if ("0".equals(ownerJiacn)) throw new IllegalArgumentException("owner");
     }
     private static void id(String value, String name) {
         if (value == null || value.isBlank() || !value.equals(value.strip()) || value.codePointCount(0, value.length()) > 100 || value.chars().anyMatch(Character::isISOControl)) throw new IllegalArgumentException(name);

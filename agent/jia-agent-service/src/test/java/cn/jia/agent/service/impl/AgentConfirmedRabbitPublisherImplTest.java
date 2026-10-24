@@ -7,6 +7,8 @@ import cn.jia.agent.config.AgentRabbitSafetyProperties;
 import cn.jia.agent.config.AgentRabbitTopologyConfiguration;
 import cn.jia.agent.config.AgentRabbitTopologyManifest;
 import cn.jia.agent.config.AgentRabbitTopologyReadiness;
+import cn.jia.agent.config.AgentRabbitV2TopologyManifest;
+import cn.jia.agent.config.AgentRabbitV2TopologyReadiness;
 import cn.jia.agent.entity.AgentConfirmedPublishRequest;
 import cn.jia.agent.entity.AgentInboxMessage;
 import cn.jia.agent.entity.AgentRabbitPublishResult;
@@ -44,6 +46,10 @@ import static org.mockito.Mockito.verify;
 
 class AgentConfirmedRabbitPublisherImplTest {
     private static final AgentRabbitTopologyManifest MANIFEST = AgentRabbitTopologyManifest.canonical();
+    private static final AgentRabbitV2TopologyManifest SCOPED_MANIFEST =
+            AgentRabbitV2TopologyManifest.forPersistedScope("1", "cyf", "pool-a");
+    private static final AgentRabbitV2TopologyManifest ADJACENT_MANIFEST =
+            AgentRabbitV2TopologyManifest.forPersistedScope("2", "cyf", "pool-a");
     private static final String SPRING_LISTENER_RETURN_CORRELATION =
             "spring_listener_return_correlation";
     private static final String SPRING_RETURNED_MESSAGE_CORRELATION =
@@ -74,12 +80,19 @@ class AgentConfirmedRabbitPublisherImplTest {
         assertEquals(request.messageId(), properties.getMessageId());
         assertEquals("command.dispatch", properties.getType());
         Map<String, Object> headers = properties.getHeaders();
-        assertEquals(13, headers.size());
-        assertHeader(headers, AgentCommandAmqpContract.HEADER_WIRE_VERSION, Integer.class, 1);
+        assertEquals(19, headers.size());
+        assertHeader(headers, AgentCommandAmqpContract.HEADER_WIRE_VERSION, Integer.class, 2);
         assertHeader(headers, AgentCommandAmqpContract.HEADER_EVENT_ID, String.class, "evt-1");
-        assertHeader(headers, AgentCommandAmqpContract.HEADER_DELIVERY_ID, Long.class, 41L);
+        assertHeader(headers, AgentCommandAmqpContract.HEADER_DELIVERY_ID, String.class, "41");
         assertHeader(headers, AgentCommandAmqpContract.HEADER_COMMAND_ID, String.class, "cmd-1");
-        assertHeader(headers, AgentCommandAmqpContract.HEADER_TENANT_ID, String.class, "tenant-a");
+        assertHeader(headers, AgentCommandAmqpContract.HEADER_TENANT_ID, String.class, "1");
+        assertHeader(headers, AgentCommandAmqpContract.HEADER_DATA_DOMAIN_ID, String.class, "cyf");
+        assertHeader(headers, AgentCommandAmqpContract.HEADER_EXECUTION_POOL_ID, String.class, "pool-a");
+        assertHeader(headers, AgentCommandAmqpContract.HEADER_PRODUCER_DEPLOYMENT_ID,
+                String.class, "producer-a");
+        assertHeader(headers, AgentCommandAmqpContract.HEADER_ADMISSION_EPOCH, Long.class, 13L);
+        assertHeader(headers, AgentCommandAmqpContract.HEADER_MODULE_ID, String.class, "agent-command");
+        assertHeader(headers, AgentCommandAmqpContract.HEADER_MIGRATION_EPOCH, Long.class, 17L);
         assertHeader(headers, AgentCommandAmqpContract.HEADER_CLIENT_ID, String.class, "client-a");
         assertHeader(headers, AgentCommandAmqpContract.HEADER_TASK_ID, String.class, "task-1");
         assertHeader(headers, AgentCommandAmqpContract.HEADER_TARGET_AGENT_ID, String.class, "agent-1");
@@ -88,7 +101,7 @@ class AgentConfirmedRabbitPublisherImplTest {
         assertHeader(headers, AgentCommandAmqpContract.HEADER_WIRE_SHA256, String.class,
                 AgentCommandAmqpContract.hex(request.wirePayloadHash()));
         assertHeader(headers, AgentCommandAmqpContract.HEADER_TOPOLOGY_SHA256, String.class,
-                MANIFEST.sha256());
+                SCOPED_MANIFEST.sha256());
         assertHeader(headers, AgentCommandAmqpContract.HEADER_SOURCE_SETTLEMENT_RETRY,
                 Integer.class, 0);
 
@@ -98,7 +111,8 @@ class AgentConfirmedRabbitPublisherImplTest {
                 properties.getMessageId(),
                 (String) headers.get(AgentCommandAmqpContract.HEADER_EVENT_ID),
                 (String) headers.get(AgentCommandAmqpContract.HEADER_COMMAND_ID),
-                ((Long) headers.get(AgentCommandAmqpContract.HEADER_DELIVERY_ID)).longValue(),
+                AgentCommandAmqpContract.parseCanonicalDeliveryId(
+                        (String) headers.get(AgentCommandAmqpContract.HEADER_DELIVERY_ID)),
                 message.getValue().getBody());
         assertEquals("evt-1", d07.eventId());
         assertEquals(41L, d07.deliveryId());
@@ -106,11 +120,23 @@ class AgentConfirmedRabbitPublisherImplTest {
     }
 
     @Test
+    void legacyV1KeepsLongHeaderAndForbidsDeliveryIdInBody() {
+        AgentConfirmedPublishRequest legacy = legacyRequest();
+
+        Map<String, Object> headers = AgentCommandAmqpContract.headers(legacy);
+
+        assertHeader(headers, AgentCommandAmqpContract.HEADER_DELIVERY_ID,
+                Long.class, 41L);
+        assertFalse(new String(legacy.wirePayload(), StandardCharsets.UTF_8)
+                .contains("\"deliveryId\""));
+    }
+
+    @Test
     void retryKeepsMessageIdentityHeadersAndWireBytesWhileCorrelationIsIndependent() throws Exception {
         RabbitTemplate template = ackingTemplate();
         AtomicInteger ids = new AtomicInteger();
         AgentConfirmedRabbitPublisherImpl publisher = new AgentConfirmedRabbitPublisherImpl(
-                template, allowedGate(), MANIFEST, ready(),
+                template, allowedGate(), MANIFEST, legacyReady(), ready(),
                 () -> new UUID(0L, ids.incrementAndGet()));
         AgentConfirmedPublishRequest request = request(1, 0);
 
@@ -141,19 +167,26 @@ class AgentConfirmedRabbitPublisherImplTest {
 
 
     @Test
-    void bodyTypesAndHeaderOnlyProvenanceFieldsAreExact() {
+    void bodyTypesAndIdentifiersAreExact() {
         AgentConfirmedPublishRequest base = request(1, 0);
         String original = new String(base.wirePayload(), StandardCharsets.UTF_8);
         for (String drift : List.of(
                 original.replace("\"attempt\":1", "\"attempt\":\"1\""),
                 original.substring(0, original.length() - 1) + ",\"eventId\":\"evt-1\"}",
-                original.substring(0, original.length() - 1) + ",\"deliveryId\":41}")) {
+                original.replace("\"deliveryId\":\"41\"", "\"deliveryId\":41"),
+                original.replace("\"deliveryId\":\"41\"", "\"deliveryId\":\"42\""),
+                original.replace("\"deliveryId\":\"41\"", "\"deliveryId\":\"01\""),
+                original.replace("\"deliveryId\":\"41\"", "\"deliveryId\":\"+41\""),
+                original.replace("\"deliveryId\":\"41\"", "\"deliveryId\":\"9223372036854775808\""))) {
             byte[] wire = drift.getBytes(StandardCharsets.UTF_8);
             AgentConfirmedPublishRequest invalid = new AgentConfirmedPublishRequest(
                     base.destination(), base.routingKey(), wire,
                     AgentCommandAmqpContract.sha256(wire), base.messageId(), base.eventId(),
-                    base.deliveryId(), base.commandId(), base.tenantId(), base.clientId(),
-                    base.taskId(), base.targetAgentId(), base.commandType(), base.activeAttempt(),
+                    base.deliveryId(), base.commandId(), base.tenantId(),
+                    base.dataDomainId(), base.executionPoolId(), base.admissionEpoch(),
+                    base.producerDeploymentId(), base.moduleId(), base.migrationEpoch(),
+                    base.protocolVersion(), base.clientId(), base.taskId(), base.targetAgentId(),
+                    base.commandType(), base.activeAttempt(),
                     base.expiresAt(), base.topologySha256(), base.sourceSettlementRetry());
             assertThrows(IllegalArgumentException.class,
                     () -> AgentCommandAmqpContract.validate(invalid));
@@ -230,8 +263,22 @@ class AgentConfirmedRabbitPublisherImplTest {
                 allowed.publish(requestWithHash(new byte[32]), 1000).errorCode());
         assertEquals("DESTINATION_POLICY_REJECTED",
                 allowed.publish(withRoute("not.manifest", "not.manifest"), 1000).errorCode());
+        assertEquals("DESTINATION_POLICY_REJECTED",
+                allowed.publish(withRoute(ADJACENT_MANIFEST.mainExchange(),
+                        ADJACENT_MANIFEST.generalRoutingKey()), 1000).errorCode());
+        assertEquals("DESTINATION_POLICY_REJECTED",
+                allowed.publish(withRoute(AgentRabbitTopologyManifest.MAIN_EXCHANGE,
+                        AgentRabbitTopologyManifest.GENERAL_ROUTING_KEY), 1000).errorCode());
+        assertEquals("TOPOLOGY_NOT_CANONICAL_READY",
+                allowed.publish(withTopologySha256("0".repeat(64)), 1000).errorCode());
         assertEquals("DISPATCH_SCOPE_REJECTED",
                 publisher(template, ready(), deniedGate()).publish(request(1, 0), 1000).errorCode());
+        assertEquals("DISPATCH_SCOPE_REJECTED",
+                publisher(template, ready(), gate("1", "other", "pool-a"))
+                        .publish(request(1, 0), 1000).errorCode());
+        assertEquals("DISPATCH_SCOPE_REJECTED",
+                publisher(template, ready(), gate("1", "cyf", "pool-b"))
+                        .publish(request(1, 0), 1000).errorCode());
         assertEquals("TOPOLOGY_NOT_CANONICAL_READY",
                 publisher(template, notReady(), allowedGate()).publish(request(1, 0), 1000).errorCode());
         verify(template, never()).send(any(), any(), any(Message.class), any(CorrelationData.class));
@@ -243,17 +290,20 @@ class AgentConfirmedRabbitPublisherImplTest {
         RabbitTemplate template = ackingTemplate();
         AgentConfirmedPublishRequest base = request(1, 1);
         AgentConfirmedPublishRequest parking = new AgentConfirmedPublishRequest(
-                AgentRabbitTopologyManifest.DEAD_LETTER_EXCHANGE,
-                AgentRabbitTopologyManifest.RETRY_5S_ROUTING_KEY,
+                SCOPED_MANIFEST.deadLetterExchange(),
+                SCOPED_MANIFEST.retry5sRoutingKey(),
                 base.wirePayload(), base.wirePayloadHash(), base.messageId(), base.eventId(),
-                base.deliveryId(), base.commandId(), base.tenantId(), base.clientId(),
-                base.taskId(), base.targetAgentId(), base.commandType(), base.activeAttempt(),
+                base.deliveryId(), base.commandId(), base.tenantId(),
+                base.dataDomainId(), base.executionPoolId(), base.admissionEpoch(),
+                base.producerDeploymentId(), base.moduleId(), base.migrationEpoch(),
+                base.protocolVersion(), base.clientId(), base.taskId(), base.targetAgentId(),
+                base.commandType(), base.activeAttempt(),
                 base.expiresAt(), base.topologySha256(), 1);
 
         assertEquals(AgentRabbitPublishResult.Type.ACK,
                 publisher(template, ready(), allowedGate()).publish(parking, 1000).type());
-        verify(template).send(eq(AgentRabbitTopologyManifest.DEAD_LETTER_EXCHANGE),
-                eq(AgentRabbitTopologyManifest.RETRY_5S_ROUTING_KEY),
+        verify(template).send(eq(SCOPED_MANIFEST.deadLetterExchange()),
+                eq(SCOPED_MANIFEST.retry5sRoutingKey()),
                 any(Message.class), any(CorrelationData.class));
     }
 
@@ -266,13 +316,13 @@ class AgentConfirmedRabbitPublisherImplTest {
         Map<String, Object> death = Map.of(
                 "count", 1L,
                 "reason", "rejected",
-                "queue", AgentRabbitTopologyManifest.DISPATCH_QUEUE,
+                "queue", SCOPED_MANIFEST.dispatchQueue(),
                 "time", new Date(1_700_000_000_000L),
-                "exchange", AgentRabbitTopologyManifest.MAIN_EXCHANGE,
-                "routing-keys", List.of(AgentRabbitTopologyManifest.GENERAL_ROUTING_KEY));
+                "exchange", SCOPED_MANIFEST.mainExchange(),
+                "routing-keys", List.of(SCOPED_MANIFEST.generalRoutingKey()));
         headers.put("x-death", List.of(death));
-        headers.put("x-first-death-queue", AgentRabbitTopologyManifest.DISPATCH_QUEUE);
-        headers.put("x-first-death-exchange", AgentRabbitTopologyManifest.MAIN_EXCHANGE);
+        headers.put("x-first-death-queue", SCOPED_MANIFEST.dispatchQueue());
+        headers.put("x-first-death-exchange", SCOPED_MANIFEST.mainExchange());
         headers.put("x-first-death-reason", "rejected");
         headers.put(SPRING_LISTENER_RETURN_CORRELATION, LISTENER_RETURN_CORRELATION_ID);
         headers.put(SPRING_RETURNED_MESSAGE_CORRELATION, RETURNED_MESSAGE_CORRELATION_ID);
@@ -327,19 +377,47 @@ class AgentConfirmedRabbitPublisherImplTest {
         Map<String, Object> retryDeath = Map.of(
                 "count", 1L,
                 "reason", "expired",
-                "queue", AgentRabbitTopologyManifest.RETRY_5S_QUEUE,
+                "queue", SCOPED_MANIFEST.retry5sQueue(),
                 "time", new Date(1_800_000_000_000L),
-                "exchange", AgentRabbitTopologyManifest.DEAD_LETTER_EXCHANGE,
-                "routing-keys", List.of(AgentRabbitTopologyManifest.RETRY_5S_ROUTING_KEY));
+                "exchange", SCOPED_MANIFEST.deadLetterExchange(),
+                "routing-keys", List.of(SCOPED_MANIFEST.retry5sRoutingKey()));
         unordered.put("x-death", List.of(death, retryDeath));
-        unordered.put("x-first-death-queue", AgentRabbitTopologyManifest.RETRY_5S_QUEUE);
-        unordered.put("x-first-death-exchange", AgentRabbitTopologyManifest.DEAD_LETTER_EXCHANGE);
+        unordered.put("x-first-death-queue", SCOPED_MANIFEST.retry5sQueue());
+        unordered.put("x-first-death-exchange", SCOPED_MANIFEST.deadLetterExchange());
         unordered.put("x-first-death-reason", "expired");
         unordered.put(SPRING_LISTENER_RETURN_CORRELATION, LISTENER_RETURN_CORRELATION_ID);
         unordered.put(SPRING_RETURNED_MESSAGE_CORRELATION, RETURNED_MESSAGE_CORRELATION_ID);
         assertEquals("PRESERVED_HEADERS_INVALID",
                 publisher(mock(RabbitTemplate.class), ready(), allowedGate())
                         .publishPreservingHeaders(request, unordered, 1000).errorCode());
+
+        Map<String, Object> adjacentScopeDeath = new LinkedHashMap<>(headers);
+        adjacentScopeDeath.put("x-death", List.of(Map.of(
+                "count", 1L, "reason", "rejected",
+                "queue", ADJACENT_MANIFEST.dispatchQueue(),
+                "time", new Date(1_700_000_000_000L),
+                "exchange", ADJACENT_MANIFEST.mainExchange(),
+                "routing-keys", List.of(ADJACENT_MANIFEST.generalRoutingKey()))));
+        adjacentScopeDeath.put("x-first-death-queue", ADJACENT_MANIFEST.dispatchQueue());
+        adjacentScopeDeath.put("x-first-death-exchange", ADJACENT_MANIFEST.mainExchange());
+        adjacentScopeDeath.put("x-first-death-reason", "rejected");
+        assertEquals("PRESERVED_HEADERS_INVALID",
+                publisher(mock(RabbitTemplate.class), ready(), allowedGate())
+                        .publishPreservingHeaders(request, adjacentScopeDeath, 1000).errorCode());
+
+        Map<String, Object> legacyDeath = new LinkedHashMap<>(headers);
+        legacyDeath.put("x-death", List.of(Map.of(
+                "count", 1L, "reason", "rejected",
+                "queue", AgentRabbitTopologyManifest.DISPATCH_QUEUE,
+                "time", new Date(1_700_000_000_000L),
+                "exchange", AgentRabbitTopologyManifest.MAIN_EXCHANGE,
+                "routing-keys", List.of(AgentRabbitTopologyManifest.GENERAL_ROUTING_KEY))));
+        legacyDeath.put("x-first-death-queue", AgentRabbitTopologyManifest.DISPATCH_QUEUE);
+        legacyDeath.put("x-first-death-exchange", AgentRabbitTopologyManifest.MAIN_EXCHANGE);
+        legacyDeath.put("x-first-death-reason", "rejected");
+        assertEquals("PRESERVED_HEADERS_INVALID",
+                publisher(mock(RabbitTemplate.class), ready(), allowedGate())
+                        .publishPreservingHeaders(request, legacyDeath, 1000).errorCode());
 
         headers.put("authorization", "Bearer secret");
         assertEquals("PRESERVED_HEADERS_INVALID",
@@ -356,7 +434,7 @@ class AgentConfirmedRabbitPublisherImplTest {
 
     @Test
     void wireContractDigestIsStableAndLowercaseHex() {
-        assertEquals("96a78cb5c792e8b9192dc905af75ca0ed07c967b6d000769aeefa7db54321244",
+        assertEquals("2b2189d4f14aee62cd15a9af6cc82a7ac4a80dd56c6ebd5ad55664fbde39fa76",
                 AgentCommandAmqpContract.CANONICAL_SHA256);
         assertTrue(AgentCommandAmqpContract.CANONICAL_SHA256.matches("[0-9a-f]{64}"));
     }
@@ -373,31 +451,56 @@ class AgentConfirmedRabbitPublisherImplTest {
 
     private static AgentConfirmedRabbitPublisherImpl publisher(
             RabbitTemplate template,
-            AgentRabbitTopologyReadiness readiness,
+            AgentRabbitV2TopologyReadiness readiness,
             AgentRabbitSafetyGate gate) {
-        return new AgentConfirmedRabbitPublisherImpl(template, gate, MANIFEST, readiness);
+        return new AgentConfirmedRabbitPublisherImpl(
+                template, gate, MANIFEST, legacyReady(), readiness);
     }
 
     private static AgentConfirmedPublishRequest request(int activeAttempt, int settlementRetry) {
-        byte[] wire = ("{\"schemaVersion\":1,\"messageType\":\"command.dispatch\"," +
+        byte[] wire = ("{\"schemaVersion\":2,\"messageType\":\"command.dispatch\"," +
                 "\"messageId\":\"msg-1\",\"commandId\":\"cmd-1\"," +
-                "\"tenantId\":\"tenant-a\",\"clientId\":\"client-a\"," +
+                "\"tenantId\":\"1\",\"dataDomainId\":\"cyf\"," +
+                "\"executionPoolId\":\"pool-a\",\"producerDeploymentId\":\"producer-a\"," +
+                "\"admissionEpoch\":13,\"moduleId\":\"agent-command\",\"migrationEpoch\":17," +
+                "\"deliveryId\":\"41\"," +
+                "\"clientId\":\"client-a\"," +
+                "\"taskId\":\"task-1\",\"targetAgentId\":\"agent-1\"," +
+                "\"commandType\":\"task.invite\",\"attempt\":1," +
+                "\"expiresAt\":9999999,\"payload\":{\"opaque\":true}}")
+                .getBytes(StandardCharsets.UTF_8);
+        var route = SCOPED_MANIFEST.defaultCommandPublishRoute();
+        return new AgentConfirmedPublishRequest(route.destination(), route.routingKey(), wire,
+                AgentCommandAmqpContract.sha256(wire), "msg-1", "evt-1", 41L, "cmd-1",
+                "1", "cyf", "pool-a", 13, "producer-a", "agent-command", 17, 2,
+                "client-a", "task-1", "agent-1", "task.invite",
+                activeAttempt, 9_999_999L, SCOPED_MANIFEST.sha256(), settlementRetry);
+    }
+
+    private static AgentConfirmedPublishRequest legacyRequest() {
+        byte[] wire = ("{\"schemaVersion\":1,\"messageType\":\"command.dispatch\"," +
+                "\"messageId\":\"legacy-msg-1\",\"commandId\":\"legacy-cmd-1\"," +
+                "\"tenantId\":\"0\",\"clientId\":\"client-a\"," +
                 "\"taskId\":\"task-1\",\"targetAgentId\":\"agent-1\"," +
                 "\"commandType\":\"task.invite\",\"attempt\":1," +
                 "\"expiresAt\":9999999,\"payload\":{\"opaque\":true}}")
                 .getBytes(StandardCharsets.UTF_8);
         var route = MANIFEST.defaultCommandPublishRoute();
         return new AgentConfirmedPublishRequest(route.destination(), route.routingKey(), wire,
-                AgentCommandAmqpContract.sha256(wire), "msg-1", "evt-1", 41L, "cmd-1",
-                "tenant-a", "client-a", "task-1", "agent-1", "task.invite",
-                activeAttempt, 9_999_999L, MANIFEST.sha256(), settlementRetry);
+                AgentCommandAmqpContract.sha256(wire), "legacy-msg-1", "legacy-evt-1",
+                41L, "legacy-cmd-1", "0", null, null, -1L, null, null, -1L,
+                AgentCommandAmqpContract.LEGACY_WIRE_VERSION, "client-a", "task-1",
+                "agent-1", "task.invite", 1, 9_999_999L, MANIFEST.sha256(), 0);
     }
 
     private static AgentConfirmedPublishRequest requestWithHash(byte[] hash) {
         AgentConfirmedPublishRequest request = request(1, 0);
         return new AgentConfirmedPublishRequest(request.destination(), request.routingKey(),
                 request.wirePayload(), hash, request.messageId(), request.eventId(),
-                request.deliveryId(), request.commandId(), request.tenantId(), request.clientId(),
+                request.deliveryId(), request.commandId(), request.tenantId(),
+                request.dataDomainId(), request.executionPoolId(), request.admissionEpoch(),
+                request.producerDeploymentId(), request.moduleId(), request.migrationEpoch(),
+                request.protocolVersion(), request.clientId(),
                 request.taskId(), request.targetAgentId(), request.commandType(),
                 request.activeAttempt(), request.expiresAt(), request.topologySha256(),
                 request.sourceSettlementRetry());
@@ -407,44 +510,68 @@ class AgentConfirmedRabbitPublisherImplTest {
         AgentConfirmedPublishRequest request = request(1, 0);
         return new AgentConfirmedPublishRequest(destination, routingKey,
                 request.wirePayload(), request.wirePayloadHash(), request.messageId(), request.eventId(),
-                request.deliveryId(), request.commandId(), request.tenantId(), request.clientId(),
+                request.deliveryId(), request.commandId(), request.tenantId(),
+                request.dataDomainId(), request.executionPoolId(), request.admissionEpoch(),
+                request.producerDeploymentId(), request.moduleId(), request.migrationEpoch(),
+                request.protocolVersion(), request.clientId(),
                 request.taskId(), request.targetAgentId(), request.commandType(),
                 request.activeAttempt(), request.expiresAt(), request.topologySha256(),
                 request.sourceSettlementRetry());
     }
 
-    private static AgentRabbitTopologyReadiness ready() throws Exception {
-        AgentRabbitTopologyReadiness readiness = notReady();
-        Method mark = AgentRabbitTopologyReadiness.class.getDeclaredMethod("markProvisioned");
+    private static AgentConfirmedPublishRequest withTopologySha256(String topologySha256) {
+        AgentConfirmedPublishRequest request = request(1, 0);
+        return new AgentConfirmedPublishRequest(request.destination(), request.routingKey(),
+                request.wirePayload(), request.wirePayloadHash(), request.messageId(), request.eventId(),
+                request.deliveryId(), request.commandId(), request.tenantId(),
+                request.dataDomainId(), request.executionPoolId(), request.admissionEpoch(),
+                request.producerDeploymentId(), request.moduleId(), request.migrationEpoch(),
+                request.protocolVersion(), request.clientId(),
+                request.taskId(), request.targetAgentId(), request.commandType(),
+                request.activeAttempt(), request.expiresAt(), topologySha256,
+                request.sourceSettlementRetry());
+    }
+
+    private static AgentRabbitV2TopologyReadiness ready() throws Exception {
+        AgentRabbitV2TopologyReadiness readiness = notReady();
+        Method mark = AgentRabbitV2TopologyReadiness.class.getDeclaredMethod(
+                "markProvisioned", AgentRabbitV2TopologyManifest.class);
         mark.setAccessible(true);
-        mark.invoke(readiness);
+        mark.invoke(readiness, SCOPED_MANIFEST);
         return readiness;
     }
 
-    private static AgentRabbitTopologyReadiness notReady() {
+    private static AgentRabbitV2TopologyReadiness notReady() {
+        return new AgentRabbitV2TopologyReadiness();
+    }
+
+    private static AgentRabbitTopologyReadiness legacyReady() {
         return new AgentRabbitTopologyConfiguration().agentRabbitTopologyReadiness(MANIFEST);
     }
 
     private static AgentRabbitSafetyGate allowedGate() {
-        return gate("tenant-a");
+        return gate("1", "cyf", "pool-a");
     }
 
     private static AgentRabbitSafetyGate deniedGate() {
-        return gate("tenant-other");
+        return gate("2", "cyf", "pool-a");
     }
 
-    private static AgentRabbitSafetyGate gate(String tenant) {
+    private static AgentRabbitSafetyGate gate(
+            String tenant, String dataDomain, String executionPool) {
         AgentRabbitSafetyProperties properties = new AgentRabbitSafetyProperties(
                 new AgentRabbitSafetyProperties.CommandOutbox(true),
                 new AgentRabbitSafetyProperties.RabbitTopology(true),
                 new AgentRabbitSafetyProperties.RabbitPublish(true),
-                new AgentRabbitSafetyProperties.RabbitConsume(true),
+                new AgentRabbitSafetyProperties.RabbitConsume(false),
+                new AgentRabbitSafetyProperties.RabbitConsumeV2(true),
                 new AgentRabbitSafetyProperties.RabbitDispatch(true),
                 new AgentRabbitSafetyProperties.RabbitBroker(
                         "isolated.invalid", 5673, "user", "secret", "/isolated"));
         return new AgentRabbitSafetyGate(properties,
-                new AgentRabbitDispatchScopeProperties(List.of(
-                        new AgentRabbitDispatchScopeProperties.AllowedScope(tenant, "client-a"))));
+                new AgentRabbitDispatchScopeProperties(List.of(), List.of(
+                        new AgentRabbitDispatchScopeProperties.AllowedWorkerScope(
+                                tenant, dataDomain, executionPool))));
     }
 
     private static void assertHeader(

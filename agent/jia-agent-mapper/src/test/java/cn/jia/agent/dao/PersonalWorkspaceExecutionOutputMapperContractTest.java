@@ -59,13 +59,17 @@ class PersonalWorkspaceExecutionOutputMapperContractTest {
 
     @Test void daoPreparationForwardsFullOwnerScopeAndNeverCallsLockQuery() {
         var outputs=mock(PersonalWorkspaceExecutionOutputMapper.class);
-        var dao=new PersonalWorkspaceExecutionDaoImpl(mock(PersonalWorkspaceExecutionMapper.class),
+        var executions=mock(PersonalWorkspaceExecutionMapper.class);
+        var dao=new PersonalWorkspaceExecutionDaoImpl(executions,
                 mock(PersonalWorkspaceExecutionInputMapper.class),outputs);
-        var receipt=new PersonalWorkspaceExecutionOutputEntity().setOutputId("output_1");
-        when(outputs.findByOutputId("0","client","owner","execution","output_1")).thenReturn(receipt);
+        var receipt=new PersonalWorkspaceExecutionOutputEntity().setOutputId("output_1")
+                .setOwnerJiacn("owner").setExecutionId("execution");
+        receipt.setTenantId("0");receipt.setClientId("client");
+        when(executions.findOutputForPrecomputation("0","client","owner","execution","output_1"))
+                .thenReturn(java.util.List.of(receipt));
         assertSame(receipt,dao.findOutput("0","client","owner","execution","output_1"));
-        verify(outputs).findByOutputId("0","client","owner","execution","output_1");
-        verifyNoMoreInteractions(outputs);
+        verify(executions).findOutputForPrecomputation("0","client","owner","execution","output_1");
+        verifyNoMoreInteractions(executions);verifyNoInteractions(outputs);
         assertThrows(IllegalArgumentException.class,()->dao.findOutput("1","client","owner","execution","output_1"));
         assertThrows(IllegalArgumentException.class,()->dao.findOutput("0","client","0","execution","output_1"));
         assertThrows(IllegalArgumentException.class,()->dao.findOutput("0","client","owner"," execution","output_1"));

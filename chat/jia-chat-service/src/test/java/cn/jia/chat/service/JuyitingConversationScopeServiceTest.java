@@ -2,6 +2,10 @@ package cn.jia.chat.service;
 
 import cn.jia.agent.service.AgentService;
 import cn.jia.chat.handler.dto.ChatMessageDTO;
+import cn.jia.core.tenant.BusinessScope;
+import cn.jia.core.tenant.DataDomainId;
+import cn.jia.core.tenant.TenantId;
+import cn.jia.core.tenant.UserAdmissionScope;
 import cn.jia.test.BaseMockTest;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mock;
@@ -11,6 +15,7 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 class JuyitingConversationScopeServiceTest extends BaseMockTest {
@@ -34,7 +39,7 @@ class JuyitingConversationScopeServiceTest extends BaseMockTest {
 
     @Test
     void forgedParticipantMetadataNeverAuthorizesTarget() {
-        when(agentService.listTaskWritableMemberAgentIds("0", "client-a", "372"))
+        when(agentService.listTaskWritableMemberAgentIds("0", "client-a", "tenant-a", "372"))
                 .thenReturn(List.of("agent-wuyong"));
         ChatMessageDTO request = bounty("372", List.of("agent-linchong"));
         request.setMetadata(Map.of("participantAgentIds", List.of("agent-linchong")));
@@ -48,7 +53,7 @@ class JuyitingConversationScopeServiceTest extends BaseMockTest {
         omitted.setConversationScopeKey("public");
         assertThrows(IllegalStateException.class, () -> authorize(omitted));
 
-        when(agentService.listTaskWritableMemberAgentIds("0", "client-a", "372"))
+        when(agentService.listTaskWritableMemberAgentIds("0", "client-a", "tenant-a", "372"))
                 .thenReturn(List.of("agent-wuyong"));
         ChatMessageDTO crossTask = bounty("372", List.of("agent-wuyong"));
         crossTask.setConversationScopeKey("task:999");
@@ -58,28 +63,28 @@ class JuyitingConversationScopeServiceTest extends BaseMockTest {
     @Test
     void taskMemberQueryFailureAndEmptyTaskFailClosed() {
         ChatMessageDTO request = bounty("372", List.of("agent-wuyong"));
-        when(agentService.listTaskWritableMemberAgentIds("0", "client-a", "372"))
+        when(agentService.listTaskWritableMemberAgentIds("0", "client-a", "tenant-a", "372"))
                 .thenThrow(new IllegalStateException("query failed"));
         assertThrows(IllegalStateException.class, () -> authorize(request));
 
         org.mockito.Mockito.doReturn(List.of()).when(agentService)
-                .listTaskWritableMemberAgentIds("0", "client-a", "372");
+                .listTaskWritableMemberAgentIds("0", "client-a", "tenant-a", "372");
         assertThrows(IllegalStateException.class, () -> authorize(request));
     }
 
     @Test
     void ownerIdentityIsNotMistakenForCanonicalTaskTenant() {
-        when(agentService.listTaskWritableMemberAgentIds("0", "client-a", "372"))
+        when(agentService.listTaskWritableMemberAgentIds("0", "client-a", "tenant-a", "372"))
                 .thenReturn(List.of("agent-wuyong"));
         ChatMessageDTO request = bounty("372", List.of("agent-wuyong"));
         assertEquals(List.of("agent-wuyong"), authorize(request).targetAgentIds());
         org.mockito.Mockito.verify(agentService)
-                .listTaskWritableMemberAgentIds("0", "client-a", "372");
+                .listTaskWritableMemberAgentIds("0", "client-a", "tenant-a", "372");
     }
 
     @Test
     void legalTaskTargetsUseAuthoritativeMembersAndSupportMultipleTargets() {
-        when(agentService.listTaskWritableMemberAgentIds("0", "client-a", "372"))
+        when(agentService.listTaskWritableMemberAgentIds("0", "client-a", "tenant-a", "372"))
                 .thenReturn(List.of("agent-wuyong", "agent-linchong"));
         ChatMessageDTO request = bounty("372", List.of("agent-wuyong", "agent-linchong"));
         request.setMetadata(Map.of("participantAgentIds", List.of("forged-agent")));
@@ -94,7 +99,7 @@ class JuyitingConversationScopeServiceTest extends BaseMockTest {
 
     @Test
     void taskScopeWithoutTargetsDefaultsToAllAuthoritativeMembers() {
-        when(agentService.listTaskWritableMemberAgentIds("0", "client-a", "372"))
+        when(agentService.listTaskWritableMemberAgentIds("0", "client-a", "tenant-a", "372"))
                 .thenReturn(List.of("agent-wuyong", "agent-linchong"));
         assertEquals(List.of("agent-wuyong", "agent-linchong"),
                 authorize(bounty("372", List.of())).targetAgentIds());
@@ -102,7 +107,7 @@ class JuyitingConversationScopeServiceTest extends BaseMockTest {
 
     @Test
     void privateTaskScopeAllowsOneAuthoritativeTarget() {
-        when(agentService.listTaskWritableMemberAgentIds("0", "client-a", "372"))
+        when(agentService.listTaskWritableMemberAgentIds("0", "client-a", "tenant-a", "372"))
                 .thenReturn(List.of("agent-wuyong", "agent-linchong"));
         ChatMessageDTO request = bounty("372", List.of("agent-wuyong"));
         request.setConversationScopeType("private");
@@ -118,7 +123,7 @@ class JuyitingConversationScopeServiceTest extends BaseMockTest {
 
     @Test
     void privateScopeAllowsExactlyOneTarget() {
-        when(agentService.listTaskWritableMemberAgentIds("0", "client-a", "372"))
+        when(agentService.listTaskWritableMemberAgentIds("0", "client-a", "tenant-a", "372"))
                 .thenReturn(List.of("agent-wuyong", "agent-linchong"));
         ChatMessageDTO request = bounty("372", List.of("agent-wuyong", "agent-linchong"));
         request.setConversationScopeType("private");
@@ -134,6 +139,71 @@ class JuyitingConversationScopeServiceTest extends BaseMockTest {
         JuyitingConversationScope scope = authorize(request);
         assertEquals("public", scope.scopeType());
         assertEquals(List.of("builtin-songjiang"), scope.targetAgentIds());
+    }
+
+
+    @Test
+    void tenantOneUsesExactTrustedTenantAndOwnerRatherThanTenantZero() {
+        when(agentService.listTaskWritableMemberAgentIds("1", "client-a", "tenant-a", "372"))
+                .thenReturn(List.of("agent-wuyong"));
+        ChatMessageDTO request = bounty("372", List.of("agent-wuyong"));
+        request.setMetadata(Map.of("tenantId", "0", "ownerJiacn", "other-owner"));
+        JuyitingConversationScopeService service = service();
+
+        assertEquals(List.of("agent-wuyong"), service.authorize(
+                request, service.resolve(request), areaScope("1")).targetAgentIds());
+        org.mockito.Mockito.verify(agentService)
+                .listTaskWritableMemberAgentIds("1", "client-a", "tenant-a", "372");
+        org.mockito.Mockito.verify(agentService, org.mockito.Mockito.never())
+                .listTaskWritableMemberAgentIds("0", "client-a", "tenant-a", "372");
+    }
+
+    @Test
+    void taskInAnotherTenantOrOwnerDoesNotAuthorizeSameResourceId() {
+        when(agentService.listTaskWritableMemberAgentIds("0", "client-a", "tenant-a", "372"))
+                .thenReturn(List.of("agent-wuyong"));
+        when(agentService.listTaskWritableMemberAgentIds("1", "client-a", "other-owner", "372"))
+                .thenReturn(List.of("agent-wuyong"));
+        ChatMessageDTO request = bounty("372", List.of("agent-wuyong"));
+        JuyitingConversationScopeService service = service();
+        assertEquals(List.of("agent-wuyong"), service.authorize(
+                request, service.resolve(request), areaScope("0")).targetAgentIds());
+        UserAdmissionScope otherOwner = new UserAdmissionScope(
+                new BusinessScope(TenantId.of("1"), DataDomainId.of("cyf"),
+                        "other-owner", "client-a"), 2L, 0L, 0L, 0L, 0L);
+        assertEquals(List.of("agent-wuyong"), service.authorize(
+                request, service.resolve(request), otherOwner).targetAgentIds());
+        assertThrows(IllegalStateException.class, () -> service.authorize(
+                request, service.resolve(request), areaScope("1")));
+    }
+
+
+    @Test
+    void tenantOneAllowsPublicAndPrivateScopeWhileRelayStillEnforcesRosterAcl() {
+        when(builtinHallAgentSupport.defaultAgentId()).thenReturn("builtin-songjiang");
+        ChatMessageDTO publicRequest = new ChatMessageDTO();
+        publicRequest.setConversationType("juyiting");
+        JuyitingConversationScopeService service = service();
+
+        JuyitingConversationScope publicScope = service.authorize(
+                publicRequest, service.resolve(publicRequest), areaScope("1"));
+        assertEquals(List.of("builtin-songjiang"), publicScope.targetAgentIds());
+
+        ChatMessageDTO privateRequest = new ChatMessageDTO();
+        privateRequest.setConversationType("juyiting");
+        privateRequest.setConversationScopeType("private");
+        privateRequest.setConversationScopeKey("agent:agent-wuyong");
+        privateRequest.setTargetAgentIds(List.of("agent-wuyong"));
+        assertEquals(List.of("agent-wuyong"), service.authorize(
+                privateRequest, service.resolve(privateRequest), areaScope("1")).targetAgentIds());
+        verifyNoInteractions(agentService);
+    }
+
+    private UserAdmissionScope areaScope(String tenantId) {
+        return new UserAdmissionScope(
+                new BusinessScope(TenantId.of(tenantId), DataDomainId.of("cyf"),
+                        "tenant-a", "client-a"),
+                1L, 0L, 0L, 0L, 0L);
     }
 
     private JuyitingConversationScope authorize(ChatMessageDTO request) {

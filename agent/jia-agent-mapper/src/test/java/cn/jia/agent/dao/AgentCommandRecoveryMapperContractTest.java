@@ -14,21 +14,55 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class AgentCommandRecoveryMapperContractTest {
     @Test
-    void discoveryIsBoundedUnlockedAndExactScoped() throws Exception {
-        String reconnect = sql("selectReconnectCandidates");
-        assertTrue(reconnect.contains("limit #{limit}"));
-        assertTrue(reconnect.contains("order by id asc"));
-        assertFalse(reconnect.contains("for update"));
-        for (String column : new String[] {"tenant_id", "client_id", "target_agent_id", "status"}) {
-            assertBinary(reconnect, column);
+    void discoveryIsBoundedUnlockedAndSeparatedByProtocolLane() throws Exception {
+        for (String method : new String[] {
+                "selectV2ReconnectCandidates", "selectV2DueCandidates"}) {
+            String sql = sql(method);
+            assertTrue(sql.contains("protocol_version=2"), method);
+            assertFalse(sql.contains("for update"), method);
+            assertTrue(sql.indexOf("protocol_version=2") < sql.indexOf("order by id asc"), method);
+            assertTrue(sql.indexOf("order by id asc") < sql.indexOf("limit #{limit}"), method);
+            for (String column : new String[] {
+                    "tenant_id", "data_domain_id", "execution_pool_id",
+                    "producer_deployment_id", "module_id"}) {
+                assertBinary(sql, column);
+            }
+            for (String token : new String[] {
+                    "admission_epoch=#{admissionepoch}",
+                    "migration_epoch=#{migrationepoch}"}) {
+                assertTrue(sql.contains(token), method + ": " + token);
+            }
         }
-        String due = sql("selectDueCandidates");
+
+        String reconnect = sql("selectV2ReconnectCandidates");
+        assertBinary(reconnect, "client_id");
+        assertBinary(reconnect, "target_agent_id");
+
+        String due = sql("selectV2DueCandidates");
         assertTrue(due.contains("next_retry_at<=#{now}"));
+        assertTrue(due.contains("or (status='retry' and ("));
         assertTrue(due.contains("status='sent'"));
         assertTrue(due.contains("update_time<=#{sentbefore}"));
         assertTrue(due.contains("expires_at<=#{now}"));
         assertTrue(due.contains("id>#{afterdeliveryid}"));
-        assertFalse(due.contains("for update"));
+
+        for (String method : new String[] {
+                "selectLegacyReconnectCandidates", "selectLegacyDueCandidates"}) {
+            String sql = sql(method);
+            assertTrue(sql.contains("tenant_id='0'"), method);
+            assertTrue(sql.contains("protocol_version is null or protocol_version=1"), method);
+            for (String column : new String[] {
+                    "data_domain_id", "execution_pool_id", "admission_epoch",
+                    "producer_deployment_id", "module_id", "migration_epoch"}) {
+                assertTrue(sql.contains(column + " is null"), method + ": " + column);
+            }
+            assertFalse(sql.contains("for update"), method);
+            assertTrue(sql.indexOf("tenant_id='0'") < sql.indexOf("order by id asc"), method);
+            assertTrue(sql.indexOf("order by id asc") < sql.indexOf("limit #{limit}"), method);
+        }
+        assertBinary(sql("selectLegacyReconnectCandidates"), "client_id");
+        assertBinary(sql("selectLegacyReconnectCandidates"), "target_agent_id");
+        assertFalse(sql("selectLegacyDueCandidates").contains("or (status='retry' and ("));
     }
 
     @Test
@@ -90,6 +124,17 @@ class AgentCommandRecoveryMapperContractTest {
         assertBinary(inbox, "client_id");
         assertBinary(inbox, "consumer_name");
         assertBinary(inbox, "message_id");
+
+        String retryInbox = sql("expireRetryInbox");
+        for (String token : new String[] {"version=#{inbox.version}",
+                "active_attempt=#{inbox.activeattempt}", "status='retry'",
+                "result_status='retry'", "next_retry_at=#{inbox.nextretryat}"}) {
+            assertTrue(retryInbox.contains(token), token + ": " + retryInbox);
+        }
+        assertBinary(retryInbox, "tenant_id");
+        assertBinary(retryInbox, "client_id");
+        assertBinary(retryInbox, "consumer_name");
+        assertBinary(retryInbox, "message_id");
     }
 
     @Test
@@ -103,6 +148,53 @@ class AgentCommandRecoveryMapperContractTest {
         }
         assertFalse(insert.contains("alter table"));
         assertFalse(insert.contains("json"));
+    }
+
+
+    @Test
+    void protocolV2RecoveryColumnsInsertHintAndCasRemainFenced() throws Exception {
+        String deliveryColumns = AgentCommandRecoveryMapper.DELIVERY_COLUMNS.toLowerCase(Locale.ROOT);
+        for (String column : new String[] {
+                "protocol_version", "data_domain_id", "execution_pool_id", "admission_epoch",
+                "producer_deployment_id", "module_id", "migration_epoch", "owner_jiacn"}) {
+            assertTrue(deliveryColumns.contains(column), column + ": " + deliveryColumns);
+        }
+        String outboxColumns = AgentCommandRecoveryMapper.OUTBOX_COLUMNS.toLowerCase(Locale.ROOT);
+        for (String column : new String[] {
+                "protocol_version", "data_domain_id", "execution_pool_id", "admission_epoch",
+                "producer_deployment_id", "module_id", "migration_epoch"}) {
+            assertTrue(outboxColumns.contains(column), column + ": " + outboxColumns);
+        }
+
+        String hint = sql("selectDeliveryProtocolHint");
+        assertFalse(hint.contains("for update"), hint);
+        assertTrue(hint.contains("limit 1"), hint);
+
+        String insert = sql("insertOutbox");
+        for (String token : new String[] {
+                "protocol_version", "#{protocolversion}",
+                "data_domain_id", "#{datadomainid}",
+                "execution_pool_id", "#{executionpoolid}",
+                "admission_epoch", "#{admissionepoch}",
+                "producer_deployment_id", "#{producerdeploymentid}",
+                "module_id", "#{moduleid}",
+                "migration_epoch", "#{migrationepoch}"}) {
+            assertTrue(insert.contains(token), token + ": " + insert);
+        }
+
+        for (String method : new String[] {"reissueDelivery", "manualReissueDelivery"}) {
+            String mutation = sql(method);
+            for (String token : new String[] {
+                    "protocol_version", "#{delivery.protocolversion}",
+                    "data_domain_id", "#{delivery.datadomainid}",
+                    "execution_pool_id", "#{delivery.executionpoolid}",
+                    "admission_epoch", "#{delivery.admissionepoch}",
+                    "producer_deployment_id", "#{delivery.producerdeploymentid}",
+                    "module_id", "#{delivery.moduleid}",
+                    "migration_epoch", "#{delivery.migrationepoch}"}) {
+                assertTrue(mutation.contains(token), method + " " + token + ": " + mutation);
+            }
+        }
     }
 
     private static String sql(String methodName) throws Exception {

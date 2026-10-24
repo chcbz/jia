@@ -56,6 +56,9 @@ public interface PersonalWorkspaceTaskLinkDao {
         private String requestHash;
         private String operationState;
         private String relationId;
+        private String tenantId;
+        private String clientId;
+        private String ownerJiacn;
 
         public Long getId() { return id; }
         public void setId(Long id) { this.id = id; }
@@ -71,5 +74,11 @@ public interface PersonalWorkspaceTaskLinkDao {
         public void setOperationState(String operationState) { this.operationState = operationState; }
         public String getRelationId() { return relationId; }
         public void setRelationId(String relationId) { this.relationId = relationId; }
+        public String getTenantId() { return tenantId; }
+        public void setTenantId(String tenantId) { this.tenantId = tenantId; }
+        public String getClientId() { return clientId; }
+        public void setClientId(String clientId) { this.clientId = clientId; }
+        public String getOwnerJiacn() { return ownerJiacn; }
+        public void setOwnerJiacn(String ownerJiacn) { this.ownerJiacn = ownerJiacn; }
     }
 }

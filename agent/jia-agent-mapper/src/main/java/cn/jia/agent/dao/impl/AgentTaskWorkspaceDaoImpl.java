@@ -8,6 +8,7 @@ import cn.jia.agent.entity.AgentTaskWorkspaceRows.RequestRow;
 import cn.jia.agent.entity.AgentTaskWorkspaceRows.TaskRow;
 import cn.jia.agent.entity.AgentTaskWorkspaceRows.WorkItemRow;
 import cn.jia.agent.mapper.AgentTaskWorkspaceMapper;
+import cn.jia.core.tenant.TenantId;
 import jakarta.inject.Inject;
 import jakarta.inject.Named;
 
@@ -83,9 +84,7 @@ public class AgentTaskWorkspaceDaoImpl implements AgentTaskWorkspaceDao {
     }
 
     private static void requireScope(String tenantId, String clientId, String ownerJiacn, String taskId) {
-        if (!"0".equals(tenantId)) {
-            throw new IllegalArgumentException("tenantId must be literal 0");
-        }
+        TenantId.of(tenantId);
         requireId(clientId, "clientId", 50);
         requireId(ownerJiacn, "ownerJiacn", 50);
         if ("0".equals(ownerJiacn)) {

@@ -1,5 +1,6 @@
 package cn.jia.oauth.config;
 
+import cn.jia.oauth.security.CentralSigningProperties;
 import cn.jia.core.context.EsContext;
 import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.entity.JsonResult;
@@ -9,29 +10,50 @@ import cn.jia.oauth.entity.OauthClientEntity;
 import cn.jia.oauth.service.ClientService;
 import cn.jia.oauth.vomapper.RegisteredClientMapper;
 import cn.jia.oauth.security.AccountSecurityTokenCustomizer;
+import cn.jia.oauth.security.JdbcTenantAuthorizationRepository;
+import cn.jia.oauth.security.TenantAuthorizationService;
+import cn.jia.oauth.security.TenantAuthorizationRequestProvider;
+import cn.jia.oauth.security.TenantConsentGrantProvider;
+import cn.jia.oauth.security.TenantTokenGrantProvider;
+import cn.jia.oauth.security.FixedTenantAuthorizationPolicy;
+import cn.jia.oauth.security.FixedTenantAuthorizationRequestProvider;
+import cn.jia.oauth.security.FixedTenantConsentGrantProvider;
+import cn.jia.oauth.security.FixedTenantTokenGrantProvider;
+import cn.jia.oauth.security.TenantIssuanceProperties;
 import cn.jia.user.security.AccountSecurityService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
+import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.annotation.Order;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.security.config.Customizer;
+import org.springframework.security.config.ObjectPostProcessor;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.OAuth2AuthorizationServerConfiguration;
+import org.springframework.security.oauth2.server.authorization.OAuth2AuthorizationService;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.security.oauth2.server.authorization.client.RegisteredClient;
 import org.springframework.security.oauth2.server.authorization.client.RegisteredClientRepository;
 import org.springframework.security.oauth2.server.authorization.settings.AuthorizationServerSettings;
 import org.springframework.security.oauth2.server.authorization.token.JwtEncodingContext;
 import org.springframework.security.oauth2.server.authorization.token.OAuth2TokenCustomizer;
+import org.springframework.jdbc.core.JdbcOperations;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.LoginUrlAuthenticationEntryPoint;
 import org.springframework.security.web.util.matcher.MediaTypeRequestMatcher;
+import org.springframework.security.oauth2.server.authorization.authentication.OAuth2AuthorizationCodeAuthenticationProvider;
+import org.springframework.security.oauth2.server.authorization.authentication.OAuth2AuthorizationCodeRequestAuthenticationProvider;
+import org.springframework.security.oauth2.server.authorization.authentication.OAuth2AuthorizationConsentAuthenticationProvider;
+import org.springframework.security.oauth2.server.authorization.authentication.OAuth2RefreshTokenAuthenticationProvider;
+import org.springframework.security.authentication.AuthenticationProvider;
 
 import java.io.PrintWriter;
 import java.nio.charset.StandardCharsets;
@@ -45,16 +67,83 @@ public class AuthorizationServerConfig {
     @Autowired
     private AccountSecurityService accountSecurityService;
 
+    @Autowired
+    private JdbcTenantAuthorizationRepository tenantAuthorizationRepository;
+
+    @ConditionalOnProperty(name = "cyf.oauth.authorization-server.enabled", havingValue = "true", matchIfMissing = true)
+    @Bean
+    @Order(0)
+    public SecurityFilterChain tenantSelectionSecurityFilterChain(HttpSecurity http,
+            FixedTenantAuthorizationPolicy issuancePolicy) {
+        // This is deliberately outside the OAuth endpoints matcher: the AS chain
+        // excludes endpoint CSRF checks, whereas selection is a browser mutation.
+        if (issuancePolicy.isFixedTenant()) {
+            http.securityMatcher("/oauth2/fixed-consent");
+        } else {
+            http.securityMatcher("/oauth2/tenant-options", "/oauth2/tenant-selection");
+        }
+        http
+                .authorizeHttpRequests(authorize -> authorize.anyRequest().authenticated())
+                .csrf(Customizer.withDefaults())
+                .exceptionHandling(configurer -> configurer.authenticationEntryPoint(
+                        new CustomAuthenticationEntryPoint("/login/index.html")));
+        return http.build();
+    }
+
+
+    @ConditionalOnProperty(name = "cyf.oauth.authorization-server.enabled", havingValue = "true", matchIfMissing = true)
     @Bean
     @Order(1)
-    public SecurityFilterChain authorizationServerSecurityFilterChain(HttpSecurity http) {
+    public SecurityFilterChain authorizationServerSecurityFilterChain(HttpSecurity http,
+            JdbcOperations jdbc, OAuth2AuthorizationService authorizationService, RegisteredClientRepository clients,
+            FixedTenantAuthorizationPolicy issuancePolicy) {
+        // Spring Security reads the default request provider after this configurer's
+        // callback to create its request prevalidator. Keep it in that list, but
+        // replace it when registering providers in the runtime manager.
+        http.objectPostProcessor(new ObjectPostProcessor<>() {
+            @Override
+            @SuppressWarnings("unchecked")
+            public <O> O postProcess(O object) {
+                if (object instanceof OAuth2AuthorizationCodeRequestAuthenticationProvider request) {
+                    return (O) (issuancePolicy.isFixedTenant()
+                            ? new FixedTenantAuthorizationRequestProvider(request, authorizationService, issuancePolicy)
+                            : new TenantAuthorizationRequestProvider(request, authorizationService));
+                }
+                return object;
+            }
+        });
         http.oauth2AuthorizationServer((authorizationServer) -> {
                     http.securityMatcher(authorizationServer.getEndpointsMatcher());
                     authorizationServer
                             .oidc(Customizer.withDefaults())    // Enable OpenID Connect 1.0
-                            .authorizationEndpoint(endpointConfigurer ->
-                                    endpointConfigurer.consentPage("/oauth/confirm_access")
-                            )
+                            .authorizationEndpoint(endpointConfigurer -> endpointConfigurer
+                                    .consentPage(issuancePolicy.isFixedTenant()
+                                            ? "/oauth2/fixed-consent" : "/oauth2/tenant-options")
+                                    .authenticationProviders(providers -> {
+                                        for (int index = 0; index < providers.size(); index++) {
+                                            AuthenticationProvider provider = providers.get(index);
+                                            if (provider instanceof OAuth2AuthorizationConsentAuthenticationProvider) {
+                                                providers.set(index, issuancePolicy.isFixedTenant()
+                                                        ? new FixedTenantConsentGrantProvider(provider, authorizationService,
+                                                                clients, issuancePolicy, jdbc)
+                                                        : new TenantConsentGrantProvider(provider, authorizationService,
+                                                                clients, tenantAuthorizationRepository, jdbc));
+                                            }
+                                        }
+                                    }))
+                            .tokenEndpoint(endpoint -> endpoint.authenticationProviders(providers -> {
+                                for (int index = 0; index < providers.size(); index++) {
+                                    AuthenticationProvider provider = providers.get(index);
+                                    if (provider instanceof OAuth2AuthorizationCodeAuthenticationProvider
+                                            || provider instanceof OAuth2RefreshTokenAuthenticationProvider) {
+                                        providers.set(index, issuancePolicy.isFixedTenant()
+                                                ? new FixedTenantTokenGrantProvider(provider, authorizationService,
+                                                        issuancePolicy, jdbc)
+                                                : new TenantTokenGrantProvider(provider,
+                                                        authorizationService, tenantAuthorizationRepository, jdbc));
+                                    }
+                                }
+                            }))
                     ;
                 })
                 .authorizeHttpRequests((authorize) -> authorize.anyRequest().authenticated())
@@ -119,9 +208,22 @@ public class AuthorizationServerConfig {
     }
 
     @Bean
+    @ConditionalOnProperty(name = "cyf.oauth.authorization-server.enabled", havingValue = "true", matchIfMissing = true)
+    public OAuth2AuthorizationService authorizationService() {
+        // Keep the original process-local store. Tenant isolation requires a
+        // verified binding, not a new OAuth persistence table.
+        return new TenantAuthorizationService();
+    }
+
+    @Bean
+    @ConditionalOnProperty(name = "cyf.oauth.authorization-server.enabled", havingValue = "true", matchIfMissing = true)
     public OAuth2TokenCustomizer<JwtEncodingContext> jwtTokenCustomizer(
-            @Value("${cyf.security.legacy-single-tenant-id:0}") String canonicalTenantId) {
-        return new AccountSecurityTokenCustomizer(accountSecurityService, canonicalTenantId);
+            @Value("${cyf.security.legacy-single-tenant-id:0}") String canonicalTenantId,
+            FixedTenantAuthorizationPolicy issuancePolicy) {
+        return issuancePolicy.isFixedTenant()
+                ? new AccountSecurityTokenCustomizer(accountSecurityService, issuancePolicy)
+                : new AccountSecurityTokenCustomizer(accountSecurityService,
+                        tenantAuthorizationRepository, canonicalTenantId);
     }
 
     static class CustomAuthenticationEntryPoint extends LoginUrlAuthenticationEntryPoint {
@@ -150,7 +252,42 @@ public class AuthorizationServerConfig {
     }
 
     @Bean
-    public AuthorizationServerSettings authorizationServerSettings() {
+    @ConditionalOnMissingBean(CentralSigningProperties.class)
+    @ConfigurationProperties(prefix = "cyf.oauth.signing")
+    public CentralSigningProperties centralSigningProperties() {
+        return new CentralSigningProperties();
+    }
+
+    @Bean
+    @ConfigurationProperties(prefix = "cyf.tenant")
+    public TenantIssuanceProperties tenantIssuanceProperties() {
+        return new TenantIssuanceProperties();
+    }
+
+    @Bean
+    public FixedTenantAuthorizationPolicy fixedTenantAuthorizationPolicy(
+            TenantIssuanceProperties properties,
+            @Value("${cyf.oauth.authorization-server.enabled:true}") boolean enabled) {
+        return FixedTenantAuthorizationPolicy.from(properties, enabled);
+    }
+
+    @Bean
+    public AuthorizationServerSettings authorizationServerSettings(CentralSigningProperties signing,
+            @Value("${cyf.tenant.require-bound-identity:false}") boolean strictTenant,
+            @Value("${cyf.oauth.authorization-server.enabled:true}") boolean enabled,
+            FixedTenantAuthorizationPolicy issuancePolicy) {
+        if (enabled && (strictTenant || issuancePolicy.isFixedTenant()) && !signing.isEnabled()) {
+            throw new IllegalStateException("A tenant-enabled authorization server requires persistent central signing");
+        }
+        if (signing.isEnabled()) {
+            return AuthorizationServerSettings.builder().issuer(signing.validatedIssuer()).build();
+        }
         return AuthorizationServerSettings.builder().build();
+    }
+
+    AuthorizationServerSettings authorizationServerSettings(CentralSigningProperties signing,
+            boolean strictTenant, boolean enabled) {
+        return authorizationServerSettings(signing, strictTenant, enabled,
+                FixedTenantAuthorizationPolicy.from(new TenantIssuanceProperties()));
     }
 }

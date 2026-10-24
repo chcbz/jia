@@ -1,6 +1,7 @@
 package cn.jia.agent.mapper;
 
 import cn.jia.agent.entity.AgentRuntimeV1InstallationEntity;
+import com.baomidou.mybatisplus.annotation.InterceptorIgnore;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Insert;
@@ -15,10 +16,21 @@ public interface AgentRuntimeV1InstallationMapper extends BaseMapper<AgentRuntim
                 manifest_sha256,enrollment_secret_hash,enrollment_expires_at,status,version,tenant_id,client_id)
             VALUES(#{installationId},#{canonicalAgentId},#{manifestVersion},#{manifestSha256},
                 #{enrollmentSecretHash},#{enrollmentExpiresAt},'PENDING',0,#{tenantId},#{clientId})
-            ON DUPLICATE KEY UPDATE installation_id=installation_id
             """)
     int insertCandidateIfAbsent(AgentRuntimeV1InstallationEntity candidate);
 
+    @InterceptorIgnore(tenantLine = "true")
+    @Select("""
+            SELECT * FROM agent_runtime_v1_installation
+             WHERE installation_id=#{installationId}
+               AND CAST(installation_id AS BINARY)=CAST(#{installationId} AS BINARY)
+               AND OCTET_LENGTH(installation_id)=OCTET_LENGTH(#{installationId})
+             LIMIT 1
+            """)
+    AgentRuntimeV1InstallationEntity selectBootstrapByInstallation(
+            @Param("installationId") String installationId);
+
+    @InterceptorIgnore(tenantLine = "true")
     @Select("""
             SELECT * FROM agent_runtime_v1_installation
              WHERE installation_id=#{installationId}
@@ -28,6 +40,7 @@ public interface AgentRuntimeV1InstallationMapper extends BaseMapper<AgentRuntim
             """)
     AgentRuntimeV1InstallationEntity selectByInstallationForUpdate(@Param("installationId") String installationId);
 
+    @InterceptorIgnore(tenantLine = "true")
     @Select("""
             SELECT * FROM agent_runtime_v1_installation
              WHERE tenant_id=#{tenantId} AND client_id=#{clientId} AND installation_id=#{installationId}
@@ -42,6 +55,7 @@ public interface AgentRuntimeV1InstallationMapper extends BaseMapper<AgentRuntim
     AgentRuntimeV1InstallationEntity selectByInstallationInScope(@Param("tenantId") String tenantId,
             @Param("clientId") String clientId, @Param("installationId") String installationId);
 
+    @InterceptorIgnore(tenantLine = "true")
     @Select("""
             SELECT * FROM agent_runtime_v1_installation
              WHERE runtime_authorization_hash=#{authorizationHash}
@@ -51,7 +65,8 @@ public interface AgentRuntimeV1InstallationMapper extends BaseMapper<AgentRuntim
                AND OCTET_LENGTH(status)=OCTET_LENGTH('ACTIVE')
              LIMIT 1
             """)
-    AgentRuntimeV1InstallationEntity selectActiveByAuthorizationHash(@Param("authorizationHash") byte[] authorizationHash);
+    AgentRuntimeV1InstallationEntity selectBootstrapActiveByAuthorizationHash(
+            @Param("authorizationHash") byte[] authorizationHash);
 
     @Update("""
             UPDATE agent_runtime_v1_installation

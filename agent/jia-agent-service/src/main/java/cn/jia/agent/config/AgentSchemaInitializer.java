@@ -5,6 +5,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowCallbackHandler;
+import org.springframework.context.annotation.Profile;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Component;
 
@@ -16,8 +17,8 @@ import java.util.Locale;
 
 @Slf4j
 @Component
+@Profile("schema-maintenance & !local-test-area")
 @RequiredArgsConstructor
-@org.springframework.context.annotation.Profile("schema-maintenance")
 public class AgentSchemaInitializer implements InitializingBean {
     private final JdbcTemplate jdbcTemplate;
     private Boolean h2Database;
@@ -93,7 +94,7 @@ public class AgentSchemaInitializer implements InitializingBean {
                     %s,
                     create_time         BIGINT DEFAULT NULL COMMENT 'Create time',
                     update_time         BIGINT DEFAULT NULL COMMENT 'Update time',
-                    tenant_id           VARCHAR(50) NOT NULL DEFAULT '0' COMMENT 'Single tenant scope; always 0',
+                    tenant_id           VARCHAR(50) NOT NULL DEFAULT '0' COMMENT 'Canonical numeric tenant scope',
                     client_id           VARCHAR(50) DEFAULT NULL COMMENT 'Owner-scope client ID',
                     PRIMARY KEY (id),
                     UNIQUE KEY uk_agent_binding_active_persona (tenant_id, client_id, active_persona_code),
@@ -102,7 +103,13 @@ public class AgentSchemaInitializer implements InitializingBean {
                     KEY idx_agent_binding_agent (client_id, agent_id, status),
                     KEY idx_agent_binding_persona (client_id, persona_code, status),
                     CONSTRAINT chk_agent_binding_status CHECK (status IN (0, 1, 2, 3)),
-                    CONSTRAINT chk_agent_binding_single_tenant CHECK (tenant_id = '0')
+                    CONSTRAINT chk_agent_binding_single_tenant CHECK (
+                        tenant_id IS NOT NULL
+                        AND tenant_id REGEXP BINARY '^(0|[1-9][0-9]{0,49})$'
+                        AND tenant_id NOT REGEXP BINARY '[^0-9]'
+                        AND INSTR(tenant_id, CHAR(10)) = 0
+                        AND INSTR(tenant_id, CHAR(13)) = 0
+                    )
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Durable Agent persona binding history'
                 """.formatted(ownerJiacnColumn, lifecycleColumn, activePersonaColumn, activeAgentColumn));
         // Existing binding contracts are migrated only by explicitly approved maintenance.
@@ -170,7 +177,21 @@ public class AgentSchemaInitializer implements InitializingBean {
         }
         java.util.Map<String, String> expected = java.util.Map.of(
                 "chk_agent_binding_status", normalizeIdentityExpression("status IN (0, 1, 2, 3)"),
-                "chk_agent_binding_single_tenant", normalizeIdentityExpression("tenant_id = '0'"));
+                "chk_agent_binding_single_tenant", normalizeIdentityExpression("""
+                        tenant_id IS NOT NULL
+                        AND REGEXP_LIKE(
+                            tenant_id,
+                            CAST('^(0|[1-9][0-9]{0,49})$' AS CHAR CHARSET BINARY)
+                        )
+                        AND NOT(
+                            REGEXP_LIKE(
+                                tenant_id,
+                                CAST('[^0-9]' AS CHAR CHARSET BINARY)
+                            )
+                        )
+                        AND INSTR(tenant_id, CHAR(10)) = 0
+                        AND INSTR(tenant_id, CHAR(13)) = 0
+                        """));
         if (!expected.equals(actual)) {
             throw new IllegalStateException("Agent binding CHECK set/clause drift");
         }
@@ -500,11 +521,24 @@ public class AgentSchemaInitializer implements InitializingBean {
                         """),
                 java.util.Map.entry("agent_identity_registry.chk_identity_registry_scope", """
                         (canonical_type = 'SYSTEM'
-                            AND client_id IS NULL AND owner_jiacn IS NULL AND tenant_id = '0')
+                            AND client_id IS NULL AND owner_jiacn IS NULL
+                            AND tenant_id IS NOT NULL AND tenant_id = '0')
                         OR (canonical_type <> 'SYSTEM'
                             AND client_id IS NOT NULL AND TRIM(client_id) <> ''
                             AND owner_jiacn IS NOT NULL AND TRIM(owner_jiacn) <> ''
-                            AND tenant_id = '0')
+                            AND tenant_id IS NOT NULL
+                            AND REGEXP_LIKE(
+                                tenant_id,
+                                CAST('^(0|[1-9][0-9]{0,49})$' AS CHAR CHARSET BINARY)
+                            )
+                            AND NOT(
+                                REGEXP_LIKE(
+                                    tenant_id,
+                                    CAST('[^0-9]' AS CHAR CHARSET BINARY)
+                                )
+                            )
+                            AND INSTR(tenant_id, CHAR(10)) = 0
+                            AND INSTR(tenant_id, CHAR(13)) = 0)
                         """),
                 java.util.Map.entry("agent_identity_registry.chk_identity_registry_retired", """
                         (lifecycle_status = 'RETIRED' AND retired_at IS NOT NULL)
@@ -514,8 +548,21 @@ public class AgentSchemaInitializer implements InitializingBean {
                         "alias_type = 'LEGACY_AGENT_ID'"),
                 java.util.Map.entry("agent_identity_alias.chk_identity_alias_status",
                         "alias_status IN ('ACTIVE', 'REVOKED')"),
-                java.util.Map.entry("agent_identity_alias.chk_identity_alias_scope",
-                        "tenant_id = '0'"),
+                java.util.Map.entry("agent_identity_alias.chk_identity_alias_scope", """
+                        tenant_id IS NOT NULL
+                        AND REGEXP_LIKE(
+                            tenant_id,
+                            CAST('^(0|[1-9][0-9]{0,49})$' AS CHAR CHARSET BINARY)
+                        )
+                        AND NOT(
+                            REGEXP_LIKE(
+                                tenant_id,
+                                CAST('[^0-9]' AS CHAR CHARSET BINARY)
+                            )
+                        )
+                        AND INSTR(tenant_id, CHAR(10)) = 0
+                        AND INSTR(tenant_id, CHAR(13)) = 0
+                        """),
                 java.util.Map.entry("agent_identity_alias.chk_identity_alias_no_blank_scope",
                         "TRIM(client_id) <> '' AND TRIM(owner_jiacn) <> ''"),
                 java.util.Map.entry("agent_identity_alias.chk_identity_alias_window", """
@@ -777,7 +824,7 @@ public class AgentSchemaInitializer implements InitializingBean {
                     lifecycle_status        VARCHAR(20) NOT NULL DEFAULT 'PROVISIONED' COMMENT 'PROVISIONED/ACTIVE/SUSPENDED/RETIRED | RETIRED is terminal and cannot be reverted',
                     client_id               VARCHAR(50) DEFAULT NULL COMMENT 'Immutable owner-scope client after insert | NULL only for system identity',
                     owner_jiacn             VARCHAR(50) DEFAULT NULL COMMENT 'Immutable owner-scope jiacn after insert | NULL only for system identity',
-                    tenant_id               VARCHAR(50) DEFAULT '0' COMMENT 'Single tenant scope; 0 for every identity including system rows',
+                    tenant_id               VARCHAR(50) DEFAULT '0' COMMENT 'Canonical numeric tenant scope; system identity remains 0',
                     binding_id              BIGINT DEFAULT NULL COMMENT 'Audited source binding ID | immutable after insert | not an ownership substitute',
                     provisioned_at          BIGINT DEFAULT NULL COMMENT 'Provisioned time',
                     activated_at            BIGINT DEFAULT NULL COMMENT 'First activation time',
@@ -809,11 +856,16 @@ public class AgentSchemaInitializer implements InitializingBean {
                     ),
                     CONSTRAINT chk_identity_registry_scope CHECK (
                         (canonical_type = 'SYSTEM'
-                            AND client_id IS NULL AND owner_jiacn IS NULL AND tenant_id = '0')
+                            AND client_id IS NULL AND owner_jiacn IS NULL
+                            AND tenant_id IS NOT NULL AND tenant_id = '0')
                         OR (canonical_type <> 'SYSTEM'
                             AND client_id IS NOT NULL AND TRIM(client_id) <> ''
                             AND owner_jiacn IS NOT NULL AND TRIM(owner_jiacn) <> ''
-                            AND tenant_id = '0')
+                            AND tenant_id IS NOT NULL
+                            AND tenant_id REGEXP BINARY '^(0|[1-9][0-9]{0,49})$'
+                            AND tenant_id NOT REGEXP BINARY '[^0-9]'
+                            AND INSTR(tenant_id, CHAR(10)) = 0
+                            AND INSTR(tenant_id, CHAR(13)) = 0)
                     ),
                     CONSTRAINT chk_identity_registry_retired CHECK (
                         (lifecycle_status = 'RETIRED' AND retired_at IS NOT NULL)
@@ -834,7 +886,7 @@ public class AgentSchemaInitializer implements InitializingBean {
                     %s,
                     client_id               VARCHAR(50) NOT NULL COMMENT 'Immutable owner-scope client after insert',
                     owner_jiacn             VARCHAR(50) NOT NULL COMMENT 'Immutable owner-scope jiacn after insert',
-                    tenant_id               VARCHAR(50) NOT NULL COMMENT 'Single tenant scope; always 0 | immutable after insert',
+                    tenant_id               VARCHAR(50) NOT NULL COMMENT 'Canonical numeric tenant scope | immutable after insert',
                     audit_reason            VARCHAR(1000) NOT NULL COMMENT 'Auditable alias evidence/reason',
                     create_time             BIGINT DEFAULT NULL COMMENT 'Create time',
                     update_time             BIGINT DEFAULT NULL COMMENT 'Update time',
@@ -845,7 +897,13 @@ public class AgentSchemaInitializer implements InitializingBean {
                     KEY idx_identity_alias_canonical (canonical_agent_id, alias_status),
                     CONSTRAINT chk_identity_alias_type CHECK (alias_type = 'LEGACY_AGENT_ID'),
                     CONSTRAINT chk_identity_alias_status CHECK (alias_status IN ('ACTIVE', 'REVOKED')),
-                    CONSTRAINT chk_identity_alias_scope CHECK (tenant_id = '0'),
+                    CONSTRAINT chk_identity_alias_scope CHECK (
+                        tenant_id IS NOT NULL
+                        AND tenant_id REGEXP BINARY '^(0|[1-9][0-9]{0,49})$'
+                        AND tenant_id NOT REGEXP BINARY '[^0-9]'
+                        AND INSTR(tenant_id, CHAR(10)) = 0
+                        AND INSTR(tenant_id, CHAR(13)) = 0
+                    ),
                     CONSTRAINT chk_identity_alias_no_blank_scope CHECK (
                         TRIM(client_id) <> '' AND TRIM(owner_jiacn) <> ''
                     ),

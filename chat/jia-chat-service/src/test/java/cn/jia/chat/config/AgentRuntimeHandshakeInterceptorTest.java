@@ -35,6 +35,7 @@ class AgentRuntimeHandshakeInterceptorTest {
         assertEquals("0", attrs.get("tenantId")); assertEquals("owner", attrs.get("jiacn"));
         assertEquals(3L, attrs.get("runtimeSessionGeneration"));
         assertFalse(attrs.containsKey("sessionToken")); assertFalse(attrs.containsKey("managedApiKeyId"));
+        assertFalse(attrs.containsKey(cn.jia.chat.handler.AgentRuntimeV2WebSocketAdapter.IDENTITY_ATTRIBUTE));
         assertFalse(attrs.toString().contains("rts1_"));
     }
     @Test void apiKeysQueryCredentialsOriginsAndDuplicateProofCannotFallBack() {

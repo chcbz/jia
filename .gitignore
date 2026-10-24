@@ -27,6 +27,9 @@ target/
 # Gradle File
 .gradle/
 build/
+# Java source packages named cn/jia/build are source, not Gradle output.
+!**/src/**/build/
+!**/src/**/build/**
 /.vscode/
 /.cline/
 /.clinerules/

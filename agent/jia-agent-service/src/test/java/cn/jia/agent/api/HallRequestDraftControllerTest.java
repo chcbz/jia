@@ -186,6 +186,26 @@ class HallRequestDraftControllerTest {
     }
 
     @Test
+    void legacyDraftStoreRejectsOtherAreaAndDomainBeforeAnyReadOrWrite() throws Exception {
+        for (JwtAuthenticationToken principal : List.of(
+                jwt("owner-a", "client-a", "1", "cyf"),
+                jwt("owner-a", "client-a", "00", "cyf"),
+                jwt("owner-a", "client-a", "0", "other"),
+                jwt("owner-a", "client-a", null, "cyf"),
+                jwt("owner-a", "client-a", "0", null))) {
+            mvc.perform(get("/agent/hall/drafts").principal(principal))
+                    .andExpect(status().isForbidden())
+                    .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
+            mvc.perform(post("/agent/hall/drafts").principal(principal)
+                            .contentType("application/json")
+                            .content("{\"kind\":\"CREATE\",\"originRef\":\"map\",\"inputs\":[]}"))
+                    .andExpect(status().isForbidden())
+                    .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
+        }
+        verifyNoInteractions(service);
+    }
+
+    @Test
     void submitUsesFrozenBodyKeyAndReturns202WhileRunRouteRemainsAbsent() throws Exception {
         HallRequestDraftService.SubmissionReceipt receipt = new HallRequestDraftService.SubmissionReceipt(
                 new HallRequestDraftService.SubmissionReference("PRIVATE_CASE", "hpc_1"),
@@ -238,9 +258,15 @@ class HallRequestDraftControllerTest {
 
     private static JwtAuthenticationToken jwt() { return jwt("owner-a", "client-a"); }
     private static JwtAuthenticationToken jwt(String owner, String client) {
-        Jwt jwt = Jwt.withTokenValue("token").header("alg", "none")
+        return jwt(owner, client, "0", "cyf");
+    }
+    private static JwtAuthenticationToken jwt(String owner, String client, String tenant, String domain) {
+        Jwt.Builder builder = Jwt.withTokenValue("token").header("alg", "none")
                 .claim("jiacn", owner).claim("client_id", client)
-                .issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(600)).build();
+                .issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(600));
+        if (tenant != null) builder.claim("tenant_id", tenant);
+        if (domain != null) builder.claim("data_domain_id", domain);
+        Jwt jwt = builder.build();
         JwtAuthenticationToken authentication = new JwtAuthenticationToken(jwt);
         authentication.setAuthenticated(true);
         return authentication;

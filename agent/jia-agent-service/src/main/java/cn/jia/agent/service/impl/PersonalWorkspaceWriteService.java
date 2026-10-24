@@ -5,6 +5,8 @@ import cn.jia.agent.entity.PersonalWorkspaceFileEntity;
 import cn.jia.agent.entity.PersonalWorkspaceOperationEntity;
 import cn.jia.agent.entity.PersonalWorkspaceVersionEntity;
 import cn.jia.agent.exception.PersonalWorkspaceException;
+import cn.jia.core.entity.BaseEntity;
+import cn.jia.core.tenant.TenantId;
 import jakarta.inject.Inject;
 import jakarta.inject.Named;
 import org.springframework.dao.DuplicateKeyException;
@@ -38,14 +40,20 @@ public class PersonalWorkspaceWriteService {
     @Transactional(rollbackFor = Exception.class)
     public PersonalWorkspaceFileEntity completeCreate(Scope scope, PersonalWorkspaceOperationEntity operation,
             PersonalWorkspaceFileEntity file, PersonalWorkspaceVersionEntity version) {
-        requireProcessing(scope, operation); dao.insertFile(file); dao.insertVersion(version);
+        requireProcessing(scope, operation); requireEntityScope(scope, file, file.getOwnerJiacn());
+        requireEntityScope(scope, version, version.getOwnerJiacn());
+        if (!file.getFileId().equals(version.getFileId()) || version.getVersion() == null
+                || version.getVersion() != 1) bad();
+        dao.insertFile(file); dao.insertVersion(version);
         complete(operation, file.getFileId(), version.getVersion()); return file;
     }
 
     @Transactional(rollbackFor = Exception.class)
     public PersonalWorkspaceFileEntity completeAppend(Scope scope, PersonalWorkspaceOperationEntity operation,
             String fileId, int expectedPreviousVersion, PersonalWorkspaceVersionEntity version) {
-        requireProcessing(scope, operation); PersonalWorkspaceFileEntity file = requireFile(scope, fileId);
+        requireProcessing(scope, operation); requireEntityScope(scope, version, version.getOwnerJiacn());
+        if (!fileId.equals(version.getFileId())) bad();
+        PersonalWorkspaceFileEntity file = requireFile(scope, fileId);
         if (!"ACTIVE".equals(file.getState())) throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.NOT_FOUND);
         if (file.getLatestVersion() == null || file.getLatestVersion() != expectedPreviousVersion) {
             throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.VERSION_CONFLICT);
@@ -63,6 +71,8 @@ public class PersonalWorkspaceWriteService {
                 || !scope.clientId().equals(file.getClientId())
                 || !scope.ownerJiacn().equals(file.getOwnerJiacn())
                 || !file.getFileId().equals(version.getFileId())
+                || !scope.tenantId().equals(version.getTenantId())
+                || !scope.clientId().equals(version.getClientId())
                 || !scope.ownerJiacn().equals(version.getOwnerJiacn())
                 || version.getVersion() == null || version.getVersion() != 1) {
             throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.BAD_REQUEST);
@@ -123,9 +133,30 @@ public class PersonalWorkspaceWriteService {
         String expected="\""+file.getFileId()+":"+file.getMetadataRevision()+"\"";
         if(!expected.equals(ifMatch)) throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.METADATA_CHANGED);
     }
+    private static void requireEntityScope(Scope scope, BaseEntity entity, String ownerJiacn) {
+        if (entity == null || !scope.tenantId().equals(entity.getTenantId())
+                || !scope.clientId().equals(entity.getClientId())
+                || !scope.ownerJiacn().equals(ownerJiacn)) bad();
+    }
+    private static void bad() {
+        throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.BAD_REQUEST);
+    }
     private void complete(PersonalWorkspaceOperationEntity operation, String fileId, int version) {
         operation.setState("COMMITTED").setFileId(fileId).setFileVersion(version).setErrorCode(null).setCompletedAt(System.currentTimeMillis()); dao.updateOperation(operation);
     }
-    public record Scope(String tenantId, String clientId, String ownerJiacn) { }
+    public record Scope(String tenantId, String clientId, String ownerJiacn) {
+        public Scope {
+            TenantId.of(tenantId);
+            exact(clientId, "clientId"); exact(ownerJiacn, "ownerJiacn");
+            if ("0".equals(ownerJiacn)) throw new IllegalArgumentException("ownerJiacn");
+        }
+        private static void exact(String value, String name) {
+            if (value == null || value.isBlank() || !value.equals(value.strip())
+                    || value.codePointCount(0, value.length()) > 50
+                    || value.chars().anyMatch(Character::isISOControl)) {
+                throw new IllegalArgumentException(name);
+            }
+        }
+    }
     public record Claim(PersonalWorkspaceOperationEntity operation, boolean claimed) { }
 }

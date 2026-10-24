@@ -10,5 +10,13 @@ public record OAuthResourceIdentityDTO(
         String clientId,
         String username,
         String jiacn,
-        List<String> scopes) {
+        List<String> scopes,
+        String issuer,
+        String tenantId,
+        String dataDomainId,
+        String tenantName,
+        String tenantKind,
+        String tenantSessionEpoch,
+        String membershipRevision,
+        String clientTenantGrantRevision) {
 }

@@ -281,9 +281,16 @@ class AgentTaskArtifactControllerTest {
     }
 
     private JwtAuthenticationToken jwt(String tenant, String client) {
-        Jwt jwt = Jwt.withTokenValue("token").header("alg", "none")
-                .claim("jiacn", tenant).claim("client_id", client)
-                .issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(60)).build();
+        return jwt(tenant, client, "0", "cyf");
+    }
+
+    private JwtAuthenticationToken jwt(String owner, String client, String tenantId, String domainId) {
+        Jwt.Builder builder = Jwt.withTokenValue("token").header("alg", "none")
+                .claim("jiacn", owner).claim("client_id", client)
+                .issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(60));
+        if (tenantId != null) builder.claim("tenant_id", tenantId);
+        if (domainId != null) builder.claim("data_domain_id", domainId);
+        Jwt jwt = builder.build();
         return new JwtAuthenticationToken(jwt, List.of());
     }
 

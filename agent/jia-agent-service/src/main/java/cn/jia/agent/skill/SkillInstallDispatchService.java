@@ -5,6 +5,7 @@ import cn.jia.agent.entity.*;
 import cn.jia.agent.hosting.HostingRentHttp;
 import cn.jia.agent.service.AgentManagedSessionLookup;
 import cn.jia.agent.service.impl.AgentCommandCanonicalCodec;
+import cn.jia.agent.service.impl.AgentCommandProtocolSupport;
 import cn.jia.economy.mapper.*;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;

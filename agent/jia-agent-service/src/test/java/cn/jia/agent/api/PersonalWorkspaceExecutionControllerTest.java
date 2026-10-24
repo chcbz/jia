@@ -136,14 +136,39 @@ class PersonalWorkspaceExecutionControllerTest {
     @Test
     void missingOrMalformedJwtScopeFailsClosedBeforeHistoryLookup() throws Exception {
         mvc.perform(get("/agent/personal-workspace/executions"))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.code").value("BAD_REQUEST"));
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("EXECUTION_UNAUTHENTICATED"))
+                .andExpect(jsonPath("$.protocolVersion").value(1))
+                .andExpect(jsonPath("$.msg").value("Execution access is unavailable"))
+                .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
         mvc.perform(get("/agent/personal-workspace/executions").principal(jwt("owner-a ", "client-a")))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.code").value("BAD_REQUEST"));
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("EXECUTION_FORBIDDEN"));
         mvc.perform(get("/agent/personal-workspace/executions").principal(jwt("owner-a", "client-a ")))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.code").value("BAD_REQUEST"));
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("EXECUTION_FORBIDDEN"));
+        verifyNoInteractions(service);
+    }
+
+    @Test
+    void legacyExecutionStoreRejectsOtherAreaAndDomainBeforeAnyReadOrWrite() throws Exception {
+        for (JwtAuthenticationToken principal : List.of(
+                jwt("owner-a", "client-a", "1", "cyf"),
+                jwt("owner-a", "client-a", "00", "cyf"),
+                jwt("owner-a", "client-a", "0", "other"),
+                jwt("owner-a", "client-a", null, "cyf"),
+                jwt("owner-a", "client-a", "0", null))) {
+            mvc.perform(get("/agent/personal-workspace/executions").principal(principal))
+                    .andExpect(status().isForbidden())
+                    .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
+            mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                            .post("/agent/personal-workspace/executions").principal(principal)
+                            .contentType("application/json")
+                            .content("{\"protocolVersion\":1,\"requestId\":\"test-request\","
+                                    + "\"data\":{\"targetAgentId\":\"agent-a\",\"inputs\":[]}}"))
+                    .andExpect(status().isForbidden())
+                    .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
+        }
         verifyNoInteractions(service);
     }
 
@@ -190,9 +215,16 @@ class PersonalWorkspaceExecutionControllerTest {
     }
 
     private static JwtAuthenticationToken jwt(String owner, String client) {
-        Jwt jwt = Jwt.withTokenValue("token").header("alg", "none")
+        return jwt(owner, client, "0", "cyf");
+    }
+
+    private static JwtAuthenticationToken jwt(String owner, String client, String tenant, String domain) {
+        Jwt.Builder builder = Jwt.withTokenValue("token").header("alg", "none")
                 .claim("jiacn", owner).claim("client_id", client)
-                .issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(600)).build();
+                .issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(600));
+        if (tenant != null) builder.claim("tenant_id", tenant);
+        if (domain != null) builder.claim("data_domain_id", domain);
+        Jwt jwt = builder.build();
         JwtAuthenticationToken authentication = new JwtAuthenticationToken(jwt);
         authentication.setAuthenticated(true);
         return authentication;

@@ -2,12 +2,48 @@ package cn.jia.chat.service;
 
 import cn.jia.chat.entity.ChatConversationEntity;
 import cn.jia.chat.entity.ChatMessageEntity;
+import cn.jia.core.tenant.UserAdmissionScope;
 import com.github.pagehelper.PageInfo;
 
 import java.util.List;
 
 /** Authenticated generic-conversation boundary. */
 public interface ChatConversationService {
+    PageInfo<ChatConversationEntity> findPage(
+            UserAdmissionScope scope, ChatConversationEntity example,
+            int pageNum, int pageSize, String orderBy);
+
+    void deleteConversation(UserAdmissionScope scope, String conversationId);
+
+    List<ChatMessageEntity> findByConversationId(
+            UserAdmissionScope scope, String conversationId);
+
+    ChatConversationEntity create(
+            UserAdmissionScope scope, ChatConversationEntity entity);
+
+    ChatConversationEntity get(UserAdmissionScope scope, String conversationId);
+
+    boolean isLiveGeneration(
+            UserAdmissionScope scope, String conversationId, long expectedGeneration);
+
+    List<ChatMessageEntity> findOwnedMessages(
+            UserAdmissionScope scope, String conversationId);
+
+    List<ChatMessageEntity> findOwnedMessages(
+            UserAdmissionScope scope, String conversationId, int limit);
+
+    ChatMessageEntity appendOwnedMessage(
+            UserAdmissionScope scope, ChatMessageEntity message);
+
+    ChatMessageEntity appendOwnedMessage(
+            UserAdmissionScope scope, ChatMessageEntity message, long expectedGeneration);
+
+    ChatConversationEntity updateOwnedTitle(
+            UserAdmissionScope scope, String conversationId, String title, Integer status);
+
+    ChatConversationEntity update(
+            UserAdmissionScope scope, ChatConversationEntity entity);
+
     PageInfo<ChatConversationEntity> findPage(
             ChatConversationEntity example, int pageNum, int pageSize, String orderBy);
 
@@ -26,6 +62,16 @@ public interface ChatConversationService {
     /** Fail-closed live-generation probe for asynchronous publication fences. */
     boolean isLiveGeneration(
             String ownerJiacn, String clientId, String conversationId, long expectedGeneration);
+
+    /**
+     * Fail-closed tenant-scoped live-generation probe for trusted background workers.
+     *
+     * <p>The tenant, owner and client values must come from an already-authorized worker row,
+     * never from an untrusted event payload.</p>
+     */
+    boolean isLiveGeneration(
+            String tenantId, String ownerJiacn, String clientId,
+            String conversationId, long expectedGeneration);
 
     /** Exact owner-scoped full history read for authenticated maintenance initiated by a user. */
     List<ChatMessageEntity> findOwnedMessages(

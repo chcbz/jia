@@ -189,7 +189,6 @@ public interface PersonalWorkspaceConversationFileLinkMapper
             VALUES
               (#{operationId}, #{ownerJiacn}, #{operationType}, #{idempotencyKey}, #{requestHash},
                'PROCESSING', NULL, #{now}, NULL, #{tenantId}, #{clientId}, #{now}, #{now})
-            ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id), update_time=update_time
             """)
     int reserveOperation(@Param("tenantId") String tenantId,
             @Param("clientId") String clientId, @Param("ownerJiacn") String ownerJiacn,
@@ -200,7 +199,7 @@ public interface PersonalWorkspaceConversationFileLinkMapper
 
     @Select("""
             SELECT id, operation_id, operation_type, idempotency_key, request_hash,
-                   operation_state, relation_id
+                   operation_state, relation_id, tenant_id, client_id, owner_jiacn
               FROM agent_personal_workspace_conversation_link_operation
              WHERE tenant_id=#{tenantId} AND client_id=#{clientId}
                AND owner_jiacn=#{ownerJiacn} AND operation_type=#{operationType}
@@ -210,7 +209,7 @@ public interface PersonalWorkspaceConversationFileLinkMapper
                AND OCTET_LENGTH(operation_type)=OCTET_LENGTH(#{operationType})
                AND CAST(idempotency_key AS BINARY)=CAST(#{idempotencyKey} AS BINARY)
                AND OCTET_LENGTH(idempotency_key)=OCTET_LENGTH(#{idempotencyKey})
-             LIMIT 1 FOR UPDATE
+             FOR UPDATE
             """)
     OperationRow selectOperationForUpdate(@Param("tenantId") String tenantId,
             @Param("clientId") String clientId, @Param("ownerJiacn") String ownerJiacn,

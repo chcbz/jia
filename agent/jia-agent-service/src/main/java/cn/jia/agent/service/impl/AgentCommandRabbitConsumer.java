@@ -3,6 +3,7 @@ package cn.jia.agent.service.impl;
 import cn.jia.agent.access.AgentTaskAccessLevel;
 import cn.jia.agent.config.AgentRabbitSafetyGate;
 import cn.jia.agent.config.AgentRabbitTopologyManifest;
+import cn.jia.agent.config.AgentLegacyRabbitDispatchEnabledCondition;
 import cn.jia.agent.entity.AgentConfirmedPublishRequest;
 import cn.jia.agent.entity.AgentInboxClaim;
 import cn.jia.agent.entity.AgentInboxClaimToken;
@@ -25,7 +26,7 @@ import org.springframework.amqp.core.Message;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.annotation.Conditional;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
@@ -38,7 +39,7 @@ import java.util.function.LongSupplier;
 
 /** D05 manual-ACK consumer. Rabbit and WebSocket network calls are never made in a DB transaction. */
 @Component
-@ConditionalOnProperty(prefix = "agent.rabbit-dispatch", name = "enabled", havingValue = "true")
+@Conditional(AgentLegacyRabbitDispatchEnabledCondition.class)
 public final class AgentCommandRabbitConsumer {
     static final long CLAIM_LEASE_MILLIS = 60_000L;
     static final long CONFIRM_TIMEOUT_MILLIS = 10_000L;

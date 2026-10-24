@@ -1,4 +1,7 @@
 package cn.jia.oauth.config;
+import cn.jia.core.tenant.DataDomainId;
+import cn.jia.core.tenant.TenantId;
+import cn.jia.oauth.security.TenantAuthorizationAttributes;
 
 import cn.jia.core.redis.ThirdPartyLoginTransactionService;
 import cn.jia.oauth.api.OauthController;
@@ -15,6 +18,7 @@ import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.oauth2.server.authorization.authentication.OAuth2AuthorizationConsentAuthenticationToken;
 import org.springframework.security.oauth2.server.authorization.web.authentication.OAuth2AuthorizationConsentAuthenticationConverter;
+import org.springframework.security.web.csrf.DefaultCsrfToken;
 import cn.jia.oauth.config.OauthExternalHttpClient;
 import org.springframework.web.servlet.ModelAndView;
 import org.thymeleaf.spring6.SpringTemplateEngine;
@@ -84,6 +88,39 @@ class OauthConsentTemplateTest {
 
         assertTrue(rendered.contains("method=\"post\" action=\"/jia/oauth2/authorize\""));
         assertFalse(rendered.contains("action=\"/oauth2/authorize\""));
+    }
+
+    @Test
+    void tenantPageUsesContextPathAndPostsACsrfProtectedSelection() {
+        ClassLoaderTemplateResolver resolver = new ClassLoaderTemplateResolver();
+        resolver.setPrefix("templates/");
+        resolver.setSuffix(".html");
+        resolver.setTemplateMode(TemplateMode.HTML);
+        SpringTemplateEngine engine = new SpringTemplateEngine();
+        engine.setTemplateResolver(resolver);
+        MockServletContext servletContext = new MockServletContext();
+        servletContext.setContextPath("/jia");
+        MockHttpServletRequest request = new MockHttpServletRequest(
+                servletContext, "GET", "/jia/oauth2/tenant-options");
+        request.setContextPath("/jia");
+        request.setAttribute("_csrf", new DefaultCsrfToken("X-CSRF-TOKEN", "_csrf", "test-csrf"));
+        TenantAuthorizationAttributes selected = new TenantAuthorizationAttributes(
+                TenantId.of("1"), DataDomainId.of("cyf"), "华南测试区",
+                TenantAuthorizationAttributes.TenantKind.TEST, "3", "8", "4");
+        WebContext context = new WebContext(
+                JakartaServletWebApplication.buildApplication(servletContext)
+                        .buildExchange(request, new MockHttpServletResponse()),
+                Locale.ROOT,
+                Map.of("clientId", "web", "state", "consent-state", "options", List.of(selected)));
+
+        String rendered = engine.process("oauth/tenant-selection", context);
+
+        assertTrue(rendered.contains("action=\"/jia/oauth2/tenant-selection\""));
+        assertTrue(rendered.contains("name=\"authorizationRequestId\" value=\"consent-state\""));
+        assertTrue(rendered.contains("name=\"_csrf\" value=\"test-csrf\""));
+        assertTrue(rendered.contains("华南测试区"));
+        assertTrue(rendered.contains("TEST"));
+        assertFalse(rendered.contains("action=\"/oauth2/tenant-selection\""));
     }
 
     @Test

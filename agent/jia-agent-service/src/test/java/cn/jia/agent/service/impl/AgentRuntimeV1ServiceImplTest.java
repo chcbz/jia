@@ -9,6 +9,7 @@ import cn.jia.agent.entity.AgentRuntimeV1InstallationEntity;
 import cn.jia.agent.entity.AgentRuntimeV1InstallationRequest;
 import cn.jia.agent.service.AgentCommandAckService;
 import cn.jia.agent.service.AgentIdentityService;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
@@ -37,8 +38,57 @@ class AgentRuntimeV1ServiceImplTest {
         service = new AgentRuntimeV1ServiceImpl(installations, identities, registry, provider, sessions, mock(ObjectProvider.class));
     }
 
+    @AfterEach void clearTrustedScope() {
+        var leaked = cn.jia.core.tenant.TrustedTenantContext.currentScope();
+        cn.jia.core.tenant.TrustedTenantContext.clear();
+        assertTrue(leaked.isEmpty());
+    }
+
+    private cn.jia.core.tenant.BusinessScope managementScope(
+            String tenantId, String clientId, String ownerJiacn) {
+        return new cn.jia.core.tenant.BusinessScope(
+                cn.jia.core.tenant.TenantId.of(tenantId),
+                cn.jia.core.tenant.DataDomainId.of("cyf"), ownerJiacn, clientId);
+    }
+
+    private cn.jia.agent.entity.AgentRuntimeV1InstallationView createWithScope(
+            String tenantId, String clientId, String ownerJiacn,
+            AgentRuntimeV1InstallationRequest request, long now) {
+        return cn.jia.core.tenant.TrustedTenantContext.withScope(
+                managementScope(tenantId, clientId, ownerJiacn),
+                () -> service.create(tenantId, clientId, ownerJiacn, request, now));
+    }
+
+    private cn.jia.agent.entity.AgentRuntimeV1InstallationView ensureWithScope(
+            String tenantId, String clientId, String ownerJiacn,
+            AgentRuntimeV1InstallationRequest request, long now) {
+        return cn.jia.core.tenant.TrustedTenantContext.withScope(
+                managementScope(tenantId, clientId, ownerJiacn),
+                () -> service.ensureInstallation(tenantId, clientId, ownerJiacn, request, now));
+    }
+
+    private cn.jia.agent.entity.AgentRuntimeV1InstallationView statusWithScope(
+            String tenantId, String clientId, String ownerJiacn, String installationId) {
+        return cn.jia.core.tenant.TrustedTenantContext.withScope(
+                managementScope(tenantId, clientId, ownerJiacn),
+                () -> service.status(tenantId, clientId, ownerJiacn, installationId));
+    }
+
+    private void revokeWithScope(String tenantId, String clientId, String ownerJiacn,
+            String installationId, long now) {
+        cn.jia.core.tenant.TrustedTenantContext.runWithScope(
+                managementScope(tenantId, clientId, ownerJiacn),
+                () -> service.revoke(tenantId, clientId, ownerJiacn, installationId, now));
+    }
+
+    @Test void managementFailsClosedWithoutTrustedScope() {
+        assertThrows(AgentServiceImpl.AgentBizException.class,
+                () -> service.status("0", "client-a", "owner-a", "rti-1"));
+        verifyNoInteractions(installations, identities, registry, sessions, acks);
+    }
+
     @Test void webCreationStoresOnlyProvidedDigestAndReturnsRedactedView() {
-        when(identities.requireCanonicalAgentIdInScope("tenant-a", "client-a", "owner-a", AGENT))
+        when(identities.requireCanonicalAgentIdInScope("1", "client-a", "owner-a", AGENT))
                 .thenReturn(AGENT);
         when(installations.insert(any())).thenAnswer(invocation -> {
             AgentRuntimeV1InstallationEntity entity = invocation.getArgument(0);
@@ -46,7 +96,7 @@ class AgentRuntimeV1ServiceImplTest {
             return 1;
         });
         String digest = "a".repeat(64);
-        var view = service.create("tenant-a", "client-a", "owner-a",
+        var view = createWithScope("1", "client-a", "owner-a",
                 new AgentRuntimeV1InstallationRequest("rti_0123456789abcdef0123456789abcdef", AGENT, "1", digest, digest, NOW + 1), NOW);
         assertEquals("PENDING", view.status());
         assertEquals("rti_0123456789abcdef0123456789abcdef", view.installationId());
@@ -78,8 +128,8 @@ class AgentRuntimeV1ServiceImplTest {
         when(installations.findInScope("0", "client-a", INTERNAL_ID)).thenReturn(null, row);
         when(installations.lock(INTERNAL_ID)).thenReturn(row);
         var request = candidate("a".repeat(64), "b".repeat(64), 2000);
-        var created = service.ensureInstallation("0", "client-a", "owner-a", request, NOW);
-        assertEquals(created, service.ensureInstallation("0", "client-a", "owner-a", request, NOW + 1));
+        var created = ensureWithScope("0", "client-a", "owner-a", request, NOW);
+        assertEquals(created, ensureWithScope("0", "client-a", "owner-a", request, NOW + 1));
         verify(installations, times(1)).insertCandidateIfAbsent(any());
         var order = inOrder(installations);
         order.verify(installations).findInScope("0", "client-a", INTERNAL_ID);
@@ -94,7 +144,7 @@ class AgentRuntimeV1ServiceImplTest {
         internalOwner(); var row = internalInstallation("ACTIVE").setEnrollmentConsumedAt(1500L);
         when(installations.findInScope("0", "client-a", INTERNAL_ID)).thenReturn(row);
         when(installations.lock(INTERNAL_ID)).thenReturn(row);
-        assertEquals("ACTIVE", service.ensureInstallation("0", "client-a", "owner-a",
+        assertEquals("ACTIVE", ensureWithScope("0", "client-a", "owner-a",
                 candidate("a".repeat(64), "b".repeat(64), 2000), 3000).status());
         verify(installations, never()).insertCandidateIfAbsent(any()); verify(installations, never()).activate(any(), any(), anyLong());
     }
@@ -104,21 +154,21 @@ class AgentRuntimeV1ServiceImplTest {
         when(installations.lock(INTERNAL_ID)).thenReturn(row);
         for (var request : java.util.List.of(candidate("c".repeat(64), "b".repeat(64), 2000),
                 candidate("a".repeat(64), "c".repeat(64), 2000), candidate("a".repeat(64), "b".repeat(64), 2001))) {
-            assertThrows(AgentServiceImpl.AgentBizException.class, () -> service.ensureInstallation("0", "client-a", "owner-a", request, NOW));
+            assertThrows(AgentServiceImpl.AgentBizException.class, () -> ensureWithScope("0", "client-a", "owner-a", request, NOW));
         }
         row.setStatus("REVOKED");
-        assertThrows(AgentServiceImpl.AgentBizException.class, () -> service.ensureInstallation("0", "client-a", "owner-a",
+        assertThrows(AgentServiceImpl.AgentBizException.class, () -> ensureWithScope("0", "client-a", "owner-a",
                 candidate("a".repeat(64), "b".repeat(64), 2000), NOW));
         verify(installations, never()).insertCandidateIfAbsent(any());
         row.setStatus("ACTIVE"); row.setClientId("other-client");
-        assertThrows(AgentServiceImpl.AgentBizException.class, () -> service.ensureInstallation("0", "client-a", "owner-a",
+        assertThrows(AgentServiceImpl.AgentBizException.class, () -> ensureWithScope("0", "client-a", "owner-a",
                 candidate("a".repeat(64), "b".repeat(64), 2000), NOW));
     }
     @Test void internalEnsureRejectsUnprovenOwnerAndExpiredNewCandidateBeforeInsert() {
         var request = candidate("a".repeat(64), "b".repeat(64), 2000);
-        assertThrows(AgentServiceImpl.AgentBizException.class, () -> service.ensureInstallation("0", "client-a", "other-owner", request, NOW));
+        assertThrows(AgentServiceImpl.AgentBizException.class, () -> ensureWithScope("0", "client-a", "other-owner", request, NOW));
         verifyNoInteractions(installations); internalOwner();
-        assertThrows(AgentServiceImpl.AgentBizException.class, () -> service.ensureInstallation("0", "client-a", "owner-a", request, 3000));
+        assertThrows(AgentServiceImpl.AgentBizException.class, () -> ensureWithScope("0", "client-a", "owner-a", request, 3000));
         verify(installations, never()).insertCandidateIfAbsent(any());
     }
 
@@ -128,7 +178,7 @@ class AgentRuntimeV1ServiceImplTest {
         when(installations.findInScope("0", "client-a", INTERNAL_ID)).thenReturn(null);
         doNothing().when(installations).insertCandidateIfAbsent(any()); // another candidate won
         when(installations.lock(INTERNAL_ID)).thenReturn(winner);
-        assertThrows(AgentServiceImpl.AgentBizException.class, () -> service.ensureInstallation("0", "client-a", "owner-a",
+        assertThrows(AgentServiceImpl.AgentBizException.class, () -> ensureWithScope("0", "client-a", "owner-a",
                 candidate("a".repeat(64), "b".repeat(64), 2000), NOW));
         var order = inOrder(installations);
         order.verify(installations).findInScope("0", "client-a", INTERNAL_ID);
@@ -137,7 +187,7 @@ class AgentRuntimeV1ServiceImplTest {
     }
     @Test void expiredNewCandidateNeverObtainsMissingKeyGapLock() {
         internalOwner();
-        assertThrows(AgentServiceImpl.AgentBizException.class, () -> service.ensureInstallation("0", "client-a", "owner-a",
+        assertThrows(AgentServiceImpl.AgentBizException.class, () -> ensureWithScope("0", "client-a", "owner-a",
                 candidate("a".repeat(64), "b".repeat(64), 2000), 3000));
         verify(installations, never()).lock(anyString()); verify(installations, never()).insertCandidateIfAbsent(any());
     }
@@ -163,21 +213,25 @@ class AgentRuntimeV1ServiceImplTest {
         configuration.addMapper(cn.jia.agent.mapper.AgentRuntimeV1InstallationMapper.class); factory.setConfiguration(configuration);
         var mapper = new org.mybatis.spring.SqlSessionTemplate(java.util.Objects.requireNonNull(factory.getObject()))
                 .getMapper(cn.jia.agent.mapper.AgentRuntimeV1InstallationMapper.class);
+        var actualInstallations = new cn.jia.agent.dao.impl.AgentRuntimeV1InstallationDaoImpl();
+        var baseMapper = cn.jia.common.dao.BaseDaoImpl.class.getDeclaredField("baseMapper");
+        baseMapper.setAccessible(true);
+        baseMapper.set(actualInstallations, mapper);
         var bothAbsent = new java.util.concurrent.CountDownLatch(2);
         when(installations.findInScope("0", "client-a", INTERNAL_ID)).thenAnswer(call -> {
-            var hint = mapper.selectByInstallationInScope("0", "client-a", INTERNAL_ID);
+            var hint = actualInstallations.findInScope("0", "client-a", INTERNAL_ID);
             if (hint == null) {
                 bothAbsent.countDown(); assertTrue(bothAbsent.await(5, java.util.concurrent.TimeUnit.SECONDS));
             }
             return hint;
         });
-        doAnswer(call -> { mapper.insertCandidateIfAbsent(call.getArgument(0)); return null; })
+        doAnswer(call -> { actualInstallations.insertCandidateIfAbsent(call.getArgument(0)); return null; })
                 .when(installations).insertCandidateIfAbsent(any());
         var missingReads = new java.util.concurrent.ConcurrentLinkedQueue<java.util.Map<String, Integer>>();
         var independent = new org.springframework.jdbc.core.JdbcTemplate(
                 new org.springframework.jdbc.datasource.DriverManagerDataSource(source.getUrl(), "sa", ""));
         when(installations.lock(INTERNAL_ID)).thenAnswer(call -> {
-            var row = mapper.selectByInstallationForUpdate(INTERNAL_ID);
+            var row = actualInstallations.lock(INTERNAL_ID);
             if (row == null) {
                 missingReads.add(java.util.Map.of("transactionRawRows", jdbc.queryForObject("SELECT COUNT(*) FROM agent_runtime_v1_installation", Integer.class),
                         "committedRawRows", independent.queryForObject("SELECT COUNT(*) FROM agent_runtime_v1_installation", Integer.class)));
@@ -199,7 +253,7 @@ class AgentRuntimeV1ServiceImplTest {
         var request = candidate("a".repeat(64), "b".repeat(64), 2000);
         try (var executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
             java.util.concurrent.Callable<Object> ensure = () -> {
-                try { return transactions.execute(status -> service.ensureInstallation("0", "client-a", "owner-a", request, NOW)); }
+                try { return transactions.execute(status -> ensureWithScope("0", "client-a", "owner-a", request, NOW)); }
                 catch (AgentServiceImpl.AgentBizException denied) { return denied; }
             };
             var first = executor.submit(ensure); var second = executor.submit(ensure);
@@ -215,15 +269,15 @@ class AgentRuntimeV1ServiceImplTest {
             }
             assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM agent_runtime_v1_installation", Integer.class));
             verify(installations, times(2)).insertCandidateIfAbsent(any()); verify(installations, times(2)).lock(INTERNAL_ID);
-            assertEquals("PENDING", transactions.execute(status -> service.ensureInstallation("0", "client-a", "owner-a", request, 3000)).status());
-            assertThrows(AgentServiceImpl.AgentBizException.class, () -> transactions.execute(status -> service.ensureInstallation(
+            assertEquals("PENDING", transactions.execute(status -> ensureWithScope("0", "client-a", "owner-a", request, 3000)).status());
+            assertThrows(AgentServiceImpl.AgentBizException.class, () -> transactions.execute(status -> ensureWithScope(
                     "0", "client-a", "owner-a", candidate("c".repeat(64), "b".repeat(64), 2000), NOW)));
             assertEquals("a".repeat(64), jdbc.queryForObject("SELECT manifest_sha256 FROM agent_runtime_v1_installation", String.class));
         } finally { jdbc.execute("DROP ALL OBJECTS"); }
     }
 
     @Test void rejectsInstallationIdThatCannotBeBoundIntoTheManifest() {
-        assertThrows(AgentServiceImpl.AgentBizException.class, () -> service.create("tenant-a", "client-a", "owner-a",
+        assertThrows(AgentServiceImpl.AgentBizException.class, () -> createWithScope("1", "client-a", "owner-a",
                 new AgentRuntimeV1InstallationRequest("rti-not-opaque", AGENT, "1", "a".repeat(64),
                         "b".repeat(64), NOW + 1), NOW));
         verifyNoInteractions(identities, installations);
@@ -231,20 +285,20 @@ class AgentRuntimeV1ServiceImplTest {
 
     @Test void existingDirectLegacyCanonicalIdentityCanUseOnlyTheV1Protocol() {
         String legacyCanonical = "jyt-client-a-linchong";
-        when(identities.requireCanonicalAgentIdInScope("tenant-a", "client-a", "owner-a", legacyCanonical))
+        when(identities.requireCanonicalAgentIdInScope("1", "client-a", "owner-a", legacyCanonical))
                 .thenReturn(legacyCanonical);
         when(installations.insert(any())).thenAnswer(invocation -> {
             ((AgentRuntimeV1InstallationEntity) invocation.getArgument(0)).setId(5L);
             return 1;
         });
 
-        var view = service.create("tenant-a", "client-a", "owner-a",
+        var view = createWithScope("1", "client-a", "owner-a",
                 new AgentRuntimeV1InstallationRequest("rti_abcdefabcdefabcdefabcdefabcdefab", legacyCanonical, "1", "a".repeat(64),
                         "b".repeat(64), NOW + 1), NOW);
 
         assertEquals(legacyCanonical, view.canonicalAgentId());
         verify(identities).requireCanonicalAgentIdInScope(
-                "tenant-a", "client-a", "owner-a", legacyCanonical);
+                "1", "client-a", "owner-a", legacyCanonical);
     }
 
     @Test void enrollmentIsSingleUseAndNeverReturnsEnrollmentMaterial() {
@@ -328,9 +382,9 @@ class AgentRuntimeV1ServiceImplTest {
         when(installations.lock("rti-1")).thenReturn(row);
         for (String owner : java.util.List.of("owner-b", "OWNER-A", "owner-a ")) {
             assertThrows(AgentServiceImpl.AgentBizException.class,
-                    () -> service.status("0", "client-a", owner, "rti-1"));
+                    () -> statusWithScope("0", "client-a", owner, "rti-1"));
             assertThrows(AgentServiceImpl.AgentBizException.class,
-                    () -> service.revoke("0", "client-a", owner, "rti-1", NOW));
+                    () -> revokeWithScope("0", "client-a", owner, "rti-1", NOW));
         }
         verify(installations, never()).revoke(any(), anyLong());
         verifyNoInteractions(identities, acks);
@@ -346,9 +400,9 @@ class AgentRuntimeV1ServiceImplTest {
         when(installations.findInScope("0", "client-a", "rti-1")).thenReturn(row);
         when(installations.lock("rti-1")).thenReturn(row);
         when(installations.revoke(row, NOW)).thenReturn(1);
-        assertEquals("PENDING", service.status("0", "client-a", "owner-a", "rti-1").status());
+        assertEquals("PENDING", statusWithScope("0", "client-a", "owner-a", "rti-1").status());
         identity.setLifecycleStatus("SUSPENDED");
-        service.revoke("0", "client-a", "owner-a", "rti-1", NOW);
+        revokeWithScope("0", "client-a", "owner-a", "rti-1", NOW);
         verify(installations).revoke(row, NOW);
         verifyNoInteractions(identities, acks);
     }
@@ -363,9 +417,9 @@ class AgentRuntimeV1ServiceImplTest {
         when(installations.findInScope("0", "client-a", "rti-1")).thenReturn(row);
         when(installations.lock("rti-1")).thenReturn(row);
         assertThrows(AgentServiceImpl.AgentBizException.class,
-                () -> service.status("0", "client-a", "owner-a", "rti-1"));
+                () -> statusWithScope("0", "client-a", "owner-a", "rti-1"));
         assertThrows(AgentServiceImpl.AgentBizException.class,
-                () -> service.revoke("0", "client-a", "owner-a", "rti-1", NOW));
+                () -> revokeWithScope("0", "client-a", "owner-a", "rti-1", NOW));
         verify(installations, never()).revoke(any(), anyLong());
     }
 

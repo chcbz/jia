@@ -2,6 +2,10 @@ package cn.jia.agent.hosting;
 
 import cn.jia.agent.dao.AgentPersonaBindingDao;
 import cn.jia.agent.service.AgentIdentityService;
+import cn.jia.core.tenant.BusinessScope;
+import cn.jia.core.tenant.DataDomainId;
+import cn.jia.core.tenant.TenantId;
+import cn.jia.core.tenant.TrustedTenantContext;
 import cn.jia.economy.entity.EconomyHostingProvisioningIntentEntity;
 import cn.jia.economy.mapper.EconomyHostingRentMapper;
 import cn.jia.oauth.service.ApiKeyService;
@@ -31,8 +35,17 @@ public final class ManagedHostingCredentials {
 
     /** No secret/key creation. Installation authorization and durable operation linkage commit together. */
     public void ensureInstallation(ManagedHostingProvisioner.Preparation p, ManagedHostingProvisioner.Candidate candidate) {
-        transactions.executeWithoutResult(status -> {
-            if (p == null || candidate == null || candidate.provisionGeneration() <= 0) throw unavailable();
+        if (p == null || candidate == null || candidate.provisionGeneration() <= 0) throw unavailable();
+        final BusinessScope management;
+        try {
+            management = new BusinessScope(TenantId.of(p.tenantId()), DataDomainId.of("cyf"),
+                    p.ownerJiacn(), p.clientId());
+        } catch (RuntimeException invalidScope) {
+            throw unavailable();
+        }
+        BusinessScope current = TrustedTenantContext.currentScope().orElse(null);
+        if (current != null && !current.equals(management)) throw unavailable();
+        TrustedTenantContext.runWithScope(management, () -> transactions.executeWithoutResult(status -> {
             var installed = runtime.ensureInstallation(p.tenantId(), p.clientId(), p.ownerJiacn(),
                     new cn.jia.agent.entity.AgentRuntimeV1InstallationRequest(candidate.installationId(), p.agentId(), "1",
                             candidate.manifestSha256(), candidate.enrollmentSecretSha256(), candidate.enrollmentExpiresAt()),
@@ -98,7 +111,7 @@ public final class ManagedHostingCredentials {
                 } else if (!Long.valueOf(candidate.provisionGeneration()).equals(free.getRuntimeTargetGeneration())
                         || !Long.valueOf(candidate.provisionGeneration()).equals(intent.getRuntimeProvisionGeneration())) throw unavailable();
             }
-        });
+        }));
     }
 
     private static boolean matches(EconomyHostingProvisioningIntentEntity intent, ManagedHostingProvisioner.Candidate candidate) {

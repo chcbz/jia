@@ -8,6 +8,15 @@ public record AgentOutboxClaimToken(
         long outboxId,
         long deliveryId,
         String tenantId,
+        String dataDomainId,
+        String executionPoolId,
+        long admissionEpoch,
+        String producerDeploymentId,
+        String moduleId,
+        long migrationEpoch,
+        int protocolVersion,
+        String claimantDeploymentId,
+        long claimantWorkerGeneration,
         String clientId,
         String eventId,
         String messageId,
@@ -28,6 +37,20 @@ public record AgentOutboxClaimToken(
         String deliveryActiveMessageId,
         int deliveryActiveAttempt,
         long deliveryVersion) {
+
+    /** Legacy constructor creates an invalid v1 token retained only for source compatibility. */
+    public AgentOutboxClaimToken(long outboxId, long deliveryId, String tenantId, String clientId,
+            String eventId, String messageId, String commandId, String taskId, String targetAgentId,
+            String commandType, String destination, String routingKey, byte[] wirePayload,
+            byte[] wirePayloadHash, long expiresAt, String leaseOwner, long leaseUntil,
+            int publishAttempt, long outboxVersion, String deliveryStatus,
+            String deliveryActiveMessageId, int deliveryActiveAttempt, long deliveryVersion) {
+        this(outboxId, deliveryId, tenantId, null, null, -1, null, null, -1, 1, null, -1,
+                clientId, eventId, messageId, commandId, taskId, targetAgentId, commandType,
+                destination, routingKey, wirePayload, wirePayloadHash, expiresAt, leaseOwner,
+                leaseUntil, publishAttempt, outboxVersion, deliveryStatus,
+                deliveryActiveMessageId, deliveryActiveAttempt, deliveryVersion);
+    }
 
     public AgentOutboxClaimToken {
         Objects.requireNonNull(tenantId, "tenantId");

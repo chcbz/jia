@@ -1,7 +1,16 @@
 package cn.jia.oauth.api;
 
+import cn.jia.core.config.ApiJsonResponses;
+import cn.jia.core.entity.JsonResult;
+import cn.jia.core.tenant.UserAdmissionScope;
+import cn.jia.oauth.config.ResourceServerConfig.TenantDeploymentProperties;
+import cn.jia.oauth.security.AccountSecurityJwtClaims;
+import cn.jia.oauth.security.TenantAdmissionPolicy;
+import cn.jia.oauth.security.UserAdmissionScopeResolver;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
@@ -11,12 +20,31 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.Collection;
 import java.util.List;
 import java.util.TreeSet;
+import java.util.regex.Pattern;
 
 @RestController
 public class OAuthResourceIdentityController {
+    private static final Pattern TENANT_ID = Pattern.compile("0|[1-9][0-9]{0,49}");
+    private static final Pattern DATA_DOMAIN_ID = Pattern.compile("[a-z][a-z0-9-]{0,63}");
+    private static final Pattern EPOCH = Pattern.compile("0|[1-9][0-9]{0,18}");
+
+    private final TenantAdmissionPolicy admissionPolicy;
+    private final UserAdmissionScopeResolver admissionScopeResolver;
+
+    /** Standalone/legacy construction retains the existing platform response contract. */
+    public OAuthResourceIdentityController() {
+        this(new TenantDeploymentProperties(), new UserAdmissionScopeResolver());
+    }
+
+    @Autowired(required = false)
+    public OAuthResourceIdentityController(TenantDeploymentProperties properties,
+                                           UserAdmissionScopeResolver admissionScopeResolver) {
+        this.admissionPolicy = TenantAdmissionPolicy.from(properties);
+        this.admissionScopeResolver = admissionScopeResolver;
+    }
 
     @GetMapping("/resource")
-    public ResponseEntity<cn.jia.core.entity.JsonResult<OAuthResourceIdentityDTO>> resource(Authentication authentication) {
+    public ResponseEntity<JsonResult<OAuthResourceIdentityDTO>> resource(Authentication authentication) {
         try {
             if (!(authentication instanceof JwtAuthenticationToken jwtAuthentication) ||
                     !authentication.isAuthenticated()) {
@@ -24,16 +52,57 @@ public class OAuthResourceIdentityController {
             }
 
             Jwt jwt = jwtAuthentication.getToken();
+            if (admissionPolicy.isFixedTenant()) {
+                return ApiJsonResponses.success(
+                        ResponseEntity.ok().header("Cache-Control", "no-store")
+                                .body(fixedTenantIdentity(authentication, jwt)));
+            }
+            TenantIdentity tenant = tenantIdentity(jwt);
             OAuthResourceIdentityDTO identity = new OAuthResourceIdentityDTO(
                     requiredString(jwt, "sub"),
                     requiredString(jwt, "client_id"),
                     optionalString(jwt, "username"),
                     optionalString(jwt, "jiacn"),
-                    scopes(jwt));
-            return cn.jia.core.config.ApiJsonResponses.success(ResponseEntity.ok(identity));
+                    scopes(jwt),
+                    tenant.tenantId() == null ? optionalString(jwt, "iss") : requiredString(jwt, "iss"),
+                    tenant.tenantId(),
+                    tenant.dataDomainId(),
+                    tenant.tenantName(),
+                    tenant.tenantKind(),
+                    tenant.tenantSessionEpoch(),
+                    tenant.membershipRevision(),
+                    tenant.clientTenantGrantRevision());
+            return ApiJsonResponses.success(
+                    ResponseEntity.ok().header("Cache-Control", "no-store").body(identity));
         } catch (InvalidIdentityClaimsException ignored) {
-            return cn.jia.core.config.ApiJsonResponses.success(ResponseEntity.status(HttpStatus.UNAUTHORIZED).build());
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .header("Cache-Control", "no-store")
+                    .body(JsonResult.failure("E401", "Authentication required"));
         }
+    }
+
+    private OAuthResourceIdentityDTO fixedTenantIdentity(Authentication authentication, Jwt jwt) {
+        final UserAdmissionScope admission;
+        try {
+            admission = admissionScopeResolver.resolve(authentication);
+        } catch (AccessDeniedException denied) {
+            throw InvalidIdentityClaimsException.INSTANCE;
+        }
+        var business = admission.businessScope();
+        return new OAuthResourceIdentityDTO(
+                requiredString(jwt, "sub"),
+                business.callerClientId(),
+                optionalString(jwt, "username"),
+                business.ownerJiacn(),
+                scopes(jwt),
+                requiredString(jwt, "iss"),
+                business.tenantId().value(),
+                null,
+                null,
+                null,
+                null,
+                null,
+                null);
     }
 
     private static String requiredString(Jwt jwt, String claimName) {
@@ -88,6 +157,51 @@ public class OAuthResourceIdentityController {
         return List.copyOf(scopes);
     }
 
+    /**
+     * New tenant-aware tokens carry the entire identity bundle. Old tokens keep
+     * their existing /resource shape during the explicitly controlled migration
+     * window, but a partially supplied bundle is always rejected.
+     */
+    private static TenantIdentity tenantIdentity(Jwt jwt) {
+        boolean present = jwt.getClaims().keySet().stream().anyMatch(name -> name.equals("tenant_id")
+                || name.equals("data_domain_id") || name.equals("tenant_name") || name.equals("tenant_kind")
+                || name.equals("tenant_session_epoch") || name.equals("membership_revision")
+                || name.equals("client_tenant_grant_revision"));
+        if (!present) {
+            return TenantIdentity.EMPTY;
+        }
+        try {
+            if (AccountSecurityJwtClaims.parse(jwt).tokenClass() != AccountSecurityJwtClaims.TokenClass.USER) {
+                throw InvalidIdentityClaimsException.INSTANCE;
+            }
+        } catch (IllegalArgumentException exception) {
+            throw InvalidIdentityClaimsException.INSTANCE;
+        }
+        String tenantId = requiredString(jwt, "tenant_id");
+        String dataDomainId = requiredString(jwt, "data_domain_id");
+        String tenantName = requiredString(jwt, "tenant_name");
+        String tenantKind = requiredString(jwt, "tenant_kind");
+        String sessionEpoch = requiredString(jwt, "tenant_session_epoch");
+        String membershipRevision = requiredString(jwt, "membership_revision");
+        String grantRevision = requiredString(jwt, "client_tenant_grant_revision");
+        if (!TENANT_ID.matcher(tenantId).matches() || !DATA_DOMAIN_ID.matcher(dataDomainId).matches() || !validRevision(sessionEpoch)
+                || !validRevision(membershipRevision) || !validRevision(grantRevision)
+                || !("NORMAL".equals(tenantKind) || "TEST".equals(tenantKind))) {
+            throw InvalidIdentityClaimsException.INSTANCE;
+        }
+        return new TenantIdentity(tenantId, dataDomainId, tenantName, tenantKind, sessionEpoch, membershipRevision, grantRevision);
+    }
+
+    private static boolean validRevision(String value) {
+        if (!EPOCH.matcher(value).matches()) return false;
+        try {
+            Long.parseLong(value);
+            return true;
+        } catch (NumberFormatException exception) {
+            return false;
+        }
+    }
+
     private static boolean containsWhitespace(String value) {
         return value.codePoints().anyMatch(OAuthResourceIdentityController::isUnicodeWhiteSpace);
     }
@@ -112,5 +226,11 @@ public class OAuthResourceIdentityController {
         private InvalidIdentityClaimsException() {
             super(null, null, false, false);
         }
+    }
+
+    private record TenantIdentity(String tenantId, String dataDomainId, String tenantName, String tenantKind,
+                                  String tenantSessionEpoch, String membershipRevision,
+                                  String clientTenantGrantRevision) {
+        private static final TenantIdentity EMPTY = new TenantIdentity(null, null, null, null, null, null, null);
     }
 }

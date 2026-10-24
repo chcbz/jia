@@ -1,5 +1,6 @@
 package cn.jia.agent.service;
 
+import cn.jia.core.tenant.TenantId;
 import jakarta.annotation.PreDestroy;
 import jakarta.inject.Named;
 import org.reactivestreams.Subscription;
@@ -239,10 +240,11 @@ public class AgentTaskEventBroker implements AutoCloseable {
     public record TaskScope(String tenantId, String clientId, String ownerJiacn, String taskId) {
         public TaskScope {
             tenantId = requireIdentity(tenantId, "tenantId", 50);
+            TenantId.of(tenantId);
             clientId = requireIdentity(clientId, "clientId", 50);
             ownerJiacn = requireIdentity(ownerJiacn, "ownerJiacn", 50);
-            if (!"0".equals(tenantId) || "0".equals(ownerJiacn)) {
-                throw new IllegalArgumentException("task scope must use tenant 0 and a real owner");
+            if ("0".equals(ownerJiacn)) {
+                throw new IllegalArgumentException("task scope must use a real owner");
             }
             taskId = requireIdentity(taskId, "taskId", 100);
         }

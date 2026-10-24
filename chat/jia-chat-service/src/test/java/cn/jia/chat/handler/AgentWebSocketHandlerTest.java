@@ -34,6 +34,10 @@ import cn.jia.chat.service.ServerResolvedAgentSender;
 import cn.jia.chat.service.JuyitingConversationScopeService;
 import cn.jia.core.context.EsContext;
 import cn.jia.core.context.EsContextHolder;
+import cn.jia.core.tenant.BusinessScope;
+import cn.jia.core.tenant.DataDomainId;
+import cn.jia.core.tenant.TenantId;
+import cn.jia.core.tenant.UserAdmissionScope;
 import reactor.core.publisher.Flux;
 import cn.jia.test.BaseMockTest;
 import org.junit.jupiter.api.BeforeEach;
@@ -101,6 +105,8 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
                 any(), org.mockito.ArgumentMatchers.anyLong(), any(), any())).thenReturn(true);
         org.mockito.Mockito.lenient().when(chatConversationService.isLiveGeneration(
                 any(), any(), any(), org.mockito.ArgumentMatchers.anyLong())).thenReturn(true);
+        org.mockito.Mockito.lenient().when(chatConversationService.isLiveGeneration(
+                any(UserAdmissionScope.class), any(), org.mockito.ArgumentMatchers.anyLong())).thenReturn(true);
     }
 
 
@@ -2008,7 +2014,7 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
                 .setConversationScopeType("public").setConversationScopeKey("public")
                 .setTargetAgentIds("[\"agent-wuyong\"]").setLifecycleGeneration(1L);
         conversation.setTenantId("0"); conversation.setClientId("web-client");
-        when(chatConversationService.getOwned("tester", "web-client", "1001"))
+        when(chatConversationService.get(areaZeroScope(), "1001"))
                 .thenReturn(conversation);
         JuyitingConversationScopeService scopeService = new JuyitingConversationScopeService(builtinHallAgentSupport, agentService);
         ChatDeliberationService deliberationService = org.mockito.Mockito.mock(ChatDeliberationService.class);
@@ -2044,7 +2050,7 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
                 .thenReturn(new ChatDeliberationService.Admission("req-1", 1L, "9007199254740993",
                         "1001", 1L, cn.jia.chat.deliberation.InteractionRoute.CHAT, List.of(dispatch), false));
         JuyitingAgentRelayResult relayResult = relayService.relay(
-                chatMessage, "1001",
+                areaZeroScope(), chatMessage, "1001",
                 new ServerResolvedSender("user", "测试用户", "tester", "web-client",
                         DisplayNameSource.NICKNAME),
                 cn.jia.chat.deliberation.InteractionRoute.CHAT);
@@ -2093,6 +2099,13 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         EsContextHolder.setContext(new EsContext());
     }
 
+
+    private UserAdmissionScope areaZeroScope() {
+        return new UserAdmissionScope(
+                new BusinessScope(TenantId.of("0"), DataDomainId.of("cyf"),
+                        "tester", "web-client"),
+                1L, 0L, 0L, 0L, 0L);
+    }
 
     private cn.jia.agent.entity.AgentRuntimeDTO runtime(String agentId, String name) {
         cn.jia.agent.entity.AgentRuntimeDTO dto = new cn.jia.agent.entity.AgentRuntimeDTO();

@@ -6,7 +6,9 @@ import cn.jia.core.entity.JsonResult;
 import tools.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
+import org.springframework.security.authorization.AuthorizationDecision;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.annotation.Order;
@@ -15,6 +17,7 @@ import org.springframework.http.MediaType;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.context.NullSecurityContextRepository;
@@ -30,12 +33,24 @@ public class VoiceSecurityConfiguration {
     public SecurityFilterChain voiceSecurityFilterChain(
             HttpSecurity http,
             ObjectMapper objectMapper,
-            ObjectProvider<JwtDecoder> jwtDecoderProvider) throws Exception {
+            ObjectProvider<JwtDecoder> jwtDecoderProvider,
+            @Value("${cyf.tenant.require-bound-identity:false}") boolean strictTenant) throws Exception {
         JwtDecoder jwtDecoder = jwtDecoderProvider.getIfAvailable();
         http.securityMatcher("/chat/speech/**")
                 .authorizeHttpRequests(authorize -> {
                     if (jwtDecoder == null) {
                         authorize.anyRequest().denyAll();
+                    } else if (strictTenant) {
+                        // Voice has its own higher-priority security chain and a legacy
+                        // client/owner cache namespace; it cannot inherit the chat route gate.
+                        authorize.anyRequest().access((authentication, request) -> {
+                            if (!(authentication.get() instanceof JwtAuthenticationToken jwt)) {
+                                return new AuthorizationDecision(false);
+                            }
+                            var claims = jwt.getToken().getClaims();
+                            return new AuthorizationDecision("0".equals(claims.get("tenant_id"))
+                                    && "cyf".equals(claims.get("data_domain_id")));
+                        });
                     } else {
                         authorize.anyRequest().authenticated();
                     }

@@ -1,6 +1,7 @@
 package cn.jia.agent.mapper;
 
 import cn.jia.agent.entity.AgentPersonaBindingEntity;
+import com.baomidou.mybatisplus.annotation.InterceptorIgnore;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
@@ -58,6 +59,7 @@ public interface AgentPersonaBindingMapper extends BaseMapper<AgentPersonaBindin
             @Param("personaCode") String personaCode,
             @Param("activeStatus") int activeStatus);
 
+    @InterceptorIgnore(tenantLine = "true")
     @Select("""
             SELECT CASE WHEN b.owner_jiacn = #{ownerJiacn}
                               AND CAST(b.owner_jiacn AS BINARY) = CAST(#{ownerJiacn} AS BINARY)
@@ -140,6 +142,10 @@ public interface AgentPersonaBindingMapper extends BaseMapper<AgentPersonaBindin
                  )
              AND (
                    p.client_id IS NULL
+                   OR (#{sharedClientId} <> '' AND CAST(p.tenant_id AS BINARY) = CAST('0' AS BINARY)
+                       AND OCTET_LENGTH(p.tenant_id) = 1
+                       AND CAST(p.client_id AS BINARY) = CAST(#{sharedClientId} AS BINARY)
+                       AND OCTET_LENGTH(p.client_id) = OCTET_LENGTH(#{sharedClientId}))
                    OR
                    (p.client_id = #{clientId}
                     AND CAST(p.client_id AS BINARY) = CAST(#{clientId} AS BINARY)
@@ -186,7 +192,8 @@ public interface AgentPersonaBindingMapper extends BaseMapper<AgentPersonaBindin
             @Param("tenantId") String tenantId,
             @Param("clientId") String clientId,
             @Param("ownerJiacn") String ownerJiacn,
-            @Param("activeStatus") int activeStatus);
+            @Param("activeStatus") int activeStatus,
+            @Param("sharedClientId") String sharedClientId);
 
     @Select("""
             SELECT *

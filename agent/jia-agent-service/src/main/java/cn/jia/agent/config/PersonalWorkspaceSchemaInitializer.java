@@ -30,9 +30,15 @@ public final class PersonalWorkspaceSchemaInitializer implements InitializingBea
             "agent_personal_workspace_file_version",
             "agent_personal_workspace_operation");
     private final JdbcTemplate jdbc;
+    private final boolean validateOnly;
 
     public PersonalWorkspaceSchemaInitializer(JdbcTemplate jdbc) {
+        this(jdbc, false);
+    }
+
+    PersonalWorkspaceSchemaInitializer(JdbcTemplate jdbc, boolean validateOnly) {
         this.jdbc = Objects.requireNonNull(jdbc, "jdbc");
+        this.validateOnly = validateOnly;
     }
 
     @Override
@@ -44,6 +50,7 @@ public final class PersonalWorkspaceSchemaInitializer implements InitializingBea
     void initializeSchema() {
         List<String> present = presentTables();
         if (present.isEmpty()) {
+            SchemaValidationMode.requireMutationAllowed(validateOnly, "Personal workspace schema");
             ddlStatements().forEach(jdbc::execute);
         } else if (!present.equals(TABLES)) {
             throw new IllegalStateException("Personal workspace schema is partial: " + present);
@@ -121,6 +128,8 @@ public final class PersonalWorkspaceSchemaInitializer implements InitializingBea
         List<Map<String, Object>> columns = provenanceColumns();
         if (columns.size() == 1 && "source_kind".equals(text(columns.getFirst(), "column_name"))) {
             validateLegacySourceCatalog(columns.getFirst());
+            SchemaValidationMode.requireMutationAllowed(validateOnly,
+                    "Personal workspace origin schema");
             // One MySQL ALTER keeps the additive column/check change atomic. Any failure aborts startup;
             // a later startup can safely retry only while the legacy catalog is still exact.
             jdbc.execute(originMigrationStatement());

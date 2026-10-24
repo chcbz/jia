@@ -1,12 +1,22 @@
 package cn.jia.chat.dao;
 
 import cn.jia.chat.entity.ChatMessageEntity;
+import cn.jia.chat.entity.ConversationDataScope;
 import cn.jia.core.dao.IBaseDao;
 
 import java.util.List;
 
 /** Chat message DAO boundary. */
 public interface ChatMessageDao extends IBaseDao<ChatMessageEntity> {
+    List<ChatMessageEntity> findOwnedByConversationId(
+            ConversationDataScope scope, String conversationId);
+
+    List<ChatMessageEntity> findOwnedByConversationIdWithLimit(
+            ConversationDataScope scope, String conversationId, int limit);
+
+    int deleteExactOwnedConversationMessages(
+            ConversationDataScope scope, String conversationId);
+
     /** Scoped task-thread write boundary; intentionally separate from generic conversations. */
     int insertScoped(String tenantId, String clientId, ChatMessageEntity message);
 
@@ -32,7 +42,15 @@ public interface ChatMessageDao extends IBaseDao<ChatMessageEntity> {
     int markMemorySnapshotSynced(String ownerJiacn, String clientId,
             String conversationId, List<Long> messageIds);
 
-    void updateSyncStatusByConversationId(String conversationId, String syncStatus);
+    List<String> findPendingConversationIds(
+            String syncStatus, List<String> excludedConversationIds, int limit);
+
+    int markPendingMessagesSynced(
+            ConversationDataScope scope, String conversationId,
+            List<Long> messageIds);
+    int updateSyncStatusByConversationId(String conversationId, String syncStatus);
+
+    int deleteMaintenanceMessageIds(List<Long> messageIds);
 
     List<Long> findExpiredMessageIds(long beforeTime, int limit);
 

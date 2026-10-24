@@ -1,19 +1,31 @@
 package cn.jia.agent.dao.impl;
 
 import cn.jia.agent.common.AgentConstants;
+import cn.jia.agent.config.AgentPersonaTemplateAccess;
+import jakarta.inject.Inject;
 import cn.jia.agent.dao.AgentPersonaBindingDao;
 import cn.jia.agent.entity.AgentPersonaBindingEntity;
 import cn.jia.agent.mapper.AgentPersonaBindingMapper;
 import cn.jia.agent.mapper.AgentPersonaCatalogBindingRow;
 import cn.jia.common.dao.BaseDaoImpl;
+import cn.jia.core.tenant.BusinessScope;
+import cn.jia.core.tenant.TenantId;
+import cn.jia.core.tenant.TrustedTenantContext;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import jakarta.inject.Named;
 
 import java.util.List;
+import java.util.Objects;
 
 @Named
 public class AgentPersonaBindingDaoImpl extends BaseDaoImpl<AgentPersonaBindingMapper, AgentPersonaBindingEntity>
         implements AgentPersonaBindingDao {
+    private AgentPersonaTemplateAccess templateAccess = new AgentPersonaTemplateAccess("");
+
+    @Inject
+    public void setTemplateAccess(AgentPersonaTemplateAccess templateAccess) {
+        this.templateAccess = Objects.requireNonNull(templateAccess);
+    }
     @Override
     public AgentPersonaBindingEntity findByIdForUpdate(long id) {
         return baseMapper.selectByIdForUpdate(id);
@@ -38,11 +50,15 @@ public class AgentPersonaBindingDaoImpl extends BaseDaoImpl<AgentPersonaBindingM
     @Override
     public AgentPersonaBindingEntity findActiveByTenantClientAndPersonaForUpdate(
             String tenantId, String clientId, String personaCode) {
+        TenantId.of(tenantId);
         requireExact(tenantId, "tenantId", 50);
         requireExact(clientId, "clientId", 50);
         requireExact(personaCode, "personaCode", 50);
-        if (!"0".equals(tenantId)) {
-            throw new IllegalArgumentException("persona tenant must be the single tenant");
+        BusinessScope trusted = TrustedTenantContext.requireScope();
+        if (!"cyf".equals(trusted.dataDomainId().value())
+                || !tenantId.equals(trusted.tenantId().value())
+                || !clientId.equals(trusted.callerClientId())) {
+            throw new IllegalArgumentException("persona binding scope is invalid");
         }
         return baseMapper.findActiveByTenantClientAndPersonaForUpdate(
                 tenantId, clientId, personaCode, AgentConstants.BINDING_STATUS_ACTIVE);
@@ -51,9 +67,9 @@ public class AgentPersonaBindingDaoImpl extends BaseDaoImpl<AgentPersonaBindingM
     @Override
     public List<AgentPersonaCatalogBindingRow> findCatalogOverlay(
             String tenantId, String clientId, String ownerJiacn) {
-        requirePersonaOwnerScope(tenantId, clientId, ownerJiacn);
+        requireCatalogReadScope(tenantId, clientId, ownerJiacn);
         return baseMapper.findCatalogOverlay(
-                tenantId, clientId, ownerJiacn, AgentConstants.BINDING_STATUS_ACTIVE);
+                tenantId, clientId, ownerJiacn, AgentConstants.BINDING_STATUS_ACTIVE, templateAccess.sharedClientId());
     }
 
     @Override
@@ -128,6 +144,24 @@ public class AgentPersonaBindingDaoImpl extends BaseDaoImpl<AgentPersonaBindingM
         requireExact(ownerJiacn, "ownerJiacn", 50);
         if ("0".equals(ownerJiacn) || !"0".equals(tenantId)) {
             throw new IllegalArgumentException("persona owner scope is invalid");
+        }
+    }
+
+    private void requireCatalogReadScope(
+            String tenantId, String clientId, String ownerJiacn) {
+        TenantId.of(tenantId);
+        requireExact(tenantId, "tenantId", 50);
+        requireExact(clientId, "clientId", 50);
+        requireExact(ownerJiacn, "ownerJiacn", 50);
+        if ("0".equals(ownerJiacn)) {
+            throw new IllegalArgumentException("persona catalog owner scope is invalid");
+        }
+        BusinessScope trusted = TrustedTenantContext.requireScope();
+        if (!"cyf".equals(trusted.dataDomainId().value())
+                || !tenantId.equals(trusted.tenantId().value())
+                || !clientId.equals(trusted.callerClientId())
+                || !ownerJiacn.equals(trusted.ownerJiacn())) {
+            throw new IllegalArgumentException("persona catalog read scope is invalid");
         }
     }
 

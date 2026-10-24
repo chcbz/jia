@@ -35,14 +35,25 @@ public final class AgentTaskCreationOperationSchemaInitializer implements Initia
                     "((json_type(input_refs_json)='ARRAY')and"
                             + "(json_length(input_refs_json)between0and32))"),
             Map.entry("chk_atco_scope",
-                    "((tenant_id='0')and(owner_jiacn<>'0'))"),
+                    "((tenant_idisnotnull)andregexp_like(tenant_id,"
+                            + "cast('^(0|[1-9][0-9]{0,49})$'ascharcharsetbinary))and"
+                            + "not(regexp_like(tenant_id,"
+                            + "cast('[^0-9]'ascharcharsetbinary)))and"
+                            + "(instr(tenant_id,char(10))=0)and"
+                            + "(instr(tenant_id,char(13))=0)and(owner_jiacn<>'0'))"),
             Map.entry("chk_atco_time",
                     "((created_at>0)and((completed_atisnull)or"
                             + "(completed_at>=created_at)))"));
     private final JdbcTemplate jdbc;
+    private final boolean validateOnly;
 
     public AgentTaskCreationOperationSchemaInitializer(JdbcTemplate jdbc) {
+        this(jdbc, false);
+    }
+
+    AgentTaskCreationOperationSchemaInitializer(JdbcTemplate jdbc, boolean validateOnly) {
         this.jdbc = Objects.requireNonNull(jdbc, "jdbc");
+        this.validateOnly = validateOnly;
     }
 
     @Override
@@ -50,7 +61,11 @@ public final class AgentTaskCreationOperationSchemaInitializer implements Initia
         requireMySql8();
         Integer count = jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.tables "
                 + "WHERE table_schema=DATABASE() AND table_name=?", Integer.class, TABLE);
-        if (count == null || count == 0) jdbc.execute(ddl());
+        if (count == null || count == 0) {
+            SchemaValidationMode.requireMutationAllowed(validateOnly,
+                    "Creation-operation schema");
+            jdbc.execute(ddl());
+        }
         validate();
     }
 

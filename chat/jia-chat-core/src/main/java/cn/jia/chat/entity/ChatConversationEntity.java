@@ -41,6 +41,10 @@ public class ChatConversationEntity extends BaseEntity {
     @Schema(description = "用户ID")
     private String jiacn;
 
+    @Schema(description = "业务数据域")
+    @TableField("data_domain_id")
+    private String dataDomainId;
+
     @Schema(description = "会话类型（normal-普通/juyiting-聚义厅）")
     @TableField("conversation_type")
     private String conversationType;
@@ -75,4 +79,16 @@ public class ChatConversationEntity extends BaseEntity {
     @Schema(description = "monotonic lifecycle generation incremented by deletion")
     @TableField("lifecycle_generation")
     private Long lifecycleGeneration;
+
+    @Schema(description = "persisted conversation data scope mode")
+    @TableField("data_scope_mode")
+    private String dataScopeMode;
+
+    @Schema(description = "currently visible memory snapshot token")
+    @TableField("memory_published_token")
+    private String memoryPublishedToken;
+
+    @Schema(description = "currently visible memory Elasticsearch revision")
+    @TableField("memory_published_revision")
+    private Long memoryPublishedRevision;
 }

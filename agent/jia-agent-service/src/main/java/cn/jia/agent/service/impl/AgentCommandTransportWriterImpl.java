@@ -4,6 +4,7 @@ import cn.jia.agent.access.AgentTaskAccessLevel;
 import cn.jia.agent.common.AgentConstants;
 import cn.jia.agent.config.AgentRabbitSafetyGate;
 import cn.jia.agent.config.AgentRabbitTopologyManifest;
+import cn.jia.agent.config.AgentRabbitV2TopologyManifest;
 import cn.jia.agent.dao.AgentCommandTransportDao;
 import cn.jia.agent.dao.AgentHallCommandTransportDao;
 import cn.jia.agent.entity.AgentCommandDeliveryEntity;
@@ -15,6 +16,10 @@ import cn.jia.agent.service.AgentCommandShadowIntentException;
 import cn.jia.agent.service.AgentCommandTransportWriter;
 import cn.jia.agent.service.AgentService;
 import cn.jia.agent.service.AgentTaskCollaborationAccessService;
+import cn.jia.core.tenant.BusinessScope;
+import cn.jia.core.tenant.ProducerScope;
+import cn.jia.core.tenant.TenantModuleAdmissionGuard;
+import cn.jia.core.tenant.UserAdmissionScope;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
@@ -45,6 +50,7 @@ public final class AgentCommandTransportWriterImpl implements AgentCommandTransp
     private final AgentRabbitSafetyGate gate;
     private final AgentService agentService;
     private final AgentTaskCollaborationAccessService accessService;
+    private final TenantModuleAdmissionGuard admissionGuard;
     private final TransactionTemplate transaction;
     private final Supplier<UUID> uuidSupplier;
 
@@ -54,7 +60,18 @@ public final class AgentCommandTransportWriterImpl implements AgentCommandTransp
             AgentService agentService,
             AgentTaskCollaborationAccessService accessService,
             PlatformTransactionManager transactionManager) {
-        this(dao, dao, gate, agentService, accessService,
+        this(dao, dao, gate, agentService, accessService, null,
+                transactionManager, UUID::randomUUID);
+    }
+
+    public AgentCommandTransportWriterImpl(
+            AgentHallCommandTransportDao dao,
+            AgentRabbitSafetyGate gate,
+            AgentService agentService,
+            AgentTaskCollaborationAccessService accessService,
+            TenantModuleAdmissionGuard admissionGuard,
+            PlatformTransactionManager transactionManager) {
+        this(dao, dao, gate, agentService, accessService, admissionGuard,
                 transactionManager, UUID::randomUUID);
     }
 
@@ -64,7 +81,7 @@ public final class AgentCommandTransportWriterImpl implements AgentCommandTransp
             AgentRabbitSafetyGate gate,
             PlatformTransactionManager transactionManager,
             Supplier<UUID> uuidSupplier) {
-        this(dao, null, gate, null, null, transactionManager, uuidSupplier);
+        this(dao, null, gate, null, null, null, transactionManager, uuidSupplier);
     }
 
     AgentCommandTransportWriterImpl(
@@ -74,7 +91,19 @@ public final class AgentCommandTransportWriterImpl implements AgentCommandTransp
             AgentTaskCollaborationAccessService accessService,
             PlatformTransactionManager transactionManager,
             Supplier<UUID> uuidSupplier) {
-        this(dao, dao, gate, agentService, accessService,
+        this(dao, dao, gate, agentService, accessService, null,
+                transactionManager, uuidSupplier);
+    }
+
+    AgentCommandTransportWriterImpl(
+            AgentHallCommandTransportDao dao,
+            AgentRabbitSafetyGate gate,
+            AgentService agentService,
+            AgentTaskCollaborationAccessService accessService,
+            TenantModuleAdmissionGuard admissionGuard,
+            PlatformTransactionManager transactionManager,
+            Supplier<UUID> uuidSupplier) {
+        this(dao, dao, gate, agentService, accessService, admissionGuard,
                 transactionManager, uuidSupplier);
     }
 
@@ -84,6 +113,7 @@ public final class AgentCommandTransportWriterImpl implements AgentCommandTransp
             AgentRabbitSafetyGate gate,
             AgentService agentService,
             AgentTaskCollaborationAccessService accessService,
+            TenantModuleAdmissionGuard admissionGuard,
             PlatformTransactionManager transactionManager,
             Supplier<UUID> uuidSupplier) {
         this.dao = Objects.requireNonNull(dao, "dao");
@@ -91,6 +121,7 @@ public final class AgentCommandTransportWriterImpl implements AgentCommandTransp
         this.gate = Objects.requireNonNull(gate, "gate");
         this.agentService = agentService;
         this.accessService = accessService;
+        this.admissionGuard = admissionGuard;
         this.uuidSupplier = Objects.requireNonNull(uuidSupplier, "uuidSupplier");
         this.transaction = new TransactionTemplate(
                 Objects.requireNonNull(transactionManager, "transactionManager"));
@@ -107,7 +138,22 @@ public final class AgentCommandTransportWriterImpl implements AgentCommandTransp
         }
         byte[] commandHash = AgentCommandCanonicalCodec.sha256(commandBytes);
         return transaction.execute(status -> writeInTransaction(
-                draft, commandBytes, commandHash));
+                draft, commandBytes, commandHash, null));
+    }
+
+    @Override
+    public AgentCommandTransportWriteResult writeV2(
+            UserAdmissionScope scope, AgentCommandDraft draft) {
+        requireEnabled();
+        requireV2Scope(scope, draft);
+        byte[] commandBytes = AgentCommandCanonicalCodec.businessBytes(draft);
+        if (AgentCommandCanonicalCodec.isHallIntentCommand(draft)) {
+            throw new IllegalStateException(
+                    "Hall commands require transactional caller and target authorization");
+        }
+        byte[] commandHash = AgentCommandCanonicalCodec.sha256(commandBytes);
+        return transaction.execute(status -> requireV2Admission(scope, producer ->
+                writeInTransaction(draft, commandBytes, commandHash, producer)));
     }
 
     @Override
@@ -121,8 +167,52 @@ public final class AgentCommandTransportWriterImpl implements AgentCommandTransp
         byte[] commandHash = AgentCommandCanonicalCodec.sha256(commandBytes);
         return transaction.execute(status -> {
             requireAuthorizedHall(draft, callerAgentId);
-            return writeInTransaction(draft, commandBytes, commandHash);
+            return writeInTransaction(draft, commandBytes, commandHash, null);
         });
+    }
+
+    @Override
+    public AgentCommandTransportWriteResult writeAuthorizedHallV2(
+            UserAdmissionScope scope, AgentCommandDraft draft, String callerAgentId) {
+        requireEnabled();
+        requireV2Scope(scope, draft);
+        byte[] commandBytes = AgentCommandCanonicalCodec.businessBytes(draft);
+        if (!AgentCommandCanonicalCodec.isHallIntentCommand(draft)) {
+            throw new IllegalArgumentException("authorized Hall writer requires a Hall command");
+        }
+        byte[] commandHash = AgentCommandCanonicalCodec.sha256(commandBytes);
+        return transaction.execute(status -> requireV2Admission(scope, producer -> {
+            requireAuthorizedHall(draft, callerAgentId);
+            return writeInTransaction(draft, commandBytes, commandHash, producer);
+        }));
+    }
+
+    private <T> T requireV2Admission(
+            UserAdmissionScope scope, java.util.function.Function<ProducerScope, T> work) {
+        if (admissionGuard == null) {
+            throw new IllegalStateException("Protocol-v2 producer admission is unavailable");
+        }
+        return admissionGuard.withAdmissionSnapshot(
+                scope, AgentCommandProtocolSupport.MODULE_ID,
+                TenantModuleAdmissionGuard.Operation.WRITE, snapshot -> {
+                    if (snapshot.mode() != TenantModuleAdmissionGuard.Mode.DOMAIN) {
+                        throw new IllegalStateException(
+                                "Protocol-v2 producer requires DOMAIN module admission");
+                    }
+                    return work.apply(snapshot.producerScope());
+                });
+    }
+
+    private void requireV2Scope(UserAdmissionScope scope, AgentCommandDraft draft) {
+        Objects.requireNonNull(scope, "scope");
+        Objects.requireNonNull(draft, "draft");
+        BusinessScope business = scope.businessScope();
+        if (!business.tenantId().value().equals(draft.tenantId())
+                || !business.callerClientId().equals(draft.clientId())
+                || !business.ownerJiacn().equals(draft.ownerJiacn())) {
+            throw new IllegalArgumentException(
+                    "Signed user scope does not match command tenant, client, and owner");
+        }
     }
 
     private void requireEnabled() {
@@ -170,23 +260,23 @@ public final class AgentCommandTransportWriterImpl implements AgentCommandTransp
     }
 
     private AgentCommandTransportWriteResult writeInTransaction(
-            AgentCommandDraft draft, byte[] commandBytes, byte[] commandHash) {
+            AgentCommandDraft draft, byte[] commandBytes, byte[] commandHash,
+            ProducerScope producerScope) {
         Admission admission = admission(draft.tenantId(), draft.clientId());
-        AgentCommandDeliveryEntity existing = dao.lockDelivery(
-                draft.tenantId(), draft.clientId(), draft.ownerJiacn(), draft.commandId());
+        AgentCommandDeliveryEntity existing = producerScope == null
+                ? dao.lockDelivery(draft.tenantId(), draft.clientId(),
+                    draft.ownerJiacn(), draft.commandId())
+                : dao.lockDeliveryV2(draft.tenantId(), draft.clientId(),
+                    draft.ownerJiacn(), draft.commandId());
         if (existing != null) {
-            return duplicateOrConflict(existing, draft, commandBytes, commandHash, admission);
+            return duplicateOrConflict(
+                    existing, draft, commandBytes, commandHash, admission, producerScope);
         }
 
         String messageId = nextUuid("messageId");
         String eventId = nextUuid("eventId");
-        byte[] wireBytes = AgentCommandCanonicalCodec.wireBytes(draft, messageId);
-        byte[] wireHash = AgentCommandCanonicalCodec.sha256(wireBytes);
         String status = admission.dispatchEligible() ? "PENDING" : "DEAD";
         String marker = admission.marker();
-        AgentRabbitTopologyManifest.PublishRoute route =
-                AgentRabbitTopologyManifest.canonical().defaultCommandPublishRoute();
-
         AgentCommandDeliveryEntity delivery = new AgentCommandDeliveryEntity()
                 .setCommandId(draft.commandId())
                 .setOwnerJiacn(draft.ownerJiacn())
@@ -207,37 +297,65 @@ public final class AgentCommandTransportWriterImpl implements AgentCommandTransp
         delivery.setClientId(draft.clientId());
         delivery.setCreateTime(draft.issuedAt());
         delivery.setUpdateTime(draft.issuedAt());
+        if (producerScope != null) AgentCommandProtocolSupport.apply(delivery, producerScope);
         try {
-            requireOne(dao.insertDelivery(delivery), "delivery insert");
+            requireOne(producerScope == null
+                    ? dao.insertDelivery(delivery) : dao.insertDeliveryV2(delivery),
+                    "delivery insert");
         } catch (DuplicateKeyException concurrent) {
-            AgentCommandDeliveryEntity winner = dao.lockDelivery(
-                    draft.tenantId(), draft.clientId(), draft.ownerJiacn(), draft.commandId());
+            AgentCommandDeliveryEntity winner = producerScope == null
+                    ? dao.lockDelivery(draft.tenantId(), draft.clientId(),
+                        draft.ownerJiacn(), draft.commandId())
+                    : dao.lockDeliveryV2(draft.tenantId(), draft.clientId(),
+                        draft.ownerJiacn(), draft.commandId());
             if (winner == null) {
                 throw new IllegalStateException(
                         "Concurrent command identity conflict did not expose the winning row",
                         concurrent);
             }
             return duplicateOrConflict(
-                    winner, draft, commandBytes, commandHash, admission);
+                    winner, draft, commandBytes, commandHash, admission, producerScope);
         }
         if (delivery.getId() == null || delivery.getId() <= 0) {
             throw new IllegalStateException(
                     "delivery insert did not return a generated id");
         }
 
+        byte[] wireBytes = producerScope == null
+                ? AgentCommandCanonicalCodec.wireBytes(draft, messageId)
+                : AgentCommandCanonicalCodec.wireBytesV2(
+                    draft, messageId, delivery.getId(),
+                    AgentCommandCanonicalCodec.ATTEMPT, producerScope);
+        byte[] wireHash = AgentCommandCanonicalCodec.sha256(wireBytes);
+
         AgentOutboxEventEntity outbox = newOutbox(
                 delivery.getId(), draft, eventId, messageId, wireBytes, wireHash,
-                status, marker);
-        requireOne(dao.insertOutbox(outbox), "outbox insert");
+                status, marker, producerScope);
+        requireOne(producerScope == null
+                ? dao.insertOutbox(outbox) : dao.insertOutboxV2(outbox),
+                "outbox insert");
         return new AgentCommandTransportWriteResult(
                 delivery.getId(), draft.commandId(), messageId, eventId, false);
     }
 
     private AgentOutboxEventEntity newOutbox(
             long deliveryId, AgentCommandDraft draft, String eventId, String messageId,
-            byte[] wireBytes, byte[] wireHash, String status, String marker) {
-        AgentRabbitTopologyManifest.PublishRoute route =
-                AgentRabbitTopologyManifest.canonical().defaultCommandPublishRoute();
+            byte[] wireBytes, byte[] wireHash, String status, String marker,
+            ProducerScope producerScope) {
+        String destination;
+        String routingKey;
+        if (producerScope == null) {
+            AgentRabbitTopologyManifest.PublishRoute route =
+                    AgentRabbitTopologyManifest.canonical().defaultCommandPublishRoute();
+            destination = route.destination();
+            routingKey = route.routingKey();
+        } else {
+            AgentRabbitV2TopologyManifest.PublishRoute route =
+                    AgentRabbitV2TopologyManifest.forScope(producerScope)
+                            .defaultCommandPublishRoute();
+            destination = route.destination();
+            routingKey = route.routingKey();
+        }
         AgentOutboxEventEntity outbox = new AgentOutboxEventEntity()
                 .setEventId(eventId)
                 .setMessageId(messageId)
@@ -245,8 +363,8 @@ public final class AgentCommandTransportWriterImpl implements AgentCommandTransp
                 .setDeliveryId(deliveryId)
                 .setAggregateType("task")
                 .setAggregateId(draft.taskId())
-                .setDestination(route.destination())
-                .setRoutingKey(route.routingKey())
+                .setDestination(destination)
+                .setRoutingKey(routingKey)
                 .setWirePayload(wireBytes)
                 .setWirePayloadHash(wireHash)
                 .setStatus(status)
@@ -261,6 +379,7 @@ public final class AgentCommandTransportWriterImpl implements AgentCommandTransp
         outbox.setClientId(draft.clientId());
         outbox.setCreateTime(draft.issuedAt());
         outbox.setUpdateTime(draft.issuedAt());
+        if (producerScope != null) AgentCommandProtocolSupport.apply(outbox, producerScope);
         return outbox;
     }
 
@@ -281,7 +400,18 @@ public final class AgentCommandTransportWriterImpl implements AgentCommandTransp
             AgentCommandDraft draft,
             byte[] commandBytes,
             byte[] commandHash,
-            Admission admission) {
+            Admission admission,
+            ProducerScope producerScope) {
+        ProducerScope persisted;
+        try {
+            persisted = AgentCommandProtocolSupport.producerScopeOrLegacy(existing);
+        } catch (IllegalArgumentException malformed) {
+            throw new IllegalStateException("Existing Agent command protocol is invalid", malformed);
+        }
+        if (!Objects.equals(persisted, producerScope)) {
+            throw new IllegalStateException(
+                    "Agent commandId conflict: producer protocol or provenance differs");
+        }
         ComparableCommand comparable = comparableCommand(
                 existing, draft, commandBytes, commandHash);
         boolean identityMatches = Objects.equals(existing.getTenantId(), draft.tenantId())
@@ -305,6 +435,10 @@ public final class AgentCommandTransportWriterImpl implements AgentCommandTransp
         }
         if (admission.dispatchEligible()
                 && AgentCommandCanonicalCodec.isHallIntentCommand(draft)) {
+            if (producerScope != null && shadowCaptureMarker(existing.getLastError())) {
+                throw new AgentCommandShadowIntentException(
+                        "Protocol-v2 shadow intent cannot be promoted in place");
+            }
             if (DB_SHADOW_MARKER.equals(existing.getLastError())) {
                 throw new AgentCommandShadowIntentException(
                         "DB_SHADOW intent is capture-only; submit a new intent for canary dispatch");

@@ -5,6 +5,7 @@ import cn.jia.agent.dao.PersonalWorkspaceConversationLinkDao.OperationRow;
 import cn.jia.agent.entity.PersonalWorkspaceConversationFileLinkEntity;
 import cn.jia.agent.service.PersonalWorkspaceConversationLinkService;
 import cn.jia.chat.service.WorkspaceConversationAccessService;
+import cn.jia.core.tenant.TenantId;
 import jakarta.inject.Inject;
 import jakarta.inject.Named;
 import org.springframework.transaction.annotation.Transactional;
@@ -254,7 +255,9 @@ public class PersonalWorkspaceConversationLinkServiceImpl implements PersonalWor
     }
 
     private static void validateScope(Scope scope) {
-        if (scope == null || !"0".equals(scope.tenantId())) throw failure(Reason.BAD_REQUEST);
+        if (scope == null) throw failure(Reason.BAD_REQUEST);
+        try { TenantId.of(scope.tenantId()); }
+        catch (RuntimeException invalid) { throw failure(Reason.BAD_REQUEST); }
         id(scope.clientId(), 50); id(scope.ownerJiacn(), 50);
         if ("0".equals(scope.ownerJiacn())) throw failure(Reason.BAD_REQUEST);
     }

@@ -1,10 +1,14 @@
 package cn.jia.agent.dao.impl;
 
 import cn.jia.agent.cache.AgentPersonaCatalogCache;
+import cn.jia.agent.config.AgentPersonaTemplateAccess;
 import cn.jia.agent.dao.AgentPersonaDao;
 import cn.jia.agent.entity.AgentPersonaEntity;
 import cn.jia.agent.mapper.AgentPersonaMapper;
 import cn.jia.common.dao.BaseDaoImpl;
+import cn.jia.core.tenant.BusinessScope;
+import cn.jia.core.tenant.TenantId;
+import cn.jia.core.tenant.TrustedTenantContext;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import jakarta.inject.Inject;
 import jakarta.inject.Named;
@@ -16,6 +20,12 @@ import java.util.Objects;
 
 @Named
 public class AgentPersonaDaoImpl extends BaseDaoImpl<AgentPersonaMapper, AgentPersonaEntity> implements AgentPersonaDao {
+    private AgentPersonaTemplateAccess templateAccess = new AgentPersonaTemplateAccess("");
+
+    @Inject
+    public void setTemplateAccess(AgentPersonaTemplateAccess templateAccess) {
+        this.templateAccess = Objects.requireNonNull(templateAccess);
+    }
     private AgentPersonaCatalogCache catalogCache = new AgentPersonaCatalogCache();
 
     @Inject
@@ -38,14 +48,35 @@ public class AgentPersonaDaoImpl extends BaseDaoImpl<AgentPersonaMapper, AgentPe
     }
 
     @Override
-    public List<AgentPersonaEntity> findRuntimeProjection() {
-        return baseMapper.selectRuntimeProjection();
+    public AgentPersonaEntity findByNameInReadScope(
+            String tenantId, String clientId, String name) {
+        requireExact(name, "name");
+        return uniqueExact(findFullProjection(tenantId, clientId), name, false);
+    }
+
+    @Override
+    public AgentPersonaEntity findByCodeInReadScope(
+            String tenantId, String clientId, String personaCode) {
+        requireExact(personaCode, "personaCode");
+        return uniqueExact(findRuntimeProjection(tenantId, clientId), personaCode, true);
+    }
+
+    @Override
+    public List<AgentPersonaEntity> findFullProjection(String tenantId, String clientId) {
+        requireReadScope(tenantId, clientId);
+        return baseMapper.selectFullProjection(tenantId, clientId, templateAccess.sharedClientId());
+    }
+
+    @Override
+    public List<AgentPersonaEntity> findRuntimeProjection(String tenantId, String clientId) {
+        requireReadScope(tenantId, clientId);
+        return baseMapper.selectRuntimeProjection(tenantId, clientId, templateAccess.sharedClientId());
     }
 
     @Override
     public List<AgentPersonaEntity> findCatalogProjection(String tenantId, String clientId) {
-        requireExactScope(tenantId, clientId);
-        return baseMapper.selectCatalogProjection(tenantId, clientId);
+        requireReadScope(tenantId, clientId);
+        return baseMapper.selectCatalogProjection(tenantId, clientId, templateAccess.sharedClientId());
     }
 
     @Override
@@ -103,9 +134,32 @@ public class AgentPersonaDaoImpl extends BaseDaoImpl<AgentPersonaMapper, AgentPe
         }
     }
 
-    private void requireExactScope(String tenantId, String clientId) {
+    private void requireReadScope(String tenantId, String clientId) {
         requireExact(tenantId, "tenantId");
+        TenantId.of(tenantId);
         requireExact(clientId, "clientId");
+        BusinessScope trusted = TrustedTenantContext.requireScope();
+        if (!"cyf".equals(trusted.dataDomainId().value())
+                || !tenantId.equals(trusted.tenantId().value())
+                || !clientId.equals(trusted.callerClientId())) {
+            throw new IllegalArgumentException("persona read scope is invalid");
+        }
+    }
+
+    private AgentPersonaEntity uniqueExact(
+            List<AgentPersonaEntity> rows, String expected, boolean byCode) {
+        AgentPersonaEntity found = null;
+        for (AgentPersonaEntity row : Objects.requireNonNull(rows, "persona projection")) {
+            String actual = row == null ? null : byCode ? row.getPersonaCode() : row.getName();
+            if (!expected.equals(actual)) {
+                continue;
+            }
+            if (found != null) {
+                throw new IllegalStateException("persona read projection is ambiguous");
+            }
+            found = row;
+        }
+        return found;
     }
 
     private void requireExact(String value, String field) {

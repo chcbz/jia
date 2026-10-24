@@ -217,6 +217,8 @@ public class AgentTaskFormalDeliveryController {
             throw new AuthenticationFailure(false);
         }
         Map<String, Object> claims = jwt.getToken().getClaims();
+        if (!"0".equals(claims.get("tenant_id")) || !"cyf".equals(claims.get("data_domain_id")))
+            throw new AuthenticationFailure(true);
         String ownerJiacn = requiredClaim(claims, "jiacn", 50);
         String clientId = requiredClaim(claims, "client_id", 50);
         String actorId = requiredClaim(claims, "sub", 100);
@@ -224,6 +226,8 @@ public class AgentTaskFormalDeliveryController {
                 || !byteExact(authentication.getName(), actorId)) {
             throw new AuthenticationFailure(true);
         }
+        // All four routes still use area-0 legacy task and rework stores;
+        // selecting another area cannot silently rebind an owner to area 0.
         return new Scope("0", clientId, ownerJiacn, actorId);
     }
 

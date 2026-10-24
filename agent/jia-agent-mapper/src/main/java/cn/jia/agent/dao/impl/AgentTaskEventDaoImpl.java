@@ -95,14 +95,8 @@ public class AgentTaskEventDaoImpl
     }
 
     private void requireStrictOwnerScope(String tenantId, String clientId, String ownerJiacn) {
-        if (!"0".equals(tenantId)) {
-            throw new IllegalArgumentException("tenantId must be literal 0");
-        }
-        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
-        requireExactId(ownerJiacn, "ownerJiacn", 50);
-        if ("0".equals(ownerJiacn)) {
-            throw new IllegalArgumentException("ownerJiacn must be a real task owner");
-        }
+        TaskCollaborationDaoSupport.requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
+        if (ownerJiacn.length() > 50) throw new IllegalArgumentException("ownerJiacn is invalid");
     }
 
     private void requireExactId(String value, String name, int maxLength) {

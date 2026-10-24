@@ -36,7 +36,12 @@ CREATE TABLE IF NOT EXISTS hall_request_draft (
     UNIQUE KEY uk_hall_draft_submit (tenant_id, client_id, owner_jiacn, submit_key),
     UNIQUE KEY uk_hall_draft_discard (tenant_id, client_id, owner_jiacn, discard_key),
     KEY idx_hall_draft_recovery (tenant_id, client_id, owner_jiacn, state, updated_at, draft_id),
-    CONSTRAINT chk_hall_draft_tenant CHECK (tenant_id = '0'),
+    CONSTRAINT chk_hall_draft_tenant CHECK (
+        tenant_id IS NOT NULL
+        AND tenant_id REGEXP BINARY '^(0|[1-9][0-9]{0,49})$'
+        AND tenant_id NOT REGEXP BINARY '[^0-9]'
+        AND INSTR(tenant_id, CHAR(10)) = 0
+        AND INSTR(tenant_id, CHAR(13)) = 0),
     CONSTRAINT chk_hall_draft_kind CHECK (kind IN ('CREATE','REVISION','TASK_CREATE','TASK_ACTION')),
     CONSTRAINT chk_hall_draft_state CHECK (state IN ('EDITING','SUBMITTED','DISCARDED')),
     CONSTRAINT chk_hall_draft_revision CHECK (revision >= 1 AND revision <= 9007199254740991),

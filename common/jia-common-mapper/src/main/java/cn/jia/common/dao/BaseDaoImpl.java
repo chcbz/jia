@@ -3,7 +3,6 @@ package cn.jia.common.dao;
 import cn.jia.common.entity.BaseEntityWrapper;
 import cn.jia.core.dao.IBaseDao;
 import cn.jia.core.entity.BaseEntity;
-import cn.jia.core.mybatis.TenantScopeHelper;
 import cn.jia.core.util.CollectionUtil;
 import cn.jia.core.util.StringUtil;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
@@ -164,17 +163,12 @@ public abstract class BaseDaoImpl<M extends BaseMapper<T>, T extends BaseEntity>
     }
 
     /**
-     * 根据实体条件查询，自动追加 tenant 范围条件。
-     * <p>
-     * 当 entity.tenantId 不为空时，生成
-     * {@code (tenant_id = entity.tenantId OR tenant_id = '0')}，
-     * 确保公共数据（tenant_id='0'）同时被查出。
-     * </p>
+     * 根据实体条件查询，tenantId 存在时只精确匹配该业务区域。
      */
     @Override
     public List<T> selectByEntity(T entity) {
         String entityTenantId = entity.getTenantId();
-        // 临时清零 tenantId 避免 QueryWrapper 自动生成 tenant_id = ? 精确条件
+        // 临时清零 tenantId，统一由 applyTenantScope 添加精确谓词。
         entity.setTenantId(null);
         try {
             QueryWrapper<T> queryWrapper = new QueryWrapper<>(entity);
@@ -188,12 +182,11 @@ public abstract class BaseDaoImpl<M extends BaseMapper<T>, T extends BaseEntity>
     }
 
     /**
-     * 追加 tenant 范围条件：当 tenantId 非空时，查
-     * {@code (tenant_id = tenantId OR tenant_id = '0')}。
+     * 追加精确 tenant 范围条件。tenant 0 与其它区域完全同等。
      */
     private void applyTenantScope(QueryWrapper<T> queryWrapper, String tenantId) {
-        if (StringUtil.isNotBlank(tenantId) && !TenantScopeHelper.DEFAULT_TENANT.equals(tenantId)) {
-            queryWrapper.and(w -> w.eq("tenant_id", tenantId).or().eq("tenant_id", TenantScopeHelper.DEFAULT_TENANT));
+        if (StringUtil.isNotBlank(tenantId)) {
+            queryWrapper.eq("tenant_id", tenantId);
         }
     }
 

@@ -4,7 +4,11 @@ import cn.jia.chat.dao.AgentTaskThreadDao;
 import cn.jia.chat.dao.ChatConversationDao;
 import cn.jia.chat.entity.AgentTaskThreadConstants;
 import cn.jia.chat.entity.ChatConversationEntity;
+import cn.jia.chat.entity.ConversationDataScope;
 import cn.jia.chat.service.WorkspaceConversationAccessService;
+import cn.jia.core.tenant.BusinessScope;
+import cn.jia.core.tenant.DataDomainId;
+import cn.jia.core.tenant.TenantId;
 import cn.jia.core.util.JsonUtil;
 import jakarta.inject.Inject;
 import jakarta.inject.Named;
@@ -21,6 +25,7 @@ import java.util.Set;
 @Named
 public class WorkspaceConversationAccessServiceImpl implements WorkspaceConversationAccessService {
     private static final String DEFAULT_TENANT = "0";
+    private static final String DATA_DOMAIN = "cyf";
     private static final String CONVERSATION_TYPE_JUYITING = "juyiting";
     private static final Set<String> SUPPORTED_SCOPE_TYPES =
             Set.of("public", "bounty", "private");
@@ -43,17 +48,16 @@ public class WorkspaceConversationAccessServiceImpl implements WorkspaceConversa
     @Override
     @Transactional(readOnly = true)
     public ConversationView requireAccessible(Scope scope, String conversationId) {
-        validateScope(scope);
+        ConversationDataScope dataScope = validateScope(scope);
         String canonicalConversationId = canonicalConversationId(conversationId);
 
         ChatConversationEntity conversation;
         try {
-            conversation = conversationDao.findScopedById(
-                    scope.ownerJiacn(), scope.clientId(), canonicalConversationId);
+            conversation = conversationDao.findScopedById(dataScope, canonicalConversationId);
         } catch (RuntimeException queryFailure) {
             throw denied();
         }
-        requireExactOwnedJuyitingConversation(scope, canonicalConversationId, conversation);
+        requireExactOwnedJuyitingConversation(dataScope, canonicalConversationId, conversation);
         rejectTaskThreadBinding(canonicalConversationId);
 
         String scopeType = conversation.getConversationScopeType();
@@ -75,12 +79,14 @@ public class WorkspaceConversationAccessServiceImpl implements WorkspaceConversa
     }
 
     private void requireExactOwnedJuyitingConversation(
-            Scope scope, String conversationId, ChatConversationEntity conversation) {
+            ConversationDataScope scope,
+            String conversationId,
+            ChatConversationEntity conversation) {
         if (conversation == null
                 || conversation.getId() == null
                 || !conversationId.equals(Long.toString(conversation.getId()))
-                || !DEFAULT_TENANT.equals(conversation.getTenantId())
-                || !scope.clientId().equals(conversation.getClientId())
+                || !scope.tenantId().equals(conversation.getTenantId())
+                || !scope.callerClientId().equals(conversation.getClientId())
                 || !scope.ownerJiacn().equals(conversation.getJiacn())
                 || conversation.getDeletedAt() != null
                 || !CONVERSATION_TYPE_JUYITING.equals(conversation.getConversationType())
@@ -162,12 +168,22 @@ public class WorkspaceConversationAccessServiceImpl implements WorkspaceConversa
         }
     }
 
-    private void validateScope(Scope scope) {
+    private ConversationDataScope validateScope(Scope scope) {
         if (scope == null
-                || !DEFAULT_TENANT.equals(scope.tenantId())
                 || !isExactText(scope.clientId(), MAX_IDENTITY_LENGTH)
                 || !isExactText(scope.ownerJiacn(), MAX_IDENTITY_LENGTH)
                 || DEFAULT_TENANT.equals(scope.ownerJiacn())) {
+            throw denied();
+        }
+        try {
+            return new ConversationDataScope(
+                    new BusinessScope(
+                            TenantId.of(scope.tenantId()),
+                            DataDomainId.of(DATA_DOMAIN),
+                            scope.ownerJiacn(),
+                            scope.clientId()),
+                    ConversationDataScope.Mode.LEGACY_CLIENT);
+        } catch (RuntimeException malformedScope) {
             throw denied();
         }
     }

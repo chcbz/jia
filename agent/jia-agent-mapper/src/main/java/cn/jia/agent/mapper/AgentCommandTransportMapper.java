@@ -38,6 +38,34 @@ public interface AgentCommandTransportMapper {
             @Param("commandId") String commandId);
 
     @Select("""
+            SELECT id, protocol_version, data_domain_id, execution_pool_id, admission_epoch,
+                   producer_deployment_id, module_id, migration_epoch, command_id, owner_jiacn,
+                   task_id, work_item_id, target_agent_id, command_type, command_payload,
+                   command_payload_hash, status, attempt_count, next_retry_at, lease_owner,
+                   lease_until, active_message_id, active_attempt, expires_at, last_error,
+                   version, replay_parent_message_id, replay_requester_id, replay_approver_id,
+                   replay_reason, tenant_id, client_id, create_time, update_time
+            FROM agent_command_delivery
+            WHERE tenant_id=#{tenantId} AND client_id=#{clientId} AND owner_jiacn=#{ownerJiacn}
+              AND command_id=#{commandId}
+              AND CAST(tenant_id AS BINARY)=CAST(#{tenantId} AS BINARY)
+              AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(#{tenantId})
+              AND CAST(client_id AS BINARY)=CAST(#{clientId} AS BINARY)
+              AND OCTET_LENGTH(client_id)=OCTET_LENGTH(#{clientId})
+              AND CAST(owner_jiacn AS BINARY)=CAST(#{ownerJiacn} AS BINARY)
+              AND OCTET_LENGTH(owner_jiacn)=OCTET_LENGTH(#{ownerJiacn})
+              AND CAST(command_id AS BINARY)=CAST(#{commandId} AS BINARY)
+              AND OCTET_LENGTH(command_id)=OCTET_LENGTH(#{commandId})
+              AND protocol_version=2
+            LIMIT 1 FOR UPDATE
+            """)
+    AgentCommandDeliveryEntity selectDeliveryForUpdateV2(
+            @Param("tenantId") String tenantId,
+            @Param("clientId") String clientId,
+            @Param("ownerJiacn") String ownerJiacn,
+            @Param("commandId") String commandId);
+
+    @Select("""
             SELECT id,event_id,message_id,command_id,delivery_id,aggregate_type,aggregate_id,
                    destination,routing_key,wire_payload,wire_payload_hash,status,attempt_count,
                    next_retry_at,lease_owner,lease_until,active_attempt,expires_at,
@@ -135,6 +163,24 @@ public interface AgentCommandTransportMapper {
     int insertDelivery(AgentCommandDeliveryEntity delivery);
 
     @Insert("""
+            INSERT INTO agent_command_delivery
+              (protocol_version,data_domain_id,execution_pool_id,admission_epoch,producer_deployment_id,
+               module_id,migration_epoch,command_id,owner_jiacn,task_id,work_item_id,target_agent_id,
+               command_type,command_payload,command_payload_hash,status,attempt_count,next_retry_at,
+               lease_owner,lease_until,active_message_id,active_attempt,expires_at,last_error,
+               version,tenant_id,client_id,create_time,update_time)
+            VALUES
+              (#{protocolVersion},#{dataDomainId},#{executionPoolId},#{admissionEpoch},#{producerDeploymentId},
+               #{moduleId},#{migrationEpoch},#{commandId},#{ownerJiacn},#{taskId},#{workItemId},
+               #{targetAgentId},#{commandType},#{commandPayload},#{commandPayloadHash},#{status},
+               #{attemptCount},#{nextRetryAt},#{leaseOwner},#{leaseUntil},#{activeMessageId},
+               #{activeAttempt},#{expiresAt},#{lastError},#{version},#{tenantId},#{clientId},
+               #{createTime},#{updateTime})
+            """)
+    @Options(useGeneratedKeys = true, keyProperty = "id")
+    int insertDeliveryV2(AgentCommandDeliveryEntity delivery);
+
+    @Insert("""
             INSERT INTO agent_outbox_event
               (event_id,message_id,command_id,delivery_id,aggregate_type,aggregate_id,
                destination,routing_key,wire_payload,wire_payload_hash,status,attempt_count,
@@ -150,6 +196,26 @@ public interface AgentCommandTransportMapper {
             """)
     @Options(useGeneratedKeys = true, keyProperty = "id")
     int insertOutbox(AgentOutboxEventEntity outbox);
+
+    @Insert("""
+            INSERT INTO agent_outbox_event
+              (protocol_version,data_domain_id,execution_pool_id,admission_epoch,producer_deployment_id,
+               module_id,migration_epoch,event_id,message_id,command_id,delivery_id,aggregate_type,
+               aggregate_id,destination,routing_key,wire_payload,wire_payload_hash,status,attempt_count,
+               next_retry_at,lease_owner,lease_until,active_attempt,expires_at,
+               publisher_confirm_status,mandatory_return_status,last_error,version,
+               tenant_id,client_id,create_time,update_time)
+            VALUES
+              (#{protocolVersion},#{dataDomainId},#{executionPoolId},#{admissionEpoch},#{producerDeploymentId},
+               #{moduleId},#{migrationEpoch},#{eventId},#{messageId},#{commandId},#{deliveryId},
+               #{aggregateType},#{aggregateId},#{destination},#{routingKey},#{wirePayload},
+               #{wirePayloadHash},#{status},#{attemptCount},#{nextRetryAt},#{leaseOwner},
+               #{leaseUntil},#{activeAttempt},#{expiresAt},#{publisherConfirmStatus},
+               #{mandatoryReturnStatus},#{lastError},#{version},#{tenantId},#{clientId},
+               #{createTime},#{updateTime})
+            """)
+    @Options(useGeneratedKeys = true, keyProperty = "id")
+    int insertOutboxV2(AgentOutboxEventEntity outbox);
     @Select("""
             SELECT d.id AS id, d.command_id AS commandId, d.task_id AS taskId,
                    d.work_item_id AS workItemId, d.target_agent_id AS targetAgentId,

@@ -19,6 +19,11 @@ class HallRequestDraftSchemaInitializerTest {
         assertTrue(ddl.contains("UNIQUE KEY uk_hall_draft_discard (tenant_id, client_id, owner_jiacn, discard_key)"));
         assertTrue(ddl.contains("KEY idx_hall_draft_recovery (tenant_id, client_id, owner_jiacn, state, updated_at, draft_id)"));
         assertTrue(ddl.contains("CONSTRAINT chk_hall_draft_revision CHECK (revision >= 1 AND revision <= 9007199254740991)"));
+        assertTrue(ddl.contains("tenant_id IS NOT NULL"));
+        assertTrue(ddl.contains("tenant_id REGEXP BINARY '^(0|[1-9][0-9]{0,49})$'"));
+        assertTrue(ddl.contains("tenant_id NOT REGEXP BINARY '[^0-9]'"));
+        assertTrue(ddl.contains("INSTR(tenant_id, CHAR(10)) = 0"));
+        assertTrue(ddl.contains("INSTR(tenant_id, CHAR(13)) = 0"));
         assertTrue(ddl.contains("CONSTRAINT chk_hall_draft_kind_refs CHECK"));
         assertTrue(ddl.contains("source_type IN ('CONVERSATION','TASK','EXECUTION_OUTPUT')"));
         assertTrue(ddl.contains("state='DISCARDED'"));

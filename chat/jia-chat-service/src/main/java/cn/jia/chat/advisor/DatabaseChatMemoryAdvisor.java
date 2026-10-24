@@ -8,6 +8,7 @@ import cn.jia.chat.service.ServerTrustedSender;
 import cn.jia.chat.entity.ChatMessageEntity;
 import cn.jia.core.util.JsonUtil;
 import cn.jia.core.util.StringUtil;
+import cn.jia.core.tenant.UserAdmissionScope;
 import org.springframework.ai.chat.client.ChatClientRequest;
 import org.springframework.ai.chat.client.ChatClientResponse;
 import org.springframework.ai.chat.client.advisor.api.Advisor;
@@ -58,6 +59,7 @@ public class DatabaseChatMemoryAdvisor implements BaseChatMemoryAdvisor {
     public static final String USER_MESSAGE = "user_message";
     public static final String SKIP_USER_MESSAGE_PERSISTENCE = "skipUserMessagePersistence";
     public static final String SKIP_ASSISTANT_MESSAGE_PERSISTENCE = "skipAssistantMessagePersistence";
+    public static final String USER_ADMISSION_SCOPE = "userAdmissionScope";
     public static final String SERVER_RESOLVED_SENDER = "serverResolvedSender";
 
     private static final String MEMORY_TEMPLATE = """
@@ -129,8 +131,9 @@ public class DatabaseChatMemoryAdvisor implements BaseChatMemoryAdvisor {
         // 查询最近 maxMessages 条历史消息用于增强上下文
         String ownerJiacn = requireIdentity(request.context(), "jiacn");
         String ownerClientId = requireIdentity(request.context(), "clientId");
+        UserAdmissionScope admissionScope = requireAdmissionScope(request.context());
         List<ChatMessageEntity> historyMessages = chatConversationService.findOwnedMessages(
-                ownerJiacn, ownerClientId, conversationId, maxMessages);
+                admissionScope, conversationId, maxMessages);
 
         // 构建内存文本
         String memory = historyMessages.stream()
@@ -232,12 +235,21 @@ public class DatabaseChatMemoryAdvisor implements BaseChatMemoryAdvisor {
             }
             entity.setMetadata(JsonUtil.toJson(metadata));
 
-            chatConversationService.appendOwnedMessage(ownerJiacn, ownerClientId, entity);
+            chatConversationService.appendOwnedMessage(
+                    requireAdmissionScope(context), entity);
             log.debug("Saved message to conversation: {}", conversationId);
         } catch (Exception e) {
             log.error("Failed to save message for conversation ID: {}", conversationId, e);
             throw new RuntimeException("Failed to save message for conversation ID: " + conversationId, e);
         }
+    }
+
+    private UserAdmissionScope requireAdmissionScope(Map<String, Object> context) {
+        Object raw = context.get(USER_ADMISSION_SCOPE);
+        if (!(raw instanceof UserAdmissionScope scope)) {
+            throw new IllegalStateException("Missing authenticated conversation tenant scope");
+        }
+        return scope;
     }
 
     private PersistedSender persistedSender(

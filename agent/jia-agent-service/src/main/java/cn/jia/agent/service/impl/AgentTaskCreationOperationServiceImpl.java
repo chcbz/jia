@@ -15,7 +15,7 @@ import cn.jia.agent.service.AgentTaskRequirementSnapshotService;
 import cn.jia.agent.service.PersonalWorkspaceTaskLinkService;
 import cn.jia.core.context.EsContext;
 import cn.jia.core.context.EsContextHolder;
-import cn.jia.core.security.TenantClaimPolicy;
+import cn.jia.core.tenant.TrustedTenantContext;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.node.ArrayNode;
@@ -520,7 +520,7 @@ public class AgentTaskCreationOperationServiceImpl
     }
 
     private static void requireAuthenticatedScope(Scope scope) {
-        if (scope == null || !"0".equals(scope.tenantId())
+        if (scope == null
                 || !validId(scope.clientId(), 50) || !validId(scope.ownerJiacn(), 50)
                 || "0".equals(scope.ownerJiacn())) {
             throw failure(Reason.FORBIDDEN);
@@ -530,17 +530,15 @@ public class AgentTaskCreationOperationServiceImpl
             throw failure(Reason.FORBIDDEN);
         }
         Map<String, Object> claims = jwt.getToken().getClaims();
-        final String tenant;
-        try {
-            tenant = TenantClaimPolicy.resolve(claims, "0");
-        } catch (IllegalArgumentException invalid) {
-            throw failure(Reason.FORBIDDEN, invalid);
-        }
+        var trusted = TrustedTenantContext.requireScope();
         EsContext context = EsContextHolder.getContext();
-        if (!Objects.equals("0", tenant)
+        if (!Objects.equals(scope.tenantId(), trusted.tenantId().value())
+                || !Objects.equals(scope.ownerJiacn(), trusted.ownerJiacn())
+                || !Objects.equals(scope.clientId(), trusted.callerClientId())
+                || !Objects.equals(scope.tenantId(), claims.get("tenant_id"))
                 || !Objects.equals(scope.ownerJiacn(), claims.get("jiacn"))
                 || !Objects.equals(scope.clientId(), claims.get("client_id"))
-                || context == null || !Objects.equals("0", context.getTenantId())
+                || context == null
                 || !Objects.equals(scope.ownerJiacn(), context.getJiacn())
                 || !Objects.equals(scope.clientId(), context.getClientId())) {
             throw failure(Reason.FORBIDDEN);

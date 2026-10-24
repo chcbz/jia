@@ -20,7 +20,10 @@ import cn.jia.agent.event.AgentEventPublisher;
 import cn.jia.agent.service.AgentCommandReconnectSignal;
 import cn.jia.agent.service.AgentExecutionReportService;
 import cn.jia.agent.service.AgentRawCommandDispatcher;
+import cn.jia.agent.service.AgentCommandV2ExecutionPort;
+import cn.jia.agent.service.AgentCommandV2RuntimeGateway;
 import cn.jia.agent.service.AgentService;
+import cn.jia.core.tenant.WorkerScope;
 import cn.jia.agent.service.NativeBountyExecutionSessionLookup;
 import cn.jia.agent.service.NativeProviderCredentialBindingLookup;
 import cn.jia.agent.service.ControlledImageExecutionSessionLookup;
@@ -50,7 +53,10 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
+import org.springframework.web.socket.adapter.NativeWebSocketSession;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
+import org.apache.tomcat.websocket.Constants;
+import org.apache.tomcat.websocket.WsSession;
 import reactor.core.Disposable;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
@@ -79,7 +85,10 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
 
 /**
@@ -94,7 +103,7 @@ import java.util.function.Supplier;
 @Slf4j
 @Component
 public class AgentWebSocketHandler extends TextWebSocketHandler
-        implements AgentEventPublisher, AgentRawCommandDispatcher,
+        implements AgentEventPublisher, AgentRawCommandDispatcher, AgentCommandV2RuntimeGateway,
         NativeBountyExecutionSessionLookup, NativeProviderCredentialBindingLookup, ControlledImageExecutionSessionLookup,
         ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup {
     private static final String CHANNEL = "agent";
@@ -123,9 +132,19 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             AgentProtocolConstants.TYPE_TASK_EVENT);
 
     private cn.jia.agent.security.AgentRuntimeAuthenticationService runtimeAuthentication;
+    private AgentRuntimeV2WebSocketAdapter registrationV2=new AgentRuntimeV2WebSocketAdapter(null,null);
+    @Autowired(required=false)
+    public void setRegistrationV2(AgentRuntimeV2WebSocketAdapter adapter){this.registrationV2=adapter;}
     @Autowired
     public void setRuntimeAuthentication(cn.jia.agent.security.AgentRuntimeAuthenticationService service) {
         this.runtimeAuthentication = service;
+    }
+    private WorkerScope agentCommandWorkerScope;
+    @Autowired(required = false)
+    public void setAgentCommandWorkerScope(
+            @org.springframework.beans.factory.annotation.Qualifier("agentOutboxWorkerScope")
+            WorkerScope workerScope) {
+        this.agentCommandWorkerScope = workerScope;
     }
 
     private cn.jia.agent.skill.SkillInstallResultService skillResults;
@@ -195,6 +214,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             sessionControlledImageBountyExecution = new ConcurrentHashMap<>();
     private final Map<String, ControlledImageV3Declaration> sessionControlledImageV3 = new ConcurrentHashMap<>();
     private final Map<String, StreamState> runningStreams = new ConcurrentHashMap<>();
+    private final Map<String, SessionSendGate> sessionSendGates = new HashMap<>();
 
     public AgentWebSocketHandler(ChatClient chatClient, ObjectProvider<AgentService> agentServiceProvider,
                                  ChatMessageDao chatMessageDao, ChatConversationEventBroker chatConversationEventBroker) {
@@ -255,7 +275,9 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
 
     @Override
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {
+        if(registrationV2!=null)registrationV2.established(session);
         sessions.put(session.getId(), session);
+        retainAndReleaseSessionSendGate(session);
         Map<String, Object> connected = new HashMap<>();
         connected.put("sessionId", session.getId());
         connected.put("channel", CHANNEL);
@@ -458,11 +480,13 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
 
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) throws Exception {
+        if(registrationV2!=null)registrationV2.closed(session);
         if (runtimeAuthentication != null) runtimeAuthentication.disconnect(session.getId());
-        sessions.remove(session.getId());
+        sessions.remove(session.getId(), session);
         sessionAgentIds.remove(session.getId());
         successfullyRegisteredAgentIds.remove(session.getId());
         sessionRuntimeInstanceIds.remove(session.getId());
+        removeUnusedSessionSendGate(session.getId());
         sessionRuntimeCapabilities.remove(session.getId());
         sessionDurableStateHealthy.remove(session.getId());
         sessionReadyCommandTypes.remove(session.getId());
@@ -480,6 +504,16 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             }
             return false;
         });
+    }
+
+    private boolean hasV2RegistrationProof(WebSocketSession session) {
+        return session.getAttributes().get(AgentRuntimeV2WebSocketAdapter.IDENTITY_ATTRIBUTE)
+                instanceof cn.jia.agent.entity.AgentRuntimeV2RegistrationContext;
+    }
+
+    private int[] supportedProtocolVersions(WebSocketSession session) {
+        return hasV2RegistrationProof(session) && registrationV2 != null
+                ? registrationV2.supportedProtocolVersions() : new int[] {1};
     }
 
     private void sendProtocolHello(WebSocketSession session, Map<String, Object> payload) {
@@ -1919,16 +1953,10 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             return false;
         }
         try {
-            synchronized (session) {
-                // Authenticated INSPECT facts and selectors are integrity-bound protocol data.
-                // The logging sanitizer truncates deep maps and redacts DATA strings, which
-                // changes contextHash and makes root/payload copies conflict. Never log this wire.
-                var envelope=cn.jia.agent.common.AgentMessageWire.event(type,payload,incomingWire.get());
-                // Logging sanitization must never alter transmitted DTO bytes or signatures.
-                String wireJson = STRICT_RAW_COMMAND_JSON.writeValueAsString(envelope);
-                session.sendMessage(new TextMessage(wireJson));
-            }
-            return true;
+            // Authenticated protocol data must be serialized without the logging sanitizer.
+            var envelope = cn.jia.agent.common.AgentMessageWire.event(type, payload, incomingWire.get());
+            String wireJson = STRICT_RAW_COMMAND_JSON.writeValueAsString(envelope);
+            return sendWithSessionGate(session, new TextMessage(wireJson));
         } catch (Exception e) {
             if ("agent_registered".equals(type)) log.error("AGENT_REGISTRATION_DELIVERY_UNAVAILABLE");
             else log.error("Error sending OpenClaw channel event", e);
@@ -2177,9 +2205,11 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                 }
                 var privateCommand=STRICT_RAW_COMMAND_JSON.readValue(raw,MESSAGE_TYPE);
                 var command=cn.jia.agent.common.AgentMessageWire.event("command.dispatch",privateCommand,null);
-                selected.sendMessage(new TextMessage(STRICT_RAW_COMMAND_JSON.writeValueAsString(command)));
+                return sendWithSessionGate(selected,
+                        new TextMessage(STRICT_RAW_COMMAND_JSON.writeValueAsString(command)),
+                        () -> exactCommandSessionReady(
+                                selected, tenantId, clientId, targetAgentId, commandType));
             }
-            return AgentRawCommandDispatchResult.sent(1, 1); // transport only, NOT a D06 commit receipt
         } catch (Exception sendFailure) {
             log.warn("Exact-scope raw Agent command WebSocket send failed");
             return AgentRawCommandDispatchResult.sendFailed(1);
@@ -2205,6 +2235,95 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                     || !result.add(type)) throw new IllegalArgumentException("Invalid command readiness declaration");
         }
         return Set.copyOf(result);
+    }
+
+    @Override
+    public DispatchResult dispatch(
+            CurrentSession target, byte[] rawWireBytes, long sendTimeoutMillis) {
+        if (target == null || rawWireBytes == null || rawWireBytes.length == 0
+                || rawWireBytes.length > cn.jia.agent.common.AgentCommandAmqpContract.MAX_WIRE_BYTES
+                || !validUtf8(rawWireBytes) || sendTimeoutMillis < 100L
+                || sendTimeoutMillis > AgentCommandV2ExecutionPort.SEND_TIMEOUT_MILLIS) {
+            return DispatchResult.rejected();
+        }
+        WebSocketSession session = sessions.get(target.sessionId());
+        if (session == null || !session.isOpen()) return DispatchResult.offline();
+        if (!matchesV2Target(target, session)) {
+            return DispatchResult.rejected();
+        }
+        if (!(session instanceof NativeWebSocketSession nativeWebSocketSession)
+                || !(nativeWebSocketSession.getNativeSession() instanceof WsSession nativeSession)
+                || !nativeSession.isOpen()) {
+            return DispatchResult.rejected();
+        }
+        byte[] exact = java.util.Arrays.copyOf(rawWireBytes, rawWireBytes.length);
+        long deadlineNanos = System.nanoTime()
+                + TimeUnit.MILLISECONDS.toNanos(sendTimeoutMillis);
+        SessionSendGate gate = retainSessionSendGate(session);
+        boolean locked = false;
+        try {
+            long remainingNanos = deadlineNanos - System.nanoTime();
+            if (remainingNanos <= 0
+                    || !gate.lock.tryLock(remainingNanos, TimeUnit.NANOSECONDS)) {
+                return DispatchResult.sendFailed();
+            }
+            locked = true;
+            if (sessions.get(target.sessionId()) != session || !session.isOpen()
+                    || !nativeSession.isOpen()) {
+                return DispatchResult.offline();
+            }
+            if (!matchesV2Target(target, session)) return DispatchResult.rejected();
+            remainingNanos = deadlineNanos - System.nanoTime();
+            long remainingMillis = TimeUnit.NANOSECONDS.toMillis(remainingNanos);
+            if (remainingMillis <= 0) return DispatchResult.sendFailed();
+            Map<String, Object> userProperties = nativeSession.getUserProperties();
+            Object previousTimeout = userProperties.put(
+                    Constants.BLOCKING_SEND_TIMEOUT_PROPERTY, remainingMillis);
+            try {
+                session.sendMessage(new TextMessage(exact));
+            } finally {
+                // Legacy sends share this session; do not leave the V2 deadline behind.
+                if (previousTimeout == null) {
+                    userProperties.remove(Constants.BLOCKING_SEND_TIMEOUT_PROPERTY);
+                } else {
+                    userProperties.put(Constants.BLOCKING_SEND_TIMEOUT_PROPERTY, previousTimeout);
+                }
+            }
+            return DispatchResult.dispatched();
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            return DispatchResult.sendFailed();
+        } catch (Exception failure) {
+            invalidateV2Session(session);
+            log.warn("Protocol-v2 Agent command WebSocket send failed");
+            return DispatchResult.sendFailed();
+        } finally {
+            if (locked) gate.lock.unlock();
+            releaseSessionSendGate(session, gate);
+        }
+    }
+
+    private boolean matchesV2Target(CurrentSession target, WebSocketSession session) {
+        return target.agentId().equals(sessionAgentId(session))
+                && target.runtimeInstanceId().equals(sessionRuntimeInstanceId(session))
+                && target.tenantId().equals(sessionTenantId(session))
+                && target.dataDomainId().equals(sessionAttribute(session, "dataDomainId"))
+                && target.executionPoolId().equals(sessionAttribute(session, "executionPoolId"))
+                && target.clientId().equals(sessionClientId(session))
+                && target.ownerJiacn().equals(sessionJiacn(session))
+                && AgentCommandV2RuntimeGateway.DEDUPLICATION_CONTRACT.equals(
+                        sessionAttribute(session, "commandV2DeduplicationContract"))
+                && registeredAgentIds(session.getId()).contains(target.agentId())
+                && successfullyRegisteredAgentIds(session.getId()).contains(target.agentId());
+    }
+
+    private void invalidateV2Session(WebSocketSession session) {
+        String sessionId = session.getId();
+        sessions.remove(sessionId, session);
+        sessionAgentIds.remove(sessionId);
+        successfullyRegisteredAgentIds.remove(sessionId);
+        sessionRuntimeInstanceIds.remove(sessionId);
+        if (runtimeAuthentication != null) runtimeAuthentication.disconnect(sessionId);
     }
 
     private boolean validRawCommandEnvelope(
@@ -2996,9 +3115,10 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                 if(!matchesManagedSkill(selected,tenant,client,agent,fence)) return AgentRawCommandDispatchResult.offline();
                 var privateCommand=STRICT_RAW_COMMAND_JSON.readValue(raw,MESSAGE_TYPE);
                 var command=cn.jia.agent.common.AgentMessageWire.event("command.dispatch",privateCommand,null);
-                selected.sendMessage(new TextMessage(STRICT_RAW_COMMAND_JSON.writeValueAsString(command)));
+                return sendWithSessionGate(selected,
+                        new TextMessage(STRICT_RAW_COMMAND_JSON.writeValueAsString(command)),
+                        () -> matchesManagedSkill(selected,tenant,client,agent,fence));
             }
-            return AgentRawCommandDispatchResult.sent(1,1);
         } catch(Exception failure) { return AgentRawCommandDispatchResult.sendFailed(1); }
     }
 
@@ -3348,6 +3468,78 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         return value == null ? null : String.valueOf(value);
     }
 
+    private boolean sendWithSessionGate(WebSocketSession session, TextMessage message)
+            throws Exception {
+        cn.jia.agent.service.impl.AgentRuntimeV2RegistrationServiceImpl.outside();
+        SessionSendGate gate = retainSessionSendGate(session);
+        boolean locked = false;
+        try {
+            gate.lock.lockInterruptibly();
+            locked = true;
+            if (sessions.get(session.getId()) != session || !session.isOpen()) return false;
+            session.sendMessage(message);
+            return true;
+        } finally {
+            if (locked) gate.lock.unlock();
+            releaseSessionSendGate(session, gate);
+        }
+    }
+
+    private AgentRawCommandDispatchResult sendWithSessionGate(WebSocketSession session,
+            TextMessage message, BooleanSupplier commandReady) throws Exception {
+        cn.jia.agent.service.impl.AgentRuntimeV2RegistrationServiceImpl.outside();
+        SessionSendGate gate = retainSessionSendGate(session);
+        boolean locked = false;
+        try {
+            gate.lock.lockInterruptibly();
+            locked = true;
+            if (sessions.get(session.getId()) != session || !session.isOpen()) {
+                return AgentRawCommandDispatchResult.sendFailed(1);
+            }
+            // Ordinary event sends share this gate. Their contention can outlive the
+            // command's proof/readiness, so revalidate only after acquiring it, before I/O.
+            if (!commandReady.getAsBoolean()) return AgentRawCommandDispatchResult.offline();
+            session.sendMessage(message);
+            return AgentRawCommandDispatchResult.sent(1, 1); // Transport only, not a commit receipt.
+        } finally {
+            if (locked) gate.lock.unlock();
+            releaseSessionSendGate(session, gate);
+        }
+    }
+
+    private void retainAndReleaseSessionSendGate(WebSocketSession session) {
+        SessionSendGate gate = retainSessionSendGate(session);
+        releaseSessionSendGate(session, gate);
+    }
+
+    private SessionSendGate retainSessionSendGate(WebSocketSession session) {
+        synchronized (sessionSendGates) {
+            SessionSendGate gate = sessionSendGates.computeIfAbsent(
+                    session.getId(), ignored -> new SessionSendGate());
+            gate.users++;
+            return gate;
+        }
+    }
+
+    private void releaseSessionSendGate(WebSocketSession session, SessionSendGate gate) {
+        synchronized (sessionSendGates) {
+            gate.users--;
+            if (gate.users < 0) throw new IllegalStateException("Session send gate underflow");
+            if (gate.users == 0 && !sessions.containsKey(session.getId())) {
+                sessionSendGates.remove(session.getId(), gate);
+            }
+        }
+    }
+
+    private void removeUnusedSessionSendGate(String sessionId) {
+        synchronized (sessionSendGates) {
+            SessionSendGate gate = sessionSendGates.get(sessionId);
+            if (gate != null && gate.users == 0 && !sessions.containsKey(sessionId)) {
+                sessionSendGates.remove(sessionId, gate);
+            }
+        }
+    }
+
     private String asString(Object value) {
         return value == null ? null : String.valueOf(value);
     }
@@ -3409,5 +3601,10 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         private void dispose() {
             disposable.dispose();
         }
+    }
+
+    private static final class SessionSendGate {
+        private final ReentrantLock lock = new ReentrantLock(true);
+        private int users;
     }
 }

@@ -1,7 +1,15 @@
 package cn.jia.chat.memory;
 
+import cn.jia.chat.dao.MemoryPublicationDao;
+import cn.jia.chat.entity.ConversationDataScope;
+import cn.jia.chat.entity.MemoryPublicationRecord;
+import cn.jia.chat.entity.MemoryPublicationPayload;
+
 import co.elastic.clients.elasticsearch.ElasticsearchClient;
+import co.elastic.clients.elasticsearch._types.VersionType;
+import co.elastic.clients.elasticsearch._types.ElasticsearchException;
 import co.elastic.clients.elasticsearch.core.DeleteByQueryRequest;
+import co.elastic.clients.elasticsearch.core.GetResponse;
 import co.elastic.clients.elasticsearch.core.IndexRequest;
 import co.elastic.clients.elasticsearch.core.SearchRequest;
 import co.elastic.clients.elasticsearch.core.SearchResponse;
@@ -14,6 +22,10 @@ import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Repository;
 import org.springframework.util.StringUtils;
 
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.LocalDate;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -31,6 +43,25 @@ import java.util.stream.Collectors;
 @Repository
 public class MemoryRepositoryImpl implements MemoryRepository {
 
+    private static final List<String> PAYLOAD_FIELDS = List.of(
+            "id", "jiacn", "tenant_id", "data_domain_id", "client_id", "scope_mode",
+            "conversation_id", "document_kind", "publication_class", "state", "content",
+            "summary_type", "timestamp", "topic", "key_points", "categories", "preferences",
+            "period_start", "period_end", "conversation_count", "embedding",
+            "snapshot_version", "snapshot_token", "lifecycle_generation");
+
+    private static final Set<String> STRING_FIELDS = Set.of(
+            "id", "jiacn", "tenant_id", "data_domain_id", "client_id", "scope_mode",
+            "conversation_id", "document_kind", "publication_class", "state", "content",
+            "summary_type", "topic", "snapshot_token");
+
+    private static final Set<String> LONG_FIELDS = Set.of(
+            "timestamp", "period_start", "period_end", "snapshot_version",
+            "lifecycle_generation");
+
+    private static final Set<String> STRING_LIST_FIELDS = Set.of(
+            "key_points", "categories", "preferences");
+
     @Autowired
     private ElasticsearchClient elasticsearchClient;
     
@@ -38,7 +69,7 @@ public class MemoryRepositoryImpl implements MemoryRepository {
     private EmbeddingModel embeddingModel;
 
     @Autowired
-    private cn.jia.chat.service.impl.AgentTaskThreadMemoryGuard taskThreadMemoryGuard;
+    private MemoryPublicationDao memoryPublicationDao;
 
     @Value("${chat.memory.vector-index:chat_memory}")
     private String indexName;
@@ -54,59 +85,321 @@ public class MemoryRepositoryImpl implements MemoryRepository {
 
     @Override
     public void save(MemoryDocument document) {
-        if (document == null) {
-            return;
-        }
-        requireOwner(document.getJiacn());
-        // Public write paths always generate their own vector, ignoring any caller-supplied vector.
-        document.setEmbedding(generateEmbeddingArray(document.getContent()));
-        savePrepared(document);
+        throw new IllegalStateException("Unscoped memory storage is disabled");
     }
 
     @Override
-    public void savePrepared(MemoryDocument document) {
-        Objects.requireNonNull(document, "document");
-        requireOwner(document.getJiacn());
-        if (!StringUtils.hasText(document.getContent())) {
-            throw new IllegalArgumentException("Memory content must not be blank");
+    public void save(ConversationDataScope scope, MemoryDocument document) {
+        applyScope(scope, document);
+        document.setDocumentKind(MemoryDocument.DOCUMENT_KIND_LIBRARY);
+        document.setPublicationClass(MemoryDocument.PUBLICATION_CLASS_DIRECT);
+        document.setState(MemoryDocument.STATE_PUBLISHED);
+        indexDocument(document, null, null, true);
+    }
+
+    @Override
+    public void saveConversationSnapshot(
+            ConversationDataScope scope, MemoryDocument document,
+            MemoryPublicationRecord publication) {
+        applyScope(scope, document);
+        if (!"conversation".equals(document.getSummaryType())) {
+            throw new IllegalArgumentException(
+                    "Versioned conversation memory requires conversation summary type");
         }
-        validateEmbedding(document.getEmbedding());
+        requireExactIdentity(document.getConversationId(), "conversationId");
+        Objects.requireNonNull(publication, "publication");
+        if (publication.getEsRevision() == null || publication.getEsRevision() <= 0
+                || publication.getMessageCount() == null || publication.getMessageCount() <= 0
+                || !Objects.equals(publication.getTenantId(), scope.tenantId())
+                || !Objects.equals(publication.getScopeMode(), scope.mode().name())
+                || !Objects.equals(publication.getScopeKey(), scope.mode()
+                        == ConversationDataScope.Mode.LEGACY_CLIENT
+                        ? scope.callerClientId() : scope.dataDomainId())
+                || !Objects.equals(publication.getOwnerJiacn(), scope.ownerJiacn())
+                || !Objects.equals(publication.getConversationId(), document.getConversationId())
+                || !Objects.equals(publication.getSnapshotToken(), document.getSnapshotToken())
+                || !Objects.equals(publication.getLifecycleGeneration(), document.getLifecycleGeneration())) {
+            throw new IllegalArgumentException("Publication does not match memory snapshot");
+        }
+        if (!("STAGED".equals(publication.getState())
+                || "PUBLISHED".equals(publication.getState()))) {
+            throw new IllegalArgumentException("Publication payload is not staged");
+        }
+        MemoryPublicationPayload payload = MemoryPublicationPayload.stored(
+                publication.getSummaryContent(), publication.getEmbeddingBytes(),
+                publication.getPayloadDigest());
+        if (!Objects.equals(payload.summaryContent(), document.getContent())
+                || !Arrays.equals(payload.embedding(), document.getEmbedding())
+                || publication.getCreateTime() == null
+                || !Objects.equals(publication.getCreateTime(), document.getTimestamp())) {
+            throw new IllegalArgumentException(
+                    "Memory document does not match the persisted publication payload");
+        }
+        document.setDocumentKind(MemoryDocument.DOCUMENT_KIND_CONVERSATION_SUMMARY);
+        document.setPublicationClass(MemoryDocument.PUBLICATION_CLASS_MANIFEST);
+        document.setState(MemoryDocument.STATE_PUBLISHED);
+        String documentId = publication.getDocumentId();
+        String expectedDocumentId = deterministicConversationDocumentId(
+                scope, document.getConversationId(), document.getSnapshotToken());
+        if (!Objects.equals(expectedDocumentId, documentId)) {
+            throw new IllegalArgumentException(
+                    "Publication document identity does not match memory snapshot");
+        }
+        document.setId(documentId);
+        document.setSnapshotVersion(publication.getEsRevision());
+        indexDocument(document, documentId, publication.getEsRevision(), false);
+    }
+
+    private void applyScope(ConversationDataScope scope, MemoryDocument document) {
+        Objects.requireNonNull(scope, "scope");
+        Objects.requireNonNull(document, "document");
+        if (document.getJiacn() == null) {
+            document.setJiacn(scope.ownerJiacn());
+        } else if (!scope.ownerJiacn().equals(document.getJiacn())) {
+            throw new IllegalArgumentException("Memory owner does not match admission scope");
+        }
+        document.setTenantId(scope.tenantId());
+        document.setDataDomainId(scope.dataDomainId());
+        document.setClientId(scope.callerClientId());
+        document.setScopeMode(scope.mode().name());
+    }
+
+    private void indexDocument(
+            MemoryDocument document, String documentId, Long snapshotVersion,
+            boolean generateEmbedding) {
         try {
-            if (!StringUtils.hasText(document.getId())) {
-                document.setId(UUID.randomUUID().toString());
+            if (generateEmbedding) {
+                document.setEmbedding(generateEmbeddingArray(document.getContent()));
+            } else if (document.getEmbedding() == null || document.getEmbedding().length == 0) {
+                throw new IllegalStateException(
+                        "Persisted memory publication embedding is unavailable");
             }
-            document.setTimestamp(document.getTimestamp() != null ? document.getTimestamp() : System.currentTimeMillis());
-
+            document.setTimestamp(document.getTimestamp() != null
+                    ? document.getTimestamp() : System.currentTimeMillis());
             Map<String, Object> docMap = convertToMap(document);
+            String payloadFingerprint = canonicalPayloadFingerprint(docMap);
+            document.setPayloadFingerprint(payloadFingerprint);
+            docMap.put("payload_fingerprint", payloadFingerprint);
 
-            IndexRequest<Map<String, Object>> request = IndexRequest.of(builder -> builder
-                    .index(indexName)
-                    .id(document.getId())
-                    .document(docMap)
-            );
+            IndexRequest<Map<String, Object>> request = IndexRequest.of(builder -> {
+                builder.index(indexName).document(docMap);
+                if (documentId != null && snapshotVersion != null) {
+                    builder.id(documentId)
+                            .version(snapshotVersion)
+                            .versionType(VersionType.External);
+                }
+                return builder;
+            });
 
             elasticsearchClient.index(request);
-            log.debug("Saved memory document: {}", document.getId());
+            log.debug("Saved memory document: {}", documentId);
+        } catch (ElasticsearchException conflict) {
+            if (documentId != null && snapshotVersion != null && conflict.status() == 409) {
+                verifyExistingSnapshot(document, documentId, snapshotVersion);
+                log.info("Verified idempotent memory snapshot retry: {}", documentId);
+                return;
+            }
+            log.error("Failed to save memory document", conflict);
+            throw new RuntimeException("Failed to save memory document", conflict);
         } catch (Exception e) {
             log.error("Failed to save memory document", e);
             throw new RuntimeException("Failed to save memory document", e);
         }
     }
 
+    private void verifyExistingSnapshot(
+            MemoryDocument expected, String documentId, long snapshotVersion) {
+        final GetResponse<Map> existing;
+        try {
+            existing = elasticsearchClient.get(
+                    request -> request.index(indexName).id(documentId), Map.class);
+        } catch (Exception verificationFailure) {
+            throw new IllegalStateException(
+                    "Unable to verify conflicting memory snapshot", verificationFailure);
+        }
+        Map source = existing == null ? null : existing.source();
+        String expectedFingerprint = canonicalPayloadFingerprint(convertToMap(expected));
+        String actualFingerprint = source == null ? null : canonicalPayloadFingerprint(source);
+        boolean exactScope = source != null
+                && Objects.equals(expected.getTenantId(), source.get("tenant_id"))
+                && Objects.equals(expected.getScopeMode(), source.get("scope_mode"))
+                && Objects.equals(expected.getJiacn(), source.get("jiacn"))
+                && Objects.equals(expected.getConversationId(), source.get("conversation_id"))
+                && (ConversationDataScope.Mode.LEGACY_CLIENT.name().equals(expected.getScopeMode())
+                ? Objects.equals(expected.getClientId(), source.get("client_id"))
+                : Objects.equals(expected.getDataDomainId(), source.get("data_domain_id")));
+        if (existing == null || !existing.found()
+                || !Objects.equals(documentId, existing.id())
+                || !Objects.equals(snapshotVersion, existing.version())
+                || !Objects.equals(documentId, source == null ? null : source.get("id"))
+                || !exactScope
+                || !Objects.equals(MemoryDocument.DOCUMENT_KIND_CONVERSATION_SUMMARY,
+                        source.get("document_kind"))
+                || !Objects.equals(MemoryDocument.PUBLICATION_CLASS_MANIFEST,
+                        source.get("publication_class"))
+                || !Objects.equals(MemoryDocument.STATE_PUBLISHED, source.get("state"))
+                || !Objects.equals(expected.getSnapshotToken(), source.get("snapshot_token"))
+                || !Objects.equals(snapshotVersion, longValue(source.get("snapshot_version")))
+                || !Objects.equals(expected.getLifecycleGeneration(),
+                        longValue(source.get("lifecycle_generation")))
+                || !Objects.equals(actualFingerprint, source.get("payload_fingerprint"))
+                || !Objects.equals(expectedFingerprint, actualFingerprint)) {
+            throw new IllegalStateException(
+                    "Conflicting memory snapshot does not match the staged publication");
+        }
+    }
+
+    private Long longValue(Object value) {
+        return value instanceof Number number ? number.longValue() : null;
+    }
+
+    public static String deterministicConversationDocumentId(
+            ConversationDataScope scope, String conversationId, String snapshotToken) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            updateDigest(digest, scope.tenantId());
+            updateDigest(digest, scope.mode().name());
+            updateDigest(digest, scope.mode() == ConversationDataScope.Mode.LEGACY_CLIENT
+                    ? scope.callerClientId() : scope.dataDomainId());
+            updateDigest(digest, scope.ownerJiacn());
+            updateDigest(digest, conversationId);
+            updateDigest(digest, snapshotToken);
+            return "memory-v2-"
+                    + HexFormat.of().formatHex(digest.digest());
+        } catch (NoSuchAlgorithmException exception) {
+            throw new IllegalStateException("SHA-256 is unavailable", exception);
+        }
+    }
+
+    private static void updateDigest(MessageDigest digest, String value) {
+        byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
+        digest.update((byte) (bytes.length >>> 24));
+        digest.update((byte) (bytes.length >>> 16));
+        digest.update((byte) (bytes.length >>> 8));
+        digest.update((byte) bytes.length);
+        digest.update(bytes);
+    }
+
+    static String canonicalPayloadFingerprint(Map<?, ?> source) {
+        Objects.requireNonNull(source, "source");
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            for (String field : PAYLOAD_FIELDS) {
+                updateDigest(digest, field);
+                if (!source.containsKey(field)) {
+                    digest.update((byte) 0);
+                    continue;
+                }
+                digest.update((byte) 1);
+                Object value = source.get(field);
+                if (value == null) {
+                    throw new IllegalStateException("Memory payload field is null: " + field);
+                }
+                if (STRING_FIELDS.contains(field)) {
+                    if (!(value instanceof String stringValue)) {
+                        throw invalidPayloadType(field);
+                    }
+                    digest.update((byte) 'S');
+                    updateDigest(digest, stringValue);
+                } else if (LONG_FIELDS.contains(field)) {
+                    digest.update((byte) 'L');
+                    updateLong(digest, exactLong(value, field));
+                } else if ("conversation_count".equals(field)) {
+                    long count = exactLong(value, field);
+                    if (count < Integer.MIN_VALUE || count > Integer.MAX_VALUE) {
+                        throw invalidPayloadType(field);
+                    }
+                    digest.update((byte) 'I');
+                    updateLong(digest, count);
+                } else if (STRING_LIST_FIELDS.contains(field)) {
+                    if (!(value instanceof List<?> list)) {
+                        throw invalidPayloadType(field);
+                    }
+                    digest.update((byte) 'A');
+                    updateLong(digest, list.size());
+                    for (Object element : list) {
+                        if (!(element instanceof String stringElement)) {
+                            throw invalidPayloadType(field);
+                        }
+                        updateDigest(digest, stringElement);
+                    }
+                } else if ("embedding".equals(field)) {
+                    if (!(value instanceof List<?> list)) {
+                        throw invalidPayloadType(field);
+                    }
+                    digest.update((byte) 'E');
+                    updateLong(digest, list.size());
+                    for (Object element : list) {
+                        if (!(element instanceof Number number)) {
+                            throw invalidPayloadType(field);
+                        }
+                        double vectorValue = number.doubleValue();
+                        if (!Double.isFinite(vectorValue)) {
+                            throw invalidPayloadType(field);
+                        }
+                        updateLong(digest, Double.doubleToLongBits(vectorValue));
+                    }
+                } else {
+                    throw new IllegalStateException("Unhandled memory payload field: " + field);
+                }
+            }
+            return HexFormat.of().formatHex(digest.digest());
+        } catch (NoSuchAlgorithmException exception) {
+            throw new IllegalStateException("SHA-256 is unavailable", exception);
+        }
+    }
+
+    private static IllegalStateException invalidPayloadType(String field) {
+        return new IllegalStateException("Invalid memory payload field type: " + field);
+    }
+
+    private static long exactLong(Object value, String field) {
+        if (!(value instanceof Number number)) {
+            throw invalidPayloadType(field);
+        }
+        long longValue = number.longValue();
+        if (value instanceof Float || value instanceof Double) {
+            double doubleValue = number.doubleValue();
+            if (!Double.isFinite(doubleValue) || doubleValue != (double) longValue) {
+                throw invalidPayloadType(field);
+            }
+        }
+        return longValue;
+    }
+
+    private static void updateLong(MessageDigest digest, long value) {
+        digest.update(ByteBuffer.allocate(Long.BYTES).putLong(value).array());
+    }
+
+    private void requireExactIdentity(String value, String field) {
+        if (!StringUtils.hasText(value) || !value.equals(value.strip())
+                || value.codePoints().anyMatch(Character::isISOControl)) {
+            throw new IllegalArgumentException(field + " is invalid");
+        }
+    }
+
     @Override
     public void saveAll(List<MemoryDocument> documents) {
-        if (documents == null || documents.isEmpty()) {
-            return;
-        }
-        for (MemoryDocument doc : documents) {
-            save(doc);
-        }
+        throw new IllegalStateException("Unscoped bulk memory storage is disabled");
     }
 
     @Override
     public List<MemoryDocument> searchWithConversationBoost(String jiacn, String userMessage,
             String currentConversationId, int topK, double similarityThreshold) {
-        requireOwner(jiacn);
+        throw new IllegalStateException("Unscoped memory search is disabled");
+    }
+
+    @Override
+    public List<MemoryDocument> searchWithConversationBoost(
+            ConversationDataScope scope, String userMessage, String currentConversationId,
+            int topK, double similarityThreshold) {
+        Objects.requireNonNull(scope, "scope");
+        return searchScoped(scope, userMessage, currentConversationId, topK, similarityThreshold);
+    }
+
+    private List<MemoryDocument> searchScoped(
+            ConversationDataScope scope, String userMessage,
+            String currentConversationId, int topK, double similarityThreshold) {
         try {
             LocalDate currentDay = LocalDate.now();
             long currentDayStart = currentDay.toEpochDay() * 24 * 60 * 60 * 1000L;
@@ -120,21 +413,40 @@ public class MemoryRepositoryImpl implements MemoryRepository {
             SearchRequest searchRequest = SearchRequest.of(builder -> builder
                 .index(indexName)
                 .size(topK)
-                .knn(k -> k
-                    .filter(f -> f.term(t -> t.field("jiacn").value(jiacn)))
-                    .field("embedding")
-                    .queryVector(toFloatList(queryVector))
-                    .k(topK)
-                    .numCandidates(100)
-                )
+                .knn(k -> {
+                    k.field("embedding")
+                            .queryVector(toFloatList(queryVector))
+                            .k(topK)
+                            .numCandidates(100)
+                            .filter(f -> f.term(t -> t.field("jiacn.keyword").value(scope.ownerJiacn())))
+                            .filter(f -> f.term(t -> t.field("tenant_id.keyword").value(scope.tenantId())))
+                            .filter(f -> f.term(t -> t.field("scope_mode.keyword").value(scope.mode().name())))
+                            .filter(f -> f.term(t -> t.field("state.keyword").value(MemoryDocument.STATE_PUBLISHED)));
+                    if (scope.mode() == ConversationDataScope.Mode.LEGACY_CLIENT) {
+                        k.filter(f -> f.term(t -> t.field("client_id.keyword").value(scope.callerClientId())));
+                    } else {
+                        k.filter(f -> f.term(t -> t.field("data_domain_id.keyword").value(scope.dataDomainId())));
+                    }
+                    return k;
+                })
             );
 
             SearchResponse<Map> response = elasticsearchClient.search(searchRequest, Map.class);
 
+            List<Hit<Map>> candidateHits = response.hits().hits().stream()
+                    .filter(hit -> hit.source() != null && matchesSearchScope(hit.source(), scope))
+                    .toList();
+            List<String> manifestIds = candidateHits.stream()
+                    .filter(hit -> isManifestDocument(hit.source()))
+                    .map(Hit::id)
+                    .toList();
+            Set<String> visibleManifestIds = manifestIds.isEmpty()
+                    ? Set.of()
+                    : memoryPublicationDao.findVisibleDocumentIds(scope, manifestIds);
             List<MemoryDocument> results = new ArrayList<>();
-            for (Hit<Map> hit : response.hits().hits()) {
+            for (Hit<Map> hit : candidateHits) {
                 Map<String, Object> source = hit.source();
-                if (source != null && jiacn.equals(source.get("jiacn"))) {
+                if (isDirectDocument(source) || visibleManifestIds.contains(hit.id())) {
                     MemoryDocument doc = convertFromMap(source);
                     doc.setId(hit.id());
                     doc.setScore(hit.score());
@@ -172,151 +484,72 @@ public class MemoryRepositoryImpl implements MemoryRepository {
         }
     }
 
+    private boolean matchesSearchScope(Map<String, Object> source, ConversationDataScope scope) {
+        boolean direct = isDirectDocument(source);
+        boolean manifest = isManifestDocument(source);
+        if (direct == manifest) {
+            return false;
+        }
+        if (!Objects.equals(scope.ownerJiacn(), source.get("jiacn"))
+                || !Objects.equals(scope.tenantId(), source.get("tenant_id"))
+                || !Objects.equals(scope.mode().name(), source.get("scope_mode"))) {
+            return false;
+        }
+        return scope.mode() == ConversationDataScope.Mode.LEGACY_CLIENT
+                ? Objects.equals(scope.callerClientId(), source.get("client_id"))
+                : Objects.equals(scope.dataDomainId(), source.get("data_domain_id"));
+    }
+
+    private boolean isDirectDocument(Map<String, Object> source) {
+        return Objects.equals(MemoryDocument.DOCUMENT_KIND_LIBRARY,
+                source.get("document_kind"))
+                && Objects.equals(MemoryDocument.PUBLICATION_CLASS_DIRECT,
+                source.get("publication_class"))
+                && Objects.equals(MemoryDocument.STATE_PUBLISHED, source.get("state"));
+    }
+
+    private boolean isManifestDocument(Map<String, Object> source) {
+        return Objects.equals(MemoryDocument.DOCUMENT_KIND_CONVERSATION_SUMMARY,
+                source.get("document_kind"))
+                && Objects.equals(MemoryDocument.PUBLICATION_CLASS_MANIFEST,
+                source.get("publication_class"))
+                && Objects.equals(MemoryDocument.STATE_PUBLISHED, source.get("state"));
+    }
+
     @Override
     public List<MemoryDocument> search(String jiacn, float[] queryVector, int topK) {
-        requireOwner(jiacn);
-        validateEmbedding(queryVector);
-        try {
-            SearchRequest searchRequest = SearchRequest.of(builder -> builder
-                .index(indexName)
-                .size(topK)
-                .knn(k -> k
-                    .filter(f -> f.term(t -> t.field("jiacn").value(jiacn)))
-                    .field("embedding")
-                    .queryVector(toFloatList(queryVector))
-                    .k(topK)
-                    .numCandidates(100)
-                )
-            );
-
-            SearchResponse<Map> response = elasticsearchClient.search(searchRequest, Map.class);
-
-            return response.hits().hits().stream()
-                .filter(hit -> hit.source() != null && jiacn.equals(hit.source().get("jiacn")))
-                .map(hit -> {
-                    MemoryDocument doc = convertFromMap(hit.source());
-                    doc.setId(hit.id());
-                    doc.setScore(hit.score());
-                    return doc;
-                })
-                .collect(Collectors.toList());
-        } catch (Exception e) {
-            log.error("Failed to search memory", e);
-            throw new RuntimeException("Failed to search memory", e);
-        }
+        throw new IllegalStateException("Unscoped memory search is disabled");
     }
 
     @Override
     public List<String> findConversationSummariesByJiacn(String jiacn, long sinceTime) {
-        return findSummariesByTypeAndJiacn(jiacn, "conversation", sinceTime);
+        throw new IllegalStateException("Owner-only summary aggregation is disabled");
     }
 
     @Override
     public List<String> findDailySummariesByJiacn(String jiacn, long sinceTime) {
-        return findSummariesByTypeAndJiacn(jiacn, "daily_summary", sinceTime);
+        throw new IllegalStateException("Owner-only summary aggregation is disabled");
     }
 
     @Override
     public List<String> findWeeklySummariesByJiacn(String jiacn, long sinceTime) {
-        return findSummariesByTypeAndJiacn(jiacn, "weekly_summary", sinceTime);
-    }
-
-    private List<String> findSummariesByTypeAndJiacn(String jiacn, String summaryType, long sinceTime) {
-        requireOwner(jiacn);
-        try {
-            SearchRequest searchRequest = SearchRequest.of(builder -> builder
-                .index(indexName)
-                .size(100)
-                .sort(s -> s.field(f -> f.field("timestamp").order(co.elastic.clients.elasticsearch._types.SortOrder.Desc)))
-                .query(q -> q
-                    .bool(b -> b
-                        .must(m -> m.term(t -> t.field("jiacn").value(jiacn)))
-                        .must(m -> m.term(t -> t.field("summary_type").value(summaryType)))
-                        .must(m -> m.range(r -> r.number(n -> n.field("timestamp").gte((double) sinceTime))))
-                    )
-                )
-            );
-
-            SearchResponse<Map> response = elasticsearchClient.search(searchRequest, Map.class);
-
-            return response.hits().hits().stream()
-                .filter(hit -> hit.source() != null
-                        && jiacn.equals(hit.source().get("jiacn"))
-                        && summaryType.equals(hit.source().get("summary_type")))
-                .filter(hit -> !"conversation".equals(summaryType)
-                        || !taskThreadMemoryGuard.isProtectedConversation(
-                                (String) hit.source().get("conversation_id")))
-                .map(hit -> (String) hit.source().get("content"))
-                .filter(Objects::nonNull)
-                .collect(Collectors.toList());
-        } catch (Exception e) {
-            log.error("Failed to find summaries", e);
-            throw new IllegalStateException("Memory summaries unavailable", e);
-        }
+        throw new IllegalStateException("Owner-only summary aggregation is disabled");
     }
 
     @Override
     public void deleteExpiredDocuments(long beforeTime) {
-        try {
-            DeleteByQueryRequest request = DeleteByQueryRequest.of(builder -> builder
-                .index(indexName)
-                .query(q -> q
-                    .bool(b -> b
-                        .must(m -> m.range(r -> r.number(n -> n.field("timestamp").lt((double) beforeTime))))
-                        .must(m -> m.term(t -> t.field("summary_type").value("conversation")))
-                    )
-                )
-            );
-
-            elasticsearchClient.deleteByQuery(request);
-            log.info("Deleted expired documents before {}", beforeTime);
-        } catch (Exception e) {
-            log.error("Failed to delete expired documents", e);
-        }
+        throw new IllegalStateException("Unscoped memory deletion is disabled");
     }
 
     @Override
     public void deleteOldDocuments(String summaryType, int keepCount) {
-        try {
-            // 查询要删除的文档
-            SearchRequest searchRequest = SearchRequest.of(builder -> builder
-                .index(indexName)
-                .size(0)
-                .aggregations("by_time", a -> a
-                    .terms(t -> t.field("timestamp").size(10000))
-                )
-                .query(q -> q
-                    .term(t -> t.field("summary_type").value(summaryType))
-                )
-            );
-
-            // 这里简化处理，实际应该根据 timestamp 排序后删除超过 keepCount 的文档
-            log.info("deleteOldDocuments called for type: {}, keepCount: {}", summaryType, keepCount);
-        } catch (Exception e) {
-            log.error("Failed to delete old documents", e);
-        }
+        throw new IllegalStateException("Unscoped memory deletion is disabled");
     }
 
     @Override
     public long countByJiacn(String jiacn) {
-        requireOwner(jiacn);
-        try {
-            SearchRequest searchRequest = SearchRequest.of(builder -> builder
-                .index(indexName)
-                .size(0)
-                .query(q -> q
-                    .term(t -> t.field("jiacn").value(jiacn))
-                )
-            );
-
-            SearchResponse<Map> response = elasticsearchClient.search(searchRequest, Map.class);
-            return response.hits().total() != null ? response.hits().total().value() : 0;
-        } catch (Exception e) {
-            log.error("Failed to count documents", e);
-            return 0;
-        }
+        throw new IllegalStateException("Owner-only memory count is disabled");
     }
-
     @Override
     public float[] generateEmbedding(String text) {
         return generateEmbeddingArray(text);
@@ -378,7 +611,14 @@ public class MemoryRepositoryImpl implements MemoryRepository {
         Map<String, Object> map = new HashMap<>();
         if (doc.getId() != null) map.put("id", doc.getId());
         if (doc.getJiacn() != null) map.put("jiacn", doc.getJiacn());
+        if (doc.getTenantId() != null) map.put("tenant_id", doc.getTenantId());
+        if (doc.getDataDomainId() != null) map.put("data_domain_id", doc.getDataDomainId());
+        if (doc.getClientId() != null) map.put("client_id", doc.getClientId());
+        if (doc.getScopeMode() != null) map.put("scope_mode", doc.getScopeMode());
         if (doc.getConversationId() != null) map.put("conversation_id", doc.getConversationId());
+        if (doc.getDocumentKind() != null) map.put("document_kind", doc.getDocumentKind());
+        if (doc.getPublicationClass() != null) map.put("publication_class", doc.getPublicationClass());
+        if (doc.getState() != null) map.put("state", doc.getState());
         if (doc.getContent() != null) map.put("content", doc.getContent());
         if (doc.getSummaryType() != null) map.put("summary_type", doc.getSummaryType());
         if (doc.getTopic() != null) map.put("topic", doc.getTopic());
@@ -389,6 +629,9 @@ public class MemoryRepositoryImpl implements MemoryRepository {
         if (doc.getPeriodStart() != null) map.put("period_start", doc.getPeriodStart());
         if (doc.getPeriodEnd() != null) map.put("period_end", doc.getPeriodEnd());
         if (doc.getConversationCount() != null) map.put("conversation_count", doc.getConversationCount());
+        if (doc.getSnapshotVersion() != null) map.put("snapshot_version", doc.getSnapshotVersion());
+        if (doc.getSnapshotToken() != null) map.put("snapshot_token", doc.getSnapshotToken());
+        if (doc.getLifecycleGeneration() != null) map.put("lifecycle_generation", doc.getLifecycleGeneration());
         if (doc.getEmbedding() != null) map.put("embedding", toDoubleList(doc.getEmbedding()));
         return map;
     }
@@ -398,7 +641,14 @@ public class MemoryRepositoryImpl implements MemoryRepository {
         MemoryDocument doc = new MemoryDocument();
         if (map.containsKey("id")) doc.setId(String.valueOf(map.get("id")));
         if (map.containsKey("jiacn")) doc.setJiacn(String.valueOf(map.get("jiacn")));
+        if (map.containsKey("tenant_id")) doc.setTenantId(String.valueOf(map.get("tenant_id")));
+        if (map.containsKey("data_domain_id")) doc.setDataDomainId(String.valueOf(map.get("data_domain_id")));
+        if (map.containsKey("client_id")) doc.setClientId(String.valueOf(map.get("client_id")));
+        if (map.containsKey("scope_mode")) doc.setScopeMode(String.valueOf(map.get("scope_mode")));
         if (map.containsKey("conversation_id")) doc.setConversationId(String.valueOf(map.get("conversation_id")));
+        if (map.containsKey("document_kind")) doc.setDocumentKind(String.valueOf(map.get("document_kind")));
+        if (map.containsKey("publication_class")) doc.setPublicationClass(String.valueOf(map.get("publication_class")));
+        if (map.containsKey("state")) doc.setState(String.valueOf(map.get("state")));
         if (map.containsKey("content")) doc.setContent(String.valueOf(map.get("content")));
         if (map.containsKey("summary_type")) doc.setSummaryType(String.valueOf(map.get("summary_type")));
         if (map.containsKey("topic")) doc.setTopic(String.valueOf(map.get("topic")));
@@ -416,6 +666,13 @@ public class MemoryRepositoryImpl implements MemoryRepository {
             doc.setPeriodEnd(((Number) map.get("period_end")).longValue());
         if (map.containsKey("conversation_count") && map.get("conversation_count") instanceof Number) 
             doc.setConversationCount(((Number) map.get("conversation_count")).intValue());
+        if (map.containsKey("snapshot_version") && map.get("snapshot_version") instanceof Number)
+            doc.setSnapshotVersion(((Number) map.get("snapshot_version")).longValue());
+        if (map.containsKey("snapshot_token")) doc.setSnapshotToken(String.valueOf(map.get("snapshot_token")));
+        if (map.containsKey("lifecycle_generation") && map.get("lifecycle_generation") instanceof Number)
+            doc.setLifecycleGeneration(((Number) map.get("lifecycle_generation")).longValue());
+        if (map.containsKey("payload_fingerprint"))
+            doc.setPayloadFingerprint(String.valueOf(map.get("payload_fingerprint")));
         if (map.containsKey("embedding") && map.get("embedding") instanceof List) {
             List<Double> embList = (List<Double>) map.get("embedding");
             float[] emb = new float[embList.size()];

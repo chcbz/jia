@@ -10,16 +10,29 @@ public record AgentRabbitSafetyProperties(
         RabbitTopology rabbitTopology,
         RabbitPublish rabbitPublish,
         RabbitConsume rabbitConsume,
+        RabbitConsumeV2 rabbitConsumeV2,
         RabbitDispatch rabbitDispatch,
         RabbitBroker rabbitBroker) {
 
+    @ConstructorBinding
     public AgentRabbitSafetyProperties {
         commandOutbox = commandOutbox == null ? new CommandOutbox(false) : commandOutbox;
         rabbitTopology = rabbitTopology == null ? new RabbitTopology(false) : rabbitTopology;
         rabbitPublish = rabbitPublish == null ? new RabbitPublish(false) : rabbitPublish;
         rabbitConsume = rabbitConsume == null ? new RabbitConsume(false) : rabbitConsume;
+        rabbitConsumeV2 = rabbitConsumeV2 == null
+                ? new RabbitConsumeV2(false) : rabbitConsumeV2;
         rabbitDispatch = rabbitDispatch == null
                 ? new RabbitDispatch(false) : rabbitDispatch;
+    }
+
+    /** Legacy source compatibility; protocol-v2 consumption remains disabled by default. */
+    public AgentRabbitSafetyProperties(CommandOutbox commandOutbox,
+            RabbitTopology rabbitTopology, RabbitPublish rabbitPublish,
+            RabbitConsume rabbitConsume, RabbitDispatch rabbitDispatch,
+            RabbitBroker rabbitBroker) {
+        this(commandOutbox, rabbitTopology, rabbitPublish, rabbitConsume,
+                new RabbitConsumeV2(false), rabbitDispatch, rabbitBroker);
     }
 
     public record CommandOutbox(boolean enabled) {
@@ -67,6 +80,9 @@ public record AgentRabbitSafetyProperties(
     }
 
     public record RabbitConsume(boolean enabled) {
+    }
+
+    public record RabbitConsumeV2(boolean enabled) {
     }
 
     public record RabbitDispatch(boolean enabled) {

@@ -45,6 +45,8 @@ import cn.jia.agent.service.funding.FundedBountyService;
 import cn.jia.agent.service.impl.AgentServiceImpl.AgentBizException;
 import cn.jia.core.entity.JsonResult;
 import cn.jia.core.entity.JsonResultPage;
+import cn.jia.core.tenant.BusinessScope;
+import cn.jia.core.tenant.TrustedTenantContext;
 import cn.jia.economy.exception.EconomyPostingException;
 import cn.jia.economy.hosting.HostingRentException;
 import com.github.pagehelper.PageInfo;
@@ -178,11 +180,11 @@ public class AgentController {
 
     @GetMapping("/personas/catalog")
     public Object personaCatalog(Authentication authentication) {
-        AgentHostedBindingTransaction.Scope scope = requireJwtScope(authentication);
+        BusinessScope scope = requireBusinessJwtScope(authentication);
         return ResponseEntity.ok()
                 .header(HttpHeaders.CACHE_CONTROL, "private, no-store")
                 .body(JsonResult.success(agentService.listPersonaCatalog(
-                        scope.tenantId(), scope.clientId(), scope.ownerJiacn())));
+                        scope.tenantId().value(), scope.callerClientId(), scope.ownerJiacn())));
     }
 
     @PostMapping("/personas/{personaCode}/bind")
@@ -229,13 +231,17 @@ public class AgentController {
 
     public Object bindPersona(String personaCode, AgentPersonaBindRequestDTO request,
             Authentication authentication) {
-        AgentHostedBindingTransaction.Scope scope = requireJwtScope(authentication);
         String mode = request == null ? "local" : request.getMode();
         if (mode != null && "server".equalsIgnoreCase(mode.strip())) {
+            requireJwtScope(authentication);
             throw new HostingRentAdmissionException(
                     HostingRentAdmissionException.Reason.HOSTING_RENT_NOT_READY);
         }
-        return JsonResult.success(requirePersonaProvisioningService().bind(scope, personaCode, mode));
+        BusinessScope scope = requireBusinessJwtScope(authentication);
+        if (mode != null && !mode.isBlank() && !"local".equalsIgnoreCase(mode.strip())) {
+            throw new IllegalArgumentException("Unsupported bind mode: " + mode);
+        }
+        return JsonResult.success(requirePersonaProvisioningService().bindLocal(scope, personaCode));
     }
 
     @PostMapping("/personas/bindings/{bindingId}/repair")
@@ -259,26 +265,62 @@ public class AgentController {
     }
 
     static AgentHostedBindingTransaction.Scope requireJwtScope(Authentication authentication) {
+        BusinessScope scope = requireBusinessJwtScope(authentication);
+        if (!"0".equals(scope.tenantId().value())) {
+            throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN,
+                    "Authenticated hosted scope is invalid");
+        }
+        return new AgentHostedBindingTransaction.Scope(
+                scope.tenantId().value(), scope.callerClientId(), scope.ownerJiacn());
+    }
+
+    static BusinessScope requireBusinessJwtScope(Authentication authentication) {
         if (authentication == null || !authentication.isAuthenticated()
                 || !(authentication instanceof JwtAuthenticationToken jwt)) {
             throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN,
                     "Authenticated JWT scope is required");
         }
         Map<String, Object> claims = jwt.getToken().getClaims();
-        Object rawJiacn = claims.get("jiacn");
-        Object rawClientId = claims.get("client_id");
-        if (!(rawJiacn instanceof String jiacn) || !(rawClientId instanceof String clientId)
-                || "0".equals(jiacn) || !validExactScopeComponent(jiacn)
-                || !validExactScopeComponent(clientId)) {
+        final BusinessScope trusted;
+        try {
+            trusted = TrustedTenantContext.requireScope();
+        } catch (RuntimeException unavailable) {
+            throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN,
+                    "Authenticated JWT scope is unavailable");
+        }
+        Object claimedDomain = claims.get("data_domain_id");
+        if (!trusted.tenantId().value().equals(claims.get("tenant_id"))
+                || (claimedDomain != null && !trusted.dataDomainId().value().equals(claimedDomain))
+                || !"cyf".equals(trusted.dataDomainId().value())) {
             throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN,
                     "Authenticated JWT scope is invalid");
         }
-        return new AgentHostedBindingTransaction.Scope("0", clientId, jiacn);
+        Object rawJiacn = claims.get("jiacn");
+        Object rawClientId = claims.get("client_id");
+        Object rawSubject = claims.get("sub");
+        if (!(rawJiacn instanceof String jiacn) || !(rawClientId instanceof String clientId)
+                || !(rawSubject instanceof String subject)
+                || "0".equals(jiacn) || !validExactScopeComponent(jiacn)
+                || !validExactScopeComponent(clientId)
+                || !validExactComponent(subject, 100)
+                || !exact(authentication.getName(), subject)) {
+            throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN,
+                    "Authenticated JWT scope is invalid");
+        }
+        if (!jiacn.equals(trusted.ownerJiacn()) || !clientId.equals(trusted.callerClientId())) {
+            throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN,
+                    "Authenticated JWT scope is invalid");
+        }
+        return trusted;
     }
 
     private static boolean validExactScopeComponent(String value) {
+        return validExactComponent(value, 50);
+    }
+
+    private static boolean validExactComponent(String value, int maxCodePoints) {
         return value != null && !hasUnpairedSurrogate(value)
-                && value.codePointCount(0, value.length()) <= 50
+                && value.codePointCount(0, value.length()) <= maxCodePoints
                 && !value.codePoints().allMatch(AgentController::isPadding)
                 && !isPadding(value.codePointAt(0))
                 && !isPadding(value.codePointBefore(value.length()))
@@ -361,6 +403,7 @@ public class AgentController {
             Authentication authentication) {
         AgentTaskCreateDTO request = protocolRequest == null ? null : protocolRequest.data();
         if (!hasFundingFields(request)) {
+            requireBusinessJwtScope(authentication);
             return JsonResult.success(agentService.createTask(request));
         }
         FundedBountyActor actor = requireMoneyActor(authentication);
@@ -650,6 +693,10 @@ public class AgentController {
                     "ECONOMY_UNAUTHENTICATED", "Authentication is required");
         }
         Map<String, Object> claims = jwt.getToken().getClaims();
+        if (!"0".equals(claims.get("tenant_id")) || !"cyf".equals(claims.get("data_domain_id"))) {
+            throw new FundedBountyException(HttpStatus.FORBIDDEN,
+                    "ECONOMY_FORBIDDEN", "Authenticated money scope is incomplete");
+        }
         String subject = requiredMoneyClaim(claims, "sub", 100);
         if (!exact(authentication.getName(), subject)) {
             throw new FundedBountyException(HttpStatus.FORBIDDEN,

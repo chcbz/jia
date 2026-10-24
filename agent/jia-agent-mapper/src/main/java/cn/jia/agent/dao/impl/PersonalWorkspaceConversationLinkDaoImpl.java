@@ -3,8 +3,10 @@ package cn.jia.agent.dao.impl;
 import cn.jia.agent.dao.PersonalWorkspaceConversationLinkDao;
 import cn.jia.agent.entity.PersonalWorkspaceConversationFileLinkEntity;
 import cn.jia.agent.mapper.PersonalWorkspaceConversationFileLinkMapper;
+import cn.jia.core.tenant.TenantId;
 import jakarta.inject.Inject;
 import jakarta.inject.Named;
+import org.springframework.dao.DuplicateKeyException;
 
 import java.util.List;
 import java.util.Objects;
@@ -40,7 +42,7 @@ public class PersonalWorkspaceConversationLinkDaoImpl implements PersonalWorkspa
             String ownerJiacn, String conversationId, String relationId) {
         scope(tenantId, clientId, ownerJiacn); id(conversationId, "conversationId", 100);
         id(relationId, "relationId", 100);
-        return mapper.selectByRelation(tenantId, clientId, ownerJiacn, conversationId, relationId);
+        return checked(mapper.selectByRelation(tenantId, clientId, ownerJiacn, conversationId, relationId), tenantId, clientId, ownerJiacn, conversationId);
     }
 
     @Override
@@ -48,7 +50,7 @@ public class PersonalWorkspaceConversationLinkDaoImpl implements PersonalWorkspa
             String ownerJiacn, String conversationId, String relationId) {
         scope(tenantId, clientId, ownerJiacn); id(conversationId, "conversationId", 100);
         id(relationId, "relationId", 100);
-        return mapper.selectByRelationForUpdate(tenantId, clientId, ownerJiacn, conversationId, relationId);
+        return checked(mapper.selectByRelationForUpdate(tenantId, clientId, ownerJiacn, conversationId, relationId), tenantId, clientId, ownerJiacn, conversationId);
     }
 
     @Override
@@ -56,8 +58,8 @@ public class PersonalWorkspaceConversationLinkDaoImpl implements PersonalWorkspa
             String ownerJiacn, String conversationId, String fileId, int fileVersion, String role) {
         scope(tenantId, clientId, ownerJiacn); id(conversationId, "conversationId", 100);
         id(fileId, "fileId", 100); version(fileVersion); id(role, "role", 20);
-        return mapper.selectBySelectionForUpdate(tenantId, clientId, ownerJiacn,
-                conversationId, fileId, fileVersion, role);
+        return checked(mapper.selectBySelectionForUpdate(tenantId, clientId, ownerJiacn,
+                conversationId, fileId, fileVersion, role), tenantId, clientId, ownerJiacn, conversationId);
     }
 
     @Override
@@ -70,16 +72,18 @@ public class PersonalWorkspaceConversationLinkDaoImpl implements PersonalWorkspa
             if (beforeCreatedAt < 0) throw new IllegalArgumentException("cursor");
             id(afterRelationId, "cursor", 100);
         }
-        return mapper.selectLinks(tenantId, clientId, ownerJiacn, conversationId,
+        List<PersonalWorkspaceConversationFileLinkEntity> rows = mapper.selectLinks(tenantId, clientId, ownerJiacn, conversationId,
                 beforeCreatedAt, afterRelationId, Math.max(1, Math.min(limit, 100)));
+        rows.forEach(row -> checked(row, tenantId, clientId, ownerJiacn, conversationId)); return rows;
     }
 
     @Override
     public List<PersonalWorkspaceConversationFileLinkEntity> listActiveByFile(String tenantId,
             String clientId, String ownerJiacn, String fileId, int limit) {
         scope(tenantId, clientId, ownerJiacn); id(fileId, "fileId", 100);
-        return mapper.selectActiveByFile(tenantId, clientId, ownerJiacn, fileId,
+        List<PersonalWorkspaceConversationFileLinkEntity> rows = mapper.selectActiveByFile(tenantId, clientId, ownerJiacn, fileId,
                 Math.max(1, Math.min(limit, 100)));
+        rows.forEach(row -> checked(row, tenantId, clientId, ownerJiacn, row.getConversationId())); return rows;
     }
 
     @Override
@@ -92,7 +96,11 @@ public class PersonalWorkspaceConversationLinkDaoImpl implements PersonalWorkspa
 
     @Override
     public void insert(PersonalWorkspaceConversationFileLinkEntity link) {
-        Objects.requireNonNull(link, "link").init4Creation();
+        Objects.requireNonNull(link, "link");
+        scope(link.getTenantId(), link.getClientId(), link.getOwnerJiacn());
+        id(link.getConversationId(), "conversationId", 100); id(link.getFileId(), "fileId", 100);
+        id(link.getRelationId(), "relationId", 100); version(link.getFileVersion());
+        link.init4Creation();
         mapper.insert(link);
     }
 
@@ -118,11 +126,18 @@ public class PersonalWorkspaceConversationLinkDaoImpl implements PersonalWorkspa
         scope(tenantId, clientId, ownerJiacn); id(operationType, "operationType", 20);
         id(idempotencyKey, "idempotencyKey", 100); hash(requestHash);
         id(proposedOperationId, "operationId", 100);
-        mapper.reserveOperation(tenantId, clientId, ownerJiacn, operationType,
-                idempotencyKey, requestHash, proposedOperationId, now);
+        try {
+            mapper.reserveOperation(tenantId, clientId, ownerJiacn, operationType,
+                    idempotencyKey, requestHash, proposedOperationId, now);
+        } catch (DuplicateKeyException ignored) {
+            // Idempotent replay: the exact scoped row is locked and returned below.
+        }
         OperationRow row = mapper.selectOperationForUpdate(tenantId, clientId, ownerJiacn,
                 operationType, idempotencyKey);
         if (row == null) throw new IllegalStateException("conversation-link operation reservation missing");
+        if (!tenantId.equals(row.getTenantId()) || !clientId.equals(row.getClientId())
+                || !ownerJiacn.equals(row.getOwnerJiacn()))
+            throw new IllegalStateException("conversation-link operation scope projection mismatch");
         return row;
     }
 
@@ -136,9 +151,20 @@ public class PersonalWorkspaceConversationLinkDaoImpl implements PersonalWorkspa
     }
 
     private static void scope(String tenantId, String clientId, String ownerJiacn) {
-        if (!"0".equals(tenantId)) throw new IllegalArgumentException("tenantId");
+        TenantId.of(tenantId);
         id(clientId, "clientId", 50); id(ownerJiacn, "ownerJiacn", 50);
         if ("0".equals(ownerJiacn)) throw new IllegalArgumentException("ownerJiacn");
+    }
+
+    private static PersonalWorkspaceConversationFileLinkEntity checked(
+            PersonalWorkspaceConversationFileLinkEntity row, String tenantId, String clientId,
+            String ownerJiacn, String conversationId) {
+        if (row != null && (!tenantId.equals(row.getTenantId()) || !clientId.equals(row.getClientId())
+                || !ownerJiacn.equals(row.getOwnerJiacn())
+                || !conversationId.equals(row.getConversationId()))) {
+            throw new IllegalStateException("conversation file link scope projection mismatch");
+        }
+        return row;
     }
 
     private static void version(int value) {

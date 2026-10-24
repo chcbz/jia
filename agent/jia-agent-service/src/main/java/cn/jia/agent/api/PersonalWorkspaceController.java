@@ -5,6 +5,8 @@ import cn.jia.core.entity.JsonRequest;
 import cn.jia.agent.entity.PersonalWorkspaceViews;
 import cn.jia.agent.exception.PersonalWorkspaceException;
 import cn.jia.agent.service.PersonalWorkspaceService;
+import cn.jia.agent.service.impl.PersonalWorkspacePreviewRenderer;
+import cn.jia.core.tenant.TrustedTenantContext;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ContentDisposition;
@@ -172,8 +174,16 @@ public class PersonalWorkspaceController {
     private PersonalWorkspaceService.Scope scope(Authentication authentication) {
         if(authentication==null||!authentication.isAuthenticated()||!(authentication instanceof JwtAuthenticationToken jwt)) throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.NOT_FOUND);
         Map<String,Object> claims=jwt.getToken().getClaims(); Object owner=claims.get("jiacn"),client=claims.get("client_id");
+        final var trusted = TrustedTenantContext.requireScope();
+        Object claimedDomain = claims.get("data_domain_id");
+        if (!trusted.tenantId().value().equals(claims.get("tenant_id"))
+                || (claimedDomain != null && !trusted.dataDomainId().value().equals(claimedDomain))
+                || !"cyf".equals(trusted.dataDomainId().value()))
+            throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.NOT_FOUND);
         if(!(owner instanceof String o)||!(client instanceof String c)||!valid(o,50)||!valid(c,50)||"0".equals(o)) throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.NOT_FOUND);
-        return new PersonalWorkspaceService.Scope("0",c,o);
+        if (!o.equals(trusted.ownerJiacn()) || !c.equals(trusted.callerClientId()))
+            throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.NOT_FOUND);
+        return new PersonalWorkspaceService.Scope(trusted.tenantId().value(),c,o);
     }
     private PersonalWorkspaceService.UploadCommand upload(MultipartFile file,String displayName,String key) throws IOException {
         if(file==null) throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.BAD_REQUEST);

@@ -10,7 +10,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 public class AgentCommandTransportSchemaConfiguration {
     @org.springframework.context.annotation.Profile("schema-maintenance")
     @Bean
-    @Conditional(AgentCommandOutboxEnabledCondition.class)
+    @Conditional(AgentCommandLegacyTransportSchemaEnabledCondition.class)
     public AgentCommandTransportSchemaInitializer agentCommandTransportSchemaInitializer(
             JdbcTemplate jdbcTemplate) {
         return new AgentCommandTransportSchemaInitializer(jdbcTemplate);

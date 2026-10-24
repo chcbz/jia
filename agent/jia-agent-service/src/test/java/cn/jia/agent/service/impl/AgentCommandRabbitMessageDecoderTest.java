@@ -32,7 +32,7 @@ class AgentCommandRabbitMessageDecoderTest {
         assertEquals("msg-1", decoded.messageId());
         assertEquals("evt-1", decoded.eventId());
         assertEquals(41L, decoded.deliveryId());
-        assertEquals("tenant-a", decoded.tenantId());
+        assertEquals("0", decoded.tenantId());
         assertEquals("client-a", decoded.clientId());
         assertEquals("task-1", decoded.taskId());
         assertEquals("agent-1", decoded.targetAgentId());
@@ -162,7 +162,7 @@ class AgentCommandRabbitMessageDecoderTest {
         headers.put(AgentCommandAmqpContract.HEADER_EVENT_ID, "evt-1");
         headers.put(AgentCommandAmqpContract.HEADER_DELIVERY_ID, Long.valueOf(41L));
         headers.put(AgentCommandAmqpContract.HEADER_COMMAND_ID, "cmd-1");
-        headers.put(AgentCommandAmqpContract.HEADER_TENANT_ID, "tenant-a");
+        headers.put(AgentCommandAmqpContract.HEADER_TENANT_ID, "0");
         headers.put(AgentCommandAmqpContract.HEADER_CLIENT_ID, "client-a");
         headers.put(AgentCommandAmqpContract.HEADER_TASK_ID, "task-1");
         headers.put(AgentCommandAmqpContract.HEADER_TARGET_AGENT_ID, "agent-1");
@@ -180,7 +180,7 @@ class AgentCommandRabbitMessageDecoderTest {
         return """
                 {"schemaVersion":1,"messageType":"command.dispatch","messageId":"msg-1",\
                 "commandId":"cmd-1","correlationId":"task-1","causationId":"intent-d05",\
-                "tenantId":"tenant-a","clientId":"client-a","taskId":"task-1",\
+                "tenantId":"0","clientId":"client-a","ownerJiacn":"owner-a","taskId":"task-1",\
                 "workItemId":null,"targetAgentId":"agent-1","commandType":"TASK_INVITE",\
                 "issuedAt":1000,"expiresAt":9999999999,"intentId":"intent-d05","attempt":1,\
                 "payload":{"actionType":"task_briefing","instruction":"Read the task briefing",\
@@ -193,7 +193,7 @@ class AgentCommandRabbitMessageDecoderTest {
     private String wire() {
         return """
                 {"schemaVersion":1,"messageType":"command.dispatch","messageId":"msg-1",\
-                "commandId":"cmd-1","tenantId":"tenant-a","clientId":"client-a",\
+                "commandId":"cmd-1","tenantId":"0","clientId":"client-a","ownerJiacn":"owner-a",\
                 "taskId":"task-1","targetAgentId":"agent-1","commandType":"TASK_INVITE",\
                 "attempt":1,"expiresAt":9999999999,"payload":{"instruction":"execute"}}
                 """.replace("\\\n", "").strip();

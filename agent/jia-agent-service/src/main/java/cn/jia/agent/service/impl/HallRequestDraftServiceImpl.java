@@ -1214,7 +1214,8 @@ public class HallRequestDraftServiceImpl implements HallRequestDraftService {
     }
 
     private static void requireScope(OwnerScope scope) {
-        if (scope == null || !"0".equals(scope.tenantId())) throw failure(Reason.BAD_REQUEST);
+        if (scope == null) throw failure(Reason.BAD_REQUEST);
+        cn.jia.core.tenant.TenantId.of(scope.tenantId());
         requireId(scope.clientId(), "clientId", 50);
         requireId(scope.ownerJiacn(), "ownerJiacn", 50);
         if ("0".equals(scope.ownerJiacn())) throw failure(Reason.BAD_REQUEST);

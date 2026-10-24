@@ -39,15 +39,24 @@ public final class HallPrivateMarkSchemaInitializer implements InitializingBean 
             "chk_hall_private_mark_time", "snapshot_updated_at>=0 AND updated_at>=0")));
 
     private final JdbcTemplate jdbc;
+    private final boolean validateOnly;
 
     public HallPrivateMarkSchemaInitializer(JdbcTemplate jdbc) {
+        this(jdbc, false);
+    }
+
+    HallPrivateMarkSchemaInitializer(JdbcTemplate jdbc, boolean validateOnly) {
         this.jdbc = Objects.requireNonNull(jdbc, "jdbc");
+        this.validateOnly = validateOnly;
     }
 
     @Override public void afterPropertiesSet() {
         requireMySql();
         List<String> present = presentTables();
-        if (present.isEmpty()) ddlStatements().forEach(jdbc::execute);
+        if (present.isEmpty()) {
+            SchemaValidationMode.requireMutationAllowed(validateOnly, "Hall private mark schema");
+            ddlStatements().forEach(jdbc::execute);
+        }
         else if (!present.equals(TABLES)) {
             throw new IllegalStateException("Hall private mark schema is partial: " + present);
         }
