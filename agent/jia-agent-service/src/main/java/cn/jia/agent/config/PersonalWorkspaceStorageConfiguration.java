@@ -23,12 +23,10 @@ public class PersonalWorkspaceStorageConfiguration {
     @Bean
     public PersonalWorkspaceStorage personalWorkspaceStorage(PersonalWorkspaceStorageProperties properties) {
         if (!properties.enabled()) return new DisabledPersonalWorkspaceStorage();
-        if (properties.rootDirectory() == null || properties.rootDirectory().isBlank()
-                || properties.maxContentBytes() == null || properties.maxContentBytes() < 1) {
+        if (properties.rootDirectory() == null || properties.rootDirectory().isBlank()) {
             throw new IllegalStateException("Invalid personal workspace storage configuration");
         }
-        return new FileSystemPersonalWorkspaceStorage(Path.of(properties.rootDirectory()),
-                properties.maxContentBytes());
+        return new FileSystemPersonalWorkspaceStorage(Path.of(properties.rootDirectory()));
     }
 
     @org.springframework.context.annotation.Profile("schema-maintenance")

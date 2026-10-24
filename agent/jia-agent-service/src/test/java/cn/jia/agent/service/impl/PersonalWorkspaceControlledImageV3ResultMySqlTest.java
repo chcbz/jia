@@ -373,7 +373,7 @@ class PersonalWorkspaceControlledImageV3ResultMySqlTest {
 
     private void configureService() {
         PersonalWorkspaceStorage storage=new FileSystemPersonalWorkspaceStorage(
-                storageRoot.toAbsolutePath(),1_000_000);
+                storageRoot.toAbsolutePath());
         service=new PersonalWorkspaceExecutionServiceImpl(rows,mock(cn.jia.agent.dao.PersonalWorkspaceDao.class),
                 mock(cn.jia.agent.dao.PersonalWorkspaceTaskLinkDao.class),
                 mock(cn.jia.agent.dao.AgentRuntimeDao.class),storage,mock(PersonalWorkspaceWriteService.class),

@@ -21,7 +21,7 @@ class PersonalWorkspaceStorageBoundaryTest {
     void rejectsSameLengthObjectReplacementInsteadOfReturningTamperedBytes() throws Exception {
         Path root = temporaryDirectory.resolve("private-workspace");
         PersonalWorkspaceStorage storage = new FileSystemPersonalWorkspaceStorage(
-                root, 4096);
+                root);
         PersonalWorkspaceStorage.Scope owner =
                 new PersonalWorkspaceStorage.Scope("0", "browser", "owner-a");
         byte[] original = "owner-private".getBytes(StandardCharsets.UTF_8);
@@ -41,7 +41,7 @@ class PersonalWorkspaceStorageBoundaryTest {
     void rejectsSymlinkReplacementEvenWhenTargetContainsTheExpectedBytes() throws Exception {
         Path root = temporaryDirectory.resolve("private-workspace");
         PersonalWorkspaceStorage storage = new FileSystemPersonalWorkspaceStorage(
-                root, 4096);
+                root);
         PersonalWorkspaceStorage.Scope owner =
                 new PersonalWorkspaceStorage.Scope("0", "browser", "owner-a");
         byte[] original = "owner-private".getBytes(StandardCharsets.UTF_8);
@@ -63,7 +63,7 @@ class PersonalWorkspaceStorageBoundaryTest {
     void rejectsAValidObjectUriWhenEitherOwnerOrClientScopeChanges() {
         Path root = temporaryDirectory.resolve("private-workspace");
         PersonalWorkspaceStorage storage = new FileSystemPersonalWorkspaceStorage(
-                root, 4096);
+                root);
         PersonalWorkspaceStorage.Scope owner =
                 new PersonalWorkspaceStorage.Scope("0", "browser", "owner-a");
         byte[] original = "owner-private".getBytes(StandardCharsets.UTF_8);

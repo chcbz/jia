@@ -49,7 +49,7 @@ public final class AgentCommandInboxServiceImpl implements AgentCommandInboxServ
     public static final String STALE_MESSAGE_FENCE = "STALE_MESSAGE_FENCE";
     public static final String MESSAGE_EXPIRED = "MESSAGE_EXPIRED";
     public static final long MAX_LEASE_MILLIS = 300_000L;
-    public static final int MAX_WIRE_BYTES = 16_777_215;
+    public static final int MAX_WIRE_BYTES = AgentCommandAmqpContract.MAX_WIRE_BYTES;
 
     private static final Logger LOG = LoggerFactory.getLogger(AgentCommandInboxServiceImpl.class);
     private static final Set<String> COMMAND_TYPES = Set.of("SKILL_INSTALL",

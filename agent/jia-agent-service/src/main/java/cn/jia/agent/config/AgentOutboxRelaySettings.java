@@ -47,7 +47,7 @@ public final class AgentOutboxRelaySettings {
         jitterPercent = range(source.jitterPercent(), 0, 50, "jitter-percent");
         shutdownDrainMillis = range(
                 source.shutdownDrainMillis(), 0L, 599_999L, "shutdown-drain-millis");
-        maxWireBytes = range(source.maxWireBytes(), 1, 131_072, "max-wire-bytes");
+        maxWireBytes = range(source.maxWireBytes(), 1, cn.jia.agent.common.AgentCommandAmqpContract.MAX_WIRE_BYTES, "max-wire-bytes");
         long minimumLease;
         try {
             minimumLease = Math.addExact(Math.multiplyExact(confirmTimeoutMillis, 2L), 5_000L);

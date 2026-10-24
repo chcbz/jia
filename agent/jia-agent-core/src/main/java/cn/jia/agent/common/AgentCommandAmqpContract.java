@@ -14,7 +14,8 @@ import java.util.Map;
 public final class AgentCommandAmqpContract {
     public static final int WIRE_VERSION = 1;
     public static final int INITIAL_SOURCE_SETTLEMENT_RETRY = 0;
-    public static final int MAX_WIRE_BYTES = 131_072;
+    // Exact wire is persisted in the transport MEDIUMBLOB columns; this is their byte range.
+    public static final int MAX_WIRE_BYTES = 16_777_215;
 
     public static final String CONTENT_TYPE = "application/json";
     public static final String CONTENT_ENCODING = "UTF-8";

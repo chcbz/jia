@@ -57,7 +57,7 @@ public record AgentRabbitSafetyProperties(
             maxBackoffMillis = maxBackoffMillis == null ? 300_000L : maxBackoffMillis;
             jitterPercent = jitterPercent == null ? 20 : jitterPercent;
             shutdownDrainMillis = shutdownDrainMillis == null ? 7_000L : shutdownDrainMillis;
-            maxWireBytes = maxWireBytes == null ? 131_072 : maxWireBytes;
+            maxWireBytes = maxWireBytes == null ? cn.jia.agent.common.AgentCommandAmqpContract.MAX_WIRE_BYTES : maxWireBytes;
         }
 
         public RabbitPublish(boolean enabled) {

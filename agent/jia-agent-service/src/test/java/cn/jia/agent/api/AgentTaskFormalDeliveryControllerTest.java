@@ -76,10 +76,11 @@ class AgentTaskFormalDeliveryControllerTest {
                         .header("Idempotency-Key", "formal-key-0001")
                         .contentType("application/json").content(body).principal(jwt()))
                 .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("E0"))
                 .andExpect(header().string("Cache-Control", "private, no-store"))
-                .andExpect(jsonPath("$.deliveryId").value(org.hamcrest.Matchers.startsWith("fd_")))
-                .andExpect(jsonPath("$.leaseToken").doesNotExist())
-                .andExpect(jsonPath("$.submissionDigest").doesNotExist());
+                .andExpect(jsonPath("$.data.deliveryId").value(org.hamcrest.Matchers.startsWith("fd_")))
+                .andExpect(jsonPath("$.data.leaseToken").doesNotExist())
+                .andExpect(jsonPath("$.data.submissionDigest").doesNotExist());
 
         ArgumentCaptor<cn.jia.agent.entity.AgentTaskFormalDeliverySubmitDTO> command =
                 ArgumentCaptor.forClass(cn.jia.agent.entity.AgentTaskFormalDeliverySubmitDTO.class);
@@ -102,8 +103,9 @@ class AgentTaskFormalDeliveryControllerTest {
                         .header("Idempotency-Key", "decision-key-0001")
                         .contentType("application/json").content(body).principal(jwt()))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.state").value("changes_requested"))
-                .andExpect(jsonPath("$.deliveryVersion").value(1));
+                .andExpect(jsonPath("$.code").value("E0"))
+                .andExpect(jsonPath("$.data.state").value("changes_requested"))
+                .andExpect(jsonPath("$.data.deliveryVersion").value(1));
         verify(decision).decide(eq("0"), eq(CLIENT), eq(TASK), eq(TENANT), any());
     }
 
@@ -127,11 +129,12 @@ class AgentTaskFormalDeliveryControllerTest {
                         .header("Idempotency-Key", "rework-key-0001")
                         .contentType("application/json").content(body).principal(jwt()))
                 .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.code").value("E0"))
                 .andExpect(header().string("Cache-Control", "private, no-store"))
-                .andExpect(jsonPath("$.executionId").value("exec-rework"))
-                .andExpect(jsonPath("$.leaseToken").doesNotExist())
-                .andExpect(jsonPath("$.storageUri").doesNotExist())
-                .andExpect(jsonPath("$.instruction").doesNotExist());
+                .andExpect(jsonPath("$.data.executionId").value("exec-rework"))
+                .andExpect(jsonPath("$.data.leaseToken").doesNotExist())
+                .andExpect(jsonPath("$.data.storageUri").doesNotExist())
+                .andExpect(jsonPath("$.data.instruction").doesNotExist());
 
         ArgumentCaptor<AgentTaskReworkExecutionService.ReworkCommand> command =
                 ArgumentCaptor.forClass(AgentTaskReworkExecutionService.ReworkCommand.class);

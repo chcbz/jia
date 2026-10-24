@@ -32,16 +32,15 @@ public final class FileSystemPersonalWorkspaceStorage implements PersonalWorkspa
     private static final Set<PosixFilePermission> DIR_PERMS = Set.of(PosixFilePermission.OWNER_READ,
             PosixFilePermission.OWNER_WRITE, PosixFilePermission.OWNER_EXECUTE);
     private static final Set<PosixFilePermission> FILE_PERMS = Set.of(PosixFilePermission.OWNER_READ);
-    private final Path root; private final Object rootKey; private final long maximum;
+    private final Path root; private final Object rootKey;
 
-    public FileSystemPersonalWorkspaceStorage(Path configuredRoot, long maximum) {
-        if (configuredRoot == null || !configuredRoot.isAbsolute() || configuredRoot.normalize().getParent() == null || maximum < 1) invalid();
+    public FileSystemPersonalWorkspaceStorage(Path configuredRoot) {
+        if (configuredRoot == null || !configuredRoot.isAbsolute() || configuredRoot.normalize().getParent() == null) invalid();
         this.root = createRoot(configuredRoot.normalize()); this.rootKey = attributes(root).fileKey();
-        this.maximum = maximum;
     }
 
     @Override public StoredObject store(Scope scope, byte[] content, String mimeType) {
-        validateScope(scope); validateMime(mimeType); if (content == null || content.length > maximum) invalid();
+        validateScope(scope); validateMime(mimeType); if (content == null) invalid();
         verifyRoot(); String hash = sha(content); String key = scopeKey(scope); Path directory = directory(key, hash); ensureDirectory(directory);
         Path target = objectPath(directory, hash);
         if (Files.exists(target, LinkOption.NOFOLLOW_LINKS)) verifyExisting(target, hash, content.length);
@@ -57,12 +56,12 @@ public final class FileSystemPersonalWorkspaceStorage implements PersonalWorkspa
         verifyRoot(); return new StoredObject(uri(key, hash), hash, content.length, mimeType);
     }
 
-    @Override public long maxContentBytes() { return maximum; }
+    @Override public long maxContentBytes() { return Integer.MAX_VALUE; }
 
     @Override public StoredContent read(Scope scope, String storageUri, String expectedSha256,
             long expectedByteLength, String expectedMimeType) {
         validateScope(scope); validateMime(expectedMimeType);
-        if (!SHA.matcher(Objects.requireNonNullElse(expectedSha256, "")).matches() || expectedByteLength < 0 || expectedByteLength > maximum) invalid();
+        if (!SHA.matcher(Objects.requireNonNullElse(expectedSha256, "")).matches() || expectedByteLength < 0 || expectedByteLength > Integer.MAX_VALUE) invalid();
         verifyRoot(); UriParts parts = parse(storageUri);
         if (!constant(scopeKey(scope), parts.scopeKey()) || !constant(expectedSha256, parts.hash())) corrupt();
         byte[] bytes = read(objectPath(requireDirectory(parts.scopeKey(), parts.hash()), parts.hash()));
@@ -104,7 +103,7 @@ public final class FileSystemPersonalWorkspaceStorage implements PersonalWorkspa
     }
     private void verifyRoot(){BasicFileAttributes a=attributes(root);if(a.isSymbolicLink()||!a.isDirectory()||(rootKey!=null&&!Objects.equals(rootKey,a.fileKey())))corrupt();}
     private void verifyExisting(Path target,String hash,long length){byte[] bytes=read(target);if(bytes.length!=length||!constant(sha(bytes),hash))corrupt();permissions(target,FILE_PERMS);}
-    private byte[] read(Path target){BasicFileAttributes a=attributes(target);if(a.isSymbolicLink()||!a.isRegularFile()||a.size()>maximum)corrupt();try(FileChannel c=FileChannel.open(target,Set.<OpenOption>of(StandardOpenOption.READ,LinkOption.NOFOLLOW_LINKS));ByteArrayOutputStream out=new ByteArrayOutputStream((int)Math.min(a.size(),65536))){ByteBuffer b=ByteBuffer.allocate(8192);long count=0;while(c.read(b)!=-1){b.flip();count+=b.remaining();if(count>maximum)corrupt();out.write(b.array(),b.position(),b.remaining());b.clear();}return out.toByteArray();}catch(IOException e){unavailable(e);return null;}}
+    private byte[] read(Path target){BasicFileAttributes a=attributes(target);if(a.isSymbolicLink()||!a.isRegularFile()||a.size()>Integer.MAX_VALUE)corrupt();try(FileChannel c=FileChannel.open(target,Set.<OpenOption>of(StandardOpenOption.READ,LinkOption.NOFOLLOW_LINKS));ByteArrayOutputStream out=new ByteArrayOutputStream((int)Math.min(a.size(),65536))){ByteBuffer b=ByteBuffer.allocate(8192);long count=0;while(c.read(b)!=-1){b.flip();count+=b.remaining();if(count>Integer.MAX_VALUE)corrupt();out.write(b.array(),b.position(),b.remaining());b.clear();}return out.toByteArray();}catch(IOException e){unavailable(e);return null;}}
     private static void write(Path target,byte[] bytes)throws IOException{try(FileChannel c=FileChannel.open(target,Set.<OpenOption>of(StandardOpenOption.WRITE,LinkOption.NOFOLLOW_LINKS))){ByteBuffer b=ByteBuffer.wrap(bytes);while(b.hasRemaining())c.write(b);c.force(true);}}
     private static void verifyRegular(Path p){BasicFileAttributes a=attributes(p);if(a.isSymbolicLink()||!a.isRegularFile())corrupt();}
     private static BasicFileAttributes attributes(Path p){try{return Files.readAttributes(p,BasicFileAttributes.class,LinkOption.NOFOLLOW_LINKS);}catch(IOException e){unavailable(e);return null;}}

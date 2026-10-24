@@ -288,8 +288,7 @@ class PersonalWorkspaceHttpPersistenceIntegrationTest {
 
     private CountingStorage newStorage() {
         return new CountingStorage(new FileSystemPersonalWorkspaceStorage(
-                temporaryDirectory.resolve("private-workspace").toAbsolutePath(),
-                1024 * 1024));
+                temporaryDirectory.resolve("private-workspace").toAbsolutePath()));
     }
 
     private MockMvc controller(DataSource dataSource) {

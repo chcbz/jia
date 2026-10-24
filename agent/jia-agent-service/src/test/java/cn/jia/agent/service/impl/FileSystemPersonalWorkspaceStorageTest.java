@@ -21,15 +21,14 @@ class FileSystemPersonalWorkspaceStorageTest {
     @TempDir Path temporaryDirectory;
 
     @Test
-    void storesAnyValidMimeWhileKeepingSizeAndIntegrityBoundaries() {
-        var storage = new FileSystemPersonalWorkspaceStorage(temporaryDirectory.resolve("unrestricted"), 16);
+    void storesAnyValidMimeWhileKeepingIntegrityBoundaries() {
+        var storage = new FileSystemPersonalWorkspaceStorage(temporaryDirectory.resolve("unrestricted"));
         var scope = new PersonalWorkspaceStorage.Scope("0", "browser", "owner");
         for (String mime : Set.of("image/avif", "application/x-custom", "application/octet-stream", "text/html", "image/svg+xml")) {
             byte[] content = "opaque".getBytes(StandardCharsets.UTF_8);
             var saved = storage.store(scope, content, mime);
             assertArrayEquals(content, storage.read(scope, saved.storageUri(), saved.sha256(), saved.byteLength(), mime).content());
         }
-        assertThrows(PersonalWorkspaceException.class, () -> storage.store(scope, new byte[17], "application/octet-stream"));
         assertThrows(PersonalWorkspaceException.class, () -> storage.store(scope, new byte[1], "text/html\r\nX: bad"));
     }
 
@@ -41,7 +40,7 @@ class FileSystemPersonalWorkspaceStorageTest {
                 PosixFilePermission.OTHERS_READ, PosixFilePermission.OTHERS_EXECUTE));
         Path root = temporaryDirectory.resolve("private-workspace");
 
-        new FileSystemPersonalWorkspaceStorage(root, 4096);
+        new FileSystemPersonalWorkspaceStorage(root);
 
         assertEquals(Set.of(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE, PosixFilePermission.OWNER_EXECUTE,
                 PosixFilePermission.GROUP_READ, PosixFilePermission.GROUP_EXECUTE,
@@ -55,7 +54,7 @@ class FileSystemPersonalWorkspaceStorageTest {
     @Test
     void storesImmutableContentUnderExactOwnerScopeAndVerifiesReadback() {
         PersonalWorkspaceStorage storage = new FileSystemPersonalWorkspaceStorage(
-                temporaryDirectory.resolve("private-workspace"), 4096);
+                temporaryDirectory.resolve("private-workspace"));
         PersonalWorkspaceStorage.Scope first = new PersonalWorkspaceStorage.Scope("0", "browser", "chcbz");
         byte[] content = "个人工作空间".getBytes(StandardCharsets.UTF_8);
 
@@ -74,7 +73,7 @@ class FileSystemPersonalWorkspaceStorageTest {
     @Test
     void keepsTheSameDigestPrivateToEachOwnerScope() {
         PersonalWorkspaceStorage storage = new FileSystemPersonalWorkspaceStorage(
-                temporaryDirectory.resolve("private-workspace"), 4096);
+                temporaryDirectory.resolve("private-workspace"));
         byte[] content = "same bytes".getBytes(StandardCharsets.UTF_8);
         PersonalWorkspaceStorage.StoredObject first = storage.store(
                 new PersonalWorkspaceStorage.Scope("0", "browser", "owner-a"), content, "text/plain");

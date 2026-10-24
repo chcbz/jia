@@ -102,3 +102,16 @@
 - 删除控制器JSON业务体固定1/8/32/64KiB重复限制，以及context-pack1MiB/workspace4MiB序列化响应硬拒绝；保留JSON解析、单次读取、非空、字段类型、授权/动作与真实传输异常，不改写摘要字节。分块buffer大小只是IO批次，不是业务总量。
 - 旧F02文件存储取消MIME白名单、默认16MiB和配置上界64MiB及配置体积拒绝；配置仅启用和root，旧max-content-bytes/allowed-mime-types不再用于准入。接口当前返回Java byte[]，只保留Integer.MAX_VALUE可表示性及实际IO失败，不能宣称任意大小均可加载。摘要/长度/归属/根inode/链接/原子写入/不可变内容继续保护，不改变HTTP主动内容预览策略。
 - 参考图选择32仅是旧UI数量限制，不是Provider编辑合同，删除；预览不支持的格式仍仅在该图片预览入口限制，不扩散到存储。本轮仅更新失效旧断言或撤下纯上限旧测试，不新增数量扩张正例。
+
+### 原上下文压缩与传输重复上限（2026-10-24续核）
+
+Runtime已无8KiB fact限制，但ChatDeliberationService仍按该旧假设裁剪availableRefs/taskMaterials/最近消息并可能抛出persistence错误；删除该第二层按字节裁剪及20万字符历史整条丢弃。保留原近期24条/较旧摘要的上下文组织（有source IDs/hash/truncated标记），不将摘要冒充全文；已授权目录不因8KiB任意裁剪，错主体/错会话/非授权消息仍隔离。该变化仅产生新的dispatch快照，不重写已持久化contextHash或重放旧副作用。
+
+AMQP/WS同一wire重复限制128KiB无独立依据，改为与transport真实MEDIUMBLOB列一致的16,777,215字节可表示边界（建表agent-command-transport SQL及inbox原边界）。默认值/配置可表示范围/核心wire/inbox使用同一常量，不再互相矛盾；保留明确配置的更小运维额度及拒绝无法落库的wire，不做生产DDL、不迁移为更大字段。租约、摘要/原字节、ACK持久顺序、实际broker错误与网络超时不变。只调整现有默认配置断言，不新增大包正例。
+
+### 个人工作空间与交付读取续核（2026-10-24）
+
+- 源码基线 API `2197fe32558807d8afe3cd27532c210fc3d7f656`，本节描述其续修候选，尚未上线。个人工作空间 `FileSystemPersonalWorkspaceStorage` 取消显式 `maximum/max-content-bytes` 存储额度，配置仅保留 enabled/rootDirectory；构造器仅接收 Path。`maxContentBytes()` 保留为现有消费者所需的实现可表示性声明，文件系统返回 Java `byte[]` 的 `Integer.MAX_VALUE`，不是人为业务配额；disabled 实现仍返回不可用。读取不可表示长度、实际IO错误不能伪造成功，不承诺无限内存或任意大文件可处理。旧配置不再用于容量准入。
+- 保留 MIME 语法防响应头注入（不是格式白名单）、实际长度/SHA-256、精确 owner/client/tenant、根inode、路径和符号链接、不可变原子存储保护；现有 `FileSystemPersonalWorkspaceStorageTest` / `PersonalWorkspaceStorageBoundaryTest` 验证隔离与篡改。删除原17字节越界拒绝断言，不新增超过旧上限的大体积正例。
+- 正式交付读取链补齐 `AgentTaskFormalDeliveryDaoImpl.listTaskDeliveries` 遗留的100条上限；limit须为正数（SQL参数含义），不再拒绝服务层完整读取。API272的真实MySQL事务回归发现此遗漏，不能把服务层单测成功当整链成功。
+- API272同时暴露3个Controller已有测试使用旧根级JSON路径；断言按当前公共R信封更新为 `$.data.*`，HTTP状态/`code`、可信身份转发及敏感字段不外泄断言继续保留。这是既有断言同步，不改变生产响应契约，也不删掉失败回归凑绿。

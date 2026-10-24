@@ -24,7 +24,7 @@ class AgentOutboxRelaySettingsTest {
         assertEquals(300_000, settings.maxBackoffMillis());
         assertEquals(20, settings.jitterPercent());
         assertEquals(7_000, settings.shutdownDrainMillis());
-        assertEquals(131_072, settings.maxWireBytes());
+        assertEquals(cn.jia.agent.common.AgentCommandAmqpContract.MAX_WIRE_BYTES, settings.maxWireBytes());
         assertEquals(200, settings.discoveryLimit(50));
     }
 
@@ -41,7 +41,7 @@ class AgentOutboxRelaySettingsTest {
         assertThrows(IllegalStateException.class, () -> settings(publish(
                 null, null, null, null, null, null, null, null, 0.5D, null, null, null, null)));
         assertThrows(IllegalStateException.class, () -> settings(publish(
-                null, null, null, null, null, null, null, null, null, null, null, null, 131_073)));
+                null, null, null, null, null, null, null, null, null, null, null, null, cn.jia.agent.common.AgentCommandAmqpContract.MAX_WIRE_BYTES + 1)));
     }
 
     @Test

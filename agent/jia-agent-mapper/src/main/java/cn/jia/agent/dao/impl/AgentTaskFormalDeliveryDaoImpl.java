@@ -61,7 +61,7 @@ public class AgentTaskFormalDeliveryDaoImpl implements AgentTaskFormalDeliveryDa
     public List<AgentTaskFormalDeliveryEntity> listTaskDeliveries(
             String tenantId, String clientId, String taskId, int limit) {
         scope(tenantId, clientId); id(taskId, "taskId");
-        if (limit < 1 || limit > 100) {
+        if (limit < 1) {
             throw new IllegalArgumentException("formal delivery list limit is invalid");
         }
         return mapper.selectTaskDeliveries(tenantId, clientId, taskId, limit);
