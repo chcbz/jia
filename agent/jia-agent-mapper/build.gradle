@@ -1,4 +1,5 @@
 dependencies {
+    implementation libs.spring.jdbc
     api project(':agent:jia-agent-api')
     api project(':common:jia-common-mapper')
     implementation libs.spring.jdbc

@@ -1241,3 +1241,38 @@ tasks.register('startupSchemaValidation', Test) {
     useJUnitPlatform()
     maxParallelForks = 1
 }
+
+// Explicit real-MySQL position lifecycle slice; never silently falls back to an in-memory database.
+def positionSkillsTestSourceSet = sourceSets.create('positionSkillsTest') {
+    java.srcDir 'src/positionSkillsTest/java'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(positionSkillsTestSourceSet.implementationConfigurationName) { extendsFrom configurations.testImplementation }
+configurations.named(positionSkillsTestSourceSet.runtimeOnlyConfigurationName) { extendsFrom configurations.testRuntimeOnly }
+tasks.register('positionSkillsTest', Test) {
+    group = 'verification'
+    dependsOn tasks.named(positionSkillsTestSourceSet.classesTaskName)
+    testClassesDirs = positionSkillsTestSourceSet.output.classesDirs
+    classpath = positionSkillsTestSourceSet.runtimeClasspath
+    useJUnitPlatform()
+}
+
+// Exact native security lane and persistent generation regressions for position/archive integration.
+def positionSecuritySourceSet = sourceSets.create('positionSecurityTest') {
+    java.srcDir 'src/test/java'
+    java.include 'cn/jia/agent/security/AgentRuntimeSecurityIntegrationTest.java'
+    java.include 'cn/jia/agent/security/AgentRuntimePersistentSessionFenceTest.java'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(positionSecuritySourceSet.implementationConfigurationName) { extendsFrom configurations.testImplementation }
+configurations.named(positionSecuritySourceSet.runtimeOnlyConfigurationName) { extendsFrom configurations.testRuntimeOnly }
+tasks.register('positionSecurityTest', Test) {
+    dependsOn tasks.named(positionSecuritySourceSet.classesTaskName)
+    testClassesDirs = positionSecuritySourceSet.output.classesDirs
+    classpath = positionSecuritySourceSet.runtimeClasspath
+    useJUnitPlatform()
+    maxParallelForks = 1
+    maxHeapSize = '384m'
+}

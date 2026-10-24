@@ -38,7 +38,12 @@ public class ArchiveReaderServiceImpl implements ArchiveReaderService {
     @Override
     @Transactional(readOnly = true)
     public ArchiveRepresentation<ArchiveCatalogDTO> catalog(String workId) {
-        Active active = requireActiveWork(workId, null);
+        return catalogEdition(workId, null);
+    }
+
+    @Override
+    public ArchiveRepresentation<ArchiveCatalogDTO> catalogEdition(String workId,String editionId) {
+        Active active = requireActiveWork(workId, editionId);
         ArchiveEditionRecord edition = active.edition();
         CatalogBlocks blocks = catalogBlocks(edition);
         ArchiveActiveEditionDTO activeEdition = new ArchiveActiveEditionDTO(
@@ -90,9 +95,14 @@ public class ArchiveReaderServiceImpl implements ArchiveReaderService {
         }
         ArchiveWorkRecord work = activeContent.work();
         ArchiveEditionRecord edition = activeContent.edition();
+        boolean historical = requestedEdition != null && !requestedEdition.equals(work.activeEditionId());
+        if (historical) {
+            if (!store.wasPublished(requestedEdition)) throw new ArchiveResourceNotFoundException();
+            edition = store.findEdition(requestedEdition);
+            if (edition == null) throw new ArchiveResourceNotFoundException();
+        }
         if (!Objects.equals(workId, work.workId()) || work.activeEditionId() == null
-                || !Objects.equals(work.activeEditionId(), edition.editionId())
-                || (requestedEdition != null && !requestedEdition.equals(work.activeEditionId()))
+                || (!historical && !Objects.equals(work.activeEditionId(), edition.editionId()))
                 || !"READY".equals(edition.importState()) || !work.workId().equals(edition.workId())
                 || !digest(edition.manifestSha256()) || !digest(edition.manifestFileSha256())
                 || !digest(edition.sourceSha256()) || edition.sourceUtf8ByteLength() <= 0

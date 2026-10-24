@@ -67,13 +67,13 @@ public class JdbcArchivePersonalDataStore implements ArchivePersonalDataStore {
                 WHERE work_id=? AND CAST(work_id AS BINARY)=CAST(? AS BINARY)
                   AND OCTET_LENGTH(work_id)=OCTET_LENGTH(?) FOR UPDATE
                 """, (rs, ignored) -> rs.getString(1), workId, workId, workId));
-        if (!editionId.equals(activeEdition)) return null;
+        if (activeEdition == null) return null;
         return first(jdbc.query("""
                 SELECT edition_id, manifest_sha256 FROM archive_edition
                 WHERE edition_id=? AND CAST(edition_id AS BINARY)=CAST(? AS BINARY)
                   AND OCTET_LENGTH(edition_id)=OCTET_LENGTH(?)
                   AND work_id=? AND CAST(work_id AS BINARY)=CAST(? AS BINARY)
-                  AND OCTET_LENGTH(work_id)=OCTET_LENGTH(?) AND import_state='READY' FOR UPDATE
+                  AND OCTET_LENGTH(work_id)=OCTET_LENGTH(?) AND import_state='READY' AND activated_at IS NOT NULL FOR UPDATE
                 """, (rs, ignored) -> new ActiveEdition(rs.getString(1), rs.getString(2)),
                 editionId, editionId, editionId, workId, workId, workId));
     }

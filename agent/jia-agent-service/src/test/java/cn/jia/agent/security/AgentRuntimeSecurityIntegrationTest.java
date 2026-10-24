@@ -351,6 +351,41 @@ class AgentRuntimeSecurityIntegrationTest {
 
 
 
+    @RestController
+    static final class ArchivePositionProbe {
+        @GetMapping({"/internal/archive/v1/jobs", "/internal/archive/v1/jobs/{id}/source", "/internal/archive/v1/jobs/{id}/result"})
+        Map<String,String> get(Authentication a) { return Map.of("agent",a.getName()); }
+        @PostMapping("/internal/archive/v1/jobs/{id}/result")
+        Map<String,String> post(Authentication a) { return Map.of("agent",a.getName()); }
+    }
+    @Test void archiveNativeLaneRejectsJwtApiKeysStaleSessionsAndMethodPathExpansion() throws Exception {
+        var archive=MockMvcBuilders.standaloneSetup(new ArchivePositionProbe()).addFilters(context.getBean(FilterChainProxy.class)).build();
+        for(String path:List.of("/internal/archive/v1/jobs","/internal/archive/v1/jobs/job-1/source","/internal/archive/v1/jobs/job-1/result")) {
+            archive.perform(headers(get(path),A,"runtime-a",TOKEN_A)).andExpect(status().isOk());
+            archive.perform(get(path).header("Authorization","Bearer browser-jwt")).andExpect(status().isUnauthorized());
+            archive.perform(get(path).header("X-API-Key","old-secret")).andExpect(status().isUnauthorized());
+            archive.perform(headers(get(path),A,"runtime-b",TOKEN_A)).andExpect(status().isUnauthorized());
+        }
+        archive.perform(headers(post("/internal/archive/v1/jobs/job-1/result"),A,"runtime-a",TOKEN_A)).andExpect(status().isOk());
+        for(String path:List.of("/internal/archive/v1/jobs","/internal/archive/v1/jobs/job-1/source","/internal/archive/v1/jobs/job-1/result/extra"))
+            archive.perform(headers(post(path),A,"runtime-a",TOKEN_A)).andExpect(status().isForbidden());
+        verifyNoInteractions(keys);
+    }
+    @Test void positionNativeCommandsRequireCurrentRuntimeEvenForBrowserJwtAndReceiptRecovery() throws Exception {
+        var service=mock(cn.jia.agent.position.PositionSkillRuntimeService.class);
+        when(service.prepare(any(),eq(A))).thenReturn(List.of());when(service.commands(any(),any())).thenReturn(List.of());
+        when(service.outcome(any(),eq("grant1"))).thenReturn(Map.of("state","INSTALLED"));
+        var position=MockMvcBuilders.standaloneSetup(new cn.jia.agent.api.PositionSkillRuntimeController(service,auth)).addFilters(context.getBean(FilterChainProxy.class)).build();
+        for(String path:List.of("/internal/agent/position-skills","/internal/agent/position-skills/grant1/receipt")) {
+            position.perform(headers(get(path),A,"runtime-a",TOKEN_A)).andExpect(status().isOk());
+            position.perform(get(path).header("Authorization","Bearer browser-jwt")).andExpect(status().isUnauthorized());
+            position.perform(get(path).header("X-API-Key","legacy")).andExpect(status().isUnauthorized());
+            position.perform(headers(get(path),A,"runtime-b",TOKEN_A)).andExpect(status().isUnauthorized());
+        }
+        position.perform(headers(get("/internal/agent/position-skills/grant1/receipt/extra"),A,"runtime-a",TOKEN_A)).andExpect(status().isForbidden());
+        verifyNoInteractions(keys);
+    }
+
     @Test
     void skillPackageUsesActualNativeChainAndNeverLegacyKeyOrProductInstallAsRuntimeProof() throws Exception {
         var installs=mock(cn.jia.agent.skill.SkillManagementService.class);

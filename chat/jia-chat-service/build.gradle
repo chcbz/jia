@@ -577,3 +577,64 @@ tasks.register('startupSchemaValidation', Test) {
     useJUnitPlatform()
     maxParallelForks = 1
 }
+
+// Position/archive production SQL against an explicitly owned isolated MySQL.
+def archiveMaintenanceSourceSet = sourceSets.create('archiveMaintenanceTest') {
+    java.setSrcDirs(['src/archiveMaintenanceTest/java'])
+    resources.setSrcDirs(['src/archiveMaintenanceTest/resources'])
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(archiveMaintenanceSourceSet.implementationConfigurationName) { extendsFrom configurations.testImplementation }
+configurations.named(archiveMaintenanceSourceSet.runtimeOnlyConfigurationName) { extendsFrom configurations.testRuntimeOnly }
+dependencies {
+    add(archiveMaintenanceSourceSet.implementationConfigurationName, project(':economy:jia-economy-mapper'))
+    add(archiveMaintenanceSourceSet.implementationConfigurationName, project(':user:jia-user-mapper'))
+    add(archiveMaintenanceSourceSet.implementationConfigurationName, project(':user:jia-user-service'))
+    add(archiveMaintenanceSourceSet.implementationConfigurationName, 'org.apache.tomcat.embed:tomcat-embed-core')
+}
+tasks.register('archiveMaintenanceTest', Test) {
+    dependsOn tasks.named(archiveMaintenanceSourceSet.classesTaskName)
+    testClassesDirs = archiveMaintenanceSourceSet.output.classesDirs
+    classpath = archiveMaintenanceSourceSet.runtimeClasspath
+    useJUnitPlatform()
+    maxParallelForks = 1
+    maxHeapSize = '384m'
+    def skillScript = System.getenv('CYF_ARCHIVE_SKILL_SCRIPT')
+    if (skillScript) inputs.file(skillScript)
+    def clientRoot = System.getenv('CYF_ARCHIVE_CLIENT_ROOT')
+    if (clientRoot) inputs.files(fileTree(clientRoot + '/conf') { exclude '**/node_modules/**' })
+    def skillPackage = System.getenv('CYF_ARCHIVE_SKILL_PACKAGE')
+    if (skillPackage) inputs.file(skillPackage)
+}
+
+// Reader/importer/private-data regressions affected by historical-edition access.
+// Reuses existing test sources and fixtures without compiling unrelated chat suites.
+def archiveReaderRegressionSourceSet = sourceSets.create('archiveReaderRegression') {
+    java.setSrcDirs(['src/test/java'])
+    java.include 'cn/jia/chat/archive/content/ArchiveFixtureLoader.java'
+    java.include 'cn/jia/chat/archive/content/ArchiveManifestBundle.java'
+    java.include 'cn/jia/chat/archive/content/ArchiveGoldenSummary.java'
+    java.include 'cn/jia/chat/archive/content/ArchiveGenericManifestTest.java'
+    java.include 'cn/jia/chat/archive/content/ArchiveManifestLoaderTest.java'
+    java.include 'cn/jia/chat/archive/service/ArchiveReaderServiceTest.java'
+    java.include 'cn/jia/chat/archive/service/ArchiveContentImporterTest.java'
+    java.include 'cn/jia/chat/archive/service/ArchivePersonalDataServiceTest.java'
+    java.include 'cn/jia/chat/archive/http/ArchiveControllerTest.java'
+    java.include 'cn/jia/chat/archive/http/ArchivePersonalDataControllerTest.java'
+    java.include 'cn/jia/chat/archive/config/ArchiveReaderAccessPolicyTest.java'
+    resources.setSrcDirs(['src/test/resources'])
+    resources.include 'archive/**'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(archiveReaderRegressionSourceSet.implementationConfigurationName) { extendsFrom configurations.testImplementation }
+configurations.named(archiveReaderRegressionSourceSet.runtimeOnlyConfigurationName) { extendsFrom configurations.testRuntimeOnly }
+tasks.register('archiveReaderRegression', Test) {
+    dependsOn tasks.named(archiveReaderRegressionSourceSet.classesTaskName)
+    testClassesDirs = archiveReaderRegressionSourceSet.output.classesDirs
+    classpath = archiveReaderRegressionSourceSet.runtimeClasspath
+    useJUnitPlatform()
+    maxParallelForks = 1
+    maxHeapSize = '384m'
+}

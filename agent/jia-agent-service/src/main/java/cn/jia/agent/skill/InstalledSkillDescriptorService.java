@@ -30,6 +30,9 @@ public final class InstalledSkillDescriptorService implements InstalledSkillDesc
     public void setManagement(SkillManagementService management,cn.jia.economy.mapper.EconomySkillManagementMapper managed) {
         this.management=management;this.managed=managed;
     }
+    private cn.jia.agent.position.PositionInstalledSkills positionSkills;
+    @org.springframework.beans.factory.annotation.Autowired(required=false)
+    public void setPositionSkills(cn.jia.agent.position.PositionInstalledSkills value){this.positionSkills=value;}
     private SkillCostInfoSource costs;
     @org.springframework.beans.factory.annotation.Autowired
     public void setCostInfoSource(SkillCostInfoSource costs) {this.costs=Objects.requireNonNull(costs);}
@@ -62,6 +65,7 @@ public final class InstalledSkillDescriptorService implements InstalledSkillDesc
                 }
             }
             if(management!=null)result.addAll(management.descriptors(scope));
+            if(positionSkills!=null)result.addAll(positionSkills.read(scope));
             // Decoration changes no package/manifest identity or readiness reason. Snapshot consumers
             // retain these informational bytes at admission; a later price update does not invalidate work.
             if(costs!=null) {
