@@ -573,6 +573,7 @@ class JuyitingWorkflowMySqlTest {
             config.addMapper(ChatDeliberationMapper.class);
             config.addMapper(cn.jia.chat.mapper.ChatConversationMapper.class);
             config.addMapper(cn.jia.chat.mapper.ChatMessageMapper.class);
+            config.addMapper(cn.jia.chat.mapper.MemoryPublicationMapper.class);
             var factory=new com.baomidou.mybatisplus.extension.spring.MybatisSqlSessionFactoryBean();
             factory.setDataSource(jdbc.getDataSource()); factory.setConfiguration(config);
             var global=new com.baomidou.mybatisplus.core.config.GlobalConfig();
@@ -723,6 +724,10 @@ class JuyitingWorkflowMySqlTest {
             org.springframework.test.util.ReflectionTestUtils.setField(conversations,"baseMapper",domain.sql.getMapper(cn.jia.chat.mapper.ChatConversationMapper.class));
             var messages=new cn.jia.chat.dao.impl.ChatMessageDaoImpl();
             org.springframework.test.util.ReflectionTestUtils.setField(messages,"baseMapper",domain.sql.getMapper(cn.jia.chat.mapper.ChatMessageMapper.class));
+            var publications=new cn.jia.chat.dao.impl.MemoryPublicationDaoImpl();
+            org.springframework.test.util.ReflectionTestUtils.setField(publications,"mapper",domain.sql.getMapper(cn.jia.chat.mapper.MemoryPublicationMapper.class));
+            org.springframework.test.util.ReflectionTestUtils.setField(publications,"conversationDao",conversations);
+            org.springframework.test.util.ReflectionTestUtils.setField(messages,"memoryPublicationDao",publications);
             var agents=mock(cn.jia.agent.service.AgentService.class);
             when(agents.getTask("task")).thenAnswer(call->{var task=new cn.jia.agent.entity.AgentTaskDTO();task.setId("task");task.setTitle("修改验收测试");
                 task.setTenantId("0");task.setClientId("client");task.setAssignedAgentId("wuyong");

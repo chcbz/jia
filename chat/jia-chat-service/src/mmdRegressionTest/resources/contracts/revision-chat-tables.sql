@@ -33,6 +33,7 @@ CREATE TABLE chat_conversation (
 -- 聊天消息表
 CREATE TABLE chat_message (
   id bigint NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  data_domain_id varchar(64) DEFAULT NULL,
   conversation_id varchar(100) NOT NULL COMMENT '会话ID',
   message_type varchar(20) DEFAULT NULL COMMENT '消息类型（USER/ASSISTANT/SYSTEM）',
   content text COMMENT '消息内容',
@@ -71,3 +72,23 @@ CREATE TABLE agent_task_thread (
   UNIQUE KEY uk_task_thread_conversation (tenant_id, client_id, conversation_id),
   KEY idx_task_thread_task (tenant_id, client_id, task_id, status, create_time)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Scoped task to shared conversation binding';
+
+-- Durable message signal participates in the same real MySQL transaction.
+CREATE TABLE chat_memory_work (
+      id BIGINT NOT NULL AUTO_INCREMENT, tenant_id VARCHAR(50) NOT NULL,
+      scope_mode VARCHAR(20) NOT NULL, scope_key VARCHAR(64) NOT NULL,
+      owner_jiacn VARCHAR(50) NOT NULL, conversation_id VARCHAR(100) NOT NULL,
+      lifecycle_generation BIGINT NOT NULL, state VARCHAR(20) NOT NULL,
+      due_at BIGINT NOT NULL, lease_owner VARCHAR(100) DEFAULT NULL,
+      lease_until BIGINT DEFAULT NULL, attempts INT NOT NULL DEFAULT 0,
+      wake_requested TINYINT(1) NOT NULL DEFAULT 0,
+      last_error VARCHAR(1000) DEFAULT NULL,
+      create_time BIGINT NOT NULL, update_time BIGINT NOT NULL,
+      PRIMARY KEY (id),
+      UNIQUE KEY uk_memory_work_scope
+        (tenant_id, scope_mode, scope_key, owner_jiacn, conversation_id),
+      KEY idx_memory_work_claim (state, due_at, lease_until, id),
+      CONSTRAINT chk_memory_work_mode CHECK (scope_mode IN ('LEGACY_CLIENT', 'DOMAIN')),
+      CONSTRAINT chk_memory_work_state CHECK (state IN ('READY', 'LEASED', 'RETRY', 'DONE', 'DEAD')),
+      CONSTRAINT chk_memory_work_attempts CHECK (attempts >= 0)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
