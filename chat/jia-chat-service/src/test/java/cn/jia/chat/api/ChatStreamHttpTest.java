@@ -40,8 +40,8 @@ class ChatStreamHttpTest {
         var conversation = new ChatConversationEntity().setId(42L).setJiacn("owner")
                 .setTitle("existing title").setConversationType("juyiting").setLifecycleGeneration(1L);
         conversation.setTenantId("0"); conversation.setClientId("client");
-        when(conversations.get("42")).thenReturn(conversation);
-        when(conversations.isLiveGeneration("owner", "client", "42", 1L)).thenReturn(true);
+        when(conversations.get(any(cn.jia.core.tenant.UserAdmissionScope.class), eq("42"))).thenReturn(conversation);
+        when(conversations.isLiveGeneration(any(cn.jia.core.tenant.UserAdmissionScope.class), eq("42"), eq(1L))).thenReturn(true);
         redis = mock(RedisService.class);
         when(redis.subscribeToChannel("42")).thenReturn(Flux.never());
         var identity = mock(HumanSenderIdentityResolver.class);
@@ -122,7 +122,7 @@ class ChatStreamHttpTest {
     }
 
     private void frames(Flux<String> stream) {
-        when(relay.relay(any(), eq("42"), any(), any())).thenReturn(new JuyitingAgentRelayResult(true, Mono.just(true), stream));
+        when(relay.relay(any(), any(), eq("42"), any(), any())).thenReturn(new JuyitingAgentRelayResult(true, Mono.just(true), stream));
     }
     private List<Map> read() throws Exception {
         String requestJson = "{\"protocolVersion\":1,\"requestId\":\"transport\",\"data\":{\"content\":\"hello\",\"conversationId\":\"42\",\"conversationType\":\"juyiting\",\"requestRevision\":\"1\"}}";

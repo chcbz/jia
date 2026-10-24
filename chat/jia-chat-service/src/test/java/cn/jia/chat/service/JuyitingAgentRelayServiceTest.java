@@ -544,22 +544,25 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
 
     @Test
     void capturesNondefaultTenantOwnerClientBeforeThreadLocalIsCleared() {
+        UserAdmissionScope alternateScope=new UserAdmissionScope(
+                new BusinessScope(TenantId.of("1"),DataDomainId.of("cyf"),"owner-alt","client-alt"),
+                2L,0L,0L,0L,0L);
         EsContext context = new EsContext();
-        context.setTenantId("tenant-alt"); context.setJiacn("owner-alt"); context.setClientId("client-alt");
+        context.setTenantId("1"); context.setJiacn("owner-alt"); context.setClientId("client-alt");
         EsContextHolder.setContext(context);
         ChatConversationEntity alternate = conversation("public", "public", null, List.of("agent-wuyong"));
-        alternate.setTenantId("tenant-alt"); alternate.setJiacn("owner-alt"); alternate.setClientId("client-alt");
-        when(chatConversationService.getOwned("owner-alt", "client-alt", "1001")).thenReturn(alternate);
-        when(chatConversationService.isLiveGeneration("owner-alt", "client-alt", "1001", 1L)).thenReturn(true);
+        alternate.setTenantId("1"); alternate.setJiacn("owner-alt"); alternate.setClientId("client-alt");
+        when(chatConversationService.get(alternateScope, "1001")).thenReturn(alternate);
+        when(chatConversationService.isLiveGeneration(alternateScope, "1001", 1L)).thenReturn(true);
         stubAdmission(List.of("agent-wuyong"), false);
-        when(deliberationService.getRequest("tenant-alt", "owner-alt", "client-alt", "req-1"))
+        when(deliberationService.getRequest("1", "owner-alt", "client-alt", "req-1"))
                 .thenReturn(view("COMPLETED", List.of("FINAL_PERSISTED"), List.of("agent-wuyong")));
         ServerResolvedSender trusted = new ServerResolvedSender(ServerResolvedSender.USER_TYPE, "Alternate Owner",
                 "owner-alt", "client-alt", DisplayNameSource.NICKNAME);
-        Flux<String> stream = service().relay(request("public", null, List.of("agent-wuyong")), "1001", trusted, InteractionRoute.CHAT).stream();
+        Flux<String> stream = service().relay(alternateScope, request("public", null, List.of("agent-wuyong")), "1001", trusted, InteractionRoute.CHAT).stream();
         EsContextHolder.clearContext();
         assertEquals(1, stream.collectList().block(Duration.ofSeconds(2)).size());
-        verify(deliberationService).getRequest("tenant-alt", "owner-alt", "client-alt", "req-1");
+        verify(deliberationService).getRequest("1", "owner-alt", "client-alt", "req-1");
         verify(deliberationService, never()).getRequest("0", "tester", "web-client", "req-1");
     }
 
@@ -615,7 +618,7 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
     @Test
     void privateInspectAdmissionKeepsItsRouteAndCompletesFromAuthoritativeSnapshot() {
         stubLiveConversation();
-        when(chatConversationService.getOwned("tester", "web-client", "1001"))
+        when(chatConversationService.get(areaZeroScope(), "1001"))
                 .thenReturn(conversation("private", "agent:agent-wuyong", null, List.of("agent-wuyong")));
         stubAdmission(List.of("agent-wuyong"), false, InteractionRoute.INSPECT);
         ChatDeliberationService.TurnView turn = new ChatDeliberationService.TurnView("turn-agent-wuyong", "req-1", "1", "1001", "1", "agent-wuyong",
@@ -623,7 +626,7 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
         currentView.set(new ChatDeliberationService.RequestView("req-1", "1", "1001", "1", "11", "COMPLETED", "2", List.of(turn), List.of()));
         ChatMessageDTO request = request("private", null, List.of("agent-wuyong"));
         request.setConversationScopeKey("agent:agent-wuyong");
-        assertEquals(1, service().relay(request, "1001", sender(), InteractionRoute.INSPECT)
+        assertEquals(1, service().relay(areaZeroScope(), request, "1001", sender(), InteractionRoute.INSPECT)
                 .stream().collectList().block(Duration.ofSeconds(2)).size());
         verify(deliberationService).admit(eq("0"), any(), eq("1001"), eq(1L), any(), eq(InteractionRoute.INSPECT), eq(request), any());
         assertEquals(0, broker.subscriberCount("1001"));
@@ -672,19 +675,19 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
         stubLiveConversation();
         when(agentService.listTaskWritableMemberAgentIds("0", "web-client", "task-7"))
                 .thenReturn(List.of("agent-wuyong"));
-        when(chatConversationService.getOwned("tester", "web-client", "1001"))
+        when(chatConversationService.get(areaZeroScope(), "1001"))
                 .thenReturn(conversation("bounty", "task:task-7", "task-7", List.of("agent-wuyong")));
         stubAdmission(List.of("agent-wuyong"), false);
-        return service().relay(request("bounty", "task-7", List.of("agent-wuyong")),
+        return service().relay(areaZeroScope(), request("bounty", "task-7", List.of("agent-wuyong")),
                 "1001", sender(), InteractionRoute.CHAT).stream();
     }
 
     private Flux<String> preparedStream(List<String> targets) {
         stubLiveConversation();
-        when(chatConversationService.getOwned("tester", "web-client", "1001"))
+        when(chatConversationService.get(areaZeroScope(), "1001"))
                 .thenReturn(conversation("public", "public", null, targets));
         stubAdmission(targets, false);
-        return service().relay(request("public", null, targets), "1001", sender(), InteractionRoute.CHAT).stream();
+        return service().relay(areaZeroScope(), request("public", null, targets), "1001", sender(), InteractionRoute.CHAT).stream();
     }
 
     private void publish(Map<String, ?> event) {
