@@ -281,7 +281,7 @@ class ChatMessageScopedQueryTest {
                 () -> dao.findByConversationIdForMaintenance("25"));
 
         assertEquals(List.of("20", "21", "22"),
-                dao.findPendingConversationIds("PENDING", 20));
+                dao.findPendingConversationIds("PENDING", 20, 0L));
         assertEquals(Set.of(OWNER, "Legacy-Null", "Legacy-Empty", "Mixed"),
                 Set.copyOf(dao.findActiveJiacns(50)));
     }
