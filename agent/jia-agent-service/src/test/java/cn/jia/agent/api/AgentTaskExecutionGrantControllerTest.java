@@ -63,8 +63,8 @@ class AgentTaskExecutionGrantControllerTest {
 
             AgentTaskExecutionGrantException failure=assertThrows(
                     AgentTaskExecutionGrantException.class,
-                    () -> controller.assignTask("task-1",new cn.jia.core.entity.JsonRequest<>(1, "test-request", request),"key-selector",
-                            jwt("owner","client")),selector);
+                    () -> withScope(() -> controller.assignTask("task-1",new cn.jia.core.entity.JsonRequest<>(1, "test-request", request),"key-selector",
+                            jwt("owner","client"))),selector);
 
             assertSame(rejected,failure,selector);
             verify(grants).assignAndGrant(
@@ -91,13 +91,19 @@ class AgentTaskExecutionGrantControllerTest {
         controller.setTaskExecutionGrants(grants); AgentTaskAssignDTO request=request();
         when(grants.assignAndGrant(any(),eq("task-1"),eq("key-1"),same(request)))
                 .thenReturn(new AgentTaskExecutionGrantDTO().setGrantId("grant-1"));
-        Object raw=controller.assignTask("task-1",new cn.jia.core.entity.JsonRequest<>(1, "test-request", request),"key-1",jwt("owner","client"));
+        Object raw=withScope(() -> controller.assignTask("task-1",new cn.jia.core.entity.JsonRequest<>(1, "test-request", request),"key-1",jwt("owner","client")));
         assertInstanceOf(ResponseEntity.class,raw);
         verify(grants).assignAndGrant(new AgentTaskExecutionGrantService.Scope("0","client","owner"),
                 "task-1","key-1",request);
     }
 
+    private static <T> T withScope(java.util.function.Supplier<T> action) {
+        return cn.jia.core.tenant.TrustedTenantContext.withScope(
+                new cn.jia.core.tenant.BusinessScope(cn.jia.core.tenant.TenantId.of("0"),
+                        cn.jia.core.tenant.DataDomainId.of("cyf"), "owner", "client"), action);
+    }
+
     private static AgentTaskAssignDTO request(){AgentTaskAssignDTO r=new AgentTaskAssignDTO();r.setAgentId("agent-1");r.setWorkflowVersion(2);r.setBusinessAction("assign_and_start");r.setExpectedTaskVersion(0L);r.setRequirementRevision(1L);r.setRequestedOperations(List.of("GENERATE_IMAGE"));return r;}
     private static AgentTaskAssignDTO selectorOnly(String selector){AgentTaskAssignDTO r=new AgentTaskAssignDTO();r.setAgentId("agent-1");r.setInitialOperation(selector);return r;}
-    private static JwtAuthenticationToken jwt(String owner,String client){Jwt jwt=Jwt.withTokenValue("token").header("alg","none").claim("jiacn",owner).claim("client_id",client).issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(60)).build();return new JwtAuthenticationToken(jwt,List.of());}
+    private static JwtAuthenticationToken jwt(String owner,String client){Jwt jwt=Jwt.withTokenValue("token").header("alg","none").subject("login-owner").claim("tenant_id","0").claim("data_domain_id","cyf").claim("jiacn",owner).claim("client_id",client).issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(60)).build();return new JwtAuthenticationToken(jwt,List.of());}
 }

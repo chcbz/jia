@@ -189,7 +189,7 @@ class JuyitingWorkflowMySqlTest {
         jdbc.execute("CREATE TABLE agent_task_execution_grant (tenant_id VARCHAR(50),client_id VARCHAR(50),owner_jiacn VARCHAR(50),task_id VARCHAR(100),state VARCHAR(32),assignment_revision BIGINT)");
         jdbc.update("INSERT INTO agent_task_execution_grant VALUES ('0','client','owner','task','ACTIVE',1)");
         jdbc.execute("CREATE TABLE chat_conversation_asset (tenant_id VARCHAR(50),owner_jiacn VARCHAR(50),client_id VARCHAR(50),conversation_id VARCHAR(100),conversation_generation BIGINT,request_id VARCHAR(100),step_id VARCHAR(100),execution_id VARCHAR(100),run_id VARCHAR(100),output_id VARCHAR(100),content_mime_type VARCHAR(127),sha256 CHAR(64),byte_length BIGINT)");
-        jdbc.execute("CREATE TABLE chat_conversation (id BIGINT,tenant_id VARCHAR(50),jiacn VARCHAR(50),client_id VARCHAR(50),deleted_at BIGINT,lifecycle_generation BIGINT,task_id VARCHAR(100),conversation_type VARCHAR(32),conversation_scope_type VARCHAR(32),conversation_scope_key VARCHAR(100))");
+        jdbc.execute("CREATE TABLE chat_conversation (data_scope_mode VARCHAR(32) NOT NULL DEFAULT 'LEGACY_CLIENT',data_domain_id VARCHAR(64),id BIGINT,tenant_id VARCHAR(50),jiacn VARCHAR(50),client_id VARCHAR(50),deleted_at BIGINT,lifecycle_generation BIGINT,task_id VARCHAR(100),conversation_type VARCHAR(32),conversation_scope_type VARCHAR(32),conversation_scope_key VARCHAR(100))");
         jdbc.execute("CREATE TABLE chat_request (tenant_id VARCHAR(50) COLLATE utf8mb4_0900_bin NOT NULL,owner_jiacn VARCHAR(50) COLLATE utf8mb4_0900_bin NOT NULL,client_id VARCHAR(50) COLLATE utf8mb4_0900_bin NOT NULL,request_id VARCHAR(100) COLLATE utf8mb4_0900_bin NOT NULL,request_revision BIGINT NOT NULL,user_message_id BIGINT NOT NULL,conversation_id VARCHAR(100),conversation_generation BIGINT,PRIMARY KEY(tenant_id,owner_jiacn,client_id,request_id,request_revision)) ENGINE=InnoDB");
         jdbc.execute("CREATE TABLE chat_message (id BIGINT,tenant_id VARCHAR(50),jiacn VARCHAR(50),client_id VARCHAR(50),conversation_id VARCHAR(100),content MEDIUMTEXT,metadata MEDIUMTEXT,message_type VARCHAR(32),sender_type VARCHAR(32))");
     }
@@ -206,7 +206,7 @@ class JuyitingWorkflowMySqlTest {
         Supplier<cn.jia.chat.archive.conversation.ChatConversationArchiveStore.Source> read = () ->
                 store.findAuthorizedOutputSource(scope, "42", 3, "task", "agent", "producer", "step", "output", "a".repeat(64));
         assertNull(read.get()); // async projection not ready: no invented asset, no writes
-        jdbc.update("INSERT INTO chat_conversation VALUES (42,'0','owner','client',NULL,3,'task','juyiting','bounty','task:task','[\"agent\"]')");
+        jdbc.update("INSERT INTO chat_conversation(id,tenant_id,jiacn,client_id,deleted_at,lifecycle_generation,task_id,conversation_type,conversation_scope_type,conversation_scope_key,target_agent_ids) VALUES (42,'0','owner','client',NULL,3,'task','juyiting','bounty','task:task','[\"agent\"]')");
         jdbc.update("INSERT INTO chat_conversation_asset VALUES ('0','owner','client','42',3,'producer','step','execution','run','output','image/png',?,10,'asset',1)", "a".repeat(64));
         jdbc.update("INSERT INTO chat_interaction_step VALUES ('step','0','owner','client','producer',1,'42',3,'task','EXECUTE','RESULT_COMMITTED')");
         jdbc.update("INSERT INTO chat_step_execution_link VALUES ('0','owner','client','step','execution','RESULT_COMMITTED')");
@@ -461,7 +461,7 @@ class JuyitingWorkflowMySqlTest {
         jdbc.execute("ALTER TABLE agent_task_meta ADD id BIGINT NOT NULL AUTO_INCREMENT UNIQUE, ADD required_abilities TEXT, ADD assigned_agent_id VARCHAR(100), ADD reward DECIMAL(18,2), ADD assigned_at BIGINT, ADD started_at BIGINT, ADD completed_at BIGINT, ADD failure_reason TEXT, ADD create_time BIGINT DEFAULT 1, ADD update_time BIGINT DEFAULT 1");
         jdbc.execute("ALTER TABLE agent_task_meta CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci");
         jdbc.execute("ALTER TABLE agent_task_formal_delivery ADD revision BIGINT NOT NULL DEFAULT 1");
-        jdbc.execute("CREATE TABLE task_plan(id BIGINT,jiacn VARCHAR(50),client_id VARCHAR(50),name VARCHAR(100),description TEXT,amount DECIMAL(18,2),create_time BIGINT,update_time BIGINT)");
+        jdbc.execute("CREATE TABLE task_plan(tenant_id VARCHAR(50) NOT NULL DEFAULT '0',id BIGINT,jiacn VARCHAR(50),client_id VARCHAR(50),name VARCHAR(100),description TEXT,amount DECIMAL(18,2),create_time BIGINT,update_time BIGINT)");
         // The actual mapper's keyword expression includes these owner-scoped collaborators.
         jdbc.execute("CREATE TABLE agent_task_member(id BIGINT,tenant_id VARCHAR(50),client_id VARCHAR(50),owner_jiacn VARCHAR(50),task_id VARCHAR(100),agent_id VARCHAR(100),member_role VARCHAR(24),member_status VARCHAR(24))");
         jdbc.execute("CREATE TABLE agent_runtime(tenant_id VARCHAR(50),client_id VARCHAR(50),owner_jiacn VARCHAR(50),agent_id VARCHAR(100),name VARCHAR(100))");
