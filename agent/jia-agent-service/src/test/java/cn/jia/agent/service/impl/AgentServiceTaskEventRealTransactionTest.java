@@ -374,6 +374,19 @@ class AgentServiceTaskEventRealTransactionTest {
         interceptor.setTransactionAttributeSource(new AnnotationTransactionAttributeSource());
         ProxyFactory factory = new ProxyFactory(target);
         factory.setInterfaces(AgentService.class);
+        // Model the authenticated boundary; keep the real transaction interceptor and database.
+        factory.addAdvice((org.aopalliance.intercept.MethodInterceptor) invocation ->
+                cn.jia.core.tenant.TrustedTenantContext.withScope(
+                        new cn.jia.core.tenant.BusinessScope(cn.jia.core.tenant.TenantId.of("0"),
+                                cn.jia.core.tenant.DataDomainId.of("cyf"), "juyiting", "jia_client"), () -> {
+                            try {
+                                return invocation.proceed();
+                            } catch (RuntimeException | Error failure) {
+                                throw failure;
+                            } catch (Throwable failure) {
+                                throw new IllegalStateException(failure);
+                            }
+                        }));
         factory.addAdvice(interceptor);
         return (AgentService) factory.getProxy();
     }

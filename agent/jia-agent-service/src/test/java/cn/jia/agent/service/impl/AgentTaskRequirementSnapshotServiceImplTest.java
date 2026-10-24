@@ -175,7 +175,8 @@ class AgentTaskRequirementSnapshotServiceImplTest {
                 new AgentTaskRequirementSnapshotService.CurrentSnapshot("task-1",Long.MAX_VALUE,
                         Long.MAX_VALUE,"Title",null,"a".repeat(64),"CREATE"));
         MockMvc mvc=MockMvcBuilders.standaloneSetup(
-                new AgentTaskRequirementSnapshotController(snapshots)).build();
+                new AgentTaskRequirementSnapshotController(snapshots))
+                .addFilters(trustedFixtureBoundary()).build();
 
         mvc.perform(get("/agent/tasks/task-1/requirements/current")
                         .principal(jwtToken("owner","client"))
@@ -198,7 +199,8 @@ class AgentTaskRequirementSnapshotServiceImplTest {
             throws Exception {
         AgentTaskRequirementSnapshotService snapshots=mock(AgentTaskRequirementSnapshotService.class);
         MockMvc mvc=MockMvcBuilders.standaloneSetup(
-                new AgentTaskRequirementSnapshotController(snapshots)).build();
+                new AgentTaskRequirementSnapshotController(snapshots))
+                .addFilters(trustedFixtureBoundary()).build();
 
         mvc.perform(get("/agent/tasks/task-1/requirements/current"))
                 .andExpect(status().isUnauthorized())
@@ -211,8 +213,9 @@ class AgentTaskRequirementSnapshotServiceImplTest {
                 .andExpect(jsonPath("$.code").value("BAD_REQUEST"));
         AgentTaskRequirementSnapshotController direct=
                 new AgentTaskRequirementSnapshotController(snapshots);
-        RuntimeException invalidTask=assertThrows(RuntimeException.class, () -> direct.current(
-                "task-1 ",new MockHttpServletRequest(),jwtToken("owner","client")));
+        RuntimeException invalidTask=assertThrows(RuntimeException.class, () -> cn.jia.core.tenant.TrustedTenantContext.withScope(
+                fixtureScope("owner","client"), () -> direct.current(
+                "task-1 ",new MockHttpServletRequest(),jwtToken("owner","client"))));
         assertEquals(400,direct.badRequest(invalidTask).getStatusCode().value());
         assertEquals("private, no-store",direct.badRequest(invalidTask)
                 .getHeaders().getFirst(HttpHeaders.CACHE_CONTROL));
@@ -271,16 +274,43 @@ class AgentTaskRequirementSnapshotServiceImplTest {
 
     private static JwtAuthenticationToken jwtToken(String owner,String client) {
         Jwt token=Jwt.withTokenValue("token").header("alg","none")
+                .claim("tenant_id","0").claim("data_domain_id","cyf")
                 .claim("jiacn",owner).claim("client_id",client).build();
         JwtAuthenticationToken authentication=new JwtAuthenticationToken(token);
         authentication.setAuthenticated(true);
         return authentication;
     }
 
+    private static cn.jia.core.tenant.BusinessScope fixtureScope(String owner, String client) {
+        return new cn.jia.core.tenant.BusinessScope(cn.jia.core.tenant.TenantId.of("0"),
+                cn.jia.core.tenant.DataDomainId.of("cyf"), owner, client);
+    }
+
+    private static jakarta.servlet.Filter trustedFixtureBoundary() {
+        return (request, response, chain) -> {
+            var principal = ((jakarta.servlet.http.HttpServletRequest) request).getUserPrincipal();
+            if (!(principal instanceof JwtAuthenticationToken jwt)) {
+                chain.doFilter(request, response);
+                return;
+            }
+            try {
+                cn.jia.core.tenant.TrustedTenantContext.runWithScopeChecked(
+                        fixtureScope(jwt.getToken().getClaimAsString("jiacn"),
+                                jwt.getToken().getClaimAsString("client_id")),
+                        () -> chain.doFilter(request, response));
+            } catch (java.io.IOException | jakarta.servlet.ServletException failure) {
+                throw failure;
+            } catch (Exception failure) {
+                throw new jakarta.servlet.ServletException(failure);
+            }
+        };
+    }
+
     private record FailureCase(AgentTaskRequirementReadException.Reason reason,int status,String code) { }
 
     private static void jwt(String owner,String client) {
         Jwt token=Jwt.withTokenValue("token").header("alg","none")
+                .claim("tenant_id","0").claim("data_domain_id","cyf")
                 .claim("jiacn",owner).claim("client_id",client).build();
         var authentication=new JwtAuthenticationToken(token);
         authentication.setAuthenticated(true);
