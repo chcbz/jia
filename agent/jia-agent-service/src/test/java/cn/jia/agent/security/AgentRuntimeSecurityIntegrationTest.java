@@ -382,6 +382,12 @@ class AgentRuntimeSecurityIntegrationTest {
             position.perform(get(path).header("X-API-Key","legacy")).andExpect(status().isUnauthorized());
             position.perform(headers(get(path),A,"runtime-b",TOKEN_A)).andExpect(status().isUnauthorized());
         }
+        String results="/internal/agent/position-skills/results";
+        position.perform(headers(post(results),A,"runtime-a",TOKEN_A).contentType("application/json").content("{\"protocolVersion\":1,\"requestId\":\"position-result\",\"data\":{}}"))
+                .andExpect(status().isOk());
+        position.perform(post(results).header("Authorization","Bearer browser-jwt")).andExpect(status().isUnauthorized());
+        position.perform(headers(post(results),A,"runtime-b",TOKEN_A)).andExpect(status().isUnauthorized());
+        position.perform(headers(post("/internal/agent/position-skills/grant1/receipt"),A,"runtime-a",TOKEN_A)).andExpect(status().isForbidden());
         position.perform(headers(get("/internal/agent/position-skills/grant1/receipt/extra"),A,"runtime-a",TOKEN_A)).andExpect(status().isForbidden());
         verifyNoInteractions(keys);
     }

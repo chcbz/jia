@@ -40,8 +40,8 @@ public final class AgentRuntimeAuthenticationFilter extends OncePerRequestFilter
         String id = "[A-Za-z0-9][A-Za-z0-9._:-]{0,99}";
         return "GET".equals(request.getMethod()) && (path.equals("/internal/archive/v1/jobs") || path.matches("/internal/archive/v1/jobs/"+id+"/(?:source|result)"))
                 || "POST".equals(request.getMethod()) && path.matches("/internal/archive/v1/jobs/"+id+"/result")
-                || "GET".equals(request.getMethod()) && (path.equals("/internal/agent/position-skills") || path.matches("/internal/agent/position-skills/"+id+"/revisions/[1-9][0-9]*/package"))
-                || ("POST".equals(request.getMethod()) || "GET".equals(request.getMethod())) && path.matches("/internal/agent/position-skills/"+id+"/receipt")
+                || "GET".equals(request.getMethod()) && (path.equals("/internal/agent/position-skills") || path.matches("/internal/agent/position-skills/"+id+"/receipt"))
+                || "POST".equals(request.getMethod()) && path.equals("/internal/agent/position-skills/results")
                 || ("GET".equals(request.getMethod()) || "POST".equals(request.getMethod()))
                 && path.matches("/internal/agent/tasks/" + id + "/work-items/" + id + "/reassignments/" + id
                 + "/commands/" + id + "/result-commit")
