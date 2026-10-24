@@ -197,7 +197,7 @@ class HallRequestDraftControllerTest {
                     .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
             mvc.perform(post("/agent/hall/drafts").principal(principal)
                             .contentType("application/json")
-                            .content("{\"kind\":\"CREATE\",\"originRef\":\"map\",\"inputs\":[]}"))
+                            .content(q("{\"kind\":\"CREATE\",\"originRef\":\"map\",\"inputs\":[]}")))
                     .andExpect(status().isForbidden())
                     .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
         }
