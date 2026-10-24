@@ -303,7 +303,7 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         assertEquals(0,count("economy_skill_change"));assertEquals(0,count("economy_skill_change_command"));assertEquals(0,count("economy_skill_management_result"));
         assertEquals(1,service.descriptors(scope()).size());
         var auth=db.findAuthorization("0",ACTOR.clientId(),id);
-        assertTrue(tx.execute(s->service.qualifies(scope(),auth)));
+        assertTrue(Boolean.TRUE.equals(tx.execute(s->service.qualifies(scope(),auth))));
         assertEquals(id,service.admit(scope(),"pdf-export",id,()->service.taskBinding("0",ACTOR.clientId(),"exec-adopted","grant-adopted",1,AGENT,id)).get("skillInstallationId"));
         var listed=service.skills(ACTOR,AGENT,false);assertEquals(1,((List<?>)listed.get("items")).size());
         var item=object(((List<?>)listed.get("items")).getFirst());assertNull(item.get("latestChange"));assertTrue(((List<?>)item.get("allowedActions")).contains("DISABLE"));
@@ -317,7 +317,7 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         var beforeWallet=wallet();
         jdbc.update("UPDATE economy_skill_result_receipt SET request_hash=?",new byte[32]);
         assertTrue(service.descriptors(scope()).isEmpty());
-        assertFalse(tx.execute(s->service.qualifies(scope(),db.findAuthorization("0",ACTOR.clientId(),id))));
+        assertFalse(Boolean.TRUE.equals(tx.execute(s->service.qualifies(scope(),db.findAuthorization("0",ACTOR.clientId(),id)))));
         jdbc.update("UPDATE economy_skill_result_receipt SET request_hash=?",HexFormat.of().parseHex("d".repeat(64)));
         assertEquals(1,service.descriptors(scope()).size());
         for(String key:List.of("ownerJiacn","agentId","skillKey","receiptSha256","localEvidenceSha256","approvedPermissionsSha256")) {
@@ -333,7 +333,7 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         var adopted=adoptedFixture();catalog(adopted);String id=text(object(adopted.get("target")),"skillInstallationId");
         jdbc.update("UPDATE economy_skill_installation_authorization SET adoption_evidence_json=NULL");
         assertTrue(service.descriptors(scope()).isEmpty());
-        assertFalse(tx.execute(s->service.qualifies(scope(),db.findAuthorization("0",ACTOR.clientId(),id))));
+        assertFalse(Boolean.TRUE.equals(tx.execute(s->service.qualifies(scope(),db.findAuthorization("0",ACTOR.clientId(),id)))));
         assertThrows(SkillMarketplaceException.class,()->service.admit(scope(),"pdf-export",id,()->"never"));
         assertEquals(0,count("economy_skill_change_command"));assertEquals(1,count("economy_skill_order"));
     }
