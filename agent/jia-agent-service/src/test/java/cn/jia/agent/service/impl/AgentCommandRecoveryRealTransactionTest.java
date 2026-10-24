@@ -1,14 +1,11 @@
 package cn.jia.agent.service.impl;
 
 import cn.jia.agent.common.AgentProtocolConstants;
-import cn.jia.agent.config.AgentOutboxRelaySettings;
 import cn.jia.agent.config.AgentCommandReissueSettings;
 import cn.jia.agent.config.AgentRabbitDispatchScopeProperties;
 import cn.jia.agent.config.AgentRabbitSafetyGate;
 import cn.jia.agent.config.AgentRabbitSafetyProperties;
-import cn.jia.agent.config.AgentRabbitTopologyConfiguration;
 import cn.jia.agent.config.AgentRabbitTopologyManifest;
-import cn.jia.agent.config.AgentRabbitTopologyReadiness;
 import cn.jia.agent.dao.AgentCommandInboxDao;
 import cn.jia.agent.dao.AgentCommandRecoveryDao;
 import cn.jia.agent.dao.AgentOutboxRelayDao;
@@ -27,10 +24,7 @@ import cn.jia.agent.entity.AgentInboxDisposition;
 import cn.jia.agent.entity.AgentInboxConsumers;
 import cn.jia.agent.entity.AgentInboxFenceException;
 import cn.jia.agent.entity.AgentInboxMessage;
-import cn.jia.agent.entity.AgentOutboxClaim;
 import cn.jia.agent.entity.AgentOutboxEventEntity;
-import cn.jia.agent.entity.AgentOutboxSettleResult;
-import cn.jia.agent.entity.AgentRabbitPublishResult;
 import cn.jia.agent.entity.AgentRawCommandDispatchResult;
 import cn.jia.agent.entity.AgentTaskInvitePayload;
 import cn.jia.agent.entity.AgentWaitingCommandCandidate;
@@ -52,7 +46,6 @@ import org.mybatis.spring.SqlSessionTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 
-import java.lang.reflect.Method;
 import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
@@ -120,7 +113,7 @@ class AgentCommandRecoveryRealTransactionTest {
     }
 
     @Test
-    void reissueCommitsDeliveryAndOneRelayDiscoverablePendingOutbox() {
+    void legacyReissueCommitsDeliveryAndOnePendingOutbox() {
         AgentCommandReissueServiceImpl service = reissueService(dao);
         assertEquals(1, service.reissueForReconnect(scope(), 10, NOW).reissued());
 
@@ -236,12 +229,7 @@ class AgentCommandRecoveryRealTransactionTest {
     @Test
     void automaticReplayDirectTerminalBeforeSentCompletionIsIdempotentAndFenced() {
         assertEquals(1, reissueService(dao).reissueForReconnect(scope(), 10, NOW).reissued());
-        AgentOutboxRelayServiceImpl relay = relayService();
-        AgentOutboxClaim relayClaim = relay.claim(
-                relay.discover(NOW + 1, 10).getFirst(), "relay-direct-terminal", NOW + 1);
-        assertEquals(AgentOutboxClaim.Status.ACQUIRED, relayClaim.status());
-        assertEquals(AgentOutboxSettleResult.PUBLISHED,
-                relay.settle(relayClaim.token(), AgentRabbitPublishResult.ack(), NOW + 2));
+        seedHistoricalBrokerConfirmation(M2, NOW + 2);
 
         String eventId = string(
                 "SELECT event_id FROM agent_outbox_event WHERE message_id='" + M2 + "'");
@@ -535,13 +523,7 @@ class AgentCommandRecoveryRealTransactionTest {
         jdbc.update("UPDATE agent_command_delivery SET version=? WHERE id=1", Long.MAX_VALUE - 8);
         assertEquals(1, reissueService(dao).reissueForReconnect(scope(), 10, NOW).reissued());
 
-        AgentOutboxRelayServiceImpl relay = relayService();
-        var candidates = relay.discover(NOW + 1, 10);
-        assertEquals(1, candidates.size());
-        AgentOutboxClaim claim = relay.claim(candidates.getFirst(), "relay-d06", NOW + 1);
-        assertEquals(AgentOutboxClaim.Status.ACQUIRED, claim.status());
-        assertEquals(AgentOutboxSettleResult.PUBLISHED,
-                relay.settle(claim.token(), AgentRabbitPublishResult.ack(), NOW + 2));
+        seedHistoricalBrokerConfirmation(M2, NOW + 2);
 
         byte[] wire = blob("SELECT wire_payload FROM agent_outbox_event WHERE message_id='" + M2 + "'");
         String eventId = string("SELECT event_id FROM agent_outbox_event WHERE message_id='" + M2 + "'");
@@ -653,12 +635,7 @@ class AgentCommandRecoveryRealTransactionTest {
     }
 
     private void publishAndComplete(String messageId, String worker, long now) {
-        AgentOutboxRelayServiceImpl relay = relayService();
-        AgentOutboxClaim relayClaim = relay.claim(
-                relay.discover(now, 10).getFirst(), worker + "-relay", now);
-        assertEquals(AgentOutboxClaim.Status.ACQUIRED, relayClaim.status());
-        assertEquals(AgentOutboxSettleResult.PUBLISHED,
-                relay.settle(relayClaim.token(), AgentRabbitPublishResult.ack(), now + 1));
+        seedHistoricalBrokerConfirmation(messageId, now + 1);
 
         String eventId = string(
                 "SELECT event_id FROM agent_outbox_event WHERE message_id='" + messageId + "'");
@@ -688,25 +665,21 @@ class AgentCommandRecoveryRealTransactionTest {
     }
 
 
-    private AgentOutboxRelayServiceImpl relayService() {
-        return new AgentOutboxRelayServiceImpl(
-                relayDao, gate(), AgentRabbitTopologyManifest.canonical(), ready(),
-                new AgentOutboxRelaySettings(new AgentRabbitSafetyProperties.RabbitPublish(true)),
-                manager);
-    }
-
-    private AgentRabbitTopologyReadiness ready() {
-        try {
-            AgentRabbitTopologyManifest manifest = AgentRabbitTopologyManifest.canonical();
-            AgentRabbitTopologyReadiness readiness =
-                    new AgentRabbitTopologyConfiguration().agentRabbitTopologyReadiness(manifest);
-            Method method = AgentRabbitTopologyReadiness.class.getDeclaredMethod("markProvisioned");
-            method.setAccessible(true);
-            method.invoke(readiness);
-            return readiness;
-        } catch (ReflectiveOperationException impossible) {
-            throw new AssertionError(impossible);
-        }
+    /** Historical broker fixture, not a claim that retired v1 relay can still publish.
+     * Recovery/inbox/ACK below remain real transactional services. The legacy broker's
+     * claim + confirm consumed two revisions; preserve that history for overflow tests.
+     */
+    private void seedHistoricalBrokerConfirmation(String messageId, long now) {
+        assertEquals(1, jdbc.update("UPDATE agent_command_delivery SET status='PUBLISHED',"
+                + "next_retry_at=NULL,lease_owner=NULL,lease_until=NULL,last_error=NULL,"
+                + "version=version+2,update_time=? WHERE id=1 AND active_message_id=? AND status='PENDING'",
+                now, messageId));
+        assertEquals(1, jdbc.update("UPDATE agent_outbox_event SET status='PUBLISHED',"
+                + "attempt_count=attempt_count+1,next_retry_at=NULL,lease_owner=NULL,lease_until=NULL,"
+                + "publisher_confirm_status='ACK',confirmed_at=?,confirm_error=NULL,"
+                + "mandatory_return_status='NOT_RETURNED',returned_at=NULL,return_reply_code=NULL,"
+                + "return_reply_text=NULL,published_at=?,last_error=NULL,version=version+2,update_time=?"
+                + " WHERE message_id=? AND status='PENDING'", now, now, now, messageId));
     }
 
     private AgentCommandReconnectScope scope() {

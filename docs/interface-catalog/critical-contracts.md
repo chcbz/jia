@@ -548,3 +548,5 @@ path ID沿`[A-Za-z0-9][A-Za-z0-9._:-]{0,99}`；幂等键沿`[A-Za-z0-9][A-Za-z0-
 ### 2026-10-24 集成回归夹具对齐（源码候选，非上线证明）
 
 当前租户边界要求受信上下文与JWT的tenant/owner/client一致。资料HTTP、托管绑定夹具显式提供认证边界上下文，跨owner/client读取仍须失败；不修改生产授权策略。Runtime请求结束清理线程旧身份，不能恢复上个请求遗留的cookie身份；对应 `AgentRuntimeSecurityIntegrationTest`。场景查询mock使用五参数租户作用域；Runtime enrollment使用持久安装发现与授权作用域回调。真实ES冲突恢复夹具显式配置其二元素向量维度，仍保留SQL提交失败后同一winner的字节稳定重试断言。市场独占测试库补当前DAO读取的nullable scope列，不转换历史/native行，也不是生产迁移执行证据。WS ACK拒绝测试先建立实际session，保留HTTP持久ACK与不泄漏身份的断言。
+
+历史恢复事务测试中的旧无scope Rabbit relay已经退役，不能继续以其发现/发布成功作为夹具。`AgentCommandRecoveryRealTransactionTest`将旧broker确认改为明确的历史数据seed（保留原claim+confirm两次revision），真实inbox、ACK、重排、CAS回滚和历史终态幂等断言不删除。该seed不证明当前relay能发布；现行scoped relay由其既有scope/fence用例覆盖，不将旧行转换为v2，也不恢复退役入口。

@@ -58,6 +58,7 @@ class MemoryRepositoryImplTenantScopeTest {
         repository = new MemoryRepositoryImpl();
         ReflectionTestUtils.setField(repository, "elasticsearchClient", elasticsearchClient);
         ReflectionTestUtils.setField(repository, "embeddingModel", embeddingModel);
+        ReflectionTestUtils.setField(repository, "embeddingDimension", 2);
         ReflectionTestUtils.setField(repository, "memoryPublicationDao", publicationDao);
         ReflectionTestUtils.setField(repository, "indexName", "chat_memory");
         ReflectionTestUtils.setField(repository, "currentConversationWeight", 1.5d);
