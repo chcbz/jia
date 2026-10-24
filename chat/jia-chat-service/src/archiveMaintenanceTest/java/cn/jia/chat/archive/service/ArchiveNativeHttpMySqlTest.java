@@ -172,7 +172,7 @@ class ArchiveNativeHttpMySqlTest {
         var auth=spring.getBean(AgentRuntimeAuthenticationService.class);
         var headers=new AgentRuntimeAuthenticationFilter.SessionHeaders(AGENT,INSTALLATION,"archive-host","archive-boot",Long.parseLong(h.get("X-Agent-Session-Generation")),h.get("Authorization").substring("AgentRuntime ".length()));
         var proof=auth.verify(headers);auth.bind("fixture-channel",proof,()->node.isAlive());
-        var installed=installAndMeasure(proof);assertEquals(4,installed.get("processed"));assertTrue(positions.read(scope).state().installations().values().stream().allMatch(Installation::usable),()->"Installation states: "+positions.read(scope).state().installations().values().stream().map(i->i.state()+"/"+i.errorCode()).toList());
+        var installed=installAndMeasure(proof);assertTrue(positions.read(scope).state().installations().values().stream().allMatch(Installation::usable),()->"Installation states: "+positions.read(scope).state().installations().values().stream().map(i->i.state()+"/"+i.errorCode()).toList()+"; measured="+installed.get("catalog"));assertEquals(4,installed.get("processed"));
         assertTrue(Files.isRegularFile(root.resolve("codex-home/skills/archive-maintenance/SKILL.md")));
         var service=spring.getBean(ArchiveMaintenanceService.class);var reader=new ArchiveReaderServiceImpl(spring.getBean(JdbcArchiveContentStore.class));
         String sourceA="第一回 初见\n这是仓库外生成的测试文本："+UUID.randomUUID()+"。\n第二回 后续\n第二段。";
