@@ -217,7 +217,8 @@ class ArchiveNativeHttpMySqlTest {
         retained.setManagement(spring.getBean(SkillManagementService.class),spring.getBean(EconomySkillManagementMapper.class));
         var lookupScope=new SkillCapabilityLookup.Scope(TENANT,CLIENT,OWNER,AGENT);
         assertEquals(List.of("archive-general"),retained.read(lookupScope).stream().map(InstalledSkillDescriptorLookup.Descriptor::skillKey).toList());
-        assertEquals(1,new org.springframework.transaction.support.TransactionTemplate(spring.getBean(DataSourceTransactionManager.class)).execute(status->retained.entitlements(lookupScope).size()));
+        int entitled=new org.springframework.transaction.support.TransactionTemplate(spring.getBean(DataSourceTransactionManager.class)).execute(status->retained.entitlements(lookupScope).size());
+        assertEquals(1,entitled);
         verifyNoInteractions(spring.getBean(SkillMarketplaceService.class));
         assertEquals(0,jdbc.queryForObject("SELECT count(*) FROM economy_skill_order",Integer.class));
         assertEquals("STOPPED",exchange(Map.of("op","STOP")).get("op"));assertTrue(node.waitFor(10,TimeUnit.SECONDS));assertEquals(0,node.exitValue());
@@ -228,7 +229,7 @@ class ArchiveNativeHttpMySqlTest {
         var mapper=new ObjectMapper();
         var skills=((List<?>)raw.get("skills")).stream().map(row->mapper.convertValue(row,SkillCapabilityLookup.RuntimeSkill.class)).toList();
         measuredCatalog=new SkillCapabilityLookup.View(SkillCapabilityLookup.State.AVAILABLE,"fixture-channel",
-                new AgentManagedSessionLookup.SessionFence(proof.installationId(),proof.hostId(),proof.runtimeInstanceId(),proof.sessionGeneration()),
+                SkillMarketplaceService.sessionFence(proof),
                 new SkillCapabilityLookup.Catalog((String)raw.get("catalogRevision"),skills));
         spring.getBean(SkillManagementService.class).capabilitiesChanged(proof);
         // The next poll consumes the committed, measured catalog; no synthetic install receipt.
@@ -350,7 +351,7 @@ class ArchiveNativeHttpMySqlTest {
             var sessions=mock(AgentManagedSessionLookup.class);
             when(sessions.isReady(eq(TENANT),eq(CLIENT),eq(AGENT),any())).thenAnswer(call->{
                 var proof=auth.currentRegisteredProof(TENANT,CLIENT,AGENT);
-                return new AgentManagedSessionLookup.SessionFence(proof.installationId(),proof.hostId(),proof.runtimeInstanceId(),proof.sessionGeneration()).equals(call.getArgument(3));
+                return SkillMarketplaceService.sessionFence(proof).equals(call.getArgument(3));
             });return sessions;
         }
         @Bean SkillCapabilityLookup capabilities() {return (scope,fence)->measuredCatalog.state()==SkillCapabilityLookup.State.AVAILABLE && measuredCatalog.fence().equals(fence)
