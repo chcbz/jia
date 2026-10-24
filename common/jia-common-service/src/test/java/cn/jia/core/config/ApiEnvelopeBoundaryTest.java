@@ -4,6 +4,8 @@ import cn.jia.core.entity.JsonRequest;
 import cn.jia.core.entity.JsonResult;
 import cn.jia.core.filter.RequestIdFilter;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.AfterEach;
+import org.slf4j.MDC;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
 import org.springframework.http.converter.HttpMessageConverter;
@@ -31,7 +33,12 @@ class ApiEnvelopeBoundaryTest {
         @GetMapping("/sms/receive") String external() { throw new IllegalStateException("provider failure"); }
     }
     private MockMvc mvc;
+    private java.util.Map<String, String> previousMdc;
+    @AfterEach void restoreMdc() {
+        if (previousMdc == null) MDC.clear(); else MDC.setContextMap(previousMdc);
+    }
     @BeforeEach void setup() {
+        previousMdc = MDC.getCopyOfContextMap();
         List<HttpMessageConverter<?>> converters = new ArrayList<>();
         converters.add(new org.springframework.http.converter.ByteArrayHttpMessageConverter());
         converters.add(new JacksonJsonHttpMessageConverter());
