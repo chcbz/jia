@@ -112,4 +112,27 @@ class ApiEnvelopeBoundaryTest {
         org.junit.jupiter.api.Assertions.assertEquals("raw-response", decoded.get("requestId").asString());
         org.junit.jupiter.api.Assertions.assertEquals("图片", decoded.get("data").get("name").asString());
     }
+    @Test void additiveEnvelopeFieldsDoNotChangeTypedOrRawBusinessData() throws Exception {
+        String data = "{ \"name\":\"图片\", \"count\":1 }";
+        String json = "{\"trace\":{\"next\":true},\"protocolVersion\":1,\"requestId\":\"r\",\"data\":" + data + ",\"owner\":\"ignored\"}";
+        mvc.perform(post("/test/protocol").contentType(MediaType.APPLICATION_JSON).content(json))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data.name").value("图片"))
+                .andExpect(jsonPath("$.data.owner").doesNotExist());
+        mvc.perform(post("/test/raw").contentType(MediaType.APPLICATION_JSON).content(json))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data").value(data));
+        var request = new org.springframework.mock.web.MockHttpServletRequest();
+        request.setContent(json.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        org.junit.jupiter.api.Assertions.assertArrayEquals(data.getBytes(java.nio.charset.StandardCharsets.UTF_8), ApiJsonInput.readData(request, 256, false));
+    }
+    @Test void additiveMetadataCannotReplaceRequiredFieldsOrHideDuplicates() throws Exception {
+        for (String json : List.of("{\"protocolVersion\":1,\"requestId\":\"r\",\"payload\":null}",
+                "{\"protocolVersion\":1,\"requestId\":\"r\",\"data\":null,\"trace\":1,\"trace\":2}")) {
+            mvc.perform(post("/test/raw").contentType(MediaType.APPLICATION_JSON).content(json)).andExpect(status().isBadRequest());
+            var request = new org.springframework.mock.web.MockHttpServletRequest();
+            request.setContent(json.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            org.junit.jupiter.api.Assertions.assertThrows(org.springframework.http.converter.HttpMessageNotReadableException.class,
+                    () -> ApiJsonInput.readData(request, 256, false));
+        }
+    }
+
 }

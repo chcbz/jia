@@ -1,5 +1,5 @@
 {
-  "standardVersion": "1.2",
+  "standardVersion": "1.4",
   "protocolVersion": 1,
   "cases": [
     {
@@ -43,12 +43,12 @@
       "errorCode": "PROTOCOL_INVALID_RESPONSE"
     },
     {
-      "name": "extra-field",
+      "name": "additive-field-ignored",
       "text": "{\"protocolVersion\": 1, \"requestId\": \"req_test_1\", \"code\": \"E0\", \"msg\": \"ok\", \"data\": null,\"status\":200}",
       "status": 200,
       "requestId": "req_test_1",
-      "valid": false,
-      "errorCode": "PROTOCOL_INVALID_RESPONSE"
+      "valid": true,
+      "errorCode": null
     },
     {
       "name": "duplicate-root",
@@ -141,6 +141,14 @@
     {
       "name": "success-http-failure-code",
       "text": "{\"protocolVersion\": 1, \"requestId\": \"req_test_1\", \"code\": \"E003\", \"msg\": \"ok\", \"data\": null}",
+      "status": 200,
+      "requestId": "req_test_1",
+      "valid": false,
+      "errorCode": "PROTOCOL_INVALID_RESPONSE"
+    },
+    {
+      "name": "additive-field-cannot-replace-missing-data",
+      "text": "{\"protocolVersion\":1,\"requestId\":\"req_test_1\",\"code\":\"E0\",\"msg\":\"ok\",\"payload\":null}",
       "status": 200,
       "requestId": "req_test_1",
       "valid": false,

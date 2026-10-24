@@ -8,9 +8,9 @@
 - 新增接口或修改 wire 契约前，先核对该规范及同一份完整报文 fixture；生产端、消费端、测试一起改，先做最小跨端契约测试。不得用 `data ?? payload ?? root` 等猜测式兼容，也不得凭 mock 约定编造实际报文。
 - 规范是已确定的目标，不等于现有实现或线上已符合；已知差异、代码入口和迁移顺序见 [影响分析](docs/interface-standard-impact-20261014.md)。当前只改文档，不授权自动重构、迁移、发布或重启。
 - 第三方回调（含微信通知/握手、GitHub等OAuth重定向及框架回调）必须先按统一规范§7.1分类保护，保持提供方协议，不套Q/R、不强加本站JWT、不机械改method。清单见 `docs/interface-catalog/external-callback-contracts.md`；自有管理接口不自动豁免。
-- 逐接口源码库存、关键链契约及风险见 [接口目录](docs/interface-catalog/README.md)。当前公共文档版本1.2；库存数量不是线上数量，SOURCE_INDEXED/DESIGN_DOCUMENTED不是schema验证或迁移完成。
+- 逐接口源码库存、关键链契约及风险见 [接口目录](docs/interface-catalog/README.md)。当前公共文档版本1.4；库存数量不是线上数量，SOURCE_INDEXED/DESIGN_DOCUMENTED不是schema验证或迁移完成。
 - 具体字段映射、类/方法改动、前端解包、Runtime/WS/UDS及持久消息切换见 [代码字段级详设](docs/interface-standard-detailed-design.md)；该文档是目标设计，不代表迁移已完成。
-- 聚义厅低于 2.0.0 的接口切换遵循项目最新唯一契约，不保留旧版本兼容层；既有持久消息、签名/摘要、在途操作必须按规范完成切换处置，不能直接改写。
+- 2026-10-24按最新用户要求增加明确边界的兼容、删除非必要校验；必要校验须在`docs/interface-catalog/validation-policy.md`及对应业务规格写清理由和失败行为。历史消息/签名/摘要不改写，不猜测缺失授权或重放UNKNOWN；不再以低于2.0.0为由一律拒绝兼容。
 
 ## 一、基本原则
 

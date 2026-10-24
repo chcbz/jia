@@ -1,6 +1,6 @@
 {
-  "standardVersion": "1.2",
+  "standardVersion": "1.4",
   "source": "API docs/interface-catalog/contracts/http-envelope-fixtures.json",
-  "sha256": "a6edcdd04f8ceba91c10b019fcbd1c7c55dc9ff655878ee55d71ff6cefc46d6d",
-  "javascriptCodecSha256": "22a1b24533afe7ad7e880fff38e3709f722dbf0c134ef7ed27ba702e6da4a14d"
+  "sha256": "0da61fa028d28054c0da153644493ad0676ff04b9342bc6cef36eca3cf16e813",
+  "javascriptCodecSha256": "129a20184a0836ccc2fe2d30a6c7b760bb1c6770b1f0e00435e90a7f53f071e0"
 }

@@ -27,7 +27,7 @@ public record ProtocolMessage<T>(int protocolVersion, String requestId, String m
         boolean reply=root.containsKey("correlationId")||root.containsKey("code")||root.containsKey("msg");
         Set<String> fields=reply?Set.of("protocolVersion","requestId","messageType","messageId","data","correlationId","code","msg")
                 :Set.of("protocolVersion","requestId","messageType","messageId","data");
-        if(!root.keySet().equals(fields)||!Integer.valueOf(1).equals(root.get("protocolVersion")))throw new IllegalArgumentException("Invalid message fields");
+        if(!root.keySet().containsAll(fields)||!Integer.valueOf(1).equals(root.get("protocolVersion")))throw new IllegalArgumentException("Invalid message fields");
         if(!(root.get("requestId") instanceof String requestId)||!(root.get("messageType") instanceof String type)||!(root.get("messageId") instanceof String messageId))
             throw new IllegalArgumentException("Invalid message metadata");
         if(reply&&(!(root.get("correlationId") instanceof String)||!(root.get("code") instanceof String)||!(root.get("msg") instanceof String)))throw new IllegalArgumentException("Invalid message reply");

@@ -17,4 +17,15 @@ class ProtocolMessageTest {
         assertThrows(IllegalArgumentException.class, () -> new ProtocolMessage<>(1, "r", "agent.registered", "m", null, "original", null, "ok"));
         assertThrows(IllegalArgumentException.class, () -> ProtocolMessage.event("r\n", "agent.register", "m", null));
     }
+    @Test void additiveMetadataDoesNotReplaceRoutingOrReplyFields() {
+        var root = new java.util.HashMap<String,Object>();
+        root.put("protocolVersion", 1); root.put("requestId", "r"); root.put("messageType", "agent.register");
+        root.put("messageId", "m"); root.put("data", null); root.put("type", "admin.delete"); root.put("trace", "next");
+        var decoded = ProtocolMessage.decode(root);
+        assertEquals("agent.register", decoded.messageType()); assertNull(decoded.data());
+        root.remove("messageType"); assertThrows(IllegalArgumentException.class, () -> ProtocolMessage.decode(root));
+        root.put("messageType", "agent.register"); root.put("code", "E0");
+        assertThrows(IllegalArgumentException.class, () -> ProtocolMessage.decode(root));
+    }
+
 }

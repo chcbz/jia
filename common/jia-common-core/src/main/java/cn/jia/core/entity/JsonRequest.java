@@ -1,6 +1,7 @@
 package cn.jia.core.entity;
 
 /** The only request envelope for CYF-owned HTTP JSON operations. */
+@com.fasterxml.jackson.annotation.JsonIgnoreProperties(ignoreUnknown = true)
 public record JsonRequest<T>(int protocolVersion, String requestId, T data) {
     public JsonRequest {
         if (protocolVersion != 1) throw new IllegalArgumentException("PROTOCOL_UNSUPPORTED_VERSION");

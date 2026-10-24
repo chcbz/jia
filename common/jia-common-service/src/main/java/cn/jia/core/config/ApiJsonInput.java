@@ -24,7 +24,7 @@ public final class ApiJsonInput {
     public static Decoded decode(byte[] bytes, HttpInputMessage input) {
         try {
             var root = JSON.readTree(bytes);
-            if (root == null || !root.isObject() || !Set.copyOf(root.propertyNames()).equals(Set.of("protocolVersion", "requestId", "data"))) {
+            if (root == null || !root.isObject() || !Set.copyOf(root.propertyNames()).containsAll(Set.of("protocolVersion", "requestId", "data"))) {
                 throw invalid("PROTOCOL_INVALID_ENVELOPE", input);
             }
             var version = root.get("protocolVersion");
@@ -84,7 +84,7 @@ public final class ApiJsonInput {
                 var keyNode = JSON.readTree(readValue(stream, first, Integer.MAX_VALUE, false, input));
                 if (!keyNode.isString()) throw invalid("PROTOCOL_INVALID_ENVELOPE", input);
                 String key = keyNode.asString();
-                if (!Set.of("protocolVersion", "requestId", "data").contains(key) || !keys.add(key)
+                if (!keys.add(key)
                         || nextNonWhitespace(stream) != ':') throw invalid("PROTOCOL_INVALID_ENVELOPE", input);
                 byte[] value = readValue(stream, nextNonWhitespace(stream),
                         "data".equals(key) ? dataBudget : Integer.MAX_VALUE, "data".equals(key) && compact, input);
@@ -94,7 +94,7 @@ public final class ApiJsonInput {
                 else if ("requestId".equals(key)) {
                     if (!node.isString() || !RequestIdFilter.isValid(node.asString())) throw invalid("PROTOCOL_INVALID_ENVELOPE", input);
                     requestId = node.asString();
-                } else {
+                } else if ("protocolVersion".equals(key)) {
                     if (!node.isIntegralNumber() || !node.canConvertToInt() || node.intValue() != 1)
                         throw invalid("PROTOCOL_UNSUPPORTED_VERSION", input);
                     versionValid = true;
@@ -103,7 +103,7 @@ public final class ApiJsonInput {
                 if (separator == '}') break;
                 if (separator != ',') throw invalid("PROTOCOL_INVALID_ENVELOPE", input);
             }
-            if (!versionValid || requestId == null || data == null || keys.size() != 3 || nextNonWhitespace(stream) != -1)
+            if (!versionValid || requestId == null || data == null || nextNonWhitespace(stream) != -1)
                 throw invalid("PROTOCOL_INVALID_ENVELOPE", input);
             var decoded = new Decoded(requestId, data); bind(request, decoded, input); return data;
         } catch (HttpMessageNotReadableException failure) { throw failure; }
