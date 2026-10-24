@@ -43,6 +43,11 @@ public class JdbcArchiveContentStore implements ArchiveContentStore {
     }
 
     @Override
+    public boolean wasPublished(String editionId) {
+        return Integer.valueOf(1).equals(jdbc.queryForObject("SELECT count(*) FROM archive_edition WHERE edition_id=? AND CAST(edition_id AS BINARY)=CAST(? AS BINARY) AND OCTET_LENGTH(edition_id)=OCTET_LENGTH(?) AND import_state='READY' AND activated_at IS NOT NULL",Integer.class,editionId,editionId,editionId));
+    }
+
+    @Override
     public List<cn.jia.chat.archive.dto.ArchiveBookDTO> listPublishedBooks() {
         return jdbc.query("""
                 SELECT w.work_id, w.title, e.edition_id, e.chapter_count

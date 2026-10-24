@@ -28,6 +28,8 @@ public interface ArchiveContentStore {
     ArchiveEditionRecord lockEdition(String editionId);
     int switchActiveEdition(String workId, String editionId);
     int markActivated(String editionId);
+    /** Historical content must have an actual activation fact, never just READY staging. */
+    default boolean wasPublished(String editionId) { return false; }
 
     record ActiveContent(ArchiveWorkRecord work, ArchiveEditionRecord edition) { }
 }

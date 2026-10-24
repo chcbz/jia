@@ -27,15 +27,18 @@ public class InstalledSkillEntitlementLookup implements FundedBountySkillEntitle
     private SkillManagementService management;
     @org.springframework.beans.factory.annotation.Autowired
     public void setManagement(cn.jia.economy.mapper.EconomySkillManagementMapper mapper,SkillManagementService service) {managed=mapper;management=service;}
+    private cn.jia.agent.position.PositionInstalledSkills positionSkills;
+    @org.springframework.beans.factory.annotation.Autowired(required=false)
+    public void setPositionSkills(cn.jia.agent.position.PositionInstalledSkills value){this.positionSkills=value;}
     @Override @Transactional(rollbackFor=Exception.class)
     public VerifiedSkillSnapshot lookup(FundedBountyActor actor,String agentId,List<AgentSkillRequirementDTO> requirements) {
         Objects.requireNonNull(requirements,"requirements");
         var a=new HostingRentHttp.Actor(actor.userId(),actor.tenantId(),actor.clientId(),actor.ownerJiacn());
-        if(!skills.available(a)) return snapshot(requirements.isEmpty(),List.of());
+        boolean marketplaceAvailable=skills.available(a);
         // The caller already holds task/binding/runtime roots; this joins the same REQUIRED transaction.
-        versions.requireOwned(a,agentId,null,false);
+        if(marketplaceAvailable)versions.requireOwned(a,agentId,null,false);
         List<InstalledSkill> installed=new ArrayList<>();
-        for(var e:market.selectEntitlementsByAgent(a.tenantId(),a.clientId(),agentId)) {
+        if(marketplaceAvailable)for(var e:market.selectEntitlementsByAgent(a.tenantId(),a.clientId(),agentId)) {
             if(!"ACTIVE".equals(e.getStatus())) continue;
             var auth=managed==null?null:managed.findAuthorization(a.tenantId(),a.clientId(),e.getInstallationId());
             if(auth!=null) {
@@ -52,8 +55,12 @@ public class InstalledSkillEntitlementLookup implements FundedBountySkillEntitle
                     || !e.getSkillVersion().equals(i.getSkillVersion()) || !Objects.equals(e.getActivatedAt(),i.getInstalledAt())) continue;
             installed.add(new InstalledSkill(e.getSkillKey(),e.getSkillVersion()));
         }
+        if(positionSkills!=null)installed.addAll(positionSkills.entitlements(new cn.jia.agent.service.SkillCapabilityLookup.Scope(
+                actor.tenantId(),actor.clientId(),actor.ownerJiacn(),agentId)));
+        installed=new ArrayList<>(new LinkedHashSet<>(installed));
         installed.sort(Comparator.comparing(InstalledSkill::skillKey).thenComparing(InstalledSkill::version));
-        boolean matched=requirements.stream().allMatch(r->r!=null && installed.stream().anyMatch(i->
+        final var eligible=installed;
+        boolean matched=requirements.stream().allMatch(r->r!=null && eligible.stream().anyMatch(i->
                 i.skillKey().equals(r.getSkillKey()) && matchesVersion(i.version(),r.getVersionRange())));
         return snapshot(matched,installed);
     }

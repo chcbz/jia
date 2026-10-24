@@ -258,7 +258,7 @@ public class AgentController {
         return personaProvisioningService;
     }
 
-    static AgentHostedBindingTransaction.Scope requireJwtScope(Authentication authentication) {
+    public static AgentHostedBindingTransaction.Scope requireJwtScope(Authentication authentication) {
         if (authentication == null || !authentication.isAuthenticated()
                 || !(authentication instanceof JwtAuthenticationToken jwt)) {
             throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN,

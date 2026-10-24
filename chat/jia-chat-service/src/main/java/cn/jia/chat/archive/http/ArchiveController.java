@@ -59,6 +59,16 @@ public class ArchiveController {
         }
     }
 
+    @GetMapping("/works/{workId}/editions/{editionId}/catalog")
+    public ResponseEntity<JsonResult<?>> historicalCatalog(@PathVariable String workId,@PathVariable String editionId,
+            @RequestHeader(value=HttpHeaders.IF_NONE_MATCH,required=false)String ifNoneMatch,Authentication authentication) {
+        Authorization authorization=authorize(authentication);
+        if(authorization.error()!=null)return authorization.error();
+        var conditionalError=validateConditional(ifNoneMatch);if(conditionalError!=null)return conditionalError;
+        if(!validIdentifier(workId,64)||!validIdentifier(editionId,96)||!accessPolicy.allows(authorization.tenantId(),authorization.clientId()))return notFound();
+        try{return render(ifNoneMatch,readerService.catalogEdition(workId,editionId));}catch(ArchiveResourceNotFoundException unavailable){return notFound();}
+    }
+
     @GetMapping("/editions/{editionId}/preface")
     public ResponseEntity<JsonResult<?>> preface(
             @PathVariable String editionId,
