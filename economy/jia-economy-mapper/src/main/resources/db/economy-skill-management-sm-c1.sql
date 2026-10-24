@@ -26,6 +26,7 @@ CREATE TABLE economy_skill_installation_authorization (
  tenant_id VARCHAR(50) NOT NULL, client_id VARCHAR(50) NOT NULL, installation_id VARCHAR(100) NOT NULL,
  change_id VARCHAR(100) NOT NULL, entitlement_id VARCHAR(100) NOT NULL,
  package_json TEXT NOT NULL, details_json LONGTEXT NOT NULL, permissions_json TEXT NOT NULL,
+ adoption_evidence_json LONGTEXT NULL,
  permissions_sha256 CHAR(64) NOT NULL, runtime_installation_id VARCHAR(100) NOT NULL, runtime_host_id VARCHAR(100) NOT NULL,
  PRIMARY KEY(tenant_id,client_id,installation_id), KEY idx_skill_auth_change(tenant_id,client_id,change_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;

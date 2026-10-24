@@ -70,6 +70,8 @@ public interface EconomySkillManagementMapper {
     SkillEntitlementEntity entitlement(@Param("tenantId") String t,@Param("clientId") String c,@Param("entitlementId") String id);
     @Select("SELECT p.* FROM economy_skill_product p WHERE "+S+" AND status='PUBLISHED' ORDER BY product_id")
     List<SkillProductEntity> products(@Param("tenantId") String t,@Param("clientId") String c);
+    @Select("SELECT a.* FROM economy_skill_installation_authorization a JOIN economy_skill_installation i ON i.tenant_id=a.tenant_id AND i.client_id=a.client_id AND i.installation_id=a.installation_id WHERE a.tenant_id=#{tenantId} AND a.client_id=#{clientId} AND i.target_agent_id=#{agentId} ORDER BY a.installation_id")
+    List<SkillInstallationAuthorizationEntity> authorizationsForAgent(@Param("tenantId") String t,@Param("clientId") String c,@Param("agentId") String a);
     @Select("SELECT * FROM economy_skill_installation_authorization WHERE "+S+" AND change_id=#{changeId} ORDER BY installation_id")
     List<SkillInstallationAuthorizationEntity> authorizations(@Param("tenantId") String t,@Param("clientId") String c,@Param("changeId") String id);
 }

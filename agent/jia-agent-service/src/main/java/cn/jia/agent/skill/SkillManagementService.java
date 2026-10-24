@@ -714,23 +714,55 @@ public final class SkillManagementService {
     }
     /** Keep all authorized exact installs available to in-flight tasks; only admission selects active.
      * No current product/order pointer is borrowed to authorize covered upgrades or old executions. */
+    private record AuthorizationOrigin(String actorId,String ownerJiacn,String agentId,String skillKey) { }
+    /** One canonical authorization model. A one-time adoption is backed by the exact original
+     * successful receipt and offline immutable-package evidence, not a replayed old message or
+     * invented APPLIED result. No HTTP/WS migration decoder or startup data repair exists. */
+    private AuthorizationOrigin origin(SkillInstallationAuthorizationEntity auth) {
+        var c=db.findChange(auth.getTenantId(),auth.getClientId(),auth.getChangeId());
+        if(auth.getAdoptionEvidenceJson()==null)return c==null?null:new AuthorizationOrigin(c.getActorId(),c.getOwnerJiacn(),c.getAgentId(),c.getSkillKey());
+        if(c!=null)return null; // Adoption cannot override a real management operation.
+        var proof=read(auth.getAdoptionEvidenceJson().getBytes(java.nio.charset.StandardCharsets.UTF_8),null);
+        if(!proof.keySet().equals(Set.of("schemaVersion","migrationId","actorId","ownerJiacn","agentId","skillKey",
+                "runtimeInstallationId","runtimeHostId","receiptMessageId","receiptSha256","package",
+                "approvedPermissionsSha256","localEvidenceSha256","evidenceSha256")))return null;
+        var preimage=new LinkedHashMap<>(proof);preimage.remove("evidenceSha256");
+        if(!Integer.valueOf(1).equals(proof.get("schemaVersion"))||!hash("cyf.skill.adoption.v1",preimage).equals(proof.get("evidenceSha256"))
+                ||!auth.getChangeId().equals(proof.get("migrationId"))||!auth.getRuntimeInstallationId().equals(proof.get("runtimeInstallationId"))
+                ||!auth.getRuntimeHostId().equals(proof.get("runtimeHostId"))||!json(ref(auth)).equals(json(proof.get("package")))
+                ||!auth.getPermissionsSha256().equals(proof.get("approvedPermissionsSha256"))
+                ||!(proof.get("localEvidenceSha256") instanceof String local)||!local.matches("[0-9a-f]{64}"))return null;
+        String migration="adopt_"+hash("cyf.skill.adoption.identity.v1",map("tenantId",auth.getTenantId(),"clientId",auth.getClientId(),
+                "skillInstallationId",auth.getInstallationId(),"localEvidenceSha256",local));
+        if(!migration.equals(auth.getChangeId()))return null;
+        for(String key:List.of("actorId","ownerJiacn","agentId","skillKey","receiptMessageId"))
+            if(!(proof.get(key) instanceof String text)||text.isBlank())return null;
+        var receipt=app.result(auth.getTenantId(),auth.getClientId(),text(proof,"receiptMessageId"));
+        var i=app.installation(auth.getTenantId(),auth.getClientId(),auth.getInstallationId());
+        var order=i==null||i.getOrderId()==null?null:app.order(auth.getTenantId(),auth.getClientId(),i.getOrderId());
+        if(receipt==null||!"ACTIVE".equals(receipt.getOutcome())||!auth.getInstallationId().equals(receipt.getInstallationId())
+                ||receipt.getRequestHash()==null||receipt.getRequestHash().length!=32
+                ||!HexFormat.of().formatHex(receipt.getRequestHash()).equals(proof.get("receiptSha256"))
+                ||i==null||!i.getTargetAgentId().equals(proof.get("agentId"))||!i.getSkillKey().equals(proof.get("skillKey"))
+                ||order==null||!"ACTIVE".equals(order.getStatus())||!order.getBuyerId().equals(proof.get("actorId"))
+                ||!i.getTargetAgentId().equals(order.getTargetAgentId()))return null;
+        return new AuthorizationOrigin(text(proof,"actorId"),text(proof,"ownerJiacn"),text(proof,"agentId"),text(proof,"skillKey"));
+    }
     public List<InstalledSkillDescriptorLookup.Descriptor> descriptors(SkillCapabilityLookup.Scope scope) {
         var rows=new ArrayList<InstalledSkillDescriptorLookup.Descriptor>();
-        for(var c:db.changes(scope.tenantId(),scope.clientId(),scope.agentId())) {
-            if(!scope.ownerJiacn().equals(c.getOwnerJiacn()))continue;
-            // Each retry has immutable authorization; successful installations are never overwritten.
-            for(var auth:db.authorizations(scope.tenantId(),scope.clientId(),c.getChangeId())) {
-                var i=app.installation(scope.tenantId(),scope.clientId(),auth.getInstallationId());
-                var e=db.readEntitlement(scope.tenantId(),scope.clientId(),auth.getEntitlementId());
-                if(!validInstallation(scope,auth,i,e))continue;
-                var target=ref(auth);var approved=market.selectApprovedProductVersion(scope.tenantId(),scope.clientId(),text(target,"productVersionId"));
-                if(approved==null||!HexFormat.of().formatHex(approved.getPackageSha256()).equals(target.get("packageSha256")))continue;
-                if(i.getOrderId()!=null) {var o=app.order(scope.tenantId(),scope.clientId(),i.getOrderId());if(o==null||!"ACTIVE".equals(o.getStatus()))continue;}
-                var pkg=packages.getObject().prepare(approved);var manifest=packages.getObject().manifest(pkg);if(manifest==null)continue;
-                if(!manifest.manifestSha256().equals(target.get("manifestSha256")))continue;
-                rows.add(new InstalledSkillDescriptorLookup.Descriptor(c.getSkillKey(),text(target,"skillVersion"),auth.getInstallationId(),
-                        text(target,"packageSha256"),manifest.manifestSha256(),manifest.document().toString(),auth.getRuntimeInstallationId(),auth.getRuntimeHostId(),null));
-            }
+        for(var auth:db.authorizationsForAgent(scope.tenantId(),scope.clientId(),scope.agentId())) {
+            var context=origin(auth);
+            if(context==null||!scope.ownerJiacn().equals(context.ownerJiacn())||!scope.agentId().equals(context.agentId()))continue;
+            var i=app.installation(scope.tenantId(),scope.clientId(),auth.getInstallationId());
+            var e=db.readEntitlement(scope.tenantId(),scope.clientId(),auth.getEntitlementId());
+            if(!validInstallation(scope,auth,i,e))continue;
+            var target=ref(auth);var approved=market.selectApprovedProductVersion(scope.tenantId(),scope.clientId(),text(target,"productVersionId"));
+            if(approved==null||!HexFormat.of().formatHex(approved.getPackageSha256()).equals(target.get("packageSha256")))continue;
+            if(i.getOrderId()!=null) {var o=app.order(scope.tenantId(),scope.clientId(),i.getOrderId());if(o==null||!"ACTIVE".equals(o.getStatus()))continue;}
+            var pkg=packages.getObject().prepare(approved);var manifest=packages.getObject().manifest(pkg);if(manifest==null)continue;
+            if(!manifest.manifestSha256().equals(target.get("manifestSha256")))continue;
+            rows.add(new InstalledSkillDescriptorLookup.Descriptor(context.skillKey(),text(target,"skillVersion"),auth.getInstallationId(),
+                    text(target,"packageSha256"),manifest.manifestSha256(),manifest.document().toString(),auth.getRuntimeInstallationId(),auth.getRuntimeHostId(),null));
         }
         return rows;
     }
@@ -751,6 +783,11 @@ public final class SkillManagementService {
         var binding=app.deliveryBinding(scope.tenantId(),scope.clientId(),auth.getInstallationId());
         if(binding==null||!scope.agentId().equals(binding.getCanonicalAgentId())||!auth.getRuntimeInstallationId().equals(binding.getRuntimeInstallationId())
                 ||!auth.getRuntimeHostId().equals(binding.getRuntimeHostId()))return false;
+        if(auth.getAdoptionEvidenceJson()!=null) {
+            var context=origin(auth);
+            return context!=null&&scope.ownerJiacn().equals(context.ownerJiacn())&&scope.agentId().equals(context.agentId())
+                    &&i.getSkillKey().equals(context.skillKey());
+        }
         return db.commands(scope.tenantId(),scope.clientId(),auth.getChangeId()).stream().filter(cmd->"RESULT".equals(cmd.getState())&&cmd.getEvidenceJson()!=null)
                 .map(cmd->decode(cmd.getEvidenceJson(),"InstallEvidence")).anyMatch(ev->"APPLIED".equals(ev.get("outcome"))&&json(target).equals(json(ev.get("actual"))));
     }
@@ -758,12 +795,12 @@ public final class SkillManagementService {
      * through authorization commit. Older active entitlements cannot qualify a disabled skill. */
     public boolean qualifies(SkillCapabilityLookup.Scope scope,SkillInstallationAuthorizationEntity auth) {
         require(TransactionSynchronizationManager.isActualTransactionActive(),503,"SKILL_STATE_UNAVAILABLE");
-        var c=db.findChange(scope.tenantId(),scope.clientId(),auth.getChangeId());
-        if(c==null||!scope.agentId().equals(c.getAgentId())||!scope.ownerJiacn().equals(c.getOwnerJiacn()))return false;
-        var state=db.lockState(scope.tenantId(),scope.clientId(),scope.agentId(),c.getSkillKey());
+        var context=origin(auth);
+        if(context==null||!scope.agentId().equals(context.agentId())||!scope.ownerJiacn().equals(context.ownerJiacn()))return false;
+        var state=db.lockState(scope.tenantId(),scope.clientId(),scope.agentId(),context.skillKey());
         if(state==null||!Boolean.TRUE.equals(state.getDesiredEnabled())||!Boolean.TRUE.equals(state.getAdmissionEnabled())||!auth.getInstallationId().equals(state.getActiveInstallationId()))return false;
         if(!validInstallation(scope,auth,app.installation(scope.tenantId(),scope.clientId(),auth.getInstallationId()),db.readEntitlement(scope.tenantId(),scope.clientId(),auth.getEntitlementId())))return false;
-        var a=new HostingRentHttp.Actor(c.getActorId(),scope.tenantId(),scope.clientId(),scope.ownerJiacn());
+        var a=new HostingRentHttp.Actor(context.actorId(),scope.tenantId(),scope.clientId(),scope.ownerJiacn());
         return "READY".equals(runtime(a,scope.agentId(),state,auth,catalog(a,scope.agentId()),online(a,scope.agentId())).get("state"));
     }
     /** Outer transaction precedes task/grant locks, then retains the per-skill root while task
@@ -771,9 +808,9 @@ public final class SkillManagementService {
     public <T> T admit(SkillCapabilityLookup.Scope scope,String skill,String installationId,Supplier<T> taskAdmission) {
         var auth=db.findAuthorization(scope.tenantId(),scope.clientId(),installationId);
         require(auth!=null,409,"SKILL_STATE_CONFLICT");
-        var c=db.findChange(scope.tenantId(),scope.clientId(),auth.getChangeId());
-        require(c!=null&&c.getAgentId().equals(scope.agentId())&&c.getOwnerJiacn().equals(scope.ownerJiacn()),403,"AGENT_FORBIDDEN");
-        var a=new HostingRentHttp.Actor(c.getActorId(),scope.tenantId(),scope.clientId(),scope.ownerJiacn());
+        var context=origin(auth);
+        require(context!=null&&context.agentId().equals(scope.agentId())&&context.ownerJiacn().equals(scope.ownerJiacn())&&context.skillKey().equals(skill),403,"AGENT_FORBIDDEN");
+        var a=new HostingRentHttp.Actor(context.actorId(),scope.tenantId(),scope.clientId(),scope.ownerJiacn());
         return owned(a,scope.agentId(),null,true,()->{
             var state=state(a,scope.agentId(),skill);var e=db.entitlement(scope.tenantId(),scope.clientId(),auth.getEntitlementId());
             require(installationId.equals(state.getActiveInstallationId())&&Boolean.TRUE.equals(state.getDesiredEnabled())
@@ -787,8 +824,8 @@ public final class SkillManagementService {
         var auth=db.findAuthorization(tenant,client,installationId);
         Map<String,Object> ref;String key,permissions;
         if(auth!=null) {
-            ref=ref(auth);var c=db.findChange(tenant,client,auth.getChangeId());
-            require(c!=null&&agent.equals(c.getAgentId()),409,"SKILL_STATE_CONFLICT");key=c.getSkillKey();permissions=auth.getPermissionsSha256();
+            ref=ref(auth);var context=origin(auth);
+            require(context!=null&&agent.equals(context.agentId()),409,"SKILL_STATE_CONFLICT");key=context.skillKey();permissions=auth.getPermissionsSha256();
         } else {
             // Explicit adapter for ALREADY admitted snapshots. Resolve ONLY their exact immutable
             // installation/order/receipt, never current state/product or a guessed replacement.

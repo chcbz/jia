@@ -18,4 +18,6 @@ public class SkillInstallationAuthorizationEntity {
     private String permissionsSha256;
     private String runtimeInstallationId;
     private String runtimeHostId;
+    /** Offline, verified provenance projection; never a fabricated SM-C1 command/result. */
+    private String adoptionEvidenceJson;
 }

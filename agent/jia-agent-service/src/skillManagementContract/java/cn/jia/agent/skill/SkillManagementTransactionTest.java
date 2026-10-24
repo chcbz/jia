@@ -280,6 +280,63 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         assertEquals(2,service.descriptors(scope()).size()); // old exact executable remains recoverable
         assertEquals("new",service.admit(scope(),"pdf-export",newest,()->"new"));assertEquals(1,count("economy_skill_order"));assertEquals(95_000_000L,wallet());
     }
+    /** Convert a private successful fixture into an exact historical installation plus adoption
+     * projection. No new protocol command/result is invented by the migration. */
+    private Map<String,Object> adoptedFixture() throws Exception {
+        publishExecutable("1.0.0",1);var change=packageChange("INSTALL",null,"0","spv_pdf_1");finishInstall(change);change=current(change);
+        String installation=text(object(change.get("target")),"skillInstallationId");
+        var auth=db.findAuthorization("0",ACTOR.clientId(),installation);
+        byte[] receiptHash=java.util.HexFormat.of().parseHex("d".repeat(64));
+        app.insertResult("0",ACTOR.clientId(),"historical-receipt",installation,receiptHash,"ACTIVE",1L);
+        String local="e".repeat(64),migration="adopt_"+hash("cyf.skill.adoption.identity.v1",map("tenantId","0","clientId",ACTOR.clientId(),"skillInstallationId",installation,"localEvidenceSha256",local));
+        var proof=map("schemaVersion",1,"migrationId",migration,"actorId",ACTOR.actorId(),"ownerJiacn",ACTOR.ownerJiacn(),"agentId",AGENT,"skillKey","pdf-export",
+                "runtimeInstallationId",runtime.getRuntimeInstallationId(),"runtimeHostId","host-1","receiptMessageId","historical-receipt","receiptSha256",HexFormat.of().formatHex(receiptHash),
+                "package",object(change.get("target")),"approvedPermissionsSha256",auth.getPermissionsSha256(),"localEvidenceSha256",local);
+        proof.put("evidenceSha256",hash("cyf.skill.adoption.v1",proof));
+        jdbc.update("UPDATE economy_skill_installation_authorization SET change_id=?,adoption_evidence_json=? WHERE installation_id=?",migration,json(proof),installation);
+        jdbc.update("DELETE FROM economy_skill_change_command");jdbc.update("DELETE FROM economy_skill_change");jdbc.update("DELETE FROM economy_skill_management_result");
+        jdbc.update("UPDATE economy_skill_installation SET schema_version=1");
+        return change;
+    }
+    @Test void exactHistoricalAdoptionSupportsDescriptorsAdmissionFrozenBindingAndDisableWithoutInventedApplied() throws Exception {
+        var adopted=adoptedFixture();String id=text(object(adopted.get("target")),"skillInstallationId");catalog(adopted);
+        assertEquals(0,count("economy_skill_change"));assertEquals(0,count("economy_skill_change_command"));assertEquals(0,count("economy_skill_management_result"));
+        assertEquals(1,service.descriptors(scope()).size());
+        var auth=db.findAuthorization("0",ACTOR.clientId(),id);
+        assertTrue(tx.execute(s->service.qualifies(scope(),auth)));
+        assertEquals(id,service.admit(scope(),"pdf-export",id,()->service.taskBinding("0",ACTOR.clientId(),"exec-adopted","grant-adopted",1,AGENT,id)).get("skillInstallationId"));
+        var listed=service.skills(ACTOR,AGENT,false);assertEquals(1,((List<?>)listed.get("items")).size());
+        var item=object(((List<?>)listed.get("items")).getFirst());assertNull(item.get("latestChange"));assertTrue(((List<?>)item.get("allowedActions")).contains("DISABLE"));
+        assertEquals(1,count("economy_skill_order"));assertEquals(1,count("economy_skill_entitlement"));assertEquals(95_000_000L,wallet());
+        assertTrue(service.descriptors(new SkillCapabilityLookup.Scope("0",ACTOR.clientId(),"wrong-owner",AGENT)).isEmpty());
+        assertTrue(service.descriptors(new SkillCapabilityLookup.Scope("0","other-client",ACTOR.ownerJiacn(),AGENT)).isEmpty());
+    }
+    @Test void historicalAdoptionRejectsChangedReceiptDigestPackageOrLocalProofWithoutFinancialSideEffects() throws Exception {
+        var adopted=adoptedFixture();catalog(adopted);String id=text(object(adopted.get("target")),"skillInstallationId");
+        var original=jdbc.queryForObject("SELECT adoption_evidence_json FROM economy_skill_installation_authorization",String.class);
+        var beforeWallet=wallet();
+        jdbc.update("UPDATE economy_skill_result_receipt SET request_hash=?",new byte[32]);
+        assertTrue(service.descriptors(scope()).isEmpty());
+        assertFalse(tx.execute(s->service.qualifies(scope(),db.findAuthorization("0",ACTOR.clientId(),id))));
+        jdbc.update("UPDATE economy_skill_result_receipt SET request_hash=?",HexFormat.of().parseHex("d".repeat(64)));
+        assertEquals(1,service.descriptors(scope()).size());
+        for(String key:List.of("ownerJiacn","agentId","skillKey","receiptSha256","localEvidenceSha256","approvedPermissionsSha256")) {
+            var forged=read(original.getBytes(java.nio.charset.StandardCharsets.UTF_8),null);forged.put(key,"f".repeat(64));
+            jdbc.update("UPDATE economy_skill_installation_authorization SET adoption_evidence_json=?",json(forged));
+            assertTrue(service.descriptors(scope()).isEmpty(),key);
+        }
+        jdbc.update("UPDATE economy_skill_installation_authorization SET adoption_evidence_json=?",original);
+        jdbc.update("UPDATE economy_skill_installation SET package_sha256=?",new byte[32]);assertTrue(service.descriptors(scope()).isEmpty());
+        assertEquals(beforeWallet,wallet());assertEquals(1,count("economy_skill_order"));assertEquals(0,count("economy_skill_change_command"));
+    }
+    @Test void historicalActiveWithoutExplicitAdoptionNeverQualifiesOrCreatesNewPurchase() throws Exception {
+        var adopted=adoptedFixture();catalog(adopted);String id=text(object(adopted.get("target")),"skillInstallationId");
+        jdbc.update("UPDATE economy_skill_installation_authorization SET adoption_evidence_json=NULL");
+        assertTrue(service.descriptors(scope()).isEmpty());
+        assertFalse(tx.execute(s->service.qualifies(scope(),db.findAuthorization("0",ACTOR.clientId(),id))));
+        assertThrows(SkillMarketplaceException.class,()->service.admit(scope(),"pdf-export",id,()->"never"));
+        assertEquals(0,count("economy_skill_change_command"));assertEquals(1,count("economy_skill_order"));
+    }
     @Test void explicitPaidUpgradeReservesAndCapturesFullApprovedTargetPriceOnlyOnce() throws Exception {
         publishExecutable("1.0.0",1);var first=packageChange("INSTALL",null,"0","spv_pdf_1");finishInstall(first);first=current(first);
         publishExecutable("2.0.0",2);
