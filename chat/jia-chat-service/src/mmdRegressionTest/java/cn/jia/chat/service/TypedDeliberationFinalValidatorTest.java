@@ -398,7 +398,7 @@ class TypedDeliberationFinalValidatorTest {
     }
 
     @Test
-    void tv28ReferenceCatalogMatchesUnified32Materials() {
+    void tv28ReferenceCatalogPreservesMaterialsBeyondOldCountLimit() {
         List<Object> thirtyTwo = new ArrayList<>();
         for (int index = 0; index < 32; index++) {
             thirtyTwo.add(source("source_" + index, "TASK_WORKSPACE_FILE", "file"));
@@ -408,6 +408,9 @@ class TypedDeliberationFinalValidatorTest {
         assertEquals(32, result.dispatchFacts().availableSources().size());
         List<Object> thirtyThree = new ArrayList<>(thirtyTwo);
         thirtyThree.add(source("source_32", "TASK_WORKSPACE_FILE", "file"));
+        assertEquals(33, TypedDeliberationFinalValidator.validate(binding(),
+                facts(List.of(), thirtyThree, "AVAILABLE"), "正文", answer("正文")).dispatchFacts().availableSources().size());
+        thirtyThree.add(thirtyThree.getFirst());
         rejects(INVALID_FACTS, () -> TypedDeliberationFinalValidator.validate(binding(),
                 facts(List.of(), thirtyThree, "AVAILABLE"), "正文", answer("正文")));
     }

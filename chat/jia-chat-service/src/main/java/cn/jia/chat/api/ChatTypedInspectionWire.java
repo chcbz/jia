@@ -77,7 +77,7 @@ public final class ChatTypedInspectionWire {
         Long parentVersion = nullableDecimal(body.get("expectedParentStateVersion"));
         String pending = nullableText(body.get("pendingQuestionId"), 64);
         Long pendingVersion = nullableDecimal(body.get("expectedPendingQuestionStateVersion"));
-        if (!(body.get("sourceSelectors") instanceof List<?> raw) || raw.size() > 32) throw invalid();
+        if (!(body.get("sourceSelectors") instanceof List<?> raw)) throw invalid();
         List<SourceSelector> selectors = new ArrayList<>();
         Set<SourceSelector> unique = new HashSet<>();
         for (Object item : raw) { SourceSelector selector = selector(item); if (!unique.add(selector)) throw invalid(); selectors.add(selector); }

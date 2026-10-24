@@ -61,12 +61,12 @@
         "minItems": {
           "type": "integer",
           "minimum": 0,
-          "maximum": 32
+          "maximum": 2147483647
         },
         "maxItems": {
           "type": "integer",
           "minimum": 0,
-          "maximum": 32
+          "maximum": 2147483647
         },
         "acceptedMimeTypes": {
           "type": "array",

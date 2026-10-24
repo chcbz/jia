@@ -79,7 +79,6 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     private static final String RUNTIME_FAILURE_CODE = "AGENT_DELIVERY_FAILED";
     private static final String RUNTIME_FAILURE_MESSAGE = "Agent 未能完成本次交付，请调整需求后重新创建执行。";
     /** Matches the runtime bridge manifest limit; every input remains independently owner-scoped and version-pinned. */
-    private static final int MAX_EXECUTION_INPUTS = 128;
     private static final long TASK_LEASE_DURATION_MILLIS = 900_000L;
     /** Security fence lease, renewable by the same authenticated runtime, not a performance timeout. */
     private static final long CONVERSATION_LEASE_MILLIS = 900_000L;
@@ -337,7 +336,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         if (valid.taskId() == null || !(textFile || Set.of("image/png", "image/jpeg").contains(valid.outputContentMimeType()))
                 || command.controlledImage() && !"image/png".equals(valid.outputContentMimeType()))
             throw failure(Reason.CAPABILITY_UNAVAILABLE);
-        if (command.references().size()>(command.controlledImage()?16:32)) throw failure(Reason.BAD_REQUEST);
+        if (command.controlledImage() && command.references().size()>16) throw failure(Reason.BAD_REQUEST);
         if(controlledProtocol==3&&(followupSources==null||initialControlledOperations==null))
             throw failure(Reason.CAPABILITY_UNAVAILABLE);
         for (var ref:command.references()) {
@@ -2509,7 +2508,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     }
 
     private RuntimeCommand command(PersonalWorkspaceExecutionEntity execution, List<RuntimeInput> inputs) {
-        if (Objects.equals(4,execution.getExecutionProtocolVersion()) || inputs.size() > MAX_EXECUTION_INPUTS || !"QUEUED".equals(execution.getExecutionState())) return null;
+        if (Objects.equals(4,execution.getExecutionProtocolVersion()) || !"QUEUED".equals(execution.getExecutionState())) return null;
         String outputMime = execution.getOutputContentMimeType();
         String extension = EXTENSIONS.get(outputMime);
         if (!executionMimeTypes.contains(outputMime) || extension == null || storage.maxContentBytes() < 1
@@ -2682,7 +2681,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                 || !executionMimeTypes.contains(outputMime)) {
             throw failure(Reason.CAPABILITY_UNAVAILABLE);
         }
-        if (command.inputs() == null || command.inputs().size() > MAX_EXECUTION_INPUTS) throw failure(Reason.BAD_REQUEST);
+        if (command.inputs() == null) throw failure(Reason.BAD_REQUEST);
         List<InputSelection> selections = List.copyOf(command.inputs());
         Set<String> selectedFiles = new LinkedHashSet<>();
         for (InputSelection selected : selections) {
@@ -2849,7 +2848,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         return (Map<String,Object>)value;
     }
     @SuppressWarnings("unchecked") private static List<Map<String,Object>> skillInputs(Map<String,Object> snapshot) {
-        if(!(snapshot.get("inputs") instanceof List<?> values)||values.size()>32)throw failure(Reason.BAD_REQUEST);
+        if(!(snapshot.get("inputs") instanceof List<?> values))throw failure(Reason.BAD_REQUEST);
         var result=new ArrayList<Map<String,Object>>();for(var input:values)result.add(skillObject(input));return List.copyOf(result);
     }
     private static String skillString(Map<String,Object> value,String key) {
@@ -3178,7 +3177,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     public cn.jia.agent.service.SkillExecutionService.ResultReceipt commitResult(RuntimeScope authenticatedScope,String taskId,String runId,String manifestId,cn.jia.agent.service.SkillExecutionService.ResultCommit command) {
         final RuntimeScope scope=executionScope(authenticatedScope,taskId,runId);
         requireSkillEnabled();nativeAuthentication(scope);id(manifestId,"manifestId",100);
-        if(command==null||command.artifacts()==null||command.inputReceipts()==null||command.inputReceipts().size()>32||command.artifacts().size()>128||!sha(command.snapshotDigest()))throw failure(Reason.BAD_REQUEST);
+        if(command==null||command.artifacts()==null||command.inputReceipts()==null||command.artifacts().size()>128||!sha(command.snapshotDigest()))throw failure(Reason.BAD_REQUEST);
         var artifactIds=new LinkedHashSet<String>();for(var output:command.artifacts()) {
             if(output==null||!artifactIds.add(output.outputId())||!sha(output.sha256())||output.byteLength()<1||output.byteLength()>storage.maxContentBytes())throw failure(Reason.BAD_REQUEST);id(output.outputId(),"outputId",100);
         }

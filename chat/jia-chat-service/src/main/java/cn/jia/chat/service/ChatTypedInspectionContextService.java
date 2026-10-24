@@ -88,7 +88,7 @@ public final class ChatTypedInspectionContextService {
     public Context resolve(Scope scope, List<ChatTypedInspectionWire.SourceSelector> requested) {
         if (!enabled) throw unavailable("Typed inspection is disabled");
         validate(scope);
-        if (requested == null || requested.isEmpty() || requested.size() > 32) throw invalid();
+        if (requested == null || requested.isEmpty()) throw invalid();
         var executor=dispatchAuthority.admissionTarget(scope.tenantId(),scope.ownerJiacn(),scope.clientId(),scope.taskId(),scope.targetAgentId());
         TypedInspectionSessionRegistry.Ready ready;
         try {
@@ -233,7 +233,7 @@ public final class ChatTypedInspectionContextService {
         validateScope(exactMap(manifest.get("scope"), SCOPE_KEYS));
         validateProfile(exactMap(manifest.get("profile"), PROFILE_KEYS));
         if (!(manifest.get("sources") instanceof List<?> rawSources)
-                || rawSources.isEmpty() || rawSources.size() > 32
+                || rawSources.isEmpty()
                 || available.size() != rawSources.size()) {
             throw new IllegalArgumentException();
         }

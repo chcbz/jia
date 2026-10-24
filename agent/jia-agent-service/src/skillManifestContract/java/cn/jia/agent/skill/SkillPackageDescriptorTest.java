@@ -67,9 +67,9 @@ class SkillPackageDescriptorTest {
         var present=archive(Map.of("SKILL.md","instructions".getBytes(),"manifest.json",manifest,"scripts/export.py","print(1)".getBytes()));
         assertEquals("local-script",SkillPackageDescriptor.read(present,codec).document().path("runner").asText());
     }
-    @Test void existingArchiveEntryCountLimitEnforced() throws Exception {
+    @Test void ordinaryArchiveIsNotRejectedForEntryCount() throws Exception {
         Map<String,byte[]> files=new LinkedHashMap<>();files.put("SKILL.md","instructions".getBytes());
         for(int i=0;i<256;i++) files.put("references/"+i,new byte[0]);var p=archive(files);
-        assertThrows(SkillMarketplaceException.class,()->SkillPackageDescriptor.read(p,codec));
+        assertNull(SkillPackageDescriptor.read(p,codec));
     }
 }

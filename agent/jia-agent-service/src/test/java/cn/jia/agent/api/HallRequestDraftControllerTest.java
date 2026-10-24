@@ -40,6 +40,17 @@ class HallRequestDraftControllerTest {
     }
 
     @Test
+    void validDraftBodyHasNoRedundant256KiBEnvelopeBudget() throws Exception {
+        when(service.create(any(),any(),eq("large-body"))).thenReturn(view("hdr_1",1,"EDITING"));
+        String body="{ "+" ".repeat(300*1024)+"\"kind\":\"CREATE\",\"originRef\":\"map\","
+                +"\"title\":\"title\",\"instruction\":\"body\",\"inputs\":[]}";
+        mvc.perform(post("/agent/hall/drafts").principal(jwt())
+                .header("Idempotency-Key","large-body").contentType("application/json").content(q(body)))
+                .andExpect(status().isCreated());
+        verify(service).create(any(),any(),eq("large-body"));
+    }
+
+    @Test
     void createUsesOnlyJwtScopeAndReturnsFrozenDraftShapeWithNoStore() throws Exception {
         when(service.create(any(), any(), eq("create-key"))).thenReturn(view("hdr_1", 1, "EDITING"));
 

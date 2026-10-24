@@ -71,7 +71,6 @@ public final class HistoricalV4ChatActionOutcomeContract {
         exact(raw, "ACTION_FACTS_INVALID", "schemaVersion", "availableActions", "availableSources", "inspectedSourceRefIds");
         if (integer(raw.get("schemaVersion"), "ACTION_FACTS_INVALID") != VERSION) throw invalid("ACTION_FACTS_INVALID");
         var rawSources = array(raw.get("availableSources"), "ACTION_SOURCES_INVALID");
-        if (rawSources.size() > 32) throw invalid("ACTION_SOURCES_INVALID");
         List<Source> sources = new ArrayList<>(); Set<String> ids = new HashSet<>();
         for (var source : rawSources) {
             exact(source, "ACTION_SOURCES_INVALID", "sourceRefId", "kind", "mediaType", "contentMimeType");

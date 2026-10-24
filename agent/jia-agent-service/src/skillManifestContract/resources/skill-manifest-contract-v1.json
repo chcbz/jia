@@ -122,10 +122,10 @@
       "skillVersion": "1.0.0"
     },
     {
-      "id": "source-bound",
+      "id": "source-count-extension",
       "kind": "manifest",
       "json": "{\"schemaVersion\": 1, \"skillKey\": \"image-edit\", \"skillVersion\": \"1.0.0\", \"title\": \"图片编辑\", \"description\": \"按用户要求修改已授权的一张图片。\", \"runner\": \"provider-operation\", \"entrypoint\": \"image-http.edit\", \"parametersSchema\": {\"type\": \"object\", \"properties\": {}, \"required\": [], \"additionalProperties\": false, \"$schema\": \"https://json-schema.org/draft/2020-12/schema\"}, \"inputs\": {\"minItems\": 1, \"maxItems\": 33, \"acceptedMimeTypes\": [\"image/png\", \"image/jpeg\"]}, \"outputs\": {\"mimeTypes\": [\"image/png\"], \"multiple\": false, \"dataSchema\": null, \"artifactsRequired\": true}, \"requirements\": {\"providerAlias\": \"image\"}, \"costInfo\": {\"mode\": \"UNKNOWN\", \"amount\": null, \"currency\": null, \"unit\": \"image\", \"description\": \"由绑定服务商收费，平台仅登记说明。\", \"source\": null, \"updatedAt\": null}}",
-      "expected": false,
+      "expected": true,
       "skillKey": "image-edit",
       "skillVersion": "1.0.0"
     },
@@ -956,6 +956,14 @@
       },
       "json": "{\"a\": 1, \"b\": 2}",
       "expected": false
+    },
+    {
+      "id": "source-count-int-overflow",
+      "kind": "manifest",
+      "json": "{\"schemaVersion\": 1, \"skillKey\": \"image-edit\", \"skillVersion\": \"1.0.0\", \"title\": \"图片编辑\", \"description\": \"按用户要求修改已授权的一张图片。\", \"runner\": \"provider-operation\", \"entrypoint\": \"image-http.edit\", \"parametersSchema\": {\"type\": \"object\", \"properties\": {}, \"required\": [], \"additionalProperties\": false, \"$schema\": \"https://json-schema.org/draft/2020-12/schema\"}, \"inputs\": {\"minItems\": 1, \"maxItems\": 2147483648, \"acceptedMimeTypes\": [\"image/png\", \"image/jpeg\"]}, \"outputs\": {\"mimeTypes\": [\"image/png\"], \"multiple\": false, \"dataSchema\": null, \"artifactsRequired\": true}, \"requirements\": {\"providerAlias\": \"image\"}, \"costInfo\": {\"mode\": \"UNKNOWN\", \"amount\": null, \"currency\": null, \"unit\": \"image\", \"description\": \"由绑定服务商收费，平台仅登记说明。\", \"source\": null, \"updatedAt\": null}}",
+      "expected": false,
+      "skillKey": "image-edit",
+      "skillVersion": "1.0.0"
     }
   ]
 }

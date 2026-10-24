@@ -191,14 +191,16 @@ class AgentTaskExecutionGrantServiceImplTest {
     }
 
     @Test
-    void pointRejectsMoreThan32DistinctVersionsBeforeAssignment() {
+    void pointGrantsEveryVersionAcrossPagesWithoutACountGate() {
         var rows=new java.util.ArrayList<PersonalWorkspaceTaskFileLinkEntity>();
-        for(int i=0;i<33;i++)rows.add(pointMaterial("file-"+i,1,"INPUT","text/plain"));
+        for(int i=0;i<33;i++)rows.add(pointMaterial("file-"+i,1,"INPUT","text/plain")
+                .setCreatedAt(100L).setRelationId(String.format("r%02d",i)));
         when(links.list("0","client","owner","task-1",null,null,33)).thenReturn(rows);
-        var failure=assertThrows(AgentTaskExecutionGrantException.class,
-                ()->service.assignForDeliberation(scope(),"task-1","point-limit","agent-1",0,1));
-        assertEquals(AgentTaskExecutionGrantException.Reason.BAD_REQUEST,failure.reason());
-        assertNull(root.getAssignedAgentId()); assertTrue(grants.byAction.isEmpty());
+        when(links.list("0","client","owner","task-1",100L,"r32",33))
+                .thenReturn(List.of(pointMaterial("file-33",1,"INPUT","text/plain")));
+        var receipt=service.assignForDeliberation(scope(),"task-1","point-limit","agent-1",0,1);
+        assertEquals(34,receipt.getInputs().size());
+        assertEquals(1,grants.byAction.size()); assertEquals(1,bootstraps.byAction.size());
     }
 
     @Test

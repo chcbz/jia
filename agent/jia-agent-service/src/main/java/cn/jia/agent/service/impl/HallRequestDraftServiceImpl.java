@@ -50,7 +50,6 @@ import java.util.function.LongSupplier;
 @Named
 public class HallRequestDraftServiceImpl implements HallRequestDraftService {
     private static final int PAGE_SIZE = 20;
-    private static final int MAX_INPUTS = 128;
     private static final long MAX_SAFE_REVISION = 9_007_199_254_740_991L;
     private static final Set<String> KINDS = Set.of(
             "CREATE", "REVISION", "TASK_CREATE", "TASK_ACTION");
@@ -806,7 +805,6 @@ public class HallRequestDraftServiceImpl implements HallRequestDraftService {
         if (mime != null && !allowedOutputMimes.contains(mime)) {
             throw sourceUnavailable("outputMime", "OUTPUT_MIME");
         }
-        if (fields.inputs().size() > MAX_INPUTS) throw failure(Reason.BAD_REQUEST);
         List<InputSelection> inputs = new ArrayList<>(fields.inputs().size());
         Set<String> unique = new HashSet<>();
         for (InputSelection input : fields.inputs()) {

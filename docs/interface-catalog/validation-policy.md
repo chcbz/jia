@@ -70,3 +70,22 @@
 4. 源码/测试/上线分别记录，修改旧测试时必须保留原受保护不变量，不删除失败样例来凑绿。
 
 扫描证据：`/var/tmp/cyf-skill-adoption-20261024/validation-scan/inventory.json`（路径/行/模式/文件SHA）、`summary.json`、各定向测试日志。扫描基线API ff819208、Web8c84e51、Runtime b77f7d0；操作脚本来自共享根工作区实际字节，非干净HEAD快照。排除依赖、测试、产物和其他项目；扫描范围与“已逐条核实”分开记录。
+
+## 6. 资料链路续核（2026-10-24，候选源码，未上线）
+
+- 删除资料选择/创建/点将/议事/检查/通用执行快照的32项门槛，删除草稿Web100/API128项、执行128项及草稿HTTP256KiB重复门槛。覆盖Web picker、create/point intents、draft与typed消费者；API creation/Grant/allTaskMaterials、draft、workspace execute；Chat typed wire/context/final与bootstrap及历史只读投影；Runtime reference/materials/typed-inspection/action/skill command。目录不截断，完整分页仍检查游标前进/主体，不以超过单页长度拒绝整个目录。
+- `MATERIAL_PAGE_SIZE=33`只控制每次数据库读取批次，循环读取全部页，不是总资料限额。点将回归使用34份跨页目录；草稿129份逐项核权，最后一份不可读仍拒绝且不创建草稿。去掉通用数量校验不等于删除逐项版本/归属/哈希/租约/幂等/CAS核对。
+- 技能manifest的minItems/maxItems不再限定≤32；保留0≤min≤max及int可表示范围（Java使用asInt及List.size，2147483648会溢出）。具体技能批准manifest仍决定单次技能输入范围：运行时不能偷偷修改已安装manifest/摘要，也不能将目录全部资料自动授权给某个动作。既有发布包maxItems=32不在本轮重打包，新增声明可超过32；Provider真实能力仍在Provider边界校验。完整目录可用于普通议事，不要求全部参与单次技能调用。
+- 必要的可执行技能输出声明：dataSchema与mimeTypes不能同时为空，否则无法区分“只返回文字解释”与“正式技能结果”；artifactsRequired=true必须声明可交付类型。失败范围仅该技能manifest，不影响普通SKILL.md说明包；实现`SkillManifestCodec`/Runtime manifest，shared contract fixtures与descriptor回归。API270失败来自新增测试错误地同时声明null dataSchema和空mimeTypes，修正夹具为text/plain而不删除该语义保护。
+
+### 数据库存量迁移（未执行）
+
+创建事项表旧`chk_atco_refs`把input_refs_json限定为ARRAY且0..32；只删Java/Web仍会写库失败，不能宣称已打通。新建表保留JSON ARRAY类型但去数量上限；现有表必须在受控schema维护窗口应用`agent/jia-agent-mapper/src/main/resources/db/agent-task-creation-operation-unbounded-materials.sql`。
+
+步骤：核对真实目标与授权→按现有schema/发布锁保存SHOW CREATE TABLE及数据恢复点/行数→确认仅旧ARRAY+0..32 CHECK待替换（已迁移则只读验证，不重复ALTER）→同一ALTER原子替换为ARRAY-only→读取CHECK及原行数/抽样原内容→原initializer只读校验→再启用候选程序。不能删除身份/唯一键/receipt CHECK、清表、自动截断或把迁移写进普通应用启动；本轮仅提交脚本和隔离MySQL回归，不修改生产库。
+
+回退：出现超过32的真实数据后旧程序/旧CHECK不能无损承载；不得为回退截断资料或恢复旧备份覆盖新事实。先核对数据兼容性，再决定受控恢复或向前修复。正式验证包含复用既有自有MySQL的`SkillManagementMaterialMigrationTest`（非环境跳过）；原opt-in `AgentTaskCreationOperationMySqlTest`另保留。
+
+### 尚未逐项核实（不是必要性豁免）
+
+剩余其他业务DTO/只读事件/工作空间帧的封闭字段、其他HTTP body和文本阈值、成果数量限制、分页上限、旧技能/工作空间发现采样与深度限制仍须按调用链逐项裁定。检索命中、文档列名和局部回归都不等于全库审核完成；本节不将这些项默认保留为必要，也不声称全库已清理完。

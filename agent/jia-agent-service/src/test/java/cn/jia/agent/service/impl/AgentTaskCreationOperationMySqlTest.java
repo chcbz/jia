@@ -106,10 +106,36 @@ class AgentTaskCreationOperationMySqlTest {
                 """, "a".repeat(64)));
         String thirtyThree = "[" + String.join(",", java.util.Collections.nCopies(33,
                 "{\"fileId\":\"f\",\"version\":1,\"purpose\":\"REFERENCE\"}")) + "]";
+        insertProcessing("owner-a", "many-materials", "atco_5", thirtyThree);
         assertThrows(DataAccessException.class,
-                () -> insertProcessing("owner-a", "too-many", "atco_5", thirtyThree));
+                () -> insertProcessing("owner-a", "not-array", "atco_bad", "{}"));
         assertThrows(DataAccessException.class,
                 () -> insertProcessing("0", "bad-owner", "atco_6", "[]"));
+    }
+
+    @Test
+    void explicitMigrationRemovesOnlyCountConstraintAndPreservesExistingFacts() throws Exception {
+        jdbc.execute("ALTER TABLE agent_task_creation_operation DROP CHECK chk_atco_refs, "
+                + "ADD CONSTRAINT chk_atco_refs CHECK (JSON_TYPE(input_refs_json)='ARRAY' "
+                + "AND JSON_LENGTH(input_refs_json) BETWEEN 0 AND 32)");
+        insertProcessing("owner-a", "original", "atco_original", "[]");
+        String refs="["+String.join(",",java.util.Collections.nCopies(129,"{}"))+"]";
+        assertThrows(DataAccessException.class,
+                () -> insertProcessing("owner-a", "many", "atco_many", refs));
+        String migration=new org.springframework.core.io.ClassPathResource(
+                "db/agent-task-creation-operation-unbounded-materials.sql")
+                .getContentAsString(java.nio.charset.StandardCharsets.UTF_8)
+                .replaceAll("(?m)^\\s*--.*$", " ").trim();
+        jdbc.execute(migration);
+        assertEquals(1,count());
+        new AgentTaskCreationOperationSchemaInitializer(jdbc).afterPropertiesSet();
+        insertProcessing("owner-a", "many", "atco_many", refs);
+        assertEquals(129,jdbc.queryForObject("SELECT JSON_LENGTH(input_refs_json) FROM "
+                + "agent_task_creation_operation WHERE operation_id='atco_many'",Integer.class));
+        assertThrows(DataAccessException.class,
+                () -> insertProcessing("owner-a", "object", "atco_object", "{}"));
+        assertThrows(DataAccessException.class,
+                () -> insertProcessing("owner-a", "original", "atco_conflict", "[]"));
     }
 
     @Test

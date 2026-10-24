@@ -48,6 +48,28 @@ class HallRequestDraftServiceImplTest {
             new HallRequestDraftService.OwnerScope("0", "client-b", "owner-a");
 
     @Test
+    void draftPreservesAll129InputsAndStillChecksTheLastVersionsAuthority() {
+        Fixture fixture=new Fixture();
+        var inputs=new ArrayList<HallRequestDraftService.InputSelection>();
+        for(int i=0;i<129;i++) {
+            String id="file-"+i; inputs.add(new HallRequestDraftService.InputSelection(id,1));
+            when(fixture.workspace.findFile("0","client-a","owner-a",id))
+                    .thenReturn(new PersonalWorkspaceFileEntity().setFileId(id).setState("ACTIVE"));
+            when(fixture.workspace.findVersion("0","client-a","owner-a",id,1))
+                    .thenReturn(new PersonalWorkspaceVersionEntity().setFileId(id).setVersion(1));
+        }
+        var fields=new HallRequestDraftService.EditableFields("title","body",null,
+                PersonalWorkspaceExecutionProperties.DOCX,inputs);
+        var command=new HallRequestDraftService.CreateCommand("CREATE","files",null,null,null,null,fields,null);
+        var result=fixture.service.create(OWNER_A,command,"many-inputs");
+        assertEquals(inputs,result.editableFields().inputs());
+        when(fixture.workspace.findVersion("0","client-a","owner-a","file-128",1)).thenReturn(null);
+        assertReason(HallRequestDraftService.Reason.SOURCE_UNAVAILABLE,
+                () -> fixture.service.create(OWNER_A,command,"unavailable-tail"));
+        assertEquals(1,fixture.dao.rows.size());
+    }
+
+    @Test
     void resultFakePreservesExactScopePrivateModeBinaryOrderAndUnavailableBindings() {
         FakeDao dao = new FakeDao();
         var later = resultRow("0", "client-a", "owner-a", "run-a", "PRIVATE", "z");

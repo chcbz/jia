@@ -165,7 +165,6 @@ public class AgentCollaborationRequestServiceImpl implements AgentCollaborationR
         exact(command.targetAgentId(), "targetAgentId", 100);
         exact(command.instruction(), "instruction", 16_000);
         exact(command.outputContentMimeType(), "outputContentMimeType", 160);
-        if (command.inputs().size() > 32) throw new Failure(Reason.BAD_REQUEST);
         for (InputSelection input : command.inputs()) {
             if (input == null || input.version() < 1) throw new Failure(Reason.BAD_REQUEST);
             exact(input.fileId(), "fileId", 100);

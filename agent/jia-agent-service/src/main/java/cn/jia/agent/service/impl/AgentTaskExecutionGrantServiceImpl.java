@@ -52,7 +52,8 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
     private static final Set<String> OPERATIONS = Set.of(
             "DELIBERATE", "EXECUTE_SKILL", "INSPECT_INPUTS", "GENERATE_TEXT_FILE", "GENERATE_IMAGE", "EDIT_IMAGE", "GENERATE_AUDIO", "EDIT_AUDIO");
     private static final Set<String> PURPOSES = Set.of("INPUT", "REFERENCE");
-    private static final int MAX_INPUTS = 32;
+    // Query batch only; all pages participate in the same owner-scoped snapshot.
+    private static final int MATERIAL_PAGE_SIZE = 33;
     private static final long MAX_SAFE_INTEGER = 9_007_199_254_740_991L;
 
     private final AgentTaskExecutionGrantDao grants;
@@ -150,8 +151,8 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
         Long before=null; String after=null;
         while (true) {
             List<PersonalWorkspaceTaskFileLinkEntity> page=taskLinks.list(scope.tenantId(),scope.clientId(),
-                    scope.ownerJiacn(),taskId,before,after,MAX_INPUTS+1);
-            if (page==null || page.size()>MAX_INPUTS+1) throw invalidState("Task material catalogue is unavailable");
+                    scope.ownerJiacn(),taskId,before,after,MATERIAL_PAGE_SIZE);
+            if (page==null || page.size()>MATERIAL_PAGE_SIZE) throw invalidState("Task material catalogue is unavailable");
             for (var link:page) {
                 if (link==null || !same(link.getTenantId(),scope.tenantId())
                         || !same(link.getClientId(),scope.clientId()) || !same(link.getOwnerJiacn(),scope.ownerJiacn())
@@ -162,9 +163,8 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
                 // A version may have both historical roles; it is still one product attachment.
                 if (old==null || "INPUT".equals(link.getLinkRole())) selected.put(identity,
                         material(link.getFileId(),link.getFileVersion(),link.getLinkRole()));
-                if (selected.size()>MAX_INPUTS) throw bad("Task material catalogue exceeds 32 fixed versions");
             }
-            if (page.size()<MAX_INPUTS+1) break;
+            if (page.size()<MATERIAL_PAGE_SIZE) break;
             var last=page.getLast();
             if (last.getCreatedAt()==null || last.getRelationId()==null
                     || before!=null && (last.getCreatedAt()>before
@@ -1014,7 +1014,6 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
     }
     private static List<ValidInput> canonicalInputs(List<AgentTaskGrantInputDTO> source) {
         if (source==null) return List.of();
-        if (source.size()>MAX_INPUTS) throw bad("inputRefs exceeds the safe limit");
         LinkedHashSet<String> unique=new LinkedHashSet<>(); List<ValidInput> result=new ArrayList<>();
         for (AgentTaskGrantInputDTO input:source) {
             if (input==null) throw bad("inputRef is invalid");

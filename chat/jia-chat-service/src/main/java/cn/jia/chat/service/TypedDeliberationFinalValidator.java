@@ -32,7 +32,6 @@ public final class TypedDeliberationFinalValidator {
     private static final int MAX_CONTENT_UTF16 = 200_000;
     private static final int MAX_INSTRUCTION_CODE_POINTS = 4_000;
     private static final int MAX_SOURCE_ID_UTF16 = 512;
-    private static final int MAX_SOURCES = 32;
     private static final Set<String> FACT_KEYS = Set.of(
             "schemaVersion", "referenceMode", "supportedOperations", "availableSources");
     private static final Set<String> SOURCE_KEYS = Set.of("sourceRefId", "kind", "mediaType");
@@ -267,7 +266,6 @@ public final class TypedDeliberationFinalValidator {
             operations.add(operation);
         }
         List<Object> rawSources = list(map.get("availableSources"), Reason.INVALID_FACTS);
-        if (rawSources.size() > MAX_SOURCES) fail(Reason.INVALID_FACTS);
         List<Source> sources = new ArrayList<>();
         Set<String> sourceIds = new HashSet<>();
         for (Object item : rawSources) {

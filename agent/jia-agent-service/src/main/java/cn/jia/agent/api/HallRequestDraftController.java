@@ -37,7 +37,6 @@ import java.util.UUID;
 @RequestMapping("/agent/hall/drafts")
 public class HallRequestDraftController {
     static final String CACHE_CONTROL = "private, no-store";
-    static final int MAX_BODY_BYTES = 256 * 1024;
     private static final ObjectMapper STRICT_JSON = JsonMapper.builder()
             .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
             .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
@@ -252,7 +251,7 @@ public class HallRequestDraftController {
 
     static byte[] readBounded(HttpServletRequest request) {
         if (request == null) throw new RequestFailure();
-        try { return cn.jia.core.config.ApiJsonInput.readData(request, MAX_BODY_BYTES, false); }
+        try { return cn.jia.core.config.ApiJsonInput.readData(request); }
         catch (IOException failure) { throw new RequestFailure(); }
     }
 

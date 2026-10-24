@@ -32,8 +32,7 @@ public final class AgentTaskCreationOperationSchemaInitializer implements Initia
                             + "((operation_state='COMMITTED')and(task_idisnotnull)and"
                             + "(requirement_revision=1)and(completed_atisnotnull)))"),
             Map.entry("chk_atco_refs",
-                    "((json_type(input_refs_json)='ARRAY')and"
-                            + "(json_length(input_refs_json)between0and32))"),
+                    "(json_type(input_refs_json)='ARRAY')"),
             Map.entry("chk_atco_scope",
                     "((tenant_id='0')and(owner_jiacn<>'0'))"),
             Map.entry("chk_atco_time",

@@ -19,8 +19,8 @@ class SkillPackageDescriptorTest {
             {"schemaVersion":1,"skillKey":"repo-inspector","skillVersion":"1.0.0","title":"Read","description":"inspect",
              "runner":"native-model","entrypoint":"repo.inspect",
              "parametersSchema":{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object"},
-             "inputs":{"minItems":0,"maxItems":0,"acceptedMimeTypes":[]},
-             "outputs":{"dataSchema":null,"mimeTypes":[],"multiple":false,"artifactsRequired":false},"requirements":{}}
+             "inputs":{"minItems":0,"maxItems":129,"acceptedMimeTypes":["text/plain"]},
+             "outputs":{"dataSchema":null,"mimeTypes":["text/plain"],"multiple":false,"artifactsRequired":false},"requirements":{}}
             """.getBytes(StandardCharsets.UTF_8);
         var buffer = new ByteArrayOutputStream();
         try (var zip = new ZipOutputStream(buffer)) {
@@ -30,6 +30,7 @@ class SkillPackageDescriptorTest {
         }
         var result = SkillPackageDescriptor.read(packageOf(buffer.toByteArray()), codec);
         assertEquals("repo-inspector", result.document().path("skillKey").asText());
+        assertEquals(129, result.document().at("/inputs/maxItems").asInt());
         assertEquals(java.util.HexFormat.of().formatHex(SkillPackageStore.sha256(manifest)), result.manifestSha256());
     }
     @Test void retainsTotalExpansionProtectionForCompressedContent() throws Exception {

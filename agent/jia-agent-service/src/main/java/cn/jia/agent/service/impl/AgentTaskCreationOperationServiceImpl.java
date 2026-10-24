@@ -337,7 +337,6 @@ public class AgentTaskCreationOperationServiceImpl
             abilities = List.copyOf(abilities);
         }
         List<InputReference> references = new ArrayList<>(command.inputRefs());
-        if (references.size() > 32) throw failure(Reason.BAD_REQUEST);
         Set<String> selected = new HashSet<>();
         for (InputReference reference : references) {
             if (reference == null || !validId(reference.fileId(), 100)
@@ -373,7 +372,7 @@ public class AgentTaskCreationOperationServiceImpl
         String purpose = purpose(schemaVersion);
         try {
             JsonNode root = json.readTree(value);
-            if (root == null || !root.isArray() || root.size() > 32) {
+            if (root == null || !root.isArray()) {
                 throw failure(Reason.UNAVAILABLE);
             }
             List<InputReference> references = new ArrayList<>();

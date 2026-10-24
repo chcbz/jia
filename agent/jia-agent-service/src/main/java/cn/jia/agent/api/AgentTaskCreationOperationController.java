@@ -221,7 +221,7 @@ public final class AgentTaskCreationOperationController {
     private static List<AgentTaskCreationOperationService.InputReference> references(
             JsonNode value, boolean present) {
         if (!present) return List.of();
-        if (value == null || !value.isArray() || value.size() > 32) throw new InvalidRequest();
+        if (value == null || !value.isArray()) throw new InvalidRequest();
         List<AgentTaskCreationOperationService.InputReference> references = new ArrayList<>();
         Set<String> selected = new HashSet<>();
         for (JsonNode item : value) {
@@ -247,7 +247,7 @@ public final class AgentTaskCreationOperationController {
     private static List<AgentTaskCreationOperationService.InputReference> attachments(
             JsonNode value, boolean present) {
         if (!present) return List.of();
-        if (value == null || !value.isArray() || value.size() > 32) throw new InvalidRequest();
+        if (value == null || !value.isArray()) throw new InvalidRequest();
         List<AgentTaskCreationOperationService.InputReference> attachments = new ArrayList<>();
         Set<String> selected = new HashSet<>();
         for (JsonNode item : value) {
