@@ -271,6 +271,7 @@ class AgentServiceImplTest extends BaseMockTest {
     @Test
     void apiKeyOwnedAgentRequiresMatchingScopeAndActiveBinding() {
         AgentRuntimeEntity runtime = new AgentRuntimeEntity();
+        runtime.setTenantId("0");
         runtime.setAgentId("agent-owned");
         runtime.setClientId("client-a");
         runtime.setOwnerJiacn("tenant-a");
@@ -288,6 +289,71 @@ class AgentServiceImplTest extends BaseMockTest {
 
         assertEquals("agent-owned", agentService.requireApiKeyOwnedAgent(
                 "client-a", "tenant-a", "agent-owned").getAgentId());
+    }
+
+    @Test
+    void rosterOwnedAgentSupportsExactTenantOneReadProof() {
+        AgentRuntimeEntity runtime = new AgentRuntimeEntity();
+        runtime.setTenantId("1");
+        runtime.setAgentId("agent-owned");
+        runtime.setClientId("client-a");
+        runtime.setOwnerJiacn("owner-a");
+        runtime.setStatus(AgentConstants.STATUS_ONLINE);
+        runtime.setBindingId(1L);
+        when(agentRuntimeDao.findByAgentId("agent-owned")).thenReturn(runtime);
+        AgentPersonaBindingEntity active = binding("agent-owned", "wuyong");
+        active.setTenantId("1");
+        active.setClientId("client-a");
+        active.setJiacn("owner-a");
+        AgentIdentityRegistryEntity identity = identity(active, AgentConstants.IDENTITY_STATUS_ACTIVE);
+        when(agentIdentityService.requireCanonicalAgentIdInScope(
+                "1", "client-a", "owner-a", "agent-owned")).thenReturn("agent-owned");
+        when(agentIdentityService.requireActiveIdentityForBinding(
+                "1", "client-a", "owner-a", 1L, "agent-owned")).thenReturn(identity);
+
+        AgentRuntimeDTO result = agentService.requireRosterOwnedAgent(
+                "1", "client-a", "owner-a", "agent-owned");
+
+        assertEquals("agent-owned", result.getAgentId());
+        assertEquals(Boolean.TRUE, result.getBoundToMe());
+        assertEquals(Boolean.TRUE, result.getCanOperate());
+    }
+
+    @ParameterizedTest
+    @MethodSource("foreignRosterScopes")
+    void rosterOwnedAgentRejectsForeignTenantClientOrOwner(
+            String tenantId, String clientId, String ownerJiacn) {
+        AgentRuntimeEntity runtime = new AgentRuntimeEntity();
+        runtime.setTenantId("1");
+        runtime.setAgentId("agent-owned");
+        runtime.setClientId("client-a");
+        runtime.setOwnerJiacn("owner-a");
+        runtime.setStatus(AgentConstants.STATUS_ONLINE);
+        runtime.setBindingId(1L);
+        when(agentRuntimeDao.findByAgentId("agent-owned")).thenReturn(runtime);
+        AgentPersonaBindingEntity active = binding("agent-owned", "wuyong");
+        active.setTenantId("1");
+        active.setClientId("client-a");
+        active.setJiacn("owner-a");
+        AgentIdentityRegistryEntity identity = identity(active, AgentConstants.IDENTITY_STATUS_ACTIVE);
+        when(agentIdentityService.requireCanonicalAgentIdInScope(
+                tenantId, clientId, ownerJiacn, "agent-owned")).thenReturn("agent-owned");
+        when(agentIdentityService.requireActiveIdentityForBinding(
+                tenantId, clientId, ownerJiacn, 1L, "agent-owned")).thenReturn(identity);
+
+        AgentServiceImpl.AgentBizException denied = assertThrows(
+                AgentServiceImpl.AgentBizException.class,
+                () -> agentService.requireRosterOwnedAgent(
+                        tenantId, clientId, ownerJiacn, "agent-owned"));
+
+        assertEquals(AgentErrorConstants.AGENT_FORBIDDEN, denied.getCode());
+    }
+
+    static Stream<Arguments> foreignRosterScopes() {
+        return Stream.of(
+                Arguments.of("2", "client-a", "owner-a"),
+                Arguments.of("1", "client-b", "owner-a"),
+                Arguments.of("1", "client-a", "owner-b"));
     }
 
     @Test

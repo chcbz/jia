@@ -643,17 +643,24 @@ public class AgentServiceImpl implements AgentService {
 
     @Override
     public AgentRuntimeDTO requireApiKeyOwnedAgent(String clientId, String jiacn, String agentId) {
-        return requireApiKeyOwnedAgent(clientId, jiacn, agentId, false);
+        return requireScopedOwnedAgent(SINGLE_TENANT_ID, clientId, jiacn, agentId, false);
+    }
+
+    @Override
+    public AgentRuntimeDTO requireRosterOwnedAgent(
+            String tenantId, String clientId, String jiacn, String agentId) {
+        return requireScopedOwnedAgent(tenantId, clientId, jiacn, agentId, false);
     }
 
     @Override
     public AgentRuntimeDTO requireApiKeyOwnedAgentForUpdate(
             String clientId, String jiacn, String agentId) {
-        return requireApiKeyOwnedAgent(clientId, jiacn, agentId, true);
+        return requireScopedOwnedAgent(SINGLE_TENANT_ID, clientId, jiacn, agentId, true);
     }
 
-    private AgentRuntimeDTO requireApiKeyOwnedAgent(
-            String clientId, String jiacn, String agentId, boolean forUpdate) {
+    private AgentRuntimeDTO requireScopedOwnedAgent(
+            String tenantId, String clientId, String jiacn, String agentId, boolean forUpdate) {
+        requireCanonicalIdentityInput(tenantId, "tenantId");
         requireCanonicalIdentityInput(clientId, "clientId");
         requireCanonicalIdentityInput(jiacn, "jiacn");
         requireCanonicalIdentityInput(agentId, "agentId");
@@ -663,10 +670,10 @@ public class AgentServiceImpl implements AgentService {
         }
 
         if (forUpdate) {
-            return toRuntimeDTO(requireOwnedAgentForUpdate(SINGLE_TENANT_ID, clientId, jiacn, agentId));
+            return toRuntimeDTO(requireOwnedAgentForUpdate(tenantId, clientId, jiacn, agentId));
         }
         agentIdentityService.requireCanonicalAgentIdInScope(
-                SINGLE_TENANT_ID, clientId, jiacn, agentId);
+                tenantId, clientId, jiacn, agentId);
 
         AgentRuntimeEntity agent = agentRuntimeDao.findByAgentId(agentId);
         if (agent == null) {
@@ -674,9 +681,9 @@ public class AgentServiceImpl implements AgentService {
                     "Agent runtime is missing or outside the authenticated scope");
         }
         AgentIdentityRegistryEntity identity = agentIdentityService.requireActiveIdentityForBinding(
-                SINGLE_TENANT_ID, clientId, jiacn, requireBindingId(agent), agentId);
-        requireExactRuntime(agent, SINGLE_TENANT_ID, agentId, clientId, jiacn, identity.getBindingId());
-        return toRuntimeDTO(agent);
+                tenantId, clientId, jiacn, requireBindingId(agent), agentId);
+        requireExactRuntime(agent, tenantId, agentId, clientId, jiacn, identity.getBindingId());
+        return toRuntimeDTO(agent, clientId, jiacn);
     }
 
     private AgentRuntimeEntity requireOwnedAgentForUpdate(

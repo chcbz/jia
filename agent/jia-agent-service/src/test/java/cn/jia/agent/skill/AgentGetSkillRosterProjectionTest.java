@@ -9,6 +9,8 @@ import cn.jia.agent.hosting.HostingRentOwnerResolver;
 import cn.jia.agent.service.AbilityEvaluationService;
 import cn.jia.agent.service.AgentService;
 import cn.jia.agent.service.impl.AgentServiceImpl.AgentBizException;
+import cn.jia.core.context.EsContext;
+import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.entity.JsonResult;
 import com.github.pagehelper.PageInfo;
 import org.junit.jupiter.api.AfterEach;
@@ -44,6 +46,7 @@ class AgentGetSkillRosterProjectionTest {
     @AfterEach
     void clearAuthentication() {
         SecurityContextHolder.clearContext();
+        EsContextHolder.clearContext();
     }
 
     @Test
@@ -100,6 +103,76 @@ class AgentGetSkillRosterProjectionTest {
         assertEquals(single.getBoundToMe(), listed.getBoundToMe());
         assertEquals(single.getCanOperate(), listed.getCanOperate());
         verify(versions, times(2)).requireOwned(ACTOR, AGENT_ID, null, false);
+    }
+
+    @Test
+    void tenantOneOwnedGetAndRosterPreserveChatAuthorityWithoutEnteringLegacySkillPath() {
+        wireTenantProjection("1", "Client-A", "Owner-A");
+        var single = row();
+        var listed = row();
+        when(agents.get(AGENT_ID)).thenReturn(single);
+        when(agents.listRoster(null, null, 1, 50)).thenReturn(new PageInfo<>(List.of(listed)));
+        when(agents.requireRosterOwnedAgent("1", "Client-A", "Owner-A", AGENT_ID))
+                .thenReturn(row());
+
+        var getResult = getRow();
+        controller.roster(new cn.jia.core.entity.JsonRequest<>(
+                1, "test-request", new AgentRosterSearchDTO()));
+
+        assertEquals(Boolean.TRUE, getResult.getBoundToMe());
+        assertEquals(Boolean.TRUE, getResult.getCanOperate());
+        assertNull(getResult.getVersion());
+        assertEquals(Boolean.TRUE, listed.getBoundToMe());
+        assertEquals(Boolean.TRUE, listed.getCanOperate());
+        assertNull(listed.getVersion());
+        verify(agents, times(2)).requireRosterOwnedAgent(
+                "1", "Client-A", "Owner-A", AGENT_ID);
+        verify(agents, never()).requireApiKeyOwnedAgent(any(), any(), any());
+        verifyNoInteractions(owners, versions, skills);
+    }
+
+    @Test
+    void tenantOneForeignOwnerProjectionCannotReuseAuthoritativeAgentId() {
+        wireTenantProjection("1", "Client-A", "Owner-A");
+        when(agents.get(AGENT_ID)).thenReturn(row());
+        var foreign = row();
+        foreign.setOwnerJiacn("Owner-B");
+        when(agents.requireRosterOwnedAgent("1", "Client-A", "Owner-A", AGENT_ID))
+                .thenReturn(foreign);
+
+        assertNoSkillAuthority(getRow());
+
+        verifyNoInteractions(owners, versions, skills);
+    }
+
+    @Test
+    void tenantOneServiceDenialForForeignScopeCannotPreserveDtoFlags() {
+        wireTenantProjection("1", "Client-A", "Owner-A");
+        when(agents.get(AGENT_ID)).thenReturn(row());
+        when(agents.requireRosterOwnedAgent("1", "Client-A", "Owner-A", AGENT_ID))
+                .thenThrow(new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN, "Foreign scope"));
+
+        assertNoSkillAuthority(getRow());
+
+        verifyNoInteractions(owners, versions, skills);
+    }
+
+    @Test
+    void jwtAndRequestContextMustMatchTenantClientAndOwnerByteExact() {
+        var projection = new SkillRosterProjection(owners, agentProvider, versions, skills);
+        var authentication = jwt("1", "Client-A", "Owner-A");
+        for (String[] context : List.of(
+                new String[]{"2", "Client-A", "Owner-A"},
+                new String[]{"1", "Client-B", "Owner-A"},
+                new String[]{"1", "Client-A", "Owner-B"})) {
+            setContext(context[0], context[1], context[2]);
+            var projected = row();
+
+            projection.project(authentication, List.of(projected));
+
+            assertNoSkillAuthority(projected);
+        }
+        verifyNoInteractions(owners, agentProvider, versions, skills);
     }
 
     @Test
@@ -221,15 +294,42 @@ class AgentGetSkillRosterProjectionTest {
     }
 
     private void wireProjection() {
-        var jwt = Jwt.withTokenValue("test-token").header("alg", "none")
-                .subject("login-sub").claim("client_id", "Client-A").claim("jiacn", "Owner-A")
-                .build();
-        SecurityContextHolder.getContext().setAuthentication(new JwtAuthenticationToken(jwt, List.of()));
+        setAuthenticationAndContext("0", "Client-A", "Owner-A");
         when(owners.requireOwner(ACTOR)).thenReturn("Owner-A");
         when(agentProvider.getObject()).thenReturn(agents);
         when(agents.requireApiKeyOwnedAgent("Client-A", "Owner-A", AGENT_ID)).thenReturn(row());
         when(versions.requireOwned(ACTOR, AGENT_ID, null, false)).thenReturn(VERSION);
         controller.setSkillRoster(new SkillRosterProjection(owners, agentProvider, versions, skills));
+    }
+
+    private void wireTenantProjection(String tenantId, String clientId, String ownerJiacn) {
+        setAuthenticationAndContext(tenantId, clientId, ownerJiacn);
+        when(agentProvider.getObject()).thenReturn(agents);
+        controller.setSkillRoster(new SkillRosterProjection(owners, agentProvider, versions, skills));
+    }
+
+    private static void setAuthenticationAndContext(
+            String tenantId, String clientId, String ownerJiacn) {
+        SecurityContextHolder.getContext().setAuthentication(jwt(tenantId, clientId, ownerJiacn));
+        setContext(tenantId, clientId, ownerJiacn);
+    }
+
+    private static void setContext(String tenantId, String clientId, String ownerJiacn) {
+        EsContext context = new EsContext();
+        context.setTenantId(tenantId);
+        context.setClientId(clientId);
+        context.setJiacn(ownerJiacn);
+        EsContextHolder.setContext(context);
+    }
+
+    private static JwtAuthenticationToken jwt(
+            String tenantId, String clientId, String ownerJiacn) {
+        Jwt.Builder jwt = Jwt.withTokenValue("test-token").header("alg", "none")
+                .subject("login-sub").claim("client_id", clientId).claim("jiacn", ownerJiacn);
+        if (!"0".equals(tenantId)) {
+            jwt.claim("tenant_id", tenantId).claim("tenant_claim_version", "1");
+        }
+        return new JwtAuthenticationToken(jwt.build(), List.of());
     }
 
     private AgentRuntimeDTO getRow() {

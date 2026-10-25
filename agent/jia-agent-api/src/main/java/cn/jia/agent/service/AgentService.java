@@ -41,6 +41,13 @@ public interface AgentService {
 
     AgentRuntimeDTO requireApiKeyOwnedAgent(String clientId, String jiacn, String agentId);
 
+    /**
+     * Read-only exact-scope ownership proof for roster/get projection. This does not authorize
+     * task, economy, hosting, skill, or any other mutation.
+     */
+    AgentRuntimeDTO requireRosterOwnedAgent(
+            String tenantId, String clientId, String jiacn, String agentId);
+
     AgentRuntimeDTO requireApiKeyOwnedAgentForUpdate(String clientId, String jiacn, String agentId);
 
     AgentRuntimeDTO get(String agentId);
