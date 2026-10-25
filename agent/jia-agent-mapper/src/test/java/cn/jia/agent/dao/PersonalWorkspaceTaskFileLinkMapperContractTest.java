@@ -38,6 +38,9 @@ class PersonalWorkspaceTaskFileLinkMapperContractTest {
     @Test void materialReadKeepsExactVersionAndDoesNotHideAmbiguousRows() throws Exception {
         var method=PersonalWorkspaceTaskFileLinkMapper.class.getDeclaredMethod("selectActiveMaterial",
                 String.class,String.class,String.class,String.class,String.class,int.class,String.class);
+        var options=method.getAnnotation(org.apache.ibatis.annotations.Options.class);
+        assertFalse(options.useCache());
+        org.junit.jupiter.api.Assertions.assertEquals(org.apache.ibatis.annotations.Options.FlushCachePolicy.TRUE,options.flushCache());
         String sql=String.join(" ",method.getAnnotation(Select.class).value()).toLowerCase(Locale.ROOT);
         for(String column:new String[]{"tenant_id","client_id","owner_jiacn","task_id","file_id"})
             assertTrue(sql.contains("binary l."+column+"=binary #{"),column);

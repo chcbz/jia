@@ -27,6 +27,9 @@ public interface PersonalWorkspaceTaskFileLinkMapper
               AND BINARY l.link_role=BINARY #{purpose} AND l.link_role IN ('INPUT','REFERENCE')
               AND l.link_state='ACTIVE'
             """)
+    // Post-I/O authorization must reach MySQL even within a synchronized NOT_SUPPORTED SqlSession.
+    @org.apache.ibatis.annotations.Options(useCache=false,
+            flushCache=org.apache.ibatis.annotations.Options.FlushCachePolicy.TRUE)
     @org.apache.ibatis.annotations.ConstructorArgs({
             @org.apache.ibatis.annotations.Arg(column="content_mime_type", javaType=String.class),
             @org.apache.ibatis.annotations.Arg(column="content_hash", javaType=String.class),
