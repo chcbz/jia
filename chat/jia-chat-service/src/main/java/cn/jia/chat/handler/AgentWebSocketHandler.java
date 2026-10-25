@@ -2976,17 +2976,43 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         int count=0;
         for (var session : sessions.values()) {
             if (matchesManagedSkill(session,tenant,client,agent,fence)) { count++; continue; }
-            // Native skill control uses authenticated HTTP pull, not legacy SKILL_INSTALL WS commands.
-            // A live exact-fence catalog proves channel readiness; individual skill admission stays downstream.
-            if (fence == null || skillExecutionSessions == null || !tenant.equals(sessionTenantId(session))
-                    || !client.equals(sessionClientId(session)) || !agent.equals(sessionAgentId(session))
-                    || !typedDeliberationSessionCurrent(session,agent)) continue;
-            var view=skillExecutionSessions.lookup(new cn.jia.agent.service.SkillCapabilityLookup.Scope(
-                    tenant,client,sessionJiacn(session),agent),fence);
-            if (view.state()==cn.jia.agent.service.SkillCapabilityLookup.State.AVAILABLE
-                    && session.getId().equals(view.sessionId())) count++;
+            if (matchesNativeSkill(session,tenant,client,agent,fence)) count++;
         }
         return count==1;
+    }
+    private boolean matchesNativeSkill(WebSocketSession session,String tenant,String client,String agent,
+            cn.jia.agent.service.AgentManagedSessionLookup.SessionFence fence) {
+        // Execution uses HTTP pull; management still sends the canonical SM-C1 WS envelope.
+        if (fence == null || skillExecutionSessions == null || !tenant.equals(sessionTenantId(session))
+                || !client.equals(sessionClientId(session)) || !agent.equals(sessionAgentId(session))
+                || !typedDeliberationSessionCurrent(session,agent)) return false;
+        var view=skillExecutionSessions.lookup(new cn.jia.agent.service.SkillCapabilityLookup.Scope(
+                tenant,client,sessionJiacn(session),agent),fence);
+        return view.state()==cn.jia.agent.service.SkillCapabilityLookup.State.AVAILABLE
+                && session.getId().equals(view.sessionId());
+    }
+    private AgentRawCommandDispatchResult dispatchManagedSkillEnvelope(String tenant,String client,String agent,
+            cn.jia.agent.service.AgentManagedSessionLookup.SessionFence fence,byte[] raw) {
+        final Map<String,Object> data;
+        try {
+            var envelope=cn.jia.agent.skill.SkillManagementCodec.read(raw,"Command");
+            data=cn.jia.agent.skill.SkillManagementCodec.object(envelope.get("data"));
+            if (fence==null || !tenant.equals(data.get("tenantId")) || !client.equals(data.get("clientId"))
+                    || !agent.equals(data.get("agentId")) || !fence.runtimeInstallationId().equals(data.get("runtimeInstallationId")))
+                return AgentRawCommandDispatchResult.rejected();
+        } catch (RuntimeException invalid) {return AgentRawCommandDispatchResult.rejected();}
+        java.util.function.Predicate<WebSocketSession> ready=session ->
+                data.get("ownerJiacn").equals(sessionJiacn(session))
+                && (matchesManagedSkill(session,tenant,client,agent,fence)||matchesNativeSkill(session,tenant,client,agent,fence));
+        var current=sessions.values().stream().filter(ready).toList();
+        if(current.size()!=1) return current.isEmpty()?AgentRawCommandDispatchResult.offline():AgentRawCommandDispatchResult.rejected();
+        var selected=current.getFirst();
+        try {synchronized(selected) {
+            if(!ready.test(selected))return AgentRawCommandDispatchResult.offline();
+            // Already validated canonical wire: do not nest it in a second event or rewrite its IDs/hash.
+            selected.sendMessage(new TextMessage(new String(raw,java.nio.charset.StandardCharsets.UTF_8)));
+        }return AgentRawCommandDispatchResult.sent(1,1);
+        }catch(Exception failure){return AgentRawCommandDispatchResult.sendFailed(1);}
     }
     public AgentRawCommandDispatchResult dispatchManagedSkill(String tenant,String client,String agent,
             cn.jia.agent.service.AgentManagedSessionLookup.SessionFence fence,byte[] raw) {
@@ -2994,6 +3020,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             throw new IllegalStateException("Skill WebSocket I/O inside transaction");
         try {
             var node=STRICT_RAW_COMMAND_JSON.readTree(raw);
+            if (node!=null && node.has("protocolVersion"))return dispatchManagedSkillEnvelope(tenant,client,agent,fence,raw);
             if (!"SKILL_INSTALL".equals(textJson(node,"commandType"))
                     || !validRawCommandEnvelope(tenant,client,textJson(node,"orderId"),agent,raw))
                 return AgentRawCommandDispatchResult.rejected();

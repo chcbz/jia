@@ -306,10 +306,30 @@ class AgentWebSocketRawCommandDispatchTest extends BaseMockTest {
         registry.register(current.getId(),scope,fence,
                 new cn.jia.agent.service.SkillCapabilityLookup.Catalog("1",java.util.List.of()),()->true);
         assertTrue(handler.isManagedSkillSessionReady("0","client-a","agent-1",fence));
+        var target=Map.of("skillInstallationId","install-1","productVersionId","version-1","skillVersion","1.0.0",
+                "packageSha256","a".repeat(64),"manifestSha256","b".repeat(64),"byteLength","500","kind","EXECUTABLE");
+        var command=cn.jia.agent.skill.SkillManagementCodec.map("schemaVersion",2,"commandId","command-1","skillChangeId","change-1",
+                "action","INSTALL","tenantId","0","clientId","client-a","ownerJiacn","owner-a","agentId","agent-1",
+                "runtimeInstallationId",fence.runtimeInstallationId(),"skillKey","image-generate","attempt",1,"fencingToken","1",
+                "deliveryEpoch","1","skillRevision","1","source",null,"target",target,"approvedPermissionsSha256","c".repeat(64),
+                "desiredEnabled",true,"issuedAt",1L,"commandSha256","d".repeat(64),"phase","PREPARE","commandType","SKILL_INSTALL",
+                "downloadPath","/internal/agent/skill-installations/install-1/package");
+        byte[] canonical=cn.jia.agent.skill.SkillManagementCodec.bytes(cn.jia.agent.skill.SkillManagementCodec.map(
+                "protocolVersion",1,"requestId","request-1","messageType","command.dispatch","messageId","message-1","data",command));
+        org.mockito.Mockito.clearInvocations(old,current);
+        assertEquals(AgentRawCommandDispatchResult.Status.SENT,handler.dispatchManagedSkill("0","client-a","agent-1",fence,canonical).status());
+        var canonicalSent=ArgumentCaptor.forClass(TextMessage.class);verify(current).sendMessage(canonicalSent.capture());
+        assertArrayEquals(canonical,canonicalSent.getValue().getPayload().getBytes(StandardCharsets.UTF_8));
+        verify(old,never()).sendMessage(any(TextMessage.class));
         // Native readiness does not re-enable a retired legacy command transport.
         assertEquals(AgentRawCommandDispatchResult.Status.OFFLINE,handler.dispatchManagedSkill("0","client-a","agent-1",fence,raw).status());
         var wrongHost=new cn.jia.agent.service.AgentManagedSessionLookup.SessionFence(fence.runtimeInstallationId(),"other-host",fence.runtimeInstanceId(),fence.sessionGeneration());
         assertFalse(handler.isManagedSkillSessionReady("0","client-a","agent-1",wrongHost));
+        assertEquals(AgentRawCommandDispatchResult.Status.OFFLINE,handler.dispatchManagedSkill("0","client-a","agent-1",wrongHost,canonical).status());
+        command.put("ownerJiacn","different-owner");
+        byte[] foreignOwner=cn.jia.agent.skill.SkillManagementCodec.bytes(cn.jia.agent.skill.SkillManagementCodec.map(
+                "protocolVersion",1,"requestId","request-1","messageType","command.dispatch","messageId","message-1","data",command));
+        assertEquals(AgentRawCommandDispatchResult.Status.OFFLINE,handler.dispatchManagedSkill("0","client-a","agent-1",fence,foreignOwner).status());
         registry.suspend(current.getId());
         assertFalse(handler.isManagedSkillSessionReady("0","client-a","agent-1",fence));
         UnifiedRuntimeTestSupport.deliver(handler,current,new TextMessage(
