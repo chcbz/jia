@@ -153,7 +153,7 @@ public class SkillMarketplaceRealTransactionTest {
         });
         var dto=new AgentRuntimeDTO();dto.setAgentId(AGENT);dto.setStatus("online");dto.setSystemAgent(false);
         when(agents.requireApiKeyOwnedAgentForUpdate(ACTOR.clientId(),ACTOR.ownerJiacn(),AGENT)).thenReturn(dto);
-        versions=new SkillAgentVersions(app,runtimes,provider(agents),owner,manager,true);
+        versions=new SkillAgentVersions(app,runtimes,provider(agents),owner,manager);
         var commands=new AgentCommandTransportDaoImpl(sql.getMapper(AgentCommandTransportMapper.class));
         var writer=new SkillInstallCommandWriter(commands,gate);
         var packages=new SkillPackages(packageRoot); keys=mock(ApiKeyService.class);
@@ -162,7 +162,7 @@ public class SkillMarketplaceRealTransactionTest {
         credentialMapper=spy(sql.getMapper(EconomySkillCredentialMapper.class));
         doReturn(List.of()).when(credentialMapper).hostingCandidates(anyString(),anyString(),anyString());
         credentialMapper.insert("sc_1","key-1",AGENT,7L,ACTOR.tenantId(),ACTOR.clientId(),1L);
-        credentials=new SkillManagedCredentials(credentialMapper,app,mock(EconomyHostingRentMapper.class),versions,runtimes,provider(keys),gate,manager,true,false);
+        credentials=new SkillManagedCredentials(credentialMapper,app,mock(EconomyHostingRentMapper.class),versions,runtimes,provider(keys),gate,manager);
         sessions=mock(AgentManagedSessionLookup.class);
         when(sessions.isReady(eq(ACTOR.tenantId()),eq(ACTOR.clientId()),eq(AGENT),any())).thenReturn(true);
         service=new SkillMarketplaceService(market,app,ledger,posting,gate,versions,runtimes,provider(writer),provider(packages),provider(authentication),provider(sessions),manager);

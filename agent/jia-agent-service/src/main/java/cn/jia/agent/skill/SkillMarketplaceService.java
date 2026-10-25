@@ -47,7 +47,7 @@ public final class SkillMarketplaceService {
     }
     public boolean available(HostingRentHttp.Actor a) {
         var transport=writer.getIfAvailable();
-        return versions.enabled() && preview.allows(a.tenantId(),a.clientId()) && packages.getIfAvailable()!=null
+        return preview.allows(a.tenantId(),a.clientId()) && packages.getIfAvailable()!=null
                 && transport!=null && transport.allows(a.tenantId(),a.clientId())
                 && authentication.getIfAvailable()!=null && sessions.getIfAvailable()!=null;
     }

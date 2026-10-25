@@ -791,9 +791,7 @@ public final class SkillManagementService {
     }
     /** Called by the existing authenticated capability registration consumer, not a new wire endpoint. */
     public void capabilitiesChanged(AgentRuntimeAuthenticationService.Proof proof) {
-        if(!versions.enabled()&&(positionProvider==null||positionProvider.getIfAvailable()==null))return;
         for(var hint:db.changes(proof.scope().tenantId(),proof.scope().clientId(),proof.scope().agentId())) {
-            if(!versions.enabled()&&!positionChange(hint))continue;
             var data=dto(hint);if(!Set.of("VERIFYING","SUCCEEDED").contains(text(data,"status"))||Boolean.TRUE.equals(data.get("runtimeSynced")))continue;
             var actor=new HostingRentHttp.Actor(hint.getActorId(),hint.getTenantId(),hint.getClientId(),hint.getOwnerJiacn());
             ownedChange(hint,()->authentication.withFence(proof,false,()->{

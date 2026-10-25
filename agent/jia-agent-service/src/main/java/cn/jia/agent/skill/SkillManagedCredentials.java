@@ -7,7 +7,6 @@ import cn.jia.economy.entity.skill.SkillManagedCredentialEntity;
 import cn.jia.oauth.entity.OauthApiKeyEntity;
 import cn.jia.oauth.service.ApiKeyService;
 import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -26,18 +25,15 @@ public final class SkillManagedCredentials {
     private final AgentRuntimeDao runtimes;
     private final ObjectProvider<ApiKeyService> keys;
     private final EconomyPreviewGate preview;
-    private final boolean enabled,adoptHosting;
     private final TransactionTemplate tx;
     public SkillManagedCredentials(EconomySkillCredentialMapper mapper,EconomySkillApplicationMapper roots,
             EconomyHostingRentMapper rent,SkillAgentVersions versions,AgentRuntimeDao runtimes,
-            ObjectProvider<ApiKeyService> keys,EconomyPreviewGate preview,PlatformTransactionManager manager,
-            @Value("${economy.skill.marketplace.enabled:false}") boolean enabled,
-            @Value("${economy.skill.marketplace.adopt-hosting-credentials:true}") boolean adoptHosting) {
+            ObjectProvider<ApiKeyService> keys,EconomyPreviewGate preview,PlatformTransactionManager manager) {
         this.mapper=mapper;this.roots=roots;this.rent=rent;this.versions=versions;this.runtimes=runtimes;
-        this.keys=keys;this.preview=preview;this.enabled=enabled;this.adoptHosting=adoptHosting;this.tx=new TransactionTemplate(manager);
+        this.keys=keys;this.preview=preview;this.tx=new TransactionTemplate(manager);
     }
     public Map<String,Object> rotate(HostingRentHttp.Actor actor,String agent,String idem,long expected) {
-        require(enabled && preview.allows(actor.tenantId(),actor.clientId()) && keys.getIfAvailable()!=null,503,"SKILL_MARKETPLACE_DISABLED");
+        require(preview.allows(actor.tenantId(),actor.clientId()) && keys.getIfAvailable()!=null,503,"SKILL_MARKETPLACE_DISABLED");
         HostingRentHttp.key(idem); HostingRentHttp.exact(agent,100); require(expected>0,400,"BAD_REQUEST");
         byte[] hash=HostingRentHttp.hash("skill-credential-rotation-v1",Map.of("agent",agent,"expectedVersion",Long.toString(expected)));
         return tx.execute(s->{
@@ -79,7 +75,7 @@ public final class SkillManagedCredentials {
         var runtime=runtimes.findByAgentIdForUpdate(agent);
         require(runtime!=null && runtime.getBindingId()!=null,403,"SKILL_AGENT_CREDENTIAL_UNPROVEN");
         var binding=mapper.active(actor.tenantId(),actor.clientId(),agent);
-        if(binding==null && adoptHosting) binding=adopt(actor,agent,runtime.getBindingId());
+        if(binding==null) binding=adopt(actor,agent,runtime.getBindingId());
         require(binding!=null && runtime.getBindingId().equals(binding.getBindingId()),409,"SKILL_AGENT_CREDENTIAL_UNPROVEN");
         var key=keys.getObject().get(binding.getApiKeyId());
         require(validKey(actor,key,binding.getApiKeyId()),409,"SKILL_AGENT_CREDENTIAL_UNPROVEN");

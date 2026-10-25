@@ -720,7 +720,7 @@ public final class Ur04E05HttpFixture {
         @Bean HostingRentOwnerResolver hostingOwners(ObjectProvider<AccountSecurityService> accounts, ObjectProvider<UserService> users) { return new HostingRentOwnerResolver(accounts, users); }
         @Bean SkillAgentVersions skillVersions(SqlSessionTemplate s, AgentRuntimeDao runtimes, ObjectProvider<AgentService> agents,
                 HostingRentOwnerResolver owners, DataSourceTransactionManager manager) {
-            return new SkillAgentVersions(s.getMapper(EconomySkillApplicationMapper.class), runtimes, agents, owners, manager, false);
+            return new SkillAgentVersions(s.getMapper(EconomySkillApplicationMapper.class), runtimes, agents, owners, manager);
         }
         @Bean AgentService agents(AgentRuntimeDao runtimes, AgentIdentityService identity, AgentPersonaDao personas, AgentPersonaBindingDao bindings,
                 AgentTaskMetaDao meta, AgentTaskMemberDao members, AgentLegacyTaskCompatibilityService legacy, AgentTaskNoteDao notes, DialogueTemplateDao dialogues,

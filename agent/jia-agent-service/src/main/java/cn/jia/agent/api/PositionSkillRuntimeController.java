@@ -4,7 +4,6 @@ import cn.jia.agent.position.*;
 import cn.jia.agent.security.AgentRuntimeAuthenticationService;
 import cn.jia.core.entity.JsonRequest;
 import cn.jia.core.entity.JsonResult;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
@@ -12,7 +11,6 @@ import static cn.jia.agent.position.PositionSkillException.require;
 
 @RestController
 @RequestMapping("/internal/agent/position-skills")
-@ConditionalOnProperty(prefix="agent.position-skills",name="enabled",havingValue="true")
 public class PositionSkillRuntimeController {
     private final PositionSkillRuntimeService service;
     private final AgentRuntimeAuthenticationService authentication;

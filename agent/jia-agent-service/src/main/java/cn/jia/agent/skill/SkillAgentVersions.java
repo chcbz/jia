@@ -7,7 +7,6 @@ import cn.jia.agent.hosting.HostingRentOwnerResolver;
 import cn.jia.agent.service.AgentService;
 import cn.jia.economy.mapper.EconomySkillApplicationMapper;
 import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -22,16 +21,13 @@ public final class SkillAgentVersions {
     private final ObjectProvider<AgentService> agents;
     private final HostingRentOwnerResolver owners;
     private final TransactionTemplate tx;
-    private final boolean enabled;
     public SkillAgentVersions(EconomySkillApplicationMapper mapper, AgentRuntimeDao runtimes,
             ObjectProvider<AgentService> agents, HostingRentOwnerResolver owners,
-            PlatformTransactionManager manager, @Value("${economy.skill.marketplace.enabled:false}") boolean enabled) {
+            PlatformTransactionManager manager) {
         this.mapper=mapper; this.runtimes=runtimes; this.agents=agents; this.owners=owners;
-        this.tx=new TransactionTemplate(manager); this.enabled=enabled;
+        this.tx=new TransactionTemplate(manager);
     }
-    public boolean enabled() { return enabled; }
     public long requireOwned(HostingRentHttp.Actor actor, String agentId, Long expected, boolean ready) {
-        require(enabled, 503, "SKILL_MARKETPLACE_DISABLED");
         return tx.execute(s -> {
             String owner=owners.requireOwner(actor);
             var dto=agents.getObject().requireApiKeyOwnedAgentForUpdate(actor.clientId(), owner, agentId);
@@ -47,7 +43,6 @@ public final class SkillAgentVersions {
     }
     /** Query-only projection of the version the next locked write will observe; no CAS or root creation. */
     public long readOwned(HostingRentHttp.Actor actor,String agentId) {
-        require(enabled,503,"SKILL_STATE_UNAVAILABLE");
         var dto=agents.getObject().requireApiKeyOwnedAgent(actor.clientId(),owners.requireOwner(actor),agentId);
         require(dto!=null&&agentId.equals(dto.getAgentId())&&!Boolean.TRUE.equals(dto.getSystemAgent()),404,"RESOURCE_NOT_FOUND");
         var runtime=runtimes.findInScope(actor.tenantId(),actor.clientId(),agentId);
@@ -58,7 +53,7 @@ public final class SkillAgentVersions {
     }
     /** Called for every existing runtime persistence path, inside its lifecycle transaction. */
     public void observe(AgentRuntimeEntity row) {
-        if(!enabled || row==null || row.getOwnerJiacn()==null || row.getBindingId()==null) return;
+        if(row==null || row.getOwnerJiacn()==null || row.getBindingId()==null) return;
         tx.executeWithoutResult(s -> observeLocked(runtimes.findByAgentIdForUpdate(row.getAgentId())));
     }
     private long observeLocked(AgentRuntimeEntity row) {

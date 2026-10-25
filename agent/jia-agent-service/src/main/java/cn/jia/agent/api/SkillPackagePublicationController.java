@@ -3,7 +3,6 @@ import cn.jia.agent.skill.*;
 import cn.jia.agent.hosting.HostingRentHttp;
 import cn.jia.core.entity.JsonResult;
 import jakarta.servlet.http.HttpServletRequest;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.*;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
@@ -16,7 +15,6 @@ import java.util.*;
 
 /** Explicit authenticated platform-maintenance entry; never model-directed execution. */
 @RestController
-@ConditionalOnProperty(prefix="economy.skill.marketplace",name="enabled",havingValue="true")
 public final class SkillPackagePublicationController {
     private final SkillPackagePublicationService publisher;
     public SkillPackagePublicationController(SkillPackagePublicationService publisher){this.publisher=publisher;}

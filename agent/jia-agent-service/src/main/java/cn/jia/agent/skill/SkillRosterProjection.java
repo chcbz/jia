@@ -25,7 +25,7 @@ public final class SkillRosterProjection {
                 var trusted=agents.getObject().requireApiKeyOwnedAgent(actor.clientId(),owner,row.getAgentId());
                 if(!row.getAgentId().equals(trusted.getAgentId())) continue;
                 row.setBoundToMe(true); row.setCanOperate(true);
-                if(versions.enabled()) row.setVersion(Long.toString(versions.requireOwned(actor,row.getAgentId(),null,false)));
+                row.setVersion(Long.toString(versions.requireOwned(actor,row.getAgentId(),null,false)));
             } catch(RuntimeException denied) { row.setVersion(null); }
         }
     }

@@ -4,7 +4,6 @@ import cn.jia.agent.position.*;
 import cn.jia.agent.service.PositionAuthority.Scope;
 import cn.jia.core.entity.JsonRequest;
 import cn.jia.core.entity.JsonResult;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
@@ -14,7 +13,6 @@ import static cn.jia.agent.position.PositionSkillState.*;
 
 @RestController
 @RequestMapping("/agent/positions/v1")
-@ConditionalOnProperty(prefix="agent.position-skills",name="enabled",havingValue="true")
 public class PositionSkillController {
     public record DefineSkill(String skillKey, SkillType type, String productVersionId) { }
     public record Configure(String positionId,String title,int capacity,String resource,boolean allowPublish,

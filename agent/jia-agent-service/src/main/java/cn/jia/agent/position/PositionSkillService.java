@@ -5,7 +5,6 @@ import cn.jia.agent.service.PositionAuthority;
 import cn.jia.economy.mapper.EconomySkillMarketplaceMapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -17,7 +16,6 @@ import static cn.jia.agent.position.PositionSkillException.require;
 import static cn.jia.agent.position.PositionSkillState.*;
 
 @Service
-@ConditionalOnProperty(prefix="agent.position-skills", name="enabled", havingValue="true")
 public class PositionSkillService implements PositionAuthority {
     public record View(String operationId, String resultId, long revision, PositionSkillState state) { }
     private final PositionSkillStore store;

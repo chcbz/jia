@@ -8,7 +8,6 @@ import cn.jia.agent.skill.SkillManifestCodec;
 import cn.jia.economy.mapper.EconomySkillMarketplaceMapper;
 import cn.jia.economy.config.skillseed.PlatformSkillPackageCatalog.PlatformSkillPackage;
 import org.springframework.stereotype.Service;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import java.util.*;
 import static cn.jia.agent.position.PositionSkillException.require;
 import static cn.jia.agent.position.PositionSkillState.*;
@@ -16,7 +15,6 @@ import static cn.jia.agent.position.PositionSkillState.*;
 /** A non-paid installation source using the existing approved packages and Runtime installer.
  * The durable desired-state revision is the delivery/recovery identity, never a fake order. */
 @Service
-@ConditionalOnProperty(prefix="agent.position-skills",name="enabled",havingValue="true")
 public class PositionSkillRuntimeService {
     public record Prepared(Installation installation,Skill skill,PlatformSkillPackage bytes,SkillManifestCodec.Manifest manifest) { }
     public record Receipt(String grantId,String revision,String physicalInstallationId,boolean installed,

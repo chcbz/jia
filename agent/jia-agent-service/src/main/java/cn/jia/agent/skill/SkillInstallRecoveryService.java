@@ -4,7 +4,6 @@ import cn.jia.agent.mapper.AgentSkillInstallRecoveryMapper;
 import cn.jia.agent.entity.*;
 import cn.jia.agent.service.impl.AgentCommandCanonicalCodec;
 import cn.jia.economy.config.EconomyPreviewGate;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -17,7 +16,6 @@ import static cn.jia.agent.skill.SkillMarketplaceService.one;
  * No broker ACK is fabricated. Same-message replay is safe only through the real Runtime
  * installation idempotence. Original live orders remain recoverable without an artificial task-invitation deadline. */
 @Service
-@ConditionalOnProperty(prefix="economy.skill.marketplace",name="enabled",havingValue="true")
 public final class SkillInstallRecoveryService {
     private final AgentSkillInstallRecoveryMapper mapper;
     private final AgentCommandRecoveryDao dao;

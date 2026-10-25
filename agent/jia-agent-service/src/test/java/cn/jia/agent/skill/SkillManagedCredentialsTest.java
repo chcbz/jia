@@ -31,7 +31,7 @@ class SkillManagedCredentialsTest {
             var row=new SkillManagedCredentialEntity();row.setApiKeyId("key");row.setBindingId(7L);state.set(row);return 1;
         });
         var service=new SkillManagedCredentials(mapper,roots,rent,versions,runtimes,SkillMarketplaceRealTransactionTest.provider(keys),
-                mock(EconomyPreviewGate.class),mock(org.springframework.transaction.PlatformTransactionManager.class),true,true);
+                mock(EconomyPreviewGate.class),mock(org.springframework.transaction.PlatformTransactionManager.class));
         assertEquals("key",service.requireCurrent(a,"agent"));verify(keys,never()).create(any());verify(keys,never()).update(any());
         state.set(null);when(mapper.hostingReferenceCount("key")).thenReturn(2);
         assertEquals("SKILL_AGENT_CREDENTIAL_UNPROVEN",assertThrows(SkillMarketplaceException.class,()->service.requireCurrent(a,"agent")).code());

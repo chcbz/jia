@@ -30,16 +30,16 @@ class SkillAgentVersionsTest {
         when(mapper.advanceVersion(eq("owner"),eq("client"),eq("agt_1"),any(),anyLong())).thenAnswer(i->{
             assertEquals(state.getVersion(),i.getArgument(4));state.setVersion(state.getVersion()+1);state.setSourceHash(i.getArgument(3));return 1;
         });
-        var versions=new SkillAgentVersions(mapper,runtimes,SkillMarketplaceRealTransactionTest.provider(mock(cn.jia.agent.service.AgentService.class)),mock(HostingRentOwnerResolver.class),manager,true);
+        var versions=new SkillAgentVersions(mapper,runtimes,SkillMarketplaceRealTransactionTest.provider(mock(cn.jia.agent.service.AgentService.class)),mock(HostingRentOwnerResolver.class),manager);
         row.setStatus("offline");versions.observe(row);row.setStatus("online");versions.observe(row);
         assertEquals(19L,state.getVersion());row.setLastSeenAt(1000L);versions.observe(row);assertEquals(19L,state.getVersion());
         verify(mapper,times(2)).advanceVersion(anyString(),anyString(),anyString(),any(),anyLong());
     }
-    @Test void defaultOffDoesNotTouchHistoricalRuntimeOrSchema() {
+    @Test void unboundRuntimeDoesNotTouchSkillState() {
         var mapper=mock(EconomySkillApplicationMapper.class);var runtimes=mock(AgentRuntimeDao.class);
         var versions=new SkillAgentVersions(mapper,runtimes,SkillMarketplaceRealTransactionTest.provider(mock(cn.jia.agent.service.AgentService.class)),mock(HostingRentOwnerResolver.class),
-                mock(org.springframework.transaction.PlatformTransactionManager.class),false);
-        versions.observe(runtime());verifyNoInteractions(mapper,runtimes);
+                mock(org.springframework.transaction.PlatformTransactionManager.class));
+        versions.observe(new AgentRuntimeEntity().setAgentId("unbound"));versions.observe(null);verifyNoInteractions(mapper,runtimes);
     }
     private static AgentRuntimeEntity runtime() {
         var row=new AgentRuntimeEntity().setAgentId("agt_1").setBindingId(7L).setOwnerJiacn("owner").setStatus("online").setTokenHash("generation");

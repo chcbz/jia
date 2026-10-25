@@ -4,7 +4,6 @@ import cn.jia.agent.dao.AgentCommandTransportDao;
 import cn.jia.agent.entity.*;
 import cn.jia.agent.service.impl.AgentCommandCanonicalCodec;
 import cn.jia.economy.config.EconomyPreviewGate;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import java.util.*;
@@ -14,7 +13,6 @@ import static cn.jia.agent.skill.SkillMarketplaceService.one;
 /** Narrow transactional skill-install producer. Reuses the command delivery/outbox tables,
  * without enabling the unrelated Rabbit/task-command transport. The caller owns order ACL. */
 @Service
-@ConditionalOnProperty(prefix="economy.skill.marketplace",name="enabled",havingValue="true")
 public final class SkillInstallCommandWriter {
     public static final String DESTINATION="agent.skill-install.ws.v1";
     private final AgentCommandTransportDao commands;

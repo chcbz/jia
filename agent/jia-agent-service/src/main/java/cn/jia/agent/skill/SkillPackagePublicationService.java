@@ -6,7 +6,6 @@ import cn.jia.economy.config.skillseed.PlatformSkillPackageCatalog.*;
 import cn.jia.economy.entity.skill.*;
 import cn.jia.economy.mapper.EconomySkillMarketplaceMapper;
 import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -17,7 +16,6 @@ import static cn.jia.agent.skill.SkillMarketplaceException.require;
 
 /** Platform-maintainer publication, not task execution or cost approval. */
 @Service
-@ConditionalOnProperty(prefix="economy.skill.marketplace",name="enabled",havingValue="true")
 public final class SkillPackagePublicationService {
     public record Publish(String productId,String productVersionId,String name,String description,String skillKey,
             String skillVersion,long priceMicro,String deploymentRestriction,String approvedPermissionsManifest,

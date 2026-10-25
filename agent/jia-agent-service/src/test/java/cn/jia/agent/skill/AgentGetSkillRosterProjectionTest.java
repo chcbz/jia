@@ -48,7 +48,7 @@ class AgentGetSkillRosterProjectionTest {
 
     @Test
     void ownedGetUsesAuthoritativeDecimalVersionAndPreservesAgentMetadata() {
-        wireProjection(true);
+        wireProjection();
         var row = row();
         when(agents.get(AGENT_ID)).thenReturn(row);
 
@@ -64,14 +64,13 @@ class AgentGetSkillRosterProjectionTest {
         var ordered = inOrder(agents, versions);
         ordered.verify(agents).get(AGENT_ID);
         ordered.verify(agents).requireApiKeyOwnedAgent("Client-A", "Owner-A", AGENT_ID);
-        ordered.verify(versions).enabled();
         ordered.verify(versions).requireOwned(ACTOR, AGENT_ID, null, false);
         verifyNoInteractions(skills);
     }
 
     @Test
     void actualGetRouteSerializesVersionAsDecimalString() throws Exception {
-        wireProjection(true);
+        wireProjection();
         when(agents.get(AGENT_ID)).thenReturn(row());
 
         var response = MockMvcBuilders.standaloneSetup(controller).build()
@@ -88,7 +87,7 @@ class AgentGetSkillRosterProjectionTest {
 
     @Test
     void getAndRosterUseTheSameAuthoritativeVersionAndOwnershipProjection() {
-        wireProjection(true);
+        wireProjection();
         var single = row();
         var listed = row();
         when(agents.get(AGENT_ID)).thenReturn(single);
@@ -104,23 +103,8 @@ class AgentGetSkillRosterProjectionTest {
     }
 
     @Test
-    void disabledMarketplaceKeepsRealOwnershipButNeverReadsPersistentVersion() {
-        wireProjection(false);
-        when(agents.get(AGENT_ID)).thenReturn(row());
-
-        var result = getRow();
-
-        assertNull(result.getVersion());
-        assertEquals(Boolean.TRUE, result.getBoundToMe());
-        assertEquals(Boolean.TRUE, result.getCanOperate());
-        verify(versions).enabled();
-        verifyNoMoreInteractions(versions);
-        verifyNoInteractions(skills);
-    }
-
-    @Test
     void originalServiceDenialPrecedesAnySkillProjection() {
-        wireProjection(true);
+        wireProjection();
         var denial = new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN, "Outside scope");
         when(agents.get(AGENT_ID)).thenThrow(denial);
 
@@ -132,7 +116,7 @@ class AgentGetSkillRosterProjectionTest {
 
     @Test
     void missingAuthenticationClearsStaleSkillAuthorityAndDoesNotLoadVersion() {
-        wireProjection(true);
+        wireProjection();
         SecurityContextHolder.clearContext();
         when(agents.get(AGENT_ID)).thenReturn(row());
 
@@ -143,7 +127,7 @@ class AgentGetSkillRosterProjectionTest {
 
     @Test
     void nonJwtAuthenticationCannotUseLegacyOwnerFallback() {
-        wireProjection(true);
+        wireProjection();
         SecurityContextHolder.getContext().setAuthentication(
                 UsernamePasswordAuthenticationToken.authenticated("legacy-user", "n/a", List.of()));
         when(agents.get(AGENT_ID)).thenReturn(row());
@@ -155,7 +139,7 @@ class AgentGetSkillRosterProjectionTest {
 
     @Test
     void unprovenOwnerCannotRetainStaleVersionOrPermissions() {
-        wireProjection(true);
+        wireProjection();
         when(owners.requireOwner(ACTOR)).thenThrow(new IllegalStateException("Owner unproven"));
         when(agents.get(AGENT_ID)).thenReturn(row());
 
@@ -166,7 +150,7 @@ class AgentGetSkillRosterProjectionTest {
 
     @Test
     void revokedOwnershipCannotRetainStaleVersionOrPermissions() {
-        wireProjection(true);
+        wireProjection();
         when(agents.requireApiKeyOwnedAgent("Client-A", "Owner-A", AGENT_ID))
                 .thenThrow(new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN, "Revoked"));
         when(agents.get(AGENT_ID)).thenReturn(row());
@@ -178,7 +162,7 @@ class AgentGetSkillRosterProjectionTest {
 
     @Test
     void mismatchedTrustedAgentCannotExposeAnotherAgentsVersion() {
-        wireProjection(true);
+        wireProjection();
         var other = row();
         other.setAgentId("other-agent");
         when(agents.requireApiKeyOwnedAgent("Client-A", "Owner-A", AGENT_ID)).thenReturn(other);
@@ -191,7 +175,7 @@ class AgentGetSkillRosterProjectionTest {
 
     @Test
     void systemAgentIsNeverMadePurchasable() {
-        wireProjection(true);
+        wireProjection();
         var system = row();
         system.setSystemAgent(true);
         when(agents.get(AGENT_ID)).thenReturn(system);
@@ -203,7 +187,7 @@ class AgentGetSkillRosterProjectionTest {
 
     @Test
     void unavailablePersistentVersionDoesNotFallBackToStaleOrHeartbeatToken() {
-        wireProjection(true);
+        wireProjection();
         when(versions.requireOwned(ACTOR, AGENT_ID, null, false))
                 .thenThrow(new IllegalStateException("Version unavailable"));
         when(agents.get(AGENT_ID)).thenReturn(row());
@@ -227,7 +211,7 @@ class AgentGetSkillRosterProjectionTest {
 
     @Test
     void nullServiceResultRetainsOriginalResponseWithoutProjectingNull() {
-        wireProjection(true);
+        wireProjection();
         when(agents.get(AGENT_ID)).thenReturn(null);
 
         var result = assertInstanceOf(JsonResult.class, controller.get(AGENT_ID));
@@ -236,7 +220,7 @@ class AgentGetSkillRosterProjectionTest {
         verifyNoInteractions(owners, agentProvider, versions, skills);
     }
 
-    private void wireProjection(boolean enabled) {
+    private void wireProjection() {
         var jwt = Jwt.withTokenValue("test-token").header("alg", "none")
                 .subject("login-sub").claim("client_id", "Client-A").claim("jiacn", "Owner-A")
                 .build();
@@ -244,8 +228,7 @@ class AgentGetSkillRosterProjectionTest {
         when(owners.requireOwner(ACTOR)).thenReturn("Owner-A");
         when(agentProvider.getObject()).thenReturn(agents);
         when(agents.requireApiKeyOwnedAgent("Client-A", "Owner-A", AGENT_ID)).thenReturn(row());
-        when(versions.enabled()).thenReturn(enabled);
-        if (enabled) when(versions.requireOwned(ACTOR, AGENT_ID, null, false)).thenReturn(VERSION);
+        when(versions.requireOwned(ACTOR, AGENT_ID, null, false)).thenReturn(VERSION);
         controller.setSkillRoster(new SkillRosterProjection(owners, agentProvider, versions, skills));
     }
 

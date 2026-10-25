@@ -5,13 +5,11 @@ import cn.jia.agent.service.PositionAuthority.Scope;
 import cn.jia.agent.skill.SkillPackages;
 import cn.jia.economy.mapper.EconomySkillMarketplaceMapper;
 import org.springframework.stereotype.Service;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import java.util.*;
 import static cn.jia.agent.service.InstalledSkillDescriptorLookup.*;
 
 /** Legitimate non-marketplace entitlement source. Neither retained files nor a transport ACK suffice. */
 @Service
-@ConditionalOnProperty(prefix="agent.position-skills",name="enabled",havingValue="true")
 public class PositionInstalledSkills {
     private final PositionSkillService positions;
     private final AgentIdentityService identities;
