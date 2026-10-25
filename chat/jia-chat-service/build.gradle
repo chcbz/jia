@@ -564,3 +564,31 @@ tasks.register('archiveReaderRegression', Test) {
     maxParallelForks = 1
     maxHeapSize = '384m'
 }
+
+// R8 fixed-tenant private CHAT closure. Isolated from unrelated historical chat tests.
+def r8TenantPrivateChatSourceSet = sourceSets.create('r8TenantPrivateChat') {
+    java.srcDir 'src/r8TenantPrivateChatTest/java'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(r8TenantPrivateChatSourceSet.implementationConfigurationName) {
+    extendsFrom configurations.testImplementation
+}
+configurations.named(r8TenantPrivateChatSourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.testRuntimeOnly
+}
+dependencies {
+    add(r8TenantPrivateChatSourceSet.implementationConfigurationName, 'com.h2database:h2')
+}
+tasks.register('r8TenantPrivateChat', Test) {
+    group = 'verification'
+    description = 'Runs R8 exact-tenant private CHAT admission, dispatch, callback and request-read regressions.'
+    dependsOn tasks.named(r8TenantPrivateChatSourceSet.classesTaskName)
+    testClassesDirs = r8TenantPrivateChatSourceSet.output.classesDirs
+    classpath = r8TenantPrivateChatSourceSet.runtimeClasspath
+    useJUnitPlatform()
+    maxParallelForks = 1
+    maxHeapSize = '384m'
+    jvmArgs '-XX:+UseSerialGC', '-XX:ActiveProcessorCount=2', '-XX:MaxMetaspaceSize=192m', '-Xss256k'
+    testLogging { events 'passed', 'failed'; exceptionFormat 'full' }
+}

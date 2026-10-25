@@ -285,7 +285,8 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
         Map<String,Object> wire = hostedWire(row, p);
         AtomicReference<AgentWebSocketHandler.CapabilityDispatchResult> dispatch = new AtomicReference<>();
         boolean live = broker.runIfLive(conversationId, generation,
-                () -> conversations.isLiveGeneration(row.getOwnerJiacn(), row.getClientId(), conversationId, generation),
+                () -> conversations.isLiveGeneration(row.getTenantId(), row.getOwnerJiacn(),
+                        row.getClientId(), conversationId, generation),
                 () -> dispatch.set(sockets.sendNegotiatedChatMessageToAgent(
                         row.getTenantId(), binding.executorOwner(), row.getClientId(), agentId, route, wire)));
         if (!live) {

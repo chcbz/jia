@@ -73,7 +73,7 @@ public class JuyitingAgentRelayService {
         }
 
         Optional<String> forbiddenTarget = forbiddenOwnedRosterTarget(
-                scope, ownerJiacn, ownerClientId);
+                scope, tenantId, ownerClientId);
         if (forbiddenTarget.isPresent()) {
             return new JuyitingAgentRelayResult(true, Mono.just(true), Flux.just(JsonUtil.toSafeJson(Map.of(
                     "error", "target outside owned roster",
@@ -211,7 +211,7 @@ public class JuyitingAgentRelayService {
     }
 
     private Optional<String> forbiddenOwnedRosterTarget(
-            JuyitingConversationScope scope, String ownerJiacn, String ownerClientId) {
+            JuyitingConversationScope scope, String tenantId, String ownerClientId) {
         // Transactional admission freezes the exact task grant for new requests and restores
         // the original receipt for replay. An owned-roster preflight would wrongly reject B
         // or re-authorize an old request against today's assignment.
@@ -223,7 +223,7 @@ public class JuyitingAgentRelayService {
             }
             try {
                 agentService.get(agentId);
-                agentService.requireHostingNewWork(ownerJiacn, ownerClientId, agentId);
+                agentService.requireHostingNewWork(tenantId, ownerClientId, agentId);
             } catch (RuntimeException error) {
                 return Optional.of(agentId);
             }
