@@ -295,12 +295,15 @@ class AgentWebSocketRawCommandDispatchTest extends BaseMockTest {
         var current=session("current-skill","0","client-a","agent-1");current.getAttributes().put("jiacn","owner-a");
         var handler=handler();register(handler,old,"agent-1");register(handler,current,"agent-1");
         var proof=UnifiedRuntimeTestSupport.install(current);
+        // Both sockets in this fixture otherwise share a mocked current binding.
+        // A real superseded connection cannot count toward the unique live owner.
+        when(old.isOpen()).thenReturn(false);
         var fence=cn.jia.agent.skill.SkillMarketplaceService.sessionFence(proof);
         var payload=new cn.jia.agent.entity.AgentSkillInstallPayload("order-1","install-1","version-1","repo-test","1.0.0","500","sha256:"+"a".repeat(64),"/internal/agent/skill-installations/install-1/package");
         var draft=new AgentCommandDraft(1,AgentCommandCanonicalCodec.skillInstallCommandId("0","client-a","owner-a","install-1"),
                 "order-1","install-1","0","client-a","owner-a","order-1",null,"agent-1","SKILL_INSTALL",1L,3600001L,payload);
         byte[] raw=AgentCommandCanonicalCodec.wireBytes(draft,"message-1",1);
-        assertFalse(handler.isManagedSkillSessionReady("0","client-a","agent-1",fence));
+        assertTrue(handler.isManagedSkillSessionReady("0","client-a","agent-1",fence));
         var registry=new SkillExecutionSessionRegistry();handler.setSkillExecutionSessions(registry);
         var scope=new cn.jia.agent.service.SkillCapabilityLookup.Scope("0","client-a","owner-a","agent-1");
         registry.register(current.getId(),scope,fence,
@@ -331,7 +334,12 @@ class AgentWebSocketRawCommandDispatchTest extends BaseMockTest {
                 "protocolVersion",1,"requestId","request-1","messageType","command.dispatch","messageId","message-1","data",command));
         assertEquals(AgentRawCommandDispatchResult.Status.OFFLINE,handler.dispatchManagedSkill("0","client-a","agent-1",fence,foreignOwner).status());
         registry.suspend(current.getId());
+        assertTrue(handler.isManagedSkillSessionReady("0","client-a","agent-1",fence));
+        assertEquals(AgentRawCommandDispatchResult.Status.SENT,handler.dispatchManagedSkill("0","client-a","agent-1",fence,canonical).status());
+        assertEquals(cn.jia.agent.service.SkillCapabilityLookup.State.DISCONNECTED,registry.lookup(scope,fence).state());
+        when(current.isOpen()).thenReturn(false);
         assertFalse(handler.isManagedSkillSessionReady("0","client-a","agent-1",fence));
+        when(current.isOpen()).thenReturn(true);
         UnifiedRuntimeTestSupport.deliver(handler,current,new TextMessage(
                 "{\"type\":\"agent.register\",\"agentId\":\"agent-1\",\"name\":\"Agent\",\"durableStateHealthy\":true,\"readyCommandTypes\":[\"SKILL_INSTALL\"]}"));
         assertTrue(handler.isManagedSkillSessionReady("0","client-a","agent-1",fence));

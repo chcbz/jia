@@ -2982,14 +2982,16 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
     }
     private boolean matchesNativeSkill(WebSocketSession session,String tenant,String client,String agent,
             cn.jia.agent.service.AgentManagedSessionLookup.SessionFence fence) {
-        // Execution uses HTTP pull; management still sends the canonical SM-C1 WS envelope.
-        if (fence == null || skillExecutionSessions == null || !tenant.equals(sessionTenantId(session))
+        // Management repairs/updates discovery itself. A missing/refreshing execution
+        // catalog must not prevent PREPARE/ACTIVATE/READ on the authenticated channel.
+        if (fence == null || !tenant.equals(sessionTenantId(session))
                 || !client.equals(sessionClientId(session)) || !agent.equals(sessionAgentId(session))
                 || !typedDeliberationSessionCurrent(session,agent)) return false;
-        var view=skillExecutionSessions.lookup(new cn.jia.agent.service.SkillCapabilityLookup.Scope(
-                tenant,client,sessionJiacn(session),agent),fence);
-        return view.state()==cn.jia.agent.service.SkillCapabilityLookup.State.AVAILABLE
-                && session.getId().equals(view.sessionId());
+        var proof=sessionProof(session);
+        return proof!=null && fence.runtimeInstallationId().equals(proof.installationId())
+                && fence.hostId().equals(proof.hostId())
+                && fence.runtimeInstanceId().equals(proof.scope().runtimeInstanceId())
+                && fence.sessionGeneration()==proof.sessionGeneration();
     }
     private AgentRawCommandDispatchResult dispatchManagedSkillEnvelope(String tenant,String client,String agent,
             cn.jia.agent.service.AgentManagedSessionLookup.SessionFence fence,byte[] raw) {
