@@ -6,6 +6,10 @@ import java.util.List;
 
 /** Strict tenant/client/owner persistence boundary for task file selections. */
 public interface PersonalWorkspaceTaskLinkDao {
+    /** Internal immutable version facts; storageUri is never part of the public reader contract. */
+    record MaterialRow(String contentMimeType, String sha256, Long byteLength, String storageUri) { }
+    List<MaterialRow> findActiveMaterial(String tenantId, String clientId, String ownerJiacn,
+            String taskId, String fileId, int version, String purpose);
     boolean taskExists(String tenantId, String clientId, String ownerJiacn, String taskId);
     boolean lockTask(String tenantId, String clientId, String ownerJiacn, String taskId);
     boolean lockFile(String tenantId, String clientId, String ownerJiacn, String fileId,

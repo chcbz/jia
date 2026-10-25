@@ -3,8 +3,22 @@ package cn.jia.agent.service;
 /** Task data scope/assignment authorization and the independently authenticated Agent runtime scope.
  * Runtime readiness alone and costs never grant execution authority. */
 public interface TaskSkillPolicyService {
+    enum Decision { ALLOWED, DENIED, TEMPORARILY_UNAVAILABLE, INDETERMINATE }
     record Snapshot(boolean allowed, String reasonCode, long assignmentRevision,
             AgentManagedSessionLookup.SessionFence fence, SkillCapabilityLookup.Scope runtimeScope) {
+        /** Internal recoverability classification; never changes the persisted/wire snapshot. */
+        @com.fasterxml.jackson.annotation.JsonIgnore
+        public Decision decision() {
+            if (allowed) return Decision.ALLOWED;
+            if (reasonCode == null) return Decision.INDETERMINATE;
+            return switch (reasonCode) {
+                case "RUNTIME_UNAVAILABLE" -> Decision.TEMPORARILY_UNAVAILABLE;
+                case "TASK_NOT_ASSIGNED", "TASK_GRANT_MISSING", "TASK_GRANT_STALE",
+                     "ASSIGNMENT_EPOCH_UNPROVEN", "REQUIREMENT_STALE", "SKILL_BASELINE_REQUIRED",
+                     "RUNTIME_FENCED" -> Decision.DENIED;
+                default -> Decision.INDETERMINATE;
+            };
+        }
         public Snapshot {
             if (allowed) {
                 if (runtimeScope == null) throw new IllegalArgumentException("Allowed task policy requires an authenticated runtime scope");

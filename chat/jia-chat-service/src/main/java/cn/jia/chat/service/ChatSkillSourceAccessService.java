@@ -1,6 +1,8 @@
 package cn.jia.chat.service;
 
 import cn.jia.agent.service.PersonalWorkspaceExecutionService;
+import cn.jia.agent.service.PersonalWorkspaceTaskLinkService;
+import cn.jia.agent.service.TaskLinkedMaterialReader;
 import cn.jia.agent.service.SkillExecutionService;
 import cn.jia.agent.service.SkillSourceAccessService;
 import cn.jia.chat.archive.conversation.ChatConversationArchiveStore;
@@ -26,11 +28,11 @@ public final class ChatSkillSourceAccessService implements SkillSourceAccessServ
     private final PersonalWorkspaceExecutionService files;
     private final SkillExecutionService skills;
     private final JdbcTemplate jdbc;
-    private final cn.jia.agent.service.PersonalWorkspaceStorage storage;
+    private final TaskLinkedMaterialReader materials;
     public ChatSkillSourceAccessService(ChatConversationDao conversations,JuyitingConversationScopeService scopes,
             ChatConversationArchiveStore archive,@org.springframework.context.annotation.Lazy PersonalWorkspaceExecutionService files,
-            @org.springframework.context.annotation.Lazy SkillExecutionService skills,JdbcTemplate jdbc,cn.jia.agent.service.PersonalWorkspaceStorage storage) {
-        this.conversations=conversations;this.scopes=scopes;this.archive=archive;this.files=files;this.skills=skills;this.jdbc=jdbc;this.storage=storage;
+            @org.springframework.context.annotation.Lazy SkillExecutionService skills,JdbcTemplate jdbc,TaskLinkedMaterialReader materials) {
+        this.conversations=conversations;this.scopes=scopes;this.archive=archive;this.files=files;this.skills=skills;this.jdbc=jdbc;this.materials=materials;
     }
     @Override public void requireAuthorized(PersonalWorkspaceExecutionService.OwnerScope scope,String task,
             String conversation,long generation,Map<String,Object> input) {
@@ -53,10 +55,12 @@ public final class ChatSkillSourceAccessService implements SkillSourceAccessServ
             String task,String conversation,long generation,Map<String,Object> input) {
         requireAuthorized(scope,task,conversation,generation,input);var identity=object(input.get("sourceIdentity"));byte[] bytes;String filename;
         if("TASK_LINKED_WORKSPACE_VERSION".equals(input.get("sourceKind"))) {
-            var row=workspace(scope,task,identity,input);
-            var content=storage.read(new cn.jia.agent.service.PersonalWorkspaceStorage.Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn()),
-                    text(row,"storage_uri"),(String)input.get("sha256"),decimal(input.get("byteLength")),(String)input.get("contentMimeType"));
-            bytes=content.content();filename="material";
+            var selection=selection(identity);
+            try {
+                var content=materials.read(new PersonalWorkspaceTaskLinkService.Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn()),
+                        task,selection,expected(input));
+                bytes=content.content();filename="material";
+            } catch (TaskLinkedMaterialReader.Failure error) { throw materialFailure(error); }
         }else if("CURRENT_CONVERSATION_ASSET".equals(input.get("sourceKind"))) {
             var s=asset(scope,task,conversation,generation,conversation(scope,task,conversation,generation),identity);
             var output=files.readConversationOutput(scope,task,s.runId(),s.outputId());
@@ -72,21 +76,30 @@ public final class ChatSkillSourceAccessService implements SkillSourceAccessServ
         requireAuthorized(scope,task,conversation,generation,input);
         return new PersonalWorkspaceExecutionService.RuntimeContent(filename,(String)input.get("contentMimeType"),bytes);
     }
-    private Map<String,Object> workspace(PersonalWorkspaceExecutionService.OwnerScope s,String task,Map<String,Object> identity,Map<String,Object> input) {
+    private void workspace(PersonalWorkspaceExecutionService.OwnerScope s,String task,Map<String,Object> identity,Map<String,Object> input) {
+        var selection=selection(identity);
+        try {
+            var actual=materials.metadata(new PersonalWorkspaceTaskLinkService.Scope(s.tenantId(),s.clientId(),s.ownerJiacn()),task,selection);
+            if(!actual.equals(expected(input)))throw missing();
+        } catch (TaskLinkedMaterialReader.Failure error) { throw materialFailure(error); }
+    }
+    private static TaskLinkedMaterialReader.Selection selection(Map<String,Object> identity) {
         if(!identity.keySet().equals(Set.of("kind","fileId","version","purpose"))||!"TASK_LINKED_WORKSPACE_VERSION".equals(identity.get("kind"))
                 ||!Set.of("INPUT","REFERENCE").contains(identity.get("purpose")))throw missing();
-        var rows=jdbc.queryForList("""
-            SELECT v.storage_uri,v.content_hash,v.byte_length,v.content_mime_type FROM agent_personal_workspace_task_file_link l
-            JOIN agent_personal_workspace_file f ON BINARY f.tenant_id=BINARY l.tenant_id AND BINARY f.client_id=BINARY l.client_id
-              AND BINARY f.owner_jiacn=BINARY l.owner_jiacn AND BINARY f.file_id=BINARY l.file_id AND f.state='ACTIVE'
-            JOIN agent_personal_workspace_file_version v ON BINARY v.tenant_id=BINARY l.tenant_id AND BINARY v.client_id=BINARY l.client_id
-              AND BINARY v.owner_jiacn=BINARY l.owner_jiacn AND BINARY v.file_id=BINARY l.file_id AND v.version=l.file_version
-            WHERE BINARY l.tenant_id=BINARY ? AND BINARY l.client_id=BINARY ? AND BINARY l.owner_jiacn=BINARY ? AND BINARY l.task_id=BINARY ?
-              AND BINARY l.file_id=BINARY ? AND l.file_version=? AND BINARY l.link_role=BINARY ? AND l.link_state='ACTIVE'
-            """,s.tenantId(),s.clientId(),s.ownerJiacn(),task,text(identity,"fileId"),decimal(identity.get("version")),text(identity,"purpose"));
-        if(rows.size()!=1)throw missing();var row=rows.getFirst();
-        if(!input.get("sha256").equals(row.get("content_hash"))||decimal(input.get("byteLength"))!=decimal(row.get("byte_length"))
-                ||!input.get("contentMimeType").equals(row.get("content_mime_type")))throw missing();return row;
+        long version=decimal(identity.get("version"));
+        if(version<1||version>Integer.MAX_VALUE)throw missing();
+        return new TaskLinkedMaterialReader.Selection(text(identity,"fileId"),(int)version,text(identity,"purpose"));
+    }
+    private static TaskLinkedMaterialReader.Metadata expected(Map<String,Object> input) {
+        return new TaskLinkedMaterialReader.Metadata(text(input,"contentMimeType"),text(input,"sha256"),decimal(input.get("byteLength")));
+    }
+    private static ChatDeliberationException materialFailure(TaskLinkedMaterialReader.Failure error) {
+        return switch(error.reason()) {
+            case NOT_FOUND, METADATA_INVALID -> missing();
+            case CONTENT_MISMATCH -> conflict();
+            case UNAVAILABLE -> new ChatDeliberationException(ChatDeliberationException.Reason.PERSISTENCE_ERROR,
+                    "Skill source storage is unavailable",error);
+        };
     }
     public String conversation(PersonalWorkspaceExecutionService.OwnerScope s,String task,String id,long generation) {
         var c=conversations.findScopedById(s.ownerJiacn(),s.clientId(),id);

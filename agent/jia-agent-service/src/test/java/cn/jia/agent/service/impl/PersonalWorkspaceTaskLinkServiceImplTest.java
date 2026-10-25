@@ -151,6 +151,10 @@ class PersonalWorkspaceTaskLinkServiceImplTest {
     }
 
     private static final class FakeDao implements PersonalWorkspaceTaskLinkDao {
+        @Override public List<MaterialRow> findActiveMaterial(String tenantId, String clientId, String ownerJiacn,
+                String taskId, String fileId, int version, String purpose) {
+            throw new UnsupportedOperationException("Link mutation fixture must not read storage metadata");
+        }
         private boolean taskOwned = true;
         private boolean activeFile = true;
         private boolean fileExists = true;

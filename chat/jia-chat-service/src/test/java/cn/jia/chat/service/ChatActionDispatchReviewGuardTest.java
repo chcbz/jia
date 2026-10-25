@@ -101,10 +101,16 @@ class ChatActionDispatchReviewGuardTest {
                 new cn.jia.agent.service.TaskSkillPolicyService.Snapshot(false,"RUNTIME_UNAVAILABLE",1,null,null),
                 new cn.jia.agent.service.TaskSkillPolicyService.Snapshot(true,null,1,fence,key),
                 new cn.jia.agent.service.TaskSkillPolicyService.Snapshot(false,"TASK_GRANT_MISSING",1,null,null));
-        var unavailable=assertThrows(IllegalStateException.class,()->actual.prepare(action));
+        var unavailable=assertThrows(ChatActionDispatchService.Unavailable.class,()->actual.prepare(action));
         assertEquals("SKILL_RUNTIME_UNAVAILABLE",unavailable.getMessage());verifyNoInteractions(installed);
         assertDoesNotThrow(()->actual.prepare(action));verify(installed).read(key);
         assertThrows(ChatActionDispatchService.Rejected.class,()->actual.prepare(action));
+        verifyNoMoreInteractions(installed);
+        // An unknown producer reason is not permission and must not permanently kill the action.
+        when(policies.read(key,"task")).thenReturn(
+                new cn.jia.agent.service.TaskSkillPolicyService.Snapshot(false,"FUTURE_REASON",1,null,null));
+        assertEquals("SKILL_POLICY_INDETERMINATE",
+                assertThrows(ChatActionDispatchService.Unavailable.class,()->actual.prepare(action)).reasonCode());
         verifyNoMoreInteractions(installed);
     }
 

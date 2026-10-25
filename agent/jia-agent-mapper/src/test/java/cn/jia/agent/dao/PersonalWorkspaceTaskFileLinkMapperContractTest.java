@@ -35,4 +35,17 @@ class PersonalWorkspaceTaskFileLinkMapperContractTest {
         assertFalse(sql.contains("max(file_version)"));
         assertFalse(sql.contains("latest_version"));
     }
+    @Test void materialReadKeepsExactVersionAndDoesNotHideAmbiguousRows() throws Exception {
+        var method=PersonalWorkspaceTaskFileLinkMapper.class.getDeclaredMethod("selectActiveMaterial",
+                String.class,String.class,String.class,String.class,String.class,int.class,String.class);
+        String sql=String.join(" ",method.getAnnotation(Select.class).value()).toLowerCase(Locale.ROOT);
+        for(String column:new String[]{"tenant_id","client_id","owner_jiacn","task_id","file_id"})
+            assertTrue(sql.contains("binary l."+column+"=binary #{"),column);
+        assertTrue(sql.contains("l.file_version=#{version}"));
+        assertTrue(sql.contains("v.version=l.file_version"));
+        assertTrue(sql.contains("binary l.link_role=binary #{purpose}"));
+        assertTrue(sql.contains("f.state='active'"));assertTrue(sql.contains("l.link_state='active'"));
+        assertFalse(sql.contains("limit "));assertFalse(sql.contains("for update"));
+        assertFalse(sql.contains("latest_version"));assertFalse(sql.contains("max("));
+    }
 }

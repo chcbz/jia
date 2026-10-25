@@ -159,9 +159,9 @@ public final class ChatActionCapabilityService {
         for(var item:observed.items()) {
             var view=new java.util.LinkedHashMap<String,Object>();
             view.put("skillKey",item.skillKey());view.put("skillVersion",item.skillVersion());view.put("title",item.title());
-            boolean callable=stable&&policy.allowed()&&"RUNTIME_READY".equals(item.state());
+            boolean callable=stable&&policy.decision()==cn.jia.agent.service.TaskSkillPolicyService.Decision.ALLOWED&&"RUNTIME_READY".equals(item.state());
             view.put("state",callable?"CALLABLE":"UNAVAILABLE");
-            view.put("reasonCode",!stable?"SKILL_TASK_POLICY_CHANGED":!policy.allowed()?policy.reasonCode():item.reasonCode());
+            view.put("reasonCode",!stable?"SKILL_TASK_POLICY_CHANGED":policy.decision()!=cn.jia.agent.service.TaskSkillPolicyService.Decision.ALLOWED?policy.reasonCode():item.reasonCode());
             view.put("costInfo",costInfo(item.metadataJson()));
             items.add(java.util.Collections.unmodifiableMap(view));
         }
@@ -170,7 +170,7 @@ public final class ChatActionCapabilityService {
     public List<Map<String,Object>> available(Scope scope, String taskId, List<Map<String,Object>> catalog) {
         var key=new cn.jia.agent.service.SkillCapabilityLookup.Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),scope.targetAgentId());
         var policy=policies.read(key,taskId);
-        if(!policy.allowed()||policy.runtimeScope()==null)return List.of();
+        if(policy.decision()!=cn.jia.agent.service.TaskSkillPolicyService.Decision.ALLOWED||policy.runtimeScope()==null)return List.of();
         var task=taskCatalog(scope,taskId,policy);
         var runtimeKey=policy.runtimeScope();
         var installed=installedSkills.read(runtimeKey);

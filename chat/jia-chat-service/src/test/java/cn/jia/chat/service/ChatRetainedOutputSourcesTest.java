@@ -130,4 +130,60 @@ class ChatRetainedOutputSourcesTest {
         return Map.of("sourceKind", "CURRENT_CONVERSATION_ASSET", "sourceIdentity", ChatSkillSourceAccessService.assetIdentity(source),
                 "sourceRefId", ref, "contentHash", source.sha256());
     }
+    @Test void workspaceSourceUsesExactAgentPortWithoutChatStorageSql() {
+        var materials=mock(cn.jia.agent.service.TaskLinkedMaterialReader.class);
+        var selection=new cn.jia.agent.service.TaskLinkedMaterialReader.Selection("image",2,"REFERENCE");
+        var readerScope=new cn.jia.agent.service.PersonalWorkspaceTaskLinkService.Scope("0","client","owner");
+        byte[] bytes={1,2,3};String sha=ChatSkillSourceAccessService.sha(bytes);
+        var metadata=new cn.jia.agent.service.TaskLinkedMaterialReader.Metadata("image/png",sha,3);
+        when(materials.metadata(readerScope,"task",selection)).thenReturn(metadata);
+        when(materials.read(readerScope,"task",selection,metadata)).thenReturn(
+                new cn.jia.agent.service.PersonalWorkspaceStorage.StoredContent(bytes,sha,3,"image/png"));
+        var conversations=mock(cn.jia.chat.dao.ChatConversationDao.class);
+        var c=new cn.jia.chat.entity.ChatConversationEntity();
+        c.setId(42L);c.setTenantId("0");c.setJiacn("owner");c.setClientId("client");c.setLifecycleGeneration(3L);
+        c.setTaskId("task");c.setConversationType("juyiting");c.setConversationScopeType("bounty");
+        c.setConversationScopeKey("task:task");c.setTargetAgentIds("[\"agent\"]");
+        when(conversations.findScopedById("owner","client","42")).thenReturn(c);
+        var scopes=mock(JuyitingConversationScopeService.class);
+        when(scopes.parsePersistedTargetAgentIds(c.getTargetAgentIds())).thenReturn(List.of("agent"));
+        var actual=new ChatSkillSourceAccessService(conversations,scopes,mock(ChatConversationArchiveStore.class),
+                mock(PersonalWorkspaceExecutionService.class),mock(cn.jia.agent.service.SkillExecutionService.class),jdbc,materials);
+        var identity=Map.<String,Object>of("kind","TASK_LINKED_WORKSPACE_VERSION","fileId","image","version","2","purpose","REFERENCE");
+        var input=Map.<String,Object>of("sourceKind","TASK_LINKED_WORKSPACE_VERSION","sourceIdentity",identity,
+                "sha256",sha,"byteLength","3","contentMimeType","image/png");
+        var result=actual.read(owner,"task","42",3,input);
+        assertEquals("material",result.filename());assertArrayEquals(bytes,result.bytes());
+        verify(materials,times(2)).metadata(readerScope,"task",selection);
+        verify(materials).read(readerScope,"task",selection,metadata);verifyNoInteractions(jdbc);
+        when(materials.metadata(readerScope,"task",selection)).thenThrow(new cn.jia.agent.service.TaskLinkedMaterialReader.Failure(
+                cn.jia.agent.service.TaskLinkedMaterialReader.Failure.Reason.UNAVAILABLE));
+        assertEquals(ChatDeliberationException.Reason.PERSISTENCE_ERROR,assertThrows(ChatDeliberationException.class,
+                ()->actual.requireAuthorized(owner,"task","42",3,input)).reason());
+    }
+
+    @Test void typedWorkspaceContextFreezesSameIdentityAndMetadataThroughAgentPort() {
+        var materials=mock(cn.jia.agent.service.TaskLinkedMaterialReader.class);contexts.setMaterials(materials);
+        var authority=mock(ChatDispatchAuthorityService.class);contexts.setDispatchAuthority(authority);
+        when(authority.admissionTarget("0","owner","client","task","agent")).thenReturn(
+                new TaskAssigneeAuthorityService.Target("0","client","executor","agent",1,null));
+        when(schema.ready()).thenReturn(true);
+        var profile=Map.<String,Object>of("schemaVersion",1,"supportedInputs",List.of(Map.of(
+                "mediaKind","image","mimeType","image/png","carrier","LOCAL_IMAGE","carrierContractDigest","sha256:"+"d".repeat(64))));
+        when(sessions.requireSingleReady(new TypedDeliberationSessionRegistry.Scope("0","executor","client"),"agent"))
+                .thenReturn(new TypedDeliberationSessionRegistry.Ready("session","agent",List.of(),Map.of("materialsInput",profile)));
+        when(capabilities.available(any(),eq("task"),anyList())).thenReturn(List.of());
+        var readerScope=new cn.jia.agent.service.PersonalWorkspaceTaskLinkService.Scope("0","client","owner");
+        var selection=new cn.jia.agent.service.TaskLinkedMaterialReader.Selection("file",2,"REFERENCE");
+        when(materials.metadata(readerScope,"task",selection)).thenReturn(
+                new cn.jia.agent.service.TaskLinkedMaterialReader.Metadata("image/png","a".repeat(64),3));
+        var selector=new SourceSelector("TASK_LINKED_WORKSPACE_VERSION","file","2","REFERENCE",null,null);
+        var frozen=contexts.resolve(scope,"task","agent",List.of(selector));
+        var row=ChatTypedDeliberationContextService.parseCatalog(frozen.sourceCatalogJson()).getFirst();
+        assertEquals("TASK_WORKSPACE_FILE",row.get("sourceKind"));
+        assertEquals(cn.jia.chat.api.ChatTypedDeliberationWire.selectorMap(selector),row.get("sourceIdentity"));
+        assertEquals("a".repeat(64),row.get("contentHash"));assertEquals("3",row.get("byteLength"));
+        assertEquals(ChatTypedDeliberationContextService.sourceRefId(scope,row),row.get("sourceRefId"));
+        verifyNoInteractions(jdbc);
+    }
 }

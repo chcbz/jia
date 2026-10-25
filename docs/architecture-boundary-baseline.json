@@ -1,0 +1,710 @@
+{
+  "schemaVersion": 1,
+  "spec": "specs/architecture-convergence/design.md#2",
+  "sourceCommit": "f7a7d1ecf2407aafecdfbfac074aa8ea46306322",
+  "policy": "Exact historical exceptions, not approval. Do not regenerate to accept new violations. Remove retired exceptions in the same change.",
+  "projectPaths": [
+    ":",
+    ":agent",
+    ":agent:jia-agent-api",
+    ":agent:jia-agent-core",
+    ":agent:jia-agent-mapper",
+    ":agent:jia-agent-service",
+    ":base",
+    ":base:jia-base-api",
+    ":base:jia-base-core",
+    ":base:jia-base-mapper",
+    ":base:jia-base-service",
+    ":base:jia-base-starter",
+    ":chat",
+    ":chat:jia-chat-api",
+    ":chat:jia-chat-core",
+    ":chat:jia-chat-mapper",
+    ":chat:jia-chat-service",
+    ":chat:jia-chat-starter",
+    ":common",
+    ":common:jia-common-api",
+    ":common:jia-common-core",
+    ":common:jia-common-mapper",
+    ":common:jia-common-service",
+    ":common:jia-common-starter",
+    ":common:jia-common-test",
+    ":dwz",
+    ":dwz:jia-dwz-api",
+    ":dwz:jia-dwz-core",
+    ":dwz:jia-dwz-mapper",
+    ":dwz:jia-dwz-service",
+    ":dwz:jia-dwz-starter",
+    ":economy",
+    ":economy:jia-economy-api",
+    ":economy:jia-economy-core",
+    ":economy:jia-economy-mapper",
+    ":economy:jia-economy-service",
+    ":isp",
+    ":isp:jia-isp-api",
+    ":isp:jia-isp-core",
+    ":isp:jia-isp-mapper",
+    ":isp:jia-isp-service",
+    ":isp:jia-isp-starter",
+    ":kefu",
+    ":kefu:jia-kefu-api",
+    ":kefu:jia-kefu-core",
+    ":kefu:jia-kefu-mapper",
+    ":kefu:jia-kefu-service",
+    ":material",
+    ":material:jia-material-api",
+    ":material:jia-material-core",
+    ":material:jia-material-mapper",
+    ":material:jia-material-service",
+    ":material:jia-material-starter",
+    ":oauth",
+    ":oauth:jia-oauth-api",
+    ":oauth:jia-oauth-client-starter",
+    ":oauth:jia-oauth-core",
+    ":oauth:jia-oauth-mapper",
+    ":oauth:jia-oauth-resource",
+    ":oauth:jia-oauth-resource-starter",
+    ":oauth:jia-oauth-server-starter",
+    ":oauth:jia-oauth-service",
+    ":point",
+    ":point:jia-point-api",
+    ":point:jia-point-core",
+    ":point:jia-point-mapper",
+    ":point:jia-point-service",
+    ":sms",
+    ":sms:jia-sms-api",
+    ":sms:jia-sms-core",
+    ":sms:jia-sms-mapper",
+    ":sms:jia-sms-service",
+    ":sms:jia-sms-starter",
+    ":starter",
+    ":task",
+    ":task:jia-task-api",
+    ":task:jia-task-core",
+    ":task:jia-task-mapper",
+    ":task:jia-task-service",
+    ":task:jia-task-starter",
+    ":user",
+    ":user:jia-user-api",
+    ":user:jia-user-core",
+    ":user:jia-user-mapper",
+    ":user:jia-user-service",
+    ":user:jia-user-starter",
+    ":workflow",
+    ":workflow:jia-workflow-api",
+    ":workflow:jia-workflow-core",
+    ":workflow:jia-workflow-service",
+    ":workflow:jia-workflow-starter",
+    ":wx",
+    ":wx:jia-wx-api",
+    ":wx:jia-wx-core",
+    ":wx:jia-wx-mapper",
+    ":wx:jia-wx-service"
+  ],
+  "scopedNewSources": [
+    "agent/jia-agent-api/src/main/java/cn/jia/agent/service/TaskLinkedMaterialReader.java",
+    "agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/TaskLinkedMaterialReaderImpl.java"
+  ],
+  "exceptions": [
+    {
+      "rule": "G1",
+      "sourcePath": "agent/jia-agent-service/src/main/java/cn/jia/agent/config/SkillMarketplaceConfiguration.java",
+      "symbol": "cn.jia.economy.config.EconomySkillApplicationSchemaInitializer",
+      "owner": "agent",
+      "reason": "Existing Economy entitlement/hosting/seed dependency. Preserve local financial transaction and installation behavior; dedicated domain split is outside this package.",
+      "retireIn": "follow-up-economy-agent-boundary"
+    },
+    {
+      "rule": "G1",
+      "sourcePath": "agent/jia-agent-service/src/main/java/cn/jia/agent/hosting/HostingRentApplicationService.java",
+      "symbol": "cn.jia.economy.config.EconomyPreviewGate",
+      "owner": "agent",
+      "reason": "Existing Economy entitlement/hosting/seed dependency. Preserve local financial transaction and installation behavior; dedicated domain split is outside this package.",
+      "retireIn": "follow-up-economy-agent-boundary"
+    },
+    {
+      "rule": "G1",
+      "sourcePath": "agent/jia-agent-service/src/main/java/cn/jia/agent/hosting/HostingRentApplicationService.java",
+      "symbol": "cn.jia.economy.mapper.EconomyHostingRentMapper",
+      "owner": "agent",
+      "reason": "Existing Economy entitlement/hosting/seed dependency. Preserve local financial transaction and installation behavior; dedicated domain split is outside this package.",
+      "retireIn": "follow-up-economy-agent-boundary"
+    },
+    {
+      "rule": "G1",
+      "sourcePath": "agent/jia-agent-service/src/main/java/cn/jia/agent/hosting/HostingRentReconciler.java",
+      "symbol": "cn.jia.economy.config.EconomyPreviewGate",
+      "owner": "agent",
+      "reason": "Existing Economy entitlement/hosting/seed dependency. Preserve local financial transaction and installation behavior; dedicated domain split is outside this package.",
+      "retireIn": "follow-up-economy-agent-boundary"
+    },
+    {
+      "rule": "G1",
+      "sourcePath": "agent/jia-agent-service/src/main/java/cn/jia/agent/hosting/HostingRentReconciler.java",
+      "symbol": "cn.jia.economy.mapper.EconomyHostingRentMapper",
+      "owner": "agent",
+      "reason": "Existing Economy entitlement/hosting/seed dependency. Preserve local financial transaction and installation behavior; dedicated domain split is outside this package.",
+      "retireIn": "follow-up-economy-agent-boundary"
+    },
+    {
+      "rule": "G1",
+      "sourcePath": "agent/jia-agent-service/src/main/java/cn/jia/agent/hosting/HostingRentWorkAdmission.java",
+      "symbol": "cn.jia.economy.mapper.EconomyHostingRentMapper",
+      "owner": "agent",
+      "reason": "Existing Economy entitlement/hosting/seed dependency. Preserve local financial transaction and installation behavior; dedicated domain split is outside this package.",
+      "retireIn": "follow-up-economy-agent-boundary"
+    },
+    {
+      "rule": "G1",
+      "sourcePath": "agent/jia-agent-service/src/main/java/cn/jia/agent/hosting/ManagedHostingCredentials.java",
+      "symbol": "cn.jia.economy.mapper.EconomyHostingRentMapper",
+      "owner": "agent",
+      "reason": "Existing Economy entitlement/hosting/seed dependency. Preserve local financial transaction and installation behavior; dedicated domain split is outside this package.",
+      "retireIn": "follow-up-economy-agent-boundary"
+    },
+    {
+      "rule": "G1",
+      "sourcePath": "agent/jia-agent-service/src/main/java/cn/jia/agent/position/PositionInstalledSkills.java",
+      "symbol": "cn.jia.economy.mapper.EconomySkillMarketplaceMapper",
+      "owner": "agent",
+      "reason": "Existing Economy entitlement/hosting/seed dependency. Preserve local financial transaction and installation behavior; dedicated domain split is outside this package.",
+      "retireIn": "follow-up-economy-agent-boundary"
+    },
+    {
+      "rule": "G1",
+      "sourcePath": "agent/jia-agent-service/src/main/java/cn/jia/agent/position/PositionSkillRuntimeService.java",
+      "symbol": "cn.jia.economy.config.skillseed.PlatformSkillPackageCatalog.PlatformSkillPackage",
+      "owner": "agent",
+      "reason": "Existing Economy entitlement/hosting/seed dependency. Preserve local financial transaction and installation behavior; dedicated domain split is outside this package.",
+      "retireIn": "follow-up-economy-agent-boundary"
+    },
+    {
+      "rule": "G1",
+      "sourcePath": "agent/jia-agent-service/src/main/java/cn/jia/agent/position/PositionSkillRuntimeService.java",
+      "symbol": "cn.jia.economy.mapper.EconomySkillMarketplaceMapper",
+      "owner": "agent",
+      "reason": "Existing Economy entitlement/hosting/seed dependency. Preserve local financial transaction and installation behavior; dedicated domain split is outside this package.",
+      "retireIn": "follow-up-economy-agent-boundary"
+    },
+    {
+      "rule": "G1",
+      "sourcePath": "agent/jia-agent-service/src/main/java/cn/jia/agent/position/PositionSkillService.java",
+      "symbol": "cn.jia.economy.mapper.EconomySkillMarketplaceMapper",
+      "owner": "agent",
+      "reason": "Existing Economy entitlement/hosting/seed dependency. Preserve local financial transaction and installation behavior; dedicated domain split is outside this package.",
+      "retireIn": "follow-up-economy-agent-boundary"
+    },
+    {
+      "rule": "G1",
+      "sourcePath": "agent/jia-agent-service/src/main/java/cn/jia/agent/skill/InstalledSkillDescriptorService.java",
+      "symbol": "cn.jia.economy.mapper.EconomySkillApplicationMapper",
+      "owner": "agent",
+      "reason": "Existing Economy entitlement/hosting/seed dependency. Preserve local financial transaction and installation behavior; dedicated domain split is outside this package.",
+      "retireIn": "follow-up-economy-agent-boundary"
+    },
+    {
+      "rule": "G1",
+      "sourcePath": "agent/jia-agent-service/src/main/java/cn/jia/agent/skill/InstalledSkillDescriptorService.java",
+      "symbol": "cn.jia.economy.mapper.EconomySkillMarketplaceMapper",
+      "owner": "agent",
+      "reason": "Existing Economy entitlement/hosting/seed dependency. Preserve local financial transaction and installation behavior; dedicated domain split is outside this package.",
+      "retireIn": "follow-up-economy-agent-boundary"
+    },
+    {
+      "rule": "G1",
+      "sourcePath": "agent/jia-agent-service/src/main/java/cn/jia/agent/skill/InstalledSkillEntitlementLookup.java",
+      "symbol": "cn.jia.economy.mapper.EconomySkillApplicationMapper",
+      "owner": "agent",
+      "reason": "Existing Economy entitlement/hosting/seed dependency. Preserve local financial transaction and installation behavior; dedicated domain split is outside this package.",
+      "retireIn": "follow-up-economy-agent-boundary"
+    },
+    {
+      "rule": "G1",
+      "sourcePath": "agent/jia-agent-service/src/main/java/cn/jia/agent/skill/InstalledSkillEntitlementLookup.java",
+      "symbol": "cn.jia.economy.mapper.EconomySkillMarketplaceMapper",
+      "owner": "agent",
+      "reason": "Existing Economy entitlement/hosting/seed dependency. Preserve local financial transaction and installation behavior; dedicated domain split is outside this package.",
+      "retireIn": "follow-up-economy-agent-boundary"
+    },
+    {
+      "rule": "G1",
+      "sourcePath": "agent/jia-agent-service/src/main/java/cn/jia/agent/skill/SkillAgentVersions.java",
+      "symbol": "cn.jia.economy.mapper.EconomySkillApplicationMapper",
+      "owner": "agent",
+      "reason": "Existing Economy entitlement/hosting/seed dependency. Preserve local financial transaction and installation behavior; dedicated domain split is outside this package.",
+      "retireIn": "follow-up-economy-agent-boundary"
+    },
+    {
+      "rule": "G1",
+      "sourcePath": "agent/jia-agent-service/src/main/java/cn/jia/agent/skill/SkillInstallAckService.java",
+      "symbol": "cn.jia.economy.config.EconomyPreviewGate",
+      "owner": "agent",
+      "reason": "Existing Economy entitlement/hosting/seed dependency. Preserve local financial transaction and installation behavior; dedicated domain split is outside this package.",
+      "retireIn": "follow-up-economy-agent-boundary"
+    },
+    {
+      "rule": "G1",
+      "sourcePath": "agent/jia-agent-service/src/main/java/cn/jia/agent/skill/SkillInstallAckService.java",
+      "symbol": "cn.jia.economy.mapper.EconomySkillApplicationMapper",
+      "owner": "agent",
+      "reason": "Existing Economy entitlement/hosting/seed dependency. Preserve local financial transaction and installation behavior; dedicated domain split is outside this package.",
+      "retireIn": "follow-up-economy-agent-boundary"
+    },
+    {
+      "rule": "G1",
+      "sourcePath": "agent/jia-agent-service/src/main/java/cn/jia/agent/skill/SkillInstallAckService.java",
+      "symbol": "cn.jia.economy.mapper.EconomySkillMarketplaceMapper",
+      "owner": "agent",
+      "reason": "Existing Economy entitlement/hosting/seed dependency. Preserve local financial transaction and installation behavior; dedicated domain split is outside this package.",
+      "retireIn": "follow-up-economy-agent-boundary"
+    },
+    {
+      "rule": "G1",
+      "sourcePath": "agent/jia-agent-service/src/main/java/cn/jia/agent/skill/SkillInstallCommandWriter.java",
+      "symbol": "cn.jia.economy.config.EconomyPreviewGate",
+      "owner": "agent",
+      "reason": "Existing Economy entitlement/hosting/seed dependency. Preserve local financial transaction and installation behavior; dedicated domain split is outside this package.",
+      "retireIn": "follow-up-economy-agent-boundary"
+    },
+    {
+      "rule": "G1",
+      "sourcePath": "agent/jia-agent-service/src/main/java/cn/jia/agent/skill/SkillInstallDispatchService.java",
+      "symbol": "cn.jia.economy.mapper.*",
+      "owner": "agent",
+      "reason": "Existing Economy entitlement/hosting/seed dependency. Preserve local financial transaction and installation behavior; dedicated domain split is outside this package.",
+      "retireIn": "follow-up-economy-agent-boundary"
+    },
+    {
+      "rule": "G1",
+      "sourcePath": "agent/jia-agent-service/src/main/java/cn/jia/agent/skill/SkillInstallRecoveryService.java",
+      "symbol": "cn.jia.economy.config.EconomyPreviewGate",
+      "owner": "agent",
+      "reason": "Existing Economy entitlement/hosting/seed dependency. Preserve local financial transaction and installation behavior; dedicated domain split is outside this package.",
+      "retireIn": "follow-up-economy-agent-boundary"
+    },
+    {
+      "rule": "G1",
+      "sourcePath": "agent/jia-agent-service/src/main/java/cn/jia/agent/skill/SkillInstallResultService.java",
+      "symbol": "cn.jia.economy.mapper.*",
+      "owner": "agent",
+      "reason": "Existing Economy entitlement/hosting/seed dependency. Preserve local financial transaction and installation behavior; dedicated domain split is outside this package.",
+      "retireIn": "follow-up-economy-agent-boundary"
+    },
+    {
+      "rule": "G1",
+      "sourcePath": "agent/jia-agent-service/src/main/java/cn/jia/agent/skill/SkillManagedCredentials.java",
+      "symbol": "cn.jia.economy.config.EconomyPreviewGate",
+      "owner": "agent",
+      "reason": "Existing Economy entitlement/hosting/seed dependency. Preserve local financial transaction and installation behavior; dedicated domain split is outside this package.",
+      "retireIn": "follow-up-economy-agent-boundary"
+    },
+    {
+      "rule": "G1",
+      "sourcePath": "agent/jia-agent-service/src/main/java/cn/jia/agent/skill/SkillManagedCredentials.java",
+      "symbol": "cn.jia.economy.mapper.*",
+      "owner": "agent",
+      "reason": "Existing Economy entitlement/hosting/seed dependency. Preserve local financial transaction and installation behavior; dedicated domain split is outside this package.",
+      "retireIn": "follow-up-economy-agent-boundary"
+    },
+    {
+      "rule": "G1",
+      "sourcePath": "agent/jia-agent-service/src/main/java/cn/jia/agent/skill/SkillManagementService.java",
+      "symbol": "cn.jia.economy.mapper.*",
+      "owner": "agent",
+      "reason": "Existing Economy entitlement/hosting/seed dependency. Preserve local financial transaction and installation behavior; dedicated domain split is outside this package.",
+      "retireIn": "follow-up-economy-agent-boundary"
+    },
+    {
+      "rule": "G1",
+      "sourcePath": "agent/jia-agent-service/src/main/java/cn/jia/agent/skill/SkillMarketplaceService.java",
+      "symbol": "cn.jia.economy.config.EconomyPreviewGate",
+      "owner": "agent",
+      "reason": "Existing Economy entitlement/hosting/seed dependency. Preserve local financial transaction and installation behavior; dedicated domain split is outside this package.",
+      "retireIn": "follow-up-economy-agent-boundary"
+    },
+    {
+      "rule": "G1",
+      "sourcePath": "agent/jia-agent-service/src/main/java/cn/jia/agent/skill/SkillMarketplaceService.java",
+      "symbol": "cn.jia.economy.mapper.*",
+      "owner": "agent",
+      "reason": "Existing Economy entitlement/hosting/seed dependency. Preserve local financial transaction and installation behavior; dedicated domain split is outside this package.",
+      "retireIn": "follow-up-economy-agent-boundary"
+    },
+    {
+      "rule": "G1",
+      "sourcePath": "agent/jia-agent-service/src/main/java/cn/jia/agent/skill/SkillPackageDescriptor.java",
+      "symbol": "cn.jia.economy.config.skillseed.PlatformSkillPackageCatalog.PlatformSkillPackage",
+      "owner": "agent",
+      "reason": "Existing Economy entitlement/hosting/seed dependency. Preserve local financial transaction and installation behavior; dedicated domain split is outside this package.",
+      "retireIn": "follow-up-economy-agent-boundary"
+    },
+    {
+      "rule": "G1",
+      "sourcePath": "agent/jia-agent-service/src/main/java/cn/jia/agent/skill/SkillPackagePublicationService.java",
+      "symbol": "cn.jia.economy.config.skillseed.PlatformSkillPackageCatalog",
+      "owner": "agent",
+      "reason": "Existing Economy entitlement/hosting/seed dependency. Preserve local financial transaction and installation behavior; dedicated domain split is outside this package.",
+      "retireIn": "follow-up-economy-agent-boundary"
+    },
+    {
+      "rule": "G1",
+      "sourcePath": "agent/jia-agent-service/src/main/java/cn/jia/agent/skill/SkillPackagePublicationService.java",
+      "symbol": "cn.jia.economy.mapper.EconomySkillMarketplaceMapper",
+      "owner": "agent",
+      "reason": "Existing Economy entitlement/hosting/seed dependency. Preserve local financial transaction and installation behavior; dedicated domain split is outside this package.",
+      "retireIn": "follow-up-economy-agent-boundary"
+    },
+    {
+      "rule": "G1",
+      "sourcePath": "agent/jia-agent-service/src/main/java/cn/jia/agent/skill/SkillPackages.java",
+      "symbol": "cn.jia.economy.config.skillseed.PlatformSkillPackageCatalog",
+      "owner": "agent",
+      "reason": "Existing Economy entitlement/hosting/seed dependency. Preserve local financial transaction and installation behavior; dedicated domain split is outside this package.",
+      "retireIn": "follow-up-economy-agent-boundary"
+    },
+    {
+      "rule": "G1",
+      "sourcePath": "agent/jia-agent-service/src/main/java/cn/jia/agent/skill/SkillPackages.java",
+      "symbol": "cn.jia.economy.config.skillseed.PlatformSkillPackageCatalog.PlatformSkillPackage",
+      "owner": "agent",
+      "reason": "Existing Economy entitlement/hosting/seed dependency. Preserve local financial transaction and installation behavior; dedicated domain split is outside this package.",
+      "retireIn": "follow-up-economy-agent-boundary"
+    },
+    {
+      "rule": "G1",
+      "sourcePath": "agent/jia-agent-service/src/main/java/cn/jia/agent/skill/SkillPackages.java",
+      "symbol": "cn.jia.economy.config.skillseed.PlatformSkillPackageCatalog.PlatformSkillProduct",
+      "owner": "agent",
+      "reason": "Existing Economy entitlement/hosting/seed dependency. Preserve local financial transaction and installation behavior; dedicated domain split is outside this package.",
+      "retireIn": "follow-up-economy-agent-boundary"
+    },
+    {
+      "rule": "G1",
+      "sourcePath": "chat/jia-chat-service/src/main/java/cn/jia/chat/api/AgentInspectionInputController.java",
+      "symbol": "cn.jia.agent.security.AgentRuntimeAuthentication",
+      "owner": "chat",
+      "reason": "Existing authenticated Runtime/position/archive/dispatch adapter dependency; narrow B1/B2 refactoring does not migrate these entrypoints.",
+      "retireIn": "follow-up-chat-runtime-adapters"
+    },
+    {
+      "rule": "G1",
+      "sourcePath": "chat/jia-chat-service/src/main/java/cn/jia/chat/api/AgentInspectionInputController.java",
+      "symbol": "cn.jia.agent.security.AgentRuntimeAuthenticationService",
+      "owner": "chat",
+      "reason": "Existing authenticated Runtime/position/archive/dispatch adapter dependency; narrow B1/B2 refactoring does not migrate these entrypoints.",
+      "retireIn": "follow-up-chat-runtime-adapters"
+    },
+    {
+      "rule": "G1",
+      "sourcePath": "chat/jia-chat-service/src/main/java/cn/jia/chat/api/AgentMaterialsInputController.java",
+      "symbol": "cn.jia.agent.security.AgentRuntimeAuthentication",
+      "owner": "chat",
+      "reason": "Existing authenticated Runtime/position/archive/dispatch adapter dependency; narrow B1/B2 refactoring does not migrate these entrypoints.",
+      "retireIn": "follow-up-chat-runtime-adapters"
+    },
+    {
+      "rule": "G1",
+      "sourcePath": "chat/jia-chat-service/src/main/java/cn/jia/chat/api/AgentMaterialsInputController.java",
+      "symbol": "cn.jia.agent.security.AgentRuntimeAuthenticationService",
+      "owner": "chat",
+      "reason": "Existing authenticated Runtime/position/archive/dispatch adapter dependency; narrow B1/B2 refactoring does not migrate these entrypoints.",
+      "retireIn": "follow-up-chat-runtime-adapters"
+    },
+    {
+      "rule": "G1",
+      "sourcePath": "chat/jia-chat-service/src/main/java/cn/jia/chat/api/AgentProfileCapabilitiesController.java",
+      "symbol": "cn.jia.agent.hosting.HostingRentApplicationException",
+      "owner": "chat",
+      "reason": "Existing authenticated Runtime/position/archive/dispatch adapter dependency; narrow B1/B2 refactoring does not migrate these entrypoints.",
+      "retireIn": "follow-up-chat-runtime-adapters"
+    },
+    {
+      "rule": "G1",
+      "sourcePath": "chat/jia-chat-service/src/main/java/cn/jia/chat/api/AgentProfileCapabilitiesController.java",
+      "symbol": "cn.jia.agent.hosting.HostingRentHttp",
+      "owner": "chat",
+      "reason": "Existing authenticated Runtime/position/archive/dispatch adapter dependency; narrow B1/B2 refactoring does not migrate these entrypoints.",
+      "retireIn": "follow-up-chat-runtime-adapters"
+    },
+    {
+      "rule": "G1",
+      "sourcePath": "chat/jia-chat-service/src/main/java/cn/jia/chat/api/AgentProfileCapabilitiesController.java",
+      "symbol": "cn.jia.agent.service.impl.AgentServiceImpl",
+      "owner": "chat",
+      "reason": "Existing authenticated Runtime/position/archive/dispatch adapter dependency; narrow B1/B2 refactoring does not migrate these entrypoints.",
+      "retireIn": "follow-up-chat-runtime-adapters"
+    },
+    {
+      "rule": "G1",
+      "sourcePath": "chat/jia-chat-service/src/main/java/cn/jia/chat/api/ChatSkillResultController.java",
+      "symbol": "cn.jia.agent.service.*",
+      "owner": "chat",
+      "reason": "Existing authenticated Runtime/position/archive/dispatch adapter dependency; narrow B1/B2 refactoring does not migrate these entrypoints.",
+      "retireIn": "follow-up-chat-runtime-adapters"
+    },
+    {
+      "rule": "G1",
+      "sourcePath": "chat/jia-chat-service/src/main/java/cn/jia/chat/archive/controller/ArchiveMaintenanceController.java",
+      "symbol": "cn.jia.agent.api.AgentController",
+      "owner": "chat",
+      "reason": "Existing authenticated Runtime/position/archive/dispatch adapter dependency; narrow B1/B2 refactoring does not migrate these entrypoints.",
+      "retireIn": "follow-up-chat-runtime-adapters"
+    },
+    {
+      "rule": "G1",
+      "sourcePath": "chat/jia-chat-service/src/main/java/cn/jia/chat/archive/controller/ArchiveMaintenanceRuntimeController.java",
+      "symbol": "cn.jia.agent.security.AgentRuntimeAuthenticationService",
+      "owner": "chat",
+      "reason": "Existing authenticated Runtime/position/archive/dispatch adapter dependency; narrow B1/B2 refactoring does not migrate these entrypoints.",
+      "retireIn": "follow-up-chat-runtime-adapters"
+    },
+    {
+      "rule": "G1",
+      "sourcePath": "chat/jia-chat-service/src/main/java/cn/jia/chat/archive/service/ArchiveMaintenanceService.java",
+      "symbol": "cn.jia.agent.position.*",
+      "owner": "chat",
+      "reason": "Existing authenticated Runtime/position/archive/dispatch adapter dependency; narrow B1/B2 refactoring does not migrate these entrypoints.",
+      "retireIn": "follow-up-chat-runtime-adapters"
+    },
+    {
+      "rule": "G1",
+      "sourcePath": "chat/jia-chat-service/src/main/java/cn/jia/chat/archive/service/ArchiveMaintenanceService.java",
+      "symbol": "cn.jia.agent.security.AgentRuntimeAuthenticationService.Proof",
+      "owner": "chat",
+      "reason": "Existing authenticated Runtime/position/archive/dispatch adapter dependency; narrow B1/B2 refactoring does not migrate these entrypoints.",
+      "retireIn": "follow-up-chat-runtime-adapters"
+    },
+    {
+      "rule": "G1",
+      "sourcePath": "chat/jia-chat-service/src/main/java/cn/jia/chat/config/AgentRuntimeHandshakeInterceptor.java",
+      "symbol": "cn.jia.agent.security.AgentRuntimeAuthenticationFilter",
+      "owner": "chat",
+      "reason": "Existing authenticated Runtime/position/archive/dispatch adapter dependency; narrow B1/B2 refactoring does not migrate these entrypoints.",
+      "retireIn": "follow-up-chat-runtime-adapters"
+    },
+    {
+      "rule": "G1",
+      "sourcePath": "chat/jia-chat-service/src/main/java/cn/jia/chat/config/AgentRuntimeHandshakeInterceptor.java",
+      "symbol": "cn.jia.agent.security.AgentRuntimeAuthenticationService",
+      "owner": "chat",
+      "reason": "Existing authenticated Runtime/position/archive/dispatch adapter dependency; narrow B1/B2 refactoring does not migrate these entrypoints.",
+      "retireIn": "follow-up-chat-runtime-adapters"
+    },
+    {
+      "rule": "G1",
+      "sourcePath": "chat/jia-chat-service/src/main/java/cn/jia/chat/handler/SkillExecutionDeclaration.java",
+      "symbol": "cn.jia.agent.skill.SkillManagementCodec",
+      "owner": "chat",
+      "reason": "Existing authenticated Runtime/position/archive/dispatch adapter dependency; narrow B1/B2 refactoring does not migrate these entrypoints.",
+      "retireIn": "follow-up-chat-runtime-adapters"
+    },
+    {
+      "rule": "G1",
+      "sourcePath": "chat/jia-chat-service/src/main/java/cn/jia/chat/service/AgentProfileCapabilitiesService.java",
+      "symbol": "cn.jia.agent.hosting.HostingRentHttp",
+      "owner": "chat",
+      "reason": "Existing authenticated Runtime/position/archive/dispatch adapter dependency; narrow B1/B2 refactoring does not migrate these entrypoints.",
+      "retireIn": "follow-up-chat-runtime-adapters"
+    },
+    {
+      "rule": "G1",
+      "sourcePath": "chat/jia-chat-service/src/main/java/cn/jia/chat/service/AgentProfileCapabilitiesService.java",
+      "symbol": "cn.jia.agent.hosting.HostingRentOwnerResolver",
+      "owner": "chat",
+      "reason": "Existing authenticated Runtime/position/archive/dispatch adapter dependency; narrow B1/B2 refactoring does not migrate these entrypoints.",
+      "retireIn": "follow-up-chat-runtime-adapters"
+    },
+    {
+      "rule": "G1",
+      "sourcePath": "chat/jia-chat-service/src/main/java/cn/jia/chat/service/AgentProfileCapabilitiesService.java",
+      "symbol": "cn.jia.agent.security.AgentRuntimeAuthenticationService",
+      "owner": "chat",
+      "reason": "Existing authenticated Runtime/position/archive/dispatch adapter dependency; narrow B1/B2 refactoring does not migrate these entrypoints.",
+      "retireIn": "follow-up-chat-runtime-adapters"
+    },
+    {
+      "rule": "G1",
+      "sourcePath": "chat/jia-chat-service/src/main/java/cn/jia/chat/service/ChatBountyInteractionV3PreviewService.java",
+      "symbol": "cn.jia.agent.service.*",
+      "owner": "chat",
+      "reason": "Existing authenticated Runtime/position/archive/dispatch adapter dependency; narrow B1/B2 refactoring does not migrate these entrypoints.",
+      "retireIn": "follow-up-chat-runtime-adapters"
+    },
+    {
+      "rule": "G1",
+      "sourcePath": "chat/jia-chat-service/src/main/java/cn/jia/chat/service/ChatInspectionAuthorityService.java",
+      "symbol": "cn.jia.agent.security.AgentRuntimeAuthentication",
+      "owner": "chat",
+      "reason": "Existing authenticated Runtime/position/archive/dispatch adapter dependency; narrow B1/B2 refactoring does not migrate these entrypoints.",
+      "retireIn": "follow-up-chat-runtime-adapters"
+    },
+    {
+      "rule": "G1",
+      "sourcePath": "chat/jia-chat-service/src/main/java/cn/jia/chat/service/ChatMaterialsInputService.java",
+      "symbol": "cn.jia.agent.security.AgentRuntimeAuthentication",
+      "owner": "chat",
+      "reason": "Existing authenticated Runtime/position/archive/dispatch adapter dependency; narrow B1/B2 refactoring does not migrate these entrypoints.",
+      "retireIn": "follow-up-chat-runtime-adapters"
+    },
+    {
+      "rule": "G1",
+      "sourcePath": "chat/jia-chat-service/src/main/java/cn/jia/chat/service/HallActionDispatcher.java",
+      "symbol": "cn.jia.agent.config.AgentRabbitActivationState",
+      "owner": "chat",
+      "reason": "Existing authenticated Runtime/position/archive/dispatch adapter dependency; narrow B1/B2 refactoring does not migrate these entrypoints.",
+      "retireIn": "follow-up-chat-runtime-adapters"
+    },
+    {
+      "rule": "G1",
+      "sourcePath": "chat/jia-chat-service/src/main/java/cn/jia/chat/service/HallActionDispatcher.java",
+      "symbol": "cn.jia.agent.config.AgentRabbitSafetyGate",
+      "owner": "chat",
+      "reason": "Existing authenticated Runtime/position/archive/dispatch adapter dependency; narrow B1/B2 refactoring does not migrate these entrypoints.",
+      "retireIn": "follow-up-chat-runtime-adapters"
+    },
+    {
+      "rule": "G1",
+      "sourcePath": "chat/jia-chat-service/src/main/java/cn/jia/chat/service/HallActionDispatcher.java",
+      "symbol": "cn.jia.agent.service.impl.AgentCommandCanonicalCodec",
+      "owner": "chat",
+      "reason": "Existing authenticated Runtime/position/archive/dispatch adapter dependency; narrow B1/B2 refactoring does not migrate these entrypoints.",
+      "retireIn": "follow-up-chat-runtime-adapters"
+    },
+    {
+      "rule": "G1",
+      "sourcePath": "chat/jia-chat-service/src/main/java/cn/jia/chat/tool/KefuTools.java",
+      "symbol": "cn.jia.kefu.entity.KefuMsgTypeCode",
+      "owner": "chat",
+      "reason": "Existing authenticated Runtime/position/archive/dispatch adapter dependency; narrow B1/B2 refactoring does not migrate these entrypoints.",
+      "retireIn": "follow-up-chat-runtime-adapters"
+    },
+    {
+      "rule": "G1",
+      "sourcePath": "point/jia-point-service/src/main/java/cn/jia/point/api/GiftController.java",
+      "symbol": "cn.jia.kefu.entity.KefuMsgTypeCode",
+      "owner": "point",
+      "reason": "Existing Kefu message enum located in service source; move shared model with callers in a separately scoped change.",
+      "retireIn": "follow-up-kefu-shared-model"
+    },
+    {
+      "rule": "G1",
+      "sourcePath": "wx/jia-wx-service/src/main/java/cn/jia/wx/api/WxMpController.java",
+      "symbol": "cn.jia.kefu.entity.KefuMsgTypeCode",
+      "owner": "wx",
+      "reason": "Existing Kefu message enum located in service source; move shared model with callers in a separately scoped change.",
+      "retireIn": "follow-up-kefu-shared-model"
+    },
+    {
+      "rule": "G1",
+      "sourcePath": "wx/jia-wx-service/src/main/java/cn/jia/wx/schedule/WxSchedule.java",
+      "symbol": "cn.jia.kefu.entity.KefuMsgTypeCode",
+      "owner": "wx",
+      "reason": "Existing Kefu message enum located in service source; move shared model with callers in a separately scoped change.",
+      "retireIn": "follow-up-kefu-shared-model"
+    },
+    {
+      "rule": "G2",
+      "sourcePath": "agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentServiceImpl.java",
+      "symbol": "AgentServiceImpl#authenticatedTaskSearchScope(String):SecurityContextHolder",
+      "owner": "agent",
+      "reason": "Existing implicit authentication context; explicit-context migration is a separate follow-up, outside B1/B2.",
+      "retireIn": "follow-up-identity-context"
+    },
+    {
+      "rule": "G2",
+      "sourcePath": "agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentTaskCreationOperationServiceImpl.java",
+      "symbol": "AgentTaskCreationOperationServiceImpl#requireAuthenticatedScope(Scope):SecurityContextHolder",
+      "owner": "agent",
+      "reason": "Existing implicit authentication context; explicit-context migration is a separate follow-up, outside B1/B2.",
+      "retireIn": "follow-up-identity-context"
+    },
+    {
+      "rule": "G2",
+      "sourcePath": "agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentTaskRequirementSnapshotServiceImpl.java",
+      "symbol": "AgentTaskRequirementSnapshotServiceImpl#reconfirm(AgentTaskExecutionGrantService.Scope,String,long,String,String,String):SecurityContextHolder",
+      "owner": "agent",
+      "reason": "Existing implicit authentication context; explicit-context migration is a separate follow-up, outside B1/B2.",
+      "retireIn": "follow-up-identity-context"
+    },
+    {
+      "rule": "G2",
+      "sourcePath": "agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/HallTaskCreationServiceImpl.java",
+      "symbol": "HallTaskCreationServiceImpl#authenticated(HallRequestDraftService.OwnerScope):SecurityContextHolder",
+      "owner": "agent",
+      "reason": "Existing implicit authentication context; explicit-context migration is a separate follow-up, outside B1/B2.",
+      "retireIn": "follow-up-identity-context"
+    },
+    {
+      "rule": "G2",
+      "sourcePath": "agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/PersonalWorkspaceExecutionServiceImpl.java",
+      "symbol": "PersonalWorkspaceExecutionServiceImpl#nativeAuthentication(RuntimeScope):SecurityContextHolder",
+      "owner": "agent",
+      "reason": "Existing implicit authentication context; explicit-context migration is a separate follow-up, outside B1/B2.",
+      "retireIn": "follow-up-identity-context"
+    },
+    {
+      "rule": "G3",
+      "sourcePath": "chat/jia-chat-service/src/main/java/cn/jia/chat/service/ChatInspectionAuthorityService.java",
+      "symbol": "ChatInspectionAuthorityService#workspaceRow(ChatTypedDeliberationStore.Scope,String,Map<String, Object>):agent_personal_workspace_file",
+      "owner": "chat",
+      "reason": "Existing default selection or inspection/lock-read semantics outside the two B2 consumers.",
+      "retireIn": "follow-up-material-selection-and-lock-reads"
+    },
+    {
+      "rule": "G3",
+      "sourcePath": "chat/jia-chat-service/src/main/java/cn/jia/chat/service/ChatInspectionAuthorityService.java",
+      "symbol": "ChatInspectionAuthorityService#workspaceRow(ChatTypedDeliberationStore.Scope,String,Map<String, Object>):agent_personal_workspace_file_version",
+      "owner": "chat",
+      "reason": "Existing default selection or inspection/lock-read semantics outside the two B2 consumers.",
+      "retireIn": "follow-up-material-selection-and-lock-reads"
+    },
+    {
+      "rule": "G3",
+      "sourcePath": "chat/jia-chat-service/src/main/java/cn/jia/chat/service/ChatInspectionAuthorityService.java",
+      "symbol": "ChatInspectionAuthorityService#workspaceRow(ChatTypedDeliberationStore.Scope,String,Map<String, Object>):agent_personal_workspace_task_file_link",
+      "owner": "chat",
+      "reason": "Existing default selection or inspection/lock-read semantics outside the two B2 consumers.",
+      "retireIn": "follow-up-material-selection-and-lock-reads"
+    },
+    {
+      "rule": "G3",
+      "sourcePath": "chat/jia-chat-service/src/main/java/cn/jia/chat/service/ChatTypedDeliberationContextService.java",
+      "symbol": "ChatTypedDeliberationContextService#effectiveSelectors(Scope,String,String,List<ChatTypedDeliberationWire.SourceSelector>,List<ChatTypedDeliberationWire.SourceSelector>):agent_personal_workspace_file",
+      "owner": "chat",
+      "reason": "Existing default selection or inspection/lock-read semantics outside the two B2 consumers.",
+      "retireIn": "follow-up-material-selection-and-lock-reads"
+    },
+    {
+      "rule": "G3",
+      "sourcePath": "chat/jia-chat-service/src/main/java/cn/jia/chat/service/ChatTypedDeliberationContextService.java",
+      "symbol": "ChatTypedDeliberationContextService#effectiveSelectors(Scope,String,String,List<ChatTypedDeliberationWire.SourceSelector>,List<ChatTypedDeliberationWire.SourceSelector>):agent_personal_workspace_task_file_link",
+      "owner": "chat",
+      "reason": "Existing default selection or inspection/lock-read semantics outside the two B2 consumers.",
+      "retireIn": "follow-up-material-selection-and-lock-reads"
+    },
+    {
+      "rule": "G3",
+      "sourcePath": "chat/jia-chat-service/src/main/java/cn/jia/chat/service/ChatTypedInspectionContextService.java",
+      "symbol": "ChatTypedInspectionContextService#workspace(Scope,ChatTypedInspectionWire.SourceSelector):agent_personal_workspace_file",
+      "owner": "chat",
+      "reason": "Existing default selection or inspection/lock-read semantics outside the two B2 consumers.",
+      "retireIn": "follow-up-material-selection-and-lock-reads"
+    },
+    {
+      "rule": "G3",
+      "sourcePath": "chat/jia-chat-service/src/main/java/cn/jia/chat/service/ChatTypedInspectionContextService.java",
+      "symbol": "ChatTypedInspectionContextService#workspace(Scope,ChatTypedInspectionWire.SourceSelector):agent_personal_workspace_file_version",
+      "owner": "chat",
+      "reason": "Existing default selection or inspection/lock-read semantics outside the two B2 consumers.",
+      "retireIn": "follow-up-material-selection-and-lock-reads"
+    },
+    {
+      "rule": "G3",
+      "sourcePath": "chat/jia-chat-service/src/main/java/cn/jia/chat/service/ChatTypedInspectionContextService.java",
+      "symbol": "ChatTypedInspectionContextService#workspace(Scope,ChatTypedInspectionWire.SourceSelector):agent_personal_workspace_task_file_link",
+      "owner": "chat",
+      "reason": "Existing default selection or inspection/lock-read semantics outside the two B2 consumers.",
+      "retireIn": "follow-up-material-selection-and-lock-reads"
+    }
+  ]
+}

@@ -2909,7 +2909,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         if(!same(skillJson(snapshot.get("outputs")),skillJson(manifest.get("outputs"))))throw failure(Reason.BAD_REQUEST);
         if(runtimeRequired) {
             var policy=skillPolicy.read(capScope,skillString(snapshot,"taskId"));
-            if(!policy.allowed())throw failure(Reason.CAPABILITY_UNAVAILABLE);
+            if(policy.decision()!=cn.jia.agent.service.TaskSkillPolicyService.Decision.ALLOWED)throw failure(Reason.CAPABILITY_UNAVAILABLE);
             var catalog=skillCapabilities.lookup(policy.runtimeScope(),policy.fence());
             if(catalog.state()!=cn.jia.agent.service.SkillCapabilityLookup.State.AVAILABLE)throw failure(Reason.CAPABILITY_UNAVAILABLE);
             if(!same(descriptor.runtimeInstallationId(),policy.fence().runtimeInstallationId())||!same(descriptor.runtimeHostId(),policy.fence().hostId()))throw failure(Reason.CAPABILITY_UNAVAILABLE);

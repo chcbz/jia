@@ -19,6 +19,12 @@ public class PersonalWorkspaceTaskLinkDaoImpl implements PersonalWorkspaceTaskLi
     }
 
     @Override
+    public List<MaterialRow> findActiveMaterial(String tenantId, String clientId, String ownerJiacn,
+            String taskId, String fileId, int version, String purpose) {
+        return mapper.selectActiveMaterial(tenantId, clientId, ownerJiacn, taskId, fileId, version, purpose);
+    }
+
+    @Override
     public boolean taskExists(String tenantId, String clientId, String ownerJiacn, String taskId) {
         scope(tenantId, clientId, ownerJiacn); id(taskId, "taskId", 100);
         return mapper.selectTask(tenantId, clientId, ownerJiacn, taskId) != null;

@@ -136,7 +136,7 @@ public class ChatActionExecutionService implements ChatActionDispatchService.Exe
         var manifest=ChatSkillSnapshotJson.object(descriptor.manifestJson());
         var runtime=runtimes.lookup(runtimeKey,policy.fence());
         if(runtime==null||runtime.state()==SkillCapabilityLookup.State.DISCONNECTED||runtime.state()==SkillCapabilityLookup.State.FENCED)
-            throw new IllegalStateException("SKILL_RUNTIME_UNAVAILABLE");
+            throw new ChatActionDispatchService.Unavailable("SKILL_RUNTIME_UNAVAILABLE");
         if(runtime.state()!=SkillCapabilityLookup.State.AVAILABLE)throw new ChatActionDispatchService.Rejected();
         var reports=runtime.catalog().skills().stream().filter(d->selected.skillKey().equals(d.skillKey())&&selected.skillVersion().equals(d.skillVersion())).toList();
         if(reports.size()!=1)throw new ChatActionDispatchService.Rejected();var report=reports.getFirst();
@@ -148,7 +148,7 @@ public class ChatActionExecutionService implements ChatActionDispatchService.Exe
         // A connection may rotate while preparing. Roll back and re-read trusted facts on retry;
         // never admit using the old fence or reinterpret a transport race as revoked authority.
         if(!policy.equals(currentPolicy)||!runtime.equals(runtimes.lookup(runtimeKey,policy.fence())))
-            throw new IllegalStateException("SKILL_RUNTIME_CHANGED");
+            throw new ChatActionDispatchService.Unavailable("SKILL_RUNTIME_CHANGED");
         var inputs=new ArrayList<Map<String,Object>>();
         for(var source:catalog) {
             var input=new LinkedHashMap<String,Object>();
@@ -176,9 +176,15 @@ public class ChatActionExecutionService implements ChatActionDispatchService.Exe
     }
 
     private static void requireAvailablePolicy(TaskSkillPolicyService.Snapshot policy) {
-        if(policy!=null&&!policy.allowed()&&"RUNTIME_UNAVAILABLE".equals(policy.reasonCode()))
-            throw new IllegalStateException("SKILL_RUNTIME_UNAVAILABLE");
-        if(policy==null||!policy.allowed()||policy.runtimeScope()==null)throw new ChatActionDispatchService.Rejected();
+        if (policy == null) throw new ChatActionDispatchService.Rejected();
+        switch (policy.decision()) {
+            case ALLOWED -> {
+                if (policy.runtimeScope() == null) throw new ChatActionDispatchService.Rejected();
+            }
+            case DENIED -> throw new ChatActionDispatchService.Rejected();
+            case TEMPORARILY_UNAVAILABLE -> throw new ChatActionDispatchService.Unavailable("SKILL_RUNTIME_UNAVAILABLE");
+            case INDETERMINATE -> throw new ChatActionDispatchService.Unavailable("SKILL_POLICY_INDETERMINATE");
+        }
     }
 
     private static void requireRuntimeTarget(SkillCapabilityLookup.Scope task,SkillCapabilityLookup.Scope runtime) {

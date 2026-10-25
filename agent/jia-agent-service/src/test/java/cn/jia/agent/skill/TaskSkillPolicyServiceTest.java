@@ -68,4 +68,24 @@ class TaskSkillPolicyServiceTest {
         assertThrows(NullPointerException.class,()->new TaskSkillPolicyService.Snapshot(true,null,7,null,scope));
     }
 
+    @Test void recoveryDecisionPreservesAuthorityAndSnapshotWire() throws Exception {
+        var allowed = service.read(scope,"task");
+        assertEquals(TaskSkillPolicyService.Decision.ALLOWED, allowed.decision());
+        for (String reason : java.util.List.of("TASK_NOT_ASSIGNED", "TASK_GRANT_MISSING", "TASK_GRANT_STALE",
+                "ASSIGNMENT_EPOCH_UNPROVEN", "REQUIREMENT_STALE", "SKILL_BASELINE_REQUIRED", "RUNTIME_FENCED")) {
+            assertEquals(TaskSkillPolicyService.Decision.DENIED,
+                    new TaskSkillPolicyService.Snapshot(false,reason,1,null,null).decision(), reason);
+        }
+        assertEquals(TaskSkillPolicyService.Decision.TEMPORARILY_UNAVAILABLE,
+                new TaskSkillPolicyService.Snapshot(false,"RUNTIME_UNAVAILABLE",1,null,null).decision());
+        for (String reason : java.util.Arrays.asList(null, "FUTURE_REASON")) {
+            assertEquals(TaskSkillPolicyService.Decision.INDETERMINATE,
+                    new TaskSkillPolicyService.Snapshot(false,reason,1,null,null).decision());
+        }
+        var snapshot = new TaskSkillPolicyService.Snapshot(false,"RUNTIME_UNAVAILABLE",1,null,null);
+        var json = new com.fasterxml.jackson.databind.ObjectMapper().valueToTree(snapshot);
+        assertEquals(5, json.size());
+        assertFalse(json.has("decision"));
+        assertEquals(snapshot, new TaskSkillPolicyService.Snapshot(false,"RUNTIME_UNAVAILABLE",1,null,null));
+    }
 }

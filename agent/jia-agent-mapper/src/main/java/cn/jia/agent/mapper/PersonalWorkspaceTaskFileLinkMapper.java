@@ -12,6 +12,32 @@ import java.util.List;
 
 public interface PersonalWorkspaceTaskFileLinkMapper
         extends BaseMapper<PersonalWorkspaceTaskFileLinkEntity> {
+    @Select("""
+            SELECT v.content_mime_type, v.content_hash, v.byte_length, v.storage_uri
+            FROM agent_personal_workspace_task_file_link l
+            JOIN agent_personal_workspace_file f ON BINARY f.tenant_id=BINARY l.tenant_id
+              AND BINARY f.client_id=BINARY l.client_id AND BINARY f.owner_jiacn=BINARY l.owner_jiacn
+              AND BINARY f.file_id=BINARY l.file_id AND f.state='ACTIVE'
+            JOIN agent_personal_workspace_file_version v ON BINARY v.tenant_id=BINARY l.tenant_id
+              AND BINARY v.client_id=BINARY l.client_id AND BINARY v.owner_jiacn=BINARY l.owner_jiacn
+              AND BINARY v.file_id=BINARY l.file_id AND v.version=l.file_version
+            WHERE BINARY l.tenant_id=BINARY #{tenantId} AND BINARY l.client_id=BINARY #{clientId}
+              AND BINARY l.owner_jiacn=BINARY #{ownerJiacn} AND BINARY l.task_id=BINARY #{taskId}
+              AND BINARY l.file_id=BINARY #{fileId} AND l.file_version=#{version}
+              AND BINARY l.link_role=BINARY #{purpose} AND l.link_role IN ('INPUT','REFERENCE')
+              AND l.link_state='ACTIVE'
+            """)
+    @org.apache.ibatis.annotations.ConstructorArgs({
+            @org.apache.ibatis.annotations.Arg(column="content_mime_type", javaType=String.class),
+            @org.apache.ibatis.annotations.Arg(column="content_hash", javaType=String.class),
+            @org.apache.ibatis.annotations.Arg(column="byte_length", javaType=Long.class),
+            @org.apache.ibatis.annotations.Arg(column="storage_uri", javaType=String.class)
+    })
+    List<cn.jia.agent.dao.PersonalWorkspaceTaskLinkDao.MaterialRow> selectActiveMaterial(
+            @Param("tenantId") String tenantId, @Param("clientId") String clientId,
+            @Param("ownerJiacn") String ownerJiacn, @Param("taskId") String taskId,
+            @Param("fileId") String fileId, @Param("version") int version, @Param("purpose") String purpose);
+
     String EXACT_SCOPE = """
               AND CAST(tenant_id AS BINARY)=CAST(#{tenantId} AS BINARY)
               AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(#{tenantId})

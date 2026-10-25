@@ -26,6 +26,12 @@ public class ChatActionDispatchService {
     }
 
     /** Confirmed stale immutable request, not a transient DB/lease/runtime failure. */
+    /** Retry preparation through the existing outbox; never a permanent action rejection. */
+    public static final class Unavailable extends IllegalStateException {
+        private final String reasonCode;
+        public Unavailable(String reasonCode) { super(reasonCode); this.reasonCode = reasonCode; }
+        public String reasonCode() { return reasonCode; }
+    }
     public static final class Rejected extends ChatDeliberationException {
         public Rejected() { super(Reason.CONFLICT, "Action request no longer applies"); }
     }

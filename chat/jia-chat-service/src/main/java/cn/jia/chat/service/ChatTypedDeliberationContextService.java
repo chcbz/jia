@@ -1,6 +1,8 @@
 package cn.jia.chat.service;
 
 import cn.jia.chat.api.ChatTypedDeliberationWire;
+import cn.jia.agent.service.TaskLinkedMaterialReader;
+import cn.jia.agent.service.PersonalWorkspaceTaskLinkService;
 import cn.jia.chat.config.ChatTypedDeliberationReadiness;
 import cn.jia.chat.handler.TypedDeliberationSessionRegistry;
 import org.springframework.beans.factory.annotation.Value;
@@ -47,6 +49,9 @@ public final class ChatTypedDeliberationContextService {
     private final ChatTypedDeliberationReadiness schema;
     private final boolean enabled;
     private final ChatActionCapabilityService capabilities;
+    private TaskLinkedMaterialReader materials;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setMaterials(TaskLinkedMaterialReader value) { materials=Objects.requireNonNull(value); }
     private ChatSkillSourceAccessService skillSources;
     @org.springframework.beans.factory.annotation.Autowired
     public void setSkillSources(ChatSkillSourceAccessService value) {skillSources=Objects.requireNonNull(value);}
@@ -204,28 +209,15 @@ public final class ChatTypedDeliberationContextService {
     }
 
     private Map<String,Object> workspace(Scope s,String taskId,ChatTypedDeliberationWire.SourceSelector x) {
-        List<Map<String,Object>> rows=jdbc.queryForList("""
-                SELECT v.content_mime_type,v.content_hash,v.byte_length
-                FROM agent_personal_workspace_task_file_link l
-                JOIN agent_personal_workspace_file f ON f.file_id=l.file_id AND f.tenant_id=l.tenant_id
-                  AND BINARY f.tenant_id=BINARY l.tenant_id AND f.client_id=l.client_id
-                  AND BINARY f.client_id=BINARY l.client_id AND f.owner_jiacn=l.owner_jiacn
-                  AND BINARY f.owner_jiacn=BINARY l.owner_jiacn AND f.state='ACTIVE'
-                JOIN agent_personal_workspace_file_version v ON v.file_id=l.file_id AND v.version=l.file_version
-                  AND v.tenant_id=l.tenant_id AND BINARY v.tenant_id=BINARY l.tenant_id
-                  AND v.client_id=l.client_id AND BINARY v.client_id=BINARY l.client_id
-                  AND v.owner_jiacn=l.owner_jiacn AND BINARY v.owner_jiacn=BINARY l.owner_jiacn
-                WHERE l.tenant_id=? AND BINARY l.tenant_id=BINARY ?
-                  AND l.owner_jiacn=? AND BINARY l.owner_jiacn=BINARY ?
-                  AND l.client_id=? AND BINARY l.client_id=BINARY ?
-                  AND l.task_id=? AND BINARY l.task_id=BINARY ?
-                  AND l.file_id=? AND BINARY l.file_id=BINARY ? AND l.file_version=?
-                  AND l.link_role=? AND BINARY l.link_role=BINARY ? AND l.link_state='ACTIVE'
-                """,s.tenantId(),s.tenantId(),s.ownerJiacn(),s.ownerJiacn(),s.clientId(),s.clientId(),
-                taskId,taskId,x.fileId(),x.fileId(),Integer.parseInt(x.version()),x.purpose(),x.purpose());
-        if(rows.size()!=1)throw missing(); Map<String,Object> row=rows.getFirst();
-        return source("TASK_WORKSPACE_FILE","TASK_LINKED_WORKSPACE_VERSION",x,
-                text(row,"content_mime_type"),text(row,"content_hash"),number(row,"byte_length"),null,null);
+        try {
+            var metadata=materials.metadata(new PersonalWorkspaceTaskLinkService.Scope(s.tenantId(),s.clientId(),s.ownerJiacn()),
+                    taskId,new TaskLinkedMaterialReader.Selection(x.fileId(),Integer.parseInt(x.version()),x.purpose()));
+            return source("TASK_WORKSPACE_FILE","TASK_LINKED_WORKSPACE_VERSION",x,
+                    metadata.contentMimeType(),metadata.sha256(),metadata.byteLength(),null,null);
+        } catch (TaskLinkedMaterialReader.Failure error) {
+            if(error.reason()==TaskLinkedMaterialReader.Failure.Reason.NOT_FOUND)throw missing();
+            throw unavailable("Source metadata is unavailable");
+        }
     }
 
     private Map<String,Object> asset(Scope s,String taskId,String targetAgentId,ChatTypedDeliberationWire.SourceSelector x) {
@@ -268,8 +260,6 @@ public final class ChatTypedDeliberationContextService {
     private static Map<String,Object> scopeMap(Scope s){return Map.of("tenantId",s.tenantId(),"ownerJiacn",s.ownerJiacn(),
             "clientId",s.clientId(),"conversationId",s.conversationId(),"conversationGeneration",Long.toString(s.conversationGeneration()));}
     private static String mediaType(String mime){if(mime.startsWith("image/"))return"image";if(mime.startsWith("audio/"))return"audio";if(mime.startsWith("text/"))return"text";return"file";}
-    private static String text(Map<String,Object> row,String key){Object v=row.get(key);if(v==null)v=row.get(key.toUpperCase());if(!(v instanceof String s))throw unavailable("Source metadata is invalid");return s;}
-    private static long number(Map<String,Object> row,String key){Object v=row.get(key);if(v==null)v=row.get(key.toUpperCase());if(!(v instanceof Number n))throw unavailable("Source metadata is invalid");return n.longValue();}
     private static void exact(String value,int max){if(value==null||value.isBlank()||!value.equals(value.strip())||value.codePointCount(0,value.length())>max||value.codePoints().anyMatch(Character::isISOControl))throw invalid();}
     private static String sha256(String value){try{return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8)));}catch(NoSuchAlgorithmException e){throw new IllegalStateException(e);}}
     private static ChatDeliberationException invalid(){return new ChatDeliberationException(ChatDeliberationException.Reason.INVALID_REQUEST,"Typed discussion source selection is invalid");}
