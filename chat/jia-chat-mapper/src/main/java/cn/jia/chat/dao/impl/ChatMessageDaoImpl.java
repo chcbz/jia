@@ -59,40 +59,40 @@ public class ChatMessageDaoImpl extends BaseDaoImpl<ChatMessageMapper, ChatMessa
 
     @Override
     public List<ChatMessageEntity> findOwnedByConversationId(
-            String ownerJiacn, String clientId, String conversationId) {
-        requireScope(ownerJiacn, clientId);
+            String tenantId, String ownerJiacn, String clientId, String conversationId) {
+        requireScope(tenantId, clientId); requireIdentity(ownerJiacn, "ownerJiacn");
         Long numericId = parseConversationId(conversationId);
         String canonicalId = Long.toString(numericId);
-        observeContamination(ownerJiacn, clientId, canonicalId, numericId);
+        observeContamination(tenantId, ownerJiacn, clientId, canonicalId, numericId);
         return requireOwnedRows(baseMapper.findExactOwnedConversationMessages(
-                        ownerJiacn, clientId, canonicalId, numericId),
-                ownerJiacn, clientId, canonicalId);
+                        tenantId, ownerJiacn, clientId, canonicalId, numericId),
+                tenantId, ownerJiacn, clientId, canonicalId);
     }
 
     @Override
     public List<ChatMessageEntity> findOwnedByConversationIdWithLimit(
-            String ownerJiacn, String clientId, String conversationId, int limit) {
-        requireScope(ownerJiacn, clientId);
+            String tenantId, String ownerJiacn, String clientId, String conversationId, int limit) {
+        requireScope(tenantId, clientId); requireIdentity(ownerJiacn, "ownerJiacn");
         requireLimit(limit);
         Long numericId = parseConversationId(conversationId);
         String canonicalId = Long.toString(numericId);
-        observeContamination(ownerJiacn, clientId, canonicalId, numericId);
+        observeContamination(tenantId, ownerJiacn, clientId, canonicalId, numericId);
         List<ChatMessageEntity> result = requireOwnedRows(
                 baseMapper.findExactOwnedConversationMessagesWithLimit(
-                        ownerJiacn, clientId, canonicalId, numericId, limit),
-                ownerJiacn, clientId, canonicalId);
+                        tenantId, ownerJiacn, clientId, canonicalId, numericId, limit),
+                tenantId, ownerJiacn, clientId, canonicalId);
         Collections.reverse(result);
         return result;
     }
 
     @Override
     public int deleteExactOwnedConversationMessages(
-            String ownerJiacn, String clientId, String conversationId) {
-        requireScope(ownerJiacn, clientId);
+            String tenantId, String ownerJiacn, String clientId, String conversationId) {
+        requireScope(tenantId, clientId); requireIdentity(ownerJiacn, "ownerJiacn");
         Long numericId = parseConversationId(conversationId);
         String canonicalId = Long.toString(numericId);
         return baseMapper.deleteExactOwnedConversationMessages(
-                ownerJiacn, clientId, canonicalId, numericId);
+                tenantId, ownerJiacn, clientId, canonicalId, numericId);
     }
 
     @Override
@@ -115,15 +115,15 @@ public class ChatMessageDaoImpl extends BaseDaoImpl<ChatMessageMapper, ChatMessa
     }
 
     @Override
-    public int markMemorySnapshotSynced(String ownerJiacn, String clientId,
+    public int markMemorySnapshotSynced(String tenantId, String ownerJiacn, String clientId,
             String conversationId, List<Long> messageIds) {
-        requireScope(ownerJiacn, clientId);
+        requireScope(tenantId, clientId); requireIdentity(ownerJiacn, "ownerJiacn");
         long id = parseConversationId(conversationId);
         if (messageIds == null || messageIds.isEmpty()
                 || messageIds.stream().anyMatch(value -> value == null || value <= 0)) {
             throw new IllegalArgumentException("A non-empty persisted message snapshot is required");
         }
-        return baseMapper.markMemorySnapshotSynced(ownerJiacn, clientId, conversationId, id, messageIds);
+        return baseMapper.markMemorySnapshotSynced(tenantId, ownerJiacn, clientId, conversationId, id, messageIds);
     }
 
     @Override
@@ -178,10 +178,10 @@ public class ChatMessageDaoImpl extends BaseDaoImpl<ChatMessageMapper, ChatMessa
      * does not relax isolation or expose the conflicting row.
      */
     private void observeContamination(
-            String ownerJiacn, String clientId, String conversationId, Long numericId) {
+            String tenantId, String ownerJiacn, String clientId, String conversationId, Long numericId) {
         try {
             int contaminated = baseMapper.countContaminatedOwnedConversationMessages(
-                    ownerJiacn, clientId, conversationId, numericId);
+                    tenantId, ownerJiacn, clientId, conversationId, numericId);
             if (contaminated > 0) {
                 log.warn("Ignoring out-of-scope historical message rows while returning exact-scoped conversation messages. conversationId={}, rows={}",
                         conversationId, contaminated);
@@ -196,6 +196,7 @@ public class ChatMessageDaoImpl extends BaseDaoImpl<ChatMessageMapper, ChatMessa
 
     private List<ChatMessageEntity> requireOwnedRows(
             List<ChatMessageEntity> result,
+            String tenantId,
             String ownerJiacn,
             String clientId,
             String conversationId) {
@@ -207,7 +208,7 @@ public class ChatMessageDaoImpl extends BaseDaoImpl<ChatMessageMapper, ChatMessa
                     || !ownerJiacn.equals(message.getJiacn())
                     || !clientId.equals(message.getClientId())
                     || !conversationId.equals(message.getConversationId())
-                    || !SINGLE_TENANT.equals(message.getTenantId())) {
+                    || !tenantId.equals(message.getTenantId())) {
                 throw new IllegalStateException(
                         "Conversation message identity does not match its owner scope");
             }

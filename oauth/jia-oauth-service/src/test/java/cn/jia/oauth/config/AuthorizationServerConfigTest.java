@@ -1,6 +1,7 @@
 package cn.jia.oauth.config;
 
 import cn.jia.oauth.security.AccountSecurityTokenCustomizer;
+import cn.jia.core.security.FixedTenantAdmissionPolicy;
 import cn.jia.test.BaseMockTest;
 import cn.jia.user.entity.CustomUserDetails;
 import cn.jia.user.security.AccountSecurityService;
@@ -176,6 +177,28 @@ class AuthorizationServerConfigTest extends BaseMockTest {
         assertFalse(claims.containsKey("username"));
         assertFalse(claims.containsKey("auth_epoch"));
         verifyNoInteractions(accountSecurityService);
+    }
+
+
+    @Test
+    void fixedClientReceivesTenantOneAndMissingOrMismatchedMappingFailsClosed() {
+        when(accountSecurityService.findByUserId(17)).thenReturn(java.util.Optional.of(
+                new AccountSecuritySnapshot(17, "Jia-A", AccountState.ACTIVE, 4)));
+        var admitted = new AccountSecurityTokenCustomizer(accountSecurityService, ignored -> "1",
+                new FixedTenantAdmissionPolicy("0", true, "1", "web-client"));
+        JwtEncodingContext context = encodingContext(userAuthentication, AuthorizationGrantType.AUTHORIZATION_CODE);
+        admitted.customize(context);
+        assertEquals("1", context.getClaims().build().getClaim("tenant_id"));
+        for (String mapped : new String[]{"0", "2"}) {
+            var customizer = new AccountSecurityTokenCustomizer(accountSecurityService, ignored -> mapped,
+                    new FixedTenantAdmissionPolicy("0", true, "1", "web-client"));
+            assertThrows(OAuth2AuthenticationException.class, () -> customizer.customize(
+                    encodingContext(userAuthentication, AuthorizationGrantType.AUTHORIZATION_CODE)));
+        }
+        var missing = new AccountSecurityTokenCustomizer(accountSecurityService, ignored -> null,
+                new FixedTenantAdmissionPolicy("0", true, "1", "web-client"));
+        assertThrows(OAuth2AuthenticationException.class, () -> missing.customize(
+                encodingContext(userAuthentication, AuthorizationGrantType.AUTHORIZATION_CODE)));
     }
 
     private OAuth2TokenGenerator<OAuth2Token> generator(AtomicReference<Authentication> accessPrincipal) {

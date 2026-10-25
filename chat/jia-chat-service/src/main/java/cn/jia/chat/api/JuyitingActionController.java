@@ -7,6 +7,7 @@ import cn.jia.chat.service.HallActionDispatcher;
 import cn.jia.chat.service.HallActionIntent;
 import cn.jia.chat.service.HallTrustedCaller;
 import cn.jia.core.entity.JsonResult;
+import cn.jia.core.security.TenantClaimPolicy;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
@@ -68,12 +69,18 @@ public class JuyitingActionController {
         Map<String, Object> claims = jwt.getToken().getClaims();
         Object owner = claims.get("jiacn");
         Object client = claims.get("client_id");
+        String tenantId;
+        try {
+            tenantId = TenantClaimPolicy.resolve(claims, TenantClaimPolicy.defaultSingleTenant());
+        } catch (IllegalArgumentException invalidTenant) {
+            return null;
+        }
         if (!(owner instanceof String ownerJiacn) || !(client instanceof String clientId)
                 || !validExact(ownerJiacn, 50) || !validExact(clientId, 50)) {
             return null;
         }
         return new HallTrustedCaller(
-                "0", clientId, ownerJiacn,
+                tenantId, clientId, ownerJiacn,
                 validExact(callerAgentId, 100) ? callerAgentId : null);
     }
 

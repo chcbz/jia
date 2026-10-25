@@ -708,6 +708,18 @@ class AgentRuntimeSecurityIntegrationTest {
     }
 
     @Test
+    void fixedTenantProcessRejectsTenantZeroRuntimeSessionAndWebSocketProof() {
+        var fixed = new AgentRuntimeAuthenticationService(rows, installations, identityRegistryDao,
+                context.getBean(AgentIdentityService.class), accounts, context.getBean(AgentTaskEventsGate.class),
+                new cn.jia.core.security.FixedTenantAdmissionPolicy("0", true, "1", "cyf-local"));
+        assertThrows(IllegalArgumentException.class,
+                () -> fixed.verify(proofHeaders(A, "runtime-a", TOKEN_A)));
+        assertThrows(IllegalArgumentException.class,
+                () -> bind(fixed, "fixed-tenant-zero", CLIENT_A, OWNER_A, A,
+                        "runtime-a", "key-a", TOKEN_A, () -> true));
+    }
+
+    @Test
     void disabledCapabilityIsReflectedWithoutChangingAuthenticatedScope() {
         var disabledGate = new AgentTaskEventsGate(new AgentTaskEventsProperties(false, List.of()));
         var scopedAuth = new AgentRuntimeAuthenticationService(rows,

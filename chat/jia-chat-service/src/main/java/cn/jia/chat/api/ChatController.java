@@ -185,6 +185,7 @@ public class ChatController {
         boolean needSummary = StringUtil.isBlank(conversation.getTitle());
         StringBuilder summary = new StringBuilder();
         String conversationId = String.valueOf(conversation.getId());
+        String ownerTenantId = requireIdentityPart(context.getTenantId());
         String ownerJiacn = sender.jiacn();
         String ownerClientId = sender.clientId();
         long generation = lifecycleGeneration(conversation);
@@ -214,7 +215,7 @@ public class ChatController {
                 .concatWith(Flux.defer(() -> Flux.just("{\"conversationId\": \"" + conversationId + "\", \"conversationType\": \"" + resolveConversationType(conversation) + "\"}")))
                 .concatWith(Flux.defer(() -> handleSummary(
                         needSummary, chatMessage.getContent(), summary.toString(),
-                        conversationId, ownerJiacn, ownerClientId)))
+                        conversationId, ownerTenantId, ownerJiacn, ownerClientId)))
                 // This means the HTTP stream completed, not that an asynchronously delivered Agent turn succeeded.
                 // Put it BEFORE cancellation/deletion operators: a cancelled stream must never gain a success tail.
                 .concatWith(Flux.defer(() -> Flux.just(JsonUtil.toJson(Map.of("type", "stream_completed",
@@ -223,13 +224,13 @@ public class ChatController {
                 .takeUntilOther(chatConversationEventBroker.deletionSignal(
                         conversationId, generation,
                         () -> chatConversationService.isLiveGeneration(
-                                ownerJiacn, ownerClientId, conversationId, generation)))
+                                ownerTenantId, ownerJiacn, ownerClientId, conversationId, generation)))
                 .transform(ChatStreamPolicy::bounded)
                 .<String>handle((value, sink) -> {
                     boolean live = chatConversationEventBroker.runIfLive(
                             conversationId, generation,
                             () -> chatConversationService.isLiveGeneration(
-                                    ownerJiacn, ownerClientId, conversationId, generation),
+                                    ownerTenantId, ownerJiacn, ownerClientId, conversationId, generation),
                             () -> sink.next(value));
                     if (!live) {
                         sink.complete();
@@ -238,7 +239,7 @@ public class ChatController {
                 .onErrorResume(error -> {
                     log.error("Error processing chat response", error);
                     return liveErrorFrame(
-                            conversation, conversationId, ownerJiacn, ownerClientId, generation,
+                            conversation, conversationId, ownerTenantId, ownerJiacn, ownerClientId, generation,
                             safeStreamErrorMessage(error));
                 })
                 .doOnCancel(() -> log.debug(
@@ -251,13 +252,14 @@ public class ChatController {
 
     private Flux<String> liveErrorFrame(
             ChatConversationEntity conversation, String conversationId,
-            String ownerJiacn, String ownerClientId, long generation, String message) {
+            String ownerTenantId, String ownerJiacn, String ownerClientId,
+            long generation, String message) {
         String payload = streamErrorJson(conversation, conversationId, message);
         return Flux.just(payload).handle((value, sink) -> {
             boolean live = chatConversationEventBroker.runIfLive(
                     conversationId, generation,
                     () -> chatConversationService.isLiveGeneration(
-                            ownerJiacn, ownerClientId, conversationId, generation),
+                            ownerTenantId, ownerJiacn, ownerClientId, conversationId, generation),
                     () -> sink.next(value));
             if (!live) {
                 sink.complete();
@@ -303,7 +305,7 @@ public class ChatController {
                     scope = juyitingConversationScopeService.authorize(
                             chatMessage,
                             juyitingConversationScopeService.resolve(chatMessage),
-                            sender.jiacn(),
+                            requireIdentityPart(EsContextHolder.getContext().getTenantId()),
                             sender.clientId());
                 } catch (RuntimeException denied) {
                     throw new AgentTaskThreadException(
@@ -413,6 +415,7 @@ public class ChatController {
                         Prompt.builder().messages(UserMessage.builder().text(chatMessage.getContent()).build()).build())
                 .advisors(advisor -> advisor
                         .param(ChatMemory.CONVERSATION_ID, conversationId)
+                        .param("tenantId", requireIdentityPart(EsContextHolder.getContext().getTenantId()))
                         .param("jiacn", ownerJiacn)
                         .param("clientId", ownerClientId)
                         .param("conversationType", conversationType)
@@ -481,7 +484,7 @@ public class ChatController {
 
     private Flux<String> handleSummary(
             boolean needSummary, String question, String answer, String conversationId,
-            String ownerJiacn, String ownerClientId) {
+            String tenantId, String ownerJiacn, String ownerClientId) {
         if (!needSummary || StringUtil.isBlank(answer)) {
             return Flux.empty();
         }
@@ -489,7 +492,7 @@ public class ChatController {
                         SUMMARY_PROMPT_TEMPLATE.create(Map.of("question", question, "answer", answer)))
                 .call().content();
         chatConversationService.updateOwnedTitle(
-                ownerJiacn, ownerClientId, conversationId, title, 1);
+                tenantId, ownerJiacn, ownerClientId, conversationId, title, 1);
         return Flux.just(JsonUtil.toJson(Map.of("t", title)));
     }
 
@@ -705,7 +708,7 @@ public class ChatController {
         ChatConversationEventBroker.LiveSubscription liveSubscription =
                 chatConversationEventBroker.subscribeBuffered(id, generation,
                         () -> chatConversationService.isLiveGeneration(
-                                ownerJiacn, ownerClientId, id, generation));
+                                tenantId, ownerJiacn, ownerClientId, id, generation));
         if (liveSubscription == null) return Flux.empty();
         try {
             ChatDeliberationService service = requireDeliberationService();
@@ -744,11 +747,12 @@ public class ChatController {
     public Flux<String> conversationEvents(String id) {
         ChatConversationEntity conversation = chatConversationService.get(id);
         long generation = lifecycleGeneration(conversation);
+        String tenantId = requireIdentityPart(EsContextHolder.getContext().getTenantId());
         String ownerJiacn = requireIdentityPart(EsContextHolder.getContext().getJiacn());
         String ownerClientId = requireIdentityPart(EsContextHolder.getContext().getClientId());
         return ChatStreamPolicy.firstFrame(ChatStreamPolicy.bounded(chatConversationEventBroker.stream(
                         id, generation, () -> chatConversationService.isLiveGeneration(
-                                ownerJiacn, ownerClientId, id, generation),
+                                tenantId, ownerJiacn, ownerClientId, id, generation),
                         "{\"type\":\"stream_ready\"}")
                 .map(event -> "data: " + event + "\n\n")));
     }

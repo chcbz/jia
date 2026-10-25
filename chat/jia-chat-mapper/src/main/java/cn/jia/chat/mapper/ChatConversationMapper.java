@@ -9,11 +9,11 @@ import org.apache.ibatis.annotations.Update;
 /** Chat conversation mapper. */
 public interface ChatConversationMapper extends BaseMapper<ChatConversationEntity> {
     String EXACT_OWNER_SCOPE = """
-              AND tenant_id = '0'
+              AND tenant_id = #{tenantId}
               AND jiacn = #{ownerJiacn}
               AND client_id = #{clientId}
-              AND CAST(tenant_id AS BINARY) = CAST('0' AS BINARY)
-              AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH('0')
+              AND CAST(tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY)
+              AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
               AND CAST(jiacn AS BINARY) = CAST(#{ownerJiacn} AS BINARY)
               AND OCTET_LENGTH(jiacn) = OCTET_LENGTH(#{ownerJiacn})
               AND CAST(client_id AS BINARY) = CAST(#{clientId} AS BINARY)
@@ -28,6 +28,7 @@ public interface ChatConversationMapper extends BaseMapper<ChatConversationEntit
             LIMIT 1
             """)
     ChatConversationEntity findExactScopedById(
+            @Param("tenantId") String tenantId,
             @Param("ownerJiacn") String ownerJiacn,
             @Param("clientId") String clientId,
             @Param("id") Long id);
@@ -40,6 +41,7 @@ public interface ChatConversationMapper extends BaseMapper<ChatConversationEntit
             LIMIT 1 FOR UPDATE
             """)
     ChatConversationEntity lockExactScopedById(
+            @Param("tenantId") String tenantId,
             @Param("ownerJiacn") String ownerJiacn,
             @Param("clientId") String clientId,
             @Param("id") Long id);
@@ -51,6 +53,7 @@ public interface ChatConversationMapper extends BaseMapper<ChatConversationEntit
             LIMIT 1 FOR UPDATE
             """)
     ChatConversationEntity lockExactScopedByIdIncludingDeleted(
+            @Param("tenantId") String tenantId,
             @Param("ownerJiacn") String ownerJiacn,
             @Param("clientId") String clientId,
             @Param("id") Long id);
@@ -65,6 +68,7 @@ public interface ChatConversationMapper extends BaseMapper<ChatConversationEntit
               AND deleted_at IS NULL
             """)
     int softDeleteExactScopedById(
+            @Param("tenantId") String tenantId,
             @Param("ownerJiacn") String ownerJiacn,
             @Param("clientId") String clientId,
             @Param("id") Long id,
@@ -79,6 +83,7 @@ public interface ChatConversationMapper extends BaseMapper<ChatConversationEntit
               AND deleted_at IS NULL
             """)
     int updateExactOwnedFields(
+            @Param("tenantId") String tenantId,
             @Param("ownerJiacn") String ownerJiacn,
             @Param("clientId") String clientId,
             @Param("id") Long id,
@@ -93,6 +98,7 @@ public interface ChatConversationMapper extends BaseMapper<ChatConversationEntit
               AND lifecycle_generation = #{expectedGeneration}
             """)
     int countExactLiveGeneration(
+            @Param("tenantId") String tenantId,
             @Param("ownerJiacn") String ownerJiacn,
             @Param("clientId") String clientId,
             @Param("id") Long id,

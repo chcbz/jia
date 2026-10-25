@@ -26,6 +26,12 @@ public class ChatDeliberationOutboxService {
         return dao.findDueOutbox(now, Math.max(1, Math.min(limit, 32)));
     }
 
+    @Transactional(readOnly = true)
+    public List<ChatDispatchOutboxEntity> discoverInScope(String tenantId, String clientId, long now, int limit) {
+        requireExact(tenantId, 50); requireExact(clientId, 50);
+        return dao.findDueOutboxInScope(tenantId, clientId, now, Math.max(1, Math.min(limit, 32)));
+    }
+
     @Transactional(rollbackFor = Exception.class)
     public Claim claim(ChatDispatchOutboxEntity candidate, String leaseOwner, long now, long leaseMillis) {
         if (candidate == null || leaseMillis < 1) return null;

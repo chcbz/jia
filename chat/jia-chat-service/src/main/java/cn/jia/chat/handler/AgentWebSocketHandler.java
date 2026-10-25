@@ -744,7 +744,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         boolean live = chatConversationEventBroker.runIfLive(
                 conversationId, generation,
                 () -> chatConversationService.isLiveGeneration(
-                        ownerJiacn, ownerClientId, conversationId, generation),
+                        sessionTenantId(session), ownerJiacn, ownerClientId, conversationId, generation),
                 () -> sendEvent(session, "started", started));
         if (!live) {
             return;
@@ -753,6 +753,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         Disposable disposable = chatClient.prompt(content)
                 .advisors(advisor -> advisor
                         .param(ChatMemory.CONVERSATION_ID, conversationId)
+                        .param("tenantId", sessionTenantId(session))
                         .param("jiacn", ownerJiacn)
                         .param("clientId", ownerClientId)
                         .param("conversationType", conversationType)
@@ -769,17 +770,17 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                     chatConversationEventBroker.runIfLive(
                             conversationId, generation,
                             () -> chatConversationService.isLiveGeneration(
-                                    ownerJiacn, ownerClientId, conversationId, generation),
+                                    sessionTenantId(session), ownerJiacn, ownerClientId, conversationId, generation),
                             () -> sendEvent(session, "delta", event));
                 }))
                 .takeUntilOther(chatConversationEventBroker.deletionSignal(
                         conversationId, generation,
                         () -> chatConversationService.isLiveGeneration(
-                                ownerJiacn, ownerClientId, conversationId, generation)))
+                                sessionTenantId(session), ownerJiacn, ownerClientId, conversationId, generation)))
                 .doOnError(error -> chatConversationEventBroker.runIfLive(
                         conversationId, generation,
                         () -> chatConversationService.isLiveGeneration(
-                                ownerJiacn, ownerClientId, conversationId, generation),
+                                sessionTenantId(session), ownerJiacn, ownerClientId, conversationId, generation),
                         () -> sendError(session, payload, error.getMessage())))
                 .doOnComplete(() -> {
                     Map<String, Object> done = copyTrace(payload);
@@ -790,7 +791,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                     chatConversationEventBroker.runIfLive(
                             conversationId, generation,
                             () -> chatConversationService.isLiveGeneration(
-                                    ownerJiacn, ownerClientId, conversationId, generation),
+                                    sessionTenantId(session), ownerJiacn, ownerClientId, conversationId, generation),
                             () -> sendEvent(session, "done", done));
                 })
                 .doFinally(signal -> runningStreams.remove(streamKey))
@@ -1374,7 +1375,8 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         try {
             ChatMessageEntity proposed = entity;
             entity = withSessionMutationFence(session,
-                    () -> chatConversationService.appendOwnedMessage(jiacn, clientId, proposed, generation));
+                    () -> chatConversationService.appendOwnedMessage(
+                            sessionTenantId(session), jiacn, clientId, proposed, generation));
         } catch (RuntimeException denied) {
             sendError(session, payload, "CONVERSATION_NOT_AVAILABLE",
                     "Conversation is not available to this agent session");
@@ -1394,7 +1396,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         chatConversationEventBroker.runIfLive(
                 conversationId, generation,
                 () -> chatConversationService.isLiveGeneration(
-                        jiacn, clientId, conversationId, generation),
+                        sessionTenantId(session), jiacn, clientId, conversationId, generation),
                 () -> {
                     sendEvent(session, "agent_message_saved", event);
                     broadcastConversationEventToTargets(
@@ -1487,7 +1489,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         chatConversationEventBroker.publishIfLive(
                 conversationId, generation,
                 () -> chatConversationService.isLiveGeneration(
-                        sessionJiacn(session), sessionClientId(session),
+                        sessionTenantId(session), sessionJiacn(session), sessionClientId(session),
                         conversationId, generation),
                 event);
     }
@@ -1612,8 +1614,8 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             event.put("occurredAt", Long.toString(stored.getOccurredAt()));
             requireNoActiveTransactionForChatDelivery();
             chatConversationEventBroker.publishIfSubscribed(stored.getConversationId(), stored.getConversationGeneration(),
-                    () -> chatConversationService.isLiveGeneration(stored.getOwnerJiacn(), stored.getClientId(),
-                            stored.getConversationId(), stored.getConversationGeneration()), event);
+                    () -> chatConversationService.isLiveGeneration(stored.getTenantId(), stored.getOwnerJiacn(),
+                            stored.getClientId(), stored.getConversationId(), stored.getConversationGeneration()), event);
         } catch (Exception ignored) {
             // Durable DB replay remains available; a best-effort live publication never changes persisted state.
         }
@@ -1817,7 +1819,8 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                     || !Objects.equals(payload.get("turnId"),turn.getTurnId())
                     || !Objects.equals(exactPositiveLong(payload.get("conversationGeneration")),turn.getConversationGeneration()))
                 throw new IllegalStateException("Dispatch binding mismatch");
-            var conversation=chatConversationService.getOwned(turn.getOwnerJiacn(),turn.getClientId(),conversationId);
+            var conversation=chatConversationService.getOwned(sessionTenantId(session), turn.getOwnerJiacn(),
+                    turn.getClientId(), conversationId);
             if (!Objects.equals(sessionTenantId(session),conversation.getTenantId())) throw new IllegalStateException("Tenant mismatch");
             return conversation;
         } catch (RuntimeException denied) {
@@ -1839,7 +1842,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             return null;
         }
         try {
-            ChatConversationEntity conversation = chatConversationService.getOwned(jiacn, clientId, conversationId);
+            ChatConversationEntity conversation = chatConversationService.getOwned(sessionTenantId(session), jiacn, clientId, conversationId);
             if (!isExactConversationIdentity(sessionTenantId(session))
                     || !sessionTenantId(session).equals(conversation.getTenantId())) {
                 throw new IllegalStateException("tenant mismatch");

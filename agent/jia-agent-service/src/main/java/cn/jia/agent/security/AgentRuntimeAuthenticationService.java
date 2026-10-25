@@ -9,8 +9,11 @@ import cn.jia.agent.entity.AgentRuntimeV1InstallationEntity;
 import cn.jia.agent.entity.AgentRuntimeV1SessionRequest;
 import cn.jia.agent.entity.AgentRuntimeV1SessionResponse;
 import cn.jia.agent.service.AgentIdentityService;
+import cn.jia.core.security.FixedTenantAdmissionPolicy;
 import cn.jia.user.security.AccountSecurityService;
 import cn.jia.user.security.AccountSecuritySnapshot;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataAccessException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -40,22 +43,49 @@ public class AgentRuntimeAuthenticationService {
     private final AgentIdentityService identities;
     private final AccountSecurityService accounts;
     private final AgentTaskEventsGate gate;
+    private final FixedTenantAdmissionPolicy tenantAdmission;
     private final Map<AgentRuntimeAuthentication.Scope, Binding> bindings = new ConcurrentHashMap<>();
 
     public AgentRuntimeAuthenticationService(AgentRuntimeDao runtimes, AgentRuntimeV1InstallationDao installations,
             AgentIdentityRegistryDao registry, AgentIdentityService identities,
             AccountSecurityService accounts, AgentTaskEventsGate gate) {
+        this(runtimes, installations, registry, identities, accounts, gate,
+                new FixedTenantAdmissionPolicy("0", false, null, null));
+    }
+
+    public AgentRuntimeAuthenticationService(AgentRuntimeDao runtimes, AgentRuntimeV1InstallationDao installations,
+            AgentIdentityRegistryDao registry, AgentIdentityService identities,
+            AccountSecurityService accounts, AgentTaskEventsGate gate, FixedTenantAdmissionPolicy tenantAdmission) {
         this.runtimes = runtimes; this.installations = installations; this.registry = registry;
         this.identities = identities; this.accounts = accounts; this.gate = gate;
+        this.tenantAdmission = Objects.requireNonNull(tenantAdmission);
+    }
+
+    @Autowired
+    public AgentRuntimeAuthenticationService(AgentRuntimeDao runtimes, AgentRuntimeV1InstallationDao installations,
+            AgentIdentityRegistryDao registry, AgentIdentityService identities,
+            AccountSecurityService accounts, AgentTaskEventsGate gate,
+            @Value("${cyf.security.legacy-single-tenant-id:0}") String legacyTenantId,
+            @Value("${cyf.security.fixed-tenant.enabled:false}") boolean fixedTenantEnabled,
+            @Value("${cyf.security.fixed-tenant.tenant-id:}") String fixedTenantId,
+            @Value("${cyf.security.fixed-tenant.client-id:}") String fixedClientId) {
+        this(runtimes, installations, registry, identities, accounts, gate,
+                new FixedTenantAdmissionPolicy(legacyTenantId, fixedTenantEnabled, fixedTenantId, fixedClientId));
     }
 
     /** Caller holds the ACTIVE installation lock after verifying its Bearer. */
     public AgentRuntimeV1SessionResponse issue(AgentRuntimeV1InstallationEntity installation,
             AgentRuntimeV1SessionRequest request, long now) {
         if (installation == null || request == null || !"ACTIVE".equals(installation.getStatus())
-                || !"0".equals(installation.getTenantId())
+                || !exact(installation.getTenantId(), 50) || !exact(installation.getClientId(), 50)
                 || !exact(request.hostId(), 100) || !exact(request.runtimeInstanceId(), 100)
                 || request.runtimeInstanceId().equals(installation.getCanonicalAgentId())) throw denied();
+        requireAdmitted(installation.getTenantId(), installation.getClientId());
+        requireAdmitted(request.tenantId(), request.clientId());
+        if (!installation.getTenantId().equals(request.tenantId())
+                || !installation.getClientId().equals(request.clientId())
+                || !installation.getCanonicalAgentId().equals(request.canonicalAgentId())
+                || !installation.getInstallationId().equals(request.installationId())) throw denied();
         // The installation binds the full subject, not an owner supplied by the caller.
         var candidates = registry.selectByMap(Map.of("tenant_id", installation.getTenantId(),
                 "client_id", installation.getClientId(), "canonical_agent_id", installation.getCanonicalAgentId()));
@@ -120,6 +150,7 @@ public class AgentRuntimeAuthenticationService {
         if (installation == null || !"ACTIVE".equals(installation.getStatus())
                 || !headers.installationId().equals(installation.getInstallationId())
                 || !headers.agentId().equals(installation.getCanonicalAgentId())) throw denied();
+        requireAdmitted(installation.getTenantId(), installation.getClientId());
         var row = runtimes.findInScope(installation.getTenantId(), installation.getClientId(), headers.agentId());
         if (row == null || row.getTokenHash() == null) throw denied();
         String[] verifier = row.getTokenHash().split(":", -1);
@@ -163,6 +194,7 @@ public class AgentRuntimeAuthenticationService {
 
     /** Money admission may consult live evidence; it grants no authority to an arbitrary caller. */
     public Proof currentRegisteredProof(String tenantId, String clientId, String agentId) {
+        requireAdmitted(tenantId, clientId);
         Proof result = null;
         for (var binding : bindings.values()) {
             var candidate = binding.proof();
@@ -187,6 +219,7 @@ public class AgentRuntimeAuthenticationService {
     /** No secret is retained in WS attributes or the registry. */
     public Receipt bind(String sessionId, Proof proof, BooleanSupplier connected) {
         if (!exact(sessionId, 128) || proof == null || connected == null || !connected.getAsBoolean()) throw denied();
+        requireAdmitted(proof.scope().tenantId(), proof.scope().clientId());
         validateCurrent(proof, true);
         bindings.put(proof.scope(), new Binding(sessionId, proof, connected));
         var scope = proof.scope();
@@ -238,9 +271,10 @@ public class AgentRuntimeAuthenticationService {
 
     private void validateRow(Proof proof, AgentRuntimeV1InstallationEntity installation, AgentRuntimeEntity row, boolean registered) {
         var scope = proof.scope();
+        requireAdmitted(scope.tenantId(), scope.clientId());
         String verifier = "urs1:" + proof.tokenDigest() + ":" + proof.userId() + ":" + proof.authEpoch();
         if (installation == null || row == null || !"ACTIVE".equals(installation.getStatus())
-                || !"0".equals(scope.tenantId()) || !scope.tenantId().equals(installation.getTenantId())
+                || !exact(scope.tenantId(), 50) || !scope.tenantId().equals(installation.getTenantId())
                 || !scope.clientId().equals(installation.getClientId()) || !scope.agentId().equals(installation.getCanonicalAgentId())
                 || !proof.installationId().equals(installation.getInstallationId())
                 || !scope.agentId().equals(row.getAgentId()) || !scope.tenantId().equals(row.getTenantId())
@@ -260,6 +294,11 @@ public class AgentRuntimeAuthenticationService {
                     || identities.requireActiveBinding(identity, null) == null) throw denied();
         } catch (DataAccessException unavailable) { throw unavailable; }
         catch (RuntimeException invalidIdentity) { throw denied(); }
+    }
+
+    private void requireAdmitted(String tenantId, String clientId) {
+        try { tenantAdmission.requireAdmitted(tenantId, clientId); }
+        catch (IllegalArgumentException denied) { throw denied(); }
     }
 
     private AccountSecuritySnapshot account(String ownerJiacn) {

@@ -2,6 +2,7 @@ package cn.jia.oauth.filter;
 
 import cn.jia.core.context.EsContext;
 import cn.jia.core.context.EsContextHolder;
+import cn.jia.core.security.FixedTenantAdmissionPolicy;
 import cn.jia.core.security.TenantClaimPolicy;
 import jakarta.servlet.Filter;
 import jakarta.servlet.FilterChain;
@@ -17,10 +18,18 @@ import java.io.IOException;
 
 public class EsSecurityContextFilter implements Filter {
     private final String legacySingleTenantId;
+    private final FixedTenantAdmissionPolicy tenantAdmission;
 
-    public EsSecurityContextFilter() { this(TenantClaimPolicy.defaultSingleTenant()); }
+    public EsSecurityContextFilter() {
+        this(TenantClaimPolicy.defaultSingleTenant(),
+                new FixedTenantAdmissionPolicy(TenantClaimPolicy.defaultSingleTenant(), false, null, null));
+    }
     public EsSecurityContextFilter(String legacySingleTenantId) {
+        this(legacySingleTenantId, new FixedTenantAdmissionPolicy(legacySingleTenantId, false, null, null));
+    }
+    public EsSecurityContextFilter(String legacySingleTenantId, FixedTenantAdmissionPolicy tenantAdmission) {
         this.legacySingleTenantId = TenantClaimPolicy.exact(legacySingleTenantId);
+        this.tenantAdmission = java.util.Objects.requireNonNull(tenantAdmission);
     }
     @Override
     public void doFilter(ServletRequest req, ServletResponse res, FilterChain chain) throws IOException, ServletException {
@@ -40,10 +49,17 @@ public class EsSecurityContextFilter implements Filter {
             context.setTenantId(null);
             throw new ServletException("Authenticated token has invalid tenant scope", invalid);
         }
+        String clientId = stringClaim(jwt, "client_id");
+        try {
+            tenantAdmission.requireAdmitted(tenant, clientId);
+        } catch (IllegalArgumentException denied) {
+            context.setTenantId(null);
+            throw new ServletException("Authenticated token tenant/client scope is not admitted", denied);
+        }
         context.setTenantId(tenant);
         context.setJiacn(stringClaim(jwt, "jiacn"));
         context.setAppcn(stringClaim(jwt, "appcn"));
-        context.setClientId(stringClaim(jwt, "client_id"));
+        context.setClientId(clientId);
         context.setUsername(stringClaim(jwt, "username"));
     }
 

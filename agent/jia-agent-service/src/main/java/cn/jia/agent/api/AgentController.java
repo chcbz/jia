@@ -1,6 +1,7 @@
 package cn.jia.agent.api;
 
 import cn.jia.core.entity.JsonRequest;
+import cn.jia.core.security.TenantClaimPolicy;
 
 import cn.jia.agent.common.AgentErrorConstants;
 import cn.jia.agent.entity.AbilityCompareRequestDTO;
@@ -267,13 +268,20 @@ public class AgentController {
         Map<String, Object> claims = jwt.getToken().getClaims();
         Object rawJiacn = claims.get("jiacn");
         Object rawClientId = claims.get("client_id");
+        String tenantId;
+        try {
+            tenantId = TenantClaimPolicy.resolve(claims, TenantClaimPolicy.defaultSingleTenant());
+        } catch (IllegalArgumentException invalidTenant) {
+            throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN,
+                    "Authenticated JWT scope is invalid");
+        }
         if (!(rawJiacn instanceof String jiacn) || !(rawClientId instanceof String clientId)
                 || "0".equals(jiacn) || !validExactScopeComponent(jiacn)
                 || !validExactScopeComponent(clientId)) {
             throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN,
                     "Authenticated JWT scope is invalid");
         }
-        return new AgentHostedBindingTransaction.Scope("0", clientId, jiacn);
+        return new AgentHostedBindingTransaction.Scope(tenantId, clientId, jiacn);
     }
 
     private static boolean validExactScopeComponent(String value) {

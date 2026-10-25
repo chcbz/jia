@@ -48,17 +48,18 @@ public class JuyitingAgentRelayService {
         }
 
         ServerResolvedSender trustedSender = requireTrustedSender(sender);
+        String tenantId = requireIdentityPart(EsContextHolder.getContext().getTenantId());
         String ownerJiacn = trustedSender.jiacn();
         String ownerClientId = trustedSender.clientId();
         JuyitingConversationScope scope;
         try {
             scope = scopeService.authorize(
-                    chatMessage, requestedScope, ownerJiacn, ownerClientId);
+                    chatMessage, requestedScope, tenantId, ownerClientId);
         } catch (RuntimeException denied) {
             return deniedScope(conversationId, requestedScope);
         }
         ChatConversationEntity conversation = chatConversationService.getOwned(
-                ownerJiacn, ownerClientId, conversationId);
+                tenantId, ownerJiacn, ownerClientId, conversationId);
         if (!conversationMatchesScope(conversation, scope)) {
             return new JuyitingAgentRelayResult(true, Mono.just(true), Flux.just(JsonUtil.toSafeJson(Map.of(
                     "error", "conversation scope mismatch",
@@ -67,7 +68,6 @@ public class JuyitingAgentRelayService {
             ))));
         }
         long generation = lifecycleGeneration(conversation);
-        String tenantId = requireIdentityPart(EsContextHolder.getContext().getTenantId());
         if (!tenantId.equals(requireIdentityPart(conversation.getTenantId()))) {
             return deniedScope(conversationId, scope);
         }
@@ -112,7 +112,7 @@ public class JuyitingAgentRelayService {
                     ChatConversationEventBroker.LiveSubscription subscription =
                             chatConversationEventBroker.subscribeBuffered(conversationId, generation,
                                     () -> chatConversationService.isLiveGeneration(
-                                            ownerJiacn, clientId, conversationId, generation));
+                                            tenantId, ownerJiacn, clientId, conversationId, generation));
                     if (subscription == null) throw new IllegalStateException("Conversation stream unavailable");
                     return subscription;
                 }, subscription -> readRequestTerminal(

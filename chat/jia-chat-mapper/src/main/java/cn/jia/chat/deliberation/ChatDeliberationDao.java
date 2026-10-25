@@ -20,6 +20,7 @@ public interface ChatDeliberationDao {
     ChatDispatchOutboxEntity lockOutboxById(String tenantId, String ownerJiacn, String clientId, String eventId);
     ChatDispatchOutboxEntity lockOutboxByDispatch(String tenantId, String ownerJiacn, String clientId, String dispatchId);
     List<ChatDispatchOutboxEntity> findDueOutbox(long now, int limit);
+    List<ChatDispatchOutboxEntity> findDueOutboxInScope(String tenantId, String clientId, long now, int limit);
     List<ChatConversationEventEntity> replayEvents(String tenantId, String ownerJiacn, String clientId,
             String conversationId, long generation, long afterSequence, long throughSequence, int limit);
     long eventHighWatermark(String tenantId, String ownerJiacn, String clientId,

@@ -70,7 +70,7 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
     @Test
     void legalSingleAgentRelayUsesDurableAdmissionAndStreamsRequestEvents() throws Exception {
         stubLiveConversation();
-        when(chatConversationService.getOwned("tester", "web-client", "1001"))
+        when(chatConversationService.getOwned("0", "tester", "web-client", "1001"))
                 .thenReturn(conversation("public", "public", null, List.of("agent-wuyong")));
         stubAdmission(List.of("agent-wuyong"), false);
         ChatMessageDTO request = request("public", null, List.of("agent-wuyong"));
@@ -101,7 +101,7 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
     @Test
     void clientSenderSpoofCannotReplaceTrustedHumanAtDurableAdmission() {
         when(builtinHallAgentSupport.isBuiltinAgent("songjiang")).thenReturn(true);
-        when(chatConversationService.getOwned("tester", "web-client", "1001"))
+        when(chatConversationService.getOwned("0", "tester", "web-client", "1001"))
                 .thenReturn(conversation("public", "public", null, List.of("songjiang")));
         stubAdmission(List.of("songjiang"), false);
         ChatMessageDTO request = request("public", null, List.of("songjiang"));
@@ -128,7 +128,7 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
         List<String> members = List.of("agent-wuyong", "agent-linchong");
         when(agentService.listTaskWritableMemberAgentIds("0", "web-client", "task-7"))
                 .thenReturn(members);
-        when(chatConversationService.getOwned("tester", "web-client", "1001"))
+        when(chatConversationService.getOwned("0", "tester", "web-client", "1001"))
                 .thenReturn(conversation("bounty", "task:task-7", "task-7", members));
         when(taskLinkService.list(
                 new PersonalWorkspaceTaskLinkService.Scope("0", "web-client", "tester"),
@@ -180,7 +180,7 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
     void taskMaterialLookupFailureAdmitsOnlyUnavailableMarker() {
         when(agentService.listTaskWritableMemberAgentIds("0", "web-client", "task-7"))
                 .thenReturn(List.of("agent-wuyong"));
-        when(chatConversationService.getOwned("tester", "web-client", "1001"))
+        when(chatConversationService.getOwned("0", "tester", "web-client", "1001"))
                 .thenReturn(conversation("bounty", "task:task-7", "task-7", List.of("agent-wuyong")));
         when(taskLinkService.list(
                 new PersonalWorkspaceTaskLinkService.Scope("0", "web-client", "tester"),
@@ -237,7 +237,7 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
         List<String> members = List.of("agent-wuyong", "agent-linchong");
         when(agentService.listTaskWritableMemberAgentIds("0", "web-client", "task-7"))
                 .thenReturn(members);
-        when(chatConversationService.getOwned("tester", "web-client", "1001"))
+        when(chatConversationService.getOwned("0", "tester", "web-client", "1001"))
                 .thenReturn(conversation("bounty", "task:task-7", "task-7", members));
         when(taskLinkService.list(any(), eq("task-7"), eq(null)))
                 .thenReturn(new PersonalWorkspaceTaskLinkService.LinkListView(List.of(), null));
@@ -266,7 +266,7 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
                 "bounty", "task:task-7", "task-7", List.of("agent-wuyong"));
         legacy.setTargetAgentId(null);
         legacy.setTargetAgentIds(null);
-        when(chatConversationService.getOwned("tester", "web-client", "1001"))
+        when(chatConversationService.getOwned("0", "tester", "web-client", "1001"))
                 .thenReturn(legacy);
 
         JuyitingAgentRelayResult result = service().relay(
@@ -282,7 +282,7 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
     void requestedTargetOutsidePersistedSetIsRejectedBeforeAdmission() {
         when(agentService.listTaskWritableMemberAgentIds("0", "web-client", "task-7"))
                 .thenReturn(List.of("agent-wuyong", "agent-linchong"));
-        when(chatConversationService.getOwned("tester", "web-client", "1001"))
+        when(chatConversationService.getOwned("0", "tester", "web-client", "1001"))
                 .thenReturn(conversation("bounty", "task:task-7", "task-7",
                         List.of("agent-wuyong")));
 
@@ -297,7 +297,7 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
 
     @Test
     void replayAdmissionReturnsStableDurableIdentifiersWithoutOpeningBrokerSubscription() {
-        when(chatConversationService.getOwned("tester", "web-client", "1001"))
+        when(chatConversationService.getOwned("0", "tester", "web-client", "1001"))
                 .thenReturn(conversation("public", "public", null, List.of("agent-wuyong")));
         stubAdmission(List.of("agent-wuyong"), true);
 
@@ -545,8 +545,8 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
         EsContextHolder.setContext(context);
         ChatConversationEntity alternate = conversation("public", "public", null, List.of("agent-wuyong"));
         alternate.setTenantId("tenant-alt"); alternate.setJiacn("owner-alt"); alternate.setClientId("client-alt");
-        when(chatConversationService.getOwned("owner-alt", "client-alt", "1001")).thenReturn(alternate);
-        when(chatConversationService.isLiveGeneration("owner-alt", "client-alt", "1001", 1L)).thenReturn(true);
+        when(chatConversationService.getOwned("tenant-alt", "owner-alt", "client-alt", "1001")).thenReturn(alternate);
+        when(chatConversationService.isLiveGeneration("tenant-alt", "owner-alt", "client-alt", "1001", 1L)).thenReturn(true);
         stubAdmission(List.of("agent-wuyong"), false);
         when(deliberationService.getRequest("tenant-alt", "owner-alt", "client-alt", "req-1"))
                 .thenReturn(view("COMPLETED", List.of("FINAL_PERSISTED"), List.of("agent-wuyong")));
@@ -611,7 +611,7 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
     @Test
     void privateInspectAdmissionKeepsItsRouteAndCompletesFromAuthoritativeSnapshot() {
         stubLiveConversation();
-        when(chatConversationService.getOwned("tester", "web-client", "1001"))
+        when(chatConversationService.getOwned("0", "tester", "web-client", "1001"))
                 .thenReturn(conversation("private", "agent:agent-wuyong", null, List.of("agent-wuyong")));
         stubAdmission(List.of("agent-wuyong"), false, InteractionRoute.INSPECT);
         ChatDeliberationService.TurnView turn = new ChatDeliberationService.TurnView("turn-agent-wuyong", "req-1", "1", "1001", "1", "agent-wuyong",
@@ -668,7 +668,7 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
         stubLiveConversation();
         when(agentService.listTaskWritableMemberAgentIds("0", "web-client", "task-7"))
                 .thenReturn(List.of("agent-wuyong"));
-        when(chatConversationService.getOwned("tester", "web-client", "1001"))
+        when(chatConversationService.getOwned("0", "tester", "web-client", "1001"))
                 .thenReturn(conversation("bounty", "task:task-7", "task-7", List.of("agent-wuyong")));
         stubAdmission(List.of("agent-wuyong"), false);
         return service().relay(request("bounty", "task-7", List.of("agent-wuyong")),
@@ -677,7 +677,7 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
 
     private Flux<String> preparedStream(List<String> targets) {
         stubLiveConversation();
-        when(chatConversationService.getOwned("tester", "web-client", "1001"))
+        when(chatConversationService.getOwned("0", "tester", "web-client", "1001"))
                 .thenReturn(conversation("public", "public", null, targets));
         stubAdmission(targets, false);
         return service().relay(request("public", null, targets), "1001", sender(), InteractionRoute.CHAT).stream();
@@ -707,7 +707,7 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
 
     private void stubLiveConversation() {
         when(chatConversationService.isLiveGeneration(
-                "tester", "web-client", "1001", 1L)).thenReturn(true);
+                "0", "tester", "web-client", "1001", 1L)).thenReturn(true);
     }
 
     private void stubAdmission(List<String> targets, boolean replay) {

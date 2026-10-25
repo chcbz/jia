@@ -1,6 +1,8 @@
 package cn.jia.oauth.config;
 
 import cn.jia.oauth.filter.EsSecurityContextFilter;
+import cn.jia.oauth.filter.MinimalGreyTenantRouteFilter;
+import cn.jia.core.security.FixedTenantAdmissionPolicy;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -22,11 +24,27 @@ public class EsSecurityContextConfig {
      */
     @Bean
     public FilterRegistrationBean<EsSecurityContextFilter> esSecurityContextFilter(
-            @Value("${cyf.security.legacy-single-tenant-id:0}") String legacySingleTenantId) {
+            @Value("${cyf.security.legacy-single-tenant-id:0}") String legacySingleTenantId,
+            @Value("${cyf.security.fixed-tenant.enabled:false}") boolean fixedTenantEnabled,
+            @Value("${cyf.security.fixed-tenant.tenant-id:}") String fixedTenantId,
+            @Value("${cyf.security.fixed-tenant.client-id:}") String fixedClientId) {
         FilterRegistrationBean<EsSecurityContextFilter> filterRegistrationBean = new FilterRegistrationBean<>();
-        filterRegistrationBean.setFilter(new EsSecurityContextFilter(legacySingleTenantId));
+        filterRegistrationBean.setFilter(new EsSecurityContextFilter(legacySingleTenantId,
+                new FixedTenantAdmissionPolicy(legacySingleTenantId, fixedTenantEnabled,
+                        fixedTenantId, fixedClientId)));
         filterRegistrationBean.addUrlPatterns("/*");
         filterRegistrationBean.setOrder(2);
         return filterRegistrationBean;
     }
+    @Bean
+    public FilterRegistrationBean<MinimalGreyTenantRouteFilter> minimalGreyTenantRouteFilter(
+            @Value("${cyf.security.fixed-tenant.enabled:false}") boolean enabled,
+            @Value("${cyf.security.fixed-tenant.tenant-id:}") String tenantId) {
+        FilterRegistrationBean<MinimalGreyTenantRouteFilter> bean = new FilterRegistrationBean<>();
+        bean.setFilter(new MinimalGreyTenantRouteFilter(enabled, tenantId));
+        bean.addUrlPatterns("/*");
+        bean.setOrder(3);
+        return bean;
+    }
+
 }

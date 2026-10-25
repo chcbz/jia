@@ -369,6 +369,52 @@ class AgentRuntimeV1ServiceImplTest {
         verify(installations, never()).revoke(any(), anyLong());
     }
 
+
+    @Test void tenantOneEnrollmentSessionHeartbeatStayBoundAndCrossTenantCallbacksFail() {
+        service = new AgentRuntimeV1ServiceImpl(installations, identities, registry,
+                provider(acks), sessions, mock(ObjectProvider.class),
+                new cn.jia.core.security.FixedTenantAdmissionPolicy("0", true, "1", "cyf-local"));
+        String authorization = "tenant-one-runtime-authorization";
+        AgentRuntimeV1InstallationEntity active = installation("ACTIVE")
+                .setRuntimeAuthorizationHash(sha(authorization));
+        active.setTenantId("1"); active.setClientId("cyf-local");
+        when(installations.findActiveByAuthorizationHash(any())).thenReturn(active);
+        when(installations.lock("rti-1")).thenReturn(active);
+        var sessionRequest = new cn.jia.agent.entity.AgentRuntimeV1SessionRequest(
+                "rti-1", "1", "cyf-local", AGENT, "1", HASH, "host-1", "boot-1");
+        var issued = new cn.jia.agent.entity.AgentRuntimeV1SessionResponse(
+                "rti-1", "1", "cyf-local", AGENT, "host-1", "boot-1", 1L,
+                "AgentRuntime", "rts1_" + "a".repeat(64), "/ws/agent/channel", "CHANNEL_PENDING");
+        when(sessions.issue(active, sessionRequest, NOW)).thenReturn(issued);
+        assertSame(issued, service.session(authorization, sessionRequest, NOW));
+        when(installations.heartbeat(active, NOW)).thenReturn(1);
+        var heartbeat = new cn.jia.agent.entity.AgentRuntimeV1RuntimeRequest(
+                "rti-1", "1", "cyf-local", AGENT, "1", HASH, "ok");
+        assertEquals("1", service.heartbeat(authorization, heartbeat, NOW).tenantId());
+        var foreign = new cn.jia.agent.entity.AgentRuntimeV1RuntimeRequest(
+                "rti-1", "0", "cyf-local", AGENT, "1", HASH, "ok");
+        assertThrows(AgentServiceImpl.AgentBizException.class,
+                () -> service.heartbeat(authorization, foreign, NOW));
+        verify(installations, times(1)).heartbeat(active, NOW);
+    }
+
+    @Test void fixedProcessRejectsTenantZeroNativeEnrollmentBeforeDatabaseLookup() {
+        service = new AgentRuntimeV1ServiceImpl(installations, identities, registry,
+                provider(acks), sessions, mock(ObjectProvider.class),
+                new cn.jia.core.security.FixedTenantAdmissionPolicy("0", true, "1", "cyf-local"));
+        var request = new AgentRuntimeV1EnrollmentRequest("rti-1", "0", "production-client",
+                AGENT, "1", HASH, "enrollment-secret");
+        assertThrows(AgentServiceImpl.AgentBizException.class, () -> service.enroll(request, NOW));
+        verifyNoInteractions(installations);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static ObjectProvider<AgentCommandAckService> provider(AgentCommandAckService service) {
+        ObjectProvider<AgentCommandAckService> result = mock(ObjectProvider.class);
+        when(result.getIfAvailable()).thenReturn(service);
+        return result;
+    }
+
     private static final String AGENT = "agt_0123456789abcdef0123456789abcdef";
     private static final String HASH = "b".repeat(64);
     private static AgentRuntimeV1InstallationEntity installation(String status) {

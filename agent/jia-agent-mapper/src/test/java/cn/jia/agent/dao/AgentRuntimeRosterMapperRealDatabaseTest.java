@@ -56,10 +56,10 @@ class AgentRuntimeRosterMapperRealDatabaseTest {
         insertOwnedPersona("wu-yong", "agt_22222222222222222222222222222222", "ACTIVE");
         insertOwnedPersona("lin-chong", "agt_33333333333333333333333333333333", "SUSPENDED");
 
-        List<AgentRuntimeEntity> roster = mapper.findActiveRosterByOwner(CLIENT, OWNER, null, null);
+        List<AgentRuntimeEntity> roster = mapper.findActiveRosterByOwner("0", CLIENT, OWNER, null, null);
         assertEquals(List.of("gong-sun-sheng", "wu-yong"), personaCodes(roster));
 
-        List<AgentRuntimeEntity> candidates = mapper.findCandidateRosterByOwner(CLIENT, OWNER);
+        List<AgentRuntimeEntity> candidates = mapper.findCandidateRosterByOwner("0", CLIENT, OWNER);
         assertEquals(List.of("wu-yong"), personaCodes(candidates));
     }
 

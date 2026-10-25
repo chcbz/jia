@@ -13,11 +13,11 @@ import java.util.List;
 public interface ChatMessageMapper extends BaseMapper<ChatMessageEntity> {
     String LIVE_CONVERSATION_OWNER_SCOPE = """
               AND c.deleted_at IS NULL
-              AND c.tenant_id = '0'
+              AND c.tenant_id = #{tenantId}
               AND c.jiacn = #{ownerJiacn}
               AND c.client_id = #{clientId}
-              AND CAST(c.tenant_id AS BINARY) = CAST('0' AS BINARY)
-              AND OCTET_LENGTH(c.tenant_id) = OCTET_LENGTH('0')
+              AND CAST(c.tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY)
+              AND OCTET_LENGTH(c.tenant_id) = OCTET_LENGTH(#{tenantId})
               AND CAST(c.jiacn AS BINARY) = CAST(#{ownerJiacn} AS BINARY)
               AND OCTET_LENGTH(c.jiacn) = OCTET_LENGTH(#{ownerJiacn})
               AND CAST(c.client_id AS BINARY) = CAST(#{clientId} AS BINARY)
@@ -50,7 +50,7 @@ public interface ChatMessageMapper extends BaseMapper<ChatMessageEntity> {
               AND OCTET_LENGTH(m.conversation_id) = OCTET_LENGTH(CAST(c.id AS CHAR))
             WHERE c.deleted_at IS NULL AND c.tenant_id = '0'
               AND CAST(c.tenant_id AS BINARY) = CAST('0' AS BINARY)
-              AND OCTET_LENGTH(c.tenant_id) = 1
+              AND OCTET_LENGTH(c.tenant_id) = OCTET_LENGTH('0')
               AND c.id > #{afterId}
               AND m.sync_status = #{syncStatus}
               AND m.message_type IN ('USER', 'ASSISTANT')
@@ -74,7 +74,8 @@ public interface ChatMessageMapper extends BaseMapper<ChatMessageEntity> {
               </foreach>
             </script>
             """)
-    int markMemorySnapshotSynced(@Param("ownerJiacn") String ownerJiacn,
+    int markMemorySnapshotSynced(@Param("tenantId") String tenantId,
+            @Param("ownerJiacn") String ownerJiacn,
             @Param("clientId") String clientId, @Param("conversationId") String conversationId,
             @Param("numericConversationId") long numericConversationId,
             @Param("messageIds") List<Long> messageIds);
@@ -90,6 +91,7 @@ public interface ChatMessageMapper extends BaseMapper<ChatMessageEntity> {
             ORDER BY m.create_time ASC, m.id ASC
             """)
     List<ChatMessageEntity> findExactOwnedConversationMessages(
+            @Param("tenantId") String tenantId,
             @Param("ownerJiacn") String ownerJiacn,
             @Param("clientId") String clientId,
             @Param("conversationId") String conversationId,
@@ -107,6 +109,7 @@ public interface ChatMessageMapper extends BaseMapper<ChatMessageEntity> {
             LIMIT #{limit}
             """)
     List<ChatMessageEntity> findExactOwnedConversationMessagesWithLimit(
+            @Param("tenantId") String tenantId,
             @Param("ownerJiacn") String ownerJiacn,
             @Param("clientId") String clientId,
             @Param("conversationId") String conversationId,
@@ -131,6 +134,7 @@ public interface ChatMessageMapper extends BaseMapper<ChatMessageEntity> {
                 OR OCTET_LENGTH(m.tenant_id) <> OCTET_LENGTH(c.tenant_id))
             """)
     int countContaminatedOwnedConversationMessages(
+            @Param("tenantId") String tenantId,
             @Param("ownerJiacn") String ownerJiacn,
             @Param("clientId") String clientId,
             @Param("conversationId") String conversationId,
@@ -144,6 +148,7 @@ public interface ChatMessageMapper extends BaseMapper<ChatMessageEntity> {
             + LIVE_CONVERSATION_OWNER_SCOPE
             + EXACT_MESSAGE_OWNER_SCOPE)
     int deleteExactOwnedConversationMessages(
+            @Param("tenantId") String tenantId,
             @Param("ownerJiacn") String ownerJiacn,
             @Param("clientId") String clientId,
             @Param("conversationId") String conversationId,

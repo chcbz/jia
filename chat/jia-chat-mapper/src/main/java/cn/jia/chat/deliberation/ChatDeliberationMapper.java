@@ -211,6 +211,20 @@ public interface ChatDeliberationMapper {
     List<ChatDispatchOutboxEntity> findDueOutbox(@Param("now") long now, @Param("limit") int limit);
 
     @Select("""
+            SELECT * FROM chat_dispatch_outbox
+            WHERE tenant_id=#{tenantId} AND client_id=#{clientId}
+              AND CAST(tenant_id AS BINARY)=CAST(#{tenantId} AS BINARY)
+              AND CAST(client_id AS BINARY)=CAST(#{clientId} AS BINARY)
+              AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(#{tenantId})
+              AND OCTET_LENGTH(client_id)=OCTET_LENGTH(#{clientId})
+              AND (((status IN ('READY','RETRY','AWAITING_ACK') AND available_at<=#{now})
+                OR (status='CLAIMED' AND lease_until<=#{now})))
+            ORDER BY available_at,event_id LIMIT #{limit}
+            """)
+    List<ChatDispatchOutboxEntity> findDueOutboxInScope(@Param("tenantId") String tenantId,
+            @Param("clientId") String clientId, @Param("now") long now, @Param("limit") int limit);
+
+    @Select("""
             SELECT * FROM chat_conversation_event WHERE
             """ + EXACT_SCOPE + """
               AND conversation_id=#{conversationId} AND conversation_generation=#{generation}

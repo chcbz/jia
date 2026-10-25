@@ -28,7 +28,7 @@ class AuthenticationControllerTest {
                 "access_token", "must-not-leak",
                 "arbitrary_claim", Map.of("private", true)));
 
-        ResponseEntity<OAuthResourceIdentityDTO> response = controller.resource(authenticated(jwt));
+        ResponseEntity<cn.jia.core.entity.JsonResult<OAuthResourceIdentityDTO>> response = controller.resource(authenticated(jwt));
         OAuthResourceIdentityDTO identity = successData(response);
 
         assertEquals("user-17", identity.subject());
@@ -138,13 +138,13 @@ class AuthenticationControllerTest {
     }
 
     private static OAuthResourceIdentityDTO successData(
-            ResponseEntity<OAuthResourceIdentityDTO> response) {
+            ResponseEntity<cn.jia.core.entity.JsonResult<OAuthResourceIdentityDTO>> response) {
         assertEquals(200, response.getStatusCode().value());
-        return response.getBody();
+        return response.getBody().getData();
     }
 
     private void assertUnauthorized(Jwt jwt) {
-        ResponseEntity<OAuthResourceIdentityDTO> response = controller.resource(authenticated(jwt));
+        ResponseEntity<cn.jia.core.entity.JsonResult<OAuthResourceIdentityDTO>> response = controller.resource(authenticated(jwt));
         assertEquals(401, response.getStatusCode().value());
         assertNull(response.getBody());
     }
