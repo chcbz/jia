@@ -260,6 +260,8 @@ public final class ChatTypedDeliberationContextService {
     private static Map<String,Object> scopeMap(Scope s){return Map.of("tenantId",s.tenantId(),"ownerJiacn",s.ownerJiacn(),
             "clientId",s.clientId(),"conversationId",s.conversationId(),"conversationGeneration",Long.toString(s.conversationGeneration()));}
     private static String mediaType(String mime){if(mime.startsWith("image/"))return"image";if(mime.startsWith("audio/"))return"audio";if(mime.startsWith("text/"))return"text";return"file";}
+    private static String text(Map<String,Object> row,String key){Object v=row.get(key);if(v==null)v=row.get(key.toUpperCase());if(!(v instanceof String s))throw unavailable("Source metadata is invalid");return s;}
+    private static long number(Map<String,Object> row,String key){Object v=row.get(key);if(v==null)v=row.get(key.toUpperCase());if(!(v instanceof Number n))throw unavailable("Source metadata is invalid");return n.longValue();}
     private static void exact(String value,int max){if(value==null||value.isBlank()||!value.equals(value.strip())||value.codePointCount(0,value.length())>max||value.codePoints().anyMatch(Character::isISOControl))throw invalid();}
     private static String sha256(String value){try{return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8)));}catch(NoSuchAlgorithmException e){throw new IllegalStateException(e);}}
     private static ChatDeliberationException invalid(){return new ChatDeliberationException(ChatDeliberationException.Reason.INVALID_REQUEST,"Typed discussion source selection is invalid");}
