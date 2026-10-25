@@ -7,6 +7,7 @@ import cn.jia.agent.dao.AgentIdentityRegistryDao;
 import cn.jia.agent.dao.AgentPersonaBindingDao;
 import cn.jia.agent.dao.AgentPersonaDao;
 import cn.jia.agent.dao.AgentRuntimeDao;
+import cn.jia.agent.dao.AgentRuntimeV1InstallationDao;
 import cn.jia.agent.dao.AgentTaskMemberDao;
 import cn.jia.agent.dao.AgentTaskMetaDao;
 import cn.jia.agent.dao.AgentTaskNoteDao;
@@ -16,15 +17,19 @@ import cn.jia.agent.dao.impl.AgentIdentityRegistryDaoImpl;
 import cn.jia.agent.dao.impl.AgentPersonaBindingDaoImpl;
 import cn.jia.agent.dao.impl.AgentPersonaDaoImpl;
 import cn.jia.agent.dao.impl.AgentRuntimeDaoImpl;
+import cn.jia.agent.dao.impl.AgentRuntimeV1InstallationDaoImpl;
 import cn.jia.agent.entity.AgentIdentityRegistryEntity;
 import cn.jia.agent.entity.AgentRegisterDTO;
 import cn.jia.agent.entity.AgentRegisterResultDTO;
 import cn.jia.agent.entity.AgentRuntimeDTO;
+import cn.jia.agent.entity.AgentRuntimeV1EnrollmentRequest;
+import cn.jia.agent.entity.AgentRuntimeV1InstallationRequest;
 import cn.jia.agent.mapper.AgentIdentityAliasMapper;
 import cn.jia.agent.mapper.AgentIdentityRegistryMapper;
 import cn.jia.agent.mapper.AgentPersonaBindingMapper;
 import cn.jia.agent.mapper.AgentPersonaMapper;
 import cn.jia.agent.mapper.AgentRuntimeMapper;
+import cn.jia.agent.mapper.AgentRuntimeV1InstallationMapper;
 import cn.jia.agent.service.AgentIdentityService;
 import cn.jia.agent.service.AgentScopePublicationCoordinator;
 import cn.jia.agent.service.AgentSceneService;
@@ -34,6 +39,7 @@ import cn.jia.agent.service.AgentTaskMutationTransaction;
 import cn.jia.agent.event.AgentEventPublisher;
 import cn.jia.core.context.EsContext;
 import cn.jia.core.context.EsContextHolder;
+import cn.jia.core.security.FixedTenantAdmissionPolicy;
 import cn.jia.oauth.service.ApiKeyService;
 import cn.jia.task.service.TaskService;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
@@ -57,6 +63,9 @@ import javax.sql.DataSource;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Proxy;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -81,6 +90,8 @@ class AgentIdentityRuntimeRealTransactionTest {
     private AgentService agentService;
     private AgentRuntimeDao runtimeDao;
     private AgentPersonaBindingDao bindingDao;
+    private AgentIdentityRegistryDao registryDao;
+    private AgentRuntimeV1InstallationDao installationDao;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -95,7 +106,7 @@ class AgentIdentityRuntimeRealTransactionTest {
 
         SqlSessionFactory factory = sqlSessionFactory(dataSource);
         SqlSessionTemplate template = new SqlSessionTemplate(factory);
-        AgentIdentityRegistryDao registryDao = wire(
+        registryDao = wire(
                 new AgentIdentityRegistryDaoImpl(), template.getMapper(AgentIdentityRegistryMapper.class));
         AgentIdentityAliasDao aliasDao = wire(
                 new AgentIdentityAliasDaoImpl(), template.getMapper(AgentIdentityAliasMapper.class));
@@ -104,6 +115,8 @@ class AgentIdentityRuntimeRealTransactionTest {
         AgentPersonaDao personaDao = wire(new AgentPersonaDaoImpl(),
                 template.getMapper(AgentPersonaMapper.class));
         runtimeDao = wire(new AgentRuntimeDaoImpl(), template.getMapper(AgentRuntimeMapper.class));
+        installationDao = wire(new AgentRuntimeV1InstallationDaoImpl(),
+                template.getMapper(AgentRuntimeV1InstallationMapper.class));
 
         AgentIdentityServiceImpl rawIdentity = new AgentIdentityServiceImpl(
                 registryDao, aliasDao, bindingDao);
@@ -113,8 +126,8 @@ class AgentIdentityRuntimeRealTransactionTest {
         jdbc.update("""
                 INSERT INTO agent_persona
                     (persona_code, name, title, abilities, active, system_agent,
-                     create_time, update_time)
-                VALUES ('wuyong', 'Wu Yong', 'Strategist', '[\"planning\"]', 1, 0, 1, 1)
+                     create_time, update_time, tenant_id)
+                VALUES ('wuyong', 'Wu Yong', 'Strategist', '["planning"]', 1, 0, 1, 1, '0')
                 """);
         EsContext context = new EsContext();
         context.setClientId("client-a");
@@ -157,6 +170,95 @@ class AgentIdentityRuntimeRealTransactionTest {
         assertEquals("urs1:synthetic", jdbc.queryForObject("SELECT token_hash FROM agent_runtime", String.class));
         assertEquals(1, count("SELECT COUNT(*) FROM agent_runtime"));
         assertEquals(1, count("SELECT COUNT(*) FROM agent_identity_registry"));
+    }
+
+    @Test
+    void tenantOneLocalBindAndCatalogPersistExactScopeWithoutForeignDisclosure() throws Exception {
+        EsContext context = new EsContext();
+        context.setTenantId("1");
+        context.setClientId("cyf-local");
+        context.setJiacn("owner-a");
+        EsContextHolder.setContext(context);
+
+        AgentRuntimeDTO bound = agentService.bindPersona("1", "cyf-local", "owner-a", "wuyong");
+        assertTrue(bound.getAgentId().matches("agt_[0-9a-f]{32}"));
+        assertEquals("1", jdbc.queryForObject(
+                "SELECT tenant_id FROM agent_persona_binding", String.class));
+        assertEquals("cyf-local", jdbc.queryForObject(
+                "SELECT client_id FROM agent_identity_registry", String.class));
+        assertEquals("owner-a", jdbc.queryForObject(
+                "SELECT owner_jiacn FROM agent_runtime", String.class));
+
+        AgentRuntimeV1ServiceImpl runtimeV1 = new AgentRuntimeV1ServiceImpl(
+                installationDao, identityService, registryDao, provider(),
+                mock(cn.jia.agent.security.AgentRuntimeAuthenticationService.class), provider(),
+                new FixedTenantAdmissionPolicy("0", true, "1", "cyf-local"));
+        String enrollmentSecret = "tenant-one-enrollment-secret";
+        String digest = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
+                .digest(enrollmentSecret.getBytes(StandardCharsets.UTF_8)));
+        String installationId = "rti_0123456789abcdef0123456789abcdef";
+        var installation = runtimeV1.create("1", "cyf-local", "owner-a",
+                new AgentRuntimeV1InstallationRequest(installationId, bound.getAgentId(),
+                        "1", "a".repeat(64), digest, 10_000L), 1_000L);
+        assertEquals("PENDING", installation.status());
+        assertEquals("1", jdbc.queryForObject(
+                "SELECT tenant_id FROM agent_runtime_v1_installation", String.class));
+        AgentRuntimeV1InstallationRequest deniedRequest = new AgentRuntimeV1InstallationRequest(
+                "rti_abcdefabcdefabcdefabcdefabcdefab", bound.getAgentId(),
+                "1", "a".repeat(64), digest, 10_000L);
+        assertThrows(AgentServiceImpl.AgentBizException.class, () -> runtimeV1.create(
+                "0", "cyf-local", "owner-a", deniedRequest, 1_000L));
+        assertThrows(AgentServiceImpl.AgentBizException.class, () -> runtimeV1.create(
+                "1", "foreign-client", "owner-a", deniedRequest, 1_000L));
+        assertThrows(AgentServiceImpl.AgentBizException.class, () -> runtimeV1.create(
+                "1", "cyf-local", "foreign-owner", deniedRequest, 1_000L));
+        assertThrows(AgentServiceImpl.AgentBizException.class, () -> runtimeV1.create(
+                "1", "cyf-local", "owner-a",
+                new AgentRuntimeV1InstallationRequest(
+                        "rti_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                        AgentConstants.BUILTIN_SONGJIANG_AGENT_ID, "1",
+                        "a".repeat(64), digest, 10_000L), 1_000L));
+        assertEquals(1, count("SELECT COUNT(*) FROM agent_runtime_v1_installation"));
+
+        var enrolled = runtimeV1.enroll(new AgentRuntimeV1EnrollmentRequest(
+                installationId, "1", "cyf-local", bound.getAgentId(), "1",
+                "a".repeat(64), enrollmentSecret), 2_000L);
+        assertEquals("ACTIVE", enrolled.installation().status());
+        assertTrue(enrolled.runtimeAuthorization().startsWith("rta1_"));
+
+        AgentRuntimeDTO mine = agentService.listPersonaCatalog(
+                "1", "cyf-local", "owner-a").getFirst();
+        assertEquals(bound.getAgentId(), mine.getAgentId());
+        assertTrue(mine.getBound());
+        assertTrue(mine.getBoundToMe());
+        assertTrue(mine.getCanOperate());
+        assertEquals(false, mine.getCanBind());
+
+        AgentRuntimeDTO foreignOwner = agentService.listPersonaCatalog(
+                "1", "cyf-local", "owner-b").getFirst();
+        assertNull(foreignOwner.getAgentId());
+        assertTrue(foreignOwner.getBound());
+        assertEquals(false, foreignOwner.getBoundToMe());
+        assertEquals(false, foreignOwner.getCanOperate());
+        assertEquals(false, foreignOwner.getCanBind());
+        assertThrows(AgentServiceImpl.AgentBizException.class, () ->
+                agentService.bindPersona("1", "cyf-local", "owner-b", "wuyong"));
+
+        AgentRuntimeDTO foreignClient = agentService.listPersonaCatalog(
+                "1", "foreign-client", "owner-a").getFirst();
+        assertNull(foreignClient.getAgentId());
+        assertEquals(false, foreignClient.getBound());
+        assertEquals(false, foreignClient.getBoundToMe());
+        assertTrue(foreignClient.getCanBind());
+
+        jdbc.update("""
+                INSERT INTO agent_persona
+                    (persona_code, name, active, system_agent, create_time, update_time, tenant_id)
+                VALUES ('songjiang', 'Song Jiang', 1, 1, 1, 1, '0')
+                """);
+        assertThrows(AgentServiceImpl.AgentBizException.class, () ->
+                agentService.bindPersona("1", "cyf-local", "owner-a", "songjiang"));
+        assertEquals(1, count("SELECT COUNT(*) FROM agent_persona_binding"));
     }
 
     @Test
@@ -378,6 +480,7 @@ class AgentIdentityRuntimeRealTransactionTest {
         configuration.addMapper(AgentPersonaBindingMapper.class);
         configuration.addMapper(AgentPersonaMapper.class);
         configuration.addMapper(AgentRuntimeMapper.class);
+        configuration.addMapper(AgentRuntimeV1InstallationMapper.class);
         GlobalConfig globalConfig = new GlobalConfig();
         globalConfig.setIdentifierGenerator(new DefaultIdentifierGenerator());
         globalConfig.setBanner(false);
@@ -459,6 +562,26 @@ class AgentIdentityRuntimeRealTransactionTest {
                     current_task_title VARCHAR(200), last_seen_at BIGINT, error_message VARCHAR(1000),
                     create_time BIGINT, update_time BIGINT,
                     tenant_id VARCHAR_IGNORECASE(50), client_id VARCHAR_IGNORECASE(50)
+                )
+                """);
+        jdbc.execute("""
+                CREATE TABLE agent_runtime_v1_installation (
+                    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                    installation_id VARCHAR_IGNORECASE(100) NOT NULL UNIQUE,
+                    canonical_agent_id VARCHAR_IGNORECASE(100) NOT NULL,
+                    manifest_version VARCHAR(100) NOT NULL,
+                    manifest_sha256 VARCHAR(64) NOT NULL,
+                    enrollment_secret_hash BINARY(32) NOT NULL,
+                    enrollment_expires_at BIGINT NOT NULL,
+                    enrollment_consumed_at BIGINT,
+                    runtime_authorization_hash BINARY(32),
+                    runtime_authorization_issued_at BIGINT,
+                    status VARCHAR(32) NOT NULL,
+                    last_heartbeat_at BIGINT,
+                    version BIGINT NOT NULL,
+                    create_time BIGINT, update_time BIGINT,
+                    tenant_id VARCHAR_IGNORECASE(50) NOT NULL,
+                    client_id VARCHAR_IGNORECASE(50) NOT NULL
                 )
                 """);
     }

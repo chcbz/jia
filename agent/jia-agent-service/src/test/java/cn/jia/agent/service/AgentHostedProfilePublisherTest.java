@@ -23,6 +23,28 @@ class AgentHostedProfilePublisherTest {
     @TempDir Path temp;
 
     @Test
+    void tenantOneHostedProfileFailsBeforeAnyFilesystemMutation() {
+        Path runtime = temp.resolve("tenant-one-runtime");
+        Path clients = temp.resolve("tenant-one-clients");
+        AgentHostedProfileEntity hosted = new AgentHostedProfileEntity();
+        hosted.setBindingId(11L);
+        hosted.setTenantId("1");
+        hosted.setClientId("cyf-local");
+        hosted.setOwnerJiacn("owner-a");
+        hosted.setCanonicalAgentId("agt_0123456789abcdef0123456789abcdef");
+        hosted.setProfileKey("not-used");
+        hosted.setApiKeyId("key-11");
+        AgentPersonaEntity persona = new AgentPersonaEntity();
+        persona.setName("Wu Yong");
+
+        assertThrows(AgentBizException.class, () ->
+                new AgentHostedProfilePublisher(runtime, clients)
+                        .publish(hosted, persona, 0L, 1L, false, "dedicated-secret"));
+        assertFalse(Files.exists(runtime));
+        assertFalse(Files.exists(clients));
+    }
+
+    @Test
     void responseContractHasNoCredentialFieldAndLargeIdentifiersSerializeAsStrings() throws Exception {
         Set<String> fields = Arrays.stream(AgentPersonaBindResultDTO.class.getDeclaredFields())
                 .filter(field -> !java.lang.reflect.Modifier.isStatic(field.getModifiers()))

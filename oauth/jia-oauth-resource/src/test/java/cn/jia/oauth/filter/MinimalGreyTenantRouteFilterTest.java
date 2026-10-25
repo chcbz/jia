@@ -30,12 +30,13 @@ class MinimalGreyTenantRouteFilterTest {
             assertPassed(route[0], route[1]);
         EsContextHolder.getContext().setTenantId("0");
         assertDenied("GET", "/agent/map");
+        assertDenied("GET", "/user/my");
         assertDenied("POST", "/agent/runtime/v1/installations");
         assertDenied("GET", "/ws/agent/channel");
     }
     @Test void tenantOneAllowsMinimalSurfaceAndRejectsLegacySideEffects() throws Exception {
         EsContextHolder.getContext().setTenantId("1");
-        for (String[] route : new String[][]{{"GET","/resource"},{"GET","/agent/map"},{"POST","/agent/roster"},
+        for (String[] route : new String[][]{{"GET","/resource"},{"GET","/user/my"},{"GET","/agent/map"},{"POST","/agent/roster"},
                 {"GET","/agent/personas/catalog"},{"POST","/agent/personas/wuyong/bind"},
                 {"GET","/agent/agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},{"PUT","/agent/agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/status"},
                 {"POST","/agent/runtime/v1/installations"},{"GET","/agent/runtime/v1/installations/rti_1"},
@@ -44,7 +45,8 @@ class MinimalGreyTenantRouteFilterTest {
                 {"POST","/agent/runtime/v1/commands/msg-1/acks"},{"GET","/ws/agent/channel"},
                 {"POST","/chat/stream"},{"GET","/chat/conversation/events"}})
             assertPassed(route[0], route[1]);
-        for (String[] route : new String[][]{{"POST","/agent/tasks"},{"GET","/agent/tasks/task-1"},
+        for (String[] route : new String[][]{{"POST","/agent/tasks"},{"GET","/agent/tasks/task-1"},{"POST","/user/my"},
+                {"GET","/user/get"},{"GET","/user/list"},{"GET","/user/my/"},{"GET","/user/my-extra"},
                 {"POST","/agent/personal-workspace/files"},{"GET","/economy/wallet"},{"POST","/chat/library/documents"},
                 {"GET","/agent/stats"},{"GET","/agent/runtime/v1/enroll"},
                 {"GET","/agent/runtime/v1/session"},{"POST","/agent/runtime/v1/commands/msg-1/retry"}})

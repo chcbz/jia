@@ -31,6 +31,40 @@ public class UserInfoDaoImpl extends BaseDaoImpl<InfoMapper, UserEntity> impleme
     }
 
     @Override
+    public List<UserEntity> selectOwnIdentityByExactJiacn(String jiacn) {
+        requireExactIdentity(jiacn);
+        return baseMapper.selectOwnIdentityByExactJiacn(jiacn);
+    }
+
+    private void requireExactIdentity(String value) {
+        if (value == null || value.isEmpty() || value.codePointCount(0, value.length()) > 50
+                || isPadding(value.codePointAt(0))
+                || isPadding(value.codePointBefore(value.length()))
+                || value.codePoints().anyMatch(Character::isISOControl)
+                || hasUnpairedSurrogate(value)) {
+            throw new IllegalArgumentException("jiacn is invalid");
+        }
+    }
+
+    private static boolean isPadding(int codePoint) {
+        return Character.isWhitespace(codePoint) || Character.isSpaceChar(codePoint);
+    }
+
+    private static boolean hasUnpairedSurrogate(String value) {
+        for (int index = 0; index < value.length(); index++) {
+            char unit = value.charAt(index);
+            if (Character.isHighSurrogate(unit)) {
+                if (++index >= value.length() || !Character.isLowSurrogate(value.charAt(index))) {
+                    return true;
+                }
+            } else if (Character.isLowSurrogate(unit)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    @Override
     public UserEntity selectByUsername(String username) {
         return baseMapper.selectOne(Wrappers.lambdaQuery(UserEntity.class).eq(UserEntity::getUsername, username));
     }

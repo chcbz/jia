@@ -20,6 +20,8 @@ public interface UserInfoDao extends IBaseDao<UserEntity> {
 
     UserEntity selectByJiacn(String jiacn);
 
+    List<UserEntity> selectOwnIdentityByExactJiacn(String jiacn);
+
     UserEntity selectByUsername(String username);
 
     UserEntity selectByOpenid(String openid);

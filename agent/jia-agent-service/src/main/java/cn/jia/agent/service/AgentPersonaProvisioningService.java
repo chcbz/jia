@@ -31,11 +31,13 @@ public class AgentPersonaProvisioningService {
         String normalized = StringUtil.isBlank(mode) ? "local" : mode.strip().toLowerCase();
         if ("local".equals(normalized)) return local(scope, personaCode);
         if (!"server".equals(normalized)) throw new IllegalArgumentException("Unsupported bind mode: " + mode);
+        scope.requireLegacyHostedTenant();
         Prepared prepared = transactions.prepareHosted(scope, personaCode);
         return advance(scope, prepared);
     }
 
     public void unbind(Scope scope, String personaCode) {
+        scope.requireLegacyHostedTenant();
         Prepared prepared = transactions.prepareUnbind(scope, personaCode);
         if (prepared == null) return;
         AgentHostedProfileEntity hosted = prepared.hosted();
@@ -55,6 +57,7 @@ public class AgentPersonaProvisioningService {
     }
 
     public AgentPersonaBindResultDTO repair(Scope scope, long bindingId) {
+        scope.requireLegacyHostedTenant();
         if (bindingId <= 0) throw new IllegalArgumentException("bindingId must be positive");
         Prepared prepared = transactions.resumeRepair(scope, bindingId);
         AgentHostedProfileEntity hosted = prepared.hosted();

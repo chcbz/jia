@@ -401,6 +401,7 @@ public class AgentHostedProfilePublisher {
         try {
             scope = new AgentHostedBindingTransaction.Scope(
                     h.getTenantId(), h.getClientId(), h.getOwnerJiacn());
+            scope.requireLegacyHostedTenant();
         } catch (IllegalArgumentException invalidScope) {
             fail("Hosted profile durable scope is invalid");
             return;

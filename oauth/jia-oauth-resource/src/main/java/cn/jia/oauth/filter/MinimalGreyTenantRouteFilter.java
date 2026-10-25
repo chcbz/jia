@@ -74,7 +74,7 @@ public final class MinimalGreyTenantRouteFilter implements Filter {
     }
 
     static boolean allowed(String method, String path) {
-        if ("GET".equals(method) && "/resource".equals(path)) return true;
+        if ("GET".equals(method) && Set.of("/resource", "/user/my").contains(path)) return true;
         if ("GET".equals(method) && Set.of("/agent/map", "/agent/capabilities", "/agent/personas/catalog").contains(path)) return true;
         if ("POST".equals(method) && "/agent/roster".equals(path)) return true;
         if ("POST".equals(method) && PERSONA_BIND.matcher(path).matches()) return true;

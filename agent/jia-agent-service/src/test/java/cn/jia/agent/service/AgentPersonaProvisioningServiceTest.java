@@ -23,8 +23,8 @@ class AgentPersonaProvisioningServiceTest {
         AgentHostedBindingTransaction transactions = mock(AgentHostedBindingTransaction.class);
         AgentHostedProfilePublisher publisher = mock(AgentHostedProfilePublisher.class);
         AgentRuntimeDTO runtime = runtime();
-        Scope nonDefaultClientScope = new Scope("0", "client-local-alt", "owner-local");
-        when(agentService.bindPersona("0", "client-local-alt", "owner-local", "wuyong"))
+        Scope nonDefaultClientScope = new Scope("1", "cyf-local", "owner-local");
+        when(agentService.bindPersona("1", "cyf-local", "owner-local", "wuyong"))
                 .thenReturn(runtime);
 
         var result = new AgentPersonaProvisioningService(agentService, transactions, publisher)
@@ -41,9 +41,8 @@ class AgentPersonaProvisioningServiceTest {
         var setup = result.getRuntimeSetup();
         assertNotNull(setup);
         assertEquals("v1", setup.getRuntimeProtocolVersion());
-        // The current server Scope constructor permits only tenant 0; this does not claim multi-tenant binding.
-        assertEquals("0", setup.getTenantId());
-        assertEquals("client-local-alt", setup.getClientId());
+        assertEquals("1", setup.getTenantId());
+        assertEquals("cyf-local", setup.getClientId());
         assertEquals(AGENT_ID, setup.getCanonicalAgentId());
         assertEquals("1", setup.getManifestVersion());
         assertEquals("/agent/runtime/v1/installations", setup.getInstallationCreatePath());
@@ -51,8 +50,27 @@ class AgentPersonaProvisioningServiceTest {
                 setup.getGuideUrl());
         assertFalse(result.getCommands().toString().toLowerCase().contains("api key"));
         assertFalse(result.getCommands().toString().contains("codex-ws-agent"));
-        verify(agentService).bindPersona("0", "client-local-alt", "owner-local", "wuyong");
+        verify(agentService).bindPersona("1", "cyf-local", "owner-local", "wuyong");
         verifyNoInteractions(transactions, publisher);
+    }
+
+    @Test
+    void tenantOneCannotEnterServerHostedRepairOrUnbindPaths() {
+        AgentService agentService = mock(AgentService.class);
+        AgentHostedBindingTransaction transactions = mock(AgentHostedBindingTransaction.class);
+        AgentHostedProfilePublisher publisher = mock(AgentHostedProfilePublisher.class);
+        AgentPersonaProvisioningService service =
+                new AgentPersonaProvisioningService(agentService, transactions, publisher);
+        Scope tenantOne = new Scope("1", "cyf-local", "owner-local");
+
+        assertThrows(IllegalArgumentException.class,
+                () -> service.bind(tenantOne, "wuyong", "server"));
+        assertThrows(IllegalArgumentException.class,
+                () -> service.unbind(tenantOne, "wuyong"));
+        assertThrows(IllegalArgumentException.class,
+                () -> service.repair(tenantOne, 19L));
+
+        verifyNoInteractions(agentService, transactions, publisher);
     }
 
     @Test

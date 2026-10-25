@@ -26,6 +26,7 @@ public class AgentHostedRuntimePublicationWorker {
         if (current == null
                 || !Objects.equals(current.getAgentId(), agentId)
                 || !Objects.equals(current.getBindingId(), bindingId)
+                || !Objects.equals(current.getTenantId(), scope.tenantId())
                 || !Objects.equals(current.getClientId(), scope.clientId())
                 || !Objects.equals(current.getOwnerJiacn(), scope.ownerJiacn())) {
             return null;
@@ -44,6 +45,7 @@ public class AgentHostedRuntimePublicationWorker {
         if (current == null
                 || !Objects.equals(current.getId(), runtimeId)
                 || !Objects.equals(current.getAgentId(), agentId)
+                || !Objects.equals(current.getTenantId(), scope.tenantId())
                 || current.getBindingId() != null
                 || current.getClientId() != null
                 || current.getOwnerJiacn() != null

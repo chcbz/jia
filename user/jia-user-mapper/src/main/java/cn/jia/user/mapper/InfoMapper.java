@@ -4,6 +4,7 @@ import cn.jia.user.dao.UserRelationRow;
 import cn.jia.user.entity.UserEntity;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import org.apache.ibatis.annotations.Param;
+import org.apache.ibatis.annotations.Select;
 
 import java.util.Collection;
 import java.util.List;
@@ -30,6 +31,17 @@ public interface InfoMapper extends BaseMapper<UserEntity> {
     UserEntity selectSecurityById(@Param("userId") long userId);
 
     List<UserEntity> selectSecurityByExactJiacn(@Param("jiacn") String jiacn);
+
+    @Select("""
+            SELECT id, username, openid, jiacn, nickname, avatar
+            FROM user_info
+            WHERE jiacn = #{jiacn}
+              AND CAST(jiacn AS BINARY) = CAST(#{jiacn} AS BINARY)
+              AND OCTET_LENGTH(jiacn) = OCTET_LENGTH(#{jiacn})
+            ORDER BY id
+            LIMIT 2
+            """)
+    List<UserEntity> selectOwnIdentityByExactJiacn(@Param("jiacn") String jiacn);
 
     int incrementAuthEpoch(@Param("userId") long userId, @Param("expectedEpoch") long expectedEpoch);
 

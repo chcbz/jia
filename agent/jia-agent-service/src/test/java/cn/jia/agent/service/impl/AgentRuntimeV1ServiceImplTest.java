@@ -9,6 +9,7 @@ import cn.jia.agent.entity.AgentRuntimeV1InstallationEntity;
 import cn.jia.agent.entity.AgentRuntimeV1InstallationRequest;
 import cn.jia.agent.service.AgentCommandAckService;
 import cn.jia.agent.service.AgentIdentityService;
+import cn.jia.core.security.FixedTenantAdmissionPolicy;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
@@ -37,9 +38,38 @@ class AgentRuntimeV1ServiceImplTest {
         service = new AgentRuntimeV1ServiceImpl(installations, identities, registry, provider, sessions, mock(ObjectProvider.class));
     }
 
+    @Test void fixedTenantOneCreationAdmitsOnlyExactClientAndOwnerScopeBeforeMutation() {
+        @SuppressWarnings("unchecked") ObjectProvider<AgentCommandAckService> provider = mock(ObjectProvider.class);
+        AgentRuntimeV1ServiceImpl fixed = new AgentRuntimeV1ServiceImpl(
+                installations, identities, registry, provider, sessions, mock(ObjectProvider.class),
+                new FixedTenantAdmissionPolicy("0", true, "1", "cyf-local"));
+        when(identities.requireRegistrationIdentityInScope("1", "cyf-local", "owner-a", AGENT))
+                .thenReturn(registrationIdentity("1", "cyf-local", "owner-a", AGENT));
+        when(installations.insert(any())).thenAnswer(invocation -> {
+            ((AgentRuntimeV1InstallationEntity) invocation.getArgument(0)).setId(9L);
+            return 1;
+        });
+        String digest = "a".repeat(64);
+        AgentRuntimeV1InstallationRequest request = new AgentRuntimeV1InstallationRequest(
+                "rti_0123456789abcdef0123456789abcdef", AGENT, "1", digest, digest, NOW + 1);
+
+        assertEquals("PENDING", fixed.create(
+                "1", "cyf-local", "owner-a", request, NOW).status());
+        assertThrows(AgentServiceImpl.AgentBizException.class,
+                () -> fixed.create("0", "cyf-local", "owner-a", request, NOW));
+        assertThrows(AgentServiceImpl.AgentBizException.class,
+                () -> fixed.create("1", "foreign-client", "owner-a", request, NOW));
+
+        when(identities.requireRegistrationIdentityInScope("1", "cyf-local", "foreign-owner", AGENT))
+                .thenThrow(new AgentServiceImpl.AgentBizException("AGENT_FORBIDDEN", "foreign owner"));
+        assertThrows(AgentServiceImpl.AgentBizException.class,
+                () -> fixed.create("1", "cyf-local", "foreign-owner", request, NOW));
+        verify(installations, times(1)).insert(any());
+    }
+
     @Test void webCreationStoresOnlyProvidedDigestAndReturnsRedactedView() {
-        when(identities.requireCanonicalAgentIdInScope("tenant-a", "client-a", "owner-a", AGENT))
-                .thenReturn(AGENT);
+        when(identities.requireRegistrationIdentityInScope("tenant-a", "client-a", "owner-a", AGENT))
+                .thenReturn(registrationIdentity("tenant-a", "client-a", "owner-a", AGENT));
         when(installations.insert(any())).thenAnswer(invocation -> {
             AgentRuntimeV1InstallationEntity entity = invocation.getArgument(0);
             entity.setId(4L);
@@ -231,8 +261,8 @@ class AgentRuntimeV1ServiceImplTest {
 
     @Test void existingDirectLegacyCanonicalIdentityCanUseOnlyTheV1Protocol() {
         String legacyCanonical = "jyt-client-a-linchong";
-        when(identities.requireCanonicalAgentIdInScope("tenant-a", "client-a", "owner-a", legacyCanonical))
-                .thenReturn(legacyCanonical);
+        when(identities.requireRegistrationIdentityInScope("tenant-a", "client-a", "owner-a", legacyCanonical))
+                .thenReturn(registrationIdentity("tenant-a", "client-a", "owner-a", legacyCanonical));
         when(installations.insert(any())).thenAnswer(invocation -> {
             ((AgentRuntimeV1InstallationEntity) invocation.getArgument(0)).setId(5L);
             return 1;
@@ -243,7 +273,7 @@ class AgentRuntimeV1ServiceImplTest {
                         "b".repeat(64), NOW + 1), NOW);
 
         assertEquals(legacyCanonical, view.canonicalAgentId());
-        verify(identities).requireCanonicalAgentIdInScope(
+        verify(identities).requireRegistrationIdentityInScope(
                 "tenant-a", "client-a", "owner-a", legacyCanonical);
     }
 
@@ -413,6 +443,16 @@ class AgentRuntimeV1ServiceImplTest {
         ObjectProvider<AgentCommandAckService> result = mock(ObjectProvider.class);
         when(result.getIfAvailable()).thenReturn(service);
         return result;
+    }
+
+    private static cn.jia.agent.entity.AgentIdentityRegistryEntity registrationIdentity(
+            String tenantId, String clientId, String ownerJiacn, String canonicalAgentId) {
+        var identity = new cn.jia.agent.entity.AgentIdentityRegistryEntity();
+        identity.setTenantId(tenantId);
+        identity.setClientId(clientId);
+        identity.setOwnerJiacn(ownerJiacn);
+        identity.setCanonicalAgentId(canonicalAgentId);
+        return identity;
     }
 
     private static final String AGENT = "agt_0123456789abcdef0123456789abcdef";

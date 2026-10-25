@@ -99,8 +99,8 @@ public class AgentRuntimeV1ServiceImpl implements AgentRuntimeV1Service {
                 || !sha256Text(request.enrollmentSecretSha256()) || request.enrollmentExpiresAt() <= now) {
             throw forbidden("Runtime v1 installation request is invalid");
         }
-        String canonicalAgentId = identityService.requireCanonicalAgentIdInScope(
-                tenantId, clientId, ownerJiacn, request.canonicalAgentId());
+        String canonicalAgentId = identityService.requireRegistrationIdentityInScope(
+                tenantId, clientId, ownerJiacn, request.canonicalAgentId()).getCanonicalAgentId();
         AgentRuntimeV1InstallationEntity installation = new AgentRuntimeV1InstallationEntity()
                 .setInstallationId(request.installationId())
                 .setCanonicalAgentId(canonicalAgentId).setManifestVersion(request.manifestVersion())
@@ -316,7 +316,7 @@ public class AgentRuntimeV1ServiceImpl implements AgentRuntimeV1Service {
                 && Objects.equals(installation.getClientId(), clientId)
                 && Objects.equals(installation.getCanonicalAgentId(), canonicalAgentId);
     }
-    /** Management remains owner-bound even though every user now shares tenant 0.
+    /** Management remains owner-bound within the admitted tenant/client scope.
      * Lifecycle is deliberately not an execution gate: an owner can inspect/revoke
      * a pending, suspended or retired installation without activating that Agent.
      */

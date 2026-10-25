@@ -102,11 +102,13 @@ class EsSecurityContextFilterTest {
                         assertEquals("1", EsContextHolder.getContext().getTenantId()));
         var fixed = new EsSecurityContextFilter("0", new FixedTenantAdmissionPolicy("0", true, "1", "cyf-local"));
         SecurityContextHolder.getContext().setAuthentication(auth(Map.of(
-                "client_id", "other", "tenant_id", "1", "tenant_claim_version", "1")));
+                "token_kind", "user", "jiacn", "Jia-A", "client_id", "other",
+                "tenant_id", "1", "tenant_claim_version", "1")));
         assertThrows(jakarta.servlet.ServletException.class, () ->
                 fixed.doFilter(request, new MockHttpServletResponse(), mock(jakarta.servlet.FilterChain.class)));
         SecurityContextHolder.getContext().setAuthentication(auth(Map.of(
-                "client_id", "production-client", "tenant_id", "0", "tenant_claim_version", "1")));
+                "token_kind", "user", "jiacn", "Jia-A", "client_id", "production-client",
+                "tenant_id", "0", "tenant_claim_version", "1")));
         assertThrows(jakarta.servlet.ServletException.class, () ->
                 fixed.doFilter(request, new MockHttpServletResponse(), mock(jakarta.servlet.FilterChain.class)));
     }
