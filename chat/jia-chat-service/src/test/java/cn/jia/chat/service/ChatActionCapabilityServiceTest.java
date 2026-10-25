@@ -32,7 +32,7 @@ class ChatActionCapabilityServiceTest {
         var old=new InstalledSkillDescriptorLookup.Descriptor("image-edit","0.9.0","old-install",
                 "d".repeat(64),"e".repeat(64),"{}","installation","host",null);
         when(installed.read(key)).thenReturn(new InstalledSkillDescriptorLookup.Snapshot(List.of(old,descriptor(null))));
-        when(installed.readCurrent(key)).thenReturn(new InstalledSkillDescriptorLookup.Snapshot(List.of(descriptor(null))));
+        doReturn(new InstalledSkillDescriptorLookup.Snapshot(List.of(descriptor(null)))).when(installed).readCurrent(key);
         assertEquals(1,service.inspectInstalledSkills(scope,fence).items().size());
         assertEquals("RUNTIME_READY",service.inspectInstalledSkills(scope,fence).items().getFirst().state());
         assertEquals(1,service.inspectInstalledSkillsWithoutRuntime(scope).items().size());
