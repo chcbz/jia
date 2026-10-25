@@ -47,7 +47,7 @@ public final class ChatActionCapabilityService {
             throw new cn.jia.agent.service.InstalledSkillDescriptorLookup.SourceUnavailable();
         var key=new cn.jia.agent.service.SkillCapabilityLookup.Scope(scope.tenantId(),scope.clientId(),
                 scope.ownerJiacn(),scope.targetAgentId());
-        var descriptors=installedSkills.read(key);
+        var descriptors=installedSkills.readCurrent(key);
         var runtime=expectedFence==null?null:Objects.requireNonNull(skillRuntimes.lookup(key,expectedFence));
         var results=new ArrayList<SkillCandidate>();
         var counts=new java.util.HashMap<List<String>,Integer>();

@@ -262,6 +262,11 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
     @Test void coveredUpgradePreservesExactOldTaskReferenceAndClosesAdmissionOnlyAtActivation() throws Exception {
         publishExecutable("1.0.0",1);var first=packageChange("INSTALL",null,"0","spv_pdf_1");finishInstall(first);first=current(first);
         String old=text(object(first.get("target")),"skillInstallationId");
+        var identities=mock(AgentIdentityService.class);
+        when(identities.requireCanonicalAgentIdInScope("0",ACTOR.clientId(),ACTOR.ownerJiacn(),AGENT)).thenReturn(AGENT);
+        var descriptors=new InstalledSkillDescriptorService(identities,market,app,provider(packages));
+        descriptors.setManagement(service,db);
+        assertEquals(List.of(old),descriptors.readCurrent(scope()).skills().stream().map(InstalledSkillDescriptorLookup.Descriptor::installationId).toList());
         var frozen=service.admit(scope(),"pdf-export",old,()->service.taskBinding("0",ACTOR.clientId(),"exec-old","grant-old",1,AGENT,old));
         publishExecutable("2.0.0",2);
         var base=first;
@@ -271,6 +276,7 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         assertEquals("old-active",service.admit(scope(),"pdf-export",old,()->"old-active"));
         report(upgrade,"FAILED","DEPENDENCY_MISSING");upgrade=current(upgrade);
         assertEquals("still-old",service.admit(scope(),"pdf-export",old,()->"still-old"));
+        assertEquals(List.of(old),descriptors.readCurrent(scope()).skills().stream().map(InstalledSkillDescriptorLookup.Descriptor::installationId).toList());
         upgrade=service.retry(ACTOR,AGENT,text(upgrade,"skillChangeId"),"upgrade-retry","retry-request",map("expectedChangeRevision",upgrade.get("changeRevision")));
         report(upgrade,"PREPARED",null);upgrade=current(upgrade);
         assertThrows(SkillMarketplaceException.class,()->service.admit(scope(),"pdf-export",old,()->"never"));
@@ -278,6 +284,8 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         String newest=text(object(upgrade.get("target")),"skillInstallationId");assertNotEquals(old,newest);
         assertEquals(old,frozen.get("skillInstallationId"));assertEquals("spv_pdf_1",frozen.get("productVersionId"));
         assertEquals(2,service.descriptors(scope()).size()); // old exact executable remains recoverable
+        assertEquals(2,descriptors.read(scope()).skills().size());
+        assertEquals(List.of(newest),descriptors.readCurrent(scope()).skills().stream().map(InstalledSkillDescriptorLookup.Descriptor::installationId).toList());
         assertEquals("new",service.admit(scope(),"pdf-export",newest,()->"new"));assertEquals(1,count("economy_skill_order"));assertEquals(95_000_000L,wallet());
     }
     /** Convert a private successful fixture into an exact historical installation plus adoption

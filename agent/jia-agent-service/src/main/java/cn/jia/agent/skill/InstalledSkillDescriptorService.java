@@ -86,6 +86,22 @@ public final class InstalledSkillDescriptorService implements InstalledSkillDesc
         }
         catch(RuntimeException failure) { throw new SourceUnavailable(failure); }
     }
+    @Override public Snapshot readCurrent(SkillCapabilityLookup.Scope scope) {
+        var history=read(scope); // Preserve the same identity and installation evidence checks.
+        if(managed==null)return history;
+        try {
+            var states=new HashMap<String,Optional<SkillManagedStateEntity>>();
+            var current=history.skills().stream().filter(d->{
+                var state=states.computeIfAbsent(d.skillKey(),key->Optional.ofNullable(
+                        managed.findState(scope.tenantId(),scope.clientId(),scope.agentId(),key)));
+                // Legacy installations without a managed pointer keep their existing semantics.
+                // Pending/failed upgrades never override the active pointer; version ordering is irrelevant.
+                return state.isEmpty() || Objects.equals(d.installationId(),state.get().getActiveInstallationId());
+            }).toList();
+            return new Snapshot(current);
+        } catch(SourceUnavailable failure) { throw failure; }
+        catch(RuntimeException failure) { throw new SourceUnavailable(failure); }
+    }
     private Descriptor descriptor(SkillCapabilityLookup.Scope s,SkillEntitlementEntity e) {
         if(!"ACTIVE".equals(e.getStatus())) return unavailable(e,"SKILL_NOT_INSTALLED");
         var i=app.installation(s.tenantId(),s.clientId(),e.getInstallationId());

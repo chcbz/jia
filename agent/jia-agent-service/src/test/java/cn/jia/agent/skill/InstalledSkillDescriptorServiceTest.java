@@ -46,6 +46,27 @@ class InstalledSkillDescriptorServiceTest {
         binding.setRuntimeInstallationId("runtime-install");binding.setRuntimeHostId("host");
         when(app.deliveryBinding("0","client","ins")).thenReturn(binding);
     }
+    @Test void currentPointerSelectsOneVersionWithoutDiscardingHistory() {
+        var management=mock(SkillManagementService.class);
+        var managed=mock(EconomySkillManagementMapper.class);
+        service.setManagement(management,managed);
+        when(market.selectEntitlementsByAgent("0","client","agent")).thenReturn(List.of());
+        var old=new InstalledSkillDescriptorLookup.Descriptor("image-edit","1.0.0","old","a","b","{}","runtime","host",null);
+        var newer=new InstalledSkillDescriptorLookup.Descriptor("image-edit","1.2.0","new","c","d","{}","runtime","host",null);
+        when(management.descriptors(scope)).thenReturn(List.of(old,newer));
+        var state=new SkillManagedStateEntity();state.setActiveInstallationId("old");
+        when(managed.findState("0","client","agent","image-edit")).thenReturn(state);
+        assertEquals(List.of(old),service.readCurrent(scope).skills());
+        state.setActiveInstallationId("new");
+        assertEquals(List.of(newer),service.readCurrent(scope).skills());
+        assertEquals(List.of(old,newer),service.read(scope).skills());
+        state.setActiveInstallationId(null);
+        assertTrue(service.readCurrent(scope).skills().isEmpty());
+        when(managed.findState("0","client","agent","image-edit")).thenReturn(null);
+        assertEquals(List.of(old,newer),service.readCurrent(scope).skills()); // No invented legacy pointer.
+        when(managed.findState("0","client","agent","image-edit")).thenThrow(new IllegalStateException("db unavailable"));
+        assertThrows(InstalledSkillDescriptorLookup.SourceUnavailable.class,()->service.readCurrent(scope));
+    }
     private InstalledSkillDescriptorLookup.Descriptor read() { return service.read(scope).skills().getFirst(); }
     @Test void pendingIsUnavailableAndDoesNotReadPackagesOrFinancialServices() {
         e.setStatus("PENDING_INSTALLATION");assertEquals("SKILL_NOT_INSTALLED",read().reasonCode());

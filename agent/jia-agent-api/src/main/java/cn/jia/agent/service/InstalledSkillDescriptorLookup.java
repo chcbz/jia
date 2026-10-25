@@ -14,7 +14,11 @@ public interface InstalledSkillDescriptorLookup {
     record Snapshot(List<Descriptor> skills) {
         public Snapshot { skills = List.copyOf(Objects.requireNonNull(skills)); }
     }
+    /** Includes historical installations needed for exact task bindings and recovery. */
     Snapshot read(SkillCapabilityLookup.Scope scope);
+
+    /** Current installations for profile display and new task selection, not task authorization. */
+    default Snapshot readCurrent(SkillCapabilityLookup.Scope scope) { return read(scope); }
 
     final class SourceUnavailable extends RuntimeException {
         public enum Reason { UNAVAILABLE, FORBIDDEN }

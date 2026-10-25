@@ -24,8 +24,21 @@ class ChatActionCapabilityServiceTest {
                 List.of(new SkillCapabilityLookup.RuntimeSkill("image-edit", "1.0.0", digest, "b".repeat(64), "provider-operation", readiness, reason, "c".repeat(64), "binding-1"))));
     }
     @BeforeEach void setup() {
+        when(installed.readCurrent(key)).thenAnswer(invocation -> installed.read(key));
         when(installed.read(key)).thenReturn(new InstalledSkillDescriptorLookup.Snapshot(List.of(descriptor(null))));
         when(runtime.lookup(key, fence)).thenReturn(ready("1", "a".repeat(64), SkillCapabilityLookup.Readiness.READY, null));
+    }
+    @Test void profileAndNewTaskCatalogExcludeHistoricalVersions() {
+        var old=new InstalledSkillDescriptorLookup.Descriptor("image-edit","0.9.0","old-install",
+                "d".repeat(64),"e".repeat(64),"{}","installation","host",null);
+        when(installed.read(key)).thenReturn(new InstalledSkillDescriptorLookup.Snapshot(List.of(old,descriptor(null))));
+        when(installed.readCurrent(key)).thenReturn(new InstalledSkillDescriptorLookup.Snapshot(List.of(descriptor(null))));
+        assertEquals(1,service.inspectInstalledSkills(scope,fence).items().size());
+        assertEquals("RUNTIME_READY",service.inspectInstalledSkills(scope,fence).items().getFirst().state());
+        assertEquals(1,service.inspectInstalledSkillsWithoutRuntime(scope).items().size());
+        when(policies.read(key,"task")).thenReturn(new TaskSkillPolicyService.Snapshot(true,null,1,fence,key));
+        assertEquals(1,service.taskCatalog(scope,"task").items().size());
+        assertEquals(2,installed.read(key).skills().size());
     }
     @Test void verifiedInstallationAndRuntimeAreIndependentWithoutTaskPolicy() {
         var item = service.inspectInstalledSkills(scope, fence).items().getFirst(); assertTrue(item.installationVerified()); assertEquals("RUNTIME_READY", item.state());
