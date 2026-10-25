@@ -52,7 +52,7 @@ public class ChatActionExecutionService implements ChatActionDispatchService.Exe
         var taskScope=new SkillCapabilityLookup.Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),
                 (String)action.validated().binding().get("targetAgentId"));
         var policy=policies.read(taskScope,action.outcome().taskId());
-        if(!policy.allowed()||policy.runtimeScope()==null)throw new ChatActionDispatchService.Rejected();
+        requireAvailablePolicy(policy);
         requireRuntimeTarget(taskScope,policy.runtimeScope());
         installed.read(policy.runtimeScope());
     }
@@ -123,7 +123,8 @@ public class ChatActionExecutionService implements ChatActionDispatchService.Exe
         var parent=action.outcome();var scope=parent.scope();String target=(String)action.validated().binding().get("targetAgentId");
         var key=new SkillCapabilityLookup.Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),target);
         var policy=policies.read(key,parent.taskId());
-        if(!policy.allowed()||policy.fence()==null||policy.runtimeScope()==null||policy.assignmentRevision()!=parent.assignmentRevision())throw new ChatActionDispatchService.Rejected();
+        requireAvailablePolicy(policy);
+        if(policy.fence()==null||policy.assignmentRevision()!=parent.assignmentRevision())throw new ChatActionDispatchService.Rejected();
         requireRuntimeTarget(key,policy.runtimeScope());
         var runtimeKey=policy.runtimeScope();
         var selected=capability.skill();
@@ -134,13 +135,20 @@ public class ChatActionExecutionService implements ChatActionDispatchService.Exe
                 ||!selected.manifestSha256().equals(descriptor.manifestSha256()))throw new ChatActionDispatchService.Rejected();
         var manifest=ChatSkillSnapshotJson.object(descriptor.manifestJson());
         var runtime=runtimes.lookup(runtimeKey,policy.fence());
-        if(runtime==null||runtime.state()!=SkillCapabilityLookup.State.AVAILABLE)throw new ChatActionDispatchService.Rejected();
+        if(runtime==null||runtime.state()==SkillCapabilityLookup.State.DISCONNECTED||runtime.state()==SkillCapabilityLookup.State.FENCED)
+            throw new IllegalStateException("SKILL_RUNTIME_UNAVAILABLE");
+        if(runtime.state()!=SkillCapabilityLookup.State.AVAILABLE)throw new ChatActionDispatchService.Rejected();
         var reports=runtime.catalog().skills().stream().filter(d->selected.skillKey().equals(d.skillKey())&&selected.skillVersion().equals(d.skillVersion())).toList();
         if(reports.size()!=1)throw new ChatActionDispatchService.Rejected();var report=reports.getFirst();
         if(report.readiness()!=SkillCapabilityLookup.Readiness.READY||!selected.packageSha256().equals(report.packageSha256())
                 ||!selected.manifestSha256().equals(report.manifestSha256()))throw new ChatActionDispatchService.Rejected();
-        if(!policy.equals(policies.read(key,parent.taskId()))||!runtime.equals(runtimes.lookup(runtimeKey,policy.fence())))
-            throw new ChatActionDispatchService.Rejected();
+        var currentPolicy=policies.read(key,parent.taskId());
+        requireAvailablePolicy(currentPolicy);
+        if(currentPolicy.assignmentRevision()!=parent.assignmentRevision())throw new ChatActionDispatchService.Rejected();
+        // A connection may rotate while preparing. Roll back and re-read trusted facts on retry;
+        // never admit using the old fence or reinterpret a transport race as revoked authority.
+        if(!policy.equals(currentPolicy)||!runtime.equals(runtimes.lookup(runtimeKey,policy.fence())))
+            throw new IllegalStateException("SKILL_RUNTIME_CHANGED");
         var inputs=new ArrayList<Map<String,Object>>();
         for(var source:catalog) {
             var input=new LinkedHashMap<String,Object>();
@@ -165,6 +173,12 @@ public class ChatActionExecutionService implements ChatActionDispatchService.Exe
         snapshot.put("costInfo",manifest.getOrDefault("costInfo",Map.of("mode","UNKNOWN")));
         // No producer/replaces is inferred from an uploaded input. Output lineage comes only from committed results.
         return snapshot;
+    }
+
+    private static void requireAvailablePolicy(TaskSkillPolicyService.Snapshot policy) {
+        if(policy!=null&&!policy.allowed()&&"RUNTIME_UNAVAILABLE".equals(policy.reasonCode()))
+            throw new IllegalStateException("SKILL_RUNTIME_UNAVAILABLE");
+        if(policy==null||!policy.allowed()||policy.runtimeScope()==null)throw new ChatActionDispatchService.Rejected();
     }
 
     private static void requireRuntimeTarget(SkillCapabilityLookup.Scope task,SkillCapabilityLookup.Scope runtime) {

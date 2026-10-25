@@ -88,4 +88,24 @@ class ChatActionDispatchReviewGuardTest {
         assertThrows(ChatDeliberationException.class,()->service.consume(claim));verify(executor).admit(action);
         // This unit fixture proves exception propagation; only the real transaction test can prove rollback.
     }
+    @Test void transientRuntimeLossRetriesPreparationButRevokedGrantStillRejects() {
+        var policies=mock(cn.jia.agent.service.TaskSkillPolicyService.class);
+        var installed=mock(cn.jia.agent.service.InstalledSkillDescriptorLookup.class);
+        var actual=new ChatActionExecutionService(mock(ChatDeliberationService.class),mock(ChatDeliberationDao.class),
+                typed,mock(ChatInteractionStepStore.class),mock(cn.jia.agent.service.AgentTaskExecutionGrantService.class),
+                mock(cn.jia.agent.service.SkillExecutionService.class),installed,
+                mock(cn.jia.agent.service.SkillCapabilityLookup.class),policies);
+        var key=new cn.jia.agent.service.SkillCapabilityLookup.Scope("0","client","owner","agent");
+        var fence=new cn.jia.agent.service.AgentManagedSessionLookup.SessionFence("installation","host","runtime",2);
+        when(policies.read(key,"task")).thenReturn(
+                new cn.jia.agent.service.TaskSkillPolicyService.Snapshot(false,"RUNTIME_UNAVAILABLE",1,null,null),
+                new cn.jia.agent.service.TaskSkillPolicyService.Snapshot(true,null,1,fence,key),
+                new cn.jia.agent.service.TaskSkillPolicyService.Snapshot(false,"TASK_GRANT_MISSING",1,null,null));
+        var unavailable=assertThrows(IllegalStateException.class,()->actual.prepare(action));
+        assertEquals("SKILL_RUNTIME_UNAVAILABLE",unavailable.getMessage());verifyNoInteractions(installed);
+        assertDoesNotThrow(()->actual.prepare(action));verify(installed).read(key);
+        assertThrows(ChatActionDispatchService.Rejected.class,()->actual.prepare(action));
+        verifyNoMoreInteractions(installed);
+    }
+
 }
