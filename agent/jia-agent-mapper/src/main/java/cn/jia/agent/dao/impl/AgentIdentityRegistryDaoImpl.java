@@ -1,5 +1,6 @@
 package cn.jia.agent.dao.impl;
 
+import cn.jia.agent.common.AgentConstants;
 import cn.jia.agent.dao.AgentIdentityRegistryDao;
 import cn.jia.agent.entity.AgentIdentityRegistryEntity;
 import cn.jia.agent.mapper.AgentIdentityRegistryMapper;
@@ -16,6 +17,7 @@ public class AgentIdentityRegistryDaoImpl
             String ownerJiacn, String canonicalAgentId) {
         requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
         requireExact(canonicalAgentId, "canonicalAgentId", 400);
+        requireSystemTenantScope(tenantId, canonicalAgentId);
         QueryWrapper<AgentIdentityRegistryEntity> query = new QueryWrapper<>();
         IdentityExactQuerySupport.exact(query, "tenant_id", tenantId, 200);
         IdentityExactQuerySupport.exact(query, "client_id", clientId, 200);
@@ -29,6 +31,7 @@ public class AgentIdentityRegistryDaoImpl
             String tenantId, String clientId, String ownerJiacn, String canonicalAgentId) {
         requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
         requireExact(canonicalAgentId, "canonicalAgentId", 400);
+        requireSystemTenantScope(tenantId, canonicalAgentId);
         QueryWrapper<AgentIdentityRegistryEntity> query = new QueryWrapper<>();
         IdentityExactQuerySupport.exact(query, "tenant_id", tenantId, 200);
         IdentityExactQuerySupport.exact(query, "client_id", clientId, 200);
@@ -68,8 +71,15 @@ public class AgentIdentityRegistryDaoImpl
         requireExact(tenantId, "tenantId", 200);
         requireExact(clientId, "clientId", 200);
         requireExact(ownerJiacn, "ownerJiacn", 200);
-        if (!"0".equals(tenantId) || "0".equals(ownerJiacn)) {
-            throw new IllegalArgumentException("identity scope requires tenant 0 and a real owner");
+        if ("0".equals(ownerJiacn)) {
+            throw new IllegalArgumentException("identity scope requires a real owner");
+        }
+    }
+
+    private static void requireSystemTenantScope(String tenantId, String canonicalAgentId) {
+        if (AgentConstants.BUILTIN_SONGJIANG_AGENT_ID.equals(canonicalAgentId)
+                && !"0".equals(tenantId)) {
+            throw new IllegalArgumentException("system identity requires tenant 0");
         }
     }
 

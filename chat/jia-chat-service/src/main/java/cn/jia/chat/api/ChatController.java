@@ -196,7 +196,7 @@ public class ChatController {
         boolean skipAdvisorUserPersistence = agentDelivery.attempted();
         Flux<String> aiStream = agentDelivery.delivered().flatMapMany(delivered -> delivered
                 ? Flux.empty()
-                : createAIStream(chatMessage, conversationId, sender,
+                : createAIStream(chatMessage, conversationId, ownerTenantId, sender,
                         resolveConversationType(conversation), needSummary, summary,
                         skipAdvisorUserPersistence));
 
@@ -403,7 +403,7 @@ public class ChatController {
     }
 
     private Flux<String> createAIStream(
-            ChatMessageDTO chatMessage, String conversationId,
+            ChatMessageDTO chatMessage, String conversationId, String ownerTenantId,
             ServerResolvedSender sender, String conversationType,
             boolean needSummary, StringBuilder summary,
             boolean skipAdvisorUserPersistence) {
@@ -415,7 +415,7 @@ public class ChatController {
                         Prompt.builder().messages(UserMessage.builder().text(chatMessage.getContent()).build()).build())
                 .advisors(advisor -> advisor
                         .param(ChatMemory.CONVERSATION_ID, conversationId)
-                        .param("tenantId", requireIdentityPart(EsContextHolder.getContext().getTenantId()))
+                        .param("tenantId", ownerTenantId)
                         .param("jiacn", ownerJiacn)
                         .param("clientId", ownerClientId)
                         .param("conversationType", conversationType)
