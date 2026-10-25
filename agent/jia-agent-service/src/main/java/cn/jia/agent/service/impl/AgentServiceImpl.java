@@ -446,9 +446,9 @@ public class AgentServiceImpl implements AgentService {
                 .orElseGet(Collections::emptyList);
         List<AgentCapabilityDTO> capabilities = new ArrayList<>(roster
                 .stream()
-                .map(agent -> toCapabilityDTO(toRuntimeDTO(agent)))
+                .map(agent -> toCapabilityDTO(toRuntimeDTO(agent, clientId, ownerJiacn)))
                 .toList());
-        capabilities.add(toCapabilityDTO(buildSongjiangDTO()));
+        capabilities.add(toCapabilityDTO(buildSongjiangDTO(tenantId)));
         return capabilities;
     }
 
@@ -644,7 +644,7 @@ public class AgentServiceImpl implements AgentService {
     @Override
     public AgentRuntimeDTO requireApiKeyOwnedAgent(String clientId, String jiacn, String agentId) {
         return toRuntimeDTO(requireScopedOwnedRuntime(
-                SINGLE_TENANT_ID, clientId, jiacn, agentId));
+                SINGLE_TENANT_ID, clientId, jiacn, agentId), clientId, jiacn);
     }
 
     @Override
@@ -659,7 +659,7 @@ public class AgentServiceImpl implements AgentService {
     public AgentRuntimeDTO requireApiKeyOwnedAgentForUpdate(
             String clientId, String jiacn, String agentId) {
         return toRuntimeDTO(requireOwnedAgentForUpdate(
-                SINGLE_TENANT_ID, clientId, jiacn, agentId));
+                SINGLE_TENANT_ID, clientId, jiacn, agentId), clientId, jiacn);
     }
 
     private AgentRuntimeEntity requireScopedOwnedRuntime(
@@ -2321,9 +2321,12 @@ public class AgentServiceImpl implements AgentService {
         return dto;
     }
 
-    private AgentRuntimeDTO buildSongjiangDTO() {
-        return buildSongjiangDTO(agentPersonaDao.findByCode(
-                AgentConstants.BUILTIN_SONGJIANG_PERSONA_CODE));
+    private AgentRuntimeDTO buildSongjiangDTO(String tenantId) {
+        AgentPersonaEntity persona = SINGLE_TENANT_ID.equals(tenantId)
+                ? agentPersonaDao.findByCode(AgentConstants.BUILTIN_SONGJIANG_PERSONA_CODE)
+                : WaterMarginPersonaCatalog.publicPersona(
+                        AgentConstants.BUILTIN_SONGJIANG_PERSONA_CODE);
+        return buildSongjiangDTO(persona);
     }
 
     private AgentRuntimeDTO buildSongjiangDTO(AgentPersonaEntity persona) {
@@ -2361,7 +2364,10 @@ public class AgentServiceImpl implements AgentService {
     }
 
     private AgentPersonaEntity resolveRuntimePersona(AgentRuntimeEntity entity) {
-        if (!usesLegacyTaskStats(entity)) {
+        boolean nonlegacySystemProjection = entity != null
+                && AgentConstants.BUILTIN_SONGJIANG_AGENT_ID.equals(entity.getAgentId())
+                && !SINGLE_TENANT_ID.equals(resolveCurrentTenantId());
+        if (nonlegacySystemProjection || !usesLegacyTaskStats(entity)) {
             return WaterMarginPersonaCatalog.publicPersona(entity.getPersonaCode());
         }
         return resolvePersona(entity);
@@ -3353,7 +3359,7 @@ public class AgentServiceImpl implements AgentService {
                     }
                     publishAgentSnapshots(clientId, ownerJiacn,
                             List.of(toRuntimeDTO(current, clientId, ownerJiacn)),
-                            listCapabilities(resolveCurrentTenantId(), clientId, ownerJiacn));
+                            listCapabilities(tenantId, clientId, ownerJiacn));
                 }));
     }
 
