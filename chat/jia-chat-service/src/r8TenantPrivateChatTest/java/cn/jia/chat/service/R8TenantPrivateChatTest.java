@@ -2,10 +2,12 @@ package cn.jia.chat.service;
 
 import cn.jia.agent.service.AgentService;
 import cn.jia.agent.service.PersonalWorkspaceTaskLinkService;
+import cn.jia.chat.dao.AgentTaskThreadDao;
 import cn.jia.chat.dao.ChatConversationDao;
 import cn.jia.chat.dao.ChatMessageDao;
 import cn.jia.chat.dao.impl.ChatConversationDaoImpl;
 import cn.jia.chat.dao.impl.ChatMessageDaoImpl;
+import cn.jia.chat.deliberation.ChatBountyBindingStore;
 import cn.jia.chat.deliberation.ChatDeliberationDao;
 import cn.jia.chat.deliberation.ChatDeliberationDaoImpl;
 import cn.jia.chat.deliberation.ChatDeliberationMapper;
@@ -18,6 +20,7 @@ import cn.jia.chat.handler.AgentWebSocketHandler;
 import cn.jia.chat.handler.dto.ChatMessageDTO;
 import cn.jia.chat.mapper.ChatConversationMapper;
 import cn.jia.chat.mapper.ChatMessageMapper;
+import cn.jia.chat.service.impl.ChatConversationServiceImpl;
 import cn.jia.core.context.EsContext;
 import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.util.JsonUtil;
@@ -37,11 +40,16 @@ import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.annotation.AnnotationTransactionAttributeSource;
 import org.springframework.transaction.interceptor.TransactionInterceptor;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -51,6 +59,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doCallRealMethod;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
@@ -60,7 +69,7 @@ import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-/** R8 ordinary private CHAT path with real production DAOs and real Spring JDBC transactions. */
+/** R8/R9 ordinary private CHAT path with real production DAOs and real Spring JDBC transactions. */
 class R8TenantPrivateChatTest {
     private static final String TENANT = "tenant-1";
     private static final String OWNER = "owner-1";
@@ -77,6 +86,7 @@ class R8TenantPrivateChatTest {
     private ChatDispatchAuthorityService dispatchAuthority;
     private ChatDeliberationService deliberation;
     private ChatDeliberationOutboxService outbox;
+    private DataSourceTransactionManager transactionManager;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -117,13 +127,17 @@ class R8TenantPrivateChatTest {
                 .when(messages).findOwnedByConversationIdWithLimit(
                         anyString(), anyString(), anyString(), org.mockito.ArgumentMatchers.anyInt());
 
+        doThrow(new AssertionError("divergent live-generation count probe used"))
+                .when(conversations).isLiveGeneration(
+                        anyString(), anyString(), anyString(), anyString(), anyLong());
+
         dispatchAuthority = mock(ChatDispatchAuthorityService.class);
         ChatDeliberationService rawDeliberation = new ChatDeliberationService(
                 deliberationDao, conversations, messages, mock(AgentService.class));
         rawDeliberation.setDispatchAuthority(dispatchAuthority);
         ChatDeliberationOutboxService rawOutbox = new ChatDeliberationOutboxService(deliberationDao);
         rawOutbox.setDispatchAuthority(dispatchAuthority);
-        DataSourceTransactionManager transactionManager = new DataSourceTransactionManager(dataSource);
+        transactionManager = new DataSourceTransactionManager(dataSource);
         deliberation = transactional(rawDeliberation, transactionManager);
         outbox = transactional(rawOutbox, transactionManager);
         assertTrue(AopUtils.isAopProxy(deliberation));
@@ -260,6 +274,212 @@ class R8TenantPrivateChatTest {
     }
 
     @Test
+    void liveGenerationUsesExactEntityReadWithoutAmbientContextAndKeepsTenant0Compatibility() throws Exception {
+        seedConversation(TENANT, OWNER, CLIENT, CONVERSATION, AGENT);
+        seedConversation("0", "legacy-owner", "legacy-client", "77", AGENT);
+        ChatConversationService service = realConversationService(new ChatConversationEventBroker());
+
+        EsContext spoof = new EsContext();
+        spoof.setTenantId("spoof-tenant");
+        spoof.setJiacn("spoof-owner");
+        spoof.setClientId("spoof-client");
+        EsContextHolder.setContext(spoof);
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            List<Boolean> observed = executor.submit(() -> {
+                EsContext workerBefore = EsContextHolder.getContext();
+                assertEquals(null, workerBefore.getTenantId());
+                List<Boolean> result = List.of(
+                        service.isLiveGeneration(TENANT, OWNER, CLIENT, CONVERSATION, 1L),
+                        service.isLiveGeneration("tenant-foreign", OWNER, CLIENT, CONVERSATION, 1L),
+                        service.isLiveGeneration(TENANT, "owner-foreign", CLIENT, CONVERSATION, 1L),
+                        service.isLiveGeneration(TENANT, OWNER, "client-foreign", CONVERSATION, 1L),
+                        service.isLiveGeneration(TENANT, OWNER, CLIENT, CONVERSATION, 2L),
+                        service.isLiveGeneration("0", "legacy-owner", "legacy-client", "77", 1L));
+                assertEquals(null, EsContextHolder.getContext().getTenantId());
+                return result;
+            }).get(3, TimeUnit.SECONDS);
+            assertEquals(List.of(true, false, false, false, false, true), observed);
+            assertEquals(null, executor.submit(() -> EsContextHolder.getContext().getTenantId())
+                    .get(3, TimeUnit.SECONDS));
+        } finally {
+            executor.shutdownNow();
+        }
+        assertEquals("spoof-tenant", EsContextHolder.getContext().getTenantId());
+        verify(conversations, never()).isLiveGeneration(
+                anyString(), anyString(), anyString(), anyString(), anyLong());
+
+        ChatConversationEventBroker phaseBroker = new ChatConversationEventBroker();
+        assertThrows(ChatConversationEventBroker.PersistentLiveCheckUnavailable.class,
+                () -> phaseBroker.runIfLiveOrThrow(CONVERSATION, 1L,
+                        () -> { throw new IllegalStateException("live check outage"); }, () -> { }));
+        assertThrows(ChatConversationEventBroker.LivePublicationUnavailable.class,
+                () -> phaseBroker.runIfLiveOrThrow(CONVERSATION, 1L, () -> true,
+                        () -> { throw new IllegalStateException("publication outage"); }));
+
+        doThrow(new IllegalStateException("exact conversation read outage"))
+                .when(conversations).findScopedById(TENANT, OWNER, CLIENT, CONVERSATION);
+        assertThrows(IllegalStateException.class,
+                () -> service.isLiveGeneration(TENANT, OWNER, CLIENT, CONVERSATION, 1L));
+    }
+
+    @Test
+    void asyncPublicationFailureIsRetriedAndNeverMisclassifiedAsStaleDead() throws Exception {
+        seedConversation(TENANT, OWNER, CLIENT, CONVERSATION, AGENT);
+        ChatDeliberationService.Admission admission = admit(
+                TENANT, OWNER, CLIENT, CONVERSATION, REQUEST, AGENT, InteractionRoute.CHAT);
+        ChatDeliberationService.Dispatch dispatch = admission.dispatches().getFirst();
+        ChatTurnEntity turn = deliberationDao.findTurn(TENANT, OWNER, CLIENT, dispatch.turnId());
+        bindOutgoingAuthority(TENANT, OWNER, CLIENT, AGENT, dispatch, turn);
+
+        CountDownLatch attempted = new CountDownLatch(1);
+        AgentWebSocketHandler sockets = mock(AgentWebSocketHandler.class);
+        when(sockets.sendNegotiatedChatMessageToAgent(
+                eq(TENANT), eq(OWNER), eq(CLIENT), eq(AGENT), eq(InteractionRoute.CHAT), any()))
+                .thenAnswer(ignored -> {
+                    attempted.countDown();
+                    throw new IllegalStateException("socket publication outage");
+                });
+        BuiltinHallAgentSupport builtin = mock(BuiltinHallAgentSupport.class);
+        when(builtin.isBuiltinAgent(AGENT)).thenReturn(false);
+        ChatConversationEventBroker broker = new ChatConversationEventBroker();
+        ChatDeliberationOutboxRelay relay = fixedTenantRelay(
+                sockets, builtin, broker, realConversationService(broker));
+        relay.setDispatchAuthority(dispatchAuthority);
+
+        EsContext caller = new EsContext();
+        caller.setTenantId("spoof-tenant");
+        caller.setJiacn("spoof-owner");
+        caller.setClientId("spoof-client");
+        EsContextHolder.setContext(caller);
+        try {
+            relay.start();
+            assertTrue(attempted.await(3, TimeUnit.SECONDS));
+            assertEquals("RETRY", awaitOutboxStatus(dispatch.dispatchEventId(), "RETRY", 3_000));
+        } finally {
+            relay.stop();
+        }
+        assertEquals("LivePublicationUnavailable", jdbc.queryForObject(
+                "SELECT last_error FROM chat_dispatch_outbox WHERE event_id=?", String.class,
+                dispatch.dispatchEventId()));
+        assertEquals(0, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM chat_dispatch_outbox WHERE event_id=? AND status='DEAD'", Integer.class,
+                dispatch.dispatchEventId()));
+        assertEquals("spoof-tenant", EsContextHolder.getContext().getTenantId());
+    }
+
+    @Test
+    void cleanGenerationMismatchStillDeadLettersWithoutAttemptingSocketPublication() {
+        seedConversation(TENANT, OWNER, CLIENT, CONVERSATION, AGENT);
+        ChatDeliberationService.Admission admission = admit(
+                TENANT, OWNER, CLIENT, CONVERSATION, REQUEST, AGENT, InteractionRoute.CHAT);
+        ChatDeliberationService.Dispatch dispatch = admission.dispatches().getFirst();
+        ChatDispatchOutboxEntity candidate = deliberationDao.findOutboxById(
+                TENANT, OWNER, CLIENT, dispatch.dispatchEventId());
+        ChatDeliberationOutboxService.Claim claim = outbox.claim(candidate, "r9-stale-worker",
+                Math.max(System.currentTimeMillis(), candidate.getAvailableAt()) + 1, 120_000);
+        assertNotNull(claim);
+        assertEquals(1, jdbc.update(
+                "UPDATE chat_conversation SET lifecycle_generation=2 WHERE tenant_id=? AND jiacn=? AND client_id=? AND id=?",
+                TENANT, OWNER, CLIENT, Long.parseLong(CONVERSATION)));
+        ChatTurnEntity turn = deliberationDao.findTurn(TENANT, OWNER, CLIENT, dispatch.turnId());
+        bindOutgoingAuthority(TENANT, OWNER, CLIENT, AGENT, dispatch, turn);
+
+        AgentWebSocketHandler sockets = mock(AgentWebSocketHandler.class);
+        BuiltinHallAgentSupport builtin = mock(BuiltinHallAgentSupport.class);
+        when(builtin.isBuiltinAgent(AGENT)).thenReturn(false);
+        ChatConversationEventBroker broker = new ChatConversationEventBroker();
+        try (ChatDeliberationOutboxRelay relay = new ChatDeliberationOutboxRelay(
+                outbox, deliberation, sockets, builtin, broker,
+                realConversationService(broker), mock(ChatClient.class))) {
+            relay.setDispatchAuthority(dispatchAuthority);
+            relay.deliverClaim(claim);
+        }
+        assertEquals("DEAD", jdbc.queryForObject(
+                "SELECT status FROM chat_dispatch_outbox WHERE event_id=?", String.class,
+                dispatch.dispatchEventId()));
+        assertEquals("CONVERSATION_DELETED_OR_GENERATION_STALE", jdbc.queryForObject(
+                "SELECT last_error FROM chat_dispatch_outbox WHERE event_id=?", String.class,
+                dispatch.dispatchEventId()));
+        verify(sockets, never()).sendNegotiatedChatMessageToAgent(
+                anyString(), anyString(), anyString(), anyString(), any(), any());
+    }
+
+    @Test
+    void exactDeadEventRecoveryResumesOriginalAdmissionWithoutAnotherPost() throws Exception {
+        seedConversation(TENANT, OWNER, CLIENT, CONVERSATION, AGENT);
+        ChatDeliberationService.Admission admission = admit(
+                TENANT, OWNER, CLIENT, CONVERSATION, REQUEST, AGENT, InteractionRoute.CHAT);
+        ChatDeliberationService.Dispatch dispatch = admission.dispatches().getFirst();
+        ChatDispatchOutboxEntity candidate = deliberationDao.findOutboxById(
+                TENANT, OWNER, CLIENT, dispatch.dispatchEventId());
+        ChatDeliberationOutboxService.Claim failed = outbox.claim(candidate, "r9-original-worker",
+                Math.max(System.currentTimeMillis(), candidate.getAvailableAt()) + 1, 120_000);
+        assertNotNull(failed);
+        assertTrue(outbox.dead(failed, "CONVERSATION_DELETED_OR_GENERATION_STALE", System.currentTimeMillis()));
+        ChatDispatchOutboxEntity dead = deliberationDao.findOutboxById(
+                TENANT, OWNER, CLIENT, dispatch.dispatchEventId());
+        assertEquals("DEAD", dead.getStatus());
+        assertEquals(2L, dead.getVersion());
+        assertEquals(1, dead.getAttemptCount());
+        assertEquals(1L, dead.getFencingToken());
+
+        assertEquals(0, recoverExactDead("tenant-foreign", OWNER, CLIENT, REQUEST, dispatch, dead));
+        assertEquals(0, recoverExactDead(TENANT, "owner-foreign", CLIENT, REQUEST, dispatch, dead));
+        assertEquals(0, recoverExactDead(TENANT, OWNER, "client-foreign", REQUEST, dispatch, dead));
+        assertEquals(0, recoverExactDead(TENANT, OWNER, CLIENT, "request-foreign", dispatch, dead));
+        ChatDeliberationService.Dispatch foreignTurn = new ChatDeliberationService.Dispatch(
+                REQUEST, "turn-foreign", dispatch.dispatchId(), dispatch.dispatchEventId(), AGENT,
+                dispatch.route(), dispatch.state(), dispatch.contextSnapshotId(), dispatch.contextHash(),
+                dispatch.sourceVector(), dispatch.factsManifest());
+        assertEquals(0, recoverExactDead(TENANT, OWNER, CLIENT, REQUEST, foreignTurn, dead));
+        assertEquals(1, recoverExactDead(TENANT, OWNER, CLIENT, REQUEST, dispatch, dead));
+        assertEquals("RETRY", jdbc.queryForObject(
+                "SELECT status FROM chat_dispatch_outbox WHERE event_id=?", String.class,
+                dispatch.dispatchEventId()));
+        assertEquals(3L, jdbc.queryForObject(
+                "SELECT version FROM chat_dispatch_outbox WHERE event_id=?", Long.class,
+                dispatch.dispatchEventId()));
+
+        ChatTurnEntity turn = deliberationDao.findTurn(TENANT, OWNER, CLIENT, dispatch.turnId());
+        bindOutgoingAuthority(TENANT, OWNER, CLIENT, AGENT, dispatch, turn);
+        AgentWebSocketHandler sockets = mock(AgentWebSocketHandler.class);
+        when(sockets.sendNegotiatedChatMessageToAgent(
+                eq(TENANT), eq(OWNER), eq(CLIENT), eq(AGENT), eq(InteractionRoute.CHAT), any()))
+                .thenReturn(new AgentWebSocketHandler.CapabilityDispatchResult(
+                        AgentWebSocketHandler.CapabilityDispatchStatus.READY, true, Map.of()));
+        BuiltinHallAgentSupport builtin = mock(BuiltinHallAgentSupport.class);
+        when(builtin.isBuiltinAgent(AGENT)).thenReturn(false);
+        ChatConversationEventBroker broker = new ChatConversationEventBroker();
+        ChatDeliberationOutboxRelay relay = fixedTenantRelay(
+                sockets, builtin, broker, realConversationService(broker));
+        relay.setDispatchAuthority(dispatchAuthority);
+        try {
+            relay.start();
+            assertEquals("AWAITING_ACK", awaitOutboxStatus(
+                    dispatch.dispatchEventId(), "AWAITING_ACK", 3_000));
+        } finally {
+            relay.stop();
+        }
+
+        ChatDeliberationService.FinalResult result = deliberation.persistFinal(
+                TENANT, OWNER, CLIENT, CONVERSATION, 1L, AGENT, REQUEST,
+                dispatch.turnId(), dispatch.dispatchId(), dispatch.contextSnapshotId(), dispatch.contextHash(),
+                "recovered original reply", new ServerResolvedAgentSender(
+                        ServerResolvedAgentSender.AGENT_TYPE, "Melon Ready", OWNER, CLIENT, AGENT));
+        assertEquals(ChatDeliberationService.FinalStatus.PERSISTED, result.status());
+        ChatDeliberationService.RequestView request = deliberation.getRequest(TENANT, OWNER, CLIENT, REQUEST);
+        assertEquals("COMPLETED", request.state());
+        assertEquals(admission.userMessageId(), request.userMessageId());
+        assertEquals(1, count("chat_request"));
+        assertEquals(1, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM chat_message WHERE message_type='USER'", Integer.class));
+        assertEquals(1, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM chat_message WHERE message_type='ASSISTANT' AND content='recovered original reply'",
+                Integer.class));
+    }
+
+    @Test
     void tenant0PrivateChatRetainsLegacyApiBehaviorWhileUsingExplicitScope() {
         String tenant = "0";
         String owner = "legacy-owner";
@@ -328,6 +548,94 @@ class R8TenantPrivateChatTest {
         verify(agents, never()).requireHostingNewWork(OWNER, CLIENT, AGENT);
         verify(admissions).admit(eq(TENANT), any(ServerResolvedSender.class), eq(CONVERSATION), eq(1L),
                 any(JuyitingConversationScope.class), eq(InteractionRoute.CHAT), eq(input), any());
+    }
+
+    private ChatConversationService realConversationService(ChatConversationEventBroker broker) {
+        return new ChatConversationServiceImpl(conversations, messages, mock(AgentTaskThreadDao.class), broker,
+                mock(ChatBountyBindingStore.class), mock(AgentService.class));
+    }
+
+    private ChatDeliberationOutboxRelay fixedTenantRelay(AgentWebSocketHandler sockets,
+            BuiltinHallAgentSupport builtin, ChatConversationEventBroker broker,
+            ChatConversationService conversationService) {
+        return new ChatDeliberationOutboxRelay(outbox, deliberation, sockets, builtin, broker,
+                conversationService, mock(ChatClient.class), 120_000, 10_000, 1,
+                true, TENANT, CLIENT);
+    }
+
+    private String awaitOutboxStatus(String eventId, String expected, long timeoutMillis) throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis);
+        String current = null;
+        while (System.nanoTime() < deadline) {
+            current = jdbc.queryForObject(
+                    "SELECT status FROM chat_dispatch_outbox WHERE event_id=?", String.class, eventId);
+            if (expected.equals(current)) return current;
+            Thread.sleep(10);
+        }
+        return current;
+    }
+
+    private void bindOutgoingAuthority(String tenant, String owner, String client, String agent,
+            ChatDeliberationService.Dispatch dispatch, ChatTurnEntity turn) {
+        ChatDeliberationException denied = new ChatDeliberationException(
+                ChatDeliberationException.Reason.NOT_FOUND_OR_FORBIDDEN, "test binding denied");
+        doAnswer(invocation -> {
+            ChatDispatchOutboxEntity row = invocation.getArgument(0);
+            if (row != null && tenant.equals(row.getTenantId()) && owner.equals(row.getOwnerJiacn())
+                    && client.equals(row.getClientId()) && dispatch.turnId().equals(row.getTurnId())
+                    && dispatch.dispatchId().equals(row.getDispatchId())
+                    && dispatch.dispatchEventId().equals(row.getEventId())) {
+                return new ChatDispatchAuthorityService.Binding(row, turn, owner);
+            }
+            throw denied;
+        }).when(dispatchAuthority).outgoing(any(ChatDispatchOutboxEntity.class));
+        doReturn(new ChatDispatchAuthorityService.Binding(
+                deliberationDao.findOutboxById(tenant, owner, client, dispatch.dispatchEventId()), turn, owner))
+                .when(dispatchAuthority).incoming(tenant, client, owner, agent, dispatch.dispatchId());
+    }
+
+    private int recoverExactDead(String tenant, String owner, String client, String requestId,
+            ChatDeliberationService.Dispatch dispatch, ChatDispatchOutboxEntity expectedDead) {
+        Integer updated = new TransactionTemplate(transactionManager).execute(status -> {
+            ChatDispatchOutboxEntity row = deliberationDao.lockOutboxById(
+                    tenant, owner, client, dispatch.dispatchEventId());
+            if (row == null || !"DISPATCH".equals(row.getEventType()) || !"DEAD".equals(row.getStatus())
+                    || !"CONVERSATION_DELETED_OR_GENERATION_STALE".equals(row.getLastError())
+                    || !dispatch.turnId().equals(row.getTurnId())
+                    || !dispatch.dispatchId().equals(row.getDispatchId())
+                    || !expectedDead.getVersion().equals(row.getVersion())
+                    || !expectedDead.getAttemptCount().equals(row.getAttemptCount())
+                    || !expectedDead.getFencingToken().equals(row.getFencingToken())
+                    || row.getAvailableAt() != null || row.getLeaseOwner() != null
+                    || row.getLeaseUntil() != null || row.getSentAt() != null) return 0;
+            ChatTurnEntity turn = deliberationDao.findTurn(tenant, owner, client, dispatch.turnId());
+            var request = deliberationDao.findRequest(tenant, owner, client, requestId);
+            ChatConversationEntity conversation = conversations.findScopedById(
+                    tenant, owner, client, CONVERSATION);
+            if (turn == null || !requestId.equals(turn.getRequestId())
+                    || !"RECEIVED".equals(turn.getState()) || turn.getFinalMessageId() != null
+                    || !"CHAT".equals(turn.getRoute()) || !AGENT.equals(turn.getTargetAgentId())
+                    || request == null || !"RUNNING".equals(request.getAggregateState())
+                    || !CONVERSATION.equals(request.getConversationId())
+                    || !Long.valueOf(1L).equals(request.getConversationGeneration())
+                    || conversation == null || conversation.getDeletedAt() != null
+                    || !Long.valueOf(1L).equals(conversation.getLifecycleGeneration())) return 0;
+            long now = System.currentTimeMillis();
+            return jdbc.update("""
+                    UPDATE chat_dispatch_outbox
+                    SET status='RETRY', available_at=?, lease_owner=NULL, lease_until=NULL,
+                        last_error='R9_EXACT_AUTHORIZED_RECOVERY', sent_at=NULL,
+                        version=version+1, updated_at=?
+                    WHERE tenant_id=? AND owner_jiacn=? AND client_id=? AND event_id=?
+                      AND turn_id=? AND dispatch_id=? AND event_type='DISPATCH'
+                      AND status='DEAD' AND last_error='CONVERSATION_DELETED_OR_GENERATION_STALE'
+                      AND version=? AND attempt_count=? AND fencing_token=?
+                      AND available_at IS NULL AND lease_owner IS NULL AND lease_until IS NULL AND sent_at IS NULL
+                    """, now - 1, now, tenant, owner, client, dispatch.dispatchEventId(),
+                    dispatch.turnId(), dispatch.dispatchId(), expectedDead.getVersion(),
+                    expectedDead.getAttemptCount(), expectedDead.getFencingToken());
+        });
+        return updated == null ? 0 : updated;
     }
 
     private ChatDeliberationService.Admission admit(String tenant, String owner, String client,

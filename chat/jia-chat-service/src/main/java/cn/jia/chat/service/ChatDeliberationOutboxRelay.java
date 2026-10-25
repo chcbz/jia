@@ -284,12 +284,14 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
         var binding = dispatchAuthority.outgoing(row);
         Map<String,Object> wire = hostedWire(row, p);
         AtomicReference<AgentWebSocketHandler.CapabilityDispatchResult> dispatch = new AtomicReference<>();
-        boolean live = broker.runIfLive(conversationId, generation,
+        boolean live = broker.runIfLiveOrThrow(conversationId, generation,
                 () -> conversations.isLiveGeneration(row.getTenantId(), row.getOwnerJiacn(),
                         row.getClientId(), conversationId, generation),
                 () -> dispatch.set(sockets.sendNegotiatedChatMessageToAgent(
                         row.getTenantId(), binding.executorOwner(), row.getClientId(), agentId, route, wire)));
         if (!live) {
+            log.warn("Durable chat dispatch rejected by exact live-generation fence, eventId={}, conversationId={}, generation={}",
+                    row.getEventId(), conversationId, generation);
             outbox.dead(claim, "CONVERSATION_DELETED_OR_GENERATION_STALE", System.currentTimeMillis());
             return;
         }

@@ -267,17 +267,21 @@ public class ChatConversationServiceImpl implements ChatConversationService {
     public boolean isLiveGeneration(
             String tenantId, String ownerJiacn, String clientId,
             String conversationId, long expectedGeneration) {
-        try {
-            requireIdentityParts(tenantId, ownerJiacn, clientId);
-            if (expectedGeneration < 1) {
-                return false;
-            }
-            return chatConversationDao.isLiveGeneration(
-                    tenantId, ownerJiacn, clientId, Long.toString(parseConversationId(conversationId)),
-                    expectedGeneration);
-        } catch (RuntimeException unavailable) {
+        requireIdentityParts(tenantId, ownerJiacn, clientId);
+        if (expectedGeneration < 1) {
             return false;
         }
+        Long requestedId = parseConversationId(conversationId);
+        // Use the same exact-scoped entity read as authenticated GET. A separate count probe had
+        // no diagnostic distinction between a stale generation and a storage/query failure; the
+        // outbox must retry the latter rather than permanently DEAD-lettering an admitted turn.
+        ChatConversationEntity conversation = chatConversationDao.findScopedById(
+                tenantId, ownerJiacn, clientId, Long.toString(requestedId));
+        return conversation != null
+                && conversation.getDeletedAt() == null
+                && belongsToIdentity(conversation, requestedId, tenantId, ownerJiacn, clientId)
+                && conversation.getLifecycleGeneration() != null
+                && conversation.getLifecycleGeneration() == expectedGeneration;
     }
 
     @Override

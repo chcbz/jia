@@ -592,3 +592,17 @@ tasks.register('r8TenantPrivateChat', Test) {
     jvmArgs '-XX:+UseSerialGC', '-XX:ActiveProcessorCount=2', '-XX:MaxMetaspaceSize=192m', '-Xss256k'
     testLogging { events 'passed', 'failed'; exceptionFormat 'full' }
 }
+
+// R9 durable live-generation/publication classification and exact original-event recovery regressions.
+tasks.register('r9TenantPrivateChat', Test) {
+    group = 'verification'
+    description = 'Runs R8/R9 exact-tenant private CHAT live-check, retry, stale and recovery regressions.'
+    dependsOn tasks.named(r8TenantPrivateChatSourceSet.classesTaskName)
+    testClassesDirs = r8TenantPrivateChatSourceSet.output.classesDirs
+    classpath = r8TenantPrivateChatSourceSet.runtimeClasspath
+    useJUnitPlatform()
+    maxParallelForks = 1
+    maxHeapSize = '384m'
+    jvmArgs '-XX:+UseSerialGC', '-XX:ActiveProcessorCount=2', '-XX:MaxMetaspaceSize=192m', '-Xss256k'
+    testLogging { events 'passed', 'failed'; exceptionFormat 'full' }
+}
