@@ -8,6 +8,7 @@ import cn.jia.agent.common.AgentErrorConstants;
 import cn.jia.agent.common.AgentSceneConstants;
 import cn.jia.agent.common.TaskEventPayload;
 import cn.jia.agent.common.TaskEventType;
+import cn.jia.agent.common.WaterMarginPersonaCatalog;
 import cn.jia.agent.config.AgentSceneFeatureFlags;
 import cn.jia.agent.dao.AgentPersonaBindingDao;
 import cn.jia.agent.dao.AgentPersonaDao;
@@ -354,7 +355,8 @@ public class AgentServiceImpl implements AgentService {
         AgentPersonaBindingEntity binding = agentIdentityService.requireActiveBinding(
                 identity, Objects.equals(request.getAgentId(), identity.getCanonicalAgentId())
                         ? null : request.getAgentId());
-        AgentPersonaEntity persona = requirePersona(binding.getPersonaCode());
+        AgentPersonaEntity persona = requireScopedPersona(
+                tenantId, clientId, binding.getPersonaCode());
         identity = agentIdentityService.activateForFirstRegistration(identity);
         String canonicalAgentId = identity.getCanonicalAgentId();
 
@@ -457,8 +459,7 @@ public class AgentServiceImpl implements AgentService {
                 new AgentHostedBindingTransaction.Scope(tenantId, clientId, ownerJiacn);
         List<CatalogEntry> catalog = personaCatalogCache.get(
                 scope.tenantId(), scope.clientId(),
-                () -> agentPersonaDao.findCatalogProjection(scope.tenantId(), scope.clientId()))
-                .entries();
+                () -> loadPersonaCatalog(scope)).entries();
         Map<String, AgentPersonaCatalogBindingRow> bindings = loadCatalogBindings(scope, catalog);
         return catalog.stream()
                 .map(persona -> toCatalogDTO(persona, bindings.get(persona.personaCode()), scope))
@@ -604,7 +605,8 @@ public class AgentServiceImpl implements AgentService {
     public AgentRuntimeDTO bindPersona(String tenantId, String clientId, String jiacn, String personaCode) {
         AgentHostedBindingTransaction.Scope exactScope =
                 new AgentHostedBindingTransaction.Scope(tenantId, clientId, jiacn);
-        AgentPersonaEntity persona = requirePersona(personaCode);
+        AgentPersonaEntity persona = requireScopedPersona(
+                exactScope.tenantId(), exactScope.clientId(), personaCode);
         if (Boolean.TRUE.equals(persona.getSystemAgent())) {
             throw new AgentBizException(AgentErrorConstants.PERSONA_NOT_BINDABLE, "System persona cannot be bound");
         }
@@ -2055,6 +2057,58 @@ public class AgentServiceImpl implements AgentService {
         AgentPersonaEntity persona = agentPersonaDao.findByCode(personaCode);
         if (persona == null) {
             throw new AgentBizException(AgentErrorConstants.AGENT_NOT_FOUND, "Agent persona not found");
+        }
+        return persona;
+    }
+
+    private List<AgentPersonaEntity> loadPersonaCatalog(
+            AgentHostedBindingTransaction.Scope scope) {
+        List<AgentPersonaEntity> scopedRows = Optional.ofNullable(
+                agentPersonaDao.findCatalogProjection(scope.tenantId(), scope.clientId()))
+                .orElseGet(Collections::emptyList);
+        if ("0".equals(scope.tenantId())) {
+            return scopedRows;
+        }
+        LinkedHashMap<String, AgentPersonaEntity> merged = new LinkedHashMap<>();
+        for (AgentPersonaEntity builtin : WaterMarginPersonaCatalog.publicPersonas()) {
+            merged.put(builtin.getPersonaCode(), builtin);
+        }
+        for (AgentPersonaEntity scoped : scopedRows) {
+            requireScopedCatalogPersona(scope.tenantId(), scope.clientId(),
+                    scoped == null ? null : scoped.getPersonaCode(), scoped);
+            merged.put(scoped.getPersonaCode(), scoped);
+        }
+        return List.copyOf(merged.values());
+    }
+
+    private AgentPersonaEntity requireScopedPersona(
+            String tenantId, String clientId, String personaCode) {
+        if ("0".equals(tenantId)) {
+            return requirePersona(personaCode);
+        }
+        AgentPersonaEntity scoped = agentPersonaDao.findCatalogPersona(
+                tenantId, clientId, personaCode);
+        if (scoped != null) {
+            return requireScopedCatalogPersona(tenantId, clientId, personaCode, scoped);
+        }
+        AgentPersonaEntity builtin = WaterMarginPersonaCatalog.publicPersona(personaCode);
+        if (builtin == null) {
+            throw new AgentBizException(AgentErrorConstants.AGENT_NOT_FOUND,
+                    "Agent persona not found");
+        }
+        return builtin;
+    }
+
+    private AgentPersonaEntity requireScopedCatalogPersona(
+            String tenantId, String clientId, String personaCode, AgentPersonaEntity persona) {
+        if (persona == null || !Boolean.TRUE.equals(persona.getActive())
+                || !Objects.equals(personaCode, persona.getPersonaCode())
+                || !("0".equals(persona.getTenantId())
+                        || Objects.equals(tenantId, persona.getTenantId()))
+                || !(persona.getClientId() == null
+                        || Objects.equals(clientId, persona.getClientId()))) {
+            throw personaCatalogForbidden(
+                    "Persona metadata escaped the byte-exact requested scope");
         }
         return persona;
     }

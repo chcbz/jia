@@ -74,6 +74,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -126,8 +127,8 @@ class AgentIdentityRuntimeRealTransactionTest {
         jdbc.update("""
                 INSERT INTO agent_persona
                     (persona_code, name, title, abilities, active, system_agent,
-                     create_time, update_time, tenant_id)
-                VALUES ('wuyong', 'Wu Yong', 'Strategist', '["planning"]', 1, 0, 1, 1, '0')
+                     create_time, update_time, tenant_id, client_id)
+                VALUES ('wuyong', 'Wu Yong', 'Strategist', '["planning"]', 1, 0, 1, 1, '0', 'legacy-client')
                 """);
         EsContext context = new EsContext();
         context.setClientId("client-a");
@@ -173,15 +174,21 @@ class AgentIdentityRuntimeRealTransactionTest {
     }
 
     @Test
-    void tenantOneLocalBindAndCatalogPersistExactScopeWithoutForeignDisclosure() throws Exception {
+    void tenantOneLocalBindAndCatalogUseCodeBuiltinsWithoutForeignDisclosure() throws Exception {
         EsContext context = new EsContext();
         context.setTenantId("1");
         context.setClientId("cyf-local");
         context.setJiacn("owner-a");
         EsContextHolder.setContext(context);
+        insertPersona("shared-public", "Shared Public", "0", null, false);
+        insertPersona("private-local", "Private Local", "1", "cyf-local", false);
+        insertPersona("private-foreign-client", "Foreign Client", "1", "other-client", false);
+        insertPersona("private-foreign-tenant", "Foreign Tenant", "2", "cyf-local", false);
 
-        AgentRuntimeDTO bound = agentService.bindPersona("1", "cyf-local", "owner-a", "wuyong");
+        AgentRuntimeDTO bound = agentService.bindPersona(
+                "1", "cyf-local", "owner-a", "husanniang");
         assertTrue(bound.getAgentId().matches("agt_[0-9a-f]{32}"));
+        assertEquals("扈三娘", bound.getName());
         assertEquals("1", jdbc.queryForObject(
                 "SELECT tenant_id FROM agent_persona_binding", String.class));
         assertEquals("cyf-local", jdbc.queryForObject(
@@ -225,39 +232,64 @@ class AgentIdentityRuntimeRealTransactionTest {
                 "a".repeat(64), enrollmentSecret), 2_000L);
         assertEquals("ACTIVE", enrolled.installation().status());
         assertTrue(enrolled.runtimeAuthorization().startsWith("rta1_"));
+        jdbc.update("""
+                UPDATE agent_runtime
+                SET runtime_installation_id=?, runtime_host_id='host-a',
+                    runtime_instance_id='runtime-a', runtime_session_generation=1,
+                    token_hash='urs1:tenant-one'
+                WHERE tenant_id='1' AND client_id='cyf-local'
+                  AND owner_jiacn='owner-a' AND agent_id=?
+                """, installationId, bound.getAgentId());
 
-        AgentRuntimeDTO mine = agentService.listPersonaCatalog(
-                "1", "cyf-local", "owner-a").getFirst();
+        AgentRegisterDTO register = new AgentRegisterDTO();
+        register.setAgentId(bound.getAgentId());
+        register.setEndpoint("wss://agent/husanniang");
+        AgentRegisterResultDTO registered = agentService.register(register);
+        assertEquals(bound.getAgentId(), registered.getAgentId());
+        assertEquals("扈三娘", jdbc.queryForObject(
+                "SELECT name FROM agent_runtime", String.class));
+
+        List<AgentRuntimeDTO> mineCatalog = agentService.listPersonaCatalog(
+                "1", "cyf-local", "owner-a");
+        assertEquals(110, mineCatalog.size());
+        AgentRuntimeDTO mine = persona(mineCatalog, "husanniang");
         assertEquals(bound.getAgentId(), mine.getAgentId());
         assertTrue(mine.getBound());
         assertTrue(mine.getBoundToMe());
         assertTrue(mine.getCanOperate());
-        assertEquals(false, mine.getCanBind());
+        assertFalse(mine.getCanBind());
+        assertEquals("Shared Public", persona(mineCatalog, "shared-public").getName());
+        assertEquals("Private Local", persona(mineCatalog, "private-local").getName());
+        assertFalse(hasPersona(mineCatalog, "private-foreign-client"));
+        assertFalse(hasPersona(mineCatalog, "private-foreign-tenant"));
+        assertEquals("0", jdbc.queryForObject(
+                "SELECT tenant_id FROM agent_persona WHERE persona_code='wuyong'", String.class));
+        assertEquals("legacy-client", jdbc.queryForObject(
+                "SELECT client_id FROM agent_persona WHERE persona_code='wuyong'", String.class));
 
-        AgentRuntimeDTO foreignOwner = agentService.listPersonaCatalog(
-                "1", "cyf-local", "owner-b").getFirst();
+        AgentRuntimeDTO foreignOwner = persona(agentService.listPersonaCatalog(
+                "1", "cyf-local", "owner-b"), "husanniang");
         assertNull(foreignOwner.getAgentId());
         assertTrue(foreignOwner.getBound());
-        assertEquals(false, foreignOwner.getBoundToMe());
-        assertEquals(false, foreignOwner.getCanOperate());
-        assertEquals(false, foreignOwner.getCanBind());
+        assertFalse(foreignOwner.getBoundToMe());
+        assertFalse(foreignOwner.getCanOperate());
+        assertFalse(foreignOwner.getCanBind());
         assertThrows(AgentServiceImpl.AgentBizException.class, () ->
-                agentService.bindPersona("1", "cyf-local", "owner-b", "wuyong"));
+                agentService.bindPersona("1", "cyf-local", "owner-b", "husanniang"));
 
-        AgentRuntimeDTO foreignClient = agentService.listPersonaCatalog(
-                "1", "foreign-client", "owner-a").getFirst();
+        AgentRuntimeDTO foreignClient = persona(agentService.listPersonaCatalog(
+                "1", "foreign-client", "owner-a"), "husanniang");
         assertNull(foreignClient.getAgentId());
-        assertEquals(false, foreignClient.getBound());
-        assertEquals(false, foreignClient.getBoundToMe());
+        assertFalse(foreignClient.getBound());
+        assertFalse(foreignClient.getBoundToMe());
         assertTrue(foreignClient.getCanBind());
 
-        jdbc.update("""
-                INSERT INTO agent_persona
-                    (persona_code, name, active, system_agent, create_time, update_time, tenant_id)
-                VALUES ('songjiang', 'Song Jiang', 1, 1, 1, 1, '0')
-                """);
         assertThrows(AgentServiceImpl.AgentBizException.class, () ->
                 agentService.bindPersona("1", "cyf-local", "owner-a", "songjiang"));
+        assertThrows(AgentServiceImpl.AgentBizException.class, () ->
+                agentService.bindPersona("1", "cyf-local", "owner-a", "private-foreign-client"));
+        assertThrows(AgentServiceImpl.AgentBizException.class, () ->
+                agentService.bindPersona("1", "cyf-local", "owner-a", "private-foreign-tenant"));
         assertEquals(1, count("SELECT COUNT(*) FROM agent_persona_binding"));
     }
 
@@ -434,6 +466,27 @@ class AgentIdentityRuntimeRealTransactionTest {
     @SuppressWarnings("unchecked")
     private <T> ObjectProvider<T> provider() {
         return mock(ObjectProvider.class);
+    }
+
+    private void insertPersona(String code, String name, String tenantId,
+            String clientId, boolean systemAgent) {
+        jdbc.update("""
+                INSERT INTO agent_persona
+                    (persona_code, name, abilities, active, system_agent,
+                     create_time, update_time, tenant_id, client_id)
+                VALUES (?, ?, '["metadata"]', 1, ?, 1, 1, ?, ?)
+                """, code, name, systemAgent, tenantId, clientId);
+    }
+
+    private AgentRuntimeDTO persona(List<AgentRuntimeDTO> catalog, String personaCode) {
+        return catalog.stream()
+                .filter(persona -> personaCode.equals(persona.getPersonaCode()))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("missing persona " + personaCode));
+    }
+
+    private boolean hasPersona(List<AgentRuntimeDTO> catalog, String personaCode) {
+        return catalog.stream().anyMatch(persona -> personaCode.equals(persona.getPersonaCode()));
     }
 
     private int count(String sql) {

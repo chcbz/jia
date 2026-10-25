@@ -44,6 +44,19 @@ class AgentPersonaDaoCacheInvalidationTest {
     }
 
     @Test
+    void catalogPersonaUsesExplicitExactScope() throws Exception {
+        AgentPersonaMapper mapper = mock(AgentPersonaMapper.class);
+        AgentPersonaEntity expected = persona("husanniang", "扈三娘");
+        when(mapper.selectCatalogPersona("1", "cyf-local", "husanniang")).thenReturn(expected);
+
+        AgentPersonaEntity result = dao(mapper, new AgentPersonaCatalogCache())
+                .findCatalogPersona("1", "cyf-local", "husanniang");
+
+        assertSame(expected, result);
+        verify(mapper).selectCatalogPersona("1", "cyf-local", "husanniang");
+    }
+
+    @Test
     void catalogProjectionRejectsMissingOrMalformedTenantAndClient() throws Exception {
         AgentPersonaMapper mapper = mock(AgentPersonaMapper.class);
         AgentPersonaDaoImpl dao = dao(mapper, new AgentPersonaCatalogCache());
@@ -53,6 +66,12 @@ class AgentPersonaDaoCacheInvalidationTest {
                     () -> dao.findCatalogProjection(value, "jia_client"));
             assertThrows(IllegalArgumentException.class,
                     () -> dao.findCatalogProjection("0", value));
+            assertThrows(IllegalArgumentException.class,
+                    () -> dao.findCatalogPersona(value, "jia_client", "husanniang"));
+            assertThrows(IllegalArgumentException.class,
+                    () -> dao.findCatalogPersona("0", value, "husanniang"));
+            assertThrows(IllegalArgumentException.class,
+                    () -> dao.findCatalogPersona("0", "jia_client", value));
         }
         verifyNoInteractions(mapper);
     }
