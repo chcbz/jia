@@ -301,6 +301,17 @@ class AgentWebSocketRawCommandDispatchTest extends BaseMockTest {
                 "order-1","install-1","0","client-a","owner-a","order-1",null,"agent-1","SKILL_INSTALL",1L,3600001L,payload);
         byte[] raw=AgentCommandCanonicalCodec.wireBytes(draft,"message-1",1);
         assertFalse(handler.isManagedSkillSessionReady("0","client-a","agent-1",fence));
+        var registry=new SkillExecutionSessionRegistry();handler.setSkillExecutionSessions(registry);
+        var scope=new cn.jia.agent.service.SkillCapabilityLookup.Scope("0","client-a","owner-a","agent-1");
+        registry.register(current.getId(),scope,fence,
+                new cn.jia.agent.service.SkillCapabilityLookup.Catalog("1",java.util.List.of()),()->true);
+        assertTrue(handler.isManagedSkillSessionReady("0","client-a","agent-1",fence));
+        // Native readiness does not re-enable a retired legacy command transport.
+        assertEquals(AgentRawCommandDispatchResult.Status.OFFLINE,handler.dispatchManagedSkill("0","client-a","agent-1",fence,raw).status());
+        var wrongHost=new cn.jia.agent.service.AgentManagedSessionLookup.SessionFence(fence.runtimeInstallationId(),"other-host",fence.runtimeInstanceId(),fence.sessionGeneration());
+        assertFalse(handler.isManagedSkillSessionReady("0","client-a","agent-1",wrongHost));
+        registry.suspend(current.getId());
+        assertFalse(handler.isManagedSkillSessionReady("0","client-a","agent-1",fence));
         UnifiedRuntimeTestSupport.deliver(handler,current,new TextMessage(
                 "{\"type\":\"agent.register\",\"agentId\":\"agent-1\",\"name\":\"Agent\",\"durableStateHealthy\":true,\"readyCommandTypes\":[\"SKILL_INSTALL\"]}"));
         assertTrue(handler.isManagedSkillSessionReady("0","client-a","agent-1",fence));

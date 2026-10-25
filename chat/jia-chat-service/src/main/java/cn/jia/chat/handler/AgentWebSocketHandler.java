@@ -2974,7 +2974,18 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
     public boolean isManagedSkillSessionReady(String tenant,String client,String agent,
             cn.jia.agent.service.AgentManagedSessionLookup.SessionFence fence) {
         int count=0;
-        for (var session : sessions.values()) if(matchesManagedSkill(session,tenant,client,agent,fence)) count++;
+        for (var session : sessions.values()) {
+            if (matchesManagedSkill(session,tenant,client,agent,fence)) { count++; continue; }
+            // Native skill control uses authenticated HTTP pull, not legacy SKILL_INSTALL WS commands.
+            // A live exact-fence catalog proves channel readiness; individual skill admission stays downstream.
+            if (fence == null || skillExecutionSessions == null || !tenant.equals(sessionTenantId(session))
+                    || !client.equals(sessionClientId(session)) || !agent.equals(sessionAgentId(session))
+                    || !typedDeliberationSessionCurrent(session,agent)) continue;
+            var view=skillExecutionSessions.lookup(new cn.jia.agent.service.SkillCapabilityLookup.Scope(
+                    tenant,client,sessionJiacn(session),agent),fence);
+            if (view.state()==cn.jia.agent.service.SkillCapabilityLookup.State.AVAILABLE
+                    && session.getId().equals(view.sessionId())) count++;
+        }
         return count==1;
     }
     public AgentRawCommandDispatchResult dispatchManagedSkill(String tenant,String client,String agent,
