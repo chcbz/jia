@@ -286,9 +286,21 @@ class AgentServiceImplTest extends BaseMockTest {
                 "0", "client-a", "tenant-a", "agent-owned")).thenReturn("agent-owned");
         when(agentIdentityService.requireActiveIdentityForBinding(
                 "0", "client-a", "tenant-a", 1L, "agent-owned")).thenReturn(identity);
+        AgentTaskMetaEntity completed = scopedTaskRow("task-completed", "0", "client-a");
+        completed.setOwnerJiacn("tenant-a");
+        completed.setAssignedAgentId("agent-owned");
+        completed.setRewardStatus(AgentConstants.TASK_STATUS_COMPLETED);
+        when(agentTaskMetaDao.findByAgentInOwnerScope(
+                "0", "client-a", "tenant-a", "agent-owned", 500))
+                .thenReturn(List.of(completed));
 
-        assertEquals("agent-owned", agentService.requireApiKeyOwnedAgent(
-                "client-a", "tenant-a", "agent-owned").getAgentId());
+        AgentRuntimeDTO result = agentService.requireApiKeyOwnedAgent(
+                "client-a", "tenant-a", "agent-owned");
+
+        assertEquals("agent-owned", result.getAgentId());
+        assertEquals(1, result.getStats().getCompletedTaskCount());
+        verify(agentTaskMetaDao).findByAgentInOwnerScope(
+                "0", "client-a", "tenant-a", "agent-owned", 500);
     }
 
     @Test
@@ -310,13 +322,146 @@ class AgentServiceImplTest extends BaseMockTest {
                 "1", "client-a", "owner-a", "agent-owned")).thenReturn("agent-owned");
         when(agentIdentityService.requireActiveIdentityForBinding(
                 "1", "client-a", "owner-a", 1L, "agent-owned")).thenReturn(identity);
+        org.mockito.Mockito.lenient().when(agentTaskMetaDao.findByAgentInOwnerScope(
+                anyString(), anyString(), anyString(), anyString(), anyInt()))
+                .thenThrow(new IllegalStateException("legacy statistics unavailable"));
 
         AgentRuntimeDTO result = agentService.requireRosterOwnedAgent(
                 "1", "client-a", "owner-a", "agent-owned");
 
         assertEquals("agent-owned", result.getAgentId());
+        assertEquals("owner-a", result.getOwnerJiacn());
+        assertEquals(Boolean.FALSE, result.getSystemAgent());
         assertEquals(Boolean.TRUE, result.getBoundToMe());
         assertEquals(Boolean.TRUE, result.getCanOperate());
+        assertNull(result.getStats());
+        verifyNoInteractions(agentPersonaDao, agentTaskMetaDao);
+    }
+
+    @Test
+    void tenantOneGetUsesPublicStaticStatsWithoutLegacyMetadataOrTasks() {
+        EsContext context = new EsContext();
+        context.setTenantId("1");
+        context.setClientId("client-a");
+        context.setJiacn("owner-a");
+        EsContextHolder.setContext(context);
+        AgentRuntimeEntity runtime = runtimeAgent(
+                "agent-owned", "吴用", AgentConstants.STATUS_ONLINE, "[\"planning\"]");
+        runtime.setTenantId("1");
+        runtime.setClientId("client-a");
+        runtime.setOwnerJiacn("owner-a");
+        runtime.setBindingId(1L);
+        runtime.setPersonaCode("wuyong");
+        runtime.setPersonaName("吴用");
+        when(agentRuntimeDao.findByAgentId("agent-owned")).thenReturn(runtime);
+        AgentPersonaBindingEntity active = binding("agent-owned", "wuyong");
+        active.setTenantId("1");
+        active.setClientId("client-a");
+        active.setJiacn("owner-a");
+        AgentIdentityRegistryEntity identity = identity(active, AgentConstants.IDENTITY_STATUS_ACTIVE);
+        when(agentIdentityService.requireCanonicalAgentIdInScope(
+                "1", "client-a", "owner-a", "agent-owned")).thenReturn("agent-owned");
+        when(agentIdentityService.requireActiveIdentityForBinding(
+                "1", "client-a", "owner-a", 1L, "agent-owned")).thenReturn(identity);
+        when(agentIdentityService.requireActiveBinding(identity, null)).thenReturn(active);
+        org.mockito.Mockito.lenient().when(agentTaskMetaDao.findByAgentInOwnerScope(
+                anyString(), anyString(), anyString(), anyString(), anyInt()))
+                .thenThrow(new IllegalStateException("legacy statistics unavailable"));
+
+        AgentRuntimeDTO result = agentService.get("agent-owned");
+
+        assertEquals(Boolean.TRUE, result.getBoundToMe());
+        assertEquals(Boolean.TRUE, result.getCanOperate());
+        assertEquals("智多星", result.getTitle());
+        assertNotNull(result.getStats().getPower());
+        assertEquals(0, result.getStats().getCompletedTaskCount());
+        assertEquals(0, result.getStats().getFailedTaskCount());
+        verifyNoInteractions(agentPersonaDao, agentTaskMetaDao);
+    }
+
+    @Test
+    void tenantOneRosterBatchUsesPublicStaticStatsWithoutTaskAggregation() {
+        EsContext context = new EsContext();
+        context.setTenantId("1");
+        context.setClientId("client-a");
+        context.setJiacn("owner-a");
+        EsContextHolder.setContext(context);
+        AgentRuntimeEntity runtime = runtimeAgent(
+                "agent-owned", "吴用", AgentConstants.STATUS_ONLINE, "[\"planning\"]");
+        runtime.setTenantId("1");
+        runtime.setClientId("client-a");
+        runtime.setOwnerJiacn("owner-a");
+        runtime.setBindingId(1L);
+        runtime.setPersonaCode("wuyong");
+        runtime.setPersonaName("吴用");
+        when(agentRuntimeDao.findRosterByOwner(
+                "1", "client-a", "owner-a", null, null)).thenReturn(List.of(runtime));
+        org.mockito.Mockito.lenient().when(agentTaskMetaDao.findStatsByAgents(any()))
+                .thenThrow(new IllegalStateException("legacy statistics unavailable"));
+
+        PageInfo<AgentRuntimeDTO> result = agentService.listRoster(null, null, 1, 50);
+
+        AgentRuntimeDTO projected = result.getList().getFirst();
+        assertEquals("智多星", projected.getTitle());
+        assertNotNull(projected.getStats().getPower());
+        assertEquals(0, projected.getStats().getCompletedTaskCount());
+        assertEquals(0, projected.getStats().getFailedTaskCount());
+        verifyNoInteractions(agentPersonaDao, agentTaskMetaDao);
+    }
+
+    @Test
+    void tenantOneMapBatchUsesPublicStaticStatsWithoutTaskAggregation() {
+        EsContext context = new EsContext();
+        context.setTenantId("1");
+        context.setClientId("client-a");
+        context.setJiacn("owner-a");
+        EsContextHolder.setContext(context);
+        AgentRuntimeEntity runtime = runtimeAgent(
+                "agent-owned", "吴用", AgentConstants.STATUS_ONLINE, "[\"planning\"]");
+        runtime.setTenantId("1");
+        runtime.setClientId("client-a");
+        runtime.setOwnerJiacn("owner-a");
+        runtime.setBindingId(1L);
+        runtime.setPersonaCode("wuyong");
+        runtime.setPersonaName("吴用");
+        when(agentRuntimeDao.findMapVisible("1", "client-a")).thenReturn(List.of(runtime));
+        org.mockito.Mockito.lenient().when(agentTaskMetaDao.findStatsByAgents(any()))
+                .thenThrow(new IllegalStateException("legacy statistics unavailable"));
+
+        List<AgentRuntimeDTO> result = agentService.listMapAgents();
+
+        AgentRuntimeDTO projected = result.getFirst();
+        assertEquals("agent-owned", projected.getAgentId());
+        assertEquals(Boolean.TRUE, projected.getBoundToMe());
+        assertEquals(Boolean.TRUE, projected.getCanOperate());
+        assertEquals("智多星", projected.getTitle());
+        assertNotNull(projected.getStats().getPower());
+        assertEquals(0, projected.getStats().getCompletedTaskCount());
+        assertEquals(AgentConstants.BUILTIN_SONGJIANG_AGENT_ID, result.getLast().getAgentId());
+        verifyNoInteractions(agentPersonaDao, agentTaskMetaDao);
+    }
+
+    @Test
+    void tenantOneLocalBindFullDtoDoesNotReadLegacyTaskStats() {
+        EsContext context = new EsContext();
+        context.setTenantId("1");
+        context.setClientId("client-a");
+        context.setJiacn("owner-a");
+        EsContextHolder.setContext(context);
+        when(agentPersonaDao.findCatalogPersona("1", "client-a", "wuyong"))
+                .thenReturn(null);
+        org.mockito.Mockito.lenient().when(agentTaskMetaDao.findByAgentInOwnerScope(
+                anyString(), anyString(), anyString(), anyString(), anyInt()))
+                .thenThrow(new IllegalStateException("legacy statistics unavailable"));
+
+        AgentRuntimeDTO result = agentService.bindPersona(
+                "1", "client-a", "owner-a", "wuyong");
+
+        assertEquals("智多星", result.getTitle());
+        assertEquals(Boolean.TRUE, result.getBoundToMe());
+        assertEquals(Boolean.TRUE, result.getCanOperate());
+        assertEquals(0, result.getStats().getCompletedTaskCount());
+        verifyNoInteractions(agentTaskMetaDao);
     }
 
     @ParameterizedTest

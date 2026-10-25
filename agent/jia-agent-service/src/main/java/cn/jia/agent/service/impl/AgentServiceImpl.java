@@ -413,7 +413,7 @@ public class AgentServiceImpl implements AgentService {
                 agentRuntimeDao.findRosterByOwner(tenantId, clientId, ownerJiacn, status, ability));
         agents.getList().forEach(runtime -> requireBatchRuntimeScope(
                 runtime, tenantId, clientId, ownerJiacn));
-        RuntimeBatchEnrichment enrichment = loadRuntimeBatchEnrichment(agents.getList(), false);
+        RuntimeBatchEnrichment enrichment = loadRuntimeBatchEnrichment(agents.getList(), false, tenantId);
         return agents.convert(runtime -> toRuntimeDTO(
                 runtime, clientId, ownerJiacn, enrichment));
     }
@@ -426,7 +426,7 @@ public class AgentServiceImpl implements AgentService {
         List<AgentRuntimeEntity> visible = Optional.ofNullable(agentRuntimeDao.findMapVisible(tenantId, clientId))
                 .orElseGet(Collections::emptyList);
         visible.forEach(runtime -> requireBatchRuntimeScope(runtime, tenantId, clientId, null));
-        RuntimeBatchEnrichment enrichment = loadRuntimeBatchEnrichment(visible, true);
+        RuntimeBatchEnrichment enrichment = loadRuntimeBatchEnrichment(visible, true, tenantId);
         List<AgentRuntimeDTO> agents = new ArrayList<>(visible.stream()
                 .map(runtime -> toRuntimeDTO(runtime, clientId, ownerJiacn, enrichment))
                 .toList());
@@ -643,23 +643,27 @@ public class AgentServiceImpl implements AgentService {
 
     @Override
     public AgentRuntimeDTO requireApiKeyOwnedAgent(String clientId, String jiacn, String agentId) {
-        return requireScopedOwnedAgent(SINGLE_TENANT_ID, clientId, jiacn, agentId, false);
+        return toRuntimeDTO(requireScopedOwnedRuntime(
+                SINGLE_TENANT_ID, clientId, jiacn, agentId));
     }
 
     @Override
     public AgentRuntimeDTO requireRosterOwnedAgent(
             String tenantId, String clientId, String jiacn, String agentId) {
-        return requireScopedOwnedAgent(tenantId, clientId, jiacn, agentId, false);
+        return toRosterOwnershipProof(
+                requireScopedOwnedRuntime(tenantId, clientId, jiacn, agentId),
+                clientId, jiacn);
     }
 
     @Override
     public AgentRuntimeDTO requireApiKeyOwnedAgentForUpdate(
             String clientId, String jiacn, String agentId) {
-        return requireScopedOwnedAgent(SINGLE_TENANT_ID, clientId, jiacn, agentId, true);
+        return toRuntimeDTO(requireOwnedAgentForUpdate(
+                SINGLE_TENANT_ID, clientId, jiacn, agentId));
     }
 
-    private AgentRuntimeDTO requireScopedOwnedAgent(
-            String tenantId, String clientId, String jiacn, String agentId, boolean forUpdate) {
+    private AgentRuntimeEntity requireScopedOwnedRuntime(
+            String tenantId, String clientId, String jiacn, String agentId) {
         requireCanonicalIdentityInput(tenantId, "tenantId");
         requireCanonicalIdentityInput(clientId, "clientId");
         requireCanonicalIdentityInput(jiacn, "jiacn");
@@ -669,12 +673,8 @@ public class AgentServiceImpl implements AgentService {
                     "System agent cannot be registered by external clients");
         }
 
-        if (forUpdate) {
-            return toRuntimeDTO(requireOwnedAgentForUpdate(tenantId, clientId, jiacn, agentId));
-        }
         agentIdentityService.requireCanonicalAgentIdInScope(
                 tenantId, clientId, jiacn, agentId);
-
         AgentRuntimeEntity agent = agentRuntimeDao.findByAgentId(agentId);
         if (agent == null) {
             throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN,
@@ -682,8 +682,21 @@ public class AgentServiceImpl implements AgentService {
         }
         AgentIdentityRegistryEntity identity = agentIdentityService.requireActiveIdentityForBinding(
                 tenantId, clientId, jiacn, requireBindingId(agent), agentId);
-        requireExactRuntime(agent, tenantId, agentId, clientId, jiacn, identity.getBindingId());
-        return toRuntimeDTO(agent, clientId, jiacn);
+        return requireExactRuntime(
+                agent, tenantId, agentId, clientId, jiacn, identity.getBindingId());
+    }
+
+    private AgentRuntimeDTO toRosterOwnershipProof(
+            AgentRuntimeEntity entity, String clientId, String ownerJiacn) {
+        AgentRuntimeDTO proof = new AgentRuntimeDTO();
+        proof.setAgentId(entity.getAgentId());
+        proof.setOwnerJiacn(entity.getOwnerJiacn());
+        proof.setSystemAgent(false);
+        boolean owned = Objects.equals(clientId, entity.getClientId())
+                && Objects.equals(ownerJiacn, entity.getOwnerJiacn());
+        proof.setBoundToMe(owned);
+        proof.setCanOperate(owned);
+        return proof;
     }
 
     private AgentRuntimeEntity requireOwnedAgentForUpdate(
@@ -2193,7 +2206,7 @@ public class AgentServiceImpl implements AgentService {
         dto.setOwnerJiacn(entity.getOwnerJiacn());
         dto.setPersonaCode(entity.getPersonaCode());
         dto.setPersonaName(entity.getPersonaName());
-        AgentPersonaEntity persona = resolvePersona(entity);
+        AgentPersonaEntity persona = resolveRuntimePersona(entity);
         if (persona != null) {
             dto.setName(StringUtil.isBlank(dto.getName()) ? persona.getName() : dto.getName());
             dto.setAvatar(StringUtil.isBlank(dto.getAvatar()) ? persona.getAvatar() : dto.getAvatar());
@@ -2220,7 +2233,9 @@ public class AgentServiceImpl implements AgentService {
                 && Objects.equals(ownerJiacn, entity.getOwnerJiacn()));
         dto.setCanBind(false);
         dto.setCanOperate(Boolean.TRUE.equals(dto.getBoundToMe()) && !Boolean.TRUE.equals(dto.getSystemAgent()));
-        dto.setStats(buildStats(entity));
+        dto.setStats(usesLegacyTaskStats(entity)
+                ? buildLegacyTaskStats(entity, persona)
+                : buildStats(entity, persona, null));
         return dto;
     }
 
@@ -2345,6 +2360,13 @@ public class AgentServiceImpl implements AgentService {
         return dto;
     }
 
+    private AgentPersonaEntity resolveRuntimePersona(AgentRuntimeEntity entity) {
+        if (!usesLegacyTaskStats(entity)) {
+            return WaterMarginPersonaCatalog.publicPersona(entity.getPersonaCode());
+        }
+        return resolvePersona(entity);
+    }
+
     private AgentPersonaEntity resolvePersona(AgentRuntimeEntity entity) {
         if (!StringUtil.isBlank(entity.getPersonaCode())) {
             AgentPersonaEntity persona = agentPersonaDao.findByCode(entity.getPersonaCode());
@@ -2355,13 +2377,20 @@ public class AgentServiceImpl implements AgentService {
         return StringUtil.isBlank(entity.getPersonaName()) ? null : agentPersonaDao.findByName(entity.getPersonaName());
     }
 
+    private boolean usesLegacyTaskStats(AgentRuntimeEntity entity) {
+        return entity == null || StringUtil.isBlank(entity.getTenantId())
+                || SINGLE_TENANT_ID.equals(entity.getTenantId());
+    }
+
     private RuntimeBatchEnrichment loadRuntimeBatchEnrichment(
-            List<AgentRuntimeEntity> runtimes, boolean includeSongjiang) {
+            List<AgentRuntimeEntity> runtimes, boolean includeSongjiang, String tenantId) {
         if (runtimes.isEmpty() && !includeSongjiang) {
             return RuntimeBatchEnrichment.empty();
         }
-        List<AgentPersonaEntity> personas = Optional.ofNullable(
-                agentPersonaDao.findRuntimeProjection()).orElseGet(Collections::emptyList);
+        List<AgentPersonaEntity> personas = SINGLE_TENANT_ID.equals(tenantId)
+                ? Optional.ofNullable(agentPersonaDao.findRuntimeProjection())
+                        .orElseGet(Collections::emptyList)
+                : WaterMarginPersonaCatalog.publicPersonas();
         LinkedHashMap<String, AgentPersonaEntity> personasByCode = new LinkedHashMap<>();
         LinkedHashMap<String, AgentPersonaEntity> personasByName = new LinkedHashMap<>();
         for (AgentPersonaEntity persona : personas) {
@@ -2373,11 +2402,13 @@ public class AgentServiceImpl implements AgentService {
         }
 
         LinkedHashMap<RuntimeScopeKey, AgentTaskStatsScope> scopes = new LinkedHashMap<>();
-        for (AgentRuntimeEntity runtime : runtimes) {
-            RuntimeScopeKey key = RuntimeScopeKey.from(runtime);
-            if (key != null) {
-                scopes.putIfAbsent(key, new AgentTaskStatsScope(
-                        key.tenantId(), key.clientId(), key.agentId()));
+        if (SINGLE_TENANT_ID.equals(tenantId)) {
+            for (AgentRuntimeEntity runtime : runtimes) {
+                RuntimeScopeKey key = RuntimeScopeKey.from(runtime);
+                if (key != null) {
+                    scopes.putIfAbsent(key, new AgentTaskStatsScope(
+                            key.tenantId(), key.clientId(), key.agentId()));
+                }
             }
         }
         List<AgentTaskStatsRow> rows = scopes.isEmpty()
@@ -2522,14 +2553,9 @@ public class AgentServiceImpl implements AgentService {
         }
     }
 
-    private AgentStatsDTO buildStats(AgentRuntimeEntity entity) {
-        AgentStatsDTO stats = new AgentStatsDTO();
-        AgentPersonaEntity persona = resolvePersona(entity);
-        if (persona != null) {
-            stats.setPower(persona.getPower());
-            stats.setIntelligence(persona.getIntelligence());
-            stats.setLeadership(persona.getLeadership());
-        }
+    private AgentStatsDTO buildLegacyTaskStats(
+            AgentRuntimeEntity entity, AgentPersonaEntity persona) {
+        AgentStatsDTO stats = buildStats(entity, persona, null);
         String tenantId = SINGLE_TENANT_ID;
         String ownerJiacn = entity.getOwnerJiacn();
         String clientId = entity.getClientId();
