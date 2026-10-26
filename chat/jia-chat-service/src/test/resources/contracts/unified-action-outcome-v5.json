@@ -1,0 +1,166 @@
+{
+  "contract": "juyiting-action-outcome-v5",
+  "facts": {
+    "schemaVersion": 5,
+    "availableActions": [
+      {
+        "actionId": "analyze-materials",
+        "kind": "EXECUTE",
+        "operation": "EXECUTE_SKILL",
+        "minSources": 1,
+        "maxSources": 32,
+        "skill": {
+          "skillKey": "material-analysis",
+          "skillVersion": "1.0.0",
+          "packageSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "manifestSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "parametersSchema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string"
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        },
+        "inputMimeTypes": [
+          "text/plain",
+          "image/png",
+          "audio/wav",
+          "application/pdf"
+        ],
+        "outputMimeTypes": [
+          "text/plain"
+        ]
+      },
+      {
+        "actionId": "write-document",
+        "kind": "EXECUTE",
+        "operation": "EXECUTE_SKILL",
+        "minSources": 0,
+        "maxSources": 32,
+        "skill": {
+          "skillKey": "text-file",
+          "skillVersion": "1.0.0",
+          "packageSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "manifestSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "parametersSchema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string"
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        },
+        "inputMimeTypes": [
+          "text/plain",
+          "image/png",
+          "audio/wav",
+          "application/pdf"
+        ],
+        "outputMimeTypes": [
+          "text/plain"
+        ]
+      }
+    ],
+    "availableSources": [
+      {
+        "sourceRefId": "source-text",
+        "kind": "TASK_WORKSPACE_FILE",
+        "mediaType": "text",
+        "contentMimeType": "text/plain"
+      },
+      {
+        "sourceRefId": "source-image",
+        "kind": "TASK_WORKSPACE_FILE",
+        "mediaType": "image",
+        "contentMimeType": "image/png"
+      },
+      {
+        "sourceRefId": "source-audio",
+        "kind": "TASK_WORKSPACE_FILE",
+        "mediaType": "audio",
+        "contentMimeType": "audio/wav"
+      },
+      {
+        "sourceRefId": "source-file",
+        "kind": "TASK_WORKSPACE_FILE",
+        "mediaType": "file",
+        "contentMimeType": "application/pdf"
+      }
+    ],
+    "inspectedSourceRefIds": []
+  },
+  "outcomes": [
+    {
+      "schemaVersion": 5,
+      "kind": "ANSWER",
+      "text": "已整理。",
+      "clarification": null,
+      "action": null,
+      "deliverable": false,
+      "deliveryRelation": null,
+      "revision": null
+    },
+    {
+      "schemaVersion": 5,
+      "kind": "CLARIFY",
+      "text": "请补充交付格式。",
+      "clarification": {
+        "question": "需要 PDF 还是纯文本？",
+        "requiredFacts": [
+          "交付格式"
+        ]
+      },
+      "action": null,
+      "deliverable": false,
+      "deliveryRelation": null,
+      "revision": null
+    },
+    {
+      "schemaVersion": 5,
+      "kind": "ACTION_REQUEST",
+      "text": "先查阅已添加的资料。",
+      "clarification": null,
+      "action": {
+        "actionId": "analyze-materials",
+        "instruction": "了解文档、音频与图片中的需求。",
+        "sourceRefIds": [
+          "source-text",
+          "source-image",
+          "source-audio",
+          "source-file"
+        ],
+        "parameters": {}
+      },
+      "deliverable": false,
+      "deliveryRelation": null,
+      "revision": null
+    },
+    {
+      "schemaVersion": 5,
+      "kind": "ACTION_REQUEST",
+      "text": "根据资料生成文档。",
+      "clarification": null,
+      "action": {
+        "actionId": "write-document",
+        "instruction": "整理为报告，不需要用户再点执行。",
+        "sourceRefIds": [
+          "source-file",
+          "source-audio"
+        ],
+        "parameters": {}
+      },
+      "deliverable": false,
+      "deliveryRelation": null,
+      "revision": null
+    }
+  ]
+}

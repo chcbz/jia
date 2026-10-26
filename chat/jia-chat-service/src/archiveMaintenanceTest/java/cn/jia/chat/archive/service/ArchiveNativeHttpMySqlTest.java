@@ -162,7 +162,7 @@ class ArchiveNativeHttpMySqlTest {
         String appointment=(String)operator("POST","/agent/positions/v1/appointments",operatorToken,"appoint",Map.of("positionId","editor","agentId",AGENT),200).get("resultId");
         assertFalse(positions.read(scope).state().installations().values().iterator().next().usable());
         String clientRoot=System.getenv("CYF_ARCHIVE_CLIENT_ROOT");assertNotNull(clientRoot);
-        node=new ProcessBuilder("node",Path.of(clientRoot,"conf/codex-ws-agent/test/fixtures/archive-native-http.mjs").toString()).redirectError(root.resolve("node-private.log").toFile()).start();
+        node=new ProcessBuilder("node",Path.of(clientRoot,"conf/codex-bridge/test/fixtures/archive-native-http.mjs").toString()).redirectError(root.resolve("node-private.log").toFile()).start();
         output=new BufferedReader(new InputStreamReader(node.getInputStream(),StandardCharsets.UTF_8));input=new BufferedWriter(new OutputStreamWriter(node.getOutputStream(),StandardCharsets.UTF_8));
         String origin="http://127.0.0.1:"+tomcat.getConnector().getLocalPort();
         var session=exchange(Map.of("op","INIT","ownerJiacn",OWNER,"root",root.toString(),"origin",origin,"authorization",authorization,"manifest",Map.of("runtimeProtocolVersion","v1","manifestVersion","1","installationId",INSTALLATION,"tenantId",TENANT,"clientId",CLIENT,"canonicalAgentId",AGENT,"manifestSha256","sha256:"+manifestHash)));

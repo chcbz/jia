@@ -76,6 +76,22 @@ class ChatActionOutcomeV5Test {
         assertThrows(IllegalArgumentException.class,()->ChatActionOutcomeContract.outcome(value,facts,ChatDeliveryRevisionContract.basis(fixture().get("basis"))));
     }
 
+    @SuppressWarnings("unchecked") @Test void executionReplacementKeepsExactTargetAndDoesNotAuthorizeUntargetedReplace() {
+        Map<String,Object> f;
+        try(var stream=getClass().getResourceAsStream("/contracts/unified-action-outcome-v5.json")) {f=JSON.readValue(stream,Map.class);}
+        catch(java.io.IOException e){throw new AssertionError(e);}
+        var facts=ChatActionOutcomeContract.facts(f.get("facts"));
+        var action=new LinkedHashMap<>(((List<Map<String,Object>>)f.get("outcomes")).stream()
+                .filter(o->"ACTION_REQUEST".equals(o.get("kind"))).findFirst().orElseThrow());
+        var relation=new LinkedHashMap<String,Object>();relation.put("mode","REPLACE");
+        relation.put("parentOutcomeId","parent");relation.put("parentFinalDigest","sha256:"+"a".repeat(64));
+        relation.put("targetOutcomeId","red");relation.put("targetFinalDigest","sha256:"+"b".repeat(64));
+        action.put("deliveryRelation",relation);
+        assertEquals("red",ChatActionOutcomeContract.outcome(action,facts).deliveryRelation().targetOutcomeId());
+        relation.remove("targetOutcomeId");relation.remove("targetFinalDigest");
+        assertThrows(IllegalArgumentException.class,()->ChatActionOutcomeContract.outcome(action,facts));
+    }
+
     @Test void mediaBatchReplacementPreservesOtherTextAndMediaAndRejectsMissingTargets() {
         var text=Map.<String,Object>of("outcomeId","text","finalDigest","t","text","keep");
         var red=Map.<String,Object>of("outcomeId","red","finalDigest","r","outputSource",Map.of("outputId","red"));
