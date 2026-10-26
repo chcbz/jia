@@ -76,6 +76,21 @@ class ChatActionOutcomeV5Test {
         assertThrows(IllegalArgumentException.class,()->ChatActionOutcomeContract.outcome(value,facts,ChatDeliveryRevisionContract.basis(fixture().get("basis"))));
     }
 
+    @Test void mediaBatchReplacementPreservesOtherTextAndMediaAndRejectsMissingTargets() {
+        var text=Map.<String,Object>of("outcomeId","text","finalDigest","t","text","keep");
+        var red=Map.<String,Object>of("outcomeId","red","finalDigest","r","outputSource",Map.of("outputId","red"));
+        var other=Map.<String,Object>of("outcomeId","other","finalDigest","o","outputSource",Map.of("outputId","other"));
+        var red2=Map.<String,Object>of("outcomeId","red","finalDigest","r","outputSource",Map.of("outputId","red2"));
+        var green=Map.<String,Object>of("outcomeId","green","finalDigest","g","outputSource",Map.of("outputId","green"));
+        var retained=new ArrayList<>(List.of(text,red,other,red2));
+        assertThrows(RuntimeException.class,()->ChatActionFinalService.replaceRetainedBatch(retained,List.of(),"red","r",true));
+        assertEquals(List.of(text,red,other,red2),retained);
+        assertThrows(RuntimeException.class,()->ChatActionFinalService.replaceRetainedBatch(retained,List.of(green),"red","wrong",true));
+        assertThrows(RuntimeException.class,()->ChatActionFinalService.replaceRetainedBatch(retained,List.of(green),"text","t",true));
+        ChatActionFinalService.replaceRetainedBatch(retained,List.of(green),"red","r",true);
+        assertEquals(List.of(text,green,other),retained);
+    }
+
     /** Real final reconstruction/receipt validator; only persistence is mocked. */
     @Nested class PersistedRevisionReplay {
         final ChatTypedDeliberationStore store=mock(ChatTypedDeliberationStore.class);
@@ -148,6 +163,23 @@ class ChatActionOutcomeV5Test {
             row=new ChatTypedDeliberationStore.Outcome(r.outcomeId(),r.scope(),r.requestId(),r.requestRevision(),r.turnId(),r.taskId(),r.assignmentRevision(),
                     r.assistantMessageId(),r.finalDigest(),r.kind(),r.text(),r.bindingJson(),r.factsJson(),CanonicalContextJson.write(stored),r.sourceCatalogJson(),r.createdAt());
             when(store.findOutcomeByTurn(scope,"turn",false)).thenReturn(row);
+        }
+        @SuppressWarnings("unchecked") @Test void failedPlanningWithoutFinalProjectsTerminalButIncompleteCommitStillFails() {
+            arrange(false);
+            var turn=dao.findTurn("0","owner","client","turn");
+            turn.setFinalMessageId(null).setFinalDigest(null);
+            var snapshot=dao.findSnapshot("0","owner","client","snapshot");
+            var facts=JSON.readValue(snapshot.getFactsManifestJson(),Map.class);
+            facts.put("task",Map.of("id",row.taskId()));
+            snapshot.setFactsManifestJson(CanonicalContextJson.write(facts));
+            for(String state:List.of("FAILED","CANCELLED","RUNNING","UNKNOWN","PARTIAL")) {
+                turn.setState(state);
+                var view=service.readActionIfPresent(scope,row.requestId(),"turn",1,"CHAT");
+                assertEquals(Set.of("FAILED","CANCELLED").contains(state)?state:"PENDING",view.get("state"));
+                assertNull(view.get("outcome"));assertNull(view.get("actionProgress"));
+            }
+            turn.setState("FAILED").setFinalDigest(original.finalDigest());
+            assertThrows(RuntimeException.class,()->service.readActionIfPresent(scope,row.requestId(),"turn",1,"CHAT"));
         }
         @Test void revisionWithNativeMaterialReplaysExactPersistedReceiptAndDigest() {
             arrange(true);var loaded=service.loadRevision(event);

@@ -210,14 +210,15 @@ public final class ChatActionOutcomeContract {
         }
         if (Boolean.TRUE.equals(deliverable) && !"ANSWER".equals(kind)) throw invalid("ACTION_OUTCOME_UNION_INVALID");
         // EXECUTE intent relates its future byte-backed batch, never ACTION_REQUEST prose.
-        // Batch replacement still uses the existing exact output edit lineage, not this relation.
+        // Media replacement names a frozen output batch; only committed execution outputs become replacements.
         if (relation != null && "SUBMIT".equals(relation.mode()) && !"SUBMISSION_REQUEST".equals(kind)) throw invalid("ACTION_DELIVERY_RELATION_INVALID");
         if (relation != null && !Boolean.TRUE.equals(deliverable) && !"SUBMISSION_REQUEST".equals(kind)) {
             String selectedAction=action==null?null:action.actionId();
             var descriptor=facts.availableActions().stream()
                     .filter(item->item.actionId().equals(selectedAction)).findFirst().orElse(null);
             if (!"ACTION_REQUEST".equals(kind) || descriptor==null || !"EXECUTE".equals(descriptor.kind())
-                    || !Set.of("APPEND","RESET").contains(relation.mode()) || relation.targetOutcomeId()!=null)
+                    || !("REPLACE".equals(relation.mode()) ? relation.targetOutcomeId()!=null
+                        : Set.of("APPEND","RESET").contains(relation.mode()) && relation.targetOutcomeId()==null))
                 throw invalid("ACTION_DELIVERY_RELATION_INVALID");
         }
         return new Outcome(VERSION, kind, text, clarification, action, deliverable, relation, revision);

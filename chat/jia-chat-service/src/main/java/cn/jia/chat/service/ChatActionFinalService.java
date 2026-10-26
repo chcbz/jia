@@ -305,11 +305,11 @@ public class ChatActionFinalService {
                     || !row.sourceCatalogJson().equals(admission.sourceCatalogJson())) throw persistence("Stored action final differs");
             verifyDeliveryRelation(scope,admission,facts,validated,verifyTargets);
             outcome = projection(row, validated);
-        } else if (turn.getFinalDigest() != null) throw persistence("Action final transaction is incomplete");
+        } else if (turn.getFinalDigest() != null || turn.getFinalMessageId() != null) throw persistence("Action final transaction is incomplete");
         var view = new LinkedHashMap<String, Object>(); view.put("schemaVersion", 5); view.put("route", expectedRoute);
         view.put("conversationId", scope.conversationId()); view.put("conversationGeneration", Long.toString(scope.conversationGeneration()));
         view.put("requestId", requestId); view.put("requestRevision", Long.toString(revision)); view.put("turnId", turnId);
-        view.put("state", row == null ? "PENDING" : "READY"); view.put("outcome", outcome);
+        view.put("state", row != null ? "READY" : Set.of("FAILED", "CANCELLED").contains(turn.getState()) ? turn.getState() : "PENDING"); view.put("outcome", outcome);
         view.put("inspection", inspection == null ? null : inspectionView(inspection, validated));
         view.put("actionProgress", includeProgress && row != null && "ACTION_REQUEST".equals(row.kind())
                 ? actionProgress(row, validated, admission) : null);
@@ -496,7 +496,7 @@ public class ChatActionFinalService {
         if(verifyTargets&&(relation.targetOutcomeId()!=null||"ACTION_REQUEST".equals(parent.kind())||"SUBMIT".equals(relation.mode())||"SUBMISSION_REQUEST".equals(parent.kind()))) {
             var retained=deliveryTargets(scope,basis);
             if(!canonical(retained).equals(canonical(facts.get("deliveryTargets"))))throw invalid("ACTION_DELIVERY_TARGET_INVALID");
-            if(relation.targetOutcomeId()!=null)verifyTargetAdvertisement(facts,relation,retained);
+            if(relation.targetOutcomeId()!=null)verifyTargetAdvertisement(facts,relation,retained,"ACTION_REQUEST".equals(validated.interactionOutcome().kind()));
         }
     }
 
@@ -546,18 +546,15 @@ public class ChatActionFinalService {
                 case "REPLACE" -> {
                     String target=(String)relation.getOrDefault("targetOutcomeId",relation.get("parentOutcomeId"));
                     String targetDigest=(String)relation.getOrDefault("targetFinalDigest",relation.get("parentFinalDigest"));
-                    int index=-1;
-                    for(int n=0;n<retained.size();n++)if(retained.get(n).containsKey("text")&&target.equals(retained.get(n).get("outcomeId"))&&targetDigest.equals(retained.get(n).get("finalDigest")))index=n;
-                    if(index<0)throw unavailable();
+                    boolean media="ACTION_REQUEST".equals(text.get("kind"));
                     if(relation.containsKey("targetOutcomeId")) {
                         var row=store.findOutcome(scope,(String)text.get("outcomeId"),false);
                         var turn=dao.findTurn(scope.tenantId(),scope.ownerJiacn(),scope.clientId(),row.turnId());
                         var snapshot=dao.findSnapshot(scope.tenantId(),scope.ownerJiacn(),scope.clientId(),turn.getSnapshotId());
                         verifyTargetAdvertisement(map(parse(snapshot.getFactsManifestJson()).get("typedDeliberationAdmission")),
-                                new ChatActionOutcomeContract.DeliveryRelation("REPLACE",(String)relation.get("parentOutcomeId"),(String)relation.get("parentFinalDigest"),target,targetDigest),retained);
+                                new ChatActionOutcomeContract.DeliveryRelation("REPLACE",(String)relation.get("parentOutcomeId"),(String)relation.get("parentFinalDigest"),target,targetDigest),retained,media);
                     }
-                    if(additions.size()!=1||!additions.getFirst().containsKey("text"))throw unavailable();
-                    retained.set(index,additions.getFirst());
+                    replaceRetainedBatch(retained,additions,target,targetDigest,media);
                 }
                 default -> throw unavailable();
             }
@@ -638,10 +635,34 @@ public class ChatActionFinalService {
         }
     }
 
+    // Called only after executionDeliveryTargets has verified committed outputs. No provider writes.
+    static void replaceRetainedBatch(List<Map<String,Object>> retained,List<Map<String,Object>> additions,
+            String target,String digest,boolean media) {
+        String kind=media?"outputSource":"text";
+        var slots=new java.util.ArrayList<Integer>();
+        for(int n=0;n<retained.size();n++) {
+            var item=retained.get(n);
+            if(target.equals(item.get("outcomeId"))&&digest.equals(item.get("finalDigest"))) {
+                if(!item.containsKey(kind))throw unavailable();
+                slots.add(n);
+            }
+        }
+        if(slots.isEmpty()||additions.isEmpty()||(!media&&(slots.size()!=1||additions.size()!=1))
+                ||additions.stream().anyMatch(item->!item.containsKey(kind)))throw unavailable();
+        // Explicit execution lineage, if present, may only name an output in this target batch.
+        for(var item:additions)if(item.containsKey("replaces")&&slots.stream().noneMatch(n->
+                canonical(retained.get(n).get("outputSource")).equals(canonical(item.get("replaces")))))throw unavailable();
+        var clean=additions.stream().map(item->{var copy=new LinkedHashMap<String,Object>(item);
+            copy.remove("replaces");return Collections.unmodifiableMap(copy);}).toList();
+        int insertion=slots.getFirst();
+        for(int n=slots.size()-1;n>=0;n--)retained.remove((int)slots.get(n));
+        retained.addAll(insertion,clean);
+    }
+
     private static void verifyTargetAdvertisement(Map<String,Object> facts,
-            ChatActionOutcomeContract.DeliveryRelation relation,List<Map<String,Object>> retained) {
+            ChatActionOutcomeContract.DeliveryRelation relation,List<Map<String,Object>> retained,boolean media) {
         if(!canonical(retained).equals(canonical(facts.get("deliveryTargets")))
-                ||retained.stream().noneMatch(item->item.containsKey("text")&&relation.targetOutcomeId().equals(item.get("outcomeId"))
+                ||retained.stream().noneMatch(item->item.containsKey(media?"outputSource":"text")&&relation.targetOutcomeId().equals(item.get("outcomeId"))
                     &&relation.targetFinalDigest().equals(item.get("finalDigest"))))throw invalid("ACTION_DELIVERY_TARGET_INVALID");
     }
 
