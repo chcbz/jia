@@ -67,6 +67,13 @@ public class ChatBountyBootstrapRelay implements SmartLifecycle, AutoCloseable {
     ChatBountyBootstrapRelay(AgentTaskBountyBootstrapOutboxService outbox,
             ChatBountyBootstrapAdmissionService admission, ChatTypedDeliberationContextService contexts,
             Supplier<ScheduledExecutorService> schedulerFactory) {
+        this(outbox, admission, contexts, schedulerFactory, System::currentTimeMillis);
+    }
+
+    ChatBountyBootstrapRelay(AgentTaskBountyBootstrapOutboxService outbox,
+            ChatBountyBootstrapAdmissionService admission, ChatTypedDeliberationContextService contexts,
+            Supplier<ScheduledExecutorService> schedulerFactory, LongSupplier clock) {
+        this.clock = Objects.requireNonNull(clock);
         this.outbox = Objects.requireNonNull(outbox);
         this.admission = Objects.requireNonNull(admission);
         this.contexts = Objects.requireNonNull(contexts);
