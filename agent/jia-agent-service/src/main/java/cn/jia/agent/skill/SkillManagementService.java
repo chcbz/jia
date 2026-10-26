@@ -260,9 +260,24 @@ public final class SkillManagementService {
             for(var e:app.lockSkillKey(a.tenantId(),a.clientId(),state.getAgentId(),state.getSkillKey())) {
                 var auth=db.findAuthorization(a.tenantId(),a.clientId(),e.getInstallationId());
                 var old=auth==null?null:db.findChange(a.tenantId(),a.clientId(),auth.getChangeId());
-                require(old!=null&&Set.of("FAILED_RETRYABLE","FAILED_FINAL").contains(dto(old).get("status")),409,"SKILL_ALREADY_ORDERED");
+                require(old!=null&&(Set.of("FAILED_RETRYABLE","FAILED_FINAL").contains(dto(old).get("status"))
+                        || uninstalledAfter(a,state.getAgentId(),state.getSkillKey(),dto(old))),409,"SKILL_ALREADY_ORDERED");
             }
         }
+    }
+    private boolean uninstalledAfter(HostingRentHttp.Actor a,String agent,String skill,Map<String,Object> installationChange) {
+        return db.changes(a.tenantId(),a.clientId(),agent).stream().filter(c->skill.equals(c.getSkillKey())).map(SkillManagementService::dto)
+                .anyMatch(c->"UNINSTALL".equals(c.get("action"))&&"SUCCEEDED".equals(c.get("status"))&&Boolean.TRUE.equals(c.get("runtimeSynced"))
+                        &&Long.parseLong(text(c,"skillRevision"))>Long.parseLong(text(installationChange,"skillRevision")));
+    }
+    private SkillEntitlementEntity reinstallEntitlement(HostingRentHttp.Actor a,String agent,String skill,String productVersion) {
+        for(var e:app.lockSkillKey(a.tenantId(),a.clientId(),agent,skill)) {
+            if(!"ACTIVE".equals(e.getStatus())||!productVersion.equals(e.getProductVersionId()))continue;
+            var auth=db.findAuthorization(a.tenantId(),a.clientId(),e.getInstallationId());
+            var original=auth==null?null:db.findChange(a.tenantId(),a.clientId(),auth.getChangeId());
+            if(original!=null&&uninstalledAfter(a,agent,skill,dto(original)))return e;
+        }
+        return null;
     }
     private record Prepared(SkillProductVersionEntity version,Map<String,Object> target,Map<String,Object> details) {}
     private Prepared prepare(HostingRentHttp.Actor a,String productVersion,boolean admin) {
@@ -329,6 +344,10 @@ public final class SkillManagementService {
                 if("COVERED".equals(policy)){coverage="ENTITLEMENT";entitlement=src.getEntitlementId();price=0;}
                 else require("PAID".equals(policy),409,"SKILL_UPGRADE_POLICY_UNSET");
             }
+            if(src==null) {
+                var retained=reinstallEntitlement(a,agent,state.getSkillKey(),text(data,"targetProductVersionId"));
+                if(retained!=null){coverage="ENTITLEMENT";entitlement=retained.getEntitlementId();price=0;}
+            }
             long now=System.currentTimeMillis();String quote=id("sq_");
             var result=map("quoteId",quote,"action",data.get("action"),"agentId",agent,"skillKey",state.getSkillKey(),
                     "sourceSkillInstallationId",data.get("sourceSkillInstallationId"),"targetProductVersionId",data.get("targetProductVersionId"),
@@ -380,11 +399,15 @@ public final class SkillManagementService {
                     require(policy!=null,409,"SKILL_UPGRADE_POLICY_UNSET");require(!"NOT_ALLOWED".equals(policy),409,"SKILL_UPGRADE_NOT_ALLOWED");
                     require("COVERED".equals(policy)?"ENTITLEMENT".equals(quote.get("coverage")):"PAID".equals(policy)&&"PURCHASE".equals(quote.get("coverage")),409,"SKILL_QUOTE_MISMATCH");
                 }
+                if(src==null&&"ENTITLEMENT".equals(quote.get("coverage"))) {
+                    var retained=reinstallEntitlement(a,agent,state.getSkillKey(),text(data,"targetProductVersionId"));
+                    require(retained!=null&&retained.getEntitlementId().equals(quote.get("entitlementId")),409,"SKILL_QUOTE_MISMATCH");
+                }
                 target=decode(q.getTargetJson(),"PackageRef");details=decode(q.getDetailsJson(),"VersionDetails");permissions=json(data.get("approvedPermissions"));
             } else {target=ref(src);details=decode(src.getDetailsJson(),"VersionDetails");permissions=src.getPermissionsJson();}
             terminateSupersededFailures(a,state);
             long now=System.currentTimeMillis(),revision=Math.addExact(state.getSkillRevision(),1);
-            if(install&&"PURCHASE".equals(quote.get("coverage"))) {
+            if(install&&("PURCHASE".equals(quote.get("coverage"))||"INSTALL".equals(data.get("action")))) {
                 orderId=id("so_");long amount=Long.parseLong(text(object(quote.get("price")),"amountMinor"));
                 var reserve=marketplace.reserve(a,orderId,amount,now);escrowVersion=reserve==null?null:reserve.escrow().escrowVersion();
                 var v=prepared.version();
@@ -518,7 +541,7 @@ public final class SkillManagementService {
                 require(order!=null&&"INSTALLING".equals(order.getStatus())&&order.getRefundTransactionId()==null,409,"SKILL_RETRY_NOT_ALLOWED");
             }
             boolean install=Set.of("INSTALL","UPGRADE").contains(text(value,"action"));
-            if(!"INSTALL".equals(value.get("action")))require(online(a,agent),409,"SKILL_AGENT_OFFLINE");
+            if(!Set.of("INSTALL","UNINSTALL").contains(text(value,"action")))require(online(a,agent),409,"SKILL_AGENT_OFFLINE");
             var runtime=runtimes.findInScope(a.tenantId(),a.clientId(),agent);
             require(c.getRuntimeInstallationId().equals(runtime.getRuntimeInstallationId())&&c.getRuntimeHostId().equals(runtime.getRuntimeHostId()),409,"SKILL_RUNTIME_MAPPING_REQUIRED");
             var target=new LinkedHashMap<>(object(value.get("target")));var oldAuth=db.findAuthorization(a.tenantId(),a.clientId(),text(target,"skillInstallationId"));
@@ -596,6 +619,8 @@ public final class SkillManagementService {
                 } else {
                     if(Set.of("COVERED","PAID").contains(eligibility)&&connected&&blocked==null&&(admin||"NONE".equals(candidate.version().getDeploymentRestriction())))allowed.add("UPGRADE");
                     else if(!"NOT_APPLICABLE".equals(eligibility))denied.add(map("action","UPGRADE","reasonCode",blocked!=null?blocked:!connected?"AGENT_OFFLINE":candidate!=null&&!admin&&!"NONE".equals(candidate.version().getDeploymentRestriction())?"AGENT_FORBIDDEN":"POLICY_UNSET".equals(eligibility)?"UPGRADE_POLICY_UNSET":"UPGRADE_NOT_ALLOWED"));
+                    if(blocked==null)allowed.add("UNINSTALL");
+                    else denied.add(map("action","UNINSTALL","reasonCode",blocked));
                     String action=Boolean.TRUE.equals(s.getDesiredEnabled())?"DISABLE":"ENABLE";
                     if(blocked==null&&("DISABLE".equals(action)||connected))allowed.add(action);
                     else denied.add(map("action",action,"reasonCode",blocked!=null?blocked:"AGENT_OFFLINE"));
@@ -648,7 +673,7 @@ public final class SkillManagementService {
                 &&proof.scope().agentId().equals(data.get("agentId"))&&proof.installationId().equals(data.get("runtimeInstallationId")),409,"SKILL_DELIVERY_FENCED");
         var evidence=object(data.get("evidence"));
         var approved=market.selectApprovedProductVersion(proof.scope().tenantId(),proof.scope().clientId(),text(object(dto(hint).get("target")),"productVersionId"));
-        var prepared="APPLIED".equals(evidence.get("outcome"))?packages.getObject().prepare(approved):null;
+        var prepared="APPLIED".equals(evidence.get("outcome"))&&!"UNINSTALL".equals(dto(hint).get("action"))?packages.getObject().prepare(approved):null;
         var actor=new HostingRentHttp.Actor(hint.getActorId(),hint.getTenantId(),hint.getClientId(),hint.getOwnerJiacn());
         return ownedChange(hint,()->authentication.withFence(proof,false,()->{
             var state=state(actor,hint.getAgentId(),hint.getSkillKey());
@@ -704,6 +729,14 @@ public final class SkillManagementService {
             value.put("status","ACTIVATING");value.put("reasonCode",null);value.put("runtimeSynced",false);save(c,value);
             cmd.setState("RESULT").setEvidenceJson(json(evidence));one(db.saveCommand(cmd));return;
         }
+        if("APPLIED".equals(outcome)&&"UNINSTALL".equals(value.get("action"))) {
+            require("POLICY".equals(phase)&&evidence.get("actual")==null&&value.get("skillRevision").equals(evidence.get("appliedRevision"))
+                    &&Objects.equals(state.getActiveInstallationId(),object(value.get("source")).get("skillInstallationId")),409,"SKILL_RESULT_CONFLICT");
+            state.setAdmissionEnabled(false);one(db.saveState(state,revision));
+            value.put("status","VERIFYING");value.put("reasonCode","CATALOG_UNCONFIRMED");value.put("runtimeSynced",false);value.put("retryAllowed",false);
+            save(c,value);cmd.setState("RESULT").setEvidenceJson(json(evidence));one(db.saveCommand(cmd));
+            confirmCatalog(a,state,c,value);return;
+        }
         if("APPLIED".equals(outcome)) {
             require(!"PREPARE".equals(phase)&&json(value.get("target")).equals(json(evidence.get("actual")))
                     &&value.get("skillRevision").equals(evidence.get("appliedRevision")),409,"SKILL_RESULT_CONFLICT");
@@ -732,13 +765,13 @@ public final class SkillManagementService {
             confirmCatalog(a,state,c,value);return;
         }
         if(Set.of("FAILED","NOT_STARTED").contains(outcome)&&!"DISABLE".equals(value.get("action"))
-                &&("PREPARE".equals(phase)||"ENABLE".equals(value.get("action"))||"NOT_STARTED".equals(outcome))) {
+                &&("PREPARE".equals(phase)||Set.of("ENABLE","UNINSTALL").contains(text(value,"action"))||"NOT_STARTED".equals(outcome))) {
             // FAILED/NOT_STARTED are accepted only as determinate non-switch facts. Security and
             // entitlement denials are final; absent/unknown evidence never enters this branch.
             String reason=evidence.get("reasonCode")==null?"PREPARATION_FAILED":text(evidence,"reasonCode");
             // Frozen public Reasons only; the no-switch phase/outcome gate above remains
             // mandatory even for a terminal identity/entitlement diagnostic.
-            boolean recoverable=("PREPARE".equals(phase)||"ENABLE".equals(value.get("action")))
+            boolean recoverable=("PREPARE".equals(phase)||Set.of("ENABLE","UNINSTALL").contains(text(value,"action")))
                     && !Set.of("IDENTITY_CHANGED","ENTITLEMENT_TERMINATED").contains(reason);
             value.put("status",recoverable?"FAILED_RETRYABLE":"FAILED_FINAL");value.put("retryAllowed",recoverable);value.put("reasonCode",reason);
             value.put("runtimeSynced",false);
@@ -775,6 +808,18 @@ public final class SkillManagementService {
         if(!Set.of("VERIFYING","SUCCEEDED").contains(text(value,"status")))return;
         var auth=state.getActiveInstallationId()==null?null:db.findAuthorization(a.tenantId(),a.clientId(),state.getActiveInstallationId());
         var view=catalog(a,c.getAgentId());boolean connected=online(a,c.getAgentId());
+        if("UNINSTALL".equals(value.get("action"))) {
+            // A current authenticated catalog supplements, never replaces, exact APPLIED evidence.
+            var command=db.findCommand(a.tenantId(),a.clientId(),c.getCommandId());
+            if(!connected||view==null||command==null||!"RESULT".equals(command.getState())||command.getEvidenceJson()==null)return;
+            var evidence=decode(command.getEvidenceJson(),"InstallEvidence");
+            if(!"APPLIED".equals(evidence.get("outcome"))||evidence.get("actual")!=null
+                    ||!value.get("skillRevision").equals(evidence.get("appliedRevision"))
+                    ||view.catalog().skills().stream().anyMatch(f->c.getSkillKey().equals(f.skillKey())))return;
+            state.setActiveInstallationId(null).setAdmissionEnabled(false).setDesiredEnabled(false).setPendingChangeId(null);
+            one(db.saveState(state,state.getSkillRevision()));
+            value.put("status","SUCCEEDED");value.put("runtimeSynced",true);value.put("reasonCode",null);save(c,value);return;
+        }
         var live=runtime(a,c.getAgentId(),state,auth,view,connected);
         boolean instruction=auth!=null&&"INSTRUCTION".equals(ref(auth).get("kind"));
         // Disabling is a policy fact, not an assertion that the runner or its dependencies

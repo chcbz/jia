@@ -638,4 +638,50 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         SkillTransportStorageAssertions.immutableAudit(jdbc,"0",ACTOR.clientId(),AGENT);
     }
 
+    private void uninstallApplied(Map<String,Object> change) {
+        var e=evidence(change,"APPLIED",null);e.put("actual",null);service.result(proof(),result(change,e));
+    }
+    private void emptyCurrentCatalog() {
+        var fence=new AgentManagedSessionLookup.SessionFence(runtime.getRuntimeInstallationId(),"host-1","runtime-1",1L);
+        when(capabilities.lookup(any(),any())).thenReturn(new SkillCapabilityLookup.View(SkillCapabilityLookup.State.AVAILABLE,"session-1",fence,new SkillCapabilityLookup.Catalog("2",List.of())));
+        service.capabilitiesChanged(proof());
+    }
+    @Test void uninstallRequiresExactRemovalAndCurrentCatalogThenReinstallUsesRetainedRights() throws Exception {
+        publishExecutable("1.0.0",1);var first=packageChange("INSTALL",null,"0","spv_pdf_1");finishInstall(first);first=current(first);
+        String installation=text(object(first.get("target")),"skillInstallationId");long paidBalance=wallet();
+        var frozen=service.admit(scope(),"pdf-export",installation,()->service.taskBinding("0",ACTOR.clientId(),"retained-execution","retained-grant",1,AGENT,installation));
+        var removal=policyChange("UNINSTALL",first);
+        assertEquals("NONE",removal.get("fundingStatus"));assertNull(removal.get("orderId"));assertNull(removal.get("price"));
+        assertThrows(SkillMarketplaceException.class,()->service.admit(scope(),"pdf-export",installation,()->"never"));
+        assertThrows(SkillMarketplaceException.class,()->policyChange("ENABLE",removal));
+        // Existing disable-style evidence (actual target) cannot claim uninstall.
+        assertThrows(SkillMarketplaceException.class,()->report(removal,"APPLIED",null));
+        uninstallApplied(removal);assertEquals("VERIFYING",current(removal).get("status"));
+        assertEquals(installation,db.lockState("0",ACTOR.clientId(),AGENT,"pdf-export").getActiveInstallationId());
+        emptyCurrentCatalog();var done=current(removal);assertEquals("SUCCEEDED",done.get("status"));assertEquals(true,done.get("runtimeSynced"));
+        assertNull(db.lockState("0",ACTOR.clientId(),AGENT,"pdf-export").getActiveInstallationId());
+        assertEquals(installation,frozen.get("skillInstallationId"));assertEquals(1,service.descriptors(scope()).size());assertEquals(paidBalance,wallet());
+        var request=map("action","INSTALL","agentId",AGENT,"skillKey","pdf-export","sourceSkillInstallationId",null,"targetProductVersionId","spv_pdf_1",
+                "expectedAgentVersion",Long.toString(versions.readOwned(ACTOR,AGENT)),"expectedSkillRevision",done.get("skillRevision"),"approvedPermissions",List.of());
+        var q=service.quote(ACTOR,"reinstall-quote",request,false);assertEquals("ENTITLEMENT",q.get("coverage"));assertEquals("0",object(q.get("price")).get("amountMinor"));
+        var input=creation(q,request);var reinstall=service.create(ACTOR,AGENT,"reinstall","reinstall-request",input,false);
+        assertEquals(reinstall,service.create(ACTOR,AGENT,"reinstall","reinstall-request",input,false));
+        finishInstall(reinstall);assertEquals("SUCCEEDED",current(reinstall).get("status"));assertEquals(paidBalance,wallet());
+        assertNotEquals(installation,object(reinstall.get("target")).get("skillInstallationId"));assertEquals(2,service.descriptors(scope()).size());
+    }
+    @Test void uninstallOfflineFailureRetryAndUnknownNeverDeleteOrReopenAdmission() throws Exception {
+        publishExecutable("1.0.0",1);var first=packageChange("INSTALL",null,"0","spv_pdf_1");finishInstall(first);first=current(first);
+        var disabled=policyChange("DISABLE",first);report(disabled,"APPLIED",null);catalog(current(disabled));
+        when(sessions.isReady(anyString(),anyString(),anyString(),any())).thenReturn(false);
+        var removal=policyChange("UNINSTALL",current(disabled));assertEquals("WAITING_AGENT",removal.get("status"));
+        when(sessions.isReady(anyString(),anyString(),anyString(),any())).thenReturn(true);
+        report(removal,"NOT_STARTED","PREPARATION_FAILED");var failed=current(removal);assertEquals("FAILED_RETRYABLE",failed.get("status"));
+        var retried=service.retry(ACTOR,AGENT,text(failed,"skillChangeId"),"retry-uninstall","retry-request",map("expectedChangeRevision",failed.get("changeRevision")));
+        assertEquals(2,retried.get("attempt"));assertEquals(removal.get("skillChangeId"),retried.get("skillChangeId"));assertEquals(removal.get("target"),retried.get("target"));
+        report(retried,"UNKNOWN","RECEIPT_UNKNOWN");var unknown=current(retried);assertEquals("RECOVERY_REQUIRED",unknown.get("status"));
+        assertEquals(false,unknown.get("retryAllowed"));assertEquals(1,count("economy_skill_installation"));assertEquals(1,count("economy_skill_entitlement"));
+        assertThrows(SkillMarketplaceException.class,()->service.retry(ACTOR,AGENT,text(unknown,"skillChangeId"),"illegal-retry","request",map("expectedChangeRevision",unknown.get("changeRevision"))));
+        assertEquals(false,db.lockState("0",ACTOR.clientId(),AGENT,"pdf-export").getAdmissionEnabled());
+    }
+
 }

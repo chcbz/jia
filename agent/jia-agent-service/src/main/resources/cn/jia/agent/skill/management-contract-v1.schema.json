@@ -338,7 +338,8 @@
             "INSTALL",
             "UPGRADE",
             "ENABLE",
-            "DISABLE"
+            "DISABLE",
+            "UNINSTALL"
           ]
         },
         "skillRevision": {
@@ -503,7 +504,8 @@
                 "enum": [
                   "UPGRADE",
                   "ENABLE",
-                  "DISABLE"
+                  "DISABLE",
+                  "UNINSTALL"
                 ]
               }
             }
@@ -522,7 +524,8 @@
               "action": {
                 "enum": [
                   "ENABLE",
-                  "DISABLE"
+                  "DISABLE",
+                  "UNINSTALL"
                 ]
               }
             }
@@ -595,7 +598,8 @@
                 "enum": [
                   "INSTALL",
                   "UPGRADE",
-                  "ENABLE"
+                  "ENABLE",
+                  "UNINSTALL"
                 ]
               }
             }
@@ -624,6 +628,22 @@
               },
               "fundingStatus": {
                 "const": "NONE"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "UNINSTALL"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "desiredEnabled": {
+                "const": false
               }
             }
           }
@@ -760,7 +780,8 @@
               "ENABLE",
               "DISABLE",
               "RETRY",
-              "RECONCILE"
+              "RECONCILE",
+              "UNINSTALL"
             ]
           },
           "uniqueItems": true
@@ -782,7 +803,8 @@
                   "ENABLE",
                   "DISABLE",
                   "RETRY",
-                  "RECONCILE"
+                  "RECONCILE",
+                  "UNINSTALL"
                 ]
               },
               "reasonCode": {
@@ -1029,12 +1051,6 @@
             "properties": {
               "sourceSkillInstallationId": {
                 "type": "null"
-              },
-              "coverage": {
-                "const": "PURCHASE"
-              },
-              "entitlementId": {
-                "type": "null"
               }
             }
           }
@@ -1065,9 +1081,6 @@
           },
           "then": {
             "properties": {
-              "action": {
-                "const": "UPGRADE"
-              },
               "entitlementId": {
                 "$ref": "#/definitions/Id"
               },
@@ -1077,6 +1090,22 @@
                     "const": "0"
                   }
                 }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "coverage": {
+                "const": "PURCHASE"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "entitlementId": {
+                "type": "null"
               }
             }
           }
@@ -1223,6 +1252,34 @@
             },
             "action": {
               "const": "DISABLE"
+            },
+            "sourceSkillInstallationId": {
+              "$ref": "#/definitions/Id"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "skillKey",
+            "expectedAgentVersion",
+            "expectedSkillRevision",
+            "action",
+            "sourceSkillInstallationId"
+          ],
+          "properties": {
+            "skillKey": {
+              "$ref": "#/definitions/SkillKey"
+            },
+            "expectedAgentVersion": {
+              "$ref": "#/definitions/PositiveRevision"
+            },
+            "expectedSkillRevision": {
+              "$ref": "#/definitions/Revision"
+            },
+            "action": {
+              "const": "UNINSTALL"
             },
             "sourceSkillInstallationId": {
               "$ref": "#/definitions/Id"
@@ -1720,7 +1777,8 @@
             "action": {
               "enum": [
                 "ENABLE",
-                "DISABLE"
+                "DISABLE",
+                "UNINSTALL"
               ]
             },
             "tenantId": {
@@ -1829,7 +1887,8 @@
                 "INSTALL",
                 "UPGRADE",
                 "ENABLE",
-                "DISABLE"
+                "DISABLE",
+                "UNINSTALL"
               ]
             },
             "tenantId": {
@@ -2201,10 +2260,36 @@
           "then": {
             "properties": {
               "actual": {
-                "$ref": "#/definitions/PackageRef"
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/PackageRef"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
               "appliedRevision": {
                 "$ref": "#/definitions/PositiveRevision"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "phase": {
+                "const": "ACTIVATE"
+              },
+              "outcome": {
+                "const": "APPLIED"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "actual": {
+                "$ref": "#/definitions/PackageRef"
               }
             }
           }
