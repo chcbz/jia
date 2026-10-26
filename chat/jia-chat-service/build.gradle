@@ -197,6 +197,7 @@ def mmdControlledImageBridgeSourceSet = sourceSets.create('mmdControlledImageBri
         include 'cn/jia/chat/handler/NativeBountyExecutionDeclarationTest.java'
         include 'cn/jia/chat/handler/AgentRuntimeCapabilitiesTest.java'
         include 'cn/jia/chat/service/ControlledImagePointAndStartCapabilityServiceTest.java'
+        include 'cn/jia/chat/service/ChatBountyBootstrapRelayRecoveryTest.java'
         include 'cn/jia/chat/api/AgentTaskControlledImageCapabilityControllerTest.java'
         include 'cn/jia/chat/service/ChatBountyExecutionCoordinatorTest.java'
         include 'cn/jia/chat/service/ChatBountyExecutionCoordinatorSpringTransactionTest.java'

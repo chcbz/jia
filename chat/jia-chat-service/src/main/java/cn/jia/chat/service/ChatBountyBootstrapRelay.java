@@ -12,13 +12,21 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.SmartLifecycle;
 import org.springframework.stereotype.Component;
 
+import java.sql.SQLException;
+import java.sql.SQLRecoverableException;
+import java.sql.SQLTransientException;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
+import java.util.function.LongSupplier;
+import org.springframework.dao.TransientDataAccessException;
 
 /**
  * Claims task-transaction intents without a browser session. Acknowledges only the committed
@@ -33,6 +41,12 @@ public class ChatBountyBootstrapRelay implements SmartLifecycle, AutoCloseable {
     private final ChatBountyBootstrapAdmissionService admission;
     private final ChatTypedDeliberationContextService contexts;
     private final Supplier<ScheduledExecutorService> schedulerFactory;
+    // Reuse the outbox recovery backoff range: delay claim attempts, never expire user work.
+    static final long CLAIM_RETRY_BASE_MILLIS = 1_000L;
+    static final long CLAIM_RETRY_MAX_MILLIS = 300_000L;
+    private final LongSupplier clock;
+    private volatile long claimRetryNotBefore;
+    private volatile long claimRetryDelay = CLAIM_RETRY_BASE_MILLIS;
     private final String consumerId = "mmd-chat-" + UUID.randomUUID();
     private final AtomicBoolean running = new AtomicBoolean();
     private final AtomicBoolean polling = new AtomicBoolean();
@@ -64,6 +78,8 @@ public class ChatBountyBootstrapRelay implements SmartLifecycle, AutoCloseable {
                 || !running.compareAndSet(false, true)) return;
         previousFailure = null;
         sameFailureCount = 0;
+        claimRetryNotBefore = 0;
+        claimRetryDelay = CLAIM_RETRY_BASE_MILLIS;
         try {
             ScheduledExecutorService active = Objects.requireNonNull(schedulerFactory.get());
             scheduler = active;
@@ -93,8 +109,23 @@ public class ChatBountyBootstrapRelay implements SmartLifecycle, AutoCloseable {
         }
         // SmartLifecycle starts before ApplicationRunner: do not acquire a lease or consume
         // an attempt until typed admission is ready. Terminal unavailability is a real failure.
-        long now = System.currentTimeMillis();
-        AgentTaskBountyBootstrapClaimDTO claim = outbox.claimNextAvailable(consumerId, now);
+        long now = clock.getAsLong();
+        if (now < claimRetryNotBefore) return false;
+        AgentTaskBountyBootstrapClaimDTO claim;
+        try {
+            claim = outbox.claimNextAvailable(consumerId, now);
+        } catch (RuntimeException failure) {
+            // Only retry acquisition of a durable fenced intent. No Chat/Provider call has
+            // happened here. An uncertain claim remains protected by its existing lease.
+            if (!transientClaimFailure(failure)) throw failure;
+            claimRetryNotBefore = clock.getAsLong() + claimRetryDelay;
+            log.warn("Bounty bootstrap claim temporarily unavailable; retrying durable claim in {} ms",
+                    claimRetryDelay, failure);
+            claimRetryDelay = Math.min(CLAIM_RETRY_MAX_MILLIS, claimRetryDelay * 2);
+            return false;
+        }
+        claimRetryNotBefore = 0;
+        claimRetryDelay = CLAIM_RETRY_BASE_MILLIS;
         if (claim == null) return true;
         AgentTaskExecutionGrantService.Scope scope = new AgentTaskExecutionGrantService.Scope(
                 claim.tenantId(), claim.clientId(), claim.ownerJiacn());
@@ -119,6 +150,21 @@ public class ChatBountyBootstrapRelay implements SmartLifecycle, AutoCloseable {
         }
         reconcile(scope, claim, Outcome.ADMITTED, result.conversationId(), result.requestId(), null);
         return true;
+    }
+
+    private static boolean transientClaimFailure(Throwable failure) {
+        Set<Throwable> seen = Collections.newSetFromMap(new IdentityHashMap<>());
+        for (Throwable cause = failure; cause != null && seen.add(cause); cause = cause.getCause()) {
+            if (cause instanceof TransientDataAccessException
+                    || cause instanceof SQLTransientException
+                    || cause instanceof SQLRecoverableException) return true;
+            if (cause instanceof SQLException sql) {
+                String state = sql.getSQLState();
+                if (state != null && (state.startsWith("08") || state.equals("40001"))) return true;
+            }
+        }
+        // Schema, authorization, protocol and unknown evidence failures retain fail-closed handling.
+        return false;
     }
 
     private void reconcile(AgentTaskExecutionGrantService.Scope scope,
