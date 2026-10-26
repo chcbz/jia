@@ -2,13 +2,13 @@
   "source": "specs/juyiting-skill-execution/fixtures",
   "contractVersion": "SM-C1",
   "files": {
-    "management-contract-v1.schema.json": "b4543c09df8a2681c5a4e4fb95bbf2291c39b9715ac247d67db1dd80d33c2257",
+    "management-contract-v1.schema.json": "6692316be719bc93e3d4f03be2e12b0fa1233e6b490a7610cd8aec392f175776",
     "management-contract-v1.examples.json": "b9e48e96fc431b4920af44a437097d6479a61d7c2ccb076ad6be266db133171e",
     "management-contract-v1.behavior.json": "dcd4b7ae53c539b343480fe11b639fcf47bcd6c14b100b139f10fa24302a8edf"
   },
   "schemaOverlay": {
-    "date": "2026-10-25",
+    "date": "2026-10-26",
     "source": "api/agent/jia-agent-service/src/main/resources/cn/jia/agent/skill/management-contract-v1.schema.json",
-    "scope": "Optional server-owned POSITION authorization; no order/price/funding. Original examples, behavior and historical hashes unchanged."
+    "scope": "Optional server-owned POSITION authorization; no order/price/funding. Original examples, behavior and historical hashes unchanged. UNINSTALL management action and entitlement-covered reinstall; source fixture schema hash updated, examples and behavior unchanged."
   }
 }
