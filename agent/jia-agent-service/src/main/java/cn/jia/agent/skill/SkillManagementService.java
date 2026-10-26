@@ -260,22 +260,33 @@ public final class SkillManagementService {
             for(var e:app.lockSkillKey(a.tenantId(),a.clientId(),state.getAgentId(),state.getSkillKey())) {
                 var auth=db.findAuthorization(a.tenantId(),a.clientId(),e.getInstallationId());
                 var old=auth==null?null:db.findChange(a.tenantId(),a.clientId(),auth.getChangeId());
-                require(old!=null&&(Set.of("FAILED_RETRYABLE","FAILED_FINAL").contains(dto(old).get("status"))
-                        || uninstalledAfter(a,state.getAgentId(),state.getSkillKey(),dto(old))),409,"SKILL_ALREADY_ORDERED");
+                require(old!=null&&Set.of("FAILED_RETRYABLE","FAILED_FINAL").contains(dto(old).get("status"))
+                        || uninstalledAfter(a,state.getAgentId(),state.getSkillKey(),auth),409,"SKILL_ALREADY_ORDERED");
             }
         }
     }
-    private boolean uninstalledAfter(HostingRentHttp.Actor a,String agent,String skill,Map<String,Object> installationChange) {
+    private boolean uninstalledAfter(HostingRentHttp.Actor a,String agent,String skill,SkillInstallationAuthorizationEntity authorization) {
+        if(authorization==null)return false;
+        var original=db.findChange(a.tenantId(),a.clientId(),authorization.getChangeId());
+        final long installationRevision;
+        if(original!=null)installationRevision=Long.parseLong(text(dto(original),"skillRevision"));
+        else {
+            // Explicit historical adoption is the immutable pre-management baseline, not a
+            // fabricated management change. Revalidate its original receipt and identity.
+            var context=origin(authorization);
+            if(context==null||!a.actorId().equals(context.actorId())||!a.ownerJiacn().equals(context.ownerJiacn())
+                    ||!agent.equals(context.agentId())||!skill.equals(context.skillKey()))return false;
+            installationRevision=0;
+        }
         return db.changes(a.tenantId(),a.clientId(),agent).stream().filter(c->skill.equals(c.getSkillKey())).map(SkillManagementService::dto)
                 .anyMatch(c->"UNINSTALL".equals(c.get("action"))&&"SUCCEEDED".equals(c.get("status"))&&Boolean.TRUE.equals(c.get("runtimeSynced"))
-                        &&Long.parseLong(text(c,"skillRevision"))>Long.parseLong(text(installationChange,"skillRevision")));
+                        &&Long.parseLong(text(c,"skillRevision"))>installationRevision);
     }
     private SkillEntitlementEntity reinstallEntitlement(HostingRentHttp.Actor a,String agent,String skill,String productVersion) {
         for(var e:app.lockSkillKey(a.tenantId(),a.clientId(),agent,skill)) {
             if(!"ACTIVE".equals(e.getStatus())||!productVersion.equals(e.getProductVersionId()))continue;
             var auth=db.findAuthorization(a.tenantId(),a.clientId(),e.getInstallationId());
-            var original=auth==null?null:db.findChange(a.tenantId(),a.clientId(),auth.getChangeId());
-            if(original!=null&&uninstalledAfter(a,agent,skill,dto(original)))return e;
+            if(uninstalledAfter(a,agent,skill,auth))return e;
         }
         return null;
     }

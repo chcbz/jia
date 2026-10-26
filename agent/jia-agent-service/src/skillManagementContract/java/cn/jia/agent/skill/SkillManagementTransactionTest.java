@@ -669,6 +669,25 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         finishInstall(reinstall);assertEquals("SUCCEEDED",current(reinstall).get("status"));assertEquals(paidBalance,wallet());
         assertNotEquals(installation,object(reinstall.get("target")).get("skillInstallationId"));assertEquals(2,service.descriptors(scope()).size());
     }
+    @Test void uninstallHistoricalAdoptionReusesRightsOnlyWithIntactOriginalEvidence() throws Exception {
+        var adopted=adoptedFixture();catalog(adopted);long balance=wallet();
+        String old=text(object(adopted.get("target")),"skillInstallationId");
+        var removal=policyChange("UNINSTALL",adopted);uninstallApplied(removal);emptyCurrentCatalog();
+        var done=current(removal);assertEquals("SUCCEEDED",done.get("status"));
+        var request=map("action","INSTALL","agentId",AGENT,"skillKey","pdf-export","sourceSkillInstallationId",null,"targetProductVersionId","spv_pdf_1",
+                "expectedAgentVersion",Long.toString(versions.readOwned(ACTOR,AGENT)),"expectedSkillRevision",done.get("skillRevision"),"approvedPermissions",List.of());
+        // An absent or altered old receipt is not permission to invent a free reinstall.
+        jdbc.update("UPDATE economy_skill_result_receipt SET request_hash=?",new byte[32]);
+        assertThrows(SkillMarketplaceException.class,()->service.quote(ACTOR,"invalid-adopted-reinstall",request,false));
+        assertEquals(1,count("economy_skill_order"));assertEquals(balance,wallet());
+        jdbc.update("UPDATE economy_skill_result_receipt SET request_hash=?",HexFormat.of().parseHex("d".repeat(64)));
+        var quote=service.quote(ACTOR,"adopted-reinstall-quote",request,false);
+        assertEquals("ENTITLEMENT",quote.get("coverage"));assertEquals("0",object(quote.get("price")).get("amountMinor"));
+        var reinstall=service.create(ACTOR,AGENT,"adopted-reinstall","adopted-reinstall-request",creation(quote,request),false);
+        finishInstall(reinstall);assertEquals("SUCCEEDED",current(reinstall).get("status"));assertEquals(balance,wallet());
+        assertNotEquals(old,object(reinstall.get("target")).get("skillInstallationId"));assertEquals(2,service.descriptors(scope()).size());
+        assertEquals(1,jdbc.queryForObject("SELECT COUNT(*) FROM economy_skill_installation_authorization WHERE adoption_evidence_json IS NOT NULL",Integer.class));
+    }
     @Test void uninstallOfflineFailureRetryAndUnknownNeverDeleteOrReopenAdmission() throws Exception {
         publishExecutable("1.0.0",1);var first=packageChange("INSTALL",null,"0","spv_pdf_1");finishInstall(first);first=current(first);
         var disabled=policyChange("DISABLE",first);report(disabled,"APPLIED",null);catalog(current(disabled));
