@@ -712,7 +712,8 @@ class JuyitingWorkflowMySqlTest {
             assertEquals(topic,store.findTopic(scope,"task","topic-key-001"));
             assertThrows(org.springframework.dao.DuplicateKeyException.class,
                     ()->store.insertTopic(scope,"task",topic,2));
-            assertEquals(7L,tx.execute(status->store.lock(scope,"task").conversationId()));
+            Long anchor = tx.execute(status->store.lock(scope,"task").conversationId());
+            assertEquals(Long.valueOf(7L), anchor);
         }
     }
 
