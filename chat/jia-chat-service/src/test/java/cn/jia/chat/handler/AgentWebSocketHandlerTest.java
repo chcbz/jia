@@ -2129,11 +2129,20 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         handler.setChatDeliberationService(deliberation);
         handler.setChatDeliberationOutboxService(outbox);
         handler.afterConnectionEstablished(session);
-        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("{\"type\":\"agent.register\",\"agentId\":\"agent-001\",\"name\":\"Wu Yong\"}"));
         UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
-                {"schemaVersion":1,"type":"chat.dispatch.ack","agentId":"agent-001","messageId":"dispatch-message-1",
+                {"schemaVersion":1,"type":"agent.register","runtimeInstanceId":"runtime-1",
+                 "messageId":"register-message-1","requestId":"reg-1","agentId":"agent-001","name":"Wu Yong"}
+                """));
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
+                {"schemaVersion":1,"type":"chat.dispatch.ack","runtimeInstanceId":"runtime-1",
+                 "agentId":"agent-001","messageId":"dispatch-message-1",
                  "dispatchId":"dispatch-1","status":"recovery_required","errorCode":"%s"}
                 """.formatted(errorCode)));
+        ArgumentCaptor<TextMessage> receipts = ArgumentCaptor.forClass(TextMessage.class);
+        verify(session, org.mockito.Mockito.atLeastOnce()).sendMessage(receipts.capture());
+        List<String> outbound = receipts.getAllValues().stream().map(TextMessage::getPayload).toList();
+        assertFalse(outbound.stream().anyMatch(wire -> wire.contains("\"messageType\":\"protocol.error\"")),
+                () -> "Recovery ACK rejected before service invocation: " + outbound);
         var order = org.mockito.Mockito.inOrder(deliberation, outbox);
         if ("ACTION_OUTCOME_INVALID".equals(errorCode)) {
             order.verify(deliberation).failInvalidAgentOutcome("0", "juyiting", "jia_client", "agent-001", "dispatch-1", "dispatch-message-1", errorCode);
