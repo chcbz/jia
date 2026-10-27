@@ -147,4 +147,41 @@ class ChatCancellationVersionTest {
         assertThrows(ChatDeliberationException.class, () -> service.failInvalidAgentOutcome("0", "owner", "client", "agent", "other-dispatch", "dispatch-message", "ACTION_OUTCOME_INVALID"));
         verify(dao, never()).updateTurnState(any(), any(), any(), anyLong());
     }
+    @Test void runtimeUncertaintyIsPersistedAndDuplicateAckDoesNotReplayOrFail() throws Exception {
+        ChatTurnEntity turn = turn(); visible(turn); journal();
+        when(dao.findOutboxById("0", "owner", "client", "dispatch-message"))
+                .thenReturn(new ChatDispatchOutboxEntity().setTurnId("turn").setDispatchId("dispatch"));
+        when(dao.updateTurnState(eq(turn), eq("RECOVERY_REQUIRED"), eq("APP_SERVER_RPC_TIMEOUT"), anyLong())).thenReturn(1);
+        ChatRequestEntity request = new ChatRequestEntity().setAggregateState("RUNNING");
+        when(dao.findRequest("0", "owner", "client", "request")).thenReturn(request);
+        when(dao.findTurnsByRequest("0", "owner", "client", "request")).thenReturn(List.of(turn));
+        when(dao.updateRequestState(eq(request), eq("RECOVERY_REQUIRED"), anyLong())).thenReturn(1);
+        var event = service.requireRuntimeRecovery("0", "owner", "client", "agent", "dispatch", "dispatch-message", "APP_SERVER_RPC_TIMEOUT");
+        assertEquals("RECOVERY_REQUIRED", turn.getState());
+        assertNull(turn.getFinalDigest());
+        Map<?, ?> wire = JsonUtil.getMapper().readValue(event.getPayloadJson(), Map.class);
+        assertEquals("RECOVERY_REQUIRED", wire.get("state")); assertEquals("8", wire.get("stateVersion"));
+        assertNull(service.requireRuntimeRecovery("0", "owner", "client", "agent", "dispatch", "dispatch-message", "APP_SERVER_RPC_TIMEOUT"));
+        verify(dao, times(1)).updateRequestState(eq(request), eq("RECOVERY_REQUIRED"), anyLong());
+        verify(dao, times(1)).updateTurnState(any(), any(), any(), anyLong());
+        verify(dao, never()).insertOutbox(any());
+    }
+    @Test void recoveryAckPreservesConfirmedFinalAndRequiresExactDispatchAuthority() {
+        ChatTurnEntity turn = turn().setState("FINAL_PERSISTED"); visible(turn);
+        when(dao.findOutboxById("0", "owner", "client", "dispatch-message"))
+                .thenReturn(new ChatDispatchOutboxEntity().setTurnId("turn").setDispatchId("dispatch"));
+        assertNull(service.requireRuntimeRecovery("0", "owner", "client", "agent", "dispatch", "dispatch-message", "TURN_ACCEPTANCE_UNKNOWN"));
+        assertThrows(ChatDeliberationException.class, () -> service.requireRuntimeRecovery("0", "owner", "client", "foreign-agent", "dispatch", "dispatch-message", "TURN_ACCEPTANCE_UNKNOWN"));
+        assertThrows(ChatDeliberationException.class, () -> service.requireRuntimeRecovery("0", "owner", "client", "agent", "other-dispatch", "dispatch-message", "TURN_ACCEPTANCE_UNKNOWN"));
+        assertThrows(ChatDeliberationException.class, () -> service.requireRuntimeRecovery("0", "owner", "client", "agent", "dispatch", "other-message", "TURN_ACCEPTANCE_UNKNOWN"));
+        verify(dao, never()).updateTurnState(any(), any(), any(), anyLong());
+    }
+    @Test void recoveryAggregateCanAdvanceToConfirmedCompletionWithoutFabricatingTerminalFailure() {
+        ChatTurnEntity turn = turn().setState("RECOVERY_REQUIRED");
+        assertEquals("RECOVERY_REQUIRED", ChatDeliberationService.aggregate(List.of(turn)));
+        turn.setState("FINAL_PERSISTED");
+        assertEquals("COMPLETED", ChatDeliberationService.aggregate(List.of(turn)));
+        assertEquals("PARTIAL", ChatDeliberationService.aggregate(List.of(turn, turn().setState("RECOVERY_REQUIRED"))));
+    }
+
 }

@@ -2113,6 +2113,39 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         return task;
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"APP_SERVER_RPC_TIMEOUT", "TURN_ACCEPTANCE_UNKNOWN", "ACTION_OUTCOME_INVALID"})
+    void recoveryDispatchAckUpdatesBusinessStateBeforeConfirmingReceipt(String errorCode) throws Exception {
+        stubAgentSession("session-recovery-ack", "agent-001");
+        when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
+        when(agentService.register(any(AgentRegisterDTO.class)))
+                .thenReturn(new AgentRegisterResultDTO("agent-001", "token-001", AgentConstants.STATUS_ONLINE));
+        var deliberation = org.mockito.Mockito.mock(ChatDeliberationService.class);
+        var outbox = org.mockito.Mockito.mock(cn.jia.chat.service.ChatDeliberationOutboxService.class);
+        when(outbox.acknowledgeHostedDispatch(eq("0"), eq("juyiting"), eq("jia_client"), eq("agent-001"),
+                eq("dispatch-1"), eq("dispatch-message-1"), org.mockito.ArgumentMatchers.anyLong())).thenReturn(true);
+        var handler = UnifiedRuntimeTestSupport.authorize(new AgentWebSocketHandler(
+                chatClient, agentServiceProvider, chatMessageDao, chatConversationEventBroker));
+        handler.setChatDeliberationService(deliberation);
+        handler.setChatDeliberationOutboxService(outbox);
+        handler.afterConnectionEstablished(session);
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("{\"type\":\"agent.register\",\"agentId\":\"agent-001\",\"name\":\"Wu Yong\"}"));
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
+                {"schemaVersion":1,"type":"chat.dispatch.ack","agentId":"agent-001","messageId":"dispatch-message-1",
+                 "dispatchId":"dispatch-1","status":"recovery_required","errorCode":"%s"}
+                """.formatted(errorCode)));
+        var order = org.mockito.Mockito.inOrder(deliberation, outbox);
+        if ("ACTION_OUTCOME_INVALID".equals(errorCode)) {
+            order.verify(deliberation).failInvalidAgentOutcome("0", "juyiting", "jia_client", "agent-001", "dispatch-1", "dispatch-message-1", errorCode);
+            verify(deliberation, never()).requireRuntimeRecovery(any(), any(), any(), any(), any(), any(), any());
+        } else {
+            order.verify(deliberation).requireRuntimeRecovery("0", "juyiting", "jia_client", "agent-001", "dispatch-1", "dispatch-message-1", errorCode);
+            verify(deliberation, never()).failInvalidAgentOutcome(any(), any(), any(), any(), any(), any(), any());
+        }
+        order.verify(outbox).acknowledgeHostedDispatch(eq("0"), eq("juyiting"), eq("jia_client"), eq("agent-001"),
+                eq("dispatch-1"), eq("dispatch-message-1"), org.mockito.ArgumentMatchers.anyLong());
+    }
+
     private void stubAgentSession(String sessionId, String agentId) {
         stubAgentSession(sessionId, agentId, null);
     }

@@ -839,6 +839,23 @@ public class ChatDeliberationService {
     public ChatConversationEventEntity failInvalidAgentOutcome(String tenantId, String executorOwner, String clientId,
             String agentId, String dispatchId, String messageId, String reason) {
         if (!isInvalidAgentOutcome(reason)) throw invalid("Not a definite model outcome rejection");
+        return recordRuntimeDispatchState(tenantId, executorOwner, clientId, agentId, dispatchId, messageId,
+                reason, ChatDeliberationStates.FAILED, "MODEL_OUTCOME_REJECTED");
+    }
+
+    /** A durable Runtime recovery ACK is not a failed/succeeded Provider call and never permits replay. */
+    @Transactional(rollbackFor = Exception.class)
+    public ChatConversationEventEntity requireRuntimeRecovery(String tenantId, String executorOwner, String clientId,
+            String agentId, String dispatchId, String messageId, String reason) {
+        // Store an error code, not arbitrary Runtime/provider text or private context.
+        String code = reason != null && reason.matches("[A-Z][A-Z0-9_]{0,127}")
+                ? reason : "CHAT_RUNTIME_RECOVERY_REQUIRED";
+        return recordRuntimeDispatchState(tenantId, executorOwner, clientId, agentId, dispatchId, messageId,
+                code, ChatDeliberationStates.RECOVERY_REQUIRED, "RUNTIME_RECOVERY_REQUIRED");
+    }
+
+    private ChatConversationEventEntity recordRuntimeDispatchState(String tenantId, String executorOwner, String clientId,
+            String agentId, String dispatchId, String messageId, String reason, String state, String eventKey) {
         String ownerJiacn=requireDispatchAuthority().incoming(tenantId,clientId,executorOwner,agentId,dispatchId).turn().getOwnerJiacn();
         ChatDispatchOutboxEntity dispatch = dao.findOutboxById(tenantId, ownerJiacn, clientId, messageId);
         if (dispatch == null || !Objects.equals(dispatchId, dispatch.getDispatchId())) throw unavailable();
@@ -848,13 +865,13 @@ public class ChatDeliberationService {
         ChatTurnEntity turn = requireLockedTurn(tenantId, ownerJiacn, clientId, visible.getTurnId());
         if (!Objects.equals(agentId, turn.getTargetAgentId()) || !Objects.equals(dispatchId, turn.getDispatchId()))
             throw unavailable();
-        if (terminal(turn.getState())) return null;
+        if (terminal(turn.getState()) || state.equals(turn.getState())) return null;
         long now = System.currentTimeMillis();
-        if (dao.updateTurnState(turn, ChatDeliberationStates.FAILED, reason, now) != 1)
+        if (dao.updateTurnState(turn, state, reason, now) != 1)
             throw conflict("Concurrent outcome rejection state change");
-        turn.setState(ChatDeliberationStates.FAILED).setTerminalReason(reason)
+        turn.setState(state).setTerminalReason(reason)
                 .setStateVersion(turn.getStateVersion() + 1).setUpdatedAt(now);
-        ChatConversationEventEntity event = persistEvent(turn, stableId("evt", dispatchId, "MODEL_OUTCOME_REJECTED"),
+        ChatConversationEventEntity event = persistEvent(turn, stableId("evt", dispatchId, eventKey),
                 "resync_required", Map.of("reason", reason), now);
         refreshAggregate(tenantId, ownerJiacn, clientId, turn.getRequestId(), now);
         return event;
@@ -1733,6 +1750,8 @@ public class ChatDeliberationService {
         if (cancelled == turns.size()) return ChatDeliberationStates.CANCELLED;
         if (failed == turns.size()) return ChatDeliberationStates.FAILED;
         if (completed > 0 || cancelled > 0 || failed > 0) return ChatDeliberationStates.PARTIAL;
+        if (turns.stream().anyMatch(t -> ChatDeliberationStates.RECOVERY_REQUIRED.equals(t.getState())))
+            return ChatDeliberationStates.RECOVERY_REQUIRED;
         return ChatDeliberationStates.RUNNING;
     }
 
