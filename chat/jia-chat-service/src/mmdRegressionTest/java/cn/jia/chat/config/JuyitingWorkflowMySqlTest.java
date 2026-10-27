@@ -693,6 +693,29 @@ class JuyitingWorkflowMySqlTest {
     }
 
 
+    @Test void topicReceiptIsScopedUniqueAndRollsBackWithConversationTransaction() throws Exception {
+        try(var harness=new RevisionHarness()) {
+            var store=new ChatBountyBindingStore(jdbc);
+            var scope=new ChatBountyBindingStore.Scope("0","owner","client");
+            var topic=new ChatBountyBindingStore.Topic("topic-key-001",7,1,8,1,"wuyong");
+            assertThrows(IllegalStateException.class,()->tx.execute(status->{
+                store.lock(scope,"task");store.insertTopic(scope,"task",topic,1);
+                throw new IllegalStateException("rollback test");
+            }));
+            assertNull(store.findTopic(scope,"task","topic-key-001"));
+            tx.execute(status->{store.lock(scope,"task");store.insertTopic(scope,"task",topic,1);return null;});
+            assertTrue(store.containsTopic(scope,"task","8"));
+            assertFalse(store.containsTopic(scope,"other-task","8"));
+            assertFalse(store.containsTopic(new ChatBountyBindingStore.Scope("0","other-owner","client"),"task","8"));
+            assertFalse(store.containsTopic(new ChatBountyBindingStore.Scope("0","owner","other-client"),"task","8"));
+            assertFalse(store.containsTopic(scope,"task","08"));
+            assertEquals(topic,store.findTopic(scope,"task","topic-key-001"));
+            assertThrows(org.springframework.dao.DuplicateKeyException.class,
+                    ()->store.insertTopic(scope,"task",topic,2));
+            assertEquals(7L,tx.execute(status->store.lock(scope,"task").conversationId()));
+        }
+    }
+
     /** Real consumer, real continuation/admission, real DAOs and domain transaction.
      * Only the already-validated model final and external capability/catalog reads are seeded. */
     private final class RevisionHarness implements AutoCloseable {

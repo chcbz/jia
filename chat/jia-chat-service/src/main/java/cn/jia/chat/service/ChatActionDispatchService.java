@@ -79,7 +79,8 @@ public class ChatActionDispatchService {
             if (root == null || root.getRewardStatus() == null || !java.util.Set.of("planning","assigned","running","blocked").contains(root.getRewardStatus())
                     || root.getTaskVersion() == null || root.getTaskVersion() < parent.assignmentRevision()
                     || !target.equals(root.getAssignedAgentId()) || binding == null || binding.conversationId() == null
-                    || !scope.conversationId().equals(Long.toString(binding.conversationId()))
+                    || (!scope.conversationId().equals(Long.toString(binding.conversationId()))
+                    && !bindings.containsTopic(new cn.jia.chat.deliberation.ChatBountyBindingStore.Scope(scope.tenantId(),scope.ownerJiacn(),scope.clientId()),parent.taskId(),scope.conversationId()))
                     || parent.assignmentRevision() != binding.assignmentRevision()) throw new Rejected();
             var conversation = conversations.lockScopedById(scope.ownerJiacn(), scope.clientId(), scope.conversationId());
             if (conversation == null || conversation.getId() == null || conversation.getDeletedAt() != null

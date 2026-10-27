@@ -109,7 +109,8 @@ public class ChatTypedDiscussionAdmissionService {
             ChatBountyBindingStore.Binding binding;
             try { binding=bindings.lock(new ChatBountyBindingStore.Scope(tenantId,owner,client),command.taskId()); }
             catch (IllegalStateException missing) { throw unavailable(); }
-            if(binding==null||binding.conversationId()==null||!conversationId.equals(Long.toString(binding.conversationId()))
+            if(binding==null||binding.conversationId()==null||(!conversationId.equals(Long.toString(binding.conversationId()))
+                    && !bindings.containsTopic(new cn.jia.chat.deliberation.ChatBountyBindingStore.Scope(tenantId,owner,client),command.taskId(),conversationId))
                     ||binding.assignmentRevision()!=command.expectedAssignmentRevision()||root==null
                     ||root.getTaskVersion()==null||root.getTaskVersion()<command.expectedAssignmentRevision())throw conflict("Bounty assignment changed");
             ChatConversationEntity conversation=conversations.lockScopedById(owner,client,conversationId);

@@ -40,7 +40,8 @@ public class ChatBountyInteractionV3PreviewService {
    if(binding==null)throw conflict();
    ChatConversationEntity locked=conversations.lockScopedById(
      sender.jiacn(),sender.clientId(),conversation);
-   if(binding.conversationId()==null||!conversation.equals(Long.toString(binding.conversationId()))
+   if(binding.conversationId()==null||(!conversation.equals(Long.toString(binding.conversationId()))
+                    && !bindings.containsTopic(new cn.jia.chat.deliberation.ChatBountyBindingStore.Scope(tenant,sender.jiacn(),sender.clientId()),observed.getTaskId(),conversation))
      ||binding.assignmentRevision()!=current.assignmentRevision()||locked==null||locked.getId()==null
      ||!conversation.equals(Long.toString(locked.getId()))
      ||!Objects.equals(observed.getLifecycleGeneration(),locked.getLifecycleGeneration())

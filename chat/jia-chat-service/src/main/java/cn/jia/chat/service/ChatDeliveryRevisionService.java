@@ -110,7 +110,8 @@ public class ChatDeliveryRevisionService {
                 if(!"reviewing".equals(root.getRewardStatus()) || !b.taskVersion().equals(String.valueOf(root.getTaskVersion()))
                         || !target.equals(root.getAssignedAgentId()) || operations.assignmentRevision(owner,row.taskId())!=Long.parseLong(b.assignmentRevision()))throw new ChatDeliveryReviewContract.Conflict();
                 var binding=bindings.lock(new ChatBountyBindingStore.Scope(s.tenantId(),s.ownerJiacn(),s.clientId()),row.taskId());
-                if(binding==null || binding.conversationId()==null || !s.conversationId().equals(binding.conversationId().toString())
+                if(binding==null || binding.conversationId()==null || (!s.conversationId().equals(binding.conversationId().toString())
+                    && !bindings.containsTopic(new cn.jia.chat.deliberation.ChatBountyBindingStore.Scope(s.tenantId(),s.ownerJiacn(),s.clientId()),row.taskId(),s.conversationId()))
                         || binding.assignmentRevision()!=row.assignmentRevision())throw new ChatDeliveryReviewContract.Conflict();
                 var conversation=conversations.lockScopedById(s.ownerJiacn(),s.clientId(),s.conversationId());
                 if(conversation==null || conversation.getDeletedAt()!=null || !Objects.equals(s.conversationGeneration(),conversation.getLifecycleGeneration())

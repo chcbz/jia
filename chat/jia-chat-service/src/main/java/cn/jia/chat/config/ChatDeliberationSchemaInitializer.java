@@ -28,7 +28,7 @@ public class ChatDeliberationSchemaInitializer implements ApplicationRunner {
     static final List<String> TABLES = List.of(
             "chat_context_snapshot", "chat_request", "chat_turn", "chat_dispatch_outbox",
             "chat_conversation_event", "chat_interaction_step", "chat_step_execution_link",
-            "chat_bounty_binding", "chat_conversation_asset");
+            "chat_bounty_binding", "chat_bounty_topic", "chat_conversation_asset");
     private static final String COLLATION = "utf8mb4_0900_bin";
     private static final String MIGRATION_LOCK = "cyf:chat-deliberation:v2";
     private static final Map<String, Map<String, ColumnDef>> COLUMNS = columns();
@@ -485,6 +485,11 @@ public class ChatDeliberationSchemaInitializer implements ApplicationRunner {
                 c("task_id",v(100,false)), c("conversation_id",b(true,null)),
                 c("assignment_revision",b(false,null)), c("created_at",b(false,null)),
                 c("updated_at",b(false,null))));
+        all.put("chat_bounty_topic", ordered(c("tenant_id",v(50,false)),c("owner_jiacn",v(50,false)),
+                c("client_id",v(50,false)),c("task_id",v(100,false)),c("operation_key",v(100,false)),
+                c("source_conversation_id",b(false,null)),c("source_generation",b(false,null)),
+                c("conversation_id",b(false,null)),c("conversation_generation",b(false,null)),
+                c("target_agent_id",v(100,false)),c("created_at",b(false,null))));
         all.put("chat_conversation_asset", ordered(c("asset_id",v(64,false)),
                 c("tenant_id",v(50,false)), c("owner_jiacn",v(50,false)), c("client_id",v(50,false)),
                 c("conversation_id",v(100,false)), c("conversation_generation",b(false,null)),
@@ -527,6 +532,9 @@ public class ChatDeliberationSchemaInitializer implements ApplicationRunner {
         all.put("chat_bounty_binding", Map.of(
                 "PRIMARY",ix(true,"tenant_id","owner_jiacn","client_id","task_id"),
                 "uk_chat_bounty_binding_conversation",ix(true,"tenant_id","owner_jiacn","client_id","conversation_id")));
+        all.put("chat_bounty_topic", Map.of(
+                "PRIMARY",ix(true,"tenant_id","owner_jiacn","client_id","task_id","operation_key"),
+                "uk_chat_bounty_topic_conversation",ix(true,"tenant_id","owner_jiacn","client_id","conversation_id")));
         all.put("chat_conversation_asset", Map.of(
                 "PRIMARY",ix(true,"asset_id"),
                 "uk_chat_asset_step_output",ix(true,"tenant_id","owner_jiacn","client_id","step_id","output_id"),

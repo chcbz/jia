@@ -112,7 +112,8 @@ public class ChatBountyInteractionAdmissionService {
         }
         ChatBountyBindingStore.Binding binding = bindings.lock(
                 new ChatBountyBindingStore.Scope(tenantId, owner, client), intent.taskId());
-        if (binding.conversationId() == null || !conversationId.equals(Long.toString(binding.conversationId()))
+        if (binding.conversationId() == null || (!conversationId.equals(Long.toString(binding.conversationId()))
+                    && !bindings.containsTopic(new cn.jia.chat.deliberation.ChatBountyBindingStore.Scope(tenantId,owner,client),intent.taskId(),conversationId))
                 || binding.assignmentRevision() != intent.expectedAssignmentRevision()) {
             throw conflict("Bounty discussion assignment changed");
         }

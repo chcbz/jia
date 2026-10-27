@@ -6,7 +6,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import java.util.List;
 import java.util.Objects;
 
-/** One durable, owner-scoped user-facing bounty conversation per task. Never a task-team thread. */
+/** One bootstrap anchor per task; additional topics require an explicit durable membership receipt. */
 @Named
 public class ChatBountyBindingStore {
     private final JdbcTemplate jdbc;
@@ -14,6 +14,46 @@ public class ChatBountyBindingStore {
 
     public record Scope(String tenantId,String ownerJiacn,String clientId) { }
     public record Binding(long assignmentRevision,Long conversationId) { }
+
+
+    public record Topic(String operationKey, long sourceConversationId, long sourceGeneration,
+            long conversationId, long generation, String targetAgentId) { }
+
+    /** Caller already holds task root and binding locks. Membership never substitutes for grant/ACL checks. */
+    public boolean containsTopic(Scope scope, String taskId, String conversationId) {
+        Long id;
+        try { id=Long.valueOf(conversationId); if(id<1 || !id.toString().equals(conversationId)) return false; }
+        catch(RuntimeException invalid) { return false; }
+        Integer count=jdbc.queryForObject("""
+                SELECT COUNT(*) FROM chat_bounty_topic
+                WHERE tenant_id=? AND owner_jiacn=? AND client_id=? AND task_id=? AND conversation_id=?
+                """,Integer.class,scope.tenantId(),scope.ownerJiacn(),scope.clientId(),taskId,id);
+        return Integer.valueOf(1).equals(count);
+    }
+
+    public Topic findTopic(Scope scope, String taskId, String operationKey) {
+        List<Topic> rows=jdbc.query("""
+                SELECT operation_key,source_conversation_id,source_generation,conversation_id,
+                       conversation_generation,target_agent_id FROM chat_bounty_topic
+                WHERE tenant_id=? AND owner_jiacn=? AND client_id=? AND task_id=? AND operation_key=?
+                """,(rs,n)->new Topic(rs.getString("operation_key"),rs.getLong("source_conversation_id"),
+                rs.getLong("source_generation"),rs.getLong("conversation_id"),
+                rs.getLong("conversation_generation"),rs.getString("target_agent_id")),
+                scope.tenantId(),scope.ownerJiacn(),scope.clientId(),taskId,operationKey);
+        if(rows.size()>1) throw new IllegalStateException("Topic creation receipt is ambiguous");
+        return rows.isEmpty()?null:rows.getFirst();
+    }
+
+    public void insertTopic(Scope scope, String taskId, Topic topic, long now) {
+        if(jdbc.update("""
+                INSERT INTO chat_bounty_topic(tenant_id,owner_jiacn,client_id,task_id,operation_key,
+                  source_conversation_id,source_generation,conversation_id,conversation_generation,target_agent_id,created_at)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?)
+                """,scope.tenantId(),scope.ownerJiacn(),scope.clientId(),taskId,topic.operationKey(),
+                topic.sourceConversationId(),topic.sourceGeneration(),topic.conversationId(),
+                topic.generation(),topic.targetAgentId(),now)!=1)
+            throw new IllegalStateException("Topic receipt was not persisted");
+    }
 
     /** Transactional reserve: duplicate assignment actions lock the same task row. */
     public void reserve(Scope scope,String taskId,long assignmentRevision,long now) {
@@ -67,12 +107,22 @@ public class ChatBountyBindingStore {
     /** The target list changes on reassignment, never the task/conversation scope. */
     public int replaceAuthorizedTargets(Scope scope,String taskId,long conversationId,
             String targetIdsJson,long now) {
-        return jdbc.update("""
+        int updated=jdbc.update("""
                 UPDATE chat_conversation SET target_agent_ids=?,update_time=?
                 WHERE id=? AND tenant_id=? AND jiacn=? AND client_id=? AND task_id=?
                   AND conversation_type='juyiting' AND conversation_scope_type='bounty'
                   AND conversation_scope_key=CONCAT('task:',task_id) AND deleted_at IS NULL
                 """,targetIdsJson,now,conversationId,scope.tenantId(),scope.ownerJiacn(),
                 scope.clientId(),taskId);
+        if(updated==1) jdbc.update("""
+                UPDATE chat_conversation SET target_agent_ids=?,update_time=?
+                WHERE tenant_id=? AND jiacn=? AND client_id=? AND task_id=?
+                  AND conversation_type='juyiting' AND conversation_scope_type='bounty'
+                  AND conversation_scope_key=CONCAT('task:',task_id) AND deleted_at IS NULL
+                  AND id IN (SELECT conversation_id FROM chat_bounty_topic
+                    WHERE tenant_id=? AND owner_jiacn=? AND client_id=? AND task_id=?)
+                """,targetIdsJson,now,scope.tenantId(),scope.ownerJiacn(),scope.clientId(),taskId,
+                scope.tenantId(),scope.ownerJiacn(),scope.clientId(),taskId);
+        return updated;
     }
 }

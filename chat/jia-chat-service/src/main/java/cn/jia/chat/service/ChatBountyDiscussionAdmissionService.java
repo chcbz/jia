@@ -65,7 +65,8 @@ public class ChatBountyDiscussionAdmissionService {
                     // Task version advances on unrelated task events; the binding carries the
                     // assignment revision, and the locked root carries the current target.
                     if (binding == null || binding.conversationId() == null
-                            || !conversationId.equals(Long.toString(binding.conversationId()))
+                            || (!conversationId.equals(Long.toString(binding.conversationId()))
+                    && !bindings.containsTopic(new cn.jia.chat.deliberation.ChatBountyBindingStore.Scope(tenantId,owner,client),taskId,conversationId))
                             || binding.assignmentRevision() != expectedAssignmentRevision
                             || root == null || root.getTaskVersion() == null
                             || root.getTaskVersion() < expectedAssignmentRevision)

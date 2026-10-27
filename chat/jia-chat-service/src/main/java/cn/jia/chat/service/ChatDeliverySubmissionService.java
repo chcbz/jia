@@ -152,7 +152,8 @@ public class ChatDeliverySubmissionService {
             if(root.getRewardStatus()==null || !Set.of("planning","assigned","running","blocked").contains(root.getRewardStatus())
                     || root.getTaskVersion()==null || !candidate.targetAgentId().equals(root.getAssignedAgentId()))throw rejected("DELIVERY_TASK_CHANGED");
             var binding=bindings.lock(new ChatBountyBindingStore.Scope(scope.tenantId(),scope.ownerJiacn(),scope.clientId()),row.taskId());
-            if(binding==null || binding.conversationId()==null || !scope.conversationId().equals(Long.toString(binding.conversationId()))
+            if(binding==null || binding.conversationId()==null || (!scope.conversationId().equals(Long.toString(binding.conversationId()))
+                    && !bindings.containsTopic(new cn.jia.chat.deliberation.ChatBountyBindingStore.Scope(scope.tenantId(),scope.ownerJiacn(),scope.clientId()),row.taskId(),scope.conversationId()))
                     || row.assignmentRevision()!=binding.assignmentRevision())throw rejected("DELIVERY_ASSIGNMENT_CHANGED");
             var conversation=conversations.lockScopedById(scope.ownerJiacn(),scope.clientId(),scope.conversationId());
             if(conversation==null || conversation.getDeletedAt()!=null || !scope.tenantId().equals(conversation.getTenantId())

@@ -52,7 +52,8 @@ public class ChatTypedInspectionAdmissionService {
             try{binding=bindings.lock(new ChatBountyBindingStore.Scope(tenant,owner,client),command.taskId());}
             catch(IllegalStateException missing){throw unavailable();}
             if(root==null||binding==null||binding.conversationId()==null
-                    ||!conversationId.equals(Long.toString(binding.conversationId()))
+                    ||(!conversationId.equals(Long.toString(binding.conversationId()))
+                    && !bindings.containsTopic(new cn.jia.chat.deliberation.ChatBountyBindingStore.Scope(tenant,owner,client),command.taskId(),conversationId))
                     ||binding.assignmentRevision()!=command.expectedAssignmentRevision()
                     ||root.getTaskVersion()==null||root.getTaskVersion()<command.expectedAssignmentRevision())throw conflict("Bounty assignment changed");
             ChatConversationEntity conversation=requireConversation(tenant,owner,client,conversationId,command.taskId(),true);

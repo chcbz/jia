@@ -202,6 +202,25 @@ CREATE TABLE IF NOT EXISTS chat_bounty_binding (
   CONSTRAINT chk_chat_bounty_binding_revision CHECK (assignment_revision>=0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
 
+-- Additional user-created topics: immutable receipt and explicit task membership.
+-- Existing bootstrap conversations retain chat_bounty_binding and need no backfill.
+CREATE TABLE IF NOT EXISTS chat_bounty_topic (
+  tenant_id VARCHAR(50) NOT NULL,
+  owner_jiacn VARCHAR(50) NOT NULL,
+  client_id VARCHAR(50) NOT NULL,
+  task_id VARCHAR(100) NOT NULL,
+  operation_key VARCHAR(100) NOT NULL,
+  source_conversation_id BIGINT NOT NULL,
+  source_generation BIGINT NOT NULL,
+  conversation_id BIGINT NOT NULL,
+  conversation_generation BIGINT NOT NULL,
+  target_agent_id VARCHAR(100) NOT NULL,
+  created_at BIGINT NOT NULL,
+  PRIMARY KEY (tenant_id,owner_jiacn,client_id,task_id,operation_key),
+  UNIQUE KEY uk_chat_bounty_topic_conversation (tenant_id,owner_jiacn,client_id,conversation_id),
+  CONSTRAINT chk_chat_bounty_topic_generations CHECK (source_generation>=1 AND conversation_generation>=1)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
+
 CREATE TABLE IF NOT EXISTS chat_deliberation_schema_version (
   version BIGINT NOT NULL,
   stage VARCHAR(30) NOT NULL,

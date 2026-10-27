@@ -254,6 +254,8 @@ def mmdControlledImageFollowupV3SourceSet = sourceSets.create('mmdControlledImag
         srcDir 'src/mmdRegressionTest/java'
         include 'cn/jia/chat/api/ChatBountyInteractionV3ControllerTest.java'
         include 'cn/jia/chat/service/ChatBountyInteractionV3PreviewServiceTest.java'
+        include 'cn/jia/chat/service/ChatBountyTopicServiceTest.java'
+        include 'cn/jia/chat/api/ChatBountyTopicControllerTest.java'
         include 'cn/jia/chat/service/ChatBountyInteractionV3AuthorityServiceTest.java'
         include 'cn/jia/chat/service/ChatBountyInteractionV3AdmissionServiceTest.java'
         include 'cn/jia/chat/service/ChatConversationAssetSourceResolverTest.java'

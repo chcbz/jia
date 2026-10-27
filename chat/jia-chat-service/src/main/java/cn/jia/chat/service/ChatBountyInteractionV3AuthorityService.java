@@ -159,7 +159,8 @@ public class ChatBountyInteractionV3AuthorityService {
             ChatBountyInteractionV3PreviewService.Prepared prepared,String executionId,boolean replay) {
         String owner=sender.jiacn(),client=sender.clientId(),requestId=prepared.command().requestId();
         var binding=bindings.lock(new ChatBountyBindingStore.Scope(tenant,owner,client),intent.taskId());
-        if(binding==null||binding.conversationId()==null||!conversationId.equals(Long.toString(binding.conversationId()))
+        if(binding==null||binding.conversationId()==null||(!conversationId.equals(Long.toString(binding.conversationId()))
+                    && !bindings.containsTopic(new cn.jia.chat.deliberation.ChatBountyBindingStore.Scope(tenant,owner,client),intent.taskId(),conversationId))
                 ||binding.assignmentRevision()!=intent.assignmentRevision())throw conflict();
         ChatConversationEntity conversation=conversations.lockScopedById(owner,client,conversationId);
         requireConversation(conversation,tenant,sender,conversationId,intent);

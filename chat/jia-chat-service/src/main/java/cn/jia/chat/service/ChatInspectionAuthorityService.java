@@ -167,7 +167,8 @@ public class ChatInspectionAuthorityService {
             throw serviceUnavailable("Inspection assignment service is unavailable");
         }
         if (binding == null || binding.conversationId() == null
-                || !scope.conversationId().equals(Long.toString(binding.conversationId()))
+                || (!scope.conversationId().equals(Long.toString(binding.conversationId()))
+                    && !bindings.containsTopic(new cn.jia.chat.deliberation.ChatBountyBindingStore.Scope(scope.tenantId(),scope.ownerJiacn(),scope.clientId()),admission.taskId(),scope.conversationId()))
                 || binding.assignmentRevision() != admission.assignmentRevision()
                 || taskVersion == null || taskVersion < admission.assignmentRevision()
                 || !expectedAgent.equals(rootAgent)) throw conflict("Inspection assignment changed");

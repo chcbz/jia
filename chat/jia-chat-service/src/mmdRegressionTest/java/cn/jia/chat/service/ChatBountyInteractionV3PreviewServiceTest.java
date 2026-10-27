@@ -64,6 +64,23 @@ class ChatBountyInteractionV3PreviewServiceTest {
         assertNotNull(annotation);assertFalse(annotation.readOnly());
     }
 
+    @Test void registeredTopicUsesCurrentTaskGrantButUnregisteredConversationCannotBorrowIt() {
+        var row=conversation(1,0);
+        when(conversations.findScopedById("owner","client","10")).thenReturn(row);
+        when(conversations.lockScopedById("owner","client","10")).thenReturn(row);
+        when(scopes.parsePersistedTargetAgentIds("[\"agent\"]")).thenReturn(List.of("agent"));
+        when(grants.currentFollowupContext(new AgentTaskExecutionGrantService.Scope("0","client","owner"),
+                "task","agent")).thenReturn(new AgentTaskExecutionGrantService.FollowupContext("task","agent",0,0,1,1));
+        var scope=new ChatBountyBindingStore.Scope("0","owner","client");
+        when(bindings.lock(scope,"task")).thenReturn(new ChatBountyBindingStore.Binding(0,9L));
+        assertThrows(ChatDeliberationException.class,()->service.context("0",sender,"10"));
+        when(bindings.containsTopic(scope,"task","10")).thenReturn(true);
+        assertEquals("10",service.context("0",sender,"10").conversationId());
+        when(bindings.lock(scope,"task")).thenReturn(new ChatBountyBindingStore.Binding(2,9L));
+        assertThrows(ChatDeliberationException.class,()->service.context("0",sender,"10"));
+        verifyNoInteractions(sources,authority);
+    }
+
     @Test void contextUsesWritableSpringTransactionForRequiredTaskAndProjectionLocks() {
         DriverManagerDataSource dataSource=new DriverManagerDataSource(
                 "jdbc:h2:mem:v3_context_lock;MODE=MYSQL;DB_CLOSE_DELAY=-1","sa","");
