@@ -114,4 +114,39 @@ class ChatActionDispatchReviewGuardTest {
         verifyNoMoreInteractions(installed);
     }
 
+    @Test void newExecutionSnapshotUsesCurrentSameVersionInstallationAndRejectsAmbiguity() {
+        var installed=mock(cn.jia.agent.service.InstalledSkillDescriptorLookup.class);
+        var runtime=mock(cn.jia.agent.service.SkillCapabilityLookup.class);
+        var policies=mock(cn.jia.agent.service.TaskSkillPolicyService.class);
+        var actual=new ChatActionExecutionService(mock(ChatDeliberationService.class),mock(ChatDeliberationDao.class),
+                typed,mock(ChatInteractionStepStore.class),mock(cn.jia.agent.service.AgentTaskExecutionGrantService.class),
+                mock(cn.jia.agent.service.SkillExecutionService.class),installed,runtime,policies);
+        var key=new cn.jia.agent.service.SkillCapabilityLookup.Scope("0","client","owner","agent");
+        var fence=new cn.jia.agent.service.AgentManagedSessionLookup.SessionFence("installation","host","runtime",1);
+        when(policies.read(key,"task")).thenReturn(new cn.jia.agent.service.TaskSkillPolicyService.Snapshot(true,null,1,fence,key));
+        var descriptor=new cn.jia.agent.service.InstalledSkillDescriptorLookup.Descriptor("text-file","1.0.1","current-install",
+                "a".repeat(64),"b".repeat(64),"{\"runner\":\"script\",\"entrypoint\":\"main.py\",\"requirements\":{},\"outputs\":{}}",
+                "installation","host",null);
+        when(installed.readCurrent(key)).thenReturn(new cn.jia.agent.service.InstalledSkillDescriptorLookup.Snapshot(List.of(descriptor)));
+        when(installed.read(key)).thenThrow(new AssertionError("New execution must not choose from history"));
+        var report=new cn.jia.agent.service.SkillCapabilityLookup.RuntimeSkill("text-file","1.0.1","a".repeat(64),"b".repeat(64),
+                "script",cn.jia.agent.service.SkillCapabilityLookup.Readiness.READY,null,"c".repeat(64),null);
+        when(runtime.lookup(key,fence)).thenReturn(new cn.jia.agent.service.SkillCapabilityLookup.View(
+                cn.jia.agent.service.SkillCapabilityLookup.State.AVAILABLE,"session",fence,
+                new cn.jia.agent.service.SkillCapabilityLookup.Catalog("1",List.of(report))));
+        var capability=new ChatActionOutcomeContract.Capability("execute","EXECUTE","EXECUTE_SKILL",
+                new ChatActionOutcomeContract.Skill("text-file","1.0.1","a".repeat(64),"b".repeat(64)),Map.of(),List.of(),0,0,List.of());
+        var grant=mock(cn.jia.agent.service.AgentTaskExecutionGrantService.Admission.class);
+        when(grant.grantId()).thenReturn("grant");when(grant.grantVersion()).thenReturn(1L);
+        Map<String,Object> snapshot=org.springframework.test.util.ReflectionTestUtils.invokeMethod(actual,"prepare",action,"act_test",capability,List.of(),grant);
+        assertEquals("current-install",((Map<?,?>)snapshot.get("skill")).get("installationId"));
+        when(installed.readCurrent(key)).thenReturn(new cn.jia.agent.service.InstalledSkillDescriptorLookup.Snapshot(List.of(descriptor,descriptor)));
+        assertThrows(ChatActionDispatchService.Rejected.class,()->org.springframework.test.util.ReflectionTestUtils.invokeMethod(
+                actual,"prepare",action,"act_test",capability,List.of(),grant));
+        when(installed.readCurrent(key)).thenReturn(new cn.jia.agent.service.InstalledSkillDescriptorLookup.Snapshot(List.of()));
+        assertThrows(ChatActionDispatchService.Rejected.class,()->org.springframework.test.util.ReflectionTestUtils.invokeMethod(
+                actual,"prepare",action,"act_test",capability,List.of(),grant));
+        verify(installed,never()).read(key);
+    }
+
 }

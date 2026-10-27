@@ -17,7 +17,7 @@ class ChatActionCapabilityServiceTest {
     final AgentManagedSessionLookup.SessionFence fence = new AgentManagedSessionLookup.SessionFence("installation", "host", "runtime", 1);
     InstalledSkillDescriptorLookup.Descriptor descriptor(String reason) {
         return new InstalledSkillDescriptorLookup.Descriptor("image-edit", "1.0.0", "install", "a".repeat(64), "b".repeat(64),
-                reason == null ? "{\"title\":\"图片修改\",\"runner\":\"provider-operation\",\"requirements\":{}}" : null, "installation", "host", reason);
+                reason == null ? "{\"title\":\"图片修改\",\"runner\":\"provider-operation\",\"requirements\":{},\"parametersSchema\":{},\"inputs\":{\"acceptedMimeTypes\":[],\"minItems\":0,\"maxItems\":0},\"outputs\":{\"mimeTypes\":[\"text/plain\"]}}" : null, "installation", "host", reason);
     }
     SkillCapabilityLookup.View ready(String revision, String digest, SkillCapabilityLookup.Readiness readiness, String reason) {
         return new SkillCapabilityLookup.View(SkillCapabilityLookup.State.AVAILABLE, "session", fence, new SkillCapabilityLookup.Catalog(revision,
@@ -39,6 +39,31 @@ class ChatActionCapabilityServiceTest {
         when(policies.read(key,"task")).thenReturn(new TaskSkillPolicyService.Snapshot(true,null,1,fence,key));
         assertEquals(1,service.taskCatalog(scope,"task").items().size());
         assertEquals(2,installed.read(key).skills().size());
+    }
+    @Test void sameVersionReinstallRemainsCallableFromCurrentInstallationOnly() {
+        var current=descriptor(null);
+        var historical=new InstalledSkillDescriptorLookup.Descriptor(current.skillKey(),current.skillVersion(),
+                "historical-install",current.packageSha256(),current.manifestSha256(),current.manifestJson(),
+                "installation","host",null);
+        when(installed.read(key)).thenReturn(new InstalledSkillDescriptorLookup.Snapshot(List.of(historical,current)));
+        doReturn(new InstalledSkillDescriptorLookup.Snapshot(List.of(current))).when(installed).readCurrent(key);
+        when(policies.read(key,"task")).thenReturn(new TaskSkillPolicyService.Snapshot(true,null,1,fence,key));
+        assertEquals("CALLABLE",service.taskCatalog(scope,"task").items().getFirst().get("state"));
+        assertEquals(1,service.available(scope,"task",List.of()).size());
+        assertEquals(2,installed.read(key).skills().size()); // History remains available to pinned executions.
+    }
+    @Test void ambiguousCurrentInstallationsNeverBecomeActions() {
+        when(installed.read(key)).thenReturn(new InstalledSkillDescriptorLookup.Snapshot(List.of(descriptor(null),descriptor(null))));
+        when(policies.read(key,"task")).thenReturn(new TaskSkillPolicyService.Snapshot(true,null,1,fence,key));
+        assertTrue(service.available(scope,"task",List.of()).isEmpty());
+    }
+    @Test void changingCurrentInstallationDuringDiscoveryRetractsActions() {
+        var current=new InstalledSkillDescriptorLookup.Snapshot(List.of(descriptor(null)));
+        var removed=new InstalledSkillDescriptorLookup.Snapshot(List.of());
+        // UI catalog read, followed by action discovery and its stability check.
+        doReturn(current,current,removed).when(installed).readCurrent(key);
+        when(policies.read(key,"task")).thenReturn(new TaskSkillPolicyService.Snapshot(true,null,1,fence,key));
+        assertTrue(service.available(scope,"task",List.of()).isEmpty());
     }
     @Test void verifiedInstallationAndRuntimeAreIndependentWithoutTaskPolicy() {
         var item = service.inspectInstalledSkills(scope, fence).items().getFirst(); assertTrue(item.installationVerified()); assertEquals("RUNTIME_READY", item.state());

@@ -139,7 +139,7 @@ public final class ChatActionCapabilityService {
         if(policy.fence()!=null) observed=inspectInstalledSkills(runtimeScope,policy.fence());
         else {
             var list=new ArrayList<SkillCandidate>();
-            for(var d:installedSkills.read(runtimeKey).skills()) {
+            for(var d:installedSkills.readCurrent(runtimeKey).skills()) {
                 String title=d.skillKey(),metadata=null;
                 if(d.verified()) try {
                     var m=SKILL_JSON.readTree(d.manifestJson());title=m.path("title").asText(d.skillKey());
@@ -173,8 +173,8 @@ public final class ChatActionCapabilityService {
         if(policy.decision()!=cn.jia.agent.service.TaskSkillPolicyService.Decision.ALLOWED||policy.runtimeScope()==null)return List.of();
         var task=taskCatalog(scope,taskId,policy);
         var runtimeKey=policy.runtimeScope();
-        var installed=installedSkills.read(runtimeKey);
-        if(!policy.equals(policies.read(key,taskId))||!installed.equals(installedSkills.read(runtimeKey)))return List.of();
+        var installed=installedSkills.readCurrent(runtimeKey);
+        if(!policy.equals(policies.read(key,taskId))||!installed.equals(installedSkills.readCurrent(runtimeKey)))return List.of();
         var callable=task.items().stream().filter(x->"CALLABLE".equals(x.get("state"))).toList();
         var actions=new ArrayList<Map<String,Object>>();
         for(var item:callable) {

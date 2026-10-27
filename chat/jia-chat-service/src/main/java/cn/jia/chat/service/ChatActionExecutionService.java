@@ -128,7 +128,7 @@ public class ChatActionExecutionService implements ChatActionDispatchService.Exe
         requireRuntimeTarget(key,policy.runtimeScope());
         var runtimeKey=policy.runtimeScope();
         var selected=capability.skill();
-        var descriptors=installed.read(runtimeKey).skills().stream().filter(d->selected.skillKey().equals(d.skillKey())
+        var descriptors=installed.readCurrent(runtimeKey).skills().stream().filter(d->selected.skillKey().equals(d.skillKey())
                 &&selected.skillVersion().equals(d.skillVersion())).toList();
         if(descriptors.size()!=1)throw new ChatActionDispatchService.Rejected();var descriptor=descriptors.getFirst();
         if(!descriptor.verified()||!selected.packageSha256().equals(descriptor.packageSha256())
