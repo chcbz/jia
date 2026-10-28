@@ -133,7 +133,9 @@ public class SkillExecutionSchemaMySqlTest {
     // Additional cases are executed by the non-skippable owned SM-C1 TestFactory.
     void detectorRejectsMissingTaskBindingColumnWithoutRepair() {
         detector().afterPropertiesSet();
-        jdbc.execute("ALTER TABLE agent_skill_execution DROP COLUMN task_skill_binding_json");
+        // Construct a damaged schema only in this owned test database; MySQL requires
+        // removing the dependent native binding check before its column can be dropped.
+        jdbc.execute("ALTER TABLE agent_skill_execution DROP CHECK chk_skill_execution_hashes, DROP COLUMN task_skill_binding_json");
         assertThrows(IllegalStateException.class,()->detector().afterPropertiesSet());
         assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='agent_skill_execution' AND column_name='task_skill_binding_json'",Integer.class));
     }
