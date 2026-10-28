@@ -62,6 +62,8 @@ public interface EconomySkillManagementMapper {
     List<SkillChangeCommandEntity> commands(@Param("tenantId") String t,@Param("clientId") String c,@Param("changeId") String a);
     @Update("UPDATE economy_skill_change_command SET state=#{state},prepared_sha256=#{preparedSha256},evidence_json=#{evidenceJson} WHERE "+S+" AND command_id=#{commandId}")
     int saveCommand(SkillChangeCommandEntity command);
+    @Insert("INSERT INTO economy_skill_upgrade_policy(tenant_id,client_id,source_product_version_id,target_product_version_id,policy) VALUES(#{tenantId},#{clientId},#{source},#{target},'COVERED')")
+    int insertCoveredUpgradePolicy(@Param("tenantId") String tenant,@Param("clientId") String client,@Param("source") String source,@Param("target") String target);
     @Select("SELECT policy FROM economy_skill_upgrade_policy WHERE "+S+" AND source_product_version_id=#{source} AND target_product_version_id=#{target} FOR UPDATE")
     String upgradePolicy(@Param("tenantId") String t,@Param("clientId") String c,@Param("source") String source,@Param("target") String target);
     @Select("SELECT * FROM economy_skill_entitlement WHERE "+S+" AND entitlement_id=#{entitlementId}")

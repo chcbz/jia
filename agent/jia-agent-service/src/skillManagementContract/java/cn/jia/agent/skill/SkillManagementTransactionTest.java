@@ -265,6 +265,33 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
                 .setDeploymentRestriction("NONE").setReviewStatus("APPROVED").setTenantId("0").setClientId(ACTOR.clientId()).setCreateTime(1L));
         assertEquals(1,market.publishProductVersion("0",ACTOR.clientId(),"sp_pdf","spv_pdf_"+sequence,sequence,System.currentTimeMillis()));
     }
+    @Test void managedPublicationCoversExistingEntitlementAndRollsBackInvalidSource() throws Exception {
+        publishExecutable("1.0.0",1);
+        var first=packageChange("INSTALL",null,"0","spv_pdf_1");finishInstall(first);first=current(first);
+        String sourceInstallation=text(object(first.get("target")),"skillInstallationId");
+        var out=new java.io.ByteArrayOutputStream();
+        try(var zip=new java.util.zip.ZipOutputStream(out)) {
+            zip.putNextEntry(new java.util.zip.ZipEntry("SKILL.md"));
+            zip.write("---\nname: pdf-export\ndescription: export pdf\nmetadata:\n  version: \"2.0.0\"\n---\nUse native tools.\n".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            zip.closeEntry();
+        }
+        byte[] archive=out.toByteArray();var packageProvider=provider(packages);when(packageProvider.getIfUnique()).thenReturn(packages);
+        var publisher=new SkillPackagePublicationService(market,packageProvider,manager,db);
+        var invalid=new SkillPackagePublicationService.Publish("sp_pdf","spv_pdf_2","PDF","synthetic fixture","pdf-export","2.0.0",5_000_000L,"NONE","[]",HexFormat.of().formatHex(SkillPackageStore.sha256(archive)),null,2,"missing-source");
+        assertEquals("SKILL_UPGRADE_SOURCE_INVALID",assertThrows(SkillMarketplaceException.class,()->publisher.publish(ACTOR,true,invalid,archive)).code());
+        assertEquals("spv_pdf_1",market.selectProductForUpdate("0",ACTOR.clientId(),"sp_pdf").getCurrentProductVersionId());
+        assertNull(market.selectApprovedProductVersion("0",ACTOR.clientId(),"spv_pdf_2"));
+        var valid=new SkillPackagePublicationService.Publish("sp_pdf","spv_pdf_2","PDF","synthetic fixture","pdf-export","2.0.0",5_000_000L,"NONE","[]",invalid.packageSha256(),null,2,"spv_pdf_1");
+        assertEquals("PUBLISHED",publisher.publish(ACTOR,true,valid,archive).disposition());
+        assertEquals("RECORDED",publisher.publish(ACTOR,true,valid,archive).disposition());
+        assertEquals("COVERED",db.upgradePolicy("0",ACTOR.clientId(),"spv_pdf_1","spv_pdf_2"));
+        int orders=count("economy_skill_order");
+        var upgrade=packageChange("UPGRADE",sourceInstallation,text(first,"skillRevision"),"spv_pdf_2");
+        assertNull(upgrade.get("orderId"));assertEquals("0",object(upgrade.get("price")).get("amountMinor"));
+        assertEquals("INSTRUCTION",object(upgrade.get("target")).get("kind"));
+        finishInstall(upgrade);assertEquals("SUCCEEDED",current(upgrade).get("status"));
+        assertEquals(orders,count("economy_skill_order"));
+    }
     @Test void instructionNativeBindingUsesRealInstallationAndDisablingClosesAdmission() throws Exception {
         publishInstruction();var first=packageChange("INSTALL",null,"0","spv_pdf_1");finishInstall(first);first=current(first);
         var target=object(first.get("target"));assertEquals("INSTRUCTION",target.get("kind"));assertNull(target.get("manifestSha256"));
