@@ -253,7 +253,7 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         var out=new java.io.ByteArrayOutputStream();
         try(var zip=new java.util.zip.ZipOutputStream(out)) {
             zip.putNextEntry(new java.util.zip.ZipEntry("SKILL.md"));
-            zip.write("---\nname: pdf-export\ndescription: export pdf\nmetadata:\n  version: \""+version+"\"\n---\nDescribe a PDF.\n".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            zip.write(("---\nname: pdf-export\ndescription: export pdf\nmetadata:\n  version: \""+version+"\"\n---\nDescribe a PDF.\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
             zip.closeEntry();
         }
         byte[] bytes=out.toByteArray();new SkillPackageStore(scratch.resolve(database+"-packages")).publish(bytes);
