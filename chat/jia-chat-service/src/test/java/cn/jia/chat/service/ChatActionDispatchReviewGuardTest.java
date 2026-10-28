@@ -139,7 +139,7 @@ class ChatActionDispatchReviewGuardTest {
         var grant=mock(cn.jia.agent.service.AgentTaskExecutionGrantService.Admission.class);
         when(grant.grantId()).thenReturn("grant");when(grant.grantVersion()).thenReturn(1L);
         Map<String,Object> snapshot=org.springframework.test.util.ReflectionTestUtils.invokeMethod(actual,"prepare",action,"act_test",capability,List.of(),grant);
-        assertEquals("current-install",((Map<?,?>)snapshot.get("skill")).get("installationId"));
+        assertEquals("current-install",((Map<?,?>)((Map<?,?>)((List<?>)snapshot.get("skills")).getFirst()).get("skill")).get("installationId"));
         when(installed.readCurrent(key)).thenReturn(new cn.jia.agent.service.InstalledSkillDescriptorLookup.Snapshot(List.of(descriptor,descriptor)));
         assertThrows(ChatActionDispatchService.Rejected.class,()->org.springframework.test.util.ReflectionTestUtils.invokeMethod(
                 actual,"prepare",action,"act_test",capability,List.of(),grant));

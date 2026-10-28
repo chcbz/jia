@@ -432,9 +432,9 @@ class AgentRuntimeSecurityIntegrationTest {
         String path="/internal/agent/tasks/task-a/runs/run-a/conversation/provider-start";
         String body="{\"version\":1,\"token\":\"01234567-89ab-cdef-0123-456789abcdef\"}";
         conversationMvc.perform(headers(post(path),A,"runtime-a",TOKEN_A).contentType("application/json").content(body))
-                .andExpect(status().isNotFound());
+                .andExpect(status().isForbidden());
         conversationMvc.perform(headers(post(path),A,"runtime-b",TOKEN_A).contentType("application/json").content(body))
-                .andExpect(status().isUnauthorized());
+                .andExpect(status().isForbidden());
         conversationMvc.perform(headers(post(path),A,"runtime-a",TOKEN_A).header("Origin","https://browser.invalid")
                 .contentType("application/json").content(body)).andExpect(status().isForbidden());
         conversationMvc.perform(headers(post(path+"/extra"),A,"runtime-a",TOKEN_A)).andExpect(status().isForbidden());
@@ -447,9 +447,9 @@ class AgentRuntimeSecurityIntegrationTest {
             String path="/internal/agent/tasks/task-a/runs/run-a/conversation/"+suffix;
             for(String body:List.of("{}","{\"schemaVersion\":2}","{\"schemaVersion\":3,\"consentId\":\"forged\"}"))
                 conversationMvc.perform(headers(post(path),A,"runtime-a",TOKEN_A).contentType("application/json").content(body))
-                        .andExpect(status().isNotFound());
+                        .andExpect(status().isForbidden());
             conversationMvc.perform(headers(post(path),A,"runtime-b",TOKEN_A).contentType("application/json").content("{}"))
-                    .andExpect(status().isUnauthorized());
+                    .andExpect(status().isForbidden());
             conversationMvc.perform(headers(post(path+"/extra"),A,"runtime-a",TOKEN_A)).andExpect(status().isForbidden());
         }
         verifyNoInteractions(workspaceExecutions);

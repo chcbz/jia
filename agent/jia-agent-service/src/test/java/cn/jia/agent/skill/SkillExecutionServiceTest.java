@@ -185,7 +185,7 @@ public class SkillExecutionServiceTest {
         var result=service.create(owner,new SkillExecutionService.Create("action","task","42",1,"agent","grant",1,7,snapshot()));
         assertTrue(result.executionId().matches("pwe_[a-f0-9]{60}"));assertTrue(result.runId().matches("pwe_run_[a-f0-9]{64}"));assertEquals("READY",skill.getPhase());assertNull(execution.getControlledConsentId());assertEquals(5,execution.getExecutionProtocolVersion());assertNull(execution.getOutputContentMimeType());
         verify(grants).admit(any(),eq("task"),eq("grant"),eq(1L),eq(7L),eq("agent"),eq("EXECUTE_SKILL"),eq(false));
-        verify(management).admit(eq(new SkillCapabilityLookup.Scope("0","client","owner","agent")),eq("analysis"),eq("install"),any());
+        verify(management).admitNative(eq(new SkillCapabilityLookup.Scope("0","client","owner","agent")),eq("analysis"),eq("install"),any());
         var stored=JsonMapper.builder().build().readValue(skill.getTaskSkillBindingJson(),List.class);
         var binding=(Map<?,?>)((Map<?,?>)stored.getFirst()).get("taskSkillBinding");
         assertNull(skill.getSkillKey());assertNull(skill.getSkillVersion());assertNull(skill.getPackageSha256());assertNull(skill.getManifestSha256());
@@ -334,6 +334,8 @@ public class SkillExecutionServiceTest {
     }
     void emptySkills() {var snapshot=snapshot();snapshot.put("skills",List.of());replaceSnapshot(snapshot);skill.setTaskSkillBindingJson("[]");}
     void insertFixtures() {
+        when(pwe.findByTaskRun(eq("0"),eq("client"),eq("owner"),eq("task"),anyString())).thenAnswer(i->execution);
+        when(pwe.lockByTaskRun(eq("0"),eq("client"),eq("owner"),eq("task"),anyString())).thenAnswer(i->execution);
         doAnswer(i->{execution=i.getArgument(0);return null;}).when(pwe).insert(any());
         doAnswer(i->{skill=i.getArgument(0);skill.setPhase("READY").setVersion(0L).setEffectsJson("{}");return null;}).when(attachments).insertReady(any());
     }
@@ -462,7 +464,8 @@ public class SkillExecutionServiceTest {
         assertEquals(2,manifest.get("schemaVersion"));assertEquals(bytes.length,((Map<?,?>)((List<?>)manifest.get("artifacts")).getFirst()).get("byteLength"));
         var recovery=service.resume(runtime,"task","run",new SkillExecutionService.Resume("exec",skill.getSnapshotSha256()));
         assertEquals(List.of("PROJECT_RESULT"),recovery.allowedWork());assertEquals(manifest,recovery.resultManifest());
-        clearInvocations(storage,installed);assertEquals(receipt,commit(runtime,command));verifyNoInteractions(storage,installed);
+        clearInvocations(storage,installed);assertEquals(receipt,commit(runtime,command));
+        verify(storage).maxContentBytes();verifyNoMoreInteractions(storage);verifyNoInteractions(installed);
     }
     @Test void emptySkillsDoNotBypassCurrentConversationAclOrGeneration() {
         emptySkills();
@@ -507,6 +510,7 @@ public class SkillExecutionServiceTest {
         verify(pwe,never()).insert(any());
     }
     @Test void unfinishedRetiredOwnerViewIsReadOnlyAndCannotAdvertiseRecovery() {
+        clearInvocations(storage);
         when(pwe.listInputs("0","client","owner","exec")).thenReturn(List.of());
         for (int protocol : List.of(1,2,3,4)) {
             execution.setExecutionProtocolVersion(protocol).setExecutionState("QUEUED")

@@ -106,7 +106,7 @@ class ChatRetainedOutputSourcesTest {
         var carrier = (Map<?,?>) ((List<?>) ChatMaterialsInputContract.candidates(frozen.frozenDeclaration(), catalog).get("sources")).getFirst();
         assertEquals(red.sha256(), carrier.get("sha256"));
         assertEquals(bindings.getFirst().get("sourceRefId"), carrier.get("sourceRefId"));
-        verify(capabilities).available(any(), eq("task"), eq(catalog));
+        verify(capabilities).availableNative(any(), eq("task"), eq(catalog), eq(frozen.frozenDeclaration()), eq("session"));
     }
 
     @Test void multipleOutputsAreMappedByFullIdentityNotPositionAndStaleShaCannotMatch() {
