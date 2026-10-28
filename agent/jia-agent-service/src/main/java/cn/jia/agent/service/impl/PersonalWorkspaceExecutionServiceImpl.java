@@ -2153,7 +2153,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
             boolean instructionPackage=descriptor.manifestJson()==null;
             var manifest=instructionPackage?null:skillMap(descriptor.manifestJson());
             if(!instructionPackage) {
-            skillCodec.validateParameters(manifest.get("parametersSchema"),skillJson(snapshot.get("parameters")).getBytes(StandardCharsets.UTF_8));
+            skillCodec.validateParameters(skillCodec.parseJson(skillJson(manifest.get("parametersSchema")).getBytes(StandardCharsets.UTF_8)),skillJson(snapshot.get("parameters")).getBytes(StandardCharsets.UTF_8));
             var inputs=skillInputs(snapshot);var inputSpec=skillObject(manifest.get("inputs"));
             if(inputs.size()<skillLong(inputSpec.get("minItems"))||inputs.size()>skillLong(inputSpec.get("maxItems")))throw failure(Reason.BAD_REQUEST);
             for(var input:inputs)if(!((List<?>)inputSpec.get("acceptedMimeTypes")).contains(skillString(input,"contentMimeType")))throw failure(Reason.BAD_REQUEST);
