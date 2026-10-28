@@ -63,9 +63,9 @@ class AgentHostedProfilePublisherTest {
 
     @Test
     void scopeDigestAndBindingProduceIsolatedProfileKeys() {
-        String a = AgentHostedBindingTransaction.scopeDigest(new Scope("owner-a", "client", "owner-a")) + 7L;
-        String b = AgentHostedBindingTransaction.scopeDigest(new Scope("owner-b", "client", "owner-b")) + 7L;
-        String c = AgentHostedBindingTransaction.scopeDigest(new Scope("owner-a", "client", "owner-a")) + 8L;
+        String a = AgentHostedBindingTransaction.scopeDigest(new Scope("0", "client", "owner-a")) + 7L;
+        String b = AgentHostedBindingTransaction.scopeDigest(new Scope("0", "client", "owner-b")) + 7L;
+        String c = AgentHostedBindingTransaction.scopeDigest(new Scope("0", "client", "owner-a")) + 8L;
         assertNotEquals(a, b);
         assertNotEquals(a, c);
         assertTrue(a.endsWith("7"));
@@ -307,7 +307,7 @@ class AgentHostedProfilePublisherTest {
     }
 
     private FixtureData data() {
-        Scope scope = new Scope("owner-a", "client-a", "owner-a");
+        Scope scope = new Scope("0", "client-a", "owner-a");
         AgentHostedProfileEntity hosted = new AgentHostedProfileEntity();
         hosted.setBindingId(11L);
         hosted.setTenantId(scope.tenantId());

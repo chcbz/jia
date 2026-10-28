@@ -155,7 +155,7 @@ class AgentIdentityRuntimeRealTransactionTest {
         request.setEndpoint("wss://agent/one");
         // Registration cannot create/rotate credentials: an authenticated unified session
         // must already have claimed this exact runtime. Model that persisted boundary.
-        assertThrows(AgentServiceImpl.AgentBizException.class, () -> agentService.register(request));
+        assertThrows(IllegalArgumentException.class, () -> agentService.register(request));
         assertEquals("PROVISIONED", jdbc.queryForObject("SELECT lifecycle_status FROM agent_identity_registry", String.class));
         jdbc.update("UPDATE agent_runtime SET tenant_id='0', runtime_installation_id='install-a', "
                 + "runtime_host_id='host-a', runtime_instance_id='runtime-a', runtime_session_generation=1, token_hash='urs1:synthetic'");
