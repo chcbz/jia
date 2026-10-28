@@ -5,6 +5,7 @@ import cn.jia.agent.entity.AgentPersonaEntity;
 import cn.jia.agent.entity.AgentRegisterDTO;
 import cn.jia.agent.entity.AgentRegisterResultDTO;
 import cn.jia.agent.entity.AgentRuntimeDTO;
+import cn.jia.agent.entity.AgentTaskAssigneeCandidateDTO;
 import cn.jia.agent.entity.AgentStatusDTO;
 import cn.jia.agent.entity.AgentTaskAssignDTO;
 import cn.jia.agent.entity.AgentTaskCreateDTO;
@@ -12,7 +13,6 @@ import cn.jia.agent.entity.AgentTaskDTO;
 import cn.jia.agent.entity.AgentTaskCountsDTO;
 import cn.jia.agent.entity.AgentTaskNoteDTO;
 import cn.jia.agent.entity.AgentTaskReportDTO;
-import cn.jia.agent.entity.AgentTaskRecommendationDTO;
 import cn.jia.agent.entity.AgentTaskTeamRecommendationDTO;
 import cn.jia.agent.entity.AgentTaskTeamRecommendationRequestDTO;
 import cn.jia.agent.entity.AgentTaskSearchDTO;
@@ -72,7 +72,8 @@ public interface AgentService {
 
     AgentTaskDTO assignTask(String taskId, AgentTaskAssignDTO request);
 
-    List<AgentTaskRecommendationDTO> recommendTaskAssignees(String taskId);
+    /** All task-authorized candidates, unranked; never truncates using the retired single-assignee score. */
+    List<AgentTaskAssigneeCandidateDTO> listTaskAssigneeCandidates(String taskId);
 
     AgentTaskTeamRecommendationDTO recommendTaskTeam(
             String tenantId, String clientId, String taskId,

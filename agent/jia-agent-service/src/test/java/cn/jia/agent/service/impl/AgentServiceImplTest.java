@@ -21,6 +21,7 @@ import cn.jia.agent.entity.AgentPersonaEntity;
 import cn.jia.agent.entity.AgentRegisterDTO;
 import cn.jia.agent.entity.AgentRegisterResultDTO;
 import cn.jia.agent.entity.AgentRuntimeDTO;
+import cn.jia.agent.entity.AgentTaskAssigneeCandidateDTO;
 import cn.jia.agent.entity.AgentRuntimeEntity;
 import cn.jia.agent.entity.AgentSceneStateDTO;
 import cn.jia.agent.entity.AgentStatsDTO;
@@ -1556,7 +1557,7 @@ class AgentServiceImplTest extends BaseMockTest {
     }
 
     @Test
-    void recommendTaskAssigneesReturnsEligibleScoresAndExcludedCandidates() {
+    void listTaskAssigneeCandidatesPreservesAuthorityWithoutScoring() {
         AgentTaskMetaEntity meta = new AgentTaskMetaEntity();
         meta.setId(1L);
         meta.setTaskId("task-001");
@@ -1580,45 +1581,19 @@ class AgentServiceImplTest extends BaseMockTest {
                 "[\"planning\"]");
         wireAssigneeCandidates(List.of(executor, offlinePlanner, erroredPlanner, busyPlanner, planner));
 
-        List<AgentTaskRecommendationDTO> result = agentService.recommendTaskAssignees("task-001");
+        List<AgentTaskAssigneeCandidateDTO> result = agentService.listTaskAssigneeCandidates("task-001");
 
         assertEquals(5, result.size());
-        AgentTaskRecommendationDTO selected = result.getFirst();
-        assertEquals("agent-wuyong", selected.getAgent().getAgentId());
-        assertTrue(selected.getEligible());
-        assertEquals(List.of(), selected.getExclusionReasons());
-        assertEquals(Map.of("ability", 40, "availability", 20, "success", 11,
-                "load", 15, "context", 8, "riskPenalty", 0), selected.getScoreParts());
-        assertEquals(94, selected.getScore());
-        assertEquals(100, selected.getAbilityScore());
-        assertTrue(selected.getReason().contains("宋江首领建议"));
-
-        AgentTaskRecommendationDTO busy = result.stream()
-                .filter(candidate -> "agent-busy".equals(candidate.getAgent().getAgentId()))
-                .findFirst().orElseThrow();
-        assertTrue(busy.getEligible());
-        assertEquals(List.of(), busy.getExclusionReasons());
-        AgentTaskRecommendationDTO unmatched = result.stream()
-                .filter(candidate -> "agent-linchong".equals(candidate.getAgent().getAgentId()))
-                .findFirst().orElseThrow();
-        assertTrue(unmatched.getEligible());
-        assertEquals(List.of(), unmatched.getExclusionReasons());
-        AgentTaskRecommendationDTO offline = result.stream()
-                .filter(candidate -> "agent-offline".equals(candidate.getAgent().getAgentId()))
-                .findFirst().orElseThrow();
-        assertTrue(offline.getEligible());
-        assertEquals(List.of(), offline.getExclusionReasons());
-        AgentTaskRecommendationDTO errored = result.stream()
-                .filter(candidate -> "agent-error".equals(candidate.getAgent().getAgentId()))
-                .findFirst().orElseThrow();
-        assertTrue(errored.getEligible());
-        assertEquals(List.of(), errored.getExclusionReasons());
+        assertEquals(List.of("agent-linchong", "agent-offline", "agent-error", "agent-busy", "agent-wuyong"),
+                result.stream().map(c -> c.target().agentId()).toList());
+        assertTrue(result.stream().allMatch(agent -> agent.target().isMine()));
+        assertEquals(2, AgentTaskAssigneeCandidateDTO.class.getRecordComponents().length);
         verify(externalServicePolicies).candidates(any(), org.mockito.ArgumentMatchers.eq("task-001"), org.mockito.ArgumentMatchers.isNull(), org.mockito.ArgumentMatchers.eq(100));
         verify(agentRuntimeDao, never()).findRosterByOwner("jia_client", "jiacn", null, null);
     }
 
     @Test
-    void recommendTaskAssigneesPreservesRosterOrderWhenEligibilityAndScoresTie() {
+    void listTaskAssigneeCandidatesPreservesPublicOrder() {
         AgentTaskMetaEntity meta = new AgentTaskMetaEntity();
         meta.setId(1L);
         meta.setTaskId("task-001");
@@ -1635,13 +1610,34 @@ class AgentServiceImplTest extends BaseMockTest {
                 "[\"execution\"]");
         wireAssigneeCandidates(List.of(planner, executor));
 
-        List<AgentTaskRecommendationDTO> result = agentService.recommendTaskAssignees("task-001");
+        List<AgentTaskAssigneeCandidateDTO> result = agentService.listTaskAssigneeCandidates("task-001");
 
         assertEquals(2, result.size());
-        assertTrue(result.stream().allMatch(candidate -> Boolean.TRUE.equals(candidate.getEligible())));
-        assertEquals(result.get(0).getScore(), result.get(1).getScore());
+        assertTrue(result.stream().allMatch(candidate -> candidate.target().isMine()));
         assertEquals(List.of("agent-wuyong", "agent-linchong"), result.stream()
-                .map(candidate -> candidate.getAgent().getAgentId()).toList());
+                .map(c -> c.target().agentId()).toList());
+    }
+
+    @Test
+    void taskAssigneeCandidatePagesAreNotTruncatedAndExternalPrivacyIsPreserved() {
+        AgentTaskMetaEntity meta = new AgentTaskMetaEntity();
+        meta.setId(1L); meta.setTaskId("task-001"); meta.setTenantId("0"); meta.setClientId("jia_client");
+        meta.setOwnerJiacn("jiacn"); meta.setRewardStatus(AgentConstants.TASK_STATUS_OPEN); meta.setTaskVersion(0L);
+        when(agentTaskMetaDao.findByTaskIdInOwnerScope("0", "jia_client", "jiacn", "task-001")).thenReturn(meta);
+        var first = java.util.stream.IntStream.range(0, 5).mapToObj(i -> new cn.jia.agent.entity.AgentTaskTargetSummaryDTO(
+                "external-" + i, "External " + i, "Provider", false, "online")).toList();
+        var last = new cn.jia.agent.entity.AgentTaskTargetSummaryDTO("external-5", "External 5", "Provider", false, "online");
+        when(externalServicePolicies.candidates(any(), org.mockito.ArgumentMatchers.eq("task-001"),
+                org.mockito.ArgumentMatchers.isNull(), org.mockito.ArgumentMatchers.eq(100)))
+                .thenReturn(new cn.jia.agent.service.AgentExternalServicePolicyService.Candidates(first, "external-4"));
+        when(externalServicePolicies.candidates(any(), org.mockito.ArgumentMatchers.eq("task-001"),
+                org.mockito.ArgumentMatchers.eq("external-4"), org.mockito.ArgumentMatchers.eq(100)))
+                .thenReturn(new cn.jia.agent.service.AgentExternalServicePolicyService.Candidates(List.of(last), null));
+        var result = agentService.listTaskAssigneeCandidates("task-001");
+        assertEquals(6, result.size());
+        assertTrue(result.stream().allMatch(agent -> agent.abilities().isEmpty() && !agent.target().isMine()));
+        assertEquals("Provider", result.getFirst().target().providerDisplayName());
+        verify(agentRuntimeDao, never()).findByAgentId("external-5");
     }
 
     @Test

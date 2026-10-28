@@ -25,6 +25,7 @@ import cn.jia.agent.entity.AgentPersonaEntity;
 import cn.jia.agent.entity.AgentRegisterDTO;
 import cn.jia.agent.entity.AgentRegisterResultDTO;
 import cn.jia.agent.entity.AgentRuntimeDTO;
+import cn.jia.agent.entity.AgentTaskAssigneeCandidateDTO;
 import cn.jia.agent.entity.AgentRuntimeEntity;
 import cn.jia.agent.entity.AgentSceneStateDTO;
 import cn.jia.agent.entity.AgentStatsDTO;
@@ -1331,36 +1332,28 @@ public class AgentServiceImpl implements AgentService {
     }
 
     @Override
-    public List<AgentTaskRecommendationDTO> recommendTaskAssignees(String taskId) {
-        AgentTaskDTO task = getTask(taskId);
+    public List<AgentTaskAssigneeCandidateDTO> listTaskAssigneeCandidates(String taskId) {
+        getTask(taskId); // Owner-scoped task read before enumerating any candidate.
         String clientId = resolveCurrentClientId();
         String ownerJiacn = resolveCurrentJiacn();
-        var scope=new cn.jia.agent.service.AgentTaskExecutionGrantService.Scope(SINGLE_TENANT_ID,clientId,ownerJiacn);
-        List<AgentTaskRecommendationDTO> recommendations=new ArrayList<>();
-        String after=null;
+        var scope = new cn.jia.agent.service.AgentTaskExecutionGrantService.Scope(SINGLE_TENANT_ID, clientId, ownerJiacn);
+        var candidates = new java.util.LinkedHashMap<String, AgentTaskAssigneeCandidateDTO>();
+        var cursors = new java.util.HashSet<String>();
+        String after = null;
         do {
-            var page=externalServicePolicies.candidates(scope,taskId,after,100);
-            for(var candidate:page.items()) {
-                var runtime=agentRuntimeDao.findByAgentId(candidate.agentId());
-                if(runtime==null) continue;
-                if (!Objects.equals(runtime.getClientId(), clientId)) continue;
-                var recommendation=candidate.isMine()
-                        ? buildTaskRecommendation(task,runtime,clientId,ownerJiacn)
-                        : buildTaskRecommendation(task,toRuntimeDTO(runtime,clientId,ownerJiacn,RuntimeBatchEnrichment.empty()));
-                recommendation.setEligible(true); recommendation.setExclusionReasons(List.of());
-                // Candidate authority is shared; recommendation never exposes another customer's work.
-                if(!candidate.isMine()) {
-                    var agent=recommendation.getAgent();
-                    agent.setOwnerJiacn(null); agent.setEndpoint(null); agent.setCurrentTaskId(null);
-                    agent.setCurrentTaskTitle(null); agent.setLastSeenAt(null); agent.setErrorMessage(null); agent.setStats(null);
-                    var capability=recommendation.getCapability();
-                    capability.setCurrentTaskId(null); capability.setCurrentTaskTitle(null);
+            var page = externalServicePolicies.candidates(scope, taskId, after, 100);
+            for (var candidate : page.items()) {
+                List<String> abilities = List.of();
+                if (candidate.isMine()) {
+                    var owned = requireApiKeyOwnedAgent(clientId, ownerJiacn, candidate.agentId());
+                    abilities = List.copyOf(Optional.ofNullable(owned.getAbilities()).orElseGet(List::of));
                 }
-                recommendations.add(recommendation);
+                candidates.put(candidate.agentId(), new AgentTaskAssigneeCandidateDTO(candidate, abilities));
             }
-            after=page.nextAfterAgentId();
-        } while(after!=null);
-        return recommendations.stream().sorted(java.util.Comparator.comparing(AgentTaskRecommendationDTO::getScore).reversed()).limit(5).toList();
+            after = page.nextAfterAgentId();
+            if (after != null && !cursors.add(after)) throw new IllegalStateException("Candidate pagination did not advance");
+        } while (after != null);
+        return List.copyOf(candidates.values());
     }
 
     @Override

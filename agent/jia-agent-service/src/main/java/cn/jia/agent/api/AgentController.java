@@ -17,7 +17,6 @@ import cn.jia.agent.entity.AgentTaskCreateDTO;
 import cn.jia.agent.entity.AgentTaskExecutionGrantRevokeDTO;
 import cn.jia.agent.entity.AgentTaskDTO;
 import cn.jia.agent.entity.AgentTaskNoteDTO;
-import cn.jia.agent.entity.AgentTaskRecommendationDTO;
 import cn.jia.agent.entity.AgentTaskTeamRecommendationDTO;
 import cn.jia.agent.entity.AgentTaskTeamRecommendationRequestDTO;
 import cn.jia.agent.entity.AgentTaskReportDTO;
@@ -440,12 +439,6 @@ public class AgentController {
                 .body(JsonResult.success(requireTaskExecutionGrants().revoke(
                         requireTaskGrantScope(authentication), taskId, grantId, idempotencyKey,
                         request.getExpectedVersion())));
-    }
-
-    @PostMapping("/tasks/{taskId}/recommend")
-    public Object recommendTaskAssignees(@PathVariable String taskId) {
-        List<AgentTaskRecommendationDTO> recommendations = agentService.recommendTaskAssignees(taskId);
-        return JsonResult.success(recommendations);
     }
 
     @PostMapping("/tasks/{taskId}/team-recommendation")

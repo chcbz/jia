@@ -9,7 +9,6 @@ import cn.jia.agent.entity.AgentTaskDTO;
 import cn.jia.agent.entity.AgentTaskNoteDTO;
 import cn.jia.agent.entity.AgentTaskReportDTO;
 import cn.jia.agent.entity.AgentTaskSearchDTO;
-import cn.jia.agent.entity.AgentTaskRecommendationDTO;
 import cn.jia.agent.service.AgentService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.ai.tool.annotation.Tool;
@@ -99,12 +98,6 @@ public class AgentTools {
         AgentTaskAssignDTO request = new AgentTaskAssignDTO();
         request.setAgentId(agentId);
         return agentService.assignTask(taskId, request);
-    }
-
-    @Tool(name = "recommendTaskAssignees", description = "根据任务需求推荐最适合执行的智能体列表")
-    public List<AgentTaskRecommendationDTO> recommendTaskAssignees(
-            @ToolParam(description = "任务ID") String taskId) {
-        return agentService.recommendTaskAssignees(taskId);
     }
 
     @Tool(name = "autoAssignTask", description = "自动将任务分配给系统选出的最佳智能体")

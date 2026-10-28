@@ -596,6 +596,36 @@ public final class SkillManagementService {
             return view.state()==SkillCapabilityLookup.State.AVAILABLE?view:null;
         }catch(IllegalArgumentException absent){return null;}
     }
+    /** Read-only recommendation facts. Unlike the management screen, never prepares/downloads
+     * candidate packages, quotes upgrades or checks unrelated unpublished products. */
+    public record RecommendationSkill(String installationId,String skillKey,String skillVersion,
+            String title,String description,boolean available,String runtimeState) { }
+    public List<RecommendationSkill> recommendationSkills(HostingRentHttp.Actor a,String agent) {
+        return queryOwned(a,agent,()->{
+            var products=new HashMap<String,SkillProductEntity>();
+            for(var product:db.products(a.tenantId(),a.clientId()))products.put(product.getProductId(),product);
+            boolean connected=online(a,agent);var observed=catalog(a,agent);
+            var rows=new ArrayList<RecommendationSkill>();
+            for(var state:db.states(a.tenantId(),a.clientId(),agent)) {
+                if(state.getActiveInstallationId()==null)continue;
+                var auth=db.findAuthorization(a.tenantId(),a.clientId(),state.getActiveInstallationId());
+                if(auth==null)continue;
+                var status=runtime(a,agent,state,auth,observed,connected);
+                var pkg=ref(auth);
+                var installedVersion=market.selectApprovedProductVersion(a.tenantId(),a.clientId(),text(pkg,"productVersionId"));
+                var product=installedVersion==null?null:products.get(installedVersion.getProductId());
+                boolean ready=Boolean.TRUE.equals(state.getAdmissionEnabled())&&Boolean.TRUE.equals(state.getDesiredEnabled())
+                        &&"READY".equals(status.get("state"));
+                rows.add(new RecommendationSkill(auth.getInstallationId(),state.getSkillKey(),text(pkg,"skillVersion"),
+                        product==null?state.getSkillKey():product.getName(),product==null?"":product.getDescription(),ready,text(status,"state")));
+            }
+            if(!Objects.equals(observed,catalog(a,agent)))
+                rows.replaceAll(row->new RecommendationSkill(row.installationId(),row.skillKey(),row.skillVersion(),row.title(),row.description(),false,"CHANGED"));
+            rows.sort(Comparator.comparing(RecommendationSkill::installationId));
+            return List.copyOf(rows);
+        });
+    }
+
     public Map<String,Object> skills(HostingRentHttp.Actor a,String agent,boolean admin) {
         enabled(a);path(agent);
         // Package bytes must be prepared outside all DB locks. Product pointer changes are rechecked below.
