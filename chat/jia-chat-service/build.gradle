@@ -499,7 +499,7 @@ tasks.register('skillManagementWire', Test) {
         includeTestsMatching 'cn.jia.chat.handler.SkillManagementWireMySqlTest.persistentSqlFenceStaysLockedThroughResultCommitAndWholeTransactionRollback'
         includeTestsMatching 'cn.jia.chat.handler.SkillManagementWireMySqlTest.currentReconnectProofMaySubmitOriginalAuthorizedEpochWithoutRewritingExecutingBoot'
         includeTestsMatching 'cn.jia.chat.handler.SkillManagementNodeMySqlTest.firstInstallWithRealNodePeer'
-        includeTestsMatching 'cn.jia.chat.handler.SkillManagementNodeMySqlTest.realNodeUpgradeAndPolicyKeepOldTaskPinnedWithoutBorrowingCurrent'
+        includeTestsMatching 'cn.jia.chat.handler.SkillManagementNodeMySqlTest.realNativeNodeUpgradeAndPolicyKeepOldTaskPinnedWithoutBorrowingCurrent'
     }
     testLogging { events 'passed','failed'; exceptionFormat 'full'; showStandardStreams = true }
 }
