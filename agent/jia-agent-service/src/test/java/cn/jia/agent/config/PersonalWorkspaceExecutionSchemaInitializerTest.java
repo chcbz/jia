@@ -142,10 +142,14 @@ class PersonalWorkspaceExecutionSchemaInitializerTest {
     }
 
     @Test
-    void committedSkillResultRequiresProtocolFour() {
+    void committedSkillResultRequiresProtocolFourOrFive() {
         var jdbc = taskExecutionFixture();
         var initializer = new PersonalWorkspaceExecutionSchemaInitializer(jdbc);
-        for (Integer protocol : new Integer[]{null, 0, 3, 5}) {
+        for (int protocol : new int[]{4, 5}) {
+            jdbc.update("UPDATE agent_personal_workspace_execution SET execution_protocol_version=?", protocol);
+            assertDoesNotThrow(initializer::verifyTaskExecution);
+        }
+        for (Integer protocol : new Integer[]{null, 0, 3, 6}) {
             jdbc.update("UPDATE agent_personal_workspace_execution SET execution_protocol_version=?", protocol);
             assertThrows(IllegalStateException.class, initializer::verifyTaskExecution);
         }

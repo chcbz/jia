@@ -268,13 +268,13 @@ class PersonalWorkspaceConversationExecutionTest {
         assertEquals(PersonalWorkspaceExecutionService.Reason.CAPABILITY_UNAVAILABLE,assertThrows(
                 PersonalWorkspaceExecutionService.Failure.class,()-> service.claimConversationStart(
                         RUNTIME,"task-1","run-1",commandId(),messageId())).getReason());
-        assertEquals(PersonalWorkspaceExecutionService.Reason.CAPABILITY_UNAVAILABLE,assertThrows(
+        assertEquals(PersonalWorkspaceExecutionService.Reason.NOT_FOUND,assertThrows(
                 PersonalWorkspaceExecutionService.Failure.class,()-> service.start(
                         RUNTIME,"task-1","run-1",commandId(),messageId())).getReason());
-        assertEquals(PersonalWorkspaceExecutionService.Reason.CAPABILITY_UNAVAILABLE,assertThrows(
+        assertEquals(PersonalWorkspaceExecutionService.Reason.NOT_FOUND,assertThrows(
                 PersonalWorkspaceExecutionService.Failure.class,()-> service.stageOutput(
                         RUNTIME,"task-1","run-1","output_1","bird.png","image/png",new byte[]{1})).getReason());
-        assertEquals(PersonalWorkspaceExecutionService.Reason.CAPABILITY_UNAVAILABLE,assertThrows(
+        assertEquals(PersonalWorkspaceExecutionService.Reason.NOT_FOUND,assertThrows(
                 PersonalWorkspaceExecutionService.Failure.class,()-> service.fail(
                         RUNTIME,"task-1","run-1","AGENT_DELIVERY_FAILED")).getReason());
         when(rows.listQueuedByTarget(eq("0"),eq("client"),eq("owner"),eq("agent"),anyInt()))
