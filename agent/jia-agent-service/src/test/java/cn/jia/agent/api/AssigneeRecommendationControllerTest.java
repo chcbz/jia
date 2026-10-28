@@ -25,7 +25,7 @@ class AssigneeRecommendationControllerTest {
     static final String BODY = "{\"protocolVersion\":1,\"requestId\":\"recommend-test\",\"data\":{\"expectedTaskVersion\":\"7\"}}";
     @BeforeEach void setup() {
         login = new JwtAuthenticationToken(Jwt.withTokenValue("test").header("alg", "none")
-                .claim("sub", "user").claim("jiacn", "owner").claim("client_id", "client").build());
+                .claim("sub", "user").claim("jiacn", "owner").claim("client_id", "client").build(), List.of());
         var context = new EsContext(); context.setTenantId("0"); context.setClientId("client"); context.setJiacn("owner"); EsContextHolder.setContext(context);
         mvc = MockMvcBuilders.standaloneSetup(new AssigneeRecommendationController(service))
                 .setMessageConverters(new JacksonJsonHttpMessageConverter()).setControllerAdvice(new ApiEnvelopeAdvice())
@@ -45,6 +45,12 @@ class AssigneeRecommendationControllerTest {
         mvc.perform(post("/agent/tasks/task/recommend").contentType(MediaType.APPLICATION_JSON).content(BODY)).andExpect(status().isUnauthorized());
         EsContextHolder.getContext().setJiacn("other");
         mvc.perform(post("/agent/tasks/task/recommend").principal(login).contentType(MediaType.APPLICATION_JSON).content(BODY)).andExpect(status().isNotFound());
+        verifyNoInteractions(service);
+    }
+    @Test void unauthenticatedJwtNeverInvokesRecommendation() throws Exception {
+        var unauthenticated = new JwtAuthenticationToken(login.getToken());
+        mvc.perform(post("/agent/tasks/task/recommend").principal(unauthenticated).contentType(MediaType.APPLICATION_JSON).content(BODY))
+                .andExpect(status().isUnauthorized());
         verifyNoInteractions(service);
     }
     @Test void malformedJsonIsBadRequestNotProviderFailure() throws Exception {
