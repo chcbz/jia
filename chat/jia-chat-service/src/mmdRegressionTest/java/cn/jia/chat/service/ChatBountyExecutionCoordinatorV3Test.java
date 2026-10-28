@@ -1,1 +1,16 @@
-package cn.jia.chat.service; import org.junit.jupiter.api.Test; import java.nio.file.*; import static org.junit.jupiter.api.Assertions.*; class ChatBountyExecutionCoordinatorV3Test{@Test void admitCreatesAgentReservationBeforeLateChatWrites()throws Exception{String s=Files.readString(Path.of("src/main/java/cn/jia/chat/service/ChatBountyInteractionV3AuthorityService.java"));assertTrue(s.indexOf("authorities.reserve")<s.indexOf("persistChat"));assertTrue(s.contains("interaction.state_changed"));}}
+package cn.jia.chat.service;
+
+import org.junit.jupiter.api.Test;
+import java.util.Arrays;
+import static org.junit.jupiter.api.Assertions.*;
+
+class ChatBountyExecutionCoordinatorV3Test {
+    @Test void retiredAuthorityHasNoAdmissionOrReplayEntryButKeepsHistoryLookup() {
+        var methods=Arrays.stream(ChatBountyInteractionV3AuthorityService.class.getDeclaredMethods())
+                .map(java.lang.reflect.Method::getName).toList();
+        assertFalse(methods.contains("admit"));
+        assertFalse(methods.contains("persistChat"));
+        assertTrue(methods.contains("getInteraction"));
+        assertTrue(methods.contains("getIssue"));
+    }
+}

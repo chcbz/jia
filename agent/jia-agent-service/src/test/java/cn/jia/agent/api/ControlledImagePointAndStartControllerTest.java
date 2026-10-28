@@ -54,7 +54,7 @@ class ControlledImagePointAndStartControllerTest {
                         .header("Idempotency-Key","assignment-key"))
                 .andExpect(status().isForbidden());
         verify(service,times(1)).get(any(),eq("task-1"),eq("assignment-key"));
-        verify(service,never()).submit(any(),anyString(),anyString(),any());
+        verifyNoMoreInteractions(service);
     }
 
     private static String body(int inputs,String version) {

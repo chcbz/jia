@@ -153,7 +153,7 @@ public final class ChatSkillSourceAccessService implements SkillSourceAccessServ
             WHERE BINARY l.tenant_id=BINARY ? AND BINARY l.client_id=BINARY ? AND BINARY l.owner_jiacn=BINARY ?
               AND BINARY e.execution_id=BINARY ? AND BINARY p.task_id=BINARY ? AND BINARY e.task_id=BINARY ?
               AND BINARY p.conversation_id=BINARY ? AND BINARY e.conversation_id=BINARY ? AND p.conversation_generation=?
-              AND p.kind='EXECUTE' AND e.execution_protocol_version=4 AND e.execution_state='RESULT_COMMITTED'
+              AND p.kind='EXECUTE' AND e.execution_protocol_version IN (4,5) AND e.execution_state='RESULT_COMMITTED'
               AND p.state='RESULT_COMMITTED' AND l.state='RESULT_COMMITTED'
             """,s.tenantId(),s.clientId(),s.ownerJiacn(),execution,task,task,conversation,conversation,generation);
         if(rows.size()!=1)throw missing();

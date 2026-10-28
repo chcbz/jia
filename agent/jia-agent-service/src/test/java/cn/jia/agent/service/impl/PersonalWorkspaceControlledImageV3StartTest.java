@@ -33,87 +33,19 @@ class PersonalWorkspaceControlledImageV3StartTest {
   assertTrue(receipt.started());assertEquals(3,receipt.schemaVersion());
   assertTrue(java.util.Arrays.stream(receipt.getClass().getRecordComponents()).noneMatch(c->c.getName().toLowerCase().contains("token")));
  }
- @Test void startReadsExternalBytesBeforeRootTransactionAndOnlyRevalidatesRowsInsideLateCheck()
-     throws Exception {
-  String source=java.nio.file.Files.readString(java.nio.file.Path.of(
-    "src/main/java/cn/jia/agent/service/impl/PersonalWorkspaceExecutionServiceImpl.java"));
-  int method=source.indexOf("beginControlledConversationProviderStartV3(");
-  int bytes=source.indexOf("verifiedV3SourceBytes(scope,candidate)",method);
-  int consume=source.indexOf("followupAuthority.consumeForStart",method);
-  int rows=source.indexOf("verifiedV3SourceRows(scope,execution)",consume);
-  int nextMethod=source.indexOf("private static ProviderExecution provider",method);
-  assertTrue(method>=0&&bytes>method&&consume>bytes&&rows>consume&&nextMethod>rows);
-  assertEquals(-1,source.substring(consume,nextMethod)
-    .indexOf("verifiedV3SourceBytes(scope,execution)"));
- }
+
 
  @AfterEach void clearPrincipal() { SecurityContextHolder.clearContext(); }
 
- @Test void rotationDuringSourceIoRejectsPaidStartBeforeAuthorityConsumption() throws Exception {
-  var fixture=new StartFixture();
-  when(fixture.storage.read(any(),anyString(),anyString(),anyLong(),anyString())).thenAnswer(call->{
-   assertFalse(fixture.transactionActive.get(), "external bytes must precede persistent fence locks");
-   fixture.row.setRuntimeSessionGeneration(2L).setRuntimeInstanceId("replacement");
-   return fixture.stored;
-  });
-  assertThrows(RuntimeException.class,fixture::start);
-  verify(fixture.manager).rollback(fixture.status);
-  verify(fixture.manager,never()).commit(any());
-  verify(fixture.authority,never()).consumeForStart(any(),any(),any());
-  verify(fixture.executions,never()).update(any());
- }
 
- @Test void currentProofFencesOriginalCommandAfterByteReadAndBeforeConsumption() throws Exception {
-  var fixture=new StartFixture();
-  when(fixture.authority.consumeForStart(any(),any(),any())).thenAnswer(call->{
-   assertTrue(fixture.transactionActive.get());
-   ControlledImageFollowupAuthorityService.StartCommand command=call.getArgument(1);
-   assertEquals(fixture.command.commandId(),command.commandId());
-   assertEquals(fixture.command.messageId(),command.messageId());
-   assertEquals(fixture.command.inputSnapshotDigest(),command.inputSnapshotDigest());
-   return new ControlledImageFollowupAuthorityService.StartReceipt("task","run","conversation","execution",
-     command.commandId(),command.messageId(),command.operation(),command.inputSnapshotDigest(),
-     command.providerExecution(),command.leaseVersion());
-  });
-  assertTrue(fixture.start().started());
-  var order=inOrder(fixture.storage,fixture.manager,fixture.installations,fixture.rows,fixture.authority);
-  order.verify(fixture.storage).read(any(),anyString(),anyString(),anyLong(),anyString());
-  order.verify(fixture.manager).getTransaction(any());
-  order.verify(fixture.installations).lock(StartFixture.ID);
-  order.verify(fixture.rows).lockInScope("0","client",StartFixture.AGENT);
-  order.verify(fixture.authority).consumeForStart(any(),any(),any());
-  order.verify(fixture.manager).commit(fixture.status);
- }
 
- @Test void missingRuntimeProofCannotReadSourceOrConsumeStart() throws Exception {
-  var fixture=new StartFixture();
-  SecurityContextHolder.clearContext();
-  assertThrows(RuntimeException.class,fixture::start);
-  verify(fixture.authority,never()).consumeForStart(any(),any(),any());
-  verify(fixture.storage,never()).read(any(),anyString(),anyString(),anyLong(),anyString());
- }
 
- @Test void corruptSourceSnapshotRejectsBeforeRuntimeTransactionAndConsumption() throws Exception {
-  var fixture=new StartFixture();
-  when(fixture.workspace.findVersion("0","client","owner","file",1)).thenReturn(
-    new PersonalWorkspaceVersionEntity().setContentHash("0".repeat(64)).setByteLength(22L).setContentMimeType("image/png"));
-  assertThrows(RuntimeException.class,fixture::start);
-  verify(fixture.manager,never()).getTransaction(any());
-  verify(fixture.authority,never()).consumeForStart(any(),any(),any());
- }
 
- @Test void assetSourcePreparationUsesNonLockingExactOutputBeforeRuntimeFence() throws Exception {
-  var fixture=new StartFixture();fixture.useAssetSource();
-  when(fixture.storage.read(any(),anyString(),anyString(),anyLong(),anyString())).thenAnswer(call->{
-   assertFalse(fixture.transactionActive.get());
-   verify(fixture.executions).findOutput("0","client","owner","producer","output_1");
-   verify(fixture.executions,never()).lockOutput(anyString(),anyString(),anyString(),anyString(),anyString());
-   fixture.row.setRuntimeSessionGeneration(2L).setRuntimeInstanceId("replacement");
-   return fixture.stored;
-  });
-  assertThrows(RuntimeException.class,fixture::start);
-  verify(fixture.authority,never()).consumeForStart(any(),any(),any());
- }
+
+
+
+
+
 
  /** Real native service + real transaction-advised auth; DAO/storage/authority are explicit
   * collaborators. Cloud DB/root/paid-side-effect integration remains separate evidence. */
@@ -237,9 +169,7 @@ class PersonalWorkspaceControlledImageV3StartTest {
    command=new PersonalWorkspaceExecutionService.ControlledProviderStartV3(3,command.commandId(),command.messageId(),command.executionId(),
      command.operation(),digest,command.providerExecution(),command.fence());
   }
-  PersonalWorkspaceExecutionService.ControlledProviderStartReceiptV3 start() {
-   return service.beginControlledConversationProviderStartV3(scope,"task","run",command);
-  }
+
   static String sha(byte[] value) throws Exception { return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value)); }
  }
 

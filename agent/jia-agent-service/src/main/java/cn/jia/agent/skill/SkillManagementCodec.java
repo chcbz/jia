@@ -75,6 +75,24 @@ public final class SkillManagementCodec {
         require(schema.validate(node.toString(),InputFormat.JSON).isEmpty(),400,"BAD_REQUEST");
         unicode(node);
     }
+    /** Separate v5 execution binding; the frozen v1 definition and its digest remain unchanged. */
+    public static void validateNativeTaskBinding(Object value) {
+        var node=value instanceof JsonNode n?n:JSON.valueToTree(value);
+        var schema=DEFINITIONS.computeIfAbsent("NativeTaskSkillBindingV5",name->{
+            var root=((ObjectNode)SCHEMA).deepCopy();
+            root.put("$id",SCHEMA.path("$id").asText()+"?definition="+name);
+            var definitions=(ObjectNode)root.get("definitions");
+            var binding=((ObjectNode)definitions.get("TaskSkillBinding")).deepCopy();
+            var manifest=((ObjectNode)binding.get("properties")).putObject("manifestSha256");
+            var options=manifest.putArray("anyOf");
+            options.addObject().put("$ref","#/definitions/Sha256");
+            options.addObject().put("type","null");
+            definitions.set(name,binding);root.put("$ref","#/definitions/"+name);
+            return REGISTRY.getSchema(root.toString(),InputFormat.JSON);
+        });
+        require(schema.validate(node.toString(),InputFormat.JSON).isEmpty(),400,"BAD_REQUEST");
+        unicode(node);
+    }
     public static Map<String,Object> object(Object value) {
         require(value instanceof Map<?,?>,400,"BAD_REQUEST");
         @SuppressWarnings("unchecked") var map=(Map<String,Object>)value;return map;

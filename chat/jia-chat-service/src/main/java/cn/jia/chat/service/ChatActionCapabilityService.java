@@ -22,6 +22,10 @@ public final class ChatActionCapabilityService {
         installedSkills = Objects.requireNonNull(installed); skillRuntimes = Objects.requireNonNull(runtimes);
     }
 
+    private cn.jia.agent.service.PersonalWorkspaceExecutionService nativeExecutions;
+    @org.springframework.beans.factory.annotation.Autowired(required=false)
+    public void setNativeExecutions(cn.jia.agent.service.PersonalWorkspaceExecutionService value) { nativeExecutions=value; }
+
     /** Installation/runtime observation, NOT availableActions or a task authorization grant.
      * I16/I18 must separately re-admit the selected skill under the current task/assignment. */
     public record SkillCandidate(String skillKey, String skillVersion, String title,
@@ -196,6 +200,54 @@ public final class ChatActionCapabilityService {
             }catch(java.io.IOException malformed){throw new cn.jia.agent.service.InstalledSkillDescriptorLookup.SourceUnavailable(malformed);}
         }
         return List.copyOf(actions);
+    }
+    /** Advertise only after authenticated runtime declaration and server execution configuration agree. */
+    public List<Map<String,Object>> availableNative(Scope scope,String taskId,List<Map<String,Object>> catalog,Map<String,Object> declaration,String sessionId) {
+        var actions=new ArrayList<>(available(scope,taskId,catalog));
+        int legacyCount=actions.size();
+        if(declaration==null||!(declaration.get("nativeExecution") instanceof Map<?,?> nativeDeclaration)||nativeExecutions==null)return List.copyOf(actions);
+        var server=nativeExecutions.nativeLocalFileCapabilities();if(server==null||!server.generationEnabled())return List.copyOf(actions);
+        var key=new cn.jia.agent.service.SkillCapabilityLookup.Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),scope.targetAgentId());
+        var policy=policies.read(key,taskId);
+        if(policy.decision()!=cn.jia.agent.service.TaskSkillPolicyService.Decision.ALLOWED||policy.fence()==null||policy.runtimeScope()==null)return List.copyOf(actions);
+        var live=skillRuntimes.lookup(policy.runtimeScope(),policy.fence());
+        if(live==null||live.state()!=cn.jia.agent.service.SkillCapabilityLookup.State.AVAILABLE||!java.util.Objects.equals(live.sessionId(),sessionId))return List.copyOf(actions);
+        if(!(nativeDeclaration.get("outputMimeTypes") instanceof List<?> runtimeMimes))return List.copyOf(actions);
+        var allowed=server.allowedMimeTypes().stream().filter(runtimeMimes::contains).filter(Set.of("text/plain","text/markdown","text/html","application/json","image/png")::contains).sorted().toList();
+        if(allowed.isEmpty())return List.copyOf(actions);
+        var input=catalog.stream().map(x->x.get("contentMimeType")).filter(String.class::isInstance).map(String.class::cast).filter(server.inputMimeTypes()::contains).distinct().sorted().toList();
+        var schema=Map.<String,Object>of("$schema","https://json-schema.org/draft/2020-12/schema","type","object","additionalProperties",false,"properties",Map.of());
+        var action=new java.util.LinkedHashMap<String,Object>();
+        action.put("actionId","act_"+cn.jia.chat.api.ChatBountyInteractionV3Wire.shaText(CanonicalContextJson.write(Map.of("operation","EXECUTE_NATIVE","inputMimeTypes",input,"outputMimeTypes",allowed))));
+        action.put("kind","EXECUTE");action.put("operation","EXECUTE_NATIVE");action.put("skill",null);action.put("parametersSchema",schema);
+        action.put("inputMimeTypes",input);action.put("minSources",0);action.put("maxSources",input.isEmpty()?0:32);action.put("outputMimeTypes",allowed);
+        if(!policy.equals(policies.read(key,taskId))||!live.equals(skillRuntimes.lookup(policy.runtimeScope(),policy.fence())))return List.copyOf(actions);
+        actions.add(java.util.Collections.unmodifiableMap(action));
+        if(!(nativeDeclaration.get("supportedToolPolicyRefs") instanceof List<?> refs)||!refs.contains(cn.jia.agent.service.SkillExecutionService.NATIVE_SKILL_SCRIPT_POLICY))return List.copyOf(actions);
+        var current=installedSkills.readCurrent(policy.runtimeScope());
+        for(var d:current.skills()) {
+            if(current.skills().stream().filter(x->Objects.equals(x.installationId(),d.installationId())).count()!=1)continue;
+            if(!d.verifiedNative()||d.manifestJson()!=null||d.manifestSha256()!=null
+                    ||!Objects.equals(d.runtimeInstallationId(),policy.fence().runtimeInstallationId())||!Objects.equals(d.runtimeHostId(),policy.fence().hostId()))continue;
+            var matches=live.catalog().skills().stream().filter(r->Objects.equals(r.skillInstallationId(),d.installationId())
+                    &&Objects.equals(r.skillKey(),d.skillKey())&&Objects.equals(r.skillVersion(),d.skillVersion())
+                    &&Objects.equals(r.packageSha256(),d.packageSha256())&&r.manifestSha256()==null&&"INSTRUCTION".equals(r.kind())&&r.enabled()).toList();
+            if(matches.size()!=1)continue;
+            var skill=new java.util.LinkedHashMap<String,Object>();skill.put("skillKey",d.skillKey());skill.put("skillVersion",d.skillVersion());
+            skill.put("packageSha256",d.packageSha256());skill.put("manifestSha256",null);
+            var selected=new java.util.LinkedHashMap<String,Object>(action);selected.put("actionId",nativeSkillActionId(d,input,allowed));selected.put("skill",skill);
+            actions.add(java.util.Collections.unmodifiableMap(selected));
+        }
+        if(!current.equals(installedSkills.readCurrent(policy.runtimeScope()))||!policy.equals(policies.read(key,taskId))
+                ||!live.equals(skillRuntimes.lookup(policy.runtimeScope(),policy.fence())))return List.copyOf(actions.subList(0,legacyCount));
+        return List.copyOf(actions);
+    }
+    static String nativeSkillActionId(cn.jia.agent.service.InstalledSkillDescriptorLookup.Descriptor d,List<String> input,List<String> output) {
+        var identity=new java.util.LinkedHashMap<String,Object>();identity.put("operation","EXECUTE_NATIVE");identity.put("installationId",d.installationId());
+        identity.put("skillKey",d.skillKey());identity.put("skillVersion",d.skillVersion());identity.put("packageSha256",d.packageSha256());
+        identity.put("manifestSha256",d.manifestSha256());identity.put("toolPolicyRef",cn.jia.agent.service.SkillExecutionService.NATIVE_SKILL_SCRIPT_POLICY);
+        identity.put("inputMimeTypes",input);identity.put("outputMimeTypes",output);
+        return "act_"+cn.jia.chat.api.ChatBountyInteractionV3Wire.shaText(CanonicalContextJson.write(identity));
     }
     private static Object costInfo(String metadata) {
         try {

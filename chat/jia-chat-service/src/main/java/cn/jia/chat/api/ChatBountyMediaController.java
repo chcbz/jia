@@ -56,6 +56,9 @@ public class ChatBountyMediaController {
 
     private static Map<String, String> safeAttachments() {
         var formats = new java.util.HashMap<>(SAFE_INLINE);
+        formats.put("text/markdown", "md");
+        formats.put("text/html", "html"); // Active content is attachment-only, never inline.
+        formats.put("application/json", "json");
         formats.put("application/pdf", "pdf");
         formats.put("application/vnd.openxmlformats-officedocument.wordprocessingml.document", "docx");
         formats.put("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "xlsx");

@@ -95,17 +95,21 @@ public final class ChatActionFinalValidator {
     }
 
     public static Map<String, Object> factsMap(ChatActionOutcomeContract.Facts facts) {
-        return Map.of("schemaVersion", 5, "availableSources", facts.availableSources().stream().map(source -> Map.of(
+        return Map.of("schemaVersion", facts.schemaVersion(), "availableSources", facts.availableSources().stream().map(source -> Map.of(
                         "sourceRefId", source.sourceRefId(), "kind", source.kind(), "mediaType", source.mediaType(),
                         "contentMimeType", source.contentMimeType())).toList(),
                 "inspectedSourceRefIds", facts.inspectedSourceRefIds(),
-                "availableActions", facts.availableActions().stream().map(action -> Map.of(
-                        "actionId", action.actionId(), "kind", action.kind(), "operation", action.operation(),
-                        "skill", Map.of("skillKey", action.skill().skillKey(), "skillVersion", action.skill().skillVersion(),
-                                "packageSha256", action.skill().packageSha256(), "manifestSha256", action.skill().manifestSha256()),
-                        "parametersSchema", action.parametersSchema(), "inputMimeTypes", action.inputMimeTypes(),
-                        "minSources", action.minSources(), "maxSources", action.maxSources(),
-                        "outputMimeTypes", action.outputMimeTypes())).toList());
+                "availableActions", facts.availableActions().stream().map(action -> {
+                    var result=new LinkedHashMap<String,Object>();result.put("actionId",action.actionId());result.put("kind",action.kind());result.put("operation",action.operation());
+                    result.put("skill",skillMap(action.skill()));
+                    result.put("parametersSchema",action.parametersSchema());result.put("inputMimeTypes",action.inputMimeTypes());result.put("minSources",action.minSources());result.put("maxSources",action.maxSources());result.put("outputMimeTypes",action.outputMimeTypes());return result;
+                }).toList());
+    }
+
+    static Map<String,Object> skillMap(ChatActionOutcomeContract.Skill skill) {
+        if(skill==null)return null;
+        var result=new LinkedHashMap<String,Object>();result.put("skillKey",skill.skillKey());result.put("skillVersion",skill.skillVersion());
+        result.put("packageSha256",skill.packageSha256());result.put("manifestSha256",skill.manifestSha256());return result;
     }
 
     /** Separate event identity, stable for retries but distinct for each immutable bound final. */

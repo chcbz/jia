@@ -71,7 +71,7 @@ class ConversationLeaseWireHttpTest {
         verifyNoInteractions(executions);
     }
     @Test void inputAndResumeLeaseVersionsUseSameWireType() throws Exception {
-        when(skills.inputs(any(),eq("task"),eq("run"),any())).thenReturn(new SkillExecutionService.Inputs(4,"execution",9007199254740993L,"a".repeat(64),true,List.of()));
+        when(skills.inputs(any(),eq("task"),eq("run"),any())).thenReturn(new SkillExecutionService.Inputs(5,"execution",9007199254740993L,"a".repeat(64),true,List.of()));
         call("/inputs","{\"version\":\"9007199254740993\",\"token\":\""+TOKEN+"\"}")
                 .andExpect(status().isOk()).andExpect(jsonPath("$.data.leaseVersion").value("9007199254740993"));
         when(skills.resume(any(),eq("task"),eq("run"),any())).thenReturn(new SkillExecutionService.ResumeReceipt(lease(9007199254740993L),"RUNNING",List.of("EXECUTE"),null));
@@ -92,13 +92,63 @@ class ConversationLeaseWireHttpTest {
         when(skills.commitResult(any(),eq("task"),eq("run"),eq("manifest"),any()))
                 .thenReturn(new SkillExecutionService.ResultReceipt("manifest","RESULT_COMMITTED","ARCHIVING","c".repeat(64)));
         String data="{\"fence\":{\"version\":\"1\",\"token\":\""+TOKEN+"\"},\"snapshotSha256\":\""+"a".repeat(64)+"\","
-                +"\"data\":null,\"inputReceipts\":[],\"artifacts\":[{\"outputId\":\"output_1\",\"sha256\":\""+"b".repeat(64)+"\",\"byteLength\":\"9007199254740993\"}]}";
+                +"\"data\":null,\"inputReceipts\":[],\"effectDependencies\":[],\"artifacts\":[{\"outputId\":\"output_1\",\"sha256\":\""+"b".repeat(64)+"\",\"byteLength\":\"9007199254740993\"}]}";
         call("/result-commits/manifest",data).andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.resultSha256").value("c".repeat(64))).andExpect(jsonPath("$.data.resultDigest").doesNotExist());
         verify(skills).commitResult(any(),eq("task"),eq("run"),eq("manifest"),argThat(value->
                 value.snapshotDigest().equals("a".repeat(64))&&value.artifacts().getFirst().byteLength()==9007199254740993L));
         call("/result-commits/manifest",data.replace("snapshotSha256","snapshotDigest")).andExpect(status().isBadRequest());
+        call("/result-commits/manifest",data.replace("\"effectDependencies\":[],", "")).andExpect(status().isBadRequest());
         call("/result-commits/manifest",data.replace("\"9007199254740993\"","1")).andExpect(status().isBadRequest());
+    }
+
+    @Test void v5EmptySkillCommandAndResultUseTheSharedExactWireFixture() throws Exception {
+        var mapper=tools.jackson.databind.json.JsonMapper.builder().build();
+        var fixture=mapper.readTree(new org.springframework.core.io.ClassPathResource("contracts/native-execution-v5-local-files.json")
+                .getContentAsString(java.nio.charset.StandardCharsets.UTF_8));
+        var command=fixture.path("commandResponse").path("data").path("items").get(0);
+        var outputs=mapper.convertValue(command.path("outputs"),java.util.Map.class);
+        var view=new SkillExecutionService.Command(5,"execution","task","run","42","1","cmd","msg",List.of(),
+                "a".repeat(64),java.util.Map.of(),command.path("instruction").asText(),List.of(),outputs,SkillExecutionService.NATIVE_LOCAL_FILES_POLICY);
+        when(executions.runtimeConversationCommandViews(any(),eq(16))).thenAnswer(i->List.of(view));
+        String actual=mvc.perform(get("/internal/agent/tasks/conversation-executions/commands").principal(auth).header("X-Request-Id","lease-test"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data.items[0].skills").isEmpty())
+                .andExpect(jsonPath("$.data.items[0].skill").doesNotExist()).andExpect(jsonPath("$.data.items[0].taskSkillBinding").doesNotExist())
+                .andReturn().getResponse().getContentAsString(java.nio.charset.StandardCharsets.UTF_8);
+        org.junit.jupiter.api.Assertions.assertEquals(command,mapper.readTree(actual).path("data").path("items").get(0));
+        var preimage=mapper.convertValue(fixture.path("resultPreimage"),java.util.Map.class);
+        String canonical=cn.jia.agent.service.SkillCanonicalJson.write(preimage);
+        org.junit.jupiter.api.Assertions.assertEquals(fixture.path("canonicalPreimage").asText(),canonical);
+        String digest=java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(canonical.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        org.junit.jupiter.api.Assertions.assertEquals(fixture.path("resultSha256").asText(),digest);
+        String manifest=fixture.path("manifestId").asText();
+        when(skills.commitResult(any(),eq("task"),eq("run"),eq(manifest),any()))
+                .thenReturn(new SkillExecutionService.ResultReceipt(manifest,"RESULT_COMMITTED","ARCHIVING",digest));
+        mvc.perform(post(BASE+"/result-commits/"+manifest).principal(auth).header("X-Request-Id","lease-test")
+                .contentType(MediaType.APPLICATION_JSON).content(fixture.path("resultCommitRequest").toString()))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data.resultSha256").value(digest));
+        verify(skills).commitResult(any(),eq("task"),eq("run"),eq(manifest),argThat(value->
+                value.effectDependencies().isEmpty()&&value.artifacts().getFirst().byteLength()==14));
+    }
+    @Test void resumeProjectsRealEffectFactsWithoutLeakingInternalDigestNames() throws Exception {
+        var effect=new java.util.LinkedHashMap<String,Object>();effect.put("effectDigest","a".repeat(64));effect.put("resultDigest",null);
+        effect.put("status","START_RECORDED");effect.put("bindingRevision",null);
+        when(skills.resume(any(),eq("task"),eq("run"),any())).thenReturn(new SkillExecutionService.ResumeReceipt(lease(1),
+                "WAITING_PROVIDER",List.of("QUERY_EFFECT","RECOVER_LOCAL_RESULT"),null,java.util.Map.of("operation_1",effect)));
+        call("/resume","{\"executionId\":\"execution\",\"snapshotSha256\":\""+"a".repeat(64)+"\"}")
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data.effects.operation_1.effectSha256").value("a".repeat(64)))
+                .andExpect(jsonPath("$.data.effects.operation_1.status").value("START_RECORDED"))
+                .andExpect(jsonPath("$.data.effects.operation_1.effectDigest").doesNotExist());
+    }
+
+    @Test void resumeReturnsAuthoritativeFailedTurnWithoutAResultOrLease() throws Exception {
+        when(skills.resume(any(),eq("task"),eq("run"),any())).thenReturn(new SkillExecutionService.ResumeReceipt(null,
+                "FAILED",List.of(),null,java.util.Map.of(),"NATIVE_EXECUTION_TURN_FAILED"));
+        call("/resume","{\"executionId\":\"execution\",\"snapshotSha256\":\""+"a".repeat(64)+"\"}")
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data.phase").value("FAILED"))
+                .andExpect(jsonPath("$.data.turnFailureCode").value("NATIVE_EXECUTION_TURN_FAILED"))
+                .andExpect(jsonPath("$.data.allowedWork").isEmpty())
+                .andExpect(jsonPath("$.data.lease").doesNotExist()).andExpect(jsonPath("$.data.resultManifest").doesNotExist());
     }
 
     @Test void multipartStageUsesByteLengthAndKeepsBytesAndLeaseProof() throws Exception {
@@ -118,18 +168,9 @@ class ConversationLeaseWireHttpTest {
                 .andExpect(status().isBadRequest());
     }
 
-    @Test void outputCommitUsesStringLengthsWithoutChangingDomainManifest() throws Exception {
-        when(executions.commitConversationOutput(any(),eq("task"),eq("run"),any(),eq("manifest"),any()))
-                .thenReturn(new PersonalWorkspaceExecutionService.CommitView("manifest","COMMITTED",List.of(
-                        new PersonalWorkspaceExecutionService.CommitItem("output_1",null,null,"b".repeat(64),"text/plain",9007199254740993L))));
-        String data="{\"fence\":{\"version\":\"1\",\"token\":\""+TOKEN+"\"},\"outputs\":[{\"outputId\":\"output_1\",\"sha256\":\""+"b".repeat(64)+"\",\"byteLength\":\"9007199254740993\"}]}";
-        call("/output-commits/manifest",data).andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.items[0].byteLength").value("9007199254740993"))
-                .andExpect(jsonPath("$.data.items[0].fileVersion").isEmpty());
-        verify(executions).commitConversationOutput(any(),eq("task"),eq("run"),any(),eq("manifest"),argThat(items->items.getFirst().byteLength()==9007199254740993L));
-        call("/output-commits/manifest",data.replace("byteLength","length")).andExpect(status().isBadRequest());
-        call("/output-commits/manifest",data.replace("\"9007199254740993\"","1")).andExpect(status().isBadRequest());
-        call("/output-commits/manifest",data.replace("9007199254740993","9223372036854775808")).andExpect(status().isBadRequest());
+    @Test void retiredConversationOutputCommitHasNoRoute() throws Exception {
+        call("/output-commits/manifest","{}").andExpect(status().isNotFound());
+        verifyNoInteractions(executions);
     }
 
     @Test void workspaceOutputCommitUsesSameWireProjection() throws Exception {

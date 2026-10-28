@@ -6,6 +6,7 @@ import cn.jia.agent.dao.*;
 import cn.jia.agent.dao.impl.PersonalWorkspaceExecutionDaoImpl;
 import cn.jia.agent.entity.AgentTaskMetaEntity;
 import cn.jia.agent.entity.PersonalWorkspaceExecutionEntity;
+import cn.jia.agent.entity.PersonalWorkspaceExecutionOutputEntity;
 import cn.jia.agent.mapper.*;
 import cn.jia.agent.service.*;
 import cn.jia.agent.service.impl.FileSystemPersonalWorkspaceStorage;
@@ -234,11 +235,15 @@ class ChatBountyExecutionTerminationMySqlTest {
     }
 
     @Test void committedResultAndItsLostAckCannotBeAbandoned() throws Exception {
-        byte[] bytes=png();stage();String hash=sha(bytes);
-        var result=inTx(()->runtime.commitConversationOutput(runtimeScope(),"task","run",fence(),
-                "pwe_m_"+sha("task\nrun\noutput_1\n"+hash+"\n"+bytes.length+"\n"),
-                List.of(new PersonalWorkspaceExecutionService.OutputDeclaration("output_1",hash,bytes.length))));
-        assertEquals("COMMITTED",result.state());fail(Reason.CONFLICT,this::abandon);
+        stage();
+        // Historical committed fact, not a call back into the removed legacy execution lane.
+        inTx(()->{
+            jdbc.update("UPDATE agent_personal_workspace_execution_output SET output_state='COMMITTED', committed_at=20 WHERE execution_id='exec'");
+            jdbc.update("UPDATE agent_personal_workspace_execution SET execution_state='OUTPUT_COMMITTED' WHERE execution_id='exec'");
+            return null;
+        });
+        assertEquals("COMMITTED",jdbc.queryForObject("SELECT output_state FROM agent_personal_workspace_execution_output",String.class));
+        fail(Reason.CONFLICT,this::abandon);
         assertEquals("OUTPUT_COMMITTED",executionState());assertEquals(0,countEvents());
     }
 
@@ -250,25 +255,18 @@ class ChatBountyExecutionTerminationMySqlTest {
         assertEquals("FAILED",executionState());assertEquals(1,countEvents());
     }
 
-    @Test void realStageAndAbandonRaceSerializeAtSameRootWithoutLostResult() throws Exception {
-        byte[] bytes=png();beforeRoot=new CountDownLatch(2);
-        Object stageResult,abandonResult;
+    @Test void retiredStageCannotRaceOwnerAbandonmentIntoANewHistoricalResult() throws Exception {
+        byte[] bytes=png();
+        // No shared-root barrier: retired protocol rejection may occur before acquiring the root.
         try(var pool=Executors.newFixedThreadPool(2)) {
             var first=pool.submit(()->outcome(()->inTx(()->runtime.stageConversationOutput(runtimeScope(),"task","run",
                     fence(),"output_1","bird.png","image/png",bytes))));
             var second=pool.submit(()->outcome(this::abandon));
-            stageResult=first.get(30,TimeUnit.SECONDS);abandonResult=second.get(30,TimeUnit.SECONDS);
-        }finally{beforeRoot=null;}
-        if(abandonResult instanceof Receipt) {
-            assertInstanceOf(PersonalWorkspaceExecutionService.Failure.class,stageResult);
-            assertEquals("FAILED",executionState());assertEquals(1,countEvents());
-            assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM agent_personal_workspace_execution_output",Integer.class));
-        }else{
-            assertFalse(stageResult instanceof Exception,String.valueOf(stageResult));
-            assertInstanceOf(Failure.class,abandonResult);assertEquals(Reason.CONFLICT,((Failure)abandonResult).reason());
-            assertEquals("QUEUED",executionState());assertEquals("RUNNING",requestState());assertEquals(0,countEvents());
-            assertEquals("STAGED",jdbc.queryForObject("SELECT output_state FROM agent_personal_workspace_execution_output",String.class));
+            assertInstanceOf(PersonalWorkspaceExecutionService.Failure.class,first.get(30,TimeUnit.SECONDS));
+            assertInstanceOf(Receipt.class,second.get(30,TimeUnit.SECONDS));
         }
+        assertEquals("FAILED",executionState());assertEquals(1,countEvents());
+        assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM agent_personal_workspace_execution_output",Integer.class));
     }
 
     @Test void journalFailureRollsBackAllAggregatesAndEmitsNothing() {
@@ -391,7 +389,21 @@ class ChatBountyExecutionTerminationMySqlTest {
                 FROM agent_personal_workspace_execution
                 """);
     }
-    private void stage() throws Exception {byte[] bytes=png();inTx(()->runtime.stageConversationOutput(runtimeScope(),"task","run",fence(),"output_1","bird.png","image/png",bytes));}
+    /** Seed an already-staged historical object, without reactivating a retired protocol. */
+    private void stage() throws Exception {
+        byte[] bytes=png();
+        var stored=new FileSystemPersonalWorkspaceStorage(storage.toAbsolutePath(),1_000_000)
+                .store(new PersonalWorkspaceStorage.Scope("0","client","owner"),bytes,"image/png");
+        var output=new PersonalWorkspaceExecutionOutputEntity()
+                .setOutputId("output_1").setExecutionId("exec").setOwnerJiacn("owner")
+                .setOriginalFilename("bird.png").setContentMimeType("image/png")
+                .setByteLength(stored.byteLength()).setContentHash(stored.sha256()).setStorageUri(stored.storageUri())
+                .setOutputPurpose("CONVERSATION").setOutputState("STAGED")
+                .setPublicationState("PENDING").setPublicationRevision(0L).setStagedAt(15L);
+        output.setTenantId("0");output.setClientId("client");
+        inTx(()->{executions.insertOutput(output);return null;});
+    }
+
     private static PersonalWorkspaceExecutionService.RuntimeScope runtimeScope(){return new PersonalWorkspaceExecutionService.RuntimeScope("0","client","owner","agent","runtime");}
     private static PersonalWorkspaceExecutionService.ConversationFence fence(){return new PersonalWorkspaceExecutionService.ConversationFence(1,"lease-token");}
     private Receipt abandon(){return inTx(()->service.abandon(OWNER,"req",KEY,COMMAND));}

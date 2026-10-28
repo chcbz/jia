@@ -33,7 +33,8 @@ public final class ChatTypedDeliberationContextService {
             String conversationId, long conversationGeneration) { }
     public record Context(Map<String,Object> facts, String sourceCatalogJson,
             List<ChatTypedDeliberationWire.SourceSelector> selectors,
-            Map<String,Object> frozenDeclaration) {
+            Map<String,Object> frozenDeclaration,String sessionId) {
+        public Context(Map<String,Object> facts,String sourceCatalogJson,List<ChatTypedDeliberationWire.SourceSelector> selectors,Map<String,Object> frozenDeclaration) {this(facts,sourceCatalogJson,selectors,frozenDeclaration,null);}
         public Context { facts=Map.copyOf(facts); selectors=List.copyOf(selectors); frozenDeclaration=Map.copyOf(frozenDeclaration); }
     }
 
@@ -176,10 +177,11 @@ public final class ChatTypedDeliberationContextService {
         Map<String,Object> facts=new LinkedHashMap<>(); facts.put("schemaVersion",5);
         facts.put("availableSources",List.copyOf(available));
         facts.put("inspectedSourceRefIds",List.of());
-        facts.put("availableActions",capabilities.available(new ChatActionCapabilityService.Scope(
-                scope.tenantId(),scope.ownerJiacn(),scope.clientId(),targetAgentId),taskId,List.copyOf(catalog)));
+        facts.put("availableActions",capabilities.availableNative(new ChatActionCapabilityService.Scope(
+                scope.tenantId(),scope.ownerJiacn(),scope.clientId(),targetAgentId),taskId,List.copyOf(catalog),ready.frozenDeclaration(),ready.sessionId()));
+        if(((List<?>)facts.get("availableActions")).stream().anyMatch(a->"EXECUTE_NATIVE".equals(((Map<?,?>)a).get("operation"))))facts.put("schemaVersion",6);
         ChatActionOutcomeContract.facts(facts);
-        return new Context(Map.copyOf(facts),CanonicalContextJson.write(catalog),normalized,ready.frozenDeclaration());
+        return new Context(Map.copyOf(facts),CanonicalContextJson.write(catalog),normalized,ready.frozenDeclaration(),ready.sessionId());
     }
 
     Context withFormalRevisionSources(Scope scope,String task,String target,Context context,List<Map<String,Object>> formal) {
@@ -189,9 +191,10 @@ public final class ChatTypedDeliberationContextService {
         var facts=new LinkedHashMap<String,Object>(context.facts());
         facts.put("availableSources",catalog.stream().map(x->Map.of("sourceRefId",x.get("sourceRefId"),
                 "kind",x.get("sourceKind"),"mediaType",x.get("mediaType"),"contentMimeType",x.get("contentMimeType"))).toList());
-        facts.put("availableActions",capabilities.available(new ChatActionCapabilityService.Scope(scope.tenantId(),scope.ownerJiacn(),scope.clientId(),target),task,catalog));
+        facts.put("availableActions",capabilities.availableNative(new ChatActionCapabilityService.Scope(scope.tenantId(),scope.ownerJiacn(),scope.clientId(),target),task,catalog,context.frozenDeclaration(),context.sessionId()));
+        if(((List<?>)facts.get("availableActions")).stream().anyMatch(a->"EXECUTE_NATIVE".equals(((Map<?,?>)a).get("operation"))))facts.put("schemaVersion",6);
         ChatActionOutcomeContract.facts(facts);
-        return new Context(facts,CanonicalContextJson.write(catalog),context.selectors(),context.frozenDeclaration());
+        return new Context(facts,CanonicalContextJson.write(catalog),context.selectors(),context.frozenDeclaration(),context.sessionId());
     }
 
     @SuppressWarnings("unchecked")

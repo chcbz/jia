@@ -41,6 +41,14 @@ class PersonalWorkspaceOutputFormatValidatorTest {
                 "not an OOXML document".getBytes(StandardCharsets.UTF_8)));
     }
 
+    @Test void nativeTextFormatsCheckUtf8EnvelopeWithoutParsingContents() {
+        for (String mime : java.util.List.of("text/plain", "text/markdown", "text/html", "application/json")) {
+            assertTrue(PersonalWorkspaceOutputFormatValidator.isValid(mime, "内容".getBytes(StandardCharsets.UTF_8)));
+            assertFalse(PersonalWorkspaceOutputFormatValidator.isValid(mime, new byte[] {(byte)0xff}));
+            assertFalse(PersonalWorkspaceOutputFormatValidator.isValid(mime, new byte[] {0}));
+        }
+    }
+
     private static byte[] png() throws Exception {
         return image("png");
     }

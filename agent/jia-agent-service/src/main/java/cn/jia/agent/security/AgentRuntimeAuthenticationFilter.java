@@ -50,10 +50,9 @@ public final class AgentRuntimeAuthenticationFilter extends OncePerRequestFilter
                 || "GET".equals(request.getMethod()) && path.matches("/internal/agent/skill-installations/" + id + "/package")
                 || "GET".equals(request.getMethod()) && path.equals("/ws/agent/channel")
                 || "POST".equals(request.getMethod()) && path.matches("/agent/runtime/v1/commands/" + id + "/acks")
-                || "GET".equals(request.getMethod()) && (path.equals("/internal/agent/tasks/conversation-executions/commands")
-                || path.equals("/internal/agent/tasks/conversation-executions/controlled-image-v3-commands"))
+                || "GET".equals(request.getMethod()) && path.equals("/internal/agent/tasks/conversation-executions/commands")
                 || "POST".equals(request.getMethod()) && path.matches("/internal/agent/tasks/" + id
-                + "/runs/" + id + "/conversation/(?:inputs(?:-v3|/" + id + "/content)?|lease(?:/renew)?|provider-start(?:-controlled-image(?:-v3)?)?|failure|resume|effects/" + id + "/(?:start|result)|(?:output|result)-commits/" + id
+                + "/runs/" + id + "/conversation/(?:inputs(?:/" + id + "/content)?|lease(?:/renew)?|failure|resume|effects/" + id + "/(?:start|result)|result-commits/" + id
                 + "|outputs/" + id + "/content)")
                 || "GET".equals(request.getMethod()) && path.equals("/internal/agent/tasks/workspace-executions/commands")
                 || "GET".equals(request.getMethod()) && path.matches("/agent/tasks/" + id + "/context-pack")

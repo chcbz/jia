@@ -16,6 +16,8 @@ class SkillManagementSchemaMySqlTest extends SkillManagementMySqlFixture {
             new Case("detectorDoesNotRepairMissingAttachmentOrWeakenedChecks",SkillExecutionSchemaMySqlTest::detectorDoesNotRepairMissingAttachmentOrWeakenedChecks),
             new Case("receiptScopeIndexIsExplicitAndDriftIsNotRepaired",SkillExecutionSchemaMySqlTest::receiptScopeIndexIsExplicitAndDriftIsNotRepaired),
             new Case("realCasAndTransactionPairRollback",SkillExecutionSchemaMySqlTest::realCasAndTransactionPairRollback),
+            new Case("nativeTurnFailureAndEffectResolutionRollbackTogether",SkillExecutionSchemaMySqlTest::nativeTurnFailureAndEffectResolutionRollbackTogether),
+            new Case("nativeEmptySkillsExactArrays",SkillExecutionSchemaMySqlTest::nativeEmptySkillsUseNoFakeScalarSkillAndRequireExplicitArrays),
             new Case("taskBindingColumnMissing",SkillExecutionSchemaMySqlTest::detectorRejectsMissingTaskBindingColumnWithoutRepair),
             new Case("taskBindingColumnWrongType",SkillExecutionSchemaMySqlTest::detectorRejectsWrongTaskBindingTypeWithoutRepair),
             new Case("taskBindingColumnNonNullable",SkillExecutionSchemaMySqlTest::detectorRejectsNonNullableTaskBindingWithoutRepair),

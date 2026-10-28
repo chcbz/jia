@@ -670,6 +670,8 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
 
     private Admission verifyAdmission(Scope scope,AgentTaskMetaEntity root,AgentTaskExecutionGrantEntity grant,
             long grantVersion,long assignmentRevision,String targetAgentId,String operation,boolean paid) {
+        if ("EXECUTE_SKILL".equals(operation) && !"SKILLS_V1".equals(grant.getPermittedToolPolicyRef()))
+            throw conflict("Execution tool policy is not authorized");
         if ("cancelled".equals(root.getRewardStatus())
                 || !"ACTIVE".equals(grant.getState()) || !Objects.equals(grantVersion,grant.getGrantVersion())
                 || !Objects.equals(assignmentRevision,grant.getAssignmentRevision())

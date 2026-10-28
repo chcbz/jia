@@ -44,7 +44,8 @@ public class PersonalWorkspaceController {
             Map.entry("webp", "image/webp"), Map.entry("gif", "image/gif"),
             Map.entry("mp3", "audio/mpeg"), Map.entry("ogg", "audio/ogg"), Map.entry("oga", "audio/ogg"),
             Map.entry("wav", "audio/wav"), Map.entry("m4a", "audio/mp4"), Map.entry("mp4", "audio/mp4"),
-            Map.entry("webm", "audio/webm"), Map.entry("txt", "text/plain"), Map.entry("pdf", "application/pdf"),
+            Map.entry("webm", "audio/webm"), Map.entry("txt", "text/plain"), Map.entry("md", "text/markdown"),
+            Map.entry("html", "text/html"), Map.entry("json", "application/json"), Map.entry("pdf", "application/pdf"),
             Map.entry("docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
             Map.entry("xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
             Map.entry("pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation"));

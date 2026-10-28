@@ -1,0 +1,72 @@
+{
+  "commandResponse": {
+    "protocolVersion": 1,
+    "requestId": "lease-test",
+    "code": "E0",
+    "msg": "ok",
+    "data": {
+      "items": [
+        {
+          "executionProtocolVersion": 5,
+          "executionId": "execution",
+          "taskId": "task",
+          "runId": "run",
+          "conversationId": "42",
+          "conversationGeneration": "1",
+          "commandId": "cmd",
+          "messageId": "msg",
+          "skills": [],
+          "snapshotSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "parameters": {},
+          "instruction": "Write a real UTF-8 file in the isolated workspace.",
+          "inputRefs": [],
+          "outputs": {
+            "mimeTypes": [
+              "text/plain"
+            ],
+            "multiple": false,
+            "artifactsRequired": true
+          },
+          "toolPolicyRef": "NATIVE_LOCAL_FILES_V1"
+        }
+      ]
+    }
+  },
+  "resultCommitRequest": {
+    "protocolVersion": 1,
+    "requestId": "lease-test",
+    "data": {
+      "fence": {
+        "version": "1",
+        "token": "00000000-0000-0000-0000-000000000001"
+      },
+      "snapshotSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "data": null,
+      "artifacts": [
+        {
+          "outputId": "output_native_1",
+          "sha256": "c01beb8ee67392ff6ee14cfd5919337b81897716c789dbc9ff19da7d96e31890",
+          "byteLength": "14"
+        }
+      ],
+      "inputReceipts": [],
+      "effectDependencies": []
+    }
+  },
+  "resultPreimage": {
+    "schemaVersion": 2,
+    "data": null,
+    "artifacts": [
+      {
+        "outputId": "output_native_1",
+        "sha256": "c01beb8ee67392ff6ee14cfd5919337b81897716c789dbc9ff19da7d96e31890",
+        "byteLength": 14
+      }
+    ],
+    "inputReceipts": [],
+    "effectDependencies": []
+  },
+  "canonicalPreimage": "{\"artifacts\":[{\"byteLength\":14,\"outputId\":\"output_native_1\",\"sha256\":\"c01beb8ee67392ff6ee14cfd5919337b81897716c789dbc9ff19da7d96e31890\"}],\"data\":null,\"effectDependencies\":[],\"inputReceipts\":[],\"schemaVersion\":2}",
+  "resultSha256": "24161bb335096fdf57957f4424161f893391b88f3e1841750b18491ce7a3346c",
+  "manifestId": "manifest_24161bb335096fdf57957f4424161f893391b88f3e1841750b18491ce7a3346c"
+}

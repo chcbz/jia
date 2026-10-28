@@ -64,24 +64,7 @@ class ControlledImageIntentOperationGrantServiceTest {
                 "model",16,1,1));
     }
 
-    @Test void ordinaryWorkspaceEditKeepsInputRoleAndBindsExactGrantBytes() {
-        var rows=ordinaryStore();var original=ordinary();var source=new ControlledImageFollowupAuthorityService.Source(
-                "input_1","TASK_LINKED_WORKSPACE_VERSION","file",2,"INPUT",null,null,null,null,null,null,null,null,null,null,
-                "image/png",9,"a".repeat(64),"{\"fileId\":\"file\",\"kind\":\"TASK_LINKED_WORKSPACE_VERSION\",\"purpose\":\"INPUT\",\"version\":\"2\"}");
-        var p=original.preview();var selected=new ControlledImageFollowupAuthorityService.PreviewCommand(p.taskId(),p.conversationId(),
-                p.conversationGeneration(),p.interactionIdempotencyKey(),p.requestId(),p.stepId(),p.executionIntentId(),p.baseline(),
-                "EDIT_IMAGE",p.instruction(),p.instructionSha256(),p.ownerPayloadSha256(),p.sourceSnapshotSha256(),List.of(source));
-        var b=baseline();when(grants.admitFollowupBaseline(any(),anyString(),anyString(),anyLong(),anyLong(),anyLong(),anyLong(),anyString())).thenReturn(
-                new AgentTaskExecutionGrantService.Admission(b.grantId(),b.grantVersion(),b.assignmentRevision(),b.targetAgentId(),null,false,
-                        List.of(new AgentTaskExecutionGrantService.AuthorizedInput("file",2,"INPUT","image/png",9,"a".repeat(64))),
-                        null,null,b.taskVersion(),b.requirementRevision(),b.requirementSha256(),b.assignmentIdempotencyKey(),b.assignmentBaseHash()));
-        var command=new ControlledImageFollowupAuthorityService.OrdinaryActionCommand(selected,original.actionRequestId(),original.parentOutcomeId(),
-                original.parentFinalDigest(),original.originalUserMessageId(),original.originalUserContentSha256(),original.executionId(),original.runId(),original.interactionRequestDigest());
-        assertEquals("execution",service.admitOrdinaryAction(scope,command,()->{}).executionId());
-        assertEquals("EDIT_IMAGE",rows.execution.get().getPermittedOperation());
-        var captured=org.mockito.ArgumentCaptor.forClass(cn.jia.agent.entity.ControlledImageExecutionSourceV3Entity.class);
-        verify(sources).insert(captured.capture());assertEquals("INPUT",captured.getValue().getPurpose());assertEquals("file",captured.getValue().getFileId());
-    }
+
 
     @Test void selectedWorkspaceRoleOrBytesOutsideCurrentBaselineCannotGetAuthority() {
         ordinaryStore();var p=preview();
@@ -97,21 +80,7 @@ class ControlledImageIntentOperationGrantServiceTest {
         verify(consents,never()).insert(any());verify(operationGrants,never()).insert(any());verify(executions,never()).insert(any());
     }
 
-    @Test void ordinaryOriginAndPreviewDigestsUseCanonicalOrderAcrossJvmMapAndRecordOrdering() throws Exception {
-        var rows=ordinaryStore();var command=ordinary();service.admitOrdinaryAction(scope,command,()->{});
-        var mapper=tools.jackson.databind.json.JsonMapper.builder()
-                .enable(tools.jackson.databind.SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS)
-                .enable(tools.jackson.databind.MapperFeature.SORT_PROPERTIES_ALPHABETICALLY).build();
-        var fields=new java.util.LinkedHashMap<String,Object>();
-        fields.put("schemaVersion",3);fields.put("origin","ORDINARY_ACTION");fields.put("actionRequestId",command.actionRequestId());
-        fields.put("parentOutcomeId",command.parentOutcomeId());fields.put("parentFinalDigest",command.parentFinalDigest());
-        fields.put("originalUserMessageId",Long.toString(command.originalUserMessageId()));fields.put("originalUserContentSha256",command.originalUserContentSha256());
-        fields.put("ownerPayloadSha256",command.preview().ownerPayloadSha256());fields.put("interactionRequestDigest",command.interactionRequestDigest());
-        fields.put("previewSha256",sha(mapper.writeValueAsString(command.preview())));
-        assertEquals(sha(mapper.writeValueAsString(fields)),rows.operation.get().getIssueRequestDigest());
-        var reverse=new java.util.LinkedHashMap<String,Object>();new java.util.ArrayList<>(fields.keySet()).reversed().forEach(key->reverse.put(key,fields.get(key)));
-        assertEquals(sha(mapper.writeValueAsString(reverse)),rows.operation.get().getIssueRequestDigest());
-    }
+
 
     @Test void exactIssueReplayPrecedesBaselinePolicyAndLateChecks() {
         var row=operationGrant("issue-key","a".repeat(64));
@@ -130,78 +99,15 @@ class ControlledImageIntentOperationGrantServiceTest {
         verify(consents,never()).insert(any());
     }
 
-    @Test void ordinaryActionUsesExistingPolicyWithoutAcknowledgementAndReplaysOfflineWithoutNewExecution() {
-        var rows=ordinaryStore(); var checks=new java.util.concurrent.atomic.AtomicInteger();
-        var command=ordinary();
-        var first=service.admitOrdinaryAction(scope,command,checks::incrementAndGet);
-        assertEquals("execution",first.executionId()); assertEquals("run",first.runId());
-        assertEquals("ORDINARY_ACTION",rows.consent.get().getConsentPurpose());
-        assertEquals("ordinary_"+command.actionRequestId(),rows.operation.get().getIssueIdempotencyKey());
-        assertEquals("policy-r1",rows.consent.get().getOperatorPolicyRevision());
-        assertEquals(1,rows.consent.get().getMaxOutboundRequestAttempts());
-        assertEquals("RESERVED",rows.consent.get().getState());
-        assertEquals("QUEUED",rows.execution.get().getExecutionState());
-        int previousChecks=checks.get();
-        clearInvocations(grants,policies,declaration,executions,consents,operationGrants);
-        when(declaration.current(any())).thenThrow(new IllegalStateException("offline"));
-        var replay=service.admitOrdinaryAction(scope,command,checks::incrementAndGet);
-        assertEquals(first,replay); assertTrue(checks.get()>previousChecks);
-        verifyNoInteractions(grants,policies,declaration);
-        verify(executions,never()).insert(any()); verify(consents,never()).insert(any());
-        verify(operationGrants,never()).insert(any());
-    }
 
-    @Test void ordinaryActionCannotInventUserProofOrConvertLegacyAuthority() {
-        ordinaryStore(); var command=ordinary();
-        assertThrows(IllegalStateException.class,()->service.admitOrdinaryAction(scope,command,
-                ()->{throw new IllegalStateException("original USER changed");}));
-        verifyNoInteractions(grants,policies,executions,consents,operationGrants);
-        var rows=ordinaryStore();
-        service.admitOrdinaryAction(scope,command,()->{});
-        rows.consent.get().setConsentPurpose("FOLLOWUP_EXECUTE");
-        var failure=assertThrows(ControlledImageFollowupAuthorityService.Failure.class,
-                ()->service.admitOrdinaryAction(scope,command,()->{}));
-        assertEquals(ControlledImageFollowupAuthorityService.Reason.CONFLICT,failure.reason());
-        verify(executions,times(1)).insert(any());
-    }
 
-    @Test void ordinaryActionWithRevokedOperatorPolicyCannotMintAuthorityOrQueueExecution() {
-        ordinaryStore();
-        when(policies.requireCurrent(any(),eq("agent"),eq("binding"),eq(7L),anyLong()))
-                .thenThrow(new ControlledImageProviderOperatorPolicy.PolicyFailure(
-                        ControlledImageProviderOperatorPolicy.Reason.FORBIDDEN,null));
-        assertThrows(ControlledImageFollowupAuthorityService.Failure.class,
-                ()->service.admitOrdinaryAction(scope,ordinary(),()->{}));
-        verify(executions,never()).insert(any());verify(consents,never()).insert(any());
-        verify(operationGrants,never()).insert(any());
-    }
 
-    @Test void ordinaryActionSameEventWithChangedOriginalUserConflictsInsteadOfMintingAnotherAttempt() {
-        ordinaryStore();var command=ordinary();service.admitOrdinaryAction(scope,command,()->{});
-        var changed=new ControlledImageFollowupAuthorityService.OrdinaryActionCommand(command.preview(),
-                command.actionRequestId(),command.parentOutcomeId(),command.parentFinalDigest(),902L,
-                command.originalUserContentSha256(),command.executionId(),command.runId(),command.interactionRequestDigest());
-        var failure=assertThrows(ControlledImageFollowupAuthorityService.Failure.class,
-                ()->service.admitOrdinaryAction(scope,changed,()->{}));
-        assertEquals(ControlledImageFollowupAuthorityService.Reason.CONFLICT,failure.reason());
-        verify(executions,times(1)).insert(any()); verify(consents,times(1)).insert(any());
-    }
 
-    @Test void ordinaryActionCannotReplayChangedInstructionBehindUnchangedCallerDigests() {
-        ordinaryStore();var command=ordinary();service.admitOrdinaryAction(scope,command,()->{});
-        var p=command.preview();
-        var changedPreview=new ControlledImageFollowupAuthorityService.PreviewCommand(p.taskId(),p.conversationId(),
-                p.conversationGeneration(),p.interactionIdempotencyKey(),p.requestId(),p.stepId(),p.executionIntentId(),
-                p.baseline(),p.operation(),"different instruction",p.instructionSha256(),p.ownerPayloadSha256(),
-                p.sourceSnapshotSha256(),p.sources());
-        var changed=new ControlledImageFollowupAuthorityService.OrdinaryActionCommand(changedPreview,
-                command.actionRequestId(),command.parentOutcomeId(),command.parentFinalDigest(),command.originalUserMessageId(),
-                command.originalUserContentSha256(),command.executionId(),command.runId(),command.interactionRequestDigest());
-        var failure=assertThrows(ControlledImageFollowupAuthorityService.Failure.class,
-                ()->service.admitOrdinaryAction(scope,changed,()->{}));
-        assertEquals(ControlledImageFollowupAuthorityService.Reason.CONFLICT,failure.reason());
-        verify(executions,times(1)).insert(any());
-    }
+
+
+
+
+
 
     private ControlledImageFollowupAuthorityService.OrdinaryActionCommand ordinary() {
         return new ControlledImageFollowupAuthorityService.OrdinaryActionCommand(preview(),"act_"+"a".repeat(40),
@@ -271,29 +177,7 @@ class ControlledImageIntentOperationGrantServiceTest {
         verifyNoInteractions(executions,sources);
     }
 
-    @Test void reserveReplayRejectsChangedPersistedRuntimeSnapshotBeforeAuthorityOrLateChecks() {
-        String expectedRuntimeDigest="cf52041c690cdb7fa6625ba3dbb00adf4d7fbad71882278e0b5968a50cf915e5";
-        var prior=new PersonalWorkspaceExecutionEntity().setExecutionId("execution").setRunId("run")
-                .setRequestHash("6".repeat(64)).setRuntimeInputSnapshotDigest("7".repeat(64))
-                .setControlledConsentId("consent_1234567890abcdef1234567890abcdef")
-                .setOperationGrantId("opgrant_1234567890abcdef1234567890abcdef");
-        when(executions.findByIdempotency("0","client","owner","conv_"+
-                "282bcbc3f0a34a8a4ac6f00c276fcf66cf3757a3332e83d92208e5079af46922"))
-                .thenReturn(prior);
-        var late=mock(ControlledImageFollowupAuthorityService.LateCheck.class);
-        var command=new ControlledImageFollowupAuthorityService.ReserveCommand(preview(),
-                new ControlledImageFollowupAuthorityService.Authority(
-                        "consent_1234567890abcdef1234567890abcdef",1,
-                        "opgrant_1234567890abcdef1234567890abcdef",1),
-                "6".repeat(64),expectedRuntimeDigest,"execution","run","image/png");
 
-        var failure=assertThrows(ControlledImageFollowupAuthorityService.Failure.class,
-                () -> service.reserve(scope,command,late));
-
-        assertEquals(ControlledImageFollowupAuthorityService.Reason.CONFLICT,failure.reason());
-        verifyNoInteractions(operationGrants,consents,grants,sources,policies);
-        verify(late,never()).verify();
-    }
 
     @Test void originalKeyReadStorageFailuresAreTypedUnavailable() {
         var row=operationGrant("issue-key","a".repeat(64));
@@ -314,84 +198,9 @@ class ControlledImageIntentOperationGrantServiceTest {
         assertEquals(ControlledImageFollowupAuthorityService.Reason.UNAVAILABLE,interaction.reason());
     }
 
-    @Test void admitRejectsRepointedOperatorPolicyBeforeExecutionOrAuthorityWrites() {
-        String runtimeDigest="cf52041c690cdb7fa6625ba3dbb00adf4d7fbad71882278e0b5968a50cf915e5";
-        var operation=operationGrant("issue-key","a".repeat(64));
-        var consent=followupConsent(operation);
-        when(grants.admitFollowupBaseline(any(),eq("task"),eq("baseline"),eq(1L),eq(0L),
-                eq(0L),eq(1L),eq("agent"))).thenReturn(baseline());
-        when(operationGrants.lockById("0","client","owner","task",operation.getOperationGrantId()))
-                .thenReturn(operation);
-        when(consents.findFollowupByConsentForUpdate("0","client","owner","task",consent.getConsentId()))
-                .thenReturn(consent);
-        when(policies.requireCurrent(any(),eq("agent"),eq("binding"),eq(7L),anyLong()))
-                .thenReturn(new ControlledImageProviderOperatorPolicy.Policy("CONTROLLED_IMAGE_HTTP_V1",
-                        "binding",7,"changed-model","OPERATOR_TEMPLATE","operator","policy-r1",
-                        "UNPRICED_EXTERNAL_ACCOUNT",1,Long.MAX_VALUE));
-        var command=new ControlledImageFollowupAuthorityService.ReserveCommand(preview(),
-                new ControlledImageFollowupAuthorityService.Authority(consent.getConsentId(),1,
-                        operation.getOperationGrantId(),1),"6".repeat(64),runtimeDigest,
-                "execution","run","image/png");
 
-        var failure=assertThrows(ControlledImageFollowupAuthorityService.Failure.class,
-                () -> service.reserve(scope,command,()->fail("late check must not run")));
 
-        assertEquals(ControlledImageFollowupAuthorityService.Reason.CONFLICT,failure.reason());
-        verify(executions,never()).insert(any());
-        verify(operationGrants,never()).reserve(any(),anyLong());
-        verify(consents,never()).bindFollowup(any(),anyLong());
-        verify(consents,never()).reserveFollowup(any(),anyLong());
-        verifyNoInteractions(sources);
-    }
 
-    @Test void startCompletesAgentChecksBeforeChatLockAndOnlyThenConsumesAuthority() {
-        var operation=operationGrant("issue-key","a".repeat(64)).setState("RESERVED").setVersion(2L)
-                .setReservedExecutionId("execution").setReservedRunId("run");
-        var consent=followupConsent(operation).setState("RESERVED").setVersion(3L)
-                .setReservedExecutionId("execution").setReservedRunId("run")
-                .setRuntimeInputSnapshotSha256("7".repeat(64));
-        var execution=new PersonalWorkspaceExecutionEntity().setExecutionId("execution").setRunId("run")
-                .setExecutionProtocolVersion(3).setTargetAgentId("agent").setPermittedOperation("GENERATE_IMAGE")
-                .setOperationGrantId(operation.getOperationGrantId()).setControlledConsentId(consent.getConsentId())
-                .setConversationId("conversation").setInstruction("draw")
-                .setRuntimeInputSnapshotDigest("7".repeat(64));
-        var verifier=mock(ControlledImageFollowupAuthorityService.RuntimeSourceAccessLookup.class);
-        var late=mock(ControlledImageFollowupAuthorityService.LateCheck.class);
-        when(executions.lockByTaskRun("0","client","owner","task","run")).thenReturn(execution);
-        when(operationGrants.lockById("0","client","owner","task",operation.getOperationGrantId()))
-                .thenReturn(operation);
-        when(consents.findFollowupByConsentForUpdate("0","client","owner","task",consent.getConsentId()))
-                .thenReturn(consent);
-        when(grants.admitFollowupBaseline(any(),eq("task"),eq("baseline"),eq(1L),eq(0L),
-                eq(0L),eq(1L),eq("agent"))).thenReturn(baseline());
-        when(policies.requireCurrent(any(),eq("agent"),eq("binding"),eq(7L),anyLong()))
-                .thenReturn(new ControlledImageProviderOperatorPolicy.Policy("CONTROLLED_IMAGE_HTTP_V1",
-                        "binding",7,"model","OPERATOR_TEMPLATE","operator","policy-r1",
-                        "UNPRICED_EXTERNAL_ACCOUNT",1,Long.MAX_VALUE));
-        when(sourceAccess.getIfUnique()).thenReturn(verifier);
-        when(operationGrants.consume(eq(operation),eq(2L))).thenReturn(true);
-        when(consents.consumeFollowup(eq(consent),eq(3L))).thenReturn(true);
-        when(executions.markControlledProviderStartedV3(eq("0"),eq("client"),eq("owner"),eq("task"),
-                eq("run"),eq("execution"),eq(consent.getConsentId()),eq(operation.getOperationGrantId()),
-                eq(1L),anyLong())).thenReturn(true);
-        var provider=new ControlledImageFollowupAuthorityService.ProviderExecution(
-                "CONTROLLED_IMAGE_HTTP_V1",consent.getConsentId(),"binding","7","model",16,1,1);
-        var command=new ControlledImageFollowupAuthorityService.StartCommand("task","run","execution",
-                "command","message","GENERATE_IMAGE","7".repeat(64),provider,1,"lease");
-
-        var receipt=service.consumeForStart(new ControlledImageFollowupAuthorityService.RuntimeScope(
-                "0","client","owner","agent","runtime"),command,late);
-
-        assertEquals("execution",receipt.executionId());
-        var order=inOrder(late,verifier,operationGrants,consents,executions);
-        order.verify(late).verify();
-        order.verify(verifier).verify(any(),eq(List.of()),eq(true));
-        order.verify(operationGrants).consume(operation,2);
-        order.verify(consents).consumeFollowup(consent,3);
-        order.verify(executions).markControlledProviderStartedV3(eq("0"),eq("client"),eq("owner"),
-                eq("task"),eq("run"),eq("execution"),eq(consent.getConsentId()),
-                eq(operation.getOperationGrantId()),eq(1L),anyLong());
-    }
 
 
     @Test void resultAuthorityUsesExactConsumedStartLeaseWithoutCurrentProviderOrSourceLookup() {

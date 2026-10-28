@@ -10,7 +10,8 @@ import lombok.experimental.Accessors;
 import java.io.Serial;
 import java.io.Serializable;
 
-/** Skill-specific attachment to PWE, not a second admission or completion authority.
+/** Execution lifecycle attachment to PWE, not a second admission or completion authority.
+ * v4 scalar skill columns are historical only; v5 stores exact skill/binding arrays and leaves them null.
  * Snapshot identity is immutable; mutable fields are written only through scope-exact CAS.
  * Deliberately does not inherit BaseEntity's unrelated create_time/update_time columns. */
 @Data

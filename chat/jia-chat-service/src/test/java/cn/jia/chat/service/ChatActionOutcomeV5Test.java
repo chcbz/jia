@@ -30,6 +30,31 @@ class ChatActionOutcomeV5Test {
         assertThrows(IllegalArgumentException.class,()->ChatActionFinalValidator.validateJson(binding,f.get("facts"),null,(String)outcome.get("text"),4,ChatDeliveryReviewContract.json(outcome),null,basis));
         assertThrows(IllegalArgumentException.class,()->ChatActionFinalValidator.validateJson(binding,f.get("facts"),null,(String)outcome.get("text"),5,ChatDeliveryReviewContract.json(outcome),null));
     }
+    @SuppressWarnings("unchecked") @Test void nativeActionIsExplicitlyVersionedAndNeverDowngradesSkill() throws Exception {
+        Map<String,Object> fixture;
+        try(var stream=getClass().getResourceAsStream("/contracts/unified-action-outcome-v5.json")) {fixture=JSON.readValue(stream,Map.class);}
+        var facts=new LinkedHashMap<String,Object>((Map<String,Object>)fixture.get("facts"));
+        var oldActions=(List<Map<String,Object>>)facts.get("availableActions");
+        var nativeAction=new LinkedHashMap<String,Object>(oldActions.getFirst());
+        nativeAction.put("operation","EXECUTE_NATIVE");nativeAction.put("skill",null);
+        facts.put("availableActions",List.of(nativeAction));
+        assertThrows(IllegalArgumentException.class,()->ChatActionOutcomeContract.facts(facts));
+        facts.put("schemaVersion",6);
+        var parsed=ChatActionOutcomeContract.facts(facts);
+        assertEquals(6,parsed.schemaVersion());assertNull(parsed.availableActions().getFirst().skill());
+        assertEquals(facts,ChatActionFinalValidator.factsMap(parsed));
+        var requested=new LinkedHashMap<String,Object>(((List<Map<String,Object>>)fixture.get("outcomes")).stream()
+                .filter(o->"ACTION_REQUEST".equals(o.get("kind"))).findFirst().orElseThrow());
+        var selection=new LinkedHashMap<String,Object>((Map<String,Object>)requested.get("action"));
+        selection.put("actionId",nativeAction.get("actionId"));requested.put("action",selection);
+        assertEquals("ACTION_REQUEST",ChatActionOutcomeContract.outcome(requested,parsed).kind());
+        var skill=new LinkedHashMap<String,Object>();skill.put("skillKey","ordinary");skill.put("skillVersion","1.0");skill.put("packageSha256","a".repeat(64));skill.put("manifestSha256",null);
+        nativeAction.put("skill",skill);var withSkill=ChatActionOutcomeContract.facts(facts);
+        assertNull(withSkill.availableActions().getFirst().skill().manifestSha256());assertEquals(facts,ChatActionFinalValidator.factsMap(withSkill));
+        facts.put("schemaVersion",5);assertThrows(IllegalArgumentException.class,()->ChatActionOutcomeContract.facts(facts));facts.put("schemaVersion",6);
+        nativeAction.put("operation","EXECUTE_SKILL");
+        assertThrows(IllegalArgumentException.class,()->ChatActionOutcomeContract.facts(facts));
+    }
     @Test void ordinaryAnswerAndClarificationCannotReplacePendingBatchOrAuthorizeAnAction() {
         var f=fixture();var basis=ChatDeliveryRevisionContract.basis(f.get("basis"));var facts=ChatActionOutcomeContract.facts(f.get("facts"));
         for(String kind:List.of("ANSWER","CLARIFY")) {

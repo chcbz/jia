@@ -78,7 +78,7 @@ public class ChatBountyAssetProjector {
                 JOIN agent_personal_workspace_execution e ON e.execution_id=l.execution_id
                   AND e.tenant_id=s.tenant_id AND e.client_id=s.client_id AND e.owner_jiacn=s.owner_jiacn
                   AND e.execution_state IN ('OUTPUT_COMMITTED','RESULT_COMMITTED','FAILED','INPUTS_REVOKED') AND e.execution_mode='CONVERSATION'
-                WHERE s.kind='EXECUTE' AND l.state='RUNNING'
+                WHERE e.execution_protocol_version<>4 AND s.kind='EXECUTE' AND l.state='RUNNING'
                   AND (s.state='RUNNING' OR (s.state=e.execution_state AND e.execution_state IN ('OUTPUT_COMMITTED','RESULT_COMMITTED')))
                   AND (? IS NULL OR s.step_id > ?)
                 ORDER BY s.step_id LIMIT ?
@@ -93,7 +93,7 @@ public class ChatBountyAssetProjector {
     public int project(Candidate candidate) {
         if (candidate == null) throw new IllegalArgumentException("Missing candidate");
         if(taskMutations==null)throw new IllegalStateException("Task projection lock unavailable");
-        var roots=jdbc.queryForList("SELECT task_id FROM agent_personal_workspace_execution WHERE BINARY tenant_id=BINARY ? AND BINARY client_id=BINARY ? AND BINARY owner_jiacn=BINARY ? AND BINARY execution_id=BINARY ?",
+        var roots=jdbc.queryForList("SELECT task_id FROM agent_personal_workspace_execution WHERE execution_protocol_version<>4 AND BINARY tenant_id=BINARY ? AND BINARY client_id=BINARY ? AND BINARY owner_jiacn=BINARY ? AND BINARY execution_id=BINARY ?",
                 candidate.tenantId(),candidate.clientId(),candidate.ownerJiacn(),candidate.executionId());
         if(roots.size()!=1)return 0;
         return taskMutations.executeWithLockedTaskRootInOwnerScope(candidate.tenantId(),candidate.clientId(),candidate.ownerJiacn(),

@@ -6,10 +6,6 @@ import java.util.List;
 /** Root-first aggregate for one owner-issued schema-3 controlled-image intent. No Provider call occurs here. */
 public interface ControlledImageFollowupAuthorityService {
     Preview preview(Scope scope, PreviewCommand command);
-    /** Internal coordinator entry: original USER + immutable Agent action under EXISTING operator
-     * delegation. No browser acknowledgement, policy creation, or Provider call. Caller must join
-     * its durable action transaction and recheck the real USER/final in lateCheck. */
-    Reservation admitOrdinaryAction(Scope scope, OrdinaryActionCommand command, LateCheck lateCheck);
     record OrdinaryActionCommand(PreviewCommand preview, String actionRequestId,
             String parentOutcomeId, String parentFinalDigest, long originalUserMessageId,
             String originalUserContentSha256, String executionId, String runId,
@@ -23,7 +19,6 @@ public interface ControlledImageFollowupAuthorityService {
     ControlledImageFollowupAuthorityDTO getByInteractionKey(Scope scope,String taskId,
             String conversationId,String interactionIdempotencyKey);
     ControlledImageFollowupAuthorityDTO revoke(Scope scope, RevokeCommand command);
-    Reservation reserve(Scope scope, ReserveCommand command, LateCheck lateCheck);
     /** COMMAND/INPUTS/EXISTING_RUN revalidate live authority; FAILURE selects reserved pre-START
      * admission or the consumed START lease, while RESULT always requires the consumed START lease. */
     RuntimeAuthority runtimeAuthority(RuntimeScope scope,String taskId,String runId,String purpose);
@@ -32,7 +27,6 @@ public interface ControlledImageFollowupAuthorityService {
     CommittedResultAuthority committedResultAuthority(Scope scope,String taskId,String runId);
     record CommittedResultAuthority(String executionId,String targetAgentId,String operation,
             String inputSnapshotDigest) { }
-    StartReceipt consumeForStart(RuntimeScope scope, StartCommand command, LateCheck lateCheck);
 
     record Scope(String tenantId,String clientId,String ownerJiacn) { }
     record RuntimeScope(String tenantId,String clientId,String ownerJiacn,String targetAgentId,

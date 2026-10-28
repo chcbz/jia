@@ -10,6 +10,9 @@ public interface InstalledSkillDescriptorLookup {
             String packageSha256, String manifestSha256, String manifestJson,
             String runtimeInstallationId, String runtimeHostId, String reasonCode) {
         public boolean verified() { return reasonCode == null && manifestJson != null; }
+        /** Native execution also accepts a verified instruction package without a manifest. */
+        public boolean verifiedNative() { return reasonCode == null && packageSha256 != null
+                && ((manifestJson == null && manifestSha256 == null) || verified() && manifestSha256 != null); }
     }
     record Snapshot(List<Descriptor> skills) {
         public Snapshot { skills = List.copyOf(Objects.requireNonNull(skills)); }

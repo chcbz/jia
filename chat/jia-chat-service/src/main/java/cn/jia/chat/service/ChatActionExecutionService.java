@@ -43,11 +43,36 @@ public class ChatActionExecutionService implements ChatActionDispatchService.Exe
         this.grants=grants; this.executions=executions; this.installed=installed;this.runtimes=runtimes;this.policies=policies;
     }
 
+    private ChatActionCapabilityService nativeCapabilities;
+    private cn.jia.chat.handler.TypedDeliberationSessionRegistry nativeSessions;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setNativeCapabilities(ChatActionCapabilityService value,cn.jia.chat.handler.TypedDeliberationSessionRegistry sessions) {
+        nativeCapabilities=value;nativeSessions=sessions;
+    }
+    private static ChatActionOutcomeContract.Capability selectedCapability(ChatActionFinalService.BoundAction action) {
+        return action.validated().dispatchFacts().availableActions().stream()
+                .filter(c->c.actionId().equals(action.validated().interactionOutcome().action().actionId())).findFirst().orElseThrow(ChatActionExecutionService::conflict);
+    }
+    private void requireCurrentNative(ChatActionFinalService.BoundAction action) {
+        if(nativeCapabilities==null||nativeSessions==null)throw new ChatActionDispatchService.Unavailable("NATIVE_RUNTIME_UNAVAILABLE");
+        var scope=action.outcome().scope();var target=(String)action.validated().binding().get("targetAgentId");
+        var key=new SkillCapabilityLookup.Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),target);
+        var policy=policies.read(key,action.outcome().taskId());requireAvailablePolicy(policy);requireRuntimeTarget(key,policy.runtimeScope());
+        final cn.jia.chat.handler.TypedDeliberationSessionRegistry.Ready ready;
+        try {ready=nativeSessions.requireSingleReady(new cn.jia.chat.handler.TypedDeliberationSessionRegistry.Scope(scope.tenantId(),policy.runtimeScope().ownerJiacn(),scope.clientId()),target);}
+        catch(IllegalStateException unavailable){throw new ChatActionDispatchService.Unavailable("NATIVE_RUNTIME_UNAVAILABLE");}
+        var current=nativeCapabilities.availableNative(new ChatActionCapabilityService.Scope(scope.tenantId(),scope.ownerJiacn(),scope.clientId(),target),action.outcome().taskId(),
+                ChatTypedDeliberationContextService.parseCatalog(action.outcome().sourceCatalogJson()),ready.frozenDeclaration(),ready.sessionId());
+        var original=selectedCapability(action);
+        if(current.stream().noneMatch(c->original.actionId().equals(c.get("actionId"))))throw new ChatActionDispatchService.Rejected();
+    }
+
     @Override
     @Transactional(propagation=Propagation.NOT_SUPPORTED)
     public void prepare(ChatActionFinalService.BoundAction action) {
         if(org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive())
             throw new InstalledSkillDescriptorLookup.SourceUnavailable();
+        if("EXECUTE_NATIVE".equals(selectedCapability(action).operation())) {requireCurrentNative(action);return;}
         var scope=action.outcome().scope();
         var taskScope=new SkillCapabilityLookup.Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),
                 (String)action.validated().binding().get("targetAgentId"));
@@ -62,9 +87,8 @@ public class ChatActionExecutionService implements ChatActionDispatchService.Exe
     public String admit(ChatActionFinalService.BoundAction action) {
         var parent=action.outcome(); var scope=parent.scope();
         var requested=action.validated().interactionOutcome().action();
-        var capability=action.validated().dispatchFacts().availableActions().stream()
-                .filter(c->c.actionId().equals(requested.actionId())).findFirst().orElseThrow(ChatActionExecutionService::conflict);
-        if (!"EXECUTE".equals(capability.kind()) || !"EXECUTE_SKILL".equals(capability.operation())) throw conflict();
+        var capability=selectedCapability(action);
+        if (!"EXECUTE".equals(capability.kind()) || !java.util.Set.of("EXECUTE_SKILL","EXECUTE_NATIVE").contains(capability.operation())) throw conflict();
         String target=(String)action.validated().binding().get("targetAgentId");
         String actionId=ChatActionFinalValidator.actionEventId(action.validated());
         String requestId=stable("action-execute",actionId), stepId=stable("action-step",actionId);
@@ -76,18 +100,19 @@ public class ChatActionExecutionService implements ChatActionDispatchService.Exe
         body.put("schemaVersion",4); body.put("origin","AGENT_ACTION"); body.put("actionRequestId",actionId);
         body.put("parentOutcomeId",parent.outcomeId()); body.put("parentFinalDigest",parent.finalDigest());
         body.put("originalUserMessageId",Long.toString(user.getId())); body.put("originalUserContentSha256",userHash);
-        body.put("operation",capability.operation()); body.put("skill",Map.of("skillKey",capability.skill().skillKey(),"skillVersion",capability.skill().skillVersion(),"packageSha256",capability.skill().packageSha256(),"manifestSha256",capability.skill().manifestSha256())); body.put("parameters",requested.parameters()); body.put("instruction",requested.instruction()); body.put("sources",catalog);
+        body.put("operation",capability.operation()); body.put("skill",ChatActionFinalValidator.skillMap(capability.skill())); body.put("parameters",requested.parameters()); body.put("instruction",requested.instruction()); body.put("sources",catalog);
         String bodyDigest=ChatDeliberationService.digest(body);
         var prior=typed.findAdmissionByKey(scope,actionId,true);
         if (prior!=null) {
             requireReplay(action,prior,requestId,stepId,intentId,bodyDigest,CanonicalContextJson.write(catalog));
             return requestId; // No live source/runtime/policy lookup, reserve, dispatch or Provider call.
         }
+        if("EXECUTE_NATIVE".equals(capability.operation()))requireCurrentNative(action);
         if (dao.findRequest(scope.tenantId(),scope.ownerJiacn(),scope.clientId(),requestId)!=null) throw conflict();
         // Existing action keys returned above, before any current policy/descriptor/source lookup.
         var grantScope=new AgentTaskExecutionGrantService.Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn());
         var baseline=grants.resolveAndAdmit(grantScope,parent.taskId(),parent.assignmentRevision(),target,"EXECUTE_SKILL",false);
-        var snapshot=prepare(action,actionId,capability,catalog,baseline);
+        var snapshot="EXECUTE_NATIVE".equals(capability.operation())?prepareNative(action,actionId,capability,catalog,baseline):prepare(action,actionId,capability,catalog,baseline);
         var creation=executions.create(new PersonalWorkspaceExecutionService.OwnerScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn()),
                 new SkillExecutionService.Create(actionId,parent.taskId(),scope.conversationId(),scope.conversationGeneration(),target,
                         baseline.grantId(),baseline.grantVersion(),parent.assignmentRevision(),snapshot));
@@ -114,6 +139,46 @@ public class ChatActionExecutionService implements ChatActionDispatchService.Exe
         if (typed.insertAdmission(admission)!=1) throw persistence();
         deliberation.persistActionStarted(action,requestId,"EXECUTE",now);
         return requestId;
+    }
+
+    private Map<String,Object> prepareNative(ChatActionFinalService.BoundAction action,String actionId,
+            ChatActionOutcomeContract.Capability capability,List<Map<String,Object>> catalog,AgentTaskExecutionGrantService.Admission baseline) {
+        var parent=action.outcome();var scope=parent.scope();var inputs=new ArrayList<Map<String,Object>>();
+        for(var source:catalog) {
+            var input=new LinkedHashMap<String,Object>();String kind=(String)source.get("sourceKind");
+            if("TASK_WORKSPACE_FILE".equals(kind))kind="TASK_LINKED_WORKSPACE_VERSION";
+            if(!List.of("TASK_LINKED_WORKSPACE_VERSION","CURRENT_CONVERSATION_ASSET","EXECUTION_RESULT","FORMAL_ARTIFACT").contains(kind))throw conflict();
+            input.put("sourceKind",kind);input.put("sourceIdentity",source.get("sourceIdentity"));input.put("inputRef",source.get("sourceRefId"));
+            input.put("contentMimeType",source.get("contentMimeType"));input.put("byteLength",source.get("byteLength"));input.put("sha256",source.get("contentHash"));inputs.add(input);
+        }
+        var snapshot=new LinkedHashMap<String,Object>();snapshot.put("schemaVersion",1);snapshot.put("executionProtocolVersion",5);
+        snapshot.put("toolPolicyRef",capability.skill()==null?SkillExecutionService.NATIVE_LOCAL_FILES_POLICY:SkillExecutionService.NATIVE_SKILL_SCRIPT_POLICY);snapshot.put("actionEventId",actionId);snapshot.put("taskId",parent.taskId());
+        snapshot.put("conversationId",scope.conversationId());snapshot.put("conversationGeneration",Long.toString(scope.conversationGeneration()));
+        snapshot.put("targetAgentId",action.validated().binding().get("targetAgentId"));
+        snapshot.put("taskGrant",Map.of("id",baseline.grantId(),"version",Long.toString(baseline.grantVersion()),"assignmentRevision",Long.toString(baseline.assignmentRevision())));
+        snapshot.put("instruction",action.validated().interactionOutcome().action().instruction());snapshot.put("parameters",action.validated().interactionOutcome().action().parameters());
+        snapshot.put("inputs",List.copyOf(inputs));snapshot.put("sourceSnapshotDigest",ChatSkillSnapshotJson.sha(inputs));
+        snapshot.put("outputs",Map.of("mimeTypes",capability.outputMimeTypes(),"multiple",true,"artifactsRequired",true));
+        if(capability.skill()==null)snapshot.put("skills",List.of());
+        else {
+            String target=(String)action.validated().binding().get("targetAgentId");
+            var key=new SkillCapabilityLookup.Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),target);
+            var policy=policies.read(key,parent.taskId());requireAvailablePolicy(policy);requireRuntimeTarget(key,policy.runtimeScope());
+            snapshot.put("skills",List.of(nativeSelection(installed.readCurrent(policy.runtimeScope()),capability)));
+        }
+        return snapshot;
+    }
+
+    static Map<String,Object> nativeSelection(InstalledSkillDescriptorLookup.Snapshot current,ChatActionOutcomeContract.Capability capability) {
+        var selected=capability.skill();
+        var matches=current.skills().stream().filter(d->d.verifiedNative()&&d.manifestJson()==null&&d.manifestSha256()==null
+                &&Objects.equals(d.skillKey(),selected.skillKey())&&Objects.equals(d.skillVersion(),selected.skillVersion())
+                &&Objects.equals(d.packageSha256(),selected.packageSha256())&&Objects.equals(d.manifestSha256(),selected.manifestSha256())
+                &&ChatActionCapabilityService.nativeSkillActionId(d,capability.inputMimeTypes(),capability.outputMimeTypes()).equals(capability.actionId())).toList();
+        if(matches.size()!=1)throw new ChatActionDispatchService.Rejected();var descriptor=matches.getFirst();
+        var skill=new LinkedHashMap<String,Object>();skill.put("key",descriptor.skillKey());skill.put("version",descriptor.skillVersion());
+        skill.put("installationId",descriptor.installationId());skill.put("packageSha256",descriptor.packageSha256());skill.put("manifestSha256",descriptor.manifestSha256());
+        var selection=new LinkedHashMap<String,Object>();selection.put("skill",skill);selection.put("providerBinding",null);return selection;
     }
 
     /** Frozen model selection is a locator, not authority. Core rechecks the exact installation and all inputs. */
@@ -158,18 +223,20 @@ public class ChatActionExecutionService implements ChatActionDispatchService.Exe
             input.put("inputRef",source.get("sourceRefId"));input.put("contentMimeType",source.get("contentMimeType"));
             input.put("byteLength",source.get("byteLength"));input.put("sha256",source.get("contentHash"));inputs.add(input);
         }
-        var snapshot=new LinkedHashMap<String,Object>();snapshot.put("schemaVersion",1);snapshot.put("actionEventId",actionId);
+        var snapshot=new LinkedHashMap<String,Object>();snapshot.put("schemaVersion",1);snapshot.put("executionProtocolVersion",5);snapshot.put("toolPolicyRef",SkillExecutionService.NATIVE_LOCAL_FILES_POLICY);snapshot.put("actionEventId",actionId);
         snapshot.put("taskId",parent.taskId());snapshot.put("conversationId",scope.conversationId());
         snapshot.put("conversationGeneration",Long.toString(scope.conversationGeneration()));snapshot.put("targetAgentId",target);
         snapshot.put("taskGrant",Map.of("id",baseline.grantId(),"version",Long.toString(baseline.grantVersion()),
                 "assignmentRevision",Long.toString(baseline.assignmentRevision())));
-        snapshot.put("skill",Map.of("key",descriptor.skillKey(),"version",descriptor.skillVersion(),"installationId",descriptor.installationId(),
-                "packageSha256",descriptor.packageSha256(),"manifestSha256",descriptor.manifestSha256(),"runner",manifest.get("runner"),"entrypoint",manifest.get("entrypoint")));
+        var selectedSkill=Map.of("key",descriptor.skillKey(),"version",descriptor.skillVersion(),"installationId",descriptor.installationId(),
+                "packageSha256",descriptor.packageSha256(),"manifestSha256",descriptor.manifestSha256(),"runner",manifest.get("runner"),"entrypoint",manifest.get("entrypoint"));
         snapshot.put("instruction",action.validated().interactionOutcome().action().instruction());
         snapshot.put("parameters",action.validated().interactionOutcome().action().parameters());snapshot.put("inputs",List.copyOf(inputs));
         snapshot.put("outputs",manifest.get("outputs"));snapshot.put("sourceSnapshotDigest",ChatSkillSnapshotJson.sha(inputs));
         var requirements=(Map<?,?>)manifest.get("requirements");
-        snapshot.put("providerBinding",requirements.get("providerAlias")==null?null:Map.of("alias",requirements.get("providerAlias"),"revision",report.bindingRevision()));
+        var selection=new LinkedHashMap<String,Object>();selection.put("skill",selectedSkill);
+        selection.put("providerBinding",requirements.get("providerAlias")==null?null:Map.of("alias",requirements.get("providerAlias"),"revision",report.bindingRevision()));
+        snapshot.put("skills",List.of(selection));
         snapshot.put("costInfo",manifest.getOrDefault("costInfo",Map.of("mode","UNKNOWN")));
         // No producer/replaces is inferred from an uploaded input. Output lineage comes only from committed results.
         return snapshot;

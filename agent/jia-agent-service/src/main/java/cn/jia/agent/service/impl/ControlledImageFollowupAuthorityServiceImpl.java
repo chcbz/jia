@@ -88,34 +88,6 @@ public class ControlledImageFollowupAuthorityServiceImpl implements ControlledIm
     "FOLLOWUP_EXECUTE", current->requireExpected(command,current),late);
  }
 
- /** The authority basis is recorded as ORDINARY_ACTION, never as a fabricated user checkbox. */
- @Override @Transactional(propagation=org.springframework.transaction.annotation.Propagation.MANDATORY,rollbackFor=Exception.class)
- public Reservation admitOrdinaryAction(Scope scope,OrdinaryActionCommand command,LateCheck late){
-  if(command==null||late==null)throw fail(Reason.BAD_REQUEST);
-  validate(scope,command.preview());id(command.actionRequestId(),100);id(command.parentOutcomeId(),100);
-  if(!command.actionRequestId().matches("act_[0-9a-f]{40}")||command.originalUserMessageId()<1
-    ||command.parentFinalDigest()==null||!command.parentFinalDigest().matches("sha256:[0-9a-f]{64}"))throw fail(Reason.BAD_REQUEST);
-  hash(command.originalUserContentSha256());hash(command.interactionRequestDigest());
-  id(command.executionId(),100);id(command.runId(),100);
-  var p=command.preview();
-  String originDigest=ordinaryDigest(Map.of("schemaVersion",3,"origin","ORDINARY_ACTION",
-    "actionRequestId",command.actionRequestId(),"parentOutcomeId",command.parentOutcomeId(),
-    "parentFinalDigest",command.parentFinalDigest(),"originalUserMessageId",Long.toString(command.originalUserMessageId()),
-    "originalUserContentSha256",command.originalUserContentSha256(),"ownerPayloadSha256",p.ownerPayloadSha256(),
-    "interactionRequestDigest",command.interactionRequestDigest(),"previewSha256",ordinaryDigest(p)));
-  return tx.executeWithLockedTaskRootInOwnerScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),p.taskId(),root->{
-  // This proof is supplied by the Chat owner, not by the model or an external controller.
-  // Acquire the root before Chat checks and before grant writes. The caller transaction
-  // makes issuance, reservation and Chat child writes roll back together.
-  late.verify();
-  var issued=issueAuthorized(scope,p,"ordinary_"+command.actionRequestId(),originDigest,
-    "ORDINARY_ACTION",current->{},late);
-  return reserve(scope,new ReserveCommand(p,new Authority(issued.consentId(),Long.parseLong(issued.consentVersion()),
-    issued.operationGrantId(),Long.parseLong(issued.operationGrantVersion())),command.interactionRequestDigest(),
-    runtimeDigest(p,command.executionId(),command.runId()),command.executionId(),command.runId(),"image/png"),late);
-  });
- }
-
  private ControlledImageFollowupAuthorityDTO issueAuthorized(Scope scope,PreviewCommand preview,
    String issueKey,String issueDigest,String purpose,java.util.function.Consumer<Preview> expected,LateCheck late){
   try{return tx.executeWithLockedTaskRootInOwnerScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),preview.taskId(),root->{
@@ -173,39 +145,6 @@ public class ControlledImageFollowupAuthorityServiceImpl implements ControlledIm
    if(!opgrants.revoke(op,c.expectedOperationGrantVersion())||!consents.revokeFollowup(consent,c.expectedConsentVersion()))throw fail(Reason.CONFLICT);op.setState("REVOKED").setVersion(c.expectedOperationGrantVersion()+1);return view(scope,op,false);
   });}catch(Failure f){throw f;}catch(RuntimeException f){throw translate(f);}}
 
- @Override public Reservation reserve(Scope scope,ReserveCommand c,LateCheck late){
-  if(c==null||c.preview()==null||c.authority()==null||late==null)throw fail(Reason.BAD_REQUEST);validate(scope,c.preview());hash(c.interactionRequestDigest());hash(c.runtimeInputSnapshotDigest());id(c.executionId(),100);id(c.runId(),100);if(!"image/png".equals(c.outputContentMimeType())||!sameHash(c.runtimeInputSnapshotDigest(),runtimeDigest(c.preview(),c.executionId(),c.runId())))throw fail(Reason.BAD_REQUEST);
-  try{return tx.executeWithLockedTaskRootInOwnerScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),c.preview().taskId(),root->{
-   var prior=executions.findByIdempotency(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),"conv_"+sha(c.preview().executionIntentId()));
-   if(prior!=null){
-    if(!same(prior.getRequestHash(),c.interactionRequestDigest())||!same(prior.getExecutionId(),c.executionId())
-      ||!same(prior.getRunId(),c.runId())||!sameHash(prior.getRuntimeInputSnapshotDigest(),c.runtimeInputSnapshotDigest())
-      ||!same(prior.getControlledConsentId(),c.authority().consentId())
-      ||!same(prior.getOperationGrantId(),c.authority().operationGrantId()))throw fail(Reason.CONFLICT);
-    var persistedOp=opgrants.findById(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),c.preview().taskId(),prior.getOperationGrantId());
-    var persistedConsent=consents.findFollowupByConsent(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),c.preview().taskId(),prior.getControlledConsentId());
-    if(persistedOp==null||persistedConsent==null||!reservedOrConsumed(persistedOp.getState())
-      ||!reservedOrConsumed(persistedConsent.getState())
-      ||!same(prior.getExecutionId(),persistedOp.getReservedExecutionId())
-      ||!same(prior.getRunId(),persistedOp.getReservedRunId()))throw fail(Reason.CONFLICT);
-    return new Reservation(prior.getExecutionId(),prior.getRunId(),persistedConsent.getConsentId(),
-      persistedOp.getOperationGrantId(),persistedConsent.getVersion(),persistedOp.getVersion(),
-      prior.getRuntimeInputSnapshotDigest());
-   }
-   var base=baseline(scope,c.preview());requireBaseline(c.preview(),base);
-   var op=opgrants.lockById(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),c.preview().taskId(),c.authority().operationGrantId());
-   var consent=consents.findFollowupByConsentForUpdate(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),c.preview().taskId(),c.authority().consentId());
-   requireAuthority(c,op,consent);
-   requireCurrentProvider(scope,c.preview(),consent);
-   long now=System.currentTimeMillis();var row=new PersonalWorkspaceExecutionEntity().setExecutionId(c.executionId()).setOwnerJiacn(scope.ownerJiacn()).setTaskId(c.preview().taskId()).setRunId(c.runId()).setExecutionMode("CONVERSATION").setTaskGrantId(c.preview().baseline().grantId()).setTaskGrantVersion(c.preview().baseline().grantVersion()).setAssignmentRevision(c.preview().baseline().assignmentRevision()).setPermittedOperation(c.preview().operation()).setControlledConsentId(c.authority().consentId()).setExecutionProtocolVersion(3).setOperationGrantId(c.authority().operationGrantId()).setRuntimeInputSnapshotDigest(c.runtimeInputSnapshotDigest()).setConversationId(c.preview().conversationId()).setTargetAgentId(c.preview().baseline().targetAgentId()).setInstruction(c.preview().instruction()).setOutputContentMimeType("image/png").setExecutionState("QUEUED").setGrantRevision(1L).setIdempotencyKey("conv_"+sha(c.preview().executionIntentId())).setRequestHash(c.interactionRequestDigest()).setCreatedAt(now);
-   row.setTenantId(scope.tenantId());row.setClientId(scope.clientId());executions.insert(row);
-   int n=0;for(Source source:c.preview().sources())sources.insert(sourceRow(scope,row.getExecutionId(),++n,source,now));
-   op.setReservedExecutionId(row.getExecutionId()).setReservedRunId(row.getRunId()).setUpdateTime(now);if(!opgrants.reserve(op,c.authority().operationGrantVersion()))throw fail(Reason.CONFLICT);
-   consent.setBoundGrantId(c.preview().baseline().grantId()).setBoundGrantVersion(c.preview().baseline().grantVersion()).setBoundAssignmentRevision(c.preview().baseline().assignmentRevision()).setUpdateTime(now);if(!consents.bindFollowup(consent,c.authority().consentVersion()))throw fail(Reason.CONFLICT);
-   consent.setReservedExecutionId(row.getExecutionId()).setReservedRunId(row.getRunId()).setRuntimeInputSnapshotSha256(c.runtimeInputSnapshotDigest()).setUpdateTime(now);if(!consents.reserveFollowup(consent,c.authority().consentVersion()+1))throw fail(Reason.CONFLICT);
-   late.verify();return new Reservation(row.getExecutionId(),row.getRunId(),c.authority().consentId(),c.authority().operationGrantId(),c.authority().consentVersion()+2,c.authority().operationGrantVersion()+1,c.runtimeInputSnapshotDigest());
-  });}catch(Failure f){throw f;}catch(RuntimeException f){throw translate(f);}}
-
  @Override @Transactional(rollbackFor=Exception.class)
  public RuntimeAuthority runtimeAuthority(RuntimeScope scope,String taskId,String runId,String purpose){
   if(scope==null||!Set.of("COMMAND","INPUTS","EXISTING_RUN","RESULT","RESULT_RECOVERY","FAILURE").contains(purpose))throw fail(Reason.BAD_REQUEST);
@@ -254,28 +193,6 @@ public class ControlledImageFollowupAuthorityServiceImpl implements ControlledIm
    }
    return runtimeAuthority(execution,provider);
   }catch(Failure f){throw f;}catch(RuntimeException f){throw translate(f);}}
-
- @Override public StartReceipt consumeForStart(RuntimeScope scope,StartCommand c,LateCheck late){
-  if(scope==null||c==null||late==null)throw fail(Reason.BAD_REQUEST);validScope(new Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn()));id(scope.targetAgentId(),100);id(scope.runtimeInstanceId(),100);id(c.taskId(),100);id(c.runId(),100);id(c.executionId(),100);id(c.commandId(),100);id(c.messageId(),100);hash(c.inputSnapshotDigest());positive(c.leaseVersion());id(c.leaseId(),100);
-  try{return tx.executeWithLockedTaskRootInOwnerScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),c.taskId(),root->{
-   var execution=executions.lockByTaskRun(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),c.taskId(),c.runId());if(execution==null||!Objects.equals(3,execution.getExecutionProtocolVersion())||!same(c.executionId(),execution.getExecutionId())||!same(scope.targetAgentId(),execution.getTargetAgentId())||!same(c.operation(),execution.getPermittedOperation())||!same(c.inputSnapshotDigest(),execution.getRuntimeInputSnapshotDigest())||execution.getConversationProviderStartedAt()!=null)throw fail(Reason.CONFLICT);
-   var op=opgrants.lockById(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),c.taskId(),execution.getOperationGrantId());
-   if(op==null)return consumeInitialForStart(scope,c,late,execution);
-   var consent=consents.findFollowupByConsentForUpdate(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),c.taskId(),execution.getControlledConsentId());
-   if(op==null||consent==null||!"RESERVED".equals(op.getState())||!"RESERVED".equals(consent.getState())||!same(execution.getExecutionId(),op.getReservedExecutionId())||!same(execution.getRunId(),op.getReservedRunId())||!same(execution.getExecutionId(),consent.getReservedExecutionId())||!same(c.inputSnapshotDigest(),consent.getRuntimeInputSnapshotSha256()))throw fail(Reason.CONFLICT);
-   Scope owner=new Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn());
-   PreviewCommand preview=previewFrom(op,execution);var base=baseline(owner,preview);requireBaseline(preview,base);
-   var declaration=requireCurrentProvider(owner,preview,consent);if(!same(scope.runtimeInstanceId(),declaration.runtimeInstanceId())||!declaration.operations().contains(c.operation()))throw fail(Reason.CONFLICT);
-   ProviderExecution expected=new ProviderExecution(declaration.providerLane(),consent.getConsentId(),declaration.bindingId(),Long.toString(declaration.bindingEpoch()),declaration.modelId(),16,1,1);if(!expected.equals(c.providerExecution()))throw fail(Reason.CONFLICT);
-   // Re-entering the already-held Agent root/execution checks must happen before any Chat row is
-   // locked. The subsequent source verifier takes the current Chat ACL/lineage lock, after which
-   // this aggregate only performs the three terminal Agent CAS writes and never reacquires a root.
-   late.verify();
-   requireSourceAccess(owner,preview,true);
-   long now=System.currentTimeMillis();op.setConsumedLeaseId(c.leaseId()).setUpdateTime(now);consent.setConsumedLeaseId(c.leaseId()).setConsumedAt(now).setUpdateTime(now);if(!opgrants.consume(op,op.getVersion())||!consents.consumeFollowup(consent,consent.getVersion())||!executions.markControlledProviderStartedV3(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),c.taskId(),c.runId(),c.executionId(),consent.getConsentId(),op.getOperationGrantId(),c.leaseVersion(),now))throw fail(Reason.CONFLICT);
-   return new StartReceipt(c.taskId(),c.runId(),execution.getConversationId(),c.executionId(),c.commandId(),c.messageId(),c.operation(),c.inputSnapshotDigest(),expected,c.leaseVersion());
-  });}catch(Failure f){throw f;}catch(RuntimeException f){throw translate(f);}}
-
 
  private RuntimeAuthority initialRuntimeAuthority(RuntimeScope scope,PersonalWorkspaceExecutionEntity execution,String purpose){
   if(initialOperations==null||execution.getOperationGrantId()==null)throw fail(Reason.UNAVAILABLE);
@@ -370,24 +287,6 @@ public class ControlledImageFollowupAuthorityServiceImpl implements ControlledIm
     execution.getRuntimeInputSnapshotDigest(),provider);
  }
 
- private StartReceipt consumeInitialForStart(RuntimeScope scope,StartCommand c,LateCheck late,PersonalWorkspaceExecutionEntity execution){
-  if(initialOperations==null||execution.getOperationGrantId()==null)throw fail(Reason.UNAVAILABLE);
-  var bridge=initialOperations.lockByOperationGrant(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),c.taskId(),execution.getOperationGrantId());
-  var consent=consents.findByConsentForUpdate(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),c.taskId(),execution.getControlledConsentId());
-  requireInitialBridge(execution,bridge,consent);
-  if(!"RESERVED".equals(consent.getState())||!same(execution.getExecutionId(),consent.getReservedExecutionId())
-    ||!same(execution.getRunId(),consent.getReservedRunId()))throw fail(Reason.CONFLICT);
-  var admitted=grants.admitControlledV3(new AgentTaskExecutionGrantService.Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn()),
-    c.taskId(),execution.getTaskGrantId(),execution.getTaskGrantVersion(),execution.getAssignmentRevision(),
-    execution.getTargetAgentId(),execution.getPermittedOperation(),"PROVIDER_START",execution.getExecutionId(),execution.getRunId(),scope.runtimeInstanceId());
-  if(admitted==null||!admitted.paidExecutionAuthorized()||!same(admitted.costAuthorizationRef(),"mmd-ci-v1:"+consent.getConsentId()))throw fail(Reason.CONFLICT);
-  var d=declaration(new Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn()),scope.targetAgentId());
-  ProviderExecution expected=new ProviderExecution(d.providerLane(),consent.getConsentId(),d.bindingId(),Long.toString(d.bindingEpoch()),d.modelId(),16,1,1);
-  if(!same(scope.runtimeInstanceId(),d.runtimeInstanceId())||!expected.equals(c.providerExecution()))throw fail(Reason.CONFLICT);
-  late.verify();long now=System.currentTimeMillis();consent.setConsumedLeaseId(c.leaseId()).setConsumedAt(now).setUpdateTime(now);
-  if(!consents.consume(consent,consent.getVersion())||!executions.markControlledProviderStartedV3(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),c.taskId(),c.runId(),c.executionId(),consent.getConsentId(),bridge.getOperationGrantId(),c.leaseVersion(),now))throw fail(Reason.CONFLICT);
-  return new StartReceipt(c.taskId(),c.runId(),execution.getConversationId(),c.executionId(),c.commandId(),c.messageId(),c.operation(),c.inputSnapshotDigest(),expected,c.leaseVersion());
- }
  private static void requireInitialBridge(PersonalWorkspaceExecutionEntity execution,ControlledImageBridgeOperationEntity bridge,AgentTaskProviderCostConsentEntity consent){
   if(bridge==null||consent==null||!Objects.equals(3,bridge.getExecutionProtocolVersion())
     ||bridge.getOperationGrantId()==null||!bridge.getOperationGrantId().matches("opgrant_[0-9a-f]{32}")

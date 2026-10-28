@@ -124,6 +124,20 @@ class AgentTaskExecutionGrantServiceImplTest {
                 grant.getGrantVersion(),grant.getAssignmentRevision(),"agent-1","EXECUTE_SKILL",false));
     }
 
+    @Test void unknownToolPolicyDoesNotBecomeNativeExecutionAuthority() {
+        when(links.list("0","client","owner","task-1",null,null,33)).thenReturn(List.of());
+        var grant=service.assignForDeliberation(scope(),"task-1","unknown-tools","agent-1",0,1);
+        var row=grants.byAction.values().iterator().next();
+        for(String policy:List.of("ALL_TOOLS","NATIVE_LOCAL_FILES_V1","NO_TOOLS_V1")) {
+            row.setPermittedToolPolicyRef(policy);
+            assertThrows(AgentTaskExecutionGrantException.class,()->service.admit(scope(),"task-1",grant.getGrantId(),
+                    grant.getGrantVersion(),grant.getAssignmentRevision(),"agent-1","EXECUTE_SKILL",false));
+        }
+        row.setPermittedToolPolicyRef("SKILLS_V1");
+        assertEquals("EXECUTE_SKILL",service.admit(scope(),"task-1",grant.getGrantId(),grant.getGrantVersion(),
+                grant.getAssignmentRevision(),"agent-1","EXECUTE_SKILL",false).operation());
+    }
+
     @Test
     void pointFreezesAllMixedMediaAndReplayDoesNotReadChangedCatalogue() {
         List<PersonalWorkspaceTaskFileLinkEntity> materials=new java.util.ArrayList<>();

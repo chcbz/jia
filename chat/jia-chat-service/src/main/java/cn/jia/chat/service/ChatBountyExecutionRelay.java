@@ -11,10 +11,8 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-/** Opt-in durable consumer; a crash after execution insert resumes the same intent ID. */
+/** Retired legacy relay; not registered as a Spring component. */
 @Slf4j
-@Component
-@ConditionalOnProperty(prefix="chat.bounty-execution",name="enabled",havingValue="true")
 public class ChatBountyExecutionRelay implements SmartLifecycle, AutoCloseable {
     private final ChatBountyExecutionCoordinator coordinator;
     private final AtomicBoolean running=new AtomicBoolean();

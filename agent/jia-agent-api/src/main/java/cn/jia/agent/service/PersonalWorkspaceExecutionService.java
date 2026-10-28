@@ -34,7 +34,6 @@ public interface PersonalWorkspaceExecutionService {
         }
     }
     /** Native runtime inbox; intentionally separate from legacy unfenced commands. */
-    List<ConversationRuntimeCommand> runtimeConversationCommands(RuntimeScope scope, int limit);
     List<? extends ConversationCommandView> runtimeConversationCommandViews(RuntimeScope scope,int limit);
     sealed interface ConversationCommandView permits ConversationRuntimeCommand,ControlledConversationRuntimeCommand,ControlledConversationRuntimeCommandV3,SkillExecutionService.Command { }
     record ConversationRuntimeCommand(int schemaVersion, String taskId, String runId,
@@ -65,18 +64,6 @@ public interface PersonalWorkspaceExecutionService {
     ConversationLease claimConversationStart(RuntimeScope scope, String taskId, String runId,
             String commandId, String messageId);
     ConversationLease renewConversationLease(RuntimeScope scope, String taskId, String runId, ConversationFence fence);
-    /** Irreversible one-shot Provider admission; an uncertain result must be reconciled, not re-generated. */
-    void beginConversationProviderStart(RuntimeScope scope, String taskId, String runId, ConversationFence fence);
-    ControlledProviderStartReceipt beginControlledConversationProviderStart(RuntimeScope scope,
-            String taskId,String runId,ControlledProviderStart command);
-    List<ControlledConversationRuntimeCommandV3> runtimeControlledImageV3Commands(RuntimeScope scope,int limit);
-    ControlledProviderStartReceiptV3 beginControlledConversationProviderStartV3(RuntimeScope scope,
-            String taskId,String runId,ControlledProviderStartV3 command);
-    /** Server-verified source manifest under live task/grant and exact lease. No legacy /inputs fallback. */
-    ConversationInputSnapshot conversationInputs(RuntimeScope scope, String taskId, String runId, ConversationFence fence);
-    /** Runtime byte read; exact input ref must belong to this fenced execution and grant. */
-    RuntimeContent conversationInputContent(RuntimeScope scope, String taskId, String runId,
-            ConversationFence fence, String inputRef);
     record ConversationInputSnapshot(String executionId, long leaseVersion, boolean noReferencedMaterials,
             List<RuntimeInput> inputs) {
         public ConversationInputSnapshot { inputs = List.copyOf(inputs); }
@@ -91,18 +78,8 @@ public interface PersonalWorkspaceExecutionService {
     record RuntimeSource(String kind,String fileId,String version,String purpose,String conversationId,
             String conversationGeneration,String assetId,String assetRevision,String producerRequestId,
             String producerStepId,String producerExecutionId,String producerRunId,String producerOutputId) { }
-    ConversationInputSnapshotV3 conversationInputsV3(RuntimeScope scope,String taskId,String runId,ConversationFence fence);
     StagedOutput stageConversationOutput(RuntimeScope scope, String taskId, String runId, ConversationFence fence,
             String outputId, String filename, String contentMimeType, byte[] content);
-    CommitView commitConversationOutput(RuntimeScope scope, String taskId, String runId, ConversationFence fence,
-            String manifestId, List<OutputDeclaration> outputs);
-    /** Result-only reconciliation of already staged bytes. Never issues a lease or starts a Provider. */
-    CommitView recoverStagedConversationOutput(RuntimeScope scope, String taskId, String runId,
-            String manifestId, ConversationResultRecovery command);
-    /** Recover locally retained bytes under the original consumed START; never renews a lease. */
-    CommitView recoverConversationOutput(RuntimeScope scope, String taskId, String runId,
-            String manifestId, ConversationResultRecovery command, String filename,
-            String contentMimeType, byte[] content);
     record ConversationResultRecovery(String executionId, String commandId, String messageId,
             String inputSnapshotDigest, List<OutputDeclaration> outputs) { }
     ExecutionView failConversation(RuntimeScope scope, String taskId, String runId, ConversationFence fence,
@@ -156,6 +133,8 @@ public interface PersonalWorkspaceExecutionService {
      * authenticated runtime and do not claim that a Provider completed any operation.
      */
     ExecutionCapabilities capabilities();
+    /** Server-side native admission capabilities; never Provider authority. */
+    default ExecutionCapabilities nativeLocalFileCapabilities() { return new ExecutionCapabilities(List.of(),List.of(),false); }
     /** Bounded, newest-first owner history. The summary is an explicit browser-safe allow-list. */
     ExecutionHistoryView list(OwnerScope scope, int limit, Long beforeCreatedAt,
             String beforeExecutionId);
@@ -223,7 +202,18 @@ public interface PersonalWorkspaceExecutionService {
     record ExecutionView(String executionId, String taskId, String runId, String conversationId,
             String targetAgentId, String state, String failureCode, String failureMessage, long grantRevision,
             String outputContentMimeType, List<RuntimeInput> inputs, RuntimeCommand runtimeCommand,
-            String executionMode, String businessTaskId, String workItemId, String workItemState) {
+            String executionMode, String businessTaskId, String workItemId, String workItemState,
+            @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+            String recoveryStatus) {
+        /** Existing adapters retain their original constructor and wire semantics. */
+        public ExecutionView(String executionId, String taskId, String runId, String conversationId,
+                String targetAgentId, String state, String failureCode, String failureMessage, long grantRevision,
+                String outputContentMimeType, List<RuntimeInput> inputs, RuntimeCommand runtimeCommand,
+                String executionMode, String businessTaskId, String workItemId, String workItemState) {
+            this(executionId, taskId, runId, conversationId, targetAgentId, state, failureCode,
+                    failureMessage, grantRevision, outputContentMimeType, inputs, runtimeCommand,
+                    executionMode, businessTaskId, workItemId, workItemState, null);
+        }
         /** Source-compatible private-mode constructor for existing adapters and clients. */
         public ExecutionView(String executionId, String taskId, String runId, String conversationId,
                 String targetAgentId, String state, String failureCode, String failureMessage, long grantRevision,

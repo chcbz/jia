@@ -79,7 +79,8 @@ public final class ChatActionOutcomeContract {
 
     private static Facts factsNode(JsonNode raw) {
         exact(raw, "ACTION_FACTS_INVALID", "schemaVersion", "availableActions", "availableSources", "inspectedSourceRefIds");
-        if (integer(raw.get("schemaVersion"), "ACTION_FACTS_INVALID") != VERSION) throw invalid("ACTION_FACTS_INVALID");
+        int factsVersion=integer(raw.get("schemaVersion"), "ACTION_FACTS_INVALID");
+        if (factsVersion != VERSION && factsVersion != 6) throw invalid("ACTION_FACTS_INVALID");
         var rawSources = array(raw.get("availableSources"), "ACTION_SOURCES_INVALID");
         if (rawSources.size() > 32) throw invalid("ACTION_SOURCES_INVALID");
         List<Source> sources = new ArrayList<>(); Set<String> ids = new HashSet<>();
@@ -104,24 +105,29 @@ public final class ChatActionOutcomeContract {
             String kind = string(action.get("kind"), true, error);
             String operation = string(action.get("operation"), true, error);
             var rawSkill = action.get("skill");
-            exact(rawSkill, error, "skillKey", "skillVersion", "packageSha256", "manifestSha256");
-            String key = string(rawSkill.get("skillKey"), true, error);
-            String version = string(rawSkill.get("skillVersion"), true, error);
-            String packageHash = hash(rawSkill.get("packageSha256"), error);
-            String manifestHash = hash(rawSkill.get("manifestSha256"), error);
-            if (!key.matches("[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
-                    || !version.matches("[A-Za-z0-9][A-Za-z0-9._+-]{0,63}")) throw invalid(error);
+            Skill skill=null;
+            if("EXECUTE_NATIVE".equals(operation)&&factsVersion!=6)throw invalid(error);
+            if(rawSkill!=null && rawSkill.isNull() && "EXECUTE_NATIVE".equals(operation)) {
+                // Empty native execution is a distinct capability, not an empty legacy skill.
+            } else {
+                exact(rawSkill, error, "skillKey", "skillVersion", "packageSha256", "manifestSha256");
+                String key=string(rawSkill.get("skillKey"),true,error), version=string(rawSkill.get("skillVersion"),true,error);
+                String packageHash=hash(rawSkill.get("packageSha256"),error);
+                String manifestHash="EXECUTE_NATIVE".equals(operation)&&rawSkill.get("manifestSha256").isNull()?null:hash(rawSkill.get("manifestSha256"),error);
+                if(!key.matches("[A-Za-z0-9][A-Za-z0-9._-]{0,63}")||!version.matches("[A-Za-z0-9][A-Za-z0-9._+-]{0,63}"))throw invalid(error);
+                skill=new Skill(key,version,packageHash,manifestHash);
+            }
             var schema = action.get("parametersSchema");
             validateSchema(schema);
             List<String> mimeTypes = mimeTypes(action.get("inputMimeTypes"), error);
             List<String> outputs = mimeTypes(action.get("outputMimeTypes"), error);
             int min = integer(action.get("minSources"), error), max = integer(action.get("maxSources"), error);
-            if (!actionIds.add(id) || !"EXECUTE".equals(kind) || !"EXECUTE_SKILL".equals(operation)
+            if (!actionIds.add(id) || !"EXECUTE".equals(kind) || !("EXECUTE_SKILL".equals(operation)||"EXECUTE_NATIVE".equals(operation))
                     || min < 0 || max < min || max > 32 || (max > 0 && mimeTypes.isEmpty())) throw invalid(error);
-            capabilities.add(new Capability(id, kind, operation, new Skill(key, version, packageHash, manifestHash),
+            capabilities.add(new Capability(id, kind, operation, skill,
                     object(schema, error), mimeTypes, min, max, outputs));
         }
-        return new Facts(VERSION, capabilities, sources, inspected);
+        return new Facts(factsVersion, capabilities, sources, inspected);
     }
 
     private static Outcome outcomeNode(JsonNode value, Facts suppliedFacts, ChatDeliveryRevisionContract.Basis basis) {

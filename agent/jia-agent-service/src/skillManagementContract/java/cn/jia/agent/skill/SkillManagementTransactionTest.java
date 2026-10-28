@@ -248,6 +248,43 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
             .setDeploymentRestriction("NONE").setReviewStatus("APPROVED").setTenantId("0").setClientId(ACTOR.clientId()).setCreateTime(1L));
         assertEquals(1,market.publishProductVersion("0",ACTOR.clientId(),"sp_pdf","spv_pdf_"+sequence,sequence,System.currentTimeMillis()));
     }
+    private void publishInstruction() throws Exception {
+        var out=new java.io.ByteArrayOutputStream();
+        try(var zip=new java.util.zip.ZipOutputStream(out)) {
+            zip.putNextEntry(new java.util.zip.ZipEntry("SKILL.md"));
+            zip.write("---\nname: pdf-export\ndescription: export pdf\nmetadata:\n  version: \"1.0.0\"\n---\nDescribe a PDF.\n".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            zip.closeEntry();
+        }
+        byte[] bytes=out.toByteArray();new SkillPackageStore(scratch.resolve(database+"-packages")).publish(bytes);
+        market.insertProduct(new SkillProductEntity().setProductId("sp_pdf").setSellerType("SYSTEM").setSellerId("SKILL_STORE").setName("PDF").setDescription("instruction fixture")
+                .setStatus("DRAFT").setVersion(1L).setTenantId("0").setClientId(ACTOR.clientId()).setCreateTime(1L).setUpdateTime(1L));
+        market.insertProductVersion(new SkillProductVersionEntity().setProductVersionId("spv_pdf_1").setProductId("sp_pdf").setVersionSequence(1L)
+                .setSkillKey("pdf-export").setSkillVersion("1.0.0").setPriceMicro(5_000_000L).setPackageSha256(SkillPackageStore.sha256(bytes)).setPackageSize((long)bytes.length)
+                .setApprovedPermissionsManifest("[]").setApprovedPermissionsSha256(SkillPackageStore.sha256("[]".getBytes(java.nio.charset.StandardCharsets.UTF_8)))
+                .setDeploymentRestriction("NONE").setReviewStatus("APPROVED").setTenantId("0").setClientId(ACTOR.clientId()).setCreateTime(1L));
+        assertEquals(1,market.publishProductVersion("0",ACTOR.clientId(),"sp_pdf","spv_pdf_1",1,System.currentTimeMillis()));
+    }
+    @Test void instructionNativeBindingUsesRealInstallationAndDisablingClosesAdmission() throws Exception {
+        publishInstruction();var first=packageChange("INSTALL",null,"0","spv_pdf_1");finishInstall(first);first=current(first);
+        var target=object(first.get("target"));assertEquals("INSTRUCTION",target.get("kind"));assertNull(target.get("manifestSha256"));
+        String id=text(target,"skillInstallationId");var rows=service.descriptors(scope());assertEquals(1,rows.size());
+        var descriptor=rows.getFirst();assertTrue(descriptor.verifiedNative());assertNull(descriptor.manifestJson());assertNull(descriptor.manifestSha256());
+        var binding=service.admitNative(scope(),"pdf-export",id,()->service.nativeTaskBinding("0",ACTOR.clientId(),"exec-native","grant",1,AGENT,id));
+        assertNull(binding.get("manifestSha256"));assertNotNull(binding.get("approvedPermissionsSha256"));
+        assertThrows(SkillMarketplaceException.class,()->SkillManagementCodec.validate("TaskSkillBinding",binding));
+        assertDoesNotThrow(()->SkillManagementCodec.validateNativeTaskBinding(binding));
+        policyChange("DISABLE",first);
+        assertThrows(SkillMarketplaceException.class,()->service.admitNative(scope(),"pdf-export",id,()->"never"));
+    }
+    @Test void nativeAdmissionRejectsSelfConsistentPermissionsNotMatchingEntitlement() throws Exception {
+        publishInstruction();var first=packageChange("INSTALL",null,"0","spv_pdf_1");finishInstall(first);first=current(first);
+        String id=text(object(first.get("target")),"skillInstallationId");
+        var unrelated=List.of("READ_AUTHORIZED_INPUT");
+        jdbc.update("UPDATE economy_skill_installation_authorization SET permissions_json=?,permissions_sha256=? WHERE installation_id=?",
+                json(unrelated),hash("cyf.skill.permissions.v1",unrelated),id);
+        assertTrue(service.descriptors(scope()).isEmpty());
+        assertThrows(SkillMarketplaceException.class,()->service.admitNative(scope(),"pdf-export",id,()->"never"));
+    }
     protected Map<String,Object> packageChange(String action,String source,String revision,String target) {
         var request=map("action",action,"agentId",AGENT,"skillKey","pdf-export","sourceSkillInstallationId",source,"targetProductVersionId",target,
             "expectedAgentVersion",Long.toString(versions.readOwned(ACTOR,AGENT)),"expectedSkillRevision",revision,"approvedPermissions",List.of());

@@ -175,7 +175,7 @@ public final class PersonalWorkspaceExecutionSchemaInitializer implements Initia
         Integer invalid=jdbc.queryForObject("""
                 SELECT COUNT(*) FROM agent_personal_workspace_execution
                  WHERE execution_state NOT IN ('QUEUED','INPUTS_REVOKED','OUTPUT_COMMITTED','RESULT_COMMITTED','FAILED')
-                    OR (execution_state='RESULT_COMMITTED' AND (execution_protocol_version IS NULL OR execution_protocol_version<>4))
+                    OR (execution_state='RESULT_COMMITTED' AND (execution_protocol_version IS NULL OR execution_protocol_version NOT IN (4,5)))
                     OR (execution_state='FAILED' AND (failure_code IS NULL
                         OR failure_code <> 'AGENT_DELIVERY_FAILED' OR failure_message IS NULL OR failed_at IS NULL))
                     OR (execution_state<>'FAILED' AND (failure_code IS NOT NULL
@@ -219,7 +219,7 @@ public final class PersonalWorkspaceExecutionSchemaInitializer implements Initia
                 SELECT COUNT(*) FROM agent_personal_workspace_execution
                  WHERE execution_mode NOT IN ('PRIVATE','TASK','CONVERSATION')
                     OR execution_state NOT IN ('QUEUED','INPUTS_REVOKED','OUTPUT_STAGED','OUTPUT_COMMITTED','RESULT_COMMITTED','FAILED')
-                    OR (execution_state='RESULT_COMMITTED' AND (execution_protocol_version IS NULL OR execution_protocol_version<>4))
+                    OR (execution_state='RESULT_COMMITTED' AND (execution_protocol_version IS NULL OR execution_protocol_version NOT IN (4,5)))
                     OR (execution_mode='PRIVATE' AND (work_item_id IS NOT NULL OR lease_token IS NOT NULL
                         OR lease_work_item_version IS NOT NULL OR lease_expires_at IS NOT NULL))
                     OR (execution_mode='TASK' AND (work_item_id IS NULL OR lease_token IS NULL
@@ -458,7 +458,7 @@ public final class PersonalWorkspaceExecutionSchemaInitializer implements Initia
                       'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
                       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
                       'application/vnd.openxmlformats-officedocument.presentationml.presentation','text/plain'))
-                   AND (execution_protocol_version IS NULL OR execution_protocol_version<>4)
+                   AND (execution_protocol_version IS NULL OR execution_protocol_version NOT IN (4,5))
                 """, Integer.class);
         if (invalid == null || invalid != 0) throw new IllegalStateException("Execution output MIME schema is invalid");
     }

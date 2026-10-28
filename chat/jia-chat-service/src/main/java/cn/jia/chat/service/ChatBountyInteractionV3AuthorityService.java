@@ -105,42 +105,6 @@ public class ChatBountyInteractionV3AuthorityService {
                         body.expectedOperationGrantVersion(),revokeKey,digest));
     }
 
-    public ChatBountyInteractionV3Wire.AcceptedData admit(String tenant,ServerResolvedSender sender,
-            String conversationId,String interactionKey,ChatBountyInteractionV3Wire.IntentValue intent) {
-        requireSender(tenant,sender,conversationId,interactionKey);
-        if (intent.authority()==null) throw invalid();
-        String requestId=stable("mmd-interaction-request",tenant,sender.clientId(),sender.jiacn(),interactionKey);
-        String digest=ChatBountyInteractionV3Wire.sha(ChatBountyInteractionV3Wire.canonicalAdmit(intent));
-        ChatRequestEntity prior=deliberation.findRequest(tenant,sender.jiacn(),sender.clientId(),requestId);
-        if(prior!=null) return replay(tenant,sender,conversationId,interactionKey,intent,digest,prior);
-
-        var prepared=previews.prepare(tenant,sender,conversationId,interactionKey,intent,false);
-        if(!requestId.equals(prepared.command().requestId())) throw conflict();
-        String executionId="pwe_"+prepared.command().executionIntentId();
-        String runId="pwe_run_"+ChatBountyInteractionV3Wire.shaText("run\n"+prepared.command().executionIntentId());
-        String runtimeDigest=runtimeDigest(prepared.command(),executionId,runId);
-        var a=intent.authority();
-        AtomicReference<ChatBountyInteractionV3Wire.AcceptedData> accepted=new AtomicReference<>();
-        var reservation=authorities.reserve(authorityScope(tenant,sender),
-                new ControlledImageFollowupAuthorityService.ReserveCommand(prepared.command(),
-                        new ControlledImageFollowupAuthorityService.Authority(a.consentId(),
-                                a.expectedConsentVersion(),a.operationGrantId(),a.expectedOperationGrantVersion()),
-                        digest,runtimeDigest,executionId,runId,"image/png"),()->{
-                    var locked=previews.prepare(tenant,sender,conversationId,interactionKey,intent,true);
-                    requireSamePrepared(prepared,locked);
-                    accepted.set(persistChat(tenant,sender,conversationId,intent,digest,locked,
-                            executionId,false));
-                });
-        var result=accepted.get();
-        if(result==null) {
-            ChatRequestEntity raced=deliberation.findRequest(tenant,sender.jiacn(),sender.clientId(),requestId);
-            if(raced==null) throw unavailable();
-            result=replay(tenant,sender,conversationId,interactionKey,intent,digest,raced);
-        }
-        if(!reservation.executionId().equals(executionId)||!reservation.runId().equals(runId))throw conflict();
-        return result;
-    }
-
     @Transactional(readOnly=true, rollbackFor=Exception.class)
     public ChatBountyInteractionV3Wire.AcceptedData getInteraction(String tenant,
             ServerResolvedSender sender,String conversationId,String interactionKey) {
@@ -152,80 +116,6 @@ public class ChatBountyInteractionV3AuthorityService {
         if(step==null)throw unavailable();
         var authority=authorities.getByInteractionKey(authorityScope(tenant,sender),step.taskId(),conversationId,interactionKey);
         return projection(prior,step,authority,false);
-    }
-
-    private ChatBountyInteractionV3Wire.AcceptedData persistChat(String tenant,ServerResolvedSender sender,
-            String conversationId,ChatBountyInteractionV3Wire.IntentValue intent,String digest,
-            ChatBountyInteractionV3PreviewService.Prepared prepared,String executionId,boolean replay) {
-        String owner=sender.jiacn(),client=sender.clientId(),requestId=prepared.command().requestId();
-        var binding=bindings.lock(new ChatBountyBindingStore.Scope(tenant,owner,client),intent.taskId());
-        if(binding==null||binding.conversationId()==null||!conversationId.equals(Long.toString(binding.conversationId()))
-                ||binding.assignmentRevision()!=intent.assignmentRevision())throw conflict();
-        ChatConversationEntity conversation=conversations.lockScopedById(owner,client,conversationId);
-        requireConversation(conversation,tenant,sender,conversationId,intent);
-        if(!List.of(intent.targetAgentId()).equals(scopeService.parsePersistedTargetAgentIds(
-                conversation.getTargetAgentIds())))throw conflict();
-        ChatRequestEntity prior=deliberation.findRequest(tenant,owner,client,requestId);
-        if(prior!=null)return replay(tenant,sender,conversationId,
-                prepared.command().interactionIdempotencyKey(),intent,digest,prior);
-        long now=System.currentTimeMillis();
-        ChatMessageEntity message=new ChatMessageEntity().setConversationId(conversationId)
-                .setMessageType("USER").setContent(intent.content())
-                .setMetadata(JsonUtil.toJson(Map.of("schemaVersion",3,"requestId",requestId,
-                        "stepId",prepared.command().stepId(),"executionIntentId",prepared.command().executionIntentId(),
-                        "taskId",intent.taskId(),"targetAgentId",intent.targetAgentId(),
-                        "permittedOperation",intent.operation(),"consentId",intent.authority().consentId(),
-                        "operationGrantId",intent.authority().operationGrantId(),"interactionMode","EXECUTE")))
-                .setJiacn(owner).setSyncStatus("PENDING").setConversationType("juyiting")
-                .setSenderType(sender.type()).setSenderName(sender.displayName());
-        message.setTenantId(tenant);message.setClientId(client);message.init4Creation();
-        if(messages.insertScoped(tenant,client,message)!=1||message.getId()==null)throw unavailable();
-        ChatRequestEntity request=new ChatRequestEntity().setTenantId(tenant).setOwnerJiacn(owner)
-                .setClientId(client).setRequestId(requestId).setRequestRevision(1L).setRequestDigest(digest)
-                .setConversationId(conversationId).setConversationGeneration(intent.conversationGeneration())
-                .setUserMessageId(message.getId()).setAggregateState("PLANNING").setStateVersion(0L)
-                .setCreatedAt(now).setUpdatedAt(now);
-        if(deliberation.insertRequest(request)!=1||request.getId()==null)throw unavailable();
-        var step=new ChatInteractionStepStore.Step(prepared.command().stepId(),tenant,owner,client,
-                requestId,1L,1L,conversationId,intent.conversationGeneration(),intent.taskId(),
-                intent.assignmentRevision(),prepared.command().baseline().grantId(),
-                prepared.command().baseline().grantVersion(),intent.targetAgentId(),"EXECUTE","RUNNING",0L,
-                prepared.sourceSnapshotSha256(),now,now);
-        if(steps.insertStep(step)!=1||steps.insertLink(new ChatInteractionStepStore.ExecutionLink(
-                prepared.command().executionIntentId(),tenant,owner,client,step.stepId(),executionId,
-                "RUNNING",0L,now,now))!=1)throw unavailable();
-        ChatConversationEventEntity event=new ChatConversationEventEntity()
-                .setEventId(stable("mmd-interaction-event",requestId)).setTenantId(tenant)
-                .setOwnerJiacn(owner).setClientId(client).setConversationId(conversationId)
-                .setConversationGeneration(intent.conversationGeneration()).setRequestId(requestId)
-                .setEventType("interaction.state_changed").setEventVersion(0L).setOccurredAt(now)
-                .setPayloadJson(JsonUtil.toJson(Map.of("requestId",requestId,"state","PLANNING",
-                        "userMessageId",Long.toString(message.getId()),"stepId",step.stepId(),
-                        "executionId",executionId)));
-        if(deliberation.insertEvent(event)!=1||event.getEventSequence()==null
-                ||deliberation.assignEventVersion(event.getEventSequence())!=1)throw unavailable();
-        publishAfterCommit(conversationId,intent.conversationGeneration(),owner,client,tenant,event,
-                requestId,message.getId(),step.stepId());
-        return new ChatBountyInteractionV3Wire.AcceptedData(3,requestId,Long.toString(message.getId()),
-                step.stepId(),prepared.command().executionIntentId(),intent.authority().consentId(),
-                intent.authority().operationGrantId(),"PLANNING","0",Long.toString(event.getEventSequence()),
-                "/chat/requests/"+requestId,replay);
-    }
-
-    private ChatBountyInteractionV3Wire.AcceptedData replay(String tenant,ServerResolvedSender sender,
-            String conversationId,String interactionKey,ChatBountyInteractionV3Wire.IntentValue intent,
-            String digest,ChatRequestEntity prior) {
-        String requestId=stable("mmd-interaction-request",tenant,sender.clientId(),sender.jiacn(),interactionKey);
-        if(!requestId.equals(prior.getRequestId())||!digest.equals(prior.getRequestDigest())
-                ||!conversationId.equals(prior.getConversationId())
-                ||!Objects.equals(intent.conversationGeneration(),prior.getConversationGeneration()))throw conflict();
-        var step=steps.findStep(tenant,sender.jiacn(),sender.clientId(),requestId,1,1);
-        if(step==null||!intent.taskId().equals(step.taskId())||!intent.targetAgentId().equals(step.targetAgentId())
-                ||!"EXECUTE".equals(step.kind()))throw unavailable();
-        var authority=authorities.getByInteractionKey(authorityScope(tenant,sender),intent.taskId(),conversationId,interactionKey);
-        if(intent.authority()==null||!intent.authority().consentId().equals(authority.consentId())
-                ||!intent.authority().operationGrantId().equals(authority.operationGrantId()))throw conflict();
-        return projection(prior,step,authority,true);
     }
 
     private ChatBountyInteractionV3Wire.AcceptedData projection(ChatRequestEntity request,

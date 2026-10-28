@@ -39,7 +39,7 @@ class PersonalWorkspaceNativeTaskPublicationFenceTest {
         order.verify(f.events).append(any());order.verify(f.formal).submit(eq("0"),eq("client"),eq("owner"),eq("task"),eq(f.base.scope.agentId()),any());
         order.verify(f.base.manager).commit(f.base.status);
         assertEquals(2,f.persisted.size());
-        verify(f.base.authority,never()).consumeForStart(any(),any(),any());verifyNoInteractions(f.base.sources);
+        verifyNoInteractions(f.base.sources);
     }
     @Test void lostAckReplayRefencesWithoutRequiringClearedLeaseOrStorageOrRepublishing() throws Exception {
         var f=new TaskFixture();var receipt=f.commit();

@@ -97,7 +97,7 @@ public class ChatActionDispatchService {
             if (reviewContexts != null) reviewContexts.requireActionAllowed(action);
             var capability = action.validated().dispatchFacts().availableActions().stream().filter(c -> c.actionId().equals(
                     action.validated().interactionOutcome().action().actionId())).findFirst().orElseThrow();
-            if(!"EXECUTE".equals(capability.kind())||!"EXECUTE_SKILL".equals(capability.operation()))throw new Rejected();
+            if(!"EXECUTE".equals(capability.kind())||!java.util.Set.of("EXECUTE_SKILL","EXECUTE_NATIVE").contains(capability.operation()))throw new Rejected();
             executor.admit(action);
             if (!outbox.sent(claim, System.currentTimeMillis())) throw conflict("Action outbox lease changed");
             return null;

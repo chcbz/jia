@@ -238,7 +238,7 @@ class ControlledImageFollowupV3SchemaInitializerTest {
             switch(drift) {
                 case "weak" -> protocol.put("check_clause","1=1");
                 case "missingDigestFence" -> protocol.put("check_clause",exact.replace("(runtime_input_snapshot_digest is not null)","(1=1)"));
-                case "unknownProtocol" -> protocol.put("check_clause",exact.replace("(execution_protocol_version = 4)","(execution_protocol_version = 5)"));
+                case "unknownProtocol" -> protocol.put("check_clause",exact.replace("(execution_protocol_version in (4,5))","(execution_protocol_version in (4,5,6))"));
                 case "unenforced" -> protocol.put("enforced","NO");
                 case "extraCheck" -> checks.add(check("chk_pwex_execution_protocol_shadow","YES","1=1"));
                 case "partialColumn" -> columns.removeLast();

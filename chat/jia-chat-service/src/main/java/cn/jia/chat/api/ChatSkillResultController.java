@@ -42,7 +42,7 @@ public final class ChatSkillResultController {
             WHERE BINARY l.tenant_id=BINARY ? AND BINARY l.client_id=BINARY ? AND BINARY l.owner_jiacn=BINARY ? AND BINARY l.execution_id=BINARY ?
               AND BINARY s.conversation_id=BINARY ? AND s.conversation_generation=? AND BINARY r.conversation_id=BINARY s.conversation_id
               AND r.conversation_generation=s.conversation_generation AND BINARY e.conversation_id=BINARY s.conversation_id
-              AND BINARY e.task_id=BINARY s.task_id AND BINARY s.task_id=BINARY ? AND s.kind='EXECUTE' AND e.execution_protocol_version=4
+              AND BINARY e.task_id=BINARY s.task_id AND BINARY s.task_id=BINARY ? AND s.kind='EXECUTE' AND e.execution_protocol_version IN (4,5)
             """,tenant,sender.clientId(),sender.jiacn(),executionId,conversationId,conversation.getLifecycleGeneration(),conversation.getTaskId());
         if(rows.size()!=1)throw missing();var chain=rows.getFirst();var view=skills.result(owner,executionId);if(view==null||!executionId.equals(view.executionId()))throw missing();
         boolean complete="COMPLETE".equals(view.phase());

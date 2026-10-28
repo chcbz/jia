@@ -987,10 +987,12 @@ public final class SkillManagementService {
             var target=ref(auth);var approved=market.selectApprovedProductVersion(scope.tenantId(),scope.clientId(),text(target,"productVersionId"));
             if(approved==null||!HexFormat.of().formatHex(approved.getPackageSha256()).equals(target.get("packageSha256")))continue;
             if(i.getOrderId()!=null) {var o=app.order(scope.tenantId(),scope.clientId(),i.getOrderId());if(o==null||!"ACTIVE".equals(o.getStatus()))continue;}
-            var pkg=packages.getObject().prepare(approved);var manifest=packages.getObject().manifest(pkg);if(manifest==null)continue;
-            if(!manifest.manifestSha256().equals(target.get("manifestSha256")))continue;
+            var pkg=packages.getObject().prepare(approved);var manifest=packages.getObject().manifest(pkg);
+            if(manifest==null) {
+                if(!"INSTRUCTION".equals(target.get("kind"))||target.get("manifestSha256")!=null)continue;
+            } else if(!"EXECUTABLE".equals(target.get("kind"))||!manifest.manifestSha256().equals(target.get("manifestSha256")))continue;
             rows.add(new InstalledSkillDescriptorLookup.Descriptor(context.skillKey(),text(target,"skillVersion"),auth.getInstallationId(),
-                    text(target,"packageSha256"),manifest.manifestSha256(),manifest.document().toString(),auth.getRuntimeInstallationId(),auth.getRuntimeHostId(),null));
+                    text(target,"packageSha256"),manifest==null?null:manifest.manifestSha256(),manifest==null?null:manifest.document().toString(),auth.getRuntimeInstallationId(),auth.getRuntimeHostId(),null));
         }
         return rows;
     }
@@ -1007,6 +1009,9 @@ public final class SkillManagementService {
         var version=market.selectApprovedProductVersion(scope.tenantId(),scope.clientId(),e.getProductVersionId());
         if(version==null||!Objects.equals(version.getApprovedPermissionsManifest(),e.getApprovedPermissionsManifest())
                 ||!Arrays.equals(version.getApprovedPermissionsSha256(),e.getApprovedPermissionsSha256())
+                // The binding hash must describe this entitlement's approved set, not merely
+                // a self-consistent but unrelated authorization row.
+                ||!decodePermissions(auth.getPermissionsJson()).equals(SkillMarketplaceHttp.permissions(e.getApprovedPermissionsManifest()))
                 ||!permissionsHash(decodePermissions(auth.getPermissionsJson())).equals(auth.getPermissionsSha256()))return false;
         var binding=app.deliveryBinding(scope.tenantId(),scope.clientId(),auth.getInstallationId());
         if(binding==null||!scope.agentId().equals(binding.getCanonicalAgentId())||!auth.getRuntimeInstallationId().equals(binding.getRuntimeInstallationId())
@@ -1050,7 +1055,36 @@ public final class SkillManagementService {
         };
         return positionChange(change)?ownedChange(change,admission):owned(a,scope.agentId(),null,true,admission);
     }
+    /** Native instruction admission is independent of legacy runner readiness, not of ownership or policy. */
+    public <T> T admitNative(SkillCapabilityLookup.Scope scope,String skill,String installationId,Supplier<T> taskAdmission) {
+        var auth=db.findAuthorization(scope.tenantId(),scope.clientId(),installationId);
+        require(auth!=null,409,"SKILL_STATE_CONFLICT");
+        if(!"INSTRUCTION".equals(ref(auth).get("kind")))return admit(scope,skill,installationId,taskAdmission);
+        var context=origin(auth);
+        require(context!=null&&scope.agentId().equals(context.agentId())&&scope.ownerJiacn().equals(context.ownerJiacn())&&skill.equals(context.skillKey()),403,"AGENT_FORBIDDEN");
+        var actor=new HostingRentHttp.Actor(context.actorId(),scope.tenantId(),scope.clientId(),scope.ownerJiacn());
+        var change=db.findChange(scope.tenantId(),scope.clientId(),auth.getChangeId());
+        Supplier<T> admission=()->{
+            var state=state(actor,scope.agentId(),skill);
+            require(state!=null&&installationId.equals(state.getActiveInstallationId())&&Boolean.TRUE.equals(state.getDesiredEnabled())
+                    &&state.getPendingChangeId()==null
+                    &&validInstallation(scope,auth,app.installation(scope.tenantId(),scope.clientId(),installationId),db.readEntitlement(scope.tenantId(),scope.clientId(),auth.getEntitlementId())),409,"SKILL_STATE_CONFLICT");
+            require(currentPositionSource(scope,auth),403,"AGENT_FORBIDDEN");
+            var view=catalog(actor,scope.agentId());
+            require(online(actor,scope.agentId())&&view!=null&&view.state()==SkillCapabilityLookup.State.AVAILABLE,409,"SKILL_STATE_CONFLICT");
+            var facts=view.catalog().skills().stream().filter(f->installationId.equals(f.skillInstallationId())).toList();
+            require(facts.size()==1&&exactCatalog(actor,state,auth,view,facts.getFirst()),409,"SKILL_STATE_CONFLICT");
+            return taskAdmission.get();
+        };
+        return positionChange(change)?ownedChange(change,admission):owned(actor,scope.agentId(),null,true,admission);
+    }
+    public Map<String,Object> nativeTaskBinding(String tenant,String client,String executionId,String grantId,long grantVersion,String agent,String installationId) {
+        return taskBinding(tenant,client,executionId,grantId,grantVersion,agent,installationId,true);
+    }
     public Map<String,Object> taskBinding(String tenant,String client,String executionId,String grantId,long grantVersion,String agent,String installationId) {
+        return taskBinding(tenant,client,executionId,grantId,grantVersion,agent,installationId,false);
+    }
+    private Map<String,Object> taskBinding(String tenant,String client,String executionId,String grantId,long grantVersion,String agent,String installationId,boolean nativeV5) {
         // Internal adapter invoked only after exact installation ownership/admission was verified.
         var auth=db.findAuthorization(tenant,client,installationId);
         Map<String,Object> ref;String key,permissions;
@@ -1078,6 +1112,6 @@ public final class SkillManagementService {
         var result=map("executionId",executionId,"taskGrantId",grantId,"taskGrantVersion",Long.toString(grantVersion),"agentId",agent,"skillKey",key,
                 "skillInstallationId",installationId,"productVersionId",ref.get("productVersionId"),"skillVersion",ref.get("skillVersion"),
                 "packageSha256",ref.get("packageSha256"),"manifestSha256",ref.get("manifestSha256"),"approvedPermissionsSha256",permissions);
-        validate("TaskSkillBinding",result);return result;
+        if(nativeV5)SkillManagementCodec.validateNativeTaskBinding(result);else validate("TaskSkillBinding",result);return result;
     }
 }

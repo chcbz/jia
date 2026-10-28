@@ -48,7 +48,7 @@ public class SkillExecutionSchemaMySqlTest {
         new ControlledImageExecutionSchemaInitializer(jdbc).afterPropertiesSet();
         new ControlledImageFollowupV3SchemaInitializer(jdbc).afterPropertiesSet();
         apply("db/economy-v0-skill-application.sql");
-        apply("db/agent-skill-execution-v1.sql");apply("db/agent-personal-workspace-skill-v1.sql");
+        apply("db/agent-skill-execution-v1.sql");apply("db/agent-personal-workspace-skill-v1.sql");apply("db/agent-personal-workspace-native-v5.sql");
         new PersonalWorkspaceExecutionSchemaInitializer(jdbc).afterPropertiesSet();
         detector().afterPropertiesSet();
     }
@@ -74,7 +74,7 @@ public class SkillExecutionSchemaMySqlTest {
         assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM agent_skill_execution",Integer.class));
     }
     void row(String id,int protocol,String mime,String state) {
-        jdbc.update("INSERT INTO agent_personal_workspace_execution (execution_id,owner_jiacn,task_id,run_id,conversation_id,target_agent_id,instruction,output_content_mime_type,execution_state,grant_revision,idempotency_key,request_hash,created_at,tenant_id,client_id,execution_mode,task_grant_id,task_grant_version,assignment_revision,permitted_operation,execution_protocol_version,runtime_input_snapshot_digest) VALUES (?,?,?,?,?,?,?,?,?,1,?,?,1,'0','client','CONVERSATION','grant',1,7,?,?,?)",id,"owner","task",id+"-run","42","agent","test",mime,state,id,"a".repeat(64),protocol==4?"EXECUTE_SKILL":"DELIBERATE",protocol,protocol==4?"a".repeat(64):null);
+        jdbc.update("INSERT INTO agent_personal_workspace_execution (execution_id,owner_jiacn,task_id,run_id,conversation_id,target_agent_id,instruction,output_content_mime_type,execution_state,grant_revision,idempotency_key,request_hash,created_at,tenant_id,client_id,execution_mode,task_grant_id,task_grant_version,assignment_revision,permitted_operation,execution_protocol_version,runtime_input_snapshot_digest) VALUES (?,?,?,?,?,?,?,?,?,1,?,?,1,'0','client','CONVERSATION','grant',1,7,?,?,?)",id,"owner","task",id+"-run","42","agent","test",mime,state,id,"a".repeat(64),(protocol==4||protocol==5)?"EXECUTE_SKILL":"DELIBERATE",protocol,(protocol==4||protocol==5)?"a".repeat(64):null);
     }
     void attachment(String id) {jdbc.update("INSERT INTO agent_skill_execution (tenant_id,client_id,owner_jiacn,execution_id,skill_key,skill_version,package_sha256,manifest_sha256,snapshot_json,snapshot_sha256,phase,effects_json,created_at,updated_at) VALUES ('0','client','owner',?,'analysis','1.0.0',?,?,'{}',?,'READY','{}',1,1)",id,"a".repeat(64),"a".repeat(64),"a".repeat(64));}
     @Test void realChecksDistinguishGenericNullMimeFromLegacyAndKeepFailureFence() {
@@ -105,6 +105,30 @@ public class SkillExecutionSchemaMySqlTest {
         assertEquals(1,jdbc.update("UPDATE agent_skill_execution SET phase='RUNNING',version=version+1 WHERE execution_id='cas' AND version=0 AND phase='READY'"));
         assertEquals(0,jdbc.update("UPDATE agent_skill_execution SET phase='RUNNING',version=version+1 WHERE execution_id='cas' AND version=0 AND phase='READY'"));
         detector().afterPropertiesSet();
+    }
+    @Test void nativeTurnFailureAndEffectResolutionRollbackTogether() {
+        row("turn",5,null,"QUEUED");attachment("turn");
+        jdbc.update("UPDATE agent_skill_execution SET phase='RESULT_UNKNOWN',last_error_code='NATIVE_EXECUTION_TURN_FAILED',effects_json=? WHERE execution_id='turn'", "{\"e\":{\"status\":\"UNKNOWN\"}}");
+        var tx=new TransactionTemplate(new DataSourceTransactionManager(source));
+        assertThrows(IllegalStateException.class,()->tx.execute(status->{
+            jdbc.update("UPDATE agent_skill_execution SET phase='FAILED',effects_json=?,version=version+1 WHERE execution_id='turn'", "{\"e\":{\"status\":\"SUCCEEDED\"}}");
+            jdbc.update("UPDATE agent_personal_workspace_execution SET execution_state='FAILED',failure_code='AGENT_DELIVERY_FAILED',failure_message='failed',failed_at=1 WHERE execution_id='turn'");
+            throw new IllegalStateException("rollback");
+        }));
+        assertEquals("RESULT_UNKNOWN",jdbc.queryForObject("SELECT phase FROM agent_skill_execution WHERE execution_id='turn'",String.class));
+        assertEquals("NATIVE_EXECUTION_TURN_FAILED",jdbc.queryForObject("SELECT last_error_code FROM agent_skill_execution WHERE execution_id='turn'",String.class));
+        assertEquals("QUEUED",jdbc.queryForObject("SELECT execution_state FROM agent_personal_workspace_execution WHERE execution_id='turn'",String.class));
+        assertEquals("UNKNOWN",jdbc.queryForObject("SELECT JSON_UNQUOTE(JSON_EXTRACT(effects_json,'$.e.status')) FROM agent_skill_execution WHERE execution_id='turn'",String.class));
+    }
+    @Test void nativeEmptySkillsUseNoFakeScalarSkillAndRequireExplicitArrays() {
+        row("native",5,null,"QUEUED");
+        jdbc.update("INSERT INTO agent_skill_execution (tenant_id,client_id,owner_jiacn,execution_id,snapshot_json,snapshot_sha256,task_skill_binding_json,phase,effects_json,created_at,updated_at) VALUES ('0','client','owner','native',?,?,?,'READY','{}',1,1)",
+                "{\"executionProtocolVersion\":5,\"skills\":[]}","a".repeat(64),"[]");
+        detector().afterPropertiesSet();
+        assertNull(jdbc.queryForObject("SELECT skill_key FROM agent_skill_execution WHERE execution_id='native'",String.class));
+        assertThrows(RuntimeException.class,()->jdbc.update("UPDATE agent_skill_execution SET snapshot_json='{}' WHERE execution_id='native'"));
+        assertThrows(RuntimeException.class,()->jdbc.update("UPDATE agent_skill_execution SET task_skill_binding_json=NULL WHERE execution_id='native'"));
+        assertEquals(5,jdbc.queryForObject("SELECT execution_protocol_version FROM agent_personal_workspace_execution WHERE execution_id='native'",Integer.class));
     }
     // Additional cases are executed by the non-skippable owned SM-C1 TestFactory.
     void detectorRejectsMissingTaskBindingColumnWithoutRepair() {
