@@ -18,13 +18,13 @@ import static org.mockito.Mockito.*;
 
 /** Real HTTP adapter -> MySQL/outbox -> Node manager/registry -> actual Java WS consumer.
  * Servlet/socket/authenticated identity remain explicit adapters. No browser, model or paid IO.
- * Node executable/tool probes are fake ONLY in the second, synthetic executable test. */
+ * Both tests use ordinary instruction packages; no executable runner readiness is fabricated. */
 public class SkillManagementNodeMySqlTest extends SkillManagementWireMySqlTest {
     @TempDir Path nodeScratch;
 
-    private boolean executableFirstInstall;
+    private boolean pdfFirstInstall;
     @Override protected Map<String,Object> quoteData() {
-        if(!executableFirstInstall)return super.quoteData();
+        if(!pdfFirstInstall)return super.quoteData();
         return map("action","INSTALL","agentId",AGENT,"skillKey","pdf-export","sourceSkillInstallationId",null,"targetProductVersionId","spv_pdf_1",
             "expectedAgentVersion",Long.toString(versions.readOwned(ACTOR,AGENT)),"expectedSkillRevision","0","approvedPermissions",List.of());
     }
@@ -41,8 +41,8 @@ public class SkillManagementNodeMySqlTest extends SkillManagementWireMySqlTest {
             Path executable=Path.of(binary),script=Path.of(entry);
             assertTrue(executable.isAbsolute()&&Files.isExecutable(executable));assertTrue(script.isAbsolute()&&Files.isRegularFile(script));
             String entrySha=HexFormat.of().formatHex(AgentCommandCanonicalCodec.sha256(Files.readAllBytes(script)));
-            assertEquals("11969b9ed439dfec5dca6929493525003595db53059eee4986bc1893f0ab688c",entrySha,"Pinned Runtime 90f24090 peer input changed");
-            System.out.println("CYF_SM_NODE_PEER runtimeCommit=90f24090be110293011e1d3aef6dbc733ca440d9 entrySha256="+entrySha);
+            assertEquals("0e41d4029785ba5cd014d48b2df2a7dfb7c1b7b2a8b845e964d2ddbc94d8d7c3",entrySha,"Pinned native Runtime peer input changed");
+            System.out.println("CYF_SM_NODE_PEER runtimeCommit=2771bcd0315435f9a4820da6502fd2e22388f035 entrySha256="+entrySha);
             diagnostics=nodeScratch.resolve("node-stderr.log");
             process=new ProcessBuilder(executable.toString(),script.toString()).redirectError(diagnostics.toFile()).start();
             input=new BufferedWriter(new OutputStreamWriter(process.getOutputStream(),StandardCharsets.UTF_8));
@@ -150,30 +150,30 @@ public class SkillManagementNodeMySqlTest extends SkillManagementWireMySqlTest {
             node.consume(replay);
         }
     }
-    @Test void realNodeUpgradeAndPolicyKeepOldTaskPinnedWithoutBorrowingCurrent() throws Exception {
-        executableFirstInstall=true;publishExecutable("1.0.0",1);
-        try(var node=new NodeSession(true)) {
+    @Test void realNativeNodeUpgradeAndPolicyKeepOldTaskPinnedWithoutBorrowingCurrent() throws Exception {
+        pdfFirstInstall=true;publishInstruction("1.0.0",1);
+        try(var node=new NodeSession(false)) {
             var first=node.complete(installOverHttp(),true);String old=text(object(first.get("target")),"skillInstallationId");
-            var binding=service.admit(scope(),"pdf-export",old,()->service.taskBinding("0",ACTOR.clientId(),"old-execution","old-grant",1,AGENT,old));
-            publishExecutable("2.0.0",2);
+            var binding=service.admitNative(scope(),"pdf-export",old,()->service.nativeTaskBinding("0",ACTOR.clientId(),"old-execution","old-grant",1,AGENT,old));
+            publishInstruction("2.0.0",2);
             jdbc.update("INSERT INTO economy_skill_upgrade_policy VALUES (?,?,?,?,?)","0",ACTOR.clientId(),"spv_pdf_1","spv_pdf_2","COVERED");
             var upgrade=packageChange("UPGRADE",old,text(first,"skillRevision"),"spv_pdf_2");node.supply(upgrade);
-            assertEquals("old-admission",service.admit(scope(),"pdf-export",old,()->"old-admission"));
+            assertThrows(cn.jia.agent.skill.SkillMarketplaceException.class,()->service.admitNative(scope(),"pdf-export",old,()->"never"));
             recovery.recover();assertEquals("ACTIVATING",current(upgrade).get("status"));
-            assertThrows(cn.jia.agent.skill.SkillMarketplaceException.class,()->service.admit(scope(),"pdf-export",old,()->"never"));
+            assertThrows(cn.jia.agent.skill.SkillMarketplaceException.class,()->service.admitNative(scope(),"pdf-export",old,()->"never"));
             recovery.recover();upgrade=current(upgrade);assertEquals("SUCCEEDED",upgrade.get("status"));
             assertNotEquals(old,object(upgrade.get("target")).get("skillInstallationId"));
-            assertEquals(binding,service.taskBinding("0",ACTOR.clientId(),"old-execution","old-grant",1,AGENT,old));
+            assertEquals(binding,service.nativeTaskBinding("0",ACTOR.clientId(),"old-execution","old-grant",1,AGENT,old));
             var disabled=policyChange("DISABLE",upgrade);String active=text(object(upgrade.get("target")),"skillInstallationId");
-            assertThrows(cn.jia.agent.skill.SkillMarketplaceException.class,()->service.admit(scope(),"pdf-export",active,()->"never"));
+            assertThrows(cn.jia.agent.skill.SkillMarketplaceException.class,()->service.admitNative(scope(),"pdf-export",active,()->"never"));
             disabled=node.complete(disabled,false);assertEquals(false,disabled.get("desiredEnabled"));
-            var resolved=node.peer.call(map("op","resolveTask","taskSkillBinding",binding));
+            var resolved=node.peer.call(map("op","resolveNativeTask","taskSkillBinding",binding));
             var exact=object(resolved.stream().filter(r->"taskPackage".equals(r.get("kind"))).findFirst().orElseThrow().get("value"));
             for(String field:List.of("skillInstallationId","productVersionId","skillKey","skillVersion","packageSha256","manifestSha256","approvedPermissionsSha256"))
                 assertEquals(binding.get(field),exact.get(field),field);
             var enabled=node.complete(policyChange("ENABLE",disabled),false);
             assertEquals(active,object(enabled.get("target")).get("skillInstallationId"));
-            assertEquals("new-admission",service.admit(scope(),"pdf-export",active,()->"new-admission"));
+            assertEquals("new-admission",service.admitNative(scope(),"pdf-export",active,()->"new-admission"));
             assertEquals(1,jdbc.queryForObject("SELECT COUNT(*) FROM economy_skill_order",Integer.class),"COVERED upgrade and policy commands cannot charge again");
             assertEquals(6,node.dispatched.size());assertEquals(6,node.results);assertEquals(node.results,node.receipts);
         }

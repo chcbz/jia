@@ -248,21 +248,22 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
             .setDeploymentRestriction("NONE").setReviewStatus("APPROVED").setTenantId("0").setClientId(ACTOR.clientId()).setCreateTime(1L));
         assertEquals(1,market.publishProductVersion("0",ACTOR.clientId(),"sp_pdf","spv_pdf_"+sequence,sequence,System.currentTimeMillis()));
     }
-    private void publishInstruction() throws Exception {
+    private void publishInstruction() throws Exception {publishInstruction("1.0.0",1);}
+    protected void publishInstruction(String version,long sequence) throws Exception {
         var out=new java.io.ByteArrayOutputStream();
         try(var zip=new java.util.zip.ZipOutputStream(out)) {
             zip.putNextEntry(new java.util.zip.ZipEntry("SKILL.md"));
-            zip.write("---\nname: pdf-export\ndescription: export pdf\nmetadata:\n  version: \"1.0.0\"\n---\nDescribe a PDF.\n".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            zip.write("---\nname: pdf-export\ndescription: export pdf\nmetadata:\n  version: \""+version+"\"\n---\nDescribe a PDF.\n".getBytes(java.nio.charset.StandardCharsets.UTF_8));
             zip.closeEntry();
         }
         byte[] bytes=out.toByteArray();new SkillPackageStore(scratch.resolve(database+"-packages")).publish(bytes);
-        market.insertProduct(new SkillProductEntity().setProductId("sp_pdf").setSellerType("SYSTEM").setSellerId("SKILL_STORE").setName("PDF").setDescription("instruction fixture")
+        if(sequence==1)market.insertProduct(new SkillProductEntity().setProductId("sp_pdf").setSellerType("SYSTEM").setSellerId("SKILL_STORE").setName("PDF").setDescription("instruction fixture")
                 .setStatus("DRAFT").setVersion(1L).setTenantId("0").setClientId(ACTOR.clientId()).setCreateTime(1L).setUpdateTime(1L));
-        market.insertProductVersion(new SkillProductVersionEntity().setProductVersionId("spv_pdf_1").setProductId("sp_pdf").setVersionSequence(1L)
-                .setSkillKey("pdf-export").setSkillVersion("1.0.0").setPriceMicro(5_000_000L).setPackageSha256(SkillPackageStore.sha256(bytes)).setPackageSize((long)bytes.length)
+        market.insertProductVersion(new SkillProductVersionEntity().setProductVersionId("spv_pdf_"+sequence).setProductId("sp_pdf").setVersionSequence(sequence)
+                .setSkillKey("pdf-export").setSkillVersion(version).setPriceMicro(5_000_000L).setPackageSha256(SkillPackageStore.sha256(bytes)).setPackageSize((long)bytes.length)
                 .setApprovedPermissionsManifest("[]").setApprovedPermissionsSha256(SkillPackageStore.sha256("[]".getBytes(java.nio.charset.StandardCharsets.UTF_8)))
                 .setDeploymentRestriction("NONE").setReviewStatus("APPROVED").setTenantId("0").setClientId(ACTOR.clientId()).setCreateTime(1L));
-        assertEquals(1,market.publishProductVersion("0",ACTOR.clientId(),"sp_pdf","spv_pdf_1",1,System.currentTimeMillis()));
+        assertEquals(1,market.publishProductVersion("0",ACTOR.clientId(),"sp_pdf","spv_pdf_"+sequence,sequence,System.currentTimeMillis()));
     }
     @Test void instructionNativeBindingUsesRealInstallationAndDisablingClosesAdmission() throws Exception {
         publishInstruction();var first=packageChange("INSTALL",null,"0","spv_pdf_1");finishInstall(first);first=current(first);

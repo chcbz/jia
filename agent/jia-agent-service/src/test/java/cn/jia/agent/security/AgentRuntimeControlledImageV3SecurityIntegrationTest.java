@@ -8,12 +8,12 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 
 class AgentRuntimeControlledImageV3SecurityIntegrationTest {
-    @Test void onlyExactV3InboxInputsAndProviderStartRoutesEnterRuntimeLane() {
+    @Test void retiredV3InboxInputsAndProviderStartRoutesNeverEnterRuntimeLane() {
         for(String path:List.of(
                 "/internal/agent/tasks/conversation-executions/controlled-image-v3-commands",
                 "/internal/agent/tasks/task-1/runs/run-1/conversation/inputs-v3",
                 "/internal/agent/tasks/task-1/runs/run-1/conversation/provider-start-controlled-image-v3"))
-            assertTrue(AgentRuntimeAuthenticationFilter.allowed(request(
+            assertFalse(AgentRuntimeAuthenticationFilter.allowed(request(
                     path.endsWith("commands")?"GET":"POST",path)),path);
 
         for(String path:List.of(
