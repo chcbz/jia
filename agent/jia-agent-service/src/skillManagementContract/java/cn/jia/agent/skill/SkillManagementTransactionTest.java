@@ -276,7 +276,7 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
             zip.closeEntry();
         }
         byte[] archive=out.toByteArray();var packageProvider=provider(packages);when(packageProvider.getIfUnique()).thenReturn(packages);
-        var publisher=new SkillPackagePublicationService(market,packageProvider,manager,db);
+        var publisher=new SkillPackagePublicationService(market,packageProvider,manager);
         var invalid=new SkillPackagePublicationService.Publish("sp_pdf","spv_pdf_2","PDF","synthetic fixture","pdf-export","2.0.0",5_000_000L,"NONE","[]",HexFormat.of().formatHex(SkillPackageStore.sha256(archive)),null,2,"missing-source");
         assertEquals("SKILL_UPGRADE_SOURCE_INVALID",assertThrows(SkillMarketplaceException.class,()->publisher.publish(ACTOR,true,invalid,archive)).code());
         assertEquals("spv_pdf_1",market.selectProductForUpdate("0",ACTOR.clientId(),"sp_pdf").getCurrentProductVersionId());

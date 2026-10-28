@@ -5,7 +5,6 @@ import cn.jia.economy.config.skillseed.PlatformSkillPackageCatalog;
 import cn.jia.economy.config.skillseed.PlatformSkillPackageCatalog.*;
 import cn.jia.economy.entity.skill.*;
 import cn.jia.economy.mapper.EconomySkillMarketplaceMapper;
-import cn.jia.economy.mapper.EconomySkillManagementMapper;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -26,9 +25,8 @@ public final class SkillPackagePublicationService {
     private final EconomySkillMarketplaceMapper market;
     private final ObjectProvider<SkillPackages> packages;
     private final TransactionTemplate transactions;
-    private final EconomySkillManagementMapper management;
-    public SkillPackagePublicationService(EconomySkillMarketplaceMapper market,ObjectProvider<SkillPackages> packages,PlatformTransactionManager manager,EconomySkillManagementMapper management) {
-        this.management=Objects.requireNonNull(management);this.market=Objects.requireNonNull(market);this.packages=Objects.requireNonNull(packages);this.transactions=new TransactionTemplate(Objects.requireNonNull(manager));
+    public SkillPackagePublicationService(EconomySkillMarketplaceMapper market,ObjectProvider<SkillPackages> packages,PlatformTransactionManager manager) {
+        this.market=Objects.requireNonNull(market);this.packages=Objects.requireNonNull(packages);this.transactions=new TransactionTemplate(Objects.requireNonNull(manager));
     }
     public Receipt publish(HostingRentHttp.Actor actor,boolean platformAdmin,Publish command,byte[] archive) {
         require(actor!=null&&platformAdmin,403,"SKILL_PUBLICATION_FORBIDDEN");
@@ -65,8 +63,8 @@ public final class SkillPackagePublicationService {
                 &&command.productId().equals(source.getProductId())&&command.skillKey().equals(source.getSkillKey())
                 &&"APPROVED".equals(source.getReviewStatus())&&source.getVersionSequence()!=null
                 &&source.getVersionSequence()<target.getVersionSequence(),409,"SKILL_UPGRADE_SOURCE_INVALID");
-        String policy=management.upgradePolicy(actor.tenantId(),actor.clientId(),sourceId,command.productVersionId());
-        if(policy==null)one(management.insertCoveredUpgradePolicy(actor.tenantId(),actor.clientId(),sourceId,command.productVersionId()));
+        String policy=market.selectUpgradePolicy(actor.tenantId(),actor.clientId(),sourceId,command.productVersionId());
+        if(policy==null)one(market.insertCoveredUpgradePolicy(actor.tenantId(),actor.clientId(),sourceId,command.productVersionId()));
         else require("COVERED".equals(policy),409,"SKILL_UPGRADE_POLICY_CONFLICT");
     }
     private static boolean matches(HostingRentHttp.Actor a,Publish c,SkillProductVersionEntity v,byte[] hash,byte[] permissions,long byteLength) {return a.tenantId().equals(v.getTenantId())&&a.clientId().equals(v.getClientId())&&c.productId().equals(v.getProductId())&&c.productVersionId().equals(v.getProductVersionId())&&c.skillKey().equals(v.getSkillKey())&&c.skillVersion().equals(v.getSkillVersion())&&Objects.equals(c.priceMicro(),v.getPriceMicro())&&Arrays.equals(hash,v.getPackageSha256())&&Objects.equals(byteLength,v.getPackageSize())&&Arrays.equals(permissions,v.getApprovedPermissionsSha256())&&c.approvedPermissionsManifest().equals(v.getApprovedPermissionsManifest())&&c.deploymentRestriction().equals(v.getDeploymentRestriction())&&"APPROVED".equals(v.getReviewStatus());}
