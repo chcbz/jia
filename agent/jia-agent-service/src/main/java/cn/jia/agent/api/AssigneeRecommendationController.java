@@ -1,10 +1,9 @@
-package cn.jia.chat.api;
+package cn.jia.agent.api;
 
 import cn.jia.agent.hosting.HostingRentHttp;
 import cn.jia.agent.hosting.HostingRentApplicationException;
 import cn.jia.agent.service.impl.AgentServiceImpl;
-import cn.jia.chat.service.TenantScopeResolver;
-import cn.jia.chat.service.recommendation.AssigneeRecommendationService;
+import cn.jia.agent.service.recommendation.AssigneeRecommendationService;
 import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.entity.JsonRequest;
 import cn.jia.core.entity.JsonResult;
@@ -12,7 +11,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 import java.util.Objects;
-import static cn.jia.chat.service.recommendation.AssigneeRecommendation.*;
+import static cn.jia.agent.entity.AssigneeRecommendation.*;
 
 /** Replaces (does not coexist with) AgentController's rule-scored recommendation endpoint. */
 @RestController
@@ -20,16 +19,15 @@ import static cn.jia.chat.service.recommendation.AssigneeRecommendation.*;
 public final class AssigneeRecommendationController {
     private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(AssigneeRecommendationController.class);
     private final AssigneeRecommendationService recommendations;
-    private final TenantScopeResolver tenants;
-    public AssigneeRecommendationController(AssigneeRecommendationService recommendations, TenantScopeResolver tenants) {
-        this.recommendations = recommendations; this.tenants = tenants;
+    public AssigneeRecommendationController(AssigneeRecommendationService recommendations) {
+        this.recommendations = recommendations;
     }
     @PostMapping("/{taskId}/recommend")
     public ResponseEntity<JsonResult<Result>> recommend(@PathVariable String taskId,
             @RequestBody JsonRequest<Request> request, Authentication authentication) {
         var actor = HostingRentHttp.actor(authentication);
         var context = EsContextHolder.getContext();
-        if (context == null || !Objects.equals(tenants.resolve(authentication), actor.tenantId())
+        if (context == null
                 || !Objects.equals(context.getTenantId(), actor.tenantId())
                 || !Objects.equals(context.getClientId(), actor.clientId())
                 || !Objects.equals(context.getJiacn(), actor.ownerJiacn())) throw new Failure(404, "RECOMMENDATION_NOT_FOUND");

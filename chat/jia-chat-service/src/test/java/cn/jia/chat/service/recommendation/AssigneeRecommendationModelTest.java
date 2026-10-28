@@ -1,4 +1,5 @@
 package cn.jia.chat.service.recommendation;
+import cn.jia.agent.entity.AssigneeRecommendation;
 
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;

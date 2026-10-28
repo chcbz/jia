@@ -1,4 +1,4 @@
-package cn.jia.chat.service.recommendation;
+package cn.jia.agent.entity;
 
 import java.util.List;
 

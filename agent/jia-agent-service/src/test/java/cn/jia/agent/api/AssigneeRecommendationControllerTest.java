@@ -1,7 +1,6 @@
-package cn.jia.chat.api;
+package cn.jia.agent.api;
 
-import cn.jia.chat.service.TenantScopeResolver;
-import cn.jia.chat.service.recommendation.AssigneeRecommendationService;
+import cn.jia.agent.service.recommendation.AssigneeRecommendationService;
 import cn.jia.core.config.ApiEnvelopeAdvice;
 import cn.jia.core.context.*;
 import cn.jia.core.filter.RequestIdFilter;
@@ -13,7 +12,7 @@ import org.springframework.security.oauth2.server.resource.authentication.JwtAut
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import java.util.List;
-import static cn.jia.chat.service.recommendation.AssigneeRecommendation.*;
+import static cn.jia.agent.entity.AssigneeRecommendation.*;
 import static org.mockito.Mockito.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
@@ -28,7 +27,7 @@ class AssigneeRecommendationControllerTest {
         login = new JwtAuthenticationToken(Jwt.withTokenValue("test").header("alg", "none")
                 .claim("sub", "user").claim("jiacn", "owner").claim("client_id", "client").build());
         var context = new EsContext(); context.setTenantId("0"); context.setClientId("client"); context.setJiacn("owner"); EsContextHolder.setContext(context);
-        mvc = MockMvcBuilders.standaloneSetup(new AssigneeRecommendationController(service, TenantScopeResolver.legacySingleTenant()))
+        mvc = MockMvcBuilders.standaloneSetup(new AssigneeRecommendationController(service))
                 .setMessageConverters(new JacksonJsonHttpMessageConverter()).setControllerAdvice(new ApiEnvelopeAdvice())
                 .addFilters(new RequestIdFilter()).build();
         when(service.recommend(any(), eq("task"), any())).thenReturn(new Result("task", "7", 1000, "NO_MATCH", "没有匹配证据", List.of(), List.of(), true));

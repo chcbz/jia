@@ -8,11 +8,11 @@ import org.springframework.ai.model.tool.ToolCallingChatOptions;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Component;
 import java.util.List;
-import static cn.jia.chat.service.recommendation.AssigneeRecommendation.*;
+import static cn.jia.agent.entity.AssigneeRecommendation.*;
 
 /** Single-shot inference using the existing provider/transport. No ChatClient, advisors or tools. */
 @Component
-public final class AssigneeRecommendationModel {
+public final class AssigneeRecommendationModel implements cn.jia.agent.service.AgentAssigneeRecommendationModel {
     private final ChatModel model;
     public AssigneeRecommendationModel(@Lazy ChatModel model) { this.model = model; }
     private static final String INSTRUCTIONS = """
@@ -30,6 +30,7 @@ public final class AssigneeRecommendationModel {
         READY必须至少推荐一人，每人必须有事实依据；其他state的recommendations为空，NEEDS_CLARIFICATION必须有questions。
         reason是你的判断，证据只能引用输入中的id；不要把缺口说成具备的能力。可以少推荐，不必凑数。
         """;
+    @Override
     public String judge(String inputJson) {
         // A global model with implicit tool defaults is not safe for this read-only purpose.
         if (model.getOptions() instanceof ToolCallingChatOptions defaults

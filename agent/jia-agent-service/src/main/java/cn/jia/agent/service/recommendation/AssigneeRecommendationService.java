@@ -1,8 +1,9 @@
-package cn.jia.chat.service.recommendation;
+package cn.jia.agent.service.recommendation;
 
 import cn.jia.agent.entity.AgentTaskDTO;
 import cn.jia.agent.hosting.HostingRentHttp;
 import cn.jia.agent.service.AgentService;
+import cn.jia.agent.service.AgentAssigneeRecommendationModel;
 import cn.jia.agent.skill.SkillManagementService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -10,7 +11,7 @@ import com.fasterxml.jackson.databind.DeserializationFeature;
 import org.springframework.stereotype.Service;
 import java.time.Instant;
 import java.util.*;
-import static cn.jia.chat.service.recommendation.AssigneeRecommendation.*;
+import static cn.jia.agent.entity.AssigneeRecommendation.*;
 
 /** API-owned observations + model advice. No assignment, billing, installation or transaction. */
 @Service
@@ -18,8 +19,8 @@ public final class AssigneeRecommendationService {
     private static final ObjectMapper JSON = new ObjectMapper().enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
     private final AgentService agents;
     private final SkillManagementService skills;
-    private final AssigneeRecommendationModel model;
-    public AssigneeRecommendationService(AgentService agents, SkillManagementService skills, AssigneeRecommendationModel model) {
+    private final AgentAssigneeRecommendationModel model;
+    public AssigneeRecommendationService(AgentService agents, SkillManagementService skills, AgentAssigneeRecommendationModel model) {
         this.agents = agents; this.skills = skills; this.model = model;
     }
     public Result recommend(HostingRentHttp.Actor actor, String taskId, Request request) {

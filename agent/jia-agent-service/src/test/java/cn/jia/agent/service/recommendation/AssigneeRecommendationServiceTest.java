@@ -1,15 +1,16 @@
-package cn.jia.chat.service.recommendation;
+package cn.jia.agent.service.recommendation;
 
 import cn.jia.agent.entity.AgentTaskAssigneeCandidateDTO;
 import cn.jia.agent.entity.AgentTaskTargetSummaryDTO;
 import cn.jia.agent.entity.AgentTaskDTO;
 import cn.jia.agent.hosting.HostingRentHttp;
 import cn.jia.agent.service.AgentService;
+import cn.jia.agent.service.AgentAssigneeRecommendationModel;
 import cn.jia.agent.skill.SkillManagementService;
 import org.junit.jupiter.api.Test;
 import java.util.List;
 import java.util.Map;
-import static cn.jia.chat.service.recommendation.AssigneeRecommendation.*;
+import static cn.jia.agent.entity.AssigneeRecommendation.*;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -53,7 +54,7 @@ class AssigneeRecommendationServiceTest {
         assertThrows(Failure.class, () -> AssigneeRecommendationService.decode("task", "7", 1, List.of(candidate()), noMatch.replace("NO_MATCH", "NEEDS_CLARIFICATION")));
     }
     @Test void noCandidatesMakesNoModelOrSkillCallAndVersionMismatchDoesNotInvokeModel() {
-        var agents = mock(AgentService.class); var skills = mock(SkillManagementService.class); var model = mock(AssigneeRecommendationModel.class);
+        var agents = mock(AgentService.class); var skills = mock(SkillManagementService.class); var model = mock(AgentAssigneeRecommendationModel.class);
         var service = new AssigneeRecommendationService(agents, skills, model);
         when(agents.getTask("task")).thenReturn(task("7")); when(agents.listTaskAssigneeCandidates("task")).thenReturn(List.of());
         assertEquals("NO_CANDIDATES", service.recommend(ACTOR, "task", new Request("7")).state());
@@ -61,7 +62,7 @@ class AssigneeRecommendationServiceTest {
         verifyNoInteractions(skills, model);
     }
     @Test void usesSingleCallNoAssignmentAndChecksTaskAgainAfterInference() {
-        var agents = mock(AgentService.class); var skills = mock(SkillManagementService.class); var model = mock(AssigneeRecommendationModel.class);
+        var agents = mock(AgentService.class); var skills = mock(SkillManagementService.class); var model = mock(AgentAssigneeRecommendationModel.class);
         var service = new AssigneeRecommendationService(agents, skills, model);
         var a = new AgentTaskAssigneeCandidateDTO(new AgentTaskTargetSummaryDTO("a", "Agent", null, true, "online"), List.of("写作"));
         when(agents.getTask("task")).thenReturn(task("7")); when(agents.listTaskAssigneeCandidates("task")).thenReturn(List.of(a));
@@ -72,7 +73,7 @@ class AssigneeRecommendationServiceTest {
         assertEquals(409, assertThrows(Failure.class, () -> service.recommend(ACTOR, "task", new Request("7"))).status());
     }
     @Test void externalCandidateNeverReadsPrivateSkillsAndProviderFailureDoesNotRetry() {
-        var agents = mock(AgentService.class); var skills = mock(SkillManagementService.class); var model = mock(AssigneeRecommendationModel.class);
+        var agents = mock(AgentService.class); var skills = mock(SkillManagementService.class); var model = mock(AgentAssigneeRecommendationModel.class);
         var a = new AgentTaskAssigneeCandidateDTO(new AgentTaskTargetSummaryDTO("external", "Agent", "公开提供方", false, "online"), List.of());
         when(agents.getTask("task")).thenReturn(task("7")); when(agents.listTaskAssigneeCandidates("task")).thenReturn(List.of(a));
         when(model.judge(anyString())).thenThrow(new RuntimeException("private upstream details"));
