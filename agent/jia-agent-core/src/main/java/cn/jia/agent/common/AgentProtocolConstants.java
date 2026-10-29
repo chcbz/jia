@@ -13,6 +13,8 @@ import java.util.Set;
 public final class AgentProtocolConstants {
     public static final int LEGACY_VERSION = 0;
     public static final int VERSION_1 = 1;
+    /** Existing MEDIUMBLOB wire capacity; not a new business quota. */
+    public static final int MAX_WIRE_BYTES = 16_777_215;
 
     public static final String CATEGORY_CONTROL = "control";
     public static final String CATEGORY_CHAT = "chat";
