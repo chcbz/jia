@@ -98,8 +98,14 @@ public final class AgentTaskRequirementSnapshotSchemaInitializer implements Init
             // Installing code must not require an unrelated production DDL rollout.
             boolean legacyScope = "chk_atrs_scope".equals(expected.getKey())
                     && "((`tenant_id` = _utf8mb4\\'0\\') and (`owner_jiacn` <> _utf8mb4\\'0\\'))".equals(clause);
+            // MySQL 8.0.21 renders the case-sensitive ASCII regex argument as a
+            // binary CHAR cast (same catalog form as the controlled-image checks).
+            // Match that full expression, never remove operators/grouping or accept fragments.
+            boolean binaryRegexContent = "chk_atrs_content".equals(expected.getKey())
+                    && expected.getValue().replace("_utf8mb4\\'^[0-9a-f]{64}$\\'",
+                            "cast(_utf8mb4\\'^[0-9a-f]{64}$\\' as char charset binary)").equals(clause);
             if (!"YES".equalsIgnoreCase(Objects.toString(row.get("enforced"), ""))
-                    || !(expected.getValue().equals(clause) || legacyScope))
+                    || !(expected.getValue().equals(clause) || legacyScope || binaryRegexContent))
                 throw new IllegalStateException("Snapshot CHECK drift: "+expected.getKey());
         }
     }

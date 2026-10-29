@@ -127,6 +127,9 @@ class TaskBootstrapTenantIsolationMySqlTest extends SkillManagementMySqlFixture 
         seed("0","client","production","action");
         var before = row("production");
         var beforeSnapshot = jdbc.queryForMap("SELECT * FROM agent_task_requirement_snapshot");
+        System.out.println("CYF_TASK_SNAPSHOT_CHECKS " + jdbc.queryForList(
+                "SELECT constraint_name,check_clause FROM information_schema.check_constraints "
+                + "WHERE constraint_schema=DATABASE() AND constraint_name IN ('chk_atrs_scope','chk_atrs_content')"));
         // Old production schema must still pass startup validation before any migration.
         new AgentTaskBountyBootstrapOutboxSchemaInitializer(jdbc).afterPropertiesSet();
         new AgentTaskRequirementSnapshotSchemaInitializer(jdbc).afterPropertiesSet();
@@ -143,6 +146,14 @@ class TaskBootstrapTenantIsolationMySqlTest extends SkillManagementMySqlFixture 
         assertThrows(org.springframework.dao.DataAccessException.class, () -> jdbc.update(
                 "UPDATE agent_task_bounty_bootstrap_outbox SET attempt_count=-1 WHERE tenant_id='1'"));
         assertEquals(before,row("production"));
+        assertThrows(org.springframework.dao.DataAccessException.class, () -> jdbc.update(
+                "UPDATE agent_task_requirement_snapshot SET revision=0 WHERE tenant_id='1'"));
+        assertThrows(org.springframework.dao.DataAccessException.class, () -> jdbc.update(
+                "UPDATE agent_task_requirement_snapshot SET content_sha256=? WHERE tenant_id='1'", "G".repeat(64)));
+        jdbc.execute("ALTER TABLE agent_task_requirement_snapshot DROP CHECK chk_atrs_content, "
+                + "ADD CONSTRAINT chk_atrs_content CHECK (revision>=0)");
+        assertThrows(IllegalStateException.class,
+                () -> new AgentTaskRequirementSnapshotSchemaInitializer(jdbc).afterPropertiesSet());
     }
 
     private AgentTaskBountyBootstrapOutboxServiceImpl service(boolean fixed,String tenant,String client) {
