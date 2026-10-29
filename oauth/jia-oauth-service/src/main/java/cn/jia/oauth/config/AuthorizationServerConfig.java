@@ -122,14 +122,23 @@ public class AuthorizationServerConfig {
             @Value("${cyf.security.legacy-single-tenant-id:0}") String legacyTenantId,
             @Value("${cyf.security.fixed-tenant.enabled:false}") boolean fixedTenantEnabled,
             @Value("${cyf.security.fixed-tenant.tenant-id:}") String fixedTenantId,
-            @Value("${cyf.security.fixed-tenant.client-id:}") String fixedClientId) {
+            @Value("${cyf.security.fixed-tenant.client-id:}") String fixedClientId,
+            @Value("${cyf.security.oauth.issuer-client-ids:}") String issuerClientIds) {
         FixedTenantAdmissionPolicy admission = new FixedTenantAdmissionPolicy(legacyTenantId,
                 fixedTenantEnabled, fixedTenantId, fixedClientId);
-        return new AccountSecurityTokenCustomizer(accountSecurityService, clientId -> {
-            OauthClientEntity client = clientService.findExactByClientId(clientId);
-            if (client == null) throw new IllegalArgumentException("Registered client is unavailable");
-            return client.getTenantId();
-        }, admission);
+        // A global OAuth registry does not decide which applications may use this
+        // issuer. Production's previous admitted set must be migrated to deployment
+        // configuration before switching binaries; never infer it from the request.
+        java.util.Set<String> allowedClients;
+        if (fixedTenantEnabled && issuerClientIds.isBlank()) {
+            allowedClients = java.util.Set.of(fixedClientId);
+        } else {
+            allowedClients = issuerClientIds.isBlank() ? java.util.Set.of()
+                    : java.util.Arrays.stream(issuerClientIds.split(",", -1))
+                            .map(String::strip).collect(java.util.stream.Collectors.toUnmodifiableSet());
+        }
+        return new AccountSecurityTokenCustomizer(accountSecurityService,
+                clientId -> clientService.findExactByClientId(clientId) != null, admission, allowedClients);
     }
 
     static class CustomAuthenticationEntryPoint extends LoginUrlAuthenticationEntryPoint {

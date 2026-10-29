@@ -23,7 +23,7 @@ import java.util.Date;
 @Data
 @EqualsAndHashCode(callSuper = true)
 @Accessors(chain = true)
-@TableName("oauth_client")
+@TableName(value = "oauth_client", excludeProperty = {"tenantId"})
 @Schema(name = "OauthClient对象", description="")
 public class OauthClientEntity extends BaseEntity {
 

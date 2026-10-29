@@ -8,17 +8,17 @@
     </sql>
 
     <select id="selectByRole" parameterType="java.lang.Long" resultType="cn.jia.user.entity.UserEntity">
-        select <include refid="Base_Column_List" />, u.location, u.tenant_id, u.client_id
+        select <include refid="Base_Column_List" />, u.location
         from user_info u left join user_role_rel r on u.id = r.user_id
         where r.role_id = #{roleId,jdbcType=BIGINT}
     </select>
     <select id="selectByGroup" parameterType="java.lang.Long" resultType="cn.jia.user.entity.UserEntity">
-        select <include refid="Base_Column_List" />, u.location, u.tenant_id, u.client_id
+        select <include refid="Base_Column_List" />, u.location
         from user_info u left join user_group_rel r on u.id = r.user_id
         where r.group_id = #{groupId,jdbcType=BIGINT}
     </select>
     <select id="selectByOrg" parameterType="java.lang.Long" resultType="cn.jia.user.entity.UserEntity">
-        select <include refid="Base_Column_List" />, u.location, u.tenant_id, u.client_id
+        select <include refid="Base_Column_List" />, u.location
         from user_info u left join user_org_rel r on u.id = r.user_id
         where r.org_id = #{orgId,jdbcType=BIGINT}
     </select>

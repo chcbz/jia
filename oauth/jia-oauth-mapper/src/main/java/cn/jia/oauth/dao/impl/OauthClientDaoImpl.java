@@ -20,6 +20,12 @@ import java.util.List;
 @Named
 public class OauthClientDaoImpl extends BaseDaoImpl<OauthClientMapper, OauthClientEntity> implements OauthClientDao {
 
+    /** Global registration metadata has no business-tenant predicate. */
+    @Override
+    public List<OauthClientEntity> selectByEntity(OauthClientEntity query) {
+        return baseMapper.selectList(new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<>(query));
+    }
+
     @Override
     public OauthClientEntity selectByAppcn(String appcn) {
         return baseMapper.selectOne(Wrappers.lambdaQuery(OauthClientEntity.class)

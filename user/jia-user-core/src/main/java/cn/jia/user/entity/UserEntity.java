@@ -26,7 +26,7 @@ import java.time.LocalDate;
 @Data
 @EqualsAndHashCode(callSuper = true)
 @Accessors(chain = true)
-@TableName("user_info")
+@TableName(value = "user_info", excludeProperty = {"tenantId", "clientId"})
 @Schema(name = "Info对象", description="")
 public class UserEntity extends BaseEntity {
 

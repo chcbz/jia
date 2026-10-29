@@ -24,26 +24,21 @@ public final class AccountSecurityTokenCustomizer implements OAuth2TokenCustomiz
     static final String MACHINE_TOKEN_KIND = "machine";
 
     private final AccountSecurityService accountSecurityService;
-    private final ClientTenantLookup clientTenants;
+    private final java.util.function.Predicate<String> registeredClientExists;
+    private final java.util.Set<String> allowedClients;
     private final FixedTenantAdmissionPolicy tenantAdmission;
 
-    public AccountSecurityTokenCustomizer(AccountSecurityService accountSecurityService) {
-        this(accountSecurityService, ignored -> TenantClaimPolicy.defaultSingleTenant(),
-                new FixedTenantAdmissionPolicy(TenantClaimPolicy.defaultSingleTenant(), false, null, null));
-    }
-
-    public AccountSecurityTokenCustomizer(AccountSecurityService accountSecurityService, String tenantId) {
-        String exactTenant = TenantClaimPolicy.exact(tenantId);
-        this.accountSecurityService = accountSecurityService;
-        this.clientTenants = ignored -> exactTenant;
-        this.tenantAdmission = new FixedTenantAdmissionPolicy(exactTenant, false, null, null);
-    }
-
     public AccountSecurityTokenCustomizer(AccountSecurityService accountSecurityService,
-            ClientTenantLookup clientTenants, FixedTenantAdmissionPolicy tenantAdmission) {
+            java.util.function.Predicate<String> registeredClientExists,
+            FixedTenantAdmissionPolicy tenantAdmission, java.util.Set<String> allowedClients) {
         this.accountSecurityService = java.util.Objects.requireNonNull(accountSecurityService);
-        this.clientTenants = java.util.Objects.requireNonNull(clientTenants);
+        this.registeredClientExists = java.util.Objects.requireNonNull(registeredClientExists);
         this.tenantAdmission = java.util.Objects.requireNonNull(tenantAdmission);
+        if (allowedClients == null || allowedClients.isEmpty()) {
+            throw new IllegalArgumentException("OAuth issuer requires explicit admitted client IDs");
+        }
+        allowedClients.forEach(tenantAdmission::tenantForClient);
+        this.allowedClients = java.util.Set.copyOf(allowedClients);
     }
 
     @Override
@@ -52,8 +47,11 @@ public final class AccountSecurityTokenCustomizer implements OAuth2TokenCustomiz
                 ? null : context.getRegisteredClient().getClientId();
         String tenantId;
         try {
-            tenantId = tenantAdmission.requireClientTenant(clientId, clientTenants.findTenantId(clientId));
-        } catch (RuntimeException invalidClientMapping) {
+            if (!allowedClients.contains(clientId) || !registeredClientExists.test(clientId)) {
+                throw new IllegalArgumentException("OAuth client is not admitted to this issuer");
+            }
+            tenantId = tenantAdmission.tenantForClient(clientId);
+        } catch (RuntimeException invalidClientAdmission) {
             throw invalidGrant();
         }
         context.getClaims()
@@ -133,11 +131,6 @@ public final class AccountSecurityTokenCustomizer implements OAuth2TokenCustomiz
             return null;
         }
         return null;
-    }
-
-    @FunctionalInterface
-    public interface ClientTenantLookup {
-        String findTenantId(String clientId);
     }
 
     private static OAuth2AuthenticationException invalidGrant() {

@@ -46,6 +46,8 @@ class UserServiceImplTest extends BaseMockTest {
     UserInfoDao userInfoDao;
     @Mock
     PointAccountService pointAccounts;
+    @Mock
+    UserBusinessMembership businessMembership;
     @InjectMocks
     UserServiceImpl userServiceImpl;
 
@@ -444,7 +446,7 @@ class UserServiceImplTest extends BaseMockTest {
     @Test
     void pointSearchUsesBusinessScopeNotTheIdentityTenantField() {
         UserEntity search = new UserEntity(); search.setPoint(7); search.setTenantId("0");
-        when(pointAccounts.tenantId()).thenReturn("1");
+        when(businessMembership.tenantId()).thenReturn("1");
         when(userInfoDao.searchByExample(search, "1")).thenReturn(List.of());
         userServiceImpl.search(search);
         verify(userInfoDao).searchByExample(search, "1");

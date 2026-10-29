@@ -134,8 +134,7 @@ public class UserInfoDaoImpl extends BaseDaoImpl<InfoMapper, UserEntity> impleme
                         + "AND CAST(pa.jiacn AS BINARY)=CAST(user_info.jiacn AS BINARY)),0)={1}",
                         pointTenantId, query.getPoint());
             }
-            appendExactScope(wrapper, "tenant_id", tenantId);
-            appendExactScope(wrapper, "client_id", clientId);
+            appendMembershipFilter(wrapper, tenantId, clientId);
             if (pointTenantId != null) {
                 // Keep BaseMapper's entity predicates and UserVOWrapper's table-qualified
                 // membership predicates; customSqlSegment alone omits entity conditions.
@@ -161,11 +160,32 @@ public class UserInfoDaoImpl extends BaseDaoImpl<InfoMapper, UserEntity> impleme
         return baseMapper.selectRelationsByUserIds(userIds);
     }
 
-    private void appendExactScope(QueryWrapper<UserEntity> wrapper, String column, String value) {
-        if (value != null) {
-            wrapper.apply("OCTET_LENGTH(" + column + ") = OCTET_LENGTH({0}) "
-                    + "AND CAST(" + column + " AS BINARY(200)) = CAST({0} AS BINARY(200))", value);
+    private void appendMembershipFilter(QueryWrapper<UserEntity> wrapper, String tenantId, String clientId) {
+        if (tenantId == null && clientId == null) return;
+        String sql = "EXISTS (SELECT 1 FROM user_business_membership bm WHERE bm.user_id=user_info.id";
+        java.util.List<Object> values = new java.util.ArrayList<>();
+        if (tenantId != null) {
+            sql += " AND bm.tenant_id={0} AND OCTET_LENGTH(bm.tenant_id)=OCTET_LENGTH({0})";
+            values.add(tenantId);
         }
+        if (clientId != null) {
+            // Empty stored client represents old NULL, not an empty application ID.
+            String index = "{" + values.size() + "}";
+            sql += " AND bm.client_id<>'' AND bm.client_id=" + index
+                    + " AND OCTET_LENGTH(bm.client_id)=OCTET_LENGTH(" + index + ")";
+            values.add(clientId);
+        }
+        wrapper.apply(sql + ")", values.toArray());
+    }
+
+    /** Generic filtered identity lists must not reintroduce BaseDao's tenant-zero union. */
+    @Override
+    public List<UserEntity> selectByEntity(UserEntity query) {
+        requirePointScope(query, null);
+        QueryWrapper<UserEntity> wrapper = new QueryWrapper<>(query);
+        appendQueryWrapper(query, wrapper);
+        appendMembershipFilter(wrapper, query.getTenantId(), query.getClientId());
+        return baseMapper.selectList(wrapper);
     }
 
     @Override

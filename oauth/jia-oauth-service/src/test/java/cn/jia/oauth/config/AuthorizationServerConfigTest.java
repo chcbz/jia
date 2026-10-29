@@ -147,7 +147,7 @@ class AuthorizationServerConfigTest extends BaseMockTest {
         when(accountSecurityService.findByUserId(17)).thenReturn(java.util.Optional.of(
                 new AccountSecuritySnapshot(17, "Jia-A", AccountState.ACTIVE, 4)));
         JwtEncodingContext valid = encodingContext(userAuthentication, AuthorizationGrantType.AUTHORIZATION_CODE);
-        new AccountSecurityTokenCustomizer(accountSecurityService).customize(valid);
+        productionCustomizer().customize(valid);
         Map<String, Object> claims = valid.getClaims().build().getClaims();
         assertEquals("user", claims.get("token_kind"));
         assertEquals("17", claims.get("uid"));
@@ -159,7 +159,7 @@ class AuthorizationServerConfigTest extends BaseMockTest {
         when(accountSecurityService.findByUserId(17)).thenReturn(java.util.Optional.of(
                 new AccountSecuritySnapshot(17, "Jia-A", AccountState.ACTIVE, 5)));
         OAuth2AuthenticationException failure = assertThrows(OAuth2AuthenticationException.class,
-                () -> new AccountSecurityTokenCustomizer(accountSecurityService)
+                () -> productionCustomizer()
                         .customize(encodingContext(userAuthentication, AuthorizationGrantType.REFRESH_TOKEN)));
         assertEquals("invalid_grant", failure.getError().getErrorCode());
     }
@@ -169,7 +169,7 @@ class AuthorizationServerConfigTest extends BaseMockTest {
         JwtEncodingContext context = encodingContext(clientPrincipal(), AuthorizationGrantType.CLIENT_CREDENTIALS);
         context.getClaims().claim("uid", "17").claim("jiacn", "stale").claim("username", "stale")
                 .claim("auth_epoch", 3L);
-        new AccountSecurityTokenCustomizer(accountSecurityService).customize(context);
+        productionCustomizer().customize(context);
         Map<String, Object> claims = context.getClaims().build().getClaims();
         assertEquals("machine", claims.get("token_kind"));
         assertFalse(claims.containsKey("uid"));
@@ -180,33 +180,31 @@ class AuthorizationServerConfigTest extends BaseMockTest {
     }
 
 
+    private AccountSecurityTokenCustomizer productionCustomizer() {
+        return new AccountSecurityTokenCustomizer(accountSecurityService, ignored -> true,
+                new FixedTenantAdmissionPolicy("0", false, null, null), Set.of("web-client"));
+    }
+
     @Test
-    void fixedClientReceivesTenantOneAndMissingOrMismatchedMappingFailsClosed() {
+    void fixedIssuerUsesConfiguredTenantWithoutClientTenantMetadata() {
         when(accountSecurityService.findByUserId(17)).thenReturn(java.util.Optional.of(
                 new AccountSecuritySnapshot(17, "Jia-A", AccountState.ACTIVE, 4)));
-        var admitted = new AccountSecurityTokenCustomizer(accountSecurityService, ignored -> "1",
-                new FixedTenantAdmissionPolicy("0", true, "1", "web-client"));
+        var admitted = new AccountSecurityTokenCustomizer(accountSecurityService, ignored -> true,
+                new FixedTenantAdmissionPolicy("0", true, "1", "web-client"), Set.of("web-client"));
         JwtEncodingContext context = encodingContext(userAuthentication, AuthorizationGrantType.AUTHORIZATION_CODE);
         admitted.customize(context);
         assertEquals("1", context.getClaims().build().getClaim("tenant_id"));
-        for (String mapped : new String[]{"0", "2"}) {
-            var customizer = new AccountSecurityTokenCustomizer(accountSecurityService, ignored -> mapped,
-                    new FixedTenantAdmissionPolicy("0", true, "1", "web-client"));
-            assertThrows(OAuth2AuthenticationException.class, () -> customizer.customize(
-                    encodingContext(userAuthentication, AuthorizationGrantType.AUTHORIZATION_CODE)));
-        }
-        var missing = new AccountSecurityTokenCustomizer(accountSecurityService, ignored -> null,
-                new FixedTenantAdmissionPolicy("0", true, "1", "web-client"));
+        var missing = new AccountSecurityTokenCustomizer(accountSecurityService, ignored -> false,
+                new FixedTenantAdmissionPolicy("0", true, "1", "web-client"), Set.of("web-client"));
         assertThrows(OAuth2AuthenticationException.class, () -> missing.customize(
                 encodingContext(userAuthentication, AuthorizationGrantType.AUTHORIZATION_CODE)));
     }
 
     @Test
-    void legacyClientWithoutMetadataKeepsLoginRefreshAndMachineClaimsButRejectsGreyMapping() {
+    void productionPreservesLoginRefreshMachineClaimsAndRejectsUnadmittedClient() {
         when(accountSecurityService.findByUserId(17)).thenReturn(java.util.Optional.of(
                 new AccountSecuritySnapshot(17, "Jia-A", AccountState.ACTIVE, 4)));
-        var legacy = new AccountSecurityTokenCustomizer(accountSecurityService, ignored -> null,
-                new FixedTenantAdmissionPolicy("0", false, null, null));
+        var legacy = productionCustomizer();
         for (var grant : new AuthorizationGrantType[]{AuthorizationGrantType.AUTHORIZATION_CODE,
                 AuthorizationGrantType.REFRESH_TOKEN}) {
             var context = encodingContext(userAuthentication, grant);
@@ -219,10 +217,20 @@ class AuthorizationServerConfigTest extends BaseMockTest {
         legacy.customize(machine);
         assertEquals("0", machine.getClaims().build().getClaim("tenant_id"));
         assertEquals("machine", machine.getClaims().build().getClaim("token_kind"));
-        var foreign = new AccountSecurityTokenCustomizer(accountSecurityService, ignored -> "1",
-                new FixedTenantAdmissionPolicy("0", false, null, null));
+        var denied = new AccountSecurityTokenCustomizer(accountSecurityService, ignored -> true,
+                new FixedTenantAdmissionPolicy("0", false, null, null), Set.of("other-client"));
         assertThrows(OAuth2AuthenticationException.class,
-                () -> foreign.customize(encodingContext(clientPrincipal(), AuthorizationGrantType.CLIENT_CREDENTIALS)));
+                () -> denied.customize(encodingContext(clientPrincipal(), AuthorizationGrantType.CLIENT_CREDENTIALS)));
+    }
+
+    @Test
+    void emptyIssuerClientSetAndConflictingGreyClientSetFailAtConfiguration() {
+        assertThrows(IllegalArgumentException.class, () -> new AccountSecurityTokenCustomizer(
+                accountSecurityService, ignored -> true,
+                new FixedTenantAdmissionPolicy("0", false, null, null), Set.of()));
+        assertThrows(IllegalArgumentException.class, () -> new AccountSecurityTokenCustomizer(
+                accountSecurityService, ignored -> true,
+                new FixedTenantAdmissionPolicy("0", true, "1", "cyf-local"), Set.of("web-client")));
     }
 
     private OAuth2TokenGenerator<OAuth2Token> generator(AtomicReference<Authentication> accessPrincipal) {

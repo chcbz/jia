@@ -34,7 +34,7 @@
 - UserService旧积分适配器保留对外方法，使用精确唯一身份查询后调用point账户，不再写user_info余额。通用create/update/upsert忽略point写输入；余额投影不进入登录身份查询。
 - UserController的get/list/search及生产my、微信余额展示改读新账户；列表批量查询不按每用户增加SQL。保留搜索OR与列表AND原语义，point=0包含本环境尚无账户的用户，不从tenant0兜底。
 - 现有微信答题回调测试替身改用point_account；第三方协议、回放/幂等合同不变。该测试的积分协作者仍是替身，不冒充真实PointService回归。
-- **尚未完成**：OAuth/用户scope列解耦、权限/成员链全量核对；签到位置/推荐人仍写共享用户资料，灰度路由保持最小白名单。礼品调用者ACL和外部支付凭据还需原完整审计，不凭tenant谓词宣称全功能灰度就绪。
+- **尚未完成**：OAuth/用户scope列解耦的正式回归及权限/成员链全量核对；签到位置/推荐人仍写共享用户资料，灰度路由保持最小白名单。礼品调用者ACL和外部支付凭据还需原完整审计，不凭tenant谓词宣称全功能灰度就绪。
 - 运维/初始化SQL及历史备份中的旧user_info.point仍需按切换生命周期分类，不能机械全库替换。回退最新余额迁回方案/真实备份恢复实测、Flow测试构建及安装未完成。
 
 ## 必要校验的具体依据
@@ -56,3 +56,20 @@
 新增/更新Java测试包括point账户与业务单测、真实account Mapper+Spring事务回滚测试（订单/流水协作者使用同事务JDBC）、用户实际ORM/XML兼容测试、用户/微信兼容fixture。**均尚未执行，正式验证待Flow。** XML/Python语法与diff空白检查通过。
 
 生产只读聚合检查：jia的point_sign 1313行、point_referral 2行、point_gift 7行、point_gift_usage 9行，全部tenant0，无NULL/非0；本次严格tenant谓词不会仅因这些历史记录的scope值而隐藏它们。这不代表全部生产调用已验证。元数据只有主键，新增资格查询索引随受控迁移执行，尚未创建。
+
+
+## 身份与业务成员解耦候选（2026-10-29，尚未发布）
+
+- `user_info`不持久化tenant/client/point；`oauth_client`不持久化tenant，但保留OAuth协议自身client_id。全球身份查询不以业务分区兜底或筛选；资料写入忽略请求携带的归属/余额。
+- `user_business_membership(tenant_id,client_id,user_id)`单独保存业务归属，不代替角色/权限。旧NULL client保存为`''`仅表示环境成员；按客户端筛选不匹配此行。实际库存中7个有client的用户均无等价角色/组/组织归属，不能仅用这些关系替代旧筛选。
+- 新建/upsert在身份事务内，以进程tenant和已准入调用者client写成员，幂等不覆盖旧归属。`sync`外层事务覆盖self-call；无事务直接调用成员Service拒绝执行。既有默认角色和关系读写未宣称完整灰度隔离，原路由限制继续保留。
+- OAuth签发使用全局精确客户端注册记录+配置`cyf.security.oauth.issuer-client-ids`；环境tenant由进程确定。签名tenant仍作为环境绑定供既有API/Runtime校验，不代表身份表或OAuth客户端拥有租户。
+- 生产allowlist缺失会启动失败；必须先将原准入集合写部署配置。灰度仅准入固定client，不能靠删列开放生产签发灰度client。测试profile只配置合成`jia_client`，不替代生产清单。
+
+### 切换条件与验证边界
+
+1. 停止旧身份/积分写入并备份；准备账户及成员DDL，运行显式导入并核对全量计数/余额/精确归属。导入程序不会自动CALL或删列，命名锁只锁导入者，不冒充应用停写锁。
+2. 配置生产issuer清单、安装受测不可变制品后验证旧业务。删列必须最后进行；不能先删列再让旧应用写。
+3. 新版本写入后，不能恢复旧余额/成员快照覆盖新事实；完整受控恢复实测仍待完成。
+4. 新增5项隔离MySQL检查已通过（17.658秒）：精确迁移/源数据不变/不赋权、拒绝覆盖、坏数据整批回滚、删列筛选、实际mapper幂等及事务回滚。SQL筛选测试独立构造等价谓词，不冒充Java DAO执行；Java实际ORM tests待Flow。
+5. 新增/扩展`UserPointProjectionMapperTest`、`OauthClientIdentityMapperTest`和`UserBusinessMembershipTest`，覆盖删列CRUD/查询及配置/事务声明。Java、validateLayering、应用启动及生产行为尚未验证；无生产迁移或发布。

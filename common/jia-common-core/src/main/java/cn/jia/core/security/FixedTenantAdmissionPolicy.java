@@ -2,7 +2,7 @@ package cn.jia.core.security;
 
 /**
  * Narrow fixed-process admission policy. Disabled mode preserves the legacy tenant-zero
- * deployment. Enabled mode admits only one exact persisted tenant/client pair; it never accepts
+ * deployment. Enabled mode admits only the configured tenant/client pair; it never accepts
  * a request/header tenant override and never keeps a tenant-zero side lane open.
  */
 public final class FixedTenantAdmissionPolicy {
@@ -27,15 +27,15 @@ public final class FixedTenantAdmissionPolicy {
         }
     }
 
-    public String requireClientTenant(String persistedClientId, String persistedTenantId) {
-        String exactClient = TenantClaimPolicy.exact(persistedClientId);
-        // Only an existing exact client with absent historical metadata gets the old single-tenant
-        // scope. Explicit foreign/invalid mappings and every grey mapping remain fail-closed.
-        String exactTenant = !enabled && (persistedTenantId == null || persistedTenantId.isEmpty())
-                ? legacyTenantId : TenantClaimPolicy.exact(persistedTenantId);
-        requireAdmitted(exactTenant, exactClient);
-        return exactTenant;
+    /** Business partition is process configuration, never an OAuth registry attribute. */
+    public String tenantForClient(String registeredClientId) {
+        String exactClient = TenantClaimPolicy.exact(registeredClientId);
+        String businessTenant = businessTenantId();
+        requireAdmitted(businessTenant, exactClient);
+        return businessTenant;
     }
+
+    public String businessTenantId() { return enabled ? tenantId : legacyTenantId; }
 
     public void requireAdmitted(String claimedTenantId, String claimedClientId) {
         String exactTenant = TenantClaimPolicy.exact(claimedTenantId);

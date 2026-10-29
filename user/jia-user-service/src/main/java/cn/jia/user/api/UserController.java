@@ -363,6 +363,9 @@ public class UserController {
             if (user == null) {
                 throw new EsRuntimeException(UserErrorConstants.USER_NOT_EXIST);
             }
+            // Compatibility fields describe this admitted session, not persisted identity ownership.
+            user.setTenantId(pointAccounts.tenantId());
+            user.setClientId(context.getClientId());
             user.setPoint(pointAccounts.balance(user.getJiacn()));
             user.setPassword("***");
             return JsonResult.success(user);

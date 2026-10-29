@@ -45,6 +45,8 @@ public class UserServiceImpl extends BaseServiceImpl<UserInfoDao, UserEntity> im
     @Autowired
     private PointAccountService pointAccounts;
     @Autowired
+    private UserBusinessMembership businessMembership;
+    @Autowired
     private UserRoleRelDao userRoleRelDao;
     @Autowired
     private UserOrgRelDao userOrgRelDao;
@@ -188,7 +190,7 @@ public class UserServiceImpl extends BaseServiceImpl<UserInfoDao, UserEntity> im
     }
 
     private List<UserEntity> searchUsers(UserEntity user) {
-        return baseDao.searchByExample(user, pointAccounts.tenantId());
+        return baseDao.searchByExample(user, businessMembership.tenantId());
     }
 
     @Override
@@ -203,7 +205,7 @@ public class UserServiceImpl extends BaseServiceImpl<UserInfoDao, UserEntity> im
 
     @Override
     public PageInfo<UserEntity> findListPage(UserVO user, int pageNum, int pageSize, String orderBy) {
-        return getPageInfo(pageNum, pageSize, orderBy, () -> baseDao.selectForList(user, pointAccounts.tenantId()));
+        return getPageInfo(pageNum, pageSize, orderBy, () -> baseDao.selectForList(user, businessMembership.tenantId()));
     }
 
     @Override
@@ -244,6 +246,7 @@ public class UserServiceImpl extends BaseServiceImpl<UserInfoDao, UserEntity> im
     }
 
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public void sync(List<UserEntity> userList) {
         for (UserEntity user : userList) {
             stripAccountSecurityMutation(user);
@@ -252,6 +255,7 @@ public class UserServiceImpl extends BaseServiceImpl<UserInfoDao, UserEntity> im
     }
 
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public UserEntity upsert(UserEntity user) {
         stripAccountSecurityMutation(user);
         // 处理本地用户
@@ -268,6 +272,7 @@ public class UserServiceImpl extends BaseServiceImpl<UserInfoDao, UserEntity> im
             handleNewUserCreation(user);
         } else {
             handleExistingUserUpdate(user, curUser.getFirst());
+            businessMembership.ensure(user.getId(), EsContextHolder.getContext().getClientId());
         }
 
         return user;
@@ -417,7 +422,8 @@ public class UserServiceImpl extends BaseServiceImpl<UserInfoDao, UserEntity> im
      */
     private void createUserWithDefaultRole(UserEntity user) {
         user.setPassword(StringUtil.isNotEmpty(user.getPassword()) ? PasswordUtil.encode(user.getPassword()) : null);
-        baseDao.insert(user);
+        if (baseDao.insert(user) != 1) throw new IllegalStateException("User insert failed");
+        businessMembership.ensure(user.getId(), EsContextHolder.getContext().getClientId());
         RoleRelEntity rel = new RoleRelEntity();
         rel.setRoleId(UserConstants.DEFAULT_ROLE_ID);
         rel.setUserId(user.getId());
@@ -577,7 +583,8 @@ public class UserServiceImpl extends BaseServiceImpl<UserInfoDao, UserEntity> im
         }
         user.setPassword(StringUtil.isNotEmpty(user.getPassword()) ? PasswordUtil.encode(user.getPassword()) : null);
 
-        baseDao.insert(user);
+        if (baseDao.insert(user) != 1) throw new IllegalStateException("User insert failed");
+        businessMembership.ensure(user.getId(), EsContextHolder.getContext().getClientId());
         RoleRelEntity rel = new RoleRelEntity();
         rel.setRoleId(UserConstants.DEFAULT_ROLE_ID);
         rel.setUserId(user.getId());
@@ -607,6 +614,8 @@ public class UserServiceImpl extends BaseServiceImpl<UserInfoDao, UserEntity> im
     private static void stripAccountSecurityMutation(UserEntity user) {
         if (user != null) {
             user.setPoint(null);
+            user.setTenantId(null);
+            user.setClientId(null);
             user.setAccountState(null);
             user.setAuthEpoch(null);
         }
