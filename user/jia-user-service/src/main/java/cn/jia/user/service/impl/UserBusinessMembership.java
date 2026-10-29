@@ -25,6 +25,12 @@ public class UserBusinessMembership {
 
     public String tenantId() { return tenantId; }
 
+    /** Global identity deletion removes affiliations, not financial history or permission definitions. */
+    @Transactional(propagation = Propagation.MANDATORY, rollbackFor = Exception.class)
+    public void removeForDeletedIdentity(java.io.Serializable userId) {
+        memberships.deleteByUserId(java.util.Objects.requireNonNull(userId));
+    }
+
     /** Called within identity registration/upsert, with the admitted caller's client, never a profile field. */
     @Transactional(propagation = Propagation.MANDATORY, rollbackFor = Exception.class)
     public void ensure(Long userId, String admittedClientId) {

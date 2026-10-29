@@ -80,6 +80,14 @@ public class UserServiceImpl extends BaseServiceImpl<UserInfoDao, UserEntity> im
     }
 
     @Override
+    @Transactional(rollbackFor = Exception.class)
+    public boolean delete(java.io.Serializable id) {
+        boolean deleted = super.delete(id);
+        if (deleted) businessMembership.removeForDeletedIdentity(id);
+        return deleted;
+    }
+
+    @Override
     public UserEntity update(UserEntity user) {
         stripAccountSecurityMutation(user);
         return super.update(user);

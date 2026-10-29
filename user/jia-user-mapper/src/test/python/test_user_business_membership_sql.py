@@ -95,6 +95,20 @@ class MembershipSqlTest(unittest.TestCase):
         self.sql(statement + ';' + statement.replace('123', '456') + ';')
         self.assertEqual(self.sql('SELECT COUNT(*),MIN(create_time) FROM user_business_membership;'), '1\t123')
 
+    def test_actual_delete_mapper_removes_only_deleted_identity_memberships(self):
+        self.seed()
+        self.sql('CALL cyf_import_user_business_membership();')
+        self.sql("INSERT INTO user_business_membership VALUES('1','gray',1,123);")
+        source = (MODULE / 'src/main/java/cn/jia/user/mapper/UserBusinessMembershipMapper.java').read_text()
+        statement = re.search(r'@org.apache.ibatis.annotations.Delete\("([^"\n]+)"\)', source).group(1)
+        statement = statement.replace('#{userId}', '1')
+        before = self.sql('SELECT * FROM user_business_membership ORDER BY user_id,tenant_id;')
+        self.sql('START TRANSACTION;DELETE FROM user_info WHERE id=1;' + statement + ';ROLLBACK;')
+        self.assertEqual(self.sql('SELECT * FROM user_business_membership ORDER BY user_id,tenant_id;'), before)
+        self.assertEqual(self.sql('SELECT COUNT(*) FROM user_info;'), '3')
+        self.sql('START TRANSACTION;DELETE FROM user_info WHERE id=1;' + statement + ';COMMIT;')
+        self.assertEqual(self.sql('SELECT user_id FROM user_business_membership ORDER BY user_id;'), '2\n3')
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()

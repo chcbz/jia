@@ -184,6 +184,35 @@ class PointAccountSqlTest(unittest.TestCase):
         self.command('ALTER TABLE user_info DROP COLUMN point;')
         self.assertEqual(self.command(query)[0], 'alice\t7\nbob\t0')
 
+    def test_recovery_uses_current_production_balance_and_preserves_gray(self):
+        self.command("INSERT INTO user_info VALUES (1,'alice',41,'0',1,1),(2,'bob',8,'0',1,1);")
+        self.command('CALL cyf_import_legacy_point_account();')
+        self.command(self.mapper('change', delta=-12) + self.mapper('ensureAccount', tenant='1')
+                     + self.mapper('change', tenant='1', delta=99))
+        self.command("INSERT INTO user_info VALUES (3,'carol',999,'0',1,1);")
+        self.command((RESOURCE / 'point-account-export-legacy.sql').read_text())
+        self.command('ALTER TABLE user_info DROP COLUMN point;ALTER TABLE user_info ADD COLUMN point int;')
+        accounts = self.command('SELECT * FROM point_account ORDER BY tenant_id,jiacn;')[0]
+        self.assertEqual(self.command('CALL cyf_export_current_point_to_legacy();')[0], '3\t0')
+        self.assertEqual(self.command('SELECT jiacn,point FROM user_info ORDER BY id;')[0], 'alice\t29\nbob\t8\ncarol\t0')
+        self.assertEqual(self.command('SELECT * FROM point_account ORDER BY tenant_id,jiacn;')[0], accounts)
+        self.command('CALL cyf_export_current_point_to_legacy();')
+        self.assertEqual(self.command("SELECT point FROM user_info WHERE jiacn='alice';")[0], '29')
+
+    def test_recovery_rejects_orphan_or_duplicate_identity_without_partial_update(self):
+        self.command("INSERT INTO user_info VALUES (1,'alice',41,'0',1,1);")
+        self.command(self.mapper('ensureAccount') + self.mapper('change', delta=9)
+                     + self.mapper('ensureAccount', user='orphan'))
+        self.command((RESOURCE / 'point-account-export-legacy.sql').read_text())
+        self.command('CALL cyf_export_current_point_to_legacy();', success=False)
+        self.assertEqual(self.command('SELECT point FROM user_info;')[0], '41')
+        self.command("DELETE FROM point_account WHERE jiacn='orphan';"
+                     "INSERT INTO user_info VALUES (2,'alice',50,'0',1,1);")
+        self.command('CALL cyf_export_current_point_to_legacy();', success=False)
+        self.assertEqual(self.command('SELECT point FROM user_info ORDER BY id;')[0], '41\n50')
+        self.command('DELETE FROM user_info WHERE id=2;CALL cyf_export_current_point_to_legacy();')
+        self.assertEqual(self.command('SELECT point FROM user_info;')[0], '9')
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()

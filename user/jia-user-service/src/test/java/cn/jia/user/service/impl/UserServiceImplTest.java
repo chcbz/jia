@@ -57,6 +57,30 @@ class UserServiceImplTest extends BaseMockTest {
     }
 
     @Test
+    void globalIdentityDeleteCleansMembershipButNeverFinancialHistory() {
+        when(userInfoDao.deleteById(7L)).thenReturn(1);
+        Assertions.assertTrue(userServiceImpl.delete(7L));
+        var ordered = inOrder(userInfoDao, businessMembership);
+        ordered.verify(userInfoDao).deleteById(7L);
+        ordered.verify(businessMembership).removeForDeletedIdentity(7L);
+        verifyNoInteractions(pointAccounts);
+    }
+
+    @Test
+    void absentIdentityDoesNotDeleteMembershipAsASideEffect() {
+        when(userInfoDao.deleteById(7L)).thenReturn(0);
+        Assertions.assertFalse(userServiceImpl.delete(7L));
+        verifyNoInteractions(businessMembership, pointAccounts);
+    }
+
+    @Test
+    void membershipCleanupFailureIsNotReportedAsDeleteSuccess() {
+        when(userInfoDao.deleteById(7L)).thenReturn(1);
+        doThrow(new IllegalStateException("fixture failure")).when(businessMembership).removeForDeletedIdentity(7L);
+        assertThrows(IllegalStateException.class, () -> userServiceImpl.delete(7L));
+    }
+
+    @Test
     void testCreate() {
         when(ldapUserService.create(any())).thenReturn(new LdapUser("uid"));
         when(ldapUserService.search(any())).thenReturn(Collections.emptyList());

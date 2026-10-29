@@ -95,6 +95,7 @@ class AgentTaskCollaborationSchemaTest {
         String migration = readResource("db/migration-tenant-default-zero.sql");
         String normalizedMigration = compact(migration);
         for (String table : List.of(
+                "user_info", "oauth_client",
                 "agent_task_meta", "agent_task_member", "agent_task_work_item",
                 "agent_task_request", "agent_task_artifact", "agent_task_event",
                 "agent_task_thread", "agent_task_backfill_issue",

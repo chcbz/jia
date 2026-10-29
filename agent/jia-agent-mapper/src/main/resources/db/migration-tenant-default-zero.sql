@@ -6,6 +6,8 @@
 -- ============================================================================
 
 -- =========================================================
+-- Global identity/OAuth registration no longer own a tenant column (2026-10-29).
+-- Do not recreate/backfill their removed scope; migrate business affiliations separately.
 -- Phase 1: Backfill all NULL tenant_id values to '0'
 -- Collaboration-owned agent_task_meta is intentionally excluded; B09/C01H owns its audited migration.
 -- Shared chat facts are excluded from historical NULL-to-'0' rewrites because this script cannot
@@ -37,7 +39,6 @@ UPDATE `mat_vote_item`        SET tenant_id = '0' WHERE tenant_id IS NULL;
 UPDATE `mat_vote_question`    SET tenant_id = '0' WHERE tenant_id IS NULL;
 UPDATE `mat_vote_tick`        SET tenant_id = '0' WHERE tenant_id IS NULL;
 UPDATE `oauth_api_key`        SET tenant_id = '0' WHERE tenant_id IS NULL;
-UPDATE `oauth_client`         SET tenant_id = '0' WHERE tenant_id IS NULL;
 UPDATE `point_gift`           SET tenant_id = '0' WHERE tenant_id IS NULL;
 UPDATE `point_gift_usage`     SET tenant_id = '0' WHERE tenant_id IS NULL;
 UPDATE `point_record`         SET tenant_id = '0' WHERE tenant_id IS NULL;
@@ -55,7 +56,6 @@ UPDATE `task_item`            SET tenant_id = '0' WHERE tenant_id IS NULL;
 UPDATE `task_plan`            SET tenant_id = '0' WHERE tenant_id IS NULL;
 UPDATE `user_group`           SET tenant_id = '0' WHERE tenant_id IS NULL;
 UPDATE `user_group_rel`       SET tenant_id = '0' WHERE tenant_id IS NULL;
-UPDATE `user_info`            SET tenant_id = '0' WHERE tenant_id IS NULL;
 UPDATE `user_msg`             SET tenant_id = '0' WHERE tenant_id IS NULL;
 UPDATE `user_org`             SET tenant_id = '0' WHERE tenant_id IS NULL;
 UPDATE `user_org_rel`         SET tenant_id = '0' WHERE tenant_id IS NULL;
@@ -102,7 +102,6 @@ ALTER TABLE `mat_vote_item`        MODIFY COLUMN tenant_id varchar(50)  DEFAULT 
 ALTER TABLE `mat_vote_question`    MODIFY COLUMN tenant_id varchar(50)  DEFAULT '0' COMMENT '租户ID';
 ALTER TABLE `mat_vote_tick`        MODIFY COLUMN tenant_id varchar(50)  DEFAULT '0' COMMENT '租户ID';
 ALTER TABLE `oauth_api_key`        MODIFY COLUMN tenant_id varchar(100) DEFAULT '0' COMMENT '租户ID';
-ALTER TABLE `oauth_client`         MODIFY COLUMN tenant_id varchar(50)  DEFAULT '0' COMMENT '租户ID';
 ALTER TABLE `point_gift`           MODIFY COLUMN tenant_id varchar(50)  DEFAULT '0' COMMENT '租户ID';
 ALTER TABLE `point_gift_usage`     MODIFY COLUMN tenant_id varchar(50)  DEFAULT '0' COMMENT '租户ID';
 ALTER TABLE `point_record`         MODIFY COLUMN tenant_id varchar(50)  DEFAULT '0' COMMENT '租户ID';
@@ -120,7 +119,6 @@ ALTER TABLE `task_item`            MODIFY COLUMN tenant_id varchar(50)  DEFAULT 
 ALTER TABLE `task_plan`            MODIFY COLUMN tenant_id varchar(50)  DEFAULT '0' COMMENT '租户ID';
 ALTER TABLE `user_group`           MODIFY COLUMN tenant_id varchar(50)  DEFAULT '0' COMMENT '租户ID';
 ALTER TABLE `user_group_rel`       MODIFY COLUMN tenant_id varchar(50)  DEFAULT '0' COMMENT '租户ID';
-ALTER TABLE `user_info`            MODIFY COLUMN tenant_id varchar(50)  DEFAULT '0' COMMENT '租户ID';
 ALTER TABLE `user_msg`             MODIFY COLUMN tenant_id varchar(50)  DEFAULT '0' COMMENT '租户ID';
 ALTER TABLE `user_org`             MODIFY COLUMN tenant_id varchar(50)  DEFAULT '0' COMMENT '租户ID';
 ALTER TABLE `user_org_rel`         MODIFY COLUMN tenant_id varchar(50)  DEFAULT '0' COMMENT '租户ID';

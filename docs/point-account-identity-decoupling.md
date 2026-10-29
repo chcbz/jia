@@ -73,3 +73,11 @@
 3. 新版本写入后，不能恢复旧余额/成员快照覆盖新事实；完整受控恢复实测仍待完成。
 4. 新增5项隔离MySQL检查已通过（17.658秒）：精确迁移/源数据不变/不赋权、拒绝覆盖、坏数据整批回滚、删列筛选、实际mapper幂等及事务回滚。SQL筛选测试独立构造等价谓词，不冒充Java DAO执行；Java实际ORM tests待Flow。
 5. 新增/扩展`UserPointProjectionMapperTest`、`OauthClientIdentityMapperTest`和`UserBusinessMembershipTest`，覆盖删列CRUD/查询及配置/事务声明。Java、validateLayering、应用启动及生产行为尚未验证；无生产迁移或发布。
+
+## 2026-10-29 收口补充（候选，未生产执行）
+
+- 全局用户删除继续走原`user-delete`权限与全局删除语义，在同一事务删除该user_id的所有环境成员；不删除point账户/流水/订单，不改角色权限定义。失败回滚身份和成员，新增实际Mapper+Spring代理事务回归。成员不授予权限；旧角色等关系清理问题未借本任务扩改。
+- `migration-tenant-default-zero.sql`当前可执行资源排除user_info/oauth_client的回填和ALTER；Git历史保留原脚本。仓内及主机既有控制工具定向搜索未见直接调用该脚本，不能据此声称外部手工调用不存在。新增schema契约断言防回归。
+- 登录权限链核对：DefaultSecurityConfig→PermsService→PermsRelMapper及RoleMapper，前后均不依赖user_info的tenant/client；本次不修改原权限判定，不把业务成员当权限。只读生产聚合：user_role 2、user_role_rel 190、user_group_rel 6、user_org_rel 1均tenant0，user_perms_rel空。灰度用户管理、积分等路由仍被MinimalGreyTenantRouteFilter拒绝。此结论不是这些接口已实现完整多环境权限隔离；不扩大本任务至旧权限ID映射修复。
+- 新增`point-account-export-legacy.sql`仅承担资金恢复步骤：所有写入停下并备份当前状态后，将最新tenant0余额写回重新准备好的旧point列；不读旧快照、不改tenant1余额和流水；孤儿生产账户/歧义身份拒绝并要求核对，不静默丢款。身份/OAuth列兼容和旧应用启动仍须另行恢复，不将该步骤当完整回退器。合成库2项恢复检查通过，包含删列重建后的最新余额和失败后不部分更新。
+- 成员SQL测试现6/6通过，5.358秒；新增清理事务检查。新Java事务测试尚待Flow。生产未迁移、未删列、未变更配置或进程。
