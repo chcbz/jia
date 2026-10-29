@@ -79,25 +79,6 @@ class PointAccountSqlTest(unittest.TestCase):
         self.command('CALL cyf_import_legacy_point_account();', success=False)
         self.assertEqual(self.balance(), '41')
 
-    def test_identityless_zero_point_profiles_are_preserved_without_invented_accounts(self):
-        self.command("INSERT INTO user_info VALUES (1,'alice',41,'0',1,2),(2,NULL,0,'0',1,2),(3,'',NULL,'0',1,2);")
-        self.command('CALL cyf_import_legacy_point_account();')
-        self.assertEqual(self.command('SELECT COUNT(*) FROM point_account;')[0], '1')
-        self.assertEqual(self.command('SELECT COUNT(*) FROM user_info;')[0], '3')
-        self.assertEqual(self.balance(), '41')
-        self.command((RESOURCE / 'point-account-export-legacy.sql').read_text())
-        self.command("UPDATE point_account SET balance=35 WHERE jiacn='alice';CALL cyf_export_current_point_to_legacy();")
-        self.assertEqual(self.command('SELECT point FROM user_info ORDER BY id;')[0], '35\n0\nNULL')
-
-    def test_identityless_history_is_skipped_and_source_values_remain_unchanged(self):
-        self.command("INSERT INTO user_info VALUES (1,'alice',41,'0',1,2),(2,NULL,7,'0',1,2);")
-        self.command('CALL cyf_import_legacy_point_account();')
-        self.assertEqual(self.command('SELECT COUNT(*) FROM point_account;')[0], '1')
-        self.assertEqual(self.balance(), '41')
-        self.command((RESOURCE / 'point-account-export-legacy.sql').read_text())
-        self.command('CALL cyf_export_current_point_to_legacy();')
-        self.assertEqual(self.command('SELECT point FROM user_info WHERE id=2;')[0], '7')
-
     def test_existing_target_is_never_reset_or_reimported(self):
         self.command("INSERT INTO user_info VALUES (1,'alice',41,'0',1,2);")
         self.command(self.mapper('ensureAccount') + self.mapper('change', delta=9))

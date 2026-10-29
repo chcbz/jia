@@ -97,7 +97,7 @@ public class UserController {
         if (user == null) {
             throw new EsRuntimeException(UserErrorConstants.USER_NOT_EXIST);
         }
-        user.setPoint(projectBalance(user));
+        user.setPoint(pointAccounts.balance(user.getJiacn()));
         UserVO userVO = UserVOMapper.INSTANCE.toVO(user);
         userVO.setRoleIds(userService.findRoleIds(user.getId()));
         userVO.setOrgIds(userService.findOrgIds(user.getId()));
@@ -366,7 +366,7 @@ public class UserController {
             // Compatibility fields describe this admitted session, not persisted identity ownership.
             user.setTenantId(pointAccounts.tenantId());
             user.setClientId(context.getClientId());
-            user.setPoint(projectBalance(user));
+            user.setPoint(pointAccounts.balance(user.getJiacn()));
             user.setPassword("***");
             return JsonResult.success(user);
         }
@@ -565,19 +565,9 @@ public class UserController {
         return JsonResult.success(user);
     }
 
-    private int projectBalance(UserEntity user) {
-        // Legacy profile-only rows may have no financial identity; no account is projected.
-        // Do not create a synthetic account or relax PointAccountService write validation.
-        String jiacn = user.getJiacn();
-        return jiacn == null || jiacn.isEmpty() ? 0 : pointAccounts.balance(jiacn);
-    }
-
     private void projectBalances(List<UserEntity> users) {
         Map<String, Integer> balances = pointAccounts.balances(users.stream()
-                .map(UserEntity::getJiacn).filter(value -> value != null && !value.isEmpty()).toList());
-        for (UserEntity user : users) {
-            String jiacn = user.getJiacn();
-            user.setPoint(jiacn == null || jiacn.isEmpty() ? 0 : balances.getOrDefault(jiacn, 0));
-        }
+                .map(UserEntity::getJiacn).filter(java.util.Objects::nonNull).toList());
+        for (UserEntity user : users) user.setPoint(balances.getOrDefault(user.getJiacn(), 0));
     }
 }

@@ -7,8 +7,6 @@
 -- means zero, as in PointAccountService; orphan/duplicate identities require
 -- reconciliation, not guessed reassignment. Restore identity/OAuth compatibility
 -- separately before any old binary is permitted to start.
--- Identityless historical rows are outside financial import/export scope; leave
--- their existing legacy point values unchanged, without fabricating account keys.
 DELIMITER $$
 CREATE PROCEDURE cyf_export_current_point_to_legacy()
 BEGIN
@@ -28,8 +26,9 @@ BEGIN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Point migration already active';
     END IF;
     START TRANSACTION;
-    IF EXISTS(SELECT 1 FROM user_info WHERE jiacn IS NOT NULL AND jiacn<>'' AND (CHAR_LENGTH(jiacn)>50 OR jiacn REGEXP '[[:cntrl:]]|^[[:space:]]|[[:space:]]$'))
-        OR EXISTS(SELECT 1 FROM user_info WHERE jiacn IS NOT NULL AND jiacn<>'' GROUP BY CAST(jiacn AS BINARY) HAVING COUNT(*)>1) THEN
+    IF EXISTS(SELECT 1 FROM user_info WHERE jiacn IS NULL OR jiacn=''
+        OR CHAR_LENGTH(jiacn)>50 OR jiacn REGEXP '[[:cntrl:]]|^[[:space:]]|[[:space:]]$')
+        OR EXISTS(SELECT 1 FROM user_info GROUP BY CAST(jiacn AS BINARY) HAVING COUNT(*)>1) THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Invalid or duplicate identity; no financial recovery';
     END IF;
     IF EXISTS(SELECT 1 FROM point_account a LEFT JOIN user_info u
@@ -37,15 +36,15 @@ BEGIN
         WHERE CAST(a.tenant_id AS BINARY)=CAST('0' AS BINARY) AND u.id IS NULL) THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Orphan production account; reconcile without discarding funds';
     END IF;
-    SELECT COUNT(*) INTO v_rows FROM user_info WHERE jiacn IS NOT NULL AND jiacn<>'';
+    SELECT COUNT(*) INTO v_rows FROM user_info;
     UPDATE user_info u LEFT JOIN point_account a
         ON CAST(a.tenant_id AS BINARY)=CAST('0' AS BINARY)
         AND CAST(a.jiacn AS BINARY)=CAST(u.jiacn AS BINARY)
-        SET u.point=COALESCE(a.balance,0) WHERE u.jiacn IS NOT NULL AND u.jiacn<>'';
+        SET u.point=COALESCE(a.balance,0);
     IF EXISTS(SELECT 1 FROM user_info u LEFT JOIN point_account a
         ON CAST(a.tenant_id AS BINARY)=CAST('0' AS BINARY)
         AND CAST(a.jiacn AS BINARY)=CAST(u.jiacn AS BINARY)
-        WHERE u.jiacn IS NOT NULL AND u.jiacn<>'' AND (u.point IS NULL OR u.point<>COALESCE(a.balance,0))) THEN
+        WHERE u.point IS NULL OR u.point<>COALESCE(a.balance,0)) THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Current balance recovery mismatch';
     END IF;
     COMMIT;
