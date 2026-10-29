@@ -905,14 +905,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             var skillExecution = SkillExecutionDeclaration.parse(payload.get("skillExecution"));
             AgentRegisterDTO request = new AgentRegisterDTO();
             request.setAgentId(agentId);
-            request.setName(asString(payload.get("name")));
-            request.setAvatar(asString(payload.get("avatar")));
-            request.setPersonaName(asString(payload.get("personaName")));
-            request.setPersonaCode(asString(payload.get("personaCode")));
             request.setEndpoint(asString(payload.get("endpoint")));
-            if (payload.containsKey("abilities")) {
-                request.setAbilities(asStringList(payload.get("abilities")));
-            }
             stage = "runtime_register";
             AgentRegisterResultDTO result = withSessionContext(session, () -> runtimeAuthentication.withFence(sessionProof(session), true, () -> agentService.register(request)));
             if (result == null || !agentId.equals(result.getAgentId())) {
@@ -1088,9 +1081,6 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             request.setCurrentTaskId(asString(payload.get("currentTaskId")));
             request.setCurrentTaskTitle(asString(payload.get("currentTaskTitle")));
             request.setErrorMessage(asString(payload.get("errorMessage")));
-            if (payload.containsKey("abilities")) {
-                request.setAbilities(asStringList(payload.get("abilities")));
-            }
             if (payload.containsKey("durableStateHealthy") && !(payload.get("durableStateHealthy") instanceof Boolean)) {
                 throw new IllegalArgumentException("Invalid durable-state health declaration");
             }
@@ -3419,20 +3409,6 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         } catch (ReflectiveOperationException ignored) {
             return null;
         }
-    }
-
-    private java.util.List<String> asStringList(Object value) {
-        if (!(value instanceof java.util.List<?> list)) {
-            throw new IllegalArgumentException("abilities must be an array");
-        }
-        java.util.List<String> abilities = new java.util.ArrayList<>(list.size());
-        for (Object item : list) {
-            if (!(item instanceof String ability) || ability.isBlank()) {
-                throw new IllegalArgumentException("abilities must contain non-blank strings");
-            }
-            abilities.add(ability);
-        }
-        return java.util.List.copyOf(abilities);
     }
 
     private static final class ControlledImageV3Declaration {

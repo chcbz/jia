@@ -1,6 +1,7 @@
 package cn.jia.agent.service;
 
 import cn.jia.agent.entity.AgentCapabilityDTO;
+import cn.jia.agent.entity.AgentAbilitiesUpdateDTO;
 import cn.jia.agent.entity.AgentPersonaEntity;
 import cn.jia.agent.entity.AgentRegisterDTO;
 import cn.jia.agent.entity.AgentRegisterResultDTO;
@@ -53,6 +54,8 @@ public interface AgentService {
     AgentRuntimeDTO get(String agentId);
 
     AgentRuntimeDTO updateStatus(String agentId, AgentStatusDTO request);
+
+    AgentRuntimeDTO updateAbilities(String agentId, AgentAbilitiesUpdateDTO request);
 
     List<AgentTaskDTO> getAgentTasks(String agentId);
 

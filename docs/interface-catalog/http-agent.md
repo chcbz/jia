@@ -2525,3 +2525,14 @@ public ResponseEntity<ConversationDeliverableReadAdapter.Page> list( @PathVariab
 TASK概览和事项分页/阶段计数复用同一 `AgentTaskPhaseSql.PHASE`。`review` 仅在 `phase=PENDING_ACCEPTANCE` 且真实reviewReady完整时返回；多个submitted、最新交付矛盾等即使latest-only join取到一个批次，也必须UNKNOWN且review=null。正式schema关闭时不访问正式交付表，根终态保留COMPLETED/HISTORY，其余UNKNOWN。
 
 此字段仅为只读展示，不是验收授权。Web对缺失/非法/矛盾phase隔离TASK来源错误；不把reviewing自行提升为可验收，UNKNOWN只读核对。真实MyBatis/MySQL逐项对照及正式Flow180通过，线上部署未发生，部署后的身份/ACL及真实页面核验不由该证据替代。
+
+## 本领本人维护合同（2026-10-29，接口标准 v1.4）
+
+本节覆盖旧注册/状态接口中资料和本领的可写声明，其他接口条目仍保留原基线。实施基线 de6776fb3092a3e71aa5004d115c1280b742f2aa，发布状态另见根项目 handoff JUYITING-PERSONA-ABILITIES-20261029。
+
+- `PUT /agent/{agentId}/abilities`，JWT 本人已绑定的非系统好汉；公共 `JsonRequest.data` 为 `{expectedAbilities: string[], abilities: string[]}`，两项必须给出，允许清空 `[]`。成功 `200`、公共 JsonResult.data 为权威 AgentRuntimeDTO，所有响应 `Cache-Control: private, no-store`。
+- 服务端先归一化新值，事务内沿已有身份/绑定/运行行锁检查租户、客户端、所有者及有效绑定；当前投影本领须与 expectedAbilities 按项/顺序相等，不同返回 `409 / AGENT_ABILITIES_CONFLICT`，零写入。此为最终值 CAS，避免覆盖不同的当前值，不识别 ABA/编辑历史；介绍文本不新增修订历史。保存仅改本领，不改任务、状态、错误、心跳、技能就绪或授权。提交后沿现有身份隔离发布最新快照。
+- 新值最多128项、每项 strip 后1–100个 UTF-16 单元，拒绝 null/空项/ISO控制字符；按 Locale.ROOT 小写键保留首项去重。沿用原本领字段/匹配输入界限，防止介绍载荷无界扩展、标签/匹配控制字符混入；非法入参400/BAD_REQUEST，越权403/AGENT_FORBIDDEN，数据库写失败500/AGENT_ERROR。失败不改本领；未增加注册或运行就绪门禁。
+- Web 每行一项，移除空行和重复项，空列表可保存；取消不写。保存后读取 `profile-capabilities`，只有权威读回匹配才展示保存完成；409或网络未知保留草稿，显式核对最新值后再决定保存，不自动重试。切换身份/好汉/面板中止并隔离旧回调；非本人/宋江只读。本领仍参与现有任务匹配，不是已安装技能、就绪或执行授权证明。
+- 请上梁山创建新 runtime 时初始化资料/默认本领，重复绑定不覆盖。注册 DTO 只含 agentId/endpoint，状态 DTO 只含 status/currentTaskId/currentTaskTitle/errorMessage；两条链路均不能覆盖资料或本领。不提供旧客户端双轨适配。WS 身份/会话、防重及实际消费的运行声明保留：runtimeCapabilities、typedDeliberation（含材料输入和nativeExecution）、skillExecution；presence 仅动态状态和必要 fence。
+- 回归：WaterMarginPersonaCatalogTest、AgentServiceImplTest、AgentControllerTest、AgentWebSocketHandlerTest、AgentRuntimeCapabilitiesTest；Web juyiting-agent-abilities-editor.test.js；Runtime agent-client.test.mjs、registration-footprint.test.mjs。正式构建/线上验收证据独立记录，不以本节更新代替已上线。

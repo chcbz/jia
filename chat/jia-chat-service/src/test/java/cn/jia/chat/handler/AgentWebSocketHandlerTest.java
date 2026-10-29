@@ -32,6 +32,7 @@ import cn.jia.chat.service.DisplayNameSource;
 import cn.jia.chat.service.ServerResolvedSender;
 import cn.jia.chat.service.ServerResolvedAgentSender;
 import cn.jia.chat.service.JuyitingConversationScopeService;
+import cn.jia.core.util.JsonUtil;
 import cn.jia.core.context.EsContext;
 import cn.jia.core.context.EsContextHolder;
 import reactor.core.publisher.Flux;
@@ -164,36 +165,23 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
     }
 
     @Test
-    void registerAbilitiesDistinguishMissingEmptyAndNull() throws Exception {
-        stubAgentSession("session-register-abilities", "agent-001", "runtime-1");
+    void registrationPassesOnlyConnectionFieldsToService() throws Exception {
+        stubAgentSession("session-register-minimal", "agent-001", "runtime-1");
         when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
-        when(agentService.register(any(AgentRegisterDTO.class)))
-                .thenReturn(new AgentRegisterResultDTO(
-                        "agent-001", "token", AgentConstants.STATUS_ONLINE));
-        AgentWebSocketHandler handler = UnifiedRuntimeTestSupport.authorize(new AgentWebSocketHandler(chatClient, agentServiceProvider,
-                chatMessageDao, chatConversationEventBroker));
-
-        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
-                {"type":"agent.register","agentId":"agent-001","runtimeInstanceId":"runtime-1"}
-                """));
+        when(agentService.register(any(AgentRegisterDTO.class))).thenReturn(
+                new AgentRegisterResultDTO("agent-001", "token", AgentConstants.STATUS_ONLINE));
+        AgentWebSocketHandler handler = UnifiedRuntimeTestSupport.authorize(new AgentWebSocketHandler(
+                chatClient, agentServiceProvider, chatMessageDao, chatConversationEventBroker));
         UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
                 {"type":"agent.register","agentId":"agent-001","runtimeInstanceId":"runtime-1",
-                 "abilities":[]}
+                 "endpoint":"wss://example.com/agent"}
                 """));
-        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
-                {"type":"agent.register","agentId":"agent-001","runtimeInstanceId":"runtime-1",
-                 "abilities":null}
-                """));
-
         ArgumentCaptor<AgentRegisterDTO> captor = ArgumentCaptor.forClass(AgentRegisterDTO.class);
-        verify(agentService, org.mockito.Mockito.times(2)).register(captor.capture());
-        assertEquals(null, captor.getAllValues().get(0).getAbilities());
-        assertTrue(captor.getAllValues().get(1).getAbilities().isEmpty());
-        ArgumentCaptor<TextMessage> messages = ArgumentCaptor.forClass(TextMessage.class);
-        verify(session, org.mockito.Mockito.atLeast(1)).sendMessage(messages.capture());
-        assertTrue(messages.getAllValues().stream()
-                .map(TextMessage::getPayload)
-                .anyMatch(payload -> payload.contains("AGENT_REGISTRATION_UNAVAILABLE")));
+        verify(agentService).register(captor.capture());
+        assertEquals("agent-001", captor.getValue().getAgentId());
+        assertEquals("wss://example.com/agent", captor.getValue().getEndpoint());
+        assertEquals(java.util.Set.of("agentId", "endpoint"),
+                JsonUtil.getMapper().convertValue(captor.getValue(), java.util.Map.class).keySet());
     }
 
     @org.junit.jupiter.params.ParameterizedTest(name = "64K-boundary [{index}] units={0}, symbol={1}")
@@ -271,91 +259,24 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
     }
 
     @Test
-    void presenceAbilitiesDistinguishMissingEmptyAndNull() throws Exception {
-        stubAgentSession("session-presence-abilities", "agent-001", "runtime-1");
+    void presencePassesOnlyDynamicStatusToService() throws Exception {
+        stubAgentSession("session-presence-minimal", "agent-001", "runtime-1");
         when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
         AgentRuntimeDTO updated = new AgentRuntimeDTO();
-        updated.setAgentId("agent-001");
-        updated.setStatus(AgentConstants.STATUS_ONLINE);
-        when(agentService.updateStatus(any(String.class), any(AgentStatusDTO.class)))
-                .thenReturn(updated);
-        AgentWebSocketHandler handler = UnifiedRuntimeTestSupport.authorize(new AgentWebSocketHandler(chatClient, agentServiceProvider,
-                chatMessageDao, chatConversationEventBroker));
-
-        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
-                {"type":"agent.presence","agentId":"agent-001","runtimeInstanceId":"runtime-1",
-                 "status":"online"}
-                """));
-        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
-                {"type":"agent.presence","agentId":"agent-001","runtimeInstanceId":"runtime-1",
-                 "status":"online","abilities":[]}
-                """));
-        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
-                {"type":"agent.presence","agentId":"agent-001","runtimeInstanceId":"runtime-1",
-                 "status":"online","abilities":null}
-                """));
-
-        ArgumentCaptor<AgentStatusDTO> captor = ArgumentCaptor.forClass(AgentStatusDTO.class);
-        verify(agentService, org.mockito.Mockito.times(2))
-                .updateStatus(org.mockito.Mockito.eq("agent-001"), captor.capture());
-        assertEquals(null, captor.getAllValues().get(0).getAbilities());
-        assertTrue(captor.getAllValues().get(1).getAbilities().isEmpty());
-        ArgumentCaptor<TextMessage> messages = ArgumentCaptor.forClass(TextMessage.class);
-        verify(session, org.mockito.Mockito.atLeast(1)).sendMessage(messages.capture());
-        assertTrue(messages.getAllValues().stream()
-                .map(TextMessage::getPayload)
-                .anyMatch(payload -> payload.contains("abilities must be an array")));
-    }
-
-    @Test
-    void presenceForwardsClientAbilitiesForRuntimeRefresh() throws Exception {
-        stubAgentSession("session-001", "agent-001", "runtime-1");
-        when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
-        AgentRuntimeDTO updated = new AgentRuntimeDTO();
-        updated.setAgentId("agent-001");
-        updated.setStatus(AgentConstants.STATUS_ONLINE);
-        updated.setAbilities(List.of("code-edit", "review"));
+        updated.setAgentId("agent-001"); updated.setStatus("busy");
         when(agentService.updateStatus(any(String.class), any(AgentStatusDTO.class))).thenReturn(updated);
-
-        AgentWebSocketHandler handler = UnifiedRuntimeTestSupport.authorize(new AgentWebSocketHandler(chatClient, agentServiceProvider,
-                chatMessageDao, chatConversationEventBroker));
+        AgentWebSocketHandler handler = UnifiedRuntimeTestSupport.authorize(new AgentWebSocketHandler(
+                chatClient, agentServiceProvider, chatMessageDao, chatConversationEventBroker));
         UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
-                {"type":"agent.presence","schemaVersion":1,"messageId":"presence-1",
-                 "agentId":"agent-001","sourceAgentId":"agent-001","runtimeInstanceId":"runtime-1",
-                 "status":"online",
-                 "abilities":["code-edit","review"]}
+                {"type":"agent.presence","agentId":"agent-001","runtimeInstanceId":"runtime-1",
+                 "status":"busy","currentTaskId":"task-1","currentTaskTitle":"工作中","errorMessage":""}
                 """));
-
         ArgumentCaptor<AgentStatusDTO> captor = ArgumentCaptor.forClass(AgentStatusDTO.class);
         verify(agentService).updateStatus(org.mockito.Mockito.eq("agent-001"), captor.capture());
-        assertEquals(List.of("code-edit", "review"), captor.getValue().getAbilities());
-    }
-
-    @Test
-    void abilitiesMustBeAnArrayOfNonBlankStrings() throws Exception {
-        stubAgentSession("session-invalid-abilities", "agent-001", "runtime-1");
-        when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
-        AgentWebSocketHandler handler = UnifiedRuntimeTestSupport.authorize(new AgentWebSocketHandler(chatClient, agentServiceProvider,
-                chatMessageDao, chatConversationEventBroker));
-
-        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
-                {"type":"agent.register","agentId":"agent-001","runtimeInstanceId":"runtime-1",
-                 "abilities":{"planning":true}}
-                """));
-        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
-                {"type":"agent.presence","agentId":"agent-001","runtimeInstanceId":"runtime-1",
-                 "status":"online","abilities":["planning",null]}
-                """));
-
-        verify(agentService, never()).register(any(AgentRegisterDTO.class));
-        verify(agentService, never()).updateStatus(any(), any(AgentStatusDTO.class));
-        ArgumentCaptor<TextMessage> messageCaptor = ArgumentCaptor.forClass(TextMessage.class);
-        verify(session, org.mockito.Mockito.times(2)).sendMessage(messageCaptor.capture());
-        String messages = messageCaptor.getAllValues().stream()
-                .map(TextMessage::getPayload).reduce("", String::concat);
-        assertTrue(messages.contains("AGENT_REGISTRATION_UNAVAILABLE"));
-        assertFalse(messages.contains("abilities must be an array"), "registration error must stay sanitized");
-        assertTrue(messages.contains("abilities must contain non-blank strings"));
+        assertEquals("busy", captor.getValue().getStatus());
+        assertEquals("task-1", captor.getValue().getCurrentTaskId());
+        assertEquals(java.util.Set.of("status", "currentTaskId", "currentTaskTitle", "errorMessage"),
+                JsonUtil.getMapper().convertValue(captor.getValue(), java.util.Map.class).keySet());
     }
 
     @Test

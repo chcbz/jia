@@ -156,9 +156,7 @@ public final class WaterMarginPersonaCatalog {
             if ("songjiang".equals(code)) {
                 return "[\"coordination\",\"dispatch\",\"planning\",\"briefing\",\"task_management\"]";
             }
-            return rankNo <= 36
-                    ? "[\"strategy\",\"execution\",\"battle\"]"
-                    : "[\"support\",\"execution\",\"scouting\"]";
+            return "[]";
         }
 
         public String personality() {

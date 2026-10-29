@@ -31,6 +31,29 @@ class AgentControllerTest {
             agentService, mock(AbilityEvaluationService.class), provisioning);
 
     @Test
+    void abilitiesSaveRequiresJwtAndMapsConflictAndValidationToHttpStatus() {
+        var request = new cn.jia.agent.entity.AgentAbilitiesUpdateDTO();
+        request.setExpectedAbilities(java.util.List.of());
+        request.setAbilities(java.util.List.of("分析"));
+        var wire = new cn.jia.core.entity.JsonRequest<>(1, "ability-test", request);
+        ResponseEntity<?> forbidden = assertInstanceOf(ResponseEntity.class,
+                controller.updateAbilities("agent-a", wire, null));
+        assertEquals(403, forbidden.getStatusCode().value());
+        verifyNoInteractions(agentService);
+        when(agentService.updateAbilities("agent-a", request)).thenThrow(
+                new cn.jia.agent.service.impl.AgentServiceImpl.AgentBizException(
+                        "AGENT_ABILITIES_CONFLICT", "conflict"));
+        ResponseEntity<?> conflict = assertInstanceOf(ResponseEntity.class,
+                controller.updateAbilities("agent-a", wire, jwt("Owner-A", "Client-A")));
+        assertEquals(409, conflict.getStatusCode().value());
+        assertEquals("private, no-store", conflict.getHeaders().getFirst(HttpHeaders.CACHE_CONTROL));
+        doThrow(new IllegalArgumentException("invalid")).when(agentService).updateAbilities("agent-a", request);
+        ResponseEntity<?> invalid = assertInstanceOf(ResponseEntity.class,
+                controller.updateAbilities("agent-a", wire, jwt("Owner-A", "Client-A")));
+        assertEquals(400, invalid.getStatusCode().value());
+    }
+
+    @Test
     void bindPersonaNeverAllowsSensitiveOutput() throws Exception {
         Method method = AgentController.class.getDeclaredMethod(
                 "bindPersona", String.class, AgentPersonaBindRequestDTO.class, Authentication.class);

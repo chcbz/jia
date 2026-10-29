@@ -15,6 +15,7 @@ import cn.jia.agent.dao.AgentTaskNoteDao;
 import cn.jia.agent.dao.DialogueTemplateDao;
 import cn.jia.agent.entity.AgentActionDispatchResultDTO;
 import cn.jia.agent.entity.AgentCapabilityDTO;
+import cn.jia.agent.entity.AgentAbilitiesUpdateDTO;
 import cn.jia.agent.entity.AgentIdentityRegistryEntity;
 import cn.jia.agent.entity.AgentActionIntentDTO;
 import cn.jia.agent.entity.AgentPersonaBindingEntity;
@@ -444,7 +445,6 @@ class AgentServiceImplTest extends BaseMockTest {
                 .thenThrow(new IllegalStateException("legacy persona metadata unavailable"));
         AgentRegisterDTO request = new AgentRegisterDTO();
         request.setAgentId("agent-owned");
-        request.setAbilities(List.of("planning"));
 
         AgentRegisterResultDTO result = agentService.register(request);
 
@@ -698,10 +698,11 @@ class AgentServiceImplTest extends BaseMockTest {
         when(eventPublisherProvider.getIfAvailable()).thenReturn(eventPublisher);
 
         var sessionClaim = claimedRuntime("agent-001");
+        sessionClaim.setName("吴用");
+        sessionClaim.setPersonaCode("wuyong");
         org.mockito.Mockito.doReturn(sessionClaim).when(agentRuntimeDao).lockInScope("0", "jia_client", "agent-001");
         AgentRegisterDTO request = new AgentRegisterDTO();
         request.setAgentId("agent-001");
-        request.setAbilities(List.of("planning", "research"));
         request.setEndpoint("wss://example.com/openclaw/agent-001");
 
         AgentRegisterResultDTO result = agentService.register(request);
@@ -729,7 +730,7 @@ class AgentServiceImplTest extends BaseMockTest {
     }
 
     @Test
-    void registerUsesClientReportedAbilitiesInsteadOfPersonaDefaults() {
+    void registerPreservesUserMaintainedProfile() {
         AgentPersonaBindingEntity binding = binding("agent-001", "wuyong");
         AgentIdentityRegistryEntity identity = identity(binding, AgentConstants.IDENTITY_STATUS_PROVISIONED);
         AgentPersonaEntity persona = persona("wuyong", "吴用", "智多星");
@@ -741,20 +742,27 @@ class AgentServiceImplTest extends BaseMockTest {
         when(agentRuntimeDao.findByAgentId("agent-001")).thenReturn(null);
 
         var sessionClaim = claimedRuntime("agent-001");
+        sessionClaim.setAbilities("[]");
+        sessionClaim.setName("本人维护名称");
+        sessionClaim.setAvatar("user-avatar");
+        sessionClaim.setPersonaCode("wuyong");
+        sessionClaim.setPersonaName("本人角色名");
         org.mockito.Mockito.doReturn(sessionClaim).when(agentRuntimeDao).lockInScope("0", "jia_client", "agent-001");
         AgentRegisterDTO request = new AgentRegisterDTO();
         request.setAgentId("agent-001");
-        request.setAbilities(List.of(" code-edit ", "debug", "DEBUG"));
 
         agentService.register(request);
 
         ArgumentCaptor<AgentRuntimeEntity> captor = ArgumentCaptor.forClass(AgentRuntimeEntity.class);
         verify(agentRuntimeDao).updateById(captor.capture());
-        assertEquals("[\"code-edit\",\"debug\"]", captor.getValue().getAbilities());
+        assertEquals("[]", captor.getValue().getAbilities());
+        assertEquals("本人维护名称", captor.getValue().getName());
+        assertEquals("user-avatar", captor.getValue().getAvatar());
+        assertEquals("本人角色名", captor.getValue().getPersonaName());
     }
 
     @Test
-    void firstRegistrationWithoutAbilitiesFallsBackToPersonaDefaults() {
+    void registrationPreservesExplicitlyEmptyAbilities() {
         AgentPersonaBindingEntity binding = binding("agent-001", "wuyong");
         AgentIdentityRegistryEntity identity = identity(
                 binding, AgentConstants.IDENTITY_STATUS_PROVISIONED);
@@ -768,6 +776,11 @@ class AgentServiceImplTest extends BaseMockTest {
         when(agentRuntimeDao.findByAgentId("agent-001")).thenReturn(null);
 
         var sessionClaim = claimedRuntime("agent-001");
+        sessionClaim.setAbilities("[]");
+        sessionClaim.setName("本人维护名称");
+        sessionClaim.setAvatar("user-avatar");
+        sessionClaim.setPersonaCode("wuyong");
+        sessionClaim.setPersonaName("本人角色名");
         org.mockito.Mockito.doReturn(sessionClaim).when(agentRuntimeDao).lockInScope("0", "jia_client", "agent-001");
         AgentRegisterDTO request = new AgentRegisterDTO();
         request.setAgentId("agent-001");
@@ -776,7 +789,7 @@ class AgentServiceImplTest extends BaseMockTest {
         ArgumentCaptor<AgentRuntimeEntity> captor = ArgumentCaptor.forClass(AgentRuntimeEntity.class);
         verify(agentRuntimeDao).lockInScope("0", "jia_client", "agent-001");
         verify(agentRuntimeDao).updateById(captor.capture());
-        assertEquals("[\"planning\",\"research\"]", captor.getValue().getAbilities());
+        assertEquals("[]", captor.getValue().getAbilities());
     }
 
     @Test
@@ -820,41 +833,32 @@ class AgentServiceImplTest extends BaseMockTest {
     }
 
     @Test
-    void httpAbilityDtosDeserializeMissingAndEmpty() throws Exception {
-        AgentRegisterDTO missingRegister = JsonUtil.getMapper().readValue(
-                "{\"agentId\":\"agent-001\"}", AgentRegisterDTO.class);
-        AgentRegisterDTO emptyRegister = JsonUtil.getMapper().readValue(
-                "{\"agentId\":\"agent-001\",\"abilities\":[]}", AgentRegisterDTO.class);
-        AgentStatusDTO missingStatus = JsonUtil.getMapper().readValue(
-                "{\"status\":\"online\"}", AgentStatusDTO.class);
-        AgentStatusDTO emptyStatus = JsonUtil.getMapper().readValue(
-                "{\"status\":\"online\",\"abilities\":[]}", AgentStatusDTO.class);
-
-        assertNull(missingRegister.getAbilities());
-        assertTrue(emptyRegister.getAbilities().isEmpty());
-        assertNull(missingStatus.getAbilities());
-        assertTrue(emptyStatus.getAbilities().isEmpty());
+    void registrationAndStatusDtosContainOnlyRuntimeFields() throws Exception {
+        var mapper = JsonUtil.getMapper();
+        assertEquals(java.util.Set.of("agentId", "endpoint"),
+                mapper.convertValue(new AgentRegisterDTO(), java.util.Map.class).keySet());
+        assertEquals(java.util.Set.of("status", "currentTaskId", "currentTaskTitle", "errorMessage"),
+                mapper.convertValue(new AgentStatusDTO(), java.util.Map.class).keySet());
     }
 
     @Test
-    void presenceRefreshesRuntimeAbilities() {
+    void presencePreservesUserAbilities() {
         AgentRuntimeEntity existing = ownedAgent(
                 "agent-001", "吴用", AgentConstants.STATUS_ONLINE, "[\"old-skill\"]");
         when(agentRuntimeDao.findByAgentId("agent-001")).thenReturn(existing);
 
         AgentStatusDTO status = new AgentStatusDTO();
         status.setStatus(AgentConstants.STATUS_ONLINE);
-        status.setAbilities(List.of("review", "test"));
 
         AgentRuntimeDTO result = agentService.updateStatus("agent-001", status);
 
-        assertEquals("[\"review\",\"test\"]", existing.getAbilities());
-        assertEquals(List.of("review", "test"), result.getAbilities());
+        assertEquals("[\"old-skill\"]", existing.getAbilities());
+        assertEquals(List.of("old-skill"), result.getAbilities());
         verify(agentRuntimeDao).updateById(existing);
     }
 
     @Test
-    void presencePreservesAbilitiesWhenMissingAndClearsThemWhenExplicitlyEmpty() {
+    void repeatedPresenceCannotClearUserAbilities() {
         AgentRuntimeEntity existing = ownedAgent(
                 "agent-001", "吴用", AgentConstants.STATUS_ONLINE, "[\"old-skill\"]");
         when(agentRuntimeDao.findByAgentId("agent-001")).thenReturn(existing);
@@ -865,9 +869,8 @@ class AgentServiceImplTest extends BaseMockTest {
 
         AgentStatusDTO clear = new AgentStatusDTO();
         clear.setStatus(AgentConstants.STATUS_ONLINE);
-        clear.setAbilities(List.of());
-        assertTrue(agentService.updateStatus("agent-001", clear).getAbilities().isEmpty());
-        assertEquals("[]", existing.getAbilities());
+        assertEquals(List.of("old-skill"), agentService.updateStatus("agent-001", clear).getAbilities());
+        assertEquals("[\"old-skill\"]", existing.getAbilities());
     }
 
     @Test
@@ -878,7 +881,6 @@ class AgentServiceImplTest extends BaseMockTest {
         when(eventPublisherProvider.getIfAvailable()).thenReturn(eventPublisher);
         AgentStatusDTO status = new AgentStatusDTO();
         status.setStatus(AgentConstants.STATUS_ONLINE);
-        status.setAbilities(List.of("review"));
 
         TransactionSynchronizationManager.initSynchronization();
         TransactionSynchronizationManager.setActualTransactionActive(true);
@@ -924,7 +926,6 @@ class AgentServiceImplTest extends BaseMockTest {
         when(eventPublisherProvider.getIfAvailable()).thenReturn(eventPublisher);
         AgentStatusDTO status = new AgentStatusDTO();
         status.setStatus(AgentConstants.STATUS_ONLINE);
-        status.setAbilities(List.of("captured-online"));
 
         List<TransactionSynchronization> delayedCallbacks;
         TransactionSynchronizationManager.initSynchronization();
@@ -984,6 +985,8 @@ class AgentServiceImplTest extends BaseMockTest {
         org.mockito.Mockito.lenient().when(eventPublisherProvider.getIfAvailable())
                 .thenReturn(eventPublisher);
         var sessionClaim = claimedRuntime("agent-001");
+        sessionClaim.setName("吴用");
+        sessionClaim.setPersonaCode("wuyong");
         org.mockito.Mockito.doReturn(sessionClaim).when(agentRuntimeDao).lockInScope("0", "jia_client", "agent-001");
         AgentRegisterDTO request = new AgentRegisterDTO();
         request.setAgentId("agent-001");
@@ -1011,39 +1014,42 @@ class AgentServiceImplTest extends BaseMockTest {
     }
 
     @Test
-    void runtimeAbilitySnapshotRejectsControlCharactersAndOversizedInputs() {
+    void userAbilityEditRejectsControlCharactersAndOversizedInputs() {
         AgentRuntimeEntity existing = ownedAgent(
                 "agent-001", "吴用", AgentConstants.STATUS_ONLINE, "[\"old-skill\"]");
-        when(agentRuntimeDao.findByAgentId("agent-001")).thenReturn(existing);
+        org.mockito.Mockito.lenient().when(agentRuntimeDao.findByAgentId("agent-001")).thenReturn(existing);
 
-        AgentStatusDTO c1 = new AgentStatusDTO();
+        AgentAbilitiesUpdateDTO c1 = new AgentAbilitiesUpdateDTO();
+        c1.setExpectedAbilities(java.util.List.copyOf(List.of("old-skill")));
         c1.setAbilities(List.of("review" + (char) 0x85));
         IllegalArgumentException controlFailure = assertThrows(
                 IllegalArgumentException.class,
-                () -> agentService.updateStatus("agent-001", c1));
+                () -> agentService.updateAbilities("agent-001", c1));
         assertEquals("ability must not contain control characters", controlFailure.getMessage());
 
-        AgentStatusDTO tooMany = new AgentStatusDTO();
+        AgentAbilitiesUpdateDTO tooMany = new AgentAbilitiesUpdateDTO();
+        tooMany.setExpectedAbilities(java.util.List.copyOf(List.of("old-skill")));
         tooMany.setAbilities(java.util.stream.IntStream.range(0, 129)
                 .mapToObj(index -> "ability-" + index)
                 .toList());
         IllegalArgumentException countFailure = assertThrows(
                 IllegalArgumentException.class,
-                () -> agentService.updateStatus("agent-001", tooMany));
+                () -> agentService.updateAbilities("agent-001", tooMany));
         assertEquals("abilities must contain at most 128 items", countFailure.getMessage());
 
-        AgentStatusDTO tooLong = new AgentStatusDTO();
+        AgentAbilitiesUpdateDTO tooLong = new AgentAbilitiesUpdateDTO();
+        tooLong.setExpectedAbilities(java.util.List.copyOf(List.of("old-skill")));
         tooLong.setAbilities(List.of("x".repeat(101)));
         IllegalArgumentException lengthFailure = assertThrows(
                 IllegalArgumentException.class,
-                () -> agentService.updateStatus("agent-001", tooLong));
+                () -> agentService.updateAbilities("agent-001", tooLong));
         assertEquals("ability must contain at most 100 characters", lengthFailure.getMessage());
 
         verify(agentRuntimeDao, never()).updateById(existing);
     }
 
     @Test
-    void runtimeAbilitySnapshotAcceptsExactly128ItemsAnd100Characters() {
+    void userAbilityEditAcceptsExactly128ItemsAnd100Characters() {
         AgentRuntimeEntity existing = ownedAgent(
                 "agent-001", "吴用", AgentConstants.STATUS_ONLINE, "[]");
         when(agentRuntimeDao.findByAgentId("agent-001")).thenReturn(existing);
@@ -1051,14 +1057,60 @@ class AgentServiceImplTest extends BaseMockTest {
                 .mapToObj(index -> "ability-" + index)
                 .toList());
         abilities.add("x".repeat(100));
-        AgentStatusDTO status = new AgentStatusDTO();
+        AgentAbilitiesUpdateDTO status = new AgentAbilitiesUpdateDTO();
+        status.setExpectedAbilities(java.util.List.copyOf(List.of()));
         status.setAbilities(abilities);
 
-        AgentRuntimeDTO result = agentService.updateStatus("agent-001", status);
+        AgentRuntimeDTO result = agentService.updateAbilities("agent-001", status);
 
         assertEquals(128, result.getAbilities().size());
         assertEquals(100, result.getAbilities().get(result.getAbilities().size() - 1).length());
         verify(agentRuntimeDao).updateById(existing);
+    }
+
+    @Test
+    void userAbilitiesSavePreservesRuntimeStatusAndRejectsStaleSnapshot() {
+        AgentRuntimeEntity existing = ownedAgent("agent-001", "吴用", AgentConstants.STATUS_ONLINE, "[\"old\"]");
+        existing.setId(99L);
+        existing.setCurrentTaskId("task-1");
+        when(agentRuntimeDao.findByAgentId("agent-001")).thenReturn(existing);
+        AgentAbilitiesUpdateDTO request = new AgentAbilitiesUpdateDTO();
+        request.setExpectedAbilities(List.of("old"));
+        request.setAbilities(List.of(" research ", "RESEARCH"));
+        AgentRuntimeDTO result = agentService.updateAbilities("agent-001", request);
+        assertEquals(List.of("research"), result.getAbilities());
+        assertEquals("task-1", existing.getCurrentTaskId());
+        assertEquals(AgentConstants.STATUS_ONLINE, existing.getStatus());
+        assertThrows(AgentServiceImpl.AgentBizException.class,
+                () -> agentService.updateAbilities("agent-001", request));
+        assertEquals("[\"research\"]", existing.getAbilities());
+    }
+
+    @Test
+    void userAbilitiesRejectsForeignRuntimeAndSystemAgentWithoutWrites() {
+        AgentRuntimeEntity existing = ownedAgent("agent-001", "吴用", "online", "[]");
+        existing.setOwnerJiacn("other-owner");
+        when(agentRuntimeDao.findByAgentId("agent-001")).thenReturn(existing);
+        AgentAbilitiesUpdateDTO request = new AgentAbilitiesUpdateDTO();
+        request.setExpectedAbilities(List.of());
+        request.setAbilities(List.of("research"));
+        assertThrows(AgentServiceImpl.AgentBizException.class,
+                () -> agentService.updateAbilities("agent-001", request));
+        assertThrows(AgentServiceImpl.AgentBizException.class,
+                () -> agentService.updateAbilities(AgentConstants.BUILTIN_SONGJIANG_AGENT_ID, request));
+        verify(agentRuntimeDao, never()).updateById(any(AgentRuntimeEntity.class));
+    }
+
+    @Test
+    void userAbilitiesCanBeCleared() {
+        AgentRuntimeEntity existing = ownedAgent("agent-001", "吴用", AgentConstants.STATUS_ONLINE, "[\"old\"]");
+        existing.setId(99L);
+        when(agentRuntimeDao.findByAgentId("agent-001")).thenReturn(existing);
+        AgentAbilitiesUpdateDTO request = new AgentAbilitiesUpdateDTO();
+        request.setExpectedAbilities(List.of("old"));
+        request.setAbilities(List.of());
+        assertTrue(agentService.updateAbilities("agent-001", request).getAbilities().isEmpty());
+        assertEquals("[]", existing.getAbilities());
     }
 
     @Test

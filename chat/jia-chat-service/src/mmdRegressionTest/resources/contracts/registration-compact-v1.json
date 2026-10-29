@@ -4,10 +4,7 @@
   "messageType": "agent.register",
   "messageId": "fixture-register-1",
   "data": {
-    "name": "Fixture Agent",
-    "personaName": "Fixture",
     "endpoint": "",
-    "abilities": [],
     "runtimeCapabilities": {
       "capabilityContractVersion": 1,
       "runtimeVersion": "juyiting-fast-context-runtime-v2",
