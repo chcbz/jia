@@ -1,11 +1,12 @@
 package cn.jia.agent.skill;
 
-import com.fasterxml.jackson.core.JsonFactory;
-import com.fasterxml.jackson.core.StreamReadFeature;
-import com.fasterxml.jackson.databind.DeserializationFeature;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
+import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.core.StreamReadFeature;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.DeserializationFeature;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ObjectNode;
 import com.networknt.schema.Schema;
 import com.networknt.schema.InputFormat;
 import com.networknt.schema.SchemaRegistry;
@@ -27,10 +28,10 @@ import java.util.Set;
 public final class SkillManifestCodec {
     public static final String DIALECT = "https://json-schema.org/draft/2020-12/schema";
     private static final BigDecimal MAX_SAFE = new BigDecimal("9007199254740991");
-    private static final ObjectMapper JSON = new ObjectMapper(JsonFactory.builder()
-            .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION).build())
+    private static final ObjectMapper JSON = JsonMapper.builderWithJackson2Defaults()
+            .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
             .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
-            .enable(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS);
+            .enable(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS).build();
     private static final Set<String> KEYWORDS = Set.of(("$schema $ref $dynamicRef $anchor $dynamicAnchor $defs $comment title description default examples deprecated readOnly writeOnly "
             + "type enum const multipleOf minimum maximum exclusiveMinimum exclusiveMaximum minLength maxLength pattern format "
             + "contentEncoding contentMediaType contentSchema items prefixItems contains minContains maxContains minItems maxItems uniqueItems "
@@ -57,7 +58,7 @@ public final class SkillManifestCodec {
         try (var input = SkillManifestCodec.class.getResourceAsStream("skill-manifest-v1.schema.json")) {
             require(input != null, "SKILL_MANIFEST_SCHEMA_MISSING");
             manifestSchema = factory.getSchema(JSON.readTree(input).toString(), InputFormat.JSON);
-        } catch (IOException e) { throw failure("SKILL_MANIFEST_SCHEMA_MISSING"); }
+        } catch (IOException | JacksonException e) { throw failure("SKILL_MANIFEST_SCHEMA_MISSING"); }
     }
 
     public JsonNode parseJson(byte[] bytes) {
@@ -65,7 +66,7 @@ public final class SkillManifestCodec {
                     .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
                     .decode(java.nio.ByteBuffer.wrap(bytes)).toString();
             var value = JSON.readTree(text); require(value != null, "SKILL_INVALID_JSON"); checkUnicode(value); return value; }
-        catch (IOException e) { throw failure("SKILL_INVALID_JSON"); }
+        catch (IOException | JacksonException e) { throw failure("SKILL_INVALID_JSON"); }
     }
 
     /** Null means ordinary SKILL.md package, not an executable capability. */
@@ -130,7 +131,7 @@ public final class SkillManifestCodec {
     private static void checkSchemaPolicy(JsonNode schema) {
         if (schema.isBoolean()) return;
         require(schema.isObject(), "SKILL_SCHEMA_INVALID");
-        schema.fields().forEachRemaining(entry -> {
+        schema.properties().iterator().forEachRemaining(entry -> {
             String key = entry.getKey(); var value = entry.getValue();
             require(KEYWORDS.contains(key), "SKILL_SCHEMA_UNSUPPORTED");
             if (key.equals("$schema")) require(DIALECT.equals(value.asText()), "SKILL_SCHEMA_DIALECT");
@@ -150,7 +151,7 @@ public final class SkillManifestCodec {
     }
     private static void checkUnicode(JsonNode value) {
         if (value.isTextual()) checkString(value.asText());
-        if (value.isObject()) value.fieldNames().forEachRemaining(SkillManifestCodec::checkString);
+        if (value.isObject()) value.propertyNames().iterator().forEachRemaining(SkillManifestCodec::checkString);
         if (value.isContainerNode()) value.forEach(SkillManifestCodec::checkUnicode);
     }
     private static void checkString(String value) {
@@ -167,12 +168,12 @@ public final class SkillManifestCodec {
         if (raw == null) return new Cost(value, false);
         boolean valid = raw.isObject() && Set.of("FREE", "FIXED", "METERED", "UNKNOWN").contains(raw.path("mode").asText());
         if (valid) {
-            Iterator<String> names = raw.fieldNames();
+            Iterator<String> names = raw.propertyNames().iterator();
             while (names.hasNext()) { String name = names.next(); if (!name.equals("mode") && !nullable.contains(name)) valid = false; }
             for (String name : nullable) if (raw.hasNonNull(name) && !raw.get(name).isTextual()) valid = false;
             if (raw.hasNonNull("amount") && !raw.get("amount").asText().matches("(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?")) valid = false;
         }
-        if (valid) raw.fields().forEachRemaining(entry -> value.set(entry.getKey(), entry.getValue().deepCopy()));
+        if (valid) raw.properties().iterator().forEachRemaining(entry -> value.set(entry.getKey(), entry.getValue().deepCopy()));
         return new Cost(value, !valid);
     }
     private static String sha256(byte[] bytes) {

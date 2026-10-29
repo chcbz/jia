@@ -33,7 +33,8 @@ import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.config.GlobalConfig;
 import com.baomidou.mybatisplus.core.incrementer.DefaultIdentifierGenerator;
 import com.baomidou.mybatisplus.extension.spring.MybatisSqlSessionFactoryBean;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.databind.ObjectMapper;
 import org.apache.ibatis.logging.nologging.NoLoggingImpl;
 import org.apache.ibatis.session.SqlSessionFactory;
 import org.mybatis.spring.SqlSessionTemplate;
@@ -76,7 +77,7 @@ class ArchiveNativeHttpMySqlTest {
     static DataSource source;static Path packageRoot;
     static volatile SkillCapabilityLookup.View measuredCatalog=SkillCapabilityLookup.View.unavailable(SkillCapabilityLookup.State.DISCONNECTED);
     @TempDir Path root;
-    final ObjectMapper json=new ObjectMapper();
+    final ObjectMapper json=JsonMapper.builderWithJackson2Defaults().build();
     Process node;BufferedReader output;BufferedWriter input;JdbcTemplate admin,jdbc;String database;
     Tomcat tomcat;AnnotationConfigWebApplicationContext spring;
     Map<String,Object> exchange(Map<String,Object> request)throws Exception {
@@ -226,7 +227,7 @@ class ArchiveNativeHttpMySqlTest {
     Map<String,Object> installAndMeasure(AgentRuntimeAuthenticationService.Proof proof)throws Exception {
         var installed=exchange(Map.of("op","INSTALL"));
         var raw=(Map<String,Object>)installed.get("catalog");assertNotNull(raw,"Measured Runtime catalog required");
-        var mapper=new ObjectMapper();
+        var mapper=JsonMapper.builderWithJackson2Defaults().build();
         var skills=((List<?>)raw.get("skills")).stream().map(row->mapper.convertValue(row,SkillCapabilityLookup.RuntimeSkill.class)).toList();
         measuredCatalog=new SkillCapabilityLookup.View(SkillCapabilityLookup.State.AVAILABLE,"fixture-channel",
                 SkillMarketplaceService.sessionFence(proof),

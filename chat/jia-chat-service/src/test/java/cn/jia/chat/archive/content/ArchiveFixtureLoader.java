@@ -1,13 +1,14 @@
 package cn.jia.chat.archive.content;
 
-import com.fasterxml.jackson.core.JsonFactory;
-import com.fasterxml.jackson.core.JsonParser;
-import com.fasterxml.jackson.databind.DeserializationFeature;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
+import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.core.StreamReadFeature;
+import tools.jackson.databind.DeserializationFeature;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ObjectNode;
 
 import java.io.IOException;
+import tools.jackson.core.JacksonException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -38,11 +39,10 @@ public class ArchiveFixtureLoader {
     private final ObjectMapper mapper;
 
     public ArchiveFixtureLoader() {
-        JsonFactory factory = new JsonFactory();
-        factory.enable(JsonParser.Feature.STRICT_DUPLICATE_DETECTION);
-        this.mapper = new ObjectMapper(factory)
+        this.mapper = JsonMapper.builderWithJackson2Defaults()
+                .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
                 .enable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
-                .enable(DeserializationFeature.FAIL_ON_NULL_FOR_PRIMITIVES);
+                .enable(DeserializationFeature.FAIL_ON_NULL_FOR_PRIMITIVES).build();
     }
 
     public ArchiveManifestBundle load() {
@@ -74,7 +74,7 @@ public class ArchiveFixtureLoader {
             return new ArchiveManifestBundle(manifest, golden, manifestFileSha, goldenFileSha);
         } catch (ArchiveContentException failure) {
             throw failure;
-        } catch (IOException | RuntimeException failure) {
+        } catch (RuntimeException failure) {
             throw new ArchiveContentException("invalid packaged archive content", failure);
         }
     }
@@ -214,7 +214,7 @@ public class ArchiveFixtureLoader {
     private void appendCanonical(JsonNode node, StringBuilder output, int indent) {
         if (node.isObject()) {
             List<String> names = new ArrayList<>();
-            node.fieldNames().forEachRemaining(names::add);
+            node.propertyNames().iterator().forEachRemaining(names::add);
             names.sort(String::compareTo);
             if (names.isEmpty()) {
                 output.append("{}");
@@ -260,7 +260,7 @@ public class ArchiveFixtureLoader {
     private void appendJsonString(String value, StringBuilder output) {
         try {
             output.append(mapper.writeValueAsString(value));
-        } catch (IOException failure) {
+        } catch (JacksonException failure) {
             throw new ArchiveContentException("unable to canonicalize manifest string", failure);
         }
     }

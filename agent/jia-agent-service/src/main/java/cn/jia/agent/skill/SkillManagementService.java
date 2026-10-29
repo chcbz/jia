@@ -308,7 +308,7 @@ public final class SkillManagementService {
         var types=new ArrayList<String>();var requirements=new ArrayList<String>();
         if(manifest!=null) {
             manifest.document().at("/inputs/acceptedMimeTypes").forEach(n->types.add(n.asText()));
-            var r=manifest.document().get("requirements");if(r!=null)r.fields().forEachRemaining(e->{if(!e.getValue().isNull())requirements.add(e.getKey()+": "+e.getValue().toString());});
+            var r=manifest.document().get("requirements");if(r!=null)r.properties().iterator().forEachRemaining(e->{if(!e.getValue().isNull())requirements.add(e.getKey()+": "+e.getValue().toString());});
         }
         var details=map("productVersionId",v.getProductVersionId(),"skillVersion",v.getSkillVersion(),"packageSha256",target.get("packageSha256"),
                 "manifestSha256",target.get("manifestSha256"),"byteLength",target.get("byteLength"),"kind",target.get("kind"),"inputMimeTypes",types,
@@ -480,7 +480,7 @@ public final class SkillManagementService {
                 .setRuntimeInstallationId(c.getRuntimeInstallationId()).setRuntimeHostId(c.getRuntimeHostId())));
     }
     private static List<String> decodePermissions(String value) {
-        try {return new com.fasterxml.jackson.databind.ObjectMapper().readValue(value,new com.fasterxml.jackson.core.type.TypeReference<List<String>>(){});}
+        try {return tools.jackson.databind.json.JsonMapper.builderWithJackson2Defaults().build().readValue(value,new tools.jackson.core.type.TypeReference<List<String>>(){});}
         catch(Exception invalid){throw new SkillMarketplaceException(503,"SKILL_STATE_UNAVAILABLE");}
     }
     private SkillChangeCommandEntity command(SkillChangeEntity c,Map<String,Object> value,String requestId,String phase,SkillChangeCommandEntity prepared) {

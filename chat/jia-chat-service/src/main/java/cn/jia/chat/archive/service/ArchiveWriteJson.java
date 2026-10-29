@@ -2,17 +2,17 @@ package cn.jia.chat.archive.service;
 
 import cn.jia.chat.archive.content.ArchiveEtags;
 import cn.jia.core.entity.JsonResult;
-import com.fasterxml.jackson.core.JsonFactory;
-import com.fasterxml.jackson.core.JsonParser;
-import com.fasterxml.jackson.databind.DeserializationFeature;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.MapperFeature;
-import com.fasterxml.jackson.databind.cfg.CoercionAction;
-import com.fasterxml.jackson.databind.cfg.CoercionInputShape;
-import com.fasterxml.jackson.databind.type.LogicalType;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.core.StreamReadFeature;
+import tools.jackson.databind.DeserializationFeature;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.MapperFeature;
+import tools.jackson.databind.cfg.CoercionAction;
+import tools.jackson.databind.cfg.CoercionInputShape;
+import tools.jackson.databind.type.LogicalType;
+import tools.jackson.databind.ObjectMapper;
 
-import java.io.IOException;
+import tools.jackson.core.JacksonException;
 import java.nio.ByteBuffer;
 import java.nio.charset.CharacterCodingException;
 import java.nio.charset.CodingErrorAction;
@@ -25,25 +25,24 @@ final class ArchiveWriteJson {
     private final ObjectMapper mapper;
 
     ArchiveWriteJson() {
-        JsonFactory factory = new JsonFactory();
-        factory.enable(JsonParser.Feature.STRICT_DUPLICATE_DETECTION);
-        mapper = new ObjectMapper(factory)
+        mapper = JsonMapper.builderWithJackson2Defaults()
+                .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
                 .enable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
                 .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
                 .enable(DeserializationFeature.FAIL_ON_NULL_FOR_PRIMITIVES)
-                .disable(MapperFeature.ALLOW_COERCION_OF_SCALARS);
-        mapper.coercionConfigFor(LogicalType.Textual)
-                .setCoercion(CoercionInputShape.Integer, CoercionAction.Fail)
-                .setCoercion(CoercionInputShape.Float, CoercionAction.Fail)
-                .setCoercion(CoercionInputShape.Boolean, CoercionAction.Fail);
-        mapper.coercionConfigFor(LogicalType.Integer)
-                .setCoercion(CoercionInputShape.String, CoercionAction.Fail)
-                .setCoercion(CoercionInputShape.Float, CoercionAction.Fail)
-                .setCoercion(CoercionInputShape.Boolean, CoercionAction.Fail);
-        mapper.coercionConfigFor(LogicalType.Boolean)
-                .setCoercion(CoercionInputShape.String, CoercionAction.Fail)
-                .setCoercion(CoercionInputShape.Integer, CoercionAction.Fail)
-                .setCoercion(CoercionInputShape.Float, CoercionAction.Fail);
+                .disable(MapperFeature.ALLOW_COERCION_OF_SCALARS)
+                .withCoercionConfig(LogicalType.Textual, config -> config
+                        .setCoercion(CoercionInputShape.Integer, CoercionAction.Fail)
+                        .setCoercion(CoercionInputShape.Float, CoercionAction.Fail)
+                        .setCoercion(CoercionInputShape.Boolean, CoercionAction.Fail))
+                .withCoercionConfig(LogicalType.Integer, config -> config
+                        .setCoercion(CoercionInputShape.String, CoercionAction.Fail)
+                        .setCoercion(CoercionInputShape.Float, CoercionAction.Fail)
+                        .setCoercion(CoercionInputShape.Boolean, CoercionAction.Fail))
+                .withCoercionConfig(LogicalType.Boolean, config -> config
+                        .setCoercion(CoercionInputShape.String, CoercionAction.Fail)
+                        .setCoercion(CoercionInputShape.Integer, CoercionAction.Fail)
+                        .setCoercion(CoercionInputShape.Float, CoercionAction.Fail)).build();
     }
 
     Parsed parse(byte[] bytes, Class<?> type) {
@@ -71,7 +70,7 @@ final class ArchiveWriteJson {
             return new Parsed(value, canonical(node));
         } catch (CharacterCodingException failure) {
             throw invalidJsonException();
-        } catch (IOException | RuntimeException failure) {
+        } catch (RuntimeException failure) {
             if (failure instanceof ArchivePersonalDataException personal) throw personal;
             throw invalidJsonException();
         }
@@ -79,7 +78,7 @@ final class ArchiveWriteJson {
 
     private boolean containsRoutingField(JsonNode node) {
         if (node.isObject()) {
-            var names = node.fieldNames();
+            var names = node.propertyNames().iterator();
             while (names.hasNext()) {
                 String name = names.next();
                 String normalized = name.toLowerCase(java.util.Locale.ROOT)
@@ -111,12 +110,12 @@ final class ArchiveWriteJson {
 
     JsonNode readCanonical(String json) {
         try { return mapper.readTree(json); }
-        catch (IOException failure) { throw new IllegalStateException("Persisted canonical JSON is invalid", failure); }
+        catch (JacksonException failure) { throw new IllegalStateException("Persisted canonical JSON is invalid", failure); }
     }
 
     byte[] success(Object data) {
         try { return mapper.writeValueAsBytes(JsonResult.success(data)); }
-        catch (IOException failure) { throw new IllegalStateException("Unable to serialize archive response", failure); }
+        catch (JacksonException failure) { throw new IllegalStateException("Unable to serialize archive response", failure); }
     }
 
     String writeCanonical(JsonNode node) {
@@ -129,7 +128,7 @@ final class ArchiveWriteJson {
 
     <T> T readValue(String json, Class<T> type) {
         try { return mapper.readValue(json, type); }
-        catch (IOException failure) { throw new IllegalStateException("Persisted archive JSON is invalid", failure); }
+        catch (JacksonException failure) { throw new IllegalStateException("Persisted archive JSON is invalid", failure); }
     }
 
     String sha256(String method, String canonicalPath, byte[] canonicalJson) {
@@ -150,7 +149,7 @@ final class ArchiveWriteJson {
         try {
             if (node.isObject()) {
                 List<String> names = new ArrayList<>();
-                node.fieldNames().forEachRemaining(names::add);
+                node.propertyNames().iterator().forEachRemaining(names::add);
                 names.sort(String::compareTo);
                 out.append('{');
                 for (int i = 0; i < names.size(); i++) {
@@ -176,7 +175,7 @@ final class ArchiveWriteJson {
             } else if (node.isNull()) {
                 out.append("null");
             } else invalidJson();
-        } catch (IOException failure) {
+        } catch (JacksonException failure) {
             throw invalidJsonException();
         }
     }
@@ -184,8 +183,8 @@ final class ArchiveWriteJson {
     private void validateNode(JsonNode node) {
         if (node.isFloatingPointNumber() || node.isBinary() || node.isMissingNode()) invalidJson();
         if (node.isTextual()) validateUnicode(node.textValue());
-        if (node.isContainerNode()) node.elements().forEachRemaining(this::validateNode);
-        if (node.isObject()) node.fieldNames().forEachRemaining(this::validateUnicode);
+        if (node.isContainerNode()) node.values().iterator().forEachRemaining(this::validateNode);
+        if (node.isObject()) node.propertyNames().iterator().forEachRemaining(this::validateUnicode);
     }
 
     private void validateUnicode(String value) {

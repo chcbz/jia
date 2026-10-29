@@ -3,8 +3,9 @@ package cn.jia.agent.position;
 import cn.jia.agent.service.AgentIdentityService;
 import cn.jia.agent.service.PositionAuthority;
 import cn.jia.economy.mapper.EconomySkillMarketplaceMapper;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.SerializationFeature;
+import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.SerializationFeature;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -22,7 +23,7 @@ public class PositionSkillService implements PositionAuthority {
     private final AgentIdentityService identities;
     private final EconomySkillMarketplaceMapper packages;
     private final TransactionTemplate tx;
-    private final ObjectMapper codec = new ObjectMapper().enable(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS);
+    private final ObjectMapper codec = JsonMapper.builderWithJackson2Defaults().enable(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS).build();
     public PositionSkillService(PositionSkillStore store, AgentIdentityService identities,
             EconomySkillMarketplaceMapper packages, PlatformTransactionManager manager) {
         this.store=store;this.identities=identities;this.packages=packages;this.tx=new TransactionTemplate(manager);

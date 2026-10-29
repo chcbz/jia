@@ -1,9 +1,9 @@
 package cn.jia.agent.skill;
 
-import com.fasterxml.jackson.core.StreamReadFeature;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.json.JsonMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
+import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.core.StreamReadFeature;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.node.ObjectNode;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import java.nio.file.*;
@@ -13,7 +13,7 @@ import java.util.*;
  * The same shared binding file is consumed by the runtime; secrets remain outside this file. */
 @Service
 public final class SkillCostInfoSource {
-    private static final JsonMapper JSON=JsonMapper.builder().enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION).build();
+    private static final JsonMapper JSON=JsonMapper.builderWithJackson2Defaults().enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION).build();
     private static final Set<String> FIELDS=Set.of("mode","amount","currency","unit","description","source","updatedAt","informationRevision");
     private final Path file;
     public SkillCostInfoSource(@Value("${agent.skill.bindings-file:/home/isp/conf/cyf-agent-runtime-v1/skill-bindings.json}") String file) { this.file=Path.of(file); }
@@ -40,12 +40,12 @@ public final class SkillCostInfoSource {
             ObjectNode value=JSON.createObjectNode();value.put("mode","UNKNOWN");
             boolean valid=selected.isObject()&&Set.of("FREE","FIXED","METERED","UNKNOWN").contains(selected.path("mode").asText());
             if(valid) {
-                for(var names=selected.fieldNames();names.hasNext();)if(!FIELDS.contains(names.next()))valid=false;
+                for(var names=selected.propertyNames().iterator();names.hasNext();)if(!FIELDS.contains(names.next()))valid=false;
                 for(String name:FIELDS)if(selected.hasNonNull(name)&&!selected.get(name).isTextual())valid=false;
                 if(selected.hasNonNull("amount")&&!selected.get("amount").asText().matches("(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?"))valid=false;
                 if(!selected.path("informationRevision").asText().matches("[1-9][0-9]*"))valid=false;
             }
-            if(valid)selected.fields().forEachRemaining(e->value.set(e.getKey(),e.getValue().deepCopy()));
+            if(valid)selected.properties().iterator().forEachRemaining(e->value.set(e.getKey(),e.getValue().deepCopy()));
             manifest.set("costInfo",value);return manifest.toString();
         } catch(Exception ignored) {return manifestJson;}
     }

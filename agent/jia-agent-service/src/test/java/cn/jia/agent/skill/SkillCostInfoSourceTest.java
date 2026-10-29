@@ -1,8 +1,8 @@
 package cn.jia.agent.skill;
+import tools.jackson.databind.json.JsonMapper;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.io.TempDir;
 import java.nio.file.*;
-import com.fasterxml.jackson.databind.json.JsonMapper;
 import static org.junit.jupiter.api.Assertions.*;
 class SkillCostInfoSourceTest {
     @TempDir Path root;

@@ -5,7 +5,8 @@ import cn.jia.agent.security.AgentRuntimeAuthenticationService;
 import cn.jia.agent.service.AgentService;
 import cn.jia.chat.dao.ChatMessageDao;
 import cn.jia.chat.service.ChatConversationEventBroker;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.ai.chat.client.ChatClient;
@@ -96,7 +97,7 @@ class AgentWebSocketUnifiedReadinessTest {
         for (var types : List.of(List.of("NEW_BUSINESS_COMMAND"), List.of("TASK_INVITE", "TASK_INVITE"))) {
             var f = new Fixture(); var a = f.session("a", "agent-a");
             f.handler.afterConnectionEstablished(a);
-            f.handler.handleTextMessage(a, new TextMessage(new ObjectMapper().writeValueAsString(Map.of(
+            f.handler.handleTextMessage(a, new TextMessage(JsonMapper.builderWithJackson2Defaults().build().writeValueAsString(Map.of(
                     "type", "agent.register", "agentId", "agent-a", "runtimeInstanceId", "boot",
                     "durableStateHealthy", true, "readyCommandTypes", types))));
             verify(f.service, never()).register(any());
@@ -233,10 +234,10 @@ class AgentWebSocketUnifiedReadinessTest {
             var payload = new HashMap<String, Object>(); payload.put("type", "agent.register"); payload.put("agentId", s.getAttributes().get("agentId"));
             UnifiedRuntimeTestSupport.registrationProof(s, payload);
             payload.put("runtimeInstanceId", "boot"); payload.put("durableStateHealthy", durable); payload.put("readyCommandTypes", execute ? List.of("TASK_INVITE") : List.of());
-            handler.handleTextMessage(s, new TextMessage(new ObjectMapper().writeValueAsString(payload)));
+            handler.handleTextMessage(s, new TextMessage(JsonMapper.builderWithJackson2Defaults().build().writeValueAsString(payload)));
         }
         void stop(WebSocketSession session, String requestId, String conversationId) throws Exception {
-            handler.handleTextMessage(session, new TextMessage(new ObjectMapper().writeValueAsString(Map.of(
+            handler.handleTextMessage(session, new TextMessage(JsonMapper.builderWithJackson2Defaults().build().writeValueAsString(Map.of(
                     "type", "chat.stop", "requestId", requestId, "conversationId", conversationId))));
         }
         AgentRawCommandDispatchResult dispatch(String agent) { return handler.dispatchExactRawCommand("0", "client", "task", agent, wire(agent)); }

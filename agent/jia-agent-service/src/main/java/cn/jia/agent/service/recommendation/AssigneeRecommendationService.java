@@ -5,9 +5,10 @@ import cn.jia.agent.hosting.HostingRentHttp;
 import cn.jia.agent.service.AgentService;
 import cn.jia.agent.service.AgentAssigneeRecommendationModel;
 import cn.jia.agent.skill.SkillManagementService;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.DeserializationFeature;
+import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.DeserializationFeature;
 import org.springframework.stereotype.Service;
 import java.time.Instant;
 import java.util.*;
@@ -16,7 +17,7 @@ import static cn.jia.agent.entity.AssigneeRecommendation.*;
 /** API-owned observations + model advice. No assignment, billing, installation or transaction. */
 @Service
 public final class AssigneeRecommendationService {
-    private static final ObjectMapper JSON = new ObjectMapper().enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
+    private static final ObjectMapper JSON = JsonMapper.builderWithJackson2Defaults().enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS).build();
     private final AgentService agents;
     private final SkillManagementService skills;
     private final AgentAssigneeRecommendationModel model;

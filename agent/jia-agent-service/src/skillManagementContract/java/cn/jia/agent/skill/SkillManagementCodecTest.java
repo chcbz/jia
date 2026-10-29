@@ -1,6 +1,7 @@
 package cn.jia.agent.skill;
 
-import com.fasterxml.jackson.databind.*;
+import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.databind.*;
 import org.junit.jupiter.api.Test;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -9,14 +10,14 @@ import static org.junit.jupiter.api.Assertions.*;
 
 /** Consumes the pinned, unedited multi-component corpus, not separately invented DTO samples. */
 class SkillManagementCodecTest {
-    static final ObjectMapper JSON=new ObjectMapper();
+    static final ObjectMapper JSON=JsonMapper.builderWithJackson2Defaults().build();
     static byte[] resource(String name) throws Exception {
         try(var in=Objects.requireNonNull(SkillManagementCodecTest.class.getResourceAsStream("/"+name))){return in.readAllBytes();}
     }
     static JsonNode examples() throws Exception{return JSON.readTree(resource("management-contract-v1.examples.json"));}
     @Test void originalFixtureBytesMatchSourceLock() throws Exception {
         var provenance=JSON.readTree(resource("source-sha256.json"));
-        for(var it=provenance.get("files").fields();it.hasNext();) {
+        for(var it=provenance.get("files").properties().iterator();it.hasNext();) {
             var e=it.next();assertEquals(e.getValue().asText(),HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(resource(e.getKey()))),e.getKey());
         }
         try(var in=SkillManagementCodec.class.getResourceAsStream("management-contract-v1.schema.json")) {

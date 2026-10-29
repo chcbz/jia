@@ -4,7 +4,8 @@ import cn.jia.agent.dao.SkillExecutionDao;
 import cn.jia.agent.dao.impl.SkillExecutionDaoImpl;
 import cn.jia.agent.entity.SkillExecutionEntity;
 import cn.jia.agent.mapper.SkillExecutionMapper;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.*;
 import org.apache.ibatis.executor.statement.StatementHandler;
 import org.apache.ibatis.plugin.*;
@@ -38,7 +39,7 @@ public class SkillExecutionMapperRealTransactionTest {
     private TransactionTemplate tx;
     private SkillExecutionDao dao;
     private Connection schemaConnection;
-    private static final ObjectMapper JSON = new ObjectMapper();
+    private static final ObjectMapper JSON = JsonMapper.builderWithJackson2Defaults().build();
     private static final String HASH = "a".repeat(64);
 
     public static String jsonType(String input) {

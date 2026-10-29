@@ -2,7 +2,8 @@ package cn.jia.agent.skill;
 
 import cn.jia.economy.config.skillseed.PlatformSkillPackageCatalog.PlatformSkillPackage;
 import cn.jia.economy.config.skillseed.PlatformSkillPackageCatalog.PlatformSkillProduct;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
@@ -14,7 +15,7 @@ class SkillPackageDescriptorTest {
     private final SkillManifestCodec codec=new SkillManifestCodec();
     private byte[] fixture(String id) throws Exception {
         try(var stream=getClass().getResourceAsStream("/skill-manifest-contract-v1.json")) {
-            for(var c:new ObjectMapper().readTree(stream).path("cases"))
+            for(var c:JsonMapper.builderWithJackson2Defaults().build().readTree(stream).path("cases"))
                 if(id.equals(c.path("id").asText())) return c.path("json").asText().getBytes(StandardCharsets.UTF_8);
         }
         throw new AssertionError("fixture missing");

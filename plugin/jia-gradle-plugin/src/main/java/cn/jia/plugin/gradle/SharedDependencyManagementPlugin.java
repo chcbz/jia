@@ -41,8 +41,9 @@ public class SharedDependencyManagementPlugin implements Plugin<Settings> {
                             // === 工具类库 ===
                             catalog.version("lombok", "1.18.42");
                             catalog.version("mapstruct", "1.6.3");
-                            catalog.version("jackson-databind", "3.0.3");
-                            catalog.version("jackson-annotations", "2.20");
+                            catalog.version("jackson-databind", "3.1.4");
+                            // Jackson 3 deliberately shares the com.fasterxml.jackson.annotation API.
+                            catalog.version("jackson-annotations", "2.21");
                             catalog.version("guava", "33.4.0-jre");
                             catalog.version("commons-lang3", "3.17.0");
                             catalog.version("commons-io", "2.18.0");

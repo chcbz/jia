@@ -87,7 +87,7 @@ class InstalledSkillDescriptorServiceTest {
     }
     @Test void multipleVerifiedDescriptorsUseOnlyOneFinalEntitlementRead() {
         var store=mock(SkillPackages.class);when(packages.getIfUnique()).thenReturn(store);
-        var node=new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode();node.put("runner","native-model");
+        var node=tools.jackson.databind.json.JsonMapper.builderWithJackson2Defaults().build().createObjectNode();node.put("runner","native-model");
         when(store.manifest(any())).thenReturn(new SkillManifestCodec.Manifest(node,"a".repeat(64)));
         var second=new SkillEntitlementEntity().setTenantId("0").setClientId("client").setTargetAgentId("agent")
                 .setSkillKey("text-file").setSkillVersion("1.0.0").setEntitlementId("ent-2").setInstallationId("ins")
@@ -118,7 +118,7 @@ class InstalledSkillDescriptorServiceTest {
     }
     @Test void revokedDuringPreparationDoesNotReusePreviouslyActiveSnapshot() {
         var store=mock(SkillPackages.class);when(packages.getIfUnique()).thenReturn(store);
-        var node=new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode();node.put("runner","native-model");
+        var node=tools.jackson.databind.json.JsonMapper.builderWithJackson2Defaults().build().createObjectNode();node.put("runner","native-model");
         when(store.manifest(any())).thenReturn(new SkillManifestCodec.Manifest(node,"a".repeat(64)));
         when(market.selectEntitlementsByAgent("0","client","agent")).thenReturn(List.of(e),List.of());
         assertEquals("SKILL_INSTALLATION_CHANGED",read().reasonCode());

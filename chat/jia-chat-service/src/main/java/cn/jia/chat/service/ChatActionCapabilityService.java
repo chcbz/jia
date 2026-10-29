@@ -13,7 +13,7 @@ import java.util.Set;
 public final class ChatActionCapabilityService {
     private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(ChatActionCapabilityService.class);
     public record Scope(String tenantId, String ownerJiacn, String clientId, String targetAgentId) { }
-    private static final com.fasterxml.jackson.databind.ObjectMapper SKILL_JSON = new com.fasterxml.jackson.databind.ObjectMapper();
+    private static final tools.jackson.databind.ObjectMapper SKILL_JSON = tools.jackson.databind.json.JsonMapper.builderWithJackson2Defaults().build();
     private cn.jia.agent.service.InstalledSkillDescriptorLookup installedSkills;
     private cn.jia.agent.service.SkillCapabilityLookup skillRuntimes;
     @org.springframework.beans.factory.annotation.Autowired
@@ -71,7 +71,7 @@ public final class ChatActionCapabilityService {
                     for(String field:List.of("description","parametersSchema","inputs","outputs","costInfo"))
                         publicMetadata.set(field,manifest.get(field));
                     metadata=publicMetadata.toString();
-                } catch(java.io.IOException invalid) {
+                } catch(tools.jackson.core.JacksonException invalid) {
                     throw new cn.jia.agent.service.InstalledSkillDescriptorLookup.SourceUnavailable(invalid);
                 }
             } else if(reason==null) reason="SKILL_INSTALLATION_EVIDENCE_INVALID";
@@ -150,7 +150,7 @@ public final class ChatActionCapabilityService {
                     var publicMetadata=SKILL_JSON.createObjectNode();
                     for(String field:List.of("description","parametersSchema","inputs","outputs","costInfo")) publicMetadata.set(field,m.get(field));
                     metadata=publicMetadata.toString();
-                } catch(java.io.IOException malformed) {throw new cn.jia.agent.service.InstalledSkillDescriptorLookup.SourceUnavailable(malformed);}
+                } catch(tools.jackson.core.JacksonException malformed) {throw new cn.jia.agent.service.InstalledSkillDescriptorLookup.SourceUnavailable(malformed);}
                 list.add(new SkillCandidate(d.skillKey(),d.skillVersion(),title,"UNAVAILABLE",
                         d.reasonCode()!=null?d.reasonCode():"SKILL_RUNTIME_UNAVAILABLE",metadata,d.verified()));
             }
@@ -197,7 +197,7 @@ public final class ChatActionCapabilityService {
                 action.put("minSources",manifest.at("/inputs/minItems").intValue());action.put("maxSources",manifest.at("/inputs/maxItems").intValue());
                 action.put("outputMimeTypes",SKILL_JSON.convertValue(manifest.at("/outputs/mimeTypes"),List.class));
                 actions.add(java.util.Collections.unmodifiableMap(action));
-            }catch(java.io.IOException malformed){throw new cn.jia.agent.service.InstalledSkillDescriptorLookup.SourceUnavailable(malformed);}
+            }catch(tools.jackson.core.JacksonException malformed){throw new cn.jia.agent.service.InstalledSkillDescriptorLookup.SourceUnavailable(malformed);}
         }
         return List.copyOf(actions);
     }
@@ -256,7 +256,7 @@ public final class ChatActionCapabilityService {
                 if(raw!=null&&raw.isObject()&&Set.of("FREE","FIXED","METERED","UNKNOWN").contains(raw.path("mode").asText()))
                     return SKILL_JSON.convertValue(raw,Map.class);
             }
-        }catch(java.io.IOException ignored){/* metadata warning only, never authority */}
+        }catch(tools.jackson.core.JacksonException ignored){/* metadata warning only, never authority */}
         return Map.of("mode","UNKNOWN");
     }
 }

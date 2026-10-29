@@ -10,7 +10,8 @@ import cn.jia.chat.archive.content.ArchiveManifestLoader;
 import cn.jia.chat.archive.store.*;
 import cn.jia.economy.mapper.EconomySkillMarketplaceMapper;
 import cn.jia.economy.entity.skill.SkillProductVersionEntity;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.*;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -29,7 +30,7 @@ class ArchiveMaintenanceMySqlTest {
     JdbcTemplate admin,jdbc; String database,appointment; PositionSkillService positions;
     ArchiveMaintenanceService service; JdbcArchiveContentStore content; SpringArchiveTransactions tx;
     final Scope scope=new Scope("0","test-client","owner-a");
-    final ObjectMapper json=new ObjectMapper();
+    final ObjectMapper json=JsonMapper.builderWithJackson2Defaults().build();
     final Proof proof=new Proof(new AgentRuntimeAuthentication.Scope("0","test-client","owner-a","agent1","instance1"),"runtime1","host1",1,"test-digest",1,1);
     @BeforeEach void setup()throws Exception {
         String base=System.getenv("CYF_POSITION_TEST_JDBC");

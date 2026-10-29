@@ -37,7 +37,8 @@ import org.springframework.security.web.authentication.LoginUrlAuthenticationEnt
 import org.springframework.web.context.support.AnnotationConfigWebApplicationContext;
 import org.springframework.web.filter.CharacterEncodingFilter;
 import org.springframework.web.filter.DelegatingFilterProxy;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.databind.ObjectMapper;
 
 import java.net.CookieManager;
 import java.net.CookiePolicy;
@@ -128,7 +129,7 @@ class AuthFormTransportTest {
             assertEquals(400, wrongProof.statusCode());
             var exchanged = post(publicClient, base + "/oauth2/token", grant + "&code_verifier=" + verifier);
             assertEquals(200, exchanged.statusCode(), exchanged.body());
-            var json = new ObjectMapper().readTree(exchanged.body());
+            var json = JsonMapper.builderWithJackson2Defaults().build().readTree(exchanged.body());
             assertFalse(json.path("access_token").asText().isBlank());
             assertEquals("Bearer", json.path("token_type").asText());
             var replay = post(publicClient, base + "/oauth2/token", grant + "&code_verifier=" + verifier);

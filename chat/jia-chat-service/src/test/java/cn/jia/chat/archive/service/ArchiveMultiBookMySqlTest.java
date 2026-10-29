@@ -8,7 +8,8 @@ import cn.jia.chat.archive.dto.ArchiveTextAnchorDTO;
 import cn.jia.chat.archive.model.ArchiveOwnerScope;
 import cn.jia.chat.archive.store.JdbcArchiveContentStore;
 import cn.jia.chat.archive.store.JdbcArchivePersonalDataStore;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.junit.jupiter.api.io.TempDir;
@@ -120,7 +121,7 @@ class ArchiveMultiBookMySqlTest {
             var paragraph = last.paragraphs().getLast();
             var point = personalStore.lockFinalContentPoint(manifest.editionId());
             assertEquals(paragraph.paragraphId(), point.paragraphId());
-            byte[] body = new ObjectMapper().writeValueAsBytes(Map.of("expectedVersion", "0", "markCompleted", true,
+            byte[] body = JsonMapper.builderWithJackson2Defaults().build().writeValueAsBytes(Map.of("expectedVersion", "0", "markCompleted", true,
                     "location", Map.of("editionManifestSha256", manifest.manifestSha256(), "blockType", "CHAPTER",
                             "blockId", last.blockId(), "paragraphId", paragraph.paragraphId(),
                             "byteOffset", paragraph.utf8ByteLength(), "paragraphSha256", paragraph.sha256())));

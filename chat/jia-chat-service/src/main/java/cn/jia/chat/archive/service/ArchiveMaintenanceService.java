@@ -7,7 +7,8 @@ import cn.jia.agent.security.AgentRuntimeAuthenticationService.Proof;
 import cn.jia.chat.archive.content.*;
 import cn.jia.chat.archive.model.*;
 import cn.jia.chat.archive.store.*;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Service;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.dao.DuplicateKeyException;
@@ -32,7 +33,7 @@ public class ArchiveMaintenanceService {
     private final ArchiveMaintenanceStore jobs;
     private final ArchiveContentStore content;
     private final ArchiveTransactions tx;
-    private final ObjectMapper json=new ObjectMapper();
+    private final ObjectMapper json=JsonMapper.builderWithJackson2Defaults().build();
     public ArchiveMaintenanceService(PositionSkillService positions,AgentIdentityService identities,
             ArchiveMaintenanceStore jobs,ArchiveContentStore content,ArchiveTransactions tx){
         this.positions=positions;this.identities=identities;this.jobs=jobs;this.content=content;this.tx=tx;

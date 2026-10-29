@@ -1,7 +1,8 @@
 package cn.jia.chat.archive.content;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
+import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -48,7 +49,7 @@ public class ArchiveGenericManifestTest {
             bytes = input.readAllBytes();
         }
         assertThrows(ArchiveContentException.class, () -> loader.parseAndValidate(bytes, "0".repeat(64)));
-        var mapper = new ObjectMapper();
+        var mapper = JsonMapper.builderWithJackson2Defaults().build();
         ObjectNode root = (ObjectNode) mapper.readTree(bytes);
         root.put("title", "Tampered");
         byte[] altered = mapper.writeValueAsBytes(root);

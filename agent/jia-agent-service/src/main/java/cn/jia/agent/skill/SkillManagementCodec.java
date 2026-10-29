@@ -1,8 +1,9 @@
 package cn.jia.agent.skill;
 
-import com.fasterxml.jackson.core.*;
-import com.fasterxml.jackson.databind.*;
-import com.fasterxml.jackson.databind.node.ObjectNode;
+import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.core.*;
+import tools.jackson.databind.*;
+import tools.jackson.databind.node.ObjectNode;
 import com.networknt.schema.*;
 import com.networknt.schema.regex.JoniRegularExpressionFactory;
 import java.nio.*;
@@ -14,9 +15,9 @@ import static cn.jia.agent.skill.SkillMarketplaceException.require;
 
 /** SM-C1 wire boundary, shared by real HTTP, command and result adapters. Historical hashes stay untouched. */
 public final class SkillManagementCodec {
-    private static final ObjectMapper JSON = new ObjectMapper(JsonFactory.builder()
-            .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION).build())
-            .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
+    private static final ObjectMapper JSON = JsonMapper.builderWithJackson2Defaults()
+            .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
+            .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS).build();
     private static final JsonNode SCHEMA;
     private static final SchemaRegistry REGISTRY = SchemaRegistry.withDefaultDialect(SpecificationVersion.DRAFT_7,
             b -> b.schemaRegistryConfig(SchemaRegistryConfig.builder().typeLoose(false)
@@ -44,7 +45,7 @@ public final class SkillManagementCodec {
             var node=JSON.readTree(raw); unicode(node);
             if(node.isObject()&&node.has("protocolVersion"))require(node.get("protocolVersion").isIntegralNumber()&&node.get("protocolVersion").intValue()==1,400,"PROTOCOL_VERSION_UNSUPPORTED");
             if(definition!=null)validate(definition,node);
-            return JSON.convertValue(node,new com.fasterxml.jackson.core.type.TypeReference<LinkedHashMap<String,Object>>(){});
+            return JSON.convertValue(node,new tools.jackson.core.type.TypeReference<LinkedHashMap<String,Object>>(){});
         } catch(SkillMarketplaceException e) { throw e; }
         catch(Exception e) { throw new SkillMarketplaceException(400,"BAD_REQUEST"); }
     }
@@ -52,7 +53,7 @@ public final class SkillManagementCodec {
     public static void validateEmbeddedDeclaration(String raw) {
         try(var parser=JSON.createParser(raw)) {
             while(parser.nextToken()!=null) {
-                if(parser.currentToken()==JsonToken.FIELD_NAME&&"skillExecution".equals(parser.currentName())) {
+                if(parser.currentToken()==JsonToken.PROPERTY_NAME&&"skillExecution".equals(parser.currentName())) {
                     parser.nextToken();int start=Math.toIntExact(parser.currentTokenLocation().getCharOffset());
                     parser.skipChildren();int end=Math.toIntExact(parser.currentLocation().getCharOffset());
                     read(raw.substring(start,end).getBytes(StandardCharsets.UTF_8),null);
@@ -115,7 +116,7 @@ public final class SkillManagementCodec {
     private static void unicode(JsonNode node) {
         require(node!=null,400,"BAD_REQUEST");
         if(node.isTextual())checkText(node.textValue());
-        if(node.isObject())node.fields().forEachRemaining(e->{checkText(e.getKey());unicode(e.getValue());});
+        if(node.isObject())node.properties().iterator().forEachRemaining(e->{checkText(e.getKey());unicode(e.getValue());});
         else if(node.isArray())node.forEach(SkillManagementCodec::unicode);
     }
     private static void checkText(String s) {

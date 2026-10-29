@@ -37,7 +37,7 @@ class SkillManagementHttpTest {
     }
     Map<String,Object> sample(String definition) throws Exception {
         for(var c:SkillManagementCodecTest.examples().get("cases"))if(c.get("valid").asBoolean()&&definition.equals(c.get("definition").asText()))
-            return SkillManagementCodecTest.JSON.convertValue(c.get("value"),new com.fasterxml.jackson.core.type.TypeReference<Map<String,Object>>(){});
+            return SkillManagementCodecTest.JSON.convertValue(c.get("value"),new tools.jackson.core.type.TypeReference<Map<String,Object>>(){});
         throw new AssertionError("Missing locked fixture: "+definition);
     }
     @Test void completeQuoteEnvelopeAndIdHeaderArePreserved() throws Exception {
@@ -92,7 +92,7 @@ class SkillManagementHttpTest {
     }
     @Test void allContractBusinessErrorsKeepTheirActualHttpStatus() throws Exception {
         var cases=SkillManagementCodecTest.JSON.readTree(SkillManagementCodecTest.resource("management-contract-v1.behavior.json")).get("errorStatus");
-        for(var fields=cases.fields();fields.hasNext();) {
+        for(var fields=cases.properties().iterator();fields.hasNext();) {
             var entry=fields.next();doThrow(new SkillMarketplaceException(entry.getValue().asInt(),entry.getKey()))
                 .when(service).skills(any(),anyString(),anyBoolean());
             mvc.perform(get("/agent/agt_demo/skills").principal(auth)).andExpect(status().is(entry.getValue().asInt())).andExpect(jsonPath("$.code").value(entry.getKey()))

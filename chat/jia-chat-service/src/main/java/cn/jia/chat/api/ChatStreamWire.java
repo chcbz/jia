@@ -1,9 +1,10 @@
 package cn.jia.chat.api;
 
 import cn.jia.core.entity.ProtocolMessage;
-import com.fasterxml.jackson.core.JsonParser;
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.core.StreamReadFeature;
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.ObjectMapper;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -11,8 +12,8 @@ import java.util.UUID;
 
 /** Projects private relay/model frames at the HTTP boundary; never rewrites durable event bytes. */
 final class ChatStreamWire {
-    private static final ObjectMapper JSON = new ObjectMapper()
-            .enable(JsonParser.Feature.STRICT_DUPLICATE_DETECTION);
+    private static final ObjectMapper JSON = JsonMapper.builderWithJackson2Defaults()
+            .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION).build();
     private static final long MAX_SAFE_INTEGER = 9_007_199_254_740_991L;
 
     private ChatStreamWire() { }

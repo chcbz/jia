@@ -83,7 +83,7 @@ class TaskSkillPolicyServiceTest {
                     new TaskSkillPolicyService.Snapshot(false,reason,1,null,null).decision());
         }
         var snapshot = new TaskSkillPolicyService.Snapshot(false,"RUNTIME_UNAVAILABLE",1,null,null);
-        var json = new com.fasterxml.jackson.databind.ObjectMapper().valueToTree(snapshot);
+        var json = tools.jackson.databind.json.JsonMapper.builderWithJackson2Defaults().build().valueToTree(snapshot);
         assertEquals(5, json.size());
         assertFalse(json.has("decision"));
         assertEquals(snapshot, new TaskSkillPolicyService.Snapshot(false,"RUNTIME_UNAVAILABLE",1,null,null));

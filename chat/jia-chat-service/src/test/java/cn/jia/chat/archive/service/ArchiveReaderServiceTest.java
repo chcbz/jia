@@ -11,8 +11,9 @@ import cn.jia.chat.archive.model.ArchiveParagraphRecord;
 import cn.jia.chat.archive.model.ArchiveWorkRecord;
 import cn.jia.chat.archive.store.ArchiveContentStore;
 import cn.jia.core.entity.BaseEntity;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
 import java.util.LinkedHashMap;
@@ -69,7 +70,7 @@ class ArchiveReaderServiceTest {
         assertEquals(manifest.chapters().getFirst().paragraphs().getFirst().text(),
                 chapter.data().paragraphs().getFirst().text());
 
-        ObjectMapper mapper = new ObjectMapper();
+        ObjectMapper mapper = JsonMapper.builderWithJackson2Defaults().build();
         JsonNode catalogJson = mapper.valueToTree(catalog.data());
         assertEquals(List.of("representationSchemaVersion", "workId", "title", "activeEdition"),
                 fieldNames(catalogJson));
@@ -114,7 +115,7 @@ class ArchiveReaderServiceTest {
 
     private List<String> fieldNames(JsonNode node) {
         java.util.ArrayList<String> names = new java.util.ArrayList<>();
-        node.fieldNames().forEachRemaining(names::add);
+        node.propertyNames().iterator().forEachRemaining(names::add);
         return names;
     }
 
