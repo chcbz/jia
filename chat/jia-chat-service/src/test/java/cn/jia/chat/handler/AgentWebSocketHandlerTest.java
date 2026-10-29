@@ -196,7 +196,7 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
                 .anyMatch(payload -> payload.contains("AGENT_REGISTRATION_UNAVAILABLE")));
     }
 
-    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.ParameterizedTest(name = "64K-boundary [{index}] units={0}, symbol={1}")
     @org.junit.jupiter.params.provider.CsvSource({"10000,x", "65536,x", "65537,x", "65536,中", "65537,中", "65536,😀"})
     void realTomcatAgentChannelEnforces64KTextUnitsWithoutBypassingCodec(
             int units, String symbol, @org.junit.jupiter.api.io.TempDir java.nio.file.Path scratch) throws Exception {
@@ -207,6 +207,10 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         tomcat.getConnector().setProperty("address", "127.0.0.1");
         var context = tomcat.addContext("", scratch.toString());
         context.setParentClassLoader(getClass().getClassLoader());
+        // Tomcat must map a servlet before its WebSocket filter can handle the upgrade.
+        org.apache.catalina.startup.Tomcat.addServlet(context, "default",
+                new org.apache.catalina.servlets.DefaultServlet());
+        context.addServletMappingDecoded("/", "default");
         context.addServletContainerInitializer(new org.apache.tomcat.websocket.server.WsSci(), Set.of());
         java.net.http.WebSocket client = null;
         try {
