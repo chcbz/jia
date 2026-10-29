@@ -29,13 +29,13 @@ public class UserVOWrapper implements BaseEntityWrapper<UserVO, UserEntity> {
                 .in(CollectionUtil.isNotNullOrEmpty(entity.getJiacnList()), UserEntity::getJiacn, entity.getJiacnList())
                 .exists(entity.getOrgId() != null,
                         "select 1 from user_org_rel where user_org_rel.user_id = user_info.id and user_org_rel.org_id" +
-                                " = %s", entity.getOrgId())
+                                " = {0}", entity.getOrgId())
                 .exists(entity.getGroupId() != null,
                         "select 1 from user_group_rel where user_group_rel.user_id = user_info.id and user_group_rel" +
-                                ".group_id = %s", entity.getGroupId())
+                                ".group_id = {0}", entity.getGroupId())
                 .exists(entity.getRoleId() != null,
                         "select 1 from user_role_rel where user_role_rel.user_id = user_info.id and user_role_rel" +
-                                ".role_id = %s", entity.getRoleId());
+                                ".role_id = {0}", entity.getRoleId());
     }
 
     @Override
