@@ -30,6 +30,7 @@ public final class SkillManagementService {
     private final SkillMarketplaceService marketplace;
     private final SkillAgentVersions versions;
     private final AgentRuntimeDao runtimes;
+    private final AgentIdentityService identities;
     private final AgentRuntimeV1InstallationDao installations;
     private final AgentRuntimeAuthenticationService authentication;
     private final ObjectProvider<SkillPackages> packages;
@@ -39,12 +40,12 @@ public final class SkillManagementService {
     private final TransactionTemplate tx;
     public SkillManagementService(EconomySkillManagementMapper db,EconomySkillMarketplaceMapper market,
             EconomySkillApplicationMapper app,SkillMarketplaceService marketplace,SkillAgentVersions versions,
-            AgentRuntimeDao runtimes,AgentRuntimeV1InstallationDao installations,AgentRuntimeAuthenticationService authentication,
+            AgentRuntimeDao runtimes,AgentRuntimeV1InstallationDao installations,AgentRuntimeAuthenticationService authentication,AgentIdentityService identities,
             ObjectProvider<SkillPackages> packages,ObjectProvider<SkillInstallCommandWriter> writer,
             ObjectProvider<AgentManagedSessionLookup> sessions,ObjectProvider<SkillCapabilityLookup> capabilities,
             PlatformTransactionManager manager) {
         this.db=db;this.market=market;this.app=app;this.marketplace=marketplace;this.versions=versions;this.runtimes=runtimes;
-        this.installations=installations;this.authentication=authentication;this.packages=packages;this.writer=writer;
+        this.installations=installations;this.authentication=authentication;this.identities=identities;this.packages=packages;this.writer=writer;
         this.sessions=sessions;this.capabilities=capabilities;this.tx=new TransactionTemplate(manager);
     }
     private org.springframework.beans.factory.ObjectProvider<cn.jia.agent.position.PositionSkillService> positionProvider;
@@ -198,6 +199,8 @@ public final class SkillManagementService {
             require(installation!=null&&"ACTIVE".equals(installation.getStatus())
                     &&a.tenantId().equals(installation.getTenantId())&&a.clientId().equals(installation.getClientId())
                     &&agent.equals(installation.getCanonicalAgentId()),409,"SKILL_RUNTIME_MAPPING_REQUIRED");
+            // requireVersion and fenced callbacks also acquire binding/identity locks.
+            identities.lockRegistrationIdentityInScope(a.tenantId(),a.clientId(),a.ownerJiacn(),agent);
             var row=runtimes.lockInScope(a.tenantId(),a.clientId(),agent);
             require(row!=null&&a.ownerJiacn().equals(row.getOwnerJiacn())
                     &&hint.getRuntimeInstallationId().equals(row.getRuntimeInstallationId())

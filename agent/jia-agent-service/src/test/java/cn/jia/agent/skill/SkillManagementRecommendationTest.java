@@ -31,7 +31,7 @@ class SkillManagementRecommendationTest {
         when(db.states("0", "client", "agent")).thenReturn(List.of());
         when(auth.currentRegisteredProof("0", "client", "agent")).thenThrow(new IllegalArgumentException("offline"));
         var service = new SkillManagementService(db, market, app, marketplace, versions, runtime, installations,
-                auth, packages, writer, sessions, capabilities, tx);
+                auth, mock(cn.jia.agent.service.AgentIdentityService.class), packages, writer, sessions, capabilities, tx);
         var actor = new HostingRentHttp.Actor("user", "0", "client", "owner");
         when(marketplace.available(actor)).thenReturn(true);
         assertEquals(List.of(), service.recommendationSkills(actor, "agent"));

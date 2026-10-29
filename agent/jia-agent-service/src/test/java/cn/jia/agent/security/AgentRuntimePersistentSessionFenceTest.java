@@ -45,6 +45,7 @@ class AgentRuntimePersistentSessionFenceTest {
         when(identities.requireRegistrationIdentityInScope("0", "client", "owner", AGENT)).thenReturn(identity);
         when(identities.requireActiveIdentityForBinding("0", "client", "owner", 3L, AGENT)).thenReturn(identity);
         when(identities.requireActiveBinding(identity, null)).thenReturn(binding);
+        when(identities.lockRegistrationIdentityInScope("0", "client", "owner", AGENT)).thenReturn(identity);
         when(identities.activateForFirstRegistration(identity)).thenReturn(identity);
         when(accounts.findUniqueByExactJiacn("owner")).thenReturn(Optional.of(new AccountSecuritySnapshot(7, "owner", AccountState.ACTIVE, 2)));
         when(installations.lock(ID)).thenReturn(installation);
@@ -125,6 +126,43 @@ class AgentRuntimePersistentSessionFenceTest {
         AtomicBoolean entered=new AtomicBoolean();
         assertThrows(RuntimeException.class,()->proxy.withNativeFence(admitted,()->entered.compareAndSet(false,true)));
         assertFalse(entered.get());verify(manager).rollback(status);verify(manager,never()).commit(any());
+    }
+
+    @Test void ordinaryFenceLocksIdentityBeforeRuntimeAndDoesNotActivatePendingIdentity() {
+        var session = auth.issue(installation, request("host", "boot"), 1000);
+        var proof = auth.verify(headers(session));
+        clearInvocations(installations, identities, rows);
+        assertEquals("committed", auth.withFence(proof, false, () -> "committed"));
+        var order = inOrder(installations, identities, rows);
+        order.verify(installations).lock(ID);
+        order.verify(identities).lockRegistrationIdentityInScope("0", "client", "owner", AGENT);
+        order.verify(rows).lockInScope("0", "client", AGENT);
+        verify(identities, never()).activateForFirstRegistration(any());
+    }
+
+    @Test void registrationFenceLocksIdentityAndActivatesBeforeRuntime() {
+        var session = auth.issue(installation, request("host", "boot"), 1000);
+        var proof = auth.verify(headers(session));
+        clearInvocations(installations, identities, rows);
+        assertEquals("registered", auth.withFence(proof, true, () -> "registered"));
+        var order = inOrder(installations, identities, rows);
+        order.verify(installations).lock(ID);
+        order.verify(identities).lockRegistrationIdentityInScope("0", "client", "owner", AGENT);
+        order.verify(identities).activateForFirstRegistration(identity);
+        order.verify(rows).lockInScope("0", "client", AGENT);
+    }
+
+    @Test void identityLockFailurePreventsRuntimeLockAndBusinessCallback() {
+        var session = auth.issue(installation, request("host", "boot"), 1000);
+        var proof = auth.verify(headers(session));
+        when(identities.lockRegistrationIdentityInScope("0", "client", "owner", AGENT))
+                .thenThrow(new IllegalArgumentException("identity revoked"));
+        clearInvocations(rows);
+        AtomicBoolean entered = new AtomicBoolean();
+        assertThrows(IllegalArgumentException.class,
+                () -> auth.withFence(proof, false, () -> entered.compareAndSet(false, true)));
+        assertFalse(entered.get());
+        verify(rows, never()).lockInScope(anyString(), anyString(), anyString());
     }
 
     @Test void coldProvisionedIdentityIssuesIndependentDigestOnlyPendingSession() {

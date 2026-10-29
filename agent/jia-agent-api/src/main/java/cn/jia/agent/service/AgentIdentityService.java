@@ -13,6 +13,10 @@ public interface AgentIdentityService {
     AgentIdentityRegistryEntity requireRegistrationIdentityInScope(
             String tenantId, String clientId, String ownerJiacn, String requestedAgentId);
 
+    /** Locks binding then identity for a runtime fence, without activating PROVISIONED identities. */
+    AgentIdentityRegistryEntity lockRegistrationIdentityInScope(
+            String tenantId, String clientId, String ownerJiacn, String requestedAgentId);
+
     AgentIdentityRegistryEntity activateForFirstRegistration(
             AgentIdentityRegistryEntity identity);
 

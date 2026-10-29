@@ -105,7 +105,7 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         when(sessions.dispatch(anyString(),anyString(),anyString(),any(),any())).thenReturn(AgentRawCommandDispatchResult.sent(1,1));
         capabilities=mock(SkillCapabilityLookup.class);when(capabilities.lookup(any(),any())).thenReturn(SkillCapabilityLookup.View.unavailable(SkillCapabilityLookup.State.DISCONNECTED));
         marketplace=new SkillMarketplaceService(market,app,ledger,posting,gate,versions,runtimes,provider(writer),provider(packages),provider(authentication),provider(sessions),manager);
-        service=new SkillManagementService(db,market,app,marketplace,versions,runtimes,installations,authentication,provider(packages),provider(writer),provider(sessions),provider(capabilities),manager);
+        service=new SkillManagementService(db,market,app,marketplace,versions,runtimes,installations,authentication,mock(AgentIdentityService.class),provider(packages),provider(writer),provider(sessions),provider(capabilities),manager);
         dispatch=new SkillInstallDispatchService(app,market,marketplace,versions,authentication,commands,provider(sessions),manager);dispatch.setManagement(service);
         recoveryMapper=sql.getMapper(AgentSkillInstallRecoveryMapper.class);
         recoveryDao=new AgentCommandRecoveryDaoImpl(sql.getMapper(AgentCommandRecoveryMapper.class));
@@ -171,7 +171,7 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         when(agents.requireApiKeyOwnedAgentForUpdate(ACTOR.clientId(),ACTOR.ownerJiacn(),AGENT)).thenReturn(dto);
         when(agents.requireApiKeyOwnedAgent(ACTOR.clientId(),ACTOR.ownerJiacn(),AGENT)).thenReturn(dto);
         versions=new SkillAgentVersions(app,rows,provider(agents),owner,manager);
-        service=new SkillManagementService(db,market,app,marketplace,versions,rows,installs,authentication,provider(packages),provider(writer),provider(sessions),provider(capabilities),manager);
+        service=new SkillManagementService(db,market,app,marketplace,versions,rows,installs,authentication,identities,provider(packages),provider(writer),provider(sessions),provider(capabilities),manager);
     }
     /** Immutable snapshot of ALL relevant SQL business rows, including versions and transport leases. */
     protected Map<String,Object> businessSnapshot() {

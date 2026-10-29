@@ -111,6 +111,26 @@ public class AgentIdentityServiceImpl implements AgentIdentityService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
+    public AgentIdentityRegistryEntity lockRegistrationIdentityInScope(
+            String tenantId, String clientId, String ownerJiacn, String requestedAgentId) {
+        AgentIdentityRegistryEntity observed = requireRegistrationIdentityInScope(
+                tenantId, clientId, ownerJiacn, requestedAgentId);
+        AgentPersonaBindingEntity binding = bindingDao.findByIdForUpdate(observed.getBindingId());
+        AgentIdentityRegistryEntity locked = registryDao.findExactByCanonicalInScopeForUpdate(
+                tenantId, clientId, ownerJiacn, observed.getCanonicalAgentId());
+        if (locked == null || !Objects.equals(observed.getId(), locked.getId())
+                || !Objects.equals(observed.getBindingId(), locked.getBindingId())) {
+            throw forbidden("Agent identity changed while acquiring runtime fence locks");
+        }
+        validateRegistry(locked, tenantId, clientId, ownerJiacn, observed.getCanonicalAgentId(), true);
+        requireRegistrableLifecycle(locked);
+        requireBindingProjection(locked, binding,
+                Objects.equals(requestedAgentId, locked.getCanonicalAgentId()) ? null : requestedAgentId, true);
+        return locked;
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
     public AgentIdentityRegistryEntity activateForFirstRegistration(
             AgentIdentityRegistryEntity identity) {
         if (identity == null || identity.getId() == null || identity.getBindingId() == null) {

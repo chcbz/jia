@@ -106,6 +106,40 @@ class AgentIdentityServiceImplTest extends BaseMockTest {
     }
 
     @Test
+    void runtimeFenceLocksBindingThenIdentityWithoutActivatingProvisionedIdentity() {
+        AgentPersonaBindingEntity binding = binding(CANONICAL);
+        AgentIdentityRegistryEntity identity = registry(binding, CANONICAL,
+                AgentConstants.IDENTITY_TYPE_OPAQUE, AgentConstants.IDENTITY_STATUS_PROVISIONED);
+        when(registryDao.findExactByCanonicalInScope(TENANT, CLIENT, OWNER, CANONICAL)).thenReturn(identity);
+        when(bindingDao.selectById(binding.getId())).thenReturn(binding);
+        when(bindingDao.findByIdForUpdate(binding.getId())).thenReturn(binding);
+        when(registryDao.findExactByCanonicalInScopeForUpdate(TENANT, CLIENT, OWNER, CANONICAL)).thenReturn(identity);
+
+        assertSame(identity, service.lockRegistrationIdentityInScope(TENANT, CLIENT, OWNER, CANONICAL));
+        var order = inOrder(bindingDao, registryDao);
+        order.verify(bindingDao).findByIdForUpdate(binding.getId());
+        order.verify(registryDao).findExactByCanonicalInScopeForUpdate(TENANT, CLIENT, OWNER, CANONICAL);
+        assertEquals(AgentConstants.IDENTITY_STATUS_PROVISIONED, identity.getLifecycleStatus());
+        verify(registryDao, never()).activateProvisioned(anyLong(), anyLong());
+    }
+
+    @Test
+    void runtimeFenceRejectsIdentityReplacementWhileWaitingForBindingLock() {
+        AgentPersonaBindingEntity binding = binding(CANONICAL);
+        AgentIdentityRegistryEntity observed = registry(binding, CANONICAL,
+                AgentConstants.IDENTITY_TYPE_OPAQUE, AgentConstants.IDENTITY_STATUS_ACTIVE);
+        AgentIdentityRegistryEntity replacement = registry(binding, CANONICAL,
+                AgentConstants.IDENTITY_TYPE_OPAQUE, AgentConstants.IDENTITY_STATUS_ACTIVE);
+        replacement.setId(observed.getId() + 1);
+        when(registryDao.findExactByCanonicalInScope(TENANT, CLIENT, OWNER, CANONICAL)).thenReturn(observed);
+        when(bindingDao.selectById(binding.getId())).thenReturn(binding);
+        when(bindingDao.findByIdForUpdate(binding.getId())).thenReturn(binding);
+        when(registryDao.findExactByCanonicalInScopeForUpdate(TENANT, CLIENT, OWNER, CANONICAL)).thenReturn(replacement);
+        assertThrows(AgentServiceImpl.AgentBizException.class,
+                () -> service.lockRegistrationIdentityInScope(TENANT, CLIENT, OWNER, CANONICAL));
+    }
+
+    @Test
     void explicitlyRegisteredLegacyCanonicalIsPreserved() {
         String legacy = "jyt-client-a-wuyong";
         AgentPersonaBindingEntity binding = binding(legacy);

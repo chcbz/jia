@@ -260,8 +260,11 @@ public class AgentRuntimeAuthenticationService {
         if (proof == null) throw denied();
         var scope = proof.scope();
         var installation = installations.lock(proof.installationId());
+        // Joined callbacks may lock binding/identity again. Acquire them before runtime,
+        // matching the status monitor; runtime -> binding otherwise deadlocks with it.
+        var identity = identities.lockRegistrationIdentityInScope(
+                scope.tenantId(), scope.clientId(), scope.ownerJiacn(), scope.agentId());
         if (registration) {
-            var identity = identities.requireRegistrationIdentityInScope(scope.tenantId(), scope.clientId(), scope.ownerJiacn(), scope.agentId());
             identities.activateForFirstRegistration(identity);
         }
         var row = runtimes.lockInScope(scope.tenantId(), scope.clientId(), scope.agentId());
