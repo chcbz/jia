@@ -25,7 +25,7 @@ class AgentRuntimeCapabilitiesTest {
                     capabilities.decision(InteractionRoute.CHAT));
             assertEquals(AgentRuntimeCapabilities.Decision.UNSUPPORTED,
                     capabilities.decision(InteractionRoute.INSPECT));
-            assertEquals(fixture, capabilities.normalizedForReceipt());
+            assertEquals(compact(fixture), capabilities.normalizedForReceipt());
         }
     }
 
@@ -71,6 +71,51 @@ class AgentRuntimeCapabilitiesTest {
         Map<String, Object> wrongVersion = candidate(true, false);
         wrongVersion.put("capabilityContractVersion", "1");
         assertThrows(IllegalArgumentException.class, () -> AgentRuntimeCapabilities.parse(wrongVersion));
+    }
+
+    @Test
+    void compactV1HasSameRoutingAsExpandedV1AndDoesNotEchoRetiredConstants() {
+        for (boolean enabled : new boolean[] {true, false}) {
+            var expanded = AgentRuntimeCapabilities.parse(candidate(true, enabled));
+            var reduced = AgentRuntimeCapabilities.parse(compact(candidate(true, enabled)));
+            for (var route : InteractionRoute.values()) assertEquals(expanded.decision(route), reduced.decision(route));
+            assertEquals(expanded.normalizedForReceipt(), reduced.normalizedForReceipt());
+            assertFalse(reduced.normalizedForReceipt().containsKey("legacyCompatibility"));
+            assertFalse(reduced.normalizedForReceipt().containsKey("protocolVersions"));
+        }
+        var missing = compact(candidate(true, true)); missing.remove("profiles");
+        assertThrows(IllegalArgumentException.class, () -> AgentRuntimeCapabilities.parse(missing));
+        var conflict = candidate(true, true); conflict.put("protocolVersions", java.util.List.of(99));
+        assertThrows(IllegalArgumentException.class, () -> AgentRuntimeCapabilities.parse(conflict));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void exactRuntimeCompactRegistrationRetainsMaterialsNativeExecutionAndSkillCatalog() throws Exception {
+        try (InputStream stream = getClass().getResourceAsStream("/contracts/registration-compact-v1.json")) {
+            Map<String, Object> envelope = JsonUtil.getMapper().readValue(stream, Map.class);
+            assertEquals("agent.register", envelope.get("messageType"));
+            Map<String, Object> data = (Map<String, Object>) envelope.get("data");
+            var runtime = AgentRuntimeCapabilities.parse(data.get("runtimeCapabilities"));
+            assertEquals(AgentRuntimeCapabilities.Decision.WAITING_DISABLED, runtime.decision(InteractionRoute.CHAT));
+            var typed = TypedDeliberationDeclaration.parse(data.get("typedDeliberation"));
+            assertEquals(TypedDeliberationDeclaration.State.UNAVAILABLE, typed.state());
+            var material = (Map<String, Object>) typed.frozenReceipt().get("materialsInput");
+            assertEquals(9, ((java.util.List<?>) material.get("supportedInputs")).size());
+            var nativeExecution = (Map<String, Object>) typed.frozenReceipt().get("nativeExecution");
+            assertEquals(java.util.List.of("NATIVE_SKILL_SCRIPT_V1"), nativeExecution.get("supportedToolPolicyRefs"));
+            var skills = SkillExecutionDeclaration.parse(data.get("skillExecution"));
+            org.junit.jupiter.api.Assertions.assertNotNull(skills);
+            assertEquals(4, skills.skills().size());
+            assertFalse(data.containsKey("inputCarriers"));
+        }
+    }
+
+    private static Map<String, Object> compact(Map<String, Object> expanded) {
+        var compact = new LinkedHashMap<>(expanded);
+        compact.keySet().retainAll(java.util.Set.of("capabilityContractVersion", "runtimeVersion", "profiles",
+                "fastChatEnabled", "appServerEnabled", "trueDeltaEnabled"));
+        return compact;
     }
 
     static Map<String, Object> candidate(boolean supported, boolean enabled) {

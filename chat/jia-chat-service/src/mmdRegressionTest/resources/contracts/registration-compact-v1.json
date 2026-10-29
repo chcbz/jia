@@ -1,0 +1,220 @@
+{
+  "protocolVersion": 1,
+  "requestId": "fixture-request-1",
+  "messageType": "agent.register",
+  "messageId": "fixture-register-1",
+  "data": {
+    "name": "Fixture Agent",
+    "personaName": "Fixture",
+    "endpoint": "",
+    "abilities": [],
+    "runtimeCapabilities": {
+      "capabilityContractVersion": 1,
+      "runtimeVersion": "juyiting-fast-context-runtime-v2",
+      "profiles": {
+        "CHAT": {
+          "supported": true,
+          "enabled": false,
+          "strictNoToolsVerified": false
+        },
+        "INSPECT": {
+          "supported": false,
+          "enabled": false,
+          "strictNoToolsVerified": false,
+          "unavailableReason": "fixed-manifest-provider-isolation-not-verified"
+        },
+        "EXECUTE": {
+          "supported": false,
+          "enabled": false
+        }
+      },
+      "fastChatEnabled": false,
+      "appServerEnabled": false,
+      "trueDeltaEnabled": false
+    },
+    "typedDeliberation": {
+      "schemaVersion": 5,
+      "state": "UNAVAILABLE",
+      "carrier": "CHAT_MESSAGE_FINAL_SIDECAR_V5",
+      "referenceModes": [
+        "NONE",
+        "AVAILABLE"
+      ],
+      "outcomeKinds": [
+        "ANSWER",
+        "CLARIFY",
+        "ACTION_REQUEST",
+        "REVISION_REQUEST",
+        "SUBMISSION_REQUEST"
+      ],
+      "engine": "CODEX_APP_SERVER_NATIVE_OUTPUT_SCHEMA",
+      "strictNoToolsVerified": false,
+      "toolPolicy": "read-only-constrained",
+      "materialsInput": {
+        "schemaVersion": 1,
+        "supportedInputs": [
+          {
+            "mediaKind": "file",
+            "mimeType": "application/x-fixture-0",
+            "carrier": "PARSED_TEXT",
+            "carrierContractDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          {
+            "mediaKind": "file",
+            "mimeType": "application/x-fixture-1",
+            "carrier": "PARSED_TEXT",
+            "carrierContractDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          {
+            "mediaKind": "file",
+            "mimeType": "application/x-fixture-2",
+            "carrier": "PARSED_TEXT",
+            "carrierContractDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          {
+            "mediaKind": "file",
+            "mimeType": "application/x-fixture-3",
+            "carrier": "PARSED_TEXT",
+            "carrierContractDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          {
+            "mediaKind": "file",
+            "mimeType": "application/x-fixture-4",
+            "carrier": "PARSED_TEXT",
+            "carrierContractDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          {
+            "mediaKind": "file",
+            "mimeType": "application/x-fixture-5",
+            "carrier": "PARSED_TEXT",
+            "carrierContractDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          {
+            "mediaKind": "file",
+            "mimeType": "application/x-fixture-6",
+            "carrier": "PARSED_TEXT",
+            "carrierContractDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          {
+            "mediaKind": "file",
+            "mimeType": "application/x-fixture-7",
+            "carrier": "PARSED_TEXT",
+            "carrierContractDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          {
+            "mediaKind": "file",
+            "mimeType": "application/x-fixture-8",
+            "carrier": "PARSED_TEXT",
+            "carrierContractDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        ]
+      },
+      "nativeExecution": {
+        "schemaVersion": 1,
+        "executionProtocolVersion": 5,
+        "toolPolicyRef": "NATIVE_LOCAL_FILES_V1",
+        "outputMimeTypes": [
+          "text/plain",
+          "text/markdown",
+          "text/html",
+          "application/json",
+          "image/png"
+        ],
+        "supportedToolPolicyRefs": [
+          "NATIVE_SKILL_SCRIPT_V1"
+        ]
+      }
+    },
+    "skillExecution": {
+      "schemaVersion": 2,
+      "catalogRevision": "1",
+      "skills": [
+        {
+          "skillKey": "skill-0",
+          "skillInstallationId": "installed-0",
+          "productVersionId": "product-0",
+          "skillVersion": "1.0.0",
+          "packageSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "manifestSha256": null,
+          "kind": "INSTRUCTION",
+          "policyRevision": "1",
+          "enabled": true,
+          "runner": null,
+          "readiness": "NOT_EXECUTABLE",
+          "reasonCode": null,
+          "toolchainDigest": null,
+          "bindingRevision": null,
+          "observedAt": 1793232000000
+        },
+        {
+          "skillKey": "skill-1",
+          "skillInstallationId": "installed-1",
+          "productVersionId": "product-1",
+          "skillVersion": "1.0.0",
+          "packageSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "manifestSha256": null,
+          "kind": "INSTRUCTION",
+          "policyRevision": "1",
+          "enabled": true,
+          "runner": null,
+          "readiness": "NOT_EXECUTABLE",
+          "reasonCode": null,
+          "toolchainDigest": null,
+          "bindingRevision": null,
+          "observedAt": 1793232000000
+        },
+        {
+          "skillKey": "skill-2",
+          "skillInstallationId": "installed-2",
+          "productVersionId": "product-2",
+          "skillVersion": "1.0.0",
+          "packageSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "manifestSha256": null,
+          "kind": "INSTRUCTION",
+          "policyRevision": "1",
+          "enabled": true,
+          "runner": null,
+          "readiness": "NOT_EXECUTABLE",
+          "reasonCode": null,
+          "toolchainDigest": null,
+          "bindingRevision": null,
+          "observedAt": 1793232000000
+        },
+        {
+          "skillKey": "skill-3",
+          "skillInstallationId": "installed-3",
+          "productVersionId": "product-3",
+          "skillVersion": "1.0.0",
+          "packageSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "manifestSha256": null,
+          "kind": "INSTRUCTION",
+          "policyRevision": "1",
+          "enabled": true,
+          "runner": null,
+          "readiness": "NOT_EXECUTABLE",
+          "reasonCode": null,
+          "toolchainDigest": null,
+          "bindingRevision": null,
+          "observedAt": 1793232000000
+        }
+      ]
+    },
+    "durableStateHealthy": true,
+    "readyCommandTypes": [
+      "WORK_ITEM_EXECUTE"
+    ],
+    "tenantId": "1",
+    "clientId": "fixture-client",
+    "hostId": "fixture-host",
+    "sessionGeneration": "1",
+    "schemaVersion": 1,
+    "agentId": "fixture-agent",
+    "sourceAgentId": "fixture-agent",
+    "runtimeInstanceId": "fixture-runtime",
+    "senderType": "agent",
+    "senderName": "Fixture",
+    "sentAt": 1793232000000,
+    "requestId": "fixture-request-1",
+    "runtimeInstallationId": "fixture-installation"
+  }
+}

@@ -15,6 +15,9 @@ final class AgentRuntimeCapabilities {
             "deltaVersions", "dispatchAckTypes", "deliverySemantics", "interactionModes",
             "profiles", "legacyCompatibility", "fastChatEnabled", "appServerEnabled",
             "trueDeltaEnabled");
+    private static final Set<String> REQUIRED_KEYS = Set.of(
+            "capabilityContractVersion", "runtimeVersion", "profiles",
+            "fastChatEnabled", "appServerEnabled", "trueDeltaEnabled");
     private static final Set<String> PROFILE_KEYS = Set.of("CHAT", "INSPECT", "EXECUTE");
     private static final Set<String> CHAT_DISABLED_KEYS = Set.of(
             "supported", "enabled", "strictNoToolsVerified");
@@ -31,18 +34,16 @@ final class AgentRuntimeCapabilities {
     private final boolean modern;
     private final String runtimeVersion;
     private final Map<String, Profile> profiles;
-    private final LegacyCompatibility legacyCompatibility;
     private final boolean fastChatEnabled;
     private final boolean appServerEnabled;
     private final boolean trueDeltaEnabled;
 
     private AgentRuntimeCapabilities(boolean modern, String runtimeVersion,
-            Map<String, Profile> profiles, LegacyCompatibility legacyCompatibility,
+            Map<String, Profile> profiles,
             boolean fastChatEnabled, boolean appServerEnabled, boolean trueDeltaEnabled) {
         this.modern = modern;
         this.runtimeVersion = runtimeVersion;
         this.profiles = Map.copyOf(profiles);
-        this.legacyCompatibility = legacyCompatibility;
         this.fastChatEnabled = fastChatEnabled;
         this.appServerEnabled = appServerEnabled;
         this.trueDeltaEnabled = trueDeltaEnabled;
@@ -50,24 +51,25 @@ final class AgentRuntimeCapabilities {
 
     static AgentRuntimeCapabilities legacy() {
         return new AgentRuntimeCapabilities(false, null, Map.of(),
-                new LegacyCompatibility(true, true, true, List.of("chat.dispatch.ack")),
                 false, false, false);
     }
 
     static AgentRuntimeCapabilities parse(Object raw) {
         if (raw == null) return legacy();
-        Map<String, Object> root = exactMap(raw, ROOT_KEYS, "runtimeCapabilities");
+        if (!(raw instanceof Map<?, ?> candidate) || !candidate.keySet().containsAll(REQUIRED_KEYS)
+                || !ROOT_KEYS.containsAll(candidate.keySet())) throw invalid("runtimeCapabilities keys do not match contract v1");
+        @SuppressWarnings("unchecked") Map<String, Object> root = (Map<String, Object>) candidate;
         if (integer(root.get("capabilityContractVersion"), "capabilityContractVersion") != 1) {
             throw invalid("Unsupported capabilityContractVersion");
         }
         String runtimeVersion = text(root.get("runtimeVersion"), "runtimeVersion", 100);
-        exactList(root.get("protocolVersions"), List.of(1), "protocolVersions");
-        exactList(root.get("chatProtocolVersions"), List.of(1), "chatProtocolVersions");
-        exactList(root.get("contextSnapshotVersions"), List.of(1), "contextSnapshotVersions");
-        exactList(root.get("contextEnvelopeVersions"), List.of(2), "contextEnvelopeVersions");
-        exactList(root.get("deltaVersions"), List.of(1), "deltaVersions");
-        exactList(root.get("dispatchAckTypes"), List.of("chat.dispatch.ack"), "dispatchAckTypes");
-        exactList(root.get("deliverySemantics"),
+        if (root.containsKey("protocolVersions")) exactList(root.get("protocolVersions"), List.of(1), "protocolVersions");
+        if (root.containsKey("chatProtocolVersions")) exactList(root.get("chatProtocolVersions"), List.of(1), "chatProtocolVersions");
+        if (root.containsKey("contextSnapshotVersions")) exactList(root.get("contextSnapshotVersions"), List.of(1), "contextSnapshotVersions");
+        if (root.containsKey("contextEnvelopeVersions")) exactList(root.get("contextEnvelopeVersions"), List.of(2), "contextEnvelopeVersions");
+        if (root.containsKey("deltaVersions")) exactList(root.get("deltaVersions"), List.of(1), "deltaVersions");
+        if (root.containsKey("dispatchAckTypes")) exactList(root.get("dispatchAckTypes"), List.of("chat.dispatch.ack"), "dispatchAckTypes");
+        if (root.containsKey("deliverySemantics")) exactList(root.get("deliverySemantics"),
                 List.of("AT_LEAST_ONCE_DURABLE_DEDUPE_REQUIRED"), "deliverySemantics");
 
         Map<String, Object> rawProfiles = exactMap(root.get("profiles"), PROFILE_KEYS, "profiles");
@@ -76,25 +78,22 @@ final class AgentRuntimeCapabilities {
         profiles.put("INSPECT", inspectProfile(rawProfiles.get("INSPECT")));
         profiles.put("EXECUTE", executeProfile(rawProfiles.get("EXECUTE")));
         Profile chat = profiles.get("CHAT");
-        exactList(root.get("interactionModes"), chat.enabled() ? List.of("CHAT") : List.of(),
+        if (root.containsKey("interactionModes")) exactList(root.get("interactionModes"), chat.enabled() ? List.of("CHAT") : List.of(),
                 "interactionModes");
 
-        Map<String, Object> legacy = exactMap(root.get("legacyCompatibility"), LEGACY_KEYS,
-                "legacyCompatibility");
-        exactList(legacy.get("dispatchAckTypes"), List.of("chat.dispatch.ack"),
-                "legacyCompatibility.dispatchAckTypes");
-        LegacyCompatibility compatibility = new LegacyCompatibility(
-                bool(legacy.get("PRIVATE"), "legacyCompatibility.PRIVATE"),
-                bool(legacy.get("TASK"), "legacyCompatibility.TASK"),
-                bool(legacy.get("nativeStart"), "legacyCompatibility.nativeStart"),
-                List.of("chat.dispatch.ack"));
+        // Older v1 producers may still send this descriptive block. It grants no routes.
+        if (root.containsKey("legacyCompatibility")) {
+            Map<String, Object> legacy = exactMap(root.get("legacyCompatibility"), LEGACY_KEYS, "legacyCompatibility");
+            exactList(legacy.get("dispatchAckTypes"), List.of("chat.dispatch.ack"), "legacyCompatibility.dispatchAckTypes");
+            for (String field : List.of("PRIVATE", "TASK", "nativeStart")) bool(legacy.get(field), "legacyCompatibility." + field);
+        }
         boolean fastChatEnabled = bool(root.get("fastChatEnabled"), "fastChatEnabled");
         boolean appServerEnabled = bool(root.get("appServerEnabled"), "appServerEnabled");
         boolean trueDeltaEnabled = bool(root.get("trueDeltaEnabled"), "trueDeltaEnabled");
         if (chat.enabled() && (!fastChatEnabled || !appServerEnabled)) {
             throw invalid("Enabled CHAT must match enabled Fast CHAT and app-server runtime flags");
         }
-        return new AgentRuntimeCapabilities(true, runtimeVersion, profiles, compatibility,
+        return new AgentRuntimeCapabilities(true, runtimeVersion, profiles,
                 fastChatEnabled, appServerEnabled, trueDeltaEnabled);
     }
 
@@ -116,23 +115,14 @@ final class AgentRuntimeCapabilities {
             return Map.of(
                     "capabilityContractVersion", 0,
                     "mode", "legacy-compatible",
-                    "legacyCompatibility", legacyCompatibility.asMap());
+                    "legacyCompatibility", legacyReceipt());
         }
         Map<String, Object> normalizedProfiles = new LinkedHashMap<>();
         profiles.forEach((name, profile) -> normalizedProfiles.put(name, profile.asMap()));
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("capabilityContractVersion", 1);
         result.put("runtimeVersion", runtimeVersion);
-        result.put("protocolVersions", List.of(1));
-        result.put("chatProtocolVersions", List.of(1));
-        result.put("contextSnapshotVersions", List.of(1));
-        result.put("contextEnvelopeVersions", List.of(2));
-        result.put("deltaVersions", List.of(1));
-        result.put("dispatchAckTypes", List.of("chat.dispatch.ack"));
-        result.put("deliverySemantics", List.of("AT_LEAST_ONCE_DURABLE_DEDUPE_REQUIRED"));
-        result.put("interactionModes", profiles.get("CHAT").enabled() ? List.of("CHAT") : List.of());
         result.put("profiles", normalizedProfiles);
-        result.put("legacyCompatibility", legacyCompatibility.asMap());
         result.put("fastChatEnabled", fastChatEnabled);
         result.put("appServerEnabled", appServerEnabled);
         result.put("trueDeltaEnabled", trueDeltaEnabled);
@@ -149,7 +139,7 @@ final class AgentRuntimeCapabilities {
             result.put("runtimeVersion", runtimeVersion);
             result.put("policy", profiles.get(profileName).asMap());
         } else {
-            result.put("legacyCompatibility", legacyCompatibility.asMap());
+            result.put("legacyCompatibility", legacyReceipt());
         }
         return Map.copyOf(result);
     }
@@ -265,14 +255,8 @@ final class AgentRuntimeCapabilities {
         }
     }
 
-    private record LegacyCompatibility(boolean privateExecution, boolean taskExecution,
-            boolean nativeStart, List<String> dispatchAckTypes) {
-        Map<String, Object> asMap() {
-            return Map.of(
-                    "PRIVATE", privateExecution,
-                    "TASK", taskExecution,
-                    "nativeStart", nativeStart,
-                    "dispatchAckTypes", dispatchAckTypes);
-        }
+    private static Map<String, Object> legacyReceipt() {
+        return Map.of("PRIVATE", true, "TASK", true, "nativeStart", true,
+                "dispatchAckTypes", List.of("chat.dispatch.ack"));
     }
 }

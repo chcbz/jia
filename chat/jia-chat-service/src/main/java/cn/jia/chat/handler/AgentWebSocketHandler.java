@@ -255,9 +255,6 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
 
     @Override
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {
-        // The servlet default text buffer must not reject a valid Agent wire before its codec.
-        // Scope this to the authenticated Agent endpoint; ordinary chat defaults are unchanged.
-        session.setTextMessageSizeLimit(AgentProtocolConstants.MAX_WIRE_BYTES);
         sessions.put(session.getId(), session);
         Map<String, Object> connected = new HashMap<>();
         connected.put("sessionId", session.getId());
