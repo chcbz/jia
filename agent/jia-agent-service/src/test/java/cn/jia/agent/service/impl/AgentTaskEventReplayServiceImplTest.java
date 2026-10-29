@@ -143,7 +143,7 @@ class AgentTaskEventReplayServiceImplTest {
                 SCOPE.tenantId(), SCOPE.clientId(), SCOPE.ownerJiacn(), SCOPE.taskId());
     }
 
-    @Test
+    @org.junit.jupiter.api.RepeatedTest(20)
     void replaysExactEventsAcrossPagesAndSupportsProcessRestartCursor() {
         store.appendRange(1L, 5L);
 
@@ -174,6 +174,27 @@ class AgentTaskEventReplayServiceImplTest {
                 org.mockito.ArgumentMatchers.eq(SCOPE.ownerJiacn()),
                 org.mockito.ArgumentMatchers.eq(SCOPE.taskId()), anyLong(),
                 org.mockito.ArgumentMatchers.eq(2));
+    }
+
+    @Test
+    void requestDuringDeliverySaturatesWithoutLosingPreviouslyReservedDemand() {
+        store.appendRange(1L, 5L);
+        var received=new CopyOnWriteArrayList<Long>();
+        var failure=new AtomicReference<Throwable>();
+        var finished=new CountDownLatch(1);
+        service.replay(SCOPE,0L).subscribe(new BaseSubscriber<>() {
+            @Override protected void hookOnSubscribe(Subscription subscription) { request(5); }
+            @Override protected void hookOnNext(ReplaySignal signal) {
+                received.add(((DurableEvent)signal).eventVersion());
+                request(Long.MAX_VALUE); // add to finite credits without overflow, including reentrant requests
+                if(received.size()==5) { cancel();finished.countDown(); }
+            }
+            @Override protected void hookOnError(Throwable error) { failure.set(error);finished.countDown(); }
+        });
+        await(finished);
+        org.junit.jupiter.api.Assertions.assertNull(failure.get());
+        assertEquals(List.of(1L,2L,3L,4L,5L),received);
+        awaitCleaned();
     }
 
     @Test
