@@ -138,7 +138,7 @@ class JuyitingConversationScopeServiceTest extends BaseMockTest {
 
     private JuyitingConversationScope authorize(ChatMessageDTO request) {
         JuyitingConversationScopeService service = service();
-        return service.authorize(request, service.resolve(request), "tenant-a", "client-a");
+        return service.authorize(request, service.resolve(request), "0", "client-a");
     }
 
     private JuyitingConversationScopeService service() {

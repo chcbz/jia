@@ -357,7 +357,7 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         org.mockito.Mockito.clearInvocations(firstSession, secondSession, crossTenantSession, crossClientSession);
 
         UnifiedRuntimeTestSupport.deliver(handler, firstSession, new TextMessage("""
-                {"type":"task.assign","requestId":"legacy-assign","taskId":"task-legacy",
+                {"type":"task.assign","requestId":"legacy-assign","messageId":"legacy-assign","taskId":"task-legacy",
                  "agentId":"agent-legacy","targetAgentId":"agent-malicious",
                  "tenantId":"tenant-malicious","clientId":"client-malicious"}
                 """));
@@ -382,7 +382,7 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         // Authenticated transport scope is not the task DTO's historical owner field.
         // The body target remains untrusted; the assignment still uses the session Agent.
         UnifiedRuntimeTestSupport.deliver(handler, firstSession, new TextMessage("""
-                {"type":"task.assign","requestId":"legacy-assign","taskId":"task-legacy",
+                {"type":"task.assign","requestId":"legacy-assign","messageId":"legacy-assign","taskId":"task-legacy",
                  "agentId":"agent-legacy","targetAgentId":"agent-malicious",
                  "tenantId":"0","clientId":"client-a"}
                 """));
@@ -618,7 +618,7 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         assertTrue(!messages.contains("\"commandType\""));
         Map<String, Object> chatEnvelope = findOutboundEnvelope(
                 messageCaptor.getAllValues(), AgentProtocolConstants.TYPE_CHAT_MESSAGE);
-        assertEquals(chatEnvelope.get("sentAt"), chatEnvelope.get("timestamp"));
+        assertEquals(chatEnvelope.get("sentAt"), chatEnvelope.get("occurredAt"));
         AgentProtocolMessageNormalizer.NormalizedMessage normalized =
                 new AgentProtocolMessageNormalizer().normalizeInbound(chatEnvelope);
         assertEquals(AgentProtocolConstants.TYPE_CHAT_MESSAGE, normalized.canonicalType());
@@ -1981,7 +1981,7 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
 
         var decoded = cn.jia.agent.common.AgentMessageWire.decode(commandEnvelope);
         assertEquals(AgentProtocolConstants.TYPE_COMMAND_DISPATCH, decoded.messageType());
-        assertEquals("TASK_INVITE", decoded.data().get("commandType"));
+        assertEquals("REQUEST_RESPOND", decoded.data().get("commandType"));
 
         assertSafeServerDownlinks(messageCaptor.getAllValues());
     }
@@ -2092,7 +2092,7 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         org.junit.jupiter.api.Assertions.assertNotNull(chatEnvelope,
                 "Should find a chat.message messageType in WebSocket output");
 
-        assertEquals(chatEnvelope.get("sentAt"), chatEnvelope.get("timestamp"),
+        assertEquals(chatEnvelope.get("sentAt"), chatEnvelope.get("occurredAt"),
                 "sentAt and timestamp must be equal in canonical chat.message");
         assertEquals(AgentProtocolConstants.TYPE_CHAT_MESSAGE, chatEnvelope.get("messageType"));
         assertFalse(chatEnvelope.containsKey("commandType"));
@@ -2201,7 +2201,10 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         for (TextMessage textMessage : messages) {
             Map<String, Object> event = mapper.readValue(textMessage.getPayload(), mapType);
             if (messageType.equals(event.get("messageType"))) {
-                return cn.jia.agent.common.AgentMessageWire.business(cn.jia.agent.common.AgentMessageWire.decode(event));
+                // Assert the real wire first, then expose business fields for these focused assertions.
+                var decoded = cn.jia.agent.common.AgentMessageWire.decode(event);
+                event.putAll(cn.jia.agent.common.AgentMessageWire.business(decoded));
+                return event;
             }
         }
         throw new AssertionError("Missing outbound Envelope for messageType=" + messageType);
@@ -2213,6 +2216,8 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         Set<String> legacyExecutionOuterTypes = Set.of("codex.exec", "task.assign", "task_assigned", "task_event");
         for (TextMessage textMessage : messages) {
             Map<String, Object> event = mapper.readValue(textMessage.getPayload(), mapType);
+            cn.jia.agent.common.AgentMessageWire.decode(event);
+            assertFalse(event.containsKey("type"), "Legacy outer type must not be emitted");
             String outerType = String.valueOf(event.get("type"));
             assertFalse(legacyExecutionOuterTypes.contains(outerType),
                     () -> "unsafe legacy execution outer type: " + outerType);
