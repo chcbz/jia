@@ -255,6 +255,9 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
 
     @Override
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {
+        // Agent-only transport limit: Tomcat counts UTF-16 units, not UTF-8 bytes.
+        // Explicit 64K policy; unrelated to inbox persistence capacity or binary attachments.
+        session.setTextMessageSizeLimit(64 * 1024);
         sessions.put(session.getId(), session);
         Map<String, Object> connected = new HashMap<>();
         connected.put("sessionId", session.getId());

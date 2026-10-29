@@ -132,6 +132,7 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         AgentWebSocketHandler handler = UnifiedRuntimeTestSupport.authorize(new AgentWebSocketHandler(chatClient, agentServiceProvider,
                 chatMessageDao, chatConversationEventBroker));
         handler.afterConnectionEstablished(session);
+        verify(session).setTextMessageSizeLimit(64 * 1024);
         UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("{\"type\":\"ping\",\"requestId\":\"ping-1\"}"));
         UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
                 {"type":"agent.register","requestId":"reg-1","agentId":"agent-001","name":"Wu Yong","abilities":["planning","analysis"]}
@@ -193,6 +194,76 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         assertTrue(messages.getAllValues().stream()
                 .map(TextMessage::getPayload)
                 .anyMatch(payload -> payload.contains("AGENT_REGISTRATION_UNAVAILABLE")));
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({"10000,x", "65536,x", "65537,x", "65536,中", "65537,中", "65536,😀"})
+    void realTomcatAgentChannelEnforces64KTextUnitsWithoutBypassingCodec(
+            int units, String symbol, @org.junit.jupiter.api.io.TempDir java.nio.file.Path scratch) throws Exception {
+        var handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker);
+        var tomcat = new org.apache.catalina.startup.Tomcat();
+        tomcat.setBaseDir(scratch.toString()); tomcat.setPort(0);
+        tomcat.getConnector().setProperty("address", "127.0.0.1");
+        var context = tomcat.addContext("", scratch.toString());
+        context.setParentClassLoader(getClass().getClassLoader());
+        context.addServletContainerInitializer(new org.apache.tomcat.websocket.server.WsSci(), Set.of());
+        java.net.http.WebSocket client = null;
+        try {
+            tomcat.start();
+            var container = (jakarta.websocket.server.ServerContainer) context.getServletContext()
+                    .getAttribute("jakarta.websocket.server.ServerContainer");
+            var endpoint = jakarta.websocket.server.ServerEndpointConfig.Builder.create(
+                    org.springframework.web.socket.adapter.standard.StandardWebSocketHandlerAdapter.class,
+                    "/agent-test").configurator(new jakarta.websocket.server.ServerEndpointConfig.Configurator() {
+                @Override public <T> T getEndpointInstance(Class<T> type) {
+                    var session = new org.springframework.web.socket.adapter.standard.StandardWebSocketSession(
+                            new org.springframework.http.HttpHeaders(), Map.of(), null, null);
+                    return type.cast(new org.springframework.web.socket.adapter.standard.StandardWebSocketHandlerAdapter(handler, session));
+                }
+            }).build();
+            container.addEndpoint(endpoint);
+            var response = new java.util.concurrent.CompletableFuture<String>();
+            var listener = new java.net.http.WebSocket.Listener() {
+                private final StringBuilder text = new StringBuilder();
+                @Override public void onOpen(java.net.http.WebSocket socket) { socket.request(1); }
+                @Override public java.util.concurrent.CompletionStage<?> onText(java.net.http.WebSocket socket, CharSequence part, boolean last) {
+                    text.append(part);
+                    if (last) {
+                        String wire = text.toString(); text.setLength(0);
+                        if (wire.contains("MESSAGE_INVALID")) response.complete(wire);
+                    }
+                    socket.request(1); return null;
+                }
+                @Override public java.util.concurrent.CompletionStage<?> onClose(java.net.http.WebSocket socket, int code, String reason) {
+                    response.complete("CLOSE:" + code); return null;
+                }
+                @Override public void onError(java.net.http.WebSocket socket, Throwable error) { response.completeExceptionally(error); }
+            };
+            client = java.net.http.HttpClient.newHttpClient().newWebSocketBuilder()
+                    .buildAsync(java.net.URI.create("ws://127.0.0.1:" + tomcat.getConnector().getLocalPort() + "/agent-test"), listener)
+                    .get(10, java.util.concurrent.TimeUnit.SECONDS);
+            // Synthetic invalid envelope: accepted sizes reach codec without business calls.
+            // Multibyte and supplementary characters prove the limit is UTF-16, not wire bytes.
+            String prefix = "{\"padding\":\"";
+            String suffix = "\"}";
+            int padding = units - prefix.length() - suffix.length();
+            String wire = prefix + symbol.repeat(padding / symbol.length())
+                    + "x".repeat(padding % symbol.length()) + suffix;
+            org.junit.jupiter.api.Assertions.assertEquals(units, wire.length());
+            client.sendText(wire, true).get(10, java.util.concurrent.TimeUnit.SECONDS);
+            String outcome = response.get(10, java.util.concurrent.TimeUnit.SECONDS);
+            if (units <= 64 * 1024) {
+                assertTrue(outcome.contains("MESSAGE_INVALID"));
+                assertFalse(client.isInputClosed());
+            } else {
+                org.junit.jupiter.api.Assertions.assertEquals("CLOSE:1009", outcome);
+            }
+            verify(agentServiceProvider, never()).getIfAvailable();
+        } finally {
+            if (client != null) client.abort();
+            try { tomcat.stop(); } finally { tomcat.destroy(); }
+        }
     }
 
     @Test
