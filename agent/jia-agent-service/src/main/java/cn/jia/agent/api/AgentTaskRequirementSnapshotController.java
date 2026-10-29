@@ -65,6 +65,11 @@ public final class AgentTaskRequirementSnapshotController {
         return error(HttpStatus.UNAUTHORIZED,"UNAUTHENTICATED","Authentication is required");
     }
 
+    @ExceptionHandler(ScopeFailure.class)
+    public ResponseEntity<JsonResult<Void>> scopeFailure(ScopeFailure ignored) {
+        return error(HttpStatus.FORBIDDEN,"REQUIREMENT_FORBIDDEN","Requirement scope is unavailable");
+    }
+
     @ExceptionHandler({InvalidRequest.class, IllegalArgumentException.class})
     public ResponseEntity<JsonResult<Void>> badRequest(Exception ignored) {
         return error(HttpStatus.BAD_REQUEST,"BAD_REQUEST","Invalid current requirement request");
@@ -111,7 +116,10 @@ public final class AgentTaskRequirementSnapshotController {
                 || !validExact(clientId,50)) {
             throw new AuthenticationFailure();
         }
-        return new AgentTaskExecutionGrantService.Scope("0",clientId,ownerJiacn);
+        final String tenant;
+        try { tenant=cn.jia.core.security.TenantClaimPolicy.resolve(claims,"0"); }
+        catch (IllegalArgumentException invalid) { throw new ScopeFailure(); }
+        return new AgentTaskExecutionGrantService.Scope(tenant,clientId,ownerJiacn);
     }
 
     private static void requireExact(String value,int maxCodePoints) {
@@ -166,5 +174,6 @@ public final class AgentTaskRequirementSnapshotController {
             String contentSha256,String source) { }
 
     private static final class AuthenticationFailure extends RuntimeException { }
+    private static final class ScopeFailure extends RuntimeException { }
     private static final class InvalidRequest extends RuntimeException { }
 }

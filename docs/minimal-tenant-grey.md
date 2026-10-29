@@ -115,3 +115,9 @@ Bootstrap discovery 在 LIMIT/锁定前按进程固定租户（灰度另固定 c
 已有表需要独立授权执行 `db/agent-task-bootstrap-tenant-20261029.sql` 才能存储灰度事实；启动不会执行此维护脚本。执行前固定目标数据库，备份两张表及 SHOW CREATE TABLE；脚本不迁移历史数据，DDL自动提交，可重复执行。新旧生产 CHECK 均应通过启动校验，保留 owner/内容/状态/租约/唯一索引保护，不能要求生产先迁移才能升级应用。回退程序不应将约束恢复为 tenant0 并排斥已有灰度行；保留数据及兼容 schema。
 
 回归入口：现有 `mmdU1BootstrapOutbox`（含 Flow 自有 MySQL fixture、新旧 schema 校验和双租户 claim/reconcile）；workspace/SSE/broker/replay、DAO精确过滤及 repeatable-read 相关测试。需记录实际 Flow 结果后才能宣称通过；不使用本机或生产库作为 fixture。
+
+### 2026-10-30 当前需求读取与执行入口作用域（候选，基线69c5f02499）
+
+- 当前需求读取从已验证JWT解析租户，经精确tenant/client/owner/task根锁再读不可变快照；保留根行复核、摘要校验、读一致性和原生产0行为。根锁是作用域原语，不是写入授权；创建/预留、重确认、授权/执行写入的原有0限制未开放。
+- 浏览器个人执行入口不再把声明的灰度租户改写成0，冲突/非法租户声明403；请求查询不能覆盖身份。执行服务仍拒绝未适配租户，不代表灰度执行已支持。Runtime文件/会话入口原已使用Runtime认证租户，其下游执行服务仍有0限制。
+- minimal-grey路由与配置不变，无生产DDL/安装；正式回归及合入证据见根任务handoff。

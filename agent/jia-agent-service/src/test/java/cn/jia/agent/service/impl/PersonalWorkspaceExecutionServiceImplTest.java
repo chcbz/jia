@@ -98,6 +98,16 @@ class PersonalWorkspaceExecutionServiceImplTest {
     }
 
     @Test
+    void grayExecutionStillFailsBeforeAnyBusinessStorageAccess() {
+        var gray=new PersonalWorkspaceExecutionService.OwnerScope("1","client-a","owner-a");
+        var failure=assertThrows(PersonalWorkspaceExecutionService.Failure.class,
+                ()->service.create(gray,new PersonalWorkspaceExecutionService.CreateCommand(
+                        null,"agent-a",null,"instruction",PersonalWorkspaceExecutionProperties.DOCX,List.of()),"gray-key"));
+        assertEquals(PersonalWorkspaceExecutionService.Reason.BAD_REQUEST,failure.getReason());
+        org.mockito.Mockito.verifyNoInteractions(executions,workspace,taskLinks,writes);
+    }
+
+    @Test
     void ownerHistoryUsesLimitPlusOneAndByteExactTieCursorWithoutDuplicates() {
         PersonalWorkspaceExecutionEntity upper = historyExecution("pwe_A", 1_790_000_000_000L);
         PersonalWorkspaceExecutionEntity lower = historyExecution("pwe_a", 1_790_000_000_000L);

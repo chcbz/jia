@@ -113,7 +113,7 @@ public class AgentTaskMetaDaoImpl extends BaseDaoImpl<AgentTaskMetaMapper, Agent
     @Override
     public AgentTaskMetaEntity findByTaskIdForUpdateInOwnerScope(
             String tenantId, String clientId, String ownerJiacn, String taskId) {
-        requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
+        requireExactOwnerScope(tenantId, clientId, ownerJiacn);
         requireExactId(taskId, "taskId", 100);
         return baseMapper.findExactByOwnerTaskScopeForUpdate(
                 tenantId, clientId, ownerJiacn, taskId);
@@ -305,6 +305,15 @@ public class AgentTaskMetaDaoImpl extends BaseDaoImpl<AgentTaskMetaMapper, Agent
         requireExactId(ownerJiacn, "ownerJiacn", 50);
         if (!"0".equals(tenantId) || "0".equals(ownerJiacn)) {
             throw new IllegalArgumentException("strict task owner scope requires tenant 0 and a real owner");
+        }
+    }
+
+    private void requireExactOwnerScope(String tenantId, String clientId, String ownerJiacn) {
+        requireExactId(tenantId, "tenantId", 50);
+        requireExactId(clientId, "clientId", 50);
+        requireExactId(ownerJiacn, "ownerJiacn", 50);
+        if ("0".equals(ownerJiacn)) {
+            throw new IllegalArgumentException("task scope requires a real owner");
         }
     }
 

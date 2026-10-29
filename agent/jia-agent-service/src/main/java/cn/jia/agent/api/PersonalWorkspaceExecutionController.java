@@ -108,6 +108,10 @@ public class PersonalWorkspaceExecutionController {
     }
     @ExceptionHandler({IllegalArgumentException.class, RequestFailure.class})
     public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> malformed(Exception ignored) { return error(HttpStatus.BAD_REQUEST, "BAD_REQUEST", "Invalid execution request"); }
+    @ExceptionHandler(ScopeFailure.class)
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> scopeFailure(ScopeFailure ignored) {
+        return error(HttpStatus.FORBIDDEN, "EXECUTION_FORBIDDEN", "Execution scope is unavailable");
+    }
     @ExceptionHandler(Exception.class)
     public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> unexpected(Exception ignored, HttpServletRequest request) { return error(HttpStatus.SERVICE_UNAVAILABLE, "EXECUTION_UNAVAILABLE", "Execution is temporarily unavailable"); }
 
@@ -115,7 +119,10 @@ public class PersonalWorkspaceExecutionController {
         if (!(authentication instanceof JwtAuthenticationToken jwt) || !authentication.isAuthenticated()) throw new RequestFailure();
         Map<String,Object> claims = jwt.getToken().getClaims(); Object owner=claims.get("jiacn"), client=claims.get("client_id");
         if (!(owner instanceof String o) || !(client instanceof String c) || !valid(o,50) || !valid(c,50) || "0".equals(o)) throw new RequestFailure();
-        return new PersonalWorkspaceExecutionService.OwnerScope("0", c, o);
+        final String tenant;
+        try { tenant = cn.jia.core.security.TenantClaimPolicy.resolve(claims, "0"); }
+        catch (IllegalArgumentException invalid) { throw new ScopeFailure(); }
+        return new PersonalWorkspaceExecutionService.OwnerScope(tenant, c, o);
     }
     private static int historyLimit(String value) {
         if (value == null) return 20;
@@ -143,5 +150,6 @@ public class PersonalWorkspaceExecutionController {
     public record InputRequest(String fileId, String version) { }
     public record RevokeRequest(String expectedGrantRevision) { }
     public record ErrorBody(String code,String message) { }
+    private static final class ScopeFailure extends RuntimeException { }
     private static final class RequestFailure extends RuntimeException { }
 }

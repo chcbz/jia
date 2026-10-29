@@ -382,6 +382,17 @@ class AgentTaskMetaScopedDaoTest {
         verify(mapper).deleteReservedTaskRoot("tenant-a", "client-a", "task-a");
     }
 
+    @Test
+    void ownerRootObservationForwardsExactTenantButReservationRemainsClosed() throws Exception {
+        var mapper=mock(AgentTaskMetaMapper.class); var dao=dao(mapper);
+        dao.findByTaskIdForUpdateInOwnerScope("1","client","owner","task");
+        verify(mapper).findExactByOwnerTaskScopeForUpdate("1","client","owner","task");
+        for (String tenant:List.of(" 1","1 ","x".repeat(51)))
+            assertThrows(IllegalArgumentException.class,()->dao.findByTaskIdForUpdateInOwnerScope(tenant,"client","owner","task"));
+        assertThrows(IllegalArgumentException.class,()->dao.findByTaskIdForUpdateInOwnerScope("1","client","0","task"));
+        assertThrows(IllegalArgumentException.class,()->dao.reserveOpenTaskRootInOwnerScope("1","client","owner","task",1000));
+    }
+
     private void assertExactOpenGuard(String sql) {
         assertTrue(sql.contains("reward_status = 'open'"), sql);
         assertTrue(sql.contains(

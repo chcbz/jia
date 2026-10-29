@@ -146,6 +146,22 @@ class AgentTaskMutationTransactionTest extends BaseMockTest {
         assertTrue(transaction.isValidScopeId(TENANT, 50));
     }
 
+    @Test
+    void exactGrayOwnerRootIsValidatedBeforeCallbackAndForeignRootRollsBack() {
+        var root=root();root.setTenantId("1");root.setOwnerJiacn("owner");
+        when(taskMetaDao.findByTaskIdForUpdateInOwnerScope("1",CLIENT,"owner",TASK)).thenReturn(root);
+        assertEquals("1",transaction.executeWithLockedTaskRootInOwnerScope("1",CLIENT,"owner",TASK,
+                locked -> locked.getTenantId()));
+        root.setTenantId("0");
+        assertThrows(AgentTaskCollaborationException.class,()->transaction.executeWithLockedTaskRootInOwnerScope(
+                "1",CLIENT,"owner",TASK,lockedMutation));
+        verifyNoInteractions(lockedMutation);
+        verify(transactionManager).rollback(any());
+        assertThrows(IllegalArgumentException.class,()->transaction.executeAfterTaskRootReservationInOwnerScope(
+                "1",CLIENT,"owner",TASK,reservation,reservedMutation));
+        verifyNoInteractions(reservation,reservedMutation);
+    }
+
     private AgentTaskMetaEntity root() {
         AgentTaskMetaEntity root = new AgentTaskMetaEntity()
                 .setTaskId(TASK)

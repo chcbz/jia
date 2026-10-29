@@ -120,6 +120,47 @@ class TaskBootstrapTenantIsolationMySqlTest extends SkillManagementMySqlFixture 
         assertEquals(productionHash,snapshots.read(scope("0","client"),"task",1).sha256());
     }
 
+    @Test void currentSnapshotLocksExactTenantRootAndCannotReturnProductionAsGray() throws Exception {
+        // Same identifiers under a case-insensitive catalog: exercise the production mapper's exact predicates.
+        jdbc.execute("CREATE TABLE agent_task_meta (id BIGINT AUTO_INCREMENT PRIMARY KEY, "
+                + "tenant_id VARCHAR(50) NOT NULL, client_id VARCHAR(50) NOT NULL, owner_jiacn VARCHAR(50) NOT NULL, "
+                + "task_id VARCHAR(100) NOT NULL, task_version BIGINT NOT NULL, current_event_version BIGINT NOT NULL, "
+                + "KEY scope_key(tenant_id,client_id,owner_jiacn,task_id)) ENGINE=InnoDB COLLATE=utf8mb4_0900_ai_ci");
+        seed("0","client","production","action");seed("1","client","gray","action");
+        jdbc.update("INSERT INTO agent_task_meta(tenant_id,client_id,owner_jiacn,task_id,task_version,current_event_version) "
+                + "VALUES ('0','client','owner','task',7,0),('1','client','owner','task',9,0)");
+        var configuration=new MybatisConfiguration();configuration.setMapUnderscoreToCamelCase(true);
+        configuration.addMapper(cn.jia.agent.mapper.AgentTaskMetaMapper.class);
+        var factory=new MybatisSqlSessionFactoryBean();factory.setDataSource(jdbc.getDataSource());factory.setConfiguration(configuration);
+        var rootDao=new cn.jia.agent.dao.impl.AgentTaskMetaDaoImpl();
+        var field=cn.jia.common.dao.BaseDaoImpl.class.getDeclaredField("baseMapper");field.setAccessible(true);
+        field.set(rootDao,new SqlSessionTemplate(Objects.requireNonNull(factory.getObject()))
+                .getMapper(cn.jia.agent.mapper.AgentTaskMetaMapper.class));
+        var rootTransactions=new AgentTaskMutationTransactionImpl(rootDao,transactions);
+        var service=new AgentTaskRequirementSnapshotServiceImpl(jdbc,rootTransactions);
+        var beforeRoots=jdbc.queryForList("SELECT * FROM agent_task_meta ORDER BY id");
+        var beforeSnapshots=jdbc.queryForList("SELECT * FROM agent_task_requirement_snapshot ORDER BY tenant_id");
+        var production=service.readCurrent(scope("0","client"),"task");
+        var gray=service.readCurrent(scope("1","client"),"task");
+        assertEquals("Title 0",production.title());assertEquals(7,production.taskVersion());
+        assertEquals("Title 1",gray.title());assertEquals(9,gray.taskVersion());assertNotEquals(production.sha256(),gray.sha256());
+        for(var foreign:List.of(scope("2","client"),scope("1","Client"),
+                new AgentTaskExecutionGrantService.Scope("1","client","Owner"))) {
+            assertEquals(cn.jia.agent.service.AgentTaskRequirementReadException.Reason.NOT_FOUND,
+                    assertThrows(cn.jia.agent.service.AgentTaskRequirementReadException.class,
+                            ()->service.readCurrent(foreign,"task")).reason());
+        }
+        assertEquals(beforeRoots,jdbc.queryForList("SELECT * FROM agent_task_meta ORDER BY id"));
+        assertEquals(beforeSnapshots,jdbc.queryForList("SELECT * FROM agent_task_requirement_snapshot ORDER BY tenant_id"));
+        assertThrows(IllegalArgumentException.class,()->service.captureOnCreate(scope("1","client"),"task","title",null));
+        assertThrows(IllegalArgumentException.class,()->service.requireCurrent(scope("1","client"),"task",1));
+        jdbc.update("UPDATE agent_task_requirement_snapshot SET content_sha256=? WHERE tenant_id='1'",production.sha256());
+        assertEquals(cn.jia.agent.service.AgentTaskRequirementReadException.Reason.INTEGRITY_ERROR,
+                assertThrows(cn.jia.agent.service.AgentTaskRequirementReadException.class,
+                        ()->service.readCurrent(scope("1","client"),"task")).reason());
+        assertEquals(production,service.readCurrent(scope("0","client"),"task"));
+    }
+
     @Test void migrationIsRepeatablePreservesProductionAndKeepsSchemaGuards() throws Exception {
         jdbc.execute("ALTER TABLE agent_task_bounty_bootstrap_outbox ADD CONSTRAINT chk_atbbo_tenant CHECK (tenant_id='0')");
         jdbc.execute("ALTER TABLE agent_task_requirement_snapshot DROP CHECK chk_atrs_scope, "
