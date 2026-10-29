@@ -44,12 +44,12 @@ public class AgentTaskWorkspaceController {
         requireRequestId(taskId, "taskId", 100);
         String actorAgentId = singleRequiredQuery(request, "actorAgentId");
         requireRequestId(actorAgentId, "actorAgentId", 100);
-        if (!taskEventsGate.allows("0", scope.clientId())) {
+        if (!taskEventsGate.allows(scope.tenantId(), scope.clientId())) {
             throw new AgentTaskWorkspaceException(
                     AgentTaskWorkspaceException.Reason.SNAPSHOT_UNAVAILABLE);
         }
         AgentTaskWorkspaceDTO snapshot = workspaceService.snapshot(
-                "0", scope.clientId(), scope.jiacn(), taskId, actorAgentId);
+                scope.tenantId(), scope.clientId(), scope.jiacn(), taskId, actorAgentId);
         byte[] body;
         try {
             body = JsonUtil.getMapper().writeValueAsBytes(snapshot);
@@ -114,11 +114,15 @@ public class AgentTaskWorkspaceController {
         Map<String, Object> claims = jwt.getToken().getClaims();
         Object jiacn = claims.get("jiacn");
         Object clientId = claims.get("client_id");
-        if (!(jiacn instanceof String tenant) || !(clientId instanceof String client)
-                || !validExact(tenant, 50) || !validExact(client, 50)) {
+        if (!(jiacn instanceof String owner) || !(clientId instanceof String client)
+                || !validExact(owner, 50) || !validExact(client, 50)) {
             throw new WorkspaceAuthenticationException(true);
         }
-        return new Scope(tenant, client);
+        try {
+            return new Scope(cn.jia.core.security.TenantClaimPolicy.resolve(claims, "0"), owner, client);
+        } catch (IllegalArgumentException invalidTenant) {
+            throw new WorkspaceAuthenticationException(true);
+        }
     }
 
     private static String singleRequiredQuery(
@@ -172,7 +176,7 @@ public class AgentTaskWorkspaceController {
                 .body(cn.jia.core.entity.JsonResult.<Void>failure(code, message));
     }
 
-    private record Scope(String jiacn, String clientId) {
+    private record Scope(String tenantId, String jiacn, String clientId) {
     }
 
     public record WorkspaceError(String code, String message) {

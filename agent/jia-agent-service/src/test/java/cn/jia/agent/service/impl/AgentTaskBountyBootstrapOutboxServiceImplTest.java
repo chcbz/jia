@@ -956,7 +956,7 @@ class AgentTaskBountyBootstrapOutboxServiceImplTest {
         @Override public AgentTaskBountyBootstrapOutboxEntity findClaimableForUpdate(
                 String t, String c, String o, long now) { throw new AssertionError("read must not claim"); }
         @Override public AgentTaskBountyBootstrapOutboxEntity findClaimableAvailableForUpdate(
-                long now) { throw new AssertionError("read must not discover"); }
+                String tenant, String client, long now) { throw new AssertionError("read must not discover"); }
         @Override public AgentTaskBountyBootstrapOutboxEntity findByBootstrapForUpdate(
                 String t, String c, String o, String id) { throw new AssertionError(); }
         @Override public void insert(AgentTaskBountyBootstrapOutboxEntity value) {
@@ -1028,11 +1028,11 @@ class AgentTaskBountyBootstrapOutboxServiceImplTest {
                             && row.getLeaseUntil()<=now))).findFirst().orElse(null);
         }
         @Override public synchronized AgentTaskBountyBootstrapOutboxEntity findClaimableAvailableForUpdate(
-                long now) {
+                String tenant, String client, long now) {
             for (AgentTaskBountyBootstrapOutboxEntity row : rows.values()) {
                 String c = row.getClientId(), o = row.getOwnerJiacn();
                 // Mirrors the SQL scope predicates and simulated SKIP LOCKED selection.
-                if (!"0".equals(row.getTenantId()) || c == null || c.isBlank()
+                if (!tenant.equals(row.getTenantId()) || (client != null && !client.equals(c)) || c == null || c.isBlank()
                         || !c.equals(c.strip()) || o == null || o.isBlank()
                         || "0".equals(o) || !o.equals(o.strip())
                         || c.chars().anyMatch(Character::isISOControl)

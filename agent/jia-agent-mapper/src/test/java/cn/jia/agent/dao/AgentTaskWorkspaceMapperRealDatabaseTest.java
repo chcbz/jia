@@ -64,6 +64,17 @@ class AgentTaskWorkspaceMapperRealDatabaseTest {
     }
 
     @Test
+    void daoReadsSameTaskIdentityOnlyWithinSelectedTenant() {
+        insertTask("0", CLIENT, OWNER, TASK, 7L);
+        insertTask("1", CLIENT, OWNER, TASK, 19L);
+        AgentTaskWorkspaceDao dao = new AgentTaskWorkspaceDaoImpl(mapper);
+        assertEquals(7L, dao.findTask("0", CLIENT, OWNER, TASK).getCurrentEventVersion());
+        assertEquals(19L, dao.findTask("1", CLIENT, OWNER, TASK).getCurrentEventVersion());
+        assertNull(dao.findTask("1", "other-client", OWNER, TASK));
+        assertNull(dao.findTask("1", CLIENT, "other-owner", TASK));
+    }
+
+    @Test
     void daoRejectsUnicodeSpacePaddingForEveryScopeDimensionBeforeIssuingSql() {
         AgentTaskWorkspaceDao dao = new AgentTaskWorkspaceDaoImpl(mapper);
         org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,

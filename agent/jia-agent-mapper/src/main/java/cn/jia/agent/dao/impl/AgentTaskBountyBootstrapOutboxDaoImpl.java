@@ -36,9 +36,11 @@ public final class AgentTaskBountyBootstrapOutboxDaoImpl
     }
 
     @Override
-    public AgentTaskBountyBootstrapOutboxEntity findClaimableAvailableForUpdate(long now) {
+    public AgentTaskBountyBootstrapOutboxEntity findClaimableAvailableForUpdate(String tenantId, String clientId, long now) {
+        exact(tenantId, "tenantId", 50);
+        if (clientId != null) exact(clientId, "clientId", 50);
         if (now <= 0) throw new IllegalArgumentException("now");
-        return mapper.selectClaimableAvailableForUpdate(now);
+        return mapper.selectClaimableAvailableForUpdate(tenantId, clientId, now);
     }
 
     @Override
@@ -77,7 +79,7 @@ public final class AgentTaskBountyBootstrapOutboxDaoImpl
     }
 
     private static void scope(String tenant, String client, String owner) {
-        if (!"0".equals(tenant)) throw new IllegalArgumentException("tenantId");
+        exact(tenant, "tenantId", 50);
         exact(client, "clientId", 50);
         exact(owner, "ownerJiacn", 50);
         if ("0".equals(owner)) throw new IllegalArgumentException("ownerJiacn");

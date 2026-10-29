@@ -105,3 +105,13 @@ same-key independent reservations, reciprocal scoped reads, conditional detach a
 business CHECKs, and real service transaction rollback on foreign-file denial.
 Conversation ACL in that SQL service test is a mocked port; its actual implementation
 has separate focused tests, not an end-to-end CHAT/browser claim.
+
+### 2026-10-29 任务只读与 bootstrap 后台隔离候选
+
+基线 `77de2687eac0aa53f7fc7c48a5974346436be620` 后续候选；不代表已上线或全业务灰度完成。
+任务 workspace/SSE 从已准入身份解析租户，保留旧用户 token 默认0、owner/client/member ACL；query 不能覆盖租户。事件 replay/broker 按完整 scope 分区，事件写入仍只支持0，未提前开放任务创建、native执行及资金链路。
+Bootstrap discovery 在 LIMIT/锁定前按进程固定租户（灰度另固定 client）筛选；显式 claim/reconcile 也校验进程准入。生产仍在0内发现合法 client；需求快照仅开放隔离只读，重确认写入未开放。`minimal-grey` 显式关闭独立线程的 `chat.bounty-bootstrap` relay，不能依赖全局 scheduling 开关。
+
+已有表需要独立授权执行 `db/agent-task-bootstrap-tenant-20261029.sql` 才能存储灰度事实；启动不会执行此维护脚本。执行前固定目标数据库，备份两张表及 SHOW CREATE TABLE；脚本不迁移历史数据，DDL自动提交，可重复执行。新旧生产 CHECK 均应通过启动校验，保留 owner/内容/状态/租约/唯一索引保护，不能要求生产先迁移才能升级应用。回退程序不应将约束恢复为 tenant0 并排斥已有灰度行；保留数据及兼容 schema。
+
+回归入口：现有 `mmdU1BootstrapOutbox`（含 Flow 自有 MySQL fixture、新旧 schema 校验和双租户 claim/reconcile）；workspace/SSE/broker/replay、DAO精确过滤及 repeatable-read 相关测试。需记录实际 Flow 结果后才能宣称通过；不使用本机或生产库作为 fixture。

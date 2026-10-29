@@ -71,6 +71,39 @@ class AgentTaskWorkspaceControllerTest extends BaseMockTest {
     }
 
     @Test
+    void admittedGrayClaimIsForwardedAndQueryCannotOverrideIt() throws Exception {
+        var authentication = tenantAuthentication(java.util.Map.of("tenant_id", "1"));
+        when(service.snapshot("1", PRODUCTION_CLIENT, OWNER, TASK, ACTOR)).thenReturn(snapshot("19"));
+        mvc.perform(get("/agent/tasks/{taskId}/workspace", TASK)
+                        .queryParam("actorAgentId", ACTOR).queryParam("tenant_id", "0")
+                        .principal(authentication))
+                .andExpect(status().isOk());
+        verify(taskEventsGate).allows("1", PRODUCTION_CLIENT);
+        verify(service).snapshot("1", PRODUCTION_CLIENT, OWNER, TASK, ACTOR);
+        verify(service, never()).snapshot("0", PRODUCTION_CLIENT, OWNER, TASK, ACTOR);
+    }
+
+    @Test
+    void malformedOrConflictingTenantClaimsFailBeforeWorkspaceLookup() throws Exception {
+        for (var claims : java.util.List.<java.util.Map<String, Object>>of(
+                java.util.Map.of("tenant_id", 1), java.util.Map.of("tenant_id", " 1"),
+                java.util.Map.of("tenant_id", "1", "tenantId", "0"))) {
+            mvc.perform(get("/agent/tasks/{taskId}/workspace", TASK)
+                            .queryParam("actorAgentId", ACTOR).principal(tenantAuthentication(claims)))
+                    .andExpect(status().isForbidden());
+        }
+        verifyNoInteractions(service, taskEventsGate);
+    }
+
+    private static JwtAuthenticationToken tenantAuthentication(java.util.Map<String, Object> claims) {
+        Jwt jwt = Jwt.withTokenValue("token").header("alg", "none")
+                .claim("jiacn", OWNER).claim("client_id", PRODUCTION_CLIENT)
+                .claims(values -> values.putAll(claims))
+                .issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(60)).build();
+        return new JwtAuthenticationToken(jwt, List.of());
+    }
+
+    @Test
     void jwtClaimsAreSoleScopeAuthorityAndSuccessIsRawNoStoreJson() throws Exception {
         EsContext poisoned = new EsContext();
         poisoned.setJiacn("cookie-tenant");

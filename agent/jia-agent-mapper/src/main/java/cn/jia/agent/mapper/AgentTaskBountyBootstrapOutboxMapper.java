@@ -53,7 +53,12 @@ public interface AgentTaskBountyBootstrapOutboxMapper
     // Only structurally valid persisted owner scopes are discoverable. Never trust client input.
     // MySQL 8 SKIP LOCKED keeps a busy owner's row from stalling another owner.
     @Select("SELECT " + COLUMNS + " FROM agent_task_bounty_bootstrap_outbox" + """
-             WHERE tenant_id='0' AND CAST(tenant_id AS BINARY)=0x30
+             WHERE tenant_id=#{tenantId}
+               AND CAST(tenant_id AS BINARY)=CAST(#{tenantId} AS BINARY)
+               AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(#{tenantId})
+               AND (#{clientId} IS NULL OR (client_id=#{clientId}
+                    AND CAST(client_id AS BINARY)=CAST(#{clientId} AS BINARY)
+                    AND OCTET_LENGTH(client_id)=OCTET_LENGTH(#{clientId})))
                AND client_id<>'' AND client_id=TRIM(client_id)
                AND owner_jiacn<>'' AND owner_jiacn<>'0'
                AND owner_jiacn=TRIM(owner_jiacn)
@@ -65,7 +70,9 @@ public interface AgentTaskBountyBootstrapOutboxMapper
              ORDER BY id
              LIMIT 1 FOR UPDATE SKIP LOCKED
             """)
-    AgentTaskBountyBootstrapOutboxEntity selectClaimableAvailableForUpdate(@Param("now") long now);
+    AgentTaskBountyBootstrapOutboxEntity selectClaimableAvailableForUpdate(
+            @Param("tenantId") String tenantId, @Param("clientId") String clientId,
+            @Param("now") long now);
 
     @Select("SELECT " + COLUMNS + " FROM agent_task_bounty_bootstrap_outbox"
             + " WHERE tenant_id=#{tenantId} AND client_id=#{clientId} AND owner_jiacn=#{ownerJiacn}"

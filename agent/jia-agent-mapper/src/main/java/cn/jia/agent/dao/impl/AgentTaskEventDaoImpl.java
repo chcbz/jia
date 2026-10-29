@@ -59,7 +59,7 @@ public class AgentTaskEventDaoImpl
     @Override
     public List<AgentTaskEventEntity> findAfterVersion(
             String tenantId, String clientId, String ownerJiacn, String taskId, long afterVersion, int limit) {
-        requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
+        requireReadOwnerScope(tenantId, clientId, ownerJiacn);
         requireExactId(taskId, "taskId", 100);
         if (afterVersion < 0) {
             throw new IllegalArgumentException("afterVersion must not be negative");
@@ -74,14 +74,14 @@ public class AgentTaskEventDaoImpl
 
     @Override
     public Long findCurrentVersion(String tenantId, String clientId, String ownerJiacn, String taskId) {
-        requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
+        requireReadOwnerScope(tenantId, clientId, ownerJiacn);
         requireExactId(taskId, "taskId", 100);
         return baseMapper.findExactCurrentEventVersion(tenantId, clientId, ownerJiacn, taskId);
     }
 
     @Override
     public Long findEarliestVersion(String tenantId, String clientId, String ownerJiacn, String taskId) {
-        requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
+        requireReadOwnerScope(tenantId, clientId, ownerJiacn);
         requireExactId(taskId, "taskId", 100);
         return baseMapper.findExactEarliestEventVersion(tenantId, clientId, ownerJiacn, taskId);
     }
@@ -89,7 +89,7 @@ public class AgentTaskEventDaoImpl
     @Override
     public AgentTaskEventEntity findByEventId(
             String tenantId, String clientId, String ownerJiacn, String eventId) {
-        requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
+        requireReadOwnerScope(tenantId, clientId, ownerJiacn);
         requireExactId(eventId, "eventId", 100);
         return baseMapper.findExactByEventId(tenantId, clientId, ownerJiacn, eventId);
     }
@@ -98,7 +98,12 @@ public class AgentTaskEventDaoImpl
         if (!"0".equals(tenantId)) {
             throw new IllegalArgumentException("tenantId must be literal 0");
         }
-        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+        requireReadOwnerScope(tenantId, clientId, ownerJiacn);
+    }
+
+    private void requireReadOwnerScope(String tenantId, String clientId, String ownerJiacn) {
+        requireExactId(tenantId, "tenantId", 50);
+        requireExactId(clientId, "clientId", 50);
         requireExactId(ownerJiacn, "ownerJiacn", 50);
         if ("0".equals(ownerJiacn)) {
             throw new IllegalArgumentException("ownerJiacn must be a real task owner");
