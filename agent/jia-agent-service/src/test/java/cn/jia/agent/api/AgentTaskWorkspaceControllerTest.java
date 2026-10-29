@@ -104,7 +104,7 @@ class AgentTaskWorkspaceControllerTest extends BaseMockTest {
     }
 
     @Test
-    void jwtClaimsAreSoleScopeAuthorityAndSuccessIsRawNoStoreJson() throws Exception {
+    void jwtClaimsAreSoleScopeAuthorityAndSuccessUsesPublicNoStoreEnvelope() throws Exception {
         EsContext poisoned = new EsContext();
         poisoned.setJiacn("cookie-tenant");
         poisoned.setClientId("cookie-client");
@@ -117,9 +117,12 @@ class AgentTaskWorkspaceControllerTest extends BaseMockTest {
                         .queryParam("actorAgentId", ACTOR).principal(authentication))
                 .andExpect(status().isOk())
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
-                .andExpect(jsonPath("$.currentVersion").value("9007199254740993"))
-                .andExpect(jsonPath("$.conversationId").value(nullValue()))
-                .andExpect(jsonPath("$.data").doesNotExist());
+                .andExpect(jsonPath("$.data.currentVersion").value("9007199254740993"))
+                .andExpect(jsonPath("$.data.conversationId").value(nullValue()))
+                .andExpect(jsonPath("$.code").value("E0"))
+                .andExpect(jsonPath("$.protocolVersion").value(1))
+                .andExpect(jsonPath("$.requestId").isNotEmpty())
+                .andExpect(jsonPath("$.currentVersion").doesNotExist());
         verify(service).snapshot("0", "client-a", "tenant-a", TASK, ACTOR);
     }
 
@@ -140,7 +143,7 @@ class AgentTaskWorkspaceControllerTest extends BaseMockTest {
                         .principal(authenticate(OWNER, PRODUCTION_CLIENT)))
                 .andExpect(status().isOk())
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
-                .andExpect(jsonPath("$.currentVersion").value("7"));
+                .andExpect(jsonPath("$.data.currentVersion").value("7"));
         verify(service).snapshot("0", PRODUCTION_CLIENT, OWNER, TASK, ACTOR);
 
         productionMvc.perform(get("/agent/tasks/{taskId}/workspace", TASK)
