@@ -18,6 +18,30 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 
 class PersonalWorkspaceWriteServiceTest {
     @Test
+    void runtimeOutputRejectsForeignVersionMetadataBeforeAnyWrite() {
+        var dao = org.mockito.Mockito.mock(cn.jia.agent.dao.PersonalWorkspaceDao.class);
+        var writes = new PersonalWorkspaceWriteService(dao,
+                org.mockito.Mockito.mock(PersonalWorkspaceOperationClaimTx.class));
+        var scope = new PersonalWorkspaceWriteService.Scope("1", "browser", "owner");
+        var file = new PersonalWorkspaceFileEntity();
+        file.setTenantId("1"); file.setClientId("browser");
+        file.setFileId("file-1"); file.setOwnerJiacn("owner");
+        var version = new PersonalWorkspaceVersionEntity();
+        version.setTenantId("0"); version.setClientId("browser");
+        version.setFileId("file-1"); version.setOwnerJiacn("owner"); version.setVersion(1);
+        org.junit.jupiter.api.Assertions.assertThrows(cn.jia.agent.exception.PersonalWorkspaceException.class,
+                () -> writes.archiveRuntimeOutput(scope, file, version));
+        version.setTenantId("1"); version.setClientId("foreign");
+        org.junit.jupiter.api.Assertions.assertThrows(cn.jia.agent.exception.PersonalWorkspaceException.class,
+                () -> writes.archiveRuntimeOutput(scope, file, version));
+        org.mockito.Mockito.verifyNoInteractions(dao);
+        version.setClientId("browser");
+        assertEquals(file, writes.archiveRuntimeOutput(scope, file, version));
+        org.mockito.Mockito.verify(dao).insertFile(file);
+        org.mockito.Mockito.verify(dao).insertVersion(version);
+    }
+
+    @Test
     void storageIoStaysOutsideTransactionsWhileClaimAndFailureReceiptsUseRequiresNew() throws Exception {
         assertNull(PersonalWorkspaceServiceImpl.class.getAnnotation(Transactional.class));
         Method create = PersonalWorkspaceServiceImpl.class.getMethod("create",

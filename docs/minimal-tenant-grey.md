@@ -36,3 +36,40 @@ No Runtime execution-lane deletion or replay change is introduced here.
 Tests/build run through existing Flow5260799 and orchestrator; exact commit/tree and CI-only evidence are recorded in
 `/home/isp/wsps/cyf/docs/implementation/handoffs/MINIMAL-TENANT-GRAY-MERGE-CHECK-20261028.md`.
 No production data migration, deployment, new approval system or full-project dual-protocol mechanism is authorized by this document.
+
+## Full-gray extension candidate — 2026-10-29
+
+Base: develop `f932d38ccd8701ac06d5167a07f420d4cf1e3c12` (tree
+`78ae168f19d027d50cc97ba008ef43cbd491c1f9`). This section describes source changes
+under FULL-TENANT-GRAY-20261029, **not deployed/verified behavior**. The older minimal
+scope above remains the delivered baseline until new Flow and installation evidence exists.
+
+The first extension is private workspace **file CRUD/read only**. HTTP maps admitted
+JWT scope to a framework-free service scope; the JWT tenant is an assertion of process
+configuration, not an OAuth-client/user database attribute or caller-selected business field.
+DAO predicates, operation uniqueness and the existing storage scope hash include tenant,
+client and owner. Legacy user tokens continue to resolve to tenant zero; malformed or
+conflicting scope claims fail before service access. Runtime output metadata additionally
+requires the version tenant/client to match its file and write scope.
+
+The gray profile retains opt-in storage to avoid breaking existing minimal launchers:
+`CYF_LOCAL_WORKSPACE_ENABLED=true` requires a positive
+`CYF_LOCAL_WORKSPACE_MAX_CONTENT_BYTES` using the deployment's chosen file-size policy.
+Objects are under `${CYF_LOCAL_STATE_ROOT}/personal-workspace` (default local state root
+`/tmp/cyf-gray-minimal`); use a separate durable local root when persistence is needed.
+No production storage/configuration or startup DDL is changed. With storage disabled,
+the added route support does not imply usable uploads. Production default configuration
+is unchanged. Task execution, file links, Runtime grants, paid/external providers and
+formal delivery remain denied pending their end-to-end isolation work.
+
+| Concrete risk | Regression source (execution pending) |
+|---|---|
+| Same identity/idempotency key shares rows or bytes across tenant0/1 | PersonalWorkspaceHttpPersistenceIntegrationTest (real DAO/transactions with H2, not MySQL proof); FileSystemPersonalWorkspaceStorageTest |
+| Forged upload tenant input or conflicting JWT claims changes scope | PersonalWorkspaceControllerPreviewTest; existing EsSecurityContextFilterTest |
+| Runtime output version points to another tenant/client | PersonalWorkspaceWriteServiceTest |
+| Route expansion inadvertently exposes execution or other tenants | MinimalGreyTenantRouteFilterTest |
+
+Workspace tests reuse `:agent:jia-agent-service:v1131Acceptance`; no new runner is
+introduced. Include resource filter regressions, startup safety and `validateLayering`
+in the authoritative Flow verification. No production acceptance claim follows from
+source inspection or synthetic H2 regression.

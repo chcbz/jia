@@ -174,7 +174,14 @@ public class PersonalWorkspaceController {
         if(authentication==null||!authentication.isAuthenticated()||!(authentication instanceof JwtAuthenticationToken jwt)) throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.NOT_FOUND);
         Map<String,Object> claims=jwt.getToken().getClaims(); Object owner=claims.get("jiacn"),client=claims.get("client_id");
         if(!(owner instanceof String o)||!(client instanceof String c)||!valid(o,50)||!valid(c,50)||"0".equals(o)) throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.NOT_FOUND);
-        return new PersonalWorkspaceService.Scope("0",c,o);
+        try {
+            // JWT has already passed the process tenant/client admission filter.
+            // Never read this scope from request parameters or copy production's tenant.
+            return new PersonalWorkspaceService.Scope(
+                    cn.jia.core.security.TenantClaimPolicy.resolve(claims, "0"), c, o);
+        } catch (IllegalArgumentException invalidScope) {
+            throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.NOT_FOUND);
+        }
     }
     private PersonalWorkspaceService.UploadCommand upload(MultipartFile file,String displayName,String key) throws IOException {
         if(file==null) throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.BAD_REQUEST);

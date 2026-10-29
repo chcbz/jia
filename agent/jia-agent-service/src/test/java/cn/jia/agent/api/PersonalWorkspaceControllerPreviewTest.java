@@ -37,6 +37,38 @@ class PersonalWorkspaceControllerPreviewTest {
     }
 
     @Test
+    void trustedTenantIsNotOverriddenByUploadParameters() throws Exception {
+        var token = Jwt.withTokenValue("fixture").header("alg", "none")
+                .claim("jiacn", OWNER).claim("client_id", CLIENT).claim("tenant_id", "1").build();
+        mvc.perform(multipart("/agent/personal-workspace/files")
+                .file(new MockMultipartFile("file", "note.txt", "text/plain", new byte[]{1}))
+                .param("tenant_id", "0").param("tenantId", "0")
+                .header("Idempotency-Key", "gray-upload")
+                .principal(new JwtAuthenticationToken(token, List.of())))
+                .andExpect(status().isCreated());
+        verify(service).create(org.mockito.ArgumentMatchers.eq(
+                new PersonalWorkspaceService.Scope("1", CLIENT, OWNER)), org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    void invalidOrConflictingTenantClaimsNeverReachTheService() throws Exception {
+        for (String tenant : new String[]{"", " 1", "1\n"}) {
+            var token = Jwt.withTokenValue("fixture").header("alg", "none")
+                    .claim("jiacn", OWNER).claim("client_id", CLIENT).claim("tenant_id", tenant).build();
+            mvc.perform(get("/agent/personal-workspace/files/" + FILE)
+                    .principal(new JwtAuthenticationToken(token, List.of())))
+                    .andExpect(status().isNotFound());
+        }
+        var conflicting = Jwt.withTokenValue("fixture").header("alg", "none")
+                .claim("jiacn", OWNER).claim("client_id", CLIENT)
+                .claim("tenant_id", "1").claim("tenantId", "0").build();
+        mvc.perform(get("/agent/personal-workspace/files/" + FILE)
+                .principal(new JwtAuthenticationToken(conflicting, List.of())))
+                .andExpect(status().isNotFound());
+        org.mockito.Mockito.verifyNoInteractions(service);
+    }
+
+    @Test
     void arbitraryUploadMimeIsPreservedAndUnknownMissingMimeUsesOctetStream() throws Exception {
         String[][] cases = {{"README", null, "application/octet-stream"},
                 {"data.custom", "application/octet-stream", "application/octet-stream"},

@@ -61,6 +61,8 @@ public class PersonalWorkspaceWriteService {
             PersonalWorkspaceFileEntity file, PersonalWorkspaceVersionEntity version) {
         if (file == null || version == null || !scope.tenantId().equals(file.getTenantId())
                 || !scope.clientId().equals(file.getClientId())
+                || !scope.tenantId().equals(version.getTenantId())
+                || !scope.clientId().equals(version.getClientId())
                 || !scope.ownerJiacn().equals(file.getOwnerJiacn())
                 || !file.getFileId().equals(version.getFileId())
                 || !scope.ownerJiacn().equals(version.getOwnerJiacn())
