@@ -78,19 +78,21 @@ public class ChatActionFinalService {
         return basis;
     }
 
-    static boolean isV5(Map<String, Object> facts) {
+    static boolean supportsActionFacts(Map<String, Object> facts) {
         if (facts.containsKey("typedDeliberation") && facts.containsKey("typedInspection"))
             throw persistence("Snapshot has conflicting typed contracts");
         Object value = facts.get("typedDeliberation");
         if (facts.containsKey("typedInspection")) value = map(facts.get("typedInspection")).get("discussionFacts");
-        return value instanceof Map<?, ?> typed && Integer.valueOf(5).equals(typed.get("schemaVersion"));
+        // Facts v6 adds native capabilities; the final outcome contract remains v5.
+        return value instanceof Map<?, ?> typed && (Integer.valueOf(5).equals(typed.get("schemaVersion"))
+                || Integer.valueOf(6).equals(typed.get("schemaVersion")));
     }
 
     public Prepared prepare(ChatTurnEntity turn, ChatContextSnapshotEntity snapshot, String content,
             Integer version, String rawOutcome, String rawReceipt) {
         verifySnapshot(turn, snapshot);
         Map<String, Object> facts = parse(snapshot.getFactsManifestJson());
-        if (!isV5(facts)) throw invalid("Action final requires v5 snapshot facts");
+        if (!supportsActionFacts(facts)) throw invalid("Action final requires v5 or v6 snapshot facts");
         var scope = scope(turn);
         var admission = requireAdmission(scope, turn.getRequestId(), turn.getTurnId(), turn.getRequestRevision());
         String taskId = taskId(facts);
@@ -273,7 +275,7 @@ public class ChatActionFinalService {
         var snapshot = dao.findSnapshot(scope.tenantId(), scope.ownerJiacn(), scope.clientId(), turn.getSnapshotId());
         verifySnapshot(turn, snapshot);
         Map<String, Object> facts = parse(snapshot.getFactsManifestJson());
-        if (!isV5(facts)) {
+        if (!supportsActionFacts(facts)) {
             var old=historicalV4==null?null:historicalV4.readIfV4(scope,requestId,turnId,revision,expectedRoute);
             return old!=null?old:historical==null?null:historical.readIfV3(scope,requestId,turnId,revision,expectedRoute);
         }

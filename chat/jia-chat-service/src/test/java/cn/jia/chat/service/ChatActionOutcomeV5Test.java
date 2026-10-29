@@ -55,6 +55,97 @@ class ChatActionOutcomeV5Test {
         nativeAction.put("operation","EXECUTE_SKILL");
         assertThrows(IllegalArgumentException.class,()->ChatActionOutcomeContract.facts(facts));
     }
+    @Test void actionFinalRoutingAcceptsOnlyKnownActionFactsOnBothRoutes() {
+        for (int version : List.of(3, 4, 5, 6, 7)) {
+            var typed=Map.<String,Object>of("schemaVersion",version);
+            assertEquals(version==5 || version==6,ChatActionFinalService.supportsActionFacts(Map.of("typedDeliberation",typed)));
+            assertEquals(version==5 || version==6,ChatActionFinalService.supportsActionFacts(Map.of("typedInspection",Map.of("discussionFacts",typed))));
+        }
+        assertFalse(ChatActionFinalService.supportsActionFacts(Map.of()));
+        assertFalse(ChatActionFinalService.supportsActionFacts(Map.of("typedDeliberation",Map.of("schemaVersion","6"))));
+        assertThrows(RuntimeException.class,()->ChatActionFinalService.supportsActionFacts(Map.of(
+                "typedDeliberation",Map.of("schemaVersion",6),"typedInspection",Map.of("discussionFacts",Map.of("schemaVersion",6)))));
+    }
+
+    /** Reproduces native finals with/without a TXT attachment through persistence, outbox and readback. */
+    @SuppressWarnings("unchecked") @Test void nativeV6FinalPersistsAndReadsV5OutcomeAndDispatchWithoutChangingAuthority() throws Exception {
+        for (boolean withSource : List.of(false,true)) {
+            var store=mock(ChatTypedDeliberationStore.class);
+            var dao=mock(ChatDeliberationDao.class);
+            var service=new ChatActionFinalService(store,dao,mock(TypedInspectionSessionRegistry.class));
+            var scope=new ChatTypedDeliberationStore.Scope("0","owner","client","7",1);
+            Map<String,Object> fixture;
+            try(var stream=getClass().getResourceAsStream("/contracts/unified-action-outcome-v5.json")) {fixture=JSON.readValue(stream,Map.class);}
+            var facts=new LinkedHashMap<String,Object>((Map<String,Object>)fixture.get("facts"));
+            var capability=new LinkedHashMap<String,Object>(((List<Map<String,Object>>)facts.get("availableActions")).getFirst());
+            capability.put("operation","EXECUTE_NATIVE");capability.put("skill",null);capability.put("minSources",0);
+            capability.put("inputMimeTypes",List.of("text/plain"));capability.put("outputMimeTypes",List.of("text/plain"));
+            facts.put("schemaVersion",6);facts.put("availableActions",List.of(capability));
+            var source=new LinkedHashMap<String,Object>();
+            source.put("sourceKind","TASK_WORKSPACE_FILE");source.put("mediaType","text");source.put("contentMimeType","text/plain");
+            source.put("contentHash","a".repeat(64));source.put("byteLength","58");
+            source.put("sourceIdentity",Map.of("kind","TASK_WORKSPACE_FILE","fileId","file","fileVersion","1"));
+            String ref=ChatTypedDeliberationContextService.sourceRefId(new ChatTypedDeliberationContextService.Scope("0","owner","client","7",1),source);
+            source.put("sourceRefId",ref);
+            String catalog=CanonicalContextJson.write(withSource?List.of(source):List.of());
+            facts.put("availableSources",withSource?List.of(Map.of("sourceRefId",ref,"kind","TASK_WORKSPACE_FILE","mediaType","text","contentMimeType","text/plain")):List.of());
+            var outcome=new LinkedHashMap<String,Object>(((List<Map<String,Object>>)fixture.get("outcomes")).stream()
+                    .filter(o->"ACTION_REQUEST".equals(o.get("kind"))).findFirst().orElseThrow());
+            outcome.put("action",Map.of("actionId",capability.get("actionId"),"instruction","生成 result.txt", "sourceRefIds",withSource?List.of(ref):List.of(),"parameters",Map.of()));
+            var turn=new ChatTurnEntity().setTenantId("0").setOwnerJiacn("owner").setClientId("client").setConversationId("7").setConversationGeneration(1L)
+                    .setRequestId("request").setRequestRevision(1L).setTurnId("turn").setDispatchId("dispatch").setSnapshotId("snapshot")
+                    .setContextDigest("sha256:"+"b".repeat(64)).setTargetAgentId("wuyong").setRoute("CHAT").setState("RUNNING");
+            var snapshot=new ChatContextSnapshotEntity().setTenantId("0").setOwnerJiacn("owner").setClientId("client").setConversationId("7").setConversationGeneration(1L)
+                    .setRequestId("request").setRequestRevision(1L).setSnapshotId("snapshot").setContextDigest(turn.getContextDigest())
+                    .setTargetAgentId("wuyong").setRoute("CHAT").setFactsManifestJson(CanonicalContextJson.write(Map.of("task",Map.of("id","task"),"typedDeliberation",facts)));
+            var admission=new ChatTypedDeliberationStore.Admission("admission",scope,"key","sha256:"+"1".repeat(64),"sha256:"+"1".repeat(64),
+                    "DISCUSSION","task",1,null,null,"request",1,100,"[\"turn\"]",catalog,"ADMITTED",0,0,1);
+            when(store.findAdmissionByRequest(scope,"request")).thenReturn(admission);
+            when(dao.findTurn("0","owner","client","turn")).thenReturn(turn);
+            when(dao.findSnapshot("0","owner","client","snapshot")).thenReturn(snapshot);
+            when(store.insertOutcome(any())).thenReturn(1);when(dao.insertOutbox(any())).thenReturn(1);
+            String raw=CanonicalContextJson.write(outcome);
+            // Exercise the real callback branch, not only the codec or the routing predicate.
+            var conversations=mock(cn.jia.chat.dao.ChatConversationDao.class);
+            when(conversations.lockScopedById("0","owner","client","7")).thenReturn(
+                    new cn.jia.chat.entity.ChatConversationEntity().setTenantId("0").setLifecycleGeneration(1L));
+            when(dao.lockTurn("0","owner","client","turn")).thenReturn(turn);
+            var dispatchAuthority=mock(ChatDispatchAuthorityService.class);
+            when(dispatchAuthority.incoming("0","client","owner","wuyong","dispatch")).thenReturn(
+                    new ChatDispatchAuthorityService.Binding(null,turn,"owner"));
+            var deliberation=new ChatDeliberationService(dao,conversations,mock(cn.jia.chat.dao.ChatMessageDao.class),mock(cn.jia.agent.service.AgentService.class));
+            deliberation.setDispatchAuthority(dispatchAuthority);
+            var routedFinals=mock(ChatActionFinalService.class);deliberation.setActionFinals(routedFinals);
+            var reachedActionBranch=new IllegalStateException("action final branch reached");
+            when(routedFinals.prepare(turn,snapshot,(String)outcome.get("text"),5,raw,null)).thenThrow(reachedActionBranch);
+            assertSame(reachedActionBranch,assertThrows(IllegalStateException.class,()->org.springframework.test.util.ReflectionTestUtils.invokeMethod(
+                    deliberation,"persistFinalLocked","0","owner","client","7",1L,"wuyong","request","turn","dispatch","snapshot",turn.getContextDigest(),
+                    (String)outcome.get("text"),5,raw,null,new ServerResolvedAgentSender("agent","吴用","owner","client","wuyong"),turn)));
+            var prepared=service.prepare(turn,snapshot,(String)outcome.get("text"),5,raw,null);
+            assertEquals(6,prepared.validated().dispatchFacts().schemaVersion());
+            assertThrows(RuntimeException.class,()->service.prepare(turn,snapshot,(String)outcome.get("text"),6,raw,null));
+            service.persist(prepared,101,1);
+            var rowCaptor=org.mockito.ArgumentCaptor.forClass(ChatTypedDeliberationStore.Outcome.class);
+            var eventCaptor=org.mockito.ArgumentCaptor.forClass(ChatDispatchOutboxEntity.class);
+            verify(store).insertOutcome(rowCaptor.capture());verify(dao).insertOutbox(eventCaptor.capture());
+            var row=rowCaptor.getValue();var event=eventCaptor.getValue();
+            turn.setFinalMessageId(101L).setFinalDigest(row.finalDigest()).setState("PUBLISHED");
+            when(store.findOutcomeByRequest(scope,"request")).thenReturn(row);
+            when(store.findOutcomeByTurn(scope,"turn",true)).thenReturn(row);
+            when(dao.findOutboxById(eq("0"),eq("owner"),eq("client"),eq(event.getEventId()))).thenReturn(event);
+            var view=service.readActionIfPresent(scope,"request","turn",1,"CHAT");
+            assertEquals("READY",view.get("state"));assertEquals(5,view.get("schemaVersion"));
+            assertEquals("QUEUED",((Map<?,?>)view.get("actionProgress")).get("state"));
+            var loaded=service.loadAction(event);
+            assertEquals(row.finalDigest(),loaded.validated().finalDigest());
+            assertEquals("EXECUTE_NATIVE",loaded.validated().dispatchFacts().availableActions().getFirst().operation());
+            assertEquals(withSource?List.of(ref):List.of(),loaded.validated().interactionOutcome().action().sourceRefIds());
+            // Duplicate final is idempotent; neither a second outcome nor a second action is inserted.
+            service.persist(service.prepare(turn,snapshot,(String)outcome.get("text"),5,raw,null),101,2);
+            verify(store,times(1)).insertOutcome(any());verify(dao,times(1)).insertOutbox(any());
+        }
+    }
+
     @Test void ordinaryAnswerAndClarificationCannotReplacePendingBatchOrAuthorizeAnAction() {
         var f=fixture();var basis=ChatDeliveryRevisionContract.basis(f.get("basis"));var facts=ChatActionOutcomeContract.facts(f.get("facts"));
         for(String kind:List.of("ANSWER","CLARIFY")) {
