@@ -156,11 +156,12 @@ class AgentRuntimePersistentSessionFenceTest {
         var session = auth.issue(installation, request("host", "boot"), 1000);
         var proof = auth.verify(headers(session));
         when(identities.lockRegistrationIdentityInScope("0", "client", "owner", AGENT))
-                .thenThrow(new IllegalArgumentException("identity revoked"));
+                .thenThrow(new IllegalStateException("identity revoked"));
         clearInvocations(rows);
         AtomicBoolean entered = new AtomicBoolean();
-        assertThrows(IllegalArgumentException.class,
+        var failure = assertThrows(IllegalArgumentException.class,
                 () -> auth.withFence(proof, false, () -> entered.compareAndSet(false, true)));
+        assertEquals("AGENT_RUNTIME_UNAUTHENTICATED", failure.getMessage());
         assertFalse(entered.get());
         verify(rows, never()).lockInScope(anyString(), anyString(), anyString());
     }
