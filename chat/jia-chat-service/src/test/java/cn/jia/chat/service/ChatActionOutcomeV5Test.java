@@ -107,8 +107,9 @@ class ChatActionOutcomeV5Test {
             String raw=CanonicalContextJson.write(outcome);
             // Exercise the real callback branch, not only the codec or the routing predicate.
             var conversations=mock(cn.jia.chat.dao.ChatConversationDao.class);
-            when(conversations.lockScopedById("0","owner","client","7")).thenReturn(
-                    new cn.jia.chat.entity.ChatConversationEntity().setTenantId("0").setLifecycleGeneration(1L));
+            var conversation=new cn.jia.chat.entity.ChatConversationEntity();
+            conversation.setTenantId("0");conversation.setLifecycleGeneration(1L);
+            when(conversations.lockScopedById("0","owner","client","7")).thenReturn(conversation);
             when(dao.lockTurn("0","owner","client","turn")).thenReturn(turn);
             var dispatchAuthority=mock(ChatDispatchAuthorityService.class);
             when(dispatchAuthority.incoming("0","client","owner","wuyong","dispatch")).thenReturn(
