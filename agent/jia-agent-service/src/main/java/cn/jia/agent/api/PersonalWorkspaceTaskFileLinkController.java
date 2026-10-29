@@ -134,7 +134,12 @@ public class PersonalWorkspaceTaskFileLinkController {
                 || !valid(ownerJiacn, 50) || !valid(clientId, 50) || "0".equals(ownerJiacn)) {
             throw new AuthenticationFailure(true);
         }
-        return new PersonalWorkspaceTaskLinkService.Scope("0", clientId, ownerJiacn);
+        try {
+            return new PersonalWorkspaceTaskLinkService.Scope(
+                    cn.jia.core.security.TenantClaimPolicy.resolve(claims, "0"), clientId, ownerJiacn);
+        } catch (IllegalArgumentException invalidTenant) {
+            throw new AuthenticationFailure(true);
+        }
     }
 
     private static PersonalWorkspaceTaskLinkService.CreateCommand createCommand(

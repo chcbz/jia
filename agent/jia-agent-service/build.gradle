@@ -138,6 +138,7 @@ def v1131AcceptanceSourceSet = sourceSets.create('v1131Acceptance') {
         include 'cn/jia/agent/service/impl/PersonalWorkspaceWriteServiceTest.java'
         include 'cn/jia/agent/service/impl/PersonalWorkspaceStorageBoundaryTest.java'
         include 'cn/jia/agent/service/impl/FileSystemPersonalWorkspaceStorageTest.java'
+        include 'cn/jia/agent/service/impl/TaskLinkedMaterialReaderMySqlTest.java'
         include 'cn/jia/agent/service/impl/PersonalWorkspacePreviewRendererTest.java'
         include 'cn/jia/agent/service/impl/PersonalWorkspaceOutputFormatValidatorTest.java'
         include 'cn/jia/agent/service/impl/AgentTaskArtifactStorageF02Test.java'

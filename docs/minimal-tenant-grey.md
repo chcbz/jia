@@ -73,3 +73,35 @@ Workspace tests reuse `:agent:jia-agent-service:v1131Acceptance`; no new runner 
 introduced. Include resource filter regressions, startup safety and `validateLayering`
 in the authoritative Flow verification. No production acceptance claim follows from
 source inspection or synthetic H2 regression.
+
+### File-link isolation candidate (2026-10-29; based on develop d3aa82d0ea)
+
+Task/conversation link controllers now carry the admitted tenant assertion through
+framework-free scopes. Services/DAOs retain exact tenant/client/owner predicates,
+transactional reservations, OUTPUT restrictions, conditional detach and cursor binding.
+Chat-owned conversation authorization uses the explicit four-argument tenant DAO;
+it still rejects deleted, foreign, malformed and task-thread conversations.
+**Link routes remain closed in minimal-grey pending complete chain verification.**
+
+Schema audit: the canonical workspace file/version/operation tables already have
+scope-aware indexes and no tenant-zero CHECK. The four link/operation tables did
+have tenant-zero CHECKs. Fresh DDL removes only those four obsolete constraints.
+Existing databases need explicit maintenance script
+`db/agent-personal-workspace-tenant-links-20261029.sql`; merely rerunning CREATE TABLE
+or deploying this JAR does not migrate them. This script is not registered with
+normal/gray startup. Before authorized execution, fix the database target, capture
+SHOW CREATE TABLE and backups, and check all four tables are present. MySQL DDL
+commits independently; the script tolerates retry after partial execution. Read back
+all four removals and preserved business CHECKs/indexes. Application rollback leaves
+this additive schema in place: do not reinstate tenant=0 restrictions over nonzero
+rows, delete gray data, or restore old data snapshots over new production facts.
+No production DDL or gray environment acceptance has occurred for this candidate.
+
+Synthetic regressions (authored, not yet execution evidence): controller malformed/
+conflicting JWT and query override denial; chat exact-tenant ACL; existing
+`TaskLinkedMaterialReaderMySqlTest` now also installs canonical MySQL DDL, exercises
+fresh and twice-retried legacy migration, preserves production rows, verifies
+same-key independent reservations, reciprocal scoped reads, conditional detach and
+business CHECKs, and real service transaction rollback on foreign-file denial.
+Conversation ACL in that SQL service test is a mocked port; its actual implementation
+has separate focused tests, not an end-to-end CHAT/browser claim.

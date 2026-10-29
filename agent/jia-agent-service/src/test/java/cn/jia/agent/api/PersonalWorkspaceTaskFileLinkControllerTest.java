@@ -109,6 +109,37 @@ class PersonalWorkspaceTaskFileLinkControllerTest extends BaseMockTest {
         verify(service, never()).create(scope, "task-a", null);
     }
 
+    @Test
+    void grayTenantComesOnlyFromAdmittedJwtNotQueryParameters() throws Exception {
+        var scope = new PersonalWorkspaceTaskLinkService.Scope("1", "browser", "owner-a");
+        when(service.list(scope, "task-a", null))
+                .thenReturn(new PersonalWorkspaceTaskLinkService.LinkListView(List.of(), null));
+        mvc.perform(get("/agent/tasks/task-a/file-links").param("tenant_id", "0")
+                        .principal(tenantJwt("1", null)))
+                .andExpect(status().isOk());
+        verify(service).list(scope, "task-a", null);
+    }
+
+    @Test
+    void malformedOrConflictingTenantClaimsFailBeforeService() throws Exception {
+        for (Object tenant : List.of(" 1", "1\0", 1)) {
+            mvc.perform(get("/agent/tasks/task-a/file-links").principal(tenantJwt(tenant, null)))
+                    .andExpect(status().isForbidden());
+        }
+        mvc.perform(get("/agent/tasks/task-a/file-links").principal(tenantJwt("1", "0")))
+                .andExpect(status().isForbidden());
+        verifyNoInteractions(service);
+    }
+
+    private static JwtAuthenticationToken tenantJwt(Object tenant, String alias) {
+        var builder = Jwt.withTokenValue("token").header("alg", "none")
+                .claim("jiacn", "owner-a").claim("client_id", "browser")
+                .claim("tenant_id", tenant)
+                .issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(60));
+        if (alias != null) builder.claim("tenantId", alias);
+        return new JwtAuthenticationToken(builder.build(), List.of());
+    }
+
     private static JwtAuthenticationToken jwt(String owner, String client) {
         Jwt token = Jwt.withTokenValue("token").header("alg", "none")
                 .claim("jiacn", owner).claim("client_id", client)

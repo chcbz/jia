@@ -49,7 +49,7 @@ public class WorkspaceConversationAccessServiceImpl implements WorkspaceConversa
         ChatConversationEntity conversation;
         try {
             conversation = conversationDao.findScopedById(
-                    scope.ownerJiacn(), scope.clientId(), canonicalConversationId);
+                    scope.tenantId(), scope.ownerJiacn(), scope.clientId(), canonicalConversationId);
         } catch (RuntimeException queryFailure) {
             throw denied();
         }
@@ -79,7 +79,7 @@ public class WorkspaceConversationAccessServiceImpl implements WorkspaceConversa
         if (conversation == null
                 || conversation.getId() == null
                 || !conversationId.equals(Long.toString(conversation.getId()))
-                || !DEFAULT_TENANT.equals(conversation.getTenantId())
+                || !scope.tenantId().equals(conversation.getTenantId())
                 || !scope.clientId().equals(conversation.getClientId())
                 || !scope.ownerJiacn().equals(conversation.getJiacn())
                 || conversation.getDeletedAt() != null
@@ -164,7 +164,7 @@ public class WorkspaceConversationAccessServiceImpl implements WorkspaceConversa
 
     private void validateScope(Scope scope) {
         if (scope == null
-                || !DEFAULT_TENANT.equals(scope.tenantId())
+                || !isExactText(scope.tenantId(), MAX_IDENTITY_LENGTH)
                 || !isExactText(scope.clientId(), MAX_IDENTITY_LENGTH)
                 || !isExactText(scope.ownerJiacn(), MAX_IDENTITY_LENGTH)
                 || DEFAULT_TENANT.equals(scope.ownerJiacn())) {

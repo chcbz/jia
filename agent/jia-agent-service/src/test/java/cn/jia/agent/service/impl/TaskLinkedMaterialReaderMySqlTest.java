@@ -1,6 +1,10 @@
 package cn.jia.agent.service.impl;
 
 import cn.jia.agent.dao.impl.PersonalWorkspaceTaskLinkDaoImpl;
+import cn.jia.agent.dao.impl.PersonalWorkspaceConversationLinkDaoImpl;
+import cn.jia.agent.mapper.PersonalWorkspaceConversationFileLinkMapper;
+import org.springframework.core.io.ClassPathResource;
+import org.springframework.jdbc.datasource.init.ResourceDatabasePopulator;
 import cn.jia.agent.mapper.PersonalWorkspaceTaskFileLinkMapper;
 import cn.jia.agent.service.PersonalWorkspaceStorage;
 import cn.jia.agent.service.PersonalWorkspaceTaskLinkService;
@@ -43,6 +47,8 @@ class TaskLinkedMaterialReaderMySqlTest {
     String database,namespace;
     DataSourceTransactionManager transactions;
     TaskLinkedMaterialReader reader;
+    PersonalWorkspaceTaskLinkDaoImpl taskLinks;
+    PersonalWorkspaceConversationLinkDaoImpl conversationLinks;
     final PersonalWorkspaceStorage storage=mock(PersonalWorkspaceStorage.class);
     final PersonalWorkspaceTaskLinkService.Scope scope=new PersonalWorkspaceTaskLinkService.Scope("0","client","owner");
     final TaskLinkedMaterialReader.Selection selection=new TaskLinkedMaterialReader.Selection("file",2,"REFERENCE");
@@ -126,10 +132,15 @@ class TaskLinkedMaterialReaderMySqlTest {
         jdbc.update("INSERT INTO agent_personal_workspace_task_file_link VALUES ('0','client','owner','file','task',2,'REFERENCE','ACTIVE')");
         var configuration=new MybatisConfiguration();configuration.setMapUnderscoreToCamelCase(true);
         configuration.addMapper(PersonalWorkspaceTaskFileLinkMapper.class);
+        configuration.addMapper(PersonalWorkspaceConversationFileLinkMapper.class);
         var global=new GlobalConfig();global.setBanner(false);
         var bean=new MybatisSqlSessionFactoryBean();bean.setDataSource(ds);bean.setConfiguration(configuration);bean.setGlobalConfig(global);
         var mapper=new SqlSessionTemplate(Objects.requireNonNull(bean.getObject())).getMapper(PersonalWorkspaceTaskFileLinkMapper.class);
-        var target=new TaskLinkedMaterialReaderImpl(new PersonalWorkspaceTaskLinkDaoImpl(mapper),storage);
+        taskLinks = new PersonalWorkspaceTaskLinkDaoImpl(mapper);
+        conversationLinks = new PersonalWorkspaceConversationLinkDaoImpl(
+                new SqlSessionTemplate(Objects.requireNonNull(bean.getObject()))
+                        .getMapper(PersonalWorkspaceConversationFileLinkMapper.class));
+        var target=new TaskLinkedMaterialReaderImpl(taskLinks,storage);
         var proxy=new ProxyFactory(target);proxy.setInterfaces(TaskLinkedMaterialReader.class);
         var interceptor=new TransactionInterceptor();interceptor.setTransactionManager(transactions);
         interceptor.setTransactionAttributeSource(new AnnotationTransactionAttributeSource());proxy.addAdvice(interceptor);
@@ -138,6 +149,174 @@ class TaskLinkedMaterialReaderMySqlTest {
     @AfterEach void cleanup() {
         if(admin!=null&&database!=null&&database.startsWith(namespace))admin.execute("DROP DATABASE IF EXISTS `"+database+"`");
     }
+    @Test void canonicalMySqlSchemaAllowsIndependentTenantLinksAndOperations() {
+        installCanonicalWorkspaceSchema();
+        exerciseTenantLinks();
+    }
+
+    @Test void existingTenantZeroChecksAreMigratedWithoutChangingProductionRows() {
+        installCanonicalWorkspaceSchema();
+        String[][] oldChecks = {
+                {"task_file_link", "chk_pwtl_single_tenant"},
+                {"task_link_operation", "chk_pwtl_operation_tenant"},
+                {"conversation_file_link", "chk_pwcl_single_tenant"},
+                {"conversation_link_operation", "chk_pwcl_operation_tenant"}
+        };
+        for (String[] check : oldChecks) {
+            jdbc.execute("ALTER TABLE agent_personal_workspace_" + check[0]
+                    + " ADD CONSTRAINT " + check[1] + " CHECK (tenant_id = '0')");
+        }
+        insertLink("task", "0", "prior");
+        insertLink("conversation", "0", "prior");
+        assertThrows(org.springframework.dao.DataAccessException.class,
+                () -> insertLink("task", "1", "rejected"));
+        assertThrows(org.springframework.dao.DataAccessException.class,
+                () -> insertLink("conversation", "1", "rejected"));
+        var priorTask = jdbc.queryForMap("SELECT * FROM agent_personal_workspace_task_file_link");
+        var priorConversation = jdbc.queryForMap("SELECT * FROM agent_personal_workspace_conversation_file_link");
+        script("db/agent-personal-workspace-tenant-links-20261029.sql");
+        script("db/agent-personal-workspace-tenant-links-20261029.sql");
+        assertEquals(priorTask, jdbc.queryForMap("SELECT * FROM agent_personal_workspace_task_file_link"));
+        assertEquals(priorConversation, jdbc.queryForMap("SELECT * FROM agent_personal_workspace_conversation_file_link"));
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.table_constraints "
+                + "WHERE constraint_schema=DATABASE() AND constraint_name IN "
+                + "('chk_pwtl_single_tenant','chk_pwtl_operation_tenant',"
+                + "'chk_pwcl_single_tenant','chk_pwcl_operation_tenant')", Integer.class));
+        exerciseTenantLinks();
+    }
+
+    @Test void realServiceTransactionsKeepTenantLinksAndFailedReservationsSeparate() {
+        installCanonicalWorkspaceSchema();
+        jdbc.execute("CREATE TABLE agent_task_meta (tenant_id VARCHAR(50),client_id VARCHAR(50),"
+                + "owner_jiacn VARCHAR(50),task_id VARCHAR(100)) ENGINE=InnoDB");
+        for (String tenant : java.util.List.of("0", "1")) {
+            jdbc.update("INSERT INTO agent_task_meta VALUES (?,'client','owner','parent')", tenant);
+            seedFile(tenant, "shared");
+        }
+        seedFile("0", "production-only");
+        var taskService = transactional(new PersonalWorkspaceTaskLinkServiceImpl(taskLinks),
+                PersonalWorkspaceTaskLinkService.class);
+        var access = mock(cn.jia.chat.service.WorkspaceConversationAccessService.class);
+        var conversationService = transactional(new PersonalWorkspaceConversationLinkServiceImpl(conversationLinks, access),
+                cn.jia.agent.service.PersonalWorkspaceConversationLinkService.class);
+        for (String tenant : java.util.List.of("0", "1")) {
+            var taskScope = new PersonalWorkspaceTaskLinkService.Scope(tenant, "client", "owner");
+            var conversationScope = new cn.jia.agent.service.PersonalWorkspaceConversationLinkService.Scope(tenant, "client", "owner");
+            var taskCommand = new PersonalWorkspaceTaskLinkService.CreateCommand("shared", 2, "REFERENCE", "same-key");
+            var conversationCommand = new cn.jia.agent.service.PersonalWorkspaceConversationLinkService.CreateCommand("shared", 2, "REFERENCE", "same-key");
+            var taskLink = taskService.create(taskScope, "parent", taskCommand);
+            var conversationLink = conversationService.create(conversationScope, "41", conversationCommand);
+            assertEquals(taskLink, taskService.create(taskScope, "parent", taskCommand));
+            assertEquals(conversationLink, conversationService.create(conversationScope, "41", conversationCommand));
+            assertEquals(1, taskService.list(taskScope, "parent", null).items().size());
+            assertEquals(1, conversationService.list(conversationScope, "41", null).items().size());
+            verify(access, atLeastOnce()).requireAccessible(
+                    new cn.jia.chat.service.WorkspaceConversationAccessService.Scope(tenant, "client", "owner"), "41");
+        }
+        var gray = new PersonalWorkspaceTaskLinkService.Scope("1", "client", "owner");
+        var grayConversation = new cn.jia.agent.service.PersonalWorkspaceConversationLinkService.Scope("1", "client", "owner");
+        assertEquals(PersonalWorkspaceTaskLinkService.Reason.NOT_FOUND, assertThrows(
+                PersonalWorkspaceTaskLinkService.Failure.class, () -> taskService.create(gray, "parent",
+                        new PersonalWorkspaceTaskLinkService.CreateCommand("production-only", 2, "REFERENCE", "denied-key"))).getReason());
+        assertEquals(cn.jia.agent.service.PersonalWorkspaceConversationLinkService.Reason.NOT_FOUND, assertThrows(
+                cn.jia.agent.service.PersonalWorkspaceConversationLinkService.Failure.class, () -> conversationService.create(grayConversation, "41",
+                        new cn.jia.agent.service.PersonalWorkspaceConversationLinkService.CreateCommand("production-only", 2, "REFERENCE", "denied-key"))).getReason());
+        for (String kind : java.util.List.of("task", "conversation")) {
+            assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM agent_personal_workspace_" + kind
+                    + "_link_operation WHERE idempotency_key='denied-key'", Integer.class));
+        }
+        doThrow(new IllegalStateException("unavailable")).when(access).requireAccessible(
+                new cn.jia.chat.service.WorkspaceConversationAccessService.Scope("1", "client", "owner"), "42");
+        assertThrows(cn.jia.agent.service.PersonalWorkspaceConversationLinkService.Failure.class,
+                () -> conversationService.create(grayConversation, "42",
+                        new cn.jia.agent.service.PersonalWorkspaceConversationLinkService.CreateCommand("shared", 2, "REFERENCE", "acl-denied")));
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM agent_personal_workspace_conversation_link_operation "
+                + "WHERE idempotency_key='acl-denied'", Integer.class));
+    }
+
+    private void seedFile(String tenant, String file) {
+        jdbc.update("INSERT INTO agent_personal_workspace_file "
+                + "(file_id,owner_jiacn,source_kind,display_name,media_family,state,metadata_revision,latest_version,created_at,tenant_id,client_id) "
+                + "VALUES (?,'owner','UPLOAD','image.png','IMAGE','ACTIVE',1,2,1,?,'client')", file, tenant);
+        jdbc.update("INSERT INTO agent_personal_workspace_file_version "
+                + "(file_id,owner_jiacn,version,original_filename,content_mime_type,byte_length,content_hash,storage_uri,created_at,tenant_id,client_id) "
+                + "VALUES (?,'owner',2,'image.png','image/png',3,?,'private:v2',1,?,'client')", file, "a".repeat(64), tenant);
+    }
+
+    private <T> T transactional(T target, Class<T> contract) {
+        var proxy = new ProxyFactory(target);
+        proxy.setInterfaces(contract);
+        var interceptor = new TransactionInterceptor();
+        interceptor.setTransactionManager(transactions);
+        interceptor.setTransactionAttributeSource(new AnnotationTransactionAttributeSource());
+        proxy.addAdvice(interceptor);
+        return contract.cast(proxy.getProxy());
+    }
+
+    private void installCanonicalWorkspaceSchema() {
+        // Replace only this test's minimal projection inside its private random database.
+        jdbc.execute("DROP TABLE agent_personal_workspace_task_file_link");
+        jdbc.execute("DROP TABLE agent_personal_workspace_file_version");
+        jdbc.execute("DROP TABLE agent_personal_workspace_file");
+        script("db/agent-personal-workspace-v1.sql");
+        script("db/agent-personal-workspace-v1_11-task-links.sql");
+        script("db/agent-personal-workspace-v1_13-conversation-links.sql");
+    }
+
+    private void script(String path) {
+        // ResourceDatabasePopulator retains one connection for SET/PREPARE/EXECUTE.
+        new ResourceDatabasePopulator(new ClassPathResource(path))
+                .execute(Objects.requireNonNull(jdbc.getDataSource()));
+    }
+
+    private void insertLink(String kind, String tenant, String relation) {
+        if (!java.util.Set.of("task", "conversation").contains(kind)) throw new IllegalArgumentException();
+        jdbc.update("INSERT INTO agent_personal_workspace_" + kind + "_file_link "
+                + "(relation_id,owner_jiacn," + kind + "_id,file_id,file_version,link_role,"
+                + "link_state,relation_revision,created_at,tenant_id,client_id) "
+                + "VALUES (?,'owner','parent',?,2,'REFERENCE','ACTIVE',1,1,?,'client')",
+                relation, "file-" + relation, tenant);
+    }
+
+    private void exerciseTenantLinks() {
+        for (String tenant : java.util.List.of("0", "1")) {
+            insertLink("task", tenant, "shared");
+            insertLink("conversation", tenant, "shared");
+            var task = taskLinks.reserveOperation(tenant, "client", "owner", "CREATE",
+                    "same-key", "a".repeat(64), "task-op-" + tenant, 1);
+            var conversation = conversationLinks.reserveOperation(tenant, "client", "owner", "CREATE",
+                    "same-key", "a".repeat(64), "conversation-op-" + tenant, 1);
+            assertEquals("task-op-" + tenant, task.getOperationId());
+            assertEquals("conversation-op-" + tenant, conversation.getOperationId());
+            assertEquals(tenant, taskLinks.findByRelation(tenant, "client", "owner", "parent", "shared").getTenantId());
+            assertEquals(tenant, conversationLinks.findByRelation(tenant, "client", "owner", "parent", "shared").getTenantId());
+            assertEquals("task-op-" + tenant, taskLinks.reserveOperation(tenant, "client", "owner", "CREATE",
+                    "same-key", "a".repeat(64), "unused", 2).getOperationId());
+            assertEquals("conversation-op-" + tenant, conversationLinks.reserveOperation(tenant, "client", "owner", "CREATE",
+                    "same-key", "a".repeat(64), "unused", 2).getOperationId());
+        }
+        insertLink("task", "0", "production-only");
+        insertLink("conversation", "0", "production-only");
+        assertNull(taskLinks.findByRelation("1", "client", "owner", "parent", "production-only"));
+        assertNull(conversationLinks.findByRelation("1", "client", "owner", "parent", "production-only"));
+        assertFalse(taskLinks.completeOperation("1", "client", "owner", "task-op-0", "shared", 3));
+        assertFalse(conversationLinks.completeOperation("1", "client", "owner", "conversation-op-0", "shared", 3));
+        assertTrue(taskLinks.completeOperation("1", "client", "owner", "task-op-1", "shared", 3));
+        assertTrue(conversationLinks.completeOperation("1", "client", "owner", "conversation-op-1", "shared", 3));
+        assertTrue(taskLinks.changeState("1", "client", "owner", "parent", "shared", "ACTIVE", 1, "DETACHED", 2, 3L));
+        assertTrue(conversationLinks.changeState("1", "client", "owner", "parent", "shared", "ACTIVE", 1, "DETACHED", 2, 3L));
+        assertFalse(taskLinks.changeState("1", "client", "owner", "parent", "shared", "ACTIVE", 1, "DETACHED", 2, 3L));
+        assertFalse(conversationLinks.changeState("1", "client", "owner", "parent", "shared", "ACTIVE", 1, "DETACHED", 2, 3L));
+        assertEquals("ACTIVE", taskLinks.findByRelation("0", "client", "owner", "parent", "shared").getLinkState());
+        assertEquals("ACTIVE", conversationLinks.findByRelation("0", "client", "owner", "parent", "shared").getLinkState());
+        for (String kind : java.util.List.of("task", "conversation")) {
+            assertThrows(org.springframework.dao.DataAccessException.class, () ->
+                    jdbc.update("UPDATE agent_personal_workspace_" + kind + "_file_link SET file_version=0 WHERE tenant_id='1'"));
+            assertThrows(org.springframework.dao.DataAccessException.class, () ->
+                    jdbc.update("UPDATE agent_personal_workspace_" + kind + "_link_operation SET request_hash='bad' WHERE tenant_id='1'"));
+        }
+    }
+
     @Test void realMapperKeepsExactScopeVersionAndRole() {
         assertEquals(metadata,reader.metadata(scope,"task",selection));
         assertMissing(new PersonalWorkspaceTaskLinkService.Scope("0","client","Owner"),"task",selection);
