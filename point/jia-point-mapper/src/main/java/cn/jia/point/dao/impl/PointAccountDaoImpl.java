@@ -10,6 +10,10 @@ public class PointAccountDaoImpl implements PointAccountDao {
 
     public PointAccountDaoImpl(PointAccountMapper mapper) { this.mapper = mapper; }
 
+    @Override public java.util.List<cn.jia.point.entity.PointAccountBalance> balances(
+            String tenantId, java.util.Collection<String> jiacns) {
+        return mapper.balances(tenantId, jiacns);
+    }
     @Override public Integer balance(String tenantId, String jiacn) {
         return mapper.balance(tenantId, jiacn);
     }

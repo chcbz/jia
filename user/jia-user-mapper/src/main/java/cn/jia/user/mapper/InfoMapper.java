@@ -24,7 +24,12 @@ public interface InfoMapper extends BaseMapper<UserEntity> {
 
     List<UserEntity> selectByOrg(Long orgId);
 
-    List<UserEntity> searchByExample(UserEntity user);
+    List<UserEntity> searchByExample(@Param("user") UserEntity user,
+                                     @Param("pointTenantId") String pointTenantId);
+
+    List<UserEntity> selectForListWithPoint(
+            @Param("ew") com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<UserEntity> query,
+            @Param("pointTenantId") String pointTenantId);
 
     List<UserRelationRow> selectRelationsByUserIds(@Param("userIds") Collection<Long> userIds);
 
@@ -45,8 +50,5 @@ public interface InfoMapper extends BaseMapper<UserEntity> {
 
     int incrementAuthEpoch(@Param("userId") long userId, @Param("expectedEpoch") long expectedEpoch);
 
-    int incrementPoint(@Param("jiacn") String jiacn, @Param("add") int add,
-                       @Param("updateTime") long updateTime);
 
-    Integer selectPointByJiacn(@Param("jiacn") String jiacn);
 }

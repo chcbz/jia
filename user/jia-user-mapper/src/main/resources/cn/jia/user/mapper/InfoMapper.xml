@@ -4,88 +4,104 @@
 
     <!-- 通用查询结果列 -->
     <sql id="Base_Column_List">
-        create_time,
-        update_time,
-        id, username, password, openid, weixinid, weiboid, githubid, jiacn, phone, email, sex, nickname, avatar, city, country, province,
-        latitude, longitude, point, referrer, birthday, tel, weixin, qq, position, status, remark, msg_type, subscribe, account_state, auth_epoch
+        u.create_time, u.update_time, u.id, u.username, u.password, u.openid, u.weixinid, u.weiboid, u.githubid, u.jiacn, u.phone, u.email, u.sex, u.nickname, u.avatar, u.city, u.country, u.province, u.latitude, u.longitude, u.referrer, u.birthday, u.tel, u.weixin, u.qq, u.position, u.status, u.remark, u.msg_type, u.subscribe, u.account_state, u.auth_epoch
     </sql>
 
     <select id="selectByRole" parameterType="java.lang.Long" resultType="cn.jia.user.entity.UserEntity">
-        select u.*
+        select <include refid="Base_Column_List" />, u.location, u.tenant_id, u.client_id
         from user_info u left join user_role_rel r on u.id = r.user_id
         where r.role_id = #{roleId,jdbcType=BIGINT}
     </select>
     <select id="selectByGroup" parameterType="java.lang.Long" resultType="cn.jia.user.entity.UserEntity">
-        select u.*
+        select <include refid="Base_Column_List" />, u.location, u.tenant_id, u.client_id
         from user_info u left join user_group_rel r on u.id = r.user_id
         where r.group_id = #{groupId,jdbcType=BIGINT}
     </select>
     <select id="selectByOrg" parameterType="java.lang.Long" resultType="cn.jia.user.entity.UserEntity">
-        select u.*
+        select <include refid="Base_Column_List" />, u.location, u.tenant_id, u.client_id
         from user_info u left join user_org_rel r on u.id = r.user_id
         where r.org_id = #{orgId,jdbcType=BIGINT}
     </select>
-    <select id="searchByExample" parameterType="cn.jia.user.entity.UserEntity" resultType="cn.jia.user.entity.UserEntity">
+    <!-- Explicit balance projection also preserves ORDER BY point after the legacy column is removed. -->
+    <sql id="Point_Balance">
+        COALESCE((SELECT pa.balance FROM point_account pa
+            WHERE pa.tenant_id = #{pointTenantId,jdbcType=VARCHAR}
+              AND OCTET_LENGTH(pa.tenant_id) = OCTET_LENGTH(#{pointTenantId,jdbcType=VARCHAR})
+              AND pa.jiacn = u.jiacn
+              AND CAST(pa.jiacn AS BINARY) = CAST(u.jiacn AS BINARY)), 0)
+    </sql>
+    <select id="selectForListWithPoint" resultType="cn.jia.user.entity.UserEntity">
+        SELECT <include refid="Base_Column_List" />, u.location, u.tenant_id, u.client_id,
+               <include refid="Point_Balance" /> AS point
+        FROM user_info u
+        ${ew.customSqlSegment}
+    </select>
+    <select id="searchByExample" resultType="cn.jia.user.entity.UserEntity">
         select
         <include refid="Base_Column_List" />
-        from user_info
+        <if test="pointTenantId != null">, <include refid="Point_Balance" /> AS point</if>
+        from user_info u
         where 1 = 2
-        <if test="openid != null">
-            or openid = #{openid,jdbcType=VARCHAR}
+        <if test="user.openid != null">
+            or openid = #{user.openid,jdbcType=VARCHAR}
         </if>
-        <if test="weixinid != null">
-            or weixinid = #{weixinid,jdbcType=VARCHAR}
+        <if test="user.weixinid != null">
+            or weixinid = #{user.weixinid,jdbcType=VARCHAR}
         </if>
-        <if test="weiboid != null">
-            or weiboid = #{weiboid,jdbcType=VARCHAR}
+        <if test="user.weiboid != null">
+            or weiboid = #{user.weiboid,jdbcType=VARCHAR}
         </if>
-        <if test="githubid != null">
-            or githubid = #{githubid,jdbcType=VARCHAR}
+        <if test="user.githubid != null">
+            or githubid = #{user.githubid,jdbcType=VARCHAR}
         </if>
-        <if test="jiacn != null">
-            or jiacn = #{jiacn,jdbcType=VARCHAR}
+        <if test="user.jiacn != null">
+            or jiacn = #{user.jiacn,jdbcType=VARCHAR}
         </if>
-        <if test="phone != null">
-            or phone LIKE CONCAT('%',#{phone,jdbcType=VARCHAR},'%')
+        <if test="user.phone != null">
+            or phone LIKE CONCAT('%',#{user.phone,jdbcType=VARCHAR},'%')
         </if>
-        <if test="email != null">
-            or email LIKE CONCAT('%',#{email,jdbcType=VARCHAR},'%')
+        <if test="user.email != null">
+            or email LIKE CONCAT('%',#{user.email,jdbcType=VARCHAR},'%')
         </if>
-        <if test="sex != null">
-            or sex = #{sex,jdbcType=INTEGER}
+        <if test="user.sex != null">
+            or sex = #{user.sex,jdbcType=INTEGER}
         </if>
-        <if test="nickname != null">
-            or nickname LIKE CONCAT('%',#{nickname,jdbcType=VARCHAR},'%')
+        <if test="user.nickname != null">
+            or nickname LIKE CONCAT('%',#{user.nickname,jdbcType=VARCHAR},'%')
         </if>
-        <if test="city != null">
-            or city LIKE CONCAT('%',#{city,jdbcType=VARCHAR},'%')
+        <if test="user.city != null">
+            or city LIKE CONCAT('%',#{user.city,jdbcType=VARCHAR},'%')
         </if>
-        <if test="country != null">
-            or country LIKE CONCAT('%',#{country,jdbcType=VARCHAR},'%')
+        <if test="user.country != null">
+            or country LIKE CONCAT('%',#{user.country,jdbcType=VARCHAR},'%')
         </if>
-        <if test="province != null">
-            or province LIKE CONCAT('%',#{province,jdbcType=VARCHAR},'%')
+        <if test="user.province != null">
+            or province LIKE CONCAT('%',#{user.province,jdbcType=VARCHAR},'%')
         </if>
-        <if test="latitude != null">
-            or latitude = #{latitude,jdbcType=VARCHAR}
+        <if test="user.latitude != null">
+            or latitude = #{user.latitude,jdbcType=VARCHAR}
         </if>
-        <if test="longitude != null">
-            or longitude = #{longitude,jdbcType=VARCHAR}
+        <if test="user.longitude != null">
+            or longitude = #{user.longitude,jdbcType=VARCHAR}
         </if>
-        <if test="point != null">
-            or point = #{point,jdbcType=INTEGER}
+        <if test="user.point != null">
+            or COALESCE((SELECT pa.balance FROM point_account pa
+                WHERE pa.tenant_id = #{pointTenantId,jdbcType=VARCHAR}
+                  AND OCTET_LENGTH(pa.tenant_id) = OCTET_LENGTH(#{pointTenantId,jdbcType=VARCHAR})
+                  AND pa.jiacn = u.jiacn
+                  AND CAST(pa.jiacn AS BINARY) = CAST(u.jiacn AS BINARY)), 0) = #{user.point,jdbcType=INTEGER}
         </if>
-        <if test="referrer != null">
-            or referrer LIKE CONCAT('%',#{referrer,jdbcType=VARCHAR},'%')
+        <if test="user.referrer != null">
+            or referrer LIKE CONCAT('%',#{user.referrer,jdbcType=VARCHAR},'%')
         </if>
-        <if test="birthday != null">
-            or birthday = #{birthday,jdbcType=DATE}
+        <if test="user.birthday != null">
+            or birthday = #{user.birthday,jdbcType=DATE}
         </if>
-        <if test="createTime != null">
-            or create_time = #{createTime,jdbcType=BIGINT}
+        <if test="user.createTime != null">
+            or create_time = #{user.createTime,jdbcType=BIGINT}
         </if>
-        <if test="updateTime != null">
-            or update_time = #{updateTime,jdbcType=BIGINT}
+        <if test="user.updateTime != null">
+            or update_time = #{user.updateTime,jdbcType=BIGINT}
         </if>
     </select>
     <select id="selectRelationsByUserIds" resultType="cn.jia.user.dao.UserRelationRow">
@@ -138,23 +154,5 @@
           AND auth_epoch &lt; 9223372036854775807
     </update>
 
-    <update id="incrementPoint">
-        UPDATE user_info
-        SET point = COALESCE(point, 0) + #{add,jdbcType=INTEGER},
-            update_time = #{updateTime,jdbcType=BIGINT}
-        WHERE jiacn = #{jiacn,jdbcType=VARCHAR}
-          AND OCTET_LENGTH(jiacn) = OCTET_LENGTH(#{jiacn,jdbcType=VARCHAR})
-          AND CAST(jiacn AS BINARY) = CAST(#{jiacn,jdbcType=VARCHAR} AS BINARY)
-          AND COALESCE(point, 0) + #{add,jdbcType=INTEGER} &gt;= 0
-    </update>
 
-    <select id="selectPointByJiacn" resultType="java.lang.Integer">
-        SELECT point
-        FROM user_info
-        WHERE jiacn = #{jiacn,jdbcType=VARCHAR}
-          AND OCTET_LENGTH(jiacn) = OCTET_LENGTH(#{jiacn,jdbcType=VARCHAR})
-          AND CAST(jiacn AS BINARY) = CAST(#{jiacn,jdbcType=VARCHAR} AS BINARY)
-        ORDER BY id
-        LIMIT 2
-    </select>
 </mapper>

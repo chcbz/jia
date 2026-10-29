@@ -7,6 +7,7 @@ import cn.jia.isp.entity.LdapUserGroup;
 import cn.jia.isp.service.LdapUserGroupService;
 import cn.jia.isp.service.LdapUserService;
 import cn.jia.test.BaseMockTest;
+import cn.jia.point.service.PointAccountService;
 import cn.jia.user.common.UserErrorConstants;
 import cn.jia.user.dao.UserGroupRelDao;
 import cn.jia.user.dao.UserInfoDao;
@@ -43,6 +44,8 @@ class UserServiceImplTest extends BaseMockTest {
     LdapUserGroupService ldapUserGroupService;
     @Mock
     UserInfoDao userInfoDao;
+    @Mock
+    PointAccountService pointAccounts;
     @InjectMocks
     UserServiceImpl userServiceImpl;
 
@@ -67,53 +70,34 @@ class UserServiceImplTest extends BaseMockTest {
     }
 
     @Test
-    void testChangePoint() {
-        UserEntity userEntity = new UserEntity();
-        userEntity.setPoint(1);
-        when(userInfoDao.selectByJiacn(any())).thenReturn(userEntity);
-        when(userInfoDao.updateById(any())).thenReturn(1);
-
-        userServiceImpl.changePoint("jiacn", 1);
-
-        EsRuntimeException exception = assertThrows(EsRuntimeException.class, () ->
-                userServiceImpl.changePoint("jiacn", -2));
-        Assertions.assertEquals(UserErrorConstants.POINT_NO_ENOUGH.getMessage(), exception.getMessage());
-    }
-
-
-    @Test
-    void changePointAndGetUsesAtomicIncrementAndReturnsCommittedBalance() {
-        when(userInfoDao.incrementPoint(eq("jiacn"), eq(2), anyLong())).thenReturn(1);
-        when(userInfoDao.selectPointByJiacn("jiacn")).thenReturn(7);
-
-        int balance = userServiceImpl.changePointAndGet("jiacn", 2);
-
-        Assertions.assertEquals(7, balance);
-        verify(userInfoDao).incrementPoint(eq("jiacn"), eq(2), anyLong());
-        verify(userInfoDao).selectPointByJiacn("jiacn");
-        verify(userInfoDao, never()).selectByJiacn("jiacn");
+    void pointCompatibilityAdapterUsesDomainBalanceAndNeverWritesUserInfo() {
+        when(userInfoDao.selectOwnIdentityByExactJiacn("alice")).thenReturn(List.of(new UserEntity()));
+        when(pointAccounts.changeAndGet("alice", 2)).thenReturn(7);
+        Assertions.assertEquals(7, userServiceImpl.changePointAndGet("alice", 2));
+        userServiceImpl.changePoint("alice", 1);
+        verify(pointAccounts).changeAndGet("alice", 1);
         verify(userInfoDao, never()).updateById(any());
     }
 
     @Test
-    void changePointAndGetFailsClosedForMissingInsufficientOrAmbiguousIdentity() {
-        when(userInfoDao.incrementPoint(eq("missing"), eq(1), anyLong())).thenReturn(0);
-        when(userInfoDao.selectPointByJiacn("missing")).thenReturn(null);
-        EsRuntimeException missing = assertThrows(EsRuntimeException.class,
-                () -> userServiceImpl.changePointAndGet("missing", 1));
-        Assertions.assertEquals(UserErrorConstants.USER_NOT_EXIST.getMessage(), missing.getMessage());
+    void pointAdapterRejectsMissingAndAmbiguousIdentity() {
+        when(userInfoDao.selectOwnIdentityByExactJiacn("missing")).thenReturn(List.of());
+        assertThrows(EsRuntimeException.class, () -> userServiceImpl.changePointAndGet("missing", 1));
+        when(userInfoDao.selectOwnIdentityByExactJiacn("duplicate"))
+                .thenReturn(List.of(new UserEntity(), new UserEntity()));
+        assertThrows(IllegalStateException.class, () -> userServiceImpl.changePointAndGet("duplicate", 1));
+        verifyNoInteractions(pointAccounts);
+    }
 
-        when(userInfoDao.incrementPoint(eq("poor"), eq(-2), anyLong())).thenReturn(0);
-        when(userInfoDao.selectPointByJiacn("poor")).thenReturn(1);
-        EsRuntimeException insufficient = assertThrows(EsRuntimeException.class,
+    @Test
+    void insufficientPointErrorPassesThroughAdapter() {
+        when(userInfoDao.selectOwnIdentityByExactJiacn("poor")).thenReturn(List.of(new UserEntity()));
+        when(pointAccounts.changeAndGet("poor", -2))
+                .thenThrow(new EsRuntimeException(UserErrorConstants.POINT_NO_ENOUGH));
+        EsRuntimeException error = assertThrows(EsRuntimeException.class,
                 () -> userServiceImpl.changePointAndGet("poor", -2));
-        Assertions.assertEquals(UserErrorConstants.POINT_NO_ENOUGH.getMessage(), insufficient.getMessage());
-
-        when(userInfoDao.incrementPoint(eq("duplicate"), eq(1), anyLong())).thenReturn(2);
-        assertThrows(IllegalStateException.class,
-                () -> userServiceImpl.changePointAndGet("duplicate", 1));
-        verify(userInfoDao, never()).selectPointByJiacn("duplicate");
-        verify(userInfoDao, never()).selectByJiacn(anyString());
+        Assertions.assertEquals(UserErrorConstants.POINT_NO_ENOUGH.getMessage(), error.getMessage());
+        verify(userInfoDao, never()).updateById(any());
     }
 
     @Test
@@ -209,7 +193,7 @@ class UserServiceImplTest extends BaseMockTest {
     @Test
     void testSearch() {
         UserEntity userEntity = new UserEntity();
-        when(userInfoDao.searchByExample(any())).thenReturn(List.of(userEntity));
+        when(userInfoDao.searchByExample(any(), nullable(String.class))).thenReturn(List.of(userEntity));
         PageInfo<UserEntity> result = userServiceImpl.search(new UserEntity(), 10, 1, null);
         Assertions.assertEquals(userEntity, result.getList().get(0));
     }
@@ -446,14 +430,33 @@ class UserServiceImplTest extends BaseMockTest {
         UserVO search = new UserVO();
         search.setTenantId("Tenant-A");
         search.setClientId("Client-A");
-        when(userInfoDao.selectForList(search)).thenReturn(List.of(new UserEntity().setId(1L)));
+        when(userInfoDao.selectForList(eq(search), nullable(String.class))).thenReturn(List.of(new UserEntity().setId(1L)));
 
         PageInfo<UserEntity> page = userServiceImpl.findListPage(search, 2, 25, "create_time desc");
 
         Assertions.assertEquals(1L, page.getList().getFirst().getId());
-        verify(userInfoDao).selectForList(same(search));
+        verify(userInfoDao).selectForList(same(search), nullable(String.class));
         Assertions.assertEquals("Tenant-A", search.getTenantId());
         Assertions.assertEquals("Client-A", search.getClientId());
     }
 
+
+    @Test
+    void pointSearchUsesBusinessScopeNotTheIdentityTenantField() {
+        UserEntity search = new UserEntity(); search.setPoint(7); search.setTenantId("0");
+        when(pointAccounts.tenantId()).thenReturn("1");
+        when(userInfoDao.searchByExample(search, "1")).thenReturn(List.of());
+        userServiceImpl.search(search);
+        verify(userInfoDao).searchByExample(search, "1");
+        verify(userInfoDao, never()).searchByExample(search);
+    }
+
+    @Test
+    void genericProfileUpdateCannotMutateThePointBalanceProjection() {
+        UserEntity profile = new UserEntity(); profile.setId(1L); profile.setPoint(999);
+        when(userInfoDao.updateById(profile)).thenReturn(1);
+        userServiceImpl.update(profile);
+        Assertions.assertNull(profile.getPoint());
+        verifyNoInteractions(pointAccounts);
+    }
 }

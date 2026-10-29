@@ -16,5 +16,5 @@ public interface PointSignDao extends IBaseDao<PointSignEntity> {
      * @param jiacn 用户编号
      * @return 签到信息
      */
-    PointSignEntity selectLatest(String jiacn);
+    PointSignEntity selectLatest(String tenantId, String jiacn);
 }

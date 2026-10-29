@@ -92,7 +92,8 @@ public class UserEntity extends BaseEntity {
     @Schema(description = "经度")
     private String longitude;
 
-    @Schema(description = "积分")
+    @Schema(description = "当前业务环境的积分余额（只读投影）")
+    @TableField(exist = false)
     private Integer point;
 
     @Schema(description = "推荐人Jia账号")

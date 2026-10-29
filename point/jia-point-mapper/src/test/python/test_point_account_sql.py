@@ -139,6 +139,51 @@ class PointAccountSqlTest(unittest.TestCase):
         self.assertEqual(self.balance(), '16')
         self.assertEqual(self.command("SELECT version FROM point_account WHERE tenant_id='0' AND jiacn='alice';")[0], '16')
 
+    def test_batch_mapper_returns_only_the_fixed_tenant(self):
+        self.command(self.mapper('ensureAccount') + self.mapper('change', delta=90)
+                     + self.mapper('ensureAccount', tenant='1')
+                     + self.mapper('change', tenant='1', delta=7))
+        source = MAPPER.read_text()
+        expression = re.search(r'@Select\(("<script>SELECT jiacn,balance.*?)(?=\n    @org)',
+                               source, re.S).group(1)
+        sql = sql_fragments(expression).replace('<script>', '').replace('</script>', '')
+        sql = re.sub(r'<foreach.*?</foreach>', "('alice','bob')", sql)
+        sql = sql.replace('#{tenantId}', "'1'")
+        self.assertEqual(self.command(sql)[0], 'alice\t7')
+
+    def test_user_point_search_preserves_zero_and_scoped_balance_semantics(self):
+        self.command("INSERT INTO user_info VALUES (1,'alice',999,'0',1,1),(2,'bob',999,'0',1,1);")
+        self.command(self.mapper('ensureAccount') + self.mapper('change', delta=90)
+                     + self.mapper('ensureAccount', tenant='1')
+                     + self.mapper('change', tenant='1', delta=7))
+        root = MODULE.parents[1]
+        source = (root / 'user/jia-user-mapper/src/main/resources/cn/jia/user/mapper/InfoMapper.xml').read_text()
+        predicate = re.search(r'<if test="user.point != null">(.*?)</if>', source, re.S).group(1).strip()
+        predicate = re.sub(r'^or ', '', predicate)
+        def query(tenant, balance):
+            sql = predicate.replace('#{pointTenantId,jdbcType=VARCHAR}', "'" + tenant + "'")
+            sql = sql.replace('#{user.point,jdbcType=INTEGER}', str(balance))
+            return self.command('SELECT u.jiacn FROM user_info u WHERE ' + sql + ' ORDER BY u.id;')[0]
+        self.assertEqual(query('1', 7), 'alice')
+        self.assertEqual(query('1', 0), 'bob')
+        self.assertEqual(query('1', 90), '')
+        self.assertEqual(query('0', 90), 'alice')
+        # Target user table need no legacy point column for the same predicate.
+        self.command('ALTER TABLE user_info DROP COLUMN point;')
+        self.assertEqual(query('1', 7), 'alice')
+
+    def test_user_balance_sort_uses_projection_after_legacy_column_removal(self):
+        self.command("INSERT INTO user_info VALUES (1,'alice',1,'0',1,1),(2,'bob',999,'0',1,1);")
+        self.command(self.mapper('ensureAccount', tenant='1')
+                     + self.mapper('change', tenant='1', delta=7))
+        source = (MODULE.parents[1] / 'user/jia-user-mapper/src/main/resources/cn/jia/user/mapper/InfoMapper.xml').read_text()
+        projection = re.search(r'<sql id="Point_Balance">(.*?)</sql>', source, re.S).group(1)
+        projection = projection.replace('#{pointTenantId,jdbcType=VARCHAR}', "'1'")
+        query = 'SELECT u.jiacn, ' + projection + ' AS point FROM user_info u ORDER BY point DESC;'
+        self.assertEqual(self.command(query)[0], 'alice\t7\nbob\t0')
+        self.command('ALTER TABLE user_info DROP COLUMN point;')
+        self.assertEqual(self.command(query)[0], 'alice\t7\nbob\t0')
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()

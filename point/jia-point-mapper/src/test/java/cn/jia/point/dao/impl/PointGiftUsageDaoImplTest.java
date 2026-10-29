@@ -16,14 +16,14 @@ class PointGiftUsageDaoImplTest extends BaseDbUnitTest {
 
     @Test
     void listByUser() {
-        List<PointGiftUsageEntity> usageEntities = pointGiftUsageDao.listByUser("oH2zD1PUPvspicVak69uB4wDaFLg");
+        List<PointGiftUsageEntity> usageEntities = pointGiftUsageDao.listByUser("0", "oH2zD1PUPvspicVak69uB4wDaFLg");
         assertEquals(1, usageEntities.size());
         assertEquals(7L, usageEntities.get(0).getGiftId());
     }
 
     @Test
     void listByGift() {
-        List<PointGiftUsageEntity> pointGiftUsageEntities = pointGiftUsageDao.listByGift(7L);
+        List<PointGiftUsageEntity> pointGiftUsageEntities = pointGiftUsageDao.listByGift("0", 7L);
         assertEquals(1, pointGiftUsageEntities.size());
         assertEquals(7L, pointGiftUsageEntities.get(0).getGiftId());
     }

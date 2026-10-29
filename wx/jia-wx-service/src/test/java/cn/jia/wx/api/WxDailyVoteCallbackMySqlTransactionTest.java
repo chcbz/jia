@@ -276,7 +276,7 @@ class WxDailyVoteCallbackMySqlTransactionTest {
         });
         when(pointService.add(eq(JIACN), anyInt(), anyInt())).thenAnswer(invocation -> {
             int point = invocation.getArgument(1);
-            jdbc.update("UPDATE user_info SET point=point+? WHERE jiacn=?", point, JIACN);
+            jdbc.update("UPDATE point_account SET balance=balance+? WHERE tenant_id='0' AND jiacn=?", point, JIACN);
             return new PointRecordEntity();
         });
     }
@@ -349,8 +349,9 @@ class WxDailyVoteCallbackMySqlTransactionTest {
                 ) ENGINE=InnoDB
                 """);
         jdbc.execute("""
-                CREATE TABLE user_info(
-                    id BIGINT PRIMARY KEY,jiacn VARCHAR(32) NOT NULL,point INT NOT NULL
+                CREATE TABLE point_account(
+                    tenant_id VARCHAR(50) NOT NULL,jiacn VARCHAR(32) NOT NULL,balance INT NOT NULL,
+                    PRIMARY KEY(tenant_id,jiacn)
                 ) ENGINE=InnoDB
                 """);
     }
@@ -367,7 +368,7 @@ class WxDailyVoteCallbackMySqlTransactionTest {
             jdbc.update("INSERT INTO mat_vote_tick(jiacn,vote_id,question_id,opt,tick) VALUES(?,1,338,'A',1)",
                     JIACN);
         }
-        jdbc.update("INSERT INTO user_info(id,jiacn,point) VALUES(1,?,?)", JIACN, answered * 2);
+        jdbc.update("INSERT INTO point_account(tenant_id,jiacn,balance) VALUES('0',?,?)", JIACN, answered * 2);
     }
 
     private long insertCompleted(String canonicalMessage, long questionId, String answer, String reply) {
@@ -408,7 +409,7 @@ class WxDailyVoteCallbackMySqlTransactionTest {
                 jdbc.queryForObject("SELECT num FROM mat_vote_item WHERE question_id=337", Integer.class),
                 jdbc.queryForObject("SELECT num FROM mat_vote_item WHERE question_id=338", Integer.class),
                 jdbc.queryForObject("SELECT COUNT(*) FROM mat_vote_tick WHERE jiacn=?", Integer.class, JIACN),
-                jdbc.queryForObject("SELECT point FROM user_info WHERE jiacn=?", Integer.class, JIACN));
+                jdbc.queryForObject("SELECT balance FROM point_account WHERE tenant_id='0' AND jiacn=?", Integer.class, JIACN));
     }
 
     private static String xml(String answer) {

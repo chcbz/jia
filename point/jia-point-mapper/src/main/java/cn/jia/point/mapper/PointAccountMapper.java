@@ -29,4 +29,15 @@ public interface PointAccountMapper {
             + "AND version < 9223372036854775807")
     int change(@Param("tenantId") String tenantId, @Param("jiacn") String jiacn,
                @Param("delta") int delta, @Param("now") long now);
+
+    @Select("<script>SELECT jiacn,balance FROM point_account WHERE tenant_id=#{tenantId} "
+            + "AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(#{tenantId}) AND jiacn IN "
+            + "<foreach collection='jiacns' item='jiacn' open='(' separator=',' close=')'>#{jiacn}</foreach>"
+            + "</script>")
+    @org.apache.ibatis.annotations.ConstructorArgs({
+            @org.apache.ibatis.annotations.Arg(column = "jiacn", javaType = String.class),
+            @org.apache.ibatis.annotations.Arg(column = "balance", javaType = int.class)
+    })
+    java.util.List<cn.jia.point.entity.PointAccountBalance> balances(
+            @Param("tenantId") String tenantId, @Param("jiacns") java.util.Collection<String> jiacns);
 }

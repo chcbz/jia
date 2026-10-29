@@ -16,7 +16,11 @@ class UserLegacyIdentityCompatibilityTest {
         var service = mock(UserService.class);
         var controller = new UserController();
         ReflectionTestUtils.setField(controller, "userService", service);
+        var accounts = mock(cn.jia.point.service.PointAccountService.class);
+        ReflectionTestUtils.setField(controller, "pointAccounts", accounts);
+        when(accounts.balance("owner")).thenReturn(17);
         var user = new UserEntity();
+        user.setPoint(999);
         user.setJiacn("owner"); user.setPhone("15500000000");
         user.setEmail("own@example.test"); user.setPassword("never-return");
         when(service.findByJiacn("owner")).thenReturn(user);
@@ -28,6 +32,7 @@ class UserLegacyIdentityCompatibilityTest {
         assertEquals("15500000000", data.getPhone());
         assertEquals("own@example.test", data.getEmail());
         assertEquals("***", data.getPassword());
+        assertEquals(17, data.getPoint());
         verify(service, never()).findOwnIdentityByExactJiacn(anyString());
     }
 }

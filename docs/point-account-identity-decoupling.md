@@ -13,29 +13,46 @@
 
 ## 当前阶段
 
-新增账户Service/DAO/Mapper、显式schema与一次性导入SQL、Java定向测试。**尚未切换既有调用方，未部署、未建生产表，未删除user_info.point或身份分区列。** 新服务无启动DDL，不做自动迁移。后续完整切换前不运行付费构建，避免重复Run。
+基础提交433d190e之后已合并2026-10-29查询的远端develop `648d644bc2fcc27c3ea7d67d49d6f541370c55eb`（合并提交732c70547d），在同一隔离工作区继续接入实际调用方。PointService、GiftService、UserService旧积分适配器、用户Controller及微信余额读取已改为point账户；用户point为非持久化投影，列表批量读、列表/搜索积分条件按固定业务tenant查point_account。
+
+**仍是未完成候选，不可直接部署。** Java回归/完整身份权限链尚未验证，OAuth/用户分区列去除尚未完成。未建生产表、未迁移余额、未删除任何生产列；新服务无启动DDL，不做自动迁移。完整候选再集中走Flow，避免为半成品重复计费。
 
 ## 受控迁移与恢复
 
 1. 固定源码、必要回归、制品与生产目标，保存原schema及数据备份和摘要。
 2. 停止所有旧积分写入口（API/微信回调/后台等）；导入器命名锁仅互斥导入器，不替代停写及发布锁。
-3. 显式安装并核对point-account.sql；在选定数据库加载point-account-import-legacy.sql，单独调用过程。
+3. 显式安装并核对point-account.sql及point-business-scope-indexes.sql（先核对实际索引，不盲重跑DDL）；在选定数据库加载point-account-import-legacy.sql，单独调用过程。
 4. 导入仅INSERT tenant0；任何已有tenant0账户即拒绝，不用ON DUPLICATE覆盖现值。核对每个账户余额及行数，保留来源/结果证据。
 5. 切换已完成的所有读写调用方，核对事务、余额和流水后才恢复写入；不在源仍有旧写入时做在线快照复制。
 6. 只有目标三列及point不再有运行代码/工具依赖，才进入下一阶段删列。当前SQL不执行任何DROP COLUMN。
 7. 不确定CALL是否已提交时查询目标及记录，不盲重放。目标有新写入后禁止重灌旧余额，回退必须按同一停写边界迁回最新余额，不能直接启动旧JAR读陈旧user_info.point。
 
-## 待接入清单
+## 已接入与未完成边界
 
-- UserService.changePoint/changePointAndGet与用户资料point只读投影，去除user_info积分SQL和通用写入映射。
-- PointService签到/推荐/概率/初始化/奖励：统一余额与point_record事务，签到/推荐查询同域。
-- GiftService扣减、库存、取消退款：精确tenant和行锁，退款幂等及流水，不能从UserEntity取余额或update用户退款。
-- 微信查询/展示与答题幂等回调，用户管理积分入口；保留第三方回调协议及现有错误合同。
-- 列表/搜索的point过滤与展示必须使用业务投影，不能在user_info删列后仍拼point条件。
-- OAuth客户端/全局身份去列仍按根handoff推进；灰度路由继续保持最小白名单，不能因账户表增加就开放未隔离的其他积分链路。
+- PointService签到/推荐/概率/初始化/奖励使用账户返回余额写流水；插入失败抛出异常回滚。签到/推荐先锁参与账户，再按同tenant当前读检查资格；多账户按稳定顺序加锁。
+- GiftService按固定tenant读取/修改礼品和订单，兑换锁库存，退款锁订单，余额/退款流水/状态同事务。数量须正、成本不得负、整数乘法不得溢出；现金订单不能从请求携带可退积分。保留现行支付状态和不自动回库存语义。
+- UserService旧积分适配器保留对外方法，使用精确唯一身份查询后调用point账户，不再写user_info余额。通用create/update/upsert忽略point写输入；余额投影不进入登录身份查询。
+- UserController的get/list/search及生产my、微信余额展示改读新账户；列表批量查询不按每用户增加SQL。保留搜索OR与列表AND原语义，point=0包含本环境尚无账户的用户，不从tenant0兜底。
+- 现有微信答题回调测试替身改用point_account；第三方协议、回放/幂等合同不变。该测试的积分协作者仍是替身，不冒充真实PointService回归。
+- **尚未完成**：OAuth/用户scope列解耦、权限/成员链全量核对；签到位置/推荐人仍写共享用户资料，灰度路由保持最小白名单。礼品调用者ACL和外部支付凭据还需原完整审计，不凭tenant谓词宣称全功能灰度就绪。
+- 运维/初始化SQL及历史备份中的旧user_info.point仍需按切换生命周期分类，不能机械全库替换。回退最新余额迁回方案/真实备份恢复实测、Flow测试构建及安装未完成。
+
+## 必要校验的具体依据
+
+| 风险与条件 | 失败范围 | 实现/回归入口 |
+|---|---|---|
+| 并发变更后以旧用户余额生成流水 | 本次积分事务回滚，不能返回成功 | PointServiceImpl / PointServiceImplTest、PointAccountTransactionTest |
+| 重复取消/跨tenant订单被退积分 | 非本环境订单视为不存在，已取消拒绝；写入失败回滚退款及流水 | GiftServiceImpl / GiftServiceImplTest、PointAccountTransactionTest |
+| 负数量/负成本或乘法溢出把扣分变加分 | 拒绝本次兑换/概率变更，不影响其他账户 | GiftServiceImpl、PointServiceImpl及对应测试 |
+| 缺失/歧义用户或请求覆盖业务tenant | 变更前拒绝；tenant只读配置 | 精确用户查询、PointAccountServiceImpl及定向测试 |
+| 删旧point列后ORM仍引用，或悄悄丢弃过滤 | 不回退旧列；有point过滤但无业务scope拒绝查询 | UserPointProjectionMapperTest、12项隔离SQL检查 |
 
 正式Java回归在Flow执行；本机SQL验证只能作为轻量隔离证据，不能冒充完整应用或生产验收。
 
 ## 本轮验证
 
-本机显式MySQL socket上创建并清理本任务随机命名的独立测试库，使用合成user_info；未读取生产用户数据。9项SQL测试通过，执行的是源码Mapper里的SQL及迁移资源，覆盖独立租户、大小写/尾空格精确匹配、并发增量、余额/流水事务回滚、非负与溢出、逐行迁移、重复/非法源和拒绝覆盖已迁余额。该结果不是Java/Spring/MyBatis运行回归。10项Java测试已编写，尚待完整候选在Flow执行；不启动应用和生产DDL。
+2026-10-29本机显式MySQL socket独立随机测试库、合成数据：**12/12 SQL测试通过，103.985秒**。原9项账户/导入检查之外，执行实际batch mapper SQL、用户XML的积分过滤及排序投影，覆盖tenant1不取tenant0余额、缺账户为0及user_info删除旧point后过滤仍工作。日志位于根handoff证据目录；不是Java/Spring/MyBatis完整运行回归。
+
+新增/更新Java测试包括point账户与业务单测、真实account Mapper+Spring事务回滚测试（订单/流水协作者使用同事务JDBC）、用户实际ORM/XML兼容测试、用户/微信兼容fixture。**均尚未执行，正式验证待Flow。** XML/Python语法与diff空白检查通过。
+
+生产只读聚合检查：jia的point_sign 1313行、point_referral 2行、point_gift 7行、point_gift_usage 9行，全部tenant0，无NULL/非0；本次严格tenant谓词不会仅因这些历史记录的scope值而隐藏它们。这不代表全部生产调用已验证。元数据只有主键，新增资格查询索引随受控迁移执行，尚未创建。

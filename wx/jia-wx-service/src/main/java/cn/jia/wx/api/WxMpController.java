@@ -22,6 +22,7 @@ import cn.jia.mat.service.MatVoteService;
 import cn.jia.point.entity.*;
 import cn.jia.point.service.GiftService;
 import cn.jia.point.service.PointService;
+import cn.jia.point.service.PointAccountService;
 import cn.jia.user.common.UserConstants;
 import cn.jia.user.entity.UserEntity;
 import cn.jia.user.service.UserService;
@@ -102,6 +103,8 @@ public class WxMpController {
     private MpUserService mpUserService;
     @Autowired(required = false)
     private PointService pointService;
+    @Autowired
+    private PointAccountService pointAccounts;
     @Autowired(required = false)
     private GiftService giftService;
     @Autowired(required = false)
@@ -226,7 +229,7 @@ public class WxMpController {
             outMessage.setToUserName(message.getFromUser());
 
             UserEntity user = userService.findByJiacn(mpUser.getJiacn());
-            if (user.getPoint() == 0) {
+            if (pointAccounts.balance(user.getJiacn()) == 0) {
                 //初始化积分
                 PointRecordEntity record = new PointRecordEntity();
                 record.setJiacn(user.getJiacn());
@@ -293,7 +296,7 @@ public class WxMpController {
                     outMessage.setContent(WxErrorConstants.USER_NOT_EXIST.getCode());
                     return toXml(outMessage, timing);
                 }
-                outMessage.setContent(EsHandler.getMessage(request, "point.mine", new String[]{String.valueOf(user.getPoint())}));
+                outMessage.setContent(EsHandler.getMessage(request, "point.mine", new String[]{String.valueOf(pointAccounts.balance(user.getJiacn()))}));
             }
             //签到
             if (WxConstants.EVENKEY_POINT_SIGN.equals(message.getEventKey())) {
@@ -480,7 +483,7 @@ public class WxMpController {
                 outMessage.setContent(WxErrorConstants.USER_NOT_EXIST.getCode());
                 return toXml(outMessage, timing);
             }
-            outMessage.setContent(EsHandler.getMessage(request, "point.mine", new String[]{String.valueOf(user.getPoint())}));
+            outMessage.setContent(EsHandler.getMessage(request, "point.mine", new String[]{String.valueOf(pointAccounts.balance(user.getJiacn()))}));
             return toXml(outMessage, timing);
         }
 

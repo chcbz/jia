@@ -96,11 +96,29 @@ public class UserInfoDaoImpl extends BaseDaoImpl<InfoMapper, UserEntity> impleme
 
     @Override
     public List<UserEntity> searchByExample(UserEntity user) {
-        return baseMapper.searchByExample(user);
+        return searchByExample(user, null);
+    }
+
+    @Override
+    public List<UserEntity> searchByExample(UserEntity user, String pointTenantId) {
+        requirePointScope(user, pointTenantId);
+        return baseMapper.searchByExample(user, pointTenantId);
     }
 
     @Override
     public List<UserEntity> selectForList(UserVO user) {
+        return selectForList(user, null);
+    }
+
+    private void requirePointScope(UserEntity user, String pointTenantId) {
+        if (user != null && user.getPoint() != null && (pointTenantId == null || pointTenantId.isBlank())) {
+            throw new IllegalArgumentException("Point filtering requires a fixed business tenant");
+        }
+    }
+
+    @Override
+    public List<UserEntity> selectForList(UserVO user, String pointTenantId) {
+        requirePointScope(user, pointTenantId);
         UserVO query = user == null ? new UserVO() : user;
         String tenantId = query.getTenantId();
         String clientId = query.getClientId();
@@ -109,9 +127,17 @@ public class UserInfoDaoImpl extends BaseDaoImpl<InfoMapper, UserEntity> impleme
         try {
             QueryWrapper<UserEntity> wrapper = new QueryWrapper<>(query);
             new UserVOWrapper().appendQueryWrapper(query, wrapper);
+            if (query.getPoint() != null) {
+                wrapper.apply("COALESCE((SELECT pa.balance FROM point_account pa "
+                        + "WHERE pa.tenant_id={0} AND OCTET_LENGTH(pa.tenant_id)=OCTET_LENGTH({0}) "
+                        + "AND pa.jiacn=u.jiacn "
+                        + "AND CAST(pa.jiacn AS BINARY)=CAST(u.jiacn AS BINARY)),0)={1}",
+                        pointTenantId, query.getPoint());
+            }
             appendExactScope(wrapper, "tenant_id", tenantId);
             appendExactScope(wrapper, "client_id", clientId);
-            return baseMapper.selectList(wrapper);
+            return pointTenantId == null ? baseMapper.selectList(wrapper)
+                    : baseMapper.selectForListWithPoint(wrapper, pointTenantId);
         } finally {
             query.setTenantId(tenantId);
             query.setClientId(clientId);
@@ -145,13 +171,5 @@ public class UserInfoDaoImpl extends BaseDaoImpl<InfoMapper, UserEntity> impleme
         return baseMapper.incrementAuthEpoch(userId, expectedEpoch);
     }
 
-    @Override
-    public int incrementPoint(String jiacn, int add, long updateTime) {
-        return baseMapper.incrementPoint(jiacn, add, updateTime);
-    }
 
-    @Override
-    public Integer selectPointByJiacn(String jiacn) {
-        return baseMapper.selectPointByJiacn(jiacn);
-    }
 }

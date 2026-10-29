@@ -11,6 +11,15 @@ public interface PointAccountService {
     /** Does not create an account. A new account has zero points. */
     int balance(String jiacn);
 
+    /** One scoped read for a user page; missing accounts have a zero balance. */
+    java.util.Map<String, Integer> balances(java.util.Collection<String> jiacns);
+
+    /**
+     * Lock participating accounts in stable identity order before checking business
+     * eligibility. Requires the caller's transaction; never changes a balance.
+     */
+    void lockAccounts(java.util.Collection<String> jiacns);
+
     /**
      * Requires an existing transaction owned by the business operation. The caller
      * must validate the user/authority and persist its point_record in that same

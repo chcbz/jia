@@ -41,6 +41,24 @@ public class PointAccountServiceImpl implements PointAccountService {
     }
 
     @Override
+    public java.util.Map<String, Integer> balances(java.util.Collection<String> jiacns) {
+        java.util.Objects.requireNonNull(jiacns, "point account identities");
+        java.util.Map<String, Integer> balances = new java.util.LinkedHashMap<>();
+        for (String jiacn : jiacns) {
+            requireIdentity(jiacn);
+            balances.put(jiacn, 0);
+        }
+        if (balances.isEmpty()) return balances;
+        for (var row : accounts.balances(tenantId, balances.keySet())) {
+            if (row.balance() < 0 || !balances.containsKey(row.jiacn())) {
+                throw new IllegalStateException("Invalid point account projection");
+            }
+            balances.put(row.jiacn(), row.balance());
+        }
+        return balances;
+    }
+
+    @Override
     @Transactional(propagation = Propagation.MANDATORY, rollbackFor = Exception.class)
     public int changeAndGet(String jiacn, int delta) {
         requireIdentity(jiacn);
@@ -56,6 +74,20 @@ public class PointAccountServiceImpl implements PointAccountService {
             throw new IllegalStateException("Point balance update did not affect exactly one account");
         }
         return (int) after;
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.MANDATORY, rollbackFor = Exception.class)
+    public void lockAccounts(java.util.Collection<String> jiacns) {
+        java.util.Objects.requireNonNull(jiacns, "point account identities");
+        // Validate every identity before acquiring any lock. All multi-user point
+        // operations must use this order, including account creation/upsert locks.
+        jiacns.forEach(PointAccountServiceImpl::requireIdentity);
+        for (String jiacn : new java.util.TreeSet<>(jiacns)) {
+            accounts.ensureAccount(tenantId, jiacn, System.currentTimeMillis());
+            Integer balance = accounts.lockBalance(tenantId, jiacn);
+            if (balance == null || balance < 0) throw new IllegalStateException("Invalid point account");
+        }
     }
 
     private static void requireIdentity(String jiacn) {

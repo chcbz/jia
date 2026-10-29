@@ -16,5 +16,5 @@ public interface PointReferralDao extends IBaseDao<PointReferralEntity> {
      * @param referral 推荐人
      * @return 是否被推荐过
      */
-    boolean checkHasReferral(String referral);
+    boolean checkHasReferral(String tenantId, String referral);
 }

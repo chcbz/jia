@@ -1,6 +1,7 @@
 package cn.jia.user.api;
 
 import cn.jia.core.entity.JsonRequest;
+import cn.jia.point.service.PointAccountService;
 
 import cn.jia.core.common.EsConstants;
 import cn.jia.core.context.EsContextHolder;
@@ -54,6 +55,8 @@ public class UserController {
     @Autowired
     private UserService userService;
     @Autowired
+    private PointAccountService pointAccounts;
+    @Autowired
     private OrgService orgService;
     @Autowired
     private RoleService roleService;
@@ -94,6 +97,7 @@ public class UserController {
         if (user == null) {
             throw new EsRuntimeException(UserErrorConstants.USER_NOT_EXIST);
         }
+        user.setPoint(pointAccounts.balance(user.getJiacn()));
         UserVO userVO = UserVOMapper.INSTANCE.toVO(user);
         userVO.setRoleIds(userService.findRoleIds(user.getId()));
         userVO.setOrgIds(userService.findOrgIds(user.getId()));
@@ -241,6 +245,7 @@ public class UserController {
         JsonRequestPage<UserVO> page = protocolRequest == null ? null : protocolRequest.data();
         PageInfo<UserEntity> userList = userService.findListPage(page.getSearch(), page.getPageNum(),
                 page.getPageSize(), page.getOrderBy());
+        projectBalances(userList.getList());
         List<Long> userIds = userList.getList().stream().map(UserEntity::getId).toList();
         Map<Long, UserRelationIds> relationsByUser = userService.findRelationIds(userIds);
         List<UserVO> userVOList = new ArrayList<>();
@@ -270,6 +275,7 @@ public class UserController {
         JsonRequestPage<UserEntity> page = protocolRequest == null ? null : protocolRequest.data();
         String orderBy = page.getOrderBy();
         PageInfo<UserEntity> userList = userService.search(page.getSearch(), page.getPageNum(), page.getPageSize(), orderBy);
+        projectBalances(userList.getList());
         //隐藏密码
         for (UserEntity u : userList.getList()) {
             u.setPassword("******");
@@ -357,6 +363,7 @@ public class UserController {
             if (user == null) {
                 throw new EsRuntimeException(UserErrorConstants.USER_NOT_EXIST);
             }
+            user.setPoint(pointAccounts.balance(user.getJiacn()));
             user.setPassword("***");
             return JsonResult.success(user);
         }
@@ -553,5 +560,11 @@ public class UserController {
         userService.update(user);
 
         return JsonResult.success(user);
+    }
+
+    private void projectBalances(List<UserEntity> users) {
+        Map<String, Integer> balances = pointAccounts.balances(users.stream()
+                .map(UserEntity::getJiacn).filter(java.util.Objects::nonNull).toList());
+        for (UserEntity user : users) user.setPoint(balances.getOrDefault(user.getJiacn(), 0));
     }
 }

@@ -74,3 +74,5 @@ CREATE TABLE point_sign (
   tenant_id varchar(50) DEFAULT '0' COMMENT '租户ID',
   PRIMARY KEY (id)
 ) COMMENT='签到信息';
+CREATE INDEX idx_point_sign_tenant_user_time ON point_sign(tenant_id, jiacn, update_time);
+CREATE INDEX idx_point_referral_tenant_referral ON point_referral(tenant_id, referral);

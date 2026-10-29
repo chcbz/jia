@@ -12,8 +12,9 @@ import jakarta.inject.Named;
 public class PointReferralDaoImpl extends BaseDaoImpl<PointReferralMapper, PointReferralEntity>
         implements PointReferralDao {
     @Override
-    public boolean checkHasReferral(String referral) {
+    public boolean checkHasReferral(String tenantId, String referral) {
         LambdaQueryWrapper<PointReferralEntity> queryWrapper = Wrappers.lambdaQuery(new PointReferralEntity());
-        return baseMapper.selectCount(queryWrapper.eq(PointReferralEntity::getReferral, referral)) > 0;
+        return !baseMapper.selectList(queryWrapper.eq(PointReferralEntity::getTenantId, tenantId)
+                .eq(PointReferralEntity::getReferral, referral).last("LIMIT 1 FOR UPDATE")).isEmpty();
     }
 }

@@ -36,7 +36,11 @@ public interface UserInfoDao extends IBaseDao<UserEntity> {
 
     List<UserEntity> searchByExample(UserEntity user);
 
+    List<UserEntity> searchByExample(UserEntity user, String pointTenantId);
+
     List<UserEntity> selectForList(UserVO user);
+
+    List<UserEntity> selectForList(UserVO user, String pointTenantId);
 
     List<UserRelationRow> selectRelationsByUserIds(Collection<Long> userIds);
 
@@ -46,7 +50,5 @@ public interface UserInfoDao extends IBaseDao<UserEntity> {
 
     int incrementAuthEpoch(long userId, long expectedEpoch);
 
-    int incrementPoint(String jiacn, int add, long updateTime);
 
-    Integer selectPointByJiacn(String jiacn);
 }

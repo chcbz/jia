@@ -13,7 +13,7 @@ class PointReferralDaoImplTest extends BaseDbUnitTest {
 
     @Test
     void checkHasReferral() {
-        boolean b = pointReferralDao.checkHasReferral("o-q51v7nN6nXQ-ciwOiRFRuef-_Q");
+        boolean b = pointReferralDao.checkHasReferral("0", "o-q51v7nN6nXQ-ciwOiRFRuef-_Q");
         assertTrue(b);
     }
 }

@@ -1,6 +1,7 @@
 dependencies {
     api project(':base:jia-base-api')
     api project(':user:jia-user-api')
+    implementation project(':point:jia-point-api')
     api project(':isp:jia-isp-api')
     api project(':sms:jia-sms-api')
     implementation project(':common:jia-common-service')

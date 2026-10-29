@@ -2,6 +2,7 @@ package cn.jia.user.service.impl;
 
 import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.exception.EsRuntimeException;
+import cn.jia.point.service.PointAccountService;
 import cn.jia.core.service.BaseServiceImpl;
 import cn.jia.core.util.ImgUtil;
 import cn.jia.core.util.PasswordUtil;
@@ -41,6 +42,8 @@ import java.util.function.Supplier;
 
 @Service
 public class UserServiceImpl extends BaseServiceImpl<UserInfoDao, UserEntity> implements UserService {
+    @Autowired
+    private PointAccountService pointAccounts;
     @Autowired
     private UserRoleRelDao userRoleRelDao;
     @Autowired
@@ -84,38 +87,18 @@ public class UserServiceImpl extends BaseServiceImpl<UserInfoDao, UserEntity> im
      * 增加或减少用户积分
      */
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public void changePoint(String jiacn, int add) {
-        UserEntity user = baseDao.selectByJiacn(jiacn);
-        if (user == null) {
-            throw new EsRuntimeException(UserErrorConstants.USER_NOT_EXIST);
-        }
-        UserEntity upUser = new UserEntity();
-        upUser.setId(user.getId());
-        upUser.setPoint(user.getPoint() + add);
-        if (upUser.getPoint() < 0) {
-            throw new EsRuntimeException(UserErrorConstants.POINT_NO_ENOUGH);
-        }
-        baseDao.updateById(upUser);
+        changePointAndGet(jiacn, add);
     }
 
     @Override
     @Transactional(rollbackFor = Exception.class)
     public int changePointAndGet(String jiacn, int add) {
-        if (jiacn == null || jiacn.isBlank()) {
+        if (jiacn == null || jiacn.isBlank() || findOwnIdentityByExactJiacn(jiacn) == null) {
             throw new EsRuntimeException(UserErrorConstants.USER_NOT_EXIST);
         }
-        int changed = baseDao.incrementPoint(jiacn, add, cn.jia.core.util.DateUtil.nowTime());
-        if (changed > 1) {
-            throw new IllegalStateException("ambiguous user point identity");
-        }
-        Integer point = baseDao.selectPointByJiacn(jiacn);
-        if (point == null) {
-            throw new EsRuntimeException(UserErrorConstants.USER_NOT_EXIST);
-        }
-        if (changed == 0) {
-            throw new EsRuntimeException(UserErrorConstants.POINT_NO_ENOUGH);
-        }
-        return point;
+        return pointAccounts.changeAndGet(jiacn, add);
     }
 
     @Override
@@ -204,19 +187,23 @@ public class UserServiceImpl extends BaseServiceImpl<UserInfoDao, UserEntity> im
         return baseDao.selectByPhone(phone);
     }
 
+    private List<UserEntity> searchUsers(UserEntity user) {
+        return baseDao.searchByExample(user, pointAccounts.tenantId());
+    }
+
     @Override
     public List<UserEntity> search(UserEntity user) {
-        return baseDao.searchByExample(user);
+        return searchUsers(user);
     }
 
     @Override
     public PageInfo<UserEntity> search(UserEntity user, int pageNum, int pageSize, String orderBy) {
-        return getPageInfo(pageNum, pageSize, orderBy, () -> baseDao.searchByExample(user));
+        return getPageInfo(pageNum, pageSize, orderBy, () -> searchUsers(user));
     }
 
     @Override
     public PageInfo<UserEntity> findListPage(UserVO user, int pageNum, int pageSize, String orderBy) {
-        return getPageInfo(pageNum, pageSize, orderBy, () -> baseDao.selectForList(user));
+        return getPageInfo(pageNum, pageSize, orderBy, () -> baseDao.selectForList(user, pointAccounts.tenantId()));
     }
 
     @Override
@@ -619,6 +606,7 @@ public class UserServiceImpl extends BaseServiceImpl<UserInfoDao, UserEntity> im
 
     private static void stripAccountSecurityMutation(UserEntity user) {
         if (user != null) {
+            user.setPoint(null);
             user.setAccountState(null);
             user.setAuthEpoch(null);
         }

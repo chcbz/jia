@@ -98,4 +98,51 @@ class PointAccountServiceImplTest {
         assertEquals(TransactionDefinition.PROPAGATION_MANDATORY, attribute.getPropagationBehavior());
         assertTrue(attribute.rollbackOn(new Exception("ledger insert failed")));
     }
+
+    @Test void participantLocksAreSortedAndDeduplicatedBeforeBusinessChecks() {
+        var dao = mock(PointAccountDao.class);
+        when(dao.lockBalance(anyString(), anyString())).thenReturn(0);
+        var service = new PointAccountServiceImpl(dao, "0", true, "1");
+        service.lockAccounts(java.util.List.of("bob", "alice", "bob"));
+        var order = inOrder(dao);
+        order.verify(dao).ensureAccount(eq("1"), eq("alice"), anyLong());
+        order.verify(dao).lockBalance("1", "alice");
+        order.verify(dao).ensureAccount(eq("1"), eq("bob"), anyLong());
+        order.verify(dao).lockBalance("1", "bob");
+        order.verifyNoMoreInteractions();
+    }
+
+    @Test void invalidParticipantIsRejectedBeforeAnyLocks() {
+        var dao = mock(PointAccountDao.class);
+        var service = new PointAccountServiceImpl(dao, "0", false, "");
+        assertThrows(IllegalArgumentException.class,
+                () -> service.lockAccounts(java.util.List.of("alice", " bad")));
+        verifyNoInteractions(dao);
+    }
+
+    @Test void eligibilityLocksRequireBusinessTransaction() throws Exception {
+        var method = PointAccountServiceImpl.class.getMethod("lockAccounts", java.util.Collection.class);
+        var attribute = new AnnotationTransactionAttributeSource()
+                .getTransactionAttribute(method, PointAccountServiceImpl.class);
+        assertNotNull(attribute);
+        assertEquals(TransactionDefinition.PROPAGATION_MANDATORY, attribute.getPropagationBehavior());
+    }
+
+    @Test void userPageUsesOneTenantScopedQueryAndDefaultsAbsentAccountsToZero() {
+        var dao = mock(PointAccountDao.class);
+        when(dao.balances(eq("1"), anyCollection())).thenReturn(java.util.List.of(
+                new cn.jia.point.entity.PointAccountBalance("alice", 7)));
+        var service = new PointAccountServiceImpl(dao, "0", true, "1");
+        assertEquals(java.util.Map.of("alice", 7, "bob", 0),
+                service.balances(java.util.List.of("alice", "bob", "alice")));
+        verify(dao).balances("1", java.util.Set.of("alice", "bob"));
+        verifyNoMoreInteractions(dao);
+    }
+
+    @Test void emptyPageDoesNotIssueAnInvalidInClauseOrCreateAccounts() {
+        var dao = mock(PointAccountDao.class);
+        var service = new PointAccountServiceImpl(dao, "0", false, "");
+        assertEquals(java.util.Map.of(), service.balances(java.util.List.of()));
+        verifyNoInteractions(dao);
+    }
 }

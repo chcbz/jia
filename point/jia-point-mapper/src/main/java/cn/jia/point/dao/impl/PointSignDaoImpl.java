@@ -11,9 +11,9 @@ import jakarta.inject.Named;
 @Named
 public class PointSignDaoImpl extends BaseDaoImpl<PointSignMapper, PointSignEntity> implements PointSignDao {
     @Override
-    public PointSignEntity selectLatest(String jiacn) {
+    public PointSignEntity selectLatest(String tenantId, String jiacn) {
         LambdaQueryWrapper<PointSignEntity> queryWrapper = Wrappers.lambdaQuery(new PointSignEntity());
-        return baseMapper.selectOne(queryWrapper.eq(PointSignEntity::getJiacn, jiacn)
-                .orderByDesc(PointSignEntity::getUpdateTime));
+        return baseMapper.selectOne(queryWrapper.eq(PointSignEntity::getTenantId, tenantId).eq(PointSignEntity::getJiacn, jiacn)
+                .orderByDesc(PointSignEntity::getUpdateTime).last("LIMIT 1 FOR UPDATE"));
     }
 }
