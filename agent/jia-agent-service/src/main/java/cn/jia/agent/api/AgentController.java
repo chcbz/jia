@@ -7,6 +7,7 @@ import cn.jia.agent.common.AgentErrorConstants;
 import cn.jia.agent.entity.AbilityCompareRequestDTO;
 import cn.jia.agent.entity.AbilityEvaluationRequestDTO;
 import cn.jia.agent.entity.AgentCapabilityDTO;
+import cn.jia.agent.entity.AgentAbilitiesUpdateDTO;
 import cn.jia.agent.entity.AgentPersonaBindRequestDTO;
 import cn.jia.agent.entity.AgentPersonaEntity;
 import cn.jia.agent.entity.AgentRegisterDTO;
@@ -316,6 +317,27 @@ public class AgentController {
                             .getAuthentication(), List.of(result));
         }
         return JsonResult.success(result);
+    }
+
+    @PutMapping("/{agentId}/abilities")
+    public Object updateAbilities(@PathVariable String agentId,
+            @RequestBody JsonRequest<AgentAbilitiesUpdateDTO> protocolRequest, Authentication authentication) {
+        try {
+            requireJwtScope(authentication);
+            return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL, "private, no-store")
+                    .body(JsonResult.success(agentService.updateAbilities(agentId,
+                            protocolRequest == null ? null : protocolRequest.data())));
+        } catch (AgentBizException e) {
+            HttpStatus status = "AGENT_ABILITIES_CONFLICT".equals(e.getCode()) ? HttpStatus.CONFLICT
+                    : AgentErrorConstants.AGENT_FORBIDDEN.equals(e.getCode()) ? HttpStatus.FORBIDDEN
+                    : HttpStatus.INTERNAL_SERVER_ERROR;
+            return ResponseEntity.status(status).header(HttpHeaders.CACHE_CONTROL, "private, no-store")
+                    .body(JsonResult.failure(e.getCode(), "AGENT_ABILITIES_CONFLICT".equals(e.getCode())
+                            ? "本领已变更，请刷新后核对" : "无法保存本领"));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().header(HttpHeaders.CACHE_CONTROL, "private, no-store")
+                    .body(JsonResult.failure("BAD_REQUEST", "本领格式不正确"));
+        }
     }
 
     @PutMapping("/{agentId}/status")

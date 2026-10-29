@@ -18,6 +18,7 @@ import cn.jia.agent.dao.AgentTaskMetaDao;
 import cn.jia.agent.dao.AgentTaskNoteDao;
 import cn.jia.agent.dao.DialogueTemplateDao;
 import cn.jia.agent.entity.AgentCapabilityDTO;
+import cn.jia.agent.entity.AgentAbilitiesUpdateDTO;
 import cn.jia.agent.entity.AgentIdentityRegistryEntity;
 import cn.jia.agent.entity.AgentPersonaBindingEntity;
 import cn.jia.agent.entity.AgentActionDispatchResultDTO;
@@ -356,8 +357,7 @@ public class AgentServiceImpl implements AgentService {
         AgentPersonaBindingEntity binding = agentIdentityService.requireActiveBinding(
                 identity, Objects.equals(request.getAgentId(), identity.getCanonicalAgentId())
                         ? null : request.getAgentId());
-        AgentPersonaEntity persona = requireScopedPersona(
-                tenantId, clientId, binding.getPersonaCode());
+        requireScopedPersona(tenantId, clientId, binding.getPersonaCode());
         identity = agentIdentityService.activateForFirstRegistration(identity);
         String canonicalAgentId = identity.getCanonicalAgentId();
 
@@ -365,14 +365,9 @@ public class AgentServiceImpl implements AgentService {
                 .map(existing -> requireExactRuntime(existing, tenantId, canonicalAgentId, clientId, jiacn, binding.getId()))
                 .orElseThrow(() -> new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN, "Unified runtime session is required"));
         entity.setAgentId(canonicalAgentId);
-        entity.setName(persona.getName());
-        entity.setAvatar(StringUtil.isBlank(request.getAvatar()) ? persona.getAvatar() : request.getAvatar());
-        entity.setPersonaCode(persona.getPersonaCode());
-        entity.setPersonaName(persona.getName());
         entity.setOwnerJiacn(jiacn);
         entity.setBindingId(binding.getId());
         entity.setClientId(clientId);
-        entity.setAbilities(resolveRuntimeAbilities(request.getAbilities(), entity.getAbilities(), persona.getAbilities()));
         entity.setEndpoint(request.getEndpoint());
         require(entity.getRuntimeInstallationId() != null && entity.getRuntimeHostId() != null
                 && entity.getRuntimeInstanceId() != null && entity.getRuntimeSessionGeneration() != null
@@ -758,9 +753,6 @@ public class AgentServiceImpl implements AgentService {
         entity.setCurrentTaskId(request.getCurrentTaskId());
         entity.setCurrentTaskTitle(request.getCurrentTaskTitle());
         entity.setErrorMessage(request.getErrorMessage());
-        if (request.getAbilities() != null) {
-            entity.setAbilities(JsonUtil.toJson(normalizeRuntimeAbilities(request.getAbilities())));
-        }
         entity.setLastSeenAt(System.currentTimeMillis());
         require(agentRuntimeDao.updateById(entity) == 1, "Agent runtime update failed");
         observeSkillLifecycle(entity);
@@ -768,6 +760,28 @@ public class AgentServiceImpl implements AgentService {
         publishAgentSnapshotAfterCommit("agent-presence", tenantId, clientId, jiacn,
                 entity.getAgentId(), requireBindingId(entity));
         return dto;
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public AgentRuntimeDTO updateAbilities(String agentId, AgentAbilitiesUpdateDTO request) {
+        require(request != null && request.getExpectedAbilities() != null && request.getAbilities() != null,
+                "expectedAbilities and abilities are required");
+        List<String> abilities = normalizeRuntimeAbilities(request.getAbilities());
+        String tenantId = resolveCurrentTenantId();
+        String clientId = resolveCurrentClientId();
+        String jiacn = resolveCurrentJiacn();
+        AgentRuntimeEntity entity = requireOwnedAgentForUpdate(tenantId, clientId, jiacn, agentId);
+        if (!Objects.equals(toRuntimeDTO(entity).getAbilities(), request.getExpectedAbilities())) {
+            throw new AgentBizException("AGENT_ABILITIES_CONFLICT", "Abilities changed; refresh before saving");
+        }
+        entity.setAbilities(JsonUtil.toJson(abilities));
+        if (agentRuntimeDao.updateById(entity) != 1) {
+            throw new AgentBizException(AgentErrorConstants.AGENT_ERROR, "Agent abilities update failed");
+        }
+        publishAgentSnapshotAfterCommit("agent-abilities", tenantId, clientId, jiacn,
+                entity.getAgentId(), requireBindingId(entity));
+        return toRuntimeDTO(entity);
     }
 
     @Override
@@ -1964,17 +1978,6 @@ public class AgentServiceImpl implements AgentService {
         return value != null && !value.isEmpty() && value.length() <= maxLength
                 && value.equals(value.strip())
                 && value.chars().noneMatch(Character::isISOControl);
-    }
-
-    private String resolveRuntimeAbilities(List<String> reportedAbilities, String existingAbilities,
-            String personaAbilities) {
-        if (reportedAbilities != null) {
-            return JsonUtil.toJson(normalizeRuntimeAbilities(reportedAbilities));
-        }
-        if (!StringUtil.isBlank(existingAbilities)) {
-            return existingAbilities;
-        }
-        return StringUtil.isBlank(personaAbilities) ? "[]" : personaAbilities;
     }
 
     private List<String> normalizeRuntimeAbilities(List<String> abilities) {

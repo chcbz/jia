@@ -28,9 +28,16 @@ class WaterMarginPersonaCatalogTest {
         assertNull(first.getClientId());
         assertTrue(first.getActive());
         assertFalse(first.getSystemAgent());
-        assertTrue(first.getAbilities().contains("scouting"));
+        assertEquals("[]", first.getAbilities());
         assertNull(WaterMarginPersonaCatalog.publicPersona("HUSANNIANG"));
         assertNull(WaterMarginPersonaCatalog.publicPersona("private-persona"));
+    }
+
+    @Test
+    void nonSystemBuiltinAbilitiesAreNotInferredFromRank() {
+        WaterMarginPersonaCatalog.publicPersonas().stream()
+                .filter(persona -> !Boolean.TRUE.equals(persona.getSystemAgent()))
+                .forEach(persona -> assertEquals("[]", persona.getAbilities(), persona.getPersonaCode()));
     }
 
     @Test
