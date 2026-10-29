@@ -42,7 +42,7 @@ public class SkillManagementNodeMySqlTest extends SkillManagementWireMySqlTest {
             assertTrue(executable.isAbsolute()&&Files.isExecutable(executable));assertTrue(script.isAbsolute()&&Files.isRegularFile(script));
             String entrySha=HexFormat.of().formatHex(AgentCommandCanonicalCodec.sha256(Files.readAllBytes(script)));
             assertEquals("0e41d4029785ba5cd014d48b2df2a7dfb7c1b7b2a8b845e964d2ddbc94d8d7c3",entrySha,"Pinned native Runtime peer input changed");
-            System.out.println("CYF_SM_NODE_PEER runtimeCommit=2771bcd0315435f9a4820da6502fd2e22388f035 entrySha256="+entrySha);
+            System.out.println("CYF_SM_NODE_PEER runtimeCommit=c3f973c2e5ca2990dd3e775b42f6bf02f7e0a060 entrySha256="+entrySha);
             diagnostics=nodeScratch.resolve("node-stderr.log");
             process=new ProcessBuilder(executable.toString(),script.toString()).redirectError(diagnostics.toFile()).start();
             input=new BufferedWriter(new OutputStreamWriter(process.getOutputStream(),StandardCharsets.UTF_8));

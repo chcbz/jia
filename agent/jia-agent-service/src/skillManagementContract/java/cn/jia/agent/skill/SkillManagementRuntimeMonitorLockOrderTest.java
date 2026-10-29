@@ -47,7 +47,7 @@ class SkillManagementRuntimeMonitorLockOrderTest extends SkillManagementMySqlFix
         var identityService = new AgentIdentityServiceImpl(registry, mock(AgentIdentityAliasDao.class), bindingDao);
         String agent = "agt_" + "a".repeat(32), installationId = "rti_" + "1".repeat(32);
         var binding = new AgentPersonaBindingEntity().setId(1L).setJiacn("owner")
-                .setPersonaCode("wuyong").setAgentId(agent).setStatus(1);
+                .setPersonaCode("wuyong").setAgentId(agent).setStatus(1).setBoundAt(1000L);
         binding.setTenantId("0"); binding.setClientId("client");
         var identity = new AgentIdentityRegistryEntity().setId(1L).setBindingId(1L)
                 .setCanonicalAgentId(agent).setCanonicalType("OPAQUE").setOwnerJiacn("owner")
