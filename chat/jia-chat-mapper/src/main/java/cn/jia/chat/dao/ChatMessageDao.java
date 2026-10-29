@@ -14,22 +14,34 @@ public interface ChatMessageDao extends IBaseDao<ChatMessageEntity> {
     List<ChatMessageEntity> findByConversationIdScoped(
             String tenantId, String clientId, String conversationId, int limit);
 
+    default List<ChatMessageEntity> findOwnedByConversationId(String ownerJiacn, String clientId, String conversationId) {
+        return findOwnedByConversationId("0", ownerJiacn, clientId, conversationId);
+    }
     List<ChatMessageEntity> findOwnedByConversationId(
-            String ownerJiacn, String clientId, String conversationId);
+            String tenantId, String ownerJiacn, String clientId, String conversationId);
 
+    default List<ChatMessageEntity> findOwnedByConversationIdWithLimit(String ownerJiacn, String clientId, String conversationId, int limit) {
+        return findOwnedByConversationIdWithLimit("0", ownerJiacn, clientId, conversationId, limit);
+    }
     List<ChatMessageEntity> findOwnedByConversationIdWithLimit(
-            String ownerJiacn, String clientId, String conversationId, int limit);
+            String tenantId, String ownerJiacn, String clientId, String conversationId, int limit);
 
     /** Deletes every byte-exact row for an already locked and authenticated conversation. */
+    default int deleteExactOwnedConversationMessages(String ownerJiacn, String clientId, String conversationId) {
+        return deleteExactOwnedConversationMessages("0", ownerJiacn, clientId, conversationId);
+    }
     int deleteExactOwnedConversationMessages(
-            String ownerJiacn, String clientId, String conversationId);
+            String tenantId, String ownerJiacn, String clientId, String conversationId);
 
     /** Explicitly unscoped maintenance-only history query. Never expose through request paths. */
     List<ChatMessageEntity> findByConversationIdForMaintenance(String conversationId);
 
     List<String> findPendingConversationIds(String syncStatus, int limit, long afterId);
 
-    int markMemorySnapshotSynced(String ownerJiacn, String clientId,
+    default int markMemorySnapshotSynced(String ownerJiacn, String clientId, String conversationId, List<Long> messageIds) {
+        return markMemorySnapshotSynced("0", ownerJiacn, clientId, conversationId, messageIds);
+    }
+    int markMemorySnapshotSynced(String tenantId, String ownerJiacn, String clientId,
             String conversationId, List<Long> messageIds);
 
     void updateSyncStatusByConversationId(String conversationId, String syncStatus);

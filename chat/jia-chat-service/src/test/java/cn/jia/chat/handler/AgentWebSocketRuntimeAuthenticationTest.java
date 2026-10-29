@@ -7,7 +7,10 @@ import cn.jia.agent.security.AgentRuntimeAuthenticationService;
 import cn.jia.agent.service.AgentService;
 import cn.jia.chat.dao.ChatMessageDao;
 import cn.jia.chat.service.ChatConversationEventBroker;
+import cn.jia.core.context.EsContext;
+import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.util.JsonUtil;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.beans.factory.ObjectProvider;
@@ -19,8 +22,42 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 class AgentWebSocketRuntimeAuthenticationTest {
-    static final String TENANT = "0", CLIENT = "client-a", OWNER = "owner-a";
+    static final String TENANT = "1", CLIENT = "cyf-local", OWNER = "owner-a";
     static final String AGENT = "agt_" + "a".repeat(32), TOKEN = "1".repeat(32);
+
+    @AfterEach void clearContext() {
+        EsContextHolder.clearContext();
+    }
+
+    @Test void canonicalTenantOneRegistrationIgnoresPayloadAndThreadLocalScopeSpoofing() throws Exception {
+        Fixture f = new Fixture(false);
+        EsContext attacker = new EsContext();
+        attacker.setTenantId("0"); attacker.setClientId("evil-client"); attacker.setJiacn("evil-owner");
+        EsContextHolder.setContext(attacker);
+        when(f.service.register(any(AgentRegisterDTO.class))).thenAnswer(invocation -> {
+            EsContext effective = EsContextHolder.getContext();
+            assertEquals(TENANT, effective.getTenantId());
+            assertEquals(CLIENT, effective.getClientId());
+            assertEquals(OWNER, effective.getJiacn());
+            return new AgentRegisterResultDTO(AGENT, TOKEN, AgentConstants.STATUS_ONLINE);
+        });
+        when(f.auth.bind(eq("socket-a"), any(AgentRuntimeAuthenticationService.Proof.class), any()))
+                .thenReturn(new AgentRuntimeAuthenticationService.Receipt(
+                        "native-runtime-v1", TENANT, CLIENT, OWNER, AGENT, "runtime-a",
+                        UnifiedRuntimeTestSupport.INSTALLATION, "host-1", 1, true));
+
+        f.register();
+
+        var receipt = f.frames.stream().map(text -> JsonUtil.getMapper().readTree(text))
+                .filter(node -> "agent.registered".equals(node.path("messageType").asText()))
+                .findFirst().orElseThrow();
+        assertEquals(TENANT, receipt.path("data").path("runtimeAuth").path("tenantId").textValue());
+        assertEquals(CLIENT, receipt.path("data").path("runtimeAuth").path("clientId").textValue());
+        assertEquals(OWNER, receipt.path("data").path("runtimeAuth").path("ownerJiacn").textValue());
+        assertNull(EsContextHolder.getContext().getTenantId());
+        assertNull(EsContextHolder.getContext().getClientId());
+        assertNull(EsContextHolder.getContext().getJiacn());
+    }
 
     @Test void realRegistrationWireCarriesOnlyServerBoundScopeAndCloseRevokes() throws Exception {
         Fixture f = new Fixture(false);

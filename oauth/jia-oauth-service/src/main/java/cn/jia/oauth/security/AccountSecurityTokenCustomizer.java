@@ -1,6 +1,7 @@
 package cn.jia.oauth.security;
 
 import cn.jia.user.entity.CustomUserDetails;
+import cn.jia.core.security.FixedTenantAdmissionPolicy;
 import cn.jia.core.security.TenantClaimPolicy;
 import cn.jia.user.security.AccountSecurityService;
 import cn.jia.user.security.AccountSecuritySnapshot;
@@ -23,21 +24,40 @@ public final class AccountSecurityTokenCustomizer implements OAuth2TokenCustomiz
     static final String MACHINE_TOKEN_KIND = "machine";
 
     private final AccountSecurityService accountSecurityService;
-    private final String tenantId;
+    private final ClientTenantLookup clientTenants;
+    private final FixedTenantAdmissionPolicy tenantAdmission;
 
     public AccountSecurityTokenCustomizer(AccountSecurityService accountSecurityService) {
-        this(accountSecurityService, TenantClaimPolicy.defaultSingleTenant());
+        this(accountSecurityService, ignored -> TenantClaimPolicy.defaultSingleTenant(),
+                new FixedTenantAdmissionPolicy(TenantClaimPolicy.defaultSingleTenant(), false, null, null));
     }
 
     public AccountSecurityTokenCustomizer(AccountSecurityService accountSecurityService, String tenantId) {
+        String exactTenant = TenantClaimPolicy.exact(tenantId);
         this.accountSecurityService = accountSecurityService;
-        this.tenantId = TenantClaimPolicy.exact(tenantId);
+        this.clientTenants = ignored -> exactTenant;
+        this.tenantAdmission = new FixedTenantAdmissionPolicy(exactTenant, false, null, null);
+    }
+
+    public AccountSecurityTokenCustomizer(AccountSecurityService accountSecurityService,
+            ClientTenantLookup clientTenants, FixedTenantAdmissionPolicy tenantAdmission) {
+        this.accountSecurityService = java.util.Objects.requireNonNull(accountSecurityService);
+        this.clientTenants = java.util.Objects.requireNonNull(clientTenants);
+        this.tenantAdmission = java.util.Objects.requireNonNull(tenantAdmission);
     }
 
     @Override
     public void customize(JwtEncodingContext context) {
+        String clientId = context.getRegisteredClient() == null
+                ? null : context.getRegisteredClient().getClientId();
+        String tenantId;
+        try {
+            tenantId = tenantAdmission.requireClientTenant(clientId, clientTenants.findTenantId(clientId));
+        } catch (RuntimeException invalidClientMapping) {
+            throw invalidGrant();
+        }
         context.getClaims()
-                .claim("client_id", context.getRegisteredClient().getClientId())
+                .claim("client_id", clientId)
                 .claim(TenantClaimPolicy.CANONICAL_CLAIM, tenantId)
                 .claim(TenantClaimPolicy.VERSION_CLAIM, TenantClaimPolicy.CURRENT_VERSION);
 
@@ -113,6 +133,11 @@ public final class AccountSecurityTokenCustomizer implements OAuth2TokenCustomiz
             return null;
         }
         return null;
+    }
+
+    @FunctionalInterface
+    public interface ClientTenantLookup {
+        String findTenantId(String clientId);
     }
 
     private static OAuth2AuthenticationException invalidGrant() {

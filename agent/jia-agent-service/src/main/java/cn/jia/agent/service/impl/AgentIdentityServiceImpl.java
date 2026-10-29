@@ -51,10 +51,11 @@ public class AgentIdentityServiceImpl implements AgentIdentityService {
             throw forbidden("Identity provisioning requires an active binding");
         }
 
+        String tenantId = binding.getTenantId();
         AgentIdentityRegistryEntity existing = registryDao.findExactByBindingInScope(
-                "0", binding.getClientId(), binding.getJiacn(), binding.getId());
+                tenantId, binding.getClientId(), binding.getJiacn(), binding.getId());
         if (existing != null) {
-            validateRegistry(existing, "0", binding.getClientId(), binding.getJiacn(),
+            validateRegistry(existing, tenantId, binding.getClientId(), binding.getJiacn(),
                     binding.getAgentId(), true);
             requireRegistrableLifecycle(existing);
             return existing;
@@ -67,7 +68,7 @@ public class AgentIdentityServiceImpl implements AgentIdentityService {
         identity.setLifecycleStatus(AgentConstants.IDENTITY_STATUS_PROVISIONED);
         identity.setClientId(binding.getClientId());
         identity.setOwnerJiacn(binding.getJiacn());
-        identity.setTenantId("0");
+        identity.setTenantId(tenantId);
         identity.setBindingId(binding.getId());
         identity.setProvisionedAt(now);
         identity.setAuditReason(auditReason);
@@ -524,19 +525,16 @@ public class AgentIdentityServiceImpl implements AgentIdentityService {
         if (binding == null) {
             throw forbidden("Agent binding is required");
         }
-        requireScope("0", binding.getClientId(), binding.getJiacn());
+        requireScope(binding.getTenantId(), binding.getClientId(), binding.getJiacn());
         requireAgentId(binding.getAgentId());
-        if (!"0".equals(binding.getTenantId())) {
-            throw forbidden("Agent binding tenant must be the single tenant");
-        }
     }
 
     private void requireScope(String tenantId, String clientId, String ownerJiacn) {
         requireExactText(tenantId, "tenantId", 50);
         requireExactText(clientId, "clientId", 50);
         requireExactText(ownerJiacn, "ownerJiacn", 50);
-        if (!"0".equals(tenantId) || "0".equals(ownerJiacn)) {
-            throw forbidden("Agent identity must use the single tenant and a real owner");
+        if ("0".equals(ownerJiacn)) {
+            throw forbidden("Agent identity must use a real owner");
         }
     }
 

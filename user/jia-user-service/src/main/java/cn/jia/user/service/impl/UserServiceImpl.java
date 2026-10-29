@@ -185,6 +185,16 @@ public class UserServiceImpl extends BaseServiceImpl<UserInfoDao, UserEntity> im
     }
 
     @Override
+    public UserEntity findOwnIdentityByExactJiacn(String jiacn) {
+        List<UserEntity> matches = baseDao.selectOwnIdentityByExactJiacn(jiacn);
+        if (matches == null || matches.isEmpty()) return null;
+        if (matches.size() != 1) {
+            throw new IllegalStateException("ambiguous authenticated user identity");
+        }
+        return matches.getFirst();
+    }
+
+    @Override
     public UserEntity findByOpenid(String openid) {
         return baseDao.selectByOpenid(openid);
     }

@@ -12,6 +12,8 @@ import java.util.Map;
 public interface UserService extends IBaseService<UserEntity> {
 
 	UserEntity findByJiacn(String jiacn);
+
+	UserEntity findOwnIdentityByExactJiacn(String jiacn);
 	
 	UserEntity findByUsername(String username);
 	

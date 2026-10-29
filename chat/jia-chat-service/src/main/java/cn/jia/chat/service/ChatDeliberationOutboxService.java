@@ -17,13 +17,22 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class ChatDeliberationOutboxService {
     private final ChatDeliberationDao dao;
+    @org.springframework.beans.factory.annotation.Value("${cyf.security.legacy-single-tenant-id:0}")
+    private String legacyTenantId = "0";
     private ChatDispatchAuthorityService dispatchAuthority;
     @org.springframework.beans.factory.annotation.Autowired
     public void setDispatchAuthority(ChatDispatchAuthorityService value) { dispatchAuthority=value; }
 
     @Transactional(readOnly = true)
     public List<ChatDispatchOutboxEntity> discover(long now, int limit) {
-        return dao.findDueOutbox(now, Math.max(1, Math.min(limit, 32)));
+        requireExact(legacyTenantId, 50);
+        return dao.findDueOutboxInTenant(legacyTenantId, now, Math.max(1, Math.min(limit, 32)));
+    }
+
+    @Transactional(readOnly = true)
+    public List<ChatDispatchOutboxEntity> discoverInScope(String tenantId, String clientId, long now, int limit) {
+        requireExact(tenantId, 50); requireExact(clientId, 50);
+        return dao.findDueOutboxInScope(tenantId, clientId, now, Math.max(1, Math.min(limit, 32)));
     }
 
     @Transactional(rollbackFor = Exception.class)

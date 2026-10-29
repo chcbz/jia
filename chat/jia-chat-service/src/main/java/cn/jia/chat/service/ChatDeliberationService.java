@@ -308,7 +308,7 @@ public class ChatDeliberationService {
                 tenantId, ownerJiacn, clientId, conversationId, expectedGeneration);
         requireConversationScope(conversation, scope);
         List<ChatMessageEntity> existingMessages = messageDao.findOwnedByConversationIdWithLimit(
-                ownerJiacn, clientId, conversationId, HISTORY_QUERY_LIMIT);
+                tenantId, ownerJiacn, clientId, conversationId, HISTORY_QUERY_LIMIT);
         if (existingMessages == null) throw unavailable();
         List<Map<String, Object>> inputRefs = authorizeInputRefs(
                 input.getInputRefs(), route, conversation, scope, existingMessages,
@@ -1647,7 +1647,7 @@ public class ChatDeliberationService {
             String conversationId, long generation) {
         ChatConversationEntity conversation;
         try {
-            conversation = conversationDao.findScopedById(owner, client, conversationId);
+            conversation = conversationDao.findScopedById(tenantId, owner, client, conversationId);
         } catch (RuntimeException e) {
             throw unavailable();
         }
@@ -1658,7 +1658,7 @@ public class ChatDeliberationService {
             String conversationId, long generation) {
         ChatConversationEntity conversation;
         try {
-            conversation = conversationDao.lockScopedById(owner, client, conversationId);
+            conversation = conversationDao.lockScopedById(tenantId, owner, client, conversationId);
         } catch (RuntimeException e) {
             throw unavailable();
         }
@@ -1708,7 +1708,7 @@ public class ChatDeliberationService {
     private boolean liveTurn(String tenantId, String owner, String client, ChatTurnEntity turn) {
         try {
             ChatConversationEntity conversation = conversationDao.findScopedById(
-                    owner, client, turn.getConversationId());
+                    tenantId, owner, client, turn.getConversationId());
             return conversation != null && conversation.getDeletedAt() == null
                     && Objects.equals(tenantId, conversation.getTenantId())
                     && Objects.equals(conversation.getLifecycleGeneration(), turn.getConversationGeneration());
@@ -1720,7 +1720,7 @@ public class ChatDeliberationService {
     private boolean liveRequest(String tenantId, String owner, String client, ChatRequestEntity request) {
         try {
             ChatConversationEntity conversation = conversationDao.findScopedById(
-                    owner, client, request.getConversationId());
+                    tenantId, owner, client, request.getConversationId());
             return conversation != null && conversation.getDeletedAt() == null
                     && Objects.equals(tenantId, conversation.getTenantId())
                     && Objects.equals(conversation.getLifecycleGeneration(), request.getConversationGeneration());

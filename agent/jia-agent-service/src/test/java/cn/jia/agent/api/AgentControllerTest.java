@@ -59,6 +59,20 @@ class AgentControllerTest {
     }
 
     @Test
+    void tenantOneJwtCatalogReturnsOkAndForwardsExactMinimalScope() {
+        JwtAuthenticationToken auth = jwtTenant("1", "owner-a", "cyf-local");
+
+        ResponseEntity<?> response = assertInstanceOf(
+                ResponseEntity.class, controller.personaCatalog(auth));
+
+        assertEquals(200, response.getStatusCode().value());
+        assertEquals("private, no-store",
+                response.getHeaders().getFirst(HttpHeaders.CACHE_CONTROL));
+        verify(agentService).listPersonaCatalog("1", "cyf-local", "owner-a");
+        verifyNoInteractions(provisioning);
+    }
+
+    @Test
     void teamRecommendationRequiresExactJwtScopeAndReturnsNoStorePreview() throws Exception {
         AgentTaskTeamRecommendationRequestDTO request = new AgentTaskTeamRecommendationRequestDTO();
         request.setMaxTeamSize(3);
@@ -154,6 +168,15 @@ class AgentControllerTest {
 
     private static JwtAuthenticationToken jwt(String jiacn, String clientId) {
         return jwtClaims(jiacn, clientId);
+    }
+
+    private static JwtAuthenticationToken jwtTenant(
+            String tenantId, String jiacn, String clientId) {
+        Jwt token = Jwt.withTokenValue("token").header("alg", "none")
+                .issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(60))
+                .claim("tenant_id", tenantId).claim("tenant_claim_version", "1")
+                .claim("jiacn", jiacn).claim("client_id", clientId).build();
+        return new JwtAuthenticationToken(token, List.of());
     }
 
     private static JwtAuthenticationToken jwtClaims(Object jiacn, Object clientId) {

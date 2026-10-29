@@ -12,4 +12,7 @@ public interface ClientService extends IBaseService<OauthClientEntity> {
 	 * @return 客户端实体
 	 */
 	OauthClientEntity findByAppcn(String appcn);
+
+	/** Exact, byte-preserving OAuth client lookup used for signed tenant issuance. */
+	OauthClientEntity findExactByClientId(String clientId);
 }

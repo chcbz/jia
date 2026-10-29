@@ -48,17 +48,18 @@ public class JuyitingAgentRelayService {
         }
 
         ServerResolvedSender trustedSender = requireTrustedSender(sender);
+        String tenantId = requireIdentityPart(EsContextHolder.getContext().getTenantId());
         String ownerJiacn = trustedSender.jiacn();
         String ownerClientId = trustedSender.clientId();
         JuyitingConversationScope scope;
         try {
             scope = scopeService.authorize(
-                    chatMessage, requestedScope, ownerJiacn, ownerClientId);
+                    chatMessage, requestedScope, tenantId, ownerClientId);
         } catch (RuntimeException denied) {
             return deniedScope(conversationId, requestedScope);
         }
         ChatConversationEntity conversation = chatConversationService.getOwned(
-                ownerJiacn, ownerClientId, conversationId);
+                tenantId, ownerJiacn, ownerClientId, conversationId);
         if (!conversationMatchesScope(conversation, scope)) {
             return new JuyitingAgentRelayResult(true, Mono.just(true), Flux.just(JsonUtil.toSafeJson(Map.of(
                     "error", "conversation scope mismatch",
@@ -67,13 +68,12 @@ public class JuyitingAgentRelayService {
             ))));
         }
         long generation = lifecycleGeneration(conversation);
-        String tenantId = requireIdentityPart(EsContextHolder.getContext().getTenantId());
         if (!tenantId.equals(requireIdentityPart(conversation.getTenantId()))) {
             return deniedScope(conversationId, scope);
         }
 
         Optional<String> forbiddenTarget = forbiddenOwnedRosterTarget(
-                scope, ownerJiacn, ownerClientId);
+                scope, tenantId, ownerClientId);
         if (forbiddenTarget.isPresent()) {
             return new JuyitingAgentRelayResult(true, Mono.just(true), Flux.just(JsonUtil.toSafeJson(Map.of(
                     "error", "target outside owned roster",
@@ -112,7 +112,7 @@ public class JuyitingAgentRelayService {
                     ChatConversationEventBroker.LiveSubscription subscription =
                             chatConversationEventBroker.subscribeBuffered(conversationId, generation,
                                     () -> chatConversationService.isLiveGeneration(
-                                            ownerJiacn, clientId, conversationId, generation));
+                                            tenantId, ownerJiacn, clientId, conversationId, generation));
                     if (subscription == null) throw new IllegalStateException("Conversation stream unavailable");
                     return subscription;
                 }, subscription -> readRequestTerminal(
@@ -211,7 +211,7 @@ public class JuyitingAgentRelayService {
     }
 
     private Optional<String> forbiddenOwnedRosterTarget(
-            JuyitingConversationScope scope, String ownerJiacn, String ownerClientId) {
+            JuyitingConversationScope scope, String tenantId, String ownerClientId) {
         // Transactional admission freezes the exact task grant for new requests and restores
         // the original receipt for replay. An owned-roster preflight would wrongly reject B
         // or re-authorize an old request against today's assignment.
@@ -223,7 +223,7 @@ public class JuyitingAgentRelayService {
             }
             try {
                 agentService.get(agentId);
-                agentService.requireHostingNewWork(ownerJiacn, ownerClientId, agentId);
+                agentService.requireHostingNewWork(tenantId, ownerClientId, agentId);
             } catch (RuntimeException error) {
                 return Optional.of(agentId);
             }

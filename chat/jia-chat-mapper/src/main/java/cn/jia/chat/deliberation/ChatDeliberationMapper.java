@@ -204,11 +204,34 @@ public interface ChatDeliberationMapper {
 
     @Select("""
             SELECT * FROM chat_dispatch_outbox
-            WHERE ((status IN ('READY','RETRY','AWAITING_ACK') AND available_at<=#{now})
+            WHERE tenant_id=#{tenantId}
+              AND CAST(tenant_id AS BINARY)=CAST(#{tenantId} AS BINARY)
+              AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(#{tenantId})
+              AND ((status IN ('READY','RETRY','AWAITING_ACK') AND available_at<=#{now})
                 OR (status='CLAIMED' AND lease_until<=#{now}))
             ORDER BY available_at,event_id LIMIT #{limit}
             """)
-    List<ChatDispatchOutboxEntity> findDueOutbox(@Param("now") long now, @Param("limit") int limit);
+    List<ChatDispatchOutboxEntity> findDueOutboxInTenant(@Param("tenantId") String tenantId,
+            @Param("now") long now, @Param("limit") int limit);
+
+    /** Historical callers belong to tenant zero, never an all-tenant worker. */
+    default List<ChatDispatchOutboxEntity> findDueOutbox(long now, int limit) {
+        return findDueOutboxInTenant("0", now, limit);
+    }
+
+    @Select("""
+            SELECT * FROM chat_dispatch_outbox
+            WHERE tenant_id=#{tenantId} AND client_id=#{clientId}
+              AND CAST(tenant_id AS BINARY)=CAST(#{tenantId} AS BINARY)
+              AND CAST(client_id AS BINARY)=CAST(#{clientId} AS BINARY)
+              AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(#{tenantId})
+              AND OCTET_LENGTH(client_id)=OCTET_LENGTH(#{clientId})
+              AND (((status IN ('READY','RETRY','AWAITING_ACK') AND available_at<=#{now})
+                OR (status='CLAIMED' AND lease_until<=#{now})))
+            ORDER BY available_at,event_id LIMIT #{limit}
+            """)
+    List<ChatDispatchOutboxEntity> findDueOutboxInScope(@Param("tenantId") String tenantId,
+            @Param("clientId") String clientId, @Param("now") long now, @Param("limit") int limit);
 
     @Select("""
             SELECT * FROM chat_conversation_event WHERE

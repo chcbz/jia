@@ -49,6 +49,14 @@ public class AgentPersonaDaoImpl extends BaseDaoImpl<AgentPersonaMapper, AgentPe
     }
 
     @Override
+    public AgentPersonaEntity findCatalogPersona(
+            String tenantId, String clientId, String personaCode) {
+        requireExactScope(tenantId, clientId);
+        requireExact(personaCode, "personaCode");
+        return baseMapper.selectCatalogPersona(tenantId, clientId, personaCode);
+    }
+
+    @Override
     public int insert(AgentPersonaEntity entity) {
         int changed = super.insert(entity);
         invalidateIfChanged(changed > 0);

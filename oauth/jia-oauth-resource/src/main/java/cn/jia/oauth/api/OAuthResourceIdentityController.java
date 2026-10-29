@@ -32,7 +32,7 @@ public class OAuthResourceIdentityController {
                     scopes(jwt));
             return cn.jia.core.config.ApiJsonResponses.success(ResponseEntity.ok(identity));
         } catch (InvalidIdentityClaimsException ignored) {
-            return cn.jia.core.config.ApiJsonResponses.success(ResponseEntity.status(HttpStatus.UNAUTHORIZED).build());
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
         }
     }
 

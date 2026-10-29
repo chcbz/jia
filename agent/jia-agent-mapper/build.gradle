@@ -3,6 +3,7 @@ dependencies {
     api project(':agent:jia-agent-api')
     api project(':common:jia-common-mapper')
     testImplementation project(':common:jia-common-test')
+    testImplementation "com.baomidou:mybatis-plus-jsqlparser-4.9:${libs.versions.mybatis.plus.get()}"
 }
 
 version = '1.1.2-SNAPSHOT'

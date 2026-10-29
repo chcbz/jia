@@ -3,6 +3,7 @@ package cn.jia.oauth.config;
 import cn.jia.core.context.EsContext;
 import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.entity.JsonResult;
+import cn.jia.core.security.FixedTenantAdmissionPolicy;
 import cn.jia.core.exception.EsErrorConstants;
 import cn.jia.core.util.JsonUtil;
 import cn.jia.oauth.entity.OauthClientEntity;
@@ -104,9 +105,7 @@ public class AuthorizationServerConfig {
 
             @Override
             public RegisteredClient findByClientId(String clientId) {
-                OauthClientEntity oauthClientEntity = new OauthClientEntity();
-                oauthClientEntity.setClientId(clientId);
-                OauthClientEntity clientEntity = clientService.findOne(oauthClientEntity);
+                OauthClientEntity clientEntity = clientService.findExactByClientId(clientId);
                 if (clientEntity == null) {
                     return null;
                 }
@@ -120,8 +119,17 @@ public class AuthorizationServerConfig {
 
     @Bean
     public OAuth2TokenCustomizer<JwtEncodingContext> jwtTokenCustomizer(
-            @Value("${cyf.security.legacy-single-tenant-id:0}") String canonicalTenantId) {
-        return new AccountSecurityTokenCustomizer(accountSecurityService, canonicalTenantId);
+            @Value("${cyf.security.legacy-single-tenant-id:0}") String legacyTenantId,
+            @Value("${cyf.security.fixed-tenant.enabled:false}") boolean fixedTenantEnabled,
+            @Value("${cyf.security.fixed-tenant.tenant-id:}") String fixedTenantId,
+            @Value("${cyf.security.fixed-tenant.client-id:}") String fixedClientId) {
+        FixedTenantAdmissionPolicy admission = new FixedTenantAdmissionPolicy(legacyTenantId,
+                fixedTenantEnabled, fixedTenantId, fixedClientId);
+        return new AccountSecurityTokenCustomizer(accountSecurityService, clientId -> {
+            OauthClientEntity client = clientService.findExactByClientId(clientId);
+            if (client == null) throw new IllegalArgumentException("Registered client is unavailable");
+            return client.getTenantId();
+        }, admission);
     }
 
     static class CustomAuthenticationEntryPoint extends LoginUrlAuthenticationEntryPoint {

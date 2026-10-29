@@ -41,9 +41,6 @@ public class AgentPersonaBindingDaoImpl extends BaseDaoImpl<AgentPersonaBindingM
         requireExact(tenantId, "tenantId", 50);
         requireExact(clientId, "clientId", 50);
         requireExact(personaCode, "personaCode", 50);
-        if (!"0".equals(tenantId)) {
-            throw new IllegalArgumentException("persona tenant must be the single tenant");
-        }
         return baseMapper.findActiveByTenantClientAndPersonaForUpdate(
                 tenantId, clientId, personaCode, AgentConstants.BINDING_STATUS_ACTIVE);
     }
@@ -126,7 +123,7 @@ public class AgentPersonaBindingDaoImpl extends BaseDaoImpl<AgentPersonaBindingM
         requireExact(tenantId, "tenantId", 50);
         requireExact(clientId, "clientId", 50);
         requireExact(ownerJiacn, "ownerJiacn", 50);
-        if ("0".equals(ownerJiacn) || !"0".equals(tenantId)) {
+        if ("0".equals(ownerJiacn)) {
             throw new IllegalArgumentException("persona owner scope is invalid");
         }
     }

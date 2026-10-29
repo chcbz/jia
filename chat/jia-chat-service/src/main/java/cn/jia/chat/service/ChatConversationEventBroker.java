@@ -104,16 +104,46 @@ public class ChatConversationEventBroker {
 
     public boolean runIfLive(String conversationId, long generation,
             BooleanSupplier persistentLiveCheck, Runnable publication) {
+        try {
+            return runIfLiveOrThrow(conversationId, generation, persistentLiveCheck, publication);
+        } catch (RuntimeException unavailable) {
+            return false;
+        }
+    }
+
+    /**
+     * Runs a durable publication under the same deletion fence, but preserves infrastructure and
+     * publication failures for the durable outbox to retry. For a valid invocation, a clean {@code false} means only that the exact persisted
+     * generation is no longer live.
+     */
+    public boolean runIfLiveOrThrow(String conversationId, long generation,
+            BooleanSupplier persistentLiveCheck, Runnable publication) {
         if (!validKey(conversationId, generation) || persistentLiveCheck == null || publication == null) return false;
         ReentrantLock lock = stripe(conversationId);
         lock.lock();
         try {
-            if (!persistentLiveCheck.getAsBoolean()) return false;
-            publication.run();
+            final boolean live;
+            try {
+                live = persistentLiveCheck.getAsBoolean();
+            } catch (RuntimeException unavailable) {
+                throw new PersistentLiveCheckUnavailable(unavailable);
+            }
+            if (!live) return false;
+            try {
+                publication.run();
+            } catch (RuntimeException unavailable) {
+                throw new LivePublicationUnavailable(unavailable);
+            }
             return true;
-        } catch (RuntimeException unavailable) {
-            return false;
         } finally { lock.unlock(); }
+    }
+
+    static final class PersistentLiveCheckUnavailable extends RuntimeException {
+        private PersistentLiveCheckUnavailable(RuntimeException cause) { super(cause); }
+    }
+
+    static final class LivePublicationUnavailable extends RuntimeException {
+        private LivePublicationUnavailable(RuntimeException cause) { super(cause); }
     }
 
     public DeletionFence beginDeletion(String conversationId) {

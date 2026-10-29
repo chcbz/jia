@@ -1,6 +1,7 @@
 package cn.jia.agent.mapper;
 
 import cn.jia.agent.entity.AgentPersonaBindingEntity;
+import com.baomidou.mybatisplus.annotation.InterceptorIgnore;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
@@ -124,7 +125,7 @@ public interface AgentPersonaBindingMapper extends BaseMapper<AgentPersonaBindin
                    r.abilities AS runtime_abilities,
                    r.status AS runtime_status
             FROM agent_persona_binding b
-            INNER JOIN agent_persona p
+            LEFT JOIN agent_persona p
               ON p.persona_code = b.persona_code
              AND CAST(p.persona_code AS BINARY) = CAST(b.persona_code AS BINARY)
              AND OCTET_LENGTH(p.persona_code) = OCTET_LENGTH(b.persona_code)
@@ -180,8 +181,10 @@ public interface AgentPersonaBindingMapper extends BaseMapper<AgentPersonaBindin
               AND OCTET_LENGTH(b.tenant_id) = OCTET_LENGTH(#{tenantId})
               AND CAST(b.client_id AS BINARY) = CAST(#{clientId} AS BINARY)
               AND OCTET_LENGTH(b.client_id) = OCTET_LENGTH(#{clientId})
+              AND (#{tenantId} <> '0' OR p.persona_code IS NOT NULL)
             ORDER BY b.persona_code ASC
             """)
+    @InterceptorIgnore(tenantLine = "true")
     List<AgentPersonaCatalogBindingRow> findCatalogOverlay(
             @Param("tenantId") String tenantId,
             @Param("clientId") String clientId,

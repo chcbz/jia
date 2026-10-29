@@ -70,6 +70,7 @@ public class AgentHostedBindingTransaction {
 
     @Transactional(rollbackFor = Exception.class)
     public Prepared prepareHosted(Scope scope, String personaCode) {
+        scope.requireLegacyHostedTenant();
         AgentPersonaEntity persona = requirePersona(personaCode);
         if (Boolean.TRUE.equals(persona.getSystemAgent())) fail(AgentErrorConstants.PERSONA_NOT_BINDABLE, "System persona cannot be bound");
         AgentPersonaBindingEntity binding = bindingDao.findActiveByTenantClientAndPersonaForUpdate(
@@ -146,6 +147,7 @@ public class AgentHostedBindingTransaction {
 
     @Transactional(rollbackFor = Exception.class)
     public Prepared resumeRepair(Scope scope, long bindingId) {
+        scope.requireLegacyHostedTenant();
         AgentPersonaBindingEntity binding = bindingDao.findByIdForUpdate(bindingId);
         if (binding == null) fail(AgentErrorConstants.AGENT_FORBIDDEN, "Hosted binding not found");
         requireExactBinding(scope, binding);
@@ -175,6 +177,7 @@ public class AgentHostedBindingTransaction {
 
     @Transactional(rollbackFor = Exception.class)
     public Prepared prepareUnbind(Scope scope, String personaCode) {
+        scope.requireLegacyHostedTenant();
         AgentPersonaEntity persona = requirePersona(personaCode);
         AgentPersonaBindingEntity binding = bindingDao.findExactActiveByScopeAndPersonaForUpdate(
                 scope.tenantId(), scope.clientId(), scope.ownerJiacn(), persona.getPersonaCode());
@@ -229,6 +232,7 @@ public class AgentHostedBindingTransaction {
     @Transactional(rollbackFor = Exception.class)
     public AgentHostedProfileEntity completeUnbind(Scope scope, long bindingId,
             long expectedGeneration, long fileGeneration) {
+        scope.requireLegacyHostedTenant();
         AgentHostedGeneration.requireTransition(AgentHostedProfileState.SUSPENDING,
                 expectedGeneration, AgentHostedProfileState.SUSPENDED, fileGeneration);
         AgentPersonaBindingEntity binding = bindingDao.findByIdForUpdate(bindingId);
@@ -313,6 +317,7 @@ public class AgentHostedBindingTransaction {
     @Transactional(rollbackFor = Exception.class)
     public AgentHostedProfileEntity transition(Scope scope, long bindingId, String expectedState,
             long expectedGeneration, String nextState, long nextGeneration, boolean desiredEnabled) {
+        scope.requireLegacyHostedTenant();
         AgentHostedGeneration.requireTransition(expectedState, expectedGeneration,
                 nextState, nextGeneration);
         AgentPersonaBindingEntity binding = bindingDao.findByIdForUpdate(bindingId);
@@ -336,6 +341,7 @@ public class AgentHostedBindingTransaction {
     public void markRepair(Scope scope, long bindingId, String expectedState,
             String expectedResumeState, long expectedGeneration, String resumeState,
             RuntimeException failure) {
+        scope.requireLegacyHostedTenant();
         AgentHostedGeneration.requireAdvanceable(resumeState, expectedGeneration);
         AgentPersonaBindingEntity binding = bindingDao.findByIdForUpdate(bindingId);
         if (binding == null) return;
@@ -503,8 +509,13 @@ public class AgentHostedBindingTransaction {
     public record Scope(String tenantId, String clientId, String ownerJiacn) {
         public Scope {
             if (!validExact(tenantId) || !validExact(clientId) || !validExact(ownerJiacn)
-                    || "0".equals(ownerJiacn) || !"0".equals(tenantId)) {
+                    || "0".equals(ownerJiacn)) {
                 throw new IllegalArgumentException("exact hosted scope is required");
+            }
+        }
+        public void requireLegacyHostedTenant() {
+            if (!"0".equals(tenantId)) {
+                throw new IllegalArgumentException("hosted profile scope requires tenant 0");
             }
         }
         private static boolean validExact(String value) {

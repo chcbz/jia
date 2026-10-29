@@ -20,35 +20,64 @@ public interface ChatConversationService {
 
     ChatConversationEntity get(String conversationId);
 
-    /** Exact owner-scoped live lookup for callbacks that cannot use thread-local context. */
-    ChatConversationEntity getOwned(String ownerJiacn, String clientId, String conversationId);
+    /** Tenant-zero compatibility for callbacks that predate explicit tenant propagation. */
+    default ChatConversationEntity getOwned(
+            String ownerJiacn, String clientId, String conversationId) {
+        return getOwned("0", ownerJiacn, clientId, conversationId);
+    }
 
-    /** Fail-closed live-generation probe for asynchronous publication fences. */
-    boolean isLiveGeneration(
-            String ownerJiacn, String clientId, String conversationId, long expectedGeneration);
+    /** Exact tenant/owner/client live lookup for callbacks without thread-local context. */
+    ChatConversationEntity getOwned(
+            String tenantId, String ownerJiacn, String clientId, String conversationId);
 
-    /** Exact owner-scoped full history read for authenticated maintenance initiated by a user. */
+    default boolean isLiveGeneration(
+            String ownerJiacn, String clientId, String conversationId, long expectedGeneration) {
+        return isLiveGeneration("0", ownerJiacn, clientId, conversationId, expectedGeneration);
+    }
+
+    /** Fail-closed exact-scope generation probe for asynchronous publication fences. */
+    boolean isLiveGeneration(String tenantId, String ownerJiacn, String clientId,
+            String conversationId, long expectedGeneration);
+
+    default List<ChatMessageEntity> findOwnedMessages(
+            String ownerJiacn, String clientId, String conversationId) {
+        return findOwnedMessages("0", ownerJiacn, clientId, conversationId);
+    }
+
     List<ChatMessageEntity> findOwnedMessages(
-            String ownerJiacn, String clientId, String conversationId);
+            String tenantId, String ownerJiacn, String clientId, String conversationId);
 
-    /** Exact owner-scoped bounded history read for advisors running after a thread switch. */
+    default List<ChatMessageEntity> findOwnedMessages(
+            String ownerJiacn, String clientId, String conversationId, int limit) {
+        return findOwnedMessages("0", ownerJiacn, clientId, conversationId, limit);
+    }
+
     List<ChatMessageEntity> findOwnedMessages(
-            String ownerJiacn, String clientId, String conversationId, int limit);
+            String tenantId, String ownerJiacn, String clientId, String conversationId, int limit);
 
-    /**
-     * Atomically locks a live owned conversation, derives all message identity from it, and inserts.
-     * Lock order is chat_conversation row then chat_message insert.
-     */
+    default ChatMessageEntity appendOwnedMessage(
+            String ownerJiacn, String clientId, ChatMessageEntity message) {
+        return appendOwnedMessage("0", ownerJiacn, clientId, message);
+    }
+
     ChatMessageEntity appendOwnedMessage(
-            String ownerJiacn, String clientId, ChatMessageEntity message);
+            String tenantId, String ownerJiacn, String clientId, ChatMessageEntity message);
 
-    /** Append only when the locked conversation still has the captured lifecycle generation. */
-    ChatMessageEntity appendOwnedMessage(
-            String ownerJiacn, String clientId, ChatMessageEntity message, long expectedGeneration);
+    default ChatMessageEntity appendOwnedMessage(
+            String ownerJiacn, String clientId, ChatMessageEntity message, long expectedGeneration) {
+        return appendOwnedMessage("0", ownerJiacn, clientId, message, expectedGeneration);
+    }
 
-    /** Exact owner-scoped title update for asynchronous summary callbacks. */
-    ChatConversationEntity updateOwnedTitle(
-            String ownerJiacn, String clientId, String conversationId, String title, Integer status);
+    ChatMessageEntity appendOwnedMessage(String tenantId, String ownerJiacn, String clientId,
+            ChatMessageEntity message, long expectedGeneration);
+
+    default ChatConversationEntity updateOwnedTitle(String ownerJiacn, String clientId,
+            String conversationId, String title, Integer status) {
+        return updateOwnedTitle("0", ownerJiacn, clientId, conversationId, title, status);
+    }
+
+    ChatConversationEntity updateOwnedTitle(String tenantId, String ownerJiacn, String clientId,
+            String conversationId, String title, Integer status);
 
     ChatConversationEntity update(ChatConversationEntity entity);
 }

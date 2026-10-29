@@ -2,6 +2,7 @@ package cn.jia.oauth.filter;
 
 import cn.jia.core.context.EsContext;
 import cn.jia.core.context.EsContextHolder;
+import cn.jia.core.security.FixedTenantAdmissionPolicy;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockHttpServletRequest;
@@ -84,9 +85,34 @@ class EsSecurityContextFilterTest {
         SecurityContextHolder.getContext().setAuthentication(auth(Map.of(
                 "token_kind", "user", "jiacn", "Jia-A", "client_id", "web",
                 "tenant_id", "tenant-a", "tenantId", "tenant-a", "tenant_claim_version", "1")));
-        new EsSecurityContextFilter().doFilter(new MockHttpServletRequest(), new MockHttpServletResponse(),
-                (request, response) -> assertEquals("tenant-a", EsContextHolder.getContext().getTenantId()));
+        new EsSecurityContextFilter("0", new FixedTenantAdmissionPolicy("0", true, "tenant-a", "web"))
+                .doFilter(new MockHttpServletRequest(), new MockHttpServletResponse(),
+                        (request, response) -> assertEquals("tenant-a", EsContextHolder.getContext().getTenantId()));
     }
+
+    @Test
+    void configuredTenantOneRequiresExactSignedClientAndIgnoresSpoofHeaders() throws Exception {
+        SecurityContextHolder.getContext().setAuthentication(auth(Map.of(
+                "token_kind", "user", "jiacn", "Jia-A", "client_id", "cyf-local",
+                "tenant_id", "1", "tenant_claim_version", "1")));
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.addHeader("X-Tenant-Id", "0");
+        new EsSecurityContextFilter("0", new FixedTenantAdmissionPolicy("0", true, "1", "cyf-local"))
+                .doFilter(request, new MockHttpServletResponse(), (a, b) ->
+                        assertEquals("1", EsContextHolder.getContext().getTenantId()));
+        var fixed = new EsSecurityContextFilter("0", new FixedTenantAdmissionPolicy("0", true, "1", "cyf-local"));
+        SecurityContextHolder.getContext().setAuthentication(auth(Map.of(
+                "token_kind", "user", "jiacn", "Jia-A", "client_id", "other",
+                "tenant_id", "1", "tenant_claim_version", "1")));
+        assertThrows(jakarta.servlet.ServletException.class, () ->
+                fixed.doFilter(request, new MockHttpServletResponse(), mock(jakarta.servlet.FilterChain.class)));
+        SecurityContextHolder.getContext().setAuthentication(auth(Map.of(
+                "token_kind", "user", "jiacn", "Jia-A", "client_id", "production-client",
+                "tenant_id", "0", "tenant_claim_version", "1")));
+        assertThrows(jakarta.servlet.ServletException.class, () ->
+                fixed.doFilter(request, new MockHttpServletResponse(), mock(jakarta.servlet.FilterChain.class)));
+    }
+
     private static JwtAuthenticationToken auth(Map<String, Object> claims) {
         Jwt.Builder builder = Jwt.withTokenValue("token").header("alg", "RS256")
                 .issuedAt(Instant.now().minusSeconds(5)).expiresAt(Instant.now().plusSeconds(300));

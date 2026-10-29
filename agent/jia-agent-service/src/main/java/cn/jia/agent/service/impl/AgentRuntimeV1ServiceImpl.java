@@ -19,8 +19,10 @@ import cn.jia.agent.service.AgentCommandAckService;
 import cn.jia.agent.service.AgentIdentityService;
 import cn.jia.agent.service.AgentRuntimeV1Service;
 import cn.jia.agent.service.impl.AgentServiceImpl.AgentBizException;
-import lombok.RequiredArgsConstructor;
+import cn.jia.core.security.FixedTenantAdmissionPolicy;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -35,7 +37,6 @@ import java.util.regex.Pattern;
 
 /** Runtime v1 boundary. It stores enrollment and runtime credentials as SHA-256 digests only. */
 @Service
-@RequiredArgsConstructor
 public class AgentRuntimeV1ServiceImpl implements AgentRuntimeV1Service {
     private static final Pattern SHA_256 = Pattern.compile("[0-9a-f]{64}");
     // The controlled installer generates this opaque id before hashing its manifest.
@@ -51,19 +52,55 @@ public class AgentRuntimeV1ServiceImpl implements AgentRuntimeV1Service {
     private final ObjectProvider<AgentCommandAckService> commandAcks;
     private final AgentRuntimeAuthenticationService sessions;
     private final ObjectProvider<cn.jia.agent.skill.SkillInstallAckService> skillAcks;
+    private final FixedTenantAdmissionPolicy tenantAdmission;
+
+    public AgentRuntimeV1ServiceImpl(AgentRuntimeV1InstallationDao installations,
+            AgentIdentityService identityService, AgentIdentityRegistryDao identityRegistry,
+            ObjectProvider<AgentCommandAckService> commandAcks, AgentRuntimeAuthenticationService sessions,
+            ObjectProvider<cn.jia.agent.skill.SkillInstallAckService> skillAcks) {
+        this(installations, identityService, identityRegistry, commandAcks, sessions, skillAcks, null);
+    }
+
+    public AgentRuntimeV1ServiceImpl(AgentRuntimeV1InstallationDao installations,
+            AgentIdentityService identityService, AgentIdentityRegistryDao identityRegistry,
+            ObjectProvider<AgentCommandAckService> commandAcks, AgentRuntimeAuthenticationService sessions,
+            ObjectProvider<cn.jia.agent.skill.SkillInstallAckService> skillAcks,
+            FixedTenantAdmissionPolicy tenantAdmission) {
+        this.installations = installations;
+        this.identityService = identityService;
+        this.identityRegistry = identityRegistry;
+        this.commandAcks = commandAcks;
+        this.sessions = sessions;
+        this.skillAcks = skillAcks;
+        this.tenantAdmission = tenantAdmission;
+    }
+
+    @Autowired
+    public AgentRuntimeV1ServiceImpl(AgentRuntimeV1InstallationDao installations,
+            AgentIdentityService identityService, AgentIdentityRegistryDao identityRegistry,
+            ObjectProvider<AgentCommandAckService> commandAcks, AgentRuntimeAuthenticationService sessions,
+            ObjectProvider<cn.jia.agent.skill.SkillInstallAckService> skillAcks,
+            @Value("${cyf.security.legacy-single-tenant-id:0}") String legacyTenantId,
+            @Value("${cyf.security.fixed-tenant.enabled:false}") boolean fixedTenantEnabled,
+            @Value("${cyf.security.fixed-tenant.tenant-id:}") String fixedTenantId,
+            @Value("${cyf.security.fixed-tenant.client-id:}") String fixedClientId) {
+        this(installations, identityService, identityRegistry, commandAcks, sessions, skillAcks,
+                new FixedTenantAdmissionPolicy(legacyTenantId, fixedTenantEnabled, fixedTenantId, fixedClientId));
+    }
 
     @Override
     @Transactional(rollbackFor = Exception.class)
     public AgentRuntimeV1InstallationView create(String tenantId, String clientId, String ownerJiacn,
             AgentRuntimeV1InstallationRequest request, long now) {
         requireScope(tenantId, clientId);
+        requireAdmitted(tenantId, clientId);
         if (request == null || !installationId(request.installationId()) || !exact(request.canonicalAgentId(), 100)
                 || !exact(request.manifestVersion(), 100) || !sha256Text(request.manifestSha256())
                 || !sha256Text(request.enrollmentSecretSha256()) || request.enrollmentExpiresAt() <= now) {
             throw forbidden("Runtime v1 installation request is invalid");
         }
-        String canonicalAgentId = identityService.requireCanonicalAgentIdInScope(
-                tenantId, clientId, ownerJiacn, request.canonicalAgentId());
+        String canonicalAgentId = identityService.requireRegistrationIdentityInScope(
+                tenantId, clientId, ownerJiacn, request.canonicalAgentId()).getCanonicalAgentId();
         AgentRuntimeV1InstallationEntity installation = new AgentRuntimeV1InstallationEntity()
                 .setInstallationId(request.installationId())
                 .setCanonicalAgentId(canonicalAgentId).setManifestVersion(request.manifestVersion())
@@ -82,6 +119,7 @@ public class AgentRuntimeV1ServiceImpl implements AgentRuntimeV1Service {
     public AgentRuntimeV1InstallationView ensureInstallation(String tenantId, String clientId, String ownerJiacn,
             AgentRuntimeV1InstallationRequest request, long now) {
         requireScope(tenantId, clientId);
+        requireAdmitted(tenantId, clientId);
         if (request == null || !installationId(request.installationId()) || !exact(request.canonicalAgentId(), 100)
                 || !"1".equals(request.manifestVersion()) || !sha256Text(request.manifestSha256())
                 || !sha256Text(request.enrollmentSecretSha256()) || request.enrollmentExpiresAt() <= 0) {
@@ -123,6 +161,7 @@ public class AgentRuntimeV1ServiceImpl implements AgentRuntimeV1Service {
     @Override
     public AgentRuntimeV1InstallationView status(String tenantId, String clientId, String ownerJiacn, String installationId) {
         requireScope(tenantId, clientId);
+        requireAdmitted(tenantId, clientId);
         AgentRuntimeV1InstallationEntity installation = installations.findInScope(tenantId, clientId, installationId);
         requireInstallationOwner(installation, tenantId, clientId, ownerJiacn);
         return view(installation, null);
@@ -132,6 +171,7 @@ public class AgentRuntimeV1ServiceImpl implements AgentRuntimeV1Service {
     @Transactional(rollbackFor = Exception.class)
     public void revoke(String tenantId, String clientId, String ownerJiacn, String installationId, long now) {
         requireScope(tenantId, clientId);
+        requireAdmitted(tenantId, clientId);
         AgentRuntimeV1InstallationEntity installation = installations.lock(installationId);
         if (installation == null || !sameScope(installation, tenantId, clientId)
                 || installation.getVersion() == null || installation.getId() == null) {
@@ -149,6 +189,7 @@ public class AgentRuntimeV1ServiceImpl implements AgentRuntimeV1Service {
                 || !exact(request.clientId(), 50) || !exact(request.canonicalAgentId(), 100)
                 || !exact(request.manifestVersion(), 100) || !sha256Text(request.manifestSha256())
                 || !exact(request.enrollmentSecret(), 4096)) throw forbidden("Runtime v1 enrollment rejected");
+        requireAdmitted(request.tenantId(), request.clientId());
         AgentRuntimeV1InstallationEntity installation = installations.lock(request.installationId());
         if (installation == null || !sameScope(installation, request.tenantId(), request.clientId())
                 || !request.canonicalAgentId().equals(installation.getCanonicalAgentId())
@@ -173,6 +214,7 @@ public class AgentRuntimeV1ServiceImpl implements AgentRuntimeV1Service {
     @Transactional(rollbackFor = Exception.class)
     public AgentRuntimeV1SessionResponse session(String authorization, AgentRuntimeV1SessionRequest request, long now) {
         AgentRuntimeV1InstallationEntity found = authenticate(authorization);
+        requireAdmitted(found.getTenantId(), found.getClientId());
         AgentRuntimeV1InstallationEntity installation = installations.lock(found.getInstallationId());
         if (installation == null || !"ACTIVE".equals(installation.getStatus())
                 || !MessageDigest.isEqual(digest(authorization), installation.getRuntimeAuthorizationHash())
@@ -189,6 +231,11 @@ public class AgentRuntimeV1ServiceImpl implements AgentRuntimeV1Service {
     @Transactional(rollbackFor = Exception.class)
     public AgentRuntimeV1InstallationView heartbeat(String authorization, AgentRuntimeV1RuntimeRequest request, long now) {
         AgentRuntimeV1InstallationEntity installation = authenticate(authorization);
+        requireAdmitted(installation.getTenantId(), installation.getClientId());
+        if (tenantAdmission != null) {
+            if (request == null) throw forbidden("Runtime v1 scope is not admitted");
+            requireAdmitted(request.tenantId(), request.clientId());
+        }
         AgentRuntimeV1InstallationView state = runtimeView(installation, request);
         if ("REBINDS_REQUIRED".equals(state.status())) return state;
         if (installation.getId() == null || installation.getVersion() == null
@@ -212,6 +259,7 @@ public class AgentRuntimeV1ServiceImpl implements AgentRuntimeV1Service {
         }
         var proof = sessions.verify(new AgentRuntimeAuthenticationFilter.SessionHeaders(request.canonicalAgentId(),
                 request.installationId(), request.hostId(), request.runtimeInstanceId(), request.sessionGeneration(), authorization));
+        requireAdmitted(proof.scope().tenantId(), proof.scope().clientId());
         if (!Objects.equals(proof.scope().tenantId(), request.tenantId())
                 || !Objects.equals(proof.scope().clientId(), request.clientId())) throw forbidden("Runtime ACK rejected");
         return sessions.withFence(proof, false, () -> {
@@ -268,7 +316,7 @@ public class AgentRuntimeV1ServiceImpl implements AgentRuntimeV1Service {
                 && Objects.equals(installation.getClientId(), clientId)
                 && Objects.equals(installation.getCanonicalAgentId(), canonicalAgentId);
     }
-    /** Management remains owner-bound even though every user now shares tenant 0.
+    /** Management remains owner-bound within the admitted tenant/client scope.
      * Lifecycle is deliberately not an execution gate: an owner can inspect/revoke
      * a pending, suspended or retired installation without activating that Agent.
      */
@@ -310,6 +358,11 @@ public class AgentRuntimeV1ServiceImpl implements AgentRuntimeV1Service {
     private static boolean exact(String input, int maximum) {
         return input != null && !input.isBlank() && input.length() <= maximum
                 && input.codePoints().noneMatch(Character::isISOControl);
+    }
+    private void requireAdmitted(String tenantId, String clientId) {
+        if (tenantAdmission == null) return; // Direct-construction compatibility for existing isolated tests only.
+        try { tenantAdmission.requireAdmitted(tenantId, clientId); }
+        catch (IllegalArgumentException denied) { throw forbidden("Runtime v1 scope is not admitted"); }
     }
     private static void requireScope(String tenantId, String clientId) {
         if (!exact(tenantId, 50) || !exact(clientId, 50)) throw forbidden("Runtime v1 scope is invalid");

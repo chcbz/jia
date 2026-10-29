@@ -652,6 +652,55 @@ class ChatControllerTest extends BaseMockTest {
     }
 
     @Test
+    void ordinaryModelStreamKeepsCapturedTenantAfterRequestContextIsCleared() {
+        EsContext context = new EsContext();
+        context.setTenantId("1"); context.setJiacn("owner-a"); context.setClientId("cyf-local");
+        EsContextHolder.setContext(context);
+
+        ChatClient.ChatClientRequestSpec requestSpec =
+                org.mockito.Mockito.mock(ChatClient.ChatClientRequestSpec.class);
+        ChatClient.StreamResponseSpec streamSpec =
+                org.mockito.Mockito.mock(ChatClient.StreamResponseSpec.class);
+        java.util.Map<String, Object> advisorParams = new java.util.concurrent.ConcurrentHashMap<>();
+        when(chatClient.prompt(any(Prompt.class))).thenReturn(requestSpec);
+        when(requestSpec.advisors(any(java.util.function.Consumer.class))).thenAnswer(invocation -> {
+            @SuppressWarnings("unchecked")
+            java.util.function.Consumer<ChatClient.AdvisorSpec> customizer = invocation.getArgument(0);
+            ChatClient.AdvisorSpec advisorSpec = org.mockito.Mockito.mock(ChatClient.AdvisorSpec.class);
+            when(advisorSpec.param(anyString(), any())).thenAnswer(parameter -> {
+                advisorParams.put(parameter.getArgument(0), parameter.getArgument(1));
+                return advisorSpec;
+            });
+            customizer.accept(advisorSpec);
+            return requestSpec;
+        });
+        when(requestSpec.messages()).thenReturn(requestSpec);
+        when(requestSpec.stream()).thenReturn(streamSpec);
+        when(streamSpec.content()).thenReturn(Flux.just("tenant-one-response"));
+
+        ChatConversationEntity normal = new ChatConversationEntity()
+                .setId(1001L).setJiacn("owner-a").setTitle("existing")
+                .setConversationType("normal").setLifecycleGeneration(1L);
+        normal.setTenantId("1"); normal.setClientId("cyf-local");
+        when(chatConversationService.get("1001")).thenReturn(normal);
+        when(redisService.subscribeToChannel("1001")).thenReturn(Flux.never());
+
+        ChatMessageDTO request = new ChatMessageDTO();
+        request.setConversationId("1001"); request.setContent("ordinary chat");
+        request.setConversationType("normal");
+        Flux<String> response = newController().handleChat(request);
+
+        EsContextHolder.clearContext();
+        List<String> frames = response.collectList().block(Duration.ofSeconds(2));
+
+        assertTrue(frames.stream().anyMatch(frame -> frame.contains("tenant-one-response")));
+        assertEquals("1", advisorParams.get("tenantId"));
+        assertEquals("owner-a", advisorParams.get("jiacn"));
+        assertEquals("cyf-local", advisorParams.get("clientId"));
+        assertFalse(advisorParams.containsValue("0"));
+    }
+
+    @Test
     void ordinaryNonHallModelStreamStillCompletesWithAllContent() {
         EsContext context = new EsContext();
         context.setTenantId("0"); context.setJiacn("tester"); context.setClientId("web-client");

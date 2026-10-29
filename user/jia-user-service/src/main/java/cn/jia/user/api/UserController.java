@@ -341,18 +341,68 @@ public class UserController {
      * @return 用户信息对象
      * @throws EsRuntimeException 如果用户不存在，则抛出异常
      */
+    @Value("${cyf.security.legacy-single-tenant-id:0}")
+    private String legacySingleTenantId = "0";
+
     @RequestMapping(value = "/my", method = RequestMethod.GET)
     public Object userInfo() {
-        String jiacn = EsContextHolder.getContext().getJiacn();
-        if (StringUtil.isEmpty(jiacn)) {
+        var context = EsContextHolder.getContext();
+        // The grey identity projection must not remove fields from the existing tenant-zero API.
+        if (legacySingleTenantId.equals(context.getTenantId())) {
+            String jiacn = context.getJiacn();
+            if (StringUtil.isEmpty(jiacn)) {
+                throw new EsRuntimeException(UserErrorConstants.USER_NOT_EXIST);
+            }
+            UserEntity user = userService.findByJiacn(jiacn);
+            if (user == null) {
+                throw new EsRuntimeException(UserErrorConstants.USER_NOT_EXIST);
+            }
+            user.setPassword("***");
+            return JsonResult.success(user);
+        }
+        String tenantId = exactIdentityPart(context.getTenantId());
+        String clientId = exactIdentityPart(context.getClientId());
+        String jiacn = exactIdentityPart(context.getJiacn());
+        if (tenantId == null || clientId == null || jiacn == null || "0".equals(jiacn)) {
             throw new EsRuntimeException(UserErrorConstants.USER_NOT_EXIST);
         }
-        UserEntity user = userService.findByJiacn(jiacn);
-        if (user == null) {
+        UserEntity user = userService.findOwnIdentityByExactJiacn(jiacn);
+        if (user == null || !jiacn.equals(user.getJiacn())) {
             throw new EsRuntimeException(UserErrorConstants.USER_NOT_EXIST);
         }
-        user.setPassword("***");
-        return JsonResult.success(user);
+        CurrentUserIdentityDTO identity = new CurrentUserIdentityDTO(
+                user.getId(), user.getUsername(), user.getNickname(), user.getAvatar(),
+                user.getOpenid(), user.getJiacn(), tenantId, clientId);
+        return JsonResult.success(identity);
+    }
+
+    private static String exactIdentityPart(String value) {
+        if (value == null || value.isEmpty() || value.codePointCount(0, value.length()) > 50
+                || isIdentityPadding(value.codePointAt(0))
+                || isIdentityPadding(value.codePointBefore(value.length()))
+                || value.codePoints().anyMatch(Character::isISOControl)
+                || hasUnpairedIdentitySurrogate(value)) {
+            return null;
+        }
+        return value;
+    }
+
+    private static boolean isIdentityPadding(int codePoint) {
+        return Character.isWhitespace(codePoint) || Character.isSpaceChar(codePoint);
+    }
+
+    private static boolean hasUnpairedIdentitySurrogate(String value) {
+        for (int index = 0; index < value.length(); index++) {
+            char unit = value.charAt(index);
+            if (Character.isHighSurrogate(unit)) {
+                if (++index >= value.length() || !Character.isLowSurrogate(value.charAt(index))) {
+                    return true;
+                }
+            } else if (Character.isLowSurrogate(unit)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

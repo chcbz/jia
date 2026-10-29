@@ -50,9 +50,8 @@ public class JuyitingConversationScopeService {
     }
 
     /**
-     * Resolves task membership in the authenticated owner's scope. The Agent task tenant is
-     * the canonical "0", whereas the Hall caller's jiacn identifies the owner, not the tenant.
-     * Caller participant metadata is intentionally ignored for authorization.
+     * Resolves task membership in the authenticated tenant/client scope. The caller's owner
+     * metadata is intentionally ignored for authorization.
      */
     public JuyitingConversationScope authorize(
             ChatMessageDTO chatMessage,
@@ -83,7 +82,7 @@ public class JuyitingConversationScopeService {
         List<String> members;
         try {
             members = normalizeAuthoritativeAgentIds(
-                    agentService.listTaskWritableMemberAgentIds("0", clientId, taskId));
+                    agentService.listTaskWritableMemberAgentIds(tenantId, clientId, taskId));
         } catch (RuntimeException queryFailure) {
             throw denied();
         }

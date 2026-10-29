@@ -3,6 +3,7 @@ package cn.jia.agent.dao;
 import cn.jia.agent.mapper.AgentPersonaBindingMapper;
 import cn.jia.agent.mapper.AgentPersonaMapper;
 import cn.jia.agent.mapper.AgentTaskMetaMapper;
+import com.baomidou.mybatisplus.annotation.InterceptorIgnore;
 import org.apache.ibatis.annotations.Select;
 import org.junit.jupiter.api.Test;
 
@@ -26,6 +27,7 @@ class AgentRuntimeBatchMapperContractTest {
     @Test
     void personaCatalogMetadataAndUserOverlayAreTwoBoundedByteExactQueries() throws Exception {
         String catalog = selectSql(AgentPersonaMapper.class, "selectCatalogProjection");
+        assertTenantLineIgnored(AgentPersonaMapper.class, "selectCatalogProjection");
         assertTrue(catalog.startsWith("select persona_code, rank_no, star_name, name, title, avatar,"));
         assertTrue(catalog.contains("where active = 1"));
         assertTrue(catalog.contains("tenant_id = '0'"));
@@ -35,13 +37,23 @@ class AgentRuntimeBatchMapperContractTest {
         assertFalse(catalog.contains("binding_id"));
         assertFalse(catalog.contains("owner_jiacn"));
 
+        String scopedPersona = selectSql(AgentPersonaMapper.class, "selectCatalogPersona");
+        assertTenantLineIgnored(AgentPersonaMapper.class, "selectCatalogPersona");
+        assertTrue(scopedPersona.contains("where active = 1"));
+        assertExactParameter(scopedPersona, "persona_code", "personacode");
+        assertExactParameter(scopedPersona, "tenant_id", "tenantid");
+        assertExactParameter(scopedPersona, "client_id", "clientid");
+        assertTrue(scopedPersona.contains("client_id is null"));
+        assertTrue(scopedPersona.contains("limit 1"));
+
         String overlay = selectSql(AgentPersonaBindingMapper.class, "findCatalogOverlay");
+        assertTenantLineIgnored(AgentPersonaBindingMapper.class, "findCatalogOverlay");
         assertTrue(overlay.contains("from agent_persona_binding b"));
-        assertTrue(overlay.contains("inner join agent_persona p"));
-        assertTrue(overlay.contains("cast(p.persona_code as binary) = cast(b.persona_code as binary)"));
+        assertTrue(overlay.contains("left join agent_persona p"));
         assertTrue(overlay.contains("p.active = 1"));
         assertExactParameter(overlay, "p.tenant_id", "tenantid");
         assertExactParameter(overlay, "p.client_id", "clientid");
+        assertTrue(overlay.contains("#{tenantid} <> '0' or p.persona_code is not null"));
         assertTrue(overlay.contains("left join agent_identity_registry i on i.binding_id = b.id"));
         assertTrue(overlay.contains("i.tenant_id = b.tenant_id"));
         assertTrue(overlay.contains("cast(i.tenant_id as binary) = cast(b.tenant_id as binary)"));
@@ -101,6 +113,15 @@ class AgentRuntimeBatchMapperContractTest {
         if (select == null) throw new IllegalStateException(methodName + " is not @Select");
         return String.join(" ", select.value()).replaceAll("\\s+", " ")
                 .trim().toLowerCase(Locale.ROOT);
+    }
+
+    private static void assertTenantLineIgnored(Class<?> mapperType, String methodName) throws Exception {
+        Method method = java.util.Arrays.stream(mapperType.getDeclaredMethods())
+                .filter(candidate -> candidate.getName().equals(methodName))
+                .findFirst()
+                .orElseThrow(() -> new NoSuchMethodException(methodName));
+        InterceptorIgnore ignored = method.getAnnotation(InterceptorIgnore.class);
+        assertTrue(ignored != null && "true".equals(ignored.tenantLine()), methodName);
     }
 
     private static void assertExactParameter(String sql, String column, String parameter) {

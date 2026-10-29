@@ -9,6 +9,7 @@ import cn.jia.agent.entity.AgentRuntimeV1InstallationEntity;
 import cn.jia.agent.entity.AgentRuntimeV1InstallationRequest;
 import cn.jia.agent.service.AgentCommandAckService;
 import cn.jia.agent.service.AgentIdentityService;
+import cn.jia.core.security.FixedTenantAdmissionPolicy;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
@@ -37,9 +38,38 @@ class AgentRuntimeV1ServiceImplTest {
         service = new AgentRuntimeV1ServiceImpl(installations, identities, registry, provider, sessions, mock(ObjectProvider.class));
     }
 
+    @Test void fixedTenantOneCreationAdmitsOnlyExactClientAndOwnerScopeBeforeMutation() {
+        @SuppressWarnings("unchecked") ObjectProvider<AgentCommandAckService> provider = mock(ObjectProvider.class);
+        AgentRuntimeV1ServiceImpl fixed = new AgentRuntimeV1ServiceImpl(
+                installations, identities, registry, provider, sessions, mock(ObjectProvider.class),
+                new FixedTenantAdmissionPolicy("0", true, "1", "cyf-local"));
+        when(identities.requireRegistrationIdentityInScope("1", "cyf-local", "owner-a", AGENT))
+                .thenReturn(registrationIdentity("1", "cyf-local", "owner-a", AGENT));
+        when(installations.insert(any())).thenAnswer(invocation -> {
+            ((AgentRuntimeV1InstallationEntity) invocation.getArgument(0)).setId(9L);
+            return 1;
+        });
+        String digest = "a".repeat(64);
+        AgentRuntimeV1InstallationRequest request = new AgentRuntimeV1InstallationRequest(
+                "rti_0123456789abcdef0123456789abcdef", AGENT, "1", digest, digest, NOW + 1);
+
+        assertEquals("PENDING", fixed.create(
+                "1", "cyf-local", "owner-a", request, NOW).status());
+        assertThrows(AgentServiceImpl.AgentBizException.class,
+                () -> fixed.create("0", "cyf-local", "owner-a", request, NOW));
+        assertThrows(AgentServiceImpl.AgentBizException.class,
+                () -> fixed.create("1", "foreign-client", "owner-a", request, NOW));
+
+        when(identities.requireRegistrationIdentityInScope("1", "cyf-local", "foreign-owner", AGENT))
+                .thenThrow(new AgentServiceImpl.AgentBizException("AGENT_FORBIDDEN", "foreign owner"));
+        assertThrows(AgentServiceImpl.AgentBizException.class,
+                () -> fixed.create("1", "cyf-local", "foreign-owner", request, NOW));
+        verify(installations, times(1)).insert(any());
+    }
+
     @Test void webCreationStoresOnlyProvidedDigestAndReturnsRedactedView() {
-        when(identities.requireCanonicalAgentIdInScope("tenant-a", "client-a", "owner-a", AGENT))
-                .thenReturn(AGENT);
+        when(identities.requireRegistrationIdentityInScope("tenant-a", "client-a", "owner-a", AGENT))
+                .thenReturn(registrationIdentity("tenant-a", "client-a", "owner-a", AGENT));
         when(installations.insert(any())).thenAnswer(invocation -> {
             AgentRuntimeV1InstallationEntity entity = invocation.getArgument(0);
             entity.setId(4L);
@@ -231,8 +261,8 @@ class AgentRuntimeV1ServiceImplTest {
 
     @Test void existingDirectLegacyCanonicalIdentityCanUseOnlyTheV1Protocol() {
         String legacyCanonical = "jyt-client-a-linchong";
-        when(identities.requireCanonicalAgentIdInScope("tenant-a", "client-a", "owner-a", legacyCanonical))
-                .thenReturn(legacyCanonical);
+        when(identities.requireRegistrationIdentityInScope("tenant-a", "client-a", "owner-a", legacyCanonical))
+                .thenReturn(registrationIdentity("tenant-a", "client-a", "owner-a", legacyCanonical));
         when(installations.insert(any())).thenAnswer(invocation -> {
             ((AgentRuntimeV1InstallationEntity) invocation.getArgument(0)).setId(5L);
             return 1;
@@ -243,7 +273,7 @@ class AgentRuntimeV1ServiceImplTest {
                         "b".repeat(64), NOW + 1), NOW);
 
         assertEquals(legacyCanonical, view.canonicalAgentId());
-        verify(identities).requireCanonicalAgentIdInScope(
+        verify(identities).requireRegistrationIdentityInScope(
                 "tenant-a", "client-a", "owner-a", legacyCanonical);
     }
 
@@ -367,6 +397,62 @@ class AgentRuntimeV1ServiceImplTest {
         assertThrows(AgentServiceImpl.AgentBizException.class,
                 () -> service.revoke("0", "client-a", "owner-a", "rti-1", NOW));
         verify(installations, never()).revoke(any(), anyLong());
+    }
+
+
+    @Test void tenantOneEnrollmentSessionHeartbeatStayBoundAndCrossTenantCallbacksFail() {
+        service = new AgentRuntimeV1ServiceImpl(installations, identities, registry,
+                provider(acks), sessions, mock(ObjectProvider.class),
+                new cn.jia.core.security.FixedTenantAdmissionPolicy("0", true, "1", "cyf-local"));
+        String authorization = "tenant-one-runtime-authorization";
+        AgentRuntimeV1InstallationEntity active = installation("ACTIVE")
+                .setRuntimeAuthorizationHash(sha(authorization));
+        active.setTenantId("1"); active.setClientId("cyf-local");
+        when(installations.findActiveByAuthorizationHash(any())).thenReturn(active);
+        when(installations.lock("rti-1")).thenReturn(active);
+        var sessionRequest = new cn.jia.agent.entity.AgentRuntimeV1SessionRequest(
+                "rti-1", "1", "cyf-local", AGENT, "1", HASH, "host-1", "boot-1");
+        var issued = new cn.jia.agent.entity.AgentRuntimeV1SessionResponse(
+                "rti-1", "1", "cyf-local", AGENT, "host-1", "boot-1", 1L,
+                "AgentRuntime", "rts1_" + "a".repeat(64), "/ws/agent/channel", "CHANNEL_PENDING");
+        when(sessions.issue(active, sessionRequest, NOW)).thenReturn(issued);
+        assertSame(issued, service.session(authorization, sessionRequest, NOW));
+        when(installations.heartbeat(active, NOW)).thenReturn(1);
+        var heartbeat = new cn.jia.agent.entity.AgentRuntimeV1RuntimeRequest(
+                "rti-1", "1", "cyf-local", AGENT, "1", HASH, "ok");
+        assertEquals("1", service.heartbeat(authorization, heartbeat, NOW).tenantId());
+        var foreign = new cn.jia.agent.entity.AgentRuntimeV1RuntimeRequest(
+                "rti-1", "0", "cyf-local", AGENT, "1", HASH, "ok");
+        assertThrows(AgentServiceImpl.AgentBizException.class,
+                () -> service.heartbeat(authorization, foreign, NOW));
+        verify(installations, times(1)).heartbeat(active, NOW);
+    }
+
+    @Test void fixedProcessRejectsTenantZeroNativeEnrollmentBeforeDatabaseLookup() {
+        service = new AgentRuntimeV1ServiceImpl(installations, identities, registry,
+                provider(acks), sessions, mock(ObjectProvider.class),
+                new cn.jia.core.security.FixedTenantAdmissionPolicy("0", true, "1", "cyf-local"));
+        var request = new AgentRuntimeV1EnrollmentRequest("rti-1", "0", "production-client",
+                AGENT, "1", HASH, "enrollment-secret");
+        assertThrows(AgentServiceImpl.AgentBizException.class, () -> service.enroll(request, NOW));
+        verifyNoInteractions(installations);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static ObjectProvider<AgentCommandAckService> provider(AgentCommandAckService service) {
+        ObjectProvider<AgentCommandAckService> result = mock(ObjectProvider.class);
+        when(result.getIfAvailable()).thenReturn(service);
+        return result;
+    }
+
+    private static cn.jia.agent.entity.AgentIdentityRegistryEntity registrationIdentity(
+            String tenantId, String clientId, String ownerJiacn, String canonicalAgentId) {
+        var identity = new cn.jia.agent.entity.AgentIdentityRegistryEntity();
+        identity.setTenantId(tenantId);
+        identity.setClientId(clientId);
+        identity.setOwnerJiacn(ownerJiacn);
+        identity.setCanonicalAgentId(canonicalAgentId);
+        return identity;
     }
 
     private static final String AGENT = "agt_0123456789abcdef0123456789abcdef";

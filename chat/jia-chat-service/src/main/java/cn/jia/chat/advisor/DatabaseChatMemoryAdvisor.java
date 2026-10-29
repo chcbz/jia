@@ -127,10 +127,11 @@ public class DatabaseChatMemoryAdvisor implements BaseChatMemoryAdvisor {
                 .map(AbstractMessage::getText).orElse("");
         
         // 查询最近 maxMessages 条历史消息用于增强上下文
+        String tenantId = requireIdentity(request.context(), "tenantId");
         String ownerJiacn = requireIdentity(request.context(), "jiacn");
         String ownerClientId = requireIdentity(request.context(), "clientId");
         List<ChatMessageEntity> historyMessages = chatConversationService.findOwnedMessages(
-                ownerJiacn, ownerClientId, conversationId, maxMessages);
+                tenantId, ownerJiacn, ownerClientId, conversationId, maxMessages);
 
         // 构建内存文本
         String memory = historyMessages.stream()
@@ -204,6 +205,7 @@ public class DatabaseChatMemoryAdvisor implements BaseChatMemoryAdvisor {
         context.putIfAbsent(ChatMemory.CONVERSATION_ID, defaultConversationId);
         String conversationId = getConversationId(context);
         try {
+            String tenantId = requireIdentity(context, "tenantId");
             String ownerJiacn = requireIdentity(context, "jiacn");
             String ownerClientId = requireIdentity(context, "clientId");
             ChatMessageEntity entity = new ChatMessageEntity();
@@ -232,7 +234,7 @@ public class DatabaseChatMemoryAdvisor implements BaseChatMemoryAdvisor {
             }
             entity.setMetadata(JsonUtil.toJson(metadata));
 
-            chatConversationService.appendOwnedMessage(ownerJiacn, ownerClientId, entity);
+            chatConversationService.appendOwnedMessage(tenantId, ownerJiacn, ownerClientId, entity);
             log.debug("Saved message to conversation: {}", conversationId);
         } catch (Exception e) {
             log.error("Failed to save message for conversation ID: {}", conversationId, e);

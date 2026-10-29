@@ -18,4 +18,8 @@ public class ClientServiceImpl extends BaseServiceImpl<OauthClientDao, OauthClie
 	public OauthClientEntity findByAppcn(String appcn) {
 		return baseDao.selectByAppcn(appcn);
 	}
+	@Override
+	public OauthClientEntity findExactByClientId(String clientId) {
+		return baseDao.selectExactByClientId(clientId);
+	}
 }

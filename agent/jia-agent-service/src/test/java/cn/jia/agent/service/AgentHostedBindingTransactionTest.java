@@ -37,6 +37,37 @@ class AgentHostedBindingTransactionTest {
     private static final String AGENT_ID = "agt_0123456789abcdef0123456789abcdef";
 
     @Test
+    void scopeAllowsTenantOneLocalIdentityButHostedEntryPointsRemainTenantZeroOnly() {
+        Scope tenantOne = new Scope("1", "cyf-local", "owner-a");
+        assertEquals("1", tenantOne.tenantId());
+        assertEquals("cyf-local", tenantOne.clientId());
+        assertThrows(IllegalArgumentException.class, tenantOne::requireLegacyHostedTenant);
+        assertDoesNotThrow(SCOPE::requireLegacyHostedTenant);
+        assertThrows(IllegalArgumentException.class, () -> new Scope("1", "cyf-local", "0"));
+        assertThrows(IllegalArgumentException.class, () -> new Scope("1", " cyf-local", "owner-a"));
+        assertThrows(IllegalArgumentException.class, () -> new Scope("1", "cyf-local", "owner-a\0"));
+
+        Fixture fixture = fixture();
+        assertThrows(IllegalArgumentException.class,
+                () -> fixture.transaction.prepareHosted(tenantOne, "wuyong"));
+        assertThrows(IllegalArgumentException.class,
+                () -> fixture.transaction.resumeRepair(tenantOne, 12L));
+        assertThrows(IllegalArgumentException.class,
+                () -> fixture.transaction.prepareUnbind(tenantOne, "wuyong"));
+        assertThrows(IllegalArgumentException.class,
+                () -> fixture.transaction.completeUnbind(tenantOne, 12L, 1L, 2L));
+        assertThrows(IllegalArgumentException.class, () -> fixture.transaction.transition(
+                tenantOne, 12L, AgentHostedProfileState.PREPARED, 0L,
+                AgentHostedProfileState.STAGED_DISABLED, 1L, true));
+        assertThrows(IllegalArgumentException.class, () -> fixture.transaction.markRepair(
+                tenantOne, 12L, AgentHostedProfileState.PREPARED, null, 0L,
+                AgentHostedProfileState.PREPARED, new IllegalStateException("failure")));
+        verifyNoInteractions(fixture.personaDao, fixture.bindingDao, fixture.hostedDao,
+                fixture.runtimeDao, fixture.identityService, fixture.apiKeys,
+                fixture.taskMetaDao, fixture.eventPublisher);
+    }
+
+    @Test
     void disabledFileCrashWindowLocksFreshRuntimeThenPublishesOfflineOnceAfterCommit() {
         Fixture fixture = fixture();
         AgentPersonaBindingEntity binding = binding();
@@ -531,15 +562,19 @@ class AgentHostedBindingTransactionTest {
                 new AgentHostedRuntimePublicationWorker(runtimeDao);
         AgentRuntimeEntity bound = runtime(AgentConstants.STATUS_ONLINE);
         AgentRuntimeEntity detached = runtime(AgentConstants.STATUS_OFFLINE);
+        AgentRuntimeEntity foreignTenant = runtime(AgentConstants.STATUS_ONLINE);
+        foreignTenant.setTenantId("1");
         detached.setBindingId(null);
         detached.setClientId(null);
         detached.setOwnerJiacn(null);
         detached.setPersonaCode(null);
         detached.setPersonaName(null);
 
-        when(runtimeDao.findByAgentId(AGENT_ID)).thenReturn(bound, detached, detached);
+        when(runtimeDao.findByAgentId(AGENT_ID))
+                .thenReturn(bound, foreignTenant, detached, detached);
 
         assertSame(bound, worker.revalidateForPublication(SCOPE, AGENT_ID, 12L));
+        assertNull(worker.revalidateForPublication(SCOPE, AGENT_ID, 12L));
         assertNull(worker.revalidateForPublication(SCOPE, AGENT_ID, 12L));
         assertSame(detached,
                 worker.revalidateDetachedForPublication(SCOPE, AGENT_ID, 31L));
@@ -654,6 +689,7 @@ class AgentHostedBindingTransactionTest {
         runtime.setId(31L);
         runtime.setAgentId(AGENT_ID);
         runtime.setBindingId(12L);
+        runtime.setTenantId("0");
         runtime.setClientId("client-a");
         runtime.setOwnerJiacn("owner-a");
         runtime.setName("Wu Yong");

@@ -19,4 +19,6 @@ public interface OauthClientDao extends IBaseDao<OauthClientEntity> {
      * @return 客户端实体
      */
     OauthClientEntity selectByAppcn(String appcn);
+
+    OauthClientEntity selectExactByClientId(String clientId);
 }
