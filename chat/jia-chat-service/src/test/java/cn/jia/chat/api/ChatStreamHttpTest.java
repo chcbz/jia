@@ -41,7 +41,7 @@ class ChatStreamHttpTest {
                 .setTitle("existing title").setConversationType("juyiting").setLifecycleGeneration(1L);
         conversation.setTenantId("0"); conversation.setClientId("client");
         when(conversations.get("42")).thenReturn(conversation);
-        when(conversations.isLiveGeneration("owner", "client", "42", 1L)).thenReturn(true);
+        when(conversations.isLiveGeneration("0", "owner", "client", "42", 1L)).thenReturn(true);
         redis = mock(RedisService.class);
         when(redis.subscribeToChannel("42")).thenReturn(Flux.never());
         var identity = mock(HumanSenderIdentityResolver.class);

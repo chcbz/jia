@@ -147,16 +147,16 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         verify(session, org.mockito.Mockito.atLeast(5)).sendMessage(messageCaptor.capture());
         String messages = messageCaptor.getAllValues().stream().map(TextMessage::getPayload).reduce("", String::concat);
 
-        assertTrue(messages.contains("\"type\":\"connected\""));
+        assertTrue(messages.contains("\"messageType\":\"connection.established\""));
         assertTrue(messages.contains("\"supportedProtocolVersions\":[1]"));
         assertTrue(messages.contains("\"command.dispatch\""));
         assertTrue(messages.contains("\"agent.register\""));
-        assertTrue(messages.contains("\"type\":\"pong\""));
-        assertTrue(messages.contains("\"type\":\"agent_registered\""));
-        assertTrue(messages.contains("\"type\":\"task.event\""));
+        assertTrue(messages.contains("\"messageType\":\"connection.pong\""));
+        assertTrue(messages.contains("\"messageType\":\"agent.registered\""));
+        assertTrue(messages.contains("\"messageType\":\"task.event\""));
         assertTrue(messages.contains("\"eventType\":\"task.assignment.accepted\""));
         assertFalse(messages.contains("\"type\":\"task_assigned\""));
-        assertTrue(messages.contains("\"type\":\"task_reported\""));
+        assertTrue(messages.contains("\"messageType\":\"task.report.receipt\""));
         assertTrue(messages.contains("\"status\":\"running\""));
         verify(agentService).reportTask(any(String.class), any(AgentTaskReportDTO.class));
         assertSafeServerDownlinks(messageCaptor.getAllValues());
@@ -535,7 +535,7 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         ArgumentCaptor<TextMessage> messageCaptor = ArgumentCaptor.forClass(TextMessage.class);
         verify(session, org.mockito.Mockito.atLeast(2)).sendMessage(messageCaptor.capture());
         String messages = messageCaptor.getAllValues().stream().map(TextMessage::getPayload).reduce("", String::concat);
-        assertTrue(messages.contains("\"type\":\"stopped\""));
+        assertTrue(messages.contains("\"messageType\":\"chat.stream.stopped\""));
         assertTrue(messages.contains("\"conversationId\":\"juyi-1\""));
     }
 
@@ -555,9 +555,9 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         ArgumentCaptor<TextMessage> messageCaptor = ArgumentCaptor.forClass(TextMessage.class);
         verify(session).sendMessage(messageCaptor.capture());
         String message = messageCaptor.getValue().getPayload();
-        assertTrue(message.contains("\"type\":\"error\""));
+        assertTrue(message.contains("\"messageType\":\"protocol.error\""));
         assertTrue(message.contains("\"code\":\"AGENT_OFFLINE\""));
-        assertTrue(message.contains("\"message\":\"Agent is offline\""));
+        assertTrue(message.contains("\"msg\":\"Agent is offline\""));
     }
 
     @Test
@@ -575,8 +575,8 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         verify(session, org.mockito.Mockito.atLeast(2)).sendMessage(messageCaptor.capture());
         String messages = messageCaptor.getAllValues().stream().map(TextMessage::getPayload).reduce("", String::concat);
 
-        assertTrue(messages.contains("\"type\":\"connected\""));
-        assertTrue(messages.contains("\"type\":\"pong\""));
+        assertTrue(messages.contains("\"messageType\":\"connection.established\""));
+        assertTrue(messages.contains("\"messageType\":\"connection.pong\""));
         assertTrue(messages.contains("\"conversationType\":\"juyiting\""));
         assertTrue(messages.contains("\"requestId\":\"ping-juyi\""));
     }
@@ -611,7 +611,7 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         String messages = messageCaptor.getAllValues().stream().map(TextMessage::getPayload).reduce("", String::concat);
 
         assertTrue(delivered);
-        assertTrue(messages.contains("\"type\":\"agent_direct_message\""));
+        assertFalse(messages.contains("\"type\":\"agent_direct_message\""));
         assertTrue(messages.contains("\"messageType\":\"chat.message\""));
         assertTrue(messages.contains("\"conversationId\":\"1001\""));
         assertTrue(messages.contains("@Wu Yong please reply"));
@@ -814,7 +814,7 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
 
         assertEquals("dispatched", result.getStatus());
         assertEquals("agent-001", result.getTargetAgentId());
-        assertTrue(messages.contains("\"type\":\"agent_direct_message\""));
+        assertFalse(messages.contains("\"type\":\"agent_direct_message\""));
         assertTrue(messages.contains("\"messageType\":\"command.dispatch\""));
         assertTrue(messages.contains("\"commandId\":\"intent-task-1\""));
         assertTrue(messages.contains("\"commandType\":\"TASK_INVITE\""));
@@ -1043,7 +1043,7 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         verify(session, org.mockito.Mockito.atLeast(2)).sendMessage(messageCaptor.capture());
         String messages = messageCaptor.getAllValues().stream().map(TextMessage::getPayload).reduce("", String::concat);
 
-        assertTrue(messages.contains("\"type\":\"agent_capability_index\""));
+        assertTrue(messages.contains("\"messageType\":\"agent.capability.index\""));
         assertTrue(messages.contains("\"agentId\":\"agent-wuyong\""));
         assertTrue(messages.contains("\"planning\""));
         assertTrue(messages.contains("\"planner\""));
@@ -1664,7 +1664,7 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         ArgumentCaptor<TextMessage> messageCaptor = ArgumentCaptor.forClass(TextMessage.class);
         verify(session, org.mockito.Mockito.atLeast(2)).sendMessage(messageCaptor.capture());
         String messages = messageCaptor.getAllValues().stream().map(TextMessage::getPayload).reduce("", String::concat);
-        assertTrue(messages.contains("\"type\":\"protocol_error\""));
+        assertTrue(messages.contains("\"messageType\":\"protocol.error\""));
         assertTrue(messages.contains("\"code\":\"REPORT_INVALID\""));
         assertTrue(messages.contains("\"cacheControl\":\"private, no-store\""));
     }
@@ -1748,7 +1748,7 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         ArgumentCaptor<TextMessage> messageCaptor = ArgumentCaptor.forClass(TextMessage.class);
         verify(session, org.mockito.Mockito.atLeast(4)).sendMessage(messageCaptor.capture());
         String messages = messageCaptor.getAllValues().stream().map(TextMessage::getPayload).reduce("", String::concat);
-        assertTrue(messages.contains("\"type\":\"task.event\""));
+        assertTrue(messages.contains("\"messageType\":\"task.event\""));
         assertFalse(messages.contains("\"type\":\"task_event\""));
         assertFalse(messages.contains("\"type\":\"task.assign\""));
         assertSafeServerDownlinks(messageCaptor.getAllValues());
@@ -1768,7 +1768,7 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         ArgumentCaptor<TextMessage> messageCaptor = ArgumentCaptor.forClass(TextMessage.class);
         verify(session, org.mockito.Mockito.atLeast(2)).sendMessage(messageCaptor.capture());
         String messages = messageCaptor.getAllValues().stream().map(TextMessage::getPayload).reduce("", String::concat);
-        assertTrue(messages.contains("\"type\":\"protocol_error\""));
+        assertTrue(messages.contains("\"messageType\":\"protocol.error\""));
         assertTrue(messages.contains("\"code\":\"RUNTIME_INSTANCE_ID_REQUIRED\""));
     }
 
@@ -1815,7 +1815,7 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         ArgumentCaptor<TextMessage> messageCaptor = ArgumentCaptor.forClass(TextMessage.class);
         verify(session, org.mockito.Mockito.atLeast(4)).sendMessage(messageCaptor.capture());
         String messages = messageCaptor.getAllValues().stream().map(TextMessage::getPayload).reduce("", String::concat);
-        assertTrue(messages.contains("\"code\":\"RUNTIME_INSTANCE_ID_MISMATCH\""));
+        assertTrue(messages.contains("\"code\":\"MESSAGE_INVALID\""));
     }
 
     @Test
@@ -1832,7 +1832,7 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         ArgumentCaptor<TextMessage> messageCaptor = ArgumentCaptor.forClass(TextMessage.class);
         verify(session, org.mockito.Mockito.atLeast(2)).sendMessage(messageCaptor.capture());
         String messages = messageCaptor.getAllValues().stream().map(TextMessage::getPayload).reduce("", String::concat);
-        assertTrue(messages.contains("\"code\":\"RUNTIME_INSTANCE_ID_MISMATCH\""));
+        assertTrue(messages.contains("\"code\":\"MESSAGE_INVALID\""));
         // The proof mismatch is rejected before resolving a business service, not by a
         // weakened register implementation or a permissive authentication fallback.
         verify(agentServiceProvider, never()).getIfAvailable();
@@ -1860,7 +1860,7 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         ArgumentCaptor<TextMessage> messageCaptor = ArgumentCaptor.forClass(TextMessage.class);
         verify(session, org.mockito.Mockito.atLeast(4)).sendMessage(messageCaptor.capture());
         String messages = messageCaptor.getAllValues().stream().map(TextMessage::getPayload).reduce("", String::concat);
-        assertTrue(messages.contains("\"code\":\"RUNTIME_INSTANCE_ID_MISMATCH\""));
+        assertTrue(messages.contains("\"code\":\"MESSAGE_INVALID\""));
     }
 
     @Test
@@ -1979,10 +1979,9 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
                 "messageId and requestId must be equal in canonical command.dispatch");
         assertEquals(AgentProtocolConstants.TYPE_COMMAND_DISPATCH, commandEnvelope.get("messageType"));
 
-        AgentProtocolMessageNormalizer.NormalizedMessage normalized =
-                new AgentProtocolMessageNormalizer().normalizeInbound(commandEnvelope);
-        assertEquals(AgentProtocolConstants.TYPE_COMMAND_DISPATCH, normalized.canonicalType());
-        assertTrue(normalized.executionTrigger());
+        var decoded = cn.jia.agent.common.AgentMessageWire.decode(commandEnvelope);
+        assertEquals(AgentProtocolConstants.TYPE_COMMAND_DISPATCH, decoded.messageType());
+        assertEquals("TASK_INVITE", decoded.data().get("commandType"));
 
         assertSafeServerDownlinks(messageCaptor.getAllValues());
     }
@@ -2202,7 +2201,7 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         for (TextMessage textMessage : messages) {
             Map<String, Object> event = mapper.readValue(textMessage.getPayload(), mapType);
             if (messageType.equals(event.get("messageType"))) {
-                return event;
+                return cn.jia.agent.common.AgentMessageWire.business(cn.jia.agent.common.AgentMessageWire.decode(event));
             }
         }
         throw new AssertionError("Missing outbound Envelope for messageType=" + messageType);

@@ -123,7 +123,7 @@ class ChatControllerTest extends BaseMockTest {
     @Test
     void savesUserMessageBeforeRelayingToJuyitingAgent() {
         EsContext context = new EsContext();
-        context.setJiacn("tester");
+        context.setTenantId("0"); context.setJiacn("tester");
         context.setClientId("web-client");
         EsContextHolder.setContext(context);
 
@@ -177,7 +177,7 @@ class ChatControllerTest extends BaseMockTest {
     @Test
     void clientCancellationStillCancelsSlowChatBackendWithoutSyntheticTimeout() throws Exception {
         EsContext context = new EsContext();
-        context.setJiacn("tester");
+        context.setTenantId("0"); context.setJiacn("tester");
         context.setClientId("web-client");
         EsContextHolder.setContext(context);
 
@@ -228,7 +228,7 @@ class ChatControllerTest extends BaseMockTest {
     @Test
     void genericChatCannotCreateReservedTaskThreadScope() {
         EsContext context = new EsContext();
-        context.setJiacn("tester");
+        context.setTenantId("0"); context.setJiacn("tester");
         context.setClientId("web-client");
         EsContextHolder.setContext(context);
 
@@ -349,7 +349,7 @@ class ChatControllerTest extends BaseMockTest {
     @Test
     void createsScopedJuyitingConversationFromRequestFields() throws Exception {
         EsContext context = new EsContext();
-        context.setJiacn("tester");
+        context.setTenantId("0"); context.setJiacn("tester");
         context.setClientId("web-client");
         EsContextHolder.setContext(context);
 
@@ -431,7 +431,7 @@ class ChatControllerTest extends BaseMockTest {
     @Test
     void bountyConversationRejectsTargetOutsideParticipantScope() throws Exception {
         EsContext context = new EsContext();
-        context.setJiacn("tester");
+        context.setTenantId("0"); context.setJiacn("tester");
         context.setClientId("web-client");
         EsContextHolder.setContext(context);
 
@@ -460,7 +460,7 @@ class ChatControllerTest extends BaseMockTest {
     @Test
     void createsTwoTargetBountyAndRelaysBothThroughControllerChain() {
         EsContext context = new EsContext();
-        context.setJiacn("tester");
+        context.setTenantId("0"); context.setJiacn("tester");
         context.setClientId("web-client");
         EsContextHolder.setContext(context);
         List<String> members = List.of("agent-wuyong", "agent-linchong");
@@ -470,7 +470,7 @@ class ChatControllerTest extends BaseMockTest {
         when(chatConversationService.create(any(ChatConversationEntity.class)))
                 .thenAnswer(invocation -> ((ChatConversationEntity) invocation.getArgument(0))
                         .setId(1001L));
-        when(chatConversationService.getOwned("tester", "web-client", "1001"))
+        when(chatConversationService.getOwned("0", "tester", "web-client", "1001"))
                 .thenAnswer(invocation -> {
                     ChatConversationEntity value = new ChatConversationEntity()
                             .setId(1001L).setJiacn("tester").setConversationType("juyiting")
@@ -511,7 +511,7 @@ class ChatControllerTest extends BaseMockTest {
     @Test
     void deletingConversationCompletesExistingSseSubscriberWithoutEvent() throws Exception {
         EsContext context = new EsContext();
-        context.setJiacn("tester");
+        context.setTenantId("0"); context.setJiacn("tester");
         context.setClientId("web-client");
         EsContextHolder.setContext(context);
         ChatConversationEventBroker broker = new ChatConversationEventBroker();
@@ -519,7 +519,7 @@ class ChatControllerTest extends BaseMockTest {
                 .setId(5001L).setLifecycleGeneration(1L);
         when(chatConversationService.get("5001")).thenReturn(conversation);
         when(chatConversationService.isLiveGeneration(
-                "tester", "web-client", "5001", 1L)).thenReturn(true);
+                "0", "tester", "web-client", "5001", 1L)).thenReturn(true);
         JuyitingConversationScopeService scopeService =
                 new JuyitingConversationScopeService(builtinHallAgentSupport, agentService);
         ChatController controller = new ChatController(
@@ -553,7 +553,7 @@ class ChatControllerTest extends BaseMockTest {
     @Test
     void searchLibraryReturnsExplicitFailureWhenMemorySearchFails() throws Exception {
         EsContext context = new EsContext();
-        context.setJiacn("tester");
+        context.setTenantId("0"); context.setJiacn("tester");
         EsContextHolder.setContext(context);
 
         when(memoryRepository.searchWithConversationBoost(anyString(), anyString(), any(), anyInt(), anyDouble()))
@@ -570,7 +570,7 @@ class ChatControllerTest extends BaseMockTest {
     @Test
     void seedLibraryDocumentStoresProjectMemory() throws Exception {
         EsContext context = new EsContext();
-        context.setJiacn("tester");
+        context.setTenantId("0"); context.setJiacn("tester");
         EsContextHolder.setContext(context);
 
         ChatController controller = newController();
@@ -615,7 +615,7 @@ class ChatControllerTest extends BaseMockTest {
         ChatConversationEventBroker broker = new ChatConversationEventBroker();
         ChatController controller = newController(broker);
         when(chatConversationService.get("1001"))
-                .thenAnswer(ignored -> chatConversationService.getOwned("tester", "web-client", "1001"));
+                .thenAnswer(ignored -> chatConversationService.getOwned("0", "tester", "web-client", "1001"));
         when(redisService.subscribeToChannel("1001")).thenReturn(Flux.never());
         java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicInteger> reads =
                 new java.util.concurrent.ConcurrentHashMap<>();
@@ -733,7 +733,7 @@ class ChatControllerTest extends BaseMockTest {
         EsContextHolder.setContext(context);
         ChatController controller = newController(new ChatConversationEventBroker());
         when(chatConversationService.get("1001"))
-                .thenAnswer(ignored -> chatConversationService.getOwned("tester", "web-client", "1001"));
+                .thenAnswer(ignored -> chatConversationService.getOwned("0", "tester", "web-client", "1001"));
         when(redisService.subscribeToChannel("1001")).thenReturn(Flux.never());
         when(chatDeliberationService.getRequest(eq("0"), eq("tester"), eq("web-client"), eq("round-failed-read")))
                 .thenThrow(new IllegalStateException("unavailable"));
@@ -775,13 +775,13 @@ class ChatControllerTest extends BaseMockTest {
                 .setTargetAgentIds("[\"agent-wuyong\"]");
         publicConversation.setTenantId("0"); publicConversation.setClientId("web-client");
         org.mockito.Mockito.lenient().when(chatConversationService.getOwned(
-                "tester", "web-client", "1001")).thenReturn(publicConversation);
+                "0", "tester", "web-client", "1001")).thenReturn(publicConversation);
         org.mockito.Mockito.lenient().when(chatConversationService.appendOwnedMessage(
                 anyString(), anyString(), any(ChatMessageEntity.class),
                 org.mockito.ArgumentMatchers.anyLong()))
                 .thenAnswer(invocation -> invocation.getArgument(2));
         org.mockito.Mockito.lenient().when(chatConversationService.isLiveGeneration(
-                anyString(), anyString(), anyString(), org.mockito.ArgumentMatchers.anyLong()))
+                anyString(), anyString(), anyString(), anyString(), org.mockito.ArgumentMatchers.anyLong()))
                 .thenReturn(true);
         org.mockito.Mockito.lenient().when(chatConversationEventBroker.deletionSignal(
                 anyString(), org.mockito.ArgumentMatchers.anyLong(), any())).thenReturn(Flux.never());

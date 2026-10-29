@@ -36,7 +36,7 @@ class ChatReviewContextAdmissionTest {
         service.setDispatchAuthority(authority);
         var conversation=new ChatConversationEntity().setId(123L).setJiacn("owner").setConversationType("juyiting").setConversationScopeType("bounty")
                 .setConversationScopeKey(scope.scopeKey()).setTaskId(scope.taskId()).setLifecycleGeneration(1L).setTargetAgentIds("[\"agent\"]");
-        conversation.setTenantId("0");conversation.setClientId("client");when(conversations.lockScopedById("owner","client","123")).thenReturn(conversation);
+        conversation.setTenantId("0");conversation.setClientId("client");when(conversations.lockScopedById("0","owner","client","123")).thenReturn(conversation);
         when(messages.findOwnedByConversationIdWithLimit(any(),any(),any(),anyInt())).thenReturn(List.of());
         var task=new AgentTaskDTO();task.setId(scope.taskId());task.setTitle("核对");task.setStatus("reviewing");task.setTaskVersion("7");task.setAssignedAgentId("agent");
         task.setTenantId("0");task.setClientId("client");when(agents.getTask(scope.taskId())).thenReturn(task);

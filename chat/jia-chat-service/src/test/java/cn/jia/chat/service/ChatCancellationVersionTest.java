@@ -70,8 +70,8 @@ class ChatCancellationVersionTest {
         service.setDispatchAuthority(authority);
         ChatConversationEntity conversation = new ChatConversationEntity().setLifecycleGeneration(1L);
         conversation.setTenantId("0");
-        when(conversations.findScopedById("owner", "client", "1001")).thenReturn(conversation);
-        when(conversations.lockScopedById("owner", "client", "1001")).thenReturn(conversation);
+        when(conversations.findScopedById("0","owner", "client", "1001")).thenReturn(conversation);
+        when(conversations.lockScopedById("0","owner", "client", "1001")).thenReturn(conversation);
         when(dao.findTurn("0", "owner", "client", "turn")).thenReturn(turn);
         when(dao.lockTurn("0", "owner", "client", "turn")).thenReturn(turn);
     }

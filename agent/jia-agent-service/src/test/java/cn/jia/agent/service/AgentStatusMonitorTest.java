@@ -295,7 +295,7 @@ class AgentStatusMonitorTest extends BaseMockTest {
     private void stubActiveLocks(AgentRuntimeEntity current) {
         when(bindingDao.findByIdForUpdate(current.getBindingId())).thenReturn(binding(current));
         when(identityRegistryDao.findExactByBindingInScopeForUpdate(
-                current.getOwnerJiacn(), current.getClientId(), current.getOwnerJiacn(),
+                "0", current.getClientId(), current.getOwnerJiacn(),
                 current.getBindingId()))
                 .thenReturn(identity(current, AgentConstants.IDENTITY_STATUS_ACTIVE));
         when(agentRuntimeDao.findByAgentIdForUpdate(current.getAgentId())).thenReturn(current);
