@@ -44,6 +44,8 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
     protected SkillInstallRecoveryService recovery;
     protected AgentRuntimeAuthenticationService authentication;
     protected AgentRuntimeEntity runtime;
+    private AgentIdentityService identityLocks;
+    private AgentRuntimeDao runtimeLocks;
     protected AgentManagedSessionLookup sessions;
     protected SkillCapabilityLookup capabilities;
     protected SkillAgentVersions versions;
@@ -75,7 +77,7 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         db=sql.getMapper(EconomySkillManagementMapper.class);var ledger=sql.getMapper(EconomyLedgerMapper.class);
         var gate=new EconomyPreviewGate(new EconomyPreviewProperties(true,List.of(new EconomyPreviewProperties.AllowedScope("0",ACTOR.clientId()))));
         var posting=new EconomyPostingServiceImpl(ledger,manager,gate);
-        var agents=mock(AgentService.class);var owner=mock(HostingRentOwnerResolver.class);var runtimes=mock(AgentRuntimeDao.class);
+        var agents=mock(AgentService.class);var owner=mock(HostingRentOwnerResolver.class);var runtimes=mock(AgentRuntimeDao.class);runtimeLocks=runtimes;identityLocks=mock(AgentIdentityService.class);
         runtime=new AgentRuntimeEntity().setAgentId(AGENT).setOwnerJiacn(ACTOR.ownerJiacn()).setBindingId(7L).setTokenHash("registered").setStatus("online")
                 .setRuntimeInstallationId("rti_"+"a".repeat(32)).setRuntimeHostId("host-1").setRuntimeInstanceId("runtime-1").setRuntimeSessionGeneration(1L);
         runtime.setTenantId("0");runtime.setClientId(ACTOR.clientId());
@@ -105,7 +107,7 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         when(sessions.dispatch(anyString(),anyString(),anyString(),any(),any())).thenReturn(AgentRawCommandDispatchResult.sent(1,1));
         capabilities=mock(SkillCapabilityLookup.class);when(capabilities.lookup(any(),any())).thenReturn(SkillCapabilityLookup.View.unavailable(SkillCapabilityLookup.State.DISCONNECTED));
         marketplace=new SkillMarketplaceService(market,app,ledger,posting,gate,versions,runtimes,provider(writer),provider(packages),provider(authentication),provider(sessions),manager);
-        service=new SkillManagementService(db,market,app,marketplace,versions,runtimes,installations,authentication,mock(AgentIdentityService.class),provider(packages),provider(writer),provider(sessions),provider(capabilities),manager);
+        service=new SkillManagementService(db,market,app,marketplace,versions,runtimes,installations,authentication,identityLocks,provider(packages),provider(writer),provider(sessions),provider(capabilities),manager);
         dispatch=new SkillInstallDispatchService(app,market,marketplace,versions,authentication,commands,provider(sessions),manager);dispatch.setManagement(service);
         recoveryMapper=sql.getMapper(AgentSkillInstallRecoveryMapper.class);
         recoveryDao=new AgentCommandRecoveryDaoImpl(sql.getMapper(AgentCommandRecoveryMapper.class));
@@ -265,6 +267,14 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
                 .setDeploymentRestriction("NONE").setReviewStatus("APPROVED").setTenantId("0").setClientId(ACTOR.clientId()).setCreateTime(1L));
         assertEquals(1,market.publishProductVersion("0",ACTOR.clientId(),"sp_pdf","spv_pdf_"+sequence,sequence,System.currentTimeMillis()));
     }
+    @Test void managementLocksIdentityBeforeRuntimeAndVersionOwnershipChecks() throws Exception {
+        publishExecutable("1.0.0",1);
+        packageChange("INSTALL",null,"0","spv_pdf_1");
+        var order=inOrder(identityLocks,runtimeLocks);
+        order.verify(identityLocks).lockRegistrationIdentityInScope("0",ACTOR.clientId(),ACTOR.ownerJiacn(),AGENT);
+        order.verify(runtimeLocks).lockInScope("0",ACTOR.clientId(),AGENT);
+    }
+
     @Test void managedPublicationCoversExistingEntitlementAndRollsBackInvalidSource() throws Exception {
         publishExecutable("1.0.0",1);
         var first=packageChange("INSTALL",null,"0","spv_pdf_1");finishInstall(first);first=current(first);

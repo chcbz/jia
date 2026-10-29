@@ -207,6 +207,9 @@ class AgentRuntimeSecurityIntegrationTest {
         when(identityRegistryDao.findExactByCanonicalInScope(
                 anyString(), anyString(), anyString(), anyString())).thenAnswer(inv -> scopedIdentityByCanonical(
                         inv.getArgument(0), inv.getArgument(1), inv.getArgument(2), inv.getArgument(3)));
+        when(identityRegistryDao.findExactByCanonicalInScopeForUpdate(
+                anyString(), anyString(), anyString(), anyString())).thenAnswer(inv -> scopedIdentityByCanonical(
+                        inv.getArgument(0), inv.getArgument(1), inv.getArgument(2), inv.getArgument(3)));
         when(identityBindingDao.selectById(anyLong())).thenAnswer(inv -> persistedBindings.get(inv.getArgument(0)));
         when(identityBindingDao.findByIdForUpdate(anyLong())).thenAnswer(inv -> persistedBindings.get(inv.getArgument(0)));
         when(identityAliasDao.findExactActiveLegacyAlias(
