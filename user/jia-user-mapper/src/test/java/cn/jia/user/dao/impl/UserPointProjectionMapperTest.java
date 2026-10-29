@@ -73,4 +73,14 @@ class UserPointProjectionMapperTest {
         UserEntity query = new UserEntity(); query.setJiacn("alice");
         assertNull(users.searchByExample(query).getFirst().getPoint());
     }
+
+    @Test void pointProjectionDoesNotDropExactIdentityOrMembershipFilters() {
+        UserVO exact = new UserVO(); exact.setJiacn("bob");
+        assertEquals(1, users.selectForList(exact, "1").size());
+        assertEquals("bob", users.selectForList(exact, "1").getFirst().getJiacn());
+        UserVO membership = new UserVO(); membership.setOrgId(99L);
+        assertTrue(users.selectForList(membership, "1").isEmpty());
+        jdbc.update("INSERT INTO user_org_rel(user_id,org_id) VALUES(1,99)");
+        assertEquals("alice", users.selectForList(membership, "1").getFirst().getJiacn());
+    }
 }

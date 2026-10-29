@@ -130,14 +130,26 @@ public class UserInfoDaoImpl extends BaseDaoImpl<InfoMapper, UserEntity> impleme
             if (query.getPoint() != null) {
                 wrapper.apply("COALESCE((SELECT pa.balance FROM point_account pa "
                         + "WHERE pa.tenant_id={0} AND OCTET_LENGTH(pa.tenant_id)=OCTET_LENGTH({0}) "
-                        + "AND pa.jiacn=u.jiacn "
-                        + "AND CAST(pa.jiacn AS BINARY)=CAST(u.jiacn AS BINARY)),0)={1}",
+                        + "AND pa.jiacn=user_info.jiacn "
+                        + "AND CAST(pa.jiacn AS BINARY)=CAST(user_info.jiacn AS BINARY)),0)={1}",
                         pointTenantId, query.getPoint());
             }
             appendExactScope(wrapper, "tenant_id", tenantId);
             appendExactScope(wrapper, "client_id", clientId);
-            return pointTenantId == null ? baseMapper.selectList(wrapper)
-                    : baseMapper.selectForListWithPoint(wrapper, pointTenantId);
+            if (pointTenantId != null) {
+                // Keep BaseMapper's entity predicates and UserVOWrapper's table-qualified
+                // membership predicates; customSqlSegment alone omits entity conditions.
+                wrapper.select(UserEntity.class, field -> true);
+                String identityColumns = wrapper.getSqlSelect();
+                wrapper.getParamNameValuePairs().put("pointBusinessTenant", pointTenantId);
+                String tenant = "#{ew.paramNameValuePairs.pointBusinessTenant}";
+                wrapper.select(identityColumns, "COALESCE((SELECT pa.balance FROM point_account pa "
+                        + "WHERE pa.tenant_id=" + tenant
+                        + " AND OCTET_LENGTH(pa.tenant_id)=OCTET_LENGTH(" + tenant + ")"
+                        + " AND pa.jiacn=user_info.jiacn"
+                        + " AND CAST(pa.jiacn AS BINARY)=CAST(user_info.jiacn AS BINARY)),0) AS point");
+            }
+            return baseMapper.selectList(wrapper);
         } finally {
             query.setTenantId(tenantId);
             query.setClientId(clientId);

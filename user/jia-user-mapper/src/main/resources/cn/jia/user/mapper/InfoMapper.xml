@@ -30,12 +30,6 @@
               AND pa.jiacn = u.jiacn
               AND CAST(pa.jiacn AS BINARY) = CAST(u.jiacn AS BINARY)), 0)
     </sql>
-    <select id="selectForListWithPoint" resultType="cn.jia.user.entity.UserEntity">
-        SELECT <include refid="Base_Column_List" />, u.location, u.tenant_id, u.client_id,
-               <include refid="Point_Balance" /> AS point
-        FROM user_info u
-        ${ew.customSqlSegment}
-    </select>
     <select id="searchByExample" resultType="cn.jia.user.entity.UserEntity">
         select
         <include refid="Base_Column_List" />
