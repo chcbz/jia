@@ -38,4 +38,31 @@ class UserLegacyIdentityCompatibilityTest {
         assertEquals("web-client", data.getClientId());
         verify(service, never()).findOwnIdentityByExactJiacn(anyString());
     }
+    @Test void historicalProfileWithoutFinancialIdentityHasZeroProjectionWithoutAccountAccess() {
+        var controller = new UserController();
+        var accounts = mock(cn.jia.point.service.PointAccountService.class);
+        ReflectionTestUtils.setField(controller, "pointAccounts", accounts);
+        for (String identity : new String[] {null, ""}) {
+            var user = new UserEntity();
+            user.setJiacn(identity);
+            assertEquals(0, (Integer) ReflectionTestUtils.invokeMethod(controller, "projectBalance", user));
+        }
+        verifyNoInteractions(accounts);
+    }
+
+    @Test void historicalIdentitylessRowsStayInUserListsWithZeroProjection() {
+        var controller = new UserController();
+        var accounts = mock(cn.jia.point.service.PointAccountService.class);
+        ReflectionTestUtils.setField(controller, "pointAccounts", accounts);
+        var missing = new UserEntity();
+        var empty = new UserEntity(); empty.setJiacn("");
+        var owner = new UserEntity(); owner.setJiacn("owner");
+        when(accounts.balances(java.util.List.of("owner"))).thenReturn(java.util.Map.of("owner", 17));
+        var users = java.util.List.of(missing, empty, owner);
+        ReflectionTestUtils.invokeMethod(controller, "projectBalances", users);
+        assertEquals(0, missing.getPoint()); assertEquals(0, empty.getPoint()); assertEquals(17, owner.getPoint());
+        verify(accounts).balances(java.util.List.of("owner"));
+        verifyNoMoreInteractions(accounts);
+    }
+
 }
