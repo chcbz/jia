@@ -10,6 +10,15 @@ import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.model.tool.ToolCallingChatOptions;
 import java.util.List;
+import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import com.sun.net.httpserver.HttpServer;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.ai.openai.OpenAiChatModel;
+import org.springframework.ai.openai.OpenAiChatOptions;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -39,5 +48,65 @@ class AssigneeRecommendationModelTest {
         var failed = mock(ChatModel.class); when(failed.call(any(Prompt.class))).thenThrow(new IllegalStateException("network"));
         assertThrows(IllegalStateException.class, () -> new AssigneeRecommendationModel(failed).judge("{}"));
         verify(failed, times(1)).call(any(Prompt.class));
+    }
+
+    @Test void retainsNativeOptionsTypeAndValuesWithoutMutatingSharedDefaults() {
+        var defaults = OpenAiChatOptions.builder().model("configured-model")
+                .temperature(0.25).maxCompletionTokens(300).reasoningEffort("low").build();
+        var model = mock(ChatModel.class);
+        when(model.getOptions()).thenReturn(defaults);
+        when(model.call(any(Prompt.class))).thenReturn(new ChatResponse(List.of(new Generation(new AssistantMessage("{}")))));
+        assertEquals("{}", new AssigneeRecommendationModel(model).judge("{}"));
+        var prompt = ArgumentCaptor.forClass(Prompt.class);
+        verify(model, times(1)).call(prompt.capture());
+        var copied = assertInstanceOf(OpenAiChatOptions.class, prompt.getValue().getOptions());
+        assertNotSame(defaults, copied);
+        assertEquals("configured-model", copied.getModel());
+        assertEquals(0.25, copied.getTemperature());
+        assertEquals(300, copied.getMaxCompletionTokens());
+        assertEquals("low", copied.getReasoningEffort());
+        assertTrue(copied.getToolCallbacks().isEmpty());
+        assertNull(defaults.getToolCallbacks());
+    }
+
+    @Test void realOpenAiRequestUsesNativeOptionsAndNoTools() throws Exception {
+        verifyRealProviderRequest(200);
+    }
+
+    @Test void realOpenAiProviderFailureIsNotRetried() throws Exception {
+        verifyRealProviderRequest(400);
+    }
+
+    private static void verifyRealProviderRequest(int status) throws Exception {
+        var json = new ObjectMapper();
+        var requests = new AtomicInteger();
+        var body = new AtomicReference<JsonNode>();
+        var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/v1/chat/completions", exchange -> {
+            requests.incrementAndGet();
+            body.set(json.readTree(exchange.getRequestBody()));
+            String response = status == 200
+                    ? "{\"id\":\"diagnostic\",\"object\":\"chat.completion\",\"created\":1,\"model\":\"configured-model\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"{}\"},\"finish_reason\":\"stop\"}]}"
+                    : "{\"error\":{\"message\":\"synthetic rejection\",\"type\":\"invalid_request_error\"}}";
+            byte[] bytes = response.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().set("Content-Type", "application/json");
+            exchange.sendResponseHeaders(status, bytes.length);
+            try (var output = exchange.getResponseBody()) { output.write(bytes); }
+        });
+        server.start();
+        try {
+            var defaults = OpenAiChatOptions.builder().model("configured-model")
+                    .baseUrl("http://127.0.0.1:" + server.getAddress().getPort() + "/v1")
+                    .apiKey("synthetic-test-key").maxRetries(0).build();
+            var model = OpenAiChatModel.builder().options(defaults).build();
+            var adapter = new AssigneeRecommendationModel(model);
+            if (status == 200) assertEquals("{}", adapter.judge("{\"task\":\"synthetic\"}"));
+            else assertThrows(RuntimeException.class, () -> adapter.judge("{}"));
+            assertEquals(1, requests.get(), "exactly one real SDK request, including on provider rejection");
+            assertEquals("configured-model", body.get().path("model").asText());
+            assertEquals(2, body.get().path("messages").size());
+            assertTrue(body.get().path("tools").isMissingNode() || body.get().path("tools").isEmpty());
+            assertNull(defaults.getToolCallbacks());
+        } finally { server.stop(0); }
     }
 }
