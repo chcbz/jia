@@ -151,6 +151,15 @@ class FundedBountyServiceRealTransactionTest {
         assertEquals(1, count("task_plan"));
         assertEquals(1, count("task_item")); // The production ALLTIME TaskService creates an item, not a detail.
         assertEquals(created.getId(), jdbc.queryForObject("SELECT CAST(id AS VARCHAR) FROM task_plan", String.class));
+        assertEquals(ACTOR.ownerJiacn(), jdbc.queryForObject("SELECT jiacn FROM task_plan", String.class));
+        for (String table : List.of("task_plan", "task_item")) {
+            assertEquals(ACTOR.tenantId(), jdbc.queryForObject("SELECT tenant_id FROM " + table, String.class));
+            assertEquals(ACTOR.clientId(), jdbc.queryForObject("SELECT client_id FROM " + table, String.class));
+        }
+        var plan = context.getBean(TaskService.class).getInOwnerScope(
+                ACTOR.tenantId(), ACTOR.clientId(), ACTOR.ownerJiacn(), Long.valueOf(created.getId()));
+        assertNotNull(plan);
+        assertEquals(request.getTitle(), plan.getName());
         assertEquals(created.getId(), jdbc.queryForObject("SELECT task_id FROM agent_task_funding_operation", String.class));
         assertEquals(1, count("agent_task_meta"));
         assertEquals(1, count("agent_task_funding"));
