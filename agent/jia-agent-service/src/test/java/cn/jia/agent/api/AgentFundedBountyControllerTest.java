@@ -39,7 +39,7 @@ class AgentFundedBountyControllerTest {
         AgentController controller = new AgentController(
                 legacy, mock(AbilityEvaluationService.class), mock(FundedBountyService.class));
 
-        controller.createTask(new cn.jia.core.entity.JsonRequest<>(1, "test-request", request), null, jwt("user-1", "0", "Client-A"));
+        controller.createTask(new cn.jia.core.entity.JsonRequest<>(1, "test-request", request), null, jwt("user-1", "user-1", "Client-A"));
 
         verify(legacy).createTask(eq(new AgentService.TaskOwnerScope("0", "Client-A", "user-1")), eq(request));
     }
@@ -91,7 +91,7 @@ class AgentFundedBountyControllerTest {
         ArgumentCaptor<byte[]> digest = ArgumentCaptor.forClass(byte[].class);
         verify(funded, org.mockito.Mockito.times(2)).create(actor.capture(),
                 eq("018f0000-0000-7000-8000-000000000004"), digest.capture(), eq(request));
-        assertEquals(new FundedBountyActor("Tenant-A", "Client-A", "Tenant-A", "user-1"), actor.getAllValues().getFirst());
+        assertEquals(new FundedBountyActor("0", "Client-A", "Tenant-A", "user-1"), actor.getAllValues().getFirst());
         assertArrayEquals(digest.getAllValues().getFirst(), digest.getAllValues().getLast());
         verify(legacy, never()).createTask(any(), any());
     }
@@ -129,7 +129,7 @@ class AgentFundedBountyControllerTest {
                 jwt("user-1", "Tenant-A", "Client-A"));
 
         assertEquals("task-1", ((AgentTaskFundingCancelReceiptDTO) ((JsonResult<?>) raw).getData()).taskId());
-        verify(funded).cancel(eq(new FundedBountyActor("Tenant-A", "Client-A", "Tenant-A", "user-1")),
+        verify(funded).cancel(eq(new FundedBountyActor("0", "Client-A", "Tenant-A", "user-1")),
                 eq("018f0000-0000-7000-8000-000000000005"), any(), eq("task-1"), eq(8L));
     }
 
@@ -147,9 +147,9 @@ class AgentFundedBountyControllerTest {
         return request;
     }
 
-    private static JwtAuthenticationToken jwt(String subject, String tenant, String client) {
+    private static JwtAuthenticationToken jwt(String subject, String owner, String client) {
         Jwt token = Jwt.withTokenValue("token").header("alg", "none")
-                .claim("jiacn", tenant).claim("client_id", client).subject(subject)
+                .claim("tenant_id", "0").claim("jiacn", owner).claim("client_id", client).subject(subject)
                 .issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(60)).build();
         return new JwtAuthenticationToken(token, List.of());
     }

@@ -423,6 +423,9 @@ public class ChatController {
                         .param("selectedAgentId", Optional.ofNullable(juyitingAgentRelayService.selectedAgentId(chatMessage)).orElse(""))
                         .param(DatabaseChatMemoryAdvisor.SKIP_USER_MESSAGE_PERSISTENCE, skipAdvisorUserPersistence)
                         .param(QuestionAnswerAdvisor.FILTER_EXPRESSION, filterExpression))
+                .toolContext(Map.of(cn.jia.chat.tool.AgentTools.TASK_OWNER_SCOPE,
+                        new cn.jia.agent.service.AgentService.TaskOwnerScope(
+                                ownerTenantId, ownerClientId, ownerJiacn)))
                 .messages()
                 .stream().content()
                 .map(content -> processContent(content, needSummary, summary));

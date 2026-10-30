@@ -674,6 +674,11 @@ class ChatControllerTest extends BaseMockTest {
             customizer.accept(advisorSpec);
             return requestSpec;
         });
+        var toolParams = new java.util.concurrent.ConcurrentHashMap<String, Object>();
+        when(requestSpec.toolContext(any(Map.class))).thenAnswer(invocation -> {
+            toolParams.putAll(invocation.<Map<String, Object>>getArgument(0));
+            return requestSpec;
+        });
         when(requestSpec.messages()).thenReturn(requestSpec);
         when(requestSpec.stream()).thenReturn(streamSpec);
         when(streamSpec.content()).thenReturn(Flux.just("tenant-one-response"));
@@ -698,6 +703,8 @@ class ChatControllerTest extends BaseMockTest {
         assertEquals("owner-a", advisorParams.get("jiacn"));
         assertEquals("cyf-local", advisorParams.get("clientId"));
         assertFalse(advisorParams.containsValue("0"));
+        assertEquals(new cn.jia.agent.service.AgentService.TaskOwnerScope("1", "cyf-local", "owner-a"),
+                toolParams.get(cn.jia.chat.tool.AgentTools.TASK_OWNER_SCOPE));
     }
 
     @Test
@@ -707,7 +714,7 @@ class ChatControllerTest extends BaseMockTest {
         EsContextHolder.setContext(context);
         chatClient = org.mockito.Mockito.mock(ChatClient.class, org.mockito.Mockito.RETURNS_DEEP_STUBS);
         when(chatClient.prompt(any(Prompt.class)).advisors(any(java.util.function.Consumer.class))
-                .messages().stream().content()).thenReturn(Flux.just("第一块", "第二块"));
+                .toolContext(any(Map.class)).messages().stream().content()).thenReturn(Flux.just("第一块", "第二块"));
         ChatController controller = newController(new ChatConversationEventBroker());
         ChatConversationEntity normal = new ChatConversationEntity()
                 .setId(1001L).setJiacn("tester").setTitle("已有标题").setConversationType("normal").setLifecycleGeneration(1L);

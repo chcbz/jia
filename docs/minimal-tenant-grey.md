@@ -124,6 +124,6 @@ Bootstrap discovery 在 LIMIT/锁定前按进程固定租户（灰度另固定 c
 
 ### 2026-10-30 普通建任务授权上下文（候选，尚未上线）
 
-基线 develop `85162da0d548a87b392836132e8fcdb848304816`。普通建任务的两个 HTTP 入口和 Chat 工具适配器显式传入 `AgentService.TaskOwnerScope`；创建幂等服务不再读取 Spring Security/EsContext，任务根、计划的 owner/client 以及回执成员查询使用已传入的身份，而非线程默认值。HTTP 身份校验保留在边界，租户不是模型/请求可指定的业务字段；缺失身份不得回退为 juyiting。
+基线 develop `85162da0d548a87b392836132e8fcdb848304816`。普通建任务的两个 HTTP 入口和 Chat 入口通过框架 ToolContext 传递捕获的身份（不依赖异步线程 EsContext），工具适配器显式传入 `AgentService.TaskOwnerScope`；创建幂等服务不再读取 Spring Security/EsContext，任务根、计划的 owner/client 以及回执成员查询使用已传入的身份，而非线程默认值。HTTP 身份校验保留在边界，租户不是模型/请求可指定的业务字段；缺失身份不得回退为 juyiting。
 
 此步是授权上下文解耦，**不表示 tenant1 已支持建任务**。创建服务和幂等服务仍在任何存储访问前拒绝非0租户；任务根预约/改键、快照捕获、事件写入、操作幂等表及 task_plan/task_item 的持久隔离须一起完成后再放开。未修改数据库/灰度路由/生产进程，不包含资金流程变更或灰度环境验收。正式回归、合入及交付以根 handoff 的真实 Flow 记录为准。
