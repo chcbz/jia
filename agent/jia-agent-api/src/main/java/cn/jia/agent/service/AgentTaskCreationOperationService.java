@@ -15,6 +15,7 @@ public interface AgentTaskCreationOperationService {
     Receipt getByIdempotencyKey(Scope scope, String idempotencyKey);
     Receipt getByIdempotencyKey(Scope scope, String idempotencyKey, int schemaVersion);
 
+    /** Authenticated by the caller boundary, never populated from a business request body. */
     record Scope(String tenantId, String clientId, String ownerJiacn) { }
 
     /** Presence flags preserve the exact optional JSON-field semantics in the request digest. */

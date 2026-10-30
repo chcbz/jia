@@ -285,13 +285,13 @@ public final class AgentTaskCreationOperationController {
         EsContext context = EsContextHolder.getContext();
         if (!(owner instanceof String ownerJiacn) || !(client instanceof String clientId)
                 || !valid(ownerJiacn, 50) || "0".equals(ownerJiacn)
-                || !valid(clientId, 50) || !"0".equals(tenant)
-                || context == null || !"0".equals(context.getTenantId())
+                || !valid(clientId, 50)
+                || context == null || !Objects.equals(tenant, context.getTenantId())
                 || !Objects.equals(ownerJiacn, context.getJiacn())
                 || !Objects.equals(clientId, context.getClientId())) {
             throw new AuthenticationFailure(true);
         }
-        return new AgentTaskCreationOperationService.Scope("0", clientId, ownerJiacn);
+        return new AgentTaskCreationOperationService.Scope(tenant, clientId, ownerJiacn);
     }
 
     private static void requireSingleKeyAndNoQuery(

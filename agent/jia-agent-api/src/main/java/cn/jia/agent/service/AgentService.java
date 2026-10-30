@@ -71,7 +71,12 @@ public interface AgentService {
 
     AgentTaskCountsDTO countTasksByStatus(AgentTaskSearchDTO request);
 
-    AgentTaskDTO createTask(AgentTaskCreateDTO request);
+    /** Trusted boundary scope; never deserialize this context from task request fields. */
+    record TaskOwnerScope(String tenantId, String clientId, String ownerJiacn) { }
+
+    AgentTaskDTO createTask(TaskOwnerScope scope, AgentTaskCreateDTO request);
+
+    AgentTaskDTO getTask(TaskOwnerScope scope, String taskId);
 
     AgentTaskDTO getTask(String taskId);
 

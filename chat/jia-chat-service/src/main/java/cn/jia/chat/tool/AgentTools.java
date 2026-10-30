@@ -23,6 +23,8 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class AgentTools {
 
+    public static final String TASK_OWNER_SCOPE = "cyf.taskOwnerScope";
+
     private final AgentService agentService;
 
     @Tool(name = "listAgents", description = "列出所有在线AI智能体及其能力信息，用于了解可调用的智能体资源")
@@ -60,13 +62,19 @@ public class AgentTools {
             @ToolParam(description = "任务标题") String title,
             @ToolParam(description = "任务详细描述") String description,
             @ToolParam(description = "所需能力列表，如 [\"planning\", \"research\"]") List<String> requiredAbilities,
-            @ToolParam(description = "任务奖励积分") Integer reward) {
+            @ToolParam(description = "任务奖励积分") Integer reward,
+            org.springframework.ai.chat.model.ToolContext toolContext) {
         AgentTaskCreateDTO request = new AgentTaskCreateDTO();
         request.setTitle(title);
         request.setDescription(description);
         request.setRequiredAbilities(requiredAbilities);
         request.setReward(reward);
-        return agentService.createTask(request);
+        // Supplied by the trusted chat boundary; never exposed as a model argument.
+        Object actor = toolContext == null ? null : toolContext.getContext().get(TASK_OWNER_SCOPE);
+        if (!(actor instanceof AgentService.TaskOwnerScope scope)) {
+            throw new IllegalStateException("Task creation identity is unavailable");
+        }
+        return agentService.createTask(scope, request);
     }
 
     @Tool(name = "getAgentTask", description = "查询指定任务的详细信息")
