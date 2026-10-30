@@ -136,7 +136,7 @@ public class PersonalWorkspaceConversationLinkDaoImpl implements PersonalWorkspa
     }
 
     private static void scope(String tenantId, String clientId, String ownerJiacn) {
-        if (!"0".equals(tenantId)) throw new IllegalArgumentException("tenantId");
+        id(tenantId, "tenantId", 50);
         id(clientId, "clientId", 50); id(ownerJiacn, "ownerJiacn", 50);
         if ("0".equals(ownerJiacn)) throw new IllegalArgumentException("ownerJiacn");
     }

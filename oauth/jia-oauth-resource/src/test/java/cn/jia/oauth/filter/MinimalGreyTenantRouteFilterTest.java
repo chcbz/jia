@@ -47,11 +47,32 @@ class MinimalGreyTenantRouteFilterTest {
             assertPassed(route[0], route[1]);
         for (String[] route : new String[][]{{"POST","/agent/tasks"},{"GET","/agent/tasks/task-1"},{"POST","/user/my"},
                 {"GET","/user/get"},{"GET","/user/list"},{"GET","/user/my/"},{"GET","/user/my-extra"},
-                {"POST","/agent/personal-workspace/files"},{"GET","/economy/wallet"},{"POST","/chat/library/documents"},
+                {"GET","/economy/wallet"},{"POST","/chat/library/documents"},
                 {"GET","/agent/stats"},{"GET","/agent/runtime/v1/enroll"},
                 {"GET","/agent/runtime/v1/session"},{"POST","/agent/runtime/v1/commands/msg-1/retry"}})
             assertDenied(route[0], route[1]);
     }
+    @Test void workspaceRoutesAreNarrowAndRequireTheFixedTenant() throws Exception {
+        String base = "/agent/personal-workspace";
+        for (String tenant : new String[]{null, "0"}) {
+            EsContextHolder.getContext().setTenantId(tenant);
+            assertDenied("GET", base + "/files");
+            assertDenied("POST", base + "/files");
+        }
+        EsContextHolder.getContext().setTenantId("1");
+        for (String[] route : new String[][]{{"GET", "/files"}, {"POST", "/files"},
+                {"GET", "/files/f1"}, {"PATCH", "/files/f1"}, {"GET", "/files/f1/versions"},
+                {"POST", "/files/f1/versions"}, {"POST", "/files/f1/trash"}, {"POST", "/files/f1/restore"},
+                {"GET", "/files/f1/usage"}, {"GET", "/files/f1/versions/1/content"},
+                {"GET", "/files/f1/versions/1/preview"}, {"GET", "/files/f1/versions/1/preview/parts/content"},
+                {"GET", "/operations/op1"}}) assertPassed(route[0], base + route[1]);
+        for (String[] route : new String[][]{{"DELETE", "/files/f1"}, {"PUT", "/files/f1"},
+                {"POST", "/operations/op1"}, {"POST", "/executions"}, {"GET", "/executions/e1"},
+                {"POST", "/files/f1/links"}, {"GET", "/files/f1/versions/0/content"},
+                {"POST", "/files/f1/versions/1/content"}, {"GET", "/files/f1/unknown"}})
+            assertDenied(route[0], base + route[1]);
+    }
+
     private void assertPassed(String method, String path) throws Exception {
         var request = new MockHttpServletRequest(method, path); var response = new MockHttpServletResponse();
         AtomicBoolean called = new AtomicBoolean();

@@ -231,15 +231,67 @@ class PersonalWorkspaceHttpPersistenceIntegrationTest {
         assertEquals(1, storage.readCalls(), "authorized preview reads the immutable object once");
     }
 
+    @Test
+    void sameIdentityAndIdempotencyKeyRemainIndependentAcrossTenants() throws Exception {
+        String[] ids = new String[2];
+        String[] uris = new String[2];
+        for (int tenant = 0; tenant < 2; tenant++) {
+            var identity = jwt(OWNER, CLIENT, String.valueOf(tenant));
+            var created = upload("/agent/personal-workspace/files", "shared-key", VERSION_ONE, null, identity)
+                    .andExpect(status().isCreated()).andReturn();
+            ids[tenant] = JsonUtil.getMapper().readTree(created.getResponse().getContentAsByteArray())
+                    .at("/data/file/fileId").asText();
+            upload("/agent/personal-workspace/files", "shared-key", VERSION_ONE, null, identity)
+                    .andExpect(status().isCreated())
+                    .andExpect(jsonPath("$.data.file.fileId").value(ids[tenant]));
+            uris[tenant] = jdbc.queryForObject(
+                    "SELECT storage_uri FROM agent_personal_workspace_file_version WHERE file_id=? AND version=1",
+                    String.class, ids[tenant]);
+        }
+        assertNotEquals(ids[0], ids[1]);
+        assertNotEquals(uris[0], uris[1]);
+        assertCounts(2, 2, 2);
+        storage.resetReads();
+        for (int tenant = 0; tenant < 2; tenant++) {
+            var identity = jwt(OWNER, CLIENT, String.valueOf(tenant));
+            assertOpaqueMissingPreview(identity, ids[1 - tenant], uris[1 - tenant]);
+            mvc.perform(get("/agent/personal-workspace/files/{fileId}", ids[1 - tenant])
+                    .principal(identity)).andExpect(status().isNotFound());
+        }
+        assertEquals(0, storage.readCalls(), "foreign tenant must fail before accessing bytes");
+        for (int tenant = 0; tenant < 2; tenant++) {
+            var identity = jwt(OWNER, CLIENT, String.valueOf(tenant));
+            upload("/agent/personal-workspace/files/" + ids[tenant] + "/versions",
+                    "shared-append", VERSION_TWO, "1", identity).andExpect(status().isCreated());
+            mvc.perform(get("/agent/personal-workspace/files/{fileId}/versions/2/content", ids[tenant])
+                    .principal(identity)).andExpect(status().isOk()).andExpect(content().bytes(VERSION_TWO));
+            assertEquals(String.valueOf(tenant), jdbc.queryForObject(
+                    "SELECT tenant_id FROM agent_personal_workspace_file_version WHERE file_id=? AND version=2",
+                    String.class, ids[tenant]));
+        }
+        assertCounts(2, 4, 4);
+        // Legacy production credentials (without tenant claims) must still read tenant zero only.
+        mvc.perform(get("/agent/personal-workspace/files/{fileId}", ids[0])
+                .principal(jwt(OWNER, CLIENT))).andExpect(status().isOk());
+        mvc.perform(get("/agent/personal-workspace/files/{fileId}", ids[1])
+                .principal(jwt(OWNER, CLIENT))).andExpect(status().isNotFound());
+    }
+
     private org.springframework.test.web.servlet.ResultActions upload(
             String path, String key, byte[] bytes, String expectedPreviousVersion) throws Exception {
+        return upload(path, key, bytes, expectedPreviousVersion, jwt(OWNER, CLIENT));
+    }
+
+    private org.springframework.test.web.servlet.ResultActions upload(
+            String path, String key, byte[] bytes, String expectedPreviousVersion,
+            JwtAuthenticationToken identity) throws Exception {
         MockMultipartFile file = new MockMultipartFile(
                 "file", "report:Q1.txt", MIME, bytes);
         var request = multipart(path)
                 .file(file)
                 .param("displayName", "Quarterly report")
                 .header("Idempotency-Key", key)
-                .principal(jwt(OWNER, CLIENT));
+                .principal(identity);
         if (expectedPreviousVersion != null) {
             request.param("expectedPreviousVersion", expectedPreviousVersion);
         }
@@ -328,6 +380,12 @@ class PersonalWorkspaceHttpPersistenceIntegrationTest {
                 .claim("jiacn", owner)
                 .claim("client_id", client)
                 .build();
+        return new JwtAuthenticationToken(token, List.of());
+    }
+
+    private static JwtAuthenticationToken jwt(String owner, String client, String tenant) {
+        Jwt token = Jwt.withTokenValue("fixture").header("alg", "none")
+                .claim("jiacn", owner).claim("client_id", client).claim("tenant_id", tenant).build();
         return new JwtAuthenticationToken(token, List.of());
     }
 

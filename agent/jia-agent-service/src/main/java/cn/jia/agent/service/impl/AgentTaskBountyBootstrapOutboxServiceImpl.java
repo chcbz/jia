@@ -1,6 +1,7 @@
 package cn.jia.agent.service.impl;
 
 import cn.jia.agent.dao.AgentTaskBountyBootstrapOutboxDao;
+import cn.jia.core.security.FixedTenantAdmissionPolicy;
 import cn.jia.agent.entity.AgentTaskBountyBootstrapClaimDTO;
 import cn.jia.agent.entity.AgentTaskBountyBootstrapOutboxEntity;
 import cn.jia.agent.entity.AgentTaskBountyBootstrapReconcileDTO;
@@ -34,11 +35,31 @@ public final class AgentTaskBountyBootstrapOutboxServiceImpl
     private final AgentTaskRequirementSnapshotService requirementSnapshots;
     private final ObjectMapper json;
     private final TransactionTemplate transaction;
+    private final FixedTenantAdmissionPolicy processScope;
 
     @Inject
     public AgentTaskBountyBootstrapOutboxServiceImpl(AgentTaskBountyBootstrapOutboxDao outbox,
             ObjectMapper json, PlatformTransactionManager transactionManager,
+            AgentTaskRequirementSnapshotService requirementSnapshots,
+            @org.springframework.beans.factory.annotation.Value("${cyf.security.legacy-single-tenant-id:0}") String legacyTenantId,
+            @org.springframework.beans.factory.annotation.Value("${cyf.security.fixed-tenant.enabled:false}") boolean fixedEnabled,
+            @org.springframework.beans.factory.annotation.Value("${cyf.security.fixed-tenant.tenant-id:}") String tenantId,
+            @org.springframework.beans.factory.annotation.Value("${cyf.security.fixed-tenant.client-id:}") String clientId) {
+        this(outbox, json, transactionManager, requirementSnapshots,
+                new FixedTenantAdmissionPolicy(legacyTenantId, fixedEnabled, tenantId, clientId));
+    }
+
+    public AgentTaskBountyBootstrapOutboxServiceImpl(AgentTaskBountyBootstrapOutboxDao outbox,
+            ObjectMapper json, PlatformTransactionManager transactionManager,
             AgentTaskRequirementSnapshotService requirementSnapshots) {
+        this(outbox, json, transactionManager, requirementSnapshots,
+                new FixedTenantAdmissionPolicy("0", false, null, null));
+    }
+
+    public AgentTaskBountyBootstrapOutboxServiceImpl(AgentTaskBountyBootstrapOutboxDao outbox,
+            ObjectMapper json, PlatformTransactionManager transactionManager,
+            AgentTaskRequirementSnapshotService requirementSnapshots, FixedTenantAdmissionPolicy processScope) {
+        this.processScope = Objects.requireNonNull(processScope, "processScope");
         this.outbox = Objects.requireNonNull(outbox, "outbox");
         this.requirementSnapshots = Objects.requireNonNull(requirementSnapshots, "requirementSnapshots");
         this.json = Objects.requireNonNull(json, "json");
@@ -59,9 +80,11 @@ public final class AgentTaskBountyBootstrapOutboxServiceImpl
     public AgentTaskBountyBootstrapClaimDTO claimNextAvailable(String consumerId, long now) {
         long leaseUntil = leaseUntil(consumerId, now);
         return transaction.execute(ignored -> {
-            AgentTaskBountyBootstrapOutboxEntity row = outbox.findClaimableAvailableForUpdate(now);
+            AgentTaskBountyBootstrapOutboxEntity row = outbox.findClaimableAvailableForUpdate(
+                    processScope.businessTenantId(), processScope.clientId(), now);
             if (row == null) return null;
-            // Scope is derived solely from the row locked by MySQL, never from a caller.
+            // Discovery is bounded by process configuration BEFORE locks/claim limits.
+            // Owner comes from the selected row, never from caller-controlled discovery input.
             AgentTaskExecutionGrantService.Scope scope = new AgentTaskExecutionGrantService.Scope(
                     row.getTenantId(), row.getClientId(), row.getOwnerJiacn());
             validateScope(scope);
@@ -275,10 +298,11 @@ public final class AgentTaskBountyBootstrapOutboxServiceImpl
         }
     }
 
-    private static void validateScope(AgentTaskExecutionGrantService.Scope scope) {
-        if (scope == null || !"0".equals(scope.tenantId())) {
+    private void validateScope(AgentTaskExecutionGrantService.Scope scope) {
+        if (scope == null) {
             throw new IllegalArgumentException("scope is invalid");
         }
+        processScope.requireAdmitted(scope.tenantId(), scope.clientId());
         exact(scope.clientId(), "clientId", 50);
         exact(scope.ownerJiacn(), "ownerJiacn", 50);
         if ("0".equals(scope.ownerJiacn())) throw new IllegalArgumentException("scope is invalid");

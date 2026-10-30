@@ -51,7 +51,7 @@ public class AgentTaskMutationTransactionImpl implements AgentTaskMutationTransa
             String ownerJiacn,
             String taskId,
             LockedTaskMutation<T> mutation) {
-        requireOwnerScope(tenantId, clientId, ownerJiacn, taskId);
+        requireExactOwnerScope(tenantId, clientId, ownerJiacn, taskId);
         if (mutation == null) {
             throw new IllegalArgumentException("mutation must not be null");
         }
@@ -179,8 +179,16 @@ public class AgentTaskMutationTransactionImpl implements AgentTaskMutationTransa
 
     private void requireOwnerScope(
             String tenantId, String clientId, String ownerJiacn, String taskId) {
+        requireExactOwnerScope(tenantId, clientId, ownerJiacn, taskId);
+        if (!"0".equals(tenantId)) {
+            throw new IllegalArgumentException("task mutation admission requires tenant 0");
+        }
+    }
+
+    private void requireExactOwnerScope(
+            String tenantId, String clientId, String ownerJiacn, String taskId) {
         requireScope(tenantId, clientId, taskId);
-        if (!"0".equals(tenantId) || !isValidScopeId(ownerJiacn, 50) || "0".equals(ownerJiacn)) {
+        if (!isValidScopeId(ownerJiacn, 50) || "0".equals(ownerJiacn)) {
             throw new IllegalArgumentException("strict task owner scope is invalid");
         }
     }

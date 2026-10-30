@@ -76,6 +76,24 @@ class AgentTaskWorkspaceServiceImplTest extends BaseMockTest {
     }
 
     @Test
+    void grayAuthorizationRetainsIdentityMembershipAndReturnedRowChecks() {
+        TaskRow grayTask = task(19L); grayTask.setTenantId("1");
+        MemberRow grayActor = member(ACTOR, "worker", "accepted", 0L); grayActor.setTenantId("1");
+        when(agentIdentityService.requireCanonicalAgentIdInScope("1", CLIENT, OWNER, ACTOR)).thenReturn(ACTOR);
+        when(dao.findTask("1", CLIENT, OWNER, TASK)).thenReturn(grayTask);
+        when(dao.findActorMember("1", CLIENT, OWNER, TASK, ACTOR)).thenReturn(grayActor);
+        assertEquals("1", service.authorize("1", CLIENT, OWNER, TASK, ACTOR).tenantId());
+        grayActor.setTenantId("0");
+        assertEquals(AgentTaskWorkspaceException.Reason.NOT_FOUND_OR_FORBIDDEN,
+                assertThrows(AgentTaskWorkspaceException.class,
+                        () -> service.authorize("1", CLIENT, OWNER, TASK, ACTOR)).getReason());
+        grayActor.setTenantId("1"); grayTask.setTenantId("0");
+        assertEquals(AgentTaskWorkspaceException.Reason.NOT_FOUND_OR_FORBIDDEN,
+                assertThrows(AgentTaskWorkspaceException.class,
+                        () -> service.authorize("1", CLIENT, OWNER, TASK, ACTOR)).getReason());
+    }
+
+    @Test
     void transactionContractIsSingleRequiredRepeatableReadOnlyBoundary() throws Exception {
         Method method = AgentTaskWorkspaceServiceImpl.class.getMethod(
                 "snapshot", String.class, String.class, String.class, String.class, String.class);

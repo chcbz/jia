@@ -58,7 +58,8 @@ class PersonalWorkspaceExecutionServiceImplTest {
     private static final String PPTX =
             "application/vnd.openxmlformats-officedocument.presentationml.presentation";
     private static final List<String> INPUT_MIME_TYPES = List.of(
-            PersonalWorkspaceExecutionProperties.DOCX, XLSX, PDF, PPTX, "image/png", "image/jpeg", "text/plain");
+            PersonalWorkspaceExecutionProperties.DOCX, XLSX, PDF, PPTX, "image/png", "image/jpeg",
+            "text/plain", "text/markdown", "text/html", "application/json");
     private static final PersonalWorkspaceExecutionService.RuntimeScope RUNTIME =
             new PersonalWorkspaceExecutionService.RuntimeScope("0", "client-a", "owner-a", "agent-a", "runtime-a");
     private PersonalWorkspaceExecutionDao executions;
@@ -94,6 +95,16 @@ class PersonalWorkspaceExecutionServiceImplTest {
         var auth=mock(cn.jia.agent.security.AgentRuntimeAuthenticationService.class);
         when(auth.withNativeFence(any(),any())).thenAnswer(call->((java.util.function.Supplier<?>)call.getArgument(1)).get());
         service.setRuntimeAuthentication(auth);
+    }
+
+    @Test
+    void grayExecutionStillFailsBeforeAnyBusinessStorageAccess() {
+        var gray=new PersonalWorkspaceExecutionService.OwnerScope("1","client-a","owner-a");
+        var failure=assertThrows(PersonalWorkspaceExecutionService.Failure.class,
+                ()->service.create(gray,new PersonalWorkspaceExecutionService.CreateCommand(
+                        null,"agent-a",null,"instruction",PersonalWorkspaceExecutionProperties.DOCX,List.of()),"gray-key"));
+        assertEquals(PersonalWorkspaceExecutionService.Reason.BAD_REQUEST,failure.getReason());
+        org.mockito.Mockito.verifyNoInteractions(executions,workspace,taskLinks,writes);
     }
 
     @Test
@@ -351,7 +362,7 @@ class PersonalWorkspaceExecutionServiceImplTest {
     }
 
     @Test
-    void createAcceptsSevenFixedInputFormatsWhileKeepingDocxAsTheOnlyOutput() {
+    void createAcceptsCurrentNativeInputFormatsWhileKeepingConfiguredOutputRestricted() {
         AgentRuntimeEntity runtime = new AgentRuntimeEntity();
         runtime.setAgentId("agent-a"); runtime.setClientId("client-a"); runtime.setOwnerJiacn("owner-a");
         when(runtimes.findCandidateRosterByOwner("client-a", "owner-a")).thenReturn(List.of(runtime));
@@ -365,7 +376,7 @@ class PersonalWorkspaceExecutionServiceImplTest {
             when(workspace.findVersion("0", "client-a", "owner-a", fileId, 1))
                     .thenReturn(workspaceVersion(fileId, 1, "source" + extension(mime), mime));
         }
-        when(executions.findByIdempotency("0", "client-a", "owner-a", "seven-inputs-key"))
+        when(executions.findByIdempotency("0", "client-a", "owner-a", "native-inputs-key"))
                 .thenReturn(null);
         when(executions.listInputs("0", "client-a", "owner-a", "pwe_created")).thenReturn(List.of());
         doAnswer(invocation -> {
@@ -377,7 +388,7 @@ class PersonalWorkspaceExecutionServiceImplTest {
                         "0", "client-a", "owner-a"),
                 new PersonalWorkspaceExecutionService.CreateCommand(null, "agent-a", null,
                         "用全部资料生成 Word", PersonalWorkspaceExecutionProperties.DOCX, selections),
-                "seven-inputs-key");
+                "native-inputs-key");
 
         assertEquals(PersonalWorkspaceExecutionProperties.DOCX, created.outputContentMimeType());
         var captured = ArgumentCaptor.forClass(PersonalWorkspaceExecutionInputEntity.class);
@@ -1019,6 +1030,9 @@ class PersonalWorkspaceExecutionServiceImplTest {
             case "image/png" -> ".png";
             case "image/jpeg" -> ".jpg";
             case "text/plain" -> ".txt";
+            case "text/markdown" -> ".md";
+            case "text/html" -> ".html";
+            case "application/json" -> ".json";
             default -> throw new IllegalArgumentException(mime);
         };
     }

@@ -39,6 +39,26 @@ class AgentTaskEventReplayDaoTest extends BaseMockTest {
     }
 
     @Test
+    void grayReadsKeepExactPartitionWhileUnadaptedWritesStayClosed() {
+        when(mapper.findExactCurrentEventVersion("1", "client", OWNER, "task")).thenReturn(17L);
+        when(mapper.findExactCurrentEventVersion("0", "client", OWNER, "task")).thenReturn(4L);
+        assertEquals(17L, dao.findCurrentVersion("1", "client", OWNER, "task"));
+        assertEquals(4L, dao.findCurrentVersion("0", "client", OWNER, "task"));
+        dao.findAfterVersion("1", "client", OWNER, "task", 0L, 10);
+        dao.findEarliestVersion("1", "client", OWNER, "task");
+        dao.findByEventId("1", "client", OWNER, "event");
+        verify(mapper).findExactByTaskScopeAfterVersion("1", "client", OWNER, "task", 0L, 10);
+        verify(mapper).findExactEarliestEventVersion("1", "client", OWNER, "task");
+        verify(mapper).findExactByEventId("1", "client", OWNER, "event");
+        assertThrows(IllegalArgumentException.class,
+                () -> dao.lockAndAllocateVersion("1", "client", OWNER, "task"));
+        assertThrows(IllegalArgumentException.class,
+                () -> dao.commitEventVersion("1", "client", OWNER, "task", 0, 1, 1000));
+        assertThrows(IllegalArgumentException.class,
+                () -> dao.findCurrentVersion("1", "client", "0", "task"));
+    }
+
+    @Test
     void boundedExclusivePageDelegatesLimitAndRejectsEveryUnboundedShape() {
         List<AgentTaskEventEntity> expected = List.of(new AgentTaskEventEntity());
         when(mapper.findExactByTaskScopeAfterVersion(

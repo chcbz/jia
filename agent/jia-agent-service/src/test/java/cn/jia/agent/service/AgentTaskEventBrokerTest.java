@@ -45,7 +45,8 @@ class AgentTaskEventBrokerTest {
         TaskScope composed = new TaskScope("0", "client-a", "owner-a", "caf\u00e9");
         TaskScope decomposed = new TaskScope("0", "client-a", "owner-a", "cafe\u0301");
         List<TaskScope> scopes = List.of(
-                scope, clientCase, ownerCase, taskCase, composed, decomposed);
+                scope, new TaskScope("1", "client-a", "owner-a", "task-a"),
+                clientCase, ownerCase, taskCase, composed, decomposed);
         List<CopyOnWriteArrayList<Long>> received = scopes.stream()
                 .map(ignored -> new CopyOnWriteArrayList<Long>())
                 .toList();
@@ -91,7 +92,7 @@ class AgentTaskEventBrokerTest {
         assertThrows(IllegalArgumentException.class, () -> new AgentTaskEventBroker(0));
 
         assertThrows(IllegalArgumentException.class,
-                () -> new TaskScope("tenant", "client", "owner", "task"));
+                () -> new TaskScope(" tenant", "client", "owner", "task"));
         assertThrows(IllegalArgumentException.class,
                 () -> new TaskScope("0", "client", "0", "task"));
         TaskScope exact = new TaskScope("0", "client", "owner", "a b");

@@ -19,7 +19,10 @@ public interface AgentTaskMutationTransaction {
             String taskId,
             LockedTaskMutation<T> mutation);
 
-    /** Strict single-tenant root lock; SQL must include the authenticated owner. */
+    /**
+     * Exact tenant/client/owner root lock, also used for consistent requirement observation.
+     * This primitive does not admit a business mutation: callers retain their own write policy.
+     */
     <T> T executeWithLockedTaskRootInOwnerScope(
             String tenantId,
             String clientId,

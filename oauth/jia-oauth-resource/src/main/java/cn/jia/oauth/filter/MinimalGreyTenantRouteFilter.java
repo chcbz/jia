@@ -73,8 +73,23 @@ public final class MinimalGreyTenantRouteFilter implements Filter {
                 "/agent/runtime/v1/session", "/agent/runtime/v1/heartbeat").contains(path);
     }
 
+    // Only file CRUD/read routes whose HTTP -> DAO -> storage scope is tenant-aware.
+    // Execution, links, runtime file grants and paid/provider routes remain separate.
+    static boolean personalWorkspaceFilesAllowed(String method, String path) {
+        String base = "/agent/personal-workspace";
+        if (("GET".equals(method) || "POST".equals(method)) && (base + "/files").equals(path)) return true;
+        String file = base + "/files/[^/]{1,100}";
+        if (("GET".equals(method) || "PATCH".equals(method)) && path.matches(file)) return true;
+        if (("GET".equals(method) || "POST".equals(method)) && path.matches(file + "/versions")) return true;
+        if ("POST".equals(method) && path.matches(file + "/(?:trash|restore)")) return true;
+        return "GET".equals(method) && (path.matches(file + "/usage")
+                || path.matches(file + "/versions/[1-9][0-9]*/(?:content|preview(?:/parts/[^/]{1,100})?)")
+                || path.matches(base + "/operations/[^/]{1,100}"));
+    }
+
     static boolean allowed(String method, String path) {
         if ("GET".equals(method) && Set.of("/resource", "/user/my").contains(path)) return true;
+        if (personalWorkspaceFilesAllowed(method, path)) return true;
         if ("GET".equals(method) && Set.of("/agent/map", "/agent/capabilities", "/agent/personas/catalog").contains(path)) return true;
         if ("POST".equals(method) && "/agent/roster".equals(path)) return true;
         if ("POST".equals(method) && PERSONA_BIND.matcher(path).matches()) return true;

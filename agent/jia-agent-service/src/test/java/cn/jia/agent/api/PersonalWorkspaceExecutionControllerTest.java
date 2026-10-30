@@ -179,6 +179,42 @@ class PersonalWorkspaceExecutionControllerTest {
                 .andExpect(jsonPath("$.code").value("EXECUTION_NOT_FOUND"));
     }
 
+    @Test
+    void grayScopeIsForwardedAndQueryCannotSelectProduction() throws Exception {
+        var gray = new PersonalWorkspaceExecutionService.OwnerScope("1", "client-a", "owner-a");
+        when(service.list(gray, 20, null, null)).thenReturn(
+                new PersonalWorkspaceExecutionService.ExecutionHistoryView(List.of(), null));
+        mvc.perform(get("/agent/personal-workspace/executions")
+                        .queryParam("tenant_id", "0").principal(tenantJwt(java.util.Map.of("tenant_id", "1"))))
+                .andExpect(status().isOk());
+        verify(service).list(gray, 20, null, null);
+        when(service.create(eq(gray), any(), eq("gray-create"))).thenReturn(executionView("gray"));
+        controller.create(new cn.jia.core.entity.JsonRequest<>(1, "request",
+                new PersonalWorkspaceExecutionController.CreateRequest(null,"agent-a",null,
+                        "instruction",PersonalWorkspaceExecutionProperties.DOCX,List.of())),
+                "gray-create",tenantJwt(java.util.Map.of("tenantId","1")));
+        verify(service).create(eq(gray),any(),eq("gray-create"));
+    }
+
+    @Test
+    void conflictingMalformedOrVersionedMissingTenantCannotFallBackToProduction() throws Exception {
+        for (var claims : List.of(java.util.Map.<String,Object>of("tenant_id","1","tenantId","0"),
+                java.util.Map.<String,Object>of("tenant_id",1),
+                java.util.Map.<String,Object>of("tenant_id"," 1"),
+                java.util.Map.<String,Object>of("tenant_claim_version","1"))) {
+            mvc.perform(get("/agent/personal-workspace/executions").principal(tenantJwt(claims)))
+                    .andExpect(status().isForbidden()).andExpect(jsonPath("$.code").value("EXECUTION_FORBIDDEN"));
+        }
+        verifyNoInteractions(service);
+    }
+
+    private static JwtAuthenticationToken tenantJwt(java.util.Map<String,Object> claims) {
+        var builder=Jwt.withTokenValue("token").header("alg","none")
+                .claim("jiacn","owner-a").claim("client_id","client-a");
+        claims.forEach(builder::claim);
+        var token=new JwtAuthenticationToken(builder.build()); token.setAuthenticated(true); return token;
+    }
+
     private static PersonalWorkspaceExecutionService.ExecutionView executionView(String executionId) {
         return new PersonalWorkspaceExecutionService.ExecutionView(
                 executionId, "pwe_task_1", "pwe_run_1", null, "agent-a", "QUEUED",

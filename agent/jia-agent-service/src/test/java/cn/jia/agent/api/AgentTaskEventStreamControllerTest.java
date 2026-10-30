@@ -103,6 +103,44 @@ class AgentTaskEventStreamControllerTest extends BaseMockTest {
     }
 
     @Test
+    void admittedGrayClaimScopesAuthorizationAndReplayDespiteQueryOverride() throws Exception {
+        var scope = new TaskScope("1", CLIENT, OWNER, TASK);
+        when(accessService.authorize("1", CLIENT, OWNER, TASK, ACTOR)).thenReturn(
+                new AuthorizedSubject("1", CLIENT, OWNER, TASK, ACTOR, "worker", OTHER));
+        when(replayService.replay(scope, 0L)).thenReturn(Flux.empty());
+        complete(mvc.perform(get("/agent/tasks/{taskId}/events", TASK)
+                        .queryParam("actorAgentId", ACTOR).queryParam("tenant_id", "0")
+                        .accept(MediaType.TEXT_EVENT_STREAM)
+                        .principal(tenantAuthentication(Map.of("tenant_id", "1"))))
+                .andExpect(request().asyncStarted()).andReturn());
+        verify(taskEventsGate).allows("1", CLIENT);
+        verify(accessService).authorize("1", CLIENT, OWNER, TASK, ACTOR);
+        verify(replayService).replay(scope, 0L);
+        verify(accessService, never()).authorize("0", CLIENT, OWNER, TASK, ACTOR);
+    }
+
+    @Test
+    void malformedOrConflictingTenantClaimsFailBeforeEventAuthorization() throws Exception {
+        for (var claims : List.<Map<String, Object>>of(
+                Map.of("tenant_id", 1), Map.of("tenant_id", " 1"),
+                Map.of("tenant_id", "1", "tenantId", "0"))) {
+            mvc.perform(get("/agent/tasks/{taskId}/events", TASK)
+                            .queryParam("actorAgentId", ACTOR).accept(MediaType.TEXT_EVENT_STREAM)
+                            .principal(tenantAuthentication(claims)))
+                    .andExpect(status().isForbidden());
+        }
+        verifyNoInteractions(accessService, replayService, taskEventsGate);
+    }
+
+    private static JwtAuthenticationToken tenantAuthentication(java.util.Map<String, Object> claims) {
+        Jwt jwt = Jwt.withTokenValue("token").header("alg", "none")
+                .claim("jiacn", OWNER).claim("client_id", CLIENT)
+                .claims(values -> values.putAll(claims))
+                .issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(60)).build();
+        return new JwtAuthenticationToken(jwt, List.of());
+    }
+
+    @Test
     void directJwtClaimsAreSoleAuthorityAndSuccessHasFrozenHeadersAndFrame() throws Exception {
         EsContext poisoned = new EsContext();
         poisoned.setJiacn("cookie-tenant");

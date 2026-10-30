@@ -21,6 +21,28 @@ class FileSystemPersonalWorkspaceStorageTest {
     @TempDir Path temporaryDirectory;
 
     @Test
+    void identicalOwnerClientAndBytesCannotCrossTenantStorageBoundaries() {
+        var storage = new FileSystemPersonalWorkspaceStorage(temporaryDirectory.resolve("tenants"), 4096);
+        var production = new PersonalWorkspaceStorage.Scope("0", "browser", "owner");
+        var gray = new PersonalWorkspaceStorage.Scope("1", "browser", "owner");
+        byte[] bytes = "same bytes".getBytes(StandardCharsets.UTF_8);
+        var first = storage.store(production, bytes, "text/plain");
+        var second = storage.store(gray, bytes, "text/plain");
+        assertEquals(first.sha256(), second.sha256());
+        assertNotEquals(first.storageUri(), second.storageUri());
+        assertArrayEquals(bytes, storage.read(gray, second.storageUri(), second.sha256(),
+                second.byteLength(), "text/plain").content());
+        assertThrows(PersonalWorkspaceException.class, () -> storage.read(gray,
+                first.storageUri(), first.sha256(), first.byteLength(), "text/plain"));
+        assertThrows(PersonalWorkspaceException.class, () -> storage.read(production,
+                second.storageUri(), second.sha256(), second.byteLength(), "text/plain"));
+        for (String invalid : new String[]{"", " 1", "1 ", "1\n"}) {
+            assertThrows(PersonalWorkspaceException.class, () -> storage.store(
+                    new PersonalWorkspaceStorage.Scope(invalid, "browser", "owner"), bytes, "text/plain"));
+        }
+    }
+
+    @Test
     void storesAnyValidMimeWhileKeepingSizeAndIntegrityBoundaries() {
         var storage = new FileSystemPersonalWorkspaceStorage(temporaryDirectory.resolve("unrestricted"), 16);
         var scope = new PersonalWorkspaceStorage.Scope("0", "browser", "owner");

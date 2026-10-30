@@ -16,7 +16,7 @@ public final class AgentTaskRequirementSnapshotSchemaInitializer implements Init
     private static final String TABLE = "agent_task_requirement_snapshot";
     private static final Map<String, String> CHECKS = Map.of(
             "chk_atrs_scope",
-            "((`tenant_id` = _utf8mb4\\'0\\') and (`owner_jiacn` <> _utf8mb4\\'0\\'))",
+            "(`owner_jiacn` <> _utf8mb4\\'0\\')",
             "chk_atrs_content",
             "((`revision` >= 1) and (`task_version_at_confirmation` >= 0) and "
                     + "(char_length(`title`) > 0) and regexp_like(`content_sha256`,"
@@ -94,8 +94,18 @@ public final class AgentTaskRequirementSnapshotSchemaInitializer implements Init
         for (Map.Entry<String, String> expected : CHECKS.entrySet()) {
             var row=checks.stream().filter(r -> expected.getKey().equals(r.get("constraint_name"))).findFirst()
                     .orElseThrow(() -> new IllegalStateException("Snapshot CHECK absent: "+expected.getKey()));
+            String clause = Objects.toString(row.get("check_clause"), "");
+            // Installing code must not require an unrelated production DDL rollout.
+            boolean legacyScope = "chk_atrs_scope".equals(expected.getKey())
+                    && "((`tenant_id` = _utf8mb4\\'0\\') and (`owner_jiacn` <> _utf8mb4\\'0\\'))".equals(clause);
+            // MySQL 8.0.21 converts this ASCII-column regex literal from utf8mb4
+            // to ascii while rebuilding constraints during ALTER TABLE. Accept
+            // only the two complete catalog expressions, not operator fragments.
+            boolean asciiRegexContent = "chk_atrs_content".equals(expected.getKey())
+                    && expected.getValue().replace("_utf8mb4\\'^[0-9a-f]{64}$\\'",
+                            "_ascii\\'^[0-9a-f]{64}$\\'").equals(clause);
             if (!"YES".equalsIgnoreCase(Objects.toString(row.get("enforced"), ""))
-                    || !expected.getValue().equals(Objects.toString(row.get("check_clause"), "")))
+                    || !(expected.getValue().equals(clause) || legacyScope || asciiRegexContent))
                 throw new IllegalStateException("Snapshot CHECK drift: "+expected.getKey());
         }
     }

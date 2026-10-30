@@ -67,11 +67,11 @@ public class AgentTaskEventStreamController {
             Authentication authentication) {
         Scope jwt = requireJwtScope(authentication);
         RawRequest raw = requireRawRequest(taskId, request);
-        if (!taskEventsGate.allows("0", jwt.clientId())) {
+        if (!taskEventsGate.allows(jwt.tenantId(), jwt.clientId())) {
             throw unavailable();
         }
         AuthorizedSubject subject = accessService.authorize(
-                "0", jwt.clientId(), jwt.jiacn(), taskId, raw.actorAgentId());
+                jwt.tenantId(), jwt.clientId(), jwt.jiacn(), taskId, raw.actorAgentId());
         if (subject == null || TransactionSynchronizationManager.isActualTransactionActive()) {
             throw unavailable();
         }
@@ -210,11 +210,15 @@ public class AgentTaskEventStreamController {
         Map<String, Object> claims = jwt.getToken().getClaims();
         Object jiacn = claims.get("jiacn");
         Object clientId = claims.get("client_id");
-        if (!(jiacn instanceof String tenant) || !(clientId instanceof String client)
-                || !validExact(tenant, 50) || !validExact(client, 50)) {
+        if (!(jiacn instanceof String owner) || !(clientId instanceof String client)
+                || !validExact(owner, 50) || !validExact(client, 50)) {
             throw new StreamAuthenticationException(true);
         }
-        return new Scope(tenant, client);
+        try {
+            return new Scope(cn.jia.core.security.TenantClaimPolicy.resolve(claims, "0"), owner, client);
+        } catch (IllegalArgumentException invalidTenant) {
+            throw new StreamAuthenticationException(true);
+        }
     }
 
     private static void requireExact(String value, int maxLength) {
@@ -272,7 +276,7 @@ public class AgentTaskEventStreamController {
         return new StreamUnavailableException();
     }
 
-    private record Scope(String jiacn, String clientId) {
+    private record Scope(String tenantId, String jiacn, String clientId) {
     }
 
     private record RawRequest(String actorAgentId, long cursor) {

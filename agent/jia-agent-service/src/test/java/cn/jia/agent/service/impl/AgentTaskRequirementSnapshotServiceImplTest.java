@@ -264,6 +264,34 @@ class AgentTaskRequirementSnapshotServiceImplTest {
         assertFalse(gate.matchIfMissing());
     }
 
+    @Test void currentRequirementUsesTrustedTenantAndRejectsConflictingClaims() throws Exception {
+        var snapshots=mock(AgentTaskRequirementSnapshotService.class);
+        var gray=new AgentTaskExecutionGrantService.Scope("1","client","owner");
+        when(snapshots.readCurrent(gray,"task-1")).thenReturn(
+                new AgentTaskRequirementSnapshotService.CurrentSnapshot("task-1",0,1,"Gray",null,"a".repeat(64),"CREATE"));
+        var mvc=MockMvcBuilders.standaloneSetup(new AgentTaskRequirementSnapshotController(snapshots)).build();
+        mvc.perform(get("/agent/tasks/task-1/requirements/current").principal(tenantJwt(java.util.Map.of("tenant_id","1"))))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data.title").value("Gray"));
+        verify(snapshots).readCurrent(gray,"task-1");
+        clearInvocations(snapshots);
+        mvc.perform(get("/agent/tasks/task-1/requirements/current?tenant_id=0")
+                        .principal(tenantJwt(java.util.Map.of("tenant_id","1"))))
+                .andExpect(status().isBadRequest());
+        for (var claims:List.of(java.util.Map.<String,Object>of("tenant_id","1","tenantId","0"),
+                java.util.Map.<String,Object>of("tenant_id",1),
+                java.util.Map.<String,Object>of("tenant_claim_version","1"))) {
+            mvc.perform(get("/agent/tasks/task-1/requirements/current").principal(tenantJwt(claims)))
+                    .andExpect(status().isForbidden()).andExpect(jsonPath("$.code").value("REQUIREMENT_FORBIDDEN"));
+        }
+        verifyNoInteractions(snapshots);
+    }
+
+    private static JwtAuthenticationToken tenantJwt(java.util.Map<String,Object> claims) {
+        var builder=Jwt.withTokenValue("token").header("alg","none").claim("jiacn","owner").claim("client_id","client");
+        claims.forEach(builder::claim);
+        var token=new JwtAuthenticationToken(builder.build());token.setAuthenticated(true);return token;
+    }
+
     private static void assertReason(AgentTaskRequirementReadException.Reason reason,
             org.junit.jupiter.api.function.Executable action) {
         assertEquals(reason,assertThrows(AgentTaskRequirementReadException.class,action).reason());

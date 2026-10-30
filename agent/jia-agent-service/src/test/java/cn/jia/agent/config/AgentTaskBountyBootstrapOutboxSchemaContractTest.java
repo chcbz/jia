@@ -76,16 +76,17 @@ class AgentTaskBountyBootstrapOutboxSchemaContractTest {
     @Test
     void globalDiscoveryUsesMySql8SkipLockedAndPersistedScope() throws Exception {
         Select annotation = AgentTaskBountyBootstrapOutboxMapper.class
-                .getMethod("selectClaimableAvailableForUpdate", long.class)
+                .getMethod("selectClaimableAvailableForUpdate", String.class, String.class, long.class)
                 .getAnnotation(Select.class);
         String sql = String.join(" ", annotation.value()).toLowerCase();
         assertTrue(sql.contains("limit 1 for update skip locked"));
-        assertTrue(sql.contains("tenant_id='0'"));
+        assertTrue(sql.contains("tenant_id=#{tenantid}"));
+        assertTrue(sql.contains("#{clientid} is null"));
         assertTrue(sql.contains("status in ('pending','retry')"));
         assertTrue(sql.contains("lease_until<=#{now}"));
         assertTrue(sql.contains("order by id"));
         assertFalse(sql.contains("#{ownerjiacn}"));
-        assertFalse(sql.contains("#{clientid}"));
+        assertTrue(sql.contains("cast(client_id as binary)=cast(#{clientid} as binary)"));
     }
 
     @Test

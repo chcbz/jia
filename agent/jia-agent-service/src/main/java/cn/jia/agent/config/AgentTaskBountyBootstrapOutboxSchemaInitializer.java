@@ -38,7 +38,7 @@ public final class AgentTaskBountyBootstrapOutboxSchemaInitializer implements In
     private static final Set<String> UNIQUE_INDEXES = Set.of(
             "PRIMARY","uk_atbbo_scope_bootstrap","uk_atbbo_scope_action");
     private static final Set<String> REQUIRED_CHECKS = Set.of(
-            "chk_atbbo_tenant","chk_atbbo_revision","chk_atbbo_hash",
+            "chk_atbbo_revision","chk_atbbo_hash",
             "chk_atbbo_references","chk_atbbo_state","chk_atbbo_lifecycle","chk_atbbo_time");
 
     private final JdbcTemplate jdbc;
@@ -127,10 +127,15 @@ public final class AgentTaskBountyBootstrapOutboxSchemaInitializer implements In
                 throw new IllegalStateException("Bounty bootstrap CHECK is ambiguous or unenforced");
             }
         }
+        // Existing production schemas remain valid until the explicit gray migration.
+        // Do not silently remove the legacy constraint during application startup.
+        if (checks.containsKey("chk_atbbo_tenant")) {
+            requireCheck(checks, "chk_atbbo_tenant", "tenant_id", "='0'");
+            checks.remove("chk_atbbo_tenant");
+        }
         if (!checks.keySet().equals(REQUIRED_CHECKS)) {
             throw new IllegalStateException("Bounty bootstrap checks are partial or drifted");
         }
-        requireCheck(checks, "chk_atbbo_tenant", "tenant_id", "='0'");
         requireCheck(checks, "chk_atbbo_revision", "grant_version", "attempt_count", "version");
         requireCheck(checks, "chk_atbbo_hash", "payload_hash", "reference_summary_sha256");
         requireCheck(checks, "chk_atbbo_references", "json_type", "reference_summary_json", "'ARRAY'");

@@ -137,6 +137,8 @@ def v1131AcceptanceSourceSet = sourceSets.create('v1131Acceptance') {
         include 'cn/jia/agent/service/impl/PersonalWorkspaceExecutionServiceImplTest.java'
         include 'cn/jia/agent/service/impl/PersonalWorkspaceWriteServiceTest.java'
         include 'cn/jia/agent/service/impl/PersonalWorkspaceStorageBoundaryTest.java'
+        include 'cn/jia/agent/service/impl/FileSystemPersonalWorkspaceStorageTest.java'
+        include 'cn/jia/agent/service/impl/TaskLinkedMaterialReaderMySqlTest.java'
         include 'cn/jia/agent/service/impl/PersonalWorkspacePreviewRendererTest.java'
         include 'cn/jia/agent/service/impl/PersonalWorkspaceOutputFormatValidatorTest.java'
         include 'cn/jia/agent/service/impl/AgentTaskArtifactStorageF02Test.java'
@@ -488,6 +490,10 @@ tasks.register('mmdU1Grant', Test) {
 // MMD-U1-BOOTSTRAP-OUTBOX isolated assignment/grant/bootstrap transaction and claim contract.
 def mmdU1BootstrapOutboxSourceSet = sourceSets.create('mmdU1BootstrapOutbox') {
     java {
+        srcDir 'src/mmdU1BootstrapOutbox/java'
+        srcDir 'src/skillManagementContract/java'
+        include 'cn/jia/agent/skill/SkillManagementMySqlFixture.java'
+        include 'cn/jia/agent/service/impl/TaskBootstrapTenantIsolationMySqlTest.java'
         srcDir 'src/test/java'
         include 'cn/jia/agent/service/impl/AgentTaskExecutionGrantServiceImplTest.java'
         include 'cn/jia/agent/service/impl/AgentTaskBountyBootstrapOutboxServiceImplTest.java'

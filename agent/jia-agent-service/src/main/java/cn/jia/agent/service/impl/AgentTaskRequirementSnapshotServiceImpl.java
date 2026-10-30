@@ -111,7 +111,7 @@ public final class AgentTaskRequirementSnapshotServiceImpl implements AgentTaskR
     }
 
     @Override public Snapshot read(AgentTaskExecutionGrantService.Scope scope,String taskId,long revision) {
-        validScope(scope,taskId);
+        validReadScope(scope,taskId);
         if (revision<1) throw new IllegalArgumentException("requirement revision invalid");
         List<Snapshot> rows=jdbc.query("SELECT tenant_id,client_id,owner_jiacn,task_id,revision,title,description,"
                         + "content_sha256,source FROM agent_task_requirement_snapshot "
@@ -130,7 +130,7 @@ public final class AgentTaskRequirementSnapshotServiceImpl implements AgentTaskR
 
     @Override public CurrentSnapshot readCurrent(
             AgentTaskExecutionGrantService.Scope scope, String taskId) {
-        validScope(scope,taskId);
+        validReadScope(scope,taskId);
         try {
             return transactions.executeWithLockedTaskRootInOwnerScope(
                     scope.tenantId(),scope.clientId(),scope.ownerJiacn(),taskId,root -> {
@@ -171,6 +171,7 @@ public final class AgentTaskRequirementSnapshotServiceImpl implements AgentTaskR
     }
 
     @Override public Snapshot requireCurrent(AgentTaskExecutionGrantService.Scope scope,String taskId,long revision) {
+        validScope(scope,taskId);
         if (revision<1) throw new IllegalArgumentException("requirement revision invalid");
         Snapshot current=latest(scope,taskId,true);
         if (current==null || current.revision()!=revision)
@@ -179,7 +180,7 @@ public final class AgentTaskRequirementSnapshotServiceImpl implements AgentTaskR
     }
 
     private Snapshot latest(AgentTaskExecutionGrantService.Scope scope,String taskId,boolean lock) {
-        validScope(scope,taskId);
+        validReadScope(scope,taskId);
         List<Snapshot> rows=jdbc.query("SELECT tenant_id,client_id,owner_jiacn,task_id,revision,title,description,"
                         + "content_sha256,source FROM agent_task_requirement_snapshot "
                         + "WHERE tenant_id=? AND client_id=? AND owner_jiacn=? AND task_id=? "
@@ -264,7 +265,12 @@ public final class AgentTaskRequirementSnapshotServiceImpl implements AgentTaskR
         }
     }
     private static void validScope(AgentTaskExecutionGrantService.Scope scope,String taskId) {
-        if (scope==null || !"0".equals(scope.tenantId()) || !exact(scope.clientId(),50)
+        validReadScope(scope, taskId);
+        if (!"0".equals(scope.tenantId()))
+            throw new IllegalArgumentException("Task requirement mutation scope is not supported");
+    }
+    private static void validReadScope(AgentTaskExecutionGrantService.Scope scope,String taskId) {
+        if (scope==null || !exact(scope.tenantId(),50) || !exact(scope.clientId(),50)
                 || !exact(scope.ownerJiacn(),50) || "0".equals(scope.ownerJiacn())
                 || !exact(taskId,100))
             throw new IllegalArgumentException("Owner-scoped requirement key invalid");

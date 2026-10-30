@@ -211,7 +211,8 @@ public class AgentTaskEventReplayServiceImpl
         private final AtomicLong deliveredVersion;
         private final AtomicLong highestHintedVersion;
         private final AtomicLong lastDurableHighWater;
-        private final AtomicInteger outstandingSignals = new AtomicInteger();
+        // Demand is reserved exactly once at enqueue, independently of delivery callback timing.
+        private final AtomicLong unreservedDemand = new AtomicLong();
         private final AtomicBoolean dirty = new AtomicBoolean();
         private final AtomicBoolean workerScheduled = new AtomicBoolean();
         private final AtomicBoolean logicalStopped = new AtomicBoolean();
@@ -250,7 +251,11 @@ public class AgentTaskEventReplayServiceImpl
             StartDecision decision = beginStart();
             sink.onCancel(this::cancel);
             sink.onDispose(this::cancel);
-            sink.onRequest(ignored -> signalDelivery());
+            sink.onRequest(requested -> {
+                unreservedDemand.getAndUpdate(available ->
+                        requested >= Long.MAX_VALUE - available ? Long.MAX_VALUE : available + requested);
+                signalDelivery();
+            });
             deliveryStartGate.countDown();
 
             if (sink.isCancelled()) {
@@ -535,8 +540,11 @@ public class AgentTaskEventReplayServiceImpl
             if (logicalStopped.get() || sink.isCancelled()) {
                 return false;
             }
-            long requested = sink.requestedFromDownstream();
-            if (requested <= outstandingSignals.get()) {
+            // sink demand is decremented inside next(), while outstanding used to be decremented
+            // after next() returned. Comparing those two snapshots could count one delivery twice.
+            long available = unreservedDemand.getAndUpdate(value ->
+                    value == Long.MAX_VALUE || value == 0 ? value : value - 1);
+            if (available == 0) {
                 terminalBackpressure(false, false);
                 return false;
             }
@@ -551,16 +559,12 @@ public class AgentTaskEventReplayServiceImpl
                     entity.getAggregateId(),
                     entity.getEventJson(),
                     entity.getOccurredAt());
-            outstandingSignals.incrementAndGet();
             if (!signalQueue.offer(signal)) {
-                outstandingSignals.decrementAndGet();
                 terminalBackpressure(true, false);
                 return false;
             }
             if (logicalStopped.get() || downstreamCancelled.get() || sink.isCancelled()) {
-                if (signalQueue.remove(signal)) {
-                    outstandingSignals.decrementAndGet();
-                }
+                signalQueue.remove(signal);
                 return false;
             }
             signalDelivery();
@@ -614,11 +618,9 @@ public class AgentTaskEventReplayServiceImpl
                     DurableEvent signal = signalQueue.poll();
                     if (signal != null) {
                         if (downstreamCancelled.get() || sink.isCancelled()) {
-                            outstandingSignals.decrementAndGet();
                             return;
                         }
                         if (serviceShutdownRequested.get()) {
-                            outstandingSignals.decrementAndGet();
                             clearSignalQueue();
                             deliverServiceShutdown();
                             return;
@@ -628,8 +630,6 @@ public class AgentTaskEventReplayServiceImpl
                             deliveredVersion.set(signal.eventVersion());
                         } catch (RuntimeException callbackFailure) {
                             terminalBackpressure(true, true);
-                        } finally {
-                            outstandingSignals.decrementAndGet();
                         }
                         continue;
                     }
@@ -790,13 +790,7 @@ public class AgentTaskEventReplayServiceImpl
         }
 
         private void clearSignalQueue() {
-            int removed = 0;
-            while (signalQueue.poll() != null) {
-                removed++;
-            }
-            if (removed != 0) {
-                outstandingSignals.addAndGet(-removed);
-            }
+            signalQueue.clear();
         }
 
         private void releaseActivePermit() {

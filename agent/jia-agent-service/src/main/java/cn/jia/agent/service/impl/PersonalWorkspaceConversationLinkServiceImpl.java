@@ -254,7 +254,8 @@ public class PersonalWorkspaceConversationLinkServiceImpl implements PersonalWor
     }
 
     private static void validateScope(Scope scope) {
-        if (scope == null || !"0".equals(scope.tenantId())) throw failure(Reason.BAD_REQUEST);
+        if (scope == null) throw failure(Reason.BAD_REQUEST);
+        id(scope.tenantId(), 50);
         id(scope.clientId(), 50); id(scope.ownerJiacn(), 50);
         if ("0".equals(scope.ownerJiacn())) throw failure(Reason.BAD_REQUEST);
     }

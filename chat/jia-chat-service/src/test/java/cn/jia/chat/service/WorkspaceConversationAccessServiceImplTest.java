@@ -39,7 +39,7 @@ class WorkspaceConversationAccessServiceImplTest extends BaseMockTest {
                 .setTargetAgentIds("[\"agent-a\"]")
                 .setLifecycleGeneration(3L);
         conversation.setUpdateTime(17L);
-        when(conversationDao.findScopedById(OWNER, CLIENT, "41")).thenReturn(conversation);
+        when(conversationDao.findScopedById(TENANT, OWNER, CLIENT, "41")).thenReturn(conversation);
 
         WorkspaceConversationAccessService.ConversationView view =
                 service().requireAccessible(SCOPE, "41");
@@ -59,7 +59,7 @@ class WorkspaceConversationAccessServiceImplTest extends BaseMockTest {
                 Arrays.stream(WorkspaceConversationAccessService.ConversationView.class
                                 .getRecordComponents())
                         .map(component -> component.getName()).toList());
-        verify(conversationDao).findScopedById(OWNER, CLIENT, "41");
+        verify(conversationDao).findScopedById(TENANT, OWNER, CLIENT, "41");
         verify(taskThreadDao).findAnyByConversationId("41");
     }
 
@@ -70,7 +70,7 @@ class WorkspaceConversationAccessServiceImplTest extends BaseMockTest {
                 .setConversationScopeKey("task:task-7")
                 .setTaskId("task-7")
                 .setTargetAgentIds("[\"agent-a\",\"agent-b\"]");
-        when(conversationDao.findScopedById(OWNER, CLIENT, "42")).thenReturn(conversation);
+        when(conversationDao.findScopedById(TENANT, OWNER, CLIENT, "42")).thenReturn(conversation);
 
         WorkspaceConversationAccessService.ConversationView view =
                 service().requireAccessible(SCOPE, "42");
@@ -81,9 +81,22 @@ class WorkspaceConversationAccessServiceImplTest extends BaseMockTest {
     }
 
     @Test
+    void grayScopeUsesExplicitTenantAndRejectsProductionRows() {
+        var gray = new WorkspaceConversationAccessService.Scope("1", CLIENT, OWNER);
+        ChatConversationEntity row = privateConversation(41L);
+        row.setTenantId("1");
+        when(conversationDao.findScopedById("1", OWNER, CLIENT, "41")).thenReturn(row);
+        assertEquals("41", service().requireAccessible(gray, "41").conversationId());
+        verify(conversationDao).findScopedById("1", OWNER, CLIENT, "41");
+        verify(conversationDao, never()).findScopedById(OWNER, CLIENT, "41");
+        row.setTenantId("0");
+        assertDenied(() -> service().requireAccessible(gray, "41"));
+    }
+
+    @Test
     void malformedScopeOrConversationIdFailsBeforeDao() {
         List<WorkspaceConversationAccessService.Scope> malformedScopes = List.of(
-                new WorkspaceConversationAccessService.Scope("tenant-a", CLIENT, OWNER),
+                new WorkspaceConversationAccessService.Scope(" 1", CLIENT, OWNER),
                 new WorkspaceConversationAccessService.Scope(TENANT, " client-a", OWNER),
                 new WorkspaceConversationAccessService.Scope(TENANT, CLIENT, "owner-a\0"),
                 new WorkspaceConversationAccessService.Scope(TENANT, CLIENT, TENANT));
@@ -96,6 +109,7 @@ class WorkspaceConversationAccessServiceImplTest extends BaseMockTest {
         verify(conversationDao, never()).findScopedById(
                 org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.any());
         verify(taskThreadDao, never()).findAnyByConversationId(
                 org.mockito.ArgumentMatchers.any());
@@ -103,33 +117,33 @@ class WorkspaceConversationAccessServiceImplTest extends BaseMockTest {
 
     @Test
     void missingForeignDeletedAndNonJuyitingRowsAreIndistinguishable() {
-        when(conversationDao.findScopedById(OWNER, CLIENT, "51")).thenReturn(null);
+        when(conversationDao.findScopedById(TENANT, OWNER, CLIENT, "51")).thenReturn(null);
         assertDenied(() -> service().requireAccessible(SCOPE, "51"));
 
         ChatConversationEntity foreignOwner = conversation(52L).setJiacn("owner-b");
-        when(conversationDao.findScopedById(OWNER, CLIENT, "52")).thenReturn(foreignOwner);
+        when(conversationDao.findScopedById(TENANT, OWNER, CLIENT, "52")).thenReturn(foreignOwner);
         assertDenied(() -> service().requireAccessible(SCOPE, "52"));
 
         ChatConversationEntity foreignClient = conversation(53L);
         foreignClient.setClientId("client-b");
-        when(conversationDao.findScopedById(OWNER, CLIENT, "53")).thenReturn(foreignClient);
+        when(conversationDao.findScopedById(TENANT, OWNER, CLIENT, "53")).thenReturn(foreignClient);
         assertDenied(() -> service().requireAccessible(SCOPE, "53"));
 
         ChatConversationEntity foreignTenant = conversation(54L);
         foreignTenant.setTenantId("tenant-b");
-        when(conversationDao.findScopedById(OWNER, CLIENT, "54")).thenReturn(foreignTenant);
+        when(conversationDao.findScopedById(TENANT, OWNER, CLIENT, "54")).thenReturn(foreignTenant);
         assertDenied(() -> service().requireAccessible(SCOPE, "54"));
 
         ChatConversationEntity wrongId = conversation(999L);
-        when(conversationDao.findScopedById(OWNER, CLIENT, "55")).thenReturn(wrongId);
+        when(conversationDao.findScopedById(TENANT, OWNER, CLIENT, "55")).thenReturn(wrongId);
         assertDenied(() -> service().requireAccessible(SCOPE, "55"));
 
         ChatConversationEntity deleted = conversation(56L).setDeletedAt(100L);
-        when(conversationDao.findScopedById(OWNER, CLIENT, "56")).thenReturn(deleted);
+        when(conversationDao.findScopedById(TENANT, OWNER, CLIENT, "56")).thenReturn(deleted);
         assertDenied(() -> service().requireAccessible(SCOPE, "56"));
 
         ChatConversationEntity normal = conversation(57L).setConversationType("normal");
-        when(conversationDao.findScopedById(OWNER, CLIENT, "57")).thenReturn(normal);
+        when(conversationDao.findScopedById(TENANT, OWNER, CLIENT, "57")).thenReturn(normal);
         assertDenied(() -> service().requireAccessible(SCOPE, "57"));
 
         verify(taskThreadDao, never()).findAnyByConversationId(
@@ -140,16 +154,16 @@ class WorkspaceConversationAccessServiceImplTest extends BaseMockTest {
     void taskThreadMarkerOrBindingAlwaysFailsClosed() {
         ChatConversationEntity marked = conversation(61L)
                 .setConversationScopeType(AgentTaskThreadConstants.CONVERSATION_SCOPE_TYPE);
-        when(conversationDao.findScopedById(OWNER, CLIENT, "61")).thenReturn(marked);
+        when(conversationDao.findScopedById(TENANT, OWNER, CLIENT, "61")).thenReturn(marked);
         assertDenied(() -> service().requireAccessible(SCOPE, "61"));
 
         ChatConversationEntity corruptedMarker = conversation(62L)
                 .setConversationScopeType(" TASK_THREAD\0 ");
-        when(conversationDao.findScopedById(OWNER, CLIENT, "62")).thenReturn(corruptedMarker);
+        when(conversationDao.findScopedById(TENANT, OWNER, CLIENT, "62")).thenReturn(corruptedMarker);
         assertDenied(() -> service().requireAccessible(SCOPE, "62"));
 
         ChatConversationEntity bound = privateConversation(63L);
-        when(conversationDao.findScopedById(OWNER, CLIENT, "63")).thenReturn(bound);
+        when(conversationDao.findScopedById(TENANT, OWNER, CLIENT, "63")).thenReturn(bound);
         when(taskThreadDao.findAnyByConversationId("63"))
                 .thenReturn(new AgentTaskThreadEntity().setConversationId("63"));
         assertDenied(() -> service().requireAccessible(SCOPE, "63"));
@@ -159,7 +173,7 @@ class WorkspaceConversationAccessServiceImplTest extends BaseMockTest {
     void malformedPersistedFactsFailClosed() {
         ChatConversationEntity badTargets = privateConversation(71L)
                 .setTargetAgentIds("[\"agent-a\",\"agent-a\"]");
-        when(conversationDao.findScopedById(OWNER, CLIENT, "71")).thenReturn(badTargets);
+        when(conversationDao.findScopedById(TENANT, OWNER, CLIENT, "71")).thenReturn(badTargets);
         assertDenied(() -> service().requireAccessible(SCOPE, "71"));
 
         ChatConversationEntity mismatchedKey = conversation(72L)
@@ -167,32 +181,32 @@ class WorkspaceConversationAccessServiceImplTest extends BaseMockTest {
                 .setConversationScopeKey("task:other")
                 .setTaskId("task-7")
                 .setTargetAgentIds("[\"agent-a\"]");
-        when(conversationDao.findScopedById(OWNER, CLIENT, "72")).thenReturn(mismatchedKey);
+        when(conversationDao.findScopedById(TENANT, OWNER, CLIENT, "72")).thenReturn(mismatchedKey);
         assertDenied(() -> service().requireAccessible(SCOPE, "72"));
 
         ChatConversationEntity missingGeneration = privateConversation(73L)
                 .setLifecycleGeneration(null);
-        when(conversationDao.findScopedById(OWNER, CLIENT, "73"))
+        when(conversationDao.findScopedById(TENANT, OWNER, CLIENT, "73"))
                 .thenReturn(missingGeneration);
         assertDenied(() -> service().requireAccessible(SCOPE, "73"));
 
         ChatConversationEntity missingRevision = privateConversation(74L);
         missingRevision.setUpdateTime(null);
-        when(conversationDao.findScopedById(OWNER, CLIENT, "74"))
+        when(conversationDao.findScopedById(TENANT, OWNER, CLIENT, "74"))
                 .thenReturn(missingRevision);
         assertDenied(() -> service().requireAccessible(SCOPE, "74"));
     }
 
     @Test
     void daoFailuresFailClosedWithoutLeakingCause() {
-        when(conversationDao.findScopedById(OWNER, CLIENT, "81"))
+        when(conversationDao.findScopedById(TENANT, OWNER, CLIENT, "81"))
                 .thenThrow(new IllegalArgumentException("sensitive database detail"));
         IllegalStateException conversationFailure = assertThrows(IllegalStateException.class,
                 () -> service().requireAccessible(SCOPE, "81"));
         assertEquals("Workspace conversation is unavailable", conversationFailure.getMessage());
 
         ChatConversationEntity conversation = privateConversation(82L);
-        when(conversationDao.findScopedById(OWNER, CLIENT, "82")).thenReturn(conversation);
+        when(conversationDao.findScopedById(TENANT, OWNER, CLIENT, "82")).thenReturn(conversation);
         when(taskThreadDao.findAnyByConversationId("82"))
                 .thenThrow(new IllegalStateException("sensitive binding detail"));
         IllegalStateException bindingFailure = assertThrows(IllegalStateException.class,

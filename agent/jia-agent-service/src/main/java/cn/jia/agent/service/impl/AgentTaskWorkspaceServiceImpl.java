@@ -139,7 +139,7 @@ public class AgentTaskWorkspaceServiceImpl
 
     private Authorization authorizeRows(
             String tenantId, String clientId, String ownerJiacn, String taskId, String actorAgentId) {
-        if (!"0".equals(tenantId)) {
+        if (!validId(tenantId, 50)) {
             throw notFound();
         }
         requireId(clientId, "clientId", 50);

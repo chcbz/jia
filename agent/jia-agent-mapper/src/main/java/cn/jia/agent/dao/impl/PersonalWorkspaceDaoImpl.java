@@ -127,7 +127,7 @@ public class PersonalWorkspaceDaoImpl implements PersonalWorkspaceDao {
     }
     private static void init(cn.jia.core.entity.BaseEntity entity) { entity.init4Creation(); }
     private static int bounded(int limit) { return Math.max(1, Math.min(limit, 100)); }
-    private static void requireScope(String tenant, String client, String owner) { if (!"0".equals(tenant)) throw new IllegalArgumentException("tenant"); requireId(client,"clientId",50); requireId(owner,"ownerJiacn",50); if ("0".equals(owner)) throw new IllegalArgumentException("owner"); }
+    private static void requireScope(String tenant, String client, String owner) { requireId(tenant,"tenantId",50); requireId(client,"clientId",50); requireId(owner,"ownerJiacn",50); if ("0".equals(owner)) throw new IllegalArgumentException("owner"); }
     private static void requireVersion(int value) { if (value < 1) throw new IllegalArgumentException("version"); }
     private static void requireId(String value, String name, int max) { if (value == null || value.isBlank() || !value.equals(value.strip()) || value.codePointCount(0,value.length()) > max || value.chars().anyMatch(Character::isISOControl)) throw new IllegalArgumentException(name); }
 }

@@ -71,7 +71,40 @@ class AgentTaskWorkspaceControllerTest extends BaseMockTest {
     }
 
     @Test
-    void jwtClaimsAreSoleScopeAuthorityAndSuccessIsRawNoStoreJson() throws Exception {
+    void admittedGrayClaimIsForwardedAndQueryCannotOverrideIt() throws Exception {
+        var authentication = tenantAuthentication(java.util.Map.of("tenant_id", "1"));
+        when(service.snapshot("1", PRODUCTION_CLIENT, OWNER, TASK, ACTOR)).thenReturn(snapshot("19"));
+        mvc.perform(get("/agent/tasks/{taskId}/workspace", TASK)
+                        .queryParam("actorAgentId", ACTOR).queryParam("tenant_id", "0")
+                        .principal(authentication))
+                .andExpect(status().isOk());
+        verify(taskEventsGate).allows("1", PRODUCTION_CLIENT);
+        verify(service).snapshot("1", PRODUCTION_CLIENT, OWNER, TASK, ACTOR);
+        verify(service, never()).snapshot("0", PRODUCTION_CLIENT, OWNER, TASK, ACTOR);
+    }
+
+    @Test
+    void malformedOrConflictingTenantClaimsFailBeforeWorkspaceLookup() throws Exception {
+        for (var claims : java.util.List.<java.util.Map<String, Object>>of(
+                java.util.Map.of("tenant_id", 1), java.util.Map.of("tenant_id", " 1"),
+                java.util.Map.of("tenant_id", "1", "tenantId", "0"))) {
+            mvc.perform(get("/agent/tasks/{taskId}/workspace", TASK)
+                            .queryParam("actorAgentId", ACTOR).principal(tenantAuthentication(claims)))
+                    .andExpect(status().isForbidden());
+        }
+        verifyNoInteractions(service, taskEventsGate);
+    }
+
+    private static JwtAuthenticationToken tenantAuthentication(java.util.Map<String, Object> claims) {
+        Jwt jwt = Jwt.withTokenValue("token").header("alg", "none")
+                .claim("jiacn", OWNER).claim("client_id", PRODUCTION_CLIENT)
+                .claims(values -> values.putAll(claims))
+                .issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(60)).build();
+        return new JwtAuthenticationToken(jwt, List.of());
+    }
+
+    @Test
+    void jwtClaimsAreSoleScopeAuthorityAndSuccessUsesPublicNoStoreEnvelope() throws Exception {
         EsContext poisoned = new EsContext();
         poisoned.setJiacn("cookie-tenant");
         poisoned.setClientId("cookie-client");
@@ -84,9 +117,12 @@ class AgentTaskWorkspaceControllerTest extends BaseMockTest {
                         .queryParam("actorAgentId", ACTOR).principal(authentication))
                 .andExpect(status().isOk())
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
-                .andExpect(jsonPath("$.currentVersion").value("9007199254740993"))
-                .andExpect(jsonPath("$.conversationId").value(nullValue()))
-                .andExpect(jsonPath("$.data").doesNotExist());
+                .andExpect(jsonPath("$.data.currentVersion").value("9007199254740993"))
+                .andExpect(jsonPath("$.data.conversationId").value(nullValue()))
+                .andExpect(jsonPath("$.code").value("E0"))
+                .andExpect(jsonPath("$.protocolVersion").value(1))
+                .andExpect(jsonPath("$.requestId").isNotEmpty())
+                .andExpect(jsonPath("$.currentVersion").doesNotExist());
         verify(service).snapshot("0", "client-a", "tenant-a", TASK, ACTOR);
     }
 
@@ -107,7 +143,7 @@ class AgentTaskWorkspaceControllerTest extends BaseMockTest {
                         .principal(authenticate(OWNER, PRODUCTION_CLIENT)))
                 .andExpect(status().isOk())
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
-                .andExpect(jsonPath("$.currentVersion").value("7"));
+                .andExpect(jsonPath("$.data.currentVersion").value("7"));
         verify(service).snapshot("0", PRODUCTION_CLIENT, OWNER, TASK, ACTOR);
 
         productionMvc.perform(get("/agent/tasks/{taskId}/workspace", TASK)
