@@ -243,7 +243,8 @@ class AgentTaskAggregationRealDatabaseTest {
 
         assertThrows(IllegalArgumentException.class, () -> taskMetaDao.findByTaskIdInOwnerScope(
                 OTHER_TENANT, CLIENT, OWNER, TENANT_ZERO_TASK));
-        assertThrows(IllegalArgumentException.class, () -> taskMetaDao.findByTaskIdForUpdateInOwnerScope(
+        // Exact scoped locking reads admit another tenant, but must never find tenant 0's row.
+        assertNull(taskMetaDao.findByTaskIdForUpdateInOwnerScope(
                 OTHER_TENANT, CLIENT, OWNER, TENANT_ZERO_TASK));
         assertThrows(IllegalArgumentException.class, () -> taskMetaDao.findAggregationSnapshot(
                 OTHER_TENANT, CLIENT, OWNER, TENANT_ZERO_TASK));
