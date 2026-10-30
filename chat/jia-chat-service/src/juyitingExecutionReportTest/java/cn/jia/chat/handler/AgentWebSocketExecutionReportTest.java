@@ -161,7 +161,8 @@ class AgentWebSocketExecutionReportTest {
         UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage(generic(
                 "work.heartbeat", "foreign-report", "\"status\":\"RUNNING\",\"tenantId\":\"0\"")));
         verify(reports, never()).accept(any(), any());
-        assertEquals("REPORT_INVALID", lastOutbound().get("code"));
+        // Scope tampering is rejected at the session boundary before report dispatch.
+        assertEquals("SESSION_PROOF_MISMATCH", lastOutbound().get("code"));
     }
 
     private String codexResult(String targetAgentId, String runtimeInstanceId) {
