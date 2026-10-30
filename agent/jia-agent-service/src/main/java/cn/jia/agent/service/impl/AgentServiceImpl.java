@@ -1079,7 +1079,8 @@ public class AgentServiceImpl implements AgentService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public AgentTaskDTO createTask(AgentTaskCreateDTO request) {
+    public AgentTaskDTO createTask(TaskOwnerScope scope, AgentTaskCreateDTO request) {
+        requireSupportedTaskOwner(scope);
         require(request != null && !StringUtil.isBlank(request.getTitle()), "title is required");
         // Validate full original Unicode and SQL MEDIUMTEXT capacity before lossy TaskPlan work.
         AgentTaskRequirementSnapshotServiceImpl.validateOriginalInput(
@@ -1088,9 +1089,9 @@ public class AgentServiceImpl implements AgentService {
                         && request.getRequiredSkillRequirements() == null,
                 "funded task fields require the funded bounty endpoint");
 
-        String tenantId = SINGLE_TENANT_ID;
-        String clientId = resolveCurrentClientId();
-        String ownerJiacn = resolveCurrentJiacn();
+        String tenantId = scope.tenantId();
+        String clientId = scope.clientId();
+        String ownerJiacn = scope.ownerJiacn();
         String reservedTaskId = UUID.randomUUID().toString();
         AgentTaskMetaEntity reservedMeta = new AgentTaskMetaEntity();
         reservedMeta.setTaskId(reservedTaskId);
@@ -1104,7 +1105,9 @@ public class AgentServiceImpl implements AgentService {
         reservedMeta.setReviewRequired(false);
         reservedMeta.setTaskVersion(0L);
         reservedMeta.setCurrentEventVersion(0L);
-        applyCurrentTaskScope(reservedMeta);
+        reservedMeta.setTenantId(tenantId);
+        reservedMeta.setClientId(clientId);
+        reservedMeta.setOwnerJiacn(ownerJiacn);
 
         return mutationTransaction.executeAfterTaskRootReservationInOwnerScope(
                 tenantId, clientId, ownerJiacn, reservedTaskId,
@@ -1128,7 +1131,7 @@ public class AgentServiceImpl implements AgentService {
                     String finalTaskId = reservedTaskId;
                     TaskService taskService = taskServiceProvider.getIfAvailable();
                     if (taskService != null) {
-                        TaskPlanEntity taskPlan = taskPlanFor(request);
+                        TaskPlanEntity taskPlan = taskPlanFor(scope, request);
                         TaskPlanEntity persistedPlan = taskService.create(taskPlan);
                         Long planId = taskPlan.getId() != null
                                 ? taskPlan.getId()
@@ -1178,12 +1181,12 @@ public class AgentServiceImpl implements AgentService {
                 });
     }
 
-    private TaskPlanEntity taskPlanFor(AgentTaskCreateDTO request) {
+    private TaskPlanEntity taskPlanFor(TaskOwnerScope scope, AgentTaskCreateDTO request) {
         TaskPlanEntity taskPlan = new TaskPlanEntity();
         taskPlan.setName(limitLength(request.getTitle(), 30));
         taskPlan.setDescription(limitLength(request.getDescription(), 200));
-        taskPlan.setJiacn(resolveCurrentJiacn());
-        taskPlan.setClientId(resolveCurrentClientId());
+        taskPlan.setJiacn(scope.ownerJiacn());
+        taskPlan.setClientId(scope.clientId());
         taskPlan.setPeriod(TaskConstants.TASK_PERIOD_ALLTIME);
         taskPlan.setType(TaskConstants.TASK_TYPE_NOTIFY);
         taskPlan.setStatus(TaskConstants.TASK_STATUS_ENABLE);
@@ -1196,7 +1199,7 @@ public class AgentServiceImpl implements AgentService {
 
     private AgentTaskDTO taskCreateResult(
             AgentTaskMetaEntity taskRoot, AgentTaskCreateDTO request) {
-        AgentTaskDTO task = toTaskDTO(taskRoot);
+        AgentTaskDTO task = toTaskDTO(taskRoot, taskRoot.getOwnerJiacn());
         task.setTitle(request.getTitle());
         task.setDescription(request.getDescription());
         return task;
@@ -1206,6 +1209,31 @@ public class AgentServiceImpl implements AgentService {
     @org.springframework.beans.factory.annotation.Autowired
     public void setExternalServicePolicies(cn.jia.agent.service.AgentExternalServicePolicyService policies) {
         this.externalServicePolicies=Objects.requireNonNull(policies);
+    }
+
+    private void requireSupportedTaskOwner(TaskOwnerScope scope) {
+        if (scope == null || !SINGLE_TENANT_ID.equals(scope.tenantId())
+                || !isExactAuthenticatedScopeId(scope.clientId())
+                || !isExactAuthenticatedScopeId(scope.ownerJiacn())
+                || "0".equals(scope.ownerJiacn())) {
+            throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN,
+                    "Task creation owner scope is unavailable");
+        }
+    }
+
+    @Override
+    public AgentTaskDTO getTask(TaskOwnerScope scope, String taskId) {
+        requireSupportedTaskOwner(scope);
+        requireExactTaskOwnerScope(scope.tenantId(), scope.clientId(), scope.ownerJiacn(), taskId);
+        AgentTaskMetaEntity meta = Optional.ofNullable(agentTaskMetaDao.findByTaskIdInOwnerScope(
+                scope.tenantId(), scope.clientId(), scope.ownerJiacn(), taskId)).orElseThrow(() ->
+                new AgentBizException(AgentErrorConstants.TASK_NOT_FOUND, "Task not found"));
+        requireOwnedTaskProjection(meta, scope.tenantId(), scope.clientId(), scope.ownerJiacn(), taskId);
+        var result = toTaskDTO(meta, scope.ownerJiacn());
+        result.setAssignedTarget(externalServicePolicies.assignedTarget(
+                new AgentTaskExecutionGrantService.Scope(scope.tenantId(), scope.clientId(),
+                        scope.ownerJiacn()), taskId));
+        return result;
     }
 
     @Override
@@ -1218,7 +1246,11 @@ public class AgentServiceImpl implements AgentService {
 
     @Override
     public List<String> listTaskMemberAgentIds(String tenantId, String clientId, String taskId) {
-        String ownerJiacn = resolveCurrentJiacn();
+        return listTaskMemberAgentIds(tenantId, clientId, resolveCurrentJiacn(), taskId);
+    }
+
+    private List<String> listTaskMemberAgentIds(
+            String tenantId, String clientId, String ownerJiacn, String taskId) {
         requireExactTaskOwnerScope(tenantId, clientId, ownerJiacn, taskId);
 
         List<AgentTaskMemberEntity> members = Optional.ofNullable(
@@ -1887,28 +1919,6 @@ public class AgentServiceImpl implements AgentService {
             throw new IllegalArgumentException("Task event timestamp is invalid");
         }
         return result;
-    }
-
-    private void applyCurrentTaskScope(AgentTaskMetaEntity meta) {
-        String clientId = resolveCurrentClientId();
-        String ownerJiacn = resolveCurrentJiacn();
-        if (StringUtil.isBlank(meta.getTenantId())) {
-            meta.setTenantId(SINGLE_TENANT_ID);
-        } else {
-            require(SINGLE_TENANT_ID.equals(meta.getTenantId()),
-                    "task tenantId must be the single-tenant key");
-        }
-        if (StringUtil.isBlank(meta.getClientId())) {
-            meta.setClientId(clientId);
-        } else {
-            require(clientId.equals(meta.getClientId()), "task clientId does not match current scope");
-        }
-        if (StringUtil.isBlank(meta.getOwnerJiacn())) {
-            meta.setOwnerJiacn(ownerJiacn);
-        } else {
-            require(ownerJiacn.equals(meta.getOwnerJiacn()),
-                    "task owner does not match authenticated scope");
-        }
     }
 
     private void requireExactTaskOwnerScope(
@@ -2930,6 +2940,10 @@ public class AgentServiceImpl implements AgentService {
     }
 
     private AgentTaskDTO toTaskDTO(AgentTaskMetaEntity meta) {
+        return toTaskDTO(meta, resolveCurrentJiacn());
+    }
+
+    private AgentTaskDTO toTaskDTO(AgentTaskMetaEntity meta, String ownerJiacn) {
         AgentTaskDTO dto = new AgentTaskDTO();
         dto.setId(meta.getTaskId());
         dto.setTenantId(meta.getTenantId());
@@ -2943,7 +2957,7 @@ public class AgentServiceImpl implements AgentService {
                     "Persisted task coordinatorAgentId is invalid");
             dto.setCoordinatorAgentId(meta.getCoordinatorAgentId());
         }
-        List<String> assignedAgentIds = resolveTaskAssigneeIds(meta);
+        List<String> assignedAgentIds = resolveTaskAssigneeIds(meta, ownerJiacn);
         applyTaskAssignees(dto, assignedAgentIds);
         dto.setCreatedAt(meta.getCreateTime());
         dto.setUpdatedAt(meta.getUpdateTime());
@@ -2993,12 +3007,12 @@ public class AgentServiceImpl implements AgentService {
         meta.setCoordinatorAgentId(primaryAgentId);
     }
 
-    private List<String> resolveTaskAssigneeIds(AgentTaskMetaEntity meta) {
+    private List<String> resolveTaskAssigneeIds(AgentTaskMetaEntity meta, String ownerJiacn) {
         if (meta != null && !StringUtil.isBlank(meta.getTenantId())
                 && !StringUtil.isBlank(meta.getClientId())
                 && !StringUtil.isBlank(meta.getTaskId())) {
             List<String> memberAgentIds = listTaskMemberAgentIds(
-                    meta.getTenantId(), meta.getClientId(), meta.getTaskId());
+                    meta.getTenantId(), meta.getClientId(), ownerJiacn, meta.getTaskId());
             if (!memberAgentIds.isEmpty()) {
                 return memberAgentIds;
             }

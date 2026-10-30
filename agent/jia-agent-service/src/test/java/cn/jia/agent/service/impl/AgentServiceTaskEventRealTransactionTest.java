@@ -156,7 +156,7 @@ class AgentServiceTaskEventRealTransactionTest {
             }
             return null;
         }).when(eventWriter).append(any());
-        assertThrows(IllegalStateException.class, () -> service.createTask(createRequest()));
+        assertThrows(IllegalStateException.class, () -> service.createTask(new cn.jia.agent.service.AgentService.TaskOwnerScope("0", "jia_client", "juyiting"), createRequest()));
         assertEquals(0, count("agent_task_meta"));
         assertEquals(0, count("task_plan_fixture"));
         assertEquals(0, count("task_item_fixture"));
@@ -166,7 +166,7 @@ class AgentServiceTaskEventRealTransactionTest {
         reset(eventWriter, eventPublisher);
         TransactionTemplate outer = new TransactionTemplate(transactionManager);
         outer.executeWithoutResult(status -> {
-            service.createTask(createRequest());
+            service.createTask(new cn.jia.agent.service.AgentService.TaskOwnerScope("0", "jia_client", "juyiting"), createRequest());
             status.setRollbackOnly();
         });
         assertEquals(0, count("agent_task_meta"));
@@ -185,7 +185,7 @@ class AgentServiceTaskEventRealTransactionTest {
                 VALUES ('42',7,'evt-existing','TASK_CREATED','{}','0','jia_client')
                 """);
 
-        assertThrows(IllegalStateException.class, () -> service.createTask(createRequest()));
+        assertThrows(IllegalStateException.class, () -> service.createTask(new cn.jia.agent.service.AgentService.TaskOwnerScope("0", "jia_client", "juyiting"), createRequest()));
 
         assertEquals(1, count("agent_task_meta"));
         assertEquals(9L, jdbc.queryForObject(
@@ -204,7 +204,7 @@ class AgentServiceTaskEventRealTransactionTest {
 
     @Test
     void successfulCreateRekeysReservedRootAndPublishesOnlyAfterCommit() {
-        AgentTaskDTO created = service.createTask(createRequest());
+        AgentTaskDTO created = service.createTask(new cn.jia.agent.service.AgentService.TaskOwnerScope("0", "jia_client", "juyiting"), createRequest());
 
         assertEquals("42", created.getId());
         assertEquals(List.of("42"), jdbc.queryForList(
@@ -222,7 +222,7 @@ class AgentServiceTaskEventRealTransactionTest {
         AgentTaskCreateDTO request=createRequest();
         request.setTitle("a".repeat(29)+"🚀"+" untruncated title");
         request.setDescription("b".repeat(199)+"🚀"+" complete original body");
-        assertEquals("42",service.createTask(request).getId());
+        assertEquals("42",service.createTask(new cn.jia.agent.service.AgentService.TaskOwnerScope("0", "jia_client", "juyiting"), request).getId());
         assertEquals(request.getTitle(),jdbc.queryForObject(
                 "SELECT title FROM agent_task_requirement_snapshot WHERE task_id='42'",String.class));
         assertEquals(request.getDescription(),jdbc.queryForObject(

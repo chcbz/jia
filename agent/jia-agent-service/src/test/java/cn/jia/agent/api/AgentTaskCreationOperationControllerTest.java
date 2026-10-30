@@ -300,6 +300,29 @@ class AgentTaskCreationOperationControllerTest {
                         "file-a", 1, "REFERENCE")), task);
     }
 
+    @Test
+    void trustedGrayScopeIsForwardedButCannotOverrideProcessContext() throws Exception {
+        EsContextHolder.getContext().setTenantId("1");
+        var token = Jwt.withTokenValue("fixture").header("alg", "none")
+                .claim("tenant_id", "1").claim("jiacn", "owner-a").claim("client_id", "client-a")
+                .issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(600)).build();
+        var authentication = new JwtAuthenticationToken(token, List.of());
+        var expected = new AgentTaskCreationOperationService.Scope("1", "client-a", "owner-a");
+        when(operations.create(eq(expected), eq("gray-key"), any())).thenThrow(
+                new AgentTaskCreationOperationService.Failure(AgentTaskCreationOperationService.Reason.FORBIDDEN));
+        mvc.perform(post("/agent/tasks/creation-operations").principal(authentication)
+                        .header("Idempotency-Key", "gray-key").contentType(MediaType.APPLICATION_JSON)
+                        .content(q("{\"title\":\"x\"}")))
+                .andExpect(status().isForbidden());
+        verify(operations).create(eq(expected), eq("gray-key"), any());
+        EsContextHolder.getContext().setTenantId("0");
+        mvc.perform(post("/agent/tasks/creation-operations").principal(authentication)
+                        .header("Idempotency-Key", "wrong-process").contentType(MediaType.APPLICATION_JSON)
+                        .content(q("{\"title\":\"x\"}")))
+                .andExpect(status().isForbidden());
+        verify(operations, never()).create(any(), eq("wrong-process"), any());
+    }
+
     private static JwtAuthenticationToken jwt(String owner, String client) {
         Jwt token = Jwt.withTokenValue("fixture").header("alg", "none")
                 .claim("tenant_id", "0").claim("jiacn", owner).claim("client_id", client)

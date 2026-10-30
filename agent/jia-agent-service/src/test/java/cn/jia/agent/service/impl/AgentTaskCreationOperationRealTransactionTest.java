@@ -83,9 +83,9 @@ class AgentTaskCreationOperationRealTransactionTest {
 
         JdbcOperationDao operationRows = new JdbcOperationDao(jdbc, failCompletion);
         AgentService agentTarget = mock(AgentService.class);
-        when(agentTarget.createTask(any())).thenAnswer(invocation -> {
+        when(agentTarget.createTask(any(AgentService.TaskOwnerScope.class), any())).thenAnswer(invocation -> {
             taskCalls.incrementAndGet();
-            cn.jia.agent.entity.AgentTaskCreateDTO request = invocation.getArgument(0);
+            cn.jia.agent.entity.AgentTaskCreateDTO request = invocation.getArgument(1);
             String taskId = "task-" + taskCalls.get();
             jdbc.update("INSERT INTO fixture_task(task_id,title,description) VALUES (?,?,?)",
                     taskId, request.getTitle(), request.getDescription());
@@ -96,8 +96,8 @@ class AgentTaskCreationOperationRealTransactionTest {
                     taskId);
             return task(taskId, request.getTitle(), request.getDescription());
         });
-        when(agentTarget.getTask(anyString())).thenAnswer(invocation -> {
-            String taskId = invocation.getArgument(0);
+        when(agentTarget.getTask(any(AgentService.TaskOwnerScope.class), anyString())).thenAnswer(invocation -> {
+            String taskId = invocation.getArgument(1);
             return jdbc.queryForObject("SELECT task_id,title,description FROM fixture_task "
                             + "WHERE task_id=?", (rs, row) ->
                             task(rs.getString(1), rs.getString(2), rs.getString(3)), taskId);

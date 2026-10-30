@@ -390,7 +390,9 @@ public class AgentController {
             Authentication authentication) {
         AgentTaskCreateDTO request = protocolRequest == null ? null : protocolRequest.data();
         if (!hasFundingFields(request)) {
-            return JsonResult.success(agentService.createTask(request));
+            var scope = requireJwtScope(authentication);
+            return JsonResult.success(agentService.createTask(new AgentService.TaskOwnerScope(
+                    scope.tenantId(), scope.clientId(), scope.ownerJiacn()), request));
         }
         FundedBountyActor actor = requireMoneyActor(authentication);
         FundedBountyService service = requireFundedBountyService();

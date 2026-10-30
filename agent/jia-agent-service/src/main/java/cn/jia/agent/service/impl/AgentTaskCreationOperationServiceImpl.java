@@ -13,9 +13,6 @@ import cn.jia.agent.service.AgentTaskCreationOperationService;
 import cn.jia.agent.service.AgentTaskExecutionGrantService;
 import cn.jia.agent.service.AgentTaskRequirementSnapshotService;
 import cn.jia.agent.service.PersonalWorkspaceTaskLinkService;
-import cn.jia.core.context.EsContext;
-import cn.jia.core.context.EsContextHolder;
-import cn.jia.core.security.TenantClaimPolicy;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.node.ArrayNode;
@@ -23,8 +20,6 @@ import tools.jackson.databind.node.ObjectNode;
 import jakarta.inject.Inject;
 import jakarta.inject.Named;
 import org.springframework.dao.DataAccessException;
-import org.springframework.security.core.context.SecurityContextHolder;
-import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.transaction.TransactionException;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
@@ -41,7 +36,6 @@ import java.util.Comparator;
 import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
@@ -82,7 +76,7 @@ public class AgentTaskCreationOperationServiceImpl
     @Transactional(rollbackFor = Exception.class)
     public Result create(Scope scope, String idempotencyKey, CreateCommand command) {
         requireWriteTransaction();
-        requireAuthenticatedScope(scope);
+        requireSupportedScope(scope);
         ValidRequest valid = validate(idempotencyKey, command);
         String refsJson = refsJson(valid.references(), valid.schemaVersion());
         String requestHash = requestHash(valid);
@@ -115,7 +109,7 @@ public class AgentTaskCreationOperationServiceImpl
                 throw failure(Reason.UNAVAILABLE);
             }
 
-            AgentTaskDTO created = agents.createTask(taskRequest(valid));
+            AgentTaskDTO created = agents.createTask(taskOwnerScope(scope), taskRequest(valid));
             String taskId = requireCreatedTask(created, scope, valid);
             AgentTaskExecutionGrantService.Scope requirementScope = requirementScope(scope);
             AgentTaskRequirementSnapshotService.Snapshot snapshot =
@@ -170,7 +164,7 @@ public class AgentTaskCreationOperationServiceImpl
     @Override
     @Transactional(readOnly = true, rollbackFor = Exception.class)
     public Receipt getByIdempotencyKey(Scope scope, String idempotencyKey, int schemaVersion) {
-        requireAuthenticatedScope(scope);
+        requireSupportedScope(scope);
         requireSchemaVersion(schemaVersion);
         requireKey(idempotencyKey);
         try {
@@ -220,7 +214,7 @@ public class AgentTaskCreationOperationServiceImpl
                 || !Objects.equals(operation.getTaskId(), snapshot.taskId())) {
             throw failure(Reason.UNAVAILABLE);
         }
-        AgentTaskDTO task = agents.getTask(operation.getTaskId());
+        AgentTaskDTO task = agents.getTask(taskOwnerScope(scope), operation.getTaskId());
         requireTaskProjection(task, scope, operation.getTaskId());
         return new Receipt(operationVersion(operation), operation.getOperationId(), operation.getTaskId(), 1,
                 "COMMITTED", references, task);
@@ -519,30 +513,16 @@ public class AgentTaskCreationOperationServiceImpl
         return false;
     }
 
-    private static void requireAuthenticatedScope(Scope scope) {
+    private static AgentService.TaskOwnerScope taskOwnerScope(Scope scope) {
+        return new AgentService.TaskOwnerScope(scope.tenantId(), scope.clientId(), scope.ownerJiacn());
+    }
+
+    // Identity is authenticated at the boundary. Keep production-only admission until every
+    // creation persistence path (including events and plan items) supports tenant isolation.
+    private static void requireSupportedScope(Scope scope) {
         if (scope == null || !"0".equals(scope.tenantId())
                 || !validId(scope.clientId(), 50) || !validId(scope.ownerJiacn(), 50)
                 || "0".equals(scope.ownerJiacn())) {
-            throw failure(Reason.FORBIDDEN);
-        }
-        var authentication = SecurityContextHolder.getContext().getAuthentication();
-        if (!(authentication instanceof JwtAuthenticationToken jwt) || !jwt.isAuthenticated()) {
-            throw failure(Reason.FORBIDDEN);
-        }
-        Map<String, Object> claims = jwt.getToken().getClaims();
-        final String tenant;
-        try {
-            tenant = TenantClaimPolicy.resolve(claims, "0");
-        } catch (IllegalArgumentException invalid) {
-            throw failure(Reason.FORBIDDEN, invalid);
-        }
-        EsContext context = EsContextHolder.getContext();
-        if (!Objects.equals("0", tenant)
-                || !Objects.equals(scope.ownerJiacn(), claims.get("jiacn"))
-                || !Objects.equals(scope.clientId(), claims.get("client_id"))
-                || context == null || !Objects.equals("0", context.getTenantId())
-                || !Objects.equals(scope.ownerJiacn(), context.getJiacn())
-                || !Objects.equals(scope.clientId(), context.getClientId())) {
             throw failure(Reason.FORBIDDEN);
         }
     }

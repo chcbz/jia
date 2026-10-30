@@ -31,17 +31,29 @@ import static org.mockito.Mockito.when;
 
 class AgentFundedBountyControllerTest {
     @Test
-    void legacyCreateRemainsUnfundedWithoutJwtOrIdempotencyHeader() {
+    void ordinaryCreateUsesTrustedJwtWithoutRequiringIdempotencyHeader() {
         AgentService legacy = mock(AgentService.class);
         AgentTaskCreateDTO request = new AgentTaskCreateDTO();
         request.setTitle("legacy");
-        when(legacy.createTask(request)).thenReturn(new AgentTaskDTO());
+        when(legacy.createTask(any(AgentService.TaskOwnerScope.class), eq(request))).thenReturn(new AgentTaskDTO());
         AgentController controller = new AgentController(
                 legacy, mock(AbilityEvaluationService.class), mock(FundedBountyService.class));
 
-        controller.createTask(new cn.jia.core.entity.JsonRequest<>(1, "test-request", request), null, null);
+        controller.createTask(new cn.jia.core.entity.JsonRequest<>(1, "test-request", request), null, jwt("user-1", "0", "Client-A"));
 
-        verify(legacy).createTask(request);
+        verify(legacy).createTask(eq(new AgentService.TaskOwnerScope("0", "Client-A", "user-1")), eq(request));
+    }
+
+    @Test
+    void ordinaryCreateRejectsMissingIdentityBeforeService() {
+        AgentService legacy = mock(AgentService.class);
+        AgentController controller = new AgentController(legacy,
+                mock(AbilityEvaluationService.class), mock(FundedBountyService.class));
+        AgentTaskCreateDTO request = new AgentTaskCreateDTO();
+        request.setTitle("ordinary");
+        assertThrows(RuntimeException.class, () -> controller.createTask(
+                new cn.jia.core.entity.JsonRequest<>(1, "test-request", request), null, null));
+        org.mockito.Mockito.verifyNoInteractions(legacy);
     }
 
     @Test
@@ -57,7 +69,7 @@ class AgentFundedBountyControllerTest {
                 () -> controller.createTask(new cn.jia.core.entity.JsonRequest<>(1, "test-request", request), null, null));
 
         assertEquals("ECONOMY_UNAUTHENTICATED", failure.code());
-        verify(legacy, never()).createTask(any());
+        verify(legacy, never()).createTask(any(), any());
     }
 
     @Test
@@ -81,7 +93,7 @@ class AgentFundedBountyControllerTest {
                 eq("018f0000-0000-7000-8000-000000000004"), digest.capture(), eq(request));
         assertEquals(new FundedBountyActor("Tenant-A", "Client-A", "Tenant-A", "user-1"), actor.getAllValues().getFirst());
         assertArrayEquals(digest.getAllValues().getFirst(), digest.getAllValues().getLast());
-        verify(legacy, never()).createTask(any());
+        verify(legacy, never()).createTask(any(), any());
     }
 
     @Test

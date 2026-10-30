@@ -1114,7 +1114,21 @@ class AgentServiceImplTest extends BaseMockTest {
     }
 
     @Test
+    void explicitCreationRejectsGrayAndPlaceholderOwnerBeforeMutation() {
+        for (var scope : java.util.Arrays.asList(null,
+                new cn.jia.agent.service.AgentService.TaskOwnerScope("1", "jia_client", "jiacn"),
+                new cn.jia.agent.service.AgentService.TaskOwnerScope("0", "jia_client", "0"))) {
+            assertThrows(AgentServiceImpl.AgentBizException.class,
+                    () -> agentService.createTask(scope, new AgentTaskCreateDTO()));
+        }
+        verify(agentTaskMetaDao, never()).insert(any(AgentTaskMetaEntity.class));
+        verify(taskService, never()).create(any());
+        verify(taskEventWriter, never()).append(any());
+    }
+
+    @Test
     void createTaskCreatesTaskPlanAndOpenAgentTaskMeta() {
+        EsContextHolder.clearContext();
         when(taskServiceProvider.getIfAvailable()).thenReturn(taskService);
         when(eventPublisherProvider.getIfAvailable()).thenReturn(eventPublisher);
 
@@ -1124,7 +1138,7 @@ class AgentServiceImplTest extends BaseMockTest {
         request.setRequiredAbilities(List.of("research", "debug"));
         request.setReward(30);
 
-        AgentTaskDTO result = agentService.createTask(request);
+        AgentTaskDTO result = agentService.createTask(new cn.jia.agent.service.AgentService.TaskOwnerScope("0", "jia_client", "jiacn"), request);
 
         assertEquals(AgentConstants.TASK_STATUS_OPEN, result.getStatus());
         assertEquals("Inspect archive search with a title that exceeds task plan name", result.getTitle());
@@ -1168,7 +1182,7 @@ class AgentServiceImplTest extends BaseMockTest {
         TransactionSynchronizationManager.initSynchronization();
         TransactionSynchronizationManager.setActualTransactionActive(true);
         try {
-            AgentTaskDTO result = agentService.createTask(request);
+            AgentTaskDTO result = agentService.createTask(new cn.jia.agent.service.AgentService.TaskOwnerScope("0", "jia_client", "jiacn"), request);
 
             InOrder order = inOrder(agentTaskMetaDao, taskService, taskEventWriter);
             order.verify(agentTaskMetaDao).insert(any(AgentTaskMetaEntity.class));
@@ -1205,7 +1219,7 @@ class AgentServiceImplTest extends BaseMockTest {
         AgentTaskCreateDTO request = new AgentTaskCreateDTO();
         request.setTitle("collision");
 
-        assertThrows(IllegalStateException.class, () -> agentService.createTask(request));
+        assertThrows(IllegalStateException.class, () -> agentService.createTask(new cn.jia.agent.service.AgentService.TaskOwnerScope("0", "jia_client", "jiacn"), request));
 
         verify(agentTaskMetaDao, never()).deleteReservedTaskRoot(any(), any(), any());
         verify(agentTaskMetaDao, never()).rekeyReservedTaskRootInOwnerScope(
@@ -1232,7 +1246,7 @@ class AgentServiceImplTest extends BaseMockTest {
 
         AgentTaskCreateDTO request = new AgentTaskCreateDTO();
         request.setTitle("duplicate");
-        assertThrows(IllegalStateException.class, () -> agentService.createTask(request));
+        assertThrows(IllegalStateException.class, () -> agentService.createTask(new cn.jia.agent.service.AgentService.TaskOwnerScope("0", "jia_client", "jiacn"), request));
 
         verify(taskService, never()).create(any());
         verify(taskEventWriter, never()).append(any());
@@ -3522,6 +3536,25 @@ class AgentServiceImplTest extends BaseMockTest {
         assertThrows(IllegalArgumentException.class,
                 () -> agentService.getAgentTasks("agent-linchong"));
         verify(agentTaskMetaDao, never()).findByTaskIdInOwnerScope(any(), any(), any(), any());
+    }
+
+    @Test
+    void explicitTaskReceiptProjectionUsesOwnerScopeWithoutThreadContext() {
+        var meta = new AgentTaskMetaEntity();
+        meta.setTaskId("explicit-task");
+        meta.setTenantId("0");
+        meta.setClientId("jia_client");
+        meta.setOwnerJiacn("jiacn");
+        meta.setRewardStatus(AgentConstants.TASK_STATUS_OPEN);
+        when(agentTaskMetaDao.findByTaskIdInOwnerScope(
+                "0", "jia_client", "jiacn", "explicit-task")).thenReturn(meta);
+        EsContextHolder.clearContext();
+        var scope = new cn.jia.agent.service.AgentService.TaskOwnerScope("0", "jia_client", "jiacn");
+        assertEquals("explicit-task", agentService.getTask(scope, "explicit-task").getId());
+        verify(agentTaskMemberDao).listByTask("0", "jia_client", "jiacn", "explicit-task");
+        meta.setOwnerJiacn("foreign-owner");
+        assertThrows(IllegalArgumentException.class, () -> agentService.getTask(scope, "explicit-task"));
+        verifyNoInteractions(taskEventWriter);
     }
 
     @Test

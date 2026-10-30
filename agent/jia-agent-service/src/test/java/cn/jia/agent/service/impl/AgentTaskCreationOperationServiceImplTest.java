@@ -99,8 +99,8 @@ class AgentTaskCreationOperationServiceImplTest {
         when(linkRows.lockTask("0", "client-a", "owner-a", "task-1")).thenReturn(true);
         when(linkRows.taskExists("0", "client-a", "owner-a", "task-1")).thenReturn(true);
         AgentTaskDTO created = task("task-1", "完整🚀标题", "");
-        when(agents.createTask(any())).thenReturn(created);
-        when(agents.getTask("task-1")).thenReturn(created);
+        when(agents.createTask(any(AgentService.TaskOwnerScope.class), any())).thenReturn(created);
+        when(agents.getTask(any(AgentService.TaskOwnerScope.class), eq("task-1"))).thenReturn(created);
         when(requirements.read(any(AgentTaskExecutionGrantService.Scope.class), eq("task-1"),
                 eq(1L))).thenReturn(new AgentTaskRequirementSnapshotService.Snapshot(
                         "0", "client-a", "owner-a", "task-1", 1,
@@ -139,7 +139,7 @@ class AgentTaskCreationOperationServiceImplTest {
                 first.receipt().inputRefs());
         ArgumentCaptor<cn.jia.agent.entity.AgentTaskCreateDTO> task =
                 ArgumentCaptor.forClass(cn.jia.agent.entity.AgentTaskCreateDTO.class);
-        verify(agents).createTask(task.capture());
+        verify(agents).createTask(eq(new AgentService.TaskOwnerScope("0", "client-a", "owner-a")), task.capture());
         assertEquals("", task.getValue().getDescription());
         assertNull(task.getValue().getRequiredAbilities());
         assertNull(task.getValue().getReward());
@@ -155,7 +155,7 @@ class AgentTaskCreationOperationServiceImplTest {
         assertTrue(replay.replay());
         assertEquals(first.receipt().operationId(), replay.receipt().operationId());
         assertEquals(first.receipt().inputRefs(), replay.receipt().inputRefs());
-        verify(agents, times(1)).createTask(any());
+        verify(agents, times(1)).createTask(any(AgentService.TaskOwnerScope.class), any());
         verify(links, times(2)).create(any(), anyString(), any());
 
         AgentTaskCreationOperationService.Failure conflict = assertThrows(
@@ -165,7 +165,7 @@ class AgentTaskCreationOperationServiceImplTest {
                                 command.inputRefs()))));
         assertEquals(AgentTaskCreationOperationService.Reason.IDEMPOTENCY_CONFLICT,
                 conflict.reason());
-        verify(agents, times(1)).createTask(any());
+        verify(agents, times(1)).createTask(any(AgentService.TaskOwnerScope.class), any());
     }
 
     @Test
@@ -209,12 +209,37 @@ class AgentTaskCreationOperationServiceImplTest {
         assertEquals(AgentTaskCreationOperationService.Reason.UNAVAILABLE, snapshot.reason());
         verify(links, never()).create(any(), anyString(), any());
 
-        authenticate("owner-b", "client-a");
-        AgentTaskCreationOperationService.Failure scope = assertThrows(
-                AgentTaskCreationOperationService.Failure.class, () -> inTransaction(
-                        () -> service.create(SCOPE, "scope-key", command("title", true, null,
-                                true, new ArrayList<>(), true, null, List.of()))));
-        assertEquals(AgentTaskCreationOperationService.Reason.FORBIDDEN, scope.reason());
+    }
+
+    @Test
+    void trustedScopeDoesNotDependOnThreadAuthenticationOrContext() {
+        SecurityContextHolder.clearContext();
+        EsContextHolder.clearContext();
+        var result = inTransaction(() -> service.create(SCOPE, "explicit-scope",
+                command("完整🚀标题", true, "", true, List.of(), true, null, List.of())));
+        assertFalse(result.replay());
+        authenticate("unrelated-owner", "unrelated-client");
+        assertTrue(inTransaction(() -> service.create(SCOPE, "explicit-scope",
+                command("完整🚀标题", true, "", true, List.of(), true, null, List.of()))).replay());
+        verify(agents).createTask(eq(new AgentService.TaskOwnerScope("0", "client-a", "owner-a")), any());
+        verify(agents).getTask(eq(new AgentService.TaskOwnerScope("0", "client-a", "owner-a")), eq("task-1"));
+    }
+
+    @Test
+    void unsupportedOrInvalidScopeFailsBeforeAnyStorageAccess() {
+        for (var scope : java.util.Arrays.asList(null,
+                new AgentTaskCreationOperationService.Scope("1", "client-a", "owner-a"),
+                new AgentTaskCreationOperationService.Scope("0", "client-a", "0"),
+                new AgentTaskCreationOperationService.Scope("0", "client-a ", "owner-a"))) {
+            var failure = assertThrows(AgentTaskCreationOperationService.Failure.class,
+                    () -> inTransaction(() -> service.create(scope, "scope-key",
+                            command("title", true, null, true, List.of(), true, null, List.of()))));
+            assertEquals(AgentTaskCreationOperationService.Reason.FORBIDDEN, failure.reason());
+            assertEquals(AgentTaskCreationOperationService.Reason.FORBIDDEN,
+                    assertThrows(AgentTaskCreationOperationService.Failure.class,
+                            () -> service.getByIdempotencyKey(scope, "scope-key")).reason());
+        }
+        org.mockito.Mockito.verifyNoInteractions(operations, agents, requirements, links, linkRows, workspace);
     }
 
     @Test
@@ -255,7 +280,7 @@ class AgentTaskCreationOperationServiceImplTest {
         assertEquals(first.receipt(), replay.receipt());
         when(operations.find("0", "client-a", "owner-a", "mixed")).thenReturn(stored.get());
         assertEquals(first.receipt(), service.getByIdempotencyKey(SCOPE, "mixed", 2));
-        verify(agents, times(1)).createTask(any());
+        verify(agents, times(1)).createTask(any(AgentService.TaskOwnerScope.class), any());
         verify(links, times(4)).create(any(), eq("task-1"), any());
         verify(workspace, never()).findVersion("0", "client-a", "owner-a", "file-b", 3);
         assertEquals(AgentTaskCreationOperationService.Reason.IDEMPOTENCY_CONFLICT,
@@ -296,7 +321,7 @@ class AgentTaskCreationOperationServiceImplTest {
                     assertThrows(AgentTaskCreationOperationService.Failure.class, () -> inTransaction(() ->
                             service.create(SCOPE, "invalid", materialCommand(refs)))).reason());
         }
-        verify(agents, never()).createTask(any());
+        verify(agents, never()).createTask(any(AgentService.TaskOwnerScope.class), any());
         var foreign = version("file-x", 1, "audio/wav").setOwnerJiacn("owner-b");
         when(workspace.findVersion("0", "client-a", "owner-a", "file-x", 1)).thenReturn(foreign);
         assertEquals(AgentTaskCreationOperationService.Reason.NOT_FOUND,

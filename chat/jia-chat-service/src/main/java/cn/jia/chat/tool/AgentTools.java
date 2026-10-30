@@ -66,7 +66,11 @@ public class AgentTools {
         request.setDescription(description);
         request.setRequiredAbilities(requiredAbilities);
         request.setReward(reward);
-        return agentService.createTask(request);
+        // The tool adapter carries the authenticated invocation context, not model arguments.
+        var context = cn.jia.core.context.EsContextHolder.getContext();
+        if (context == null) throw new IllegalStateException("Task creation identity is unavailable");
+        return agentService.createTask(new AgentService.TaskOwnerScope(
+                context.getTenantId(), context.getClientId(), context.getJiacn()), request);
     }
 
     @Tool(name = "getAgentTask", description = "查询指定任务的详细信息")
