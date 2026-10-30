@@ -381,14 +381,14 @@ class AgentTaskStateServiceImplTest extends BaseMockTest {
 
     @Test
     void grayMemberTransitionCarriesTenantIntoRootLockAndScopedLookup() {
-        when(mutationTransaction.executeWithLockedTaskRootInOwnerScope(
-                eq("1"), eq(CLIENT), eq(OWNER), eq(TASK_ID), any())).thenAnswer(invocation -> {
+        org.mockito.Mockito.doAnswer(invocation -> {
             var root = task("assigned", 0L);
             root.setTenantId("1");
             root.setCurrentEventVersion(0L);
             AgentTaskMutationTransaction.LockedTaskMutation<?> mutation = invocation.getArgument(4);
             return mutation.apply(root);
-        });
+        }).when(mutationTransaction).executeWithLockedTaskRootInOwnerScope(
+                eq("1"), eq(CLIENT), eq(OWNER), eq(TASK_ID), any());
         var missing = assertThrows(AgentTaskStateException.class, () -> service.transitionMember(
                 "1", CLIENT, OWNER, TASK_ID, AGENT_ID, transition("accepted", 0L, null)));
         assertEquals(Reason.NOT_FOUND, missing.getReason());

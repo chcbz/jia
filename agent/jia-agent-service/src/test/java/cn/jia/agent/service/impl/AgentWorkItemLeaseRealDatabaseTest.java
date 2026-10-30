@@ -434,7 +434,7 @@ class AgentWorkItemLeaseRealDatabaseTest {
         AgentTaskStateException error = assertThrows(AgentTaskStateException.class,
                 () -> service.claim(OTHER_TENANT, CLIENT, OWNER, TASK, WORK,
                         claimCommand(AGENT_A, 0L, 500L)));
-        assertEquals(Reason.INVALID_REQUEST, error.getReason());
+        assertEquals(Reason.NOT_FOUND, error.getReason());
         Map<String, Object> row = workItemRow(TENANT);
         assertEquals("ready", row.get("STATUS"));
         assertEquals(0L, longValue(row.get("VERSION")));

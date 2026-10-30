@@ -247,7 +247,7 @@ class AgentTaskAggregationRealDatabaseTest {
         AgentTaskStateException error = assertThrows(AgentTaskStateException.class,
                 () -> aggregateService.aggregate(
                         OTHER_TENANT, CLIENT, OWNER, TASK, command(0L)));
-        assertEquals(Reason.INVALID_REQUEST, error.getReason());
+        assertEquals(Reason.NOT_FOUND, error.getReason());
         assertTask("planning", 0L);
     }
 
@@ -277,16 +277,16 @@ class AgentTaskAggregationRealDatabaseTest {
         // Exact scoped locking reads admit another tenant, but must never find tenant 0's row.
         assertNull(taskMetaDao.findByTaskIdForUpdateInOwnerScope(
                 OTHER_TENANT, CLIENT, OWNER, TENANT_ZERO_TASK));
-        assertThrows(IllegalArgumentException.class, () -> taskMetaDao.findAggregationSnapshot(
+        assertNull(taskMetaDao.findAggregationSnapshot(
                 OTHER_TENANT, CLIENT, OWNER, TENANT_ZERO_TASK));
-        assertThrows(IllegalArgumentException.class, () -> taskMetaDao.updateStatusByVersionInOwnerScope(
+        assertEquals(0, taskMetaDao.updateStatusByVersionInOwnerScope(
                 OTHER_TENANT, CLIENT, OWNER, TENANT_ZERO_TASK, 0L,
                 "failed", null, null, "must-not-cross-scope"));
 
         AgentTaskStateException hidden = assertThrows(AgentTaskStateException.class,
                 () -> aggregateService.aggregate(
                         OTHER_TENANT, CLIENT, OWNER, TENANT_ZERO_TASK, command(0L)));
-        assertEquals(Reason.INVALID_REQUEST, hidden.getReason());
+        assertEquals(Reason.NOT_FOUND, hidden.getReason());
         Map<String, Object> zeroRow = jdbc.queryForMap(
                 "SELECT reward_status, task_version FROM agent_task_meta WHERE task_id=?",
                 TENANT_ZERO_TASK);

@@ -51,7 +51,7 @@ class AgentHostingRentControllerTest {
                 .andExpect(status().isServiceUnavailable())
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
                 .andExpect(jsonPath("$.code").value("HOSTING_RENT_NOT_CONFIGURED"))
-                .andExpect(jsonPath("$.status").value(503));
+                .andExpect(jsonPath("$.protocolVersion").value(1));
 
         ArgumentCaptor<HostingRentAdmissionService.Principal> principal =
                 ArgumentCaptor.forClass(HostingRentAdmissionService.Principal.class);

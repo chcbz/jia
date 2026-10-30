@@ -326,9 +326,7 @@ class AgentGetSkillRosterProjectionTest {
             String tenantId, String clientId, String ownerJiacn) {
         Jwt.Builder jwt = Jwt.withTokenValue("test-token").header("alg", "none")
                 .subject("login-sub").claim("client_id", clientId).claim("jiacn", ownerJiacn);
-        if (!"0".equals(tenantId)) {
-            jwt.claim("tenant_id", tenantId).claim("tenant_claim_version", "1");
-        }
+        jwt.claim("tenant_id", tenantId).claim("tenant_claim_version", "1");
         return new JwtAuthenticationToken(jwt.build(), List.of());
     }
 

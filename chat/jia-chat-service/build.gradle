@@ -57,6 +57,9 @@ description = 'jia-chat-service'
 // D02 source-only verification slice. It avoids compiling unrelated historical chat tests.
 def juyitingExecutionReportSourceSet = sourceSets.create('juyitingExecutionReport') {
     java.srcDir 'src/juyitingExecutionReportTest/java'
+    java.srcDir 'src/test/java'
+    java.include 'cn/jia/chat/handler/AgentWebSocketExecutionReportTest.java'
+    java.include 'cn/jia/chat/handler/UnifiedRuntimeTestSupport.java'
     resources.srcDir 'src/juyitingExecutionReportTest/resources'
     compileClasspath += sourceSets.main.output
     runtimeClasspath += output + compileClasspath

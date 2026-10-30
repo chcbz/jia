@@ -175,6 +175,8 @@ class AgentIdentityRuntimeRealTransactionTest {
 
     @Test
     void tenantOneLocalBindAndCatalogUseCodeBuiltinsWithoutForeignDisclosure() throws Exception {
+        ((AgentServiceImpl) ((org.springframework.aop.framework.Advised) agentService)
+                .getTargetSource().getTarget()).configureProcessTenant(new FixedTenantAdmissionPolicy("1", "cyf-local"));
         EsContext context = new EsContext();
         context.setTenantId("1");
         context.setClientId("cyf-local");

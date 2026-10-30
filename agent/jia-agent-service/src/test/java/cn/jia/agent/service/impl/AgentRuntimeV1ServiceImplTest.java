@@ -68,6 +68,8 @@ class AgentRuntimeV1ServiceImplTest {
     }
 
     @Test void webCreationStoresOnlyProvidedDigestAndReturnsRedactedView() {
+        service = new AgentRuntimeV1ServiceImpl(installations, identities, registry,
+                ackProvider(), sessions, mock(ObjectProvider.class), new FixedTenantAdmissionPolicy("tenant-a", null));
         when(identities.requireRegistrationIdentityInScope("tenant-a", "client-a", "owner-a", AGENT))
                 .thenReturn(registrationIdentity("tenant-a", "client-a", "owner-a", AGENT));
         when(installations.insert(any())).thenAnswer(invocation -> {
@@ -86,6 +88,12 @@ class AgentRuntimeV1ServiceImplTest {
         AgentRuntimeV1InstallationEntity persisted = captor.getValue();
         assertArrayEquals(java.util.HexFormat.of().parseHex(digest), persisted.getEnrollmentSecretHash());
         assertNull(persisted.getRuntimeAuthorizationHash());
+    }
+
+    private ObjectProvider<AgentCommandAckService> ackProvider() {
+        @SuppressWarnings("unchecked") ObjectProvider<AgentCommandAckService> provider = mock(ObjectProvider.class);
+        when(provider.getIfAvailable()).thenReturn(acks);
+        return provider;
     }
 
     private static final String INTERNAL_ID = "rti_0123456789abcdef0123456789abcdef";
@@ -260,6 +268,8 @@ class AgentRuntimeV1ServiceImplTest {
     }
 
     @Test void existingDirectLegacyCanonicalIdentityCanUseOnlyTheV1Protocol() {
+        service = new AgentRuntimeV1ServiceImpl(installations, identities, registry,
+                ackProvider(), sessions, mock(ObjectProvider.class), new FixedTenantAdmissionPolicy("tenant-a", null));
         String legacyCanonical = "jyt-client-a-linchong";
         when(identities.requireRegistrationIdentityInScope("tenant-a", "client-a", "owner-a", legacyCanonical))
                 .thenReturn(registrationIdentity("tenant-a", "client-a", "owner-a", legacyCanonical));
@@ -278,6 +288,8 @@ class AgentRuntimeV1ServiceImplTest {
     }
 
     @Test void enrollmentIsSingleUseAndNeverReturnsEnrollmentMaterial() {
+        service = new AgentRuntimeV1ServiceImpl(installations, identities, registry,
+                ackProvider(), sessions, mock(ObjectProvider.class), new FixedTenantAdmissionPolicy("tenant-a", null));
         String enrollmentSecret = "runtime-v1-enrollment-secret-must-not-leak";
         AgentRuntimeV1InstallationEntity pending = installation("PENDING").setEnrollmentSecretHash(sha(enrollmentSecret));
         when(installations.lock("rti-1")).thenReturn(pending);
@@ -306,6 +318,8 @@ class AgentRuntimeV1ServiceImplTest {
     }
 
     @Test void manifestMismatchRequiresRebindAndValidAckIsBoundToInstallationIdentity() {
+        service = new AgentRuntimeV1ServiceImpl(installations, identities, registry,
+                ackProvider(), sessions, mock(ObjectProvider.class), new FixedTenantAdmissionPolicy("tenant-a", null));
         AgentRuntimeV1InstallationEntity active = installation("ACTIVE").setRuntimeAuthorizationHash(sha("auth"));
         when(installations.findActiveByAuthorizationHash(any())).thenReturn(active);
         when(installations.lock("rti-1")).thenReturn(active);

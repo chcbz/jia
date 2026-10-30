@@ -192,7 +192,7 @@ class PersonalWorkspaceExecutionControllerTest {
         controller.create(new cn.jia.core.entity.JsonRequest<>(1, "request",
                 new PersonalWorkspaceExecutionController.CreateRequest(null,"agent-a",null,
                         "instruction",PersonalWorkspaceExecutionProperties.DOCX,List.of())),
-                "gray-create",tenantJwt(java.util.Map.of("tenantId","1")));
+                "gray-create",tenantJwt(java.util.Map.of("tenant_id","1","tenantId","1")));
         verify(service).create(eq(gray),any(),eq("gray-create"));
     }
 

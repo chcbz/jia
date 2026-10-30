@@ -50,16 +50,16 @@ class ConversationDeliverableControllerTest {
                         .principal(jwt("owner-a", "client-a", "subject-a", "subject-a")))
                 .andExpect(status().isOk())
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
-                .andExpect(jsonPath("$.state").value("AVAILABLE"))
-                .andExpect(jsonPath("$.items[0].executionId").value("exec-1"))
-                .andExpect(jsonPath("$.items[0].outputId").value("out-1"))
-                .andExpect(jsonPath("$.items[0].fileId").value("file-1"))
-                .andExpect(jsonPath("$.items[0].storageUri").doesNotExist())
-                .andExpect(jsonPath("$.items[0].leaseToken").doesNotExist())
-                .andExpect(jsonPath("$.items[0].originalFilename").doesNotExist())
-                .andExpect(jsonPath("$.items[0].content").doesNotExist())
-                .andExpect(jsonPath("$.items[0].body").doesNotExist())
-                .andExpect(jsonPath("$.items[0].metadata").doesNotExist());
+                .andExpect(jsonPath("$.data.state").value("AVAILABLE"))
+                .andExpect(jsonPath("$.data.items[0].executionId").value("exec-1"))
+                .andExpect(jsonPath("$.data.items[0].outputId").value("out-1"))
+                .andExpect(jsonPath("$.data.items[0].fileId").value("file-1"))
+                .andExpect(jsonPath("$.data.items[0].storageUri").doesNotExist())
+                .andExpect(jsonPath("$.data.items[0].leaseToken").doesNotExist())
+                .andExpect(jsonPath("$.data.items[0].originalFilename").doesNotExist())
+                .andExpect(jsonPath("$.data.items[0].content").doesNotExist())
+                .andExpect(jsonPath("$.data.items[0].body").doesNotExist())
+                .andExpect(jsonPath("$.data.items[0].metadata").doesNotExist());
 
         verify(adapter).list(new ConversationDeliverableReadAdapter.Scope(
                 "0", "client-a", "owner-a"), "7", 100);
@@ -111,14 +111,14 @@ class ConversationDeliverableControllerTest {
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value("CONVERSATION_DELIVERABLE_NOT_FOUND"));
 
-        when(adapter.list(any(), anyString(), anyInt()))
-                .thenThrow(new ConversationDeliverableReadAdapter.Failure(
+        org.mockito.Mockito.doThrow(new ConversationDeliverableReadAdapter.Failure(
                         ConversationDeliverableReadAdapter.Reason.CORRUPT_STATE,
-                        new IllegalStateException("storage_uri=secret")));
+                        new IllegalStateException("storage_uri=secret")))
+                .when(adapter).list(any(), anyString(), anyInt());
         mvc.perform(get("/agent/conversations/7/deliverables").principal(principal))
                 .andExpect(status().isServiceUnavailable())
                 .andExpect(jsonPath("$.code").value("CONVERSATION_DELIVERABLE_UNAVAILABLE"))
-                .andExpect(jsonPath("$.message").value("Conversation deliverables are unavailable"));
+                .andExpect(jsonPath("$.msg").value("Conversation deliverables are unavailable"));
     }
 
     @Test

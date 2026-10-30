@@ -62,8 +62,10 @@ class AgentWebSocketExecutionReportTest {
                 new AgentExecutionReportService.ReportReceipt("report-1", "rr_result", "7", false));
         handler = new AgentWebSocketHandler(chatClient, agentProvider, messages, broker);
         handler.setExecutionReportService(reports);
+        UnifiedRuntimeTestSupport.authorize(handler);
+        UnifiedRuntimeTestSupport.install(session);
         handler.afterConnectionEstablished(session);
-        handler.handleTextMessage(session, new TextMessage("""
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
                 {"type":"agent.register","agentId":"agent-1","runtimeInstanceId":"runtime-1"}
                 """));
         clearInvocations(session, reports);
@@ -71,7 +73,7 @@ class AgentWebSocketExecutionReportTest {
 
     @Test
     void acceptsExactD03WireAndReturnsCompatiblePrivateReceipt() throws Exception {
-        handler.handleTextMessage(session, new TextMessage(codexResult("agent-1", "runtime-1")));
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage(codexResult("agent-1", "runtime-1")));
 
         ArgumentCaptor<AgentExecutionReportService.RuntimeScope> scope =
                 ArgumentCaptor.forClass(AgentExecutionReportService.RuntimeScope.class);
@@ -97,7 +99,7 @@ class AgentWebSocketExecutionReportTest {
 
     @Test
     void rejectsSpoofedIdentityAndRuntimeBeforeServiceWithoutEchoingSensitiveFields() throws Exception {
-        handler.handleTextMessage(session, new TextMessage(codexResult("agent-other", "runtime-1")));
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage(codexResult("agent-other", "runtime-1")));
         verify(reports, never()).accept(any(), any());
         Map<String, Object> error = lastOutbound();
         assertEquals("REPORT_INVALID", error.get("code"));
@@ -108,11 +110,11 @@ class AgentWebSocketExecutionReportTest {
         assertFalse(error.containsKey("status"));
 
         clearInvocations(session, reports);
-        handler.handleTextMessage(session, new TextMessage(codexResult("agent-1", "runtime-other")));
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage(codexResult("agent-1", "runtime-other")));
         verify(reports, never()).accept(any(), any());
 
         clearInvocations(session, reports);
-        handler.handleTextMessage(session, new TextMessage(
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage(
                 codexResult("agent-1", "runtime-1").replace(
                         "\"sourceAgentId\":\"agent-1\",\"agentId\":\"agent-1\",",
                         "\"sourceAgentId\":\"agent-1\",")));
@@ -131,12 +133,12 @@ class AgentWebSocketExecutionReportTest {
                         "\"artifactId\":\"artifact-1\",\"artifactVersion\":\"1\","
                                 + "\"stageRef\":\"stage-1\",\"sha256\":\"" + "a".repeat(64)
                                 + "\",\"byteLength\":\"12\",\"contentType\":\"text/plain\""))) {
-            handler.handleTextMessage(session, new TextMessage(json));
+            UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage(json));
         }
         verify(reports, org.mockito.Mockito.times(5)).accept(any(), any());
 
         clearInvocations(reports);
-        handler.handleTextMessage(session, new TextMessage("""
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
                 {"type":"task.report","requestId":"legacy-1","taskId":"task-1",
                  "agentId":"agent-1","status":"running"}
                 """));
@@ -167,6 +169,12 @@ class AgentWebSocketExecutionReportTest {
         ArgumentCaptor<TextMessage> captor = ArgumentCaptor.forClass(TextMessage.class);
         verify(session, atLeastOnce()).sendMessage(captor.capture());
         TextMessage last = captor.getAllValues().get(captor.getAllValues().size() - 1);
-        return new ObjectMapper().readValue(last.getPayload(), new TypeReference<>() { });
+        Map<String,Object> wire = new ObjectMapper().readValue(last.getPayload(), new TypeReference<>() { });
+        @SuppressWarnings("unchecked") Map<String,Object> data = (Map<String,Object>)wire.get("data");
+        Map<String,Object> result = new HashMap<>(data == null ? Map.of() : data);
+        for (String key : List.of("messageType", "messageId", "correlationId", "code", "cacheControl")) {
+            if (wire.containsKey(key)) result.put(key, wire.get(key));
+        }
+        return result;
     }
 }

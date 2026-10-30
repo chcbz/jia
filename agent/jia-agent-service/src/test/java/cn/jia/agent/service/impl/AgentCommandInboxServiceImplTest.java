@@ -586,9 +586,13 @@ class AgentCommandInboxServiceImplTest {
                         "tenant-A", "client-a", "msg-1", "evt-1", "cmd-1", 1,
                         message().rawWireBytes()))) {
             RecordingDao driftDao = new RecordingDao();
-            assertThrows(AgentInboxIdentityConflictException.class,
-                    () -> service(driftDao, enabledGate())
-                            .claim(drift, "worker-a", NOW, LEASE));
+            if ("tenant-a".equals(drift.tenantId())) {
+                assertThrows(AgentInboxIdentityConflictException.class,
+                        () -> service(driftDao, enabledGate()).claim(drift, "worker-a", NOW, LEASE));
+            } else {
+                assertEquals(AgentInboxClaim.DisabledReason.FOREIGN_TENANT,
+                        service(driftDao, enabledGate()).claim(drift, "worker-a", NOW, LEASE).disabledReason());
+            }
             assertEquals(null, driftDao.inbox);
             assertEquals("PUBLISHED", driftDao.delivery.getStatus());
         }

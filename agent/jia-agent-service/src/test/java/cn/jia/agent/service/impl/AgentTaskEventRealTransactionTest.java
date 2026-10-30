@@ -526,7 +526,12 @@ class AgentTaskEventRealTransactionTest {
             writer.append(c);
         });
 
-        assertAppendFails(ALT_TENANT, CLIENT, "evt-unsupported-tenant");
+        AgentTaskEventWriteCommand foreign = command("evt-foreign-tenant", TaskEventType.TASK_CREATED);
+        foreign.setTenantId(ALT_TENANT);
+        assertEquals(cn.jia.agent.exception.AgentTaskCollaborationException.Reason.NOT_FOUND,
+                assertThrows(cn.jia.agent.exception.AgentTaskCollaborationException.class,
+                        () -> writer.append(foreign)).getReason());
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM agent_task_event", Integer.class));
 
         AgentTaskEventWriteCommand c5 = command("evt-sc5", TaskEventType.TASK_CREATED);
         c5.setOwnerJiacn("other-owner");

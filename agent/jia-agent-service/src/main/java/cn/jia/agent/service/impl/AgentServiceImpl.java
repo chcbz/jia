@@ -2503,13 +2503,13 @@ public class AgentServiceImpl implements AgentService {
 
     private record RuntimeScopeKey(String tenantId, String clientId, String agentId) {
         private static RuntimeScopeKey from(AgentRuntimeEntity runtime) {
-            if (runtime == null || StringUtil.isBlank(runtime.getOwnerJiacn())
+            if (runtime == null || StringUtil.isBlank(runtime.getTenantId())
                     || StringUtil.isBlank(runtime.getClientId())
                     || StringUtil.isBlank(runtime.getAgentId())) {
                 return null;
             }
             return new RuntimeScopeKey(
-                    runtime.getOwnerJiacn(), runtime.getClientId(), runtime.getAgentId());
+                    runtime.getTenantId(), runtime.getClientId(), runtime.getAgentId());
         }
 
         private static RuntimeScopeKey from(AgentTaskStatsRow row) {

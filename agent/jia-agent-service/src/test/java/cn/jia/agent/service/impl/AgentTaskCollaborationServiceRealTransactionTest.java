@@ -180,7 +180,7 @@ class AgentTaskCollaborationServiceRealTransactionTest {
     void aclCrossTenantAndIllegalReferencesFailClosedWithRealMappers() {
         AgentTaskCollaborationException crossTenant = assertThrows(AgentTaskCollaborationException.class,
                 () -> requestService.get("tenant-b", CLIENT, OWNER, TASK, REQUESTER, "req-secret"));
-        assertEquals(Reason.INVALID_REQUEST, crossTenant.getReason());
+        assertEquals(Reason.NOT_FOUND, crossTenant.getReason());
         for (String otherOwner : List.of("owner-b", "OWNER-A")) {
             AgentTaskCollaborationException hidden = assertThrows(AgentTaskCollaborationException.class,
                     () -> requestService.get(TENANT, CLIENT, otherOwner, TASK, REQUESTER, "req-secret"));

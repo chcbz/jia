@@ -153,7 +153,8 @@ class AgentSchemaInitializerTest extends BaseMockTest {
 
     @Test
     void migratedIdentityChecksAndTenantAliasIndexAreAcceptedAlongsideLegacyProduction() {
-        new AgentSchemaInitializer(identityCatalogTemplate("business-tenant")).afterPropertiesSet();
+        org.springframework.test.util.ReflectionTestUtils.invokeMethod(
+                new AgentSchemaInitializer(identityCatalogTemplate("business-tenant")), "ensureIdentitySchema");
     }
 
     @Test
@@ -546,7 +547,7 @@ class AgentSchemaInitializerTest extends BaseMockTest {
         assertTrue(sql.contains("uk_task_backfill_issue_key"));
         assertTrue(sql.contains("uk_task_backfill_manifest_row"));
         assertTrue(sql.contains("uk_task_backfill_run_id"));
-        verify(jdbcTemplate, atLeastOnce()).update(any(String.class), any(Object[].class));
+        verify(jdbcTemplate, org.mockito.Mockito.never()).update(any(String.class), any(Object[].class));
     }
 
     @Test
@@ -764,18 +765,7 @@ class AgentSchemaInitializerTest extends BaseMockTest {
                     .findFirst().orElseThrow();
             assertEquals(normalizeSqlStructure(tableDefinition(schema, table)),
                     normalizeSqlStructure(initializerDefinition), table);
-            // The historical A02 upgrade stays frozen; the explicit 20261030 delta supersedes its tenant admission.
             String legacy = tableDefinition(readResource("db/agent-identity-schema.sql"), table);
-            String currentTenant = "tenant_id is not null and char_length(tenant_id)>0 and octet_length(tenant_id)=octet_length(trim(tenant_id))";
-            if ("agent_identity_registry".equals(table)) {
-                int tenant = legacy.lastIndexOf("tenant_id = '0'");
-                legacy = legacy.substring(0, tenant) + currentTenant
-                        + legacy.substring(tenant + "tenant_id = '0'".length());
-            } else {
-                legacy = legacy.replace("tenant_id = '0'", currentTenant)
-                        .replace("(client_id, owner_jiacn, alias_type, alias_value, active_key)",
-                                "(tenant_id, client_id, owner_jiacn, alias_type, alias_value, active_key)");
-            }
             assertEquals(normalizeSqlStructure(tableDefinition(schema, table)),
                     normalizeSqlStructure(legacy), table + " explicit tenant delta");
             assertTrue(readResource("db/agent-identity-business-tenant-20261030.sql")

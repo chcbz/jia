@@ -42,17 +42,17 @@ class AgentCollaborationRequestControllerTest {
                         .header("Idempotency-Key", "idempotency-1")
                         .contentType("application/json")
                         .content("""
-                                {"conversationId":"99","targetAgentId":"agent-husan-niang",
+                                {"protocolVersion":1,"requestId":"test-request","data":{"conversationId":"99","targetAgentId":"agent-husan-niang",
                                  "instruction":"执行测试","outputContentMimeType":"application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                                 "inputs":[]}
+                                 "inputs":[]}}
                                 """)
                         .principal(jwt()))
                 .andExpect(status().isAccepted())
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
-                .andExpect(jsonPath("$.requestId").value("pwe_1"))
-                .andExpect(jsonPath("$.targetAgentId").value("agent-husan-niang"))
-                .andExpect(jsonPath("$.dispatchMode").value("RUNTIME_COMMAND_DISPATCH"))
-                .andExpect(jsonPath("$.coordinatorAgentId").doesNotExist());
+                .andExpect(jsonPath("$.data.requestId").value("pwe_1"))
+                .andExpect(jsonPath("$.data.targetAgentId").value("agent-husan-niang"))
+                .andExpect(jsonPath("$.data.dispatchMode").value("RUNTIME_COMMAND_DISPATCH"))
+                .andExpect(jsonPath("$.data.coordinatorAgentId").doesNotExist());
         verify(service).submit(eq(new AgentCollaborationRequestService.OwnerScope("0", "client-a", "owner-a")),
                 any(), eq("idempotency-1"));
     }
@@ -62,9 +62,9 @@ class AgentCollaborationRequestControllerTest {
         mvc.perform(post("/agent/hall/collaboration/requests")
                         .header("Idempotency-Key", "idempotency-1").contentType("application/json")
                         .content("""
-                                {"conversationId":"99","targetAgentId":"agent-husan-niang",
+                                {"protocolVersion":1,"requestId":"test-request","data":{"conversationId":"99","targetAgentId":"agent-husan-niang",
                                  "instruction":"执行测试","outputContentMimeType":"application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                                 "inputs":[],"coordinatorAgentId":"songjiang"}
+                                 "inputs":[],"coordinatorAgentId":"songjiang"}}
                                 """)
                         .principal(jwt()))
                 .andExpect(status().isBadRequest())
@@ -78,7 +78,7 @@ class AgentCollaborationRequestControllerTest {
         mvc.perform(get("/agent/hall/collaboration/requests/request")
                         .header("Idempotency-Key", "idempotency-1").principal(jwt()))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.requestId").value("pwe_1"));
+                .andExpect(jsonPath("$.data.requestId").value("pwe_1"));
         verify(service).getByIdempotencyKey(eq(new AgentCollaborationRequestService.OwnerScope(
                 "0", "client-a", "owner-a")), eq("idempotency-1"));
     }

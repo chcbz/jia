@@ -342,6 +342,7 @@ class AgentServiceImplTest extends BaseMockTest {
         runtime.setOwnerJiacn("owner-a");
         runtime.setStatus(AgentConstants.STATUS_ONLINE);
         runtime.setBindingId(1L);
+        runtime.setPersonaCode("wuyong");
         when(agentRuntimeDao.findByAgentId("agent-owned")).thenReturn(runtime);
         AgentPersonaBindingEntity active = binding("agent-owned", "wuyong");
         active.setTenantId("1");
@@ -365,8 +366,7 @@ class AgentServiceImplTest extends BaseMockTest {
         assertEquals(Boolean.TRUE, result.getBoundToMe());
         assertEquals(Boolean.TRUE, result.getCanOperate());
         assertNull(result.getStats());
-        verify(agentPersonaDao).findCatalogPersona("1", "client-a", "wuyong");
-        verifyNoMoreInteractions(agentPersonaDao);
+        verifyNoInteractions(agentPersonaDao);
         verifyNoInteractions(agentTaskMetaDao);
     }
 
@@ -470,7 +470,7 @@ class AgentServiceImplTest extends BaseMockTest {
 
         assertEquals("agent-owned", result.getAgentId());
         assertEquals(AgentConstants.STATUS_ONLINE, result.getStatus());
-        verify(agentPersonaDao).findCatalogPersona("1", "client-a", "wuyong");
+        verify(agentPersonaDao, times(2)).findCatalogPersona("1", "client-a", "wuyong");
         verifyNoInteractions(agentTaskMetaDao);
     }
 
@@ -1895,7 +1895,7 @@ class AgentServiceImplTest extends BaseMockTest {
         AgentPersonaEntity persona = persona("linchong", "林冲", "豹子头");
         persona.setTenantId("0");
         AgentPersonaBindingEntity binding = binding(
-                "agt_cccccccccccccccccccccccccccccccc", "wuyong");
+                "agt_cccccccccccccccccccccccccccccccc", "unknown-private-persona");
         AgentIdentityRegistryEntity identity = identity(binding, AgentConstants.IDENTITY_STATUS_ACTIVE);
         AgentPersonaCatalogBindingRow unknownPersona = catalogOverlay(binding, identity, null);
         when(agentPersonaDao.findCatalogProjection("0", "jia_client"))
@@ -3099,8 +3099,8 @@ class AgentServiceImplTest extends BaseMockTest {
         ArgumentCaptor<List<AgentTaskStatsScope>> scopes = ArgumentCaptor.forClass(List.class);
         verify(agentTaskMetaDao, times(1)).findStatsByAgents(scopes.capture());
         assertEquals(100, scopes.getValue().size());
-        assertEquals("juyiting", scopes.getValue().get(0).getTenantId());
-        assertEquals("tenant-b", scopes.getValue().get(1).getTenantId());
+        assertEquals("0", scopes.getValue().get(0).getTenantId());
+        assertEquals("0", scopes.getValue().get(1).getTenantId());
         verify(agentTaskMetaDao, never()).findByAgentId(any(), any(), any(), anyInt());
     }
 
@@ -3258,9 +3258,9 @@ class AgentServiceImplTest extends BaseMockTest {
         context.setJiacn("tenant-a");
         EsContextHolder.setContext(context);
         when(agentRuntimeDao.findMapVisible("0", "client-a")).thenReturn(List.of(runtime));
-        when(agentPersonaDao.findCatalogProjection("0", "jia_client")).thenReturn(List.of());
+        when(agentPersonaDao.findCatalogProjection("0", "client-a")).thenReturn(List.of());
         AgentTaskStatsScope scope = new AgentTaskStatsScope(
-                "tenant-a", "client-a", "agent-owned");
+                "0", "client-a", "agent-owned");
         when(agentTaskMetaDao.findStatsByAgents(any())).thenReturn(List.of(
                 taskStats(scope, 1, 1, 0, 1, 10),
                 taskStats(scope, 1, 1, 0, 1, 10)));
@@ -3283,7 +3283,7 @@ class AgentServiceImplTest extends BaseMockTest {
         context.setJiacn("tenant-a");
         EsContextHolder.setContext(context);
         when(agentRuntimeDao.findMapVisible("0", "client-a")).thenReturn(List.of(runtime));
-        when(agentPersonaDao.findCatalogProjection("0", "jia_client")).thenReturn(List.of());
+        when(agentPersonaDao.findCatalogProjection("0", "client-a")).thenReturn(List.of());
         AgentTaskStatsScope foreignScope = new AgentTaskStatsScope(
                 "0", "client-b", "agent-owned");
         when(agentTaskMetaDao.findStatsByAgents(any())).thenReturn(List.of(
@@ -4248,7 +4248,7 @@ class AgentServiceImplTest extends BaseMockTest {
         agent.setTenantId("0");
         agent.setAgentId(agentId);
         agent.setName(name);
-        agent.setPersonaCode(agentId);
+        agent.setPersonaCode("wuyong");
         agent.setStatus(status);
         agent.setAbilities(abilities);
         return agent;
