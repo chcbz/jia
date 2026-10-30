@@ -56,16 +56,16 @@ class EconomyWalletControllerTest {
     }
 
     @Test
-    void walletUsesJwtScopeOnlyAndReturnsExactStringWire() throws Exception {
+    void walletUsesTrustedScopeAndReturnsExactMoneyWire() throws Exception {
         when(mapper.selectUserWalletSnapshot(TENANT, CLIENT, USER)).thenReturn(snapshot(
                 1200000000L, 300000000L, 17L));
 
         mvc.perform(get("/economy/wallet").principal(auth(OWNER, CLIENT, USER)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.currency").value("SILVER"))
-                .andExpect(jsonPath("$.availableMicro").value("1200000000"))
-                .andExpect(jsonPath("$.heldMicro").value("300000000"))
-                .andExpect(jsonPath("$.version").value("17"));
+                .andExpect(jsonPath("$.data.currency").value("SILVER"))
+                .andExpect(jsonPath("$.data.available.amountMinor").value("1200000000"))
+                .andExpect(jsonPath("$.data.held.amountMinor").value("300000000"))
+                .andExpect(jsonPath("$.data.version").value("17"));
         verify(mapper).selectUserWalletSnapshot(TENANT, CLIENT, USER);
     }
 
@@ -85,9 +85,9 @@ class EconomyWalletControllerTest {
         when(mapper.selectUserWalletSnapshot(TENANT, CLIENT, USER)).thenReturn(snapshot(0L, 0L, 0L));
         mvc.perform(get("/economy/wallet").principal(auth(OWNER, CLIENT, USER)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.availableMicro").value("0"))
-                .andExpect(jsonPath("$.heldMicro").value("0"))
-                .andExpect(jsonPath("$.version").value("0"));
+                .andExpect(jsonPath("$.data.available.amountMinor").value("0"))
+                .andExpect(jsonPath("$.data.held.amountMinor").value("0"))
+                .andExpect(jsonPath("$.data.version").value("0"));
 
         mvc(gate(false)).perform(get("/economy/wallet").principal(auth(OWNER, CLIENT, USER)))
                 .andExpect(status().isForbidden())
@@ -101,7 +101,7 @@ class EconomyWalletControllerTest {
 
     @Test
     void issuanceRejectsUnknownDuplicateMalformedAndProductionInputBeforeTreasury() throws Exception {
-        String valid = "{\"amountMicro\":\"100\",\"campaignRef\":\"preview-welcome\"}";
+        String valid = "{\"amount\":{\"amountMinor\":\"100\",\"currency\":\"SILVER\"},\"campaignRef\":\"preview-welcome\"}";
         for (String body : List.of(
                 "{\"amountMicro\":\"100\",\"campaignRef\":\"preview-welcome\",\"scope\":\"Tenant-B\"}",
                 "{\"amountMicro\":\"100\",\"amountMicro\":\"101\",\"campaignRef\":\"preview-welcome\"}",
@@ -140,12 +140,12 @@ class EconomyWalletControllerTest {
                 100L, 100L, List.of(), null));
         mvc.perform(post("/economy/preview/issuances").principal(auth(OWNER, CLIENT, USER))
                         .header("Idempotency-Key", KEY).contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"amountMicro\":\"100\",\"campaignRef\":\"preview-welcome\"}"))
+                        .content("{\"amount\":{\"amountMinor\":\"100\",\"currency\":\"SILVER\"},\"campaignRef\":\"preview-welcome\"}"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.transactionId").value("etx_1"))
-                .andExpect(jsonPath("$.status").value("POSTED"))
-                .andExpect(jsonPath("$.amountMicro").value("100"))
-                .andExpect(jsonPath("$.availableMicro").doesNotExist());
+                .andExpect(jsonPath("$.data.transactionId").value("etx_1"))
+                .andExpect(jsonPath("$.data.status").value("POSTED"))
+                .andExpect(jsonPath("$.data.amount.amountMinor").value("100"))
+                .andExpect(jsonPath("$.data.available.amountMinor").doesNotExist());
         ArgumentCaptor<EconomyPostingCommand> command = ArgumentCaptor.forClass(EconomyPostingCommand.class);
         verify(treasury).issue(command.capture());
         org.junit.jupiter.api.Assertions.assertEquals(TENANT, command.getValue().scope().tenantId());
@@ -164,9 +164,9 @@ class EconomyWalletControllerTest {
         mvc.perform(post("/economy/onboarding-grant").principal(auth(OWNER, CLIENT, USER))
                         .contentType(MediaType.APPLICATION_JSON).content("{}"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.transactionId").value("etx_welcome"))
-                .andExpect(jsonPath("$.amountMicro").value("1000000000"))
-                .andExpect(jsonPath("$.campaignRef").value("hosting-welcome-v1"));
+                .andExpect(jsonPath("$.data.transactionId").value("etx_welcome"))
+                .andExpect(jsonPath("$.data.amount.amountMinor").value("1000000000"))
+                .andExpect(jsonPath("$.data.campaignRef").value("hosting-welcome-v1"));
 
         ArgumentCaptor<EconomyPostingCommand> command = ArgumentCaptor.forClass(EconomyPostingCommand.class);
         verify(treasury).issue(command.capture());
@@ -194,17 +194,17 @@ class EconomyWalletControllerTest {
         when(mapper.selectUserAvailableLedger(eq(TENANT), eq(CLIENT), eq(USER), eq(null), eq(null), eq(51)))
                 .thenReturn(List.of(row(9L, "etx_9", "een_9", 100L, 200L),
                         row(8L, "etx_8", "een_8", -40L, 199L)));
-        mvc.perform(get("/economy/ledger?limit=50").principal(auth(OWNER, CLIENT, USER)))
+        mvc.perform(get("/economy/ledger?pageSize=50").principal(auth(OWNER, CLIENT, USER)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.items[0].direction").value("CREDIT"))
-                .andExpect(jsonPath("$.items[0].amountMicro").value("100"))
-                .andExpect(jsonPath("$.items[0].postedAt").value("200"))
-                .andExpect(jsonPath("$.items[1].direction").value("DEBIT"))
-                .andExpect(jsonPath("$.items[1].amountMicro").value("40"))
-                .andExpect(jsonPath("$.nextCursor", nullValue()));
-        mvc.perform(get("/economy/ledger?limit=101").principal(auth(OWNER, CLIENT, USER)))
+                .andExpect(jsonPath("$.data.items[0].direction").value("CREDIT"))
+                .andExpect(jsonPath("$.data.items[0].amount.amountMinor").value("100"))
+                .andExpect(jsonPath("$.data.items[0].postedAt").value("200"))
+                .andExpect(jsonPath("$.data.items[1].direction").value("DEBIT"))
+                .andExpect(jsonPath("$.data.items[1].amount.amountMinor").value("40"))
+                .andExpect(jsonPath("$.data.nextCursor", nullValue()));
+        mvc.perform(get("/economy/ledger?pageSize=101").principal(auth(OWNER, CLIENT, USER)))
                 .andExpect(status().isBadRequest());
-        mvc.perform(get("/economy/ledger?limit=1&limit=2").principal(auth(OWNER, CLIENT, USER)))
+        mvc.perform(get("/economy/ledger?pageSize=1&pageSize=2").principal(auth(OWNER, CLIENT, USER)))
                 .andExpect(status().isBadRequest());
     }
 

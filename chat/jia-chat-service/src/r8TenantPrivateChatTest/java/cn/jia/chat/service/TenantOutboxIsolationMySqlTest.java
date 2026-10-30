@@ -24,6 +24,6 @@ class TenantOutboxIsolationMySqlTest extends SkillManagementMySqlFixture {
         scenario.legacyAndGreyWorkersDiscoverAndClaimOnlyTheirOwnRowsIncludingExpiredLeases();
     }
     @Test void configuredLegacyTenantPreservesAllOfItsClients() {
-        scenario.legacyDiscoveryHonorsConfiguredTenantAndNeverRestrictsItsMultipleClients();
+        scenario.discoveryHonorsConfiguredTenantAndNeverRestrictsItsMultipleClients();
     }
 }

@@ -212,8 +212,8 @@ class TaskBootstrapTenantIsolationMySqlTest extends SkillManagementMySqlFixture 
         }
         assertEquals(beforeRoots,jdbc.queryForList("SELECT * FROM agent_task_meta ORDER BY id"));
         assertEquals(beforeSnapshots,jdbc.queryForList("SELECT * FROM agent_task_requirement_snapshot ORDER BY tenant_id"));
-        assertThrows(IllegalArgumentException.class,()->service.captureOnCreate(scope("1","client"),"task","title",null));
-        assertThrows(IllegalArgumentException.class,()->service.requireCurrent(scope("1","client"),"task",1));
+        assertThrows(IllegalStateException.class,()->service.captureOnCreate(scope("1","client"),"task","title",null));
+        assertEquals(gray.sha256(),service.requireCurrent(scope("1","client"),"task",1).sha256());
         jdbc.update("UPDATE agent_task_requirement_snapshot SET content_sha256=? WHERE tenant_id='1'",production.sha256());
         assertEquals(cn.jia.agent.service.AgentTaskRequirementReadException.Reason.INTEGRITY_ERROR,
                 assertThrows(cn.jia.agent.service.AgentTaskRequirementReadException.class,

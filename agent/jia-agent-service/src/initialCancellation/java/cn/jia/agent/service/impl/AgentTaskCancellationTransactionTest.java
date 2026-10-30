@@ -159,9 +159,9 @@ class AgentTaskCancellationTransactionTest {
         var jwt=new JwtAuthenticationToken(Jwt.withTokenValue("fixture-token").claim("tenant_id", "0").header("alg","none")
                 .subject("actor").claim("jiacn","owner").claim("client_id","client").build(),List.of(),"actor");
         mvc.perform(post("/agent/tasks/417/cancel").principal(jwt).contentType("application/json")
-                .content("{\"expectedTaskVersion\":1}"))
-                .andExpect(status().isOk()).andExpect(jsonPath("$.taskId").value("417"))
-                .andExpect(jsonPath("$.status").value("cancelled")).andExpect(jsonPath("$.taskVersion").value(2));
+                .content("{\"protocolVersion\":1,\"requestId\":\"cancel-tx\",\"data\":{\"expectedTaskVersion\":\"1\"}}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data.taskId").value("417"))
+                .andExpect(jsonPath("$.data.status").value("cancelled")).andExpect(jsonPath("$.data.taskVersion").value("2"));
         assertEquals("left",readMember("a").getMemberStatus());
         assertEquals("rejected",readMember("b").getMemberStatus());
         assertNull(readMember("a").getStartedAt()); assertNull(readMember("b").getStartedAt());
@@ -173,8 +173,8 @@ class AgentTaskCancellationTransactionTest {
         var graphBefore=jdbc.queryForList("SELECT * FROM member ORDER BY agent_id");
         for (long expectedVersion:List.of(1L,2L)) {
             mvc.perform(post("/agent/tasks/417/cancel").principal(jwt).contentType("application/json")
-                    .content("{\"expectedTaskVersion\":"+expectedVersion+"}"))
-                    .andExpect(status().isOk()).andExpect(jsonPath("$.taskVersion").value(2));
+                    .content("{\"protocolVersion\":1,\"requestId\":\"cancel-tx\",\"data\":{\"expectedTaskVersion\":\""+expectedVersion+"\"}}"))
+                    .andExpect(status().isOk()).andExpect(jsonPath("$.data.taskVersion").value("2"));
             assertEquals(2,number("root","version"));
             assertEquals(4,number("root","event_version"));
             assertEquals(eventsBefore,jdbc.queryForList("SELECT * FROM event_row ORDER BY event_id"));

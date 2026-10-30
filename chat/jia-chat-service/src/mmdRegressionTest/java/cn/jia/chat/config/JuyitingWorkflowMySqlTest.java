@@ -465,7 +465,7 @@ class JuyitingWorkflowMySqlTest {
         jdbc.execute("ALTER TABLE agent_task_meta ADD id BIGINT NOT NULL AUTO_INCREMENT UNIQUE, ADD required_abilities TEXT, ADD assigned_agent_id VARCHAR(100), ADD reward DECIMAL(18,2), ADD assigned_at BIGINT, ADD started_at BIGINT, ADD completed_at BIGINT, ADD failure_reason TEXT, ADD create_time BIGINT DEFAULT 1, ADD update_time BIGINT DEFAULT 1");
         jdbc.execute("ALTER TABLE agent_task_meta CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci");
         jdbc.execute("ALTER TABLE agent_task_formal_delivery ADD revision BIGINT NOT NULL DEFAULT 1");
-        jdbc.execute("CREATE TABLE task_plan(id BIGINT,jiacn VARCHAR(50),client_id VARCHAR(50),name VARCHAR(100),description TEXT,amount DECIMAL(18,2),create_time BIGINT,update_time BIGINT)");
+        jdbc.execute("CREATE TABLE task_plan(id BIGINT,tenant_id VARCHAR(50) NOT NULL DEFAULT '0',jiacn VARCHAR(50),client_id VARCHAR(50),name VARCHAR(100),description TEXT,amount DECIMAL(18,2),create_time BIGINT,update_time BIGINT)");
         // The actual mapper's keyword expression includes these owner-scoped collaborators.
         jdbc.execute("CREATE TABLE agent_task_member(id BIGINT,tenant_id VARCHAR(50),client_id VARCHAR(50),owner_jiacn VARCHAR(50),task_id VARCHAR(100),agent_id VARCHAR(100),member_role VARCHAR(24),member_status VARCHAR(24))");
         jdbc.execute("CREATE TABLE agent_runtime(tenant_id VARCHAR(50),client_id VARCHAR(50),owner_jiacn VARCHAR(50),agent_id VARCHAR(100),name VARCHAR(100))");
@@ -509,7 +509,6 @@ class JuyitingWorkflowMySqlTest {
         }
         assertEquals(0,mapper.countSearchExactInScope("0","CLIENT","owner",null,null,null,null));
         // The overview is an independent keyset source, but TASK phases must have one classifier.
-        jdbc.execute("ALTER TABLE task_plan ADD tenant_id VARCHAR(50) NOT NULL DEFAULT '0'");
         jdbc.execute("ALTER TABLE agent_task_formal_delivery ADD id BIGINT NOT NULL AUTO_INCREMENT UNIQUE, ADD work_item_id VARCHAR(100), ADD reviewed_at BIGINT, ADD review_reason TEXT, ADD manifest_artifact_id VARCHAR(100), ADD manifest_artifact_version INT DEFAULT 1, ADD submitted_at BIGINT DEFAULT 1");
         jdbc.update("UPDATE agent_task_formal_delivery SET work_item_id=CONCAT('work-',task_id),manifest_artifact_id=CONCAT('manifest-',task_id)");
         jdbc.execute("CREATE TABLE agent_task_work_item(tenant_id VARCHAR(50),client_id VARCHAR(50),owner_jiacn VARCHAR(50),task_id VARCHAR(100),work_item_id VARCHAR(100),status VARCHAR(32),result_artifact_id VARCHAR(100),version BIGINT,lease_token VARCHAR(100),lease_until BIGINT)");

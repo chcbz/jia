@@ -61,7 +61,7 @@ class SkillAgentVersionsTest {
         when(mapper.lockVersion("tenant-blue","client","agt_1")).thenReturn(state);
         when(mapper.advanceVersion("tenant-blue","client","agt_1",state.getSourceHash(),7L)).thenReturn(1);
         var versions=new SkillAgentVersions(mapper,runtimes,SkillMarketplaceRealTransactionTest.provider(agents),owners,
-                mock(PlatformTransactionManager.class));
+                mock(org.springframework.transaction.PlatformTransactionManager.class));
         assertEquals(7L,versions.readOwned(actor,"agt_1"));
         versions.consume(actor,"agt_1",7L);
         verify(mapper).findVersion("tenant-blue","client","agt_1");

@@ -110,13 +110,15 @@ class PersonalWorkspaceExecutionServiceImplTest {
     }
 
     @Test
-    void grayExecutionStillFailsBeforeAnyBusinessStorageAccess() {
+    void grayExecutionRequiresAnOwnedRuntimeBeforeCreatingBusinessState() {
         var gray=new PersonalWorkspaceExecutionService.OwnerScope("1","client-a","owner-a");
         var failure=assertThrows(PersonalWorkspaceExecutionService.Failure.class,
                 ()->service.create(gray,new PersonalWorkspaceExecutionService.CreateCommand(
                         null,"agent-a",null,"instruction",PersonalWorkspaceExecutionProperties.DOCX,List.of()),"gray-key"));
-        assertEquals(PersonalWorkspaceExecutionService.Reason.BAD_REQUEST,failure.getReason());
-        org.mockito.Mockito.verifyNoInteractions(executions,workspace,taskLinks,writes);
+        assertEquals(PersonalWorkspaceExecutionService.Reason.NOT_FOUND,failure.getReason());
+        org.mockito.Mockito.verify(executions).findByIdempotency("1","client-a","owner-a","gray-key");
+        org.mockito.Mockito.verifyNoMoreInteractions(executions);
+        org.mockito.Mockito.verifyNoInteractions(workspace,taskLinks,writes);
     }
 
     @Test

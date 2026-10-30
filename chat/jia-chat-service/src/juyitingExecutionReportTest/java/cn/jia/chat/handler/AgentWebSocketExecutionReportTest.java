@@ -46,6 +46,7 @@ class AgentWebSocketExecutionReportTest {
     @BeforeEach
     void setUp() throws Exception {
         Map<String, Object> attributes = new HashMap<>();
+        attributes.put("tenantId", "0");
         attributes.put("agentId", "agent-1");
         attributes.put("clientId", "client-1");
         attributes.put("jiacn", "owner-1");

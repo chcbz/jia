@@ -70,7 +70,8 @@ public interface AgentExecutionReportMapper {
                    committed_version,terminal_report_id,terminal_result_ref,
                    tenant_id,client_id,create_time,update_time
               FROM agent_execution_report_head
-             WHERE """ + EXACT_SCOPE + """
+             WHERE
+            """ + EXACT_SCOPE + """
                AND agent_id=#{agentId} AND command_id=#{commandId} AND attempt=#{attempt}
                AND CAST(agent_id AS BINARY)=CAST(#{agentId} AS BINARY)
                AND OCTET_LENGTH(agent_id)=OCTET_LENGTH(#{agentId})
@@ -102,7 +103,8 @@ public interface AgentExecutionReportMapper {
                    sequence,occurred_at,semantic_hash,payload_json,result_ref,committed_version,
                    tenant_id,client_id,create_time,update_time
               FROM agent_execution_report_inbox
-             WHERE """ + EXACT_SCOPE + """
+             WHERE
+            """ + EXACT_SCOPE + """
                AND agent_id=#{agentId} AND report_id=#{reportId}
                AND CAST(agent_id AS BINARY)=CAST(#{agentId} AS BINARY)
                AND OCTET_LENGTH(agent_id)=OCTET_LENGTH(#{agentId})
@@ -134,7 +136,8 @@ public interface AgentExecutionReportMapper {
                SET last_sequence=#{nextSequence},committed_version=#{nextVersion},
                    terminal_report_id=#{terminalReportId},terminal_result_ref=#{terminalResultRef},
                    update_time=#{now}
-             WHERE id=#{head.id} AND """ + EXACT_SCOPE + """
+             WHERE id=#{head.id} AND
+            """ + EXACT_SCOPE + """
                AND agent_id=#{agentId} AND command_id=#{commandId} AND attempt=#{attempt}
                AND runtime_instance_id=#{head.runtimeInstanceId} AND execution_ref=#{head.executionRef}
                AND last_sequence=#{head.lastSequence} AND committed_version=#{head.committedVersion}

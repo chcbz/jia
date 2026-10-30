@@ -121,8 +121,8 @@ class AgentIdentitySchemaTest {
         assertEquals(2, occurrenceCount(complete,
                 "and client_id is null and owner_jiacn is null and tenant_id = '0'"));
         assertEquals(2, occurrenceCount(complete,
-                "and owner_jiacn is not null and trim(owner_jiacn) <> '' and tenant_id = '0'"));
-        assertEquals(2, occurrenceCount(complete, "chk_identity_alias_scope check (tenant_id = '0')"));
+                "and owner_jiacn is not null and trim(owner_jiacn) <> '' and tenant_id is not null and char_length(tenant_id)>0 and octet_length(tenant_id)=octet_length(trim(tenant_id))"));
+        assertEquals(2, occurrenceCount(complete, "chk_identity_alias_scope check (tenant_id is not null and char_length(tenant_id)>0 and octet_length(tenant_id)=octet_length(trim(tenant_id)))"));
         assertEquals(2, occurrenceCount(complete,
                 "comment 'single tenant scope; 0 for every identity including system rows'"));
         assertEquals(2, occurrenceCount(complete,
