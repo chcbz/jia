@@ -4,6 +4,7 @@ import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.model.tool.ToolCallingChatOptions;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Component;
@@ -33,11 +34,17 @@ public final class AssigneeRecommendationModel implements cn.jia.agent.service.A
     @Override
     public String judge(String inputJson) {
         // A global model with implicit tool defaults is not safe for this read-only purpose.
-        if (model.getOptions() instanceof ToolCallingChatOptions defaults
+        ChatOptions modelOptions = model.getOptions();
+        if (modelOptions instanceof ToolCallingChatOptions defaults
                 && defaults.getToolCallbacks() != null && !defaults.getToolCallbacks().isEmpty())
             throw new Failure(503, "RECOMMENDATION_UNAVAILABLE");
         // Spring AI 2.0 ChatModel has no internal tool loop; do not attach a ToolCallingAdvisor.
-        var options = ToolCallingChatOptions.builder().toolCallbacks(List.of()).build();
+        // Retain the provider-specific options type (Spring AI 2.0 casts it when creating a request).
+        // Mutate a copy, never the shared model defaults; do not branch on provider brands.
+        ChatOptions options = modelOptions instanceof ToolCallingChatOptions toolOptions
+                ? toolOptions.mutate().toolCallbacks(List.of()).build()
+                : modelOptions != null ? modelOptions.mutate().build()
+                : ToolCallingChatOptions.builder().toolCallbacks(List.of()).build();
         var response = model.call(new Prompt(List.of(new SystemMessage(INSTRUCTIONS), new UserMessage(inputJson)), options));
         if (response == null || response.getResult() == null || response.getResult().getOutput() == null
                 || response.getResult().getOutput().hasToolCalls())
