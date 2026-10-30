@@ -48,7 +48,7 @@ CREATE TABLE IF NOT EXISTS agent_identity_registry (
         OR (canonical_type <> 'SYSTEM'
             AND client_id IS NOT NULL AND TRIM(client_id) <> ''
             AND owner_jiacn IS NOT NULL AND TRIM(owner_jiacn) <> ''
-            AND tenant_id = '0')
+            AND tenant_id IS NOT NULL AND CHAR_LENGTH(tenant_id)>0 AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(TRIM(tenant_id)))
     ),
     CONSTRAINT chk_identity_registry_retired CHECK (
         (lifecycle_status = 'RETIRED' AND retired_at IS NOT NULL)
@@ -79,12 +79,12 @@ CREATE TABLE IF NOT EXISTS agent_identity_alias (
     update_time             BIGINT DEFAULT NULL COMMENT 'Update time',
     PRIMARY KEY (id),
     UNIQUE KEY uk_identity_alias_active
-        (client_id, owner_jiacn, alias_type, alias_value, active_key),
+        (tenant_id, client_id, owner_jiacn, alias_type, alias_value, active_key),
     KEY idx_identity_alias_registry (registry_id, alias_status),
     KEY idx_identity_alias_canonical (canonical_agent_id, alias_status),
     CONSTRAINT chk_identity_alias_type CHECK (alias_type = 'LEGACY_AGENT_ID'),
     CONSTRAINT chk_identity_alias_status CHECK (alias_status IN ('ACTIVE', 'REVOKED')),
-    CONSTRAINT chk_identity_alias_scope CHECK (tenant_id = '0'),
+    CONSTRAINT chk_identity_alias_scope CHECK (tenant_id IS NOT NULL AND CHAR_LENGTH(tenant_id)>0 AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(TRIM(tenant_id))),
     CONSTRAINT chk_identity_alias_no_blank_scope CHECK (
         TRIM(client_id) <> '' AND TRIM(owner_jiacn) <> ''
     ),
@@ -393,7 +393,7 @@ CALL a02_assert((SELECT CONCAT(MIN(non_unique), ':',
     GROUP_CONCAT(LOWER(column_name) ORDER BY seq_in_index SEPARATOR ','))
     FROM information_schema.statistics WHERE table_schema = DATABASE()
       AND table_name = 'agent_identity_alias' AND index_name = 'uk_identity_alias_active')
-    = '0:client_id,owner_jiacn,alias_type,alias_value,active_key',
+    = '0:tenant_id,client_id,owner_jiacn,alias_type,alias_value,active_key',
     'A02: incompatible alias active unique index');
 
 ALTER TABLE agent_identity_registry
@@ -413,7 +413,7 @@ ALTER TABLE agent_identity_registry
         OR (canonical_type <> 'SYSTEM'
             AND client_id IS NOT NULL AND TRIM(client_id) <> ''
             AND owner_jiacn IS NOT NULL AND TRIM(owner_jiacn) <> ''
-            AND tenant_id = '0')),
+            AND tenant_id IS NOT NULL AND CHAR_LENGTH(tenant_id)>0 AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(TRIM(tenant_id)))),
     ADD CONSTRAINT chk_identity_registry_retired CHECK (
         (lifecycle_status = 'RETIRED' AND retired_at IS NOT NULL)
         OR (lifecycle_status <> 'RETIRED' AND retired_at IS NULL));
@@ -421,7 +421,7 @@ ALTER TABLE agent_identity_registry
 ALTER TABLE agent_identity_alias
     ADD CONSTRAINT chk_identity_alias_type CHECK (alias_type = 'LEGACY_AGENT_ID'),
     ADD CONSTRAINT chk_identity_alias_status CHECK (alias_status IN ('ACTIVE', 'REVOKED')),
-    ADD CONSTRAINT chk_identity_alias_scope CHECK (tenant_id = '0'),
+    ADD CONSTRAINT chk_identity_alias_scope CHECK (tenant_id IS NOT NULL AND CHAR_LENGTH(tenant_id)>0 AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(TRIM(tenant_id))),
     ADD CONSTRAINT chk_identity_alias_no_blank_scope CHECK (
         TRIM(client_id) <> '' AND TRIM(owner_jiacn) <> ''),
     ADD CONSTRAINT chk_identity_alias_window CHECK (

@@ -46,11 +46,8 @@ class AgentRuntimeBatchMapperContractTest {
         String overlay = selectSql(AgentPersonaBindingMapper.class, "findCatalogOverlay");
         assertTenantLineIgnored(AgentPersonaBindingMapper.class, "findCatalogOverlay");
         assertTrue(overlay.contains("from agent_persona_binding b"));
-        assertTrue(overlay.contains("left join agent_persona p"));
-        assertTrue(overlay.contains("p.active = 1"));
-        assertExactParameter(overlay, "p.tenant_id", "tenantid");
-        assertExactParameter(overlay, "p.client_id", "clientid");
-        assertTrue(overlay.contains("#{tenantid} <> '0' or p.persona_code is not null"));
+        assertFalse(overlay.contains("left join agent_persona p"));
+        assertFalse(overlay.contains("#{tenantid} <> '0'"));
         assertTrue(overlay.contains("left join agent_identity_registry i on i.binding_id = b.id"));
         assertTrue(overlay.contains("i.tenant_id = b.tenant_id"));
         assertTrue(overlay.contains("cast(i.tenant_id as binary) = cast(b.tenant_id as binary)"));
