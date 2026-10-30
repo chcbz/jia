@@ -145,7 +145,7 @@ public final class FundedBountyServiceImpl implements FundedBountyService {
                 () -> taskMetaDao.insert(reserved),
                 (root, created) -> {
                     if (!created) throw conflict("Funded task root identifier collision");
-                    String finalTaskId = createTaskPlan(request, reservedTaskId, actor.ownerJiacn());
+                    String finalTaskId = createTaskPlan(request, reservedTaskId, actor);
                     if (!reservedTaskId.equals(finalTaskId)) {
                         if (taskMetaDao.findByTaskIdForUpdateInOwnerScope(actor.tenantId(), actor.clientId(), actor.ownerJiacn(), finalTaskId) != null) {
                             throw conflict("Task plan ID collides with an existing task root");
@@ -426,13 +426,15 @@ public final class FundedBountyServiceImpl implements FundedBountyService {
         }
     }
 
-    private String createTaskPlan(AgentTaskCreateDTO request, String fallbackId, String tenantId) {
+    private String createTaskPlan(AgentTaskCreateDTO request, String fallbackId, FundedBountyActor actor) {
         TaskService taskService = taskServiceProvider.getIfAvailable();
         if (taskService == null) return fallbackId;
         TaskPlanEntity plan = new TaskPlanEntity();
         plan.setName(limit(request.getTitle(), 30));
         plan.setDescription(limit(request.getDescription(), 200));
-        plan.setJiacn(tenantId);
+        plan.setJiacn(actor.ownerJiacn());
+        plan.setTenantId(actor.tenantId());
+        plan.setClientId(actor.clientId());
         plan.setPeriod(TaskConstants.TASK_PERIOD_ALLTIME);
         plan.setType(TaskConstants.TASK_TYPE_NOTIFY);
         plan.setStatus(TaskConstants.TASK_STATUS_ENABLE);
