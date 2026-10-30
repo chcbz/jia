@@ -47,7 +47,7 @@ public final class SkillAgentVersions {
         require(dto!=null&&agentId.equals(dto.getAgentId())&&!Boolean.TRUE.equals(dto.getSystemAgent()),404,"RESOURCE_NOT_FOUND");
         var runtime=runtimes.findInScope(actor.tenantId(),actor.clientId(),agentId);
         require(runtime!=null&&actor.ownerJiacn().equals(runtime.getOwnerJiacn()),404,"RESOURCE_NOT_FOUND");
-        var state=mapper.findVersion(actor.ownerJiacn(),actor.clientId(),agentId);
+        var state=mapper.findVersion(actor.tenantId(),actor.clientId(),agentId);
         if(state==null)return 1;
         return Arrays.equals(sourceHash(runtime),state.getSourceHash())?state.getVersion():Math.addExact(state.getVersion(),1);
     }
@@ -59,19 +59,19 @@ public final class SkillAgentVersions {
     private long observeLocked(AgentRuntimeEntity row) {
         require(row!=null && row.getBindingId()!=null,403,"AGENT_FORBIDDEN");
         byte[] hash=sourceHash(row);
-        mapper.ensureVersion(row.getOwnerJiacn(),row.getClientId(),row.getAgentId(),hash);
-        var state=mapper.lockVersion(row.getOwnerJiacn(),row.getClientId(),row.getAgentId());
+        mapper.ensureVersion(row.getTenantId(),row.getClientId(),row.getAgentId(),hash);
+        var state=mapper.lockVersion(row.getTenantId(),row.getClientId(),row.getAgentId());
         require(state!=null && state.getVersion()!=null && state.getVersion()>0,503,"SKILL_STATE_UNAVAILABLE");
         if(!Arrays.equals(hash,state.getSourceHash())) {
-            require(mapper.advanceVersion(row.getOwnerJiacn(),row.getClientId(),row.getAgentId(),hash,state.getVersion())==1,409,"AGENT_VERSION_CONFLICT");
+            require(mapper.advanceVersion(row.getTenantId(),row.getClientId(),row.getAgentId(),hash,state.getVersion())==1,409,"AGENT_VERSION_CONFLICT");
             return Math.addExact(state.getVersion(),1);
         }
         return state.getVersion();
     }
     public void consume(HostingRentHttp.Actor actor,String agentId,long expected) {
-        var state=mapper.lockVersion(actor.ownerJiacn(),actor.clientId(),agentId);
+        var state=mapper.lockVersion(actor.tenantId(),actor.clientId(),agentId);
         require(state!=null && state.getVersion()==expected,409,"AGENT_VERSION_CONFLICT");
-        require(mapper.advanceVersion(actor.ownerJiacn(),actor.clientId(),agentId,state.getSourceHash(),expected)==1,409,"AGENT_VERSION_CONFLICT");
+        require(mapper.advanceVersion(actor.tenantId(),actor.clientId(),agentId,state.getSourceHash(),expected)==1,409,"AGENT_VERSION_CONFLICT");
     }
     static byte[] sourceHash(AgentRuntimeEntity r) {
         Map<String,String> fields=new TreeMap<>();

@@ -107,7 +107,7 @@ public class ChatController {
     private final HumanSenderIdentityResolver humanSenderIdentityResolver;
     private InteractionRouter interactionRouter = new InteractionRouter();
     private ChatDeliberationService chatDeliberationService;
-    private TenantScopeResolver tenantScopeResolver = TenantScopeResolver.legacySingleTenant();
+    private TenantScopeResolver tenantScopeResolver = new TenantScopeResolver();
     private ChatBountyAssetProjector bountyAssets;
 
     @Autowired(required = false)

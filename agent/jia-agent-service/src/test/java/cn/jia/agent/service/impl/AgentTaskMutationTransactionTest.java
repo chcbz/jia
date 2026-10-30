@@ -157,9 +157,27 @@ class AgentTaskMutationTransactionTest extends BaseMockTest {
                 "1",CLIENT,"owner",TASK,lockedMutation));
         verifyNoInteractions(lockedMutation);
         verify(transactionManager).rollback(any());
-        assertThrows(IllegalArgumentException.class,()->transaction.executeAfterTaskRootReservationInOwnerScope(
+        assertThrows(AgentTaskCollaborationException.class,()->transaction.executeAfterTaskRootReservationInOwnerScope(
                 "1",CLIENT,"owner",TASK,reservation,reservedMutation));
-        verifyNoInteractions(reservation,reservedMutation);
+        verify(reservation).reserve();
+        verifyNoInteractions(reservedMutation);
+    }
+
+    @Test
+    void grayWorkItemMutationLocksOnlyTheExactOwnerEnvironment() {
+        var root = root();
+        root.setTenantId("1");
+        root.setOwnerJiacn("owner");
+        when(taskMetaDao.findByWorkItemIdForUpdateInOwnerScope("1", CLIENT, "owner", "work-1"))
+                .thenReturn(root);
+        assertEquals("1", transaction.executeWithLockedTaskRootForWorkItemInOwnerScope(
+                "1", CLIENT, "owner", "work-1", locked -> locked.getTenantId()));
+        root.setTenantId("0");
+        assertThrows(AgentTaskCollaborationException.class,
+                () -> transaction.executeWithLockedTaskRootForWorkItemInOwnerScope(
+                        "1", CLIENT, "owner", "work-1", lockedMutation));
+        verifyNoInteractions(lockedMutation);
+        verify(transactionManager).rollback(any());
     }
 
     private AgentTaskMetaEntity root() {

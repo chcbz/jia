@@ -39,9 +39,9 @@ public class AgentTaskCancellationController {
         }
         String owner=claim(jwt,"jiacn",50), client=claim(jwt,"client_id",50), actor=claim(jwt,"sub",100);
         final String tenant;
-        try { tenant=TenantClaimPolicy.resolve(jwt.getToken().getClaims(),"0"); }
+        try { tenant=TenantClaimPolicy.resolve(jwt.getToken().getClaims()); }
         catch (IllegalArgumentException invalid) { throw new AuthenticationFailure(true); }
-        if (!"0".equals(tenant) || "0".equals(owner) || "0".equals(client) || !actor.equals(authentication.getName())) {
+        if ("0".equals(owner) || "0".equals(client) || !actor.equals(authentication.getName())) {
             throw new AuthenticationFailure(true);
         }
         if (!exact(taskId,100) || request.getQueryString()!=null && !request.getQueryString().isEmpty()) {
@@ -60,7 +60,7 @@ public class AgentTaskCancellationController {
             if (version<0 || version==Long.MAX_VALUE) throw badRequest();
         } catch (org.springframework.http.converter.HttpMessageNotReadableException protocol) { throw protocol; }
         catch (Exception failure) { throw badRequest(); }
-        var receipt=service.cancel("0",client,owner,actor,taskId,version);
+        var receipt=service.cancel(tenant,client,owner,actor,taskId,version);
         if (receipt==null || !taskId.equals(receipt.taskId()) || !"cancelled".equals(receipt.status())
                 || receipt.taskVersion()<0) {
             throw new IllegalStateException("Invalid cancellation receipt");
@@ -72,6 +72,11 @@ public class AgentTaskCancellationController {
     public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> authentication(AuthenticationFailure failure) {
         return error(failure.forbidden ? HttpStatus.FORBIDDEN : HttpStatus.UNAUTHORIZED,
                 failure.forbidden ? "CANCEL_FORBIDDEN" : "CANCEL_UNAUTHENTICATED");
+    }
+    @ExceptionHandler(org.springframework.http.converter.HttpMessageNotReadableException.class)
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> malformedEnvelope(
+            org.springframework.http.converter.HttpMessageNotReadableException ignored) {
+        return error(HttpStatus.BAD_REQUEST, "BAD_REQUEST");
     }
     @ExceptionHandler(RequestFailure.class)
     public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> badRequest(RequestFailure ignored) { return error(HttpStatus.BAD_REQUEST,"BAD_REQUEST"); }

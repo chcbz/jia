@@ -45,7 +45,9 @@ public final class AgentTaskExecutionGrantDaoImpl implements AgentTaskExecutionG
         return mapper.selectLatestAssignmentEventJson(tenantId,clientId,ownerJiacn,taskId);
     }
     @Override public void insert(AgentTaskExecutionGrantEntity grant) {
-        Objects.requireNonNull(grant,"grant").init4Creation();
+        Objects.requireNonNull(grant,"grant");
+        scope(grant.getTenantId(),grant.getClientId(),grant.getOwnerJiacn());
+        grant.init4Creation();
         if (mapper.insert(grant) != 1) throw new IllegalStateException("grant insert did not affect one row");
     }
     @Override public int supersedeActiveForTask(String tenantId, String clientId,
@@ -71,7 +73,7 @@ public final class AgentTaskExecutionGrantDaoImpl implements AgentTaskExecutionG
                 idempotencyKey,requestHash,revokedAt) == 1;
     }
     private static void scope(String tenant, String client, String owner) {
-        if (!"0".equals(tenant)) throw new IllegalArgumentException("tenantId");
+        TaskCollaborationDaoSupport.requireStrictOwnerScope(tenant, client, owner);
         id(client,"clientId",50); id(owner,"ownerJiacn",50);
         if ("0".equals(owner)) throw new IllegalArgumentException("ownerJiacn");
     }

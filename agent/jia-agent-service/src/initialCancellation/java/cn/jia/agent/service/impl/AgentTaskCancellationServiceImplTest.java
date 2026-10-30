@@ -74,6 +74,19 @@ class AgentTaskCancellationServiceImplTest {
         verify(dao,never()).releaseTaskOccupation(anyString(),anyString(),anyString(),anyString(),anyLong());
         verify(dao,never()).cancelRetryBootstrap(anyString(),anyString(),anyString(),anyString(),anyLong(),anyLong(),anyLong());
     }
+    @Test void grayCancellationLocksAndMutatesOnlyGrayPartition() {
+        root.setTenantId("1");
+        when(dao.lockMembers("1","client","owner","417")).thenReturn(List.of());
+        when(items.listByTaskForUpdate("1","client","owner","417",501)).thenReturn(List.of());
+        when(dao.lockGrants("1","client","owner","417")).thenReturn(List.of());
+        when(dao.lockBootstraps("1","client","owner","417")).thenReturn(List.of());
+        assertEquals("cancelled", service.cancel("1","client","owner","actor","417",1).status());
+        verify(tx).executeWithLockedTaskRootInOwnerScope(eq("1"),eq("client"),eq("owner"),eq("417"),any());
+        verify(states).transitionTask(eq("1"),eq("client"),eq("owner"),eq("417"),any());
+        verify(dao,never()).lockMembers("0","client","owner","417");
+        verify(grants,never()).revoke(anyString(),anyString(),anyString(),anyString(),anyString(),anyLong(),anyString(),anyString(),anyLong());
+    }
+
     @Test void multipleMembersItemsTerminalPreservationAndUnusedGrant() {
         when(dao.lockMembers("0","client","owner","417")).thenReturn(List.of(
                 member("a","accepted"),member("b","invited"),member("c","left").setCompletedAt(1L),member("d","rejected").setCompletedAt(2L)));

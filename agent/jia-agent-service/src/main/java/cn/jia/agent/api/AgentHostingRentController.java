@@ -1,5 +1,7 @@
 package cn.jia.agent.api;
 
+import cn.jia.core.security.TenantClaimPolicy;
+
 import cn.jia.agent.service.HostingRentAdmissionException;
 import cn.jia.agent.hosting.HostingRentApplicationService;
 import cn.jia.agent.hosting.HostingRentHttp;
@@ -133,7 +135,12 @@ public final class AgentHostingRentController {
         String ownerJiacn = requiredClaim(claims, "jiacn", 50);
         if ("0".equals(ownerJiacn)) throw new AuthenticationFailure(true);
         String client = requiredClaim(claims, "client_id", 50);
-        return new HostingRentAdmissionService.Principal(actor, "0", client);
+        try {
+            return new HostingRentAdmissionService.Principal(actor,
+                    TenantClaimPolicy.resolve(claims), client);
+        } catch (IllegalArgumentException denied) {
+            throw new AuthenticationFailure(true);
+        }
     }
 
     private static String requiredClaim(Map<String, Object> claims, String name, int maxBytes) {

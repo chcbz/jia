@@ -51,7 +51,7 @@ class PointAccountTransactionTest {
         var factory = new SqlSessionFactoryBean();
         factory.setDataSource(source); factory.setConfiguration(configuration);
         var mapper = new SqlSessionTemplate(factory.getObject()).getMapper(PointAccountMapper.class);
-        accounts = proxy(new PointAccountServiceImpl(new PointAccountDaoImpl(mapper), "0", true, "1"));
+        accounts = proxy(new PointAccountServiceImpl(new PointAccountDaoImpl(mapper), new cn.jia.core.security.FixedTenantAdmissionPolicy("1", null)));
         users = mock(UserService.class);
         when(users.findOwnIdentityByExactJiacn("alice")).thenReturn(new UserEntity());
         ledger = mock(PointRecordDao.class);

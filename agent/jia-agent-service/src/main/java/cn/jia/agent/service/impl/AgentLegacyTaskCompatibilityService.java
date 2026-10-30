@@ -1077,7 +1077,7 @@ public class AgentLegacyTaskCompatibilityService {
         requireExactText(tenantId, "tenantId", 50);
         requireExactText(clientId, "clientId", 50);
         requireExactText(ownerJiacn, "ownerJiacn", 50);
-        if (!"0".equals(tenantId) || "0".equals(ownerJiacn)) {
+        if ("0".equals(ownerJiacn)) {
             throw forbidden();
         }
     }

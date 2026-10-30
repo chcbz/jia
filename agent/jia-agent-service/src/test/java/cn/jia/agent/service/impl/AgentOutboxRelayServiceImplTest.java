@@ -65,18 +65,34 @@ class AgentOutboxRelayServiceImplTest {
     }
 
     @Test
+    void foreignAndUnattributableHintsNeverReachLocksOrQuarantine() {
+        for (String tenant : List.of("1", "tenant-b", "", "tenant-a ")) {
+            var foreign = new AgentOutboxCandidate(1, tenant, "client-a", 41, NOW, 0, "PENDING");
+            when(dao.selectCorruptCandidates("tenant-a", NOW, 1)).thenReturn(List.of(foreign));
+            when(dao.selectDueCandidates("tenant-a", NOW, 4)).thenReturn(List.of(foreign));
+            when(dao.selectStaleCandidates("tenant-a", NOW, 4)).thenReturn(List.of(foreign));
+            assertEquals(List.of(), service.discover(NOW, 1));
+            assertEquals(AgentOutboxClaim.Status.SKIPPED, service.claim(foreign, "worker", NOW).status());
+        }
+        verify(dao, never()).lockDelivery(anyString(), anyString(), anyLong());
+        verify(dao, never()).lockOutbox(anyString(), anyString(), anyLong());
+        verify(dao, never()).lockOutboxForQuarantine(any());
+        verify(dao, never()).quarantineOutbox(any(), anyString(), anyLong());
+    }
+
+    @Test
     void discoveryMergesDueAndStaleLanesDeterministicallyWithOverscan() {
-        when(dao.selectDueCandidates(NOW, 8)).thenReturn(List.of(
+        when(dao.selectDueCandidates("tenant-a", NOW, 8)).thenReturn(List.of(
                 candidate(8, 80), candidate(3, 30)));
-        when(dao.selectStaleCandidates(NOW, 8)).thenReturn(List.of(
+        when(dao.selectStaleCandidates("tenant-a", NOW, 8)).thenReturn(List.of(
                 candidate(4, 30), candidate(2, 20)));
 
         List<AgentOutboxCandidate> found = service.discover(NOW, 2);
 
         assertEquals(List.of(2L, 3L, 4L, 8L),
                 found.stream().map(AgentOutboxCandidate::outboxId).toList());
-        verify(dao).selectDueCandidates(NOW, 8);
-        verify(dao).selectStaleCandidates(NOW, 8);
+        verify(dao).selectDueCandidates("tenant-a", NOW, 8);
+        verify(dao).selectStaleCandidates("tenant-a", NOW, 8);
     }
 
     @Test
@@ -89,8 +105,8 @@ class AgentOutboxRelayServiceImplTest {
         assertEquals(List.of(), notReady.discover(NOW, 50));
         assertEquals(AgentOutboxClaim.Status.DISABLED,
                 notReady.claim(candidate(1, NOW), "lease", NOW).status());
-        verify(dao, never()).selectCorruptCandidates(anyLong(), anyInt());
-        verify(dao, never()).selectDueCandidates(anyLong(), anyInt());
+        verify(dao, never()).selectCorruptCandidates(eq("tenant-a"), anyLong(), anyInt());
+        verify(dao, never()).selectDueCandidates(eq("tenant-a"), anyLong(), anyInt());
         verify(dao, never()).lockDelivery(anyString(), anyString(), anyLong());
     }
 
@@ -285,15 +301,15 @@ class AgentOutboxRelayServiceImplTest {
     }
 
     @Test
-    void dispatchStateOutsideExactScopeTerminalizesCaptureInsteadOfCreatingBacklog() throws Exception {
+    void sameTenantOutsideClientAllowlistTerminalizesCaptureInsteadOfCreatingBacklog() throws Exception {
         Fixture fixture = pending();
-        fixture.delivery.setTenantId("tenant-b");
-        fixture.outbox.setTenantId("tenant-b");
+        fixture.delivery.setClientId("client-b");
+        fixture.outbox.setClientId("client-b");
         arrange(fixture);
         AgentOutboxRelayServiceImpl scoped = service(allowedGate(), ready());
 
         AgentOutboxClaim claim = scoped.claim(
-                new AgentOutboxCandidate(1, "tenant-b", "client-a", 41, NOW, 0, "PENDING"),
+                new AgentOutboxCandidate(1, "tenant-a", "client-b", 41, NOW, 0, "PENDING"),
                 "lease-a", NOW);
 
         assertEquals(AgentOutboxClaim.Status.SKIPPED, claim.status());
@@ -524,18 +540,18 @@ class AgentOutboxRelayServiceImplTest {
         AgentOutboxCandidate badDeliveryId =
                 new AgentOutboxCandidate(1, "tenant-a", "client-a", 0, 1, 0, "PENDING");
         AgentOutboxCandidate blankScope =
-                new AgentOutboxCandidate(2, "", "client-a", 41, 2, 0, "PENDING");
+                new AgentOutboxCandidate(2, "tenant-a", "", 41, 2, 0, "PENDING");
         AgentOutboxCandidate controlScope =
-                new AgentOutboxCandidate(3, "tenant-" + Character.toString(1), "client-a", 41, 3, 0, "PENDING");
+                new AgentOutboxCandidate(3, "tenant-a", "client-" + Character.toString(1), 41, 3, 0, "PENDING");
         AgentOutboxCandidate missingDelivery =
                 new AgentOutboxCandidate(4, "tenant-a", "client-a", 404, 4, 0, "PENDING");
         AgentOutboxCandidate legal =
                 new AgentOutboxCandidate(10, "tenant-a", "client-a", 41, 10, 0, "PENDING");
-        when(dao.selectCorruptCandidates(NOW, 1)).thenReturn(
+        when(dao.selectCorruptCandidates("tenant-a", NOW, 1)).thenReturn(
                 List.of(badDeliveryId), List.of(blankScope),
                 List.of(controlScope), List.of(missingDelivery));
-        when(dao.selectDueCandidates(NOW, 4)).thenReturn(List.of(legal));
-        when(dao.selectStaleCandidates(NOW, 4)).thenReturn(List.of());
+        when(dao.selectDueCandidates("tenant-a", NOW, 4)).thenReturn(List.of(legal));
+        when(dao.selectStaleCandidates("tenant-a", NOW, 4)).thenReturn(List.of());
         when(dao.lockOutboxForQuarantine(badDeliveryId))
                 .thenReturn(poisonOutbox(badDeliveryId));
         when(dao.lockOutboxForQuarantine(blankScope))
@@ -550,9 +566,9 @@ class AgentOutboxRelayServiceImplTest {
                     .map(AgentOutboxCandidate::outboxId).toList());
         }
 
-        verify(dao, times(4)).selectCorruptCandidates(NOW, 1);
-        verify(dao, times(4)).selectDueCandidates(NOW, 4);
-        verify(dao, times(4)).selectStaleCandidates(NOW, 4);
+        verify(dao, times(4)).selectCorruptCandidates("tenant-a", NOW, 1);
+        verify(dao, times(4)).selectDueCandidates("tenant-a", NOW, 4);
+        verify(dao, times(4)).selectStaleCandidates("tenant-a", NOW, 4);
         verify(dao).quarantineOutbox(any(), eq(AgentOutboxRelayServiceImpl.DISCOVERY_DELIVERY_ID_INVALID), eq(NOW));
         verify(dao, times(2)).quarantineOutbox(any(),
                 eq(AgentOutboxRelayServiceImpl.DISCOVERY_SCOPE_INVALID), eq(NOW));
@@ -567,9 +583,9 @@ class AgentOutboxRelayServiceImplTest {
         fixture.outbox.setVersion(Long.MAX_VALUE - 1);
         AgentOutboxCandidate poison = new AgentOutboxCandidate(
                 1, "tenant-a", "client-a", 41, NOW, Long.MAX_VALUE - 1, "PENDING");
-        when(dao.selectCorruptCandidates(NOW, 1)).thenReturn(List.of());
-        when(dao.selectDueCandidates(NOW, 4)).thenReturn(List.of(poison));
-        when(dao.selectStaleCandidates(NOW, 4)).thenReturn(List.of());
+        when(dao.selectCorruptCandidates("tenant-a", NOW, 1)).thenReturn(List.of());
+        when(dao.selectDueCandidates("tenant-a", NOW, 4)).thenReturn(List.of(poison));
+        when(dao.selectStaleCandidates("tenant-a", NOW, 4)).thenReturn(List.of());
         when(dao.lockDelivery("tenant-a", "client-a", 41L)).thenReturn(fixture.delivery);
         when(dao.lockOutboxForQuarantine(poison)).thenReturn(fixture.outbox);
 
@@ -589,9 +605,9 @@ class AgentOutboxRelayServiceImplTest {
         fixture.outbox.setVersion(Long.MAX_VALUE - 1);
         AgentOutboxCandidate poison = new AgentOutboxCandidate(
                 1, "tenant-a", "client-a", 41, NOW, Long.MAX_VALUE - 1, "PENDING");
-        when(dao.selectCorruptCandidates(NOW, 1)).thenReturn(List.of(poison));
-        when(dao.selectDueCandidates(NOW, 4)).thenReturn(List.of());
-        when(dao.selectStaleCandidates(NOW, 4)).thenReturn(List.of());
+        when(dao.selectCorruptCandidates("tenant-a", NOW, 1)).thenReturn(List.of(poison));
+        when(dao.selectDueCandidates("tenant-a", NOW, 4)).thenReturn(List.of());
+        when(dao.selectStaleCandidates("tenant-a", NOW, 4)).thenReturn(List.of());
         when(dao.lockDelivery("tenant-a", "client-a", 41L)).thenReturn(fixture.delivery);
         when(dao.lockOutboxForQuarantine(poison)).thenReturn(fixture.outbox);
 
@@ -760,7 +776,7 @@ class AgentOutboxRelayServiceImplTest {
         PlatformTransactionManager transactions = mock(PlatformTransactionManager.class);
         when(transactions.getTransaction(any())).thenReturn(new SimpleTransactionStatus());
         return new AgentOutboxRelayServiceImpl(
-                dao, gate, MANIFEST, readiness, settings(), transactions);
+                dao, gate, MANIFEST, readiness, settings(), transactions, "tenant-a");
     }
 
     private static AgentOutboxRelaySettings settings() {

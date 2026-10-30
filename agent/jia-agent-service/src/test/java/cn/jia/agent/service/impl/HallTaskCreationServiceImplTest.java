@@ -104,7 +104,7 @@ class HallTaskCreationServiceImplTest {
         plan.setClientId("c"); plan.setTenantId("0"); return plan;
     }
     private static void identity(String owner, String client) {
-        JwtAuthenticationToken authentication = new JwtAuthenticationToken(Jwt.withTokenValue("fixture")
+        JwtAuthenticationToken authentication = new JwtAuthenticationToken(Jwt.withTokenValue("fixture").claim("tenant_id", "0")
                 .header("alg", "none").subject(owner).claim("jiacn", owner).claim("client_id", client)
                 .issuedAt(Instant.ofEpochSecond(1)).expiresAt(Instant.ofEpochSecond(2)).build());
         authentication.setAuthenticated(true); // fixture models the post-authentication principal

@@ -92,6 +92,7 @@ class AgentWorkItemRuntimeResultFenceRealTransactionTest {
         when(identities.lockActiveCanonicalAgentIdsInScope(anyString(),anyString(),anyString(),any())).thenAnswer(inv->inv.getArgument(3));
         var agents=mock(AgentService.class);
         when(agents.requireApiKeyOwnedAgentForUpdate(anyString(),anyString(),anyString())).thenAnswer(inv->{var row=new AgentRuntimeDTO();row.setAgentId(inv.getArgument(2));row.setStatus("online");return row;});
+        when(agents.requireApiKeyOwnedAgentForUpdate(anyString(),anyString(),anyString(),anyString())).thenAnswer(inv->{var row=new AgentRuntimeDTO();row.setAgentId(inv.getArgument(3));row.setStatus("online");return row;});
         // Explicit identity authority on the raw B04 service (proxy construction must not hide its mandatory setter).
         var rawLease=new AgentWorkItemLeaseServiceImpl(memberDao,workDao,roots,writer,()->NOW,()->TOKEN,900_000);rawLease.setAssigneeAuthority(new TaskAssigneeAuthorityServiceImpl(org.mockito.Mockito.mock(cn.jia.agent.dao.AgentExternalServicePolicyDao.class), identities, org.mockito.Mockito.mock(cn.jia.agent.dao.AgentTaskExecutionGrantDao.class)));leases=proxy(rawLease,AgentWorkItemLeaseService.class);
         var transport=new AgentCommandTransportWriter() {
@@ -276,7 +277,7 @@ class AgentWorkItemRuntimeResultFenceRealTransactionTest {
         var identities=mock(AgentIdentityService.class);var identity=new AgentIdentityRegistryEntity().setCanonicalAgentId(TARGET).setBindingId(3L).setOwnerJiacn(OWNER);
         when(identities.requireRegistrationIdentityInScope(TENANT,CLIENT,OWNER,TARGET)).thenReturn(identity);when(identities.requireActiveBinding(identity,null)).thenReturn(new AgentPersonaBindingEntity().setId(3L));
         var accounts=mock(AccountSecurityService.class);when(accounts.findUniqueByExactJiacn(OWNER)).thenReturn(Optional.of(new AccountSecuritySnapshot(7,OWNER,AccountState.ACTIVE,2)));
-        return classProxy(new AgentRuntimeAuthenticationService(runtimeDao,installationDao,mock(AgentIdentityRegistryDao.class),identities,accounts,mock(AgentTaskEventsGate.class)));
+        return classProxy(new AgentRuntimeAuthenticationService(runtimeDao,installationDao,mock(AgentIdentityRegistryDao.class),identities,accounts,mock(AgentTaskEventsGate.class), new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null)));
     }
     private AgentRuntimeV1InstallationEntity installation(boolean lock) {
         String status=jdbc.queryForObject("SELECT status FROM ur02_runtime_installation_fence WHERE installation_id=?"+(lock?" FOR UPDATE":""),String.class,INSTALLATION);

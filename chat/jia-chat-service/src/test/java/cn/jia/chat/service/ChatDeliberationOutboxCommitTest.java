@@ -11,7 +11,7 @@ import static org.mockito.Mockito.*;
 /** In-memory claim follows commit, never a SQL write that may still roll back. */
 class ChatDeliberationOutboxCommitTest {
     @Test void rollbackKeepsClaimReusableAndCommitAloneMakesItTerminal() {
-        var dao=mock(ChatDeliberationDao.class);var service=new ChatDeliberationOutboxService(dao);
+        var dao=mock(ChatDeliberationDao.class);var service=new ChatDeliberationOutboxService(dao, new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null));
         var row=new ChatDispatchOutboxEntity().setTenantId("0").setOwnerJiacn("owner").setClientId("client")
                 .setEventId("event").setStatus("CLAIMED").setLeaseOwner("worker").setFencingToken(1L).setVersion(2L).setLeaseUntil(100L);
         var claim=new ChatDeliberationOutboxService.Claim(row,false);
@@ -32,7 +32,7 @@ class ChatDeliberationOutboxCommitTest {
         } finally {TransactionSynchronizationManager.clearSynchronization();}
     }
     @Test void staleFenceCannotSettleAnotherWorkersClaim() {
-        var dao=mock(ChatDeliberationDao.class);var service=new ChatDeliberationOutboxService(dao);
+        var dao=mock(ChatDeliberationDao.class);var service=new ChatDeliberationOutboxService(dao, new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null));
         var row=new ChatDispatchOutboxEntity().setTenantId("0").setOwnerJiacn("owner").setClientId("client")
                 .setEventId("event").setLeaseOwner("worker").setFencingToken(1L).setVersion(2L);
         var current=new ChatDispatchOutboxEntity().setStatus("CLAIMED").setLeaseOwner("next-worker").setFencingToken(2L).setVersion(3L);

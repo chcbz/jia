@@ -103,16 +103,17 @@ public class AbilityEvaluationServiceImpl implements AbilityEvaluationService {
     }
 
     private AbilityEvaluationEntity buildEvaluation(AbilityEvaluationRequestDTO request) {
-        AgentPersonaEntity persona = agentPersonaDao.findByName(request.getAgentName());
         EsContext context = EsContextHolder.getContext();
-        require(!StringUtil.isBlank(context.getJiacn()) && !StringUtil.isBlank(context.getClientId()),
-                "tenant and client scope are required");
-        List<AgentTaskMetaEntity> tasks = agentTaskMetaDao.findByAgentId(
-                context.getJiacn(), context.getClientId(), request.getAgentName(), 500);
+        require(context != null && isExactText(context.getTenantId(), 50) && isExactText(context.getJiacn(), 50)
+                        && isExactText(context.getClientId(), 50), "tenant, client and owner scope are required");
+        AgentPersonaEntity persona = agentPersonaDao.findCatalogPersonaByName(
+                context.getTenantId(), context.getClientId(), request.getAgentName());
+        List<AgentTaskMetaEntity> tasks = agentTaskMetaDao.findByAgentInOwnerScope(
+                context.getTenantId(), context.getClientId(), context.getJiacn(), request.getAgentName(), 500);
         require(tasks != null && tasks.size() < 500,
                 "Agent task evaluation snapshot exceeds the safe limit");
         validateScopedTaskSnapshot(
-                tasks, context.getJiacn(), context.getClientId(), request.getAgentName());
+                tasks, context.getTenantId(), context.getClientId(), context.getJiacn(), request.getAgentName());
 
         int power = score(request, "power", valueOrZero(persona == null ? null : persona.getPower()));
         int intelligence = score(request, "intelligence", valueOrZero(persona == null ? null : persona.getIntelligence()));
@@ -127,6 +128,8 @@ public class AbilityEvaluationServiceImpl implements AbilityEvaluationService {
         content.put("scores", Optional.ofNullable(request.getScores()).orElseGet(Map::of));
 
         AbilityEvaluationEntity entity = new AbilityEvaluationEntity();
+        entity.setTenantId(context.getTenantId());
+        entity.setClientId(context.getClientId());
         entity.setAgentName(request.getAgentName());
         entity.setEvaluationType(Optional.ofNullable(request.getEvaluationType()).orElse("AUTO"));
         entity.setTaskContext(request.getTaskContext());
@@ -185,11 +188,12 @@ public class AbilityEvaluationServiceImpl implements AbilityEvaluationService {
     }
 
     private void validateScopedTaskSnapshot(
-            List<AgentTaskMetaEntity> tasks, String tenantId, String clientId, String agentId) {
+            List<AgentTaskMetaEntity> tasks, String tenantId, String clientId, String ownerJiacn, String agentId) {
         for (AgentTaskMetaEntity task : tasks) {
             require(task != null
                             && tenantId.equals(task.getTenantId())
                             && clientId.equals(task.getClientId())
+                            && ownerJiacn.equals(task.getOwnerJiacn())
                             && agentId.equals(task.getAssignedAgentId())
                             && isExactText(task.getTaskId(), 100),
                     "Persisted Agent task evaluation row is outside the byte-exact requested scope");

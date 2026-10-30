@@ -2,7 +2,12 @@
 
 CREATE TABLE IF NOT EXISTS agent_persona (
     id              BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID',
-    name            VARCHAR(50) NOT NULL COMMENT '水浒人物名称',
+    persona_code    VARCHAR(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
+    rank_no         INT DEFAULT NULL,
+    star_name       VARCHAR(50) DEFAULT NULL,
+    visual_config   TEXT,
+    system_agent    TINYINT(1) DEFAULT 0,
+    name            VARCHAR(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL COMMENT '水浒人物名称',
     title           VARCHAR(100) DEFAULT NULL COMMENT '称号',
     avatar          VARCHAR(500) DEFAULT NULL COMMENT '头像URL',
     abilities       TEXT COMMENT '能力列表(JSON数组)',
@@ -15,11 +20,18 @@ CREATE TABLE IF NOT EXISTS agent_persona (
     active          TINYINT(1) DEFAULT 1 COMMENT '是否启用',
     create_time     BIGINT DEFAULT NULL COMMENT '创建时间',
     update_time     BIGINT DEFAULT NULL COMMENT '更新时间',
-    tenant_id       VARCHAR(50) DEFAULT '0' COMMENT '租户ID',
+    tenant_id       VARCHAR(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL COMMENT 'Explicit private overlay tenant',
     client_id       VARCHAR(50) DEFAULT NULL COMMENT '客户端ID',
+    catalog_client_key VARBINARY(200) GENERATED ALWAYS AS (CAST(COALESCE(client_id, '') AS BINARY)) STORED,
     PRIMARY KEY (id),
-    UNIQUE KEY uk_agent_persona_name (name),
-    KEY idx_agent_persona_active (active)
+    -- Lookup prefix matches tenant + code/name; client key still preserves scope uniqueness.
+    UNIQUE KEY uk_agent_persona_scope_code (tenant_id, persona_code, catalog_client_key),
+    UNIQUE KEY uk_agent_persona_scope_name (tenant_id, name, catalog_client_key),
+    KEY idx_agent_persona_active (active),
+    CONSTRAINT chk_agent_persona_private_scope CHECK (
+        CHAR_LENGTH(tenant_id) > 0 AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(TRIM(tenant_id))
+        AND (client_id IS NULL OR (CHAR_LENGTH(client_id) > 0
+            AND OCTET_LENGTH(client_id) = OCTET_LENGTH(TRIM(client_id)))))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Agent人设表';
 
 CREATE TABLE IF NOT EXISTS agent_runtime (
@@ -86,7 +98,7 @@ CREATE TABLE IF NOT EXISTS agent_persona_binding (
     KEY idx_agent_binding_agent (client_id, agent_id, status),
     KEY idx_agent_binding_persona (client_id, persona_code, status),
     CONSTRAINT chk_agent_binding_status CHECK (status IN (0, 1, 2, 3)),
-    CONSTRAINT chk_agent_binding_single_tenant CHECK (tenant_id = '0')
+    CONSTRAINT chk_agent_binding_single_tenant CHECK (tenant_id IS NOT NULL AND CHAR_LENGTH(tenant_id)>0 AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(TRIM(tenant_id)))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Durable Agent persona binding history';
 
 CREATE TABLE IF NOT EXISTS agent_identity_registry (
@@ -132,7 +144,7 @@ CREATE TABLE IF NOT EXISTS agent_identity_registry (
         OR (canonical_type <> 'SYSTEM'
             AND client_id IS NOT NULL AND TRIM(client_id) <> ''
             AND owner_jiacn IS NOT NULL AND TRIM(owner_jiacn) <> ''
-            AND tenant_id = '0')
+            AND tenant_id IS NOT NULL AND CHAR_LENGTH(tenant_id)>0 AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(TRIM(tenant_id)))
     ),
     CONSTRAINT chk_identity_registry_retired CHECK (
         (lifecycle_status = 'RETIRED' AND retired_at IS NOT NULL)
@@ -163,12 +175,12 @@ CREATE TABLE IF NOT EXISTS agent_identity_alias (
     update_time             BIGINT DEFAULT NULL COMMENT 'Update time',
     PRIMARY KEY (id),
     UNIQUE KEY uk_identity_alias_active
-        (client_id, owner_jiacn, alias_type, alias_value, active_key),
+        (tenant_id, client_id, owner_jiacn, alias_type, alias_value, active_key),
     KEY idx_identity_alias_registry (registry_id, alias_status),
     KEY idx_identity_alias_canonical (canonical_agent_id, alias_status),
     CONSTRAINT chk_identity_alias_type CHECK (alias_type = 'LEGACY_AGENT_ID'),
     CONSTRAINT chk_identity_alias_status CHECK (alias_status IN ('ACTIVE', 'REVOKED')),
-    CONSTRAINT chk_identity_alias_scope CHECK (tenant_id = '0'),
+    CONSTRAINT chk_identity_alias_scope CHECK (tenant_id IS NOT NULL AND CHAR_LENGTH(tenant_id)>0 AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(TRIM(tenant_id))),
     CONSTRAINT chk_identity_alias_no_blank_scope CHECK (
         TRIM(client_id) <> '' AND TRIM(owner_jiacn) <> ''
     ),
@@ -867,7 +879,7 @@ CREATE TABLE IF NOT EXISTS agent_hosted_profile (
     CONSTRAINT chk_hosted_state CHECK (lifecycle_state IN
       ('PREPARED','STAGED_DISABLED','FILE_ENABLED','ACTIVE','SUSPENDING','SUSPENDED','REPAIR_REQUIRED')),
     CONSTRAINT chk_hosted_generation CHECK (generation >= 0),
-    CONSTRAINT chk_hosted_single_tenant CHECK (tenant_id = '0'),
+    CONSTRAINT chk_hosted_single_tenant CHECK (tenant_id IS NOT NULL AND CHAR_LENGTH(tenant_id)>0 AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(TRIM(tenant_id))),
     CONSTRAINT chk_hosted_repair CHECK (
       (lifecycle_state = 'REPAIR_REQUIRED' AND resume_state IS NOT NULL)
       OR (lifecycle_state <> 'REPAIR_REQUIRED' AND resume_state IS NULL))

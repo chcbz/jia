@@ -12,7 +12,7 @@ public interface AgentCommandRecoveryDao {
             String tenantId, String clientId, String targetAgentId,
             long now, long afterDeliveryId, int limit);
     List<AgentWaitingCommandCandidate> findDueCandidates(
-            long now, long sentBefore, long afterDeliveryId, int limit);
+            String tenantId, long now, long sentBefore, long afterDeliveryId, int limit);
     AgentCommandDeliveryEntity lockDelivery(String tenantId, String clientId, long deliveryId);
     AgentCommandDeliveryEntity lockDeliveryByCommand(String tenantId, String clientId, String commandId);
     List<AgentOutboxEventEntity> lockActiveOutboxes(

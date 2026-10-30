@@ -27,6 +27,8 @@ import static org.mockito.Mockito.mock;
 
 class AgentRabbitSafetyConfigurationTest {
     private static final ApplicationContextRunner RUNNER = new ApplicationContextRunner()
+                .withBean(cn.jia.core.security.FixedTenantAdmissionPolicy.class,
+                        () -> new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null))
             .withBean(AgentOutboxRelayDao.class, () -> mock(AgentOutboxRelayDao.class))
             .withBean(AgentCommandRecoveryDao.class, () -> mock(AgentCommandRecoveryDao.class))
             .withBean(AgentRawCommandDispatcher.class, () -> mock(AgentRawCommandDispatcher.class))

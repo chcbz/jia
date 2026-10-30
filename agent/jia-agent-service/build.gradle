@@ -101,6 +101,9 @@ def v1131RegressionSourceSet = sourceSets.create('v1131Regression') {
         include 'cn/jia/agent/service/impl/AgentTaskFormalDeliveryDecisionServiceImplTest.java'
         include 'cn/jia/agent/conversation/ConversationDeliverableReadAdapterTest.java'
         include 'cn/jia/agent/security/AgentRuntimeSecurityIntegrationTest.java'
+        include 'cn/jia/agent/security/TenantActorAdaptersTest.java'
+        include 'cn/jia/agent/service/impl/AgentPersonaPublicScopeTest.java'
+        include 'cn/jia/agent/service/impl/AbilityEvaluationServiceImplTest.java'
     }
     resources.srcDir 'src/test/resources'
     compileClasspath += sourceSets.main.output

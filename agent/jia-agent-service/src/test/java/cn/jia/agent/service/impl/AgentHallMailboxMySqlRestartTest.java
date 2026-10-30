@@ -180,9 +180,7 @@ class AgentHallMailboxMySqlRestartTest {
         makeWaitingSource(firstContext.jdbc(), written, waitingAt, retryAt);
 
         RuntimeContext restarted = newContext();
-        AgentCommandReissueServiceImpl reissue = new AgentCommandReissueServiceImpl(
-                new AgentCommandRecoveryDaoImpl(restarted.recoveryMapper()), gate(), connected(),
-                AgentRabbitTopologyManifest.canonical(), restarted.transactionManager(), ids(M2, E2));
+        AgentCommandReissueServiceImpl reissue = new AgentCommandReissueServiceImpl(new AgentCommandRecoveryDaoImpl(restarted.recoveryMapper()), gate(), connected(), AgentRabbitTopologyManifest.canonical(), 30_000L, restarted.transactionManager(), ids(M2, E2), new AgentCommandRecoveryPolicy(), "0");
 
         assertEquals(1, reissue.reissueForReconnect(new AgentCommandReconnectScope(
                 TENANT, CLIENT, TARGET, TARGET,
@@ -611,20 +609,23 @@ class AgentHallMailboxMySqlRestartTest {
         when(service.requireApiKeyOwnedAgentForUpdate(
                 anyString(), anyString(), anyString()))
                 .thenAnswer(invocation -> {
-                    String clientId = invocation.getArgument(0);
-                    String ownerJiacn = invocation.getArgument(1);
-                    String agentId = invocation.getArgument(2);
+                    String tenantId = invocation.getArgument(0);
+                    String clientId = invocation.getArgument(1);
+                    String ownerJiacn = invocation.getArgument(2);
+                    String agentId = invocation.getArgument(3);
                     List<String> identities = context.jdbc().query(
                             """
                             SELECT agent_id FROM d08_agent_identity
-                            WHERE tenant_id='0' AND client_id=? AND owner_jiacn=?
+                            WHERE tenant_id=? AND client_id=? AND owner_jiacn=?
                               AND agent_id=? AND identity_status='active'
+                              AND CAST(tenant_id AS BINARY)=CAST(? AS BINARY)
+                              AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(?)
                               AND CAST(client_id AS BINARY)=CAST(? AS BINARY)
                               AND CAST(owner_jiacn AS BINARY)=CAST(? AS BINARY)
                               AND CAST(agent_id AS BINARY)=CAST(? AS BINARY)
                             LIMIT 2 FOR UPDATE
                             """, (row, index) -> row.getString(1),
-                            clientId, ownerJiacn, agentId, clientId, ownerJiacn, agentId);
+                            tenantId, clientId, ownerJiacn, agentId, tenantId, tenantId, clientId, ownerJiacn, agentId);
                     if (!List.of(agentId).equals(identities)) {
                         throw new AgentBizException(
                                 AgentErrorConstants.AGENT_FORBIDDEN,
@@ -633,13 +634,15 @@ class AgentHallMailboxMySqlRestartTest {
                     List<String> statuses = context.jdbc().query(
                             """
                             SELECT runtime_status FROM d08_agent_runtime
-                            WHERE tenant_id='0' AND client_id=? AND owner_jiacn=? AND agent_id=?
+                            WHERE tenant_id=? AND client_id=? AND owner_jiacn=? AND agent_id=?
+                              AND CAST(tenant_id AS BINARY)=CAST(? AS BINARY)
+                              AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(?)
                               AND CAST(client_id AS BINARY)=CAST(? AS BINARY)
                               AND CAST(owner_jiacn AS BINARY)=CAST(? AS BINARY)
                               AND CAST(agent_id AS BINARY)=CAST(? AS BINARY)
                             LIMIT 2 FOR UPDATE
                             """, (row, index) -> row.getString(1),
-                            clientId, ownerJiacn, agentId, clientId, ownerJiacn, agentId);
+                            tenantId, clientId, ownerJiacn, agentId, tenantId, tenantId, clientId, ownerJiacn, agentId);
                     if (statuses.size() != 1) {
                         throw new AgentBizException(
                                 AgentErrorConstants.AGENT_NOT_FOUND,

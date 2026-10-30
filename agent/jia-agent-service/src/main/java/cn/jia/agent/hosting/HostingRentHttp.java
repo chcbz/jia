@@ -1,5 +1,7 @@
 package cn.jia.agent.hosting;
 
+import cn.jia.core.security.TenantClaimPolicy;
+
 import cn.jia.economy.common.EconomyPrincipalType;
 import cn.jia.economy.service.EconomyPrincipal;
 import cn.jia.economy.service.EconomyScope;
@@ -29,13 +31,13 @@ public final class HostingRentHttp {
     private HostingRentHttp() { }
 
     /**
-     * Economy payer and authenticated personal owner are distinct. Tenant is the fixed shared
-     * deployment tenant, never a substitute for the owner's jiacn.
+     * Economy payer and authenticated personal owner are distinct. Tenant is the admitted
+     * deployment partition, never a substitute for the owner's jiacn.
      */
     public record Actor(String actorId, String tenantId, String clientId, String ownerJiacn) {
         public Actor {
             exact(actorId, 100);
-            if (!"0".equals(tenantId)) throw new IllegalArgumentException("tenantId must be 0");
+            TenantClaimPolicy.exact(tenantId);
             exact(clientId, 50); exact(ownerJiacn, 50);
             if ("0".equals(ownerJiacn)) throw new IllegalArgumentException("ownerJiacn must not be 0");
         }
@@ -49,7 +51,8 @@ public final class HostingRentHttp {
         }
         try {
             Map<String, Object> claims = jwt.getToken().getClaims();
-            return new Actor(claim(claims, "sub"), "0", claim(claims, "client_id"),
+            return new Actor(claim(claims, "sub"),
+                    TenantClaimPolicy.resolve(claims), claim(claims, "client_id"),
                     claim(claims, "jiacn"));
         } catch (IllegalArgumentException exception) {
             throw new HostingRentApplicationException(403, "HOSTING_RENT_FORBIDDEN");

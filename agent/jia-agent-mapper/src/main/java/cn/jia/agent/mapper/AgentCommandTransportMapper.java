@@ -19,7 +19,7 @@ public interface AgentCommandTransportMapper {
                    replay_requester_id, replay_approver_id, replay_reason,
                    tenant_id, client_id, create_time, update_time
             FROM agent_command_delivery
-            WHERE tenant_id='0' AND client_id=#{clientId} AND owner_jiacn=#{ownerJiacn}
+            WHERE tenant_id=#{tenantId} AND client_id=#{clientId} AND owner_jiacn=#{ownerJiacn}
               AND command_id=#{commandId}
               AND CAST(tenant_id AS BINARY)=CAST(#{tenantId} AS BINARY)
               AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(#{tenantId})
@@ -66,7 +66,7 @@ public interface AgentCommandTransportMapper {
     @Update("""
             UPDATE agent_command_delivery
             SET status='PENDING', last_error=#{marker}, version=version+1, update_time=#{now}
-            WHERE id=#{delivery.id} AND tenant_id='0'
+            WHERE id=#{delivery.id} AND tenant_id=#{delivery.tenantId}
               AND client_id=#{delivery.clientId} AND owner_jiacn=#{delivery.ownerJiacn}
               AND command_id=#{delivery.commandId}
               AND active_message_id=#{delivery.activeMessageId}
@@ -224,7 +224,7 @@ public interface AgentCommandTransportMapper {
                    AND OCTET_LENGTH(target.assignment_source)=OCTET_LENGTH('migration'))
                OR (CAST(target.assignment_source AS BINARY)=CAST('legacy' AS BINARY)
                    AND OCTET_LENGTH(target.assignment_source)=OCTET_LENGTH('legacy')))
-            WHERE d.tenant_id='0' AND d.client_id=#{clientId} AND d.owner_jiacn=#{ownerJiacn}
+            WHERE d.tenant_id=#{tenantId} AND d.client_id=#{clientId} AND d.owner_jiacn=#{ownerJiacn}
               AND d.target_agent_id=#{targetAgentId}
               AND CAST(d.tenant_id AS BINARY)=CAST(#{tenantId} AS BINARY)
               AND OCTET_LENGTH(d.tenant_id)=OCTET_LENGTH(#{tenantId})

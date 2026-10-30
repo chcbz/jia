@@ -144,7 +144,7 @@ class PersonalWorkspaceControllerPreviewTest {
     }
 
     private static JwtAuthenticationToken jwt() {
-        Jwt token = Jwt.withTokenValue("token")
+        Jwt token = Jwt.withTokenValue("token").claim("tenant_id", "0")
                 .header("alg", "none")
                 .claim("jiacn", OWNER)
                 .claim("client_id", CLIENT)

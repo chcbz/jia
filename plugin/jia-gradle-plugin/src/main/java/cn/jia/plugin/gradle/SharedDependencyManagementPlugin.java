@@ -128,6 +128,7 @@ public class SharedDependencyManagementPlugin implements Plugin<Settings> {
                             catalog.library("pagehelper-spring-boot-starter", "com.github.pagehelper", "pagehelper-spring-boot-starter").versionRef("spring-boot-pagehelper");
                             catalog.library("mybatis-core", "org.mybatis", "mybatis").versionRef("mybatis");
                             catalog.library("mybatis-plus-core", "com.baomidou", "mybatis-plus").versionRef("mybatis-plus");
+                            catalog.library("mybatis-plus-jsqlparser", "com.baomidou", "mybatis-plus-jsqlparser-4.9").versionRef("mybatis-plus");
                             catalog.library("mybatis-plus-annotation", "com.baomidou", "mybatis-plus-annotation").versionRef("mybatis-plus");
                             catalog.library("mybatis-plus-generator", "com.baomidou", "mybatis-plus-generator").versionRef("mybatis-plus");
                             catalog.library("mybatis-plus-boot-starter", "com.baomidou", "mybatis-plus-spring-boot4-starter").versionRef("mybatis-plus");

@@ -220,7 +220,7 @@ public final class AgentTaskDeliberationOperationController {
         }
         Map<String,Object> claims = jwt.getToken().getClaims();
         try {
-            if (!"0".equals(TenantClaimPolicy.resolve(claims, "0"))) throw new AuthenticationFailure();
+            if (!"0".equals(TenantClaimPolicy.resolve(claims))) throw new AuthenticationFailure();
         } catch (IllegalArgumentException invalid) { throw new AuthenticationFailure(); }
         Object owner = claims.get("jiacn");
         Object client = claims.get("client_id");

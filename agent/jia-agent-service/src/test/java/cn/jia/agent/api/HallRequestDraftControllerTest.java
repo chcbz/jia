@@ -238,7 +238,7 @@ class HallRequestDraftControllerTest {
 
     private static JwtAuthenticationToken jwt() { return jwt("owner-a", "client-a"); }
     private static JwtAuthenticationToken jwt(String owner, String client) {
-        Jwt jwt = Jwt.withTokenValue("token").header("alg", "none")
+        Jwt jwt = Jwt.withTokenValue("token").claim("tenant_id", "0").header("alg", "none")
                 .claim("jiacn", owner).claim("client_id", client)
                 .issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(600)).build();
         JwtAuthenticationToken authentication = new JwtAuthenticationToken(jwt);

@@ -64,6 +64,21 @@ class AgentTaskCollaborationDaoTest {
     }
 
     @Test
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    void sharedOwnerScopeAcceptsGrayButRetainsExactPredicatesAndRealOwner() {
+        AgentTaskMemberMapper mapper = mock(AgentTaskMemberMapper.class);
+        AgentTaskMemberDao dao = new AgentTaskMemberDaoImpl(mapper);
+        dao.listByTask("1", "client-a", OWNER, "task-1");
+        ArgumentCaptor<Wrapper> capture = ArgumentCaptor.forClass(Wrapper.class);
+        verify(mapper).selectList(capture.capture());
+        assertScoped(capture.getValue(), "1", "client-a", OWNER);
+        for (String invalid : List.of("", "1 ", " 1", "x".repeat(51))) {
+            assertThrows(IllegalArgumentException.class, () -> dao.listByTask(invalid, "client-a", OWNER, "task-1"));
+        }
+        assertThrows(IllegalArgumentException.class, () -> dao.listByTask("1", "client-a", "0", "task-1"));
+    }
+
+    @Test
     void everyCollaborationDaoMethodStartsWithTenantAndClientScope() {
         for (Class<?> dao : List.of(
                 AgentTaskMemberDao.class, AgentTaskWorkItemDao.class,

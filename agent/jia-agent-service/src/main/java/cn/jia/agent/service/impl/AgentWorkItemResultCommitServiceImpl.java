@@ -382,10 +382,15 @@ public class AgentWorkItemResultCommitServiceImpl implements AgentWorkItemResult
 
     private void requireScope(
             String tenantId, String clientId, String ownerJiacn, String taskId) {
-        if (!"0".equals(tenantId) || StringUtil.isBlank(clientId)
+        try {
+            cn.jia.core.security.TenantClaimPolicy.exact(tenantId);
+        } catch (IllegalArgumentException malformed) {
+            throw invalid("tenantId is invalid");
+        }
+        if (StringUtil.isBlank(clientId)
                 || StringUtil.isBlank(ownerJiacn) || "0".equals(ownerJiacn)
                 || StringUtil.isBlank(taskId)) {
-            throw invalid("strict tenant-zero client, owner and task scope is required");
+            throw invalid("strict tenant, client, owner and task scope is required");
         }
     }
 

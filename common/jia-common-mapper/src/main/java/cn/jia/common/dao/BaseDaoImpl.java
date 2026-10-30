@@ -3,7 +3,7 @@ package cn.jia.common.dao;
 import cn.jia.common.entity.BaseEntityWrapper;
 import cn.jia.core.dao.IBaseDao;
 import cn.jia.core.entity.BaseEntity;
-import cn.jia.core.mybatis.TenantScopeHelper;
+import cn.jia.core.security.TenantClaimPolicy;
 import cn.jia.core.util.CollectionUtil;
 import cn.jia.core.util.StringUtil;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
@@ -164,12 +164,9 @@ public abstract class BaseDaoImpl<M extends BaseMapper<T>, T extends BaseEntity>
     }
 
     /**
-     * 根据实体条件查询，自动追加 tenant 范围条件。
-     * <p>
-     * 当 entity.tenantId 不为空时，生成
-     * {@code (tenant_id = entity.tenantId OR tenant_id = '0')}，
-     * 确保公共数据（tenant_id='0'）同时被查出。
-     * </p>
+     * Query an explicitly supplied business partition exactly, including production.
+     * Shared definitions require an explicit catalog query, never an implicit tenant-zero union.
+     * Global identity DAOs override this operation without a business tenant column.
      */
     @Override
     public List<T> selectByEntity(T entity) {
@@ -187,13 +184,9 @@ public abstract class BaseDaoImpl<M extends BaseMapper<T>, T extends BaseEntity>
         }
     }
 
-    /**
-     * 追加 tenant 范围条件：当 tenantId 非空时，查
-     * {@code (tenant_id = tenantId OR tenant_id = '0')}。
-     */
     private void applyTenantScope(QueryWrapper<T> queryWrapper, String tenantId) {
-        if (StringUtil.isNotBlank(tenantId) && !TenantScopeHelper.DEFAULT_TENANT.equals(tenantId)) {
-            queryWrapper.and(w -> w.eq("tenant_id", tenantId).or().eq("tenant_id", TenantScopeHelper.DEFAULT_TENANT));
+        if (tenantId != null) {
+            queryWrapper.eq("tenant_id", TenantClaimPolicy.exact(tenantId));
         }
     }
 

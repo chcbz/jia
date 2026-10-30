@@ -67,7 +67,7 @@ public class AgentCommandTransportCapture {
                     "agent.command-outbox.enabled=true but AgentCommandTransportWriter is missing");
         }
         if (ownerJiacn == null || ownerJiacn.isBlank()
-                || task == null || !"0".equals(task.getTenantId())
+                || task == null || task.getTenantId() == null || task.getTenantId().isBlank()
                 || task.getClientId() == null || task.getClientId().isBlank()
                 || assignedAgents == null || assignedAgents.isEmpty()
                 || taskAssignedEventId == null || taskAssignedEventId.isBlank()
@@ -96,13 +96,13 @@ public class AgentCommandTransportCapture {
             writer.write(new AgentCommandDraft(
                     AgentCommandCanonicalCodec.SCHEMA_VERSION,
                     AgentCommandCanonicalCodec.taskInviteCommandId(
-                            "0", task.getClientId(), ownerJiacn, task.getId(), targetAgentId),
+                            task.getTenantId(), task.getClientId(), ownerJiacn, task.getId(), targetAgentId),
                     task.getId(), taskAssignedEventId,
-                    "0", task.getClientId(), ownerJiacn, task.getId(), null,
+                    task.getTenantId(), task.getClientId(), ownerJiacn, task.getId(), null,
                     targetAgentId, AgentProtocolConstants.COMMAND_TASK_INVITE,
                     occurredAt, expiresAt, payload));
         }
-        return gate.allowsDispatch("0", task.getClientId());
+        return gate.allowsDispatch(task.getTenantId(), task.getClientId());
     }
 
     private static int compareUtf8Unsigned(String left, String right) {

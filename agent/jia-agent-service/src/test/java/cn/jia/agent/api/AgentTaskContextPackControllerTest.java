@@ -58,6 +58,22 @@ class AgentTaskContextPackControllerTest extends BaseMockTest {
     }
 
     @Test
+    void grayContextPackUsesSameScopeForGateReadAndSerializedProvenance() throws Exception {
+        var token = Jwt.withTokenValue("gray-test").header("alg", "none")
+                .claim("sub", ACTOR).claim("jiacn", "tenant-a").claim("client_id", "client-a")
+                .claim("tenant_id", "1").build();
+        when(service.generate("1", "client-a", "tenant-a", TASK, ACTOR, "9"))
+                .thenReturn(pack("1", "client-a", "9"));
+        mvc.perform(get("/agent/tasks/{taskId}/context-pack", TASK).param("expectedVersion", "9")
+                .principal(new JwtAuthenticationToken(token, List.of(), ACTOR)))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data.provenance.tenantId").value("1"));
+        verify(gate).allows("1", "client-a");
+        verify(service).generate("1", "client-a", "tenant-a", TASK, ACTOR, "9");
+        org.mockito.Mockito.verify(service, org.mockito.Mockito.never())
+                .generate("0", "client-a", "tenant-a", TASK, ACTOR, "9");
+    }
+
+    @Test
     void exactJwtSubjectAndNameAloneBindActorAndScopeIgnoringThreadLocalIdentity() throws Exception {
         EsContext poisoned = new EsContext();
         poisoned.setJiacn("cookie-tenant");
@@ -310,7 +326,7 @@ class AgentTaskContextPackControllerTest extends BaseMockTest {
 
     private static JwtAuthenticationToken jwtClaims(
             Object tenant, Object client, Object subject, String name) {
-        Jwt.Builder builder = Jwt.withTokenValue("token").header("alg", "none")
+        Jwt.Builder builder = Jwt.withTokenValue("token").claim("tenant_id", "0").header("alg", "none")
                 .issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(60));
         if (tenant != null) builder.claim("jiacn", tenant);
         if (client != null) builder.claim("client_id", client);

@@ -19,7 +19,6 @@ public interface ChatDeliberationDao {
     ChatDispatchOutboxEntity findOutboxById(String tenantId, String ownerJiacn, String clientId, String eventId);
     ChatDispatchOutboxEntity lockOutboxById(String tenantId, String ownerJiacn, String clientId, String eventId);
     ChatDispatchOutboxEntity lockOutboxByDispatch(String tenantId, String ownerJiacn, String clientId, String dispatchId);
-    List<ChatDispatchOutboxEntity> findDueOutbox(long now, int limit);
     List<ChatDispatchOutboxEntity> findDueOutboxInTenant(String tenantId, long now, int limit);
     List<ChatDispatchOutboxEntity> findDueOutboxInScope(String tenantId, String clientId, long now, int limit);
     List<ChatConversationEventEntity> replayEvents(String tenantId, String ownerJiacn, String clientId,

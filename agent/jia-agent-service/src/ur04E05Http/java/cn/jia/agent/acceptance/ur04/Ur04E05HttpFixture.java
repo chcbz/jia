@@ -671,7 +671,7 @@ public final class Ur04E05HttpFixture {
         }
         @Bean AgentRuntimeAuthenticationService authentication(AgentRuntimeDao rows, AgentRuntimeV1InstallationDao installations,
                 AgentIdentityRegistryDao registry, AgentIdentityService identity, AccountSecurityService accounts, AgentTaskEventsGate gate) {
-            return new AgentRuntimeAuthenticationService(rows, installations, registry, identity, accounts, gate);
+            return new AgentRuntimeAuthenticationService(rows, installations, registry, identity, accounts, gate, new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null));
         }
         @Bean AgentRabbitSafetyGate ackGate() {
             return new AgentRabbitSafetyGate(new AgentRabbitSafetyProperties(
@@ -687,7 +687,7 @@ public final class Ur04E05HttpFixture {
         }
         @Bean AgentRuntimeV1Service runtime(AgentRuntimeV1InstallationDao installations, AgentIdentityService identity,
                 AgentIdentityRegistryDao registry, ObjectProvider<AgentCommandAckService> acks, AgentRuntimeAuthenticationService authentication) {
-            return new AgentRuntimeV1ServiceImpl(installations, identity, registry, acks, authentication);
+            return new AgentRuntimeV1ServiceImpl(installations, identity, registry, acks, authentication, org.mockito.Mockito.mock(org.springframework.beans.factory.ObjectProvider.class), new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null));
         }
         @Bean AgentRuntimeV1Controller controller(AgentRuntimeV1Service runtime) { return new AgentRuntimeV1Controller(runtime); }
         @Bean JdbcTemplate jdbc(DataSource source) { return new JdbcTemplate(source); }
@@ -727,7 +727,8 @@ public final class Ur04E05HttpFixture {
                 ObjectProvider<AgentEventPublisher> publisher, ObjectProvider<TaskService> tasks, ObjectProvider<ApiKeyService> keys, ObjectProvider<AgentSceneService> scene,
                 AgentTaskMutationTransaction mutation, AgentTaskEventWriter writer) {
             return new AgentServiceImpl(runtimes, identity, personas, bindings, meta, members, legacy, notes, dialogues, publisher, tasks, keys, scene,
-                new AgentScopePublicationCoordinator(), new AgentSceneFeatureFlags(false, false), mutation, writer);
+                new AgentScopePublicationCoordinator(), new AgentSceneFeatureFlags(false, false), mutation, writer,
+                new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null));
         }
         @Bean AgentTaskCollaborationAccessService access(AgentTaskMetaDao meta, AgentTaskMemberDao members) { return new AgentTaskCollaborationAccessServiceImpl(meta, members); }
         @Bean AgentCommandTransportWriter transportWriter(SqlSessionTemplate s, AgentRabbitSafetyGate gate, AgentService agents,

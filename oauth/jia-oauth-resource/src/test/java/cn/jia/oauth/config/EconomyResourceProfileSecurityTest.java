@@ -127,7 +127,7 @@ class EconomyResourceProfileSecurityTest {
         @Bean
         @Primary
         JwtDecoder testJwtDecoder() {
-            return token -> Jwt.withTokenValue(token).header("alg", "RS256")
+            return token -> Jwt.withTokenValue(token).claim("tenant_id", "0").header("alg", "RS256")
                     .subject("user-1").claim("client_id", "client-a").claim("jiacn", "tenant-a")
                     .issuedAt(Instant.now().minusSeconds(5)).expiresAt(Instant.now().plusSeconds(300)).build();
         }

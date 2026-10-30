@@ -1,5 +1,7 @@
 package cn.jia.agent.api;
 
+import cn.jia.core.security.TenantClaimPolicy;
+
 import cn.jia.agent.entity.AgentWorkItemReassignmentLeaseDTO;
 import cn.jia.agent.security.AgentRuntimeAuthentication;
 import cn.jia.agent.security.AgentRuntimeAuthenticationService;
@@ -186,7 +188,7 @@ public class AgentWorkItemReassignmentController {
         if (authentication instanceof AgentRuntimeAuthentication runtime && runtime.isAuthenticated()) {
             if (requireAuthority) throw new AuthenticationFailure(true);
             var scope = runtime.getPrincipal();
-            return new Principal("0", scope.clientId(), scope.ownerJiacn(), scope.agentId());
+            return new Principal(scope.tenantId(), scope.clientId(), scope.ownerJiacn(), scope.agentId());
         }
         if (authentication == null || !authentication.isAuthenticated()
                 || !(authentication instanceof JwtAuthenticationToken jwt)) {
@@ -206,7 +208,13 @@ public class AgentWorkItemReassignmentController {
                 .noneMatch(REASSIGN_AUTHORITY::equals)) {
             throw new AuthenticationFailure(true);
         }
-        return new Principal("0", clientId, ownerJiacn, operatorSubject);
+        // The resource security boundary has admitted this JWT's process tenant/client.
+        // Resolve with the shared claim policy; a declared gray tenant is never rewritten to zero.
+        try {
+            return new Principal(TenantClaimPolicy.resolve(claims), clientId, ownerJiacn, operatorSubject);
+        } catch (IllegalArgumentException denied) {
+            throw new AuthenticationFailure(true);
+        }
     }
 
     /** A query parameter can confirm, never select, the authenticated target. */

@@ -134,6 +134,19 @@ class AgentTaskCollaborationServiceImplTest {
     }
 
     @Test
+    void grayCollaborationUsesExactTaskLookupAndNeverProductionFallback() {
+        when(taskDao.findByTaskIdInOwnerScope("1", CLIENT, OWNER, TASK)).thenReturn(null);
+        var missing = assertThrows(AgentTaskCollaborationException.class,
+                () -> service.list("1", CLIENT, OWNER, TASK, ACTOR, (AgentTaskRequestQueryDTO) null));
+        assertEquals(Reason.NOT_FOUND, missing.getReason());
+        verify(taskDao).findByTaskIdInOwnerScope("1", CLIENT, OWNER, TASK);
+        verify(taskDao, never()).findByTaskIdInOwnerScope("0", CLIENT, OWNER, TASK);
+        verify(memberDao, never()).findByTaskAndAgent(any(), any(), any(), any(), any());
+        assertThrows(AgentTaskCollaborationException.class,
+                () -> service.list("1 ", CLIENT, OWNER, TASK, ACTOR, (AgentTaskRequestQueryDTO) null));
+    }
+
+    @Test
     void crossScopeTaskMissReturnsGenericNotFoundWithoutMemberLookup() {
         when(taskDao.findByTaskIdInOwnerScope(TENANT, CLIENT, "other-owner", TASK)).thenReturn(null);
 

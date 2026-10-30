@@ -757,7 +757,7 @@ class JuyitingWorkflowMySqlTest {
             when(dispatchAuthority.forTurn(any())).thenAnswer(call -> new ChatDispatchAuthorityService.Binding(null,call.getArgument(0),"owner"));
             context.registerBean(ChatDispatchAuthorityService.class,()->dispatchAuthority);
             context.registerBean(ChatDeliberationService.class,()->new ChatDeliberationService(dao,conversations,messages,agents));
-            context.registerBean(ChatDeliberationOutboxService.class,()->new ChatDeliberationOutboxService(dao));
+            context.registerBean(ChatDeliberationOutboxService.class,()->new ChatDeliberationOutboxService(dao, new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null)));
             context.registerBean(ChatDeliveryRevisionService.class,()->new ChatDeliveryRevisionService(dao,
                     finalProvider.getBeanProvider(ChatActionFinalService.class),context.getBeanProvider(ChatDeliberationService.class),reviews,typed,
                     domain.locks,domain.context.getBean(cn.jia.agent.service.AgentTaskFormalDeliveryReadService.class),domain.decisions,

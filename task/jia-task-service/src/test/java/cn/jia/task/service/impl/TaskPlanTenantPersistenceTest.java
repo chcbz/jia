@@ -2,6 +2,9 @@ package cn.jia.task.service.impl;
 
 import cn.jia.core.context.EsContextHolder;
 import cn.jia.task.common.TaskConstants;
+import cn.jia.task.config.TaskTenantConfiguration;
+import cn.jia.core.security.FixedTenantAdmissionPolicy;
+import cn.jia.task.mapper.TaskDetailMapper;
 import cn.jia.task.entity.TaskPlanEntity;
 import cn.jia.task.mapper.TaskItemMapper;
 import cn.jia.task.mapper.TaskPlanMapper;
@@ -24,11 +27,12 @@ import static org.junit.jupiter.api.Assertions.*;
 class TaskPlanTenantPersistenceTest {
     private TaskServiceImpl service;
     private JdbcTemplate jdbc;
+    private DriverManagerDataSource source;
 
     @BeforeEach
     void setUp() throws Exception {
         EsContextHolder.clearContext();
-        var source = new DriverManagerDataSource(
+        source = new DriverManagerDataSource(
                 "jdbc:h2:mem:task_plan_tenant;MODE=MYSQL;DB_CLOSE_DELAY=-1", "sa", "");
         jdbc = new JdbcTemplate(source);
         jdbc.execute("DROP ALL OBJECTS");
@@ -127,6 +131,75 @@ class TaskPlanTenantPersistenceTest {
                 () -> service.getInOwnerScope("1", null, "owner-A", plan.getId()));
         assertThrows(IllegalArgumentException.class,
                 () -> service.getInOwnerScope("1", "client-A", "0", plan.getId()));
+    }
+
+    @Test
+    void productionAndGrayGenericQueriesAndMutationsAreProcessPartitioned() throws Exception {
+        var production = service.create(plan("0"));
+        var gray = service.create(plan("1"));
+        jdbc.execute("""
+                CREATE VIEW v_task_item AS
+                SELECT i.id,i.plan_id,p.jiacn,p.type,p.period,p.crond,p.name,p.description,p.amount,
+                  p.remind,p.remind_phone,p.remind_msg,i.status,i.execute_time,
+                  i.create_time,i.update_time,i.client_id,i.tenant_id
+                FROM task_plan p JOIN task_item i ON p.id=i.plan_id
+                """);
+        for (String tenant : new String[]{"0", "1"}) {
+            var template = processSession(tenant);
+            var plans = template.getMapper(TaskPlanMapper.class);
+            var own = "0".equals(tenant) ? production : gray;
+            var foreign = "0".equals(tenant) ? gray : production;
+            EsContextHolder.clearContext(); // Background work must not need a request identity.
+            assertEquals(1, plans.selectList(null).size());
+            try {
+                com.github.pagehelper.PageHelper.startPage(1, 1);
+                assertEquals(1L, com.github.pagehelper.PageInfo.of(plans.selectList(null)).getTotal());
+            } finally {
+                com.github.pagehelper.PageHelper.clearPage();
+            }
+            assertNotNull(plans.selectById(own.getId()));
+            assertNull(plans.selectById(foreign.getId()));
+            assertNull(plans.findInOwnerScope(foreign.getTenantId(), "client-A", "owner-A", foreign.getId()));
+            var patch = new TaskPlanEntity();
+            patch.setId(foreign.getId()); patch.setName("must not write");
+            assertEquals(0, plans.updateById(patch));
+            assertEquals(0, plans.deleteById(foreign.getId()));
+            var itemMapper = template.getMapper(TaskItemMapper.class);
+            assertEquals(1, itemMapper.selectList(null).size());
+            var items = new TaskItemDaoImpl();
+            ReflectionTestUtils.setField(items, "baseMapper", itemMapper);
+            assertEquals(0, items.deleteByPlan(foreign.getId()));
+            assertEquals(0, items.cancelByPlan(foreign.getId(), 0L));
+            var details = template.getMapper(TaskDetailMapper.class).selectList(null);
+            assertEquals(1, details.size());
+            assertEquals(tenant, details.getFirst().getTenantId());
+            var generated = plan(null);
+            plans.insert(generated);
+            assertEquals(tenant, jdbc.queryForObject(
+                    "SELECT tenant_id FROM task_plan WHERE id=?", String.class, generated.getId()));
+            assertEquals(1, plans.deleteById(generated.getId()));
+        }
+        assertEquals(2, jdbc.queryForObject("SELECT COUNT(*) FROM task_plan", Integer.class));
+        assertEquals(2, jdbc.queryForObject("SELECT COUNT(*) FROM task_item", Integer.class));
+    }
+
+    private SqlSessionTemplate processSession(String tenant) throws Exception {
+        var config = new MybatisConfiguration();
+        config.setMapUnderscoreToCamelCase(true);
+        config.addMapper(TaskPlanMapper.class);
+        config.addMapper(TaskItemMapper.class);
+        config.addMapper(TaskDetailMapper.class);
+        var factory = new MybatisSqlSessionFactoryBean();
+        factory.setDataSource(source);
+        factory.setConfiguration(config);
+        factory.setGlobalConfig(new GlobalConfig());
+        var policy = new FixedTenantAdmissionPolicy(tenant, "client-A");
+        var pagination = new com.github.pagehelper.PageInterceptor();
+        var properties = new java.util.Properties();
+        properties.setProperty("helperDialect", "h2");
+        pagination.setProperties(properties);
+        factory.setPlugins(pagination, new TaskTenantConfiguration().taskPlanTenantInterceptor(policy));
+        return new SqlSessionTemplate(factory.getObject());
     }
 
     private TaskPlanEntity plan(String tenant) {

@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS agent_execution_report_head (
   PRIMARY KEY (id),
   UNIQUE KEY uk_execution_report_head (tenant_id,client_id,owner_jiacn,agent_id,command_id,attempt),
   KEY idx_execution_report_head_execution (tenant_id,client_id,owner_jiacn,execution_ref,agent_id),
-  CONSTRAINT chk_execution_report_head_tenant CHECK (tenant_id='0'),
+  CONSTRAINT chk_execution_report_head_tenant CHECK (CHAR_LENGTH(tenant_id)>0 AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(TRIM(tenant_id))),
   CONSTRAINT chk_execution_report_head_numbers CHECK (attempt>0 AND last_sequence>=0 AND committed_version>=0),
   CONSTRAINT chk_execution_report_head_terminal CHECK ((terminal_report_id IS NULL AND terminal_result_ref IS NULL) OR (terminal_report_id IS NOT NULL AND terminal_result_ref IS NOT NULL))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin
@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS agent_execution_report_inbox (
   UNIQUE KEY uk_execution_report_sequence (tenant_id,client_id,owner_jiacn,agent_id,command_id,attempt,sequence),
   KEY idx_execution_report_command (tenant_id,client_id,owner_jiacn,command_id,attempt,committed_version),
   KEY idx_execution_report_execution (tenant_id,client_id,owner_jiacn,execution_ref,agent_id),
-  CONSTRAINT chk_execution_report_tenant CHECK (tenant_id='0'),
+  CONSTRAINT chk_execution_report_tenant CHECK (CHAR_LENGTH(tenant_id)>0 AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(TRIM(tenant_id))),
   CONSTRAINT chk_execution_report_numbers CHECK (grant_revision>0 AND attempt>0 AND sequence>0 AND occurred_at>0 AND committed_version>0),
   CONSTRAINT chk_execution_report_hash CHECK (OCTET_LENGTH(semantic_hash)=32),
   CONSTRAINT chk_execution_report_type CHECK (message_type IN ('work.progress','work.heartbeat','work.result','help.request','artifact.publish'))

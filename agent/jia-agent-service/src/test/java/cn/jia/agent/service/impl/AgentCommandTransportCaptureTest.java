@@ -70,6 +70,29 @@ class AgentCommandTransportCaptureTest {
                 "TASK_INVITE".equals(draft.commandType())));
     }
 
+    @Test
+    void grayAssignmentPreservesScopeButDoesNotUseProductionDispatchAllowlist() {
+        @SuppressWarnings("unchecked")
+        ObjectProvider<AgentCommandTransportWriter> provider = mock(ObjectProvider.class);
+        AgentCommandTransportWriter writer = mock(AgentCommandTransportWriter.class);
+        when(provider.getIfAvailable()).thenReturn(writer);
+        var gray = task();
+        gray.setTenantId("1");
+        var capture = new AgentCommandTransportCapture(
+                gate(AgentRabbitActivationState.DISPATCH_CANARY), provider);
+        assertFalse(capture.captureTaskInvites("owner-a", gray,
+                List.of(agent("agent-a")), "evt-assigned", 1_000L));
+        ArgumentCaptor<AgentCommandDraft> drafts = ArgumentCaptor.forClass(AgentCommandDraft.class);
+        verify(writer).write(drafts.capture());
+        var draft = drafts.getValue();
+        org.junit.jupiter.api.Assertions.assertEquals("1", draft.tenantId());
+        org.junit.jupiter.api.Assertions.assertNotEquals(
+                AgentCommandCanonicalCodec.taskInviteCommandId("0", "client-a", "owner-a", "task-1", "agent-a"),
+                draft.commandId());
+        org.junit.jupiter.api.Assertions.assertEquals(draft, AgentCommandCanonicalCodec.decodeBusinessBytes(
+                AgentCommandCanonicalCodec.businessBytes(draft)));
+    }
+
     private AgentTaskDTO task() {
         AgentTaskDTO task = new AgentTaskDTO();
         task.setId("task-1");

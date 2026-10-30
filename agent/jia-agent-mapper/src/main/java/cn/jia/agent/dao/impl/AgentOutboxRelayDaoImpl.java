@@ -16,18 +16,18 @@ public class AgentOutboxRelayDaoImpl implements AgentOutboxRelayDao {
     private final AgentOutboxRelayMapper mapper;
 
     @Override
-    public List<AgentOutboxCandidate> selectCorruptCandidates(long now, int limit) {
-        return mapper.selectCorruptCandidates(now, limit);
+    public List<AgentOutboxCandidate> selectCorruptCandidates(String tenantId, long now, int limit) {
+        return mapper.selectCorruptCandidates(tenantId, now, limit);
     }
 
     @Override
-    public List<AgentOutboxCandidate> selectDueCandidates(long now, int limit) {
-        return mapper.selectDueCandidates(now, limit);
+    public List<AgentOutboxCandidate> selectDueCandidates(String tenantId, long now, int limit) {
+        return mapper.selectDueCandidates(tenantId, now, limit);
     }
 
     @Override
-    public List<AgentOutboxCandidate> selectStaleCandidates(long now, int limit) {
-        return mapper.selectStaleCandidates(now, limit);
+    public List<AgentOutboxCandidate> selectStaleCandidates(String tenantId, long now, int limit) {
+        return mapper.selectStaleCandidates(tenantId, now, limit);
     }
 
     @Override

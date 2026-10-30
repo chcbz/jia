@@ -162,7 +162,7 @@ class HallSubmissionControllerTest {
     }
 
     private static JwtAuthenticationToken jwt() {
-        Jwt token = Jwt.withTokenValue("token").header("alg", "none")
+        Jwt token = Jwt.withTokenValue("token").claim("tenant_id", "0").header("alg", "none")
                 .claim("jiacn", "owner-a").claim("client_id", "client-a")
                 .issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(600)).build();
         JwtAuthenticationToken authentication = new JwtAuthenticationToken(token);

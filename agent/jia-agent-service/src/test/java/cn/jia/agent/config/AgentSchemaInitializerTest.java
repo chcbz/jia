@@ -57,7 +57,7 @@ class AgentSchemaInitializerTest extends BaseMockTest {
         assertEquals(Set.of("chk_hosted_state", "chk_hosted_generation",
                 "chk_hosted_single_tenant", "chk_hosted_repair"), baseline.keySet());
         assertEquals(baseline, hostedCheckClauses(created));
-        assertEquals("tenant_id='0'", baseline.get("chk_hosted_single_tenant"));
+        assertEquals("tenant_idisnotnullandchar_length(tenant_id)>0andoctet_length(tenant_id)=octet_length(trim(tenant_id))", baseline.get("chk_hosted_single_tenant"));
 
         // Statement extraction must preserve quoted SQL and comments, not truncate a CHECK oracle.
         String prefix = "create table if not exists statement_probe (";
@@ -137,6 +137,23 @@ class AgentSchemaInitializerTest extends BaseMockTest {
             initializer.validateBindingTenantContract();
             assertTrue(statements.isEmpty(), "Binding validation must not repair DDL or convert data");
         }
+    }
+
+    @Test
+    void migratedBindingTenantCheckIsAcceptedWithoutAutomaticAlter() throws Exception {
+        List<Map<String,Object>> checks = new java.util.ArrayList<>(bindingTenantChecks("MySQL"));
+        var tenant = new LinkedHashMap<>(checks.get(1));
+        tenant.put("CHECK_CLAUSE", "tenant_id IS NOT NULL AND CHAR_LENGTH(tenant_id)>0 AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(TRIM(tenant_id))");
+        checks.set(1, tenant);
+        List<String> statements = new java.util.ArrayList<>();
+        var catalog = bindingContractTemplate("MySQL", List.of(bindingTenantColumn("MySQL")), checks, statements);
+        new AgentSchemaInitializer(catalog).validateBindingTenantContract();
+        assertTrue(statements.isEmpty());
+    }
+
+    @Test
+    void migratedIdentityChecksAndTenantAliasIndexAreAcceptedAlongsideLegacyProduction() {
+        new AgentSchemaInitializer(identityCatalogTemplate("business-tenant")).afterPropertiesSet();
     }
 
     @Test
@@ -271,7 +288,7 @@ class AgentSchemaInitializerTest extends BaseMockTest {
         for (String definition : List.of(created, baseline)) {
             String normalized = normalizeCatalogSql(definition);
             assertTrue(normalized.contains("tenant_id varchar(50) not null default '0'"));
-            assertTrue(normalized.contains("constraint chk_agent_binding_single_tenant check (tenant_id = '0')"));
+            assertTrue(normalized.contains("constraint chk_agent_binding_single_tenant check (tenant_id is not null and char_length(tenant_id)>0 and octet_length(tenant_id)=octet_length(trim(tenant_id)))"));
             assertTrue(normalized.contains("constraint chk_agent_binding_status check (status in (0, 1, 2, 3))"));
             assertTrue(normalized.contains("unique key uk_agent_binding_active_persona "
                     + "(tenant_id, client_id, active_persona_code)"));
@@ -747,9 +764,22 @@ class AgentSchemaInitializerTest extends BaseMockTest {
                     .findFirst().orElseThrow();
             assertEquals(normalizeSqlStructure(tableDefinition(schema, table)),
                     normalizeSqlStructure(initializerDefinition), table);
+            // The historical A02 upgrade stays frozen; the explicit 20261030 delta supersedes its tenant admission.
+            String legacy = tableDefinition(readResource("db/agent-identity-schema.sql"), table);
+            String currentTenant = "tenant_id is not null and char_length(tenant_id)>0 and octet_length(tenant_id)=octet_length(trim(tenant_id))";
+            if ("agent_identity_registry".equals(table)) {
+                int tenant = legacy.lastIndexOf("tenant_id = '0'");
+                legacy = legacy.substring(0, tenant) + currentTenant
+                        + legacy.substring(tenant + "tenant_id = '0'".length());
+            } else {
+                legacy = legacy.replace("tenant_id = '0'", currentTenant)
+                        .replace("(client_id, owner_jiacn, alias_type, alias_value, active_key)",
+                                "(tenant_id, client_id, owner_jiacn, alias_type, alias_value, active_key)");
+            }
             assertEquals(normalizeSqlStructure(tableDefinition(schema, table)),
-                    normalizeSqlStructure(tableDefinition(
-                            readResource("db/agent-identity-schema.sql"), table)), table + " migration");
+                    normalizeSqlStructure(legacy), table + " explicit tenant delta");
+            assertTrue(readResource("db/agent-identity-business-tenant-20261030.sql")
+                    .contains("alter table " + table));
         }
     }
 
@@ -1552,6 +1582,12 @@ class AgentSchemaInitializerTest extends BaseMockTest {
                     return (List<T>) List.of(definition);
                 }
                 if (normalized.contains("from information_schema.statistics")) {
+                    if ("business-tenant".equals(fault) && "uk_identity_alias_active".equals(args[1])) {
+                        var columns = List.of("tenant_id","client_id","owner_jiacn","alias_type","alias_value","active_key");
+                        var parts = new java.util.ArrayList<AgentSchemaInitializer.IndexColumn>();
+                        for (int i=0;i<columns.size();i++) parts.add(new AgentSchemaInitializer.IndexColumn(0,columns.get(i),i+1,null));
+                        return (List<T>) parts;
+                    }
                     return (List<T>) identityIndex(String.valueOf(args[0]), String.valueOf(args[1]));
                 }
                 if (normalized.contains("join information_schema.check_constraints")) {
@@ -1571,6 +1607,13 @@ class AgentSchemaInitializerTest extends BaseMockTest {
                         } else if ("chk_identity_alias_scope".equals(original.name())
                                 && "alias-owner-tenant".equals(fault)) {
                             clause = "tenant_id = TRIM(owner_jiacn)";
+                        }
+                        if ("business-tenant".equals(fault)
+                                && ("chk_identity_registry_scope".equals(original.name())
+                                    || "chk_identity_alias_scope".equals(original.name()))) {
+                            int tenant = clause.lastIndexOf("tenant_id = '0'");
+                            clause = clause.substring(0, tenant) + "tenant_id IS NOT NULL AND CHAR_LENGTH(tenant_id)>0 AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(TRIM(tenant_id))"
+                                    + clause.substring(tenant + "tenant_id = '0'".length());
                         }
                         checks.set(i, new AgentSchemaInitializer.CheckDefinition(
                                 original.table(), original.name(), clause));

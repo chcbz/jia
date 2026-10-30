@@ -11,6 +11,7 @@ import cn.jia.agent.service.impl.AgentRabbitOutboxPublisher;
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Qualifier;
+import cn.jia.core.security.FixedTenantAdmissionPolicy;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Conditional;
 import org.springframework.context.annotation.Configuration;
@@ -58,9 +59,11 @@ public class AgentOutboxRelayConfiguration {
             @Qualifier("agentRabbitTopologyManifest") AgentRabbitTopologyManifest manifest,
             @Qualifier("agentRabbitTopologyReadiness") AgentRabbitTopologyReadiness readiness,
             @Qualifier("agentOutboxRelaySettings") AgentOutboxRelaySettings settings,
-            PlatformTransactionManager transactionManager) {
+            PlatformTransactionManager transactionManager,
+            FixedTenantAdmissionPolicy admission) {
         return new AgentOutboxRelayServiceImpl(
-                dao, gate, manifest, readiness, settings, transactionManager);
+                dao, gate, manifest, readiness, settings, transactionManager,
+                admission.businessTenantId());
     }
 
     @Bean(name = "agentOutboxRelayScheduler", defaultCandidate = false,

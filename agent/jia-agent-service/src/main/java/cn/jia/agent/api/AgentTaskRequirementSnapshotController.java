@@ -117,7 +117,7 @@ public final class AgentTaskRequirementSnapshotController {
             throw new AuthenticationFailure();
         }
         final String tenant;
-        try { tenant=cn.jia.core.security.TenantClaimPolicy.resolve(claims,"0"); }
+        try { tenant=cn.jia.core.security.TenantClaimPolicy.resolve(claims); }
         catch (IllegalArgumentException invalid) { throw new ScopeFailure(); }
         return new AgentTaskExecutionGrantService.Scope(tenant,clientId,ownerJiacn);
     }

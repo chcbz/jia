@@ -278,7 +278,7 @@ public final class AgentTaskCreationOperationController {
         Object client = claims.get("client_id");
         final String tenant;
         try {
-            tenant = TenantClaimPolicy.resolve(claims, "0");
+            tenant = TenantClaimPolicy.resolve(claims);
         } catch (IllegalArgumentException invalid) {
             throw new AuthenticationFailure(true);
         }

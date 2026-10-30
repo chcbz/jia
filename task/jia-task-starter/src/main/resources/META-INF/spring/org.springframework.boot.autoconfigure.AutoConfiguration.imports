@@ -1,1 +1,3 @@
 cn.jia.task.config.JobAutoConfiguration
+
+cn.jia.task.config.TaskTenantConfiguration

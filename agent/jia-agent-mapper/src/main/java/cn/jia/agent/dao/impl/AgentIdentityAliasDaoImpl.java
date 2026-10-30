@@ -54,8 +54,8 @@ public class AgentIdentityAliasDaoImpl
         requireExact(tenantId, "tenantId", 200);
         requireExact(clientId, "clientId", 200);
         requireExact(ownerJiacn, "ownerJiacn", 200);
-        if (!"0".equals(tenantId) || "0".equals(ownerJiacn)) {
-            throw new IllegalArgumentException("identity alias scope requires tenant 0 and a real owner");
+        if ("0".equals(ownerJiacn)) {
+            throw new IllegalArgumentException("identity alias scope requires a real owner");
         }
     }
 

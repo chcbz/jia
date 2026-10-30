@@ -1,11 +1,10 @@
 package cn.jia.point.service.impl;
 
 import cn.jia.core.exception.EsRuntimeException;
-import cn.jia.core.security.TenantClaimPolicy;
 import cn.jia.point.dao.PointAccountDao;
 import cn.jia.point.service.PointAccountService;
 import cn.jia.user.common.UserErrorConstants;
-import org.springframework.beans.factory.annotation.Value;
+import cn.jia.core.security.FixedTenantAdmissionPolicy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -20,15 +19,9 @@ public class PointAccountServiceImpl implements PointAccountService {
     private final String tenantId;
 
     public PointAccountServiceImpl(PointAccountDao accounts,
-            @Value("${cyf.security.legacy-single-tenant-id:0}") String legacyTenantId,
-            @Value("${cyf.security.fixed-tenant.enabled:false}") boolean fixed,
-            @Value("${cyf.security.fixed-tenant.tenant-id:}") String fixedTenantId) {
+            FixedTenantAdmissionPolicy processScope) {
         this.accounts = java.util.Objects.requireNonNull(accounts);
-        String legacy = TenantClaimPolicy.exact(legacyTenantId);
-        this.tenantId = fixed ? TenantClaimPolicy.exact(fixedTenantId) : legacy;
-        if (fixed && legacy.equals(tenantId)) {
-            throw new IllegalArgumentException("Grey point partition must differ from production");
-        }
+        this.tenantId = processScope.businessTenantId();
     }
 
     @Override public String tenantId() { return tenantId; }

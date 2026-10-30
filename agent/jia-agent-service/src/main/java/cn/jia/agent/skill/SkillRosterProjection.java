@@ -102,7 +102,7 @@ public final class SkillRosterProjection {
                 return null;
             }
             AgentHostedBindingTransaction.Scope scope = new AgentHostedBindingTransaction.Scope(
-                    TenantClaimPolicy.resolve(claims, TenantClaimPolicy.defaultSingleTenant()),
+                    TenantClaimPolicy.resolve(claims),
                     clientId, ownerJiacn);
             EsContext context = EsContextHolder.getContext();
             if (!Objects.equals(scope.tenantId(), context.getTenantId())

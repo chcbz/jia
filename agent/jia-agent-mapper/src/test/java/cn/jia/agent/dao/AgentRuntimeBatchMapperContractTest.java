@@ -15,13 +15,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class AgentRuntimeBatchMapperContractTest {
     @Test
-    void personaRuntimeProjectionIsOneBoundedColumnOnlyQuery() throws Exception {
-        String sql = selectSql(AgentPersonaMapper.class, "selectRuntimeProjection");
-
-        assertTrue(sql.startsWith("select persona_code, rank_no, star_name, name, title, avatar, visual_config,"));
-        assertTrue(sql.contains("abilities, power, intelligence, leadership, system_agent from agent_persona"));
-        assertFalse(sql.contains("select *"));
-        assertFalse(sql.contains("where"));
+    void runtimeMetadataCannotUseAnUnscopedWholeTableProjection() {
+        assertFalse(java.util.Arrays.stream(AgentPersonaMapper.class.getDeclaredMethods())
+                .anyMatch(method -> method.getName().equals("selectRuntimeProjection")));
     }
 
     @Test
@@ -30,7 +26,8 @@ class AgentRuntimeBatchMapperContractTest {
         assertTenantLineIgnored(AgentPersonaMapper.class, "selectCatalogProjection");
         assertTrue(catalog.startsWith("select persona_code, rank_no, star_name, name, title, avatar,"));
         assertTrue(catalog.contains("where active = 1"));
-        assertTrue(catalog.contains("tenant_id = '0'"));
+        assertFalse(catalog.contains("tenant_id = '0'"));
+        assertTrue(catalog.contains("tenant_id = #{tenantid}"));
         assertExactParameter(catalog, "tenant_id", "tenantid");
         assertExactParameter(catalog, "client_id", "clientid");
         assertFalse(catalog.contains("select *"));

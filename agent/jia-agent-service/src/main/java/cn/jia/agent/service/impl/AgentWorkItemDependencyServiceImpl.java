@@ -401,10 +401,7 @@ public class AgentWorkItemDependencyServiceImpl implements AgentWorkItemDependen
 
     private void requireStrictScope(
             String tenantId, String clientId, String ownerJiacn, String taskId) {
-        if (!"0".equals(tenantId)) {
-            throw new AgentWorkItemDependencyException(Reason.INVALID_REQUEST,
-                    "tenantId must be the strict single-tenant value");
-        }
+        requireScopeId(tenantId, "tenantId", 50);
         requireScopeId(clientId, "clientId", 50);
         requireScopeId(ownerJiacn, "ownerJiacn", 50);
         if ("0".equals(ownerJiacn)) {

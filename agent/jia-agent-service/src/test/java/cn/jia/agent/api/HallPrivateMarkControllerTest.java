@@ -69,7 +69,7 @@ class HallPrivateMarkControllerTest {
     private static String q(String data) { return "{\"protocolVersion\":1,\"requestId\":\"mark-test\",\"data\":" + data + "}"; }
     private static JwtAuthenticationToken jwt() {
         JwtAuthenticationToken authentication = new JwtAuthenticationToken(
-                Jwt.withTokenValue("fixture").header("alg","none").subject("o")
+                Jwt.withTokenValue("fixture").claim("tenant_id", "0").header("alg","none").subject("o")
                         .claim("jiacn","o").claim("client_id","c")
                         .issuedAt(Instant.ofEpochSecond(1)).expiresAt(Instant.ofEpochSecond(2)).build());
         // Standalone MVC receives the post-authentication principal; no decoder/filter runs here.

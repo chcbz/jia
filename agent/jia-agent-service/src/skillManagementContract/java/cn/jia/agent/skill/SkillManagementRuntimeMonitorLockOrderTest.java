@@ -103,7 +103,8 @@ class SkillManagementRuntimeMonitorLockOrderTest extends SkillManagementMySqlFix
         when(accounts.findUniqueByExactJiacn("owner")).thenReturn(Optional.of(
                 new AccountSecuritySnapshot(7, "owner", AccountState.ACTIVE, 2)));
         var auth = new AgentRuntimeAuthenticationService(runtimes, installations, registry,
-                identityService, accounts, mock(AgentTaskEventsGate.class));
+                identityService, accounts, mock(AgentTaskEventsGate.class),
+                new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null));
         @SuppressWarnings("unchecked")
         ObjectProvider<AgentEventPublisher> publishers = mock(ObjectProvider.class);
         var publisher = mock(AgentEventPublisher.class);

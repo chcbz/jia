@@ -2024,8 +2024,8 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         }
         return Set.copyOf(allowed);
     }
-    private static void validateOwnerScope(OwnerScope scope) { if(scope==null||!"0".equals(scope.tenantId()))throw failure(Reason.BAD_REQUEST); id(scope.clientId(),"clientId",50);id(scope.ownerJiacn(),"owner",50);if("0".equals(scope.ownerJiacn()))throw failure(Reason.BAD_REQUEST); }
-    private static void validateRuntimeScope(RuntimeScope scope) { if(scope==null||!"0".equals(scope.tenantId()))throw failure(Reason.NOT_FOUND); id(scope.clientId(),"clientId",50);id(scope.ownerJiacn(),"owner",50);id(scope.executorOwnerJiacn(),"executorOwner",50);id(scope.agentId(),"agentId",100);id(scope.runtimeInstanceId(),"runtimeInstanceId",100);if("0".equals(scope.ownerJiacn()))throw failure(Reason.NOT_FOUND); }
+    private static void validateOwnerScope(OwnerScope scope) { if(scope==null)throw failure(Reason.BAD_REQUEST); id(scope.tenantId(),"tenantId",50); id(scope.clientId(),"clientId",50);id(scope.ownerJiacn(),"owner",50);if("0".equals(scope.ownerJiacn()))throw failure(Reason.BAD_REQUEST); }
+    private static void validateRuntimeScope(RuntimeScope scope) { if(scope==null)throw failure(Reason.NOT_FOUND); id(scope.tenantId(),"tenantId",50); id(scope.clientId(),"clientId",50);id(scope.ownerJiacn(),"owner",50);id(scope.executorOwnerJiacn(),"executorOwner",50);id(scope.agentId(),"agentId",100);id(scope.runtimeInstanceId(),"runtimeInstanceId",100);if("0".equals(scope.ownerJiacn()))throw failure(Reason.NOT_FOUND); }
     private static void validateIdempotency(String key) { id(key,"Idempotency-Key",100); }
     private static void id(String value,String name,int max) { if(value==null||value.isBlank()||!value.equals(value.strip())||value.codePointCount(0,value.length())>max||value.chars().anyMatch(Character::isISOControl))throw failure(Reason.BAD_REQUEST); }
     private static String optional(String value,int max) { if(value==null)return null;id(value,"optional",max);return value; }

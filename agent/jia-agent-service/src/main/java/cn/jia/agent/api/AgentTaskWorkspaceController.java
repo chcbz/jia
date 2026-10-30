@@ -119,7 +119,7 @@ public class AgentTaskWorkspaceController {
             throw new WorkspaceAuthenticationException(true);
         }
         try {
-            return new Scope(cn.jia.core.security.TenantClaimPolicy.resolve(claims, "0"), owner, client);
+            return new Scope(cn.jia.core.security.TenantClaimPolicy.resolve(claims), owner, client);
         } catch (IllegalArgumentException invalidTenant) {
             throw new WorkspaceAuthenticationException(true);
         }

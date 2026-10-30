@@ -24,10 +24,10 @@ class AgentProfileCapabilitiesControllerTest {
     MockMvc mvc;
     JwtAuthenticationToken login;
     @BeforeEach void setup() {
-        var jwt = Jwt.withTokenValue("fixture").header("alg", "RS256").subject("user").claim("jiacn", "owner").claim("client_id", "client").build();
+        var jwt = Jwt.withTokenValue("fixture").claim("tenant_id", "0").header("alg", "RS256").subject("user").claim("jiacn", "owner").claim("client_id", "client").build();
         login = new JwtAuthenticationToken(jwt, List.of());
         var context = new EsContext(); context.setTenantId("0"); context.setClientId("client"); context.setJiacn("owner"); EsContextHolder.setContext(context);
-        mvc = MockMvcBuilders.standaloneSetup(new AgentProfileCapabilitiesController(profiles, TenantScopeResolver.legacySingleTenant()))
+        mvc = MockMvcBuilders.standaloneSetup(new AgentProfileCapabilitiesController(profiles, new TenantScopeResolver()))
                 .setMessageConverters(new JacksonJsonHttpMessageConverter()).setControllerAdvice(new ApiEnvelopeAdvice())
                 .addFilters(new RequestIdFilter()).build();
         when(profiles.read(any(), eq("agent"))).thenReturn(new AgentProfileCapabilitiesService.ProfileCapabilities("agent", 10000,
@@ -92,7 +92,7 @@ class AgentProfileCapabilitiesControllerTest {
         try {
             context.refresh();
             var filters = context.getBean(org.springframework.security.web.FilterChainProxy.class);
-            var secured = MockMvcBuilders.standaloneSetup(new AgentProfileCapabilitiesController(profiles, TenantScopeResolver.legacySingleTenant()))
+            var secured = MockMvcBuilders.standaloneSetup(new AgentProfileCapabilitiesController(profiles, new TenantScopeResolver()))
                     .setControllerAdvice(new ApiEnvelopeAdvice()).addFilters(new RequestIdFilter(), filters).build();
             secured.perform(get("/agent/agent/profile-capabilities")).andExpect(status().isUnauthorized());
             secured.perform(get("/agent/agent/profile-capabilities").header("Authorization", "Bearer invalid-fixture"))

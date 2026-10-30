@@ -40,13 +40,13 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
     public static final String AGENT_OFFLINE = AgentCommandRabbitConsumer.AGENT_OFFLINE;
     public static final String SENT_ACK_TIMEOUT = "SENT_ACK_TIMEOUT";
     public static final String MESSAGE_EXPIRED = AgentCommandInboxServiceImpl.MESSAGE_EXPIRED;
-    private static final long DEFAULT_SENT_ACK_TIMEOUT_MILLIS = 30_000L;
     // Reserve all remaining delivery mutations: D06 reissue, D03 claim+settle,
     // D07 claim+complete, and A06 ACK RECEIVED+STARTED+terminal.
     private static final long MAX_SAFE_REISSUE_VERSION = Long.MAX_VALUE - 8;
     private static final Logger LOG = LoggerFactory.getLogger(AgentCommandReissueServiceImpl.class);
 
     private final AgentCommandRecoveryDao dao;
+    private final String processTenantId;
     private final AgentRabbitSafetyGate gate;
     private final AgentRawCommandDispatcher dispatcher;
     private final AgentRabbitTopologyManifest.PublishRoute route;
@@ -56,58 +56,22 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
     private final AgentCommandRecoveryPolicy recoveryPolicy;
 
     public AgentCommandReissueServiceImpl(
-            AgentCommandRecoveryDao dao,
-            AgentRabbitSafetyGate gate,
-            AgentRawCommandDispatcher dispatcher,
-            AgentRabbitTopologyManifest manifest,
-            PlatformTransactionManager transactionManager) {
-        this(dao, gate, dispatcher, manifest, DEFAULT_SENT_ACK_TIMEOUT_MILLIS,
-                transactionManager, UUID::randomUUID, new AgentCommandRecoveryPolicy());
-    }
-
-    public AgentCommandReissueServiceImpl(
-            AgentCommandRecoveryDao dao,
-            AgentRabbitSafetyGate gate,
-            AgentRawCommandDispatcher dispatcher,
-            AgentRabbitTopologyManifest manifest,
-            long sentAckTimeoutMillis,
-            PlatformTransactionManager transactionManager) {
-        this(dao, gate, dispatcher, manifest, sentAckTimeoutMillis,
-                transactionManager, UUID::randomUUID, new AgentCommandRecoveryPolicy());
-    }
-
-    AgentCommandReissueServiceImpl(
-            AgentCommandRecoveryDao dao,
-            AgentRabbitSafetyGate gate,
-            AgentRawCommandDispatcher dispatcher,
-            AgentRabbitTopologyManifest manifest,
-            PlatformTransactionManager transactionManager,
-            Supplier<UUID> uuidSupplier) {
-        this(dao, gate, dispatcher, manifest, DEFAULT_SENT_ACK_TIMEOUT_MILLIS,
-                transactionManager, uuidSupplier, new AgentCommandRecoveryPolicy());
-    }
-
-    AgentCommandReissueServiceImpl(
-            AgentCommandRecoveryDao dao,
-            AgentRabbitSafetyGate gate,
-            AgentRawCommandDispatcher dispatcher,
-            AgentRabbitTopologyManifest manifest,
-            long sentAckTimeoutMillis,
-            PlatformTransactionManager transactionManager,
-            Supplier<UUID> uuidSupplier) {
+            AgentCommandRecoveryDao dao, AgentRabbitSafetyGate gate,
+            AgentRawCommandDispatcher dispatcher, AgentRabbitTopologyManifest manifest,
+            long sentAckTimeoutMillis, PlatformTransactionManager transactionManager,
+            String processTenantId) {
         this(dao, gate, dispatcher, manifest, sentAckTimeoutMillis, transactionManager,
-                uuidSupplier, new AgentCommandRecoveryPolicy());
+                UUID::randomUUID, new AgentCommandRecoveryPolicy(), processTenantId);
     }
 
     AgentCommandReissueServiceImpl(
-            AgentCommandRecoveryDao dao,
-            AgentRabbitSafetyGate gate,
-            AgentRawCommandDispatcher dispatcher,
-            AgentRabbitTopologyManifest manifest,
-            long sentAckTimeoutMillis,
-            PlatformTransactionManager transactionManager,
-            Supplier<UUID> uuidSupplier,
-            AgentCommandRecoveryPolicy recoveryPolicy) {
+            AgentCommandRecoveryDao dao, AgentRabbitSafetyGate gate,
+            AgentRawCommandDispatcher dispatcher, AgentRabbitTopologyManifest manifest,
+            long sentAckTimeoutMillis, PlatformTransactionManager transactionManager,
+            Supplier<UUID> uuidSupplier, AgentCommandRecoveryPolicy recoveryPolicy,
+            String processTenantId) {
+        if (!exact(processTenantId, 50)) throw new IllegalArgumentException("processTenantId");
+        this.processTenantId = processTenantId;
         this.dao = Objects.requireNonNull(dao, "dao");
         this.gate = Objects.requireNonNull(gate, "gate");
         this.dispatcher = Objects.requireNonNull(dispatcher, "dispatcher");
@@ -366,9 +330,9 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
         if (!isDispatchState()) return new AgentCommandReissueScanResult(0, 0, afterDeliveryId);
         long sentBefore = now > sentAckTimeoutMillis ? now - sentAckTimeoutMillis : 0L;
         List<AgentWaitingCommandCandidate> candidates = dao.findDueCandidates(
-                now, sentBefore, afterDeliveryId, limit);
+                processTenantId, now, sentBefore, afterDeliveryId, limit);
         if (candidates.isEmpty() && afterDeliveryId > 0) {
-            candidates = dao.findDueCandidates(now, sentBefore, 0, limit);
+            candidates = dao.findDueCandidates(processTenantId, now, sentBefore, 0, limit);
         }
         return process(candidates, REQUESTER_SCHEDULER, REASON_SCHEDULER, true, now, null);
     }
@@ -739,7 +703,7 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
     }
 
     private boolean allows(String tenantId, String clientId) {
-        return isDispatchState() && gate.allowsDispatch(tenantId, clientId);
+        return processTenantId.equals(tenantId) && isDispatchState() && gate.allowsDispatch(tenantId, clientId);
     }
 
     private boolean isDispatchState() {

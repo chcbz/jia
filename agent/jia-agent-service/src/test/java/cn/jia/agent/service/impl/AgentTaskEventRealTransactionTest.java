@@ -218,6 +218,30 @@ class AgentTaskEventRealTransactionTest {
     // ── Test 1: Basic append via Writer (single transaction) ──
 
     @Test
+    void sameTaskAndEventKeysHaveIndependentTenantVersionsAndRollback() {
+        seedTask("0", CLIENT, TASK_ID);
+        seedTask("1", CLIENT, TASK_ID);
+        for (String tenant : List.of("0", "1")) {
+            var result = writer.append(command("same-event", TaskEventType.TASK_CREATED).setTenantId(tenant));
+            assertEquals(1L, result.getEventVersion());
+            assertEquals(tenant, result.getEvent().getTenantId());
+        }
+        assertThrows(IllegalStateException.class, () -> new TransactionTemplate(txManager)
+                .executeWithoutResult(status -> {
+                    writer.append(command("rolled-back", TaskEventType.PROGRESS_REPORTED).setTenantId("1"));
+                    throw new IllegalStateException("rollback gray event and version");
+                }));
+        assertEquals(1L,eventDao.findCurrentVersion("0",CLIENT,OWNER,TASK_ID));
+        assertEquals(1L,eventDao.findCurrentVersion("1",CLIENT,OWNER,TASK_ID));
+        assertNull(eventDao.findByEventId("1",CLIENT,OWNER,"rolled-back"));
+        assertEquals("0",eventDao.findByEventId("0",CLIENT,OWNER,"same-event").getTenantId());
+        assertEquals("1",eventDao.findByEventId("1",CLIENT,OWNER,"same-event").getTenantId());
+        assertEquals(0,eventDao.commitEventVersion("1",CLIENT,OWNER,TASK_ID,0,1,1000));
+        assertEquals(0,eventDao.commitEventVersion("1",CLIENT,"foreign-owner",TASK_ID,1,2,1000));
+        assertEquals(1L,eventDao.findCurrentVersion("1",CLIENT,OWNER,TASK_ID));
+    }
+
+    @Test
     void basicAppendViaWriter() {
         seedTask(TENANT, CLIENT, TASK_ID);
 

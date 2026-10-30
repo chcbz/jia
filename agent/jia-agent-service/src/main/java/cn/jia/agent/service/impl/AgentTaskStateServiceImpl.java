@@ -555,7 +555,12 @@ public class AgentTaskStateServiceImpl implements AgentTaskStateService {
 
     private void requireStrictScopeAndId(
             String tenantId, String clientId, String ownerJiacn, String id, String idName) {
-        if (!"0".equals(tenantId) || StringUtil.isBlank(clientId)
+        try {
+            cn.jia.core.security.TenantClaimPolicy.exact(tenantId);
+        } catch (IllegalArgumentException invalid) {
+            throw invalidRequest("strict task owner scope is required");
+        }
+        if (StringUtil.isBlank(clientId)
                 || StringUtil.isBlank(ownerJiacn) || "0".equals(ownerJiacn)) {
             throw invalidRequest("strict task owner scope is required");
         }

@@ -128,7 +128,7 @@ class AgentHostingRentControllerTest {
     }
 
     private static JwtAuthenticationToken jwt(String actor, String tenant, String client) {
-        Jwt.Builder builder = Jwt.withTokenValue("token").header("alg", "none")
+        Jwt.Builder builder = Jwt.withTokenValue("token").claim("tenant_id", "0").header("alg", "none")
                 .issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(60));
         if (actor != null) builder.subject(actor);
         if (tenant != null) builder.claim("jiacn", tenant);
@@ -137,7 +137,7 @@ class AgentHostingRentControllerTest {
     }
 
     private static JwtAuthenticationToken jwtWithFallbackClaims() {
-        Jwt token = Jwt.withTokenValue("token").header("alg", "none")
+        Jwt token = Jwt.withTokenValue("token").claim("tenant_id", "0").header("alg", "none")
                 .claim("uid", "actor-1")
                 .claim("token_kind", "user")
                 .claim("jiacn", "Tenant-A")

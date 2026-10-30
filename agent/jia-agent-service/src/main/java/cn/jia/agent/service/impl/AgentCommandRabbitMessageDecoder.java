@@ -131,7 +131,6 @@ final class AgentCommandRabbitMessageDecoder {
                 || !commandId.equals(text(root, "commandId"))
                 || !tenantId.equals(text(root, "tenantId"))
                 || !clientId.equals(text(root, "clientId"))
-                || !"0".equals(tenantId)
                 || !validOwner(text(root, "ownerJiacn"))
                 || !taskId.equals(text(root, "taskId"))
                 || !targetAgentId.equals(text(root, "targetAgentId"))

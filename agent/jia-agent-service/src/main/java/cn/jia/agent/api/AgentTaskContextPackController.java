@@ -58,7 +58,7 @@ public class AgentTaskContextPackController {
         if (expectedVersion != null && !canonicalDecimal(expectedVersion)) {
             throw new ContextPackRequestException("expectedVersion");
         }
-        if (!taskEventsGate.allows("0", scope.clientId())) {
+        if (!taskEventsGate.allows(scope.tenantId(), scope.clientId())) {
             throw new AgentTaskContextPackException(
                     AgentTaskContextPackException.Reason.CONTEXT_UNAVAILABLE);
         }
@@ -140,12 +140,12 @@ public class AgentTaskContextPackController {
     private static Scope requireJwtScope(Authentication authentication) {
         if (authentication instanceof AgentRuntimeAuthentication runtime && runtime.isAuthenticated()) {
             var scope = runtime.getPrincipal();
-            if (!"0".equals(scope.tenantId()) || !validExact(scope.clientId(), 50)
+            if (!validExact(scope.tenantId(), 50) || !validExact(scope.clientId(), 50)
                     || !validExact(scope.ownerJiacn(), 50) || !validExact(scope.agentId(), 100)
                     || !validExact(scope.runtimeInstanceId(), 100)) {
                 throw new ContextPackAuthenticationException(true);
             }
-            return new Scope("0", scope.clientId(), scope.ownerJiacn(), scope.agentId());
+            return new Scope(scope.tenantId(), scope.clientId(), scope.ownerJiacn(), scope.agentId());
         }
         if (authentication == null || !authentication.isAuthenticated()
                 || !(authentication instanceof JwtAuthenticationToken jwt)) {
@@ -159,7 +159,13 @@ public class AgentTaskContextPackController {
         if (!validExact(name, 100) || !actorAgentId.equals(name)) {
             throw new ContextPackAuthenticationException(true);
         }
-        return new Scope("0", clientId, ownerJiacn, actorAgentId);
+        final String tenant;
+        try {
+            tenant = cn.jia.core.security.TenantClaimPolicy.resolve(claims);
+        } catch (IllegalArgumentException invalid) {
+            throw new ContextPackAuthenticationException(true);
+        }
+        return new Scope(tenant, clientId, ownerJiacn, actorAgentId);
     }
 
     private static String requiredClaim(Map<String, Object> claims, String field, int maxLength) {

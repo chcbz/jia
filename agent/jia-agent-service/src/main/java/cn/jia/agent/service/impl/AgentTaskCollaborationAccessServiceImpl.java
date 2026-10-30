@@ -9,6 +9,7 @@ import cn.jia.agent.service.AgentTaskCollaborationAccessService;
 import cn.jia.agent.state.AgentTaskMemberStatus;
 import cn.jia.agent.state.AgentTaskStatus;
 import cn.jia.core.util.StringUtil;
+import cn.jia.core.security.TenantClaimPolicy;
 import jakarta.inject.Inject;
 import jakarta.inject.Named;
 
@@ -123,9 +124,7 @@ public class AgentTaskCollaborationAccessServiceImpl
 
     private void requireStrictOwnerScope(
             String tenantId, String clientId, String ownerJiacn) {
-        if (!"0".equals(tenantId)) {
-            throw new IllegalArgumentException("tenantId must be 0");
-        }
+        TenantClaimPolicy.exact(tenantId);
         requireScopeId(clientId, "clientId");
         requireScopeId(ownerJiacn, "ownerJiacn");
         if ("0".equals(ownerJiacn)) {

@@ -1,5 +1,7 @@
 package cn.jia.agent.conversation;
 
+import cn.jia.core.security.TenantClaimPolicy;
+
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpHeaders;
@@ -88,7 +90,12 @@ public class ConversationDeliverableController {
                 || !subject.equals(authentication.getName())) {
             throw new AuthenticationFailure(true);
         }
-        return new ConversationDeliverableReadAdapter.Scope("0", clientId, ownerJiacn);
+        try {
+            return new ConversationDeliverableReadAdapter.Scope(
+                    TenantClaimPolicy.resolve(claims), clientId, ownerJiacn);
+        } catch (IllegalArgumentException denied) {
+            throw new AuthenticationFailure(true);
+        }
     }
 
     private static String requiredClaim(

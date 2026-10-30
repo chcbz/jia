@@ -410,9 +410,7 @@ public final class FileSystemAgentTaskArtifactStorage implements AgentTaskArtifa
         if (scope == null) {
             throw invalid("Artifact storage scope is required");
         }
-        if (!"0".equals(scope.tenantId())) {
-            throw invalid("Artifact storage tenant must be literal 0");
-        }
+        requireExactIdentifier(scope.tenantId(), 50);
         requireExactIdentifier(scope.clientId(), 50);
         requireExactIdentifier(scope.ownerJiacn(), 50);
         if ("0".equals(scope.ownerJiacn())) {

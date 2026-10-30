@@ -121,7 +121,7 @@ public class AgentTaskMutationTransactionImpl implements AgentTaskMutationTransa
             String taskId,
             TaskRootReservation reservation,
             ReservedTaskMutation<T> mutation) {
-        requireOwnerScope(tenantId, clientId, ownerJiacn, taskId);
+        requireExactOwnerScope(tenantId, clientId, ownerJiacn, taskId);
         if (reservation == null) {
             throw new IllegalArgumentException("reservation must not be null");
         }
@@ -180,9 +180,6 @@ public class AgentTaskMutationTransactionImpl implements AgentTaskMutationTransa
     private void requireOwnerScope(
             String tenantId, String clientId, String ownerJiacn, String taskId) {
         requireExactOwnerScope(tenantId, clientId, ownerJiacn, taskId);
-        if (!"0".equals(tenantId)) {
-            throw new IllegalArgumentException("task mutation admission requires tenant 0");
-        }
     }
 
     private void requireExactOwnerScope(

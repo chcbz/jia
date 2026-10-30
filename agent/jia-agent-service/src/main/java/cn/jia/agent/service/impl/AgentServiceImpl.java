@@ -115,6 +115,12 @@ import java.util.regex.Pattern;
 @Slf4j
 public class AgentServiceImpl implements AgentService {
     private static final String SINGLE_TENANT_ID = "0";
+    private cn.jia.core.security.FixedTenantAdmissionPolicy processTenant;
+
+    public void configureProcessTenant(cn.jia.core.security.FixedTenantAdmissionPolicy processTenant) {
+        this.processTenant = java.util.Objects.requireNonNull(processTenant);
+    }
+
     private static final String REGION_BOUNTY_BOARD = "bounty-board";
     private static final String REGION_COUNCIL_TABLE = "council-table";
     private static final String REGION_MAIN_SEAT = "main-seat";
@@ -219,14 +225,16 @@ public class AgentServiceImpl implements AgentService {
             AgentScopePublicationCoordinator scopePublicationCoordinator,
             AgentSceneFeatureFlags sceneFeatureFlags,
             AgentTaskMutationTransaction mutationTransaction,
-            AgentTaskEventWriter taskEventWriter) {
+            AgentTaskEventWriter taskEventWriter,
+            cn.jia.core.security.FixedTenantAdmissionPolicy processTenant) {
         this(agentRuntimeDao, agentIdentityService, agentPersonaDao, agentPersonaBindingDao,
                 agentTaskMetaDao, agentTaskMemberDao, legacyTaskCompatibilityService,
                 agentTaskNoteDao, dialogueTemplateDao, eventPublisherProvider,
                 taskServiceProvider, apiKeyServiceProvider, sceneServiceProvider,
                 scopePublicationCoordinator, new AgentHostedRuntimePublicationWorker(agentRuntimeDao),
                 sceneFeatureFlags, mutationTransaction, taskEventWriter,
-                AgentCommandTransportCapture.disabledForLegacyConstruction());
+                AgentCommandTransportCapture.disabledForLegacyConstruction(),
+                processTenant);
     }
 
     public AgentServiceImpl(
@@ -247,13 +255,15 @@ public class AgentServiceImpl implements AgentService {
             AgentSceneFeatureFlags sceneFeatureFlags,
             AgentTaskMutationTransaction mutationTransaction,
             AgentTaskEventWriter taskEventWriter,
-            AgentCommandTransportCapture commandTransportCapture) {
+            AgentCommandTransportCapture commandTransportCapture,
+            cn.jia.core.security.FixedTenantAdmissionPolicy processTenant) {
         this(agentRuntimeDao, agentIdentityService, agentPersonaDao, agentPersonaBindingDao,
                 agentTaskMetaDao, agentTaskMemberDao, legacyTaskCompatibilityService,
                 agentTaskNoteDao, dialogueTemplateDao, eventPublisherProvider,
                 taskServiceProvider, apiKeyServiceProvider, sceneServiceProvider,
                 scopePublicationCoordinator, new AgentHostedRuntimePublicationWorker(agentRuntimeDao),
-                sceneFeatureFlags, mutationTransaction, taskEventWriter, commandTransportCapture);
+                sceneFeatureFlags, mutationTransaction, taskEventWriter, commandTransportCapture,
+                processTenant);
     }
 
     public AgentServiceImpl(
@@ -275,14 +285,16 @@ public class AgentServiceImpl implements AgentService {
             AgentSceneFeatureFlags sceneFeatureFlags,
             AgentTaskMutationTransaction mutationTransaction,
             AgentTaskEventWriter taskEventWriter,
-            AgentCommandTransportCapture commandTransportCapture) {
+            AgentCommandTransportCapture commandTransportCapture,
+            cn.jia.core.security.FixedTenantAdmissionPolicy processTenant) {
         this(agentRuntimeDao, agentIdentityService, agentPersonaDao, agentPersonaBindingDao,
                 agentTaskMetaDao, agentTaskMemberDao, legacyTaskCompatibilityService,
                 agentTaskNoteDao, dialogueTemplateDao, eventPublisherProvider,
                 taskServiceProvider, apiKeyServiceProvider, sceneServiceProvider,
                 scopePublicationCoordinator, runtimePublicationWorker, sceneFeatureFlags,
                 mutationTransaction, taskEventWriter, commandTransportCapture,
-                HostingRentAdmissionService.unconfigured());
+                HostingRentAdmissionService.unconfigured(),
+                processTenant);
     }
 
     @Autowired
@@ -306,7 +318,9 @@ public class AgentServiceImpl implements AgentService {
             AgentTaskMutationTransaction mutationTransaction,
             AgentTaskEventWriter taskEventWriter,
             AgentCommandTransportCapture commandTransportCapture,
-            HostingRentAdmissionService hostingRentAdmissionService) {
+            HostingRentAdmissionService hostingRentAdmissionService,
+            cn.jia.core.security.FixedTenantAdmissionPolicy processTenant) {
+        configureProcessTenant(processTenant);
         this.agentRuntimeDao = agentRuntimeDao;
         this.agentIdentityService = agentIdentityService;
         this.agentPersonaDao = agentPersonaDao;
@@ -409,7 +423,7 @@ public class AgentServiceImpl implements AgentService {
                 agentRuntimeDao.findRosterByOwner(tenantId, clientId, ownerJiacn, status, ability));
         agents.getList().forEach(runtime -> requireBatchRuntimeScope(
                 runtime, tenantId, clientId, ownerJiacn));
-        RuntimeBatchEnrichment enrichment = loadRuntimeBatchEnrichment(agents.getList(), false, tenantId);
+        RuntimeBatchEnrichment enrichment = loadRuntimeBatchEnrichment(agents.getList(), false, tenantId, clientId);
         return agents.convert(runtime -> toRuntimeDTO(
                 runtime, clientId, ownerJiacn, enrichment));
     }
@@ -422,7 +436,7 @@ public class AgentServiceImpl implements AgentService {
         List<AgentRuntimeEntity> visible = Optional.ofNullable(agentRuntimeDao.findMapVisible(tenantId, clientId))
                 .orElseGet(Collections::emptyList);
         visible.forEach(runtime -> requireBatchRuntimeScope(runtime, tenantId, clientId, null));
-        RuntimeBatchEnrichment enrichment = loadRuntimeBatchEnrichment(visible, true, tenantId);
+        RuntimeBatchEnrichment enrichment = loadRuntimeBatchEnrichment(visible, true, tenantId, clientId);
         List<AgentRuntimeDTO> agents = new ArrayList<>(visible.stream()
                 .map(runtime -> toRuntimeDTO(runtime, clientId, ownerJiacn, enrichment))
                 .toList());
@@ -654,8 +668,14 @@ public class AgentServiceImpl implements AgentService {
     @Override
     public AgentRuntimeDTO requireApiKeyOwnedAgentForUpdate(
             String clientId, String jiacn, String agentId) {
+        return requireApiKeyOwnedAgentForUpdate(SINGLE_TENANT_ID, clientId, jiacn, agentId);
+    }
+
+    @Override
+    public AgentRuntimeDTO requireApiKeyOwnedAgentForUpdate(
+            String tenantId, String clientId, String jiacn, String agentId) {
         return toRuntimeDTO(requireOwnedAgentForUpdate(
-                SINGLE_TENANT_ID, clientId, jiacn, agentId), clientId, jiacn);
+                tenantId, clientId, jiacn, agentId), clientId, jiacn);
     }
 
     private AgentRuntimeEntity requireScopedOwnedRuntime(
@@ -786,7 +806,7 @@ public class AgentServiceImpl implements AgentService {
 
     @Override
     public List<AgentTaskDTO> getAgentTasks(String requestedAgentId) {
-        String tenantId = SINGLE_TENANT_ID;
+        String tenantId = resolveCurrentTenantId();
         String clientId = resolveCurrentClientId();
         String ownerJiacn = resolveCurrentJiacn();
         String agentId = legacyTaskCompatibilityService.resolveAgentId(
@@ -843,12 +863,16 @@ public class AgentServiceImpl implements AgentService {
 
     @Override
     public List<AgentPersonaEntity> listPersonas() {
-        return agentPersonaDao.selectAll();
+        return loadPersonaCatalog(new AgentHostedBindingTransaction.Scope(
+                resolveCurrentTenantId(), resolveCurrentClientId(), resolveCurrentJiacn()));
     }
 
     @Override
     public AgentPersonaEntity getPersona(String name) {
-        AgentPersonaEntity persona = agentPersonaDao.findByName(name);
+        AgentPersonaEntity persona = listPersonas().stream()
+                .filter(candidate -> Objects.equals(name, candidate.getName()))
+                .reduce((first, second) -> { throw personaCatalogForbidden("Ambiguous persona name"); })
+                .orElse(null);
         if (persona == null) {
             throw new AgentBizException(AgentErrorConstants.AGENT_NOT_FOUND, "Agent persona not found");
         }
@@ -993,7 +1017,7 @@ public class AgentServiceImpl implements AgentService {
             throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN,
                     "Authenticated task " + operation + " scope is invalid");
         }
-        return new TaskSearchScope(SINGLE_TENANT_ID, clientId, ownerJiacn);
+        return new TaskSearchScope(resolveCurrentTenantId(), clientId, ownerJiacn);
     }
 
     private boolean isExactAuthenticatedScopeId(String value) {
@@ -1213,7 +1237,7 @@ public class AgentServiceImpl implements AgentService {
     }
 
     private void requireSupportedTaskOwner(TaskOwnerScope scope) {
-        if (scope == null || !SINGLE_TENANT_ID.equals(scope.tenantId())
+        if (scope == null || !Objects.equals(resolveCurrentTenantId(), scope.tenantId())
                 || !isExactAuthenticatedScopeId(scope.clientId())
                 || !isExactAuthenticatedScopeId(scope.ownerJiacn())
                 || "0".equals(scope.ownerJiacn())) {
@@ -1241,7 +1265,7 @@ public class AgentServiceImpl implements AgentService {
     public AgentTaskDTO getTask(String taskId) {
         var result=toTaskDTO(requireTask(taskId));
         result.setAssignedTarget(externalServicePolicies.assignedTarget(
-                new cn.jia.agent.service.AgentTaskExecutionGrantService.Scope(SINGLE_TENANT_ID,resolveCurrentClientId(),resolveCurrentJiacn()),taskId));
+                new cn.jia.agent.service.AgentTaskExecutionGrantService.Scope(resolveCurrentTenantId(),resolveCurrentClientId(),resolveCurrentJiacn()),taskId));
         return result;
     }
 
@@ -1336,7 +1360,7 @@ public class AgentServiceImpl implements AgentService {
             String taskId, AgentTaskAssignDTO request, boolean automatic) {
         List<String> requestedAgentIds = normalizeAssignAgentIds(request);
         require(!requestedAgentIds.isEmpty(), "agentId is required");
-        String tenantId = SINGLE_TENANT_ID;
+        String tenantId = resolveCurrentTenantId();
         String clientId = resolveCurrentClientId();
         String ownerJiacn = resolveCurrentJiacn();
         AgentTaskMetaEntity meta = requireTask(taskId);
@@ -1410,7 +1434,7 @@ public class AgentServiceImpl implements AgentService {
         getTask(taskId); // Owner-scoped task read before enumerating any candidate.
         String clientId = resolveCurrentClientId();
         String ownerJiacn = resolveCurrentJiacn();
-        var scope = new cn.jia.agent.service.AgentTaskExecutionGrantService.Scope(SINGLE_TENANT_ID, clientId, ownerJiacn);
+        var scope = new cn.jia.agent.service.AgentTaskExecutionGrantService.Scope(resolveCurrentTenantId(), clientId, ownerJiacn);
         var candidates = new java.util.LinkedHashMap<String, AgentTaskAssigneeCandidateDTO>();
         var cursors = new java.util.HashSet<String>();
         String after = null;
@@ -1652,7 +1676,7 @@ public class AgentServiceImpl implements AgentService {
     }
 
     private void requireExactTeamScope(String tenantId, String clientId) {
-        if (!SINGLE_TENANT_ID.equals(tenantId)
+        if (!Objects.equals(resolveCurrentTenantId(), tenantId)
                 || !isExactAuthenticatedScopeId(clientId)
                 || !Objects.equals(clientId, resolveCurrentClientId())) {
             throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN,
@@ -1673,7 +1697,7 @@ public class AgentServiceImpl implements AgentService {
     @Transactional(rollbackFor = Exception.class)
     public AgentTaskDTO autoAssignTask(String taskId, AgentTaskAssignDTO request) {
         requireTask(taskId);
-        requireLegacyAssignmentAllowed(SINGLE_TENANT_ID, resolveCurrentClientId(), taskId, true, 1);
+        requireLegacyAssignmentAllowed(resolveCurrentTenantId(), resolveCurrentClientId(), taskId, true, 1);
         AgentTaskDTO task = getTask(taskId);
         // Legacy team auto-assignment remains owner-only; external single-agent delegation
         // uses point-and-deliberate, which persists the shared execution grant.
@@ -1697,7 +1721,7 @@ public class AgentServiceImpl implements AgentService {
     public AgentTaskDTO reportTask(String taskId, AgentTaskReportDTO request) {
         require(request != null, "report request is required");
         require(!StringUtil.isBlank(request.getAgentId()), "agentId is required");
-        String tenantId = SINGLE_TENANT_ID;
+        String tenantId = resolveCurrentTenantId();
         String clientId = resolveCurrentClientId();
         String ownerJiacn = resolveCurrentJiacn();
         requireTask(taskId);
@@ -1760,7 +1784,7 @@ public class AgentServiceImpl implements AgentService {
                 TaskEventPayload.ContentDigest.fromUtf8(request.getContent());
         // Validate the bounded code before any business row is written.
         TaskEventPayload.builder().put(TaskEventPayload.Key.NOTE_TYPE, noteType);
-        String tenantId = SINGLE_TENANT_ID;
+        String tenantId = resolveCurrentTenantId();
         String clientId = resolveCurrentClientId();
         String ownerJiacn = resolveCurrentJiacn();
         return mutationTransaction.executeWithLockedTaskRootInOwnerScope(
@@ -1788,7 +1812,7 @@ public class AgentServiceImpl implements AgentService {
     public List<AgentTaskNoteDTO> listTaskNotes(String taskId) {
         requireTask(taskId);
         return agentTaskNoteDao.findByTaskIdInOwnerScope(
-                        SINGLE_TENANT_ID, resolveCurrentClientId(), resolveCurrentJiacn(), taskId).stream()
+                        resolveCurrentTenantId(), resolveCurrentClientId(), resolveCurrentJiacn(), taskId).stream()
                 .map(this::toTaskNoteDTO)
                 .toList();
     }
@@ -1796,7 +1820,7 @@ public class AgentServiceImpl implements AgentService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public AgentTaskDTO archiveTask(String taskId) {
-        String tenantId = SINGLE_TENANT_ID;
+        String tenantId = resolveCurrentTenantId();
         String clientId = resolveCurrentClientId();
         String ownerJiacn = resolveCurrentJiacn();
         return mutationTransaction.executeWithLockedTaskRootInOwnerScope(
@@ -1924,7 +1948,7 @@ public class AgentServiceImpl implements AgentService {
 
     private void requireExactTaskOwnerScope(
             String tenantId, String clientId, String ownerJiacn, String taskId) {
-        require(SINGLE_TENANT_ID.equals(tenantId), "tenantId must be 0");
+        require(isExactAuthenticatedScopeId(tenantId), "tenantId is invalid");
         require(isExactAuthenticatedScopeId(clientId), "clientId is invalid");
         require(isExactAuthenticatedScopeId(ownerJiacn), "ownerJiacn is invalid");
         require(isExactStoredText(taskId, 100), "taskId is invalid");
@@ -1935,9 +1959,9 @@ public class AgentServiceImpl implements AgentService {
         String ownerJiacn = resolveCurrentJiacn();
         AgentTaskMetaEntity task = Optional.ofNullable(
                 agentTaskMetaDao.findByTaskIdInOwnerScope(
-                        SINGLE_TENANT_ID, clientId, ownerJiacn, taskId)).orElseThrow(() ->
+                        resolveCurrentTenantId(), clientId, ownerJiacn, taskId)).orElseThrow(() ->
                 new AgentBizException(AgentErrorConstants.TASK_NOT_FOUND, "Task not found"));
-        requireOwnedTaskProjection(task, SINGLE_TENANT_ID, clientId, ownerJiacn, taskId);
+        requireOwnedTaskProjection(task, resolveCurrentTenantId(), clientId, ownerJiacn, taskId);
         return task;
     }
 
@@ -2080,29 +2104,16 @@ public class AgentServiceImpl implements AgentService {
         return entity;
     }
 
-    private AgentPersonaEntity requirePersona(String personaCode) {
-        AgentPersonaEntity persona = agentPersonaDao.findByCode(personaCode);
-        if (persona == null) {
-            throw new AgentBizException(AgentErrorConstants.AGENT_NOT_FOUND, "Agent persona not found");
-        }
-        return persona;
-    }
-
     private List<AgentPersonaEntity> loadPersonaCatalog(
             AgentHostedBindingTransaction.Scope scope) {
         List<AgentPersonaEntity> scopedRows = Optional.ofNullable(
                 agentPersonaDao.findCatalogProjection(scope.tenantId(), scope.clientId()))
                 .orElseGet(Collections::emptyList);
-        if ("0".equals(scope.tenantId())) {
-            return scopedRows;
-        }
         LinkedHashMap<String, AgentPersonaEntity> merged = new LinkedHashMap<>();
         for (AgentPersonaEntity builtin : WaterMarginPersonaCatalog.publicPersonas()) {
             merged.put(builtin.getPersonaCode(), builtin);
         }
         for (AgentPersonaEntity scoped : scopedRows) {
-            requireScopedCatalogPersona(scope.tenantId(), scope.clientId(),
-                    scoped == null ? null : scoped.getPersonaCode(), scoped);
             merged.put(scoped.getPersonaCode(), scoped);
         }
         return List.copyOf(merged.values());
@@ -2110,13 +2121,10 @@ public class AgentServiceImpl implements AgentService {
 
     private AgentPersonaEntity requireScopedPersona(
             String tenantId, String clientId, String personaCode) {
-        if ("0".equals(tenantId)) {
-            return requirePersona(personaCode);
-        }
         AgentPersonaEntity scoped = agentPersonaDao.findCatalogPersona(
                 tenantId, clientId, personaCode);
         if (scoped != null) {
-            return requireScopedCatalogPersona(tenantId, clientId, personaCode, scoped);
+            return scoped;
         }
         AgentPersonaEntity builtin = WaterMarginPersonaCatalog.publicPersona(personaCode);
         if (builtin == null) {
@@ -2124,20 +2132,6 @@ public class AgentServiceImpl implements AgentService {
                     "Agent persona not found");
         }
         return builtin;
-    }
-
-    private AgentPersonaEntity requireScopedCatalogPersona(
-            String tenantId, String clientId, String personaCode, AgentPersonaEntity persona) {
-        if (persona == null || !Boolean.TRUE.equals(persona.getActive())
-                || !Objects.equals(personaCode, persona.getPersonaCode())
-                || !("0".equals(persona.getTenantId())
-                        || Objects.equals(tenantId, persona.getTenantId()))
-                || !(persona.getClientId() == null
-                        || Objects.equals(clientId, persona.getClientId()))) {
-            throw personaCatalogForbidden(
-                    "Persona metadata escaped the byte-exact requested scope");
-        }
-        return persona;
     }
 
     private void requireOwnedAgent(AgentRuntimeEntity agent) {
@@ -2329,10 +2323,8 @@ public class AgentServiceImpl implements AgentService {
     }
 
     private AgentRuntimeDTO buildSongjiangDTO(String tenantId) {
-        AgentPersonaEntity persona = SINGLE_TENANT_ID.equals(tenantId)
-                ? agentPersonaDao.findByCode(AgentConstants.BUILTIN_SONGJIANG_PERSONA_CODE)
-                : WaterMarginPersonaCatalog.publicPersona(
-                        AgentConstants.BUILTIN_SONGJIANG_PERSONA_CODE);
+        AgentPersonaEntity persona = WaterMarginPersonaCatalog.publicPersona(
+                AgentConstants.BUILTIN_SONGJIANG_PERSONA_CODE);
         return buildSongjiangDTO(persona);
     }
 
@@ -2371,23 +2363,12 @@ public class AgentServiceImpl implements AgentService {
     }
 
     private AgentPersonaEntity resolveRuntimePersona(AgentRuntimeEntity entity) {
-        boolean nonlegacySystemProjection = entity != null
-                && AgentConstants.BUILTIN_SONGJIANG_AGENT_ID.equals(entity.getAgentId())
-                && !SINGLE_TENANT_ID.equals(resolveCurrentTenantId());
-        if (nonlegacySystemProjection || !usesLegacyTaskStats(entity)) {
-            return WaterMarginPersonaCatalog.publicPersona(entity.getPersonaCode());
+        if (entity == null) return null;
+        if (AgentConstants.BUILTIN_SONGJIANG_AGENT_ID.equals(entity.getAgentId())) {
+            return WaterMarginPersonaCatalog.publicPersona(AgentConstants.BUILTIN_SONGJIANG_PERSONA_CODE);
         }
-        return resolvePersona(entity);
-    }
-
-    private AgentPersonaEntity resolvePersona(AgentRuntimeEntity entity) {
-        if (!StringUtil.isBlank(entity.getPersonaCode())) {
-            AgentPersonaEntity persona = agentPersonaDao.findByCode(entity.getPersonaCode());
-            if (persona != null) {
-                return persona;
-            }
-        }
-        return StringUtil.isBlank(entity.getPersonaName()) ? null : agentPersonaDao.findByName(entity.getPersonaName());
+        if (StringUtil.isBlank(entity.getPersonaCode())) return null;
+        return requireScopedPersona(entity.getTenantId(), entity.getClientId(), entity.getPersonaCode());
     }
 
     private boolean usesLegacyTaskStats(AgentRuntimeEntity entity) {
@@ -2396,14 +2377,12 @@ public class AgentServiceImpl implements AgentService {
     }
 
     private RuntimeBatchEnrichment loadRuntimeBatchEnrichment(
-            List<AgentRuntimeEntity> runtimes, boolean includeSongjiang, String tenantId) {
+            List<AgentRuntimeEntity> runtimes, boolean includeSongjiang, String tenantId, String clientId) {
         if (runtimes.isEmpty() && !includeSongjiang) {
             return RuntimeBatchEnrichment.empty();
         }
-        List<AgentPersonaEntity> personas = SINGLE_TENANT_ID.equals(tenantId)
-                ? Optional.ofNullable(agentPersonaDao.findRuntimeProjection())
-                        .orElseGet(Collections::emptyList)
-                : WaterMarginPersonaCatalog.publicPersonas();
+        List<AgentPersonaEntity> personas = loadPersonaCatalog(
+                new AgentHostedBindingTransaction.Scope(tenantId, clientId, resolveCurrentJiacn()));
         LinkedHashMap<String, AgentPersonaEntity> personasByCode = new LinkedHashMap<>();
         LinkedHashMap<String, AgentPersonaEntity> personasByName = new LinkedHashMap<>();
         for (AgentPersonaEntity persona : personas) {
@@ -3313,8 +3292,13 @@ public class AgentServiceImpl implements AgentService {
         if (normalized.isEmpty()) {
             return Optional.empty();
         }
-        AgentPersonaEntity byCode = agentPersonaDao.findByCode(normalized);
-        AgentPersonaEntity byName = agentPersonaDao.findByName(normalized);
+        List<AgentPersonaEntity> catalog = listPersonas();
+        AgentPersonaEntity byCode = catalog.stream()
+                .filter(persona -> normalized.equals(persona.getPersonaCode())).findFirst().orElse(null);
+        List<AgentPersonaEntity> byNames = catalog.stream()
+                .filter(persona -> normalized.equals(persona.getName())).toList();
+        if (byNames.size() > 1) return Optional.empty();
+        AgentPersonaEntity byName = byNames.isEmpty() ? null : byNames.getFirst();
         if (byCode != null && byName != null
                 && !Objects.equals(byCode.getPersonaCode(), byName.getPersonaCode())) {
             log.warn("Skipping optional dialogue scene publication because persona identity is ambiguous");
@@ -3527,13 +3511,8 @@ public class AgentServiceImpl implements AgentService {
     }
 
     private String resolveCurrentTenantId() {
-        EsContext context = EsContextHolder.getContext();
-        String tenantId = context == null ? null : context.getTenantId();
-        if (StringUtil.isBlank(tenantId) || !tenantId.equals(tenantId.strip())
-                || tenantId.length() > 50 || tenantId.chars().anyMatch(Character::isISOControl)) {
-            return SINGLE_TENANT_ID;
-        }
-        return tenantId;
+        // Business tenancy belongs to this process, never to mutable user/thread-local input.
+        return processTenant.businessTenantId();
     }
 
     private String resolveCurrentClientId() {

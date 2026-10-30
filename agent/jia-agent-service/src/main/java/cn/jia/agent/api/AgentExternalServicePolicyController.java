@@ -72,7 +72,7 @@ public final class AgentExternalServicePolicyController {
         var claims=jwt.getToken().getClaims();
         Object owner=claims.get("jiacn"),client=claims.get("client_id");
         try {
-            if(!"0".equals(TenantClaimPolicy.resolve(claims,"0")) || !(owner instanceof String o)
+            if(!"0".equals(TenantClaimPolicy.resolve(claims)) || !(owner instanceof String o)
                     || !(client instanceof String c) || !exact(o) || "0".equals(o) || !exact(c)) throw unauthorized();
             return new AgentTaskExecutionGrantService.Scope("0",c,o);
         } catch(IllegalArgumentException invalid) { throw unauthorized(); }

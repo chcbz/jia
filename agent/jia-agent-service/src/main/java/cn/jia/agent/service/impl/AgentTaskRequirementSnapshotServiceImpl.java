@@ -40,7 +40,7 @@ public final class AgentTaskRequirementSnapshotServiceImpl implements AgentTaskR
 
     @Override public Snapshot captureOnCreate(AgentTaskExecutionGrantService.Scope scope, String taskId,
             String title, String description) {
-        validScope(scope,taskId);
+        validReadScope(scope,taskId);
         writeTransaction();
         if (latest(scope,taskId,true)!=null) throw new IllegalStateException("Requirement snapshot already exists");
         return insert(scope,taskId,1,0,"CREATE",title,description,"CREATE");
@@ -171,7 +171,7 @@ public final class AgentTaskRequirementSnapshotServiceImpl implements AgentTaskR
     }
 
     @Override public Snapshot requireCurrent(AgentTaskExecutionGrantService.Scope scope,String taskId,long revision) {
-        validScope(scope,taskId);
+        validReadScope(scope,taskId);
         if (revision<1) throw new IllegalArgumentException("requirement revision invalid");
         Snapshot current=latest(scope,taskId,true);
         if (current==null || current.revision()!=revision)

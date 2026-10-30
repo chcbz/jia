@@ -308,7 +308,8 @@ public class AgentExecutionReportServiceImpl implements AgentExecutionReportServ
     }
 
     private static void validateScope(RuntimeScope scope) {
-        if (scope == null || !"0".equals(scope.tenantId())) invalid();
+        if (scope == null) invalid();
+        exact(scope.tenantId(), 50);
         exact(scope.clientId(), 50);
         exact(scope.ownerJiacn(), 50);
         exact(scope.agentId(), 100);

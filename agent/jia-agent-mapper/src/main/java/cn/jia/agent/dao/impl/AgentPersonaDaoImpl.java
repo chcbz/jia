@@ -4,42 +4,25 @@ import cn.jia.agent.cache.AgentPersonaCatalogCache;
 import cn.jia.agent.dao.AgentPersonaDao;
 import cn.jia.agent.entity.AgentPersonaEntity;
 import cn.jia.agent.mapper.AgentPersonaMapper;
-import cn.jia.common.dao.BaseDaoImpl;
-import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import cn.jia.agent.common.WaterMarginPersonaCatalog;
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import jakarta.inject.Inject;
 import jakarta.inject.Named;
 
-import java.io.Serializable;
-import java.util.Collection;
+import java.util.LinkedHashMap;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import java.util.List;
 import java.util.Objects;
 
 @Named
-public class AgentPersonaDaoImpl extends BaseDaoImpl<AgentPersonaMapper, AgentPersonaEntity> implements AgentPersonaDao {
+public class AgentPersonaDaoImpl implements AgentPersonaDao {
+    @Inject
+    private AgentPersonaMapper baseMapper;
     private AgentPersonaCatalogCache catalogCache = new AgentPersonaCatalogCache();
 
     @Inject
     public void setCatalogCache(AgentPersonaCatalogCache catalogCache) {
         this.catalogCache = Objects.requireNonNull(catalogCache, "catalogCache");
-    }
-
-    @Override
-    public AgentPersonaEntity findByName(String name) {
-        return baseMapper.selectOne(new LambdaQueryWrapper<AgentPersonaEntity>()
-                .eq(AgentPersonaEntity::getName, name)
-                .last("limit 1"));
-    }
-
-    @Override
-    public AgentPersonaEntity findByCode(String personaCode) {
-        return baseMapper.selectOne(new LambdaQueryWrapper<AgentPersonaEntity>()
-                .eq(AgentPersonaEntity::getPersonaCode, personaCode)
-                .last("limit 1"));
-    }
-
-    @Override
-    public List<AgentPersonaEntity> findRuntimeProjection() {
-        return baseMapper.selectRuntimeProjection();
     }
 
     @Override
@@ -57,52 +40,77 @@ public class AgentPersonaDaoImpl extends BaseDaoImpl<AgentPersonaMapper, AgentPe
     }
 
     @Override
-    public int insert(AgentPersonaEntity entity) {
-        int changed = super.insert(entity);
+    public AgentPersonaEntity findCatalogPersonaByName(String tenantId, String clientId, String name) {
+        requireExact(name, "name");
+        // Scope/active filtering belongs to the catalog SQL, not a second per-row pass here.
+        List<AgentPersonaEntity> privateRows = findCatalogProjection(tenantId, clientId);
+        var byCode = new LinkedHashMap<String, AgentPersonaEntity>();
+        for (var builtin : WaterMarginPersonaCatalog.publicPersonas()) byCode.put(builtin.getPersonaCode(), builtin);
+        for (var row : privateRows) byCode.put(row.getPersonaCode(), row);
+        var matches = byCode.values().stream().filter(row -> name.equals(row.getName())).toList();
+        if (matches.size() > 1) throw new IllegalArgumentException("Ambiguous persona name in requested scope");
+        return matches.isEmpty() ? null : matches.getFirst();
+    }
+
+    @Override
+    public int insertPrivate(String tenantId, String clientId, AgentPersonaEntity entity) {
+        requirePrivateWrite(tenantId, clientId, entity);
+        if (entity.getId() != null) throw new IllegalArgumentException("New persona must not choose an existing ID");
+        entity.init4Creation();
+        int changed = baseMapper.insert(entity);
         invalidateIfChanged(changed > 0);
         return changed;
     }
 
     @Override
-    public boolean insertBatch(Collection<AgentPersonaEntity> entityList, int batchSize) {
-        boolean changed = super.insertBatch(entityList, batchSize);
-        invalidateIfChanged(changed);
-        return changed;
-    }
-
-    @Override
-    public boolean insertOrUpdateBatch(Collection<AgentPersonaEntity> entityList, int batchSize) {
-        boolean changed = super.insertOrUpdateBatch(entityList, batchSize);
-        invalidateIfChanged(changed);
-        return changed;
-    }
-
-    @Override
-    public int deleteById(Serializable id) {
-        int changed = super.deleteById(id);
+    public int updatePrivate(String tenantId, String clientId, AgentPersonaEntity entity) {
+        requirePrivateWrite(tenantId, clientId, entity);
+        var scope = privateRow(tenantId, clientId, entity.getId());
+        entity.init4Update();
+        int changed = baseMapper.update(entity, scope);
         invalidateIfChanged(changed > 0);
         return changed;
     }
 
     @Override
-    public int deleteBatchIds(Collection<?> idList) {
-        int changed = super.deleteBatchIds(idList);
+    public int deletePrivate(String tenantId, String clientId, Long id) {
+        var scope = privateRow(tenantId, clientId, id);
+        requireSynchronizationIfTransactional();
+        int changed = baseMapper.delete(scope);
         invalidateIfChanged(changed > 0);
         return changed;
     }
 
-    @Override
-    public int updateById(AgentPersonaEntity entity) {
-        int changed = super.updateById(entity);
-        invalidateIfChanged(changed > 0);
-        return changed;
+    private void requirePrivateWrite(String tenantId, String clientId, AgentPersonaEntity entity) {
+        requireExact(tenantId, "tenantId");
+        if (clientId != null) requireExact(clientId, "clientId");
+        if (entity == null || !tenantId.equals(entity.getTenantId())
+                || !Objects.equals(clientId, entity.getClientId())) {
+            throw new IllegalArgumentException("Explicit private persona scope must match its row");
+        }
+        requireExact(entity.getPersonaCode(), "personaCode");
+        requireExact(entity.getName(), "name");
+        requireSynchronizationIfTransactional();
     }
 
-    @Override
-    public boolean updateBatchById(Collection<AgentPersonaEntity> entityList, int batchSize) {
-        boolean changed = super.updateBatchById(entityList, batchSize);
-        invalidateIfChanged(changed);
-        return changed;
+    private QueryWrapper<AgentPersonaEntity> privateRow(String tenantId, String clientId, Long id) {
+        requireExact(tenantId, "tenantId");
+        if (clientId != null) requireExact(clientId, "clientId");
+        if (id == null || id <= 0) throw new IllegalArgumentException("Persona ID is required");
+        var query = new QueryWrapper<AgentPersonaEntity>().eq("id", id).eq("tenant_id", tenantId)
+                .apply("CAST(tenant_id AS BINARY) = CAST({0} AS BINARY)", tenantId)
+                .apply("OCTET_LENGTH(tenant_id) = OCTET_LENGTH({0})", tenantId);
+        if (clientId == null) return query.isNull("client_id");
+        return query.eq("client_id", clientId)
+                .apply("CAST(client_id AS BINARY) = CAST({0} AS BINARY)", clientId)
+                .apply("OCTET_LENGTH(client_id) = OCTET_LENGTH({0})", clientId);
+    }
+
+    private void requireSynchronizationIfTransactional() {
+        if (TransactionSynchronizationManager.isActualTransactionActive()
+                && !TransactionSynchronizationManager.isSynchronizationActive()) {
+            throw new IllegalStateException("Persona mutation requires transaction synchronization");
+        }
     }
 
     private void invalidateIfChanged(boolean changed) {

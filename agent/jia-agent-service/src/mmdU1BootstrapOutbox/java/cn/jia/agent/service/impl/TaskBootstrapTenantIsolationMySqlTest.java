@@ -1,6 +1,9 @@
 package cn.jia.agent.service.impl;
 
 import cn.jia.agent.config.AgentTaskBountyBootstrapOutboxSchemaInitializer;
+import cn.jia.agent.config.AgentTaskCreationOperationSchemaInitializer;
+import cn.jia.agent.dao.impl.AgentTaskCreationOperationDaoImpl;
+import cn.jia.agent.mapper.AgentTaskCreationOperationMapper;
 import cn.jia.agent.config.AgentTaskRequirementSnapshotSchemaInitializer;
 import cn.jia.agent.dao.impl.AgentTaskBountyBootstrapOutboxDaoImpl;
 import cn.jia.agent.entity.AgentTaskBountyBootstrapClaimDTO;
@@ -37,6 +40,7 @@ class TaskBootstrapTenantIsolationMySqlTest extends SkillManagementMySqlFixture 
     private DataSourceTransactionManager transactions;
     private AgentTaskBountyBootstrapOutboxDaoImpl dao;
     private AgentTaskRequirementSnapshotServiceImpl snapshots;
+    private AgentTaskCreationOperationDaoImpl operations;
     private final ObjectMapper json = new ObjectMapper();
 
     @BeforeEach void setUp() throws Exception {
@@ -47,14 +51,18 @@ class TaskBootstrapTenantIsolationMySqlTest extends SkillManagementMySqlFixture 
         transactions = new DataSourceTransactionManager(source);
         script("db/agent-task-bounty-bootstrap-outbox-v1.sql");
         script("db/agent-task-requirement-snapshot-v1.sql");
+        script("db/agent-task-creation-operation-v1.sql");
         var configuration = new MybatisConfiguration();
         configuration.setMapUnderscoreToCamelCase(true);
         configuration.addMapper(AgentTaskBountyBootstrapOutboxMapper.class);
+        configuration.addMapper(AgentTaskCreationOperationMapper.class);
         var global = new GlobalConfig(); global.setBanner(false);
         var factory = new MybatisSqlSessionFactoryBean();
         factory.setDataSource(source); factory.setConfiguration(configuration); factory.setGlobalConfig(global);
         dao = new AgentTaskBountyBootstrapOutboxDaoImpl(new SqlSessionTemplate(
                 Objects.requireNonNull(factory.getObject())).getMapper(AgentTaskBountyBootstrapOutboxMapper.class));
+        operations = new AgentTaskCreationOperationDaoImpl(new SqlSessionTemplate(
+                Objects.requireNonNull(factory.getObject())).getMapper(AgentTaskCreationOperationMapper.class));
         snapshots = new AgentTaskRequirementSnapshotServiceImpl(jdbc, mock(AgentTaskMutationTransaction.class));
     }
 
@@ -63,12 +71,64 @@ class TaskBootstrapTenantIsolationMySqlTest extends SkillManagementMySqlFixture 
             admin.execute("DROP DATABASE `" + database + "`");
     }
 
+    @Test void creationReceiptsAndSnapshotsUseExactTenantAndRollbackTogether() {
+        var transaction = new TransactionTemplate(transactions);
+        for (String tenant : List.of("0", "1")) {
+            transaction.executeWithoutResult(status -> {
+                var row = operations.reserveAndLock(tenant,"client","owner","same-key",
+                        "a".repeat(64),"same-operation","[]",1000);
+                assertEquals(tenant,row.getTenantId());
+                var snapshot = snapshots.captureOnCreate(scope(tenant,"client"),"same-task",
+                        "title-" + tenant,"original-" + tenant);
+                assertEquals(tenant,snapshot.tenantId());
+                assertTrue(operations.complete(tenant,"client","owner","same-operation",
+                        "a".repeat(64),"[]","same-task",1,1001));
+            });
+        }
+        for (String tenant : List.of("0", "1")) {
+            var row = operations.find(tenant,"client","owner","same-key");
+            assertEquals("COMMITTED",row.getOperationState());
+            transaction.executeWithoutResult(status -> assertEquals("title-" + tenant,
+                    snapshots.requireCurrent(scope(tenant,"client"),"same-task",1).title()));
+        }
+        assertNull(operations.find("1","other-client","owner","same-key"));
+        assertNull(operations.find("1","client","other-owner","same-key"));
+        assertFalse(operations.complete("1","client","owner","same-operation",
+                "b".repeat(64),"[]","wrong-task",1,1002));
+        assertThrows(IllegalStateException.class, () -> transaction.executeWithoutResult(status -> {
+            operations.reserveAndLock("1","client","owner","rollback-key",
+                    "a".repeat(64),"rollback-operation","[]",1000);
+            snapshots.captureOnCreate(scope("1","client"),"rollback-task","title","description");
+            throw new IllegalStateException("rollback both facts");
+        }));
+        assertNull(operations.find("1","client","owner","rollback-key"));
+        assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM agent_task_requirement_snapshot "
+                + "WHERE task_id='rollback-task'",Integer.class));
+        assertEquals(2,jdbc.queryForObject("SELECT COUNT(*) FROM agent_task_creation_operation",Integer.class));
+    }
+
+    @Test void creationConstraintMigrationIsRepeatableAndKeepsOwnerProtection() throws Exception {
+        jdbc.execute("ALTER TABLE agent_task_creation_operation DROP CHECK chk_atco_scope, "
+                + "ADD CONSTRAINT chk_atco_scope CHECK (tenant_id='0' AND owner_jiacn<>'0')");
+        operations.reserveAndLock("0","client","owner","preserved-key",
+                "a".repeat(64),"preserved-operation","[]",1000);
+        var before = jdbc.queryForList("SELECT * FROM agent_task_creation_operation");
+        script("db/agent-task-creation-tenant-20261030.sql");
+        script("db/agent-task-creation-tenant-20261030.sql");
+        new AgentTaskCreationOperationSchemaInitializer(jdbc).afterPropertiesSet();
+        assertEquals(before,jdbc.queryForList("SELECT * FROM agent_task_creation_operation"));
+        operations.reserveAndLock("1","client","owner","preserved-key",
+                "a".repeat(64),"preserved-operation","[]",1000);
+        assertThrows(org.springframework.dao.DataAccessException.class, () -> jdbc.update(
+                "UPDATE agent_task_creation_operation SET owner_jiacn='0' WHERE tenant_id='1'"));
+    }
+
     @Test void processDiscoveryDoesNotClaimOrQuarantineAnotherTenantOrClient() throws Exception {
         seed("1", "client", "gray", "same-action"); // First in claim order, must not consume production capacity.
         seed("1", "other-client", "other", "same-action");
         seed("0", "client", "production", "same-action");
-        var production = service(false, null, null);
-        var gray = service(true, "1", "client");
+        var production = service("0", null);
+        var gray = service("1", "client");
         var beforeGray = row("gray"); var beforeOther = row("other");
         var claimed = production.claimNextAvailable("production-worker", 1000);
         assertNotNull(claimed); assertEquals("production", claimed.bootstrapId());
@@ -100,7 +160,7 @@ class TaskBootstrapTenantIsolationMySqlTest extends SkillManagementMySqlFixture 
         seed("1", "client", "gray", "action");
         var before = row("production");
         jdbc.update("DELETE FROM agent_task_requirement_snapshot WHERE tenant_id='1'");
-        assertNull(service(true,"1","client").claimNextAvailable("gray-worker",1000));
+        assertNull(service("1","client").claimNextAvailable("gray-worker",1000));
         assertEquals("DEAD", row("gray").get("status"));
         assertEquals(before,row("production"));
         assertThrows(IllegalArgumentException.class, () -> dao.findClaimableAvailableForUpdate(" 1",null,1000));
@@ -197,9 +257,9 @@ class TaskBootstrapTenantIsolationMySqlTest extends SkillManagementMySqlFixture 
                 () -> new AgentTaskRequirementSnapshotSchemaInitializer(jdbc).afterPropertiesSet());
     }
 
-    private AgentTaskBountyBootstrapOutboxServiceImpl service(boolean fixed,String tenant,String client) {
+    private AgentTaskBountyBootstrapOutboxServiceImpl service(String tenant,String client) {
         return new AgentTaskBountyBootstrapOutboxServiceImpl(dao,json,transactions,snapshots,
-                new FixedTenantAdmissionPolicy("0",fixed,tenant,client));
+                new FixedTenantAdmissionPolicy(tenant, client));
     }
     private static AgentTaskExecutionGrantService.Scope scope(String tenant,String client) {
         return new AgentTaskExecutionGrantService.Scope(tenant,client,"owner");

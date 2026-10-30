@@ -120,7 +120,7 @@ public class PersonalWorkspaceExecutionController {
         Map<String,Object> claims = jwt.getToken().getClaims(); Object owner=claims.get("jiacn"), client=claims.get("client_id");
         if (!(owner instanceof String o) || !(client instanceof String c) || !valid(o,50) || !valid(c,50) || "0".equals(o)) throw new RequestFailure();
         final String tenant;
-        try { tenant = cn.jia.core.security.TenantClaimPolicy.resolve(claims, "0"); }
+        try { tenant = cn.jia.core.security.TenantClaimPolicy.resolve(claims); }
         catch (IllegalArgumentException invalid) { throw new ScopeFailure(); }
         return new PersonalWorkspaceExecutionService.OwnerScope(tenant, c, o);
     }

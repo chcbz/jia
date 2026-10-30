@@ -1,5 +1,6 @@
 package cn.jia.agent.skill;
 import cn.jia.agent.dao.AgentCommandRecoveryDao;
+import cn.jia.core.security.FixedTenantAdmissionPolicy;
 import cn.jia.agent.mapper.AgentSkillInstallRecoveryMapper;
 import cn.jia.agent.entity.*;
 import cn.jia.agent.service.impl.AgentCommandCanonicalCodec;
@@ -22,15 +23,17 @@ public final class SkillInstallRecoveryService {
     private final EconomyPreviewGate preview;
     private final SkillInstallDispatchService dispatch;
     private final TransactionTemplate tx;
+    private final FixedTenantAdmissionPolicy processScope;
     public SkillInstallRecoveryService(AgentSkillInstallRecoveryMapper mapper,AgentCommandRecoveryDao dao,
-            EconomyPreviewGate preview,SkillInstallDispatchService dispatch,PlatformTransactionManager manager) {
+            EconomyPreviewGate preview,SkillInstallDispatchService dispatch,PlatformTransactionManager manager,
+            FixedTenantAdmissionPolicy processScope) {
         this.mapper=mapper;this.dao=dao;this.preview=preview;this.dispatch=dispatch;tx=new TransactionTemplate(manager);
+        this.processScope=processScope;
     }
     @Scheduled(fixedDelayString="${economy.skill.marketplace.recovery-delay-ms:5000}")
     public void recover() {
         long now=System.currentTimeMillis();
-        for(var candidate:mapper.candidates(now,now-60000)) {
-            if(!preview.allows(candidate.getTenantId(),candidate.getClientId())) continue;
+        for(var candidate:mapper.candidates(processScope.businessTenantId(),processScope.clientId(),now,now-60000)) {
             try { recover(candidate,now); } catch(RuntimeException rejected) {
                 org.slf4j.LoggerFactory.getLogger(getClass()).warn("Skill same-wire WS recovery deferred: {}",
                         rejected instanceof SkillMarketplaceException known ? known.code() : "SKILL_STATE_UNAVAILABLE");
@@ -38,7 +41,7 @@ public final class SkillInstallRecoveryService {
         }
     }
     void recover(AgentCommandDeliveryEntity hint,long now) {
-        require("0".equals(hint.getTenantId()) && preview.allows(hint.getTenantId(),hint.getClientId()),403,"SKILL_DELIVERY_FENCED");
+        if(!preview.allows(hint.getTenantId(),hint.getClientId())) return;
         String owner="skill-ws-"+UUID.randomUUID();
         Claim claim=tx.execute(s->{
             var d=dao.lockDelivery(hint.getTenantId(),hint.getClientId(),hint.getId());

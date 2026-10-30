@@ -30,7 +30,8 @@ class NativeBountyCurrentBindingTest {
         AccountSecurityService accounts=mock(AccountSecurityService.class);
         AgentTaskEventsGate gate=new AgentTaskEventsGate(new AgentTaskEventsProperties(false,List.of()));
         AgentRuntimeAuthenticationService service=new AgentRuntimeAuthenticationService(rows,installations,
-                mock(AgentIdentityRegistryDao.class),identities,accounts,gate);
+                mock(AgentIdentityRegistryDao.class),identities,accounts,gate,
+                new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null));
         String digest="1".repeat(64),agent="agt_"+"a".repeat(32),installationId="rti_"+"b".repeat(32);
         String verifier="urs1:"+digest+":9:3";
         var installation=new AgentRuntimeV1InstallationEntity().setInstallationId(installationId)

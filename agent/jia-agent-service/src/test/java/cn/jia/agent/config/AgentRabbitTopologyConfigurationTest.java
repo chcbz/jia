@@ -39,6 +39,8 @@ class AgentRabbitTopologyConfigurationTest {
     };
 
     private static final ApplicationContextRunner RUNNER = new ApplicationContextRunner()
+                .withBean(cn.jia.core.security.FixedTenantAdmissionPolicy.class,
+                        () -> new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null))
             .withUserConfiguration(AgentRabbitSafetyConfiguration.class);
 
     @Test

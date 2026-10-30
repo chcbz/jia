@@ -364,8 +364,10 @@ class AgentTaskMetaScopedDaoTest {
         verify(mapper).countSearchByStatusExactInScope(
                 "0", "client-a", "owner-a", "planning", "reward", null);
 
+        dao.countSearch("1", "client-a", "owner-a", null, null, null, null);
+        verify(mapper).countSearchExactInScope("1", "client-a", "owner-a", null, null, null, null);
         assertThrows(IllegalArgumentException.class,
-                () -> dao.countSearch("tenant-a", "client-a", "owner-a", null, null, null, null));
+                () -> dao.countSearch("1 ", "client-a", "owner-a", null, null, null, null));
         assertThrows(IllegalArgumentException.class,
                 () -> dao.searchPage("0", "client-a", "0", null, null, null, 0, 20, null));
         assertThrows(IllegalArgumentException.class,
@@ -383,14 +385,17 @@ class AgentTaskMetaScopedDaoTest {
     }
 
     @Test
-    void ownerRootObservationForwardsExactTenantButReservationRemainsClosed() throws Exception {
+    void ownerRootObservationAndReservationForwardExactTenant() throws Exception {
         var mapper=mock(AgentTaskMetaMapper.class); var dao=dao(mapper);
         dao.findByTaskIdForUpdateInOwnerScope("1","client","owner","task");
         verify(mapper).findExactByOwnerTaskScopeForUpdate("1","client","owner","task");
         for (String tenant:List.of(" 1","1 ","x".repeat(51)))
             assertThrows(IllegalArgumentException.class,()->dao.findByTaskIdForUpdateInOwnerScope(tenant,"client","owner","task"));
         assertThrows(IllegalArgumentException.class,()->dao.findByTaskIdForUpdateInOwnerScope("1","client","0","task"));
-        assertThrows(IllegalArgumentException.class,()->dao.reserveOpenTaskRootInOwnerScope("1","client","owner","task",1000));
+        dao.reserveOpenTaskRootInOwnerScope("1","client","owner","task",1000);
+        verify(mapper).reserveOpenTaskRootInOwnerScope("1","client","owner","task",1000);
+        dao.rekeyReservedTaskRootInOwnerScope("1","client","owner","task","42",1001);
+        verify(mapper).rekeyReservedTaskRootInOwnerScope("1","client","owner","task","42",1001);
     }
 
     private void assertExactOpenGuard(String sql) {

@@ -8,7 +8,7 @@ import static org.mockito.Mockito.*;
 class ChatDeliberationOutboxAuthorityTest {
     final ChatDeliberationDao dao=mock(ChatDeliberationDao.class);
     final ChatDispatchAuthorityService authority=mock(ChatDispatchAuthorityService.class);
-    final ChatDeliberationOutboxService service=new ChatDeliberationOutboxService(dao);
+    final ChatDeliberationOutboxService service=new ChatDeliberationOutboxService(dao, new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null));
     final ChatTurnEntity turn=new ChatTurnEntity().setOwnerJiacn("A").setTargetAgentId("agent-B");
     final ChatDispatchOutboxEntity row=new ChatDispatchOutboxEntity().setDispatchId("dispatch")
             .setEventId("event").setStatus("AWAITING_ACK").setPayloadJson("{\"targetAgentId\":\"agent-B\"}");

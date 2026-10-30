@@ -28,6 +28,24 @@ class AgentTaskCollaborationAccessServiceImplTest extends BaseMockTest {
     AgentTaskMemberDao memberDao;
 
     @Test
+    void grayMembershipRequiresExactTaskAndMemberTenantIncludingLockedReads() {
+        var grayTask = task(); grayTask.setTenantId("1");
+        var grayMember = member("working"); grayMember.setTenantId("1");
+        when(taskMetaDao.findByTaskIdInOwnerScope("1", CLIENT, OWNER, TASK)).thenReturn(grayTask);
+        when(taskMetaDao.findByTaskIdForUpdateInOwnerScope("1", CLIENT, OWNER, TASK)).thenReturn(grayTask);
+        when(memberDao.findByTaskAndAgent("1", CLIENT, OWNER, TASK, AGENT)).thenReturn(grayMember);
+        when(memberDao.findByTaskAndAgentForUpdate("1", CLIENT, OWNER, TASK, AGENT)).thenReturn(grayMember);
+        assertEquals(AgentTaskAccessLevel.READ_WRITE, service().resolveMemberAccess("1", CLIENT, OWNER, TASK, AGENT));
+        assertEquals(AgentTaskAccessLevel.READ_WRITE, service().resolveMemberAccessForUpdate("1", CLIENT, OWNER, TASK, AGENT));
+        grayMember.setTenantId("0");
+        assertEquals(AgentTaskAccessLevel.NONE, service().resolveMemberAccess("1", CLIENT, OWNER, TASK, AGENT));
+        assertEquals(AgentTaskAccessLevel.NONE, service().resolveMemberAccessForUpdate("1", CLIENT, OWNER, TASK, AGENT));
+        grayMember.setTenantId("1"); grayTask.setTenantId("0");
+        assertEquals(AgentTaskAccessLevel.NONE, service().resolveMemberAccess("1", CLIENT, OWNER, TASK, AGENT));
+        assertThrows(IllegalArgumentException.class, () -> service().resolveMemberAccess("1", CLIENT, "0", TASK, AGENT));
+    }
+
+    @Test
     void statusPolicyExplicitlySeparatesActiveHistoricalAndFormerMembers() {
         AgentTaskCollaborationAccessServiceImpl service = service();
         when(taskMetaDao.findByTaskIdInOwnerScope(TENANT, CLIENT, OWNER, TASK))
@@ -63,9 +81,8 @@ class AgentTaskCollaborationAccessServiceImplTest extends BaseMockTest {
         assertEquals(AgentTaskAccessLevel.NONE,
                 service.resolveMemberAccess(TENANT, CLIENT, OWNER, TASK, AGENT));
 
-        // Strict single-tenant owner scope already rejects this input in baseline 1e911.
-        assertThrows(IllegalArgumentException.class,
-                () -> service.resolveMemberAccess("tenant-b", CLIENT, OWNER, TASK, AGENT));
+        assertEquals(AgentTaskAccessLevel.NONE,
+                service.resolveMemberAccess("tenant-b", CLIENT, OWNER, TASK, AGENT));
         assertEquals(AgentTaskAccessLevel.NONE,
                 service.resolveMemberAccess(TENANT, "client-b", OWNER, TASK, AGENT));
         assertEquals(AgentTaskAccessLevel.NONE,

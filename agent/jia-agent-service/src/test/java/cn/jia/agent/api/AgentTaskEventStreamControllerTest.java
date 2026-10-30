@@ -200,7 +200,7 @@ class AgentTaskEventStreamControllerTest extends BaseMockTest {
                 .andExpect(status().isUnauthorized())
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
 
-        Jwt invalid = Jwt.withTokenValue("token")
+        Jwt invalid = Jwt.withTokenValue("token").claim("tenant_id", "0")
                 .header("alg", "none")
                 .claim("jiacn", OWNER)
                 .claim("client_id", 123)
@@ -624,7 +624,7 @@ class AgentTaskEventStreamControllerTest extends BaseMockTest {
     }
 
     private static JwtAuthenticationToken authenticateClaims(Object jiacn, Object clientId) {
-        Jwt jwt = Jwt.withTokenValue("token")
+        Jwt jwt = Jwt.withTokenValue("token").claim("tenant_id", "0")
                 .header("alg", "none")
                 .claim("jiacn", jiacn)
                 .claim("client_id", clientId)

@@ -144,7 +144,7 @@ class AgentTaskContextPackHttpActorTest {
     }
 
     private static JwtAuthenticationToken requester() {
-        Jwt jwt = Jwt.withTokenValue("validated-by-server-test-token").header("alg", "none")
+        Jwt jwt = Jwt.withTokenValue("validated-by-server-test-token").claim("tenant_id", "0").header("alg", "none")
                 .claim("jiacn", OWNER).claim("client_id", CLIENT).subject(REQUESTER)
                 .issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(60)).build();
         return new JwtAuthenticationToken(jwt, List.of(), REQUESTER);

@@ -773,9 +773,7 @@ public class AgentTaskArtifactOutcomeServiceImpl implements AgentTaskArtifactOut
 
     private static void requireScope(
             String tenantId, String clientId, String ownerJiacn, String taskId, String actorAgentId) {
-        if (!"0".equals(tenantId)) {
-            throw invalid("tenantId must be the single-tenant scope");
-        }
+        requireId(tenantId, "tenantId", 50);
         requireId(clientId, "clientId", 50);
         requireId(ownerJiacn, "ownerJiacn", 50);
         if ("0".equals(ownerJiacn)) {

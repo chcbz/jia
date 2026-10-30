@@ -135,7 +135,7 @@ class ConversationDeliverableControllerTest {
 
     private static JwtAuthenticationToken jwt(
             Object owner, Object client, String subject, String authenticationName) {
-        Jwt token = Jwt.withTokenValue("fixture-token").header("alg", "none")
+        Jwt token = Jwt.withTokenValue("fixture-token").claim("tenant_id", "0").header("alg", "none")
                 .subject(subject).claim("jiacn", owner).claim("client_id", client).build();
         return new JwtAuthenticationToken(token, List.of(), authenticationName);
     }

@@ -219,7 +219,7 @@ public final class AgentTaskProviderCostConsentController {
                 || !(authentication instanceof JwtAuthenticationToken jwt)) throw new AuthenticationFailure(false);
         Map<String,Object> claims=jwt.getToken().getClaims(); Object owner=claims.get("jiacn");
         Object client=claims.get("client_id"); final String tenant;
-        try { tenant=TenantClaimPolicy.resolve(claims,"0"); }
+        try { tenant=TenantClaimPolicy.resolve(claims); }
         catch (IllegalArgumentException invalid) { throw new AuthenticationFailure(true); }
         EsContext context=EsContextHolder.getContext();
         if (!(owner instanceof String ownerJiacn) || !(client instanceof String clientId)

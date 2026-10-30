@@ -21,6 +21,9 @@ class AgentOutboxRelayMapperContractTest {
             assertTrue(sql.contains("eligibleat asc") || sql.contains("lease_until asc"), methodName);
             assertTrue(sql.contains("id asc"), methodName);
             assertTrue(sql.contains("limit #{limit}"), methodName);
+            assertTrue(sql.contains("o.tenant_id=#{tenantid}"), methodName);
+            assertTrue(sql.contains("cast(o.tenant_id as binary)=cast(#{tenantid} as binary)"), methodName);
+            assertTrue(sql.contains("octet_length(o.tenant_id)=octet_length(#{tenantid})"), methodName);
             assertFalse(sql.contains("for update"), methodName);
             assertFalse(sql.contains("skip locked"), methodName);
         }

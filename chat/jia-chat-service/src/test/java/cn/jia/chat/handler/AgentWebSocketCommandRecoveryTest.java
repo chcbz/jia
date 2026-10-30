@@ -158,6 +158,8 @@ class AgentWebSocketCommandRecoveryTest extends BaseMockTest {
     @Test
     void flagOnSpringContextWiresActualHandlerDispatcherWithoutConstructorCycle() {
         new ApplicationContextRunner()
+                .withBean(cn.jia.core.security.FixedTenantAdmissionPolicy.class,
+                        () -> new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null))
                 .withPropertyValues("agent.rabbit-dispatch.enabled=true")
                 .withBean(ChatClient.class, () -> mock(ChatClient.class))
                 .withBean(AgentService.class, () -> mock(AgentService.class))

@@ -80,7 +80,7 @@ class AgentBountySettlementControllerTest {
     void authenticatedJwtMissingClientScopeIsForbiddenBeforePreviewLookup() {
         AgentBountySettlementController controller = new AgentBountySettlementController(
                 new StaticListableBeanFactory().getBeanProvider(FundedBountySettlementService.class));
-        Jwt missingScope = Jwt.withTokenValue("fixture").header("alg", "none").subject("sub").claim("jiacn", "Tenant").build();
+        Jwt missingScope = Jwt.withTokenValue("fixture").claim("tenant_id", "0").header("alg", "none").subject("sub").claim("jiacn", "Tenant").build();
         JwtAuthenticationToken authentication = new JwtAuthenticationToken(missingScope, List.of());
         assertTrue(authentication.isAuthenticated());
         FundedBountyException failure = assertThrows(FundedBountyException.class,
@@ -90,7 +90,7 @@ class AgentBountySettlementControllerTest {
     }
 
     private static JwtAuthenticationToken jwt(String subject, String tenant, String client) {
-        JwtAuthenticationToken authentication = new JwtAuthenticationToken(Jwt.withTokenValue("fixture").header("alg", "none")
+        JwtAuthenticationToken authentication = new JwtAuthenticationToken(Jwt.withTokenValue("fixture").claim("tenant_id", "0").header("alg", "none")
                 .subject(subject).claim("jiacn", tenant).claim("client_id", client).build(), List.of());
         assertTrue(authentication.isAuthenticated());
         return authentication;

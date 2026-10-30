@@ -48,10 +48,22 @@ class AgentCommandMailboxServiceImplTest {
         when(transactions.getTransaction(any())).thenReturn(new SimpleTransactionStatus());
         when(accessService.resolveMemberAccessForUpdate(any(), any(), any(), any(), any()))
                 .thenReturn(AgentTaskAccessLevel.READ_WRITE);
-        when(agentService.requireApiKeyOwnedAgentForUpdate(any(), any(), any()))
-                .thenAnswer(invocation -> runtime(invocation.getArgument(2)));
+        when(agentService.requireApiKeyOwnedAgentForUpdate(any(), any(), any(), any()))
+                .thenAnswer(invocation -> runtime(invocation.getArgument(3)));
         service = new AgentCommandMailboxServiceImpl(
                 mapper, agentService, accessService, transactions, () -> NOW);
+    }
+
+    @Test
+    void grayMailboxKeepsTenantThroughMemberRuntimeLocksAndProjection() {
+        when(mapper.selectMailboxPage("1", "client-a", "owner-a", "caller-a", "target-a", "task-1",
+                null, null, 3, false, NOW)).thenReturn(List.of());
+        assertEquals(List.of(), service.query("1", "client-a", "owner-a", "caller-a", "target-a", "task-1",
+                null, null, 2, false).entries());
+        verify(accessService).resolveMemberAccessForUpdate("1", "client-a", "owner-a", "task-1", "caller-a");
+        verify(agentService).requireApiKeyOwnedAgentForUpdate("1", "client-a", "owner-a", "caller-a");
+        verify(agentService).requireApiKeyOwnedAgentForUpdate("1", "client-a", "owner-a", "target-a");
+        verify(agentService, never()).requireApiKeyOwnedAgentForUpdate(any(), any(), any());
     }
 
     @Test
@@ -79,9 +91,9 @@ class AgentCommandMailboxServiceImplTest {
         order.verify(accessService).resolveMemberAccessForUpdate(
                 "0", "client-a", "owner-a", "task-1", "target-a");
         order.verify(agentService).requireApiKeyOwnedAgentForUpdate(
-                "client-a", "owner-a", "caller-a");
+                "0", "client-a", "owner-a", "caller-a");
         order.verify(agentService).requireApiKeyOwnedAgentForUpdate(
-                "client-a", "owner-a", "target-a");
+                "0", "client-a", "owner-a", "target-a");
         order.verify(mapper).selectMailboxPage(
                 "0", "client-a", "owner-a", "caller-a", "target-a", "task-1",
                 null, null, 3, false, NOW);

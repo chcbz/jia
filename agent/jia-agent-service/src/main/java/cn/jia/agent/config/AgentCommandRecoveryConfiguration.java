@@ -9,6 +9,7 @@ import cn.jia.agent.service.impl.AgentCommandAckServiceImpl;
 import cn.jia.agent.service.impl.AgentCommandReissueCoordinator;
 import cn.jia.agent.service.impl.AgentCommandReissueServiceImpl;
 import org.springframework.beans.factory.annotation.Qualifier;
+import cn.jia.core.security.FixedTenantAdmissionPolicy;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -30,9 +31,11 @@ public class AgentCommandRecoveryConfiguration {
             AgentRawCommandDispatcher dispatcher,
             @Qualifier("agentRabbitTopologyManifest") AgentRabbitTopologyManifest manifest,
             @Qualifier("agentCommandReissueSettings") AgentCommandReissueSettings settings,
-            PlatformTransactionManager transactionManager) {
+            PlatformTransactionManager transactionManager,
+            FixedTenantAdmissionPolicy admission) {
         return new AgentCommandReissueServiceImpl(
-                dao, gate, dispatcher, manifest, settings.sentAckTimeoutMillis(), transactionManager);
+                dao, gate, dispatcher, manifest, settings.sentAckTimeoutMillis(), transactionManager,
+                admission.businessTenantId());
     }
 
     @Bean

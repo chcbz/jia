@@ -32,7 +32,7 @@ class EconomyOperationWireTest {
         var mvc = org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(new AgentHostingRentController(service))
                 .setControllerAdvice(new cn.jia.core.config.ApiEnvelopeAdvice(),new cn.jia.core.config.ApiRequestEnvelopeAdvice(),new cn.jia.core.config.ExceptionHandlerAdvice())
                 .addFilters(new cn.jia.core.filter.RequestIdFilter()).build();
-        var jwt = org.springframework.security.oauth2.jwt.Jwt.withTokenValue("fixture").header("alg","none")
+        var jwt = org.springframework.security.oauth2.jwt.Jwt.withTokenValue("fixture").claim("tenant_id", "0").header("alg","none")
                 .subject("owner").claim("jiacn","owner").claim("client_id","client").build();
         var auth = new org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken(jwt);
         auth.setAuthenticated(true);

@@ -40,24 +40,6 @@ public final class AgentTaskBountyBootstrapOutboxServiceImpl
     @Inject
     public AgentTaskBountyBootstrapOutboxServiceImpl(AgentTaskBountyBootstrapOutboxDao outbox,
             ObjectMapper json, PlatformTransactionManager transactionManager,
-            AgentTaskRequirementSnapshotService requirementSnapshots,
-            @org.springframework.beans.factory.annotation.Value("${cyf.security.legacy-single-tenant-id:0}") String legacyTenantId,
-            @org.springframework.beans.factory.annotation.Value("${cyf.security.fixed-tenant.enabled:false}") boolean fixedEnabled,
-            @org.springframework.beans.factory.annotation.Value("${cyf.security.fixed-tenant.tenant-id:}") String tenantId,
-            @org.springframework.beans.factory.annotation.Value("${cyf.security.fixed-tenant.client-id:}") String clientId) {
-        this(outbox, json, transactionManager, requirementSnapshots,
-                new FixedTenantAdmissionPolicy(legacyTenantId, fixedEnabled, tenantId, clientId));
-    }
-
-    public AgentTaskBountyBootstrapOutboxServiceImpl(AgentTaskBountyBootstrapOutboxDao outbox,
-            ObjectMapper json, PlatformTransactionManager transactionManager,
-            AgentTaskRequirementSnapshotService requirementSnapshots) {
-        this(outbox, json, transactionManager, requirementSnapshots,
-                new FixedTenantAdmissionPolicy("0", false, null, null));
-    }
-
-    public AgentTaskBountyBootstrapOutboxServiceImpl(AgentTaskBountyBootstrapOutboxDao outbox,
-            ObjectMapper json, PlatformTransactionManager transactionManager,
             AgentTaskRequirementSnapshotService requirementSnapshots, FixedTenantAdmissionPolicy processScope) {
         this.processScope = Objects.requireNonNull(processScope, "processScope");
         this.outbox = Objects.requireNonNull(outbox, "outbox");

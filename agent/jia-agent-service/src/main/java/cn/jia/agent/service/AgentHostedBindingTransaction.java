@@ -71,7 +71,7 @@ public class AgentHostedBindingTransaction {
     @Transactional(rollbackFor = Exception.class)
     public Prepared prepareHosted(Scope scope, String personaCode) {
         scope.requireLegacyHostedTenant();
-        AgentPersonaEntity persona = requirePersona(personaCode);
+        AgentPersonaEntity persona = requirePersona(scope, personaCode);
         if (Boolean.TRUE.equals(persona.getSystemAgent())) fail(AgentErrorConstants.PERSONA_NOT_BINDABLE, "System persona cannot be bound");
         AgentPersonaBindingEntity binding = bindingDao.findActiveByTenantClientAndPersonaForUpdate(
                 scope.tenantId(), scope.clientId(), persona.getPersonaCode());
@@ -172,13 +172,13 @@ public class AgentHostedBindingTransaction {
                 ? runtimePlaceholder(hosted.getCanonicalAgentId()) : toDto(runtime);
         String apiKey = AgentHostedProfileState.SUSPENDED.equals(hosted.getLifecycleState())
                 ? null : requireApiKeyMaterial(hosted);
-        return prepared(hosted, runtimeDto, requirePersona(hosted.getPersonaCode()), apiKey);
+        return prepared(hosted, runtimeDto, requirePersona(scope, hosted.getPersonaCode()), apiKey);
     }
 
     @Transactional(rollbackFor = Exception.class)
     public Prepared prepareUnbind(Scope scope, String personaCode) {
         scope.requireLegacyHostedTenant();
-        AgentPersonaEntity persona = requirePersona(personaCode);
+        AgentPersonaEntity persona = requirePersona(scope, personaCode);
         AgentPersonaBindingEntity binding = bindingDao.findExactActiveByScopeAndPersonaForUpdate(
                 scope.tenantId(), scope.clientId(), scope.ownerJiacn(), persona.getPersonaCode());
         if (binding == null) fail(AgentErrorConstants.AGENT_FORBIDDEN, "Persona is not bound to current owner");
@@ -433,8 +433,11 @@ public class AgentHostedBindingTransaction {
         if (service == null) fail(AgentErrorConstants.AGENT_ERROR, "ApiKeyService is unavailable");
         return service;
     }
-    private AgentPersonaEntity requirePersona(String code) {
-        AgentPersonaEntity p = personaDao.findByCode(code);
+    private AgentPersonaEntity requirePersona(Scope scope, String code) {
+        AgentPersonaEntity p = personaDao.findCatalogPersona(scope.tenantId(), scope.clientId(), code);
+        if (p == null) {
+            p = cn.jia.agent.common.WaterMarginPersonaCatalog.publicPersona(code);
+        }
         if (p == null) fail(AgentErrorConstants.AGENT_NOT_FOUND, "Persona not found");
         return p;
     }

@@ -20,9 +20,7 @@ public class AgentTaskContextPackDaoImpl implements AgentTaskContextPackDao {
     @Override
     public AgentTaskContextPackTaskSourceRow findTaskDescription(
             String tenantId, String clientId, String ownerJiacn, String taskId) {
-        if (!"0".equals(tenantId)) {
-            throw new IllegalArgumentException("tenantId must be literal 0");
-        }
+        TaskCollaborationDaoSupport.requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
         requireId(clientId, "clientId", 50);
         requireId(ownerJiacn, "ownerJiacn", 50);
         if ("0".equals(ownerJiacn)) {

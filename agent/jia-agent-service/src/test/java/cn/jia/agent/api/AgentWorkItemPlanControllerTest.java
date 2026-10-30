@@ -73,7 +73,7 @@ class AgentWorkItemPlanControllerTest {
                 .andExpect(status().isUnauthorized())
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
 
-        Jwt malformed = Jwt.withTokenValue("token").header("alg", "none")
+        Jwt malformed = Jwt.withTokenValue("token").claim("tenant_id", "0").header("alg", "none")
                 .claim("jiacn", "tenant-a").claim("client_id", 7)
                 .issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(60)).build();
         mvc.perform(post("/agent/tasks/%20bad%20/work-item-plans/suggest")
@@ -224,7 +224,7 @@ class AgentWorkItemPlanControllerTest {
     }
 
     private JwtAuthenticationToken jwt(String tenant, String client) {
-        Jwt jwt = Jwt.withTokenValue("token").header("alg", "none")
+        Jwt jwt = Jwt.withTokenValue("token").claim("tenant_id", "0").header("alg", "none")
                 .claim("jiacn", tenant).claim("client_id", client)
                 .issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(60)).build();
         return new JwtAuthenticationToken(jwt, List.of());

@@ -86,7 +86,7 @@ public class SkillManagementWireMySqlTest extends SkillManagementTransactionTest
         var http=MockMvcBuilders.standaloneSetup(controller)
             .setControllerAdvice(new ApiEnvelopeAdvice(),new ApiRequestEnvelopeAdvice(),new ExceptionHandlerAdvice())
             .setMessageConverters(converters.toArray(HttpMessageConverter[]::new)).addFilters(new RequestIdFilter()).build();
-        var user=new JwtAuthenticationToken(Jwt.withTokenValue("synthetic").header("alg","none").subject(ACTOR.actorId())
+        var user=new JwtAuthenticationToken(Jwt.withTokenValue("synthetic").claim("tenant_id", ACTOR.tenantId()).header("alg","none").subject(ACTOR.actorId())
             .claim("client_id",ACTOR.clientId()).claim("jiacn",ACTOR.ownerJiacn()).build(),List.of());
         var request=quoteData();
         var quote=http.perform(post("/agent/skill-orders/quotes").principal(user).contentType(MediaType.APPLICATION_JSON)

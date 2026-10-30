@@ -1,6 +1,7 @@
 package cn.jia.task.api;
 
 import cn.jia.core.entity.JsonRequest;
+import cn.jia.core.security.FixedTenantAdmissionPolicy;
 
 import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.entity.JsonRequestPage;
@@ -28,6 +29,9 @@ public class TaskController {
     @Autowired
     private TaskService taskService;
 
+    @Autowired
+    private FixedTenantAdmissionPolicy tenantPolicy;
+
     /**
      * 获取任务信息
      *
@@ -51,6 +55,7 @@ public class TaskController {
     @RequestMapping(value = "/create", method = RequestMethod.POST)
     public Object create(@RequestBody JsonRequest<TaskPlanEntity> protocolRequest) {
         TaskPlanEntity task = protocolRequest == null ? null : protocolRequest.data();
+        task.setTenantId(tenantPolicy.businessTenantId());
         task.setClientId(EsContextHolder.getContext().getClientId());
         taskService.create(task);
         return JsonResult.success();
@@ -66,6 +71,7 @@ public class TaskController {
     @RequestMapping(value = "/update", method = RequestMethod.POST)
     public Object update(@RequestBody JsonRequest<TaskPlanEntity> protocolRequest) {
         TaskPlanEntity task = protocolRequest == null ? null : protocolRequest.data();
+        task.setTenantId(tenantPolicy.businessTenantId());
         taskService.update(task);
         return JsonResult.success();
     }
@@ -106,6 +112,7 @@ public class TaskController {
     public Object search(@RequestBody JsonRequest<JsonRequestPage<TaskPlanVO>> protocolRequest) {
         JsonRequestPage<TaskPlanVO> page = protocolRequest == null ? null : protocolRequest.data();
         TaskPlanVO plan = Optional.ofNullable(page.getSearch()).orElse(new TaskPlanVO());
+        plan.setTenantId(tenantPolicy.businessTenantId());
         plan.setClientId(EsContextHolder.getContext().getClientId());
         PageInfo<TaskPlanEntity> taskList = taskService.findPage(plan, page.getPageNum(), page.getPageSize(), page.getOrderBy());
         JsonResultPage<TaskPlanEntity> result = JsonResultPage.page(taskList.getList(), taskList.getPageNum(), taskList.getPageSize(), taskList.getTotal());
@@ -121,6 +128,7 @@ public class TaskController {
     public Object searchItem(@RequestBody JsonRequest<JsonRequestPage<TaskDetailVO>> protocolRequest) {
         JsonRequestPage<TaskDetailVO> page = protocolRequest == null ? null : protocolRequest.data();
         TaskDetailVO item = Optional.ofNullable(page.getSearch()).orElse(new TaskDetailVO());
+        item.setTenantId(tenantPolicy.businessTenantId());
         PageInfo<TaskDetailEntity> taskList = taskService.findItems(item, page.getPageNum(), page.getPageSize(), page.getOrderBy());
         JsonResultPage<TaskDetailEntity> result = JsonResultPage.page(taskList.getList(), taskList.getPageNum(), taskList.getPageSize(), taskList.getTotal());
         return result;

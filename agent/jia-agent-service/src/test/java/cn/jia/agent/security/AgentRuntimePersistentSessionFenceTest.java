@@ -33,7 +33,7 @@ class AgentRuntimePersistentSessionFenceTest {
         registry = mock(AgentIdentityRegistryDao.class); identities = mock(AgentIdentityService.class);
         accounts = mock(AccountSecurityService.class);
         var gate = mock(AgentTaskEventsGate.class);
-        auth = new AgentRuntimeAuthenticationService(rows, installations, registry, identities, accounts, gate);
+        auth = new AgentRuntimeAuthenticationService(rows, installations, registry, identities, accounts, gate, new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null));
         installation = new AgentRuntimeV1InstallationEntity().setId(1L).setInstallationId(ID)
                 .setCanonicalAgentId(AGENT).setStatus("ACTIVE");
         installation.setTenantId("0"); installation.setClientId("client");
@@ -178,7 +178,7 @@ class AgentRuntimePersistentSessionFenceTest {
     }
     @Test void persistentProofSurvivesApiRestartWithoutPretendingChannelReadiness() {
         var session = auth.issue(installation, request("host", "boot"), 1000);
-        var restart = new AgentRuntimeAuthenticationService(rows, installations, registry, identities, accounts, mock(AgentTaskEventsGate.class));
+        var restart = new AgentRuntimeAuthenticationService(rows, installations, registry, identities, accounts, mock(AgentTaskEventsGate.class), new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null));
         var proof = restart.verify(headers(session));
         assertEquals("owner", proof.scope().ownerJiacn());
         assertEquals(AGENT, restart.authenticate(headers(session), false).getName());

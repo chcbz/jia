@@ -83,6 +83,7 @@ def bf08FormalFlowSourceSet = sourceSets.create('bf08FormalFlow') {
         srcDir 'src/test/java'
         include 'cn/jia/chat/handler/AgentWebSocketHandlerTest.java'
         include 'cn/jia/chat/api/ChatControllerTest.java'
+        include 'cn/jia/chat/service/TenantScopeResolverTest.java'
     }
     resources.srcDir 'src/test/resources'
     compileClasspath += sourceSets.main.output

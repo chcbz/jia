@@ -102,7 +102,7 @@ class HostingRentHttpTest {
     void forgedClaimsMissingKeyDuplicateKeysAndNumericMoneyCannotReachApplication() throws Exception {
         mvc.perform(post(BIND).contentType(MediaType.APPLICATION_JSON).content(confirmation()))
                 .andExpect(status().isUnauthorized());
-        var fallback = new JwtAuthenticationToken(Jwt.withTokenValue("fixture").header("alg", "none")
+        var fallback = new JwtAuthenticationToken(Jwt.withTokenValue("fixture").claim("tenant_id", "0").header("alg", "none")
                 .claim("uid", "Login-A").claim("jiacn", "Tenant-A").claim("client_id", "Client-A").build(), List.of());
         mvc.perform(post(BIND).principal(fallback).header("Idempotency-Key", KEY)
                         .contentType(MediaType.APPLICATION_JSON).content(confirmation())).andExpect(status().isForbidden());
@@ -167,7 +167,7 @@ class HostingRentHttpTest {
                 + "\",\"quoteId\":\"hrq-test\",\"expectedPlanVersion\":\"1\",\"expectedAmountMicro\":\"1000000000\",\"expectedPeriodSeconds\":\"2592000\"}";
     }
     private JwtAuthenticationToken jwt() {
-        return new JwtAuthenticationToken(Jwt.withTokenValue("fixture").header("alg", "none").subject("Login-A")
+        return new JwtAuthenticationToken(Jwt.withTokenValue("fixture").claim("tenant_id", "0").header("alg", "none").subject("Login-A")
                 .claim("jiacn", "Tenant-A").claim("client_id", "Client-A").build(), List.of());
     }
 }

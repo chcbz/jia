@@ -31,6 +31,8 @@ class AgentCommandInboxConfigurationTest {
     @Test
     void disabledConsumeRegistersNoInboxServiceAndNeedsNoDao() {
         new ApplicationContextRunner()
+                .withBean(cn.jia.core.security.FixedTenantAdmissionPolicy.class,
+                        () -> new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null))
                 .withUserConfiguration(
                         AgentRabbitSafetyConfiguration.class,
                         AgentCommandInboxConfiguration.class)
@@ -53,6 +55,8 @@ class AgentCommandInboxConfigurationTest {
                 }
         }) {
             new ApplicationContextRunner()
+                .withBean(cn.jia.core.security.FixedTenantAdmissionPolicy.class,
+                        () -> new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null))
                     .withUserConfiguration(
                             AgentRabbitSafetyConfiguration.class,
                             AgentCommandInboxConfiguration.class)
@@ -71,6 +75,8 @@ class AgentCommandInboxConfigurationTest {
     @Test
     void enabledConsumeRegistersExactlyOneRealService() {
         new ApplicationContextRunner()
+                .withBean(cn.jia.core.security.FixedTenantAdmissionPolicy.class,
+                        () -> new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null))
                 .withUserConfiguration(
                         AgentRabbitSafetyConfiguration.class,
                         AgentCommandInboxConfiguration.class,
@@ -86,6 +92,8 @@ class AgentCommandInboxConfigurationTest {
     @Test
     void enabledConsumeWithMissingWiringFailsStartupRatherThanNoOp() {
         new ApplicationContextRunner()
+                .withBean(cn.jia.core.security.FixedTenantAdmissionPolicy.class,
+                        () -> new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null))
                 .withUserConfiguration(
                         AgentRabbitSafetyConfiguration.class,
                         AgentCommandInboxConfiguration.class)
@@ -102,6 +110,8 @@ class AgentCommandInboxConfigurationTest {
         String[] values = ENABLED.clone();
         values[2] = "agent.rabbit-consume.enabled=on";
         new ApplicationContextRunner()
+                .withBean(cn.jia.core.security.FixedTenantAdmissionPolicy.class,
+                        () -> new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null))
                 .withUserConfiguration(
                         AgentRabbitSafetyConfiguration.class,
                         AgentCommandInboxConfiguration.class,

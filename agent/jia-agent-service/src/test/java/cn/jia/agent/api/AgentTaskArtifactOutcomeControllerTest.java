@@ -287,7 +287,7 @@ class AgentTaskArtifactOutcomeControllerTest {
 
     private static JwtAuthenticationToken jwtClaims(
             Object tenant, Object client, Object subject, String authenticationName) {
-        Jwt.Builder builder = Jwt.withTokenValue("token").header("alg", "none")
+        Jwt.Builder builder = Jwt.withTokenValue("token").claim("tenant_id", "0").header("alg", "none")
                 .issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(60));
         if (tenant != null) {
             builder.claim("jiacn", tenant);

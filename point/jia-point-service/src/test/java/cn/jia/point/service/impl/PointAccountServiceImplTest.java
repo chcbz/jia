@@ -11,7 +11,7 @@ import static org.mockito.Mockito.*;
 class PointAccountServiceImplTest {
     @Test void defaultPartitionIsProductionAndReadsDoNotCreateAccounts() {
         var dao = mock(PointAccountDao.class);
-        var service = new PointAccountServiceImpl(dao, "0", false, "");
+        var service = new PointAccountServiceImpl(dao, new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null));
         assertEquals("0", service.tenantId());
         assertEquals(0, service.balance("alice"));
         verify(dao).balance("0", "alice");
@@ -21,7 +21,7 @@ class PointAccountServiceImplTest {
     @Test void greyNeverFallsBackToProductionBalance() {
         var dao = mock(PointAccountDao.class);
         when(dao.balance("0", "alice")).thenReturn(999);
-        var service = new PointAccountServiceImpl(dao, "0", true, "1");
+        var service = new PointAccountServiceImpl(dao, new cn.jia.core.security.FixedTenantAdmissionPolicy("1", null));
         assertEquals("1", service.tenantId());
         assertEquals(0, service.balance("alice"));
         verify(dao, never()).balance("0", "alice");
@@ -31,7 +31,7 @@ class PointAccountServiceImplTest {
         var dao = mock(PointAccountDao.class);
         when(dao.lockBalance("1", "alice")).thenReturn(20);
         when(dao.change(eq("1"), eq("alice"), eq(-5), anyLong())).thenReturn(1);
-        var service = new PointAccountServiceImpl(dao, "0", true, "1");
+        var service = new PointAccountServiceImpl(dao, new cn.jia.core.security.FixedTenantAdmissionPolicy("1", null));
         assertEquals(15, service.changeAndGet("alice", -5));
         var order = inOrder(dao);
         order.verify(dao).ensureAccount(eq("1"), eq("alice"), anyLong());
@@ -43,7 +43,7 @@ class PointAccountServiceImplTest {
     @Test void insufficientPointsPreserveExistingBusinessErrorAndNeverUpdate() {
         var dao = mock(PointAccountDao.class);
         when(dao.lockBalance("0", "alice")).thenReturn(4);
-        var service = new PointAccountServiceImpl(dao, "0", false, "");
+        var service = new PointAccountServiceImpl(dao, new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null));
         assertThrows(EsRuntimeException.class, () -> service.changeAndGet("alice", -5));
         verify(dao, never()).change(anyString(), anyString(), anyInt(), anyLong());
     }
@@ -51,7 +51,7 @@ class PointAccountServiceImplTest {
     @Test void signedIntOverflowCannotWrapIntoAValidBalance() {
         var dao = mock(PointAccountDao.class);
         when(dao.lockBalance("0", "alice")).thenReturn(Integer.MAX_VALUE);
-        var service = new PointAccountServiceImpl(dao, "0", false, "");
+        var service = new PointAccountServiceImpl(dao, new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null));
         assertThrows(IllegalArgumentException.class, () -> service.changeAndGet("alice", 1));
         verify(dao, never()).change(anyString(), anyString(), anyInt(), anyLong());
     }
@@ -59,14 +59,14 @@ class PointAccountServiceImplTest {
     @Test void minimumIntDebitCannotBecomeACredit() {
         var dao = mock(PointAccountDao.class);
         when(dao.lockBalance("0", "alice")).thenReturn(1);
-        var service = new PointAccountServiceImpl(dao, "0", false, "");
+        var service = new PointAccountServiceImpl(dao, new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null));
         assertThrows(EsRuntimeException.class, () -> service.changeAndGet("alice", Integer.MIN_VALUE));
         verify(dao, never()).change(anyString(), anyString(), anyInt(), anyLong());
     }
 
     @Test void corruptOrMissingLockedRowAndFailedUpdateDoNotReportSuccess() {
         var dao = mock(PointAccountDao.class);
-        var service = new PointAccountServiceImpl(dao, "0", false, "");
+        var service = new PointAccountServiceImpl(dao, new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null));
         assertThrows(IllegalStateException.class, () -> service.changeAndGet("alice", 1));
         when(dao.lockBalance("0", "alice")).thenReturn(-1);
         assertThrows(IllegalStateException.class, () -> service.changeAndGet("alice", 1));
@@ -76,18 +76,12 @@ class PointAccountServiceImplTest {
 
     @Test void invalidIdentityFailsBeforeAnyDatabaseAccess() {
         var dao = mock(PointAccountDao.class);
-        var service = new PointAccountServiceImpl(dao, "0", false, "");
+        var service = new PointAccountServiceImpl(dao, new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null));
         for (String invalid : new String[]{"", " alice", "alice ", "ali\nce", "x".repeat(51), "\uD800"}) {
             assertThrows(IllegalArgumentException.class, () -> service.balance(invalid));
         }
         assertThrows(IllegalArgumentException.class, () -> service.changeAndGet(null, 1));
         verifyNoInteractions(dao);
-    }
-
-    @Test void invalidFixedProcessConfigurationFailsAtConstruction() {
-        var dao = mock(PointAccountDao.class);
-        assertThrows(IllegalArgumentException.class, () -> new PointAccountServiceImpl(dao, "0", true, ""));
-        assertThrows(IllegalArgumentException.class, () -> new PointAccountServiceImpl(dao, "0", true, "0"));
     }
 
     @Test void mutationRequiresTheBusinessTransactionForBalanceAndLedgerAtomicity() throws Exception {
@@ -102,7 +96,7 @@ class PointAccountServiceImplTest {
     @Test void participantLocksAreSortedAndDeduplicatedBeforeBusinessChecks() {
         var dao = mock(PointAccountDao.class);
         when(dao.lockBalance(anyString(), anyString())).thenReturn(0);
-        var service = new PointAccountServiceImpl(dao, "0", true, "1");
+        var service = new PointAccountServiceImpl(dao, new cn.jia.core.security.FixedTenantAdmissionPolicy("1", null));
         service.lockAccounts(java.util.List.of("bob", "alice", "bob"));
         var order = inOrder(dao);
         order.verify(dao).ensureAccount(eq("1"), eq("alice"), anyLong());
@@ -114,7 +108,7 @@ class PointAccountServiceImplTest {
 
     @Test void invalidParticipantIsRejectedBeforeAnyLocks() {
         var dao = mock(PointAccountDao.class);
-        var service = new PointAccountServiceImpl(dao, "0", false, "");
+        var service = new PointAccountServiceImpl(dao, new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null));
         assertThrows(IllegalArgumentException.class,
                 () -> service.lockAccounts(java.util.List.of("alice", " bad")));
         verifyNoInteractions(dao);
@@ -132,7 +126,7 @@ class PointAccountServiceImplTest {
         var dao = mock(PointAccountDao.class);
         when(dao.balances(eq("1"), anyCollection())).thenReturn(java.util.List.of(
                 new cn.jia.point.entity.PointAccountBalance("alice", 7)));
-        var service = new PointAccountServiceImpl(dao, "0", true, "1");
+        var service = new PointAccountServiceImpl(dao, new cn.jia.core.security.FixedTenantAdmissionPolicy("1", null));
         assertEquals(java.util.Map.of("alice", 7, "bob", 0),
                 service.balances(java.util.List.of("alice", "bob", "alice")));
         verify(dao).balances("1", java.util.Set.of("alice", "bob"));
@@ -141,7 +135,7 @@ class PointAccountServiceImplTest {
 
     @Test void emptyPageDoesNotIssueAnInvalidInClauseOrCreateAccounts() {
         var dao = mock(PointAccountDao.class);
-        var service = new PointAccountServiceImpl(dao, "0", false, "");
+        var service = new PointAccountServiceImpl(dao, new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null));
         assertEquals(java.util.Map.of(), service.balances(java.util.List.of()));
         verifyNoInteractions(dao);
     }

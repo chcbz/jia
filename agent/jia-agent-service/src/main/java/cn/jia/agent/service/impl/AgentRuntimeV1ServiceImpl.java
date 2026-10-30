@@ -21,8 +21,6 @@ import cn.jia.agent.service.AgentRuntimeV1Service;
 import cn.jia.agent.service.impl.AgentServiceImpl.AgentBizException;
 import cn.jia.core.security.FixedTenantAdmissionPolicy;
 import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -57,13 +55,6 @@ public class AgentRuntimeV1ServiceImpl implements AgentRuntimeV1Service {
     public AgentRuntimeV1ServiceImpl(AgentRuntimeV1InstallationDao installations,
             AgentIdentityService identityService, AgentIdentityRegistryDao identityRegistry,
             ObjectProvider<AgentCommandAckService> commandAcks, AgentRuntimeAuthenticationService sessions,
-            ObjectProvider<cn.jia.agent.skill.SkillInstallAckService> skillAcks) {
-        this(installations, identityService, identityRegistry, commandAcks, sessions, skillAcks, null);
-    }
-
-    public AgentRuntimeV1ServiceImpl(AgentRuntimeV1InstallationDao installations,
-            AgentIdentityService identityService, AgentIdentityRegistryDao identityRegistry,
-            ObjectProvider<AgentCommandAckService> commandAcks, AgentRuntimeAuthenticationService sessions,
             ObjectProvider<cn.jia.agent.skill.SkillInstallAckService> skillAcks,
             FixedTenantAdmissionPolicy tenantAdmission) {
         this.installations = installations;
@@ -72,20 +63,7 @@ public class AgentRuntimeV1ServiceImpl implements AgentRuntimeV1Service {
         this.commandAcks = commandAcks;
         this.sessions = sessions;
         this.skillAcks = skillAcks;
-        this.tenantAdmission = tenantAdmission;
-    }
-
-    @Autowired
-    public AgentRuntimeV1ServiceImpl(AgentRuntimeV1InstallationDao installations,
-            AgentIdentityService identityService, AgentIdentityRegistryDao identityRegistry,
-            ObjectProvider<AgentCommandAckService> commandAcks, AgentRuntimeAuthenticationService sessions,
-            ObjectProvider<cn.jia.agent.skill.SkillInstallAckService> skillAcks,
-            @Value("${cyf.security.legacy-single-tenant-id:0}") String legacyTenantId,
-            @Value("${cyf.security.fixed-tenant.enabled:false}") boolean fixedTenantEnabled,
-            @Value("${cyf.security.fixed-tenant.tenant-id:}") String fixedTenantId,
-            @Value("${cyf.security.fixed-tenant.client-id:}") String fixedClientId) {
-        this(installations, identityService, identityRegistry, commandAcks, sessions, skillAcks,
-                new FixedTenantAdmissionPolicy(legacyTenantId, fixedTenantEnabled, fixedTenantId, fixedClientId));
+        this.tenantAdmission = Objects.requireNonNull(tenantAdmission);
     }
 
     @Override
@@ -360,7 +338,6 @@ public class AgentRuntimeV1ServiceImpl implements AgentRuntimeV1Service {
                 && input.codePoints().noneMatch(Character::isISOControl);
     }
     private void requireAdmitted(String tenantId, String clientId) {
-        if (tenantAdmission == null) return; // Direct-construction compatibility for existing isolated tests only.
         try { tenantAdmission.requireAdmitted(tenantId, clientId); }
         catch (IllegalArgumentException denied) { throw forbidden("Runtime v1 scope is not admitted"); }
     }

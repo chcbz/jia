@@ -1,5 +1,7 @@
 package cn.jia.agent.api.funding;
 
+import cn.jia.core.security.TenantClaimPolicy;
+
 import cn.jia.core.entity.JsonRequest;
 
 import cn.jia.agent.entity.funding.AgentTaskFundingCompleteDTO;
@@ -66,8 +68,12 @@ public class AgentBountySettlementController {
         }
         String subject = claim(jwt, "sub", 100);
         if (!subject.equals(auth.getName())) throw forbidden();
-        return new FundedBountyActor("0", claim(jwt, "client_id", 50),
-                claim(jwt, "jiacn", 50), subject);
+        try {
+            return new FundedBountyActor(TenantClaimPolicy.resolve(jwt.getToken().getClaims()), claim(jwt, "client_id", 50),
+                    claim(jwt, "jiacn", 50), subject);
+        } catch (IllegalArgumentException denied) {
+            throw forbidden();
+        }
     }
 
     private static String claim(JwtAuthenticationToken jwt, String name, int limit) {

@@ -411,7 +411,7 @@ class AgentWorkItemPlanServiceImplTest {
                 TENANT, CLIENT, OWNER, TASK, ACTOR, suggest("Build endpoint"));
         AgentWorkItemPlanConfirmRequestDTO command = confirmation(suggestion);
 
-        assertReason(AgentWorkItemPlanException.Reason.INVALID_REQUEST,
+        assertReason(AgentWorkItemPlanException.Reason.NOT_FOUND_OR_FORBIDDEN,
                 () -> service.confirm("tenant-b", CLIENT, OWNER, TASK, ACTOR,
                         "confirm-key-0005", command));
         assertReason(AgentWorkItemPlanException.Reason.NOT_FOUND_OR_FORBIDDEN,

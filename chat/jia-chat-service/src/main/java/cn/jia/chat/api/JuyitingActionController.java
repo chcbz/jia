@@ -71,7 +71,7 @@ public class JuyitingActionController {
         Object client = claims.get("client_id");
         String tenantId;
         try {
-            tenantId = TenantClaimPolicy.resolve(claims, TenantClaimPolicy.defaultSingleTenant());
+            tenantId = TenantClaimPolicy.resolve(claims);
         } catch (IllegalArgumentException invalidTenant) {
             return null;
         }

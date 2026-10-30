@@ -24,14 +24,10 @@ public class EsSecurityContextConfig {
      */
     @Bean
     public FilterRegistrationBean<EsSecurityContextFilter> esSecurityContextFilter(
-            @Value("${cyf.security.legacy-single-tenant-id:0}") String legacySingleTenantId,
-            @Value("${cyf.security.fixed-tenant.enabled:false}") boolean fixedTenantEnabled,
-            @Value("${cyf.security.fixed-tenant.tenant-id:}") String fixedTenantId,
-            @Value("${cyf.security.fixed-tenant.client-id:}") String fixedClientId) {
+            FixedTenantAdmissionPolicy admission) {
         FilterRegistrationBean<EsSecurityContextFilter> filterRegistrationBean = new FilterRegistrationBean<>();
-        filterRegistrationBean.setFilter(new EsSecurityContextFilter(legacySingleTenantId,
-                new FixedTenantAdmissionPolicy(legacySingleTenantId, fixedTenantEnabled,
-                        fixedTenantId, fixedClientId)));
+        filterRegistrationBean.setFilter(new EsSecurityContextFilter(
+                admission));
         filterRegistrationBean.addUrlPatterns("/*");
         filterRegistrationBean.setOrder(2);
         return filterRegistrationBean;

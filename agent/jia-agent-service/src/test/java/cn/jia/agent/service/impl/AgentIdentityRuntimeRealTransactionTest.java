@@ -199,7 +199,7 @@ class AgentIdentityRuntimeRealTransactionTest {
         AgentRuntimeV1ServiceImpl runtimeV1 = new AgentRuntimeV1ServiceImpl(
                 installationDao, identityService, registryDao, provider(),
                 mock(cn.jia.agent.security.AgentRuntimeAuthenticationService.class), provider(),
-                new FixedTenantAdmissionPolicy("0", true, "1", "cyf-local"));
+                new FixedTenantAdmissionPolicy("1", "cyf-local"));
         String enrollmentSecret = "tenant-one-enrollment-secret";
         String digest = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
                 .digest(enrollmentSecret.getBytes(StandardCharsets.UTF_8)));
@@ -458,7 +458,8 @@ class AgentIdentityRuntimeRealTransactionTest {
                 provider(), provider(), provider(), provider(),
                 new AgentScopePublicationCoordinator(),
                 new AgentSceneFeatureFlags(false, false),
-                mock(AgentTaskMutationTransaction.class), mock(AgentTaskEventWriter.class));
+                mock(AgentTaskMutationTransaction.class), mock(AgentTaskEventWriter.class),
+                new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null));
         raw.setExternalServicePolicies(org.mockito.Mockito.mock(cn.jia.agent.service.AgentExternalServicePolicyService.class));
         return transactionalProxy(raw, AgentService.class);
     }

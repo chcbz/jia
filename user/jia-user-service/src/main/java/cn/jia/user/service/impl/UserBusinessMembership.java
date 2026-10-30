@@ -2,7 +2,7 @@ package cn.jia.user.service.impl;
 
 import cn.jia.core.security.TenantClaimPolicy;
 import cn.jia.user.dao.UserBusinessMembershipDao;
-import org.springframework.beans.factory.annotation.Value;
+import cn.jia.core.security.FixedTenantAdmissionPolicy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -14,13 +14,9 @@ public class UserBusinessMembership {
     private final String tenantId;
 
     public UserBusinessMembership(UserBusinessMembershipDao memberships,
-            @Value("${cyf.security.legacy-single-tenant-id:0}") String legacyTenantId,
-            @Value("${cyf.security.fixed-tenant.enabled:false}") boolean fixed,
-            @Value("${cyf.security.fixed-tenant.tenant-id:}") String fixedTenantId) {
+            FixedTenantAdmissionPolicy processScope) {
         this.memberships = java.util.Objects.requireNonNull(memberships);
-        String legacy = TenantClaimPolicy.exact(legacyTenantId);
-        this.tenantId = fixed ? TenantClaimPolicy.exact(fixedTenantId) : legacy;
-        if (fixed && legacy.equals(tenantId)) throw new IllegalArgumentException("Grey tenant must differ from production");
+        this.tenantId = processScope.businessTenantId();
     }
 
     public String tenantId() { return tenantId; }

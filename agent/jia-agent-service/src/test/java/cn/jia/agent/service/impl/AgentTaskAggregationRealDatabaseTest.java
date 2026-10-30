@@ -115,6 +115,37 @@ class AgentTaskAggregationRealDatabaseTest {
     }
 
     @Test
+    void collaborationDaoPartitionsMemberIdentityAcrossEnvironments() {
+        insertTask(TASK, "0", "running", 0L);
+        String grayTask = TASK + "-gray";
+        insertTask(grayTask, "1", "running", 0L);
+        insertMember(TASK, AGENT_A, "working");
+        jdbc.update("INSERT INTO agent_task_member (owner_jiacn,task_id,agent_id,member_role,member_status,"
+                + "assignment_source,version,tenant_id,client_id) VALUES (?,?,?,'worker','done','manual',0,'1',?)",
+                OWNER, grayTask, AGENT_A, CLIENT);
+        var access = new AgentTaskCollaborationAccessServiceImpl(taskMetaDao, memberDao);
+        for (String tenant : List.of("0", "1")) {
+            String taskId = "0".equals(tenant) ? TASK : grayTask;
+            assertEquals(tenant, taskMetaDao.findByTaskIdInOwnerScope(tenant, CLIENT, OWNER, taskId).getTenantId());
+            assertEquals(tenant, memberDao.findByTaskAndAgent(tenant, CLIENT, OWNER, taskId, AGENT_A).getTenantId());
+            assertEquals(1, memberDao.listByTask(tenant, CLIENT, OWNER, taskId).size());
+        }
+        assertEquals(cn.jia.agent.access.AgentTaskAccessLevel.READ_WRITE,
+                access.resolveMemberAccess("0", CLIENT, OWNER, TASK, AGENT_A));
+        assertEquals(cn.jia.agent.access.AgentTaskAccessLevel.READ_ONLY,
+                access.resolveMemberAccess("1", CLIENT, OWNER, grayTask, AGENT_A));
+        assertEquals(List.of(), memberDao.listByTask("1", CLIENT, OWNER, TASK));
+        assertEquals(List.of(), memberDao.listByTask("0", CLIENT, OWNER, grayTask));
+        assertEquals(List.of(), memberDao.listByTask("1", CLIENT, "foreign-owner", grayTask));
+        assertEquals(List.of(), memberDao.listByTask("1", "foreign-client", OWNER, grayTask));
+        assertThrows(IllegalArgumentException.class, () -> memberDao.listByTask("1 ", CLIENT, OWNER, TASK));
+        var grayAggregation = aggregateService.aggregate("1", CLIENT, OWNER, grayTask, command(0L));
+        assertEquals(1, grayAggregation.getMemberCount());
+        assertEquals(0L, taskMetaDao.findByTaskIdInOwnerScope("0", CLIENT, OWNER, TASK).getTaskVersion());
+        assertEquals("running", taskMetaDao.findByTaskIdInOwnerScope("0", CLIENT, OWNER, TASK).getRewardStatus());
+    }
+
+    @Test
     void multiMemberSingleCompletionDoesNotCompleteAndOptionalDoesNotBlockFinalCompletion() {
         insertTask(TASK, TENANT, "running", 0L);
         insertMember(TASK, AGENT_A, "done");
@@ -241,7 +272,7 @@ class AgentTaskAggregationRealDatabaseTest {
         insertWork(TENANT_ZERO_TASK, "0", "zero-work", true,
                 "submitted", 0, 3, null, null);
 
-        assertThrows(IllegalArgumentException.class, () -> taskMetaDao.findByTaskIdInOwnerScope(
+        assertNull(taskMetaDao.findByTaskIdInOwnerScope(
                 OTHER_TENANT, CLIENT, OWNER, TENANT_ZERO_TASK));
         // Exact scoped locking reads admit another tenant, but must never find tenant 0's row.
         assertNull(taskMetaDao.findByTaskIdForUpdateInOwnerScope(

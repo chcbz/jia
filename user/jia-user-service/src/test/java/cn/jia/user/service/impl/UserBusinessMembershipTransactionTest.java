@@ -44,7 +44,7 @@ class UserBusinessMembershipTransactionTest {
         var factory = new SqlSessionFactoryBean(); factory.setConfiguration(config); factory.setDataSource(source);
         memberships = spy(new UserBusinessMembershipDaoImpl(
                 new SqlSessionTemplate(factory.getObject()).getMapper(UserBusinessMembershipMapper.class)));
-        service = proxy(new UserBusinessMembership(memberships, "0", false, ""));
+        service = proxy(new UserBusinessMembership(memberships, new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null)));
     }
 
     @AfterEach void cleanup() { if (jdbc != null) jdbc.execute("DROP ALL OBJECTS"); }

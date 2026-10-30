@@ -139,7 +139,7 @@ class AgentHostedBindingTransactionTest {
         freshRuntime.setCurrentTaskId("fresh-task");
         freshRuntime.setCurrentTaskTitle("Fresh task");
 
-        when(fixture.personaDao.findByCode("wuyong")).thenReturn(persona());
+        when(fixture.personaDao.findCatalogPersona(SCOPE.tenantId(), SCOPE.clientId(), "wuyong")).thenReturn(persona());
         when(fixture.bindingDao.findExactActiveByScopeAndPersonaForUpdate(
                 "0", "client-a", "owner-a", "wuyong")).thenReturn(binding);
         when(fixture.identityService.requireRegistrationIdentityInScope(
@@ -205,7 +205,7 @@ class AgentHostedBindingTransactionTest {
         assigned.setAssignedAgentId(AGENT_ID);
         assigned.setRewardStatus(AgentConstants.TASK_STATUS_ASSIGNED);
 
-        when(fixture.personaDao.findByCode("wuyong")).thenReturn(persona());
+        when(fixture.personaDao.findCatalogPersona(SCOPE.tenantId(), SCOPE.clientId(), "wuyong")).thenReturn(persona());
         when(fixture.bindingDao.findExactActiveByScopeAndPersonaForUpdate(
                 "0", "client-a", "owner-a", "wuyong")).thenReturn(binding);
         when(fixture.identityService.requireRegistrationIdentityInScope(
@@ -246,7 +246,7 @@ class AgentHostedBindingTransactionTest {
         runtime.setEndpoint("wss://agent.example");
         runtime.setTokenHash("sensitive-hash");
 
-        when(fixture.personaDao.findByCode("wuyong")).thenReturn(persona());
+        when(fixture.personaDao.findCatalogPersona(SCOPE.tenantId(), SCOPE.clientId(), "wuyong")).thenReturn(persona());
         when(fixture.bindingDao.findExactActiveByScopeAndPersonaForUpdate(
                 "0", "client-a", "owner-a", "wuyong")).thenReturn(binding);
         when(fixture.identityService.requireRegistrationIdentityInScope(
@@ -276,7 +276,7 @@ class AgentHostedBindingTransactionTest {
     @Test
     void localUnbindRollbackPublishesZeroSnapshots() {
         Fixture fixture = fixture();
-        when(fixture.personaDao.findByCode("wuyong")).thenReturn(persona());
+        when(fixture.personaDao.findCatalogPersona(SCOPE.tenantId(), SCOPE.clientId(), "wuyong")).thenReturn(persona());
         when(fixture.bindingDao.findExactActiveByScopeAndPersonaForUpdate(
                 "0", "client-a", "owner-a", "wuyong")).thenReturn(binding());
         when(fixture.identityService.requireRegistrationIdentityInScope(
@@ -339,7 +339,7 @@ class AgentHostedBindingTransactionTest {
         when(fixture.runtimeDao.findByAgentIdForUpdate(AGENT_ID)).thenReturn(runtime);
         when(fixture.hostedDao.resumeRepair(5L, AgentHostedProfileState.STAGED_DISABLED, 6L)).thenReturn(1);
         when(fixture.apiKeys.get("key-12")).thenReturn(key);
-        when(fixture.personaDao.findByCode("wuyong")).thenReturn(persona());
+        when(fixture.personaDao.findCatalogPersona(SCOPE.tenantId(), SCOPE.clientId(), "wuyong")).thenReturn(persona());
 
         AgentHostedBindingTransaction.Prepared result = fixture.transaction.resumeRepair(SCOPE, 12L);
 
@@ -358,7 +358,7 @@ class AgentHostedBindingTransactionTest {
         AgentPersonaBindingEntity binding = binding();
         AgentIdentityRegistryEntity identity = identity();
         AgentHostedProfileEntity hosted = hosted(AgentHostedProfileState.PREPARED, Long.MAX_VALUE);
-        when(fixture.personaDao.findByCode("wuyong")).thenReturn(persona());
+        when(fixture.personaDao.findCatalogPersona(SCOPE.tenantId(), SCOPE.clientId(), "wuyong")).thenReturn(persona());
         when(fixture.bindingDao.findExactActiveByScopeAndPersonaForUpdate(
                 "0", "client-a", "owner-a", "wuyong")).thenReturn(binding);
         when(fixture.identityService.requireRegistrationIdentityInScope(
@@ -386,7 +386,7 @@ class AgentHostedBindingTransactionTest {
         AgentPersonaBindingEntity binding = binding();
         AgentIdentityRegistryEntity identity = identity();
         AgentHostedProfileEntity hosted = hosted(AgentHostedProfileState.ACTIVE, Long.MAX_VALUE);
-        when(fixture.personaDao.findByCode("wuyong")).thenReturn(persona());
+        when(fixture.personaDao.findCatalogPersona(SCOPE.tenantId(), SCOPE.clientId(), "wuyong")).thenReturn(persona());
         when(fixture.bindingDao.findExactActiveByScopeAndPersonaForUpdate(
                 "0", "client-a", "owner-a", "wuyong")).thenReturn(binding);
         when(fixture.identityService.requireRegistrationIdentityInScope(
@@ -455,7 +455,7 @@ class AgentHostedBindingTransactionTest {
         AgentIdentityRegistryEntity identity = identity();
         AgentHostedProfileEntity hosted = hosted(AgentHostedProfileState.REPAIR_REQUIRED, Long.MAX_VALUE);
         hosted.setResumeState(AgentHostedProfileState.PREPARED);
-        when(fixture.personaDao.findByCode("wuyong")).thenReturn(persona());
+        when(fixture.personaDao.findCatalogPersona(SCOPE.tenantId(), SCOPE.clientId(), "wuyong")).thenReturn(persona());
         when(fixture.bindingDao.findExactActiveByScopeAndPersonaForUpdate(
                 "0", "client-a", "owner-a", "wuyong")).thenReturn(binding);
         when(fixture.identityService.requireRegistrationIdentityInScope(
@@ -491,7 +491,7 @@ class AgentHostedBindingTransactionTest {
         reconnected.setEndpoint("newer-online-endpoint");
         reconnected.setLastSeenAt(System.currentTimeMillis() + 1_000L);
 
-        when(fixture.personaDao.findByCode("wuyong")).thenReturn(persona());
+        when(fixture.personaDao.findCatalogPersona(SCOPE.tenantId(), SCOPE.clientId(), "wuyong")).thenReturn(persona());
         when(fixture.bindingDao.findExactActiveByScopeAndPersonaForUpdate(
                 "0", "client-a", "owner-a", "wuyong")).thenReturn(binding);
         when(fixture.identityService.requireRegistrationIdentityInScope(
@@ -701,6 +701,9 @@ class AgentHostedBindingTransactionTest {
 
     private static AgentPersonaEntity persona() {
         AgentPersonaEntity persona = new AgentPersonaEntity();
+        persona.setTenantId(SCOPE.tenantId());
+        persona.setClientId(SCOPE.clientId());
+        persona.setActive(true);
         persona.setPersonaCode("wuyong");
         persona.setName("Wu Yong");
         persona.setTitle("Strategist");

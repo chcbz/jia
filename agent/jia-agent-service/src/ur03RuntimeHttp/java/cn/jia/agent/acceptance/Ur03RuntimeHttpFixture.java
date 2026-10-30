@@ -545,7 +545,7 @@ public final class Ur03RuntimeHttpFixture {
         }
         @Bean AgentRuntimeAuthenticationService authentication(AgentRuntimeDao rows, AgentRuntimeV1InstallationDao installations,
                 AgentIdentityRegistryDao registry, AgentIdentityService identity, AccountSecurityService accounts, AgentTaskEventsGate gate) {
-            return new AgentRuntimeAuthenticationService(rows, installations, registry, identity, accounts, gate);
+            return new AgentRuntimeAuthenticationService(rows, installations, registry, identity, accounts, gate, new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null));
         }
         @Bean AgentRabbitSafetyGate ackGate() {
             return new AgentRabbitSafetyGate(new AgentRabbitSafetyProperties(
@@ -560,7 +560,7 @@ public final class Ur03RuntimeHttpFixture {
         }
         @Bean AgentRuntimeV1Service runtime(AgentRuntimeV1InstallationDao installations, AgentIdentityService identity,
                 AgentIdentityRegistryDao registry, ObjectProvider<AgentCommandAckService> acks, AgentRuntimeAuthenticationService authentication) {
-            return new AgentRuntimeV1ServiceImpl(installations, identity, registry, acks, authentication);
+            return new AgentRuntimeV1ServiceImpl(installations, identity, registry, acks, authentication, org.mockito.Mockito.mock(org.springframework.beans.factory.ObjectProvider.class), new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null));
         }
         @Bean AgentRuntimeV1Controller controller(AgentRuntimeV1Service runtime) { return new AgentRuntimeV1Controller(runtime); }
         @Bean SensitiveResponseProperties sensitiveProperties() { return new SensitiveResponseProperties(); }

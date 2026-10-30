@@ -415,7 +415,7 @@ class AgentCommandInboxMySqlTest {
     }
 
     private AgentCommandInboxServiceImpl service(AgentCommandInboxDao dao) {
-        return new AgentCommandInboxServiceImpl(dao, enabledGate(), manager);
+        return new AgentCommandInboxServiceImpl(dao, enabledGate(), manager, "tenant-a");
     }
 
     private AgentInboxMessage message() {

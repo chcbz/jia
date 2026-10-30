@@ -240,7 +240,7 @@ class EconomyWalletControllerTest {
     }
 
     private static JwtAuthenticationToken auth(String tenant, String client, String subject) {
-        Jwt token = Jwt.withTokenValue("token").header("alg", "none")
+        Jwt token = Jwt.withTokenValue("token").claim("tenant_id", "0").header("alg", "none")
                 .claim("jiacn", tenant).claim("client_id", client).subject(subject)
                 .issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(60)).build();
         return new JwtAuthenticationToken(token, List.of());

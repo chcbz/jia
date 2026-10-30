@@ -128,7 +128,8 @@ class HallReadTaskCreateMySqlTest {
                 mock(AgentLegacyTaskCompatibilityService.class), mock(AgentTaskNoteDao.class), mock(DialogueTemplateDao.class),
                 provider(events), provider((TaskService) taskService), provider(), provider(),
                 new AgentScopePublicationCoordinator(), new AgentSceneFeatureFlags(false, false),
-                new AgentTaskMutationTransactionImpl(tasks, transactionManager), writer);
+                new AgentTaskMutationTransactionImpl(tasks, transactionManager), writer,
+                new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null));
         rawAgents.setExternalServicePolicies(org.mockito.Mockito.mock(cn.jia.agent.service.AgentExternalServicePolicyService.class));
         var requirements = new AgentTaskRequirementSnapshotServiceImpl(jdbc,
                 new AgentTaskMutationTransactionImpl(tasks, transactionManager));
@@ -465,7 +466,7 @@ class HallReadTaskCreateMySqlTest {
     }
     private static void identity(HallRequestDraftService.OwnerScope scope) {
         EsContext context = new EsContext(); context.setJiacn(scope.ownerJiacn()); context.setClientId(scope.clientId()); EsContextHolder.setContext(context);
-        JwtAuthenticationToken authentication = new JwtAuthenticationToken(Jwt.withTokenValue("fixture").header("alg", "none")
+        JwtAuthenticationToken authentication = new JwtAuthenticationToken(Jwt.withTokenValue("fixture").claim("tenant_id", scope.tenantId()).header("alg", "none")
                 .subject(scope.ownerJiacn()).claim("jiacn", scope.ownerJiacn()).claim("client_id", scope.clientId())
                 .issuedAt(Instant.ofEpochSecond(1)).expiresAt(Instant.ofEpochSecond(2)).build());
         authentication.setAuthenticated(true); // applies independently in each concurrent submit thread

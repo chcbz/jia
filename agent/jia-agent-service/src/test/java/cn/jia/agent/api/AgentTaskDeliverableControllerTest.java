@@ -586,7 +586,7 @@ class AgentTaskDeliverableControllerTest {
 
     private static JwtAuthenticationToken jwtClaims(
             String tenant, Object client, String subject, String authenticationName) {
-        Jwt token = Jwt.withTokenValue("token")
+        Jwt token = Jwt.withTokenValue("token").claim("tenant_id", "0")
                 .header("alg", "none")
                 .claim("jiacn", tenant)
                 .claim("client_id", client)

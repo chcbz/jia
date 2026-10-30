@@ -38,11 +38,11 @@ class AgentIdentitySchemaTest {
         assertTrue(registry.contains("utf8mb4_0900_bin"));
 
         assertTrue(alias.contains("chk_identity_alias_no_blank_scope"));
-        assertTrue(alias.contains("tenant_id = '0'"));
+        assertTrue(alias.contains("tenant_id is not null and char_length(tenant_id)>0 and octet_length(tenant_id)=octet_length(trim(tenant_id))"));
         assertTrue(alias.contains("foreign key "
                 + "(registry_id, canonical_agent_id, client_id, owner_jiacn, tenant_id)"));
         assertTrue(alias.contains("unique key uk_identity_alias_active "
-                + "(client_id, owner_jiacn, alias_type, alias_value, active_key)"));
+                + "(tenant_id, client_id, owner_jiacn, alias_type, alias_value, active_key)"));
         assertTrue(alias.contains("utf8mb4_0900_bin"));
 
         assertTrue(runtime.contains("owner_jiacn varchar(50) default null"));
@@ -106,7 +106,7 @@ class AgentIdentitySchemaTest {
         assertFalse(migration.contains("add constraint chk_agent_binding_tenant_owner"));
         String binding = compact(tableDefinition(readResource("db/schema.sql"), "agent_persona_binding"));
         assertTrue(binding.contains("tenant_id varchar(50) not null default '0'"));
-        assertTrue(binding.contains("chk_agent_binding_single_tenant check (tenant_id = '0')"));
+        assertTrue(binding.contains("chk_agent_binding_single_tenant check (tenant_id is not null and char_length(tenant_id)>0 and octet_length(tenant_id)=octet_length(trim(tenant_id)))"));
         assertTrue(binding.contains("unique key uk_agent_binding_active_persona "
                 + "(tenant_id, client_id, active_persona_code)"));
         assertTrue(migration.contains("on agent_persona_binding (tenant_id, client_id, active_persona_code)"));

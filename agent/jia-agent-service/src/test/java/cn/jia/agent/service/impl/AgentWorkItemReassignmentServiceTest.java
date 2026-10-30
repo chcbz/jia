@@ -110,13 +110,13 @@ class AgentWorkItemReassignmentServiceTest {
         for (String agent : List.of(PREVIOUS, TARGET, COORDINATOR)) {
             when(memberDao.findByTaskAndAgentForUpdate(TENANT, CLIENT, OWNER, TASK, agent))
                     .thenReturn(member(agent));
-            when(agentService.requireApiKeyOwnedAgentForUpdate(CLIENT, OWNER, agent))
+            when(agentService.requireApiKeyOwnedAgentForUpdate(TENANT, CLIENT, OWNER, agent))
                     .thenReturn(runtime(agent));
         }
         when(identityService.lockActiveCanonicalAgentIdsInScope(
                 eq(TENANT), eq(CLIENT), eq(OWNER), any()))
                 .thenAnswer(invocation -> invocation.getArgument(3));
-        doNothing().when(agentService).requireHostingNewWork(OWNER, CLIENT, TARGET);
+        doNothing().when(agentService).requireHostingNewWork(TENANT, CLIENT, TARGET);
         when(workItemDao.findByTaskAndWorkItemId(TENANT, CLIENT, OWNER, TASK, WORK))
                 .thenReturn(workItem);
         when(reassignmentDao.findSourceCommand(TENANT, CLIENT, OWNER, source.getCommandId()))
@@ -155,10 +155,10 @@ class AgentWorkItemReassignmentServiceTest {
         for (String agent : List.of(LEGACY_PREVIOUS, LEGACY_TARGET, LEGACY_COORDINATOR)) {
             when(memberDao.findByTaskAndAgentForUpdate(TENANT, CLIENT, OWNER, TASK, agent))
                     .thenReturn(member(agent, LEGACY_COORDINATOR));
-            when(agentService.requireApiKeyOwnedAgentForUpdate(CLIENT, OWNER, agent))
+            when(agentService.requireApiKeyOwnedAgentForUpdate(TENANT, CLIENT, OWNER, agent))
                     .thenReturn(runtime(agent));
         }
-        doNothing().when(agentService).requireHostingNewWork(OWNER, CLIENT, LEGACY_TARGET);
+        doNothing().when(agentService).requireHostingNewWork(TENANT, CLIENT, LEGACY_TARGET);
         when(commandWriter.writeAuthorizedHall(any(), eq(LEGACY_COORDINATOR)))
                 .thenAnswer(invocation -> {
                     AgentCommandDraft draft = invocation.getArgument(0);
@@ -400,11 +400,25 @@ class AgentWorkItemReassignmentServiceTest {
     }
 
     @Test
+    void grayReassignmentPassesTrustedScopeToRootLock() {
+        var transaction = mock(AgentTaskMutationTransaction.class);
+        var gray = new AgentWorkItemReassignmentServiceImpl(reassignmentDao, memberDao, workItemDao,
+                transaction, identityService, agentService, eventWriter, commandWriter, leaseService,
+                () -> NOW, () -> NEW_TOKEN, 300_000);
+        gray.reassign("1", CLIENT, OWNER, "operator-1", COORDINATOR,
+                TASK, WORK, "gray-reassign-0001", request(TARGET));
+        verify(transaction).executeWithLockedTaskRootInOwnerScope(
+                eq("1"), eq(CLIENT), eq(OWNER), eq(TASK), any());
+    }
+
+    @Test
     void expiredLeaseReassignsExplicitTargetAndIgnoresTransportExhaustion() {
         var result = service.reassign(TENANT, CLIENT, OWNER, "operator-1", COORDINATOR,
                 TASK, WORK, "reassign-key-0001", request(TARGET));
 
         assertEquals(TARGET, result.getTargetAgentId());
+        verify(agentService).requireHostingNewWork(TENANT, CLIENT, TARGET);
+        verify(agentService, never()).requireHostingNewWork(OWNER, CLIENT, TARGET);
         assertEquals("claimed", result.getStatus());
         assertEquals(VERSION + 1, result.getWorkItemVersion());
         assertEquals(1, result.getAttemptCount());
@@ -585,7 +599,7 @@ class AgentWorkItemReassignmentServiceTest {
 
         when(memberDao.findByTaskAndAgentForUpdate(TENANT, CLIENT, OWNER, TASK, TARGET))
                 .thenReturn(member(TARGET));
-        when(agentService.requireApiKeyOwnedAgentForUpdate(CLIENT, OWNER, TARGET))
+        when(agentService.requireApiKeyOwnedAgentForUpdate(TENANT, CLIENT, OWNER, TARGET))
                 .thenThrow(new IllegalStateException("cross-scope runtime"));
         assertEquals(AgentWorkItemReassignmentException.Reason.NOT_FOUND_OR_FORBIDDEN,
                 assertThrows(AgentWorkItemReassignmentException.class,
@@ -593,9 +607,9 @@ class AgentWorkItemReassignmentServiceTest {
                                 TASK, WORK, "reassign-key-runtime", request(TARGET))).getReason());
 
         org.mockito.Mockito.doReturn(runtime(TARGET)).when(agentService)
-                .requireApiKeyOwnedAgentForUpdate(CLIENT, OWNER, TARGET);
+                .requireApiKeyOwnedAgentForUpdate(TENANT, CLIENT, OWNER, TARGET);
         org.mockito.Mockito.doThrow(new IllegalStateException("hosting denied"))
-                .when(agentService).requireHostingNewWork(OWNER, CLIENT, TARGET);
+                .when(agentService).requireHostingNewWork(TENANT, CLIENT, TARGET);
         assertEquals(AgentWorkItemReassignmentException.Reason.NOT_FOUND_OR_FORBIDDEN,
                 assertThrows(AgentWorkItemReassignmentException.class,
                         () -> service.reassign(TENANT, CLIENT, OWNER, "operator-1", COORDINATOR,
@@ -802,9 +816,9 @@ class AgentWorkItemReassignmentServiceTest {
             String target, PersistedIdentityAuthority authority, String idempotencyKey) {
         when(memberDao.findByTaskAndAgentForUpdate(TENANT, CLIENT, OWNER, TASK, target))
                 .thenReturn(member(target));
-        when(agentService.requireApiKeyOwnedAgentForUpdate(CLIENT, OWNER, target))
+        when(agentService.requireApiKeyOwnedAgentForUpdate(TENANT, CLIENT, OWNER, target))
                 .thenReturn(runtime(target));
-        doNothing().when(agentService).requireHostingNewWork(OWNER, CLIENT, target);
+        doNothing().when(agentService).requireHostingNewWork(TENANT, CLIENT, target);
         useIdentityAuthority(authority.service());
         assertEquals(AgentWorkItemReassignmentException.Reason.NOT_FOUND_OR_FORBIDDEN,
                 assertThrows(AgentWorkItemReassignmentException.class,

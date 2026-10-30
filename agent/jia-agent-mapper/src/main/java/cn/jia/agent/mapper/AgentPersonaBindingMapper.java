@@ -125,27 +125,6 @@ public interface AgentPersonaBindingMapper extends BaseMapper<AgentPersonaBindin
                    r.abilities AS runtime_abilities,
                    r.status AS runtime_status
             FROM agent_persona_binding b
-            LEFT JOIN agent_persona p
-              ON p.persona_code = b.persona_code
-             AND CAST(p.persona_code AS BINARY) = CAST(b.persona_code AS BINARY)
-             AND OCTET_LENGTH(p.persona_code) = OCTET_LENGTH(b.persona_code)
-             AND p.active = 1
-             AND (
-                   (p.tenant_id = '0'
-                    AND CAST(p.tenant_id AS BINARY) = CAST('0' AS BINARY)
-                    AND OCTET_LENGTH(p.tenant_id) = OCTET_LENGTH('0'))
-                   OR
-                   (p.tenant_id = #{tenantId}
-                    AND CAST(p.tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY)
-                    AND OCTET_LENGTH(p.tenant_id) = OCTET_LENGTH(#{tenantId}))
-                 )
-             AND (
-                   p.client_id IS NULL
-                   OR
-                   (p.client_id = #{clientId}
-                    AND CAST(p.client_id AS BINARY) = CAST(#{clientId} AS BINARY)
-                    AND OCTET_LENGTH(p.client_id) = OCTET_LENGTH(#{clientId}))
-                 )
             LEFT JOIN agent_identity_registry i
               ON i.binding_id = b.id
              AND i.tenant_id = b.tenant_id
@@ -181,7 +160,6 @@ public interface AgentPersonaBindingMapper extends BaseMapper<AgentPersonaBindin
               AND OCTET_LENGTH(b.tenant_id) = OCTET_LENGTH(#{tenantId})
               AND CAST(b.client_id AS BINARY) = CAST(#{clientId} AS BINARY)
               AND OCTET_LENGTH(b.client_id) = OCTET_LENGTH(#{clientId})
-              AND (#{tenantId} <> '0' OR p.persona_code IS NOT NULL)
             ORDER BY b.persona_code ASC
             """)
     @InterceptorIgnore(tenantLine = "true")

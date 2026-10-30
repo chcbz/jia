@@ -376,7 +376,12 @@ public class AgentTaskAggregationServiceImpl implements AgentTaskAggregationServ
 
     private void requireScopeAndTask(
             String tenantId, String clientId, String ownerJiacn, String taskId) {
-        if (!"0".equals(tenantId) || StringUtil.isBlank(clientId)
+        try {
+            cn.jia.core.security.TenantClaimPolicy.exact(tenantId);
+        } catch (IllegalArgumentException malformed) {
+            throw invalidRequest("tenantId is invalid");
+        }
+        if (StringUtil.isBlank(clientId)
                 || StringUtil.isBlank(ownerJiacn) || "0".equals(ownerJiacn) || StringUtil.isBlank(taskId)) {
             throw invalidRequest("tenantId, clientId, ownerJiacn and taskId are required");
         }

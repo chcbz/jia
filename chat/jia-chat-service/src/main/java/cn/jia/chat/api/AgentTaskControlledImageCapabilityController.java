@@ -76,7 +76,7 @@ public final class AgentTaskControlledImageCapabilityController {
         Map<String,Object> claims=jwt.getToken().getClaims();
         Object owner=claims.get("jiacn"),client=claims.get("client_id");
         final String tenant;
-        try { tenant=TenantClaimPolicy.resolve(claims,"0"); }
+        try { tenant=TenantClaimPolicy.resolve(claims); }
         catch (IllegalArgumentException invalid) { throw new AuthenticationFailure(true); }
         EsContext context=EsContextHolder.getContext();
         if (!(owner instanceof String o) || !(client instanceof String c) || "0".equals(o)

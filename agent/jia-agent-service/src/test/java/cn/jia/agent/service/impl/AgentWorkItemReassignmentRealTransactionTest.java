@@ -118,13 +118,13 @@ class AgentWorkItemReassignmentRealTransactionTest {
         when(identityService.lockActiveCanonicalAgentIdsInScope(
                 anyString(), anyString(), anyString(), any())).thenAnswer(i -> i.getArgument(3));
         when(agentService.requireApiKeyOwnedAgentForUpdate(
-                anyString(), anyString(), anyString())).thenAnswer(i -> {
+                anyString(), anyString(), anyString(), anyString())).thenAnswer(i -> {
             AgentRuntimeDTO runtime = new AgentRuntimeDTO();
-            runtime.setAgentId(i.getArgument(2));
+            runtime.setAgentId(i.getArgument(3));
             runtime.setStatus("offline");
             return runtime;
         });
-        doNothing().when(agentService).requireHostingNewWork(OWNER, CLIENT, TARGET);
+        doNothing().when(agentService).requireHostingNewWork(TENANT, CLIENT, TARGET);
         insertFixture();
     }
 

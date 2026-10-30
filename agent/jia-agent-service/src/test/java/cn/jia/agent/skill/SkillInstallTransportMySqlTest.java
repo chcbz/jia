@@ -1,5 +1,6 @@
 package cn.jia.agent.skill;
 
+import cn.jia.core.security.FixedTenantAdmissionPolicy;
 import cn.jia.agent.dao.impl.AgentCommandTransportDaoImpl;
 import cn.jia.agent.dao.impl.AgentCommandRecoveryDaoImpl;
 import cn.jia.agent.entity.*;
@@ -47,7 +48,7 @@ class SkillInstallTransportMySqlTest {
         var manager=new DataSourceTransactionManager(ds);tx=new TransactionTemplate(manager);
         var preview=new EconomyPreviewGate(new EconomyPreviewProperties(true,List.of(new EconomyPreviewProperties.AllowedScope("0","Client-A"))));
         writer=new SkillInstallCommandWriter(new AgentCommandTransportDaoImpl(commands),preview);dispatch=mock(SkillInstallDispatchService.class);
-        recovery=new SkillInstallRecoveryService(mapper,new AgentCommandRecoveryDaoImpl(sql.getMapper(AgentCommandRecoveryMapper.class)),preview,dispatch,manager);
+        recovery=new SkillInstallRecoveryService(mapper,new AgentCommandRecoveryDaoImpl(sql.getMapper(AgentCommandRecoveryMapper.class)),preview,dispatch,manager,new FixedTenantAdmissionPolicy("0", null));
         long now=System.currentTimeMillis();String install="si_fixture",order="so_fixture";
         draft=new AgentCommandDraft(1,AgentCommandCanonicalCodec.skillInstallCommandId("0","Client-A","Owner-A",install),order,install,
                 "0","Client-A","Owner-A",order,null,"agt_fixture","SKILL_INSTALL",now,now+3600000,
@@ -71,7 +72,7 @@ class SkillInstallTransportMySqlTest {
         assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM agent_consumer_inbox",Integer.class));
     }
     @Test void claimCasCannotOverwriteLeaseOrCrossCaseScope() {
-        pending();long now=System.currentTimeMillis();var d=mapper.candidates(now,now-60000).getFirst();
+        pending();long now=System.currentTimeMillis();var d=mapper.candidates("0",null,now,now-60000).getFirst();
         assertEquals(1,mapper.claimDelivery(d,"owner-1",now+60000,now));
         assertEquals(0,mapper.claimDelivery(d,"owner-2",now+60000,now));
         d.setVersion(d.getVersion()+1).setStatus("CONSUMED");
@@ -92,7 +93,7 @@ class SkillInstallTransportMySqlTest {
         var ds=new DriverManagerDataSource(System.getenv("CYF_SKILL_MYSQL_URL").replace("/?","/"+db+"?"),"root","");
         var factory=new SqlSessionFactoryBean();factory.setDataSource(ds);factory.setConfiguration(cfg);
         try { var relay=new SqlSessionTemplate(Objects.requireNonNull(factory.getObject())).getMapper(AgentOutboxRelayMapper.class);
-            assertTrue(relay.selectDueCandidates(now,25).isEmpty());assertTrue(relay.selectCorruptCandidates(now,25).isEmpty());assertTrue(relay.selectStaleCandidates(now,25).isEmpty());
+            assertTrue(relay.selectDueCandidates("0", now,25).isEmpty());assertTrue(relay.selectCorruptCandidates("0", now,25).isEmpty());assertTrue(relay.selectStaleCandidates("0", now,25).isEmpty());
         } catch(Exception e) { throw new RuntimeException(e); }
     }
 }

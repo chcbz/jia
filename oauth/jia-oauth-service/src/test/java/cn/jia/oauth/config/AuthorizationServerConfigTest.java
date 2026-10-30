@@ -182,7 +182,7 @@ class AuthorizationServerConfigTest extends BaseMockTest {
 
     private AccountSecurityTokenCustomizer productionCustomizer() {
         return new AccountSecurityTokenCustomizer(accountSecurityService, ignored -> true,
-                new FixedTenantAdmissionPolicy("0", false, null, null), Set.of("web-client"));
+                new FixedTenantAdmissionPolicy("0", null), Set.of("web-client"));
     }
 
     @Test
@@ -190,12 +190,12 @@ class AuthorizationServerConfigTest extends BaseMockTest {
         when(accountSecurityService.findByUserId(17)).thenReturn(java.util.Optional.of(
                 new AccountSecuritySnapshot(17, "Jia-A", AccountState.ACTIVE, 4)));
         var admitted = new AccountSecurityTokenCustomizer(accountSecurityService, ignored -> true,
-                new FixedTenantAdmissionPolicy("0", true, "1", "web-client"), Set.of("web-client"));
+                new FixedTenantAdmissionPolicy("1", "web-client"), Set.of("web-client"));
         JwtEncodingContext context = encodingContext(userAuthentication, AuthorizationGrantType.AUTHORIZATION_CODE);
         admitted.customize(context);
         assertEquals("1", context.getClaims().build().getClaim("tenant_id"));
         var missing = new AccountSecurityTokenCustomizer(accountSecurityService, ignored -> false,
-                new FixedTenantAdmissionPolicy("0", true, "1", "web-client"), Set.of("web-client"));
+                new FixedTenantAdmissionPolicy("1", "web-client"), Set.of("web-client"));
         assertThrows(OAuth2AuthenticationException.class, () -> missing.customize(
                 encodingContext(userAuthentication, AuthorizationGrantType.AUTHORIZATION_CODE)));
     }
@@ -218,7 +218,7 @@ class AuthorizationServerConfigTest extends BaseMockTest {
         assertEquals("0", machine.getClaims().build().getClaim("tenant_id"));
         assertEquals("machine", machine.getClaims().build().getClaim("token_kind"));
         var denied = new AccountSecurityTokenCustomizer(accountSecurityService, ignored -> true,
-                new FixedTenantAdmissionPolicy("0", false, null, null), Set.of("other-client"));
+                new FixedTenantAdmissionPolicy("0", null), Set.of("other-client"));
         assertThrows(OAuth2AuthenticationException.class,
                 () -> denied.customize(encodingContext(clientPrincipal(), AuthorizationGrantType.CLIENT_CREDENTIALS)));
     }
@@ -227,10 +227,10 @@ class AuthorizationServerConfigTest extends BaseMockTest {
     void emptyIssuerClientSetAndConflictingGreyClientSetFailAtConfiguration() {
         assertThrows(IllegalArgumentException.class, () -> new AccountSecurityTokenCustomizer(
                 accountSecurityService, ignored -> true,
-                new FixedTenantAdmissionPolicy("0", false, null, null), Set.of()));
+                new FixedTenantAdmissionPolicy("0", null), Set.of()));
         assertThrows(IllegalArgumentException.class, () -> new AccountSecurityTokenCustomizer(
                 accountSecurityService, ignored -> true,
-                new FixedTenantAdmissionPolicy("0", true, "1", "cyf-local"), Set.of("web-client")));
+                new FixedTenantAdmissionPolicy("1", "cyf-local"), Set.of("web-client")));
     }
 
     private OAuth2TokenGenerator<OAuth2Token> generator(AtomicReference<Authentication> accessPrincipal) {

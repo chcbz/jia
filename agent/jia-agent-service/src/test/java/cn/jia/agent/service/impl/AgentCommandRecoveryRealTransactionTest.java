@@ -120,6 +120,16 @@ class AgentCommandRecoveryRealTransactionTest {
     }
 
     @Test
+    void dueRecoveryQueryUsesExplicitProcessTenant() {
+        for (String tenant : List.of("0", "1")) {
+            jdbc.update("UPDATE agent_command_delivery SET tenant_id=?", tenant);
+            assertEquals(1, dao.findDueCandidates(tenant, NOW, NOW, 0, 10).size());
+            assertEquals(List.of(), dao.findDueCandidates("0".equals(tenant) ? "1" : "0", NOW, NOW, 0, 10));
+            assertEquals(List.of(), dao.findDueCandidates(tenant + " ", NOW, NOW, 0, 10));
+        }
+    }
+
+    @Test
     void reissueCommitsDeliveryAndOneRelayDiscoverablePendingOutbox() {
         AgentCommandReissueServiceImpl service = reissueService(dao);
         assertEquals(1, service.reissueForReconnect(scope(), 10, NOW).reissued());
@@ -149,7 +159,7 @@ class AgentCommandRecoveryRealTransactionTest {
         jdbc.update("UPDATE agent_command_delivery SET status='PUBLISHED',next_retry_at=NULL,"
                 + "last_error=NULL,version=7 WHERE id=1");
         byte[] wire = blob("SELECT wire_payload FROM agent_outbox_event WHERE message_id='" + M1 + "'");
-        AgentCommandInboxServiceImpl inbox = new AgentCommandInboxServiceImpl(inboxDao, gate(), manager);
+        AgentCommandInboxServiceImpl inbox = new AgentCommandInboxServiceImpl(inboxDao, gate(), manager, "0");
         var claim = inbox.claim(new AgentInboxMessage(
                 AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1,
                 "0", "client-a", M1, "event-1",
@@ -181,7 +191,7 @@ class AgentCommandRecoveryRealTransactionTest {
 
     @Test
     void sentCompletionRejectsAckDeliveryShapePoisonAndKeepsInboxProcessing() {
-        AgentCommandInboxServiceImpl inbox = new AgentCommandInboxServiceImpl(inboxDao, gate(), manager);
+        AgentCommandInboxServiceImpl inbox = new AgentCommandInboxServiceImpl(inboxDao, gate(), manager, "0");
         AgentInboxClaim claim = claimFirstPublished(inbox, "shape-poison-worker", NOW);
         AgentCommandAckServiceImpl ack = new AgentCommandAckServiceImpl(dao, gate(), manager);
         assertEquals("RECEIVED", ack.acknowledge(
@@ -217,7 +227,7 @@ class AgentCommandRecoveryRealTransactionTest {
                 "SELECT status FROM agent_consumer_inbox WHERE message_id='" + M1 + "'"));
 
         insertWaitingSourceAfterDelete();
-        inbox = new AgentCommandInboxServiceImpl(inboxDao, gate(), manager);
+        inbox = new AgentCommandInboxServiceImpl(inboxDao, gate(), manager, "0");
         claim = claimFirstPublished(inbox, "rejected-marker-worker", NOW + 10);
         ack = new AgentCommandAckServiceImpl(dao, gate(), manager);
         assertEquals("REJECTED", ack.acknowledge(
@@ -247,7 +257,7 @@ class AgentCommandRecoveryRealTransactionTest {
                 "SELECT event_id FROM agent_outbox_event WHERE message_id='" + M2 + "'");
         byte[] wire = blob(
                 "SELECT wire_payload FROM agent_outbox_event WHERE message_id='" + M2 + "'");
-        AgentCommandInboxServiceImpl inbox = new AgentCommandInboxServiceImpl(inboxDao, gate(), manager);
+        AgentCommandInboxServiceImpl inbox = new AgentCommandInboxServiceImpl(inboxDao, gate(), manager, "0");
         AgentInboxClaim inboxClaim = inbox.claim(new AgentInboxMessage(
                 AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1,
                 "0", "client-a", M2, eventId,
@@ -545,7 +555,7 @@ class AgentCommandRecoveryRealTransactionTest {
 
         byte[] wire = blob("SELECT wire_payload FROM agent_outbox_event WHERE message_id='" + M2 + "'");
         String eventId = string("SELECT event_id FROM agent_outbox_event WHERE message_id='" + M2 + "'");
-        AgentCommandInboxServiceImpl inbox = new AgentCommandInboxServiceImpl(inboxDao, gate(), manager);
+        AgentCommandInboxServiceImpl inbox = new AgentCommandInboxServiceImpl(inboxDao, gate(), manager, "0");
         AgentInboxClaim inboxClaim = inbox.claim(new AgentInboxMessage(
                 AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1,
                 "0", "client-a", M2, eventId,
@@ -664,7 +674,7 @@ class AgentCommandRecoveryRealTransactionTest {
                 "SELECT event_id FROM agent_outbox_event WHERE message_id='" + messageId + "'");
         byte[] wire = blob(
                 "SELECT wire_payload FROM agent_outbox_event WHERE message_id='" + messageId + "'");
-        AgentCommandInboxServiceImpl inbox = new AgentCommandInboxServiceImpl(inboxDao, gate(), manager);
+        AgentCommandInboxServiceImpl inbox = new AgentCommandInboxServiceImpl(inboxDao, gate(), manager, "0");
         AgentInboxClaim inboxClaim = inbox.claim(new AgentInboxMessage(
                 AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1,
                 "0", "client-a", messageId, eventId,
@@ -682,9 +692,7 @@ class AgentCommandRecoveryRealTransactionTest {
             AgentCommandRecoveryDao selectedDao, String messageId, String eventId) {
         List<UUID> ids = new java.util.ArrayList<>(List.of(
                 UUID.fromString(messageId), UUID.fromString(eventId)));
-        return new AgentCommandReissueServiceImpl(
-                selectedDao, gate(), connected(), AgentRabbitTopologyManifest.canonical(),
-                manager, () -> ids.removeFirst());
+        return new AgentCommandReissueServiceImpl(selectedDao, gate(), connected(), AgentRabbitTopologyManifest.canonical(), 30_000L, manager, () -> ids.removeFirst(), new AgentCommandRecoveryPolicy(), "0");
     }
 
 
@@ -692,7 +700,7 @@ class AgentCommandRecoveryRealTransactionTest {
         return new AgentOutboxRelayServiceImpl(
                 relayDao, gate(), AgentRabbitTopologyManifest.canonical(), ready(),
                 new AgentOutboxRelaySettings(new AgentRabbitSafetyProperties.RabbitPublish(true)),
-                manager);
+                manager, "0");
     }
 
     private AgentRabbitTopologyReadiness ready() {
@@ -905,8 +913,8 @@ class AgentCommandRecoveryRealTransactionTest {
             return delegate.findReconnectCandidates(tenantId, clientId, targetAgentId, now, afterDeliveryId, limit);
         }
         @Override public List<AgentWaitingCommandCandidate> findDueCandidates(
-                long now, long sentBefore, long afterDeliveryId, int limit) {
-            return delegate.findDueCandidates(now, sentBefore, afterDeliveryId, limit);
+                String tenantId, long now, long sentBefore, long afterDeliveryId, int limit) {
+            return delegate.findDueCandidates(tenantId, now, sentBefore, afterDeliveryId, limit);
         }
         @Override public AgentCommandDeliveryEntity lockDelivery(String tenantId, String clientId, long deliveryId) {
             return delegate.lockDelivery(tenantId, clientId, deliveryId);

@@ -1,5 +1,7 @@
 package cn.jia.agent.api;
 
+import cn.jia.core.security.TenantClaimPolicy;
+
 import cn.jia.agent.service.HallRequestDraftService;
 import jakarta.servlet.ServletInputStream;
 import jakarta.servlet.http.HttpServletRequest;
@@ -216,7 +218,13 @@ public class HallRequestDraftController {
                 || !identity(ownerJiacn) || !identity(clientId) || "0".equals(ownerJiacn)) {
             throw new AuthenticationFailure(true);
         }
-        return new HallRequestDraftService.OwnerScope("0", clientId, ownerJiacn);
+        // The resource security boundary has admitted this JWT's process tenant/client.
+        // Resolve with the shared claim policy; a declared gray tenant is never rewritten to zero.
+        try {
+            return new HallRequestDraftService.OwnerScope(TenantClaimPolicy.resolve(claims), clientId, ownerJiacn);
+        } catch (IllegalArgumentException denied) {
+            throw new AuthenticationFailure(true);
+        }
     }
 
     private static boolean identity(String value) {

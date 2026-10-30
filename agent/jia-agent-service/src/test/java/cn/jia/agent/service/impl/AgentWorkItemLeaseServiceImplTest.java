@@ -386,8 +386,10 @@ class AgentWorkItemLeaseServiceImplTest extends BaseMockTest {
         AgentTaskStateException error = assertThrows(AgentTaskStateException.class,
                 () -> service.claim(
                         "tenant-b", CLIENT, OWNER, TASK, WORK, claimCommand(AGENT, 0L, 100L)));
-        assertEquals(Reason.INVALID_REQUEST, error.getReason());
-        verifyNoInteractions(memberDao, workItemDao);
+        assertEquals(Reason.NOT_FOUND, error.getReason());
+        verify(memberDao).findByTaskAndAgent("tenant-b", CLIENT, OWNER, TASK, AGENT);
+        verify(memberDao, never()).findByTaskAndAgent(TENANT, CLIENT, OWNER, TASK, AGENT);
+        verifyNoInteractions(workItemDao);
     }
 
     @Test

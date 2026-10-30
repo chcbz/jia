@@ -1,10 +1,11 @@
 package cn.jia.core.security;
 
-import cn.jia.core.mybatis.TenantScopeHelper;
-
 import java.util.Map;
 
-/** Shared issuer/resource/chat policy for canonical and legacy tenant JWT claims. */
+/**
+ * Shared issuer/resource/chat policy. A signed canonical business partition is required;
+ * neither a user identity, an alias-only claim nor a default deployment is a substitute.
+ */
 public final class TenantClaimPolicy {
     public static final String CANONICAL_CLAIM = "tenant_id";
     public static final String ALIAS_CLAIM = "tenantId";
@@ -13,24 +14,17 @@ public final class TenantClaimPolicy {
 
     private TenantClaimPolicy() { }
 
-    public static String resolve(Map<String, ?> claims, String legacySingleTenantId) {
+    public static String resolve(Map<String, ?> claims) {
         if (claims == null) throw invalid();
         String canonical = claim(claims, CANONICAL_CLAIM);
         String alias = claim(claims, ALIAS_CLAIM);
         if (canonical != null && alias != null && !canonical.equals(alias)) throw invalid();
         String version = claim(claims, VERSION_CLAIM);
         if (version != null && !CURRENT_VERSION.equals(version)) throw invalid();
-        String declared = canonical != null ? canonical : alias;
-        if (declared != null) return exact(declared);
-        if (version != null) throw invalid();
-        Object kind = claims.get("token_kind");
-        boolean legacyUser = "user".equals(kind)
-                || kind == null && claims.get("jiacn") instanceof String jiacn && !jiacn.isBlank();
-        if (!legacyUser) throw invalid();
-        return exact(legacySingleTenantId);
+        // An optional duplicate field must agree, but never supplies missing authority.
+        if (canonical == null) throw invalid();
+        return canonical;
     }
-
-    public static String defaultSingleTenant() { return TenantScopeHelper.DEFAULT_TENANT; }
 
     public static String exact(String value) {
         if (value == null || value.isBlank() || value.length() > 50 || !value.equals(value.strip())

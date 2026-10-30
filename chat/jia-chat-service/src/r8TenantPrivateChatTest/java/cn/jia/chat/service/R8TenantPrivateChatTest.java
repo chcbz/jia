@@ -139,7 +139,7 @@ class R8TenantPrivateChatTest {
         ChatDeliberationService rawDeliberation = new ChatDeliberationService(
                 deliberationDao, conversations, messages, mock(AgentService.class));
         rawDeliberation.setDispatchAuthority(dispatchAuthority);
-        ChatDeliberationOutboxService rawOutbox = new ChatDeliberationOutboxService(deliberationDao);
+        ChatDeliberationOutboxService rawOutbox = new ChatDeliberationOutboxService(deliberationDao, new cn.jia.core.security.FixedTenantAdmissionPolicy(TENANT, CLIENT));
         rawOutbox.setDispatchAuthority(dispatchAuthority);
         transactionManager = new DataSourceTransactionManager(dataSource);
         deliberation = transactional(rawDeliberation, transactionManager);
@@ -569,22 +569,22 @@ class R8TenantPrivateChatTest {
         }
         seedOutbox("foreign", "1", "other-client", "READY", now);
         seedOutbox("other-tenant", "2", "cyf-local", "READY", now);
-        assertEquals(4, outbox.discover(now, 32).size());
-        assertTrue(outbox.discover(now, 32).stream().allMatch(row -> "0".equals(row.getTenantId())));
-        assertEquals(4, outbox.discoverInScope("1", "cyf-local", now, 32).size());
-        assertTrue(deliberationDao.findDueOutbox(now, 32).stream()
-                .allMatch(row -> "0".equals(row.getTenantId())));
+        var productionOutbox = outboxFor("0", null);
+        var greyOutbox = outboxFor("1", "cyf-local");
+        assertEquals(4, productionOutbox.discover(now, 32).size());
+        assertTrue(productionOutbox.discover(now, 32).stream().allMatch(row -> "0".equals(row.getTenantId())));
+        assertEquals(4, greyOutbox.discover(now, 32).size());
 
         var delivered = new java.util.concurrent.ConcurrentHashMap<String, String>();
         var done = new CountDownLatch(8);
         var broker = new ChatConversationEventBroker();
-        try (var production = spy(new ChatDeliberationOutboxRelay(outbox, deliberation,
+        try (var production = spy(new ChatDeliberationOutboxRelay(productionOutbox, deliberation,
                      mock(AgentWebSocketHandler.class), mock(BuiltinHallAgentSupport.class), broker,
                      mock(ChatConversationService.class), mock(ChatClient.class)));
-             var grey = spy(new ChatDeliberationOutboxRelay(outbox, deliberation,
+             var grey = spy(new ChatDeliberationOutboxRelay(greyOutbox, deliberation,
                      mock(AgentWebSocketHandler.class), mock(BuiltinHallAgentSupport.class), broker,
                      mock(ChatConversationService.class), mock(ChatClient.class),
-                     120_000, 10_000, 4, true, "1", "cyf-local"))) {
+                     120_000, 10_000, 4))) {
             for (var relay : List.of(production, grey)) {
                 String process = relay == production ? "production" : "grey";
                 // Only downstream delivery is stubbed: poll/discover/transactional claim/settle are real.
@@ -609,14 +609,21 @@ class R8TenantPrivateChatTest {
     }
 
     @Test
-    void legacyDiscoveryHonorsConfiguredTenantAndNeverRestrictsItsMultipleClients() {
+    void discoveryHonorsConfiguredTenantAndNeverRestrictsItsMultipleClients() {
         long now = System.currentTimeMillis();
         seedOutbox("custom-a", "legacy-custom", "client-a", "READY", now);
         seedOutbox("custom-b", "legacy-custom", "client-b", "READY", now);
         seedOutbox("grey", "1", "cyf-local", "READY", now);
-        ReflectionTestUtils.setField(outbox, "legacyTenantId", "legacy-custom");
-        assertEquals(2, outbox.discover(now, 32).size());
-        assertTrue(outbox.discover(now, 32).stream().allMatch(row -> "legacy-custom".equals(row.getTenantId())));
+        var custom = outboxFor("legacy-custom", null);
+        assertEquals(2, custom.discover(now, 32).size());
+        assertTrue(custom.discover(now, 32).stream().allMatch(row -> "legacy-custom".equals(row.getTenantId())));
+    }
+
+    private ChatDeliberationOutboxService outboxFor(String tenant, String client) {
+        var raw = new ChatDeliberationOutboxService(deliberationDao,
+                new cn.jia.core.security.FixedTenantAdmissionPolicy(tenant, client));
+        raw.setDispatchAuthority(dispatchAuthority);
+        return transactional(raw, transactionManager);
     }
 
     private void seedOutbox(String event, String tenant, String client, String status, long now) {
@@ -632,8 +639,7 @@ class R8TenantPrivateChatTest {
             BuiltinHallAgentSupport builtin, ChatConversationEventBroker broker,
             ChatConversationService conversationService) {
         return new ChatDeliberationOutboxRelay(outbox, deliberation, sockets, builtin, broker,
-                conversationService, mock(ChatClient.class), 120_000, 10_000, 1,
-                true, TENANT, CLIENT);
+                conversationService, mock(ChatClient.class), 120_000, 10_000, 1);
     }
 
     private String awaitOutboxStatus(String eventId, String expected, long timeoutMillis) throws Exception {

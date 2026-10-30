@@ -7,11 +7,11 @@ import cn.jia.agent.entity.AgentOutboxEventEntity;
 import java.util.List;
 
 public interface AgentOutboxRelayDao {
-    List<AgentOutboxCandidate> selectCorruptCandidates(long now, int limit);
+    List<AgentOutboxCandidate> selectCorruptCandidates(String tenantId, long now, int limit);
 
-    List<AgentOutboxCandidate> selectDueCandidates(long now, int limit);
+    List<AgentOutboxCandidate> selectDueCandidates(String tenantId, long now, int limit);
 
-    List<AgentOutboxCandidate> selectStaleCandidates(long now, int limit);
+    List<AgentOutboxCandidate> selectStaleCandidates(String tenantId, long now, int limit);
 
     AgentCommandDeliveryEntity lockDelivery(String tenantId, String clientId, long deliveryId);
 

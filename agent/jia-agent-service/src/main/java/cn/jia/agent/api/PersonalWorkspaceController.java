@@ -178,7 +178,7 @@ public class PersonalWorkspaceController {
             // JWT has already passed the process tenant/client admission filter.
             // Never read this scope from request parameters or copy production's tenant.
             return new PersonalWorkspaceService.Scope(
-                    cn.jia.core.security.TenantClaimPolicy.resolve(claims, "0"), c, o);
+                    cn.jia.core.security.TenantClaimPolicy.resolve(claims), c, o);
         } catch (IllegalArgumentException invalidScope) {
             throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.NOT_FOUND);
         }

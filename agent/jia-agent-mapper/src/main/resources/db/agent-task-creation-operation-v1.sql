@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS agent_task_creation_operation (
     (tenant_id,client_id,owner_jiacn,operation_id),
   KEY idx_atco_task_receipt
     (tenant_id,client_id,owner_jiacn,task_id,operation_state),
-  CONSTRAINT chk_atco_scope CHECK (tenant_id='0' AND owner_jiacn<>'0'),
+  CONSTRAINT chk_atco_scope CHECK (owner_jiacn<>'0'),
   CONSTRAINT chk_atco_identity CHECK (
     CHAR_LENGTH(client_id) BETWEEN 1 AND 50
     AND CHAR_LENGTH(owner_jiacn) BETWEEN 1 AND 50

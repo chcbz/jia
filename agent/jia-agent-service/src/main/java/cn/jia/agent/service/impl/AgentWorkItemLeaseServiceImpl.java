@@ -701,9 +701,14 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
     }
 
     private void requireScope(String tenantId, String clientId, String ownerJiacn) {
-        if (!"0".equals(tenantId) || StringUtil.isBlank(clientId)
+        try {
+            cn.jia.core.security.TenantClaimPolicy.exact(tenantId);
+        } catch (IllegalArgumentException malformed) {
+            throw invalidRequest("tenantId is invalid");
+        }
+        if (StringUtil.isBlank(clientId)
                 || StringUtil.isBlank(ownerJiacn) || "0".equals(ownerJiacn)) {
-            throw invalidRequest("strict tenant-zero client and owner scope is required");
+            throw invalidRequest("strict tenant, client and owner scope is required");
         }
     }
 

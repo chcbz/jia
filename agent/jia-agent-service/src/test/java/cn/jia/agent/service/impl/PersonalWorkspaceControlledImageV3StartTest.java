@@ -89,7 +89,7 @@ class PersonalWorkspaceControlledImageV3StartTest {
    row.setTenantId("0");row.setClientId("client");
    when(installations.lock(ID)).thenReturn(installation);
    when(rows.lockInScope("0","client",AGENT)).thenReturn(row);
-   var auth=new AgentRuntimeAuthenticationService(rows,installations,mock(AgentIdentityRegistryDao.class),identities,accounts,mock(AgentTaskEventsGate.class));
+   var auth=new AgentRuntimeAuthenticationService(rows,installations,mock(AgentIdentityRegistryDao.class),identities,accounts,mock(AgentTaskEventsGate.class), new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null));
    when(manager.getTransaction(any())).thenAnswer(i->{transactionActive.set(true);return status;});
    doAnswer(i->{transactionActive.set(false);return null;}).when(manager).commit(status);
    doAnswer(i->{transactionActive.set(false);return null;}).when(manager).rollback(status);

@@ -69,9 +69,6 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
     private final long leaseMillis;
     private final long heartbeatMillis;
     private final int maxConcurrentDeliveries;
-    private final boolean fixedTenantEnabled;
-    private final String fixedTenantId;
-    private final String fixedClientId;
     private final Semaphore deliverySlots;
     private final AtomicBoolean running = new AtomicBoolean();
     private volatile ScheduledExecutorService scheduler;
@@ -81,22 +78,9 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
     public ChatDeliberationOutboxRelay(ChatDeliberationOutboxService outbox,
             ChatDeliberationService deliberation, AgentWebSocketHandler sockets,
             BuiltinHallAgentSupport builtin, ChatConversationEventBroker broker,
-            ChatConversationService conversations, @Lazy ChatClient chatClient,
-            @org.springframework.beans.factory.annotation.Value("${cyf.security.fixed-tenant.enabled:false}") boolean fixedTenantEnabled,
-            @org.springframework.beans.factory.annotation.Value("${cyf.security.fixed-tenant.tenant-id:}") String fixedTenantId,
-            @org.springframework.beans.factory.annotation.Value("${cyf.security.fixed-tenant.client-id:}") String fixedClientId) {
+            ChatConversationService conversations, @Lazy ChatClient chatClient) {
         this(outbox, deliberation, sockets, builtin, broker, conversations, chatClient,
-                DEFAULT_LEASE_MILLIS, DEFAULT_HEARTBEAT_MILLIS, DEFAULT_MAX_CONCURRENT_DELIVERIES,
-                fixedTenantEnabled, fixedTenantId, fixedClientId);
-    }
-
-    ChatDeliberationOutboxRelay(ChatDeliberationOutboxService outbox,
-            ChatDeliberationService deliberation, AgentWebSocketHandler sockets,
-            BuiltinHallAgentSupport builtin, ChatConversationEventBroker broker,
-            ChatConversationService conversations, ChatClient chatClient) {
-        this(outbox, deliberation, sockets, builtin, broker, conversations, chatClient,
-                DEFAULT_LEASE_MILLIS, DEFAULT_HEARTBEAT_MILLIS, DEFAULT_MAX_CONCURRENT_DELIVERIES,
-                false, null, null);
+                DEFAULT_LEASE_MILLIS, DEFAULT_HEARTBEAT_MILLIS, DEFAULT_MAX_CONCURRENT_DELIVERIES);
     }
 
     ChatDeliberationOutboxRelay(ChatDeliberationOutboxService outbox,
@@ -105,7 +89,7 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
             ChatConversationService conversations, ChatClient chatClient,
             long leaseMillis, long heartbeatMillis) {
         this(outbox, deliberation, sockets, builtin, broker, conversations, chatClient,
-                leaseMillis, heartbeatMillis, DEFAULT_MAX_CONCURRENT_DELIVERIES, false, null, null);
+                leaseMillis, heartbeatMillis, DEFAULT_MAX_CONCURRENT_DELIVERIES);
     }
 
     ChatDeliberationOutboxRelay(ChatDeliberationOutboxService outbox,
@@ -113,16 +97,6 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
             BuiltinHallAgentSupport builtin, ChatConversationEventBroker broker,
             ChatConversationService conversations, ChatClient chatClient,
             long leaseMillis, long heartbeatMillis, int maxConcurrentDeliveries) {
-        this(outbox, deliberation, sockets, builtin, broker, conversations, chatClient,
-                leaseMillis, heartbeatMillis, maxConcurrentDeliveries, false, null, null);
-    }
-
-    ChatDeliberationOutboxRelay(ChatDeliberationOutboxService outbox,
-            ChatDeliberationService deliberation, AgentWebSocketHandler sockets,
-            BuiltinHallAgentSupport builtin, ChatConversationEventBroker broker,
-            ChatConversationService conversations, ChatClient chatClient,
-            long leaseMillis, long heartbeatMillis, int maxConcurrentDeliveries,
-            boolean fixedTenantEnabled, String fixedTenantId, String fixedClientId) {
         if (leaseMillis < 3 || heartbeatMillis < 1 || heartbeatMillis * 3 >= leaseMillis) {
             throw new IllegalArgumentException("Heartbeat must be materially shorter than the lease");
         }
@@ -133,9 +107,6 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
         this.builtin = builtin; this.broker = broker; this.conversations = conversations;
         this.chatClient = chatClient; this.leaseMillis = leaseMillis; this.heartbeatMillis = heartbeatMillis;
         this.maxConcurrentDeliveries = maxConcurrentDeliveries;
-        this.fixedTenantEnabled = fixedTenantEnabled;
-        this.fixedTenantId = fixedTenantEnabled ? cn.jia.core.security.TenantClaimPolicy.exact(fixedTenantId) : null;
-        this.fixedClientId = fixedTenantEnabled ? cn.jia.core.security.TenantClaimPolicy.exact(fixedClientId) : null;
         this.deliverySlots = new Semaphore(maxConcurrentDeliveries, true);
     }
 
@@ -153,9 +124,7 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
         int capacity = Math.min(8, deliverySlots.availablePermits());
         if (capacity < 1) return;
         long now = System.currentTimeMillis();
-        List<ChatDispatchOutboxEntity> candidates = fixedTenantEnabled
-                ? outbox.discoverInScope(fixedTenantId, fixedClientId, now, capacity)
-                : outbox.discover(now, capacity);
+        List<ChatDispatchOutboxEntity> candidates = outbox.discover(now, capacity);
         for (ChatDispatchOutboxEntity candidate : candidates) {
             if (!deliverySlots.tryAcquire()) break;
             ChatDeliberationOutboxService.Claim claim = null;

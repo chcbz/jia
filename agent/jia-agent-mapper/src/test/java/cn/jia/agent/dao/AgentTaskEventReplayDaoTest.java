@@ -39,7 +39,7 @@ class AgentTaskEventReplayDaoTest extends BaseMockTest {
     }
 
     @Test
-    void grayReadsKeepExactPartitionWhileUnadaptedWritesStayClosed() {
+    void grayReadsAndVersionWritesKeepExactPartition() {
         when(mapper.findExactCurrentEventVersion("1", "client", OWNER, "task")).thenReturn(17L);
         when(mapper.findExactCurrentEventVersion("0", "client", OWNER, "task")).thenReturn(4L);
         assertEquals(17L, dao.findCurrentVersion("1", "client", OWNER, "task"));
@@ -50,10 +50,10 @@ class AgentTaskEventReplayDaoTest extends BaseMockTest {
         verify(mapper).findExactByTaskScopeAfterVersion("1", "client", OWNER, "task", 0L, 10);
         verify(mapper).findExactEarliestEventVersion("1", "client", OWNER, "task");
         verify(mapper).findExactByEventId("1", "client", OWNER, "event");
-        assertThrows(IllegalArgumentException.class,
-                () -> dao.lockAndAllocateVersion("1", "client", OWNER, "task"));
-        assertThrows(IllegalArgumentException.class,
-                () -> dao.commitEventVersion("1", "client", OWNER, "task", 0, 1, 1000));
+        dao.lockAndAllocateVersion("1", "client", OWNER, "task");
+        dao.commitEventVersion("1", "client", OWNER, "task", 0, 1, 1000);
+        verify(mapper).lockTaskMetaForEventVersion("1", "client", OWNER, "task");
+        verify(mapper).incrementCurrentEventVersion("1", "client", OWNER, "task", 0, 1, 1000);
         assertThrows(IllegalArgumentException.class,
                 () -> dao.findCurrentVersion("1", "client", "0", "task"));
     }

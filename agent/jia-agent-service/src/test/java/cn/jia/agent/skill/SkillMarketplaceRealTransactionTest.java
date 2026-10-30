@@ -1,5 +1,6 @@
 package cn.jia.agent.skill;
 
+import cn.jia.core.security.FixedTenantAdmissionPolicy;
 import cn.jia.agent.config.*;
 import cn.jia.agent.dao.*;
 import cn.jia.agent.dao.impl.AgentCommandTransportDaoImpl;
@@ -153,6 +154,7 @@ public class SkillMarketplaceRealTransactionTest {
         });
         var dto=new AgentRuntimeDTO();dto.setAgentId(AGENT);dto.setStatus("online");dto.setSystemAgent(false);
         when(agents.requireApiKeyOwnedAgentForUpdate(ACTOR.clientId(),ACTOR.ownerJiacn(),AGENT)).thenReturn(dto);
+        when(agents.requireApiKeyOwnedAgentForUpdate(ACTOR.tenantId(),ACTOR.clientId(),ACTOR.ownerJiacn(),AGENT)).thenReturn(dto);
         versions=new SkillAgentVersions(app,runtimes,provider(agents),owner,manager);
         var commands=new AgentCommandTransportDaoImpl(sql.getMapper(AgentCommandTransportMapper.class));
         var writer=new SkillInstallCommandWriter(commands,gate);
@@ -168,7 +170,7 @@ public class SkillMarketplaceRealTransactionTest {
         service=new SkillMarketplaceService(market,app,ledger,posting,gate,versions,runtimes,provider(writer),provider(packages),provider(authentication),provider(sessions),manager);
         dispatch=new SkillInstallDispatchService(app,market,service,versions,authentication,commands,provider(sessions),manager);
         recoveryMapper=sql.getMapper(AgentSkillInstallRecoveryMapper.class);
-        recovery=new SkillInstallRecoveryService(recoveryMapper,new AgentCommandRecoveryDaoImpl(sql.getMapper(AgentCommandRecoveryMapper.class)),gate,dispatch,manager);
+        recovery=new SkillInstallRecoveryService(recoveryMapper,new AgentCommandRecoveryDaoImpl(sql.getMapper(AgentCommandRecoveryMapper.class)),gate,dispatch,manager,new FixedTenantAdmissionPolicy("0", null));
         ackCommands=spy(new AgentCommandRecoveryDaoImpl(sql.getMapper(AgentCommandRecoveryMapper.class)));
         nativeAcks=new SkillInstallAckService(app,market,ackCommands,recoveryMapper,authentication,gate,service,manager);
         commandsForResults=commands;transactionManagerForResults=manager;
@@ -213,7 +215,8 @@ public class SkillMarketplaceRealTransactionTest {
     private AgentCommandAckResult nativeAckAt(SkillInstallationEntity i,String status,Long deliveryVersion,long now) {
         var generic=mock(AgentCommandAckService.class);
         var boundary=new cn.jia.agent.service.impl.AgentRuntimeV1ServiceImpl(mock(AgentRuntimeV1InstallationDao.class),
-                mock(AgentIdentityService.class),mock(AgentIdentityRegistryDao.class),provider(generic),authentication,provider(nativeAcks));
+                mock(AgentIdentityService.class),mock(AgentIdentityRegistryDao.class),provider(generic),authentication,provider(nativeAcks),
+                new cn.jia.core.security.FixedTenantAdmissionPolicy(ACTOR.tenantId(), null));
         doAnswer(call->{
             cn.jia.agent.security.AgentRuntimeAuthenticationFilter.SessionHeaders h=call.getArgument(0);
             if(h.sessionGeneration()!=proof().sessionGeneration() || !h.installationId().equals(proof().installationId())

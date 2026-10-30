@@ -60,6 +60,24 @@ class AgentPersonaCatalogOverlaySqlTest {
         }
     }
 
+    @Test
+    void bindingProjectionDoesNotRequireOrJoinLegacyPublicPersonaRows() throws Exception {
+        try (Connection c = fixture(); Statement s = c.createStatement()) {
+            s.execute("DELETE FROM agent_persona");
+            try (ResultSet rows = s.executeQuery(sql("Alice"))) {
+                assertTrue(rows.next());
+                assertEquals(1, rows.getLong("binding_id"));
+                assertFalse(rows.next());
+            }
+            // Metadata overlays are resolved by the catalog, not by this binding projection.
+            s.execute("INSERT INTO agent_persona VALUES ('linchong','0',NULL,1), ('linchong','0','client-a',1)");
+            try (ResultSet rows = s.executeQuery(sql("Alice"))) {
+                assertTrue(rows.next());
+                assertFalse(rows.next(), "metadata overlays must not multiply binding rows");
+            }
+        }
+    }
+
     private String sql(String owner) throws Exception {
         String query = String.join(" ", AgentPersonaBindingMapper.class.getMethod(
                 "findCatalogOverlay", String.class, String.class, String.class, int.class)

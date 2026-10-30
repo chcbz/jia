@@ -4,32 +4,26 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 class FixedTenantAdmissionPolicyTest {
-    @Test void disabledModePreservesOnlyLegacyTenantZeroCompatibility() {
-        var policy = new FixedTenantAdmissionPolicy("0", false, null, null);
-        assertDoesNotThrow(() -> policy.requireAdmitted("0", null));
-        assertDoesNotThrow(() -> policy.requireAdmitted("0", "production-client"));
-        assertThrows(IllegalArgumentException.class, () -> policy.requireAdmitted("1", "cyf-local"));
-    }
-
-    @Test void issuerPartitionComesOnlyFromProcessConfiguration() {
-        var production = new FixedTenantAdmissionPolicy("0", false, null, null);
-        assertEquals("0", production.tenantForClient("web-client"));
-        assertEquals("0", production.businessTenantId());
-        var grey = new FixedTenantAdmissionPolicy("0", true, "1", "cyf-local");
-        assertEquals("1", grey.tenantForClient("cyf-local"));
-        assertThrows(IllegalArgumentException.class, () -> grey.tenantForClient("web-client"));
-        assertThrows(IllegalArgumentException.class, () -> production.tenantForClient("web-client "));
-    }
-
-    @Test void enabledModeAdmitsOnlyConfiguredExactTenantClientPairAndRejectsTenantZero() {
-        var policy = new FixedTenantAdmissionPolicy("0", true, "1", "cyf-local");
-        assertEquals("1", policy.tenantForClient("cyf-local"));
-        for (String client : new String[]{"CYF-LOCAL", "cyf-local ", "other", "production-client"}) {
-            assertThrows(IllegalArgumentException.class, () -> policy.requireAdmitted("1", client));
+    @Test void everyConfiguredTenantUsesTheSamePolicyWithoutLegacyModes() {
+        for(String tenant : new String[]{"0", "1", "production", "tenant-blue"}) {
+            var policy = new FixedTenantAdmissionPolicy(tenant, null);
+            assertEquals(tenant, policy.businessTenantId());
+            assertEquals(tenant, policy.tenantForClient("web-client"));
+            assertDoesNotThrow(() -> policy.requireAdmitted(tenant, "web-client"));
+            assertThrows(IllegalArgumentException.class, () -> policy.requireAdmitted("foreign", "web-client"));
+            assertThrows(IllegalArgumentException.class, () -> policy.requireAdmitted(tenant, null));
         }
-        assertThrows(IllegalArgumentException.class, () -> policy.requireAdmitted("2", "cyf-local"));
-        assertThrows(IllegalArgumentException.class, () -> policy.requireAdmitted("0", "production-client"));
+    }
+    @Test void optionalClientRestrictionDoesNotChangeTheConfiguredPartition() {
+        var policy = new FixedTenantAdmissionPolicy("tenant-blue", "cyf-local");
+        assertEquals("tenant-blue", policy.tenantForClient("cyf-local"));
         assertThrows(IllegalArgumentException.class, () -> policy.requireAdmitted("0", "cyf-local"));
-        assertThrows(IllegalArgumentException.class, () -> policy.tenantForClient("production-client"));
+        for(String client : new String[]{"CYF-LOCAL", "cyf-local ", "other"})
+            assertThrows(IllegalArgumentException.class, () -> policy.requireAdmitted("tenant-blue", client));
+    }
+    @Test void missingOrInvalidConfigurationNeverFallsBackToAnotherPartition() {
+        for(String tenant : new String[]{null, "", " ", "tenant-blue ", "x".repeat(51)})
+            assertThrows(IllegalArgumentException.class, () -> new FixedTenantAdmissionPolicy(tenant, null));
+        assertThrows(IllegalArgumentException.class, () -> new FixedTenantAdmissionPolicy("tenant-blue", ""));
     }
 }

@@ -26,8 +26,8 @@ public class AgentCommandRecoveryDaoImpl implements AgentCommandRecoveryDao {
 
     @Override
     public List<AgentWaitingCommandCandidate> findDueCandidates(
-            long now, long sentBefore, long afterDeliveryId, int limit) {
-        return mapper.selectDueCandidates(now, sentBefore, afterDeliveryId, limit);
+            String tenantId, long now, long sentBefore, long afterDeliveryId, int limit) {
+        return mapper.selectDueCandidates(tenantId, now, sentBefore, afterDeliveryId, limit);
     }
 
     @Override

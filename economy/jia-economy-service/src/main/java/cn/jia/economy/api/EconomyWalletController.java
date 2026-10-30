@@ -1,5 +1,7 @@
 package cn.jia.economy.api;
 
+import cn.jia.core.security.TenantClaimPolicy;
+
 import cn.jia.economy.common.EconomyConstants;
 import cn.jia.economy.common.MicroSilver;
 import cn.jia.economy.common.Money;
@@ -171,7 +173,12 @@ public final class EconomyWalletController {
             throw new EconomyRequestException(HttpStatus.FORBIDDEN, "ECONOMY_FORBIDDEN",
                     "Economy scope is unavailable");
         }
-        return new Subject(new EconomyScope("0", client), actor);
+        try {
+            return new Subject(new EconomyScope(TenantClaimPolicy.resolve(claims), client), actor);
+        } catch (IllegalArgumentException denied) {
+            throw new EconomyRequestException(HttpStatus.FORBIDDEN, "ECONOMY_FORBIDDEN",
+                    "Economy scope is unavailable");
+        }
     }
 
     private static void requireNoQuery(HttpServletRequest request) {

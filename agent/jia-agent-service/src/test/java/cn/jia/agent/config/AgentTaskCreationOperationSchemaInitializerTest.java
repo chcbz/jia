@@ -46,10 +46,10 @@ class AgentTaskCreationOperationSchemaInitializerTest {
         String actual = row(actualCatalogRows(), "chk_atco_scope").get("CHECK_CLAUSE").toString();
         String canonical = AgentTaskCreationOperationSchemaInitializer
                 .canonicalCheckExpression(actual);
-        assertEquals("((tenant_id='0')and(owner_jiacn<>'0'))", canonical);
+        assertEquals("(owner_jiacn<>'0')", canonical);
         assertTrue(canonical.contains("<>"));
-        assertTrue(canonical.startsWith("(("));
-        assertTrue(canonical.endsWith("))"));
+        assertTrue(canonical.startsWith("("));
+        assertTrue(canonical.endsWith(")"));
         assertTrue(canonical.contains("'0'"));
         assertNotEquals(canonical, AgentTaskCreationOperationSchemaInitializer
                 .canonicalCheckExpression(actual.replace("<>", "=")));
@@ -82,7 +82,7 @@ class AgentTaskCreationOperationSchemaInitializerTest {
                 () -> AgentTaskCreationOperationSchemaInitializer.validateChecks(weak));
 
         List<Map<String, Object>> changed = actualCatalogRows();
-        row(changed, "chk_atco_scope").compute("CHECK_CLAUSE",
+        row(changed, "chk_atco_identity").compute("CHECK_CLAUSE",
                 (ignored, clause) -> clause.toString().replace(" and ", " or "));
         assertThrows(IllegalStateException.class,
                 () -> AgentTaskCreationOperationSchemaInitializer.validateChecks(changed));
@@ -154,7 +154,7 @@ class AgentTaskCreationOperationSchemaInitializerTest {
                 "((json_type(`input_refs_json`) = _utf8mb4'ARRAY') and "
                         + "(json_length(`input_refs_json`) between 0 and 32))")));
         rows.add(check("chk_atco_scope", "YES", escaped(
-                "((`tenant_id` = _utf8mb4'0') and (`owner_jiacn` <> _utf8mb4'0'))")));
+                "(`owner_jiacn` <> _utf8mb4'0')")));
         rows.add(check("chk_atco_time", "YES",
                 "((`created_at` > 0) and ((`completed_at` is null) "
                         + "or (`completed_at` >= `created_at`)))"));

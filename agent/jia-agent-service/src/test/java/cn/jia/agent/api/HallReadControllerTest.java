@@ -73,7 +73,7 @@ class HallReadControllerTest {
     }
     private static JwtAuthenticationToken jwt(String owner, String client) {
         JwtAuthenticationToken authentication = new JwtAuthenticationToken(
-                Jwt.withTokenValue("fixture").header("alg", "none")
+                Jwt.withTokenValue("fixture").claim("tenant_id", "0").header("alg", "none")
                         .subject(owner).claim("jiacn", owner).claim("client_id", client)
                         .issuedAt(Instant.ofEpochSecond(1)).expiresAt(Instant.ofEpochSecond(2)).build());
         // Standalone MVC receives the post-authentication principal; no decoder/filter runs here.

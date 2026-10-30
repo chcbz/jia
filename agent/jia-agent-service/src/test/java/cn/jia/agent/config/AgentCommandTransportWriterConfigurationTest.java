@@ -17,6 +17,8 @@ import static org.mockito.Mockito.mock;
 
 class AgentCommandTransportWriterConfigurationTest {
     private static final ApplicationContextRunner RUNNER = new ApplicationContextRunner()
+                .withBean(cn.jia.core.security.FixedTenantAdmissionPolicy.class,
+                        () -> new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null))
             .withBean(AgentHallCommandTransportDao.class,
                     () -> mock(AgentHallCommandTransportDao.class))
             .withBean(AgentCommandTransportMapper.class,

@@ -15,7 +15,8 @@ public record AgentInboxClaim(
         TRANSPORT_OFF,
         DB_SHADOW,
         RABBIT_CONSUME_DISABLED,
-        DB_SHADOW_CAPTURE_ONLY
+        DB_SHADOW_CAPTURE_ONLY,
+        FOREIGN_TENANT
     }
 
     public AgentInboxClaim {

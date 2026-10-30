@@ -176,7 +176,7 @@ class AgentWorkItemReassignmentControllerTest {
 
 
     private JwtAuthenticationToken targetJwt(String subject) {
-        Jwt token = Jwt.withTokenValue("test-target-token").header("alg", "none")
+        Jwt token = Jwt.withTokenValue("test-target-token").claim("tenant_id", "0").header("alg", "none")
                 .claim("jiacn", "tenant-a").claim("client_id", "client-a")
                 .subject(subject).issuedAt(Instant.now())
                 .expiresAt(Instant.now().plusSeconds(60)).build();
@@ -190,7 +190,7 @@ class AgentWorkItemReassignmentControllerTest {
 
     private JwtAuthenticationToken jwt(
             boolean subject, boolean authority, String tenant, String client, String name) {
-        Jwt.Builder builder = Jwt.withTokenValue("token").header("alg", "none")
+        Jwt.Builder builder = Jwt.withTokenValue("token").claim("tenant_id", "0").header("alg", "none")
                 .claim("jiacn", tenant).claim("client_id", client)
                 .issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(60));
         if (subject) builder.subject("operator-123");

@@ -127,3 +127,19 @@ Bootstrap discovery 在 LIMIT/锁定前按进程固定租户（灰度另固定 c
 基线 develop `85162da0d548a87b392836132e8fcdb848304816`。普通建任务的两个 HTTP 入口和 Chat 入口通过框架 ToolContext 传递捕获的身份（不依赖异步线程 EsContext），工具适配器显式传入 `AgentService.TaskOwnerScope`；创建幂等服务不再读取 Spring Security/EsContext，任务根、计划的 owner/client 以及回执成员查询使用已传入的身份，而非线程默认值。HTTP 身份校验保留在边界，租户不是模型/请求可指定的业务字段；缺失身份不得回退为 juyiting。
 
 此步是授权上下文解耦，**不表示 tenant1 已支持建任务**。创建服务和幂等服务仍在任何存储访问前拒绝非0租户；任务根预约/改键、快照捕获、事件写入、操作幂等表及 task_plan/task_item 的持久隔离须一起完成后再放开。未修改数据库/灰度路由/生产进程，不包含资金流程变更或灰度环境验收。正式回归、合入及交付以根 handoff 的真实 Flow 记录为准。
+
+### 2026-10-30 12:43 统一适配候选（未完成、未验证、未上线）
+
+最新已核对并合入本任务工作区的 develop 基线为 `16a769bd727cebaa636cb18d55f238e80aa44d8f`；后续灰度改动仍未提交，不能用该基线的生产发布证明候选已上线。任务/协作/事件/传输/执行报告/个人执行/身份别名的隔离源码持续补齐；AgentService隐式租户改从进程 FixedTenantAdmissionPolicy 取得，不信任线程中的可变 tenant 值，公共SYSTEM身份仍保留0。Artifact scope摘要保持原格式，已包含tenant，不搬迁生产文件。
+
+新增维护SQL为显式执行入口，不随启动迁移：identity-business-tenant、task-execution-grant-tenant、execution-report-tenant、personal-workspace-execution-tenant（均20261030）；须固定数据库、备份与回读约束/索引，全部所需表准备完才开放灰度。约束兼容旧生产定义不代表灰度已可写，不将旧数据恢复覆盖新生产事实。
+
+仍存在 native/skill/正式交付/资金授权/托管/Hall 等链路的tenant0限制，以及后台消费者、Rabbit隔离、Runtime/Web和入口开放的待完成项。**不是“全改完只差验证”**。本轮仅静态diff检查，无本机Gradle、无Flow/DDL/安装/重启/灰度验收；完整状态及新增回归见根handoff同日12:43节。较早章节“仅支持0”的陈述为当时状态，不能据本节部分更新宣称整个功能已支持tenant1。
+
+## 2026-10-30 最终批次范围冻结（非全量灰度交付）
+
+本批只集成现有环境配置/身份解耦适配、Task局部持久化、persona公共定义与私有覆盖、已改后台发现及相关测试；停止扩大适配范围。普通主键/批量DAO不批量改造，Web和Runtime本批不改。
+
+**未交付**：全业务表公共SQL隔离、其他业务写死租户/CHECK清理、Memory/Archive及其后台全量适配、Runtime独立安装根。既有minimal-grey路由/启动/调度限制继续保留，不因本批合入开放未适配能力。`/user/my`旧响应分支不在本次最后补丁继续改造。
+
+**运行前提**：本批公共policy必须显式配置`cyf.security.fixed-tenant.tenant-id`，不再从legacy属性或0兜底；OAuth issuer允许客户端按环境明确配置。旧生产配置不能直接启动此候选。合入develop仅用于集成验证，不包含安装、DDL或生产重启授权，也不代表全量灰度隔离或生产验收通过。

@@ -8,12 +8,14 @@ import org.apache.ibatis.annotations.Select;
 public interface AgentTaskContextPackMapper {
     @Select("""
             SELECT #{taskId} AS task_id, plan.id AS plan_id,
-                   '0' AS tenant_id, plan.jiacn AS owner_jiacn, plan.client_id, plan.name AS title,
+                   plan.tenant_id, plan.jiacn AS owner_jiacn, plan.client_id, plan.name AS title,
                    plan.description
               FROM task_plan plan
              WHERE #{taskId} REGEXP '^[0-9]+$'
                AND plan.id = CAST(#{taskId} AS UNSIGNED)
-               AND #{tenantId} = '0'
+               AND plan.tenant_id = #{tenantId}
+               AND CAST(plan.tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY)
+               AND OCTET_LENGTH(plan.tenant_id) = OCTET_LENGTH(#{tenantId})
                AND plan.jiacn = #{ownerJiacn}
                AND plan.client_id = #{clientId}
                AND CAST(plan.jiacn AS BINARY) = CAST(#{ownerJiacn} AS BINARY)

@@ -19,7 +19,10 @@ class AgentTaskContextPackMapperTest {
 
         assertTrue(sql.contains("regexp '^[0-9]+$'"));
         assertTrue(sql.contains("plan.id = cast(#{taskid} as unsigned)"));
-        assertTrue(sql.contains("#{tenantid} = '0'"));
+        assertFalse(sql.contains("#{tenantid} = '0'"));
+        assertTrue(sql.contains("plan.tenant_id = #{tenantid}"));
+        assertTrue(sql.contains("cast(plan.tenant_id as binary) = cast(#{tenantid} as binary)"));
+        assertTrue(sql.contains("octet_length(plan.tenant_id) = octet_length(#{tenantid})"));
         assertTrue(sql.contains("cast(plan.jiacn as binary) = cast(#{ownerjiacn} as binary)"));
         assertTrue(sql.contains("octet_length(plan.jiacn) = octet_length(#{ownerjiacn})"));
         assertTrue(sql.contains("cast(plan.client_id as binary) = cast(#{clientid} as binary)"));
@@ -27,6 +30,19 @@ class AgentTaskContextPackMapperTest {
         assertFalse(sql.contains("remind_phone"));
         assertFalse(sql.contains("remind_msg"));
         assertFalse(sql.contains("select *"));
+    }
+
+    @Test
+    void contextPackDaoKeepsGrayScopeAndRejectsMalformedOrSystemOwner() {
+        var mapper = org.mockito.Mockito.mock(AgentTaskContextPackMapper.class);
+        var dao = new cn.jia.agent.dao.impl.AgentTaskContextPackDaoImpl(mapper);
+        dao.findTaskDescription("1", "client-a", "owner-a", "123");
+        org.mockito.Mockito.verify(mapper).findTaskDescription("1", "client-a", "owner-a", "123");
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+                () -> dao.findTaskDescription("1 ", "client-a", "owner-a", "123"));
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+                () -> dao.findTaskDescription("1", "client-a", "0", "123"));
+        org.mockito.Mockito.verifyNoMoreInteractions(mapper);
     }
 
     @Test

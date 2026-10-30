@@ -375,7 +375,7 @@ class PersonalWorkspaceHttpPersistenceIntegrationTest {
     }
 
     private static JwtAuthenticationToken jwt(String owner, String client) {
-        Jwt token = Jwt.withTokenValue("fixture")
+        Jwt token = Jwt.withTokenValue("fixture").claim("tenant_id", "0")
                 .header("alg", "none")
                 .claim("jiacn", owner)
                 .claim("client_id", client)

@@ -89,6 +89,27 @@ class AgentPersonaCatalogCacheTest {
     }
 
     @Test
+    void publicDefinitionsAreImmutableCatalogFactsNotTenantZeroOrNullScopeRows() {
+        for (String tenant : List.of("0", "1", "tenant-blue")) {
+            AgentPersonaCatalogCache cache = new AgentPersonaCatalogCache();
+            var global = cn.jia.agent.common.WaterMarginPersonaCatalog.publicPersona("wuyong");
+            assertEquals("wuyong", cache.get(tenant, "Client-A", () -> List.of(global))
+                    .entries().getFirst().personaCode());
+            global.setName("forged published name");
+            cache.invalidateAllAfterCommit();
+            assertThrows(IllegalStateException.class,
+                    () -> cache.get(tenant, "Client-A", () -> List.of(global)));
+            assertThrows(IllegalStateException.class, () -> cache.get(tenant, "Client-A",
+                    () -> List.of(persona(null, null, "private-null", "not published"))));
+        }
+        AgentPersonaCatalogCache cache = new AgentPersonaCatalogCache();
+        assertThrows(IllegalStateException.class, () -> cache.get("1", "Client-A",
+                () -> List.of(persona("0", null, "wuyong", "production override"))));
+        assertThrows(IllegalStateException.class, () -> cache.get("0", "Client-A",
+                () -> List.of(persona("1", null, "wuyong", "gray override"))));
+    }
+
+    @Test
     void nullEmptyMalformedAndExceptionalLoadsFailClosedAndRemainRetryable() {
         AgentPersonaCatalogCache cache = new AgentPersonaCatalogCache();
         assertThrows(IllegalStateException.class,

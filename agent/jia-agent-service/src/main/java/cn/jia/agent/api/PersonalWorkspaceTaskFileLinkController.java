@@ -136,7 +136,7 @@ public class PersonalWorkspaceTaskFileLinkController {
         }
         try {
             return new PersonalWorkspaceTaskLinkService.Scope(
-                    cn.jia.core.security.TenantClaimPolicy.resolve(claims, "0"), clientId, ownerJiacn);
+                    cn.jia.core.security.TenantClaimPolicy.resolve(claims), clientId, ownerJiacn);
         } catch (IllegalArgumentException invalidTenant) {
             throw new AuthenticationFailure(true);
         }

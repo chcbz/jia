@@ -71,7 +71,7 @@ public final class AgentCommandMailboxServiceImpl implements AgentCommandMailbox
             String tenantId, String clientId, String ownerJiacn, String callerAgentId,
             String targetAgentId, String taskId, Long beforeCreateTime, Long beforeId, int limit,
             boolean includeTerminal) {
-        if (!"0".equals(tenantId)) throw new IllegalArgumentException("tenantId must be 0");
+        requireExact(tenantId, "tenantId", 50);
         requireExact(clientId, "clientId", 50);
         requireExact(ownerJiacn, "ownerJiacn", 50);
         requireExact(callerAgentId, "callerAgentId", 100);
@@ -108,7 +108,7 @@ public final class AgentCommandMailboxServiceImpl implements AgentCommandMailbox
             }
         }
         for (String agentId : agents) {
-            requireOwnedRuntime(clientId, ownerJiacn, agentId);
+            requireOwnedRuntime(tenantId, clientId, ownerJiacn, agentId);
         }
         long now = clock.getAsLong();
         if (now <= 0) throw new IllegalStateException("mailbox clock returned an invalid time");
@@ -138,11 +138,11 @@ public final class AgentCommandMailboxServiceImpl implements AgentCommandMailbox
                 last == null ? null : last.createTime(), last == null ? null : last.id());
     }
 
-    private void requireOwnedRuntime(String clientId, String ownerJiacn, String agentId) {
+    private void requireOwnedRuntime(String tenantId, String clientId, String ownerJiacn, String agentId) {
         AgentRuntimeDTO runtime;
         try {
             runtime = agentService.requireApiKeyOwnedAgentForUpdate(
-                    clientId, ownerJiacn, agentId);
+                    tenantId, clientId, ownerJiacn, agentId);
         } catch (AgentBizException denied) {
             if (AgentErrorConstants.AGENT_FORBIDDEN.equals(denied.getCode())
                     || AgentErrorConstants.AGENT_NOT_FOUND.equals(denied.getCode())) {

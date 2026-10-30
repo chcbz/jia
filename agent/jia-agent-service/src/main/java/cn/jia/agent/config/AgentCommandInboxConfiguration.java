@@ -4,6 +4,7 @@ import cn.jia.agent.dao.AgentCommandInboxDao;
 import cn.jia.agent.service.AgentCommandInboxService;
 import cn.jia.agent.service.impl.AgentCommandInboxServiceImpl;
 import org.springframework.context.annotation.Bean;
+import cn.jia.core.security.FixedTenantAdmissionPolicy;
 import org.springframework.context.annotation.Conditional;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -16,7 +17,9 @@ public class AgentCommandInboxConfiguration {
     public AgentCommandInboxService agentCommandInboxService(
             AgentCommandInboxDao dao,
             AgentRabbitSafetyGate gate,
-            PlatformTransactionManager transactionManager) {
-        return new AgentCommandInboxServiceImpl(dao, gate, transactionManager);
+            PlatformTransactionManager transactionManager,
+            FixedTenantAdmissionPolicy admission) {
+        return new AgentCommandInboxServiceImpl(dao, gate, transactionManager,
+                admission.businessTenantId());
     }
 }

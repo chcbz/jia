@@ -38,7 +38,7 @@ CREATE TABLE IF NOT EXISTS agent_task_execution_grant (
  UNIQUE KEY uk_atxg_active_task (tenant_id,client_id,owner_jiacn,active_task_guard),
  KEY idx_atxg_executor (tenant_id,client_id,executor_owner_jiacn,target_agent_id,state),
  KEY idx_atxg_task_state (tenant_id,client_id,owner_jiacn,task_id,state),
- CONSTRAINT chk_atxg_tenant CHECK (tenant_id='0'),
+ CONSTRAINT chk_atxg_tenant CHECK (CHAR_LENGTH(tenant_id)>0 AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(TRIM(tenant_id))),
  CONSTRAINT chk_atxg_revision CHECK (requirement_revision>=1 AND assignment_revision>=0 AND grant_version>=1),
  CONSTRAINT chk_atxg_state CHECK (state IN ('ACTIVE','REVOKED','SUPERSEDED')),
  CONSTRAINT chk_atxg_derived CHECK (allow_own_task_derived_assets IN (0,1)),

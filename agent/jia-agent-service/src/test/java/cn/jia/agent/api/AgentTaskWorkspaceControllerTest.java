@@ -86,6 +86,7 @@ class AgentTaskWorkspaceControllerTest extends BaseMockTest {
     @Test
     void malformedOrConflictingTenantClaimsFailBeforeWorkspaceLookup() throws Exception {
         for (var claims : java.util.List.<java.util.Map<String, Object>>of(
+                java.util.Map.of(), java.util.Map.of("tenantId", "0"),
                 java.util.Map.of("tenant_id", 1), java.util.Map.of("tenant_id", " 1"),
                 java.util.Map.of("tenant_id", "1", "tenantId", "0"))) {
             mvc.perform(get("/agent/tasks/{taskId}/workspace", TASK)
@@ -162,7 +163,7 @@ class AgentTaskWorkspaceControllerTest extends BaseMockTest {
                 .andExpect(status().isUnauthorized())
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
 
-        Jwt jwt = Jwt.withTokenValue("token")
+        Jwt jwt = Jwt.withTokenValue("token").claim("tenant_id", "0")
                 .header("alg", "none")
                 .claim("jiacn", "tenant-a")
                 .claim("client_id", 123)
@@ -180,7 +181,7 @@ class AgentTaskWorkspaceControllerTest extends BaseMockTest {
                 .andExpect(status().isUnauthorized())
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
 
-        Jwt badClaimsJwt = Jwt.withTokenValue("token")
+        Jwt badClaimsJwt = Jwt.withTokenValue("token").claim("tenant_id", "0")
                 .header("alg", "none")
                 .claim("jiacn", "tenant-a")
                 .claim("client_id", 123)
@@ -399,7 +400,7 @@ class AgentTaskWorkspaceControllerTest extends BaseMockTest {
     }
 
     private static JwtAuthenticationToken authenticate(String jiacn, String clientId) {
-        Jwt jwt = Jwt.withTokenValue("token")
+        Jwt jwt = Jwt.withTokenValue("token").claim("tenant_id", "0")
                 .header("alg", "none")
                 .claim("jiacn", jiacn)
                 .claim("client_id", clientId)

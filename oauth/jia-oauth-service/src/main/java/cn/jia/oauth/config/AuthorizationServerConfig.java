@@ -119,19 +119,14 @@ public class AuthorizationServerConfig {
 
     @Bean
     public OAuth2TokenCustomizer<JwtEncodingContext> jwtTokenCustomizer(
-            @Value("${cyf.security.legacy-single-tenant-id:0}") String legacyTenantId,
-            @Value("${cyf.security.fixed-tenant.enabled:false}") boolean fixedTenantEnabled,
-            @Value("${cyf.security.fixed-tenant.tenant-id:}") String fixedTenantId,
-            @Value("${cyf.security.fixed-tenant.client-id:}") String fixedClientId,
+            FixedTenantAdmissionPolicy admission,
             @Value("${cyf.security.oauth.issuer-client-ids:}") String issuerClientIds) {
-        FixedTenantAdmissionPolicy admission = new FixedTenantAdmissionPolicy(legacyTenantId,
-                fixedTenantEnabled, fixedTenantId, fixedClientId);
         // A global OAuth registry does not decide which applications may use this
         // issuer. Production's previous admitted set must be migrated to deployment
         // configuration before switching binaries; never infer it from the request.
         java.util.Set<String> allowedClients;
-        if (fixedTenantEnabled && issuerClientIds.isBlank()) {
-            allowedClients = java.util.Set.of(fixedClientId);
+        if (admission.clientId() != null && issuerClientIds.isBlank()) {
+            allowedClients = java.util.Set.of(admission.clientId());
         } else {
             allowedClients = issuerClientIds.isBlank() ? java.util.Set.of()
                     : java.util.Arrays.stream(issuerClientIds.split(",", -1))

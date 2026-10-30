@@ -75,6 +75,26 @@ class AgentTaskExecutionGrantServiceImplTest {
         service.setAssigneeAuthority(authority);
     }
 
+    @Test void grayScopeReachesTenantBoundRootLockWithoutProductionFallback() {
+        var transactions = mock(AgentTaskMutationTransaction.class);
+        var scoped = new AgentTaskExecutionGrantServiceImpl(grants,bootstraps,links,workspace,
+                legacy,identities,transactions,new ObjectMapper(),requirementSnapshots);
+        var gray = new AgentTaskExecutionGrantService.Scope("1","client","owner");
+        scoped.admit(gray,"task-1","grant-1",1,0,"agent-1","READ_TASK",false);
+        verify(transactions).executeWithLockedTaskRootInOwnerScope(eq("1"),eq("client"),
+                eq("owner"),eq("task-1"),any());
+        verifyNoMoreInteractions(transactions);
+        for (String tenant : List.of("", "1 ", " 1", "x".repeat(51))) {
+            assertThrows(AgentTaskExecutionGrantException.class, () -> scoped.admit(
+                    new AgentTaskExecutionGrantService.Scope(tenant,"client","owner"),
+                    "task-1","grant-1",1,0,"agent-1","READ_TASK",false));
+        }
+        assertThrows(AgentTaskExecutionGrantException.class, () -> scoped.admit(
+                new AgentTaskExecutionGrantService.Scope("1","client","0"),
+                "task-1","grant-1",1,0,"agent-1","READ_TASK",false));
+        verifyNoMoreInteractions(transactions);
+    }
+
     @Test void externalGrantFreezesExecutorAndStillCreatesOriginalAutomaticBootstrap() {
         when(links.list("0","client","owner","task-1",null,null,33)).thenReturn(List.of());
         when(authority.lockForAssignment("0","client","owner","agent-1"))

@@ -332,11 +332,11 @@ class ArchiveNativeHttpMySqlTest {
         }
         @Bean AgentRuntimeAuthenticationService authentication(AgentRuntimeDao rows, AgentRuntimeV1InstallationDao installations,
                 AgentIdentityRegistryDao registry, AgentIdentityService identity, AccountSecurityService accounts, AgentTaskEventsGate gate) {
-            return new AgentRuntimeAuthenticationService(rows, installations, registry, identity, accounts, gate);
+            return new AgentRuntimeAuthenticationService(rows, installations, registry, identity, accounts, gate, new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null));
         }
         @Bean AgentRuntimeV1Service runtime(AgentRuntimeV1InstallationDao installations, AgentIdentityService identity,
                 AgentIdentityRegistryDao registry, ObjectProvider<AgentCommandAckService> acks, AgentRuntimeAuthenticationService authentication, ObjectProvider<SkillInstallAckService> skillAcks) {
-            return new AgentRuntimeV1ServiceImpl(installations, identity, registry, acks, authentication, skillAcks);
+            return new AgentRuntimeV1ServiceImpl(installations, identity, registry, acks, authentication, skillAcks, new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null));
         }
         @Bean AgentRuntimeV1Controller controller(AgentRuntimeV1Service runtime) { return new AgentRuntimeV1Controller(runtime); }
         @Bean SensitiveResponseProperties sensitiveProperties() { return new SensitiveResponseProperties(); }

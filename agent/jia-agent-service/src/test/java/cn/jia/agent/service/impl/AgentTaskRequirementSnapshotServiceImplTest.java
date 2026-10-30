@@ -298,7 +298,7 @@ class AgentTaskRequirementSnapshotServiceImplTest {
     }
 
     private static JwtAuthenticationToken jwtToken(String owner,String client) {
-        Jwt token=Jwt.withTokenValue("token").header("alg","none")
+        Jwt token=Jwt.withTokenValue("token").claim("tenant_id", "0").header("alg","none")
                 .claim("jiacn",owner).claim("client_id",client).build();
         JwtAuthenticationToken authentication=new JwtAuthenticationToken(token);
         authentication.setAuthenticated(true);
@@ -308,7 +308,7 @@ class AgentTaskRequirementSnapshotServiceImplTest {
     private record FailureCase(AgentTaskRequirementReadException.Reason reason,int status,String code) { }
 
     private static void jwt(String owner,String client) {
-        Jwt token=Jwt.withTokenValue("token").header("alg","none")
+        Jwt token=Jwt.withTokenValue("token").claim("tenant_id", "0").header("alg","none")
                 .claim("jiacn",owner).claim("client_id",client).build();
         var authentication=new JwtAuthenticationToken(token);
         authentication.setAuthenticated(true);

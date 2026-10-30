@@ -1,4 +1,5 @@
 dependencies {
+    testImplementation project(':common:jia-common-test')
     api project(':common:jia-common-api')
     api libs.pagehelper.core
     api libs.mybatis.plus.core

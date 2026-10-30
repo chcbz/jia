@@ -141,7 +141,7 @@ class PersonalWorkspaceConversationFileLinkControllerTest extends BaseMockTest {
     }
 
     private static JwtAuthenticationToken jwt(String owner, String client) {
-        Jwt token = Jwt.withTokenValue("token").header("alg", "none")
+        Jwt token = Jwt.withTokenValue("token").claim("tenant_id", "0").header("alg", "none")
                 .claim("jiacn", owner).claim("client_id", client)
                 .issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(60)).build();
         return new JwtAuthenticationToken(token, List.of());

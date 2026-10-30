@@ -174,7 +174,7 @@ public class PersonalWorkspaceExecutionDaoImpl implements PersonalWorkspaceExecu
 
     private static void init(cn.jia.core.entity.BaseEntity entity) { entity.init4Creation(); }
     private static void scope(String tenantId, String clientId, String ownerJiacn) {
-        if (!"0".equals(tenantId)) throw new IllegalArgumentException("tenant");
+        TaskCollaborationDaoSupport.requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
         id(clientId, "clientId"); id(ownerJiacn, "ownerJiacn"); if ("0".equals(ownerJiacn)) throw new IllegalArgumentException("owner");
     }
     private static void id(String value, String name) {

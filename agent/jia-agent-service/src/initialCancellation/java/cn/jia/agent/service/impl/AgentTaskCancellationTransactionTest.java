@@ -156,7 +156,7 @@ class AgentTaskCancellationTransactionTest {
     @Test void realMemberExitClocksSurviveOriginalVersionHttpReplayWithoutDuplicateEvents() throws Exception {
         jdbc.update("INSERT INTO member VALUES('b','invited',0,NULL,NULL)");
         var mvc=MockMvcBuilders.standaloneSetup(new AgentTaskCancellationController(service)).build();
-        var jwt=new JwtAuthenticationToken(Jwt.withTokenValue("fixture-token").header("alg","none")
+        var jwt=new JwtAuthenticationToken(Jwt.withTokenValue("fixture-token").claim("tenant_id", "0").header("alg","none")
                 .subject("actor").claim("jiacn","owner").claim("client_id","client").build(),List.of(),"actor");
         mvc.perform(post("/agent/tasks/417/cancel").principal(jwt).contentType("application/json")
                 .content("{\"expectedTaskVersion\":1}"))

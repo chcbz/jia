@@ -24,7 +24,11 @@ class WaterMarginPersonaCatalogTest {
         assertEquals("地慧星", first.getStarName());
         assertEquals("扈三娘", first.getName());
         assertEquals("一丈青", first.getTitle());
-        assertEquals("0", first.getTenantId());
+        assertNull(first.getTenantId());
+        assertTrue(WaterMarginPersonaCatalog.isPublicDefinition(first));
+        first.setName("tenant override");
+        assertFalse(WaterMarginPersonaCatalog.isPublicDefinition(first));
+        assertEquals("扈三娘", second.getName());
         assertNull(first.getClientId());
         assertTrue(first.getActive());
         assertFalse(first.getSystemAgent());

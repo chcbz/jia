@@ -156,7 +156,7 @@ public final class AgentCommandTransportWriterImpl implements AgentCommandTransp
             AgentRuntimeDTO runtime;
             try {
                 runtime = agentService.requireApiKeyOwnedAgentForUpdate(
-                        draft.clientId(), draft.ownerJiacn(), agentId);
+                        draft.tenantId(), draft.clientId(), draft.ownerJiacn(), agentId);
             } catch (AgentServiceImpl.AgentBizException denied) {
                 throw new IllegalArgumentException(
                         "Caller or target is not active in the trusted owner scope", denied);

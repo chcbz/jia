@@ -48,7 +48,7 @@ public class AgentWorkItemReassignmentDaoImpl implements AgentWorkItemReassignme
     }
 
     private void require(String tenantId, String clientId, String ownerJiacn, String first, String second, String third) {
-        if (!"0".equals(tenantId) || !exact(clientId, 50) || !exact(ownerJiacn, 50)
+        if (!exact(tenantId, 50) || !exact(clientId, 50) || !exact(ownerJiacn, 50)
                 || !exact(first, 100) || !exact(second, 100) || !exact(third, 100)) {
             throw new IllegalArgumentException("reassignment DAO scope or identity is invalid");
         }

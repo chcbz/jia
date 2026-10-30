@@ -154,13 +154,34 @@ class AgentCommandTransportWriterImplTest {
         order.verify(accessService).resolveMemberAccessForUpdate(
                 "0", "client-a", OWNER, "task-1", "agent-1");
         order.verify(agentService).requireApiKeyOwnedAgentForUpdate(
-                "client-a", OWNER, CALLER);
+                "0", "client-a", OWNER, CALLER);
         order.verify(agentService).requireApiKeyOwnedAgentForUpdate(
-                "client-a", OWNER, "agent-1");
+                "0", "client-a", OWNER, "agent-1");
         order.verify(dao).lockDelivery("0", "client-a", OWNER, draft.commandId());
         order.verify(dao).insertDelivery(any());
         order.verify(dao).insertOutbox(any());
         order.verify(transactions).commit(any(TransactionStatus.class));
+    }
+
+    @Test
+    void grayHallWriterRetainsTenantThroughAuthorizationAndShadowPersistence() {
+        var draft = hallDraft("1", 1_000L, "执行工作项并回报结果");
+        allowHallAuthorization();
+        when(dao.insertDelivery(any())).thenAnswer(invocation -> {
+            var row = invocation.<AgentCommandDeliveryEntity>getArgument(0);
+            assertEquals("1", row.getTenantId());
+            row.setId(91L);
+            return 1;
+        });
+        when(dao.insertOutbox(any())).thenAnswer(invocation -> {
+            assertEquals("1", invocation.<AgentOutboxEventEntity>getArgument(0).getTenantId());
+            return 1;
+        });
+        hallWriter(gate(AgentRabbitActivationState.DB_SHADOW, false)).writeAuthorizedHall(draft, CALLER);
+        verify(agentService).requireApiKeyOwnedAgentForUpdate("1", "client-a", OWNER, CALLER);
+        verify(agentService).requireApiKeyOwnedAgentForUpdate("1", "client-a", OWNER, "agent-1");
+        verify(agentService, never()).requireApiKeyOwnedAgentForUpdate(any(), any(), any());
+        verify(dao).lockDelivery("1", "client-a", OWNER, draft.commandId());
     }
 
     @Test
@@ -177,7 +198,7 @@ class AgentCommandTransportWriterImplTest {
                 gate(AgentRabbitActivationState.DISPATCH_CANARY, true))
                 .writeAuthorizedHall(draft, CALLER));
 
-        verify(agentService, never()).requireApiKeyOwnedAgentForUpdate(any(), any(), any());
+        verify(agentService, never()).requireApiKeyOwnedAgentForUpdate(any(), any(), any(), any());
         verify(dao, never()).lockDelivery(any(), any(), any(), any());
         verify(dao, never()).insertDelivery(any());
         verify(dao, never()).insertOutbox(any());
@@ -192,10 +213,10 @@ class AgentCommandTransportWriterImplTest {
         when(accessService.resolveMemberAccessForUpdate(any(), any(), any(), any(), any()))
                 .thenReturn(AgentTaskAccessLevel.READ_WRITE);
         when(agentService.requireApiKeyOwnedAgentForUpdate(
-                "client-a", OWNER, CALLER))
+                "0", "client-a", OWNER, CALLER))
                 .thenReturn(runtime(CALLER, AgentConstants.STATUS_ONLINE));
         when(agentService.requireApiKeyOwnedAgentForUpdate(
-                "client-a", OWNER, "agent-1"))
+                "0", "client-a", OWNER, "agent-1"))
                 .thenThrow(ownershipDenied);
 
         IllegalArgumentException denied = assertThrows(
@@ -364,9 +385,9 @@ class AgentCommandTransportWriterImplTest {
     private void allowHallAuthorization() {
         when(accessService.resolveMemberAccessForUpdate(any(), any(), any(), any(), any()))
                 .thenReturn(AgentTaskAccessLevel.READ_WRITE);
-        when(agentService.requireApiKeyOwnedAgentForUpdate(any(), any(), any()))
+        when(agentService.requireApiKeyOwnedAgentForUpdate(any(), any(), any(), any()))
                 .thenAnswer(invocation -> runtime(
-                        invocation.getArgument(2), AgentConstants.STATUS_ONLINE));
+                        invocation.getArgument(3), AgentConstants.STATUS_ONLINE));
     }
 
     private AgentRuntimeDTO runtime(String agentId, String status) {
@@ -419,12 +440,16 @@ class AgentCommandTransportWriterImplTest {
     }
 
     private AgentCommandDraft hallDraft(long issuedAt, String instruction) {
+        return hallDraft("0", issuedAt, instruction);
+    }
+
+    private AgentCommandDraft hallDraft(String tenant, long issuedAt, String instruction) {
         String intentId = "intent-hall-1";
         String commandType = AgentProtocolConstants.COMMAND_WORK_ITEM_EXECUTE;
         String commandId = AgentCommandCanonicalCodec.hallCommandId(
-                "0", "client-a", OWNER, "task-1", "agent-1", intentId, commandType);
+                tenant, "client-a", OWNER, "task-1", "agent-1", intentId, commandType);
         return new AgentCommandDraft(
-                1, commandId, "task-1", intentId, "0", "client-a", OWNER, "task-1",
+                1, commandId, "task-1", intentId, tenant, "client-a", OWNER, "task-1",
                 "work-1", "agent-1", commandType, issuedAt,
                 issuedAt + AgentCommandCanonicalCodec.HALL_COMMAND_TTL_MILLIS, intentId,
                 new AgentHallCommandPayload(

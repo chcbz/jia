@@ -68,6 +68,9 @@ class AgentExternalServicePolicyMySqlTest {
     private long providerBinding;
     private PersonalWorkspaceExecutionMapper executions;
 
+    private AgentTaskExecutionGrantDaoImpl grants;
+    private AgentExecutionReportMapper reports;
+
     @BeforeAll static void startOwnedDatabase() throws Exception {
         Path executable = Path.of(System.getenv("CYF_REVIEW_MYSQLD")).toRealPath();
         assertTrue(Files.isExecutable(executable));
@@ -150,18 +153,19 @@ class AgentExternalServicePolicyMySqlTest {
         MybatisConfiguration configuration = new MybatisConfiguration(); configuration.setMapUnderscoreToCamelCase(true);
         for (Class<?> mapper : List.of(AgentIdentityRegistryMapper.class, AgentIdentityAliasMapper.class,
                 AgentPersonaBindingMapper.class, AgentExternalServicePolicyMapper.class, AgentTaskMetaMapper.class,
-                AgentTaskExecutionGrantMapper.class, AgentRuntimeMapper.class, PersonalWorkspaceExecutionMapper.class)) configuration.addMapper(mapper);
+                AgentTaskExecutionGrantMapper.class, AgentExecutionReportMapper.class, AgentRuntimeMapper.class, PersonalWorkspaceExecutionMapper.class)) configuration.addMapper(mapper);
         GlobalConfig global = new GlobalConfig(); global.setIdentifierGenerator(new DefaultIdentifierGenerator()); global.setBanner(false);
         var factory = new MybatisSqlSessionFactoryBean(); factory.setDataSource(source); factory.setConfiguration(configuration); factory.setGlobalConfig(global);
         var sql = new SqlSessionTemplate(Objects.requireNonNull(factory.getObject()));
         executions = sql.getMapper(PersonalWorkspaceExecutionMapper.class);
+        reports = sql.getMapper(AgentExecutionReportMapper.class);
         var registry = wire(new AgentIdentityRegistryDaoImpl(), sql.getMapper(AgentIdentityRegistryMapper.class));
         var aliases = wire(new AgentIdentityAliasDaoImpl(), sql.getMapper(AgentIdentityAliasMapper.class));
         var bindings = wire(new AgentPersonaBindingDaoImpl(), sql.getMapper(AgentPersonaBindingMapper.class));
         identities = proxy(new AgentIdentityServiceImpl(registry, aliases, bindings), AgentIdentityService.class);
         var policyDao = new AgentExternalServicePolicyDaoImpl(sql.getMapper(AgentExternalServicePolicyMapper.class));
         var tasks = wire(new AgentTaskMetaDaoImpl(), sql.getMapper(AgentTaskMetaMapper.class));
-        var grants = new AgentTaskExecutionGrantDaoImpl(sql.getMapper(AgentTaskExecutionGrantMapper.class));
+        grants = new AgentTaskExecutionGrantDaoImpl(sql.getMapper(AgentTaskExecutionGrantMapper.class));
         var runtimes = wire(new AgentRuntimeDaoImpl(), sql.getMapper(AgentRuntimeMapper.class));
         policies = proxy(new AgentExternalServicePolicyServiceImpl(policyDao, identities, tasks, grants, runtimes), AgentExternalServicePolicyService.class);
         authority = new TaskAssigneeAuthorityServiceImpl(policyDao, identities, grants);
@@ -175,6 +179,87 @@ class AgentExternalServicePolicyMySqlTest {
             admin.execute("DROP DATABASE `" + database + "`");
             assertEquals(0, admin.queryForObject("SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name=?", Integer.class, database));
         }
+    }
+
+    @Test void reportHeadsKeepIdenticalCommandKeysInSeparateEnvironments() {
+        var source = Objects.requireNonNull(jdbc.getDataSource());
+        new ResourceDatabasePopulator(new ClassPathResource("db/agent-execution-report-v1.sql")).execute(source);
+        jdbc.execute("ALTER TABLE agent_execution_report_head DROP CHECK chk_execution_report_head_tenant, "
+                + "ADD CONSTRAINT chk_execution_report_head_tenant CHECK (tenant_id='0')");
+        jdbc.execute("ALTER TABLE agent_execution_report_inbox DROP CHECK chk_execution_report_tenant, "
+                + "ADD CONSTRAINT chk_execution_report_tenant CHECK (tenant_id='0')");
+        var migration = new ResourceDatabasePopulator(new ClassPathResource("db/agent-execution-report-tenant-20261030.sql"));
+        migration.execute(source);
+        migration.execute(source);
+        for (String tenant : List.of("0","1")) {
+            var row = new cn.jia.agent.entity.AgentExecutionReportHeadEntity()
+                    .setOwnerJiacn("task-owner").setAgentId(A).setRuntimeInstanceId("runtime-a")
+                    .setExecutionRef("execution-a").setCommandId("command-a").setAttempt(1)
+                    .setLastSequence(0L).setCommittedVersion(0L);
+            row.setTenantId(tenant); row.setClientId("client-a");
+            row.setCreateTime(1L); row.setUpdateTime(1L);
+            assertEquals(1,reports.insertHead(row));
+        }
+        new TransactionTemplate(transactions).executeWithoutResult(status -> {
+            assertEquals("0", reports.lockHead("0","client-a","task-owner",A,"command-a",1).getTenantId());
+            assertEquals("1", reports.lockHead("1","client-a","task-owner",A,"command-a",1).getTenantId());
+            assertNull(reports.lockHead("1 ","client-a","task-owner",A,"command-a",1));
+            assertNull(reports.lockHead("1","client-a","foreign-owner",A,"command-a",1));
+            assertNull(reports.lockHead("1","foreign-client","task-owner",A,"command-a",1));
+        });
+    }
+
+    @Test void identityMigrationPartitionsSameLegacyAliasWithoutChangingProductionIdentity() {
+        jdbc.execute("ALTER TABLE agent_persona_binding ADD CONSTRAINT chk_agent_binding_single_tenant CHECK (tenant_id='0')");
+        jdbc.execute("CREATE TABLE agent_hosted_profile (id BIGINT PRIMARY KEY, tenant_id VARCHAR(50) NOT NULL, "
+                + "CONSTRAINT chk_hosted_single_tenant CHECK (tenant_id='0')) ENGINE=InnoDB");
+        var migration = new ResourceDatabasePopulator(
+                new ClassPathResource("db/agent-identity-business-tenant-20261030.sql"));
+        migration.execute(Objects.requireNonNull(jdbc.getDataSource()));
+        migration.execute(jdbc.getDataSource());
+        String production = "agt_" + "c".repeat(32), gray = "agt_" + "d".repeat(32);
+        seed(production, TASK_OWNER, null, "online");
+        seed(gray, new AgentTaskExecutionGrantService.Scope("1","client-a","task-owner"), null, "online");
+        for (String agent : List.of(production, gray)) {
+            jdbc.update("INSERT INTO agent_identity_alias "
+                    + "(registry_id,canonical_agent_id,alias_type,alias_value,alias_status,valid_from,client_id,owner_jiacn,tenant_id,audit_reason) "
+                    + "SELECT id,canonical_agent_id,'LEGACY_AGENT_ID','same-alias','ACTIVE',1,client_id,owner_jiacn,tenant_id,'fixture' "
+                    + "FROM agent_identity_registry WHERE canonical_agent_id=?", agent);
+        }
+        assertEquals(production, identities.resolveAgentIdInScope("0","client-a","task-owner","same-alias"));
+        assertEquals(gray, identities.resolveAgentIdInScope("1","client-a","task-owner","same-alias"));
+        assertThrows(RuntimeException.class, () -> identities.requireCanonicalAgentIdInScope("0","client-a","task-owner",gray));
+        assertThrows(RuntimeException.class, () -> identities.requireCanonicalAgentIdInScope("1","client-a","task-owner",production));
+        assertThrows(RuntimeException.class, () -> jdbc.update("INSERT INTO agent_identity_alias "
+                + "(registry_id,canonical_agent_id,alias_type,alias_value,alias_status,valid_from,client_id,owner_jiacn,tenant_id,audit_reason) "
+                + "SELECT id,canonical_agent_id,'LEGACY_AGENT_ID','forged-alias','ACTIVE',1,client_id,owner_jiacn,'1','fixture' "
+                + "FROM agent_identity_registry WHERE canonical_agent_id=?", production));
+        assertEquals("0", jdbc.queryForObject("SELECT tenant_id FROM agent_identity_registry WHERE canonical_agent_id=?", String.class, A));
+    }
+
+    @Test void grantTenantMigrationKeepsProductionAndScopesIdenticalGrantKeys() {
+        persistExternalGrant();
+        jdbc.execute("ALTER TABLE agent_task_execution_grant DROP CHECK chk_atxg_tenant, "
+                + "ADD CONSTRAINT chk_atxg_tenant CHECK (tenant_id='0')");
+        var migration = new ResourceDatabasePopulator(
+                new ClassPathResource("db/agent-task-execution-grant-tenant-20261030.sql"));
+        migration.execute(Objects.requireNonNull(jdbc.getDataSource()));
+        migration.execute(jdbc.getDataSource());
+        var gray = grants.findByGrant("0", "client-a", "task-owner", "task-a", "grant-a");
+        assertNotNull(gray);
+        gray.setId(null);
+        gray.setTenantId("1");
+        grants.insert(gray);
+        assertEquals("0", grants.findByGrant("0", "client-a", "task-owner", "task-a", "grant-a").getTenantId());
+        assertEquals("1", grants.findByGrant("1", "client-a", "task-owner", "task-a", "grant-a").getTenantId());
+        assertNull(grants.findByGrant("1", "client-a", "foreign-owner", "task-a", "grant-a"));
+        assertNull(grants.findByGrant("1", "foreign-client", "task-owner", "task-a", "grant-a"));
+        assertThrows(IllegalArgumentException.class,
+                () -> grants.findByGrant("1 ", "client-a", "task-owner", "task-a", "grant-a"));
+        new TransactionTemplate(transactions).executeWithoutResult(status ->
+                assertEquals(1, grants.supersedeActiveForTask("1", "client-a", "task-owner", "task-a", 2L)));
+        assertEquals("ACTIVE", grants.findByGrant("0", "client-a", "task-owner", "task-a", "grant-a").getState());
+        assertEquals("SUPERSEDED", grants.findByGrant("1", "client-a", "task-owner", "task-a", "grant-a").getState());
     }
 
     @Test void simultaneousOppositeFirstWritesHaveOneCasWinnerAndOneConflict() throws Exception {

@@ -101,6 +101,26 @@ class AgentTaskArtifactStorageF02Test {
     }
 
     @Test
+    void identicalContentInGrayAndProductionHasSeparateScopeAndNoCrossRead() throws Exception {
+        var storage = storage(1024L);
+        var production = new AgentTaskArtifactStorage.Scope("0", CLIENT, OWNER, TASK);
+        var gray = new AgentTaskArtifactStorage.Scope("1", CLIENT, OWNER, TASK);
+        byte[] content = "isolated content".getBytes(StandardCharsets.UTF_8);
+        var prodObject = storage.store(production, content, "text/plain");
+        var grayObject = storage.store(gray, content, "text/plain");
+        assertEquals(prodObject.sha256(), grayObject.sha256());
+        assertNotEquals(prodObject.storageUri(), grayObject.storageUri());
+        assertThrows(AgentTaskArtifactStorageException.class, () -> storage.read(gray,
+                prodObject.storageUri(), prodObject.sha256(), prodObject.byteLength(), prodObject.mimeType()));
+        assertThrows(AgentTaskArtifactStorageException.class, () -> storage.read(production,
+                grayObject.storageUri(), grayObject.sha256(), grayObject.byteLength(), grayObject.mimeType()));
+        assertArrayEquals(content, storage.read(production, prodObject.storageUri(), prodObject.sha256(),
+                prodObject.byteLength(), prodObject.mimeType()).content());
+        assertArrayEquals(content, storage.read(gray, grayObject.storageUri(), grayObject.sha256(),
+                grayObject.byteLength(), grayObject.mimeType()).content());
+    }
+
+    @Test
     void fileStoreComputesDigestScopesUrisAndNeverOverwrites() throws Exception {
         FileSystemAgentTaskArtifactStorage storage = storage(2L * 1024L * 1024L);
         byte[] content = "x".repeat(300_000).getBytes(StandardCharsets.UTF_8);

@@ -24,7 +24,6 @@ public class ChatDeliberationDaoImpl implements ChatDeliberationDao {
     public ChatDispatchOutboxEntity findOutboxById(String t,String o,String c,String e){return mapper.findOutboxById(t,o,c,e);}
     public ChatDispatchOutboxEntity lockOutboxById(String t,String o,String c,String e){return mapper.lockOutboxById(t,o,c,e);}
     public ChatDispatchOutboxEntity lockOutboxByDispatch(String t,String o,String c,String d){return mapper.lockOutboxByDispatch(t,o,c,d);}
-    public List<ChatDispatchOutboxEntity> findDueOutbox(long n,int l){return mapper.findDueOutbox(n,l);}
     public List<ChatDispatchOutboxEntity> findDueOutboxInTenant(String t,long n,int l){return mapper.findDueOutboxInTenant(t,n,l);}
     public List<ChatDispatchOutboxEntity> findDueOutboxInScope(String t,String c,long n,int l){return mapper.findDueOutboxInScope(t,c,n,l);}
     public List<ChatConversationEventEntity> replayEvents(String t,String o,String c,String id,long g,long a,long through,int l){return mapper.replayEvents(t,o,c,id,g,a,through,l);}

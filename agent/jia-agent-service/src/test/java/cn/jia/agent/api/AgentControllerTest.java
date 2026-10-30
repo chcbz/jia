@@ -203,7 +203,7 @@ class AgentControllerTest {
     }
 
     private static JwtAuthenticationToken jwtClaims(Object jiacn, Object clientId) {
-        Jwt.Builder builder = Jwt.withTokenValue("token").header("alg", "none")
+        Jwt.Builder builder = Jwt.withTokenValue("token").claim("tenant_id", "0").header("alg", "none")
                 .issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(60));
         if (jiacn != null) builder.claim("jiacn", jiacn);
         if (clientId != null) builder.claim("client_id", clientId);

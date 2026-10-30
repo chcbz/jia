@@ -27,6 +27,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 
 class AgentPersonaTenantInterceptorRealDatabaseTest {
     private AgentPersonaMapper personas;
+    private JdbcTemplate jdbc;
     private AgentPersonaBindingMapper bindings;
     private InterceptorControlMapper control;
 
@@ -38,12 +39,12 @@ class AgentPersonaTenantInterceptorRealDatabaseTest {
                 + "CASE_INSENSITIVE_IDENTIFIERS=TRUE");
         source.setUsername("sa");
         source.setPassword("");
-        JdbcTemplate jdbc = new JdbcTemplate(source);
+        jdbc = new JdbcTemplate(source);
         jdbc.execute("DROP ALL OBJECTS");
         jdbc.execute("""
                 CREATE TABLE agent_persona (
                     id BIGINT AUTO_INCREMENT PRIMARY KEY,
-                    persona_code VARCHAR(50) NOT NULL UNIQUE,
+                    persona_code VARCHAR(50) NOT NULL,
                     rank_no INT, star_name VARCHAR(50), name VARCHAR(50) NOT NULL,
                     title VARCHAR(100), avatar VARCHAR(500), visual_config VARCHAR(1000),
                     abilities VARCHAR(1000), personality VARCHAR(500), speaking_style VARCHAR(500),
@@ -113,12 +114,14 @@ class AgentPersonaTenantInterceptorRealDatabaseTest {
     }
 
     @Test
-    void methodScopedIgnoreRetainsExplicitPublicAndPrivateAcl() {
-        assertEquals(List.of("private-local", "shared-public"),
+    void methodScopedIgnoreNeverSharesProductionRowsAndRetainsBindingAcl() {
+        assertEquals(List.of("private-local"),
                 personas.selectCatalogProjection("1", "cyf-local").stream()
                         .map(AgentPersonaEntity::getPersonaCode).sorted().toList());
+        assertNull(personas.selectCatalogPersona("1", "cyf-local", "shared-public"));
         assertEquals("shared-public", personas.selectCatalogPersona(
-                "1", "cyf-local", "shared-public").getPersonaCode());
+                "0", "cyf-local", "shared-public").getPersonaCode());
+        assertNull(personas.selectCatalogPersona("0", "cyf-local", "private-local"));
         assertEquals("private-local", personas.selectCatalogPersona(
                 "1", "cyf-local", "private-local").getPersonaCode());
         assertNull(personas.selectCatalogPersona(
@@ -137,6 +140,39 @@ class AgentPersonaTenantInterceptorRealDatabaseTest {
 
         assertEquals(List.of("private-foreign-client", "private-local"),
                 control.selectCodes().stream().sorted().toList());
+    }
+
+    @Test
+    void arbitraryTenantAndClientOverridesNeverFallBackToProductionRows() {
+        assertNull(personas.selectCatalogPersona("tenant-blue", "cyf-local", "shared-public"));
+        assertEquals(List.of(), personas.selectCatalogProjection("tenant-blue", "cyf-local"));
+        assertNull(personas.selectCatalogPersona("1 ", "cyf-local", "private-local"));
+        assertNull(personas.selectCatalogPersona("1", "cyf-local ", "private-local"));
+    }
+
+    @Test
+    void sameCodeIsPrivateToEachTenantAndExactClientWinsOverTenantWide() {
+        insert(jdbc, "same-code", "production", "0", null);
+        insert(jdbc, "same-code", "gray-wide", "1", null);
+        insert(jdbc, "same-code", "gray-client", "1", "cyf-local");
+        insert(jdbc, "same-code", "blue", "tenant-blue", "cyf-local");
+        assertEquals("production", personas.selectCatalogPersona("0", "cyf-local", "same-code").getName());
+        assertEquals("gray-client", personas.selectCatalogPersona("1", "cyf-local", "same-code").getName());
+        assertEquals("gray-wide", personas.selectCatalogPersona("1", "another-client", "same-code").getName());
+        assertEquals("blue", personas.selectCatalogPersona("tenant-blue", "cyf-local", "same-code").getName());
+        assertEquals(List.of("gray-wide", "gray-client"), personas.selectCatalogProjection("1", "cyf-local")
+                .stream().filter(p -> "same-code".equals(p.getPersonaCode())).map(AgentPersonaEntity::getName).toList());
+    }
+
+    @Test
+    void sqlExcludesInactiveAndUnownedRowsWithoutServicePostFiltering() {
+        insert(jdbc, "inactive-overlay", "inactive", "1", "cyf-local");
+        jdbc.update("UPDATE agent_persona SET active = 0 WHERE persona_code = ?", "inactive-overlay");
+        insert(jdbc, "unowned-overlay", "unowned", null, null);
+        assertNull(personas.selectCatalogPersona("1", "cyf-local", "inactive-overlay"));
+        assertNull(personas.selectCatalogPersona("1", "cyf-local", "unowned-overlay"));
+        assertEquals(List.of("private-local"), personas.selectCatalogProjection("1", "cyf-local")
+                .stream().map(AgentPersonaEntity::getPersonaCode).toList());
     }
 
     private void insert(JdbcTemplate jdbc, String code, String name, String tenant, String client) {

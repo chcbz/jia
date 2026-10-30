@@ -24,7 +24,7 @@ class AssigneeRecommendationControllerTest {
     JwtAuthenticationToken login;
     static final String BODY = "{\"protocolVersion\":1,\"requestId\":\"recommend-test\",\"data\":{\"expectedTaskVersion\":\"7\"}}";
     @BeforeEach void setup() {
-        login = new JwtAuthenticationToken(Jwt.withTokenValue("test").header("alg", "none")
+        login = new JwtAuthenticationToken(Jwt.withTokenValue("test").claim("tenant_id", "0").header("alg", "none")
                 .claim("sub", "user").claim("jiacn", "owner").claim("client_id", "client").build(), List.of());
         var context = new EsContext(); context.setTenantId("0"); context.setClientId("client"); context.setJiacn("owner"); EsContextHolder.setContext(context);
         mvc = MockMvcBuilders.standaloneSetup(new AssigneeRecommendationController(service))

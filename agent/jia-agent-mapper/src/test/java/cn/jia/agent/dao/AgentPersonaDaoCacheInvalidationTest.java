@@ -4,7 +4,6 @@ import cn.jia.agent.cache.AgentPersonaCatalogCache;
 import cn.jia.agent.dao.impl.AgentPersonaDaoImpl;
 import cn.jia.agent.entity.AgentPersonaEntity;
 import cn.jia.agent.mapper.AgentPersonaMapper;
-import cn.jia.common.dao.BaseDaoImpl;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -23,6 +22,9 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class AgentPersonaDaoCacheInvalidationTest {
     @AfterEach
@@ -88,7 +90,7 @@ class AgentPersonaDaoCacheInvalidationTest {
 
         TransactionSynchronizationManager.setActualTransactionActive(true);
         TransactionSynchronizationManager.initSynchronization();
-        dao.insert(persona("linchong", "林冲"));
+        dao.insertPrivate("Tenant-A", "Client-A", persona("linchong", "林冲"));
         List<TransactionSynchronization> commitCallbacks =
                 TransactionSynchronizationManager.getSynchronizations();
         assertEquals(1, commitCallbacks.size());
@@ -105,7 +107,7 @@ class AgentPersonaDaoCacheInvalidationTest {
 
         TransactionSynchronizationManager.setActualTransactionActive(true);
         TransactionSynchronizationManager.initSynchronization();
-        dao.insert(persona("luzhishen", "鲁智深"));
+        dao.insertPrivate("Tenant-A", "Client-A", persona("luzhishen", "鲁智深"));
         List<TransactionSynchronization> rollbackCallbacks =
                 TransactionSynchronizationManager.getSynchronizations();
         assertEquals(1, rollbackCallbacks.size());
@@ -126,13 +128,82 @@ class AgentPersonaDaoCacheInvalidationTest {
         TransactionSynchronizationManager.setActualTransactionActive(true);
 
         assertThrows(IllegalStateException.class,
-                () -> dao.insert(persona("wuyong", "吴用")));
+                () -> dao.insertPrivate("Tenant-A", "Client-A", persona("wuyong", "吴用")));
+        verifyNoInteractions(mapper);
+    }
+
+    @Test
+    void nameResolutionOverlaysOnlyRequestedScopeOntoImmutableDefinitions() throws Exception {
+        var mapper = mock(AgentPersonaMapper.class);
+        var dao = dao(mapper, new AgentPersonaCatalogCache());
+        var row = persona("wuyong", "Private strategist");
+        when(mapper.selectCatalogProjection("Tenant-A", "Client-A")).thenReturn(List.of(row));
+        assertSame(row, dao.findCatalogPersonaByName("Tenant-A", "Client-A", "Private strategist"));
+        assertEquals(null, dao.findCatalogPersonaByName("Tenant-A", "Client-A", "吴用"));
+        when(mapper.selectCatalogProjection("tenant-blue", "Client-A")).thenReturn(List.of());
+        assertTrue(cn.jia.agent.common.WaterMarginPersonaCatalog.isPublicDefinition(
+                dao.findCatalogPersonaByName("tenant-blue", "Client-A", "吴用")));
+        // Actual tenant/client exclusion is exercised by AgentPersonaTenantInterceptorRealDatabaseTest.
+        verify(mapper, org.mockito.Mockito.times(2)).selectCatalogProjection("Tenant-A", "Client-A");
+        verify(mapper).selectCatalogProjection("tenant-blue", "Client-A");
+        verifyNoMoreInteractions(mapper);
+    }
+
+    @Test
+    void privateWritesCannotUseMissingOrDifferentScopeOrGlobalDefinitions() throws Exception {
+        var mapper = mock(AgentPersonaMapper.class);
+        var dao = dao(mapper, new AgentPersonaCatalogCache());
+        var global = cn.jia.agent.common.WaterMarginPersonaCatalog.publicPersona("wuyong");
+        assertThrows(IllegalArgumentException.class, () -> dao.insertPrivate("0", null, global));
+        assertThrows(IllegalArgumentException.class, () -> dao.insertPrivate(null, null, global));
+        assertThrows(IllegalArgumentException.class,
+                () -> dao.insertPrivate("1", "Client-A", persona("wuyong", "吴用")));
+        assertThrows(IllegalArgumentException.class,
+                () -> dao.insertPrivate("Tenant-A", "foreign", persona("wuyong", "吴用")));
+        assertThrows(IllegalArgumentException.class, () -> dao.deletePrivate(" ", "Client-A", 1L));
+        verifyNoInteractions(mapper);
+        assertFalse(cn.jia.core.dao.IBaseDao.class.isAssignableFrom(AgentPersonaDao.class));
+        assertFalse(java.util.Arrays.stream(AgentPersonaDao.class.getMethods())
+                .anyMatch(method -> java.util.Set.of("selectAll", "findByCode", "findByName", "updateById", "deleteById")
+                        .contains(method.getName())));
+    }
+
+    @Test
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    void updateAndDeleteAlwaysCarryExactIdTenantAndClientPredicates() throws Exception {
+        for (String tenant : List.of("0", "1", "tenant-blue")) {
+            var mapper = mock(AgentPersonaMapper.class);
+            var dao = dao(mapper, new AgentPersonaCatalogCache());
+            var entity = persona("wuyong", "吴用");
+            entity.setTenantId(tenant);
+            entity.setId(7L);
+            var query = org.mockito.ArgumentCaptor.forClass(com.baomidou.mybatisplus.core.conditions.query.QueryWrapper.class);
+            dao.updatePrivate(tenant, "Client-A", entity);
+            verify(mapper).update(eq(entity), query.capture());
+            assertExactWriteScope(query.getValue(), tenant, "Client-A");
+            dao.deletePrivate(tenant, "Client-A", 7L);
+            verify(mapper).delete(query.capture());
+            assertExactWriteScope(query.getValue(), tenant, "Client-A");
+            verifyNoMoreInteractions(mapper);
+        }
+    }
+
+    private static void assertExactWriteScope(
+            com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<?> query, String tenant, String client) {
+        String sql = query.getSqlSegment();
+        assertTrue(sql.contains("id =") && sql.contains("tenant_id =") && sql.contains("client_id ="), sql);
+        assertTrue(sql.contains("CAST(tenant_id AS BINARY)") && sql.contains("CAST(client_id AS BINARY)"), sql);
+        assertTrue(sql.contains("OCTET_LENGTH(tenant_id)") && sql.contains("OCTET_LENGTH(client_id)"), sql);
+        assertFalse(sql.contains(" OR "), sql);
+        assertTrue(query.getParamNameValuePairs().containsValue(7L));
+        assertTrue(query.getParamNameValuePairs().containsValue(tenant));
+        assertTrue(query.getParamNameValuePairs().containsValue(client));
     }
 
     private static AgentPersonaDaoImpl dao(
             AgentPersonaMapper mapper, AgentPersonaCatalogCache cache) throws Exception {
         AgentPersonaDaoImpl dao = new AgentPersonaDaoImpl();
-        Field field = BaseDaoImpl.class.getDeclaredField("baseMapper");
+        Field field = AgentPersonaDaoImpl.class.getDeclaredField("baseMapper");
         field.setAccessible(true);
         field.set(dao, mapper);
         dao.setCatalogCache(cache);

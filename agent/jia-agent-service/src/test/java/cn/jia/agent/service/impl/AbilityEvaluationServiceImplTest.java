@@ -20,6 +20,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
 
 class AbilityEvaluationServiceImplTest extends BaseMockTest {
@@ -37,7 +39,8 @@ class AbilityEvaluationServiceImplTest extends BaseMockTest {
     @BeforeEach
     void setUp() {
         EsContext context = new EsContext();
-        context.setJiacn("tenant-a");
+        context.setTenantId("tenant-a");
+        context.setJiacn("owner-a");
         context.setClientId("client-a");
         EsContextHolder.setContext(context);
         service = new AbilityEvaluationServiceImpl(
@@ -47,19 +50,23 @@ class AbilityEvaluationServiceImplTest extends BaseMockTest {
     @Test
     void evaluationPushesExactScopeAndAgentIntoBoundedTaskQuery() {
         AgentTaskMetaEntity task = scopedTask("task-a", "agent-a");
-        when(agentTaskMetaDao.findByAgentId("tenant-a", "client-a", "agent-a", 500))
+        when(agentTaskMetaDao.findByAgentInOwnerScope("tenant-a", "client-a", "owner-a", "agent-a", 500))
                 .thenReturn(List.of(task));
 
         service.evaluate(request("agent-a"));
 
-        verify(agentTaskMetaDao).findByAgentId("tenant-a", "client-a", "agent-a", 500);
-        verify(abilityEvaluationDao).insert(any());
+        verify(agentTaskMetaDao).findByAgentInOwnerScope("tenant-a", "client-a", "owner-a", "agent-a", 500);
+        var inserted = org.mockito.ArgumentCaptor.forClass(cn.jia.agent.entity.AbilityEvaluationEntity.class);
+        verify(abilityEvaluationDao).insert(inserted.capture());
+        assertEquals("tenant-a", inserted.getValue().getTenantId());
+        assertEquals("client-a", inserted.getValue().getClientId());
+        verify(agentPersonaDao).findCatalogPersonaByName("tenant-a", "client-a", "agent-a");
     }
 
     @Test
     void evaluationRejectsTruncatedTaskSnapshotBeforeWriting() {
         AgentTaskMetaEntity task = scopedTask("task-a", "agent-a");
-        when(agentTaskMetaDao.findByAgentId("tenant-a", "client-a", "agent-a", 500))
+        when(agentTaskMetaDao.findByAgentInOwnerScope("tenant-a", "client-a", "owner-a", "agent-a", 500))
                 .thenReturn(Collections.nCopies(500, task));
 
         assertThrows(IllegalArgumentException.class,
@@ -72,12 +79,29 @@ class AbilityEvaluationServiceImplTest extends BaseMockTest {
     void evaluationRejectsMapperScopeAgentOrTaskIdDriftBeforeWriting() {
         AgentTaskMetaEntity drifted = scopedTask("task-a ", "agent-b");
         drifted.setTenantId("TENANT-A");
-        when(agentTaskMetaDao.findByAgentId("tenant-a", "client-a", "agent-a", 500))
+        when(agentTaskMetaDao.findByAgentInOwnerScope("tenant-a", "client-a", "owner-a", "agent-a", 500))
                 .thenReturn(List.of(drifted));
 
         assertThrows(IllegalArgumentException.class,
                 () -> service.evaluate(request("agent-a")));
 
+        verify(abilityEvaluationDao, never()).insert(any());
+    }
+
+    @Test
+    void ownerIsNotTenantAndMissingBusinessScopeCannotBeInferredFromOwner() {
+        EsContextHolder.getContext().setTenantId(null);
+        assertThrows(IllegalArgumentException.class, () -> service.evaluate(request("agent-a")));
+        verifyNoInteractions(agentPersonaDao, agentTaskMetaDao, abilityEvaluationDao);
+    }
+
+    @Test
+    void anotherOwnersTasksCannotBecomeEvaluationFacts() {
+        var task = scopedTask("task-a", "agent-a");
+        task.setOwnerJiacn("other-owner");
+        when(agentTaskMetaDao.findByAgentInOwnerScope("tenant-a", "client-a", "owner-a", "agent-a", 500))
+                .thenReturn(List.of(task));
+        assertThrows(IllegalArgumentException.class, () -> service.evaluate(request("agent-a")));
         verify(abilityEvaluationDao, never()).insert(any());
     }
 
@@ -92,6 +116,7 @@ class AbilityEvaluationServiceImplTest extends BaseMockTest {
         task.setTaskId(taskId);
         task.setTenantId("tenant-a");
         task.setClientId("client-a");
+        task.setOwnerJiacn("owner-a");
         task.setAssignedAgentId(agentId);
         task.setRewardStatus("completed");
         return task;

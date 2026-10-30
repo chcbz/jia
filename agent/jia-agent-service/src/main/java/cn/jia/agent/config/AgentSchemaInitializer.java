@@ -1,6 +1,5 @@
 package cn.jia.agent.config;
 
-import cn.jia.agent.common.WaterMarginPersonaCatalog;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.InitializingBean;
@@ -35,7 +34,6 @@ public class AgentSchemaInitializer implements InitializingBean {
         ensureSceneTables();
         ensureTaskEventSchema();
         ensureHistoricalEventBaselineAuditSchema();
-        seedWaterMarginPersonas();
     }
 
     private void ensureAgentPersonaColumns() {
@@ -49,8 +47,8 @@ public class AgentSchemaInitializer implements InitializingBean {
                 "visual_config TEXT COMMENT 'Frontend visual config JSON'");
         addColumnIfMissing("agent_persona", "system_agent",
                 "system_agent TINYINT(1) DEFAULT 0 COMMENT 'System controlled persona'");
-        addIndexIfMissing("agent_persona", "uk_agent_persona_code",
-                "CREATE UNIQUE INDEX uk_agent_persona_code ON agent_persona (persona_code)");
+        // Scoped code/name uniqueness is installed by the explicit persona maintenance SQL.
+        // Never recreate the retired global unique index on an already migrated database.
         addIndexIfMissing("agent_persona", "idx_agent_persona_system",
                 "CREATE INDEX idx_agent_persona_system ON agent_persona (system_agent)");
     }
@@ -103,7 +101,7 @@ public class AgentSchemaInitializer implements InitializingBean {
                     KEY idx_agent_binding_agent (client_id, agent_id, status),
                     KEY idx_agent_binding_persona (client_id, persona_code, status),
                     CONSTRAINT chk_agent_binding_status CHECK (status IN (0, 1, 2, 3)),
-                    CONSTRAINT chk_agent_binding_single_tenant CHECK (tenant_id = '0')
+                    CONSTRAINT chk_agent_binding_single_tenant CHECK (tenant_id IS NOT NULL AND CHAR_LENGTH(tenant_id)>0 AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(TRIM(tenant_id)))
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Durable Agent persona binding history'
                 """.formatted(ownerJiacnColumn, lifecycleColumn, activePersonaColumn, activeAgentColumn));
         // Existing binding contracts are migrated only by explicitly approved maintenance.
@@ -172,6 +170,7 @@ public class AgentSchemaInitializer implements InitializingBean {
         java.util.Map<String, String> expected = java.util.Map.of(
                 "chk_agent_binding_status", normalizeIdentityExpression("status IN (0, 1, 2, 3)"),
                 "chk_agent_binding_single_tenant", normalizeIdentityExpression("tenant_id = '0'"));
+        acceptBusinessTenantCheck(actual, "chk_agent_binding_single_tenant");
         if (!expected.equals(actual)) {
             throw new IllegalStateException("Agent binding CHECK set/clause drift");
         }
@@ -203,7 +202,7 @@ public class AgentSchemaInitializer implements InitializingBean {
                     KEY idx_hosted_scope_state (tenant_id,client_id,owner_jiacn,lifecycle_state),
                     CONSTRAINT chk_hosted_state CHECK (lifecycle_state IN ('PREPARED','STAGED_DISABLED','FILE_ENABLED','ACTIVE','SUSPENDING','SUSPENDED','REPAIR_REQUIRED')),
                     CONSTRAINT chk_hosted_generation CHECK (generation >= 0),
-                    CONSTRAINT chk_hosted_single_tenant CHECK (tenant_id = '0'),
+                    CONSTRAINT chk_hosted_single_tenant CHECK (tenant_id IS NOT NULL AND CHAR_LENGTH(tenant_id)>0 AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(TRIM(tenant_id))),
                     CONSTRAINT chk_hosted_repair CHECK ((lifecycle_state='REPAIR_REQUIRED' AND resume_state IS NOT NULL) OR (lifecycle_state<>'REPAIR_REQUIRED' AND resume_state IS NULL))
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Durable hosted Agent profile publication state'
                 """);
@@ -309,6 +308,7 @@ public class AgentSchemaInitializer implements InitializingBean {
         });
         java.util.Map<String, String> normalizedChecks = new java.util.HashMap<>();
         expectedChecks.forEach((name, clause) -> normalizedChecks.put(name, normalizeIdentityExpression(clause)));
+        acceptBusinessTenantCheck(actualChecks, "chk_hosted_single_tenant");
         if (!actualChecks.equals(normalizedChecks)) {
             throw new IllegalStateException("PWA-HOSTED-P0 CHECK set drift: " + actualChecks.keySet());
         }
@@ -484,6 +484,15 @@ public class AgentSchemaInitializer implements InitializingBean {
         }
     }
 
+    private static final String BUSINESS_TENANT_CHECK = "tenant_id IS NOT NULL AND CHAR_LENGTH(tenant_id)>0 AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(TRIM(tenant_id))";
+
+    /** Accept only the explicitly migrated tenant CHECK or the stricter production baseline. */
+    private void acceptBusinessTenantCheck(java.util.Map<String, String> checks, String name) {
+        if (normalizeIdentityExpression(BUSINESS_TENANT_CHECK).equals(checks.get(name))) {
+            checks.put(name, normalizeIdentityExpression("tenant_id = '0'"));
+        }
+    }
+
     private void validateIdentityChecks() {
         java.util.Map<String, String> expected = java.util.Map.ofEntries(
                 java.util.Map.entry("agent_identity_registry.chk_identity_registry_type",
@@ -545,6 +554,15 @@ public class AgentSchemaInitializer implements InitializingBean {
         if (!actualByName.keySet().equals(expected.keySet())) {
             throw new IllegalStateException("A02 identity CHECK constraint set is incompatible: "
                     + actualByName.keySet());
+        }
+        acceptBusinessTenantCheck(actualByName, "agent_identity_alias.chk_identity_alias_scope");
+        String registryKey = "agent_identity_registry.chk_identity_registry_scope";
+        String legacyRegistry = expected.get(registryKey);
+        int tenantClause = legacyRegistry.lastIndexOf("tenant_id = '0'");
+        String scopedRegistry = legacyRegistry.substring(0, tenantClause)
+                + BUSINESS_TENANT_CHECK + legacyRegistry.substring(tenantClause + "tenant_id = '0'".length());
+        if (normalizeIdentityExpression(scopedRegistry).equals(actualByName.get(registryKey))) {
+            actualByName.put(registryKey, normalizeIdentityExpression(legacyRegistry));
         }
         for (var entry : expected.entrySet()) {
             if (!normalizeIdentityExpression(entry.getValue()).equals(actualByName.get(entry.getKey()))) {
@@ -814,7 +832,7 @@ public class AgentSchemaInitializer implements InitializingBean {
                         OR (canonical_type <> 'SYSTEM'
                             AND client_id IS NOT NULL AND TRIM(client_id) <> ''
                             AND owner_jiacn IS NOT NULL AND TRIM(owner_jiacn) <> ''
-                            AND tenant_id = '0')
+                            AND tenant_id IS NOT NULL AND CHAR_LENGTH(tenant_id)>0 AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(TRIM(tenant_id)))
                     ),
                     CONSTRAINT chk_identity_registry_retired CHECK (
                         (lifecycle_status = 'RETIRED' AND retired_at IS NOT NULL)
@@ -841,12 +859,12 @@ public class AgentSchemaInitializer implements InitializingBean {
                     update_time             BIGINT DEFAULT NULL COMMENT 'Update time',
                     PRIMARY KEY (id),
                     UNIQUE KEY uk_identity_alias_active
-                        (client_id, owner_jiacn, alias_type, alias_value, active_key),
+                        (tenant_id, client_id, owner_jiacn, alias_type, alias_value, active_key),
                     KEY idx_identity_alias_registry (registry_id, alias_status),
                     KEY idx_identity_alias_canonical (canonical_agent_id, alias_status),
                     CONSTRAINT chk_identity_alias_type CHECK (alias_type = 'LEGACY_AGENT_ID'),
                     CONSTRAINT chk_identity_alias_status CHECK (alias_status IN ('ACTIVE', 'REVOKED')),
-                    CONSTRAINT chk_identity_alias_scope CHECK (tenant_id = '0'),
+                    CONSTRAINT chk_identity_alias_scope CHECK (tenant_id IS NOT NULL AND CHAR_LENGTH(tenant_id)>0 AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(TRIM(tenant_id))),
                     CONSTRAINT chk_identity_alias_no_blank_scope CHECK (
                         TRIM(client_id) <> '' AND TRIM(owner_jiacn) <> ''
                     ),
@@ -885,7 +903,7 @@ public class AgentSchemaInitializer implements InitializingBean {
         ensureRequiredIndex("agent_identity_alias", "uk_identity_alias_active", true,
                 List.of("client_id", "owner_jiacn", "alias_type", "alias_value", "active_key"),
                 "CREATE UNIQUE INDEX uk_identity_alias_active "
-                        + "ON agent_identity_alias (client_id, owner_jiacn, alias_type, alias_value, active_key)");
+                        + "ON agent_identity_alias (tenant_id, client_id, owner_jiacn, alias_type, alias_value, active_key)");
         ensureRequiredIndex("agent_identity_alias", "idx_identity_alias_registry", false,
                 List.of("registry_id", "alias_status"),
                 "CREATE INDEX idx_identity_alias_registry ON agent_identity_alias (registry_id, alias_status)");
@@ -2560,29 +2578,6 @@ BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'C01H successful run cannot be 
         }
     }
 
-    private void seedWaterMarginPersonas() {
-        if (isH2Database() && !h2TableExists("agent_persona")) {
-            log.info("Skipping Water Margin persona seeds because H2 does not provide the optional agent_persona table");
-            return;
-        }
-        for (WaterMarginPersonaCatalog.Definition seed : WaterMarginPersonaCatalog.definitions()) {
-            jdbcTemplate.update("""
-                    INSERT INTO agent_persona
-                        (persona_code, rank_no, star_name, name, title, avatar, visual_config, abilities,
-                         personality, speaking_style, background, power, intelligence, leadership, active,
-                         system_agent, create_time, update_time)
-                    SELECT ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?
-                    WHERE NOT EXISTS (
-                        SELECT 1 FROM agent_persona WHERE persona_code = ?
-                    )
-                    """,
-                    seed.code(), seed.rankNo(), seed.starName(), seed.name(), seed.title(),
-                    seed.visualConfig(), seed.abilities(), seed.personality(), seed.speakingStyle(), seed.background(),
-                    seed.power(), seed.intelligence(), seed.leadership(), seed.systemAgent(),
-                    System.currentTimeMillis(), System.currentTimeMillis(), seed.code());
-        }
-    }
-
     private void addRequiredColumnIfMissing(String table, String column, String definition) {
         String catalogQuery = isH2Database()
                 ? """
@@ -2659,6 +2654,10 @@ BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'C01H successful run cannot be 
     private void ensureRequiredIndex(
             String table, String indexName, boolean unique, List<String> columns, String createSql) {
         List<IndexColumn> actual = inspectRequiredIndex(table, indexName);
+        if ("agent_identity_alias".equals(table) && "uk_identity_alias_active".equals(indexName)
+                && actual != null && actual.size() == 6) {
+            columns = List.of("tenant_id", "client_id", "owner_jiacn", "alias_type", "alias_value", "active_key");
+        }
         if (actual == null || actual.isEmpty()) {
             if (createSql == null || createSql.isBlank()) {
                 throw new IllegalStateException("Required index " + table + "." + indexName

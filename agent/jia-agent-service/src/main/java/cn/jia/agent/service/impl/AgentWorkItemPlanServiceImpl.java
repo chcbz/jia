@@ -920,7 +920,7 @@ public class AgentWorkItemPlanServiceImpl implements AgentWorkItemPlanService {
         requireExact(ownerJiacn, "ownerJiacn", 50);
         requireExact(taskId, "taskId", 100);
         requireExact(actorAgentId, "actorAgentId", 100);
-        if (!"0".equals(tenantId) || "0".equals(ownerJiacn)) {
+        if ("0".equals(ownerJiacn)) {
             throw invalid("strict task owner scope is invalid");
         }
     }

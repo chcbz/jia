@@ -61,7 +61,8 @@ class AgentTaskBountyBootstrapOutboxServiceImplTest {
     @BeforeEach
     void setUp() {
         service = new AgentTaskBountyBootstrapOutboxServiceImpl(dao, json,
-                new DirectPlatformTransactionManager(), requirementSnapshots);
+                new DirectPlatformTransactionManager(), requirementSnapshots,
+                new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null));
         dao.insert(valid("owner", "action-1"));
         org.mockito.Mockito.when(requirementSnapshots.read(
                 org.mockito.ArgumentMatchers.any(),org.mockito.ArgumentMatchers.anyString(),
@@ -264,7 +265,8 @@ class AgentTaskBountyBootstrapOutboxServiceImplTest {
         concurrent.insert(valid("owner", "action-1"));
         concurrent.insert(valid("another-owner", "action-2").setBootstrapId("bootstrap-2"));
         var worker = new AgentTaskBountyBootstrapOutboxServiceImpl(concurrent, json,
-                new DirectPlatformTransactionManager(), requirementSnapshots);
+                new DirectPlatformTransactionManager(), requirementSnapshots,
+                new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null));
         var executor = Executors.newSingleThreadExecutor();
         try {
             var first = executor.submit(() -> worker.claimNextAvailable("worker-1", 1000));
@@ -876,7 +878,7 @@ class AgentTaskBountyBootstrapOutboxServiceImplTest {
         }
 
         private static JwtAuthenticationToken jwtToken(String owner, String client) {
-            Jwt token = Jwt.withTokenValue("token").header("alg", "none")
+            Jwt token = Jwt.withTokenValue("token").claim("tenant_id", "0").header("alg", "none")
                     .claim("jiacn", owner).claim("client_id", client).build();
             JwtAuthenticationToken authentication = new JwtAuthenticationToken(token);
             authentication.setAuthenticated(true);

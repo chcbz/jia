@@ -32,6 +32,8 @@ class AgentOutboxRelayConfigurationTest {
     };
 
     private static final ApplicationContextRunner RUNNER = new ApplicationContextRunner()
+                .withBean(cn.jia.core.security.FixedTenantAdmissionPolicy.class,
+                        () -> new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null))
             .withBean(AgentOutboxRelayDao.class, () -> mock(AgentOutboxRelayDao.class))
             .withBean(PlatformTransactionManager.class,
                     () -> mock(PlatformTransactionManager.class))

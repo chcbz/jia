@@ -270,7 +270,7 @@ public class AgentController {
         Object rawClientId = claims.get("client_id");
         String tenantId;
         try {
-            tenantId = TenantClaimPolicy.resolve(claims, TenantClaimPolicy.defaultSingleTenant());
+            tenantId = TenantClaimPolicy.resolve(claims);
         } catch (IllegalArgumentException invalidTenant) {
             throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN,
                     "Authenticated JWT scope is invalid");
@@ -680,8 +680,14 @@ public class AgentController {
             throw new FundedBountyException(HttpStatus.FORBIDDEN,
                     "ECONOMY_FORBIDDEN", "Authenticated money scope is incomplete");
         }
-        return new FundedBountyActor("0", requiredMoneyClaim(claims, "client_id", 50),
-                requiredMoneyClaim(claims, "jiacn", 50), subject);
+        try {
+            return new FundedBountyActor(TenantClaimPolicy.resolve(claims),
+                    requiredMoneyClaim(claims, "client_id", 50),
+                    requiredMoneyClaim(claims, "jiacn", 50), subject);
+        } catch (IllegalArgumentException denied) {
+            throw new FundedBountyException(HttpStatus.FORBIDDEN,
+                    "ECONOMY_FORBIDDEN", "Authenticated money scope is incomplete");
+        }
     }
 
     private static String requiredMoneyClaim(Map<String, Object> claims, String name, int maxBytes) {

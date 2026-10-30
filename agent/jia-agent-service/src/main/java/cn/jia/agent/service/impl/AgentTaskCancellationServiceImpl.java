@@ -44,7 +44,7 @@ public class AgentTaskCancellationServiceImpl implements AgentTaskCancellationSe
     @Override
     public Receipt cancel(String tenant, String client, String owner, String actor,
             String taskId, long expectedTaskVersion) {
-        if (!"0".equals(tenant) || !exact(client,50) || "0".equals(client)
+        if (!exact(tenant,50) || !exact(client,50) || "0".equals(client)
                 || !exact(owner,50) || "0".equals(owner) || !exact(actor,100)
                 || !exact(taskId,100) || expectedTaskVersion<0 || expectedTaskVersion==Long.MAX_VALUE) {
             throw error(INVALID_REQUEST);

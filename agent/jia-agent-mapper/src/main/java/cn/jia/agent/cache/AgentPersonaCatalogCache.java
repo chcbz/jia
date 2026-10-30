@@ -1,6 +1,7 @@
 package cn.jia.agent.cache;
 
 import cn.jia.agent.entity.AgentPersonaEntity;
+import cn.jia.agent.common.WaterMarginPersonaCatalog;
 import jakarta.inject.Named;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
@@ -148,8 +149,9 @@ public class AgentPersonaCatalogCache {
         if (row == null || !Boolean.TRUE.equals(row.getActive())
                 || !validExact(row.getPersonaCode(), 50)
                 || !validExact(row.getName(), 50)
-                || !("0".equals(row.getTenantId()) || scope.tenantId().equals(row.getTenantId()))
-                || !(row.getClientId() == null || scope.clientId().equals(row.getClientId()))) {
+                || !(WaterMarginPersonaCatalog.isPublicDefinition(row)
+                     || scope.tenantId().equals(row.getTenantId())
+                        && (row.getClientId() == null || scope.clientId().equals(row.getClientId())))) {
             throw new IllegalStateException("persona catalog row is null, inactive, or outside exact scope");
         }
         return new CatalogEntry(row.getPersonaCode(), row.getRankNo(), row.getStarName(),

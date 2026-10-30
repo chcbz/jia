@@ -9,13 +9,7 @@ import org.apache.ibatis.annotations.Select;
 import java.util.List;
 
 public interface AgentPersonaMapper extends BaseMapper<AgentPersonaEntity> {
-    @Select("""
-            SELECT persona_code, rank_no, star_name, name, title, avatar, visual_config,
-                   abilities, power, intelligence, leadership, system_agent
-            FROM agent_persona
-            """)
-    List<AgentPersonaEntity> selectRuntimeProjection();
-
+    // Tenant-private overlays only. Platform definitions come from the immutable core catalog.
     @InterceptorIgnore(tenantLine = "true")
     @Select("""
             SELECT persona_code, rank_no, star_name, name, title, avatar, visual_config,
@@ -23,15 +17,9 @@ public interface AgentPersonaMapper extends BaseMapper<AgentPersonaEntity> {
                    tenant_id, client_id
             FROM agent_persona
             WHERE active = 1
-              AND (
-                    (tenant_id = '0'
-                     AND CAST(tenant_id AS BINARY) = CAST('0' AS BINARY)
-                     AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH('0'))
-                    OR
-                    (tenant_id = #{tenantId}
-                     AND CAST(tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY)
-                     AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId}))
-                  )
+              AND tenant_id = #{tenantId}
+              AND CAST(tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY)
+              AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
               AND (
                     client_id IS NULL
                     OR
@@ -39,11 +27,13 @@ public interface AgentPersonaMapper extends BaseMapper<AgentPersonaEntity> {
                      AND CAST(client_id AS BINARY) = CAST(#{clientId} AS BINARY)
                      AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{clientId}))
                   )
-            ORDER BY rank_no ASC, persona_code ASC
+            ORDER BY CASE WHEN client_id IS NULL THEN 0 ELSE 1 END,
+                     rank_no ASC, persona_code ASC
             """)
     List<AgentPersonaEntity> selectCatalogProjection(
             @Param("tenantId") String tenantId, @Param("clientId") String clientId);
 
+    // Tenant-private overlays only. Platform definitions come from the immutable core catalog.
     @InterceptorIgnore(tenantLine = "true")
     @Select("""
             SELECT persona_code, rank_no, star_name, name, title, avatar, visual_config,
@@ -55,15 +45,9 @@ public interface AgentPersonaMapper extends BaseMapper<AgentPersonaEntity> {
               AND persona_code = #{personaCode}
               AND CAST(persona_code AS BINARY) = CAST(#{personaCode} AS BINARY)
               AND OCTET_LENGTH(persona_code) = OCTET_LENGTH(#{personaCode})
-              AND (
-                    (tenant_id = '0'
-                     AND CAST(tenant_id AS BINARY) = CAST('0' AS BINARY)
-                     AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH('0'))
-                    OR
-                    (tenant_id = #{tenantId}
-                     AND CAST(tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY)
-                     AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId}))
-                  )
+              AND tenant_id = #{tenantId}
+              AND CAST(tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY)
+              AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
               AND (
                     client_id IS NULL
                     OR
@@ -71,7 +55,7 @@ public interface AgentPersonaMapper extends BaseMapper<AgentPersonaEntity> {
                      AND CAST(client_id AS BINARY) = CAST(#{clientId} AS BINARY)
                      AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{clientId}))
                   )
-            ORDER BY CASE WHEN tenant_id = #{tenantId} THEN 0 ELSE 1 END
+            ORDER BY CASE WHEN client_id IS NULL THEN 1 ELSE 0 END
             LIMIT 1
             """)
     AgentPersonaEntity selectCatalogPersona(

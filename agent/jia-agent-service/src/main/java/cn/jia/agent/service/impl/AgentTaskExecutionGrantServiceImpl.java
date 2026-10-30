@@ -1091,7 +1091,8 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
         catch (Exception failure) { throw invalidState("Persisted grant inputs are invalid"); }
     }
     private static void validateScope(Scope scope) {
-        if (scope==null || !"0".equals(scope.tenantId())) throw bad("JWT scope is invalid");
+        if (scope==null) throw bad("Business scope is invalid");
+        exact(scope.tenantId(),"tenantId",50);
         exact(scope.clientId(),"clientId",50); exact(scope.ownerJiacn(),"ownerJiacn",50);
         if ("0".equals(scope.ownerJiacn())) throw bad("JWT scope is invalid");
     }

@@ -65,7 +65,7 @@ public final class AgentCommandCanonicalCodec {
     public static String taskInviteCommandId(
             String tenantId, String clientId, String ownerJiacn, String taskId,
             String targetAgentId) {
-        requireSingleTenant(tenantId);
+        requireTenant(tenantId);
         requireExact(clientId, "clientId", 50);
         requireExact(ownerJiacn, "ownerJiacn", 50);
         requireExact(taskId, "taskId", 100);
@@ -80,7 +80,7 @@ public final class AgentCommandCanonicalCodec {
     public static String hallCommandId(
             String tenantId, String clientId, String ownerJiacn, String taskId,
             String targetAgentId, String intentId, String commandType) {
-        requireSingleTenant(tenantId);
+        requireTenant(tenantId);
         requireExact(clientId, "clientId", 50);
         requireExact(ownerJiacn, "ownerJiacn", 50);
         requireExact(taskId, "taskId", 100);
@@ -96,7 +96,7 @@ public final class AgentCommandCanonicalCodec {
 
     public static String skillInstallCommandId(
             String tenantId, String clientId, String ownerJiacn, String installationId) {
-        requireSingleTenant(tenantId);
+        requireTenant(tenantId);
         requireExact(clientId, "clientId", 50);
         requireExact(ownerJiacn, "ownerJiacn", 50);
         requireExact(installationId, "installationId", 100);
@@ -291,7 +291,7 @@ public final class AgentCommandCanonicalCodec {
         requireExact(draft.commandId(), "commandId", 100);
         requireExact(draft.correlationId(), "correlationId", 100);
         requireExact(draft.causationId(), "causationId", 100);
-        requireSingleTenant(draft.tenantId());
+        requireTenant(draft.tenantId());
         requireExact(draft.clientId(), "clientId", 50);
         requireExact(draft.ownerJiacn(), "ownerJiacn", 50);
         requireExact(draft.taskId(), "taskId", 100);
@@ -695,11 +695,8 @@ public final class AgentCommandCanonicalCodec {
         }
     }
 
-    private static void requireSingleTenant(String tenantId) {
-        requireExact(tenantId, "tenantId", 1);
-        if (!"0".equals(tenantId)) {
-            throw invalid("tenantId must equal 0");
-        }
+    private static void requireTenant(String tenantId) {
+        requireExact(tenantId, "tenantId", 50);
     }
 
     private static void requireExact(String value, String field, int maxChars) {

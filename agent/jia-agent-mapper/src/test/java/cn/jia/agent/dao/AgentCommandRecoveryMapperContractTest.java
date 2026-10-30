@@ -23,6 +23,9 @@ class AgentCommandRecoveryMapperContractTest {
             assertBinary(reconnect, column);
         }
         String due = sql("selectDueCandidates");
+        assertTrue(due.contains("tenant_id=#{tenantid}"));
+        assertTrue(due.contains("octet_length(tenant_id)=octet_length(#{tenantid})"));
+        assertBinary(due, "tenant_id");
         assertTrue(due.contains("next_retry_at<=#{now}"));
         assertTrue(due.contains("status='sent'"));
         assertTrue(due.contains("update_time<=#{sentbefore}"));

@@ -17,18 +17,9 @@ import org.springframework.security.oauth2.server.resource.authentication.JwtAut
 import java.io.IOException;
 
 public class EsSecurityContextFilter implements Filter {
-    private final String legacySingleTenantId;
     private final FixedTenantAdmissionPolicy tenantAdmission;
 
-    public EsSecurityContextFilter() {
-        this(TenantClaimPolicy.defaultSingleTenant(),
-                new FixedTenantAdmissionPolicy(TenantClaimPolicy.defaultSingleTenant(), false, null, null));
-    }
-    public EsSecurityContextFilter(String legacySingleTenantId) {
-        this(legacySingleTenantId, new FixedTenantAdmissionPolicy(legacySingleTenantId, false, null, null));
-    }
-    public EsSecurityContextFilter(String legacySingleTenantId, FixedTenantAdmissionPolicy tenantAdmission) {
-        this.legacySingleTenantId = TenantClaimPolicy.exact(legacySingleTenantId);
+    public EsSecurityContextFilter(FixedTenantAdmissionPolicy tenantAdmission) {
         this.tenantAdmission = java.util.Objects.requireNonNull(tenantAdmission);
     }
     @Override
@@ -44,7 +35,7 @@ public class EsSecurityContextFilter implements Filter {
     private void overwriteFromJwt(EsContext context, Jwt jwt) throws ServletException {
         String tenant;
         try {
-            tenant = TenantClaimPolicy.resolve(jwt.getClaims(), legacySingleTenantId);
+            tenant = TenantClaimPolicy.resolve(jwt.getClaims());
         } catch (IllegalArgumentException invalid) {
             context.setTenantId(null);
             throw new ServletException("Authenticated token has invalid tenant scope", invalid);

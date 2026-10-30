@@ -12,8 +12,8 @@ import static org.mockito.Mockito.*;
 class UserBusinessMembershipTest {
     @Test void derivesScopeOnlyFromProcessAndUsesAdmittedClient() {
         var dao = mock(UserBusinessMembershipDao.class);
-        var production = new UserBusinessMembership(dao, "0", false, "");
-        var gray = new UserBusinessMembership(dao, "0", true, "1");
+        var production = new UserBusinessMembership(dao, new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null));
+        var gray = new UserBusinessMembership(dao, new cn.jia.core.security.FixedTenantAdmissionPolicy("1", null));
         production.ensure(7L, "web");
         gray.ensure(7L, "gray");
         verify(dao).ensure(eq("0"), eq("web"), eq(7L), anyLong());
@@ -24,17 +24,16 @@ class UserBusinessMembershipTest {
 
     @Test void registrationWithoutApplicationHasEnvironmentAffiliationOnly() {
         var dao = mock(UserBusinessMembershipDao.class);
-        new UserBusinessMembership(dao, "0", false, "").ensure(7L, null);
+        new UserBusinessMembership(dao, new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null)).ensure(7L, null);
         verify(dao).ensure(eq("0"), eq(""), eq(7L), anyLong());
     }
 
     @Test void invalidIdentityAndAmbiguousScopeCannotReachPersistence() {
         var dao = mock(UserBusinessMembershipDao.class);
-        var membership = new UserBusinessMembership(dao, "0", false, "");
+        var membership = new UserBusinessMembership(dao, new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null));
         assertThrows(IllegalArgumentException.class, () -> membership.ensure(null, "web"));
         assertThrows(IllegalArgumentException.class, () -> membership.ensure(0L, "web"));
         assertThrows(IllegalArgumentException.class, () -> membership.ensure(7L, "web "));
-        assertThrows(IllegalArgumentException.class, () -> new UserBusinessMembership(dao, "0", true, "0"));
         verifyNoInteractions(dao);
     }
 

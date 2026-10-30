@@ -1,4 +1,5 @@
 package cn.jia.agent.skill;
+import cn.jia.core.security.FixedTenantAdmissionPolicy;
 import cn.jia.agent.dao.AgentCommandRecoveryDao;
 import cn.jia.agent.mapper.AgentSkillInstallRecoveryMapper;
 import cn.jia.agent.entity.*;
@@ -16,13 +17,14 @@ class SkillInstallRecoveryServiceTest {
     private final AgentCommandRecoveryDao dao=mock(AgentCommandRecoveryDao.class);
     private final SkillInstallDispatchService dispatch=mock(SkillInstallDispatchService.class);
     private final EconomyPreviewGate preview=new EconomyPreviewGate(new EconomyPreviewProperties(true,List.of(new EconomyPreviewProperties.AllowedScope("0","c"))));
-    private final SkillInstallRecoveryService service=new SkillInstallRecoveryService(mapper,dao,preview,dispatch,mock(PlatformTransactionManager.class));
+    private final SkillInstallRecoveryService service=new SkillInstallRecoveryService(mapper,dao,preview,dispatch,mock(PlatformTransactionManager.class),new FixedTenantAdmissionPolicy("0", null));
     private AgentCommandDeliveryEntity d;
     private AgentOutboxEventEntity o;
-    void fixture() {
+    void fixture() { fixture("0"); }
+    void fixture(String tenant) {
         // Schema-2 PREPARE persisted by the real SM-C1 producer, not the retired task wire.
         var data=SkillManagementCodec.map("schemaVersion",2,"commandId","cmd_prepare","skillChangeId","o","action","INSTALL",
-                "tenantId","0","clientId","c","ownerJiacn","owner-a","agentId","a","runtimeInstallationId","rti_fixture",
+                "tenantId",tenant,"clientId","c","ownerJiacn","owner-a","agentId","a","runtimeInstallationId","rti_fixture",
                 "skillKey","repo-test","attempt",1,"fencingToken","1","deliveryEpoch","1","skillRevision","1","source",null,
                 "target",SkillManagementCodec.map("skillInstallationId","i","productVersionId","pv","skillVersion","1.0.0",
                         "packageSha256","a".repeat(64),"manifestSha256",null,"byteLength","100","kind","INSTRUCTION"),
@@ -34,13 +36,13 @@ class SkillInstallRecoveryServiceTest {
         d=new AgentCommandDeliveryEntity().setOwnerJiacn("owner-a").setCommandId("cmd_prepare").setTaskId("o").setTargetAgentId("a").setCommandType("SKILL_INSTALL")
                 .setCommandPayload(business).setCommandPayloadHash(AgentCommandCanonicalCodec.sha256(business)).setStatus("PENDING")
                 .setActiveMessageId("message").setActiveAttempt(1).setExpiresAt(Long.MAX_VALUE).setVersion(7L);
-        d.setId(1L);d.setTenantId("0");d.setClientId("c");d.setUpdateTime(now-70000);
+        d.setId(1L);d.setTenantId(tenant);d.setClientId("c");d.setUpdateTime(now-70000);
         o=new AgentOutboxEventEntity().setEventId("event").setMessageId("message").setCommandId("cmd_prepare").setDeliveryId(1L)
                 .setAggregateType("skill-change").setAggregateId("o").setDestination(SkillInstallCommandWriter.DESTINATION).setRoutingKey("a")
                 .setActiveAttempt(1).setWirePayload(wire).setWirePayloadHash(AgentCommandCanonicalCodec.sha256(wire)).setStatus("PENDING")
                 .setPublisherConfirmStatus("NONE").setMandatoryReturnStatus("NONE").setExpiresAt(Long.MAX_VALUE).setVersion(1L);
-        o.setId(2L);o.setTenantId("0");o.setClientId("c");
-        when(dao.lockDelivery("0","c",1L)).thenReturn(d);when(dao.lockActiveOutboxes("0","c",1L,"message")).thenReturn(List.of(o));
+        o.setId(2L);o.setTenantId(tenant);o.setClientId("c");
+        when(dao.lockDelivery(tenant,"c",1L)).thenReturn(d);when(dao.lockActiveOutboxes(tenant,"c",1L,"message")).thenReturn(List.of(o));
     }
     @Test void rejectsBrokerReceiptAndCrossScopeWithoutSending() {
         fixture();o.setPublisherConfirmStatus("ACK");assertThrows(SkillMarketplaceException.class,()->service.recover(d,now));
@@ -73,8 +75,32 @@ class SkillInstallRecoveryServiceTest {
         verifyNoInteractions(dispatch);verify(mapper,never()).claimDelivery(any(),anyString(),anyLong(),anyLong());
     }
     @Test void scanRequiresExactPreviewScope() {
-        fixture();d.setClientId("C");when(mapper.candidates(anyLong(),anyLong())).thenReturn(List.of(d));service.recover();
+        fixture();d.setClientId("C");when(mapper.candidates(eq("0"),isNull(),anyLong(),anyLong())).thenReturn(List.of(d));service.recover();
         verifyNoInteractions(dao,dispatch);
+    }
+    @Test void configuredPartitionIsPassedToDiscoveryBeforeLimit() {
+        var policy=new FixedTenantAdmissionPolicy("tenant-blue", "c");
+        var scoped=new SkillInstallRecoveryService(mapper,dao,preview,dispatch,mock(PlatformTransactionManager.class),policy);
+        when(mapper.candidates(eq("tenant-blue"),eq("c"),anyLong(),anyLong())).thenReturn(List.of());
+        scoped.recover();
+        verify(mapper).candidates(eq("tenant-blue"),eq("c"),anyLong(),anyLong());
+        verifyNoMoreInteractions(mapper);verifyNoInteractions(dao,dispatch);
+    }
+    @Test void nonNumericTenantRecoversOriginalWireWithoutTenantZeroGate() {
+        fixture("tenant-blue");
+        var gate=new EconomyPreviewGate(new EconomyPreviewProperties(true,
+                List.of(new EconomyPreviewProperties.AllowedScope("tenant-blue","c"))));
+        var scoped=new SkillInstallRecoveryService(mapper,dao,gate,dispatch,mock(PlatformTransactionManager.class),
+                new FixedTenantAdmissionPolicy("tenant-blue", "c"));
+        when(mapper.claimDelivery(eq(d),anyString(),anyLong(),anyLong())).thenReturn(1);
+        when(mapper.claimOutbox(eq(o),anyString(),anyLong(),anyLong())).thenReturn(1);
+        when(dispatch.dispatch(anyString(),anyString(),anyString(),anyString(),anyString(),anyString(),any())).thenAnswer(call->{
+            assertArrayEquals(o.getWirePayload(),call.getArgument(6));
+            d.setLeaseOwner("superseded");return AgentRawCommandDispatchResult.sent(1,1);
+        });
+        scoped.recover(d,now);
+        verify(dispatch).dispatch(eq("tenant-blue"),eq("c"),eq("owner-a"),eq("o"),eq("a"),eq(d.getCommandId()),any());
+        verify(mapper,never()).finishDelivery(any(),anyString(),anyString(),any(),anyString(),anyLong());
     }
     @Test void supersededCompletionDoesNotClearAnotherOwnersLease() {
         fixture();when(mapper.claimDelivery(eq(d),anyString(),anyLong(),anyLong())).thenReturn(1);

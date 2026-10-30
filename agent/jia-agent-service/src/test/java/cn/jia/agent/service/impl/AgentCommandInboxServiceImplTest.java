@@ -37,6 +37,19 @@ class AgentCommandInboxServiceImplTest {
     private static final long EXPIRES_AT = NOW + 60_000L;
 
     @Test
+    void processTenantRejectsForeignClaimBeforeAnyDatabaseAccess() {
+        RecordingDao dao = new RecordingDao();
+        JdbcDataSource source = new JdbcDataSource();
+        source.setURL("jdbc:h2:mem:d07_gray_" + System.nanoTime());
+        var gray = new AgentCommandInboxServiceImpl(dao, enabledGate(),
+                new DataSourceTransactionManager(source), "1");
+        var denied = gray.claim(message(), "worker-a", NOW, LEASE);
+        assertEquals(AgentInboxClaim.Kind.DISABLED, denied.kind());
+        assertEquals(AgentInboxClaim.DisabledReason.FOREIGN_TENANT, denied.disabledReason());
+        assertEquals(0, dao.accesses);
+    }
+
+    @Test
     void offDbShadowAndConsumeDisabledReturnBeforeAnyDaoAccess() {
         for (AgentRabbitSafetyGate gate : List.of(offGate(), dbShadowGate(), consumeDisabledGate())) {
             RecordingDao dao = new RecordingDao();
@@ -861,7 +874,7 @@ class AgentCommandInboxServiceImplTest {
         JdbcDataSource source = new JdbcDataSource();
         source.setURL("jdbc:h2:mem:d07_unit_" + System.nanoTime());
         return new AgentCommandInboxServiceImpl(
-                dao, gate, new DataSourceTransactionManager(source));
+                dao, gate, new DataSourceTransactionManager(source), "tenant-a");
     }
 
     private AgentInboxMessage message() {

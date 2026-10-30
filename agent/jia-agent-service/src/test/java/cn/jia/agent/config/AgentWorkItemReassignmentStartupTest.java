@@ -48,6 +48,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class AgentWorkItemReassignmentStartupTest {
     private static final String ACTOR = "agt_cccccccccccccccccccccccccccccccc";
     private static final ApplicationContextRunner RUNNER = new ApplicationContextRunner()
+                .withBean(cn.jia.core.security.FixedTenantAdmissionPolicy.class,
+                        () -> new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null))
             .withBean(cn.jia.agent.security.AgentRuntimeAuthenticationService.class,
                     () -> mock(cn.jia.agent.security.AgentRuntimeAuthenticationService.class))
             .withBean(AgentWorkItemReassignmentDao.class,
@@ -154,7 +156,7 @@ class AgentWorkItemReassignmentStartupTest {
     }
 
     private static JwtAuthenticationToken principal() {
-        Jwt jwt = Jwt.withTokenValue("offline-fixture-not-a-credential")
+        Jwt jwt = Jwt.withTokenValue("offline-fixture-not-a-credential").claim("tenant_id", "0")
                 .header("alg", "RS256").subject(ACTOR)
                 .claim("jiacn", "tenant-a").claim("client_id", "client-a")
                 .issuedAt(Instant.parse("2026-01-01T00:00:00Z"))

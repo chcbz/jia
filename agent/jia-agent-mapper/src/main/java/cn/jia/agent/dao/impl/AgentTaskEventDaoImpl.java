@@ -17,7 +17,7 @@ public class AgentTaskEventDaoImpl
 
     @Override
     public Long lockAndAllocateVersion(String tenantId, String clientId, String ownerJiacn, String taskId) {
-        requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
+        requireReadOwnerScope(tenantId, clientId, ownerJiacn);
         requireExactId(taskId, "taskId", 100);
         return baseMapper.lockTaskMetaForEventVersion(tenantId, clientId, ownerJiacn, taskId);
     }
@@ -34,7 +34,7 @@ public class AgentTaskEventDaoImpl
             String tenantId, String clientId, String ownerJiacn, String taskId,
             long expectedCurrentVersion, long newEventVersion,
             long updateTime) {
-        requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
+        requireReadOwnerScope(tenantId, clientId, ownerJiacn);
         requireExactId(taskId, "taskId", 100);
         if (expectedCurrentVersion < 0) {
             throw new IllegalArgumentException("expectedCurrentVersion must not be negative");
@@ -94,13 +94,6 @@ public class AgentTaskEventDaoImpl
         return baseMapper.findExactByEventId(tenantId, clientId, ownerJiacn, eventId);
     }
 
-    private void requireStrictOwnerScope(String tenantId, String clientId, String ownerJiacn) {
-        if (!"0".equals(tenantId)) {
-            throw new IllegalArgumentException("tenantId must be literal 0");
-        }
-        requireReadOwnerScope(tenantId, clientId, ownerJiacn);
-    }
-
     private void requireReadOwnerScope(String tenantId, String clientId, String ownerJiacn) {
         requireExactId(tenantId, "tenantId", 50);
         requireExactId(clientId, "clientId", 50);
@@ -124,7 +117,7 @@ public class AgentTaskEventDaoImpl
         if (event == null) {
             throw new IllegalArgumentException("event must not be null");
         }
-        requireStrictOwnerScope(event.getTenantId(), event.getClientId(), event.getOwnerJiacn());
+        requireReadOwnerScope(event.getTenantId(), event.getClientId(), event.getOwnerJiacn());
         requireExactId(event.getTaskId(), "taskId", 100);
         requireExactId(event.getEventId(), "eventId", 100);
         if (event.getEventVersion() == null || event.getEventVersion() <= 0) {

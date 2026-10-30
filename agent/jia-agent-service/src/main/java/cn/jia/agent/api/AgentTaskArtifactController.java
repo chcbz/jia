@@ -1,5 +1,7 @@
 package cn.jia.agent.api;
 
+import cn.jia.core.security.TenantClaimPolicy;
+
 import cn.jia.agent.entity.AgentTaskArtifactContentDTO;
 import cn.jia.agent.entity.AgentTaskArtifactPublishDTO;
 import cn.jia.agent.entity.AgentTaskArtifactViewDTO;
@@ -188,7 +190,13 @@ public class AgentTaskArtifactController {
                 || "0".equals(ownerJiacn) || "0".equals(clientId)) {
             throw new AuthenticationFailure(true);
         }
-        return new Scope("0", clientId, ownerJiacn);
+        // The resource security boundary has admitted this JWT's process tenant/client.
+        // Resolve with the shared claim policy; a declared gray tenant is never rewritten to zero.
+        try {
+            return new Scope(TenantClaimPolicy.resolve(claims), clientId, ownerJiacn);
+        } catch (IllegalArgumentException denied) {
+            throw new AuthenticationFailure(true);
+        }
     }
 
     private static String actor(HttpServletRequest request) {

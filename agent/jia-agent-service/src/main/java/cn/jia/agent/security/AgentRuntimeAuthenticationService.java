@@ -12,8 +12,6 @@ import cn.jia.agent.service.AgentIdentityService;
 import cn.jia.core.security.FixedTenantAdmissionPolicy;
 import cn.jia.user.security.AccountSecurityService;
 import cn.jia.user.security.AccountSecuritySnapshot;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataAccessException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -48,29 +46,10 @@ public class AgentRuntimeAuthenticationService {
 
     public AgentRuntimeAuthenticationService(AgentRuntimeDao runtimes, AgentRuntimeV1InstallationDao installations,
             AgentIdentityRegistryDao registry, AgentIdentityService identities,
-            AccountSecurityService accounts, AgentTaskEventsGate gate) {
-        this(runtimes, installations, registry, identities, accounts, gate,
-                new FixedTenantAdmissionPolicy("0", false, null, null));
-    }
-
-    public AgentRuntimeAuthenticationService(AgentRuntimeDao runtimes, AgentRuntimeV1InstallationDao installations,
-            AgentIdentityRegistryDao registry, AgentIdentityService identities,
             AccountSecurityService accounts, AgentTaskEventsGate gate, FixedTenantAdmissionPolicy tenantAdmission) {
         this.runtimes = runtimes; this.installations = installations; this.registry = registry;
         this.identities = identities; this.accounts = accounts; this.gate = gate;
         this.tenantAdmission = Objects.requireNonNull(tenantAdmission);
-    }
-
-    @Autowired
-    public AgentRuntimeAuthenticationService(AgentRuntimeDao runtimes, AgentRuntimeV1InstallationDao installations,
-            AgentIdentityRegistryDao registry, AgentIdentityService identities,
-            AccountSecurityService accounts, AgentTaskEventsGate gate,
-            @Value("${cyf.security.legacy-single-tenant-id:0}") String legacyTenantId,
-            @Value("${cyf.security.fixed-tenant.enabled:false}") boolean fixedTenantEnabled,
-            @Value("${cyf.security.fixed-tenant.tenant-id:}") String fixedTenantId,
-            @Value("${cyf.security.fixed-tenant.client-id:}") String fixedClientId) {
-        this(runtimes, installations, registry, identities, accounts, gate,
-                new FixedTenantAdmissionPolicy(legacyTenantId, fixedTenantEnabled, fixedTenantId, fixedClientId));
     }
 
     /** Caller holds the ACTIVE installation lock after verifying its Bearer. */

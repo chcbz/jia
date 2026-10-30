@@ -304,7 +304,7 @@ class AgentWorkItemDependencyServiceImplTest {
     void invalidRequestAndOutOfScopeRootFailClosed() {
         Fixture fixture = fixture(root("running"));
         assertReason(Reason.INVALID_REQUEST,
-                () -> fixture.service.resolveReady("tenant-a", CLIENT, OWNER, TASK));
+                () -> fixture.service.resolveReady("1 ", CLIENT, OWNER, TASK));
         verify(fixture.transaction, never()).executeWithLockedTaskRootInOwnerScope(any(), any(), any(), any(), any());
 
         AgentTaskMetaEntity wrongRoot = root("running");
@@ -334,6 +334,24 @@ class AgentWorkItemDependencyServiceImplTest {
         AgentWorkItemDependencyException failure = assertThrows(
                 AgentWorkItemDependencyException.class, action::run);
         assertEquals(reason, failure.getReason());
+    }
+
+    @Test
+    void grayDependenciesUseOnlyScopedRowsAndRetainProductionRootFence() {
+        var grayRoot = root("running");
+        grayRoot.setTenantId("1");
+        Fixture gray = fixture(grayRoot);
+        var next = pending("gray-work", "[]", 0L);
+        next.setTenantId("1");
+        when(gray.dao.listByTaskForUpdate("1", CLIENT, OWNER, TASK, 501)).thenReturn(List.of(next));
+        when(gray.dao.readyPendingByVersion(eq("1"), eq(CLIENT), eq(OWNER), eq(TASK),
+                eq("gray-work"), eq(0L), eq(NOW), any())).thenReturn(1);
+        assertEquals(List.of("gray-work"), gray.service.resolveReady("1", CLIENT, OWNER, TASK).getReadyWorkItemIds());
+        verify(gray.dao, never()).listByTaskForUpdate("0", CLIENT, OWNER, TASK, 501);
+        var productionRoot = fixture(root("running"));
+        assertReason(Reason.INVALID_PERSISTED_STATE,
+                () -> productionRoot.service.resolveReady("1", CLIENT, OWNER, TASK));
+        verify(productionRoot.dao, never()).listByTaskForUpdate(any(), any(), any(), any(), anyInt());
     }
 
     private Fixture fixture(AgentTaskMetaEntity root) {

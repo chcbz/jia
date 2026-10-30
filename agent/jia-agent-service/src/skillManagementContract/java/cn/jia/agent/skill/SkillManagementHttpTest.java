@@ -33,7 +33,7 @@ class SkillManagementHttpTest {
         new ApiEnvelopeJsonConfig().extendMessageConverters(converters);
         mvc=MockMvcBuilders.standaloneSetup(controller,new SkillPackageController(service)).setControllerAdvice(new ApiEnvelopeAdvice(),new ApiRequestEnvelopeAdvice(),new ExceptionHandlerAdvice())
             .setMessageConverters(converters.toArray(HttpMessageConverter[]::new)).addFilters(new RequestIdFilter()).build();
-        auth=new JwtAuthenticationToken(Jwt.withTokenValue("synthetic").header("alg","none").subject("buyer").claim("client_id","sm-client").claim("jiacn","owner").build(),List.of());
+        auth=new JwtAuthenticationToken(Jwt.withTokenValue("synthetic").claim("tenant_id", "0").header("alg","none").subject("buyer").claim("client_id","sm-client").claim("jiacn","owner").build(),List.of());
     }
     Map<String,Object> sample(String definition) throws Exception {
         for(var c:SkillManagementCodecTest.examples().get("cases"))if(c.get("valid").asBoolean()&&definition.equals(c.get("definition").asText()))

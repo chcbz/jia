@@ -68,11 +68,12 @@ public final class AgentCommandInboxServiceImpl implements AgentCommandInboxServ
     private final AgentCommandInboxDao dao;
     private final AgentRabbitSafetyGate gate;
     private final TransactionTemplate transaction;
+    private final String processTenantId;
 
     public AgentCommandInboxServiceImpl(
-            AgentCommandInboxDao dao,
-            AgentRabbitSafetyGate gate,
-            PlatformTransactionManager transactionManager) {
+            AgentCommandInboxDao dao, AgentRabbitSafetyGate gate,
+            PlatformTransactionManager transactionManager, String processTenantId) {
+        this.processTenantId = cn.jia.core.security.TenantClaimPolicy.exact(processTenantId);
         this.dao = Objects.requireNonNull(dao, "dao");
         this.gate = Objects.requireNonNull(gate, "gate");
         this.transaction = new TransactionTemplate(
@@ -87,6 +88,9 @@ public final class AgentCommandInboxServiceImpl implements AgentCommandInboxServ
         if (disabled != null) {
             return AgentInboxClaim.disabled(disabled);
         }
+        if (message != null && !processTenantId.equals(message.tenantId())) {
+            return AgentInboxClaim.disabled(AgentInboxClaim.DisabledReason.FOREIGN_TENANT);
+        }
         ValidatedMessage validated = validateMessage(message, leaseOwner, now, leaseMillis);
         return transaction.execute(status -> claimInTransaction(validated, leaseOwner, now, leaseMillis));
     }
@@ -99,6 +103,9 @@ public final class AgentCommandInboxServiceImpl implements AgentCommandInboxServ
                     "Agent command Inbox completion called while Rabbit consume is disabled");
         }
         validateToken(token);
+        if (!processTenantId.equals(token.tenantId())) {
+            throw new IllegalArgumentException("Inbox token belongs to another environment");
+        }
         Objects.requireNonNull(disposition, "disposition");
         if (now <= 0) throw new IllegalArgumentException("now must be positive");
         return transaction.execute(status -> completeInTransaction(token, disposition, now));

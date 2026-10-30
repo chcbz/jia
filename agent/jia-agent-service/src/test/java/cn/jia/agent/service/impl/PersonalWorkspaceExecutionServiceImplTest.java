@@ -73,6 +73,18 @@ class PersonalWorkspaceExecutionServiceImplTest {
     @org.junit.jupiter.api.AfterEach
     void clearRuntimePrincipal() { org.springframework.security.core.context.SecurityContextHolder.clearContext(); }
 
+    @Test
+    void grayExecutionReadUsesExactOwnerPartitionWithoutProductionFallback() {
+        var gray = new PersonalWorkspaceExecutionService.OwnerScope("1", "client-a", "owner-a");
+        var missing = assertThrows(PersonalWorkspaceExecutionService.Failure.class,
+                () -> service.get(gray, "execution-gray"));
+        assertEquals(PersonalWorkspaceExecutionService.Reason.NOT_FOUND, missing.getReason());
+        verify(executions).find("1", "client-a", "owner-a", "execution-gray");
+        verify(executions, never()).find("0", "client-a", "owner-a", "execution-gray");
+        assertThrows(PersonalWorkspaceExecutionService.Failure.class, () -> service.get(
+                new PersonalWorkspaceExecutionService.OwnerScope("1 ", "client-a", "owner-a"), "execution-gray"));
+    }
+
     @BeforeEach
     void setUp() throws Exception {
         executions = mock(PersonalWorkspaceExecutionDao.class);

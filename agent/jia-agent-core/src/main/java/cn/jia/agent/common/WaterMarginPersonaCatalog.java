@@ -130,8 +130,14 @@ public final class WaterMarginPersonaCatalog {
         return DEFINITIONS.stream().map(Definition::toPublicEntity).toList();
     }
 
+    /** Null scope alone is not publication authority: only exact checked-in definitions are public. */
+    public static boolean isPublicDefinition(AgentPersonaEntity persona) {
+        return persona != null && persona.getTenantId() == null && persona.getClientId() == null
+                && persona.equals(publicPersona(persona.getPersonaCode()));
+    }
+
     public static AgentPersonaEntity publicPersona(String personaCode) {
-        Definition definition = BY_CODE.get(personaCode);
+        Definition definition = personaCode == null ? null : BY_CODE.get(personaCode);
         return definition == null ? null : definition.toPublicEntity();
     }
 
@@ -205,7 +211,8 @@ public final class WaterMarginPersonaCatalog {
             entity.setLeadership(leadership());
             entity.setActive(true);
             entity.setSystemAgent(systemAgent());
-            entity.setTenantId("0");
+            // A checked-in platform definition is not owned by any business tenant.
+            entity.setTenantId(null);
             entity.setClientId(null);
             return entity;
         }

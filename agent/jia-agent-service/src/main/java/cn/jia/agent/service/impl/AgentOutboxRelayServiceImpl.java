@@ -45,6 +45,7 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
     private static final Set<String> TERMINAL_OUTBOX =
             Set.of("PUBLISHED", "FAILED", "EXPIRED", "DEAD");
     private final AgentOutboxRelayDao dao;
+    private final String processTenantId;
     private final AgentRabbitSafetyGate gate;
     private final AgentRabbitTopologyManifest manifest;
     private final AgentRabbitTopologyReadiness readiness;
@@ -58,7 +59,10 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
             AgentRabbitTopologyManifest manifest,
             AgentRabbitTopologyReadiness readiness,
             AgentOutboxRelaySettings settings,
-            PlatformTransactionManager transactionManager) {
+            PlatformTransactionManager transactionManager,
+            String processTenantId) {
+        if (!validExact(processTenantId, 50)) throw new IllegalArgumentException("processTenantId");
+        this.processTenantId = processTenantId;
         this.dao = Objects.requireNonNull(dao, "dao");
         this.gate = Objects.requireNonNull(gate, "gate");
         this.manifest = Objects.requireNonNull(manifest, "manifest");
@@ -79,7 +83,7 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
             return List.of();
         }
         int corruptionLimit = Math.min(requested, settings.batchSize());
-        List<AgentOutboxCandidate> corrupt = dao.selectCorruptCandidates(now, corruptionLimit);
+        List<AgentOutboxCandidate> corrupt = dao.selectCorruptCandidates(processTenantId, now, corruptionLimit);
         if (corrupt != null) {
             Set<Long> quarantined = new HashSet<>();
             for (AgentOutboxCandidate candidate : corrupt) {
@@ -91,8 +95,8 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
         }
 
         List<AgentOutboxCandidate> merged = new ArrayList<>(limit * 2);
-        List<AgentOutboxCandidate> due = dao.selectDueCandidates(now, limit);
-        List<AgentOutboxCandidate> stale = dao.selectStaleCandidates(now, limit);
+        List<AgentOutboxCandidate> due = dao.selectDueCandidates(processTenantId, now, limit);
+        List<AgentOutboxCandidate> stale = dao.selectStaleCandidates(processTenantId, now, limit);
         if (due != null) merged.addAll(due.stream().filter(Objects::nonNull).toList());
         if (stale != null) merged.addAll(stale.stream().filter(Objects::nonNull).toList());
         merged.sort(Comparator.comparingLong(AgentOutboxCandidate::eligibleAt)
@@ -100,7 +104,7 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
         Set<Long> seen = new HashSet<>();
         List<AgentOutboxCandidate> result = new ArrayList<>(limit);
         for (AgentOutboxCandidate candidate : merged) {
-            if (!seen.add(candidate.outboxId())) continue;
+            if (!processTenantId.equals(candidate.tenantId()) || !seen.add(candidate.outboxId())) continue;
             if (!validCandidateHint(candidate)) {
                 quarantineCandidate(candidate, now);
                 continue;
@@ -117,7 +121,7 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
         if (!globallyPublishable()) {
             return AgentOutboxClaim.disabled();
         }
-        if (candidate == null || candidate.outboxId() <= 0
+        if (candidate == null || !processTenantId.equals(candidate.tenantId()) || candidate.outboxId() <= 0
                 || !validExact(leaseOwner, 100) || now <= 0) {
             return AgentOutboxClaim.skipped();
         }
@@ -133,7 +137,7 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
     @Override
     public AgentOutboxSettleResult settle(
             AgentOutboxClaimToken token, AgentRabbitPublishResult result, long now) {
-        if (token == null || result == null || now <= 0) {
+        if (token == null || !processTenantId.equals(token.tenantId()) || result == null || now <= 0) {
             return AgentOutboxSettleResult.STALE;
         }
         AgentOutboxSettleResult settled = settleTransaction.execute(
@@ -305,7 +309,7 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
     }
 
     private void quarantineCandidate(AgentOutboxCandidate candidate, long now) {
-        if (candidate == null || candidate.outboxId() <= 0 || now <= 0) return;
+        if (candidate == null || !processTenantId.equals(candidate.tenantId()) || candidate.outboxId() <= 0 || now <= 0) return;
         claimTransaction.execute(ignored -> {
             quarantineCandidateInTransaction(candidate, now);
             return null;

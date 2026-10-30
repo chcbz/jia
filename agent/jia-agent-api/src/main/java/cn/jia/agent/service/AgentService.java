@@ -51,6 +51,10 @@ public interface AgentService {
 
     AgentRuntimeDTO requireApiKeyOwnedAgentForUpdate(String clientId, String jiacn, String agentId);
 
+    /** Exact admitted environment, identity/binding and runtime ownership under the existing locks. */
+    AgentRuntimeDTO requireApiKeyOwnedAgentForUpdate(
+            String tenantId, String clientId, String jiacn, String agentId);
+
     AgentRuntimeDTO get(String agentId);
 
     AgentRuntimeDTO updateStatus(String agentId, AgentStatusDTO request);

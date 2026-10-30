@@ -405,7 +405,7 @@ class AgentCommandOperationsControllerTest {
     }
 
     private Jwt jwtToken(String subject, String approver) {
-        return Jwt.withTokenValue("token").header("alg", "none")
+        return Jwt.withTokenValue("token").claim("tenant_id", "0").header("alg", "none")
                 .claim("jiacn", "tenant-a").claim("client_id", "client-a")
                 .claim("sub", subject).claim("agent_command_ops_approver", approver)
                 .issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(60)).build();

@@ -214,11 +214,6 @@ public interface ChatDeliberationMapper {
     List<ChatDispatchOutboxEntity> findDueOutboxInTenant(@Param("tenantId") String tenantId,
             @Param("now") long now, @Param("limit") int limit);
 
-    /** Historical callers belong to tenant zero, never an all-tenant worker. */
-    default List<ChatDispatchOutboxEntity> findDueOutbox(long now, int limit) {
-        return findDueOutboxInTenant("0", now, limit);
-    }
-
     @Select("""
             SELECT * FROM chat_dispatch_outbox
             WHERE tenant_id=#{tenantId} AND client_id=#{clientId}

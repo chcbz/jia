@@ -200,7 +200,7 @@ public class AgentWorkItemReassignmentServiceImpl implements AgentWorkItemReassi
         lockActiveCanonicalAgents(tenantId, clientId, ownerJiacn, authorityAgents);
         requireRuntimes(tenantId, clientId, ownerJiacn, agents);
         try {
-            agentService.requireHostingNewWork(ownerJiacn, clientId, required.targetAgentId());
+            agentService.requireHostingNewWork(tenantId, clientId, required.targetAgentId());
         } catch (RuntimeException denied) {
             throw failure(Reason.NOT_FOUND_OR_FORBIDDEN,
                     "Target cannot accept new hosted work", denied);
@@ -616,7 +616,7 @@ public class AgentWorkItemReassignmentServiceImpl implements AgentWorkItemReassi
         for (String agentId : sortedAgents) {
             try {
                 AgentRuntimeDTO runtime = agentService.requireApiKeyOwnedAgentForUpdate(
-                        clientId, ownerJiacn, agentId);
+                        tenantId, clientId, ownerJiacn, agentId);
                 if (runtime == null || !agentId.equals(runtime.getAgentId())
                         || !RUNTIME_STATUSES.contains(runtime.getStatus())) {
                     throw unavailable();
@@ -973,7 +973,7 @@ public class AgentWorkItemReassignmentServiceImpl implements AgentWorkItemReassi
     }
 
     private void requireScope(String tenantId, String clientId, String ownerJiacn, String taskId, String workItemId) {
-        if (!"0".equals(tenantId) || !exact(clientId, 50) || !exact(ownerJiacn, 50)
+        if (!exact(tenantId, 50) || !exact(clientId, 50) || !exact(ownerJiacn, 50)
                 || !exact(taskId, 100) || !exact(workItemId, 100)) {
             throw failure(Reason.INVALID_REQUEST, "Scope or path identity is invalid");
         }

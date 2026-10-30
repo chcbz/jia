@@ -18,7 +18,7 @@ public interface AgentExecutionReportMapper {
                    version,replay_parent_message_id,replay_requester_id,replay_approver_id,
                    replay_reason,tenant_id,client_id,create_time,update_time
               FROM agent_command_delivery
-             WHERE tenant_id='0' AND client_id=#{clientId} AND owner_jiacn=#{ownerJiacn}
+             WHERE tenant_id=#{tenantId} AND client_id=#{clientId} AND owner_jiacn=#{ownerJiacn}
                AND command_id=#{commandId}
                AND CAST(tenant_id AS BINARY)=CAST(#{tenantId} AS BINARY)
                AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(#{tenantId})
@@ -56,7 +56,7 @@ public interface AgentExecutionReportMapper {
             @Param("dispatchMessageId") String dispatchMessageId);
 
     String EXACT_SCOPE = """
-            tenant_id='0' AND client_id=#{clientId} AND owner_jiacn=#{ownerJiacn}
+            tenant_id=#{tenantId} AND client_id=#{clientId} AND owner_jiacn=#{ownerJiacn}
             AND CAST(tenant_id AS BINARY)=CAST(#{tenantId} AS BINARY)
             AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(#{tenantId})
             AND CAST(client_id AS BINARY)=CAST(#{clientId} AS BINARY)

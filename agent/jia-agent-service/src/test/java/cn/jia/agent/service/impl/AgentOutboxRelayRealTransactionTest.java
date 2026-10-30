@@ -91,6 +91,44 @@ class AgentOutboxRelayRealTransactionTest {
     }
 
     @Test
+    void discoveryPartitionsDueStaleAndCorruptRowsBeforeLimit() {
+        for (String tenant : List.of("0", "1")) {
+            String foreign = "0".equals(tenant) ? "1" : "0";
+            jdbc.update("UPDATE agent_command_delivery SET tenant_id=?", tenant);
+            jdbc.update("UPDATE agent_outbox_event SET tenant_id=?,status='PENDING',delivery_id=41,lease_until=NULL", tenant);
+            assertEquals(1, productionDao.selectDueCandidates(tenant, NOW, 1).size());
+            assertEquals(List.of(), productionDao.selectDueCandidates(foreign, NOW, 1));
+            assertEquals(List.of(), productionDao.selectDueCandidates(tenant + " ", NOW, 1));
+            jdbc.update("UPDATE agent_outbox_event SET status='CLAIMED',lease_until=?", NOW - 1);
+            assertEquals(1, productionDao.selectStaleCandidates(tenant, NOW, 1).size());
+            assertEquals(List.of(), productionDao.selectStaleCandidates(foreign, NOW, 1));
+            jdbc.update("UPDATE agent_outbox_event SET delivery_id=404");
+            assertEquals(1, productionDao.selectCorruptCandidates(tenant, NOW, 1).size());
+            assertEquals(List.of(), productionDao.selectCorruptCandidates(foreign, NOW, 1));
+        }
+    }
+
+    @Test
+    void foreignTenantCandidateAndSettlementNeverMutateRows() {
+        AgentOutboxRelayServiceImpl foreign = new AgentOutboxRelayServiceImpl(
+                productionDao, gate(), MANIFEST, ready(),
+                new AgentOutboxRelaySettings(new AgentRabbitSafetyProperties.RabbitPublish(true)),
+                manager, "1");
+        assertEquals(List.of(), foreign.discover(NOW, 10));
+        assertEquals(AgentOutboxClaim.Status.SKIPPED, foreign.claim(candidate(), "gray-worker", NOW).status());
+        assertEquals("PENDING", string("SELECT status FROM agent_outbox_event"));
+        assertEquals(0, integer("SELECT version FROM agent_outbox_event"));
+        AgentOutboxClaim owned = service(productionDao).claim(candidate(), "owner-worker", NOW);
+        assertEquals(AgentOutboxClaim.Status.ACQUIRED, owned.status());
+        long version = longValue("SELECT version FROM agent_outbox_event");
+        // Reuse the real fenced claim; a different process must not even acquire its locks.
+        assertEquals(AgentOutboxSettleResult.STALE, foreign.settle(owned.token(),
+                AgentRabbitPublishResult.ack(), NOW + 1));
+        assertEquals(version, longValue("SELECT version FROM agent_outbox_event"));
+        assertEquals("CLAIMED", string("SELECT status FROM agent_outbox_event"));
+    }
+
+    @Test
     void historicalUnadmittedPendingIsAtomicallyDeadWithoutConsumingPublishAttempt() {
         jdbc.update("UPDATE agent_outbox_event SET last_error=NULL");
 
@@ -343,8 +381,8 @@ class AgentOutboxRelayRealTransactionTest {
     void poisonLaneQuarantinesMalformedHeadsAndStillReturnsLegalCandidate() {
         jdbc.update("UPDATE agent_outbox_event SET id=10");
         insertOutboxCopy(1, 0, "tenant-a", "client-a");
-        insertOutboxCopy(2, 41, "", "client-a");
-        insertOutboxCopy(3, 41, "tenant-" + Character.toString(1), "client-a");
+        insertOutboxCopy(2, 41, "tenant-a", "");
+        insertOutboxCopy(3, 41, "tenant-a", "client-" + Character.toString(1));
         insertOutboxCopy(4, 404, "tenant-a", "client-a");
         insertOutboxCopy(5, -1, "tenant-a", "client-a");
         insertOutboxCopy(6, 405, "tenant-a", "client-a");
@@ -385,7 +423,7 @@ class AgentOutboxRelayRealTransactionTest {
         assertEquals(List.of(), service(productionDao).discover(NOW, 1));
         assertEquals(versions, jdbc.queryForList(
                 "SELECT version FROM agent_outbox_event WHERE id<10 ORDER BY id", Long.class));
-        assertEquals(0, productionDao.selectCorruptCandidates(NOW, 4).size());
+        assertEquals(0, productionDao.selectCorruptCandidates("tenant-a", NOW, 4).size());
     }
 
     @Test
@@ -436,7 +474,7 @@ class AgentOutboxRelayRealTransactionTest {
             assertEquals(max == VersionMax.DELIVERY_ONLY ? 1L : Long.MAX_VALUE,
                     longValue("SELECT version FROM agent_outbox_event"));
             assertEquals(List.of(), service(productionDao).discover(NOW, 1));
-            assertEquals(0, productionDao.selectCorruptCandidates(NOW, 4).size());
+            assertEquals(0, productionDao.selectCorruptCandidates("tenant-a", NOW, 4).size());
         }
     }
 
@@ -606,7 +644,7 @@ class AgentOutboxRelayRealTransactionTest {
                     string("SELECT last_error FROM agent_outbox_event"));
             assertEquals(Long.MAX_VALUE, longValue("SELECT version FROM agent_command_delivery"));
             assertEquals(Long.MAX_VALUE, longValue("SELECT version FROM agent_outbox_event"));
-            assertEquals(0, productionDao.selectCorruptCandidates(NOW + 1, 4).size());
+            assertEquals(0, productionDao.selectCorruptCandidates("tenant-a", NOW + 1, 4).size());
         }
     }
 
@@ -665,7 +703,7 @@ class AgentOutboxRelayRealTransactionTest {
         return new AgentOutboxRelayServiceImpl(
                 dao, gate(), MANIFEST, ready(),
                 new AgentOutboxRelaySettings(new AgentRabbitSafetyProperties.RabbitPublish(true)),
-                manager);
+                manager, "tenant-a");
     }
 
     private void insertPending() {
@@ -824,14 +862,14 @@ class AgentOutboxRelayRealTransactionTest {
         private FailingDao(AgentOutboxRelayDao delegate, Failure failure) {
             this.delegate = delegate; this.failure = failure;
         }
-        @Override public List<AgentOutboxCandidate> selectCorruptCandidates(long now, int limit) {
-            return delegate.selectCorruptCandidates(now, limit);
+        @Override public List<AgentOutboxCandidate> selectCorruptCandidates(String tenantId, long now, int limit) {
+            return delegate.selectCorruptCandidates(tenantId, now, limit);
         }
-        @Override public List<AgentOutboxCandidate> selectDueCandidates(long now, int limit) {
-            return delegate.selectDueCandidates(now, limit);
+        @Override public List<AgentOutboxCandidate> selectDueCandidates(String tenantId, long now, int limit) {
+            return delegate.selectDueCandidates(tenantId, now, limit);
         }
-        @Override public List<AgentOutboxCandidate> selectStaleCandidates(long now, int limit) {
-            return delegate.selectStaleCandidates(now, limit);
+        @Override public List<AgentOutboxCandidate> selectStaleCandidates(String tenantId, long now, int limit) {
+            return delegate.selectStaleCandidates(tenantId, now, limit);
         }
         @Override public AgentCommandDeliveryEntity lockDelivery(String tenant, String client, long id) {
             return delegate.lockDelivery(tenant, client, id);

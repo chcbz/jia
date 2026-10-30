@@ -35,14 +35,14 @@ class AgentRuntimeV1ServiceImplTest {
         when(provider.getIfAvailable()).thenReturn(acks);
         registry = mock(cn.jia.agent.dao.AgentIdentityRegistryDao.class);
         sessions = mock(cn.jia.agent.security.AgentRuntimeAuthenticationService.class);
-        service = new AgentRuntimeV1ServiceImpl(installations, identities, registry, provider, sessions, mock(ObjectProvider.class));
+        service = new AgentRuntimeV1ServiceImpl(installations, identities, registry, provider, sessions, mock(ObjectProvider.class), new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null));
     }
 
     @Test void fixedTenantOneCreationAdmitsOnlyExactClientAndOwnerScopeBeforeMutation() {
         @SuppressWarnings("unchecked") ObjectProvider<AgentCommandAckService> provider = mock(ObjectProvider.class);
         AgentRuntimeV1ServiceImpl fixed = new AgentRuntimeV1ServiceImpl(
                 installations, identities, registry, provider, sessions, mock(ObjectProvider.class),
-                new FixedTenantAdmissionPolicy("0", true, "1", "cyf-local"));
+                new FixedTenantAdmissionPolicy("1", "cyf-local"));
         when(identities.requireRegistrationIdentityInScope("1", "cyf-local", "owner-a", AGENT))
                 .thenReturn(registrationIdentity("1", "cyf-local", "owner-a", AGENT));
         when(installations.insert(any())).thenAnswer(invocation -> {
@@ -403,7 +403,7 @@ class AgentRuntimeV1ServiceImplTest {
     @Test void tenantOneEnrollmentSessionHeartbeatStayBoundAndCrossTenantCallbacksFail() {
         service = new AgentRuntimeV1ServiceImpl(installations, identities, registry,
                 provider(acks), sessions, mock(ObjectProvider.class),
-                new cn.jia.core.security.FixedTenantAdmissionPolicy("0", true, "1", "cyf-local"));
+                new cn.jia.core.security.FixedTenantAdmissionPolicy("1", "cyf-local"));
         String authorization = "tenant-one-runtime-authorization";
         AgentRuntimeV1InstallationEntity active = installation("ACTIVE")
                 .setRuntimeAuthorizationHash(sha(authorization));
@@ -431,7 +431,7 @@ class AgentRuntimeV1ServiceImplTest {
     @Test void fixedProcessRejectsTenantZeroNativeEnrollmentBeforeDatabaseLookup() {
         service = new AgentRuntimeV1ServiceImpl(installations, identities, registry,
                 provider(acks), sessions, mock(ObjectProvider.class),
-                new cn.jia.core.security.FixedTenantAdmissionPolicy("0", true, "1", "cyf-local"));
+                new cn.jia.core.security.FixedTenantAdmissionPolicy("1", "cyf-local"));
         var request = new AgentRuntimeV1EnrollmentRequest("rti-1", "0", "production-client",
                 AGENT, "1", HASH, "enrollment-secret");
         assertThrows(AgentServiceImpl.AgentBizException.class, () -> service.enroll(request, NOW));

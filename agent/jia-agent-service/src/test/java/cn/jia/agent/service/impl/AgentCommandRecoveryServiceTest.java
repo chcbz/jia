@@ -52,6 +52,20 @@ class AgentCommandRecoveryServiceTest {
     private static final String M3 = "44444444-4444-4444-4444-444444444444";
 
     @Test
+    void grayRecoveryCannotTouchProductionEvenIfDispatchGateAllowsProduction() {
+        RecordingDao dao = sourceDao();
+        AgentCommandReissueServiceImpl gray = new AgentCommandReissueServiceImpl(
+                dao, enabledGate(), new PresenceDispatcher(true),
+                AgentRabbitTopologyManifest.canonical(), 30_000L, transactionManager(), "1");
+        assertEquals(0, gray.reissueForReconnect(reconnectScope(), 10, NOW).reissued());
+        assertEquals(0, dao.discoveryCalls);
+        // This test double deliberately returns a production hint even for a gray scan.
+        assertEquals(0, gray.reissueDue(10, 0, NOW).reissued());
+        assertEquals("1", dao.lastDiscoveryTenant);
+        assertEquals(List.of(), dao.operations);
+    }
+
+    @Test
     void d06AckAndReissueAcceptEveryCanonicalHallCommandType() {
         List<ActionType> allowlist = List.of(
                 new ActionType("execute", AgentProtocolConstants.COMMAND_WORK_ITEM_EXECUTE),
@@ -91,10 +105,7 @@ class AgentCommandRecoveryServiceTest {
                 .setLeaseOwner(null).setLeaseUntil(null).setProcessedAt(NOW - 1)
                 .setLastError("BROKER_DEAD");
         List<UUID> ids = new ArrayList<>(List.of(UUID.fromString(M2), UUID.fromString(E2)));
-        AgentCommandReissueServiceImpl service = new AgentCommandReissueServiceImpl(
-                dao, enabledGate(), new PresenceDispatcher(false),
-                AgentRabbitTopologyManifest.canonical(), transactionManager(),
-                () -> ids.removeFirst());
+        AgentCommandReissueServiceImpl service = new AgentCommandReissueServiceImpl(dao, enabledGate(), new PresenceDispatcher(false), AgentRabbitTopologyManifest.canonical(), 30_000L, transactionManager(), () -> ids.removeFirst(), new AgentCommandRecoveryPolicy(), "0");
         AgentCommandOperationRequest request = new AgentCommandOperationRequest(
                 "0", "client-a", 1L, "task-1", "agent-a", M1,
                 "operator-a", "approver-b", "incident recovery", "INC-42");
@@ -137,9 +148,7 @@ class AgentCommandRecoveryServiceTest {
         RecordingDao dao = waitingDao();
         PresenceDispatcher presence = new PresenceDispatcher(true);
         List<UUID> ids = new ArrayList<>(List.of(UUID.fromString(M2), UUID.fromString(E2)));
-        AgentCommandReissueServiceImpl service = new AgentCommandReissueServiceImpl(
-                dao, enabledGate(), presence, AgentRabbitTopologyManifest.canonical(),
-                transactionManager(), () -> ids.removeFirst());
+        AgentCommandReissueServiceImpl service = new AgentCommandReissueServiceImpl(dao, enabledGate(), presence, AgentRabbitTopologyManifest.canonical(), 30_000L, transactionManager(), () -> ids.removeFirst(), new AgentCommandRecoveryPolicy(), "0");
 
         AgentCommandReissueScanResult result = service.reissueForReconnect(
                 reconnectScope(), 10, NOW);
@@ -620,9 +629,7 @@ class AgentCommandRecoveryServiceTest {
     @Test
     void offOrWrongScopeStopsBeforeDiscovery() {
         RecordingDao dao = waitingDao();
-        AgentCommandReissueServiceImpl service = new AgentCommandReissueServiceImpl(
-                dao, offGate(), new PresenceDispatcher(true), AgentRabbitTopologyManifest.canonical(),
-                transactionManager());
+        AgentCommandReissueServiceImpl service = new AgentCommandReissueServiceImpl(dao, offGate(), new PresenceDispatcher(true), AgentRabbitTopologyManifest.canonical(), 30_000L, transactionManager(), "0");
         assertEquals(0, service.reissueDue(10, 0, NOW).examined());
         assertEquals(0, dao.discoveryCalls);
 
@@ -1064,9 +1071,7 @@ class AgentCommandRecoveryServiceTest {
 
     private AgentCommandReissueServiceImpl reissue(RecordingDao dao, PresenceDispatcher dispatcher) {
         List<UUID> ids = new ArrayList<>(List.of(UUID.fromString(M2), UUID.fromString(E2)));
-        return new AgentCommandReissueServiceImpl(
-                dao, enabledGate(), dispatcher, AgentRabbitTopologyManifest.canonical(),
-                transactionManager(), () -> ids.removeFirst());
+        return new AgentCommandReissueServiceImpl(dao, enabledGate(), dispatcher, AgentRabbitTopologyManifest.canonical(), 30_000L, transactionManager(), () -> ids.removeFirst(), new AgentCommandRecoveryPolicy(), "0");
     }
 
     private AgentCommandAckServiceImpl ackService(RecordingDao dao, AgentRabbitSafetyGate gate) {
@@ -1375,6 +1380,7 @@ class AgentCommandRecoveryServiceTest {
         private AgentConsumerInboxEntity parentInbox;
         private final List<String> operations = new ArrayList<>();
         private int discoveryCalls;
+        private String lastDiscoveryTenant;
         private int reissueRows = 1;
         private int ackRows = 1;
         private int ackMutations;
@@ -1407,8 +1413,9 @@ class AgentCommandRecoveryServiceTest {
 
         @Override
         public List<AgentWaitingCommandCandidate> findDueCandidates(
-                long now, long sentBefore, long afterDeliveryId, int limit) {
+                String tenantId, long now, long sentBefore, long afterDeliveryId, int limit) {
             discoveryCalls++;
+            lastDiscoveryTenant = tenantId;
             return List.of(new AgentWaitingCommandCandidate(
                     1, delivery.getTenantId(), delivery.getClientId(), delivery.getTargetAgentId(),
                     delivery.getExpiresAt() <= now));
