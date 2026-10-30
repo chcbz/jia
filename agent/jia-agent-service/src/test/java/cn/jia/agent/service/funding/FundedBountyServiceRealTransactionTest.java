@@ -352,6 +352,8 @@ class FundedBountyServiceRealTransactionTest {
                 + "ON a.account_id=e.escrow_account_id AND a.tenant_id=e.tenant_id AND a.client_id=e.client_id "
                 + "WHERE e.gross_micro<>e.captured_micro+e.refunded_micro+a.balance_micro", Integer.class));
         assertEquals(events, count("agent_task_event"));
+        assertEquals(events, jdbc.queryForObject("SELECT COUNT(*) FROM agent_task_event "
+                + "WHERE tenant_id=? AND client_id=? AND owner_jiacn=?", Integer.class, TENANT, CLIENT, OWNER));
         assertEquals(events, broker.wakeups.size());
         for (CommittedWakeup wakeup : broker.wakeups) {
             assertEquals(1, wakeup.visibleEventCount(), "event must be committed on independent connection before publication");

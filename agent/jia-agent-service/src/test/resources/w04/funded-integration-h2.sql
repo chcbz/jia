@@ -181,12 +181,13 @@ CREATE TABLE agent_task_event (
     occurred_at BIGINT NOT NULL,
     tenant_id VARCHAR(50) NOT NULL,
     client_id VARCHAR(50) NOT NULL,
+    owner_jiacn VARCHAR(50) NOT NULL,
     create_time BIGINT,
     update_time BIGINT,
     PRIMARY KEY (id),
     UNIQUE KEY uk_task_event_version
-        (tenant_id, client_id, task_id, event_version),
-    UNIQUE KEY uk_task_event_id (tenant_id, client_id, event_id)
+        (tenant_id, client_id, owner_jiacn, task_id, event_version),
+    UNIQUE KEY uk_task_event_id (tenant_id, client_id, owner_jiacn, event_id)
 );
 
 CREATE TABLE agent_task_member(id BIGINT AUTO_INCREMENT PRIMARY KEY, task_id VARCHAR(100),

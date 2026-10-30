@@ -475,7 +475,7 @@ public final class FundedBountyServiceImpl implements FundedBountyService {
                 + eventType + '\0' + TaskEventType.Aggregate.TASK + '\0' + taskId + '\0' + resultVersion;
         String eventId = "evt_" + TaskEventPayload.ContentDigest.fromUtf8(seed).sha256();
         return new AgentTaskEventWriteCommand().setTenantId(actor.tenantId()).setClientId(actor.clientId())
-                .setTaskId(taskId).setEventId(eventId).setEventType(eventType)
+                .setOwnerJiacn(actor.ownerJiacn()).setTaskId(taskId).setEventId(eventId).setEventType(eventType)
                 .setActorType(TaskEventType.ActorType.SYSTEM).setActorId(null)
                 .setAggregateType(TaskEventType.Aggregate.TASK).setAggregateId(taskId)
                 .setEventJson(payload.toJson()).setOccurredAt(occurredAt);
