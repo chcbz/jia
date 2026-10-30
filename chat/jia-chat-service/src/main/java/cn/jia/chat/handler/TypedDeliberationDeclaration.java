@@ -76,7 +76,9 @@ public final class TypedDeliberationDeclaration {
         if(!(raw instanceof Map<?,?> m)||!m.keySet().containsAll(Set.of("schemaVersion","executionProtocolVersion","toolPolicyRef","outputMimeTypes"))
                 ||!Set.of("schemaVersion","executionProtocolVersion","toolPolicyRef","outputMimeTypes","supportedToolPolicyRefs").containsAll(m.keySet()))throw invalid();
         exactInteger(m.get("schemaVersion"),1);exactInteger(m.get("executionProtocolVersion"),5);exact(m.get("toolPolicyRef"),"NATIVE_LOCAL_FILES_V1");
-        if(!(m.get("outputMimeTypes") instanceof List<?> types)||types.stream().anyMatch(x->!(x instanceof String t)||!Set.of("text/plain","text/markdown","text/html","application/json","image/png").contains(t))||new java.util.HashSet<>(types).size()!=types.size())throw invalid();
+        if(!(m.get("outputMimeTypes") instanceof List<?> types)||types.stream().anyMatch(x->!(x instanceof String t)||!Set.of("text/plain","text/markdown","text/html","application/json","image/png",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet").contains(t))||new java.util.HashSet<>(types).size()!=types.size())throw invalid();
         var result=new java.util.LinkedHashMap<String,Object>();
         result.put("schemaVersion",1);result.put("executionProtocolVersion",5);result.put("toolPolicyRef","NATIVE_LOCAL_FILES_V1");result.put("outputMimeTypes",List.copyOf(types));
         if(m.containsKey("supportedToolPolicyRefs")) {

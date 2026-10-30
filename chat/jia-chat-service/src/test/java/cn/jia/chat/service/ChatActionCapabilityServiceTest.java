@@ -123,6 +123,15 @@ class ChatActionCapabilityServiceTest {
         assertEquals(List.of("image/png"),imageAction.get("outputMimeTypes"));assertEquals(List.of("image/png"),imageAction.get("inputMimeTypes"));
         assertTrue(service.availableNative(scope,"task",catalog,declaration,"other-session").isEmpty());
         assertTrue(service.availableNative(scope,"task",catalog,java.util.Map.of(),"session").isEmpty());
+        var docx="application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+        var xlsx="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+        when(executions.nativeLocalFileCapabilities()).thenReturn(new PersonalWorkspaceExecutionService.ExecutionCapabilities(
+                List.of(docx,xlsx,"text/plain"),List.of(docx,xlsx),true));
+        var officeDeclaration=java.util.Map.<String,Object>of("nativeExecution",java.util.Map.of("outputMimeTypes",List.of(docx,xlsx,"image/png")));
+        var officeCatalog=List.<java.util.Map<String,Object>>of(java.util.Map.of("contentMimeType",docx),java.util.Map.of("contentMimeType",xlsx));
+        var officeAction=service.availableNative(scope,"task",officeCatalog,officeDeclaration,"session").getFirst();
+        assertEquals(List.of(xlsx,docx),officeAction.get("outputMimeTypes"));
+        assertEquals(List.of(xlsx,docx),officeAction.get("inputMimeTypes"));
         when(executions.nativeLocalFileCapabilities()).thenReturn(new PersonalWorkspaceExecutionService.ExecutionCapabilities(List.of("application/json"),List.of(),true));
         assertTrue(service.availableNative(scope,"task",catalog,java.util.Map.of("nativeExecution",java.util.Map.of("outputMimeTypes",List.of("text/plain"))),"session").isEmpty());
         when(executions.nativeLocalFileCapabilities()).thenReturn(new PersonalWorkspaceExecutionService.ExecutionCapabilities(List.of(),List.of(),false));

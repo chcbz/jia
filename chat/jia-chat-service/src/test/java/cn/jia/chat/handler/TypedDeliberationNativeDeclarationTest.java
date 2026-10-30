@@ -34,6 +34,13 @@ class TypedDeliberationNativeDeclarationTest {
         assertEquals(TypedDeliberationDeclaration.State.UNSUPPORTED,TypedDeliberationDeclaration.parse(value).state());
         nativeExecution.put("outputMimeTypes",List.of("image/png"));
         assertEquals(TypedDeliberationDeclaration.State.READY,TypedDeliberationDeclaration.parse(value).state());
+        var office=List.of("text/plain","image/png",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        nativeExecution.put("outputMimeTypes",office);
+        var officeParsed=TypedDeliberationDeclaration.parse(value);
+        assertEquals(TypedDeliberationDeclaration.State.READY,officeParsed.state());
+        assertEquals(office,((Map<?,?>)officeParsed.frozenReceipt().get("nativeExecution")).get("outputMimeTypes"));
         nativeExecution.put("outputMimeTypes",List.of("image/jpeg"));
         assertEquals(TypedDeliberationDeclaration.State.UNSUPPORTED,TypedDeliberationDeclaration.parse(value).state());
     }

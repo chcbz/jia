@@ -213,7 +213,9 @@ public final class ChatActionCapabilityService {
         var live=skillRuntimes.lookup(policy.runtimeScope(),policy.fence());
         if(live==null||live.state()!=cn.jia.agent.service.SkillCapabilityLookup.State.AVAILABLE||!java.util.Objects.equals(live.sessionId(),sessionId))return List.copyOf(actions);
         if(!(nativeDeclaration.get("outputMimeTypes") instanceof List<?> runtimeMimes))return List.copyOf(actions);
-        var allowed=server.allowedMimeTypes().stream().filter(runtimeMimes::contains).filter(Set.of("text/plain","text/markdown","text/html","application/json","image/png")::contains).sorted().toList();
+        var allowed=server.allowedMimeTypes().stream().filter(runtimeMimes::contains).filter(Set.of("text/plain","text/markdown","text/html","application/json","image/png",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")::contains).sorted().toList();
         if(allowed.isEmpty())return List.copyOf(actions);
         var input=catalog.stream().map(x->x.get("contentMimeType")).filter(String.class::isInstance).map(String.class::cast).filter(server.inputMimeTypes()::contains).distinct().sorted().toList();
         var schema=Map.<String,Object>of("$schema","https://json-schema.org/draft/2020-12/schema","type","object","additionalProperties",false,"properties",Map.of());
