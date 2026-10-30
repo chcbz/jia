@@ -37,8 +37,8 @@ class ChatMaterialsLockOrderMySqlTest extends SkillManagementMySqlFixture {
                 materialAttemptedBinding.countDown();
                 jdbc.queryForObject("SELECT id FROM binding_row WHERE id=1 FOR UPDATE",Long.class);
                 fixture.fenced=true;fixture.fences++;
-                try{return ((Supplier<?>)i.getArgument(2)).get();}finally{fixture.fenced=false;}
-            })).when(fixture.authentication).withFence(eq(fixture.proof),eq(false),any());
+                try{return ((Supplier<?>)i.getArgument(1)).get();}finally{fixture.fenced=false;}
+            })).when(fixture.authentication).withNativeFence(eq(fixture.runtime),any());
             doAnswer(i->{
                 assertTrue(fixture.fenced);
                 assertTrue(TransactionSynchronizationManager.isActualTransactionActive());
@@ -69,9 +69,9 @@ class ChatMaterialsLockOrderMySqlTest extends SkillManagementMySqlFixture {
                 return true;
             }));
             assertTrue(nativeHasBinding.await(5,TimeUnit.SECONDS));
-            var material=executor.submit(()->fixture.service.read(fixture.proof,"request","turn","source",fixture.digest));
+            var material=executor.submit(fixture::read);
             assertTrue(nativeMutation.get(10,TimeUnit.SECONDS));
-            assertSame(fixture.content,material.get(10,TimeUnit.SECONDS));
+            assertArrayEquals(fixture.content.bytes(),material.get(10,TimeUnit.SECONDS));
             assertEquals(2,fixture.fences);
         } finally {
             executor.shutdownNow();

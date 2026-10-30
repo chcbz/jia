@@ -18,8 +18,14 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class AgentMaterialsErrorHttpTest {
     private static final String PATH = "/internal/agent/chat/requests/request/turns/turn/materials/inputs/source/content";
     private final ChatMaterialsInputService authority = mock(ChatMaterialsInputService.class);
+    private final AgentRuntimeAuthenticationService authentication = mock(AgentRuntimeAuthenticationService.class);
     private final MockMvc mvc = MockMvcBuilders.standaloneSetup(
-            new AgentMaterialsInputController(authority)).build();
+            new AgentMaterialsInputController(authority, authentication)).build();
+
+    @org.junit.jupiter.api.BeforeEach void fences() {
+        when(authentication.withNativeFence(any(),any()))
+                .thenAnswer(i -> ((java.util.function.Supplier<?>)i.getArgument(1)).get());
+    }
 
     @Test void anonymousImageRequestKeepsUnauthorizedJson() throws Exception {
         mvc.perform(get(PATH).accept(MediaType.IMAGE_PNG))
@@ -52,15 +58,15 @@ class AgentMaterialsErrorHttpTest {
     @Test void successfulImageStillReturnsExactBinaryBytes() throws Exception {
         var runtime = runtime();
         byte[] bytes = new byte[] { (byte) 137, 80, 78, 71, 13, 10, 26, 10 };
-        when(authority.read(any(), eq("request"), eq("turn"), eq("source"), anyString()))
+        when(authority.read(any()))
                 .thenReturn(new cn.jia.agent.service.PersonalWorkspaceExecutionService.RuntimeContent(
                         "image.png", "image/png", bytes));
         mvc.perform(get(PATH).principal(runtime).accept(MediaType.IMAGE_PNG)
                         .header("X-Materials-Manifest-Digest", "sha256:" + "a".repeat(64)))
                 .andExpect(status().isOk()).andExpect(content().contentType(MediaType.IMAGE_PNG))
                 .andExpect(content().bytes(bytes));
-        var proof = AgentRuntimeAuthenticationService.requireProof(runtime);
-        verify(authority).read(eq(proof), eq("request"), eq("turn"), eq("source"), anyString());
+        verify(authentication,times(2)).withNativeFence(eq(runtime),any());
+        verify(authority).revalidate(any());
     }
 
     private AgentRuntimeAuthentication runtime() {
@@ -75,8 +81,8 @@ class AgentMaterialsErrorHttpTest {
 
     private void failsWith(RuntimeException failure, int statusCode) throws Exception {
         var runtime = runtime();
-        var proof = AgentRuntimeAuthenticationService.requireProof(runtime);
-        when(authority.read(eq(proof), eq("request"), eq("turn"), eq("source"), anyString())).thenThrow(failure);
+        var scope = runtime.getPrincipal();
+        when(authority.prepare(eq(scope), eq("request"), eq("turn"), eq("source"), anyString())).thenThrow(failure);
         mvc.perform(get(PATH).principal(runtime).accept(MediaType.IMAGE_PNG)
                         .header("X-Materials-Manifest-Digest", "sha256:" + "a".repeat(64)))
                 .andExpect(status().is(statusCode)).andExpect(content().contentType(MediaType.APPLICATION_JSON))

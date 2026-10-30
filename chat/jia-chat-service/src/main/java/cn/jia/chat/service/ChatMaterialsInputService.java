@@ -1,6 +1,6 @@
 package cn.jia.chat.service;
 
-import cn.jia.agent.security.AgentRuntimeAuthenticationService;
+import cn.jia.agent.security.AgentRuntimeAuthentication;
 import cn.jia.agent.service.AgentTaskMutationTransaction;
 import cn.jia.agent.service.PersonalWorkspaceExecutionService;
 import cn.jia.chat.deliberation.*;
@@ -15,7 +15,6 @@ public class ChatMaterialsInputService {
     private ChatDispatchAuthorityService dispatchAuthority;
     @org.springframework.beans.factory.annotation.Autowired
     public void setDispatchAuthority(ChatDispatchAuthorityService value) { dispatchAuthority=value; }
-    private final AgentRuntimeAuthenticationService runtimeAuthentication;
     private final ChatDeliberationDao dao;
     private final ChatTypedDeliberationStore store;
     private final AgentTaskMutationTransaction tasks;
@@ -23,30 +22,39 @@ public class ChatMaterialsInputService {
     private final ChatSkillSourceAccessService sources;
     private final cn.jia.agent.service.AgentTaskExecutionGrantService grants;
     public ChatMaterialsInputService(ChatDeliberationDao dao,ChatTypedDeliberationStore store,AgentTaskMutationTransaction tasks,
-            TypedDeliberationSessionRegistry sessions,ChatSkillSourceAccessService sources,cn.jia.agent.service.AgentTaskExecutionGrantService grants,
-            AgentRuntimeAuthenticationService runtimeAuthentication) {
-        this.dao=dao;this.store=store;this.tasks=tasks;this.sessions=sessions;this.sources=sources;this.grants=grants;this.runtimeAuthentication=runtimeAuthentication;
+            TypedDeliberationSessionRegistry sessions,ChatSkillSourceAccessService sources,cn.jia.agent.service.AgentTaskExecutionGrantService grants) {
+        this.dao=dao;this.store=store;this.tasks=tasks;this.sessions=sessions;this.sources=sources;this.grants=grants;
     }
-    public PersonalWorkspaceExecutionService.RuntimeContent read(AgentRuntimeAuthenticationService.Proof proof,String requestId,String turnId,String sourceId,String digest) {
-        if(proof==null||digest==null||!digest.matches("sha256:[0-9a-f]{64}"))throw missing();
-        var runtime=proof.scope();
-        // Match native WS mutations: installation -> binding/identity -> runtime -> task.
-        // incomingTurn also locks the task/grant, so it belongs inside this fence.
-        var prepared=runtimeAuthentication.withFence(proof,false,()-> {
-            var turn=dispatchAuthority.incomingTurn(runtime.tenantId(),runtime.clientId(),runtime.ownerJiacn(),runtime.agentId(),turnId).turn();
-            if(turn==null||!requestId.equals(turn.getRequestId())||!runtime.agentId().equals(turn.getTargetAgentId())||!"CHAT".equals(turn.getRoute()))throw missing();
-            return new Prepared(turn,withAuthority(turn,digest,false,()->input(turn,sourceId)));
-        });
-        var turn=prepared.turn();
+    /** Called under the HTTP boundary's native identity fence, before any task/grant lock. */
+    public Prepared prepare(AgentRuntimeAuthentication.Scope runtime,String requestId,String turnId,String sourceId,String digest) {
+        if(runtime==null||digest==null||!digest.matches("sha256:[0-9a-f]{64}"))throw missing();
+        var turn=dispatchAuthority.incomingTurn(runtime.tenantId(),runtime.clientId(),runtime.ownerJiacn(),runtime.agentId(),turnId).turn();
+        if(turn==null||!requestId.equals(turn.getRequestId())||!runtime.agentId().equals(turn.getTargetAgentId())||!"CHAT".equals(turn.getRoute()))throw missing();
+        return new Prepared(turn,withAuthority(turn,digest,false,()->input(turn,sourceId)),sourceId,digest);
+    }
+    /** Storage I/O is invoked outside the identity/task transaction. */
+    public PersonalWorkspaceExecutionService.RuntimeContent read(Prepared prepared) {
+        var turn=prepared.turn;
         var owner=new PersonalWorkspaceExecutionService.OwnerScope(turn.getTenantId(),turn.getClientId(),turn.getOwnerJiacn());
-        // No enclosing transaction: storage I/O must not retain the runtime or task locks.
-        var content=sources.read(owner,prepared.input().taskId(),turn.getConversationId(),turn.getConversationGeneration(),prepared.input().input());
-        return runtimeAuthentication.withFence(proof,false,()->withAuthority(turn,digest,false,()-> {
-            if(!input(turn,sourceId).equals(prepared.input()))throw missing();
-            return content;
-        }));
+        return sources.read(owner,prepared.input.taskId(),turn.getConversationId(),turn.getConversationGeneration(),prepared.input.input());
     }
-    private record Prepared(ChatTurnEntity turn,Input input) { }
+    /** Called under a fresh native identity fence before delivering the bytes. */
+    public void revalidate(Prepared prepared) {
+        withAuthority(prepared.turn,prepared.digest,false,()-> {
+            if(!input(prepared.turn,prepared.sourceId).equals(prepared.input))throw missing();
+            return null;
+        });
+    }
+    /** Opaque, server-created selection; HTTP callers cannot construct or alter its authority. */
+    public static final class Prepared {
+        private final ChatTurnEntity turn;
+        private final Input input;
+        private final String sourceId;
+        private final String digest;
+        private Prepared(ChatTurnEntity turn,Input input,String sourceId,String digest) {
+            this.turn=turn;this.input=input;this.sourceId=sourceId;this.digest=digest;
+        }
+    }
     public <T> T withFinalAuthority(ChatTurnEntity turn,Supplier<T> callback) {
         var facts=facts(turn);if(!facts.containsKey("materialsInput"))return callback.get();
         return withAuthority(turn,(String)((Map<?,?>)facts.get("materialsInput")).get("manifestDigest"),true,callback);

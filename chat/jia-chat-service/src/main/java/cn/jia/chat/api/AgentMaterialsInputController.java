@@ -29,8 +29,11 @@ public final class AgentMaterialsInputController {
     private static final String MANIFEST_HEADER = "X-Materials-Manifest-Digest";
     private final ChatMaterialsInputService authority;
 
-    public AgentMaterialsInputController(ChatMaterialsInputService authority) {
+    private final AgentRuntimeAuthenticationService runtimeAuthentication;
+    public AgentMaterialsInputController(ChatMaterialsInputService authority,
+            AgentRuntimeAuthenticationService runtimeAuthentication) {
         this.authority = Objects.requireNonNull(authority);
+        this.runtimeAuthentication = Objects.requireNonNull(runtimeAuthentication);
     }
 
     @GetMapping("/internal/agent/chat/requests/{requestId}/turns/{turnId}/materials/inputs/{sourceRefId}/content")
@@ -44,13 +47,18 @@ public final class AgentMaterialsInputController {
         }
         List<String> headers = Collections.list(request.getHeaders(MANIFEST_HEADER));
         if (headers.size() != 1) throw unavailable();
-        var proof=AgentRuntimeAuthenticationService.requireProof(runtime);
-        cn.jia.agent.service.PersonalWorkspaceExecutionService.RuntimeContent value = authority.read(proof, requestId,
-                turnId, sourceRefId, headers.getFirst());
-        return ResponseEntity.ok().cacheControl(CacheControl.noStore())
-                .header("X-Content-Type-Options", "nosniff")
-                .header(HttpHeaders.CONTENT_TYPE, value.contentMimeType())
-                .contentLength(value.bytes().length).body(value.bytes());
+        // Identity before task, matching native WS mutations. incomingTurn also locks the task.
+        var prepared = runtimeAuthentication.withNativeFence(runtime, () -> authority.prepare(
+                runtime.getPrincipal(), requestId, turnId, sourceRefId, headers.getFirst()));
+        // No enclosing transaction: file I/O must not retain identity/runtime/task locks.
+        var value = authority.read(prepared);
+        return runtimeAuthentication.withNativeFence(runtime, () -> {
+            authority.revalidate(prepared);
+            return ResponseEntity.ok().cacheControl(CacheControl.noStore())
+                    .header("X-Content-Type-Options", "nosniff")
+                    .header(HttpHeaders.CONTENT_TYPE, value.contentMimeType())
+                    .contentLength(value.bytes().length).body(value.bytes());
+        });
     }
 
     @ExceptionHandler(ChatDeliberationException.class)

@@ -7,6 +7,8 @@ import cn.jia.agent.service.AgentTaskExecutionGrantService;
 import cn.jia.agent.service.AgentTaskMutationTransaction;
 import cn.jia.agent.service.PersonalWorkspaceExecutionService;
 import cn.jia.chat.deliberation.*;
+import cn.jia.chat.api.AgentMaterialsInputController;
+import org.springframework.mock.web.MockHttpServletRequest;
 import cn.jia.chat.handler.TypedDeliberationSessionRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -26,7 +28,9 @@ class ChatMaterialsFenceTest {
     final AgentRuntimeAuthenticationService authentication=mock(AgentRuntimeAuthenticationService.class);
     final ChatDispatchAuthorityService dispatch=mock(ChatDispatchAuthorityService.class);
     final ChatMaterialsInputService service=new ChatMaterialsInputService(dao,store,tasks,sessions,sources,
-            mock(AgentTaskExecutionGrantService.class),authentication);
+            mock(AgentTaskExecutionGrantService.class));
+    final AgentMaterialsInputController controller=new AgentMaterialsInputController(service,authentication);
+    final AgentRuntimeAuthentication runtime=mock(AgentRuntimeAuthentication.class);
     final AgentRuntimeAuthenticationService.Proof proof=new AgentRuntimeAuthenticationService.Proof(
             new AgentRuntimeAuthentication.Scope("0","client","owner","agent","runtime"),
             "rti_"+"a".repeat(32),"host",1L,"a".repeat(64),1L,1L);
@@ -44,6 +48,8 @@ class ChatMaterialsFenceTest {
 
     @BeforeEach void setup() {
         service.setDispatchAuthority(dispatch);
+        when(runtime.isAuthenticated()).thenReturn(true);
+        when(runtime.getPrincipal()).thenReturn(proof.scope());
         var source=Map.<String,Object>of("sourceRefId","source","sourceKind","TASK_WORKSPACE_FILE",
                 "sourceIdentity",Map.of("workspaceFileId","file","version",1),
                 "contentMimeType","image/png","contentHash","a".repeat(64),"byteLength","3");
@@ -76,10 +82,10 @@ class ChatMaterialsFenceTest {
                     AgentTaskMutationTransaction.LockedTaskMutation<?> callback=i.getArgument(4);
                     return callback.apply(new AgentTaskMetaEntity().setAssignedAgentId("agent"));
                 });
-        when(authentication.withFence(eq(proof),eq(false),any())).thenAnswer(i->{
+        when(authentication.withNativeFence(eq(runtime),any())).thenAnswer(i->{
             assertFalse(fenced);fences++;if(revoked)throw new SecurityException("revoked");
             fenced=true;events.add("fence");
-            try{return ((Supplier<?>)i.getArgument(2)).get();}finally{fenced=false;events.add("release");}
+            try{return ((Supplier<?>)i.getArgument(1)).get();}finally{fenced=false;events.add("release");}
         });
         when(sources.read(any(),eq("task"),eq("123"),eq(1L),any())).thenAnswer(i->{
             assertFalse(fenced,"storage I/O must not hold runtime/task transaction");events.add("storage");return content;
@@ -87,7 +93,7 @@ class ChatMaterialsFenceTest {
     }
 
     @Test void bothAuthorizationPassesUseIdentityBeforeTaskAndStorageOutsideFence() {
-        assertSame(content,read());
+        assertArrayEquals(content.bytes(),read());
         assertEquals(List.of("fence","incoming","task","release","storage","fence","task","release"),events);
         assertEquals(2,fences);
     }
@@ -127,7 +133,9 @@ class ChatMaterialsFenceTest {
         assertThrows(SecurityException.class,this::read);
         verifyNoInteractions(dispatch,tasks,sources);
     }
-    private PersonalWorkspaceExecutionService.RuntimeContent read() {
-        return service.read(proof,"request","turn","source",digest);
+    byte[] read() {
+        var request=new MockHttpServletRequest();
+        request.addHeader("X-Materials-Manifest-Digest",digest);
+        return controller.content("request","turn","source",runtime,request).getBody();
     }
 }
