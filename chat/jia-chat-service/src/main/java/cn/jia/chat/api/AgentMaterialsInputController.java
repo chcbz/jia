@@ -10,6 +10,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.CacheControl;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -24,6 +25,7 @@ import java.util.Objects;
 @RestController
 @ConditionalOnProperty(prefix = "chat.typed-deliberation", name = "enabled", havingValue = "true")
 public final class AgentMaterialsInputController {
+    private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(AgentMaterialsInputController.class);
     private static final String MANIFEST_HEADER = "X-Materials-Manifest-Digest";
     private final ChatMaterialsInputService authority;
 
@@ -69,7 +71,7 @@ public final class AgentMaterialsInputController {
                 status == HttpStatus.NOT_FOUND
                         ? "Material input is unavailable" : failure.getMessage());
 
-        return ResponseEntity.status(status).cacheControl(CacheControl.noStore())
+        return ResponseEntity.status(status).contentType(MediaType.APPLICATION_JSON).cacheControl(CacheControl.noStore())
                 .header("X-Content-Type-Options", "nosniff").body(result);
     }
 
@@ -81,17 +83,23 @@ public final class AgentMaterialsInputController {
                 failure.status == HttpStatus.UNAUTHORIZED
                         ? "Runtime authentication is required" : "Runtime authentication is forbidden");
 
-        return ResponseEntity.status(failure.status).cacheControl(CacheControl.noStore())
+        return ResponseEntity.status(failure.status).contentType(MediaType.APPLICATION_JSON).cacheControl(CacheControl.noStore())
                 .header("X-Content-Type-Options", "nosniff").body(result);
     }
 
 
     @ExceptionHandler(RuntimeException.class)
-    public ResponseEntity<JsonResult<Void>> runtime(RuntimeException failure) {
+    public ResponseEntity<JsonResult<Void>> runtime(RuntimeException failure, HttpServletRequest request) {
+        // Preserve the failing code location without logging credentials, source bytes,
+        // query parameters or exception messages (which can contain storage details).
+        Throwable root = org.springframework.core.NestedExceptionUtils.getMostSpecificCause(failure);
+        LOG.warn("Material input failure route={} exceptionType={} rootType={} stack={}",
+                request.getRequestURI(), failure.getClass().getName(), root.getClass().getName(),
+                java.util.Arrays.toString(root.getStackTrace()));
         JsonResult<Void> result = JsonResult.failure("MATERIAL_INPUT_UNAVAILABLE",
                 "Material input is temporarily unavailable");
 
-        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).cacheControl(CacheControl.noStore())
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).contentType(MediaType.APPLICATION_JSON).cacheControl(CacheControl.noStore())
                 .header("X-Content-Type-Options", "nosniff").body(result);
     }
 
