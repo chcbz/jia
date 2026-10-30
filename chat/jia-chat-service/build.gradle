@@ -468,8 +468,10 @@ tasks.register('nativeSkillResultRegression', Test) {
 // SM-C1 real WS registration/result consumer + agent-owned SQL/outbox transaction fixture.
 // Separate selector; it does not silently replace any existing regression suite.
 def skillManagementWireSourceSet = sourceSets.create('skillManagementWire') {
-    java.srcDirs('src/skillManagementContractTest/java', '../../agent/jia-agent-service/src/skillManagementContract/java', '../../agent/jia-agent-service/src/test/java')
+    java.srcDirs('src/skillManagementContractTest/java', 'src/test/java', '../../agent/jia-agent-service/src/skillManagementContract/java', '../../agent/jia-agent-service/src/test/java')
     java.include 'cn/jia/chat/handler/SkillManagementWireMySqlTest.java'
+    java.include 'cn/jia/chat/service/ChatMaterialsLockOrderMySqlTest.java'
+    java.include 'cn/jia/chat/service/ChatMaterialsFenceTest.java'
     java.include 'cn/jia/chat/handler/SkillManagementNodeMySqlTest.java'
     java.include 'cn/jia/agent/skill/SkillManagementTransactionTest.java'
     java.include 'cn/jia/agent/skill/SkillManagementMySqlFixture.java'
@@ -492,6 +494,7 @@ tasks.register('skillManagementWire', Test) {
     useJUnitPlatform()
     maxParallelForks = 1
     filter {
+        includeTestsMatching 'cn.jia.chat.service.ChatMaterialsLockOrderMySqlTest'
         includeTestsMatching 'cn.jia.chat.handler.SkillManagementWireMySqlTest.firstInstallResultsAndRegistrationDriveRealCommittedClosedLoop'
         includeTestsMatching 'cn.jia.chat.handler.SkillManagementWireMySqlTest.persistentProofRevocationAndRuntimeIdentityDriftRejectAckAndResultWithoutSqlMutation'
         includeTestsMatching 'cn.jia.chat.handler.SkillManagementWireMySqlTest.currentProtocolRejectsWrongIdentityAttemptFenceEpochAndCorrelationWithNoSqlEffects'

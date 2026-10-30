@@ -18,9 +18,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class AgentMaterialsErrorHttpTest {
     private static final String PATH = "/internal/agent/chat/requests/request/turns/turn/materials/inputs/source/content";
     private final ChatMaterialsInputService authority = mock(ChatMaterialsInputService.class);
-    private final AgentRuntimeAuthenticationService authentication = mock(AgentRuntimeAuthenticationService.class);
     private final MockMvc mvc = MockMvcBuilders.standaloneSetup(
-            new AgentMaterialsInputController(authority, authentication)).build();
+            new AgentMaterialsInputController(authority)).build();
 
     @Test void anonymousImageRequestKeepsUnauthorizedJson() throws Exception {
         mvc.perform(get(PATH).accept(MediaType.IMAGE_PNG))
@@ -56,13 +55,12 @@ class AgentMaterialsErrorHttpTest {
         when(authority.read(any(), eq("request"), eq("turn"), eq("source"), anyString()))
                 .thenReturn(new cn.jia.agent.service.PersonalWorkspaceExecutionService.RuntimeContent(
                         "image.png", "image/png", bytes));
-        when(authentication.withNativeFence(eq(runtime), any()))
-                .thenAnswer(i -> ((java.util.function.Supplier<?>) i.getArgument(1)).get());
         mvc.perform(get(PATH).principal(runtime).accept(MediaType.IMAGE_PNG)
                         .header("X-Materials-Manifest-Digest", "sha256:" + "a".repeat(64)))
                 .andExpect(status().isOk()).andExpect(content().contentType(MediaType.IMAGE_PNG))
                 .andExpect(content().bytes(bytes));
-        verify(authentication).validateCurrent(any(), eq(false));
+        var proof = AgentRuntimeAuthenticationService.requireProof(runtime);
+        verify(authority).read(eq(proof), eq("request"), eq("turn"), eq("source"), anyString());
     }
 
     private AgentRuntimeAuthentication runtime() {
@@ -77,7 +75,8 @@ class AgentMaterialsErrorHttpTest {
 
     private void failsWith(RuntimeException failure, int statusCode) throws Exception {
         var runtime = runtime();
-        when(authority.read(eq(runtime.getPrincipal()), eq("request"), eq("turn"), eq("source"), anyString())).thenThrow(failure);
+        var proof = AgentRuntimeAuthenticationService.requireProof(runtime);
+        when(authority.read(eq(proof), eq("request"), eq("turn"), eq("source"), anyString())).thenThrow(failure);
         mvc.perform(get(PATH).principal(runtime).accept(MediaType.IMAGE_PNG)
                         .header("X-Materials-Manifest-Digest", "sha256:" + "a".repeat(64)))
                 .andExpect(status().is(statusCode)).andExpect(content().contentType(MediaType.APPLICATION_JSON))
