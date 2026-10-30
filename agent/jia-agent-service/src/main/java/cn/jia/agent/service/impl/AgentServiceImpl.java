@@ -1847,7 +1847,7 @@ public class AgentServiceImpl implements AgentService {
                     publishOptionalAfterCommit(
                             "task-archive", () -> publishTaskEvent("task_archived", task));
                     publishReturnHomeSceneStatesForAgentIds(
-                            taskRoot.getTaskId(), resolveTaskAssigneeIds(taskRoot));
+                            taskRoot.getTaskId(), resolveTaskAssigneeIds(taskRoot, taskRoot.getOwnerJiacn()));
                     return task;
                 });
     }
