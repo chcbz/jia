@@ -80,6 +80,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -156,7 +157,7 @@ class FundedBountyServiceRealTransactionTest {
             assertEquals(ACTOR.tenantId(), jdbc.queryForObject("SELECT tenant_id FROM " + table, String.class));
             assertEquals(ACTOR.clientId(), jdbc.queryForObject("SELECT client_id FROM " + table, String.class));
         }
-        var plan = context.getBean(TaskService.class).getInOwnerScope(
+        var plan = context.getBean(SqlSessionTemplate.class).getMapper(TaskPlanMapper.class).findInOwnerScope(
                 ACTOR.tenantId(), ACTOR.clientId(), ACTOR.ownerJiacn(), Long.valueOf(created.getId()));
         assertNotNull(plan);
         assertEquals(request.getTitle(), plan.getName());
