@@ -1150,6 +1150,7 @@ class AgentServiceImplTest extends BaseMockTest {
         assertEquals("Inspect archive search with a ", planCaptor.getValue().getName());
         assertEquals("Verify library retrieval", planCaptor.getValue().getDescription());
         assertEquals("jiacn", planCaptor.getValue().getJiacn());
+        assertEquals("0", planCaptor.getValue().getTenantId());
         assertEquals("jia_client", planCaptor.getValue().getClientId());
 
         ArgumentCaptor<AgentTaskMetaEntity> metaCaptor = ArgumentCaptor.forClass(AgentTaskMetaEntity.class);
@@ -3555,6 +3556,34 @@ class AgentServiceImplTest extends BaseMockTest {
         meta.setOwnerJiacn("foreign-owner");
         assertThrows(IllegalArgumentException.class, () -> agentService.getTask(scope, "explicit-task"));
         verifyNoInteractions(taskEventWriter);
+    }
+
+    @Test
+    void numericTaskPlanProjectionUsesRootOwnerScopeAndNeverUnscopedGet() {
+        var meta = new AgentTaskMetaEntity();
+        meta.setTaskId("42");
+        meta.setTenantId("0");
+        meta.setClientId("jia_client");
+        meta.setOwnerJiacn("jiacn");
+        meta.setRewardStatus(AgentConstants.TASK_STATUS_OPEN);
+        when(agentTaskMetaDao.findByTaskIdInOwnerScope("0", "jia_client", "jiacn", "42"))
+                .thenReturn(meta);
+        when(taskServiceProvider.getIfAvailable()).thenReturn(taskService);
+        var plan = new TaskPlanEntity();
+        plan.setName("scoped title");
+        plan.setDescription("scoped description");
+        when(taskService.getInOwnerScope("0", "jia_client", "jiacn", 42L))
+                .thenReturn(plan).thenReturn(null);
+        EsContextHolder.clearContext();
+        var scope = new cn.jia.agent.service.AgentService.TaskOwnerScope("0", "jia_client", "jiacn");
+        var projected = agentService.getTask(scope, "42");
+        assertEquals("scoped title", projected.getTitle());
+        assertEquals("scoped description", projected.getDescription());
+        var absent = agentService.getTask(scope, "42");
+        assertEquals("42", absent.getTitle());
+        assertNull(absent.getDescription());
+        verify(taskService, times(2)).getInOwnerScope("0", "jia_client", "jiacn", 42L);
+        verify(taskService, never()).get(any());
     }
 
     @Test
