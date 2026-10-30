@@ -155,6 +155,9 @@ class FundedBountyServiceRealTransactionTest {
         assertEquals(1, count("task_item")); // The production ALLTIME TaskService creates an item, not a detail.
         assertEquals(created.getId(), jdbc.queryForObject("SELECT CAST(id AS VARCHAR) FROM task_plan", String.class));
         assertEquals(ACTOR.ownerJiacn(), jdbc.queryForObject("SELECT jiacn FROM task_plan", String.class));
+        for (String table : List.of("agent_task_meta", "agent_task_funding", "agent_task_funding_operation")) {
+            assertEquals(ACTOR.ownerJiacn(), jdbc.queryForObject("SELECT owner_jiacn FROM " + table, String.class));
+        }
         for (String table : List.of("task_plan", "task_item")) {
             assertEquals(ACTOR.tenantId(), jdbc.queryForObject("SELECT tenant_id FROM " + table, String.class));
             assertEquals(ACTOR.clientId(), jdbc.queryForObject("SELECT client_id FROM " + table, String.class));
@@ -553,7 +556,7 @@ class FundedBountyServiceRealTransactionTest {
         public Object intercept(Invocation invocation) throws Throwable {
             String statement = ((MappedStatement) invocation.getArgs()[0]).getId();
             Pause current = pause;
-            if (current != null && statement.equals(AgentTaskMetaMapper.class.getName() + ".reserveOpenTaskRoot")) {
+            if (current != null && statement.equals(AgentTaskMetaMapper.class.getName() + ".reserveOpenTaskRootInOwnerScope")) {
                 current.legacyRootAttempt.countDown();
             }
             Object result = invocation.proceed(); // Always execute the production SQL; never synthesize results.
