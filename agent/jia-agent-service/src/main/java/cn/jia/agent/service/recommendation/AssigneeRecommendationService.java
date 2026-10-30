@@ -16,6 +16,7 @@ import static cn.jia.agent.entity.AssigneeRecommendation.*;
 /** API-owned observations + model advice. No assignment, billing, installation or transaction. */
 @Service
 public final class AssigneeRecommendationService {
+    private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(AssigneeRecommendationService.class);
     private static final ObjectMapper JSON = new ObjectMapper().enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
     private final AgentService agents;
     private final SkillManagementService skills;
@@ -33,10 +34,16 @@ public final class AssigneeRecommendationService {
         long observedAt = Instant.now().toEpochMilli();
         if (candidates.isEmpty()) return new Result(taskId, task.getTaskVersion(), observedAt,
                 "NO_CANDIDATES", "当前没有可承办候选", List.of(), List.of(), true);
+        // READY requires at least one citable fact. Do not ask the model to choose an
+        // impossible row; the complete authorized pool still backs manual choice and stale checks.
+        List<Candidate> evidenceCandidates = candidates.stream()
+                .filter(c -> c.evidence().stream().anyMatch(Evidence::available)).toList();
+        if (evidenceCandidates.isEmpty()) return new Result(taskId, task.getTaskVersion(), observedAt,
+                "NO_MATCH", "当前候选尚无可引用的已登记本领或已启用技能证据", List.of(), List.of(), true);
         String raw;
         try {
             var input = new LinkedHashMap<String, Object>();
-            input.put("task", taskInput(task)); input.put("candidates", candidates);
+            input.put("task", taskInput(task)); input.put("candidates", evidenceCandidates);
             input.put("materials", "未读取附件正文；不要猜测附件内容。必要时请用户补充。");
             raw = model.judge(JSON.writeValueAsString(input));
         } catch (Failure error) { throw error; }
@@ -70,8 +77,8 @@ public final class AssigneeRecommendationService {
                 // Existing native management authority; do not revive a legacy runner-specific capability path.
                 for (var skill : skills.recommendationSkills(actor, agent.agentId())) {
                     String description = "产品当前用途声明（不保证与安装版本完全一致）：" + string(skill.description())
-                            + "；已安装版本：" + skill.skillVersion() + "；运行状态：" + skill.runtimeState()
-                            + "；技能包就绪不等于未报告的工具依赖可用，也不保证任务结果。";
+                            + "；技能类型：" + skill.kind() + "；已安装版本：" + skill.skillVersion() + "；运行状态：" + skill.runtimeState()
+                            + "；INSTRUCTION是原生指令经验，不是可直接执行的工具；技能证据不等于未报告的工具依赖可用，也不保证任务结果。";
                     evidence.add(new Evidence("skill:" + skill.installationId(), "INSTALLED_SKILL",
                             skill.title(), description, skill.available()));
                 }
@@ -84,43 +91,47 @@ public final class AssigneeRecommendationService {
     static Result decode(String taskId, String taskVersion, long observedAt, List<Candidate> candidates, String raw) {
         try {
             JsonNode root = JSON.readTree(raw);
-            if (root == null || !root.isObject()) throw invalid();
+            if (root == null || !root.isObject()) throw invalid("JSON_OBJECT");
             String state = text(root, "state"), summary = text(root, "requirementSummary");
-            if (!Set.of("READY", "NEEDS_CLARIFICATION", "NO_MATCH").contains(state)) throw invalid();
+            if (!Set.of("READY", "NEEDS_CLARIFICATION", "NO_MATCH").contains(state)) throw invalid("STATE");
             List<String> questions = strings(root.get("questions"));
             JsonNode rows = root.get("recommendations");
-            if (rows == null || !rows.isArray()) throw invalid();
+            if (rows == null || !rows.isArray()) throw invalid("RECOMMENDATIONS_ARRAY");
             var byId = new HashMap<String, Candidate>();
             candidates.forEach(c -> byId.put(c.agent().agentId(), c));
             var seen = new HashSet<String>(); var recommendations = new ArrayList<Recommendation>();
             for (JsonNode row : rows) {
                 String id = text(row, "agentId"); Candidate candidate = byId.get(id);
-                if (candidate == null || !seen.add(id) || !candidate.agent().canOperate()) throw invalid();
+                if (candidate == null || !seen.add(id) || !candidate.agent().canOperate()) throw invalid("CANDIDATE");
                 List<String> ids = strings(row.get("evidenceIds"));
-                if (ids.isEmpty() || new HashSet<>(ids).size() != ids.size()) throw invalid();
+                if (ids.isEmpty() || new HashSet<>(ids).size() != ids.size()) throw invalid("EVIDENCE_IDS");
                 var evidence = new ArrayList<Evidence>();
                 for (String evidenceId : ids) evidence.add(candidate.evidence().stream()
-                        .filter(e -> e.id().equals(evidenceId) && e.available()).findFirst().orElseThrow(AssigneeRecommendationService::invalid));
+                        .filter(e -> e.id().equals(evidenceId) && e.available()).findFirst().orElseThrow(() -> invalid("EVIDENCE_UNAVAILABLE")));
                 var gaps = new ArrayList<>(strings(row.get("gaps")));
                 if (!"online".equalsIgnoreCase(candidate.agent().status())) gaps.add("当前运行状态：" + candidate.agent().status() + "；确认承办不代表已开始运行。");
                 recommendations.add(new Recommendation(candidate.agent(), text(row, "reason"), List.copyOf(evidence), List.copyOf(gaps)));
             }
             if ("READY".equals(state) != !recommendations.isEmpty()
-                    || "NEEDS_CLARIFICATION".equals(state) && questions.isEmpty()) throw invalid();
+                    || "NEEDS_CLARIFICATION".equals(state) && questions.isEmpty()) throw invalid("STATE_CONTENT");
             return new Result(taskId, taskVersion, observedAt, state, summary, List.copyOf(recommendations), questions, true);
         } catch (Failure failure) { throw failure; }
-        catch (Exception invalid) { throw invalid(); }
+        catch (Exception invalid) { throw invalid("JSON_DECODE"); }
     }
     private static List<String> strings(JsonNode node) {
-        if (node == null || !node.isArray()) throw invalid();
+        if (node == null || !node.isArray()) throw invalid("STRING_ARRAY");
         var values = new ArrayList<String>();
-        for (JsonNode item : node) { if (!item.isTextual() || item.asText().isBlank()) throw invalid(); values.add(item.asText()); }
+        for (JsonNode item : node) { if (!item.isTextual() || item.asText().isBlank()) throw invalid("STRING_ITEM"); values.add(item.asText()); }
         return List.copyOf(values);
     }
     private static String text(JsonNode node, String key) {
-        if (node == null || !node.path(key).isTextual() || node.path(key).asText().isBlank()) throw invalid();
+        if (node == null || !node.path(key).isTextual() || node.path(key).asText().isBlank()) throw invalid("TEXT_FIELD_" + key);
         return node.path(key).asText();
     }
     private static String string(Object value) { return value instanceof String text ? text : ""; }
-    private static Failure invalid() { return new Failure(502, "RECOMMENDATION_INVALID_RESULT"); }
+    private static Failure invalid(String reason) {
+        // Constant structural reason only: never log model text, task content, identities or credentials.
+        LOG.warn("assignee_recommendation_invalid reason={}", reason);
+        return new Failure(502, "RECOMMENDATION_INVALID_RESULT");
+    }
 }

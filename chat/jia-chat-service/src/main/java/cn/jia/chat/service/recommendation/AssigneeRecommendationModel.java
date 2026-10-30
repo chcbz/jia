@@ -28,6 +28,8 @@ public final class AssigneeRecommendationModel implements cn.jia.agent.service.A
         {"state":"READY|NEEDS_CLARIFICATION|NO_MATCH","requirementSummary":"需求理解",
          "recommendations":[{"agentId":"输入中的id","reason":"建议理由，不作能力保证",
            "evidenceIds":["该候选available=true的证据id"],"gaps":["未核实的依赖或缺口"]}],"questions":[]}
+        canOperate和在线状态不是本领或技能证据。即使只是简单文字任务，也不得把evidenceIds写成空数组。
+        每位推荐者必须引用该候选至少一条available=true的证据；不能凭“模型应该会”推荐无证据的人。现有证据不支持需求时返回NO_MATCH。
         READY必须至少推荐一人，每人必须有事实依据；其他state的recommendations为空，NEEDS_CLARIFICATION必须有questions。
         reason是你的判断，证据只能引用输入中的id；不要把缺口说成具备的能力。可以少推荐，不必凑数。
         """;

@@ -602,7 +602,14 @@ public final class SkillManagementService {
     /** Read-only recommendation facts. Unlike the management screen, never prepares/downloads
      * candidate packages, quotes upgrades or checks unrelated unpublished products. */
     public record RecommendationSkill(String installationId,String skillKey,String skillVersion,
-            String title,String description,boolean available,String runtimeState) { }
+            String title,String description,boolean available,String runtimeState,String kind) { }
+    // Citable installed experience is not executable admission. runtime() has already checked
+    // the authenticated catalog, installation, package/version and active policy before these states.
+    static boolean recommendationEvidenceAvailable(String kind,boolean enabled,boolean admission,String runtimeState) {
+        if(!enabled)return false;
+        return "INSTRUCTION".equals(kind) ? "NOT_EXECUTABLE".equals(runtimeState)
+                : "EXECUTABLE".equals(kind)&&admission&&"READY".equals(runtimeState);
+    }
     public List<RecommendationSkill> recommendationSkills(HostingRentHttp.Actor a,String agent) {
         return queryOwned(a,agent,()->{
             var products=new HashMap<String,SkillProductEntity>();
@@ -617,13 +624,13 @@ public final class SkillManagementService {
                 var pkg=ref(auth);
                 var installedVersion=market.selectApprovedProductVersion(a.tenantId(),a.clientId(),text(pkg,"productVersionId"));
                 var product=installedVersion==null?null:products.get(installedVersion.getProductId());
-                boolean ready=Boolean.TRUE.equals(state.getAdmissionEnabled())&&Boolean.TRUE.equals(state.getDesiredEnabled())
-                        &&"READY".equals(status.get("state"));
+                boolean ready=recommendationEvidenceAvailable(text(pkg,"kind"),Boolean.TRUE.equals(state.getDesiredEnabled()),
+                        Boolean.TRUE.equals(state.getAdmissionEnabled()),text(status,"state"));
                 rows.add(new RecommendationSkill(auth.getInstallationId(),state.getSkillKey(),text(pkg,"skillVersion"),
-                        product==null?state.getSkillKey():product.getName(),product==null?"":product.getDescription(),ready,text(status,"state")));
+                        product==null?state.getSkillKey():product.getName(),product==null?"":product.getDescription(),ready,text(status,"state"),text(pkg,"kind")));
             }
             if(!Objects.equals(observed,catalog(a,agent)))
-                rows.replaceAll(row->new RecommendationSkill(row.installationId(),row.skillKey(),row.skillVersion(),row.title(),row.description(),false,"CHANGED"));
+                rows.replaceAll(row->new RecommendationSkill(row.installationId(),row.skillKey(),row.skillVersion(),row.title(),row.description(),false,"CHANGED",row.kind()));
             rows.sort(Comparator.comparing(RecommendationSkill::installationId));
             return List.copyOf(rows);
         });

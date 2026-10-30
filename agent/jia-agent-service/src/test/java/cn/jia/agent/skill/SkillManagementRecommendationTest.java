@@ -39,4 +39,21 @@ class SkillManagementRecommendationTest {
         verify(marketplace).available(actor);
         verifyNoInteractions(packages, writer, market, app);
     }
+
+    @Test void enabledConfirmedInstructionIsCitableWithoutOpeningExecutableAdmission() {
+        assertTrue(SkillManagementService.recommendationEvidenceAvailable("INSTRUCTION", true, false, "NOT_EXECUTABLE"));
+        assertFalse(SkillManagementService.recommendationEvidenceAvailable("INSTRUCTION", false, false, "NOT_EXECUTABLE"));
+    }
+    @Test void instructionWithoutExactLiveCatalogIsNotPositiveEvidence() {
+        for (String state : List.of("OFFLINE", "UNKNOWN", "VERIFYING", "VERSION_MISMATCH", "CHANGED", "DEPENDENCY_MISSING", "READY")) {
+            assertFalse(SkillManagementService.recommendationEvidenceAvailable("INSTRUCTION", true, false, state), state);
+        }
+    }
+    @Test void executableFactsStillRequireEnabledAdmissionAndReadyUnknownKindsAreNotGuessed() {
+        assertTrue(SkillManagementService.recommendationEvidenceAvailable("EXECUTABLE", true, true, "READY"));
+        assertFalse(SkillManagementService.recommendationEvidenceAvailable("EXECUTABLE", true, false, "READY"));
+        assertFalse(SkillManagementService.recommendationEvidenceAvailable("EXECUTABLE", false, true, "READY"));
+        assertFalse(SkillManagementService.recommendationEvidenceAvailable("EXECUTABLE", true, true, "DEPENDENCY_MISSING"));
+        assertFalse(SkillManagementService.recommendationEvidenceAvailable("UNKNOWN_KIND", true, true, "READY"));
+    }
 }
