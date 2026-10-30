@@ -470,7 +470,8 @@ class AgentServiceImplTest extends BaseMockTest {
 
         assertEquals("agent-owned", result.getAgentId());
         assertEquals(AgentConstants.STATUS_ONLINE, result.getStatus());
-        verify(agentPersonaDao, times(2)).findCatalogPersona("1", "client-a", "wuyong");
+        // Admission, status projection and capability projection use the scoped catalog.
+        verify(agentPersonaDao, times(3)).findCatalogPersona("1", "client-a", "wuyong");
         verifyNoInteractions(agentTaskMetaDao);
     }
 
@@ -3178,7 +3179,7 @@ class AgentServiceImplTest extends BaseMockTest {
             verify(agentTaskMetaDao, times(1)).findStatsByAgents(scopes.capture());
             assertEquals(100, scopes.getValue().size());
             assertTrue(scopes.getValue().stream().allMatch(scope ->
-                    "jiacn".equals(scope.getTenantId())
+                    "0".equals(scope.getTenantId())
                             && "jia_client".equals(scope.getClientId())));
                     verify(agentTaskMetaDao, never()).findByAgentId(any(), any(), any(), anyInt());
         } finally {

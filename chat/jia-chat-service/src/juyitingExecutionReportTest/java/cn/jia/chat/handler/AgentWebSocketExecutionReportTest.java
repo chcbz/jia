@@ -45,8 +45,12 @@ class AgentWebSocketExecutionReportTest {
 
     @BeforeEach
     void setUp() throws Exception {
+        setUpTenant("0");
+    }
+
+    private void setUpTenant(String tenant) throws Exception {
         Map<String, Object> attributes = new HashMap<>();
-        attributes.put("tenantId", "0");
+        attributes.put("tenantId", tenant);
         attributes.put("agentId", "agent-1");
         attributes.put("clientId", "client-1");
         attributes.put("jiacn", "owner-1");
@@ -143,6 +147,21 @@ class AgentWebSocketExecutionReportTest {
                  "agentId":"agent-1","status":"running"}
                 """));
         verify(reports, never()).accept(any(), any());
+    }
+
+    @Test
+    void reportScopeComesFromAuthenticatedSessionNotTenantZero() throws Exception {
+        setUpTenant("grey-candidate");
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage(codexResult("agent-1", "runtime-1")));
+        ArgumentCaptor<AgentExecutionReportService.RuntimeScope> scope =
+                ArgumentCaptor.forClass(AgentExecutionReportService.RuntimeScope.class);
+        verify(reports).accept(scope.capture(), any());
+        assertEquals("grey-candidate", scope.getValue().tenantId());
+        clearInvocations(reports);
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage(generic(
+                "work.heartbeat", "foreign-report", "\"status\":\"RUNNING\",\"tenantId\":\"0\"")));
+        verify(reports, never()).accept(any(), any());
+        assertEquals("REPORT_INVALID", lastOutbound().get("code"));
     }
 
     private String codexResult(String targetAgentId, String runtimeInstanceId) {

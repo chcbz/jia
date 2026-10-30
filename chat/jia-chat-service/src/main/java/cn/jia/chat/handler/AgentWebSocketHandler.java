@@ -507,7 +507,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                 && CODEX_EXECUTION_RESULT.equals(payload.get("resultType"));
         Set<String> businessFields = reportBusinessFields(messageType, codexResult);
         Set<String> allowed = new java.util.HashSet<>(Set.of(
-                "schemaVersion", "messageType", "messageId",
+                "schemaVersion", "messageType", "messageId", "requestId",
                 "sourceAgentId", "agentId", "targetAgentId", "runtimeInstanceId",
                 "commandId", "correlationId"));
         allowed.addAll(businessFields);
@@ -528,7 +528,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                 || !exactReportSourceIdentity(payload, agentId, codexResult)
                 || !agentId.equals(exactReportString(payload.get("targetAgentId"), 100))
                 || !runtimeInstanceId.equals(exactReportString(payload.get("runtimeInstanceId"), 100))
-                || declaredReportScopeConflict(payload, ownerJiacn, clientId)
+                || declaredReportScopeConflict(payload, sessionProof(session).scope().tenantId(), ownerJiacn, clientId)
                 || exactReportString(payload.get("commandId"), 100) == null
                 || exactReportString(payload.get("correlationId"), 100) == null) {
             sendReportError(session, payload, "REPORT_INVALID", "Execution report was rejected");
@@ -549,7 +549,11 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         String fencingToken = codexResult ? null
                 : exactReportString(payload.get("fencingToken"), 100);
         Long sequence = codexResult ? 0L : exactReportLong(payload.get("sequence"));
-        Long occurredAt = codexResult ? 0L : exactReportLong(payload.get("occurredAt"));
+        // Public wire timestamps are numeric; revisions remain decimal strings.
+        Object reportTime = payload.get("occurredAt");
+        Long occurredAt = codexResult ? Long.valueOf(0L)
+                : reportTime instanceof Integer || reportTime instanceof Long
+                        ? Long.valueOf(((Number) reportTime).longValue()) : null;
         if (!codexResult && (reportId == null || executionRef == null || grantRevision == null
                 || grantRevision < 1 || attempt == null || attempt < 1 || fencingToken == null
                 || sequence == null || sequence < 1 || occurredAt == null || occurredAt < 1)) {
@@ -566,7 +570,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         try {
             AgentExecutionReportService.ReportReceipt receipt = withSessionMutationFence(session, () -> service.accept(
                     new AgentExecutionReportService.RuntimeScope(
-                            "0", clientId, ownerJiacn, agentId, runtimeInstanceId),
+                            sessionProof(session).scope().tenantId(), clientId, ownerJiacn, agentId, runtimeInstanceId),
                     new AgentExecutionReportService.ReportCommand(messageType, reportMessageId, reportId,
                             exactReportString(payload.get("commandId"), 100),
                             exactReportString(payload.get("correlationId"), 100), executionRef,
@@ -629,8 +633,8 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
     }
 
     private boolean declaredReportScopeConflict(Map<String, Object> payload,
-            String ownerJiacn, String clientId) {
-        return payload.containsKey("tenantId") && !"0".equals(strictString(payload.get("tenantId")))
+            String tenantId, String ownerJiacn, String clientId) {
+        return payload.containsKey("tenantId") && !tenantId.equals(strictString(payload.get("tenantId")))
                 || payload.containsKey("clientId")
                         && !clientId.equals(strictString(payload.get("clientId")))
                 || payload.containsKey("ownerJiacn")

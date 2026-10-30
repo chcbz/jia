@@ -277,8 +277,8 @@ class AgentTaskAggregationRealDatabaseTest {
         // Exact scoped locking reads admit another tenant, but must never find tenant 0's row.
         assertNull(taskMetaDao.findByTaskIdForUpdateInOwnerScope(
                 OTHER_TENANT, CLIENT, OWNER, TENANT_ZERO_TASK));
-        assertNull(taskMetaDao.findAggregationSnapshot(
-                OTHER_TENANT, CLIENT, OWNER, TENANT_ZERO_TASK));
+        assertTrue(taskMetaDao.findAggregationSnapshot(
+                OTHER_TENANT, CLIENT, OWNER, TENANT_ZERO_TASK).isEmpty());
         assertEquals(0, taskMetaDao.updateStatusByVersionInOwnerScope(
                 OTHER_TENANT, CLIENT, OWNER, TENANT_ZERO_TASK, 0L,
                 "failed", null, null, "must-not-cross-scope"));

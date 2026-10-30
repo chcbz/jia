@@ -253,14 +253,14 @@ class AgentIdentityRuntimeRealTransactionTest {
 
         List<AgentRuntimeDTO> mineCatalog = agentService.listPersonaCatalog(
                 "1", "cyf-local", "owner-a");
-        assertEquals(110, mineCatalog.size());
+        assertEquals(109, mineCatalog.size());
         AgentRuntimeDTO mine = persona(mineCatalog, "husanniang");
         assertEquals(bound.getAgentId(), mine.getAgentId());
         assertTrue(mine.getBound());
         assertTrue(mine.getBoundToMe());
         assertTrue(mine.getCanOperate());
         assertFalse(mine.getCanBind());
-        assertEquals("Shared Public", persona(mineCatalog, "shared-public").getName());
+        assertFalse(hasPersona(mineCatalog, "shared-public")); // tenant 0 is not a public directory
         assertEquals("Private Local", persona(mineCatalog, "private-local").getName());
         assertFalse(hasPersona(mineCatalog, "private-foreign-client"));
         assertFalse(hasPersona(mineCatalog, "private-foreign-tenant"));
