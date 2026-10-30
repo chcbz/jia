@@ -1186,6 +1186,7 @@ public class AgentServiceImpl implements AgentService {
         taskPlan.setName(limitLength(request.getTitle(), 30));
         taskPlan.setDescription(limitLength(request.getDescription(), 200));
         taskPlan.setJiacn(scope.ownerJiacn());
+        taskPlan.setTenantId(scope.tenantId());
         taskPlan.setClientId(scope.clientId());
         taskPlan.setPeriod(TaskConstants.TASK_PERIOD_ALLTIME);
         taskPlan.setType(TaskConstants.TASK_TYPE_NOTIFY);
@@ -2972,7 +2973,7 @@ public class AgentServiceImpl implements AgentService {
             dto.setRequiredSkillRequirements(fundingService.requiredSkills(
                     meta.getTenantId(), meta.getClientId(), meta.getTaskId()));
         }
-        enrichTaskPlan(dto, meta.getTaskId());
+        enrichTaskPlan(dto, meta);
         return dto;
     }
 
@@ -3051,7 +3052,8 @@ public class AgentServiceImpl implements AgentService {
         return dto;
     }
 
-    private void enrichTaskPlan(AgentTaskDTO dto, String taskId) {
+    private void enrichTaskPlan(AgentTaskDTO dto, AgentTaskMetaEntity meta) {
+        String taskId = meta.getTaskId();
         if (StringUtil.isBlank(taskId)) {
             return;
         }
@@ -3060,7 +3062,8 @@ public class AgentServiceImpl implements AgentService {
             return;
         }
         try {
-            TaskPlanEntity task = taskService.get(Long.valueOf(taskId));
+            TaskPlanEntity task = taskService.getInOwnerScope(
+                    meta.getTenantId(), meta.getClientId(), meta.getOwnerJiacn(), Long.valueOf(taskId));
             if (task == null) {
                 return;
             }

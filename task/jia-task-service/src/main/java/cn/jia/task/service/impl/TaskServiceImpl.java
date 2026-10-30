@@ -42,12 +42,12 @@ public class TaskServiceImpl extends BaseServiceImpl<TaskPlanDao, TaskPlanEntity
 	 */
 	private void saveItems(TaskPlanEntity task) {
 		if(TaskConstants.TASK_PERIOD_ALLTIME.equals(task.getPeriod())) {
-			TaskItemEntity item = new TaskItemEntity();
+			TaskItemEntity item = itemFor(task);
 			item.setPlanId(task.getId());
 			item.setStatus(TaskConstants.TASK_STATUS_ENABLE);
 			taskItemDao.insert(item);
 		} else if(TaskConstants.TASK_PERIOD_DATE.equals(task.getPeriod())) {
-			TaskItemEntity item = new TaskItemEntity();
+			TaskItemEntity item = itemFor(task);
 			item.setPlanId(task.getId());
 			item.setStatus(TaskConstants.TASK_STATUS_ENABLE);
 			item.setExecuteTime(task.getStartTime());
@@ -70,7 +70,7 @@ public class TaskServiceImpl extends BaseServiceImpl<TaskPlanDao, TaskPlanEntity
 					if((TaskConstants.TASK_PERIOD_YEAR.equals(task.getPeriod()) && lunarMonth == m && lunarDay == d) ||
 							(TaskConstants.TASK_PERIOD_MONTH.equals(task.getPeriod()) && lunarDay == d)) {
 						//保存当前执行点
-						TaskItemEntity item = new TaskItemEntity();
+						TaskItemEntity item = itemFor(task);
 						item.setPlanId(task.getId());
 						item.setStatus(TaskConstants.TASK_STATUS_ENABLE);
 						item.setExecuteTime(time);
@@ -80,7 +80,7 @@ public class TaskServiceImpl extends BaseServiceImpl<TaskPlanDao, TaskPlanEntity
 					c.add(Calendar.DAY_OF_MONTH, 1);
 				} else {
 					//保存当前执行点
-					TaskItemEntity item = new TaskItemEntity();
+					TaskItemEntity item = itemFor(task);
 					item.setPlanId(task.getId());
 					item.setExecuteTime(time);
 					taskItemDao.insert(item);
@@ -91,6 +91,20 @@ public class TaskServiceImpl extends BaseServiceImpl<TaskPlanDao, TaskPlanEntity
 				time = c.getTimeInMillis();
 			} while (time < endTime);
 		}
+	}
+
+	private TaskItemEntity itemFor(TaskPlanEntity task) {
+		TaskItemEntity item = new TaskItemEntity();
+		// The persisted parent, not request-thread context, owns all generated items.
+		item.setTenantId(task.getTenantId());
+		item.setClientId(task.getClientId());
+		return item;
+	}
+
+	@Override
+	public TaskPlanEntity getInOwnerScope(
+			String tenantId, String clientId, String ownerJiacn, Long id) {
+		return baseDao.findInOwnerScope(tenantId, clientId, ownerJiacn, id);
 	}
 
 	@Override

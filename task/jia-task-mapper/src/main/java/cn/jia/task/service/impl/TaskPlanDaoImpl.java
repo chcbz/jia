@@ -17,4 +17,21 @@ import jakarta.inject.Named;
 @Named
 public class TaskPlanDaoImpl extends BaseDaoImpl<TaskPlanMapper, TaskPlanEntity> implements TaskPlanDao {
 
+    @Override
+    public TaskPlanEntity findInOwnerScope(
+            String tenantId, String clientId, String ownerJiacn, Long id) {
+        requireScopeId(tenantId, "tenantId", 50);
+        requireScopeId(clientId, "clientId", 50);
+        requireScopeId(ownerJiacn, "ownerJiacn", 50);
+        if ("0".equals(ownerJiacn)) throw new IllegalArgumentException("ownerJiacn");
+        if (id == null) throw new IllegalArgumentException("id");
+        return baseMapper.findInOwnerScope(tenantId, clientId, ownerJiacn, id);
+    }
+
+    private static void requireScopeId(String value, String name, int maxLength) {
+        if (value == null || value.isBlank() || value.length() > maxLength
+                || !value.equals(value.strip()) || value.chars().anyMatch(Character::isISOControl)) {
+            throw new IllegalArgumentException(name);
+        }
+    }
 }
