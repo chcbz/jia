@@ -16,7 +16,15 @@ public interface AgentSelectedOutputFinalizationService {
     record SourceOutput(String requestId, String stepId, String executionId, String runId,
             String outputId, String sha256, String contentMimeType, long byteLength,
             String title, String purpose, byte[] bytes, SelectedOutputFinalizationDigest.MessageSource messageSource,
-            SelectedOutputFinalizationDigest.FormalArtifactSource formalArtifactSource) {
+            SelectedOutputFinalizationDigest.FormalArtifactSource formalArtifactSource,PersonalWorkspaceService.UploadSource source) {
+        public SourceOutput(String requestId,String stepId,String executionId,String runId,String outputId,String sha256,
+                String contentMimeType,long byteLength,String title,String purpose,byte[] bytes,
+                SelectedOutputFinalizationDigest.MessageSource messageSource,SelectedOutputFinalizationDigest.FormalArtifactSource formalArtifactSource) {
+            this(requestId,stepId,executionId,runId,outputId,sha256,contentMimeType,byteLength,title,purpose,bytes,messageSource,formalArtifactSource,null);
+        }
+        public PersonalWorkspaceService.UploadSource contentSource() {
+            return source!=null?source:bytes==null?null:()->new java.io.ByteArrayInputStream(bytes);
+        }
         public SourceOutput(String requestId,String stepId,String executionId,String runId,String outputId,String sha256,
                 String contentMimeType,long byteLength,String title,String purpose,byte[] bytes,
                 SelectedOutputFinalizationDigest.MessageSource messageSource) {

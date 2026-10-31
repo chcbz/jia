@@ -59,8 +59,8 @@ class AgentMaterialsErrorHttpTest {
         var runtime = runtime();
         byte[] bytes = new byte[] { (byte) 137, 80, 78, 71, 13, 10, 26, 10 };
         when(authority.read(any()))
-                .thenReturn(new cn.jia.agent.service.PersonalWorkspaceExecutionService.RuntimeContent(
-                        "image.png", "image/png", bytes));
+                .thenReturn(new cn.jia.agent.service.PersonalWorkspaceExecutionService.RuntimeDownload(
+                        "image.png", "image/png", "a".repeat(64), bytes.length, new java.io.ByteArrayInputStream(bytes)));
         mvc.perform(get(PATH).principal(runtime).accept(MediaType.IMAGE_PNG)
                         .header("X-Materials-Manifest-Digest", "sha256:" + "a".repeat(64)))
                 .andExpect(status().isOk()).andExpect(content().contentType(MediaType.IMAGE_PNG))

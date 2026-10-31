@@ -32,7 +32,6 @@ public final class TypedInspectionFinalValidator {
     private static final int MAX_CONTENT_UTF16 = 200_000;
     private static final int MAX_INSTRUCTION_CODE_POINTS = 4_000;
     private static final int MAX_SOURCE_ID_UTF16 = 512;
-    private static final int MAX_SOURCES = 32;
     private static final Set<String> FACT_KEYS = Set.of(
             "schemaVersion", "referenceMode", "supportedOperations", "availableSources");
     private static final Set<String> SOURCE_KEYS = Set.of("sourceRefId", "kind", "mediaType");
@@ -277,7 +276,6 @@ public final class TypedInspectionFinalValidator {
             operations.add(operation);
         }
         List<Object> rawSources = list(map.get("availableSources"), Reason.INVALID_FACTS);
-        if (rawSources.size() > MAX_SOURCES) fail(Reason.INVALID_FACTS);
         List<Source> sources = new ArrayList<>();
         Set<String> sourceIds = new HashSet<>();
         for (Object item : rawSources) {
@@ -306,7 +304,7 @@ public final class TypedInspectionFinalValidator {
     }
 
     private static InspectionAuthority authority(Object value, List<String> sourceRefIds) {
-        if (sourceRefIds == null || sourceRefIds.size() > MAX_SOURCES
+        if (sourceRefIds == null
                 || sourceRefIds.stream().anyMatch(id -> !boundedSourceIdentifier(id))
                 || new HashSet<>(sourceRefIds).size() != sourceRefIds.size()) fail(Reason.INVALID_RECEIPT);
         if (!(value instanceof Map<?, ?>)) fail(Reason.INVALID_RECEIPT);

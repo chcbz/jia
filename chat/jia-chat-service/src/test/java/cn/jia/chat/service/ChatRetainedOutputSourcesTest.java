@@ -130,15 +130,14 @@ class ChatRetainedOutputSourcesTest {
         return Map.of("sourceKind", "CURRENT_CONVERSATION_ASSET", "sourceIdentity", ChatSkillSourceAccessService.assetIdentity(source),
                 "sourceRefId", ref, "contentHash", source.sha256());
     }
-    @Test void workspaceSourceUsesExactAgentPortWithoutChatStorageSql() {
+    @Test void workspaceSourceUsesExactAgentPortWithoutChatStorageSql() throws Exception {
         var materials=mock(cn.jia.agent.service.TaskLinkedMaterialReader.class);
         var selection=new cn.jia.agent.service.TaskLinkedMaterialReader.Selection("image",2,"REFERENCE");
         var readerScope=new cn.jia.agent.service.PersonalWorkspaceTaskLinkService.Scope("0","client","owner");
         byte[] bytes={1,2,3};String sha=ChatSkillSourceAccessService.sha(bytes);
         var metadata=new cn.jia.agent.service.TaskLinkedMaterialReader.Metadata("image/png",sha,3);
         when(materials.metadata(readerScope,"task",selection)).thenReturn(metadata);
-        when(materials.read(readerScope,"task",selection,metadata)).thenReturn(
-                new cn.jia.agent.service.PersonalWorkspaceStorage.StoredContent(bytes,sha,3,"image/png"));
+        when(materials.open(readerScope,"task",selection,metadata)).thenAnswer(i->new java.io.ByteArrayInputStream(bytes));
         var conversations=mock(cn.jia.chat.dao.ChatConversationDao.class);
         var c=new cn.jia.chat.entity.ChatConversationEntity();
         c.setId(42L);c.setTenantId("0");c.setJiacn("owner");c.setClientId("client");c.setLifecycleGeneration(3L);
@@ -152,10 +151,11 @@ class ChatRetainedOutputSourcesTest {
         var identity=Map.<String,Object>of("kind","TASK_LINKED_WORKSPACE_VERSION","fileId","image","version","2","purpose","REFERENCE");
         var input=Map.<String,Object>of("sourceKind","TASK_LINKED_WORKSPACE_VERSION","sourceIdentity",identity,
                 "sha256",sha,"byteLength","3","contentMimeType","image/png");
-        var result=actual.read(owner,"task","42",3,input);
-        assertEquals("material",result.filename());assertArrayEquals(bytes,result.bytes());
+        try(var result=actual.open(owner,"task","42",3,input)) {
+            assertEquals("material",result.filename());assertArrayEquals(bytes,result.content().readNBytes(3));
+        }
         verify(materials,times(2)).metadata(readerScope,"task",selection);
-        verify(materials).read(readerScope,"task",selection,metadata);verifyNoInteractions(jdbc);
+        verify(materials).open(readerScope,"task",selection,metadata);verifyNoInteractions(jdbc);
         when(materials.metadata(readerScope,"task",selection)).thenThrow(new cn.jia.agent.service.TaskLinkedMaterialReader.Failure(
                 cn.jia.agent.service.TaskLinkedMaterialReader.Failure.Reason.UNAVAILABLE));
         assertEquals(ChatDeliberationException.Reason.PERSISTENCE_ERROR,assertThrows(ChatDeliberationException.class,

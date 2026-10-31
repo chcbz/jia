@@ -16,6 +16,9 @@ public interface AgentTaskArtifactService {
     PreparedPublication preparePublication(String tenantId, String clientId, String ownerJiacn,
             String taskId, String actorAgentId, AgentTaskArtifactPublishDTO command);
 
+    PreparedPublication prepareStreamPublication(String tenantId,String clientId,String ownerJiacn,
+            String taskId,String actorAgentId,AgentTaskArtifactPublishDTO command,PersonalWorkspaceService.UploadSource source);
+
     /** Revalidates ACL/work item/version and commits only rows/events in the caller's transaction. */
     AgentTaskArtifactViewDTO publishPrepared(String tenantId, String clientId, String ownerJiacn,
             String taskId, String actorAgentId, PreparedPublication prepared);

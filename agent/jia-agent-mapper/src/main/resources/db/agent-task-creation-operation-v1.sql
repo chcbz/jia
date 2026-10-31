@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS agent_task_creation_operation (
   CONSTRAINT chk_atco_hash CHECK (
     CHAR_LENGTH(request_hash)=64 AND request_hash REGEXP BINARY '^[0-9a-f]{64}$'),
   CONSTRAINT chk_atco_refs CHECK (
-    JSON_TYPE(input_refs_json)='ARRAY' AND JSON_LENGTH(input_refs_json) BETWEEN 0 AND 32),
+    JSON_TYPE(input_refs_json)='ARRAY'),
   CONSTRAINT chk_atco_receipt CHECK (
     (operation_state='PROCESSING' AND task_id IS NULL
       AND requirement_revision IS NULL AND completed_at IS NULL)

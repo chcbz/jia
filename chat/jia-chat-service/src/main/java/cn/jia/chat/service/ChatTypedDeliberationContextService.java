@@ -78,8 +78,6 @@ public final class ChatTypedDeliberationContextService {
             selected.addAll(inherited);
         }
         selected.addAll(explicit);
-        if(selected.size()>32)throw new ChatDeliberationException(ChatDeliberationException.Reason.INVALID_REQUEST,
-                "More than 32 effective sources; explicitly select this message's sources");
         return List.copyOf(selected);
     }
 
@@ -100,8 +98,6 @@ public final class ChatTypedDeliberationContextService {
             selectors.add(new ChatTypedDeliberationWire.SourceSelector("CURRENT_CONVERSATION_ASSET", null, null,
                     null, source.assetId(), Long.toString(source.assetRevision())));
         }
-        if (selectors.size() > 32) throw new ChatDeliberationException(ChatDeliberationException.Reason.INVALID_REQUEST,
-                "More than 32 effective sources; explicitly select this message's sources");
         return List.copyOf(selectors);
     }
 
@@ -144,7 +140,7 @@ public final class ChatTypedDeliberationContextService {
         if (!enabled || !schema.ready()) throw unavailable("Typed deliberation schema is unavailable");
         exact(scope.tenantId(),50); exact(scope.ownerJiacn(),50); exact(scope.clientId(),50);
         exact(scope.conversationId(),100); exact(taskId,100); exact(targetAgentId,100);
-        if (scope.conversationGeneration()<1 || requested==null || requested.size()>32) throw invalid();
+        if (scope.conversationGeneration()<1 || requested==null) throw invalid();
         var executor=dispatchAuthority.admissionTarget(scope.tenantId(),scope.ownerJiacn(),scope.clientId(),taskId,targetAgentId);
         TypedDeliberationSessionRegistry.Ready ready;
         try {

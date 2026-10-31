@@ -353,7 +353,7 @@ public final class AgentTaskDeliberationOperationReadServiceImpl
         try {
             List<InputSummary> values = json.readValue(source,
                     new TypeReference<List<InputSummary>>() { });
-            if (values == null || values.size() > 32) throw integrity();
+            if (values == null) throw integrity();
             Set<String> unique = new LinkedHashSet<>();
             for (InputSummary input : values) {
                 if (input == null) throw integrity();

@@ -18,6 +18,8 @@ import org.springframework.web.bind.annotation.RequestMethod;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import java.io.IOException;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
@@ -29,16 +31,12 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
-import java.util.Arrays;
-import java.util.HexFormat;
 import java.util.Map;
 import java.util.Objects;
 
-/** Bytes-backed owner view; no Agent URI, runtime credential or unsigned public asset URL. */
+/** Verified stream-backed owner view; no Agent URI, runtime credential or unsigned public asset URL. */
 @RestController
 @RequestMapping("/chat/requests")
 @ConditionalOnProperty(prefix = "chat.bounty-media", name = "enabled", havingValue = "true")
@@ -113,7 +111,7 @@ public class ChatBountyMediaController {
         var allowed = authorize(requestId, stepId, authentication);
         var items = executions.listConversationOutputs(allowed.scope(), allowed.step().taskId(),
                 allowed.execution().runId());
-        if (items == null || items.size() > 128) throw unavailable();
+        if (items == null) throw unavailable();
         var body = new java.util.ArrayList<OutputItem>(items.size());
         for (var item : items) {
             if (item == null || !allowed.execution().executionId().equals(item.executionId())
@@ -178,66 +176,62 @@ public class ChatBountyMediaController {
 
     @RequestMapping(path = "/{requestId}/steps/{stepId}/outputs/{outputId}",
             method = {RequestMethod.GET, RequestMethod.HEAD})
-    public ResponseEntity<byte[]> content(@PathVariable String requestId, @PathVariable String stepId,
+    public void content(@PathVariable String requestId, @PathVariable String stepId,
             @PathVariable String outputId, @RequestParam(defaultValue = "false") boolean download,
             @RequestHeader(value = HttpHeaders.RANGE, required = false) String range,
             @RequestHeader(value = HttpHeaders.IF_RANGE, required = false) String ifRange,
-            HttpServletRequest request, Authentication authentication) {
+            HttpServletRequest request, Authentication authentication, HttpServletResponse response) throws IOException {
         if (!safeId(requestId) || !safeId(stepId) || !safeId(outputId)) throw unavailable();
         var allowed = authorize(requestId, stepId, authentication);
-        var scope = allowed.scope();
-        var step = allowed.step();
         var execution = allowed.execution();
-        var output = executions.readConversationOutput(scope, step.taskId(), execution.runId(), outputId);
-        if (output == null || !execution.executionId().equals(output.executionId())
-                || !outputId.equals(output.outputId()) || output.bytes() == null
-                || output.byteLength() != output.bytes().length || !sha(output.sha256())
-                || !output.sha256().equals(digest(output.bytes()))) throw unavailable();
-        String extension = SAFE_INLINE.get(output.contentMimeType());
-        // Unsupported/misleading MIME is never rendered as active content in the browser.
-        boolean inline = extension != null && !download;
-        String attachmentExtension = SAFE_ATTACHMENT.get(output.contentMimeType());
-        String filename = "output." + (attachmentExtension == null ? "bin" : attachmentExtension);
-        MediaType responseMime = attachmentExtension == null ? MediaType.APPLICATION_OCTET_STREAM
-                : MediaType.parseMediaType(output.contentMimeType());
-        byte[] bytes = output.bytes();
-        boolean head = "HEAD".equals(request.getMethod());
-        String etag = "\"" + output.sha256() + "\"";
-        var response = ResponseEntity.status(HttpStatus.OK).cacheControl(CacheControl.noStore())
-                .header(HttpHeaders.CONTENT_DISPOSITION, (inline ? "inline" : "attachment")
-                        + "; filename=\"" + filename + "\"")
-                .header("X-Content-Type-Options", "nosniff")
-                .header(HttpHeaders.ACCEPT_RANGES, "bytes")
-                .eTag(etag)
-                .contentType(responseMime);
-        // Never interpret a Range before authenticating and verifying the committed bytes.
-        // A mismatched If-Range requests the full representation, not a stale partial result.
-        if (range != null && (ifRange == null || ifRange.equals(etag))) {
-            ByteRange wanted = singleRange(range, bytes.length);
-            if (wanted == null) return ResponseEntity.status(HttpStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
-                    .cacheControl(CacheControl.noStore()).header("X-Content-Type-Options", "nosniff")
-                    .header(HttpHeaders.CONTENT_RANGE, "bytes */" + bytes.length)
-                    .header(HttpHeaders.ACCEPT_RANGES, "bytes").build();
-            int start = (int) wanted.start();
-            int endExclusive = (int) wanted.end() + 1;
-            return ResponseEntity.status(HttpStatus.PARTIAL_CONTENT).cacheControl(CacheControl.noStore())
-                    .header(HttpHeaders.CONTENT_DISPOSITION, (inline ? "inline" : "attachment")
-                            + "; filename=\"" + filename + "\"")
-                    .header("X-Content-Type-Options", "nosniff")
-                    .header(HttpHeaders.ACCEPT_RANGES, "bytes")
-                    .header(HttpHeaders.CONTENT_RANGE, "bytes " + start + "-" + wanted.end() + "/" + bytes.length)
-                    .eTag(etag)
-                    .contentType(responseMime)
-                    .contentLength(endExclusive - start)
-                    .body(head ? null : Arrays.copyOfRange(bytes, start, endExclusive));
+        try(var output=executions.openConversationOutput(allowed.scope(),allowed.step().taskId(),execution.runId(),outputId)) {
+            if(output==null||!execution.executionId().equals(output.executionId())||!outputId.equals(output.outputId()))throw unavailable();
+            // Bytes and digest are verified by storage before the service returns this descriptor.
+            String extension=SAFE_INLINE.get(output.contentMimeType());
+            boolean inline=extension!=null&&!download;
+            String attachmentExtension=SAFE_ATTACHMENT.get(output.contentMimeType());
+            String filename="output."+(attachmentExtension==null?"bin":attachmentExtension);
+            MediaType responseMime=attachmentExtension==null?MediaType.APPLICATION_OCTET_STREAM
+                    :MediaType.parseMediaType(output.contentMimeType());
+            boolean head="HEAD".equals(request.getMethod());
+            String etag="\""+output.sha256()+"\"";
+            long length=output.byteLength();
+            ByteRange wanted=null;
+            response.setHeader(HttpHeaders.CACHE_CONTROL,"no-store");
+            response.setHeader("X-Content-Type-Options","nosniff");
+            response.setHeader(HttpHeaders.ACCEPT_RANGES,"bytes");
+            if(range!=null&&(ifRange==null||ifRange.equals(etag))) {
+                wanted=singleRange(range,length);
+                if(wanted==null) {
+                    response.setStatus(HttpStatus.REQUESTED_RANGE_NOT_SATISFIABLE.value());
+                    response.setHeader(HttpHeaders.CONTENT_RANGE,"bytes */"+length);
+                    return;
+                }
+            }
+            response.setHeader(HttpHeaders.CONTENT_DISPOSITION,(inline?"inline":"attachment")+"; filename=\""+filename+"\"");
+            response.setHeader(HttpHeaders.ETAG,etag);
+            response.setContentType(responseMime.toString());
+            long start=wanted==null?0:wanted.start();
+            long count=wanted==null?length:wanted.end()-start+1;
+            response.setStatus(wanted==null?HttpStatus.OK.value():HttpStatus.PARTIAL_CONTENT.value());
+            if(wanted!=null)response.setHeader(HttpHeaders.CONTENT_RANGE,"bytes "+start+"-"+wanted.end()+"/"+length);
+            response.setContentLengthLong(count);
+            if(head)return;
+            output.content().skipNBytes(start);
+            var sink=response.getOutputStream();
+            byte[] buffer=new byte[8192];
+            for(long remaining=count;remaining>0;) {
+                int read=output.content().read(buffer,0,(int)Math.min(buffer.length,remaining));
+                if(read<0)throw new java.io.EOFException("Committed output ended during download");
+                sink.write(buffer,0,read);remaining-=read;
+            }
         }
-        return response.contentLength(bytes.length).body(head ? null : bytes);
     }
 
     private record ByteRange(long start, long end) { }
 
     /** Single byte range only; never allocate for unbounded or multi-part requests. */
-    private static ByteRange singleRange(String value, int size) {
+    private static ByteRange singleRange(String value, long size) {
         if (size < 1 || value == null || !value.startsWith("bytes=")) return null;
         String spec = value.substring("bytes=".length());
         if (spec.indexOf(',') >= 0 || !spec.matches("(?:[0-9]+-[0-9]*|-[0-9]+)")) return null;
@@ -246,7 +240,7 @@ public class ChatBountyMediaController {
             if (dash == 0) {
                 long suffix = Long.parseLong(spec.substring(1));
                 if (suffix < 1) return null;
-                return new ByteRange(Math.max(0L, (long) size - suffix), size - 1L);
+                return new ByteRange(Math.max(0L, size - suffix), size - 1L);
             }
             long start = Long.parseLong(spec.substring(0, dash));
             if (start >= size) return null;
@@ -294,6 +288,18 @@ public class ChatBountyMediaController {
         return ResponseEntity.status(HttpStatus.NOT_FOUND)
                 .body(JsonResult.<Void>failure("BOUNTY_MEDIA_UNAVAILABLE", "Media is unavailable"));
     }
+    @ExceptionHandler(IOException.class)
+    public ResponseEntity<JsonResult<Void>> transferFailed(IOException failure,HttpServletResponse response) {
+        // Never append a JSON error to an already-started binary response.
+        if(response.isCommitted()) {
+            org.slf4j.LoggerFactory.getLogger(ChatBountyMediaController.class)
+                    .warn("Conversation output transfer interrupted: {}",failure.getClass().getSimpleName());
+            return null;
+        }
+        response.reset();
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .body(JsonResult.<Void>failure("BOUNTY_MEDIA_UNAVAILABLE","Media is unavailable"));
+    }
     private static boolean catalogId(String value) {
         return value != null && value.matches("[A-Za-z0-9][A-Za-z0-9._:-]{0,99}");
     }
@@ -303,10 +309,6 @@ public class ChatBountyMediaController {
                 && value.chars().noneMatch(Character::isISOControl);
     }
     private static boolean sha(String value) { return value != null && value.matches("[0-9a-f]{64}"); }
-    private static String digest(byte[] value) {
-        try { return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value)); }
-        catch (NoSuchAlgorithmException impossible) { throw new IllegalStateException(impossible); }
-    }
     private static ChatDeliberationException unavailable() {
         return new ChatDeliberationException(ChatDeliberationException.Reason.NOT_FOUND_OR_FORBIDDEN,
                 "Media is unavailable");

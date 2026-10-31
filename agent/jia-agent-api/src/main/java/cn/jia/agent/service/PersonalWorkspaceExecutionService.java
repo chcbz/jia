@@ -22,6 +22,15 @@ public interface PersonalWorkspaceExecutionService {
     }
     /** Trusted Chat consumer obtains exact bytes only after owner/grant re-admission; not a public URL. */
     ConversationOutput readConversationOutput(OwnerScope scope, String taskId, String runId, String outputId);
+    /** Verified descriptor; caller closes it. File I/O does not hold this service's root locks. */
+    ConversationDownload openConversationOutput(OwnerScope scope, String taskId, String runId, String outputId);
+
+    record ConversationDownload(String executionId, String outputId, String originalFilename,
+            String contentMimeType, String sha256, long byteLength, java.io.InputStream content)
+            implements AutoCloseable {
+        @Override public void close() throws java.io.IOException { content.close(); }
+    }
+
     /** Committed conversation-only outputs whose bytes were checked under the same owner/grant fence. */
     List<ConversationOutputInfo> listConversationOutputs(OwnerScope scope, String taskId, String runId);
     /** Exact earlier result replaced by this edit, never an input/reference used for generation. */
@@ -80,6 +89,9 @@ public interface PersonalWorkspaceExecutionService {
             String producerStepId,String producerExecutionId,String producerRunId,String producerOutputId) { }
     StagedOutput stageConversationOutput(RuntimeScope scope, String taskId, String runId, ConversationFence fence,
             String outputId, String filename, String contentMimeType, byte[] content);
+    StagedOutput stageConversationOutputStream(RuntimeScope scope, String taskId, String runId,
+            ConversationFence fence, String outputId, String filename, String contentMimeType,
+            PersonalWorkspaceService.UploadSource content, long byteLength, String sha256);
     record ConversationResultRecovery(String executionId, String commandId, String messageId,
             String inputSnapshotDigest, List<OutputDeclaration> outputs) { }
     ExecutionView failConversation(RuntimeScope scope, String taskId, String runId, ConversationFence fence,
@@ -229,6 +241,11 @@ public interface PersonalWorkspaceExecutionService {
             allowedMimeTypes = allowedMimeTypes == null ? List.of() : List.copyOf(allowedMimeTypes);
             inputMimeTypes = inputMimeTypes == null ? List.of() : List.copyOf(inputMimeTypes);
         }
+    }
+    /** Verified binary source; ownership of this descriptor transfers to the caller. */
+    record RuntimeDownload(String filename,String contentMimeType,String sha256,long byteLength,
+            java.io.InputStream content) implements AutoCloseable {
+        @Override public void close() throws java.io.IOException { content.close(); }
     }
     record RuntimeContent(String filename, String contentMimeType, byte[] bytes) {
         public RuntimeContent { bytes = bytes == null ? null : bytes.clone(); }

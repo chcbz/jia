@@ -85,7 +85,7 @@ public class PersonalWorkspaceServiceImpl implements PersonalWorkspaceService {
         if(!claim.claimed()) return completedUpload(scope,claim.operation());
         String fileId="pws_"+UUID.randomUUID().toString().replace("-","");
         try{
-            PersonalWorkspaceStorage.StoredObject stored=storage.store(storageScope(scope),valid.content(),valid.mime()); long now=System.currentTimeMillis();
+            PersonalWorkspaceStorage.StoredObject stored=storeUpload(scope,valid); long now=System.currentTimeMillis();
             PersonalWorkspaceFileEntity file=new PersonalWorkspaceFileEntity().setFileId(fileId).setOwnerJiacn(scope.ownerJiacn()).setSourceKind("UPLOAD").setOriginKind("USER_UPLOAD").setDisplayName(valid.displayName()).setMediaFamily(family(valid.mime())).setState("ACTIVE").setMetadataRevision(1L).setLatestVersion(1).setCreatedAt(now);
             file.setTenantId(scope.tenantId()); file.setClientId(scope.clientId());
             PersonalWorkspaceVersionEntity version=new PersonalWorkspaceVersionEntity().setFileId(fileId).setOwnerJiacn(scope.ownerJiacn()).setVersion(1).setOriginalFilename(valid.filename()).setContentMimeType(valid.mime()).setByteLength(stored.byteLength()).setContentHash(stored.sha256()).setStorageUri(stored.storageUri()).setCreatedAt(now);
@@ -105,8 +105,8 @@ public class PersonalWorkspaceServiceImpl implements PersonalWorkspaceService {
                 || command.assetId() == null || !command.assetId().matches("[A-Za-z0-9][A-Za-z0-9._:-]{0,99}")
                 || command.sha256() == null || !command.sha256().matches("[0-9a-f]{64}")) bad();
         ValidUpload valid = validate(new UploadCommand(command.idempotency(), command.displayName(),
-                command.filename(), command.contentMimeType(), command.content()));
-        if (!command.sha256().equals(hash(valid.content()))) bad();
+                command.filename(), command.contentMimeType(), command.source(), command.byteLength()));
+        if (!command.sha256().equals(valid.sha256())) bad();
         String requestHash = hash("ARCHIVE_ASSET", command.assetId(), Long.toString(command.revision()),
                 command.sha256(), valid.key(), valid.displayName(), valid.filename(), valid.mime());
         PersonalWorkspaceWriteService.Claim claim = writes.claim(writeScope(scope), "ARCHIVE_ASSET",
@@ -114,10 +114,9 @@ public class PersonalWorkspaceServiceImpl implements PersonalWorkspaceService {
         if (!claim.claimed()) return completedUpload(scope, claim.operation());
         String fileId = "pws_" + UUID.randomUUID().toString().replace("-", "");
         try {
-            PersonalWorkspaceStorage.StoredObject stored = storage.store(storageScope(scope),
-                    valid.content(), valid.mime());
+            PersonalWorkspaceStorage.StoredObject stored = storeUpload(scope, valid);
             if (!command.sha256().equals(stored.sha256())
-                    || valid.content().length != stored.byteLength())
+                    || valid.byteLength() != stored.byteLength())
                 throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.STORAGE_CORRUPT);
             long now = System.currentTimeMillis();
             PersonalWorkspaceFileEntity file = new PersonalWorkspaceFileEntity().setFileId(fileId)
@@ -148,8 +147,8 @@ public class PersonalWorkspaceServiceImpl implements PersonalWorkspaceService {
                 || command.sha256() == null || !command.sha256().matches("[0-9a-f]{64}")) bad();
         ValidUpload valid = validate(new UploadCommand(command.idempotency(), command.displayName(),
                 command.filename(), "text/plain", command.content()));
-        requireStrictUtf8(valid.content());
-        if (!command.sha256().equals(hash(valid.content()))) bad();
+        requireStrictUtf8(command.content());
+        if (!command.sha256().equals(valid.sha256())) bad();
         String requestHash = hash("ARCHIVE_TEXT", command.sourceSnapshotKey(), command.sha256(),
                 valid.key(), valid.displayName(), valid.filename(), valid.mime());
         PersonalWorkspaceWriteService.Claim claim = writes.claim(writeScope(scope), "ARCHIVE_TEXT",
@@ -157,10 +156,9 @@ public class PersonalWorkspaceServiceImpl implements PersonalWorkspaceService {
         if (!claim.claimed()) return completedUpload(scope, claim.operation());
         String fileId = "pws_" + UUID.randomUUID().toString().replace("-", "");
         try {
-            PersonalWorkspaceStorage.StoredObject stored = storage.store(storageScope(scope),
-                    valid.content(), "text/plain");
+            PersonalWorkspaceStorage.StoredObject stored = storeUpload(scope, valid);
             if (!command.sha256().equals(stored.sha256())
-                    || valid.content().length != stored.byteLength()
+                    || valid.byteLength() != stored.byteLength()
                     || !"text/plain".equals(stored.mimeType()))
                 throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.STORAGE_CORRUPT);
             long now = System.currentTimeMillis();
@@ -186,7 +184,7 @@ public class PersonalWorkspaceServiceImpl implements PersonalWorkspaceService {
     @Override public PersonalWorkspaceViews.UploadView appendVersion(Scope scope,String fileId,UploadCommand command,int expectedPreviousVersion){
         PersonalWorkspaceFileEntity old=file(scope,fileId); if(!"ACTIVE".equals(old.getState())||expectedPreviousVersion<1) bad(); ValidUpload valid=validate(command); String requestHash=hash("APPEND",valid,fileId,String.valueOf(expectedPreviousVersion));
         PersonalWorkspaceWriteService.Claim claim=writes.claim(writeScope(scope),"APPEND",valid.key(),requestHash); if(!claim.claimed())return completedUpload(scope,claim.operation());
-        try { PersonalWorkspaceStorage.StoredObject stored=storage.store(storageScope(scope),valid.content(),valid.mime()); int next=Math.addExact(expectedPreviousVersion,1); long now=System.currentTimeMillis();
+        try { PersonalWorkspaceStorage.StoredObject stored=storeUpload(scope,valid); int next=Math.addExact(expectedPreviousVersion,1); long now=System.currentTimeMillis();
             PersonalWorkspaceVersionEntity version=new PersonalWorkspaceVersionEntity().setFileId(fileId).setOwnerJiacn(scope.ownerJiacn()).setVersion(next).setOriginalFilename(valid.filename()).setContentMimeType(valid.mime()).setByteLength(stored.byteLength()).setContentHash(stored.sha256()).setStorageUri(stored.storageUri()).setCreatedAt(now);
             version.setTenantId(scope.tenantId()); version.setClientId(scope.clientId());
             PersonalWorkspaceFileEntity file=writes.completeAppend(writeScope(scope),claim.operation(),fileId,expectedPreviousVersion,version); return new PersonalWorkspaceViews.UploadView(operation(claim.operation()),view(file),version(version));
@@ -198,6 +196,14 @@ public class PersonalWorkspaceServiceImpl implements PersonalWorkspaceService {
         validateScope(scope); file(scope,fileId); String key=key(idempotency); PersonalWorkspaceWriteService.Claim c=writes.claim(writeScope(scope),"TRASH",key,hash("TRASH",fileId,String.valueOf(impactRevision),String.valueOf(acknowledge),ifMatch)); if(!c.claimed())return completedFile(scope,c.operation()); try{return view(writes.trash(writeScope(scope),c.operation(),fileId,impactRevision,acknowledge,ifMatch));}catch(RuntimeException f){writes.fail(writeScope(scope),c.operation(),reason(f));throw f;}}
     @Override public PersonalWorkspaceViews.FileView restore(Scope scope,String fileId,String ifMatch,Idempotency idempotency){
         validateScope(scope); file(scope,fileId); String key=key(idempotency); PersonalWorkspaceWriteService.Claim c=writes.claim(writeScope(scope),"RESTORE",key,hash("RESTORE",fileId,ifMatch)); if(!c.claimed())return completedFile(scope,c.operation()); try{return view(writes.restore(writeScope(scope),c.operation(),fileId,ifMatch));}catch(RuntimeException f){writes.fail(writeScope(scope),c.operation(),reason(f));throw f;}}
+    @Override public Download download(Scope scope, String fileId, int version) {
+        var source = versionEntity(scope, fileId, version);
+        var storageScope = storageScope(scope);
+        String uri = source.getStorageUri(), hash = source.getContentHash(), mime = source.getContentMimeType();
+        long length = source.getByteLength();
+        return new Download(source.getOriginalFilename(), mime, length,
+                storage.openStream(storageScope, uri, hash, length, mime));
+    }
     @Override public Content readContent(Scope scope,String fileId,int version){PersonalWorkspaceVersionEntity v=versionEntity(scope,fileId,version);PersonalWorkspaceStorage.StoredContent c=storage.read(storageScope(scope),v.getStorageUri(),v.getContentHash(),v.getByteLength(),v.getContentMimeType());return new Content(v.getOriginalFilename(),v.getContentMimeType(),c.content());}
     @Override public PersonalWorkspaceViews.PreviewView preview(Scope scope,String fileId,int version){return renderPreview(scope,fileId,version).rendered().view();}
     @Override public Content readPreviewPart(Scope scope,String fileId,int version,String partId){
@@ -248,7 +254,40 @@ public class PersonalWorkspaceServiceImpl implements PersonalWorkspaceService {
     private static PersonalWorkspaceViews.OperationView operation(PersonalWorkspaceOperationEntity o){return new PersonalWorkspaceViews.OperationView(o.getOperationId(),o.getState(),o.getFileId(),o.getFileVersion(),o.getErrorCode());}
     private static PersonalWorkspaceWriteService.Scope writeScope(Scope s){return new PersonalWorkspaceWriteService.Scope(s.tenantId(),s.clientId(),s.ownerJiacn());}
     private static PersonalWorkspaceStorage.Scope storageScope(Scope s){return new PersonalWorkspaceStorage.Scope(s.tenantId(),s.clientId(),s.ownerJiacn());}
-    private static ValidUpload validate(UploadCommand c){if(c==null)bad();String key=key(c.idempotency());String mime=lower(c.contentMimeType());if(mime==null||mime.isBlank())mime="application/octet-stream";if(!mime.matches("[a-z0-9][a-z0-9!#$&^_.+-]{0,63}/[a-z0-9][a-z0-9!#$&^_.+-]{0,63}"))bad();String name=filename(c.originalFilename());String display=blankToNull(c.displayName());if(display==null)display=name;text(display,255);byte[] bytes=c.content();if(bytes==null||bytes.length==0)bad();return new ValidUpload(key,display,name,mime,bytes);}
+    private static ValidUpload validate(UploadCommand c) {
+        if (c == null) bad();
+        String key = key(c.idempotency()); String mime = lower(c.contentMimeType());
+        if (mime == null || mime.isBlank()) mime = "application/octet-stream";
+        if (!mime.matches("[a-z0-9][a-z0-9!#$&^_.+-]{0,63}/[a-z0-9][a-z0-9!#$&^_.+-]{0,63}")) bad();
+        String name = filename(c.originalFilename()); String display = blankToNull(c.displayName());
+        if (display == null) display = name; text(display, 255);
+        if (c.source() == null || c.byteLength() <= 0) bad();
+        try (var input = c.source().open()) {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] buffer = new byte[8192]; long count = 0;
+            for (int n; (n = input.read(buffer)) != -1;) {
+                if (n > c.byteLength() - count) bad();
+                count += n; digest.update(buffer, 0, n);
+            }
+            if (count != c.byteLength()) bad();
+            return new ValidUpload(key, display, name, mime, c.source(), count,
+                    HexFormat.of().formatHex(digest.digest()));
+        } catch (java.io.IOException failure) {
+            throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.STORAGE_UNAVAILABLE, failure);
+        } catch (NoSuchAlgorithmException impossible) { throw new IllegalStateException(impossible); }
+    }
+    private PersonalWorkspaceStorage.StoredObject storeUpload(Scope scope, ValidUpload upload) {
+        try (var input = upload.source().open()) {
+            var stored = storage.storeStream(storageScope(scope), input, upload.byteLength(), upload.mime());
+            // Detect a source changed between idempotency hashing and the actual immutable write.
+            if (stored.byteLength() != upload.byteLength() || !stored.sha256().equals(upload.sha256())
+                    || !stored.mimeType().equals(upload.mime()))
+                throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.STORAGE_CORRUPT);
+            return stored;
+        } catch (java.io.IOException failure) {
+            throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.STORAGE_UNAVAILABLE, failure);
+        }
+    }
     private static String filename(String raw){text(raw,255);if(raw.contains("/")||raw.indexOf('\\')>=0||raw.equals(".")||raw.equals(".."))bad();return raw;}
     private static String family(String mime){if(mime.startsWith("image/"))return "IMAGE";if(mime.startsWith("audio/"))return "AUDIO";if("text/plain".equals(mime))return "TEXT";if("application/pdf".equals(mime))return "PDF";if(mime.contains("spreadsheet"))return "SPREADSHEET";if(mime.contains("presentation")||"application/vnd.ms-powerpoint".equals(mime))return "PRESENTATION";return "DOCUMENT";}
     private static String key(Idempotency i){if(i==null)bad();id(i.key(),"Idempotency-Key",100);return i.key();}
@@ -271,12 +310,12 @@ public class PersonalWorkspaceServiceImpl implements PersonalWorkspaceService {
     }
     private static String hash(String... values){try{MessageDigest d=MessageDigest.getInstance("SHA-256");for(String v:values){byte[]b=Objects.requireNonNullElse(v,"").getBytes(StandardCharsets.UTF_8);d.update(ByteBuffer.allocate(4).putInt(b.length).array());d.update(b);}return HexFormat.of().formatHex(d.digest());}catch(NoSuchAlgorithmException e){throw new IllegalStateException(e);}}
     private static String hash(byte[] bytes){try{return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(Objects.requireNonNull(bytes,"bytes")));}catch(NoSuchAlgorithmException e){throw new IllegalStateException(e);}}
-    private static String hash(String type,ValidUpload v,String... rest){List<String> p=new ArrayList<>();p.add(type);p.add(v.key());p.add(v.displayName());p.add(v.filename());p.add(v.mime());p.add(hash(v.content()));p.addAll(List.of(rest));return hash(p.toArray(String[]::new));}
+    private static String hash(String type,ValidUpload v,String... rest){List<String> p=new ArrayList<>();p.add(type);p.add(v.key());p.add(v.displayName());p.add(v.filename());p.add(v.mime());p.add(v.sha256());p.addAll(List.of(rest));return hash(p.toArray(String[]::new));}
     private static String reason(RuntimeException f){return f instanceof PersonalWorkspaceException p?p.getReason().name():"STORAGE_UNAVAILABLE";}
     private static String cursor(PersonalWorkspaceFileEntity f){return Base64.getUrlEncoder().withoutPadding().encodeToString((f.getCreatedAt()+"\n"+f.getFileId()).getBytes(StandardCharsets.UTF_8));}
     private static Cursor parseCursor(String value){if(value==null||value.isBlank())return null;try{String s=new String(Base64.getUrlDecoder().decode(value),StandardCharsets.UTF_8);String[]p=s.split("\\n",-1);if(p.length!=2)bad();long t=Long.parseLong(p[0]);id(p[1],"cursor",100);return new Cursor(t,p[1]);}catch(IllegalArgumentException e){bad();return null;}}
     private static void bad(){throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.BAD_REQUEST);}
     private record LoadedPreview(PersonalWorkspaceVersionEntity version,PersonalWorkspacePreviewRenderer.RenderedPreview rendered) { }
-    private record ValidUpload(String key,String displayName,String filename,String mime,byte[] content) { }
+    private record ValidUpload(String key,String displayName,String filename,String mime,UploadSource source,long byteLength,String sha256) { }
     private record Cursor(long createdAt,String fileId) { }
 }

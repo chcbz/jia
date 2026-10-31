@@ -102,7 +102,7 @@ class ChatActionCapabilityServiceTest {
         assertThrows(InstalledSkillDescriptorLookup.SourceUnavailable.class, () -> service.inspectInstalledSkillsWithoutRuntime(scope));
         assertThrows(NullPointerException.class, () -> service.inspectInstalledSkills(scope, null));
     }
-    @Test void nativeAdvertisementRequiresSameFencedSessionAndIntersectsActualCapabilities() {
+    @Test void nativeAdvertisementUsesSameFencedRuntimeCapabilitiesWithoutServerFormatEnum() {
         var executions=mock(PersonalWorkspaceExecutionService.class);
         service.setNativeExecutions(executions);
         when(executions.nativeLocalFileCapabilities()).thenReturn(new PersonalWorkspaceExecutionService.ExecutionCapabilities(
@@ -116,11 +116,18 @@ class ChatActionCapabilityServiceTest {
         var actions=service.availableNative(scope,"task",catalog,declaration,"session");
         assertEquals(1,actions.size());var action=actions.getFirst();
         assertEquals("EXECUTE_NATIVE",action.get("operation"));assertNull(action.get("skill"));
-        assertEquals(List.of("text/plain"),action.get("outputMimeTypes"));assertEquals(List.of("text/plain"),action.get("inputMimeTypes"));
+        assertEquals(2, action.get("maxSources"));
+        var manySources = java.util.stream.IntStream.range(0, 33)
+                .mapToObj(i -> java.util.Map.<String,Object>of("sourceRefId", "source-" + i,
+                        "contentMimeType", "application/vnd.example.custom")).toList();
+        var manyAction = service.availableNative(scope, "task", manySources, declaration, "session").getFirst();
+        assertEquals(33, manyAction.get("maxSources"));
+        assertEquals(List.of("application/vnd.example.custom"), manyAction.get("inputMimeTypes"));
+        assertEquals(List.of("application/json","text/plain"),action.get("outputMimeTypes"));assertEquals(List.of("image/png","text/plain"),action.get("inputMimeTypes"));
         when(executions.nativeLocalFileCapabilities()).thenReturn(new PersonalWorkspaceExecutionService.ExecutionCapabilities(List.of("text/plain","image/png"),List.of("image/png"),true));
         var imageDeclaration=java.util.Map.<String,Object>of("nativeExecution",java.util.Map.of("outputMimeTypes",List.of("image/png")));
         var imageAction=service.availableNative(scope,"task",catalog,imageDeclaration,"session").getFirst();
-        assertEquals(List.of("image/png"),imageAction.get("outputMimeTypes"));assertEquals(List.of("image/png"),imageAction.get("inputMimeTypes"));
+        assertEquals(List.of("image/png"),imageAction.get("outputMimeTypes"));assertEquals(List.of("image/png","text/plain"),imageAction.get("inputMimeTypes"));
         assertTrue(service.availableNative(scope,"task",catalog,declaration,"other-session").isEmpty());
         assertTrue(service.availableNative(scope,"task",catalog,java.util.Map.of(),"session").isEmpty());
         var docx="application/vnd.openxmlformats-officedocument.wordprocessingml.document";
@@ -130,10 +137,20 @@ class ChatActionCapabilityServiceTest {
         var officeDeclaration=java.util.Map.<String,Object>of("nativeExecution",java.util.Map.of("outputMimeTypes",List.of(docx,xlsx,"image/png")));
         var officeCatalog=List.<java.util.Map<String,Object>>of(java.util.Map.of("contentMimeType",docx),java.util.Map.of("contentMimeType",xlsx));
         var officeAction=service.availableNative(scope,"task",officeCatalog,officeDeclaration,"session").getFirst();
-        assertEquals(List.of(xlsx,docx),officeAction.get("outputMimeTypes"));
+        assertEquals(List.of(xlsx,docx,"image/png"),officeAction.get("outputMimeTypes"));
         assertEquals(List.of(xlsx,docx),officeAction.get("inputMimeTypes"));
+        var pdfDeclaration=java.util.Map.<String,Object>of("nativeExecution",java.util.Map.of("outputMimeTypes",List.of("application/pdf","image/png")));
+        var pdfCatalog=List.<java.util.Map<String,Object>>of(java.util.Map.of("contentMimeType","application/pdf"));
+        when(executions.nativeLocalFileCapabilities()).thenReturn(new PersonalWorkspaceExecutionService.ExecutionCapabilities(
+                List.of("application/pdf","text/plain"),List.of("application/pdf"),true));
+        var pdfAction=service.availableNative(scope,"task",pdfCatalog,pdfDeclaration,"session").getFirst();
+        assertEquals(List.of("application/pdf","image/png"),pdfAction.get("outputMimeTypes"));
+        assertEquals(List.of("application/pdf"),pdfAction.get("inputMimeTypes"));
+        when(executions.nativeLocalFileCapabilities()).thenReturn(new PersonalWorkspaceExecutionService.ExecutionCapabilities(
+                List.of("text/plain"),List.of("application/pdf"),true));
+        assertEquals(List.of("application/pdf","image/png"),service.availableNative(scope,"task",pdfCatalog,pdfDeclaration,"session").getFirst().get("outputMimeTypes"));
         when(executions.nativeLocalFileCapabilities()).thenReturn(new PersonalWorkspaceExecutionService.ExecutionCapabilities(List.of("application/json"),List.of(),true));
-        assertTrue(service.availableNative(scope,"task",catalog,java.util.Map.of("nativeExecution",java.util.Map.of("outputMimeTypes",List.of("text/plain"))),"session").isEmpty());
+        assertEquals(List.of("video/mp4"),service.availableNative(scope,"task",catalog,java.util.Map.of("nativeExecution",java.util.Map.of("outputMimeTypes",List.of("video/mp4"))),"session").getFirst().get("outputMimeTypes"));
         when(executions.nativeLocalFileCapabilities()).thenReturn(new PersonalWorkspaceExecutionService.ExecutionCapabilities(List.of(),List.of(),false));
         assertTrue(service.availableNative(scope,"task",catalog,declaration,"session").isEmpty());
     }

@@ -244,7 +244,7 @@ class AgentTaskArtifactStorageF02Test {
         assertEquals(AgentTaskArtifactStorageException.Reason.INVALID_REQUEST,
                 assertThrows(AgentTaskArtifactStorageException.class,
                         () -> new FileSystemAgentTaskArtifactStorage(
-                                link, 1024, MIME_TYPES)).getReason());
+                                link, 1024)).getReason());
     }
 
     @Test
@@ -428,11 +428,20 @@ class AgentTaskArtifactStorageF02Test {
         verify(storage, never()).read(any(), any(), any(), anyLong(), any());
     }
 
+    @Test
+    void privateStorageAcceptsNewConcreteMimeWithoutAConfiguredFormatList() {
+        var store = storage(1024);
+        var scope = new AgentTaskArtifactStorage.Scope(TENANT, CLIENT, OWNER, TASK);
+        byte[] bytes = {0, 1, 2, 3};
+        var stored = store.store(scope, bytes, "application/vnd.example.future-format");
+        assertArrayEquals(bytes, store.read(scope, stored.storageUri(), stored.sha256(), stored.byteLength(), stored.mimeType()).content());
+    }
+
     private static final String MANAGED_KEY = "_cyfArtifactStorageV1";
 
     private FileSystemAgentTaskArtifactStorage storage(long maxBytes) {
         return new FileSystemAgentTaskArtifactStorage(
-                temporaryDirectory.resolve("objects").toAbsolutePath(), maxBytes, MIME_TYPES);
+                temporaryDirectory.resolve("objects").toAbsolutePath(), maxBytes);
     }
 
     private AgentTaskCollaborationServiceImpl service(AgentTaskArtifactStorage storage) {

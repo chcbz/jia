@@ -38,7 +38,7 @@ public final class ChatConversationArchiveService {
             Map.entry("audio/mpeg", "mp3"), Map.entry("audio/ogg", "ogg"),
             Map.entry("audio/wav", "wav"), Map.entry("audio/mp4", "m4a"),
             Map.entry("audio/webm", "webm"), Map.entry("text/plain", "txt"),
-            Map.entry("application/pdf", "pdf"),
+            Map.entry("application/pdf", "pdf"), Map.entry("text/markdown", "md"), Map.entry("text/html", "html"),
             Map.entry("application/vnd.openxmlformats-officedocument.wordprocessingml.document", "docx"),
             Map.entry("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "xlsx"),
             Map.entry("application/vnd.openxmlformats-officedocument.presentationml.presentation", "pptx"));
@@ -96,30 +96,7 @@ public final class ChatConversationArchiveService {
             throw unavailable();
         }
 
-        PersonalWorkspaceExecutionService.ConversationOutput output;
-        try {
-            output = executions.readConversationOutput(executionScope(scope), source.taskId(),
-                    source.runId(), source.outputId());
-        } catch (PersonalWorkspaceExecutionService.Failure failure) {
-            if (failure.getReason() == PersonalWorkspaceExecutionService.Reason.CAPABILITY_UNAVAILABLE
-                    || failure.getReason() == PersonalWorkspaceExecutionService.Reason.STORAGE_UNAVAILABLE) {
-                throw temporary(failure);
-            }
-            failPermanently(scope, command.conversationId(), claimed.operationId(), "SOURCE_UNAVAILABLE");
-            throw unavailable();
-        }
-        if (!verifiedOutput(source, output)) {
-            failPermanently(scope, command.conversationId(), claimed.operationId(), "SOURCE_MISMATCH");
-            throw unavailable();
-        }
-
-        String extension = EXTENSIONS.get(source.contentMimeType());
-        if (extension == null) {
-            failPermanently(scope, command.conversationId(), claimed.operationId(), "UNSUPPORTED_MEDIA");
-            throw new ChatConversationArchiveException(Reason.UNSUPPORTED,
-                    "Conversation asset format is not supported by the workspace");
-        }
-
+        String extension=EXTENSIONS.getOrDefault(source.contentMimeType(),"bin");
         Operation saving = transactions.required(() -> markSaving(scope, command.conversationId(),
                 claimed.operationId(), source.conversationGeneration()));
         if ("SAVED".equals(saving.state())) return receipt(saving);
@@ -131,7 +108,7 @@ public final class ChatConversationArchiveService {
                     new PersonalWorkspaceService.ConversationArchiveCommand(
                             new PersonalWorkspaceService.Idempotency(assetWorkspaceKey(scope, source)),
                             source.assetId(), source.assetRevision(), source.sha256(), filename,
-                            filename, source.contentMimeType(), output.bytes()));
+                            filename, source.contentMimeType(), () -> openAssetSource(scope,command,source,claimed.operationId()), source.byteLength()));
         } catch (PersonalWorkspaceException failure) {
             return handleWorkspaceFailure(scope, command, saving, failure);
         } catch (RuntimeException failure) {
@@ -461,20 +438,33 @@ public final class ChatConversationArchiveService {
                 && source.contentMimeType() != null
                 && source.contentMimeType().matches("[a-z0-9.+-]+/[a-z0-9.+-]+")
                 && source.sha256() != null && source.sha256().matches("[0-9a-f]{64}")
-                && source.byteLength() > 0 && exact(scope.tenantId(), 50)
+                && source.byteLength() >= 0 && exact(scope.tenantId(), 50)
                 && exact(scope.ownerJiacn(), 50) && exact(scope.clientId(), 50);
     }
 
-    private static boolean verifiedOutput(Source source,
-            PersonalWorkspaceExecutionService.ConversationOutput output) {
-        if (output == null || !source.executionId().equals(output.executionId())
-                || !source.outputId().equals(output.outputId())
-                || !source.contentMimeType().equals(output.contentMimeType())
-                || !source.sha256().equals(output.sha256()) || source.byteLength() != output.byteLength())
-            return false;
-        byte[] bytes = output.bytes();
-        return bytes != null && bytes.length == source.byteLength()
-                && source.sha256().equals(digest(bytes));
+    private java.io.InputStream openAssetSource(Scope scope,Command command,Source source,String operationId) {
+        var current=store.findAuthorizedSource(scope,command.conversationId(),source.assetId(),source.assetRevision());
+        if(!source.equals(current)) {
+            failPermanently(scope,command.conversationId(),operationId,"SOURCE_UNAVAILABLE");throw unavailable();
+        }
+        PersonalWorkspaceExecutionService.ConversationDownload output;
+        try {output=executions.openConversationOutput(executionScope(scope),source.taskId(),source.runId(),source.outputId());}
+        catch(PersonalWorkspaceExecutionService.Failure failure) {
+            if(failure.getReason()==PersonalWorkspaceExecutionService.Reason.CAPABILITY_UNAVAILABLE
+                    ||failure.getReason()==PersonalWorkspaceExecutionService.Reason.STORAGE_UNAVAILABLE)throw temporary(failure);
+            failPermanently(scope,command.conversationId(),operationId,"SOURCE_UNAVAILABLE");throw unavailable();
+        }
+        try {
+            if(!source.executionId().equals(output.executionId())||!source.outputId().equals(output.outputId())
+                    ||!source.contentMimeType().equals(output.contentMimeType())||!source.sha256().equals(output.sha256())
+                    ||source.byteLength()!=output.byteLength()) {
+                failPermanently(scope,command.conversationId(),operationId,"SOURCE_MISMATCH");throw unavailable();
+            }
+            return output.content();
+        } catch(RuntimeException | Error rejected) {
+            try {output.close();} catch(java.io.IOException closeFailure) {rejected.addSuppressed(closeFailure);}
+            throw rejected;
+        }
     }
 
     private static boolean sameRequest(Operation operation, Command command, String requestSha) {

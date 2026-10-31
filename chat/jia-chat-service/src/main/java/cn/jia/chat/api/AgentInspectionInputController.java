@@ -35,9 +35,9 @@ public final class AgentInspectionInputController {
     }
 
     @GetMapping("/internal/agent/chat/requests/{requestId}/turns/{turnId}/inspection/inputs/{sourceRefId}/content")
-    public ResponseEntity<byte[]> content(@PathVariable String requestId,
+    public void content(@PathVariable String requestId,
             @PathVariable String turnId, @PathVariable String sourceRefId,
-            Authentication authentication, HttpServletRequest request) {
+            Authentication authentication, HttpServletRequest request, jakarta.servlet.http.HttpServletResponse response) throws java.io.IOException {
         if (request.getQueryString() != null || request.getContentLengthLong() > 0) throw unavailable();
         if (!(authentication instanceof AgentRuntimeAuthentication runtime) || !runtime.isAuthenticated()) {
             throw new RuntimeAccessException(authentication == null || !authentication.isAuthenticated()
@@ -47,14 +47,20 @@ public final class AgentInspectionInputController {
         if (headers.size() != 1) throw unavailable();
         var proof=AgentRuntimeAuthenticationService.requireProof(runtime);
         runtimeAuthentication.validateCurrent(proof,false);
-        ChatInspectionAuthorityService.Content value = authority.read(runtime.getPrincipal(), requestId,
-                turnId, sourceRefId, headers.getFirst());
-        // Source storage can perform I/O; never hold the new Runtime fence across it.
-        // Inspection is read-only. Current installation/proof is checked again for delivery.
-        return runtimeAuthentication.withNativeFence(runtime, () -> ResponseEntity.ok().cacheControl(CacheControl.noStore())
-                .header("X-Content-Type-Options", "nosniff")
-                .header(HttpHeaders.CONTENT_TYPE, value.mimeType())
-                .contentLength(value.bytes().length).body(value.bytes()));
+        try(var value=authority.read(runtime.getPrincipal(),requestId,turnId,sourceRefId,headers.getFirst())) {
+            runtimeAuthentication.withNativeFence(runtime,()->{
+                response.setHeader("Cache-Control","no-store");response.setHeader("X-Content-Type-Options","nosniff");
+                response.setContentType(value.mimeType());response.setContentLengthLong(value.byteLength());return null;
+            });
+            byte[] buffer=new byte[8192];int count;
+            var output=response.getOutputStream();
+            while((count=value.stream().read(buffer))!=-1)output.write(buffer,0,count);
+        }
+    }
+
+    @ExceptionHandler(java.io.IOException.class)
+    public void transport(java.io.IOException failure,jakarta.servlet.http.HttpServletResponse response) throws java.io.IOException {
+        if(!response.isCommitted()){response.reset();response.sendError(503);}
     }
 
     @ExceptionHandler(ChatDeliberationException.class)

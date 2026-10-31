@@ -46,7 +46,7 @@ final class AgentTaskBountyBootstrapPayload {
         try {
             List<ReferenceSummary> references = json.readValue(source,
                     new TypeReference<List<ReferenceSummary>>() { });
-            if (references == null || references.size() > 32) {
+            if (references == null) {
                 throw new IllegalStateException("Bootstrap reference summary is invalid");
             }
             for (ReferenceSummary reference : references) validateReference(reference);

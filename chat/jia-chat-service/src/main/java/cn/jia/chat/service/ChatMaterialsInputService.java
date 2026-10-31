@@ -33,10 +33,10 @@ public class ChatMaterialsInputService {
         return new Prepared(turn,withAuthority(turn,digest,false,()->input(turn,sourceId)),sourceId,digest);
     }
     /** Storage I/O is invoked outside the identity/task transaction. */
-    public PersonalWorkspaceExecutionService.RuntimeContent read(Prepared prepared) {
+    public PersonalWorkspaceExecutionService.RuntimeDownload read(Prepared prepared) {
         var turn=prepared.turn;
         var owner=new PersonalWorkspaceExecutionService.OwnerScope(turn.getTenantId(),turn.getClientId(),turn.getOwnerJiacn());
-        return sources.read(owner,prepared.input.taskId(),turn.getConversationId(),turn.getConversationGeneration(),prepared.input.input());
+        return sources.open(owner,prepared.input.taskId(),turn.getConversationId(),turn.getConversationGeneration(),prepared.input.input());
     }
     /** Called under a fresh native identity fence before delivering the bytes. */
     public void revalidate(Prepared prepared) {

@@ -29,10 +29,11 @@ class ConversationLeaseWireHttpTest {
     private SkillExecutionService skills;
     private AgentRuntimeAuthentication auth;
     private MockMvc mvc;
+    private AgentRuntimeAuthenticationService nativeAuth;
     @BeforeEach void setup() {
         executions=mock(PersonalWorkspaceExecutionService.class,withSettings().extraInterfaces(SkillExecutionService.class));
         skills=(SkillExecutionService)executions;
-        var nativeAuth=mock(AgentRuntimeAuthenticationService.class);
+        nativeAuth=mock(AgentRuntimeAuthenticationService.class);
         when(nativeAuth.withNativeFence(any(),any())).thenAnswer(invocation->invocation.getArgument(1,Supplier.class).get());
         auth=new AgentRuntimeAuthentication(new AgentRuntimeAuthentication.Scope("tenant","client","owner","agent","runtime"));
         var converters=new ArrayList<HttpMessageConverter<?>>();
@@ -77,6 +78,31 @@ class ConversationLeaseWireHttpTest {
         when(skills.resume(any(),eq("task"),eq("run"),any())).thenReturn(new SkillExecutionService.ResumeReceipt(lease(9007199254740993L),"RUNNING",List.of("EXECUTE"),null));
         call("/resume","{\"executionId\":\"execution\",\"snapshotSha256\":\""+"a".repeat(64)+"\"}")
                 .andExpect(status().isOk()).andExpect(jsonPath("$.data.lease.version").value("9007199254740993"));
+    }
+    @Test void nativeInputStreamsAndClosesOnSuccessfulResponse() throws Exception {
+        var closed=new java.util.concurrent.atomic.AtomicBoolean();
+        var stream=new java.io.ByteArrayInputStream(new byte[]{1,2,3}) {
+            @Override public byte[] readAllBytes() {throw new AssertionError("Runtime input must stream");}
+            @Override public void close() {closed.set(true);}
+        };
+        when(skills.inputContent(any(),eq("task"),eq("run"),eq("input_1"),any()))
+                .thenReturn(new PersonalWorkspaceExecutionService.RuntimeDownload("source","image/png","a".repeat(64),3,stream));
+        call("/inputs/input_1/content","{\"version\":\"1\",\"token\":\""+TOKEN+"\"}")
+                .andExpect(status().isOk()).andExpect(header().string("Content-Length","3"))
+                .andExpect(content().bytes(new byte[]{1,2,3}));
+        org.junit.jupiter.api.Assertions.assertTrue(closed.get());
+    }
+    @Test void nativeInputClosesWhenPostIoIdentityFenceRejects() throws Exception {
+        var closed=new java.util.concurrent.atomic.AtomicBoolean();
+        var stream=new java.io.ByteArrayInputStream(new byte[]{1,2,3}) {
+            @Override public void close() {closed.set(true);}
+        };
+        when(skills.inputContent(any(),eq("task"),eq("run"),eq("input_1"),any()))
+                .thenReturn(new PersonalWorkspaceExecutionService.RuntimeDownload("source","image/png","a".repeat(64),3,stream));
+        when(nativeAuth.withNativeFence(any(),any())).thenThrow(new SecurityException("fixture"));
+        call("/inputs/input_1/content","{\"version\":\"1\",\"token\":\""+TOKEN+"\"}")
+                .andExpect(status().isServiceUnavailable()).andExpect(header().doesNotExist("Content-Disposition"));
+        org.junit.jupiter.api.Assertions.assertTrue(closed.get());
     }
     @Test void rawEffectFenceIsProjectedWithoutChangingItsDomainLong() throws Exception {
         when(skills.startEffect(any(),eq("task"),eq("run"),eq("effect"),any()))
@@ -154,15 +180,21 @@ class ConversationLeaseWireHttpTest {
     @Test void multipartStageUsesByteLengthAndKeepsBytesAndLeaseProof() throws Exception {
         byte[] bytes="中文成果".getBytes(java.nio.charset.StandardCharsets.UTF_8);
         String sha=java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes));
-        when(executions.stageConversationOutput(any(),eq("task"),eq("run"),any(),eq("output_1"),any(),any(),any()))
+        when(executions.stageConversationOutputStream(any(),eq("task"),eq("run"),any(),eq("output_1"),any(),any(),any(),eq((long)bytes.length),eq(sha)))
                 .thenReturn(new PersonalWorkspaceExecutionService.StagedOutput("output_1",sha,bytes.length,"STAGED"));
-        var file=new org.springframework.mock.web.MockMultipartFile("file","result.txt","text/plain",bytes);
+        var file=new org.springframework.mock.web.MockMultipartFile("file","result.txt","text/plain",bytes) {
+            @Override public byte[] getBytes() { throw new AssertionError("Native HTTP upload must stream"); }
+        };
         mvc.perform(multipart(BASE+"/outputs/output_1/content").file(file).principal(auth)
                 .param("version","9007199254740993").param("token",TOKEN).param("sha256",sha).param("byteLength",Integer.toString(bytes.length))
                 .header("X-Request-Id","lease-test"))
                 .andExpect(status().isCreated()).andExpect(jsonPath("$.data.byteLength").value(Integer.toString(bytes.length)));
-        verify(executions).stageConversationOutput(any(),eq("task"),eq("run"),eq(new PersonalWorkspaceExecutionService.ConversationFence(9007199254740993L,TOKEN)),
-                eq("output_1"),eq("result.txt"),eq("text/plain"),org.mockito.AdditionalMatchers.aryEq(bytes));
+        var source = org.mockito.ArgumentCaptor.forClass(cn.jia.agent.service.PersonalWorkspaceService.UploadSource.class);
+        verify(executions).stageConversationOutputStream(any(),eq("task"),eq("run"),eq(new PersonalWorkspaceExecutionService.ConversationFence(9007199254740993L,TOKEN)),
+                eq("output_1"),eq("result.txt"),eq("text/plain"),source.capture(),eq((long)bytes.length),eq(sha));
+        try (var input = source.getValue().open()) {
+            org.junit.jupiter.api.Assertions.assertArrayEquals(bytes, input.readAllBytes());
+        }
         mvc.perform(multipart(BASE+"/outputs/output_1/content").file(file).principal(auth)
                 .param("version","1").param("token",TOKEN).param("sha256",sha).param("length",Integer.toString(bytes.length)))
                 .andExpect(status().isBadRequest());
@@ -189,7 +221,9 @@ class ConversationLeaseWireHttpTest {
         String sha=java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes));
         when(executions.stageOutput(any(),eq("task"),eq("run"),eq("output_1"),any(),any(),any()))
                 .thenReturn(new PersonalWorkspaceExecutionService.StagedOutput("output_1",sha,3L,"STAGED"));
-        var file=new org.springframework.mock.web.MockMultipartFile("file","result.txt","text/plain",bytes);
+        var file=new org.springframework.mock.web.MockMultipartFile("file","result.txt","text/plain",bytes) {
+            @Override public byte[] getBytes() { throw new AssertionError("Native HTTP upload must stream"); }
+        };
         for(String field:List.of("byteLength","length")) {
             var result=mvc.perform(multipart("/internal/agent/tasks/task/runs/run/outputs/output_1/content").file(file).principal(auth)
                 .param("taskId","task").param("runId","run").param("outputId","output_1").param("sha256",sha).param(field,"3"));

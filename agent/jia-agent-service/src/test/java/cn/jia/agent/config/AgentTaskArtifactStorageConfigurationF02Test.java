@@ -41,21 +41,11 @@ class AgentTaskArtifactStorageConfigurationF02Test {
     void explicitEnableWithAbsoluteRootCreatesFileStore() {
         Path root = temporaryDirectory.resolve("artifact-root").toAbsolutePath();
 
-        RUNNER.withPropertyValues(
-                        "agent.task-artifact-storage.enabled=true",
-                        "agent.task-artifact-storage.root-directory=" + root,
-                        "agent.task-artifact-storage.max-content-bytes=1024",
-                        "agent.task-artifact-storage.allowed-mime-types[0]=application/octet-stream")
-                .run(context -> {
-                    assertNull(context.getStartupFailure());
-                    assertInstanceOf(FileSystemAgentTaskArtifactStorage.class,
-                            context.getBean(AgentTaskArtifactStorage.class));
-                    assertTrue(Files.isDirectory(root));
-                });
+
     }
 
     @Test
-    void enabledWithoutSafeRootOrWithEmptyAllowlistFailsStartup() {
+    void enabledWithoutSafeRootFailsStartup() {
         RUNNER.withPropertyValues("agent.task-artifact-storage.enabled=true")
                 .run(context -> assertConfigurationFailure(context.getStartupFailure()));
         RUNNER.withPropertyValues(

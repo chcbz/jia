@@ -31,7 +31,7 @@ public interface SkillExecutionService {
     record Inputs(int schemaVersion,String executionId,long leaseVersion,String snapshotDigest,
             boolean noReferencedMaterials,List<Map<String,Object>> inputs) { }
     Inputs inputs(RuntimeScope scope,String taskId,String runId,ConversationFence fence);
-    RuntimeContent inputContent(RuntimeScope scope,String taskId,String runId,String inputRef,ConversationFence fence);
+    RuntimeDownload inputContent(RuntimeScope scope,String taskId,String runId,String inputRef,ConversationFence fence);
     record Resume(String executionId,String snapshotDigest) { }
     record ResumeReceipt(ConversationLease lease,String phase,List<String> allowedWork,Map<String,Object> resultManifest,
             Map<String,Object> effects,String turnFailureCode) {

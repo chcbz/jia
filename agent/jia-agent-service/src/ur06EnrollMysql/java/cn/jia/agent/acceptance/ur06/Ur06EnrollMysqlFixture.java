@@ -885,7 +885,7 @@ public final class Ur06EnrollMysqlFixture {
             return new AgentWorkItemReassignmentServiceImpl(new AgentWorkItemReassignmentDaoImpl(s.getMapper(AgentWorkItemReassignmentMapper.class)),
                 members, items, mutation, identity, agents, writer, commands, leases, 900_000);
         }
-        @Bean AgentTaskArtifactStorage storage() { return new FileSystemAgentTaskArtifactStorage(activeRoot.resolve("artifact-storage"), 262144, Set.of("text/plain")); }
+        @Bean AgentTaskArtifactStorage storage() { return new FileSystemAgentTaskArtifactStorage(activeRoot.resolve("artifact-storage"), 262144); }
         @Bean AgentTaskArtifactService publications(AgentTaskMetaDao meta, AgentTaskMemberDao members, AgentTaskWorkItemDao items, AgentTaskRequestDao requests,
                 AgentTaskArtifactDao artifacts, AgentTaskArtifactStorage storage, AgentTaskMutationTransaction mutation, AgentTaskEventWriter writer) {
             return new AgentTaskCollaborationServiceImpl(meta, members, items, requests, artifacts, storage, mutation, writer);

@@ -317,6 +317,23 @@ class AgentWorkItemRuntimeResultFenceRealTransactionTest {
         var bytes=AgentCommandCanonicalCodec.businessBytes(draft);jdbc.update("INSERT INTO agent_command_delivery (command_id,task_id,work_item_id,target_agent_id,command_type,command_payload,command_payload_hash,status,attempt_count,version,tenant_id,client_id,owner_jiacn,create_time,update_time) VALUES (?,?,?,?,?,?,?,'PENDING',1,0,?,?,?,?,?)",draft.commandId(),draft.taskId(),draft.workItemId(),draft.targetAgentId(),draft.commandType(),bytes,AgentCommandCanonicalCodec.sha256(bytes),draft.tenantId(),draft.clientId(),draft.ownerJiacn(),draft.issuedAt(),draft.issuedAt());
     }
     private final class BlockingStorage implements AgentTaskArtifactStorage {
+        @Override public java.io.InputStream openStream(Scope scope, String uri, String hash, long length, String mime) {
+            return new java.io.ByteArrayInputStream(read(scope, uri, hash, length, mime).content());
+        }
+        // In-memory fixture only; production storage streams directly to its private files.
+        @Override public StoredObject storeStream(Scope scope, java.io.InputStream input, long length, String mime) {
+            try {
+                byte[] bytes = input.readAllBytes();
+                if (bytes.length != length) throw new AssertionError("Fixture length mismatch");
+                return store(scope, bytes, mime);
+            } catch (java.io.IOException failure) { throw new java.io.UncheckedIOException(failure); }
+        }
+        @Override public void copyTo(Scope scope, String uri, String hash, long length,
+                String mime, java.io.OutputStream output) {
+            try { output.write(read(scope, uri, hash, length, mime).content()); }
+            catch (java.io.IOException failure) { throw new java.io.UncheckedIOException(failure); }
+        }
+
         final AtomicInteger stores=new AtomicInteger();final Map<String,byte[]> material=new HashMap<>();Runnable afterStore=()->{};CountDownLatch entered,release;
         @Override public StoredObject store(Scope scope,byte[] content,String mime) {
             assertFalse(TransactionSynchronizationManager.isActualTransactionActive(),"no external storage I/O under a DB transaction/fence");

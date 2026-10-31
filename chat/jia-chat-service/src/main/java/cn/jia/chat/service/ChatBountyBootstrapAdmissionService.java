@@ -94,7 +94,7 @@ public class ChatBountyBootstrapAdmissionService {
                 || !"TASK_REQUIREMENT_REVISION_V1".equals(claim.requirementAnchor())
                 || claim.requirementRevision() < 1 || claim.assignmentRevision() < 0
                 || claim.grantVersion() < 1 || !hex(claim.referenceSummarySha256())
-                || claim.references() == null || claim.references().size() > 32) {
+                || claim.references() == null) {
             throw new IllegalArgumentException("Invalid trusted bounty bootstrap intent");
         }
         AgentTaskExecutionGrantService.Scope scope = new AgentTaskExecutionGrantService.Scope(

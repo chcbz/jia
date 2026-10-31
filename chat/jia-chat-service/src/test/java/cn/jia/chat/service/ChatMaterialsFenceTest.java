@@ -38,8 +38,14 @@ class ChatMaterialsFenceTest {
             .setConversationId("123").setConversationGeneration(1L).setRequestId("request").setRequestRevision(1L)
             .setTurnId("turn").setTargetAgentId("agent").setRoute("CHAT").setDispatchId("dispatch")
             .setSnapshotId("snapshot").setContextDigest("context").setState("STREAMING");
-    final PersonalWorkspaceExecutionService.RuntimeContent content=
-            new PersonalWorkspaceExecutionService.RuntimeContent("image.png","image/png",new byte[]{1,2,3});
+    boolean streamClosed;
+    final byte[] bytes={1,2,3};
+    final PersonalWorkspaceExecutionService.RuntimeDownload content=
+            new PersonalWorkspaceExecutionService.RuntimeDownload("image.png","image/png","a".repeat(64),3,
+                    new java.io.ByteArrayInputStream(bytes) {
+                        @Override public byte[] readAllBytes() {throw new AssertionError("Material must stream");}
+                        @Override public void close() {streamClosed=true;}
+                    });
     final List<String> events=new ArrayList<>();
     String digest;
     boolean fenced;
@@ -87,55 +93,61 @@ class ChatMaterialsFenceTest {
             fenced=true;events.add("fence");
             try{return ((Supplier<?>)i.getArgument(1)).get();}finally{fenced=false;events.add("release");}
         });
-        when(sources.read(any(),eq("task"),eq("123"),eq(1L),any())).thenAnswer(i->{
+        when(sources.open(any(),eq("task"),eq("123"),eq(1L),any())).thenAnswer(i->{
             assertFalse(fenced,"storage I/O must not hold runtime/task transaction");events.add("storage");return content;
         });
     }
 
-    @Test void bothAuthorizationPassesUseIdentityBeforeTaskAndStorageOutsideFence() {
-        assertArrayEquals(content.bytes(),read());
+    @Test void bothAuthorizationPassesUseIdentityBeforeTaskAndStorageOutsideFence() throws Exception {
+        assertArrayEquals(bytes,read());
+        assertTrue(streamClosed);
         assertEquals(List.of("fence","incoming","task","release","storage","fence","task","release"),events);
         assertEquals(2,fences);
     }
     @Test void revokedRuntimeDuringStorageDoesNotDeliverBytes() {
-        when(sources.read(any(),anyString(),anyString(),anyLong(),any())).thenAnswer(i->{
+        when(sources.open(any(),anyString(),anyString(),anyLong(),any())).thenAnswer(i->{
             assertFalse(fenced);revoked=true;return content;
         });
         assertThrows(SecurityException.class,this::read);
+        assertTrue(streamClosed);
         assertEquals(2,fences);
     }
     @Test void changedTurnDuringStorageDoesNotDeliverBytes() {
-        when(sources.read(any(),anyString(),anyString(),anyLong(),any())).thenAnswer(i->{
+        when(sources.open(any(),anyString(),anyString(),anyLong(),any())).thenAnswer(i->{
             assertFalse(fenced);turn.setState("CANCELLED");return content;
         });
         assertThrows(ChatDeliberationException.class,this::read);
+        assertTrue(streamClosed);
         assertEquals(2,fences);
     }
     @Test void materialPermissionRevokedDuringStorageDoesNotDeliverBytes() {
-        when(sources.read(any(),anyString(),anyString(),anyLong(),any())).thenAnswer(i->{
+        when(sources.open(any(),anyString(),anyString(),anyLong(),any())).thenAnswer(i->{
             assertFalse(fenced);
             doThrow(new ChatDeliberationException(ChatDeliberationException.Reason.NOT_FOUND_OR_FORBIDDEN,
                     "Material input is unavailable")).when(sources).requireAuthorized(any(),anyString(),anyString(),anyLong(),any());
             return content;
         });
         assertThrows(ChatDeliberationException.class,this::read);
+        assertTrue(streamClosed);
         assertEquals(2,fences);
     }
     @Test void storageFailureDoesNotReturnBytesOrRetryStorage() {
         var failure=new IllegalStateException("storage unavailable");
-        when(sources.read(any(),anyString(),anyString(),anyLong(),any())).thenThrow(failure);
+        when(sources.open(any(),anyString(),anyString(),anyLong(),any())).thenThrow(failure);
         assertSame(failure,assertThrows(IllegalStateException.class,this::read));
         assertEquals(1,fences);
-        verify(sources,times(1)).read(any(),anyString(),anyString(),anyLong(),any());
+        verify(sources,times(1)).open(any(),anyString(),anyString(),anyLong(),any());
     }
     @Test void initialRevocationNeverReadsTaskOrStorage() {
         revoked=true;
         assertThrows(SecurityException.class,this::read);
         verifyNoInteractions(dispatch,tasks,sources);
     }
-    byte[] read() {
+    byte[] read() throws java.io.IOException {
         var request=new MockHttpServletRequest();
         request.addHeader("X-Materials-Manifest-Digest",digest);
-        return controller.content("request","turn","source",runtime,request).getBody();
+        var response=new org.springframework.mock.web.MockHttpServletResponse();
+        controller.content("request","turn","source",runtime,request,response);
+        return response.getContentAsByteArray();
     }
 }

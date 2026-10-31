@@ -37,6 +37,7 @@ import java.util.Map;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -105,7 +106,7 @@ class ChatTypedInspectionSpringTransactionTest {
     }
 
     @Test
-    void authorityReadFailureRollsBackInsideActualProxyTransaction() {
+    void authorityReadFailureRollsBackInsideShortRootTransaction() {
         DriverManagerDataSource source = database("inspection_authority");
         JdbcTemplate evidence = evidence(source);
         AgentTaskMutationTransaction tasks = mock(AgentTaskMutationTransaction.class);
@@ -127,10 +128,13 @@ class ChatTypedInspectionSpringTransactionTest {
         when(tasks.executeWithLockedTaskRootInOwnerScope(
                 eq("0"), eq("client"), eq("owner"), eq("task"), any()))
                 .thenAnswer(invocation -> {
-                    active(false);
-                    evidence.update("INSERT INTO tx_evidence VALUES ('authority')");
-                    throw new ChatDeliberationException(
-                            ChatDeliberationException.Reason.CONFLICT, "revoked");
+                    assertFalse(TransactionSynchronizationManager.isActualTransactionActive());
+                    return new org.springframework.transaction.support.TransactionTemplate(
+                            new DataSourceTransactionManager(source)).execute(status -> {
+                        active(false);
+                        evidence.update("INSERT INTO tx_evidence VALUES ('authority')");
+                        throw new ChatDeliberationException(ChatDeliberationException.Reason.CONFLICT,"revoked");
+                    });
                 });
 
         turn.setOwnerJiacn("owner").setClientId("client").setTenantId("0");

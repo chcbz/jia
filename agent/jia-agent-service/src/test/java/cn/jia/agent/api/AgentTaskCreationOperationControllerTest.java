@@ -148,6 +148,24 @@ class AgentTaskCreationOperationControllerTest {
     }
 
     @Test
+    void v2AdmitsMoreThanThirtyTwoMaterialsWithoutChangingTheirReferences() throws Exception {
+        when(operations.create(any(), eq("many-inputs"), any())).thenReturn(
+                new AgentTaskCreationOperationService.Result(
+                        new AgentTaskCreationOperationService.Receipt(2, "atco2_many", "42", 1,
+                                "COMMITTED", List.of(), receipt().task()), false));
+        var attachments = java.util.stream.IntStream.range(0, 33)
+                .mapToObj(i -> java.util.Map.of("fileId", "file-" + i, "version", "1")).toList();
+        String body = json.writeValueAsString(java.util.Map.of("title", "many", "attachments", attachments));
+        mvc.perform(post("/agent/tasks/creation-operations/v2").principal(jwt("owner-a", "client-a"))
+                        .header("Idempotency-Key", "many-inputs").contentType(MediaType.APPLICATION_JSON).content(q(body)))
+                .andExpect(status().isCreated());
+        var command = org.mockito.ArgumentCaptor.forClass(AgentTaskCreationOperationService.CreateCommand.class);
+        verify(operations).create(any(), eq("many-inputs"), command.capture());
+        assertEquals(33, command.getValue().inputRefs().size());
+        assertEquals("file-32", command.getValue().inputRefs().getLast().fileId());
+    }
+
+    @Test
     void v2EmptyOptionalSelectionReplayAndReadPreserveExplicitSchema() throws Exception {
         var empty = new AgentTaskCreationOperationService.Receipt(2, "atco2_empty", "42", 1,
                 "COMMITTED", List.of(), receipt().task());

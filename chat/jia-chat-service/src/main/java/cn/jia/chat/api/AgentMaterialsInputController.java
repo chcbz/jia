@@ -37,9 +37,9 @@ public final class AgentMaterialsInputController {
     }
 
     @GetMapping("/internal/agent/chat/requests/{requestId}/turns/{turnId}/materials/inputs/{sourceRefId}/content")
-    public ResponseEntity<byte[]> content(@PathVariable String requestId,
+    public void content(@PathVariable String requestId,
             @PathVariable String turnId, @PathVariable String sourceRefId,
-            Authentication authentication, HttpServletRequest request) {
+            Authentication authentication, HttpServletRequest request, jakarta.servlet.http.HttpServletResponse response) throws java.io.IOException {
         if (request.getQueryString() != null || request.getContentLengthLong() > 0 || request.getHeader(HttpHeaders.TRANSFER_ENCODING) != null) throw unavailable();
         if (!(authentication instanceof AgentRuntimeAuthentication runtime) || !runtime.isAuthenticated()) {
             throw new RuntimeAccessException(authentication == null || !authentication.isAuthenticated()
@@ -51,14 +51,25 @@ public final class AgentMaterialsInputController {
         var prepared = runtimeAuthentication.withNativeFence(runtime, () -> authority.prepare(
                 runtime.getPrincipal(), requestId, turnId, sourceRefId, headers.getFirst()));
         // No enclosing transaction: file I/O must not retain identity/runtime/task locks.
-        var value = authority.read(prepared);
-        return runtimeAuthentication.withNativeFence(runtime, () -> {
-            authority.revalidate(prepared);
-            return ResponseEntity.ok().cacheControl(CacheControl.noStore())
-                    .header("X-Content-Type-Options", "nosniff")
-                    .header(HttpHeaders.CONTENT_TYPE, value.contentMimeType())
-                    .contentLength(value.bytes().length).body(value.bytes());
-        });
+        try(var value=authority.read(prepared)) {
+            runtimeAuthentication.withNativeFence(runtime,()-> {authority.revalidate(prepared);return true;});
+            response.setHeader(HttpHeaders.CACHE_CONTROL,"no-store");
+            response.setHeader("X-Content-Type-Options","nosniff");
+            response.setContentType(value.contentMimeType());
+            response.setContentLengthLong(value.byteLength());
+            value.content().transferTo(response.getOutputStream());
+        }
+    }
+
+    @ExceptionHandler(java.io.IOException.class)
+    public ResponseEntity<JsonResult<Void>> transferFailed(java.io.IOException failure,jakarta.servlet.http.HttpServletResponse response) {
+        if(response.isCommitted()) {
+            LOG.warn("Material transfer interrupted: {}",failure.getClass().getSimpleName());
+            return null;
+        }
+        response.reset();
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).cacheControl(CacheControl.noStore())
+                .body(JsonResult.<Void>failure("MATERIAL_INPUT_UNAVAILABLE","Material input is temporarily unavailable"));
     }
 
     @ExceptionHandler(ChatDeliberationException.class)

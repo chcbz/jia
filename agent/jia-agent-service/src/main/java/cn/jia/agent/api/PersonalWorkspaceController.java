@@ -97,9 +97,20 @@ public class PersonalWorkspaceController {
         return cn.jia.core.config.ApiJsonResponses.success(ResponseEntity.status(HttpStatus.CREATED).header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL).body(view), PersonalWorkspaceWire::from);
     }
     @GetMapping("/files/{fileId}/versions/{version}/content")
-    public ResponseEntity<byte[]> content(@PathVariable String fileId, @PathVariable String version, Authentication authentication) {
-        return binary(service.readContent(scope(authentication), fileId, version(version)), true);
+    public void content(@PathVariable String fileId, @PathVariable String version,
+            Authentication authentication, jakarta.servlet.http.HttpServletResponse response) throws IOException {
+        try (var download = service.download(scope(authentication), fileId, version(version))) {
+            response.setHeader(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL);
+            response.setHeader("X-Content-Type-Options", NOSNIFF);
+            response.setHeader(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment()
+                    .filename(safeFilename(download.filename()), StandardCharsets.UTF_8).build().toString());
+            response.setContentType(MediaType.parseMediaType(download.contentMimeType()).toString());
+            response.setContentLengthLong(download.byteLength());
+            // The service has verified the complete file before any response headers are set.
+            download.content().transferTo(response.getOutputStream());
+        }
     }
+
     @GetMapping(value = "/files/{fileId}/versions/{version}/preview", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<cn.jia.core.entity.JsonResult<PersonalWorkspaceViews.PreviewView>> preview(@PathVariable String fileId,
             @PathVariable String version, HttpServletRequest request,
@@ -153,7 +164,15 @@ public class PersonalWorkspaceController {
         };
     }
     @ExceptionHandler({IOException.class, IllegalArgumentException.class})
-    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> malformed(Exception ignored) { return error(HttpStatus.BAD_REQUEST,"BAD_REQUEST","Invalid personal workspace request"); }
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> malformed(Exception failure,
+            jakarta.servlet.http.HttpServletResponse response) {
+        if (response.isCommitted()) {
+            // A disconnected/failed download cannot be replaced with a JSON error body.
+            log.warn("Personal workspace transfer interrupted after response started", failure);
+            return null;
+        }
+        return error(HttpStatus.BAD_REQUEST,"BAD_REQUEST","Invalid personal workspace request");
+    }
     @ExceptionHandler(Exception.class)
     public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> unexpected(Exception failure, HttpServletRequest request) { log.error("Personal workspace request failed: uri={}",request.getRequestURI(),failure); return error(HttpStatus.SERVICE_UNAVAILABLE,"WORKSPACE_UNAVAILABLE","Personal workspace is temporarily unavailable"); }
 
@@ -186,7 +205,7 @@ public class PersonalWorkspaceController {
     private PersonalWorkspaceService.UploadCommand upload(MultipartFile file,String displayName,String key) throws IOException {
         if(file==null) throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.BAD_REQUEST);
         return new PersonalWorkspaceService.UploadCommand(new PersonalWorkspaceService.Idempotency(key),displayName,
-                file.getOriginalFilename(), contentMimeType(file), file.getBytes());
+                file.getOriginalFilename(), contentMimeType(file), file::getInputStream, file.getSize());
     }
     private static String contentMimeType(MultipartFile file) {
         String supplied = normalizedMime(file.getContentType());

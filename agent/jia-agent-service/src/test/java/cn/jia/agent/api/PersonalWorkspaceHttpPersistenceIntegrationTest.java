@@ -286,7 +286,9 @@ class PersonalWorkspaceHttpPersistenceIntegrationTest {
             String path, String key, byte[] bytes, String expectedPreviousVersion,
             JwtAuthenticationToken identity) throws Exception {
         MockMultipartFile file = new MockMultipartFile(
-                "file", "report:Q1.txt", MIME, bytes);
+                "file", "report:Q1.txt", MIME, bytes) {
+            @Override public byte[] getBytes() { throw new AssertionError("HTTP upload must not buffer the whole file"); }
+        };
         var request = multipart(path)
                 .file(file)
                 .param("displayName", "Quarterly report")
@@ -449,6 +451,18 @@ class PersonalWorkspaceHttpPersistenceIntegrationTest {
     }
 
     private static final class CountingStorage implements PersonalWorkspaceStorage {
+        @Override public java.io.InputStream openStream(Scope scope, String uri, String hash, long length, String mime) {
+            reads.incrementAndGet(); return delegate.openStream(scope, uri, hash, length, mime);
+        }
+
+        @Override public StoredObject storeStream(Scope scope, java.io.InputStream input, long length, String mime) {
+            stores.incrementAndGet(); return delegate.storeStream(scope, input, length, mime);
+        }
+        @Override public void copyTo(Scope scope, String uri, String hash, long length,
+                String mime, java.io.OutputStream output) {
+            reads.incrementAndGet(); delegate.copyTo(scope, uri, hash, length, mime, output);
+        }
+
         private final PersonalWorkspaceStorage delegate;
         private final AtomicInteger stores = new AtomicInteger();
         private final AtomicInteger reads = new AtomicInteger();

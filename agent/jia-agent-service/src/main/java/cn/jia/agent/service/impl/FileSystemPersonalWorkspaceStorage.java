@@ -57,6 +57,82 @@ public final class FileSystemPersonalWorkspaceStorage implements PersonalWorkspa
         verifyRoot(); return new StoredObject(uri(key, hash), hash, content.length, mimeType);
     }
 
+    @Override public StoredObject storeStream(Scope scope, java.io.InputStream content,
+            long byteLength, String mimeType) {
+        validateScope(scope); validateMime(mimeType);
+        if (content == null || byteLength < 0) invalid();
+        verifyRoot();
+        Path temporary = null;
+        try {
+            // Digest is not known until EOF; this private staging file has no addressable URI.
+            temporary = Files.createTempFile(root, ".upload-", ".tmp");
+            verifyRegular(temporary);
+            MessageDigest digest = digest();
+            long count = 0;
+            try (FileChannel channel = FileChannel.open(temporary,
+                    Set.<OpenOption>of(StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS))) {
+                byte[] buffer = new byte[8192];
+                for (int n; (n = content.read(buffer)) != -1;) {
+                    if (n > byteLength - count) invalid();
+                    count += n; digest.update(buffer, 0, n);
+                    ByteBuffer bytes = ByteBuffer.wrap(buffer, 0, n);
+                    while (bytes.hasRemaining()) channel.write(bytes);
+                }
+                if (count != byteLength) invalid();
+                channel.force(true);
+            }
+            String hash = HexFormat.of().formatHex(digest.digest());
+            String key = scopeKey(scope);
+            Path directory = directory(key, hash); ensureDirectory(directory);
+            Path target = objectPath(directory, hash);
+            permissions(temporary, FILE_PERMS);
+            try { Files.createLink(target, temporary); }
+            catch (FileAlreadyExistsException raced) { /* Verify the existing immutable object below. */ }
+            verifyExisting(target, hash, count); verifyRoot();
+            return new StoredObject(uri(key, hash), hash, count, mimeType);
+        } catch (IOException failure) { unavailable(failure); return null; }
+        finally { if (temporary != null) try { Files.deleteIfExists(temporary); } catch (IOException ignored) { } }
+    }
+
+    @Override public java.io.InputStream openStream(Scope scope, String storageUri, String expectedSha256,
+            long expectedByteLength, String expectedMimeType) {
+        validateScope(scope); validateMime(expectedMimeType);
+        if (expectedByteLength < 0
+                || !SHA.matcher(Objects.requireNonNullElse(expectedSha256, "")).matches()) invalid();
+        verifyRoot(); UriParts parts = parse(storageUri);
+        if (!constant(scopeKey(scope), parts.scopeKey()) || !constant(expectedSha256, parts.hash())) corrupt();
+        Path target = objectPath(requireDirectory(parts.scopeKey(), parts.hash()), parts.hash());
+        verifyRegular(target);
+        try {
+            FileChannel channel = FileChannel.open(target,
+                    Set.<OpenOption>of(StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS));
+            try {
+                verifyChannel(channel, expectedSha256, expectedByteLength);
+                verifyRoot(); channel.position(0);
+                return java.nio.channels.Channels.newInputStream(channel);
+            } catch (IOException | RuntimeException failure) {
+                try { channel.close(); } catch (IOException closeFailure) { failure.addSuppressed(closeFailure); }
+                throw failure;
+            }
+        } catch (IOException failure) { unavailable(failure); return null; }
+    }
+
+    @Override public void copyTo(Scope scope, String storageUri, String expectedSha256,
+            long expectedByteLength, String expectedMimeType, java.io.OutputStream output) {
+        try (var input = openStream(scope, storageUri, expectedSha256, expectedByteLength, expectedMimeType)) {
+            input.transferTo(output);
+        } catch (IOException failure) { unavailable(failure); }
+    }
+
+    private static void verifyChannel(FileChannel channel, String hash, long length) throws IOException {
+        if (channel.size() != length) corrupt();
+        MessageDigest digest = digest(); ByteBuffer buffer = ByteBuffer.allocate(8192); long count = 0;
+        while (channel.read(buffer) != -1) {
+            buffer.flip(); count += buffer.remaining(); digest.update(buffer); buffer.clear();
+        }
+        if (count != length || !constant(HexFormat.of().formatHex(digest.digest()), hash)) corrupt();
+    }
+
     @Override public long maxContentBytes() { return maximum; }
 
     @Override public StoredContent read(Scope scope, String storageUri, String expectedSha256,
@@ -103,7 +179,7 @@ public final class FileSystemPersonalWorkspaceStorage implements PersonalWorkspa
         return target;
     }
     private void verifyRoot(){BasicFileAttributes a=attributes(root);if(a.isSymbolicLink()||!a.isDirectory()||(rootKey!=null&&!Objects.equals(rootKey,a.fileKey())))corrupt();}
-    private void verifyExisting(Path target,String hash,long length){byte[] bytes=read(target);if(bytes.length!=length||!constant(sha(bytes),hash))corrupt();permissions(target,FILE_PERMS);}
+    private void verifyExisting(Path target,String hash,long length){verifyRegular(target);try(FileChannel channel=FileChannel.open(target,Set.<OpenOption>of(StandardOpenOption.READ,LinkOption.NOFOLLOW_LINKS))){verifyChannel(channel,hash,length);}catch(IOException failure){unavailable(failure);}permissions(target,FILE_PERMS);}
     private byte[] read(Path target){BasicFileAttributes a=attributes(target);if(a.isSymbolicLink()||!a.isRegularFile()||a.size()>maximum)corrupt();try(FileChannel c=FileChannel.open(target,Set.<OpenOption>of(StandardOpenOption.READ,LinkOption.NOFOLLOW_LINKS));ByteArrayOutputStream out=new ByteArrayOutputStream((int)Math.min(a.size(),65536))){ByteBuffer b=ByteBuffer.allocate(8192);long count=0;while(c.read(b)!=-1){b.flip();count+=b.remaining();if(count>maximum)corrupt();out.write(b.array(),b.position(),b.remaining());b.clear();}return out.toByteArray();}catch(IOException e){unavailable(e);return null;}}
     private static void write(Path target,byte[] bytes)throws IOException{try(FileChannel c=FileChannel.open(target,Set.<OpenOption>of(StandardOpenOption.WRITE,LinkOption.NOFOLLOW_LINKS))){ByteBuffer b=ByteBuffer.wrap(bytes);while(b.hasRemaining())c.write(b);c.force(true);}}
     private static void verifyRegular(Path p){BasicFileAttributes a=attributes(p);if(a.isSymbolicLink()||!a.isRegularFile())corrupt();}

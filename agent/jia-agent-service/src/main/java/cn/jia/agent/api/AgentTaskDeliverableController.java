@@ -82,24 +82,21 @@ public class AgentTaskDeliverableController {
     }
 
     @GetMapping(value = "/{taskId}/deliverables/{artifactId}/versions/{artifactVersion}/content")
-    public ResponseEntity<byte[]> download(
-            @PathVariable String taskId,
-            @PathVariable String artifactId,
-            @PathVariable String artifactVersion,
-            HttpServletRequest request,
-            Authentication authentication) {
-        Scope scope = requireJwtScope(authentication);
-        RequestTarget target = requireTarget(taskId, artifactId, artifactVersion, request);
-        VerifiedContent content = readContent(scope, target);
-        byte[] bytes = content.bytes();
-        return ResponseEntity.ok()
-                .header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
-                .header(HttpHeaders.CONTENT_DISPOSITION,
-                        "attachment; filename=\"deliverable-v" + target.artifactVersion() + ".bin\"")
-                .header("X-Content-Type-Options", NOSNIFF)
-                .contentType(content.mediaType())
-                .contentLength(bytes.length)
-                .body(bytes);
+    public void download(@PathVariable String taskId,@PathVariable String artifactId,@PathVariable String artifactVersion,
+            HttpServletRequest request,Authentication authentication,jakarta.servlet.http.HttpServletResponse response) throws java.io.IOException {
+        Scope scope=requireJwtScope(authentication);
+        RequestTarget target=requireTarget(taskId,artifactId,artifactVersion,request);
+        try(var content=contentService.openContentForTaskOwner(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),
+                target.taskId(),target.artifactId(),target.artifactVersion())) {
+            if(content==null||!target.artifactId().equals(content.artifactId())||target.artifactVersion()!=content.artifactVersion())
+                throw new IllegalStateException("Deliverable content result is inconsistent");
+            response.setHeader(HttpHeaders.CACHE_CONTROL,CACHE_CONTROL);
+            response.setHeader(HttpHeaders.CONTENT_DISPOSITION,"attachment; filename=\"deliverable-v"+target.artifactVersion()+".bin\"");
+            response.setHeader("X-Content-Type-Options",NOSNIFF);
+            response.setContentType(content.contentMimeType());
+            response.setContentLengthLong(content.byteLength());
+            content.content().transferTo(response.getOutputStream());
+        }
     }
 
     @GetMapping(value = "/{taskId}/deliverables/{artifactId}/versions/{artifactVersion}/preview",
@@ -195,6 +192,12 @@ public class AgentTaskDeliverableController {
         };
     }
 
+    @ExceptionHandler(java.io.IOException.class)
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> transferFailed(java.io.IOException failure,jakarta.servlet.http.HttpServletResponse response) {
+        if(response.isCommitted()) {log.warn("Deliverable transfer interrupted: {}",failure.getClass().getSimpleName());return null;}
+        response.reset();
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(cn.jia.core.entity.JsonResult.<Void>failure("DELIVERABLE_UNAVAILABLE","Deliverable is unavailable"));
+    }
     @ExceptionHandler(Exception.class)
     public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> unexpected(Exception ignored, HttpServletRequest request) {
         log.error("Task deliverable HTTP request failed: uri={}", request.getRequestURI());
@@ -362,7 +365,6 @@ public class AgentTaskDeliverableController {
                 || !MIME.matcher(artifact.getContentMimeType()).matches()
                 || artifact.getArtifactVersion() == null || artifact.getArtifactVersion() < 1
                 || artifact.getContentByteLength() == null || artifact.getContentByteLength() < 0
-                || artifact.getContentByteLength() > MAX_DOWNLOAD_BYTES
                 || artifact.getContentHash() == null
                 || !SHA256.matcher(artifact.getContentHash()).matches()
                 || artifact.getCreatedAt() == null || artifact.getCreatedAt() < 0) {

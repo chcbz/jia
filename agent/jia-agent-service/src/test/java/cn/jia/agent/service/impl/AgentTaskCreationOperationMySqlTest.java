@@ -106,10 +106,40 @@ class AgentTaskCreationOperationMySqlTest {
                 """, "a".repeat(64)));
         String thirtyThree = "[" + String.join(",", java.util.Collections.nCopies(33,
                 "{\"fileId\":\"f\",\"version\":1,\"purpose\":\"REFERENCE\"}")) + "]";
+        insertProcessing("owner-a", "many-materials", "atco_5", thirtyThree);
+        assertEquals(33, jdbc.queryForObject("SELECT JSON_LENGTH(input_refs_json) FROM "
+                + "agent_task_creation_operation WHERE operation_id='atco_5'", Integer.class));
         assertThrows(DataAccessException.class,
-                () -> insertProcessing("owner-a", "too-many", "atco_5", thirtyThree));
+                () -> insertProcessing("owner-a", "not-array", "atco_bad_shape", "{}"));
         assertThrows(DataAccessException.class,
                 () -> insertProcessing("0", "bad-owner", "atco_6", "[]"));
+    }
+
+    @Test
+    void existingMaterialCountCheckMigratesWithoutChangingReceiptsOrOtherChecks() throws Exception {
+        jdbc.execute("ALTER TABLE agent_task_creation_operation DROP CHECK chk_atco_refs, "
+                + "ADD CONSTRAINT chk_atco_refs CHECK (JSON_TYPE(input_refs_json)='ARRAY' "
+                + "AND JSON_LENGTH(input_refs_json) BETWEEN 0 AND 32)");
+        insertProcessing("owner-a", "existing", "atco_existing", "[]");
+        String many = "[" + java.util.stream.IntStream.range(0, 33)
+                .mapToObj(i -> "{\"fileId\":\"f" + i + "\",\"version\":1,\"purpose\":\"REFERENCE\"}")
+                .collect(java.util.stream.Collectors.joining(",")) + "]";
+        assertThrows(DataAccessException.class,
+                () -> insertProcessing("owner-a", "many", "atco_many", many));
+        String migration = new org.springframework.core.io.ClassPathResource(
+                "db/agent-task-creation-operation-v2-unbounded-materials.sql")
+                .getContentAsString(java.nio.charset.StandardCharsets.UTF_8)
+                .replaceAll("(?m)^\\s*--.*$", " ").trim();
+        jdbc.execute(migration.substring(0, migration.length() - 1));
+        new AgentTaskCreationOperationSchemaInitializer(jdbc).afterPropertiesSet();
+        insertProcessing("owner-a", "many", "atco_many", many);
+        assertEquals(2, count());
+        assertEquals("[]", jdbc.queryForObject("SELECT CAST(input_refs_json AS CHAR) FROM "
+                + "agent_task_creation_operation WHERE operation_id='atco_existing'", String.class));
+        assertThrows(DataAccessException.class,
+                () -> insertProcessing("owner-a", "bad-shape", "atco_bad_shape", "{}"));
+        assertThrows(DataAccessException.class,
+                () -> insertProcessing("0", "bad-owner", "atco_bad_owner", "[]"));
     }
 
     @Test

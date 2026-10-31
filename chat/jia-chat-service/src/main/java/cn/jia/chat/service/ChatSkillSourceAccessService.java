@@ -51,31 +51,44 @@ public final class ChatSkillSourceAccessService implements SkillSourceAccessServ
             formalSources().authorizeRevisionMaterial(scope,task,conversation,generation,input);
         }else throw missing();
     }
-    @Override public PersonalWorkspaceExecutionService.RuntimeContent read(PersonalWorkspaceExecutionService.OwnerScope scope,
+    @Override public PersonalWorkspaceExecutionService.RuntimeDownload open(PersonalWorkspaceExecutionService.OwnerScope scope,
             String task,String conversation,long generation,Map<String,Object> input) {
-        requireAuthorized(scope,task,conversation,generation,input);var identity=object(input.get("sourceIdentity"));byte[] bytes;String filename;
-        if("TASK_LINKED_WORKSPACE_VERSION".equals(input.get("sourceKind"))) {
-            var selection=selection(identity);
-            try {
-                var content=materials.read(new PersonalWorkspaceTaskLinkService.Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn()),
-                        task,selection,expected(input));
-                bytes=content.content();filename="material";
-            } catch (TaskLinkedMaterialReader.Failure error) { throw materialFailure(error); }
-        }else if("CURRENT_CONVERSATION_ASSET".equals(input.get("sourceKind"))) {
-            var s=asset(scope,task,conversation,generation,conversation(scope,task,conversation,generation),identity);
-            var output=files.readConversationOutput(scope,task,s.runId(),s.outputId());
-            if(output==null||!s.executionId().equals(output.executionId())||!s.outputId().equals(output.outputId())
-                    ||!s.contentMimeType().equals(output.contentMimeType())||!s.sha256().equals(output.sha256())||s.byteLength()!=output.byteLength())throw missing();
-            bytes=output.bytes();filename=output.originalFilename();
-        }else if("FORMAL_ARTIFACT".equals(input.get("sourceKind"))) {
-            var content=formalSources().readRevisionMaterial(scope,task,conversation,generation,input);
-            bytes=content.bytes();filename="formal-artifact";
-        }else {bytes=result(scope,task,conversation,generation,identity);filename="execution-result.json";}
-        if(bytes==null||bytes.length!=decimal(input.get("byteLength"))||!sha(bytes).equals(input.get("sha256")))throw conflict();
-        // Recheck current ACL and retention after storage I/O, without holding a Runtime installation lock.
         requireAuthorized(scope,task,conversation,generation,input);
-        return new PersonalWorkspaceExecutionService.RuntimeContent(filename,(String)input.get("contentMimeType"),bytes);
+        var identity=object(input.get("sourceIdentity"));
+        PersonalWorkspaceExecutionService.RuntimeDownload content;
+        if("TASK_LINKED_WORKSPACE_VERSION".equals(input.get("sourceKind"))) {
+            try {
+                var stream=materials.open(new PersonalWorkspaceTaskLinkService.Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn()),
+                        task,selection(identity),expected(input));
+                content=new PersonalWorkspaceExecutionService.RuntimeDownload("material",text(input,"contentMimeType"),text(input,"sha256"),decimal(input.get("byteLength")),stream);
+            } catch(TaskLinkedMaterialReader.Failure error) {throw materialFailure(error);}
+        } else if("CURRENT_CONVERSATION_ASSET".equals(input.get("sourceKind"))) {
+            var source=asset(scope,task,conversation,generation,conversation(scope,task,conversation,generation),identity);
+            var output=files.openConversationOutput(scope,task,source.runId(),source.outputId());
+            try {
+                if(!source.executionId().equals(output.executionId())||!source.outputId().equals(output.outputId()))throw missing();
+                content=new PersonalWorkspaceExecutionService.RuntimeDownload(output.originalFilename(),output.contentMimeType(),output.sha256(),output.byteLength(),output.content());
+            } catch(RuntimeException | Error rejected) {
+                try {output.close();} catch(java.io.IOException closeFailure) {rejected.addSuppressed(closeFailure);}
+                throw rejected;
+            }
+        } else if("FORMAL_ARTIFACT".equals(input.get("sourceKind"))) {
+            content=formalSources().openRevisionMaterial(scope,task,conversation,generation,input);
+        } else {
+            byte[] bytes=result(scope,task,conversation,generation,identity);
+            content=new PersonalWorkspaceExecutionService.RuntimeDownload("execution-result.json","application/json",sha(bytes),bytes.length,new java.io.ByteArrayInputStream(bytes));
+        }
+        try {
+            if(!content.contentMimeType().equals(input.get("contentMimeType"))||!content.sha256().equals(input.get("sha256"))
+                    ||content.byteLength()!=decimal(input.get("byteLength")))throw conflict();
+            requireAuthorized(scope,task,conversation,generation,input);
+            return content;
+        } catch(RuntimeException | Error rejected) {
+            try {content.close();} catch(java.io.IOException closeFailure) {rejected.addSuppressed(closeFailure);}
+            throw rejected;
+        }
     }
+
     private void workspace(PersonalWorkspaceExecutionService.OwnerScope s,String task,Map<String,Object> identity,Map<String,Object> input) {
         var selection=selection(identity);
         try {

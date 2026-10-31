@@ -9,6 +9,10 @@ public interface TaskLinkedMaterialReader {
     PersonalWorkspaceStorage.StoredContent read(PersonalWorkspaceTaskLinkService.Scope scope,
             String taskId, Selection selection, Metadata expected);
 
+    /** Storage-verified stream; rechecks current task link after I/O. Caller closes it. */
+    java.io.InputStream open(PersonalWorkspaceTaskLinkService.Scope scope,
+            String taskId,Selection selection,Metadata expected);
+
     final class Failure extends RuntimeException {
         public enum Reason { NOT_FOUND, UNAVAILABLE, METADATA_INVALID, CONTENT_MISMATCH }
         private final Reason reason;

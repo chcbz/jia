@@ -82,7 +82,6 @@ public final class ChatActionOutcomeContract {
         int factsVersion=integer(raw.get("schemaVersion"), "ACTION_FACTS_INVALID");
         if (factsVersion != VERSION && factsVersion != 6) throw invalid("ACTION_FACTS_INVALID");
         var rawSources = array(raw.get("availableSources"), "ACTION_SOURCES_INVALID");
-        if (rawSources.size() > 32) throw invalid("ACTION_SOURCES_INVALID");
         List<Source> sources = new ArrayList<>(); Set<String> ids = new HashSet<>();
         for (var source : rawSources) {
             exact(source, "ACTION_SOURCES_INVALID", "sourceRefId", "kind", "mediaType", "contentMimeType");
@@ -123,7 +122,7 @@ public final class ChatActionOutcomeContract {
             List<String> outputs = mimeTypes(action.get("outputMimeTypes"), error);
             int min = integer(action.get("minSources"), error), max = integer(action.get("maxSources"), error);
             if (!actionIds.add(id) || !"EXECUTE".equals(kind) || !("EXECUTE_SKILL".equals(operation)||"EXECUTE_NATIVE".equals(operation))
-                    || min < 0 || max < min || max > 32 || (max > 0 && mimeTypes.isEmpty())) throw invalid(error);
+                    || min < 0 || max < min || (max > 0 && mimeTypes.isEmpty())) throw invalid(error);
             capabilities.add(new Capability(id, kind, operation, skill,
                     object(schema, error), mimeTypes, min, max, outputs));
         }

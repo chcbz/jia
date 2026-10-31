@@ -19,9 +19,6 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
-import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -39,14 +36,12 @@ public class ChatInspectionAuthorityService {
             ChatDeliberationStates.DISPATCHED, ChatDeliberationStates.STREAMING,
             ChatDeliberationStates.UNKNOWN, ChatDeliberationStates.RECOVERY_REQUIRED);
 
-    public record Content(String filename, String mimeType, byte[] bytes) {
-        public Content {
-            if (filename == null || filename.isBlank() || mimeType == null || mimeType.isBlank()
-                    || bytes == null) throw new IllegalArgumentException("Invalid inspection content");
-            bytes = bytes.clone();
-        }
-        @Override public byte[] bytes() { return bytes.clone(); }
+    public record Content(String filename, String mimeType, long byteLength, java.io.InputStream stream)
+            implements AutoCloseable {
+        @Override public void close() throws java.io.IOException {stream.close();}
     }
+    private record PreparedContent(ChatTypedDeliberationStore.Scope scope,String taskId,String filename,
+            String mimeType,String hash,long byteLength,String storageUri,String runId,String outputId) {}
 
     private final AgentTaskMutationTransaction tasks;
     private final ChatBountyBindingStore bindings;
@@ -79,9 +74,41 @@ public class ChatInspectionAuthorityService {
         this.archive = Objects.requireNonNull(archive);
     }
 
-    @Transactional(rollbackFor = Exception.class)
+    @Transactional(propagation=org.springframework.transaction.annotation.Propagation.NEVER)
     public Content read(AgentRuntimeAuthentication.Scope runtime, String requestId, String turnId,
             String sourceRefId, String suppliedManifestDigest) {
+        PreparedContent prepared=prepare(runtime,requestId,turnId,sourceRefId,suppliedManifestDigest);
+        java.io.InputStream stream;
+        try {
+            if(prepared.storageUri()!=null) {
+                stream=storage.openStream(new PersonalWorkspaceStorage.Scope(prepared.scope().tenantId(),
+                        prepared.scope().clientId(),prepared.scope().ownerJiacn()),prepared.storageUri(),
+                        prepared.hash(),prepared.byteLength(),prepared.mimeType());
+            } else {
+                var value=executions.openConversationOutput(new PersonalWorkspaceExecutionService.OwnerScope(
+                        prepared.scope().tenantId(),prepared.scope().clientId(),prepared.scope().ownerJiacn()),
+                        prepared.taskId(),prepared.runId(),prepared.outputId());
+                stream=value.content();
+                if(!prepared.hash().equals(value.sha256())||prepared.byteLength()!=value.byteLength()
+                        ||!prepared.mimeType().equals(value.contentMimeType())) {
+                    try{stream.close();}catch(java.io.IOException ignored){}
+                    throw conflict("Inspection asset changed");
+                }
+            }
+        } catch(ChatDeliberationException failure){throw failure;}
+        catch(RuntimeException failure){throw serviceUnavailable("Inspection storage is unavailable");}
+        try {
+            if(!prepared.equals(prepare(runtime,requestId,turnId,sourceRefId,suppliedManifestDigest)))
+                throw conflict("Inspection source changed");
+            return new Content(prepared.filename(),prepared.mimeType(),prepared.byteLength(),stream);
+        } catch(RuntimeException failure) {
+            try{stream.close();}catch(java.io.IOException close){failure.addSuppressed(close);}
+            throw failure;
+        }
+    }
+
+    private PreparedContent prepare(AgentRuntimeAuthentication.Scope runtime,String requestId,String turnId,
+            String sourceRefId,String suppliedManifestDigest) {
         if (runtime == null || !exact(runtime.tenantId(), 50) || !exact(runtime.ownerJiacn(), 50)
                 || !exact(runtime.clientId(), 50) || !exact(runtime.agentId(), 100)
                 || !exact(runtime.runtimeInstanceId(), 100) || !exact(requestId, 100)
@@ -116,12 +143,9 @@ public class ChatInspectionAuthorityService {
                             suppliedManifestDigest, false);
                     Map<String, Object> source = source(locked.sources(), sourceRefId);
                     Map<String, Object> selector = object(source.get("selector"));
-                    Content content = "TASK_LINKED_WORKSPACE_VERSION".equals(selector.get("kind"))
+                    return "TASK_LINKED_WORKSPACE_VERSION".equals(selector.get("kind"))
                             ? workspaceContent(scope, taskId, selector, source)
-                            : assetContent(scope, taskId, locked.turn().getTargetAgentId(),
-                                    selector, source);
-                    verifyBytes(content, source);
-                    return content;
+                            : assetContent(scope, taskId, locked.turn().getTargetAgentId(), selector, source);
                 });
     }
 
@@ -322,29 +346,18 @@ public class ChatInspectionAuthorityService {
         throw invalid("Unsupported inspection selector");
     }
 
-    private Content workspaceContent(ChatTypedDeliberationStore.Scope scope, String taskId,
+    private PreparedContent workspaceContent(ChatTypedDeliberationStore.Scope scope, String taskId,
             Map<String, Object> selector, Map<String, Object> source) {
         Map<String, Object> row = workspaceRow(scope, taskId, selector);
         if (!sameSource(text(row, "content_mime_type"), text(row, "content_hash"),
                 number(row, "byte_length"), source)) {
             throw conflict("Inspection workspace source changed");
         }
-        try {
-            PersonalWorkspaceStorage.StoredContent stored = storage.read(
-                    new PersonalWorkspaceStorage.Scope(
-                            scope.tenantId(), scope.clientId(), scope.ownerJiacn()),
-                    text(row, "storage_uri"), string(source.get("sha256")),
-                    Long.parseLong(string(source.get("byteLength"))),
-                    string(source.get("mimeType")));
-            return new Content(text(row, "original_filename"), stored.mimeType(), stored.content());
-        } catch (ChatDeliberationException failure) {
-            throw failure;
-        } catch (RuntimeException failure) {
-            throw serviceUnavailable("Inspection storage is unavailable");
-        }
+        return new PreparedContent(scope,taskId,text(row,"original_filename"),text(row,"content_mime_type"),
+                text(row,"content_hash"),number(row,"byte_length"),text(row,"storage_uri"),null,null);
     }
 
-    private Content assetContent(ChatTypedDeliberationStore.Scope scope, String taskId,
+    private PreparedContent assetContent(ChatTypedDeliberationStore.Scope scope, String taskId,
             String agentId, Map<String, Object> selector, Map<String, Object> source) {
         ChatConversationArchiveStore.Source actual = archive.findAuthorizedSourceForUpdate(
                 new ChatConversationArchiveStore.Scope(
@@ -356,15 +369,8 @@ public class ChatInspectionAuthorityService {
                 || !sameSource(actual.contentMimeType(), actual.sha256(), actual.byteLength(), source)) {
             throw conflict("Inspection asset changed");
         }
-        try {
-            PersonalWorkspaceExecutionService.ConversationOutput value = executions.readConversationOutput(
-                    new PersonalWorkspaceExecutionService.OwnerScope(
-                            scope.tenantId(), scope.clientId(), scope.ownerJiacn()),
-                    taskId, actual.runId(), actual.outputId());
-            return new Content(value.originalFilename(), value.contentMimeType(), value.bytes());
-        } catch (RuntimeException failure) {
-            throw serviceUnavailable("Inspection asset storage is unavailable");
-        }
+        return new PreparedContent(scope,taskId,actual.outputId(),actual.contentMimeType(),actual.sha256(),
+                actual.byteLength(),null,actual.runId(),actual.outputId());
     }
 
     private Map<String, Object> workspaceRow(ChatTypedDeliberationStore.Scope scope, String taskId,
@@ -390,15 +396,6 @@ public class ChatInspectionAuthorityService {
                 string(selector.get("purpose")), string(selector.get("purpose")));
         if (rows.size() != 1) throw conflict("Inspection workspace link changed");
         return rows.getFirst();
-    }
-
-    private static void verifyBytes(Content content, Map<String, Object> source) {
-        byte[] bytes = content.bytes();
-        if (!Objects.equals(content.mimeType(), source.get("mimeType"))
-                || bytes.length != Long.parseLong(string(source.get("byteLength")))
-                || !sha256(bytes).equals(source.get("sha256"))) {
-            throw conflict("Inspection content differs from manifest");
-        }
     }
 
     private static boolean sameSource(String mimeType, String sha256, long byteLength,
@@ -461,14 +458,6 @@ public class ChatInspectionAuthorityService {
         return value != null && !value.isBlank() && value.equals(value.strip())
                 && value.codePointCount(0, value.length()) <= max
                 && value.codePoints().noneMatch(Character::isISOControl);
-    }
-
-    private static String sha256(byte[] value) {
-        try {
-            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value));
-        } catch (NoSuchAlgorithmException error) {
-            throw new IllegalStateException(error);
-        }
     }
 
     private record Locked(ChatTurnEntity turn, List<Map<String, Object>> sources) { }

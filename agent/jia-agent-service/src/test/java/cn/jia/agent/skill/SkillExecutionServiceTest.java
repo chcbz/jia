@@ -317,6 +317,22 @@ public class SkillExecutionServiceTest {
         assertEquals("RECORDED",service.startEffect(runtime,"task","run","generate",start()).disposition());
         assertTrue(observed.isEmpty());
     }
+    @Test void inputDescriptorClosesWhenLeaseChangesDuringStorageIo() {
+        var sources=mock(SkillSourceAccessService.class);service.setSkillSourceAccess(sources);
+        var input=Map.<String,Object>of("inputRef","source","sourceKind","CURRENT_CONVERSATION_ASSET",
+                "sha256",HASH,"byteLength",3,"contentMimeType","image/png","sourceIdentity",Map.of("kind","CURRENT_CONVERSATION_ASSET"));
+        var snap=snapshot();snap.put("inputs",List.of(input));replaceSnapshot(snap);
+        var closed=new java.util.concurrent.atomic.AtomicBoolean();
+        when(sources.open(any(),eq("task"),eq("42"),eq(1L),any())).thenAnswer(i->{
+            execution.setConversationLeaseVersion(2L);
+            return new RuntimeDownload("image","image/png",HASH,3,new java.io.ByteArrayInputStream(new byte[]{1,2,3}) {
+                @Override public void close() {closed.set(true);}
+            });
+        });
+        assertThrows(Failure.class,()->service.inputContent(runtime,"task","run","source",fence));
+        assertTrue(closed.get());
+    }
+
     @Test void nativeLocalFileReceiptDoesNotRequireALocalScriptRunner() {
         var input=new LinkedHashMap<String,Object>();input.put("inputRef","source");input.put("sourceKind","TASK_LINKED_WORKSPACE_VERSION");input.put("sha256",HASH);input.put("byteLength",1);input.put("contentMimeType","image/png");input.put("sourceIdentity",Map.of("fileId","file","version",1,"purpose","REFERENCE"));
         var snap=snapshot();snap.put("inputs",List.of(input));snap.put("sourceSnapshotDigest",sha(json(List.of(input))));skill.setSnapshotJson(json(snap)).setSnapshotSha256(sha(json(snap)));
@@ -451,12 +467,19 @@ public class SkillExecutionServiceTest {
         when(pwe.lockOutput(eq("0"),eq("client"),eq("owner"),eq("exec"),anyString())).thenAnswer(i->rows.get(i.getArgument(4)));
         when(pwe.lockOutputs("0","client","owner","exec")).thenAnswer(i->new ArrayList<>(rows.values()));
         doAnswer(i->{var row=i.getArgument(0,PersonalWorkspaceExecutionOutputEntity.class);rows.put(row.getOutputId(),row);return null;}).when(pwe).insertOutput(any());
-        when(storage.store(any(),any(),eq("text/plain"))).thenReturn(new PersonalWorkspaceStorage.StoredObject("private-object",hash,bytes.length,"text/plain"));
-        when(storage.read(any(),eq("private-object"),eq(hash),eq((long)bytes.length),eq("text/plain")))
-                .thenReturn(new PersonalWorkspaceStorage.StoredContent(bytes,hash,bytes.length,"text/plain"));
-        var first=service.stageConversationOutput(runtime,"task","run",fence,"output_native_1","result.txt","text/plain",bytes);
-        assertEquals(first,service.stageConversationOutput(runtime,"task","run",fence,"output_native_1","result.txt","text/plain",bytes));
-        verify(storage,times(1)).store(any(),any(),eq("text/plain"));verify(pwe,times(1)).insertOutput(any());
+        when(storage.storeStream(any(),any(),eq((long)bytes.length),eq("text/plain"))).thenReturn(new PersonalWorkspaceStorage.StoredObject("private-object",hash,bytes.length,"text/plain"));
+        when(storage.openStream(any(),eq("private-object"),eq(hash),eq((long)bytes.length),eq("text/plain")))
+                .thenAnswer(i -> new java.io.ByteArrayInputStream(bytes));
+        cn.jia.agent.service.PersonalWorkspaceService.UploadSource source = () -> new java.io.ByteArrayInputStream(bytes) {
+            @Override public byte[] readAllBytes() { throw new AssertionError("Native upload must stream"); }
+        };
+        var first=service.stageConversationOutputStream(runtime,"task","run",fence,"output_native_1","result.txt","text/plain",source,bytes.length,hash);
+        assertEquals(first,service.stageConversationOutputStream(runtime,"task","run",fence,"output_native_1","result.txt","text/plain",source,bytes.length,hash));
+        assertThrows(Failure.class, () -> service.stageConversationOutputStream(runtime,"task","run",fence,
+                "output_native_1","result.txt","text/plain",source,bytes.length,"0".repeat(64)));
+        assertThrows(Failure.class, () -> service.stageConversationOutputStream(runtime,"task","run",fence,
+                "output_native_1","result.txt","text/plain",source,bytes.length + 1,hash));
+        verify(storage,times(1)).storeStream(any(),any(),eq((long)bytes.length),eq("text/plain"));verify(pwe,times(1)).insertOutput(any());
         var command=new SkillExecutionService.ResultCommit(fence,skill.getSnapshotSha256(),null,
                 List.of(new OutputDeclaration("output_native_1",hash,bytes.length)),List.of(),List.of());
         var receipt=commit(runtime,command);assertEquals("RESULT_COMMITTED",receipt.state());assertEquals("COMMITTED",rows.get("output_native_1").getOutputState());

@@ -9,6 +9,7 @@ import cn.jia.agent.exception.AgentTaskCollaborationException;
 import cn.jia.agent.service.AgentSelectedOutputFinalizationException;
 import cn.jia.agent.service.AgentSelectedOutputFinalizationService;
 import cn.jia.agent.service.AgentTaskArtifactService;
+import cn.jia.agent.service.AgentTaskArtifactContentService;
 import cn.jia.agent.service.AgentTaskExecutionGrantException;
 import cn.jia.agent.service.AgentTaskExecutionGrantService;
 import cn.jia.agent.service.AgentTaskFormalDeliveryDecisionService;
@@ -32,6 +33,8 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 class AgentSelectedOutputFinalizationServiceImplTest {
+    private record TestPublication(cn.jia.agent.entity.AgentTaskArtifactPublishDTO command)
+            implements AgentTaskArtifactService.PreparedPublication { }
     @Test
     void actualHappyPathClaimsStartsPublishesAndSubmitsWithoutAcceptingOrLeakingToken() {
         Fixture f=new Fixture();
@@ -48,7 +51,7 @@ class AgentSelectedOutputFinalizationServiceImplTest {
         verify(f.leases).start(anyString(),anyString(),anyString(),anyString(),eq("work-1"),any());
         verify(f.leases,never()).heartbeat(anyString(),anyString(),anyString(),anyString(),anyString(),any());
         var artifact=org.mockito.ArgumentCaptor.forClass(cn.jia.agent.entity.AgentTaskArtifactPublishDTO.class);
-        verify(f.artifacts,times(2)).publish(eq("0"),eq("client-1"),eq("owner-1"),eq("task-1"),eq("agent-1"),artifact.capture());
+        verify(f.artifacts,times(2)).prepareStreamPublication(eq("0"),eq("client-1"),eq("owner-1"),eq("task-1"),eq("agent-1"),artifact.capture(),any());
         assertTrue(artifact.getAllValues().stream().allMatch(v->"agent-1".equals(v.getProducerAgentId())));
         verify(f.submissions).submit(eq("0"),eq("client-1"),eq("owner-1"),eq("task-1"),eq("agent-1"),any());
         verifyNoInteractions(f.decisions);
@@ -96,7 +99,7 @@ class AgentSelectedOutputFinalizationServiceImplTest {
                 ()->f.service.prepare(f.scope,f.command("forged-run")));
         assertEquals(AgentSelectedOutputFinalizationException.Reason.CONFLICT,conflict.reason());
         verify(f.leases,times(1)).claim(anyString(),anyString(),anyString(),anyString(),anyString(),any());
-        verify(f.artifacts,times(2)).publish(anyString(),anyString(),anyString(),anyString(),anyString(),any());
+        verify(f.artifacts,times(2)).publishPrepared(anyString(),anyString(),anyString(),anyString(),anyString(),any());
     }
 
     @Test
@@ -121,7 +124,7 @@ class AgentSelectedOutputFinalizationServiceImplTest {
                 ()->f.service.prepare(f.scope,f.command("run-1")));
         assertEquals(AgentSelectedOutputFinalizationException.Reason.GRANT_CHANGED,denied.reason());
         assertFalse(denied.getMessage().contains("hidden"));
-        verify(f.artifacts,never()).publish(anyString(),anyString(),anyString(),anyString(),anyString(),any());
+        verify(f.artifacts,never()).publishPrepared(anyString(),anyString(),anyString(),anyString(),anyString(),any());
         verifyNoInteractions(f.submissions,f.decisions);
     }
 
@@ -198,7 +201,7 @@ class AgentSelectedOutputFinalizationServiceImplTest {
         var mixed=selected(f,List.of(output,f.command("run-1").outputs().getFirst()));
         assertEquals("READY_TO_SUBMIT",f.service.prepare(f.scope,mixed).stage());
         assertTrue(f.publishedManifest.get().contains("COMPLETED_MESSAGE"));assertTrue(f.publishedManifest.get().contains("out-1"));
-        verify(f.artifacts,times(3)).publish(anyString(),anyString(),anyString(),anyString(),anyString(),any());
+        verify(f.artifacts,times(3)).publishPrepared(anyString(),anyString(),anyString(),anyString(),anyString(),any());
     }
     @Test void messageReferenceDriftCannotReplaceExistingOperation() {
         Fixture f=new Fixture();var first=selected(f,List.of(text("9",f.bytes)));
@@ -236,9 +239,9 @@ class AgentSelectedOutputFinalizationServiceImplTest {
         batch.setItems(List.of(sourceItem("old-first",2,f.hash),sourceItem("old-second",7,f.hash)));
         when(f.reads.listForTaskOwner("0","client-1","owner-1","task-1"))
                 .thenAnswer(i->f.delivery.get()==null?List.of(batch):List.of(batch,f.delivery.get()));
-        when(f.contents.readContentForTaskOwner(eq("0"),eq("client-1"),eq("owner-1"),eq("task-1"),anyString(),anyInt()))
-                .thenAnswer(i->new cn.jia.agent.entity.AgentTaskArtifactContentDTO(i.getArgument(4),i.getArgument(5),
-                        f.hash,(long)f.bytes.length,"image/png",f.bytes));
+        when(f.contents.openContentForTaskOwner(eq("0"),eq("client-1"),eq("owner-1"),eq("task-1"),anyString(),anyInt()))
+                .thenAnswer(i->new AgentTaskArtifactContentService.StreamContent(i.getArgument(4),i.getArgument(5),
+                        f.hash,(long)f.bytes.length,"image/png",new java.io.ByteArrayInputStream(f.bytes)));
         return List.of(first,second);
     }
     private static cn.jia.agent.entity.AgentTaskFormalDeliveryItemDTO sourceItem(String id,int version,String hash) {
@@ -257,7 +260,7 @@ class AgentSelectedOutputFinalizationServiceImplTest {
         verify(f.contents,times(2)).readContentForTaskOwner("0","client-1","owner-1","task-1","old-first",2);
         verify(f.contents,times(2)).readContentForTaskOwner("0","client-1","owner-1","task-1","old-second",7);
         assertEquals("SUBMITTED",f.service.submit(f.scope,"task-1","op-1",command.immutableDigest()).stage());
-        verify(f.artifacts,times(4)).publish(anyString(),anyString(),anyString(),anyString(),eq("agent-1"),any());
+        verify(f.artifacts,times(4)).publishPrepared(anyString(),anyString(),anyString(),anyString(),eq("agent-1"),any());
         verify(f.leases,times(1)).claim(anyString(),anyString(),anyString(),anyString(),eq("work-1"),any());
         verifyNoInteractions(f.decisions);
     }
@@ -276,13 +279,13 @@ class AgentSelectedOutputFinalizationServiceImplTest {
             }
             when(f.reads.listForTaskOwner("0","client-1","owner-1","task-1"))
                     .thenReturn("absent".equals(drift)?List.of():List.of(batch));
-            if("denied".equals(drift))when(f.contents.readContentForTaskOwner("0","client-1","owner-1","task-1","old-first",2))
+            if(List.of("denied","bytes").contains(drift))when(f.contents.openContentForTaskOwner("0","client-1","owner-1","task-1","old-first",2))
                     .thenThrow(new AgentTaskCollaborationException(AgentTaskCollaborationException.Reason.FORBIDDEN,"private-source-detail"));
-            else if(List.of("bytes","mime","length").contains(drift))
-                when(f.contents.readContentForTaskOwner("0","client-1","owner-1","task-1","old-first",2))
-                    .thenReturn(new cn.jia.agent.entity.AgentTaskArtifactContentDTO("old-first",2,f.hash,
+            else if(List.of("mime","length").contains(drift))
+                when(f.contents.openContentForTaskOwner("0","client-1","owner-1","task-1","old-first",2))
+                    .thenReturn(new AgentTaskArtifactContentService.StreamContent("old-first",2,f.hash,
                             (long)f.bytes.length+("length".equals(drift)?1:0),"mime".equals(drift)?"text/plain":"image/png",
-                            "bytes".equals(drift)?new byte[]{1,2}:f.bytes));
+                            new java.io.ByteArrayInputStream(f.bytes)));
             var error=assertThrows(AgentSelectedOutputFinalizationException.class,()->f.service.prepare(f.scope,selected(f,List.of(source))),drift);
             assertFalse(error.getMessage().contains("private-source-detail"));
             verifyNoInteractions(f.grants,f.leases,f.artifacts,f.submissions,f.decisions);assertNull(f.jdbc.phase);
@@ -290,12 +293,12 @@ class AgentSelectedOutputFinalizationServiceImplTest {
     }
     @Test void sourceIsReauthorizedBeforePublicationNotOnlyDuringInitialResolution() {
         Fixture f=new Fixture();var source=retained(f).getFirst();
-        when(f.contents.readContentForTaskOwner("0","client-1","owner-1","task-1","old-first",2))
-                .thenReturn(new cn.jia.agent.entity.AgentTaskArtifactContentDTO("old-first",2,f.hash,(long)f.bytes.length,"image/png",f.bytes))
+        when(f.contents.openContentForTaskOwner("0","client-1","owner-1","task-1","old-first",2))
+                .thenReturn(new AgentTaskArtifactContentService.StreamContent("old-first",2,f.hash,(long)f.bytes.length,"image/png",new java.io.ByteArrayInputStream(f.bytes)))
                 .thenThrow(new AgentTaskCollaborationException(AgentTaskCollaborationException.Reason.FORBIDDEN,"revoked"));
         assertThrows(AgentSelectedOutputFinalizationException.class,()->f.service.prepare(f.scope,selected(f,List.of(source))));
         verify(f.leases).claim(anyString(),anyString(),anyString(),anyString(),anyString(),any());
-        verify(f.artifacts,never()).publish(anyString(),anyString(),anyString(),anyString(),anyString(),any());
+        verify(f.artifacts,never()).publishPrepared(anyString(),anyString(),anyString(),anyString(),anyString(),any());
         verifyNoInteractions(f.submissions,f.decisions);
     }
     @Test void oldPendingContractNeverResumesAndCommittedHistoryDoesNotRepairOrAccept() {
@@ -348,9 +351,16 @@ class AgentSelectedOutputFinalizationServiceImplTest {
                 dto.setStatus("running");dto.setVersion(8L);return dto;});
             when(artifacts.getVersion(anyString(),anyString(),anyString(),anyString(),anyString(),anyString(),eq(1)))
                     .thenThrow(new AgentTaskCollaborationException(AgentTaskCollaborationException.Reason.NOT_FOUND,"absent"));
-            when(artifacts.publish(anyString(),anyString(),anyString(),eq("task-1"),eq("agent-1"),any())).thenAnswer(i->{
-                var c=(cn.jia.agent.entity.AgentTaskArtifactPublishDTO)i.getArgument(5);
-                if ("application/json".equals(c.getContentMimeType())) publishedManifest.set(new String(c.getContentBytes(),java.nio.charset.StandardCharsets.UTF_8));
+            when(artifacts.prepareStreamPublication(anyString(),anyString(),anyString(),eq("task-1"),eq("agent-1"),any(),any())).thenAnswer(i->{
+                var c=i.getArgument(5,cn.jia.agent.entity.AgentTaskArtifactPublishDTO.class);
+                try(var stream=i.getArgument(6,cn.jia.agent.service.PersonalWorkspaceService.UploadSource.class).open()) {
+                    var bytes=stream.readAllBytes();assertEquals(c.getContentByteLength().longValue(),bytes.length);
+                    if("application/json".equals(c.getContentMimeType()))publishedManifest.set(new String(bytes,java.nio.charset.StandardCharsets.UTF_8));
+                }
+                return new TestPublication(c);
+            });
+            when(artifacts.publishPrepared(anyString(),anyString(),anyString(),eq("task-1"),eq("agent-1"),any())).thenAnswer(i->{
+                var c=i.getArgument(5,TestPublication.class).command();
                 AgentTaskArtifactViewDTO v=new AgentTaskArtifactViewDTO();v.setArtifactId(c.getArtifactId());
                 v.setTaskId("task-1");v.setWorkItemId("work-1");v.setProducerAgentId("agent-1");
                 v.setArtifactType(c.getArtifactType());v.setTitle(c.getTitle());v.setVisibility("task_members");

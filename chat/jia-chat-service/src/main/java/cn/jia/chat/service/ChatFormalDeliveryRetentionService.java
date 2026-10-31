@@ -85,18 +85,19 @@ public class ChatFormalDeliveryRetentionService {
         var catalog=new ArrayList<Map<String,Object>>();
         for(var item:basis.items())if("RESULT".equals(item.displayRole())
                 && revision.parent().validated().interactionOutcome().revision().targetArtifactIds().contains(item.artifactId())) {
-            var content=contents.readContentForTaskOwner(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),basis.taskId(),item.artifactId(),Integer.parseInt(item.artifactVersion()));
+            try(var content=contents.openContentForTaskOwner(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),basis.taskId(),item.artifactId(),Integer.parseInt(item.artifactVersion()))) {
             verifyContent(item,content);
             var identity=Map.<String,Object>of("kind","FORMAL_ARTIFACT","sourceDeliveryId",basis.deliveryId(),
                     "sourceArtifactId",item.artifactId(),"sourceArtifactVersion",item.artifactVersion(),
                     "sourceRequestId",basis.sourceRequestId(),"parentFinalDigest",revision.parent().outcome().finalDigest());
             var source=new LinkedHashMap<String,Object>();source.put("sourceKind","FORMAL_ARTIFACT");
             source.put("selectorKind","FORMAL_ARTIFACT");source.put("sourceIdentity",identity);
-            String mime=content.getContentMimeType();source.put("mediaType",mime.startsWith("image/")?"image":mime.startsWith("audio/")?"audio":mime.startsWith("text/")?"text":"file");
-            source.put("contentMimeType",mime);source.put("contentHash",item.contentHash());source.put("byteLength",String.valueOf(content.getContentByteLength()));
+            String mime=content.contentMimeType();source.put("mediaType",mime.startsWith("image/")?"image":mime.startsWith("audio/")?"audio":mime.startsWith("text/")?"text":"file");
+            source.put("contentMimeType",mime);source.put("contentHash",item.contentHash());source.put("byteLength",String.valueOf(content.byteLength()));
             source.put("parentRequestId",basis.sourceRequestId());source.put("parentStepId",null);
             source.put("sourceRefId",ChatTypedDeliberationContextService.sourceRefId(contextScope,source));
             catalog.add(Collections.unmodifiableMap(source));
+            } catch(java.io.IOException failure) {throw unavailable();}
         }
         return List.copyOf(catalog);
     }
@@ -124,19 +125,26 @@ public class ChatFormalDeliveryRetentionService {
                 && item.contentHash().equals(x.getContentHash())))throw unavailable();
         return item;
     }
-    public cn.jia.agent.service.PersonalWorkspaceExecutionService.RuntimeContent readRevisionMaterial(
+    public cn.jia.agent.service.PersonalWorkspaceExecutionService.RuntimeDownload openRevisionMaterial(
             cn.jia.agent.service.PersonalWorkspaceExecutionService.OwnerScope scope,String task,String conversation,long generation,Map<String,Object> input) {
         var item=authorizeRevisionMaterial(scope,task,conversation,generation,input);
-        var content=contents.readContentForTaskOwner(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),task,item.artifactId(),Integer.parseInt(item.artifactVersion()));
-        verifyContent(item,content);
-        if(!content.getContentMimeType().equals(input.get("contentMimeType")) || content.getContentByteLength()!=ChatSkillSourceAccessService.decimal(input.get("byteLength")))throw unavailable();
-        return new cn.jia.agent.service.PersonalWorkspaceExecutionService.RuntimeContent("formal-artifact",content.getContentMimeType(),content.getContent());
+        var content=contents.openContentForTaskOwner(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),task,item.artifactId(),Integer.parseInt(item.artifactVersion()));
+        try {
+            if(!item.artifactId().equals(content.artifactId())||!item.artifactVersion().equals(String.valueOf(content.artifactVersion()))
+                    ||!item.contentHash().equals(content.sha256())||!content.contentMimeType().equals(input.get("contentMimeType"))
+                    ||content.byteLength()!=ChatSkillSourceAccessService.decimal(input.get("byteLength")))throw unavailable();
+            authorizeRevisionMaterial(scope,task,conversation,generation,input);
+            return new cn.jia.agent.service.PersonalWorkspaceExecutionService.RuntimeDownload("formal-artifact",content.contentMimeType(),content.sha256(),content.byteLength(),content.content());
+        } catch(RuntimeException | Error rejected) {
+            try {content.close();} catch(java.io.IOException closeFailure) {rejected.addSuppressed(closeFailure);}
+            throw rejected;
+        }
     }
-    private static void verifyContent(ChatDeliveryRevisionContract.Item item,cn.jia.agent.entity.AgentTaskArtifactContentDTO content) {
-        if(content==null || !item.artifactId().equals(content.getArtifactId()) || !item.artifactVersion().equals(String.valueOf(content.getArtifactVersion()))
-                || !item.contentHash().equals(content.getContentHash()) || content.getContent()==null || content.getContentByteLength()==null
-                || content.getContent().length!=content.getContentByteLength() || !sha(content.getContent()).equals(item.contentHash())
-                || content.getContentMimeType()==null)throw unavailable();
+
+    private static void verifyContent(ChatDeliveryRevisionContract.Item item,cn.jia.agent.service.AgentTaskArtifactContentService.StreamContent content) {
+        // The artifact boundary has already verified bytes; lineage checks only the fixed identity.
+        if(content==null||!item.artifactId().equals(content.artifactId())||!item.artifactVersion().equals(String.valueOf(content.artifactVersion()))
+                ||!item.contentHash().equals(content.sha256())||content.contentMimeType()==null)throw unavailable();
     }
 
     public void requireReplacementProof(ChatTypedDeliberationStore.Scope scope,String task,Lineage lineage,
@@ -200,16 +208,26 @@ public class ChatFormalDeliveryRetentionService {
         if(!"changes_requested".equals(batch.getState()) || !lineage.receipt().deliveryVersion().equals(String.valueOf(batch.getDeliveryVersion()))
                 || batch.getItems().stream().noneMatch(i->frozen.artifactId().equals(i.getArtifactId())
                     && frozen.artifactVersion().equals(String.valueOf(i.getArtifactVersion())) && frozen.contentHash().equals(i.getContentHash())))throw unavailable();
-        var content=contents.readContentForTaskOwner(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),task,formal.sourceArtifactId(),formal.sourceArtifactVersion());
-        if(content==null || !formal.sourceArtifactId().equals(content.getArtifactId()) || !Integer.valueOf(formal.sourceArtifactVersion()).equals(content.getArtifactVersion())
-                || !selection.sha256().equals(content.getContentHash()) || content.getContent()==null || content.getContentByteLength()==null
-                || content.getContent().length!=content.getContentByteLength() || !sha(content.getContent()).equals(selection.sha256()))throw unavailable();
-        return AgentSelectedOutputFinalizationService.SourceOutput.formalArtifact(formal,selection.sha256(),content.getContentMimeType(),selection.title(),selection.purpose(),content.getContent());
+        try(var content=contents.openContentForTaskOwner(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),task,formal.sourceArtifactId(),formal.sourceArtifactVersion())) {
+            verifyContent(frozen,content);
+            return new AgentSelectedOutputFinalizationService.SourceOutput(null,null,null,null,null,selection.sha256(),content.contentMimeType(),content.byteLength(),
+                    selection.title(),selection.purpose(),null,null,formal,
+                    ()->openRetained(scope,task,formal,selection.sha256(),content.contentMimeType(),content.byteLength()));
+        } catch(java.io.IOException failure) {throw unavailable();}
     }
-    private static String sha(byte[] bytes) {
-        try{return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes));}
-        catch(java.security.NoSuchAlgorithmException e){throw new IllegalStateException(e);}
+    private java.io.InputStream openRetained(ChatSelectedOutputFinalizationService.Scope scope,String task,
+            cn.jia.agent.service.SelectedOutputFinalizationDigest.FormalArtifactSource formal,String hash,String mime,long length) {
+        var content=contents.openContentForTaskOwner(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),task,formal.sourceArtifactId(),formal.sourceArtifactVersion());
+        try {
+            if(!formal.sourceArtifactId().equals(content.artifactId())||formal.sourceArtifactVersion()!=content.artifactVersion()
+                    ||!hash.equals(content.sha256())||!mime.equals(content.contentMimeType())||length!=content.byteLength())throw unavailable();
+            return content.content();
+        } catch(RuntimeException | Error rejected) {
+            try {content.close();} catch(java.io.IOException closeFailure) {rejected.addSuppressed(closeFailure);}
+            throw rejected;
+        }
     }
+
     @SuppressWarnings("unchecked") private static Map<String,Object> map(Object value) {return (Map<String,Object>)value;}
     private static ChatDeliveryReviewContract.SourceUnavailable unavailable() {return new ChatDeliveryReviewContract.SourceUnavailable();}
 }

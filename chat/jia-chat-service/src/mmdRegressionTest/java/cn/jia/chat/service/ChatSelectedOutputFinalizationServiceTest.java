@@ -60,7 +60,7 @@ class ChatSelectedOutputFinalizationServiceTest {
         assertEquals("submitted",receipt.deliveryState());assertEquals("reviewing",receipt.taskState());
         assertEquals("9",receipt.taskVersion());assertEquals(f.command().selectedOutputs(),receipt.selectedOutputs());
         verify(f.agent).prepare(any(),argThat(v->v.outputs().size()==1
-                && v.outputs().getFirst().bytes().length==f.bytes.length
+                && v.outputs().getFirst().byteLength()==f.bytes.length && v.outputs().getFirst().contentSource()!=null
                 && "exec-1".equals(v.outputs().getFirst().executionId())
                 && "run-1".equals(v.outputs().getFirst().runId())));
     }
@@ -146,16 +146,28 @@ class ChatSelectedOutputFinalizationServiceTest {
         assertFalse(receipt.retryable());verify(f.agent,never()).prepare(any(),any());verifyNoInteractions(f.executions);
     }
 
+    @Test void storageCorruptionAndMissingFileAreClassifiedWithoutStartingPromotion() {
+        for(var reason:List.of(PersonalWorkspaceExecutionService.Reason.STORAGE_UNAVAILABLE,PersonalWorkspaceExecutionService.Reason.NOT_FOUND)) {
+            Fixture f=new Fixture();f.sourceReady();f.advanceByArguments();
+            when(f.executions.openConversationOutput(any(),eq("task-1"),eq("run-1"),eq("out-1")))
+                    .thenThrow(new PersonalWorkspaceExecutionService.Failure(reason));
+            var receipt=f.service.submit(f.scope,"task-1",Fixture.KEY,f.command());
+            boolean storage=reason==PersonalWorkspaceExecutionService.Reason.STORAGE_UNAVAILABLE;
+            assertEquals(storage?"FINALIZATION_STORAGE_UNAVAILABLE":"FINALIZATION_SOURCE_UNAVAILABLE",receipt.errorCode());
+            assertEquals(storage,receipt.retryable());verify(f.agent,never()).prepare(any(),any());
+        }
+    }
+
     @Test
     void exactBytesHashMimeAndLengthAreRecheckedNotTrustedFromBrowserOrProjection() {
-        for (String drift:List.of("mime","hash","length","bytes","execution","output","missing")) {
+        for (String drift:List.of("mime","hash","length","execution","output")) {
             Fixture f=new Fixture();f.sourceReady();f.advanceByArguments();
-            var output="missing".equals(drift)?null:new PersonalWorkspaceExecutionService.ConversationOutput(
+            var output=new PersonalWorkspaceExecutionService.ConversationDownload(
                     "execution".equals(drift)?"other-exec":"exec-1","output".equals(drift)?"other-out":"out-1","chosen.png",
                     "mime".equals(drift)?"image/jpeg":"image/png","hash".equals(drift)?"a".repeat(64):f.hash,
                     "length".equals(drift)?f.bytes.length+1:f.bytes.length,
-                    "bytes".equals(drift)?"forged".getBytes(StandardCharsets.UTF_8):f.bytes);
-            when(f.executions.readConversationOutput(any(),eq("task-1"),eq("run-1"),eq("out-1"))).thenReturn(output);
+                    new java.io.ByteArrayInputStream(f.bytes));
+            when(f.executions.openConversationOutput(any(),eq("task-1"),eq("run-1"),eq("out-1"))).thenReturn(output);
             var receipt=f.service.submit(f.scope,"task-1",Fixture.KEY,f.command());
             assertEquals("FINALIZATION_SOURCE_UNAVAILABLE",receipt.errorCode(),drift);assertFalse(receipt.retryable());
             verify(f.agent,never()).prepare(any(),any());
@@ -452,9 +464,9 @@ class ChatSelectedOutputFinalizationServiceTest {
                             "exec-1",committed,2,1,2));
             when(store.source(anyString(),anyString(),anyString(),eq("100"),eq(4L),eq("req-1"),eq("step-1"),eq("out-1")))
                     .thenReturn(new ChatSelectedOutputFinalizationStore.SourceFact(4,"exec-1","run-1","image/png",hash,bytes.length));
-            when(executions.readConversationOutput(any(),eq("task-1"),eq("run-1"),eq("out-1")))
-                    .thenReturn(new PersonalWorkspaceExecutionService.ConversationOutput("exec-1","out-1","chosen.png",
-                            "image/png",hash,bytes.length,bytes));
+            when(executions.openConversationOutput(any(),eq("task-1"),eq("run-1"),eq("out-1")))
+                    .thenReturn(new PersonalWorkspaceExecutionService.ConversationDownload("exec-1","out-1","chosen.png",
+                            "image/png",hash,bytes.length,new java.io.ByteArrayInputStream(bytes)));
         }
         void agentHappy(){
             when(agent.prepare(any(),any())).thenAnswer(i->{var c=(AgentSelectedOutputFinalizationService.PrepareCommand)i.getArgument(1);

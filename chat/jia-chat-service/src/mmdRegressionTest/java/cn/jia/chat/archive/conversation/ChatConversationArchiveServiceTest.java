@@ -54,10 +54,10 @@ class ChatConversationArchiveServiceTest {
         store.sources.put(asset, new Source(asset, 1, "42", 3, "request-1", 1,
                 "step-1", "task-1", "execution-1", "run-1", "output-1",
                 "image/png", hash, ASSET_BYTES.length));
-        when(executions.readConversationOutput(any(), eq("task-1"), eq("run-1"), eq("output-1")))
-                .thenReturn(new PersonalWorkspaceExecutionService.ConversationOutput("execution-1",
+        when(executions.openConversationOutput(any(), eq("task-1"), eq("run-1"), eq("output-1")))
+                .thenAnswer(i -> new PersonalWorkspaceExecutionService.ConversationDownload("execution-1",
                         "output-1", "/untrusted/runtime/path", "image/png", hash,
-                        ASSET_BYTES.length, ASSET_BYTES));
+                        ASSET_BYTES.length, new java.io.ByteArrayInputStream(ASSET_BYTES)));
         when(workspace.archiveConversationAsset(any(), any()))
                 .thenReturn(upload(hash, "image/png", ASSET_BYTES.length));
     }
@@ -71,7 +71,7 @@ class ChatConversationArchiveServiceTest {
     }
 
     @Test
-    void assetContractRetainsLegacyWorkspaceKeyAndReceipt() {
+    void assetContractRetainsLegacyWorkspaceKeyAndReceipt() throws Exception {
         readyAsset("asset_1");
         var receipt = service.archive(OWNER, asset("archive-key-0001", "asset_1"));
         assertEquals("saved", receipt.state());
@@ -82,7 +82,10 @@ class ChatConversationArchiveServiceTest {
                 argThat(command -> command.idempotency().key().startsWith("chat-archive-")
                         && command.idempotency().key().length() == 77
                         && command.assetId().equals("asset_1") && command.revision() == 1
-                        && java.util.Arrays.equals(command.content(), ASSET_BYTES)));
+                        && command.byteLength()==ASSET_BYTES.length && command.source()!=null));
+        var captured=ArgumentCaptor.forClass(PersonalWorkspaceService.ConversationArchiveCommand.class);
+        verify(workspace).archiveConversationAsset(any(),captured.capture());
+        try(var source=captured.getValue().source().open()) {assertArrayEquals(ASSET_BYTES,source.readAllBytes());}
     }
 
     @Test

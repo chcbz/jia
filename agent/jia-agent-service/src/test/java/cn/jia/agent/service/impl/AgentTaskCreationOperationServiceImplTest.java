@@ -256,6 +256,21 @@ class AgentTaskCreationOperationServiceImplTest {
     }
 
     @Test
+    void moreThanThirtyTwoAuthorizedMaterialsPersistAndReplayWithoutSecondWrites() {
+        var inputs = java.util.stream.IntStream.range(0, 33)
+                .mapToObj(i -> input("file-" + i, 1)).toList();
+        var first = inTransaction(() -> service.create(SCOPE, "many-inputs", materialCommand(inputs)));
+        assertEquals(33, first.receipt().inputRefs().size());
+        var replay = inTransaction(() -> service.create(SCOPE, "many-inputs", materialCommand(inputs)));
+        assertTrue(replay.replay());
+        assertEquals(first.receipt(), replay.receipt());
+        when(operations.find("0", "client-a", "owner-a", "many-inputs")).thenReturn(stored.get());
+        assertEquals(first.receipt(), service.getByIdempotencyKey(SCOPE, "many-inputs", 2));
+        verify(agents, times(1)).createTask(any(AgentService.TaskOwnerScope.class), any());
+        verify(links, times(33)).create(any(), eq("task-1"), any());
+    }
+
+    @Test
     void v2MixedMaterialsUseExactVersionsCanonicalNeutralJsonAndReadOnlyReplay() throws Exception {
         var inputs = List.of(input("file-d", 3), input("file-b", 2), input("file-a", 1), input("file-c", 1));
         when(workspace.findVersion("0", "client-a", "owner-a", "file-b", 2))

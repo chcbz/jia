@@ -34,14 +34,28 @@ class TypedDeliberationNativeDeclarationTest {
         assertEquals(TypedDeliberationDeclaration.State.UNSUPPORTED,TypedDeliberationDeclaration.parse(value).state());
         nativeExecution.put("outputMimeTypes",List.of("image/png"));
         assertEquals(TypedDeliberationDeclaration.State.READY,TypedDeliberationDeclaration.parse(value).state());
-        var office=List.of("text/plain","image/png",
+        var office=List.of("text/plain","image/png","application/pdf",
                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
         nativeExecution.put("outputMimeTypes",office);
         var officeParsed=TypedDeliberationDeclaration.parse(value);
         assertEquals(TypedDeliberationDeclaration.State.READY,officeParsed.state());
         assertEquals(office,((Map<?,?>)officeParsed.frozenReceipt().get("nativeExecution")).get("outputMimeTypes"));
-        nativeExecution.put("outputMimeTypes",List.of("image/jpeg"));
+        for (String mime : List.of("image/jpeg", "text/csv", "video/mp4", "application/vnd.example.new-format")) {
+            nativeExecution.put("outputMimeTypes",List.of(mime));
+            assertEquals(TypedDeliberationDeclaration.State.READY,TypedDeliberationDeclaration.parse(value).state());
+        }
+        value.put("diagnosticLabel", "future optional metadata");
+        nativeExecution.put("displayName", "native files");
+        var extended=TypedDeliberationDeclaration.parse(value);
+        assertEquals(TypedDeliberationDeclaration.State.READY, extended.state());
+        assertFalse(extended.frozenReceipt().containsKey("diagnosticLabel"));
+        for (String mime : List.of("*/*", "not-a-mime", "text/plain; charset=utf-8", "text/plain\r\nX-Injected: yes")) {
+            nativeExecution.put("outputMimeTypes",List.of(mime));
+            assertEquals(TypedDeliberationDeclaration.State.UNSUPPORTED,TypedDeliberationDeclaration.parse(value).state());
+        }
+        nativeExecution.put("outputMimeTypes", List.of("video/mp4"));
+        nativeExecution.put("toolPolicyRef", "UNKNOWN_EXECUTION_POLICY");
         assertEquals(TypedDeliberationDeclaration.State.UNSUPPORTED,TypedDeliberationDeclaration.parse(value).state());
     }
 }

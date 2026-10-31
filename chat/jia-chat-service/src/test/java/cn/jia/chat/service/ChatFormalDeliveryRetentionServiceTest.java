@@ -52,19 +52,19 @@ class ChatFormalDeliveryRetentionServiceTest {
         assertThrows(UnsupportedOperationException.class,()->selections.clear());
     }
     @Test void trustedNativeInputUsesFixedFormalBytesWithoutInventingPublicSelector() {
-        when(contents.readContentForTaskOwner("0","client","owner","task_fixture","target",1))
-                .thenReturn(new AgentTaskArtifactContentDTO("target",1,hash(),(long)BYTES.length,"text/plain",BYTES));
+        when(contents.openContentForTaskOwner("0","client","owner","task_fixture","target",1))
+                .thenReturn(new AgentTaskArtifactContentService.StreamContent("target",1,hash(),(long)BYTES.length,"text/plain",new java.io.ByteArrayInputStream(BYTES)));
         var catalog=service.prepareRevisionSources(bound());assertEquals(1,catalog.size());var source=catalog.getFirst();
         assertEquals("FORMAL_ARTIFACT",source.get("sourceKind"));assertEquals(hash(),source.get("contentHash"));
         assertFalse(source.containsKey("selector"));assertTrue(source.get("sourceIdentity") instanceof Map);
         assertEquals(source.get("sourceRefId"),ChatTypedDeliberationContextService.sourceRefId(
                 new ChatTypedDeliberationContextService.Scope("0","owner","client","7",1),source));
-        verify(contents,never()).readContentForTaskOwner(anyString(),anyString(),anyString(),anyString(),eq("manifest"),anyInt());
+        verify(contents,never()).openContentForTaskOwner(anyString(),anyString(),anyString(),anyString(),eq("manifest"),anyInt());
     }
     @Test void missingOrChangedFixedBytesRejectWholePreparation() {
         assertThrows(ChatDeliveryReviewContract.SourceUnavailable.class,()->service.prepareRevisionSources(bound()));
-        when(contents.readContentForTaskOwner("0","client","owner","task_fixture","target",1))
-                .thenReturn(new AgentTaskArtifactContentDTO("target",1,hash(),1L,"text/plain",new byte[]{0}));
+        when(contents.openContentForTaskOwner("0","client","owner","task_fixture","target",1))
+                .thenReturn(new AgentTaskArtifactContentService.StreamContent("target",1,"b".repeat(64),1L,"text/plain",new java.io.ByteArrayInputStream(new byte[]{0})));
         assertThrows(ChatDeliveryReviewContract.SourceUnavailable.class,()->service.prepareRevisionSources(bound()));
     }
     @Test void bothOutboxIdentifiersFit64CharacterColumnsAndRemainDomainSeparated() {

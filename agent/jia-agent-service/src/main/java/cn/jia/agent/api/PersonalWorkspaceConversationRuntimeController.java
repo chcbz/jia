@@ -29,9 +29,6 @@ import tools.jackson.databind.json.JsonMapper;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
-import java.util.HexFormat;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
@@ -108,19 +105,20 @@ public final class PersonalWorkspaceConversationRuntimeController {
 
     @PostMapping(value="/{taskId}/runs/{runId}/conversation/inputs/{inputRef}/content",
             consumes=MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<byte[]> inputContent(@PathVariable String taskId,@PathVariable String runId,
+    public void inputContent(@PathVariable String taskId,@PathVariable String runId,
             @PathVariable String inputRef,@RequestBody cn.jia.core.entity.JsonRequest<FenceRequest> protocolRequest,
-            HttpServletRequest request,Authentication authentication) {
-        FenceRequest fence = protocolRequest == null ? null : protocolRequest.data();
+            HttpServletRequest request,Authentication authentication,jakarta.servlet.http.HttpServletResponse response) throws IOException {
+        FenceRequest fence=protocolRequest==null?null:protocolRequest.data();
         noQuery(request);
-        var loaded=skillCall(()->skills().inputContent(scope(authentication),taskId,runId,inputRef,fence(fence)));
-        var content=runtimeAuthentication.withNativeFence(authentication,()->loaded);
-        if (content==null || content.bytes()==null) throw new BadRequest();
-        return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL,CACHE_CONTROL)
-                .header("X-Content-Type-Options","nosniff")
-                .header(HttpHeaders.CONTENT_DISPOSITION,"attachment; filename=reference.bin")
-                .contentType(MediaType.APPLICATION_OCTET_STREAM)
-                .contentLength(content.bytes().length).body(content.bytes());
+        try(var content=skillCall(()->skills().inputContent(scope(authentication),taskId,runId,inputRef,fence(fence)))) {
+            runtimeAuthentication.withNativeFence(authentication,()->true);
+            response.setHeader(HttpHeaders.CACHE_CONTROL,CACHE_CONTROL);
+            response.setHeader("X-Content-Type-Options","nosniff");
+            response.setHeader(HttpHeaders.CONTENT_DISPOSITION,"attachment; filename=reference.bin");
+            response.setContentType(MediaType.APPLICATION_OCTET_STREAM_VALUE);
+            response.setContentLengthLong(content.byteLength());
+            content.content().transferTo(response.getOutputStream());
+        }
     }
 
     @PostMapping(value="/{taskId}/runs/{runId}/conversation/outputs/{outputId}/content",
@@ -135,11 +133,10 @@ public final class PersonalWorkspaceConversationRuntimeController {
         var fence=fence(version,token);
         if (file==null || sha256==null || !sha256.matches("[0-9a-f]{64}")
                 || length==null || !length.matches("0|[1-9][0-9]*")) throw new BadRequest();
-        byte[] bytes=file.getBytes();
-        // Check declared content before any storage side effect; service rechecks the fence under root lock.
-        if (!length.equals(Long.toString(bytes.length)) || !sha256.equals(digest(bytes))) throw new BadRequest();
-        return cn.jia.core.config.ApiJsonResponses.success(created(executions.stageConversationOutput(scope(authentication),taskId,runId,fence,
-                outputId,file.getOriginalFilename(),file.getContentType(),bytes)), NativeOutputWire.StagedOutputResponse::from);
+        if (!length.equals(Long.toString(file.getSize()))) throw new BadRequest();
+        return cn.jia.core.config.ApiJsonResponses.success(created(executions.stageConversationOutputStream(
+                scope(authentication),taskId,runId,fence,outputId,file.getOriginalFilename(),file.getContentType(),
+                file::getInputStream,file.getSize(),sha256)), NativeOutputWire.StagedOutputResponse::from);
     }
 
     private cn.jia.agent.service.SkillExecutionService skills() {
@@ -232,10 +229,20 @@ public final class PersonalWorkspaceConversationRuntimeController {
     public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> unavailable(PersonalWorkspaceExecutionService.Failure ignored) {
         return error(HttpStatus.NOT_FOUND,"CONVERSATION_EXECUTION_UNAVAILABLE");
     }
-    @ExceptionHandler({BadRequest.class,IllegalArgumentException.class,IOException.class,
+    @ExceptionHandler({BadRequest.class,IllegalArgumentException.class,
             org.springframework.http.converter.HttpMessageNotReadableException.class,
             org.springframework.web.bind.MissingServletRequestParameterException.class})
     public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> malformed(Exception ignored) { return error(HttpStatus.BAD_REQUEST,"BAD_REQUEST"); }
+    @ExceptionHandler(IOException.class)
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> transferFailed(IOException failure,jakarta.servlet.http.HttpServletResponse response) {
+        if(response.isCommitted()) {
+            org.slf4j.LoggerFactory.getLogger(PersonalWorkspaceConversationRuntimeController.class)
+                    .warn("Runtime file transfer interrupted: {}",failure.getClass().getSimpleName());
+            return null;
+        }
+        response.reset();
+        return error(HttpStatus.SERVICE_UNAVAILABLE,"CONVERSATION_EXECUTION_UNAVAILABLE");
+    }
     @ExceptionHandler(Exception.class)
     public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> unexpected(Exception ignored) {
         return error(HttpStatus.SERVICE_UNAVAILABLE,"CONVERSATION_EXECUTION_UNAVAILABLE");
@@ -275,10 +282,7 @@ public final class PersonalWorkspaceConversationRuntimeController {
         try { return new PersonalWorkspaceExecutionService.ConversationFence(Long.parseLong(version),token); }
         catch (NumberFormatException bad) { throw new BadRequest(); }
     }
-    private static String digest(byte[] bytes) {
-        try { return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes)); }
-        catch (NoSuchAlgorithmException impossible) { throw new IllegalStateException(impossible); }
-    }
+
     private static void noQuery(HttpServletRequest request) {
         if (request.getParameterMap()!=null && !request.getParameterMap().isEmpty()) throw new BadRequest();
     }

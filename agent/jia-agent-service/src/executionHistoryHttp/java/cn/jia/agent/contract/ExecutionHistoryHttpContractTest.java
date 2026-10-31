@@ -94,6 +94,11 @@ class ExecutionHistoryHttpContractTest {
             var workspace = forbidden(PersonalWorkspaceDao.class);
             var links = forbidden(PersonalWorkspaceTaskLinkDao.class);
             PersonalWorkspaceStorage storage = new PersonalWorkspaceStorage() {
+                public java.io.InputStream openStream(Scope s, String u, String h, long n, String m) { throw forbiddenCall(); }
+
+                public StoredObject storeStream(Scope s, java.io.InputStream c, long n, String m) { throw forbiddenCall(); }
+                public void copyTo(Scope s, String u, String h, long n, String m, java.io.OutputStream out) { throw forbiddenCall(); }
+
                 public long maxContentBytes() { return 1024; }
                 public StoredObject store(Scope s, byte[] c, String m) { throw forbiddenCall(); }
                 public StoredContent read(Scope s, String u, String h, long b, String m) { throw forbiddenCall(); }

@@ -159,9 +159,8 @@ class AgentTaskDeliverableControllerTest {
 
     @Test
     void contentDownloadUsesTaskOwnerScopeAndReturnsExactSafeBytes() throws Exception {
-        when(contentService.readContentForTaskOwner("0", CLIENT, TENANT, TASK, ARTIFACT, 3))
-                .thenReturn(new AgentTaskArtifactContentDTO(ARTIFACT, 3, sha256(BYTES),
-                        (long) BYTES.length, "application/octet-stream", BYTES));
+        when(contentService.openContentForTaskOwner("0", CLIENT, TENANT, TASK, ARTIFACT, 3))
+                .thenReturn(new AgentTaskArtifactContentService.StreamContent(ARTIFACT,3,sha256(BYTES),BYTES.length,"application/octet-stream",new ByteArrayInputStream(BYTES)));
 
         MvcResult result = mvc.perform(get(
                         "/agent/tasks/{taskId}/deliverables/{artifactId}/versions/{version}/content",
@@ -176,7 +175,7 @@ class AgentTaskDeliverableControllerTest {
                 .andReturn();
 
         assertArrayEquals(BYTES, result.getResponse().getContentAsByteArray());
-        verify(contentService).readContentForTaskOwner("0", CLIENT, TENANT, TASK, ARTIFACT, 3);
+        verify(contentService).openContentForTaskOwner("0", CLIENT, TENANT, TASK, ARTIFACT, 3);
     }
 
     @Test
@@ -468,10 +467,8 @@ class AgentTaskDeliverableControllerTest {
                 .andExpect(content().string(org.hamcrest.Matchers.not(
                         org.hamcrest.Matchers.containsString("X-Secret"))));
 
-        when(contentService.readContentForTaskOwner(anyString(), anyString(), anyString(), anyString(),
-                anyString(), anyInt()))
-                .thenReturn(new AgentTaskArtifactContentDTO(ARTIFACT, 1, "0".repeat(64),
-                        (long) BYTES.length, "text/plain", BYTES));
+        when(contentService.openContentForTaskOwner(anyString(),anyString(),anyString(),anyString(),anyString(),anyInt()))
+                .thenThrow(new IllegalStateException("Verified content is corrupt"));
         mvc.perform(get(
                         "/agent/tasks/{taskId}/deliverables/{artifactId}/versions/{version}/content",
                         TASK, ARTIFACT, 1).principal(jwt(TENANT, CLIENT, ACTOR)))

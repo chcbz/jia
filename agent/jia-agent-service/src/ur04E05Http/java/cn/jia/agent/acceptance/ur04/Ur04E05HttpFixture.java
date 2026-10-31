@@ -744,7 +744,7 @@ public final class Ur04E05HttpFixture {
             return new AgentWorkItemReassignmentServiceImpl(new AgentWorkItemReassignmentDaoImpl(s.getMapper(AgentWorkItemReassignmentMapper.class)),
                 members, items, mutation, identity, agents, writer, commands, leases, LEASE_MILLIS);
         }
-        @Bean AgentTaskArtifactStorage storage() { return new FileSystemAgentTaskArtifactStorage(activeRoot.resolve("artifact-storage"), 262144, Set.of("text/plain")); }
+        @Bean AgentTaskArtifactStorage storage() { return new FileSystemAgentTaskArtifactStorage(activeRoot.resolve("artifact-storage"), 262144); }
         @Bean AgentTaskArtifactService publications(AgentTaskMetaDao meta, AgentTaskMemberDao members, AgentTaskWorkItemDao items, AgentTaskRequestDao requests,
                 AgentTaskArtifactDao artifacts, AgentTaskArtifactStorage storage, AgentTaskMutationTransaction mutation, AgentTaskEventWriter writer) {
             return new AgentTaskCollaborationServiceImpl(meta, members, items, requests, artifacts, storage, mutation, writer);

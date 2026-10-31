@@ -70,6 +70,47 @@ class PersonalWorkspaceServiceImplTest {
     }
 
     @Test
+    void streamingUploadClosesBothPassesAndReplayDoesNotWriteAgain() throws Exception {
+        Fixture fixture = new Fixture();
+        var opens = new java.util.concurrent.atomic.AtomicInteger();
+        var closes = new java.util.concurrent.atomic.AtomicInteger();
+        byte[] expected = bytes("streamed source");
+        PersonalWorkspaceService.UploadSource source = () -> {
+            opens.incrementAndGet();
+            return new java.io.ByteArrayInputStream(expected) {
+                @Override public void close() { closes.incrementAndGet(); }
+            };
+        };
+        var command = new PersonalWorkspaceService.UploadCommand(new PersonalWorkspaceService.Idempotency("stream"),
+                "stream", "stream.bin", "application/octet-stream", source, expected.length);
+        var created = fixture.service.create(OWNER_A, command);
+        var replay = fixture.service.create(OWNER_A, command);
+        assertEquals(created.file().fileId(), replay.file().fileId());
+        assertEquals(3, opens.get()); assertEquals(opens.get(), closes.get());
+        assertEquals(1, fixture.storage.storeCount);
+        try (var download = fixture.service.download(OWNER_A, created.file().fileId(), 1)) {
+            assertEquals(expected.length, download.byteLength());
+            assertArrayEquals(expected, download.content().readAllBytes());
+        }
+        assertReason(PersonalWorkspaceException.Reason.NOT_FOUND,
+                () -> fixture.service.download(OWNER_B, created.file().fileId(), 1));
+    }
+
+    @Test
+    void changedUploadSourceCannotCommitUnderTheOriginalIdempotencyDigest() {
+        Fixture fixture = new Fixture();
+        var opens = new java.util.concurrent.atomic.AtomicInteger();
+        PersonalWorkspaceService.UploadSource source = () -> new java.io.ByteArrayInputStream(
+                bytes(opens.getAndIncrement() == 0 ? "first" : "other"));
+        var command = new PersonalWorkspaceService.UploadCommand(new PersonalWorkspaceService.Idempotency("changed"),
+                "changed", "changed.bin", "application/octet-stream", source, 5);
+        assertReason(PersonalWorkspaceException.Reason.STORAGE_CORRUPT,
+                () -> fixture.service.create(OWNER_A, command));
+        assertEquals(1, fixture.storage.storeCount);
+        assertTrue(fixture.events.contains("storage.store"));
+    }
+
+    @Test
     void commonImageUploadsPreserveOriginalBytesAndOwnerScope() {
         var formats=Map.of("jpg","image/jpeg","png","image/png","webp","image/webp","gif","image/gif",
                 "bmp","image/bmp","tiff","image/tiff","heic","image/heic","heif","image/heif","avif","image/avif");
@@ -470,6 +511,23 @@ class PersonalWorkspaceServiceImplTest {
     }
 
     private static final class RecordingStorage implements PersonalWorkspaceStorage {
+        @Override public java.io.InputStream openStream(Scope scope, String uri, String hash, long length, String mime) {
+            return new java.io.ByteArrayInputStream(read(scope, uri, hash, length, mime).content());
+        }
+        // In-memory fixture only; production storage streams directly to its private files.
+        @Override public StoredObject storeStream(Scope scope, java.io.InputStream input, long length, String mime) {
+            try {
+                byte[] bytes = input.readAllBytes();
+                if (bytes.length != length) throw new AssertionError("Fixture length mismatch");
+                return store(scope, bytes, mime);
+            } catch (java.io.IOException failure) { throw new java.io.UncheckedIOException(failure); }
+        }
+        @Override public void copyTo(Scope scope, String uri, String hash, long length,
+                String mime, java.io.OutputStream output) {
+            try { output.write(read(scope, uri, hash, length, mime).content()); }
+            catch (java.io.IOException failure) { throw new java.io.UncheckedIOException(failure); }
+        }
+
         private final List<String> events;
         private final AtomicLong sequence = new AtomicLong();
         private final Map<StoredKey, StoredValue> objects = new LinkedHashMap<>();

@@ -31,7 +31,7 @@ class AgentTaskCreationOperationSchemaInitializerTest {
                 "uk_atco_scope_key", "uk_atco_scope_operation", "chk_atco_scope",
                 "chk_atco_identity", "chk_atco_hash", "chk_atco_refs",
                 "chk_atco_receipt", "chk_atco_time", "requirement_revision=1",
-                "json_length(input_refs_json) between 0 and 32"}) {
+                "json_type(input_refs_json)='array'"}) {
             assertTrue(normalized.contains(required), required);
         }
     }
@@ -89,7 +89,7 @@ class AgentTaskCreationOperationSchemaInitializerTest {
     }
 
     @Test
-    void nullReceiptRefsBoundAndHashDefinitionDriftFailClosed() {
+    void nullReceiptRefsShapeAndHashDefinitionDriftFailClosed() {
         List<Map<String, Object>> nullReceipt = actualCatalogRows();
         row(nullReceipt, "chk_atco_receipt").put("CHECK_CLAUSE", null);
         assertThrows(IllegalStateException.class,
@@ -97,8 +97,7 @@ class AgentTaskCreationOperationSchemaInitializerTest {
 
         List<Map<String, Object>> refs = actualCatalogRows();
         row(refs, "chk_atco_refs").compute("CHECK_CLAUSE",
-                (ignored, clause) -> clause.toString().replace("between 0 and 32",
-                        "between 0 and 33"));
+                (ignored, clause) -> clause.toString().replace("ARRAY", "OBJECT"));
         assertThrows(IllegalStateException.class,
                 () -> AgentTaskCreationOperationSchemaInitializer.validateChecks(refs));
 
@@ -151,8 +150,7 @@ class AgentTaskCreationOperationSchemaInitializerTest {
                         + "(`task_id` is not null) and (`requirement_revision` = 1) "
                         + "and (`completed_at` is not null)))")));
         rows.add(check("chk_atco_refs", "YES", escaped(
-                "((json_type(`input_refs_json`) = _utf8mb4'ARRAY') and "
-                        + "(json_length(`input_refs_json`) between 0 and 32))")));
+                "(json_type(`input_refs_json`) = _utf8mb4'ARRAY')")));
         rows.add(check("chk_atco_scope", "YES", escaped(
                 "(`owner_jiacn` <> _utf8mb4'0')")));
         rows.add(check("chk_atco_time", "YES",

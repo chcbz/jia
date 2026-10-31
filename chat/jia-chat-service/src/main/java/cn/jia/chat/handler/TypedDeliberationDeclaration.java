@@ -69,16 +69,14 @@ public final class TypedDeliberationDeclaration {
     }
 
     private static boolean allowedKeys(Set<?> keys) {
-        var allowed=new java.util.HashSet<>(KEYS);allowed.add("materialsInput");allowed.add("nativeExecution");
-        return keys.containsAll(KEYS)&&allowed.containsAll(keys);
+        return keys.containsAll(KEYS);
     }
     private static Map<String,Object> nativeExecution(Object raw) {
         if(!(raw instanceof Map<?,?> m)||!m.keySet().containsAll(Set.of("schemaVersion","executionProtocolVersion","toolPolicyRef","outputMimeTypes"))
-                ||!Set.of("schemaVersion","executionProtocolVersion","toolPolicyRef","outputMimeTypes","supportedToolPolicyRefs").containsAll(m.keySet()))throw invalid();
+                ||!m.keySet().stream().allMatch(String.class::isInstance))throw invalid();
         exactInteger(m.get("schemaVersion"),1);exactInteger(m.get("executionProtocolVersion"),5);exact(m.get("toolPolicyRef"),"NATIVE_LOCAL_FILES_V1");
-        if(!(m.get("outputMimeTypes") instanceof List<?> types)||types.stream().anyMatch(x->!(x instanceof String t)||!Set.of("text/plain","text/markdown","text/html","application/json","image/png",
-                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet").contains(t))||new java.util.HashSet<>(types).size()!=types.size())throw invalid();
+        if(!(m.get("outputMimeTypes") instanceof List<?> types)||types.stream().anyMatch(x->!concreteMime(x))
+                ||new java.util.HashSet<>(types).size()!=types.size())throw invalid();
         var result=new java.util.LinkedHashMap<String,Object>();
         result.put("schemaVersion",1);result.put("executionProtocolVersion",5);result.put("toolPolicyRef","NATIVE_LOCAL_FILES_V1");result.put("outputMimeTypes",List.copyOf(types));
         if(m.containsKey("supportedToolPolicyRefs")) {
@@ -86,6 +84,11 @@ public final class TypedDeliberationDeclaration {
             result.put("supportedToolPolicyRefs",List.copyOf(refs));
         }
         return java.util.Collections.unmodifiableMap(result);
+    }
+    private static boolean concreteMime(Object raw) {
+        if (!(raw instanceof String text) || !text.equals(text.strip())) return false;
+        var mime = org.springframework.http.MediaType.parseMediaType(text);
+        return mime.isConcrete() && mime.getParameters().isEmpty();
     }
     private static void exactInteger(Object value, int expected) {
         if (!(value instanceof Byte || value instanceof Short || value instanceof Integer || value instanceof Long)

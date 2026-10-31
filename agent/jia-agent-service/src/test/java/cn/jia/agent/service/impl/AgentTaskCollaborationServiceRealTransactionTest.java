@@ -561,6 +561,44 @@ class AgentTaskCollaborationServiceRealTransactionTest {
     }
 
     @Test
+    void streamPreparationClosesSourceOutsideTransactionAndRechecksRevokedAuthority() {
+        byte[] bytes={8,9,10};var command=managedArtifact("streamed",bytes);command.setContentBytes(null);
+        var closed=new java.util.concurrent.atomic.AtomicBoolean();
+        var prepared=artifactService.prepareStreamPublication(TENANT,CLIENT,OWNER,TASK,REQUESTER,command,()->{
+            assertFalse(TransactionSynchronizationManager.isActualTransactionActive());
+            return new java.io.ByteArrayInputStream(bytes) {
+                @Override public void close() {closed.set(true);}
+            };
+        });
+        assertTrue(closed.get());assertEquals(1,artifactStorage.stores);
+        assertEquals(0,count("SELECT COUNT(*) FROM agent_task_artifact"));
+        jdbc.update("UPDATE agent_task_member SET member_role='observer' WHERE agent_id=?",REQUESTER);
+        assertThrows(AgentTaskCollaborationException.class,()->artifactService.publishPrepared(TENANT,CLIENT,OWNER,TASK,REQUESTER,prepared));
+        assertEquals(0,count("SELECT COUNT(*) FROM agent_task_event"));
+        jdbc.update("UPDATE agent_task_member SET member_role='worker' WHERE agent_id=?",REQUESTER);
+        var result=artifactService.publishPrepared(TENANT,CLIENT,OWNER,TASK,REQUESTER,prepared);
+        assertEquals(command.getContentHash(),result.getContentHash());
+        assertTrue(result.getManagedStorage());assertEquals(1,artifactStorage.stores);
+        assertEquals(1,count("SELECT COUNT(*) FROM agent_task_artifact"));
+        assertEquals(1,count("SELECT COUNT(*) FROM agent_task_event"));
+    }
+
+    @Test
+    void streamDigestMismatchAndReadFailureNeverPublishAndCloseSource() {
+        var command=managedArtifact("bad-stream",new byte[]{1});command.setContentBytes(null);
+        var closed=new java.util.concurrent.atomic.AtomicBoolean();
+        assertThrows(AgentTaskCollaborationException.class,()->artifactService.prepareStreamPublication(
+                TENANT,CLIENT,OWNER,TASK,REQUESTER,command,()->new java.io.ByteArrayInputStream(new byte[]{2}) {
+                    @Override public void close(){closed.set(true);}
+                }));
+        assertTrue(closed.get());
+        assertThrows(AgentTaskCollaborationException.class,()->artifactService.prepareStreamPublication(
+                TENANT,CLIENT,OWNER,TASK,REQUESTER,command,()->{throw new java.io.IOException("source removed");}));
+        assertEquals(0,count("SELECT COUNT(*) FROM agent_task_artifact"));
+        assertEquals(0,count("SELECT COUNT(*) FROM agent_task_event"));
+    }
+
+    @Test
     void preparedCommandAndNestedMetadataAreOpaqueImmutableSnapshots() {
         var command=artifact("immutable",1,0);var nested=new java.util.LinkedHashMap<String,Object>();nested.put("original",true);
         command.setMetadata(Map.of("nested",nested));String original=command.getContent();
@@ -629,6 +667,23 @@ class AgentTaskCollaborationServiceRealTransactionTest {
         catch(Exception failure){throw new AssertionError(failure);}
     }
     private static final class MemoryArtifactStorage implements AgentTaskArtifactStorage {
+        @Override public java.io.InputStream openStream(Scope scope, String uri, String hash, long length, String mime) {
+            return new java.io.ByteArrayInputStream(read(scope, uri, hash, length, mime).content());
+        }
+        // In-memory fixture only; production storage streams directly to its private files.
+        @Override public StoredObject storeStream(Scope scope, java.io.InputStream input, long length, String mime) {
+            try {
+                byte[] bytes = input.readAllBytes();
+                if (bytes.length != length) throw new AssertionError("Fixture length mismatch");
+                return store(scope, bytes, mime);
+            } catch (java.io.IOException failure) { throw new java.io.UncheckedIOException(failure); }
+        }
+        @Override public void copyTo(Scope scope, String uri, String hash, long length,
+                String mime, java.io.OutputStream output) {
+            try { output.write(read(scope, uri, hash, length, mime).content()); }
+            catch (java.io.IOException failure) { throw new java.io.UncheckedIOException(failure); }
+        }
+
         final Map<String,byte[]> objects=new java.util.LinkedHashMap<>();int stores;
         @Override public StoredObject store(Scope scope,byte[] content,String mimeType) {
             assertFalse(TransactionSynchronizationManager.isActualTransactionActive(),"storage must run after root transaction completion");

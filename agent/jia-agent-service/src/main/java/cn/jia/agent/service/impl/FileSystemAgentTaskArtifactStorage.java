@@ -52,37 +52,25 @@ public final class FileSystemAgentTaskArtifactStorage implements AgentTaskArtifa
     private final Path root;
     private final Object rootFileKey;
     private final long maxContentBytes;
-    private final Set<String> allowedMimeTypes;
 
     public FileSystemAgentTaskArtifactStorage(
-            Path root, long maxContentBytes, Set<String> allowedMimeTypes) {
+            Path root, long maxContentBytes) {
         if (root == null || !root.isAbsolute() || root.normalize().getParent() == null) {
             throw invalid("Artifact storage root must be an absolute non-filesystem-root path");
         }
         if (maxContentBytes < 1 || maxContentBytes > MAX_CONFIGURED_BYTES) {
             throw invalid("Artifact storage size limit is invalid");
         }
-        if (allowedMimeTypes == null || allowedMimeTypes.isEmpty()) {
-            throw invalid("Artifact storage MIME allowlist is required");
-        }
-        LinkedHashSet<String> canonicalMimeTypes = new LinkedHashSet<>();
-        for (String mimeType : allowedMimeTypes) {
-            String canonical = requireMimeSyntax(mimeType);
-            if (!canonical.equals(mimeType) || !canonicalMimeTypes.add(canonical)) {
-                throw invalid("Artifact storage MIME allowlist is invalid");
-            }
-        }
         this.root = initializeRoot(root.normalize());
         setPermissions(this.root, DIRECTORY_PERMISSIONS);
         this.rootFileKey = attributes(this.root).fileKey();
         this.maxContentBytes = maxContentBytes;
-        this.allowedMimeTypes = Set.copyOf(canonicalMimeTypes);
     }
 
     @Override
     public StoredObject store(Scope scope, byte[] content, String mimeType) {
         requireScope(scope);
-        String canonicalMime = requireAllowedMime(mimeType);
+        String canonicalMime = requireMimeSyntax(mimeType);
         if (content == null) {
             throw invalid("Managed artifact content is required");
         }
@@ -125,6 +113,87 @@ public final class FileSystemAgentTaskArtifactStorage implements AgentTaskArtifa
     }
 
     @Override
+    public StoredObject storeStream(Scope scope, java.io.InputStream content, long byteLength, String mimeType) {
+        requireScope(scope); String canonicalMime = requireMimeSyntax(mimeType);
+        if (content == null || byteLength < 0) throw invalid("Managed artifact content is required");
+        verifyRootIdentity(); Path temporary = null;
+        try {
+            temporary = Files.createTempFile(root, ".upload-", ".tmp");
+            rejectSymbolicLink(temporary);
+            MessageDigest digest = MessageDigest.getInstance("SHA-256"); long count = 0;
+            try (FileChannel channel = FileChannel.open(temporary,
+                    Set.<OpenOption>of(StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS))) {
+                byte[] buffer = new byte[8192];
+                for (int n; (n = content.read(buffer)) != -1;) {
+                    if (n > byteLength - count) throw invalid("Managed artifact length mismatch");
+                    count += n; digest.update(buffer, 0, n);
+                    ByteBuffer bytes = ByteBuffer.wrap(buffer, 0, n);
+                    while (bytes.hasRemaining()) channel.write(bytes);
+                }
+                if (count != byteLength) throw invalid("Managed artifact length mismatch");
+                channel.force(true);
+            }
+            String hash = HexFormat.of().formatHex(digest.digest()); String key = scopeKey(scope);
+            Path target = objectPath(ensureObjectDirectory(key, hash), hash);
+            makeReadOnly(temporary); boolean created = false;
+            try { Files.createLink(target, temporary); created = true; }
+            catch (FileAlreadyExistsException raced) { /* Verify the existing immutable object below. */ }
+            verifyExisting(target, hash, count); verifyRootIdentity();
+            return new StoredObject(storageUri(key, hash), hash, count, canonicalMime, created);
+        } catch (IOException failure) { throw ioFailure(failure); }
+        catch (NoSuchAlgorithmException impossible) { throw new IllegalStateException(impossible); }
+        finally { deleteTemporary(temporary); }
+    }
+
+    @Override
+    public java.io.InputStream openStream(Scope scope, String storageUri, String expectedSha256,
+            long expectedByteLength, String expectedMimeType) {
+        requireScope(scope); requireMimeSyntax(expectedMimeType);
+        if (expectedByteLength < 0
+                || !SHA256.matcher(Objects.requireNonNullElse(expectedSha256, "")).matches())
+            throw invalid("Managed artifact read expectations are invalid");
+        verifyRootIdentity(); UriParts parts = parseOwnedUri(storageUri);
+        if (!constantTimeEquals(scopeKey(scope), parts.scopeKey())
+                || !constantTimeEquals(expectedSha256, parts.contentHash()))
+            throw corrupt("Managed artifact URI does not match its exact scope and digest");
+        Path target = objectPath(requireObjectDirectory(parts.scopeKey(), parts.contentHash()), parts.contentHash());
+        rejectSymbolicLink(target);
+        try {
+            FileChannel channel = FileChannel.open(target,
+                    Set.<OpenOption>of(StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS));
+            try {
+                verifyChannel(channel, expectedSha256, expectedByteLength);
+                verifyRootIdentity(); channel.position(0);
+                return java.nio.channels.Channels.newInputStream(channel);
+            } catch (IOException | RuntimeException failure) {
+                try { channel.close(); } catch (IOException closeFailure) { failure.addSuppressed(closeFailure); }
+                throw failure;
+            }
+        } catch (IOException failure) { throw ioFailure(failure); }
+    }
+
+    @Override
+    public void copyTo(Scope scope, String storageUri, String expectedSha256,
+            long expectedByteLength, String expectedMimeType, java.io.OutputStream output) {
+        try (var input = openStream(scope, storageUri, expectedSha256, expectedByteLength, expectedMimeType)) {
+            input.transferTo(output);
+        } catch (IOException failure) { throw ioFailure(failure); }
+    }
+
+    private static void verifyChannel(FileChannel channel, String hash, long length) throws IOException {
+        if (channel.size() != length) throw corrupt("Managed artifact length mismatch");
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            ByteBuffer buffer = ByteBuffer.allocate(8192); long count = 0;
+            while (channel.read(buffer) != -1) {
+                buffer.flip(); count += buffer.remaining(); digest.update(buffer); buffer.clear();
+            }
+            if (count != length || !constantTimeEquals(HexFormat.of().formatHex(digest.digest()), hash))
+                throw corrupt("Managed artifact content failed integrity verification");
+        } catch (NoSuchAlgorithmException impossible) { throw new IllegalStateException(impossible); }
+    }
+
+    @Override
     public StoredContent read(Scope scope, String storageUri, String expectedSha256,
             long expectedByteLength, String expectedMimeType) {
         requireScope(scope);
@@ -132,7 +201,7 @@ public final class FileSystemAgentTaskArtifactStorage implements AgentTaskArtifa
                 || expectedByteLength < 0 || expectedByteLength > maxContentBytes) {
             throw invalid("Managed artifact read expectations are invalid");
         }
-        String canonicalMime = requireAllowedMime(expectedMimeType);
+        String canonicalMime = requireMimeSyntax(expectedMimeType);
         verifyRootIdentity();
         UriParts parts = parseOwnedUri(storageUri);
         String exactScopeKey = scopeKey(scope);
@@ -295,11 +364,11 @@ public final class FileSystemAgentTaskArtifactStorage implements AgentTaskArtifa
     }
 
     private void verifyExisting(Path target, String expectedHash, long expectedLength) {
-        byte[] content = readBounded(target);
-        if (content.length != expectedLength
-                || !constantTimeEquals(sha256(content), expectedHash)) {
-            throw corrupt("Existing managed artifact content does not match its digest");
-        }
+        rejectSymbolicLink(target);
+        try (FileChannel channel = FileChannel.open(target,
+                Set.<OpenOption>of(StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS))) {
+            verifyChannel(channel, expectedHash, expectedLength);
+        } catch (IOException failure) { throw ioFailure(failure); }
         makeReadOnly(target);
     }
 
@@ -389,14 +458,6 @@ public final class FileSystemAgentTaskArtifactStorage implements AgentTaskArtifa
         } catch (IOException ignored) {
             // Private .upload-*.tmp residues are never returned and are reclaimable by prefix/age.
         }
-    }
-
-    private String requireAllowedMime(String mimeType) {
-        String canonical = requireMimeSyntax(mimeType);
-        if (!canonical.equals(mimeType) || !allowedMimeTypes.contains(canonical)) {
-            throw invalid("Managed artifact MIME type is not allowed");
-        }
-        return canonical;
     }
 
     private static String requireMimeSyntax(String mimeType) {

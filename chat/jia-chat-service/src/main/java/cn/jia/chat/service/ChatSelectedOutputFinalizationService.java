@@ -251,29 +251,38 @@ public final class ChatSelectedOutputFinalizationService {
                 if(matches.size()!=1||!source.executionId().equals(matches.getFirst().executionId())
                         ||!source.sha256().equals(matches.getFirst().sha256())||source.byteLength()!=matches.getFirst().byteLength())throw sourceUnavailable();
             }
-            PersonalWorkspaceExecutionService.ConversationOutput output;
-            try {
-                output=executions.readConversationOutput(owner,valid.taskId(),source.runId(),selected.outputId());
-            } catch(PersonalWorkspaceExecutionService.Failure unavailable) {
-                if(unavailable.getReason()==PersonalWorkspaceExecutionService.Reason.STORAGE_UNAVAILABLE)throw unavailable;
-                throw sourceUnavailable();
-            }
-            if(output==null || !source.executionId().equals(output.executionId())
-                    || !selected.outputId().equals(output.outputId())
-                    || !source.mime().equals(output.contentMimeType()) || !source.sha256().equals(output.sha256())
-                    || source.byteLength()!=output.byteLength() || output.bytes()==null
-                    || output.bytes().length!=output.byteLength() || !output.sha256().equals(digest(output.bytes())))
-                throw sourceUnavailable();
+            try(var verified=openSelectedOutput(owner,valid.taskId(),source.executionId(),source.runId(),selected.outputId(),source.sha256(),source.mime(),source.byteLength())) {
+                // The storage boundary validates bytes; keep source resolution before promotion.
+            } catch(java.io.IOException failure) {throw sourceUnavailable();}
             if(target==null){target=persisted.targetAgentId();grant=persisted.grantId();
                 grantVersion=persisted.grantVersion();generation=requestGeneration;}
             else if(!target.equals(persisted.targetAgentId())||!grant.equals(persisted.grantId())
                     ||grantVersion!=persisted.grantVersion()||generation!=requestGeneration)throw sourceUnavailable();
             result.add(new AgentSelectedOutputFinalizationService.SourceOutput(selected.requestId(),selected.stepId(),
                     source.executionId(),source.runId(),selected.outputId(),source.sha256(),source.mime(),source.byteLength(),
-                    selected.title(),selected.purpose(),output.bytes()));
+                    selected.title(),selected.purpose(),null,null,null,
+                    ()->openSelectedOutput(owner,valid.taskId(),source.executionId(),source.runId(),selected.outputId(),source.sha256(),source.mime(),source.byteLength())));
         }
         if(target==null||grant==null||grantVersion<1||generation<1)throw sourceUnavailable();
         return new Resolved(generation,target,grant,grantVersion,List.copyOf(result));
+    }
+
+    private java.io.InputStream openSelectedOutput(PersonalWorkspaceExecutionService.OwnerScope owner,String taskId,
+            String executionId,String runId,String outputId,String hash,String mime,long length) {
+        PersonalWorkspaceExecutionService.ConversationDownload output;
+        try {output=executions.openConversationOutput(owner,taskId,runId,outputId);}
+        catch(PersonalWorkspaceExecutionService.Failure failure) {
+            if(failure.getReason()==PersonalWorkspaceExecutionService.Reason.STORAGE_UNAVAILABLE)throw failure;
+            throw sourceUnavailable();
+        }
+        try {
+            if(!executionId.equals(output.executionId())||!outputId.equals(output.outputId())||!mime.equals(output.contentMimeType())
+                    ||!hash.equals(output.sha256())||length!=output.byteLength())throw sourceUnavailable();
+            return output.content();
+        } catch(RuntimeException | Error rejected) {
+            try {output.close();} catch(java.io.IOException closeFailure) {rejected.addSuppressed(closeFailure);}
+            throw rejected;
+        }
     }
 
     private ChatSelectedOutputFinalizationStore.Operation apply(Scope scope,

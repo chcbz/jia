@@ -324,14 +324,12 @@ public final class AgentSelectedOutputFinalizationServiceImpl implements AgentSe
         if(items.size()!=1 || !Integer.valueOf(source.sourceArtifactVersion()).equals(items.getFirst().getArtifactVersion())
                 || !output.sha256().equals(items.getFirst().getContentHash()) || !output.purpose().equals(items.getFirst().getPurpose()))
             throw conflict("Formal source differs from exact original batch");
-        var bytes=collaboration(()->contents.readContentForTaskOwner(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),taskId,
-                source.sourceArtifactId(),source.sourceArtifactVersion()));
-        if(bytes==null || !source.sourceArtifactId().equals(bytes.getArtifactId())
-                || !Integer.valueOf(source.sourceArtifactVersion()).equals(bytes.getArtifactVersion())
-                || !output.sha256().equals(bytes.getContentHash()) || !Objects.equals(output.byteLength(),bytes.getContentByteLength())
-                || !output.contentMimeType().equals(bytes.getContentMimeType()) || bytes.getContent()==null
-                || !java.util.Arrays.equals(output.bytes(),bytes.getContent()) || !output.sha256().equals(sha256(bytes.getContent())))
-            throw conflict("Formal source bytes changed or unavailable");
+        try(var content=collaboration(()->contents.openContentForTaskOwner(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),taskId,
+                source.sourceArtifactId(),source.sourceArtifactVersion()))) {
+            if(!source.sourceArtifactId().equals(content.artifactId())||source.sourceArtifactVersion()!=content.artifactVersion()
+                    ||!output.sha256().equals(content.sha256())||output.byteLength()!=content.byteLength()
+                    ||!output.contentMimeType().equals(content.contentMimeType()))throw conflict("Formal source bytes changed or unavailable");
+        } catch(java.io.IOException failure) {throw persistence("Formal source is unavailable",failure);}
     }
 
     private List<ArtifactFact> publishAll(Scope scope,Valid valid,String workItemId) {
@@ -340,16 +338,16 @@ public final class AgentSelectedOutputFinalizationServiceImpl implements AgentSe
             if(output.formalArtifactSource()!=null)verifyFormalSource(scope,valid.taskId(),output);
             String id=artifactId(valid.operationId(),index++);
             result.add(publish(scope,valid,workItemId,id,"document",output.title(),output.purpose(),
-                    output.contentMimeType(),output.sha256(),output.byteLength(),output.bytes()));
+                    output.contentMimeType(),output.sha256(),output.byteLength(),output.contentSource()));
         }
         byte[] manifest=manifest(valid).getBytes(StandardCharsets.UTF_8);
         result.add(publish(scope,valid,workItemId,valid.manifestArtifactId(),"summary",
-                "Selected output manifest","manifest","application/json",sha256(manifest),manifest.length,manifest));
+                "Selected output manifest","manifest","application/json",sha256(manifest),manifest.length,()->new java.io.ByteArrayInputStream(manifest)));
         return List.copyOf(result);
     }
 
     private ArtifactFact publish(Scope scope,Valid valid,String workItemId,String artifactId,String type,
-            String title,String purpose,String mime,String hash,long length,byte[] bytes) {
+            String title,String purpose,String mime,String hash,long length,cn.jia.agent.service.PersonalWorkspaceService.UploadSource source) {
         try {
             AgentTaskArtifactViewDTO existing=artifacts.getVersion(scope.tenantId(),scope.clientId(),
                     scope.ownerJiacn(),valid.taskId(),valid.targetAgentId(),artifactId,1);
@@ -360,13 +358,15 @@ public final class AgentSelectedOutputFinalizationServiceImpl implements AgentSe
         AgentTaskArtifactPublishDTO command=new AgentTaskArtifactPublishDTO();
         command.setArtifactId(artifactId); command.setWorkItemId(workItemId);
         command.setProducerAgentId(valid.targetAgentId()); command.setArtifactType(type);
-        command.setTitle(title); command.setContentBytes(bytes); command.setContentMimeType(mime);
+        command.setTitle(title); command.setContentMimeType(mime);
         command.setContentHash(hash); command.setContentByteLength(length);
         command.setArtifactVersion(1); command.setExpectedPreviousVersion(0); command.setVisibility("task_members");
         command.setMetadata(Map.of("source","conversation_selected_output","operationId",valid.operationId(),
                 "purpose",purpose));
-        AgentTaskArtifactViewDTO value=collaboration(() -> artifacts.publish(scope.tenantId(),scope.clientId(),
-                scope.ownerJiacn(),valid.taskId(),valid.targetAgentId(),command));
+        var prepared=collaboration(()->artifacts.prepareStreamPublication(scope.tenantId(),scope.clientId(),
+                scope.ownerJiacn(),valid.taskId(),valid.targetAgentId(),command,source));
+        AgentTaskArtifactViewDTO value=collaboration(() -> artifacts.publishPrepared(scope.tenantId(),scope.clientId(),
+                scope.ownerJiacn(),valid.taskId(),valid.targetAgentId(),prepared));
         return exactArtifact(value,valid,workItemId,artifactId,type,title,hash,length,mime,purpose);
     }
 
@@ -469,12 +469,12 @@ public final class AgentSelectedOutputFinalizationServiceImpl implements AgentSe
                 sourceKey="COMPLETED_MESSAGE\0"+output.requestId()+"\0"+output.stepId()+"\0"+message.turnId()+"\0"+message.messageId();
             }
             if (output.sha256()==null || !output.sha256().matches("[0-9a-f]{64}")
-                    || output.byteLength()<0 || output.byteLength()>MAX_SAFE_INTEGER || output.bytes()==null
-                    || output.bytes().length!=output.byteLength() || !output.sha256().equals(sha256(output.bytes()))
+                    || output.byteLength()<0 || output.byteLength()>MAX_SAFE_INTEGER || output.contentSource()==null
                     || output.contentMimeType()==null
                     || !output.contentMimeType().matches("[a-z0-9][a-z0-9.+-]*/[a-z0-9][a-z0-9.+-]*")
                     || !seen.add(sourceKey))
                 throw bad("Invalid selected output");
+            verifySourceBytes(output);
         }
         String expectedDigest=SelectedOutputFinalizationDigest.requestV2(command.taskId(),command.expectedTaskVersion(),
                 command.expectedAssignmentRevision(),command.conversationId(),command.summary(),command.outputs().stream()
@@ -652,6 +652,15 @@ public final class AgentSelectedOutputFinalizationServiceImpl implements AgentSe
     private static String artifactId(String operationId,int index) {
         return "finalization_artifact_"+sha256((operationId+"\n"+index).getBytes(StandardCharsets.UTF_8)).substring(0,64);
     }
+    private static void verifySourceBytes(SourceOutput output) {
+        try(var stream=output.contentSource().open()) {
+            var digest=java.security.MessageDigest.getInstance("SHA-256");byte[] buffer=new byte[8192];long length=0;
+            for(int count;(count=stream.read(buffer))!=-1;) {length=Math.addExact(length,count);digest.update(buffer,0,count);}
+            if(length!=output.byteLength()||!output.sha256().equals(java.util.HexFormat.of().formatHex(digest.digest())))throw bad("Invalid selected output bytes");
+        } catch(java.io.IOException failure) {throw persistence("Selected output source is unavailable",failure);}
+        catch(java.security.NoSuchAlgorithmException impossible) {throw new IllegalStateException(impossible);}
+    }
+
     private static String sourceDigest(List<SourceOutput> outputs) {
         try {
             MessageDigest digest=MessageDigest.getInstance("SHA-256");

@@ -128,7 +128,7 @@ public class ChatBountyAssetProjector {
         cn.jia.agent.service.SkillExecutionService.ResultView resultView=generic?skills.result(scope,candidate.executionId()):null;
         Map<String,Object> manifest=generic?ChatSkillResultFacts.verifiedResult(resultView,candidate.executionId()):null;
         List<PersonalWorkspaceExecutionService.ConversationOutputInfo> outputs = executions.listConversationOutputs(scope, step.taskId(), execution.runId());
-        if(outputs==null||outputs.size()>128||!generic&&outputs.isEmpty())throw new IllegalStateException("Committed output catalogue unavailable");
+        if(outputs==null||!generic&&outputs.isEmpty())throw new IllegalStateException("Committed output catalogue unavailable");
         if(generic)ChatSkillResultFacts.verifyArtifacts(manifest,outputs);
         // Runtime grant/root locks are acquired above. Other writers follow root -> conversation.
         ChatConversationEntity live = conversations.lockScopedById(candidate.ownerJiacn(),

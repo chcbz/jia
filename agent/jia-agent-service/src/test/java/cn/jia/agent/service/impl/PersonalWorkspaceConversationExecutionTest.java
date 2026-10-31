@@ -152,8 +152,8 @@ class PersonalWorkspaceConversationExecutionTest {
                 .setOutputState("COMMITTED").setContentMimeType("image/png")
                 .setContentHash(hash).setByteLength((long)bytes.length).setStorageUri("private/object");
         when(rows.lockOutputs("0","client","owner","exec-1")).thenReturn(List.of(output));
-        when(storage.read(any(),eq("private/object"),eq(hash),eq((long)bytes.length),eq("image/png")))
-                .thenReturn(new PersonalWorkspaceStorage.StoredContent(bytes,hash,bytes.length,"image/png"));
+        when(storage.openStream(any(),eq("private/object"),eq(hash),eq((long)bytes.length),eq("image/png")))
+                .thenAnswer(i -> new java.io.ByteArrayInputStream(bytes));
         var listed=service.listConversationOutputs(OWNER,"task-1","run-1");
         assertEquals(List.of(new PersonalWorkspaceExecutionService.ConversationOutputInfo(
                 "exec-1","output_1","image/png",hash,bytes.length)),listed);
@@ -162,13 +162,70 @@ class PersonalWorkspaceConversationExecutionTest {
         assertEquals(PersonalWorkspaceExecutionService.Reason.GRANT_REVOKED,assertThrows(
                 PersonalWorkspaceExecutionService.Failure.class,()->service.listConversationOutputs(
                         OWNER,"task-1","run-1")).getReason());
-        verify(storage,times(1)).read(any(),anyString(),anyString(),anyLong(),anyString());
+        verify(storage,times(1)).openStream(any(),anyString(),anyString(),anyLong(),anyString());
         root.setAssignedAgentId("agent");
-        when(storage.read(any(),eq("private/object"),eq(hash),eq((long)bytes.length),eq("image/png")))
-                .thenReturn(new PersonalWorkspaceStorage.StoredContent(new byte[bytes.length],hash,bytes.length,"image/png"));
+        when(storage.openStream(any(),eq("private/object"),eq(hash),eq((long)bytes.length),eq("image/png")))
+                .thenThrow(new PersonalWorkspaceExecutionService.Failure(PersonalWorkspaceExecutionService.Reason.STORAGE_UNAVAILABLE));
         assertEquals(PersonalWorkspaceExecutionService.Reason.STORAGE_UNAVAILABLE,assertThrows(
                 PersonalWorkspaceExecutionService.Failure.class,()->service.listConversationOutputs(
                         OWNER,"task-1","run-1")).getReason());
+    }
+
+    @Test void catalogVerifiesOutsideItsRootTransactionAndClosesBeforeRechecking() throws Exception {
+        committedEditFixture(true);
+        var inRoot=new java.util.concurrent.atomic.AtomicBoolean();
+        var closed=new java.util.concurrent.atomic.AtomicBoolean();
+        var opens=new java.util.concurrent.atomic.AtomicInteger();
+        when(transactions.executeWithLockedTaskRootInOwnerScope(eq("0"),eq("client"),eq("owner"),eq("task-1"),any()))
+                .thenAnswer(i -> {
+                    if(opens.get()>0)assertTrue(closed.get());
+                    assertFalse(inRoot.getAndSet(true));
+                    try {return ((AgentTaskMutationTransaction.LockedTaskMutation<?>)i.getArgument(4)).apply(root);}
+                    finally {inRoot.set(false);}
+                });
+        when(storage.openStream(any(),anyString(),anyString(),anyLong(),anyString())).thenAnswer(i -> {
+            assertFalse(inRoot.get());opens.incrementAndGet();
+            return new java.io.ByteArrayInputStream(png()) {
+                @Override public byte[] readAllBytes() {throw new AssertionError("Catalog must not buffer bytes");}
+                @Override public void close() {closed.set(true);}
+            };
+        });
+        assertEquals(1,service.listConversationOutputs(OWNER,"task-1","run-1").size());
+        assertEquals(1,opens.get());assertTrue(closed.get());
+        verify(storage,never()).read(any(),anyString(),anyString(),anyLong(),anyString());
+    }
+
+    @Test void ownerDownloadClosesVerifiedDescriptorWhenAuthorityChangesDuringIo() throws Exception {
+        committedEditFixture(true);
+        when(rows.lockOutput("0","client","owner","exec-1","output_1")).thenReturn(output);
+        var closed=new java.util.concurrent.atomic.AtomicBoolean();
+        when(storage.openStream(any(),anyString(),anyString(),anyLong(),anyString())).thenAnswer(i -> {
+            root.setAssignedAgentId("different-agent");
+            return new java.io.ByteArrayInputStream(png()) {
+                @Override public void close() { closed.set(true); }
+            };
+        });
+        assertEquals(PersonalWorkspaceExecutionService.Reason.GRANT_REVOKED,assertThrows(
+                PersonalWorkspaceExecutionService.Failure.class,()->service.openConversationOutput(
+                        OWNER,"task-1","run-1","output_1")).getReason());
+        assertTrue(closed.get());
+        verify(storage,never()).read(any(),anyString(),anyString(),anyLong(),anyString());
+    }
+
+    @Test void ownerDownloadClosesDescriptorWhenOutputChangesDuringIo() throws Exception {
+        committedEditFixture(true);
+        when(rows.lockOutput("0","client","owner","exec-1","output_1")).thenReturn(output);
+        var closed=new java.util.concurrent.atomic.AtomicBoolean();
+        when(storage.openStream(any(),anyString(),anyString(),anyLong(),anyString())).thenAnswer(i -> {
+            output.setContentHash("f".repeat(64));
+            return new java.io.ByteArrayInputStream(png()) {
+                @Override public void close() { closed.set(true); }
+            };
+        });
+        assertEquals(PersonalWorkspaceExecutionService.Reason.OUTPUT_CONFLICT,assertThrows(
+                PersonalWorkspaceExecutionService.Failure.class,()->service.openConversationOutput(
+                        OWNER,"task-1","run-1","output_1")).getReason());
+        assertTrue(closed.get());
     }
 
     private ControlledImageExecutionSourceV3Entity committedEditFixture(boolean workspaceSource) throws Exception {
@@ -178,8 +235,8 @@ class PersonalWorkspaceConversationExecutionTest {
                 .setOwnerJiacn("owner").setOutputPurpose("CONVERSATION").setOutputState("COMMITTED")
                 .setContentMimeType("image/png").setContentHash(hash).setByteLength((long)bytes.length).setStorageUri("private/object");
         when(rows.lockOutputs("0","client","owner","exec-1")).thenReturn(List.of(output));
-        when(storage.read(any(),eq("private/object"),eq(hash),eq((long)bytes.length),eq("image/png")))
-                .thenReturn(new PersonalWorkspaceStorage.StoredContent(bytes,hash,bytes.length,"image/png"));
+        when(storage.openStream(any(),eq("private/object"),eq(hash),eq((long)bytes.length),eq("image/png")))
+                .thenAnswer(i -> new java.io.ByteArrayInputStream(bytes));
         var source=new ControlledImageExecutionSourceV3Entity().setExecutionId("exec-1").setOwnerJiacn("owner")
                 .setInputRef("input_1").setInputOrdinal(1).setContentMimeType("image/png")
                 .setByteLength(100L).setContentSha256("a".repeat(64)).setCreatedAt(1L);

@@ -26,16 +26,16 @@ class AgentInspectionInputControllerTest {
         MockHttpServletRequest request = request();
         var human = UsernamePasswordAuthenticationToken.authenticated("human", "jwt", java.util.List.of());
         assertThrows(SecurityException.class,
-                () -> controller.content("request", "turn", "source", human, request));
+                () -> controller.content("request", "turn", "source", human, request, new org.springframework.mock.web.MockHttpServletResponse()));
         assertThrows(SecurityException.class,
-                () -> controller.content("request", "turn", "source", null, request));
+                () -> controller.content("request", "turn", "source", null, request, new org.springframework.mock.web.MockHttpServletResponse()));
         verify(authority, never()).read(org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyString(),
                 org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyString());
     }
 
     @Test
-    void runtimeResponseIsNoStoreNosniffAndExactBytes() {
+    void runtimeResponseIsNoStoreNosniffAndExactBytes() throws Exception {
         AgentRuntimeAuthentication runtime = mock(AgentRuntimeAuthentication.class);
         AgentRuntimeAuthentication.Scope scope =
                 new AgentRuntimeAuthentication.Scope("0", "client", "owner", "agent", "runtime");
@@ -47,12 +47,13 @@ class AgentInspectionInputControllerTest {
                 .thenAnswer(i->((java.util.function.Supplier<?>)i.getArgument(1)).get());
         byte[] bytes = "bird\n".getBytes(StandardCharsets.UTF_8);
         when(authority.read(scope, "request", "turn", "source", digest()))
-                .thenReturn(new ChatInspectionAuthorityService.Content("bird.txt", "text/plain", bytes));
-        var response = controller.content("request", "turn", "source", runtime, request());
-        assertEquals("no-store", response.getHeaders().getCacheControl());
-        assertEquals("nosniff", response.getHeaders().getFirst("X-Content-Type-Options"));
-        assertEquals("text/plain", response.getHeaders().getFirst("Content-Type"));
-        assertArrayEquals(bytes, response.getBody());
+                .thenReturn(new ChatInspectionAuthorityService.Content("bird.txt", "text/plain", bytes.length, new java.io.ByteArrayInputStream(bytes)));
+        var response = new org.springframework.mock.web.MockHttpServletResponse();
+        controller.content("request", "turn", "source", runtime, request(), response);
+        assertEquals("no-store", response.getHeader("Cache-Control"));
+        assertEquals("nosniff", response.getHeader("X-Content-Type-Options"));
+        assertEquals("text/plain", response.getHeader("Content-Type"));
+        assertArrayEquals(bytes, response.getContentAsByteArray());
     }
 
     private static MockHttpServletRequest request() {

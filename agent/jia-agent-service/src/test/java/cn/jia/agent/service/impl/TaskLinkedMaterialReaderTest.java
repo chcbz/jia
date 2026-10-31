@@ -43,6 +43,27 @@ class TaskLinkedMaterialReaderTest {
                 ()->reader.read(scope,"task",selection,new TaskLinkedMaterialReader.Metadata("image/png","b".repeat(64),3))).reason());
         verifyNoInteractions(storage);
     }
+    @Test void streamingReadTransfersDescriptorOwnershipWithoutBuffering() throws Exception {
+        linked();var stream=new java.io.ByteArrayInputStream(new byte[]{1,2,3}) {
+            @Override public byte[] readAllBytes() {throw new AssertionError("Material must stream");}
+        };
+        when(storage.openStream(any(),eq("private:v2"),eq(metadata.sha256()),eq(3L),eq("image/png"))).thenReturn(stream);
+        try(var actual=reader.open(scope,"task",selection,metadata)) {assertSame(stream,actual);assertEquals(1,actual.read());}
+        verify(dao,times(2)).findActiveMaterial("0","client","owner","task","file",2,"REFERENCE");
+        verify(storage,never()).read(any(),anyString(),anyString(),anyLong(),anyString());
+    }
+    @Test void streamingRevocationClosesVerifiedDescriptor() {
+        linked();var closed=new java.util.concurrent.atomic.AtomicBoolean();
+        when(storage.openStream(any(),anyString(),anyString(),anyLong(),anyString())).thenAnswer(i->{
+            when(dao.findActiveMaterial("0","client","owner","task","file",2,"REFERENCE")).thenReturn(List.of());
+            return new java.io.ByteArrayInputStream(new byte[]{1,2,3}) {
+                @Override public void close() {closed.set(true);}
+            };
+        });
+        assertEquals(TaskLinkedMaterialReader.Failure.Reason.NOT_FOUND,assertThrows(TaskLinkedMaterialReader.Failure.class,
+                ()->reader.open(scope,"task",selection,metadata)).reason());
+        assertTrue(closed.get());
+    }
     @Test void ambiguousInvalidUnavailableAndCorruptFactsHaveDistinctFailures() {
         when(dao.findActiveMaterial(anyString(),anyString(),anyString(),anyString(),anyString(),anyInt(),anyString()))
                 .thenReturn(List.of(row,row), List.of(new PersonalWorkspaceTaskLinkDao.MaterialRow("image/png",null,3L,"private:v2")))

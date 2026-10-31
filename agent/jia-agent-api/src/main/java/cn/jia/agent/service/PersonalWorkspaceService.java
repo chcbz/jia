@@ -32,6 +32,7 @@ public interface PersonalWorkspaceService {
             String ifMatch, Idempotency idempotency);
     FileView restore(Scope scope, String fileId, String ifMatch, Idempotency idempotency);
     Content readContent(Scope scope, String fileId, int version);
+    Download download(Scope scope, String fileId, int version);
     PreviewView preview(Scope scope, String fileId, int version);
     Content readPreviewPart(Scope scope, String fileId, int version, String partId);
     UsageView usage(Scope scope, String fileId);
@@ -41,19 +42,40 @@ public interface PersonalWorkspaceService {
     record ListQuery(String q, String mediaFamily, String state, String cursor) { }
     record Idempotency(String key) { }
     record ConversationArchiveCommand(Idempotency idempotency, String assetId, long revision,
-            String sha256, String displayName, String filename, String contentMimeType, byte[] content) {
-        public ConversationArchiveCommand { content = content == null ? null : content.clone(); }
-        @Override public byte[] content() { return content == null ? null : content.clone(); }
+            String sha256, String displayName, String filename, String contentMimeType, UploadSource source,long byteLength) {
+        public ConversationArchiveCommand(Idempotency idempotency,String assetId,long revision,String sha256,
+                String displayName,String filename,String contentMimeType,byte[] content) {
+            this(idempotency,assetId,revision,sha256,displayName,filename,contentMimeType,
+                    UploadCommand.memorySource(content),content==null?-1:content.length);
+        }
     }
     record ConversationTextArchiveCommand(Idempotency idempotency, String sourceSnapshotKey,
             String sha256, String displayName, String filename, byte[] content) {
         public ConversationTextArchiveCommand { content = content == null ? null : content.clone(); }
         @Override public byte[] content() { return content == null ? null : content.clone(); }
     }
+    /** Reopenable for hashing followed by storage; lifetime is the current request. */
+    @FunctionalInterface interface UploadSource {
+        java.io.InputStream open() throws java.io.IOException;
+    }
     record UploadCommand(Idempotency idempotency, String displayName, String originalFilename,
-            String contentMimeType, byte[] content) {
-        public UploadCommand { content = content == null ? null : content.clone(); }
-        @Override public byte[] content() { return content == null ? null : content.clone(); }
+            String contentMimeType, UploadSource source, long byteLength) {
+        /** In-memory sources such as existing chat text; HTTP uploads use the stream constructor. */
+        public UploadCommand(Idempotency idempotency, String displayName, String originalFilename,
+                String contentMimeType, byte[] bytes) {
+            this(idempotency, displayName, originalFilename, contentMimeType,
+                    memorySource(bytes), bytes == null ? -1 : bytes.length);
+        }
+        private static UploadSource memorySource(byte[] bytes) {
+            if (bytes == null) return null;
+            byte[] immutable = bytes.clone();
+            return () -> new java.io.ByteArrayInputStream(immutable);
+        }
+    }
+    /** Authorized, verified file descriptor; caller closes it even if response writing fails. */
+    record Download(String filename, String contentMimeType, long byteLength, java.io.InputStream content)
+            implements AutoCloseable {
+        @Override public void close() throws java.io.IOException { content.close(); }
     }
     record Content(String filename, String contentMimeType, byte[] bytes) {
         public Content { bytes = bytes == null ? null : bytes.clone(); }

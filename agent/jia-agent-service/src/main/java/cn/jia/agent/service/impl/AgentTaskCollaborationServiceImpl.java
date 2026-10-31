@@ -327,7 +327,31 @@ public class AgentTaskCollaborationServiceImpl
         ArtifactPayload payload = materializeArtifactPayload(
                 tenantId, clientId, ownerJiacn, taskId, frozen, shape.payloadMode());
         return new PreparedArtifactPublication(this, tenantId, clientId, ownerJiacn, taskId,
-                actorAgentId, frozen, payload);
+                actorAgentId, frozen, payload, false);
+    }
+
+    @Override
+    @Transactional(propagation=Propagation.NEVER)
+    public PreparedPublication prepareStreamPublication(String tenantId,String clientId,String ownerJiacn,
+            String taskId,String actorAgentId,AgentTaskArtifactPublishDTO command,cn.jia.agent.service.PersonalWorkspaceService.UploadSource source) {
+        if(TransactionSynchronizationManager.isActualTransactionActive())throw new IllegalStateException("Artifact preparation requires no enclosing transaction");
+        requireScope(tenantId,clientId,ownerJiacn,taskId,actorAgentId);
+        if(source==null)throw invalid("Artifact source is required");
+        var frozen=snapshotPublication(command);
+        mutationTransaction.executeWithLockedTaskRootInOwnerScope(tenantId,clientId,ownerJiacn,taskId,
+                root->validatePublicationLocked(tenantId,clientId,ownerJiacn,taskId,actorAgentId,frozen,root,true));
+        var scope=new AgentTaskArtifactStorage.Scope(tenantId,clientId,ownerJiacn,taskId);
+        AgentTaskArtifactStorage.StoredObject stored;
+        try(var stream=source.open()) {
+            stored=artifactStorage.storeStream(scope,stream,frozen.getContentByteLength(),frozen.getContentMimeType());
+        } catch(java.io.IOException failure) {throw invalidPersisted("Artifact source is unavailable");}
+        catch(AgentTaskArtifactStorageException failure) {throw storageFailure(failure);}
+        if(!frozen.getContentHash().equals(stored.sha256())||frozen.getContentByteLength()!=stored.byteLength()
+                ||!frozen.getContentMimeType().equals(stored.mimeType())||!artifactStorage.matches(scope,stored.storageUri(),stored.sha256()))
+            throw invalidPersisted("Managed artifact storage returned inconsistent metadata");
+        var payload=new ArtifactPayload(null,stored.storageUri(),stored.sha256(),stored.byteLength(),stored.mimeType(),true,
+                serializeManagedMetadata(frozen.getMetadata(),stored.sha256(),stored.byteLength(),stored.mimeType()));
+        return new PreparedArtifactPublication(this,tenantId,clientId,ownerJiacn,taskId,actorAgentId,frozen,payload,true);
     }
 
     @Override
@@ -342,7 +366,7 @@ public class AgentTaskCollaborationServiceImpl
         return mutationTransaction.executeWithLockedTaskRootInOwnerScope(tenantId, clientId, ownerJiacn, taskId,
                 root -> {
                     ArtifactPublicationShape shape = validatePublicationLocked(tenantId, clientId, ownerJiacn,
-                            taskId, actorAgentId, value.command(), root);
+                            taskId, actorAgentId, value.command(), root, value.streamed());
                     return persistPublication(tenantId, clientId, ownerJiacn, taskId, actorAgentId,
                             value.command(), shape, value.payload());
                 });
@@ -366,7 +390,7 @@ public class AgentTaskCollaborationServiceImpl
             ArtifactPayloadMode payloadMode) { }
     private record PreparedArtifactPublication(AgentTaskCollaborationServiceImpl issuer, String tenantId,
             String clientId, String ownerJiacn, String taskId, String actorAgentId,
-            AgentTaskArtifactPublishDTO command, ArtifactPayload payload) implements PreparedPublication {
+            AgentTaskArtifactPublishDTO command, ArtifactPayload payload, boolean streamed) implements PreparedPublication {
         @Override public String toString() { return "PreparedArtifactPublication[REDACTED]"; }
     }
 
@@ -381,6 +405,10 @@ public class AgentTaskCollaborationServiceImpl
 
     private ArtifactPublicationShape validatePublicationLocked(String tenantId, String clientId, String ownerJiacn,
             String taskId, String actorAgentId, AgentTaskArtifactPublishDTO command, AgentTaskMetaEntity taskRoot) {
+        return validatePublicationLocked(tenantId,clientId,ownerJiacn,taskId,actorAgentId,command,taskRoot,false);
+    }
+    private ArtifactPublicationShape validatePublicationLocked(String tenantId,String clientId,String ownerJiacn,
+            String taskId,String actorAgentId,AgentTaskArtifactPublishDTO command,AgentTaskMetaEntity taskRoot,boolean streamed) {
         requireAccess(tenantId, clientId, ownerJiacn, taskId, actorAgentId, true, taskRoot);
         if (command == null) {
             throw invalid("artifact command is required");
@@ -401,7 +429,7 @@ public class AgentTaskCollaborationServiceImpl
         if (!VISIBILITIES.contains(visibility)) {
             throw invalid("visibility is not supported");
         }
-        ArtifactPayloadMode payloadMode = validateArtifactPayloadShape(command);
+        ArtifactPayloadMode payloadMode = validateArtifactPayloadShape(command,streamed);
         int expectedPrevious = requireArtifactVersions(command);
 
         AgentTaskArtifactEntity latest = artifactDao.findLatestVersionForUpdate(
@@ -578,6 +606,42 @@ public class AgentTaskCollaborationServiceImpl
                 ? artifactDao.listByTask(tenantId, clientId, ownerJiacn, taskId, limit)
                 : artifactDao.listByWorkItem(tenantId, clientId, ownerJiacn, taskId, workItemId, limit);
         return entities.stream().limit(limit).map(this::artifactView).toList();
+    }
+
+    @Override
+    @Transactional(propagation=org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
+    public StreamContent openContentForTaskOwner(String tenantId,String clientId,String ownerJiacn,
+            String taskId,String artifactId,int artifactVersion) {
+        requireOwnerTaskScope(tenantId,clientId,ownerJiacn,taskId);
+        requireId(artifactId,"artifactId",100);
+        if(artifactVersion<1)throw invalid("artifactVersion must be positive");
+        var entity=artifactDao.findVersion(tenantId,clientId,ownerJiacn,taskId,artifactId,artifactVersion);
+        if(entity==null)throw notFound();
+        var material=artifactMaterial(entity);
+        String hash=entity.getContentHash(),uri=entity.getStorageUri();
+        java.io.InputStream stream;
+        if(material.inlineContent()!=null)stream=new java.io.ByteArrayInputStream(material.inlineContent());
+        else if(material.managedStorage()) {
+            try {
+                stream=artifactStorage.openStream(new AgentTaskArtifactStorage.Scope(tenantId,clientId,ownerJiacn,taskId),
+                        uri,hash,material.byteLength(),material.mimeType());
+            } catch(AgentTaskArtifactStorageException failure) {
+                throw invalidPersisted("Managed artifact storage is unavailable or corrupt");
+            }
+        } else throw invalid("Artifact content is not managed by this service");
+        try {
+            requireOwnerTaskScope(tenantId,clientId,ownerJiacn,taskId);
+            var current=artifactDao.findVersion(tenantId,clientId,ownerJiacn,taskId,artifactId,artifactVersion);
+            if(current==null)throw notFound();
+            var actual=artifactMaterial(current);
+            if(!Objects.equals(hash,current.getContentHash())||!Objects.equals(uri,current.getStorageUri())
+                    ||!Objects.equals(material.byteLength(),actual.byteLength())||!Objects.equals(material.mimeType(),actual.mimeType()))
+                throw invalidPersisted("Artifact changed during content verification");
+            return new StreamContent(artifactId,artifactVersion,hash,material.byteLength(),material.mimeType(),stream);
+        } catch(RuntimeException | Error rejected) {
+            try {stream.close();} catch(java.io.IOException closeFailure) {rejected.addSuppressed(closeFailure);}
+            throw rejected;
+        }
     }
 
     @Override
@@ -909,10 +973,11 @@ public class AgentTaskCollaborationServiceImpl
         return workItemId;
     }
 
-    private ArtifactPayloadMode validateArtifactPayloadShape(
-            AgentTaskArtifactPublishDTO command) {
+    private ArtifactPayloadMode validateArtifactPayloadShape(AgentTaskArtifactPublishDTO command,boolean streamed) {
+        if(streamed&&(command.getContent()!=null||command.hasContentBytes()||command.getStorageUri()!=null||command.getContentByteLength()==null))
+            throw invalid("Stream publication requires metadata only");
         boolean hasInline = command.getContent() != null && !command.getContent().isEmpty();
-        boolean hasManagedBytes = command.hasContentBytes();
+        boolean hasManagedBytes = command.hasContentBytes() || streamed;
         boolean hasExternalStorage = !StringUtil.isBlank(command.getStorageUri());
         int modeCount = (hasInline ? 1 : 0) + (hasManagedBytes ? 1 : 0)
                 + (hasExternalStorage ? 1 : 0);

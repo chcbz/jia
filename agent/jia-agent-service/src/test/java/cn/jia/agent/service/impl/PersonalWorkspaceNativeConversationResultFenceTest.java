@@ -28,7 +28,7 @@ class PersonalWorkspaceNativeConversationResultFenceTest {
     @Test void retiredV3CannotStageOrManufactureResultAfterStart() throws Exception {
         var f=new ResultFixture();
         assertThrows(PersonalWorkspaceExecutionService.Failure.class,f::stage);
-        verify(f.base.storage,never()).store(any(),any(),anyString());
+        verify(f.base.storage,never()).storeStream(any(),any(),anyLong(),anyString());
         verify(f.base.executions,never()).insertOutput(any());
         verify(f.base.executions,never()).update(any());
     }
@@ -78,7 +78,7 @@ class PersonalWorkspaceNativeConversationResultFenceTest {
             when(base.executions.lockOutput("0","client","owner","execution","output_1")).thenAnswer(call->output);
             when(base.executions.lockOutputs("0","client","owner","execution")).thenAnswer(call->output==null?List.of():List.of(output));
             doAnswer(call->{output=call.getArgument(0);return null;}).when(base.executions).insertOutput(any());
-            when(base.storage.store(any(),any(),anyString())).thenAnswer(call->{assertNoLocks();return stored();});
+            when(base.storage.storeStream(any(),any(),anyLong(),anyString())).thenAnswer(call->{assertNoLocks();return stored();});
             when(base.storage.read(any(),anyString(),anyString(),anyLong(),anyString())).thenAnswer(call->{assertNoLocks();return content();});
         }
         void assertNoLocks() { assertFalse(rootHeld.get());assertFalse(base.transactionActive.get()); }

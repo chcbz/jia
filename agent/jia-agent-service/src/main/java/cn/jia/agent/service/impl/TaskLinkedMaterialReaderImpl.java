@@ -52,6 +52,29 @@ public class TaskLinkedMaterialReaderImpl implements TaskLinkedMaterialReader {
         return content;
     }
 
+    @Override
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    public java.io.InputStream open(PersonalWorkspaceTaskLinkService.Scope scope,
+            String taskId,Selection selection,Metadata expected) {
+        var row=row(scope,taskId,selection);
+        if(!metadata(row).equals(expected))throw new Failure(Failure.Reason.NOT_FOUND);
+        java.io.InputStream stream;
+        try {
+            stream=storage.openStream(new PersonalWorkspaceStorage.Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn()),
+                    row.storageUri(),expected.sha256(),expected.byteLength(),expected.contentMimeType());
+        } catch(PersonalWorkspaceException error) {
+            throw new Failure(error.getReason()==PersonalWorkspaceException.Reason.STORAGE_CORRUPT
+                    ?Failure.Reason.CONTENT_MISMATCH:Failure.Reason.UNAVAILABLE,error);
+        } catch(RuntimeException error) {throw new Failure(Failure.Reason.UNAVAILABLE,error);}
+        try {
+            if(!metadata(scope,taskId,selection).equals(expected))throw new Failure(Failure.Reason.NOT_FOUND);
+            return stream;
+        } catch(RuntimeException | Error rejected) {
+            try {stream.close();} catch(java.io.IOException closeFailure) {rejected.addSuppressed(closeFailure);}
+            throw rejected;
+        }
+    }
+
     private PersonalWorkspaceTaskLinkDao.MaterialRow row(PersonalWorkspaceTaskLinkService.Scope scope,
             String taskId, Selection selection) {
         if (scope == null || selection == null || selection.version() < 1

@@ -213,16 +213,16 @@ public final class ChatActionCapabilityService {
         var live=skillRuntimes.lookup(policy.runtimeScope(),policy.fence());
         if(live==null||live.state()!=cn.jia.agent.service.SkillCapabilityLookup.State.AVAILABLE||!java.util.Objects.equals(live.sessionId(),sessionId))return List.copyOf(actions);
         if(!(nativeDeclaration.get("outputMimeTypes") instanceof List<?> runtimeMimes))return List.copyOf(actions);
-        var allowed=server.allowedMimeTypes().stream().filter(runtimeMimes::contains).filter(Set.of("text/plain","text/markdown","text/html","application/json","image/png",
-                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")::contains).sorted().toList();
+        // The authenticated runtime owns tool capability. The API does not keep
+        // a second format catalogue; task/session authorization remains above.
+        var allowed=runtimeMimes.stream().map(String.class::cast).distinct().sorted().toList();
         if(allowed.isEmpty())return List.copyOf(actions);
-        var input=catalog.stream().map(x->x.get("contentMimeType")).filter(String.class::isInstance).map(String.class::cast).filter(server.inputMimeTypes()::contains).distinct().sorted().toList();
+        var input=catalog.stream().map(x->x.get("contentMimeType")).filter(String.class::isInstance).map(String.class::cast).distinct().sorted().toList();
         var schema=Map.<String,Object>of("$schema","https://json-schema.org/draft/2020-12/schema","type","object","additionalProperties",false,"properties",Map.of());
         var action=new java.util.LinkedHashMap<String,Object>();
         action.put("actionId","act_"+cn.jia.chat.api.ChatBountyInteractionV3Wire.shaText(CanonicalContextJson.write(Map.of("operation","EXECUTE_NATIVE","inputMimeTypes",input,"outputMimeTypes",allowed))));
         action.put("kind","EXECUTE");action.put("operation","EXECUTE_NATIVE");action.put("skill",null);action.put("parametersSchema",schema);
-        action.put("inputMimeTypes",input);action.put("minSources",0);action.put("maxSources",input.isEmpty()?0:32);action.put("outputMimeTypes",allowed);
+        action.put("inputMimeTypes",input);action.put("minSources",0);action.put("maxSources",catalog.size());action.put("outputMimeTypes",allowed);
         if(!policy.equals(policies.read(key,taskId))||!live.equals(skillRuntimes.lookup(policy.runtimeScope(),policy.fence())))return List.copyOf(actions);
         actions.add(java.util.Collections.unmodifiableMap(action));
         if(!(nativeDeclaration.get("supportedToolPolicyRefs") instanceof List<?> refs)||!refs.contains(cn.jia.agent.service.SkillExecutionService.NATIVE_SKILL_SCRIPT_POLICY))return List.copyOf(actions);

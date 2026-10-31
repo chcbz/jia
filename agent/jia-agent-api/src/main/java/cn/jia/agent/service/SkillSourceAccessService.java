@@ -6,6 +6,6 @@ import java.util.Map;
 public interface SkillSourceAccessService {
     void requireAuthorized(PersonalWorkspaceExecutionService.OwnerScope scope,String taskId,
             String conversationId,long conversationGeneration,Map<String,Object> frozenInput);
-    PersonalWorkspaceExecutionService.RuntimeContent read(PersonalWorkspaceExecutionService.OwnerScope scope,
+    PersonalWorkspaceExecutionService.RuntimeDownload open(PersonalWorkspaceExecutionService.OwnerScope scope,
             String taskId,String conversationId,long conversationGeneration,Map<String,Object> frozenInput);
 }
