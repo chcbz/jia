@@ -32,7 +32,7 @@ public class ChatDispatchAuthorityService {
             String taskId, String agentId) {
         var scope=new AgentTaskExecutionGrantService.Scope(tenant,client,owner);
         var current=grants.currentFollowupContext(scope,taskId,agentId);
-        return grants.resolveFollowupBaseline(scope,taskId,current.baselineGrantVersion(),
+        return grants.resolveDiscussionBaseline(scope,taskId,current.baselineGrantVersion(),
                 current.taskVersion(),current.assignmentRevision(),current.requirementRevision(),agentId);
     }
 
@@ -136,7 +136,7 @@ public class ChatDispatchAuthorityService {
                     // baseline under A's root, without requiring a permission absent from skill grants.
                     tasks.executeWithLockedTaskRootInOwnerScope(row.getTenantId(),row.getClientId(),row.getOwnerJiacn(),task,root -> {
                         if (root==null || root.getTaskVersion()==null || "cancelled".equals(root.getRewardStatus())) throw denied();
-                        return grants.admitFollowupBaseline(scope,task,row.getTaskGrantId(),row.getTaskGrantVersion(),
+                        return grants.admitDiscussionBaseline(scope,task,row.getTaskGrantId(),row.getTaskGrantVersion(),
                                 root.getTaskVersion(),revision,requirement,turn.getTargetAgentId());
                     });
                 }

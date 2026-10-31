@@ -64,6 +64,15 @@ public interface AgentTaskExecutionGrantService {
             long expectedTaskVersion,long expectedAssignmentRevision,long expectedRequirementRevision,
             String targetAgentId);
 
+    /** Discussion routing authority only; current sources are authorized by the source adapter.
+     * Returns no authorized inputs and never authorizes a paid operation. */
+    Admission admitDiscussionBaseline(Scope scope, String taskId, String grantId,
+            long expectedGrantVersion, long expectedTaskVersion, long expectedAssignmentRevision,
+            long expectedRequirementRevision, String targetAgentId);
+    Admission resolveDiscussionBaseline(Scope scope, String taskId, long expectedGrantVersion,
+            long expectedTaskVersion, long expectedAssignmentRevision, long expectedRequirementRevision,
+            String targetAgentId);
+
     /** Current active assignment/grant admission for byte-backed promotion; starts no execution. */
     Admission admitSelectedOutputPromotion(Scope scope, String taskId, String grantId,
             long expectedGrantVersion, long expectedAssignmentRevision, String targetAgentId);

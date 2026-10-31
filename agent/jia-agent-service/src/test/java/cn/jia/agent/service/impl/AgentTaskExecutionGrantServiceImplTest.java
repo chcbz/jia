@@ -729,6 +729,34 @@ class AgentTaskExecutionGrantServiceImplTest {
                 scope(),"task-1",original.getAssignmentRevision(),"agent-1"));
     }
 
+    @Test void discussionRoutingAndReceiptsDoNotAuthorizeDetachedBootstrapInputs() {
+        when(links.list("0","client","owner","task-1",null,null,33)).thenReturn(List.of());
+        var original=service.assignForDeliberation(scope(),"task-1","discussion-input-change","agent-1",0,1);
+        var grant=grants.byId.get(original.getGrantId());
+        grant.setInputScopeJson("[{\"fileId\":\"original-file\",\"version\":1,\"purpose\":\"INPUT\","
+                +"\"contentMimeType\":\"image/png\",\"byteLength\":1499,\"contentHash\":\""+"a".repeat(64)+"\"}]");
+        root.setRewardStatus("reviewing");
+        clearInvocations(workspace,links);
+        var current=service.currentFollowupContext(scope(),"task-1","agent-1");
+        var admitted=service.resolveDiscussionBaseline(scope(),"task-1",current.baselineGrantVersion(),
+                current.taskVersion(),current.assignmentRevision(),current.requirementRevision(),"agent-1");
+        assertEquals(original.getGrantId(),admitted.grantId());
+        assertEquals(List.of(),admitted.inputs());
+        assertNull(admitted.operation());
+        assertFalse(admitted.paidExecutionAuthorized());
+        assertEquals(admitted,service.admitDiscussionBaseline(scope(),"task-1",admitted.grantId(),
+                admitted.grantVersion(),current.taskVersion(),admitted.assignmentRevision(),current.requirementRevision(),"agent-1"));
+        verifyNoInteractions(workspace,links);
+        // Paid/frozen-input consumers keep their original admission semantics.
+        assertThrows(AgentTaskExecutionGrantException.class,()->service.resolveFollowupBaseline(scope(),"task-1",
+                current.baselineGrantVersion(),current.taskVersion(),current.assignmentRevision(),current.requirementRevision(),"agent-1"));
+        assertThrows(AgentTaskExecutionGrantException.class,()->service.admitDiscussionBaseline(scope(),"task-1",
+                admitted.grantId(),admitted.grantVersion(),current.taskVersion()+1,admitted.assignmentRevision(),current.requirementRevision(),"agent-1"));
+        grant.setState("REVOKED");
+        assertThrows(AgentTaskExecutionGrantException.class,()->service.admitDiscussionBaseline(scope(),"task-1",
+                admitted.grantId(),admitted.grantVersion(),current.taskVersion(),admitted.assignmentRevision(),current.requirementRevision(),"agent-1"));
+    }
+
     @Test void latestBaselineDoesNotReviveRevokedGrantOrDifferentAssignment() {
         when(links.list("0","client","owner","task-1",null,null,33)).thenReturn(List.of());
         var original=service.assignForDeliberation(scope(),"task-1","old-revoked","agent-1",0,1);

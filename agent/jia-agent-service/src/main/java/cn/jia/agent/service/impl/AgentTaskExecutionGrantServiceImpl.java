@@ -491,6 +491,32 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
     public Admission admitFollowupBaseline(Scope scope,String taskId,String grantId,
             long expectedGrantVersion,long expectedTaskVersion,long expectedAssignmentRevision,
             long expectedRequirementRevision,String targetAgentId) {
+        return admitBaseline(scope,taskId,grantId,expectedGrantVersion,expectedTaskVersion,
+                expectedAssignmentRevision,expectedRequirementRevision,targetAgentId,true);
+    }
+
+    @Override
+    public Admission resolveDiscussionBaseline(Scope scope,String taskId,long expectedGrantVersion,
+            long expectedTaskVersion,long expectedAssignmentRevision,long expectedRequirementRevision,
+            String targetAgentId) {
+        validateScope(scope);exact(taskId,"taskId",100);exact(targetAgentId,"targetAgentId",100);
+        var active=grants.findActiveByTask(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),taskId);
+        if(active==null)throw notFound();
+        return admitDiscussionBaseline(scope,taskId,active.getGrantId(),expectedGrantVersion,expectedTaskVersion,
+                expectedAssignmentRevision,expectedRequirementRevision,targetAgentId);
+    }
+
+    @Override
+    public Admission admitDiscussionBaseline(Scope scope,String taskId,String grantId,
+            long expectedGrantVersion,long expectedTaskVersion,long expectedAssignmentRevision,
+            long expectedRequirementRevision,String targetAgentId) {
+        return admitBaseline(scope,taskId,grantId,expectedGrantVersion,expectedTaskVersion,
+                expectedAssignmentRevision,expectedRequirementRevision,targetAgentId,false);
+    }
+
+    private Admission admitBaseline(Scope scope,String taskId,String grantId,
+            long expectedGrantVersion,long expectedTaskVersion,long expectedAssignmentRevision,
+            long expectedRequirementRevision,String targetAgentId,boolean authorizePersistedInputs) {
         validateScope(scope); exact(taskId,"taskId",100); exact(grantId,"grantId",100);
         exact(targetAgentId,"targetAgentId",100);
         if(expectedGrantVersion<1 || expectedGrantVersion>MAX_SAFE_INTEGER
@@ -504,7 +530,8 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
                 AgentTaskExecutionGrantEntity observed=grants.findByGrant(scope.tenantId(),scope.clientId(),
                         scope.ownerJiacn(),taskId,grantId);
                 if(observed==null) throw notFound();
-                lockTargetAndPersistedInputs(scope,taskId,targetAgentId,observed);
+                if (authorizePersistedInputs) lockTargetAndPersistedInputs(scope,taskId,targetAgentId,observed);
+                else lockTarget(scope,taskId,targetAgentId,observed);
                 AgentTaskExecutionGrantEntity locked=grants.findByGrantForUpdate(scope.tenantId(),scope.clientId(),
                         scope.ownerJiacn(),taskId,grantId);
                 if(locked==null || !same(observed.getRequestHash(),locked.getRequestHash())
@@ -517,7 +544,7 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
                 if(current==null || current.sha256()==null || !current.sha256().matches("[0-9a-f]{64}"))
                     throw invalidState("Current requirement is unavailable");
                 return new Admission(ordinary.grantId(),ordinary.grantVersion(),ordinary.assignmentRevision(),
-                        ordinary.targetAgentId(),null,false,ordinary.inputs(),null,null,expectedTaskVersion,
+                        ordinary.targetAgentId(),null,false,authorizePersistedInputs ? ordinary.inputs() : List.of(),null,null,expectedTaskVersion,
                         expectedRequirementRevision,current.sha256(),locked.getIdempotencyKey(),locked.getRequestHash());
             });
         } catch(AgentTaskCollaborationException failure) { throw translate(failure); }

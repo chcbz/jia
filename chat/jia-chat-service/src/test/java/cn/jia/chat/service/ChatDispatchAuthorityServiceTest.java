@@ -40,11 +40,23 @@ class ChatDispatchAuthorityServiceTest {
         when(targets.requireGrantTarget("0","client","A","task-A","grant-original",3))
                 .thenReturn(new TaskAssigneeAuthorityService.Target("0","client","B","agent-B",19L,4L));
     }
+    @Test void packageAndContextTargetUseDiscussionBaselineNotFrozenInputAdmission() {
+        var scope=new AgentTaskExecutionGrantService.Scope("0","client","A");
+        when(grants.currentFollowupContext(scope,"task-A","agent-B"))
+                .thenReturn(new AgentTaskExecutionGrantService.FollowupContext("task-A","agent-B",12,7,3,2));
+        when(grants.resolveDiscussionBaseline(scope,"task-A",3,12,7,2,"agent-B"))
+                .thenReturn(new AgentTaskExecutionGrantService.Admission("grant-original",3,7,"agent-B",null,false,List.of()));
+        assertEquals("B",service.admissionTarget("0","A","client","task-A","agent-B").ownerJiacn());
+        verify(grants).currentFollowupContext(scope,"task-A","agent-B");
+        verify(grants).resolveDiscussionBaseline(scope,"task-A",3,12,7,2,"agent-B");
+        verifyNoMoreInteractions(grants);
+    }
+
     @Test void outboundRoutesToBButRetainsAData() {
         var result=service.outgoing(row);
         assertEquals("B",result.executorOwner()); assertEquals("A",result.turn().getOwnerJiacn());
         assertEquals("grant-original",result.dispatch().getTaskGrantId());
-        verify(grants).admitFollowupBaseline(new AgentTaskExecutionGrantService.Scope("0","client","A"),
+        verify(grants).admitDiscussionBaseline(new AgentTaskExecutionGrantService.Scope("0","client","A"),
                 "task-A","grant-original",3,12,7,2,"agent-B");
         verifyNoMoreInteractions(grants);
     }
@@ -67,7 +79,7 @@ class ChatDispatchAuthorityServiceTest {
         verifyNoInteractions(targets,grants);
     }
     @Test void revokedGrantOrAssignmentNeverFallsBackToCurrentGrant() {
-        doThrow(new IllegalStateException("REVOKED_OR_ASSIGNMENT_CHANGED")).when(grants).admitFollowupBaseline(
+        doThrow(new IllegalStateException("REVOKED_OR_ASSIGNMENT_CHANGED")).when(grants).admitDiscussionBaseline(
                 new AgentTaskExecutionGrantService.Scope("0","client","A"),"task-A","grant-original",3,12,7,2,"agent-B");
         assertThrows(RuntimeException.class,()->service.outgoing(row));
         verifyNoInteractions(targets);
@@ -153,7 +165,7 @@ class ChatDispatchAuthorityServiceTest {
         row.setPayloadJson(original);
         assertEquals("B",service.incoming("0","client","B","agent-B","dispatch").executorOwner());
         assertEquals(original,row.getPayloadJson());
-        verify(grants).admitFollowupBaseline(new AgentTaskExecutionGrantService.Scope("0","client","A"),
+        verify(grants).admitDiscussionBaseline(new AgentTaskExecutionGrantService.Scope("0","client","A"),
                 "task-A","grant-original",3,12,7,2,"agent-B");
         verifyNoMoreInteractions(grants);
         row.setTaskAssignmentRevision(null);
