@@ -29,10 +29,12 @@ class TypedDeliberationDeclarationTest {
         assertTrue(parsed.supportedOperations().isEmpty());
         assertEquals(declaration("UNAVAILABLE"),parsed.frozenReceipt());
     }
-    @Test void absentAndAnyShapeDriftAreNotCapabilities() {
+    @Test void extraMetadataGrantsNoAuthorityAndExecutionSemanticDriftIsRejected() {
         assertEquals(TypedDeliberationDeclaration.State.UNDECLARED,TypedDeliberationDeclaration.parse(null).state());
         Map<String,Object> extra=declaration("READY");extra.put("operations",List.of("GENERATE_IMAGE"));
-        assertEquals(TypedDeliberationDeclaration.State.UNSUPPORTED,TypedDeliberationDeclaration.parse(extra).state());
+        var parsed=TypedDeliberationDeclaration.parse(extra);
+        assertEquals(TypedDeliberationDeclaration.State.READY,parsed.state());
+        assertTrue(parsed.supportedOperations().isEmpty());assertFalse(parsed.frozenReceipt().containsKey("operations"));
         Map<String,Object> weakened=declaration("READY");weakened.put("strictNoToolsVerified",true);
         assertEquals(TypedDeliberationDeclaration.State.UNSUPPORTED,TypedDeliberationDeclaration.parse(weakened).state());
     }

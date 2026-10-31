@@ -39,7 +39,7 @@ class ChatTypedInspectionWireTest {
     }
 
     @Test
-    void fullMixed32MaterialSelectorsAreAcceptedWithoutPurposeCoercion() {
+    void mixedMaterialSelectorsBeyondOldCountAreAcceptedWithoutPurposeCoercion() {
         String selector = "{\"kind\":\"TASK_LINKED_WORKSPACE_VERSION\",\"fileId\":\"file-%d\","
                 + "\"version\":\"1\",\"purpose\":\"%s\",\"assetId\":null,\"assetRevision\":null}";
         var selectors = new java.util.ArrayList<String>();
@@ -50,7 +50,7 @@ class ChatTypedInspectionWireTest {
         assertEquals("INPUT", parsed.sourceSelectors().getFirst().purpose());
         assertEquals("REFERENCE", parsed.sourceSelectors().get(1).purpose());
         selectors.add(selector.formatted(32, "INPUT"));
-        reject(prefix + String.join(",", selectors) + "]}");
+        assertEquals(33,ChatTypedInspectionWire.parse(prefix+String.join(",",selectors)+"]}").sourceSelectors().size());
         for (String role : java.util.List.of("OUTPUT", "input", "REFERENCE ")) reject(VALID.replace("REFERENCE", role));
         reject(VALID.replace("\"version\":\"2\"", "\"version\":\"2147483648\""));
     }

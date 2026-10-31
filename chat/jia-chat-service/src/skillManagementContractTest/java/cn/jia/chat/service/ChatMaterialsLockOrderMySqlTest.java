@@ -59,7 +59,7 @@ class ChatMaterialsLockOrderMySqlTest extends SkillManagementMySqlFixture {
                 assertFalse(fixture.fenced);
                 assertFalse(TransactionSynchronizationManager.isActualTransactionActive(),"I/O must be outside both transactions");
                 return fixture.content;
-            }).when(fixture.sources).read(any(),anyString(),anyString(),anyLong(),any());
+            }).when(fixture.sources).open(any(),anyString(),anyString(),anyLong(),any());
             var nativeMutation=executor.submit(()->tx.execute(status->{
                 jdbc.queryForObject("SELECT id FROM binding_row WHERE id=1 FOR UPDATE",Long.class);
                 nativeHasBinding.countDown();
@@ -71,7 +71,7 @@ class ChatMaterialsLockOrderMySqlTest extends SkillManagementMySqlFixture {
             assertTrue(nativeHasBinding.await(5,TimeUnit.SECONDS));
             var material=executor.submit(fixture::read);
             assertTrue(nativeMutation.get(10,TimeUnit.SECONDS));
-            assertArrayEquals(fixture.content.bytes(),material.get(10,TimeUnit.SECONDS));
+            assertArrayEquals(fixture.bytes,material.get(10,TimeUnit.SECONDS));
             assertEquals(2,fixture.fences);
         } finally {
             executor.shutdownNow();
