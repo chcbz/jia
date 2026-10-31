@@ -21,8 +21,9 @@ public final class AssigneeRecommendationService {
     private final AgentService agents;
     private final SkillManagementService skills;
     private final AgentAssigneeRecommendationModel model;
-    public AssigneeRecommendationService(AgentService agents, SkillManagementService skills, AgentAssigneeRecommendationModel model) {
-        this.agents = agents; this.skills = skills; this.model = model;
+    private final RecommendationMaterials materials;
+    public AssigneeRecommendationService(AgentService agents, SkillManagementService skills, AgentAssigneeRecommendationModel model, RecommendationMaterials materials) {
+        this.agents = agents; this.skills = skills; this.model = model; this.materials = materials;
     }
     public Result recommend(HostingRentHttp.Actor actor, String taskId, Request request) {
         if (request == null || request.expectedTaskVersion() == null || request.expectedTaskVersion().isBlank())
@@ -40,11 +41,13 @@ public final class AssigneeRecommendationService {
                 .filter(c -> c.evidence().stream().anyMatch(Evidence::available)).toList();
         if (evidenceCandidates.isEmpty()) return new Result(taskId, task.getTaskVersion(), observedAt,
                 "NO_MATCH", "当前候选尚无可引用的已登记本领或已启用技能证据", List.of(), List.of(), true);
+        var materialObservation = materials.observe(actor, taskId);
         String raw;
         try {
             var input = new LinkedHashMap<String, Object>();
             input.put("task", taskInput(task)); input.put("candidates", evidenceCandidates);
-            input.put("materials", "未读取附件正文；不要猜测附件内容。必要时请用户补充。");
+            input.put("materials", materialObservation.stream().map(RecommendationMaterials.Observation::material).toList());
+            input.put("materialsNote", "仅提供关联版本元信息；未读取附件正文。summary=null表示无已有摘要，不代表附件无内容。");
             raw = model.judge(JSON.writeValueAsString(input));
         } catch (Failure error) { throw error; }
         catch (Exception unavailable) { throw new Failure(503, "RECOMMENDATION_UNAVAILABLE"); }
@@ -55,6 +58,7 @@ public final class AssigneeRecommendationService {
                 || !Objects.equals(task.getStatus(), current.getStatus())
                 || !Objects.equals(candidates, observe(actor, taskId)))
             throw new Failure(409, "RECOMMENDATION_STALE");
+        materials.verifyUnchanged(actor, taskId, materialObservation);
         return decode(taskId, task.getTaskVersion(), observedAt, candidates, raw);
     }
     private static Map<String, Object> taskInput(AgentTaskDTO task) {

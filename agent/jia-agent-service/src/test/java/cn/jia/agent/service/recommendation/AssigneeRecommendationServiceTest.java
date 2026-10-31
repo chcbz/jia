@@ -55,7 +55,7 @@ class AssigneeRecommendationServiceTest {
     }
     @Test void noCandidatesMakesNoModelOrSkillCallAndVersionMismatchDoesNotInvokeModel() {
         var agents = mock(AgentService.class); var skills = mock(SkillManagementService.class); var model = mock(AgentAssigneeRecommendationModel.class);
-        var service = new AssigneeRecommendationService(agents, skills, model);
+        var service = new AssigneeRecommendationService(agents, skills, model, mock(RecommendationMaterials.class));
         when(agents.getTask("task")).thenReturn(task("7")); when(agents.listTaskAssigneeCandidates("task")).thenReturn(List.of());
         assertEquals("NO_CANDIDATES", service.recommend(ACTOR, "task", new Request("7")).state());
         assertEquals(409, assertThrows(Failure.class, () -> service.recommend(ACTOR, "task", new Request("6"))).status());
@@ -63,7 +63,7 @@ class AssigneeRecommendationServiceTest {
     }
     @Test void usesSingleCallNoAssignmentAndChecksTaskAgainAfterInference() {
         var agents = mock(AgentService.class); var skills = mock(SkillManagementService.class); var model = mock(AgentAssigneeRecommendationModel.class);
-        var service = new AssigneeRecommendationService(agents, skills, model);
+        var service = new AssigneeRecommendationService(agents, skills, model, mock(RecommendationMaterials.class));
         var a = new AgentTaskAssigneeCandidateDTO(new AgentTaskTargetSummaryDTO("a", "Agent", null, true, "online"), List.of("写作"));
         when(agents.getTask("task")).thenReturn(task("7")); when(agents.listTaskAssigneeCandidates("task")).thenReturn(List.of(a));
         when(skills.recommendationSkills(ACTOR, "a")).thenReturn(List.of()); when(model.judge(anyString())).thenReturn(ANSWER);
@@ -76,7 +76,7 @@ class AssigneeRecommendationServiceTest {
         var agents = mock(AgentService.class); var skills = mock(SkillManagementService.class); var model = mock(AgentAssigneeRecommendationModel.class);
         var a = new AgentTaskAssigneeCandidateDTO(new AgentTaskTargetSummaryDTO("external", "Agent", "公开提供方", false, "online"), List.of());
         when(agents.getTask("task")).thenReturn(task("7")); when(agents.listTaskAssigneeCandidates("task")).thenReturn(List.of(a));
-        var service = new AssigneeRecommendationService(agents, skills, model);
+        var service = new AssigneeRecommendationService(agents, skills, model, mock(RecommendationMaterials.class));
         assertEquals("NO_MATCH", service.recommend(ACTOR, "task", new Request("7")).state());
         verifyNoInteractions(skills, model);
     }
@@ -86,7 +86,7 @@ class AssigneeRecommendationServiceTest {
         when(agents.getTask("task")).thenReturn(task("7")); when(agents.listTaskAssigneeCandidates("task")).thenReturn(List.of(a));
         when(skills.recommendationSkills(ACTOR, "a")).thenReturn(List.of());
         when(model.judge(anyString())).thenThrow(new RuntimeException("private upstream details"));
-        var service = new AssigneeRecommendationService(agents, skills, model);
+        var service = new AssigneeRecommendationService(agents, skills, model, mock(RecommendationMaterials.class));
         Failure failure = assertThrows(Failure.class, () -> service.recommend(ACTOR, "task", new Request("7")));
         assertEquals("RECOMMENDATION_UNAVAILABLE", failure.code()); verify(model, times(1)).judge(anyString());
         verify(agents, never()).assignTask(anyString(), any());
@@ -105,7 +105,7 @@ class AssigneeRecommendationServiceTest {
         when(agents.listTaskAssigneeCandidates("task")).thenReturn(List.of(impossible, eligible));
         when(skills.recommendationSkills(eq(ACTOR), anyString())).thenReturn(List.of());
         when(model.judge(anyString())).thenReturn(ANSWER);
-        var result = new AssigneeRecommendationService(agents, skills, model).recommend(ACTOR, "task", new Request("7"));
+        var result = new AssigneeRecommendationService(agents, skills, model, mock(RecommendationMaterials.class)).recommend(ACTOR, "task", new Request("7"));
         assertEquals("READY", result.state()); assertTrue(result.candidateSetComplete());
         var input = org.mockito.ArgumentCaptor.forClass(String.class); verify(model, times(1)).judge(input.capture());
         var rows = new com.fasterxml.jackson.databind.ObjectMapper().readTree(input.getValue()).get("candidates");
@@ -118,7 +118,7 @@ class AssigneeRecommendationServiceTest {
         when(agents.getTask("task")).thenReturn(task("7")); when(agents.listTaskAssigneeCandidates("task")).thenReturn(List.of(a));
         when(skills.recommendationSkills(ACTOR, "a")).thenReturn(List.of(new SkillManagementService.RecommendationSkill(
                 "installed", "image", "1", "图片", "经验", false, "VERSION_MISMATCH", "INSTRUCTION")));
-        var result = new AssigneeRecommendationService(agents, skills, model).recommend(ACTOR, "task", new Request("7"));
+        var result = new AssigneeRecommendationService(agents, skills, model, mock(RecommendationMaterials.class)).recommend(ACTOR, "task", new Request("7"));
         assertEquals("NO_MATCH", result.state()); assertTrue(result.recommendations().isEmpty()); verifyNoInteractions(model);
     }
     @Test void reproducedEmptyEvidenceResultRemainsRejectedRatherThanBeingFilledIn() {
@@ -133,12 +133,41 @@ class AssigneeRecommendationServiceTest {
         when(skills.recommendationSkills(ACTOR, "a")).thenReturn(List.of(new SkillManagementService.RecommendationSkill(
                 "installed", "writing", "1", "写作", "写作经验", true, "NOT_EXECUTABLE", "INSTRUCTION")));
         when(model.judge(anyString())).thenReturn(ANSWER.replace("ability:0", "skill:installed"));
-        var result = new AssigneeRecommendationService(agents, skills, model).recommend(ACTOR, "task", new Request("7"));
+        var result = new AssigneeRecommendationService(agents, skills, model, mock(RecommendationMaterials.class)).recommend(ACTOR, "task", new Request("7"));
         assertEquals("READY", result.state());
         var evidence = result.recommendations().getFirst().evidence().getFirst();
         assertEquals("skill:installed", evidence.id()); assertTrue(evidence.available());
         assertTrue(evidence.description().contains("不是可直接执行的工具"));
         verify(model, times(1)).judge(anyString()); verify(agents, never()).assignTask(anyString(), any());
+    }
+
+    @Test void imageMetadataEntersSingleModelCallWithoutPrivateSnapshotFields() throws Exception {
+        var agents = mock(AgentService.class); var skills = mock(SkillManagementService.class);
+        var model = mock(AgentAssigneeRecommendationModel.class); var materials = mock(RecommendationMaterials.class);
+        var t = task("7"); t.setTitle("分析结果"); t.setDescription("分析结果");
+        when(agents.getTask("task")).thenReturn(t);
+        when(agents.listTaskAssigneeCandidates("task")).thenReturn(List.of(new AgentTaskAssigneeCandidateDTO(
+                new AgentTaskTargetSummaryDTO("a", "Agent", null, true, "online"), List.of("识图分析"))));
+        when(skills.recommendationSkills(ACTOR, "a")).thenReturn(List.of());
+        var snapshot = List.of(new RecommendationMaterials.Observation("private-relation", 9, "private-file", 10,
+                "private-sha", new RecommendationMaterials.Material("检测图片", "result.png", "image/png", 1, "INPUT", "ACTIVE", null)));
+        when(materials.observe(ACTOR, "task")).thenReturn(snapshot);
+        when(model.judge(anyString())).thenReturn(ANSWER);
+        var service = new AssigneeRecommendationService(agents, skills, model, materials);
+        assertEquals("READY", service.recommend(ACTOR, "task", new Request("7")).state());
+        var input = org.mockito.ArgumentCaptor.forClass(String.class); verify(model, times(1)).judge(input.capture());
+        var root = new com.fasterxml.jackson.databind.ObjectMapper().readTree(input.getValue());
+        assertEquals("分析结果", root.path("task").path("description").asText());
+        assertEquals("image/png", root.path("materials").get(0).path("contentMimeType").asText());
+        assertEquals("检测图片", root.path("materials").get(0).path("name").asText());
+        assertTrue(root.path("materials").get(0).path("summary").isNull());
+        assertFalse(input.getValue().contains("private-"));
+        verify(materials).verifyUnchanged(ACTOR, "task", snapshot);
+        doThrow(new Failure(409, "RECOMMENDATION_STALE")).when(materials).verifyUnchanged(ACTOR, "task", snapshot);
+        assertEquals(409, assertThrows(Failure.class, () -> service.recommend(ACTOR, "task", new Request("7"))).status());
+        reset(model); when(materials.observe(ACTOR, "task")).thenThrow(new Failure(409, "RECOMMENDATION_STALE"));
+        assertThrows(Failure.class, () -> service.recommend(ACTOR, "task", new Request("7")));
+        verifyNoInteractions(model);
     }
 
 }
