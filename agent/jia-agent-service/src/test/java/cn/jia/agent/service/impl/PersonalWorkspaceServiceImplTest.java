@@ -517,7 +517,7 @@ class PersonalWorkspaceServiceImplTest {
                 org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyString(),
                 org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.eq("text/plain")))
                 .thenAnswer(invocation -> new java.io.ByteArrayInputStream(content) {
-                    @Override public synchronized byte[] readNBytes(int length) {
+                    @Override public synchronized byte[] readNBytes(int length) throws java.io.IOException {
                         byte[] result = super.readNBytes(length);
                         reads.addAndGet(result.length);
                         return result;
