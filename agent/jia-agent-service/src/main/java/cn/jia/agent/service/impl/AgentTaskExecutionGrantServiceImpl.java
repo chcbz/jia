@@ -586,7 +586,7 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
                         AgentTaskExecutionGrantEntity observed=grants.findByGrant(scope.tenantId(),
                                 scope.clientId(),scope.ownerJiacn(),taskId,grantId);
                         if (observed==null) throw notFound();
-                        lockTargetAndPersistedInputs(scope,taskId,targetAgentId,observed);
+                        lockTarget(scope,taskId,targetAgentId,observed);
                         AgentTaskExecutionGrantEntity grant=grants.findByGrantForUpdate(scope.tenantId(),
                                 scope.clientId(),scope.ownerJiacn(),taskId,grantId);
                         if (grant==null || !same(observed.getRequestHash(),grant.getRequestHash()))
@@ -620,11 +620,8 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
         } catch (IllegalArgumentException | IllegalStateException absent) {
             throw invalidState("Current requirement revision is missing or stale");
         }
-        var inputs=readInputs(grant.getInputScopeJson()).stream()
-                .map(input -> new AuthorizedInput(input.fileId(),input.version(),input.purpose(),
-                        input.contentMimeType(),input.byteLength(),input.contentHash())).toList();
         return new Admission(grant.getGrantId(),grantVersion,assignmentRevision,targetAgentId,
-                "FINALIZE_SELECTED_OUTPUTS",false,inputs);
+                "FINALIZE_SELECTED_OUTPUTS",false,List.of());
     }
 
     @Override
@@ -688,7 +685,7 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
         AgentTaskExecutionGrantEntity observed=grants.findByGrant(scope.tenantId(),
                 scope.clientId(),scope.ownerJiacn(),taskId,grantId);
         if (observed==null) throw notFound();
-        lockTargetAndPersistedInputs(scope,taskId,targetAgentId,observed);
+        lockOperationAuthority(scope,taskId,targetAgentId,observed,operation,paid);
         AgentTaskExecutionGrantEntity grant=grants.findByGrantForUpdate(scope.tenantId(),
                 scope.clientId(),scope.ownerJiacn(),taskId,grantId);
         if (grant==null || !same(observed.getRequestHash(),grant.getRequestHash())) throw conflict("Grant changed during admission");
@@ -738,7 +735,7 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
                     Reason.PAID_EXECUTION_NOT_AUTHORIZED,"Controlled image authority is unavailable");
             controlled=controlledAuthority.verify(scope,root,grant,"NEW_EXECUTION",null,null,null);
         }
-        var authorizedInputs=readInputs(grant.getInputScopeJson()).stream()
+        var authorizedInputs="EXECUTE_SKILL".equals(operation) && !paid ? List.<AuthorizedInput>of() : readInputs(grant.getInputScopeJson()).stream()
                 .map(input -> new AuthorizedInput(input.fileId(),input.version(),input.purpose(),
                         input.contentMimeType(),input.byteLength(),input.contentHash())).toList();
         return new Admission(grant.getGrantId(),grantVersion,assignmentRevision,targetAgentId,operation,
@@ -878,7 +875,7 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
                         AgentTaskExecutionGrantEntity observed=grants.findActiveByTask(scope.tenantId(),
                                 scope.clientId(),scope.ownerJiacn(),taskId);
                         if (observed==null) throw notFound();
-                        lockTargetAndPersistedInputs(scope,taskId,targetAgentId,observed);
+                        lockOperationAuthority(scope,taskId,targetAgentId,observed,operation,paidExecution);
                         AgentTaskExecutionGrantEntity locked=grants.findByGrantForUpdate(scope.tenantId(),
                                 scope.clientId(),scope.ownerJiacn(),taskId,observed.getGrantId());
                         if (locked==null || !same(observed.getRequestHash(),locked.getRequestHash())) {
@@ -937,7 +934,7 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
                         AgentTaskExecutionGrantEntity observed=grants.findActiveByTask(scope.tenantId(),
                                 scope.clientId(),scope.ownerJiacn(),taskId);
                         if (observed==null) throw notFound();
-                        lockTargetAndPersistedInputs(scope,taskId,targetAgentId,observed);
+                        lockTarget(scope,taskId,targetAgentId,observed);
                         AgentTaskExecutionGrantEntity locked=grants.findByGrantForUpdate(scope.tenantId(),
                                 scope.clientId(),scope.ownerJiacn(),taskId,observed.getGrantId());
                         if (locked==null || !same(observed.getRequestHash(),locked.getRequestHash())) {
@@ -947,6 +944,13 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
                                 targetAgentId);
                     });
         } catch (AgentTaskCollaborationException failure) { throw translate(failure); }
+    }
+
+    private void lockOperationAuthority(Scope scope,String taskId,String targetAgentId,
+            AgentTaskExecutionGrantEntity observed,String operation,boolean paid) {
+        // Native inputs are authorized from the execution's own frozen source snapshot.
+        if ("EXECUTE_SKILL".equals(operation) && !paid) lockTarget(scope,taskId,targetAgentId,observed);
+        else lockTargetAndPersistedInputs(scope,taskId,targetAgentId,observed);
     }
 
     private void lockTarget(Scope scope,String taskId,String targetAgentId,

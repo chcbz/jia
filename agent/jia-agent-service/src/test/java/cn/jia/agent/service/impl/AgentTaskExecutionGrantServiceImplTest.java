@@ -720,9 +720,22 @@ class AgentTaskExecutionGrantServiceImplTest {
         verify(identities).lockActiveCanonicalAgentIdsInScope("0","client","owner",List.of("agent-1"));
         verifyNoInteractions(workspace,links);
 
-        // The legacy/frozen-input admission path still rejects an unavailable input.
+        // Actual native execution admission also uses the execution's current source snapshot.
+        var execution=service.admit(scope(),"task-1",grant.getGrantId(),grant.getGrantVersion(),
+                original.getAssignmentRevision(),"agent-1","EXECUTE_SKILL",false);
+        assertEquals("EXECUTE_SKILL",execution.operation());
+        assertEquals(List.of(),execution.inputs());
+        assertEquals(execution,service.resolveAndAdmit(scope(),"task-1",original.getAssignmentRevision(),
+                "agent-1","EXECUTE_SKILL",false));
+        var promotion=service.resolveSelectedOutputPromotion(scope(),"task-1",original.getAssignmentRevision(),"agent-1");
+        assertEquals("FINALIZE_SELECTED_OUTPUTS",promotion.operation());
+        assertEquals(List.of(),promotion.inputs());
+        assertEquals(promotion,service.admitSelectedOutputPromotion(scope(),"task-1",grant.getGrantId(),
+                grant.getGrantVersion(),original.getAssignmentRevision(),"agent-1"));
+        verifyNoInteractions(workspace,links);
+        // Non-native/frozen-input admission still rejects the unavailable original input.
         assertThrows(AgentTaskExecutionGrantException.class,()->service.admit(scope(),"task-1",grant.getGrantId(),
-                grant.getGrantVersion(),original.getAssignmentRevision(),"agent-1","EXECUTE_SKILL",false));
+                grant.getGrantVersion(),original.getAssignmentRevision(),"agent-1","INSPECT_INPUTS",false));
         when(identities.lockActiveCanonicalAgentIdsInScope("0","client","owner",List.of("agent-1")))
                 .thenReturn(List.of());
         assertThrows(AgentTaskExecutionGrantException.class,()->service.resolveSkillBaseline(
