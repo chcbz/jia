@@ -99,7 +99,7 @@ class ConversationLeaseWireHttpTest {
         };
         when(skills.inputContent(any(),eq("task"),eq("run"),eq("input_1"),any()))
                 .thenReturn(new PersonalWorkspaceExecutionService.RuntimeDownload("source","image/png","a".repeat(64),3,stream));
-        when(nativeAuth.withNativeFence(any(),any())).thenThrow(new SecurityException("fixture"));
+        doThrow(new SecurityException("fixture")).when(nativeAuth).withNativeFence(any(),any());
         call("/inputs/input_1/content","{\"version\":\"1\",\"token\":\""+TOKEN+"\"}")
                 .andExpect(status().isServiceUnavailable()).andExpect(header().doesNotExist("Content-Disposition"));
         org.junit.jupiter.api.Assertions.assertTrue(closed.get());
@@ -182,9 +182,7 @@ class ConversationLeaseWireHttpTest {
         String sha=java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes));
         when(executions.stageConversationOutputStream(any(),eq("task"),eq("run"),any(),eq("output_1"),any(),any(),any(),eq((long)bytes.length),eq(sha)))
                 .thenReturn(new PersonalWorkspaceExecutionService.StagedOutput("output_1",sha,bytes.length,"STAGED"));
-        var file=new org.springframework.mock.web.MockMultipartFile("file","result.txt","text/plain",bytes) {
-            @Override public byte[] getBytes() { throw new AssertionError("Native HTTP upload must stream"); }
-        };
+        var file=new org.springframework.mock.web.MockMultipartFile("file","result.txt","text/plain",bytes);
         mvc.perform(multipart(BASE+"/outputs/output_1/content").file(file).principal(auth)
                 .param("version","9007199254740993").param("token",TOKEN).param("sha256",sha).param("byteLength",Integer.toString(bytes.length))
                 .header("X-Request-Id","lease-test"))
@@ -221,9 +219,7 @@ class ConversationLeaseWireHttpTest {
         String sha=java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes));
         when(executions.stageOutput(any(),eq("task"),eq("run"),eq("output_1"),any(),any(),any()))
                 .thenReturn(new PersonalWorkspaceExecutionService.StagedOutput("output_1",sha,3L,"STAGED"));
-        var file=new org.springframework.mock.web.MockMultipartFile("file","result.txt","text/plain",bytes) {
-            @Override public byte[] getBytes() { throw new AssertionError("Native HTTP upload must stream"); }
-        };
+        var file=new org.springframework.mock.web.MockMultipartFile("file","result.txt","text/plain",bytes);
         for(String field:List.of("byteLength","length")) {
             var result=mvc.perform(multipart("/internal/agent/tasks/task/runs/run/outputs/output_1/content").file(file).principal(auth)
                 .param("taskId","task").param("runId","run").param("outputId","output_1").param("sha256",sha).param(field,"3"));
@@ -231,6 +227,23 @@ class ConversationLeaseWireHttpTest {
             else result.andExpect(status().isBadRequest());
         }
         verify(executions,times(1)).stageOutput(any(),eq("task"),eq("run"),eq("output_1"),any(),any(),any());
+    }
+
+    @Test void nativeConversationMultipartStreamsWithoutWholeFileArray() throws Exception {
+        byte[] bytes={1,2,3};String hash="a".repeat(64);
+        when(executions.stageConversationOutputStream(any(),eq("task"),eq("run"),any(),eq("output_1"),
+                eq("result.txt"),eq("text/plain"),any(),eq(3L),eq(hash))).thenAnswer(i->{
+            try(var input=i.getArgument(7,cn.jia.agent.service.PersonalWorkspaceService.UploadSource.class).open()) {
+                org.junit.jupiter.api.Assertions.assertArrayEquals(bytes,input.readAllBytes());
+            }
+            return new PersonalWorkspaceExecutionService.StagedOutput("output_1",hash,3,"STAGED");
+        });
+        var file=new org.springframework.mock.web.MockMultipartFile("file","result.txt","text/plain",bytes) {
+            @Override public byte[] getBytes(){throw new AssertionError("Native stage must stream");}
+        };
+        mvc.perform(multipart(BASE+"/outputs/output_1/content").file(file).principal(auth)
+                .param("version","1").param("token",TOKEN).param("sha256",hash).param("byteLength","3"))
+                .andExpect(status().isCreated()).andExpect(jsonPath("$.data.byteLength").value("3"));
     }
 
 }

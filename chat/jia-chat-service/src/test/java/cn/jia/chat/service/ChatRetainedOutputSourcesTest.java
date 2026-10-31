@@ -73,11 +73,12 @@ class ChatRetainedOutputSourcesTest {
         verifyNoInteractions(capabilities, sessions);
     }
 
-    @Test void existingSourceCountLimitIsCheckedAfterCombiningNotSilentlyTruncated() {
+    @Test void combinedSourcesBeyondOldLimitArePreservedWithoutTruncation() {
         var selected = new ArrayList<SourceSelector>();
         for (int i = 0; i < 32; i++) selected.add(new SourceSelector("TASK_LINKED_WORKSPACE_VERSION", "file" + i, "1", "INPUT", null, null));
-        assertEquals(ChatDeliberationException.Reason.INVALID_REQUEST, assertThrows(ChatDeliberationException.class,
-                () -> contexts.withDeliverySelectors(scope, "task", "agent", "TASK_DEFAULT", selected, List.of(retained))).reason());
+        var combined=contexts.withDeliverySelectors(scope,"task","agent","TASK_DEFAULT",selected,List.of(retained));
+        assertEquals(33,combined.size());assertEquals(selected,combined.subList(0,32));
+        assertEquals("CURRENT_CONVERSATION_ASSET",combined.getLast().kind());
     }
 
     @Test void realResolveFreezesExactOutputShaAndFeedsNativeCarrierAndCapabilityCatalog() {

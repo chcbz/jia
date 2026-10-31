@@ -40,8 +40,14 @@ class AgentTaskArtifactStorageConfigurationF02Test {
     @Test
     void explicitEnableWithAbsoluteRootCreatesFileStore() {
         Path root = temporaryDirectory.resolve("artifact-root").toAbsolutePath();
-
-
+        RUNNER.withPropertyValues("agent.task-artifact-storage.enabled=true",
+                "agent.task-artifact-storage.root-directory="+root).run(context->{
+            assertNull(context.getStartupFailure());
+            var storage=assertInstanceOf(FileSystemAgentTaskArtifactStorage.class,context.getBean(AgentTaskArtifactStorage.class));
+            var stored=storage.storeStream(new AgentTaskArtifactStorage.Scope("0","client","owner","task"),
+                    new java.io.ByteArrayInputStream(new byte[]{1}),1,"application/x-custom-document");
+            assertTrue(Files.isDirectory(root));assertTrue(stored.byteLength()==1);
+        });
     }
 
     @Test
@@ -52,12 +58,7 @@ class AgentTaskArtifactStorageConfigurationF02Test {
                         "agent.task-artifact-storage.enabled=true",
                         "agent.task-artifact-storage.root-directory=relative/path")
                 .run(context -> assertConfigurationFailure(context.getStartupFailure()));
-        RUNNER.withPropertyValues(
-                        "agent.task-artifact-storage.enabled=true",
-                        "agent.task-artifact-storage.root-directory="
-                                + temporaryDirectory.resolve("empty-mimes").toAbsolutePath(),
-                        "agent.task-artifact-storage.allowed-mime-types[0]=")
-                .run(context -> assertConfigurationFailure(context.getStartupFailure()));
+
     }
 
     private static void assertConfigurationFailure(Throwable failure) {

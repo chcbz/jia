@@ -257,8 +257,8 @@ class AgentSelectedOutputFinalizationServiceImplTest {
         assertEquals("2",manifest.path("selectedOutputs").path(0).path("sourceArtifactVersion").textValue());
         assertEquals("7",manifest.path("selectedOutputs").path(2).path("sourceArtifactVersion").textValue());
         assertFalse(manifest.path("selectedOutputs").path(0).has("requestId"));
-        verify(f.contents,times(2)).readContentForTaskOwner("0","client-1","owner-1","task-1","old-first",2);
-        verify(f.contents,times(2)).readContentForTaskOwner("0","client-1","owner-1","task-1","old-second",7);
+        verify(f.contents,times(2)).openContentForTaskOwner("0","client-1","owner-1","task-1","old-first",2);
+        verify(f.contents,times(2)).openContentForTaskOwner("0","client-1","owner-1","task-1","old-second",7);
         assertEquals("SUBMITTED",f.service.submit(f.scope,"task-1","op-1",command.immutableDigest()).stage());
         verify(f.artifacts,times(4)).publishPrepared(anyString(),anyString(),anyString(),anyString(),eq("agent-1"),any());
         verify(f.leases,times(1)).claim(anyString(),anyString(),anyString(),anyString(),eq("work-1"),any());

@@ -488,7 +488,7 @@ public class SkillExecutionServiceTest {
         var recovery=service.resume(runtime,"task","run",new SkillExecutionService.Resume("exec",skill.getSnapshotSha256()));
         assertEquals(List.of("PROJECT_RESULT"),recovery.allowedWork());assertEquals(manifest,recovery.resultManifest());
         clearInvocations(storage,installed);assertEquals(receipt,commit(runtime,command));
-        verify(storage).maxContentBytes();verifyNoMoreInteractions(storage);verifyNoInteractions(installed);
+        verifyNoInteractions(storage,installed);
     }
     @Test void emptySkillsDoNotBypassCurrentConversationAclOrGeneration() {
         emptySkills();

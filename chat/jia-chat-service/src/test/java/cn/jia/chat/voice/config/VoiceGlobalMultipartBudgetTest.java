@@ -35,8 +35,17 @@ class VoiceGlobalMultipartBudgetTest {
             assertTrue(properties.contains(
                     "jia.chat.voice.synthesis.provider=${JIA_CHAT_VOICE_SYNTHESIS_PROVIDER:disabled}"),
                     profile);
-            assertTrue(properties.contains("spring.servlet.multipart.max-file-size=10MB"), profile);
-            assertTrue(properties.contains("spring.servlet.multipart.max-request-size=50MB"), profile);
+            if(profile.startsWith("chat/")) {
+                assertTrue(properties.contains("spring.servlet.multipart.max-file-size=10MB"),profile);
+                assertTrue(properties.contains("spring.servlet.multipart.max-request-size=50MB"),profile);
+            } else {
+                assertTrue(properties.contains("spring.servlet.multipart.max-file-size=-1"),profile);
+                assertTrue(properties.contains("spring.servlet.multipart.max-request-size=-1"),profile);
+                assertTrue(properties.contains("spring.servlet.multipart.file-size-threshold=0B"),profile);
+                String resolver=Files.readString(repository.resolve("starter/src/main/java/cn/jia/config/StreamingFileMultipartConfiguration.java"));
+                assertTrue(resolver.contains("LEGACY_FILE_BYTES=10L*1024*1024"));
+                assertTrue(resolver.contains("LEGACY_REQUEST_BYTES=50L*1024*1024"));
+            }
         }
     }
 

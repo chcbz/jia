@@ -304,6 +304,8 @@ class AgentTaskDeliverableControllerTest {
         String mime = "application/vnd.openxmlformats-officedocument.presentationml.presentation";
         when(contentService.readContentForTaskOwner("0", CLIENT, TENANT, TASK, ARTIFACT, 5))
                 .thenReturn(artifactContent(5, mime, original));
+        when(contentService.openContentForTaskOwner("0",CLIENT,TENANT,TASK,ARTIFACT,5))
+                .thenAnswer(i->new AgentTaskArtifactContentService.StreamContent(ARTIFACT,5,sha256(original),original.length,mime,new ByteArrayInputStream(original)));
         mvc.perform(get("/agent/tasks/{taskId}/deliverables/{artifactId}/versions/{version}/preview",
                         TASK, ARTIFACT, 5).param("view", "parts").principal(jwt(TENANT, CLIENT, ACTOR)))
                 .andExpect(status().isOk())
