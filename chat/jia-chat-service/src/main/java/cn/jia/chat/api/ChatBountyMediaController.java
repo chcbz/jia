@@ -181,11 +181,17 @@ public class ChatBountyMediaController {
             @RequestHeader(value = HttpHeaders.RANGE, required = false) String range,
             @RequestHeader(value = HttpHeaders.IF_RANGE, required = false) String ifRange,
             HttpServletRequest request, Authentication authentication, HttpServletResponse response) throws IOException {
+        contentForAsset(requestId,stepId,outputId,download,range,ifRange,request,authentication,response,null);
+    }
+
+    void contentForAsset(String requestId,String stepId,String outputId,boolean download,String range,String ifRange,
+            HttpServletRequest request,Authentication authentication,HttpServletResponse response,String expectedHash) throws IOException {
         if (!safeId(requestId) || !safeId(stepId) || !safeId(outputId)) throw unavailable();
         var allowed = authorize(requestId, stepId, authentication);
         var execution = allowed.execution();
         try(var output=executions.openConversationOutput(allowed.scope(),allowed.step().taskId(),execution.runId(),outputId)) {
             if(output==null||!execution.executionId().equals(output.executionId())||!outputId.equals(output.outputId()))throw unavailable();
+            if(expectedHash!=null&&!expectedHash.equals(output.sha256()))throw unavailable();
             // Bytes and digest are verified by storage before the service returns this descriptor.
             String extension=SAFE_INLINE.get(output.contentMimeType());
             boolean inline=extension!=null&&!download;

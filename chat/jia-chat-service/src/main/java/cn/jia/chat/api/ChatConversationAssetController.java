@@ -60,21 +60,21 @@ public class ChatConversationAssetController {
 
     @RequestMapping(path="/{conversationId}/assets/{assetId}/content",
             method={RequestMethod.GET, RequestMethod.HEAD})
-    public ResponseEntity<byte[]> content(@PathVariable String conversationId, @PathVariable String assetId,
+    public void content(@PathVariable String conversationId, @PathVariable String assetId,
             @RequestParam(defaultValue="false") boolean download,
             @RequestHeader(value=HttpHeaders.RANGE,required=false) String range,
             @RequestHeader(value=HttpHeaders.IF_RANGE,required=false) String ifRange,
-            HttpServletRequest request, Authentication authentication) {
+            HttpServletRequest request, Authentication authentication, jakarta.servlet.http.HttpServletResponse response) throws java.io.IOException {
         var asset = resolve(conversationId, assetId, authentication);
         verifyCatalog(asset, authentication);
-        ResponseEntity<byte[]> response = media.content(asset.requestId(), asset.stepId(),
-                asset.outputId(), download, range, ifRange, request, authentication);
-        // Source bytes and ETag are checked by the owner-fenced media controller; reject
-        // changed bytes even if someone mutates a supposedly immutable output row.
-        if (response.getStatusCode().value() != 416
-                && !Objects.equals(response.getHeaders().getETag(), "\"" + asset.sha256() + "\""))
-            throw unavailable();
-        return response;
+        // Verify the asset's frozen digest before headers or body, not after streaming.
+        media.contentForAsset(asset.requestId(),asset.stepId(),asset.outputId(),download,range,ifRange,
+                request,authentication,response,asset.sha256());
+    }
+
+    @ExceptionHandler(java.io.IOException.class)
+    public void transport(java.io.IOException failure,jakarta.servlet.http.HttpServletResponse response) throws java.io.IOException {
+        if(!response.isCommitted()){response.reset();response.sendError(503);}
     }
 
     private void verifyCatalog(ChatBountyAssetProjector.Asset asset, Authentication authentication) {

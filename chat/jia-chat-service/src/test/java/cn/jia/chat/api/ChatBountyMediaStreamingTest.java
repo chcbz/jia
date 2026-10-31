@@ -94,6 +94,15 @@ class ChatBountyMediaStreamingTest {
         mvc.perform(get(PATH).principal(auth)).andExpect(status().isNotFound())
                 .andExpect(header().doesNotExist("Content-Disposition"));
     }
+    @Test void assetDigestMismatchClosesBeforeHeadersOrBytes() {
+        source(16,"image/png");
+        var controller=new ChatBountyMediaController(requests,files,identities,tenants);
+        var response=new org.springframework.mock.web.MockHttpServletResponse();
+        assertThrows(ChatDeliberationException.class,()->controller.contentForAsset("request","step","output",false,
+                null,null,new org.springframework.mock.web.MockHttpServletRequest("GET",PATH),auth,response,"b".repeat(64)));
+        assertEquals(0,response.getContentAsByteArray().length);assertNull(response.getHeader("ETag"));
+        assertTrue(opened.closed);assertEquals(0,opened.readBytes);
+    }
     static class VirtualFile extends InputStream {
         final long size;long position,readBytes;boolean closed;
         VirtualFile(long size) {this.size=size;}
