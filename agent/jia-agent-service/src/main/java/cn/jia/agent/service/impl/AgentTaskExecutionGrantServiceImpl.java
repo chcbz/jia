@@ -870,7 +870,9 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
         try {return transactions.executeWithLockedTaskRootInOwnerScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),taskId,root->{
             var observed=grants.findActiveByTask(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),taskId);
             if(observed==null)throw notFound();
-            lockTargetAndPersistedInputs(scope,taskId,targetAgentId,observed);
+            // Native discussions authorize their current selections at the source boundary.
+            // A detached bootstrap input must not revoke the assignment/skill baseline.
+            lockTarget(scope,taskId,targetAgentId,observed);
             var current=grants.findByGrantForUpdate(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),taskId,observed.getGrantId());
             if(current==null||!same(observed.getRequestHash(),current.getRequestHash()))throw conflict("Grant changed");
             var operations=readOperations(current.getPermittedOperationsJson());
@@ -920,13 +922,18 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
         } catch (AgentTaskCollaborationException failure) { throw translate(failure); }
     }
 
-    private void lockTargetAndPersistedInputs(Scope scope,String taskId,String targetAgentId,
+    private void lockTarget(Scope scope,String taskId,String targetAgentId,
             AgentTaskExecutionGrantEntity observed) {
         var executor=assigneeAuthority.requireGrantTarget(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),
                 taskId,observed.getGrantId(),observed.getGrantVersion());
         List<String> locked=identities.lockActiveCanonicalAgentIdsInScope(scope.tenantId(),
                 scope.clientId(),executor.ownerJiacn(),List.of(targetAgentId));
         if (!List.of(targetAgentId).equals(locked) || !same(targetAgentId,observed.getTargetAgentId())) throw notFound();
+    }
+
+    private void lockTargetAndPersistedInputs(Scope scope,String taskId,String targetAgentId,
+            AgentTaskExecutionGrantEntity observed) {
+        lockTarget(scope,taskId,targetAgentId,observed);
         for (InputSnapshot input:readInputs(observed.getInputScopeJson())) {
             PersonalWorkspaceFileEntity file=workspace.lockFile(scope.tenantId(),scope.clientId(),
                     scope.ownerJiacn(),input.fileId());

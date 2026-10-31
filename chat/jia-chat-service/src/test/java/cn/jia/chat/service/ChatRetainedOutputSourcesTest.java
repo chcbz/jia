@@ -186,5 +186,12 @@ class ChatRetainedOutputSourcesTest {
         assertEquals("a".repeat(64),row.get("contentHash"));assertEquals("3",row.get("byteLength"));
         assertEquals(ChatTypedDeliberationContextService.sourceRefId(scope,row),row.get("sourceRefId"));
         verifyNoInteractions(jdbc);
+        // Changing the assignment baseline must not make a detached current selection readable.
+        when(materials.metadata(readerScope,"task",selection)).thenThrow(
+                new cn.jia.agent.service.TaskLinkedMaterialReader.Failure(
+                        cn.jia.agent.service.TaskLinkedMaterialReader.Failure.Reason.NOT_FOUND));
+        assertEquals(ChatDeliberationException.Reason.NOT_FOUND_OR_FORBIDDEN,
+                assertThrows(ChatDeliberationException.class,
+                        ()->contexts.resolve(scope,"task","agent",List.of(selector))).reason());
     }
 }

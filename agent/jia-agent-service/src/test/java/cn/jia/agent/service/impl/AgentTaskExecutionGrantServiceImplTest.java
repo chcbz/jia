@@ -703,6 +703,32 @@ class AgentTaskExecutionGrantServiceImplTest {
         var current=grants.byId.get(next.grantId());assertEquals("SKILLS_V1",current.getPermittedToolPolicyRef());assertNull(current.getCostAuthorizationRef());assertEquals(1,bootstraps.byAction.size());
         assertEquals(next,service.resolveSkillBaseline(scope(),"task-1",original.getAssignmentRevision(),"agent-1"));assertEquals(2,grants.byId.size());
     }
+    @Test void nativeBaselineDoesNotReauthorizeDetachedBootstrapInputs() {
+        when(links.list("0","client","owner","task-1",null,null,33)).thenReturn(List.of());
+        var original=service.assignForDeliberation(scope(),"task-1","native-input-change","agent-1",0,1);
+        var grant=grants.byId.get(original.getGrantId());
+        grant.setInputScopeJson("[{\"fileId\":\"original-file\",\"version\":1,\"purpose\":\"INPUT\","
+                +"\"contentMimeType\":\"image/png\",\"byteLength\":1499,\"contentHash\":\""+"a".repeat(64)+"\"}]");
+        clearInvocations(workspace,links,identities,authority);
+
+        var baseline=service.resolveSkillBaseline(scope(),"task-1",original.getAssignmentRevision(),"agent-1");
+        assertEquals(original.getGrantId(),baseline.grantId());
+        assertEquals("EXECUTE_SKILL",baseline.operation());
+        assertFalse(baseline.paidExecutionAuthorized());
+        assertEquals(1,grants.byId.size());
+        verify(authority).requireGrantTarget("0","client","owner","task-1",grant.getGrantId(),grant.getGrantVersion());
+        verify(identities).lockActiveCanonicalAgentIdsInScope("0","client","owner",List.of("agent-1"));
+        verifyNoInteractions(workspace,links);
+
+        // The legacy/frozen-input admission path still rejects an unavailable input.
+        assertThrows(AgentTaskExecutionGrantException.class,()->service.admit(scope(),"task-1",grant.getGrantId(),
+                grant.getGrantVersion(),original.getAssignmentRevision(),"agent-1","EXECUTE_SKILL",false));
+        when(identities.lockActiveCanonicalAgentIdsInScope("0","client","owner",List.of("agent-1")))
+                .thenReturn(List.of());
+        assertThrows(AgentTaskExecutionGrantException.class,()->service.resolveSkillBaseline(
+                scope(),"task-1",original.getAssignmentRevision(),"agent-1"));
+    }
+
     @Test void latestBaselineDoesNotReviveRevokedGrantOrDifferentAssignment() {
         when(links.list("0","client","owner","task-1",null,null,33)).thenReturn(List.of());
         var original=service.assignForDeliberation(scope(),"task-1","old-revoked","agent-1",0,1);
