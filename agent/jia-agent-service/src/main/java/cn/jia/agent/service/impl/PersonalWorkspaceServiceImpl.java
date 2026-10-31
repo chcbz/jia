@@ -241,6 +241,19 @@ public class PersonalWorkspaceServiceImpl implements PersonalWorkspaceService {
 
     private LoadedPreview renderPreview(Scope scope,String fileId,int version){return renderPreview(scope,versionEntity(scope,fileId,version));}
     private LoadedPreview renderPreview(Scope scope,PersonalWorkspaceVersionEntity v){
+        if ("text/plain".equals(v.getContentMimeType())) {
+            // The existing 200k-code-point preview is a projection, not a file-size limit.
+            // UTF-8 uses at most four bytes per code point; one extra point preserves
+            // the renderer's truncation flag without materializing the whole file.
+            int prefixBytes = 4 * (PersonalWorkspacePreviewRenderer.MAX_TEXT_CODE_POINTS + 1);
+            try (var source = storage.openStream(storageScope(scope), v.getStorageUri(),
+                    v.getContentHash(), v.getByteLength(), v.getContentMimeType())) {
+                return new LoadedPreview(v, previewRenderer.render(v.getContentMimeType(),
+                        source.readNBytes(prefixBytes)));
+            } catch (java.io.IOException failure) {
+                throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.STORAGE_CORRUPT);
+            }
+        }
         PersonalWorkspaceStorage.StoredContent source=storage.read(storageScope(scope),v.getStorageUri(),v.getContentHash(),v.getByteLength(),v.getContentMimeType());
         return new LoadedPreview(v,previewRenderer.render(v.getContentMimeType(),source.content()));
     }

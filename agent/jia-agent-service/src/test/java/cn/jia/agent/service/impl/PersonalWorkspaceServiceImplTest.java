@@ -502,6 +502,43 @@ class PersonalWorkspaceServiceImplTest {
         }
     }
 
+    @Test
+    void textPreviewReadsBoundedPrefixAndClosesSourceWithoutBufferedFileRead() {
+        Fixture fixture = new Fixture();
+        byte[] content = bytes("中文".repeat(450_000));
+        var saved = fixture.service.archiveConversationText(OWNER_A,
+                new PersonalWorkspaceService.ConversationTextArchiveCommand(
+                        new PersonalWorkspaceService.Idempotency("large-text-preview"),
+                        "a".repeat(64), sha256(content), "large text", "large.txt", content));
+        var streaming = org.mockito.Mockito.mock(PersonalWorkspaceStorage.class);
+        var reads = new java.util.concurrent.atomic.AtomicInteger();
+        var closed = new java.util.concurrent.atomic.AtomicInteger();
+        org.mockito.Mockito.when(streaming.openStream(org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.eq("text/plain")))
+                .thenAnswer(invocation -> new java.io.ByteArrayInputStream(content) {
+                    @Override public synchronized byte[] readNBytes(int length) {
+                        byte[] result = super.readNBytes(length);
+                        reads.addAndGet(result.length);
+                        return result;
+                    }
+                    @Override public void close() { closed.incrementAndGet(); }
+                });
+        var service = new PersonalWorkspaceServiceImpl(fixture.dao, streaming,
+                new PersonalWorkspaceWriteService(fixture.dao,
+                        new PersonalWorkspaceOperationClaimTx(fixture.dao)));
+        var preview = service.preview(OWNER_A, saved.file().fileId(), 1);
+        assertEquals("READY", preview.state());
+        assertTrue(preview.partial());
+        assertTrue(reads.get() > 0);
+        assertTrue(reads.get() <= 4 * (PersonalWorkspacePreviewRenderer.MAX_TEXT_CODE_POINTS + 1));
+        assertEquals(1, closed.get());
+        org.mockito.Mockito.verify(streaming, org.mockito.Mockito.never()).read(
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyLong(),
+                org.mockito.ArgumentMatchers.anyString());
+    }
+
     private static final class Fixture {
         private final List<String> events = new ArrayList<>();
         private final InMemoryDao dao = new InMemoryDao(events);
