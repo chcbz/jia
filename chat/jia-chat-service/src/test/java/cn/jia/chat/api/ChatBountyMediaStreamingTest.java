@@ -48,6 +48,14 @@ class ChatBountyMediaStreamingTest {
             return new PersonalWorkspaceExecutionService.ConversationDownload("execution","output","source",mime,HASH,size,opened);
         });
     }
+    @Test void catalogueCarriesTheStoredFilenameAlongsideUnchangedOutputIdentity() throws Exception {
+        when(files.listConversationOutputs(scope,"task","run")).thenReturn(List.of(
+                new PersonalWorkspaceExecutionService.ConversationOutputInfo("execution","output","text/plain",HASH,8L,null,"roles.txt")));
+        mvc.perform(get("/chat/requests/request/steps/step/outputs").principal(auth))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data[0].filename").value("roles.txt"))
+                .andExpect(jsonPath("$.data[0].outputId").value("output"))
+                .andExpect(jsonPath("$.data[0].byteLength").value("8"));
+    }
     @Test void longRangeStreamsOnlyRequestedBytesAndCloses() throws Exception {
         long size=3_000_000_010L,start=3_000_000_000L;source(size,"text/plain");
         var result=mvc.perform(get(PATH).principal(auth).header("Range","bytes="+start+"-"+(start+3)))

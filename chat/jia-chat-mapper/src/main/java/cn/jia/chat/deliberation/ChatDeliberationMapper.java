@@ -231,6 +231,19 @@ public interface ChatDeliberationMapper {
     @Select("""
             SELECT * FROM chat_conversation_event WHERE
             """ + EXACT_SCOPE + """
+              AND BINARY conversation_id=BINARY #{conversationId} AND conversation_generation=#{generation}
+              AND BINARY turn_id=BINARY #{turnId} AND BINARY dispatch_id=BINARY #{dispatchId}
+              AND event_type='agent_message_delta'
+            ORDER BY event_sequence
+            """)
+    List<ChatConversationEventEntity> turnDeltas(@Param("tenantId") String tenantId,
+            @Param("ownerJiacn") String ownerJiacn, @Param("clientId") String clientId,
+            @Param("conversationId") String conversationId, @Param("generation") long generation,
+            @Param("turnId") String turnId, @Param("dispatchId") String dispatchId);
+
+    @Select("""
+            SELECT * FROM chat_conversation_event WHERE
+            """ + EXACT_SCOPE + """
               AND conversation_id=#{conversationId} AND conversation_generation=#{generation}
               AND event_sequence>#{afterSequence} AND event_sequence<=#{throughSequence}
               AND CAST(conversation_id AS BINARY)=CAST(#{conversationId} AS BINARY)

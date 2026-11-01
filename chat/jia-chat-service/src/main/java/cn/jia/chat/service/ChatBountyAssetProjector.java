@@ -195,7 +195,8 @@ public class ChatBountyAssetProjector {
             if (inserted != 1) throw new IllegalStateException("Unable to persist result asset");
             Map<String, Object> part = Map.of("partId", partId, "revision", "1", "kind", kind,
                     "state", "ready", "assetId", assetId, "mime", output.contentMimeType(),
-                    "contentHash", output.sha256(), "byteLength", output.byteLength());
+                    "contentHash", output.sha256(), "byteLength", output.byteLength(),
+                    "filename", Objects.requireNonNullElse(output.filename(), ""));
             Map<String, Object> frame = Map.of("type", "agent_message", "conversationId", request.conversationId(),
                     "requestId", candidate.requestId(), "messageId", Long.toString(message.getId()),
                     "senderType", "agent", "senderName", "好汉", "agentId", step.targetAgentId(),
@@ -379,7 +380,7 @@ public class ChatBountyAssetProjector {
         if (owner == null || !safe(conversationId)) return Map.of();
         var rows = jdbc.query("""
                 SELECT CAST(a.message_id AS CHAR),a.part_id,a.kind,a.asset_id,
-                  a.content_mime_type,a.sha256,a.byte_length,a.revision
+                  a.content_mime_type,a.sha256,a.byte_length,a.revision,o.original_filename
                 FROM chat_conversation_asset a
                 JOIN chat_conversation c ON c.id=CAST(a.conversation_id AS UNSIGNED)
                   AND BINARY CAST(c.id AS CHAR)=BINARY a.conversation_id
@@ -389,11 +390,16 @@ public class ChatBountyAssetProjector {
                 JOIN chat_message m ON m.id=a.message_id
                   AND BINARY m.tenant_id=BINARY a.tenant_id AND BINARY m.client_id=BINARY a.client_id
                   AND BINARY m.jiacn=BINARY a.owner_jiacn AND BINARY m.conversation_id=BINARY a.conversation_id
+                LEFT JOIN agent_personal_workspace_execution_output o
+                  ON BINARY o.tenant_id=BINARY a.tenant_id AND BINARY o.client_id=BINARY a.client_id
+                  AND BINARY o.owner_jiacn=BINARY a.owner_jiacn
+                  AND BINARY o.execution_id=BINARY a.execution_id AND BINARY o.output_id=BINARY a.output_id
+                  AND o.output_state='COMMITTED' AND BINARY o.content_hash=BINARY a.sha256
                 WHERE BINARY a.tenant_id=BINARY ? AND BINARY a.owner_jiacn=BINARY ?
                   AND BINARY a.client_id=BINARY ? AND BINARY a.conversation_id=BINARY ?
                 ORDER BY a.message_id,a.created_at,a.part_id
                 """, (rs, n) -> Map.entry(rs.getString(1), new Part(rs.getString(2), rs.getString(3),
-                "ready", rs.getString(4), rs.getString(5), "", Long.toString(rs.getLong(8)),
+                "ready", rs.getString(4), rs.getString(5), Objects.requireNonNullElse(rs.getString(9), ""), Long.toString(rs.getLong(8)),
                 rs.getString(6), rs.getLong(7))), owner.tenantId(), owner.ownerJiacn(),
                 owner.clientId(), conversationId);
         Map<String, List<Part>> collected = new java.util.LinkedHashMap<>();

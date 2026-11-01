@@ -23,6 +23,8 @@ public interface ChatDeliberationDao {
     List<ChatDispatchOutboxEntity> findDueOutboxInScope(String tenantId, String clientId, long now, int limit);
     List<ChatConversationEventEntity> replayEvents(String tenantId, String ownerJiacn, String clientId,
             String conversationId, long generation, long afterSequence, long throughSequence, int limit);
+    /** Accepted deltas of one locked turn, in their durable order. */
+    List<ChatConversationEventEntity> turnDeltas(ChatTurnEntity turn);
     long eventHighWatermark(String tenantId, String ownerJiacn, String clientId,
             String conversationId, long generation);
     int acceptDelta(ChatTurnEntity turn, long deltaSeq, String deltaDigest, long now);

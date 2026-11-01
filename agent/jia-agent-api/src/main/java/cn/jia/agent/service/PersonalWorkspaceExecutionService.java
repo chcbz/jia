@@ -36,7 +36,11 @@ public interface PersonalWorkspaceExecutionService {
     /** Exact earlier result replaced by this edit, never an input/reference used for generation. */
     record OutputReplacement(String requestId, String stepId, String outputId, String sha256) { }
     record ConversationOutputInfo(String executionId, String outputId, String contentMimeType,
-            String sha256, long byteLength, OutputReplacement replaces) {
+            String sha256, long byteLength, OutputReplacement replaces, String filename) {
+        public ConversationOutputInfo(String executionId, String outputId, String contentMimeType,
+                String sha256, long byteLength, OutputReplacement replaces) {
+            this(executionId, outputId, contentMimeType, sha256, byteLength, replaces, "");
+        }
         public ConversationOutputInfo(String executionId, String outputId, String contentMimeType,
                 String sha256, long byteLength) {
             this(executionId, outputId, contentMimeType, sha256, byteLength, null);

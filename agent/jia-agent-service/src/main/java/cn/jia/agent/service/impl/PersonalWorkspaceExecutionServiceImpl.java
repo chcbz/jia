@@ -358,7 +358,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         requireOwnerOutputsUnchanged(prepared,prepareOwnerOutputs(scope,taskId,runId,null));
         return prepared.outputs().stream().map(output -> new ConversationOutputInfo(output.executionId(),
                 output.outputId(),output.stored().mimeType(),output.stored().sha256(),output.stored().byteLength(),
-                prepared.replacement())).toList();
+                prepared.replacement(),Objects.requireNonNullElse(output.filename(), ""))).toList();
     }
 
     private record OwnerOutputs(NativeExecutionBinding execution,List<PreparedNativeOutput> outputs,

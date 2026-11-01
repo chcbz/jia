@@ -17,8 +17,9 @@ import static org.mockito.Mockito.*;
 class ChatCancellationVersionTest {
     private final ChatDeliberationDao dao = mock(ChatDeliberationDao.class);
     private final ChatConversationDao conversations = mock(ChatConversationDao.class);
+    private final ChatMessageDao messages = mock(ChatMessageDao.class);
     private final ChatDeliberationService service = new ChatDeliberationService(
-            dao, conversations, mock(ChatMessageDao.class), mock(AgentService.class));
+            dao, conversations, messages, mock(AgentService.class));
 
     private ChatTurnEntity turn() {
         return new ChatTurnEntity().setTenantId("0").setOwnerJiacn("owner").setClientId("client")
@@ -105,6 +106,34 @@ class ChatCancellationVersionTest {
         assertEquals("8", service.cancelTurn("0", "owner", "client", "turn", 7L, null).stateVersion());
         verify(dao, times(1)).insertOutbox(any());
     }
+    @Test void cancellationPreservesPartialHistoryOnceWithoutPublishingAFinal() throws Exception {
+        var turn = turn(); visible(turn); journal();
+        when(dao.updateTurnState(eq(turn), eq("CANCELLED"), any(), anyLong())).thenReturn(1);
+        when(dao.insertOutbox(any())).thenReturn(1);
+        when(dao.findRequest("0", "owner", "client", "request"))
+                .thenReturn(new ChatRequestEntity().setAggregateState("CANCELLED"));
+        when(dao.findTurnsByRequest("0", "owner", "client", "request")).thenReturn(List.of(turn));
+        when(dao.turnDeltas(turn)).thenReturn(List.of(
+                new ChatConversationEventEntity().setPayloadJson(JsonUtil.toJson(Map.of("content", "已经生成", "senderName", "林冲"))),
+                new ChatConversationEventEntity().setPayloadJson(JsonUtil.toJson(Map.of("content", "的部分正文", "senderName", "林冲")))));
+        when(messages.insertScoped(eq("0"), eq("client"), any())).thenReturn(1);
+        service.cancelTurn("0", "owner", "client", "turn", 7L, null);
+        service.cancelTurn("0", "owner", "client", "turn", 7L, null);
+        var saved = org.mockito.ArgumentCaptor.forClass(cn.jia.chat.entity.ChatMessageEntity.class);
+        verify(messages, times(1)).insertScoped(eq("0"), eq("client"), saved.capture());
+        assertEquals("已经生成的部分正文", saved.getValue().getContent());
+        assertEquals("林冲", saved.getValue().getSenderName());
+        Map<?,?> metadata = JsonUtil.getMapper().readValue(saved.getValue().getMetadata(), Map.class);
+        assertEquals(true, metadata.get("partial"));
+        assertEquals("CANCELLED", metadata.get("completionState"));
+        assertFalse(metadata.containsKey("finalDigest"));
+        assertNull(turn.getFinalMessageId());
+        verify(dao, never()).persistFinal(any(), anyString(), anyLong(), anyLong());
+        var event = org.mockito.ArgumentCaptor.forClass(ChatConversationEventEntity.class);
+        verify(dao, times(1)).insertEvent(event.capture());
+        assertEquals("cancel_requested", event.getValue().getEventType());
+    }
+
     @Test void cancellationAllowsOnlyContinuousDeltaVersionDrift() {
         ChatTurnEntity turn = turn(); visible(turn); journal();
         when(dao.updateTurnState(eq(turn), eq("CANCELLED"), any(), anyLong())).thenReturn(1);

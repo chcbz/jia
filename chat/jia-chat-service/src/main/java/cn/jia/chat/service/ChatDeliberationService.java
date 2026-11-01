@@ -760,7 +760,7 @@ public class ChatDeliberationService {
             throw invalid("Delta checkpoint requires a state version");
         }
         ChatTurnEntity visible = requireVisibleTurn(tenantId, ownerJiacn, clientId, turnId);
-        requireLockedConversation(tenantId, ownerJiacn, clientId, visible.getConversationId(), visible.getConversationGeneration());
+        var conversation = requireLockedConversation(tenantId, ownerJiacn, clientId, visible.getConversationId(), visible.getConversationGeneration());
         ChatTurnEntity turn = requireLockedTurn(tenantId, ownerJiacn, clientId, turnId);
         if (!terminal(turn.getState())) {
             if (expectedLastDeltaSeq != null && expectedStateVersion.equals(turn.getStateVersion())
@@ -770,7 +770,7 @@ public class ChatDeliberationService {
                 throw conflict("Turn state version changed");
             }
             long now = System.currentTimeMillis();
-            cancelLockedTurn(turn, normalizeCancelReason(reason), now);
+            cancelLockedTurn(turn, normalizeCancelReason(reason), now, conversation.getConversationType());
             refreshAggregate(tenantId, ownerJiacn, clientId, turn.getRequestId(), now);
         }
         return turnView(turn);
@@ -790,7 +790,7 @@ public class ChatDeliberationService {
         requireIdentity(tenantId, 50); requireIdentity(ownerJiacn, 50); requireIdentity(clientId, 50); requireIdentity(requestId, MAX_ID);
         ChatRequestEntity request = dao.findRequest(tenantId, ownerJiacn, clientId, requestId);
         if (request == null) throw unavailable();
-        requireLockedConversation(tenantId, ownerJiacn, clientId, request.getConversationId(), request.getConversationGeneration());
+        var conversation = requireLockedConversation(tenantId, ownerJiacn, clientId, request.getConversationId(), request.getConversationGeneration());
         List<ChatTurnEntity> turns = dao.findTurnsByRequest(tenantId, ownerJiacn, clientId, requestId);
         if (turns.isEmpty()) throw unavailable();
         Set<String> selected = normalizeTurnSelection(selectedTurnIds);
@@ -804,7 +804,7 @@ public class ChatDeliberationService {
         for (ChatTurnEntity candidate : turns) {
             if (!selected.isEmpty() && !selected.contains(candidate.getTurnId())) continue;
             ChatTurnEntity turn = requireLockedTurn(tenantId, ownerJiacn, clientId, candidate.getTurnId());
-            if (!terminal(turn.getState())) cancelLockedTurn(turn, safeReason, now);
+            if (!terminal(turn.getState())) cancelLockedTurn(turn, safeReason, now, conversation.getConversationType());
         }
         refreshAggregate(tenantId, ownerJiacn, clientId, requestId, now);
         ChatRequestEntity refreshed = dao.findRequest(tenantId, ownerJiacn, clientId, requestId);
@@ -953,13 +953,14 @@ public class ChatDeliberationService {
         return dispatchAuthority;
     }
 
-    private void cancelLockedTurn(ChatTurnEntity turn, String reason, long now) {
+    private void cancelLockedTurn(ChatTurnEntity turn, String reason, long now, String conversationType) {
         if (InteractionRoute.EXECUTE.name().equals(turn.getRoute())) throw unavailable();
         if (dao.updateTurnState(turn, ChatDeliberationStates.CANCELLED, reason, now) != 1) {
             throw conflict("Concurrent cancellation");
         }
         turn.setState(ChatDeliberationStates.CANCELLED).setTerminalReason(reason)
                 .setUpdatedAt(now).setStateVersion(turn.getStateVersion() + 1);
+        persistCancelledPartial(turn, conversationType);
         ChatDispatchOutboxEntity cancel = new ChatDispatchOutboxEntity()
                 .setEventId(stableId("evt", turn.getDispatchId(), "CANCEL_REQUESTED"))
                 .setTenantId(turn.getTenantId()).setOwnerJiacn(turn.getOwnerJiacn()).setClientId(turn.getClientId())
@@ -977,6 +978,38 @@ public class ChatDeliberationService {
         persistEvent(turn, stableId("evt", turn.getDispatchId(), "CANCEL_REQUESTED"),
                 "cancel_requested", Map.of("reason", reason), now);
         if (dao.insertOutbox(cancel) != 1) throw persistence("Unable to persist cancellation event");
+    }
+
+    /** A cancelled reply is history, never a final answer or a deliverable. The turn lock
+     * makes this insertion part of the same idempotent cancellation transaction. */
+    private void persistCancelledPartial(ChatTurnEntity turn, String conversationType) {
+        if (turn.getLastDeltaSeq() == null || turn.getLastDeltaSeq() == 0) return;
+        var deltas = dao.turnDeltas(turn);
+        StringBuilder content = new StringBuilder();
+        String senderName = "好汉";
+        for (var delta : deltas) {
+            var payload = parseJsonMap(delta.getPayloadJson());
+            if (payload.get("content") instanceof String text) content.append(text);
+            if (payload.get("senderName") instanceof String name && !name.isBlank()) senderName = name;
+        }
+        if (content.isEmpty()) return;
+        var metadata = new LinkedHashMap<String,Object>();
+        metadata.put("requestId", turn.getRequestId());
+        metadata.put("turnId", turn.getTurnId());
+        metadata.put("dispatchId", turn.getDispatchId());
+        metadata.put("agentId", turn.getTargetAgentId());
+        metadata.put("route", turn.getRoute());
+        metadata.put("partial", true);
+        metadata.put("completionState", ChatDeliberationStates.CANCELLED);
+        var message = new ChatMessageEntity().setConversationId(turn.getConversationId())
+                .setMessageType("ASSISTANT").setContent(content.toString()).setMetadata(JsonUtil.toJson(metadata))
+                .setJiacn(turn.getOwnerJiacn()).setSyncStatus("PENDING").setConversationType(conversationType)
+                .setSenderType("agent").setSenderName(senderName);
+        message.setTenantId(turn.getTenantId()); message.setClientId(turn.getClientId());
+        message.init4Creation();
+        if (messageDao.insertScoped(turn.getTenantId(), turn.getClientId(), message) != 1)
+            throw persistence("Unable to preserve cancelled reply");
+        // Deliberately do not set finalMessageId/finalDigest, create an outcome, or publish agent_message.
     }
 
     private ChatConversationEventEntity persistEvent(ChatTurnEntity turn, String eventId,

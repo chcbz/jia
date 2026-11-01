@@ -85,7 +85,11 @@ public class ChatBountyMediaController {
     public record AssetRef(String assetId, String revision) { }
     public record OutputReplacement(String requestId, String stepId, String outputId, String sha256) { }
     public record OutputItem(String outputId, String contentMimeType, String sha256, String byteLength,
-            String previewUrl, String downloadUrl, AssetRef assetRef, OutputReplacement replaces) {
+            String previewUrl, String downloadUrl, AssetRef assetRef, OutputReplacement replaces, String filename) {
+        public OutputItem(String outputId, String contentMimeType, String sha256, String byteLength,
+                String previewUrl, String downloadUrl, AssetRef assetRef, OutputReplacement replaces) {
+            this(outputId,contentMimeType,sha256,byteLength,previewUrl,downloadUrl,assetRef,replaces,"");
+        }
         public OutputItem(String outputId, String contentMimeType, String sha256, long byteLength,
                 String previewUrl, String downloadUrl, AssetRef assetRef, OutputReplacement replaces) {
             this(outputId,contentMimeType,sha256,Long.toString(byteLength),previewUrl,downloadUrl,assetRef,replaces);
@@ -121,8 +125,9 @@ public class ChatBountyMediaController {
             String url = "/chat/requests/" + encode(requestId) + "/steps/" + encode(stepId)
                     + "/outputs/" + encode(item.outputId());
             body.add(new OutputItem(item.outputId(), item.contentMimeType(), item.sha256(),
-                    item.byteLength(), SAFE_INLINE.containsKey(item.contentMimeType()) ? url : null,
-                    url + "?download=true", assetRef(allowed, item), replacement(allowed,item)));
+                    Long.toString(item.byteLength()), SAFE_INLINE.containsKey(item.contentMimeType()) ? url : null,
+                    url + "?download=true", assetRef(allowed, item), replacement(allowed,item),
+                    Objects.requireNonNullElse(item.filename(), "")));
         }
         return ResponseEntity.ok().cacheControl(CacheControl.noStore())
                 .header("X-Content-Type-Options", "nosniff").body(JsonResult.success(List.copyOf(body)));

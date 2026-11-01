@@ -27,6 +27,10 @@ public class ChatDeliberationDaoImpl implements ChatDeliberationDao {
     public List<ChatDispatchOutboxEntity> findDueOutboxInTenant(String t,long n,int l){return mapper.findDueOutboxInTenant(t,n,l);}
     public List<ChatDispatchOutboxEntity> findDueOutboxInScope(String t,String c,long n,int l){return mapper.findDueOutboxInScope(t,c,n,l);}
     public List<ChatConversationEventEntity> replayEvents(String t,String o,String c,String id,long g,long a,long through,int l){return mapper.replayEvents(t,o,c,id,g,a,through,l);}
+    public List<ChatConversationEventEntity> turnDeltas(ChatTurnEntity t) {
+        return mapper.turnDeltas(t.getTenantId(),t.getOwnerJiacn(),t.getClientId(),t.getConversationId(),
+                t.getConversationGeneration(),t.getTurnId(),t.getDispatchId());
+    }
     public long eventHighWatermark(String t,String o,String c,String id,long g){Long value=mapper.eventHighWatermark(t,o,c,id,g);return value==null?0L:value;}
     public int acceptDelta(ChatTurnEntity t,long s,String d,long n){return mapper.acceptDelta(t.getTenantId(),t.getOwnerJiacn(),t.getClientId(),t.getTurnId(),t.getStateVersion(),ChatDeliberationStates.STREAMING,s,d,n);}
     public int persistFinal(ChatTurnEntity t,String d,long m,long n){return mapper.persistFinal(t.getTenantId(),t.getOwnerJiacn(),t.getClientId(),t.getTurnId(),t.getStateVersion(),d,m,n);}
