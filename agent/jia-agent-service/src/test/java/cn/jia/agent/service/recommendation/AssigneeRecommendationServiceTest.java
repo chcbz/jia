@@ -48,9 +48,15 @@ class AssigneeRecommendationServiceTest {
         assertEquals("READY", result.state());
         assertTrue(result.recommendations().getFirst().gaps().stream().anyMatch(gap -> gap.contains("不代表已开始运行")));
     }
-    @Test void noMatchAndClarificationHaveDifferentContracts() {
+    @Test void noMatchDoesNotAskQuestionsAndRemovedClarificationIsRejected() {
         String noMatch = "{\"state\":\"NO_MATCH\",\"requirementSummary\":\"能力不足\",\"recommendations\":[],\"questions\":[]}";
         assertEquals("NO_MATCH", AssigneeRecommendationService.decode("task", "7", 1, List.of(candidate()), noMatch).state());
+        String questions = noMatch.replace("\"questions\":[]", "\"questions\":[\"请补充需求\"]");
+        assertEquals(502, assertThrows(Failure.class, () -> AssigneeRecommendationService.decode("task", "7", 1, List.of(candidate()), questions)).status());
+        String oldState = questions.replace("NO_MATCH", "NEEDS_CLARIFICATION");
+        assertThrows(Failure.class, () -> AssigneeRecommendationService.decode("task", "7", 1, List.of(candidate()), oldState));
+        String readyQuestions = ANSWER.replace("\"questions\":[]", "\"questions\":[\"请补充需求\"]");
+        assertThrows(Failure.class, () -> AssigneeRecommendationService.decode("task", "7", 1, List.of(candidate()), readyQuestions));
         assertThrows(Failure.class, () -> AssigneeRecommendationService.decode("task", "7", 1, List.of(candidate()), noMatch.replace("NO_MATCH", "NEEDS_CLARIFICATION")));
     }
     @Test void noCandidatesMakesNoModelOrSkillCallAndVersionMismatchDoesNotInvokeModel() {

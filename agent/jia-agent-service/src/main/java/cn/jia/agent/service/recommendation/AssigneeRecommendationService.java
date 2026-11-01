@@ -97,8 +97,9 @@ public final class AssigneeRecommendationService {
             JsonNode root = JSON.readTree(raw);
             if (root == null || !root.isObject()) throw invalid("JSON_OBJECT");
             String state = text(root, "state"), summary = text(root, "requirementSummary");
-            if (!Set.of("READY", "NEEDS_CLARIFICATION", "NO_MATCH").contains(state)) throw invalid("STATE");
+            if (!Set.of("READY", "NO_MATCH").contains(state)) throw invalid("STATE");
             List<String> questions = strings(root.get("questions"));
+            if (!questions.isEmpty()) throw invalid("QUESTIONS_NOT_SUPPORTED");
             JsonNode rows = root.get("recommendations");
             if (rows == null || !rows.isArray()) throw invalid("RECOMMENDATIONS_ARRAY");
             var byId = new HashMap<String, Candidate>();
@@ -116,8 +117,7 @@ public final class AssigneeRecommendationService {
                 if (!"online".equalsIgnoreCase(candidate.agent().status())) gaps.add("当前运行状态：" + candidate.agent().status() + "；确认承办不代表已开始运行。");
                 recommendations.add(new Recommendation(candidate.agent(), text(row, "reason"), List.copyOf(evidence), List.copyOf(gaps)));
             }
-            if ("READY".equals(state) != !recommendations.isEmpty()
-                    || "NEEDS_CLARIFICATION".equals(state) && questions.isEmpty()) throw invalid("STATE_CONTENT");
+            if ("READY".equals(state) != !recommendations.isEmpty()) throw invalid("STATE_CONTENT");
             return new Result(taskId, taskVersion, observedAt, state, summary, List.copyOf(recommendations), questions, true);
         } catch (Failure failure) { throw failure; }
         catch (Exception invalid) { throw invalid("JSON_DECODE"); }
