@@ -11,7 +11,7 @@ public final class AssigneeRecommendation {
     /** available means this observation may be cited, NOT an execution authorization. */
     public record Evidence(String id, String kind, String label, String description, boolean available) { }
     public record Candidate(Agent agent, List<Evidence> evidence) { }
-    public record Recommendation(Agent agent, String reason, List<Evidence> evidence, List<String> gaps) { }
+    public record Recommendation(Agent agent, String recommendationLevel, String reason, List<Evidence> evidence, List<String> gaps) { }
     public record Result(String taskId, String taskVersion, long observedAt, String state,
                          String requirementSummary, List<Recommendation> recommendations,
                          List<String> questions, boolean candidateSetComplete) { }

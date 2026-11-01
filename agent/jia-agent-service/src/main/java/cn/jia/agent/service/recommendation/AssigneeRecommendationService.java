@@ -35,17 +35,11 @@ public final class AssigneeRecommendationService {
         long observedAt = Instant.now().toEpochMilli();
         if (candidates.isEmpty()) return new Result(taskId, task.getTaskVersion(), observedAt,
                 "NO_CANDIDATES", "当前没有可承办候选", List.of(), List.of(), true);
-        // READY requires at least one citable fact. Do not ask the model to choose an
-        // impossible row; the complete authorized pool still backs manual choice and stale checks.
-        List<Candidate> evidenceCandidates = candidates.stream()
-                .filter(c -> c.evidence().stream().anyMatch(Evidence::available)).toList();
-        if (evidenceCandidates.isEmpty()) return new Result(taskId, task.getTaskVersion(), observedAt,
-                "NO_MATCH", "当前候选尚无可引用的已登记本领或已启用技能证据", List.of(), List.of(), true);
         var materialObservation = materials.observe(actor, taskId);
         String raw;
         try {
             var input = new LinkedHashMap<String, Object>();
-            input.put("task", taskInput(task)); input.put("candidates", evidenceCandidates);
+            input.put("task", taskInput(task)); input.put("candidates", candidates);
             input.put("materials", materialObservation.stream().map(RecommendationMaterials.Observation::material).toList());
             input.put("materialsNote", "仅提供关联版本元信息；未读取附件正文。summary=null表示无已有摘要，不代表附件无内容。");
             raw = model.judge(JSON.writeValueAsString(input));
@@ -96,8 +90,7 @@ public final class AssigneeRecommendationService {
         try {
             JsonNode root = JSON.readTree(raw);
             if (root == null || !root.isObject()) throw invalid("JSON_OBJECT");
-            String state = text(root, "state"), summary = text(root, "requirementSummary");
-            if (!Set.of("READY", "NO_MATCH").contains(state)) throw invalid("STATE");
+            String summary = text(root, "requirementSummary");
             List<String> questions = strings(root.get("questions"));
             if (!questions.isEmpty()) throw invalid("QUESTIONS_NOT_SUPPORTED");
             JsonNode rows = root.get("recommendations");
@@ -108,16 +101,20 @@ public final class AssigneeRecommendationService {
             for (JsonNode row : rows) {
                 String id = text(row, "agentId"); Candidate candidate = byId.get(id);
                 if (candidate == null || !seen.add(id) || !candidate.agent().canOperate()) throw invalid("CANDIDATE");
+                String level = text(row, "recommendationLevel");
+                if (!Set.of("HIGH", "MEDIUM", "LOW", "UNKNOWN").contains(level)) throw invalid("LEVEL");
                 List<String> ids = strings(row.get("evidenceIds"));
-                if (ids.isEmpty() || new HashSet<>(ids).size() != ids.size()) throw invalid("EVIDENCE_IDS");
+                if ((!"UNKNOWN".equals(level) && ids.isEmpty()) || new HashSet<>(ids).size() != ids.size()) throw invalid("EVIDENCE_IDS");
                 var evidence = new ArrayList<Evidence>();
                 for (String evidenceId : ids) evidence.add(candidate.evidence().stream()
                         .filter(e -> e.id().equals(evidenceId) && e.available()).findFirst().orElseThrow(() -> invalid("EVIDENCE_UNAVAILABLE")));
                 var gaps = new ArrayList<>(strings(row.get("gaps")));
                 if (!"online".equalsIgnoreCase(candidate.agent().status())) gaps.add("当前运行状态：" + candidate.agent().status() + "；确认承办不代表已开始运行。");
-                recommendations.add(new Recommendation(candidate.agent(), text(row, "reason"), List.copyOf(evidence), List.copyOf(gaps)));
+                recommendations.add(new Recommendation(candidate.agent(), level, text(row, "reason"), List.copyOf(evidence), List.copyOf(gaps)));
             }
-            if ("READY".equals(state) != !recommendations.isEmpty()) throw invalid("STATE_CONTENT");
+            if (seen.size() != byId.size()) throw invalid("CANDIDATE_COVERAGE");
+            String state = recommendations.stream().anyMatch(r -> Set.of("HIGH", "MEDIUM").contains(r.recommendationLevel()))
+                    ? "READY" : "NO_MATCH";
             return new Result(taskId, taskVersion, observedAt, state, summary, List.copyOf(recommendations), questions, true);
         } catch (Failure failure) { throw failure; }
         catch (Exception invalid) { throw invalid("JSON_DECODE"); }

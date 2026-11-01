@@ -48,6 +48,12 @@ class AssigneeRecommendationModelTest {
         assertTrue(instructions.contains("questions始终返回空数组"));
         assertTrue(instructions.contains("本领作为适配参考"));
         assertFalse(instructions.contains("NEEDS_CLARIFICATION"));
+        assertTrue(instructions.contains("对输入的每个候选恰好评价一次"));
+        assertTrue(instructions.contains("不应再要求独立的成绩统计"));
+        assertTrue(instructions.contains("没有识图用途时，不得推断"));
+        assertTrue(instructions.contains("UNKNOWN允许evidenceIds为空"));
+        assertTrue(instructions.contains("不要将通用的不保证声明当成所有候选的否决项"));
+        assertTrue(instructions.contains("不因名称含生成或编辑就排除明确支持识图的技能"));
     }
     @Test void returnedToolCallIsRejectedWithoutExecution() {
         var model = mock(ChatModel.class); var output = mock(AssistantMessage.class);

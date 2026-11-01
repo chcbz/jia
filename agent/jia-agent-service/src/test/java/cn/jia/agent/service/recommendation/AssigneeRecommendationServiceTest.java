@@ -19,7 +19,7 @@ class AssigneeRecommendationServiceTest {
     private static final HostingRentHttp.Actor ACTOR = new HostingRentHttp.Actor("user", "0", "client", "owner");
     private static final String ANSWER = """
         {"state":"READY","requirementSummary":"写说明","recommendations":[
-        {"agentId":"a","reason":"登记写作本领","evidenceIds":["ability:0"],"gaps":[]}],"questions":[]}
+        {"agentId":"a","recommendationLevel":"HIGH","reason":"登记写作本领","evidenceIds":["ability:0"],"gaps":[]}],"questions":[]}
         """;
     private static Candidate candidate() { return new Candidate(new Agent("a", "Agent", "online", List.of("写作"), true, true, null),
             List.of(new Evidence("ability:0", "DECLARED_ABILITY", "写作", "登记声明", true))); }
@@ -35,8 +35,8 @@ class AssigneeRecommendationServiceTest {
     }
     @Test void rejectsForgedAgentEvidenceUnavailableFactMalformedStateAndDuplicateCandidate() {
         for (String invalid : List.of(ANSWER.replace("\"a\"", "\"foreign\""), ANSWER.replace("ability:0", "tool:imaginary"),
-                ANSWER.replace("READY", "UNKNOWN"), ANSWER.replace("[\"ability:0\"]", "[]"),
-                ANSWER.replace("READY", "NO_MATCH"), ANSWER + "{}", "[]")) {
+                ANSWER.replace("HIGH", "INVALID"), ANSWER.replace("[\"ability:0\"]", "[]"),
+                ANSWER.replace("HIGH", ""), ANSWER + "{}", "[]")) {
             assertEquals(502, assertThrows(Failure.class, () -> AssigneeRecommendationService.decode("task", "7", 1, List.of(candidate()), invalid)).status());
         }
         var unavailable = new Candidate(candidate().agent(), List.of(new Evidence("ability:0", "SKILL", "写作", "未就绪", false)));
@@ -48,16 +48,26 @@ class AssigneeRecommendationServiceTest {
         assertEquals("READY", result.state());
         assertTrue(result.recommendations().getFirst().gaps().stream().anyMatch(gap -> gap.contains("不代表已开始运行")));
     }
-    @Test void noMatchDoesNotAskQuestionsAndRemovedClarificationIsRejected() {
-        String noMatch = "{\"state\":\"NO_MATCH\",\"requirementSummary\":\"能力不足\",\"recommendations\":[],\"questions\":[]}";
-        assertEquals("NO_MATCH", AssigneeRecommendationService.decode("task", "7", 1, List.of(candidate()), noMatch).state());
-        String questions = noMatch.replace("\"questions\":[]", "\"questions\":[\"请补充需求\"]");
-        assertEquals(502, assertThrows(Failure.class, () -> AssigneeRecommendationService.decode("task", "7", 1, List.of(candidate()), questions)).status());
-        String oldState = questions.replace("NO_MATCH", "NEEDS_CLARIFICATION");
-        assertThrows(Failure.class, () -> AssigneeRecommendationService.decode("task", "7", 1, List.of(candidate()), oldState));
-        String readyQuestions = ANSWER.replace("\"questions\":[]", "\"questions\":[\"请补充需求\"]");
-        assertThrows(Failure.class, () -> AssigneeRecommendationService.decode("task", "7", 1, List.of(candidate()), readyQuestions));
-        assertThrows(Failure.class, () -> AssigneeRecommendationService.decode("task", "7", 1, List.of(candidate()), noMatch.replace("NO_MATCH", "NEEDS_CLARIFICATION")));
+    @Test void lowAndUnknownStillReturnIndividualAssessmentsAndQuestionsAreRejected() {
+        for (String level : List.of("LOW", "UNKNOWN")) {
+            String answer = ANSWER.replace("HIGH", level);
+            if ("UNKNOWN".equals(level)) answer = answer.replace("[\"ability:0\"]", "[]");
+            var result = AssigneeRecommendationService.decode("task", "7", 1, List.of(candidate()), answer);
+            assertEquals("NO_MATCH", result.state());
+            assertEquals(level, result.recommendations().getFirst().recommendationLevel());
+            assertEquals(1, result.recommendations().size());
+        }
+        assertThrows(Failure.class, () -> AssigneeRecommendationService.decode("task", "7", 1, List.of(candidate()),
+                ANSWER.replace("\"questions\":[]", "\"questions\":[\"请补充\"]")));
+    }
+    @Test void requiresEveryCandidateExactlyOnceWithoutInventingAssessments() {
+        var other = new Candidate(new Agent("b", "Other", "online", List.of(), true, false, null), List.of());
+        assertThrows(Failure.class, () -> AssigneeRecommendationService.decode("task", "7", 1, List.of(candidate(), other), ANSWER));
+        String row = "{\"agentId\":\"a\",\"recommendationLevel\":\"HIGH\",\"reason\":\"写作\",\"evidenceIds\":[\"ability:0\"],\"gaps\":[]}";
+        assertThrows(Failure.class, () -> AssigneeRecommendationService.decode("task", "7", 1, List.of(candidate()),
+                "{\"requirementSummary\":\"写作\",\"recommendations\":[" + row + "," + row + "],\"questions\":[]}"));
+        assertThrows(Failure.class, () -> AssigneeRecommendationService.decode("task", "7", 1, List.of(candidate()),
+                "{\"requirementSummary\":\"写作\",\"recommendations\":[],\"questions\":[]}"));
     }
     @Test void noCandidatesMakesNoModelOrSkillCallAndVersionMismatchDoesNotInvokeModel() {
         var agents = mock(AgentService.class); var skills = mock(SkillManagementService.class); var model = mock(AgentAssigneeRecommendationModel.class);
@@ -78,13 +88,16 @@ class AssigneeRecommendationServiceTest {
         when(agents.getTask("task")).thenReturn(task("7"), task("8"));
         assertEquals(409, assertThrows(Failure.class, () -> service.recommend(ACTOR, "task", new Request("7"))).status());
     }
-    @Test void externalCandidateWithoutPublicEvidenceNeverReadsPrivateSkillsOrCallsModel() {
+    @Test void externalCandidateIsRatedUnknownWithoutReadingPrivateSkills() {
         var agents = mock(AgentService.class); var skills = mock(SkillManagementService.class); var model = mock(AgentAssigneeRecommendationModel.class);
         var a = new AgentTaskAssigneeCandidateDTO(new AgentTaskTargetSummaryDTO("external", "Agent", "公开提供方", false, "online"), List.of());
         when(agents.getTask("task")).thenReturn(task("7")); when(agents.listTaskAssigneeCandidates("task")).thenReturn(List.of(a));
+        when(model.judge(anyString())).thenReturn(ANSWER.replace("\"a\"", "\"external\"").replace("HIGH", "UNKNOWN").replace("[\"ability:0\"]", "[]"));
         var service = new AssigneeRecommendationService(agents, skills, model, mock(RecommendationMaterials.class));
-        assertEquals("NO_MATCH", service.recommend(ACTOR, "task", new Request("7")).state());
-        verifyNoInteractions(skills, model);
+        var result = service.recommend(ACTOR, "task", new Request("7"));
+        assertEquals("NO_MATCH", result.state());
+        assertEquals("UNKNOWN", result.recommendations().getFirst().recommendationLevel());
+        verifyNoInteractions(skills); verify(model, times(1)).judge(anyString());
     }
     @Test void providerFailureDoesNotRetryOrLeakItsMessage() {
         var agents = mock(AgentService.class); var skills = mock(SkillManagementService.class); var model = mock(AgentAssigneeRecommendationModel.class);
@@ -103,29 +116,33 @@ class AssigneeRecommendationServiceTest {
         assertThrows(Failure.class, () -> AssigneeRecommendationService.decode("task", "7", 1, List.of(c), ANSWER.replace("ability:0", "skill:installed")));
     }
 
-    @Test void evidenceFreeCandidatesAreNotSentToModelButRemainInObservation() throws Exception {
+    @Test void allSelectableCandidatesAreSentInOneCallIncludingUnknownCapabilities() throws Exception {
         var agents = mock(AgentService.class); var skills = mock(SkillManagementService.class); var model = mock(AgentAssigneeRecommendationModel.class);
         var eligible = new AgentTaskAssigneeCandidateDTO(new AgentTaskTargetSummaryDTO("a", "Writer", null, true, "online"), List.of("写作"));
         var impossible = new AgentTaskAssigneeCandidateDTO(new AgentTaskTargetSummaryDTO("no-evidence", "Empty", null, true, "online"), List.of());
         when(agents.getTask("task")).thenReturn(task("7"));
         when(agents.listTaskAssigneeCandidates("task")).thenReturn(List.of(impossible, eligible));
         when(skills.recommendationSkills(eq(ACTOR), anyString())).thenReturn(List.of());
-        when(model.judge(anyString())).thenReturn(ANSWER);
+        String all = ANSWER.replace("}],\"questions\":[]", "},{\"agentId\":\"no-evidence\",\"recommendationLevel\":\"UNKNOWN\",\"reason\":\"资料不足\",\"evidenceIds\":[],\"gaps\":[]}],\"questions\":[]");
+        when(model.judge(anyString())).thenReturn(all);
         var result = new AssigneeRecommendationService(agents, skills, model, mock(RecommendationMaterials.class)).recommend(ACTOR, "task", new Request("7"));
         assertEquals("READY", result.state()); assertTrue(result.candidateSetComplete());
         var input = org.mockito.ArgumentCaptor.forClass(String.class); verify(model, times(1)).judge(input.capture());
         var rows = new com.fasterxml.jackson.databind.ObjectMapper().readTree(input.getValue()).get("candidates");
-        assertEquals(1, rows.size()); assertEquals("a", rows.get(0).get("agent").get("agentId").asText());
+        assertEquals(2, rows.size()); assertEquals("no-evidence", rows.get(0).get("agent").get("agentId").asText());
+        assertEquals(2, result.recommendations().size());
         verify(agents, times(2)).listTaskAssigneeCandidates("task");
     }
-    @Test void installedButUnavailableEvidenceMakesNoMatchWithoutInference() {
+    @Test void installedButUnavailableEvidenceCanOnlySupportUnknownWithoutCitation() {
         var agents = mock(AgentService.class); var skills = mock(SkillManagementService.class); var model = mock(AgentAssigneeRecommendationModel.class);
         var a = new AgentTaskAssigneeCandidateDTO(new AgentTaskTargetSummaryDTO("a", "Agent", null, true, "online"), List.of());
         when(agents.getTask("task")).thenReturn(task("7")); when(agents.listTaskAssigneeCandidates("task")).thenReturn(List.of(a));
         when(skills.recommendationSkills(ACTOR, "a")).thenReturn(List.of(new SkillManagementService.RecommendationSkill(
                 "installed", "image", "1", "图片", "经验", false, "VERSION_MISMATCH", "INSTRUCTION")));
+        when(model.judge(anyString())).thenReturn(ANSWER.replace("HIGH", "UNKNOWN").replace("[\"ability:0\"]", "[]"));
         var result = new AssigneeRecommendationService(agents, skills, model, mock(RecommendationMaterials.class)).recommend(ACTOR, "task", new Request("7"));
-        assertEquals("NO_MATCH", result.state()); assertTrue(result.recommendations().isEmpty()); verifyNoInteractions(model);
+        assertEquals("NO_MATCH", result.state()); assertEquals("UNKNOWN", result.recommendations().getFirst().recommendationLevel());
+        verify(model, times(1)).judge(anyString());
     }
     @Test void reproducedEmptyEvidenceResultRemainsRejectedRatherThanBeingFilledIn() {
         var invalid = ANSWER.replace("[\"ability:0\"]", "[]");
