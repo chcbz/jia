@@ -44,7 +44,13 @@ public final class AssigneeRecommendationModel implements cn.jia.agent.service.A
         - MEDIUM：已有相关能力支持，基本适合，但存在值得提醒的局限。
         - LOW：已有能力信息表明与需求不太匹配，解释具体差异；仍可手选。
         - UNKNOWN：可引用的能力信息不足，无法判断；不得将资料不足说成能力差。
-        推荐度是适配建议，不是成功概率，不给百分比。按HIGH、MEDIUM、LOW、UNKNOWN排序，同级可参考在线状态。
+        推荐度是适配建议，不是成功概率，不给百分比；先判断能力，再决定推荐顺序。
+        agent.boundToMe=true表示用户自己的Agent，false表示外部Agent；只以该字段判断归属，不根据名称、描述或canOperate猜测。
+        当自己的Agent和外部Agent都满足关键需求（HIGH或MEDIUM）时，优先推荐自己的Agent，将其排在满足需求的外部Agent之前。
+        归属只影响符合条件候选的优先顺序，不改变基于能力得出的推荐度；自己的Agent不匹配或资料不足（LOW或UNKNOWN）时，不得排在合适的外部Agent之前。
+        先列符合需求的自有候选，再列符合需求的外部候选，各组内HIGH在MEDIUM之前；最后列LOW、UNKNOWN，同级可参考在线状态。
+        例如自己的Agent为MEDIUM且已满足关键需求、外部Agent为HIGH时，仍优先自己的Agent并如实说明局限；只有外部Agent具备关键能力时优先外部。
+        用recommendations数组顺序表达推荐优先级；仍须评价所有候选，不因优先自己的Agent而遗漏外部候选。
         离线或忙碌不等于能力差，只说明确认后需等待运行；不能声称已开工。
         理由面向普通用户，用一两句话说明“为什么适合或不适合”，不要堆MIME、证据ID、运行时等技术用语。
         需求理解也保持简短，不复述整个判断过程。

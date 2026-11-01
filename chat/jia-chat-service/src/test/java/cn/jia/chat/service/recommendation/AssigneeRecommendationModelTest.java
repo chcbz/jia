@@ -50,6 +50,12 @@ class AssigneeRecommendationModelTest {
         assertFalse(instructions.contains("NEEDS_CLARIFICATION"));
         assertTrue(instructions.contains("对输入的每个候选恰好评价一次"));
         assertTrue(instructions.contains("不应再要求独立的成绩统计"));
+        assertTrue(instructions.contains("agent.boundToMe=true"));
+        assertTrue(instructions.contains("都满足关键需求（HIGH或MEDIUM）"));
+        assertTrue(instructions.contains("不改变基于能力得出的推荐度"));
+        assertTrue(instructions.contains("不得排在合适的外部Agent之前"));
+        assertTrue(instructions.contains("用recommendations数组顺序表达推荐优先级"));
+        assertFalse(instructions.contains("按HIGH、MEDIUM、LOW、UNKNOWN排序"));
         assertTrue(instructions.contains("没有识图用途时，不得推断"));
         assertTrue(instructions.contains("UNKNOWN允许evidenceIds为空"));
         assertTrue(instructions.contains("不要将通用的不保证声明当成所有候选的否决项"));
