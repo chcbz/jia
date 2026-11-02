@@ -30,6 +30,7 @@ import java.util.Objects;
 @RequestMapping("/chat/conversations")
 @ConditionalOnProperty(prefix="chat.typed-deliberation",name="enabled",havingValue="true")
 public final class ChatTypedDeliberationController {
+    private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(ChatTypedDeliberationController.class);
     private final ChatTypedDiscussionAdmissionService admissions;
     private final ChatTypedDeliberationService typed;
     private final ChatDeliberationService deliberation;
@@ -79,11 +80,26 @@ public final class ChatTypedDeliberationController {
 
     @ExceptionHandler(RuntimeException.class)
     public ResponseEntity<JsonResult<Void>> unavailable(RuntimeException failure) {
+        // Exception messages may contain SQL values or user content. Record only
+        // correlation, exception types and code locations; keep the wire generic.
+        LOG.error("typed_discussion_unavailable request_id={} failure_sites={}",
+                org.slf4j.MDC.get("request_id"), failureSites(failure));
         JsonResult<Void> result=JsonResult.failure("TYPED_DELIBERATION_UNAVAILABLE",
                 "Typed discussion is temporarily unavailable");
 
         return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).cacheControl(CacheControl.noStore())
                 .header("X-Content-Type-Options","nosniff").body(result);
+    }
+
+    static String failureSites(Throwable failure) {
+        var seen = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<Throwable, Boolean>());
+        var sites = new StringBuilder();
+        for (Throwable current = failure; current != null && seen.add(current); current = current.getCause()) {
+            if (!sites.isEmpty()) sites.append(" caused_by ");
+            sites.append(current.getClass().getName());
+            for (var frame : current.getStackTrace()) sites.append(" at ").append(frame);
+        }
+        return sites.toString();
     }
 
     private Scope scope(Authentication authentication){try{String tenant=tenants.resolve(authentication);ServerResolvedSender sender=identities.resolve(EsContextHolder.getContext());if(sender==null||!ServerResolvedSender.USER_TYPE.equals(sender.type())||!exact(sender.jiacn(),50)||!exact(sender.clientId(),50))throw unavailable();return new Scope(tenant,sender);}catch(ChatDeliberationException e){throw e;}catch(RuntimeException denied){throw unavailable();}}
