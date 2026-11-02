@@ -149,6 +149,8 @@ class ChatBountyExecutionTerminationMySqlTest {
                 .thenAnswer(i->conversation(i.getArgument(0),i.getArgument(1),i.getArgument(2),true));
         when(conversations.findScopedById(anyString(),anyString(),anyString()))
                 .thenAnswer(i->conversation(i.getArgument(0),i.getArgument(1),i.getArgument(2),false));
+        when(conversations.findScopedById(eq("0"),anyString(),anyString(),anyString()))
+                .thenAnswer(i->conversation(i.getArgument(1),i.getArgument(2),i.getArgument(3),false));
         var access=new WorkspaceConversationAccessServiceImpl(conversations,mock(AgentTaskThreadDao.class));
         broker=mock(ChatConversationEventBroker.class);
         service=new ChatBountyExecutionTerminationService(jdbc,roots,conversations,events,broker,access,JsonUtil.getMapper());

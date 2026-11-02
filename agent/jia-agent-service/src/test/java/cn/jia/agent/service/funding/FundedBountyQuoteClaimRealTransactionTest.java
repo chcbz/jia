@@ -76,6 +76,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -149,9 +150,9 @@ class FundedBountyQuoteClaimRealTransactionTest {
                 new AgentTaskWorkItemDaoImpl(template.getMapper(AgentTaskWorkItemMapper.class)),
                 unusedAggregation, identity, mutation, foundation.events());
         ReflectionTestUtils.setField(assignment, "fundedBountyLegacyGuard", foundation.guard());
-        AgentCommandTransportCapture capture = new AgentCommandTransportCapture(
+        AgentCommandTransportCapture capture = org.mockito.Mockito.spy(new AgentCommandTransportCapture(
                 new AgentRabbitSafetyGate(new AgentRabbitSafetyProperties(null, null, null, null, null, null)),
-                new StaticListableBeanFactory().getBeanProvider(AgentCommandTransportWriter.class));
+                new StaticListableBeanFactory().getBeanProvider(AgentCommandTransportWriter.class)));
         context.registerBean(AgentTaskBountyQuoteMapper.class, () -> template.getMapper(AgentTaskBountyQuoteMapper.class));
         context.registerBean(AgentTaskFundingMapper.class, () -> rootTemplate.getMapper(AgentTaskFundingMapper.class));
         context.registerBean(cn.jia.agent.service.AgentTaskMutationTransaction.class, () -> mutation);
@@ -279,6 +280,11 @@ class FundedBountyQuoteClaimRealTransactionTest {
             assertEquals(1, count("agent_task_bounty_claim_operation"));
             return pending;
         });
+        assertNotEquals(ACTOR.userId(), ACTOR.ownerJiacn());
+        org.mockito.Mockito.verify(context.getBean(AgentCommandTransportCapture.class)).captureTaskInvites(
+                org.mockito.ArgumentMatchers.eq(OWNER), org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.anyList(), org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyLong());
         assertEquals(AGENT_A, receipt.agentId());
         assertEquals(quote.quoteId(), receipt.quoteId());
         assertEquals("assigned", receipt.status());

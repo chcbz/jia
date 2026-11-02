@@ -283,10 +283,10 @@ public final class FundedBountyQuoteClaimServiceImpl implements FundedBountyQuot
         long receiptVersion = request.taskVersion() + 1;
         requireOne(quoteMapper.completeClaimOperation(actor.tenantId(), actor.clientId(), PRINCIPAL_TYPE,
                 actor.userId(), key, receiptVersion, claimedAt), "claim receipt completion");
-        if (!exact(actor.userId(), root.getOwnerJiacn())) {
+        if (!exact(actor.ownerJiacn(), root.getOwnerJiacn())) {
             throw unavailable("Locked funded task owner does not match the authenticated actor");
         }
-        transportCapture.captureTaskInvites(actor.userId(),
+        transportCapture.captureTaskInvites(actor.ownerJiacn(),
                 claimTaskDto(root, request.agentId(), receiptVersion),
                 List.of(runtime), outcome.taskAssignedEventId(), claimedAt);
         return new AgentTaskClaimReceiptDTO(root.getTaskId(), request.agentId(), quote.getQuoteId(),
