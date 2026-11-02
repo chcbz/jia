@@ -20,6 +20,13 @@ public interface InstalledSkillDescriptorLookup {
     /** Includes historical installations needed for exact task bindings and recovery. */
     Snapshot read(SkillCapabilityLookup.Scope scope);
 
+    /** Keep immutable descriptions prepared outside locks alive for one synchronous operation.
+     * Implementations must still re-read authorization/installation facts inside action. */
+    default <T> T withPreparedRead(SkillCapabilityLookup.Scope scope, java.util.function.Supplier<T> action) {
+        read(scope);
+        return action.get();
+    }
+
     /** Current installations for profile display and new task selection, not task authorization. */
     default Snapshot readCurrent(SkillCapabilityLookup.Scope scope) { return read(scope); }
 

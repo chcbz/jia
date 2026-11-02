@@ -88,7 +88,7 @@ class InstalledSkillDescriptorServiceTest {
     @Test void multipleVerifiedDescriptorsUseOnlyOneFinalEntitlementRead() {
         var store=mock(SkillPackages.class);when(packages.getIfUnique()).thenReturn(store);
         var node=new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode();node.put("runner","native-model");
-        when(store.manifest(any())).thenReturn(new SkillManifestCodec.Manifest(node,"a".repeat(64)));
+        when(store.manifest(org.mockito.ArgumentMatchers.<SkillPackages.Description>any())).thenReturn(new SkillManifestCodec.Manifest(node,"a".repeat(64)));
         var second=new SkillEntitlementEntity().setTenantId("0").setClientId("client").setTargetAgentId("agent")
                 .setSkillKey("text-file").setSkillVersion("1.0.0").setEntitlementId("ent-2").setInstallationId("ins")
                 .setOrderId("ord").setProductVersionId("pv").setStatus("ACTIVE").setPermissionGrantVersion(1L)
@@ -119,7 +119,7 @@ class InstalledSkillDescriptorServiceTest {
     @Test void revokedDuringPreparationDoesNotReusePreviouslyActiveSnapshot() {
         var store=mock(SkillPackages.class);when(packages.getIfUnique()).thenReturn(store);
         var node=new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode();node.put("runner","native-model");
-        when(store.manifest(any())).thenReturn(new SkillManifestCodec.Manifest(node,"a".repeat(64)));
+        when(store.manifest(org.mockito.ArgumentMatchers.<SkillPackages.Description>any())).thenReturn(new SkillManifestCodec.Manifest(node,"a".repeat(64)));
         when(market.selectEntitlementsByAgent("0","client","agent")).thenReturn(List.of(e),List.of());
         assertEquals("SKILL_INSTALLATION_CHANGED",read().reasonCode());
     }
@@ -141,6 +141,19 @@ class InstalledSkillDescriptorServiceTest {
         var unavailable=assertThrows(InstalledSkillDescriptorLookup.SourceUnavailable.class,()->service.read(scope));
         assertEquals(InstalledSkillDescriptorLookup.SourceUnavailable.Reason.UNAVAILABLE,unavailable.reason());
         assertSame(failure,unavailable.getCause());verifyNoInteractions(market,app,packages);
+    }
+    @Test void preparedMetadataScopeStillRechecksRevokedInstallation() {
+        var store=mock(SkillPackages.class);when(packages.getIfUnique()).thenReturn(store);
+        when(store.withPreparedDescriptions(any())).thenAnswer(call->((java.util.function.Supplier<?>)call.getArgument(0)).get());
+        var node=new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode();node.put("runner","native-model");
+        when(store.manifest(org.mockito.ArgumentMatchers.<SkillPackages.Description>any())).thenReturn(new SkillManifestCodec.Manifest(node,"a".repeat(64)));
+        service.withPreparedRead(scope,()->{
+            e.setStatus("REVOKED");
+            assertFalse(service.read(scope).skills().getFirst().verifiedNative());
+            return null;
+        });
+        // First read plus its post-IO entitlement recheck, then fresh revoked facts in action.
+        verify(market,times(3)).selectEntitlementsByAgent("0","client","agent");
     }
 
 }

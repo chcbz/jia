@@ -790,10 +790,11 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                     // Materialize immutable package metadata before acquiring the task lock. The
                     // locked skillCommand repeats authority/fence checks; this read is not a grant.
                     final RuntimeScope taskScope=executionScope(scope,candidate.getTaskId(),candidate.getRunId());
-                    if(Objects.equals(5,candidate.getExecutionProtocolVersion()) && !nativeSelections(skillMap(skillRow(skillOwner(taskScope),candidate.getExecutionId(),false).getSnapshotJson())).isEmpty())
-                        prepareSkillCatalog(skillOwner(taskScope),scope.agentId());
-                    result.add(withConversationRoot(taskScope,candidate.getTaskId(),candidate.getRunId(),false,
-                            execution -> commandView(taskScope,candidate,execution)));
+                    java.util.function.Supplier<ConversationCommandView> view=()->withConversationRoot(
+                            taskScope,candidate.getTaskId(),candidate.getRunId(),false,
+                            execution -> commandView(taskScope,candidate,execution));
+                    boolean needsSkills=Objects.equals(5,candidate.getExecutionProtocolVersion()) && !nativeSelections(skillMap(skillRow(skillOwner(taskScope),candidate.getExecutionId(),false).getSnapshotJson())).isEmpty();
+                    result.add(needsSkills?withPreparedSkillCatalog(skillOwner(taskScope),scope.agentId(),view):view.get());
                 } catch (Failure stale) {
                     if (stale.getReason()!=Reason.NOT_FOUND && stale.getReason()!=Reason.GRANT_REVOKED
                             && stale.getReason()!=Reason.TASK_CONFLICT) throw stale;
@@ -2162,11 +2163,11 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         if(!skillExecutions.compareAndSet(row,version,expectedPhase))throw failure(Reason.TASK_CONFLICT);
         row.setVersion(Math.addExact(version,1));
     }
-    private void prepareSkillCatalog(OwnerScope scope,String agent) {
+    private <T> T withPreparedSkillCatalog(OwnerScope scope,String agent,java.util.function.Supplier<T> action) {
         if(installedSkills==null)throw failure(Reason.CAPABILITY_UNAVAILABLE);
         var executor=assigneeAuthority.resolveForAssignment(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),agent);
-        installedSkills.read(new cn.jia.agent.service.SkillCapabilityLookup.Scope(
-                scope.tenantId(),scope.clientId(),executor.ownerJiacn(),agent));
+        return installedSkills.withPreparedRead(new cn.jia.agent.service.SkillCapabilityLookup.Scope(
+                scope.tenantId(),scope.clientId(),executor.ownerJiacn(),agent),action);
     }
     private static boolean resultProtocol(PersonalWorkspaceExecutionEntity row) {
         return Objects.equals(4,row.getExecutionProtocolVersion()) || Objects.equals(5,row.getExecutionProtocolVersion());
@@ -2283,8 +2284,6 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         if(!sourceDigest.equals(snapshot.get("sourceSnapshotDigest")))throw failure(Reason.BAD_REQUEST);
         String digest=plainSha(skillJson(snapshot));String seed=skillJson(List.of(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),command.actionEventId()));
         String executionId="pwe_"+plainSha(seed+"\\nexecution").substring(0,60);String runId="pwe_run_"+plainSha(seed+"\\nrun");String key="skill_"+plainSha(seed);
-        if(!selections.isEmpty()&&executions.findByIdempotency(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),key)==null)
-            prepareSkillCatalog(scope,command.targetAgentId());
         java.util.function.Supplier<cn.jia.agent.service.SkillExecutionService.Creation> accept=()->taskMutations.executeWithLockedTaskRootInOwnerScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),command.taskId(),root->{
             requireConversationRoot(root,scope,command.taskId(),command.targetAgentId(),command.assignmentRevision());
             var prior=executions.findByIdempotency(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),key);
@@ -2324,7 +2323,8 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         var runtimeScope=new cn.jia.agent.service.SkillCapabilityLookup.Scope(scope.tenantId(),scope.clientId(),executor.ownerJiacn(),command.targetAgentId());
         // Stable order avoids opposite lock order for concurrent multi-package admissions.
         var ordered=selections.stream().sorted(Comparator.comparing((Map<String,Object> i)->skillString(skillObject(i.get("skill")),"key")).thenComparing(i->skillString(skillObject(i.get("skill")),"installationId"))).toList();
-        return admitNativeSkills(runtimeScope,ordered,0,accept);
+        return withPreparedSkillCatalog(scope,command.targetAgentId(),
+                ()->admitNativeSkills(runtimeScope,ordered,0,accept));
     }
     private <T> T admitNativeSkills(cn.jia.agent.service.SkillCapabilityLookup.Scope scope,List<Map<String,Object>> selections,int index,java.util.function.Supplier<T> accept) {
         if(index==selections.size())return accept.get();
@@ -2438,9 +2438,8 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         if(!Objects.equals(5,observedExecution.getExecutionProtocolVersion()))throw failure(Reason.NOT_FOUND);
         var observedSkill=skillRow(skillOwner(scope),observedExecution.getExecutionId(),false);
         requireSkillSnapshot(observedSkill,command.executionId(),command.snapshotDigest());
-        if(!nativeSelections(skillMap(observedSkill.getSnapshotJson())).isEmpty()&&!skillMap(observedSkill.getEffectsJson()).containsKey(effectId))
-            prepareSkillCatalog(skillOwner(scope),scope.agentId());
-        return nativeMutation(scope,()->withConversationRoot(scope,taskId,runId,true,execution->{
+        boolean needsSkills=!nativeSelections(skillMap(observedSkill.getSnapshotJson())).isEmpty()&&!skillMap(observedSkill.getEffectsJson()).containsKey(effectId);
+        java.util.function.Supplier<cn.jia.agent.service.SkillExecutionService.EffectReceipt> operation=()->nativeMutation(scope,()->withConversationRoot(scope,taskId,runId,true,execution->{
             requireConversationFence(scope,execution,command.fence(),false);if(!Objects.equals(5,execution.getExecutionProtocolVersion()))throw failure(Reason.NOT_FOUND);
             var skill=skillRow(skillOwner(scope),execution.getExecutionId(),true);requireSkillSnapshot(skill,command.executionId(),command.snapshotDigest());
             var snapshot=skillMap(skill.getSnapshotJson());
@@ -2461,6 +2460,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
             String phase=skill.getPhase();long version=skill.getVersion();skill.setEffectsJson(skillJson(effects)).setPhase("WAITING_PROVIDER");skillCas(skill,phase,version);
             return skillEffectReceipt(effect,"NEW");
         }));
+        return needsSkills?withPreparedSkillCatalog(skillOwner(scope),scope.agentId(),operation):operation.get();
     }
     private static void requireSkillEffect(Map<String,Object> effect,String digest,String revision) {
         if(!same(skillString(effect,"effectDigest"),digest)||!Objects.equals(effect.get("bindingRevision"),revision))throw failure(Reason.TASK_CONFLICT);

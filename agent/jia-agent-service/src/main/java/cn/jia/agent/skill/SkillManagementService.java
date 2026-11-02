@@ -151,8 +151,8 @@ public final class SkillManagementService {
                         proof.installationId(),proof.hostId(),null,null,null);return null;
             }
             if(grant.desired()) {
-                require(input.bytes()!=null,503,"SKILL_STATE_UNAVAILABLE");
-                SkillPackages.revalidate(market.selectApprovedProductVersion(a.tenantId(),a.clientId(),input.skill().productVersionId()),input.bytes());
+                require(input.description()!=null,503,"SKILL_STATE_UNAVAILABLE");
+                SkillPackages.revalidate(market.selectApprovedProductVersion(a.tenantId(),a.clientId(),input.skill().productVersionId()),input.description());
                 if(src!=null&&Objects.equals(ref(src).get("productVersionId"),input.skill().productVersionId())
                         &&(!positionChange(db.findChange(a.tenantId(),a.clientId(),src.getChangeId()))
                             ||!grant.id().equals(object(dto(db.findChange(a.tenantId(),a.clientId(),src.getChangeId())).get("authorizationSource")).get("grantId")))) {
@@ -165,7 +165,7 @@ public final class SkillManagementService {
                 }
             }
             boolean install=grant.desired();String action=install?(src==null?"INSTALL":"UPGRADE"):"DISABLE";
-            var prepared=install?describe(market.selectApprovedProductVersion(a.tenantId(),a.clientId(),input.skill().productVersionId()),input.bytes()):null;
+            var prepared=install?describe(market.selectApprovedProductVersion(a.tenantId(),a.clientId(),input.skill().productVersionId()),input.description()):null;
             var target=install?prepared.target():ref(src);var details=install?prepared.details():decode(src.getDetailsJson(),"VersionDetails");
             if(install)target.put("skillInstallationId","psi_"+hash("cyf.skill.position.installation.v1",changeId));
             long revision=Math.addExact(state.getSkillRevision(),1),now=System.currentTimeMillis();
@@ -298,10 +298,10 @@ public final class SkillManagementService {
         var v=market.selectPurchasableProductVersion(a.tenantId(),a.clientId(),productVersion);
         require(v!=null,409,"SKILL_VERSION_NOT_PUBLISHED");
         require(admin||"NONE".equals(v.getDeploymentRestriction()),403,"AGENT_FORBIDDEN");
-        var pkg=packages.getObject().prepare(v);var manifest=packages.getObject().manifest(pkg);
+        var pkg=packages.getObject().describe(v);var manifest=packages.getObject().manifest(pkg);
         return describe(v,pkg);
     }
-    private Prepared describe(SkillProductVersionEntity v,cn.jia.economy.config.skillseed.PlatformSkillPackageCatalog.PlatformSkillPackage pkg) {
+    private Prepared describe(SkillProductVersionEntity v,SkillPackages.Description pkg) {
         var manifest=packages.getObject().manifest(pkg);
         var permissions=SkillMarketplaceHttp.permissions(v.getApprovedPermissionsManifest());
         var sorted=new ArrayList<>(permissions);sorted.sort(UTF8);require(sorted.equals(permissions),409,"SKILL_PERMISSIONS_MISMATCH");
@@ -724,7 +724,7 @@ public final class SkillManagementService {
                 &&proof.scope().agentId().equals(data.get("agentId"))&&proof.installationId().equals(data.get("runtimeInstallationId")),409,"SKILL_DELIVERY_FENCED");
         var evidence=object(data.get("evidence"));
         var approved=market.selectApprovedProductVersion(proof.scope().tenantId(),proof.scope().clientId(),text(object(dto(hint).get("target")),"productVersionId"));
-        var prepared="APPLIED".equals(evidence.get("outcome"))&&!"UNINSTALL".equals(dto(hint).get("action"))?packages.getObject().prepare(approved):null;
+        var prepared="APPLIED".equals(evidence.get("outcome"))&&!"UNINSTALL".equals(dto(hint).get("action"))?packages.getObject().describe(approved):null;
         var actor=new HostingRentHttp.Actor(hint.getActorId(),hint.getTenantId(),hint.getClientId(),hint.getOwnerJiacn());
         return ownedChange(hint,()->authentication.withFence(proof,false,()->{
             var state=state(actor,hint.getAgentId(),hint.getSkillKey());
@@ -760,7 +760,7 @@ public final class SkillManagementService {
     }
     private void applyEvidence(HostingRentHttp.Actor a,SkillManagedStateEntity state,SkillChangeEntity c,Map<String,Object> value,
             SkillChangeCommandEntity cmd,Map<String,Object> command,Map<String,Object> evidence,
-            cn.jia.economy.config.skillseed.PlatformSkillPackageCatalog.PlatformSkillPackage prepared) {
+            SkillPackages.Description prepared) {
         String outcome=text(evidence,"outcome"),phase=text(command,"phase");long revision=state.getSkillRevision();
         // Repeated immutable phase results are accepted, but contradictory facts never change terminal money/state.
         if("RESULT".equals(cmd.getState())) {
@@ -997,7 +997,7 @@ public final class SkillManagementService {
             var target=ref(auth);var approved=market.selectApprovedProductVersion(scope.tenantId(),scope.clientId(),text(target,"productVersionId"));
             if(approved==null||!HexFormat.of().formatHex(approved.getPackageSha256()).equals(target.get("packageSha256")))continue;
             if(i.getOrderId()!=null) {var o=app.order(scope.tenantId(),scope.clientId(),i.getOrderId());if(o==null||!"ACTIVE".equals(o.getStatus()))continue;}
-            var pkg=packages.getObject().prepare(approved);var manifest=packages.getObject().manifest(pkg);
+            var pkg=packages.getObject().describe(approved);var manifest=packages.getObject().manifest(pkg);
             if(manifest==null) {
                 if(!"INSTRUCTION".equals(target.get("kind"))||target.get("manifestSha256")!=null)continue;
             } else if(!"EXECUTABLE".equals(target.get("kind"))||!manifest.manifestSha256().equals(target.get("manifestSha256")))continue;
@@ -1113,7 +1113,7 @@ public final class SkillManagementService {
                     &&"ACTIVE".equals(e.getStatus())&&Objects.equals(i.getOrderId(),e.getOrderId())&&Objects.equals(i.getProductVersionId(),e.getProductVersionId())
                     &&Objects.equals(i.getInstalledAt(),e.getActivatedAt())&&Objects.equals(v==null?null:v.getApprovedPermissionsManifest(),e.getApprovedPermissionsManifest())
                     &&app.successfulReceipts(tenant,client,installationId)>0&&binding!=null&&agent.equals(binding.getCanonicalAgentId()),409,"SKILL_STATE_CONFLICT");
-            var prepared=packages.getObject().prepare(v);var manifest=packages.getObject().manifest(prepared);
+            var prepared=packages.getObject().describe(v);var manifest=packages.getObject().manifest(prepared);
             require(manifest!=null&&Arrays.equals(i.getPackageSha256(),v.getPackageSha256())&&Objects.equals(i.getPackageSize(),v.getPackageSize()),409,"SKILL_STATE_CONFLICT");
             ref=map("skillInstallationId",installationId,"productVersionId",i.getProductVersionId(),"skillVersion",i.getSkillVersion(),
                     "packageSha256",HexFormat.of().formatHex(i.getPackageSha256()),"manifestSha256",manifest.manifestSha256());

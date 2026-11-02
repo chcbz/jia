@@ -36,6 +36,14 @@ public final class InstalledSkillDescriptorService implements InstalledSkillDesc
     private SkillCostInfoSource costs;
     @org.springframework.beans.factory.annotation.Autowired
     public void setCostInfoSource(SkillCostInfoSource costs) {this.costs=Objects.requireNonNull(costs);}
+    @Override public <T> T withPreparedRead(SkillCapabilityLookup.Scope scope, java.util.function.Supplier<T> action) {
+        var store=packages.getIfUnique();
+        if(store==null) throw new SourceUnavailable();
+        return store.withPreparedDescriptions(() -> {
+            read(scope); // prepares metadata only; this snapshot is never reused as authorization
+            return action.get();
+        });
+    }
     @Override public Snapshot read(SkillCapabilityLookup.Scope scope) {
         Objects.requireNonNull(scope);
         try {
@@ -135,7 +143,7 @@ public final class InstalledSkillDescriptorService implements InstalledSkillDesc
             return unavailable(e,"SKILL_INSTALLATION_BINDING_INVALID");
         var store=packages.getIfUnique(); if(store==null) throw new SourceUnavailable();
         final SkillManifestCodec.Manifest manifest;
-        try { manifest=store.manifest(store.prepare(v)); }
+        try { manifest=store.manifest(store.describe(v)); }
         catch(SkillMarketplaceException invalid) { throw new SourceUnavailable(invalid); }
         if(manifest==null) return unavailable(e,"SKILL_NOT_EXECUTABLE");
         return new Descriptor(e.getSkillKey(),e.getSkillVersion(),e.getInstallationId(),

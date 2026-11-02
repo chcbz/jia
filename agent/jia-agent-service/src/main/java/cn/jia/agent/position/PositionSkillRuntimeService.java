@@ -6,7 +6,7 @@ import cn.jia.agent.security.AgentRuntimeAuthenticationService.Proof;
 import cn.jia.agent.skill.SkillPackages;
 import cn.jia.agent.skill.SkillManifestCodec;
 import cn.jia.economy.mapper.EconomySkillMarketplaceMapper;
-import cn.jia.economy.config.skillseed.PlatformSkillPackageCatalog.PlatformSkillPackage;
+import cn.jia.agent.skill.SkillPackages.Description;
 import org.springframework.stereotype.Service;
 import java.util.*;
 import static cn.jia.agent.position.PositionSkillException.require;
@@ -16,7 +16,7 @@ import static cn.jia.agent.position.PositionSkillState.*;
  * The durable desired-state revision is the delivery/recovery identity, never a fake order. */
 @Service
 public class PositionSkillRuntimeService {
-    public record Prepared(Installation installation,Skill skill,PlatformSkillPackage bytes,SkillManifestCodec.Manifest manifest) { }
+    public record Prepared(Installation installation,Skill skill,Description description,SkillManifestCodec.Manifest manifest) { }
     public record Receipt(String grantId,String revision,String physicalInstallationId,boolean installed,
             String packageDigest,String manifestSha256,String errorCode) { }
     private final PositionSkillService positions;
@@ -36,7 +36,7 @@ public class PositionSkillRuntimeService {
             if(!i.desired()){out.add(new Prepared(i,skill,null,null));continue;}
             var version=market.selectApprovedProductVersion(scope.tenantId(),scope.clientId(),skill.productVersionId());
             require(version!=null && skill.key().equals(version.getSkillKey()),503,"POSITION_PACKAGE_UNAVAILABLE");
-            var bytes=packages.prepare(version);var manifest=packages.manifest(bytes);
+            var bytes=packages.describe(version);var manifest=packages.manifest(bytes);
             out.add(new Prepared(i,skill,bytes,manifest));
         }
         return out;
@@ -60,11 +60,14 @@ public class PositionSkillRuntimeService {
     }
     public byte[] packageBytes(Proof proof,String id,long revision,List<Prepared> prepared) {
         var item=prepared.stream().filter(p->p.installation().id().equals(id) && p.installation().revision()==revision).findFirst().orElse(null);
-        require(item!=null && item.bytes()!=null,404,"POSITION_PACKAGE_NOT_FOUND");
+        require(item!=null && item.description()!=null,404,"POSITION_PACKAGE_NOT_FOUND");
+        var version=market.selectApprovedProductVersion(scope(proof).tenantId(),scope(proof).clientId(),item.skill().productVersionId());
+        var download=packages.prepare(version);
+        SkillPackages.revalidate(version,item.description());
         return positions.runtimeState(scope(proof),proof.scope().agentId(),p->{
             var i=current(proof,p.state(),id);require(i.desired() && i.revision()==revision && i.state()==InstallState.INSTALL_PENDING,409,"POSITION_INSTALLATION_FENCED");
-            SkillPackages.revalidate(market.selectApprovedProductVersion(scope(proof).tenantId(),scope(proof).clientId(),item.skill().productVersionId()),item.bytes());
-            return item.bytes().bytes();
+            SkillPackages.revalidate(market.selectApprovedProductVersion(scope(proof).tenantId(),scope(proof).clientId(),item.skill().productVersionId()),item.description());
+            return download.bytes();
         });
     }
     public Prepared prepareReceipt(Scope scope,String agentId,String id,Receipt receipt) {
@@ -74,7 +77,7 @@ public class PositionSkillRuntimeService {
         var skill=state.skills().get(i.skillKey());
         var version=market.selectApprovedProductVersion(scope.tenantId(),scope.clientId(),skill.productVersionId());
         require(version!=null,503,"POSITION_PACKAGE_UNAVAILABLE");
-        var bytes=packages.prepare(version);var manifest=packages.manifest(bytes);
+        var bytes=packages.describe(version);var manifest=packages.manifest(bytes);
         return new Prepared(i,skill,bytes,manifest);
     }
     public Map<String,Object> receipt(Proof proof,String id,Receipt receipt,Prepared prepared) {
@@ -92,7 +95,7 @@ public class PositionSkillRuntimeService {
                         && prepared!=null && prepared.installation().id().equals(id)
                         && prepared.installation().revision()==revision
                         && Objects.equals(prepared.manifest()==null?null:prepared.manifest().manifestSha256(),receipt.manifestSha256()),409,"POSITION_RECEIPT_CONFLICT");
-                SkillPackages.revalidate(version,prepared.bytes());
+                SkillPackages.revalidate(version,prepared.description());
             }
             String digest=PositionSkillService.hash(String.join("\0",id,receipt.revision(),receipt.physicalInstallationId(),
                     Boolean.toString(receipt.installed()),Objects.toString(receipt.packageDigest(),""),Objects.toString(receipt.manifestSha256(),""),Objects.toString(receipt.errorCode(),"")));

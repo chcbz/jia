@@ -48,23 +48,70 @@ class SkillPackagesTest {
         assertThrows(SkillMarketplaceException.class,()->packages.prepare(approved(bytes).setReviewStatus("PENDING")));
         assertThrows(SkillMarketplaceException.class,()->packages.prepare(null));
     }
-    @Test void cacheSharesBytesButNeverPriceOrPermissionIdentity() {
+    @Test void downloadsAreIsolatedAndDescriptionsNeverSharePriceOrPermissionIdentity() {
         byte[] bytes=archive("same content");new SkillPackageStore(root).publish(bytes);var packages=new SkillPackages(root);
-        var first=packages.prepare(approved(bytes));var second=packages.prepare(approved(bytes).setPriceMicro(5L).setProductVersionId("spv_2"));
+        var first=packages.describe(approved(bytes));var second=packages.describe(approved(bytes).setPriceMicro(5L).setProductVersionId("spv_2"));
         assertEquals(0L,first.product().priceMicro());assertEquals(5L,second.product().priceMicro());
-        byte[] copy=first.bytes();copy[0]^=1;assertArrayEquals(bytes,packages.prepare(approved(bytes)).bytes());
+        byte[] copy=packages.prepare(approved(bytes)).bytes();copy[0]^=1;assertArrayEquals(bytes,packages.prepare(approved(bytes)).bytes());
     }
-    @Test void coldTransactionPreparationForbiddenButPreparedMetadataReadsNoFiles() throws Exception {
-        byte[] bytes=archive("ready");var store=new SkillPackageStore(root);String key=store.publish(bytes);var packages=new SkillPackages(root);
-        var v=approved(bytes);var prepared=packages.prepare(v);Files.delete(root.resolve(key+".zip"));
-        TransactionSynchronizationManager.setActualTransactionActive(true);
-        try {
-            assertThrows(SkillMarketplaceException.class,()->new SkillPackages(root).prepare(v));
-            assertArrayEquals(bytes,packages.prepare(v).bytes());
-            assertDoesNotThrow(()->SkillPackages.revalidate(v,prepared));
-            assertThrows(SkillMarketplaceException.class,()->packages.prepare(v.setReviewStatus("REJECTED")));
-        }
-        finally { TransactionSynchronizationManager.setActualTransactionActive(false); }
+    @Test void operationPreparationSurvivesZeroCacheBudgetAndTransactionWithoutFiles() throws Exception {
+        byte[] bytes=archive("ready");var store=new SkillPackageStore(root);String key=store.publish(bytes);
+        var packages=new SkillPackages(root,0);var v=approved(bytes);
+        packages.withPreparedDescriptions(()->{
+            var prepared=packages.describe(v);
+            try { Files.delete(root.resolve(key+".zip")); } catch(java.io.IOException e) { throw new AssertionError(e); }
+            TransactionSynchronizationManager.setActualTransactionActive(true);
+            try {
+                assertThrows(SkillMarketplaceException.class,()->packages.prepare(v));
+                assertNull(packages.manifest(prepared));
+                assertNull(packages.describe(v).manifest());
+                assertDoesNotThrow(()->SkillPackages.revalidate(v,prepared));
+                assertThrows(SkillMarketplaceException.class,()->packages.describe(approved(bytes).setReviewStatus("REJECTED")));
+            } finally { TransactionSynchronizationManager.setActualTransactionActive(false); }
+            return null;
+        });
+        // Scope exit does not leave hidden per-thread bytes/metadata behind.
+        assertThrows(SkillMarketplaceException.class,()->packages.describe(v));
+    }
+    @Test void directoryHitDoesNotReadZipButDownloadNeverUsesStaleBytes() throws Exception {
+        byte[] bytes=archive("directory");String key=new SkillPackageStore(root).publish(bytes);
+        var packages=new SkillPackages(root);var v=approved(bytes);var description=packages.describe(v);
+        Files.delete(root.resolve(key+".zip"));
+        assertEquals(description.product().productVersionId(),packages.describe(v).product().productVersionId());
+        assertNull(packages.describe(v).manifest());
+        assertThrows(SkillMarketplaceException.class,()->packages.prepare(v));
+        assertThrows(SkillMarketplaceException.class,()->packages.describe(approved(bytes).setPackageSize((long)bytes.length+1)));
+    }
+    @Test void descriptionBudgetEvictsWithoutInvalidatingPreparedOperations() throws Exception {
+        byte[] a=archive("a"),b=archive("b");var store=new SkillPackageStore(root);
+        String aKey=store.publish(a);store.publish(b);var packages=new SkillPackages(root,1024);
+        packages.withPreparedDescriptions(()->{
+            var prepared=packages.describe(approved(a));
+            packages.describe(approved(b)); // evicts a from global description cache
+            try { Files.delete(root.resolve(aKey+".zip")); } catch(java.io.IOException e) { throw new AssertionError(e); }
+            TransactionSynchronizationManager.setActualTransactionActive(true);
+            try { assertNull(packages.describe(approved(a)).manifest());SkillPackages.revalidate(approved(a),prepared); }
+            finally { TransactionSynchronizationManager.setActualTransactionActive(false); }
+            return null;
+        });
+        assertThrows(SkillMarketplaceException.class,()->packages.describe(approved(a)));
+        assertDoesNotThrow(()->packages.describe(approved(b)));
+    }
+    @Test void exceptionalAndNestedScopesReleaseTheirOwnPreparation() throws Exception {
+        byte[] a=archive("outer"),b=archive("inner");var store=new SkillPackageStore(root);
+        String aKey=store.publish(a),bKey=store.publish(b);var packages=new SkillPackages(root,0);
+        assertThrows(IllegalStateException.class,()->packages.withPreparedDescriptions(()->{
+            packages.describe(approved(a));
+            assertThrows(IllegalArgumentException.class,()->packages.withPreparedDescriptions(()->{
+                packages.describe(approved(b));throw new IllegalArgumentException("nested");
+            }));
+            try { Files.delete(root.resolve(aKey+".zip"));Files.delete(root.resolve(bKey+".zip")); }
+            catch(java.io.IOException e) {throw new AssertionError(e);}
+            assertNull(packages.describe(approved(a)).manifest());
+            assertThrows(SkillMarketplaceException.class,()->packages.describe(approved(b)));
+            throw new IllegalStateException("outer");
+        }));
+        assertThrows(SkillMarketplaceException.class,()->packages.describe(approved(a)));
     }
     @Test void approvedFactDriftRejectedInsideTransaction() {
         byte[] bytes=archive("facts");new SkillPackageStore(root).publish(bytes);var packages=new SkillPackages(root);var prepared=packages.prepare(approved(bytes));
@@ -80,5 +127,26 @@ class SkillPackagesTest {
         assertThrows(SkillMarketplaceException.class,()->packages.prepare(approved(bytes).setApprovedPermissionsSha256(new byte[32])));
         assertThrows(SkillMarketplaceException.class,()->packages.prepare(approved(bytes).setDeploymentRestriction(null)));
         assertThrows(SkillMarketplaceException.class,()->packages.prepare(approved(bytes).setPackageSize(Long.MAX_VALUE)));
+    }    @Test void executableDescriptionIsIdentityBoundAndCannotBeMutatedByConsumers() throws Exception {
+        byte[] manifest=null;
+        try(var input=getClass().getResourceAsStream("/skill-manifest-contract-v1.json")) {
+            for(var item:new com.fasterxml.jackson.databind.ObjectMapper().readTree(input).path("cases"))
+                if("image-edit".equals(item.path("id").asText()))manifest=item.path("json").asText().getBytes(StandardCharsets.UTF_8);
+        }
+        assertNotNull(manifest);
+        var output=new java.io.ByteArrayOutputStream();
+        try(var zip=new java.util.zip.ZipOutputStream(output)) {
+            zip.putNextEntry(new java.util.zip.ZipEntry("SKILL.md"));zip.write("edit".getBytes(StandardCharsets.UTF_8));zip.closeEntry();
+            zip.putNextEntry(new java.util.zip.ZipEntry("manifest.json"));zip.write(manifest);zip.closeEntry();
+        }
+        byte[] bytes=output.toByteArray();new SkillPackageStore(root).publish(bytes);
+        var packages=new SkillPackages(root);var v=approved(bytes).setSkillKey("image-edit");
+        var description=packages.describe(v);
+        ((com.fasterxml.jackson.databind.node.ObjectNode)description.manifest().document()).put("skillKey","tampered");
+        assertEquals("image-edit",packages.describe(v).manifest().document().path("skillKey").asText());
+        assertThrows(SkillMarketplaceException.class,()->packages.describe(approved(bytes).setSkillKey("wrong")));
+        assertThrows(SkillMarketplaceException.class,()->packages.describe(approved(bytes).setSkillKey("image-edit").setSkillVersion("2.0.0")));
+        assertEquals("image-edit",packages.describe(v).manifest().document().path("skillKey").asText());
     }
+
 }

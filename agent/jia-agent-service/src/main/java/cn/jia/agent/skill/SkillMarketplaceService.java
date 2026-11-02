@@ -71,7 +71,7 @@ public final class SkillMarketplaceService {
     }
     private Map<String,Object> detail(HostingRentHttp.Actor a,SkillProductEntity p,boolean admin) {
         var v=market.selectPurchasableProductVersion(a.tenantId(),a.clientId(),p.getCurrentProductVersionId());
-        require(v!=null,404,"SKILL_PRODUCT_NOT_FOUND"); packages.getObject().prepare(v);
+        require(v!=null,404,"SKILL_PRODUCT_NOT_FOUND"); packages.getObject().describe(v);
         Map<String,Object> dto=new LinkedHashMap<>();
         dto.put("productId",p.getProductId()); dto.put("name",p.getName()); dto.put("description",p.getDescription());
         dto.put("productVersionId",v.getProductVersionId()); dto.put("skillKey",v.getSkillKey()); dto.put("skillVersion",v.getSkillVersion());
@@ -189,7 +189,7 @@ public final class SkillMarketplaceService {
         }));
     }
     private SkillProductVersionEntity productLocked(HostingRentHttp.Actor a,String id,boolean admin,
-            cn.jia.economy.config.skillseed.PlatformSkillPackageCatalog.PlatformSkillPackage prepared) {
+            SkillPackages.Description prepared) {
         var published=market.selectPurchasableProductVersion(a.tenantId(),a.clientId(),id);
         require(published!=null,404,"SKILL_PRODUCT_NOT_FOUND");
         var p=market.selectProductForUpdate(a.tenantId(),a.clientId(),published.getProductId());
@@ -198,10 +198,10 @@ public final class SkillMarketplaceService {
         require(v!=null && ("NONE".equals(v.getDeploymentRestriction()) || admin),403,"SKILL_ADMIN_REQUIRED");
         SkillPackages.revalidate(v,prepared); return v;
     }
-    private cn.jia.economy.config.skillseed.PlatformSkillPackageCatalog.PlatformSkillPackage preparePublished(HostingRentHttp.Actor a,String id) {
+    private SkillPackages.Description preparePublished(HostingRentHttp.Actor a,String id) {
         var approved=market.selectPurchasableProductVersion(a.tenantId(),a.clientId(),id);
         require(approved!=null,404,"SKILL_PRODUCT_NOT_FOUND");
-        return packages.getObject().prepare(approved);
+        return packages.getObject().describe(approved);
     }
     private AgentRuntimeAuthenticationService.Proof readyProof(HostingRentHttp.Actor actor, String agentId) {
         HostingRentHttp.exact(agentId,100);

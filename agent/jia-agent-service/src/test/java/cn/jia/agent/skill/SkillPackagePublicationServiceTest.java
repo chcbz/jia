@@ -87,11 +87,14 @@ class SkillPackagePublicationServiceTest {
         verifyNoInteractions(mapper);
         try(var files=Files.list(root)){assertEquals(0,files.count());}catch(java.io.IOException e){throw new AssertionError(e);}
     }
-    @Test void transactionReadOnlyImmutableCacheMissIsFailClosedAndPreparedBytesAreReusable() {
+    @Test void transactionUsesPreparedDescriptionWithoutRetainingPackageBytes() {
         var p=original.product();var approved=new SkillProductVersionEntity().setProductId(p.productId()).setProductVersionId(p.productVersionId()).setSkillKey(p.skillKey()).setSkillVersion(p.skillVersion()).setPackageSha256(p.packageSha256()).setPackageSize(p.packageSize()).setPriceMicro(p.priceMicro()).setApprovedPermissionsManifest(p.approvedPermissionsManifest()).setApprovedPermissionsSha256(p.approvedPermissionsSha256()).setDeploymentRestriction(p.deploymentRestriction()).setReviewStatus("APPROVED");
         TransactionSynchronizationManager.setActualTransactionActive(true);assertThrows(SkillMarketplaceException.class,()->packages.prepare(approved));
-        TransactionSynchronizationManager.setActualTransactionActive(false);var prepared=packages.prepare(approved);
-        TransactionSynchronizationManager.setActualTransactionActive(true);assertArrayEquals(prepared.bytes(),packages.prepare(approved).bytes());assertNull(packages.manifest(prepared));
-        assertThrows(SkillMarketplaceException.class,()->packages.publish(prepared));
+        TransactionSynchronizationManager.setActualTransactionActive(false);var prepared=packages.describe(approved);
+        TransactionSynchronizationManager.setActualTransactionActive(true);
+        assertThrows(SkillMarketplaceException.class,()->packages.prepare(approved));
+        assertNull(packages.manifest(prepared));
+        assertDoesNotThrow(()->SkillPackages.revalidate(approved,prepared));
+        assertThrows(SkillMarketplaceException.class,()->packages.publish(original));
     }
 }

@@ -72,6 +72,7 @@ public class SkillExecutionServiceTest {
         outputs.put("dataSchema",dataSchema);outputs.put("mimeTypes",List.of("image/png","text/plain"));outputs.put("multiple",true);outputs.put("artifactsRequired",false);
         var manifest=new LinkedHashMap<String,Object>();manifest.put("runner","native-model");manifest.put("entrypoint","SKILL.md");manifest.put("requirements",Map.of());manifest.put("outputs",outputs);
         manifest.put("inputs",Map.of("minItems",0,"maxItems",32,"acceptedMimeTypes",List.of("image/png")));manifest.put("parametersSchema",Map.of("$schema",SkillManifestCodec.DIALECT,"type","object","additionalProperties",false,"properties",Map.of()));
+        doCallRealMethod().when(installed).withPreparedRead(any(),any());
         when(installed.read(any())).thenReturn(new InstalledSkillDescriptorLookup.Snapshot(List.of(new InstalledSkillDescriptorLookup.Descriptor("analysis","1.0.0","install",HASH,HASH,json(manifest),"rti_"+"1".repeat(32),"host",null))));
         var sessionFence=new AgentManagedSessionLookup.SessionFence("rti_"+"1".repeat(32),"host","runtime",2);
         when(policy.read(any(),eq("task"))).thenReturn(new TaskSkillPolicyService.Snapshot(true,null,7,sessionFence,new SkillCapabilityLookup.Scope("0","client","owner","agent")));

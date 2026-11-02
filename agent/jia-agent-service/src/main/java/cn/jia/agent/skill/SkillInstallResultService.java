@@ -69,7 +69,7 @@ public final class SkillInstallResultService {
         });
         // Authority comes from exact-scope DB approval + immutable package bytes, never agent claims.
         var successPackage="SUCCEEDED".equals(body.get("status"))
-                ?packages.getObject().prepare(market.selectApprovedProductVersion(tenant,client,hint.getProductVersionId())):null;
+                ?packages.getObject().describe(market.selectApprovedProductVersion(tenant,client,hint.getProductVersionId())):null;
         var expectedManifest=successPackage==null?null:packages.getObject().manifest(successPackage);
         return authentication.withFence(proof,false,()->tx.execute(s->{
             String ownerJiacn=proof.scope().ownerJiacn();
