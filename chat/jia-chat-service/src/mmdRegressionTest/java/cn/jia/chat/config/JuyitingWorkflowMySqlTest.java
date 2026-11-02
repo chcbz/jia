@@ -472,23 +472,23 @@ class JuyitingWorkflowMySqlTest {
         config.setEnvironment(new org.apache.ibatis.mapping.Environment("owned-review-mysql",new org.mybatis.spring.transaction.SpringManagedTransactionFactory(),jdbc.getDataSource()));
         config.addMapper(cn.jia.agent.mapper.AgentTaskMetaMapper.class);
         var mapper=new org.mybatis.spring.SqlSessionTemplate(new org.apache.ibatis.session.SqlSessionFactoryBuilder().build(config)).getMapper(cn.jia.agent.mapper.AgentTaskMetaMapper.class);
-        assertEquals(9,mapper.countSearchExactInScope("0","client","owner",null,null,null,null));
-        assertEquals(9,mapper.countSearchExactInScope("0","client","owner",null,null,"检索目标",null));
+        assertEquals(9,mapper.countSearchExactInScope("0","client","owner",null,null,null,null,null));
+        assertEquals(9,mapper.countSearchExactInScope("0","client","owner",null,null,"检索目标",null,null));
         var actual=new LinkedHashMap<String,String>();
-        for(int offset=0;offset<9;offset+=2) for(var row:mapper.searchPageExactInScope("0","client","owner",null,null,"检索目标",offset,2,null)) {
+        for(int offset=0;offset<9;offset+=2) for(var row:mapper.searchPageExactInScope("0","client","owner",null,null,"检索目标",offset,2,null,null)) {
             assertNull(actual.put(row.getTaskId(),row.getPhase()),"pagination duplicated an item");
         }
         assertEquals(expected,actual);
-        var grouped=mapper.countSearchByStatusExactInScope("0","client","owner",null,"检索目标",null);
+        var grouped=mapper.countSearchByStatusExactInScope("0","client","owner",null,"检索目标",null,null);
         assertEquals(9,grouped.stream().mapToLong(cn.jia.agent.mapper.AgentTaskStatusCountRow::getTaskCount).sum());
         var counts=new HashMap<String,Long>();grouped.forEach(row->counts.merge(row.getPhase(),row.getTaskCount(),Long::sum));
         for(var phase:List.of("PENDING_ASSIGNMENT","IN_PROGRESS","PENDING_ACCEPTANCE","COMPLETED","HISTORY","UNKNOWN")) {
             long count=expected.values().stream().filter(phase::equals).count();
             assertEquals(count,counts.get(phase));
-            assertEquals(count,mapper.countSearchExactInScope("0","client","owner",null,null,"检索目标",phase));
-            assertEquals(count,mapper.searchPageExactInScope("0","client","owner",null,null,"检索目标",0,99,phase).size());
+            assertEquals(count,mapper.countSearchExactInScope("0","client","owner",null,null,"检索目标",phase,null));
+            assertEquals(count,mapper.searchPageExactInScope("0","client","owner",null,null,"检索目标",0,99,phase,null).size());
         }
-        assertEquals(0,mapper.countSearchExactInScope("0","CLIENT","owner",null,null,null,null));
+        assertEquals(0,mapper.countSearchExactInScope("0","CLIENT","owner",null,null,null,null,null));
         // The overview is an independent keyset source, but TASK phases must have one classifier.
         jdbc.execute("ALTER TABLE agent_task_formal_delivery ADD id BIGINT NOT NULL AUTO_INCREMENT UNIQUE, ADD work_item_id VARCHAR(100), ADD reviewed_at BIGINT, ADD review_reason TEXT, ADD manifest_artifact_id VARCHAR(100), ADD manifest_artifact_version INT DEFAULT 1, ADD submitted_at BIGINT DEFAULT 1");
         jdbc.update("UPDATE agent_task_formal_delivery SET work_item_id=CONCAT('work-',task_id),manifest_artifact_id=CONCAT('manifest-',task_id)");
