@@ -181,9 +181,13 @@ public class SkillExecutionServiceTest {
     @Test void projectionRequiresCommittedMacroState(){assertThrows(Failure.class,()->service.markProjected(owner,"exec",HASH));}
     @Test void resultReadNeedsCurrentConversationAcl(){when(conversations.requireAccessible(any(),eq("42"))).thenReturn(null);assertThrows(Failure.class,()->service.result(owner,"exec"));}
     @Test void skillCreationPinsAuthorityAndChargesNothing(){
+        var hints=mock(NativeConversationWorkDiscovery.class);service.setNativeWorkDiscovery(hints);
         doAnswer(i->{execution=i.getArgument(0);return null;}).when(pwe).insert(any());
         doAnswer(i->{skill=i.getArgument(0);skill.setPhase("READY").setVersion(0L).setEffectsJson("{}");return null;}).when(attachments).insertReady(any());
         var result=service.create(owner,new SkillExecutionService.Create("action","task","42",1,"agent","grant",1,7,snapshot()));
+        var ordering=inOrder(pwe,attachments,hints);
+        ordering.verify(pwe).insert(any());ordering.verify(attachments).insertReady(any());
+        ordering.verify(hints).afterCommit(new NativeConversationWorkAvailable("0","client","agent"));
         assertTrue(result.executionId().matches("pwe_[a-f0-9]{60}"));assertTrue(result.runId().matches("pwe_run_[a-f0-9]{64}"));assertEquals("READY",skill.getPhase());assertNull(execution.getControlledConsentId());assertEquals(5,execution.getExecutionProtocolVersion());assertNull(execution.getOutputContentMimeType());
         verify(grants).admit(any(),eq("task"),eq("grant"),eq(1L),eq(7L),eq("agent"),eq("EXECUTE_SKILL"),eq(false));
         verify(management).admitNative(eq(new SkillCapabilityLookup.Scope("0","client","owner","agent")),eq("analysis"),eq("install"),any());

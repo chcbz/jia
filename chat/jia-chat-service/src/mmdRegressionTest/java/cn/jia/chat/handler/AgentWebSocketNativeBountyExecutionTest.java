@@ -33,6 +33,38 @@ import static org.mockito.Mockito.when;
 
 class AgentWebSocketNativeBountyExecutionTest {
     @Test
+    @SuppressWarnings("unchecked")
+    void nativeWorkHintUsesOnlyCurrentNegotiatedSessionAndNeverDispatchesACommand() throws Exception {
+        var auth=mock(AgentRuntimeAuthenticationService.class);var handler=handler(auth);
+        var old=session("old","runtime-old");var current=session("current","runtime-current");
+        bind(handler,old,NativeBountyExecutionDeclaration.parse(NativeBountyExecutionDeclarationTest.candidate(true)));
+        bind(handler,current,NativeBountyExecutionDeclaration.parse(NativeBountyExecutionDeclarationTest.candidate(true)));
+        ((Set<String>)field(handler,"nativeWorkNotificationSessions")).addAll(Set.of("old","current"));
+        var target=new cn.jia.agent.entity.NativeConversationWorkAvailable("0","client-a","agent-a");
+        assertEquals(java.util.List.of(target),handler.nativeWorkTargets());
+        org.mockito.Mockito.verifyNoInteractions(auth);
+        when(auth.isCurrentBinding(anyString(),anyString(),anyString(),anyString(),anyString(),anyString()))
+                .thenAnswer(inv->"current".equals(inv.getArgument(0)));
+        handler.notifyNativeWork(new cn.jia.agent.entity.NativeConversationWorkAvailable("other","client-a","agent-a"));
+        handler.notifyNativeWork(target);
+        var sent=org.mockito.ArgumentCaptor.forClass(TextMessage.class);
+        org.mockito.Mockito.verify(current).sendMessage(sent.capture());
+        org.mockito.Mockito.verify(old,org.mockito.Mockito.never()).sendMessage(any());
+        var wire=new tools.jackson.databind.ObjectMapper().readTree(sent.getValue().getPayload());
+        var fixture=new tools.jackson.databind.ObjectMapper().readTree(new org.springframework.core.io.ClassPathResource("contracts/native-work-hint-v1.json").getInputStream());
+        assertEquals(fixture.get("data"),wire.get("data"));
+        assertEquals("runtime.work.available",wire.get("messageType").asString());
+        assertEquals("NATIVE_CONVERSATION",wire.get("data").get("lane").asString());
+        assertEquals("runtime-current",wire.get("data").get("runtimeInstanceId").asString());
+        assertEquals("1",wire.get("data").get("sessionGeneration").asString());
+        assertEquals(false,wire.get("data").has("commandId"));
+        handler.afterConnectionClosed(current,CloseStatus.NORMAL);
+        assertEquals(java.util.List.of(target),handler.nativeWorkTargets()); // only stale local subscription remains
+        handler.notifyNativeWork(target);
+        org.mockito.Mockito.verify(current).sendMessage(any()); // no second send
+    }
+
+    @Test
     void exactCurrentAuthenticatedSessionIsReadyAndOldDisconnectCannotClearReplacement() throws Exception {
         AgentRuntimeAuthenticationService auth=mock(AgentRuntimeAuthenticationService.class);
         stubFence(auth);

@@ -497,6 +497,8 @@ def mmdU1BootstrapOutboxSourceSet = sourceSets.create('mmdU1BootstrapOutbox') {
         srcDir 'src/skillManagementContract/java'
         include 'cn/jia/agent/skill/SkillManagementMySqlFixture.java'
         include 'cn/jia/agent/service/impl/TaskBootstrapTenantIsolationMySqlTest.java'
+        include 'cn/jia/agent/service/impl/NativeConversationWorkDiscoveryMySqlTest.java'
+        include 'cn/jia/agent/service/impl/NativeConversationWorkDiscoveryTest.java'
         srcDir 'src/test/java'
         include 'cn/jia/agent/service/impl/AgentTaskExecutionGrantServiceImplTest.java'
         include 'cn/jia/agent/service/impl/AgentTaskBountyBootstrapOutboxServiceImplTest.java'

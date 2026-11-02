@@ -152,6 +152,9 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
     private ChatDeliberationOutboxService chatDeliberationOutboxService;
     private cn.jia.chat.service.ChatDispatchAuthorityService chatDispatchAuthority;
     @Autowired public void setChatDispatchAuthority(cn.jia.chat.service.ChatDispatchAuthorityService value) { chatDispatchAuthority=value; }
+    @org.springframework.beans.factory.annotation.Value("${jia.agent.conversation-execution.enabled:false}")
+    private boolean nativeWorkNotificationsEnabled;
+    private final Set<String> nativeWorkNotificationSessions = ConcurrentHashMap.newKeySet();
     private TypedDeliberationSessionRegistry typedDeliberationSessions;
     private TypedInspectionSessionRegistry typedInspectionSessions;
     private NativeTextFileSessionRegistry nativeTextFileSessions;
@@ -463,6 +466,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) throws Exception {
         if (runtimeAuthentication != null) runtimeAuthentication.disconnect(session.getId());
         sessions.remove(session.getId());
+        nativeWorkNotificationSessions.remove(session.getId());
         sessionAgentIds.remove(session.getId());
         successfullyRegisteredAgentIds.remove(session.getId());
         sessionRuntimeInstanceIds.remove(session.getId());
@@ -924,6 +928,9 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             event.put("hostId", sessionProof(session).hostId());
             event.put("sessionGeneration", sessionProof(session).sessionGeneration());
             event.put("readyCommandTypes", readyCommandTypes);
+            boolean nativeWorkNotifications=nativeWorkNotificationsEnabled
+                    && Integer.valueOf(1).equals(payload.get("nativeWorkNotifications"));
+            if (nativeWorkNotifications) event.put("nativeWorkNotifications",1);
             event.put("durableStateHealthy", Boolean.TRUE.equals(payload.get("durableStateHealthy")));
             event.put("runtimeCapabilities", runtimeCapabilities.normalizedForReceipt());
             event.put("nativeBountyExecution", nativeBountyExecution.normalizedForReceipt());
@@ -970,6 +977,8 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             sessionRuntimeCapabilities.put(session.getId(), runtimeCapabilities);
             sessionDurableStateHealthy.put(session.getId(), Boolean.TRUE.equals(payload.get("durableStateHealthy")));
             sessionReadyCommandTypes.put(session.getId(), readyCommandTypes);
+            if (nativeWorkNotifications) nativeWorkNotificationSessions.add(session.getId());
+            else nativeWorkNotificationSessions.remove(session.getId());
             sessionNativeBountyExecution.put(session.getId(), nativeBountyExecution);
             sessionNativeProviderCredentialBinding.put(session.getId(), nativeProviderCredentialBinding);
             sessionControlledImageBountyExecution.put(session.getId(), controlledImageBountyExecution);
@@ -3044,6 +3053,35 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             }
             return AgentRawCommandDispatchResult.sent(1,1);
         } catch(Exception failure) { return AgentRawCommandDispatchResult.sendFailed(1); }
+    }
+
+    /** Lightweight local subscriptions only; the current persistent fence is checked on send. */
+    public List<cn.jia.agent.entity.NativeConversationWorkAvailable> nativeWorkTargets() {
+        return sessions.values().stream().filter(this::nativeWorkSubscribed)
+                .map(session -> new cn.jia.agent.entity.NativeConversationWorkAvailable(
+                        sessionTenantId(session),sessionClientId(session),sessionAgentId(session)))
+                .distinct().toList();
+    }
+    private boolean nativeWorkSubscribed(WebSocketSession session) {
+        return session!=null && session.isOpen() && nativeWorkNotificationSessions.contains(session.getId())
+                && successfullyRegisteredAgentIds(session.getId()).contains(sessionAgentId(session))
+                && Boolean.TRUE.equals(sessionDurableStateHealthy.get(session.getId()));
+    }
+    public void notifyNativeWork(cn.jia.agent.entity.NativeConversationWorkAvailable target) {
+        for (var session:sessions.values()) {
+            if (!nativeWorkSubscribed(session) || !target.tenantId().equals(sessionTenantId(session))
+                    || !target.clientId().equals(sessionClientId(session)) || !target.agentId().equals(sessionAgentId(session))) continue;
+            synchronized (session) {
+                if (!nativeWorkSubscribed(session) || !typedDeliberationSessionCurrent(session,target.agentId())) continue;
+                var proof=sessionProof(session);
+                if (proof==null) continue;
+                sendEvent(session,"runtime.work.available",Map.of(
+                        "notificationVersion",1,"lane","NATIVE_CONVERSATION","agentId",target.agentId(),
+                        "tenantId",target.tenantId(),"clientId",target.clientId(),
+                        "installationId",proof.installationId(),"hostId",proof.hostId(),
+                        "runtimeInstanceId",proof.scope().runtimeInstanceId(),"sessionGeneration",proof.sessionGeneration()));
+            }
+        }
     }
 
     public boolean isAgentConnected(String tenantId, String clientId, String agentId) {

@@ -1,0 +1,17 @@
+{
+  "protocolVersion": 1,
+  "messageType": "runtime.work.available",
+  "requestId": "fixture-request",
+  "messageId": "fixture-message",
+  "data": {
+    "notificationVersion": 1,
+    "lane": "NATIVE_CONVERSATION",
+    "tenantId": "0",
+    "clientId": "client-a",
+    "agentId": "agent-a",
+    "runtimeInstallationId": "rti_11111111111111111111111111111111",
+    "hostId": "host-a",
+    "runtimeInstanceId": "runtime-current",
+    "sessionGeneration": "1"
+  }
+}

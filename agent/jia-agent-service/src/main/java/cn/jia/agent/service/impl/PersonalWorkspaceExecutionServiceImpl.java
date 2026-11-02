@@ -106,6 +106,11 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document", ".docx",
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ".xlsx",
             "application/vnd.openxmlformats-officedocument.presentationml.presentation", ".pptx");
+    private cn.jia.agent.service.NativeConversationWorkDiscovery workDiscovery;
+    @Autowired
+    public void setNativeWorkDiscovery(cn.jia.agent.service.NativeConversationWorkDiscovery workDiscovery) {
+        this.workDiscovery=Objects.requireNonNull(workDiscovery);
+    }
     private final PersonalWorkspaceExecutionDao executions;
     private final PersonalWorkspaceDao workspace;
     private final PersonalWorkspaceTaskLinkDao taskLinks;
@@ -2314,6 +2319,8 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                 .setExecutionId(executionId).setSnapshotJson(skillJson(snapshot)).setSnapshotSha256(digest).setCreatedAt(now).setUpdatedAt(now)
                 .setTaskSkillBindingJson(skillJson(bindings.stream().map(b->Map.of("skill",cn.jia.agent.skill.SkillManagementCodec.map("key",b.skill().key(),"version",b.skill().version(),"packageSha256",b.skill().packageSha256(),"manifestSha256",b.skill().manifestSha256()),"taskSkillBinding",b.taskSkillBinding())).toList()));
             executions.insert(row);skillExecutions.insertReady(skill);
+            if (workDiscovery!=null) workDiscovery.afterCommit(new cn.jia.agent.entity.NativeConversationWorkAvailable(
+                    scope.tenantId(),scope.clientId(),command.targetAgentId()));
             for(var input:inputs)verifySkillInput(scope,row,input);
             return skillCreation(row,skillRow(scope,executionId,false));
         });
