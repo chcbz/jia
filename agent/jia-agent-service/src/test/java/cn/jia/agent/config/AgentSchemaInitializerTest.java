@@ -650,7 +650,7 @@ class AgentSchemaInitializerTest extends BaseMockTest {
                     normalizeSqlStructure(legacy), table + " explicit tenant delta");
             if (table.equals("agent_identity_alias")) {
                 assertTrue(readResource("db/agent-identity-business-tenant-20261030.sql")
-                        .contains("ALTER TABLE " + table));
+                        .contains("alter table " + table));
             }
         }
     }

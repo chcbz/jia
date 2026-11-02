@@ -55,6 +55,7 @@ CREATE TABLE agent_runtime (
 CREATE TABLE agent_task_member (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     task_id VARCHAR(100) NOT NULL,
+    owner_jiacn VARCHAR(50) NOT NULL,
     agent_id VARCHAR(100) NOT NULL,
     member_role VARCHAR(20) NOT NULL,
     member_status VARCHAR(20) NOT NULL,
@@ -64,13 +65,14 @@ CREATE TABLE agent_task_member (
     version BIGINT NOT NULL DEFAULT 0,
     tenant_id VARCHAR(50) NOT NULL, client_id VARCHAR(50) NOT NULL,
     create_time BIGINT, update_time BIGINT,
-    UNIQUE (tenant_id, client_id, task_id, agent_id)
+    UNIQUE (tenant_id, client_id, owner_jiacn, task_id, agent_id)
 );
 
 CREATE TABLE agent_task_work_item (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     work_item_id VARCHAR(100) NOT NULL,
     task_id VARCHAR(100) NOT NULL,
+    owner_jiacn VARCHAR(50) NOT NULL,
     title VARCHAR(255) NOT NULL DEFAULT '', description TEXT,
     work_type VARCHAR(30) NOT NULL DEFAULT 'implementation', required_abilities TEXT,
     assignee_agent_id VARCHAR(100), status VARCHAR(20) NOT NULL DEFAULT 'ready',
@@ -81,5 +83,5 @@ CREATE TABLE agent_task_work_item (
     version BIGINT NOT NULL DEFAULT 0,
     tenant_id VARCHAR(50) NOT NULL, client_id VARCHAR(50) NOT NULL,
     create_time BIGINT, update_time BIGINT,
-    UNIQUE (tenant_id, client_id, work_item_id)
+    UNIQUE (tenant_id, client_id, owner_jiacn, work_item_id)
 );
