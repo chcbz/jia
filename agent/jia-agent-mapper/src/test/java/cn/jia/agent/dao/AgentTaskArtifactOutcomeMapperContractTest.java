@@ -103,7 +103,7 @@ class AgentTaskArtifactOutcomeMapperContractTest {
         assertTrue(lower.contains("unique key uk_artifact_outcome_decision"));
         assertTrue(lower.contains("accepted_outcome_version"));
         assertTrue(lower.contains("decision_digest"));
-        assertTrue(lower.contains("check (artifact_version >= 1 and version >= 1 and decided_at > 0)"));
+        assertFalse(lower.contains("check ("));
         assertFalse(lower.matches("(?s).*\\b(insert|update|delete|replace|truncate)\\b.*"));
 
         for (String startupSchema : java.util.List.of(
