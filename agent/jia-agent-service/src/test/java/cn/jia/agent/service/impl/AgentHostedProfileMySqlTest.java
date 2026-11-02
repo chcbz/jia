@@ -34,7 +34,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /** Isolated MySQL 8.0.21 evidence for hosted repair bindings and lifecycle CAS locks. */
 @EnabledIfEnvironmentVariable(named = "PWA_HOSTED_MYSQL_URL", matches = ".+")
 class AgentHostedProfileMySqlTest {
-    private static final String TENANT = "owner-a";
+    private static final String TENANT = "0";
     private static final String CLIENT = "client-a";
     private static final String OWNER = "owner-a";
     private static final long BINDING_ID = 41L;

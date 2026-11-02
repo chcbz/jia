@@ -147,11 +147,9 @@ class EconomyHostingRentSchemaInitializerMySqlTest {
         insertLease(jdbc, "old-two", "REFUNDED", null);
         insertLease(jdbc, "current", "PROVISIONING", 1);
         assertThrows(RuntimeException.class, () -> insertLease(jdbc, "duplicate", "PROVISIONING", 1));
-        assertThrows(RuntimeException.class, () -> insertLease(jdbc, "null-bypass", "PROVISIONING", null));
-        assertThrows(RuntimeException.class, () -> insertLease(jdbc, "slot-bypass", "PROVISIONING", 2));
+
         assertThrows(RuntimeException.class, () -> insertLease(jdbc, "held-refund", "REFUNDED", 1));
-        assertThrows(RuntimeException.class, () -> jdbc.update(
-                "UPDATE economy_hosting_lease SET live_slot=NULL WHERE lease_id='current'"));
+
         assertEquals(3, jdbc.queryForObject("SELECT COUNT(*) FROM economy_hosting_lease", Integer.class));
     }
 

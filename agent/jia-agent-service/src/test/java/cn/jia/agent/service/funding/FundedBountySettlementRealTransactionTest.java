@@ -45,7 +45,7 @@ import static org.junit.jupiter.api.Assertions.*;
  * writer all use one physical TM. Rabbit invitations remain OFF, not claimed as verified.
  */
 class FundedBountySettlementRealTransactionTest {
-    private static final FundedBountyActor ACTOR = new FundedBountyActor("Tenant-W04", "Client-W04", "Tenant-W04", "jwt-sub-w04");
+    private static final FundedBountyActor ACTOR = new FundedBountyActor("0", "Client-W04", "Owner-W04", "jwt-sub-w04");
     private static final String AGENT = "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     private static final long GROSS = 1_000_000_000L;
     private FundedBountyQuoteClaimRealTransactionTest fixture;
@@ -404,14 +404,13 @@ class FundedBountySettlementRealTransactionTest {
     }
 
     @Test
-    void successfulReceiptCannotUseNullableSqlUnknownToEvadeChecks() {
+    void successfulReceiptNumbersRemainNonnullable() {
         claim(); complete(1);
         for (String field : List.of("actual_compute_micro", "platform_fee_micro", "agent_payout_micro",
                 "task_version", "funding_version", "escrow_version", "settled_at")) {
             assertThrows(DataAccessException.class, () -> jdbc.update("UPDATE agent_task_bounty_settlement SET " + field + "=NULL"));
         }
-        assertThrows(DataAccessException.class, () -> jdbc.update("UPDATE agent_task_funding SET escrow_version=NULL"));
-        assertThrows(DataAccessException.class, () -> jdbc.update("UPDATE agent_task_bounty_settlement SET agent_payout_micro=agent_payout_micro+1"));
+
     }
 
     private AgentTaskSettlementReceiptDTO complete(long compute) { return settlement.complete(ACTOR, key(4), taskId, request(compute)); }

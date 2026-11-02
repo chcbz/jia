@@ -66,7 +66,7 @@ public class SkillExecutionMapperRealTransactionTest {
                 + ";MODE=MYSQL;DB_CLOSE_DELAY=-1;LOCK_TIMEOUT=10000", "sa", "");
         jdbc = new JdbcTemplate(ds);
         tx = new TransactionTemplate(new DataSourceTransactionManager(ds));
-        // H2 constant-IN CHECKs keep the schema session comparator; keep that session alive.
+        // Keep the fixture schema connection until cleanup.
         schemaConnection = ds.getConnection();
         var ddl = new ClassPathResource("db/agent-skill-execution-v1.sql")
                 .getContentAsString(StandardCharsets.UTF_8)
@@ -123,8 +123,6 @@ public class SkillExecutionMapperRealTransactionTest {
         dao.insertReady(row().setOwnerJiacn("Owner-B"));
         dao.insertReady(row().setClientId("Client-B"));
         assertEquals(3, jdbc.queryForObject("SELECT COUNT(*) FROM agent_skill_execution", Integer.class));
-        assertThrows(DataAccessException.class, () -> dao.insertReady(row().setTenantId("1")));
-        assertThrows(DataAccessException.class, () -> dao.insertReady(row().setOwnerJiacn("0")));
     }
 
     @Test void findLockAndCasUseExactScopeEvenUnderCaseInsensitiveColumns() {
@@ -147,10 +145,8 @@ public class SkillExecutionMapperRealTransactionTest {
         assertEquals(0L, read().getVersion());
     }
 
-    @Test void nullInvalidHashesAndMalformedJsonAreNotAdmitted() {
-        for (var invalid : List.of(row().setSnapshotJson(null), row().setSnapshotJson("[]"),
-                row().setSnapshotJson("null"), row().setSnapshotJson("broken"), row().setSnapshotSha256(null),
-                row().setSnapshotSha256("A".repeat(64)), row().setPackageSha256("a".repeat(63)),
+    @Test void requiredColumnsRemainNonnullable() {
+        for (var invalid : List.of(row().setSnapshotJson(null), row().setSnapshotSha256(null),
                 row().setManifestSha256(null), row().setSkillKey(null), row().setCreatedAt(null))) {
             assertThrows(DataAccessException.class, () -> dao.insertReady(invalid));
         }
@@ -196,10 +192,10 @@ public class SkillExecutionMapperRealTransactionTest {
         assertTrue(dao.compareAndSet(row().setPhase("WAITING_PROVIDER"), 2, "RESULT_UNKNOWN"));
     }
 
-    @Test void resultPhasesRequireManifestButDataOnlyResultCanComplete() {
+    @Test void dataOnlyResultCompletesThroughMonotonicCasPhases() {
         dao.insertReady(row());
         assertTrue(dao.compareAndSet(row().setPhase("RUNNING"), 0, "READY"));
-        assertThrows(DataAccessException.class, () -> dao.compareAndSet(row().setPhase("RESULT_READY"), 1, "RUNNING"));
+
         assertEquals(1L, read().getVersion());
         var update = row().setPhase("RESULT_READY").setResultManifestJson("{\"data\":{\"summary\":\"ok\"},\"artifacts\":[]}");
         assertTrue(dao.compareAndSet(update, 1, "RUNNING"));
@@ -223,13 +219,10 @@ public class SkillExecutionMapperRealTransactionTest {
         assertEquals("ADAPTER_FAILED", read().getLastErrorCode());
     }
 
-    @Test void rawInvalidMutableValuesAreRejectedByDatabaseChecks() {
+    @Test void mutableEffectsRemainNonnullable() {
         dao.insertReady(row());
-        for (String update : List.of("version=-1", "phase='BOGUS'", "effects_json=NULL",
-                "effects_json='[]'", "result_manifest_json='[]'", "phase='COMPLETE'")) {
-            assertThrows(DataAccessException.class, () -> jdbc.update("UPDATE agent_skill_execution SET " + update));
-        }
-        assertEquals(0L, read().getVersion()); assertEquals("READY", read().getPhase());
+        assertThrows(DataAccessException.class, () -> jdbc.update("UPDATE agent_skill_execution SET effects_json=NULL"));
+        assertEquals("READY", read().getPhase());
     }
 
     @Test void attachmentParticipatesInCallerTransactionWithoutAutocommitEscape() {

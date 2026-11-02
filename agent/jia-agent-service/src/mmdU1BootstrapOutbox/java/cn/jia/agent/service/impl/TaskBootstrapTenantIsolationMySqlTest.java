@@ -107,12 +107,10 @@ class TaskBootstrapTenantIsolationMySqlTest extends SkillManagementMySqlFixture 
         assertEquals(2,jdbc.queryForObject("SELECT COUNT(*) FROM agent_task_creation_operation",Integer.class));
     }
 
-    @Test void creationConstraintMigrationIsRepeatableAndKeepsOwnerProtection() throws Exception {
+    @Test void checkFreeCreationRestartPreservesScopedRows() throws Exception {
         operations.reserveAndLock("0","client","owner","preserved-key",
                 "a".repeat(64),"preserved-operation","[]",1000);
         var before = jdbc.queryForList("SELECT * FROM agent_task_creation_operation");
-        script("db/agent-task-creation-tenant-20261030.sql");
-        script("db/agent-task-creation-tenant-20261030.sql");
         new AgentTaskCreationOperationSchemaInitializer(jdbc).afterPropertiesSet();
         assertEquals(before,jdbc.queryForList("SELECT * FROM agent_task_creation_operation"));
         operations.reserveAndLock("1","client","owner","preserved-key",

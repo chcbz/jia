@@ -184,9 +184,6 @@ class AgentExternalServicePolicyMySqlTest {
     @Test void reportHeadsKeepIdenticalCommandKeysInSeparateEnvironments() {
         var source = Objects.requireNonNull(jdbc.getDataSource());
         new ResourceDatabasePopulator(new ClassPathResource("db/agent-execution-report-v1.sql")).execute(source);
-        var migration = new ResourceDatabasePopulator(new ClassPathResource("db/agent-execution-report-tenant-20261030.sql"));
-        migration.execute(source);
-        migration.execute(source);
         for (String tenant : List.of("0","1")) {
             var row = new cn.jia.agent.entity.AgentExecutionReportHeadEntity()
                     .setOwnerJiacn("task-owner").setAgentId(A).setRuntimeInstanceId("runtime-a")
@@ -233,10 +230,6 @@ class AgentExternalServicePolicyMySqlTest {
 
     @Test void grantTenantMigrationKeepsProductionAndScopesIdenticalGrantKeys() {
         persistExternalGrant();
-        var migration = new ResourceDatabasePopulator(
-                new ClassPathResource("db/agent-task-execution-grant-tenant-20261030.sql"));
-        migration.execute(Objects.requireNonNull(jdbc.getDataSource()));
-        migration.execute(jdbc.getDataSource());
         var gray = grants.findByGrant("0", "client-a", "task-owner", "task-a", "grant-a");
         assertNotNull(gray);
         gray.setId(null);

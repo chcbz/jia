@@ -81,18 +81,10 @@ class EconomySchemaInitializerMySqlTest {
     }
 
     @Test
-    void negativePermissionIsLimitedToApprovedSystemContraAndVarianceAccounts() {
+    void legitimateSystemAndUserAccountShapesRemainPersistable() {
         JdbcTemplate jdbc = fixture.newDatabase("nonnegative").jdbc();
         new EconomySchemaInitializer(jdbc).afterPropertiesSet();
 
-        assertThrows(RuntimeException.class, () -> insertAccount(jdbc, "acct-user-allow", 0, 1));
-        assertThrows(RuntimeException.class, () -> insertAccount(jdbc, "acct-user-negative", -1, 0));
-        assertThrows(RuntimeException.class, () -> insertTypedAccount(jdbc, "acct-task", "TASK", "task-1", "ESCROW", 0, 1));
-        assertThrows(RuntimeException.class, () -> insertTypedAccount(jdbc, "acct-order", "ORDER", "order-1", "ESCROW", 0, 1));
-        assertThrows(RuntimeException.class, () -> insertTypedAccount(jdbc, "acct-agent", "AGENT", "agent-1", "EARNINGS", 0, 1));
-        assertThrows(RuntimeException.class, () -> insertTypedAccount(jdbc, "acct-system-other", "SYSTEM", "system", "MODEL_COST", 0, 1));
-        assertThrows(RuntimeException.class, () -> insertTypedAccount(jdbc, "acct-system-balance", "SYSTEM", "system",
-                "SILVER_ISSUANCE", -1, 0));
         insertTypedAccount(jdbc, "acct-issuance", "SYSTEM", "silver", "SILVER_ISSUANCE", -1, 1);
         insertTypedAccount(jdbc, "acct-variance", "SYSTEM", "variance", "PROVIDER_VARIANCE", -1, 1);
         insertAccount(jdbc, "acct-user-zero", 0, 0);

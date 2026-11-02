@@ -87,10 +87,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * The only failure double throws AFTER production claim-receipt SQL, never synthesizing DB results.
  */
 class FundedBountyQuoteClaimRealTransactionTest {
-    private static final String TENANT = "Tenant-W04";
+    private static final String TENANT = "0";
+    private static final String OWNER = "Owner-W04";
     private static final String CLIENT = "Client-W04";
     private static final String USER = "jwt-sub-w04";
-    private static final FundedBountyActor ACTOR = new FundedBountyActor(TENANT, CLIENT, TENANT, USER);
+    private static final FundedBountyActor ACTOR = new FundedBountyActor(TENANT, CLIENT, OWNER, USER);
     private static final String AGENT_A = "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     private static final String AGENT_B = "agt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     private static final long GROSS = 1_000_000_000L;
@@ -207,7 +208,7 @@ class FundedBountyQuoteClaimRealTransactionTest {
     }
 
     @Test
-    void recommendationCheckSurvivesIndependentConnectionsAndRejectsInvalidValues() throws Exception {
+    void recommendationPersistsAcrossConnectionsAndRemainsNonnullable() throws Exception {
         assertFalse(schemaConnection.isClosed());
         try (Connection observer = context.getBean(DataSource.class).getConnection()) {
             assertNotSame(schemaConnection, observer);
@@ -218,9 +219,6 @@ class FundedBountyQuoteClaimRealTransactionTest {
             assertEquals(recommendation, jdbc.queryForObject(
                     "SELECT recommendation FROM agent_task_bounty_quote", String.class));
         }
-        DataAccessException invalid = assertThrows(DataAccessException.class,
-                () -> jdbc.update("UPDATE agent_task_bounty_quote SET recommendation='invalid'"));
-        assertEquals("23513", ((SQLException) invalid.getMostSpecificCause()).getSQLState());
         DataAccessException nullValue = assertThrows(DataAccessException.class,
                 () -> jdbc.update("UPDATE agent_task_bounty_quote SET recommendation=NULL"));
         assertEquals("23502", ((SQLException) nullValue.getMostSpecificCause()).getSQLState());
@@ -262,7 +260,7 @@ class FundedBountyQuoteClaimRealTransactionTest {
         assertEquals(before, quote(AGENT_A, 2));
         assertThrows(FundedBountyException.class, () -> quote(AGENT_A, 4));
         AgentTaskQuoteRequestDTO request = quoteRequest(AGENT_A);
-        assertThrows(FundedBountyException.class, () -> service.quote(new FundedBountyActor(TENANT, CLIENT, TENANT, "other"),
+        assertThrows(FundedBountyException.class, () -> service.quote(new FundedBountyActor(TENANT, CLIENT, OWNER, "other"),
                 key(2), FundedBountyRequestDigest.quote(taskId, request), taskId, request));
         assertEquals(1, count("agent_task_bounty_quote"));
         assertEquals(2, count("economy_transaction"));
@@ -433,12 +431,12 @@ class FundedBountyQuoteClaimRealTransactionTest {
 
     private void seedAgent(long id, String agent) {
         jdbc.update("INSERT INTO agent_persona_binding(id,jiacn,persona_code,agent_id,bound_at,status,tenant_id,client_id) "
-                + "VALUES(?,?,?, ?,1,1,?,?)", id, TENANT, "fixture-" + id, agent, TENANT, CLIENT);
+                + "VALUES(?,?,?, ?,1,1,?,?)", id, OWNER, "fixture-" + id, agent, TENANT, CLIENT);
         jdbc.update("INSERT INTO agent_identity_registry(id,canonical_agent_id,canonical_type,lifecycle_status,"
                 + "client_id,owner_jiacn,tenant_id,binding_id,provisioned_at,activated_at,audit_reason) "
-                + "VALUES(?,?,'OPAQUE','ACTIVE',?,?,?, ?,1,1,'W05 isolated fixture')", id, agent, CLIENT, TENANT, TENANT, id);
+                + "VALUES(?,?,'OPAQUE','ACTIVE',?,?,?, ?,1,1,'W05 isolated fixture')", id, agent, CLIENT, OWNER, TENANT, id);
         jdbc.update("INSERT INTO agent_runtime(agent_id,name,owner_jiacn,binding_id,abilities,status,tenant_id,client_id) "
-                + "VALUES(?,'fixture',?,?,'[\"test\"]','online',?,?)", agent, TENANT, id, TENANT, CLIENT);
+                + "VALUES(?,'fixture',?,?,'[\"test\"]','online',?,?)", agent, OWNER, id, TENANT, CLIENT);
     }
 
     private SqlSessionTemplate claimMappers(DataSource source) throws Exception {

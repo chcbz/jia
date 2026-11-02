@@ -85,10 +85,23 @@ class PersonalWorkspaceControlledImageV3ResultMySqlTest {
         admin.execute("CREATE DATABASE `"+database+"` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin");
         dataSource=ds(databaseUrl(url,database),user,password);
         jdbc=new JdbcTemplate(dataSource);
-        new PersonalWorkspaceExecutionSchemaInitializer(jdbc).afterPropertiesSet();
+        var schema = new org.springframework.jdbc.datasource.init.ResourceDatabasePopulator();
+        for (String resource : java.util.List.of(
+                "db/agent-personal-workspace-v1_11-executions.sql",
+                "db/agent-personal-workspace-v1_13-task-execution.sql",
+                "db/agent-personal-workspace-v1_13-task-publication.sql",
+                "db/agent-personal-workspace-v1_14-conversation-execution.sql",
+                "db/agent-personal-workspace-v1_14-conversation-output.sql",
+                "db/agent-personal-workspace-v1_15-conversation-lease.sql",
+                "db/agent-personal-workspace-v1_16-conversation-provider-start.sql")) {
+            schema.addScript(new org.springframework.core.io.ClassPathResource(resource));
+        }
+        schema.execute(dataSource);
+
         new AgentTaskProviderCostConsentSchemaInitializer(jdbc).afterPropertiesSet();
         new ControlledImageExecutionSchemaInitializer(jdbc).afterPropertiesSet();
         new ControlledImageFollowupV3SchemaInitializer(jdbc).afterPropertiesSet();
+        new PersonalWorkspaceExecutionSchemaInitializer(jdbc).afterPropertiesSet();
         // Persisted authority fixture for the real runtime lookup SQL; grant lifecycle is a collaborator here.
         jdbc.execute("CREATE TABLE agent_task_execution_grant (tenant_id VARCHAR(50), client_id VARCHAR(50), owner_jiacn VARCHAR(50), task_id VARCHAR(100), grant_id VARCHAR(100), grant_version BIGINT, target_agent_id VARCHAR(100), executor_owner_jiacn VARCHAR(50)) ENGINE=InnoDB");
         jdbc.update("INSERT INTO agent_task_execution_grant VALUES ('0','client','owner','task','grant',1,'agent','owner')");
@@ -105,10 +118,6 @@ class PersonalWorkspaceControlledImageV3ResultMySqlTest {
         assertEquals(0,admin.queryForObject("SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name=?",
                 Integer.class,database));
     }
-
-
-
-
 
     @Test void retiredV3CannotWriteOrManufactureFailureEvenWithStoredLease() throws Exception {
         persist("exec-denied","run-denied","denied-conversation");
@@ -134,10 +143,6 @@ class PersonalWorkspaceControlledImageV3ResultMySqlTest {
                 Integer.class));
         assertEquals("QUEUED",rows.find("0","client","owner","exec-denied").getExecutionState());
     }
-
-
-
-
 
     @Test void committedV3OwnerCanListAndReadOriginalBytesWithoutRuntimeIdentity() throws Exception {
         var row=persist("exec-owner-read","run-owner-read","42");byte[] bytes=png();String hash=sha(bytes);
@@ -206,12 +211,6 @@ class PersonalWorkspaceControlledImageV3ResultMySqlTest {
         service.setControlledImageFollowupV3(actual,mock(ControlledImageExecutionSourceV3Dao.class));
         return grant;
     }
-
-
-
-
-
-
 
     private void configureService() {
         PersonalWorkspaceStorage storage=new FileSystemPersonalWorkspaceStorage(

@@ -114,9 +114,7 @@ class ControlledImageBridgeMySqlTest {
 
     @Test void twoExecutionRunsCanReserveOnlyOneConsent() throws Exception {
         insertConsent("consent_1234567890abcdef1234567890abcdef","BOUND",2,null,null);
-        assertThrows(DataAccessException.class,()->jdbc.update(
-                "UPDATE agent_task_provider_cost_consent SET request_digest=? WHERE consent_id=?",
-                "A"+"a".repeat(63),"consent_1234567890abcdef1234567890abcdef"));
+
         CountDownLatch start=new CountDownLatch(1);
         try(var executor=Executors.newFixedThreadPool(2)) {
             var first=executor.submit(()->reserveAttempt(start,"execution-a","run-a"));

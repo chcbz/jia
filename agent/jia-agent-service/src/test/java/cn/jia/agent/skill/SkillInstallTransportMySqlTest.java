@@ -40,7 +40,13 @@ class SkillInstallTransportMySqlTest {
         admin.execute("CREATE DATABASE "+db+" CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci");
         var ds=new DriverManagerDataSource(url.replace("/?","/"+db+"?"),"root","");jdbc=new JdbcTemplate(ds);
         new ResourceDatabasePopulator(new ClassPathResource("db/agent-command-transport-schema.sql")).execute(ds);
-        jdbc.execute("CREATE TABLE economy_skill_installation (tenant_id VARCHAR(50),client_id VARCHAR(50),command_id VARCHAR(100),status VARCHAR(32))");
+        String management = new ClassPathResource("db/economy-skill-management-sm-c1.sql")
+                .getContentAsString(java.nio.charset.StandardCharsets.UTF_8).replaceAll("(?m)^--.*$", "");
+        for (String statement : management.split(";")) {
+            if (List.of("economy_skill_change_command", "economy_skill_change", "economy_skill_managed_state")
+                    .stream().anyMatch(table -> statement.strip().startsWith("CREATE TABLE " + table + " (")))
+                jdbc.execute(statement);
+        }
         var cfg=new org.apache.ibatis.session.Configuration();cfg.setMapUnderscoreToCamelCase(true);
         for(Class<?> c:List.of(AgentCommandTransportMapper.class,AgentCommandRecoveryMapper.class,AgentSkillInstallRecoveryMapper.class,AgentOutboxRelayMapper.class)) cfg.addMapper(c);
         var factory=new SqlSessionFactoryBean();factory.setDataSource(ds);factory.setConfiguration(cfg);var sql=new SqlSessionTemplate(Objects.requireNonNull(factory.getObject()));
@@ -56,7 +62,13 @@ class SkillInstallTransportMySqlTest {
     }
     @AfterEach void cleanup() { if(admin!=null && db!=null) admin.execute("DROP DATABASE "+db); }
     void pending() {
-        tx.execute(s->{writer.write(draft);jdbc.update("INSERT INTO economy_skill_installation VALUES (?,?,?,'INSTALLING')","0","Client-A",draft.commandId());return null;});
+        tx.execute(s->{
+            writer.write(draft);
+            jdbc.update("INSERT INTO economy_skill_managed_state(tenant_id,client_id,agent_id,skill_key,skill_revision) VALUES('0','Client-A','agt_fixture','repo-test',1)");
+            jdbc.update("INSERT INTO economy_skill_change(tenant_id,client_id,change_id,agent_id,skill_key,actor_id,owner_jiacn,version,dto_json,permissions_json,runtime_installation_id,runtime_host_id,created_at,updated_at) VALUES('0','Client-A','change-fixture','agt_fixture','repo-test','actor','Owner-A',1,'{}','[]','runtime','host',1,1)");
+            jdbc.update("INSERT INTO economy_skill_change_command(tenant_id,client_id,command_id,change_id,request_id,message_id,data_json,state) VALUES('0','Client-A',?,'change-fixture','request','message',?,'PENDING')", draft.commandId(), "{\"skillRevision\":1}");
+            return null;
+        });
     }
     @Test void sqlWriterAndDrainerKeepBytesAndNeverClaimBrokerConfirmation() {
         pending();byte[] wire=jdbc.queryForObject("SELECT wire_payload FROM agent_outbox_event",byte[].class);

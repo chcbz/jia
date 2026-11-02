@@ -71,8 +71,8 @@ class AgentTaskSettlementSchemaInitializerMySqlTest {
         jdbc.execute("""
                 INSERT INTO agent_task_funding(task_id,funding_mode,funding_status,payer_principal_type,payer_principal_id,
                   settlement_policy,gross_bounty_amount_micro,remaining_micro,escrow_id,escrow_version,reserve_transaction_id,
-                  required_skill_requirements,version,tenant_id,client_id,create_time,update_time)
-                VALUES('t','FUNDED_SINGLE_AGENT','SETTLED','USER','u','GROSS_INCLUSIVE',10,0,'e',4,'reserve','[]',2,'T','C',1,1)
+                  required_skill_requirements,version,tenant_id,client_id,owner_jiacn,create_time,update_time)
+                VALUES('t','FUNDED_SINGLE_AGENT','SETTLED','USER','u','GROSS_INCLUSIVE',10,0,'e',4,'reserve','[]',2,'T','C','u',1,1)
                 """);
     }
 
