@@ -152,10 +152,10 @@ class AgentTaskMetaScopedDaoTest {
             throws Exception {
         Method count = AgentTaskMetaMapper.class.getDeclaredMethod(
                 "countSearchExactInScope", String.class, String.class,
-                String.class, String.class, String.class, String.class, String.class);
+                String.class, String.class, String.class, String.class, String.class, String.class);
         Method page = AgentTaskMetaMapper.class.getDeclaredMethod(
                 "searchPageExactInScope", String.class, String.class,
-                String.class, String.class, String.class, String.class, long.class, int.class, String.class);
+                String.class, String.class, String.class, String.class, long.class, int.class, String.class, String.class);
         String countSql = normalize(String.join(" ", count.getAnnotation(Select.class).value()));
         String pageSql = normalize(String.join(" ", page.getAnnotation(Select.class).value()));
 
@@ -201,7 +201,7 @@ class AgentTaskMetaScopedDaoTest {
 
         Method fundedPage = AgentTaskMetaMapper.class.getDeclaredMethod(
                 "searchPageWithFundingExactInScope", String.class, String.class,
-                String.class, String.class, String.class, String.class, long.class, int.class, String.class);
+                String.class, String.class, String.class, String.class, long.class, int.class, String.class, String.class);
         String fundedSql = normalize(String.join(" ", fundedPage.getAnnotation(Select.class).value()));
         assertTrue(fundedSql.contains("left join agent_task_funding funding"), fundedSql);
         assertFalse(fundedSql.contains("plan.client_id is null"), fundedSql);
@@ -220,7 +220,7 @@ class AgentTaskMetaScopedDaoTest {
     void taskStatusCountsUseSameExactScopeAndDatabaseAggregation() throws Exception {
         Method method = AgentTaskMetaMapper.class.getDeclaredMethod(
                 "countSearchByStatusExactInScope", String.class, String.class,
-                String.class, String.class, String.class, String.class);
+                String.class, String.class, String.class, String.class, String.class);
         String sql = normalize(String.join(" ", method.getAnnotation(Select.class).value()));
 
         assertTrue(sql.contains("task.tenant_id = #{tenantid}"), sql);
@@ -269,6 +269,45 @@ class AgentTaskMetaScopedDaoTest {
             long phaseBindings = bound.getParameterMappings().stream()
                     .filter(v -> "phase".equals(v.getProperty())).count();
             assertEquals(name.equals("countSearchByStatusExactInScope") ? 0 : 1, phaseBindings);
+        }
+    }
+
+    @Test
+    void assigneeFilterIsBoundBeforePaginationAndSharedByEveryTaskRead() {
+        var configuration = new org.apache.ibatis.session.Configuration();
+        configuration.addMapper(AgentTaskMetaMapper.class);
+        var params = new java.util.HashMap<String, Object>();
+        params.put("tenantId", "0"); params.put("clientId", "Client-A"); params.put("ownerJiacn", "Owner-A");
+        params.put("status", null); params.put("phase", null); params.put("keyword", null);
+        params.put("ability", null); params.put("offset", 30L); params.put("limit", 30);
+        for (String agentId : List.of("Agent-A", "agent-a", "0", "agent-a' OR 1=1 --")) {
+            params.put("assignedAgentId", agentId);
+            for (String name : List.of("countSearchExactInScope", "searchPageExactInScope",
+                    "searchPageWithFundingExactInScope", "countSearchByStatusExactInScope")) {
+                var statement = configuration.getMappedStatement(AgentTaskMetaMapper.class.getName() + "." + name);
+                var bound = statement.getBoundSql(params);
+                String sql = normalize(bound.getSql());
+                assertTrue(sql.contains("binary assignee.agent_id = binary ?"), sql);
+                assertTrue(sql.contains("binary assignee.member_status not in (binary 'rejected', binary 'left')"), sql);
+                assertTrue(sql.contains("not exists (select 1 from agent_task_member any_assignee"), sql);
+                for (String field : List.of("tenant_id", "client_id", "owner_jiacn", "task_id")) {
+                    assertTrue(sql.contains("binary assignee." + field + " = binary task." + field), sql);
+                    assertTrue(sql.contains("binary any_assignee." + field + " = binary task." + field), sql);
+                }
+                assertTrue(sql.contains("json_table("), sql); // legacy JSON-array / CSV only without members
+                assertFalse(sql.contains("OR 1=1 --"), sql);
+                assertEquals(agentId, ((java.util.Map<?, ?>) bound.getParameterObject()).get("assignedAgentId"));
+                assertFalse(sql.contains("${"), sql);
+                assertEquals(2, bound.getParameterMappings().stream()
+                        .filter(v -> "assignedAgentId".equals(v.getProperty())).count());
+                if (name.startsWith("searchPage")) {
+                    assertTrue(sql.indexOf("binary assignee.agent_id") < sql.lastIndexOf("limit ? offset ?"), sql);
+                }
+                params.put("assignedAgentId", "");
+                String unfiltered = normalize(statement.getBoundSql(params).getSql());
+                assertFalse(unfiltered.contains("from agent_task_member assignee"), unfiltered);
+                params.put("assignedAgentId", agentId);
+            }
         }
     }
 
@@ -331,28 +370,28 @@ class AgentTaskMetaScopedDaoTest {
         verify(mapper).selectByAgentInScope("tenant-a", "client-a", "agent-a", 500);
 
         when(mapper.countSearchExactInScope(
-                "0", "client-a", "owner-a", "open", "planning", "reward", null))
+                "0", "client-a", "owner-a", "open", "planning", "reward", null, null))
                 .thenReturn(2L);
         assertEquals(2L, dao.countSearch(
-                "0", "client-a", "owner-a", "open", "planning", "reward", null));
+                "0", "client-a", "owner-a", "open", "planning", "reward", null, null));
         verify(mapper).countSearchExactInScope(
-                "0", "client-a", "owner-a", "open", "planning", "reward", null);
+                "0", "client-a", "owner-a", "open", "planning", "reward", null, null);
 
         when(mapper.searchPageExactInScope(
-                "0", "client-a", "owner-a", "open", "planning", "reward", 500L, 500, null))
+                "0", "client-a", "owner-a", "open", "planning", "reward", 500L, 500, null, null))
                 .thenReturn(List.of());
         assertEquals(List.of(), dao.searchPage(
-                "0", "client-a", "owner-a", "open", "planning", "reward", 500L, 9999, null));
+                "0", "client-a", "owner-a", "open", "planning", "reward", 500L, 9999, null, null));
         verify(mapper).searchPageExactInScope(
-                "0", "client-a", "owner-a", "open", "planning", "reward", 500L, 500, null);
+                "0", "client-a", "owner-a", "open", "planning", "reward", 500L, 500, null, null);
 
         when(mapper.searchPageWithFundingExactInScope(
-                "0", "client-a", "owner-a", "open", "planning", "reward", 500L, 500, null))
+                "0", "client-a", "owner-a", "open", "planning", "reward", 500L, 500, null, null))
                 .thenReturn(List.of());
         assertEquals(List.of(), dao.searchPageWithFunding(
-                "0", "client-a", "owner-a", "open", "planning", "reward", 500L, 9999, null));
+                "0", "client-a", "owner-a", "open", "planning", "reward", 500L, 9999, null, null));
         verify(mapper).searchPageWithFundingExactInScope(
-                "0", "client-a", "owner-a", "open", "planning", "reward", 500L, 500, null);
+                "0", "client-a", "owner-a", "open", "planning", "reward", 500L, 500, null, null);
 
         dao.findSearchMembers("0", "client-a", "owner-a", List.of("task-a", "task-a"));
         verify(mapper).selectSearchMembersExactInScope(
@@ -360,20 +399,20 @@ class AgentTaskMetaScopedDaoTest {
         dao.findSearchRuntimes("0", "client-a", "owner-a", List.of("agent-a", "agent-a"));
         verify(mapper).selectSearchRuntimesExactInOwnerScope(
                 "0", "client-a", "owner-a", List.of("agent-a"));
-        dao.countSearchByStatus("0", "client-a", "owner-a", "planning", "reward");
+        dao.countSearchByStatus("0", "client-a", "owner-a", "planning", "reward", null);
         verify(mapper).countSearchByStatusExactInScope(
-                "0", "client-a", "owner-a", "planning", "reward", null);
+                "0", "client-a", "owner-a", "planning", "reward", null, null);
 
-        dao.countSearch("1", "client-a", "owner-a", null, null, null, null);
-        verify(mapper).countSearchExactInScope("1", "client-a", "owner-a", null, null, null, null);
+        dao.countSearch("1", "client-a", "owner-a", null, null, null, null, null);
+        verify(mapper).countSearchExactInScope("1", "client-a", "owner-a", null, null, null, null, null);
         assertThrows(IllegalArgumentException.class,
-                () -> dao.countSearch("1 ", "client-a", "owner-a", null, null, null, null));
+                () -> dao.countSearch("1 ", "client-a", "owner-a", null, null, null, null, null));
         assertThrows(IllegalArgumentException.class,
-                () -> dao.searchPage("0", "client-a", "0", null, null, null, 0, 20, null));
+                () -> dao.searchPage("0", "client-a", "0", null, null, null, 0, 20, null, null));
         assertThrows(IllegalArgumentException.class,
-                () -> dao.countSearchByStatus("0", "client-a", " owner-a", null, null));
+                () -> dao.countSearchByStatus("0", "client-a", " owner-a", null, null, null));
         assertThrows(IllegalArgumentException.class,
-                () -> dao.searchPage("0", "client-a", "owner-a", null, null, null, -1, 20, null));
+                () -> dao.searchPage("0", "client-a", "owner-a", null, null, null, -1, 20, null, null));
 
         dao.reserveOpenTaskRoot("tenant-a", "client-a", "task-a", 1L);
         verify(mapper).reserveOpenTaskRoot("tenant-a", "client-a", "task-a", 1L);

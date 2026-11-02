@@ -911,7 +911,7 @@ public class AgentServiceImpl implements AgentService {
 
         long total = agentTaskMetaDao.countSearch(
                 scope.tenantId(), scope.clientId(), scope.ownerJiacn(),
-                filters.getStatus(), filters.getAbility(), keyword, filters.getPhase());
+                filters.getStatus(), filters.getAbility(), keyword, filters.getPhase(), filters.getAssignedAgentId());
         require(total >= 0, "Persisted task search total is invalid");
         // The normal bounty board must remain usable while the unpublished economy
         // preview (and its additive tables) is disabled. Only an active preview service
@@ -921,10 +921,12 @@ public class AgentServiceImpl implements AgentService {
                 : Optional.ofNullable(fundingProjectionEnabled
                         ? agentTaskMetaDao.searchPageWithFunding(
                                 scope.tenantId(), scope.clientId(), scope.ownerJiacn(),
-                                filters.getStatus(), filters.getAbility(), keyword, offset, pageSize, filters.getPhase())
+                                filters.getStatus(), filters.getAbility(), keyword, offset, pageSize,
+                                filters.getPhase(), filters.getAssignedAgentId())
                         : agentTaskMetaDao.searchPage(
                                 scope.tenantId(), scope.clientId(), scope.ownerJiacn(),
-                                filters.getStatus(), filters.getAbility(), keyword, offset, pageSize, filters.getPhase()))
+                                filters.getStatus(), filters.getAbility(), keyword, offset, pageSize,
+                                filters.getPhase(), filters.getAssignedAgentId()))
                         .orElseGet(Collections::emptyList);
         require(rows.size() <= pageSize,
                 "Persisted task search page exceeds the requested bound");
@@ -979,7 +981,8 @@ public class AgentServiceImpl implements AgentService {
                 "failed", "cancelled", "archived", "UNKNOWN").forEach(status -> raw.put(status, 0L));
         String keyword = StringUtil.isBlank(filters.getKeyword()) ? null : filters.getKeyword().trim();
         List<AgentTaskStatusCountRow> rows = Optional.ofNullable(agentTaskMetaDao.countSearchByStatus(
-                scope.tenantId(), scope.clientId(), scope.ownerJiacn(), filters.getAbility(), keyword))
+                scope.tenantId(), scope.clientId(), scope.ownerJiacn(),
+                filters.getAbility(), keyword, filters.getAssignedAgentId()))
                 .orElseGet(Collections::emptyList);
         long total = 0L;
         for (AgentTaskStatusCountRow row : rows) {

@@ -2536,3 +2536,12 @@ TASK概览和事项分页/阶段计数复用同一 `AgentTaskPhaseSql.PHASE`。`
 - Web 每行一项，移除空行和重复项，空列表可保存；取消不写。保存后读取 `profile-capabilities`，只有权威读回匹配才展示保存完成；409或网络未知保留草稿，显式核对最新值后再决定保存，不自动重试。切换身份/好汉/面板中止并隔离旧回调；非本人/宋江只读。本领仍参与现有任务匹配，不是已安装技能、就绪或执行授权证明。
 - 请上梁山创建新 runtime 时初始化资料/默认本领，重复绑定不覆盖。注册 DTO 只含 agentId/endpoint，状态 DTO 只含 status/currentTaskId/currentTaskTitle/errorMessage；两条链路均不能覆盖资料或本领。不提供旧客户端双轨适配。WS 身份/会话、防重及实际消费的运行声明保留：runtimeCapabilities、typedDeliberation（含材料输入和nativeExecution）、skillExecution；presence 仅动态状态和必要 fence。
 - 回归：WaterMarginPersonaCatalogTest、AgentServiceImplTest、AgentControllerTest、AgentWebSocketHandlerTest、AgentRuntimeCapabilitiesTest；Web juyiting-agent-abilities-editor.test.js；Runtime agent-client.test.mjs、registration-footprint.test.mjs。正式构建/线上验收证据独立记录，不以本节更新代替已上线。
+
+
+## 事项承接 Agent 筛选（2026-11-02候选，未部署）
+
+- `POST /agent/tasks/search` 与 `POST /agent/tasks/status-counts` 的既有请求data新增可选字符串 `assignedAgentId`；未传/null/空串不限制承接人。现有ability保持兼容，Web事项工具栏不再发送ability。
+- 有值按实际承接Agent ID字节精确匹配，不按名称、技能或推荐人；有成员记录时仅非rejected/left成员算承接者，即使全部退出也不回退旧主承接人。没有成员记录时兼容既有assigned_agent_id标量、JSON数组及逗号分隔历史值。
+- 与keyword、phase/status条件组合；在数据库分页前执行。列表total与状态计数复用同一谓词，计数跨phase、不是当前页条数。身份与owner scope仍来自既有认证配置，不接受筛选参数覆盖授权。
+- 保持既有响应信封、分页结构和PENDING_ASSIGNMENT枚举。Web将其显示为“待承办”。不增加数据库CHECK、迁移或Runtime联动。
+- 责任层回归：AgentTaskMetaScopedDaoTest（共享SQL绑定/分页前/精确scope/禁用筛选）、AgentServiceImplTest（列表total/page/计数同字段）。源码基线8ad42be7815e499077c6a97439f0f13c96c7650e；正式执行结果见根仓JUYITING-LIST-CLICK-20261101 handoff。

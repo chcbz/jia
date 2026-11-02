@@ -58,6 +58,35 @@ CASE
               AND task.reward_status = #{status}
               AND CAST(task.reward_status AS BINARY) = CAST(#{status} AS BINARY)
             </if>
+            <if test="assignedAgentId != null and assignedAgentId != ''">
+              AND (
+                EXISTS (SELECT 1 FROM agent_task_member assignee
+                  WHERE BINARY assignee.tenant_id = BINARY task.tenant_id
+                    AND BINARY assignee.client_id = BINARY task.client_id
+                    AND BINARY assignee.owner_jiacn = BINARY task.owner_jiacn
+                    AND BINARY assignee.task_id = BINARY task.task_id
+                    AND BINARY assignee.agent_id = BINARY #{assignedAgentId}
+                    AND BINARY assignee.member_status NOT IN (BINARY 'rejected', BINARY 'left'))
+                OR (NOT EXISTS (SELECT 1 FROM agent_task_member any_assignee
+                  WHERE BINARY any_assignee.tenant_id = BINARY task.tenant_id
+                    AND BINARY any_assignee.client_id = BINARY task.client_id
+                    AND BINARY any_assignee.owner_jiacn = BINARY task.owner_jiacn
+                    AND BINARY any_assignee.task_id = BINARY task.task_id
+                ) AND EXISTS (
+                  SELECT 1 FROM JSON_TABLE(
+                    CASE WHEN JSON_VALID(task.assigned_agent_id) THEN
+                      CASE WHEN JSON_TYPE(task.assigned_agent_id) = 'ARRAY'
+                        THEN task.assigned_agent_id ELSE JSON_ARRAY(task.assigned_agent_id) END
+                    ELSE CONCAT('[', REPLACE(JSON_QUOTE(COALESCE(task.assigned_agent_id, '')), ',', '","'), ']') END,
+                    '$[*]' COLUMNS (agent_id VARCHAR(400) PATH '$')
+                  ) legacy_assignee
+                  WHERE BINARY (CASE WHEN JSON_VALID(task.assigned_agent_id) THEN
+                    CASE WHEN JSON_TYPE(task.assigned_agent_id) = 'ARRAY' THEN legacy_assignee.agent_id
+                      ELSE TRIM(legacy_assignee.agent_id) END
+                    ELSE TRIM(legacy_assignee.agent_id) END) = BINARY #{assignedAgentId}
+                ))
+              )
+            </if>
             <if test="ability != null and ability.trim() != ''">
               AND task.required_abilities LIKE CONCAT('%', '"', #{ability}, '"', '%')
             </if>

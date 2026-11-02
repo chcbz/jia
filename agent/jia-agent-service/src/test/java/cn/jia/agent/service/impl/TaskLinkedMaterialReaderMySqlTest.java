@@ -116,6 +116,57 @@ class TaskLinkedMaterialReaderMySqlTest {
         catch (Exception failure) { return failure.getClass().getSimpleName(); }
     }
 
+    // Reuse this owned MySQL fixture for the task read model; never connect to an application DB.
+    @Test void actualAssigneeQueryFiltersBeforePaginationAndCountsMembersAndLegacyIds() {
+        jdbc.execute("CREATE TABLE agent_task_meta (id BIGINT,task_id VARCHAR(100),tenant_id VARCHAR(50),"
+                + "client_id VARCHAR(50),owner_jiacn VARCHAR(50),reward_status VARCHAR(20),assigned_agent_id TEXT,"
+                + "required_abilities TEXT,reward INT,assigned_at BIGINT,started_at BIGINT,completed_at BIGINT,"
+                + "failure_reason TEXT,task_version BIGINT,create_time BIGINT,update_time BIGINT)");
+        jdbc.execute("CREATE TABLE task_plan (id BIGINT,tenant_id VARCHAR(50),client_id VARCHAR(50),jiacn VARCHAR(50),"
+                + "name VARCHAR(100),description TEXT,amount INT,create_time BIGINT,update_time BIGINT)");
+        jdbc.execute("CREATE TABLE agent_task_formal_delivery (task_id VARCHAR(100),tenant_id VARCHAR(50),"
+                + "client_id VARCHAR(50),state VARCHAR(20),revision BIGINT)");
+        jdbc.execute("CREATE TABLE agent_task_member (tenant_id VARCHAR(50),client_id VARCHAR(50),owner_jiacn VARCHAR(50),"
+                + "task_id VARCHAR(100),agent_id VARCHAR(100),member_status VARCHAR(20))");
+        String insert = "INSERT INTO agent_task_meta (id,task_id,tenant_id,client_id,owner_jiacn,reward_status,"
+                + "assigned_agent_id,required_abilities,update_time) VALUES (?,?,'0','client','owner','assigned',?, '[\"planning\"]',?)";
+        for (int n = 0; n < 35; n++) jdbc.update(insert, n, "decoy-" + n, "other-agent", 100 + n);
+        jdbc.update(insert, 40, "active", "old-primary", 4);
+        jdbc.update(insert, 41, "scalar", "Agent-Exact", 3);
+        jdbc.update(insert, 42, "json", "[\"another\",\"Agent-Exact\"]", 2);
+        jdbc.update(insert, 43, "csv", "another, Agent-Exact", 1);
+        jdbc.update(insert, 44, "left", "Agent-Exact", 99);
+        jdbc.update(insert, 45, "case", "agent-exact", 98);
+        jdbc.update(insert, 46, "foreign-member", "other-agent", 97);
+        jdbc.update("INSERT INTO agent_task_member VALUES ('0','client','owner','active','Agent-Exact','working'),"
+                + "('0','client','owner','left','Agent-Exact','left'),"
+                + "('0','client','owner','left','Agent-Exact','rejected'),"
+                + "('another-tenant','client','owner','foreign-member','Agent-Exact','working')");
+        var configuration = new org.apache.ibatis.session.Configuration();
+        configuration.addMapper(cn.jia.agent.mapper.AgentTaskMetaMapper.class);
+        var params = new java.util.HashMap<String, Object>();
+        params.put("tenantId", "0"); params.put("clientId", "client"); params.put("ownerJiacn", "owner");
+        params.put("status", null); params.put("phase", "IN_PROGRESS"); params.put("keyword", null);
+        params.put("ability", null); params.put("assignedAgentId", "Agent-Exact");
+        params.put("offset", 2L); params.put("limit", 2);
+        java.util.function.Function<String, java.util.List<java.util.Map<String, Object>>> query = name -> {
+            var bound = configuration.getMappedStatement(cn.jia.agent.mapper.AgentTaskMetaMapper.class.getName() + "." + name).getBoundSql(params);
+            Object[] values = bound.getParameterMappings().stream().map(mapping -> params.get(mapping.getProperty())).toArray();
+            return jdbc.queryForList(bound.getSql(), values);
+        };
+        assertEquals(4L, ((Number) query.apply("countSearchExactInScope").getFirst().values().iterator().next()).longValue());
+        assertEquals(java.util.List.of("json", "csv"), query.apply("searchPageExactInScope").stream().map(row -> row.get("task_id")).toList());
+        var counts = query.apply("countSearchByStatusExactInScope");
+        assertEquals(1, counts.size());
+        assertEquals(4L, ((Number) counts.getFirst().get("taskCount")).longValue());
+        params.put("assignedAgentId", "agent-exact");
+        assertEquals(1L, ((Number) query.apply("countSearchExactInScope").getFirst().values().iterator().next()).longValue());
+        params.put("assignedAgentId", "not-assigned");
+        assertEquals(0L, ((Number) query.apply("countSearchExactInScope").getFirst().values().iterator().next()).longValue());
+        params.put("assignedAgentId", "");
+        assertEquals(42L, ((Number) query.apply("countSearchExactInScope").getFirst().values().iterator().next()).longValue());
+    }
+
     @BeforeEach void setup() throws Exception {
         String url=baseUrl,user="root",password="";
         namespace="cyf_material_";database=namespace+UUID.randomUUID().toString().substring(0,8);

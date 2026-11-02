@@ -240,35 +240,35 @@ public class AgentTaskMetaDaoImpl extends BaseDaoImpl<AgentTaskMetaMapper, Agent
 
     @Override
     public long countSearch(String tenantId, String clientId, String ownerJiacn, String status,
-            String ability, String keyword, String phase) {
+            String ability, String keyword, String phase, String assignedAgentId) {
         requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
         return baseMapper.countSearchExactInScope(
-                tenantId, clientId, ownerJiacn, status, ability, keyword, phase);
+                tenantId, clientId, ownerJiacn, status, ability, keyword, phase, assignedAgentId);
     }
 
     @Override
     public List<AgentTaskSearchRow> searchPage(
             String tenantId, String clientId, String ownerJiacn, String status,
-            String ability, String keyword, long offset, int limit, String phase) {
+            String ability, String keyword, long offset, int limit, String phase, String assignedAgentId) {
         requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
         if (offset < 0) {
             throw new IllegalArgumentException("offset must not be negative");
         }
         return baseMapper.searchPageExactInScope(tenantId, clientId, ownerJiacn, status, ability,
-                keyword, offset, TaskCollaborationDaoSupport.boundedLimit(limit), phase);
+                keyword, offset, TaskCollaborationDaoSupport.boundedLimit(limit), phase, assignedAgentId);
     }
 
     @Override
     public List<AgentTaskSearchRow> searchPageWithFunding(
             String tenantId, String clientId, String ownerJiacn, String status,
-            String ability, String keyword, long offset, int limit, String phase) {
+            String ability, String keyword, long offset, int limit, String phase, String assignedAgentId) {
         requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
         if (offset < 0) {
             throw new IllegalArgumentException("offset must not be negative");
         }
         return baseMapper.searchPageWithFundingExactInScope(
                 tenantId, clientId, ownerJiacn, status, ability, keyword, offset,
-                TaskCollaborationDaoSupport.boundedLimit(limit), phase);
+                TaskCollaborationDaoSupport.boundedLimit(limit), phase, assignedAgentId);
     }
 
     @Override
@@ -293,10 +293,10 @@ public class AgentTaskMetaDaoImpl extends BaseDaoImpl<AgentTaskMetaMapper, Agent
 
     @Override
     public List<AgentTaskStatusCountRow> countSearchByStatus(
-            String tenantId, String clientId, String ownerJiacn, String ability, String keyword) {
+            String tenantId, String clientId, String ownerJiacn, String ability, String keyword, String assignedAgentId) {
         requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
         return baseMapper.countSearchByStatusExactInScope(
-                tenantId, clientId, ownerJiacn, ability, keyword, null);
+                tenantId, clientId, ownerJiacn, ability, keyword, null, assignedAgentId);
     }
 
     private void requireStrictOwnerScope(

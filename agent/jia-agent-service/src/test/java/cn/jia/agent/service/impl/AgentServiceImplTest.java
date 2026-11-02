@@ -2752,15 +2752,15 @@ class AgentServiceImplTest extends BaseMockTest {
         AgentTaskSearchRow secondScope = searchRow(
                 "task-owner-b", "0", "client-a", "owner-a", AgentConstants.TASK_STATUS_RUNNING);
 
-        when(agentTaskMetaDao.countSearch("0", "Client-A", "Owner-A", null, null, null, null))
+        when(agentTaskMetaDao.countSearch("0", "Client-A", "Owner-A", null, null, null, null, null))
                 .thenReturn(1L);
         when(agentTaskMetaDao.searchPage(
-                "0", "Client-A", "Owner-A", null, null, null, 0L, 20, null))
+                "0", "Client-A", "Owner-A", null, null, null, 0L, 20, null, null))
                 .thenReturn(List.of(firstScope));
-        when(agentTaskMetaDao.countSearch("0", "client-a", "owner-a", null, null, null, null))
+        when(agentTaskMetaDao.countSearch("0", "client-a", "owner-a", null, null, null, null, null))
                 .thenReturn(1L);
         when(agentTaskMetaDao.searchPage(
-                "0", "client-a", "owner-a", null, null, null, 0L, 20, null))
+                "0", "client-a", "owner-a", null, null, null, 0L, 20, null, null))
                 .thenReturn(List.of(secondScope));
 
         authenticateTaskScope("Owner-A", "Client-A");
@@ -2773,19 +2773,19 @@ class AgentServiceImplTest extends BaseMockTest {
         assertEquals(List.of("task-owner-b"),
                 second.getList().stream().map(AgentTaskDTO::getId).toList());
         verify(agentTaskMetaDao).searchPage(
-                "0", "Client-A", "Owner-A", null, null, null, 0L, 20, null);
+                "0", "Client-A", "Owner-A", null, null, null, 0L, 20, null, null);
         verify(agentTaskMetaDao).searchPage(
-                "0", "client-a", "owner-a", null, null, null, 0L, 20, null);
+                "0", "client-a", "owner-a", null, null, null, 0L, 20, null, null);
     }
 
     @Test
     void countTasksByStatusUsesFixedTenantAndAuthenticatedOwner() {
         when(agentTaskMetaDao.countSearchByStatus(
-                "0", "Client-A", "Owner-A", null, null))
+                "0", "Client-A", "Owner-A", null, null, null))
                 .thenReturn(List.of(statusCount("0", "Client-A", "Owner-A",
                         AgentConstants.TASK_STATUS_ASSIGNED, 1L)));
         when(agentTaskMetaDao.countSearchByStatus(
-                "0", "client-a", "owner-a", null, null))
+                "0", "client-a", "owner-a", null, null, null))
                 .thenReturn(List.of(statusCount("0", "client-a", "owner-a",
                         AgentConstants.TASK_STATUS_COMPLETED, 1L)));
 
@@ -2818,7 +2818,7 @@ class AgentServiceImplTest extends BaseMockTest {
     void phaseCountsKeepBigintPrecisionAndAggregateRawStagesOnTheSameScope() {
         authenticateTaskScope("Owner-A", "Client-A");
         long large = 9007199254740993L;
-        when(agentTaskMetaDao.countSearchByStatus("0", "Client-A", "Owner-A", null, null))
+        when(agentTaskMetaDao.countSearchByStatus("0", "Client-A", "Owner-A", null, null, null))
                 .thenReturn(List.of(statusCount("0", "Client-A", "Owner-A", "assigned", large),
                         statusCount("0", "Client-A", "Owner-A", "running", 2L)));
         var result = agentService.countTasksByStatus(new AgentTaskSearchDTO());
@@ -2847,9 +2847,9 @@ class AgentServiceImplTest extends BaseMockTest {
         assertEquals(AgentErrorConstants.AGENT_FORBIDDEN, searchFailure.getCode());
         assertEquals(AgentErrorConstants.AGENT_FORBIDDEN, countFailure.getCode());
         verify(agentTaskMetaDao, never()).countSearch(
-                any(), any(), any(), any(), any(), any(), any());
+                any(), any(), any(), any(), any(), any(), any(), any());
         verify(agentTaskMetaDao, never()).countSearchByStatus(
-                any(), any(), any(), any(), any());
+                any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -2858,10 +2858,10 @@ class AgentServiceImplTest extends BaseMockTest {
                 "valid-task", "0", "client-a", "owner-a", AgentConstants.TASK_STATUS_OPEN);
         AgentTaskSearchRow contaminated = searchRow(
                 "contaminated-task", "0", "client-a", "owner-b", AgentConstants.TASK_STATUS_OPEN);
-        when(agentTaskMetaDao.countSearch("0", "client-a", "owner-a", null, null, null, null))
+        when(agentTaskMetaDao.countSearch("0", "client-a", "owner-a", null, null, null, null, null))
                 .thenReturn(2L);
         when(agentTaskMetaDao.searchPage(
-                "0", "client-a", "owner-a", null, null, null, 0L, 20, null))
+                "0", "client-a", "owner-a", null, null, null, 0L, 20, null, null))
                 .thenReturn(List.of(valid, contaminated));
         authenticateTaskScope("owner-a", "client-a");
 
@@ -2874,10 +2874,10 @@ class AgentServiceImplTest extends BaseMockTest {
     void searchTasksRejectsCrossOwnerMemberAndRuntimeRows() {
         AgentTaskSearchRow task = searchRow(
                 "task-1", "0", "client-a", "owner-a", AgentConstants.TASK_STATUS_OPEN);
-        when(agentTaskMetaDao.countSearch("0", "client-a", "owner-a", null, null, null, null))
+        when(agentTaskMetaDao.countSearch("0", "client-a", "owner-a", null, null, null, null, null))
                 .thenReturn(1L);
         when(agentTaskMetaDao.searchPage(
-                "0", "client-a", "owner-a", null, null, null, 0L, 20, null))
+                "0", "client-a", "owner-a", null, null, null, 0L, 20, null, null))
                 .thenReturn(List.of(task));
         when(agentTaskMetaDao.findSearchMembers(
                 "0", "client-a", "owner-a", List.of("task-1")))
@@ -2890,10 +2890,10 @@ class AgentServiceImplTest extends BaseMockTest {
         verify(agentTaskMetaDao, never()).findSearchRuntimes(any(), any(), any(), any());
 
         org.mockito.Mockito.reset(agentTaskMetaDao);
-        when(agentTaskMetaDao.countSearch("0", "client-a", "owner-a", null, null, null, null))
+        when(agentTaskMetaDao.countSearch("0", "client-a", "owner-a", null, null, null, null, null))
                 .thenReturn(1L);
         when(agentTaskMetaDao.searchPage(
-                "0", "client-a", "owner-a", null, null, null, 0L, 20, null))
+                "0", "client-a", "owner-a", null, null, null, 0L, 20, null, null))
                 .thenReturn(List.of(task));
         when(agentTaskMetaDao.findSearchMembers(
                 "0", "client-a", "owner-a", List.of("task-1")))
@@ -2923,18 +2923,39 @@ class AgentServiceImplTest extends BaseMockTest {
 
         AgentTaskSearchRow task = searchRow(
                 "task-funded", "0", "client-a", "owner-a", AgentConstants.TASK_STATUS_OPEN);
-        when(agentTaskMetaDao.countSearch("0", "client-a", "owner-a", null, null, null, null))
+        when(agentTaskMetaDao.countSearch("0", "client-a", "owner-a", null, null, null, null, null))
                 .thenReturn(1L);
         when(agentTaskMetaDao.searchPageWithFunding(
-                "0", "client-a", "owner-a", null, null, null, 0L, 20, null))
+                "0", "client-a", "owner-a", null, null, null, 0L, 20, null, null))
                 .thenReturn(List.of(task));
         authenticateTaskScope("owner-a", "client-a");
 
         assertEquals(1, agentService.searchTasks(new AgentTaskSearchDTO()).getList().size());
         verify(agentTaskMetaDao).searchPageWithFunding(
-                "0", "client-a", "owner-a", null, null, null, 0L, 20, null);
+                "0", "client-a", "owner-a", null, null, null, 0L, 20, null, null);
         verify(agentTaskMetaDao, never()).searchPage(
-                "0", "client-a", "owner-a", null, null, null, 0L, 20, null);
+                "0", "client-a", "owner-a", null, null, null, 0L, 20, null, null);
+    }
+
+    @Test
+    void assignedAgentIdReachesTotalPageAndStatusCountsWithoutNameOrAbilityMatching() {
+        authenticateTaskScope("juyiting", "jia_client");
+        AgentTaskSearchDTO request = new AgentTaskSearchDTO();
+        request.setAssignedAgentId("Agent-Exact");
+        request.setKeyword(" 榜文 ");
+        request.setPhase("IN_PROGRESS");
+        when(agentTaskMetaDao.countSearch("0", "jia_client", "juyiting", null,
+                null, "榜文", "IN_PROGRESS", "Agent-Exact")).thenReturn(31L);
+        when(agentTaskMetaDao.searchPage("0", "jia_client", "juyiting", null,
+                null, "榜文", 0L, 20, "IN_PROGRESS", "Agent-Exact")).thenReturn(List.of());
+        assertEquals(31L, agentService.searchTasks(request).getTotal());
+        agentService.countTasksByStatus(request);
+        verify(agentTaskMetaDao).countSearch("0", "jia_client", "juyiting", null,
+                null, "榜文", "IN_PROGRESS", "Agent-Exact");
+        verify(agentTaskMetaDao).searchPage("0", "jia_client", "juyiting", null,
+                null, "榜文", 0L, 20, "IN_PROGRESS", "Agent-Exact");
+        verify(agentTaskMetaDao).countSearchByStatus("0", "jia_client", "juyiting",
+                null, "榜文", "Agent-Exact");
     }
 
     @Test
@@ -2962,11 +2983,11 @@ class AgentServiceImplTest extends BaseMockTest {
 
         when(agentTaskMetaDao.countSearch(
                 "0", "jia_client", "juyiting", AgentConstants.TASK_STATUS_OPEN,
-                "planning", "榜文", null))
+                "planning", "榜文", null, null))
                 .thenReturn(502L);
         when(agentTaskMetaDao.searchPage(
                 "0", "jia_client", "juyiting", AgentConstants.TASK_STATUS_OPEN,
-                "planning", "榜文", 500L, 500, null))
+                "planning", "榜文", 500L, 500, null, null))
                 .thenReturn(List.of(first, second));
         when(agentTaskMetaDao.findSearchMembers(
                 "0", "jia_client", "juyiting", List.of("1", "2")))
@@ -2994,10 +3015,10 @@ class AgentServiceImplTest extends BaseMockTest {
         assertEquals("吴用", result.getList().getFirst().getAssignedAgentName());
         verify(agentTaskMetaDao).countSearch(
                 "0", "jia_client", "juyiting", AgentConstants.TASK_STATUS_OPEN,
-                "planning", "榜文", null);
+                "planning", "榜文", null, null);
         verify(agentTaskMetaDao).searchPage(
                 "0", "jia_client", "juyiting", AgentConstants.TASK_STATUS_OPEN,
-                "planning", "榜文", 500L, 500, null);
+                "planning", "榜文", 500L, 500, null, null);
         verify(agentTaskMetaDao).findSearchMembers(
                 "0", "jia_client", "juyiting", List.of("1", "2"));
         verify(agentTaskMetaDao).findSearchRuntimes(

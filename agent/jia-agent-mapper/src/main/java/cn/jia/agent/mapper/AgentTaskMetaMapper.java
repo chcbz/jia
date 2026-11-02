@@ -403,7 +403,8 @@ public interface AgentTaskMetaMapper extends BaseMapper<AgentTaskMetaEntity> {
             @Param("ownerJiacn") String ownerJiacn,
             @Param("status") String status,
             @Param("ability") String ability,
-            @Param("keyword") String keyword, @Param("phase") String phase);
+            @Param("keyword") String keyword, @Param("phase") String phase,
+            @Param("assignedAgentId") String assignedAgentId);
 
     @Select("""
             <script>
@@ -441,7 +442,8 @@ public interface AgentTaskMetaMapper extends BaseMapper<AgentTaskMetaEntity> {
             @Param("ability") String ability,
             @Param("keyword") String keyword,
             @Param("offset") long offset,
-            @Param("limit") int limit, @Param("phase") String phase);
+            @Param("limit") int limit, @Param("phase") String phase,
+            @Param("assignedAgentId") String assignedAgentId);
 
 
     @Select("""
@@ -504,7 +506,8 @@ public interface AgentTaskMetaMapper extends BaseMapper<AgentTaskMetaEntity> {
             @Param("ability") String ability,
             @Param("keyword") String keyword,
             @Param("offset") long offset,
-            @Param("limit") int limit, @Param("phase") String phase);
+            @Param("limit") int limit, @Param("phase") String phase,
+            @Param("assignedAgentId") String assignedAgentId);
 
     @Select("""
             <script>
@@ -580,7 +583,8 @@ public interface AgentTaskMetaMapper extends BaseMapper<AgentTaskMetaEntity> {
             @Param("clientId") String clientId,
             @Param("ownerJiacn") String ownerJiacn,
             @Param("ability") String ability,
-            @Param("keyword") String keyword, @Param("status") String status);
+            @Param("keyword") String keyword, @Param("status") String status,
+            @Param("assignedAgentId") String assignedAgentId);
 
     @Select("""
             SELECT parent.*

@@ -79,15 +79,15 @@ public interface AgentTaskMetaDao extends IBaseDao<AgentTaskMetaEntity> {
     List<AgentTaskStatsRow> findStatsByAgents(List<AgentTaskStatsScope> scopes);
 
     long countSearch(String tenantId, String clientId, String ownerJiacn, String status,
-            String ability, String keyword, String phase);
+            String ability, String keyword, String phase, String assignedAgentId);
 
     List<AgentTaskSearchRow> searchPage(
             String tenantId, String clientId, String ownerJiacn, String status,
-            String ability, String keyword, long offset, int limit, String phase);
+            String ability, String keyword, long offset, int limit, String phase, String assignedAgentId);
 
     List<AgentTaskSearchRow> searchPageWithFunding(
             String tenantId, String clientId, String ownerJiacn, String status,
-            String ability, String keyword, long offset, int limit, String phase);
+            String ability, String keyword, long offset, int limit, String phase, String assignedAgentId);
 
     List<AgentTaskMemberEntity> findSearchMembers(
             String tenantId, String clientId, String ownerJiacn, List<String> taskIds);
@@ -96,5 +96,5 @@ public interface AgentTaskMetaDao extends IBaseDao<AgentTaskMetaEntity> {
             String tenantId, String clientId, String ownerJiacn, List<String> agentIds);
 
     List<AgentTaskStatusCountRow> countSearchByStatus(
-            String tenantId, String clientId, String ownerJiacn, String ability, String keyword);
+            String tenantId, String clientId, String ownerJiacn, String ability, String keyword, String assignedAgentId);
 }
