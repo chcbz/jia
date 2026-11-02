@@ -94,6 +94,7 @@ class ChatDeliberationOutboxCommitTest {
             doAnswer(call->{callbacks.add(call.getArgument(0));delays.add(call.getArgument(1));return mock(java.util.concurrent.ScheduledFuture.class);})
                 .when(scheduler).schedule(any(Runnable.class),anyLong(),eq(java.util.concurrent.TimeUnit.MILLISECONDS));
             when(outbox.discover(anyLong(),anyInt())).thenReturn(java.util.List.of());
+            when(outbox.nextDueAt(anyLong())).thenReturn(null); // SQL MIN on an empty partition is NULL, not Mockito boxed-zero.
             relay.scheduling(()->scheduler,now::get);relay.start();
         }
         @org.junit.jupiter.api.AfterEach void close() {relay.stop();}
