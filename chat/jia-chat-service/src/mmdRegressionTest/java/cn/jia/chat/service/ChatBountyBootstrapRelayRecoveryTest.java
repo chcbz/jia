@@ -214,6 +214,18 @@ class ChatBountyBootstrapRelayRecoveryTest {
             drains.get(0).run();assertEquals(2,drains.size());drains.get(1).run();
             verify(sockets,times(2)).notifyNativeWork(local);verifyNoInteractions(discovery);
         }
+        @Test void bothLanesUseOneRecoveryTimerAndOneQuery() {
+            var file=new cn.jia.agent.entity.NativeConversationWorkAvailable("0","client","local","WORKSPACE_FILE");
+            when(sockets.nativeWorkTargets()).thenReturn(List.of(local,file));
+            when(discovery.pendingFor(List.of(local,file))).thenReturn(List.of(local,file));
+            recovery.run();
+            verify(discovery).pendingFor(List.of(local,file));
+            verify(sockets).notifyNativeWork(local);verify(sockets).notifyNativeWork(file);
+            verify(worker,times(1)).scheduleWithFixedDelay(any(Runnable.class),eq(30L),eq(30L),eq(TimeUnit.SECONDS));
+            for(int i=0;i<1000;i++){notifier.available(local);notifier.available(file);}
+            assertEquals(1,drains.size());drains.get(0).run();
+            verify(sockets,times(2)).notifyNativeWork(local);verify(sockets,times(2)).notifyNativeWork(file);
+        }
         @Test void missedOrRemoteCommitIsRecoveredByOneLocalSubscriptionQuery() {
             when(discovery.pendingFor(List.of(local))).thenReturn(List.of(local));
             recovery.run();verify(discovery).pendingFor(List.of(local));verify(sockets).notifyNativeWork(local);

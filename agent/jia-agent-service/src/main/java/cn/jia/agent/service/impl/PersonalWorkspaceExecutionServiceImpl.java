@@ -314,6 +314,8 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
             PersonalWorkspaceFileEntity file = snapshot.file();
             file.setMetadataRevision(Math.addExact(file.getMetadataRevision(), 1L)); workspace.updateFile(file);
         }
+        if (workDiscovery!=null) workDiscovery.afterCommit(new cn.jia.agent.entity.NativeConversationWorkAvailable(
+                scope.tenantId(),scope.clientId(),execution.getTargetAgentId(),"WORKSPACE_FILE"));
         return view(scope, execution);
     }
 
@@ -1140,21 +1142,28 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         validateRuntimeScope(scope);
         if (limit < 1 || limit > 16) throw failure(Reason.BAD_REQUEST);
         OwnerScope owner = new OwnerScope(scope.tenantId(), scope.clientId(), scope.ownerJiacn());
-        return executions.listQueuedByTarget(scope.tenantId(), scope.clientId(), scope.ownerJiacn(),
-                        scope.agentId(), limit).stream()
-                // DAO filtering is the primary isolation boundary; retain an in-service exact check
-                // so a mapper regression can never hand a queue item to a different runtime Agent.
-                // Existing HTTP pickup has no fence-bearing upload/commit contract; never dispatch CONVERSATION.
-                .filter(execution -> execution != null && !"CONVERSATION".equals(execution.getExecutionMode())
-                        && "QUEUED".equals(execution.getExecutionState())
-                        && same(execution.getTargetAgentId(), scope.agentId())
-                        && same(execution.getTenantId(), scope.tenantId())
-                        && same(execution.getClientId(), scope.clientId())
-                        && same(execution.getOwnerJiacn(), scope.ownerJiacn())
-                        && runtimeDispatchAllowed(scope, execution))
-                .map(execution -> queuedCommand(owner, execution))
-                .filter(Objects::nonNull)
-                .toList();
+        List<RuntimeQueuedCommand> commands=new ArrayList<>();
+        var page=executions.listQueuedByTarget(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),scope.agentId(),limit);
+        while (!page.isEmpty()) {
+            for (var execution:page) {
+                // Existing business authority remains here; an ineligible candidate cannot hide later work.
+                if (execution==null || "CONVERSATION".equals(execution.getExecutionMode())
+                        || !"QUEUED".equals(execution.getExecutionState())
+                        || !same(execution.getTargetAgentId(),scope.agentId())
+                        || !same(execution.getTenantId(),scope.tenantId())
+                        || !same(execution.getClientId(),scope.clientId())
+                        || !same(execution.getOwnerJiacn(),scope.ownerJiacn())
+                        || !runtimeDispatchAllowed(scope,execution)) continue;
+                var command=queuedCommand(owner,execution);
+                if(command!=null) commands.add(command);
+                if(commands.size()==limit) return List.copyOf(commands);
+            }
+            if(page.size()<limit) break;
+            var last=page.getLast();
+            page=executions.listQueuedByTargetAfter(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),scope.agentId(),
+                    last.getCreatedAt(),last.getExecutionId(),limit);
+        }
+        return List.copyOf(commands);
     }
 
     @Override

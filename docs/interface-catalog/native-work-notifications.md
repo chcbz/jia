@@ -1,4 +1,4 @@
-# Native CONVERSATION work notifications v1
+# Runtime work notifications v1 (native conversation and workspace file)
 
 2026-11-02 candidate; interface standard baseline API 2723bdc37576eed2cb490c6b240638d1159d8445. This document describes the candidate, not a deployed contract. Responsibility: RB-1 API owns durable work/authorization; Runtime owns local recovery/execution; Web unchanged.
 
@@ -47,3 +47,47 @@ A future notification consumer must not spin on a full page of duplicates, and m
 file-lane support independently of `nativeWorkNotifications:1`. Expired TASK lease candidates
 are still service-filtered after SQL selection; that separate readiness/pagination dependency
 must be resolved before declaring the file lane's event-discovery closure complete.
+
+## Workspace-file event discovery candidate (2026-11-02)
+
+This extension supersedes the prerequisite section's pending implementation notes; it is
+not deployment evidence. Interface baseline API `189da86d622a37254f31fd5828bf96b7bc01bbbe`.
+
+- Independent offer/ACK `workspaceFileWorkNotifications:1`. Only the current correlated
+  successful registration enables file event discovery; `nativeWorkNotifications:1` alone
+  never does. File support does not require enabling conversation execution. Old peers keep
+  file 3-second discovery. WS subscriptions activate after receipt delivery and retire on
+  disconnect/re-registration; hints still check the current persistent session fence.
+- Shared `runtime.work.available` envelope, version 1, lane `WORKSPACE_FILE`; all proof fields
+  unchanged. Exact fixture `contracts/workspace-file-work-hint-v1.json` is mirrored in Runtime.
+  Unknown/unnegotiated lanes, wrong version or session proof never enter command ingress.
+- PRIVATE/TASK create registers the target-only event after execution and all input rows;
+  actual send is after commit on the existing worker. The historical `NativeConversationWork*`
+  classes now carry an explicit lane; no duplicate scheduler or second broker. One 30-second
+  compensation pass queries both subscribed lanes together in the process partition. Empty
+  subscriptions skip SQL. Hints are not authorization or a durable command queue.
+- The authoritative file GET still returns `{items:[...]}` (up to 16), unchanged wire. Inside
+  that transaction the existing service checks leases and command eligibility; if a candidate
+  page cannot fill the response, it continues by `(created_at, binary execution_id)` keyset
+  until full or exhausted. No offsets, row deletion, fabricated lease or duplicate authorization
+  logic in SQL/Runtime. Only one candidate page plus the bounded response is retained.
+- Runtime reuses the existing coalescing one-shot scheduler. Startup/reconnect always reads;
+  idle negotiated file discovery has no periodic timer. HTTP/network failures retain 3s retry.
+  Local processor resume/ACK/UNKNOWN recovery remains independent and unchanged. A non-empty
+  page is not a claim: duplicates may remain QUEUED during execution. Observe the existing
+  drain promise once, wake on completion; only a full page with newly admitted commands and
+  already-finished drain can immediately continue. Duplicate-only pages do not spin. In-flight
+  hints coalesce; stopped/old-session callbacks cannot wake a replacement loop.
+- Compensation intentionally reads candidate state, not business lease authorization. Stale or
+  non-dispatchable QUEUED candidates can still cause a 30s hint/read, and a large invalid backlog
+  can require multiple bounded pages per GET. This change fixes starvation, not stale-work
+  lifecycle cleanup or a bound on total scan duration. Cross-node/lost-hint delay remains about
+  30s plus processing. No production CPU/latency savings asserted.
+- No new migration in this extension: compensation uses the previous explicit target index;
+  its production installation/EXPLAIN still require authorized snapshot-backed verification.
+  No startup DDL, CHECK or mandatory size/time cutoff.
+
+Added regressions cover real SQL keyset/lanes, business eligibility traversal, create hint
+ordering, transaction publication, shared notifier, WS independent negotiation/fence, mirrored
+wire, old-server fallback, full/duplicate pages, real persistent inbox/dedupe, in-flight ownership
+and reconnect. Heavy Java results and exact integrated commits belong in the root handoff.

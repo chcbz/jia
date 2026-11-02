@@ -1,4 +1,8 @@
 package cn.jia.agent.entity;
 
-/** Process-local scheduling hint. No command, task grant, receipt or execution authority. */
-public record NativeConversationWorkAvailable(String tenantId, String clientId, String agentId) { }
+/** Target/lane-only scheduling hint; historical class name, never command or authorization. */
+public record NativeConversationWorkAvailable(String tenantId, String clientId, String agentId, String lane) {
+    public NativeConversationWorkAvailable(String tenantId,String clientId,String agentId) {
+        this(tenantId,clientId,agentId,"NATIVE_CONVERSATION");
+    }
+}

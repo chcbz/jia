@@ -82,6 +82,7 @@ public interface PersonalWorkspaceExecutionMapper extends BaseMapper<PersonalWor
             @Param("ownerJiacn") String ownerJiacn, @Param("idempotencyKey") String idempotencyKey);
 
     @Select("""
+            <script>
             SELECT * FROM agent_personal_workspace_execution
              WHERE tenant_id=#{tenantId} AND client_id=#{clientId} AND owner_jiacn=#{ownerJiacn}
                AND target_agent_id=#{targetAgentId} AND execution_state='QUEUED'
@@ -94,14 +95,25 @@ public interface PersonalWorkspaceExecutionMapper extends BaseMapper<PersonalWor
                AND OCTET_LENGTH(owner_jiacn)=OCTET_LENGTH(#{ownerJiacn})
                AND CAST(target_agent_id AS BINARY)=CAST(#{targetAgentId} AS BINARY)
                AND OCTET_LENGTH(target_agent_id)=OCTET_LENGTH(#{targetAgentId})
-             ORDER BY created_at ASC, execution_id ASC LIMIT #{limit}
+            <if test='afterCreatedAt != null'>
+               AND (created_at &gt; #{afterCreatedAt} OR (created_at=#{afterCreatedAt}
+                    AND CAST(execution_id AS BINARY) &gt; CAST(#{afterExecutionId} AS BINARY)))
+            </if>
+             ORDER BY created_at ASC, CAST(execution_id AS BINARY) ASC LIMIT #{limit}
+            </script>
             """)
     // File-lane selection precedes LIMIT; NULL retains historical PRIVATE semantics.
     // Task lease and business authorization remain service-owned.
-    java.util.List<PersonalWorkspaceExecutionEntity> listQueuedByTarget(
+    java.util.List<PersonalWorkspaceExecutionEntity> listQueuedByTargetAfter(
             @Param("tenantId") String tenantId, @Param("clientId") String clientId,
             @Param("ownerJiacn") String ownerJiacn, @Param("targetAgentId") String targetAgentId,
+            @Param("afterCreatedAt") Long afterCreatedAt, @Param("afterExecutionId") String afterExecutionId,
             @Param("limit") int limit);
+
+    default java.util.List<PersonalWorkspaceExecutionEntity> listQueuedByTarget(String tenantId, String clientId,
+            String ownerJiacn, String targetAgentId, int limit) {
+        return listQueuedByTargetAfter(tenantId,clientId,ownerJiacn,targetAgentId,null,null,limit);
+    }
 
     @Select("""
             <script>

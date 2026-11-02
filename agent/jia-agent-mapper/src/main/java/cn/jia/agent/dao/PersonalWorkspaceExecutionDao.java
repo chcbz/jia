@@ -29,6 +29,8 @@ public interface PersonalWorkspaceExecutionDao {
             String taskId, String runId);
     PersonalWorkspaceExecutionEntity lockByTaskRun(String tenantId, String clientId, String ownerJiacn,
             String taskId, String runId);
+    List<PersonalWorkspaceExecutionEntity> listQueuedByTargetAfter(String tenantId, String clientId,
+            String ownerJiacn, String targetAgentId, Long afterCreatedAt, String afterExecutionId, int limit);
     List<PersonalWorkspaceExecutionEntity> listQueuedByTarget(String tenantId, String clientId,
             String ownerJiacn, String targetAgentId, int limit);
     List<PersonalWorkspaceExecutionEntity> listQueuedConversationsByTarget(String tenantId,

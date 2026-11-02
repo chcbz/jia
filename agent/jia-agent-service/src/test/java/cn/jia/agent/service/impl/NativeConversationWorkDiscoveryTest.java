@@ -38,6 +38,16 @@ class NativeConversationWorkDiscoveryTest {
         assertDoesNotThrow(()->TransactionSynchronizationManager.getSynchronizations().forEach(TransactionSynchronization::afterCommit));
         verify(events).publishEvent(target);
     }
+    @Test void fileHintUsesSameTransactionAndSharedDistinctLaneQuery() {
+        var file=new NativeConversationWorkAvailable("0","client","agent","WORKSPACE_FILE");
+        when(mapper.pendingFor("0",List.of(target,file))).thenReturn(List.of(target,file));
+        assertEquals(List.of(target,file),service.pendingFor(List.of(target,file,file)));
+        TransactionSynchronizationManager.setActualTransactionActive(true);
+        TransactionSynchronizationManager.initSynchronization();service.afterCommit(file);
+        verifyNoInteractions(events);
+        TransactionSynchronizationManager.getSynchronizations().forEach(TransactionSynchronization::afterCommit);
+        verify(events).publishEvent(file);
+    }
     @Test void rollbackAndNoTransactionNeverAnnounceUncommittedWork(){
         service.afterCommit(target);verifyNoInteractions(events);
         TransactionSynchronizationManager.setActualTransactionActive(true);

@@ -155,6 +155,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
     @org.springframework.beans.factory.annotation.Value("${jia.agent.conversation-execution.enabled:false}")
     private boolean nativeWorkNotificationsEnabled;
     private final Set<String> nativeWorkNotificationSessions = ConcurrentHashMap.newKeySet();
+    private final Set<String> workspaceFileWorkNotificationSessions = ConcurrentHashMap.newKeySet();
     private TypedDeliberationSessionRegistry typedDeliberationSessions;
     private TypedInspectionSessionRegistry typedInspectionSessions;
     private NativeTextFileSessionRegistry nativeTextFileSessions;
@@ -467,6 +468,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         if (runtimeAuthentication != null) runtimeAuthentication.disconnect(session.getId());
         sessions.remove(session.getId());
         nativeWorkNotificationSessions.remove(session.getId());
+        workspaceFileWorkNotificationSessions.remove(session.getId());
         sessionAgentIds.remove(session.getId());
         successfullyRegisteredAgentIds.remove(session.getId());
         sessionRuntimeInstanceIds.remove(session.getId());
@@ -931,6 +933,8 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             boolean nativeWorkNotifications=nativeWorkNotificationsEnabled
                     && Integer.valueOf(1).equals(payload.get("nativeWorkNotifications"));
             if (nativeWorkNotifications) event.put("nativeWorkNotifications",1);
+            boolean workspaceFileWorkNotifications=Integer.valueOf(1).equals(payload.get("workspaceFileWorkNotifications"));
+            if (workspaceFileWorkNotifications) event.put("workspaceFileWorkNotifications",1);
             event.put("durableStateHealthy", Boolean.TRUE.equals(payload.get("durableStateHealthy")));
             event.put("runtimeCapabilities", runtimeCapabilities.normalizedForReceipt());
             event.put("nativeBountyExecution", nativeBountyExecution.normalizedForReceipt());
@@ -979,6 +983,8 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             sessionReadyCommandTypes.put(session.getId(), readyCommandTypes);
             if (nativeWorkNotifications) nativeWorkNotificationSessions.add(session.getId());
             else nativeWorkNotificationSessions.remove(session.getId());
+            if (workspaceFileWorkNotifications) workspaceFileWorkNotificationSessions.add(session.getId());
+            else workspaceFileWorkNotificationSessions.remove(session.getId());
             sessionNativeBountyExecution.put(session.getId(), nativeBountyExecution);
             sessionNativeProviderCredentialBinding.put(session.getId(), nativeProviderCredentialBinding);
             sessionControlledImageBountyExecution.put(session.getId(), controlledImageBountyExecution);
@@ -3057,26 +3063,29 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
 
     /** Lightweight local subscriptions only; the current persistent fence is checked on send. */
     public List<cn.jia.agent.entity.NativeConversationWorkAvailable> nativeWorkTargets() {
-        return sessions.values().stream().filter(this::nativeWorkSubscribed)
-                .map(session -> new cn.jia.agent.entity.NativeConversationWorkAvailable(
-                        sessionTenantId(session),sessionClientId(session),sessionAgentId(session)))
+        return sessions.values().stream().flatMap(session -> java.util.stream.Stream.of("NATIVE_CONVERSATION","WORKSPACE_FILE")
+                .filter(lane -> nativeWorkSubscribed(session,lane))
+                .map(lane -> new cn.jia.agent.entity.NativeConversationWorkAvailable(
+                        sessionTenantId(session),sessionClientId(session),sessionAgentId(session),lane)))
                 .distinct().toList();
     }
-    private boolean nativeWorkSubscribed(WebSocketSession session) {
-        return session!=null && session.isOpen() && nativeWorkNotificationSessions.contains(session.getId())
+    private boolean nativeWorkSubscribed(WebSocketSession session,String lane) {
+        var subscribers="WORKSPACE_FILE".equals(lane)?workspaceFileWorkNotificationSessions:
+                "NATIVE_CONVERSATION".equals(lane)?nativeWorkNotificationSessions:Set.<String>of();
+        return session!=null && session.isOpen() && subscribers.contains(session.getId())
                 && successfullyRegisteredAgentIds(session.getId()).contains(sessionAgentId(session))
                 && Boolean.TRUE.equals(sessionDurableStateHealthy.get(session.getId()));
     }
     public void notifyNativeWork(cn.jia.agent.entity.NativeConversationWorkAvailable target) {
         for (var session:sessions.values()) {
-            if (!nativeWorkSubscribed(session) || !target.tenantId().equals(sessionTenantId(session))
+            if (!nativeWorkSubscribed(session,target.lane()) || !target.tenantId().equals(sessionTenantId(session))
                     || !target.clientId().equals(sessionClientId(session)) || !target.agentId().equals(sessionAgentId(session))) continue;
             synchronized (session) {
-                if (!nativeWorkSubscribed(session) || !typedDeliberationSessionCurrent(session,target.agentId())) continue;
+                if (!nativeWorkSubscribed(session,target.lane()) || !typedDeliberationSessionCurrent(session,target.agentId())) continue;
                 var proof=sessionProof(session);
                 if (proof==null) continue;
                 sendEvent(session,"runtime.work.available",Map.of(
-                        "notificationVersion",1,"lane","NATIVE_CONVERSATION","agentId",target.agentId(),
+                        "notificationVersion",1,"lane",target.lane(),"agentId",target.agentId(),
                         "tenantId",target.tenantId(),"clientId",target.clientId(),
                         "installationId",proof.installationId(),"hostId",proof.hostId(),
                         "runtimeInstanceId",proof.scope().runtimeInstanceId(),"sessionGeneration",proof.sessionGeneration()));

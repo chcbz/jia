@@ -86,6 +86,12 @@ public class PersonalWorkspaceExecutionDaoImpl implements PersonalWorkspaceExecu
         return executions.listQueuedByTarget(tenantId, clientId, ownerJiacn, targetAgentId,
                 Math.max(1, Math.min(limit, 16)));
     }
+    @Override public List<PersonalWorkspaceExecutionEntity> listQueuedByTargetAfter(String tenantId, String clientId,
+            String ownerJiacn, String targetAgentId, Long afterCreatedAt, String afterExecutionId, int limit) {
+        scope(tenantId, clientId, ownerJiacn); id(targetAgentId, "targetAgentId");
+        return executions.listQueuedByTargetAfter(tenantId,clientId,ownerJiacn,targetAgentId,
+                afterCreatedAt,afterExecutionId,Math.max(1,Math.min(limit,16)));
+    }
     @Override public List<PersonalWorkspaceExecutionEntity> listQueuedConversationsByTarget(
             String tenantId, String clientId, String ownerJiacn, String targetAgentId,
             Long afterCreatedAt, String afterExecutionId, int limit) {

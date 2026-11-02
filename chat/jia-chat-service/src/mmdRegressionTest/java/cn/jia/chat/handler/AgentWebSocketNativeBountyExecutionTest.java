@@ -64,6 +64,63 @@ class AgentWebSocketNativeBountyExecutionTest {
         org.mockito.Mockito.verify(current).sendMessage(any()); // no second send
     }
 
+    @Test @SuppressWarnings("unchecked")
+    void successfulRegistrationAcknowledgesFileCapabilityIndependentlyAndReplacementCanRemoveIt() throws Exception {
+        var auth=mock(AgentRuntimeAuthenticationService.class);stubFence(auth);
+        var service=mock(AgentService.class);
+        var provider=(ObjectProvider<AgentService>)mock(ObjectProvider.class);
+        when(provider.getIfAvailable()).thenReturn(service);
+        when(service.register(any())).thenReturn(new AgentRegisterResultDTO("agent-a","unused",AgentConstants.STATUS_ONLINE));
+        when(auth.bind(anyString(),any(),any())).thenReturn(new AgentRuntimeAuthenticationService.Receipt(
+                "native-runtime-v1","0","client-a","owner-a","agent-a","runtime-current","rti_"+"1".repeat(32),"host-a",1,true));
+        var handler=new AgentWebSocketHandler(mock(ChatClient.class),provider,mock(ChatMessageDao.class),new ChatConversationEventBroker());
+        handler.setRuntimeAuthentication(auth);
+        var current=session("current","runtime-current");
+        bind(handler,current,NativeBountyExecutionDeclaration.parse(NativeBountyExecutionDeclarationTest.candidate(true)));
+        var registration=new java.util.HashMap<String,Object>();
+        registration.put("schemaVersion",1);registration.put("messageId","register-file-1");registration.put("agentId","agent-a");
+        registration.put("runtimeInstanceId","runtime-current");registration.put("installationId","rti_"+"1".repeat(32));
+        registration.put("hostId","host-a");registration.put("sessionGeneration",1L);
+        registration.put("durableStateHealthy",true);registration.put("readyCommandTypes",java.util.List.of());
+        registration.put("nativeWorkNotifications",1);registration.put("workspaceFileWorkNotifications",1);
+        var json=new tools.jackson.databind.ObjectMapper();
+        handler.handleTextMessage(current,new TextMessage(json.writeValueAsString(cn.jia.agent.common.AgentMessageWire.event("agent.register",registration,null))));
+        var sent=org.mockito.ArgumentCaptor.forClass(TextMessage.class);
+        org.mockito.Mockito.verify(current,org.mockito.Mockito.atLeastOnce()).sendMessage(sent.capture());
+        var receipt=sent.getAllValues().stream().map(message->json.readTree(message.getPayload()))
+                .filter(value->"agent.registered".equals(value.get("messageType").asString())).findFirst().orElseThrow();
+        assertEquals("agent.registered",receipt.get("messageType").asString());
+        assertEquals(1,receipt.get("data").get("workspaceFileWorkNotifications").asInt());
+        assertEquals(false,receipt.get("data").has("nativeWorkNotifications")); // conversation feature is off
+        assertEquals(java.util.List.of(new cn.jia.agent.entity.NativeConversationWorkAvailable("0","client-a","agent-a","WORKSPACE_FILE")),handler.nativeWorkTargets());
+        registration.remove("workspaceFileWorkNotifications");registration.put("messageId","register-file-2");
+        handler.handleTextMessage(current,new TextMessage(json.writeValueAsString(cn.jia.agent.common.AgentMessageWire.event("agent.register",registration,null))));
+        assertEquals(java.util.List.of(),handler.nativeWorkTargets());
+    }
+
+    @Test @SuppressWarnings("unchecked")
+    void fileLaneRequiresItsOwnSubscriptionAndUsesSameCurrentFence() throws Exception {
+        var auth=mock(AgentRuntimeAuthenticationService.class);var handler=handler(auth);
+        var current=session("current","runtime-current");
+        bind(handler,current,NativeBountyExecutionDeclaration.parse(NativeBountyExecutionDeclarationTest.candidate(true)));
+        ((Set<String>)field(handler,"nativeWorkNotificationSessions")).add("current");
+        var file=new cn.jia.agent.entity.NativeConversationWorkAvailable("0","client-a","agent-a","WORKSPACE_FILE");
+        handler.notifyNativeWork(file);
+        org.mockito.Mockito.verify(current,org.mockito.Mockito.never()).sendMessage(any());
+        ((Set<String>)field(handler,"workspaceFileWorkNotificationSessions")).add("current");
+        assertEquals(2,handler.nativeWorkTargets().size());
+        when(auth.isCurrentBinding(anyString(),anyString(),anyString(),anyString(),anyString(),anyString())).thenReturn(true);
+        handler.notifyNativeWork(file);
+        var sent=org.mockito.ArgumentCaptor.forClass(TextMessage.class);
+        org.mockito.Mockito.verify(current).sendMessage(sent.capture());
+        var json=new tools.jackson.databind.ObjectMapper();
+        var wire=json.readTree(sent.getValue().getPayload());
+        var fixture=json.readTree(new org.springframework.core.io.ClassPathResource("contracts/workspace-file-work-hint-v1.json").getInputStream());
+        assertEquals(fixture.get("data"),wire.get("data"));
+        handler.afterConnectionClosed(current,CloseStatus.NORMAL);
+        assertEquals(java.util.List.of(),handler.nativeWorkTargets());
+    }
+
     @Test
     void exactCurrentAuthenticatedSessionIsReadyAndOldDisconnectCannotClearReplacement() throws Exception {
         AgentRuntimeAuthenticationService auth=mock(AgentRuntimeAuthenticationService.class);

@@ -4,7 +4,6 @@ import cn.jia.agent.entity.NativeConversationWorkAvailable;
 import cn.jia.agent.service.NativeConversationWorkDiscovery;
 import cn.jia.chat.handler.AgentWebSocketHandler;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.SmartLifecycle;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
@@ -19,7 +18,6 @@ import java.util.concurrent.TimeUnit;
 /** One recovery scan per WS node, restricted to its current subscriptions. No queue authority. */
 @Slf4j
 @Component
-@ConditionalOnProperty(name="jia.agent.conversation-execution.enabled",havingValue="true")
 public final class NativeConversationWorkNotifier implements SmartLifecycle,AutoCloseable {
     private final AgentWebSocketHandler sockets;
     private final NativeConversationWorkDiscovery discovery;

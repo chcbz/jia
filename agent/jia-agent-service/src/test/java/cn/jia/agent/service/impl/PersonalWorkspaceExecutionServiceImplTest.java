@@ -295,6 +295,37 @@ class PersonalWorkspaceExecutionServiceImplTest {
     }
 
     @Test
+    void ineligibleFullPagesDoNotHideLaterAuthorizedFileCommands() {
+        var items=mock(AgentTaskWorkItemDao.class);
+        service.setTaskExecutionDependencies(mock(WorkspaceConversationAccessService.class),items,mock(AgentWorkItemLeaseService.class));
+        when(items.findByTaskAndWorkItemId("0","client-a","owner-a","pwe_task_1","work-1"))
+                .thenReturn(taskWorkItem("running",9L,"agent-a","lease",1L));
+        var expired=new java.util.ArrayList<PersonalWorkspaceExecutionEntity>();
+        for(int i=0;i<16;i++) expired.add(execution("expired-"+i,"agent-a","QUEUED")
+                .setExecutionMode("TASK").setCreatedAt(100L).setWorkItemId("work-1")
+                .setLeaseToken("lease").setLeaseWorkItemVersion(9L).setLeaseExpiresAt(1L));
+        when(executions.listQueuedByTarget("0","client-a","owner-a","agent-a",16)).thenReturn(expired);
+        var unsupported=new java.util.ArrayList<PersonalWorkspaceExecutionEntity>();
+        for(int i=0;i<16;i++) unsupported.add(execution("unsupported-"+i,"agent-a","QUEUED")
+                .setOutputContentMimeType("application/unsupported").setCreatedAt(200L));
+        when(executions.listQueuedByTargetAfter("0","client-a","owner-a","agent-a",100L,"expired-15",16)).thenReturn(unsupported);
+        var valid=execution("valid","agent-a","QUEUED").setCreatedAt(300L);
+        when(executions.listQueuedByTargetAfter("0","client-a","owner-a","agent-a",200L,"unsupported-15",16)).thenReturn(List.of(valid));
+        assertEquals(1,service.runtimeQueuedCommands(RUNTIME,16).size());
+        verify(executions,never()).update(any());
+    }
+
+    @Test
+    void completelyIneligibleQueueStopsAtExhaustionWithoutReplayingOrClaiming() {
+        var expired=execution("expired","agent-a","QUEUED").setExecutionMode("TASK").setCreatedAt(100L);
+        when(executions.listQueuedByTarget("0","client-a","owner-a","agent-a",1)).thenReturn(List.of(expired));
+        when(executions.listQueuedByTargetAfter("0","client-a","owner-a","agent-a",100L,"expired",1)).thenReturn(List.of());
+        assertEquals(List.of(),service.runtimeQueuedCommands(RUNTIME,1));
+        verify(executions).listQueuedByTargetAfter("0","client-a","owner-a","agent-a",100L,"expired",1);
+        verify(executions,never()).update(any());
+    }
+
+    @Test
     void durableQueueReturnsOnlyExactQueuedAgentItemsWithStrictRuntimePayload() throws Exception {
         PersonalWorkspaceExecutionEntity accepted = execution("pwe_1", "agent-a", "QUEUED");
         PersonalWorkspaceExecutionEntity wrongAgent = execution("pwe_2", "agent-b", "QUEUED");
@@ -398,12 +429,18 @@ class PersonalWorkspaceExecutionServiceImplTest {
             return null;
         }).when(executions).insert(any(PersonalWorkspaceExecutionEntity.class));
 
+        var hints=mock(cn.jia.agent.service.NativeConversationWorkDiscovery.class);
+        service.setNativeWorkDiscovery(hints);
         var created = service.create(new PersonalWorkspaceExecutionService.OwnerScope(
                         "0", "client-a", "owner-a"),
                 new PersonalWorkspaceExecutionService.CreateCommand(null, "agent-a", null,
                         "用全部资料生成 Word", PersonalWorkspaceExecutionProperties.DOCX, selections),
                 "native-inputs-key");
 
+        var order=org.mockito.Mockito.inOrder(executions,hints);
+        order.verify(executions).insert(any(PersonalWorkspaceExecutionEntity.class));
+        order.verify(executions,times(INPUT_MIME_TYPES.size())).insertInput(any(PersonalWorkspaceExecutionInputEntity.class));
+        order.verify(hints).afterCommit(new cn.jia.agent.entity.NativeConversationWorkAvailable("0","client-a","agent-a","WORKSPACE_FILE"));
         assertEquals(PersonalWorkspaceExecutionProperties.DOCX, created.outputContentMimeType());
         var captured = ArgumentCaptor.forClass(PersonalWorkspaceExecutionInputEntity.class);
         verify(executions, times(INPUT_MIME_TYPES.size())).insertInput(captured.capture());

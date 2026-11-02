@@ -44,6 +44,20 @@ class NativeConversationWorkDiscoveryMySqlTest extends SkillManagementMySqlFixtu
         assertEquals(List.of(),mapper.pendingFor("empty-tenant",targets));
     }
 
+    @Test void sharedScanSeparatesNegotiatedLanesAndIgnoresOtherModesAndUnsubscribedTargets() {
+        row("tenant","client","both","QUEUED",5,null);
+        for(String mode:List.of("PRIVATE","TASK","FUTURE_MODE"))
+            jdbc.update("INSERT INTO agent_personal_workspace_execution VALUES ('tenant','client',?,?, 'QUEUED',1,NULL)",mode.equals("FUTURE_MODE")?"unsupported":"both",mode);
+        jdbc.update("INSERT INTO agent_personal_workspace_execution VALUES ('tenant','client','historical',NULL,'QUEUED',1,NULL)");
+        var nativeTarget=new NativeConversationWorkAvailable("tenant","client","both");
+        var fileTarget=new NativeConversationWorkAvailable("tenant","client","both","WORKSPACE_FILE");
+        var historical=new NativeConversationWorkAvailable("tenant","client","historical","WORKSPACE_FILE");
+        var unsupported=new NativeConversationWorkAvailable("tenant","client","unsupported","WORKSPACE_FILE");
+        assertEquals(Set.of(nativeTarget,fileTarget,historical),new HashSet<>(mapper.pendingFor("tenant",List.of(nativeTarget,fileTarget,historical,unsupported))));
+        assertEquals(List.of(fileTarget),mapper.pendingFor("tenant",List.of(fileTarget)));
+        assertEquals(List.of(nativeTarget),mapper.pendingFor("tenant",List.of(nativeTarget)));
+    }
+
     @Test void coveringIndexAvoidsScanningTerminalHistoryForCompensation() throws Exception {
         // Owned synthetic fixture; representative cardinality, not a production performance claim.
         jdbc.execute("INSERT INTO agent_personal_workspace_execution SELECT 'tenant','client',CONCAT('history-',a.n,b.n,c.n,d.n),'CONVERSATION','COMPLETED',5,NULL FROM (SELECT 0 n UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) a CROSS JOIN (SELECT 0 n UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) b CROSS JOIN (SELECT 0 n UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) c CROSS JOIN (SELECT 0 n UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) d");
@@ -62,6 +76,16 @@ class NativeConversationWorkDiscoveryMySqlTest extends SkillManagementMySqlFixtu
         assertTrue(after.stream().anyMatch(r->"idx_pwex_native_work".equals(r.get("key"))));
         assertTrue(after.stream().noneMatch(r->"ALL".equals(r.get("type"))));
         assertEquals(List.of(target),mapper.pendingFor("tenant",List.of(target)));
-        System.out.println("NATIVE_WORK_QUERY_PLAN syntheticHistory=10000 before="+before+" after="+after);
+        var file=new NativeConversationWorkAvailable("tenant","client","agent","WORKSPACE_FILE");
+        jdbc.update("INSERT INTO agent_personal_workspace_execution VALUES ('tenant','client','agent','PRIVATE','QUEUED',1,NULL)");
+        var mixedParams=Map.of("tenantId","tenant","targets",List.of(target,file));
+        var mixed=sqlFactory.getConfiguration().getMappedStatement(NativeConversationWorkMapper.class.getName()+".pendingFor").getBoundSql(mixedParams);
+        Object[] mixedValues=mixed.getParameterMappings().stream().map(p->mixed.hasAdditionalParameter(p.getProperty())
+                ? mixed.getAdditionalParameter(p.getProperty()) : sqlFactory.getConfiguration().newMetaObject(mixedParams).getValue(p.getProperty())).toArray();
+        var mixedPlan=jdbc.queryForList("EXPLAIN "+mixed.getSql(),mixedValues);
+        assertTrue(mixedPlan.stream().anyMatch(r->"idx_pwex_native_work".equals(r.get("key"))));
+        assertTrue(mixedPlan.stream().noneMatch(r->"ALL".equals(r.get("type"))));
+        assertEquals(Set.of(target,file),new HashSet<>(mapper.pendingFor("tenant",List.of(target,file))));
+        System.out.println("NATIVE_WORK_QUERY_PLAN syntheticHistory=10000 before="+before+" after="+after+" mixed="+mixedPlan);
     }
 }

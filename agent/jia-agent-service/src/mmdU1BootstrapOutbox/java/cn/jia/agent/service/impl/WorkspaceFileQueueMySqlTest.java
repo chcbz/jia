@@ -5,7 +5,6 @@ import cn.jia.agent.mapper.PersonalWorkspaceExecutionMapper;
 import cn.jia.agent.skill.SkillManagementMySqlFixture;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.extension.spring.MybatisSqlSessionFactoryBean;
-import org.apache.ibatis.annotations.Select;
 import org.mybatis.spring.SqlSessionTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.junit.jupiter.api.*;
@@ -18,6 +17,7 @@ class WorkspaceFileQueueMySqlTest extends SkillManagementMySqlFixture {
     private String database;
     private JdbcTemplate jdbc;
     private PersonalWorkspaceExecutionMapper mapper;
+    private org.apache.ibatis.session.SqlSessionFactory sqlFactory;
 
     @BeforeEach void setup() throws Exception {
         database="cyf_file_queue_"+UUID.randomUUID().toString().replace("-", "");
@@ -27,7 +27,8 @@ class WorkspaceFileQueueMySqlTest extends SkillManagementMySqlFixture {
         var config=new MybatisConfiguration();config.setMapUnderscoreToCamelCase(true);
         config.addMapper(PersonalWorkspaceExecutionMapper.class);
         var factory=new MybatisSqlSessionFactoryBean();factory.setDataSource(source);factory.setConfiguration(config);
-        mapper=new SqlSessionTemplate(Objects.requireNonNull(factory.getObject())).getMapper(PersonalWorkspaceExecutionMapper.class);
+        sqlFactory=Objects.requireNonNull(factory.getObject());
+        mapper=new SqlSessionTemplate(sqlFactory).getMapper(PersonalWorkspaceExecutionMapper.class);
     }
     @AfterEach void cleanup() {
         if(database!=null && database.matches("cyf_file_queue_[0-9a-f]{32}")) admin.execute("DROP DATABASE `"+database+"`");
@@ -45,13 +46,16 @@ class WorkspaceFileQueueMySqlTest extends SkillManagementMySqlFixture {
         row("private","PRIVATE","QUEUED",100);row("task","TASK","QUEUED",101);
         row("historical-private",null,"QUEUED",102);
         // Reproduce the former real SQL (not a mocked DAO): LIMIT picked only conversations.
-        String fixed=String.join("\n",PersonalWorkspaceExecutionMapper.class.getMethod("listQueuedByTarget",
-                String.class,String.class,String.class,String.class,int.class).getAnnotation(Select.class).value());
+        var params=new HashMap<String,Object>();
+        params.put("tenantId","0");params.put("clientId","client");params.put("ownerJiacn","owner");
+        params.put("targetAgentId","agent");params.put("limit",16);
+        params.put("afterCreatedAt",null);params.put("afterExecutionId",null);
+        var bound=sqlFactory.getConfiguration().getMappedStatement(PersonalWorkspaceExecutionMapper.class.getName()+".listQueuedByTargetAfter").getBoundSql(params);
+        String fixed=bound.getSql();
         String former=fixed.replace("AND (execution_mode IN ('PRIVATE','TASK') OR execution_mode IS NULL)","");
         assertNotEquals(fixed,former);
-        former=former.replace("#{tenantId}","'0'").replace("#{clientId}","'client'")
-                .replace("#{ownerJiacn}","'owner'").replace("#{targetAgentId}","'agent'").replace("#{limit}","16");
-        var oldPage=jdbc.queryForList(former);
+        Object[] values=bound.getParameterMappings().stream().map(v->params.get(v.getProperty())).toArray();
+        var oldPage=jdbc.queryForList(former,values);
         assertEquals(16,oldPage.size());
         assertTrue(oldPage.stream().allMatch(r->"CONVERSATION".equals(r.get("execution_mode"))));
         assertEquals(List.of("private","task","historical-private"),ids());
@@ -85,4 +89,16 @@ class WorkspaceFileQueueMySqlTest extends SkillManagementMySqlFixture {
         assertEquals(List.of("wanted"),ids());
         assertEquals(List.of(),mapper.listQueuedByTarget("missing","client","owner","agent",16));
     }
+    @Test void keysetContinuesPastUnchangedCandidatesAndUsesBinaryTieBreak() {
+        for(String id:List.of("A","a","a ","b")) row(id,"TASK","QUEUED",100);
+        row("next","PRIVATE","QUEUED",101);
+        assertEquals(List.of("A","a","a ","b","next"),ids());
+        assertEquals(List.of("a ","b"),mapper.listQueuedByTargetAfter("0","client","owner","agent",100L,"a",2)
+                .stream().map(PersonalWorkspaceExecutionEntity::getExecutionId).toList());
+        assertEquals(List.of("next"),mapper.listQueuedByTargetAfter("0","client","owner","agent",100L,"b",16)
+                .stream().map(PersonalWorkspaceExecutionEntity::getExecutionId).toList());
+        assertEquals(List.of(),mapper.listQueuedByTargetAfter("0","client","owner","agent",101L,"next",16));
+        assertEquals(5,ids().size()); // no lease/state mutation to make the page advance
+    }
+
 }

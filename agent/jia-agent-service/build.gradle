@@ -500,6 +500,7 @@ def mmdU1BootstrapOutboxSourceSet = sourceSets.create('mmdU1BootstrapOutbox') {
         include 'cn/jia/agent/service/impl/NativeConversationWorkDiscoveryMySqlTest.java'
         include 'cn/jia/agent/service/impl/AgentTaskEventHeadMySqlTest.java'
         include 'cn/jia/agent/service/impl/WorkspaceFileQueueMySqlTest.java'
+        include 'cn/jia/agent/service/impl/PersonalWorkspaceExecutionServiceImplTest.java'
         // The existing unfiltered recovery slice also covers SSE compensation and its DAO.
         include 'cn/jia/agent/service/impl/AgentTaskEventReplayServiceImplTest.java'
         srcDir '../jia-agent-mapper/src/test/java'
