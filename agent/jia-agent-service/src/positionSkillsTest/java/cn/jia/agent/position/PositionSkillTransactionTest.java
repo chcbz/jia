@@ -74,6 +74,52 @@ class PositionSkillTransactionTest {
         assertThrows(PositionSkillException.class,()->service.withAuthority(scope,g,()->jdbc.update("INSERT INTO test_publication VALUES(2)")));
         assertEquals(1,jdbc.queryForObject("SELECT count(*) FROM test_publication",Integer.class));
     }
+    private Grant skillManager() {
+        grant("SKILL_REVIEW","skills:platform");grant("SKILL_PUBLISH","skills:platform");
+        service.configure(scope,"skills-configure",new Position("skill-management","技能管理",1,"skills:platform",true,List.of(),0),0);
+        var a=service.appoint(scope,"skills-appoint","skill-management","agent1");
+        return new Grant(a.resultId(),1,1,"agent1",1,null,true);
+    }
+    @Test void existingThreePermissionSchemaCanBeUpgradedWithoutLosingGrants() throws Exception {
+        jdbc.execute("ALTER TABLE agent_position_authority DROP CHECK agent_position_authority_chk_1, ADD CONSTRAINT agent_position_authority_chk_1 CHECK(permission_key IN ('MANAGE_POSITIONS','ARCHIVE_WRITE','ARCHIVE_PUBLISH'))");
+        int before=jdbc.queryForObject("SELECT count(*) FROM agent_position_authority",Integer.class);
+        String ddl=new ClassPathResource("db/agent-position-skills-management.sql").getContentAsString(StandardCharsets.UTF_8);
+        for(String sql:ddl.replaceAll("(?m)^--.*$", "").split(";"))if(!sql.isBlank())jdbc.execute(sql);
+        assertEquals(before,jdbc.queryForObject("SELECT count(*) FROM agent_position_authority",Integer.class));
+        var g=skillManager();
+        assertEquals("allowed",service.withSkillManagementAuthority(scope,g,()->"allowed"));
+    }
+    @Test void positionManagerCannotSelfGrantPlatformSkills() {
+        assertThrows(PositionSkillException.class,()->service.configure(scope,"skills-denied",
+                new Position("skill-management","技能管理",1,"skills:platform",true,List.of(),0),0));
+        assertFalse(service.read(scope).state().positions().containsKey("skill-management"));
+    }
+    @Test void skillAuthorizationIsScopedRevocableAndTransactional() {
+        var g=skillManager();
+        jdbc.execute("CREATE TABLE test_skill_publication(id INT PRIMARY KEY)");
+        assertThrows(IllegalStateException.class,()->service.withSkillManagementAuthority(scope,g,()->{
+            jdbc.update("INSERT INTO test_skill_publication VALUES(1)");throw new IllegalStateException();}));
+        assertEquals(0,jdbc.queryForObject("SELECT count(*) FROM test_skill_publication",Integer.class));
+        service.withSkillManagementAuthority(scope,g,()->jdbc.update("INSERT INTO test_skill_publication VALUES(1)"));
+        jdbc.update("DELETE FROM agent_position_authority WHERE permission_key='SKILL_PUBLISH'");
+        assertThrows(PositionSkillException.class,()->service.withSkillManagementAuthority(scope,g,()->"denied"));
+        grant("SKILL_PUBLISH","skills:platform");
+        service.resign(scope,"skills-resign",g.appointmentId());
+        assertThrows(PositionSkillException.class,()->service.withSkillManagementAuthority(scope,g,()->jdbc.update("INSERT INTO test_skill_publication VALUES(2)")));
+        assertEquals(1,jdbc.queryForObject("SELECT count(*) FROM test_skill_publication",Integer.class));
+    }
+    @Test void skillPublicationAndResignationSerializeAtDatabaseRoot()throws Exception {
+        var g=skillManager();
+        var entered=new CountDownLatch(1);var release=new CountDownLatch(1);var revokeStarted=new CountDownLatch(1);
+        try(var pool=Executors.newFixedThreadPool(2)){
+            var publishing=pool.submit(()->service.withSkillManagementAuthority(scope,g,()->{entered.countDown();try{assertTrue(release.await(10,TimeUnit.SECONDS));}catch(InterruptedException e){throw new RuntimeException(e);}return "committed";}));
+            assertTrue(entered.await(10,TimeUnit.SECONDS));
+            var revoking=pool.submit(()->{revokeStarted.countDown();return service.resign(scope,"skills-revoke",g.appointmentId());});
+            assertTrue(revokeStarted.await(10,TimeUnit.SECONDS));assertThrows(TimeoutException.class,()->revoking.get(200,TimeUnit.MILLISECONDS));
+            release.countDown();assertEquals("committed",publishing.get(10,TimeUnit.SECONDS));revoking.get(10,TimeUnit.SECONDS);
+            assertThrows(PositionSkillException.class,()->service.withSkillManagementAuthority(scope,g,()->"forbidden"));
+        }finally{release.countDown();}
+    }
     @Test void publicationAndResignationSerializeAtDatabaseRoot()throws Exception {
         var a=service.appoint(scope,"appoint1","editor","agent1");
         var g=new Grant(a.resultId(),1,1,"agent1",1,"book",false);

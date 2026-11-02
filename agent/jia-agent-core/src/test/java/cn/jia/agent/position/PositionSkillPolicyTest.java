@@ -21,6 +21,26 @@ class PositionSkillPolicyTest {
     private Installation installation(PositionSkillPolicy p, String key) {
         return p.state().installations().values().stream().filter(i -> i.skillKey().equals(key)).findFirst().orElseThrow();
     }
+    @Test void skillManagementIsNotAnArchivePermissionAndResignationRevokesIt() {
+        var p=policy();
+        p.configure(new Position("skill-management","技能管理",1,"skills:platform",true,List.of(),0),0);
+        var a=p.appoint("skill-management","agent1",1);
+        p.authorizeSkillManagement(a.id(),1,1,"agent1",1,true);
+        assertThrows(PositionSkillException.class,()->p.authorize(a.id(),1,1,"agent1",1,"book",true));
+        assertThrows(PositionSkillException.class,()->p.authorizeSkillManagement(a.id(),1,1,"agent2",1,true));
+        assertThrows(PositionSkillException.class,()->p.authorizeSkillManagement(a.id(),1,1,"agent1",2,true));
+        assertThrows(PositionSkillException.class,()->p.authorizeSkillManagement(a.id(),1,2,"agent1",1,true));
+        p.resign(a.id());
+        assertThrows(PositionSkillException.class,()->p.authorizeSkillManagement(a.id(),1,1,"agent1",1,true));
+    }
+    @Test void archiveAppointmentAndReviewOnlyAppointmentCannotPublishSkills() {
+        var p=policy();var archive=p.appoint("editor","agent1",1);
+        assertThrows(PositionSkillException.class,()->p.authorizeSkillManagement(archive.id(),1,1,"agent1",1,true));
+        p.configure(new Position("skill-review","技能审核",1,"skills:platform",false,List.of(),0),0);
+        var review=p.appoint("skill-review","agent1",1);
+        p.authorizeSkillManagement(review.id(),1,1,"agent1",1,false);
+        assertThrows(PositionSkillException.class,()->p.authorizeSkillManagement(review.id(),1,1,"agent1",1,true));
+    }
     @Test void exactlyTwoTypes() { assertEquals(List.of("POSITION", "GENERAL"), Arrays.stream(SkillType.values()).map(Enum::name).toList()); }
     @Test void appointmentSchedulesButNeverInventsInstallationSuccess() {
         var p = policy(); p.appoint("editor", "agent1", 1);

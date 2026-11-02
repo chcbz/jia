@@ -23,26 +23,38 @@ class SkillPackagePublicationControllerTest {
         return """
             {"productId":"product","productVersionId":"target","name":"Images","description":"images",
              "skillKey":"image-generate","skillVersion":"1.3.0","priceMicro":"5000000","deploymentRestriction":"NONE",
-             "approvedPermissionsManifest":"[]","packageSha256":"%s","manifestSha256":null,"expectedProductVersion":"2"%s}
+             "approvedPermissionsManifest":"[]","packageSha256":"%s","manifestSha256":null,"expectedProductVersion":"2",
+             "positionAuthority":{"appointmentId":"appointment","appointmentRevision":"1","positionRevision":"2","agentId":"wuyong","bindingId":"7"}%s}
             """.formatted("a".repeat(64),extra);
     }
-    @Test void coveredSourceIsExplicitOptionalAndOnlyAdminCanPublish() throws Exception {
+    @Test void coveredSourceAndPositionGrantAreForwardedWithoutAdminRole() throws Exception {
         var service=mock(SkillPackagePublicationService.class);var controller=new SkillPackagePublicationController(service);
         var request=new MockHttpServletRequest("POST","/agent/skill-maintenance/product-versions");
         var file=new MockMultipartFile("package","skill.zip","application/zip",new byte[]{1});
-        controller.publish(actor(true),request,metadata(",\"coveredUpgradeFromProductVersionId\":\"source\""),file);
-        verify(service).publish(any(),eq(true),argThat(c->"source".equals(c.coveredUpgradeFromProductVersionId())),any());
-        controller.publish(actor(true),request,metadata(""),file);
-        verify(service).publish(any(),eq(true),argThat(c->c.coveredUpgradeFromProductVersionId()==null),any());
-        assertEquals(403,assertThrows(SkillMarketplaceException.class,()->controller.publish(actor(false),request,metadata(""),file)).status());
+        controller.publish(actor(false),request,metadata(",\"coveredUpgradeFromProductVersionId\":\"source\""),file);
+        verify(service).publish(any(),argThat(g->g.agentId().equals("wuyong")&&g.bindingId()==7&&g.publish()),argThat(c->"source".equals(c.coveredUpgradeFromProductVersionId())),any());
+        controller.publish(actor(false),request,metadata(""),file);
+        verify(service).publish(any(),argThat(g->g.agentId().equals("wuyong")&&g.bindingId()==7&&g.publish()),argThat(c->c.coveredUpgradeFromProductVersionId()==null),any());
+
         verifyNoMoreInteractions(service);
+    }
+    @Test void adminRoleDoesNotReplaceRequiredAppointment() {
+        var service=mock(SkillPackagePublicationService.class);var controller=new SkillPackagePublicationController(service);
+        var request=new MockHttpServletRequest("POST","/agent/skill-maintenance/product-versions");
+        var metadata=metadata("").replace("\"positionAuthority\":{", "\"legacyGrant\":{");
+        assertThrows(IllegalArgumentException.class,()->controller.publish(actor(true),request,metadata,new MockMultipartFile("package",new byte[]{1})));
+        verifyNoInteractions(service);
+    }
+    @Test void positionDenialKeepsForbiddenStatus() {
+        var controller=new SkillPackagePublicationController(mock(SkillPackagePublicationService.class));
+        assertEquals(403,controller.failure(new cn.jia.agent.position.PositionSkillException(403,"POSITION_AUTHORITY_REVOKED")).getStatusCode().value());
     }
     @Test void coveredSourceDoesNotCoerceNumericOrUnknownPolicyInput() {
         var service=mock(SkillPackagePublicationService.class);var controller=new SkillPackagePublicationController(service);
         var request=new MockHttpServletRequest("POST","/agent/skill-maintenance/product-versions");
         var file=new MockMultipartFile("package",new byte[]{1});
-        assertThrows(IllegalArgumentException.class,()->controller.publish(actor(true),request,metadata(",\"coveredUpgradeFromProductVersionId\":123"),file));
-        assertThrows(IllegalArgumentException.class,()->controller.publish(actor(true),request,metadata(",\"policy\":\"PAID\""),file));
+        assertThrows(IllegalArgumentException.class,()->controller.publish(actor(false),request,metadata(",\"coveredUpgradeFromProductVersionId\":123"),file));
+        assertThrows(IllegalArgumentException.class,()->controller.publish(actor(false),request,metadata(",\"policy\":\"PAID\""),file));
         verifyNoInteractions(service);
     }
 }

@@ -7,6 +7,7 @@ import static cn.jia.agent.position.PositionSkillException.require;
 
 /** Pure lifecycle rules. Caller serializes persistence and authorization; no transport success is inferred. */
 public final class PositionSkillPolicy {
+    public static final String PLATFORM_SKILLS = "skills:platform";
     private final Map<String, Skill> skills;
     private final Map<String, Position> positions;
     private final Map<String, Appointment> appointments;
@@ -30,7 +31,7 @@ public final class PositionSkillPolicy {
         require(definition != null, 400, "POSITION_INVALID"); key(definition.id());
         require(definition.title() != null && !definition.title().isBlank() && definition.title().length() <= 200
                 && definition.capacity() > 0 && definition.resource() != null
-                && definition.resource().matches("archive:(public|work:[A-Za-z0-9][A-Za-z0-9._:-]{0,99})"), 400, "POSITION_INVALID");
+                && (PLATFORM_SKILLS.equals(definition.resource()) || definition.resource().matches("archive:(public|work:[A-Za-z0-9][A-Za-z0-9._:-]{0,99})")), 400, "POSITION_INVALID");
         require(new HashSet<>(definition.skillKeys()).size() == definition.skillKeys().size()
                 && definition.skillKeys().stream().allMatch(skills::containsKey), 400, "POSITION_SKILL_UNKNOWN");
         var old = positions.get(definition.id());
@@ -118,6 +119,15 @@ public final class PositionSkillPolicy {
         var p = positions.get(a.positionId());
         require(p != null && p.revision() == positionRevision
                 && (p.resource().equals("archive:public") || p.resource().equals("archive:work:" + workId))
+                && (!publish || p.allowPublish()), 403, "POSITION_RESOURCE_FORBIDDEN");
+    }
+    public void authorizeSkillManagement(String appointmentId, long appointmentRevision, long positionRevision,
+            String agentId, long bindingId, boolean publish) {
+        var a = appointments.get(appointmentId);
+        require(a != null && a.active() && a.revision() == appointmentRevision && a.agentId().equals(agentId)
+                && a.bindingId() == bindingId, 403, "POSITION_AUTHORITY_REVOKED");
+        var p = positions.get(a.positionId());
+        require(p != null && p.revision() == positionRevision && PLATFORM_SKILLS.equals(p.resource())
                 && (!publish || p.allowPublish()), 403, "POSITION_RESOURCE_FORBIDDEN");
     }
     private void ensure(Appointment a, Skill s) {

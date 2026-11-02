@@ -90,6 +90,23 @@ public class PositionSkillService implements PositionAuthority {
             return commit.get(); // The callback and revoke share the same REQUIRED DB transaction/root lock.
         });
     }
+    @Override public <T>T withSkillManagementAuthority(Scope scope,Grant grant,Supplier<T> commit) {
+        scope(scope);
+        require(grant!=null && grant.workId()==null,403,"POSITION_AUTHORITY_REQUIRED");
+        PositionSkillPolicy.key(grant.agentId());
+        return tx.execute(status->{
+            // Same order as appointment/native execution: binding/identity, then position root.
+            identities.lockActiveCanonicalAgentIdsInScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),List.of(grant.agentId()));
+            var identity=identities.requireRegistrationIdentityInScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),grant.agentId());
+            require(grant.agentId().equals(identity.getCanonicalAgentId()) && Objects.equals(identity.getBindingId(),grant.bindingId()),
+                    403,"POSITION_BINDING_CHANGED");
+            var row=store.lock(scope,encode(PositionSkillState.empty()));
+            new PositionSkillPolicy(decode(row.json()),PositionSkillService::id).authorizeSkillManagement(
+                    grant.appointmentId(),grant.appointmentRevision(),grant.positionRevision(),grant.agentId(),grant.bindingId(),grant.publish());
+            authority(scope,PositionSkillPolicy.PLATFORM_SKILLS,grant.publish());
+            return commit.get();
+        });
+    }
     /** Read-only omission check inside the caller's transaction. A denied pending job must not mark
      * the native poll transaction rollback-only; callback mutations still use withAuthority. */
     public boolean authorityAvailable(Scope scope,Grant grant){
@@ -139,6 +156,11 @@ public class PositionSkillService implements PositionAuthority {
         });
     }
     private void authority(Scope scope,String resource,boolean publish) {
+        if(PositionSkillPolicy.PLATFORM_SKILLS.equals(resource)) {
+            require(store.authorized(scope,"SKILL_REVIEW",resource),403,"POSITION_RESOURCE_FORBIDDEN");
+            if(publish)require(store.authorized(scope,"SKILL_PUBLISH",resource),403,"POSITION_PUBLISH_FORBIDDEN");
+            return;
+        }
         require(store.authorized(scope,"ARCHIVE_WRITE",resource),403,"POSITION_RESOURCE_FORBIDDEN");
         if(publish)require(store.authorized(scope,"ARCHIVE_PUBLISH",resource),403,"POSITION_PUBLISH_FORBIDDEN");
     }

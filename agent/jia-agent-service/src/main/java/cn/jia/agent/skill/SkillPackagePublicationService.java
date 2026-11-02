@@ -1,14 +1,14 @@
 package cn.jia.agent.skill;
 
-import cn.jia.agent.hosting.HostingRentHttp;
+import cn.jia.agent.service.PositionAuthority;
+import cn.jia.agent.service.PositionAuthority.Scope;
+import cn.jia.agent.service.PositionAuthority.Grant;
 import cn.jia.economy.config.skillseed.PlatformSkillPackageCatalog;
 import cn.jia.economy.config.skillseed.PlatformSkillPackageCatalog.*;
 import cn.jia.economy.entity.skill.*;
 import cn.jia.economy.mapper.EconomySkillMarketplaceMapper;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.PlatformTransactionManager;
-import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
@@ -24,13 +24,14 @@ public final class SkillPackagePublicationService {
             String manifestSha256,String disposition,String coveredUpgradeFromProductVersionId) { }
     private final EconomySkillMarketplaceMapper market;
     private final ObjectProvider<SkillPackages> packages;
-    private final TransactionTemplate transactions;
-    public SkillPackagePublicationService(EconomySkillMarketplaceMapper market,ObjectProvider<SkillPackages> packages,PlatformTransactionManager manager) {
-        this.market=Objects.requireNonNull(market);this.packages=Objects.requireNonNull(packages);this.transactions=new TransactionTemplate(Objects.requireNonNull(manager));
+    private final PositionAuthority positions;
+    public SkillPackagePublicationService(EconomySkillMarketplaceMapper market,ObjectProvider<SkillPackages> packages,PositionAuthority positions) {
+        this.positions=Objects.requireNonNull(positions);this.market=Objects.requireNonNull(market);this.packages=Objects.requireNonNull(packages);
     }
-    public Receipt publish(HostingRentHttp.Actor actor,boolean platformAdmin,Publish command,byte[] archive) {
-        require(actor!=null&&platformAdmin,403,"SKILL_PUBLICATION_FORBIDDEN");
+    public Receipt publish(Scope actor,Grant grant,Publish command,byte[] archive) {
+        require(actor!=null&&grant!=null&&grant.publish(),403,"SKILL_PUBLICATION_FORBIDDEN");
         require(!TransactionSynchronizationManager.isActualTransactionActive(),503,"SKILL_PACKAGE_PREPARE_IN_TRANSACTION");
+        positions.withSkillManagementAuthority(actor,grant,()->null);
         validate(command,archive);
         byte[] digest=SkillPackageStore.sha256(archive);
         require(command.packageSha256().equals(HexFormat.of().formatHex(digest)),409,"SKILL_PACKAGE_CHANGED");
@@ -40,10 +41,10 @@ public final class SkillPackagePublicationService {
         var manifest=store.manifest(prepared);
         require(Objects.equals(command.manifestSha256(),manifest==null?null:manifest.manifestSha256()),409,"SKILL_MANIFEST_CHANGED");
         store.publish(prepared); // immutable bytes first; failed DB transaction can leave only an unauthorized object.
-        try{return transactions.execute(status->persist(actor,command,digest,permissions,archive.length));}
+        try{return positions.withSkillManagementAuthority(actor,grant,()->persist(actor,command,digest,permissions,archive.length));}
         catch(org.springframework.dao.DuplicateKeyException race){throw new SkillMarketplaceException(409,"SKILL_PRODUCT_CHANGED");}
     }
-    private Receipt persist(HostingRentHttp.Actor a,Publish c,byte[] digest,byte[] permissions,long byteLength) {
+    private Receipt persist(Scope a,Publish c,byte[] digest,byte[] permissions,long byteLength) {
         var product=market.selectProductForUpdate(a.tenantId(),a.clientId(),c.productId());long now=System.currentTimeMillis();
         if(product==null){require(c.expectedProductVersion()==0,409,"SKILL_PRODUCT_CHANGED");product=new SkillProductEntity().setProductId(c.productId()).setSellerType(PlatformSkillPackageCatalog.SELLER_TYPE).setSellerId(PlatformSkillPackageCatalog.SELLER_ID).setCreatorAgentId(null).setName(c.name()).setDescription(c.description()).setStatus("DRAFT").setCurrentProductVersionId(null).setVersion(1L).setTenantId(a.tenantId()).setClientId(a.clientId()).setCreateTime(now).setUpdateTime(now);one(market.insertProduct(product));}
         require(a.tenantId().equals(product.getTenantId())&&a.clientId().equals(product.getClientId())&&c.productId().equals(product.getProductId())&&PlatformSkillPackageCatalog.SELLER_TYPE.equals(product.getSellerType())&&PlatformSkillPackageCatalog.SELLER_ID.equals(product.getSellerId())&&product.getCreatorAgentId()==null&&c.name().equals(product.getName())&&c.description().equals(product.getDescription())&&Set.of("DRAFT","PUBLISHED").contains(product.getStatus()),409,"SKILL_PRODUCT_CHANGED");
@@ -55,7 +56,7 @@ public final class SkillPackagePublicationService {
         version.setApprovedPermissionsManifest(c.approvedPermissionsManifest()).setApprovedPermissionsSha256(permissions).setDeploymentRestriction(c.deploymentRestriction()).setReviewStatus("APPROVED").setTenantId(a.tenantId()).setClientId(a.clientId()).setCreateTime(now);
         one(market.insertProductVersion(version));long baseVersion=product.getVersion();one(market.publishProductVersion(a.tenantId(),a.clientId(),c.productId(),c.productVersionId(),baseVersion,now));coverUpgrade(a,c,version);return receipt(c,baseVersion+1,"PUBLISHED");
     }
-    private void coverUpgrade(HostingRentHttp.Actor actor,Publish command,SkillProductVersionEntity target) {
+    private void coverUpgrade(Scope actor,Publish command,SkillProductVersionEntity target) {
         String sourceId=command.coveredUpgradeFromProductVersionId();
         if(sourceId==null)return;
         var source=market.selectApprovedProductVersionForUpdate(actor.tenantId(),actor.clientId(),sourceId);
@@ -67,7 +68,7 @@ public final class SkillPackagePublicationService {
         if(policy==null)one(market.insertCoveredUpgradePolicy(actor.tenantId(),actor.clientId(),sourceId,command.productVersionId()));
         else require("COVERED".equals(policy),409,"SKILL_UPGRADE_POLICY_CONFLICT");
     }
-    private static boolean matches(HostingRentHttp.Actor a,Publish c,SkillProductVersionEntity v,byte[] hash,byte[] permissions,long byteLength) {return a.tenantId().equals(v.getTenantId())&&a.clientId().equals(v.getClientId())&&c.productId().equals(v.getProductId())&&c.productVersionId().equals(v.getProductVersionId())&&c.skillKey().equals(v.getSkillKey())&&c.skillVersion().equals(v.getSkillVersion())&&Objects.equals(c.priceMicro(),v.getPriceMicro())&&Arrays.equals(hash,v.getPackageSha256())&&Objects.equals(byteLength,v.getPackageSize())&&Arrays.equals(permissions,v.getApprovedPermissionsSha256())&&c.approvedPermissionsManifest().equals(v.getApprovedPermissionsManifest())&&c.deploymentRestriction().equals(v.getDeploymentRestriction())&&"APPROVED".equals(v.getReviewStatus());}
+    private static boolean matches(Scope a,Publish c,SkillProductVersionEntity v,byte[] hash,byte[] permissions,long byteLength) {return a.tenantId().equals(v.getTenantId())&&a.clientId().equals(v.getClientId())&&c.productId().equals(v.getProductId())&&c.productVersionId().equals(v.getProductVersionId())&&c.skillKey().equals(v.getSkillKey())&&c.skillVersion().equals(v.getSkillVersion())&&Objects.equals(c.priceMicro(),v.getPriceMicro())&&Arrays.equals(hash,v.getPackageSha256())&&Objects.equals(byteLength,v.getPackageSize())&&Arrays.equals(permissions,v.getApprovedPermissionsSha256())&&c.approvedPermissionsManifest().equals(v.getApprovedPermissionsManifest())&&c.deploymentRestriction().equals(v.getDeploymentRestriction())&&"APPROVED".equals(v.getReviewStatus());}
     private static Receipt receipt(Publish c,long version,String disposition){return new Receipt(c.productId(),c.productVersionId(),version,c.packageSha256(),c.manifestSha256(),disposition,c.coveredUpgradeFromProductVersionId());}
     private static void one(int count){require(count==1,409,"SKILL_PRODUCT_CHANGED");}
     private static void validate(Publish c,byte[] archive) {
