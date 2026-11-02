@@ -73,6 +73,16 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
     private final AtomicBoolean running = new AtomicBoolean();
     private volatile ScheduledExecutorService scheduler;
     private volatile ExecutorService deliveryExecutor;
+    static final long RECOVERY_SCAN_MILLIS = 5_000L;
+    private final AtomicBoolean polling = new AtomicBoolean();
+    private java.util.function.LongSupplier clock = System::currentTimeMillis;
+    private java.util.function.Supplier<ScheduledExecutorService> schedulerFactory = this::newScheduler;
+    private ScheduledFuture<?> pendingWake;
+    private long scheduledAt = Long.MAX_VALUE;
+    private long requestedAt = Long.MAX_VALUE;
+    private long wakeGeneration;
+    private final ThreadLocal<ScheduledExecutorService> deliveryScheduler = new ThreadLocal<>();
+
 
     @Autowired
     public ChatDeliberationOutboxRelay(ChatDeliberationOutboxService outbox,
@@ -112,21 +122,84 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
 
     @Override public synchronized void start() {
         if (!running.compareAndSet(false, true)) return;
-        scheduler = newScheduler();
+        scheduler = schedulerFactory.get();
+        if (scheduler instanceof java.util.concurrent.ScheduledThreadPoolExecutor pool) pool.setRemoveOnCancelPolicy(true);
         deliveryExecutor = Executors.newFixedThreadPool(maxConcurrentDeliveries, r -> {
             Thread t = new Thread(r, "chat-deliberation-outbox-delivery"); t.setDaemon(true); return t;
         });
-        scheduler.scheduleWithFixedDelay(this::safePoll, 0, 500, TimeUnit.MILLISECONDS);
+        scheduleWake(scheduler, clock.getAsLong());
+    }
+
+    // Package-local deterministic clock/scheduler seam; production uses the existing executors.
+    synchronized void scheduling(java.util.function.Supplier<ScheduledExecutorService> factory,
+            java.util.function.LongSupplier clock) {
+        if (running.get()) throw new IllegalStateException("Relay already running");
+        this.schedulerFactory = factory; this.clock = clock;
+    }
+
+    @org.springframework.context.event.EventListener
+    public synchronized void onWorkAvailable(ChatDeliberationOutboxWakeup hint) {
+        if (!running.get() || scheduler == null) return;
+        requestedAt = Math.min(requestedAt, Math.max(clock.getAsLong(), hint.availableAt()));
+        if (!polling.get()) scheduleWake(scheduler, requestedAt);
+    }
+
+    private void scheduleWake(ScheduledExecutorService owner, long at) {
+        if (!running.get() || scheduler != owner || at >= scheduledAt) return;
+        if (pendingWake != null) pendingWake.cancel(false);
+        long generation = ++wakeGeneration;
+        scheduledAt = at;
+        pendingWake = owner.schedule(() -> scan(owner, generation),
+                Math.max(0, at - clock.getAsLong()), TimeUnit.MILLISECONDS);
+    }
+
+    private void scan(ScheduledExecutorService owner, long generation) {
+        synchronized (this) {
+            if (!running.get() || scheduler != owner || generation != wakeGeneration) return;
+            pendingWake = null; scheduledAt = Long.MAX_VALUE;
+            if (!polling.compareAndSet(false, true)) {
+                scheduleWake(owner, clock.getAsLong() + 500L); return;
+            }
+            requestedAt = Long.MAX_VALUE;
+        }
+        long scanStartedAt = clock.getAsLong();
+        Long next = null;
+        boolean failed = false;
+        try {
+            pollAvailable(owner);
+            if (running.get() && scheduler == owner && deliverySlots.availablePermits() > 0)
+                next = outbox.nextDueAt(scanStartedAt);
+        } catch (RuntimeException failure) {
+            failed = true;
+            log.warn("Chat outbox discovery failed; durable recovery retained", failure);
+        } finally {
+            synchronized (this) {
+                polling.set(false);
+                if (running.get() && scheduler == owner) {
+                    long now = clock.getAsLong();
+                    long at = Math.min(now + RECOVERY_SCAN_MILLIS, requestedAt);
+                    if (next != null) at = Math.min(at, Math.max(now, next));
+                    // A transport failure plus repeated hints must not create an immediate retry loop.
+                    if (failed) at = Math.max(at, now + 500L);
+                    scheduleWake(owner, at);
+                }
+            }
+        }
     }
 
     void pollOnce() {
+        if (!polling.compareAndSet(false, true)) return;
+        try { pollAvailable(scheduler); } finally { polling.set(false); }
+    }
+
+    private void pollAvailable(ScheduledExecutorService owner) {
         if (!running.get()) return;
         int capacity = Math.min(8, deliverySlots.availablePermits());
         if (capacity < 1) return;
-        long now = System.currentTimeMillis();
+        long now = clock.getAsLong();
         List<ChatDispatchOutboxEntity> candidates = outbox.discover(now, capacity);
         for (ChatDispatchOutboxEntity candidate : candidates) {
-            if (!deliverySlots.tryAcquire()) break;
+            if (!running.get() || scheduler != owner || !deliverySlots.tryAcquire()) break;
             ChatDeliberationOutboxService.Claim claim = null;
             try {
                 claim = outbox.claim(candidate, leaseOwner, now, leaseMillis);
@@ -134,7 +207,7 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
                     deliverySlots.release();
                     continue;
                 }
-                submitClaim(claim);
+                submitClaim(claim, owner);
             } catch (RuntimeException failure) {
                 deliverySlots.release();
                 if (claim != null) settleUnexpectedFailure(claim, candidate.getEventId(), failure);
@@ -143,17 +216,43 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
         }
     }
 
-    private void submitClaim(ChatDeliberationOutboxService.Claim claim) {
+    private void submitClaim(ChatDeliberationOutboxService.Claim claim, ScheduledExecutorService owner) {
+        var delivery = new ClaimedDelivery(claim, owner);
         try {
-            ensureDeliveryExecutor().execute(() -> {
-                try { deliverClaim(claim); }
-                catch (RuntimeException failure) {
-                    settleUnexpectedFailure(claim, claim.row().getEventId(), failure);
-                } finally { deliverySlots.release(); }
-            });
+            synchronized (this) {
+                if (!running.get() || scheduler != owner || deliveryExecutor == null)
+                    throw new java.util.concurrent.RejectedExecutionException("Relay stopped or replaced");
+                deliveryExecutor.execute(delivery);
+            }
         } catch (RuntimeException rejected) {
-            deliverySlots.release();
+            delivery.abandon();
             settleUnexpectedFailure(claim, claim.row().getEventId(), rejected);
+        }
+    }
+
+    /** A task removed by shutdownNow still returns its slot; its durable lease remains recoverable. */
+    private final class ClaimedDelivery implements Runnable {
+        private final ChatDeliberationOutboxService.Claim claim;
+        private final ScheduledExecutorService owner;
+        private final AtomicBoolean taken = new AtomicBoolean();
+        ClaimedDelivery(ChatDeliberationOutboxService.Claim claim, ScheduledExecutorService owner) {
+            this.claim = claim; this.owner = owner;
+        }
+        void abandon() { if (taken.compareAndSet(false, true)) deliverySlots.release(); }
+        @Override public void run() {
+            if (!taken.compareAndSet(false, true)) return;
+            deliveryScheduler.set(owner);
+            try {
+                if (!running.get() || scheduler != owner)
+                    throw new java.util.concurrent.RejectedExecutionException("Relay stopped or replaced");
+                deliverClaim(claim);
+            } catch (RuntimeException failure) {
+                settleUnexpectedFailure(claim, claim.row().getEventId(), failure);
+            } finally {
+                deliveryScheduler.remove();
+                deliverySlots.release();
+                onWorkAvailable(new ChatDeliberationOutboxWakeup(clock.getAsLong()));
+            }
         }
     }
 
@@ -164,7 +263,6 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
         catch (RuntimeException stale) { log.debug("Chat outbox retry lost lease", stale); }
     }
 
-    private void safePoll() { try { pollOnce(); } catch (RuntimeException e) { log.warn("Chat outbox poll failed", e); } }
 
     void deliverClaim(ChatDeliberationOutboxService.Claim claim) {
         ChatDispatchOutboxEntity row = claim.row();
@@ -376,7 +474,15 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
     }
 
     private synchronized ScheduledExecutorService ensureScheduler() {
-        if (scheduler == null || scheduler.isShutdown()) scheduler = newScheduler();
+        ScheduledExecutorService owner = deliveryScheduler.get();
+        if (owner != null) {
+            if (owner != scheduler || owner.isShutdown())
+                throw new java.util.concurrent.RejectedExecutionException("Delivery scheduler stopped or replaced");
+            return owner;
+        }
+        // Direct delivery tests may construct a relay without starting its discovery lifecycle.
+        if (scheduler == null) scheduler = newScheduler();
+        if (scheduler.isShutdown()) throw new java.util.concurrent.RejectedExecutionException("Relay stopped");
         return scheduler;
     }
 
@@ -384,15 +490,6 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
         return Executors.newScheduledThreadPool(maxConcurrentDeliveries + 1, r -> {
             Thread t = new Thread(r, "chat-deliberation-outbox-relay"); t.setDaemon(true); return t;
         });
-    }
-
-    private synchronized ExecutorService ensureDeliveryExecutor() {
-        if (deliveryExecutor == null || deliveryExecutor.isShutdown()) {
-            deliveryExecutor = Executors.newFixedThreadPool(maxConcurrentDeliveries, r -> {
-                Thread t = new Thread(r, "chat-deliberation-outbox-delivery"); t.setDaemon(true); return t;
-            });
-        }
-        return deliveryExecutor;
     }
 
     private void runBuiltin(ChatDispatchOutboxEntity row, Map<String,Object> p, Mono<Boolean> leaseLost,
@@ -543,8 +640,12 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
 
     @Override public synchronized void stop(){
         running.set(false);
+        ++wakeGeneration;
+        if (pendingWake != null) pendingWake.cancel(false);
+        pendingWake = null; scheduledAt = requestedAt = Long.MAX_VALUE;
         if(scheduler!=null)scheduler.shutdownNow();
-        if(deliveryExecutor!=null)deliveryExecutor.shutdownNow();
+        if(deliveryExecutor!=null) for (Runnable queued : deliveryExecutor.shutdownNow())
+            if (queued instanceof ClaimedDelivery delivery) delivery.abandon();
     }
     @Override public void stop(Runnable callback){stop();callback.run();}
     @Override public boolean isRunning(){return running.get();}

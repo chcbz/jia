@@ -3,6 +3,7 @@ package cn.jia.chat.deliberation;
 import java.util.List;
 
 public interface ChatDeliberationDao {
+    Long nextOutboxDue(String tenantId, String clientId, long now);
     int insertSnapshot(ChatContextSnapshotEntity entity);
     int insertRequest(ChatRequestEntity entity);
     int insertTurn(ChatTurnEntity entity);

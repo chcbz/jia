@@ -890,4 +890,20 @@ class JuyitingWorkflowMySqlTest {
         finally {pool.shutdown(); assertTrue(pool.awaitTermination(30,TimeUnit.SECONDS));}
     }
 
+
+    @Test void chatOutboxFutureDeadlineIsPartitionedAndPreservesRetryAckAndExpiredLeaseSemantics() {
+        jdbc.execute("CREATE TABLE chat_dispatch_outbox (tenant_id VARCHAR(50),client_id VARCHAR(50),status VARCHAR(30),available_at BIGINT,lease_until BIGINT,KEY idx_ready(status,available_at))");
+        var config=new com.baomidou.mybatisplus.core.MybatisConfiguration();
+        config.setEnvironment(new org.apache.ibatis.mapping.Environment("owned",new org.mybatis.spring.transaction.SpringManagedTransactionFactory(),jdbc.getDataSource()));
+        config.addMapper(cn.jia.chat.deliberation.ChatDeliberationMapper.class);
+        var mapper=new org.mybatis.spring.SqlSessionTemplate(new org.apache.ibatis.session.SqlSessionFactoryBuilder().build(config)).getMapper(cn.jia.chat.deliberation.ChatDeliberationMapper.class);
+        jdbc.update("INSERT INTO chat_dispatch_outbox VALUES ('0','client','READY',900,NULL),('0','client','RETRY',1500,NULL),('0','client','AWAITING_ACK',2000,NULL),('0','client','CLAIMED',0,1200),('0','client','SENT',1001,NULL),('1','client','RETRY',1001,NULL),('0','other','RETRY',1100,NULL),('0 ','client','RETRY',1001,NULL),('0','Client','RETRY',1001,NULL)");
+        assertEquals(1200L,mapper.nextOutboxDue("0","client",1000));
+        assertEquals(1500L,mapper.nextOutboxDue("0","client",1200));
+        assertEquals(2000L,mapper.nextOutboxDue("0","client",1500));
+        assertNull(mapper.nextOutboxDue("0","client",2000));
+        assertEquals(1001L,mapper.nextOutboxDue("0",null,1000)); // all exact clients in configured tenant
+        assertEquals(1001L,mapper.nextOutboxDue("1","client",1000));
+        assertNull(mapper.nextOutboxDue("missing",null,0));
+    }
 }

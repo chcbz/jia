@@ -83,6 +83,7 @@ class AgentWebSocketNativeBountyExecutionTest {
         registration.put("hostId","host-a");registration.put("sessionGeneration",1L);
         registration.put("durableStateHealthy",true);registration.put("readyCommandTypes",java.util.List.of());
         registration.put("nativeWorkNotifications",1);registration.put("workspaceFileWorkNotifications",1);
+        registration.put("archiveJobDiscovery",1); // Client cannot enable a disabled server controller.
         var json=new tools.jackson.databind.ObjectMapper();
         handler.handleTextMessage(current,new TextMessage(json.writeValueAsString(cn.jia.agent.common.AgentMessageWire.event("agent.register",registration,null))));
         var sent=org.mockito.ArgumentCaptor.forClass(TextMessage.class);
@@ -91,11 +92,23 @@ class AgentWebSocketNativeBountyExecutionTest {
                 .filter(value->"agent.registered".equals(value.get("messageType").asString())).findFirst().orElseThrow();
         assertEquals("agent.registered",receipt.get("messageType").asString());
         assertEquals(1,receipt.get("data").get("workspaceFileWorkNotifications").asInt());
+        var shared = json.readTree(new org.springframework.core.io.ClassPathResource("contracts/archive-discovery-registration-v1.json").getInputStream());
+        assertEquals(shared.get("data").get("archiveJobDiscovery"),receipt.get("data").get("archiveJobDiscovery"));
+        assertEquals(shared.get("messageType"),receipt.get("messageType"));
+        assertEquals(shared.get("correlationId"),receipt.get("correlationId"));
         assertEquals(false,receipt.get("data").has("nativeWorkNotifications")); // conversation feature is off
         assertEquals(java.util.List.of(new cn.jia.agent.entity.NativeConversationWorkAvailable("0","client-a","agent-a","WORKSPACE_FILE")),handler.nativeWorkTargets());
+        org.springframework.test.util.ReflectionTestUtils.setField(handler,"archiveJobDiscoveryEnabled",true);
+        registration.put("archiveJobDiscovery",0); // Server capability, not a client override.
         registration.remove("workspaceFileWorkNotifications");registration.put("messageId","register-file-2");
         handler.handleTextMessage(current,new TextMessage(json.writeValueAsString(cn.jia.agent.common.AgentMessageWire.event("agent.register",registration,null))));
         assertEquals(java.util.List.of(),handler.nativeWorkTargets());
+        var enabled=org.mockito.ArgumentCaptor.forClass(TextMessage.class);
+        org.mockito.Mockito.verify(current,org.mockito.Mockito.atLeastOnce()).sendMessage(enabled.capture());
+        var enabledReceipt=enabled.getAllValues().stream().map(message->json.readTree(message.getPayload()))
+                .filter(value->"agent.registered".equals(value.get("messageType").asString()))
+                .reduce((first,last)->last).orElseThrow();
+        assertEquals(1,enabledReceipt.get("data").get("archiveJobDiscovery").asInt());
     }
 
     @Test @SuppressWarnings("unchecked")

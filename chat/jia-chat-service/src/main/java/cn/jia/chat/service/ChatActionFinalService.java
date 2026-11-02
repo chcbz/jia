@@ -24,6 +24,10 @@ import java.util.Set;
 /** One action-v5 final store for CHAT. Action events contain references, not execution authority. */
 @Service
 public class ChatActionFinalService {
+    private org.springframework.context.ApplicationEventPublisher outboxEvents;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setOutboxEvents(org.springframework.context.ApplicationEventPublisher value) { outboxEvents = value; }
+
     public static final String ACTION_EVENT = "ACTION_REQUESTED";
     public record Prepared(ChatActionFinalValidator.ValidatedFinal validated,
             ChatTypedDeliberationStore.Scope scope, ChatTypedDeliberationStore.Admission admission,
@@ -184,6 +188,7 @@ public class ChatActionFinalService {
                 .setEventType(ACTION_EVENT).setStatus("READY").setPayloadJson(canonical(actionPayload(row, v)))
                 .setVersion(0L).setAvailableAt(now).setAttemptCount(0).setFencingToken(0L).setCreatedAt(now).setUpdatedAt(now);
         if (dao.insertOutbox(event) != 1) throw persistence("Unable to persist action event");
+        ChatDeliberationOutboxWakeup.afterCommit(outboxEvents, event.getAvailableAt());
     }
 
     /** Validate the durable event against the actual immutable final, not copied event instructions.

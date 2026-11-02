@@ -91,3 +91,48 @@ Added regressions cover real SQL keyset/lanes, business eligibility traversal, c
 ordering, transaction publication, shared notifier, WS independent negotiation/fence, mirrored
 wire, old-server fallback, full/duplicate pages, real persistent inbox/dedupe, in-flight ownership
 and reconnect. Heavy Java results and exact integrated commits belong in the root handoff.
+
+## Unified polling follow-up (2026-11-03, source candidate; not deployment evidence)
+
+Interface baseline: API192a590b2c8b690337818606a6180fca6f99a600,
+`docs/interface-standard.md`. Scope is chat outbox scheduling and archive service
+availability, not a second queue or a replacement authorization layer.
+
+- `agent.registered.data.archiveJobDiscovery` is a server-declared integer 0/1,
+  derived from the same `agent.position-skills.enabled` property as
+  ArchiveMaintenanceRuntimeController. A client cannot override it. This property
+  does NOT disable the unconditional PositionSkillRuntimeController.
+- A correlated, authenticated successful registration with 0 suppresses archive
+  job discovery only. 1 enables the existing path; absent field preserves older
+  API behavior. Re-registration replaces the capability. Invalid values reject
+  registration. A prior in-flight positions query cannot start archive discovery
+  after registration/session replacement. No permanent 404 negative cache.
+- Shared complete envelope fixture:
+  `chat/jia-chat-service/src/mmdRegressionTest/resources/contracts/archive-discovery-registration-v1.json`,
+  mirrored in Runtime `conf/cyf-agent-runtime-v1/test/fixtures/`.
+- ChatDeliberationOutboxWakeup is an in-process after-commit scheduling hint.
+  Dispatch/final/cancel/action/revision/submission producers and retry/ACK
+  settlements publish it; rollback publishes nothing. Claims still use the
+  authoritative SQL transaction, fencing and existing ACK/lease rules.
+- Relay uses one coalesced one-shot discovery timer, existing four delivery slots,
+  and a 5-second compensation ceiling (not an application request deadline).
+  Successful delivery/slot release wakes the next batch; future retry/ACK/lease
+  deadlines are read in the configured tenant/client partition, including those
+  crossed during discovery. Restart/lost or cross-process hints recover from DB.
+  Idle scans do two bounded-result queries per pass; this reduces frequency,
+  not the number of rows a query could examine. Existing status index is reused;
+  no DDL. Heartbeats and business cancellation checks remain necessary timers.
+- Stop invalidates timer ownership, prevents executor resurrection and releases
+  slots for never-started queued deliveries; durable claims recover by lease.
+  Notification failure cannot roll back a committed business transaction.
+
+Runtime1.3.37/bridge1.1.27 also reuses existing 15s-to-5min jittered recovery
+scheduling for command-local transport/unconfirmed-response/environment errors.
+This is no timeout, terminal state or grant to replay UNKNOWN. Persisted state is
+unchanged; retained native mapping mismatch has an explicit environment-changed
+code, while unsafe marker structure retains its original failure. Rejected HTTP
+bodies are canceled; numeric HTTP status is reported without payload/credentials.
+Tests cover commit/rollback, coalescing, deadline crossing, restart, failure,
+real partitioned SQL, capability negotiation and no second model invocation.
+Historical recovery records and one unreproduced wire rejection remain separate
+operational findings; backoff does not mean those executions are repaired.

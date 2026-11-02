@@ -16,6 +16,10 @@ import java.util.UUID;
 @Service
 @RequiredArgsConstructor
 public class ChatDeliberationOutboxService {
+    private org.springframework.context.ApplicationEventPublisher outboxEvents;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setOutboxEvents(org.springframework.context.ApplicationEventPublisher value) { outboxEvents = value; }
+
     private final ChatDeliberationDao dao;
     private final cn.jia.core.security.FixedTenantAdmissionPolicy processScope;
     private ChatDispatchAuthorityService dispatchAuthority;
@@ -28,6 +32,12 @@ public class ChatDeliberationOutboxService {
         return processScope.clientId() == null
                 ? dao.findDueOutboxInTenant(processScope.businessTenantId(), now, batchSize)
                 : dao.findDueOutboxInScope(processScope.businessTenantId(), processScope.clientId(), now, batchSize);
+    }
+
+    /** One future deadline, partitioned before aggregation; no in-memory retry inventory. */
+    @Transactional(readOnly = true)
+    public Long nextDueAt(long now) {
+        return dao.nextOutboxDue(processScope.businessTenantId(), processScope.clientId(), now);
     }
 
     @Transactional(rollbackFor = Exception.class)
@@ -109,6 +119,7 @@ public class ChatDeliberationOutboxService {
                             @Override public void afterCommit() {committed.run();}
                         });
                 } else committed.run();
+                if (availableAt != null) ChatDeliberationOutboxWakeup.afterCommit(outboxEvents, availableAt);
             }
             return updated;
         }

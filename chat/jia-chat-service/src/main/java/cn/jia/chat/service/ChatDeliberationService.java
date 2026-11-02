@@ -43,6 +43,10 @@ import java.util.UUID;
 /** Durable, exact-scope admission and Agent callback boundary for Juyi Hall chat turns. */
 @Service
 public class ChatDeliberationService {
+    private org.springframework.context.ApplicationEventPublisher outboxEvents;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setOutboxEvents(org.springframework.context.ApplicationEventPublisher value) { outboxEvents = value; }
+
     private static final int MAX_ID = 100;
     private static final int HISTORY_QUERY_LIMIT = 200;
     private static final int RECENT_HISTORY_LIMIT = 24;
@@ -466,6 +470,7 @@ public class ChatDeliberationService {
             if (dao.insertSnapshot(snapshot) != 1 || dao.insertTurn(turn) != 1 || dao.insertOutbox(outbox) != 1) {
                 throw persistence("Unable to persist chat turn admission");
             }
+            ChatDeliberationOutboxWakeup.afterCommit(outboxEvents, outbox.getAvailableAt());
             dispatches.add(toDispatch(turn, snapshot));
         }
         return new Admission(requestId, revision, Long.toString(userMessage.getId()), conversationId,
@@ -728,6 +733,7 @@ public class ChatDeliberationService {
                 .setStatus("READY").setPayloadJson(CanonicalContextJson.write(outboxPayload)).setVersion(0L).setAvailableAt(now)
                 .setAttemptCount(0).setFencingToken(0L).setCreatedAt(now).setUpdatedAt(now);
         if (dao.insertOutbox(outbox) != 1) throw persistence("Unable to persist final event");
+        ChatDeliberationOutboxWakeup.afterCommit(outboxEvents, outbox.getAvailableAt());
         refreshAggregate(tenantId, ownerJiacn, clientId, turn.getRequestId(), now);
         return new FinalResult(FinalStatus.PERSISTED, message.getId(),
                 Long.toString(request.getUserMessageId()), finalEventId, turn, finalEvent);
@@ -978,6 +984,7 @@ public class ChatDeliberationService {
         persistEvent(turn, stableId("evt", turn.getDispatchId(), "CANCEL_REQUESTED"),
                 "cancel_requested", Map.of("reason", reason), now);
         if (dao.insertOutbox(cancel) != 1) throw persistence("Unable to persist cancellation event");
+        ChatDeliberationOutboxWakeup.afterCommit(outboxEvents, cancel.getAvailableAt());
     }
 
     /** A cancelled reply is history, never a final answer or a deliverable. The turn lock

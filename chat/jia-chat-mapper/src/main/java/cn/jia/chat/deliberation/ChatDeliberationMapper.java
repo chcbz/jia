@@ -203,6 +203,23 @@ public interface ChatDeliberationMapper {
             @Param("dispatchId") String dispatchId);
 
     @Select("""
+            <script>
+            SELECT MIN(CASE WHEN status='CLAIMED' THEN lease_until ELSE available_at END)
+            FROM chat_dispatch_outbox WHERE tenant_id=#{tenantId}
+              AND BINARY tenant_id=BINARY #{tenantId}
+              AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(#{tenantId})
+              <if test="clientId != null">
+                AND client_id=#{clientId} AND BINARY client_id=BINARY #{clientId}
+                AND OCTET_LENGTH(client_id)=OCTET_LENGTH(#{clientId})
+              </if>
+              AND ((status IN ('READY','RETRY','AWAITING_ACK') AND available_at &gt; #{now})
+                OR (status='CLAIMED' AND lease_until &gt; #{now}))
+            </script>
+            """)
+    Long nextOutboxDue(@Param("tenantId") String tenantId, @Param("clientId") String clientId,
+            @Param("now") long now);
+
+    @Select("""
             SELECT * FROM chat_dispatch_outbox
             WHERE tenant_id=#{tenantId}
               AND CAST(tenant_id AS BINARY)=CAST(#{tenantId} AS BINARY)

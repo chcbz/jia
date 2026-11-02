@@ -22,6 +22,10 @@ import java.util.Objects;
 @Service
 @ConditionalOnProperty(prefix="chat.delivery-review",name="enabled",havingValue="true")
 public class ChatDeliveryRevisionService {
+    private org.springframework.context.ApplicationEventPublisher outboxEvents;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setOutboxEvents(org.springframework.context.ApplicationEventPublisher value) { outboxEvents = value; }
+
     public static final String EVENT="REVIEW_REQUESTED";
     public record BoundRevision(ChatActionFinalService.BoundAction parent,ChatDeliveryRevisionContract.Basis basis) {
         public BoundRevision {
@@ -80,6 +84,7 @@ public class ChatDeliveryRevisionService {
                 .setPayloadJson(CanonicalContextJson.write(payload(row))).setVersion(0L).setAvailableAt(now).setAttemptCount(0)
                 .setFencingToken(0L).setCreatedAt(now).setUpdatedAt(now);
         if(dao.insertOutbox(event)!=1)throw new IllegalStateException("DELIVERY_REVISION_EVENT_FAILED");
+        ChatDeliberationOutboxWakeup.afterCommit(outboxEvents, event.getAvailableAt());
     }
     @Transactional(propagation=Propagation.NOT_SUPPORTED)
     public void consume(ChatDeliberationOutboxService.Claim claim) {

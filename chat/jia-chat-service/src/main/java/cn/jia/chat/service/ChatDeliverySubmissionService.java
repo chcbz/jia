@@ -35,6 +35,10 @@ import java.util.Set;
 @Service
 @ConditionalOnProperty(prefix="chat",name={"delivery-review.enabled","selected-output-finalization.enabled"},havingValue="true")
 public class ChatDeliverySubmissionService {
+    private org.springframework.context.ApplicationEventPublisher outboxEvents;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setOutboxEvents(org.springframework.context.ApplicationEventPublisher value) { outboxEvents = value; }
+
     private static boolean submissionKind(String kind, Object deliverable) {
         return "ANSWER".equals(kind) && Boolean.TRUE.equals(deliverable)
                 || "SUBMISSION_REQUEST".equals(kind) && Boolean.FALSE.equals(deliverable);
@@ -97,6 +101,7 @@ public class ChatDeliverySubmissionService {
                 .setPayloadJson(CanonicalContextJson.write(payload(row,(String)validated.binding().get("targetAgentId"))))
                 .setVersion(0L).setAvailableAt(now).setAttemptCount(0).setFencingToken(0L).setCreatedAt(now).setUpdatedAt(now);
         if(dao.insertOutbox(event)!=1)throw storage();
+        ChatDeliberationOutboxWakeup.afterCommit(outboxEvents, event.getAvailableAt());
     }
 
     /** Reconstructs the final using the ordinary strict reader, then replays only its verified retained set. */

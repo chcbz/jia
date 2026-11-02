@@ -1,0 +1,14 @@
+{
+  "protocolVersion": 1,
+  "requestId": "register-file-1",
+  "messageType": "agent.registered",
+  "messageId": "registered-1",
+  "correlationId": "register-file-1",
+  "code": "E0",
+  "msg": "ok",
+  "data": {
+    "archiveJobDiscovery": 0,
+    "readyCommandTypes": [],
+    "durableStateHealthy": true
+  }
+}
