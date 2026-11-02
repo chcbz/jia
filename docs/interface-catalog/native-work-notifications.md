@@ -23,3 +23,27 @@ Owned MySQL fixture tests real mapper SQL/record mapping, case-exact partition, 
 - `AgentWebSocketNativeBountyExecutionTest`: current negotiated session only, exact shared wire fixture, never command dispatch.
 - `ChatBountyBootstrapRelayRecoveryTest.NativeWorkNotifications`: burst coalescing, trailing wake, empty/no-local subscriptions, missed/remote commit recovery and lifecycle.
 - Runtime `native-conversation-wakeup`, `skill-conversation`, `runtime-host`, native poller tests: scheduler, local uncertainty, negotiation/session rejection, old server fallback and payload import closure.
+
+## Workspace-file discovery prerequisite (2026-11-02)
+
+Code review baseline API `604e8d15a65144183adf3839d0fa5569ad8a4f70` found file pickup's
+`listQueuedByTarget` selected a mixed-lane page before service-side exclusion of CONVERSATION.
+Sixteen older conversation rows could therefore hide all file commands indefinitely. File-lane
+membership (`PRIVATE`, `TASK`, historical NULL-as-PRIVATE) now applies in the existing mapper
+before ordering/LIMIT. Unknown modes are not interpreted as file commands. This is selection,
+not authorization: runtime scope, task lease, business state and command validation stay in their
+existing responsibility layers. The only production caller is `runtimeQueuedCommands`; native
+conversation discovery uses its separate query and is unchanged. No HTTP/wire/DDL change.
+
+`WorkspaceFileQueueMySqlTest` reproduces the old empty-after-filter page on real owned MySQL,
+then checks mixed lanes, historical NULL mode, unsupported/terminal rows, exact partition,
+ordering/limit and subsequent pickup after completion. Verification status is recorded in the
+root JUYITING-POLLING-20261102 handoff, not implied by this documentation.
+
+This prerequisite does **not** enable workspace-file notifications or remove its 3s poll.
+The processor's durable inbox resume/UNKNOWN handling stays untouched. In particular file
+pickup is not a claim: already-admitted rows can remain QUEUED until execution progresses.
+A future notification consumer must not spin on a full page of duplicates, and must negotiate
+file-lane support independently of `nativeWorkNotifications:1`. Expired TASK lease candidates
+are still service-filtered after SQL selection; that separate readiness/pagination dependency
+must be resolved before declaring the file lane's event-discovery closure complete.

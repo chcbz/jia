@@ -85,6 +85,7 @@ public interface PersonalWorkspaceExecutionMapper extends BaseMapper<PersonalWor
             SELECT * FROM agent_personal_workspace_execution
              WHERE tenant_id=#{tenantId} AND client_id=#{clientId} AND owner_jiacn=#{ownerJiacn}
                AND target_agent_id=#{targetAgentId} AND execution_state='QUEUED'
+               AND (execution_mode IN ('PRIVATE','TASK') OR execution_mode IS NULL)
                AND CAST(tenant_id AS BINARY)=CAST(#{tenantId} AS BINARY)
                AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(#{tenantId})
                AND CAST(client_id AS BINARY)=CAST(#{clientId} AS BINARY)
@@ -95,6 +96,8 @@ public interface PersonalWorkspaceExecutionMapper extends BaseMapper<PersonalWor
                AND OCTET_LENGTH(target_agent_id)=OCTET_LENGTH(#{targetAgentId})
              ORDER BY created_at ASC, execution_id ASC LIMIT #{limit}
             """)
+    // File-lane selection precedes LIMIT; NULL retains historical PRIVATE semantics.
+    // Task lease and business authorization remain service-owned.
     java.util.List<PersonalWorkspaceExecutionEntity> listQueuedByTarget(
             @Param("tenantId") String tenantId, @Param("clientId") String clientId,
             @Param("ownerJiacn") String ownerJiacn, @Param("targetAgentId") String targetAgentId,
