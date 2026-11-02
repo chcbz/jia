@@ -288,14 +288,21 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
             zip.closeEntry();
         }
         byte[] archive=out.toByteArray();var packageProvider=provider(packages);when(packageProvider.getIfUnique()).thenReturn(packages);
-        var publisher=new SkillPackagePublicationService(market,packageProvider,manager);
+        // This slice proves upgrade/entitlement rollback; position ACL/locking has its own real-MySQL suite.
+        var authority=mock(cn.jia.agent.service.PositionAuthority.class);
+        var publicationScope=new cn.jia.agent.service.PositionAuthority.Scope(ACTOR.tenantId(),ACTOR.clientId(),ACTOR.ownerJiacn());
+        var publicationGrant=new cn.jia.agent.service.PositionAuthority.Grant("fixture-appointment",1,1,AGENT,1,null,true);
+        when(authority.withSkillManagementAuthority(eq(publicationScope),eq(publicationGrant),any())).thenAnswer(invocation->
+                new org.springframework.transaction.support.TransactionTemplate(manager).execute(status->
+                        ((java.util.function.Supplier<?>)invocation.getArgument(2)).get()));
+        var publisher=new SkillPackagePublicationService(market,packageProvider,authority);
         var invalid=new SkillPackagePublicationService.Publish("sp_pdf","spv_pdf_2","PDF","synthetic fixture","pdf-export","2.0.0",5_000_000L,"NONE","[]",HexFormat.of().formatHex(SkillPackageStore.sha256(archive)),null,2,"missing-source");
-        assertEquals("SKILL_UPGRADE_SOURCE_INVALID",assertThrows(SkillMarketplaceException.class,()->publisher.publish(ACTOR,true,invalid,archive)).code());
+        assertEquals("SKILL_UPGRADE_SOURCE_INVALID",assertThrows(SkillMarketplaceException.class,()->publisher.publish(publicationScope,publicationGrant,invalid,archive)).code());
         assertEquals("spv_pdf_1",market.selectProductForUpdate("0",ACTOR.clientId(),"sp_pdf").getCurrentProductVersionId());
         assertNull(market.selectApprovedProductVersion("0",ACTOR.clientId(),"spv_pdf_2"));
         var valid=new SkillPackagePublicationService.Publish("sp_pdf","spv_pdf_2","PDF","synthetic fixture","pdf-export","2.0.0",5_000_000L,"NONE","[]",invalid.packageSha256(),null,2,"spv_pdf_1");
-        assertEquals("PUBLISHED",publisher.publish(ACTOR,true,valid,archive).disposition());
-        assertEquals("RECORDED",publisher.publish(ACTOR,true,valid,archive).disposition());
+        assertEquals("PUBLISHED",publisher.publish(publicationScope,publicationGrant,valid,archive).disposition());
+        assertEquals("RECORDED",publisher.publish(publicationScope,publicationGrant,valid,archive).disposition());
         assertEquals("COVERED",db.upgradePolicy("0",ACTOR.clientId(),"spv_pdf_1","spv_pdf_2"));
         int orders=count("economy_skill_order");
         var upgrade=packageChange("UPGRADE",sourceInstallation,text(first,"skillRevision"),"spv_pdf_2");
