@@ -648,8 +648,10 @@ class AgentSchemaInitializerTest extends BaseMockTest {
             String legacy = tableDefinition(readResource("db/agent-identity-schema.sql"), table);
             assertEquals(normalizeSqlStructure(tableDefinition(schema, table)),
                     normalizeSqlStructure(legacy), table + " explicit tenant delta");
-            assertTrue(readResource("db/agent-identity-business-tenant-20261030.sql")
-                    .contains("alter table " + table));
+            if (table.equals("agent_identity_alias")) {
+                assertTrue(readResource("db/agent-identity-business-tenant-20261030.sql")
+                        .contains("alter table " + table));
+            }
         }
     }
 

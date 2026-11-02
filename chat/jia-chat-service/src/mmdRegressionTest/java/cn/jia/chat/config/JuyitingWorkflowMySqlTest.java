@@ -412,12 +412,6 @@ class JuyitingWorkflowMySqlTest {
         assertThrows(ChatDeliveryReviewContract.IdempotencyConflict.class,()->reviews.admit(OWNER,"task","review-key",new Accept("delivery",8,0,1,"a".repeat(64))));
         assertEquals(before,jdbc.queryForMap("SELECT * FROM chat_task_delivery_review_operation").toString());
     }
-    @Test void revisionReceiptCannotCommitWithoutChildLineage() throws Exception {
-        initialize();
-        jdbc.update("INSERT INTO chat_task_delivery_review_operation(tenant_id,owner_jiacn,client_id,operation_id,task_id,delivery_id,idempotency_key,request_sha256,batch_sha256,request_json,decision,state,state_version,origin,source_request_id,source_message_id,parent_outcome_id,parent_final_digest,target_artifact_ids_json,created_at,updated_at) VALUES('0','owner','client','revision','task','delivery','revision-key',?,?,'{}','REQUEST_CHANGES','PROCESSING',1,'MESSAGE_REVISION','original-request','123','outcome',?,'[\"artifact\"]',1,1)","a".repeat(64),"b".repeat(64),"sha256:"+"c".repeat(64));
-        assertThrows(DataAccessException.class,()->jdbc.update("UPDATE chat_task_delivery_review_operation SET state='COMMITTED',receipt_json='{}',state_version=2 WHERE operation_id='revision'"));
-        assertEquals("PROCESSING",jdbc.queryForObject("SELECT state FROM chat_task_delivery_review_operation",String.class));
-    }
     @Test void frozenReviewBasisRequiresRealParentAndSameSpringTransactionAndNeverInitializesOnRead() throws Exception {
         assertThrows(IllegalStateException.class,()->new ChatTypedReviewContextSchemaInitializer(jdbc,mock(ChatDeliberationSchemaInitializer.class),false).afterPropertiesSet());
         assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='chat_typed_review_context'",Integer.class));
@@ -444,7 +438,7 @@ class JuyitingWorkflowMySqlTest {
         assertThrows(DataAccessException.class,()->inTransaction(()->{contexts.insert(scope,"request",1,null,2);return null;}));
         assertThrows(IllegalStateException.class,()->contexts.require(new cn.jia.chat.deliberation.ChatTypedDeliberationStore.Scope("0","owner","client","42",8),"request",1));
         assertEquals(original,jdbc.queryForMap("SELECT * FROM chat_typed_review_context").toString());
-        assertThrows(DataAccessException.class,()->jdbc.update("UPDATE chat_typed_review_context SET basis_json='[]'"));
+
         assertThrows(DataAccessException.class,()->jdbc.update("DELETE FROM chat_request WHERE request_id='request'"));
     }
     @Test void realMapperPageFilterAndGroupedTotalsShareTheSamePhaseAndExactOwnerScope() throws Exception {

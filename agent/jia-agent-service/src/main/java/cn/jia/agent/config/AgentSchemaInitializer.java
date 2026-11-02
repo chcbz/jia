@@ -101,7 +101,7 @@ public class AgentSchemaInitializer implements InitializingBean {
                     KEY idx_agent_binding_agent (client_id, agent_id, status),
                     KEY idx_agent_binding_persona (client_id, persona_code, status)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Durable Agent persona binding history'
-""".formatted(ownerJiacnColumn, lifecycleColumn, activePersonaColumn, activeAgentColumn));
+                """.formatted(ownerJiacnColumn, lifecycleColumn, activePersonaColumn, activeAgentColumn));
         // Existing binding contracts are migrated only by explicitly approved maintenance.
         // Reject drift before generated-column/index additions can mask an old tenant contract.
         validateBindingTenantContract();
@@ -170,7 +170,7 @@ public class AgentSchemaInitializer implements InitializingBean {
                     UNIQUE KEY uk_hosted_api_key (api_key_id),
                     KEY idx_hosted_scope_state (tenant_id,client_id,owner_jiacn,lifecycle_state)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Durable hosted Agent profile publication state'
-""");
+                """);
         for (String forbidden : List.of("api_key", "apikey", "credential", "secret")) {
             if (!inspectColumnDefinition("agent_hosted_profile", forbidden).isEmpty()) {
                 throw new IllegalStateException("PWA-HOSTED-P0 forbids plaintext credential column " + forbidden);
@@ -664,7 +664,7 @@ public class AgentSchemaInitializer implements InitializingBean {
                         (id, canonical_agent_id, client_id, owner_jiacn, tenant_id),
                     KEY idx_identity_registry_scope_status (tenant_id, client_id, owner_jiacn, lifecycle_status)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Durable canonical Agent identity registry | collation binary enforces exact case matching'
-""");
+                """);
         jdbcTemplate.execute("""
                 CREATE TABLE IF NOT EXISTS agent_identity_alias (
                     id                      BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Primary key',
@@ -694,7 +694,7 @@ public class AgentSchemaInitializer implements InitializingBean {
                         (id, canonical_agent_id, client_id, owner_jiacn, tenant_id)
                         ON UPDATE RESTRICT ON DELETE RESTRICT
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Scoped legacy Agent ID compatibility aliases | collation binary enforces exact case matching'
-""".formatted(activeAliasColumn));
+                """.formatted(activeAliasColumn));
 
         addRequiredColumnIfMissing("agent_identity_alias", "active_key", activeAliasColumn);
         ensureRequiredIndex("agent_identity_registry", "uk_identity_registry_agent", true,

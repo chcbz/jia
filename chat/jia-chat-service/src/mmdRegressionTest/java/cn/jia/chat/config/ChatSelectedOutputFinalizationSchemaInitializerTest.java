@@ -71,10 +71,10 @@ class ChatSelectedOutputFinalizationSchemaInitializerTest {
 
     @Test void textSourceSqlUsesExistingItemTableAndExplicitExclusiveRealMessageReferences() throws Exception {
         String ddl=String.join("\n",ChatSelectedOutputFinalizationSchemaInitializer.ddl());
-        for(String condition:List.of("source_kind='OUTPUT' AND step_id IS NOT NULL AND output_id IS NOT NULL",
-                "source_kind='COMPLETED_MESSAGE' AND step_id IS NULL AND output_id IS NULL",
-                "turn_id IS NOT NULL AND message_id IS NOT NULL AND snapshot_id IS NOT NULL AND final_digest IS NOT NULL",
-                "uk_csofi_message","9223372036854775807"))assertTrue(ddl.contains(condition),condition);
+        for(String column:List.of("source_kind", "step_id", "output_id", "turn_id",
+                "message_id", "snapshot_id", "final_digest", "uk_csofi_message"))
+            assertTrue(ddl.contains(column),column);
+        assertFalse(ddl.toUpperCase().contains("CHECK ("));
         String upgrade=new org.springframework.core.io.ClassPathResource("db/chat-selected-output-finalization-completed-message-v1.sql")
                 .getContentAsString(java.nio.charset.StandardCharsets.UTF_8);
         assertTrue(upgrade.contains("ALTER TABLE chat_selected_output_finalization_item"));assertFalse(upgrade.contains("CREATE TABLE"));

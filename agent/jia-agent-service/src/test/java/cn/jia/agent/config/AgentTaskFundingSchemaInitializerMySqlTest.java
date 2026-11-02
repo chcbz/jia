@@ -68,20 +68,20 @@ class AgentTaskFundingSchemaInitializerMySqlTest {
     @Test
     void incompatibleIndexPropertiesFailWithoutRepair() {
         String payerIndex = "KEY idx_agent_task_funding_payer\n"
-                + "        (tenant_id, client_id, payer_principal_type, payer_principal_id, funding_status, id)";
+                + "        (tenant_id, client_id, owner_jiacn, payer_principal_type, payer_principal_id, funding_status, id)";
         assertCatalogDrift("prefix", ddl -> ddl.replace(payerIndex,
                 "KEY idx_agent_task_funding_payer\n"
-                        + "        (tenant_id(10), client_id, payer_principal_type, "
+                        + "        (tenant_id(10), client_id, owner_jiacn, payer_principal_type, "
                         + "payer_principal_id, funding_status, id)"));
         assertCatalogDrift("invisible", ddl -> ddl.replace(payerIndex,
                 payerIndex + " INVISIBLE"));
         assertCatalogDrift("descending", ddl -> ddl.replace(payerIndex,
                 "KEY idx_agent_task_funding_payer\n"
-                        + "        (tenant_id, client_id, payer_principal_type, "
+                        + "        (tenant_id, client_id, owner_jiacn, payer_principal_type, "
                         + "payer_principal_id, funding_status, id DESC)"));
         assertCatalogDrift("fulltext", ddl -> ddl.replace(payerIndex,
                 "FULLTEXT KEY idx_agent_task_funding_payer\n"
-                        + "        (tenant_id, client_id, payer_principal_type, "
+                        + "        (tenant_id, client_id, owner_jiacn, payer_principal_type, "
                         + "payer_principal_id, funding_status)"));
     }
 

@@ -87,6 +87,21 @@ class ChatBountyExecutionTerminationMySqlTest {
         var source=ds(url,target.user(),target.password());jdbc=new JdbcTemplate(source);
         tx=new TransactionTemplate(new DataSourceTransactionManager(source));
         tx.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
+        var schema = new ResourceDatabasePopulator();
+        for (String resource : java.util.List.of(
+                "db/agent-personal-workspace-v1_11-executions.sql",
+                "db/agent-personal-workspace-v1_13-task-execution.sql",
+                "db/agent-personal-workspace-v1_13-task-publication.sql",
+                "db/agent-personal-workspace-v1_14-conversation-execution.sql",
+                "db/agent-personal-workspace-v1_14-conversation-output.sql",
+                "db/agent-personal-workspace-v1_15-conversation-lease.sql",
+                "db/agent-personal-workspace-v1_16-conversation-provider-start.sql")) {
+            schema.addScript(new ClassPathResource(resource));
+        }
+        schema.execute(source);
+        new cn.jia.agent.config.AgentTaskProviderCostConsentSchemaInitializer(jdbc).afterPropertiesSet();
+        new cn.jia.agent.config.ControlledImageExecutionSchemaInitializer(jdbc).afterPropertiesSet();
+        new cn.jia.agent.config.ControlledImageFollowupV3SchemaInitializer(jdbc).afterPropertiesSet();
         new PersonalWorkspaceExecutionSchemaInitializer(jdbc).afterPropertiesSet();
         new ResourceDatabasePopulator(new ClassPathResource("db/chat-deliberation-schema.sql")).execute(source);
         jdbc.execute("""

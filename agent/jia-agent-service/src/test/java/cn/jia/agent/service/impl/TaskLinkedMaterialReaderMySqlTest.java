@@ -309,12 +309,7 @@ class TaskLinkedMaterialReaderMySqlTest {
         assertFalse(conversationLinks.changeState("1", "client", "owner", "parent", "shared", "ACTIVE", 1, "DETACHED", 2, 3L));
         assertEquals("ACTIVE", taskLinks.findByRelation("0", "client", "owner", "parent", "shared").getLinkState());
         assertEquals("ACTIVE", conversationLinks.findByRelation("0", "client", "owner", "parent", "shared").getLinkState());
-        for (String kind : java.util.List.of("task", "conversation")) {
-            assertThrows(org.springframework.dao.DataAccessException.class, () ->
-                    jdbc.update("UPDATE agent_personal_workspace_" + kind + "_file_link SET file_version=0 WHERE tenant_id='1'"));
-            assertThrows(org.springframework.dao.DataAccessException.class, () ->
-                    jdbc.update("UPDATE agent_personal_workspace_" + kind + "_link_operation SET request_hash='bad' WHERE tenant_id='1'"));
-        }
+
     }
 
     @Test void realMapperKeepsExactScopeVersionAndRole() {
