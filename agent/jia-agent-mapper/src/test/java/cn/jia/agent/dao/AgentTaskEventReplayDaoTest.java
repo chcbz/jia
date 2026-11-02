@@ -39,6 +39,19 @@ class AgentTaskEventReplayDaoTest extends BaseMockTest {
     }
 
     @Test
+    void batchedHeadsUseOneExactPartitionAndDeduplicateWithoutQueryingEmptyInput() {
+        assertEquals(List.of(), dao.findCurrentVersions("0", List.of()));
+        verifyNoInteractions(mapper);
+        var scope = new AgentTaskEventDao.ReplayScope("client", OWNER, "task");
+        var head = new cn.jia.agent.entity.AgentTaskEventHead("1", "client", OWNER, "task", 9L);
+        when(mapper.findExactCurrentEventVersions("1", List.of(scope))).thenReturn(List.of(head));
+        assertEquals(List.of(head), dao.findCurrentVersions("1", List.of(scope, scope)));
+        verify(mapper).findExactCurrentEventVersions("1", List.of(scope));
+        assertThrows(IllegalArgumentException.class, () -> dao.findCurrentVersions("1",
+                List.of(new AgentTaskEventDao.ReplayScope("client", "0", "task"))));
+    }
+
+    @Test
     void grayReadsAndVersionWritesKeepExactPartition() {
         when(mapper.findExactCurrentEventVersion("1", "client", OWNER, "task")).thenReturn(17L);
         when(mapper.findExactCurrentEventVersion("0", "client", OWNER, "task")).thenReturn(4L);

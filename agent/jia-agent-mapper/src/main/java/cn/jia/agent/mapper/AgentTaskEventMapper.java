@@ -162,6 +162,25 @@ public interface AgentTaskEventMapper extends BaseMapper<AgentTaskEventEntity> {
             @Param("taskId") String taskId);
 
     @Select("""
+            <script>
+            SELECT tenant_id AS tenantId, client_id AS clientId, owner_jiacn AS ownerJiacn,
+                   task_id AS taskId, current_event_version AS currentVersion
+            FROM agent_task_meta
+            WHERE tenant_id = #{tenantId} AND BINARY tenant_id = BINARY #{tenantId}
+              AND (
+                <foreach collection="scopes" item="scope" separator=" OR ">
+                  (client_id = #{scope.clientId} AND BINARY client_id = BINARY #{scope.clientId}
+                   AND owner_jiacn = #{scope.ownerJiacn} AND BINARY owner_jiacn = BINARY #{scope.ownerJiacn}
+                   AND task_id = #{scope.taskId} AND BINARY task_id = BINARY #{scope.taskId})
+                </foreach>
+              )
+            </script>
+            """)
+    List<cn.jia.agent.entity.AgentTaskEventHead> findExactCurrentEventVersions(
+            @Param("tenantId") String tenantId,
+            @Param("scopes") List<cn.jia.agent.dao.AgentTaskEventDao.ReplayScope> scopes);
+
+    @Select("""
             SELECT MIN(event_version)
             FROM agent_task_event
             WHERE tenant_id = #{tenantId}

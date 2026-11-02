@@ -80,6 +80,17 @@ public class AgentTaskEventDaoImpl
     }
 
     @Override
+    public List<cn.jia.agent.entity.AgentTaskEventHead> findCurrentVersions(String tenantId, List<ReplayScope> scopes) {
+        if (scopes.isEmpty()) return List.of();
+        var distinct = scopes.stream().distinct().toList();
+        for (var scope : distinct) {
+            requireReadOwnerScope(tenantId, scope.clientId(), scope.ownerJiacn());
+            requireExactId(scope.taskId(), "taskId", 100);
+        }
+        return baseMapper.findExactCurrentEventVersions(tenantId, distinct);
+    }
+
+    @Override
     public Long findEarliestVersion(String tenantId, String clientId, String ownerJiacn, String taskId) {
         requireReadOwnerScope(tenantId, clientId, ownerJiacn);
         requireExactId(taskId, "taskId", 100);

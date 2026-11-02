@@ -22,6 +22,9 @@ import reactor.core.publisher.FluxSink;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.HashMap;
+import java.util.stream.Collectors;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ArrayBlockingQueue;
@@ -66,6 +69,11 @@ public class AgentTaskEventReplayServiceImpl
     private final Object lifecycleLock = new Object();
     private final AtomicBoolean closed = new AtomicBoolean();
     private final Set<SubscriptionState> deliveryReservations = ConcurrentHashMap.newKeySet();
+    private final Set<SubscriptionState> recoverySubscriptions = ConcurrentHashMap.newKeySet();
+    // Protected by lifecycleLock. No task/event history or authorization is cached here.
+    private ScheduledFuture<?> recoveryTimer;
+    private long recoveryEpoch;
+    private final AtomicReference<FutureTask<Void>> recoveryScan = new AtomicReference<>();
     private final Semaphore activeSubscriptionPermits;
     private final Semaphore deliveryPermits;
     private final AtomicInteger scheduledWorkerTasks = new AtomicInteger();
@@ -201,6 +209,84 @@ public class AgentTaskEventReplayServiceImpl
         return deliveryExecutor.isTerminated();
     }
 
+    private void registerRecovery(SubscriptionState state) {
+        synchronized (lifecycleLock) {
+            if (closed.get() || state.logicalStopped.get()) return;
+            recoverySubscriptions.add(state);
+            if (recoveryTimer != null) return;
+            long epoch = ++recoveryEpoch;
+            try {
+                recoveryTimer = timerExecutor.scheduleAtFixedRate(() -> scheduleRecovery(epoch),
+                        policy.periodicCheck().toMillis(), policy.periodicCheck().toMillis(), TimeUnit.MILLISECONDS);
+                activeTimers.incrementAndGet();
+            } catch (RuntimeException failure) {
+                recoverySubscriptions.remove(state);
+                throw failure;
+            }
+        }
+    }
+
+    private void unregisterRecovery(SubscriptionState state) {
+        synchronized (lifecycleLock) {
+            recoverySubscriptions.remove(state);
+            if (!recoverySubscriptions.isEmpty()) return;
+            recoveryEpoch++;
+            if (recoveryTimer != null) {
+                recoveryTimer.cancel(false);
+                recoveryTimer = null;
+                activeTimers.decrementAndGet();
+            }
+            var scan = recoveryScan.getAndSet(null);
+            if (scan != null) scan.cancel(true);
+        }
+    }
+
+    private void scheduleRecovery(long epoch) {
+        synchronized (lifecycleLock) {
+            if (closed.get() || epoch != recoveryEpoch || recoverySubscriptions.isEmpty()
+                    || recoveryScan.get() != null) return;
+            FutureTask<Void> scan = new FutureTask<>(() -> { recoverSubscribedScopes(); return null; }) {
+                @Override protected void done() {
+                    recoveryScan.compareAndSet(this, null);
+                    scheduledWorkerTasks.decrementAndGet();
+                }
+            };
+            recoveryScan.set(scan);
+            scheduledWorkerTasks.incrementAndGet();
+            try { catchUpExecutor.execute(scan); }
+            catch (RejectedExecutionException saturated) { scan.cancel(false); }
+        }
+    }
+
+    // Only metadata is shared for one compensation pass. Every subscriber retains its own
+    // initial read, durable reconstruction, cursor, demand, terminal state and authorized scope.
+    void recoverSubscribedScopes() {
+        var active = recoverySubscriptions.stream().filter(s -> !s.logicalStopped.get()).toList();
+        var partitions = active.stream().collect(Collectors.groupingBy(s -> s.scope.tenantId()));
+        for (var partition : partitions.entrySet()) {
+            if (closed.get() || Thread.currentThread().isInterrupted()) return;
+            Map<TaskScope, Long> heads = new HashMap<>();
+            try {
+                var scopes = partition.getValue().stream().map(s -> new AgentTaskEventDao.ReplayScope(
+                        s.scope.clientId(), s.scope.ownerJiacn(), s.scope.taskId())).distinct().toList();
+                for (var head : eventDao.findCurrentVersions(partition.getKey(), scopes)) {
+                    heads.put(new TaskScope(head.tenantId(), head.clientId(), head.ownerJiacn(), head.taskId()),
+                            head.currentVersion());
+                }
+            } catch (RuntimeException unavailable) {
+                // Original per-subscription durable error/resync semantics remain authoritative.
+                partition.getValue().forEach(SubscriptionState::triggerCatchUp);
+                continue;
+            }
+            for (var state : partition.getValue()) {
+                Long head = heads.get(state.scope);
+                if (head == null || head != state.catchUpVersion.get() || state.dirty.get()) {
+                    state.triggerCatchUp();
+                }
+            }
+        }
+    }
+
     private final class SubscriptionState {
         private final TaskScope scope;
         private final AgentTaskEventBroker.TaskScope wakeupScope;
@@ -220,7 +306,6 @@ public class AgentTaskEventReplayServiceImpl
         private final AtomicBoolean downstreamCancelled = new AtomicBoolean();
         private final AtomicBoolean downstreamTerminated = new AtomicBoolean();
         private final AtomicBoolean serviceShutdownRequested = new AtomicBoolean();
-        private final AtomicBoolean timerCounted = new AtomicBoolean();
         private final AtomicBoolean activePermitHeld = new AtomicBoolean();
         private final AtomicBoolean deliveryPermitHeld = new AtomicBoolean();
         private final AtomicBoolean deliveryLaneStarted = new AtomicBoolean();
@@ -229,7 +314,6 @@ public class AgentTaskEventReplayServiceImpl
         private final CountDownLatch deliveryStartGate = new CountDownLatch(1);
         private final AtomicReference<TerminalOutcome> terminalOutcome = new AtomicReference<>();
         private final AtomicReference<Disposable> liveSubscription = new AtomicReference<>();
-        private final AtomicReference<ScheduledFuture<?>> timerTask = new AtomicReference<>();
         private final AtomicReference<TrackedCatchUpTask> workerTask = new AtomicReference<>();
         private final AtomicReference<DeliveryTask> deliveryTask = new AtomicReference<>();
 
@@ -293,20 +377,8 @@ public class AgentTaskEventReplayServiceImpl
             }
 
             try {
-                timerCounted.set(true);
-                activeTimers.incrementAndGet();
-                ScheduledFuture<?> timer = timerExecutor.scheduleAtFixedRate(
-                        this::triggerPeriodic,
-                        policy.periodicCheck().toMillis(),
-                        policy.periodicCheck().toMillis(),
-                        TimeUnit.MILLISECONDS);
-                timerTask.set(timer);
-                if (logicalStopped.get() && timerTask.compareAndSet(timer, null)) {
-                    timer.cancel(true);
-                    decrementTimerCount();
-                }
+                registerRecovery(this);
             } catch (RuntimeException timerFailure) {
-                decrementTimerCount();
                 terminalResync(ResyncReason.DURABLE_STATE_UNPROVABLE,
                         terminalCurrentVersion(), true);
                 return;
@@ -362,12 +434,6 @@ public class AgentTaskEventReplayServiceImpl
                     wakeup.eventVersion(), Math::max);
             if (wakeup.eventVersion() > catchUpVersion.get()
                     && wakeup.eventVersion() > previous) {
-                triggerCatchUp();
-            }
-        }
-
-        private void triggerPeriodic() {
-            if (!logicalStopped.get()) {
                 triggerCatchUp();
             }
         }
@@ -775,11 +841,7 @@ public class AgentTaskEventReplayServiceImpl
             if (live != null) {
                 live.dispose();
             }
-            ScheduledFuture<?> timer = timerTask.getAndSet(null);
-            if (timer != null) {
-                timer.cancel(true);
-            }
-            decrementTimerCount();
+            unregisterRecovery(this);
             if (cancelWorker) {
                 TrackedCatchUpTask worker = workerTask.getAndSet(null);
                 if (worker != null) {
@@ -809,12 +871,6 @@ public class AgentTaskEventReplayServiceImpl
             if (deliveryPermitHeld.compareAndSet(true, false)) {
                 deliveryReservations.remove(this);
                 deliveryPermits.release();
-            }
-        }
-
-        private void decrementTimerCount() {
-            if (timerCounted.compareAndSet(true, false)) {
-                activeTimers.decrementAndGet();
             }
         }
 

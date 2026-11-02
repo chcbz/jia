@@ -53,6 +53,7 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
@@ -795,9 +796,9 @@ class AgentTaskEventReplayServiceImplTest {
         Disposable first = service.replay(SCOPE, 0L).subscribe();
         Disposable second = service.replay(SCOPE, 0L).subscribe();
         awaitCondition(() -> service.activeSubscriptionCount() == 2
-                && service.activeTimerCount() == 2
+                && service.activeTimerCount() == 1
                 && broker.trackedLeaseCount() == 2
-                && service.pendingTimerTaskCount() == 2
+                && service.pendingTimerTaskCount() == 1
                 && service.scheduledWorkerTaskCount() == 0);
         int durableReadsAtCapacity = store.currentCalls.get();
 
@@ -806,9 +807,9 @@ class AgentTaskEventReplayServiceImplTest {
                 .verify(VERIFY_TIMEOUT);
 
         assertEquals(2, service.activeSubscriptionCount());
-        assertEquals(2, service.activeTimerCount());
+        assertEquals(1, service.activeTimerCount());
         assertEquals(2, broker.trackedLeaseCount());
-        assertEquals(2, service.pendingTimerTaskCount());
+        assertEquals(1, service.pendingTimerTaskCount());
         assertEquals(durableReadsAtCapacity, store.currentCalls.get());
         first.dispose();
         second.dispose();
@@ -1283,7 +1284,86 @@ class AgentTaskEventReplayServiceImplTest {
                 () -> new TaskScope("tenant", "client", "owner", "task\n"));
     }
 
+    @Test
+    void idleSubscribersShareOneTimerAndOneMetadataQueryWithoutReplayingEveryConnection() {
+        List<Disposable> subscriptions = new ArrayList<>();
+        for (int i = 0; i < 6; i++) subscriptions.add(service.replay(SCOPE, 0L).subscribe());
+        awaitCondition(() -> service.activeSubscriptionCount() == 6 && store.currentCalls.get() == 6
+                && service.scheduledWorkerTaskCount() == 0);
+        assertEquals(1, service.activeTimerCount());assertEquals(1, service.pendingTimerTaskCount());
+        int before = store.currentCalls.get();
+        for (int i = 0; i < 20; i++) service.recoverSubscribedScopes();
+        assertEquals(before + 20, store.currentCalls.get());
+        assertEquals(0, store.pageCalls.get());assertEquals(0, service.scheduledWorkerTaskCount());
+        verify(eventDao, org.mockito.Mockito.times(20)).findCurrentVersions("0", List.of(
+                new AgentTaskEventDao.ReplayScope(SCOPE.clientId(), SCOPE.ownerJiacn(), SCOPE.taskId())));
+        subscriptions.getFirst().dispose();assertEquals(1, service.activeTimerCount());
+        subscriptions.forEach(Disposable::dispose);awaitCleaned();
+        before = store.currentCalls.get();service.recoverSubscribedScopes();assertEquals(before, store.currentCalls.get());
+    }
+
+    @Test
+    void compensationPartitionsScopesAndDoesNotShareCursorsOrSuppressMissingHeads() {
+        var other = new TaskScope("1", "client-a", "Owner-A", SCOPE.taskId());
+        var received = new CopyOnWriteArrayList<ReplaySignal>();
+        var first = service.replay(SCOPE, 0L).subscribe(received::add);
+        var second = service.replay(other, 0L).subscribe(received::add);
+        awaitCondition(() -> store.currentCalls.get() == 2 && service.scheduledWorkerTaskCount() == 0);
+        service.recoverSubscribedScopes();
+        var scopes = List.of(new AgentTaskEventDao.ReplayScope(SCOPE.clientId(), SCOPE.ownerJiacn(), SCOPE.taskId()));
+        verify(eventDao).findCurrentVersions("0", scopes);verify(eventDao).findCurrentVersions("1", scopes);
+        assertTrue(received.isEmpty());
+        // Missing target metadata is not mistaken for an unchanged cursor of zero.
+        when(eventDao.findCurrentVersions(org.mockito.ArgumentMatchers.eq("1"), anyList())).thenReturn(List.of());
+        when(eventDao.findCurrentVersion("1", other.clientId(), other.ownerJiacn(), other.taskId())).thenReturn(null);
+        service.recoverSubscribedScopes();
+        awaitCondition(() -> received.size() == 1);
+        var resync = assertInstanceOf(ResyncRequired.class, received.getFirst());
+        assertEquals(other, resync.scope());assertEquals(ResyncReason.DURABLE_STATE_UNPROVABLE, resync.reason());
+        assertEquals(1, service.activeSubscriptionCount());
+        first.dispose();second.dispose();awaitCleaned();
+    }
+
+    @Test
+    void slowCompensationIsSingleFlightAndLastCancellationInterruptsIt() {
+        replaceService(policy(Duration.ofMillis(20)));
+        CountDownLatch entered = new CountDownLatch(1), interrupted = new CountDownLatch(1);
+        when(eventDao.findCurrentVersions(anyString(), anyList())).thenAnswer(call -> {
+            entered.countDown();
+            try { new CountDownLatch(1).await(); }
+            catch (InterruptedException expected) { interrupted.countDown(); Thread.currentThread().interrupt(); }
+            return List.of();
+        });
+        var replay = service.replay(SCOPE, 0L).subscribe();
+        await(entered);
+        CountDownLatch timerTurns = new CountDownLatch(3);
+        var turns = timer.scheduleAtFixedRate(timerTurns::countDown, 0, 20, TimeUnit.MILLISECONDS);
+        await(timerTurns);turns.cancel(false);
+        verify(eventDao, org.mockito.Mockito.times(1)).findCurrentVersions(anyString(), anyList());
+        replay.dispose();await(interrupted);awaitCleaned();
+    }
+
+    @Test
+    void failedBatchUsesOriginalDurableRecoveryRatherThanTreatingEveryTaskAsUnchanged() {
+        List<Long> received = new CopyOnWriteArrayList<>();
+        var replay = service.replay(SCOPE, 0L).ofType(DurableEvent.class)
+                .map(DurableEvent::eventVersion).subscribe(received::add);
+        awaitCondition(() -> store.currentCalls.get() == 1 && service.scheduledWorkerTaskCount() == 0);
+        store.append(1L);
+        when(eventDao.findCurrentVersions(anyString(), anyList())).thenThrow(new IllegalStateException("unavailable"));
+        service.recoverSubscribedScopes();awaitCondition(() -> received.equals(List.of(1L)));
+        replay.dispose();awaitCleaned();
+    }
+
     private void bindStore() {
+        when(eventDao.findCurrentVersions(anyString(), anyList())).thenAnswer(call -> {
+            String tenant = call.getArgument(0);
+            List<AgentTaskEventDao.ReplayScope> scopes = call.getArgument(1);
+            Long head = store.observe(store.currentCalls, store.currentSupplier);
+            if (head == null) return List.of();
+            return scopes.stream().map(scope -> new cn.jia.agent.entity.AgentTaskEventHead(
+                    tenant, scope.clientId(), scope.ownerJiacn(), scope.taskId(), head)).toList();
+        });
         when(eventDao.findCurrentVersion(anyString(), anyString(), anyString(), anyString()))
                 .thenAnswer(ignored -> store.observe(store.currentCalls, store.currentSupplier));
         when(eventDao.findEarliestVersion(anyString(), anyString(), anyString(), anyString()))

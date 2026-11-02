@@ -143,3 +143,13 @@ Bootstrap discovery 在 LIMIT/锁定前按进程固定租户（灰度另固定 c
 **未交付**：全业务表公共SQL隔离、其他业务写死租户/CHECK清理、Memory/Archive及其后台全量适配、Runtime独立安装根。既有minimal-grey路由/启动/调度限制继续保留，不因本批合入开放未适配能力。`/user/my`旧响应分支不在本次最后补丁继续改造。
 
 **运行前提**：本批公共policy必须显式配置`cyf.security.fixed-tenant.tenant-id`，不再从legacy属性或0兜底；OAuth issuer允许客户端按环境明确配置。旧生产配置不能直接启动此候选。合入develop仅用于集成验证，不包含安装、DDL或生产重启授权，也不代表全量灰度隔离或生产验收通过。
+
+### 2026-11-02 任务 SSE 集中补偿候选
+
+基线94ab8bf2a6，范围仅ReplayService/事件DAO；未部署。入口认证、owner/client/member ACL与外部SSE游标/消息合同不变，Web/Runtime无需联动。
+
+- 首次订阅仍先接本地hint、再从自己的游标读取持久事实。正常事件提示直接唤醒原回放；丢hint、跨实例写入由原5秒周期补偿，未延长恢复周期。
+- 每API实例有活跃订阅时仅一个补偿timer、一个在途批量扫描。完整tenant/client/owner/task作用域去重，再按tenant分组查询`agent_task_meta.current_event_version`；SQL中先分区并做字节精确匹配，复用现有`uk_agent_task_meta_scope`，不新增DDL。无订阅取消timer/扫描，无SQL。
+- 本批返回值只用于当前补偿轮次判断是否唤醒，绝不作为持久游标、业务授权或完成事实。相同版本且无待恢复工作时不为每连接重复回放查询；版本不同（含倒退）、目标缺失或批量查询失败，交给原独立回放处理cursor-ahead/缺页/历史保留期/不可证明状态。
+- 连接各自保留事件队列、游标、背压和终态；不缓存事件正文、跨连接共享授权或直接发送批量查询结果。工作池饱和仍由后续补偿重试；慢批量查询不叠加下一轮，最后取消/服务关闭释放对应资源。现有容量参数未增加，不以本轮优化新增性能拒绝阈值。
+- 定向回归：`AgentTaskEventReplayServiceImplTest`（单timer/去重、缺失与异常回退、丢hint/跨实例、慢查询取消、全部原游标/背压/生命周期）；`AgentTaskEventReplayDaoTest`（入口与去重）；独占MySQL `AgentTaskEventHeadMySqlTest`（case/accent/尾空格、全scope隔离、现有索引EXPLAIN）。通过既有未过滤的`mmdU1BootstrapOutbox`恢复slice执行，不修改其他任务的共享Flow配置；正式结果见CYF polling handoff。

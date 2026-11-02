@@ -62,6 +62,11 @@ public interface AgentTaskEventDao extends IBaseDao<AgentTaskEventEntity> {
     /** Return the byte-exact task scope's durable high-water, or null when absent. */
     Long findCurrentVersion(String tenantId, String clientId, String ownerJiacn, String taskId);
 
+    /** One partitioned metadata query for distinct active replay scopes; empty input does no SQL. */
+    List<cn.jia.agent.entity.AgentTaskEventHead> findCurrentVersions(String tenantId, List<ReplayScope> scopes);
+
+    record ReplayScope(String clientId, String ownerJiacn, String taskId) { }
+
     /** Return the earliest retained byte-exact event version, or null when no event is retained. */
     Long findEarliestVersion(String tenantId, String clientId, String ownerJiacn, String taskId);
 
