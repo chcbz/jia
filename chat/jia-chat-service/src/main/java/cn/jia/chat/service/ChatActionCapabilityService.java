@@ -61,6 +61,7 @@ public final class ChatActionCapabilityService {
             String reason=descriptor.reasonCode();
             String title=descriptor.skillKey(); String metadata=null;
             String runner=null; boolean requiresBinding=false;
+            boolean instruction=descriptor.verifiedNative()&&descriptor.manifestJson()==null;
             if(descriptor.verified()) {
                 try {
                     var manifest=SKILL_JSON.readTree(descriptor.manifestJson());
@@ -74,7 +75,7 @@ public final class ChatActionCapabilityService {
                 } catch(java.io.IOException invalid) {
                     throw new cn.jia.agent.service.InstalledSkillDescriptorLookup.SourceUnavailable(invalid);
                 }
-            } else if(reason==null) reason="SKILL_INSTALLATION_EVIDENCE_INVALID";
+            } else if(!instruction&&reason==null) reason="SKILL_INSTALLATION_EVIDENCE_INVALID";
             if(counts.get(List.of(descriptor.skillKey(),descriptor.skillVersion()))!=1)
                 reason="SKILL_INSTALLATION_AMBIGUOUS";
             if(reason==null && runtime==null) reason="SKILL_RUNTIME_UNAVAILABLE";
@@ -91,6 +92,12 @@ public final class ChatActionCapabilityService {
                             || !Objects.equals(descriptor.packageSha256(),report.packageSha256())
                             || !Objects.equals(descriptor.manifestSha256(),report.manifestSha256())
                             || !Objects.equals(runner,report.runner())) reason="SKILL_RUNTIME_BINDING_MISMATCH";
+                    else if(instruction) {
+                        if(!"INSTRUCTION".equals(report.kind())||!Objects.equals(descriptor.installationId(),report.skillInstallationId()))
+                            reason="SKILL_RUNTIME_BINDING_MISMATCH";
+                        else if(!report.enabled()||report.readiness()!=cn.jia.agent.service.SkillCapabilityLookup.Readiness.NOT_EXECUTABLE||report.reasonCode()!=null)
+                            reason=report.reasonCode()==null?"SKILL_RUNTIME_UNAVAILABLE":report.reasonCode();
+                    }
                     else if(report.readiness()!=cn.jia.agent.service.SkillCapabilityLookup.Readiness.READY)
                         reason=report.reasonCode()==null?"SKILL_RUNTIME_UNAVAILABLE":report.reasonCode();
                     else if(report.reasonCode()!=null||report.toolchainDigest()==null
@@ -100,7 +107,7 @@ public final class ChatActionCapabilityService {
             }
             results.add(new SkillCandidate(descriptor.skillKey(),descriptor.skillVersion(),title,
                     reason==null?"RUNTIME_READY":"UNAVAILABLE",reason,metadata,
-                    descriptor.verified()&&counts.get(List.of(descriptor.skillKey(),descriptor.skillVersion()))==1));
+                    descriptor.verifiedNative()&&counts.get(List.of(descriptor.skillKey(),descriptor.skillVersion()))==1));
         }
         // Fence/live directory is rechecked after the join. No old READY survives a reconnect.
         if(runtime!=null&&runtime.state()==cn.jia.agent.service.SkillCapabilityLookup.State.AVAILABLE
@@ -152,7 +159,7 @@ public final class ChatActionCapabilityService {
                     metadata=publicMetadata.toString();
                 } catch(java.io.IOException malformed) {throw new cn.jia.agent.service.InstalledSkillDescriptorLookup.SourceUnavailable(malformed);}
                 list.add(new SkillCandidate(d.skillKey(),d.skillVersion(),title,"UNAVAILABLE",
-                        d.reasonCode()!=null?d.reasonCode():"SKILL_RUNTIME_UNAVAILABLE",metadata,d.verified()));
+                        d.reasonCode()!=null?d.reasonCode():"SKILL_RUNTIME_UNAVAILABLE",metadata,d.verifiedNative()));
             }
             observed=new InstalledCatalog(null,list);
         }

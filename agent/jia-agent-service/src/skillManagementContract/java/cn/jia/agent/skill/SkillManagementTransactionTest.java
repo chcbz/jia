@@ -314,6 +314,9 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
     @Test void instructionNativeBindingUsesRealInstallationAndDisablingClosesAdmission() throws Exception {
         publishInstruction();var first=packageChange("INSTALL",null,"0","spv_pdf_1");finishInstall(first);first=current(first);
         var target=object(first.get("target"));assertEquals("INSTRUCTION",target.get("kind"));assertNull(target.get("manifestSha256"));
+        var list=service.skills(ACTOR,AGENT,false);
+        var item=object(((List<?>)list.get("items")).stream().filter(row->"pdf-export".equals(object(row).get("skillKey"))).findFirst().orElseThrow());
+        assertEquals(false,item.get("admissionEnabled"));assertEquals("NOT_EXECUTABLE",object(item.get("runtime")).get("state"));
         String id=text(target,"skillInstallationId");var rows=service.descriptors(scope());assertEquals(1,rows.size());
         var descriptor=rows.getFirst();assertTrue(descriptor.verifiedNative());assertNull(descriptor.manifestJson());assertNull(descriptor.manifestSha256());
         var binding=service.admitNative(scope(),"pdf-export",id,()->service.nativeTaskBinding("0",ACTOR.clientId(),"exec-native","grant",1,AGENT,id));

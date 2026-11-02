@@ -28,6 +28,28 @@ class ChatActionCapabilityServiceTest {
         when(installed.read(key)).thenReturn(new InstalledSkillDescriptorLookup.Snapshot(List.of(descriptor(null))));
         when(runtime.lookup(key, fence)).thenReturn(ready("1", "a".repeat(64), SkillCapabilityLookup.Readiness.READY, null));
     }
+    @Test void nativeInstructionIsVerifiedWithoutExecutableManifestAndRequiresMatchingLiveInstall() {
+        var descriptor=new InstalledSkillDescriptorLookup.Descriptor("document-workbench","1.0.0","native-install",
+                "a".repeat(64),null,null,"installation","host",null);
+        when(installed.read(key)).thenReturn(new InstalledSkillDescriptorLookup.Snapshot(List.of(descriptor)));
+        var offline=service.inspectInstalledSkillsWithoutRuntime(scope).items().getFirst();
+        assertTrue(offline.installationVerified());assertEquals("SKILL_RUNTIME_UNAVAILABLE",offline.reasonCode());
+        for(var identity:List.of("native-install","different-install")) {
+            var fact=new SkillCapabilityLookup.RuntimeSkill("document-workbench","1.0.0","a".repeat(64),null,null,
+                    SkillCapabilityLookup.Readiness.NOT_EXECUTABLE,null,null,null,identity,"product","INSTRUCTION","1",true,1L);
+            when(runtime.lookup(key,fence)).thenReturn(new SkillCapabilityLookup.View(SkillCapabilityLookup.State.AVAILABLE,
+                    "session",fence,new SkillCapabilityLookup.Catalog("1",List.of(fact))));
+            var item=service.inspectInstalledSkills(scope,fence).items().getFirst();assertTrue(item.installationVerified());
+            assertNull(item.metadataJson());
+            if(identity.equals("native-install")) {assertEquals("RUNTIME_READY",item.state());assertNull(item.reasonCode());}
+            else assertEquals("SKILL_RUNTIME_BINDING_MISMATCH",item.reasonCode());
+        }
+        var disabled=new SkillCapabilityLookup.RuntimeSkill("document-workbench","1.0.0","a".repeat(64),null,null,
+                SkillCapabilityLookup.Readiness.NOT_EXECUTABLE,null,null,null,"native-install","product","INSTRUCTION","2",false,1L);
+        when(runtime.lookup(key,fence)).thenReturn(new SkillCapabilityLookup.View(SkillCapabilityLookup.State.AVAILABLE,
+                "session",fence,new SkillCapabilityLookup.Catalog("2",List.of(disabled))));
+        assertEquals("UNAVAILABLE",service.inspectInstalledSkills(scope,fence).items().getFirst().state());
+    }
     @Test void profileAndNewTaskCatalogExcludeHistoricalVersions() {
         var old=new InstalledSkillDescriptorLookup.Descriptor("image-edit","0.9.0","old-install",
                 "d".repeat(64),"e".repeat(64),"{}","installation","host",null);
