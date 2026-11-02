@@ -98,7 +98,8 @@ class AgentWebSocketNativeBountyExecutionTest {
         assertEquals(shared.get("correlationId"),receipt.get("correlationId"));
         assertEquals(false,receipt.get("data").has("nativeWorkNotifications")); // conversation feature is off
         assertEquals(java.util.List.of(new cn.jia.agent.entity.NativeConversationWorkAvailable("0","client-a","agent-a","WORKSPACE_FILE")),handler.nativeWorkTargets());
-        org.springframework.test.util.ReflectionTestUtils.setField(handler,"archiveJobDiscoveryEnabled",true);
+        var archiveEnabled=AgentWebSocketHandler.class.getDeclaredField("archiveJobDiscoveryEnabled");
+        archiveEnabled.setAccessible(true);archiveEnabled.setBoolean(handler,true);
         registration.put("archiveJobDiscovery",0); // Server capability, not a client override.
         registration.remove("workspaceFileWorkNotifications");registration.put("messageId","register-file-2");
         handler.handleTextMessage(current,new TextMessage(json.writeValueAsString(cn.jia.agent.common.AgentMessageWire.event("agent.register",registration,null))));
