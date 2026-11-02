@@ -36,8 +36,8 @@ public class PositionSkillRuntimeService {
             if(!i.desired()){out.add(new Prepared(i,skill,null,null));continue;}
             var version=market.selectApprovedProductVersion(scope.tenantId(),scope.clientId(),skill.productVersionId());
             require(version!=null && skill.key().equals(version.getSkillKey()),503,"POSITION_PACKAGE_UNAVAILABLE");
-            var bytes=packages.describe(version);var manifest=packages.manifest(bytes);
-            out.add(new Prepared(i,skill,bytes,manifest));
+            var description=packages.describe(version);var manifest=packages.manifest(description);
+            out.add(new Prepared(i,skill,description,manifest));
         }
         return out;
     }
@@ -77,8 +77,8 @@ public class PositionSkillRuntimeService {
         var skill=state.skills().get(i.skillKey());
         var version=market.selectApprovedProductVersion(scope.tenantId(),scope.clientId(),skill.productVersionId());
         require(version!=null,503,"POSITION_PACKAGE_UNAVAILABLE");
-        var bytes=packages.describe(version);var manifest=packages.manifest(bytes);
-        return new Prepared(i,skill,bytes,manifest);
+        var description=packages.describe(version);var manifest=packages.manifest(description);
+        return new Prepared(i,skill,description,manifest);
     }
     public Map<String,Object> receipt(Proof proof,String id,Receipt receipt,Prepared prepared) {
         require(receipt!=null && id.equals(receipt.grantId()),400,"POSITION_RECEIPT_INVALID");

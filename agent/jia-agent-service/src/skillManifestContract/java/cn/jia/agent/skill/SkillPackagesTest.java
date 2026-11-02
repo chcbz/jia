@@ -113,6 +113,22 @@ class SkillPackagesTest {
         }));
         assertThrows(SkillMarketplaceException.class,()->packages.describe(approved(a)));
     }
+    @Test void preparedDescriptionsNeverLeakToAnotherThreadOrItsNextOperation() throws Exception {
+        byte[] bytes=archive("thread-local");String key=new SkillPackageStore(root).publish(bytes);
+        var packages=new SkillPackages(root,0);var v=approved(bytes);
+        try(var worker=java.util.concurrent.Executors.newSingleThreadExecutor()) {
+            packages.withPreparedDescriptions(()->{
+                packages.describe(v);
+                try {
+                    Files.delete(root.resolve(key+".zip"));
+                    worker.submit(()->assertThrows(SkillMarketplaceException.class,()->packages.describe(v))).get();
+                } catch(Exception e) {throw new AssertionError(e);}
+                assertNull(packages.describe(v).manifest());
+                return null;
+            });
+            assertThrows(SkillMarketplaceException.class,()->packages.describe(v));
+        }
+    }
     @Test void approvedFactDriftRejectedInsideTransaction() {
         byte[] bytes=archive("facts");new SkillPackageStore(root).publish(bytes);var packages=new SkillPackages(root);var prepared=packages.prepare(approved(bytes));
         assertThrows(SkillMarketplaceException.class,()->SkillPackages.revalidate(approved(bytes).setPriceMicro(1L),prepared));
@@ -127,7 +143,8 @@ class SkillPackagesTest {
         assertThrows(SkillMarketplaceException.class,()->packages.prepare(approved(bytes).setApprovedPermissionsSha256(new byte[32])));
         assertThrows(SkillMarketplaceException.class,()->packages.prepare(approved(bytes).setDeploymentRestriction(null)));
         assertThrows(SkillMarketplaceException.class,()->packages.prepare(approved(bytes).setPackageSize(Long.MAX_VALUE)));
-    }    @Test void executableDescriptionIsIdentityBoundAndCannotBeMutatedByConsumers() throws Exception {
+    }
+    @Test void executableDescriptionIsIdentityBoundAndCannotBeMutatedByConsumers() throws Exception {
         byte[] manifest=null;
         try(var input=getClass().getResourceAsStream("/skill-manifest-contract-v1.json")) {
             for(var item:new com.fasterxml.jackson.databind.ObjectMapper().readTree(input).path("cases"))
