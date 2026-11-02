@@ -70,25 +70,7 @@ class AgentTaskCreationOperationMySqlTest {
         List<String> before = definitions();
         new AgentTaskCreationOperationSchemaInitializer(jdbc).afterPropertiesSet();
         assertEquals(before, definitions());
-        List<Map<String, Object>> checks = jdbc.queryForList("""
-                SELECT tc.constraint_name,tc.enforced,cc.check_clause
-                  FROM information_schema.table_constraints tc
-                  JOIN information_schema.check_constraints cc
-                    ON cc.constraint_catalog=tc.constraint_catalog
-                   AND cc.constraint_schema=tc.constraint_schema
-                   AND cc.constraint_name=tc.constraint_name
-                 WHERE tc.constraint_schema=DATABASE()
-                   AND tc.table_name='agent_task_creation_operation'
-                   AND tc.constraint_type='CHECK'
-                 ORDER BY tc.constraint_name
-                """);
-        assertEquals(Set.of("chk_atco_hash", "chk_atco_identity", "chk_atco_receipt",
-                "chk_atco_refs", "chk_atco_scope", "chk_atco_time"), checks.stream()
-                .map(row -> row.get("constraint_name").toString()).collect(
-                        java.util.stream.Collectors.toSet()));
-        assertTrue(checks.stream().allMatch(row -> "YES".equals(row.get("enforced"))
-                && row.get("check_clause") != null));
-
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.table_constraints WHERE constraint_schema=DATABASE() AND constraint_type='CHECK'", Integer.class));
         insertProcessing("owner-a", "Key", "atco_1", "[]");
         assertThrows(DataAccessException.class,
                 () -> insertProcessing("owner-a", "Key", "atco_2", "[]"));
@@ -96,50 +78,10 @@ class AgentTaskCreationOperationMySqlTest {
         insertProcessing("Owner-a", "Key", "atco_4", "[]");
         assertEquals(3, count());
 
-        assertThrows(DataAccessException.class, () -> jdbc.update("""
-                INSERT INTO agent_task_creation_operation
-                  (operation_id,owner_jiacn,idempotency_key,request_hash,operation_state,
-                   task_id,requirement_revision,input_refs_json,created_at,completed_at,
-                   tenant_id,client_id,create_time,update_time)
-                VALUES ('bad','owner-a','bad-receipt',?,'COMMITTED',
-                        'task',2,JSON_ARRAY(),1,2,'0','client-a',1,2)
-                """, "a".repeat(64)));
-        String thirtyThree = "[" + String.join(",", java.util.Collections.nCopies(33,
+        String many = "[" + String.join(",", java.util.Collections.nCopies(33,
                 "{\"fileId\":\"f\",\"version\":1,\"purpose\":\"REFERENCE\"}")) + "]";
-        insertProcessing("owner-a", "many-materials", "atco_5", thirtyThree);
-        assertEquals(33, jdbc.queryForObject("SELECT JSON_LENGTH(input_refs_json) FROM "
-                + "agent_task_creation_operation WHERE operation_id='atco_5'", Integer.class));
-        assertThrows(DataAccessException.class,
-                () -> insertProcessing("owner-a", "not-array", "atco_bad_shape", "{}"));
-        assertThrows(DataAccessException.class,
-                () -> insertProcessing("0", "bad-owner", "atco_6", "[]"));
-    }
-
-    @Test
-    void existingMaterialCountCheckMigratesWithoutChangingReceiptsOrOtherChecks() throws Exception {
-        jdbc.execute("ALTER TABLE agent_task_creation_operation DROP CHECK chk_atco_refs, "
-                + "ADD CONSTRAINT chk_atco_refs CHECK (JSON_TYPE(input_refs_json)='ARRAY' "
-                + "AND JSON_LENGTH(input_refs_json) BETWEEN 0 AND 32)");
-        insertProcessing("owner-a", "existing", "atco_existing", "[]");
-        String many = "[" + java.util.stream.IntStream.range(0, 33)
-                .mapToObj(i -> "{\"fileId\":\"f" + i + "\",\"version\":1,\"purpose\":\"REFERENCE\"}")
-                .collect(java.util.stream.Collectors.joining(",")) + "]";
-        assertThrows(DataAccessException.class,
-                () -> insertProcessing("owner-a", "many", "atco_many", many));
-        String migration = new org.springframework.core.io.ClassPathResource(
-                "db/agent-task-creation-operation-v2-unbounded-materials.sql")
-                .getContentAsString(java.nio.charset.StandardCharsets.UTF_8)
-                .replaceAll("(?m)^\\s*--.*$", " ").trim();
-        jdbc.execute(migration.substring(0, migration.length() - 1));
-        new AgentTaskCreationOperationSchemaInitializer(jdbc).afterPropertiesSet();
-        insertProcessing("owner-a", "many", "atco_many", many);
-        assertEquals(2, count());
-        assertEquals("[]", jdbc.queryForObject("SELECT CAST(input_refs_json AS CHAR) FROM "
-                + "agent_task_creation_operation WHERE operation_id='atco_existing'", String.class));
-        assertThrows(DataAccessException.class,
-                () -> insertProcessing("owner-a", "bad-shape", "atco_bad_shape", "{}"));
-        assertThrows(DataAccessException.class,
-                () -> insertProcessing("0", "bad-owner", "atco_bad_owner", "[]"));
+        insertProcessing("owner-a", "many-materials", "atco_5", many);
+        assertEquals(33, jdbc.queryForObject("SELECT JSON_LENGTH(input_refs_json) FROM agent_task_creation_operation WHERE operation_id='atco_5'", Integer.class));
     }
 
     @Test

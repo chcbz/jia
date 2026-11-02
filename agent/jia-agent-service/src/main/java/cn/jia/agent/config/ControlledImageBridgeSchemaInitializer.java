@@ -15,7 +15,7 @@ import java.util.Objects;
 @org.springframework.context.annotation.Profile("schema-maintenance")
 public final class ControlledImageBridgeSchemaInitializer implements InitializingBean {
     static final String TABLE="agent_controlled_image_bridge_operation";
-    private static final Map<String,String> CHECKS=checks();
+
     private final JdbcTemplate jdbc;
     public ControlledImageBridgeSchemaInitializer(JdbcTemplate jdbc){this.jdbc=Objects.requireNonNull(jdbc);}
     @Override public void afterPropertiesSet(){
@@ -41,9 +41,7 @@ public final class ControlledImageBridgeSchemaInitializer implements Initializin
         index(indexes,"uk_acibo_scope_grant",0,List.of("tenant_id","client_id","owner_jiacn","task_id","grant_id"));
         index(indexes,"uk_acibo_scope_operation_grant",0,List.of("tenant_id","client_id","owner_jiacn","task_id","operation_grant_id"));
         if(indexes.size()!=21)throw new IllegalStateException("Controlled-image bridge index drift");
-        validateChecks(jdbc.queryForList("SELECT tc.constraint_name,tc.enforced,cc.check_clause FROM information_schema.table_constraints tc JOIN information_schema.check_constraints cc ON cc.constraint_catalog=tc.constraint_catalog AND cc.constraint_schema=tc.constraint_schema AND cc.constraint_name=tc.constraint_name WHERE tc.constraint_schema=DATABASE() AND tc.table_name=? AND tc.constraint_type='CHECK'",TABLE));
     }
-
 
     private void ensureV3Extension() {
         addColumn("execution_protocol_version","INT NOT NULL DEFAULT 2 AFTER authority_locator");
@@ -51,9 +49,6 @@ public final class ControlledImageBridgeSchemaInitializer implements Initializin
         Integer index=jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema=DATABASE() AND table_name=? AND index_name='uk_acibo_scope_operation_grant'",Integer.class,TABLE);
         if(index==null||index==0)jdbc.execute("ALTER TABLE "+TABLE+" ADD UNIQUE KEY uk_acibo_scope_operation_grant(tenant_id,client_id,owner_jiacn,task_id,operation_grant_id)");
         else if(index!=5)throw new IllegalStateException("Controlled-image bridge operation-grant index drift");
-        Integer check=jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.table_constraints WHERE constraint_schema=DATABASE() AND table_name=? AND constraint_name='chk_acibo_protocol' AND constraint_type='CHECK'",Integer.class,TABLE);
-        if(check==null||check==0)jdbc.execute("ALTER TABLE "+TABLE+" ADD CONSTRAINT chk_acibo_protocol CHECK((execution_protocol_version=2 AND operation_grant_id IS NULL) OR (execution_protocol_version=3 AND operation_grant_id REGEXP '^opgrant_[0-9a-f]{32}$'))");
-        else if(check!=1)throw new IllegalStateException("Controlled-image bridge protocol CHECK ambiguity");
     }
     private void addColumn(String name,String definition) {
         Integer count=jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name=? AND column_name=?",Integer.class,TABLE,name);
@@ -61,17 +56,6 @@ public final class ControlledImageBridgeSchemaInitializer implements Initializin
         else if(count!=1)throw new IllegalStateException("Controlled-image bridge column ambiguity: "+name);
     }
 
-    static Map<String,String> checkExpressions(){return CHECKS;}
-    static void validateChecks(List<Map<String,Object>> rows){
-        Map<String,String> actual=new LinkedHashMap<>();
-        for(var row:rows){String name=Objects.toString(row.get("constraint_name"),"");
-            if(name.isBlank()||!"YES".equalsIgnoreCase(Objects.toString(row.get("enforced"),""))
-                    ||actual.put(name,canonicalCheck(Objects.toString(row.get("check_clause"),"")))!=null)
-                throw new IllegalStateException("Controlled-image bridge CHECK catalog drift");}
-        if(!actual.keySet().equals(CHECKS.keySet()))throw new IllegalStateException("Controlled-image bridge CHECK set drift");
-        CHECKS.forEach((name,clause)->{if(!Objects.equals(canonicalCheck(clause),actual.get(name)))
-            throw new IllegalStateException("Controlled-image bridge CHECK definition drift: "+name);});
-    }
     static void validateColumns(List<Map<String,Object>> rows) {
         Map<String,Column> expected=columns();
         if(!rows.stream().map(row->Objects.toString(row.get("column_name"),"")).toList()
@@ -88,12 +72,7 @@ public final class ControlledImageBridgeSchemaInitializer implements Initializin
                 throw new IllegalStateException("Controlled-image bridge column drift: "+name);
         }
     }
-    private static String canonicalCheck(String value) {
-        try { return ControlledImageFollowupV3SchemaInitializer.canonicalControlledCheck(value); }
-        catch (IllegalArgumentException malformed) {
-            throw new IllegalStateException("Controlled-image bridge malformed CHECK catalog",malformed);
-        }
-    }
+
     private static void index(List<Map<String,Object>> rows,String name,int nonUnique,List<String> columns){
         var found=rows.stream().filter(row->name.equals(row.get("index_name"))).toList();
         if(found.size()!=columns.size())throw new IllegalStateException("Controlled-image bridge index drift: "+name);
@@ -116,16 +95,6 @@ public final class ControlledImageBridgeSchemaInitializer implements Initializin
     private static Column b(String type,String nullable){return new Column(type,nullable,"utf8mb4_0900_bin");}
     private static Column a(String type,String nullable){return new Column(type,nullable,"ascii_bin");}
     private record Column(String type,String nullable,String collation) { }
-    /** Exact MySQL 8 CHECK_CLAUSE rendering for the additive DDL. This deliberately mirrors
-     * the provider-consent catalog validation instead of weakening predicates through a generic
-     * parenthesis or REGEXP normalizer. */
-    private static Map<String,String> checks(){Map<String,String> c=new LinkedHashMap<>();
-        c.put("chk_acibo_scope","((tenant_id='0') and (owner_jiacn<>'0'))");
-        c.put("chk_acibo_hash","regexp_like(wrapper_digest,cast('^[0-9a-f]{64}$' as char charset binary))");
-        c.put("chk_acibo_consent","regexp_like(consent_id,cast('^consent_[0-9a-f]{32}$' as char charset binary))");
-        c.put("chk_acibo_locator","(authority_locator=concat('mmd-ci-v1:',consent_id))");
-        c.put("chk_acibo_protocol","(((execution_protocol_version=2) and (operation_grant_id is null)) or ((execution_protocol_version=3) and regexp_like(operation_grant_id,cast('^opgrant_[0-9a-f]{32}$' as char charset binary))))");
-        c.put("chk_acibo_versions","((expected_consent_version>0) and (grant_version>0) and (assignment_revision>=0))");
-        c.put("chk_acibo_time","(created_at>0)");return Map.copyOf(c);}
+
     static String ddl(){try{String source=new ClassPathResource("db/agent-controlled-image-bridge-v1.sql").getContentAsString(StandardCharsets.UTF_8).trim();String normalized=source.toLowerCase(Locale.ROOT).replaceAll("\\s+"," ");if(!normalized.startsWith("create table if not exists "+TABLE+" ")||normalized.substring(0,normalized.length()-1).contains(";")||normalized.contains(" alter table ")||normalized.contains(" drop ")||normalized.contains(" insert ")||normalized.contains(" update ")||normalized.contains(" delete "))throw new IllegalStateException("Unsafe bridge DDL");return source.endsWith(";")?source.substring(0,source.length()-1):source;}catch(Exception e){throw new IllegalStateException("Invalid bridge DDL",e);}}
 }

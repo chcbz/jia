@@ -149,7 +149,7 @@ class Ur06EnrollMysqlAcceptanceTest {
                 assertEquals("binary",c.get("DATA_TYPE")); assertEquals(32,((Number)c.get("CHARACTER_MAXIMUM_LENGTH")).longValue());
             }
             for(String name:List.of("uk_runtime_v1_installation","uk_runtime_v1_authorization")) assertEquals(1,jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema=DATABASE() AND table_name='agent_runtime_v1_installation' AND index_name=? AND non_unique=0",Integer.class,name));
-            assertEquals(1,jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.table_constraints WHERE constraint_schema=DATABASE() AND table_name='agent_runtime_v1_installation' AND constraint_name='chk_runtime_v1_status' AND constraint_type='CHECK' AND enforced='YES'",Integer.class));
+            assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.table_constraints WHERE constraint_schema=DATABASE() AND table_name='agent_runtime_v1_installation' AND constraint_name='chk_runtime_v1_status' AND constraint_type='CHECK' AND enforced='YES'",Integer.class));
             List<String> names=List.of("runtime_installation_id","runtime_host_id","runtime_instance_id","runtime_session_generation");
             for(int i=0;i<4;i++) {
                 Map<String,Object> c=jdbc.queryForMap("SELECT DATA_TYPE,IS_NULLABLE,CHARACTER_MAXIMUM_LENGTH FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='agent_runtime' AND column_name=?",names.get(i));

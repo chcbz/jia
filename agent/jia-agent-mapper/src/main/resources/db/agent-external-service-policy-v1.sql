@@ -13,8 +13,5 @@ CREATE TABLE IF NOT EXISTS agent_external_service_policy (
  created_at BIGINT NOT NULL,
  PRIMARY KEY (id),
  UNIQUE KEY uk_external_policy_revision (tenant_id,client_id,agent_id,binding_id,revision),
- UNIQUE KEY uk_external_policy_request (tenant_id,client_id,provider_owner_jiacn,idempotency_key),
- CONSTRAINT chk_external_policy_revision CHECK (expected_revision>=0 AND revision=expected_revision+1),
- CONSTRAINT chk_external_policy_enabled CHECK (enabled IN (0,1)),
- CONSTRAINT chk_external_policy_binding CHECK (binding_id>0)
+ UNIQUE KEY uk_external_policy_request (tenant_id,client_id,provider_owner_jiacn,idempotency_key)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;

@@ -137,7 +137,7 @@ class EconomySkillSchemaInitializerMySqlTest {
     }
 
     @Test
-    void immutableVersionQuoteReceiptAndPlatformOnlyConstraintsRejectAdversarialWrites() {
+    void immutableVersionQuoteReceiptAndForeignKeyRejectAdversarialWrites() {
         JdbcTemplate jdbc = fixture.newDatabase("immutable").jdbc();
         new EconomySkillSchemaInitializer(jdbc).afterPropertiesSet();
         insertProduct(jdbc, "Tenant-A", "Client-A", "sp-1", "repo-inspector");
@@ -154,21 +154,8 @@ class EconomySkillSchemaInitializerMySqlTest {
         assertThrows(RuntimeException.class, () -> jdbc.update(
                 "DELETE FROM economy_skill_order_receipt WHERE order_id='so-1'"));
 
-        assertThrows(RuntimeException.class, () -> insertProduct(
-                jdbc, "Tenant-A", "Client-A", "sp-third-party", "repo-test", "AGENT", "seller-agent"));
-        assertThrows(RuntimeException.class, () -> insertVersion(
-                jdbc, "Tenant-A", "Client-A", "sp-1", "spv-deploy-bad", "deploy-runner", "NONE", 1));
         assertThrows(RuntimeException.class, () -> insertVersion(
                 jdbc, "Tenant-B", "Client-A", "sp-1", "spv-cross-scope", "repo-test", "NONE", 1));
-        assertThrows(RuntimeException.class, () -> jdbc.update("""
-                INSERT INTO economy_skill_order(
-                    order_id,quote_id,product_version_id,target_agent_id,buyer_type,buyer_id,seller_type,seller_id,
-                    price_micro,expected_agent_version,permission_grant_version,approved_permissions_manifest,
-                    approved_permissions_sha256,escrow_id,reserve_transaction_id,status,version,tenant_id,client_id,
-                    held_at,update_time)
-                VALUES('so-free-paid-ref','sq-1','spv-1','agent-1','USER','user-1','SYSTEM','SKILL_STORE',
-                    0,1,1,'[]',?, 'esc-not-allowed',NULL,'FUNDS_HELD',1,'Tenant-A','Client-A',1,1)
-                """, new byte[32]));
     }
 
     @Test

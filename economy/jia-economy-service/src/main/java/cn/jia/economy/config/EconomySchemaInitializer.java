@@ -123,11 +123,6 @@ public final class EconomySchemaInitializer implements InitializingBean {
             throw new IllegalStateException("ECO-V0 table " + expected.name()
                     + " has incompatible indexes: " + indexes);
         }
-        Map<String, CheckDefinition> checks = inspectChecks(expected.name());
-        if (!expected.checks().equals(checks)) {
-            throw new IllegalStateException("ECO-V0 table " + expected.name()
-                    + " has incompatible CHECK constraints: " + checks);
-        }
         Integer foreignKeys = jdbcTemplate.queryForObject("""
                 SELECT COUNT(*)
                 FROM information_schema.referential_constraints
@@ -138,31 +133,6 @@ public final class EconomySchemaInitializer implements InitializingBean {
             throw new IllegalStateException("ECO-V0 table " + expected.name()
                     + " must not participate in database foreign keys");
         }
-    }
-
-    private Map<String, CheckDefinition> inspectChecks(String table) {
-        List<CheckDefinition> rows = jdbcTemplate.query("""
-                SELECT tc.constraint_name,cc.check_clause,tc.enforced
-                FROM information_schema.table_constraints tc
-                JOIN information_schema.check_constraints cc
-                  ON cc.constraint_catalog=tc.constraint_catalog
-                 AND cc.constraint_schema=tc.constraint_schema
-                 AND cc.constraint_name=tc.constraint_name
-                WHERE tc.constraint_schema=DATABASE() AND tc.table_name=?
-                  AND tc.constraint_type='CHECK'
-                ORDER BY tc.constraint_name
-                """, (rs, rowNum) -> new CheckDefinition(
-                rs.getString("constraint_name"),
-                normalizeCheckClause(rs.getString("check_clause")),
-                "YES".equalsIgnoreCase(rs.getString("enforced"))), table);
-        Map<String, CheckDefinition> result = new TreeMap<>();
-        for (CheckDefinition row : rows) {
-            if (result.put(row.name(), row) != null) {
-                throw new IllegalStateException("ECO-V0 table " + table
-                        + " has an ambiguous CHECK catalog");
-            }
-        }
-        return result;
     }
 
     private Map<String, IndexDefinition> inspectIndexes(String table) {
@@ -402,189 +372,15 @@ public final class EconomySchemaInitializer implements InitializingBean {
                 .replaceAll("\\s+", " ").trim().toLowerCase(Locale.ROOT);
     }
 
-    private static String normalizeSqlPreservingLiterals(String sql) {
-        StringBuilder normalized = new StringBuilder(sql.length());
-        boolean quoted = false;
-        boolean pendingSpace = false;
-        for (int index = 0; index < sql.length(); index++) {
-            char character = sql.charAt(index);
-            if (character == '\'') {
-                if (pendingSpace && !normalized.isEmpty()
-                        && normalized.charAt(normalized.length() - 1) != ' ') normalized.append(' ');
-                pendingSpace = false;
-                normalized.append(character);
-                if (quoted && index + 1 < sql.length() && sql.charAt(index + 1) == '\'') {
-                    normalized.append(sql.charAt(++index));
-                } else {
-                    quoted = !quoted;
-                }
-            } else if (quoted) {
-                normalized.append(character);
-            } else if (character == '`') {
-                continue;
-            } else if (Character.isWhitespace(character)) {
-                pendingSpace = true;
-            } else {
-                if (pendingSpace && !normalized.isEmpty()
-                        && normalized.charAt(normalized.length() - 1) != ' ') normalized.append(' ');
-                pendingSpace = false;
-                normalized.append(Character.toLowerCase(character));
-            }
-        }
-        return normalized.toString().trim();
-    }
-
     private static boolean isOpenTriggerBody(String statement) {
         String normalized = normalizeSql(statement);
         return normalized.startsWith("create trigger ") && !normalized.endsWith(" end");
-    }
-
-    static String normalizeCheckClause(String sql) {
-        if (sql == null) return null;
-        String normalized = normalizeSqlPreservingLiterals(normalizeEscapedCheckStringDelimiters(sql));
-        normalized = normalizeCheckSpacing(normalizeBinaryLengthFunction(normalized));
-        return normalizeCheckSpacing(removeRedundantCheckParentheses(normalized));
-    }
-
-    private static String normalizeEscapedCheckStringDelimiters(String value) {
-        StringBuilder normalized = new StringBuilder(value.length());
-        boolean quoted = false;
-        boolean escapedDelimiter = false;
-        for (int index = 0; index < value.length(); index++) {
-            char character = value.charAt(index);
-            if (!quoted && character == '\\' && index + 1 < value.length()
-                    && value.charAt(index + 1) == '\'') {
-                normalized.append('\'');
-                quoted = true;
-                escapedDelimiter = true;
-                index++;
-            } else if (quoted && escapedDelimiter && character == '\\'
-                    && index + 1 < value.length() && value.charAt(index + 1) == '\'') {
-                if (index + 3 < value.length() && value.charAt(index + 2) == '\\'
-                        && value.charAt(index + 3) == '\'') {
-                    normalized.append("''");
-                    index += 3;
-                } else {
-                    normalized.append('\'');
-                    quoted = false;
-                    escapedDelimiter = false;
-                    index++;
-                }
-            } else {
-                normalized.append(character);
-                if (character == '\'') {
-                    if (quoted && index + 1 < value.length() && value.charAt(index + 1) == '\'') {
-                        normalized.append(value.charAt(++index));
-                    } else {
-                        quoted = !quoted;
-                        escapedDelimiter = false;
-                    }
-                }
-            }
-        }
-        return normalized.toString();
-    }
-
-    private static String normalizeBinaryLengthFunction(String value) {
-        StringBuilder normalized = new StringBuilder(value.length());
-        boolean quoted = false;
-        for (int index = 0; index < value.length(); index++) {
-            char character = value.charAt(index);
-            if (character == '\'') {
-                normalized.append(character);
-                if (quoted && index + 1 < value.length() && value.charAt(index + 1) == '\'') {
-                    normalized.append(value.charAt(++index));
-                } else {
-                    quoted = !quoted;
-                }
-            } else if (quoted || !isSqlWordCharacter(character)) {
-                normalized.append(character);
-            } else {
-                int end = index + 1;
-                while (end < value.length() && isSqlWordCharacter(value.charAt(end))) end++;
-                String word = value.substring(index, end);
-                int next = end;
-                while (next < value.length() && Character.isWhitespace(value.charAt(next))) next++;
-                normalized.append(("length".equals(word) || "octet_length".equals(word))
-                        && next < value.length() && value.charAt(next) == '('
-                        ? "octet_length" : word);
-                index = end - 1;
-            }
-        }
-        return normalized.toString();
-    }
-
-    private static String normalizeCheckSpacing(String value) {
-        StringBuilder normalized = new StringBuilder(value.length());
-        boolean pendingSpace = false;
-        for (int index = 0; index < value.length(); index++) {
-            char character = value.charAt(index);
-            if (character == '\'') {
-                appendCheckSpace(normalized, pendingSpace);
-                pendingSpace = false;
-                normalized.append(character);
-                while (++index < value.length()) {
-                    character = value.charAt(index);
-                    normalized.append(character);
-                    if (character == '\'' && index + 1 < value.length()
-                            && value.charAt(index + 1) == '\'') {
-                        normalized.append(value.charAt(++index));
-                    } else if (character == '\'') {
-                        break;
-                    }
-                }
-            } else if (Character.isWhitespace(character)) {
-                pendingSpace = true;
-            } else if (isCharsetIntroducer(value, index)) {
-                index += "_utf8mb4".length() - 1;
-                while (index + 1 < value.length() && Character.isWhitespace(value.charAt(index + 1))) index++;
-            } else if (character == '(') {
-                trimTrailingSpace(normalized);
-                if (requiresSpaceBeforeOpenParenthesis(normalized)) normalized.append(' ');
-                normalized.append(character);
-                pendingSpace = false;
-            } else if (character == ')' || character == ',') {
-                trimTrailingSpace(normalized);
-                normalized.append(character);
-                pendingSpace = false;
-            } else if (isComparisonOperator(character)) {
-                trimTrailingSpace(normalized);
-                normalized.append(character);
-                if (index + 1 < value.length() && isComparisonPair(character, value.charAt(index + 1))) {
-                    normalized.append(value.charAt(++index));
-                }
-                pendingSpace = false;
-            } else {
-                appendCheckSpace(normalized, pendingSpace);
-                pendingSpace = false;
-                if (!normalized.isEmpty() && normalized.charAt(normalized.length() - 1) == ')'
-                        && isSqlWordCharacter(character)) normalized.append(' ');
-                normalized.append(character);
-            }
-        }
-        return normalized.toString().trim();
-    }
-
-    private static void appendCheckSpace(StringBuilder normalized, boolean pendingSpace) {
-        if (!pendingSpace || normalized.isEmpty()) return;
-        char previous = normalized.charAt(normalized.length() - 1);
-        if (previous != '(' && previous != ',' && !isComparisonOperator(previous)) normalized.append(' ');
     }
 
     private static void trimTrailingSpace(StringBuilder value) {
         while (!value.isEmpty() && Character.isWhitespace(value.charAt(value.length() - 1))) {
             value.setLength(value.length() - 1);
         }
-    }
-
-    private static boolean requiresSpaceBeforeOpenParenthesis(StringBuilder value) {
-        int end = value.length();
-        int start = end;
-        while (start > 0 && isSqlWordCharacter(value.charAt(start - 1))) start--;
-        if (start == end) return false;
-        String word = value.substring(start, end);
-        return "in".equals(word) || "and".equals(word) || "or".equals(word)
-                || "not".equals(word) || "exists".equals(word);
     }
 
     private static boolean isCharsetIntroducer(String value, int index) {
@@ -598,104 +394,6 @@ public final class EconomySchemaInitializer implements InitializingBean {
 
     private static boolean isSqlWordCharacter(char character) {
         return Character.isLetterOrDigit(character) || character == '_';
-    }
-
-    private static boolean isComparisonOperator(char character) {
-        return character == '<' || character == '>' || character == '=' || character == '!';
-    }
-
-    private static boolean isComparisonPair(char first, char second) {
-        return second == '=' && (first == '<' || first == '>' || first == '!')
-                || first == '<' && second == '>';
-    }
-
-    private static String removeRedundantCheckParentheses(String value) {
-        String current = stripOuterParentheses(value);
-        boolean changed;
-        do {
-            changed = false;
-            StringBuilder next = new StringBuilder(current);
-            List<Integer> stack = new ArrayList<>();
-            boolean quoted = false;
-            for (int index = 0; index < current.length(); index++) {
-                char character = current.charAt(index);
-                if (character == '\'') {
-                    if (quoted && index + 1 < current.length() && current.charAt(index + 1) == '\'') {
-                        index++;
-                    } else {
-                        quoted = !quoted;
-                    }
-                } else if (!quoted && character == '(') {
-                    stack.add(index);
-                } else if (!quoted && character == ')' && !stack.isEmpty()) {
-                    int open = stack.removeLast();
-                    if (!isFunctionOrInParenthesis(current, open)
-                            && !containsTopLevelBoolean(current, open + 1, index)) {
-                        next.setCharAt(open, ' ');
-                        next.setCharAt(index, ' ');
-                        changed = true;
-                    }
-                }
-            }
-            current = stripOuterParentheses(normalizeCheckSpacing(next.toString()));
-        } while (changed);
-        return current;
-    }
-
-    private static boolean isFunctionOrInParenthesis(String value, int open) {
-        int cursor = open - 1;
-        while (cursor >= 0 && Character.isWhitespace(value.charAt(cursor))) cursor--;
-        int end = cursor + 1;
-        while (cursor >= 0 && (Character.isLetterOrDigit(value.charAt(cursor))
-                || value.charAt(cursor) == '_')) cursor--;
-        if (end == cursor + 1) return false;
-        String word = value.substring(cursor + 1, end);
-        return "in".equals(word) || "octet_length".equals(word);
-    }
-
-    private static boolean containsTopLevelBoolean(String value, int start, int end) {
-        int depth = 0;
-        boolean quoted = false;
-        for (int index = start; index < end; index++) {
-            char character = value.charAt(index);
-            if (character == '\'') {
-                if (quoted && index + 1 < end && value.charAt(index + 1) == '\'') {
-                    index++;
-                } else {
-                    quoted = !quoted;
-                }
-            } else if (!quoted && character == '(') {
-                depth++;
-            } else if (!quoted && character == ')') {
-                depth--;
-            } else if (!quoted && depth == 0 && Character.isLetter(character)) {
-                int wordStart = index;
-                while (index < end && Character.isLetter(value.charAt(index))) index++;
-                String word = value.substring(wordStart, index);
-                if ("and".equals(word) || "or".equals(word)) return true;
-                index--;
-            }
-        }
-        return false;
-    }
-
-    private static String stripOuterParentheses(String value) {
-        String current = value.trim();
-        while (current.startsWith("(") && current.endsWith(")")
-                && matchingParenthesis(current, 0) == current.length() - 1) {
-            current = current.substring(1, current.length() - 1).trim();
-        }
-        return current;
-    }
-
-    private static int matchingParenthesis(String value, int open) {
-        int depth = 0;
-        for (int index = open; index < value.length(); index++) {
-            char character = value.charAt(index);
-            if (character == '(') depth++;
-            else if (character == ')' && --depth == 0) return index;
-        }
-        return -1;
     }
 
     static String normalizeTriggerSql(String sql) {
@@ -797,14 +495,7 @@ public final class EconomySchemaInitializer implements InitializingBean {
                 index("PRIMARY", true, "id"),
                 index("uk_economy_account_id", true, "tenant_id", "client_id", "account_id"),
                 index("uk_economy_account_key", true, "tenant_id", "client_id", "currency", "owner_type", "owner_id", "purpose"),
-                index("idx_economy_account_owner", false, "tenant_id", "client_id", "owner_type", "owner_id", "currency", "purpose")),
-                check("chk_economy_account_currency", "currency = 'SILVER'"),
-                check("chk_economy_account_negative", "allow_negative IN (0,1) AND "
-                        + "((allow_negative = 0 AND balance_micro >= 0) OR "
-                        + "(allow_negative = 1 AND owner_type = 'SYSTEM' "
-                        + "AND purpose IN ('SILVER_ISSUANCE','PROVIDER_VARIANCE')))"),
-                check("chk_economy_account_status", "status IN ('ACTIVE','FROZEN','CLOSED')"),
-                check("chk_economy_account_version", "version >= 0")));
+                index("idx_economy_account_owner", false, "tenant_id", "client_id", "owner_type", "owner_id", "currency", "purpose"))));
         tables.put("economy_transaction", table("economy_transaction", List.of(
                 id(), varchar("transaction_id", 100, false, null), varchar("principal_type", 20, false, null),
                 varchar("principal_id", 100, false, null), varbinary("idempotency_key", 36), binary("request_hash", 32),
@@ -817,16 +508,7 @@ public final class EconomySchemaInitializer implements InitializingBean {
                 index("PRIMARY", true, "id"),
                 index("uk_economy_transaction_id", true, "tenant_id", "client_id", "transaction_id"),
                 index("uk_economy_transaction_idempotency", true, "tenant_id", "client_id", "principal_type", "principal_id", "idempotency_key"),
-                index("idx_economy_transaction_business", false, "tenant_id", "client_id", "business_type", "business_id", "posted_at", "id")),
-                check("chk_economy_transaction_currency", "currency = 'SILVER'"),
-                check("chk_economy_transaction_hash", "OCTET_LENGTH(request_hash) = 32"),
-                check("chk_economy_transaction_key", "OCTET_LENGTH(idempotency_key) = 36"),
-                check("chk_economy_transaction_state", "(status = 'POSTING' AND posted_at IS NULL "
-                        + "AND entry_count = 0 AND debit_total_micro = 0 AND credit_total_micro = 0) OR "
-                        + "(status = 'POSTED' AND posted_at IS NOT NULL AND entry_count >= 2 "
-                        + "AND debit_total_micro > 0 AND debit_total_micro = credit_total_micro)"),
-                check("chk_economy_transaction_totals", "entry_count >= 0 AND debit_total_micro >= 0 "
-                        + "AND credit_total_micro >= 0")));
+                index("idx_economy_transaction_business", false, "tenant_id", "client_id", "business_type", "business_id", "posted_at", "id"))));
         tables.put("economy_entry", table("economy_entry", List.of(
                 id(), varchar("entry_id", 140, false, null), varchar("transaction_id", 100, false, null),
                 varchar("account_id", 100, false, null), integer("entry_sequence", false, null),
@@ -838,11 +520,7 @@ public final class EconomySchemaInitializer implements InitializingBean {
                 index("uk_economy_entry_id", true, "tenant_id", "client_id", "entry_id"),
                 index("uk_economy_entry_sequence", true, "tenant_id", "client_id", "transaction_id", "entry_sequence"),
                 index("idx_economy_entry_account", false, "tenant_id", "client_id", "account_id", "posted_at", "id"),
-                index("idx_economy_entry_transaction", false, "tenant_id", "client_id", "transaction_id", "id")),
-                check("chk_economy_entry_amount", "signed_amount_micro <> 0"),
-                check("chk_economy_entry_currency", "currency = 'SILVER'"),
-                check("chk_economy_entry_sequence", "entry_sequence > 0"),
-                check("chk_economy_entry_status", "status = 'POSTED'")));
+                index("idx_economy_entry_transaction", false, "tenant_id", "client_id", "transaction_id", "id"))));
         tables.put("economy_escrow", table("economy_escrow", List.of(
                 id(), varchar("escrow_id", 100, false, null), varchar("business_type", 32, false, null),
                 varchar("business_id", 100, false, null), varchar("payer_account_id", 100, false, null),
@@ -856,13 +534,7 @@ public final class EconomySchemaInitializer implements InitializingBean {
                 index("uk_economy_escrow_id", true, "tenant_id", "client_id", "escrow_id"),
                 index("uk_economy_escrow_business", true, "tenant_id", "client_id", "business_type", "business_id"),
                 index("uk_economy_escrow_account", true, "tenant_id", "client_id", "escrow_account_id"),
-                index("idx_economy_escrow_payer", false, "tenant_id", "client_id", "payer_account_id", "status", "id")),
-                check("chk_economy_escrow_amounts", "gross_micro > 0 AND captured_micro >= 0 "
-                        + "AND refunded_micro >= 0 AND captured_micro <= gross_micro - refunded_micro"),
-                check("chk_economy_escrow_currency", "currency = 'SILVER'"),
-                check("chk_economy_escrow_status", "status IN ('ACTIVE','PARTIALLY_CAPTURED','CAPTURED',"
-                        + "'REFUNDED','EXPIRED')"),
-                check("chk_economy_escrow_version", "version > 0")));
+                index("idx_economy_escrow_payer", false, "tenant_id", "client_id", "payer_account_id", "status", "id"))));
         tables.put("economy_escrow_funding_lot", table("economy_escrow_funding_lot", List.of(
                 id(), varchar("escrow_id", 100, false, null), integer("funding_sequence", false, null),
                 varchar("reserve_transaction_id", 100, false, null), varchar("payer_account_id", 100, false, null),
@@ -873,26 +545,15 @@ public final class EconomySchemaInitializer implements InitializingBean {
                 index("PRIMARY", true, "id"),
                 index("uk_economy_funding_sequence", true, "tenant_id", "client_id", "escrow_id", "funding_sequence"),
                 index("uk_economy_funding_transaction", true, "tenant_id", "client_id", "reserve_transaction_id"),
-                index("idx_economy_funding_escrow", false, "tenant_id", "client_id", "escrow_id", "id")),
-                check("chk_economy_funding_amount", "amount_micro > 0 "
-                        + "AND escrow_gross_after_micro >= amount_micro"),
-                check("chk_economy_funding_currency", "currency = 'SILVER'"),
-                check("chk_economy_funding_sequence", "funding_sequence > 0"),
-                check("chk_economy_funding_version", "escrow_version_after > 0")));
+                index("idx_economy_funding_escrow", false, "tenant_id", "client_id", "escrow_id", "id"))));
         return Map.copyOf(tables);
     }
 
     private static TableExpectation table(String name, List<ColumnDefinition> columns,
-                                          List<IndexDefinition> indexes, CheckDefinition... checks) {
+                                          List<IndexDefinition> indexes) {
         Map<String, IndexDefinition> byName = new TreeMap<>();
         indexes.forEach(index -> byName.put(index.name(), index));
-        Map<String, CheckDefinition> checksByName = new TreeMap<>();
-        for (CheckDefinition check : checks) checksByName.put(check.name(), check);
-        return new TableExpectation(name, columns, Map.copyOf(byName), Map.copyOf(checksByName));
-    }
-
-    private static CheckDefinition check(String name, String clause) {
-        return new CheckDefinition(name, normalizeCheckClause(clause), true);
+        return new TableExpectation(name, columns, Map.copyOf(byName));
     }
 
     private static ColumnDefinition id() {
@@ -951,11 +612,8 @@ public final class EconomySchemaInitializer implements InitializingBean {
                        Integer subPart, String indexType, String visible) {
     }
 
-    record CheckDefinition(String name, String normalizedClause, boolean enforced) {
-    }
-
     record TableExpectation(String name, List<ColumnDefinition> columns,
-                            Map<String, IndexDefinition> indexes, Map<String, CheckDefinition> checks) {
+                            Map<String, IndexDefinition> indexes) {
     }
 
     record TriggerDefinition(String name, String table, String timing, String event, String statement) {

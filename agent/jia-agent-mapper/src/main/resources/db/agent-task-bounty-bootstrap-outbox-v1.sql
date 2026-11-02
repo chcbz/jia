@@ -36,39 +36,6 @@ CREATE TABLE IF NOT EXISTS agent_task_bounty_bootstrap_outbox (
  KEY idx_atbbo_scope_claim (tenant_id,client_id,owner_jiacn,status,next_retry_at,lease_until,id),
  KEY idx_atbbo_available_due (tenant_id,status,next_retry_at,lease_until,id),
  KEY idx_atbbo_available_expired (tenant_id,status,lease_until,id),
- KEY idx_atbbo_scope_task (tenant_id,client_id,owner_jiacn,task_id,assignment_revision),
- CONSTRAINT chk_atbbo_revision CHECK (
-   requirement_revision>=1 AND assignment_revision>=0 AND grant_version>=1
-   AND attempt_count>=0 AND version>=0),
- CONSTRAINT chk_atbbo_hash CHECK (
-   payload_hash REGEXP '^[0-9a-f]{64}$'
-   AND reference_summary_sha256 REGEXP '^[0-9a-f]{64}$'),
- CONSTRAINT chk_atbbo_references CHECK (JSON_TYPE(reference_summary_json)='ARRAY'),
- CONSTRAINT chk_atbbo_state CHECK (status IN ('PENDING','CLAIMED','RETRY','ADMITTED','DEAD')),
- CONSTRAINT chk_atbbo_lifecycle CHECK (
-   (status='PENDING' AND attempt_count=0 AND next_retry_at IS NULL
-      AND lease_owner IS NULL AND lease_until IS NULL
-      AND admitted_conversation_id IS NULL AND admitted_request_id IS NULL
-      AND last_error_code IS NULL AND reconciled_at IS NULL)
-   OR (status='CLAIMED' AND attempt_count>0 AND next_retry_at IS NULL
-      AND lease_owner IS NOT NULL AND lease_until IS NOT NULL
-      AND admitted_conversation_id IS NULL AND admitted_request_id IS NULL
-      AND last_error_code IS NULL AND reconciled_at IS NULL)
-   OR (status='RETRY' AND attempt_count>0 AND next_retry_at IS NOT NULL
-      AND lease_owner IS NULL AND lease_until IS NULL
-      AND admitted_conversation_id IS NULL AND admitted_request_id IS NULL
-      AND last_error_code IS NOT NULL AND reconciled_at IS NULL)
-   OR (status='ADMITTED' AND attempt_count>0 AND next_retry_at IS NULL
-      AND lease_owner IS NULL AND lease_until IS NULL
-      AND admitted_conversation_id IS NOT NULL AND admitted_request_id IS NOT NULL
-      AND last_error_code IS NULL AND reconciled_at IS NOT NULL)
-   OR (status='DEAD' AND attempt_count>0 AND next_retry_at IS NULL
-      AND lease_owner IS NULL AND lease_until IS NULL
-      AND admitted_conversation_id IS NULL AND admitted_request_id IS NULL
-      AND last_error_code IS NOT NULL AND reconciled_at IS NOT NULL)),
- CONSTRAINT chk_atbbo_time CHECK (
-   created_at>0 AND (next_retry_at IS NULL OR next_retry_at>=created_at)
-   AND (lease_until IS NULL OR lease_until>created_at)
-   AND (reconciled_at IS NULL OR reconciled_at>=created_at))
+ KEY idx_atbbo_scope_task (tenant_id,client_id,owner_jiacn,task_id,assignment_revision)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin
  COMMENT='Owner-scoped durable bounty discussion admission intent; never an Agent delivery fact';

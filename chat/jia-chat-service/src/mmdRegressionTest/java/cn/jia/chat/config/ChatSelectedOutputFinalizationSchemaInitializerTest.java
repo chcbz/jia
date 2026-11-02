@@ -18,24 +18,13 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.never;
 
 class ChatSelectedOutputFinalizationSchemaInitializerTest {
-    @Test
-    void schemaIsAdditiveBinaryScopedAndTerminalInvariantIsDatabaseChecked(){
+    @Test void schemaIsAdditiveBinaryScopedWithoutDatabaseChecks() {
         var ddl=ChatSelectedOutputFinalizationSchemaInitializer.ddl();assertEquals(2,ddl.size());
-        String sql=String.join("\n",ddl).toLowerCase();assertTrue(sql.contains("utf8mb4_0900_bin"));
-        assertTrue(sql.contains("uk_csof_request"));assertTrue(sql.contains("state_version>0"));
-        assertTrue(sql.contains("between 8 and 160"));assertTrue(sql.contains("9007199254740991"));
-        assertTrue(sql.contains("chk_csof_progress"));assertTrue(sql.contains("chk_csof_outcome"));
-        assertTrue(sql.contains("delivery_state='accepted'"));assertTrue(sql.contains("task_state='completed'"));
-        assertTrue(sql.contains("changes_requested"));assertFalse(sql.contains("alter table"));
-    }
-
-    @Test
-    void submittedAcceptingAndCompletedRejectUnknownNullDeliveryState(){
-        String sql=String.join(" ",ChatSelectedOutputFinalizationSchemaInitializer.ddl()).toLowerCase()
-                .replaceAll("\\s+"," ");
-        for(String stage:List.of("submitted","accepting","task_completed"))
-            assertTrue(sql.contains("stage='"+stage+"' and delivery_id is not null and delivery_state is not null"));
-        assertTrue(sql.contains("and delivery_state is not null and delivery_state='accepted' and task_state='completed'"));
+        String sql=String.join("\n",ddl).toLowerCase();
+        assertTrue(sql.contains("utf8mb4_0900_bin"));
+        assertTrue(sql.contains("uk_csof_request"));
+        assertFalse(sql.contains("check ("));
+        assertFalse(sql.contains("alter table"));
     }
 
     @Test
@@ -80,43 +69,6 @@ class ChatSelectedOutputFinalizationSchemaInitializerTest {
         row.put("SUB_PART",16);assertEquals(16,method.invoke(null,row,"sub_part"));
     }
 
-    @Test
-    void submissionDefinitionsAreAcceptedAndHistoricalMysqlSnapshotIsUpgradeOnly() throws Exception {
-        invokeChecks(submissionCheckRows());
-    }
-
-    @Test
-    void actualOldSameNamedEnforcedMysqlChecksFailBeforeActivation() throws Exception {
-        var failure=assertThrows(IllegalStateException.class,()->invokeChecks(actualCheckRows(0,null,null)));
-        assertTrue(failure.getMessage().contains("check definition drift"));
-    }
-
-    @Test
-    void requiredGuardTextInsideAlwaysTrueExpressionCannotHideDefinitionDrift() throws Exception {
-        var rows=actualCheckRows(1,"chk_csof_progress",clause(1,"chk_csof_progress")+" OR 1=1");
-        assertThrows(IllegalStateException.class,()->invokeChecks(rows));
-    }
-
-    @Test
-    void nullCheckDefinitionNeverCountsAsEnforcedRequiredInvariant() throws Exception {
-        assertThrows(IllegalStateException.class,()->invokeChecks(actualCheckRows(1,"chk_csof_progress",null)));
-    }
-
-    @Test
-    void checkLiteralCaseAndWhitespaceAreNotErasedByMetadataNormalization() throws Exception {
-        String original=clause(1,"chk_csof_progress");
-        String changed=original.replace("SUBMITTED","submitted");
-        assertNotEquals(original,changed);
-        assertThrows(IllegalStateException.class,()->invokeChecks(actualCheckRows(1,"chk_csof_progress",changed)));
-        assertThrows(IllegalStateException.class,()->invokeChecks(actualCheckRows(1,"chk_csof_progress",original.replace("SUBMITTED","SUB MITTED"))));
-    }
-
-    @Test
-    void unenforcedCorrectDefinitionStillFailsClosed() throws Exception {
-        var rows=actualCheckRows(1,null,null);rows.getFirst().put("ENFORCED","NO");
-        assertThrows(IllegalStateException.class,()->invokeChecks(rows));
-    }
-
     @Test void textSourceSqlUsesExistingItemTableAndExplicitExclusiveRealMessageReferences() throws Exception {
         String ddl=String.join("\n",ChatSelectedOutputFinalizationSchemaInitializer.ddl());
         for(String condition:List.of("source_kind='OUTPUT' AND step_id IS NOT NULL AND output_id IS NOT NULL",
@@ -127,22 +79,6 @@ class ChatSelectedOutputFinalizationSchemaInitializerTest {
                 .getContentAsString(java.nio.charset.StandardCharsets.UTF_8);
         assertTrue(upgrade.contains("ALTER TABLE chat_selected_output_finalization_item"));assertFalse(upgrade.contains("CREATE TABLE"));
         assertFalse(upgrade.contains("UPDATE "));assertFalse(upgrade.contains("DROP "));
-    }
-
-    @Test void knownPredecessorIsUpgradedButTargetIsNoOpAndUnknownDriftFailsBeforeDdl() throws Exception {
-        var old=mock(JdbcTemplate.class);
-        when(old.queryForList(anyString())).thenReturn(actualCheckRows(1,null,null));
-        ChatSelectedOutputFinalizationSchemaInitializer.upgradeSubmissionChecks(old);
-        verify(old).execute(org.mockito.ArgumentMatchers.contains("ALTER TABLE chat_selected_output_finalization"));
-        var current=mock(JdbcTemplate.class);
-        when(current.queryForList(anyString())).thenReturn(submissionCheckRows());
-        ChatSelectedOutputFinalizationSchemaInitializer.upgradeSubmissionChecks(current);
-        verify(current,never()).execute(anyString());
-        for(var rows:List.of(actualCheckRows(0,null,null),actualCheckRows(1,"chk_csof_terminal","1=1"),List.<Map<String,Object>>of())) {
-            var drift=mock(JdbcTemplate.class);when(drift.queryForList(anyString())).thenReturn(rows);
-            assertThrows(IllegalStateException.class,()->ChatSelectedOutputFinalizationSchemaInitializer.upgradeSubmissionChecks(drift));
-            verify(drift,never()).execute(anyString());
-        }
     }
 
     static final class V2Jdbc extends JdbcTemplate {
@@ -165,15 +101,6 @@ class ChatSelectedOutputFinalizationSchemaInitializerTest {
                     result.add(column("source_artifact_version","source-type".equals(drift)?"bigint":"int","YES",null));}
                 return result;
             }
-            if(sql.contains("information_schema.check_constraints")) {
-                String ddl=ChatSelectedOutputFinalizationSchemaInitializer.ddl().get(item?1:0);
-                if(item && !source)try {ddl=new org.springframework.core.io.ClassPathResource("db/chat-selected-output-finalization-completed-message-v1.sql").getContentAsString(java.nio.charset.StandardCharsets.UTF_8);}catch(Exception e){throw new AssertionError(e);}
-                var clauses=ChatTaskDeliveryReviewSchemaInitializer.checks(ddl);List<Map<String,Object>> result=new ArrayList<>();
-                String name=item?"chk_csofi_source":"chk_csof_contract";
-                if(item || contract || "orphan-contract".equals(drift))result.add(Map.of("constraint_name",name,"check_clause",
-                        "check".equals(drift)&&item?"1=1":extractCheck(ddl,name),"enforced","unenforced".equals(drift)&&item?"NO":"YES"));
-                return result;
-            }
             if(sql.contains("information_schema.statistics")) {
                 if(!source && !"orphan-index".equals(drift))return List.of();
                 List<Map<String,Object>> result=new ArrayList<>();
@@ -188,14 +115,7 @@ class ChatSelectedOutputFinalizationSchemaInitializerTest {
         static Map<String,Object> column(String name,String type,String nullable,String collation) {
             var row=new LinkedHashMap<String,Object>();row.put("column_name",name);row.put("column_type",type);row.put("is_nullable",nullable);row.put("collation_name",collation);return row;
         }
-        static String extractCheck(String ddl,String name) {
-            // Return an actual SQL expression, never the normalized Boolean-tree representation.
-            String marker="CONSTRAINT "+name+" CHECK ";int start=ddl.indexOf(marker)+marker.length();
-            int depth=0;boolean quote=false;
-            for(int i=start;i<ddl.length();i++) {char c=ddl.charAt(i);if(c=='\'')quote=!quote;if(quote)continue;
-                if(c=='(')depth++;else if(c==')' && --depth==0)return ddl.substring(start,i+1);}
-            throw new AssertionError(name);
-        }
+
     }
     @Test void v2FreshKnownUpgradeRepeatAndRestartAreDeterministicWithoutRewritingOldDigests() {
         for(boolean contract:List.of(false,true))for(boolean source:List.of(false,true)) {
@@ -209,7 +129,7 @@ class ChatSelectedOutputFinalizationSchemaInitializerTest {
         }
     }
     @Test void v2PreflightsBothTablesAndRejectsPartialUnknownOrWeakenedShapesBeforeEitherAlter() {
-        for(String drift:List.of("partial","orphan-contract","orphan-index","check","unenforced","contract-type","source-type","source-collation","index-order","index-unique","index-prefix")) {
+        for(String drift:List.of("partial","orphan-index","contract-type","source-type","source-collation","index-order","index-unique","index-prefix")) {
             var jdbc=new V2Jdbc();jdbc.drift=drift;
             jdbc.contract="contract-type".equals(drift);
             jdbc.source=List.of("source-type","source-collation","index-order","index-unique","index-prefix").contains(drift);
@@ -219,43 +139,6 @@ class ChatSelectedOutputFinalizationSchemaInitializerTest {
     }
 
     // Target canonical expression derived from predecessor, not claimed as a new MySQL capture.
-    private static List<Map<String,Object>> submissionCheckRows() throws Exception {
-        var rows=actualCheckRows(1,null,null);
-        for(var row:rows) {
-            String name=(String)row.get("CONSTRAINT_NAME");String value=(String)row.get("CHECK_CLAUSE");
-            if(value!=null)value=value.replace("\\'", "'");
-            if("chk_csof_progress".equals(name))value=value.replace("_utf8mb4'submitted',_utf8mb4'changes_requested'",
-                    "_utf8mb4'submitted',_utf8mb4'accepted',_utf8mb4'changes_requested'");
-            if("chk_csof_terminal".equals(name)) value="(((`state` = _utf8mb4'completed') and (`stage` = _utf8mb4'SUBMITTED') and (`delivery_id` is not null) and (`delivery_state` is not null) and (`delivery_state` in (_utf8mb4'submitted',_utf8mb4'accepted',_utf8mb4'changes_requested')) and (`error_code` is null) and (`retryable` = 0)) or "+value.substring(1);
-            row.put("CHECK_CLAUSE",value);
-        }
-        return rows;
-    }
-
-    private static String clause(int snapshot,String check) throws Exception {
-        try(var in=new org.springframework.core.io.ClassPathResource("mmd-finalization-schema-checks-mysql8021.json").getInputStream()){
-            return new tools.jackson.databind.ObjectMapper().readTree(in).get("snapshots").get(snapshot)
-                    .get("check_clauses").get(check).textValue();
-        }
-    }
-    private static List<Map<String,Object>> actualCheckRows(int snapshot,String overrideCheck,String overrideValue) throws Exception {
-        List<Map<String,Object>> rows=new ArrayList<>();
-        for(String name:List.of("chk_csof_versions", "chk_csof_key", "chk_csof_delivery_state", "chk_csof_state", "chk_csof_stage", "chk_csof_progress", "chk_csof_outcome", "chk_csof_terminal")){
-            Map<String,Object> row=new LinkedHashMap<>();row.put("CONSTRAINT_NAME",name);row.put("ENFORCED","YES");
-            String value=name.equals("chk_csof_progress")||name.equals("chk_csof_terminal")?clause(snapshot,name):null;
-            row.put("CHECK_CLAUSE",name.equals(overrideCheck)?overrideValue:value);rows.add(row);
-        }return rows;
-    }
-    private static void invokeChecks(List<Map<String,Object>> rows) throws Exception {
-        var jdbc=mock(JdbcTemplate.class);
-        when(jdbc.queryForList(anyString(),any(Object[].class))).thenReturn(rows);
-        var method=ChatSelectedOutputFinalizationSchemaInitializer.class.getDeclaredMethod("validateChecks",JdbcTemplate.class,String.class);
-        method.setAccessible(true);
-        try{method.invoke(null,jdbc,"chat_selected_output_finalization");}catch(InvocationTargetException failure){
-            if(failure.getCause() instanceof RuntimeException cause)throw cause;
-            throw failure;
-        }
-    }
 
     private static void invokeIndexes(JdbcTemplate jdbc,String table) throws Exception {
         var method=ChatSelectedOutputFinalizationSchemaInitializer.class.getDeclaredMethod("validateIndexes",JdbcTemplate.class,String.class);

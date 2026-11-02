@@ -68,8 +68,6 @@ class ChatSchemaReadinessLifecycleTest {
             "idx_chat_archive_conversation", new IndexSpec(false,
                     List.of("tenant_id", "owner_jiacn", "client_id", "conversation_id",
                             "updated_at", "operation_id")));
-    private static final Map<String, String> OPERATION_CHECKS =
-            ChatConversationArchiveSchemaInitializer.CHECKS;
 
     @Test
     void legacyInitializingBeanReproducesFailureBeforeApplicationRunnersExecute() {
@@ -138,65 +136,6 @@ class ChatSchemaReadinessLifecycleTest {
         assertEquals(1, state.coreAttempts);
         assertEquals(1, state.deliberationAttempts);
         assertFalse(state.archiveTableCreated, state.events.toString());
-    }
-
-    @Test
-    void archiveCheckNormalizationAcceptsOnlyMySqlRegexpRenderingEquivalence() {
-        assertEquals(
-                ChatConversationArchiveSchemaInitializer.normalizeCheck(
-                        "request_sha256 REGEXP '^[0-9a-f]{64}$'"),
-                ChatConversationArchiveSchemaInitializer.normalizeCheck(
-                        "REGEXP_LIKE(`request_sha256`, _utf8mb4'^[0-9a-f]{64}$')"));
-        assertNotEquals(
-                ChatConversationArchiveSchemaInitializer.normalizeCheck(
-                        "request_sha256 REGEXP '^[0-9a-f]{64}$'"),
-                ChatConversationArchiveSchemaInitializer.normalizeCheck(
-                        "REGEXP_LIKE(`request_sha256`, _utf8mb4'^[0-9A-F]{64}$')"));
-    }
-
-    @Test
-    void archiveCatalogRenderingPreservesEveryKnownConstraintAndRejectsWeakenedLogic() {
-        assertEquals(ChatConversationArchiveSchemaInitializer.CHECKS.keySet(),
-                ChatConversationArchiveSchemaInitializer.MYSQL8_CHECK_RENDERINGS.keySet());
-        ChatConversationArchiveSchemaInitializer.MYSQL8_CHECK_RENDERINGS.forEach((name, actual) -> {
-            String expected = ChatConversationArchiveSchemaInitializer.CHECKS.get(name);
-            assertEquals(ChatConversationArchiveSchemaInitializer.normalizeCheck(expected),
-                    ChatConversationArchiveSchemaInitializer.normalizeCheck(actual), name);
-            String weakened = actual.replace(" and ", " or ").replace(">= 1", ">= 0");
-            if (!weakened.equals(actual)) {
-                assertNotEquals(ChatConversationArchiveSchemaInitializer.normalizeCheck(expected),
-                        ChatConversationArchiveSchemaInitializer.normalizeCheck(weakened), name);
-            }
-        });
-    }
-
-    @Test
-    void archiveCatalogNormalizationDoesNotEraseGroupingOrChangeLiteralPatterns() {
-        String expected = ChatConversationArchiveSchemaInitializer.normalizeCheck(
-                ChatConversationArchiveSchemaInitializer.CHECKS.get("chk_chat_archive_source_union"));
-        String actual = ChatConversationArchiveSchemaInitializer.MYSQL8_CHECK_RENDERINGS.get(
-                "chk_chat_archive_source_union");
-        assertNotEquals(expected, ChatConversationArchiveSchemaInitializer.normalizeCheck(
-                actual.replace(" - ", " + ")));
-        assertNotEquals(expected, ChatConversationArchiveSchemaInitializer.normalizeCheck(
-                actual.replace("{0,18}", "{0,19}")));
-        assertNotEquals(expected, ChatConversationArchiveSchemaInitializer.normalizeCheck(
-                actual.replace("'assetRef'", "'assetref'")));
-        assertNotEquals(ChatConversationArchiveSchemaInitializer.normalizeCheck("a=1 OR (b=2 AND c=3)"),
-                ChatConversationArchiveSchemaInitializer.normalizeCheck("(a=1 OR b=2) AND c=3"));
-    }
-
-    @Test
-    void archiveCheckDefinitionDriftStillFailsClosedAfterSourcesBecomeReady() {
-        LifecycleState state = new LifecycleState();
-        state.archiveCheckDrift = true;
-
-        Exception failure = assertThrows(Exception.class, () -> runApplication(state, false));
-
-        assertTrue(messageChain(failure).contains("Conversation archive check definition drift"),
-                messageChain(failure));
-        assertEquals(1, state.coreAttempts);
-        assertEquals(1, state.deliberationAttempts);
     }
 
     @Test
@@ -295,7 +234,7 @@ class ChatSchemaReadinessLifecycleTest {
         private boolean archiveTableCreated;
         private boolean sourceColumnDrift;
         private boolean archiveIndexDrift;
-        private boolean archiveCheckDrift;
+
     }
 
     private static final class RecordingChatSchemaInitializer extends ChatSchemaInitializer {
@@ -413,14 +352,6 @@ class ChatSchemaReadinessLifecycleTest {
                     }
                 });
                 return rows;
-            }
-            if (normalized.contains("from information_schema.table_constraints")) {
-                return OPERATION_CHECKS.entrySet().stream()
-                        .map(entry -> row("constraint_name", entry.getKey(), "enforced", "YES",
-                                "check_clause", state.archiveCheckDrift
-                                        && "chk_chat_archive_source_union".equals(entry.getKey())
-                                                ? "1=1" : entry.getValue()))
-                        .toList();
             }
             throw new AssertionError("Unexpected metadata query: " + sql);
         }

@@ -80,11 +80,18 @@ class PositionSkillTransactionTest {
         var a=service.appoint(scope,"skills-appoint","skill-management","agent1");
         return new Grant(a.resultId(),1,1,"agent1",1,null,true);
     }
+    private void assertPositionTablesHaveNoCheckConstraint() {
+        assertEquals(0,jdbc.queryForObject("SELECT count(*) FROM information_schema.TABLE_CONSTRAINTS WHERE CONSTRAINT_SCHEMA=DATABASE() AND TABLE_NAME IN ('agent_position_state','agent_position_authority','agent_position_operation') AND CONSTRAINT_TYPE='CHECK'",Integer.class));
+    }
+    @Test void freshPositionSchemaLeavesRulesToBusinessLayer() {
+        assertPositionTablesHaveNoCheckConstraint();
+    }
     @Test void existingThreePermissionSchemaCanBeUpgradedWithoutLosingGrants() throws Exception {
-        jdbc.execute("ALTER TABLE agent_position_authority DROP CHECK agent_position_authority_chk_1, ADD CONSTRAINT agent_position_authority_chk_1 CHECK(permission_key IN ('MANAGE_POSITIONS','ARCHIVE_WRITE','ARCHIVE_PUBLISH'))");
+        jdbc.execute("ALTER TABLE agent_position_authority ADD CONSTRAINT agent_position_authority_chk_1 CHECK(permission_key IN ('MANAGE_POSITIONS','ARCHIVE_WRITE','ARCHIVE_PUBLISH'))");
         int before=jdbc.queryForObject("SELECT count(*) FROM agent_position_authority",Integer.class);
         String ddl=new ClassPathResource("db/agent-position-skills-management.sql").getContentAsString(StandardCharsets.UTF_8);
         for(String sql:ddl.replaceAll("(?m)^--.*$", "").split(";"))if(!sql.isBlank())jdbc.execute(sql);
+        assertPositionTablesHaveNoCheckConstraint();
         assertEquals(before,jdbc.queryForObject("SELECT count(*) FROM agent_position_authority",Integer.class));
         var g=skillManager();
         assertEquals("allowed",service.withSkillManagementAuthority(scope,g,()->"allowed"));

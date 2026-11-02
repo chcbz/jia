@@ -145,29 +145,7 @@ class ChatConversationArchiveMySqlIntegrationTest {
         assertDoesNotThrow(initializer::afterPropertiesSet);
         assertEquals(before, showCreate());
 
-        jdbc.execute("ALTER TABLE chat_conversation_archive_operation "
-                + "DROP CHECK chk_chat_archive_source_union, "
-                + "ADD CONSTRAINT chk_chat_archive_source_union CHECK (1=1)");
-        IllegalStateException failure = assertThrows(IllegalStateException.class,
-                initializer::afterPropertiesSet);
-        assertTrue(failure.getMessage().contains("check definition drift"), failure.getMessage());
-    }
-
-    @Test
-    void migrationDoesNotMaskUnknownSameNamedLegacyCheckDrift() {
-        jdbc.execute("DROP TABLE chat_conversation_archive_operation");
-        createLegacyOperationTable();
-        jdbc.execute("ALTER TABLE chat_conversation_archive_operation "
-                + "DROP CHECK chk_chat_archive_request_sha, "
-                + "ADD CONSTRAINT chk_chat_archive_request_sha CHECK (1=1)");
-
-        execute("db/chat-conversation-archive-text-selection-migration.sql");
-
-        IllegalStateException failure = assertThrows(IllegalStateException.class,
-                () -> new ChatConversationArchiveSchemaInitializer(
-                        jdbc, mock(ChatSchemaReadiness.class)).afterPropertiesSet());
-        assertTrue(failure.getMessage().contains(
-                "check definition drift: chk_chat_archive_request_sha"), failure.getMessage());
+        assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.table_constraints WHERE constraint_schema=DATABASE() AND constraint_type='CHECK'",Integer.class));
     }
 
     @Test
@@ -199,14 +177,6 @@ class ChatConversationArchiveMySqlIntegrationTest {
                 """, String.class));
         assertDoesNotThrow(() -> new ChatConversationArchiveSchemaInitializer(
                 jdbc, mock(ChatSchemaReadiness.class)).afterPropertiesSet());
-        assertThrows(DataAccessException.class, () -> jdbc.update("""
-                INSERT INTO chat_conversation_archive_operation
-                  (operation_id,tenant_id,owner_jiacn,client_id,conversation_id,
-                   conversation_generation,idempotency_key,request_sha256,source_kind,
-                   asset_id,asset_revision,state,row_revision,created_at,updated_at)
-                VALUES ('arc_invalid','0','owner','client','42',3,'archive-invalid-1',?,
-                        'textSelection','asset',1,'PENDING',1,1,1)
-                """, "b".repeat(64)));
     }
 
     @Test
@@ -364,9 +334,6 @@ class ChatConversationArchiveMySqlIntegrationTest {
         assertAssetRejected();
     }
 
-
-
-
     @Configuration
     @EnableTransactionManagement(proxyTargetClass = true)
     static class LockingReadConfiguration { }
@@ -453,16 +420,9 @@ class ChatConversationArchiveMySqlIntegrationTest {
                   UNIQUE KEY uk_chat_archive_key(tenant_id,owner_jiacn,client_id,idempotency_key),
                   UNIQUE KEY uk_chat_archive_source(tenant_id,owner_jiacn,client_id,asset_id,asset_revision),
                   UNIQUE KEY uk_chat_archive_workspace(tenant_id,owner_jiacn,client_id,workspace_operation_id),
-                  KEY idx_chat_archive_conversation(tenant_id,owner_jiacn,client_id,conversation_id,updated_at,operation_id),
-                  CONSTRAINT chk_chat_archive_asset_revision CHECK(asset_revision>=1),
-                  CONSTRAINT chk_chat_archive_generation CHECK(conversation_generation IS NULL OR conversation_generation>=1),
-                  CONSTRAINT chk_chat_archive_key_length CHECK(CHAR_LENGTH(idempotency_key) BETWEEN 8 AND 160),
-                  CONSTRAINT chk_chat_archive_request_sha CHECK(CHAR_LENGTH(request_sha256)=64),
-                  CONSTRAINT chk_chat_archive_state CHECK(state IN ('PENDING','SAVING','SAVED','PARTIAL_FAILED')),
-                  CONSTRAINT chk_chat_archive_row_revision CHECK(row_revision>=1),
-                  CONSTRAINT chk_chat_archive_saved_receipt CHECK(state<>'SAVED' OR (conversation_generation>=1 AND workspace_operation_id IS NOT NULL AND file_id IS NOT NULL AND file_version>=1))
+                  KEY idx_chat_archive_conversation(tenant_id,owner_jiacn,client_id,conversation_id,updated_at,operation_id)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin
-                """);
+""");
     }
 
     private void insertOwnerMessage() {

@@ -11,72 +11,37 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class PersonalWorkspaceExecutionSchemaInitializerTest {
-    @Test
-    void textMimeMigrationVerifiesEnforcedDefinitionAndIsIdempotent() {
-        var jdbc=mock(JdbcTemplate.class);
-        var old=java.util.Map.<String,Object>of("enforced","YES","check_clause",
-                "(`output_content_mime_type` in ("+PersonalWorkspaceExecutionSchemaInitializer.DOCUMENT_MIMES.replace("'", "\\'")+"))");
-        var current=java.util.Map.<String,Object>of("enforced","YES","check_clause",
-                "(`output_content_mime_type` in ("+PersonalWorkspaceExecutionSchemaInitializer.OUTPUT_MIMES+"))");
-        when(jdbc.queryForList(PersonalWorkspaceExecutionSchemaInitializer.MIME_CHECK_QUERY))
-                .thenReturn(java.util.List.of(old),java.util.List.of(current));
-        var initializer=new PersonalWorkspaceExecutionSchemaInitializer(jdbc);
-        initializer.migrateTextOutputMime();
-        initializer.migrateTextOutputMime();
-        verify(jdbc,times(1)).execute(PersonalWorkspaceExecutionSchemaInitializer.textOutputMimeMigrationStatement());
-        assertTrue(PersonalWorkspaceExecutionSchemaInitializer.ddlStatements().getFirst().contains("'text/plain'"));
-        assertTrue(PersonalWorkspaceExecutionSchemaInitializer.outputMimeMigrationStatement().contains("'text/plain'"));
-    }
 
-    @Test
-    void missingDisabledDriftedOrUnappliedMimeCheckCannotPass() {
-        for (var row:java.util.List.of(
-                java.util.Map.<String,Object>of("enforced","NO","check_clause","1"),
-                java.util.Map.<String,Object>of("enforced","YES","check_clause","1"),
-                java.util.Map.<String,Object>of("enforced","YES","check_clause",
-                    "output_content_mime_type in ("+PersonalWorkspaceExecutionSchemaInitializer.DOCUMENT_MIMES+")"))) {
-            var jdbc=mock(JdbcTemplate.class);
-            when(jdbc.queryForList(PersonalWorkspaceExecutionSchemaInitializer.MIME_CHECK_QUERY)).thenReturn(java.util.List.of(row));
-            assertThrows(IllegalStateException.class,()->new PersonalWorkspaceExecutionSchemaInitializer(jdbc).migrateTextOutputMime());
-        }
-        assertThrows(IllegalStateException.class,()->new PersonalWorkspaceExecutionSchemaInitializer(mock(JdbcTemplate.class)).migrateTextOutputMime());
-    }
-
-    @Test
-    void conversationMigrationContainsByteOnlyAndGrantFenceChecks() {
+    @Test void conversationMigrationAddsColumnsWithoutChecks() {
         var execution=PersonalWorkspaceExecutionSchemaInitializer.conversationMigrationStatement(
                 PersonalWorkspaceExecutionSchemaInitializer.CONVERSATION_EXECUTION_RESOURCE,
-                "agent_personal_workspace_execution", "drop check chk_pwex_mode", "drop check chk_pwex_task_bridge");
+                "agent_personal_workspace_execution");
         var output=PersonalWorkspaceExecutionSchemaInitializer.conversationMigrationStatement(
                 PersonalWorkspaceExecutionSchemaInitializer.CONVERSATION_OUTPUT_RESOURCE,
-                "agent_personal_workspace_execution_output", "drop check chk_pwexo_commit", "add constraint chk_pwexo_conversation");
-        assertTrue(execution.contains("task_grant_version >= 1"));
-        assertTrue(execution.contains("execution_mode='CONVERSATION'"));
-        assertTrue(output.contains("output_purpose='CONVERSATION'"));
-        assertTrue(output.contains("formal_delivery_id IS NULL"));
-        assertThrows(IllegalArgumentException.class,()->
-                PersonalWorkspaceExecutionSchemaInitializer.conversationMigrationStatement(
-                        "db/untrusted.sql", "agent_personal_workspace_execution", "", ""));
+                "agent_personal_workspace_execution_output");
+        assertTrue(execution.contains("task_grant_version"));
+        assertTrue(output.contains("output_purpose"));
+        org.junit.jupiter.api.Assertions.assertFalse((execution+output).toLowerCase().contains("check ("));
+        assertThrows(IllegalArgumentException.class,()->PersonalWorkspaceExecutionSchemaInitializer.conversationMigrationStatement(
+                "db/untrusted.sql", "agent_personal_workspace_execution"));
     }
 
-    @Test
-    void absentEnforcedMysqlCheckFailsClosedEvenWithZeroBadRows() {
+    @Test void conversationRowsAreValidatedWithoutCheckCatalog() {
         var jdbc=mock(JdbcTemplate.class);
         when(jdbc.queryForObject(anyString(),eq(Integer.class))).thenReturn(0);
-        assertThrows(IllegalStateException.class, () ->
-                new PersonalWorkspaceExecutionSchemaInitializer(jdbc).verifyConversationMode());
+        var initializer=new PersonalWorkspaceExecutionSchemaInitializer(jdbc);
+        assertDoesNotThrow(initializer::verifyConversationMode);
+        when(jdbc.queryForObject(anyString(),eq(Integer.class))).thenReturn(1);
+        assertThrows(IllegalStateException.class,initializer::verifyConversationMode);
     }
 
-    @Test
-    void missingOrDisabledLeaseCheckFailsStartup() {
+    @Test void leaseRowsAreValidatedWithoutCheckCatalog() {
         var jdbc=mock(JdbcTemplate.class);
         when(jdbc.queryForObject(anyString(),eq(Integer.class))).thenReturn(0);
-        assertThrows(IllegalStateException.class,()->
-                new PersonalWorkspaceExecutionSchemaInitializer(jdbc).verifyConversationLease());
-        when(jdbc.queryForList(anyString(),eq("agent_personal_workspace_execution"),eq("chk_pwex_conversation_lease"))).thenReturn(java.util.List.of(
-                java.util.Map.of("enforced","NO","check_clause","conversation_lease_version>=0")));
-        assertThrows(IllegalStateException.class,()->
-                new PersonalWorkspaceExecutionSchemaInitializer(jdbc).verifyConversationLease());
+        var initializer=new PersonalWorkspaceExecutionSchemaInitializer(jdbc);
+        assertDoesNotThrow(initializer::verifyConversationLease);
+        when(jdbc.queryForObject(anyString(),eq(Integer.class))).thenReturn(1);
+        assertThrows(IllegalStateException.class,initializer::verifyConversationLease);
     }
 
     @Test
@@ -86,29 +51,19 @@ class PersonalWorkspaceExecutionSchemaInitializerTest {
         assertTrue(statements.getFirst().contains("uk_pwex_task_run_scope"));
         assertTrue(statements.getFirst().contains("output_content_mime_type VARCHAR(127) NOT NULL"));
         assertTrue(statements.getFirst().contains("failure_code VARCHAR(64) DEFAULT NULL"));
-        assertTrue(statements.getFirst().contains("chk_pwex_failure"));
         assertTrue(PersonalWorkspaceExecutionSchemaInitializer.outputMimeMigrationStatement()
                 .contains("ADD COLUMN output_content_mime_type VARCHAR(127) NOT NULL DEFAULT"));
-        assertTrue(PersonalWorkspaceExecutionSchemaInitializer.terminalStateMigrationStatement()
-                .contains("DROP CHECK chk_pwex_state"));
         assertTrue(PersonalWorkspaceExecutionSchemaInitializer.taskExecutionMigrationStatement()
                 .contains("ADD COLUMN execution_mode VARCHAR(16) NOT NULL DEFAULT 'PRIVATE'"));
-        assertTrue(PersonalWorkspaceExecutionSchemaInitializer.taskExecutionMigrationStatement()
-                .contains("ADD CONSTRAINT chk_pwex_task_bridge"));
         assertTrue(PersonalWorkspaceExecutionSchemaInitializer.taskPublicationMigrationStatement()
                 .contains("ADD COLUMN publication_state VARCHAR(16) NOT NULL DEFAULT 'PENDING'"));
-        assertTrue(PersonalWorkspaceExecutionSchemaInitializer.taskPublicationMigrationStatement()
-                .contains("ADD CONSTRAINT chk_pwexo_publication_mapping"));
         assertTrue(statements.get(1).contains("uk_pwexi_file_version_scope"));
-        assertTrue(statements.get(2).contains("chk_pwexo_commit"));
         var provider=PersonalWorkspaceExecutionSchemaInitializer.conversationProviderStartMigrationStatement();
         assertTrue(provider.contains("conversation_provider_started_at BIGINT DEFAULT NULL"));
-        assertTrue(provider.contains("chk_pwex_provider_start"));
-        assertTrue(provider.contains("execution_mode='CONVERSATION'"));
+
         var lease=PersonalWorkspaceExecutionSchemaInitializer.conversationLeaseMigrationStatement();
         assertTrue(lease.contains("conversation_lease_version BIGINT NOT NULL DEFAULT 0"));
-        assertTrue(lease.contains("chk_pwex_conversation_lease"));
-        assertTrue(lease.contains("conversation_lease_expires_at IS NOT NULL"));
+        assertTrue(lease.contains("conversation_lease_expires_at BIGINT"));
     }
     private JdbcTemplate taskExecutionFixture() {
         var source = new org.springframework.jdbc.datasource.DriverManagerDataSource(

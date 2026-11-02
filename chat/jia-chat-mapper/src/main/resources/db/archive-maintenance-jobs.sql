@@ -17,9 +17,7 @@ CREATE TABLE IF NOT EXISTS archive_skill_maintenance_job (
  completed_at DATETIME(6) NULL,
  PRIMARY KEY(tenant_id,client_id,owner_jiacn,job_id),
  UNIQUE KEY uq_archive_operation(tenant_id,client_id,owner_jiacn,operation_key),
- KEY ix_archive_agent(tenant_id,client_id,owner_jiacn,agent_id,state),
- CHECK (state IN ('WAITING','DRAFT','PUBLISHED','FAILED')),
- CHECK (JSON_VALID(specification))
+ KEY ix_archive_agent(tenant_id,client_id,owner_jiacn,agent_id,state)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
 
 -- Explicit operator publication receipt, committed atomically with the edition and active pointer.
@@ -31,6 +29,5 @@ CREATE TABLE IF NOT EXISTS archive_skill_maintenance_action (
  job_id VARCHAR(100) COLLATE utf8mb4_bin NOT NULL,
  action_key VARCHAR(20) COLLATE ascii_bin NOT NULL,
  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
- PRIMARY KEY(tenant_id,client_id,owner_jiacn,operation_key),
- CHECK(action_key='PUBLISH_DRAFT')
+ PRIMARY KEY(tenant_id,client_id,owner_jiacn,operation_key)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;

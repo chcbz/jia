@@ -35,33 +35,6 @@ CREATE TABLE IF NOT EXISTS hall_request_draft (
     UNIQUE KEY uk_hall_draft_create (tenant_id, client_id, owner_jiacn, create_key),
     UNIQUE KEY uk_hall_draft_submit (tenant_id, client_id, owner_jiacn, submit_key),
     UNIQUE KEY uk_hall_draft_discard (tenant_id, client_id, owner_jiacn, discard_key),
-    KEY idx_hall_draft_recovery (tenant_id, client_id, owner_jiacn, state, updated_at, draft_id),
-    CONSTRAINT chk_hall_draft_tenant CHECK (tenant_id = '0'),
-    CONSTRAINT chk_hall_draft_kind CHECK (kind IN ('CREATE','REVISION','TASK_CREATE','TASK_ACTION')),
-    CONSTRAINT chk_hall_draft_state CHECK (state IN ('EDITING','SUBMITTED','DISCARDED')),
-    CONSTRAINT chk_hall_draft_revision CHECK (revision >= 1 AND revision <= 9007199254740991),
-    CONSTRAINT chk_hall_draft_source_tuple CHECK (
-        (source_type IS NULL AND source_id IS NULL AND source_version IS NULL)
-        OR (source_type='FILE' AND source_id IS NOT NULL AND source_version >= 1)
-        OR (source_type IN ('CONVERSATION','TASK','EXECUTION_OUTPUT')
-            AND source_id IS NOT NULL AND source_version IS NULL)),
-    CONSTRAINT chk_hall_draft_kind_refs CHECK (
-        (kind='REVISION' AND source_output_ref_json IS NOT NULL AND task_id IS NULL)
-        OR (kind='CREATE' AND source_output_ref_json IS NULL AND task_id IS NULL)
-        OR (kind='TASK_CREATE' AND source_output_ref_json IS NULL AND task_id IS NULL)
-        OR (kind='TASK_ACTION' AND source_output_ref_json IS NULL AND task_id IS NOT NULL)),
-    CONSTRAINT chk_hall_draft_submit_pair CHECK (
-        (submit_key IS NULL AND submit_hash IS NULL)
-        OR (submit_key IS NOT NULL AND submit_hash IS NOT NULL)),
-    CONSTRAINT chk_hall_draft_discard_pair CHECK (
-        (discard_key IS NULL AND discard_hash IS NULL)
-        OR (discard_key IS NOT NULL AND discard_hash IS NOT NULL)),
-    CONSTRAINT chk_hall_draft_lifecycle CHECK (
-        (state='EDITING' AND submission_ref IS NULL AND submitted_execution_id IS NULL
-            AND discard_key IS NULL AND discard_hash IS NULL)
-        OR (state='DISCARDED' AND submission_ref IS NULL AND submitted_execution_id IS NULL
-            AND discard_key IS NOT NULL AND discard_hash IS NOT NULL)
-        OR (state='SUBMITTED' AND submission_ref IS NOT NULL AND submit_key IS NOT NULL
-            AND submit_hash IS NOT NULL))
+    KEY idx_hall_draft_recovery (tenant_id, client_id, owner_jiacn, state, updated_at, draft_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin
   COMMENT='Owner-scoped Hall request drafts, never an execution queue';

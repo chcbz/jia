@@ -39,20 +39,6 @@ public final class HallPrivateCaseSchemaInitializer implements InitializingBean 
                     "uk_hall_case_execution_scope", "U:tenant_id,client_id,owner_jiacn,execution_id",
                     "uk_hall_case_revision_scope", "U:tenant_id,client_id,owner_jiacn,case_id,revision_no",
                     "idx_hall_case_execution_list", "N:tenant_id,client_id,owner_jiacn,case_id,revision_no,execution_id"));
-    private static final Map<String, Map<String, String>> CHECKS = Map.of(
-            "hall_private_case", normalized(Map.of(
-                    "chk_hall_case_tenant", "tenant_id='0'",
-                    "chk_hall_case_revision", "revision>=1 AND revision<=9007199254740991",
-                    "chk_hall_case_time", "created_at>=0 AND updated_at>=created_at")),
-            "hall_case_execution", normalized(Map.of(
-                    "chk_hall_case_execution_tenant", "tenant_id='0'",
-                    "chk_hall_case_execution_revision",
-                            "revision_no>=1 AND revision_no<=9007199254740991",
-                    "chk_hall_case_execution_lineage",
-                            "(revision_no=1 AND parent_execution_id IS NULL AND source_output_ref_json IS NULL) "
-                            + "OR (revision_no>1 AND parent_execution_id IS NOT NULL "
-                            + "AND source_output_ref_json IS NOT NULL)",
-                    "chk_hall_case_execution_time", "created_at>=0")));
 
     private final JdbcTemplate jdbc;
 
@@ -113,9 +99,6 @@ public final class HallPrivateCaseSchemaInitializer implements InitializingBean 
             if (!indexes(table).equals(INDEXES.get(table))) {
                 throw new IllegalStateException("Hall private case indexes are invalid: " + table);
             }
-            if (!checks(table).equals(CHECKS.get(table))) {
-                throw new IllegalStateException("Hall private case CHECK constraints are invalid: " + table);
-            }
             List<Map<String, Object>> identities = jdbc.queryForList("""
                     SELECT column_name,is_nullable,collation_name
                       FROM information_schema.columns
@@ -165,35 +148,6 @@ public final class HallPrivateCaseSchemaInitializer implements InitializingBean 
             result.put(entry.getKey(), (unique ? "U:" : "N:")
                     + parts.stream().map(IndexPart::column).reduce((a, b) -> a + "," + b).orElse(""));
         }
-        return Map.copyOf(result);
-    }
-
-    private Map<String, String> checks(String table) {
-        Map<String, String> result = new TreeMap<>();
-        for (Map<String, Object> row : jdbc.queryForList("""
-                SELECT tc.constraint_name,cc.check_clause,tc.enforced
-                  FROM information_schema.table_constraints tc
-                  JOIN information_schema.check_constraints cc
-                    ON cc.constraint_catalog=tc.constraint_catalog
-                   AND cc.constraint_schema=tc.constraint_schema
-                   AND cc.constraint_name=tc.constraint_name
-                 WHERE tc.table_schema=DATABASE() AND tc.table_name=?
-                   AND tc.constraint_type='CHECK'
-                """, table)) {
-            String name = Objects.toString(row.get("constraint_name"), "");
-            if (!"YES".equalsIgnoreCase(Objects.toString(row.get("enforced"), ""))
-                    || result.put(name, AgentTaskFundingSchemaInitializer.normalizeCheck(
-                            Objects.toString(row.get("check_clause"), ""))) != null) {
-                throw new IllegalStateException("Hall private case CHECK catalog is invalid");
-            }
-        }
-        return Map.copyOf(result);
-    }
-
-    private static Map<String, String> normalized(Map<String, String> source) {
-        Map<String, String> result = new TreeMap<>();
-        source.forEach((name, expression) -> result.put(name,
-                AgentTaskFundingSchemaInitializer.normalizeCheck(expression)));
         return Map.copyOf(result);
     }
 

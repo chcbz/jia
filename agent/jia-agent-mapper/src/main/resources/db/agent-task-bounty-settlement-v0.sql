@@ -24,8 +24,5 @@ CREATE TABLE IF NOT EXISTS agent_task_bounty_settlement (
   transaction_ids TEXT NOT NULL,
   PRIMARY KEY (id),
   UNIQUE KEY uk_bounty_settlement_task (tenant_id,client_id,task_id),
-  UNIQUE KEY uk_bounty_settlement_actor_key (tenant_id,client_id,principal_type,principal_id,idempotency_key),
-  CONSTRAINT chk_bounty_settlement_identity CHECK (principal_type='USER' AND OCTET_LENGTH(idempotency_key)=36 AND OCTET_LENGTH(request_hash)=32),
-  CONSTRAINT chk_bounty_settlement_state CHECK (status='SETTLED' AND task_version>0 AND funding_version>=2 AND escrow_version>1 AND settled_at>0 AND OCTET_LENGTH(transaction_ids)>2),
-  CONSTRAINT chk_bounty_settlement_amount CHECK (gross_micro>0 AND actual_compute_micro>=0 AND platform_fee_micro>=0 AND agent_payout_micro>=0 AND refunded_micro=0 AND gross_micro=actual_compute_micro + platform_fee_micro + agent_payout_micro)
+  UNIQUE KEY uk_bounty_settlement_actor_key (tenant_id,client_id,principal_type,principal_id,idempotency_key)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;

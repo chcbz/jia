@@ -165,20 +165,4 @@ class ArchiveMultiBookMySqlTest {
         assertNull(personalStore.lockActiveEdition(second.manifest().editionId()));
     }
 
-    @Test void oldBookSpecificChecksRequireExplicitMigration() throws Exception {
-        String legacy = new ClassPathResource("db/archive-schema.sql").getContentAsString(StandardCharsets.UTF_8)
-                .replace("chapter_count >= 1", "chapter_count = 120")
-                .replace("preface_paragraph_count >= 0", "preface_paragraph_count >= 1")
-                .replace("preface_utf8_byte_length >= 0", "preface_utf8_byte_length > 0")
-                .replace("reader_ordinal >= 1", "reader_ordinal between 1 and 120");
-        new ResourceDatabasePopulator(new ByteArrayResource(legacy.getBytes(StandardCharsets.UTF_8))).execute(source);
-        var schema = new ArchiveSchemaInitializer(jdbc);
-        assertThrows(IllegalStateException.class, schema::initialize);
-        new ResourceDatabasePopulator(new ClassPathResource("db/archive-multi-work-migration.sql")).execute(source);
-        assertDoesNotThrow(schema::initialize);
-        var loaded = ArchiveGenericManifestTest.fixture("book-b");
-        new ArchiveContentImporter(new JdbcArchiveContentStore(jdbc), new SpringArchiveTransactions(new DataSourceTransactionManager(source)))
-                .importAndActivate(loaded.manifest(), loaded.manifestFileSha256());
-        assertEquals(121, jdbc.queryForObject("SELECT chapter_count FROM archive_edition", Integer.class));
-    }
 }

@@ -69,40 +69,6 @@ class AgentTaskBountyQuoteSchemaInitializerMySqlTest {
     }
 
     @Test
-    void claimedAndCompletedRowsRejectEachNullAndBothNullWithoutChangingReceipts() {
-        JdbcTemplate jdbc = database("rows");
-        new AgentTaskBountyQuoteSchemaInitializer(jdbc).afterPropertiesSet();
-        insertOpenAndPosting(jdbc);
-        assertEquals(1, jdbc.update("UPDATE agent_task_bounty_quote SET status='CLAIMED',claimed_at=2"));
-        assertEquals(1, jdbc.update("UPDATE agent_task_bounty_claim_operation "
-                + "SET status='COMPLETED',receipt_task_version=1,claimed_at=2"));
-        assertCheckRejected(jdbc, "UPDATE agent_task_bounty_quote SET claimed_at=NULL", "chk_bounty_quote_state");
-        for (String assignment : List.of("receipt_task_version=NULL", "claimed_at=NULL",
-                "receipt_task_version=NULL,claimed_at=NULL")) {
-            assertCheckRejected(jdbc, "UPDATE agent_task_bounty_claim_operation SET " + assignment,
-                    "chk_bounty_claim_state");
-        }
-        assertEquals(2L, jdbc.queryForObject("SELECT claimed_at FROM agent_task_bounty_quote", Long.class));
-        assertEquals(1L, jdbc.queryForObject("SELECT receipt_task_version FROM agent_task_bounty_claim_operation", Long.class));
-        assertEquals(2L, jdbc.queryForObject("SELECT claimed_at FROM agent_task_bounty_claim_operation", Long.class));
-    }
-
-    @Test
-    void eachOldSameNamedNullableStateCheckFailsClosedWithoutRepair() {
-        assertCatalogDrift("old_quote", 0, ddl -> ddl.replace("claimed_at IS NOT NULL AND ", ""));
-        assertCatalogDrift("old_version", 1, ddl -> ddl.replace("receipt_task_version IS NOT NULL AND ", ""));
-        assertCatalogDrift("old_time", 1, ddl -> ddl.replace("claimed_at IS NOT NULL AND ", ""));
-    }
-
-    @Test
-    void eachNotEnforcedStateCheckFailsClosedWithoutRepair() {
-        assertCatalogDrift("off_quote", 0, ddl -> ddl.replaceAll(
-                "(?m)(  CONSTRAINT chk_bounty_quote_state CHECK \\(.*\\))(,?)$", "$1 NOT ENFORCED$2"));
-        assertCatalogDrift("off_claim", 1, ddl -> ddl.replaceAll(
-                "(?m)(  CONSTRAINT chk_bounty_claim_state CHECK \\(.*\\))(,?)$", "$1 NOT ENFORCED$2"));
-    }
-
-    @Test
     void fullColumnAndIndexPropertiesDriftFailClosed() {
         assertCatalogDrift("col_type", 0, ddl -> ddl.replace("worst_compute_micro BIGINT", "worst_compute_micro INT"), "column");
         assertCatalogDrift("col_null", 0, ddl -> ddl.replace("budget_covered TINYINT(1) NOT NULL", "budget_covered TINYINT(1) NULL"), "column");
@@ -111,21 +77,6 @@ class AgentTaskBountyQuoteSchemaInitializerMySqlTest {
         assertCatalogDrift("nonunique", 0, ddl -> ddl.replace("UNIQUE KEY uk_bounty_quote_actor_key", "KEY uk_bounty_quote_actor_key"), "index");
         assertCatalogDrift("prefix", 1, ddl -> ddl.replace("(tenant_id,client_id,quote_id)", "(tenant_id(10),client_id,quote_id)"), "index");
         assertCatalogDrift("invisible", 1, ddl -> ddl.replace("(tenant_id,client_id,quote_id),", "(tenant_id,client_id,quote_id) INVISIBLE,"), "index");
-    }
-
-    @Test
-    void everyCheckExpressionAndEnforcementAreValidatedNotJustStateNames() {
-        List<List<String>> checks = List.of(List.of("chk_bounty_quote_hashes", "chk_bounty_quote_amounts",
-                "chk_bounty_quote_state", "chk_bounty_quote_recommendation", "chk_bounty_quote_expiry"),
-                List.of("chk_bounty_claim_hash", "chk_bounty_claim_state"));
-        for (int table = 0; table < checks.size(); table++) {
-            for (String check : checks.get(table)) {
-                assertCatalogDrift("expr_" + table + "_" + checks.get(table).indexOf(check), table, ddl -> ddl.replaceAll(
-                        "(?m)(  CONSTRAINT " + check + " CHECK )\\(.*\\)(,?)$", "$1(1=1)$2"));
-                assertCatalogDrift("off_" + table + "_" + checks.get(table).indexOf(check), table, ddl -> ddl.replaceAll(
-                        "(?m)(  CONSTRAINT " + check + " CHECK \\(.*\\))(,?)$", "$1 NOT ENFORCED$2"));
-            }
-        }
     }
 
     @Test
@@ -140,11 +91,6 @@ class AgentTaskBountyQuoteSchemaInitializerMySqlTest {
         assertTrue(failure.getMessage().contains("trigger"));
         assertEquals(before, definitions(jdbc));
         assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.triggers WHERE trigger_schema=DATABASE()", Integer.class));
-    }
-
-    private void assertCheckRejected(JdbcTemplate jdbc, String sql, String constraint) {
-        DataAccessException failure = assertThrows(DataAccessException.class, () -> jdbc.update(sql));
-        assertTrue(failure.getMostSpecificCause().getMessage().contains(constraint), failure.getMessage());
     }
 
     private void insertOpenAndPosting(JdbcTemplate jdbc) {

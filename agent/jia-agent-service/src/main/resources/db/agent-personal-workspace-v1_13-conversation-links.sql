@@ -23,14 +23,7 @@ CREATE TABLE IF NOT EXISTS agent_personal_workspace_conversation_file_link (
   KEY idx_pwcl_conversation_list
     (tenant_id, client_id, owner_jiacn, conversation_id, created_at, relation_id),
   KEY idx_pwcl_file_usage
-    (tenant_id, client_id, owner_jiacn, file_id, link_state, conversation_id),
-  CONSTRAINT chk_pwcl_file_version CHECK (file_version >= 1),
-  CONSTRAINT chk_pwcl_revision CHECK (relation_revision >= 1),
-  CONSTRAINT chk_pwcl_role CHECK (link_role IN ('INPUT','REFERENCE','OUTPUT')),
-  CONSTRAINT chk_pwcl_state CHECK (link_state IN ('ACTIVE','DETACHED')),
-  CONSTRAINT chk_pwcl_detached_at CHECK (
-    (link_state='ACTIVE' AND detached_at IS NULL)
-    OR (link_state='DETACHED' AND detached_at IS NOT NULL))
+    (tenant_id, client_id, owner_jiacn, file_id, link_state, conversation_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
 
 CREATE TABLE IF NOT EXISTS agent_personal_workspace_conversation_link_operation (
@@ -54,12 +47,5 @@ CREATE TABLE IF NOT EXISTS agent_personal_workspace_conversation_link_operation 
   UNIQUE KEY uk_pwcl_operation_id
     (tenant_id, client_id, owner_jiacn, operation_id),
   KEY idx_pwcl_operation_relation
-    (tenant_id, client_id, owner_jiacn, relation_id, operation_state),
-  CONSTRAINT chk_pwcl_operation_type CHECK (operation_type IN ('CREATE','DELETE')),
-  CONSTRAINT chk_pwcl_operation_hash CHECK (
-    CHAR_LENGTH(request_hash)=64 AND request_hash REGEXP BINARY '^[0-9a-f]{64}$'),
-  CONSTRAINT chk_pwcl_operation_state CHECK (operation_state IN ('PROCESSING','COMMITTED')),
-  CONSTRAINT chk_pwcl_operation_result CHECK (
-    (operation_state='PROCESSING' AND relation_id IS NULL AND completed_at IS NULL)
-    OR (operation_state='COMMITTED' AND relation_id IS NOT NULL AND completed_at IS NOT NULL))
+    (tenant_id, client_id, owner_jiacn, relation_id, operation_state)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;

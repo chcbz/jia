@@ -26,34 +26,7 @@ CREATE TABLE IF NOT EXISTS agent_identity_registry (
     UNIQUE KEY uk_identity_registry_binding (binding_id),
     UNIQUE KEY uk_identity_registry_alias_target
         (id, canonical_agent_id, client_id, owner_jiacn, tenant_id),
-    KEY idx_identity_registry_scope_status (tenant_id, client_id, owner_jiacn, lifecycle_status),
-    CONSTRAINT chk_identity_registry_type CHECK (
-        canonical_type IN ('OPAQUE', 'LEGACY_CANONICAL', 'SYSTEM')
-    ),
-    CONSTRAINT chk_identity_registry_lifecycle CHECK (
-        lifecycle_status IN ('PROVISIONED', 'ACTIVE', 'SUSPENDED', 'RETIRED')
-    ),
-    CONSTRAINT chk_identity_registry_canonical CHECK (
-        (canonical_type = 'OPAQUE'
-            AND canonical_agent_id REGEXP '^agt_[0-9a-f]{32}$')
-        OR (canonical_type = 'LEGACY_CANONICAL'
-            AND canonical_agent_id <> 'builtin-songjiang'
-            AND canonical_agent_id NOT REGEXP '^agt_[0-9a-f]{32}$')
-        OR (canonical_type = 'SYSTEM'
-            AND canonical_agent_id = 'builtin-songjiang')
-    ),
-    CONSTRAINT chk_identity_registry_scope CHECK (
-        (canonical_type = 'SYSTEM'
-            AND client_id IS NULL AND owner_jiacn IS NULL AND tenant_id = '0')
-        OR (canonical_type <> 'SYSTEM'
-            AND client_id IS NOT NULL AND TRIM(client_id) <> ''
-            AND owner_jiacn IS NOT NULL AND TRIM(owner_jiacn) <> ''
-            AND tenant_id IS NOT NULL AND CHAR_LENGTH(tenant_id)>0 AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(TRIM(tenant_id)))
-    ),
-    CONSTRAINT chk_identity_registry_retired CHECK (
-        (lifecycle_status = 'RETIRED' AND retired_at IS NOT NULL)
-        OR (lifecycle_status <> 'RETIRED' AND retired_at IS NULL)
-    )
+    KEY idx_identity_registry_scope_status (tenant_id, client_id, owner_jiacn, lifecycle_status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Durable canonical Agent identity registry | collation binary enforces exact case matching';
 
 CREATE TABLE IF NOT EXISTS agent_identity_alias (
@@ -82,19 +55,7 @@ CREATE TABLE IF NOT EXISTS agent_identity_alias (
         (tenant_id, client_id, owner_jiacn, alias_type, alias_value, active_key),
     KEY idx_identity_alias_registry (registry_id, alias_status),
     KEY idx_identity_alias_canonical (canonical_agent_id, alias_status),
-    CONSTRAINT chk_identity_alias_type CHECK (alias_type = 'LEGACY_AGENT_ID'),
-    CONSTRAINT chk_identity_alias_status CHECK (alias_status IN ('ACTIVE', 'REVOKED')),
-    CONSTRAINT chk_identity_alias_scope CHECK (tenant_id IS NOT NULL AND CHAR_LENGTH(tenant_id)>0 AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(TRIM(tenant_id))),
-    CONSTRAINT chk_identity_alias_no_blank_scope CHECK (
-        TRIM(client_id) <> '' AND TRIM(owner_jiacn) <> ''
-    ),
-    CONSTRAINT chk_identity_alias_window CHECK (
-        (alias_status = 'ACTIVE' AND valid_to IS NULL)
-        OR (alias_status = 'REVOKED' AND valid_to IS NOT NULL)
-    ),
-    CONSTRAINT chk_identity_alias_not_system CHECK (
-        alias_value <> 'builtin-songjiang' AND canonical_agent_id <> 'builtin-songjiang'
-    ),
+
     CONSTRAINT fk_identity_alias_registry_scope FOREIGN KEY
         (registry_id, canonical_agent_id, client_id, owner_jiacn, tenant_id)
         REFERENCES agent_identity_registry
@@ -291,9 +252,6 @@ SET @a02_sql = IF((SELECT COUNT(*) FROM information_schema.table_constraints
       AND constraint_name = 'chk_agent_binding_single_tenant' AND constraint_type = 'CHECK') > 0,
     'ALTER TABLE agent_persona_binding DROP CHECK chk_agent_binding_single_tenant', 'DO 1');
 PREPARE a02_stmt FROM @a02_sql; EXECUTE a02_stmt; DEALLOCATE PREPARE a02_stmt;
-ALTER TABLE agent_persona_binding
-    ADD CONSTRAINT chk_agent_binding_status CHECK (status IN (0, 1, 2, 3)),
-    ADD CONSTRAINT chk_agent_binding_single_tenant CHECK (tenant_id = '0');
 
 -- Real b0 -> current upgrade. Drop dependent FK/checks, normalize the complete
 -- column definitions and binary collation, then recreate exact constraints.
@@ -396,39 +354,8 @@ CALL a02_assert((SELECT CONCAT(MIN(non_unique), ':',
     = '0:tenant_id,client_id,owner_jiacn,alias_type,alias_value,active_key',
     'A02: incompatible alias active unique index');
 
-ALTER TABLE agent_identity_registry
-    ADD CONSTRAINT chk_identity_registry_type CHECK (
-        canonical_type IN ('OPAQUE', 'LEGACY_CANONICAL', 'SYSTEM')),
-    ADD CONSTRAINT chk_identity_registry_lifecycle CHECK (
-        lifecycle_status IN ('PROVISIONED', 'ACTIVE', 'SUSPENDED', 'RETIRED')),
-    ADD CONSTRAINT chk_identity_registry_canonical CHECK (
-        (canonical_type = 'OPAQUE' AND canonical_agent_id REGEXP '^agt_[0-9a-f]{32}$')
-        OR (canonical_type = 'LEGACY_CANONICAL'
-            AND canonical_agent_id <> 'builtin-songjiang'
-            AND canonical_agent_id NOT REGEXP '^agt_[0-9a-f]{32}$')
-        OR (canonical_type = 'SYSTEM' AND canonical_agent_id = 'builtin-songjiang')),
-    ADD CONSTRAINT chk_identity_registry_scope CHECK (
-        (canonical_type = 'SYSTEM'
-            AND client_id IS NULL AND owner_jiacn IS NULL AND tenant_id = '0')
-        OR (canonical_type <> 'SYSTEM'
-            AND client_id IS NOT NULL AND TRIM(client_id) <> ''
-            AND owner_jiacn IS NOT NULL AND TRIM(owner_jiacn) <> ''
-            AND tenant_id IS NOT NULL AND CHAR_LENGTH(tenant_id)>0 AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(TRIM(tenant_id)))),
-    ADD CONSTRAINT chk_identity_registry_retired CHECK (
-        (lifecycle_status = 'RETIRED' AND retired_at IS NOT NULL)
-        OR (lifecycle_status <> 'RETIRED' AND retired_at IS NULL));
-
 ALTER TABLE agent_identity_alias
-    ADD CONSTRAINT chk_identity_alias_type CHECK (alias_type = 'LEGACY_AGENT_ID'),
-    ADD CONSTRAINT chk_identity_alias_status CHECK (alias_status IN ('ACTIVE', 'REVOKED')),
-    ADD CONSTRAINT chk_identity_alias_scope CHECK (tenant_id IS NOT NULL AND CHAR_LENGTH(tenant_id)>0 AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(TRIM(tenant_id))),
-    ADD CONSTRAINT chk_identity_alias_no_blank_scope CHECK (
-        TRIM(client_id) <> '' AND TRIM(owner_jiacn) <> ''),
-    ADD CONSTRAINT chk_identity_alias_window CHECK (
-        (alias_status = 'ACTIVE' AND valid_to IS NULL)
-        OR (alias_status = 'REVOKED' AND valid_to IS NOT NULL)),
-    ADD CONSTRAINT chk_identity_alias_not_system CHECK (
-        alias_value <> 'builtin-songjiang' AND canonical_agent_id <> 'builtin-songjiang'),
+
     ADD CONSTRAINT fk_identity_alias_registry_scope FOREIGN KEY
         (registry_id, canonical_agent_id, client_id, owner_jiacn, tenant_id)
         REFERENCES agent_identity_registry

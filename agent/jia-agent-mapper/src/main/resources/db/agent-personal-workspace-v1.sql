@@ -18,11 +18,7 @@ CREATE TABLE IF NOT EXISTS agent_personal_workspace_file (
   PRIMARY KEY (id),
   UNIQUE KEY uk_pws_file_scope (tenant_id, client_id, owner_jiacn, file_id),
   KEY idx_pws_file_list (tenant_id, client_id, owner_jiacn, state, created_at, file_id),
-  KEY idx_pws_file_media (tenant_id, client_id, owner_jiacn, media_family, created_at, file_id),
-  CONSTRAINT chk_pws_file_revision CHECK (metadata_revision >= 1 AND latest_version >= 1),
-  CONSTRAINT chk_pws_file_state CHECK (state IN ('ACTIVE', 'TRASHED')),
-  CONSTRAINT chk_pws_file_source CHECK (source_kind = 'UPLOAD'),
-  CONSTRAINT chk_pws_file_origin CHECK (origin_kind IN ('USER_UPLOAD','AGENT_DELIVERY'))
+  KEY idx_pws_file_media (tenant_id, client_id, owner_jiacn, media_family, created_at, file_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
 
 CREATE TABLE IF NOT EXISTS agent_personal_workspace_file_version (
@@ -42,9 +38,7 @@ CREATE TABLE IF NOT EXISTS agent_personal_workspace_file_version (
   update_time BIGINT DEFAULT NULL,
   PRIMARY KEY (id),
   UNIQUE KEY uk_pws_version_scope (tenant_id, client_id, owner_jiacn, file_id, version),
-  KEY idx_pws_version_list (tenant_id, client_id, owner_jiacn, file_id, version),
-  CONSTRAINT chk_pws_version_positive CHECK (version >= 1 AND byte_length >= 0),
-  CONSTRAINT chk_pws_version_hash CHECK (CHAR_LENGTH(content_hash)=64)
+  KEY idx_pws_version_list (tenant_id, client_id, owner_jiacn, file_id, version)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
 
 CREATE TABLE IF NOT EXISTS agent_personal_workspace_operation (
@@ -67,7 +61,5 @@ CREATE TABLE IF NOT EXISTS agent_personal_workspace_operation (
   PRIMARY KEY (id),
   UNIQUE KEY uk_pws_operation_key (tenant_id, client_id, owner_jiacn, operation_type, idempotency_key),
   UNIQUE KEY uk_pws_operation_id (tenant_id, client_id, operation_id),
-  KEY idx_pws_operation_owner (tenant_id, client_id, owner_jiacn, operation_id),
-  CONSTRAINT chk_pws_operation_hash CHECK (CHAR_LENGTH(request_hash)=64),
-  CONSTRAINT chk_pws_operation_state CHECK (state IN ('PROCESSING','COMMITTED','FAILED'))
+  KEY idx_pws_operation_owner (tenant_id, client_id, owner_jiacn, operation_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;

@@ -15,26 +15,21 @@ public record ArchiveSchemaSnapshot(Map<String, TableSnapshot> tables) {
             String collation,
             Map<String, ColumnSnapshot> columns,
             Map<String, IndexSnapshot> indexes,
-            Map<String, ForeignKeySnapshot> foreignKeys,
-            Map<String, CheckSnapshot> checks) {
+            Map<String, ForeignKeySnapshot> foreignKeys) {
         public TableSnapshot {
             columns = immutableLinkedMap(columns);
             indexes = immutableLinkedMap(indexes);
             foreignKeys = immutableLinkedMap(foreignKeys);
-            checks = immutableLinkedMap(checks);
         }
 
         public TableSnapshot withColumns(Map<String, ColumnSnapshot> replacement) {
-            return new TableSnapshot(engine, collation, replacement, indexes, foreignKeys, checks);
+            return new TableSnapshot(engine, collation, replacement, indexes, foreignKeys);
         }
 
         public TableSnapshot withIndexes(Map<String, IndexSnapshot> replacement) {
-            return new TableSnapshot(engine, collation, columns, replacement, foreignKeys, checks);
+            return new TableSnapshot(engine, collation, columns, replacement, foreignKeys);
         }
 
-        public TableSnapshot withChecks(Map<String, CheckSnapshot> replacement) {
-            return new TableSnapshot(engine, collation, columns, indexes, foreignKeys, replacement);
-        }
     }
 
     public record ColumnSnapshot(
@@ -87,12 +82,6 @@ public record ArchiveSchemaSnapshot(Map<String, TableSnapshot> tables) {
         public ForeignKeySnapshot {
             columns = List.copyOf(columns);
             referencedColumns = List.copyOf(referencedColumns);
-        }
-    }
-
-    public record CheckSnapshot(String clause, boolean enforced) {
-        public CheckSnapshot withEnforced(boolean replacement) {
-            return new CheckSnapshot(clause, replacement);
         }
     }
 

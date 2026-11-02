@@ -62,17 +62,6 @@ public final class ChatTaskDeliveryReviewSchemaInitializer implements Initializi
                     + text(row,"is_nullable") + "|" + text(row,"collation_name"));
         }
         if (!expected.equals(actual)) throw new IllegalStateException("Review schema columns differ, including required lineage");
-        Map<String, String> checks = checks(ddl);
-        Map<String, String> installed = new LinkedHashMap<>();
-        for (var row : jdbc.queryForList("""
-                SELECT t.constraint_name,c.check_clause,t.enforced FROM information_schema.table_constraints t
-                JOIN information_schema.check_constraints c ON c.constraint_schema=t.constraint_schema AND c.constraint_name=t.constraint_name
-                WHERE t.table_schema=DATABASE() AND t.table_name='chat_task_delivery_review_operation' AND t.constraint_type='CHECK'
-                """)) {
-            if (!"YES".equalsIgnoreCase(text(row,"enforced"))) throw new IllegalStateException("Review check is not enforced");
-            installed.put(text(row,"constraint_name"), metadataExpression(text(row,"check_clause")));
-        }
-        if (!checks.equals(installed)) throw new IllegalStateException("Review check definition drift");
         Map<String, String> indexes = new LinkedHashMap<>();
         for (var row : jdbc.queryForList("""
                 SELECT index_name,non_unique,column_name,seq_in_index,sub_part FROM information_schema.statistics
@@ -100,75 +89,7 @@ public final class ChatTaskDeliveryReviewSchemaInitializer implements Initializi
         if (result.size() != expectedCount) throw new IllegalStateException("Review column declaration mismatch");
         return result;
     }
-    static Map<String, String> checks(String ddl) {
-        var result = new LinkedHashMap<String, String>();
-        var matcher = Pattern.compile("CONSTRAINT ([a-z_]+) CHECK ").matcher(ddl);
-        while (matcher.find()) {
-            int begin = matcher.end(), end = closing(ddl, begin);
-            result.put(matcher.group(1), expression(ddl.substring(begin, end + 1)));
-        }
-        return result;
-    }
-    /** MySQL 8.0.21 CHECK_CLAUSE escapes its SQL source; decode that metadata layer only.
-     * Do not apply this decoding to source DDL or erase literal content/grouping. */
-    static String metadataExpression(String value) {
-        StringBuilder sql = new StringBuilder();
-        for (int i=0;i<value.length();i++) {
-            char c=value.charAt(i);
-            if (c=='\\' && i+1<value.length() && (value.charAt(i+1)=='\\' || value.charAt(i+1)=='\''))
-                c=value.charAt(++i);
-            sql.append(c);
-        }
-        return expression(sql.toString());
-    }
-    /** Compare Boolean trees, not punctuation-stripped strings: OR/AND grouping is security relevant. */
-    static String expression(String value) {
-        StringBuilder clean = new StringBuilder(); boolean quoted = false;
-        for (int i = 0; i < value.length(); i++) {
-            char c = value.charAt(i);
-            if (c == '\'') quoted = !quoted;
-            if (quoted || c == '\'') clean.append(c);
-            else if (c != '`') clean.append(Character.isWhitespace(c) ? ' ' : Character.toLowerCase(c));
-        }
-        return booleanTree(clean.toString().replaceAll("_(utf8mb4|utf8mb3|utf8|ascii)(?=')", ""));
-    }
-    private static String booleanTree(String source) {
-        String value = source.strip();
-        while (value.startsWith("(") && closing(value, 0) == value.length() - 1) value = value.substring(1, value.length() - 1).strip();
-        for (String operator : List.of("or", "and")) {
-            List<String> parts = new ArrayList<>(); int depth = 0, start = 0; boolean quoted = false;
-            for (int i = 0; i < value.length(); i++) {
-                char c = value.charAt(i); if (c == '\'') quoted = !quoted;
-                if (quoted) continue;
-                if (c == '(') depth++; else if (c == ')') depth--;
-                // Keywords can border parentheses/literals, but never split identifiers such as origin.
-                if (depth == 0 && value.startsWith(operator, i)
-                        && i > 0 && !Character.isJavaIdentifierPart(value.charAt(i - 1))
-                        && i + operator.length() < value.length() && !Character.isJavaIdentifierPart(value.charAt(i + operator.length()))) {
-                    parts.add(flatten(operator, booleanTree(value.substring(start, i)))); start = i + operator.length(); i = start - 1;
-                }
-            }
-            if (!parts.isEmpty()) { parts.add(flatten(operator, booleanTree(value.substring(start)))); return operator + "[" + String.join(",", parts) + "]"; }
-        }
-        StringBuilder atom = new StringBuilder(); boolean quoted = false;
-        for (int i = 0; i < value.length(); i++) {
-            char c = value.charAt(i); if (c == '\'') quoted = !quoted;
-            if (quoted || !Character.isWhitespace(c)) atom.append(c);
-        }
-        return atom.toString();
-    }
-    private static String flatten(String operator, String child) {
-        return child.startsWith(operator + "[") ? child.substring(operator.length() + 1, child.length() - 1) : child;
-    }
-    private static int closing(String value, int start) {
-        int depth = 0; boolean quoted = false;
-        for (int i = start; i < value.length(); i++) {
-            char c = value.charAt(i); if (c == '\'') quoted = !quoted;
-            if (quoted) continue;
-            if (c == '(') depth++; else if (c == ')' && --depth == 0) return i;
-        }
-        throw new IllegalStateException("Invalid review CHECK expression");
-    }
+
     private static String text(Map<String,Object> row, String name) {
         return row.entrySet().stream().filter(e -> e.getKey().equalsIgnoreCase(name)).map(e -> String.valueOf(e.getValue())).findFirst().orElse("null");
     }

@@ -20,10 +20,7 @@ CREATE TABLE IF NOT EXISTS agent_hosted_profile (
     UNIQUE KEY uk_hosted_binding (binding_id),
     UNIQUE KEY uk_hosted_profile_key (profile_key),
     UNIQUE KEY uk_hosted_api_key (api_key_id),
-    KEY idx_hosted_scope_state (tenant_id,client_id,owner_jiacn,lifecycle_state),
-    CONSTRAINT chk_hosted_state CHECK (lifecycle_state IN ('PREPARED','STAGED_DISABLED','FILE_ENABLED','ACTIVE','SUSPENDING','SUSPENDED','REPAIR_REQUIRED')),
-    CONSTRAINT chk_hosted_generation CHECK (generation >= 0),
-    CONSTRAINT chk_hosted_repair CHECK ((lifecycle_state='REPAIR_REQUIRED' AND resume_state IS NOT NULL) OR (lifecycle_state<>'REPAIR_REQUIRED' AND resume_state IS NULL))
+    KEY idx_hosted_scope_state (tenant_id,client_id,owner_jiacn,lifecycle_state)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
 
 -- Fail closed rather than silently accepting a legacy/colliding table shape.

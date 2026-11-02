@@ -29,14 +29,7 @@ CREATE TABLE IF NOT EXISTS agent_personal_workspace_execution (
   UNIQUE KEY uk_pwex_task_run_scope (tenant_id, client_id, owner_jiacn, task_id, run_id),
   UNIQUE KEY uk_pwex_idempotency_scope (tenant_id, client_id, owner_jiacn, idempotency_key),
   UNIQUE KEY uk_pwex_revoke_idempotency_scope (tenant_id, client_id, owner_jiacn, revoke_idempotency_key),
-  KEY idx_pwex_owner_state (tenant_id, client_id, owner_jiacn, execution_state, created_at),
-  CONSTRAINT chk_pwex_tenant CHECK (CHAR_LENGTH(tenant_id)>0 AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(TRIM(tenant_id))),
-  CONSTRAINT chk_pwex_grant_revision CHECK (grant_revision >= 1),
-  CONSTRAINT chk_pwex_state CHECK (execution_state IN ('QUEUED','INPUTS_REVOKED','OUTPUT_COMMITTED','FAILED')),
-  CONSTRAINT chk_pwex_failure CHECK ((execution_state='FAILED' AND failure_code='AGENT_DELIVERY_FAILED' AND failure_message IS NOT NULL AND failed_at IS NOT NULL) OR (execution_state<>'FAILED' AND failure_code IS NULL AND failure_message IS NULL AND failed_at IS NULL)),
-  CONSTRAINT chk_pwex_output_mime CHECK (output_content_mime_type IN ('image/png','image/jpeg','application/pdf','application/vnd.openxmlformats-officedocument.wordprocessingml.document','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','application/vnd.openxmlformats-officedocument.presentationml.presentation','text/plain')),
-  CONSTRAINT chk_pwex_hash CHECK (CHAR_LENGTH(request_hash)=64),
-  CONSTRAINT chk_pwex_revoke_hash CHECK ((revoke_idempotency_key IS NULL AND revoke_request_hash IS NULL) OR (revoke_idempotency_key IS NOT NULL AND CHAR_LENGTH(revoke_request_hash)=64))
+  KEY idx_pwex_owner_state (tenant_id, client_id, owner_jiacn, execution_state, created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
 
 CREATE TABLE IF NOT EXISTS agent_personal_workspace_execution_input (
@@ -62,11 +55,7 @@ CREATE TABLE IF NOT EXISTS agent_personal_workspace_execution_input (
   PRIMARY KEY (id),
   UNIQUE KEY uk_pwexi_ref_scope (tenant_id, client_id, owner_jiacn, execution_id, input_ref),
   UNIQUE KEY uk_pwexi_file_version_scope (tenant_id, client_id, owner_jiacn, execution_id, file_id, file_version),
-  KEY idx_pwexi_file_active (tenant_id, client_id, owner_jiacn, file_id, grant_state, execution_id),
-  CONSTRAINT chk_pwexi_tenant CHECK (CHAR_LENGTH(tenant_id)>0 AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(TRIM(tenant_id))),
-  CONSTRAINT chk_pwexi_version CHECK (file_version >= 1 AND byte_length >= 0),
-  CONSTRAINT chk_pwexi_state CHECK (grant_state IN ('ACTIVE','REVOKED')),
-  CONSTRAINT chk_pwexi_hash CHECK (CHAR_LENGTH(content_hash)=64)
+  KEY idx_pwexi_file_active (tenant_id, client_id, owner_jiacn, file_id, grant_state, execution_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
 
 CREATE TABLE IF NOT EXISTS agent_personal_workspace_execution_output (
@@ -90,10 +79,5 @@ CREATE TABLE IF NOT EXISTS agent_personal_workspace_execution_output (
   update_time BIGINT DEFAULT NULL,
   PRIMARY KEY (id),
   UNIQUE KEY uk_pwexo_output_scope (tenant_id, client_id, owner_jiacn, execution_id, output_id),
-  KEY idx_pwexo_execution_state (tenant_id, client_id, owner_jiacn, execution_id, output_state),
-  CONSTRAINT chk_pwexo_tenant CHECK (CHAR_LENGTH(tenant_id)>0 AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(TRIM(tenant_id))),
-  CONSTRAINT chk_pwexo_lengths CHECK (byte_length >= 0),
-  CONSTRAINT chk_pwexo_state CHECK (output_state IN ('STAGED','COMMITTED')),
-  CONSTRAINT chk_pwexo_hash CHECK (CHAR_LENGTH(content_hash)=64),
-  CONSTRAINT chk_pwexo_commit CHECK ((output_state='STAGED' AND workspace_file_id IS NULL AND workspace_file_version IS NULL AND committed_at IS NULL) OR (output_state='COMMITTED' AND workspace_file_id IS NOT NULL AND workspace_file_version=1 AND committed_at IS NOT NULL))
+  KEY idx_pwexo_execution_state (tenant_id, client_id, owner_jiacn, execution_id, output_state)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;

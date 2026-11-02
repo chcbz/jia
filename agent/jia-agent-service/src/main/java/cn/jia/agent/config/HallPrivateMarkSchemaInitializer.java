@@ -29,14 +29,6 @@ public final class HallPrivateMarkSchemaInitializer implements InitializingBean 
     private static final Map<String, Map<String, String>> INDEXES = Map.of("hall_private_mark", Map.of(
             "PRIMARY", "U:tenant_id,client_id,owner_jiacn,source_type,source_id,revision",
             "uk_hall_private_mark_key", "U:tenant_id,client_id,owner_jiacn,operation_key"));
-    private static final Map<String, Map<String, String>> CHECKS = Map.of("hall_private_mark", normalized(Map.of(
-            "chk_hall_private_mark_tenant", "tenant_id='0'",
-            "chk_hall_private_mark_type", "source_type IN ('PRIVATE_CASE','LEGACY_EXECUTION')",
-            "chk_hall_private_mark_revision", "revision>=1 AND revision<=9007199254740991",
-            "chk_hall_private_mark_archived", "archived IN (0,1)",
-            "chk_hall_private_mark_view", "(viewed_execution_id IS NULL AND viewed_manifest_id IS NULL) OR "
-                + "(viewed_execution_id IS NOT NULL AND viewed_manifest_id IS NOT NULL)",
-            "chk_hall_private_mark_time", "snapshot_updated_at>=0 AND updated_at>=0")));
 
     private final JdbcTemplate jdbc;
 
@@ -95,9 +87,6 @@ public final class HallPrivateMarkSchemaInitializer implements InitializingBean 
             if (!indexes(table).entrySet().containsAll(INDEXES.get(table).entrySet())) {
                 throw new IllegalStateException("Hall private mark indexes are invalid: " + table);
             }
-            if (!checks(table).entrySet().containsAll(CHECKS.get(table).entrySet())) {
-                throw new IllegalStateException("Hall private mark CHECK constraints are invalid: " + table);
-            }
             List<Map<String, Object>> identities = jdbc.queryForList("""
                     SELECT column_name,is_nullable,collation_name
                       FROM information_schema.columns
@@ -148,36 +137,6 @@ public final class HallPrivateMarkSchemaInitializer implements InitializingBean 
             result.put(entry.getKey(), (unique ? "U:" : "N:")
                     + parts.stream().map(IndexPart::column).reduce((a, b) -> a + "," + b).orElse(""));
         }
-        return Map.copyOf(result);
-    }
-
-    private Map<String, String> checks(String table) {
-        Map<String, String> result = new TreeMap<>();
-        for (Map<String, Object> row : jdbc.queryForList("""
-                SELECT tc.constraint_name,cc.check_clause,tc.enforced
-                  FROM information_schema.table_constraints tc
-                  JOIN information_schema.check_constraints cc
-                    ON cc.constraint_catalog=tc.constraint_catalog
-                   AND cc.constraint_schema=tc.constraint_schema
-                   AND cc.constraint_name=tc.constraint_name
-                 WHERE tc.table_schema=DATABASE() AND tc.table_name=?
-                   AND tc.constraint_type='CHECK'
-                """, table)) {
-            String name = Objects.toString(row.get("constraint_name"), "");
-            if (!CHECKS.get(table).containsKey(name)) continue;
-            if (!"YES".equalsIgnoreCase(Objects.toString(row.get("enforced"), ""))
-                    || result.put(name, AgentTaskFundingSchemaInitializer.normalizeCheck(
-                            Objects.toString(row.get("check_clause"), ""))) != null) {
-                throw new IllegalStateException("Hall private mark CHECK catalog is invalid");
-            }
-        }
-        return Map.copyOf(result);
-    }
-
-    private static Map<String, String> normalized(Map<String, String> source) {
-        Map<String, String> result = new TreeMap<>();
-        source.forEach((name, expression) -> result.put(name,
-                AgentTaskFundingSchemaInitializer.normalizeCheck(expression)));
         return Map.copyOf(result);
     }
 

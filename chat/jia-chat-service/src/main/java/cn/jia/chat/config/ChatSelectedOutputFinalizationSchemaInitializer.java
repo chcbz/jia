@@ -51,10 +51,7 @@ public final class ChatSelectedOutputFinalizationSchemaInitializer implements In
                             "request_id","step_id","output_id")),
                     "uk_csofi_message",new Index(true,List.of("tenant_id","owner_jiacn","client_id","operation_id",
                             "request_id","turn_id","message_id"))));
-    private static final Map<String,Set<String>> CHECKS=Map.of(
-            "chat_selected_output_finalization",Set.of("chk_csof_versions","chk_csof_key","chk_csof_delivery_state",
-                    "chk_csof_state","chk_csof_stage","chk_csof_progress","chk_csof_outcome","chk_csof_terminal"),
-            "chat_selected_output_finalization_item",Set.of("chk_csofi_order","chk_csofi_hash","chk_csofi_source"));
+
     private static final Map<String,Set<String>> ASCII_COLUMNS=Map.of(
             "chat_selected_output_finalization",Set.of("request_digest"),
             "chat_selected_output_finalization_item",Set.of("sha256","message_id","final_digest"));
@@ -64,23 +61,6 @@ public final class ChatSelectedOutputFinalizationSchemaInitializer implements In
             "chat_selected_output_finalization_item",Set.of("tenant_id","owner_jiacn","client_id","operation_id",
                     "request_id","step_id","output_id","title","purpose","source_kind","turn_id","snapshot_id"));
 
-    // Evidence: actual MySQL8.0.21 old/repaired finalization checks admitted/rejected NULL
-    // differently while sharing constraint names and ENFORCED=YES. Compare only these
-    // three proven-sensitive definitions; preserve boolean grouping and binary literals.
-    private static final Map<String,String> PRE_SUBMISSION_CHECK_EXPRESSIONS=Map.of(
-            "chk_csof_progress", "(((stagein('PROMOTING','READY_TO_SUBMIT'))and(delivery_idisnull)and(delivery_stateisnull))or((stage='SUBMITTED')and(delivery_idisnotnull)and(delivery_stateisnotnull)and(delivery_statein('submitted','changes_requested')))or((stage='ACCEPTING')and(delivery_idisnotnull)and(delivery_stateisnotnull)and(delivery_statein('submitted','changes_requested')))or((stage='TASK_COMPLETED')and(delivery_idisnotnull)and(delivery_stateisnotnull)and(delivery_state='accepted')))",
-            "chk_csof_terminal", "(((state='completed')and(stage='TASK_COMPLETED')and(delivery_idisnotnull)and(delivery_stateisnotnull)and(delivery_state='accepted')and(task_state='completed')and(error_codeisnull)and(retryable=0))or((state<>'completed')and(stage<>'TASK_COMPLETED')))");
-    private static final Map<String,String> REQUIRED_CHECK_EXPRESSIONS=submissionChecks();
-    private static Map<String,String> submissionChecks() {
-        var result=new LinkedHashMap<>(PRE_SUBMISSION_CHECK_EXPRESSIONS);
-        result.put("chk_csof_progress",result.get("chk_csof_progress")
-                .replace("('submitted','changes_requested')","('submitted','accepted','changes_requested')"));
-        String old=result.get("chk_csof_terminal");
-        result.put("chk_csof_terminal","(((state='completed')and(stage='SUBMITTED')and(delivery_idisnotnull)"
-                +"and(delivery_stateisnotnull)and(delivery_statein('submitted','accepted','changes_requested'))"
-                +"and(error_codeisnull)and(retryable=0))or"+old.substring(1));
-        return Map.copyOf(result);
-    }
     private final JdbcTemplate jdbc;
     private final ChatSchemaReadiness schemaReadiness;
 
@@ -100,7 +80,7 @@ public final class ChatSelectedOutputFinalizationSchemaInitializer implements In
             JdbcTemplate locked=new JdbcTemplate(new SingleConnectionDataSource(connection,true));
             Integer acquired=locked.queryForObject("SELECT GET_LOCK('cyf:chat:selected-output-finalization:v1',-1)",Integer.class);
             if(!Integer.valueOf(1).equals(acquired))throw new IllegalStateException("Finalization schema lock unavailable");
-            try {for(String statement:ddl())locked.execute(statement);upgradeSubmissionChecks(locked);upgradeDeliveryIndex(locked);validate(locked);upgradeV2(locked);validateV2(locked);}
+            try {for(String statement:ddl())locked.execute(statement);upgradeDeliveryIndex(locked);validate(locked);upgradeV2(locked);validateV2(locked);}
             finally {
                 Integer released=locked.queryForObject("SELECT RELEASE_LOCK('cyf:chat:selected-output-finalization:v1')",Integer.class);
                 if(!Integer.valueOf(1).equals(released))throw new IllegalStateException("Finalization schema lock lost");
@@ -114,18 +94,13 @@ public final class ChatSelectedOutputFinalizationSchemaInitializer implements In
         String operations=TABLES.getFirst(),items=TABLES.get(1);
         var columns=columnTypes(jdbc,operations);
         boolean upgradeContract=!columns.containsKey("contract_version");
-        if(upgradeContract) {
-            if(checkExpressions(jdbc,operations).containsKey("chk_csof_contract"))throw new IllegalStateException("Orphan finalization contract CHECK");
-        } else validateContract(jdbc,columns);
+        if(!upgradeContract) validateContract(jdbc,columns);
         var actual=columnTypes(jdbc,items);
         var formal=List.of("source_delivery_id","source_artifact_id","source_artifact_version");
         long present=formal.stream().filter(actual::containsKey).count();
         boolean upgradeSource=present==0;
         if(upgradeSource) {
             if(!"varchar(100)|NO|utf8mb4_0900_bin".equals(actual.get("request_id")))throw new IllegalStateException("Finalization predecessor request column drift");
-            String predecessor=resource("db/chat-selected-output-finalization-completed-message-v1.sql");
-            var expected=ChatTaskDeliveryReviewSchemaInitializer.checks(predecessor).get("chk_csofi_source");
-            if(!Objects.equals(expected,checkExpressions(jdbc,items).get("chk_csofi_source")))throw new IllegalStateException("Finalization predecessor source CHECK drift");
             if(!formalIndex(jdbc).isEmpty())throw new IllegalStateException("Orphan finalization fixed-source index");
         } else {
             if(present!=formal.size())throw new IllegalStateException("Partial finalization formal-source schema");
@@ -140,20 +115,14 @@ public final class ChatSelectedOutputFinalizationSchemaInitializer implements In
     }
     private static void validateContract(JdbcTemplate jdbc,Map<String,String> columns) {
         if(!"smallint|NO|null".equals(columns.get("contract_version")))throw new IllegalStateException("Finalization contract column drift");
-        validateV2Check(jdbc,0,"chk_csof_contract");
     }
     private static void validateSource(JdbcTemplate jdbc,Map<String,String> item) {
         for(String key:List.of("request_id","source_delivery_id","source_artifact_id"))
             if(!"varchar(100)|YES|utf8mb4_0900_bin".equals(item.get(key)))throw new IllegalStateException("Finalization fixed-source column drift: "+key);
         if(!"int|YES|null".equals(item.get("source_artifact_version")))throw new IllegalStateException("Finalization source version drift");
-        validateV2Check(jdbc,1,"chk_csofi_source");
         if(!formalIndex(jdbc).equals(List.of("tenant_id","owner_jiacn","client_id","operation_id","source_delivery_id","source_artifact_id","source_artifact_version")))throw new IllegalStateException("Finalization fixed-source index order drift");
     }
-    private static void validateV2Check(JdbcTemplate jdbc,int index,String name) {
-        var expected=ChatTaskDeliveryReviewSchemaInitializer.checks(ddl().get(index)).get(name);
-        var actual=checkExpressions(jdbc,TABLES.get(index)).get(name);
-        if(expected==null || !expected.equals(actual))throw new IllegalStateException("Finalization v2 CHECK drift: "+name+" expected="+expected+" actual="+actual);
-    }
+
     private static List<String> formalIndex(JdbcTemplate jdbc) {
         List<String> keys=new ArrayList<>();
         for(var row:jdbc.queryForList("SELECT column_name,non_unique,sub_part FROM information_schema.statistics WHERE table_schema=DATABASE() AND table_name=? AND index_name='uk_csofi_formal' ORDER BY seq_in_index",TABLES.get(1))) {
@@ -168,14 +137,7 @@ public final class ChatSelectedOutputFinalizationSchemaInitializer implements In
             result.put(lower(row,"column_name"),lower(row,"column_type")+"|"+text(row,"is_nullable")+"|"+lower(row,"collation_name"));
         return result;
     }
-    private static Map<String,String> checkExpressions(JdbcTemplate jdbc,String table) {
-        var result=new LinkedHashMap<String,String>();
-        for(var row:jdbc.queryForList("SELECT t.constraint_name,c.check_clause,t.enforced FROM information_schema.table_constraints t JOIN information_schema.check_constraints c ON c.constraint_schema=t.constraint_schema AND c.constraint_name=t.constraint_name WHERE t.table_schema=DATABASE() AND t.table_name=? AND t.constraint_type='CHECK'",table)) {
-            if(!"YES".equalsIgnoreCase(text(row,"enforced")) || text(row,"check_clause")==null)throw new IllegalStateException("Finalization CHECK not enforced");
-            result.put(text(row,"constraint_name"),ChatTaskDeliveryReviewSchemaInitializer.metadataExpression(text(row,"check_clause")));
-        }
-        return result;
-    }
+
     private static String resource(String name) {
         try {return new ClassPathResource(name).getContentAsString(StandardCharsets.UTF_8).lines().filter(l->!l.stripLeading().startsWith("--")).reduce("",(a,b)->a+b+'\n').strip();}
         catch(java.io.IOException failure) {throw new IllegalStateException("Finalization upgrade unavailable",failure);}
@@ -184,40 +146,6 @@ public final class ChatSelectedOutputFinalizationSchemaInitializer implements In
         String sql=resource(resource);
         if(!sql.startsWith("ALTER TABLE "+table+"\n") || !sql.endsWith(";") || sql.substring(0,sql.length()-1).contains(";"))throw new IllegalStateException("Unexpected finalization upgrade");
         jdbc.execute(sql);
-    }
-
-    // Only the exact known predecessor is eligible for this semantic upgrade.
-    // Unknown check drift fails closed, under the same existing schema lock.
-    static void upgradeSubmissionChecks(JdbcTemplate jdbc) {
-        Map<String,String> actual=new LinkedHashMap<>();
-        for(var row:jdbc.queryForList("""
-                SELECT t.constraint_name,c.check_clause
-                FROM information_schema.table_constraints t
-                JOIN information_schema.check_constraints c
-                  ON c.constraint_schema=t.constraint_schema AND c.constraint_name=t.constraint_name
-                WHERE t.table_schema=DATABASE() AND t.table_name='chat_selected_output_finalization'
-                  AND t.constraint_type='CHECK'
-                """)) actual.put(text(row,"constraint_name"),compactCheckExpression(text(row,"check_clause")));
-        boolean upgrade=false;
-        for(var entry:REQUIRED_CHECK_EXPRESSIONS.entrySet()) {
-            String value=actual.get(entry.getKey());
-            if(entry.getValue().equals(value))continue;
-            if(!PRE_SUBMISSION_CHECK_EXPRESSIONS.get(entry.getKey()).equals(value))
-                throw new IllegalStateException("Finalization check definition drift: "+entry.getKey());
-            upgrade=true;
-        }
-        if(upgrade) {
-            try {
-                String sql=new ClassPathResource("db/chat-selected-output-finalization-submission-v2.sql")
-                        .getContentAsString(StandardCharsets.UTF_8);
-                String clean=sql.lines().filter(line->!line.stripLeading().startsWith("--"))
-                        .reduce("",(left,right)->left+right+'\n').strip();
-                if(!clean.startsWith("ALTER TABLE chat_selected_output_finalization")
-                        ||clean.substring(0,clean.length()-1).contains(";"))
-                    throw new IllegalStateException("Unsafe finalization submission upgrade");
-                jdbc.execute(clean);
-            } catch(java.io.IOException failure) {throw new IllegalStateException("Finalization submission upgrade unavailable",failure);}
-        }
     }
 
     private static void upgradeDeliveryIndex(JdbcTemplate jdbc) {
@@ -258,7 +186,7 @@ public final class ChatSelectedOutputFinalizationSchemaInitializer implements In
                     """,String.class,table).stream().map(String::toLowerCase).toList());
             if(!columns.containsAll(TABLE_COLUMNS.get(table)))throw new IllegalStateException(
                     "Finalization columns missing: "+table+" "+difference(TABLE_COLUMNS.get(table),columns));
-            validateIndexes(jdbc,table);validateChecks(jdbc,table);validateBinary(jdbc,table);
+            validateIndexes(jdbc,table);validateBinary(jdbc,table);
             if("chat_selected_output_finalization_item".equals(table))validateSourceNullability(jdbc);
         }
     }
@@ -292,39 +220,6 @@ public final class ChatSelectedOutputFinalizationSchemaInitializer implements In
                     ||!found.columns().equals(expected.getValue().columns()))
                 throw new IllegalStateException("Finalization index drift: "+expected.getKey());
         }
-    }
-
-    private static void validateChecks(JdbcTemplate jdbc,String table) {
-        Map<String,String> actual=new LinkedHashMap<>();
-        Map<String,String> clauses=new LinkedHashMap<>();
-        for(Map<String,Object> row:jdbc.queryForList("""
-                SELECT t.constraint_name,t.enforced,c.check_clause
-                FROM information_schema.table_constraints t
-                JOIN information_schema.check_constraints c
-                  ON c.constraint_schema=t.constraint_schema AND c.constraint_name=t.constraint_name
-                WHERE t.constraint_schema=DATABASE() AND t.table_name=? AND t.constraint_type='CHECK'
-                """,table)){
-            String name=text(row,"constraint_name");
-            actual.put(name,text(row,"enforced"));clauses.put(name,text(row,"check_clause"));
-        }
-        for(String check:CHECKS.get(table))if(!"YES".equalsIgnoreCase(actual.get(check)))
-            throw new IllegalStateException("Finalization check drift: "+check);
-        for(var required:REQUIRED_CHECK_EXPRESSIONS.entrySet())if(CHECKS.get(table).contains(required.getKey()))
-            if(!required.getValue().equals(compactCheckExpression(clauses.get(required.getKey()))))
-                throw new IllegalStateException("Finalization check definition drift: "+required.getKey());
-    }
-
-    private static String compactCheckExpression(String source){
-        if(source==null)return null;
-        String value=source.replace("\\'","'");StringBuilder result=new StringBuilder();boolean quoted=false;
-        for(int i=0;i<value.length();i++){
-            char c=value.charAt(i);
-            if(c=='\''){quoted=!quoted;result.append(c);}
-            else if(quoted)result.append(c);
-            else if(value.regionMatches(true,i,"_utf8mb4",0,8))i+=7;
-            else if(!Character.isWhitespace(c)&&c!='`')result.append(Character.toLowerCase(c));
-        }
-        return result.toString();
     }
 
     private static void validateBinary(JdbcTemplate jdbc,String table) {

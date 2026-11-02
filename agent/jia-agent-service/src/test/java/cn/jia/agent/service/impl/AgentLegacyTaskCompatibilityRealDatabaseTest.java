@@ -595,7 +595,6 @@ class AgentLegacyTaskCompatibilityRealDatabaseTest {
         }
     }
 
-
     @Test
     void concurrentDifferentFirstAssignmentsYieldOneBusinessFailureWithoutPartialRows()
             throws Exception {
@@ -724,7 +723,6 @@ class AgentLegacyTaskCompatibilityRealDatabaseTest {
                 number("SELECT attempt_count FROM agent_task_work_item"));
     }
 
-
     @Test
     void partialMemberWorkItemStateIsNeverHealedByLegacyReport() {
         insertTask(TASK, TENANT, "assigned", 0L);
@@ -799,8 +797,7 @@ class AgentLegacyTaskCompatibilityRealDatabaseTest {
     @Test
     void assignmentPersistenceFailureRollsBackEarlierMemberAndWorkItemWrites() {
         insertTask(TASK, TENANT, "assigned", 0L);
-        jdbc.execute("ALTER TABLE agent_task_work_item ADD CONSTRAINT reject_agent_b "
-                + "CHECK (assignee_agent_id <> '" + AGENT_B + "')");
+        jdbc.execute("ALTER TABLE agent_task_work_item ADD CONSTRAINT fixture_one_item_per_task UNIQUE (task_id)");
 
         assertThrows(RuntimeException.class, () -> service.assign(
                 TENANT, CLIENT, OWNER, TASK, List.of(AGENT_A, AGENT_B), false));
@@ -810,7 +807,6 @@ class AgentLegacyTaskCompatibilityRealDatabaseTest {
         assertNull(value("SELECT assigned_agent_id FROM agent_task_meta"));
         assertNull(value("SELECT coordinator_agent_id FROM agent_task_meta"));
     }
-
 
     private Object assignOutcomeAfterBarrier(CountDownLatch start, List<String> agentIds) {
         try {

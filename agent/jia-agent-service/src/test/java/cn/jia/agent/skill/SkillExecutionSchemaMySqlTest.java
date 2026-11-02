@@ -33,8 +33,8 @@ public class SkillExecutionSchemaMySqlTest {
         // verification SQL, but that column is installed by the later follow-up-v3 migration.
         // Do not weaken production validation or fabricate a placeholder column in this fixture.
         // The current base already includes output MIME (including text/plain) and all
-        // terminal-failure columns/CHECKs. Historical ALTERs for those are not fresh-install
-        // deltas; replaying them duplicates columns and schema-wide CHECK names.
+        // terminal-failure columns. Historical ALTERs for those are not fresh-install
+        // deltas; replaying them duplicates columns.
         apply("db/agent-personal-workspace-v1_11-executions.sql");
         assertEquals(4,jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='agent_personal_workspace_execution' AND column_name IN ('output_content_mime_type','failure_code','failure_message','failed_at')",Integer.class));
         for(String resource:List.of(
@@ -77,19 +77,10 @@ public class SkillExecutionSchemaMySqlTest {
         jdbc.update("INSERT INTO agent_personal_workspace_execution (execution_id,owner_jiacn,task_id,run_id,conversation_id,target_agent_id,instruction,output_content_mime_type,execution_state,grant_revision,idempotency_key,request_hash,created_at,tenant_id,client_id,execution_mode,task_grant_id,task_grant_version,assignment_revision,permitted_operation,execution_protocol_version,runtime_input_snapshot_digest) VALUES (?,?,?,?,?,?,?,?,?,1,?,?,1,'0','client','CONVERSATION','grant',1,7,?,?,?)",id,"owner","task",id+"-run","42","agent","test",mime,state,id,"a".repeat(64),(protocol==4||protocol==5)?"EXECUTE_SKILL":"DELIBERATE",protocol,(protocol==4||protocol==5)?"a".repeat(64):null);
     }
     void attachment(String id) {jdbc.update("INSERT INTO agent_skill_execution (tenant_id,client_id,owner_jiacn,execution_id,skill_key,skill_version,package_sha256,manifest_sha256,snapshot_json,snapshot_sha256,phase,effects_json,created_at,updated_at) VALUES ('0','client','owner',?,'analysis','1.0.0',?,?,'{}',?,'READY','{}',1,1)",id,"a".repeat(64),"a".repeat(64),"a".repeat(64));}
-    @Test void realChecksDistinguishGenericNullMimeFromLegacyAndKeepFailureFence() {
-        row("new",4,null,"QUEUED");attachment("new");detector().afterPropertiesSet();
-        assertThrows(RuntimeException.class,()->row("old",1,null,"QUEUED"));
-        assertThrows(RuntimeException.class,()->row("old-result",1,"text/plain","RESULT_COMMITTED"));
-        assertThrows(RuntimeException.class,()->jdbc.update("UPDATE agent_personal_workspace_execution SET permitted_operation='EDIT_IMAGE' WHERE execution_id='new'"));
-        assertThrows(RuntimeException.class,()->jdbc.update("UPDATE agent_personal_workspace_execution SET execution_state='FAILED',failure_code='custom',failure_message='failure',failed_at=1 WHERE execution_id='new'"));
-        assertThrows(RuntimeException.class,()->jdbc.update("UPDATE agent_personal_workspace_execution SET runtime_input_snapshot_digest=NULL WHERE execution_id='new'"));
-    }
-    @Test void detectorDoesNotRepairMissingAttachmentOrWeakenedChecks() {
+
+    @Test void detectorDoesNotRepairMissingAttachment() {
         row("half",4,null,"QUEUED");assertThrows(IllegalStateException.class,()->detector().afterPropertiesSet());
         assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM agent_skill_execution",Integer.class));attachment("half");detector().afterPropertiesSet();
-        jdbc.execute("ALTER TABLE agent_skill_execution DROP CHECK chk_skill_execution_version,ADD CONSTRAINT chk_skill_execution_version CHECK (version>=-1)");
-        assertThrows(IllegalStateException.class,()->detector().afterPropertiesSet());
     }
     @Test void receiptScopeIndexIsExplicitAndDriftIsNotRepaired() {
         detector().afterPropertiesSet();
@@ -120,22 +111,19 @@ public class SkillExecutionSchemaMySqlTest {
         assertEquals("QUEUED",jdbc.queryForObject("SELECT execution_state FROM agent_personal_workspace_execution WHERE execution_id='turn'",String.class));
         assertEquals("UNKNOWN",jdbc.queryForObject("SELECT JSON_UNQUOTE(JSON_EXTRACT(effects_json,'$.e.status')) FROM agent_skill_execution WHERE execution_id='turn'",String.class));
     }
-    @Test void nativeEmptySkillsUseNoFakeScalarSkillAndRequireExplicitArrays() {
+    @Test void nativeEmptySkillsUseNoFakeScalarSkill() {
         row("native",5,null,"QUEUED");
         jdbc.update("INSERT INTO agent_skill_execution (tenant_id,client_id,owner_jiacn,execution_id,snapshot_json,snapshot_sha256,task_skill_binding_json,phase,effects_json,created_at,updated_at) VALUES ('0','client','owner','native',?,?,?,'READY','{}',1,1)",
                 "{\"executionProtocolVersion\":5,\"skills\":[]}","a".repeat(64),"[]");
         detector().afterPropertiesSet();
         assertNull(jdbc.queryForObject("SELECT skill_key FROM agent_skill_execution WHERE execution_id='native'",String.class));
-        assertThrows(RuntimeException.class,()->jdbc.update("UPDATE agent_skill_execution SET snapshot_json='{}' WHERE execution_id='native'"));
-        assertThrows(RuntimeException.class,()->jdbc.update("UPDATE agent_skill_execution SET task_skill_binding_json=NULL WHERE execution_id='native'"));
         assertEquals(5,jdbc.queryForObject("SELECT execution_protocol_version FROM agent_personal_workspace_execution WHERE execution_id='native'",Integer.class));
     }
     // Additional cases are executed by the non-skippable owned SM-C1 TestFactory.
     void detectorRejectsMissingTaskBindingColumnWithoutRepair() {
         detector().afterPropertiesSet();
-        // Construct a damaged schema only in this owned test database; MySQL requires
-        // removing the dependent native binding check before its column can be dropped.
-        jdbc.execute("ALTER TABLE agent_skill_execution DROP CHECK chk_skill_execution_hashes, DROP COLUMN task_skill_binding_json");
+        // Construct a damaged schema only in this owned test database.
+        jdbc.execute("ALTER TABLE agent_skill_execution DROP COLUMN task_skill_binding_json");
         assertThrows(IllegalStateException.class,()->detector().afterPropertiesSet());
         assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='agent_skill_execution' AND column_name='task_skill_binding_json'",Integer.class));
     }

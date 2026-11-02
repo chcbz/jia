@@ -29,17 +29,7 @@ CREATE TABLE IF NOT EXISTS agent_task_formal_delivery (
     UNIQUE KEY uk_formal_delivery_id (tenant_id, client_id, delivery_id),
     UNIQUE KEY uk_formal_delivery_revision (tenant_id, client_id, task_id, revision),
     KEY idx_formal_delivery_task_state (tenant_id, client_id, task_id, state, submitted_at, id),
-    KEY idx_formal_delivery_work_item (tenant_id, client_id, task_id, work_item_id, revision),
-    CONSTRAINT chk_formal_delivery_revision CHECK (revision >= 1 AND version >= 0),
-    CONSTRAINT chk_formal_delivery_manifest CHECK (manifest_artifact_version >= 1),
-    CONSTRAINT chk_formal_delivery_submission_digest CHECK (CHAR_LENGTH(submission_digest) = 64),
-    CONSTRAINT chk_formal_delivery_state CHECK (state IN ('submitted', 'accepted', 'changes_requested')),
-    CONSTRAINT chk_formal_delivery_review CHECK (
-        (state = 'submitted' AND reviewed_by_jiacn IS NULL AND review_reason IS NULL AND reviewed_at IS NULL)
-        OR (state = 'accepted' AND reviewed_by_jiacn IS NOT NULL AND review_reason IS NULL AND reviewed_at > 0)
-        OR (state = 'changes_requested' AND reviewed_by_jiacn IS NOT NULL
-            AND review_reason IS NOT NULL AND CHAR_LENGTH(review_reason) > 0 AND reviewed_at > 0)
-    )
+    KEY idx_formal_delivery_work_item (tenant_id, client_id, task_id, work_item_id, revision)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin
   COMMENT='R2 scoped immutable formal delivery batches and one authoritative review state';
 
@@ -61,9 +51,6 @@ CREATE TABLE IF NOT EXISTS agent_task_formal_delivery_item (
     UNIQUE KEY uk_formal_delivery_item_order
         (tenant_id, client_id, delivery_id, item_order),
     KEY idx_formal_delivery_item_artifact
-        (tenant_id, client_id, artifact_id, artifact_version),
-    CONSTRAINT chk_formal_delivery_item_version CHECK (artifact_version >= 1 AND item_order >= 0),
-    CONSTRAINT chk_formal_delivery_item_hash CHECK (CHAR_LENGTH(content_hash) = 64),
-    CONSTRAINT chk_formal_delivery_item_purpose CHECK (CHAR_LENGTH(purpose) > 0)
+        (tenant_id, client_id, artifact_id, artifact_version)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin
   COMMENT='Exact immutable artifact versions pinned by a R2 formal delivery';

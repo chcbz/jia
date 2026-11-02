@@ -61,8 +61,6 @@ class EconomyHostingRentSchemaInitializerMySqlTest {
                 "paid_through BIGINT DEFAULT NULL", "columns"));
         assertIncompatibleCompleteCatalog(new CatalogChange("free_live", "reprovision", "UNIQUE KEY uk_hosting_reprovision_live",
                 "KEY uk_hosting_reprovision_live", "indexes"));
-        assertIncompatibleCompleteCatalog(new CatalogChange("free_check", "reprovision", "paid_through > requested_at",
-                "paid_through >= requested_at", "checks"));
     }
 
     @Test
@@ -73,8 +71,6 @@ class EconomyHostingRentSchemaInitializerMySqlTest {
                 "runtime_provision_generation BIGINT NOT NULL DEFAULT 1", "columns"));
         assertIncompatibleCompleteCatalog(new CatalogChange("runtime_unique", "intent", "UNIQUE KEY uk_hosting_intent_installation",
                 "KEY uk_hosting_intent_installation", "indexes"));
-        assertIncompatibleCompleteCatalog(new CatalogChange("runtime_target", "reprovision", "runtime_target_generation > 0",
-                "runtime_target_generation >= 0", "checks"));
     }
 
     @Test
@@ -104,8 +100,6 @@ class EconomyHostingRentSchemaInitializerMySqlTest {
                 "paid_from                BIGINT DEFAULT NULL", "paid_from                DECIMAL(20,0) DEFAULT NULL", "columns"));
         assertIncompatibleCompleteCatalog(new CatalogChange("paid_default", "intent",
                 "paid_through             BIGINT DEFAULT NULL", "paid_through             BIGINT DEFAULT 1", "columns"));
-        assertIncompatibleCompleteCatalog(new CatalogChange("paid_check", "intent",
-                "paid_through > paid_from)", "paid_through >= paid_from)", "checks"));
     }
 
     @Test
@@ -125,19 +119,6 @@ class EconomyHostingRentSchemaInitializerMySqlTest {
                         "KEY idx_hosting_plan_status (tenant_id,client_id,status,plan_id,plan_version DESC)", "index"),
                 new CatalogChange("fulltext", "plan", "KEY idx_hosting_plan_status (tenant_id,client_id,status,plan_id,plan_version)",
                         "FULLTEXT KEY idx_hosting_plan_status (tenant_id,client_id,status,plan_id)", "index"))) {
-            assertIncompatibleCompleteCatalog(change);
-        }
-    }
-
-    @Test
-    void fullCatalogWithSameCheckNamesButWeakenedOrUnenforcedExpressionsFails() {
-        for (CatalogChange change : List.of(
-                new CatalogChange("check_true", "plan", "CHECK (currency = 'SILVER')",
-                        "CHECK (1=1)", "checks"),
-                new CatalogChange("check_literal", "plan", "CHECK (currency = 'SILVER')",
-                        "CHECK (currency = 'silver')", "checks"),
-                new CatalogChange("check_disabled", "plan", "CHECK (currency = 'SILVER')",
-                        "CHECK (currency = 'SILVER') NOT ENFORCED", "checks"))) {
             assertIncompatibleCompleteCatalog(change);
         }
     }

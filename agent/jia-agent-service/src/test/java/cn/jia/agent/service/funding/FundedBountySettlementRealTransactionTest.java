@@ -73,7 +73,6 @@ class FundedBountySettlementRealTransactionTest {
         claims = (FundedBountyQuoteClaimServiceImpl) ReflectionTestUtils.getField(fixture, "service");
         taskId = (String) ReflectionTestUtils.getField(fixture, "taskId");
         DataSource source = context.getBean(DataSource.class);
-        new ResourceDatabasePopulator(new ClassPathResource("w06/settlement-integration-h2.sql")).execute(source);
         String ddl = new ClassPathResource("db/agent-task-bounty-settlement-v0.sql")
                 .getContentAsString(StandardCharsets.UTF_8)
                 .replace(" ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin", "");

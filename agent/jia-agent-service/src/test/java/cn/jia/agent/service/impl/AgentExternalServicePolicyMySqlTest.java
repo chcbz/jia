@@ -184,10 +184,6 @@ class AgentExternalServicePolicyMySqlTest {
     @Test void reportHeadsKeepIdenticalCommandKeysInSeparateEnvironments() {
         var source = Objects.requireNonNull(jdbc.getDataSource());
         new ResourceDatabasePopulator(new ClassPathResource("db/agent-execution-report-v1.sql")).execute(source);
-        jdbc.execute("ALTER TABLE agent_execution_report_head DROP CHECK chk_execution_report_head_tenant, "
-                + "ADD CONSTRAINT chk_execution_report_head_tenant CHECK (tenant_id='0')");
-        jdbc.execute("ALTER TABLE agent_execution_report_inbox DROP CHECK chk_execution_report_tenant, "
-                + "ADD CONSTRAINT chk_execution_report_tenant CHECK (tenant_id='0')");
         var migration = new ResourceDatabasePopulator(new ClassPathResource("db/agent-execution-report-tenant-20261030.sql"));
         migration.execute(source);
         migration.execute(source);
@@ -210,9 +206,7 @@ class AgentExternalServicePolicyMySqlTest {
     }
 
     @Test void identityMigrationPartitionsSameLegacyAliasWithoutChangingProductionIdentity() {
-        jdbc.execute("ALTER TABLE agent_persona_binding ADD CONSTRAINT chk_agent_binding_single_tenant CHECK (tenant_id='0')");
-        jdbc.execute("CREATE TABLE agent_hosted_profile (id BIGINT PRIMARY KEY, tenant_id VARCHAR(50) NOT NULL, "
-                + "CONSTRAINT chk_hosted_single_tenant CHECK (tenant_id='0')) ENGINE=InnoDB");
+        jdbc.execute("CREATE TABLE agent_hosted_profile (id BIGINT PRIMARY KEY, tenant_id VARCHAR(50) NOT NULL) ENGINE=InnoDB");
         var migration = new ResourceDatabasePopulator(
                 new ClassPathResource("db/agent-identity-business-tenant-20261030.sql"));
         migration.execute(Objects.requireNonNull(jdbc.getDataSource()));
@@ -239,8 +233,6 @@ class AgentExternalServicePolicyMySqlTest {
 
     @Test void grantTenantMigrationKeepsProductionAndScopesIdenticalGrantKeys() {
         persistExternalGrant();
-        jdbc.execute("ALTER TABLE agent_task_execution_grant DROP CHECK chk_atxg_tenant, "
-                + "ADD CONSTRAINT chk_atxg_tenant CHECK (tenant_id='0')");
         var migration = new ResourceDatabasePopulator(
                 new ClassPathResource("db/agent-task-execution-grant-tenant-20261030.sql"));
         migration.execute(Objects.requireNonNull(jdbc.getDataSource()));

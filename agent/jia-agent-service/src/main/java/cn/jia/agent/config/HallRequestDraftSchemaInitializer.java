@@ -31,37 +31,7 @@ public final class HallRequestDraftSchemaInitializer implements InitializingBean
     private static final Set<String> REQUIRED_INDEXES = Set.of(
             "PRIMARY", "uk_hall_draft_create", "uk_hall_draft_submit",
             "uk_hall_draft_discard", "idx_hall_draft_recovery");
-    private static final Map<String, String> REQUIRED_CHECKS = normalizedChecks(Map.of(
-            "chk_hall_draft_tenant", "tenant_id = '0'",
-            "chk_hall_draft_kind",
-                    "kind IN ('CREATE','REVISION','TASK_CREATE','TASK_ACTION')",
-            "chk_hall_draft_state", "state IN ('EDITING','SUBMITTED','DISCARDED')",
-            "chk_hall_draft_revision",
-                    "revision >= 1 AND revision <= 9007199254740991",
-            "chk_hall_draft_source_tuple",
-                    "(source_type IS NULL AND source_id IS NULL AND source_version IS NULL) "
-                    + "OR (source_type='FILE' AND source_id IS NOT NULL AND source_version >= 1) "
-                    + "OR (source_type IN ('CONVERSATION','TASK','EXECUTION_OUTPUT') "
-                    + "AND source_id IS NOT NULL AND source_version IS NULL)",
-            "chk_hall_draft_kind_refs",
-                    "(kind='REVISION' AND source_output_ref_json IS NOT NULL AND task_id IS NULL) "
-                    + "OR (kind='CREATE' AND source_output_ref_json IS NULL AND task_id IS NULL) "
-                    + "OR (kind='TASK_CREATE' AND source_output_ref_json IS NULL AND task_id IS NULL) "
-                    + "OR (kind='TASK_ACTION' AND source_output_ref_json IS NULL AND task_id IS NOT NULL)",
-            "chk_hall_draft_submit_pair",
-                    "(submit_key IS NULL AND submit_hash IS NULL) "
-                    + "OR (submit_key IS NOT NULL AND submit_hash IS NOT NULL)",
-            "chk_hall_draft_discard_pair",
-                    "(discard_key IS NULL AND discard_hash IS NULL) "
-                    + "OR (discard_key IS NOT NULL AND discard_hash IS NOT NULL)",
-            "chk_hall_draft_lifecycle",
-                    "(state='EDITING' AND submission_ref IS NULL AND submitted_execution_id IS NULL "
-                    + "AND discard_key IS NULL AND discard_hash IS NULL) "
-                    + "OR (state='DISCARDED' AND submission_ref IS NULL "
-                    + "AND submitted_execution_id IS NULL AND discard_key IS NOT NULL "
-                    + "AND discard_hash IS NOT NULL) "
-                    + "OR (state='SUBMITTED' AND submission_ref IS NOT NULL "
-                    + "AND submit_key IS NOT NULL AND submit_hash IS NOT NULL)"));
+
     private final JdbcTemplate jdbc;
 
     public HallRequestDraftSchemaInitializer(JdbcTemplate jdbc) {
@@ -121,27 +91,6 @@ public final class HallRequestDraftSchemaInitializer implements InitializingBean
         if (!indexes.equals(REQUIRED_INDEXES)) {
             throw new IllegalStateException("Hall request draft indexes are invalid");
         }
-        Map<String, String> checks = new TreeMap<>();
-        for (Map<String, Object> row : jdbc.queryForList("""
-                SELECT tc.constraint_name,cc.check_clause,tc.enforced
-                  FROM information_schema.table_constraints tc
-                  JOIN information_schema.check_constraints cc
-                    ON cc.constraint_catalog=tc.constraint_catalog
-                   AND cc.constraint_schema=tc.constraint_schema
-                   AND cc.constraint_name=tc.constraint_name
-                 WHERE tc.table_schema=DATABASE() AND tc.table_name='hall_request_draft'
-                   AND tc.constraint_type='CHECK'
-                """)) {
-            String name = Objects.toString(row.get("constraint_name"), "");
-            if (!"YES".equalsIgnoreCase(Objects.toString(row.get("enforced"), ""))
-                    || checks.put(name, AgentTaskFundingSchemaInitializer.normalizeCheck(
-                            Objects.toString(row.get("check_clause"), ""))) != null) {
-                throw new IllegalStateException("Hall request draft CHECK catalog is invalid");
-            }
-        }
-        if (!checks.equals(REQUIRED_CHECKS)) {
-            throw new IllegalStateException("Hall request draft CHECK constraints are invalid");
-        }
         List<Map<String, Object>> rows = jdbc.queryForList("""
                 SELECT column_name,is_nullable,column_default,collation_name,column_type
                   FROM information_schema.columns
@@ -162,13 +111,6 @@ public final class HallRequestDraftSchemaInitializer implements InitializingBean
                 throw new IllegalStateException("Hall request draft critical collation is invalid: " + name);
             }
         }
-    }
-
-    private static Map<String, String> normalizedChecks(Map<String, String> checks) {
-        Map<String, String> normalized = new TreeMap<>();
-        checks.forEach((name, clause) -> normalized.put(
-                name, AgentTaskFundingSchemaInitializer.normalizeCheck(clause)));
-        return Map.copyOf(normalized);
     }
 
     private List<String> presentTables() {

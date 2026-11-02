@@ -19,20 +19,7 @@ CREATE TABLE IF NOT EXISTS economy_account (
     PRIMARY KEY (id),
     UNIQUE KEY uk_economy_account_id (tenant_id, client_id, account_id),
     UNIQUE KEY uk_economy_account_key (tenant_id, client_id, currency, owner_type, owner_id, purpose),
-    KEY idx_economy_account_owner (tenant_id, client_id, owner_type, owner_id, currency, purpose),
-    CONSTRAINT chk_economy_account_currency CHECK (currency = 'SILVER'),
-    CONSTRAINT chk_economy_account_negative CHECK (
-        allow_negative IN (0,1)
-        AND (
-            (allow_negative = 0 AND balance_micro >= 0)
-            OR
-            (allow_negative = 1
-             AND owner_type = 'SYSTEM'
-             AND purpose IN ('SILVER_ISSUANCE','PROVIDER_VARIANCE'))
-        )
-    ),
-    CONSTRAINT chk_economy_account_status CHECK (status IN ('ACTIVE','FROZEN','CLOSED')),
-    CONSTRAINT chk_economy_account_version CHECK (version >= 0)
+    KEY idx_economy_account_owner (tenant_id, client_id, owner_type, owner_id, currency, purpose)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='SILVER account balance cache; ledger remains authoritative';
 
 CREATE TABLE IF NOT EXISTS economy_transaction (
@@ -57,16 +44,7 @@ CREATE TABLE IF NOT EXISTS economy_transaction (
     PRIMARY KEY (id),
     UNIQUE KEY uk_economy_transaction_id (tenant_id, client_id, transaction_id),
     UNIQUE KEY uk_economy_transaction_idempotency (tenant_id, client_id, principal_type, principal_id, idempotency_key),
-    KEY idx_economy_transaction_business (tenant_id, client_id, business_type, business_id, posted_at, id),
-    CONSTRAINT chk_economy_transaction_key CHECK (OCTET_LENGTH(idempotency_key) = 36),
-    CONSTRAINT chk_economy_transaction_hash CHECK (OCTET_LENGTH(request_hash) = 32),
-    CONSTRAINT chk_economy_transaction_currency CHECK (currency = 'SILVER'),
-    CONSTRAINT chk_economy_transaction_totals CHECK (entry_count >= 0 AND debit_total_micro >= 0 AND credit_total_micro >= 0),
-    CONSTRAINT chk_economy_transaction_state CHECK (
-        (status = 'POSTING' AND posted_at IS NULL AND entry_count = 0 AND debit_total_micro = 0 AND credit_total_micro = 0)
-        OR
-        (status = 'POSTED' AND posted_at IS NOT NULL AND entry_count >= 2 AND debit_total_micro > 0 AND debit_total_micro = credit_total_micro)
-    )
+    KEY idx_economy_transaction_business (tenant_id, client_id, business_type, business_id, posted_at, id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Actor-idempotent complete journal transaction';
 
 CREATE TABLE IF NOT EXISTS economy_entry (
@@ -87,11 +65,7 @@ CREATE TABLE IF NOT EXISTS economy_entry (
     UNIQUE KEY uk_economy_entry_id (tenant_id, client_id, entry_id),
     UNIQUE KEY uk_economy_entry_sequence (tenant_id, client_id, transaction_id, entry_sequence),
     KEY idx_economy_entry_account (tenant_id, client_id, account_id, posted_at, id),
-    KEY idx_economy_entry_transaction (tenant_id, client_id, transaction_id, id),
-    CONSTRAINT chk_economy_entry_sequence CHECK (entry_sequence > 0),
-    CONSTRAINT chk_economy_entry_amount CHECK (signed_amount_micro <> 0),
-    CONSTRAINT chk_economy_entry_currency CHECK (currency = 'SILVER'),
-    CONSTRAINT chk_economy_entry_status CHECK (status = 'POSTED')
+    KEY idx_economy_entry_transaction (tenant_id, client_id, transaction_id, id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Immutable balanced journal entry';
 
 CREATE TABLE IF NOT EXISTS economy_escrow (
@@ -115,14 +89,7 @@ CREATE TABLE IF NOT EXISTS economy_escrow (
     UNIQUE KEY uk_economy_escrow_id (tenant_id, client_id, escrow_id),
     UNIQUE KEY uk_economy_escrow_business (tenant_id, client_id, business_type, business_id),
     UNIQUE KEY uk_economy_escrow_account (tenant_id, client_id, escrow_account_id),
-    KEY idx_economy_escrow_payer (tenant_id, client_id, payer_account_id, status, id),
-    CONSTRAINT chk_economy_escrow_currency CHECK (currency = 'SILVER'),
-    CONSTRAINT chk_economy_escrow_amounts CHECK (
-        gross_micro > 0 AND captured_micro >= 0 AND refunded_micro >= 0
-        AND captured_micro <= gross_micro - refunded_micro
-    ),
-    CONSTRAINT chk_economy_escrow_status CHECK (status IN ('ACTIVE','PARTIALLY_CAPTURED','CAPTURED','REFUNDED','EXPIRED')),
-    CONSTRAINT chk_economy_escrow_version CHECK (version > 0)
+    KEY idx_economy_escrow_payer (tenant_id, client_id, payer_account_id, status, id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Single escrow root per funded business aggregate';
 
 CREATE TABLE IF NOT EXISTS economy_escrow_funding_lot (
@@ -141,9 +108,5 @@ CREATE TABLE IF NOT EXISTS economy_escrow_funding_lot (
     PRIMARY KEY (id),
     UNIQUE KEY uk_economy_funding_sequence (tenant_id, client_id, escrow_id, funding_sequence),
     UNIQUE KEY uk_economy_funding_transaction (tenant_id, client_id, reserve_transaction_id),
-    KEY idx_economy_funding_escrow (tenant_id, client_id, escrow_id, id),
-    CONSTRAINT chk_economy_funding_sequence CHECK (funding_sequence > 0),
-    CONSTRAINT chk_economy_funding_amount CHECK (amount_micro > 0 AND escrow_gross_after_micro >= amount_micro),
-    CONSTRAINT chk_economy_funding_version CHECK (escrow_version_after > 0),
-    CONSTRAINT chk_economy_funding_currency CHECK (currency = 'SILVER')
+    KEY idx_economy_funding_escrow (tenant_id, client_id, escrow_id, id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Immutable initial and top-up escrow funding lots';

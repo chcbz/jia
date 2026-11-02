@@ -14,8 +14,6 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ArchiveReaderDataSchemaInitializerTest {
-    private static final String UUID_PATTERN =
-            "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$";
 
     @Test
     void h03CatalogIsSeparateFromH02AllOrNoneSetAndMatchesResource() throws Exception {
@@ -32,25 +30,8 @@ class ArchiveReaderDataSchemaInitializerTest {
             definition.indexes().keySet().stream().filter(name -> !"PRIMARY".equals(name))
                     .forEach(name -> assertTrue(sql.contains(name.toLowerCase()), name));
             definition.foreignKeys().keySet().forEach(name -> assertTrue(sql.contains(name.toLowerCase()), name));
-            definition.checks().keySet().forEach(name -> assertTrue(sql.contains(name.toLowerCase()), name));
-        });
-    }
 
-    @Test
-    void progressTenantCheckKeepsDeployedNameAndRejectsRenaming() {
-        var expected = ArchiveReaderDataSchemaCatalog.expectedSnapshot();
-        var progress = expected.tables().get("archive_reader_progress");
-        var tenantCheck = progress.checks().get("chk_archive_progress_single_tenant");
-        assertNotNull(tenantCheck);
-        assertEquals("tenant_id = '0'", tenantCheck.clause());
-        assertTrue(tenantCheck.enforced());
-        var renamed = new LinkedHashMap<>(progress.checks());
-        renamed.remove("chk_archive_progress_single_tenant");
-        renamed.put("chk_archive_reader_progress_single_tenant", tenantCheck);
-        var tables = new LinkedHashMap<>(expected.tables());
-        tables.put("archive_reader_progress", progress.withChecks(renamed));
-        assertThrows(IllegalStateException.class,
-                () -> ArchiveReaderDataSchemaCatalog.validate(new ArchiveSchemaSnapshot(tables)));
+        });
     }
 
     @Test
@@ -65,12 +46,6 @@ class ArchiveReaderDataSchemaInitializerTest {
         assertColumnDrift(expected, table, "updated_at", column.withGenerationExpression("1"));
         assertColumnDrift(expected, table, "text", table.columns().get("text").withCollation("utf8mb4_0900_ai_ci"));
 
-        var checks = new LinkedHashMap<>(table.checks());
-        checks.put("chk_archive_note_payload", checks.get("chk_archive_note_payload").withEnforced(false));
-        var tables = new LinkedHashMap<>(expected.tables());
-        tables.put("archive_note", table.withChecks(checks));
-        assertThrows(IllegalStateException.class,
-                () -> ArchiveReaderDataSchemaCatalog.validate(new ArchiveSchemaSnapshot(tables)));
     }
 
     @Test
@@ -102,80 +77,6 @@ class ArchiveReaderDataSchemaInitializerTest {
     }
 
     @Test
-    void mysql8021LengthAliasForOctetLengthIsNarrowAndFailClosed() {
-        ArchiveSchemaSnapshot expected = ArchiveReaderDataSchemaCatalog.expectedSnapshot();
-        ArchiveSchemaSnapshot rendered = withCheckClause(expected, "archive_note",
-                "chk_archive_note_text_bytes", "(`text` is null) or (length(`text`) <= 20000)");
-        assertDoesNotThrow(() -> ArchiveReaderDataSchemaCatalog.validate(rendered));
-        assertEquals("length(text)", ArchiveReaderDataSchemaCatalog.normalizeCheck("OCTET_LENGTH(`text`)"));
-        assertEquals("length(text)", ArchiveReaderDataSchemaCatalog.normalizeCheck("LENGTH(`text`)"));
-        String normalized = ArchiveReaderDataSchemaCatalog.normalizeCheck("OCTET_LENGTH(`text`)");
-        assertEquals(normalized, ArchiveReaderDataSchemaCatalog.normalizeCheck(normalized));
-        assertEquals("regexp_like(note_id,'OCTET_LENGTH(text)')",
-                ArchiveReaderDataSchemaCatalog.normalizeCheck(
-                        "REGEXP_LIKE(`note_id`,'OCTET_LENGTH(text)')"));
-
-        assertCheckDrift(expected, "archive_note", "chk_archive_note_text_bytes",
-                "(text is null) or (length(anchor_json)<=20000)");
-        assertCheckDrift(expected, "archive_note", "chk_archive_note_text_bytes",
-                "(text is null) or (length(text)<=19999)");
-        assertCheckDrift(expected, "archive_note", "chk_archive_note_text_bytes",
-                "(text is null) or (length(text)<20000)");
-        assertCheckDrift(expected, "archive_note", "chk_archive_note_text_bytes",
-                "(text is null) or (char_length(text)<=20000)");
-        assertCheckDrift(expected, "archive_note", "chk_archive_note_text_bytes",
-                "(text is null) or (length(trim(text))<=20000)");
-        assertCheckDrift(expected, "archive_note", "chk_archive_note_text_bytes",
-                "(text is null) or (coalesce(length(text),0)<=20000)");
-    }
-
-    @Test
-    void mysql8021RegexpLikeMetadataForUuidChecksValidatesAndNormalizesIdempotently() {
-        ArchiveSchemaSnapshot rendered = ArchiveReaderDataSchemaCatalog.expectedSnapshot();
-        rendered = withCheckClause(rendered, "archive_bookmark", "chk_archive_bookmark_id",
-                "regexp_like(bookmark_id,'" + UUID_PATTERN + "')");
-        rendered = withCheckClause(rendered, "archive_note", "chk_archive_note_id",
-                "regexp_like(`note_id`,_utf8mb4\\'" + UUID_PATTERN + "\\')");
-        rendered = withCheckClause(rendered, "archive_idempotency", "chk_archive_idempotency_key",
-                "regexp_like(idempotency_key,'^[!-~]{1,128}$')");
-
-        ArchiveSchemaSnapshot actual = rendered;
-        assertDoesNotThrow(() -> ArchiveReaderDataSchemaCatalog.validate(actual));
-        for (String clause : actual.tables().get("archive_bookmark").checks().values().stream()
-                .map(ArchiveSchemaSnapshot.CheckSnapshot::clause).toList()) {
-            String normalized = ArchiveSchemaCatalog.normalizeCheck(clause);
-            assertEquals(normalized, ArchiveSchemaCatalog.normalizeCheck(normalized));
-        }
-        for (String clause : actual.tables().get("archive_note").checks().values().stream()
-                .map(ArchiveSchemaSnapshot.CheckSnapshot::clause).toList()) {
-            String normalized = ArchiveSchemaCatalog.normalizeCheck(clause);
-            assertEquals(normalized, ArchiveSchemaCatalog.normalizeCheck(normalized));
-        }
-    }
-
-    @Test
-    void regexpLikeUuidOperandPatternFlagsAndQuotedCaseDriftFailClosed() {
-        ArchiveSchemaSnapshot expected = ArchiveReaderDataSchemaCatalog.expectedSnapshot();
-        assertCheckDrift(expected, "archive_bookmark", "chk_archive_bookmark_id",
-                "regexp_like(note_id,'" + UUID_PATTERN + "')");
-        assertCheckDrift(expected, "archive_bookmark", "chk_archive_bookmark_id",
-                "regexp_like(bookmark_id,'" + UUID_PATTERN.replace("{12}", "{11}") + "')");
-        assertCheckDrift(expected, "archive_bookmark", "chk_archive_bookmark_id",
-                "regexp_like(bookmark_id,'" + UUID_PATTERN + "','i')");
-        assertCheckDrift(expected, "archive_bookmark", "chk_archive_bookmark_id",
-                "regexp_like(bookmark_id,'" + UUID_PATTERN.replace("[89ab]", "[89AB]") + "')");
-
-        assertCheckDrift(expected, "archive_note", "chk_archive_note_id",
-                "regexp_like(bookmark_id,'" + UUID_PATTERN + "')");
-        assertCheckDrift(expected, "archive_note", "chk_archive_note_id",
-                "regexp_like(note_id,'" + UUID_PATTERN.replace("{8}", "{7}") + "')");
-        assertCheckDrift(expected, "archive_note", "chk_archive_note_id",
-                "regexp_like(note_id,'" + UUID_PATTERN + "','c')");
-        assertCheckDrift(expected, "archive_note", "chk_archive_note_id",
-                "regexp_like(note_id,'" + UUID_PATTERN.replace("[0-9a-f]", "[0-9A-F]") + "')");
-    }
-
-    @Test
     void partialH03SchemaIsRejectedWithoutAffectingH02Set() {
         IllegalStateException failure = assertThrows(IllegalStateException.class,
                 () -> ArchiveReaderDataSchemaInitializer.requireAllOrNoneTables(
@@ -199,28 +100,6 @@ class ArchiveReaderDataSchemaInitializerTest {
         IllegalStateException failure = assertThrows(IllegalStateException.class,
                 () -> ArchiveReaderDataSchemaCatalog.validate(new ArchiveSchemaSnapshot(tables)));
         assertTrue(failure.getMessage().contains(messagePart));
-    }
-
-    private ArchiveSchemaSnapshot withCheckClause(ArchiveSchemaSnapshot snapshot,
-                                                  String tableName,
-                                                  String checkName,
-                                                  String clause) {
-        var tables = new LinkedHashMap<>(snapshot.tables());
-        var table = tables.get(tableName);
-        var checks = new LinkedHashMap<>(table.checks());
-        checks.put(checkName, new ArchiveSchemaSnapshot.CheckSnapshot(clause, true));
-        tables.put(tableName, table.withChecks(checks));
-        return new ArchiveSchemaSnapshot(tables);
-    }
-
-    private void assertCheckDrift(ArchiveSchemaSnapshot expected,
-                                  String tableName,
-                                  String checkName,
-                                  String clause) {
-        IllegalStateException failure = assertThrows(IllegalStateException.class,
-                () -> ArchiveReaderDataSchemaCatalog.validate(
-                        withCheckClause(expected, tableName, checkName, clause)));
-        assertTrue(failure.getMessage().contains(tableName + "." + checkName + ".clause"));
     }
 
     private void assertColumnDrift(ArchiveSchemaSnapshot expected,

@@ -60,16 +60,6 @@ public final class ChatTypedReviewContextSchemaInitializer implements Initializi
              WHERE table_schema=DATABASE() AND table_name='chat_typed_review_context' ORDER BY ordinal_position
             """))actual.put(text(row,"column_name"),text(row,"column_type").toLowerCase(Locale.ROOT)+"|"+text(row,"is_nullable")+"|"+text(row,"collation_name"));
         if(!expected.equals(actual))throw drift();
-        Map<String,String> checks=new LinkedHashMap<>();
-        for(var row:jdbc.queryForList("""
-            SELECT t.constraint_name,c.check_clause,t.enforced FROM information_schema.table_constraints t
-             JOIN information_schema.check_constraints c ON c.constraint_schema=t.constraint_schema AND c.constraint_name=t.constraint_name
-             WHERE t.table_schema=DATABASE() AND t.table_name='chat_typed_review_context' AND t.constraint_type='CHECK'
-            """)) {
-            if(!"YES".equals(text(row,"enforced")))throw drift();
-            checks.put(text(row,"constraint_name"),ChatTaskDeliveryReviewSchemaInitializer.metadataExpression(text(row,"check_clause")));
-        }
-        if(!ChatTaskDeliveryReviewSchemaInitializer.checks(ddl()).equals(checks))throw drift();
         Map<String,String> indexes=new LinkedHashMap<>();
         for(var row:jdbc.queryForList("""
             SELECT index_name,non_unique,column_name,seq_in_index,sub_part FROM information_schema.statistics

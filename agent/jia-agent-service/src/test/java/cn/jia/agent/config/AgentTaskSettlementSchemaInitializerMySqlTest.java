@@ -68,53 +68,18 @@ class AgentTaskSettlementSchemaInitializerMySqlTest {
                 "funding_version", "escrow_version", "settled_at")) {
             assertThrows(DataAccessException.class, () -> jdbc.execute("UPDATE agent_task_bounty_settlement SET " + column + "=NULL"));
         }
-        assertThrows(DataAccessException.class, () -> jdbc.execute("UPDATE agent_task_bounty_settlement SET agent_payout_micro=9"));
         jdbc.execute("""
                 INSERT INTO agent_task_funding(task_id,funding_mode,funding_status,payer_principal_type,payer_principal_id,
                   settlement_policy,gross_bounty_amount_micro,remaining_micro,escrow_id,escrow_version,reserve_transaction_id,
                   required_skill_requirements,version,tenant_id,client_id,create_time,update_time)
                 VALUES('t','FUNDED_SINGLE_AGENT','SETTLED','USER','u','GROSS_INCLUSIVE',10,0,'e',4,'reserve','[]',2,'T','C',1,1)
                 """);
-        DataAccessException rejected = assertThrows(DataAccessException.class,
-                () -> jdbc.execute("UPDATE agent_task_funding SET escrow_version=NULL"));
-        assertTrue(rejected.getMostSpecificCause().getMessage().contains("chk_agent_task_funding_state"));
     }
 
     @Test
-    void onlyExactAcceptedW04CatalogMigratesToSettledAndWeakLegacyCatalogDoesNot() {
-        JdbcTemplate jdbc = database("upgrade");
-        installLegacy(jdbc, false);
-        new AgentTaskFundingSchemaInitializer(jdbc).afterPropertiesSet();
-        assertTrue(definition(jdbc, "agent_task_funding").contains("SETTLED"));
-        String first = definition(jdbc, "agent_task_funding");
-        new AgentTaskFundingSchemaInitializer(jdbc).afterPropertiesSet();
-        assertEquals(first, definition(jdbc, "agent_task_funding"));
-        JdbcTemplate weak = database("weak_legacy");
-        installLegacy(weak, true);
-        String before = definition(weak, "agent_task_funding");
-        assertThrows(IllegalStateException.class, () -> new AgentTaskFundingSchemaInitializer(weak).afterPropertiesSet());
-        assertEquals(before, definition(weak, "agent_task_funding"));
-    }
-
-    @Test
-    void nullableUnenforcedOrWeakStateCatalogFailsWithoutRepair() {
+    void nullableOrNonuniqueCatalogFailsWithoutRepair() {
         assertDrift("nullable", ddl -> ddl.replace("settled_at BIGINT NOT NULL", "settled_at BIGINT NULL"));
-        assertDrift("weak", ddl -> ddl.replace("settled_at>0", "settled_at>=0"));
-        assertDrift("unenforced", ddl -> ddl.replace("OCTET_LENGTH(transaction_ids)>2),", "OCTET_LENGTH(transaction_ids)>2) NOT ENFORCED,"));
         assertDrift("nonunique", ddl -> ddl.replace("UNIQUE KEY uk_bounty_settlement_actor_key", "KEY uk_bounty_settlement_actor_key"));
-    }
-
-    private void installLegacy(JdbcTemplate jdbc, boolean weak) {
-        for (String ddl : AgentTaskFundingSchemaInitializer.tableDdlStatements()) {
-            if (ddl.contains("CONSTRAINT chk_agent_task_funding_state CHECK (")) {
-                int start = ddl.indexOf("CONSTRAINT chk_agent_task_funding_state CHECK (");
-                int end = ddl.indexOf("\n    )", start) + "\n    )".length();
-                String legacy = AgentTaskFundingSchemaInitializer.LEGACY_FUNDING_STATE;
-                if (weak) legacy = legacy.replace("escrow_version IS NOT NULL AND ", "");
-                ddl = ddl.substring(0, start) + "CONSTRAINT chk_agent_task_funding_state CHECK (" + legacy + ")" + ddl.substring(end);
-            }
-            jdbc.execute(ddl);
-        }
     }
 
     private void assertDrift(String label, UnaryOperator<String> mutation) {

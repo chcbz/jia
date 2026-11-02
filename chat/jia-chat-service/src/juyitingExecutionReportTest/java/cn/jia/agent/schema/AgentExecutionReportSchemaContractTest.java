@@ -19,7 +19,6 @@ class AgentExecutionReportSchemaContractTest {
         assertTrue(sql.contains("runtime_instance_id varchar(100) not null"));
         assertTrue(sql.contains("unique key uk_execution_report_id (tenant_id,client_id,owner_jiacn,agent_id,report_id)"));
         assertTrue(sql.contains("unique key uk_execution_report_sequence (tenant_id,client_id,owner_jiacn,agent_id,command_id,attempt,sequence)"));
-        assertTrue(sql.contains("message_type in ('work.progress','work.heartbeat','work.result','help.request','artifact.publish')"));
         assertFalse(sql.contains("foreign key"));
         assertFalse(sql.contains("insert into"));
         assertFalse(sql.contains("update agent_"));

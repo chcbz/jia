@@ -32,7 +32,6 @@ class AgentTaskBountyBootstrapOutboxSchemaContractTest {
         assertTrue(ddl.contains("permitted_operation varchar(40)"));
         assertTrue(ddl.contains("requirement_anchor varchar(50)"));
         assertTrue(ddl.contains("reference_summary_json json not null"));
-        assertTrue(ddl.contains("status in ('pending','claimed','retry','admitted','dead')"));
         assertFalse(ddl.contains("delivered"));
         assertFalse(ddl.contains("access_token"));
         assertFalse(ddl.contains("storage_uri"));
@@ -82,7 +81,6 @@ class AgentTaskBountyBootstrapOutboxSchemaContractTest {
         assertTrue(sql.contains("limit 1 for update skip locked"));
         assertTrue(sql.contains("tenant_id=#{tenantid}"));
         assertTrue(sql.contains("#{clientid} is null"));
-        assertTrue(sql.contains("status in ('pending','retry')"));
         assertTrue(sql.contains("lease_until<=#{now}"));
         assertTrue(sql.contains("order by id"));
         assertFalse(sql.contains("#{ownerjiacn}"));

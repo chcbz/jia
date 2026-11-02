@@ -32,12 +32,6 @@ public final class ChatTypedDeliberationSchemaInitializer implements Application
     private static final Map<String, List<Column>> COLUMNS = expectedColumns();
     private static final Map<String, Map<String, Index>> INDEXES = expectedIndexes();
     private static final Map<String, ForeignKey> FOREIGN_KEYS = expectedForeignKeys();
-    private static final String KIND_CHECK = "chk_chat_typed_outcome_kind";
-    private static final String PREVIOUS_KIND = "kind IN ('ANSWER','CLARIFY','EXECUTION_PROPOSAL')";
-    private static final String V4_KIND = "kind IN ('ANSWER','CLARIFY','EXECUTION_PROPOSAL','ACTION_REQUEST')";
-    private static final String V5_KIND = "kind IN ('ANSWER','CLARIFY','EXECUTION_PROPOSAL','ACTION_REQUEST','REVISION_REQUEST')";
-    private static final String ACTION_KIND = "kind IN ('ANSWER','CLARIFY','EXECUTION_PROPOSAL','ACTION_REQUEST','REVISION_REQUEST','SUBMISSION_REQUEST')";
-    private static final Map<String, String> CHECKS = expectedChecks();
 
     private final JdbcTemplate jdbc;
     private final ChatDeliberationSchemaInitializer deliberationSchema;
@@ -97,7 +91,7 @@ public final class ChatTypedDeliberationSchemaInitializer implements Application
                     if (!allowMigration) return false;
                     for (String statement : ddl()) locked.execute(statement);
                 }
-                if (!ensureActionCatalog(locked, allowMigration)) return false;
+                validateCatalog(locked);
                 if (allowMigration) {
                     locked.update("""
                             INSERT INTO chat_deliberation_schema_version(version,stage,updated_at)
@@ -170,21 +164,8 @@ public final class ChatTypedDeliberationSchemaInitializer implements Application
     }
 
     /** Called only while holding the shared schema lock on the same connection. */
-    static boolean ensureActionCatalog(JdbcTemplate locked, boolean allowMigration) {
-        // Validate the complete catalogue first. An unrelated drift must never cause any DDL.
-        boolean previousKind = validateCatalog(locked, true);
-        if (previousKind) {
-            if (!allowMigration) return false;
-            locked.execute("ALTER TABLE chat_typed_outcome DROP CHECK " + KIND_CHECK
-                    + ", ADD CONSTRAINT " + KIND_CHECK + " CHECK (" + ACTION_KIND + ")");
-            validateCatalog(locked);
-        }
-        return true;
-    }
 
-    static void validateCatalog(JdbcTemplate locked) { validateCatalog(locked, false); }
-
-    private static boolean validateCatalog(JdbcTemplate locked, boolean allowPreviousKind) {
+    static void validateCatalog(JdbcTemplate locked) {
         for (String table : TABLES) {
             List<Map<String, Object>> metadata = locked.queryForList("""
                     SELECT engine,table_collation FROM information_schema.tables
@@ -198,9 +179,7 @@ public final class ChatTypedDeliberationSchemaInitializer implements Application
             validateColumns(locked, table);
             validateIndexes(locked, table);
         }
-        boolean previousKind = validateChecks(locked, allowPreviousKind);
         validateForeignKeys(locked);
-        return previousKind;
     }
 
     private static void validateColumns(JdbcTemplate locked, String table) {
@@ -239,40 +218,6 @@ public final class ChatTypedDeliberationSchemaInitializer implements Application
             if (found.unique() != entry.getValue().unique()
                     || !found.columns().equals(entry.getValue().columns())) throw drift(entry.getKey());
         }
-    }
-
-    static void validateChecks(JdbcTemplate locked) { validateChecks(locked, false); }
-
-    static boolean validateChecks(JdbcTemplate locked, boolean allowPreviousKind) {
-        List<Map<String, Object>> rows = locked.queryForList("""
-                SELECT tc.constraint_name,tc.enforced,cc.check_clause
-                FROM information_schema.table_constraints tc
-                JOIN information_schema.check_constraints cc
-                  ON cc.constraint_schema=tc.constraint_schema AND cc.constraint_name=tc.constraint_name
-                WHERE tc.constraint_schema=DATABASE() AND tc.table_name IN (?,?,?,?)
-                  AND tc.constraint_type='CHECK'
-                """, TABLES.toArray());
-        Map<String, String> actual = new LinkedHashMap<>();
-        for (Map<String, Object> row : rows) {
-            String name = text(row, "constraint_name");
-            if (name == null || actual.put(name, canonicalCheck(text(row, "check_clause"))) != null
-                    || !"YES".equalsIgnoreCase(text(row, "enforced"))) throw drift("checks");
-        }
-        if (!actual.keySet().equals(CHECKS.keySet())) throw drift("check set");
-        boolean previousKind = false;
-        for (Map.Entry<String, String> entry : CHECKS.entrySet()) {
-            String wanted = normalizeAtomicParentheses(stripOuterParentheses(canonicalCheck(entry.getValue())));
-            String found = normalizeAtomicParentheses(stripOuterParentheses(actual.get(entry.getKey())));
-            if (!wanted.equals(found)) {
-                if (allowPreviousKind && KIND_CHECK.equals(entry.getKey())
-                        && (normalizeAtomicParentheses(stripOuterParentheses(canonicalCheck(PREVIOUS_KIND))).equals(found)
-                        || normalizeAtomicParentheses(stripOuterParentheses(canonicalCheck(V4_KIND))).equals(found)
-                        || normalizeAtomicParentheses(stripOuterParentheses(canonicalCheck(V5_KIND))).equals(found)))
-                    previousKind = true;
-                else throw drift(entry.getKey());
-            }
-        }
-        return previousKind;
     }
 
     static void validateForeignKeys(JdbcTemplate locked) {
@@ -319,68 +264,6 @@ public final class ChatTypedDeliberationSchemaInitializer implements Application
         }
     }
 
-    static String canonicalCheck(String source) {
-        if (source == null) throw drift("null check");
-        String rendered = normalizeQuotes(source);
-        StringBuilder out = new StringBuilder();
-        boolean quote = false;
-        for (int i = 0; i < rendered.length(); i++) {
-            char ch = rendered.charAt(i);
-            if (ch == '\'') {
-                out.append(ch);
-                if (quote && i + 1 < rendered.length() && rendered.charAt(i + 1) == '\'') out.append(rendered.charAt(++i));
-                else quote = !quote;
-            } else if (quote) out.append(ch);
-            else if (rendered.regionMatches(true, i, "_utf8mb4", 0, 8)
-                    && nextNonWhitespaceIsQuote(rendered, i + 8)) i += 7;
-            else if (!Character.isWhitespace(ch) && ch != '`') out.append(Character.toLowerCase(ch));
-        }
-        if (quote) throw drift("unterminated check");
-        return out.toString();
-    }
-
-    private static boolean nextNonWhitespaceIsQuote(String value, int start) {
-        int index=start;
-        while(index<value.length()&&Character.isWhitespace(value.charAt(index)))index++;
-        return index<value.length()&&value.charAt(index)=='\'';
-    }
-
-    private static String normalizeQuotes(String source) {
-        int plain = 0, escaped = 0;
-        for (int i = 0; i < source.length(); i++) if (source.charAt(i) == '\'') {
-            int slashes = 0;
-            for (int p = i - 1; p >= 0 && source.charAt(p) == '\\'; p--) slashes++;
-            if (slashes == 0) plain++;
-            else if (slashes == 1) escaped++;
-            else throw drift("ambiguous check quotes");
-        }
-        if (plain > 0 && escaped > 0) throw drift("mixed check quotes");
-        if (escaped == 0) return source;
-        if ((escaped & 1) != 0) throw drift("unbalanced check quotes");
-        return source.replace("\\'", "'");
-    }
-
-    private static String normalizeAtomicParentheses(String value) {
-        String current=value;
-        boolean changed;
-        do {
-            changed=false;
-            int[] stack=new int[current.length()];int size=0;
-            for(int i=0;i<current.length();i++){
-                char ch=current.charAt(i);
-                if(ch=='\''){while(i+1<current.length()&&current.charAt(i+1)!='\'')i++;continue;}
-                if(ch=='(')stack[size++]=i;
-                else if(ch==')'&&size>0){int open=stack[--size];
-                    if(groupingParenthesis(current,open,i)&&!containsTopLevelBoolean(current,open+1,i)){
-                        current=current.substring(0,open)+current.substring(open+1,i)+current.substring(i+1);
-                        changed=true;break;
-                    }
-                }
-            }
-        }while(changed);
-        return current;
-    }
-
     private static boolean groupingParenthesis(String value,int open,int close){
         if(open==0)return true;char previous=value.charAt(open-1);
         return !(Character.isLetterOrDigit(previous)||previous=='_');
@@ -395,13 +278,6 @@ public final class ChatTypedDeliberationSchemaInitializer implements Application
             else if(depth==0&&(value.startsWith("and",i)||value.startsWith("or",i)))return true;
         }
         return false;
-    }
-
-    private static String stripOuterParentheses(String value) {
-        String current = value;
-        while (current.length() >= 2 && current.charAt(0) == '(' && current.charAt(current.length() - 1) == ')'
-                && outerPairCoversWhole(current)) current = current.substring(1, current.length() - 1);
-        return current;
     }
 
     private static boolean outerPairCoversWhole(String value) {
@@ -515,28 +391,6 @@ public final class ChatTypedDeliberationSchemaInitializer implements Application
                 "fk_chat_typed_proposal_outcome", new ForeignKey("chat_typed_proposal",scopeOutcome,"chat_typed_outcome",scopeOutcome,"RESTRICT","RESTRICT"),
                 "fk_chat_typed_admission_request", new ForeignKey("chat_typed_admission",List.of("tenant_id","owner_jiacn","client_id","request_id","request_revision"),
                         "chat_request",List.of("tenant_id","owner_jiacn","client_id","request_id","request_revision"),"RESTRICT","RESTRICT"));
-    }
-
-    private static Map<String, String> expectedChecks() {
-        return Map.ofEntries(
-                Map.entry("chk_chat_typed_outcome_generation","conversation_generation>=1"),
-                Map.entry("chk_chat_typed_outcome_revision","((request_revision=1) AND (assignment_revision>=0))"),
-                Map.entry("chk_chat_typed_outcome_digest","REGEXP_LIKE(final_digest,CAST('^sha256:[0-9a-f]{64}$' AS CHAR CHARSET binary))"),
-                Map.entry(KIND_CHECK,ACTION_KIND),
-                Map.entry("chk_chat_typed_outcome_json","(json_valid(binding_json) and json_valid(facts_json) and json_valid(outcome_json) and json_valid(source_catalog_json))"),
-                Map.entry("chk_chat_typed_pending_state","state IN ('OPEN','ANSWERED')"),
-                Map.entry("chk_chat_typed_pending_version","(((state = 'OPEN') and (state_version = 0) and (reply_request_id is null) and (reply_idempotency_key is null) and (reply_body_digest is null)) or ((state = 'ANSWERED') and (state_version = 1) and (reply_request_id is not null) and (reply_idempotency_key is not null) and regexp_like(reply_body_digest,cast('^sha256:[0-9a-f]{64}$' as char charset binary))))"),
-                Map.entry("chk_chat_typed_pending_required","JSON_VALID(required_facts_json)"),
-                Map.entry("chk_chat_typed_proposal_state","((state='PROPOSED') AND (state_version=0))"),
-                Map.entry("chk_chat_typed_proposal_operation","operation IN ('GENERATE_IMAGE','EDIT_IMAGE')"),
-                Map.entry("chk_chat_typed_proposal_sources","(json_valid(source_ref_ids_json) and json_valid(source_selectors_json))"),
-                Map.entry("chk_chat_typed_proposal_parent","(((parent_request_id is null) and (parent_step_id is null)) or ((parent_request_id is not null) and (parent_step_id is not null)))"),
-                Map.entry("chk_chat_typed_admission_generation","conversation_generation>=1"),
-                Map.entry("chk_chat_typed_admission_digest","(regexp_like(request_digest,cast('^sha256:[0-9a-f]{64}$' as char charset binary)) and regexp_like(body_digest,cast('^sha256:[0-9a-f]{64}$' as char charset binary)))"),
-                Map.entry("chk_chat_typed_admission_intent","intent IN ('DISCUSSION','CLARIFICATION_REPLY')"),
-                Map.entry("chk_chat_typed_admission_revision","((request_revision=1) AND (assignment_revision>=0) AND (state_version>=0) AND (event_cursor>=0))"),
-                Map.entry("chk_chat_typed_admission_turns","(json_valid(turn_ids_json) and json_valid(source_catalog_json))"),
-                Map.entry("chk_chat_typed_admission_reply","(((intent = 'DISCUSSION') and (pending_question_id is null)) or ((intent = 'CLARIFICATION_REPLY') and (parent_outcome_id is not null) and (pending_question_id is not null)))"));
     }
 
     private static Column col(String name, String type, boolean nullable, String defaultValue) {

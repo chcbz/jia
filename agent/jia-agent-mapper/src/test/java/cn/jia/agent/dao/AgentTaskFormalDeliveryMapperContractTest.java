@@ -78,10 +78,8 @@ class AgentTaskFormalDeliveryMapperContractTest {
         String ddl = Files.readString(ddlPath, StandardCharsets.UTF_8).toLowerCase();
         assertTrue(ddl.contains("create table if not exists agent_task_formal_delivery"));
         assertTrue(ddl.contains("create table if not exists agent_task_formal_delivery_item"));
-        assertTrue(ddl.contains("state in ('submitted', 'accepted', 'changes_requested')"));
         assertTrue(ddl.contains("unique key uk_formal_delivery_revision"));
         assertTrue(ddl.contains("submission_digest"));
-        assertTrue(ddl.contains("chk_formal_delivery_submission_digest"));
         assertTrue(ddl.contains("unique key uk_formal_delivery_item_exact"));
         assertFalse(ddl.matches("(?s).*\\b(insert|update|delete|replace|truncate|alter|drop)\\b.*"));
 

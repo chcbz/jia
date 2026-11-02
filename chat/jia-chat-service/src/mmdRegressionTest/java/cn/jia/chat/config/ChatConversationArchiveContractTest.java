@@ -39,10 +39,6 @@ class ChatConversationArchiveContractTest {
         assertTrue(compact.contains("uk_chat_archive_source (tenant_id,owner_jiacn,client_id,asset_id,asset_revision)"));
         assertTrue(compact.contains("uk_chat_archive_source_snapshot (tenant_id,owner_jiacn,client_id,source_snapshot_key)"));
         assertTrue(compact.contains("uk_chat_archive_workspace (tenant_id,owner_jiacn,client_id,workspace_operation_id)"));
-        assertTrue(sql.contains("source_kind='textselection'"));
-        assertTrue(sql.contains("char_length(source_text)=selection_end_code_point-selection_start_code_point"));
-        assertTrue(sql.contains("chk_chat_archive_saved_receipt"));
-        assertTrue(sql.contains("file_version>=1"));
         assertTrue(sql.contains("engine=innodb default charset=utf8mb4 collate=utf8mb4_0900_bin"));
         assertFalse(sql.contains("drop table"));
         assertFalse(sql.contains("delete from"));
@@ -56,7 +52,6 @@ class ChatConversationArchiveContractTest {
         }
         assertTrue(migration.contains("source_snapshot_key"));
         assertTrue(migration.contains("uk_chat_archive_source_snapshot"));
-        assertTrue(migration.contains("chk_chat_archive_source_union"));
         assertFalse(migration.contains("drop table"));
         assertFalse(migration.contains("delete from"));
     }

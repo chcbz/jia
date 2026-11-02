@@ -198,8 +198,7 @@ CREATE TABLE IF NOT EXISTS chat_bounty_binding (
   updated_at BIGINT NOT NULL,
   PRIMARY KEY (tenant_id,owner_jiacn,client_id,task_id),
   UNIQUE KEY uk_chat_bounty_binding_conversation
-    (tenant_id,owner_jiacn,client_id,conversation_id),
-  CONSTRAINT chk_chat_bounty_binding_revision CHECK (assignment_revision>=0)
+    (tenant_id,owner_jiacn,client_id,conversation_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
 
 CREATE TABLE IF NOT EXISTS chat_deliberation_schema_version (

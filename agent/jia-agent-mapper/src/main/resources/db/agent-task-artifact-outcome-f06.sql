@@ -29,25 +29,7 @@ CREATE TABLE IF NOT EXISTS agent_task_artifact_outcome (
         (tenant_id, client_id, owner_jiacn, task_id, decision_id, id),
     KEY idx_artifact_outcome_superseded_by
         (tenant_id, client_id, owner_jiacn, task_id,
-         superseded_by_artifact_id, superseded_by_artifact_version),
-    CONSTRAINT chk_artifact_outcome_state
-        CHECK (outcome_state IN ('accepted', 'superseded')),
-    CONSTRAINT chk_artifact_outcome_versions
-        CHECK (artifact_version >= 1 AND version >= 1 AND decided_at > 0),
-    CONSTRAINT chk_artifact_outcome_digest
-        CHECK (CHAR_LENGTH(decision_digest) = 64),
-    CONSTRAINT chk_artifact_outcome_supersession
-        CHECK (
-            (outcome_state = 'accepted'
-             AND superseded_by_artifact_id IS NULL
-             AND superseded_by_artifact_version IS NULL)
-            OR
-            (outcome_state = 'superseded'
-             AND superseded_by_artifact_id IS NOT NULL
-             AND superseded_by_artifact_version >= 1
-             AND (artifact_id <> superseded_by_artifact_id
-                  OR artifact_version <> superseded_by_artifact_version))
-        )
+         superseded_by_artifact_id, superseded_by_artifact_version)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   COMMENT='Scoped current accepted/superseded state for immutable task artifact versions';
 
@@ -71,12 +53,6 @@ CREATE TABLE IF NOT EXISTS agent_task_artifact_outcome_decision (
         (tenant_id, client_id, owner_jiacn, task_id, decision_id),
     KEY idx_artifact_outcome_decision_accepted
         (tenant_id, client_id, owner_jiacn, task_id,
-         accepted_artifact_id, accepted_artifact_version),
-    CONSTRAINT chk_artifact_outcome_decision_versions
-        CHECK (accepted_artifact_version >= 1
-               AND accepted_outcome_version >= 1
-               AND decided_at > 0),
-    CONSTRAINT chk_artifact_outcome_decision_digest
-        CHECK (CHAR_LENGTH(decision_digest) = 64)
+         accepted_artifact_id, accepted_artifact_version)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   COMMENT='Immutable scoped F06 decision identities and exact replay results';

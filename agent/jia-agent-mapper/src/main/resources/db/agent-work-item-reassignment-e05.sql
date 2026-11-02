@@ -35,19 +35,6 @@ CREATE TABLE IF NOT EXISTS agent_work_item_reassignment (
     KEY idx_work_item_reassignment_latest
         (tenant_id, client_id, task_id, work_item_id, id),
     KEY idx_agent_work_item_reassignment_owner_scope
-        (tenant_id, client_id, owner_jiacn, task_id, work_item_id),
-    CONSTRAINT chk_work_item_reassignment_digest
-        CHECK (CHAR_LENGTH(request_sha256)=64 AND CHAR_LENGTH(lease_fence_sha256)=64),
-    CONSTRAINT chk_work_item_reassignment_versions
-        CHECK (expected_work_item_version >= 0
-               AND result_work_item_version = expected_work_item_version + 1
-               AND task_version >= 0),
-    CONSTRAINT chk_work_item_reassignment_agents
-        CHECK (previous_agent_id <> target_agent_id),
-    CONSTRAINT chk_work_item_reassignment_lease
-        CHECK (previous_lease_until > 0 AND lease_until > previous_lease_until
-               AND attempt_count > 0 AND attempt_count < max_attempts),
-    CONSTRAINT chk_work_item_reassignment_immutable_clock
-        CHECK (create_time > 0 AND update_time = create_time)
+        (tenant_id, client_id, owner_jiacn, task_id, work_item_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   COMMENT='Immutable E05 explicit-target expired-lease reassignment receipts';

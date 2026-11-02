@@ -26,15 +26,6 @@ public final class AgentTaskBountyQuoteSchemaInitializer implements Initializing
     private static final String COLLATION = "utf8mb4_0900_bin";
     private static final String LOCK = "cyf:agent-v0:bounty-quote-schema";
 
-    private static final Map<String, String> CHECKS = Map.ofEntries(
-            Map.entry("chk_bounty_quote_hashes", "OCTET_LENGTH(request_hash)=32 AND OCTET_LENGTH(idempotency_key)=36 AND task_input_hash LIKE 'sha256:%' AND skill_set_hash LIKE 'sha256:%'"),
-            Map.entry("chk_bounty_quote_amounts", "task_version>=0 AND estimated_input_tokens>=0 AND estimated_cached_input_tokens>=0 AND estimated_output_tokens>=0 AND estimated_reasoning_tokens>=0 AND estimated_compute_micro>=0 AND worst_compute_micro>=estimated_compute_micro AND platform_fee_micro>=0 AND gross_allocation_micro>0 AND estimated_agent_payout_micro>=0 AND worst_agent_payout_micro>=0 AND minimum_accepted_payout_micro>=0 AND budget_headroom_micro>=0"),
-            Map.entry("chk_bounty_quote_state", "(status='OPEN' AND claimed_at IS NULL) OR (status='CLAIMED' AND claimed_at IS NOT NULL AND claimed_at>0)"),
-            Map.entry("chk_bounty_quote_recommendation", "recommendation IN ('recommended','caution','reject')"),
-            Map.entry("chk_bounty_quote_expiry", "expires_at>create_time"),
-            Map.entry("chk_bounty_claim_hash", "OCTET_LENGTH(request_hash)=32 AND OCTET_LENGTH(idempotency_key)=36"),
-            Map.entry("chk_bounty_claim_state", "(status='POSTING' AND receipt_task_version IS NULL AND claimed_at IS NULL) OR (status='COMPLETED' AND receipt_task_version IS NOT NULL AND receipt_task_version>0 AND claimed_at IS NOT NULL AND claimed_at>0)"));
-
     private final JdbcTemplate jdbc;
 
     public AgentTaskBountyQuoteSchemaInitializer(JdbcTemplate jdbc) {
@@ -122,31 +113,6 @@ public final class AgentTaskBountyQuoteSchemaInitializer implements Initializing
             }
             if (!spec.indexes().equals(indexes)) {
                 throw new IllegalStateException("Invalid bounty quote indexes: " + table);
-            }
-            Set<String> checks = new LinkedHashSet<>();
-            for (Map<String, Object> row : jdbc.queryForList("""
-                    SELECT tc.constraint_name,cc.check_clause,tc.enforced
-                    FROM information_schema.table_constraints tc
-                    JOIN information_schema.check_constraints cc
-                      ON cc.constraint_catalog=tc.constraint_catalog
-                     AND cc.constraint_schema=tc.constraint_schema
-                     AND cc.constraint_name=tc.constraint_name
-                    WHERE tc.constraint_schema=DATABASE() AND tc.table_name=? AND tc.constraint_type='CHECK'
-                    ORDER BY tc.constraint_name
-                    """, table)) {
-                String name = text(row, "constraint_name");
-                if (!checks.add(name)) {
-                    throw new IllegalStateException("Ambiguous bounty quote CHECK catalog: " + table);
-                }
-                String state = CHECKS.get(name);
-                if (state == null || (!"YES".equalsIgnoreCase(text(row, "enforced"))
-                        || !AgentTaskFundingSchemaInitializer.normalizeCheck(state).equals(
-                                AgentTaskFundingSchemaInitializer.normalizeCheck(text(row, "check_clause"))))) {
-                    throw new IllegalStateException("Invalid bounty quote state CHECK: " + table + "." + name);
-                }
-            }
-            if (!spec.checks().equals(checks)) {
-                throw new IllegalStateException("Invalid bounty quote checks: " + table);
             }
             Integer foreignKeys = jdbc.queryForObject("""
                     SELECT COUNT(*) FROM information_schema.referential_constraints
@@ -288,9 +254,7 @@ public final class AgentTaskBountyQuoteSchemaInitializer implements Initializing
                         "PRIMARY", "id",
                         "idx_bounty_quote_task", "tenant_id,client_id,task_id,status,expires_at,id",
                         "uk_bounty_quote_actor_key", "tenant_id,client_id,principal_type,principal_id,idempotency_key",
-                        "uk_bounty_quote_id", "tenant_id,client_id,quote_id"),
-                Set.of("chk_bounty_quote_amounts", "chk_bounty_quote_expiry", "chk_bounty_quote_hashes",
-                        "chk_bounty_quote_recommendation", "chk_bounty_quote_state")));
+                        "uk_bounty_quote_id", "tenant_id,client_id,quote_id")));
         result.put(TABLES.get(1), new TableSpec(List.of(
                 "id","principal_type","principal_id","idempotency_key","request_hash","task_id",
                 "agent_id","quote_id","status","receipt_task_version","claimed_at","tenant_id",
@@ -299,8 +263,7 @@ public final class AgentTaskBountyQuoteSchemaInitializer implements Initializing
                         "PRIMARY", "id",
                         "idx_bounty_claim_task", "tenant_id,client_id,task_id,status,id",
                         "uk_bounty_claim_actor_key", "tenant_id,client_id,principal_type,principal_id,idempotency_key",
-                        "uk_bounty_claim_quote", "tenant_id,client_id,quote_id"),
-                Set.of("chk_bounty_claim_hash", "chk_bounty_claim_state")));
+                        "uk_bounty_claim_quote", "tenant_id,client_id,quote_id")));
         return Map.copyOf(result);
     }
 
@@ -312,6 +275,6 @@ public final class AgentTaskBountyQuoteSchemaInitializer implements Initializing
         return result;
     }
 
-    private record TableSpec(List<String> columns, Map<String, List<String>> indexes, Set<String> checks) {
+    private record TableSpec(List<String> columns, Map<String, List<String>> indexes) {
     }
 }

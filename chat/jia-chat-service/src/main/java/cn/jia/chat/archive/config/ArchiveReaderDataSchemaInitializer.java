@@ -54,7 +54,6 @@ public class ArchiveReaderDataSchemaInitializer {
         Map<String, Map<String, ArchiveSchemaSnapshot.ColumnSnapshot>> columns = inspectColumns();
         Map<String, Map<String, ArchiveSchemaSnapshot.IndexSnapshot>> indexes = inspectIndexes();
         Map<String, Map<String, ArchiveSchemaSnapshot.ForeignKeySnapshot>> foreignKeys = inspectForeignKeys();
-        Map<String, Map<String, ArchiveSchemaSnapshot.CheckSnapshot>> checks = inspectChecks();
         List<Map<String, Object>> tableRows = jdbc.queryForList("""
                 SELECT table_name, engine, table_collation
                 FROM information_schema.tables
@@ -71,7 +70,7 @@ public class ArchiveReaderDataSchemaInitializer {
             tables.put(table, new ArchiveSchemaSnapshot.TableSnapshot(
                     string(row, "engine"), string(row, "table_collation"),
                     columns.getOrDefault(table, Map.of()), indexes.getOrDefault(table, Map.of()),
-                    foreignKeys.getOrDefault(table, Map.of()), checks.getOrDefault(table, Map.of())));
+                    foreignKeys.getOrDefault(table, Map.of())));
         }
         return new ArchiveSchemaSnapshot(tables);
     }
@@ -174,29 +173,6 @@ public class ArchiveReaderDataSchemaInitializer {
         });
         return result;
     }
-
-    private Map<String, Map<String, ArchiveSchemaSnapshot.CheckSnapshot>> inspectChecks() {
-        List<Map<String, Object>> rows = jdbc.queryForList("""
-                SELECT tc.table_name, tc.constraint_name, tc.enforced, cc.check_clause
-                FROM information_schema.table_constraints tc
-                JOIN information_schema.check_constraints cc
-                  ON cc.constraint_schema = tc.constraint_schema
-                 AND cc.constraint_name = tc.constraint_name
-                WHERE tc.constraint_schema = DATABASE()
-                  AND tc.constraint_type = 'CHECK'
-                  AND tc.table_name IN ('archive_reader_progress','archive_bookmark','archive_note','archive_idempotency')
-                ORDER BY tc.table_name, tc.constraint_name
-                """);
-        Map<String, Map<String, ArchiveSchemaSnapshot.CheckSnapshot>> values = new LinkedHashMap<>();
-        for (Map<String, Object> row : rows) {
-            values.computeIfAbsent(string(row, "table_name"), ignored -> new LinkedHashMap<>())
-                    .put(string(row, "constraint_name"), new ArchiveSchemaSnapshot.CheckSnapshot(
-                            ArchiveSchemaCatalog.normalizeCheck(string(row, "check_clause")),
-                            "YES".equalsIgnoreCase(string(row, "enforced"))));
-        }
-        return values;
-    }
-
 
     private String normalizeDefault(Object value) {
         return value == null ? null : normalizeMetadata(String.valueOf(value));

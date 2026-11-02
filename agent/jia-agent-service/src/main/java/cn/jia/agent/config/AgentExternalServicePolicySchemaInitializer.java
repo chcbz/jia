@@ -26,9 +26,6 @@ public final class AgentExternalServicePolicySchemaInitializer implements Initia
             throw new IllegalStateException("External policy identity collation/nullability drift");
         Integer nullable=jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='agent_external_service_policy' AND is_nullable='YES'",Integer.class);
         if(nullable==null || nullable!=0) throw new IllegalStateException("External policy nullable fields");
-        var checks=Set.copyOf(jdbc.queryForList("SELECT constraint_name FROM information_schema.table_constraints WHERE table_schema=DATABASE() AND table_name='agent_external_service_policy' AND constraint_type='CHECK' AND enforced='YES'",String.class));
-        if(!checks.containsAll(List.of("chk_external_policy_revision","chk_external_policy_enabled","chk_external_policy_binding")))
-            throw new IllegalStateException("External policy checks unavailable");
         for(var index:List.of("uk_external_policy_revision","uk_external_policy_request")) {
             var actual=jdbc.queryForList("SELECT column_name FROM information_schema.statistics WHERE table_schema=DATABASE() AND table_name='agent_external_service_policy' AND index_name=? AND non_unique=0 ORDER BY seq_in_index",String.class,index);
             var expected=index.endsWith("revision")?List.of("tenant_id","client_id","agent_id","binding_id","revision")

@@ -16,12 +16,7 @@ public final class SkillExecutionSchemaInitializer implements InitializingBean {
     private final JdbcTemplate jdbc;
     public SkillExecutionSchemaInitializer(JdbcTemplate jdbc) {this.jdbc=Objects.requireNonNull(jdbc);}
     private record Column(String type,String nullable,String defaultValue,String collation,String extra) { }
-    static final String MIME_CATALOG_CHECK="(((execution_protocol_version is not null) and (execution_protocol_version in (4,5))) or ((output_content_mime_type is not null) and (output_content_mime_type in ("+PersonalWorkspaceExecutionSchemaInitializer.OUTPUT_MIMES+"))))";
-    static final String STATE_CATALOG_CHECK="((execution_state in ('QUEUED','INPUTS_REVOKED','OUTPUT_STAGED','OUTPUT_COMMITTED','FAILED')) or ((execution_state = 'RESULT_COMMITTED') and (execution_protocol_version is not null) and (execution_protocol_version in (4,5))))";
-    static String protocolCatalogCheck() {
-        String legacy=ControlledImageFollowupV3SchemaInitializer.EXECUTION_PROTOCOL_CATALOG_CHECK.replace("\\'", "'");
-        return legacy.substring(0,legacy.length()-1)+" or ((execution_protocol_version in (4,5)) and (execution_mode = 'CONVERSATION') and (permitted_operation = 'EXECUTE_SKILL') and (controlled_consent_id is null) and (operation_grant_id is null) and (runtime_input_snapshot_digest is not null) and regexp_like(runtime_input_snapshot_digest,cast('^[0-9a-f]{64}$' as char charset binary))))";
-    }
+
     @Override public void afterPropertiesSet() {
         try(var connection=Objects.requireNonNull(jdbc.getDataSource()).getConnection()) {
             var metadata=connection.getMetaData();if(!metadata.getDatabaseProductName().equalsIgnoreCase("MySQL")||metadata.getDatabaseMajorVersion()<8)throw new IllegalStateException("Skill schema requires MySQL8");
@@ -29,8 +24,6 @@ public final class SkillExecutionSchemaInitializer implements InitializingBean {
         var tables=jdbc.queryForList("SELECT engine,table_collation FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='agent_skill_execution'");
         if(tables.size()!=1||!"InnoDB".equals(text(tables.getFirst(),"engine"))||!"utf8mb4_0900_bin".equals(text(tables.getFirst(),"table_collation")))throw new IllegalStateException("Explicit skill schema installation missing or drifted");
         validateColumns();validateIndexes();validateReceiptIndex();
-        validateChecks("agent_skill_execution",attachmentChecks(),true);
-        validateChecks("agent_personal_workspace_execution",Map.of("chk_pwex_output_mime",MIME_CATALOG_CHECK,"chk_pwex_state",STATE_CATALOG_CHECK,"chk_pwex_execution_protocol",protocolCatalogCheck()),false);
         var mime=jdbc.queryForList("SELECT column_type,is_nullable,column_default FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='agent_personal_workspace_execution' AND column_name='output_content_mime_type'");
         if(mime.size()!=1||!"varchar(127)".equals(text(mime.getFirst(),"column_type"))||!"YES".equals(text(mime.getFirst(),"is_nullable"))||value(mime.getFirst(),"column_default")!=null)throw new IllegalStateException("Skill output MIME column drift");
         Integer missing=jdbc.queryForObject("SELECT COUNT(*) FROM agent_personal_workspace_execution e LEFT JOIN agent_skill_execution s ON BINARY s.tenant_id=BINARY e.tenant_id AND BINARY s.client_id=BINARY e.client_id AND BINARY s.owner_jiacn=BINARY e.owner_jiacn AND BINARY s.execution_id=BINARY e.execution_id WHERE e.execution_protocol_version IN (4,5) AND s.id IS NULL",Integer.class);
@@ -67,19 +60,7 @@ public final class SkillExecutionSchemaInitializer implements InitializingBean {
         if(rows.size()!=expected.size())throw new IllegalStateException("Skill receipt installation scope index missing/drifted");
         for(int i=0;i<rows.size();i++) {var row=rows.get(i);if(!"1".equals(text(row,"non_unique"))||!Integer.toString(i+1).equals(text(row,"seq_in_index"))||!expected.get(i).equals(text(row,"column_name"))||value(row,"sub_part")!=null||!"BTREE".equals(text(row,"index_type")))throw new IllegalStateException("Skill receipt installation scope index drift");}
     }
-    static Map<String,String> attachmentChecks() {return Map.of(
-        "chk_skill_execution_scope","((tenant_id = '0') and (owner_jiacn <> '0'))",
-        "chk_skill_execution_version","(version >= 0)",
-        "chk_skill_execution_hashes","(regexp_like(snapshot_sha256,'^[0-9a-f]{64}$') and (((skill_key is not null) and (skill_version is not null) and (package_sha256 is not null) and (manifest_sha256 is not null) and regexp_like(package_sha256,'^[0-9a-f]{64}$') and regexp_like(manifest_sha256,'^[0-9a-f]{64}$')) or ((skill_key is null) and (skill_version is null) and (package_sha256 is null) and (manifest_sha256 is null) and (json_extract(snapshot_json,'$.executionProtocolVersion') is not null) and (json_extract(snapshot_json,'$.executionProtocolVersion') = 5) and (json_extract(snapshot_json,'$.skills') is not null) and (json_type(json_extract(snapshot_json,'$.skills')) = 'ARRAY') and (task_skill_binding_json is not null) and (json_type(task_skill_binding_json) = 'ARRAY'))))",
-        "chk_skill_execution_json","((json_type(snapshot_json) = 'OBJECT') and (json_type(effects_json) = 'OBJECT') and ((result_manifest_json is null) or (json_type(result_manifest_json) = 'OBJECT')))",
-        "chk_skill_execution_phase","(phase in ('READY','RUNNING','WAITING_PROVIDER','RESULT_UNKNOWN','RESULT_READY','ARCHIVING','COMPLETE','FAILED','CANCELLED'))",
-        "chk_skill_execution_result","((phase not in ('RESULT_READY','ARCHIVING','COMPLETE')) or (result_manifest_json is not null))");}
-    private void validateChecks(String table,Map<String,String> expected,boolean exact) {
-        var rows=jdbc.queryForList("SELECT tc.constraint_name,tc.enforced,cc.check_clause FROM information_schema.table_constraints tc JOIN information_schema.check_constraints cc ON cc.constraint_schema=tc.constraint_schema AND cc.constraint_name=tc.constraint_name AND cc.constraint_catalog=tc.constraint_catalog WHERE tc.constraint_schema=DATABASE() AND tc.table_name=? AND tc.constraint_type='CHECK'",table);
-        if(exact&&rows.size()!=expected.size())throw new IllegalStateException("Skill CHECK partial/unknown");
-        for(var entry:expected.entrySet()){var found=rows.stream().filter(r->entry.getKey().equals(text(r,"constraint_name"))).toList();if(found.size()!=1||!"YES".equals(text(found.getFirst(),"enforced"))||!canonical(entry.getValue()).equals(canonical(text(found.getFirst(),"check_clause"))))throw new IllegalStateException("Skill CHECK drift: "+table+"."+entry.getKey());}
-    }
-    private static String canonical(String value) {return ControlledImageFollowupV3SchemaInitializer.canonicalControlledCheck(value);}
+
     private static Object value(Map<String,Object> row,String key){return row.entrySet().stream().filter(e->e.getKey().equalsIgnoreCase(key)).map(Map.Entry::getValue).filter(Objects::nonNull).findFirst().orElse(null);}
     private static String text(Map<String,Object> row,String key){return Objects.toString(value(row,key),null);}
 }

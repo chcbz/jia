@@ -48,15 +48,9 @@ class EconomySkillSchemaContractTest {
         assertFalse(normalized.contains("alter table"));
         assertFalse(normalized.contains("create trigger"));
         assertTrue(normalized.contains("price_micro bigint not null"));
-        assertTrue(normalized.contains("price_micro >= 0"));
-        assertTrue(normalized.contains("seller_type = 'system' and seller_id = 'skill_store'"));
-        assertTrue(normalized.contains("skill_key <> 'deploy-runner' or deployment_restriction = 'admin_only'"));
         assertTrue(normalized.contains("target_agent_id varchar(100) not null"));
         assertTrue(normalized.contains("idempotency_key varbinary(36) not null"));
         assertTrue(normalized.contains("request_hash binary(32) not null"));
-        assertTrue(normalized.contains("request_id = message_id"));
-        assertTrue(normalized.contains("command_type = 'skill_install'"));
-        assertTrue(normalized.contains("download_path = concat('/internal/agent/skill-installations/', installation_id, '/package')"));
         assertTrue(normalized.contains("unique key uk_skill_entitlement_skill (tenant_id, client_id, target_agent_id, skill_key, skill_version)"));
         assertTrue(normalized.contains("unique key uk_skill_entitlement_install (tenant_id, client_id, target_agent_id, installation_id)"));
         assertTrue(normalized.contains("key idx_skill_receipt_buyer_order (tenant_id, client_id, actor_type, actor_id, order_id)"));

@@ -21,19 +21,5 @@ CREATE TABLE agent_skill_execution (
   created_at BIGINT NOT NULL,
   updated_at BIGINT NOT NULL,
   PRIMARY KEY (id),
-  UNIQUE KEY uk_skill_execution_scope (tenant_id,client_id,owner_jiacn,execution_id),
-  CONSTRAINT chk_skill_execution_scope CHECK (tenant_id='0' AND owner_jiacn<>'0'),
-  CONSTRAINT chk_skill_execution_version CHECK (version>=0),
-  CONSTRAINT chk_skill_execution_hashes CHECK (
-    package_sha256 REGEXP '^[0-9a-f]{64}$' AND
-    manifest_sha256 REGEXP '^[0-9a-f]{64}$' AND
-    snapshot_sha256 REGEXP '^[0-9a-f]{64}$'),
-  CONSTRAINT chk_skill_execution_json CHECK (
-    JSON_TYPE(snapshot_json)='OBJECT' AND JSON_TYPE(effects_json)='OBJECT' AND
-    (result_manifest_json IS NULL OR JSON_TYPE(result_manifest_json)='OBJECT')),
-  CONSTRAINT chk_skill_execution_phase CHECK (phase IN (
-    'READY','RUNNING','WAITING_PROVIDER','RESULT_UNKNOWN','RESULT_READY',
-    'ARCHIVING','COMPLETE','FAILED','CANCELLED')),
-  CONSTRAINT chk_skill_execution_result CHECK (
-    phase NOT IN ('RESULT_READY','ARCHIVING','COMPLETE') OR result_manifest_json IS NOT NULL)
+  UNIQUE KEY uk_skill_execution_scope (tenant_id,client_id,owner_jiacn,execution_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;

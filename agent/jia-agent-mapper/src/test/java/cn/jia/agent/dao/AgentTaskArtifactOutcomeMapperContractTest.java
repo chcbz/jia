@@ -96,7 +96,6 @@ class AgentTaskArtifactOutcomeMapperContractTest {
         String lower = ddl.replaceAll("\\s+", " ").toLowerCase(java.util.Locale.ROOT);
 
         assertTrue(lower.contains("create table if not exists agent_task_artifact_outcome"));
-        assertTrue(lower.contains("outcome_state in ('accepted', 'superseded')"));
         assertTrue(lower.contains("unique key uk_artifact_outcome_version"));
         assertTrue(lower.contains("owner_jiacn varchar(50) not null"));
         assertTrue(lower.contains(

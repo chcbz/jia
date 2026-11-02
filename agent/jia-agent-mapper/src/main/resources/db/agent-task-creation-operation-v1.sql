@@ -21,24 +21,5 @@ CREATE TABLE IF NOT EXISTS agent_task_creation_operation (
   UNIQUE KEY uk_atco_scope_operation
     (tenant_id,client_id,owner_jiacn,operation_id),
   KEY idx_atco_task_receipt
-    (tenant_id,client_id,owner_jiacn,task_id,operation_state),
-  CONSTRAINT chk_atco_scope CHECK (owner_jiacn<>'0'),
-  CONSTRAINT chk_atco_identity CHECK (
-    CHAR_LENGTH(client_id) BETWEEN 1 AND 50
-    AND CHAR_LENGTH(owner_jiacn) BETWEEN 1 AND 50
-    AND CHAR_LENGTH(operation_id) BETWEEN 1 AND 100
-    AND CHAR_LENGTH(idempotency_key) BETWEEN 1 AND 100
-    AND operation_state IN ('PROCESSING','COMMITTED')),
-  CONSTRAINT chk_atco_hash CHECK (
-    CHAR_LENGTH(request_hash)=64 AND request_hash REGEXP BINARY '^[0-9a-f]{64}$'),
-  CONSTRAINT chk_atco_refs CHECK (
-    JSON_TYPE(input_refs_json)='ARRAY'),
-  CONSTRAINT chk_atco_receipt CHECK (
-    (operation_state='PROCESSING' AND task_id IS NULL
-      AND requirement_revision IS NULL AND completed_at IS NULL)
-    OR
-    (operation_state='COMMITTED' AND task_id IS NOT NULL
-      AND requirement_revision=1 AND completed_at IS NOT NULL)),
-  CONSTRAINT chk_atco_time CHECK (
-    created_at>0 AND (completed_at IS NULL OR completed_at>=created_at))
+    (tenant_id,client_id,owner_jiacn,task_id,operation_state)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;

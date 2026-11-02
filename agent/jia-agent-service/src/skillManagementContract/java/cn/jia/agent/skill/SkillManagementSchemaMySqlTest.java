@@ -12,12 +12,11 @@ class SkillManagementSchemaMySqlTest extends SkillManagementMySqlFixture {
     @TestFactory Stream<DynamicTest> exactSchemaDetectorAndPairedIntegrity() {
         return List.of(
             new Case("latestCatalogReadOnlyDetectionAndLegacyRestartAccept",SkillExecutionSchemaMySqlTest::latestCatalogReadOnlyDetectionAndLegacyRestartAccept),
-            new Case("realChecksDistinguishGenericNullMimeFromLegacyAndKeepFailureFence",SkillExecutionSchemaMySqlTest::realChecksDistinguishGenericNullMimeFromLegacyAndKeepFailureFence),
-            new Case("detectorDoesNotRepairMissingAttachmentOrWeakenedChecks",SkillExecutionSchemaMySqlTest::detectorDoesNotRepairMissingAttachmentOrWeakenedChecks),
+            new Case("detectorDoesNotRepairMissingAttachment",SkillExecutionSchemaMySqlTest::detectorDoesNotRepairMissingAttachment),
             new Case("receiptScopeIndexIsExplicitAndDriftIsNotRepaired",SkillExecutionSchemaMySqlTest::receiptScopeIndexIsExplicitAndDriftIsNotRepaired),
             new Case("realCasAndTransactionPairRollback",SkillExecutionSchemaMySqlTest::realCasAndTransactionPairRollback),
             new Case("nativeTurnFailureAndEffectResolutionRollbackTogether",SkillExecutionSchemaMySqlTest::nativeTurnFailureAndEffectResolutionRollbackTogether),
-            new Case("nativeEmptySkillsExactArrays",SkillExecutionSchemaMySqlTest::nativeEmptySkillsUseNoFakeScalarSkillAndRequireExplicitArrays),
+            new Case("nativeEmptySkillsExactArrays",SkillExecutionSchemaMySqlTest::nativeEmptySkillsUseNoFakeScalarSkill),
             new Case("taskBindingColumnMissing",SkillExecutionSchemaMySqlTest::detectorRejectsMissingTaskBindingColumnWithoutRepair),
             new Case("taskBindingColumnWrongType",SkillExecutionSchemaMySqlTest::detectorRejectsWrongTaskBindingTypeWithoutRepair),
             new Case("taskBindingColumnNonNullable",SkillExecutionSchemaMySqlTest::detectorRejectsNonNullableTaskBindingWithoutRepair),

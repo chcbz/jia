@@ -55,8 +55,6 @@ public final class EconomySkillSchemaInitializer implements InitializingBean {
     private static final Pattern FOREIGN_KEY = Pattern.compile(
             "(?is)^CONSTRAINT\\s+([a-z0-9_]+)\\s+FOREIGN\\s+KEY\\s*\\(([^)]+)\\)"
                     + "\\s+REFERENCES\\s+([a-z0-9_]+)\\s*\\(([^)]+)\\)$");
-    private static final Pattern CHECK = Pattern.compile(
-            "(?is)^CONSTRAINT\\s+([a-z0-9_]+)\\s+CHECK\\s*\\((.*)\\)$");
 
     private final JdbcTemplate jdbcTemplate;
 
@@ -129,11 +127,6 @@ public final class EconomySkillSchemaInitializer implements InitializingBean {
             if (!table.foreignKeys().equals(foreignKeys)) {
                 throw new IllegalStateException("ECO-V0 skill table " + table.name()
                         + " has incompatible foreign keys: " + foreignKeys);
-            }
-            Map<String, CheckSpec> checks = inspectChecks(table.name());
-            if (!table.checks().equals(checks)) {
-                throw new IllegalStateException("ECO-V0 skill table " + table.name()
-                        + " has incompatible CHECK constraints: " + checks);
             }
         }
     }
@@ -224,30 +217,6 @@ public final class EconomySkillSchemaInitializer implements InitializingBean {
             result.put(entry.getKey(), new ForeignKeySpec(entry.getKey(), List.copyOf(columns),
                     first.referencedTable(), List.copyOf(referencedColumns),
                     first.updateRule(), first.deleteRule()));
-        }
-        return result;
-    }
-
-    private Map<String, CheckSpec> inspectChecks(String table) {
-        List<CheckSpec> rows = jdbcTemplate.query("""
-                SELECT tc.constraint_name,cc.check_clause,tc.enforced
-                FROM information_schema.table_constraints tc
-                JOIN information_schema.check_constraints cc
-                  ON cc.constraint_catalog=tc.constraint_catalog
-                 AND cc.constraint_schema=tc.constraint_schema
-                 AND cc.constraint_name=tc.constraint_name
-                WHERE tc.constraint_schema=DATABASE() AND tc.table_name=?
-                  AND tc.constraint_type='CHECK'
-                ORDER BY tc.constraint_name
-                """, (rs, rowNum) -> new CheckSpec(
-                rs.getString("constraint_name"),
-                EconomySchemaInitializer.normalizeCheckClause(rs.getString("check_clause")),
-                "YES".equalsIgnoreCase(rs.getString("enforced"))), table);
-        Map<String, CheckSpec> result = new TreeMap<>();
-        for (CheckSpec row : rows) {
-            if (result.put(row.name(), row) != null) {
-                throw new IllegalStateException("ECO-V0 skill table " + table + " has ambiguous CHECK constraints");
-            }
         }
         return result;
     }
@@ -378,7 +347,6 @@ public final class EconomySkillSchemaInitializer implements InitializingBean {
         List<ColumnSpec> columns = new ArrayList<>();
         Map<String, IndexSpec> indexes = new TreeMap<>();
         Map<String, ForeignKeySpec> foreignKeys = new TreeMap<>();
-        Map<String, CheckSpec> checks = new TreeMap<>();
         for (String raw : splitTopLevel(statement.substring(open + 1, close))) {
             String part = raw.trim();
             if (part.regionMatches(true, 0, "PRIMARY KEY", 0, "PRIMARY KEY".length())) {
@@ -398,12 +366,6 @@ public final class EconomySkillSchemaInitializer implements InitializingBean {
                         foreignKey.group(3), parseColumns(foreignKey.group(4)), "RESTRICT", "RESTRICT"));
                 continue;
             }
-            Matcher check = CHECK.matcher(part);
-            if (check.matches()) {
-                checks.put(check.group(1), new CheckSpec(check.group(1),
-                        EconomySchemaInitializer.normalizeCheckClause(check.group(2)), true));
-                continue;
-            }
             Matcher column = COLUMN.matcher(part);
             if (!column.matches()) throw new IllegalStateException("Unsupported ECO-V0 skill DDL component: " + part);
             String type = column.group(2).toLowerCase(Locale.ROOT);
@@ -415,7 +377,7 @@ public final class EconomySkillSchemaInitializer implements InitializingBean {
             columns.add(new ColumnSpec(column.group(1), type, nullable, defaultValue, collation, extra));
         }
         return new TableSpec(tableName, List.copyOf(columns), Map.copyOf(indexes),
-                Map.copyOf(foreignKeys), Map.copyOf(checks));
+                Map.copyOf(foreignKeys));
     }
 
     private static String defaultValue(String modifiers) {
@@ -602,12 +564,9 @@ public final class EconomySkillSchemaInitializer implements InitializingBean {
             String updateRule, String deleteRule) {
     }
 
-    record CheckSpec(String name, String normalizedClause, boolean enforced) {
-    }
-
     record TableSpec(
             String name, List<ColumnSpec> columns, Map<String, IndexSpec> indexes,
-            Map<String, ForeignKeySpec> foreignKeys, Map<String, CheckSpec> checks) {
+            Map<String, ForeignKeySpec> foreignKeys) {
     }
 
     record TriggerSpec(String name, String table, String timing, String event, String statement) {

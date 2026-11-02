@@ -34,53 +34,6 @@ public final class ControlledImageFollowupV3SchemaInitializer implements Initial
     static final String CONSENT_TABLE = "agent_task_provider_cost_consent";
     static final String EXECUTION_TABLE = "agent_personal_workspace_execution";
 
-    private static final Map<String, String> OPERATION_GRANT_CHECKS = operationGrantChecks();
-    private static final Map<String, String> SOURCE_CHECKS = sourceChecks();
-    private static final Map<String, String> ADDITIVE_CHECKS = additiveChecks();
-    /** Exact MySQL 8.0.21 CHECK_CLAUSE rendering produced by the legacy v1_17 DDL. */
-    private static final String LEGACY_CONTROLLED_CONSENT_CATALOG_CHECK =
-            "((`controlled_consent_id` is null) or ((`execution_mode` = "
-                    + "_utf8mb4'CONVERSATION') and regexp_like(`controlled_consent_id`,"
-                    + "cast(_utf8mb4'^consent_[0-9a-f]{32}$' as char charset binary)) and "
-                    + "(`permitted_operation` = _utf8mb4'GENERATE_IMAGE') and "
-                    + "(`output_content_mime_type` = _utf8mb4'image/png')))";
-
-    /** Exact MySQL 8.0.21 CHECK_CLAUSE renderings captured from the owned Stage 5 catalog. */
-    private static final String PURPOSE_UNION_CATALOG_CHECK =
-            "((`consent_purpose` in (_utf8mb4\\'INITIAL_ASSIGN_AND_START\\',_utf8mb4\\'FOLLOWUP_EXECUTE\\')) and (((`consent_purp" +
-            "ose` = _utf8mb4\\'INITIAL_ASSIGN_AND_START\\') and (`operation_grant_id` is null) and (`execution_intent_id` is nu" +
-            "ll) and (`conversation_id` is null) and (`conversation_generation` is null) and (`operation` is null) and (`inst" +
-            "ruction_sha256` is null) and (`source_snapshot_sha256` is null) and (`owner_payload_sha256` is null) and (`runti" +
-            "me_input_snapshot_sha256` is null)) or ((`consent_purpose` = _utf8mb4\\'FOLLOWUP_EXECUTE\\') and regexp_like(`oper" +
-            "ation_grant_id`,cast(_utf8mb4\\'^opgrant_[0-9a-f]{32}$\\' as char charset binary)) and (char_length(`execution_int" +
-            "ent_id`) between 1 and 100) and (char_length(`conversation_id`) between 1 and 100) and (`conversation_generation" +
-            "` > 0) and (`operation` in (_utf8mb4\\'GENERATE_IMAGE\\',_utf8mb4\\'EDIT_IMAGE\\')) and regexp_like(`instruction_sha" +
-            "256`,cast(_utf8mb4\\'^[0-9a-f]{64}$\\' as char charset binary)) and regexp_like(`source_snapshot_sha256`,cast(_utf" +
-            "8mb4\\'^[0-9a-f]{64}$\\' as char charset binary)) and regexp_like(`owner_payload_sha256`,cast(_utf8mb4\\'^[0-9a-f]{" +
-            "64}$\\' as char charset binary)) and (((`reserved_execution_id` is null) and (`runtime_input_snapshot_sha256` is " +
-            "null)) or ((`reserved_execution_id` is not null) and regexp_like(`runtime_input_snapshot_sha256`,cast(_utf8mb4\\'" +
-            "^[0-9a-f]{64}$\\' as char charset binary)))))))";
-
-    private static final String CONTROLLED_CONSENT_V3_CATALOG_CHECK =
-            "((`controlled_consent_id` is null) or ((`execution_mode` = _utf8mb4\\'CONVERSATION\\') and regexp_like(`controlled" +
-            "_consent_id`,cast(_utf8mb4\\'^consent_[0-9a-f]{32}$\\' as char charset binary)) and (((`execution_protocol_version" +
-            "` = 2) and (`permitted_operation` = _utf8mb4\\'GENERATE_IMAGE\\') and (`operation_grant_id` is null) and (`runtime" +
-            "_input_snapshot_digest` is null)) or ((`execution_protocol_version` = 3) and (`permitted_operation` in (_utf8mb4" +
-            "\\'GENERATE_IMAGE\\',_utf8mb4\\'EDIT_IMAGE\\')) and regexp_like(`operation_grant_id`,cast(_utf8mb4\\'^opgrant_[0-9a-f" +
-            "]{32}$\\' as char charset binary)) and regexp_like(`runtime_input_snapshot_digest`,cast(_utf8mb4\\'^[0-9a-f]{64}$\\" +
-            "' as char charset binary)))) and (`output_content_mime_type` = _utf8mb4\\'image/png\\')))";
-
-    static final String EXECUTION_PROTOCOL_CATALOG_CHECK =
-            "(((`execution_protocol_version` = 1) and (`controlled_consent_id` is null) and (`operation_grant_id` is null) an" +
-            "d (`runtime_input_snapshot_digest` is null)) or ((`execution_protocol_version` = 2) and regexp_like(`controlled_" +
-            "consent_id`,cast(_utf8mb4\\'^consent_[0-9a-f]{32}$\\' as char charset binary)) and (`operation_grant_id` is null) " +
-            "and (`runtime_input_snapshot_digest` is null)) or ((`execution_protocol_version` = 3) and (`execution_mode` = _u" +
-            "tf8mb4\\'CONVERSATION\\') and regexp_like(`controlled_consent_id`,cast(_utf8mb4\\'^consent_[0-9a-f]{32}$\\' as char " +
-            "charset binary)) and regexp_like(`operation_grant_id`,cast(_utf8mb4\\'^opgrant_[0-9a-f]{32}$\\' as char charset bi" +
-            "nary)) and regexp_like(`runtime_input_snapshot_digest`,cast(_utf8mb4\\'^[0-9a-f]{64}$\\' as char charset binary)) " +
-            "and (`permitted_operation` in (_utf8mb4\\'GENERATE_IMAGE\\',_utf8mb4\\'EDIT_IMAGE\\')) and (`output_content_mime_typ" +
-            "e` = _utf8mb4\\'image/png\\')))";
-
     private final JdbcTemplate jdbc;
 
     public ControlledImageFollowupV3SchemaInitializer(JdbcTemplate jdbc) {
@@ -98,56 +51,14 @@ public final class ControlledImageFollowupV3SchemaInitializer implements Initial
         for (String statement : createStatements()) jdbc.execute(statement);
         migrateConsent();
         migrateExecution();
-        validateNewTable(OPERATION_GRANT_TABLE, operationGrantColumns(), operationGrantIndexes(),
-                materialCheckExpectation(OPERATION_GRANT_TABLE, OPERATION_GRANT_CHECKS, legacyOperationGrantCheckExpressions()));
-        validateNewTable(SOURCE_TABLE, sourceColumns(), sourceIndexes(),
-                materialCheckExpectation(SOURCE_TABLE, SOURCE_CHECKS, legacySourceCheckExpressions()));
-        validateConsentExtension(true);
+        validateNewTable(OPERATION_GRANT_TABLE, operationGrantColumns(), operationGrantIndexes());
+        validateNewTable(SOURCE_TABLE, sourceColumns(), sourceIndexes());
+        validateConsentExtension();
         validateExecutionExtension();
-        // Validate the complete existing catalog before the single purpose-union extension.
-        migrateOrdinaryActionPurpose();
-        migrateUnifiedMaterialSources();
-        validateConsentExtension(false);
-        validateNewTable(OPERATION_GRANT_TABLE, operationGrantColumns(), operationGrantIndexes(), OPERATION_GRANT_CHECKS);
-        validateNewTable(SOURCE_TABLE, sourceColumns(), sourceIndexes(), SOURCE_CHECKS);
     }
 
     /** Accept only the complete known old/current catalog; this is a narrow in-place widening,
      * not permission to ignore drift or to rewrite selected task roles. */
-    private Map<String,String> materialCheckExpectation(String table, Map<String,String> current, Map<String,String> legacy) {
-        var observed=checks(table);var expected=new LinkedHashMap<>(current);
-        for(var row:observed){String name=text(row,"constraint_name");
-            if(legacy.containsKey(name)&&canonicalCheck(legacy.get(name)).equals(canonicalCheck(text(row,"check_clause"))))
-                expected.put(name,legacy.get(name));
-        }
-        validateExactChecks(table,observed,expected);
-        return java.util.Collections.unmodifiableMap(expected);
-    }
-
-    void migrateUnifiedMaterialSources() {
-        // Preflight both before either ALTER. MySQL DDL is not transactional; a stopped migration
-        // resumes only from exact known per-table states and verifies the final catalogs afterward.
-        var operation=materialCheckExpectation(OPERATION_GRANT_TABLE,OPERATION_GRANT_CHECKS,legacyOperationGrantCheckExpressions());
-        var source=materialCheckExpectation(SOURCE_TABLE,SOURCE_CHECKS,legacySourceCheckExpressions());
-        replaceMaterialCheck(OPERATION_GRANT_TABLE,"chk_aciiog_sources",operation,OPERATION_GRANT_CHECKS);
-        replaceMaterialCheck(SOURCE_TABLE,"chk_acies_union",source,SOURCE_CHECKS);
-    }
-
-    private void replaceMaterialCheck(String table,String name,Map<String,String> observed,Map<String,String> expected) {
-        if(canonicalCheck(observed.get(name)).equals(canonicalCheck(expected.get(name))))return;
-        jdbc.execute("ALTER TABLE "+table+" DROP CHECK "+name+", ADD CONSTRAINT "+name+" CHECK ("+expected.get(name)+")");
-    }
-
-    static Map<String,String> legacyOperationGrantCheckExpressions() {
-        var value=new LinkedHashMap<>(OPERATION_GRANT_CHECKS);
-        value.put("chk_aciiog_sources","((json_type(source_snapshot_json)='ARRAY') and (((operation='GENERATE_IMAGE') and (json_length(source_snapshot_json) between 0 and 16) and (json_search(source_snapshot_json,'one','CURRENT_CONVERSATION_ASSET',null,'$[*].kind') is null)) or ((operation='EDIT_IMAGE') and (json_length(source_snapshot_json)=1) and (json_unquote(json_extract(source_snapshot_json,'$[0].kind'))='CURRENT_CONVERSATION_ASSET'))))");
-        return java.util.Collections.unmodifiableMap(value);
-    }
-    static Map<String,String> legacySourceCheckExpressions() {
-        var value=new LinkedHashMap<>(SOURCE_CHECKS);
-        value.put("chk_acies_union",value.get("chk_acies_union").replace("purpose in ('INPUT','REFERENCE')","purpose='REFERENCE'"));
-        return java.util.Collections.unmodifiableMap(value);
-    }
 
     private void migrateConsent() {
         addColumn(CONSENT_TABLE, "consent_purpose",
@@ -173,7 +84,6 @@ public final class ControlledImageFollowupV3SchemaInitializer implements Initial
                 List.of("tenant_id", "client_id", "owner_jiacn", "task_id", "operation_grant_id"));
         addIndex(CONSENT_TABLE, "uk_atpcc_scope_execution_intent", true,
                 List.of("tenant_id", "client_id", "owner_jiacn", "task_id", "execution_intent_id"));
-        addCheck(CONSENT_TABLE, "chk_atpcc_purpose_union", consentPurposeCheckExpression());
     }
 
     private void migrateExecution() {
@@ -189,53 +99,24 @@ public final class ControlledImageFollowupV3SchemaInitializer implements Initial
                 + " AND execution_protocol_version=1");
         addIndex(EXECUTION_TABLE, "uk_pwex_operation_grant", true,
                 List.of("tenant_id", "client_id", "owner_jiacn", "operation_grant_id"));
-        migrateControlledConsentCheck();
-        addCheck(EXECUTION_TABLE, "chk_pwex_execution_protocol", executionProtocolCheckDdl());
     }
 
-    private void migrateControlledConsentCheck() {
-        List<Map<String,Object>> rows=checks(EXECUTION_TABLE).stream()
-                .filter(row -> "chk_pwex_controlled_consent".equals(text(row,"constraint_name"))).toList();
-        if (rows.size()!=1 || !"YES".equalsIgnoreCase(text(rows.getFirst(),"enforced"))) {
-            throw new IllegalStateException("Controlled execution CHECK unavailable");
-        }
-        String actual=canonicalCheck(text(rows.getFirst(),"check_clause"));
-        String extended=canonicalCheck(CONTROLLED_CONSENT_V3_CATALOG_CHECK);
-        if (actual.equals(extended)) return;
-        if (!actual.equals(canonicalCheck(LEGACY_CONTROLLED_CONSENT_CATALOG_CHECK))) {
-            throw new IllegalStateException("Controlled execution CHECK definition drift");
-        }
-        jdbc.execute("ALTER TABLE " + EXECUTION_TABLE
-                + " DROP CHECK chk_pwex_controlled_consent, ADD CONSTRAINT "
-                + "chk_pwex_controlled_consent CHECK (" + controlledConsentCheckDdl() + ")");
-    }
-
-    private void validateConsentExtension(boolean allowLegacy) {
+    private void validateConsentExtension() {
         validateOwnedColumns(CONSENT_TABLE, consentExtensionColumns());
         validateIndex(CONSENT_TABLE, "uk_atpcc_scope_operation_grant", true,
                 List.of("tenant_id", "client_id", "owner_jiacn", "task_id", "operation_grant_id"));
         validateIndex(CONSENT_TABLE, "uk_atpcc_scope_execution_intent", true,
                 List.of("tenant_id", "client_id", "owner_jiacn", "task_id", "execution_intent_id"));
-        String expected = ADDITIVE_CHECKS.get("chk_atpcc_purpose_union");
-        var purpose = checks(CONSENT_TABLE).stream().filter(row ->
-                "chk_atpcc_purpose_union".equals(text(row,"constraint_name"))).toList();
-        if (allowLegacy && purpose.size()==1 && canonicalCheck(text(purpose.getFirst(),"check_clause"))
-                .equals(canonicalCheck(PURPOSE_UNION_CATALOG_CHECK))) expected=PURPOSE_UNION_CATALOG_CHECK;
-        validateOwnedChecks(CONSENT_TABLE, Map.of("chk_atpcc_purpose_union", expected));
     }
 
     private void validateExecutionExtension() {
         validateOwnedColumns(EXECUTION_TABLE, executionExtensionColumns());
         validateIndex(EXECUTION_TABLE, "uk_pwex_operation_grant", true,
                 List.of("tenant_id", "client_id", "owner_jiacn", "operation_grant_id"));
-        validateOwnedChecks(EXECUTION_TABLE, withInstalledSkillProtocolCheck(Map.of(
-                "chk_pwex_controlled_consent", ADDITIVE_CHECKS.get("chk_pwex_controlled_consent"),
-                "chk_pwex_execution_protocol", ADDITIVE_CHECKS.get("chk_pwex_execution_protocol")),
-                checks(EXECUTION_TABLE)));
     }
 
     private void validateNewTable(String table, Map<String, Column> expectedColumns,
-            Map<String, Index> expectedIndexes, Map<String, String> expectedChecks) {
+            Map<String, Index> expectedIndexes) {
         Map<String, Object> definition = jdbc.queryForMap("SELECT engine,table_collation FROM "
                 + "information_schema.tables WHERE table_schema=DATABASE() AND table_name=?", table);
         if (!"InnoDB".equalsIgnoreCase(Objects.toString(definition.get("engine"), ""))
@@ -253,7 +134,6 @@ public final class ControlledImageFollowupV3SchemaInitializer implements Initial
             throw new IllegalStateException("Follow-up index set drift: " + table);
         }
         expectedIndexes.forEach((name, index) -> validateIndexRows(table, name, index, indexes));
-        validateExactChecks(table, checks(table), expectedChecks);
     }
 
     static void validateExactColumns(String table, List<Map<String, Object>> rows,
@@ -263,22 +143,6 @@ public final class ControlledImageFollowupV3SchemaInitializer implements Initial
             throw new IllegalStateException("Follow-up column set drift: " + table);
         }
         validateColumns(table, rows, expected);
-    }
-
-    static void validateExactChecks(String table, List<Map<String, Object>> rows,
-            Map<String, String> expected) {
-        Map<String, Check> actual = new LinkedHashMap<>();
-        for (Map<String, Object> row : rows) {
-            String name = text(row, "constraint_name");
-            Check check = new Check(text(row, "enforced"), text(row, "check_clause"));
-            if (name.isBlank() || actual.put(name, check) != null) {
-                throw new IllegalStateException("Follow-up ambiguous CHECK catalog: " + table);
-            }
-        }
-        if (!actual.keySet().equals(expected.keySet())) {
-            throw new IllegalStateException("Follow-up CHECK set drift: " + table);
-        }
-        validateCheckDefinitions(table, actual, expected);
     }
 
     private void validateOwnedColumns(String table, Map<String, Column> expected) {
@@ -312,12 +176,6 @@ public final class ControlledImageFollowupV3SchemaInitializer implements Initial
         }
     }
 
-    private void validateOwnedChecks(String table, Map<String, String> expected) {
-        List<Map<String, Object>> rows = checks(table).stream()
-                .filter(row -> expected.containsKey(text(row, "constraint_name"))).toList();
-        validateExactChecks(table, rows, expected);
-    }
-
     private void addColumn(String table, String column, String definition) {
         Integer count = jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.columns "
                 + "WHERE table_schema=DATABASE() AND table_name=? AND column_name=?",
@@ -338,17 +196,6 @@ public final class ControlledImageFollowupV3SchemaInitializer implements Initial
                     + "KEY " + name + " (" + String.join(",", columns) + ")");
         } else if (!Objects.equals(count, 1)) {
             throw new IllegalStateException("Follow-up index ambiguity: " + table + "." + name);
-        }
-    }
-
-    private void addCheck(String table, String name, String predicate) {
-        Integer count = jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.table_constraints "
-                + "WHERE constraint_schema=DATABASE() AND table_name=? AND constraint_name=? "
-                + "AND constraint_type='CHECK'", Integer.class, table, name);
-        if (Objects.equals(count, 0)) jdbc.execute("ALTER TABLE " + table
-                + " ADD CONSTRAINT " + name + " CHECK (" + predicate + ")");
-        else if (!Objects.equals(count, 1)) {
-            throw new IllegalStateException("Follow-up CHECK ambiguity: " + table + "." + name);
         }
     }
 
@@ -378,32 +225,6 @@ public final class ControlledImageFollowupV3SchemaInitializer implements Initial
         return jdbc.queryForList("SELECT index_name,non_unique,seq_in_index,column_name,sub_part "
                 + "FROM information_schema.statistics WHERE table_schema=DATABASE() AND table_name=? "
                 + "ORDER BY index_name,seq_in_index", table);
-    }
-
-    private List<Map<String, Object>> checks(String table) {
-        return jdbc.queryForList("SELECT tc.constraint_name,tc.enforced,cc.check_clause FROM "
-                + "information_schema.table_constraints tc JOIN information_schema.check_constraints cc "
-                + "ON cc.constraint_catalog=tc.constraint_catalog "
-                + "AND cc.constraint_schema=tc.constraint_schema "
-                + "AND cc.constraint_name=tc.constraint_name WHERE tc.constraint_schema=DATABASE() "
-                + "AND tc.table_name=? AND tc.constraint_type='CHECK'", table);
-    }
-
-    private static void validateCheckDefinitions(String table, Map<String, Check> actual,
-            Map<String, String> expected) {
-        for (Map.Entry<String, String> entry : expected.entrySet()) {
-            Check found = actual.get(entry.getKey());
-            if (found == null || !"YES".equalsIgnoreCase(found.enforced())) {
-                throw new IllegalStateException("Follow-up CHECK enforcement drift: "
-                        + table + "." + entry.getKey());
-            }
-            if (!canonicalCheck(entry.getValue()).equals(canonicalCheck(found.clause()))
-                    && !(Set.of(EXECUTION_TABLE,"controlled execution v3").contains(table) && entry.getKey().equals("chk_pwex_execution_protocol")
-                         && canonicalCheck(SkillExecutionSchemaInitializer.protocolCatalogCheck()).equals(canonicalCheck(found.clause())))) {
-                throw new IllegalStateException("Follow-up CHECK definition drift: "
-                        + table + "." + entry.getKey());
-            }
-        }
     }
 
     private void requireMySql8() {
@@ -444,9 +265,6 @@ public final class ControlledImageFollowupV3SchemaInitializer implements Initial
         }
     }
 
-    static Map<String, String> operationGrantCheckExpressions() { return OPERATION_GRANT_CHECKS; }
-    static Map<String, String> sourceCheckExpressions() { return SOURCE_CHECKS; }
-    static Map<String, String> additiveCheckExpressions() { return ADDITIVE_CHECKS; }
     static Map<String, Column> operationGrantColumnDefinitions() { return operationGrantColumns(); }
     static Map<String, Column> sourceColumnDefinitions() { return sourceColumns(); }
 
@@ -455,47 +273,25 @@ public final class ControlledImageFollowupV3SchemaInitializer implements Initial
      * legacy catalog or the complete exact V3 extension; every partial or unknown owned shape is a
      * restart blocker.
      */
+
     static void validateExecutionRestartCatalog(List<Map<String, Object>> columns,
-            List<Map<String, Object>> indexes, List<Map<String, Object>> checks) {
+            List<Map<String, Object>> indexes) {
         Map<String, Column> legacyColumns = executionRestartLegacyColumns();
         Map<String, Index> legacyIndexes = executionRestartLegacyIndexes();
-        Map<String, String> legacyChecks = Map.of(
-                "chk_pwex_controlled_consent", LEGACY_CONTROLLED_CONSENT_CATALOG_CHECK);
         if (names(columns, "column_name").equals(legacyColumns.keySet())
-                && distinctNames(indexes, "index_name").equals(legacyIndexes.keySet())
-                && names(checks, "constraint_name").equals(legacyChecks.keySet())) {
+                && distinctNames(indexes, "index_name").equals(legacyIndexes.keySet())) {
             validateExactColumns("controlled execution legacy", columns, legacyColumns);
             validateExactIndexCatalog("controlled execution legacy", indexes, legacyIndexes);
-            validateExactChecks("controlled execution legacy", checks, legacyChecks);
             return;
         }
-
         Map<String, Column> v3Columns = executionRestartV3Columns();
         Map<String, Index> v3Indexes = executionRestartV3Indexes();
-        Map<String, String> v3Checks = withInstalledSkillProtocolCheck(executionRestartV3Checks(), checks);
         if (!names(columns, "column_name").equals(v3Columns.keySet())
-                || !distinctNames(indexes, "index_name").equals(v3Indexes.keySet())
-                || !names(checks, "constraint_name").equals(v3Checks.keySet())) {
+                || !distinctNames(indexes, "index_name").equals(v3Indexes.keySet())) {
             throw new IllegalStateException("Controlled execution restart catalog partial or unknown");
         }
         validateExactColumns("controlled execution v3", columns, v3Columns);
         validateExactIndexCatalog("controlled execution v3", indexes, v3Indexes);
-        validateExactChecks("controlled execution v3", checks, v3Checks);
-    }
-
-    /** Explicit protocol-4 installation extends exactly one V3 CHECK. Recognize only that
-     * complete expression, never a column/flag/name alone; ordinary validation still enforces
-     * exact columns, indexes, CHECK names, predicates and enforcement. No DDL is performed here. */
-    private static Map<String, String> withInstalledSkillProtocolCheck(Map<String, String> expected,
-            List<Map<String, Object>> observed) {
-        String skillCheck = SkillExecutionSchemaInitializer.protocolCatalogCheck();
-        var protocol = observed.stream().filter(row ->
-                "chk_pwex_execution_protocol".equals(text(row, "constraint_name"))).toList();
-        if (protocol.size() != 1 || !canonicalCheck(skillCheck)
-                .equals(canonicalCheck(text(protocol.getFirst(), "check_clause")))) return expected;
-        var current = new LinkedHashMap<>(expected);
-        current.put("chk_pwex_execution_protocol", skillCheck);
-        return java.util.Collections.unmodifiableMap(current);
     }
 
     static boolean isOwnedExecutionColumn(String name) {
@@ -507,119 +303,6 @@ public final class ControlledImageFollowupV3SchemaInitializer implements Initial
     static boolean isOwnedExecutionIndex(String name) {
         return name.startsWith("uk_pwex_controlled_")
                 || name.startsWith("uk_pwex_operation_grant");
-    }
-
-    static boolean isOwnedExecutionCheck(String name) {
-        return name.startsWith("chk_pwex_controlled_")
-                || name.startsWith("chk_pwex_execution_protocol");
-    }
-
-    /** Known pre-ordinary catalog, accepted only for the narrow in-place migration. */
-    static String legacyConsentPurposeCatalogCheckExpression() { return PURPOSE_UNION_CATALOG_CHECK; }
-
-    /** Expected MySQL rendering for the new union; never use this value to generate DDL. */
-    static String consentPurposeCatalogCheckExpression() {
-        return PURPOSE_UNION_CATALOG_CHECK
-                .replace("_utf8mb4\\'FOLLOWUP_EXECUTE\\'))", "_utf8mb4\\'FOLLOWUP_EXECUTE\\',_utf8mb4\\'ORDINARY_ACTION\\'))")
-                .replace("`consent_purpose` = _utf8mb4\\'FOLLOWUP_EXECUTE\\'",
-                        "`consent_purpose` in (_utf8mb4\\'FOLLOWUP_EXECUTE\\',_utf8mb4\\'ORDINARY_ACTION\\')");
-    }
-
-    void migrateOrdinaryActionPurpose() {
-        var rows=checks(CONSENT_TABLE).stream().filter(row ->
-                "chk_atpcc_purpose_union".equals(text(row,"constraint_name"))).toList();
-        if(rows.size()!=1 || !"YES".equalsIgnoreCase(text(rows.getFirst(),"enforced")))
-            throw new IllegalStateException("Ordinary action purpose CHECK unavailable");
-        String actual=canonicalCheck(text(rows.getFirst(),"check_clause"));
-        if(actual.equals(canonicalCheck(consentPurposeCatalogCheckExpression())))return;
-        if(!actual.equals(canonicalCheck(PURPOSE_UNION_CATALOG_CHECK)))
-            throw new IllegalStateException("Ordinary action purpose CHECK drift");
-        jdbc.execute("ALTER TABLE "+CONSENT_TABLE+" DROP CHECK chk_atpcc_purpose_union, "
-                +"ADD CONSTRAINT chk_atpcc_purpose_union CHECK ("+consentPurposeCheckExpression()+")");
-    }
-
-    static String consentPurposeCheckExpression() {
-        String hash=" REGEXP '^[0-9a-f]{64}$'";
-        return "consent_purpose IN ('INITIAL_ASSIGN_AND_START','FOLLOWUP_EXECUTE','ORDINARY_ACTION') AND ("
-                + "(consent_purpose='INITIAL_ASSIGN_AND_START' AND operation_grant_id IS NULL "
-                + "AND execution_intent_id IS NULL AND conversation_id IS NULL "
-                + "AND conversation_generation IS NULL AND operation IS NULL "
-                + "AND instruction_sha256 IS NULL AND source_snapshot_sha256 IS NULL "
-                + "AND owner_payload_sha256 IS NULL AND runtime_input_snapshot_sha256 IS NULL) OR "
-                + "(consent_purpose IN ('FOLLOWUP_EXECUTE','ORDINARY_ACTION') "
-                + "AND operation_grant_id REGEXP '^opgrant_[0-9a-f]{32}$' "
-                + "AND CHAR_LENGTH(execution_intent_id) BETWEEN 1 AND 100 "
-                + "AND CHAR_LENGTH(conversation_id) BETWEEN 1 AND 100 "
-                + "AND conversation_generation>0 AND operation IN ('GENERATE_IMAGE','EDIT_IMAGE') "
-                + "AND instruction_sha256"+hash+" AND source_snapshot_sha256"+hash
-                + " AND owner_payload_sha256"+hash
-                + " AND ((reserved_execution_id IS NULL AND runtime_input_snapshot_sha256 IS NULL) OR "
-                + "(reserved_execution_id IS NOT NULL AND runtime_input_snapshot_sha256"+hash+"))))";
-    }
-
-    static String legacyControlledConsentCheckExpression() {
-        return legacyControlledConsentCheckDdl();
-    }
-    static String controlledConsentCheckExpression() {
-        return controlledConsentCheckDdl();
-    }
-    private static String legacyControlledConsentCheckDdl() {
-        return "controlled_consent_id IS NULL OR (execution_mode='CONVERSATION' "
-                + "AND controlled_consent_id REGEXP '^consent_[0-9a-f]{32}$' "
-                + "AND permitted_operation='GENERATE_IMAGE' AND output_content_mime_type='image/png')";
-    }
-    private static String controlledConsentCheckDdl() {
-        return "controlled_consent_id IS NULL OR (execution_mode='CONVERSATION' "
-                + "AND controlled_consent_id REGEXP '^consent_[0-9a-f]{32}$' AND ("
-                + "(execution_protocol_version=2 AND permitted_operation='GENERATE_IMAGE' "
-                + "AND operation_grant_id IS NULL AND runtime_input_snapshot_digest IS NULL) OR "
-                + "(execution_protocol_version=3 AND permitted_operation IN ('GENERATE_IMAGE','EDIT_IMAGE') "
-                + "AND operation_grant_id REGEXP '^opgrant_[0-9a-f]{32}$' "
-                + "AND runtime_input_snapshot_digest REGEXP '^[0-9a-f]{64}$')) "
-                + "AND output_content_mime_type='image/png')";
-    }
-
-    static String executionProtocolCheckDdl() {
-        return "(execution_protocol_version=1 AND controlled_consent_id IS NULL "
-                + "AND operation_grant_id IS NULL AND runtime_input_snapshot_digest IS NULL) OR "
-                + "(execution_protocol_version=2 "
-                + "AND controlled_consent_id REGEXP '^consent_[0-9a-f]{32}$' "
-                + "AND operation_grant_id IS NULL AND runtime_input_snapshot_digest IS NULL) OR "
-                + "(execution_protocol_version=3 AND execution_mode='CONVERSATION' "
-                + "AND controlled_consent_id REGEXP '^consent_[0-9a-f]{32}$' "
-                + "AND operation_grant_id REGEXP '^opgrant_[0-9a-f]{32}$' "
-                + "AND runtime_input_snapshot_digest REGEXP '^[0-9a-f]{64}$' "
-                + "AND permitted_operation IN ('GENERATE_IMAGE','EDIT_IMAGE') "
-                + "AND output_content_mime_type='image/png')";
-    }
-
-    private static Map<String, String> operationGrantChecks() {
-        Map<String, String> checks = new LinkedHashMap<>();
-        checks.put("chk_aciiog_scope", "((tenant_id='0') and (owner_jiacn<>'0'))");
-        checks.put("chk_aciiog_ids", "(regexp_like(operation_grant_id,cast('^opgrant_[0-9a-f]{32}$' as char charset binary)) and regexp_like(consent_id,cast('^consent_[0-9a-f]{32}$' as char charset binary)))");
-        checks.put("chk_aciiog_hashes", "(regexp_like(requirement_sha256,cast('^[0-9a-f]{64}$' as char charset binary)) and regexp_like(instruction_sha256,cast('^[0-9a-f]{64}$' as char charset binary)) and regexp_like(source_snapshot_sha256,cast('^[0-9a-f]{64}$' as char charset binary)) and regexp_like(owner_payload_sha256,cast('^[0-9a-f]{64}$' as char charset binary)) and regexp_like(issue_request_digest,cast('^[0-9a-f]{64}$' as char charset binary)) and ((revoke_request_digest is null) or regexp_like(revoke_request_digest,cast('^[0-9a-f]{64}$' as char charset binary))))");
-        checks.put("chk_aciiog_versions", "((conversation_generation>0) and (baseline_grant_version>0) and (task_version>=0) and (assignment_revision>=0) and (requirement_revision>0) and (version>0))");
-        checks.put("chk_aciiog_operation", "(operation in ('GENERATE_IMAGE','EDIT_IMAGE'))");
-        checks.put("chk_aciiog_sources", "((json_type(source_snapshot_json)='ARRAY') and (((operation='GENERATE_IMAGE') and (json_length(source_snapshot_json) between 0 and 16)) or ((operation='EDIT_IMAGE') and (json_length(source_snapshot_json)=1))))");
-        checks.put("chk_aciiog_state", "(state in ('AUTHORIZED','RESERVED','CONSUMED','REVOKED'))");
-        checks.put("chk_aciiog_lifecycle", "(((state='AUTHORIZED') and (reserved_execution_id is null) and (reserved_run_id is null) and (consumed_lease_id is null) and (revoke_idempotency_key is null) and (revoke_request_digest is null) and (revoked_at is null)) or ((state='RESERVED') and (reserved_execution_id is not null) and (reserved_run_id is not null) and (consumed_lease_id is null) and (revoke_idempotency_key is null) and (revoke_request_digest is null) and (revoked_at is null)) or ((state='CONSUMED') and (reserved_execution_id is not null) and (reserved_run_id is not null) and (consumed_lease_id is not null) and (revoke_idempotency_key is null) and (revoke_request_digest is null) and (revoked_at is null)) or ((state='REVOKED') and (((reserved_execution_id is null) and (reserved_run_id is null)) or ((reserved_execution_id is not null) and (reserved_run_id is not null))) and (consumed_lease_id is null) and (revoke_idempotency_key is not null) and (revoke_request_digest is not null) and (revoked_at is not null)))");
-        return java.util.Collections.unmodifiableMap(checks);
-    }
-
-    private static Map<String, String> sourceChecks() {
-        Map<String, String> checks = new LinkedHashMap<>();
-        checks.put("chk_acies_scope", "((tenant_id='0') and (owner_jiacn<>'0'))");
-        checks.put("chk_acies_common", "((input_ordinal between 1 and 16) and (content_mime_type in ('image/jpeg','image/png')) and (byte_length>0) and regexp_like(content_sha256,cast('^[0-9a-f]{64}$' as char charset binary)))");
-        checks.put("chk_acies_union", "(((source_kind='TASK_LINKED_WORKSPACE_VERSION') and (file_id is not null) and (file_version>0) and (purpose in ('INPUT','REFERENCE')) and (conversation_id is null) and (conversation_generation is null) and (asset_id is null) and (asset_revision is null) and (producer_request_id is null) and (producer_request_revision is null) and (producer_step_id is null) and (producer_execution_id is null) and (producer_run_id is null) and (producer_output_id is null)) or ((source_kind='CURRENT_CONVERSATION_ASSET') and (file_id is null) and (file_version is null) and (purpose is null) and (conversation_id is not null) and (conversation_generation>0) and (asset_id is not null) and (asset_revision>0) and (producer_request_id is not null) and (producer_request_revision>0) and (producer_step_id is not null) and (producer_execution_id is not null) and (producer_run_id is not null) and (producer_output_id is not null)))");
-        return java.util.Collections.unmodifiableMap(checks);
-    }
-
-    private static Map<String, String> additiveChecks() {
-        Map<String, String> checks = new LinkedHashMap<>();
-        checks.put("chk_atpcc_purpose_union", consentPurposeCatalogCheckExpression());
-        checks.put("chk_pwex_controlled_consent", CONTROLLED_CONSENT_V3_CATALOG_CHECK);
-        checks.put("chk_pwex_execution_protocol", EXECUTION_PROTOCOL_CATALOG_CHECK);
-        return java.util.Collections.unmodifiableMap(checks);
     }
 
     private static Map<String, Column> executionRestartLegacyColumns() {
@@ -646,13 +329,6 @@ public final class ControlledImageFollowupV3SchemaInitializer implements Initial
         indexes.put("uk_pwex_operation_grant", unique(
                 "tenant_id", "client_id", "owner_jiacn", "operation_grant_id"));
         return java.util.Collections.unmodifiableMap(indexes);
-    }
-
-    private static Map<String, String> executionRestartV3Checks() {
-        Map<String, String> checks = new LinkedHashMap<>();
-        checks.put("chk_pwex_controlled_consent", CONTROLLED_CONSENT_V3_CATALOG_CHECK);
-        checks.put("chk_pwex_execution_protocol", EXECUTION_PROTOCOL_CATALOG_CHECK);
-        return java.util.Collections.unmodifiableMap(checks);
     }
 
     private static java.util.Set<String> names(List<Map<String, Object>> rows, String key) {
@@ -822,24 +498,7 @@ public final class ControlledImageFollowupV3SchemaInitializer implements Initial
      * Normalize only the three frozen controlled-image patterns; operators, grouping, literals and
      * every non-whitelisted cast remain byte-significant after the shared catalog canonicalizer.
      */
-    static String canonicalControlledCheck(String value) {
-        try {
-            String canonical=AgentTaskCreationOperationSchemaInitializer
-                    .canonicalCheckExpression(value);
-            for (String pattern:List.of("^[0-9a-f]{64}$",
-                    "^consent_[0-9a-f]{32}$","^opgrant_[0-9a-f]{32}$")) {
-                canonical=canonical.replace("cast('"+pattern+"'ascharcharsetbinary)",
-                        "'"+pattern+"'");
-                canonical=canonical.replace("_ascii'"+pattern+"'","'"+pattern+"'");
-            }
-            return canonical;
-        } catch (IllegalArgumentException malformed) {
-            throw new IllegalStateException("Follow-up malformed CHECK catalog", malformed);
-        }
-    }
-    private static String canonicalCheck(String value) {
-        return canonicalControlledCheck(value);
-    }
+
     private static Object[] concat(Object first, Object[] rest) {
         Object[] result = new Object[rest.length + 1]; result[0] = first;
         System.arraycopy(rest, 0, result, 1, rest.length); return result;
@@ -857,5 +516,5 @@ public final class ControlledImageFollowupV3SchemaInitializer implements Initial
 
     record Column(String type, String nullable, String collation, String defaultValue) { }
     private record Index(boolean unique, List<String> columns) { }
-    private record Check(String enforced, String clause) { }
+
 }

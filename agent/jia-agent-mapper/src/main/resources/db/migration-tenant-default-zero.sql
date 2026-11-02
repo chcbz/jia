@@ -138,8 +138,6 @@ ALTER TABLE `wx_pay_order`         MODIFY COLUMN tenant_id varchar(50)  DEFAULT 
 -- =========================================================
 
 -- ALTER TABLE agent_persona_binding DROP CONSTRAINT chk_agent_binding_tenant_owner;
--- ALTER TABLE agent_persona_binding ADD CONSTRAINT chk_agent_binding_tenant_owner
---     CHECK (tenant_id = '0' OR tenant_id = owner_jiacn);
 
 -- =========================================================
 -- Verification (uncomment to run)

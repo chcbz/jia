@@ -90,17 +90,6 @@ public final class AgentTaskSettlementSchemaInitializer implements InitializingB
         if (!Map.of("PRIMARY", List.of("id"), "uk_bounty_settlement_task", List.of("tenant_id", "client_id", "task_id"),
                 "uk_bounty_settlement_actor_key", List.of("tenant_id", "client_id", "principal_type", "principal_id", "idempotency_key"))
                 .equals(indexes)) fail("indexes");
-        Map<String, String> checks = new LinkedHashMap<>();
-        for (Map<String, Object> row : jdbc.queryForList("""
-                SELECT tc.constraint_name,cc.check_clause,tc.enforced FROM information_schema.table_constraints tc
-                JOIN information_schema.check_constraints cc ON cc.constraint_catalog=tc.constraint_catalog
-                  AND cc.constraint_schema=tc.constraint_schema AND cc.constraint_name=tc.constraint_name
-                WHERE tc.constraint_schema=DATABASE() AND tc.table_name=? AND tc.constraint_type='CHECK'
-                """, TABLE)) {
-            if (!"YES".equals(text(row, "enforced"))) fail("unenforced CHECK");
-            if (checks.put(text(row, "constraint_name"), AgentTaskFundingSchemaInitializer.normalizeCheck(text(row, "check_clause"))) != null) fail("duplicate CHECK");
-        }
-        if (!checks().equals(checks)) fail("CHECK expressions");
         Integer foreignKeys = jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.referential_constraints "
                 + "WHERE (constraint_schema=DATABASE() AND table_name=?) "
                 + "OR (unique_constraint_schema=DATABASE() AND referenced_table_name=?)", Integer.class, TABLE, TABLE);
@@ -121,14 +110,6 @@ public final class AgentTaskSettlementSchemaInitializer implements InitializingB
         return columns;
     }
 
-    private static Map<String, String> checks() {
-        Map<String, String> result = new LinkedHashMap<>();
-        result.put("chk_bounty_settlement_identity", "principal_type='USER' AND OCTET_LENGTH(idempotency_key)=36 AND OCTET_LENGTH(request_hash)=32");
-        result.put("chk_bounty_settlement_state", "status='SETTLED' AND task_version>0 AND funding_version>=2 AND escrow_version>1 AND settled_at>0 AND OCTET_LENGTH(transaction_ids)>2");
-        result.put("chk_bounty_settlement_amount", "gross_micro>0 AND actual_compute_micro>=0 AND platform_fee_micro>=0 AND agent_payout_micro>=0 AND refunded_micro=0 AND gross_micro=actual_compute_micro + platform_fee_micro + agent_payout_micro");
-        result.replaceAll((name, expression) -> AgentTaskFundingSchemaInitializer.normalizeCheck(expression));
-        return result;
-    }
     private static String text(Map<String, Object> row, String key) {
         Object value = row.get(key);
         return value == null ? null : value.toString();

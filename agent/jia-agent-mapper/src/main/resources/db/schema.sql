@@ -27,11 +27,7 @@ CREATE TABLE IF NOT EXISTS agent_persona (
     -- Lookup prefix matches tenant + code/name; client key still preserves scope uniqueness.
     UNIQUE KEY uk_agent_persona_scope_code (tenant_id, persona_code, catalog_client_key),
     UNIQUE KEY uk_agent_persona_scope_name (tenant_id, name, catalog_client_key),
-    KEY idx_agent_persona_active (active),
-    CONSTRAINT chk_agent_persona_private_scope CHECK (
-        CHAR_LENGTH(tenant_id) > 0 AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(TRIM(tenant_id))
-        AND (client_id IS NULL OR (CHAR_LENGTH(client_id) > 0
-            AND OCTET_LENGTH(client_id) = OCTET_LENGTH(TRIM(client_id)))))
+    KEY idx_agent_persona_active (active)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Agent人设表';
 
 CREATE TABLE IF NOT EXISTS agent_runtime (
@@ -96,9 +92,7 @@ CREATE TABLE IF NOT EXISTS agent_persona_binding (
     UNIQUE KEY uk_agent_binding_active_agent (active_agent_id),
     KEY idx_agent_binding_user (client_id, jiacn, status),
     KEY idx_agent_binding_agent (client_id, agent_id, status),
-    KEY idx_agent_binding_persona (client_id, persona_code, status),
-    CONSTRAINT chk_agent_binding_status CHECK (status IN (0, 1, 2, 3)),
-    CONSTRAINT chk_agent_binding_single_tenant CHECK (tenant_id IS NOT NULL AND CHAR_LENGTH(tenant_id)>0 AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(TRIM(tenant_id)))
+    KEY idx_agent_binding_persona (client_id, persona_code, status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Durable Agent persona binding history';
 
 CREATE TABLE IF NOT EXISTS agent_identity_registry (
@@ -122,34 +116,7 @@ CREATE TABLE IF NOT EXISTS agent_identity_registry (
     UNIQUE KEY uk_identity_registry_binding (binding_id),
     UNIQUE KEY uk_identity_registry_alias_target
         (id, canonical_agent_id, client_id, owner_jiacn, tenant_id),
-    KEY idx_identity_registry_scope_status (tenant_id, client_id, owner_jiacn, lifecycle_status),
-    CONSTRAINT chk_identity_registry_type CHECK (
-        canonical_type IN ('OPAQUE', 'LEGACY_CANONICAL', 'SYSTEM')
-    ),
-    CONSTRAINT chk_identity_registry_lifecycle CHECK (
-        lifecycle_status IN ('PROVISIONED', 'ACTIVE', 'SUSPENDED', 'RETIRED')
-    ),
-    CONSTRAINT chk_identity_registry_canonical CHECK (
-        (canonical_type = 'OPAQUE'
-            AND canonical_agent_id REGEXP '^agt_[0-9a-f]{32}$')
-        OR (canonical_type = 'LEGACY_CANONICAL'
-            AND canonical_agent_id <> 'builtin-songjiang'
-            AND canonical_agent_id NOT REGEXP '^agt_[0-9a-f]{32}$')
-        OR (canonical_type = 'SYSTEM'
-            AND canonical_agent_id = 'builtin-songjiang')
-    ),
-    CONSTRAINT chk_identity_registry_scope CHECK (
-        (canonical_type = 'SYSTEM'
-            AND client_id IS NULL AND owner_jiacn IS NULL AND tenant_id = '0')
-        OR (canonical_type <> 'SYSTEM'
-            AND client_id IS NOT NULL AND TRIM(client_id) <> ''
-            AND owner_jiacn IS NOT NULL AND TRIM(owner_jiacn) <> ''
-            AND tenant_id IS NOT NULL AND CHAR_LENGTH(tenant_id)>0 AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(TRIM(tenant_id)))
-    ),
-    CONSTRAINT chk_identity_registry_retired CHECK (
-        (lifecycle_status = 'RETIRED' AND retired_at IS NOT NULL)
-        OR (lifecycle_status <> 'RETIRED' AND retired_at IS NULL)
-    )
+    KEY idx_identity_registry_scope_status (tenant_id, client_id, owner_jiacn, lifecycle_status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Durable canonical Agent identity registry | collation binary enforces exact case matching';
 
 CREATE TABLE IF NOT EXISTS agent_identity_alias (
@@ -178,19 +145,7 @@ CREATE TABLE IF NOT EXISTS agent_identity_alias (
         (tenant_id, client_id, owner_jiacn, alias_type, alias_value, active_key),
     KEY idx_identity_alias_registry (registry_id, alias_status),
     KEY idx_identity_alias_canonical (canonical_agent_id, alias_status),
-    CONSTRAINT chk_identity_alias_type CHECK (alias_type = 'LEGACY_AGENT_ID'),
-    CONSTRAINT chk_identity_alias_status CHECK (alias_status IN ('ACTIVE', 'REVOKED')),
-    CONSTRAINT chk_identity_alias_scope CHECK (tenant_id IS NOT NULL AND CHAR_LENGTH(tenant_id)>0 AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(TRIM(tenant_id))),
-    CONSTRAINT chk_identity_alias_no_blank_scope CHECK (
-        TRIM(client_id) <> '' AND TRIM(owner_jiacn) <> ''
-    ),
-    CONSTRAINT chk_identity_alias_window CHECK (
-        (alias_status = 'ACTIVE' AND valid_to IS NULL)
-        OR (alias_status = 'REVOKED' AND valid_to IS NOT NULL)
-    ),
-    CONSTRAINT chk_identity_alias_not_system CHECK (
-        alias_value <> 'builtin-songjiang' AND canonical_agent_id <> 'builtin-songjiang'
-    ),
+
     CONSTRAINT fk_identity_alias_registry_scope FOREIGN KEY
         (registry_id, canonical_agent_id, client_id, owner_jiacn, tenant_id)
         REFERENCES agent_identity_registry
@@ -685,9 +640,7 @@ CREATE TABLE IF NOT EXISTS agent_command_delivery (
     KEY idx_delivery_retry (status, next_retry_at, expires_at, id),
     KEY idx_delivery_lease (status, lease_until, id),
     KEY idx_delivery_agent (tenant_id, client_id, owner_jiacn, target_agent_id, status, next_retry_at, id),
-    KEY idx_delivery_active_message (tenant_id, client_id, owner_jiacn, active_message_id, active_attempt),
-    CONSTRAINT chk_delivery_single_tenant CHECK (tenant_id = '0'),
-    CONSTRAINT chk_delivery_owner_nonempty CHECK (OCTET_LENGTH(owner_jiacn) BETWEEN 1 AND 50)
+    KEY idx_delivery_active_message (tenant_id, client_id, owner_jiacn, active_message_id, active_attempt)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Durable Agent command mailbox and business intent state';
 
 CREATE TABLE IF NOT EXISTS agent_outbox_event (
@@ -805,7 +758,6 @@ CREATE TABLE IF NOT EXISTS agent_command_operation_audit (
     KEY idx_command_operation_outcome (tenant_id, client_id, operation_type, outcome, created_at, id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Append-only privileged Agent command operation audit';
 
-
 CREATE TABLE IF NOT EXISTS agent_command_redrive_operation (
     id                          BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Primary key',
     operation_id                VARCHAR(100) NOT NULL COMMENT 'Stable privileged broker-redrive operation id',
@@ -875,12 +827,5 @@ CREATE TABLE IF NOT EXISTS agent_hosted_profile (
     UNIQUE KEY uk_hosted_binding (binding_id),
     UNIQUE KEY uk_hosted_profile_key (profile_key),
     UNIQUE KEY uk_hosted_api_key (api_key_id),
-    KEY idx_hosted_scope_state (tenant_id, client_id, owner_jiacn, lifecycle_state),
-    CONSTRAINT chk_hosted_state CHECK (lifecycle_state IN
-      ('PREPARED','STAGED_DISABLED','FILE_ENABLED','ACTIVE','SUSPENDING','SUSPENDED','REPAIR_REQUIRED')),
-    CONSTRAINT chk_hosted_generation CHECK (generation >= 0),
-    CONSTRAINT chk_hosted_single_tenant CHECK (tenant_id IS NOT NULL AND CHAR_LENGTH(tenant_id)>0 AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(TRIM(tenant_id))),
-    CONSTRAINT chk_hosted_repair CHECK (
-      (lifecycle_state = 'REPAIR_REQUIRED' AND resume_state IS NOT NULL)
-      OR (lifecycle_state <> 'REPAIR_REQUIRED' AND resume_state IS NULL))
+    KEY idx_hosted_scope_state (tenant_id, client_id, owner_jiacn, lifecycle_state)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Durable hosted Agent profile publication state';

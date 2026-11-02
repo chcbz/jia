@@ -4,7 +4,6 @@
 -- agent-position-skills.sql. A different name/definition requires adapting this
 -- pinned migration to that observed schema, not dropping unrelated constraints.
 -- No user authority, appointment, product or business data is inserted here.
+-- Permission vocabulary and authorization belong to the API business layer.
 ALTER TABLE agent_position_authority
- DROP CHECK agent_position_authority_chk_1,
- ADD CONSTRAINT chk_agent_position_permission
- CHECK(permission_key IN ('MANAGE_POSITIONS','ARCHIVE_WRITE','ARCHIVE_PUBLISH','SKILL_REVIEW','SKILL_PUBLISH'));
+ DROP CHECK agent_position_authority_chk_1;

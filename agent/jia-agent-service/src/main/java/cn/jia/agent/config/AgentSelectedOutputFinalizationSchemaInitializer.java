@@ -32,12 +32,7 @@ public final class AgentSelectedOutputFinalizationSchemaInitializer implements I
             "PRIMARY",new Index(true,List.of("tenant_id","client_id","owner_jiacn","operation_id")),
             "uk_asof_delivery",new Index(true,List.of("tenant_id","client_id","owner_jiacn","delivery_id")),
             "idx_asof_task",new Index(false,List.of("tenant_id","client_id","owner_jiacn","task_id","phase")));
-    private static final Set<String> CHECKS=Set.of("chk_asof_versions","chk_asof_digest","chk_asof_phase","chk_asof_lease");
-    // Evidence: actual MySQL8.0.21 old/repaired finalization checks admitted/rejected NULL
-    // differently while sharing constraint names and ENFORCED=YES. Compare only these
-    // three proven-sensitive definitions; preserve boolean grouping and binary literals.
-    private static final Map<String,String> REQUIRED_CHECK_EXPRESSIONS=Map.of(
-            "chk_asof_lease", "(((phase='CLAIMING')and(lease_tokenisnull)and(lease_work_item_versionisnull))or((phasein('LEASED','READY'))and(lease_tokenisnotnull)and(lease_work_item_versionisnotnull)and(lease_work_item_version>=0))or((phasein('SUBMITTED','ACCEPTED'))and(lease_tokenisnull)and(lease_work_item_versionisnotnull)))");
+
     private final JdbcTemplate jdbc;
 
     public AgentSelectedOutputFinalizationSchemaInitializer(JdbcTemplate jdbc){this.jdbc=Objects.requireNonNull(jdbc);}
@@ -74,8 +69,6 @@ public final class AgentSelectedOutputFinalizationSchemaInitializer implements I
     static void validateV2(JdbcTemplate jdbc) {
         var columns=jdbc.queryForList("SELECT column_type,is_nullable FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name=? AND column_name='contract_version'",TABLE);
         if(columns.size()!=1 || !"smallint".equals(lower(columns.getFirst(),"column_type")) || !"NO".equals(text(columns.getFirst(),"is_nullable")))throw new IllegalStateException("Finalization contract version column drift");
-        var checks=jdbc.queryForList("SELECT c.check_clause,t.enforced FROM information_schema.table_constraints t JOIN information_schema.check_constraints c ON c.constraint_schema=t.constraint_schema AND c.constraint_name=t.constraint_name WHERE t.table_schema=DATABASE() AND t.table_name=? AND t.constraint_name='chk_asof_contract'",TABLE);
-        if(checks.size()!=1 || !"YES".equalsIgnoreCase(text(checks.getFirst(),"enforced")) || !"(contract_versionin(1,2))".equals(compactCheckExpression(text(checks.getFirst(),"check_clause"))))throw new IllegalStateException("Finalization contract version CHECK drift");
     }
 
     private static void validate(JdbcTemplate jdbc){
@@ -101,7 +94,7 @@ public final class AgentSelectedOutputFinalizationSchemaInitializer implements I
         for(String column:Set.of("immutable_digest","source_facts_digest"))
             if(!"ascii_bin".equalsIgnoreCase(collations.get(column)))
                 throw new IllegalStateException("Selected-output finalization digest collation drift: "+column);
-        validateIndexes(jdbc);validateChecks(jdbc);
+        validateIndexes(jdbc);
         Integer foreignKeys=jdbc.queryForObject("""
                 SELECT COUNT(*) FROM information_schema.referential_constraints
                 WHERE constraint_schema=DATABASE() AND table_name=?
@@ -133,39 +126,6 @@ public final class AgentSelectedOutputFinalizationSchemaInitializer implements I
             if(found==null||found.unique()!=expected.getValue().unique()||!found.columns().equals(expected.getValue().columns()))
                 throw new IllegalStateException("Selected-output finalization index drift: "+expected.getKey());
         }
-    }
-
-    private static void validateChecks(JdbcTemplate jdbc){
-        Map<String,String> actual=new LinkedHashMap<>();
-        Map<String,String> clauses=new LinkedHashMap<>();
-        for(Map<String,Object> row:jdbc.queryForList("""
-                SELECT t.constraint_name,t.enforced,c.check_clause
-                FROM information_schema.table_constraints t
-                JOIN information_schema.check_constraints c
-                  ON c.constraint_schema=t.constraint_schema AND c.constraint_name=t.constraint_name
-                WHERE t.constraint_schema=DATABASE() AND t.table_name=? AND t.constraint_type='CHECK'
-                """,TABLE)){
-            String name=text(row,"constraint_name");
-            actual.put(name,text(row,"enforced"));clauses.put(name,text(row,"check_clause"));
-        }
-        for(String check:CHECKS)if(!"YES".equalsIgnoreCase(actual.get(check)))
-            throw new IllegalStateException("Selected-output finalization check drift: "+check);
-        for(var required:REQUIRED_CHECK_EXPRESSIONS.entrySet())
-            if(!required.getValue().equals(compactCheckExpression(clauses.get(required.getKey()))))
-                throw new IllegalStateException("Finalization check definition drift: "+required.getKey());
-    }
-
-    private static String compactCheckExpression(String source){
-        if(source==null)return null;
-        String value=source.replace("\\'","'");StringBuilder result=new StringBuilder();boolean quoted=false;
-        for(int i=0;i<value.length();i++){
-            char c=value.charAt(i);
-            if(c=='\''){quoted=!quoted;result.append(c);}
-            else if(quoted)result.append(c);
-            else if(value.regionMatches(true,i,"_utf8mb4",0,8))i+=7;
-            else if(!Character.isWhitespace(c)&&c!='`')result.append(Character.toLowerCase(c));
-        }
-        return result.toString();
     }
 
     static String ddl(){

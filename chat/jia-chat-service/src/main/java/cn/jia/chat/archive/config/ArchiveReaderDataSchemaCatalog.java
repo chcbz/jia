@@ -38,12 +38,7 @@ public final class ArchiveReaderDataSchemaCatalog {
                         fk("fk_archive_progress_edition", List.of("edition_id"),
                                 "archive_edition", List.of("edition_id")),
                         fk("fk_archive_progress_paragraph", List.of("edition_id", "block_id", "paragraph_id"),
-                                "archive_paragraph", List.of("edition_id", "block_id", "paragraph_id"))),
-                checks(
-                        "chk_archive_progress_single_tenant", "tenant_id = '0'",
-                        "chk_archive_progress_state", "state in ('IN_PROGRESS','COMPLETED')",
-                        "chk_archive_progress_values", "(byte_offset>=0) and (version>=1)",
-                        "chk_archive_progress_completion", "((state='IN_PROGRESS') and (completed_at is null)) or ((state='COMPLETED') and (completed_at is not null))")));
+                                "archive_paragraph", List.of("edition_id", "block_id", "paragraph_id")))));
         tables.put("archive_bookmark", table(
                 columns(
                         autoId(), owner("tenant_id"), owner("client_id"), owner("owner_jiacn"),
@@ -70,14 +65,7 @@ public final class ArchiveReaderDataSchemaCatalog {
                         fk("fk_archive_bookmark_edition", List.of("edition_id"),
                                 "archive_edition", List.of("edition_id")),
                         fk("fk_archive_bookmark_paragraph", List.of("edition_id", "block_id", "paragraph_id"),
-                                "archive_paragraph", List.of("edition_id", "block_id", "paragraph_id"))),
-                checks(
-                        "chk_archive_bookmark_single_tenant", "tenant_id = '0'",
-                        "chk_archive_bookmark_id", "regexp_like(bookmark_id,'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$')",
-                        "chk_archive_bookmark_state", "state in ('ACTIVE','DELETED')",
-                        "chk_archive_bookmark_version", "version>=1",
-                        "chk_archive_bookmark_offset", "(byte_offset is null) or (byte_offset>=0)",
-                        "chk_archive_bookmark_payload", "((state='ACTIVE') and (edition_manifest_sha256 is not null) and (block_type is not null) and (block_id is not null) and (paragraph_id is not null) and (byte_offset is not null) and (paragraph_sha256 is not null) and (deleted_at is null)) or ((state='DELETED') and (edition_manifest_sha256 is null) and (block_type is null) and (block_id is null) and (paragraph_id is null) and (byte_offset is null) and (paragraph_sha256 is null) and (deleted_at is not null))")));
+                                "archive_paragraph", List.of("edition_id", "block_id", "paragraph_id")))));
         tables.put("archive_note", table(
                 columns(
                         autoId(), owner("tenant_id"), owner("client_id"), owner("owner_jiacn"),
@@ -102,14 +90,7 @@ public final class ArchiveReaderDataSchemaCatalog {
                         fk("fk_archive_note_edition", List.of("edition_id"),
                                 "archive_edition", List.of("edition_id")),
                         fk("fk_archive_note_block", List.of("edition_id", "block_id"),
-                                "archive_chapter", List.of("edition_id", "block_id"))),
-                checks(
-                        "chk_archive_note_single_tenant", "tenant_id = '0'",
-                        "chk_archive_note_id", "regexp_like(note_id,'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$')",
-                        "chk_archive_note_state", "state in ('ACTIVE','DELETED')",
-                        "chk_archive_note_version", "version>=1",
-                        "chk_archive_note_text_bytes", "(text is null) or (octet_length(text)<=20000)",
-                        "chk_archive_note_payload", "((state='ACTIVE') and (text is not null) and (deleted_at is null) and (((block_id is null) and (anchor_json is null)) or ((block_id is not null) and (anchor_json is not null)))) or ((state='DELETED') and (text is null) and (block_id is null) and (anchor_json is null) and (deleted_at is not null))")));
+                                "archive_chapter", List.of("edition_id", "block_id")))));
         tables.put("archive_idempotency", table(
                 columns(
                         autoId(), owner("tenant_id"), owner("client_id"), owner("owner_jiacn"),
@@ -127,14 +108,7 @@ public final class ArchiveReaderDataSchemaCatalog {
                         idx("uk_archive_idempotency_scope", true, "tenant_id", "client_id", "owner_jiacn",
                                 "http_method", "canonical_path", "idempotency_key"),
                         idx("idx_archive_idempotency_expiry", false, "expires_at", "row_id")),
-                foreignKeys(),
-                checks(
-                        "chk_archive_idempotency_single_tenant", "tenant_id = '0'",
-                        "chk_archive_idempotency_method", "http_method in ('PUT','DELETE')",
-                        "chk_archive_idempotency_state", "state in ('PENDING','COMPLETED')",
-                        "chk_archive_idempotency_key", "regexp_like(idempotency_key,'^[!-~]{1,128}$')",
-                        "chk_archive_idempotency_response", "((state='PENDING') and (response_status is null) and (response_content_type is null) and (response_body is null)) or ((state='COMPLETED') and (response_status between 200 and 299) and (response_content_type is not null) and (response_body is not null))",
-                        "chk_archive_idempotency_expiry", "expires_at>=created_at")));
+                foreignKeys()));
         return new ArchiveSchemaSnapshot(tables);
     }
 
@@ -152,46 +126,7 @@ public final class ArchiveReaderDataSchemaCatalog {
             wanted.indexes().forEach((name, value) -> compare(tableName + "." + name, value, found.indexes().get(name)));
             compareMapKeys(tableName + ".foreignKeys", wanted.foreignKeys(), found.foreignKeys());
             wanted.foreignKeys().forEach((name, value) -> compare(tableName + "." + name, value, found.foreignKeys().get(name)));
-            compareMapKeys(tableName + ".checks", wanted.checks(), found.checks());
-            wanted.checks().forEach((name, value) -> {
-                ArchiveSchemaSnapshot.CheckSnapshot foundCheck = found.checks().get(name);
-                compare(tableName + "." + name + ".clause",
-                        normalizeCheck(value.clause()), normalizeCheck(foundCheck.clause()));
-                compare(tableName + "." + name + ".enforced", value.enforced(), foundCheck.enforced());
-            });
         }
-    }
-
-    static String normalizeCheck(String value) {
-        String normalized = ArchiveSchemaCatalog.normalizeCheck(value);
-        if (normalized == null) return null;
-        String alias = "octet_length(";
-        StringBuilder out = new StringBuilder(normalized.length());
-        boolean quoted = false;
-        for (int index = 0; index < normalized.length(); index++) {
-            char current = normalized.charAt(index);
-            if (quoted) {
-                out.append(current);
-                if (current == '\\' && index + 1 < normalized.length()) {
-                    out.append(normalized.charAt(++index));
-                } else if (current == '\'' && index + 1 < normalized.length()
-                        && normalized.charAt(index + 1) == '\'') {
-                    out.append(normalized.charAt(++index));
-                } else if (current == '\'') {
-                    quoted = false;
-                }
-            } else if (current == '\'') {
-                quoted = true;
-                out.append(current);
-            } else if (normalized.startsWith(alias, index)
-                    && (index == 0 || !identifierPart(normalized.charAt(index - 1)))) {
-                out.append("length(");
-                index += alias.length() - 1;
-            } else {
-                out.append(current);
-            }
-        }
-        return out.toString();
     }
 
     private static boolean identifierPart(char value) {
@@ -201,10 +136,9 @@ public final class ArchiveReaderDataSchemaCatalog {
     private static ArchiveSchemaSnapshot.TableSnapshot table(
             Map<String, ArchiveSchemaSnapshot.ColumnSnapshot> columns,
             Map<String, ArchiveSchemaSnapshot.IndexSnapshot> indexes,
-            Map<String, ArchiveSchemaSnapshot.ForeignKeySnapshot> foreignKeys,
-            Map<String, ArchiveSchemaSnapshot.CheckSnapshot> checks) {
+            Map<String, ArchiveSchemaSnapshot.ForeignKeySnapshot> foreignKeys) {
         return new ArchiveSchemaSnapshot.TableSnapshot("InnoDB", "utf8mb4_0900_bin",
-                columns, indexes, foreignKeys, checks);
+                columns, indexes, foreignKeys);
     }
 
     @SafeVarargs
@@ -271,13 +205,7 @@ public final class ArchiveReaderDataSchemaCatalog {
         return Map.entry(name, new ArchiveSchemaSnapshot.ForeignKeySnapshot(
                 columns, table, referencedColumns, "RESTRICT", "RESTRICT"));
     }
-    private static Map<String, ArchiveSchemaSnapshot.CheckSnapshot> checks(String... namesAndClauses) {
-        LinkedHashMap<String, ArchiveSchemaSnapshot.CheckSnapshot> values = new LinkedHashMap<>();
-        for (int i = 0; i < namesAndClauses.length; i += 2) {
-            values.put(namesAndClauses[i], new ArchiveSchemaSnapshot.CheckSnapshot(namesAndClauses[i + 1], true));
-        }
-        return values;
-    }
+
     @SafeVarargs
     private static <T> Map<String, T> linked(Map.Entry<String, T>... entries) {
         LinkedHashMap<String, T> values = new LinkedHashMap<>();

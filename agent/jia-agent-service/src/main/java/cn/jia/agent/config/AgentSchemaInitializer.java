@@ -99,11 +99,9 @@ public class AgentSchemaInitializer implements InitializingBean {
                     UNIQUE KEY uk_agent_binding_active_agent (active_agent_id),
                     KEY idx_agent_binding_user (client_id, jiacn, status),
                     KEY idx_agent_binding_agent (client_id, agent_id, status),
-                    KEY idx_agent_binding_persona (client_id, persona_code, status),
-                    CONSTRAINT chk_agent_binding_status CHECK (status IN (0, 1, 2, 3)),
-                    CONSTRAINT chk_agent_binding_single_tenant CHECK (tenant_id IS NOT NULL AND CHAR_LENGTH(tenant_id)>0 AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(TRIM(tenant_id)))
+                    KEY idx_agent_binding_persona (client_id, persona_code, status)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Durable Agent persona binding history'
-                """.formatted(ownerJiacnColumn, lifecycleColumn, activePersonaColumn, activeAgentColumn));
+""".formatted(ownerJiacnColumn, lifecycleColumn, activePersonaColumn, activeAgentColumn));
         // Existing binding contracts are migrated only by explicitly approved maintenance.
         // Reject drift before generated-column/index additions can mask an old tenant contract.
         validateBindingTenantContract();
@@ -145,35 +143,6 @@ public class AgentSchemaInitializer implements InitializingBean {
                 || !"0".equals(defaultValue)) {
             throw new IllegalStateException("Agent binding tenant type/nullability/default drift");
         }
-        List<java.util.Map<String, Object>> checks = jdbcTemplate.queryForList("""
-                SELECT tc.CONSTRAINT_NAME, tc.ENFORCED, cc.CHECK_CLAUSE
-                FROM information_schema.table_constraints tc
-                JOIN information_schema.check_constraints cc
-                  ON cc.CONSTRAINT_SCHEMA = tc.CONSTRAINT_SCHEMA
-                 AND cc.CONSTRAINT_NAME = tc.CONSTRAINT_NAME
-                WHERE tc.CONSTRAINT_SCHEMA = %s
-                  AND LOWER(tc.TABLE_NAME) = 'agent_persona_binding'
-                  AND tc.CONSTRAINT_TYPE = 'CHECK'
-                """.formatted(schema));
-        java.util.Map<String, String> actual = new java.util.HashMap<>();
-        for (java.util.Map<String, Object> check : checks) {
-            String name = String.valueOf(check.get("CONSTRAINT_NAME"));
-            if (h2) name = name.toLowerCase(Locale.ROOT);
-            String clause = (String) check.get("CHECK_CLAUSE");
-            // H2 renders identifiers with double quotes; MySQL uses backticks.
-            if (h2 && clause != null) clause = clause.replace("\"", "");
-            if (!"YES".equalsIgnoreCase(String.valueOf(check.get("ENFORCED")))
-                    || actual.putIfAbsent(name, normalizeIdentityExpression(clause)) != null) {
-                throw new IllegalStateException("Agent binding CHECK enforcement/duplicate drift");
-            }
-        }
-        java.util.Map<String, String> expected = java.util.Map.of(
-                "chk_agent_binding_status", normalizeIdentityExpression("status IN (0, 1, 2, 3)"),
-                "chk_agent_binding_single_tenant", normalizeIdentityExpression("tenant_id = '0'"));
-        acceptBusinessTenantCheck(actual, "chk_agent_binding_single_tenant");
-        if (!expected.equals(actual)) {
-            throw new IllegalStateException("Agent binding CHECK set/clause drift");
-        }
     }
 
     private void ensureHostedProfileTable() {
@@ -199,13 +168,9 @@ public class AgentSchemaInitializer implements InitializingBean {
                     UNIQUE KEY uk_hosted_binding (binding_id),
                     UNIQUE KEY uk_hosted_profile_key (profile_key),
                     UNIQUE KEY uk_hosted_api_key (api_key_id),
-                    KEY idx_hosted_scope_state (tenant_id,client_id,owner_jiacn,lifecycle_state),
-                    CONSTRAINT chk_hosted_state CHECK (lifecycle_state IN ('PREPARED','STAGED_DISABLED','FILE_ENABLED','ACTIVE','SUSPENDING','SUSPENDED','REPAIR_REQUIRED')),
-                    CONSTRAINT chk_hosted_generation CHECK (generation >= 0),
-                    CONSTRAINT chk_hosted_single_tenant CHECK (tenant_id IS NOT NULL AND CHAR_LENGTH(tenant_id)>0 AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(TRIM(tenant_id))),
-                    CONSTRAINT chk_hosted_repair CHECK ((lifecycle_state='REPAIR_REQUIRED' AND resume_state IS NOT NULL) OR (lifecycle_state<>'REPAIR_REQUIRED' AND resume_state IS NULL))
+                    KEY idx_hosted_scope_state (tenant_id,client_id,owner_jiacn,lifecycle_state)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Durable hosted Agent profile publication state'
-                """);
+""");
         for (String forbidden : List.of("api_key", "apikey", "credential", "secret")) {
             if (!inspectColumnDefinition("agent_hosted_profile", forbidden).isEmpty()) {
                 throw new IllegalStateException("PWA-HOSTED-P0 forbids plaintext credential column " + forbidden);
@@ -289,29 +254,6 @@ public class AgentSchemaInitializer implements InitializingBean {
         }
         ensureRequiredIndex("agent_hosted_profile", "PRIMARY", true, List.of("id"), "");
 
-        java.util.Map<String, String> expectedChecks = java.util.Map.of(
-                "chk_hosted_state", "lifecycle_state IN ('PREPARED','STAGED_DISABLED','FILE_ENABLED','ACTIVE','SUSPENDING','SUSPENDED','REPAIR_REQUIRED')",
-                "chk_hosted_generation", "generation >= 0",
-                "chk_hosted_single_tenant", "tenant_id = '0'",
-                "chk_hosted_repair", "(lifecycle_state='REPAIR_REQUIRED' AND resume_state IS NOT NULL) OR (lifecycle_state<>'REPAIR_REQUIRED' AND resume_state IS NULL)");
-        java.util.Map<String, String> actualChecks = new java.util.HashMap<>();
-        jdbcTemplate.query("""
-                SELECT tc.CONSTRAINT_NAME, cc.CHECK_CLAUSE
-                FROM information_schema.table_constraints tc
-                JOIN information_schema.check_constraints cc
-                  ON cc.CONSTRAINT_SCHEMA=tc.CONSTRAINT_SCHEMA AND cc.CONSTRAINT_NAME=tc.CONSTRAINT_NAME
-                WHERE tc.CONSTRAINT_SCHEMA=DATABASE() AND tc.TABLE_NAME='agent_hosted_profile'
-                  AND tc.CONSTRAINT_TYPE='CHECK'
-                """, (RowCallbackHandler) rs -> {
-            actualChecks.put(rs.getString("CONSTRAINT_NAME"),
-                    normalizeIdentityExpression(rs.getString("CHECK_CLAUSE")));
-        });
-        java.util.Map<String, String> normalizedChecks = new java.util.HashMap<>();
-        expectedChecks.forEach((name, clause) -> normalizedChecks.put(name, normalizeIdentityExpression(clause)));
-        acceptBusinessTenantCheck(actualChecks, "chk_hosted_single_tenant");
-        if (!actualChecks.equals(normalizedChecks)) {
-            throw new IllegalStateException("PWA-HOSTED-P0 CHECK set drift: " + actualChecks.keySet());
-        }
         Integer foreignKeyCount = jdbcTemplate.queryForObject("""
                 SELECT COUNT(*) FROM information_schema.table_constraints
                 WHERE constraint_schema=DATABASE() AND table_name='agent_hosted_profile'
@@ -395,7 +337,6 @@ public class AgentSchemaInitializer implements InitializingBean {
         if (!isH2Database()) {
             validateTableCollation("agent_identity_registry", "utf8mb4_0900_bin");
             validateTableCollation("agent_identity_alias", "utf8mb4_0900_bin");
-            validateIdentityChecks();
             validateIdentityAliasForeignKey();
             if (validateTriggers) {
                 validateIdentityTriggers();
@@ -481,94 +422,6 @@ public class AgentSchemaInitializer implements InitializingBean {
         if (!expected.equalsIgnoreCase(actual)) {
             throw new IllegalStateException("A02 identity table " + table
                     + " must use binary collation " + expected + " but was " + actual);
-        }
-    }
-
-    private static final String BUSINESS_TENANT_CHECK = "tenant_id IS NOT NULL AND CHAR_LENGTH(tenant_id)>0 AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(TRIM(tenant_id))";
-
-    /** Accept only the explicitly migrated tenant CHECK or the stricter production baseline. */
-    private void acceptBusinessTenantCheck(java.util.Map<String, String> checks, String name) {
-        if (normalizeIdentityExpression(BUSINESS_TENANT_CHECK).equals(checks.get(name))) {
-            checks.put(name, normalizeIdentityExpression("tenant_id = '0'"));
-        }
-    }
-
-    private void validateIdentityChecks() {
-        java.util.Map<String, String> expected = java.util.Map.ofEntries(
-                java.util.Map.entry("agent_identity_registry.chk_identity_registry_type",
-                        "canonical_type IN ('OPAQUE', 'LEGACY_CANONICAL', 'SYSTEM')"),
-                java.util.Map.entry("agent_identity_registry.chk_identity_registry_lifecycle",
-                        "lifecycle_status IN ('PROVISIONED', 'ACTIVE', 'SUSPENDED', 'RETIRED')"),
-                java.util.Map.entry("agent_identity_registry.chk_identity_registry_canonical", """
-                        (canonical_type = 'OPAQUE'
-                            AND REGEXP_LIKE(canonical_agent_id, '^agt_[0-9a-f]{32}$'))
-                        OR (canonical_type = 'LEGACY_CANONICAL'
-                            AND canonical_agent_id <> 'builtin-songjiang'
-                            AND NOT(REGEXP_LIKE(canonical_agent_id, '^agt_[0-9a-f]{32}$')))
-                        OR (canonical_type = 'SYSTEM'
-                            AND canonical_agent_id = 'builtin-songjiang')
-                        """),
-                java.util.Map.entry("agent_identity_registry.chk_identity_registry_scope", """
-                        (canonical_type = 'SYSTEM'
-                            AND client_id IS NULL AND owner_jiacn IS NULL AND tenant_id = '0')
-                        OR (canonical_type <> 'SYSTEM'
-                            AND client_id IS NOT NULL AND TRIM(client_id) <> ''
-                            AND owner_jiacn IS NOT NULL AND TRIM(owner_jiacn) <> ''
-                            AND tenant_id = '0')
-                        """),
-                java.util.Map.entry("agent_identity_registry.chk_identity_registry_retired", """
-                        (lifecycle_status = 'RETIRED' AND retired_at IS NOT NULL)
-                        OR (lifecycle_status <> 'RETIRED' AND retired_at IS NULL)
-                        """),
-                java.util.Map.entry("agent_identity_alias.chk_identity_alias_type",
-                        "alias_type = 'LEGACY_AGENT_ID'"),
-                java.util.Map.entry("agent_identity_alias.chk_identity_alias_status",
-                        "alias_status IN ('ACTIVE', 'REVOKED')"),
-                java.util.Map.entry("agent_identity_alias.chk_identity_alias_scope",
-                        "tenant_id = '0'"),
-                java.util.Map.entry("agent_identity_alias.chk_identity_alias_no_blank_scope",
-                        "TRIM(client_id) <> '' AND TRIM(owner_jiacn) <> ''"),
-                java.util.Map.entry("agent_identity_alias.chk_identity_alias_window", """
-                        (alias_status = 'ACTIVE' AND valid_to IS NULL)
-                        OR (alias_status = 'REVOKED' AND valid_to IS NOT NULL)
-                        """),
-                java.util.Map.entry("agent_identity_alias.chk_identity_alias_not_system",
-                        "alias_value <> 'builtin-songjiang' AND canonical_agent_id <> 'builtin-songjiang'"));
-        List<CheckDefinition> actual = jdbcTemplate.query("""
-                SELECT tc.TABLE_NAME, tc.CONSTRAINT_NAME, cc.CHECK_CLAUSE
-                FROM information_schema.table_constraints tc
-                JOIN information_schema.check_constraints cc
-                  ON cc.CONSTRAINT_SCHEMA = tc.CONSTRAINT_SCHEMA
-                 AND cc.CONSTRAINT_NAME = tc.CONSTRAINT_NAME
-                WHERE tc.CONSTRAINT_SCHEMA = DATABASE()
-                  AND tc.CONSTRAINT_TYPE = 'CHECK'
-                  AND tc.TABLE_NAME IN ('agent_identity_registry', 'agent_identity_alias')
-                """, (rs, rowNum) -> new CheckDefinition(
-                rs.getString("TABLE_NAME"), rs.getString("CONSTRAINT_NAME"),
-                rs.getString("CHECK_CLAUSE")));
-        java.util.Map<String, String> actualByName = new java.util.HashMap<>();
-        for (CheckDefinition definition : actual) {
-            actualByName.put(definition.table() + "." + definition.name(),
-                    normalizeIdentityExpression(definition.clause()));
-        }
-        if (!actualByName.keySet().equals(expected.keySet())) {
-            throw new IllegalStateException("A02 identity CHECK constraint set is incompatible: "
-                    + actualByName.keySet());
-        }
-        acceptBusinessTenantCheck(actualByName, "agent_identity_alias.chk_identity_alias_scope");
-        String registryKey = "agent_identity_registry.chk_identity_registry_scope";
-        String legacyRegistry = expected.get(registryKey);
-        int tenantClause = legacyRegistry.lastIndexOf("tenant_id = '0'");
-        String scopedRegistry = legacyRegistry.substring(0, tenantClause)
-                + BUSINESS_TENANT_CHECK + legacyRegistry.substring(tenantClause + "tenant_id = '0'".length());
-        if (normalizeIdentityExpression(scopedRegistry).equals(actualByName.get(registryKey))) {
-            actualByName.put(registryKey, normalizeIdentityExpression(legacyRegistry));
-        }
-        for (var entry : expected.entrySet()) {
-            if (!normalizeIdentityExpression(entry.getValue()).equals(actualByName.get(entry.getKey()))) {
-                throw new IllegalStateException("A02 CHECK " + entry.getKey()
-                        + " has an incompatible definition");
-            }
         }
     }
 
@@ -711,7 +564,6 @@ public class AgentSchemaInitializer implements InitializingBean {
         }
     }
 
-
     String normalizeSql(String sql) {
         if (sql == null) {
             return "";
@@ -760,7 +612,7 @@ public class AgentSchemaInitializer implements InitializingBean {
     static record ColumnDefinition(
             String dataType, String columnType, boolean nullable,
             String collation, String generationExpression) {}
-    static record CheckDefinition(String table, String name, String clause) {}
+
     static record ForeignKeyColumn(
             String column, String referencedTable, String referencedColumn,
             int position, String updateRule, String deleteRule) {}
@@ -810,36 +662,9 @@ public class AgentSchemaInitializer implements InitializingBean {
                     UNIQUE KEY uk_identity_registry_binding (binding_id),
                     UNIQUE KEY uk_identity_registry_alias_target
                         (id, canonical_agent_id, client_id, owner_jiacn, tenant_id),
-                    KEY idx_identity_registry_scope_status (tenant_id, client_id, owner_jiacn, lifecycle_status),
-                    CONSTRAINT chk_identity_registry_type CHECK (
-                        canonical_type IN ('OPAQUE', 'LEGACY_CANONICAL', 'SYSTEM')
-                    ),
-                    CONSTRAINT chk_identity_registry_lifecycle CHECK (
-                        lifecycle_status IN ('PROVISIONED', 'ACTIVE', 'SUSPENDED', 'RETIRED')
-                    ),
-                    CONSTRAINT chk_identity_registry_canonical CHECK (
-                        (canonical_type = 'OPAQUE'
-                            AND canonical_agent_id REGEXP '^agt_[0-9a-f]{32}$')
-                        OR (canonical_type = 'LEGACY_CANONICAL'
-                            AND canonical_agent_id <> 'builtin-songjiang'
-                            AND canonical_agent_id NOT REGEXP '^agt_[0-9a-f]{32}$')
-                        OR (canonical_type = 'SYSTEM'
-                            AND canonical_agent_id = 'builtin-songjiang')
-                    ),
-                    CONSTRAINT chk_identity_registry_scope CHECK (
-                        (canonical_type = 'SYSTEM'
-                            AND client_id IS NULL AND owner_jiacn IS NULL AND tenant_id = '0')
-                        OR (canonical_type <> 'SYSTEM'
-                            AND client_id IS NOT NULL AND TRIM(client_id) <> ''
-                            AND owner_jiacn IS NOT NULL AND TRIM(owner_jiacn) <> ''
-                            AND tenant_id IS NOT NULL AND CHAR_LENGTH(tenant_id)>0 AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(TRIM(tenant_id)))
-                    ),
-                    CONSTRAINT chk_identity_registry_retired CHECK (
-                        (lifecycle_status = 'RETIRED' AND retired_at IS NOT NULL)
-                        OR (lifecycle_status <> 'RETIRED' AND retired_at IS NULL)
-                    )
+                    KEY idx_identity_registry_scope_status (tenant_id, client_id, owner_jiacn, lifecycle_status)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Durable canonical Agent identity registry | collation binary enforces exact case matching'
-                """);
+""");
         jdbcTemplate.execute("""
                 CREATE TABLE IF NOT EXISTS agent_identity_alias (
                     id                      BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Primary key',
@@ -862,26 +687,14 @@ public class AgentSchemaInitializer implements InitializingBean {
                         (tenant_id, client_id, owner_jiacn, alias_type, alias_value, active_key),
                     KEY idx_identity_alias_registry (registry_id, alias_status),
                     KEY idx_identity_alias_canonical (canonical_agent_id, alias_status),
-                    CONSTRAINT chk_identity_alias_type CHECK (alias_type = 'LEGACY_AGENT_ID'),
-                    CONSTRAINT chk_identity_alias_status CHECK (alias_status IN ('ACTIVE', 'REVOKED')),
-                    CONSTRAINT chk_identity_alias_scope CHECK (tenant_id IS NOT NULL AND CHAR_LENGTH(tenant_id)>0 AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(TRIM(tenant_id))),
-                    CONSTRAINT chk_identity_alias_no_blank_scope CHECK (
-                        TRIM(client_id) <> '' AND TRIM(owner_jiacn) <> ''
-                    ),
-                    CONSTRAINT chk_identity_alias_window CHECK (
-                        (alias_status = 'ACTIVE' AND valid_to IS NULL)
-                        OR (alias_status = 'REVOKED' AND valid_to IS NOT NULL)
-                    ),
-                    CONSTRAINT chk_identity_alias_not_system CHECK (
-                        alias_value <> 'builtin-songjiang' AND canonical_agent_id <> 'builtin-songjiang'
-                    ),
+
                     CONSTRAINT fk_identity_alias_registry_scope FOREIGN KEY
                         (registry_id, canonical_agent_id, client_id, owner_jiacn, tenant_id)
                         REFERENCES agent_identity_registry
                         (id, canonical_agent_id, client_id, owner_jiacn, tenant_id)
                         ON UPDATE RESTRICT ON DELETE RESTRICT
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Scoped legacy Agent ID compatibility aliases | collation binary enforces exact case matching'
-                """.formatted(activeAliasColumn));
+""".formatted(activeAliasColumn));
 
         addRequiredColumnIfMissing("agent_identity_alias", "active_key", activeAliasColumn);
         ensureRequiredIndex("agent_identity_registry", "uk_identity_registry_agent", true,
@@ -1777,7 +1590,6 @@ public class AgentSchemaInitializer implements InitializingBean {
                         """)));
     }
 
-
     void ensureHistoricalEventBaselineAuditSchema() {
         boolean batchExists = tableExists("agent_task_historical_event_manifest_batch");
         boolean manifestExists = tableExists("agent_task_historical_event_manifest");
@@ -2625,29 +2437,6 @@ BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'C01H successful run cannot be 
             }
         } catch (Exception e) {
             log.warn("Unable to ensure index {}.{}: {}", table, indexName, e.getMessage());
-        }
-    }
-
-    private void ensureRequiredCheckConstraint(String table, String constraintName, String expression) {
-        String catalogQuery = isH2Database()
-                ? """
-                  SELECT COUNT(*)
-                  FROM information_schema.table_constraints
-                  WHERE table_schema = SCHEMA()
-                    AND LOWER(table_name) = LOWER(?)
-                    AND LOWER(constraint_name) = LOWER(?)
-                    AND constraint_type = 'CHECK'
-                  """
-                : """
-                  SELECT COUNT(*)
-                  FROM information_schema.table_constraints
-                  WHERE constraint_schema = DATABASE() AND table_name = ?
-                    AND constraint_name = ? AND constraint_type = 'CHECK'
-                  """;
-        Integer count = jdbcTemplate.queryForObject(catalogQuery, Integer.class, table, constraintName);
-        if (count == null || count == 0) {
-            jdbcTemplate.execute("ALTER TABLE " + table + " ADD CONSTRAINT " + constraintName
-                    + " CHECK (" + expression + ")");
         }
     }
 

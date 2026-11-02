@@ -40,16 +40,7 @@ CREATE TABLE IF NOT EXISTS agent_identity_legacy_manifest (
     approved_at                BIGINT NOT NULL,
     create_time                BIGINT NOT NULL,
     PRIMARY KEY (batch_id, manifest_row_no),
-    UNIQUE KEY uk_a08_manifest_binding (batch_id, binding_id),
-    CONSTRAINT chk_a08_manifest_approval CHECK (approval_status = 'APPROVED'),
-    CONSTRAINT chk_a08_manifest_type CHECK (
-        canonical_type IN ('OPAQUE', 'LEGACY_CANONICAL')),
-    CONSTRAINT chk_a08_manifest_lifecycle CHECK (
-        lifecycle_status IN ('PROVISIONED', 'ACTIVE', 'SUSPENDED', 'RETIRED')),
-    CONSTRAINT chk_a08_manifest_sha CHECK (
-        source_row_sha256 REGEXP '^[0-9a-f]{64}$'
-        AND source_snapshot_sha256 REGEXP '^[0-9a-f]{64}$'
-        AND approved_report_sha256 REGEXP '^[0-9a-f]{64}$')
+    UNIQUE KEY uk_a08_manifest_binding (batch_id, binding_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin
   COMMENT='A08 immutable human-approved legacy identity manifest; never auto-populated';
 
@@ -68,8 +59,7 @@ CREATE TABLE IF NOT EXISTS agent_identity_legacy_apply_run (
     started_at                 BIGINT NOT NULL,
     completed_at               BIGINT DEFAULT NULL,
     PRIMARY KEY (run_id),
-    KEY idx_a08_apply_batch (batch_id, started_at),
-    CONSTRAINT chk_a08_apply_status CHECK (run_status IN ('RUNNING', 'SUCCEEDED', 'FAILED'))
+    KEY idx_a08_apply_batch (batch_id, started_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin
   COMMENT='A08 durable apply audit, including successful no-op reruns and failures';
 

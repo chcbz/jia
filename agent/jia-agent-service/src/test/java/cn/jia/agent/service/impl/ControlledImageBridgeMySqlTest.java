@@ -89,34 +89,6 @@ class ControlledImageBridgeMySqlTest {
         assertEquals(List.of("EDIT_IMAGE", "GENERATE_IMAGE"), operations.invoke(reader, rawOperations));
     }
 
-    @Test void actualMySqlNormalizesExactChecksAndRejectsSameNamedWeakDefinitions() {
-        assertDoesNotThrow(()->new ControlledImageBridgeSchemaInitializer(jdbc).afterPropertiesSet());
-        assertDoesNotThrow(()->new ControlledImageExecutionSchemaInitializer(jdbc).afterPropertiesSet());
-        jdbc.execute("ALTER TABLE agent_controlled_image_bridge_operation "
-                +"DROP CHECK chk_acibo_locator, ADD CONSTRAINT chk_acibo_locator CHECK (1=1)");
-        assertThrows(IllegalStateException.class,
-                ()->new ControlledImageBridgeSchemaInitializer(jdbc).afterPropertiesSet());
-        jdbc.execute("ALTER TABLE agent_controlled_image_bridge_operation "
-                +"DROP CHECK chk_acibo_locator, ADD CONSTRAINT chk_acibo_locator "
-                +"CHECK (authority_locator=CONCAT('mmd-ci-v1:',consent_id))");
-        for(String weakened:java.util.List.of(
-                "((execution_protocol_version=2 AND operation_grant_id IS NULL) OR (execution_protocol_version=3 AND operation_grant_id REGEXP '^wrong_[0-9a-f]{32}$'))",
-                "(((execution_protocol_version=2 AND operation_grant_id IS NULL) OR (execution_protocol_version=3 AND operation_grant_id REGEXP '^opgrant_[0-9a-f]{32}$')) OR TRUE)")) {
-            jdbc.execute("ALTER TABLE agent_controlled_image_bridge_operation DROP CHECK chk_acibo_protocol, ADD CONSTRAINT chk_acibo_protocol CHECK ("+weakened+")");
-            assertThrows(IllegalStateException.class,
-                    ()->new ControlledImageBridgeSchemaInitializer(jdbc).afterPropertiesSet());
-        }
-        jdbc.execute("ALTER TABLE agent_controlled_image_bridge_operation DROP CHECK chk_acibo_protocol, ADD CONSTRAINT chk_acibo_protocol CHECK ((execution_protocol_version=2 AND operation_grant_id IS NULL) OR (execution_protocol_version=3 AND operation_grant_id REGEXP '^opgrant_[0-9a-f]{32}$')) NOT ENFORCED");
-        assertThrows(IllegalStateException.class,
-                ()->new ControlledImageBridgeSchemaInitializer(jdbc).afterPropertiesSet());
-        jdbc.execute("ALTER TABLE agent_controlled_image_bridge_operation DROP CHECK chk_acibo_protocol, ADD CONSTRAINT chk_acibo_protocol CHECK ((execution_protocol_version=2 AND operation_grant_id IS NULL) OR (execution_protocol_version=3 AND operation_grant_id REGEXP '^opgrant_[0-9a-f]{32}$'))");
-        jdbc.execute("ALTER TABLE agent_personal_workspace_execution "
-                +"DROP CHECK chk_pwex_controlled_consent, "
-                +"ADD CONSTRAINT chk_pwex_controlled_consent CHECK (1=1)");
-        assertThrows(IllegalStateException.class,
-                ()->new ControlledImageExecutionSchemaInitializer(jdbc).afterPropertiesSet());
-    }
-
     @Test void legacyBridgeCatalogUpgradesOncePreservesV2RowsAndIsIdempotent() {
         jdbc.execute("DROP TABLE agent_controlled_image_bridge_operation");
         createLegacyBridge();
@@ -137,10 +109,8 @@ class ControlledImageBridgeMySqlTest {
         assertEquals(2,jdbc.queryForObject("SELECT execution_protocol_version FROM agent_controlled_image_bridge_operation WHERE assignment_idempotency_key='legacy-key'",Integer.class));
         assertNull(jdbc.queryForObject("SELECT operation_grant_id FROM agent_controlled_image_bridge_operation WHERE assignment_idempotency_key='legacy-key'",String.class));
         assertEquals(5,jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema=DATABASE() AND table_name='agent_controlled_image_bridge_operation' AND index_name='uk_acibo_scope_operation_grant'",Integer.class));
-        assertEquals(1,jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.table_constraints WHERE constraint_schema=DATABASE() AND table_name='agent_controlled_image_bridge_operation' AND constraint_name='chk_acibo_protocol' AND constraint_type='CHECK' AND enforced='YES'",Integer.class));
+        assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.table_constraints WHERE constraint_schema=DATABASE() AND table_name='agent_controlled_image_bridge_operation' AND constraint_name='chk_acibo_protocol' AND constraint_type='CHECK' AND enforced='YES'",Integer.class));
     }
-
-
 
     @Test void twoExecutionRunsCanReserveOnlyOneConsent() throws Exception {
         insertConsent("consent_1234567890abcdef1234567890abcdef","BOUND",2,null,null);
@@ -252,15 +222,9 @@ class ControlledImageBridgeMySqlTest {
                   PRIMARY KEY(id),
                   UNIQUE KEY uk_acibo_scope_key(tenant_id,client_id,owner_jiacn,task_id,assignment_idempotency_key),
                   UNIQUE KEY uk_acibo_scope_consent(tenant_id,client_id,owner_jiacn,task_id,consent_id),
-                  UNIQUE KEY uk_acibo_scope_grant(tenant_id,client_id,owner_jiacn,task_id,grant_id),
-                  CONSTRAINT chk_acibo_scope CHECK(tenant_id='0' AND owner_jiacn<>'0'),
-                  CONSTRAINT chk_acibo_hash CHECK(wrapper_digest REGEXP '^[0-9a-f]{64}$'),
-                  CONSTRAINT chk_acibo_consent CHECK(consent_id REGEXP '^consent_[0-9a-f]{32}$'),
-                  CONSTRAINT chk_acibo_locator CHECK(authority_locator=CONCAT('mmd-ci-v1:',consent_id)),
-                  CONSTRAINT chk_acibo_versions CHECK(expected_consent_version>0 AND grant_version>0 AND assignment_revision>=0),
-                  CONSTRAINT chk_acibo_time CHECK(created_at>0)
+                  UNIQUE KEY uk_acibo_scope_grant(tenant_id,client_id,owner_jiacn,task_id,grant_id)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin
-                """);
+""");
     }
 
     private void createExecutionBase() {

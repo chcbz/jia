@@ -108,7 +108,6 @@ public final class PersonalWorkspaceSchemaInitializer implements InitializingBea
         String lower = statement.toLowerCase(Locale.ROOT).replaceAll("\\s+", " ").trim();
         if (!lower.startsWith("alter table " + FILE_TABLE + " ")
                 || !lower.contains("add column origin_kind varchar(24) not null default 'user_upload'")
-                || !lower.contains("add constraint chk_pws_file_origin check")
                 || lower.contains(" drop ") || lower.contains(" modify ") || lower.contains(" change ")
                 || lower.contains(" rename ") || lower.contains(" insert ") || lower.contains(" update ")
                 || lower.contains(" delete ") || lower.contains(" create trigger ")) {
@@ -121,7 +120,7 @@ public final class PersonalWorkspaceSchemaInitializer implements InitializingBea
         List<Map<String, Object>> columns = provenanceColumns();
         if (columns.size() == 1 && "source_kind".equals(text(columns.getFirst(), "column_name"))) {
             validateLegacySourceCatalog(columns.getFirst());
-            // One MySQL ALTER keeps the additive column/check change atomic. Any failure aborts startup;
+            // One MySQL ALTER keeps the additive column change atomic. Any failure aborts startup;
             // a later startup can safely retry only while the legacy catalog is still exact.
             jdbc.execute(originMigrationStatement());
             return;
@@ -131,20 +130,8 @@ public final class PersonalWorkspaceSchemaInitializer implements InitializingBea
         }
     }
 
-
     private void validateLegacySourceCatalog(Map<String, Object> sourceColumn) {
         requireColumn(sourceColumn, "varchar(24)", null);
-        List<Map<String, Object>> checks = provenanceChecks();
-        if (checks.size() != 1) {
-            throw new IllegalStateException("Personal workspace legacy provenance CHECK is partial");
-        }
-        Map<String, Object> sourceCheck = checks.getFirst();
-        if (!"chk_pws_file_source".equals(text(sourceCheck, "constraint_name"))
-                || !"YES".equalsIgnoreCase(text(sourceCheck, "enforced"))
-                || !AgentTaskFundingSchemaInitializer.normalizeCheck("source_kind = 'UPLOAD'").equals(
-                        AgentTaskFundingSchemaInitializer.normalizeCheck(text(sourceCheck, "check_clause")))) {
-            throw new IllegalStateException("Personal workspace legacy provenance CHECK is invalid");
-        }
         Integer invalidRows = jdbc.queryForObject("""
                 SELECT COUNT(*) FROM agent_personal_workspace_file
                  WHERE source_kind IS NULL OR source_kind <> 'UPLOAD'
@@ -164,23 +151,6 @@ public final class PersonalWorkspaceSchemaInitializer implements InitializingBea
         requireColumn(columns.get(0), "varchar(24)", null);
         requireColumn(columns.get(1), "varchar(24)", "USER_UPLOAD");
 
-        Map<String, String> checks = new LinkedHashMap<>();
-        for (Map<String, Object> row : provenanceChecks()) {
-            String name = text(row, "constraint_name");
-            if (!"YES".equalsIgnoreCase(text(row, "enforced"))
-                    || checks.put(name, AgentTaskFundingSchemaInitializer.normalizeCheck(
-                            text(row, "check_clause"))) != null) {
-                throw new IllegalStateException("Personal workspace provenance CHECK is invalid");
-            }
-        }
-        Map<String, String> expected = Map.of(
-                "chk_pws_file_source", AgentTaskFundingSchemaInitializer.normalizeCheck(
-                        "source_kind = 'UPLOAD'"),
-                "chk_pws_file_origin", AgentTaskFundingSchemaInitializer.normalizeCheck(
-                        "origin_kind IN ('USER_UPLOAD','AGENT_DELIVERY')"));
-        if (!expected.equals(checks)) {
-            throw new IllegalStateException("Personal workspace provenance CHECK is partial");
-        }
         Integer invalidRows = jdbc.queryForObject("""
                 SELECT COUNT(*) FROM agent_personal_workspace_file
                  WHERE source_kind IS NULL OR source_kind <> 'UPLOAD'
@@ -209,22 +179,6 @@ public final class PersonalWorkspaceSchemaInitializer implements InitializingBea
                  WHERE table_schema=DATABASE() AND table_name='agent_personal_workspace_file'
                    AND column_name IN ('source_kind','origin_kind')
                  ORDER BY FIELD(column_name,'source_kind','origin_kind')
-                """);
-    }
-
-    private List<Map<String, Object>> provenanceChecks() {
-        return jdbc.queryForList("""
-                SELECT tc.constraint_name,cc.check_clause,tc.enforced
-                  FROM information_schema.table_constraints tc
-                  JOIN information_schema.check_constraints cc
-                    ON cc.constraint_catalog=tc.constraint_catalog
-                   AND cc.constraint_schema=tc.constraint_schema
-                   AND cc.constraint_name=tc.constraint_name
-                 WHERE tc.constraint_schema=DATABASE()
-                   AND tc.table_name='agent_personal_workspace_file'
-                   AND tc.constraint_type='CHECK'
-                   AND tc.constraint_name IN ('chk_pws_file_source','chk_pws_file_origin')
-                 ORDER BY tc.constraint_name
                 """);
     }
 

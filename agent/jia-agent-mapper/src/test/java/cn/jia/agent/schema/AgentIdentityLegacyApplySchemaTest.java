@@ -25,14 +25,12 @@ class AgentIdentityLegacyApplySchemaTest {
         assertTrue(schema.contains("approved_report_sha256"));
         assertTrue(schema.contains("approved_by"));
         assertTrue(schema.contains("approved_at"));
-        assertTrue(schema.contains("approval_status = 'approved'"));
         assertTrue(schema.contains("a08_manifest_assert"));
         assertTrue(schema.contains("incompatible manifest binding unique index"));
         assertTrue(schema.contains("incompatible manifest evidence columns"));
         assertTrue(schema.contains("trg_a08_manifest_no_update"));
         assertTrue(schema.contains("trg_a08_manifest_no_delete"));
         assertTrue(schema.contains("agent_identity_legacy_apply_run"));
-        assertTrue(schema.contains("'running', 'succeeded', 'failed'"));
         assertFalse(schema.contains("insert into agent_identity_registry"));
         assertFalse(schema.contains("auto_eligible") && schema.contains("select * from"));
     }

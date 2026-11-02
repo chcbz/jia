@@ -37,12 +37,7 @@ public final class AgentExecutionReportSchemaInitializer implements Initializing
             TABLES.get(1), Set.of("PRIMARY", "uk_execution_report_id",
                     "uk_execution_report_sequence", "idx_execution_report_command",
                     "idx_execution_report_execution"));
-    private static final Map<String, Set<String>> REQUIRED_CHECKS = Map.of(
-            TABLES.get(0), Set.of("chk_execution_report_head_tenant",
-                    "chk_execution_report_head_numbers", "chk_execution_report_head_terminal"),
-            TABLES.get(1), Set.of("chk_execution_report_tenant",
-                    "chk_execution_report_numbers", "chk_execution_report_hash",
-                    "chk_execution_report_type"));
+
     private final JdbcTemplate jdbc;
 
     public AgentExecutionReportSchemaInitializer(JdbcTemplate jdbc) {
@@ -104,11 +99,6 @@ public final class AgentExecutionReportSchemaInitializer implements Initializing
                      WHERE table_schema=DATABASE() AND table_name=?
                     """, String.class, table));
             if (!indexes.containsAll(REQUIRED_INDEXES.get(table))) fail("indexes", table);
-            Set<String> checks = Set.copyOf(jdbc.queryForList("""
-                    SELECT constraint_name FROM information_schema.table_constraints
-                     WHERE table_schema=DATABASE() AND table_name=? AND constraint_type='CHECK'
-                    """, String.class, table));
-            if (!checks.containsAll(REQUIRED_CHECKS.get(table))) fail("checks", table);
         }
     }
 

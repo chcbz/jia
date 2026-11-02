@@ -6,8 +6,7 @@ CREATE TABLE IF NOT EXISTS agent_position_state (
  owner_jiacn VARCHAR(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
  revision BIGINT NOT NULL,
  state_json JSON NOT NULL,
- PRIMARY KEY(tenant_id,client_id,owner_jiacn),
- CHECK(revision >= 0)
+ PRIMARY KEY(tenant_id,client_id,owner_jiacn)
 ) ENGINE=InnoDB;
 CREATE TABLE IF NOT EXISTS agent_position_authority (
  tenant_id VARCHAR(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
@@ -15,8 +14,7 @@ CREATE TABLE IF NOT EXISTS agent_position_authority (
  owner_jiacn VARCHAR(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
  permission_key VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
  resource_key VARCHAR(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
- PRIMARY KEY(tenant_id,client_id,owner_jiacn,permission_key,resource_key),
- CHECK(permission_key IN ('MANAGE_POSITIONS','ARCHIVE_WRITE','ARCHIVE_PUBLISH','SKILL_REVIEW','SKILL_PUBLISH'))
+ PRIMARY KEY(tenant_id,client_id,owner_jiacn,permission_key,resource_key)
 ) ENGINE=InnoDB;
 -- Immutable operation/audit rows. They store request hashes and opaque result IDs, never source text or tokens.
 CREATE TABLE IF NOT EXISTS agent_position_operation (

@@ -19,18 +19,7 @@ CREATE TABLE IF NOT EXISTS agent_task_funding_operation (
     PRIMARY KEY (id),
     UNIQUE KEY uk_task_funding_operation_actor_key
         (tenant_id, client_id, owner_jiacn, principal_type, principal_id, idempotency_key),
-    UNIQUE KEY uk_task_funding_operation_task (tenant_id, client_id, owner_jiacn, task_id),
-    CONSTRAINT chk_task_funding_operation_key CHECK (OCTET_LENGTH(idempotency_key) = 36),
-    CONSTRAINT chk_task_funding_operation_hash CHECK (OCTET_LENGTH(request_hash) = 32),
-    CONSTRAINT chk_task_funding_operation_status CHECK (
-        (status = 'POSTING' AND reserve_transaction_id IS NULL
-            AND receipt_task_version IS NULL AND receipt_created_at IS NULL AND receipt_updated_at IS NULL)
-        OR
-        (status = 'COMPLETED' AND reserve_transaction_id IS NOT NULL
-            AND receipt_task_version IS NOT NULL AND receipt_task_version = 0
-            AND receipt_created_at IS NOT NULL AND receipt_created_at > 0
-            AND receipt_updated_at IS NOT NULL AND receipt_updated_at > 0)
-    )
+    UNIQUE KEY uk_task_funding_operation_task (tenant_id, client_id, owner_jiacn, task_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin
   COMMENT='Actor-scoped immutable funded-task create receipt root';
 
@@ -64,40 +53,6 @@ CREATE TABLE IF NOT EXISTS agent_task_funding (
     UNIQUE KEY uk_agent_task_funding_task (tenant_id, client_id, owner_jiacn, task_id),
     UNIQUE KEY uk_agent_task_funding_escrow (tenant_id, client_id, owner_jiacn, escrow_id),
     KEY idx_agent_task_funding_payer
-        (tenant_id, client_id, owner_jiacn, payer_principal_type, payer_principal_id, funding_status, id),
-    CONSTRAINT chk_agent_task_funding_amount CHECK (
-        gross_bounty_amount_micro > 0 AND remaining_micro >= 0
-        AND remaining_micro <= gross_bounty_amount_micro),
-    CONSTRAINT chk_agent_task_funding_mode CHECK (funding_mode = 'FUNDED_SINGLE_AGENT'),
-    CONSTRAINT chk_agent_task_funding_policy CHECK (settlement_policy = 'GROSS_INCLUSIVE'),
-    CONSTRAINT chk_agent_task_funding_state CHECK (
-        (funding_status = 'RESERVING' AND version = 0 AND remaining_micro = gross_bounty_amount_micro
-            AND escrow_id IS NULL AND escrow_version IS NULL AND reserve_transaction_id IS NULL
-            AND cancel_idempotency_key IS NULL AND cancel_request_hash IS NULL
-            AND refund_transaction_id IS NULL AND cancel_refunded_micro IS NULL
-            AND cancel_task_version IS NULL AND refunded_at IS NULL)
-        OR
-        (funding_status = 'FUNDS_HELD' AND version >= 1 AND remaining_micro = gross_bounty_amount_micro
-            AND escrow_id IS NOT NULL AND escrow_version IS NOT NULL AND escrow_version > 0 AND reserve_transaction_id IS NOT NULL
-            AND cancel_idempotency_key IS NULL AND cancel_request_hash IS NULL
-            AND refund_transaction_id IS NULL AND cancel_refunded_micro IS NULL
-            AND cancel_task_version IS NULL AND refunded_at IS NULL)
-        OR
-        (funding_status = 'REFUNDED' AND version >= 2 AND remaining_micro = 0
-            AND escrow_id IS NOT NULL AND escrow_version IS NOT NULL AND escrow_version > 1 AND reserve_transaction_id IS NOT NULL
-            AND cancel_idempotency_key IS NOT NULL AND OCTET_LENGTH(cancel_idempotency_key) = 36
-            AND cancel_request_hash IS NOT NULL AND OCTET_LENGTH(cancel_request_hash) = 32
-            AND refund_transaction_id IS NOT NULL
-            AND cancel_refunded_micro IS NOT NULL AND cancel_refunded_micro > 0
-            AND cancel_refunded_micro <= gross_bounty_amount_micro
-            AND cancel_task_version IS NOT NULL AND cancel_task_version > 0
-            AND refunded_at IS NOT NULL AND refunded_at > 0)
-        OR
-        (funding_status = 'SETTLED' AND version >= 2 AND remaining_micro = 0
-            AND escrow_id IS NOT NULL AND escrow_version IS NOT NULL AND escrow_version > 1 AND reserve_transaction_id IS NOT NULL
-            AND cancel_idempotency_key IS NULL AND cancel_request_hash IS NULL
-            AND refund_transaction_id IS NULL AND cancel_refunded_micro IS NULL
-            AND cancel_task_version IS NULL AND refunded_at IS NULL)
-    )
+        (tenant_id, client_id, owner_jiacn, payer_principal_type, payer_principal_id, funding_status, id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin
   COMMENT='One additive V0 funded-bounty projection per task';

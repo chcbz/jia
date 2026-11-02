@@ -24,8 +24,6 @@ class EconomySkillApplicationSchemaMySqlTest {
             "ALTER TABLE economy_skill_actor_root MODIFY actor_id VARCHAR(100) COLLATE utf8mb4_general_ci NOT NULL",
             "ALTER TABLE economy_skill_managed_credential DROP INDEX uk_skill_credential_key, ADD KEY uk_skill_credential_key(api_key_id)",
             "ALTER TABLE economy_skill_managed_credential ALTER INDEX uk_skill_credential_key INVISIBLE",
-            "ALTER TABLE economy_skill_agent_version DROP CHECK chk_skill_agent_version, ADD CONSTRAINT chk_skill_agent_version CHECK(version>=0)",
-            "ALTER TABLE economy_skill_agent_version ALTER CHECK chk_skill_agent_version NOT ENFORCED",
             "ALTER TABLE economy_skill_managed_credential ADD COLUMN unapproved VARCHAR(10) NULL");
         for(int n=0;n<mutations.size();n++) {
             var jdbc=fixture.newDatabase("drift"+n).jdbc();var init=new EconomySkillApplicationSchemaInitializer(jdbc);

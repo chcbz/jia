@@ -49,18 +49,7 @@ public final class ArchiveQuestionSchemaCatalog {
                         fk("fk_archive_question_edition", List.of("edition_id"),
                                 "archive_edition", List.of("edition_id")),
                         fk("fk_archive_question_block", List.of("edition_id", "block_id"),
-                                "archive_chapter", List.of("edition_id", "block_id"))),
-                checks(
-                        "chk_archive_question_single_tenant", "tenant_id = '0'",
-                        "chk_archive_question_id", "regexp_like(question_id,'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$')",
-                        "chk_archive_question_status", "status in ('QUEUED','RUNNING','SUCCEEDED','FAILED_RETRYABLE','FAILED_FINAL')",
-                        "chk_archive_question_content", "regexp_like(edition_manifest_sha256,'^[0-9a-f]{64}$') and (block_type in ('PREFACE','CHAPTER')) and json_valid(anchor_json)",
-                        "chk_archive_question_responder", "(responder_id='archive-clerk-v1') and (responder_name=convert(0xe6a188e58db7e4b9a6e5908f using utf8mb4)) and (responder_mode='fallback')",
-                        "chk_archive_question_lengths", "(octet_length(selected_text) between 1 and 8192) and (octet_length(question_text) between 1 and 8192) and (octet_length(answer)<=131072)",
-                        "chk_archive_question_counters", "(retry_count between 0 and 2) and (version>=1) and (current_sequence>=1)",
-                        "chk_archive_question_terminal", "((status in ('SUCCEEDED','FAILED_FINAL')) and (completed_at is not null)) or ((status in ('QUEUED','RUNNING','FAILED_RETRYABLE')) and (completed_at is null))",
-                        "chk_archive_question_error", "((status in ('FAILED_RETRYABLE','FAILED_FINAL')) and (last_error_code is not null) and regexp_like(last_error_code,'^[A-Z][A-Z0-9_]{0,63}$')) or ((status in ('QUEUED','RUNNING','SUCCEEDED')) and (last_error_code is null))",
-                        "chk_archive_question_queued_answer", "(status<>'QUEUED') or (answer='')")));
+                                "archive_chapter", List.of("edition_id", "block_id")))));
         tables.put("archive_question_mutation", table(
                 columns(
                         autoId(), owner("tenant_id"), owner("client_id"), owner("owner_jiacn"),
@@ -84,17 +73,7 @@ public final class ArchiveQuestionSchemaCatalog {
                                 "question_row_id", "tenant_id", "client_id", "owner_jiacn", "question_id")),
                 foreignKeys(fk("fk_archive_question_mutation_question",
                         List.of("question_row_id", "tenant_id", "client_id", "owner_jiacn", "question_id"),
-                        "archive_question", List.of("row_id", "tenant_id", "client_id", "owner_jiacn", "question_id"))),
-                checks(
-                        "chk_archive_question_mutation_single_tenant", "tenant_id = '0'",
-                        "chk_archive_question_mutation_id", "regexp_like(question_id,'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$')",
-                        "chk_archive_question_mutation_method", "http_method in ('PUT','POST')",
-                        "chk_archive_question_mutation_path", "regexp_like(canonical_path,'^[!-~]{1,512}$') and (((http_method='PUT') and (canonical_path=concat('/archive/v1/me/questions/',question_id))) or ((http_method='POST') and (canonical_path=concat('/archive/v1/me/questions/',question_id,'/retry'))))",
-                        "chk_archive_question_mutation_hash", "regexp_like(request_sha256,'^[0-9a-f]{64}$')",
-                        "chk_archive_question_mutation_state", "state in ('PENDING','COMPLETED')",
-                        "chk_archive_question_mutation_key", "regexp_like(idempotency_key,'^[!-~]{1,128}$')",
-                        "chk_archive_question_mutation_response", "((state='PENDING') and (question_row_id is null) and (response_status is null) and (response_content_type is null) and (response_body is null)) or ((state='COMPLETED') and (question_row_id is not null) and (response_status=202) and (response_content_type is not null) and (response_body is not null))",
-                        "chk_archive_question_mutation_expiry", "expires_at>=created_at")));
+                        "archive_question", List.of("row_id", "tenant_id", "client_id", "owner_jiacn", "question_id")))));
         tables.put("archive_question_event", table(
                 columns(
                         autoId(), owner("tenant_id"), owner("client_id"), owner("owner_jiacn"),
@@ -111,13 +90,7 @@ public final class ArchiveQuestionSchemaCatalog {
                                 "tenant_id", "client_id", "owner_jiacn", "question_id", "sequence", "row_id")),
                 foreignKeys(fk("fk_archive_question_event_question",
                         List.of("tenant_id", "client_id", "owner_jiacn", "question_id"),
-                        "archive_question", List.of("tenant_id", "client_id", "owner_jiacn", "question_id"))),
-                checks(
-                        "chk_archive_question_event_single_tenant", "tenant_id = '0'",
-                        "chk_archive_question_event_id", "regexp_like(question_id,'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$')",
-                        "chk_archive_question_event_sequence", "sequence>=1",
-                        "chk_archive_question_event_type", "event_type in ('QUESTION_QUEUED','QUESTION_RUNNING','ANSWER_DELTA','QUESTION_SUCCEEDED','QUESTION_FAILED_RETRYABLE','QUESTION_FAILED_FINAL','QUESTION_RETRY_QUEUED')",
-                        "chk_archive_question_event_payload", "json_valid(payload_json) and (octet_length(payload_json) between 2 and 32768)")));
+                        "archive_question", List.of("tenant_id", "client_id", "owner_jiacn", "question_id")))));
         tables.put("archive_outbox", table(
                 columns(
                         autoId(), owner("tenant_id"), owner("client_id"), owner("owner_jiacn"),
@@ -138,14 +111,7 @@ public final class ArchiveQuestionSchemaCatalog {
                         idx("idx_archive_outbox_publish", false, "published_sequence", "row_id")),
                 foreignKeys(fk("fk_archive_outbox_question",
                         List.of("tenant_id", "client_id", "owner_jiacn", "question_id"),
-                        "archive_question", List.of("tenant_id", "client_id", "owner_jiacn", "question_id"))),
-                checks(
-                        "chk_archive_outbox_single_tenant", "tenant_id = '0'",
-                        "chk_archive_outbox_id", "regexp_like(question_id,'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$')",
-                        "chk_archive_outbox_state", "state in ('READY','LEASED','WAITING_RETRY','DONE')",
-                        "chk_archive_outbox_counters", "(attempt_count between 0 and 3) and (fencing_token>=0) and (published_sequence>=0)",
-                        "chk_archive_outbox_lease", "((state='LEASED') and (lease_until is not null)) or ((state in ('READY','WAITING_RETRY','DONE')) and (lease_until is null))",
-                        "chk_archive_outbox_error", "((state in ('READY','LEASED')) and (last_error_code is null)) or ((state='WAITING_RETRY') and (last_error_code is not null) and regexp_like(last_error_code,'^[A-Z][A-Z0-9_]{0,63}$')) or ((state='DONE') and ((last_error_code is null) or regexp_like(last_error_code,'^[A-Z][A-Z0-9_]{0,63}$')))")));
+                        "archive_question", List.of("tenant_id", "client_id", "owner_jiacn", "question_id")))));
         return new ArchiveSchemaSnapshot(tables);
     }
 
@@ -163,38 +129,7 @@ public final class ArchiveQuestionSchemaCatalog {
             wanted.indexes().forEach((name, value) -> compare(tableName + "." + name, value, found.indexes().get(name)));
             compareMapKeys(tableName + ".foreignKeys", wanted.foreignKeys(), found.foreignKeys());
             wanted.foreignKeys().forEach((name, value) -> compare(tableName + "." + name, value, found.foreignKeys().get(name)));
-            compareMapKeys(tableName + ".checks", wanted.checks(), found.checks());
-            wanted.checks().forEach((name, value) -> {
-                ArchiveSchemaSnapshot.CheckSnapshot foundCheck = found.checks().get(name);
-                compare(tableName + "." + name + ".clause",
-                        normalizeCheck(value.clause()), normalizeCheck(foundCheck.clause()));
-                compare(tableName + "." + name + ".enforced", value.enforced(), foundCheck.enforced());
-            });
         }
-    }
-
-    static String normalizeCheck(String value) {
-        String normalized = ArchiveSchemaCatalog.normalizeCheck(value);
-        if (normalized == null) return null;
-        String alias = "octet_length(";
-        StringBuilder out = new StringBuilder(normalized.length());
-        boolean quoted = false;
-        for (int index = 0; index < normalized.length(); index++) {
-            char current = normalized.charAt(index);
-            if (quoted) {
-                out.append(current);
-                if (current == '\\' && index + 1 < normalized.length()) out.append(normalized.charAt(++index));
-                else if (current == '\'' && index + 1 < normalized.length() && normalized.charAt(index + 1) == '\'')
-                    out.append(normalized.charAt(++index));
-                else if (current == '\'') quoted = false;
-            } else if (current == '\'') {
-                quoted = true; out.append(current);
-            } else if (normalized.startsWith(alias, index)
-                    && (index == 0 || !identifierPart(normalized.charAt(index - 1)))) {
-                out.append("length("); index += alias.length() - 1;
-            } else out.append(current);
-        }
-        return out.toString();
     }
 
     private static boolean identifierPart(char value) {
@@ -203,10 +138,9 @@ public final class ArchiveQuestionSchemaCatalog {
     private static ArchiveSchemaSnapshot.TableSnapshot table(
             Map<String, ArchiveSchemaSnapshot.ColumnSnapshot> columns,
             Map<String, ArchiveSchemaSnapshot.IndexSnapshot> indexes,
-            Map<String, ArchiveSchemaSnapshot.ForeignKeySnapshot> foreignKeys,
-            Map<String, ArchiveSchemaSnapshot.CheckSnapshot> checks) {
+            Map<String, ArchiveSchemaSnapshot.ForeignKeySnapshot> foreignKeys) {
         return new ArchiveSchemaSnapshot.TableSnapshot("InnoDB", "utf8mb4_0900_bin",
-                columns, indexes, foreignKeys, checks);
+                columns, indexes, foreignKeys);
     }
     @SafeVarargs private static Map<String, ArchiveSchemaSnapshot.ColumnSnapshot> columns(
             Map.Entry<String, ArchiveSchemaSnapshot.ColumnSnapshot>... entries) {
@@ -253,11 +187,7 @@ public final class ArchiveQuestionSchemaCatalog {
     private static Map.Entry<String, ArchiveSchemaSnapshot.ForeignKeySnapshot> fk(String name, List<String> columns, String table, List<String> referencedColumns) {
         return Map.entry(name, new ArchiveSchemaSnapshot.ForeignKeySnapshot(columns, table, referencedColumns, "RESTRICT", "RESTRICT"));
     }
-    private static Map<String, ArchiveSchemaSnapshot.CheckSnapshot> checks(String... namesAndClauses) {
-        LinkedHashMap<String, ArchiveSchemaSnapshot.CheckSnapshot> values = new LinkedHashMap<>();
-        for (int i = 0; i < namesAndClauses.length; i += 2) values.put(namesAndClauses[i], new ArchiveSchemaSnapshot.CheckSnapshot(namesAndClauses[i + 1], true));
-        return values;
-    }
+
     @SafeVarargs private static <T> Map<String, T> linked(Map.Entry<String, T>... entries) {
         LinkedHashMap<String, T> values = new LinkedHashMap<>();
         for (Map.Entry<String, T> entry : entries) values.put(entry.getKey(), entry.getValue());

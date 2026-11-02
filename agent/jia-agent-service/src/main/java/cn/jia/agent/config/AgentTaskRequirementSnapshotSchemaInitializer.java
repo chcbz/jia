@@ -14,14 +14,7 @@ import java.util.Objects;
 @org.springframework.context.annotation.Profile("schema-maintenance")
 public final class AgentTaskRequirementSnapshotSchemaInitializer implements InitializingBean {
     private static final String TABLE = "agent_task_requirement_snapshot";
-    private static final Map<String, String> CHECKS = Map.of(
-            "chk_atrs_scope",
-            "(`owner_jiacn` <> _utf8mb4\\'0\\')",
-            "chk_atrs_content",
-            "((`revision` >= 1) and (`task_version_at_confirmation` >= 0) and "
-                    + "(char_length(`title`) > 0) and regexp_like(`content_sha256`,"
-                    + "_utf8mb4\\'^[0-9a-f]{64}$\\') and (`source` in "
-                    + "(_utf8mb4\\'CREATE\\',_utf8mb4\\'RECONFIRM\\')) and (`created_at` > 0))");
+
     private final JdbcTemplate jdbc;
 
     public AgentTaskRequirementSnapshotSchemaInitializer(JdbcTemplate jdbc) {
@@ -85,29 +78,6 @@ public final class AgentTaskRequirementSnapshotSchemaInitializer implements Init
         index(indexes,"uk_atrs_confirmation",0,List.of("tenant_id","client_id","owner_jiacn","task_id","confirmation_id"));
         index(indexes,"idx_atrs_task_latest",1,List.of("tenant_id","client_id","owner_jiacn","task_id","revision","id"));
         if (indexes.size()!=17) throw new IllegalStateException("Snapshot extra index drift");
-        var checks = jdbc.queryForList("SELECT tc.constraint_name,tc.enforced,cc.check_clause "
-                + "FROM information_schema.table_constraints tc JOIN information_schema.check_constraints cc "
-                + "ON cc.constraint_catalog=tc.constraint_catalog AND cc.constraint_schema=tc.constraint_schema "
-                + "AND cc.constraint_name=tc.constraint_name WHERE tc.constraint_schema=DATABASE() "
-                + "AND tc.table_name=? AND tc.constraint_type='CHECK'", TABLE);
-        if (checks.size()!=CHECKS.size()) throw new IllegalStateException("Snapshot CHECK drift");
-        for (Map.Entry<String, String> expected : CHECKS.entrySet()) {
-            var row=checks.stream().filter(r -> expected.getKey().equals(r.get("constraint_name"))).findFirst()
-                    .orElseThrow(() -> new IllegalStateException("Snapshot CHECK absent: "+expected.getKey()));
-            String clause = Objects.toString(row.get("check_clause"), "");
-            // Installing code must not require an unrelated production DDL rollout.
-            boolean legacyScope = "chk_atrs_scope".equals(expected.getKey())
-                    && "((`tenant_id` = _utf8mb4\\'0\\') and (`owner_jiacn` <> _utf8mb4\\'0\\'))".equals(clause);
-            // MySQL 8.0.21 converts this ASCII-column regex literal from utf8mb4
-            // to ascii while rebuilding constraints during ALTER TABLE. Accept
-            // only the two complete catalog expressions, not operator fragments.
-            boolean asciiRegexContent = "chk_atrs_content".equals(expected.getKey())
-                    && expected.getValue().replace("_utf8mb4\\'^[0-9a-f]{64}$\\'",
-                            "_ascii\\'^[0-9a-f]{64}$\\'").equals(clause);
-            if (!"YES".equalsIgnoreCase(Objects.toString(row.get("enforced"), ""))
-                    || !(expected.getValue().equals(clause) || legacyScope || asciiRegexContent))
-                throw new IllegalStateException("Snapshot CHECK drift: "+expected.getKey());
-        }
     }
     static void index(List<Map<String,Object>> rows,String name,int nonUnique,List<String> expected) {
         var matching=rows.stream().filter(r -> name.equals(r.get("index_name"))).toList();

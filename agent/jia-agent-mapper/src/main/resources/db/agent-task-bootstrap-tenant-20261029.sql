@@ -11,6 +11,3 @@ PREPARE task_bootstrap_tenant_stmt FROM @task_bootstrap_tenant_ddl;
 EXECUTE task_bootstrap_tenant_stmt;
 DEALLOCATE PREPARE task_bootstrap_tenant_stmt;
 -- One atomic table ALTER retains the owner protection; safe to repeat after completion.
-ALTER TABLE agent_task_requirement_snapshot
-  DROP CHECK chk_atrs_scope,
-  ADD CONSTRAINT chk_atrs_scope CHECK (owner_jiacn<>'0');

@@ -29,17 +29,6 @@ CREATE TABLE IF NOT EXISTS agent_selected_output_finalization (
   updated_at BIGINT NOT NULL,
   PRIMARY KEY (tenant_id,client_id,owner_jiacn,operation_id),
   UNIQUE KEY uk_asof_delivery (tenant_id,client_id,owner_jiacn,delivery_id),
-  KEY idx_asof_task (tenant_id,client_id,owner_jiacn,task_id,phase),
-  CONSTRAINT chk_asof_contract CHECK (contract_version IN (1,2)),
-  CONSTRAINT chk_asof_versions CHECK (expected_task_version BETWEEN 0 AND 9007199254740991
-    AND expected_assignment_revision BETWEEN 0 AND 9007199254740991
-    AND conversation_generation BETWEEN 1 AND 9007199254740991
-    AND grant_version BETWEEN 1 AND 9007199254740991 AND version>=0),
-  CONSTRAINT chk_asof_digest CHECK (CHAR_LENGTH(immutable_digest)=64 AND CHAR_LENGTH(source_facts_digest)=64),
-  CONSTRAINT chk_asof_phase CHECK (phase IN ('CLAIMING','LEASED','READY','SUBMITTED','ACCEPTED')),
-  CONSTRAINT chk_asof_lease CHECK ((phase='CLAIMING' AND lease_token IS NULL AND lease_work_item_version IS NULL)
-    OR (phase IN ('LEASED','READY') AND lease_token IS NOT NULL
-      AND lease_work_item_version IS NOT NULL AND lease_work_item_version>=0)
-    OR (phase IN ('SUBMITTED','ACCEPTED') AND lease_token IS NULL AND lease_work_item_version IS NOT NULL))
+  KEY idx_asof_task (tenant_id,client_id,owner_jiacn,task_id,phase)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin
  COMMENT='Server-private authority for selected committed-output promotion and recovery';

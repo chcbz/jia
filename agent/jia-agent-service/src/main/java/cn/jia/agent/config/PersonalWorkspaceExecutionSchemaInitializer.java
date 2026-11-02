@@ -18,16 +18,7 @@ import java.util.Objects;
 public final class PersonalWorkspaceExecutionSchemaInitializer implements InitializingBean {
     static final String RESOURCE = "db/agent-personal-workspace-v1_11-executions.sql";
     static final String OUTPUT_MIME_MIGRATION_RESOURCE = "db/agent-personal-workspace-v1_13-execution-output-mime.sql";
-    static final String TEXT_OUTPUT_MIME_RESOURCE = "db/agent-personal-workspace-v1_17-text-output-mime.sql";
-    static final String DOCUMENT_MIMES = "'image/png','image/jpeg','application/pdf','application/vnd.openxmlformats-officedocument.wordprocessingml.document','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','application/vnd.openxmlformats-officedocument.presentationml.presentation'";
-    static final String OUTPUT_MIMES = DOCUMENT_MIMES + ",'text/plain'";
-    static final String MIME_CHECK_QUERY = """
-            SELECT tc.enforced, cc.check_clause FROM information_schema.table_constraints tc
-            JOIN information_schema.check_constraints cc ON cc.constraint_schema=tc.constraint_schema
-              AND cc.constraint_name=tc.constraint_name AND cc.constraint_catalog=tc.constraint_catalog
-            WHERE tc.constraint_schema=DATABASE() AND tc.table_name='agent_personal_workspace_execution'
-              AND tc.constraint_type='CHECK' AND tc.constraint_name='chk_pwex_output_mime'
-            """;
+
     static final String TERMINAL_STATE_MIGRATION_RESOURCE = "db/agent-personal-workspace-v1_13-execution-terminal-state.sql";
     static final String TASK_EXECUTION_MIGRATION_RESOURCE = "db/agent-personal-workspace-v1_13-task-execution.sql";
     static final String TASK_PUBLICATION_MIGRATION_RESOURCE = "db/agent-personal-workspace-v1_13-task-publication.sql";
@@ -45,7 +36,6 @@ public final class PersonalWorkspaceExecutionSchemaInitializer implements Initia
         else if (!present.equals(TABLES)) throw new IllegalStateException("Personal workspace execution schema is partial: " + present);
         if (!presentTables().equals(TABLES)) throw new IllegalStateException("Personal workspace execution schema is unavailable");
         migrateOutputMime();
-        migrateTextOutputMime();
         verifyOutputMime();
         migrateTerminalState();
         verifyTerminalState();
@@ -78,7 +68,6 @@ public final class PersonalWorkspaceExecutionSchemaInitializer implements Initia
         String normalized=statement.toLowerCase(Locale.ROOT).replaceAll("\\s+", " ").trim();
         if (!normalized.startsWith("alter table agent_personal_workspace_execution ")
                 || !normalized.contains("add column output_content_mime_type varchar(127) not null default")
-                || !normalized.contains("add constraint chk_pwex_output_mime check")
                 || normalized.contains(" insert ") || normalized.contains(" update ") || normalized.contains(" delete ")
                 || normalized.contains(" drop ") || normalized.contains(" create trigger ") || !statement.endsWith(";")) {
             throw new IllegalStateException("Unsafe execution output MIME migration");
@@ -95,41 +84,6 @@ public final class PersonalWorkspaceExecutionSchemaInitializer implements Initia
         else if (present != 1) throw new IllegalStateException("Execution output MIME column is ambiguous");
     }
 
-    private static String canonicalMimeCheck(String clause) {
-        return clause.replace("_utf8mb4", "").replace("`", "").replace("\\'", "'")
-                .replaceAll("\\s+", "").replace("(", "").replace(")", "");
-    }
-    private String enforcedMimeCheck() {
-        var rows=jdbc.queryForList(MIME_CHECK_QUERY);
-        if (rows.size()!=1 || !"YES".equalsIgnoreCase(Objects.toString(rows.getFirst().get("enforced"), "")))
-            throw new IllegalStateException("Execution output MIME CHECK missing or not enforced");
-        return canonicalMimeCheck(Objects.toString(rows.getFirst().get("check_clause"), ""));
-    }
-    static String textOutputMimeMigrationStatement() {
-        try {
-            String statement=new ClassPathResource(TEXT_OUTPUT_MIME_RESOURCE)
-                    .getContentAsString(StandardCharsets.UTF_8).lines()
-                    .filter(line -> !line.stripLeading().startsWith("--"))
-                    .reduce("", (a,b)->a+b+'\n').strip();
-            String expected="ALTER TABLE agent_personal_workspace_execution DROP CHECK chk_pwex_output_mime, "
-                    + "ADD CONSTRAINT chk_pwex_output_mime CHECK (output_content_mime_type IN ("+OUTPUT_MIMES+"));";
-            if (!statement.replaceAll("\\s+", " ").equals(expected))
-                throw new IllegalStateException("Unsafe text output MIME migration");
-            return statement.substring(0,statement.length()-1);
-        } catch (IOException failure) { throw new IllegalStateException("Text output MIME migration missing",failure); }
-    }
-    void migrateTextOutputMime() {
-        String actual=enforcedMimeCheck();
-        if (actual.equals(canonicalMimeCheck(SkillExecutionSchemaInitializer.MIME_CATALOG_CHECK))) return;
-        String required=canonicalMimeCheck("output_content_mime_type in ("+OUTPUT_MIMES+")");
-        if (actual.equals(required)) return;
-        if (!actual.equals(canonicalMimeCheck("output_content_mime_type in ("+DOCUMENT_MIMES+")")))
-            throw new IllegalStateException("Execution output MIME CHECK drifted");
-        jdbc.execute(textOutputMimeMigrationStatement());
-        if (!enforcedMimeCheck().equals(required))
-            throw new IllegalStateException("Text output MIME CHECK migration not applied");
-    }
-
     static String terminalStateMigrationStatement() {
         final String source;
         try { source=new ClassPathResource(TERMINAL_STATE_MIGRATION_RESOURCE).getContentAsString(StandardCharsets.UTF_8); }
@@ -140,9 +94,6 @@ public final class PersonalWorkspaceExecutionSchemaInitializer implements Initia
                 || !normalized.contains("add column failure_code varchar(64)")
                 || !normalized.contains("add column failure_message varchar(255)")
                 || !normalized.contains("add column failed_at bigint")
-                || !normalized.contains("drop check chk_pwex_state")
-                || !normalized.contains("add constraint chk_pwex_state check")
-                || !normalized.contains("add constraint chk_pwex_failure check")
                 || normalized.contains(" insert ") || normalized.contains(" update ") || normalized.contains(" delete ")
                 || normalized.contains(" create trigger ") || !statement.endsWith(";")) {
             throw new IllegalStateException("Unsafe execution terminal-state migration");
@@ -195,9 +146,6 @@ public final class PersonalWorkspaceExecutionSchemaInitializer implements Initia
                 || !normalized.contains("add column lease_token varchar(100)")
                 || !normalized.contains("add column lease_work_item_version bigint")
                 || !normalized.contains("add column lease_expires_at bigint")
-                || !normalized.contains("drop check chk_pwex_state")
-                || !normalized.contains("add constraint chk_pwex_mode check")
-                || !normalized.contains("add constraint chk_pwex_task_bridge check")
                 || normalized.contains(" insert ") || normalized.contains(" update ") || normalized.contains(" delete ")
                 || normalized.contains(" create trigger ") || !statement.endsWith(";")) {
             throw new IllegalStateException("Unsafe task execution migration");
@@ -247,8 +195,6 @@ public final class PersonalWorkspaceExecutionSchemaInitializer implements Initia
                 || !normalized.contains("add column publication_state varchar(16) not null default 'pending'")
                 || !normalized.contains("add column publication_revision bigint not null default 0")
                 || !normalized.contains("add column publication_failure_code varchar(64)")
-                || !normalized.contains("add constraint chk_pwexo_publication_state check")
-                || !normalized.contains("add constraint chk_pwexo_publication_mapping check")
                 || normalized.contains(" insert ") || normalized.contains(" update ") || normalized.contains(" delete ")
                 || normalized.contains(" drop ") || normalized.contains(" create trigger ") || !statement.endsWith(";")) {
             throw new IllegalStateException("Unsafe task publication migration");
@@ -285,11 +231,11 @@ public final class PersonalWorkspaceExecutionSchemaInitializer implements Initia
         int executionColumns = requiredColumnCount("agent_personal_workspace_execution",
                 "'task_grant_id','task_grant_version','assignment_revision','permitted_operation'");
         if (executionColumns == 0) jdbc.execute(conversationMigrationStatement(CONVERSATION_EXECUTION_RESOURCE,
-                "agent_personal_workspace_execution", "drop check chk_pwex_mode", "drop check chk_pwex_task_bridge"));
+                "agent_personal_workspace_execution"));
         else if (executionColumns != 4) throw new IllegalStateException("Conversation execution schema is partial");
         int outputColumns = requiredColumnCount("agent_personal_workspace_execution_output", "'output_purpose'");
         if (outputColumns == 0) jdbc.execute(conversationMigrationStatement(CONVERSATION_OUTPUT_RESOURCE,
-                "agent_personal_workspace_execution_output", "drop check chk_pwexo_commit", "add constraint chk_pwexo_conversation"));
+                "agent_personal_workspace_execution_output"));
         else if (outputColumns != 1) throw new IllegalStateException("Conversation output schema is partial");
     }
     private int requiredColumnCount(String table, String columns) {
@@ -299,7 +245,7 @@ public final class PersonalWorkspaceExecutionSchemaInitializer implements Initia
         if (count==null) throw new IllegalStateException("Conversation schema discovery unavailable");
         return count;
     }
-    static String conversationMigrationStatement(String resource,String table,String drop,String add) {
+    static String conversationMigrationStatement(String resource,String table) {
         if (!List.of(CONVERSATION_EXECUTION_RESOURCE,CONVERSATION_OUTPUT_RESOURCE).contains(resource)
                 || !List.of("agent_personal_workspace_execution","agent_personal_workspace_execution_output").contains(table))
             throw new IllegalArgumentException("Conversation migration resource invalid");
@@ -309,15 +255,14 @@ public final class PersonalWorkspaceExecutionSchemaInitializer implements Initia
         String statement=source.lines().filter(line->!line.stripLeading().startsWith("--"))
                 .reduce("",(a,b)->a+b+'\n').strip();
         String lower=statement.toLowerCase(Locale.ROOT).replaceAll("\\s+"," ");
-        if (!lower.startsWith("alter table "+table+" ") || !lower.contains(drop)
-                || !lower.contains(add) || !lower.contains("add constraint chk_pwex")
+        if (!lower.startsWith("alter table "+table+" ")
                 || lower.contains(" insert ") || lower.contains(" update ") || lower.contains(" delete ")
                 || lower.contains(" drop table ") || lower.contains(" create trigger ")
                 || !statement.endsWith(";") || statement.substring(0,statement.length()-1).contains(";"))
             throw new IllegalStateException("Unsafe conversation migration");
         return statement.substring(0,statement.length()-1);
     }
-    /** Single atomic ALTER, resumed by column discovery; missing/disabled CHECK fails closed. */
+    /** Single atomic ALTER, resumed by column discovery. */
     private void migrateConversationLease() {
         int columns=requiredColumnCount("agent_personal_workspace_execution",
                 "'conversation_lease_token','conversation_lease_runtime_id','conversation_lease_version','conversation_lease_expires_at'");
@@ -336,7 +281,6 @@ public final class PersonalWorkspaceExecutionSchemaInitializer implements Initia
                 || !normalized.contains("add column conversation_lease_runtime_id varchar(100)")
                 || !normalized.contains("add column conversation_lease_version bigint not null default 0")
                 || !normalized.contains("add column conversation_lease_expires_at bigint")
-                || !normalized.contains("add constraint chk_pwex_conversation_lease check")
                 || normalized.contains(" insert ") || normalized.contains(" update ") || normalized.contains(" delete ")
                 || normalized.contains(" drop ") || normalized.contains(" create trigger ")
                 || !statement.endsWith(";") || statement.substring(0,statement.length()-1).contains(";"))
@@ -358,7 +302,6 @@ public final class PersonalWorkspaceExecutionSchemaInitializer implements Initia
                     OR conversation_lease_expires_at IS NOT NULL))
             """, Integer.class);
         if (invalid==null || invalid!=0) throw new IllegalStateException("Conversation lease row drift");
-        requireCheck("agent_personal_workspace_execution","chk_pwex_conversation_lease","conversation_lease_version");
     }
 
     /** Existing execution rows remain unchanged; absent/partial migration fails closed. */
@@ -379,7 +322,6 @@ public final class PersonalWorkspaceExecutionSchemaInitializer implements Initia
         if (!lower.startsWith("alter table agent_personal_workspace_execution ")
                 || !lower.contains("add column conversation_provider_started_at bigint")
                 || !lower.contains("add column conversation_provider_lease_version bigint")
-                || !lower.contains("add constraint chk_pwex_provider_start check")
                 || lower.contains(" insert ") || lower.contains(" update ") || lower.contains(" delete ")
                 || lower.contains(" drop ") || lower.contains(" create trigger ")
                 || !statement.endsWith(";") || statement.substring(0,statement.length()-1).contains(";"))
@@ -397,7 +339,6 @@ public final class PersonalWorkspaceExecutionSchemaInitializer implements Initia
                       OR conversation_provider_lease_version>conversation_lease_version))
             """,Integer.class);
         if (invalid==null || invalid!=0) throw new IllegalStateException("Conversation Provider START row drift");
-        requireCheck("agent_personal_workspace_execution","chk_pwex_provider_start","conversation_provider_started_at");
     }
 
     void verifyConversationMode() {
@@ -419,23 +360,6 @@ public final class PersonalWorkspaceExecutionSchemaInitializer implements Initia
                        OR artifact_id IS NOT NULL OR artifact_version IS NOT NULL OR formal_delivery_id IS NOT NULL))
                 """,Integer.class);
         if (badOutputs==null || badOutputs!=0) throw new IllegalStateException("Conversation output row drift");
-        requireCheck("agent_personal_workspace_execution","chk_pwex_mode","conversation");
-        requireCheck("agent_personal_workspace_execution","chk_pwex_task_bridge","task_grant_id");
-        requireCheck("agent_personal_workspace_execution","chk_pwex_conversation_grant","assignment_revision");
-        requireCheck("agent_personal_workspace_execution_output","chk_pwexo_commit","output_purpose");
-        requireCheck("agent_personal_workspace_execution_output","chk_pwexo_conversation","formal_delivery_id");
-    }
-    private void requireCheck(String table,String name,String fragment) {
-        var rows=jdbc.queryForList("""
-                SELECT tc.enforced, cc.check_clause FROM information_schema.table_constraints tc
-                JOIN information_schema.check_constraints cc ON cc.constraint_schema=tc.constraint_schema
-                   AND cc.constraint_name=tc.constraint_name AND cc.constraint_catalog=tc.constraint_catalog
-                WHERE tc.constraint_schema=DATABASE() AND tc.table_name=?
-                  AND tc.constraint_type='CHECK' AND tc.constraint_name=?
-                """,table,name);
-        if (rows.size()!=1 || !"YES".equalsIgnoreCase(Objects.toString(rows.getFirst().get("enforced"),""))
-                || !Objects.toString(rows.getFirst().get("check_clause"),"").toLowerCase(Locale.ROOT).contains(fragment))
-            throw new IllegalStateException("Conversation CHECK missing or drifted: "+name);
     }
 
     private void verifyOutputMime() {

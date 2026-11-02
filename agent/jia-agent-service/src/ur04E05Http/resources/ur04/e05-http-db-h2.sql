@@ -300,7 +300,6 @@ CREATE TABLE agent_task_event (
 
 -- Production task-event-schema.sql: agent_task_event; H2-only syntax.
 
-
 -- Production agent-work-item-reassignment-e05.sql: agent_work_item_reassignment; H2-only syntax.
 CREATE TABLE agent_work_item_reassignment (
     owner_jiacn VARCHAR(50) NOT NULL,
@@ -331,21 +330,7 @@ CREATE TABLE agent_work_item_reassignment (
     update_time                 BIGINT NOT NULL,
     PRIMARY KEY (id),
     UNIQUE (tenant_id, client_id, reassignment_id),
-    UNIQUE (tenant_id, client_id, command_id),
-
-    CONSTRAINT chk_work_item_reassignment_digest
-        CHECK (CHAR_LENGTH(request_sha256)=64 AND CHAR_LENGTH(lease_fence_sha256)=64),
-    CONSTRAINT chk_work_item_reassignment_versions
-        CHECK (expected_work_item_version >= 0
-               AND result_work_item_version = expected_work_item_version + 1
-               AND task_version >= 0),
-    CONSTRAINT chk_work_item_reassignment_agents
-        CHECK (previous_agent_id <> target_agent_id),
-    CONSTRAINT chk_work_item_reassignment_lease
-        CHECK (previous_lease_until > 0 AND lease_until > previous_lease_until
-               AND attempt_count > 0 AND attempt_count < max_attempts),
-    CONSTRAINT chk_work_item_reassignment_immutable_clock
-        CHECK (create_time > 0 AND update_time = create_time)
+    UNIQUE (tenant_id, client_id, command_id)
 );
 
 CREATE TRIGGER ur04_ack_update AFTER UPDATE ON agent_command_delivery FOR EACH ROW CALL 'cn.jia.agent.acceptance.ur04.Ur04E05HttpFixture$SqlProbe';

@@ -58,8 +58,7 @@ class AgentCommandTransportSchemaTest {
         assertFalse(delivery.contains(
                 "unique key uk_delivery_command (tenant_id, client_id, command_id)"));
         assertTrue(delivery.contains("owner_jiacn varchar(50) not null"));
-        assertTrue(delivery.contains(
-                "constraint chk_delivery_owner_nonempty check (octet_length(owner_jiacn) between 1 and 50)"));
+
         assertTrue(outbox.contains(
                 "unique key uk_outbox_event_id (tenant_id, client_id, event_id)"));
         assertTrue(inbox.contains(
@@ -143,7 +142,6 @@ class AgentCommandTransportSchemaTest {
         }
         assertFalse(outbox.contains("confirm_or_return"));
     }
-
 
     @Test
     void operationAuditIsPayloadFreeAppendOnlyShapedAndExactScoped() throws IOException {

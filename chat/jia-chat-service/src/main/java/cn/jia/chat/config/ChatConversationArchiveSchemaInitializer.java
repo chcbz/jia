@@ -64,38 +64,6 @@ public final class ChatConversationArchiveSchemaInitializer implements Initializ
             "idx_chat_archive_conversation", new Index(false,
                     List.of("tenant_id", "owner_jiacn", "client_id", "conversation_id",
                             "updated_at", "operation_id")));
-    static final Map<String, String> CHECKS = Map.ofEntries(
-            Map.entry("chk_chat_archive_asset_revision",
-                    "asset_revision IS NULL OR asset_revision>=1"),
-            Map.entry("chk_chat_archive_generation",
-                    "conversation_generation IS NULL OR conversation_generation>=1"),
-            Map.entry("chk_chat_archive_key_length",
-                    "CHAR_LENGTH(idempotency_key) BETWEEN 8 AND 160"),
-            Map.entry("chk_chat_archive_request_sha",
-                    "request_sha256 REGEXP '^[0-9a-f]{64}$'"),
-            Map.entry("chk_chat_archive_state",
-                    "state IN ('PENDING','SAVING','SAVED','PARTIAL_FAILED')"),
-            Map.entry("chk_chat_archive_row_revision", "row_revision>=1"),
-            Map.entry("chk_chat_archive_source_union", """
-                    ((source_kind='assetRef' AND asset_id IS NOT NULL AND asset_revision>=1
-                      AND message_id IS NULL AND message_revision IS NULL
-                      AND selection_start_code_point IS NULL AND selection_end_code_point IS NULL
-                      AND source_sha256 IS NULL AND source_snapshot_key IS NULL AND source_text IS NULL)
-                    OR
-                    (source_kind='textSelection' AND asset_id IS NULL AND asset_revision IS NULL
-                      AND conversation_generation>=1
-                      AND message_id REGEXP '^[1-9][0-9]{0,18}$' AND message_revision>=1
-                      AND selection_start_code_point>=0
-                      AND selection_end_code_point>selection_start_code_point
-                      AND source_sha256 REGEXP '^[0-9a-f]{64}$'
-                      AND source_snapshot_key REGEXP '^[0-9a-f]{64}$'
-                      AND source_text IS NOT NULL AND OCTET_LENGTH(source_text)>0
-                      AND CHAR_LENGTH(source_text)=selection_end_code_point-selection_start_code_point)) IS TRUE
-                    """),
-            Map.entry("chk_chat_archive_saved_receipt", """
-                    state<>'SAVED' OR (conversation_generation>=1 AND workspace_operation_id IS NOT NULL
-                      AND file_id IS NOT NULL AND file_version>=1)
-                    """));
 
     private final JdbcTemplate jdbc;
     private final ChatSchemaReadiness schemaReadiness;
@@ -180,31 +148,6 @@ public final class ChatConversationArchiveSchemaInitializer implements Initializ
                 throw new IllegalStateException("Conversation archive index drift: " + expected.getKey());
         }
 
-        List<Map<String, Object>> checks = jdbc.queryForList("""
-                SELECT tc.constraint_name,tc.enforced,cc.check_clause
-                FROM information_schema.table_constraints tc
-                JOIN information_schema.check_constraints cc
-                  ON cc.constraint_catalog=tc.constraint_catalog
-                 AND cc.constraint_schema=tc.constraint_schema
-                 AND cc.constraint_name=tc.constraint_name
-                WHERE tc.constraint_schema=DATABASE() AND tc.table_name=?
-                  AND tc.constraint_type='CHECK'
-                """, TABLE);
-        Map<String, String> actualChecks = new LinkedHashMap<>();
-        for (Map<String, Object> row : checks) {
-            String name = text(row, "constraint_name");
-            if (name == null || !"YES".equalsIgnoreCase(text(row, "enforced"))
-                    || actualChecks.put(name, normalizeCheck(text(row, "check_clause"))) != null) {
-                throw new IllegalStateException("Conversation archive check catalog drift");
-            }
-        }
-        if (!actualChecks.keySet().equals(CHECKS.keySet()))
-            throw new IllegalStateException("Conversation archive check set drift");
-        for (Map.Entry<String, String> expected : CHECKS.entrySet()) {
-            if (!normalizeCheck(expected.getValue()).equals(actualChecks.get(expected.getKey())))
-                throw new IllegalStateException("Conversation archive check definition drift: "
-                        + expected.getKey());
-        }
     }
 
     private void requireMySql8() {
@@ -224,48 +167,10 @@ public final class ChatConversationArchiveSchemaInitializer implements Initializ
         return dataSource;
     }
 
-
     // Exact renderings observed from information_schema on isolated MySQL 8.0.21.
     // This is a finite equivalence table for our eight constraints, not a general SQL
     // simplifier: stripping parentheses around AND/OR or arithmetic can accept drift.
     // Unknown spellings fail closed until an actual database rendering proves equivalence.
-    static final Map<String, String> MYSQL8_CHECK_RENDERINGS = Map.ofEntries(
-            Map.entry("chk_chat_archive_asset_revision", """
-                    ((asset_revision is null) or (asset_revision >= 1))
-                    """),
-            Map.entry("chk_chat_archive_generation", """
-                    ((conversation_generation is null) or (conversation_generation >= 1))
-                    """),
-            Map.entry("chk_chat_archive_key_length", """
-                    (char_length(idempotency_key) between 8 and 160)
-                    """),
-            Map.entry("chk_chat_archive_request_sha", """
-                    regexp_like(request_sha256,'^[0-9a-f]{64}$')
-                    """),
-            Map.entry("chk_chat_archive_row_revision", """
-                    (row_revision >= 1)
-                    """),
-            Map.entry("chk_chat_archive_saved_receipt", """
-                    ((state <> 'SAVED') or ((conversation_generation >= 1) and (workspace_operation_id is not null) and (file_id is not null) and (file_version >= 1)))
-                    """),
-            Map.entry("chk_chat_archive_source_union", """
-                    ((((source_kind = 'assetRef') and (asset_id is not null) and (asset_revision >= 1) and (message_id is null) and (message_revision is null) and (selection_start_code_point is null) and (selection_end_code_point is null) and (source_sha256 is null) and (source_snapshot_key is null) and (source_text is null)) or ((source_kind = 'textSelection') and (asset_id is null) and (asset_revision is null) and (conversation_generation >= 1) and regexp_like(message_id,'^[1-9][0-9]{0,18}$') and (message_revision >= 1) and (selection_start_code_point >= 0) and (selection_end_code_point > selection_start_code_point) and regexp_like(source_sha256,'^[0-9a-f]{64}$') and regexp_like(source_snapshot_key,'^[0-9a-f]{64}$') and (source_text is not null) and (length(source_text) > 0) and (char_length(source_text) = (selection_end_code_point - selection_start_code_point)))) is true)
-                    """),
-            Map.entry("chk_chat_archive_state", """
-                    (state in ('PENDING','SAVING','SAVED','PARTIAL_FAILED'))
-                    """));
-
-    static String normalizeCheck(String source) {
-        String canonical = ChatTypedDeliberationSchemaInitializer.canonicalCheck(source);
-        for (Map.Entry<String, String> rendering : MYSQL8_CHECK_RENDERINGS.entrySet()) {
-            if (canonical.equals(ChatTypedDeliberationSchemaInitializer.canonicalCheck(
-                    rendering.getValue()))) {
-                return ChatTypedDeliberationSchemaInitializer.canonicalCheck(
-                        CHECKS.get(rendering.getKey()));
-            }
-        }
-        return canonical;
-    }
 
     private static Set<String> difference(Set<String> expected, Set<String> actual) {
         var missing = new java.util.LinkedHashSet<>(expected);

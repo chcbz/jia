@@ -21,6 +21,5 @@ CREATE TABLE IF NOT EXISTS agent_runtime_v1_installation (
   UNIQUE KEY uk_runtime_v1_installation (installation_id),
   UNIQUE KEY uk_runtime_v1_authorization (runtime_authorization_hash),
   KEY idx_runtime_v1_scope (tenant_id, client_id, installation_id),
-  KEY idx_runtime_v1_identity (tenant_id, client_id, canonical_agent_id, status),
-  CONSTRAINT chk_runtime_v1_status CHECK (status IN ('PENDING','ACTIVE','REVOKED','REBINDS_REQUIRED'))
+  KEY idx_runtime_v1_identity (tenant_id, client_id, canonical_agent_id, status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;

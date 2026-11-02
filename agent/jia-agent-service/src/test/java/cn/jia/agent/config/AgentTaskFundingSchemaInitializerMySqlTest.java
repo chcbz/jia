@@ -62,20 +62,11 @@ class AgentTaskFundingSchemaInitializerMySqlTest {
         initializer.afterPropertiesSet();
 
         assertEquals(first, definitions(jdbc));
-        assertEquals(AgentTaskFundingSchemaInitializer.normalizeCheck(
-                        "((status = 'POSTING') AND (reserve_transaction_id IS NULL)) OR "
-                                + "((status = 'COMPLETED') AND (receipt_task_version IS NOT NULL))"),
-                AgentTaskFundingSchemaInitializer.normalizeCheck(
-                        "((`status` = _utf8mb4'POSTING') and (`reserve_transaction_id` is null)) "
-                                + "or ((`status` = _utf8mb4'COMPLETED') "
-                                + "and (`receipt_task_version` is not null))"));
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.table_constraints WHERE constraint_schema=DATABASE() AND constraint_type='CHECK'", Integer.class));
     }
 
     @Test
-    void notEnforcedCheckAndIncompatibleIndexPropertiesFailWithoutRepair() {
-        assertCatalogDrift("unenforced", ddl -> ddl.replace(
-                "CONSTRAINT chk_task_funding_operation_hash CHECK (OCTET_LENGTH(request_hash) = 32)",
-                "CONSTRAINT chk_task_funding_operation_hash CHECK (OCTET_LENGTH(request_hash) = 32) NOT ENFORCED"));
+    void incompatibleIndexPropertiesFailWithoutRepair() {
         String payerIndex = "KEY idx_agent_task_funding_payer\n"
                 + "        (tenant_id, client_id, payer_principal_type, payer_principal_id, funding_status, id)";
         assertCatalogDrift("prefix", ddl -> ddl.replace(payerIndex,
@@ -113,54 +104,6 @@ class AgentTaskFundingSchemaInitializerMySqlTest {
             assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.triggers "
                     + "WHERE trigger_schema=DATABASE()", Integer.class));
         }
-    }
-
-    @Test
-    void completedAndRefundedStatesRejectNullableReceiptBypasses() {
-        JdbcTemplate jdbc = database("nullable");
-        new AgentTaskFundingSchemaInitializer(jdbc).afterPropertiesSet();
-
-        assertCompletedReceiptRejected(jdbc, "task-null-version", "NULL", "1", "1");
-        assertCompletedReceiptRejected(jdbc, "task-null-created", "0", "NULL", "1");
-        assertCompletedReceiptRejected(jdbc, "task-null-updated", "0", "1", "NULL");
-        assertThrows(RuntimeException.class, () -> insertRefunded(jdbc,
-                "task-null-key", "NULL", "REPEAT(0x02,32)", "1", "1", "1"));
-        assertThrows(RuntimeException.class, () -> insertRefunded(jdbc,
-                "task-null-hash", "REPEAT(0x31,36)", "NULL", "1", "1", "1"));
-        assertThrows(RuntimeException.class, () -> insertRefunded(jdbc,
-                "task-null-amount", "REPEAT(0x31,36)", "REPEAT(0x02,32)", "NULL", "1", "1"));
-        assertThrows(RuntimeException.class, () -> insertRefunded(jdbc,
-                "task-null-version", "REPEAT(0x31,36)", "REPEAT(0x02,32)", "1", "NULL", "1"));
-        assertThrows(RuntimeException.class, () -> insertRefunded(jdbc,
-                "task-null-time", "REPEAT(0x31,36)", "REPEAT(0x02,32)", "1", "1", "NULL"));
-    }
-
-    @Test
-    void heldAndRefundedStatesRejectNullEscrowVersionAndOldCatalogFailsClosed() {
-        JdbcTemplate jdbc = database("null_escrow_version");
-        new AgentTaskFundingSchemaInitializer(jdbc).afterPropertiesSet();
-        // Start with otherwise-valid rows: the failed UPDATE must be the CHECK, not a
-        // duplicate key or a different missing receipt field.
-        jdbc.execute("INSERT INTO agent_task_funding(task_id,funding_mode,funding_status,"
-                + "payer_principal_type,payer_principal_id,settlement_policy,gross_bounty_amount_micro,"
-                + "remaining_micro,escrow_id,escrow_version,reserve_transaction_id,required_skill_requirements,"
-                + "version,tenant_id,client_id,create_time,update_time) VALUES('held-version',"
-                + "'FUNDED_SINGLE_AGENT','FUNDS_HELD','USER','u','GROSS_INCLUSIVE',10,10,"
-                + "'esc-held',1,'etx-held','[]',1,'Tenant-A','Client-A',1,1)");
-        insertRefunded(jdbc, "refunded-version", "REPEAT(0x31,36)", "REPEAT(0x02,32)", "10", "1", "1");
-        for (String taskId : List.of("held-version", "refunded-version")) {
-            org.springframework.dao.DataAccessException failure = assertThrows(
-                    org.springframework.dao.DataAccessException.class, () -> jdbc.update(
-                            "UPDATE agent_task_funding SET escrow_version=NULL WHERE task_id=?", taskId));
-            assertTrue(failure.getMostSpecificCause().getMessage()
-                    .contains("chk_agent_task_funding_state"), failure.getMessage());
-        }
-        assertEquals(List.of(1L, 2L), jdbc.queryForList(
-                "SELECT escrow_version FROM agent_task_funding ORDER BY task_id", Long.class));
-        assertCatalogDrift("old_held_version", ddl -> ddl.replace(
-                "escrow_version IS NOT NULL AND escrow_version > 0", "escrow_version > 0"));
-        assertCatalogDrift("old_refunded_version", ddl -> ddl.replace(
-                "escrow_version IS NOT NULL AND escrow_version > 1", "escrow_version > 1"));
     }
 
     private void assertCompletedReceiptRejected(JdbcTemplate jdbc, String taskId,

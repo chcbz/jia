@@ -14,7 +14,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class ArchiveSchemaInitializerTest {
 
     @Test
-    void schemaResourceContainsEveryRuntimeCatalogColumnIndexForeignKeyAndCheck() throws Exception {
+    void schemaResourceContainsEveryRuntimeCatalogColumnIndexForeignKey() throws Exception {
         String sql;
         try (var input = getClass().getClassLoader().getResourceAsStream("db/archive-schema.sql")) {
             org.junit.jupiter.api.Assertions.assertNotNull(input);
@@ -26,7 +26,7 @@ class ArchiveSchemaInitializerTest {
             definition.indexes().keySet().stream().filter(name -> !"PRIMARY".equals(name))
                     .forEach(name -> assertTrue(sql.contains(name.toLowerCase()), name));
             definition.foreignKeys().keySet().forEach(name -> assertTrue(sql.contains(name.toLowerCase()), name));
-            definition.checks().keySet().forEach(name -> assertTrue(sql.contains(name.toLowerCase()), name));
+
         });
     }
 
@@ -68,88 +68,11 @@ class ArchiveSchemaInitializerTest {
     }
 
     @Test
-    void mysql8021CharsetIntroducersNormalizeWithoutChangingQuotedLiteralCase() {
-        String rendered = "(`import_state` in (_utf8mb4\\'STAGING\\',_utf8mb4\\'READY\\'))";
-
-        assertEquals("import_statein('STAGING','READY')",
-                ArchiveSchemaCatalog.normalizeCheck(rendered));
-        assertEquals("import_statein('staging','ready')",
-                ArchiveSchemaCatalog.normalizeCheck(
-                        "(`import_state` in (_utf8mb4\\'staging\\',_utf8mb4\\'ready\\'))"));
-    }
-
-    @Test
-    void mysql8021CheckClauseNormalizationIsIdempotent() {
-        String rendered = "(`import_state` in (_utf8mb4\\'STAGING\\',_utf8mb4\\'READY\\'))";
-        String normalized = ArchiveSchemaCatalog.normalizeCheck(rendered);
-
-        assertEquals(normalized, ArchiveSchemaCatalog.normalizeCheck(normalized));
-    }
-
-    @Test
-    void mysql8021RenderedChecksValidateAgainstCatalog() {
-        ArchiveSchemaSnapshot expected = ArchiveSchemaCatalog.expectedSnapshot();
-        var tables = new LinkedHashMap<>(expected.tables());
-        tables.put("archive_edition", withChecks(expected.tables().get("archive_edition"),
-                "chk_archive_edition_counts",
-                "((`chapter_count` >= 1) and (`preface_paragraph_count` >= 0) and "
-                        + "(`chapter_paragraph_count` >= 1) and (`reader_paragraph_count` = "
-                        + "(`preface_paragraph_count` + `chapter_paragraph_count`)) and "
-                        + "(`source_utf8_byte_length` > 0) and (`preface_utf8_byte_length` >= 0) and "
-                        + "(`chapter_utf8_byte_length` > 0) and (`reader_utf8_byte_length` = "
-                        + "(`preface_utf8_byte_length` + `chapter_utf8_byte_length`)))",
-                "chk_archive_edition_state",
-                "(`import_state` in (_utf8mb4\\'STAGING\\',_utf8mb4\\'READY\\'))"));
-        tables.put("archive_chapter", withChecks(expected.tables().get("archive_chapter"),
-                "chk_archive_chapter_metrics",
-                "((`paragraph_count` > 0) and (`utf8_byte_length` > 0))",
-                "chk_archive_chapter_shape",
-                "(((`block_type` = _utf8mb4\\'PREFACE\\') and (`reader_ordinal` = 0) and "
-                        + "(`chapter_number` is null)) or ((`block_type` = _utf8mb4\\'CHAPTER\\') and "
-                        + "(`reader_ordinal` >= 1) and "
-                        + "(`chapter_number` = `reader_ordinal`)))"));
-        tables.put("archive_paragraph", withChecks(expected.tables().get("archive_paragraph"),
-                "chk_archive_paragraph_metrics",
-                "((`ordinal` >= 1) and (`utf8_byte_length` > 0))"));
-
-        assertDoesNotThrow(() -> ArchiveSchemaCatalog.validate(new ArchiveSchemaSnapshot(tables)));
-    }
-
-    @Test
-    void disabledCheckAndBinaryLiteralCaseDriftFailClosed() {
-        ArchiveSchemaSnapshot expected = ArchiveSchemaCatalog.expectedSnapshot();
-        ArchiveSchemaSnapshot.TableSnapshot edition = expected.tables().get("archive_edition");
-        var checks = new LinkedHashMap<>(edition.checks());
-        ArchiveSchemaSnapshot.CheckSnapshot state = checks.get("chk_archive_edition_state");
-        checks.put("chk_archive_edition_state", state.withEnforced(false));
-        var tables = new LinkedHashMap<>(expected.tables());
-        tables.put("archive_edition", edition.withChecks(checks));
-        assertDrift(new ArchiveSchemaSnapshot(tables), "chk_archive_edition_state");
-
-        checks = new LinkedHashMap<>(edition.checks());
-        checks.put("chk_archive_edition_state", new ArchiveSchemaSnapshot.CheckSnapshot(
-                "import_state in ('staging','ready')", true));
-        tables = new LinkedHashMap<>(expected.tables());
-        tables.put("archive_edition", edition.withChecks(checks));
-        assertDrift(new ArchiveSchemaSnapshot(tables), "chk_archive_edition_state");
-    }
-
-    @Test
     void partialExistingSchemaIsRejectedInsteadOfMutated() {
         IllegalStateException failure = assertThrows(IllegalStateException.class,
                 () -> ArchiveSchemaInitializer.requireAllOrNoneTables(
                         java.util.Set.of("archive_work", "archive_edition")));
         assertTrue(failure.getMessage().contains("partial"), failure.getMessage());
-    }
-
-    private ArchiveSchemaSnapshot.TableSnapshot withChecks(
-            ArchiveSchemaSnapshot.TableSnapshot table, String... namesAndClauses) {
-        var checks = new LinkedHashMap<String, ArchiveSchemaSnapshot.CheckSnapshot>();
-        for (int index = 0; index < namesAndClauses.length; index += 2) {
-            checks.put(namesAndClauses[index],
-                    new ArchiveSchemaSnapshot.CheckSnapshot(namesAndClauses[index + 1], true));
-        }
-        return table.withChecks(checks);
     }
 
     private void assertColumnDrift(ArchiveSchemaSnapshot expected,

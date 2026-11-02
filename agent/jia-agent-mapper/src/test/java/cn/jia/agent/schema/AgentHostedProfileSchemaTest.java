@@ -20,9 +20,6 @@ class AgentHostedProfileSchemaTest {
         assertTrue(sql.contains("unique key uk_hosted_profile_key (profile_key)"));
         assertTrue(sql.contains("tenant_id,client_id,owner_jiacn,lifecycle_state"));
         assertTrue(sql.contains("engine=innodb default charset=utf8mb4 collate=utf8mb4_0900_bin"));
-        assertTrue(sql.contains("chk_hosted_state"));
-        assertTrue(sql.contains("chk_hosted_generation"));
-        assertTrue(sql.contains("chk_hosted_repair"));
     }
 
     private String resource(String name) throws IOException {

@@ -29,8 +29,7 @@ public final class AgentTaskExecutionGrantSchemaInitializer implements Initializ
             "active_task_guard","create_time","update_time");
     private static final Set<String> REQUIRED_INDEXES = Set.of("PRIMARY","uk_atxg_scope_grant",
             "uk_atxg_scope_action","uk_atxg_active_task","idx_atxg_task_state","idx_atxg_executor");
-    private static final Set<String> REQUIRED_CHECKS = Set.of("chk_atxg_tenant","chk_atxg_revision",
-            "chk_atxg_state","chk_atxg_derived","chk_atxg_revoke","chk_atxg_time");
+
     private final JdbcTemplate jdbc;
     public AgentTaskExecutionGrantSchemaInitializer(JdbcTemplate jdbc) {
         this.jdbc = Objects.requireNonNull(jdbc,"jdbc");
@@ -75,8 +74,6 @@ public final class AgentTaskExecutionGrantSchemaInitializer implements Initializ
         validateIndex("idx_atxg_executor",false,List.of("tenant_id","client_id","executor_owner_jiacn","target_agent_id","state"));
         Integer incomplete=jdbc.queryForObject("SELECT COUNT(*) FROM agent_task_execution_grant WHERE executor_owner_jiacn IS NULL OR executor_binding_id IS NULL OR executor_binding_id<=0",Integer.class);
         if(incomplete==null || incomplete!=0) throw new IllegalStateException("Task grant executor migration is incomplete");
-        Set<String> checks = Set.copyOf(jdbc.queryForList("SELECT constraint_name FROM information_schema.table_constraints WHERE table_schema=DATABASE() AND table_name=? AND constraint_type='CHECK'", String.class, TABLE));
-        if (!checks.containsAll(REQUIRED_CHECKS)) throw new IllegalStateException("Task grant checks are partial or drifted");
         List<Map<String,Object>> identity = jdbc.queryForList("SELECT column_name,is_nullable,collation_name FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name=? AND column_name IN ('grant_id','tenant_id','client_id','owner_jiacn','task_id','target_agent_id','source_business_action_id','idempotency_key','executor_owner_jiacn')", TABLE);
         if (identity.size() != 9 || identity.stream().anyMatch(row -> !"NO".equalsIgnoreCase(Objects.toString(row.get("is_nullable"),"")) || !"utf8mb4_0900_bin".equalsIgnoreCase(Objects.toString(row.get("collation_name"),"")))) {
             throw new IllegalStateException("Task grant identity columns are not byte-exact");

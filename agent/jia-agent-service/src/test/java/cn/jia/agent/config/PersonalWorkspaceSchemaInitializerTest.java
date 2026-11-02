@@ -27,8 +27,7 @@ class PersonalWorkspaceSchemaInitializerTest {
         assertTrue(statements.get(0).startsWith("CREATE TABLE IF NOT EXISTS agent_personal_workspace_file ("));
         assertTrue(statements.get(0).contains("source_kind VARCHAR(24) NOT NULL"));
         assertTrue(statements.get(0).contains("origin_kind VARCHAR(24) NOT NULL DEFAULT 'USER_UPLOAD'"));
-        assertTrue(statements.get(0).contains(
-                "CONSTRAINT chk_pws_file_origin CHECK (origin_kind IN ('USER_UPLOAD','AGENT_DELIVERY'))"));
+        org.junit.jupiter.api.Assertions.assertFalse(statements.get(0).toLowerCase().contains("check ("));
         assertTrue(statements.get(1).startsWith("CREATE TABLE IF NOT EXISTS agent_personal_workspace_file_version ("));
         assertTrue(statements.get(2).startsWith("CREATE TABLE IF NOT EXISTS agent_personal_workspace_operation ("));
     }
@@ -38,7 +37,6 @@ class PersonalWorkspaceSchemaInitializerTest {
         JdbcTemplate jdbc = mock(JdbcTemplate.class);
         stubTables(jdbc);
         when(jdbc.queryForList(columnsSql())).thenReturn(List.of(sourceColumn()), completeColumns());
-        when(jdbc.queryForList(checksSql())).thenReturn(List.of(sourceCheck()), completeChecks());
         when(jdbc.queryForObject(eq(legacyInvalidRowsSql()), eq(Integer.class))).thenReturn(0);
         when(jdbc.queryForObject(eq(invalidRowsSql()), eq(Integer.class))).thenReturn(0);
 
@@ -51,13 +49,12 @@ class PersonalWorkspaceSchemaInitializerTest {
     void partialMigrationFailsClosedWithoutAttemptingRepair() {
         JdbcTemplate jdbc = mock(JdbcTemplate.class);
         stubTables(jdbc);
-        when(jdbc.queryForList(columnsSql())).thenReturn(completeColumns(), completeColumns());
-        when(jdbc.queryForList(checksSql())).thenReturn(List.of(sourceCheck()));
+        when(jdbc.queryForList(columnsSql())).thenReturn(List.of());
 
         IllegalStateException failure = assertThrows(IllegalStateException.class,
                 () -> new PersonalWorkspaceSchemaInitializer(jdbc).initializeSchema());
 
-        assertTrue(failure.getMessage().contains("CHECK is partial"));
+        assertTrue(failure.getMessage().contains("columns are partial"));
         verify(jdbc, never()).execute(PersonalWorkspaceSchemaInitializer.originMigrationStatement());
     }
 
@@ -66,7 +63,6 @@ class PersonalWorkspaceSchemaInitializerTest {
         JdbcTemplate jdbc = mock(JdbcTemplate.class);
         stubTables(jdbc);
         when(jdbc.queryForList(columnsSql())).thenReturn(List.of(sourceColumn()));
-        when(jdbc.queryForList(checksSql())).thenReturn(List.of(sourceCheck()));
         when(jdbc.queryForObject(eq(legacyInvalidRowsSql()), eq(Integer.class))).thenReturn(0);
         String migration = PersonalWorkspaceSchemaInitializer.originMigrationStatement();
         doThrow(new DataAccessResourceFailureException("migration failed")).when(jdbc).execute(migration);
@@ -76,18 +72,16 @@ class PersonalWorkspaceSchemaInitializerTest {
         verify(jdbc).execute(migration);
     }
 
-
     @Test
     void malformedLegacyCatalogFailsBeforeMigration() {
         JdbcTemplate jdbc = mock(JdbcTemplate.class);
         stubTables(jdbc);
-        when(jdbc.queryForList(columnsSql())).thenReturn(List.of(sourceColumn()));
-        when(jdbc.queryForList(checksSql())).thenReturn(List.of());
+        when(jdbc.queryForList(columnsSql())).thenReturn(List.of(column("source_kind", "UNEXPECTED")));
 
         IllegalStateException failure = assertThrows(IllegalStateException.class,
                 () -> new PersonalWorkspaceSchemaInitializer(jdbc).initializeSchema());
 
-        assertTrue(failure.getMessage().contains("legacy provenance CHECK is partial"));
+        assertTrue(failure.getMessage().contains("provenance column is invalid"));
         verify(jdbc, never()).execute(PersonalWorkspaceSchemaInitializer.originMigrationStatement());
     }
 
@@ -106,23 +100,6 @@ class PersonalWorkspaceSchemaInitializerTest {
                  ORDER BY FIELD(column_name,'source_kind','origin_kind')
                 """;
     }
-
-    private static String checksSql() {
-        return """
-                SELECT tc.constraint_name,cc.check_clause,tc.enforced
-                  FROM information_schema.table_constraints tc
-                  JOIN information_schema.check_constraints cc
-                    ON cc.constraint_catalog=tc.constraint_catalog
-                   AND cc.constraint_schema=tc.constraint_schema
-                   AND cc.constraint_name=tc.constraint_name
-                 WHERE tc.constraint_schema=DATABASE()
-                   AND tc.table_name='agent_personal_workspace_file'
-                   AND tc.constraint_type='CHECK'
-                   AND tc.constraint_name IN ('chk_pws_file_source','chk_pws_file_origin')
-                 ORDER BY tc.constraint_name
-                """;
-    }
-
 
     private static String legacyInvalidRowsSql() {
         return """
@@ -158,19 +135,4 @@ class PersonalWorkspaceSchemaInitializerTest {
         return row;
     }
 
-    private static List<Map<String, Object>> completeChecks() {
-        return List.of(originCheck(), sourceCheck());
-    }
-
-    private static Map<String, Object> sourceCheck() {
-        return check("chk_pws_file_source", "source_kind = 'UPLOAD'");
-    }
-
-    private static Map<String, Object> originCheck() {
-        return check("chk_pws_file_origin", "origin_kind IN ('USER_UPLOAD','AGENT_DELIVERY')");
-    }
-
-    private static Map<String, Object> check(String name, String clause) {
-        return Map.of("constraint_name", name, "check_clause", clause, "enforced", "YES");
-    }
 }

@@ -240,7 +240,7 @@ class HallReadTaskCreateMySqlTest {
         });
         assertNoTaskWrites(); verifyNoInteractions(broker, events);
         // Real write failure after task_plan INSERT (not a mocked application result).
-        jdbc.execute("ALTER TABLE task_item ADD CONSTRAINT fixture_reject_item CHECK (plan_id < 0)");
+        jdbc.execute("ALTER TABLE task_item ADD COLUMN fixture_required INT NOT NULL");
         assertThrows(RuntimeException.class, () -> hall.submit(OWNER, draft, 1, true, "submit"));
         assertNoTaskWrites();
         assertNull(jdbc.queryForObject("SELECT submit_key FROM hall_request_draft WHERE draft_id=?", String.class, draft));
@@ -427,11 +427,8 @@ class HallReadTaskCreateMySqlTest {
         assertEquals(0,count("hall_private_mark"));
     }
 
-    @Test void realMarkSchemaRevalidationRejectsMissingReceiptUniquenessAndUnenforcedChecks() {
+    @Test void realMarkSchemaRevalidationRejectsMissingReceiptUniqueness() {
         new HallPrivateMarkSchemaInitializer(jdbc).afterPropertiesSet();
-        jdbc.execute("ALTER TABLE hall_private_mark ALTER CHECK chk_hall_private_mark_type NOT ENFORCED");
-        assertThrows(IllegalStateException.class,()->new HallPrivateMarkSchemaInitializer(jdbc).afterPropertiesSet());
-        jdbc.execute("ALTER TABLE hall_private_mark ALTER CHECK chk_hall_private_mark_type ENFORCED");
         jdbc.execute("ALTER TABLE hall_private_mark DROP INDEX uk_hall_private_mark_key");
         assertThrows(IllegalStateException.class,()->new HallPrivateMarkSchemaInitializer(jdbc).afterPropertiesSet());
         assertEquals(0,count("hall_private_mark"));

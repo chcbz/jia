@@ -36,9 +36,7 @@ CREATE TABLE IF NOT EXISTS agent_command_delivery (
     KEY idx_delivery_retry (status, next_retry_at, expires_at, id),
     KEY idx_delivery_lease (status, lease_until, id),
     KEY idx_delivery_agent (tenant_id, client_id, owner_jiacn, target_agent_id, status, next_retry_at, id),
-    KEY idx_delivery_active_message (tenant_id, client_id, owner_jiacn, active_message_id, active_attempt),
-    CONSTRAINT chk_delivery_single_tenant CHECK (tenant_id = '0'),
-    CONSTRAINT chk_delivery_owner_nonempty CHECK (OCTET_LENGTH(owner_jiacn) BETWEEN 1 AND 50)
+    KEY idx_delivery_active_message (tenant_id, client_id, owner_jiacn, active_message_id, active_attempt)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Durable Agent command mailbox and business intent state';
 
 CREATE TABLE IF NOT EXISTS agent_outbox_event (

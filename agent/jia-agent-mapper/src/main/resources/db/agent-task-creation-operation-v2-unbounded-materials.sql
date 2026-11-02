@@ -1,6 +1,3 @@
--- Apply once to an existing deployment after checking chk_atco_refs in its schema.
--- Remove only the material-count business cap; preserve ARRAY shape and all other checks.
--- No row updates, identity changes, or execution replay.
-ALTER TABLE agent_task_creation_operation
-  DROP CHECK chk_atco_refs,
-  ADD CONSTRAINT chk_atco_refs CHECK (JSON_TYPE(input_refs_json)='ARRAY');
+-- CHECK-only historical migration retired on 2026-11-02.
+-- Rules are documented in docs/interface-catalog/database-check-rules-20261102.md.
+-- Existing databases use explicit, catalog-pinned CHECK removal; no startup DDL.

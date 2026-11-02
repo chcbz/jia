@@ -55,29 +55,12 @@ class EconomySchemaInitializerMySqlTest {
         }
     }
 
-    @Test
-    void sameNamedCheckClauseDriftAndDisabledEnforcementAreRejected() {
-        JdbcTemplate changed = fixture.newDatabase("checkdrift").jdbc();
-        new EconomySchemaInitializer(changed).afterPropertiesSet();
-        changed.execute("ALTER TABLE economy_account DROP CHECK chk_economy_account_currency");
-        changed.execute("""
-                ALTER TABLE economy_account
-                ADD CONSTRAINT chk_economy_account_currency
-                CHECK (currency IN ('SILVER','GOLD')) ENFORCED
-                """);
-        IllegalStateException changedFailure = assertThrows(IllegalStateException.class,
-                () -> new EconomySchemaInitializer(changed).afterPropertiesSet());
-        assertTrue(changedFailure.getMessage().contains("CHECK constraints"), changedFailure.getMessage());
-
-        JdbcTemplate disabled = fixture.newDatabase("checkoff").jdbc();
-        new EconomySchemaInitializer(disabled).afterPropertiesSet();
-        disabled.execute("""
-                ALTER TABLE economy_account
-                ALTER CHECK chk_economy_account_currency NOT ENFORCED
-                """);
-        IllegalStateException disabledFailure = assertThrows(IllegalStateException.class,
-                () -> new EconomySchemaInitializer(disabled).afterPropertiesSet());
-        assertTrue(disabledFailure.getMessage().contains("CHECK constraints"), disabledFailure.getMessage());
+    @Test void freshSchemaAndRestartDoNotRequireDatabaseChecks() {
+        var jdbc=fixture.newDatabase("withoutchecks").jdbc();
+        var initializer=new EconomySchemaInitializer(jdbc);
+        initializer.afterPropertiesSet();
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.table_constraints WHERE constraint_schema=DATABASE() AND constraint_type='CHECK'", Integer.class));
+        initializer.afterPropertiesSet();
     }
 
     @Test

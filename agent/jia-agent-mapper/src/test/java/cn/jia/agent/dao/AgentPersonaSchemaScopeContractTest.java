@@ -14,8 +14,6 @@ class AgentPersonaSchemaScopeContractTest {
         assertFalse(persona.contains("UNIQUE KEY uk_agent_persona_name (name)"));
         assertTrue(persona.contains("uk_agent_persona_scope_code (tenant_id, persona_code, catalog_client_key)"));
         assertTrue(persona.contains("uk_agent_persona_scope_name (tenant_id, name, catalog_client_key)"));
-        assertTrue(persona.contains("chk_agent_persona_private_scope"));
-        assertTrue(persona.contains("CHAR_LENGTH(client_id) > 0"));
     }
 
     @Test void explicitMaintenanceDoesNotInferOwnershipAndCreatesReplacementIndexesBeforeDroppingOldOnes() throws Exception {

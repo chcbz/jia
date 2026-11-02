@@ -15,81 +15,7 @@ import java.util.Objects;
 @org.springframework.context.annotation.Profile("schema-maintenance")
 public final class AgentTaskProviderCostConsentSchemaInitializer implements InitializingBean {
     static final String TABLE="agent_task_provider_cost_consent";
-    /** Exact MySQL 8 CHECK_CLAUSE rendering for the additive DDL below. Keeping this
-     * provider-specific avoids weakening the shared funded-task normalizer around BETWEEN's
-     * syntactic AND or MySQL's REGEXP BINARY -> regexp_like/cast catalog rewrite. */
-    private static final Map<String,String> CHECK_EXPRESSIONS=Map.ofEntries(
-            Map.entry("chk_atpcc_bound", """
-                    (((bound_grant_id IS NULL) AND (bound_grant_version IS NULL)
-                      AND (bound_assignment_revision IS NULL)) OR
-                    ((bound_grant_id IS NOT NULL) AND (bound_grant_version IS NOT NULL)
-                      AND (bound_assignment_revision IS NOT NULL)
-                      AND (state IN ('BOUND','RESERVED','CONSUMED','REVOKED'))))
-                    """),
-            Map.entry("chk_atpcc_consumed", """
-                    (((state='CONSUMED') AND (consumed_lease_id IS NOT NULL)
-                      AND (consumed_at IS NOT NULL) AND (reserved_execution_id IS NOT NULL)) OR
-                    ((state<>'CONSUMED') AND (consumed_lease_id IS NULL) AND (consumed_at IS NULL)))
-                    """),
-            Map.entry("chk_atpcc_hashes", """
-                    (regexp_like(request_digest,cast('^[0-9a-f]{64}$' as char charset binary))
-                      AND regexp_like(assignment_base_hash,cast('^[0-9a-f]{64}$' as char charset binary))
-                      AND regexp_like(requirement_sha256,cast('^[0-9a-f]{64}$' as char charset binary))
-                      AND regexp_like(input_snapshot_digest,cast('^[0-9a-f]{64}$' as char charset binary))
-                      AND ((revoke_request_digest IS NULL) OR
-                        regexp_like(revoke_request_digest,cast('^[0-9a-f]{64}$' as char charset binary))))
-                    """),
-            Map.entry("chk_atpcc_identity", """
-                    ((char_length(client_id) BETWEEN 1 AND 50)
-                      AND (char_length(owner_jiacn) BETWEEN 1 AND 50)
-                      AND (char_length(consent_id) BETWEEN 1 AND 100)
-                      AND (char_length(task_id) BETWEEN 1 AND 100)
-                      AND (char_length(target_agent_id) BETWEEN 1 AND 100)
-                      AND (char_length(idempotency_key) BETWEEN 1 AND 100)
-                      AND (char_length(assignment_idempotency_key) BETWEEN 1 AND 100)
-                      AND (char_length(binding_id) BETWEEN 1 AND 100)
-                      AND (char_length(model_id) BETWEEN 1 AND 100)
-                      AND (char_length(operator_issuer) BETWEEN 1 AND 100)
-                      AND (char_length(operator_policy_revision) BETWEEN 1 AND 100))
-                    """),
-            Map.entry("chk_atpcc_inputs", """
-                    ((json_type(input_snapshot_json)='ARRAY')
-                      AND (json_length(input_snapshot_json) BETWEEN 0 AND 16))
-                    """),
-            Map.entry("chk_atpcc_issued", """
-                    ((state<>'ISSUED') OR ((bound_grant_id IS NULL)
-                      AND (reserved_execution_id IS NULL) AND (consumed_lease_id IS NULL)
-                      AND (revoke_idempotency_key IS NULL)))
-                    """),
-            Map.entry("chk_atpcc_provider", """
-                    ((provider_lane='CONTROLLED_IMAGE_HTTP_V1')
-                      AND (pricing_mode='UNPRICED_EXTERNAL_ACCOUNT')
-                      AND (max_outbound_request_attempts=1) AND (binding_epoch>0) AND (expires_at>0))
-                    """),
-            Map.entry("chk_atpcc_reserved", """
-                    (((reserved_execution_id IS NULL) AND (reserved_run_id IS NULL)) OR
-                    ((reserved_execution_id IS NOT NULL) AND (reserved_run_id IS NOT NULL)
-                      AND (bound_grant_id IS NOT NULL)
-                      AND (state IN ('RESERVED','CONSUMED','REVOKED'))))
-                    """),
-            Map.entry("chk_atpcc_revoked", """
-                    (((state='REVOKED') AND (revoke_idempotency_key IS NOT NULL)
-                      AND (revoke_request_digest IS NOT NULL) AND (revoked_at IS NOT NULL)) OR
-                    ((state<>'REVOKED') AND (revoke_idempotency_key IS NULL)
-                      AND (revoke_request_digest IS NULL) AND (revoked_at IS NULL)))
-                    """),
-            Map.entry("chk_atpcc_scope", "((tenant_id='0') AND (owner_jiacn<>'0'))"),
-            Map.entry("chk_atpcc_state",
-                    "(state IN ('ISSUED','BOUND','RESERVED','CONSUMED','REVOKED'))"),
-            Map.entry("chk_atpcc_time", """
-                    ((created_at>0) AND ((consumed_at IS NULL) OR (consumed_at>=created_at))
-                      AND ((revoked_at IS NULL) OR (revoked_at>=created_at)))
-                    """),
-            Map.entry("chk_atpcc_versions", """
-                    ((task_version>=0) AND (requirement_revision>0) AND (version>0)
-                      AND ((bound_grant_version IS NULL) OR (bound_grant_version>0))
-                      AND ((bound_assignment_revision IS NULL) OR (bound_assignment_revision>=0)))
-                    """));
+
     private final JdbcTemplate jdbc;
     public AgentTaskProviderCostConsentSchemaInitializer(JdbcTemplate jdbc) {
         this.jdbc=Objects.requireNonNull(jdbc,"jdbc");
@@ -130,28 +56,17 @@ public final class AgentTaskProviderCostConsentSchemaInitializer implements Init
         List<Map<String,Object>> indexes=jdbc.queryForList("SELECT index_name,non_unique,seq_in_index,"
                 +"column_name,sub_part FROM information_schema.statistics WHERE table_schema=DATABASE() "
                 +"AND table_name=? ORDER BY index_name,seq_in_index",TABLE);
-        List<Map<String,Object>> checks=jdbc.queryForList("SELECT tc.constraint_name,tc.enforced,"
-                +"cc.check_clause FROM information_schema.table_constraints tc JOIN "
-                +"information_schema.check_constraints cc ON cc.constraint_catalog=tc.constraint_catalog "
-                +"AND cc.constraint_schema=tc.constraint_schema AND cc.constraint_name=tc.constraint_name "
-                +"WHERE tc.constraint_schema=DATABASE() AND tc.table_name=? "
-                +"AND tc.constraint_type='CHECK'",TABLE);
-        validateCatalog(columns,indexes,checks);
+        validateCatalog(columns,indexes);
     }
     /** Accept exactly the pristine v1 catalog or the complete follow-up-v3 extension. */
-    static void validateCatalog(List<Map<String,Object>> columnRows,List<Map<String,Object>> indexRows,
-            List<Map<String,Object>> checkRows) {
+    static void validateCatalog(List<Map<String,Object>> columnRows,List<Map<String,Object>> indexRows) {
         List<String> names=columnRows.stream().map(row->text(row,"column_name")).toList();
         Map<String,Column> expected;
         Map<String,Index> expectedIndexes;
-        Map<String,String> expectedChecks;
         if (names.equals(columns().keySet().stream().toList())) {
-            expected=columns();expectedIndexes=indexes(false);expectedChecks=CHECK_EXPRESSIONS;
+            expected=columns();expectedIndexes=indexes(false);
         } else if (names.equals(extendedColumns().keySet().stream().toList())) {
             expected=extendedColumns();expectedIndexes=indexes(true);
-            expectedChecks=new LinkedHashMap<>(CHECK_EXPRESSIONS);
-            expectedChecks.put("chk_atpcc_purpose_union",
-                    ControlledImageFollowupV3SchemaInitializer.consentPurposeCatalogCheckExpression());
         } else {
             throw new IllegalStateException("Provider-consent columns drift");
         }
@@ -176,52 +91,8 @@ public final class AgentTaskProviderCostConsentSchemaInitializer implements Init
         expectedIndexes.forEach((name,index)->index(indexRows,name,index.nonUnique(),index.columns()));
         int expectedRows=expectedIndexes.values().stream().mapToInt(index->index.columns().size()).sum();
         if (indexRows.size()!=expectedRows) throw new IllegalStateException("Provider-consent extra index drift");
-        validateChecks(checkRows,expectedChecks);
     }
 
-    static void validateChecks(List<Map<String,Object>> rows) {
-        validateChecks(rows,CHECK_EXPRESSIONS);
-    }
-    private static void validateChecks(List<Map<String,Object>> rows,Map<String,String> expectedChecks) {
-        record Check(String enforced,String clause) { }
-        Map<String,Check> actual=new LinkedHashMap<>();
-        for (Map<String,Object> row:rows) {
-            String name=text(row,"constraint_name");
-            Check found=new Check(text(row,"enforced"),text(row,"check_clause"));
-            if (name.isBlank() || actual.put(name,found)!=null) {
-                throw new IllegalStateException("Provider-consent ambiguous CHECK catalog");
-            }
-        }
-        if (!actual.keySet().equals(expectedChecks.keySet())) {
-            throw new IllegalStateException("Provider-consent CHECK set drift");
-        }
-        for (Map.Entry<String,String> expected:expectedChecks.entrySet()) {
-            Check found=actual.get(expected.getKey());
-            if (found==null || !"YES".equalsIgnoreCase(found.enforced())) {
-                throw new IllegalStateException("Provider-consent CHECK enforcement drift: "+expected.getKey());
-            }
-            String wanted;
-            String clause;
-            try {
-                wanted=ControlledImageFollowupV3SchemaInitializer.canonicalControlledCheck(
-                        expected.getValue());
-                clause=ControlledImageFollowupV3SchemaInitializer.canonicalControlledCheck(
-                        found.clause());
-            } catch (IllegalArgumentException malformed) {
-                throw new IllegalStateException(
-                        "Provider-consent malformed CHECK catalog: "+expected.getKey(),malformed);
-            }
-            boolean knownMigrationSource="chk_atpcc_purpose_union".equals(expected.getKey())
-                    && clause.equals(ControlledImageFollowupV3SchemaInitializer.canonicalControlledCheck(
-                        ControlledImageFollowupV3SchemaInitializer.legacyConsentPurposeCatalogCheckExpression()));
-            if (!wanted.equals(clause) && !knownMigrationSource) {
-                throw new IllegalStateException("Provider-consent CHECK definition drift: "+expected.getKey());
-            }
-        }
-    }
-    static Map<String,String> checkExpressions() {
-        return CHECK_EXPRESSIONS;
-    }
     private void requireMySql8() {
         try (var connection=Objects.requireNonNull(jdbc.getDataSource()).getConnection()) {
             var metadata=connection.getMetaData();
@@ -244,12 +115,7 @@ public final class AgentTaskProviderCostConsentSchemaInitializer implements Init
     static Map<String,Column> v3ColumnDefinitions() { return extendedColumns(); }
     static Map<String,Index> v1IndexDefinitions() { return indexes(false); }
     static Map<String,Index> v3IndexDefinitions() { return indexes(true); }
-    static Map<String,String> v3CheckExpressions() {
-        Map<String,String> checks=new LinkedHashMap<>(CHECK_EXPRESSIONS);
-        checks.put("chk_atpcc_purpose_union",
-                ControlledImageFollowupV3SchemaInitializer.consentPurposeCatalogCheckExpression());
-        return java.util.Collections.unmodifiableMap(checks);
-    }
+
     private static Map<String,Column> columns() {
         Map<String,Column> c=new LinkedHashMap<>();
         c.put("id",n("bigint","NO"));c.put("consent_id",b("varchar(100)","NO"));

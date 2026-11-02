@@ -325,28 +325,11 @@ class HallRequestDraftSubmissionMySqlTest {
         return page.items().stream().map(HallRequestDraftService.DraftSummary::draftId).toList();
     }
 
-    @Test
-    void initializerIsRepeatableNormalizesChecksAndRejectsInvalidRows() {
-        List<String> before = definitions();
+    @Test void initializerIsRepeatableWithoutChecks() {
+        List<String> before=definitions();
         new HallPrivateCaseSchemaInitializer(jdbc).afterPropertiesSet();
-        assertEquals(before, definitions());
-        assertTrue(checks("hall_case_execution").stream()
-                .anyMatch(check -> check.contains("revision_no") && check.contains("parent_execution_id")));
-
-        DataAccessException revision = assertThrows(DataAccessException.class, () -> jdbc.update("""
-                INSERT INTO hall_private_case
-                  (case_id,tenant_id,client_id,owner_jiacn,title,origin_ref,revision,created_at,updated_at)
-                VALUES ('bad','0','client-a','owner-a','x','map',0,1,1)
-                """));
-        assertTrue(revision.getMostSpecificCause().getMessage().contains("chk_hall_case_revision"));
-        DataAccessException lineage = assertThrows(DataAccessException.class, () -> jdbc.update("""
-                INSERT INTO hall_case_execution
-                  (tenant_id,client_id,owner_jiacn,case_id,execution_id,revision_no,
-                   parent_execution_id,source_output_ref_json,created_at)
-                VALUES ('0','client-a','owner-a','case','execution',2,NULL,NULL,1)
-                """));
-        assertTrue(lineage.getMostSpecificCause().getMessage().contains(
-                "chk_hall_case_execution_lineage"));
+        assertEquals(before,definitions());
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.table_constraints WHERE constraint_schema=DATABASE() AND constraint_type='CHECK'", Integer.class));
     }
 
     @Test
@@ -643,19 +626,6 @@ class HallRequestDraftSubmissionMySqlTest {
         return List.of("hall_private_case", "hall_case_execution").stream()
                 .map(table -> jdbc.queryForObject("SHOW CREATE TABLE " + table,
                         (rs, row) -> rs.getString(2))).toList();
-    }
-
-    private List<String> checks(String table) {
-        return jdbc.queryForList("""
-                SELECT cc.check_clause
-                  FROM information_schema.table_constraints tc
-                  JOIN information_schema.check_constraints cc
-                    ON cc.constraint_catalog=tc.constraint_catalog
-                   AND cc.constraint_schema=tc.constraint_schema
-                   AND cc.constraint_name=tc.constraint_name
-                 WHERE tc.table_schema=DATABASE() AND tc.table_name=?
-                   AND tc.constraint_type='CHECK'
-                """, String.class, table);
     }
 
     private static PersonalWorkspaceExecutionService.ExecutionView execution(String id) {

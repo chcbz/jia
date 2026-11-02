@@ -8,7 +8,5 @@ CREATE TABLE point_account (
     version bigint NOT NULL DEFAULT 0,
     create_time bigint NOT NULL,
     update_time bigint NOT NULL,
-    PRIMARY KEY (tenant_id, jiacn),
-    CONSTRAINT chk_point_account_balance CHECK (balance >= 0),
-    CONSTRAINT chk_point_account_version CHECK (version >= 0)
+    PRIMARY KEY (tenant_id, jiacn)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;

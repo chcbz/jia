@@ -23,7 +23,7 @@ class AgentTaskFundingSchemaContractTest {
         assertTrue(sql.contains("unique key uk_task_funding_operation_actor_key"));
         assertTrue(sql.contains("cancel_refunded_micro"));
         assertTrue(sql.contains("cancel_task_version"));
-        assertTrue(sql.contains("check (octet_length(idempotency_key) = 36)"));
+
         assertFalse(sql.contains("create table if not exists economy_"));
         assertFalse(sql.contains("alter table"));
     }

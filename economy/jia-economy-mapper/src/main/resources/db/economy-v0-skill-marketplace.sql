@@ -18,14 +18,7 @@ CREATE TABLE IF NOT EXISTS economy_skill_product (
     update_time                BIGINT NOT NULL,
     PRIMARY KEY (id),
     UNIQUE KEY uk_skill_product_id (tenant_id, client_id, product_id),
-    KEY idx_skill_product_catalog (tenant_id, client_id, status, name, product_id),
-    CONSTRAINT chk_skill_product_seller CHECK (seller_type = 'SYSTEM' AND seller_id = 'SKILL_STORE'),
-    CONSTRAINT chk_skill_product_status CHECK (status IN ('DRAFT','PUBLISHED','RETIRED')),
-    CONSTRAINT chk_skill_product_current CHECK (
-        (status = 'DRAFT' AND current_product_version_id IS NULL)
-        OR (status IN ('PUBLISHED','RETIRED') AND current_product_version_id IS NOT NULL)
-    ),
-    CONSTRAINT chk_skill_product_version CHECK (version > 0)
+    KEY idx_skill_product_catalog (tenant_id, client_id, status, name, product_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Platform-owned V0 skill product catalog';
 
 CREATE TABLE IF NOT EXISTS economy_skill_product_version (
@@ -54,18 +47,7 @@ CREATE TABLE IF NOT EXISTS economy_skill_product_version (
     ),
     KEY idx_skill_product_version_product (tenant_id, client_id, product_id, product_version_id),
     CONSTRAINT fk_skill_version_product FOREIGN KEY (tenant_id, client_id, product_id)
-        REFERENCES economy_skill_product (tenant_id, client_id, product_id),
-    CONSTRAINT chk_skill_product_version_sequence CHECK (version_sequence > 0),
-    CONSTRAINT chk_skill_product_version_price CHECK (price_micro >= 0),
-    CONSTRAINT chk_skill_product_version_package CHECK (
-        package_size > 0 AND OCTET_LENGTH(package_sha256) = 32
-        AND OCTET_LENGTH(approved_permissions_sha256) = 32
-    ),
-    CONSTRAINT chk_skill_product_version_restriction CHECK (
-        deployment_restriction IN ('NONE','ADMIN_ONLY')
-        AND (skill_key <> 'deploy-runner' OR deployment_restriction = 'ADMIN_ONLY')
-    ),
-    CONSTRAINT chk_skill_product_version_review CHECK (review_status = 'APPROVED')
+        REFERENCES economy_skill_product (tenant_id, client_id, product_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Immutable approved V0 skill package version';
 
 CREATE TABLE IF NOT EXISTS economy_skill_purchase_quote (
@@ -93,15 +75,7 @@ CREATE TABLE IF NOT EXISTS economy_skill_purchase_quote (
     KEY idx_skill_quote_target (tenant_id, client_id, target_agent_id, expires_at, quote_id),
     KEY idx_skill_quote_version (tenant_id, client_id, product_version_id, quote_id),
     CONSTRAINT fk_skill_quote_version FOREIGN KEY (tenant_id, client_id, product_version_id)
-        REFERENCES economy_skill_product_version (tenant_id, client_id, product_version_id),
-    CONSTRAINT chk_skill_quote_actor CHECK (actor_type = 'USER'),
-    CONSTRAINT chk_skill_quote_key CHECK (OCTET_LENGTH(idempotency_key) = 36),
-    CONSTRAINT chk_skill_quote_hashes CHECK (
-        OCTET_LENGTH(request_hash) = 32 AND OCTET_LENGTH(approved_permissions_sha256) = 32
-    ),
-    CONSTRAINT chk_skill_quote_amount_version CHECK (expected_price_micro >= 0 AND expected_agent_version >= 0),
-    CONSTRAINT chk_skill_quote_restriction CHECK (deployment_restriction IN ('NONE','ADMIN_ONLY')),
-    CONSTRAINT chk_skill_quote_expiry CHECK (expires_at > create_time)
+        REFERENCES economy_skill_product_version (tenant_id, client_id, product_version_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Immutable actor-scoped V0 skill purchase quote';
 
 CREATE TABLE IF NOT EXISTS economy_skill_order (
@@ -144,34 +118,7 @@ CREATE TABLE IF NOT EXISTS economy_skill_order (
     CONSTRAINT fk_skill_order_quote FOREIGN KEY (tenant_id, client_id, target_agent_id, quote_id)
         REFERENCES economy_skill_purchase_quote (tenant_id, client_id, target_agent_id, quote_id),
     CONSTRAINT fk_skill_order_version FOREIGN KEY (tenant_id, client_id, product_version_id)
-        REFERENCES economy_skill_product_version (tenant_id, client_id, product_version_id),
-    CONSTRAINT chk_skill_order_parties CHECK (
-        buyer_type = 'USER' AND seller_type = 'SYSTEM' AND seller_id = 'SKILL_STORE'
-    ),
-    CONSTRAINT chk_skill_order_amount CHECK (price_micro >= 0 AND expected_agent_version >= 0),
-    CONSTRAINT chk_skill_order_permission CHECK (
-        permission_grant_version = 1 AND OCTET_LENGTH(approved_permissions_sha256) = 32
-    ),
-    CONSTRAINT chk_skill_order_funding CHECK (
-        (price_micro = 0 AND escrow_id IS NULL AND reserve_transaction_id IS NULL
-         AND capture_transaction_id IS NULL AND refund_transaction_id IS NULL)
-        OR
-        (price_micro > 0 AND escrow_id IS NOT NULL AND reserve_transaction_id IS NOT NULL)
-    ),
-    CONSTRAINT chk_skill_order_status CHECK (status IN ('FUNDS_HELD','INSTALLING','ACTIVE','REFUNDED')),
-    CONSTRAINT chk_skill_order_state_time CHECK (
-        (status = 'FUNDS_HELD' AND installing_at IS NULL AND active_at IS NULL AND refunded_at IS NULL)
-        OR (status = 'INSTALLING' AND installing_at IS NOT NULL AND active_at IS NULL AND refunded_at IS NULL)
-        OR (status = 'ACTIVE' AND installing_at IS NOT NULL AND active_at IS NOT NULL AND refunded_at IS NULL)
-        OR (status = 'REFUNDED' AND active_at IS NULL AND refunded_at IS NOT NULL)
-    ),
-    CONSTRAINT chk_skill_order_paid_terminal CHECK (
-        price_micro = 0
-        OR (status IN ('FUNDS_HELD','INSTALLING') AND capture_transaction_id IS NULL AND refund_transaction_id IS NULL)
-        OR (status = 'ACTIVE' AND capture_transaction_id IS NOT NULL AND refund_transaction_id IS NULL)
-        OR (status = 'REFUNDED' AND capture_transaction_id IS NULL AND refund_transaction_id IS NOT NULL)
-    ),
-    CONSTRAINT chk_skill_order_version_number CHECK (version > 0)
+        REFERENCES economy_skill_product_version (tenant_id, client_id, product_version_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Scoped V0 skill purchase and delivery state root';
 
 CREATE TABLE IF NOT EXISTS economy_skill_order_receipt (
@@ -195,17 +142,7 @@ CREATE TABLE IF NOT EXISTS economy_skill_order_receipt (
     UNIQUE KEY uk_skill_receipt_actor_key (tenant_id, client_id, actor_type, actor_id, idempotency_key),
     KEY idx_skill_receipt_buyer_order (tenant_id, client_id, actor_type, actor_id, order_id),
     CONSTRAINT fk_skill_receipt_order FOREIGN KEY (tenant_id, client_id, actor_type, actor_id, order_id)
-        REFERENCES economy_skill_order (tenant_id, client_id, buyer_type, buyer_id, order_id),
-    CONSTRAINT chk_skill_receipt_actor CHECK (actor_type = 'USER'),
-    CONSTRAINT chk_skill_receipt_key CHECK (OCTET_LENGTH(idempotency_key) = 36),
-    CONSTRAINT chk_skill_receipt_hashes CHECK (
-        OCTET_LENGTH(request_hash) = 32 AND OCTET_LENGTH(approved_permissions_sha256) = 32
-    ),
-    CONSTRAINT chk_skill_receipt_snapshot CHECK (
-        order_version = 1 AND order_status = 'FUNDS_HELD'
-        AND price_micro >= 0 AND permission_grant_version = 1
-        AND ((price_micro = 0 AND escrow_id IS NULL) OR (price_micro > 0 AND escrow_id IS NOT NULL))
-    )
+        REFERENCES economy_skill_order (tenant_id, client_id, buyer_type, buyer_id, order_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Immutable original actor-idempotent V0 purchase receipt';
 
 CREATE TABLE IF NOT EXISTS economy_skill_installation (
@@ -260,23 +197,7 @@ CREATE TABLE IF NOT EXISTS economy_skill_installation (
         tenant_id, client_id, product_version_id, skill_key, skill_version, package_size, package_sha256
     ) REFERENCES economy_skill_product_version (
         tenant_id, client_id, product_version_id, skill_key, skill_version, package_size, package_sha256
-    ),
-    CONSTRAINT chk_skill_installation_envelope CHECK (
-        schema_version = 1 AND message_type = 'command.dispatch' AND command_type = 'SKILL_INSTALL'
-        AND request_id = message_id AND attempt > 0 AND fencing_token > 0 AND delivery_epoch > 0
-    ),
-    CONSTRAINT chk_skill_installation_package CHECK (package_size > 0 AND OCTET_LENGTH(package_sha256) = 32),
-    CONSTRAINT chk_skill_installation_path CHECK (
-        download_path = CONCAT('/internal/agent/skill-installations/', installation_id, '/package')
-    ),
-    CONSTRAINT chk_skill_installation_status CHECK (status IN ('REQUESTED','INSTALLING','SUCCEEDED','FAILED')),
-    CONSTRAINT chk_skill_installation_state_time CHECK (
-        (status = 'REQUESTED' AND started_at IS NULL AND installed_at IS NULL AND failed_at IS NULL AND failure_code IS NULL)
-        OR (status = 'INSTALLING' AND started_at IS NOT NULL AND installed_at IS NULL AND failed_at IS NULL AND failure_code IS NULL)
-        OR (status = 'SUCCEEDED' AND started_at IS NOT NULL AND installed_at IS NOT NULL AND failed_at IS NULL AND failure_code IS NULL)
-        OR (status = 'FAILED' AND installed_at IS NULL AND failed_at IS NOT NULL AND failure_code IS NOT NULL)
-    ),
-    CONSTRAINT chk_skill_installation_version_number CHECK (version > 0)
+    )
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Persistent identity for frozen V0 SKILL_INSTALL command envelope';
 
 CREATE TABLE IF NOT EXISTS economy_skill_entitlement (
@@ -319,15 +240,5 @@ CREATE TABLE IF NOT EXISTS economy_skill_entitlement (
         tenant_id, client_id, target_agent_id, installation_id, product_version_id, skill_key, skill_version
     ),
     CONSTRAINT fk_skill_entitlement_version FOREIGN KEY (tenant_id, client_id, product_version_id)
-        REFERENCES economy_skill_product_version (tenant_id, client_id, product_version_id),
-    CONSTRAINT chk_skill_entitlement_permission CHECK (
-        permission_grant_version = 1 AND OCTET_LENGTH(approved_permissions_sha256) = 32
-    ),
-    CONSTRAINT chk_skill_entitlement_status CHECK (status IN ('PENDING_INSTALLATION','ACTIVE','FAILED')),
-    CONSTRAINT chk_skill_entitlement_state_time CHECK (
-        (status = 'PENDING_INSTALLATION' AND activated_at IS NULL AND failed_at IS NULL)
-        OR (status = 'ACTIVE' AND activated_at IS NOT NULL AND failed_at IS NULL)
-        OR (status = 'FAILED' AND activated_at IS NULL AND failed_at IS NOT NULL)
-    ),
-    CONSTRAINT chk_skill_entitlement_version_number CHECK (version > 0)
+        REFERENCES economy_skill_product_version (tenant_id, client_id, product_version_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Scoped V0 commercial entitlement distinct from runtime abilities';

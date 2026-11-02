@@ -218,9 +218,8 @@ class Mmd29ceUpgradeWiringMySqlTest {
                 }
                 assertEquals(first, second, "second application start must not drift the catalog");
                 fixture.assertSchemaVersions();
-                fixture.assertSnapshotCheckDriftRejected();
                 assertEquals(second, fixture.catalog(),
-                        "negative CHECK probes must restore the exact accepted catalog");
+                        "schema inspection must not mutate the accepted catalog");
 
                 Catalog fullyWired;
                 try (ConfigurableApplicationContext context = startApplication(fixture, redis, true)) {
@@ -609,45 +608,6 @@ class Mmd29ceUpgradeWiringMySqlTest {
                         ORDER BY table_name,constraint_name
                         """));
             }
-        }
-
-        void assertSnapshotCheckDriftRejected() throws Exception {
-            DriverManagerDataSource source = new DriverManagerDataSource(jdbcUrl(), user, password);
-            JdbcTemplate jdbc = new JdbcTemplate(source);
-            String original = Files.readString(repo.resolve(
-                    "agent/jia-agent-mapper/src/main/resources/db/agent-task-requirement-snapshot-v1.sql"),
-                    StandardCharsets.UTF_8).strip();
-            probeRejectedSnapshotCheck(jdbc, original, "chk_atrs_scope",
-                    "tenant_id='0' AND owner_jiacn<>'0'",
-                    "tenant_id='1' AND owner_jiacn<>'0'");
-            probeRejectedSnapshotCheck(jdbc, original, "chk_atrs_scope",
-                    "tenant_id='0' AND owner_jiacn<>'0'",
-                    "(tenant_id='0' AND owner_jiacn<>'0') OR TRUE");
-            probeRejectedSnapshotCheck(jdbc, original, "chk_atrs_content",
-                    "source IN ('CREATE','RECONFIRM')",
-                    "source IN ('CREATE','RECONFIRM','INVALID')");
-        }
-
-        private static void probeRejectedSnapshotCheck(JdbcTemplate jdbc, String original,
-                String name, String accepted, String weakened) {
-            assertTrue(original.contains(accepted), "probe source missing accepted expression " + accepted);
-            assertEquals(original.indexOf(accepted), original.lastIndexOf(accepted),
-                    "probe replacement must be unique: " + accepted);
-            String candidate = original.replace(accepted, weakened);
-            assertFalse(candidate.equals(original), "negative probe did not change DDL");
-            try {
-                jdbc.execute("DROP TABLE agent_task_requirement_snapshot");
-                jdbc.execute(stripTerminator(candidate));
-                IllegalStateException failure = assertThrows(IllegalStateException.class,
-                        () -> new AgentTaskRequirementSnapshotSchemaInitializer(jdbc).afterPropertiesSet(),
-                        "snapshot initializer accepted weakened CHECK " + name + ": " + weakened);
-                assertTrue(failure.getMessage().contains("Snapshot CHECK drift: " + name),
-                        "unexpected rejection for " + name + ": " + failure);
-            } finally {
-                jdbc.execute("DROP TABLE IF EXISTS agent_task_requirement_snapshot");
-                jdbc.execute(stripTerminator(original));
-            }
-            new AgentTaskRequirementSnapshotSchemaInitializer(jdbc).afterPropertiesSet();
         }
 
         private static String stripTerminator(String sql) {

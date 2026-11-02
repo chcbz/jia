@@ -17,14 +17,6 @@ CREATE TABLE IF NOT EXISTS hall_private_mark (
  viewed_manifest_id VARCHAR(100) DEFAULT NULL,
  updated_at BIGINT NOT NULL,
  PRIMARY KEY (tenant_id,client_id,owner_jiacn,source_type,source_id,revision),
- UNIQUE KEY uk_hall_private_mark_key (tenant_id,client_id,owner_jiacn,operation_key),
- CONSTRAINT chk_hall_private_mark_tenant CHECK (tenant_id='0'),
- CONSTRAINT chk_hall_private_mark_type CHECK (source_type IN ('PRIVATE_CASE','LEGACY_EXECUTION')),
- CONSTRAINT chk_hall_private_mark_revision CHECK (revision>=1 AND revision<=9007199254740991),
- CONSTRAINT chk_hall_private_mark_archived CHECK (archived IN (0,1)),
- CONSTRAINT chk_hall_private_mark_view CHECK (
-   (viewed_execution_id IS NULL AND viewed_manifest_id IS NULL)
-   OR (viewed_execution_id IS NOT NULL AND viewed_manifest_id IS NOT NULL)),
- CONSTRAINT chk_hall_private_mark_time CHECK (snapshot_updated_at>=0 AND updated_at>=0)
+ UNIQUE KEY uk_hall_private_mark_key (tenant_id,client_id,owner_jiacn,operation_key)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin
  COMMENT='Private organization only; not execution, acceptance or funding state';

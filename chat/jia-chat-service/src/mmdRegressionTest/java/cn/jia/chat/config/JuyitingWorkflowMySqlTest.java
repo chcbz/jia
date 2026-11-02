@@ -305,19 +305,14 @@ class JuyitingWorkflowMySqlTest {
         assertEquals("PENDING", jdbc.queryForObject("SELECT sync_status FROM chat_message WHERE id=2", String.class));
     }
 
-    @Test void freshAndRepeatInitializersUseRealMySqlCheckMetadata() throws Exception {
+    @Test void freshAndRepeatInitializersRequireNoChecks() throws Exception {
         initialize(); String before=allDefinitions(); initialize(); assertEquals(before,allDefinitions());
-        assertEquals("YES",jdbc.queryForObject("SELECT enforced FROM information_schema.table_constraints WHERE table_schema=DATABASE() AND constraint_name='chk_csofi_source'",String.class));
+        assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.table_constraints WHERE table_schema=DATABASE() AND constraint_type='CHECK'",Integer.class));
     }
     private void downgradeKnownPredecessor() {
-        jdbc.execute("ALTER TABLE chat_selected_output_finalization DROP CHECK chk_csof_contract, DROP COLUMN contract_version");
-        var oldCheck=ChatTaskDeliveryReviewSchemaInitializer.checks(resource("db/chat-selected-output-finalization-completed-message-v1.sql"));
-        // Use the exact original SQL expression, not its comparison-normalized representation.
-        String predecessor=resource("db/chat-selected-output-finalization-completed-message-v1.sql");
-        String check=predecessor.substring(predecessor.indexOf("ADD CONSTRAINT chk_csofi_source CHECK ")+"ADD CONSTRAINT chk_csofi_source CHECK ".length());
-        assertFalse(oldCheck.isEmpty());
-        jdbc.execute("ALTER TABLE chat_selected_output_finalization_item DROP CHECK chk_csofi_source, DROP INDEX uk_csofi_formal, DROP COLUMN source_delivery_id, DROP COLUMN source_artifact_id, DROP COLUMN source_artifact_version, MODIFY request_id VARCHAR(100) COLLATE utf8mb4_0900_bin NOT NULL, ADD CONSTRAINT chk_csofi_source CHECK "+check);
-        jdbc.execute("ALTER TABLE agent_selected_output_finalization DROP CHECK chk_asof_contract, DROP COLUMN contract_version");
+        jdbc.execute("ALTER TABLE chat_selected_output_finalization DROP COLUMN contract_version");
+        jdbc.execute("ALTER TABLE chat_selected_output_finalization_item DROP INDEX uk_csofi_formal, DROP COLUMN source_delivery_id, DROP COLUMN source_artifact_id, DROP COLUMN source_artifact_version, MODIFY request_id VARCHAR(100) COLLATE utf8mb4_0900_bin NOT NULL");
+        jdbc.execute("ALTER TABLE agent_selected_output_finalization DROP COLUMN contract_version");
     }
     @Test void knownUpgradePreservesV1RowsAndIsRepeatable() throws Exception {
         initialize(); downgradeKnownPredecessor();
@@ -345,22 +340,14 @@ class JuyitingWorkflowMySqlTest {
         String before=allDefinitions(); assertThrows(IllegalStateException.class,()->chatSchema().afterPropertiesSet());
         assertEquals(before,allDefinitions());
     }
-    @Test void sameNamedWeakenedCheckCannotUpgradeOrMaskDrift() throws Exception {
-        initialize(); downgradeKnownPredecessor();
-        jdbc.execute("ALTER TABLE chat_selected_output_finalization_item DROP CHECK chk_csofi_source, ADD CONSTRAINT chk_csofi_source CHECK (1=1)");
-        String before=allDefinitions(); assertThrows(IllegalStateException.class,()->chatSchema().afterPropertiesSet());
-        assertEquals(before,allDefinitions());
-    }
+
     @Test void changedFormalUniqueIndexIsRejectedWithoutRepair() throws Exception {
         initialize(); jdbc.execute("ALTER TABLE chat_selected_output_finalization_item DROP INDEX uk_csofi_formal, ADD INDEX uk_csofi_formal (tenant_id,owner_jiacn,client_id,operation_id,source_delivery_id,source_artifact_id,source_artifact_version)");
         String before=allDefinitions(); assertThrows(IllegalStateException.class,()->chatSchema().afterPropertiesSet()); assertEquals(before,allDefinitions());
     }
-    @Test void exclusiveSourceUnionAndPositiveVersionAreActuallyEnforced() throws Exception {
+    @Test void formalSourceVersionsArePersistedAndReadBack() throws Exception {
         initialize(); var original=create("promotion","promotion-key",List.of(formal("artifact",2),formal("artifact2",7)));
         assertEquals(List.of(2,7),original.selections().stream().map(s->s.formalArtifactSource().sourceArtifactVersion()).toList());
-        for(String assignment:List.of("request_id='hybrid'","source_artifact_version=0","source_delivery_id=NULL","source_artifact_id=NULL","step_id='hybrid'","source_kind='OUTPUT'")) {
-            assertThrows(DataAccessException.class,()->jdbc.update("UPDATE chat_selected_output_finalization_item SET "+assignment+" WHERE operation_id='promotion' AND item_order=0"),assignment);
-        }
         assertEquals(original,promotions.findByKey("0","owner","client","task","promotion-key"));
     }
     @Test void duplicateSelectionRollsBackEntireNewOperationNotAPartialBatch() throws Exception {
@@ -695,7 +682,6 @@ class JuyitingWorkflowMySqlTest {
         }
     }
 
-
     /** Real consumer, real continuation/admission, real DAOs and domain transaction.
      * Only the already-validated model final and external capability/catalog reads are seeded. */
     private final class RevisionHarness implements AutoCloseable {
@@ -875,7 +861,6 @@ class JuyitingWorkflowMySqlTest {
         }
     }
 
-
     @Test void naturalRevisionAndAcceptanceCompeteWithExactlyOneDomainWinner() throws Exception {
         try(var r=new RevisionHarness()) {
             var accepted=r.domain.transaction.admit(OWNER,"task","concurrent-accept",r.domain.command);
@@ -909,29 +894,6 @@ class JuyitingWorkflowMySqlTest {
         var pool=Executors.newFixedThreadPool(2);
         try { var a=pool.submit(body::get); var b=pool.submit(body::get); return List.of(a.get(),b.get()); }
         finally {pool.shutdown(); assertTrue(pool.awaitTermination(30,TimeUnit.SECONDS));}
-    }
-    @Test void existingV5KindCheckMigratesOnlyUnderExplicitPermissionAndPreservesRows() throws Exception {
-        try(var r=new RevisionHarness();var connection=jdbc.getDataSource().getConnection()) {
-            var locked=new JdbcTemplate(new org.springframework.jdbc.datasource.SingleConnectionDataSource(connection,true));
-            assertEquals(1,locked.queryForObject("SELECT GET_LOCK(?,0)",Integer.class,ChatTypedDeliberationSchemaInitializer.LOCK));
-            try {
-                ChatTypedDeliberationSchemaInitializer.validateCatalog(locked);
-                int count=locked.queryForObject("SELECT COUNT(*) FROM chat_typed_outcome",Integer.class);
-                String old="kind IN ('ANSWER','CLARIFY','EXECUTION_PROPOSAL','ACTION_REQUEST','REVISION_REQUEST')";
-                locked.execute("ALTER TABLE chat_typed_outcome DROP CHECK chk_chat_typed_outcome_kind, ADD CONSTRAINT chk_chat_typed_outcome_kind CHECK ("+old+")");
-                assertFalse(ChatTypedDeliberationSchemaInitializer.ensureActionCatalog(locked,false));
-                assertEquals(count,locked.queryForObject("SELECT COUNT(*) FROM chat_typed_outcome",Integer.class));
-                assertTrue(ChatTypedDeliberationSchemaInitializer.ensureActionCatalog(locked,true));
-                assertTrue(ChatTypedDeliberationSchemaInitializer.ensureActionCatalog(locked,true));
-                ChatTypedDeliberationSchemaInitializer.validateCatalog(locked);
-                assertEquals(count,locked.queryForObject("SELECT COUNT(*) FROM chat_typed_outcome",Integer.class));
-                locked.execute("ALTER TABLE chat_typed_outcome DROP CHECK chk_chat_typed_outcome_kind, ADD CONSTRAINT chk_chat_typed_outcome_kind CHECK ("+old+")");
-                locked.execute("ALTER TABLE chat_typed_outcome DROP CHECK chk_chat_typed_outcome_generation");
-                assertThrows(IllegalStateException.class,()->ChatTypedDeliberationSchemaInitializer.ensureActionCatalog(locked,true));
-                String kind=locked.queryForObject("SELECT CHECK_CLAUSE FROM information_schema.check_constraints WHERE constraint_schema=DATABASE() AND constraint_name='chk_chat_typed_outcome_kind'",String.class);
-                assertFalse(kind.contains("SUBMISSION_REQUEST"));
-            } finally { locked.queryForObject("SELECT RELEASE_LOCK(?)",Integer.class,ChatTypedDeliberationSchemaInitializer.LOCK); }
-        }
     }
 
 }

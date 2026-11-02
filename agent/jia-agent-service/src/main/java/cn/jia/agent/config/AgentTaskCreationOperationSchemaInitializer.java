@@ -16,28 +16,7 @@ import java.util.Set;
 @org.springframework.context.annotation.Profile("schema-maintenance")
 public final class AgentTaskCreationOperationSchemaInitializer implements InitializingBean {
     static final String TABLE = "agent_task_creation_operation";
-    private static final Map<String, String> REQUIRED_CHECK_EXPRESSIONS = Map.ofEntries(
-            Map.entry("chk_atco_hash",
-                    "((char_length(request_hash)=64)andregexp_like(request_hash,"
-                            + "cast('^[0-9a-f]{64}$'ascharcharsetbinary)))"),
-            Map.entry("chk_atco_identity",
-                    "((char_length(client_id)between1and50)and"
-                            + "(char_length(owner_jiacn)between1and50)and"
-                            + "(char_length(operation_id)between1and100)and"
-                            + "(char_length(idempotency_key)between1and100)and"
-                            + "(operation_statein('PROCESSING','COMMITTED')))"),
-            Map.entry("chk_atco_receipt",
-                    "(((operation_state='PROCESSING')and(task_idisnull)and"
-                            + "(requirement_revisionisnull)and(completed_atisnull))or"
-                            + "((operation_state='COMMITTED')and(task_idisnotnull)and"
-                            + "(requirement_revision=1)and(completed_atisnotnull)))"),
-            Map.entry("chk_atco_refs",
-                    "(json_type(input_refs_json)='ARRAY')"),
-            Map.entry("chk_atco_scope",
-                    "(owner_jiacn<>'0')"),
-            Map.entry("chk_atco_time",
-                    "((created_at>0)and((completed_atisnull)or"
-                            + "(completed_at>=created_at)))"));
+
     private final JdbcTemplate jdbc;
 
     public AgentTaskCreationOperationSchemaInitializer(JdbcTemplate jdbc) {
@@ -118,16 +97,6 @@ public final class AgentTaskCreationOperationSchemaInitializer implements Initia
         if (indexes.size() != 14) {
             throw new IllegalStateException("Creation-operation extra index drift");
         }
-        List<Map<String, Object>> checks = jdbc.queryForList(
-                "SELECT tc.constraint_name,tc.enforced,cc.check_clause FROM "
-                        + "information_schema.table_constraints tc JOIN "
-                        + "information_schema.check_constraints cc ON "
-                        + "cc.constraint_catalog=tc.constraint_catalog AND "
-                        + "cc.constraint_schema=tc.constraint_schema AND "
-                        + "cc.constraint_name=tc.constraint_name WHERE "
-                        + "tc.constraint_schema=DATABASE() AND tc.table_name=? "
-                        + "AND tc.constraint_type='CHECK'", TABLE);
-        validateChecks(checks);
     }
 
     private void requireMySql8() {
@@ -180,112 +149,6 @@ public final class AgentTaskCreationOperationSchemaInitializer implements Initia
         }
     }
 
-    static void validateChecks(List<Map<String, Object>> rows) {
-        Map<String, Check> actual = new LinkedHashMap<>();
-        for (Map<String, Object> row : rows) {
-            String name = text(row, "constraint_name");
-            if (name == null || actual.put(name, new Check(text(row, "enforced"),
-                    text(row, "check_clause"))) != null) {
-                throw new IllegalStateException("Creation-operation ambiguous CHECK catalog");
-            }
-        }
-        Set<String> expectedNames = REQUIRED_CHECK_EXPRESSIONS.keySet();
-        if (!actual.keySet().equals(expectedNames)) {
-            throw new IllegalStateException("Creation-operation CHECK set drift");
-        }
-        for (Map.Entry<String, String> expected : REQUIRED_CHECK_EXPRESSIONS.entrySet()) {
-            Check found = actual.get(expected.getKey());
-            if (found == null || !"YES".equalsIgnoreCase(found.enforced())) {
-                throw new IllegalStateException(
-                        "Creation-operation CHECK enforcement drift: " + expected.getKey());
-            }
-            String canonical;
-            try {
-                canonical = canonicalCheckExpression(found.clause());
-            } catch (IllegalArgumentException malformed) {
-                throw new IllegalStateException(
-                        "Creation-operation CHECK drift: " + expected.getKey(), malformed);
-            }
-            if (!expected.getValue().equals(canonical)) {
-                throw new IllegalStateException(
-                        "Creation-operation CHECK drift: " + expected.getKey());
-            }
-        }
-    }
-
-    static String canonicalCheckExpression(String source) {
-        if (source == null) return null;
-        String rendered = normalizeCatalogQuoteDelimiters(source);
-        StringBuilder canonical = new StringBuilder(rendered.length());
-        boolean quoted = false;
-        for (int index = 0; index < rendered.length(); index++) {
-            char character = rendered.charAt(index);
-            if (character == '\'') {
-                canonical.append(character);
-                if (quoted && index + 1 < rendered.length()
-                        && rendered.charAt(index + 1) == '\'') {
-                    canonical.append(rendered.charAt(++index));
-                } else {
-                    quoted = !quoted;
-                }
-            } else if (quoted) {
-                canonical.append(character);
-            } else if (Character.isWhitespace(character) || character == '`') {
-                continue;
-            } else if (rendered.regionMatches(true, index, "_utf8mb4", 0, 8)
-                    && nextNonWhitespaceIsQuote(rendered, index + 8)) {
-                index += 7;
-            } else {
-                canonical.append(Character.toLowerCase(character));
-            }
-        }
-        if (quoted) throw new IllegalArgumentException("Unterminated CHECK literal");
-        return canonical.toString();
-    }
-
-    private static String normalizeCatalogQuoteDelimiters(String source) {
-        int escaped = 0;
-        int plain = 0;
-        for (int index = 0; index < source.length(); index++) {
-            if (source.charAt(index) != '\'') continue;
-            int slashes = 0;
-            for (int prior = index - 1; prior >= 0 && source.charAt(prior) == '\\'; prior--) {
-                slashes++;
-            }
-            if (slashes == 0) {
-                plain++;
-            } else if (slashes == 1) {
-                escaped++;
-            } else {
-                throw new IllegalArgumentException("Ambiguous CHECK quote rendering");
-            }
-        }
-        if (plain != 0) {
-            if (escaped != 0) throw new IllegalArgumentException("Mixed CHECK quote rendering");
-            return source;
-        }
-        if (escaped == 0) return source;
-        if ((escaped & 1) != 0) throw new IllegalArgumentException("Unbalanced CHECK quote rendering");
-        StringBuilder rendered = new StringBuilder(source.length() - escaped);
-        for (int index = 0; index < source.length(); index++) {
-            char character = source.charAt(index);
-            if (character == '\\' && index + 1 < source.length()
-                    && source.charAt(index + 1) == '\'') {
-                rendered.append('\'');
-                index++;
-            } else {
-                rendered.append(character);
-            }
-        }
-        return rendered.toString();
-    }
-
-    private static boolean nextNonWhitespaceIsQuote(String value, int start) {
-        int index = start;
-        while (index < value.length() && Character.isWhitespace(value.charAt(index))) index++;
-        return index < value.length() && value.charAt(index) == '\'';
-    }
-
     private static Object value(Map<String, Object> row, String key) {
         return row.entrySet().stream().filter(entry -> entry.getKey().equalsIgnoreCase(key))
                 .findFirst().map(Map.Entry::getValue).orElse(null);
@@ -297,5 +160,5 @@ public final class AgentTaskCreationOperationSchemaInitializer implements Initia
     }
 
     private record Column(String type, String nullable, String collation) { }
-    private record Check(String enforced, String clause) { }
+
 }

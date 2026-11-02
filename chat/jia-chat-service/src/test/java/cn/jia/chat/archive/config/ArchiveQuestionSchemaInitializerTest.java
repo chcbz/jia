@@ -14,7 +14,6 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ArchiveQuestionSchemaInitializerTest {
-    private static final String RESPONDER_HEX = "e6a188e58db7e4b9a6e5908f";
 
     @Test
     void h05aCatalogIsIndependentFromH02AndH03AndMatchesResource() throws Exception {
@@ -31,12 +30,12 @@ class ArchiveQuestionSchemaInitializerTest {
             definition.indexes().keySet().stream().filter(name -> !"PRIMARY".equals(name))
                     .forEach(name -> assertTrue(sql.contains(name.toLowerCase()), name));
             definition.foreignKeys().keySet().forEach(name -> assertTrue(sql.contains(name.toLowerCase()), name));
-            definition.checks().keySet().forEach(name -> assertTrue(sql.contains(name.toLowerCase()), name));
+
         });
     }
 
     @Test
-    void exactSnapshotPassesAndColumnIndexForeignKeyAndCheckDriftFailClosed() {
+    void exactSnapshotPassesAndColumnAndIndexDriftFailClosed() {
         ArchiveSchemaSnapshot expected = ArchiveQuestionSchemaCatalog.expectedSnapshot();
         assertDoesNotThrow(() -> ArchiveQuestionSchemaCatalog.validate(expected));
 
@@ -58,46 +57,6 @@ class ArchiveQuestionSchemaInitializerTest {
         ArchiveSchemaSnapshot indexDrift = new ArchiveSchemaSnapshot(tables);
         assertThrows(IllegalStateException.class, () -> ArchiveQuestionSchemaCatalog.validate(indexDrift));
 
-        var checks = new LinkedHashMap<>(event.checks());
-        checks.put("chk_archive_question_event_sequence", checks.get("chk_archive_question_event_sequence").withEnforced(false));
-        tables = new LinkedHashMap<>(expected.tables());
-        tables.put("archive_question_event", event.withChecks(checks));
-        ArchiveSchemaSnapshot checkDrift = new ArchiveSchemaSnapshot(tables);
-        assertThrows(IllegalStateException.class, () -> ArchiveQuestionSchemaCatalog.validate(checkDrift));
-    }
-
-    @Test
-    void mysql8021AliasesAreNarrowAndIdempotent() {
-        assertEquals("length(selected_text)<=8192",
-                ArchiveQuestionSchemaCatalog.normalizeCheck("OCTET_LENGTH(`selected_text`) <= 8192"));
-        assertEquals("regexp_like(question_id,'OCTET_LENGTH(x)')",
-                ArchiveQuestionSchemaCatalog.normalizeCheck("REGEXP_LIKE(`question_id`,'OCTET_LENGTH(x)')"));
-        String normalized = ArchiveQuestionSchemaCatalog.normalizeCheck("OCTET_LENGTH(`payload_json`) >= 2");
-        assertEquals(normalized, ArchiveQuestionSchemaCatalog.normalizeCheck(normalized));
-    }
-
-    @Test
-    void responderHexMetadataIsCanonicalAndDriftFailsClosed() {
-        ArchiveSchemaSnapshot expected = ArchiveQuestionSchemaCatalog.expectedSnapshot();
-        String canonical = "(responder_id='archive-clerk-v1') and (responder_name=convert(0x"
-                + RESPONDER_HEX + " using utf8mb4)) and (responder_mode='fallback')";
-        assertEquals(canonical, expected.tables().get("archive_question").checks()
-                .get("chk_archive_question_responder").clause());
-        assertDoesNotThrow(() -> ArchiveQuestionSchemaCatalog.validate(
-                withResponderCheck(expected, canonical)));
-
-        assertResponderCheckDrift(expected, canonical.replace(RESPONDER_HEX,
-                "e6a188e58db7e4b9a6e5908e"));
-        assertResponderCheckDrift(expected, canonical.replace("using utf8mb4", "using utf8mb3"));
-        assertResponderCheckDrift(expected, canonical.replace(
-                "convert(0x" + RESPONDER_HEX + " using utf8mb4)",
-                "unhex('" + RESPONDER_HEX + "')"));
-        assertResponderCheckDrift(expected, canonical.replace(
-                "convert(0x" + RESPONDER_HEX + " using utf8mb4)",
-                "trim(convert(0x" + RESPONDER_HEX + " using utf8mb4))"));
-        assertResponderCheckDrift(expected, canonical.replace("responder_name=", "question_text="));
-        assertResponderCheckDrift(expected, canonical.replace(
-                "convert(0x" + RESPONDER_HEX + " using utf8mb4)", "'案卷书吏'"));
     }
 
     @Test
@@ -115,19 +74,4 @@ class ArchiveQuestionSchemaInitializerTest {
                 Set.copyOf(ArchiveReaderDataSchemaCatalog.TABLE_ORDER)));
     }
 
-    private ArchiveSchemaSnapshot withResponderCheck(ArchiveSchemaSnapshot snapshot, String clause) {
-        var tables = new LinkedHashMap<>(snapshot.tables());
-        var question = tables.get("archive_question");
-        var checks = new LinkedHashMap<>(question.checks());
-        checks.put("chk_archive_question_responder", new ArchiveSchemaSnapshot.CheckSnapshot(clause, true));
-        tables.put("archive_question", question.withChecks(checks));
-        return new ArchiveSchemaSnapshot(tables);
-    }
-
-    private void assertResponderCheckDrift(ArchiveSchemaSnapshot expected, String clause) {
-        IllegalStateException failure = assertThrows(IllegalStateException.class,
-                () -> ArchiveQuestionSchemaCatalog.validate(withResponderCheck(expected, clause)));
-        assertTrue(failure.getMessage().contains(
-                "archive_question.chk_archive_question_responder.clause"));
-    }
 }

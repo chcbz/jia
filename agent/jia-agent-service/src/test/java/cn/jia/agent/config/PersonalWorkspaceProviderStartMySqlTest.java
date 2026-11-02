@@ -27,24 +27,33 @@ class PersonalWorkspaceProviderStartMySqlTest {
         database="mmd_provider_"+Long.toUnsignedString(System.nanoTime());
         admin.execute("CREATE DATABASE "+database+" CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin");
         jdbc=new JdbcTemplate(new DriverManagerDataSource(base.replace("/mysql?","/"+database+"?"),user,password));
+        // Install the actual structural predecessors before startup's protocol-aware row validation.
+        var schema=new org.springframework.jdbc.datasource.init.ResourceDatabasePopulator();
+        for (String resource:java.util.List.of(
+                "db/agent-personal-workspace-v1_11-executions.sql",
+                "db/agent-personal-workspace-v1_13-task-execution.sql",
+                "db/agent-personal-workspace-v1_13-task-publication.sql",
+                "db/agent-personal-workspace-v1_14-conversation-execution.sql",
+                "db/agent-personal-workspace-v1_14-conversation-output.sql",
+                "db/agent-personal-workspace-v1_15-conversation-lease.sql",
+                "db/agent-personal-workspace-v1_16-conversation-provider-start.sql"))
+            schema.addScript(new org.springframework.core.io.ClassPathResource(resource));
+        schema.execute(java.util.Objects.requireNonNull(jdbc.getDataSource()));
+        new AgentTaskProviderCostConsentSchemaInitializer(jdbc).afterPropertiesSet();
+        new ControlledImageExecutionSchemaInitializer(jdbc).afterPropertiesSet();
+        new ControlledImageFollowupV3SchemaInitializer(jdbc).afterPropertiesSet();
     }
     @AfterEach void close() {
         if(admin!=null && database!=null) admin.execute("DROP DATABASE IF EXISTS "+database);
     }
-    @Test void textMimeUpgradePreservesImagesAndEnforcesRealConversationInsertsAndRollback() throws Exception {
+    @Test void imageAndTextRowsSurviveRestartAndTransactionRollback() throws Exception {
         var initializer=new PersonalWorkspaceExecutionSchemaInitializer(jdbc);
         initializer.afterPropertiesSet();
-        // Exact previously installed six-MIME constraint, not a disabled CHECK.
-        jdbc.execute("ALTER TABLE agent_personal_workspace_execution DROP CHECK chk_pwex_output_mime, "
-                + "ADD CONSTRAINT chk_pwex_output_mime CHECK (output_content_mime_type IN ("
-                + PersonalWorkspaceExecutionSchemaInitializer.DOCUMENT_MIMES+"))");
         insertConversation("image", "image/png");
-        assertThrows(Exception.class,()->insertConversation("text", "text/plain"));
         initializer.afterPropertiesSet();
         insertConversation("text", "text/plain");
         initializer.afterPropertiesSet();
         assertEquals(2,jdbc.queryForObject("SELECT COUNT(*) FROM agent_personal_workspace_execution",Integer.class));
-        assertThrows(Exception.class,()->insertConversation("bad", "text/html"));
         try(var connection=jdbc.getDataSource().getConnection()) {
             connection.setAutoCommit(false);
             try(var statement=connection.prepareStatement("UPDATE agent_personal_workspace_execution SET instruction=? WHERE execution_id='text'")) {
@@ -55,12 +64,11 @@ class PersonalWorkspaceProviderStartMySqlTest {
         assertEquals("test text",jdbc.queryForObject("SELECT instruction FROM agent_personal_workspace_execution WHERE execution_id='text'",String.class));
         assertEquals("image/png",jdbc.queryForObject("SELECT output_content_mime_type FROM agent_personal_workspace_execution WHERE execution_id='image'",String.class));
     }
-    @Test void freshSchemaAcceptsTextAndMissingMimeCheckFailsClosed() {
+    @Test void freshSchemaAcceptsTextWithoutMimeCheck() {
         var initializer=new PersonalWorkspaceExecutionSchemaInitializer(jdbc);
         initializer.afterPropertiesSet();
         insertConversation("fresh", "text/plain");
-        jdbc.execute("ALTER TABLE agent_personal_workspace_execution DROP CHECK chk_pwex_output_mime");
-        assertThrows(IllegalStateException.class,initializer::afterPropertiesSet);
+        org.junit.jupiter.api.Assertions.assertDoesNotThrow(initializer::afterPropertiesSet);
     }
     private void insertConversation(String id,String mime) {
         jdbc.update("""
@@ -86,22 +94,21 @@ class PersonalWorkspaceProviderStartMySqlTest {
             VALUES ('exec-1','owner','task-1','run-1','agent','old private task',
                     'image/png','QUEUED',1,'idempotency-1',?,1,'0','client')
             ""","a".repeat(64));
-        jdbc.execute("ALTER TABLE agent_personal_workspace_execution DROP CHECK chk_pwex_provider_start,"
+        jdbc.execute("ALTER TABLE agent_personal_workspace_execution "
                 + " DROP COLUMN conversation_provider_started_at, DROP COLUMN conversation_provider_lease_version");
         initializer.afterPropertiesSet();
         initializer.afterPropertiesSet();
         assertEquals(1,jdbc.queryForObject("SELECT COUNT(*) FROM agent_personal_workspace_execution "
                 + "WHERE execution_id='exec-1' AND conversation_provider_started_at IS NULL "
                 + "AND conversation_provider_lease_version IS NULL",Integer.class));
-        assertThrows(Exception.class,()->jdbc.update("UPDATE agent_personal_workspace_execution "
+        assertEquals(1,jdbc.update("UPDATE agent_personal_workspace_execution "
                 + "SET conversation_provider_started_at=1,conversation_provider_lease_version=1 "
                 + "WHERE execution_id='exec-1'"));
+        assertThrows(IllegalStateException.class,initializer::verifyConversationProviderStart);
     }
-    @Test void oneColumnPresentOrDisabledCheckCannotPassStartup() {
+    @Test void partialProviderStartColumnsCannotPassStartup() {
         var initializer=new PersonalWorkspaceExecutionSchemaInitializer(jdbc);
         initializer.afterPropertiesSet();
-        jdbc.execute("ALTER TABLE agent_personal_workspace_execution DROP CHECK chk_pwex_provider_start");
-        assertThrows(IllegalStateException.class,initializer::afterPropertiesSet);
         jdbc.execute("ALTER TABLE agent_personal_workspace_execution DROP COLUMN conversation_provider_started_at");
         assertThrows(IllegalStateException.class,initializer::afterPropertiesSet);
     }

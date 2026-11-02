@@ -1,4 +1,3 @@
--- Expand the enforced MIME contract atomically; preserve all existing output types.
-ALTER TABLE agent_personal_workspace_execution
-  DROP CHECK chk_pwex_output_mime,
-  ADD CONSTRAINT chk_pwex_output_mime CHECK (output_content_mime_type IN ('image/png','image/jpeg','application/pdf','application/vnd.openxmlformats-officedocument.wordprocessingml.document','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','application/vnd.openxmlformats-officedocument.presentationml.presentation','text/plain'));
+-- CHECK-only historical migration retired on 2026-11-02.
+-- Rules are documented in docs/interface-catalog/database-check-rules-20261102.md.
+-- Existing databases use explicit, catalog-pinned CHECK removal; no startup DDL.

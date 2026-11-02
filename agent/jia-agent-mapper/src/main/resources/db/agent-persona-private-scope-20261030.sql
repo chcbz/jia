@@ -46,10 +46,7 @@ BEGIN
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE constraint_schema = DATABASE()
         AND table_name = 'agent_persona' AND constraint_name = 'chk_agent_persona_private_scope') THEN
-        ALTER TABLE agent_persona ADD CONSTRAINT chk_agent_persona_private_scope CHECK (
-            CHAR_LENGTH(tenant_id) > 0 AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(TRIM(tenant_id))
-            AND (client_id IS NULL OR (CHAR_LENGTH(client_id) > 0
-                AND OCTET_LENGTH(client_id) = OCTET_LENGTH(TRIM(client_id)))));
+
     END IF;
     IF (SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema = DATABASE()
         AND table_name = 'agent_persona' AND index_name = 'uk_agent_persona_scope_code'

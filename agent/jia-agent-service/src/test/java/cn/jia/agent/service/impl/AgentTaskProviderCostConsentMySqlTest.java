@@ -40,18 +40,7 @@ class AgentTaskProviderCostConsentMySqlTest {
         assertThrows(DataAccessException.class,()->insertIssued("Key","consent-b","owner-a",7,1));
         insertIssued("key","consent-c","owner-a",7,1);insertIssued("Key","consent-d","Owner-a",7,1);
         assertEquals(3,jdbc.queryForObject("SELECT COUNT(*) FROM agent_task_provider_cost_consent",Integer.class));
-        assertThrows(DataAccessException.class,()->insertIssued("bad-attempts","consent-e","owner-a",7,2));
-        assertThrows(DataAccessException.class,()->insertIssued("bad-epoch","consent-f","owner-a",0,1));
-        assertThrows(DataAccessException.class,()->jdbc.update("UPDATE agent_task_provider_cost_consent SET state='CONSUMED' WHERE consent_id='consent-a'"));}
-
-    @Test void actualMySqlCheckNormalizationAcceptsPristineAndRejectsSameNamedWeakCheck(){
-        assertDoesNotThrow(()->new AgentTaskProviderCostConsentSchemaInitializer(jdbc).afterPropertiesSet());
-        jdbc.execute("ALTER TABLE agent_task_provider_cost_consent "
-                +"DROP CHECK chk_atpcc_provider, "
-                +"ADD CONSTRAINT chk_atpcc_provider CHECK (1=1)");
-        IllegalStateException failure=assertThrows(IllegalStateException.class,
-                ()->new AgentTaskProviderCostConsentSchemaInitializer(jdbc).afterPropertiesSet());
-        assertTrue(failure.getMessage().contains("CHECK definition drift"),failure.getMessage());
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.table_constraints WHERE constraint_schema=DATABASE() AND constraint_type='CHECK'", Integer.class));
     }
 
     @Test void concurrentCasAllowsExactlyOneIssuedToBoundTransition()throws Exception{insertIssued("race","consent-race","owner-a",7,1);

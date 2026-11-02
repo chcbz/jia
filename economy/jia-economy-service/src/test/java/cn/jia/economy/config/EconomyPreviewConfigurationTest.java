@@ -116,36 +116,7 @@ class EconomyPreviewConfigurationTest {
         }
     }
 
-    @Test
-    void checkNormalizationPreservesBooleanMeaningAndCompoundTriggerDdlIsBounded() {
-        String canonical = "allow_negative in (0,1) and owner_type='SYSTEM'";
-        String expected = EconomySchemaInitializer.normalizeCheckClause(
-                "allow_negative IN (0,1) AND owner_type = 'SYSTEM'");
-        String mysql = EconomySchemaInitializer.normalizeCheckClause(
-                " ( ( `allow_negative` in ( 0 , 1 ) ) and "
-                        + "( `owner_type` = _utf8mb4 'SYSTEM' ) ) ");
-        String regrouped = EconomySchemaInitializer.normalizeCheckClause(
-                "(allow_negative IN (0,1) AND owner_type = 'SYSTEM') OR purpose = 'PROVIDER_VARIANCE'");
-
-        assertEquals(canonical, expected);
-        assertEquals(canonical, mysql);
-        assertFalse(expected.equals(regrouped));
-        assertFalse(EconomySchemaInitializer.normalizeCheckClause("currency = 'SILVER'")
-                .equals(EconomySchemaInitializer.normalizeCheckClause("currency = 'silver'")));
-        assertEquals("label='A ( B, C <> D ) and O''Brien'",
-                EconomySchemaInitializer.normalizeCheckClause(
-                        " ( label = _utf8mb4 'A ( B, C <> D ) and O''Brien' ) "));
-
-        String mysqlCatalog = "((`currency` = _utf8mb4\\'SILVER\\') AND "
-                + "(LENGTH(`request_hash`) = 32))";
-        String mysqlCatalogCaseDrift = "((`currency` = _utf8mb4\\'silver\\') AND "
-                + "(OCTET_LENGTH(`request_hash`) = 32))";
-        assertEquals("currency='SILVER' and octet_length(request_hash)=32",
-                EconomySchemaInitializer.normalizeCheckClause(mysqlCatalog));
-        assertEquals("label='O''Brien'", EconomySchemaInitializer.normalizeCheckClause(
-                "(`label` = _utf8mb4\\'O\\'\\'Brien\\')"));
-        assertFalse(EconomySchemaInitializer.normalizeCheckClause(mysqlCatalog)
-                .equals(EconomySchemaInitializer.normalizeCheckClause(mysqlCatalogCaseDrift)));
+    @Test void compoundTriggerDdlIsBounded() {
         assertEquals(5, EconomySchemaInitializer.tableDdlStatements().size());
     }
 
