@@ -139,7 +139,7 @@ public final class FundedBountySettlementServiceImpl implements FundedBountySett
                 .put(TaskEventPayload.Key.REASON_CODE, "PREVIEW_BOUNTY_SETTLED");
         String seed = actor.tenantId() + '\0' + actor.clientId() + '\0' + root.getTaskId() + "\0W06\0" + (expected + 1);
         events.append(new AgentTaskEventWriteCommand().setTenantId(actor.tenantId()).setClientId(actor.clientId())
-                .setTaskId(root.getTaskId()).setEventId("evt_" + TaskEventPayload.ContentDigest.fromUtf8(seed).sha256())
+                .setOwnerJiacn(actor.ownerJiacn()).setTaskId(root.getTaskId()).setEventId("evt_" + TaskEventPayload.ContentDigest.fromUtf8(seed).sha256())
                 .setEventType(TaskEventType.TASK_COMPLETED).setActorType(TaskEventType.ActorType.SYSTEM).setActorId(null)
                 .setAggregateType(TaskEventType.Aggregate.TASK).setAggregateId(root.getTaskId())
                 .setEventJson(payload.toJson()).setOccurredAt(now));

@@ -134,6 +134,8 @@ class FundedBountySettlementRealTransactionTest {
         assertEquals(quote, ReflectionTestUtils.invokeMethod(fixture, "quote", AGENT, 2));
         assertEquals("SETTLED", foundation.funding().findFunding(ACTOR.tenantId(), ACTOR.clientId(), taskId).getStatus());
         assertEquals(5, count("agent_task_event"));
+        assertEquals(ACTOR.ownerJiacn(), jdbc.queryForObject(
+                "SELECT owner_jiacn FROM agent_task_event WHERE event_type='TASK_COMPLETED'", String.class));
         assertEquals(5, broker.wakeups.size());
     }
 

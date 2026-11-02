@@ -89,6 +89,7 @@ class ChatBountyExecutionTerminationMySqlTest {
         tx.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
         var schema = new ResourceDatabasePopulator();
         for (String resource : java.util.List.of(
+                "db/agent-task-execution-grant-v1.sql",
                 "db/agent-personal-workspace-v1_11-executions.sql",
                 "db/agent-personal-workspace-v1_13-task-execution.sql",
                 "db/agent-personal-workspace-v1_13-task-publication.sql",
