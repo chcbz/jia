@@ -16,7 +16,7 @@ import static org.mockito.ArgumentMatchers.*;
 class SkillPackagePublicationControllerTest {
     private static JwtAuthenticationToken actor(boolean admin) {
         var jwt=Jwt.withTokenValue("fixture").header("alg","none").subject("publisher")
-                .claim("client_id","client").claim("jiacn","owner").build();
+                .claim("tenant_id","0").claim("client_id","client").claim("jiacn","owner").build();
         return new JwtAuthenticationToken(jwt,admin?List.of(new SimpleGrantedAuthority("ROLE_ADMIN")):List.of());
     }
     private static String metadata(String extra) {
