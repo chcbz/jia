@@ -66,6 +66,13 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
     private final ObjectMapper json;
     private ControlledImageGrantAuthority controlledAuthority;
     private cn.jia.agent.service.TaskAssigneeAuthorityService assigneeAuthority;
+    private AgentTaskBountyBootstrapWakeupPublisher wakeups;
+
+    @Autowired
+    public void setBootstrapWakeups(AgentTaskBountyBootstrapWakeupPublisher wakeups) {
+        this.wakeups = Objects.requireNonNull(wakeups);
+    }
+
     @Autowired
     public void setAssigneeAuthority(cn.jia.agent.service.TaskAssigneeAuthorityService authority) {
         this.assigneeAuthority=Objects.requireNonNull(authority);
@@ -367,6 +374,7 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
                 .setAdmittedRequestId(null).setLastErrorCode(null).setVersion(0L)
                 .setCreatedAt(grant.getCreatedAt()).setReconciledAt(null);
         bootstrapOutbox.insert(intent);
+        if (wakeups != null) wakeups.afterCommit(grant.getCreatedAt());
     }
 
     @Override

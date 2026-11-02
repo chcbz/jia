@@ -142,12 +142,15 @@ class AgentTaskBountyBootstrapOutboxServiceImplTest {
 
     @Test
     void retryReleasesLeaseAndReclaimsSameBusinessIntent() {
+        var wakeups = org.mockito.Mockito.mock(AgentTaskBountyBootstrapWakeupPublisher.class);
+        service.setBootstrapWakeups(wakeups);
         var first = service.claimNext(scope(), "chat-a", 1000);
         var retry = service.reconcile(scope(), new AgentTaskBountyBootstrapReconcileDTO(
                 first.bootstrapId(), first.outboxVersion(), first.leaseOwner(),
                 first.claimAttempt(), AgentTaskBountyBootstrapReconcileDTO.Outcome.RETRYABLE_FAILURE,
                 null, null, "CHAT_TRANSACTION_RETRY"), 1100);
         assertEquals("RETRY", retry.status());
+        org.mockito.Mockito.verify(wakeups).afterCommit(2100L);
         assertNull(service.claimNext(scope(), "chat-b", 2099));
         var second = service.claimNext(scope(), "chat-b", 2100);
         assertEquals(first.bootstrapId(), second.bootstrapId());

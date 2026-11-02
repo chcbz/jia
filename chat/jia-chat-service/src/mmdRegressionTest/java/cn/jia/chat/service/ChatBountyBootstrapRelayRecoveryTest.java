@@ -4,7 +4,6 @@ import cn.jia.agent.service.AgentTaskBountyBootstrapOutboxService;
 import cn.jia.chat.config.ChatTypedDeliberationReadiness.Readiness;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentCaptor;
 import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.dao.TransientDataAccessResourceException;
 import org.springframework.transaction.CannotCreateTransactionException;
@@ -12,6 +11,10 @@ import org.springframework.transaction.CannotCreateTransactionException;
 import java.sql.SQLException;
 import java.sql.SQLTransientConnectionException;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.ArrayList;
+import java.util.List;
+import cn.jia.agent.entity.AgentTaskBountyBootstrapWakeup;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -28,14 +31,20 @@ class ChatBountyBootstrapRelayRecoveryTest {
     private final AtomicLong now = new AtomicLong(1_000L);
     private ChatBountyBootstrapRelay relay;
     private Runnable tick;
+    private final List<Runnable> callbacks = new ArrayList<>();
+    private final List<Long> delays = new ArrayList<>();
 
     @BeforeEach void start() {
         when(contexts.bootstrapReadiness()).thenReturn(Readiness.READY);
+        doAnswer(call -> {
+            callbacks.add(call.getArgument(0));
+            delays.add(call.getArgument(1));
+            return mock(ScheduledFuture.class);
+        }).when(scheduler).schedule(any(Runnable.class), anyLong(), eq(TimeUnit.MILLISECONDS));
         relay = new ChatBountyBootstrapRelay(outbox, admission, contexts, () -> scheduler, now::get);
         relay.start();
-        var callback = ArgumentCaptor.forClass(Runnable.class);
-        verify(scheduler).scheduleWithFixedDelay(callback.capture(), eq(0L), eq(500L), eq(TimeUnit.MILLISECONDS));
-        tick = callback.getValue();
+        assertEquals(List.of(0L), delays);
+        tick = () -> callbacks.get(callbacks.size() - 1).run();
     }
 
     @Test void twoConnectionFailuresDoNotPermanentlyDisableNormalTaskAdmission() {
@@ -43,9 +52,11 @@ class ChatBountyBootstrapRelayRecoveryTest {
                 new SQLTransientConnectionException("pool unavailable", "08001"));
         when(outbox.claimNextAvailable(anyString(), anyLong())).thenThrow(unavailable).thenThrow(unavailable).thenReturn(null);
         tick.run();
+        assertEquals(1_000L, delays.get(delays.size() - 1).longValue());
         now.set(1_500); tick.run(); // No repeated DB access during recovery backoff.
         verify(outbox, times(1)).claimNextAvailable(anyString(), anyLong());
         now.set(2_000); tick.run();
+        assertEquals(2_000L, delays.get(delays.size() - 1).longValue());
         assertTrue(relay.isRunning());
         now.set(3_999); tick.run();
         verify(outbox, times(2)).claimNextAvailable(anyString(), anyLong());
@@ -124,10 +135,56 @@ class ChatBountyBootstrapRelayRecoveryTest {
         when(outbox.claimNextAvailable(anyString(), anyLong()))
                 .thenThrow(new TransientDataAccessResourceException("DB restarting")).thenReturn(null);
         tick.run(); relay.stop(); relay.start();
-        var callbacks = ArgumentCaptor.forClass(Runnable.class);
-        verify(scheduler, times(2)).scheduleWithFixedDelay(callbacks.capture(), eq(0L), eq(500L), eq(TimeUnit.MILLISECONDS));
-        callbacks.getAllValues().get(1).run();
+        tick.run();
         verify(outbox, times(2)).claimNextAvailable(anyString(), anyLong());
         assertTrue(relay.isRunning());
+    }
+
+    @Test void emptyQueueSleepsAndCommittedHintWakesWithoutWaitingForRecovery() {
+        tick.run();
+        assertEquals(5_000L, delays.get(delays.size() - 1));
+        Runnable staleRecovery = callbacks.get(callbacks.size() - 1);
+        now.set(1_100);
+        relay.onWorkAvailable(new AgentTaskBountyBootstrapWakeup(now.get()));
+        assertEquals(0L, delays.get(delays.size() - 1));
+        staleRecovery.run(); // A cancelled timer may already have been queued.
+        verify(outbox, times(1)).claimNextAvailable(anyString(), anyLong());
+        tick.run();
+        verify(outbox, times(2)).claimNextAvailable(anyString(), anyLong());
+        verify(scheduler, never()).scheduleWithFixedDelay(any(), anyLong(), anyLong(), any());
+    }
+
+    @Test void notificationStormCoalescesAndInFlightHintIsNotLost() {
+        tick.run();
+        int before = callbacks.size();
+        for (int i = 0; i < 1000; i++) relay.onWorkAvailable(new AgentTaskBountyBootstrapWakeup(now.get()));
+        assertEquals(before + 1, callbacks.size());
+        when(outbox.claimNextAvailable(anyString(), anyLong())).thenAnswer(ignored -> {
+            relay.onWorkAvailable(new AgentTaskBountyBootstrapWakeup(now.get()));
+            return null;
+        });
+        tick.run();
+        assertEquals(0L, delays.get(delays.size() - 1));
+        assertEquals(before + 2, callbacks.size());
+    }
+
+    @Test void retryHintSurvivesImmediateDrainAndWakesAtItsOriginalDueTime() {
+        relay.onWorkAvailable(new AgentTaskBountyBootstrapWakeup(2_000));
+        tick.run();
+        assertEquals(1_000L, delays.get(delays.size() - 1));
+        now.set(2_000); tick.run();
+        assertEquals(5_000L, delays.get(delays.size() - 1));
+    }
+
+    @Test void stoppedAndReplacedLifecycleRejectsOldCallbacksAndHints() {
+        Runnable old = callbacks.get(0);
+        relay.stop();
+        int before = callbacks.size();
+        relay.onWorkAvailable(new AgentTaskBountyBootstrapWakeup(now.get()));
+        assertEquals(before, callbacks.size());
+        relay.start(); old.run();
+        verifyNoInteractions(outbox);
+        tick.run();
+        verify(outbox).claimNextAvailable(anyString(), anyLong());
     }
 }

@@ -37,6 +37,13 @@ public final class AgentTaskBountyBootstrapOutboxServiceImpl
     private final TransactionTemplate transaction;
     private final FixedTenantAdmissionPolicy processScope;
 
+    private AgentTaskBountyBootstrapWakeupPublisher wakeups;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setBootstrapWakeups(AgentTaskBountyBootstrapWakeupPublisher wakeups) {
+        this.wakeups = Objects.requireNonNull(wakeups);
+    }
+
     @Inject
     public AgentTaskBountyBootstrapOutboxServiceImpl(AgentTaskBountyBootstrapOutboxDao outbox,
             ObjectMapper json, PlatformTransactionManager transactionManager,
@@ -195,6 +202,7 @@ public final class AgentTaskBountyBootstrapOutboxServiceImpl
                 errorCode, reconciledAt, now)) {
             throw new IllegalStateException("Bootstrap reconcile CAS lost under row lock");
         }
+        if (nextRetryAt != null && wakeups != null) wakeups.afterCommit(nextRetryAt);
         row.setStatus(status).setNextRetryAt(nextRetryAt).setLeaseOwner(null).setLeaseUntil(null)
                 .setAdmittedConversationId(conversationId).setAdmittedRequestId(requestId)
                 .setLastErrorCode(errorCode).setReconciledAt(reconciledAt)

@@ -96,6 +96,8 @@ class AgentTaskExecutionGrantServiceImplTest {
     }
 
     @Test void externalGrantFreezesExecutorAndStillCreatesOriginalAutomaticBootstrap() {
+        var wakeups = mock(AgentTaskBountyBootstrapWakeupPublisher.class);
+        service.setBootstrapWakeups(wakeups);
         when(links.list("0","client","owner","task-1",null,null,33)).thenReturn(List.of());
         when(authority.lockForAssignment("0","client","owner","agent-1"))
                 .thenReturn(new cn.jia.agent.service.TaskAssigneeAuthorityService.Target("0","client","provider","agent-1",7L,2L));
@@ -106,6 +108,7 @@ class AgentTaskExecutionGrantServiceImplTest {
         assertEquals("DELIBERATE",bootstraps.byAction.values().iterator().next().getPermittedOperation());
         service.assignForDeliberation(scope(),"task-1","external","agent-1",0,1);
         verify(authority,times(1)).lockForAssignment("0","client","owner","agent-1");
+        verify(wakeups, times(1)).afterCommit(row.getCreatedAt());
     }
 
     @Test void pendingReviewAllowsReadOnlyDiscussionContextWithoutGrantingImageExecution() {

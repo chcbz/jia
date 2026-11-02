@@ -1,6 +1,7 @@
 package cn.jia.chat.service;
 
 import cn.jia.agent.entity.AgentTaskBountyBootstrapClaimDTO;
+import cn.jia.agent.entity.AgentTaskBountyBootstrapWakeup;
 import cn.jia.agent.entity.AgentTaskBountyBootstrapReconcileDTO;
 import cn.jia.agent.entity.AgentTaskBountyBootstrapReconcileDTO.Outcome;
 import cn.jia.agent.service.AgentTaskBountyBootstrapOutboxService;
@@ -10,6 +11,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.SmartLifecycle;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
 import java.sql.SQLException;
@@ -20,8 +22,9 @@ import java.util.IdentityHashMap;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
@@ -51,13 +54,21 @@ public class ChatBountyBootstrapRelay implements SmartLifecycle, AutoCloseable {
     private final AtomicBoolean running = new AtomicBoolean();
     private final AtomicBoolean polling = new AtomicBoolean();
     private volatile ScheduledExecutorService scheduler;
+    // Same discovery scale as the existing execution relay; only missed notifications wait for it.
+    static final long RECOVERY_SCAN_MILLIS = 5_000L;
+    private ScheduledFuture<?> pendingWake;
+    private long scheduledAt = Long.MAX_VALUE;
+    private long requestedAt = Long.MAX_VALUE;
+    private long wakeGeneration;
+    private boolean claimedWork;
+
     private volatile String previousFailure;
     private volatile int sameFailureCount;
 
     @Autowired
     public ChatBountyBootstrapRelay(AgentTaskBountyBootstrapOutboxService outbox,
             ChatBountyBootstrapAdmissionService admission, ChatTypedDeliberationContextService contexts) {
-        this(outbox, admission, contexts, () -> Executors.newSingleThreadScheduledExecutor(r -> {
+        this(outbox, admission, contexts, () -> new ScheduledThreadPoolExecutor(1, r -> {
             Thread thread = new Thread(r, "chat-bounty-bootstrap");
             thread.setDaemon(true);
             return thread;
@@ -89,12 +100,44 @@ public class ChatBountyBootstrapRelay implements SmartLifecycle, AutoCloseable {
         claimRetryDelay = CLAIM_RETRY_BASE_MILLIS;
         try {
             ScheduledExecutorService active = Objects.requireNonNull(schedulerFactory.get());
+            if (active instanceof ScheduledThreadPoolExecutor executor) executor.setRemoveOnCancelPolicy(true);
             scheduler = active;
-            active.scheduleWithFixedDelay(() -> safePoll(active), 0, 500, TimeUnit.MILLISECONDS);
+            scheduleWake(active, clock.getAsLong());
         } catch (RuntimeException | Error failure) {
             stop();
             throw failure;
         }
+    }
+
+    @EventListener
+    public synchronized void onWorkAvailable(AgentTaskBountyBootstrapWakeup hint) {
+        if (!running.get() || scheduler == null) return;
+        long at = Math.max(Math.max(clock.getAsLong(), hint.availableAt()), claimRetryNotBefore);
+        requestedAt = Math.min(requestedAt, at);
+        if (!polling.get()) scheduleWake(scheduler, at);
+    }
+
+    // Caller holds this monitor. An earlier notification replaces, rather than adds to, the timer.
+    private void scheduleWake(ScheduledExecutorService owner, long at) {
+        if (!running.get() || scheduler != owner || at >= scheduledAt) return;
+        if (pendingWake != null) pendingWake.cancel(false);
+        long generation = ++wakeGeneration;
+        scheduledAt = at;
+        pendingWake = owner.schedule(() -> {
+            synchronized (this) {
+                if (scheduler != owner || generation != wakeGeneration || !running.get()) return;
+                pendingWake = null;
+                scheduledAt = Long.MAX_VALUE;
+                if (polling.get()) {
+                    // A prior lifecycle or an explicit diagnostic pass still owns the claim guard.
+                    scheduleWake(owner, clock.getAsLong() + 500L);
+                    return;
+                }
+                // Consume only notifications due for this pass. Future retries must survive it.
+                if (requestedAt <= clock.getAsLong()) requestedAt = Long.MAX_VALUE;
+            }
+            safePoll(owner);
+        }, Math.max(0, at - clock.getAsLong()), TimeUnit.MILLISECONDS);
     }
 
     /** One persistent claim per poll, so a retry never spins on the same row in one loop. */
@@ -134,6 +177,7 @@ public class ChatBountyBootstrapRelay implements SmartLifecycle, AutoCloseable {
         claimRetryNotBefore = 0;
         claimRetryDelay = CLAIM_RETRY_BASE_MILLIS;
         if (claim == null) return true;
+        claimedWork = true;
         AgentTaskExecutionGrantService.Scope scope = new AgentTaskExecutionGrantService.Scope(
                 claim.tenantId(), claim.clientId(), claim.ownerJiacn());
         ChatBountyBootstrapAdmissionService.Admission result;
@@ -194,6 +238,7 @@ public class ChatBountyBootstrapRelay implements SmartLifecycle, AutoCloseable {
         if (!running.get() || scheduler != owner || !polling.compareAndSet(false, true)) return;
         try {
             if (!running.get() || scheduler != owner) return;
+            claimedWork = false;
             if (pollWhenReady()) {
                 synchronized (this) {
                     if (scheduler != owner) return;
@@ -216,7 +261,17 @@ public class ChatBountyBootstrapRelay implements SmartLifecycle, AutoCloseable {
                 }
             }
         } finally {
-            polling.set(false);
+            synchronized (this) {
+                polling.set(false);
+                if (running.get() && scheduler == owner) {
+                    long now = clock.getAsLong();
+                    long next = claimedWork ? now : now + RECOVERY_SCAN_MILLIS;
+                    if (contexts.bootstrapReadiness() == Readiness.INITIALIZING) next = now + 500L;
+                    next = Math.min(next, requestedAt);
+                    if (claimRetryNotBefore > now) next = claimRetryNotBefore;
+                    scheduleWake(owner, next);
+                }
+            }
         }
     }
 
@@ -224,6 +279,10 @@ public class ChatBountyBootstrapRelay implements SmartLifecycle, AutoCloseable {
         running.set(false);
         ScheduledExecutorService active = scheduler;
         scheduler = null;
+        ++wakeGeneration;
+        if (pendingWake != null) pendingWake.cancel(false);
+        pendingWake = null;
+        requestedAt = scheduledAt = Long.MAX_VALUE;
         if (active != null) active.shutdown();
     }
     @Override public boolean isRunning() { return running.get(); }
