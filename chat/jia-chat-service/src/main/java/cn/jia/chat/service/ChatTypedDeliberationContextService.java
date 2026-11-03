@@ -141,7 +141,7 @@ public final class ChatTypedDeliberationContextService {
     /** Cheap hint to skip package I/O. Authoritative admission still checks after idempotency. */
     public boolean nativeRuntimeReady(cn.jia.agent.service.SkillCapabilityLookup.Scope scope) {
         try {
-            sessions.requireNativeReady(new TypedDeliberationSessionRegistry.Scope(
+            sessions.observeNative(new TypedDeliberationSessionRegistry.Scope(
                     scope.tenantId(), scope.ownerJiacn(), scope.clientId()), scope.agentId());
             return true;
         } catch (IllegalStateException unavailable) { return false; }
@@ -149,7 +149,7 @@ public final class ChatTypedDeliberationContextService {
 
     public void requireNativeRuntime(cn.jia.agent.service.SkillCapabilityLookup.Scope scope) {
         try {
-            sessions.requireNativeReady(new TypedDeliberationSessionRegistry.Scope(
+            sessions.observeNative(new TypedDeliberationSessionRegistry.Scope(
                     scope.tenantId(), scope.ownerJiacn(), scope.clientId()), scope.agentId());
         } catch (TypedDeliberationSessionRegistry.RuntimeNotReadyException awaiting) {
             throw new RuntimeNotReadyException(awaiting);

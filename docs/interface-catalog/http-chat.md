@@ -993,3 +993,6 @@ public ResponseEntity<JsonResult<VoiceTranscriptionResponse>> transcribe( HttpSe
 - HTTP503，现有错误 envelope 的 `code=TYPED_DELIBERATION_RUNTIME_NOT_READY`：本次未受理，没有创建消息/turn。Web保留草稿、手动重试沿用原键，不自动补发。传输失败仍是受理未知。
 - INSTRUCTION 技能目录新增不可用原因 `NATIVE_EXECUTION_NOT_READY`，只查内存会话；身份/ACL、任务绑定、幂等、锁保护不变。
 - 定向回归：TypedDeliberationSessionRegistryTest、ChatActionCapabilityServiceTest、ChatRetainedOutputAdmissionTest（就绪切换、并发回执）、ChatRetainedOutputSourcesTest，Web typed-deliberation-interaction。
+
+
+就绪提示只读已注册声明（`observeNative`），不调用可能查SQL的 `currentBinding`；它不是授权结果。技能目录消费方已通过 `SkillCapabilityLookup` 验证活跃会话，只联接相同sessionId的native声明。最终准入 `requireNativeReady` 仍执行原绑定校验，不削弱撤销/断线防护。集中回归验证提示不调用绑定回调、权威准入必须调用且能拒绝失效会话。

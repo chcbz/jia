@@ -26,7 +26,7 @@ public final class NativeSkillScriptSessionLookupImpl implements NativeSkillScri
         var live=runtimes.lookup(policy.runtimeScope(),policy.fence());
         if(live==null||live.state()!=SkillCapabilityLookup.State.AVAILABLE)return false;
         try {
-            if(!sessions.nativeScriptReady(new TypedDeliberationSessionRegistry.Scope(scope.tenantId(),scope.executorOwnerJiacn(),scope.clientId()),
+            if(!sessions.nativeScriptDeclared(new TypedDeliberationSessionRegistry.Scope(scope.tenantId(),scope.executorOwnerJiacn(),scope.clientId()),
                     scope.agentId(),live.sessionId()))return false;
             return policy.equals(policies.read(key,taskId))&&live.equals(runtimes.lookup(policy.runtimeScope(),policy.fence()));
         }catch(IllegalStateException unavailable){return false;}

@@ -86,9 +86,23 @@ class TypedDeliberationSessionRegistryTest {
                 "supportedToolPolicyRefs",java.util.List.of("NATIVE_SKILL_SCRIPT_V1")));
         registry.register("s1","0","owner","client","agent",declaration);
         assertEquals("s1",registry.requireNativeReady(scope,"agent").sessionId());
-        assertTrue(registry.nativeScriptReady(scope,"agent","s1"));
-        assertFalse(registry.nativeScriptReady(scope,"agent","old"));
+        assertTrue(registry.nativeScriptDeclared(scope,"agent","s1"));
+        assertFalse(registry.nativeScriptDeclared(scope,"agent","old"));
         registry.remove("s1");
-        assertFalse(registry.nativeScriptReady(scope,"agent","s1"));
+        assertFalse(registry.nativeScriptDeclared(scope,"agent","s1"));
     }
+    @Test void observationNeverInvokesThePotentiallySqlBackedBindingValidator() {
+        var calls = new java.util.concurrent.atomic.AtomicInteger();
+        var declaration=TypedDeliberationDeclarationTest.declaration("READY");
+        declaration.put("nativeExecution",java.util.Map.of("schemaVersion",1,"executionProtocolVersion",5,
+                "toolPolicyRef","NATIVE_LOCAL_FILES_V1","outputMimeTypes",java.util.List.of("text/plain"),
+                "supportedToolPolicyRefs",java.util.List.of("NATIVE_SKILL_SCRIPT_V1")));
+        registry.register("s1","0","owner","client","agent",declaration,()->{calls.incrementAndGet();return false;});
+        assertEquals("s1",registry.observeNative(scope,"agent").sessionId());
+        assertTrue(registry.nativeScriptDeclared(scope,"agent","s1"));
+        assertEquals(0,calls.get());
+        assertThrows(TypedDeliberationSessionRegistry.RuntimeNotReadyException.class,()->registry.requireNativeReady(scope,"agent"));
+        assertEquals(1,calls.get());
+    }
+
 }

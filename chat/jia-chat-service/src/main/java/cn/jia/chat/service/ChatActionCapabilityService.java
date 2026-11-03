@@ -58,7 +58,7 @@ public final class ChatActionCapabilityService {
         var descriptors=installedSkills.readCurrent(key);
         var runtime=expectedFence==null?null:Objects.requireNonNull(skillRuntimes.lookup(key,expectedFence));
         boolean nativeScriptReady = runtime != null && runtime.state() == cn.jia.agent.service.SkillCapabilityLookup.State.AVAILABLE
-                && nativeSessions != null && nativeSessions.nativeScriptReady(
+                && nativeSessions != null && nativeSessions.nativeScriptDeclared(
                         new cn.jia.chat.handler.TypedDeliberationSessionRegistry.Scope(scope.tenantId(),scope.ownerJiacn(),scope.clientId()),
                         scope.targetAgentId(),runtime.sessionId());
         var results=new ArrayList<SkillCandidate>();

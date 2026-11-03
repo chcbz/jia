@@ -31,7 +31,7 @@ class ChatActionCapabilityServiceTest {
     @Test void nativeInstructionIsVerifiedWithoutExecutableManifestAndRequiresMatchingLiveInstall() {
         var sessions=mock(cn.jia.chat.handler.TypedDeliberationSessionRegistry.class);
         service.setNativeSessions(sessions);
-        when(sessions.nativeScriptReady(any(),eq("agent"),eq("session"))).thenReturn(true);
+        when(sessions.nativeScriptDeclared(any(),eq("agent"),eq("session"))).thenReturn(true);
         var descriptor=new InstalledSkillDescriptorLookup.Descriptor("document-workbench","1.0.0","native-install",
                 "a".repeat(64),null,null,"installation","host",null);
         when(installed.read(key)).thenReturn(new InstalledSkillDescriptorLookup.Snapshot(List.of(descriptor)));
@@ -46,9 +46,9 @@ class ChatActionCapabilityServiceTest {
             assertNull(item.metadataJson());
             if(identity.equals("native-install")) {
                 assertEquals("RUNTIME_READY",item.state());assertNull(item.reasonCode());
-                when(sessions.nativeScriptReady(any(),eq("agent"),eq("session"))).thenReturn(false);
+                when(sessions.nativeScriptDeclared(any(),eq("agent"),eq("session"))).thenReturn(false);
                 assertEquals("NATIVE_EXECUTION_NOT_READY",service.inspectInstalledSkills(scope,fence).items().getFirst().reasonCode());
-                when(sessions.nativeScriptReady(any(),eq("agent"),eq("session"))).thenReturn(true);
+                when(sessions.nativeScriptDeclared(any(),eq("agent"),eq("session"))).thenReturn(true);
             }
             else assertEquals("SKILL_RUNTIME_BINDING_MISMATCH",item.reasonCode());
         }

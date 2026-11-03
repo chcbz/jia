@@ -49,11 +49,15 @@ public final class TypedDeliberationSessionRegistry {
     }
 
     public Ready requireSingleReady(Scope scope, String agentId) {
+        return selectReady(scope, agentId, true);
+    }
+
+    private Ready selectReady(Scope scope, String agentId, boolean validateBinding) {
         Objects.requireNonNull(scope, "scope");
         String target = exact(agentId, 100);
         List<Session> matching = new ArrayList<>();
         for (Session session : sessions.values()) {
-            if (scope.equals(session.scope()) && target.equals(session.agentId()) && current(session)) {
+            if (scope.equals(session.scope()) && target.equals(session.agentId()) && (!validateBinding || current(session))) {
                 matching.add(session);
             }
         }
@@ -76,17 +80,30 @@ public final class TypedDeliberationSessionRegistry {
     /** Native task discussion must not freeze an empty action catalogue during startup.
      * Plain chat/read-only consumers continue to use requireSingleReady independently. */
     public Ready requireNativeReady(Scope scope, String agentId) {
-        Ready ready = requireSingleReady(scope, agentId);
+        return requireNativeDeclaration(requireSingleReady(scope, agentId));
+    }
+
+    /** Observation only. Final admission still validates the authenticated binding.
+     * currentBinding may query SQL, so preparation hints must not invoke it. */
+    public Ready observeNative(Scope scope, String agentId) {
+        return requireNativeDeclaration(selectReady(scope, agentId, false));
+    }
+
+    private Ready requireNativeDeclaration(Ready ready) {
         if (!(ready.frozenDeclaration().get("nativeExecution") instanceof Map<?,?> nativeExecution)
                 || !(nativeExecution.get("outputMimeTypes") instanceof List<?> formats) || formats.isEmpty())
             throw new RuntimeNotReadyException();
         return ready;
     }
 
-    /** Same authenticated socket as the skill catalogue; no SQL or runtime probe. */
-    public boolean nativeScriptReady(Scope scope, String agentId, String sessionId) {
+    /** Declaration on a socket already validated by the caller's live skill catalogue. */
+    public boolean nativeScriptDeclared(Scope scope, String agentId, String sessionId) {
         try {
-            Ready ready = requireNativeReady(scope, agentId);
+            Session session = sessions.get(key(sessionId, agentId));
+            if (session == null || !scope.equals(session.scope())
+                    || session.declaration().state() != TypedDeliberationDeclaration.State.READY) return false;
+            Ready ready = requireNativeDeclaration(new Ready(session.sessionId(), session.agentId(),
+                    session.declaration().supportedOperations(), session.declaration().frozenReceipt()));
             var nativeExecution = (Map<?,?>) ready.frozenDeclaration().get("nativeExecution");
             return Objects.equals(sessionId, ready.sessionId())
                     && nativeExecution.get("supportedToolPolicyRefs") instanceof List<?> refs
