@@ -72,6 +72,7 @@ public class ChatTypedDiscussionAdmissionService {
         if (org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive())
             throw persistence("Bootstrap package preparation requires no active transaction");
         if (packagePreparation == null) throw persistence("Skill package preparation is unavailable");
+        contexts.requireNativeRuntime(scope);
         packagePreparation.prepare(scope);
     }
 
@@ -99,12 +100,18 @@ public class ChatTypedDiscussionAdmissionService {
                 ||!command.taskId().equals(locator.getTaskId()))throw unavailable();
         var locatorScope=new ChatTypedDeliberationStore.Scope(tenantId,owner,client,conversationId,locator.getLifecycleGeneration());
         var known=typed.store().findAdmissionByKey(locatorScope,idempotencyKey,false);
+        boolean preparationSkipped = false;
         if(known==null && preparePackages) {
             var targets=scopes.parsePersistedTargetAgentIds(locator.getTargetAgentIds());if(targets.size()!=1)throw unavailable();
             if(packagePreparation==null)throw persistence("Skill package preparation is unavailable");
             var executor=dispatchAuthority.admissionTarget(tenantId,owner,client,command.taskId(),targets.getFirst());
-            packagePreparation.prepare(new cn.jia.agent.service.SkillCapabilityLookup.Scope(tenantId,client,executor.ownerJiacn(),targets.getFirst()));
+            var runtimeScope = new cn.jia.agent.service.SkillCapabilityLookup.Scope(tenantId,client,executor.ownerJiacn(),targets.getFirst());
+            // Skip cold package I/O, but do not reject here: a concurrent same-key
+            // admission must still return its original receipt under the task lock.
+            if (contexts.nativeRuntimeReady(runtimeScope)) packagePreparation.prepare(runtimeScope);
+            else preparationSkipped = true;
         }
+        final boolean unavailableAtPreparation = preparationSkipped;
         return taskMutations.executeWithLockedTaskRootInOwnerScope(tenantId,client,owner,command.taskId(),root->{
             ChatBountyBindingStore.Binding binding;
             try { binding=bindings.lock(new ChatBountyBindingStore.Scope(tenantId,owner,client),command.taskId()); }
@@ -130,6 +137,9 @@ public class ChatTypedDiscussionAdmissionService {
                 if(!bodyDigest.equals(prior.bodyDigest()))throw conflict("Idempotency key body changed");
                 return receipt(prior,true);
             }
+            // Preserve concurrent replay, but never enter cold package work under the lock
+            // if readiness changed after the preflight. A later explicit retry can prepare.
+            if (unavailableAtPreparation) throw new ChatTypedDeliberationContextService.RuntimeNotReadyException();
             Parent parent=parent(storeScope,command);
             var deliveryBasis=deliveryParent(storeScope,command,parent);
             var deliveryTargets=deliveryBasis==null?List.<Map<String,Object>>of():finals.deliveryTargets(storeScope,deliveryBasis);

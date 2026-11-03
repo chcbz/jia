@@ -76,4 +76,19 @@ class TypedDeliberationSessionRegistryTest {
         assertThrows(IllegalStateException.class,()->registry.requireSingleReady(new TypedDeliberationSessionRegistry.Scope("0","Owner","client"),"agent"));
         registry.remove("other");assertEquals(1,registry.size());registry.remove("s1");assertEquals(0,registry.size());
     }
+    @Test void plannerReadinessDoesNotAdmitNativeTaskUntilSameSessionPublishesTools() {
+        var declaration=TypedDeliberationDeclarationTest.declaration("READY");
+        registry.register("s1","0","owner","client","agent",declaration);
+        assertEquals("s1",registry.requireSingleReady(scope,"agent").sessionId());
+        assertThrows(TypedDeliberationSessionRegistry.RuntimeNotReadyException.class,()->registry.requireNativeReady(scope,"agent"));
+        declaration.put("nativeExecution",java.util.Map.of("schemaVersion",1,"executionProtocolVersion",5,
+                "toolPolicyRef","NATIVE_LOCAL_FILES_V1","outputMimeTypes",java.util.List.of("text/plain"),
+                "supportedToolPolicyRefs",java.util.List.of("NATIVE_SKILL_SCRIPT_V1")));
+        registry.register("s1","0","owner","client","agent",declaration);
+        assertEquals("s1",registry.requireNativeReady(scope,"agent").sessionId());
+        assertTrue(registry.nativeScriptReady(scope,"agent","s1"));
+        assertFalse(registry.nativeScriptReady(scope,"agent","old"));
+        registry.remove("s1");
+        assertFalse(registry.nativeScriptReady(scope,"agent","s1"));
+    }
 }

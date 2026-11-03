@@ -47,6 +47,7 @@ class ChatRetainedOutputAdmissionTest {
 
     ChatRetainedOutputAdmissionTest() {
         service.setDispatchAuthority(authority); service.setPackagePreparation(packages); service.setSkillGrants(grants);
+        when(contexts.nativeRuntimeReady(any())).thenReturn(true);
         when(typed.store()).thenReturn(store);
         var c = new ChatConversationEntity().setId(42L).setJiacn("owner").setConversationType("juyiting")
                 .setConversationScopeType("bounty").setConversationScopeKey("task:task").setTaskId("task")
@@ -96,6 +97,29 @@ class ChatRetainedOutputAdmissionTest {
         clearInvocations(contexts, finals, deliberation, packages, grants);
         assertTrue(service.admit("0", sender, "42", "key", command).replay());
         verifyNoInteractions(contexts, finals, deliberation, packages, grants);
+    }
+
+    @Test void readinessChangeAfterPreflightDoesNotPerformColdWorkOrAdmit() {
+        when(contexts.nativeRuntimeReady(any())).thenReturn(false, true);
+        assertThrows(ChatTypedDeliberationContextService.RuntimeNotReadyException.class,
+                () -> service.admit("0", sender, "42", "key", command));
+        verifyNoInteractions(packages, grants, deliberation, finals);
+        verify(contexts, never()).resolve(any(), any(), any(), anyList());
+        verify(store, never()).insertAdmission(any());
+        assertFalse(service.admit("0", sender, "42", "key", command).replay());
+        verify(packages).prepare(any());
+    }
+
+    @Test void concurrentReceiptWinsEvenWhenPreflightToolsAreUnavailable() {
+        service.admit("0", sender, "42", "key", command);
+        var saved = ArgumentCaptor.forClass(ChatTypedDeliberationStore.Admission.class);
+        verify(store).insertAdmission(saved.capture());
+        when(store.findAdmissionByKey(scope, "key", false)).thenReturn(null);
+        when(store.findAdmissionByKey(scope, "key", true)).thenReturn(saved.getValue());
+        when(contexts.nativeRuntimeReady(any())).thenReturn(false);
+        clearInvocations(packages, grants, deliberation, finals);
+        assertTrue(service.admit("0", sender, "42", "key", command).replay());
+        verifyNoInteractions(packages, grants, deliberation, finals);
     }
 
     @Test void unavailableOutputDoesNotPersistAdmissionOrDispatch() {

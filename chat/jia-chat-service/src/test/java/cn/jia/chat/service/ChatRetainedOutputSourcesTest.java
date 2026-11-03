@@ -89,7 +89,7 @@ class ChatRetainedOutputSourcesTest {
         when(schema.ready()).thenReturn(true);
         var profile = Map.<String,Object>of("schemaVersion", 1, "supportedInputs", List.of(Map.of(
                 "mediaKind", "image", "mimeType", "image/png", "carrier", "LOCAL_IMAGE", "carrierContractDigest", "sha256:" + "d".repeat(64))));
-        when(sessions.requireSingleReady(new TypedDeliberationSessionRegistry.Scope("0", "executor", "client"), "agent"))
+        when(sessions.requireNativeReady(new TypedDeliberationSessionRegistry.Scope("0", "executor", "client"), "agent"))
                 .thenReturn(new TypedDeliberationSessionRegistry.Ready("session", "agent", List.of(), Map.of("materialsInput", profile)));
         when(sources.asset(eq(owner), eq("task"), eq("42"), eq(3L), eq("agent"), anyMap())).thenReturn(red);
         when(capabilities.available(any(), eq("task"), anyList())).thenReturn(List.of());
@@ -171,7 +171,7 @@ class ChatRetainedOutputSourcesTest {
         when(schema.ready()).thenReturn(true);
         var profile=Map.<String,Object>of("schemaVersion",1,"supportedInputs",List.of(Map.of(
                 "mediaKind","image","mimeType","image/png","carrier","LOCAL_IMAGE","carrierContractDigest","sha256:"+"d".repeat(64))));
-        when(sessions.requireSingleReady(new TypedDeliberationSessionRegistry.Scope("0","executor","client"),"agent"))
+        when(sessions.requireNativeReady(new TypedDeliberationSessionRegistry.Scope("0","executor","client"),"agent"))
                 .thenReturn(new TypedDeliberationSessionRegistry.Ready("session","agent",List.of(),Map.of("materialsInput",profile)));
         when(capabilities.available(any(),eq("task"),anyList())).thenReturn(List.of());
         var readerScope=new cn.jia.agent.service.PersonalWorkspaceTaskLinkService.Scope("0","client","owner");

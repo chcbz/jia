@@ -6,8 +6,6 @@ import cn.jia.agent.service.SkillCapabilityLookup;
 import cn.jia.agent.service.TaskSkillPolicyService;
 import cn.jia.chat.handler.TypedDeliberationSessionRegistry;
 import org.springframework.stereotype.Service;
-import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 
 /** Join the same authenticated skill fence and the live typed session declaration. */
@@ -28,9 +26,8 @@ public final class NativeSkillScriptSessionLookupImpl implements NativeSkillScri
         var live=runtimes.lookup(policy.runtimeScope(),policy.fence());
         if(live==null||live.state()!=SkillCapabilityLookup.State.AVAILABLE)return false;
         try {
-            var ready=sessions.requireSingleReady(new TypedDeliberationSessionRegistry.Scope(scope.tenantId(),scope.executorOwnerJiacn(),scope.clientId()),scope.agentId());
-            if(!Objects.equals(live.sessionId(),ready.sessionId())||!(ready.frozenDeclaration().get("nativeExecution") instanceof Map<?,?> nativeExecution)
-                    ||!(nativeExecution.get("supportedToolPolicyRefs") instanceof List<?> refs)||!refs.contains("NATIVE_SKILL_SCRIPT_V1"))return false;
+            if(!sessions.nativeScriptReady(new TypedDeliberationSessionRegistry.Scope(scope.tenantId(),scope.executorOwnerJiacn(),scope.clientId()),
+                    scope.agentId(),live.sessionId()))return false;
             return policy.equals(policies.read(key,taskId))&&live.equals(runtimes.lookup(policy.runtimeScope(),policy.fence()));
         }catch(IllegalStateException unavailable){return false;}
     }

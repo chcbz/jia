@@ -73,6 +73,27 @@ public final class TypedDeliberationSessionRegistry {
                 selected.declaration().supportedOperations(), selected.declaration().frozenReceipt());
     }
 
+    /** Native task discussion must not freeze an empty action catalogue during startup.
+     * Plain chat/read-only consumers continue to use requireSingleReady independently. */
+    public Ready requireNativeReady(Scope scope, String agentId) {
+        Ready ready = requireSingleReady(scope, agentId);
+        if (!(ready.frozenDeclaration().get("nativeExecution") instanceof Map<?,?> nativeExecution)
+                || !(nativeExecution.get("outputMimeTypes") instanceof List<?> formats) || formats.isEmpty())
+            throw new RuntimeNotReadyException();
+        return ready;
+    }
+
+    /** Same authenticated socket as the skill catalogue; no SQL or runtime probe. */
+    public boolean nativeScriptReady(Scope scope, String agentId, String sessionId) {
+        try {
+            Ready ready = requireNativeReady(scope, agentId);
+            var nativeExecution = (Map<?,?>) ready.frozenDeclaration().get("nativeExecution");
+            return Objects.equals(sessionId, ready.sessionId())
+                    && nativeExecution.get("supportedToolPolicyRefs") instanceof List<?> refs
+                    && refs.contains("NATIVE_SKILL_SCRIPT_V1");
+        } catch (IllegalStateException unavailable) { return false; }
+    }
+
     public int size() { return sessions.size(); }
 
     private static String key(String sessionId, String agentId) {

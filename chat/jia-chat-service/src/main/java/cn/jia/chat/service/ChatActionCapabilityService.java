@@ -26,6 +26,10 @@ public final class ChatActionCapabilityService {
     @org.springframework.beans.factory.annotation.Autowired(required=false)
     public void setNativeExecutions(cn.jia.agent.service.PersonalWorkspaceExecutionService value) { nativeExecutions=value; }
 
+    private cn.jia.chat.handler.TypedDeliberationSessionRegistry nativeSessions;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setNativeSessions(cn.jia.chat.handler.TypedDeliberationSessionRegistry value) { nativeSessions=value; }
+
     /** Installation/runtime observation, NOT availableActions or a task authorization grant.
      * I16/I18 must separately re-admit the selected skill under the current task/assignment. */
     public record SkillCandidate(String skillKey, String skillVersion, String title,
@@ -53,6 +57,10 @@ public final class ChatActionCapabilityService {
                 scope.ownerJiacn(),scope.targetAgentId());
         var descriptors=installedSkills.readCurrent(key);
         var runtime=expectedFence==null?null:Objects.requireNonNull(skillRuntimes.lookup(key,expectedFence));
+        boolean nativeScriptReady = runtime != null && runtime.state() == cn.jia.agent.service.SkillCapabilityLookup.State.AVAILABLE
+                && nativeSessions != null && nativeSessions.nativeScriptReady(
+                        new cn.jia.chat.handler.TypedDeliberationSessionRegistry.Scope(scope.tenantId(),scope.ownerJiacn(),scope.clientId()),
+                        scope.targetAgentId(),runtime.sessionId());
         var results=new ArrayList<SkillCandidate>();
         var counts=new java.util.HashMap<List<String>,Integer>();
         for(var descriptor:descriptors.skills())
@@ -97,6 +105,7 @@ public final class ChatActionCapabilityService {
                             reason="SKILL_RUNTIME_BINDING_MISMATCH";
                         else if(!report.enabled()||report.readiness()!=cn.jia.agent.service.SkillCapabilityLookup.Readiness.NOT_EXECUTABLE||report.reasonCode()!=null)
                             reason=report.reasonCode()==null?"SKILL_RUNTIME_UNAVAILABLE":report.reasonCode();
+                        else if(!nativeScriptReady) reason="NATIVE_EXECUTION_NOT_READY";
                     }
                     else if(report.readiness()!=cn.jia.agent.service.SkillCapabilityLookup.Readiness.READY)
                         reason=report.reasonCode()==null?"SKILL_RUNTIME_UNAVAILABLE":report.reasonCode();

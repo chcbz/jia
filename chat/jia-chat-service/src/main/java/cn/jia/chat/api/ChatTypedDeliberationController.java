@@ -75,7 +75,9 @@ public final class ChatTypedDeliberationController {
         case INVALID_REQUEST,INVALID_ROUTE,GAP->HttpStatus.BAD_REQUEST;case NOT_FOUND_OR_FORBIDDEN->HttpStatus.NOT_FOUND;
         case CONFLICT->HttpStatus.CONFLICT;case PERSISTENCE_ERROR->HttpStatus.SERVICE_UNAVAILABLE;};
         String message=status==HttpStatus.NOT_FOUND?"Typed discussion is unavailable":failure.getMessage();
-        JsonResult<Void> result=JsonResult.failure("TYPED_DELIBERATION_"+failure.reason(),message);
+        boolean runtimeNotReady = failure instanceof cn.jia.chat.service.ChatTypedDeliberationContextService.RuntimeNotReadyException;
+        JsonResult<Void> result=JsonResult.failure(runtimeNotReady ? "TYPED_DELIBERATION_RUNTIME_NOT_READY" : "TYPED_DELIBERATION_"+failure.reason(),
+                runtimeNotReady ? "Execution tools are not ready; this attempt was not admitted" : message);
         return ResponseEntity.status(status).cacheControl(CacheControl.noStore()).header("X-Content-Type-Options","nosniff").body(result);}
 
     @ExceptionHandler(RuntimeException.class)

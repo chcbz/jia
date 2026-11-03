@@ -38,8 +38,11 @@ public final class ChatTypedDeliberationContextService {
         public Context { facts=Map.copyOf(facts); selectors=List.copyOf(selectors); frozenDeclaration=Map.copyOf(frozenDeclaration); }
     }
 
-    /** Internal classification only; the HTTP reason/message and payload remain unchanged. */
+    /** Pre-admission unavailability: no message/turn was created by this attempt. */
     public static final class RuntimeNotReadyException extends ChatDeliberationException {
+        RuntimeNotReadyException() {
+            super(Reason.PERSISTENCE_ERROR, "Typed deliberation runtime was unavailable at package preparation");
+        }
         private RuntimeNotReadyException(TypedDeliberationSessionRegistry.RuntimeNotReadyException cause) {
             super(Reason.PERSISTENCE_ERROR, "Typed deliberation runtime is unavailable", cause);
         }
@@ -135,6 +138,24 @@ public final class ChatTypedDeliberationContextService {
         return enabled ? schema.readiness() : ChatTypedDeliberationReadiness.Readiness.DISABLED;
     }
 
+    /** Cheap hint to skip package I/O. Authoritative admission still checks after idempotency. */
+    public boolean nativeRuntimeReady(cn.jia.agent.service.SkillCapabilityLookup.Scope scope) {
+        try {
+            sessions.requireNativeReady(new TypedDeliberationSessionRegistry.Scope(
+                    scope.tenantId(), scope.ownerJiacn(), scope.clientId()), scope.agentId());
+            return true;
+        } catch (IllegalStateException unavailable) { return false; }
+    }
+
+    public void requireNativeRuntime(cn.jia.agent.service.SkillCapabilityLookup.Scope scope) {
+        try {
+            sessions.requireNativeReady(new TypedDeliberationSessionRegistry.Scope(
+                    scope.tenantId(), scope.ownerJiacn(), scope.clientId()), scope.agentId());
+        } catch (TypedDeliberationSessionRegistry.RuntimeNotReadyException awaiting) {
+            throw new RuntimeNotReadyException(awaiting);
+        }
+    }
+
     public Context resolve(Scope scope, String taskId, String targetAgentId,
             List<ChatTypedDeliberationWire.SourceSelector> requested) {
         if (!enabled || !schema.ready()) throw unavailable("Typed deliberation schema is unavailable");
@@ -144,7 +165,7 @@ public final class ChatTypedDeliberationContextService {
         var executor=dispatchAuthority.admissionTarget(scope.tenantId(),scope.ownerJiacn(),scope.clientId(),taskId,targetAgentId);
         TypedDeliberationSessionRegistry.Ready ready;
         try {
-            ready=sessions.requireSingleReady(new TypedDeliberationSessionRegistry.Scope(
+            ready=sessions.requireNativeReady(new TypedDeliberationSessionRegistry.Scope(
                     scope.tenantId(),executor.ownerJiacn(),scope.clientId()),targetAgentId);
         } catch (TypedDeliberationSessionRegistry.RuntimeNotReadyException awaiting) {
             throw new RuntimeNotReadyException(awaiting);

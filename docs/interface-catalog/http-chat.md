@@ -982,3 +982,14 @@ public ResponseEntity<JsonResult<VoiceTranscriptionResponse>> transcribe( HttpSe
 - 目标封装规则：自有JSON按公共信封；现行@RequestBody业务参数移至data；path/query/header位置不变；返回值为统一data中的业务DTO。外部协议/视图出口须人工分类，不能直接按本条批量改。
 - 未核定：嵌套DTO完整约束、实际认证链/资源ACL、全部错误码/状态、幂等持久键、实际消费者与条件装配。**此条不作为可发布完整契约**；关键链人工定义优先见上述链接。
 
+
+
+## Typed discussion 启动就绪（2026-11-03候选，未发布）
+
+责任层：会话注册表解释已认证 nativeExecution 声明，业务准入使用其结果，避免冻结空工具列表；不是性能超时门禁，不执行额外工具探测，不加表/队列/轮询。
+
+- 原幂等键回执优先，包括前置查询未命中、加锁后命中的并发情况。
+- 未就绪则跳过事务外技能包准备；锁内确认无回执后拒绝。即便随后就绪，也不在事务中读冷包；下次显式请求重新准备。
+- HTTP503，现有错误 envelope 的 `code=TYPED_DELIBERATION_RUNTIME_NOT_READY`：本次未受理，没有创建消息/turn。Web保留草稿、手动重试沿用原键，不自动补发。传输失败仍是受理未知。
+- INSTRUCTION 技能目录新增不可用原因 `NATIVE_EXECUTION_NOT_READY`，只查内存会话；身份/ACL、任务绑定、幂等、锁保护不变。
+- 定向回归：TypedDeliberationSessionRegistryTest、ChatActionCapabilityServiceTest、ChatRetainedOutputAdmissionTest（就绪切换、并发回执）、ChatRetainedOutputSourcesTest，Web typed-deliberation-interaction。

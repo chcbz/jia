@@ -29,6 +29,9 @@ class ChatActionCapabilityServiceTest {
         when(runtime.lookup(key, fence)).thenReturn(ready("1", "a".repeat(64), SkillCapabilityLookup.Readiness.READY, null));
     }
     @Test void nativeInstructionIsVerifiedWithoutExecutableManifestAndRequiresMatchingLiveInstall() {
+        var sessions=mock(cn.jia.chat.handler.TypedDeliberationSessionRegistry.class);
+        service.setNativeSessions(sessions);
+        when(sessions.nativeScriptReady(any(),eq("agent"),eq("session"))).thenReturn(true);
         var descriptor=new InstalledSkillDescriptorLookup.Descriptor("document-workbench","1.0.0","native-install",
                 "a".repeat(64),null,null,"installation","host",null);
         when(installed.read(key)).thenReturn(new InstalledSkillDescriptorLookup.Snapshot(List.of(descriptor)));
@@ -41,7 +44,12 @@ class ChatActionCapabilityServiceTest {
                     "session",fence,new SkillCapabilityLookup.Catalog("1",List.of(fact))));
             var item=service.inspectInstalledSkills(scope,fence).items().getFirst();assertTrue(item.installationVerified());
             assertNull(item.metadataJson());
-            if(identity.equals("native-install")) {assertEquals("RUNTIME_READY",item.state());assertNull(item.reasonCode());}
+            if(identity.equals("native-install")) {
+                assertEquals("RUNTIME_READY",item.state());assertNull(item.reasonCode());
+                when(sessions.nativeScriptReady(any(),eq("agent"),eq("session"))).thenReturn(false);
+                assertEquals("NATIVE_EXECUTION_NOT_READY",service.inspectInstalledSkills(scope,fence).items().getFirst().reasonCode());
+                when(sessions.nativeScriptReady(any(),eq("agent"),eq("session"))).thenReturn(true);
+            }
             else assertEquals("SKILL_RUNTIME_BINDING_MISMATCH",item.reasonCode());
         }
         var disabled=new SkillCapabilityLookup.RuntimeSkill("document-workbench","1.0.0","a".repeat(64),null,null,
@@ -203,5 +211,21 @@ class ChatActionCapabilityServiceTest {
         when(installed.read(key)).thenReturn(new InstalledSkillDescriptorLookup.Snapshot(List.of(d)));
         when(runtime.lookup(key,fence)).thenReturn(new SkillCapabilityLookup.View(SkillCapabilityLookup.State.AVAILABLE,"session",fence,new SkillCapabilityLookup.Catalog("1",List.of(disabled))));
         assertEquals(1,service.availableNative(scope,"task",List.of(),decl,"session").size());
+    }
+    @Test void missingNativeSessionIsCheapAwaitableFailureWithoutSqlOrCapabilityWork() {
+        var jdbc=mock(org.springframework.jdbc.core.JdbcTemplate.class);
+        var capabilities=mock(ChatActionCapabilityService.class);
+        var sessions=new cn.jia.chat.handler.TypedDeliberationSessionRegistry();
+        var contexts=new ChatTypedDeliberationContextService(jdbc,sessions,
+                mock(cn.jia.chat.config.ChatTypedDeliberationReadiness.class),capabilities,true);
+        var scope=new SkillCapabilityLookup.Scope("0","client","owner","agent");
+        assertFalse(contexts.nativeRuntimeReady(scope));
+        var failure=assertThrows(ChatTypedDeliberationContextService.RuntimeNotReadyException.class,
+                ()->contexts.requireNativeRuntime(scope));
+        var controller=mock(cn.jia.chat.api.ChatTypedDeliberationController.class,CALLS_REAL_METHODS);
+        var response=controller.error(failure);
+        assertEquals(503,response.getStatusCode().value());
+        assertEquals("TYPED_DELIBERATION_RUNTIME_NOT_READY",response.getBody().getCode());
+        verifyNoInteractions(jdbc,capabilities);
     }
 }
