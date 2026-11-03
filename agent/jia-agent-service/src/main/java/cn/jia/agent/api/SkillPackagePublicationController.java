@@ -42,6 +42,16 @@ public final class SkillPackagePublicationController {
                         text(node,"description"),decimal(node,"expectedProductVersion")));
         return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL,"private, no-store").body(JsonResult.success(receipt));
     }
+    @PutMapping(value="/agent/skill-maintenance/product-retirement",consumes=MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<?> retireProduct(Authentication authentication,HttpServletRequest request,@RequestBody String raw) {
+        HostingRentHttp.noQuery(request);var actor=HostingRentHttp.actor(authentication);
+        var node=JSON.readTree(raw);if(node==null||!node.isObject())throw new IllegalArgumentException();
+        var keys=new HashSet<String>();node.propertyNames().forEach(keys::add);
+        if(!keys.equals(Set.of("productId","expectedProductVersion","positionAuthority")))throw new IllegalArgumentException();
+        var receipt=publisher.retireProduct(new PositionAuthority.Scope(actor.tenantId(),actor.clientId(),actor.ownerJiacn()),
+                grant(node),new SkillPackagePublicationService.RetireProduct(text(node,"productId"),decimal(node,"expectedProductVersion")));
+        return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL,"private, no-store").body(JsonResult.success(receipt));
+    }
     private static JsonNode parse(String raw) {
         var node=JSON.readTree(raw);if(node==null||!node.isObject())throw new IllegalArgumentException();var keys=new HashSet<String>();node.propertyNames().forEach(keys::add);keys.remove("coveredUpgradeFromProductVersionId");if(!keys.equals(FIELDS))throw new IllegalArgumentException();
         return node;

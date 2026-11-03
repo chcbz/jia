@@ -95,6 +95,10 @@ class SkillManagementRecommendationTest {
         assertThrows(IllegalArgumentException.class,()->f.service.recommendationSkills(ACTOR,List.of("other")));
         verify(f.db,never()).states("0","client","other");
     }
+    @Test void withdrawnProductsRemainExcludedInBatchProjection() {
+        var f=new Fixture();f.installed("a");when(f.db.products("0","client")).thenReturn(List.of());
+        assertTrue(f.service.recommendationSkills(ACTOR,List.of("a")).get("a").isEmpty());
+    }
     @Test void enabledConfirmedInstructionIsCitableWithoutOpeningExecutableAdmission() {
         assertTrue(SkillManagementService.recommendationEvidenceAvailable("INSTRUCTION",true,false,"NOT_EXECUTABLE"));
         assertFalse(SkillManagementService.recommendationEvidenceAvailable("INSTRUCTION",false,false,"NOT_EXECUTABLE"));

@@ -116,4 +116,27 @@ class SkillPackagePublicationServiceTest {
         verifyNoInteractions(mapper);
     }
 
+
+    @Test void retirementPreservesVersionsAndPackagePointerAndReplays() {
+        service.publish(actor,grant,request("v1",0),original.bytes());
+        when(mapper.retireProduct(eq("0"),eq("client"),eq("product"),eq(2L),anyLong()))
+                .thenAnswer(i->{products.get("product").setStatus("RETIRED").setVersion(3L);return 1;});
+        var command=new SkillPackagePublicationService.RetireProduct("product",2);
+        var receipt=service.retireProduct(actor,grant,command);
+        assertEquals("RETIRED",receipt.status());assertEquals(3,receipt.productVersion());
+        assertEquals("RECORDED",service.retireProduct(actor,grant,command).disposition());
+        assertEquals("v1",products.get("product").getCurrentProductVersionId());assertEquals(1,versions.size());
+        verify(mapper,times(1)).retireProduct(anyString(),anyString(),anyString(),anyLong(),anyLong());
+        assertThrows(SkillMarketplaceException.class,()->service.retireProduct(actor,grant,new SkillPackagePublicationService.RetireProduct("product",1)));
+        assertThrows(SkillMarketplaceException.class,()->service.publish(actor,grant,request("v2",3),original.bytes()));
+    }
+    @Test void retirementRequiresLivePositionAndCurrentProductVersion() {
+        assertEquals(403,assertThrows(SkillMarketplaceException.class,()->service.retireProduct(actor,null,new SkillPackagePublicationService.RetireProduct("product",2))).status());
+        service.publish(actor,grant,request("v1",0),original.bytes());
+        assertThrows(SkillMarketplaceException.class,()->service.retireProduct(actor,grant,new SkillPackagePublicationService.RetireProduct("product",1)));
+        when(positions.withSkillManagementAuthority(eq(actor),eq(grant),any())).thenThrow(new PositionSkillException(403,"POSITION_AUTHORITY_REVOKED"));
+        assertThrows(PositionSkillException.class,()->service.retireProduct(actor,grant,new SkillPackagePublicationService.RetireProduct("product",2)));
+        verify(mapper,never()).retireProduct(anyString(),anyString(),anyString(),anyLong(),anyLong());
+    }
+
 }

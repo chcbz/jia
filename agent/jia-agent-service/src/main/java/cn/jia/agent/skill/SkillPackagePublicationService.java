@@ -69,6 +69,28 @@ public final class SkillPackagePublicationService {
             return new MetadataReceipt(p.getProductId(),command.name(),command.description(),nextVersion,"UPDATED");
         });
     }
+    /** Retiring discovery does not revoke installed packages, grants or completed facts. */
+    public record RetireProduct(String productId,long expectedProductVersion) { }
+    public record RetirementReceipt(String productId,String status,long productVersion,String disposition) { }
+    public RetirementReceipt retireProduct(Scope actor,Grant grant,RetireProduct command) {
+        require(actor!=null&&grant!=null&&grant.publish(),403,"SKILL_PUBLICATION_FORBIDDEN");
+        require(command!=null&&command.productId()!=null&&command.productId().matches("[A-Za-z0-9][A-Za-z0-9._:-]{0,99}")
+                &&command.expectedProductVersion()>0,400,"BAD_REQUEST");
+        return positions.withSkillManagementAuthority(actor,grant,()->{
+            var p=market.selectProductForUpdate(actor.tenantId(),actor.clientId(),command.productId());
+            require(p!=null,404,"RESOURCE_NOT_FOUND");
+            require(PlatformSkillPackageCatalog.SELLER_TYPE.equals(p.getSellerType())
+                    &&PlatformSkillPackageCatalog.SELLER_ID.equals(p.getSellerId())&&p.getCreatorAgentId()==null
+                    &&Set.of("PUBLISHED","RETIRED").contains(p.getStatus()),409,"SKILL_PRODUCT_CHANGED");
+            boolean retired="RETIRED".equals(p.getStatus());
+            require(p.getVersion()!=null&&(p.getVersion()==command.expectedProductVersion()
+                    ||retired&&p.getVersion()-1==command.expectedProductVersion()),409,"SKILL_PRODUCT_CHANGED");
+            if(retired)return new RetirementReceipt(p.getProductId(),"RETIRED",p.getVersion(),"RECORDED");
+            long next=Math.addExact(p.getVersion(),1L);
+            one(market.retireProduct(actor.tenantId(),actor.clientId(),p.getProductId(),command.expectedProductVersion(),System.currentTimeMillis()));
+            return new RetirementReceipt(p.getProductId(),"RETIRED",next,"RETIRED");
+        });
+    }
     private Receipt persist(Scope a,Publish c,byte[] digest,byte[] permissions,long byteLength) {
         var product=market.selectProductForUpdate(a.tenantId(),a.clientId(),c.productId());long now=System.currentTimeMillis();
         if(product==null){require(c.expectedProductVersion()==0,409,"SKILL_PRODUCT_CHANGED");product=new SkillProductEntity().setProductId(c.productId()).setSellerType(PlatformSkillPackageCatalog.SELLER_TYPE).setSellerId(PlatformSkillPackageCatalog.SELLER_ID).setCreatorAgentId(null).setName(c.name()).setDescription(c.description()).setStatus("DRAFT").setCurrentProductVersionId(null).setVersion(1L).setTenantId(a.tenantId()).setClientId(a.clientId()).setCreateTime(now).setUpdateTime(now);one(market.insertProduct(product));}

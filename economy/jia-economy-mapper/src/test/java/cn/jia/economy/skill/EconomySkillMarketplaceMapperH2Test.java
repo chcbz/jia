@@ -268,4 +268,24 @@ class EconomySkillMarketplaceMapperH2Test {
                     UNIQUE(tenant_id,client_id,target_agent_id,skill_key,skill_version))
                 """);
     }
+
+    @Test void retirementFencesNewPurchaseButKeepsInstalledVersionAndHistory() {
+        mapper.insertProduct(product());mapper.insertProductVersion(productVersion());
+        mapper.publishProductVersion(TENANT,CLIENT,"sp-1","spv-1",1,2);
+        mapper.insertInstallation(installation());mapper.insertEntitlement(entitlement());
+        assertEquals(0,mapper.retireProduct("tenant-a",CLIENT,"sp-1",2,3));
+        assertEquals(0,mapper.retireProduct(TENANT,CLIENT,"sp-1",1,3));
+        assertEquals(1,mapper.retireProduct(TENANT,CLIENT,"sp-1",2,3));
+        assertEquals(0,mapper.retireProduct(TENANT,CLIENT,"sp-1",2,4));
+        assertEquals(0,mapper.publishProductVersion(TENANT,CLIENT,"sp-1","spv-1",3,4));
+        assertEquals(0,mapper.selectPublishedProducts(TENANT,CLIENT,0,20).size());
+        assertNull(mapper.selectPurchasableProductVersion(TENANT,CLIENT,"spv-1"));
+        assertEquals("spv-1",mapper.selectApprovedProductVersion(TENANT,CLIENT,"spv-1").getProductVersionId());
+        var p=mapper.selectProductByVersion(TENANT,CLIENT,"spv-1");
+        assertEquals("RETIRED",p.getStatus());assertEquals(product().getName(),p.getName());
+        assertNull(mapper.selectProductByVersion("tenant-a",CLIENT,"spv-1"));
+        assertEquals(1,jdbc.queryForObject("SELECT count(*) FROM economy_skill_installation",Integer.class));
+        assertEquals(1,jdbc.queryForObject("SELECT count(*) FROM economy_skill_entitlement",Integer.class));
+    }
+
 }
