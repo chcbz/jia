@@ -80,7 +80,7 @@ dependencies {
     poiProductionRuntimeClasspathTestRuntimeOnly(libs.junit.platform.launcher)
 }
 
-version = '1.1.17-SNAPSHOT'
+version = '1.1.18-SNAPSHOT'
 description = 'starter'
 
 jar {
