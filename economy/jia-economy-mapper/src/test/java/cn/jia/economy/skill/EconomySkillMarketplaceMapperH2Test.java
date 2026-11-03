@@ -59,6 +59,20 @@ class EconomySkillMarketplaceMapperH2Test {
     }
 
     @Test
+    void metadataUpdateIsScopedVersionedAndPreservesPublishedPackageAndPrice() {
+        mapper.insertProduct(product());mapper.insertProductVersion(productVersion());
+        mapper.publishProductVersion(TENANT,CLIENT,"sp-1","spv-1",1,2);
+        assertEquals(0,mapper.updateProductMetadata("tenant-a",CLIENT,"sp-1","新标题","新用途",2,3));
+        assertEquals(0,mapper.updateProductMetadata(TENANT,CLIENT,"sp-1","新标题","新用途",1,3));
+        assertEquals(1,mapper.updateProductMetadata(TENANT,CLIENT,"sp-1","新标题","新用途",2,3));
+        var p=mapper.selectProductForUpdate(TENANT,CLIENT,"sp-1");
+        assertEquals("新标题",p.getName());assertEquals("新用途",p.getDescription());assertEquals(3,p.getVersion());
+        assertEquals("PUBLISHED",p.getStatus());assertEquals("spv-1",p.getCurrentProductVersionId());
+        assertEquals(0L,mapper.selectPurchasableProductVersion(TENANT,CLIENT,"spv-1").getPriceMicro());
+        assertEquals(0,mapper.updateProductMetadata(TENANT,CLIENT,"sp-1","旧标题","旧用途",2,4));
+    }
+
+    @Test
     void freePurchaseFoundationIsScopedIdempotentAndFencedThroughActivation() {
         assertEquals(1, mapper.insertProduct(product()));
         assertEquals(1, mapper.insertProductVersion(productVersion()));

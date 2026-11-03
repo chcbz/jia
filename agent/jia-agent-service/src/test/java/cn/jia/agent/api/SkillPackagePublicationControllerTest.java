@@ -57,4 +57,19 @@ class SkillPackagePublicationControllerTest {
         assertThrows(IllegalArgumentException.class,()->controller.publish(actor(false),request,metadata(",\"policy\":\"PAID\""),file));
         verifyNoInteractions(service);
     }
+    @Test void metadataUsesPositionAuthorityAndRejectsExecutableOrPricingFields() {
+        var service=mock(SkillPackagePublicationService.class);var controller=new SkillPackagePublicationController(service);
+        var request=new MockHttpServletRequest("PUT","/agent/skill-maintenance/product-metadata");
+        String body="""
+            {"productId":"product","name":"图片生成","description":"从文字生成新图片","expectedProductVersion":"2",
+            "positionAuthority":{"appointmentId":"appointment","appointmentRevision":"1","positionRevision":"2","agentId":"wuyong","bindingId":"7"}}
+            """;
+        controller.updateMetadata(actor(false),request,body);
+        verify(service).updateMetadata(any(),argThat(g->g.publish()&&g.agentId().equals("wuyong")),
+                argThat(c->c.name().equals("图片生成")&&c.expectedProductVersion()==2));
+        assertThrows(IllegalArgumentException.class,()->controller.updateMetadata(actor(false),request,body.replace("\"name\":","\"priceMicro\":\"0\",\"name\":")));
+        assertThrows(IllegalArgumentException.class,()->controller.updateMetadata(actor(true),request,body.replace("positionAuthority","legacyGrant")));
+        verifyNoMoreInteractions(service);
+    }
+
 }

@@ -97,4 +97,23 @@ class SkillPackagePublicationServiceTest {
         assertDoesNotThrow(()->SkillPackages.revalidate(approved,prepared));
         assertThrows(SkillMarketplaceException.class,()->packages.publish(original));
     }
+    @Test void metadataUpdatesDiscoveryCopyOnlyAndRetryDoesNotBumpAgain() {
+        service.publish(actor,grant,request("v1",0),original.bytes());
+        when(mapper.updateProductMetadata(eq("0"),eq("client"),eq("product"),anyString(),anyString(),anyLong(),anyLong()))
+                .thenAnswer(i->{var p=products.get("product");p.setName(i.getArgument(3)).setDescription(i.getArgument(4)).setVersion(p.getVersion()+1);return 1;});
+        var command=new SkillPackagePublicationService.UpdateMetadata("product","资料分析与对比","依据输入资料提炼结论；不代替网页检索。",2);
+        var updated=service.updateMetadata(actor,grant,command);
+        assertEquals("UPDATED",updated.disposition());assertEquals(3,updated.productVersion());
+        assertEquals("RECORDED",service.updateMetadata(actor,grant,command).disposition());
+        assertEquals("v1",products.get("product").getCurrentProductVersionId());assertEquals(1,versions.size());
+        assertEquals(0,versions.get("v1").getPriceMicro());
+        verify(mapper,times(1)).updateProductMetadata(anyString(),anyString(),anyString(),anyString(),anyString(),anyLong(),anyLong());
+        assertThrows(SkillMarketplaceException.class,()->service.updateMetadata(actor,grant,new SkillPackagePublicationService.UpdateMetadata("product","stale","stale",2)));
+    }
+    @Test void metadataRequiresCurrentSkillManagementPositionAndCannotTouchPackageStore() {
+        when(positions.withSkillManagementAuthority(eq(actor),eq(grant),any())).thenThrow(new PositionSkillException(403,"POSITION_AUTHORITY_REVOKED"));
+        assertThrows(PositionSkillException.class,()->service.updateMetadata(actor,grant,new SkillPackagePublicationService.UpdateMetadata("product","标题","用途",2)));
+        verifyNoInteractions(mapper);
+    }
+
 }

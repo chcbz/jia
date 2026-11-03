@@ -44,6 +44,31 @@ public final class SkillPackagePublicationService {
         try{return positions.withSkillManagementAuthority(actor,grant,()->persist(actor,command,digest,permissions,archive.length));}
         catch(org.springframework.dao.DuplicateKeyException race){throw new SkillMarketplaceException(409,"SKILL_PRODUCT_CHANGED");}
     }
+    /** Mutable discovery copy only; executable packages and grants remain immutable. */
+    public record UpdateMetadata(String productId,String name,String description,long expectedProductVersion) { }
+    public record MetadataReceipt(String productId,String name,String description,long productVersion,String disposition) { }
+    public MetadataReceipt updateMetadata(Scope actor,Grant grant,UpdateMetadata command) {
+        require(actor!=null&&grant!=null&&grant.publish(),403,"SKILL_PUBLICATION_FORBIDDEN");
+        require(command!=null&&command.productId()!=null&&command.productId().matches("[A-Za-z0-9][A-Za-z0-9._:-]{0,99}")
+                &&command.name()!=null&&!command.name().isBlank()&&command.name().length()<=255
+                &&command.description()!=null&&!command.description().isBlank()&&command.description().length()<=4000
+                &&command.expectedProductVersion()>0,400,"BAD_REQUEST");
+        return positions.withSkillManagementAuthority(actor,grant,()->{
+            var p=market.selectProductForUpdate(actor.tenantId(),actor.clientId(),command.productId());
+            require(p!=null,404,"RESOURCE_NOT_FOUND");
+            require(PlatformSkillPackageCatalog.SELLER_TYPE.equals(p.getSellerType())
+                    &&PlatformSkillPackageCatalog.SELLER_ID.equals(p.getSellerId())&&p.getCreatorAgentId()==null
+                    &&Set.of("DRAFT","PUBLISHED").contains(p.getStatus()),409,"SKILL_PRODUCT_CHANGED");
+            boolean same=command.name().equals(p.getName())&&command.description().equals(p.getDescription());
+            require(p.getVersion()!=null&&(p.getVersion()==command.expectedProductVersion()
+                    ||same&&p.getVersion()-1==command.expectedProductVersion()),409,"SKILL_PRODUCT_CHANGED");
+            if(same)return new MetadataReceipt(p.getProductId(),p.getName(),p.getDescription(),p.getVersion(),"RECORDED");
+            long nextVersion=p.getVersion()+1;
+            one(market.updateProductMetadata(actor.tenantId(),actor.clientId(),p.getProductId(),command.name(),
+                    command.description(),command.expectedProductVersion(),System.currentTimeMillis()));
+            return new MetadataReceipt(p.getProductId(),command.name(),command.description(),nextVersion,"UPDATED");
+        });
+    }
     private Receipt persist(Scope a,Publish c,byte[] digest,byte[] permissions,long byteLength) {
         var product=market.selectProductForUpdate(a.tenantId(),a.clientId(),c.productId());long now=System.currentTimeMillis();
         if(product==null){require(c.expectedProductVersion()==0,409,"SKILL_PRODUCT_CHANGED");product=new SkillProductEntity().setProductId(c.productId()).setSellerType(PlatformSkillPackageCatalog.SELLER_TYPE).setSellerId(PlatformSkillPackageCatalog.SELLER_ID).setCreatorAgentId(null).setName(c.name()).setDescription(c.description()).setStatus("DRAFT").setCurrentProductVersionId(null).setVersion(1L).setTenantId(a.tenantId()).setClientId(a.clientId()).setCreateTime(now).setUpdateTime(now);one(market.insertProduct(product));}
