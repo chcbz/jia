@@ -1,0 +1,491 @@
+[
+  {
+    "case": "deleted-analysis-skill",
+    "input": {
+      "task": {
+        "title": "处理附件",
+        "description": "统计成绩",
+        "requiredAbilities": []
+      },
+      "materials": [
+        {
+          "name": "资料",
+          "originalFilename": "成绩.JPG",
+          "contentMimeType": null,
+          "role": "INPUT",
+          "summary": null
+        }
+      ],
+      "candidates": [
+        {
+          "agentId": "A1",
+          "boundToMe": true,
+          "evidence": [
+            {
+              "id": "A1E1",
+              "kind": "INSTALLED_SKILL",
+              "label": "文档处理",
+              "description": "读取、编辑文档和表格、提取PDF正文。",
+              "available": true
+            }
+          ]
+        },
+        {
+          "agentId": "A2",
+          "boundToMe": true,
+          "evidence": [
+            {
+              "id": "A2E1",
+              "kind": "INSTALLED_SKILL",
+              "label": "视觉理解",
+              "description": "读取图片文字、解释图表，不生成图片。",
+              "available": true
+            }
+          ]
+        },
+        {
+          "agentId": "A3",
+          "boundToMe": true,
+          "evidence": [
+            {
+              "id": "A3E1",
+              "kind": "INSTALLED_SKILL",
+              "label": "创作图片",
+              "description": "根据文字生成图片，不读取已有图片。",
+              "available": true
+            }
+          ]
+        },
+        {
+          "agentId": "A4",
+          "boundToMe": true,
+          "evidence": []
+        }
+      ]
+    },
+    "expectedFirst": "A2",
+    "notSuitable": [
+      "A1",
+      "A3",
+      "A4"
+    ]
+  },
+  {
+    "case": "synthetic-analysis-not-reading",
+    "input": {
+      "task": {
+        "title": "处理附件",
+        "description": "统计成绩",
+        "requiredAbilities": []
+      },
+      "materials": [
+        {
+          "name": "资料",
+          "originalFilename": "成绩.jpg",
+          "contentMimeType": null,
+          "role": "INPUT",
+          "summary": null
+        }
+      ],
+      "candidates": [
+        {
+          "agentId": "A1",
+          "boundToMe": true,
+          "evidence": [
+            {
+              "id": "A1E1",
+              "kind": "INSTALLED_SKILL",
+              "label": "归纳统计",
+              "description": "对已提供的数据做归纳统计与事实核对。",
+              "available": true
+            }
+          ]
+        },
+        {
+          "agentId": "A2",
+          "boundToMe": true,
+          "evidence": [
+            {
+              "id": "A2E1",
+              "kind": "INSTALLED_SKILL",
+              "label": "视觉理解",
+              "description": "读取图片文字、解释图表，不生成图片。",
+              "available": true
+            }
+          ]
+        },
+        {
+          "agentId": "A3",
+          "boundToMe": true,
+          "evidence": []
+        }
+      ]
+    },
+    "expectedFirst": "A2",
+    "notSuitable": [
+      "A1",
+      "A3"
+    ]
+  },
+  {
+    "case": "external-reader-before-own-gap",
+    "input": {
+      "task": {
+        "title": "处理附件",
+        "description": "统计成绩",
+        "requiredAbilities": []
+      },
+      "materials": [
+        {
+          "name": "资料",
+          "originalFilename": "成绩.JpG",
+          "contentMimeType": null,
+          "role": "INPUT",
+          "summary": null
+        }
+      ],
+      "candidates": [
+        {
+          "agentId": "A1",
+          "boundToMe": true,
+          "evidence": [
+            {
+              "id": "A1E1",
+              "kind": "INSTALLED_SKILL",
+              "label": "文档处理",
+              "description": "读取、编辑文档和表格、提取PDF正文。",
+              "available": true
+            }
+          ]
+        },
+        {
+          "agentId": "A2",
+          "boundToMe": false,
+          "evidence": [
+            {
+              "id": "A2E1",
+              "kind": "INSTALLED_SKILL",
+              "label": "视觉理解",
+              "description": "读取图片文字、解释图表，不生成图片。",
+              "available": true
+            }
+          ]
+        },
+        {
+          "agentId": "A3",
+          "boundToMe": true,
+          "evidence": []
+        }
+      ]
+    },
+    "expectedFirst": "A2",
+    "notSuitable": [
+      "A1",
+      "A3"
+    ]
+  },
+  {
+    "case": "owned-qualified-first",
+    "input": {
+      "task": {
+        "title": "处理附件",
+        "description": "统计成绩",
+        "requiredAbilities": []
+      },
+      "materials": [
+        {
+          "name": "资料",
+          "originalFilename": "成绩.jpg",
+          "contentMimeType": null,
+          "role": "INPUT",
+          "summary": null
+        }
+      ],
+      "candidates": [
+        {
+          "agentId": "A1",
+          "boundToMe": true,
+          "evidence": [
+            {
+              "id": "A1E1",
+              "kind": "INSTALLED_SKILL",
+              "label": "视觉理解",
+              "description": "读取图片文字、解释图表，不生成图片。",
+              "available": true
+            }
+          ]
+        },
+        {
+          "agentId": "A2",
+          "boundToMe": false,
+          "evidence": [
+            {
+              "id": "A2E1",
+              "kind": "INSTALLED_SKILL",
+              "label": "视觉理解",
+              "description": "读取图片文字、解释图表，不生成图片。",
+              "available": true
+            }
+          ]
+        },
+        {
+          "agentId": "A3",
+          "boundToMe": true,
+          "evidence": []
+        }
+      ]
+    },
+    "expectedFirst": "A1",
+    "notSuitable": [
+      "A3"
+    ]
+  },
+  {
+    "case": "compound-skill-by-purpose",
+    "input": {
+      "task": {
+        "title": "处理附件",
+        "description": "统计成绩",
+        "requiredAbilities": []
+      },
+      "materials": [
+        {
+          "name": "资料",
+          "originalFilename": "成绩.jpg",
+          "contentMimeType": null,
+          "role": "INPUT",
+          "summary": null
+        }
+      ],
+      "candidates": [
+        {
+          "agentId": "A1",
+          "boundToMe": true,
+          "evidence": [
+            {
+              "id": "A1E1",
+              "kind": "INSTALLED_SKILL",
+              "label": "图片生成与理解",
+              "description": "生成图片，也可辨读已有图片文字、解释图表。",
+              "available": true
+            }
+          ]
+        },
+        {
+          "agentId": "A2",
+          "boundToMe": true,
+          "evidence": [
+            {
+              "id": "A2E1",
+              "kind": "INSTALLED_SKILL",
+              "label": "文档处理",
+              "description": "读取、编辑文档和表格、提取PDF正文。",
+              "available": true
+            }
+          ]
+        },
+        {
+          "agentId": "A3",
+          "boundToMe": true,
+          "evidence": []
+        }
+      ]
+    },
+    "expectedFirst": "A1",
+    "notSuitable": [
+      "A2",
+      "A3"
+    ]
+  },
+  {
+    "case": "pdf-reader",
+    "input": {
+      "task": {
+        "title": "处理附件",
+        "description": "提取正文并归纳主要结论",
+        "requiredAbilities": []
+      },
+      "materials": [
+        {
+          "name": "资料",
+          "originalFilename": "报告.PDF",
+          "contentMimeType": null,
+          "role": "INPUT",
+          "summary": null
+        }
+      ],
+      "candidates": [
+        {
+          "agentId": "A1",
+          "boundToMe": true,
+          "evidence": [
+            {
+              "id": "A1E1",
+              "kind": "INSTALLED_SKILL",
+              "label": "视觉理解",
+              "description": "读取图片文字、解释图表，不生成图片。",
+              "available": true
+            }
+          ]
+        },
+        {
+          "agentId": "A2",
+          "boundToMe": true,
+          "evidence": [
+            {
+              "id": "A2E1",
+              "kind": "INSTALLED_SKILL",
+              "label": "文档处理",
+              "description": "读取、编辑文档和表格、提取PDF正文。",
+              "available": true
+            }
+          ]
+        },
+        {
+          "agentId": "A3",
+          "boundToMe": true,
+          "evidence": []
+        }
+      ]
+    },
+    "expectedFirst": "A2",
+    "notSuitable": [
+      "A1",
+      "A3"
+    ]
+  },
+  {
+    "case": "filename-only-no-content",
+    "input": {
+      "task": {
+        "title": "处理附件",
+        "description": "仅根据附件原文件名给出统一命名建议，不读取或分析图片内容。",
+        "requiredAbilities": []
+      },
+      "materials": [
+        {
+          "name": "资料",
+          "originalFilename": "照片.HEIC",
+          "contentMimeType": null,
+          "role": "INPUT",
+          "summary": null
+        }
+      ],
+      "candidates": [
+        {
+          "agentId": "A1",
+          "boundToMe": true,
+          "evidence": [
+            {
+              "id": "A1E1",
+              "kind": "INSTALLED_SKILL",
+              "label": "文件命名",
+              "description": "根据文件名称设计命名规则与批量改名方案。",
+              "available": true
+            }
+          ]
+        },
+        {
+          "agentId": "A2",
+          "boundToMe": false,
+          "evidence": [
+            {
+              "id": "A2E1",
+              "kind": "INSTALLED_SKILL",
+              "label": "视觉理解",
+              "description": "读取图片文字、解释图表，不生成图片。",
+              "available": true
+            }
+          ]
+        },
+        {
+          "agentId": "A3",
+          "boundToMe": true,
+          "evidence": []
+        }
+      ]
+    },
+    "expectedFirst": "A1",
+    "notSuitable": [
+      "A3"
+    ]
+  },
+  {
+    "case": "multiple-inputs-not-pooled",
+    "input": {
+      "task": {
+        "title": "处理附件",
+        "description": "结合图片成绩和PDF评分标准核对成绩",
+        "requiredAbilities": []
+      },
+      "materials": [
+        {
+          "name": "资料",
+          "originalFilename": "成绩.JPG",
+          "contentMimeType": null,
+          "role": "INPUT",
+          "summary": null
+        },
+        {
+          "name": "资料",
+          "originalFilename": "评分标准.pdf",
+          "contentMimeType": null,
+          "role": "INPUT",
+          "summary": null
+        }
+      ],
+      "candidates": [
+        {
+          "agentId": "A1",
+          "boundToMe": true,
+          "evidence": [
+            {
+              "id": "A1E1",
+              "kind": "INSTALLED_SKILL",
+              "label": "视觉理解",
+              "description": "读取图片文字、解释图表，不生成图片。",
+              "available": true
+            }
+          ]
+        },
+        {
+          "agentId": "A2",
+          "boundToMe": true,
+          "evidence": [
+            {
+              "id": "A2E1",
+              "kind": "INSTALLED_SKILL",
+              "label": "文档处理",
+              "description": "读取、编辑文档和表格、提取PDF正文。",
+              "available": true
+            }
+          ]
+        },
+        {
+          "agentId": "A3",
+          "boundToMe": false,
+          "evidence": [
+            {
+              "id": "A3E1",
+              "kind": "INSTALLED_SKILL",
+              "label": "资料读取",
+              "description": "支持读取图片文字和PDF正文，比较内容。",
+              "available": true
+            }
+          ]
+        },
+        {
+          "agentId": "A4",
+          "boundToMe": true,
+          "evidence": []
+        }
+      ]
+    },
+    "expectedFirst": "A3",
+    "notSuitable": [
+      "A1",
+      "A2",
+      "A4"
+    ]
+  }
+]
