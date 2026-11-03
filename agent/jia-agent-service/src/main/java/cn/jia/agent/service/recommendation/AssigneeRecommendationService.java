@@ -17,7 +17,8 @@ import static cn.jia.agent.entity.AssigneeRecommendation.*;
 @Service
 public final class AssigneeRecommendationService {
     private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(AssigneeRecommendationService.class);
-    private static final ObjectMapper JSON = new ObjectMapper().enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
+    private static final ObjectMapper JSON = new ObjectMapper().enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
+            .enable(com.fasterxml.jackson.core.JsonParser.Feature.STRICT_DUPLICATE_DETECTION);
     private final AgentService agents;
     private final SkillManagementService skills;
     private final AgentAssigneeRecommendationModel model;
@@ -52,8 +53,9 @@ public final class AssigneeRecommendationService {
                     return new ModelMaterial(m.name(), m.originalFilename(), m.contentMimeType(), m.role(), m.summary());
                 }).toList());
                 String inputJson = JSON.writeValueAsString(input);
+                String schema = outputSchema(candidates);
                 modelStarted = System.nanoTime();
-                try { raw = model.judge(inputJson); }
+                try { raw = model.judge(inputJson, schema); }
                 finally { modelEnded = System.nanoTime(); }
             } catch (Failure error) { throw error; }
             catch (Exception unavailable) { throw new Failure(503, "RECOMMENDATION_UNAVAILABLE"); }
@@ -61,11 +63,13 @@ public final class AssigneeRecommendationService {
             AgentTaskDTO current = agents.getTaskRecommendationInput(taskId);
             if (!Objects.equals(task.getTaskVersion(), current.getTaskVersion())
                     || !Objects.equals(taskInput(task), taskInput(current))
-                    || !Objects.equals(task.getStatus(), current.getStatus())
-                    || !Objects.equals(observation, observe(actor, taskId)))
-                throw new Failure(409, "RECOMMENDATION_STALE");
-            materials.verifyUnchanged(actor, taskId, materialObservation);
-            var result = decode(taskId, task.getTaskVersion(), observedAt, candidates, raw);
+                    || !Objects.equals(task.getStatus(), current.getStatus())) throw stale("TASK");
+            var after = observe(actor, taskId);
+            verifyCandidates(observation, after);
+            try { materials.verifyUnchanged(actor, taskId, materialObservation); }
+            catch (Failure failure) { if (failure.status() == 409) throw stale("MATERIAL"); throw failure; }
+            // Display current status/name; recommendation is not execution admission.
+            var result = decode(taskId, task.getTaskVersion(), observedAt, after.candidates(), raw);
             outcome = "success";
             return result;
         } catch (Failure failure) {
@@ -99,8 +103,12 @@ public final class AssigneeRecommendationService {
         var result = new ArrayList<Candidate>();
         var modelCandidates = new ArrayList<ModelCandidate>();
         long started = System.nanoTime();
-        var available = agents.listTaskAssigneeCandidates(taskId);
+        var available = agents.listTaskAssigneeCandidates(taskId).stream()
+                .sorted(Comparator.comparing(row -> row.target().agentId())).toList();
         long listed = System.nanoTime();
+        var owned = available.stream().filter(row -> row.target().isMine()).map(row -> row.target().agentId()).toList();
+        var skillFacts = owned.isEmpty() ? Map.<String,List<SkillManagementService.RecommendationSkill>>of()
+                : skills.recommendationSkills(actor, owned);
         for (var runtime : available) {
             List<String> abilities = runtime.abilities();
             var target = runtime.target();
@@ -115,7 +123,7 @@ public final class AssigneeRecommendationService {
             }
             if (agent.boundToMe()) {
                 // Existing native management authority; do not revive a legacy runner-specific capability path.
-                for (var skill : skills.recommendationSkills(actor, agent.agentId())) {
+                for (var skill : skillFacts.getOrDefault(agent.agentId(), List.of())) {
                     String description = "产品当前用途声明（不保证与安装版本完全一致）：" + string(skill.description())
                             + "；技能类型：" + skill.kind() + "；已安装版本：" + skill.skillVersion() + "；运行状态：" + skill.runtimeState()
                             + "；INSTRUCTION是原生指令经验，不是可直接执行的工具；技能证据不等于未报告的工具依赖可用，也不保证任务结果。";
@@ -141,22 +149,62 @@ public final class AssigneeRecommendationService {
                 result.size(), millis(listed - started), millis(System.nanoTime() - listed));
         return new Observation(List.copyOf(result), List.copyOf(modelCandidates));
     }
+    private static Failure stale(String reason) {
+        LOG.info("assignee_recommendation_stale reason={}", reason);
+        return new Failure(409, "RECOMMENDATION_STALE");
+    }
+    private static void verifyCandidates(Observation before, Observation after) {
+        if (!before.candidates().stream().map(c -> c.agent().agentId()).toList()
+                .equals(after.candidates().stream().map(c -> c.agent().agentId()).toList())) throw stale("CANDIDATE_SET");
+        for (int i = 0; i < before.candidates().size(); i++) {
+            var old = before.candidates().get(i); var now = after.candidates().get(i);
+            if (old.agent().boundToMe() != now.agent().boundToMe() || old.agent().canOperate() != now.agent().canOperate()
+                    || !old.agent().abilities().equals(now.agent().abilities())) throw stale("CANDIDATE_FACTS");
+            if (!old.evidence().equals(now.evidence())) throw stale("SKILL_EVIDENCE");
+        }
+    }
+    // Business-specific output contract belongs to API; the model adapter only transports it.
+    static String outputSchema(List<Candidate> candidates) throws com.fasterxml.jackson.core.JsonProcessingException {
+        var rows = new LinkedHashMap<String,Object>();
+        var string = Map.of("type", "string");
+        var strings = Map.of("type", "array", "items", string);
+        for (int i = 0; i < candidates.size(); i++) {
+            var fields = new LinkedHashMap<String,Object>();
+            fields.put("rank", Map.of("type", "integer"));
+            fields.put("recommendationLevel", Map.of("type", "string", "enum", List.of("HIGH", "MEDIUM", "LOW", "UNKNOWN")));
+            fields.put("reason", string); fields.put("evidenceIds", strings); fields.put("gaps", strings);
+            rows.put(candidateRef(i), objectSchema(fields));
+        }
+        var root = new LinkedHashMap<String,Object>();
+        root.put("requirementSummary", string); root.put("recommendations", objectSchema(rows));
+        return JSON.writeValueAsString(objectSchema(root));
+    }
+    private static Map<String,Object> objectSchema(Map<String,Object> properties) {
+        return Map.of("type", "object", "properties", properties, "required", List.copyOf(properties.keySet()), "additionalProperties", false);
+    }
     static Result decode(String taskId, String taskVersion, long observedAt, List<Candidate> candidates, String raw) {
         try {
             JsonNode root = JSON.readTree(raw);
             if (root == null || !root.isObject()) throw invalid("JSON_OBJECT");
             String summary = text(root, "requirementSummary");
-            List<String> questions = strings(root.get("questions"));
-            if (!questions.isEmpty()) throw invalid("QUESTIONS_NOT_SUPPORTED");
+            // Questions are not part of the model contract; HTTP keeps its fixed empty array.
+            if (root.has("questions")) throw invalid("QUESTIONS_NOT_SUPPORTED");
             JsonNode rows = root.get("recommendations");
-            if (rows == null || !rows.isArray()) throw invalid("RECOMMENDATIONS_ARRAY");
+            if (rows == null || !rows.isObject()) throw invalid("RECOMMENDATIONS_OBJECT");
             var byId = new HashMap<String, Candidate>();
             for (int i = 0; i < candidates.size(); i++) byId.put(candidateRef(i), candidates.get(i));
-            var seen = new HashSet<String>(); var recommendations = new ArrayList<Recommendation>();
-            for (JsonNode row : rows) {
-                String id = text(row, "agentId"); Candidate candidate = byId.get(id);
-                if (candidate == null) throw invalid("CANDIDATE_UNKNOWN");
-                if (!seen.add(id)) throw invalid("CANDIDATE_DUPLICATE");
+            var recommendations = new ArrayList<Recommendation>();
+            var entries = new ArrayList<Map.Entry<String,JsonNode>>();
+            rows.fields().forEachRemaining(entries::add);
+            for (var entry : entries) {
+                if (!byId.containsKey(entry.getKey())) throw invalid("CANDIDATE_UNKNOWN");
+                if (!entry.getValue().path("rank").canConvertToLong() || !entry.getValue().path("rank").isIntegralNumber()) throw invalid("RANK");
+            }
+            if (entries.size() != byId.size()) throw invalid("CANDIDATE_COVERAGE");
+            entries.sort(Comparator.<Map.Entry<String,JsonNode>>comparingLong(e -> e.getValue().path("rank").longValue())
+                    .thenComparingInt(e -> Integer.parseInt(e.getKey().substring(1))));
+            for (var entry : entries) {
+                String id = entry.getKey(); JsonNode row = entry.getValue(); Candidate candidate = byId.get(id);
                 if (!candidate.agent().canOperate()) throw invalid("CANDIDATE_NOT_OPERABLE");
                 String level = text(row, "recommendationLevel");
                 if (!Set.of("HIGH", "MEDIUM", "LOW", "UNKNOWN").contains(level)) throw invalid("LEVEL");
@@ -176,10 +224,9 @@ public final class AssigneeRecommendationService {
                 if (!"online".equalsIgnoreCase(candidate.agent().status())) gaps.add("当前运行状态：" + candidate.agent().status() + "；确认承办不代表已开始运行。");
                 recommendations.add(new Recommendation(candidate.agent(), level, text(row, "reason"), List.copyOf(evidence), List.copyOf(gaps)));
             }
-            if (seen.size() != byId.size()) throw invalid("CANDIDATE_COVERAGE");
             String state = recommendations.stream().anyMatch(r -> Set.of("HIGH", "MEDIUM").contains(r.recommendationLevel()))
                     ? "READY" : "NO_MATCH";
-            return new Result(taskId, taskVersion, observedAt, state, summary, List.copyOf(recommendations), questions, true);
+            return new Result(taskId, taskVersion, observedAt, state, summary, List.copyOf(recommendations), List.of(), true);
         } catch (Failure failure) { throw failure; }
         catch (Exception invalid) { throw invalid("JSON_DECODE"); }
     }

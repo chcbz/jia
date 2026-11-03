@@ -44,17 +44,19 @@ public final class AssigneeRecommendationModel implements cn.jia.agent.service.A
         3. 每个候选恰好评价一次，不遗漏、不新增或重复。
         HIGH：关键能力明确支持；MEDIUM：基本适合但有具体局限；LOW：已知能力不匹配；UNKNOWN：证据不足，非能力差。
         HIGH/MEDIUM/LOW至少引用该候选一条available=true的证据；UNKNOWN允许不引用。
-        只原样复制本次候选agentId短编号（如A1）及其证据id（如A1E1），不得引用其他候选证据。
+        recommendations必须以本次所有候选agentId短编号（如A1）为键，每个键都要填写；资料不足也填写UNKNOWN，不得省略。
+        只原样复制该候选的证据id（如A1E1），不得引用其他候选证据。
         boundToMe只表示是否自有。先列满足关键需求的自有候选，再列满足需求的外部候选，每组HIGH在MEDIUM之前；
-        最后列LOW、UNKNOWN。自有MEDIUM优先于外部HIGH，但归属不改变能力等级；自有LOW/UNKNOWN不能优先于适合的外部候选。
+        最后列LOW、UNKNOWN。用rank从1开始表达上述推荐顺序，每个候选都给出rank。自有MEDIUM优先于外部HIGH，但归属不改变能力等级；自有LOW/UNKNOWN不能优先于适合的外部候选。
 
         4. 简短输出：每人reason用一句普通用户能理解的话说明匹配理由；gaps只列具体缺口，不重复免责声明。
-        运行等待提示由系统处理。requirementSummary简短，不复述推理；questions始终为空数组。
+        运行等待提示由系统处理。requirementSummary简短，不复述推理；不输出questions。
         仅返回以下JSON，不输出Markdown或内部思考过程：
-        {"requirementSummary":"需求与关键能力","recommendations":[{"agentId":"A1","recommendationLevel":"HIGH|MEDIUM|LOW|UNKNOWN","reason":"简短理由","evidenceIds":["A1E1"],"gaps":[]}],"questions":[]}
+        {"requirementSummary":"需求与关键能力","recommendations":{"A1":{"rank":1,"recommendationLevel":"HIGH|MEDIUM|LOW|UNKNOWN","reason":"简短理由","evidenceIds":["A1E1"],"gaps":[]}}}
+        上例仅示意一个候选，实际必须填写JSON Schema要求的全部候选键，包括LOW和UNKNOWN。
         """;
     @Override
-    public String judge(String inputJson) {
+    public String judge(String inputJson, String outputSchema) {
         // A global model with implicit tool defaults is not safe for this read-only purpose.
         ChatOptions modelOptions = model.getOptions();
         if (modelOptions instanceof ToolCallingChatOptions defaults
@@ -74,6 +76,9 @@ public final class AssigneeRecommendationModel implements cn.jia.agent.service.A
                 throw new Failure(503, "RECOMMENDATION_UNAVAILABLE");
             options = openAi.mutate().reasoningEffort(reasoningEffort).build();
         }
+        if (!(options instanceof org.springframework.ai.openai.OpenAiChatOptions structured))
+            throw new Failure(503, "RECOMMENDATION_UNAVAILABLE");
+        options = structured.mutate().outputSchema(outputSchema).build();
         var response = model.call(new Prompt(List.of(new SystemMessage(INSTRUCTIONS), new UserMessage(inputJson)), options));
         if (response == null || response.getResult() == null || response.getResult().getOutput() == null
                 || response.getResult().getOutput().hasToolCalls())
