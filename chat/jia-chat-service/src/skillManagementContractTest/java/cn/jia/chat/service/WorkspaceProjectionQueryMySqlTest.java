@@ -1,4 +1,4 @@
-package cn.jia.agent.service.impl;
+package cn.jia.chat.service;
 
 import cn.jia.agent.entity.WorkspaceExecutionProjectionHint;
 import cn.jia.agent.skill.SkillManagementMySqlFixture;
