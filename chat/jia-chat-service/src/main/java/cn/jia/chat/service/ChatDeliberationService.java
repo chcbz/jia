@@ -498,14 +498,28 @@ public class ChatDeliberationService {
             long conversationGeneration, String agentId, String requestId, String turnId, String dispatchId,
             String snapshotId, String contextDigest, long deltaSeq, String content,
             ServerResolvedAgentSender sender) {
+        return acceptDelta(tenantId, ownerJiacn, clientId, conversationId, conversationGeneration,
+                agentId, requestId, turnId, dispatchId, snapshotId, contextDigest, deltaSeq, content, null, sender);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public DeltaResult acceptDelta(String tenantId, String ownerJiacn, String clientId, String conversationId,
+            long conversationGeneration, String agentId, String requestId, String turnId, String dispatchId,
+            String snapshotId, String contextDigest, long deltaSeq, String content, String streamOutcomeKind,
+            ServerResolvedAgentSender sender) {
         if (deltaSeq < 1 || content == null || content.isEmpty()) throw invalid("Invalid delta");
+        // Optional display metadata only; does not authorize execution or finalize a typed outcome.
+        if (streamOutcomeKind != null && !Set.of("ANSWER", "CLARIFY").contains(streamOutcomeKind))
+            throw invalid("Invalid streamed reply kind");
         ServerResolvedAgentSender trustedSender = requireAgentSender(sender, agentId, ownerJiacn, clientId, tenantId, dispatchId);
         ChatTurnEntity visible = requireVisibleTurn(tenantId, ownerJiacn, clientId, turnId);
         requireLockedConversation(tenantId, ownerJiacn, clientId, visible.getConversationId(), visible.getConversationGeneration());
         ChatTurnEntity turn = requireLockedTurn(tenantId, ownerJiacn, clientId, turnId);
         requireCallbackBinding(turn, tenantId, ownerJiacn, clientId, conversationId, conversationGeneration,
                 agentId, requestId, dispatchId, snapshotId, contextDigest);
-        String deltaDigest = "sha256:" + sha256(content);
+        // Preserve legacy digests when the optional field is absent. A purpose change is not an identical replay.
+        String deltaDigest = "sha256:" + sha256(streamOutcomeKind == null ? content
+                : JsonUtil.toJson(List.of(streamOutcomeKind, content)));
         long last = Optional.ofNullable(turn.getLastDeltaSeq()).orElse(0L);
         if (deltaSeq <= last) {
             if (deltaSeq == last) {
@@ -542,15 +556,16 @@ public class ChatDeliberationService {
         }
         turn.setLastDeltaSeq(deltaSeq).setLastDeltaDigest(deltaDigest)
                 .setState(ChatDeliberationStates.STREAMING).setStateVersion(turn.getStateVersion() + 1);
+        Map<String, Object> deltaPayload = new LinkedHashMap<>();
+        deltaPayload.put("content", content);
+        deltaPayload.put("deltaSeq", Long.toString(deltaSeq));
+        deltaPayload.put("agentId", trustedSender.agentId());
+        deltaPayload.put("senderType", trustedSender.type());
+        deltaPayload.put("senderName", trustedSender.displayName());
+        if (streamOutcomeKind != null) deltaPayload.put("streamOutcomeKind", streamOutcomeKind);
         ChatConversationEventEntity event = persistEvent(turn,
                 stableId("evt", dispatchId, "DELTA", Long.toString(deltaSeq)),
-                "agent_message_delta", Map.ofEntries(
-                        Map.entry("content", content),
-                        Map.entry("deltaSeq", Long.toString(deltaSeq)),
-                        Map.entry("agentId", trustedSender.agentId()),
-                        Map.entry("senderType", trustedSender.type()),
-                        Map.entry("senderName", trustedSender.displayName())),
-                System.currentTimeMillis());
+                "agent_message_delta", deltaPayload, System.currentTimeMillis());
         return new DeltaResult(DeltaStatus.ACCEPTED, turn, event);
     }
 

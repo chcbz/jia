@@ -1503,7 +1503,8 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                         conversationId, generation, agentId,
                         asString(payload.get("requestId")), asString(payload.get("turnId")),
                         asString(payload.get("dispatchId")), contextValue(payload, "contextSnapshotId"),
-                        contextValue(payload, "contextHash"), deltaSeq, content, sender));
+                        contextValue(payload, "contextHash"), deltaSeq, content,
+                        asString(payload.get("streamOutcomeKind")), sender));
             } catch (RuntimeException rejected) {
                 sendError(session, payload, "CHAT_DELTA_REJECTED", "Durable chat delta was rejected");
                 return;

@@ -1140,7 +1140,7 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         when(deliberation.acceptDelta(anyString(), anyString(), anyString(), anyString(),
                 org.mockito.ArgumentMatchers.anyLong(), anyString(), anyString(), anyString(), anyString(),
                 anyString(), anyString(), org.mockito.ArgumentMatchers.anyLong(), anyString(),
-                any(ServerResolvedAgentSender.class)))
+                org.mockito.ArgumentMatchers.nullable(String.class), any(ServerResolvedAgentSender.class)))
                 .thenReturn(new ChatDeliberationService.DeltaResult(
                         ChatDeliberationService.DeltaStatus.ACCEPTED, null, null));
         cn.jia.chat.deliberation.ChatTurnEntity turn = new cn.jia.chat.deliberation.ChatTurnEntity()
@@ -1193,7 +1193,14 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
                 ArgumentCaptor.forClass(ServerResolvedAgentSender.class);
         verify(deliberation).acceptDelta(eq("0"), eq("task-owner-A"), eq("jia_client"), eq("1001"),
                 eq(1L), eq("agent-001"), eq("req-1"), eq("turn-1"), eq("dispatch-1"),
-                eq("snapshot-1"), eq("sha256:ctx"), eq(1L), eq(deltaContent), deltaSender.capture());
+                eq("snapshot-1"), eq("sha256:ctx"), eq(1L), eq(deltaContent),
+                org.mockito.ArgumentMatchers.<String>isNull(), deltaSender.capture());
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
+                {"schemaVersion":1,"type":"chat.message.delta","runtimeInstanceId":"runtime-1","messageId":"delta-message-2","requestId":"req-1","turnId":"turn-1","dispatchId":"dispatch-1","conversationId":"1001","conversationGeneration":"1","contextSnapshotId":"snapshot-1","contextHash":"sha256:ctx","deltaSeq":"2","agentId":"agent-001","streamOutcomeKind":"ANSWER","content":"visible"}
+                """));
+        verify(deliberation).acceptDelta(eq("0"), eq("task-owner-A"), eq("jia_client"), eq("1001"),
+                eq(1L), eq("agent-001"), eq("req-1"), eq("turn-1"), eq("dispatch-1"),
+                eq("snapshot-1"), eq("sha256:ctx"), eq(2L), eq("visible"), eq("ANSWER"), any(ServerResolvedAgentSender.class));
         ArgumentCaptor<ServerResolvedAgentSender> finalSender =
                 ArgumentCaptor.forClass(ServerResolvedAgentSender.class);
         verify(deliberation).persistFinal(eq("0"), eq("task-owner-A"), eq("jia_client"), eq("1001"),
