@@ -610,31 +610,53 @@ public final class SkillManagementService {
         return "INSTRUCTION".equals(kind) ? "NOT_EXECUTABLE".equals(runtimeState)
                 : "EXECUTABLE".equals(kind)&&admission&&"READY".equals(runtimeState);
     }
-    public List<RecommendationSkill> recommendationSkills(HostingRentHttp.Actor a,String agent) {
-        enabled(a);path(agent);
+    public Map<String,List<RecommendationSkill>> recommendationSkills(HostingRentHttp.Actor a,List<String> agents) {
+        if(agents.isEmpty())return Map.of();
+        enabled(a);
         return tx.execute(transaction->{
-            versions.readOwned(a,agent);
+            // One observation only: never reuse these reads across the model call or requests.
             var products=new HashMap<String,SkillProductEntity>();
-            for(var product:db.products(a.tenantId(),a.clientId()))products.put(product.getProductId(),product);
-            boolean connected=online(a,agent);var observed=catalog(a,agent);
-            var rows=new ArrayList<RecommendationSkill>();
-            for(var state:db.states(a.tenantId(),a.clientId(),agent)) {
-                if(state.getActiveInstallationId()==null)continue;
-                var auth=db.findAuthorization(a.tenantId(),a.clientId(),state.getActiveInstallationId());
-                if(auth==null)continue;
-                var status=runtime(a,agent,state,auth,observed,connected);
-                var pkg=ref(auth);
-                var installedVersion=market.selectApprovedProductVersion(a.tenantId(),a.clientId(),text(pkg,"productVersionId"));
-                var product=installedVersion==null?null:products.get(installedVersion.getProductId());
-                boolean ready=recommendationEvidenceAvailable(text(pkg,"kind"),Boolean.TRUE.equals(state.getDesiredEnabled()),
-                        Boolean.TRUE.equals(state.getAdmissionEnabled()),text(status,"state"));
-                rows.add(new RecommendationSkill(auth.getInstallationId(),state.getSkillKey(),text(pkg,"skillVersion"),
-                        product==null?state.getSkillKey():product.getName(),product==null?"":product.getDescription(),ready,text(status,"state"),text(pkg,"kind")));
+            var approved=new HashMap<String,Optional<SkillProductVersionEntity>>();
+            var result=new LinkedHashMap<String,List<RecommendationSkill>>();
+            boolean productsLoaded=false;
+            for(String agent:new LinkedHashSet<>(agents)) {
+                path(agent);versions.readOwned(a,agent);
+                var states=db.states(a.tenantId(),a.clientId(),agent).stream()
+                        .filter(state->state.getActiveInstallationId()!=null).toList();
+                if(states.isEmpty()){result.put(agent,List.of());continue;}
+                if(!productsLoaded){
+                    for(var product:db.products(a.tenantId(),a.clientId()))products.put(product.getProductId(),product);
+                    productsLoaded=true;
+                }
+                var authorizations=new HashMap<String,SkillInstallationAuthorizationEntity>();
+                for(var auth:db.activeAuthorizationsForAgent(a.tenantId(),a.clientId(),agent))authorizations.put(auth.getInstallationId(),auth);
+                // The registry owns live session/fence isolation. Capture one coherent catalog,
+                // not two full catalogs whose timestamps/unrelated skills may differ.
+                SkillCapabilityLookup.View observed=null;
+                try {
+                    var proof=authentication.currentRegisteredProof(a.tenantId(),a.clientId(),agent);
+                    var lookup=capabilities.getIfAvailable();
+                    if(a.ownerJiacn().equals(proof.scope().ownerJiacn())&&lookup!=null) {
+                        var view=lookup.lookup(new SkillCapabilityLookup.Scope(a.tenantId(),a.clientId(),a.ownerJiacn(),agent),SkillMarketplaceService.sessionFence(proof));
+                        if(view.state()==SkillCapabilityLookup.State.AVAILABLE)observed=view;
+                    }
+                } catch(IllegalArgumentException absent) { /* No authenticated live catalog is positive evidence. */ }
+                var rows=new ArrayList<RecommendationSkill>();
+                for(var state:states) {
+                    var auth=authorizations.get(state.getActiveInstallationId());if(auth==null)continue;
+                    var status=runtime(a,agent,state,auth,observed,observed!=null);
+                    var pkg=ref(auth);String versionId=text(pkg,"productVersionId");
+                    var installedVersion=approved.computeIfAbsent(versionId,id->Optional.ofNullable(
+                            market.selectApprovedProductVersion(a.tenantId(),a.clientId(),id))).orElse(null);
+                    var product=installedVersion==null?null:products.get(installedVersion.getProductId());
+                    boolean ready=recommendationEvidenceAvailable(text(pkg,"kind"),Boolean.TRUE.equals(state.getDesiredEnabled()),
+                            Boolean.TRUE.equals(state.getAdmissionEnabled()),text(status,"state"));
+                    rows.add(new RecommendationSkill(auth.getInstallationId(),state.getSkillKey(),text(pkg,"skillVersion"),
+                            product==null?state.getSkillKey():product.getName(),product==null?"":product.getDescription(),ready,text(status,"state"),text(pkg,"kind")));
+                }
+                rows.sort(Comparator.comparing(RecommendationSkill::installationId));result.put(agent,List.copyOf(rows));
             }
-            if(!Objects.equals(observed,catalog(a,agent)))
-                rows.replaceAll(row->new RecommendationSkill(row.installationId(),row.skillKey(),row.skillVersion(),row.title(),row.description(),false,"CHANGED",row.kind()));
-            rows.sort(Comparator.comparing(RecommendationSkill::installationId));
-            return List.copyOf(rows);
+            return Map.copyOf(result);
         });
     }
 

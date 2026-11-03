@@ -70,6 +70,9 @@ public interface EconomySkillManagementMapper {
     SkillEntitlementEntity entitlement(@Param("tenantId") String t,@Param("clientId") String c,@Param("entitlementId") String id);
     @Select("SELECT p.* FROM economy_skill_product p WHERE "+S+" AND status='PUBLISHED' ORDER BY product_id")
     List<SkillProductEntity> products(@Param("tenantId") String t,@Param("clientId") String c);
+    /** Active managed installations include native position skills without marketplace purchase rows. */
+    @Select("SELECT a.* FROM economy_skill_managed_state s JOIN economy_skill_installation_authorization a ON a.tenant_id=s.tenant_id AND a.client_id=s.client_id AND a.installation_id=s.active_installation_id WHERE s.tenant_id=#{tenantId} AND s.client_id=#{clientId} AND s.agent_id=#{agentId} ORDER BY a.installation_id")
+    List<SkillInstallationAuthorizationEntity> activeAuthorizationsForAgent(@Param("tenantId") String t,@Param("clientId") String c,@Param("agentId") String a);
     @Select("SELECT a.* FROM economy_skill_installation_authorization a JOIN economy_skill_installation i ON i.tenant_id=a.tenant_id AND i.client_id=a.client_id AND i.installation_id=a.installation_id WHERE a.tenant_id=#{tenantId} AND a.client_id=#{clientId} AND i.target_agent_id=#{agentId} ORDER BY a.installation_id")
     List<SkillInstallationAuthorizationEntity> authorizationsForAgent(@Param("tenantId") String t,@Param("clientId") String c,@Param("agentId") String a);
     @Select("SELECT * FROM economy_skill_installation_authorization WHERE "+S+" AND change_id=#{changeId} ORDER BY installation_id")

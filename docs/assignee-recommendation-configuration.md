@@ -35,3 +35,10 @@ jia.chat.recommendation.reasoning-effort=
 - 完整候选（含原技能版本/运行状态）及附件观察仍前后比较，投影精简不缩减权限或过期检查；模型外目标不作为强制超时。
 - 未知/重复/不可操作候选分别记录CANDIDATE_UNKNOWN/CANDIDATE_DUPLICATE/CANDIDATE_NOT_OPERABLE，失败范围仍为本次推荐502。防止伪造、重复和跨候选证据，保留完整覆盖/证据可用性校验，不记录模型正文/标识，不自动重试。
 - 定向回归：AssigneeRecommendationServiceTest、RecommendationMaterialsTest、AssigneeRecommendationModelTest、AssigneeRecommendationControllerTest。Luna及默认推理参数保持不变；无新增SDK结构化输出选项。
+
+## 2026-11-03 稳定性优化（后续候选，未部署）
+- 模型端口显式携带API生成的请求级outputSchema；模型适配器使用当前Spring AI 2.0 `OpenAiChatOptions.outputSchema`，真实SDK请求须验证`response_format.type=json_schema`和`strict=true`。复用原连接、凭据及options副本，不修改全局默认。不支持此输出选项时显式失败，无自动降级/重试。
+- 模型recommendations由每个候选短编号作为必填键，行内rank表达排序，必填等级/理由/证据/缺口；无模型questions。API验证并映射为既有HTTP recommendations数组，questions仍为空；同rank按固定候选顺序排列，不补造未评候选或改写等级。缺项、重复JSON键、未知候选、无效rank及跨候选/不可用证据仍拒绝本次502。
+- 每轮观察共享产品目录及已批准版本读取，按Agent批量读取当前有效安装授权（基于managed state，不依赖是否有市场购买installation行，原生岗位技能同样覆盖）；空技能不查目录，保留原归属和会话fence责任。缓存仅观察内，模型之后重读，不跨请求缓存。
+- 一轮只捕获一份可信运行目录；不再二次比较整目录后把所有技能置CHANGED。模型后复核真实推荐事实；Agent显示名/在线状态变化本身不使能力判断失效，HTTP使用后置状态，技能实际可引用性/安装/版本/用途变化仍拒绝。快照失效日志分类TASK/CANDIDATE_SET/CANDIDATE_FACTS/SKILL_EVIDENCE/MATERIAL，不记录事实值。
+- 验证不等于性能达标：同网关Luna严格Schema探针及图片/PDF/混合材料样例只是模型层检查；正式云端回归和上线后HTTP完整耗时分别记录。模型外3秒仍是观测目标，不设强制deadline。
