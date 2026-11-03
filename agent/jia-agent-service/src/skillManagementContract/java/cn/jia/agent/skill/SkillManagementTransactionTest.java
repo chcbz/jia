@@ -97,6 +97,7 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         var dto=new AgentRuntimeDTO();dto.setAgentId(AGENT);dto.setStatus("online");dto.setSystemAgent(false);
         when(agents.requireApiKeyOwnedAgentForUpdate(ACTOR.clientId(),ACTOR.ownerJiacn(),AGENT)).thenReturn(dto);
         when(agents.requireApiKeyOwnedAgent(ACTOR.clientId(),ACTOR.ownerJiacn(),AGENT)).thenReturn(dto);
+        when(agents.requireOwnedAgentCapabilities(ACTOR.tenantId(),ACTOR.clientId(),ACTOR.ownerJiacn(),AGENT)).thenReturn(dto);
         versions=new SkillAgentVersions(app,runtimes,provider(agents),owner,manager);
         var commands=new AgentCommandTransportDaoImpl(sql.getMapper(AgentCommandTransportMapper.class));writer=spy(new SkillInstallCommandWriter(commands,gate));
         // Provision this fixture's private store explicitly; production never creates it at startup.
@@ -174,6 +175,7 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         when(owner.requireOwner(ACTOR)).thenReturn(ACTOR.ownerJiacn());
         when(agents.requireApiKeyOwnedAgentForUpdate(ACTOR.clientId(),ACTOR.ownerJiacn(),AGENT)).thenReturn(dto);
         when(agents.requireApiKeyOwnedAgent(ACTOR.clientId(),ACTOR.ownerJiacn(),AGENT)).thenReturn(dto);
+        when(agents.requireOwnedAgentCapabilities(ACTOR.tenantId(),ACTOR.clientId(),ACTOR.ownerJiacn(),AGENT)).thenReturn(dto);
         versions=new SkillAgentVersions(app,rows,provider(agents),owner,manager);
         service=new SkillManagementService(db,market,app,marketplace,versions,rows,installs,authentication,identities,provider(packages),provider(writer),provider(sessions),provider(capabilities),manager);
     }

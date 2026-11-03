@@ -26,35 +26,59 @@ public final class AssigneeRecommendationService {
         this.agents = agents; this.skills = skills; this.model = model; this.materials = materials;
     }
     public Result recommend(HostingRentHttp.Actor actor, String taskId, Request request) {
-        if (request == null || request.expectedTaskVersion() == null || request.expectedTaskVersion().isBlank())
-            throw new Failure(400, "BAD_REQUEST");
-        AgentTaskDTO task = agents.getTask(taskId);
-        if (!Objects.equals(task.getTaskVersion(), request.expectedTaskVersion()) || !"open".equalsIgnoreCase(task.getStatus()))
-            throw new Failure(409, "RECOMMENDATION_STALE");
-        List<Candidate> candidates = observe(actor, taskId);
-        long observedAt = Instant.now().toEpochMilli();
-        if (candidates.isEmpty()) return new Result(taskId, task.getTaskVersion(), observedAt,
-                "NO_CANDIDATES", "当前没有可承办候选", List.of(), List.of(), true);
-        var materialObservation = materials.observe(actor, taskId);
-        String raw;
+        long started = System.nanoTime(), modelStarted = 0, modelEnded = 0;
+        String outcome = "failure";
         try {
-            var input = new LinkedHashMap<String, Object>();
-            input.put("task", taskInput(task)); input.put("candidates", candidates);
-            input.put("materials", materialObservation.stream().map(RecommendationMaterials.Observation::material).toList());
-            input.put("materialsNote", "仅提供关联版本元信息；未读取附件正文。summary=null表示无已有摘要，不代表附件无内容。");
-            raw = model.judge(JSON.writeValueAsString(input));
-        } catch (Failure error) { throw error; }
-        catch (Exception unavailable) { throw new Failure(503, "RECOMMENDATION_UNAVAILABLE"); }
-        // A response is advice on exactly these facts, not an indefinitely valid admission token.
-        AgentTaskDTO current = agents.getTask(taskId);
-        if (!Objects.equals(task.getTaskVersion(), current.getTaskVersion())
-                || !Objects.equals(taskInput(task), taskInput(current))
-                || !Objects.equals(task.getStatus(), current.getStatus())
-                || !Objects.equals(candidates, observe(actor, taskId)))
-            throw new Failure(409, "RECOMMENDATION_STALE");
-        materials.verifyUnchanged(actor, taskId, materialObservation);
-        return decode(taskId, task.getTaskVersion(), observedAt, candidates, raw);
+            if (request == null || request.expectedTaskVersion() == null || request.expectedTaskVersion().isBlank())
+                throw new Failure(400, "BAD_REQUEST");
+            AgentTaskDTO task = agents.getTaskRecommendationInput(taskId);
+            if (!Objects.equals(task.getTaskVersion(), request.expectedTaskVersion()) || !"open".equalsIgnoreCase(task.getStatus()))
+                throw new Failure(409, "RECOMMENDATION_STALE");
+            List<Candidate> candidates = observe(actor, taskId);
+            long observedAt = Instant.now().toEpochMilli();
+            if (candidates.isEmpty()) {
+                outcome = "no_candidates";
+                return new Result(taskId, task.getTaskVersion(), observedAt,
+                        "NO_CANDIDATES", "当前没有可承办候选", List.of(), List.of(), true);
+            }
+            var materialObservation = materials.observe(actor, taskId);
+            String raw;
+            try {
+                var input = new LinkedHashMap<String, Object>();
+                input.put("task", taskInput(task)); input.put("candidates", candidates);
+                input.put("materials", materialObservation.stream().map(RecommendationMaterials.Observation::material).toList());
+                input.put("materialsNote", "仅提供关联版本元信息；未读取附件正文。summary=null表示无已有摘要，不代表附件无内容。");
+                String inputJson = JSON.writeValueAsString(input);
+                modelStarted = System.nanoTime();
+                try { raw = model.judge(inputJson); }
+                finally { modelEnded = System.nanoTime(); }
+            } catch (Failure error) { throw error; }
+            catch (Exception unavailable) { throw new Failure(503, "RECOMMENDATION_UNAVAILABLE"); }
+            // A response is advice on exactly these facts, not an indefinitely valid admission token.
+            AgentTaskDTO current = agents.getTaskRecommendationInput(taskId);
+            if (!Objects.equals(task.getTaskVersion(), current.getTaskVersion())
+                    || !Objects.equals(taskInput(task), taskInput(current))
+                    || !Objects.equals(task.getStatus(), current.getStatus())
+                    || !Objects.equals(candidates, observe(actor, taskId)))
+                throw new Failure(409, "RECOMMENDATION_STALE");
+            materials.verifyUnchanged(actor, taskId, materialObservation);
+            var result = decode(taskId, task.getTaskVersion(), observedAt, candidates, raw);
+            outcome = "success";
+            return result;
+        } catch (Failure failure) {
+            outcome = failure.status() == 409 ? "stale" : "failure";
+            throw failure;
+        } finally {
+            long ended = System.nanoTime();
+            long modelNanos = modelEnded == 0 ? 0 : modelEnded - modelStarted;
+            // No prompt, attachment metadata, identities, model response or credentials in logs.
+            LOG.info("assignee_recommendation_timing outcome={} totalMs={} nonModelMs={} beforeModelMs={} modelMs={} afterModelMs={}",
+                    outcome, millis(ended - started), millis(ended - started - modelNanos),
+                    millis((modelStarted == 0 ? ended : modelStarted) - started), millis(modelNanos),
+                    modelEnded == 0 ? 0 : millis(ended - modelEnded));
+        }
     }
+    private static long millis(long nanos) { return java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(nanos); }
     private static Map<String, Object> taskInput(AgentTaskDTO task) {
         var input = new LinkedHashMap<String, Object>();
         input.put("title", task.getTitle()); input.put("description", task.getDescription());
@@ -63,7 +87,10 @@ public final class AssigneeRecommendationService {
     }
     private List<Candidate> observe(HostingRentHttp.Actor actor, String taskId) {
         var result = new ArrayList<Candidate>();
-        for (var runtime : agents.listTaskAssigneeCandidates(taskId)) {
+        long started = System.nanoTime();
+        var available = agents.listTaskAssigneeCandidates(taskId);
+        long listed = System.nanoTime();
+        for (var runtime : available) {
             List<String> abilities = runtime.abilities();
             var target = runtime.target();
             var agent = new Agent(target.agentId(), target.displayName(), target.availability(), abilities,
@@ -84,6 +111,8 @@ public final class AssigneeRecommendationService {
                     "外部候选仅提供接单公开摘要；未读取其私有技能、本领或成果。", false));
             result.add(new Candidate(agent, List.copyOf(evidence)));
         }
+        LOG.info("assignee_recommendation_observe candidates={} candidateMs={} evidenceMs={}",
+                result.size(), millis(listed - started), millis(System.nanoTime() - listed));
         return List.copyOf(result);
     }
     static Result decode(String taskId, String taskVersion, long observedAt, List<Candidate> candidates, String raw) {

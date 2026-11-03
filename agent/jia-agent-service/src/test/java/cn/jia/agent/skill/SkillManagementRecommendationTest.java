@@ -35,7 +35,7 @@ class SkillManagementRecommendationTest {
         var actor = new HostingRentHttp.Actor("user", "0", "client", "owner");
         when(marketplace.available(actor)).thenReturn(true);
         assertEquals(List.of(), service.recommendationSkills(actor, "agent"));
-        verify(versions, atLeastOnce()).readOwned(actor, "agent");
+        verify(versions, times(1)).readOwned(actor, "agent");
         verify(marketplace).available(actor);
         verifyNoInteractions(packages, writer, market, app);
     }

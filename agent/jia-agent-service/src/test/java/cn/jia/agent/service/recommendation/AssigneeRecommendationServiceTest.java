@@ -72,7 +72,7 @@ class AssigneeRecommendationServiceTest {
     @Test void noCandidatesMakesNoModelOrSkillCallAndVersionMismatchDoesNotInvokeModel() {
         var agents = mock(AgentService.class); var skills = mock(SkillManagementService.class); var model = mock(AgentAssigneeRecommendationModel.class);
         var service = new AssigneeRecommendationService(agents, skills, model, mock(RecommendationMaterials.class));
-        when(agents.getTask("task")).thenReturn(task("7")); when(agents.listTaskAssigneeCandidates("task")).thenReturn(List.of());
+        when(agents.getTaskRecommendationInput("task")).thenReturn(task("7")); when(agents.listTaskAssigneeCandidates("task")).thenReturn(List.of());
         assertEquals("NO_CANDIDATES", service.recommend(ACTOR, "task", new Request("7")).state());
         assertEquals(409, assertThrows(Failure.class, () -> service.recommend(ACTOR, "task", new Request("6"))).status());
         verifyNoInteractions(skills, model);
@@ -81,17 +81,17 @@ class AssigneeRecommendationServiceTest {
         var agents = mock(AgentService.class); var skills = mock(SkillManagementService.class); var model = mock(AgentAssigneeRecommendationModel.class);
         var service = new AssigneeRecommendationService(agents, skills, model, mock(RecommendationMaterials.class));
         var a = new AgentTaskAssigneeCandidateDTO(new AgentTaskTargetSummaryDTO("a", "Agent", null, true, "online"), List.of("写作"));
-        when(agents.getTask("task")).thenReturn(task("7")); when(agents.listTaskAssigneeCandidates("task")).thenReturn(List.of(a));
+        when(agents.getTaskRecommendationInput("task")).thenReturn(task("7")); when(agents.listTaskAssigneeCandidates("task")).thenReturn(List.of(a));
         when(skills.recommendationSkills(ACTOR, "a")).thenReturn(List.of()); when(model.judge(anyString())).thenReturn(ANSWER);
         assertEquals("READY", service.recommend(ACTOR, "task", new Request("7")).state());
         verify(model, times(1)).judge(anyString()); verify(agents, never()).assignTask(anyString(), any());
-        when(agents.getTask("task")).thenReturn(task("7"), task("8"));
+        when(agents.getTaskRecommendationInput("task")).thenReturn(task("7"), task("8"));
         assertEquals(409, assertThrows(Failure.class, () -> service.recommend(ACTOR, "task", new Request("7"))).status());
     }
     @Test void externalCandidateIsRatedUnknownWithoutReadingPrivateSkills() {
         var agents = mock(AgentService.class); var skills = mock(SkillManagementService.class); var model = mock(AgentAssigneeRecommendationModel.class);
         var a = new AgentTaskAssigneeCandidateDTO(new AgentTaskTargetSummaryDTO("external", "Agent", "公开提供方", false, "online"), List.of());
-        when(agents.getTask("task")).thenReturn(task("7")); when(agents.listTaskAssigneeCandidates("task")).thenReturn(List.of(a));
+        when(agents.getTaskRecommendationInput("task")).thenReturn(task("7")); when(agents.listTaskAssigneeCandidates("task")).thenReturn(List.of(a));
         when(model.judge(anyString())).thenReturn(ANSWER.replace("\"a\"", "\"external\"").replace("HIGH", "UNKNOWN").replace("[\"ability:0\"]", "[]"));
         var service = new AssigneeRecommendationService(agents, skills, model, mock(RecommendationMaterials.class));
         var result = service.recommend(ACTOR, "task", new Request("7"));
@@ -102,7 +102,7 @@ class AssigneeRecommendationServiceTest {
     @Test void providerFailureDoesNotRetryOrLeakItsMessage() {
         var agents = mock(AgentService.class); var skills = mock(SkillManagementService.class); var model = mock(AgentAssigneeRecommendationModel.class);
         var a = new AgentTaskAssigneeCandidateDTO(new AgentTaskTargetSummaryDTO("a", "Agent", null, true, "online"), List.of("写作"));
-        when(agents.getTask("task")).thenReturn(task("7")); when(agents.listTaskAssigneeCandidates("task")).thenReturn(List.of(a));
+        when(agents.getTaskRecommendationInput("task")).thenReturn(task("7")); when(agents.listTaskAssigneeCandidates("task")).thenReturn(List.of(a));
         when(skills.recommendationSkills(ACTOR, "a")).thenReturn(List.of());
         when(model.judge(anyString())).thenThrow(new RuntimeException("private upstream details"));
         var service = new AssigneeRecommendationService(agents, skills, model, mock(RecommendationMaterials.class));
@@ -120,7 +120,7 @@ class AssigneeRecommendationServiceTest {
         var agents = mock(AgentService.class); var skills = mock(SkillManagementService.class); var model = mock(AgentAssigneeRecommendationModel.class);
         var eligible = new AgentTaskAssigneeCandidateDTO(new AgentTaskTargetSummaryDTO("a", "Writer", null, true, "online"), List.of("写作"));
         var impossible = new AgentTaskAssigneeCandidateDTO(new AgentTaskTargetSummaryDTO("no-evidence", "Empty", null, true, "online"), List.of());
-        when(agents.getTask("task")).thenReturn(task("7"));
+        when(agents.getTaskRecommendationInput("task")).thenReturn(task("7"));
         when(agents.listTaskAssigneeCandidates("task")).thenReturn(List.of(impossible, eligible));
         when(skills.recommendationSkills(eq(ACTOR), anyString())).thenReturn(List.of());
         String all = ANSWER.replace("}],\"questions\":[]", "},{\"agentId\":\"no-evidence\",\"recommendationLevel\":\"UNKNOWN\",\"reason\":\"资料不足\",\"evidenceIds\":[],\"gaps\":[]}],\"questions\":[]");
@@ -136,7 +136,7 @@ class AssigneeRecommendationServiceTest {
     @Test void installedButUnavailableEvidenceCanOnlySupportUnknownWithoutCitation() {
         var agents = mock(AgentService.class); var skills = mock(SkillManagementService.class); var model = mock(AgentAssigneeRecommendationModel.class);
         var a = new AgentTaskAssigneeCandidateDTO(new AgentTaskTargetSummaryDTO("a", "Agent", null, true, "online"), List.of());
-        when(agents.getTask("task")).thenReturn(task("7")); when(agents.listTaskAssigneeCandidates("task")).thenReturn(List.of(a));
+        when(agents.getTaskRecommendationInput("task")).thenReturn(task("7")); when(agents.listTaskAssigneeCandidates("task")).thenReturn(List.of(a));
         when(skills.recommendationSkills(ACTOR, "a")).thenReturn(List.of(new SkillManagementService.RecommendationSkill(
                 "installed", "image", "1", "图片", "经验", false, "VERSION_MISMATCH", "INSTRUCTION")));
         when(model.judge(anyString())).thenReturn(ANSWER.replace("HIGH", "UNKNOWN").replace("[\"ability:0\"]", "[]"));
@@ -152,7 +152,7 @@ class AssigneeRecommendationServiceTest {
     @Test void enabledInstructionExperienceCanBeCitedWithoutClaimingToolAdmission() throws Exception {
         var agents = mock(AgentService.class); var skills = mock(SkillManagementService.class); var model = mock(AgentAssigneeRecommendationModel.class);
         var a = new AgentTaskAssigneeCandidateDTO(new AgentTaskTargetSummaryDTO("a", "Agent", null, true, "online"), List.of());
-        when(agents.getTask("task")).thenReturn(task("7")); when(agents.listTaskAssigneeCandidates("task")).thenReturn(List.of(a));
+        when(agents.getTaskRecommendationInput("task")).thenReturn(task("7")); when(agents.listTaskAssigneeCandidates("task")).thenReturn(List.of(a));
         when(skills.recommendationSkills(ACTOR, "a")).thenReturn(List.of(new SkillManagementService.RecommendationSkill(
                 "installed", "writing", "1", "写作", "写作经验", true, "NOT_EXECUTABLE", "INSTRUCTION")));
         when(model.judge(anyString())).thenReturn(ANSWER.replace("ability:0", "skill:installed"));
@@ -168,7 +168,7 @@ class AssigneeRecommendationServiceTest {
         var agents = mock(AgentService.class); var skills = mock(SkillManagementService.class);
         var model = mock(AgentAssigneeRecommendationModel.class); var materials = mock(RecommendationMaterials.class);
         var t = task("7"); t.setTitle("分析结果"); t.setDescription("分析结果");
-        when(agents.getTask("task")).thenReturn(t);
+        when(agents.getTaskRecommendationInput("task")).thenReturn(t);
         when(agents.listTaskAssigneeCandidates("task")).thenReturn(List.of(new AgentTaskAssigneeCandidateDTO(
                 new AgentTaskTargetSummaryDTO("a", "Agent", null, true, "online"), List.of("识图分析"))));
         when(skills.recommendationSkills(ACTOR, "a")).thenReturn(List.of());

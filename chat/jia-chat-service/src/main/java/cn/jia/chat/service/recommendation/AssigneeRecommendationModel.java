@@ -15,7 +15,15 @@ import static cn.jia.agent.entity.AssigneeRecommendation.*;
 @Component
 public final class AssigneeRecommendationModel implements cn.jia.agent.service.AgentAssigneeRecommendationModel {
     private final ChatModel model;
-    public AssigneeRecommendationModel(@Lazy ChatModel model) { this.model = model; }
+    private final String recommendationModel;
+    private final String reasoningEffort;
+    public AssigneeRecommendationModel(@Lazy ChatModel model,
+            @org.springframework.beans.factory.annotation.Value("${jia.chat.recommendation.model:}") String recommendationModel,
+            @org.springframework.beans.factory.annotation.Value("${jia.chat.recommendation.reasoning-effort:}") String reasoningEffort) {
+        this.model = model;
+        this.recommendationModel = recommendationModel.strip();
+        this.reasoningEffort = reasoningEffort.strip();
+    }
     private static final String INSTRUCTIONS = """
         你是聚义厅的承办推荐助手，只比较给定候选并提供建议，不办理或执行任务。
 
@@ -100,6 +108,13 @@ public final class AssigneeRecommendationModel implements cn.jia.agent.service.A
                 ? toolOptions.mutate().toolCallbacks(List.of()).build()
                 : modelOptions != null ? modelOptions.mutate().build()
                 : ToolCallingChatOptions.builder().toolCallbacks(List.of()).build();
+        if (!recommendationModel.isEmpty()) options = options.mutate().model(recommendationModel).build();
+        if (!reasoningEffort.isEmpty()) {
+            // Provider option adaptation belongs here, not in the recommendation business service.
+            if (!(options instanceof org.springframework.ai.openai.OpenAiChatOptions openAi))
+                throw new Failure(503, "RECOMMENDATION_UNAVAILABLE");
+            options = openAi.mutate().reasoningEffort(reasoningEffort).build();
+        }
         var response = model.call(new Prompt(List.of(new SystemMessage(INSTRUCTIONS), new UserMessage(inputJson)), options));
         if (response == null || response.getResult() == null || response.getResult().getOutput() == null
                 || response.getResult().getOutput().hasToolCalls())

@@ -2017,8 +2017,31 @@ class AgentServiceImplTest extends BaseMockTest {
                 result.stream().map(c -> c.target().agentId()).toList());
         assertTrue(result.stream().allMatch(agent -> agent.target().isMine()));
         assertEquals(2, AgentTaskAssigneeCandidateDTO.class.getRecordComponents().length);
+        assertEquals(List.of("planning", "analysis"), result.stream().filter(c -> "agent-wuyong".equals(c.target().agentId())).findFirst().orElseThrow().abilities());
+        verify(agentTaskMetaDao, never()).findByAgentInOwnerScope(anyString(), anyString(), anyString(), anyString(), anyInt());
+        verify(externalServicePolicies, never()).assignedTarget(any(), anyString());
         verify(externalServicePolicies).candidates(any(), org.mockito.ArgumentMatchers.eq("task-001"), org.mockito.ArgumentMatchers.isNull(), org.mockito.ArgumentMatchers.eq(100));
         verify(agentRuntimeDao, never()).findRosterByOwner("0", "jia_client", "jiacn", null, null);
+    }
+
+    @Test
+    void recommendationTaskInputUsesOwnerAuthorityWithoutAssignmentOrFundingProjection() {
+        var meta = new AgentTaskMetaEntity();
+        meta.setTaskId("task-001"); meta.setTenantId("0"); meta.setClientId("jia_client");
+        meta.setOwnerJiacn("jiacn"); meta.setRewardStatus(AgentConstants.TASK_STATUS_OPEN);
+        meta.setTaskVersion(9L); meta.setRequiredAbilities("[\"analysis\"]");
+        when(agentTaskMetaDao.findByTaskIdInOwnerScope("0", "jia_client", "jiacn", "task-001")).thenReturn(meta);
+        var input = agentService.getTaskRecommendationInput("task-001");
+        assertEquals("9", input.getTaskVersion());
+        assertEquals("task-001", input.getTitle());
+        assertEquals(List.of("analysis"), input.getRequiredAbilities());
+        verifyNoInteractions(externalServicePolicies, agentTaskMemberDao);
+    }
+
+    @Test
+    void recommendationInputStillRejectsTaskOutsideOwnerScope() {
+        assertThrows(AgentServiceImpl.AgentBizException.class, () -> agentService.getTaskRecommendationInput("not-owned"));
+        verifyNoInteractions(externalServicePolicies);
     }
 
     @Test

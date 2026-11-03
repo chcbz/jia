@@ -54,7 +54,7 @@ class SkillAgentVersionsTest {
         var actor=new HostingRentHttp.Actor("user", "tenant-blue", "client", "owner");
         var row=runtime();var dto=new AgentRuntimeDTO();dto.setAgentId("agt_1");dto.setSystemAgent(false);
         when(owners.requireOwner(actor)).thenReturn("owner");
-        when(agents.requireApiKeyOwnedAgent("client","owner","agt_1")).thenReturn(dto);
+        when(agents.requireOwnedAgentCapabilities("tenant-blue","client","owner","agt_1")).thenReturn(dto);
         when(runtimes.findInScope("tenant-blue","client","agt_1")).thenReturn(row);
         var state=new SkillAgentVersionEntity();state.setVersion(7L);state.setSourceHash(SkillAgentVersions.sourceHash(row));
         when(mapper.findVersion("tenant-blue","client","agt_1")).thenReturn(state);
@@ -63,6 +63,8 @@ class SkillAgentVersionsTest {
         var versions=new SkillAgentVersions(mapper,runtimes,SkillMarketplaceRealTransactionTest.provider(agents),owners,
                 mock(org.springframework.transaction.PlatformTransactionManager.class));
         assertEquals(7L,versions.readOwned(actor,"agt_1"));
+        verify(agents).requireOwnedAgentCapabilities("tenant-blue","client","owner","agt_1");
+        verify(agents,never()).requireApiKeyOwnedAgent(anyString(),anyString(),anyString());
         versions.consume(actor,"agt_1",7L);
         verify(mapper).findVersion("tenant-blue","client","agt_1");
         verify(mapper).lockVersion("tenant-blue","client","agt_1");

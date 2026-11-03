@@ -611,7 +611,9 @@ public final class SkillManagementService {
                 : "EXECUTABLE".equals(kind)&&admission&&"READY".equals(runtimeState);
     }
     public List<RecommendationSkill> recommendationSkills(HostingRentHttp.Actor a,String agent) {
-        return queryOwned(a,agent,()->{
+        enabled(a);path(agent);
+        return tx.execute(transaction->{
+            versions.readOwned(a,agent);
             var products=new HashMap<String,SkillProductEntity>();
             for(var product:db.products(a.tenantId(),a.clientId()))products.put(product.getProductId(),product);
             boolean connected=online(a,agent);var observed=catalog(a,agent);

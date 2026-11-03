@@ -43,7 +43,7 @@ public final class SkillAgentVersions {
     }
     /** Query-only projection of the version the next locked write will observe; no CAS or root creation. */
     public long readOwned(HostingRentHttp.Actor actor,String agentId) {
-        var dto=agents.getObject().requireApiKeyOwnedAgent(actor.clientId(),owners.requireOwner(actor),agentId);
+        var dto=agents.getObject().requireOwnedAgentCapabilities(actor.tenantId(),actor.clientId(),owners.requireOwner(actor),agentId);
         require(dto!=null&&agentId.equals(dto.getAgentId())&&!Boolean.TRUE.equals(dto.getSystemAgent()),404,"RESOURCE_NOT_FOUND");
         var runtime=runtimes.findInScope(actor.tenantId(),actor.clientId(),agentId);
         require(runtime!=null&&actor.ownerJiacn().equals(runtime.getOwnerJiacn()),404,"RESOURCE_NOT_FOUND");

@@ -42,6 +42,12 @@ public interface AgentService {
 
     AgentRuntimeDTO requireApiKeyOwnedAgent(String clientId, String jiacn, String agentId);
 
+    /** Same ownership authority and capability projection, without unused task/statistics enrichment. */
+    AgentRuntimeDTO requireOwnedAgentCapabilities(String tenantId, String clientId, String jiacn, String agentId);
+
+    /** Owner-scoped recommendation inputs only; does not load assignment/funding detail. */
+    AgentTaskDTO getTaskRecommendationInput(String taskId);
+
     /**
      * Read-only exact-scope ownership proof for roster/get projection. This does not authorize
      * task, economy, hosting, skill, or any other mutation.

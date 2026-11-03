@@ -155,6 +155,7 @@ public class SkillMarketplaceRealTransactionTest {
         var dto=new AgentRuntimeDTO();dto.setAgentId(AGENT);dto.setStatus("online");dto.setSystemAgent(false);
         when(agents.requireApiKeyOwnedAgentForUpdate(ACTOR.clientId(),ACTOR.ownerJiacn(),AGENT)).thenReturn(dto);
         when(agents.requireApiKeyOwnedAgentForUpdate(ACTOR.tenantId(),ACTOR.clientId(),ACTOR.ownerJiacn(),AGENT)).thenReturn(dto);
+        when(agents.requireOwnedAgentCapabilities(ACTOR.tenantId(),ACTOR.clientId(),ACTOR.ownerJiacn(),AGENT)).thenReturn(dto);
         versions=new SkillAgentVersions(app,runtimes,provider(agents),owner,manager);
         var commands=new AgentCommandTransportDaoImpl(sql.getMapper(AgentCommandTransportMapper.class));
         var writer=new SkillInstallCommandWriter(commands,gate);

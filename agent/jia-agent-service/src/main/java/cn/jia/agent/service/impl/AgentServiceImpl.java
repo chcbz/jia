@@ -658,6 +658,11 @@ public class AgentServiceImpl implements AgentService {
     }
 
     @Override
+    public AgentRuntimeDTO requireOwnedAgentCapabilities(String tenantId, String clientId, String jiacn, String agentId) {
+        return toRuntimeDTO(requireScopedOwnedRuntime(tenantId, clientId, jiacn, agentId), clientId, jiacn, false);
+    }
+
+    @Override
     public AgentRuntimeDTO requireRosterOwnedAgent(
             String tenantId, String clientId, String jiacn, String agentId) {
         return toRosterOwnershipProof(
@@ -1265,6 +1270,19 @@ public class AgentServiceImpl implements AgentService {
     }
 
     @Override
+    public AgentTaskDTO getTaskRecommendationInput(String taskId) {
+        var meta = requireTask(taskId);
+        var dto = new AgentTaskDTO();
+        dto.setId(meta.getTaskId());
+        dto.setTitle(meta.getTaskId());
+        dto.setStatus(meta.getRewardStatus());
+        dto.setTaskVersion(meta.getTaskVersion() == null ? null : Long.toString(meta.getTaskVersion()));
+        dto.setRequiredAbilities(parseList(meta.getRequiredAbilities()));
+        enrichTaskPlan(dto, meta);
+        return dto;
+    }
+
+    @Override
     public AgentTaskDTO getTask(String taskId) {
         var result=toTaskDTO(requireTask(taskId));
         result.setAssignedTarget(externalServicePolicies.assignedTarget(
@@ -1434,7 +1452,7 @@ public class AgentServiceImpl implements AgentService {
 
     @Override
     public List<AgentTaskAssigneeCandidateDTO> listTaskAssigneeCandidates(String taskId) {
-        getTask(taskId); // Owner-scoped task read before enumerating any candidate.
+        requireTask(taskId); // Owner authority only; recommendation does not consume task detail.
         String clientId = resolveCurrentClientId();
         String ownerJiacn = resolveCurrentJiacn();
         var scope = new cn.jia.agent.service.AgentTaskExecutionGrantService.Scope(resolveCurrentTenantId(), clientId, ownerJiacn);
@@ -1446,7 +1464,7 @@ public class AgentServiceImpl implements AgentService {
             for (var candidate : page.items()) {
                 List<String> abilities = List.of();
                 if (candidate.isMine()) {
-                    var owned = requireApiKeyOwnedAgent(clientId, ownerJiacn, candidate.agentId());
+                    var owned = requireOwnedAgentCapabilities(scope.tenantId(), clientId, ownerJiacn, candidate.agentId());
                     abilities = List.copyOf(Optional.ofNullable(owned.getAbilities()).orElseGet(List::of));
                 }
                 candidates.put(candidate.agentId(), new AgentTaskAssigneeCandidateDTO(candidate, abilities));
@@ -2203,6 +2221,11 @@ public class AgentServiceImpl implements AgentService {
 
     private AgentRuntimeDTO toRuntimeDTO(
             AgentRuntimeEntity entity, String clientId, String ownerJiacn) {
+        return toRuntimeDTO(entity, clientId, ownerJiacn, true);
+    }
+
+    private AgentRuntimeDTO toRuntimeDTO(
+            AgentRuntimeEntity entity, String clientId, String ownerJiacn, boolean includeStats) {
         AgentRuntimeDTO dto = new AgentRuntimeDTO();
         dto.setAgentId(entity.getAgentId());
         dto.setName(entity.getName());
@@ -2237,7 +2260,7 @@ public class AgentServiceImpl implements AgentService {
                 && Objects.equals(ownerJiacn, entity.getOwnerJiacn()));
         dto.setCanBind(false);
         dto.setCanOperate(Boolean.TRUE.equals(dto.getBoundToMe()) && !Boolean.TRUE.equals(dto.getSystemAgent()));
-        dto.setStats(usesLegacyTaskStats(entity)
+        if (includeStats) dto.setStats(usesLegacyTaskStats(entity)
                 ? buildLegacyTaskStats(entity, persona)
                 : buildStats(entity, persona, null));
         return dto;
