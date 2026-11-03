@@ -111,6 +111,34 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     public void setNativeWorkDiscovery(cn.jia.agent.service.NativeConversationWorkDiscovery workDiscovery) {
         this.workDiscovery=Objects.requireNonNull(workDiscovery);
     }
+    private org.springframework.context.ApplicationEventPublisher projectionEvents;
+    @Autowired
+    public void setProjectionEvents(org.springframework.context.ApplicationEventPublisher publisher) {
+        this.projectionEvents = Objects.requireNonNull(publisher);
+    }
+
+    // Never invoke Chat/storage work while holding the execution transaction's locks.
+    void signalProjectionAfterCommit(PersonalWorkspaceExecutionEntity execution) {
+        if (projectionEvents == null || !"CONVERSATION".equals(execution.getExecutionMode())
+                || Objects.equals(4, execution.getExecutionProtocolVersion())
+                || !Set.of("OUTPUT_COMMITTED", "RESULT_COMMITTED", "FAILED", "INPUTS_REVOKED")
+                        .contains(execution.getExecutionState())
+                || !TransactionSynchronizationManager.isActualTransactionActive()
+                || !TransactionSynchronizationManager.isSynchronizationActive()) return;
+        var hint = new cn.jia.agent.entity.WorkspaceExecutionProjectionHint(execution.getTenantId(),
+                execution.getClientId(), execution.getOwnerJiacn(), execution.getExecutionId());
+        TransactionSynchronizationManager.registerSynchronization(new org.springframework.transaction.support.TransactionSynchronization() {
+            @Override public void afterCommit() {
+                try { projectionEvents.publishEvent(hint); }
+                catch (RuntimeException unavailable) {
+                    org.slf4j.LoggerFactory.getLogger(PersonalWorkspaceExecutionServiceImpl.class)
+                            .warn("Result projection hint unavailable; durable compensation retained ({})",
+                                    unavailable.getClass().getSimpleName());
+                }
+            }
+        });
+    }
+
     private final PersonalWorkspaceExecutionDao executions;
     private final PersonalWorkspaceDao workspace;
     private final PersonalWorkspaceTaskLinkDao taskLinks;
@@ -721,6 +749,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         execution.setExecutionState("INPUTS_REVOKED").setGrantRevision(Math.addExact(execution.getGrantRevision(), 1L))
                 .setRevokeIdempotencyKey(idempotencyKey).setRevokeRequestHash(requestHash).setRevokedAt(now);
         executions.update(execution);
+        signalProjectionAfterCommit(execution);
         return view(scope, execution);
     }
 
@@ -1697,6 +1726,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         execution.setExecutionState("FAILED").setFailureCode(RUNTIME_FAILURE_CODE)
                 .setFailureMessage(RUNTIME_FAILURE_MESSAGE).setFailedAt(System.currentTimeMillis());
         executions.update(execution);
+        signalProjectionAfterCommit(execution);
         return view(new OwnerScope(scope.tenantId(), scope.clientId(), scope.ownerJiacn()), execution);
     }
 
@@ -2512,6 +2542,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
             if(failedTurn&&!unsettled) {
                 execution.setExecutionState("FAILED").setFailureCode(RUNTIME_FAILURE_CODE)
                         .setFailureMessage(RUNTIME_FAILURE_MESSAGE).setFailedAt(System.currentTimeMillis());executions.update(execution);
+                signalProjectionAfterCommit(execution);
             }
             return skillEffectReceipt(effect,"UNKNOWN".equals(command.status())?"UNKNOWN":"KNOWN");
         }));
@@ -2634,6 +2665,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
             skill.setPhase("RESULT_READY").setResultManifestJson(skillJson(envelope));skillCas(skill,phase,version);
             skill.setPhase("ARCHIVING");skillCas(skill,"RESULT_READY",skill.getVersion());
             execution.setExecutionState("RESULT_COMMITTED");executions.update(execution);
+            signalProjectionAfterCommit(execution);
             return new cn.jia.agent.service.SkillExecutionService.ResultReceipt(manifestId,"RESULT_COMMITTED","ARCHIVING",digest);
         }));
     }

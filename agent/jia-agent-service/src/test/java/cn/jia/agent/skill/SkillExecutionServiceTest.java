@@ -448,6 +448,22 @@ public class SkillExecutionServiceTest {
             assertEquals(Reason.BAD_REQUEST,assertThrows(Failure.class,()->service.commitResult(runtime,"task","run","manifest_"+HASH,command)).getReason());
         }
     }
+    @Test void actualNativeResultCommitSignalsOnlyAfterTransactionCommit() {
+        emptySkills();
+        var publisher=mock(org.springframework.context.ApplicationEventPublisher.class);
+        service.setProjectionEvents(publisher);
+        org.springframework.transaction.support.TransactionSynchronizationManager.initSynchronization();
+        org.springframework.transaction.support.TransactionSynchronizationManager.setActualTransactionActive(true);
+        try {
+            var receipt=commit(runtime,dataResult());assertEquals("RESULT_COMMITTED",receipt.state());
+            verifyNoInteractions(publisher);
+            var callbacks=org.springframework.transaction.support.TransactionSynchronizationManager.getSynchronizations();
+            assertFalse(callbacks.isEmpty());
+            callbacks.forEach(org.springframework.transaction.support.TransactionSynchronization::afterCommit);
+            verify(publisher).publishEvent(new WorkspaceExecutionProjectionHint("0","client","owner","exec"));
+        } finally { org.springframework.transaction.support.TransactionSynchronizationManager.clear(); }
+    }
+
     @Test void resultSchemaIsBoundToItsExecutionProtocolWithoutRewritingHistory() {
         emptySkills();commit(runtime,dataResult());
         assertEquals(2,service.result(owner,"exec").resultManifest().get("schemaVersion"));

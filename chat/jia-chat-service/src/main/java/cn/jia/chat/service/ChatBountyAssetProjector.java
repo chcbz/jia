@@ -70,6 +70,18 @@ public class ChatBountyAssetProjector {
     /** Read-only scan; no task/Chat locks are held before the grant's task-root lock. */
     public List<Candidate> pending(String afterStepId, int limit) {
         if (limit < 1 || limit > 128) throw new IllegalArgumentException("Invalid scan limit");
+        return pendingQuery(" AND (? IS NULL OR s.step_id > ?) ORDER BY s.step_id LIMIT ?", afterStepId, afterStepId, limit);
+    }
+
+    public List<Candidate> pendingExecution(cn.jia.agent.entity.WorkspaceExecutionProjectionHint hint) {
+        return pendingQuery(" AND e.tenant_id=? AND BINARY e.tenant_id=BINARY ?"
+                + " AND e.client_id=? AND BINARY e.client_id=BINARY ?"
+                + " AND BINARY e.owner_jiacn=BINARY ? AND e.execution_id=? AND BINARY e.execution_id=BINARY ?",
+                hint.tenantId(), hint.tenantId(), hint.clientId(), hint.clientId(), hint.ownerJiacn(),
+                hint.executionId(), hint.executionId());
+    }
+
+    private List<Candidate> pendingQuery(String suffix, Object... parameters) {
         return jdbc.query("""
                 SELECT s.tenant_id,s.owner_jiacn,s.client_id,s.request_id,s.step_id,l.execution_id
                 FROM chat_interaction_step s
@@ -80,10 +92,8 @@ public class ChatBountyAssetProjector {
                   AND e.execution_state IN ('OUTPUT_COMMITTED','RESULT_COMMITTED','FAILED','INPUTS_REVOKED') AND e.execution_mode='CONVERSATION'
                 WHERE e.execution_protocol_version<>4 AND s.kind='EXECUTE' AND l.state='RUNNING'
                   AND (s.state='RUNNING' OR (s.state=e.execution_state AND e.execution_state IN ('OUTPUT_COMMITTED','RESULT_COMMITTED')))
-                  AND (? IS NULL OR s.step_id > ?)
-                ORDER BY s.step_id LIMIT ?
-                """, (rs, n) -> new Candidate(rs.getString(1), rs.getString(2), rs.getString(3),
-                        rs.getString(4), rs.getString(5), rs.getString(6)), afterStepId, afterStepId, limit);
+                """ + suffix, (rs, n) -> new Candidate(rs.getString(1), rs.getString(2), rs.getString(3),
+                        rs.getString(4), rs.getString(5), rs.getString(6)), parameters);
     }
 
     /** Task-root/grant and committed byte check precede the conversation lock and event insert.

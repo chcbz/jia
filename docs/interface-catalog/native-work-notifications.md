@@ -136,3 +136,12 @@ Tests cover commit/rollback, coalescing, deadline crossing, restart, failure,
 real partitioned SQL, capability negotiation and no second model invocation.
 Historical recovery records and one unreproduced wire rejection remain separate
 operational findings; backoff does not mean those executions are repaired.
+
+
+## 成果投影即时提示（2026-11-03候选，未发布）
+
+此节为API内部实现，不改变Runtime/Web协议。原生结果commitResult、明确失败failLocked/recordEffect收口及撤销revoke在原事务提交后发布WorkspaceExecutionProjectionHint（scope和executionId，不含成果正文）。Chat现有asset relay单worker合并同执行提示，按精确执行查询持久候选，再独立调用原投影事务；原任务根→会话锁顺序、授权、摘要与幂等不变。提示失败不改变已提交结果，不自动重新执行模型。PRIVATE/TASK及旧protocol4不加入本提示链。
+
+正常结果不等下一次5秒扫描；遗漏/跨实例/启动恢复沿原分页补偿，周期收敛为30秒（与原生发现补偿同量级）。这一取舍允许漏通知后额外等待约30秒加处理，不承诺实时上限；不新增表/MQ/数据库deadline查询，不把内存提示当完成事实。停止/重启丢弃本地提示，持久扫描恢复；实例内不并行扫描/投影，无新增线程池。
+
+回归入口：ChatBountyAssetRelayTest、WorkspaceProjectionHintTest、WorkspaceProjectionQueryMySqlTest、SkillExecutionServiceTest。覆盖提交/回滚、失败不影响已提交结果、重复及在途提示、停启代次、精确scope/终态/旧协议排除和无通知补偿；正式Flow与上线状态见根handoff JUYITING-POLLING-20261102。不能据本候选声称纯文字模型回复或端到端响应已提速。
