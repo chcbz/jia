@@ -134,19 +134,19 @@ class ChatCancellationVersionTest {
         assertEquals("cancel_requested", event.getValue().getEventType());
     }
 
-    @Test void cancellationAllowsOnlyContinuousDeltaVersionDrift() {
+    @Test void cancellationUsesExactBusinessVersionAndIgnoresLegacyPreviewCheckpoint() {
         ChatTurnEntity turn = turn(); visible(turn); journal();
         when(dao.updateTurnState(eq(turn), eq("CANCELLED"), any(), anyLong())).thenReturn(1);
         when(dao.insertOutbox(any())).thenReturn(1);
         when(dao.findRequest("0", "owner", "client", "request"))
                 .thenReturn(new ChatRequestEntity().setAggregateState("CANCELLED"));
         when(dao.findTurnsByRequest("0", "owner", "client", "request")).thenReturn(List.of(turn));
-        assertEquals("CANCELLED", service.cancelTurn("0", "owner", "client", "turn", 5L, 2L, null).state());
+        assertEquals("CANCELLED", service.cancelTurn("0", "owner", "client", "turn", 7L, 2L, null).state());
         verify(dao).insertOutbox(any());
     }
-    @Test void checkpointCannotForgiveNonDeltaChangesOrFutureAndInconsistentValues() {
+    @Test void previewCheckpointCannotForgiveAnyBusinessVersionConflict() {
         ChatTurnEntity turn = turn(); visible(turn);
-        for (Long[] pair : List.of(new Long[]{5L, 3L}, new Long[]{8L, 5L}, new Long[]{7L, 3L}, new Long[]{null, 3L}))
+        for (Long[] pair : List.of(new Long[]{5L, 3L}, new Long[]{8L, 5L}, new Long[]{5L, 2L}))
             assertThrows(ChatDeliberationException.class, () -> service.cancelTurn("0", "owner", "client", "turn", pair[0], pair[1], null));
         turn.setState("RECOVERY_REQUIRED");
         assertThrows(ChatDeliberationException.class, () -> service.cancelTurn("0", "owner", "client", "turn", 5L, 2L, null));
