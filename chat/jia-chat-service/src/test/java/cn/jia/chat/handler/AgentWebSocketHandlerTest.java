@@ -1151,7 +1151,12 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
                 org.mockito.ArgumentMatchers.<String>isNull(), org.mockito.ArgumentMatchers.<String>isNull(),
                 any(ServerResolvedAgentSender.class)))
                 .thenReturn(new ChatDeliberationService.FinalResult(
-                        ChatDeliberationService.FinalStatus.PERSISTED, 501L, "401", "evt-final", turn, null));
+                        ChatDeliberationService.FinalStatus.PERSISTED, 501L, "401", "evt-final", turn, null),
+                        new ChatDeliberationService.FinalResult(
+                                ChatDeliberationService.FinalStatus.DUPLICATE, 501L, "401", "evt-final", turn, null))
+                .thenThrow(new IllegalStateException("synthetic persistence rejection"))
+                .thenReturn(new ChatDeliberationService.FinalResult(
+                        ChatDeliberationService.FinalStatus.DUPLICATE, 501L, "401", "evt-final", turn, null));
 
         AgentWebSocketHandler handler = UnifiedRuntimeTestSupport.authorize(new AgentWebSocketHandler(chatClient, agentServiceProvider,
                 chatMessageDao, chatConversationEventBroker));
@@ -1171,9 +1176,12 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
                 {"schemaVersion":1,"type":"chat.message.delta","runtimeInstanceId":"runtime-1","messageId":"delta-message-1","requestId":"req-1","turnId":"turn-1","dispatchId":"dispatch-1","conversationId":"1001","conversationGeneration":"1","contextSnapshotId":"snapshot-1","contextHash":"sha256:ctx","deltaSeq":"1","agentId":"agent-001","senderName":"宋江","agentName":"林冲","content":%s}
                 """.formatted(new ObjectMapper().writeValueAsString(deltaContent))));
-        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
+        TextMessage finalWire = new TextMessage("""
                 {"schemaVersion":1,"type":"chat.message","runtimeInstanceId":"runtime-1","messageId":"final-message-1","requestId":"req-1","turnId":"turn-1","dispatchId":"dispatch-1","conversationId":"1001","conversationGeneration":"1","contextSnapshotId":"snapshot-1","contextHash":"sha256:ctx","agentId":"agent-001","senderName":"宋江","agentName":"林冲","content":"final"}
-                """));
+                """);
+        var finalTimings = FinalReplyTimingTest.capture(() -> UnifiedRuntimeTestSupport.deliver(handler, session, finalWire));
+        assertEquals(1, finalTimings.size());
+        FinalReplyTimingTest.assertCompleted(finalTimings.getFirst(), "PERSISTED", true);
 
         ArgumentCaptor<TextMessage> finalReceipt = ArgumentCaptor.forClass(TextMessage.class);
         verify(session, org.mockito.Mockito.atLeastOnce()).sendMessage(finalReceipt.capture());
@@ -1215,6 +1223,21 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
             assertFalse("宋江".equals(sender.displayName()));
             assertFalse("林冲".equals(sender.displayName()));
         }
+        var duplicateTimings = FinalReplyTimingTest.capture(() -> UnifiedRuntimeTestSupport.deliver(handler, session, finalWire));
+        assertEquals(1, duplicateTimings.size());
+        FinalReplyTimingTest.assertCompleted(duplicateTimings.getFirst(), "DUPLICATE", true);
+        var rejectedTimings = FinalReplyTimingTest.capture(() -> UnifiedRuntimeTestSupport.deliver(handler, session, finalWire));
+        assertEquals(1, rejectedTimings.size());
+        assertTrue(rejectedTimings.getFirst().contains("result=REJECTED "));
+        assertEquals(-1, FinalReplyTimingTest.offset(rejectedTimings.getFirst(), "hostedStartUs"));
+        assertEquals(-1, FinalReplyTimingTest.offset(rejectedTimings.getFirst(), "sendStartUs"));
+        assertTrue(FinalReplyTimingTest.capture(() -> UnifiedRuntimeTestSupport.deliver(handler, session,
+                new TextMessage("{\"type\":\"ping\"}"))).isEmpty(), "trace must not leak into the next message");
+        org.mockito.Mockito.doThrow(new java.io.IOException("synthetic send failure"))
+                .when(session).sendMessage(any());
+        var failedSendTimings = FinalReplyTimingTest.capture(() -> UnifiedRuntimeTestSupport.deliver(handler, session, finalWire));
+        assertEquals(1, failedSendTimings.size());
+        FinalReplyTimingTest.assertCompleted(failedSendTimings.getFirst(), "DUPLICATE", false);
     }
 
     @Test

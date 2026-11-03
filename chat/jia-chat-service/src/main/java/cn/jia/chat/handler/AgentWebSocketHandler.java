@@ -326,8 +326,13 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
 
     private final ThreadLocal<cn.jia.core.entity.ProtocolMessage<java.util.Map<String,Object>>> incomingWire = new ThreadLocal<>();
 
+    // One bounded summary per durable final, never per token/delta. No wire or DB changes.
+    private final ThreadLocal<FinalReplyTiming> finalReplyTiming = new ThreadLocal<>();
+
     @Override
     protected void handleTextMessage(WebSocketSession session, TextMessage message) {
+        long handlerStarted = System.nanoTime();
+        long handlerStartedAt = System.currentTimeMillis();
         if(handleManagedSkillWire(session,message.getPayload()))return;
         try {
             var envelope=cn.jia.agent.common.AgentMessageWire.decode(STRICT_RAW_COMMAND_JSON.readValue(message.getPayload(),MESSAGE_TYPE));
@@ -337,11 +342,21 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             if("agent.register".equals(envelope.messageType()))cn.jia.agent.skill.SkillManagementCodec.validateEmbeddedDeclaration(message.getPayload());
             incomingWire.set(envelope);
             var business=cn.jia.agent.common.AgentMessageWire.business(envelope);
+            if ("chat.message".equals(envelope.messageType()) && hasDurableTurnBinding(business)) {
+                var timing = new FinalReplyTiming(handlerStarted, handlerStartedAt, asString(business.get("turnId")));
+                timing.decodedUs = timing.elapsedUs();
+                finalReplyTiming.set(timing);
+            }
             handlePrivateMessage(session,new TextMessage(STRICT_RAW_COMMAND_JSON.writeValueAsString(business)));
         } catch(Exception malformed) {
             if(skillExecutionSessions!=null && java.util.regex.Pattern.compile("\"messageType\"\\s*:\\s*\"agent\\.register\"").matcher(message.getPayload()).find())skillExecutionSessions.remove(session.getId());
             sendProtocolError(session,Map.of(),"MESSAGE_INVALID","Invalid protocol message");
-        } finally { incomingWire.remove(); }
+        } finally {
+            incomingWire.remove();
+            var timing = finalReplyTiming.get();
+            finalReplyTiming.remove();
+            if (timing != null) timing.writeSummary();
+        }
     }
 
     /** Receives only an explicitly projected, strictly decoded public message. */
@@ -1339,8 +1354,11 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                 sendError(session, payload, "CHAT_TURN_FINAL_REJECTED", "Durable chat generation was rejected");
                 return;
             }
+            var timing = finalReplyTiming.get();
+            if (timing != null) timing.authorizedUs = timing.elapsedUs();
             ChatDeliberationService.FinalResult finalResult;
             try {
+                if (timing != null) timing.persistStartUs = timing.elapsedUs();
                 finalResult = withSessionMutationFence(session, () -> chatDeliberationService.persistFinal(
                         sessionTenantId(session), jiacn, clientId, conversationId, generation, agentId,
                         asString(payload.get("requestId")), asString(payload.get("turnId")),
@@ -1350,10 +1368,21 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                         strictString(payload.get("__typedRawInteractionOutcomeJson")),
                         strictString(payload.get("__typedRawInspectionInputReceiptJson")), sender));
             } catch (RuntimeException rejected) {
+                if (timing != null) timing.persistEndUs = timing.elapsedUs();
                 sendError(session, payload, "CHAT_TURN_FINAL_REJECTED", "Durable chat final was rejected");
                 return;
+            } finally {
+                if (timing != null && timing.persistEndUs < 0) timing.persistEndUs = timing.elapsedUs();
             }
-            acknowledgeHostedReceipt(session, agentId, asString(payload.get("dispatchId")));
+            if (timing != null) {
+                timing.result = finalResult.status().name();
+                timing.hostedStartUs = timing.elapsedUs();
+            }
+            try {
+                acknowledgeHostedReceipt(session, agentId, asString(payload.get("dispatchId")));
+            } finally {
+                if (timing != null) timing.hostedEndUs = timing.elapsedUs();
+            }
             if (finalResult.status() == ChatDeliberationService.FinalStatus.DUPLICATE) {
                 sendEvent(session, "agent_message_saved", Map.of(
                         "turnId", finalResult.turn().getTurnId(),
@@ -1938,11 +1967,15 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
 
     private boolean sendEvent(WebSocketSession session, String type, Map<String, ?> payload,
             boolean preserveAuthenticatedInspectionContext) {
+        var timing = "agent_message_saved".equals(type) ? finalReplyTiming.get() : null;
+        if (timing != null) timing.sendStartUs = timing.elapsedUs();
         if (!session.isOpen()) {
+            if (timing != null) timing.sendEndUs = timing.elapsedUs();
             return false;
         }
         try {
             synchronized (session) {
+                if (timing != null) timing.sendLockUs = timing.elapsedUs();
                 // Authenticated INSPECT facts and selectors are integrity-bound protocol data.
                 // The logging sanitizer truncates deep maps and redacts DATA strings, which
                 // changes contextHash and makes root/payload copies conflict. Never log this wire.
@@ -1950,12 +1983,45 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                 // Logging sanitization must never alter transmitted DTO bytes or signatures.
                 String wireJson = STRICT_RAW_COMMAND_JSON.writeValueAsString(envelope);
                 session.sendMessage(new TextMessage(wireJson));
+                if (timing != null) timing.sendReturned = true;
             }
             return true;
         } catch (Exception e) {
             if ("agent_registered".equals(type)) log.error("AGENT_REGISTRATION_DELIVERY_UNAVAILABLE");
             else log.error("Error sending OpenClaw channel event", e);
             return false;
+        } finally {
+            if (timing != null) timing.sendEndUs = timing.elapsedUs();
+        }
+    }
+
+    static final class FinalReplyTiming {
+        private final long started;
+        private final long startedAt;
+        private final String turnId;
+        long decodedUs = -1, authorizedUs = -1, persistStartUs = -1, persistEndUs = -1;
+        long hostedStartUs = -1, hostedEndUs = -1, sendStartUs = -1, sendLockUs = -1, sendEndUs = -1;
+        String result = "REJECTED";
+        boolean sendReturned;
+
+        FinalReplyTiming(long started, long startedAt, String turnId) {
+            this.started = started;
+            this.startedAt = startedAt;
+            // Log correlation only: never reject a request or change transmitted data.
+            this.turnId = turnId == null ? "unknown"
+                    : turnId.substring(0, Math.min(128, turnId.length())).replaceAll("[^A-Za-z0-9_.:-]", "_");
+        }
+
+        long elapsedUs() { return (System.nanoTime() - started) / 1_000; }
+
+        void writeSummary() {
+            // Offsets share one monotonic origin; -1 means the stage was not reached.
+            // sendReturned is a transport call result, NOT client receipt or socket flush proof.
+            log.info("CHAT_FINAL_TIMING turnId={} startedAt={} result={} decodedUs={} authorizedUs={} "
+                            + "persistStartUs={} persistEndUs={} hostedStartUs={} hostedEndUs={} "
+                            + "sendStartUs={} sendLockUs={} sendEndUs={} sendReturned={} totalUs={}",
+                    turnId, startedAt, result, decodedUs, authorizedUs, persistStartUs, persistEndUs,
+                    hostedStartUs, hostedEndUs, sendStartUs, sendLockUs, sendEndUs, sendReturned, elapsedUs());
         }
     }
 
