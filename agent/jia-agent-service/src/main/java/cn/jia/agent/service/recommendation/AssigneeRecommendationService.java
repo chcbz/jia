@@ -34,7 +34,8 @@ public final class AssigneeRecommendationService {
             AgentTaskDTO task = agents.getTaskRecommendationInput(taskId);
             if (!Objects.equals(task.getTaskVersion(), request.expectedTaskVersion()) || !"open".equalsIgnoreCase(task.getStatus()))
                 throw new Failure(409, "RECOMMENDATION_STALE");
-            List<Candidate> candidates = observe(actor, taskId);
+            var observation = observe(actor, taskId);
+            List<Candidate> candidates = observation.candidates();
             long observedAt = Instant.now().toEpochMilli();
             if (candidates.isEmpty()) {
                 outcome = "no_candidates";
@@ -45,9 +46,11 @@ public final class AssigneeRecommendationService {
             String raw;
             try {
                 var input = new LinkedHashMap<String, Object>();
-                input.put("task", taskInput(task)); input.put("candidates", candidates);
-                input.put("materials", materialObservation.stream().map(RecommendationMaterials.Observation::material).toList());
-                input.put("materialsNote", "仅提供关联版本元信息；未读取附件正文。summary=null表示无已有摘要，不代表附件无内容。");
+                input.put("task", taskInput(task)); input.put("candidates", observation.modelCandidates());
+                input.put("materials", materialObservation.stream().map(o -> {
+                    var m = o.material();
+                    return new ModelMaterial(m.name(), m.originalFilename(), m.contentMimeType(), m.role(), m.summary());
+                }).toList());
                 String inputJson = JSON.writeValueAsString(input);
                 modelStarted = System.nanoTime();
                 try { raw = model.judge(inputJson); }
@@ -59,7 +62,7 @@ public final class AssigneeRecommendationService {
             if (!Objects.equals(task.getTaskVersion(), current.getTaskVersion())
                     || !Objects.equals(taskInput(task), taskInput(current))
                     || !Objects.equals(task.getStatus(), current.getStatus())
-                    || !Objects.equals(candidates, observe(actor, taskId)))
+                    || !Objects.equals(observation, observe(actor, taskId)))
                 throw new Failure(409, "RECOMMENDATION_STALE");
             materials.verifyUnchanged(actor, taskId, materialObservation);
             var result = decode(taskId, task.getTaskVersion(), observedAt, candidates, raw);
@@ -85,8 +88,16 @@ public final class AssigneeRecommendationService {
         input.put("requiredAbilities", task.getRequiredAbilities());
         return input;
     }
-    private List<Candidate> observe(HostingRentHttp.Actor actor, String taskId) {
+    // Model references exist only within this request. Full facts remain in Observation for stale checks and HTTP output.
+    private record ModelMaterial(String name, String originalFilename, String contentMimeType, String role, String summary) { }
+    private record ModelEvidence(String id, String kind, String label, String description, boolean available) { }
+    private record ModelCandidate(String agentId, boolean boundToMe, List<ModelEvidence> evidence) { }
+    private record Observation(List<Candidate> candidates, List<ModelCandidate> modelCandidates) { }
+    private static String candidateRef(int index) { return "A" + (index + 1); }
+    private static String evidenceRef(int candidate, int evidence) { return candidateRef(candidate) + "E" + (evidence + 1); }
+    private Observation observe(HostingRentHttp.Actor actor, String taskId) {
         var result = new ArrayList<Candidate>();
+        var modelCandidates = new ArrayList<ModelCandidate>();
         long started = System.nanoTime();
         var available = agents.listTaskAssigneeCandidates(taskId);
         long listed = System.nanoTime();
@@ -96,24 +107,39 @@ public final class AssigneeRecommendationService {
             var agent = new Agent(target.agentId(), target.displayName(), target.availability(), abilities,
                     true, target.isMine(), target.providerDisplayName());
             var evidence = new ArrayList<Evidence>();
-            for (int i = 0; i < abilities.size(); i++) evidence.add(new Evidence("ability:" + i, "DECLARED_ABILITY",
-                    abilities.get(i), "已登记本领，是能力声明而非完成保证。", true));
+            var descriptions = new ArrayList<String>();
+            for (int i = 0; i < abilities.size(); i++) {
+                evidence.add(new Evidence("ability:" + i, "DECLARED_ABILITY",
+                        abilities.get(i), "已登记本领，是能力声明而非完成保证。", true));
+                descriptions.add("");
+            }
             if (agent.boundToMe()) {
                 // Existing native management authority; do not revive a legacy runner-specific capability path.
                 for (var skill : skills.recommendationSkills(actor, agent.agentId())) {
                     String description = "产品当前用途声明（不保证与安装版本完全一致）：" + string(skill.description())
                             + "；技能类型：" + skill.kind() + "；已安装版本：" + skill.skillVersion() + "；运行状态：" + skill.runtimeState()
                             + "；INSTRUCTION是原生指令经验，不是可直接执行的工具；技能证据不等于未报告的工具依赖可用，也不保证任务结果。";
+                    descriptions.add(string(skill.description()));
                     evidence.add(new Evidence("skill:" + skill.installationId(), "INSTALLED_SKILL",
                             skill.title(), description, skill.available()));
                 }
-            } else evidence.add(new Evidence("private-skills", "UNKNOWN", "技能信息未公开",
-                    "外部候选仅提供接单公开摘要；未读取其私有技能、本领或成果。", false));
+            } else {
+                evidence.add(new Evidence("private-skills", "UNKNOWN", "技能信息未公开",
+                        "外部候选仅提供接单公开摘要；未读取其私有技能、本领或成果。", false));
+                descriptions.add("技能信息未公开");
+            }
+            var modelEvidence = new ArrayList<ModelEvidence>();
+            for (int i = 0; i < evidence.size(); i++) {
+                var e = evidence.get(i);
+                modelEvidence.add(new ModelEvidence(evidenceRef(result.size(), i), e.kind(), e.label(),
+                        descriptions.get(i), e.available()));
+            }
+            modelCandidates.add(new ModelCandidate(candidateRef(result.size()), agent.boundToMe(), List.copyOf(modelEvidence)));
             result.add(new Candidate(agent, List.copyOf(evidence)));
         }
         LOG.info("assignee_recommendation_observe candidates={} candidateMs={} evidenceMs={}",
                 result.size(), millis(listed - started), millis(System.nanoTime() - listed));
-        return List.copyOf(result);
+        return new Observation(List.copyOf(result), List.copyOf(modelCandidates));
     }
     static Result decode(String taskId, String taskVersion, long observedAt, List<Candidate> candidates, String raw) {
         try {
@@ -125,18 +151,27 @@ public final class AssigneeRecommendationService {
             JsonNode rows = root.get("recommendations");
             if (rows == null || !rows.isArray()) throw invalid("RECOMMENDATIONS_ARRAY");
             var byId = new HashMap<String, Candidate>();
-            candidates.forEach(c -> byId.put(c.agent().agentId(), c));
+            for (int i = 0; i < candidates.size(); i++) byId.put(candidateRef(i), candidates.get(i));
             var seen = new HashSet<String>(); var recommendations = new ArrayList<Recommendation>();
             for (JsonNode row : rows) {
                 String id = text(row, "agentId"); Candidate candidate = byId.get(id);
-                if (candidate == null || !seen.add(id) || !candidate.agent().canOperate()) throw invalid("CANDIDATE");
+                if (candidate == null) throw invalid("CANDIDATE_UNKNOWN");
+                if (!seen.add(id)) throw invalid("CANDIDATE_DUPLICATE");
+                if (!candidate.agent().canOperate()) throw invalid("CANDIDATE_NOT_OPERABLE");
                 String level = text(row, "recommendationLevel");
                 if (!Set.of("HIGH", "MEDIUM", "LOW", "UNKNOWN").contains(level)) throw invalid("LEVEL");
                 List<String> ids = strings(row.get("evidenceIds"));
                 if ((!"UNKNOWN".equals(level) && ids.isEmpty()) || new HashSet<>(ids).size() != ids.size()) throw invalid("EVIDENCE_IDS");
                 var evidence = new ArrayList<Evidence>();
-                for (String evidenceId : ids) evidence.add(candidate.evidence().stream()
-                        .filter(e -> e.id().equals(evidenceId) && e.available()).findFirst().orElseThrow(() -> invalid("EVIDENCE_UNAVAILABLE")));
+                var byEvidenceRef = new HashMap<String, Evidence>();
+                int candidateIndex = candidates.indexOf(candidate);
+                for (int i = 0; i < candidate.evidence().size(); i++)
+                    byEvidenceRef.put(evidenceRef(candidateIndex, i), candidate.evidence().get(i));
+                for (String evidenceId : ids) {
+                    var fact = byEvidenceRef.get(evidenceId);
+                    if (fact == null || !fact.available()) throw invalid("EVIDENCE_UNAVAILABLE");
+                    evidence.add(fact);
+                }
                 var gaps = new ArrayList<>(strings(row.get("gaps")));
                 if (!"online".equalsIgnoreCase(candidate.agent().status())) gaps.add("当前运行状态：" + candidate.agent().status() + "；确认承办不代表已开始运行。");
                 recommendations.add(new Recommendation(candidate.agent(), level, text(row, "reason"), List.copyOf(evidence), List.copyOf(gaps)));

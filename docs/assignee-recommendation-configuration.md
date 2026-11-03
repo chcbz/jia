@@ -28,3 +28,10 @@ jia.chat.recommendation.reasoning-effort=
 上线使用固定Flow制品和现有受控安装器。安装前核对外置文件摘要仍等于已封装快照；先在原外置配置下安装并确认新包健康，再在现有发布锁与生命周期锁内备份并删除整个外置application.properties、重启核验包内配置。若删除后的启动/健康失败，恢复原文件的完整内容及权限再重启，保留失败证据；回退旧JAR时须同时恢复旧外置配置。其他外置文件、身份/state和数据库不清理。
 
 验收：制品中全部122项与原外置有效值一致、推荐模型为gpt-6-luna、运行JAR摘要及来源Run匹配、原路径不存在、实际服务健康。原始配置快照保留受限备份目录；报告只记键名/数量/摘要，禁止输出凭据值。真实推荐端到端性能另行测量，不把本次配置归并当成模型外3秒达标。
+
+## 2026-11-03 精简模型投影（源码候选，非上线状态）
+- 单次请求以A1/A2及A1E1/A2E1替代真实Agent/证据ID，只允许精确映射，不兼容模型返回旧真实ID。HTTP响应仍是服务器原始Agent及证据；Web/Runtime无合同变化。
+- 模型只接收任务、候选短编号/归属/可引用能力、资料名称/原文件名/MIME/角色/摘要。不发送重复本领、供应方名、内部运行状态、附件版本或文件状态。用途描述不截断，全部候选保留。
+- 完整候选（含原技能版本/运行状态）及附件观察仍前后比较，投影精简不缩减权限或过期检查；模型外目标不作为强制超时。
+- 未知/重复/不可操作候选分别记录CANDIDATE_UNKNOWN/CANDIDATE_DUPLICATE/CANDIDATE_NOT_OPERABLE，失败范围仍为本次推荐502。防止伪造、重复和跨候选证据，保留完整覆盖/证据可用性校验，不记录模型正文/标识，不自动重试。
+- 定向回归：AssigneeRecommendationServiceTest、RecommendationMaterialsTest、AssigneeRecommendationModelTest、AssigneeRecommendationControllerTest。Luna及默认推理参数保持不变；无新增SDK结构化输出选项。
