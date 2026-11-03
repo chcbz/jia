@@ -127,6 +127,17 @@ public interface EconomySkillMarketplaceMapper {
     SkillProductEntity selectProductByVersion(@Param("tenantId") String tenantId,@Param("clientId") String clientId,
             @Param("productVersionId") String productVersionId);
 
+    /** Include retired products for installations that remain manageable. */
+    @Select("""
+            SELECT i.installation_id AS "installation_id",p.name AS "name" FROM economy_skill_installation i
+            JOIN economy_skill_product_version v ON v.tenant_id=i.tenant_id AND v.client_id=i.client_id
+              AND v.product_version_id=i.product_version_id
+            JOIN economy_skill_product p ON p.tenant_id=v.tenant_id AND p.client_id=v.client_id AND p.product_id=v.product_id
+            WHERE i.tenant_id=#{tenantId} AND i.client_id=#{clientId} AND i.target_agent_id=#{agentId}
+            """)
+    java.util.List<java.util.Map<String,Object>> selectInstallationTitles(@Param("tenantId") String tenant,
+            @Param("clientId") String client,@Param("agentId") String agent);
+
     @Insert("""
             INSERT INTO economy_skill_product_version(
                 product_version_id,product_id,version_sequence,skill_key,skill_version,price_micro,

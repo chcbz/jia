@@ -56,6 +56,7 @@ public final class ChatActionCapabilityService {
         var key=new cn.jia.agent.service.SkillCapabilityLookup.Scope(scope.tenantId(),scope.clientId(),
                 scope.ownerJiacn(),scope.targetAgentId());
         var descriptors=installedSkills.readCurrent(key);
+        var displayTitles=installedSkills.displayTitles(key);
         var runtime=expectedFence==null?null:Objects.requireNonNull(skillRuntimes.lookup(key,expectedFence));
         boolean nativeScriptReady = runtime != null && runtime.state() == cn.jia.agent.service.SkillCapabilityLookup.State.AVAILABLE
                 && nativeSessions != null && nativeSessions.nativeScriptDeclared(
@@ -114,6 +115,8 @@ public final class ChatActionCapabilityService {
                         reason="SKILL_RUNTIME_EVIDENCE_INVALID";
                 }
             }
+            // Mutable marketplace wording is not execution metadata or installation evidence.
+            title=displayTitles.getOrDefault(descriptor.installationId(),title);
             results.add(new SkillCandidate(descriptor.skillKey(),descriptor.skillVersion(),title,
                     reason==null?"RUNTIME_READY":"UNAVAILABLE",reason,metadata,
                     descriptor.verifiedNative()&&counts.get(List.of(descriptor.skillKey(),descriptor.skillVersion()))==1));

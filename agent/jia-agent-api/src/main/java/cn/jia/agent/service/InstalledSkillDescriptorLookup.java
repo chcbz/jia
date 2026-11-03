@@ -30,6 +30,10 @@ public interface InstalledSkillDescriptorLookup {
     /** Current installations for profile display and new task selection, not task authorization. */
     default Snapshot readCurrent(SkillCapabilityLookup.Scope scope) { return read(scope); }
 
+    /** Product discovery names keyed by installation ID. Display only; never part of a task
+     * binding, package digest, authorization or readiness comparison. */
+    default java.util.Map<String,String> displayTitles(SkillCapabilityLookup.Scope scope) { return java.util.Map.of(); }
+
     final class SourceUnavailable extends RuntimeException {
         public enum Reason { UNAVAILABLE, FORBIDDEN }
         private final Reason reason;

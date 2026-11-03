@@ -110,6 +110,13 @@ public final class InstalledSkillDescriptorService implements InstalledSkillDesc
         } catch(SourceUnavailable failure) { throw failure; }
         catch(RuntimeException failure) { throw new SourceUnavailable(failure); }
     }
+    @Override public Map<String,String> displayTitles(SkillCapabilityLookup.Scope scope) {
+        // Caller has read the authoritative descriptors; names are a separate display projection.
+        var names=new HashMap<String,String>();
+        for(var row:market.selectInstallationTitles(scope.tenantId(),scope.clientId(),scope.agentId()))
+            names.put((String)row.get("installation_id"),(String)row.get("name"));
+        return Map.copyOf(names);
+    }
     private Descriptor descriptor(SkillCapabilityLookup.Scope s,SkillEntitlementEntity e) {
         if(!"ACTIVE".equals(e.getStatus())) return unavailable(e,"SKILL_NOT_INSTALLED");
         var i=app.installation(s.tenantId(),s.clientId(),e.getInstallationId());

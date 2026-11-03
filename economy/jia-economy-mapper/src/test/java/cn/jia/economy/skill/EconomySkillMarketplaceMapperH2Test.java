@@ -114,6 +114,18 @@ class EconomySkillMarketplaceMapperH2Test {
         assertEquals(0, mapper.selectEntitlementsByAgent("tenant-a", CLIENT, AGENT).size());
     }
 
+    @Test void installationTitlesFollowProductMetadataAndExactAgentScope() {
+        mapper.insertProduct(product());mapper.insertProductVersion(productVersion());mapper.insertInstallation(installation());
+        var rows=mapper.selectInstallationTitles(TENANT,CLIENT,AGENT);
+        assertEquals(1,rows.size());assertEquals(installation().getInstallationId(),rows.getFirst().get("installation_id"));
+        assertEquals(product().getName(),rows.getFirst().get("name"));
+        assertEquals(0,mapper.selectInstallationTitles("other",CLIENT,AGENT).size());
+        assertEquals(0,mapper.selectInstallationTitles(TENANT,"other",AGENT).size());
+        assertEquals(0,mapper.selectInstallationTitles(TENANT,CLIENT,"other").size());
+        assertEquals(1,mapper.publishProductVersion(TENANT,CLIENT,"sp-1","spv-1",1L,2L));
+        assertEquals(1,mapper.retireProduct(TENANT,CLIENT,product().getProductId(),2L,3L));
+        assertEquals(product().getName(),mapper.selectInstallationTitles(TENANT,CLIENT,AGENT).getFirst().get("name"));
+    }
     private SkillProductEntity product() {
         return new SkillProductEntity()
                 .setProductId("sp-1").setSellerType("SYSTEM").setSellerId("SKILL_STORE")

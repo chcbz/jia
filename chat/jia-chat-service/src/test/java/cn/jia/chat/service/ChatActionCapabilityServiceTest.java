@@ -58,6 +58,25 @@ class ChatActionCapabilityServiceTest {
                 "session",fence,new SkillCapabilityLookup.Catalog("2",List.of(disabled))));
         assertEquals("UNAVAILABLE",service.inspectInstalledSkills(scope,fence).items().getFirst().state());
     }
+    @Test void nativeInstructionUsesProductTitleWithoutInventingManifest() {
+        var d=new InstalledSkillDescriptorLookup.Descriptor("document-workbench","1.0.0","native-install",
+                "a".repeat(64),null,null,"installation","host",null);
+        doReturn(new InstalledSkillDescriptorLookup.Snapshot(List.of(d))).when(installed).readCurrent(key);
+        when(installed.displayTitles(key)).thenReturn(Map.of("native-install","文档处理"));
+        var item=service.inspectInstalledSkillsWithoutRuntime(scope).items().getFirst();
+        assertEquals("文档处理",item.title());assertTrue(item.installationVerified());
+        assertEquals("SKILL_RUNTIME_UNAVAILABLE",item.reasonCode());assertNull(item.metadataJson());
+        when(installed.displayTitles(key)).thenReturn(Map.of("native-install","文档整理"));
+        assertEquals("文档整理",service.inspectInstalledSkillsWithoutRuntime(scope).items().getFirst().title());
+        assertEquals(d,installed.readCurrent(key).skills().getFirst());
+    }
+    @Test void productTitleOverridesOldExecutableManifestTitleWithoutChangingReadiness() {
+        var d=descriptor(null);
+        when(installed.displayTitles(key)).thenReturn(Map.of(d.installationId(),"图片编辑"));
+        var item=service.inspectInstalledSkills(scope,fence).items().getFirst();
+        assertEquals("图片编辑",item.title());assertEquals("RUNTIME_READY",item.state());
+        assertTrue(item.installationVerified());
+    }
     @Test void profileAndNewTaskCatalogExcludeHistoricalVersions() {
         var old=new InstalledSkillDescriptorLookup.Descriptor("image-edit","0.9.0","old-install",
                 "d".repeat(64),"e".repeat(64),"{}","installation","host",null);

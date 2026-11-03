@@ -67,6 +67,12 @@ class InstalledSkillDescriptorServiceTest {
         when(managed.findState("0","client","agent","image-edit")).thenThrow(new IllegalStateException("db unavailable"));
         assertThrows(InstalledSkillDescriptorLookup.SourceUnavailable.class,()->service.readCurrent(scope));
     }
+    @Test void productTitlesAreSeparateFromImmutableDescriptors() {
+        when(market.selectInstallationTitles("0","client","agent")).thenReturn(List.of(
+                Map.of("installation_id","ins","name","文档处理")));
+        assertEquals(Map.of("ins","文档处理"),service.displayTitles(scope));
+        verifyNoInteractions(app,packages);
+    }
     private InstalledSkillDescriptorLookup.Descriptor read() { return service.read(scope).skills().getFirst(); }
     @Test void pendingIsUnavailableAndDoesNotReadPackagesOrFinancialServices() {
         e.setStatus("PENDING_INSTALLATION");assertEquals("SKILL_NOT_INSTALLED",read().reasonCode());
