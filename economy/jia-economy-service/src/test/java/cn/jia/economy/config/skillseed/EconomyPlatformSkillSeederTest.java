@@ -89,6 +89,11 @@ class EconomyPlatformSkillSeederTest {
         seeder.afterPropertiesSet();
         assertEquals(newerId,products.get(first.productId()).getCurrentProductVersionId());
         assertEquals(3L,products.get(first.productId()).getVersion());
+        products.get(first.productId()).setStatus("RETIRED").setVersion(4L);
+        seeder.afterPropertiesSet();
+        assertEquals("RETIRED",products.get(first.productId()).getStatus());
+        assertEquals(4L,products.get(first.productId()).getVersion());
+        assertEquals(newerId,products.get(first.productId()).getCurrentProductVersionId());
         verify(mapper, times(6)).publishProductVersion(anyString(), anyString(), anyString(), anyString(), anyLong(), anyLong());
 
     }

@@ -626,10 +626,13 @@ public final class SkillManagementService {
                 var pkg=ref(auth);
                 var installedVersion=market.selectApprovedProductVersion(a.tenantId(),a.clientId(),text(pkg,"productVersionId"));
                 var product=installedVersion==null?null:products.get(installedVersion.getProductId());
+                // Recommendations advertise published experience, not withdrawn discovery entries.
+                // Installed grants remain available to their existing management/execution paths.
+                if(product==null)continue;
                 boolean ready=recommendationEvidenceAvailable(text(pkg,"kind"),Boolean.TRUE.equals(state.getDesiredEnabled()),
                         Boolean.TRUE.equals(state.getAdmissionEnabled()),text(status,"state"));
                 rows.add(new RecommendationSkill(auth.getInstallationId(),state.getSkillKey(),text(pkg,"skillVersion"),
-                        product==null?state.getSkillKey():product.getName(),product==null?"":product.getDescription(),ready,text(status,"state"),text(pkg,"kind")));
+                        product.getName(),product.getDescription(),ready,text(status,"state"),text(pkg,"kind")));
             }
             if(!Objects.equals(observed,catalog(a,agent)))
                 rows.replaceAll(row->new RecommendationSkill(row.installationId(),row.skillKey(),row.skillVersion(),row.title(),row.description(),false,"CHANGED",row.kind()));
@@ -655,6 +658,9 @@ public final class SkillManagementService {
             for(String skill:keys) {
                 var s=states.get(skill);var candidate=candidates.get(skill);var product=products.get(skill);
                 var auth=s==null||s.getActiveInstallationId()==null?null:db.findAuthorization(a.tenantId(),a.clientId(),s.getActiveInstallationId());
+                // Keep an installed retired product understandable/manageable without offering a new candidate.
+                if(product==null&&auth!=null)
+                    product=market.selectProductByVersion(a.tenantId(),a.clientId(),text(ref(auth),"productVersionId"));
                 var latest=records.stream().filter(c->skill.equals(c.getSkillKey())).findFirst().orElse(null);
                 String eligibility="NOT_APPLICABLE";
                 if(auth!=null&&candidate!=null&&!ref(auth).get("productVersionId").equals(candidate.target().get("productVersionId"))) {

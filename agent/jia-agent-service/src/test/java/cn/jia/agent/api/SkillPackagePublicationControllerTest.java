@@ -72,4 +72,19 @@ class SkillPackagePublicationControllerTest {
         verifyNoMoreInteractions(service);
     }
 
+
+    @Test void retirementForwardsPositionGrantWithoutAllowingPackageOrInstallationMutation() {
+        var service=mock(SkillPackagePublicationService.class);var controller=new SkillPackagePublicationController(service);
+        var request=new MockHttpServletRequest("PUT","/agent/skill-maintenance/product-retirement");
+        String body="""
+            {"productId":"product","expectedProductVersion":"2",
+             "positionAuthority":{"appointmentId":"appointment","appointmentRevision":"1","positionRevision":"2","agentId":"wuyong","bindingId":"7"}}
+            """;
+        controller.retireProduct(actor(false),request,body);
+        verify(service).retireProduct(any(),argThat(g->g.publish()&&g.agentId().equals("wuyong")),argThat(c->c.productId().equals("product")&&c.expectedProductVersion()==2));
+        assertThrows(IllegalArgumentException.class,()->controller.retireProduct(actor(true),request,body.replace("positionAuthority","role")));
+        assertThrows(IllegalArgumentException.class,()->controller.retireProduct(actor(false),request,body.replace("\"productId\":","\"uninstall\":true,\"productId\":")));
+        verifyNoMoreInteractions(service);
+    }
+
 }

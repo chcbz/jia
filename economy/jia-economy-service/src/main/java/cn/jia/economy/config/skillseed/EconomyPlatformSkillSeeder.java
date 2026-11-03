@@ -84,7 +84,7 @@ public final class EconomyPlatformSkillSeeder implements InitializingBean {
             requireOne(mapper.publishProductVersion(scope.tenantId(), scope.clientId(), expected.productId(),
                     expected.productVersionId(), 1L, clock.getAsLong()),
                     "publish platform skill product " + expected.productId());
-        } else if ("PUBLISHED".equals(product.getStatus())) {
+        } else if ("PUBLISHED".equals(product.getStatus()) || "RETIRED".equals(product.getStatus())) {
             if (product.getVersion()==null || product.getVersion()<2 || product.getCurrentProductVersionId()==null)
                 throw incompatible("published product pointer",expected.productId());
             // A later trusted publication owns the pointer. Seed never rolls it back to bundled v1.

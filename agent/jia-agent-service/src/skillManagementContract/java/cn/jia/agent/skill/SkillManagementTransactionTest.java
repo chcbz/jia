@@ -801,4 +801,24 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         assertEquals(false,db.lockState("0",ACTOR.clientId(),AGENT,"pdf-export").getAdmissionEnabled());
     }
 
+
+    @Test void retiredProductLeavesInstalledManagementIntactButNotRecommendations() {
+        var c=install();report(c,"PREPARED",null);c=current(c);report(c,"APPLIED",null);catalog(current(c));c=current(c);
+        assertEquals("SUCCEEDED",c.get("status"));
+        assertEquals(1,service.recommendationSkills(ACTOR,AGENT).size());
+        var version=market.selectApprovedProductVersion("0",ACTOR.clientId(),text(object(c.get("target")),"productVersionId"));
+        String productId=version.getProductId();
+        var product=tx.execute(s->market.selectProductForUpdate("0",ACTOR.clientId(),productId));
+        var before=businessSnapshot();
+        assertEquals(1,market.retireProduct("0",ACTOR.clientId(),productId,product.getVersion(),System.currentTimeMillis()));
+        assertTrue(service.recommendationSkills(ACTOR,AGENT).isEmpty());
+        var rows=(List<?>)service.skills(ACTOR,AGENT,false).get("items");
+        var installed=rows.stream().map(SkillManagementCodec::object).filter(r->version.getSkillKey().equals(r.get("skillKey"))).findFirst().orElseThrow();
+        assertEquals(product.getName(),installed.get("name"));assertNull(installed.get("candidate"));
+        assertNotNull(installed.get("installed"));assertTrue(((List<?>)installed.get("allowedActions")).contains("UNINSTALL"));
+        assertFalse(((List<?>)installed.get("allowedActions")).contains("INSTALL"));
+        assertEquals(before,businessSnapshot());
+        assertTrue(service.packageBytes(proof(),text(object(c.get("target")),"skillInstallationId")).length>0);
+    }
+
 }

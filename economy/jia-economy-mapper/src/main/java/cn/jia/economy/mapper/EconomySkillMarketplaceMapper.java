@@ -108,6 +108,25 @@ public interface EconomySkillMarketplaceMapper {
             @Param("productId") String productId,@Param("name") String name,@Param("description") String description,
             @Param("expectedVersion") long expectedVersion,@Param("now") long now);
 
+    @Update("""
+            UPDATE economy_skill_product SET status='RETIRED',version=version+1,update_time=#{now}
+            WHERE """ + EXACT_SCOPE + """
+              AND product_id=#{productId} AND OCTET_LENGTH(product_id)=OCTET_LENGTH(#{productId})
+              AND version=#{expectedVersion} AND status='PUBLISHED'
+            """)
+    int retireProduct(@Param("tenantId") String tenantId,@Param("clientId") String clientId,
+            @Param("productId") String productId,@Param("expectedVersion") long expectedVersion,@Param("now") long now);
+
+    @Select("""
+            SELECT p.* FROM economy_skill_product p
+            JOIN economy_skill_product_version v ON v.tenant_id=p.tenant_id AND v.client_id=p.client_id AND v.product_id=p.product_id
+            WHERE p.tenant_id=#{tenantId} AND p.client_id=#{clientId} AND v.product_version_id=#{productVersionId}
+              AND OCTET_LENGTH(p.tenant_id)=OCTET_LENGTH(#{tenantId}) AND OCTET_LENGTH(p.client_id)=OCTET_LENGTH(#{clientId})
+              AND OCTET_LENGTH(v.product_version_id)=OCTET_LENGTH(#{productVersionId})
+            """)
+    SkillProductEntity selectProductByVersion(@Param("tenantId") String tenantId,@Param("clientId") String clientId,
+            @Param("productVersionId") String productVersionId);
+
     @Insert("""
             INSERT INTO economy_skill_product_version(
                 product_version_id,product_id,version_sequence,skill_key,skill_version,price_micro,
