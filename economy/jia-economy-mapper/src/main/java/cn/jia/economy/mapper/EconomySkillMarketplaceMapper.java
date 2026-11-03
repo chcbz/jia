@@ -96,6 +96,18 @@ public interface EconomySkillMarketplaceMapper {
             @Param("expectedVersion") long expectedVersion,
             @Param("now") long now);
 
+    @Update("""
+            UPDATE economy_skill_product
+            SET name=#{name},description=#{description},version=version+1,update_time=#{now}
+            WHERE """ + EXACT_SCOPE + """
+              AND product_id=#{productId} AND version=#{expectedVersion}
+              AND OCTET_LENGTH(product_id)=OCTET_LENGTH(#{productId})
+              AND status IN ('DRAFT','PUBLISHED')
+            """)
+    int updateProductMetadata(@Param("tenantId") String tenantId,@Param("clientId") String clientId,
+            @Param("productId") String productId,@Param("name") String name,@Param("description") String description,
+            @Param("expectedVersion") long expectedVersion,@Param("now") long now);
+
     @Insert("""
             INSERT INTO economy_skill_product_version(
                 product_version_id,product_id,version_sequence,skill_key,skill_version,price_micro,
