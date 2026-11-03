@@ -760,6 +760,7 @@ class ChatControllerTest extends BaseMockTest {
                 org.mockito.Mockito.mock(ChatConversationEventBroker.LiveSubscription.class);
         org.mockito.Mockito.lenient().when(chatConversationEventBroker.subscribeBuffered(anyString(),
                 org.mockito.ArgumentMatchers.anyLong(), any())).thenReturn(subscription);
+        org.mockito.Mockito.lenient().when(subscription.previews()).thenReturn(reactor.core.publisher.Flux.empty());
         org.mockito.Mockito.lenient().when(subscription.flux()).thenAnswer(ignored -> {
             Flux<String> legacyFixture = chatConversationEventBroker.stream("1001", 1L, () -> true);
             return legacyFixture == null ? Flux.empty() : legacyFixture;

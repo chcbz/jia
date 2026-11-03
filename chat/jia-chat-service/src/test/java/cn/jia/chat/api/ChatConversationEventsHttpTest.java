@@ -52,6 +52,7 @@ class ChatConversationEventsHttpTest {
         subscription=mock(ChatConversationEventBroker.LiveSubscription.class);
         when(broker.subscribeBuffered(eq("42"),eq(3L),any())).thenReturn(subscription);
         when(subscription.flux()).thenReturn(Flux.empty());
+        when(subscription.previews()).thenReturn(Flux.empty());
         events=mock(ChatDeliberationService.class);
         when(events.eventHighWatermark("0","owner","client","42",3)).thenReturn(7L);
         when(events.replayEventsThrough("0","owner","client","42",3,0,7,500))
@@ -65,6 +66,27 @@ class ChatConversationEventsHttpTest {
         var scope=new EsContext();scope.setTenantId("0");scope.setJiacn("owner");scope.setClientId("client");EsContextHolder.setContext(scope);
     }
     @AfterEach void clear() { EsContextHolder.clearContext(); }
+
+    @Test void previewFramesHaveNoSseIdAndNeverLoadJournalRows() {
+        for (int count : List.of(10, 1000)) {
+            clearInvocations(events);
+            when(subscription.previews()).thenReturn(Flux.range(1, count).map(i -> Map.<String, Object>of(
+                    "type", "agent_message_delta", "conversationId", "42", "conversationGeneration", "3",
+                    "turnId", "turn", "requestId", "request", "streamId", "stream", "deltaSeq", Integer.toString(i),
+                    "content", "word", "occurredAt", 1000L)));
+            var frames = controller.conversationEvents("42", null, null, jwt("0"), new MockHttpServletRequest())
+                    .collectList().block();
+            assertNotNull(frames);
+            assertEquals(count + 2, frames.size());
+            for (var frame : frames.subList(2, frames.size())) {
+                assertNull(frame.id());
+                assertEquals("conversation.preview", frame.event());
+            }
+            verify(events).eventHighWatermark("0", "owner", "client", "42", 3);
+            verify(events).replayEventsThrough("0", "owner", "client", "42", 3, 0, 7, 500);
+            verifyNoMoreInteractions(events);
+        }
+    }
 
     @Test void replayAndReadyAreSingleEncodedWithDurableTypeScopeAndCursor() throws Exception {
         when(events.replayEventsThrough("0","owner","client","42",3,0,7,500))

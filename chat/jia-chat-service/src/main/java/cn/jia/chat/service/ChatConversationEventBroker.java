@@ -95,6 +95,19 @@ public class ChatConversationEventBroker {
         return live && delivered.get();
     }
 
+    /** Presentation only. No replay, persistent liveness check or database callback. */
+    public boolean publishPreview(String conversationId, long generation, Map<String, Object> preview) {
+        if (!validKey(conversationId, generation)) return false;
+        ReentrantLock lock = stripe(conversationId);
+        lock.lock();
+        try {
+            EventSink sink = sinks.get(conversationId);
+            if (sink == null || sink.invalidated || sink.generation != generation) return false;
+            // Best effort: a subscriber without demand misses this frame, not a durable final.
+            return sink.previews.tryEmitNext(Map.copyOf(preview)).isSuccess();
+        } finally { lock.unlock(); }
+    }
+
     private void publishLocked(String conversationId, Map<String, ?> event) {
         EventSink eventSink = sinks.get(conversationId);
         if (eventSink == null || eventSink.invalidated) return;
@@ -196,6 +209,7 @@ public class ChatConversationEventBroker {
         if (eventSink != null) {
             eventSink.invalidated = true;
             eventSink.deleted.tryEmitValue(Boolean.TRUE);
+            eventSink.previews.tryEmitComplete();
             java.util.List<Sinks.Many<String>> subscribers = java.util.List.copyOf(eventSink.subscribers.values());
             eventSink.subscribers.clear();
             subscribers.forEach(Sinks.Many::tryEmitComplete);
@@ -213,6 +227,7 @@ public class ChatConversationEventBroker {
         private final long generation;
         private final Map<Long,Sinks.Many<String>> subscribers = new ConcurrentHashMap<>();
         private final Sinks.One<Boolean> deleted = Sinks.one();
+        private final Sinks.Many<Map<String, Object>> previews = Sinks.many().multicast().directBestEffort();
         private final AtomicInteger watchers = new AtomicInteger();
         private volatile boolean invalidated;
         private EventSink(long generation) { this.generation = generation; }
@@ -224,11 +239,18 @@ public class ChatConversationEventBroker {
         private final long id;
         private final Sinks.Many<String> buffer;
         private final AtomicBoolean closed = new AtomicBoolean();
+        private final Sinks.One<Boolean> previewClosed = Sinks.one();
         private LiveSubscription(String conversationId, EventSink sink, long id, Sinks.Many<String> buffer) {
             this.conversationId=conversationId; this.sink=sink; this.id=id; this.buffer=buffer;
         }
         public Flux<String> flux() { return buffer.asFlux().doFinally(ignored -> close()); }
-        @Override public void close() { if (closed.compareAndSet(false,true)) releaseSubscriber(conversationId,sink,id); }
+        public Flux<Map<String, Object>> previews() { return sink.previews.asFlux().takeUntilOther(previewClosed.asMono()); }
+        @Override public void close() {
+            if (closed.compareAndSet(false,true)) {
+                previewClosed.tryEmitValue(Boolean.TRUE);
+                releaseSubscriber(conversationId,sink,id);
+            }
+        }
     }
 
     public final class DeletionFence implements AutoCloseable {

@@ -20,6 +20,53 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class ChatConversationEventBrokerTest {
 
     @Test
+    void previewsHaveNoReplayOrPerFramePersistentChecksAndDoNotConsumeFinalQueue() {
+        ChatConversationEventBroker broker = new ChatConversationEventBroker();
+        AtomicInteger reads = new AtomicInteger();
+        var subscription = broker.subscribeBuffered("preview", 1L, () -> { reads.incrementAndGet(); return true; });
+        List<Map<String, Object>> received = new CopyOnWriteArrayList<>();
+        var consumer = subscription.previews().subscribe(received::add);
+        for (int i = 1; i <= 1000; i++) {
+            assertTrue(broker.publishPreview("preview", 1L, Map.of("deltaSeq", Integer.toString(i))));
+        }
+        assertEquals(1, reads.get());
+        assertEquals(1000, received.size());
+        List<Map<String, Object>> late = new CopyOnWriteArrayList<>();
+        var lateConsumer = subscription.previews().subscribe(late::add);
+        assertTrue(late.isEmpty(), "late subscriber must not replay the partial reply");
+        List<String> durable = new CopyOnWriteArrayList<>();
+        var finalConsumer = subscription.flux().subscribe(durable::add);
+        broker.publish("preview", Map.of("type", "agent_message", "content", "complete"));
+        assertEquals(1, durable.size());
+        assertTrue(durable.getFirst().contains("complete"));
+        subscription.close(); consumer.dispose(); lateConsumer.dispose(); finalConsumer.dispose();
+        assertEquals(0, broker.subscriberCount("preview"));
+        assertFalse(broker.publishPreview("preview", 1L, Map.of("content", "late")));
+    }
+
+    @Test
+    void slowPreviewSubscriberDropsWithoutBlockingFastSubscriberOrBufferingHistory() {
+        ChatConversationEventBroker broker = new ChatConversationEventBroker();
+        var subscription = broker.subscribeBuffered("preview", 2L, () -> true);
+        List<Map<String, Object>> slowFrames = new CopyOnWriteArrayList<>();
+        BaseSubscriber<Map<String, Object>> slow = new BaseSubscriber<>() {
+            @Override protected void hookOnSubscribe(Subscription subscription) { }
+            @Override protected void hookOnNext(Map<String, Object> event) { slowFrames.add(event); }
+        };
+        subscription.previews().subscribe(slow);
+        AtomicInteger fastFrames = new AtomicInteger();
+        var fast = subscription.previews().subscribe(ignored -> fastFrames.incrementAndGet());
+        for (int i = 0; i < 1000; i++) broker.publishPreview("preview", 2L, Map.of("content", "x"));
+        slow.request(1);
+        assertTrue(slowFrames.isEmpty(), "requesting later must not drain a hidden preview backlog");
+        broker.publishPreview("preview", 2L, Map.of("content", "latest"));
+        assertEquals(1, slowFrames.size());
+        assertEquals(1001, fastFrames.get());
+        assertFalse(broker.publishPreview("preview", 1L, Map.of("content", "old generation")));
+        subscription.close(); slow.dispose(); fast.dispose();
+    }
+
+    @Test
     void initialControlFrameIsEmittedAfterLiveRegistrationWithoutChangingEventPayloads() throws Exception {
         ChatConversationEventBroker broker = new ChatConversationEventBroker();
         List<String> events = new CopyOnWriteArrayList<>();

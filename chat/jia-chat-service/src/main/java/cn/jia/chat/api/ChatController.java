@@ -733,7 +733,13 @@ public class ChatController {
                     ProtocolMessage.event(requestId, readyType, readyId, Map.<String, Object>of(
                     "type", "stream_ready", "conversationId", id, "cursor", Long.toString(watermark),
                     "nextCursor", Long.toString(watermark)))).id(readyId).event(readyType).build();
-            Flux<ServerSentEvent<ProtocolMessage<Map<String, Object>>>> stream = Flux.fromIterable(replay).concatWithValues(ready).concatWith(catchUpThenLive)
+            Flux<ServerSentEvent<ProtocolMessage<Map<String, Object>>>> previews = liveSubscription.previews()
+                    .map(preview -> ServerSentEvent.builder(ProtocolMessage.event(requestId,
+                            "conversation.preview", "preview:" + preview.get("streamId") + ":" + preview.get("deltaSeq"),
+                            preview)).event("conversation.preview").build());
+            // One in-flight item per source; previews never enter durableCatchUp or its journal queue.
+            Flux<ServerSentEvent<ProtocolMessage<Map<String, Object>>>> live = Flux.merge(1, catchUpThenLive, previews);
+            Flux<ServerSentEvent<ProtocolMessage<Map<String, Object>>>> stream = Flux.fromIterable(replay).concatWithValues(ready).concatWith(live)
                     .doFinally(ignored -> liveSubscription.close());
             // Durable replay/catch-up already honor downstream demand. An eager
             // onBackpressureBuffer here requests the entire history and overflows
