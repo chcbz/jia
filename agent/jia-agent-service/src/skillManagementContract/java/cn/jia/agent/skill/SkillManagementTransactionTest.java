@@ -818,7 +818,11 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         assertNotNull(installed.get("installed"));assertTrue(((List<?>)installed.get("allowedActions")).contains("UNINSTALL"));
         assertFalse(((List<?>)installed.get("allowedActions")).contains("INSTALL"));
         assertEquals(before,businessSnapshot());
-        assertTrue(service.packageBytes(proof(),text(object(c.get("target")),"skillInstallationId")).length>0);
+        String installedId=text(object(c.get("target")),"skillInstallationId");
+        assertTrue(service.descriptors(scope()).stream().anyMatch(d->installedId.equals(d.installationId())));
+        assertTrue(packages.prepare(version).bytes().length>0);
+        // The installation-only download remains closed after PREPARE; retirement must not reopen it.
+        assertEquals("SKILL_DOWNLOAD_FORBIDDEN",assertThrows(SkillMarketplaceException.class,()->service.packageBytes(proof(),installedId)).code());
     }
 
 }
