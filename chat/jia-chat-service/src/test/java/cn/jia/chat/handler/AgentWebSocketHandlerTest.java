@@ -1137,12 +1137,6 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         when(chatConversationService.getOwned("0", "task-owner-A", "jia_client", "1001"))
                 .thenReturn(conversation);
         ChatDeliberationService deliberation = org.mockito.Mockito.mock(ChatDeliberationService.class);
-        when(deliberation.acceptDelta(anyString(), anyString(), anyString(), anyString(),
-                org.mockito.ArgumentMatchers.anyLong(), anyString(), anyString(), anyString(), anyString(),
-                anyString(), anyString(), org.mockito.ArgumentMatchers.anyLong(), anyString(),
-                org.mockito.ArgumentMatchers.nullable(String.class), any(ServerResolvedAgentSender.class)))
-                .thenReturn(new ChatDeliberationService.DeltaResult(
-                        ChatDeliberationService.DeltaStatus.ACCEPTED, null, null));
         cn.jia.chat.deliberation.ChatTurnEntity turn = new cn.jia.chat.deliberation.ChatTurnEntity()
                 .setTurnId("turn-1");
         when(deliberation.persistFinal(anyString(), anyString(), anyString(), anyString(),
@@ -1174,8 +1168,20 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
                 {"schemaVersion":1,"type":"agent.register","runtimeInstanceId":"runtime-1","messageId":"register-message-1","requestId":"reg-1","agentId":"agent-001","name":"Wu Yong"}
                 """));
         UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
-                {"schemaVersion":1,"type":"chat.message.delta","runtimeInstanceId":"runtime-1","messageId":"delta-message-1","requestId":"req-1","turnId":"turn-1","dispatchId":"dispatch-1","conversationId":"1001","conversationGeneration":"1","contextSnapshotId":"snapshot-1","contextHash":"sha256:ctx","deltaSeq":"1","agentId":"agent-001","senderName":"宋江","agentName":"林冲","content":%s}
+                {"schemaVersion":1,"type":"chat.message.delta","runtimeInstanceId":"runtime-1","messageId":"delta-message-1","requestId":"req-1","turnId":"turn-1","dispatchId":"dispatch-1","conversationId":"1001","conversationGeneration":"1","contextSnapshotId":"snapshot-1","contextHash":"sha256:ctx","deltaSeq":"1","agentId":"agent-001","senderName":"宋江","agentName":"林冲","streamOutcomeKind":"ANSWER","content":%s}
                 """.formatted(new ObjectMapper().writeValueAsString(deltaContent))));
+        // Full public WS entry: once admitted, 10/1000 frames must not re-enter DB-owning services.
+        var authorityMocks = List.of(deliberation, chatConversationService, agentService, dispatchAuthority,
+                org.springframework.test.util.ReflectionTestUtils.getField(handler, "runtimeAuthentication"));
+        var callsAtAdmission = authorityMocks.stream().map(mock -> org.mockito.Mockito.mockingDetails(mock).getInvocations().size()).toList();
+        for (int index = 2; index <= 1000; index++) {
+            UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
+                    {"schemaVersion":1,"type":"chat.message.delta","runtimeInstanceId":"runtime-1","messageId":"delta-%d","requestId":"req-1","turnId":"turn-1","dispatchId":"dispatch-1","conversationId":"1001","conversationGeneration":"1","contextSnapshotId":"snapshot-1","contextHash":"sha256:ctx","deltaSeq":"%d","agentId":"agent-001","streamOutcomeKind":"ANSWER","content":"word"}
+                    """.formatted(index, index)));
+            if (index == 10 || index == 1000) assertEquals(callsAtAdmission,
+                    authorityMocks.stream().map(mock -> org.mockito.Mockito.mockingDetails(mock).getInvocations().size()).toList());
+        }
+        verify(chatConversationEventBroker, org.mockito.Mockito.times(1000)).publishPreview(eq("1001"), eq(1L), org.mockito.ArgumentMatchers.anyMap());
         TextMessage finalWire = new TextMessage("""
                 {"schemaVersion":1,"type":"chat.message","runtimeInstanceId":"runtime-1","messageId":"final-message-1","requestId":"req-1","turnId":"turn-1","dispatchId":"dispatch-1","conversationId":"1001","conversationGeneration":"1","contextSnapshotId":"snapshot-1","contextHash":"sha256:ctx","agentId":"agent-001","senderName":"宋江","agentName":"林冲","content":"final"}
                 """);
@@ -1191,16 +1197,12 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
 
         ArgumentCaptor<ServerResolvedAgentSender> deltaSender =
                 ArgumentCaptor.forClass(ServerResolvedAgentSender.class);
-        verify(deliberation).acceptDelta(eq("0"), eq("task-owner-A"), eq("jia_client"), eq("1001"),
+        verify(deliberation).admitPreview(eq("0"), eq("task-owner-A"), eq("jia_client"), eq("1001"),
                 eq(1L), eq("agent-001"), eq("req-1"), eq("turn-1"), eq("dispatch-1"),
-                eq("snapshot-1"), eq("sha256:ctx"), eq(1L), eq(deltaContent),
-                org.mockito.ArgumentMatchers.<String>isNull(), deltaSender.capture());
+                eq("snapshot-1"), eq("sha256:ctx"), deltaSender.capture());
         UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
-                {"schemaVersion":1,"type":"chat.message.delta","runtimeInstanceId":"runtime-1","messageId":"delta-message-2","requestId":"req-1","turnId":"turn-1","dispatchId":"dispatch-1","conversationId":"1001","conversationGeneration":"1","contextSnapshotId":"snapshot-1","contextHash":"sha256:ctx","deltaSeq":"2","agentId":"agent-001","streamOutcomeKind":"ANSWER","content":"visible"}
+                {"schemaVersion":1,"type":"chat.message.delta","runtimeInstanceId":"runtime-1","messageId":"delta-message-late","requestId":"req-1","turnId":"turn-1","dispatchId":"dispatch-1","conversationId":"1001","conversationGeneration":"1","contextSnapshotId":"snapshot-1","contextHash":"sha256:ctx","deltaSeq":"1001","agentId":"agent-001","streamOutcomeKind":"ANSWER","content":"late"}
                 """));
-        verify(deliberation).acceptDelta(eq("0"), eq("task-owner-A"), eq("jia_client"), eq("1001"),
-                eq(1L), eq("agent-001"), eq("req-1"), eq("turn-1"), eq("dispatch-1"),
-                eq("snapshot-1"), eq("sha256:ctx"), eq(2L), eq("visible"), eq("ANSWER"), any(ServerResolvedAgentSender.class));
         ArgumentCaptor<ServerResolvedAgentSender> finalSender =
                 ArgumentCaptor.forClass(ServerResolvedAgentSender.class);
         verify(deliberation).persistFinal(eq("0"), eq("task-owner-A"), eq("jia_client"), eq("1001"),

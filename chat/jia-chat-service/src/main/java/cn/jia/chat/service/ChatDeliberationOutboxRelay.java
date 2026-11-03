@@ -501,27 +501,28 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
         ServerResolvedAgentSender sender = new ServerResolvedAgentSender(
                 ServerResolvedAgentSender.AGENT_TYPE, BuiltinHallAgentSupport.SONGJIANG_NAME,
                 row.getOwnerJiacn(), row.getClientId(), agentId);
-        try {
-            Flux<String> chunks = chatClient.prompt(buildBuiltinPrompt(text(p,"content"), p.get("factsManifest")))
-                    .messages().stream().content();
-            chunks.takeUntilOther(Flux.merge(leaseLost, cancelled.asMono()).next()).doOnNext(chunk -> {
-                ChatDeliberationService.DeltaResult result = deliberation.acceptDelta(row.getTenantId(), row.getOwnerJiacn(),
-                        row.getClientId(), conversationId, generation, agentId, requestId, turnId, dispatchId,
-                        snapshot, hash, seq.incrementAndGet(), chunk, sender);
-                if (result.status() == ChatDeliberationService.DeltaStatus.TERMINAL) throw new TurnCancelled();
-                if (result.status() != ChatDeliberationService.DeltaStatus.ACCEPTED) throw new IllegalStateException(result.status().name());
-                answer.append(chunk);
-                publishPersistedEvent(result.event());
-            }).blockLast();
-            signalTerminalTurn(row, stop, cancelled);
-            if (stop.get() != BuiltinStop.NONE) throwForStop(stop.get());
-            if (answer.isEmpty()) answer.append("诸位稍安，宋江已收到传令。此事先记入议程，待诸位好汉回报后再作定夺。");
-            deliberation.persistFinal(row.getTenantId(), row.getOwnerJiacn(), row.getClientId(), conversationId,
-                    generation, agentId, requestId, turnId, dispatchId, snapshot, hash, answer.toString(),
-                    sender);
-        } catch (TurnCancelled terminalDelta) {
-            return;
-        }
+        deliberation.admitPreview(row.getTenantId(), row.getOwnerJiacn(), row.getClientId(), conversationId,
+                generation, agentId, requestId, turnId, dispatchId, snapshot, hash, sender);
+        String streamId = java.util.UUID.randomUUID().toString();
+        Flux<String> chunks = chatClient.prompt(buildBuiltinPrompt(text(p,"content"), p.get("factsManifest")))
+                .messages().stream().content();
+        chunks.takeUntilOther(Flux.merge(leaseLost, cancelled.asMono()).next()).doOnNext(chunk -> {
+            if (chunk == null || chunk.isEmpty()) return;
+            answer.append(chunk); // Existing final-body assembly, not a preview replay cache.
+            Map<String,Object> preview = new java.util.LinkedHashMap<>();
+            preview.put("type", "agent_message_delta"); preview.put("conversationId", conversationId);
+            preview.put("conversationGeneration", Long.toString(generation)); preview.put("requestId", requestId);
+            preview.put("turnId", turnId); preview.put("agentId", agentId); preview.put("senderName", sender.displayName());
+            preview.put("streamId", streamId); preview.put("deltaSeq", Long.toString(seq.incrementAndGet()));
+            preview.put("content", chunk); preview.put("streamOutcomeKind", "ANSWER");
+            preview.put("occurredAt", System.currentTimeMillis());
+            broker.publishPreview(conversationId, generation, preview);
+        }).blockLast();
+        signalTerminalTurn(row, stop, cancelled);
+        if (stop.get() != BuiltinStop.NONE) throwForStop(stop.get());
+        if (answer.isEmpty()) answer.append("诸位稍安，宋江已收到传令。此事先记入议程，待诸位好汉回报后再作定夺。");
+        deliberation.persistFinal(row.getTenantId(), row.getOwnerJiacn(), row.getClientId(), conversationId,
+                generation, agentId, requestId, turnId, dispatchId, snapshot, hash, answer.toString(), sender);
     }
 
     static Prompt buildBuiltinPrompt(String content, Object factsManifest) {
@@ -653,7 +654,6 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
     @Override public int getPhase(){return Integer.MAX_VALUE-90;}
     @Override public void close(){stop();}
     private enum BuiltinStop { NONE, USER_CANCELLED, TERMINAL, LEASE_LOST }
-    private static final class TurnCancelled extends RuntimeException { }
     private static final class BuiltinUserCancelled extends RuntimeException { }
     private static final class BuiltinTerminal extends RuntimeException { }
     private static final class LeaseLost extends RuntimeException { }

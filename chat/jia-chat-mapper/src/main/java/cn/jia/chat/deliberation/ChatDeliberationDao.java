@@ -28,7 +28,6 @@ public interface ChatDeliberationDao {
     List<ChatConversationEventEntity> turnDeltas(ChatTurnEntity turn);
     long eventHighWatermark(String tenantId, String ownerJiacn, String clientId,
             String conversationId, long generation);
-    int acceptDelta(ChatTurnEntity turn, long deltaSeq, String deltaDigest, long now);
     int persistFinal(ChatTurnEntity turn, String finalDigest, long finalMessageId, long now);
     int updateTurnState(ChatTurnEntity turn, String state, String terminalReason, long now);
     int publishFinal(ChatTurnEntity turn, long now);

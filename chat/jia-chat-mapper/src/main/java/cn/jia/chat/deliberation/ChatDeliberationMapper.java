@@ -285,18 +285,6 @@ public interface ChatDeliberationMapper {
             @Param("conversationId") String conversationId, @Param("generation") long generation);
 
     @Update("""
-            UPDATE chat_turn SET state=#{state}, state_version=state_version+1,
-              last_delta_seq=#{deltaSeq}, last_delta_digest=#{deltaDigest}, updated_at=#{updatedAt}
-            WHERE tenant_id=#{tenantId} AND owner_jiacn=#{ownerJiacn} AND client_id=#{clientId}
-              AND turn_id=#{turnId} AND state_version=#{stateVersion}
-              AND state NOT IN ('FINAL_PERSISTED','PUBLISHED','FAILED','CANCELLED')
-            """)
-    int acceptDelta(@Param("tenantId") String tenantId, @Param("ownerJiacn") String ownerJiacn,
-            @Param("clientId") String clientId, @Param("turnId") String turnId, @Param("stateVersion") long stateVersion,
-            @Param("state") String state, @Param("deltaSeq") long deltaSeq,
-            @Param("deltaDigest") String deltaDigest, @Param("updatedAt") long updatedAt);
-
-    @Update("""
             UPDATE chat_turn SET state='FINAL_PERSISTED', state_version=state_version+1,
               final_digest=#{finalDigest}, final_message_id=#{finalMessageId}, updated_at=#{updatedAt}
             WHERE tenant_id=#{tenantId} AND owner_jiacn=#{ownerJiacn} AND client_id=#{clientId}

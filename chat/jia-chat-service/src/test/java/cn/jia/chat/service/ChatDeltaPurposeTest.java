@@ -12,7 +12,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
-/** Display-purpose propagation uses the existing authenticated, bound and sequenced delta path. */
+/** Admission is authorized once; presentation has no durable delta state. */
 class ChatDeltaPurposeTest {
     private ChatDeliberationDao dao;
     private ChatDeliberationService service;
@@ -40,37 +40,23 @@ class ChatDeltaPurposeTest {
         when(authority.incoming("0", "client", "executor", "agent", "dispatch"))
                 .thenReturn(new ChatDispatchAuthorityService.Binding(null, turn, "executor"));
         service.setDispatchAuthority(authority);
-        when(dao.acceptDelta(any(), anyLong(), anyString(), anyLong())).thenReturn(1);
-        when(dao.insertEvent(any())).thenAnswer(invocation -> {
-            invocation.<ChatConversationEventEntity>getArgument(0).setEventSequence(1L); return 1;
-        });
-        when(dao.assignEventVersion(anyLong())).thenReturn(1);
     }
-    private ChatDeliberationService.DeltaResult send(long seq, String content, String kind) {
-        return service.acceptDelta("0", "owner", "client", "1001", 1L, "agent", "request", "turn", "dispatch",
-                "snapshot", "sha256:ctx", seq, content, kind, sender);
+    private void admit() {
+        service.admitPreview("0", "owner", "client", "1001", 1L, "agent", "request", "turn", "dispatch",
+                "snapshot", "sha256:ctx", sender);
     }
-    @ParameterizedTest @ValueSource(strings = {"ANSWER", "CLARIFY"})
-    void kindIsPersistedBeforeFinalAndCannotBeChangedByDuplicate(String kind) {
-        var result = send(1, "你好", kind);
-        assertEquals(ChatDeliberationService.DeltaStatus.ACCEPTED, result.status());
-        assertTrue(result.event().getPayloadJson().contains("\"streamOutcomeKind\":\"" + kind + "\""));
-        assertEquals("STREAMING", turn.getState());
+    @Test void previewAdmissionDoesNotPersistTextOrChangeTurnVersion() {
+        admit();
+        assertEquals("RUNNING", turn.getState());
+        assertEquals(1L, turn.getStateVersion());
         assertNull(turn.getFinalDigest());
-        assertEquals(ChatDeliberationService.DeltaStatus.DUPLICATE, send(1, "你好", kind).status());
-        assertEquals(ChatDeliberationService.DeltaStatus.CONFLICTING_DUPLICATE, send(1, "你好", null).status());
-        assertEquals(ChatDeliberationService.DeltaStatus.CONFLICTING_DUPLICATE,
-                send(1, "你好", kind.equals("ANSWER") ? "CLARIFY" : "ANSWER").status());
-        verify(dao, times(1)).insertEvent(any());
+        verify(dao, never()).insertEvent(any());
+        verify(dao, never()).updateTurnState(any(), any(), any(), anyLong());
     }
-    @Test void legacyDeltaIsAcceptedWithoutInventingPurpose() {
-        var result = send(1, "旧文本", null);
-        assertEquals(ChatDeliberationService.DeltaStatus.ACCEPTED, result.status());
-        assertFalse(result.event().getPayloadJson().contains("streamOutcomeKind"));
-        assertEquals(ChatDeliberationService.DeltaStatus.DUPLICATE, send(1, "旧文本", null).status());
-    }
-    @Test void controlKindCannotClaimVisiblePurpose() {
-        assertThrows(RuntimeException.class, () -> send(1, "内部指令", "ACTION_REQUEST"));
+    @ParameterizedTest @ValueSource(strings = {"CANCELLED", "FAILED", "FINAL_PERSISTED", "PUBLISHED"})
+    void terminalTurnCannotOpenAnotherPreview(String terminal) {
+        turn.setState(terminal);
+        assertThrows(RuntimeException.class, this::admit);
         verify(dao, never()).insertEvent(any());
     }
 }

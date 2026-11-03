@@ -104,6 +104,34 @@ public class ChatDeliberationService {
     @Autowired(required=false)
     public void setReviewContexts(ChatTypedReviewContextService value) { this.reviewContexts=Objects.requireNonNull(value); }
 
+    private ChatReplyPreviewRegistry replyPreviews;
+    @Autowired public void setReplyPreviews(ChatReplyPreviewRegistry value) { replyPreviews = value; }
+
+    /** One-time presentation admission. No delta journal/state mutation. Caller holds session fence. */
+    @Transactional(rollbackFor = Exception.class)
+    public void admitPreview(String tenantId, String owner, String clientId, String conversationId,
+            long generation, String agentId, String requestId, String turnId, String dispatchId,
+            String snapshotId, String contextHash, ServerResolvedAgentSender sender) {
+        requireAgentSender(sender, agentId, owner, clientId, tenantId, dispatchId);
+        ChatTurnEntity visible = requireVisibleTurn(tenantId, owner, clientId, turnId);
+        requireLockedConversation(tenantId, owner, clientId, visible.getConversationId(), visible.getConversationGeneration());
+        ChatTurnEntity turn = requireLockedTurn(tenantId, owner, clientId, turnId);
+        requireCallbackBinding(turn, tenantId, owner, clientId, conversationId, generation,
+                agentId, requestId, dispatchId, snapshotId, contextHash);
+        if (terminal(turn.getState())) throw conflict("Turn no longer accepts preview");
+    }
+
+    private void closePreviewAfterCommit(ChatTurnEntity turn) {
+        if (replyPreviews == null || !terminal(turn.getState())) return;
+        String tenant = turn.getTenantId(), client = turn.getClientId(), id = turn.getTurnId();
+        if (org.springframework.transaction.support.TransactionSynchronizationManager.isSynchronizationActive()) {
+            org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(
+                new org.springframework.transaction.support.TransactionSynchronization() {
+                    @Override public void afterCommit() { replyPreviews.closeTurn(tenant, client, id); }
+                });
+        } else replyPreviews.closeTurn(tenant, client, id);
+    }
+
     public ChatDeliberationService(ChatDeliberationDao dao, ChatConversationDao conversationDao,
             ChatMessageDao messageDao, AgentService agentService) {
         this.dao = dao;
@@ -494,82 +522,6 @@ public class ChatDeliberationService {
     }
 
     @Transactional(rollbackFor = Exception.class)
-    public DeltaResult acceptDelta(String tenantId, String ownerJiacn, String clientId, String conversationId,
-            long conversationGeneration, String agentId, String requestId, String turnId, String dispatchId,
-            String snapshotId, String contextDigest, long deltaSeq, String content,
-            ServerResolvedAgentSender sender) {
-        return acceptDelta(tenantId, ownerJiacn, clientId, conversationId, conversationGeneration,
-                agentId, requestId, turnId, dispatchId, snapshotId, contextDigest, deltaSeq, content, null, sender);
-    }
-
-    @Transactional(rollbackFor = Exception.class)
-    public DeltaResult acceptDelta(String tenantId, String ownerJiacn, String clientId, String conversationId,
-            long conversationGeneration, String agentId, String requestId, String turnId, String dispatchId,
-            String snapshotId, String contextDigest, long deltaSeq, String content, String streamOutcomeKind,
-            ServerResolvedAgentSender sender) {
-        if (deltaSeq < 1 || content == null || content.isEmpty()) throw invalid("Invalid delta");
-        // Optional display metadata only; does not authorize execution or finalize a typed outcome.
-        if (streamOutcomeKind != null && !Set.of("ANSWER", "CLARIFY").contains(streamOutcomeKind))
-            throw invalid("Invalid streamed reply kind");
-        ServerResolvedAgentSender trustedSender = requireAgentSender(sender, agentId, ownerJiacn, clientId, tenantId, dispatchId);
-        ChatTurnEntity visible = requireVisibleTurn(tenantId, ownerJiacn, clientId, turnId);
-        requireLockedConversation(tenantId, ownerJiacn, clientId, visible.getConversationId(), visible.getConversationGeneration());
-        ChatTurnEntity turn = requireLockedTurn(tenantId, ownerJiacn, clientId, turnId);
-        requireCallbackBinding(turn, tenantId, ownerJiacn, clientId, conversationId, conversationGeneration,
-                agentId, requestId, dispatchId, snapshotId, contextDigest);
-        // Preserve legacy digests when the optional field is absent. A purpose change is not an identical replay.
-        String deltaDigest = "sha256:" + sha256(streamOutcomeKind == null ? content
-                : JsonUtil.toJson(List.of(streamOutcomeKind, content)));
-        long last = Optional.ofNullable(turn.getLastDeltaSeq()).orElse(0L);
-        if (deltaSeq <= last) {
-            if (deltaSeq == last) {
-                return new DeltaResult(Objects.equals(deltaDigest, turn.getLastDeltaDigest())
-                        ? DeltaStatus.DUPLICATE : DeltaStatus.CONFLICTING_DUPLICATE, turn, null);
-            }
-            return new DeltaResult(DeltaStatus.STALE, turn, null);
-        }
-        if (terminal(turn.getState())) return new DeltaResult(DeltaStatus.TERMINAL, turn, null);
-        if (deltaSeq != last + 1) {
-            String reason = "DELTA_GAP_EXPECTED_" + (last + 1) + "_GOT_" + deltaSeq;
-            if (!ChatDeliberationStates.RECOVERY_REQUIRED.equals(turn.getState())) {
-                long now = System.currentTimeMillis();
-                if (dao.updateTurnState(turn, ChatDeliberationStates.RECOVERY_REQUIRED, reason, now) != 1) {
-                    throw conflict("Concurrent delta gap state change");
-                }
-                turn.setState(ChatDeliberationStates.RECOVERY_REQUIRED).setTerminalReason(reason)
-                        .setUpdatedAt(now).setStateVersion(turn.getStateVersion() + 1);
-                ChatConversationEventEntity event = persistEvent(turn,
-                        stableId("evt", dispatchId, "RESYNC_REQUIRED", Long.toString(deltaSeq)),
-                        "resync_required", Map.ofEntries(
-                                Map.entry("expectedDeltaSeq", Long.toString(last + 1)),
-                                Map.entry("receivedDeltaSeq", Long.toString(deltaSeq)),
-                                Map.entry("reason", reason),
-                                Map.entry("agentId", trustedSender.agentId()),
-                                Map.entry("senderType", trustedSender.type()),
-                                Map.entry("senderName", trustedSender.displayName())), now);
-                return new DeltaResult(DeltaStatus.GAP, turn, event);
-            }
-            return new DeltaResult(DeltaStatus.GAP, turn, null);
-        }
-        if (dao.acceptDelta(turn, deltaSeq, deltaDigest, System.currentTimeMillis()) != 1) {
-            throw conflict("Concurrent delta state change");
-        }
-        turn.setLastDeltaSeq(deltaSeq).setLastDeltaDigest(deltaDigest)
-                .setState(ChatDeliberationStates.STREAMING).setStateVersion(turn.getStateVersion() + 1);
-        Map<String, Object> deltaPayload = new LinkedHashMap<>();
-        deltaPayload.put("content", content);
-        deltaPayload.put("deltaSeq", Long.toString(deltaSeq));
-        deltaPayload.put("agentId", trustedSender.agentId());
-        deltaPayload.put("senderType", trustedSender.type());
-        deltaPayload.put("senderName", trustedSender.displayName());
-        if (streamOutcomeKind != null) deltaPayload.put("streamOutcomeKind", streamOutcomeKind);
-        ChatConversationEventEntity event = persistEvent(turn,
-                stableId("evt", dispatchId, "DELTA", Long.toString(deltaSeq)),
-                "agent_message_delta", deltaPayload, System.currentTimeMillis());
-        return new DeltaResult(DeltaStatus.ACCEPTED, turn, event);
-    }
-
-    @Transactional(rollbackFor = Exception.class)
     public FinalResult persistFinal(String tenantId, String ownerJiacn, String clientId, String conversationId,
             long conversationGeneration, String agentId, String requestId, String turnId, String dispatchId,
             String snapshotId, String contextDigest, String content,
@@ -777,17 +729,11 @@ public class ChatDeliberationService {
     @Transactional(rollbackFor = Exception.class)
     public TurnView cancelTurn(String tenantId, String ownerJiacn, String clientId, String turnId,
             Long expectedStateVersion, Long expectedLastDeltaSeq, String reason) {
-        if (expectedLastDeltaSeq != null && (expectedStateVersion == null || expectedLastDeltaSeq < 0)) {
-            throw invalid("Delta checkpoint requires a state version");
-        }
         ChatTurnEntity visible = requireVisibleTurn(tenantId, ownerJiacn, clientId, turnId);
         var conversation = requireLockedConversation(tenantId, ownerJiacn, clientId, visible.getConversationId(), visible.getConversationGeneration());
         ChatTurnEntity turn = requireLockedTurn(tenantId, ownerJiacn, clientId, turnId);
         if (!terminal(turn.getState())) {
-            if (expectedLastDeltaSeq != null && expectedStateVersion.equals(turn.getStateVersion())
-                    && !expectedLastDeltaSeq.equals(turn.getLastDeltaSeq())) throw conflict("Turn delta checkpoint changed");
-            if (expectedStateVersion != null && !expectedStateVersion.equals(turn.getStateVersion())
-                    && !onlyStreamingDeltasAdvanced(turn, expectedStateVersion, expectedLastDeltaSeq)) {
+            if (expectedStateVersion != null && !expectedStateVersion.equals(turn.getStateVersion())) {
                 throw conflict("Turn state version changed");
             }
             long now = System.currentTimeMillis();
@@ -795,14 +741,6 @@ public class ChatDeliberationService {
             refreshAggregate(tenantId, ownerJiacn, clientId, turn.getRequestId(), now);
         }
         return turnView(turn);
-    }
-
-    private boolean onlyStreamingDeltasAdvanced(ChatTurnEntity turn, long expectedVersion, Long expectedDelta) {
-        // A user stops the same turn, not a particular token. Never forgive a non-delta mutation.
-        Long version = turn.getStateVersion(), delta = turn.getLastDeltaSeq();
-        return "STREAMING".equals(turn.getState()) && expectedDelta != null && expectedVersion >= 0
-                && version != null && delta != null && version > expectedVersion && delta > expectedDelta
-                && version - expectedVersion == delta - expectedDelta;
     }
 
     @Transactional(rollbackFor = Exception.class)
@@ -1062,6 +1000,7 @@ public class ChatDeliberationService {
             throw persistence("Unable to persist conversation event");
         }
         event.setEventVersion(event.getEventSequence());
+        closePreviewAfterCommit(turn);
         return event;
     }
 
@@ -1978,8 +1917,6 @@ public class ChatDeliberationService {
             String targetAgentId, String route,
             String state, String contextSnapshotId, String contextHash,
             Map<String, Object> sourceVector, Map<String, Object> factsManifest) { }
-    public enum DeltaStatus { ACCEPTED, DUPLICATE, CONFLICTING_DUPLICATE, STALE, GAP, TERMINAL }
-    public record DeltaResult(DeltaStatus status, ChatTurnEntity turn, ChatConversationEventEntity event) { }
     public enum FinalStatus { PERSISTED, DUPLICATE }
     public record FinalResult(FinalStatus status, Long messageId, String replyToMessageId,
             String eventId, ChatTurnEntity turn, ChatConversationEventEntity event) { }

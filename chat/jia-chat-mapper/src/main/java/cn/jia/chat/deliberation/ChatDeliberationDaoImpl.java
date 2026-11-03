@@ -33,7 +33,6 @@ public class ChatDeliberationDaoImpl implements ChatDeliberationDao {
                 t.getConversationGeneration(),t.getTurnId(),t.getDispatchId());
     }
     public long eventHighWatermark(String t,String o,String c,String id,long g){Long value=mapper.eventHighWatermark(t,o,c,id,g);return value==null?0L:value;}
-    public int acceptDelta(ChatTurnEntity t,long s,String d,long n){return mapper.acceptDelta(t.getTenantId(),t.getOwnerJiacn(),t.getClientId(),t.getTurnId(),t.getStateVersion(),ChatDeliberationStates.STREAMING,s,d,n);}
     public int persistFinal(ChatTurnEntity t,String d,long m,long n){return mapper.persistFinal(t.getTenantId(),t.getOwnerJiacn(),t.getClientId(),t.getTurnId(),t.getStateVersion(),d,m,n);}
     public int updateTurnState(ChatTurnEntity t,String s,String r,long n){return mapper.updateTurnState(t.getTenantId(),t.getOwnerJiacn(),t.getClientId(),t.getTurnId(),t.getStateVersion(),s,r,n);}
     public int publishFinal(ChatTurnEntity t,long n){return mapper.publishFinal(t.getTenantId(),t.getOwnerJiacn(),t.getClientId(),t.getTurnId(),t.getStateVersion(),n);}

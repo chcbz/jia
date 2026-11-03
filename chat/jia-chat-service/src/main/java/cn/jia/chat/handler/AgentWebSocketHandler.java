@@ -30,6 +30,7 @@ import cn.jia.chat.entity.ChatConversationEntity;
 import cn.jia.chat.deliberation.InteractionRoute;
 import cn.jia.chat.entity.ChatMessageEntity;
 import cn.jia.chat.service.ChatConversationEventBroker;
+import cn.jia.chat.service.ChatReplyPreviewRegistry;
 import cn.jia.chat.service.ChatConversationService;
 import cn.jia.chat.service.AgentSenderIdentityResolver;
 import cn.jia.chat.service.ServerResolvedAgentSender;
@@ -179,6 +180,9 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
     public void setTypedInspectionSessions(TypedInspectionSessionRegistry sessions) {
         this.typedInspectionSessions = sessions;
     }
+    private ChatReplyPreviewRegistry replyPreviews;
+    @Autowired public void setReplyPreviews(ChatReplyPreviewRegistry value) { replyPreviews = value; }
+
     private final ChatClient chatClient;
     private final ObjectProvider<AgentService> agentServiceProvider;
     private final ChatMessageDao chatMessageDao;
@@ -342,6 +346,10 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             if("agent.register".equals(envelope.messageType()))cn.jia.agent.skill.SkillManagementCodec.validateEmbeddedDeclaration(message.getPayload());
             incomingWire.set(envelope);
             var business=cn.jia.agent.common.AgentMessageWire.business(envelope);
+            if ("chat.message.delta".equals(envelope.messageType()) && hasDurableTurnBinding(business)) {
+                publishReplyPreview(session, business);
+                return;
+            }
             if ("chat.message".equals(envelope.messageType()) && hasDurableTurnBinding(business)) {
                 var timing = new FinalReplyTiming(handlerStarted, handlerStartedAt, asString(business.get("turnId")));
                 timing.decodedUs = timing.elapsedUs();
@@ -483,6 +491,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
 
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) throws Exception {
+        if (replyPreviews != null) replyPreviews.closeSession(session.getId());
         if (runtimeAuthentication != null) runtimeAuthentication.disconnect(session.getId());
         sessions.remove(session.getId());
         nativeWorkNotificationSessions.remove(session.getId());
@@ -893,7 +902,8 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             }
             // Identity and generation are fixed by installation-derived native handshake proof.
             stage = "runtime_disconnect";
-            if (runtimeAuthentication != null) runtimeAuthentication.disconnect(session.getId());
+            if (replyPreviews != null) replyPreviews.closeSession(session.getId());
+        if (runtimeAuthentication != null) runtimeAuthentication.disconnect(session.getId());
             // A re-registration on the same socket must first retire its old declaration. The
             // replacement is not observable until register, auth bind and receipt delivery all
             // succeed below.
@@ -981,7 +991,8 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                     "contextPackEnabled", runtimeReceipt.contextPackEnabled()));
             stage = "registration_receipt";
             if (!sendEvent(session, "agent_registered", event)) {
-                if (runtimeAuthentication != null) runtimeAuthentication.disconnect(session.getId());
+                if (replyPreviews != null) replyPreviews.closeSession(session.getId());
+        if (runtimeAuthentication != null) runtimeAuthentication.disconnect(session.getId());
                 successfullyRegisteredAgentIds.remove(session.getId());
                 sessionRuntimeCapabilities.remove(session.getId());
                 sessionDurableStateHealthy.remove(session.getId());
@@ -1041,7 +1052,8 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             // Keep peer-facing errors generic; stage and exception type are sufficient for safe operations diagnosis.
             log.warn("Agent registration unavailable at stage={}, failure={}", stage,
                     e.getClass().getSimpleName());
-            if (runtimeAuthentication != null) runtimeAuthentication.disconnect(session.getId());
+            if (replyPreviews != null) replyPreviews.closeSession(session.getId());
+        if (runtimeAuthentication != null) runtimeAuthentication.disconnect(session.getId());
             successfullyRegisteredAgentIds.remove(session.getId());
             sessionRuntimeCapabilities.remove(session.getId());
             sessionDurableStateHealthy.remove(session.getId());
@@ -1128,7 +1140,8 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             }
             if (AgentConstants.STATUS_OFFLINE.equals(agent.getStatus())
                     || AgentConstants.STATUS_ERROR.equals(agent.getStatus())) {
-                if (runtimeAuthentication != null) runtimeAuthentication.disconnect(session.getId());
+                if (replyPreviews != null) replyPreviews.closeSession(session.getId());
+        if (runtimeAuthentication != null) runtimeAuthentication.disconnect(session.getId());
                 successfullyRegisteredAgentIds.remove(session.getId());
                 sessionRuntimeCapabilities.remove(session.getId());
                 sessionDurableStateHealthy.remove(session.getId());
@@ -1379,7 +1392,8 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                 timing.hostedStartUs = timing.elapsedUs();
             }
             try {
-                acknowledgeHostedReceipt(session, agentId, asString(payload.get("dispatchId")));
+                if (replyPreviews != null) replyPreviews.closeTurn(sessionTenantId(session), sessionClientId(session), asString(payload.get("turnId")));
+            acknowledgeHostedReceipt(session, agentId, asString(payload.get("dispatchId")));
             } finally {
                 if (timing != null) timing.hostedEndUs = timing.elapsedUs();
             }
@@ -1453,6 +1467,49 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                 });
     }
 
+    private void publishReplyPreview(WebSocketSession session, Map<String, Object> payload) {
+        if (replyPreviews == null || chatDeliberationService == null || !session.isOpen()) return;
+        validateSessionEnvelope(session, payload); // In-memory transport proof only.
+        String agentId = requireAllowedSessionAgentId(session, payload);
+        String content = asString(payload.get("content"));
+        Long sequence = exactPositiveLong(payload.get("deltaSeq"));
+        Long generation = exactPositiveLong(payload.get("conversationGeneration"));
+        if (agentId == null || content == null || content.isEmpty() || sequence == null || generation == null) return;
+        var binding = new ChatReplyPreviewRegistry.Binding(asString(payload.get("conversationId")), generation,
+                asString(payload.get("requestId")), asString(payload.get("turnId")), asString(payload.get("dispatchId")),
+                contextValue(payload, "contextSnapshotId"), contextValue(payload, "contextHash"), agentId);
+        var preview = replyPreviews.find(session.getId(), binding.turnId());
+        if (preview == null) {
+            // No re-admission from an arbitrary middle frame after restart/disconnect.
+            if (sequence != 1L) return;
+            runtimeAuthentication.validateCurrent(sessionProof(session), true);
+            var conversation = requireCallbackConversation(session, payload, binding.conversationId(), agentId);
+            if (conversation == null || !requireConversationAgentScope(session, payload, conversation, agentId)) return;
+            var sender = resolveAgentSender(session, payload, agentId);
+            if (sender == null) return;
+            preview = withSessionMutationFence(session, () -> {
+                chatDeliberationService.admitPreview(sessionTenantId(session), conversation.getJiacn(), sessionClientId(session),
+                        binding.conversationId(), generation, agentId, binding.requestId(), binding.turnId(),
+                        binding.dispatchId(), binding.snapshotId(), binding.contextHash(), sender);
+                // First valid reply proves delivery. Never repeat this work on subsequent frames.
+                if (chatDeliberationOutboxService != null) chatDeliberationOutboxService.acknowledgeHostedReceipt(
+                        sessionTenantId(session), sessionJiacn(session), sessionClientId(session), agentId,
+                        binding.dispatchId(), System.currentTimeMillis());
+                var admitted = replyPreviews.open(session.getId(), sessionTenantId(session), sessionClientId(session), binding, sender.displayName());
+                if (org.springframework.transaction.support.TransactionSynchronizationManager.isSynchronizationActive()) {
+                    org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(
+                        new org.springframework.transaction.support.TransactionSynchronization() {
+                            @Override public void afterCompletion(int status) {
+                                if (status != STATUS_COMMITTED) replyPreviews.close(admitted);
+                            }
+                        });
+                }
+                return admitted;
+            });
+        }
+        preview.forward(binding, sequence, content, asString(payload.get("streamOutcomeKind")), chatConversationEventBroker);
+    }
+
     private void publishAgentMessageDelta(WebSocketSession session, Map<String, Object> payload) {
         String conversationId = asString(payload.get("conversationId"));
         String content = asString(payload.get("content"));
@@ -1485,38 +1542,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         String senderName = sender.displayName();
 
         if (hasDurableTurnBinding(payload)) {
-            if (chatDeliberationService == null) return;
-            Long declaredGeneration = exactPositiveLong(payload.get("conversationGeneration"));
-            if (declaredGeneration == null || declaredGeneration != generation) {
-                sendError(session, payload, "CHAT_DELTA_REJECTED", "Durable chat generation was rejected");
-                return;
-            }
-            Long deltaSeq = exactPositiveLong(payload.get("deltaSeq"));
-            if (deltaSeq == null) {
-                sendError(session, payload, "CHAT_DELTA_SEQUENCE_REQUIRED", "deltaSeq is required");
-                return;
-            }
-            ChatDeliberationService.DeltaResult result;
-            try {
-                result = withSessionMutationFence(session, () -> chatDeliberationService.acceptDelta(
-                        sessionTenantId(session), jiacn, sessionClientId(session),
-                        conversationId, generation, agentId,
-                        asString(payload.get("requestId")), asString(payload.get("turnId")),
-                        asString(payload.get("dispatchId")), contextValue(payload, "contextSnapshotId"),
-                        contextValue(payload, "contextHash"), deltaSeq, content,
-                        asString(payload.get("streamOutcomeKind")), sender));
-            } catch (RuntimeException rejected) {
-                sendError(session, payload, "CHAT_DELTA_REJECTED", "Durable chat delta was rejected");
-                return;
-            }
-            acknowledgeHostedReceipt(session, agentId, asString(payload.get("dispatchId")));
-            if (result.status() == ChatDeliberationService.DeltaStatus.GAP) {
-                publishStoredConversationEvent(result.event());
-                sendError(session, payload, "CHAT_DELTA_GAP", "deltaSeq is not contiguous");
-                return;
-            }
-            if (result.status() != ChatDeliberationService.DeltaStatus.ACCEPTED) return;
-            publishStoredConversationEvent(result.event());
+            publishReplyPreview(session, payload);
             return;
         }
 
@@ -3427,6 +3453,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
 
     private void sendSessionIdentityError(WebSocketSession session, Map<String, Object> payload,
             String code, String message) {
+        if (replyPreviews != null) replyPreviews.closeSession(session.getId());
         if (runtimeAuthentication != null) runtimeAuthentication.disconnect(session.getId());
         if (isProtocolV1(payload)) {
             sendProtocolError(session, payload, code, message);

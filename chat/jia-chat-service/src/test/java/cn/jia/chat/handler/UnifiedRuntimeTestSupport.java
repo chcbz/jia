@@ -33,7 +33,9 @@ final class UnifiedRuntimeTestSupport {
     static AgentWebSocketHandler authorize(AgentWebSocketHandler handler) {
         var auth = mock(AgentRuntimeAuthenticationService.class); stub(auth);
         lenient().when(auth.isCurrentBinding(any(), any(), any(), any(), any(), any())).thenReturn(true);
-        handler.setRuntimeAuthentication(auth); return handler;
+        handler.setRuntimeAuthentication(auth);
+        handler.setReplyPreviews(new cn.jia.chat.service.ChatReplyPreviewRegistry());
+        return handler;
     }
     static AgentRuntimeAuthenticationService.Proof install(WebSocketSession session) {
         var attrs = session.getAttributes();
