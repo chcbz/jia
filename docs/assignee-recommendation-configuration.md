@@ -4,12 +4,12 @@
 
 ```properties
 # 留空继承全局model；非空必须是当前网关支持的模型ID。
-jia.chat.recommendation.model=
+jia.chat.recommendation.model=gpt-6-luna
 # 留空继承默认；当前OpenAI适配器支持，值需与所选模型/网关兼容。
 jia.chat.recommendation.reasoning-effort=
 ```
 
-生产模型选择统一维护在`starter/src/main/resources/application-prod.properties`，随正式Flow构建进入JAR；不再通过主机`/home/isp/hosts/cyf/api/application.properties`维护聊天/推荐模型覆盖，不新增secret。未设置时行为不变，不自动选择新模型；设置不支持的推理参数由推荐适配器/Provider报错，不悄悄回退或自动重试。测试本地模拟HTTP证明请求字段和共享默认隔离，不证明真实网关模型可用或速度。
+生产模型选择统一维护在`starter/src/main/resources/application-prod.properties`，随正式Flow构建进入JAR；不再通过主机`/home/isp/hosts/cyf/api/application.properties`维护聊天/推荐模型覆盖，不新增secret。通用适配器在未设置时行为不变；生产配置按用户选择显式使用`gpt-6-luna`，不自动选择新模型；设置不支持的推理参数由推荐适配器/Provider报错，不悄悄回退或自动重试。测试本地模拟HTTP证明请求字段和共享默认隔离，不证明真实网关模型可用或速度。
 
 ## 模型外耗时
 
@@ -19,8 +19,12 @@ jia.chat.recommendation.reasoning-effort=
 
 验收必须记录真实候选/技能/附件数量，区分成功/409和冷/热请求，以真实持久化及HTTP耗时扣除同请求模型计时核验。mock测试只证明调用链和规则，不作为3秒实测证据；本轮源码改动不代表已上线或已达标。
 
-## 2026-11-03 配置来源收口
+## 2026-11-03 全部外置配置收回JAR
 
-生产全局模型收回包内配置为`gpt-6.1-sol`，保持本次只读核对到的外置有效模型值；推荐专用model/reasoning-effort显式留空，仍继承全局，不因小样本选型自动换模型。连接和加密凭据保持原来源，不复制到推荐配置。
+按用户明确要求，将主机`/home/isp/hosts/cyf/api/application.properties`的全部122个配置项收回`starter/src/main/resources/application-prod.properties`，相同键以原外置有效值为准，不只迁移模型键。生产全局模型保持`gpt-6.1-sol`；推荐专用模型设为`gpt-6-luna`，推理强度留空继承。原embedding加密凭据保持ENC密文，不解密、不新增或复制推荐专用key。
 
-源码和JAR构建不等于已上线。获授权安装此候选时，先核对当前外置模型值仍与候选一致，在既有发布锁/备份下仅移除重复的`spring.ai.openai.chat.model`配置键；若值变化则先协调，不覆盖他人配置。保留外置文件所有其他键，尤其身份、租户、授权、业务开关与embedding配置；不得整文件搬入源码或删除。上线核验同时检查安装JAR内配置、外置模型键已移除及实际运行来源，失败按同次备份恢复。
+包含原外置业务开关、存储目录、租户/身份/授权、embedding等配置的原值；此次只迁移配置来源，不增加授权或执行迁移。此生产配置绑定当前环境，不能把该JAR的prod配置直接用于其他租户或主机。源码/构建不等于线上切换。
+
+上线使用固定Flow制品和现有受控安装器。安装前核对外置文件摘要仍等于已封装快照；先在原外置配置下安装并确认新包健康，再在现有发布锁与生命周期锁内备份并删除整个外置application.properties、重启核验包内配置。若删除后的启动/健康失败，恢复原文件的完整内容及权限再重启，保留失败证据；回退旧JAR时须同时恢复旧外置配置。其他外置文件、身份/state和数据库不清理。
+
+验收：制品中全部122项与原外置有效值一致、推荐模型为gpt-6-luna、运行JAR摘要及来源Run匹配、原路径不存在、实际服务健康。原始配置快照保留受限备份目录；报告只记键名/数量/摘要，禁止输出凭据值。真实推荐端到端性能另行测量，不把本次配置归并当成模型外3秒达标。
