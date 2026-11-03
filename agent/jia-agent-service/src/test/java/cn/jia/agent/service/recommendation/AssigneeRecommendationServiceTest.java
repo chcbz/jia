@@ -225,7 +225,7 @@ class AssigneeRecommendationServiceTest {
         assertEquals("a", AssigneeRecommendationService.decode("task","7",1,List.of(candidate(),other),both).recommendations().getFirst().agent().agentId());
         String ranked = both.replace("\"A1\":{\"rank\":1", "\"A1\":{\"rank\":2");
         assertEquals("b", AssigneeRecommendationService.decode("task","7",1,List.of(candidate(),other),ranked).recommendations().getFirst().agent().agentId());
-        assertThrows(Failure.class, () -> AssigneeRecommendationService.decode("task","7",1,List.of(candidate()),ANSWER.replace("\"rank\":1", "\"rank\":0")));
+        assertThrows(Failure.class, () -> AssigneeRecommendationService.decode("task","7",1,List.of(candidate()),ANSWER.replace("\"rank\":1", "\"rank\":\"first\"")));
     }
     @Test void statusOnlyChangeUsesFreshDisplayWhileRealCapabilityChangeIsStale() {
         var agents=mock(AgentService.class);var skills=mock(SkillManagementService.class);var model=mock(AgentAssigneeRecommendationModel.class);

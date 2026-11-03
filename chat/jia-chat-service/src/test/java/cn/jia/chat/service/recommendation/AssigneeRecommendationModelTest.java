@@ -49,7 +49,7 @@ class AssigneeRecommendationModelTest {
         verify(model, times(1)).call(any(Prompt.class));
     }
     @Test void globalToolDefaultsAreNotInheritedAndProviderErrorsAreNotRetried() {
-        var model = mock(ChatModel.class); when(model.getOptions()).thenReturn(OpenAiChatOptions.builder().build());
+        var model = mock(ChatModel.class);
         when(model.getOptions()).thenReturn(ToolCallingChatOptions.builder().toolCallbacks(mock(org.springframework.ai.tool.ToolCallback.class)).build());
         assertThrows(AssigneeRecommendation.Failure.class, () -> new AssigneeRecommendationModel(model, "", "").judge("{}", SCHEMA));
         verify(model, never()).call(any(Prompt.class));
@@ -61,7 +61,7 @@ class AssigneeRecommendationModelTest {
     @Test void retainsNativeOptionsTypeAndValuesWithoutMutatingSharedDefaults() {
         var defaults = OpenAiChatOptions.builder().model("configured-model")
                 .temperature(0.25).maxCompletionTokens(300).reasoningEffort("low").build();
-        var model = mock(ChatModel.class); when(model.getOptions()).thenReturn(OpenAiChatOptions.builder().build());
+        var model = mock(ChatModel.class);
         when(model.getOptions()).thenReturn(defaults);
         when(model.call(any(Prompt.class))).thenReturn(new ChatResponse(List.of(new Generation(new AssistantMessage("{}")))));
         assertEquals("{}", new AssigneeRecommendationModel(model, "", "").judge("{}", SCHEMA));
@@ -80,7 +80,7 @@ class AssigneeRecommendationModelTest {
     @Test void recommendationOverridesAreIsolatedFromGlobalDefaultsAndReuseTransport() {
         var defaults = OpenAiChatOptions.builder().model("global-model").reasoningEffort("medium")
                 .baseUrl("https://example.invalid/v1").apiKey("synthetic-only").maxRetries(0).build();
-        var model = mock(ChatModel.class); when(model.getOptions()).thenReturn(OpenAiChatOptions.builder().build());
+        var model = mock(ChatModel.class);
         when(model.getOptions()).thenReturn(defaults);
         when(model.call(any(Prompt.class))).thenReturn(new ChatResponse(List.of(new Generation(new AssistantMessage("{}")))));
         new AssigneeRecommendationModel(model, " recommendation-model ", " low ").judge("{}", SCHEMA);
@@ -97,7 +97,7 @@ class AssigneeRecommendationModelTest {
     }
 
     @Test void unsupportedReasoningOptionIsNotSilentlyIgnoredOrSentToProvider() {
-        var model = mock(ChatModel.class); when(model.getOptions()).thenReturn(OpenAiChatOptions.builder().build());
+        var model = mock(ChatModel.class);
         when(model.getOptions()).thenReturn(ToolCallingChatOptions.builder().model("other-provider").build());
         assertThrows(AssigneeRecommendation.Failure.class,
                 () -> new AssigneeRecommendationModel(model, "", "low").judge("{}", SCHEMA));

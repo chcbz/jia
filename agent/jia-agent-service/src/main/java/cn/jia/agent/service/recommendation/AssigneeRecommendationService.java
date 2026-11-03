@@ -193,20 +193,18 @@ public final class AssigneeRecommendationService {
             if (rows == null || !rows.isObject()) throw invalid("RECOMMENDATIONS_OBJECT");
             var byId = new HashMap<String, Candidate>();
             for (int i = 0; i < candidates.size(); i++) byId.put(candidateRef(i), candidates.get(i));
-            var seen = new HashSet<String>(); var recommendations = new ArrayList<Recommendation>();
+            var recommendations = new ArrayList<Recommendation>();
             var entries = new ArrayList<Map.Entry<String,JsonNode>>();
             rows.fields().forEachRemaining(entries::add);
             for (var entry : entries) {
                 if (!byId.containsKey(entry.getKey())) throw invalid("CANDIDATE_UNKNOWN");
-                if (!entry.getValue().path("rank").canConvertToInt() || !entry.getValue().path("rank").isIntegralNumber()
-                        || entry.getValue().path("rank").intValue() < 1 || entry.getValue().path("rank").intValue() > candidates.size()) throw invalid("RANK");
+                if (!entry.getValue().path("rank").canConvertToLong() || !entry.getValue().path("rank").isIntegralNumber()) throw invalid("RANK");
             }
-            entries.sort(Comparator.<Map.Entry<String,JsonNode>>comparingInt(e -> e.getValue().path("rank").intValue())
+            if (entries.size() != byId.size()) throw invalid("CANDIDATE_COVERAGE");
+            entries.sort(Comparator.<Map.Entry<String,JsonNode>>comparingLong(e -> e.getValue().path("rank").longValue())
                     .thenComparingInt(e -> Integer.parseInt(e.getKey().substring(1))));
             for (var entry : entries) {
                 String id = entry.getKey(); JsonNode row = entry.getValue(); Candidate candidate = byId.get(id);
-                if (candidate == null) throw invalid("CANDIDATE_UNKNOWN");
-                if (!seen.add(id)) throw invalid("CANDIDATE_DUPLICATE");
                 if (!candidate.agent().canOperate()) throw invalid("CANDIDATE_NOT_OPERABLE");
                 String level = text(row, "recommendationLevel");
                 if (!Set.of("HIGH", "MEDIUM", "LOW", "UNKNOWN").contains(level)) throw invalid("LEVEL");
@@ -226,7 +224,6 @@ public final class AssigneeRecommendationService {
                 if (!"online".equalsIgnoreCase(candidate.agent().status())) gaps.add("当前运行状态：" + candidate.agent().status() + "；确认承办不代表已开始运行。");
                 recommendations.add(new Recommendation(candidate.agent(), level, text(row, "reason"), List.copyOf(evidence), List.copyOf(gaps)));
             }
-            if (seen.size() != byId.size()) throw invalid("CANDIDATE_COVERAGE");
             String state = recommendations.stream().anyMatch(r -> Set.of("HIGH", "MEDIUM").contains(r.recommendationLevel()))
                     ? "READY" : "NO_MATCH";
             return new Result(taskId, taskVersion, observedAt, state, summary, List.copyOf(recommendations), List.of(), true);
