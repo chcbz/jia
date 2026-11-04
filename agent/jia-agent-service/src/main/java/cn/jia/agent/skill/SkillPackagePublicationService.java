@@ -29,6 +29,18 @@ public final class SkillPackagePublicationService {
         this.positions=Objects.requireNonNull(positions);this.market=Objects.requireNonNull(market);this.packages=Objects.requireNonNull(packages);
     }
     public Receipt publish(Scope actor,Grant grant,Publish command,byte[] archive) {
+        return commitPrepared(prepare(actor,grant,command,archive));
+    }
+    /** Opaque validated candidate; bytes are stored outside locks, authority is rechecked at commit. */
+    public static final class Prepared {
+        private final Scope actor; private final Grant grant; private final Publish command;
+        private final byte[] digest,permissions; private final long length;
+        private Prepared(Scope actor,Grant grant,Publish command,byte[] digest,byte[] permissions,long length) {
+            this.actor=actor;this.grant=grant;this.command=command;this.digest=digest;this.permissions=permissions;this.length=length;
+        }
+        public boolean matches(Scope actor,Grant grant) {return this.actor.equals(actor)&&this.grant.equals(grant);}
+    }
+    public Prepared prepare(Scope actor,Grant grant,Publish command,byte[] archive) {
         require(actor!=null&&grant!=null&&grant.publish(),403,"SKILL_PUBLICATION_FORBIDDEN");
         require(!TransactionSynchronizationManager.isActualTransactionActive(),503,"SKILL_PACKAGE_PREPARE_IN_TRANSACTION");
         positions.withSkillManagementAuthority(actor,grant,()->null);
@@ -41,8 +53,64 @@ public final class SkillPackagePublicationService {
         var manifest=store.manifest(prepared);
         require(Objects.equals(command.manifestSha256(),manifest==null?null:manifest.manifestSha256()),409,"SKILL_MANIFEST_CHANGED");
         store.publish(prepared); // immutable bytes first; failed DB transaction can leave only an unauthorized object.
-        try{return positions.withSkillManagementAuthority(actor,grant,()->persist(actor,command,digest,permissions,archive.length));}
+        return new Prepared(actor,grant,command,digest,permissions,archive.length);
+    }
+    public Receipt commitPrepared(Prepared prepared) {
+        Objects.requireNonNull(prepared);
+        try{return positions.withSkillManagementAuthority(prepared.actor,prepared.grant,()->persist(
+                prepared.actor,prepared.command,prepared.digest,prepared.permissions,prepared.length));}
         catch(org.springframework.dao.DuplicateKeyException race){throw new SkillMarketplaceException(409,"SKILL_PRODUCT_CHANGED");}
+    }
+    public record ProductView(String productId,String name,String description,String status,
+            String productVersion,String productVersionId) { }
+    /** Validated immutable package read outside business locks; returns one file or its directory. */
+    public Map<String,Object> readPackage(Scope actor,Grant grant,String productVersionId,String path) {
+        require(!TransactionSynchronizationManager.isActualTransactionActive(),503,"SKILL_PACKAGE_PREPARE_IN_TRANSACTION");
+        var version=positions.withSkillManagementAuthority(actor,grant,()->{
+            var value=market.selectApprovedProductVersionForUpdate(actor.tenantId(),actor.clientId(),productVersionId);
+            require(value!=null,404,"RESOURCE_NOT_FOUND");return value;
+        });
+        var store=packages.getIfUnique();require(store!=null,503,"SKILL_PACKAGE_UNAVAILABLE");
+        var archive=store.prepare(version);
+        var files=new ArrayList<Map<String,Object>>();Map<String,Object> selected=null;
+        try(var zip=new java.util.zip.ZipInputStream(new java.io.ByteArrayInputStream(archive.bytes()),StandardCharsets.UTF_8)) {
+            java.util.zip.ZipEntry entry;
+            while((entry=zip.getNextEntry())!=null) {
+                if(entry.isDirectory())continue;
+                if(entry.getName().equals(path)) {
+                    byte[] content=zip.readAllBytes();String text=new String(content,StandardCharsets.UTF_8);
+                    boolean utf8=Arrays.equals(content,text.getBytes(StandardCharsets.UTF_8));
+                    selected=Map.of("path",path,"byteLength",Long.toString(content.length),"encoding",utf8?"utf8":"base64",
+                            "content",utf8?text:Base64.getEncoder().encodeToString(content));
+                } else {
+                    long length=zip.transferTo(java.io.OutputStream.nullOutputStream());
+                    files.add(Map.of("path",entry.getName(),"byteLength",Long.toString(length)));
+                }
+            }
+        } catch(java.io.IOException invalid) {throw new SkillMarketplaceException(503,"SKILL_PACKAGE_UNAVAILABLE");}
+        require(path.isEmpty()||selected!=null,404,"RESOURCE_NOT_FOUND");
+        return Map.of("productVersionId",productVersionId,"packageSha256",HexFormat.of().formatHex(version.getPackageSha256()),
+                "skillKey",version.getSkillKey(),"skillVersion",version.getSkillVersion(),
+                "priceMicro",Long.toString(version.getPriceMicro()),"approvedPermissionsManifest",version.getApprovedPermissionsManifest(),
+                "data",path.isEmpty()?files:selected);
+    }
+    public List<ProductView> listProducts(Scope actor,Grant grant,int offset,int limit) {
+        require(offset>=0&&limit>0,400,"BAD_REQUEST");
+        return positions.withSkillManagementAuthority(actor,grant,()->market.selectPublishedProducts(
+                actor.tenantId(),actor.clientId(),offset,limit).stream().map(product->new ProductView(
+                product.getProductId(),product.getName(),product.getDescription(),product.getStatus(),
+                Long.toString(product.getVersion()),product.getCurrentProductVersionId())).toList());
+    }
+    /** Maintenance readback shares the same resource authority as mutations. */
+    public ProductView readProduct(Scope actor,Grant grant,String productId) {
+        require(actor!=null&&grant!=null&&grant.publish(),403,"SKILL_PUBLICATION_FORBIDDEN");
+        require(productId!=null&&productId.matches("[A-Za-z0-9][A-Za-z0-9._:-]{0,99}"),400,"BAD_REQUEST");
+        return positions.withSkillManagementAuthority(actor,grant,()->{
+            var product=market.selectProductForUpdate(actor.tenantId(),actor.clientId(),productId);
+            require(product!=null,404,"RESOURCE_NOT_FOUND");
+            return new ProductView(product.getProductId(),product.getName(),product.getDescription(),product.getStatus(),
+                    Long.toString(product.getVersion()),product.getCurrentProductVersionId());
+        });
     }
     /** Mutable discovery copy only; executable packages and grants remain immutable. */
     public record UpdateMetadata(String productId,String name,String description,long expectedProductVersion) { }

@@ -36,6 +36,17 @@ class SkillPackagePublicationServiceTest {
     }
     @AfterEach void clear(){TransactionSynchronizationManager.setActualTransactionActive(false);}
     SkillPackagePublicationService.Publish request(String version,long expected){var p=original.product();return new SkillPackagePublicationService.Publish("product",version,p.name(),p.description(),p.skillKey(),p.skillVersion(),0,"NONE","[]",HexFormat.of().formatHex(p.packageSha256()),null,expected,null);}
+    @Test void maintenanceReadbackUsesTheResourceGrantAndDoesNotMutateProducts() {
+        service.publish(actor,grant,request("v1",0),original.bytes());
+        clearInvocations(mapper,positions);
+        var view=service.readProduct(actor,grant,"product");
+        assertEquals("product",view.productId());assertEquals("v1",view.productVersionId());
+        assertEquals("2",view.productVersion());assertEquals("PUBLISHED",view.status());
+        verify(positions).withSkillManagementAuthority(eq(actor),eq(grant),any());
+        verify(mapper).selectProductForUpdate("0","client","product");verifyNoMoreInteractions(mapper);
+        assertEquals(403,assertThrows(SkillMarketplaceException.class,()->service.readProduct(actor,null,"product")).status());
+        assertEquals(404,assertThrows(SkillMarketplaceException.class,()->service.readProduct(actor,grant,"missing")).status());
+    }
     @Test void immutableBytesPublicationReplayAndNextVersionWithoutAppSeedChange() {
         var first=service.publish(actor,grant,request("v1",0),original.bytes());assertEquals("PUBLISHED",first.disposition());assertEquals(2,first.productVersion());
         assertEquals("RECORDED",service.publish(actor,grant,request("v1",0),original.bytes()).disposition());assertEquals(1,versions.size());
@@ -137,6 +148,24 @@ class SkillPackagePublicationServiceTest {
         when(positions.withSkillManagementAuthority(eq(actor),eq(grant),any())).thenThrow(new PositionSkillException(403,"POSITION_AUTHORITY_REVOKED"));
         assertThrows(PositionSkillException.class,()->service.retireProduct(actor,grant,new SkillPackagePublicationService.RetireProduct("product",2)));
         verify(mapper,never()).retireProduct(anyString(),anyString(),anyString(),anyLong(),anyLong());
+    }
+
+    @Test void preparedPublicationIsBoundAndCommitDoesNotRepeatPackageIo() {
+        var prepared=service.prepare(actor,grant,request("v1",0),original.bytes());
+        assertTrue(prepared.matches(actor,grant));
+        assertFalse(prepared.matches(new PositionAuthority.Scope("0","client","other"),grant));
+        verifyNoInteractions(mapper);
+        TransactionSynchronizationManager.setActualTransactionActive(true);
+        assertEquals("PUBLISHED",service.commitPrepared(prepared).disposition());
+    }
+    @Test void immutablePackageDirectoryAndFileAreReadFromVerifiedBytes() {
+        service.publish(actor,grant,request("v1",0),original.bytes());
+        var directory=service.readPackage(actor,grant,"v1","");
+        assertEquals(HexFormat.of().formatHex(original.product().packageSha256()),directory.get("packageSha256"));
+        assertTrue(((List<?>)directory.get("data")).stream().anyMatch(f->"SKILL.md".equals(((Map<?,?>)f).get("path"))));
+        var file=(Map<?,?>)service.readPackage(actor,grant,"v1","SKILL.md").get("data");
+        assertEquals("utf8",file.get("encoding"));assertFalse(((String)file.get("content")).isBlank());
+        assertThrows(SkillMarketplaceException.class,()->service.readPackage(actor,grant,"v1","missing"));
     }
 
 }

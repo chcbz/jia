@@ -23,6 +23,7 @@ public final class AgentRuntimeAuthenticationFilter extends OncePerRequestFilter
         // Elsewhere X-Agent-Id alone grants no Runtime authority; ambiguous duplicates fail closed.
         return request.getRequestURI().startsWith(request.getContextPath()+"/internal/archive/")
                 || request.getRequestURI().startsWith(request.getContextPath()+"/internal/agent/position-skills")
+                || request.getRequestURI().matches(request.getContextPath()+"/internal/agent/chat/requests/[^/]+/turns/[^/]+/tools(?:/.*)?")
                 || request.getRequestURI().matches(request.getContextPath()+"/internal/agent/chat/requests/[^/]+/turns/[^/]+/materials/inputs/[^/]+/content")
                 || request.getRequestURI().matches(request.getContextPath() + "/internal/agent/tasks/[^/]+/work-items/[^/]+/reassignments/[^/]+/commands/[^/]+/(?:result-commit|lease)")
                 || request.getRequestURI().matches(request.getContextPath() + "/internal/agent/skill-installations/[^/]+/package")
@@ -42,6 +43,8 @@ public final class AgentRuntimeAuthenticationFilter extends OncePerRequestFilter
                 || "POST".equals(request.getMethod()) && path.matches("/internal/archive/v1/jobs/"+id+"/result")
                 || "GET".equals(request.getMethod()) && (path.equals("/internal/agent/position-skills") || path.matches("/internal/agent/position-skills/"+id+"/receipt"))
                 || "POST".equals(request.getMethod()) && path.equals("/internal/agent/position-skills/results")
+                || "GET".equals(request.getMethod()) && path.matches("/internal/agent/chat/requests/"+id+"/turns/"+id+"/tools")
+                || "POST".equals(request.getMethod()) && path.matches("/internal/agent/chat/requests/"+id+"/turns/"+id+"/tools/"+id)
                 || ("GET".equals(request.getMethod()) || "POST".equals(request.getMethod()))
                 && path.matches("/internal/agent/tasks/" + id + "/work-items/" + id + "/reassignments/" + id
                 + "/commands/" + id + "/result-commit")
