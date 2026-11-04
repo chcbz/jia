@@ -3,6 +3,8 @@ package cn.jia.chat.service;
 import cn.jia.core.util.JsonUtil;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.BufferOverflowStrategy;
+import reactor.util.concurrent.Queues;
 import reactor.core.publisher.Sinks;
 
 import java.util.Map;
@@ -103,7 +105,8 @@ public class ChatConversationEventBroker {
         try {
             EventSink sink = sinks.get(conversationId);
             if (sink == null || sink.invalidated || sink.generation != generation) return false;
-            // Best effort: a subscriber without demand misses this frame, not a durable final.
+            // Each live subscriber absorbs short transport stalls; only an overflowing
+            // preview queue drops frames. Durable final delivery is independent.
             return sink.previews.tryEmitNext(Map.copyOf(preview)).isSuccess();
         } finally { lock.unlock(); }
     }
@@ -244,7 +247,17 @@ public class ChatConversationEventBroker {
             this.conversationId=conversationId; this.sink=sink; this.id=id; this.buffer=buffer;
         }
         public Flux<String> flux() { return buffer.asFlux().doFinally(ignored -> close()); }
-        public Flux<Map<String, Object>> previews() { return sink.previews.asFlux().takeUntilOther(previewClosed.asMono()); }
+        public Flux<Map<String, Object>> previews() {
+            // MVC requests the next item only after an asynchronous write. A hot
+            // model burst must not be mistaken for a permanently slow client.
+            // Reuse Reactor's bounded transport queue size, not a response cache:
+            // no replay, no timer, no change to durable catch-up demand. On real
+            // overflow the sequence gap lets Web discard the incomplete preview.
+            return sink.previews.asFlux()
+                    .onBackpressureBuffer(Queues.SMALL_BUFFER_SIZE, BufferOverflowStrategy.DROP_OLDEST)
+                    .takeUntilOther(previewClosed.asMono())
+                    .takeUntilOther(sink.deleted.asMono());
+        }
         @Override public void close() {
             if (closed.compareAndSet(false,true)) {
                 previewClosed.tryEmitValue(Boolean.TRUE);

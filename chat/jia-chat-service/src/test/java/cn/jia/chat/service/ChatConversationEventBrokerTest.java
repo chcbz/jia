@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 import org.reactivestreams.Subscription;
 import reactor.core.Disposable;
 import reactor.core.publisher.BaseSubscriber;
+import reactor.util.concurrent.Queues;
 
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
@@ -45,7 +46,7 @@ class ChatConversationEventBrokerTest {
     }
 
     @Test
-    void slowPreviewSubscriberDropsWithoutBlockingFastSubscriberOrBufferingHistory() {
+    void slowPreviewQueueIsBoundedAndDoesNotBlockFastSubscriberOrFinal() {
         ChatConversationEventBroker broker = new ChatConversationEventBroker();
         var subscription = broker.subscribeBuffered("preview", 2L, () -> true);
         List<Map<String, Object>> slowFrames = new CopyOnWriteArrayList<>();
@@ -56,14 +57,41 @@ class ChatConversationEventBrokerTest {
         subscription.previews().subscribe(slow);
         AtomicInteger fastFrames = new AtomicInteger();
         var fast = subscription.previews().subscribe(ignored -> fastFrames.incrementAndGet());
-        for (int i = 0; i < 1000; i++) broker.publishPreview("preview", 2L, Map.of("content", "x"));
-        slow.request(1);
-        assertTrue(slowFrames.isEmpty(), "requesting later must not drain a hidden preview backlog");
-        broker.publishPreview("preview", 2L, Map.of("content", "latest"));
-        assertEquals(1, slowFrames.size());
-        assertEquals(1001, fastFrames.get());
+        int total = Queues.SMALL_BUFFER_SIZE * 4;
+        for (int i = 1; i <= total; i++) broker.publishPreview("preview", 2L, Map.of("deltaSeq", i));
+        List<String> finals = new CopyOnWriteArrayList<>();
+        var finalConsumer = subscription.flux().subscribe(finals::add);
+        broker.publishIfLive("preview", 2L, () -> true, Map.of("type", "agent_message", "content", "complete"));
+        assertEquals(1, finals.size(), "blocked preview must not consume the final queue");
+        slow.request(Long.MAX_VALUE);
+        assertEquals(Queues.SMALL_BUFFER_SIZE, slowFrames.size());
+        assertEquals(total - Queues.SMALL_BUFFER_SIZE + 1, slowFrames.getFirst().get("deltaSeq"));
+        assertEquals(total, slowFrames.getLast().get("deltaSeq"));
+        assertEquals(total, fastFrames.get());
         assertFalse(broker.publishPreview("preview", 1L, Map.of("content", "old generation")));
-        subscription.close(); slow.dispose(); fast.dispose();
+        subscription.close(); slow.dispose(); fast.dispose(); finalConsumer.dispose();
+    }
+
+    @Test
+    void closeOrDeletionDiscardsPendingPreviewTransportBytes() {
+        for (boolean delete : List.of(false, true)) {
+            ChatConversationEventBroker broker = new ChatConversationEventBroker();
+            var subscription = broker.subscribeBuffered("preview", 1L, () -> true);
+            AtomicInteger delivered = new AtomicInteger();
+            BaseSubscriber<Map<String, Object>> slow = new BaseSubscriber<>() {
+                @Override protected void hookOnSubscribe(Subscription subscription) { }
+                @Override protected void hookOnNext(Map<String, Object> event) { delivered.incrementAndGet(); }
+            };
+            subscription.previews().subscribe(slow);
+            broker.publishPreview("preview", 1L, Map.of("content", "pending"));
+            if (delete) {
+                try (var fence = broker.beginDeletion("preview")) { fence.commitDeleted(1L); }
+            } else subscription.close();
+            slow.request(Long.MAX_VALUE);
+            assertEquals(0, delivered.get());
+            assertTrue(slow.isDisposed());
+            subscription.close();
+        }
     }
 
     @Test

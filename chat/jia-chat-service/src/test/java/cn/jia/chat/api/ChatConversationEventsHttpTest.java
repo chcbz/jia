@@ -5,6 +5,8 @@ import cn.jia.chat.entity.ChatConversationEntity;
 import cn.jia.chat.memory.MemoryRepository;
 import cn.jia.chat.service.*;
 import cn.jia.chat.service.impl.AgentTaskThreadMemoryGuard;
+import cn.jia.core.entity.ProtocolMessage;
+import org.springframework.http.codec.ServerSentEvent;
 import cn.jia.core.context.EsContext;
 import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.redis.RedisService;
@@ -66,6 +68,44 @@ class ChatConversationEventsHttpTest {
         var scope=new EsContext();scope.setTenantId("0");scope.setJiacn("owner");scope.setClientId("client");EsContextHolder.setContext(scope);
     }
     @AfterEach void clear() { EsContextHolder.clearContext(); }
+
+    @Test void hotModelBurstsSurviveMvcStyleOneItemDemandWithoutJournalReads() {
+        var hotBroker = new ChatConversationEventBroker();
+        var live = hotBroker.subscribeBuffered("42", 3L, () -> true);
+        when(subscription.previews()).thenReturn(live.previews());
+        var received = new ArrayList<ServerSentEvent<
+                ProtocolMessage<Map<String, Object>>>>();
+        // Match MVC's async writer: request one, finish that write, then request
+        // the next. Unlike Flux.range, this producer ignores downstream demand.
+        var writer = new BaseSubscriber<ServerSentEvent<
+                ProtocolMessage<Map<String, Object>>>>() {
+            @Override protected void hookOnSubscribe(Subscription s) { }
+            @Override protected void hookOnNext(ServerSentEvent<
+                    ProtocolMessage<Map<String, Object>>> frame) { received.add(frame); }
+        };
+        try {
+            controller.conversationEvents("42", null, null, jwt("0"), new MockHttpServletRequest()).subscribe(writer);
+            writer.request(1); writer.request(1); // replay and ready
+            assertEquals(2, received.size());
+            int burst = reactor.util.concurrent.Queues.SMALL_BUFFER_SIZE / 2;
+            for (int batch = 0; batch < 10; batch++) {
+                for (int i = 1; i <= burst; i++) {
+                    int sequence = batch * burst + i;
+                    hotBroker.publishPreview("42", 3L, Map.of("streamId", "burst", "deltaSeq", Integer.toString(sequence)));
+                }
+                for (int i = 1; i <= burst; i++) writer.request(1);
+                assertEquals(2 + (batch + 1) * burst, received.size(), "hot burst lost frames during a write stall");
+            }
+            for (int i = 2; i < received.size(); i++) {
+                assertNull(received.get(i).id());
+                assertEquals("conversation.preview", received.get(i).event());
+                assertEquals("preview:burst:" + (i - 1), received.get(i).data().messageId());
+            }
+            verify(events).eventHighWatermark("0", "owner", "client", "42", 3);
+            verify(events).replayEventsThrough("0", "owner", "client", "42", 3, 0, 7, 500);
+            verifyNoMoreInteractions(events);
+        } finally { writer.dispose(); live.close(); }
+    }
 
     @Test void previewFramesHaveNoSseIdAndNeverLoadJournalRows() {
         for (int count : List.of(10, 1000)) {

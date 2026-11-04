@@ -737,7 +737,8 @@ public class ChatController {
                     .map(preview -> ServerSentEvent.builder(ProtocolMessage.event(requestId,
                             "conversation.preview", "preview:" + preview.get("streamId") + ":" + preview.get("deltaSeq"),
                             preview)).event("conversation.preview").build());
-            // One in-flight item per source; previews never enter durableCatchUp or its journal queue.
+            // One in-flight item per source; previews have their own bounded transport queue
+            // and never enter durableCatchUp or its journal queue.
             Flux<ServerSentEvent<ProtocolMessage<Map<String, Object>>>> live = Flux.merge(1, catchUpThenLive, previews);
             Flux<ServerSentEvent<ProtocolMessage<Map<String, Object>>>> stream = Flux.fromIterable(replay).concatWithValues(ready).concatWith(live)
                     .doFinally(ignored -> liveSubscription.close());
