@@ -44,8 +44,8 @@ class EconomyReadOnlyPreviewSqlFixtureTest {
     private static final Principal SAME_OWNER_OTHER_SUB = principal("Tenant-A", "actor-other");
     private static final List<String> MUTATION_TABLES = List.of(
             "economy_account", "economy_transaction", "economy_entry", "economy_escrow",
-            "economy_skill_product", "economy_skill_product_version", "economy_skill_installation",
-            "economy_skill_entitlement", "agent_persona_binding", "agent_identity_registry",
+            "agent_skill_product", "agent_skill_product_version", "agent_skill_installation",
+            "agent_skill_entitlement", "agent_persona_binding", "agent_identity_registry",
             "agent_hosted_profile", "economy_hosting_rent_plan", "economy_hosting_lease",
             "agent_outbox_event");
 
@@ -199,14 +199,14 @@ class EconomyReadOnlyPreviewSqlFixtureTest {
 
     @Test
     void catalogPublicationEvidenceAndHostingAbsenceAreNotManufacturedSuccess() {
-        jdbc.update("UPDATE economy_skill_product SET status='DRAFT' WHERE product_id='product-1'");
+        jdbc.update("UPDATE agent_skill_product SET status='DRAFT' WHERE product_id='product-1'");
         assertTrue(service.products(A, 0, 10).items().isEmpty());
         assertEquals("PREVIEW_RESOURCE_NOT_FOUND", assertThrows(EconomyReadOnlyPreviewException.class,
                 () -> service.product(A, "product-1")).code());
-        jdbc.update("UPDATE economy_skill_product SET status='PUBLISHED' WHERE product_id='product-1'");
-        jdbc.update("UPDATE economy_skill_product_version SET review_status='REJECTED' WHERE product_version_id='version-1'");
+        jdbc.update("UPDATE agent_skill_product SET status='PUBLISHED' WHERE product_id='product-1'");
+        jdbc.update("UPDATE agent_skill_product_version SET review_status='REJECTED' WHERE product_version_id='version-1'");
         assertTrue(service.products(A, 0, 10).items().isEmpty());
-        jdbc.update("UPDATE economy_skill_installation SET status='FAILED',installed_at=NULL");
+        jdbc.update("UPDATE agent_skill_installation SET status='FAILED',installed_at=NULL");
         assertTrue(service.agentSkills(A, AGENT).installationEvidence().stream()
                 .allMatch(evidence -> evidence.status().equals("UNCONFIRMED")));
         jdbc.update("DELETE FROM economy_hosting_lease");
@@ -240,24 +240,24 @@ class EconomyReadOnlyPreviewSqlFixtureTest {
         entry("entry-foreign", "tx-foreign", "wallet-c", 300, 999, 3_199, "Tenant-C");
 
         jdbc.update("""
-                INSERT INTO economy_skill_product
+                INSERT INTO agent_skill_product
                   (product_id,name,description,status,current_product_version_id,tenant_id,client_id)
                 VALUES('product-1','Repository Reader','Read-only repository skill','PUBLISHED','version-1','0',?)
                 """, CLIENT);
         jdbc.update("""
-                INSERT INTO economy_skill_product_version
+                INSERT INTO agent_skill_product_version
                   (product_version_id,product_id,skill_key,skill_version,price_micro,
                    approved_permissions_manifest,deployment_restriction,review_status,tenant_id,client_id)
                 VALUES('version-1','product-1','repo-read','1.0.0',9007199254740993,
                        '[\"repo:read\"]','NONE','APPROVED','0',?)
                 """, CLIENT);
         jdbc.update("""
-                INSERT INTO economy_skill_product
+                INSERT INTO agent_skill_product
                   (product_id,name,description,status,current_product_version_id,tenant_id,client_id)
                 VALUES('case-collision','Wrong client','Must remain hidden','PUBLISHED','case-version','0','client-a')
                 """);
         jdbc.update("""
-                INSERT INTO economy_skill_product_version
+                INSERT INTO agent_skill_product_version
                   (product_version_id,product_id,skill_key,skill_version,price_micro,
                    approved_permissions_manifest,deployment_restriction,review_status,tenant_id,client_id)
                 VALUES('case-version','case-collision','wrong','1.0.0',1,'[]','NONE','APPROVED','0','client-a')
@@ -344,7 +344,7 @@ class EconomyReadOnlyPreviewSqlFixtureTest {
     private void installation(String id, String order, String version, String key,
             String skillVersion, long installedAt) {
         jdbc.update("""
-                INSERT INTO economy_skill_installation
+                INSERT INTO agent_skill_installation
                   (installation_id,order_id,product_version_id,target_agent_id,schema_version,message_type,
                    message_id,request_id,command_type,command_id,attempt,fencing_token,delivery_epoch,
                    skill_key,skill_version,package_size,package_sha256,download_path,status,failure_code,
@@ -358,7 +358,7 @@ class EconomyReadOnlyPreviewSqlFixtureTest {
     private void entitlement(String id, String order, String installation, String version,
             String key, String skillVersion, String status, long activatedAt) {
         jdbc.update("""
-                INSERT INTO economy_skill_entitlement
+                INSERT INTO agent_skill_entitlement
                   (entitlement_id,order_id,installation_id,product_version_id,target_agent_id,skill_key,
                    skill_version,permission_grant_version,approved_permissions_manifest,
                    approved_permissions_sha256,status,version,tenant_id,client_id,create_time,

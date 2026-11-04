@@ -2709,7 +2709,7 @@ OCTET_LENGTH(idempotency_key) = 36 AND OCTET_LENGTH(request_hash) = 32
         OR (status = 'FAILED_NO_EFFECT' AND live_slot IS NULL AND service_ready_at IS NULL AND evidence_ref IS NOT NULL)
 ```
 
-### `economy_skill_agent_version`
+### `agent_skill_agent_version`
 
 - 原约束：`chk_skill_agent_version`；来源：`economy/jia-economy-mapper/src/main/resources/db/economy-v0-skill-application.sql`
 
@@ -2717,7 +2717,7 @@ OCTET_LENGTH(idempotency_key) = 36 AND OCTET_LENGTH(request_hash) = 32
 version > 0
 ```
 
-### `economy_skill_change`
+### `agent_skill_change`
 
 - 原约束：`(数据库自动命名)`；来源：`economy/jia-economy-mapper/src/main/resources/db/economy-skill-management-sm-c1.sql`
 
@@ -2737,7 +2737,7 @@ JSON_VALID(dto_json)
 JSON_VALID(permissions_json)
 ```
 
-### `economy_skill_change_command`
+### `agent_skill_change_command`
 
 - 原约束：`(数据库自动命名)`；来源：`economy/jia-economy-mapper/src/main/resources/db/economy-skill-management-sm-c1.sql`
 
@@ -2751,7 +2751,7 @@ JSON_VALID(data_json)
 evidence_json IS NULL OR JSON_VALID(evidence_json)
 ```
 
-### `economy_skill_credential_operation`
+### `agent_skill_credential_operation`
 
 - 原约束：`chk_skill_credential_key_length`；来源：`economy/jia-economy-mapper/src/main/resources/db/economy-v0-skill-application.sql`
 
@@ -2759,7 +2759,7 @@ evidence_json IS NULL OR JSON_VALID(evidence_json)
 OCTET_LENGTH(idempotency_key)=36
 ```
 
-### `economy_skill_entitlement`
+### `agent_skill_entitlement`
 
 - 原约束：`chk_skill_entitlement_permission`；来源：`economy/jia-economy-mapper/src/main/resources/db/economy-v0-skill-marketplace.sql`
 
@@ -2787,7 +2787,7 @@ status IN ('PENDING_INSTALLATION','ACTIVE','FAILED')
 version > 0
 ```
 
-### `economy_skill_installation`
+### `agent_skill_installation`
 
 - 原约束：`chk_skill_installation_envelope`；来源：`economy/jia-economy-mapper/src/main/resources/db/economy-skill-management-sm-c1.sql`
 
@@ -2836,7 +2836,7 @@ status IN ('REQUESTED','INSTALLING','SUCCEEDED','FAILED')
 version > 0
 ```
 
-### `economy_skill_managed_credential`
+### `agent_skill_managed_credential`
 
 - 原约束：`chk_skill_credential_version`；来源：`economy/jia-economy-mapper/src/main/resources/db/economy-v0-skill-application.sql`
 
@@ -2851,7 +2851,7 @@ binding_id > 0 AND version > 0
   OR (live_slot IS NULL AND retired_at IS NOT NULL)
 ```
 
-### `economy_skill_managed_state`
+### `agent_skill_managed_state`
 
 - 原约束：`(数据库自动命名)`；来源：`economy/jia-economy-mapper/src/main/resources/db/economy-skill-management-sm-c1.sql`
 
@@ -2859,7 +2859,7 @@ binding_id > 0 AND version > 0
 skill_revision>=0
 ```
 
-### `economy_skill_management_quote`
+### `agent_skill_management_quote`
 
 - 原约束：`(数据库自动命名)`；来源：`economy/jia-economy-mapper/src/main/resources/db/economy-skill-management-sm-c1.sql`
 
@@ -2960,7 +2960,7 @@ order_version = 1 AND order_status = 'FUNDS_HELD'
         AND ((price_micro = 0 AND escrow_id IS NULL) OR (price_micro > 0 AND escrow_id IS NOT NULL))
 ```
 
-### `economy_skill_product`
+### `agent_skill_product`
 
 - 原约束：`chk_skill_product_seller`；来源：`economy/jia-economy-mapper/src/main/resources/db/economy-v0-skill-marketplace.sql`
 
@@ -2987,7 +2987,7 @@ status IN ('DRAFT','PUBLISHED','RETIRED')
 version > 0
 ```
 
-### `economy_skill_product_version`
+### `agent_skill_product_version`
 
 - 原约束：`chk_skill_product_version_sequence`；来源：`economy/jia-economy-mapper/src/main/resources/db/economy-v0-skill-marketplace.sql`
 
@@ -3059,7 +3059,7 @@ deployment_restriction IN ('NONE','ADMIN_ONLY')
 expires_at > create_time
 ```
 
-### `economy_skill_result_receipt`
+### `agent_skill_result_receipt`
 
 - 原约束：`chk_skill_result_outcome`；来源：`economy/jia-economy-mapper/src/main/resources/db/economy-v0-skill-application.sql`
 
@@ -3067,7 +3067,7 @@ expires_at > create_time
 outcome IN ('ACTIVE','REFUNDED','UNKNOWN')
 ```
 
-### `economy_skill_upgrade_policy`
+### `agent_skill_upgrade_policy`
 
 - 原约束：`(数据库自动命名)`；来源：`economy/jia-economy-mapper/src/main/resources/db/economy-skill-management-sm-c1.sql`
 

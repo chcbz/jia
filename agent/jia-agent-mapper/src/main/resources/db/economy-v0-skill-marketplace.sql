@@ -1,7 +1,7 @@
 -- ECO-V0-W07 platform skill marketplace foundation.
 -- Target: MySQL 8.0.21. Additive DDL only; no seed, publication, order, or money DML.
 
-CREATE TABLE IF NOT EXISTS economy_skill_product (
+CREATE TABLE IF NOT EXISTS agent_skill_product (
     id                         BIGINT NOT NULL AUTO_INCREMENT,
     product_id                 VARCHAR(100) NOT NULL,
     seller_type                VARCHAR(16) NOT NULL DEFAULT 'SYSTEM',
@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS economy_skill_product (
     KEY idx_skill_product_catalog (tenant_id, client_id, status, name, product_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Platform-owned V0 skill product catalog';
 
-CREATE TABLE IF NOT EXISTS economy_skill_product_version (
+CREATE TABLE IF NOT EXISTS agent_skill_product_version (
     id                          BIGINT NOT NULL AUTO_INCREMENT,
     product_version_id          VARCHAR(100) NOT NULL,
     product_id                  VARCHAR(100) NOT NULL,
@@ -47,7 +47,7 @@ CREATE TABLE IF NOT EXISTS economy_skill_product_version (
     ),
     KEY idx_skill_product_version_product (tenant_id, client_id, product_id, product_version_id),
     CONSTRAINT fk_skill_version_product FOREIGN KEY (tenant_id, client_id, product_id)
-        REFERENCES economy_skill_product (tenant_id, client_id, product_id)
+        REFERENCES agent_skill_product (tenant_id, client_id, product_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Immutable approved V0 skill package version';
 
 CREATE TABLE IF NOT EXISTS economy_skill_purchase_quote (
@@ -75,7 +75,7 @@ CREATE TABLE IF NOT EXISTS economy_skill_purchase_quote (
     KEY idx_skill_quote_target (tenant_id, client_id, target_agent_id, expires_at, quote_id),
     KEY idx_skill_quote_version (tenant_id, client_id, product_version_id, quote_id),
     CONSTRAINT fk_skill_quote_version FOREIGN KEY (tenant_id, client_id, product_version_id)
-        REFERENCES economy_skill_product_version (tenant_id, client_id, product_version_id)
+        REFERENCES agent_skill_product_version (tenant_id, client_id, product_version_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Immutable actor-scoped V0 skill purchase quote';
 
 CREATE TABLE IF NOT EXISTS economy_skill_order (
@@ -118,7 +118,7 @@ CREATE TABLE IF NOT EXISTS economy_skill_order (
     CONSTRAINT fk_skill_order_quote FOREIGN KEY (tenant_id, client_id, target_agent_id, quote_id)
         REFERENCES economy_skill_purchase_quote (tenant_id, client_id, target_agent_id, quote_id),
     CONSTRAINT fk_skill_order_version FOREIGN KEY (tenant_id, client_id, product_version_id)
-        REFERENCES economy_skill_product_version (tenant_id, client_id, product_version_id)
+        REFERENCES agent_skill_product_version (tenant_id, client_id, product_version_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Scoped V0 skill purchase and delivery state root';
 
 CREATE TABLE IF NOT EXISTS economy_skill_order_receipt (
@@ -145,7 +145,7 @@ CREATE TABLE IF NOT EXISTS economy_skill_order_receipt (
         REFERENCES economy_skill_order (tenant_id, client_id, buyer_type, buyer_id, order_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Immutable original actor-idempotent V0 purchase receipt';
 
-CREATE TABLE IF NOT EXISTS economy_skill_installation (
+CREATE TABLE IF NOT EXISTS agent_skill_installation (
     id                   BIGINT NOT NULL AUTO_INCREMENT,
     installation_id      VARCHAR(100) NOT NULL,
     order_id             VARCHAR(100) NOT NULL,
@@ -195,12 +195,12 @@ CREATE TABLE IF NOT EXISTS economy_skill_installation (
         REFERENCES economy_skill_order (tenant_id, client_id, target_agent_id, order_id),
     CONSTRAINT fk_skill_installation_version FOREIGN KEY (
         tenant_id, client_id, product_version_id, skill_key, skill_version, package_size, package_sha256
-    ) REFERENCES economy_skill_product_version (
+    ) REFERENCES agent_skill_product_version (
         tenant_id, client_id, product_version_id, skill_key, skill_version, package_size, package_sha256
     )
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Persistent identity for frozen V0 SKILL_INSTALL command envelope';
 
-CREATE TABLE IF NOT EXISTS economy_skill_entitlement (
+CREATE TABLE IF NOT EXISTS agent_skill_entitlement (
     id                          BIGINT NOT NULL AUTO_INCREMENT,
     entitlement_id              VARCHAR(100) NOT NULL,
     order_id                    VARCHAR(100) NOT NULL,
@@ -236,9 +236,9 @@ CREATE TABLE IF NOT EXISTS economy_skill_entitlement (
         REFERENCES economy_skill_order (tenant_id, client_id, target_agent_id, order_id),
     CONSTRAINT fk_skill_entitlement_install FOREIGN KEY (
         tenant_id, client_id, target_agent_id, installation_id, product_version_id, skill_key, skill_version
-    ) REFERENCES economy_skill_installation (
+    ) REFERENCES agent_skill_installation (
         tenant_id, client_id, target_agent_id, installation_id, product_version_id, skill_key, skill_version
     ),
     CONSTRAINT fk_skill_entitlement_version FOREIGN KEY (tenant_id, client_id, product_version_id)
-        REFERENCES economy_skill_product_version (tenant_id, client_id, product_version_id)
+        REFERENCES agent_skill_product_version (tenant_id, client_id, product_version_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Scoped V0 commercial entitlement distinct from runtime abilities';

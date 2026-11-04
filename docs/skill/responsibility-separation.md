@@ -9,14 +9,20 @@
 - 跨域操作使用原 TransactionTemplate / REQUIRED，保持原来的锁顺序和提交后派发，不引入新事务管理器或异步资金调用。
 - `validateLayering` 检查 economy 不反向引用 agent、技能代码不访问 economy Entity/Mapper、非交易实体不留在 economy。
 
-## 物理兼容与维护入口
+## 物理名称与维护入口（2026-11-04追加）
 
-21 张历史 `economy_skill_*` 物理表名不变，18 张生命周期表归 agent，3 张交易表归 economy；没有复制、双写或生产 DDL。
+用户已授权物理更名：18 张生命周期表统一 `agent_skill_*`，购买报价、订单、订单回执三张仍为 `economy_skill_*`。不复制、不双写、不加视图。迁移脚本为 agent-mapper `db/migrations/20261104-agent-skill-table-names-{up,down}.sql`；只由受控运维执行，不由应用启动执行。
 
-七表历史建表资源 `db/economy-v0-skill-marketplace.sql` 是已有联合安装合同：同时创建目录/安装和它们引用的三张交易表。首版整体迁入 agent-mapper，由唯一 `SkillSchemaInitializer` 在显式 `schema-maintenance` 下协调；不在 economy 注册第二个 initializer，不改变 DDL 字节和顺序。该联合维护入口不授予技能业务服务直接写交易表的职责。其余技能 DDL、种子及包资源同步迁移，六个内嵌技能包字节不变。
+七表历史建表资源 `db/economy-v0-skill-marketplace.sql` 是已有联合安装合同：同时创建目录/安装和它们引用的三张交易表。首版整体迁入 agent-mapper，由唯一 `SkillSchemaInitializer` 在显式 `schema-maintenance` 下协调；不在 economy 注册第二个 initializer，仅同步目标表和外键引用名称，不改变字段、索引、约束及建表顺序。该联合维护入口不授予技能业务服务直接写交易表的职责。其余技能 DDL、种子及包资源同步迁移，六个内嵌技能包字节不变。
 
 保留现有 `economy.skill.*` 配置键和资源名，避免因源码职责分离改变运维输入；它们不代表领域所有权。Web/Runtime wire 契约不变。
 
 ## 回归入口
 
 定向覆盖 agent/economy core 状态机、拆分 Mapper 的作用域/CAS、schema 与种子、真实安装/支付/退款事务、免费且经济关闭场景、岗位无订单及禁止手动安装、凭据与已安装列表。正式执行记录在根 handoff `docs/implementation/handoffs/REUSABLE-SKILLS-20261102.md`，CI 证据绑定候选 commit/tree，不复用迁移前的成功结果。
+
+## 生产切换
+
+固定受测源码与制品、核对当前库真实目录（表、外键、触发器体、视图、存储程序、表级授权）；锁内停止API写入，备份目标21表及真实DDL/触发器，单条RENAME TABLE更名18表，再核对行内容摘要、外键、触发器及3张交易表。安装新JAR后验证接口与技能状态。Runtime不操作数据库，无需发布；API停机期间通道有短暂不可用。
+
+恢复须配套：新JAR启动失败时停写，按真实表状态执行反向更名，再由既有安装器恢复旧JAR；不把旧JAR直接启动到新表名、不恢复旧数据快照覆盖已提交事实。正常主线单轨，不保留兼容查询。迁移脚本与新JAR必须匹配，Web复用已测436制品，不为表名重建。

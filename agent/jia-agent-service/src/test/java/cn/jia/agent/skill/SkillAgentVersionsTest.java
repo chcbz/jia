@@ -77,7 +77,7 @@ class SkillAgentVersionsTest {
         // Keep this private fixture alive without DB_CLOSE_DELAY or a persistent test database.
         try(var connection=ds.getConnection()) {
             var jdbc=new JdbcTemplate(ds);
-            jdbc.execute("CREATE TABLE economy_skill_agent_version (id BIGINT AUTO_INCREMENT PRIMARY KEY, "
+            jdbc.execute("CREATE TABLE agent_skill_agent_version (id BIGINT AUTO_INCREMENT PRIMARY KEY, "
                     +"tenant_id VARCHAR(50) NOT NULL, client_id VARCHAR(50) NOT NULL, agent_id VARCHAR(100) NOT NULL, "
                     +"source_hash VARBINARY(32) NOT NULL, version BIGINT NOT NULL, UNIQUE(tenant_id,client_id,agent_id))");
             var config=new org.apache.ibatis.session.Configuration();config.setMapUnderscoreToCamelCase(true);
@@ -90,7 +90,7 @@ class SkillAgentVersionsTest {
             var blue=runtime();var green=runtime();green.setTenantId("tenant-green");
             when(runtimes.findByAgentIdForUpdate("agt_1")).thenReturn(blue);versions.observe(blue);
             when(runtimes.findByAgentIdForUpdate("agt_1")).thenReturn(green);versions.observe(green);
-            assertEquals(2,jdbc.queryForObject("SELECT COUNT(*) FROM economy_skill_agent_version",Integer.class));
+            assertEquals(2,jdbc.queryForObject("SELECT COUNT(*) FROM agent_skill_agent_version",Integer.class));
             assertNull(mapper.findVersion("owner","client","agt_1"));
             blue.setStatus("offline");when(runtimes.findByAgentIdForUpdate("agt_1")).thenReturn(blue);versions.observe(blue);
             assertEquals(2L,mapper.findVersion("tenant-blue","client","agt_1").getVersion());

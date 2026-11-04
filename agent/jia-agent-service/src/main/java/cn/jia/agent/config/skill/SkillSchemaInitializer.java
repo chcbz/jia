@@ -26,13 +26,13 @@ import java.util.regex.Pattern;
 public final class SkillSchemaInitializer implements InitializingBean {
     static final String DDL_RESOURCE = "db/economy-v0-skill-marketplace.sql";
     static final List<String> TABLES = List.of(
-            "economy_skill_product",
-            "economy_skill_product_version",
+            "agent_skill_product",
+            "agent_skill_product_version",
             "economy_skill_purchase_quote",
             "economy_skill_order",
             "economy_skill_order_receipt",
-            "economy_skill_installation",
-            "economy_skill_entitlement");
+            "agent_skill_installation",
+            "agent_skill_entitlement");
     static final List<String> TRIGGER_ORDER = List.of(
             "trg_skill_market_version_no_update",
             "trg_skill_market_version_no_delete",
@@ -251,9 +251,9 @@ public final class SkillSchemaInitializer implements InitializingBean {
                 FROM information_schema.triggers
                 WHERE trigger_schema=DATABASE()
                   AND (event_object_table IN (
-                        'economy_skill_product','economy_skill_product_version','economy_skill_purchase_quote',
-                        'economy_skill_order','economy_skill_order_receipt','economy_skill_installation',
-                        'economy_skill_entitlement')
+                        'agent_skill_product','agent_skill_product_version','economy_skill_purchase_quote',
+                        'economy_skill_order','economy_skill_order_receipt','agent_skill_installation',
+                        'agent_skill_entitlement')
                        OR trigger_name LIKE 'trg_skill_market_%')
                 ORDER BY trigger_name
                 """, (rs, rowNum) -> new TriggerSpec(
@@ -271,7 +271,7 @@ public final class SkillSchemaInitializer implements InitializingBean {
 
     static Map<String, TriggerSpec> expectedTriggers() {
         Map<String, TriggerSpec> result = new TreeMap<>();
-        immutablePair(result, "version", "economy_skill_product_version", "skill product versions");
+        immutablePair(result, "version", "agent_skill_product_version", "skill product versions");
         immutablePair(result, "quote", "economy_skill_purchase_quote", "skill purchase quotes");
         immutablePair(result, "receipt", "economy_skill_order_receipt", "skill order receipts");
         return Map.copyOf(result);
@@ -480,9 +480,9 @@ public final class SkillSchemaInitializer implements InitializingBean {
                 FROM information_schema.tables
                 WHERE table_schema=DATABASE()
                   AND table_name IN (
-                    'economy_skill_product','economy_skill_product_version','economy_skill_purchase_quote',
-                    'economy_skill_order','economy_skill_order_receipt','economy_skill_installation',
-                    'economy_skill_entitlement')
+                    'agent_skill_product','agent_skill_product_version','economy_skill_purchase_quote',
+                    'economy_skill_order','economy_skill_order_receipt','agent_skill_installation',
+                    'agent_skill_entitlement')
                 ORDER BY table_name
                 """, String.class);
     }

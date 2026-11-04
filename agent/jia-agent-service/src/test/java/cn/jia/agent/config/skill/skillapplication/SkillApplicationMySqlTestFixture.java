@@ -72,7 +72,7 @@ final class SkillApplicationMySqlTestFixture implements AutoCloseable {
                 new org.springframework.core.io.ClassPathResource("db/economy-v0-skill-application.sql")).execute(source);
         // Native protocol prerequisite: agent-personal-workspace-skill-v1.sql receipt index.
         // This fixture has no agent-module resource dependency; it installs the same structural delta.
-        jdbc.execute("ALTER TABLE economy_skill_result_receipt ADD INDEX idx_skill_receipt_installation_scope "
+        jdbc.execute("ALTER TABLE agent_skill_result_receipt ADD INDEX idx_skill_receipt_installation_scope "
                 + "(tenant_id,client_id,installation_id,outcome)");
         return new Database(database, source, jdbc);
     }

@@ -1,4 +1,4 @@
-CREATE TABLE IF NOT EXISTS economy_skill_actor_root (
+CREATE TABLE IF NOT EXISTS agent_skill_actor_root (
  id BIGINT NOT NULL AUTO_INCREMENT,
  tenant_id VARCHAR(50) NOT NULL,
  client_id VARCHAR(50) NOT NULL,
@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS economy_skill_actor_root (
  PRIMARY KEY (id),
  UNIQUE KEY uk_skill_actor_root (tenant_id,client_id,actor_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
-CREATE TABLE IF NOT EXISTS economy_skill_agent_version (
+CREATE TABLE IF NOT EXISTS agent_skill_agent_version (
  id BIGINT NOT NULL AUTO_INCREMENT,
  tenant_id VARCHAR(50) NOT NULL,
  client_id VARCHAR(50) NOT NULL,
@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS economy_skill_agent_version (
  PRIMARY KEY (id),
  UNIQUE KEY uk_skill_agent_version (tenant_id,client_id,agent_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
-CREATE TABLE IF NOT EXISTS economy_skill_result_receipt (
+CREATE TABLE IF NOT EXISTS agent_skill_result_receipt (
  id BIGINT NOT NULL AUTO_INCREMENT,
  tenant_id VARCHAR(50) NOT NULL,
  client_id VARCHAR(50) NOT NULL,
@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS economy_skill_result_receipt (
  PRIMARY KEY (id),
  UNIQUE KEY uk_skill_result_message (tenant_id,client_id,message_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
-CREATE TABLE IF NOT EXISTS economy_skill_delivery_binding (
+CREATE TABLE IF NOT EXISTS agent_skill_delivery_binding (
  id BIGINT NOT NULL AUTO_INCREMENT,
  tenant_id VARCHAR(50) NOT NULL,
  client_id VARCHAR(50) NOT NULL,
@@ -42,7 +42,7 @@ CREATE TABLE IF NOT EXISTS economy_skill_delivery_binding (
  PRIMARY KEY (id),
  UNIQUE KEY uk_skill_delivery_binding (tenant_id,client_id,installation_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
-CREATE TABLE IF NOT EXISTS economy_skill_managed_credential (
+CREATE TABLE IF NOT EXISTS agent_skill_managed_credential (
  id BIGINT NOT NULL AUTO_INCREMENT,
  credential_id VARCHAR(100) NOT NULL,
  api_key_id VARCHAR(100) NOT NULL,
@@ -59,7 +59,7 @@ CREATE TABLE IF NOT EXISTS economy_skill_managed_credential (
  UNIQUE KEY uk_skill_credential_key (api_key_id),
  UNIQUE KEY uk_skill_credential_live (tenant_id,client_id,agent_id,live_slot)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
-CREATE TABLE IF NOT EXISTS economy_skill_credential_operation (
+CREATE TABLE IF NOT EXISTS agent_skill_credential_operation (
  id BIGINT NOT NULL AUTO_INCREMENT,
  tenant_id VARCHAR(50) NOT NULL,
  client_id VARCHAR(50) NOT NULL,

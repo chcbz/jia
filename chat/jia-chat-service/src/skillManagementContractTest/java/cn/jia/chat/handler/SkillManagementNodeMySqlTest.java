@@ -112,7 +112,7 @@ public class SkillManagementNodeMySqlTest extends SkillManagementWireMySqlTest {
                         assertEquals("E0",accepted.get("code"),()->"Result rejected; result="+new String(original,StandardCharsets.UTF_8)+" reply="+new String(receipt,StandardCharsets.UTF_8));
                         validate("ResultReceipt",accepted);assertEquals("ACCEPTED",object(accepted.get("data")).get("receiptStatus"));
                         var event=read(original,"Result");assertEquals(event.get("messageId"),accepted.get("correlationId"));
-                        assertEquals(1,jdbc.queryForObject("SELECT COUNT(*) FROM economy_skill_management_result WHERE message_id=?",Integer.class,event.get("messageId")));
+                        assertEquals(1,jdbc.queryForObject("SELECT COUNT(*) FROM agent_skill_management_result WHERE message_id=?",Integer.class,event.get("messageId")));
                         committed.add(receipt);receipts++;
                     } else {
                         assertEquals(before,frames.size(),()->"Valid ACK must not produce an error reply; ack="+new String(original,StandardCharsets.UTF_8)+" replies="+frames.subList(before,frames.size()));
@@ -156,7 +156,7 @@ public class SkillManagementNodeMySqlTest extends SkillManagementWireMySqlTest {
             var first=node.complete(installOverHttp(),true);String old=text(object(first.get("target")),"skillInstallationId");
             var binding=service.admitNative(scope(),"pdf-export",old,()->service.nativeTaskBinding("0",ACTOR.clientId(),"old-execution","old-grant",1,AGENT,old));
             publishInstruction("2.0.0",2);
-            jdbc.update("INSERT INTO economy_skill_upgrade_policy VALUES (?,?,?,?,?)","0",ACTOR.clientId(),"spv_pdf_1","spv_pdf_2","COVERED");
+            jdbc.update("INSERT INTO agent_skill_upgrade_policy VALUES (?,?,?,?,?)","0",ACTOR.clientId(),"spv_pdf_1","spv_pdf_2","COVERED");
             var upgrade=packageChange("UPGRADE",old,text(first,"skillRevision"),"spv_pdf_2");node.supply(upgrade);
             assertThrows(cn.jia.agent.skill.SkillMarketplaceException.class,()->service.admitNative(scope(),"pdf-export",old,()->"never"));
             recovery.recover();assertEquals("ACTIVATING",current(upgrade).get("status"));

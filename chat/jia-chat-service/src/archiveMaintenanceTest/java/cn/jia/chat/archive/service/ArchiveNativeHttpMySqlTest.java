@@ -142,7 +142,7 @@ class ArchiveNativeHttpMySqlTest {
         packageRoot=Files.createDirectory(root.resolve("packages"));Files.setPosixFilePermissions(packageRoot,java.nio.file.attribute.PosixFilePermissions.fromString("rwx------"));
         byte[] zip=Files.readAllBytes(Path.of(System.getenv("CYF_ARCHIVE_SKILL_PACKAGE")));new SkillPackageStore(packageRoot).publish(zip);
         byte[] generalZip=variantPackage(zip,"archive-general");new SkillPackageStore(packageRoot).publish(generalZip);
-        jdbc.update("INSERT INTO economy_skill_product(product_id,name,description,status,version,tenant_id,client_id,create_time,update_time) VALUES('archive-package','Archive maintenance','Isolated approved fixture','DRAFT',1,?,?,?,?)",TENANT,CLIENT,now,now);
+        jdbc.update("INSERT INTO agent_skill_product(product_id,name,description,status,version,tenant_id,client_id,create_time,update_time) VALUES('archive-package','Archive maintenance','Isolated approved fixture','DRAFT',1,?,?,?,?)",TENANT,CLIENT,now,now);
         startHttp();
         var market=spring.getBean(SkillCatalogMapper.class);
         var version=new SkillProductVersionEntity().setProductVersionId("archive-v1").setProductId("archive-package").setVersionSequence(1L).setSkillKey("archive-maintenance").setSkillVersion("1.1.1").setPriceMicro(0L).setPackageSha256(hash(zip)).setPackageSize((long)zip.length).setApprovedPermissionsManifest("[]").setApprovedPermissionsSha256(hash("[]")).setDeploymentRestriction("NONE").setReviewStatus("APPROVED");

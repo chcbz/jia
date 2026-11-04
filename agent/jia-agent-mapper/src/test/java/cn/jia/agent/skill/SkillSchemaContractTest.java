@@ -33,13 +33,14 @@ class SkillSchemaContractTest {
                 Path.of("src/main/resources/db/economy-v0-skill-marketplace.sql"), StandardCharsets.UTF_8);
         String normalized = sql.toLowerCase(Locale.ROOT).replaceAll("\\s+", " ");
         for (String table : List.of(
-                "economy_skill_product", "economy_skill_product_version",
+                "agent_skill_product", "agent_skill_product_version",
                 "economy_skill_purchase_quote", "economy_skill_order",
-                "economy_skill_order_receipt", "economy_skill_installation",
-                "economy_skill_entitlement")) {
+                "economy_skill_order_receipt", "agent_skill_installation",
+                "agent_skill_entitlement")) {
             assertEquals(1, occurrences(normalized, "create table if not exists " + table + " ("), table);
         }
-        assertEquals(7, occurrences(normalized, "create table if not exists economy_skill_"));
+        assertEquals(3, occurrences(normalized, "create table if not exists economy_skill_"));
+        assertEquals(4, occurrences(normalized, "create table if not exists agent_skill_"));
         assertFalse(normalized.contains("create table if not exists economy_account"));
         assertFalse(normalized.contains("insert into"));
         assertFalse(normalized.contains("update economy_"));
@@ -69,10 +70,10 @@ class SkillSchemaContractTest {
                 assertTrue(MUTABLE_METHODS.contains(method.getName()), method.toString());
                 String sql = String.join(" ", update.value());
                 // Publication mutates the product pointer, never the immutable version row.
-                assertFalse(Pattern.compile("(?i)\\bUPDATE\\s+economy_skill_"
+                assertFalse(Pattern.compile("(?i)\\bUPDATE\\s+(?:agent|economy)_skill_"
                         + "(?:product_version|purchase_quote|order_receipt)\\b").matcher(sql).find(), method.toString());
                 if (method.getName().equals("publishProductVersion")) {
-                    assertTrue(sql.stripLeading().startsWith("UPDATE economy_skill_product\n"), method.toString());
+                    assertTrue(sql.stripLeading().startsWith("UPDATE agent_skill_product\n"), method.toString());
                 }
             }
             assertFalse(method.getName().toLowerCase(Locale.ROOT).startsWith("delete"), method.toString());

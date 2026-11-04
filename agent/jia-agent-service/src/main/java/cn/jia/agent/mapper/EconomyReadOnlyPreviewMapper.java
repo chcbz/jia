@@ -106,8 +106,8 @@ public interface EconomyReadOnlyPreviewMapper {
     @Select("""
             SELECT p.product_id,p.name,p.description,v.product_version_id,v.skill_key,v.skill_version,
                    v.price_micro,v.approved_permissions_manifest,v.deployment_restriction
-            FROM economy_skill_product p
-            JOIN economy_skill_product_version v
+            FROM agent_skill_product p
+            JOIN agent_skill_product_version v
               ON v.tenant_id=p.tenant_id AND v.client_id=p.client_id AND v.product_id=p.product_id
              AND CAST(v.tenant_id AS BINARY)=CAST(p.tenant_id AS BINARY)
              AND OCTET_LENGTH(v.tenant_id)=OCTET_LENGTH(p.tenant_id)
@@ -133,8 +133,8 @@ public interface EconomyReadOnlyPreviewMapper {
     @Select("""
             SELECT p.product_id,p.name,p.description,v.product_version_id,v.skill_key,v.skill_version,
                    v.price_micro,v.approved_permissions_manifest,v.deployment_restriction
-            FROM economy_skill_product p
-            JOIN economy_skill_product_version v
+            FROM agent_skill_product p
+            JOIN agent_skill_product_version v
               ON v.tenant_id=p.tenant_id AND v.client_id=p.client_id AND v.product_id=p.product_id
              AND CAST(v.tenant_id AS BINARY)=CAST(p.tenant_id AS BINARY)
              AND OCTET_LENGTH(v.tenant_id)=OCTET_LENGTH(p.tenant_id)
@@ -195,7 +195,7 @@ public interface EconomyReadOnlyPreviewMapper {
                    skill_key,skill_version,permission_grant_version,approved_permissions_manifest,
                    approved_permissions_sha256,status,version,tenant_id,client_id,
                    create_time,activated_at,failed_at,update_time
-            FROM economy_skill_entitlement
+            FROM agent_skill_entitlement
             WHERE tenant_id=#{tenantId} AND client_id=#{clientId} AND target_agent_id=#{agentId}
               AND CAST(tenant_id AS BINARY)=CAST(#{tenantId} AS BINARY)
               AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(#{tenantId})
@@ -213,7 +213,7 @@ public interface EconomyReadOnlyPreviewMapper {
                    message_id,request_id,command_type,command_id,attempt,fencing_token,delivery_epoch,
                    skill_key,skill_version,package_size,package_sha256,download_path,status,failure_code,
                    version,tenant_id,client_id,create_time,started_at,installed_at,failed_at,update_time
-            FROM economy_skill_installation
+            FROM agent_skill_installation
             WHERE tenant_id=#{tenantId} AND client_id=#{clientId} AND target_agent_id=#{agentId}
               AND CAST(tenant_id AS BINARY)=CAST(#{tenantId} AS BINARY)
               AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(#{tenantId})

@@ -1,0 +1,20 @@
+-- Operator-only; stop API writers first. Never run from application bootstrap.
+RENAME TABLE
+    economy_skill_product TO agent_skill_product,
+    economy_skill_product_version TO agent_skill_product_version,
+    economy_skill_installation TO agent_skill_installation,
+    economy_skill_entitlement TO agent_skill_entitlement,
+    economy_skill_managed_state TO agent_skill_managed_state,
+    economy_skill_change TO agent_skill_change,
+    economy_skill_management_quote TO agent_skill_management_quote,
+    economy_skill_upgrade_policy TO agent_skill_upgrade_policy,
+    economy_skill_installation_authorization TO agent_skill_installation_authorization,
+    economy_skill_change_command TO agent_skill_change_command,
+    economy_skill_management_request TO agent_skill_management_request,
+    economy_skill_management_result TO agent_skill_management_result,
+    economy_skill_delivery_binding TO agent_skill_delivery_binding,
+    economy_skill_result_receipt TO agent_skill_result_receipt,
+    economy_skill_managed_credential TO agent_skill_managed_credential,
+    economy_skill_credential_operation TO agent_skill_credential_operation,
+    economy_skill_actor_root TO agent_skill_actor_root,
+    economy_skill_agent_version TO agent_skill_agent_version;

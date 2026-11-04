@@ -84,9 +84,9 @@ public class SkillExecutionSchemaMySqlTest {
     }
     @Test void receiptScopeIndexIsExplicitAndDriftIsNotRepaired() {
         detector().afterPropertiesSet();
-        jdbc.execute("ALTER TABLE economy_skill_result_receipt DROP INDEX idx_skill_receipt_installation_scope");
+        jdbc.execute("ALTER TABLE agent_skill_result_receipt DROP INDEX idx_skill_receipt_installation_scope");
         assertThrows(IllegalStateException.class,()->detector().afterPropertiesSet());
-        assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema=DATABASE() AND table_name='economy_skill_result_receipt' AND index_name='idx_skill_receipt_installation_scope'",Integer.class));
+        assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema=DATABASE() AND table_name='agent_skill_result_receipt' AND index_name='idx_skill_receipt_installation_scope'",Integer.class));
     }
     @Test void realCasAndTransactionPairRollback() {
         var tx=new TransactionTemplate(new DataSourceTransactionManager(source));

@@ -191,9 +191,9 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
     /** Immutable snapshot of ALL relevant SQL business rows, including versions and transport leases. */
     protected Map<String,Object> businessSnapshot() {
         Map<String,Object> snapshot=new LinkedHashMap<>();
-        for(String table:List.of("economy_account","economy_escrow","economy_escrow_funding_lot","economy_transaction","economy_entry","economy_skill_order","economy_skill_entitlement",
-                "economy_skill_installation","economy_skill_actor_root","economy_skill_agent_version","economy_skill_managed_state","economy_skill_change","economy_skill_change_command",
-                "economy_skill_management_result","economy_skill_installation_authorization","economy_skill_management_request","economy_skill_management_quote","economy_skill_delivery_binding","economy_skill_result_receipt","agent_command_delivery","agent_outbox_event")) {
+        for(String table:List.of("economy_account","economy_escrow","economy_escrow_funding_lot","economy_transaction","economy_entry","economy_skill_order","agent_skill_entitlement",
+                "agent_skill_installation","agent_skill_actor_root","agent_skill_agent_version","agent_skill_managed_state","agent_skill_change","agent_skill_change_command",
+                "agent_skill_management_result","agent_skill_installation_authorization","agent_skill_management_request","agent_skill_management_quote","agent_skill_delivery_binding","agent_skill_result_receipt","agent_command_delivery","agent_outbox_event")) {
             var rows=new ArrayList<Map<String,String>>();
             for(var row:jdbc.queryForList("SELECT * FROM "+table+" ORDER BY 1")) {
                 Map<String,String> values=new LinkedHashMap<>();
@@ -370,7 +370,7 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         publishInstruction();var first=packageChange("INSTALL",null,"0","spv_pdf_1");finishInstall(first);first=current(first);
         String id=text(object(first.get("target")),"skillInstallationId");
         var unrelated=List.of("READ_AUTHORIZED_INPUT");
-        jdbc.update("UPDATE economy_skill_installation_authorization SET permissions_json=?,permissions_sha256=? WHERE installation_id=?",
+        jdbc.update("UPDATE agent_skill_installation_authorization SET permissions_json=?,permissions_sha256=? WHERE installation_id=?",
                 json(unrelated),hash("cyf.skill.permissions.v1",unrelated),id);
         assertTrue(service.descriptors(scope()).isEmpty());
         assertThrows(SkillMarketplaceException.class,()->service.admitNative(scope(),"pdf-export",id,()->"never"));
@@ -398,7 +398,7 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         publishExecutable("2.0.0",2);
         var base=first;
         var missing=assertThrows(SkillMarketplaceException.class,()->packageChange("UPGRADE",old,text(base,"skillRevision"),"spv_pdf_2"));assertEquals("SKILL_UPGRADE_POLICY_UNSET",missing.code());
-        jdbc.update("INSERT INTO economy_skill_upgrade_policy VALUES (?,?,?,?,?)","0",ACTOR.clientId(),"spv_pdf_1","spv_pdf_2","COVERED");
+        jdbc.update("INSERT INTO agent_skill_upgrade_policy VALUES (?,?,?,?,?)","0",ACTOR.clientId(),"spv_pdf_1","spv_pdf_2","COVERED");
         var upgrade=packageChange("UPGRADE",old,text(first,"skillRevision"),"spv_pdf_2");assertNull(upgrade.get("orderId"));assertEquals("NONE",upgrade.get("fundingStatus"));
         assertEquals("old-active",service.admit(scope(),"pdf-export",old,()->"old-active"));
         report(upgrade,"FAILED","DEPENDENCY_MISSING");upgrade=current(upgrade);
@@ -428,14 +428,14 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
                 "runtimeInstallationId",runtime.getRuntimeInstallationId(),"runtimeHostId","host-1","receiptMessageId","historical-receipt","receiptSha256",HexFormat.of().formatHex(receiptHash),
                 "package",object(change.get("target")),"approvedPermissionsSha256",auth.getPermissionsSha256(),"localEvidenceSha256",local);
         proof.put("evidenceSha256",hash("cyf.skill.adoption.v1",proof));
-        jdbc.update("UPDATE economy_skill_installation_authorization SET change_id=?,adoption_evidence_json=? WHERE installation_id=?",migration,json(proof),installation);
-        jdbc.update("DELETE FROM economy_skill_change_command");jdbc.update("DELETE FROM economy_skill_change");jdbc.update("DELETE FROM economy_skill_management_result");
-        jdbc.update("UPDATE economy_skill_installation SET schema_version=1");
+        jdbc.update("UPDATE agent_skill_installation_authorization SET change_id=?,adoption_evidence_json=? WHERE installation_id=?",migration,json(proof),installation);
+        jdbc.update("DELETE FROM agent_skill_change_command");jdbc.update("DELETE FROM agent_skill_change");jdbc.update("DELETE FROM agent_skill_management_result");
+        jdbc.update("UPDATE agent_skill_installation SET schema_version=1");
         return change;
     }
     @Test void exactHistoricalAdoptionSupportsDescriptorsAdmissionFrozenBindingAndDisableWithoutInventedApplied() throws Exception {
         var adopted=adoptedFixture();String id=text(object(adopted.get("target")),"skillInstallationId");catalog(adopted);
-        assertEquals(0,count("economy_skill_change"));assertEquals(0,count("economy_skill_change_command"));assertEquals(0,count("economy_skill_management_result"));
+        assertEquals(0,count("agent_skill_change"));assertEquals(0,count("agent_skill_change_command"));assertEquals(0,count("agent_skill_management_result"));
         assertEquals(1,service.descriptors(scope()).size());
         var auth=db.findAuthorization("0",ACTOR.clientId(),id);
         assertTrue(Boolean.TRUE.equals(tx.execute(s->service.qualifies(scope(),auth))));
@@ -443,44 +443,44 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         var listed=service.skills(ACTOR,AGENT,false);
         var matches=((List<?>)listed.get("items")).stream().map(SkillManagementCodec::object).filter(row->"pdf-export".equals(row.get("skillKey"))).toList();
         assertEquals(1,matches.size());var item=matches.getFirst();assertNull(item.get("latestChange"));assertTrue(((List<?>)item.get("allowedActions")).contains("DISABLE"));
-        assertEquals(1,count("economy_skill_order"));assertEquals(1,count("economy_skill_entitlement"));assertEquals(95_000_000L,wallet());
+        assertEquals(1,count("economy_skill_order"));assertEquals(1,count("agent_skill_entitlement"));assertEquals(95_000_000L,wallet());
         assertTrue(service.descriptors(new SkillCapabilityLookup.Scope("0",ACTOR.clientId(),"wrong-owner",AGENT)).isEmpty());
         assertTrue(service.descriptors(new SkillCapabilityLookup.Scope("0","other-client",ACTOR.ownerJiacn(),AGENT)).isEmpty());
     }
     @Test void historicalAdoptionRejectsChangedReceiptDigestPackageOrLocalProofWithoutFinancialSideEffects() throws Exception {
         var adopted=adoptedFixture();catalog(adopted);String id=text(object(adopted.get("target")),"skillInstallationId");
-        var original=jdbc.queryForObject("SELECT adoption_evidence_json FROM economy_skill_installation_authorization",String.class);
+        var original=jdbc.queryForObject("SELECT adoption_evidence_json FROM agent_skill_installation_authorization",String.class);
         var beforeWallet=wallet();
-        jdbc.update("UPDATE economy_skill_result_receipt SET request_hash=?",new byte[32]);
+        jdbc.update("UPDATE agent_skill_result_receipt SET request_hash=?",new byte[32]);
         assertTrue(service.descriptors(scope()).isEmpty());
         assertFalse(Boolean.TRUE.equals(tx.execute(s->service.qualifies(scope(),db.findAuthorization("0",ACTOR.clientId(),id)))));
-        jdbc.update("UPDATE economy_skill_result_receipt SET request_hash=?",HexFormat.of().parseHex("d".repeat(64)));
+        jdbc.update("UPDATE agent_skill_result_receipt SET request_hash=?",HexFormat.of().parseHex("d".repeat(64)));
         assertEquals(1,service.descriptors(scope()).size());
         for(String key:List.of("ownerJiacn","agentId","skillKey","receiptSha256","localEvidenceSha256","approvedPermissionsSha256")) {
             var forged=read(original.getBytes(java.nio.charset.StandardCharsets.UTF_8),null);forged.put(key,"f".repeat(64));
-            jdbc.update("UPDATE economy_skill_installation_authorization SET adoption_evidence_json=?",json(forged));
+            jdbc.update("UPDATE agent_skill_installation_authorization SET adoption_evidence_json=?",json(forged));
             assertTrue(service.descriptors(scope()).isEmpty(),key);
         }
-        jdbc.update("UPDATE economy_skill_installation_authorization SET adoption_evidence_json=?",original);
+        jdbc.update("UPDATE agent_skill_installation_authorization SET adoption_evidence_json=?",original);
         // Mutate the untrusted projection, not the original installation's FK-protected package.
-        var changedPackage=read(jdbc.queryForObject("SELECT package_json FROM economy_skill_installation_authorization",String.class).getBytes(java.nio.charset.StandardCharsets.UTF_8),"PackageRef");
+        var changedPackage=read(jdbc.queryForObject("SELECT package_json FROM agent_skill_installation_authorization",String.class).getBytes(java.nio.charset.StandardCharsets.UTF_8),"PackageRef");
         changedPackage.put("packageSha256","0".repeat(64));
         var changedProof=read(original.getBytes(java.nio.charset.StandardCharsets.UTF_8),null);changedProof.put("package",changedPackage);changedProof.remove("evidenceSha256");changedProof.put("evidenceSha256",hash("cyf.skill.adoption.v1",changedProof));
-        jdbc.update("UPDATE economy_skill_installation_authorization SET package_json=?,adoption_evidence_json=?",json(changedPackage),json(changedProof));assertTrue(service.descriptors(scope()).isEmpty());
-        assertEquals(beforeWallet,wallet());assertEquals(1,count("economy_skill_order"));assertEquals(0,count("economy_skill_change_command"));
+        jdbc.update("UPDATE agent_skill_installation_authorization SET package_json=?,adoption_evidence_json=?",json(changedPackage),json(changedProof));assertTrue(service.descriptors(scope()).isEmpty());
+        assertEquals(beforeWallet,wallet());assertEquals(1,count("economy_skill_order"));assertEquals(0,count("agent_skill_change_command"));
     }
     @Test void historicalActiveWithoutExplicitAdoptionNeverQualifiesOrCreatesNewPurchase() throws Exception {
         var adopted=adoptedFixture();catalog(adopted);String id=text(object(adopted.get("target")),"skillInstallationId");
-        jdbc.update("UPDATE economy_skill_installation_authorization SET adoption_evidence_json=NULL");
+        jdbc.update("UPDATE agent_skill_installation_authorization SET adoption_evidence_json=NULL");
         assertTrue(service.descriptors(scope()).isEmpty());
         assertFalse(Boolean.TRUE.equals(tx.execute(s->service.qualifies(scope(),db.findAuthorization("0",ACTOR.clientId(),id)))));
         assertThrows(SkillMarketplaceException.class,()->service.admit(scope(),"pdf-export",id,()->"never"));
-        assertEquals(0,count("economy_skill_change_command"));assertEquals(1,count("economy_skill_order"));
+        assertEquals(0,count("agent_skill_change_command"));assertEquals(1,count("economy_skill_order"));
     }
     @Test void explicitPaidUpgradeReservesAndCapturesFullApprovedTargetPriceOnlyOnce() throws Exception {
         publishExecutable("1.0.0",1);var first=packageChange("INSTALL",null,"0","spv_pdf_1");finishInstall(first);first=current(first);
         publishExecutable("2.0.0",2);
-        jdbc.update("INSERT INTO economy_skill_upgrade_policy VALUES (?,?,?,?,?)","0",ACTOR.clientId(),"spv_pdf_1","spv_pdf_2","PAID");
+        jdbc.update("INSERT INTO agent_skill_upgrade_policy VALUES (?,?,?,?,?)","0",ACTOR.clientId(),"spv_pdf_1","spv_pdf_2","PAID");
         var upgrade=packageChange("UPGRADE",text(object(first.get("target")),"skillInstallationId"),text(first,"skillRevision"),"spv_pdf_2");
         assertNotNull(upgrade.get("orderId"));assertNotEquals(first.get("orderId"),upgrade.get("orderId"));
         assertEquals("5000000",object(upgrade.get("price")).get("amountMinor"));assertEquals("HELD",upgrade.get("fundingStatus"));
@@ -491,10 +491,10 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
     }
     @Test void notAllowedUpgradeCannotCreateQuoteOrderOrInstallation() throws Exception {
         publishExecutable("1.0.0",1);var first=packageChange("INSTALL",null,"0","spv_pdf_1");finishInstall(first);first=current(first);
-        publishExecutable("2.0.0",2);jdbc.update("INSERT INTO economy_skill_upgrade_policy VALUES (?,?,?,?,?)","0",ACTOR.clientId(),"spv_pdf_1","spv_pdf_2","NOT_ALLOWED");
+        publishExecutable("2.0.0",2);jdbc.update("INSERT INTO agent_skill_upgrade_policy VALUES (?,?,?,?,?)","0",ACTOR.clientId(),"spv_pdf_1","spv_pdf_2","NOT_ALLOWED");
         String source=text(object(first.get("target")),"skillInstallationId"),revision=text(first,"skillRevision");
         assertEquals("SKILL_UPGRADE_NOT_ALLOWED",assertThrows(SkillMarketplaceException.class,()->packageChange("UPGRADE",source,revision,"spv_pdf_2")).code());
-        assertEquals(1,count("economy_skill_order"));assertEquals(1,count("economy_skill_installation"));assertEquals(1,count("economy_skill_management_quote"));
+        assertEquals(1,count("economy_skill_order"));assertEquals(1,count("agent_skill_installation"));assertEquals(1,count("agent_skill_management_quote"));
         assertEquals(95_000_000L,wallet());assertEquals("still-active",service.admit(scope(),"pdf-export",source,()->"still-active"));
     }
     @Test void authorizedLateOldAttemptIsAuditedWithoutChangingNewAttemptOrRefunding() {
@@ -504,7 +504,7 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         var late=new LinkedHashMap<>(oldResult);late.put("messageId","late-old-attempt");
         var receipt=service.result(proof(),late);assertEquals("IGNORED_STALE",object(receipt.get("data")).get("receiptStatus"));
         assertEquals(retry,current(retry));assertEquals(70_000_000L,wallet());assertEquals(1,count("economy_skill_order"));
-        assertEquals(2,count("economy_skill_installation"));
+        assertEquals(2,count("agent_skill_installation"));
     }
     @Test void disableClosesApiAdmissionImmediatelyAndEnableRetryRetainsOriginalInstallation() throws Exception {
         publishExecutable("1.0.0",1);var first=packageChange("INSTALL",null,"0","spv_pdf_1");finishInstall(first);first=current(first);
@@ -516,7 +516,7 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         when(sessions.isReady(anyString(),anyString(),anyString(),any())).thenReturn(true);
         var enable=policyChange("ENABLE",disable);report(enable,"FAILED","DEPENDENCY_MISSING");enable=current(enable);
         var retry=service.retry(ACTOR,AGENT,text(enable,"skillChangeId"),"enable-retry","retry",map("expectedChangeRevision",enable.get("changeRevision")));
-        assertEquals(installation,object(retry.get("target")).get("skillInstallationId"));assertEquals(1,count("economy_skill_installation"));assertEquals("POLICY",command(retry).get("phase"));
+        assertEquals(installation,object(retry.get("target")).get("skillInstallationId"));assertEquals(1,count("agent_skill_installation"));assertEquals("POLICY",command(retry).get("phase"));
         report(retry,"APPLIED",null);catalog(current(retry));assertEquals("yes",service.admit(scope(),"pdf-export",installation,()->"yes"));
     }
 
@@ -576,7 +576,7 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         var applied=result(c,evidence(c,"APPLIED",null));var receipt=service.result(proof(),applied);assertEquals(receipt,service.result(proof(),applied));
         c=current(c);assertEquals("VERIFYING",c.get("status"));assertEquals("CAPTURED",c.get("fundingStatus"));
         assertEquals("ACTIVE",jdbc.queryForObject("SELECT status FROM economy_skill_order",String.class));
-        assertEquals("SUCCEEDED",jdbc.queryForObject("SELECT status FROM economy_skill_installation",String.class));
+        assertEquals("SUCCEEDED",jdbc.queryForObject("SELECT status FROM agent_skill_installation",String.class));
         catalog(c);c=current(c);assertEquals("SUCCEEDED",c.get("status"));assertEquals(true,c.get("runtimeSynced"));
         var list=service.skills(ACTOR,AGENT,false);validate("SkillList",list);
         String installationId=text(object(c.get("target")),"skillInstallationId");
@@ -593,7 +593,7 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         assertEquals("SKILL_STATE_CONFLICT",assertThrows(SkillMarketplaceException.class,
             ()->service.retry(ACTOR,AGENT,changeId,"new-retry-key","request",action)).code());
         assertEquals(first.get("orderId"),retried.get("orderId"));assertEquals(2,retried.get("attempt"));assertNotEquals(object(first.get("target")).get("skillInstallationId"),object(retried.get("target")).get("skillInstallationId"));
-        assertEquals(1,count("economy_skill_order"));assertEquals(2,count("economy_skill_installation"));assertEquals(70_000_000L,wallet());
+        assertEquals(1,count("economy_skill_order"));assertEquals(2,count("agent_skill_installation"));assertEquals(70_000_000L,wallet());
     }
     @Test void unknownNeverRefundsOrRetriesAndReadReconcileDoesNotInstall() {
         var c=install();report(c,"UNKNOWN","RECEIPT_UNKNOWN");c=current(c);assertEquals("RECOVERY_REQUIRED",c.get("status"));assertEquals("HELD",c.get("fundingStatus"));
@@ -607,7 +607,7 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         assertEquals("SKILL_STATE_CONFLICT",assertThrows(SkillMarketplaceException.class,
             ()->service.reconcile(ACTOR,AGENT,id,"new-read-key","request",changedAction)).code());
         service.reconcile(ACTOR,AGENT,id,"read-2","request",action);
-        assertEquals(1,count("economy_skill_installation"));assertEquals(2,count("agent_outbox_event"));assertEquals(70_000_000L,wallet());
+        assertEquals(1,count("agent_skill_installation"));assertEquals(2,count("agent_outbox_event"));assertEquals(70_000_000L,wallet());
     }
     @Test void rejectedAuthorizationRefundsOnceAndRefundedOrderNeverRevives() {
         var c=install();var message=result(c,evidence(c,"FAILED","ENTITLEMENT_TERMINATED"));validate("Result",message);
@@ -623,8 +623,8 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         var data=quoteData();var quote=service.quote(ACTOR,"quote",data,false);
         doThrow(new IllegalStateException("synthetic outbox failure")).when(writer).writeManagement(any(),any(),any(),any());
         assertThrows(IllegalStateException.class,()->service.create(ACTOR,AGENT,"create","request",creation(quote,data),false));
-        assertEquals(100_000_000L,wallet());for(String table:List.of("economy_skill_order","economy_skill_change","economy_skill_installation","agent_outbox_event"))assertEquals(0,count(table),table);
-        assertEquals(1,count("economy_skill_management_request")); // only quote accepted
+        assertEquals(100_000_000L,wallet());for(String table:List.of("economy_skill_order","agent_skill_change","agent_skill_installation","agent_outbox_event"))assertEquals(0,count(table),table);
+        assertEquals(1,count("agent_skill_management_request")); // only quote accepted
     }
     @Test void simultaneousDuplicateCreateHasOneFinancialAndOutboxEffect() throws Exception {
         var data=quoteData();var quote=service.quote(ACTOR,"quote",data,false);var body=creation(quote,data);
@@ -667,7 +667,7 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
     }
     @Test void getQueriesDoNotCreateVersionStateOrCommandsAndCrossOwnerCannotRead() {
         var list=service.skills(ACTOR,AGENT,false);assertFalse(((List<?>)list.get("items")).isEmpty());
-        for(String table:List.of("economy_skill_agent_version","economy_skill_managed_state","agent_outbox_event"))assertEquals(0,count(table));
+        for(String table:List.of("agent_skill_agent_version","agent_skill_managed_state","agent_outbox_event"))assertEquals(0,count(table));
         assertThrows(RuntimeException.class,()->service.skills(new HostingRentHttp.Actor("other","0",ACTOR.clientId(),"other-owner"),AGENT,false));
     }
     @Test void nativeRecoveryDiscoveryFiltersProcessScopeInSql() {
@@ -676,8 +676,8 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         assertTrue(recoveryMapper.candidates("tenant-blue",ACTOR.clientId(),now,now-60000).isEmpty());
         assertTrue(recoveryMapper.candidates(ACTOR.tenantId(),"foreign-client",now,now-60000).isEmpty());
         assertTrue(recoveryMapper.candidates(ACTOR.tenantId(),ACTOR.clientId().toUpperCase(Locale.ROOT),now,now-60000).isEmpty());
-        assertEquals(1,count("economy_skill_agent_version"));
-        assertEquals(ACTOR.tenantId(),jdbc.queryForObject("SELECT tenant_id FROM economy_skill_agent_version",String.class));
+        assertEquals(1,count("agent_skill_agent_version"));
+        assertEquals(ACTOR.tenantId(),jdbc.queryForObject("SELECT tenant_id FROM agent_skill_agent_version",String.class));
     }
     @Test void nativeRecoveryClaimAndFinishCasRejectWrongLeaseAndCaseChangedScope() {
         install();long now=System.currentTimeMillis();var d=recoveryMapper.candidates("0",null,now,now-60000).getFirst();
@@ -724,7 +724,7 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         assertEquals("NONE",jdbc.queryForObject("SELECT publisher_confirm_status FROM agent_outbox_event",String.class));
         assertNull(jdbc.queryForObject("SELECT confirmed_at FROM agent_outbox_event",Long.class));
         assertArrayEquals(wire,jdbc.queryForObject("SELECT wire_payload FROM agent_outbox_event",byte[].class));
-        assertEquals(1,count("economy_skill_order"));assertEquals(1,count("economy_skill_change_command"));assertEquals(70_000_000L,wallet());
+        assertEquals(1,count("economy_skill_order"));assertEquals(1,count("agent_skill_change_command"));assertEquals(70_000_000L,wallet());
         assertEquals(c.get("attempt"),current(c).get("attempt"));
     }
     @Test void nativeRecoveryOutboxClaimCasLossRollsBackDeliveryLease() {
@@ -752,7 +752,7 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
             afterReclaim.set(businessSnapshot());return AgentRawCommandDispatchResult.sent(1,1);
         });
         recovery.recover(hint,now);assertNotNull(afterReclaim.get());assertEquals(afterReclaim.get(),businessSnapshot());
-        assertEquals("RECEIVED",jdbc.queryForObject("SELECT state FROM economy_skill_change_command",String.class));
+        assertEquals("RECEIVED",jdbc.queryForObject("SELECT state FROM agent_skill_change_command",String.class));
         assertEquals("new-owner",jdbc.queryForObject("SELECT lease_owner FROM agent_outbox_event",String.class));
     }
     @Test void preparedResultRacingSendCompletionPreservesNewPhaseAndImmutableOriginalWire() {
@@ -765,7 +765,7 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         assertEquals("ACTIVATING",current(c).get("status"));assertEquals("ACTIVATE",command(current(c)).get("phase"));
         assertEquals(2,count("agent_outbox_event"));assertEquals(1,count("economy_skill_order"));assertEquals(70_000_000L,wallet());
         assertArrayEquals(original,jdbc.queryForObject("SELECT wire_payload FROM agent_outbox_event WHERE command_id=?",byte[].class,hint.getCommandId()));
-        assertEquals("RESULT",jdbc.queryForObject("SELECT state FROM economy_skill_change_command WHERE command_id=?",String.class,hint.getCommandId()));
+        assertEquals("RESULT",jdbc.queryForObject("SELECT state FROM agent_skill_change_command WHERE command_id=?",String.class,hint.getCommandId()));
     }
     @Test void realMysqlGeneratedGuardsRetainExpressionsAndNullUniqueness() {
         SkillTransportStorageAssertions.generatedGuards(jdbc,true,"0",ACTOR.clientId(),AGENT);
@@ -813,16 +813,16 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         var request=map("action","INSTALL","agentId",AGENT,"skillKey","pdf-export","sourceSkillInstallationId",null,"targetProductVersionId","spv_pdf_1",
                 "expectedAgentVersion",Long.toString(versions.readOwned(ACTOR,AGENT)),"expectedSkillRevision",done.get("skillRevision"),"approvedPermissions",List.of());
         // An absent or altered old receipt is not permission to invent a free reinstall.
-        jdbc.update("UPDATE economy_skill_result_receipt SET request_hash=?",new byte[32]);
+        jdbc.update("UPDATE agent_skill_result_receipt SET request_hash=?",new byte[32]);
         assertThrows(SkillMarketplaceException.class,()->service.quote(ACTOR,"invalid-adopted-reinstall",request,false));
         assertEquals(1,count("economy_skill_order"));assertEquals(balance,wallet());
-        jdbc.update("UPDATE economy_skill_result_receipt SET request_hash=?",HexFormat.of().parseHex("d".repeat(64)));
+        jdbc.update("UPDATE agent_skill_result_receipt SET request_hash=?",HexFormat.of().parseHex("d".repeat(64)));
         var quote=service.quote(ACTOR,"adopted-reinstall-quote",request,false);
         assertEquals("ENTITLEMENT",quote.get("coverage"));assertEquals("0",object(quote.get("price")).get("amountMinor"));
         var reinstall=service.create(ACTOR,AGENT,"adopted-reinstall","adopted-reinstall-request",creation(quote,request),false);
         finishInstall(reinstall);assertEquals("SUCCEEDED",current(reinstall).get("status"));assertEquals(balance,wallet());
         assertNotEquals(old,object(reinstall.get("target")).get("skillInstallationId"));assertEquals(2,service.descriptors(scope()).size());
-        assertEquals(1,jdbc.queryForObject("SELECT COUNT(*) FROM economy_skill_installation_authorization WHERE adoption_evidence_json IS NOT NULL",Integer.class));
+        assertEquals(1,jdbc.queryForObject("SELECT COUNT(*) FROM agent_skill_installation_authorization WHERE adoption_evidence_json IS NOT NULL",Integer.class));
     }
     @Test void uninstallOfflineFailureRetryAndUnknownNeverDeleteOrReopenAdmission() throws Exception {
         publishExecutable("1.0.0",1);var first=packageChange("INSTALL",null,"0","spv_pdf_1");finishInstall(first);first=current(first);
@@ -834,7 +834,7 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         var retried=service.retry(ACTOR,AGENT,text(failed,"skillChangeId"),"retry-uninstall","retry-request",map("expectedChangeRevision",failed.get("changeRevision")));
         assertEquals(2,retried.get("attempt"));assertEquals(removal.get("skillChangeId"),retried.get("skillChangeId"));assertEquals(removal.get("target"),retried.get("target"));
         report(retried,"UNKNOWN","RECEIPT_UNKNOWN");var unknown=current(retried);assertEquals("RECOVERY_REQUIRED",unknown.get("status"));
-        assertEquals(false,unknown.get("retryAllowed"));assertEquals(1,count("economy_skill_installation"));assertEquals(1,count("economy_skill_entitlement"));
+        assertEquals(false,unknown.get("retryAllowed"));assertEquals(1,count("agent_skill_installation"));assertEquals(1,count("agent_skill_entitlement"));
         assertThrows(SkillMarketplaceException.class,()->service.retry(ACTOR,AGENT,text(unknown,"skillChangeId"),"illegal-retry","request",map("expectedChangeRevision",unknown.get("changeRevision"))));
         assertEquals(false,db.lockState("0",ACTOR.clientId(),AGENT,"pdf-export").getAdmissionEnabled());
     }

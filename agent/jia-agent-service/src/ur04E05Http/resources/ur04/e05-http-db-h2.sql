@@ -339,7 +339,7 @@ CREATE TRIGGER ur04_artifact_insert AFTER INSERT ON agent_task_artifact FOR EACH
 CREATE TRIGGER ur04_submitted_insert BEFORE INSERT ON agent_task_event FOR EACH ROW CALL 'cn.jia.agent.acceptance.ur04.Ur04E05HttpFixture$SqlProbe';
 
 -- Skill management is built in: real Runtime lifecycle callbacks maintain its CAS root.
-CREATE TABLE IF NOT EXISTS economy_skill_agent_version (
+CREATE TABLE IF NOT EXISTS agent_skill_agent_version (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     tenant_id VARCHAR(64) NOT NULL,
     client_id VARCHAR(100) NOT NULL,

@@ -51,7 +51,7 @@ class SkillSchemaInitializerMySqlTest {
         assertEquals(first, catalogSnapshot(jdbc));
         assertEquals(7, jdbc.queryForObject("""
                 SELECT COUNT(*) FROM information_schema.tables
-                WHERE table_schema=DATABASE() AND table_name LIKE 'economy_skill_%'
+                WHERE table_schema=DATABASE() AND (table_name LIKE 'economy_skill_%' OR table_name LIKE 'agent_skill_%')
                 """, Integer.class));
         assertEquals(0, jdbc.queryForObject("""
                 SELECT COUNT(*) FROM information_schema.tables
@@ -59,9 +59,9 @@ class SkillSchemaInitializerMySqlTest {
                   'economy_account','economy_transaction','economy_entry','economy_escrow','economy_escrow_funding_lot')
                 """, Integer.class));
         for (String table : List.of(
-                "economy_skill_product", "economy_skill_product_version", "economy_skill_purchase_quote",
-                "economy_skill_order", "economy_skill_order_receipt", "economy_skill_installation",
-                "economy_skill_entitlement")) {
+                "agent_skill_product", "agent_skill_product_version", "economy_skill_purchase_quote",
+                "economy_skill_order", "economy_skill_order_receipt", "agent_skill_installation",
+                "agent_skill_entitlement")) {
             assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM " + table, Integer.class), table);
         }
     }
@@ -70,7 +70,7 @@ class SkillSchemaInitializerMySqlTest {
     void partialSchemaAndCatalogDriftFailClosedWithoutRepair() {
         JdbcTemplate partial = fixture.newDatabase("partial").jdbc();
         partial.execute(firstDdlStatement());
-        assertEquals(List.of("economy_skill_product"), partial.queryForList("""
+        assertEquals(List.of("agent_skill_product"), partial.queryForList("""
                 SELECT table_name FROM information_schema.tables
                 WHERE table_schema=DATABASE() ORDER BY table_name
                 """, String.class));
@@ -79,7 +79,7 @@ class SkillSchemaInitializerMySqlTest {
         assertTrue(partialFailure.getMessage().contains("Refusing automatic repair"), partialFailure.getMessage());
         assertEquals(1, partial.queryForObject("""
                 SELECT COUNT(*) FROM information_schema.tables
-                WHERE table_schema=DATABASE() AND table_name LIKE 'economy_skill_%'
+                WHERE table_schema=DATABASE() AND (table_name LIKE 'economy_skill_%' OR table_name LIKE 'agent_skill_%')
                 """, Integer.class));
 
         JdbcTemplate drift = fixture.newDatabase("drift").jdbc();
@@ -121,17 +121,17 @@ class SkillSchemaInitializerMySqlTest {
         JdbcTemplate jdbc = fixture.newDatabase("foreign_child").jdbc();
         SkillSchemaInitializer initializer = new SkillSchemaInitializer(jdbc);
         initializer.afterPropertiesSet();
-        jdbc.execute("ALTER TABLE economy_skill_product_version DROP FOREIGN KEY fk_skill_version_product");
-        jdbc.execute("ALTER TABLE economy_skill_product_version ADD CONSTRAINT fk_skill_version_product "
+        jdbc.execute("ALTER TABLE agent_skill_product_version DROP FOREIGN KEY fk_skill_version_product");
+        jdbc.execute("ALTER TABLE agent_skill_product_version ADD CONSTRAINT fk_skill_version_product "
                 + "FOREIGN KEY (tenant_id,client_id,product_id) "
-                + "REFERENCES `" + foreign.name() + "`.economy_skill_product (tenant_id,client_id,product_id)");
+                + "REFERENCES `" + foreign.name() + "`.agent_skill_product (tenant_id,client_id,product_id)");
         List<String> before = catalogSnapshot(jdbc);
         IllegalStateException failure = assertThrows(IllegalStateException.class, initializer::afterPropertiesSet);
         assertTrue(failure.getMessage().contains("outside the current database"), failure.getMessage());
         assertEquals(before, catalogSnapshot(jdbc));
         assertEquals(foreign.name(), jdbc.queryForObject("""
                 SELECT referenced_table_schema FROM information_schema.key_column_usage
-                WHERE constraint_schema=DATABASE() AND table_name='economy_skill_product_version'
+                WHERE constraint_schema=DATABASE() AND table_name='agent_skill_product_version'
                   AND constraint_name='fk_skill_version_product' AND ordinal_position=1
                 """, String.class));
     }
@@ -146,9 +146,9 @@ class SkillSchemaInitializerMySqlTest {
         insertFreeOrderAndReceipt(jdbc);
 
         assertThrows(RuntimeException.class, () -> jdbc.update(
-                "UPDATE economy_skill_product_version SET price_micro=1 WHERE product_version_id='spv-1'"));
+                "UPDATE agent_skill_product_version SET price_micro=1 WHERE product_version_id='spv-1'"));
         assertThrows(RuntimeException.class, () -> jdbc.update(
-                "DELETE FROM economy_skill_product_version WHERE product_version_id='spv-1'"));
+                "DELETE FROM agent_skill_product_version WHERE product_version_id='spv-1'"));
         assertThrows(RuntimeException.class, () -> jdbc.update(
                 "UPDATE economy_skill_purchase_quote SET expected_price_micro=1 WHERE quote_id='sq-1'"));
         assertThrows(RuntimeException.class, () -> jdbc.update(
@@ -189,7 +189,7 @@ class SkillSchemaInitializerMySqlTest {
         }
         assertEquals(7, first.queryForObject("""
                 SELECT COUNT(*) FROM information_schema.tables
-                WHERE table_schema=DATABASE() AND table_name LIKE 'economy_skill_%'
+                WHERE table_schema=DATABASE() AND (table_name LIKE 'economy_skill_%' OR table_name LIKE 'agent_skill_%')
                 """, Integer.class));
         assertEquals(6, first.queryForObject("""
                 SELECT COUNT(*) FROM information_schema.triggers
@@ -246,7 +246,7 @@ class SkillSchemaInitializerMySqlTest {
             JdbcTemplate jdbc, String tenant, String client, String productId, String skillKey,
             String sellerType, String sellerId) {
         jdbc.update("""
-                INSERT INTO economy_skill_product(
+                INSERT INTO agent_skill_product(
                     product_id,seller_type,seller_id,name,description,status,version,
                     tenant_id,client_id,create_time,update_time)
                 VALUES(?,?,?,?,?,'DRAFT',1,?,?,1,1)
@@ -257,7 +257,7 @@ class SkillSchemaInitializerMySqlTest {
             JdbcTemplate jdbc, String tenant, String client, String productId, String productVersionId,
             String skillKey, String restriction, long price) {
         jdbc.update("""
-                INSERT INTO economy_skill_product_version(
+                INSERT INTO agent_skill_product_version(
                     product_version_id,product_id,version_sequence,skill_key,skill_version,price_micro,
                     package_sha256,package_size,approved_permissions_manifest,approved_permissions_sha256,
                     deployment_restriction,review_status,tenant_id,client_id,create_time)
@@ -305,7 +305,7 @@ class SkillSchemaInitializerMySqlTest {
             throw new IllegalStateException(exception);
         }
         // This frozen first CREATE has no internal semicolon; skip the header comments entirely.
-        int start = sql.indexOf("CREATE TABLE IF NOT EXISTS economy_skill_product (");
+        int start = sql.indexOf("CREATE TABLE IF NOT EXISTS agent_skill_product (");
         if (start < 0) throw new IllegalStateException("W07 DDL contains no product table statement");
         int semicolon = sql.indexOf(';', start);
         if (semicolon < 0) throw new IllegalStateException("W07 product table statement is unterminated");
@@ -315,9 +315,9 @@ class SkillSchemaInitializerMySqlTest {
     private List<String> catalogSnapshot(JdbcTemplate jdbc) {
         List<String> snapshot = new ArrayList<>();
         for (String table : List.of(
-                "economy_skill_product", "economy_skill_product_version", "economy_skill_purchase_quote",
-                "economy_skill_order", "economy_skill_order_receipt", "economy_skill_installation",
-                "economy_skill_entitlement")) {
+                "agent_skill_product", "agent_skill_product_version", "economy_skill_purchase_quote",
+                "economy_skill_order", "economy_skill_order_receipt", "agent_skill_installation",
+                "agent_skill_entitlement")) {
             snapshot.add(jdbc.queryForObject("SHOW CREATE TABLE " + table, (rs, rowNum) -> rs.getString(2)));
         }
         snapshot.addAll(jdbc.query("""
@@ -325,9 +325,9 @@ class SkillSchemaInitializerMySqlTest {
                 FROM information_schema.triggers
                 WHERE trigger_schema=DATABASE()
                   AND (event_object_table IN (
-                    'economy_skill_product','economy_skill_product_version','economy_skill_purchase_quote',
-                    'economy_skill_order','economy_skill_order_receipt','economy_skill_installation',
-                    'economy_skill_entitlement') OR trigger_name LIKE 'trg_skill_market_%')
+                    'agent_skill_product','agent_skill_product_version','economy_skill_purchase_quote',
+                    'economy_skill_order','economy_skill_order_receipt','agent_skill_installation',
+                    'agent_skill_entitlement') OR trigger_name LIKE 'trg_skill_market_%')
                 ORDER BY trigger_name
                 """, (rs, rowNum) -> rs.getString("trigger_name") + "|"
                 + rs.getString("event_object_table") + "|" + rs.getString("action_timing") + "|"

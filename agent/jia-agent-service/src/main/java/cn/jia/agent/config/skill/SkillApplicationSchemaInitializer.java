@@ -25,7 +25,7 @@ import java.util.regex.Pattern;
 @org.springframework.context.annotation.Profile("schema-maintenance")
 public final class SkillApplicationSchemaInitializer implements InitializingBean {
     static final String DDL_RESOURCE = "db/economy-v0-skill-application.sql";
-    static final List<String> TABLES = List.of("economy_skill_actor_root", "economy_skill_agent_version", "economy_skill_result_receipt", "economy_skill_delivery_binding", "economy_skill_managed_credential", "economy_skill_credential_operation");
+    static final List<String> TABLES = List.of("agent_skill_actor_root", "agent_skill_agent_version", "agent_skill_result_receipt", "agent_skill_delivery_binding", "agent_skill_managed_credential", "agent_skill_credential_operation");
     static final List<String> TRIGGER_ORDER = List.of("trg_skill_app_result_no_update", "trg_skill_app_result_no_delete", "trg_skill_app_binding_no_update", "trg_skill_app_binding_no_delete", "trg_skill_app_credential_op_no_update", "trg_skill_app_credential_op_no_delete");
 
     private static final String BINARY_COLLATION = "utf8mb4_0900_bin";
@@ -238,7 +238,7 @@ public final class SkillApplicationSchemaInitializer implements InitializingBean
                 FROM information_schema.triggers
                 WHERE trigger_schema=DATABASE()
                   AND (event_object_table IN (
-                        'economy_skill_actor_root','economy_skill_agent_version','economy_skill_result_receipt','economy_skill_delivery_binding','economy_skill_managed_credential','economy_skill_credential_operation')
+                        'agent_skill_actor_root','agent_skill_agent_version','agent_skill_result_receipt','agent_skill_delivery_binding','agent_skill_managed_credential','agent_skill_credential_operation')
                        OR trigger_name LIKE 'trg_skill_app_%')
                 ORDER BY trigger_name
                 """, (rs, rowNum) -> new TriggerSpec(
@@ -256,9 +256,9 @@ public final class SkillApplicationSchemaInitializer implements InitializingBean
 
     static Map<String, TriggerSpec> expectedTriggers() {
         Map<String, TriggerSpec> result = new TreeMap<>();
-        immutablePair(result, "result", "economy_skill_result_receipt", "skill result receipts");
-        immutablePair(result, "binding", "economy_skill_delivery_binding", "skill delivery bindings");
-        immutablePair(result, "credential_op", "economy_skill_credential_operation", "credential operations");
+        immutablePair(result, "result", "agent_skill_result_receipt", "skill result receipts");
+        immutablePair(result, "binding", "agent_skill_delivery_binding", "skill delivery bindings");
+        immutablePair(result, "credential_op", "agent_skill_credential_operation", "credential operations");
         return Map.copyOf(result);
     }
 
@@ -322,7 +322,7 @@ public final class SkillApplicationSchemaInitializer implements InitializingBean
         }
         // Latest authority query index is installed explicitly with the skill protocol migration.
         // Do not accept a partial/unknown index catalog or silently repair it at startup.
-        var receipt=result.get("economy_skill_result_receipt");
+        var receipt=result.get("agent_skill_result_receipt");
         var indexes=new LinkedHashMap<String,IndexSpec>(receipt.indexes());
         String name="idx_skill_receipt_installation_scope";
         indexes.put(name,new IndexSpec(name,false,List.of("tenant_id","client_id","installation_id","outcome")));
@@ -472,7 +472,7 @@ public final class SkillApplicationSchemaInitializer implements InitializingBean
                 FROM information_schema.tables
                 WHERE table_schema=DATABASE()
                   AND table_name IN (
-                    'economy_skill_actor_root','economy_skill_agent_version','economy_skill_result_receipt','economy_skill_delivery_binding','economy_skill_managed_credential','economy_skill_credential_operation')
+                    'agent_skill_actor_root','agent_skill_agent_version','agent_skill_result_receipt','agent_skill_delivery_binding','agent_skill_managed_credential','agent_skill_credential_operation')
                 ORDER BY table_name
                 """, String.class);
     }

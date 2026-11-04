@@ -12,14 +12,14 @@ public interface SkillCatalogMapper {
 
 
     /** Explicit publication policy; existing rows are immutable, never overwritten. */
-    @Insert("INSERT INTO economy_skill_upgrade_policy(tenant_id,client_id,source_product_version_id,target_product_version_id,policy) VALUES(#{tenantId},#{clientId},#{source},#{target},'COVERED')")
+    @Insert("INSERT INTO agent_skill_upgrade_policy(tenant_id,client_id,source_product_version_id,target_product_version_id,policy) VALUES(#{tenantId},#{clientId},#{source},#{target},'COVERED')")
     int insertCoveredUpgradePolicy(@Param("tenantId") String tenant,@Param("clientId") String client,@Param("source") String source,@Param("target") String target);
 
-    @Select("SELECT policy FROM economy_skill_upgrade_policy WHERE " + EXACT_SCOPE + " AND source_product_version_id=#{source} AND target_product_version_id=#{target} FOR UPDATE")
+    @Select("SELECT policy FROM agent_skill_upgrade_policy WHERE " + EXACT_SCOPE + " AND source_product_version_id=#{source} AND target_product_version_id=#{target} FOR UPDATE")
     String selectUpgradePolicy(@Param("tenantId") String tenant,@Param("clientId") String client,@Param("source") String source,@Param("target") String target);
 
     @Insert("""
-            INSERT INTO economy_skill_product(
+            INSERT INTO agent_skill_product(
                 product_id,seller_type,seller_id,creator_agent_id,name,description,status,
                 current_product_version_id,version,tenant_id,client_id,create_time,update_time)
             VALUES(
@@ -31,7 +31,7 @@ public interface SkillCatalogMapper {
     @Select("""
             SELECT id,product_id,seller_type,seller_id,creator_agent_id,name,description,status,
                    current_product_version_id,version,tenant_id,client_id,create_time,update_time
-            FROM economy_skill_product
+            FROM agent_skill_product
             WHERE """ + EXACT_SCOPE + """
               AND product_id=#{productId}
               AND OCTET_LENGTH(product_id)=OCTET_LENGTH(#{productId})
@@ -45,7 +45,7 @@ public interface SkillCatalogMapper {
     @Select("""
             SELECT id,product_id,seller_type,seller_id,creator_agent_id,name,description,status,
                    current_product_version_id,version,tenant_id,client_id,create_time,update_time
-            FROM economy_skill_product
+            FROM agent_skill_product
             WHERE """ + EXACT_SCOPE + """
               AND status='PUBLISHED'
             ORDER BY name ASC,product_id ASC
@@ -58,7 +58,7 @@ public interface SkillCatalogMapper {
             @Param("limit") int limit);
 
     @Update("""
-            UPDATE economy_skill_product
+            UPDATE agent_skill_product
             SET status='PUBLISHED',current_product_version_id=#{productVersionId},
                 version=version+1,update_time=#{now}
             WHERE """ + EXACT_SCOPE + """
@@ -66,7 +66,7 @@ public interface SkillCatalogMapper {
               AND status IN ('DRAFT','PUBLISHED')
               AND OCTET_LENGTH(product_id)=OCTET_LENGTH(#{productId})
               AND EXISTS (
-                  SELECT 1 FROM economy_skill_product_version v
+                  SELECT 1 FROM agent_skill_product_version v
                   WHERE v.tenant_id=#{tenantId} AND v.client_id=#{clientId}
                     AND v.product_id=#{productId} AND v.product_version_id=#{productVersionId}
                     AND v.review_status='APPROVED'
@@ -85,7 +85,7 @@ public interface SkillCatalogMapper {
             @Param("now") long now);
 
     @Update("""
-            UPDATE economy_skill_product
+            UPDATE agent_skill_product
             SET name=#{name},description=#{description},version=version+1,update_time=#{now}
             WHERE """ + EXACT_SCOPE + """
               AND product_id=#{productId} AND version=#{expectedVersion}
@@ -97,7 +97,7 @@ public interface SkillCatalogMapper {
             @Param("expectedVersion") long expectedVersion,@Param("now") long now);
 
     @Update("""
-            UPDATE economy_skill_product SET status='RETIRED',version=version+1,update_time=#{now}
+            UPDATE agent_skill_product SET status='RETIRED',version=version+1,update_time=#{now}
             WHERE """ + EXACT_SCOPE + """
               AND product_id=#{productId} AND OCTET_LENGTH(product_id)=OCTET_LENGTH(#{productId})
               AND version=#{expectedVersion} AND status='PUBLISHED'
@@ -106,8 +106,8 @@ public interface SkillCatalogMapper {
             @Param("productId") String productId,@Param("expectedVersion") long expectedVersion,@Param("now") long now);
 
     @Select("""
-            SELECT p.* FROM economy_skill_product p
-            JOIN economy_skill_product_version v ON v.tenant_id=p.tenant_id AND v.client_id=p.client_id AND v.product_id=p.product_id
+            SELECT p.* FROM agent_skill_product p
+            JOIN agent_skill_product_version v ON v.tenant_id=p.tenant_id AND v.client_id=p.client_id AND v.product_id=p.product_id
             WHERE p.tenant_id=#{tenantId} AND p.client_id=#{clientId} AND v.product_version_id=#{productVersionId}
               AND OCTET_LENGTH(p.tenant_id)=OCTET_LENGTH(#{tenantId}) AND OCTET_LENGTH(p.client_id)=OCTET_LENGTH(#{clientId})
               AND OCTET_LENGTH(v.product_version_id)=OCTET_LENGTH(#{productVersionId})
@@ -116,7 +116,7 @@ public interface SkillCatalogMapper {
             @Param("productVersionId") String productVersionId);
 
     @Insert("""
-            INSERT INTO economy_skill_product_version(
+            INSERT INTO agent_skill_product_version(
                 product_version_id,product_id,version_sequence,skill_key,skill_version,price_micro,
                 package_sha256,package_size,approved_permissions_manifest,approved_permissions_sha256,
                 deployment_restriction,review_status,tenant_id,client_id,create_time)
@@ -131,7 +131,7 @@ public interface SkillCatalogMapper {
             SELECT id,product_version_id,product_id,version_sequence,skill_key,skill_version,price_micro,
                    package_sha256,package_size,approved_permissions_manifest,approved_permissions_sha256,
                    deployment_restriction,review_status,tenant_id,client_id,create_time
-            FROM economy_skill_product_version
+            FROM agent_skill_product_version
             WHERE """ + EXACT_SCOPE + """
               AND product_version_id=#{productVersionId} AND review_status='APPROVED'
               AND OCTET_LENGTH(product_version_id)=OCTET_LENGTH(#{productVersionId})
@@ -146,7 +146,7 @@ public interface SkillCatalogMapper {
             SELECT id,product_version_id,product_id,version_sequence,skill_key,skill_version,price_micro,
                    package_sha256,package_size,approved_permissions_manifest,approved_permissions_sha256,
                    deployment_restriction,review_status,tenant_id,client_id,create_time
-            FROM economy_skill_product_version
+            FROM agent_skill_product_version
             WHERE """ + EXACT_SCOPE + """
               AND product_version_id=#{productVersionId} AND review_status='APPROVED'
               AND OCTET_LENGTH(product_version_id)=OCTET_LENGTH(#{productVersionId})
@@ -162,8 +162,8 @@ public interface SkillCatalogMapper {
                    v.price_micro,v.package_sha256,v.package_size,v.approved_permissions_manifest,
                    v.approved_permissions_sha256,v.deployment_restriction,v.review_status,
                    v.tenant_id,v.client_id,v.create_time
-            FROM economy_skill_product_version v
-            JOIN economy_skill_product p
+            FROM agent_skill_product_version v
+            JOIN agent_skill_product p
               ON p.tenant_id=v.tenant_id AND p.client_id=v.client_id AND p.product_id=v.product_id
              AND OCTET_LENGTH(p.tenant_id)=OCTET_LENGTH(v.tenant_id)
              AND OCTET_LENGTH(p.client_id)=OCTET_LENGTH(v.client_id)
@@ -184,7 +184,7 @@ public interface SkillCatalogMapper {
             @Param("productVersionId") String productVersionId);
 
     @Insert("""
-            INSERT INTO economy_skill_installation(
+            INSERT INTO agent_skill_installation(
                 installation_id,order_id,product_version_id,target_agent_id,schema_version,message_type,
                 message_id,request_id,command_type,command_id,attempt,fencing_token,delivery_epoch,
                 skill_key,skill_version,package_size,package_sha256,download_path,status,failure_code,
@@ -202,7 +202,7 @@ public interface SkillCatalogMapper {
                    message_id,request_id,command_type,command_id,attempt,fencing_token,delivery_epoch,
                    skill_key,skill_version,package_size,package_sha256,download_path,status,failure_code,
                    version,tenant_id,client_id,create_time,started_at,installed_at,failed_at,update_time
-            FROM economy_skill_installation
+            FROM agent_skill_installation
             WHERE """ + EXACT_SCOPE + """
               AND target_agent_id=#{targetAgentId} AND installation_id=#{installationId}
               AND OCTET_LENGTH(target_agent_id)=OCTET_LENGTH(#{targetAgentId})
@@ -216,7 +216,7 @@ public interface SkillCatalogMapper {
             @Param("installationId") String installationId);
 
     @Update("""
-            UPDATE economy_skill_installation
+            UPDATE agent_skill_installation
             SET status='INSTALLING',started_at=#{now},version=version+1,update_time=#{now}
             WHERE """ + EXACT_SCOPE + """
               AND installation_id=#{installationId} AND target_agent_id=#{targetAgentId}
@@ -239,7 +239,7 @@ public interface SkillCatalogMapper {
             @Param("now") long now);
 
     @Update("""
-            UPDATE economy_skill_installation
+            UPDATE agent_skill_installation
             SET status='SUCCEEDED',installed_at=#{installedAt},version=version+1,update_time=#{installedAt}
             WHERE """ + EXACT_SCOPE + """
               AND installation_id=#{installationId} AND target_agent_id=#{targetAgentId}
@@ -264,7 +264,7 @@ public interface SkillCatalogMapper {
             @Param("installedAt") long installedAt);
 
     @Update("""
-            UPDATE economy_skill_installation
+            UPDATE agent_skill_installation
             SET status='FAILED',failure_code=#{failureCode},failed_at=#{failedAt},
                 version=version+1,update_time=#{failedAt}
             WHERE """ + EXACT_SCOPE + """
@@ -290,7 +290,7 @@ public interface SkillCatalogMapper {
             @Param("failedAt") long failedAt);
 
     @Insert("""
-            INSERT INTO economy_skill_entitlement(
+            INSERT INTO agent_skill_entitlement(
                 entitlement_id,order_id,installation_id,product_version_id,target_agent_id,
                 skill_key,skill_version,permission_grant_version,approved_permissions_manifest,
                 approved_permissions_sha256,status,version,tenant_id,client_id,
@@ -308,7 +308,7 @@ public interface SkillCatalogMapper {
                    skill_key,skill_version,permission_grant_version,approved_permissions_manifest,
                    approved_permissions_sha256,status,version,tenant_id,client_id,
                    create_time,activated_at,failed_at,update_time
-            FROM economy_skill_entitlement
+            FROM agent_skill_entitlement
             WHERE """ + EXACT_SCOPE + """
               AND target_agent_id=#{targetAgentId} AND skill_key=#{skillKey} AND skill_version=#{skillVersion}
               AND OCTET_LENGTH(target_agent_id)=OCTET_LENGTH(#{targetAgentId})
@@ -328,7 +328,7 @@ public interface SkillCatalogMapper {
                    skill_key,skill_version,permission_grant_version,approved_permissions_manifest,
                    approved_permissions_sha256,status,version,tenant_id,client_id,
                    create_time,activated_at,failed_at,update_time
-            FROM economy_skill_entitlement
+            FROM agent_skill_entitlement
             WHERE """ + EXACT_SCOPE + """
               AND target_agent_id=#{targetAgentId}
               AND OCTET_LENGTH(target_agent_id)=OCTET_LENGTH(#{targetAgentId})
@@ -340,7 +340,7 @@ public interface SkillCatalogMapper {
             @Param("targetAgentId") String targetAgentId);
 
     @Update("""
-            UPDATE economy_skill_entitlement
+            UPDATE agent_skill_entitlement
             SET status='ACTIVE',activated_at=#{activatedAt},version=version+1,update_time=#{activatedAt}
             WHERE """ + EXACT_SCOPE + """
               AND entitlement_id=#{entitlementId} AND installation_id=#{installationId}
@@ -360,7 +360,7 @@ public interface SkillCatalogMapper {
             @Param("activatedAt") long activatedAt);
 
     @Update("""
-            UPDATE economy_skill_entitlement
+            UPDATE agent_skill_entitlement
             SET status='FAILED',failed_at=#{failedAt},version=version+1,update_time=#{failedAt}
             WHERE """ + EXACT_SCOPE + """
               AND entitlement_id=#{entitlementId} AND installation_id=#{installationId}
@@ -379,10 +379,10 @@ public interface SkillCatalogMapper {
             @Param("expectedVersion") long expectedVersion,
             @Param("failedAt") long failedAt);
     @Select("""
-            SELECT i.installation_id AS "installation_id",p.name AS "name" FROM economy_skill_installation i
-            JOIN economy_skill_product_version v ON v.tenant_id=i.tenant_id AND v.client_id=i.client_id
+            SELECT i.installation_id AS "installation_id",p.name AS "name" FROM agent_skill_installation i
+            JOIN agent_skill_product_version v ON v.tenant_id=i.tenant_id AND v.client_id=i.client_id
               AND v.product_version_id=i.product_version_id
-            JOIN economy_skill_product p ON p.tenant_id=v.tenant_id AND p.client_id=v.client_id AND p.product_id=v.product_id
+            JOIN agent_skill_product p ON p.tenant_id=v.tenant_id AND p.client_id=v.client_id AND p.product_id=v.product_id
             WHERE i.tenant_id=#{tenantId} AND i.client_id=#{clientId} AND i.target_agent_id=#{agentId}
               AND OCTET_LENGTH(i.tenant_id)=OCTET_LENGTH(#{tenantId})
               AND OCTET_LENGTH(i.client_id)=OCTET_LENGTH(#{clientId})

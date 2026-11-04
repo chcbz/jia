@@ -48,7 +48,7 @@ class SkillInstallTransportMySqlTest {
         String management = new ClassPathResource("db/economy-skill-management-sm-c1.sql")
                 .getContentAsString(java.nio.charset.StandardCharsets.UTF_8).replaceAll("(?m)^--.*$", "");
         for (String statement : management.split(";")) {
-            if (List.of("economy_skill_change_command", "economy_skill_change", "economy_skill_managed_state")
+            if (List.of("agent_skill_change_command", "agent_skill_change", "agent_skill_managed_state")
                     .stream().anyMatch(table -> statement.strip().startsWith("CREATE TABLE " + table + " (")))
                 jdbc.execute(statement);
         }
@@ -87,9 +87,9 @@ class SkillInstallTransportMySqlTest {
     void pending() {
         tx.execute(s->{
             writer.writeManagement(change,wire,command,data);
-            jdbc.update("INSERT INTO economy_skill_managed_state(tenant_id,client_id,agent_id,skill_key,skill_revision) VALUES('0','Client-A','agt_fixture','repo-test',1)");
-            jdbc.update("INSERT INTO economy_skill_change(tenant_id,client_id,change_id,agent_id,skill_key,actor_id,owner_jiacn,version,dto_json,permissions_json,runtime_installation_id,runtime_host_id,created_at,updated_at) VALUES('0','Client-A','change-fixture','agt_fixture','repo-test','actor','Owner-A',1,'{}','[]','runtime','host',1,1)");
-            jdbc.update("INSERT INTO economy_skill_change_command(tenant_id,client_id,command_id,change_id,request_id,message_id,data_json,state) VALUES('0','Client-A',?,'change-fixture','request-fixture','message-fixture',?,'PENDING')", command.getCommandId(), SkillManagementCodec.json(data));
+            jdbc.update("INSERT INTO agent_skill_managed_state(tenant_id,client_id,agent_id,skill_key,skill_revision) VALUES('0','Client-A','agt_fixture','repo-test',1)");
+            jdbc.update("INSERT INTO agent_skill_change(tenant_id,client_id,change_id,agent_id,skill_key,actor_id,owner_jiacn,version,dto_json,permissions_json,runtime_installation_id,runtime_host_id,created_at,updated_at) VALUES('0','Client-A','change-fixture','agt_fixture','repo-test','actor','Owner-A',1,'{}','[]','runtime','host',1,1)");
+            jdbc.update("INSERT INTO agent_skill_change_command(tenant_id,client_id,command_id,change_id,request_id,message_id,data_json,state) VALUES('0','Client-A',?,'change-fixture','request-fixture','message-fixture',?,'PENDING')", command.getCommandId(), SkillManagementCodec.json(data));
             return null;
         });
     }

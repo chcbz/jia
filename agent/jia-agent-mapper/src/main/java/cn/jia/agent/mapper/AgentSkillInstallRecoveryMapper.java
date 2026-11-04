@@ -6,12 +6,12 @@ import java.util.List;
 public interface AgentSkillInstallRecoveryMapper {
     @Select("""
         <script>
-        SELECT d.* FROM agent_command_delivery d JOIN economy_skill_change_command c
+        SELECT d.* FROM agent_command_delivery d JOIN agent_skill_change_command c
           ON CAST(c.tenant_id AS BINARY)=CAST(d.tenant_id AS BINARY)
           AND CAST(c.client_id AS BINARY)=CAST(d.client_id AS BINARY)
           AND CAST(c.command_id AS BINARY)=CAST(d.command_id AS BINARY)
-        JOIN economy_skill_change ch ON ch.tenant_id=c.tenant_id AND ch.client_id=c.client_id AND ch.change_id=c.change_id
-        JOIN economy_skill_managed_state s ON s.tenant_id=ch.tenant_id AND s.client_id=ch.client_id AND s.agent_id=ch.agent_id AND s.skill_key=ch.skill_key
+        JOIN agent_skill_change ch ON ch.tenant_id=c.tenant_id AND ch.client_id=c.client_id AND ch.change_id=c.change_id
+        JOIN agent_skill_managed_state s ON s.tenant_id=ch.tenant_id AND s.client_id=ch.client_id AND s.agent_id=ch.agent_id AND s.skill_key=ch.skill_key
         WHERE d.tenant_id=#{tenantId}
           AND CAST(d.tenant_id AS BINARY)=CAST(#{tenantId} AS BINARY)
           <if test="clientId != null">

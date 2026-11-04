@@ -214,7 +214,7 @@ class SkillMarketplaceMapperH2Test {
 
     private void createTables() {
         jdbc.execute("""
-                CREATE TABLE economy_skill_product(
+                CREATE TABLE agent_skill_product(
                     id BIGINT AUTO_INCREMENT PRIMARY KEY,product_id VARCHAR(100),seller_type VARCHAR(16),
                     seller_id VARCHAR(100),creator_agent_id VARCHAR(100),name VARCHAR(200),description VARCHAR(1000),
                     status VARCHAR(16),current_product_version_id VARCHAR(100),version BIGINT,
@@ -222,7 +222,7 @@ class SkillMarketplaceMapperH2Test {
                     UNIQUE(tenant_id,client_id,product_id))
                 """);
         jdbc.execute("""
-                CREATE TABLE economy_skill_product_version(
+                CREATE TABLE agent_skill_product_version(
                     id BIGINT AUTO_INCREMENT PRIMARY KEY,product_version_id VARCHAR(100),product_id VARCHAR(100),
                     version_sequence BIGINT,skill_key VARCHAR(100),skill_version VARCHAR(64),price_micro BIGINT,
                     package_sha256 BINARY(32),package_size BIGINT,approved_permissions_manifest TEXT,
@@ -262,7 +262,7 @@ class SkillMarketplaceMapperH2Test {
                     UNIQUE(tenant_id,client_id,actor_type,actor_id,idempotency_key))
                 """);
         jdbc.execute("""
-                CREATE TABLE economy_skill_installation(
+                CREATE TABLE agent_skill_installation(
                     id BIGINT AUTO_INCREMENT PRIMARY KEY,installation_id VARCHAR(100),order_id VARCHAR(100),
                     product_version_id VARCHAR(100),target_agent_id VARCHAR(100),schema_version INT,message_type VARCHAR(32),
                     message_id VARCHAR(100),request_id VARCHAR(100),command_type VARCHAR(32),command_id VARCHAR(100),
@@ -273,7 +273,7 @@ class SkillMarketplaceMapperH2Test {
                     UNIQUE(tenant_id,client_id,installation_id),UNIQUE(tenant_id,client_id,order_id))
                 """);
         jdbc.execute("""
-                CREATE TABLE economy_skill_entitlement(
+                CREATE TABLE agent_skill_entitlement(
                     id BIGINT AUTO_INCREMENT PRIMARY KEY,entitlement_id VARCHAR(100),order_id VARCHAR(100),
                     installation_id VARCHAR(100),product_version_id VARCHAR(100),target_agent_id VARCHAR(100),
                     skill_key VARCHAR(100),skill_version VARCHAR(64),permission_grant_version BIGINT,
@@ -300,8 +300,8 @@ class SkillMarketplaceMapperH2Test {
         var p=mapper.selectProductByVersion(TENANT,CLIENT,"spv-1");
         assertEquals("RETIRED",p.getStatus());assertEquals(product().getName(),p.getName());
         assertNull(mapper.selectProductByVersion("tenant-a",CLIENT,"spv-1"));
-        assertEquals(1,jdbc.queryForObject("SELECT count(*) FROM economy_skill_installation",Integer.class));
-        assertEquals(1,jdbc.queryForObject("SELECT count(*) FROM economy_skill_entitlement",Integer.class));
+        assertEquals(1,jdbc.queryForObject("SELECT count(*) FROM agent_skill_installation",Integer.class));
+        assertEquals(1,jdbc.queryForObject("SELECT count(*) FROM agent_skill_entitlement",Integer.class));
     }
 
 }

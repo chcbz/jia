@@ -349,13 +349,13 @@ public class SkillMarketplaceRealTransactionTest {
         var i=installation();sent(i);assertArrayEquals(packageBytes,results.packageBytes(proof(),i.getInstallationId()));
         // Exact approved lookup is scope-isolated and does not depend on the product's current pointer.
         assertNull(market.selectApprovedProductVersion(ACTOR.tenantId(),"other-client","spv_dynamic_pdf_1"));
-        jdbc.update("UPDATE economy_skill_product SET current_product_version_id='a-later-version',version=3 WHERE product_id='sp_dynamic_pdf'");
+        jdbc.update("UPDATE agent_skill_product SET current_product_version_id='a-later-version',version=3 WHERE product_id='sp_dynamic_pdf'");
         assertArrayEquals(packageBytes,results.packageBytes(proof(),i.getInstallationId()));
         var success=result(i,"SUCCEEDED",null);
         assertEquals("SKILL_MANIFEST_BINDING_MISMATCH",assertThrows(SkillMarketplaceException.class,()->results.accept(proof(),success)).code());
-        assertEquals(0,count("economy_skill_result_receipt"));assertEquals("INSTALLING",installation().getStatus());
+        assertEquals(0,count("agent_skill_result_receipt"));assertEquals("INSTALLING",installation().getStatus());
         success.put("manifestSha256",HexFormat.of().formatHex(SkillPackageStore.sha256(manifest)));
-        results.accept(proof(),success);assertEquals(1,count("economy_skill_result_receipt"));
+        results.accept(proof(),success);assertEquals(1,count("agent_skill_result_receipt"));
         assertEquals(1,app.successfulReceipts(ACTOR.tenantId(),ACTOR.clientId(),i.getInstallationId()));
         assertEquals(0,app.successfulReceipts(ACTOR.tenantId(),ACTOR.clientId(),i.getCommandId()));
         assertEquals(0,app.successfulReceipts(ACTOR.tenantId(),"client-a",i.getInstallationId()));
@@ -379,7 +379,7 @@ public class SkillMarketplaceRealTransactionTest {
     @Test void paidPurchaseInstallsCapturesAndReplaysOriginalReceipt() {
         var body=purchaseBody("spv_repo_test_1_0_0");String idem=uuid();var receipt=service.purchase(ACTOR,idem,body,false);
         assertEquals("FUNDS_HELD",receipt.get("status")); assertEquals(70000000L,wallet());
-        assertEquals(1,count("agent_command_delivery"));assertEquals(1,count("agent_outbox_event"));assertEquals(1,count("economy_skill_entitlement"));
+        assertEquals(1,count("agent_command_delivery"));assertEquals(1,count("agent_outbox_event"));assertEquals(1,count("agent_skill_entitlement"));
         assertEquals("INSTALLING",service.order(ACTOR,(String)receipt.get("orderId")).get("status"));
         var i=installation(); sent(i);assertEquals(i.getPackageSize().longValue(),results.packageBytes(proof(),i.getInstallationId()).length);
         var success=result(i,"SUCCEEDED",null);results.accept(proof(),success);
@@ -446,7 +446,7 @@ public class SkillMarketplaceRealTransactionTest {
         assertEquals(i.getMessageId(),jdbc.queryForObject("SELECT active_message_id FROM agent_command_delivery WHERE command_id=?",String.class,i.getCommandId()));
         assertEquals(receipt,service.purchase(ACTOR,idem,body,false));
         assertArrayEquals(wire,jdbc.queryForObject("SELECT wire_payload FROM agent_outbox_event WHERE command_id=?",byte[].class,i.getCommandId()));
-        assertEquals(1,count("economy_skill_installation"));assertEquals(1,count("agent_outbox_event"));
+        assertEquals(1,count("agent_skill_installation"));assertEquals(1,count("agent_outbox_event"));
         assertEquals(1,count("agent_command_delivery"));
         sent(i);var success=result(i,"SUCCEEDED",null);
         assertNotEquals(i.getMessageId(),success.get("messageId"));
@@ -454,12 +454,12 @@ public class SkillMarketplaceRealTransactionTest {
         assertThrows(SkillMarketplaceException.class,()->results.accept(proof(),wrongInstallation));
         var wrongAttempt=new LinkedHashMap<>(success);wrongAttempt.put("attempt",i.getAttempt()+1);
         assertThrows(SkillMarketplaceException.class,()->results.accept(proof(),wrongAttempt));
-        assertEquals(0,count("economy_skill_result_receipt"));assertEquals("INSTALLING",installation().getStatus());
+        assertEquals(0,count("agent_skill_result_receipt"));assertEquals("INSTALLING",installation().getStatus());
         var accepted=results.accept(proof(),success);
         assertEquals(success.get("messageId"),accepted.get("correlationId"));
         assertEquals(i.getInstallationId(),accepted.get("installationId"));
         assertEquals(accepted,results.accept(proof(),success));
-        assertEquals(1,count("economy_skill_result_receipt"));assertEquals("SUCCEEDED",installation().getStatus());
+        assertEquals(1,count("agent_skill_result_receipt"));assertEquals("SUCCEEDED",installation().getStatus());
         assertEquals(i.getInstallationId(),installation().getInstallationId());
         assertEquals(i.getMessageId(),installation().getRequestId());
         assertArrayEquals(wire,jdbc.queryForObject("SELECT wire_payload FROM agent_outbox_event WHERE command_id=?",byte[].class,i.getCommandId()));
@@ -532,7 +532,7 @@ public class SkillMarketplaceRealTransactionTest {
         when(owner.requireOwner(ACTOR)).thenThrow(new cn.jia.agent.hosting.HostingRentApplicationException(403,"HOSTING_RENT_OWNER_UNPROVEN"));
         var denied=assertThrows(cn.jia.agent.hosting.HostingRentApplicationException.class,()->service.purchase(ACTOR,uuid(),body,false));
         assertEquals(403,denied.status());assertEquals("HOSTING_RENT_OWNER_UNPROVEN",denied.code());
-        assertNoPurchaseSideEffects();assertEquals(version,jdbc.queryForObject("SELECT version FROM economy_skill_agent_version",Long.class));
+        assertNoPurchaseSideEffects();assertEquals(version,jdbc.queryForObject("SELECT version FROM agent_skill_agent_version",Long.class));
     }
     @Test void exactRuntimeProofNeverBypassesRealHostingRentAdmissionOrConsumesVersion() {
         var body=purchaseBody("spv_repo_test_1_0_0");long version=versions.requireOwned(ACTOR,AGENT,null,false);
@@ -552,7 +552,7 @@ public class SkillMarketplaceRealTransactionTest {
     private void assertNoPurchaseSideEffects() {
         assertEquals(100000000L,wallet());
         for(String table:List.of("economy_transaction","economy_escrow","economy_skill_order","economy_skill_order_receipt",
-                "economy_skill_installation","economy_skill_entitlement","economy_skill_delivery_binding",
+                "agent_skill_installation","agent_skill_entitlement","agent_skill_delivery_binding",
                 "agent_command_delivery","agent_outbox_event")) assertEquals(0,count(table),table);
     }
     @Test void concurrentSameKeyHasOneReserveOneDeliveryAndImmutableReceipt() throws Exception {
@@ -608,7 +608,7 @@ public class SkillMarketplaceRealTransactionTest {
         var response=credentials.rotate(ACTOR,AGENT,idem,version);
         assertEquals("CREATED",response.get("status"));assertEquals(Long.toString(version+1),response.get("version"));
         assertTrue(((String)response.get("apiKey")).startsWith("cdx_"));assertEquals(0,count("economy_transaction"));
-        assertEquals(0,key.getStatus());assertEquals(2,count("economy_skill_managed_credential"));
+        assertEquals(0,key.getStatus());assertEquals(2,count("agent_skill_managed_credential"));
         assertEquals("SKILL_CREDENTIAL_SECRET_NOT_REPLAYABLE",assertThrows(SkillMarketplaceException.class,()->credentials.rotate(ACTOR,AGENT,idem,version)).code());
         assertEquals("IDEMPOTENCY_CONFLICT",assertThrows(SkillMarketplaceException.class,()->credentials.rotate(ACTOR,AGENT,idem,version+1)).code());
         when(sessions.isReady(eq(ACTOR.tenantId()),eq(ACTOR.clientId()),eq(AGENT),any())).thenReturn(false);
@@ -621,8 +621,8 @@ public class SkillMarketplaceRealTransactionTest {
     }
     @Test void sameApiKeyCannotBeBoundToTwoAgentsAndCredentialReceiptContainsNoSecret() {
         assertThrows(RuntimeException.class,()->credentialMapper.insert("sc_other","key-1","other-agent",8L,ACTOR.tenantId(),ACTOR.clientId(),2L));
-        assertEquals(1,count("economy_skill_managed_credential"));
-        var columns=jdbc.queryForList("SELECT column_name FROM information_schema.columns WHERE LOWER(table_name)='economy_skill_credential_operation'",String.class);
+        assertEquals(1,count("agent_skill_managed_credential"));
+        var columns=jdbc.queryForList("SELECT column_name FROM information_schema.columns WHERE LOWER(table_name)='agent_skill_credential_operation'",String.class);
         assertFalse(columns.stream().anyMatch(c->c.equalsIgnoreCase("api_key") || c.equalsIgnoreCase("secret")));
     }
     @Test void skillDispatchUsesDurableOrderNotTaskAclAndIoRunsAfterCommit() {
@@ -639,14 +639,14 @@ public class SkillMarketplaceRealTransactionTest {
         var body=purchaseBody("spv_repo_test_1_0_0");String idem=uuid();
         var receipt=service.purchase(ACTOR,idem,body,false);var i=installation();sent(i);
         // Isolated fixture mutation represents an existing, unmigrated legacy record.
-        jdbc.update("UPDATE economy_skill_delivery_binding SET canonical_agent_id=NULL,runtime_installation_id=NULL,runtime_host_id=NULL,api_key_id='historical-key',registration_hash=?",new byte[32]);
+        jdbc.update("UPDATE agent_skill_delivery_binding SET canonical_agent_id=NULL,runtime_installation_id=NULL,runtime_host_id=NULL,api_key_id='historical-key',registration_hash=?",new byte[32]);
         assertEquals("SKILL_RUNTIME_MAPPING_REQUIRED",assertThrows(SkillMarketplaceException.class,
                 ()->results.packageBytes(proof(),i.getInstallationId())).code());
         assertEquals("SKILL_RUNTIME_MAPPING_REQUIRED",assertThrows(SkillMarketplaceException.class,
                 ()->results.accept(proof(),result(i,"SUCCEEDED",null))).code());
         assertEquals(receipt,service.purchase(ACTOR,idem,body,false));
         assertEquals(1,count("economy_transaction"));assertEquals(1,count("agent_command_delivery"));
-        assertEquals(70000000L,wallet());assertEquals(0,count("economy_skill_result_receipt"));
+        assertEquals(70000000L,wallet());assertEquals(0,count("agent_skill_result_receipt"));
     }
     /** Retired wire is immutable history. It must neither send, settle money nor mint attempts.
      * Success/lease/retry/receipt semantics now live in the real SM-C1 MySQL suite. */
@@ -659,7 +659,7 @@ public class SkillMarketplaceRealTransactionTest {
         assertArrayEquals(wire,jdbc.queryForObject("SELECT wire_payload FROM agent_outbox_event",byte[].class));
         assertEquals(version,jdbc.queryForObject("SELECT version FROM agent_command_delivery",Long.class));
         assertEquals(before,wallet());assertEquals("INSTALLING",service.order(ACTOR,installation.getOrderId()).get("status"));
-        assertEquals(0,count("economy_skill_result_receipt"));assertEquals(1,count("agent_command_delivery"));assertEquals(1,count("agent_outbox_event"));
+        assertEquals(0,count("agent_skill_result_receipt"));assertEquals(1,count("agent_command_delivery"));assertEquals(1,count("agent_outbox_event"));
         verify(sessions,never()).dispatch(anyString(),anyString(),anyString(),any(),any());
     }
     private void assertRetiredAck(SkillInstallationEntity installation,String status,long now) {
@@ -687,7 +687,7 @@ public class SkillMarketplaceRealTransactionTest {
         return Map.of("quoteId",(String)quote.get("quoteId"),"productVersionId",product,"targetAgentId",AGENT,"expectedAgentVersion",version,
                 "expectedPriceMicro",((cn.jia.economy.common.Money)quote.get("price")).amountMinor(),"approvedPermissions","[]");
     }
-    private SkillInstallationEntity installation() { return app.installation(ACTOR.tenantId(),ACTOR.clientId(),jdbc.queryForObject("SELECT installation_id FROM economy_skill_installation",String.class)); }
+    private SkillInstallationEntity installation() { return app.installation(ACTOR.tenantId(),ACTOR.clientId(),jdbc.queryForObject("SELECT installation_id FROM agent_skill_installation",String.class)); }
     private void sent(SkillInstallationEntity i) { jdbc.update("UPDATE agent_command_delivery SET status='STARTED' WHERE command_id=?",i.getCommandId()); }
     private Map<String,Object> result(SkillInstallationEntity i,String status,String failure) {
         Map<String,Object> b=new LinkedHashMap<>();b.put("schemaVersion",1);b.put("messageType","work.result");b.put("messageId",uuid());b.put("resultType","SKILL_INSTALL_RESULT");

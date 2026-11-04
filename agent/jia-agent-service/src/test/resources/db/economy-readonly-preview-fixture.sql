@@ -69,7 +69,7 @@ CREATE TABLE economy_escrow (
     update_time BIGINT NOT NULL
 );
 
-CREATE TABLE economy_skill_product (
+CREATE TABLE agent_skill_product (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     product_id VARCHAR_IGNORECASE(100) NOT NULL,
     name VARCHAR(200) NOT NULL,
@@ -80,7 +80,7 @@ CREATE TABLE economy_skill_product (
     client_id VARCHAR_IGNORECASE(50) NOT NULL
 );
 
-CREATE TABLE economy_skill_product_version (
+CREATE TABLE agent_skill_product_version (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     product_version_id VARCHAR_IGNORECASE(100) NOT NULL,
     product_id VARCHAR_IGNORECASE(100) NOT NULL,
@@ -94,7 +94,7 @@ CREATE TABLE economy_skill_product_version (
     client_id VARCHAR_IGNORECASE(50) NOT NULL
 );
 
-CREATE TABLE economy_skill_installation (
+CREATE TABLE agent_skill_installation (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     installation_id VARCHAR_IGNORECASE(100) NOT NULL,
     order_id VARCHAR_IGNORECASE(100) NOT NULL,
@@ -126,7 +126,7 @@ CREATE TABLE economy_skill_installation (
     update_time BIGINT NOT NULL
 );
 
-CREATE TABLE economy_skill_entitlement (
+CREATE TABLE agent_skill_entitlement (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     entitlement_id VARCHAR(100) NOT NULL,
     order_id VARCHAR_IGNORECASE(100) NOT NULL,
