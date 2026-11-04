@@ -1,6 +1,6 @@
 package cn.jia.agent.service;
 
-/** Internal, owner-scoped, append-only requirement history. Not a task-plan projection. */
+/** Owner-scoped current requirements and immutable business snapshots. Not an audit log. */
 public interface AgentTaskRequirementSnapshotService {
     record Snapshot(String tenantId, String clientId, String ownerJiacn, String taskId,
             long revision, String title, String description, String sha256, String source) { }
@@ -21,11 +21,18 @@ public interface AgentTaskRequirementSnapshotService {
     Snapshot read(AgentTaskExecutionGrantService.Scope scope, String taskId, long revision);
 
     /**
-     * Locks the exact owner-scoped task root, then its latest immutable requirement row,
+     * Locks the exact owner-scoped task root and reads its single current requirement row,
      * and returns one read-only observation. It never captures or re-confirms history.
      */
     CurrentSnapshot readCurrent(AgentTaskExecutionGrantService.Scope scope, String taskId);
 
-    /** Must run under task-root lock before assignment/grant; rejects stale client revisions. */
+    /** Mutable current-state replacement; caller holds the task root and authorizes the edit. */
+    Snapshot updateCurrent(AgentTaskExecutionGrantService.Scope scope,String taskId,long expectedRevision,
+            String title,String description);
+
+    /** Freeze an exact business input within the assignment transaction, never on an ordinary read. */
+    Snapshot freezeCurrent(AgentTaskExecutionGrantService.Scope scope,String taskId,long revision);
+
+    /** Read current state under task-root lock; rejects stale client revisions, never freezes. */
     Snapshot requireCurrent(AgentTaskExecutionGrantService.Scope scope, String taskId, long revision);
 }

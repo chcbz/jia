@@ -430,6 +430,7 @@ class AgentServiceTaskEventRealTransactionTest {
                     created_at BIGINT NOT NULL,
                     UNIQUE (tenant_id,client_id,owner_jiacn,task_id,revision)
                 )""");
+        jdbc.execute("CREATE TABLE agent_task_current_requirement(tenant_id VARCHAR(50),client_id VARCHAR(50),owner_jiacn VARCHAR(50),task_id VARCHAR(100),revision BIGINT,title CLOB,description CLOB,content_sha256 VARCHAR(64),source VARCHAR(20),PRIMARY KEY(tenant_id,client_id,owner_jiacn,task_id))");
         jdbc.execute("""
                 CREATE TABLE task_plan_fixture (
                     id BIGINT NOT NULL,

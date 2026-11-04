@@ -62,4 +62,12 @@ class AgentTaskRequirementEditControllerTest {
         mvc.perform(put("/agent/tasks/1/requirements/edit").principal(owner()).header("Idempotency-Key","edit-key")
                 .contentType(MediaType.APPLICATION_JSON).content(body("\"0\""))).andExpect(status().isConflict());
     }
+    @Test void resultQueryUsesOriginalOperationAndNeverCallsSave() throws Exception {
+        when(service.readSaved(any(),eq("1"),eq("original-key"))).thenReturn(new AgentTaskRequirementEditService.View("1","0","1","事项标题","需求",List.of()));
+        mvc.perform(get("/agent/tasks/1/requirements/edit").principal(owner()).header("Idempotency-Key","original-key"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data.taskVersion").value("0"));
+        verify(service).readSaved(any(),eq("1"),eq("original-key"));
+        verify(service,never()).read(any(),anyString());verify(service,never()).save(any(),anyString(),anyString(),any());
+    }
+
 }
