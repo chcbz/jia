@@ -310,6 +310,10 @@ PersonalWorkspaceExecutionController的目标错误逐reason：BAD_REQUEST→400
 
 ### 11.2 完整投影字段及联合
 
+> 2026-11-04 局部合同修正（基线234d98f，当前v5澄清链路；待云端验证/发布）：v5允许 `requiredFacts=[]`，问题 `question` 仍须为非空合法文本，非空数组元素仍须合法且唯一。列表只表达需澄清的信息，不授予执行权限；pendingQuestionId、scope、CAS及任务绑定仍负责回复关联。撤销无业务依据的“至少一项fact”检查，避免schema允许的正常澄清在终态失败；不补造fact、不新增存储。下表v1–v4历史限制保持。回归入口为 `ChatActionOutcomeV5Test`、Web `juyiting-review-v5.test.js` 与bridge `juyiting-action-outcome.test.mjs` 的共享 `clarificationWithoutFacts` fixture；存储mock回归不代替真实数据库验收。
+
+
+
 下表对象除明确说明的技能参数外封闭；所有列出的字段都required，`?`表示允许null，不表示可以缺字段。ID/D0/D1/H/T沿用本文定义。字符串内容保留原文，禁止trim后当成摘要输入。
 
 | 对象 | 字段/约束 |

@@ -186,7 +186,6 @@ public final class ChatActionOutcomeContract {
                 var c = value.get("clarification"); exact(c, error, "question", "requiredFacts");
                 String question = string(c.get("question"), false, error);
                 List<String> required = strings(c.get("requiredFacts"), false, error);
-                if (required.isEmpty()) throw invalid(error);
                 clarification = new Clarification(question, required);
             }
             case "ACTION_REQUEST" -> {
