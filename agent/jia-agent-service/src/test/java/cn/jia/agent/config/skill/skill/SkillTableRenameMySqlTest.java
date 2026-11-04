@@ -19,6 +19,9 @@ class SkillTableRenameMySqlTest {
             fixture.start();
             JdbcTemplate jdbc = fixture.newDatabase("rename").jdbc();
             new SkillSchemaInitializer(jdbc).afterPropertiesSet();
+            for (String sql : cn.jia.core.sql.SchemaSqlText.splitSql(resource("db/economy-v0-skill-application.sql"))) jdbc.execute(sql);
+            // Existing protocol-4 migration is part of the deployed baseline, not this rename.
+            jdbc.execute("ALTER TABLE agent_skill_result_receipt ADD INDEX idx_skill_receipt_installation_scope (tenant_id,client_id,installation_id,outcome)");
             new SkillApplicationSchemaInitializer(jdbc).afterPropertiesSet();
             String management = resource("db/economy-skill-management-sm-c1.sql");
             for (String sql : cn.jia.core.sql.SchemaSqlText.splitSql(management)) jdbc.execute(sql);
