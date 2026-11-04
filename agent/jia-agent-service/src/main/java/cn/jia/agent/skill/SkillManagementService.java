@@ -5,8 +5,9 @@ import cn.jia.agent.entity.*;
 import cn.jia.agent.hosting.HostingRentHttp;
 import cn.jia.agent.security.AgentRuntimeAuthenticationService;
 import cn.jia.agent.service.*;
-import cn.jia.economy.entity.skill.*;
-import cn.jia.economy.mapper.*;
+import cn.jia.agent.entity.skill.*;
+import cn.jia.economy.service.skill.*;
+import cn.jia.agent.mapper.skill.*;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -24,10 +25,11 @@ import static cn.jia.agent.skill.SkillMarketplaceService.id;
  * order/entitlement -> posting -> immutable installation/command intent. */
 @Service
 public final class SkillManagementService {
-    private final EconomySkillManagementMapper db;
-    private final EconomySkillMarketplaceMapper market;
-    private final EconomySkillApplicationMapper app;
+    private final SkillManagementMapper db;
+    private final SkillCatalogMapper market;
+    private final SkillInstallationMapper app;
     private final SkillMarketplaceService marketplace;
+    private final SkillTradeService trade;
     private final SkillAgentVersions versions;
     private final AgentRuntimeDao runtimes;
     private final AgentIdentityService identities;
@@ -38,13 +40,13 @@ public final class SkillManagementService {
     private final ObjectProvider<AgentManagedSessionLookup> sessions;
     private final ObjectProvider<SkillCapabilityLookup> capabilities;
     private final TransactionTemplate tx;
-    public SkillManagementService(EconomySkillManagementMapper db,EconomySkillMarketplaceMapper market,
-            EconomySkillApplicationMapper app,SkillMarketplaceService marketplace,SkillAgentVersions versions,
+    public SkillManagementService(SkillManagementMapper db,SkillCatalogMapper market,
+            SkillInstallationMapper app,SkillMarketplaceService marketplace,SkillTradeService trade,SkillAgentVersions versions,
             AgentRuntimeDao runtimes,AgentRuntimeV1InstallationDao installations,AgentRuntimeAuthenticationService authentication,AgentIdentityService identities,
             ObjectProvider<SkillPackages> packages,ObjectProvider<SkillInstallCommandWriter> writer,
             ObjectProvider<AgentManagedSessionLookup> sessions,ObjectProvider<SkillCapabilityLookup> capabilities,
             PlatformTransactionManager manager) {
-        this.db=db;this.market=market;this.app=app;this.marketplace=marketplace;this.versions=versions;this.runtimes=runtimes;
+        this.db=db;this.market=market;this.app=app;this.marketplace=marketplace;this.trade=trade;this.versions=versions;this.runtimes=runtimes;
         this.installations=installations;this.authentication=authentication;this.identities=identities;this.packages=packages;this.writer=writer;
         this.sessions=sessions;this.capabilities=capabilities;this.tx=new TransactionTemplate(manager);
     }
@@ -91,7 +93,7 @@ public final class SkillManagementService {
                     ||!Objects.equals(ref(auth).get("productVersionId"),target.get("productVersionId")))continue;
             var i=app.installation(scope.tenantId(),scope.clientId(),auth.getInstallationId());
             if(!validInstallation(scope,auth,i,db.readEntitlement(scope.tenantId(),scope.clientId(),auth.getEntitlementId())))continue;
-            if(i.getOrderId()!=null) {var order=app.order(scope.tenantId(),scope.clientId(),i.getOrderId());if(order==null||!"ACTIVE".equals(order.getStatus()))continue;}
+            if(i.getOrderId()!=null) {var order=trade.order(scope.tenantId(),scope.clientId(),i.getOrderId());if(order==null||!"ACTIVE".equals(order.getStatus()))continue;}
             return true;
         }
         return false;
@@ -370,7 +372,7 @@ public final class SkillManagementService {
                     "expectedAgentVersion",data.get("expectedAgentVersion"),"expectedSkillRevision",data.get("expectedSkillRevision"),
                     "approvedPermissionsSha256",permissionsHash(data.get("approvedPermissions")),"price",money(price),"coverage",coverage,"entitlementId",entitlement,"expiresAt",now+300000L);
             validate("Quote",result);
-            one(market.insertPurchaseQuote(new SkillPurchaseQuoteEntity().setQuoteId(quote).setActorType("USER").setActorId(a.actorId())
+            one(trade.insertPurchaseQuote(new SkillPurchaseQuote().setQuoteId(quote).setActorType("USER").setActorId(a.actorId())
                     .setIdempotencyKey(UUID.randomUUID().toString().getBytes(java.nio.charset.StandardCharsets.UTF_8))
                     .setRequestHash(HexFormat.of().parseHex(hash("cyf.skill.request.v1",map("method","POST","path","/agent/skill-orders/quotes","data",data))))
                     .setProductVersionId(prepared.version().getProductVersionId()).setTargetAgentId(agent).setExpectedAgentVersion(Long.valueOf(text(data,"expectedAgentVersion")))
@@ -408,7 +410,7 @@ public final class SkillManagementService {
                 require(json(original).equals(json(compare))&&json(data.get("expectedPrice")).equals(json(quote.get("price")))
                         &&prepared.target().get("packageSha256").equals(quote.get("targetPackageSha256")),409,"SKILL_QUOTE_MISMATCH");
                 require(json(data.get("approvedPermissions")).equals(json(prepared.details().get("requiredPermissions"))),409,"SKILL_PERMISSIONS_MISMATCH");
-                require(app.orderForQuote(a.tenantId(),a.clientId(),q.getQuoteId())==null,409,"SKILL_QUOTE_MISMATCH");
+                require(trade.orderForQuote(a.tenantId(),a.clientId(),q.getQuoteId())==null,409,"SKILL_QUOTE_MISMATCH");
                 if(src!=null) {
                     String policy=db.upgradePolicy(a.tenantId(),a.clientId(),text(ref(src),"productVersionId"),text(data,"targetProductVersionId"));
                     require(policy!=null,409,"SKILL_UPGRADE_POLICY_UNSET");require(!"NOT_ALLOWED".equals(policy),409,"SKILL_UPGRADE_NOT_ALLOWED");
@@ -426,13 +428,13 @@ public final class SkillManagementService {
                 orderId=id("so_");long amount=Long.parseLong(text(object(quote.get("price")),"amountMinor"));
                 var reserve=marketplace.reserve(a,orderId,amount,now);escrowVersion=reserve==null?null:reserve.escrow().escrowVersion();
                 var v=prepared.version();
-                var order=new SkillOrderEntity().setOrderId(orderId).setQuoteId(q.getQuoteId()).setProductVersionId(v.getProductVersionId())
+                var order=new SkillOrder().setOrderId(orderId).setQuoteId(q.getQuoteId()).setProductVersionId(v.getProductVersionId())
                         .setTargetAgentId(agent).setBuyerType("USER").setBuyerId(a.actorId()).setSellerType("SYSTEM").setSellerId("SKILL_STORE")
                         .setPriceMicro(amount).setExpectedAgentVersion(Long.valueOf(text(data,"expectedAgentVersion"))).setPermissionGrantVersion(1L)
                         .setApprovedPermissionsManifest(v.getApprovedPermissionsManifest()).setApprovedPermissionsSha256(v.getApprovedPermissionsSha256())
                         .setEscrowId(reserve==null?null:reserve.escrow().escrowId()).setReserveTransactionId(reserve==null?null:reserve.transactionId())
                         .setStatus("FUNDS_HELD").setVersion(1L).setTenantId(a.tenantId()).setClientId(a.clientId()).setHeldAt(now).setUpdateTime(now);
-                one(market.insertOrder(order));one(market.markOrderInstalling(a.tenantId(),a.clientId(),orderId,1,now));
+                one(trade.insertOrder(order));one(trade.markOrderInstalling(a.tenantId(),a.clientId(),orderId,1,now));
             }
             var runtime=runtimes.findInScope(a.tenantId(),a.clientId(),agent);boolean connected=online(a,agent);
             boolean desired="INSTALL".equals(data.get("action"))||"ENABLE".equals(data.get("action"))
@@ -516,12 +518,12 @@ public final class SkillManagementService {
             var c=db.lockChange(a.tenantId(),a.clientId(),hint.getChangeId());value=dto(c);
             if(!"FAILED_RETRYABLE".equals(value.get("status")))continue;
             if(value.get("orderId")!=null) {
-                var order=market.selectOrderForUpdate(a.tenantId(),a.clientId(),text(value,"orderId"));
+                var order=trade.selectOrderForUpdate(a.tenantId(),a.clientId(),text(value,"orderId"));
                 require(order!=null&&Set.of("INSTALLING","REFUNDED").contains(order.getStatus()),409,"SKILL_STATE_CONFLICT");
                 if(!"REFUNDED".equals(order.getStatus())) {
                     var binding=app.deliveryBinding(a.tenantId(),a.clientId(),text(object(value.get("target")),"skillInstallationId"));
                     String transaction=marketplace.settle(a,order,binding,false,System.currentTimeMillis());
-                    one(market.markOrderRefunded(a.tenantId(),a.clientId(),order.getOrderId(),order.getVersion(),transaction,System.currentTimeMillis()));
+                    one(trade.markOrderRefunded(a.tenantId(),a.clientId(),order.getOrderId(),order.getVersion(),transaction,System.currentTimeMillis()));
                 }
                 value.put("fundingStatus",order.getPriceMicro()>0?"REFUNDED":"NONE");
             }
@@ -553,7 +555,7 @@ public final class SkillManagementService {
             require(state.getPendingChangeId()==null&&state.getSkillRevision().toString().equals(value.get("skillRevision"))
                     &&Objects.equals(state.getActiveInstallationId(),value.get("source")==null?null:object(value.get("source")).get("skillInstallationId")),409,"SKILL_STATE_CONFLICT");
             if(value.get("orderId")!=null) {
-                var order=market.selectOrderForUpdate(a.tenantId(),a.clientId(),text(value,"orderId"));
+                var order=trade.selectOrderForUpdate(a.tenantId(),a.clientId(),text(value,"orderId"));
                 require(order!=null&&"INSTALLING".equals(order.getStatus())&&order.getRefundTransactionId()==null,409,"SKILL_RETRY_NOT_ALLOWED");
             }
             boolean install=Set.of("INSTALL","UPGRADE").contains(text(value,"action"));
@@ -838,7 +840,7 @@ public final class SkillManagementService {
             var target=object(value.get("target"));String installId=text(target,"skillInstallationId");
             var approved=market.selectApprovedProductVersionForUpdate(a.tenantId(),a.clientId(),text(target,"productVersionId"));SkillPackages.revalidate(approved,prepared);
             if(install) {
-                var order=value.get("orderId")==null?null:market.selectOrderForUpdate(a.tenantId(),a.clientId(),text(value,"orderId"));
+                var order=value.get("orderId")==null?null:trade.selectOrderForUpdate(a.tenantId(),a.clientId(),text(value,"orderId"));
                 if(order!=null)require("INSTALLING".equals(order.getStatus()),409,"SKILL_RESULT_CONFLICT");
                 var ent=db.entitlement(a.tenantId(),a.clientId(),c.getEntitlementId());
                 require(ent!=null&&"PENDING_INSTALLATION".equals(ent.getStatus())&&installId.equals(ent.getInstallationId()),409,"SKILL_STATE_CONFLICT");
@@ -848,7 +850,7 @@ public final class SkillManagementService {
                 one(market.markInstallationSucceeded(a.tenantId(),a.clientId(),c.getAgentId(),installId,i.getCommandId(),i.getAttempt(),i.getFencingToken(),i.getDeliveryEpoch(),i.getVersion(),i.getPackageSha256(),observed));
                 one(market.markEntitlementActive(a.tenantId(),a.clientId(),c.getAgentId(),ent.getEntitlementId(),installId,ent.getVersion(),observed));
                 if(order!=null) {
-                    one(market.markOrderActive(a.tenantId(),a.clientId(),order.getOrderId(),order.getVersion(),transaction,System.currentTimeMillis()));
+                    one(trade.markOrderActive(a.tenantId(),a.clientId(),order.getOrderId(),order.getVersion(),transaction,System.currentTimeMillis()));
                     value.put("fundingStatus",order.getPriceMicro()>0?"CAPTURED":"NONE");
                 }
                 state.setActiveInstallationId(installId).setActivePolicyRevision(revision); // Older installations/entitlements remain immutable task references.
@@ -870,12 +872,12 @@ public final class SkillManagementService {
                     && !Set.of("IDENTITY_CHANGED","ENTITLEMENT_TERMINATED").contains(reason);
             value.put("status",recoverable?"FAILED_RETRYABLE":"FAILED_FINAL");value.put("retryAllowed",recoverable);value.put("reasonCode",reason);
             value.put("runtimeSynced",false);
-            var failedOrder=value.get("orderId")==null?null:market.selectOrderForUpdate(a.tenantId(),a.clientId(),text(value,"orderId"));
+            var failedOrder=value.get("orderId")==null?null:trade.selectOrderForUpdate(a.tenantId(),a.clientId(),text(value,"orderId"));
             var failedEnt=install?db.entitlement(a.tenantId(),a.clientId(),c.getEntitlementId()):null;
             if(!recoverable&&failedOrder!=null) {
                 require("INSTALLING".equals(failedOrder.getStatus()),409,"SKILL_STATE_CONFLICT");
                 String refund=marketplace.settle(a,failedOrder,app.deliveryBinding(a.tenantId(),a.clientId(),text(object(value.get("target")),"skillInstallationId")),false,System.currentTimeMillis());
-                one(market.markOrderRefunded(a.tenantId(),a.clientId(),failedOrder.getOrderId(),failedOrder.getVersion(),refund,System.currentTimeMillis()));
+                one(trade.markOrderRefunded(a.tenantId(),a.clientId(),failedOrder.getOrderId(),failedOrder.getVersion(),refund,System.currentTimeMillis()));
                 value.put("fundingStatus",failedOrder.getPriceMicro()>0?"REFUNDED":"NONE");
             }
             if(install) {
@@ -1021,7 +1023,7 @@ public final class SkillManagementService {
             if(!(proof.get(key) instanceof String text)||text.isBlank())return null;
         var receipt=app.result(auth.getTenantId(),auth.getClientId(),text(proof,"receiptMessageId"));
         var i=app.installation(auth.getTenantId(),auth.getClientId(),auth.getInstallationId());
-        var order=i==null||i.getOrderId()==null?null:app.order(auth.getTenantId(),auth.getClientId(),i.getOrderId());
+        var order=i==null||i.getOrderId()==null?null:trade.order(auth.getTenantId(),auth.getClientId(),i.getOrderId());
         if(receipt==null||!"ACTIVE".equals(receipt.getOutcome())||!auth.getInstallationId().equals(receipt.getInstallationId())
                 ||receipt.getRequestHash()==null||receipt.getRequestHash().length!=32
                 ||!HexFormat.of().formatHex(receipt.getRequestHash()).equals(proof.get("receiptSha256"))
@@ -1040,7 +1042,7 @@ public final class SkillManagementService {
             if(!validInstallation(scope,auth,i,e))continue;
             var target=ref(auth);var approved=market.selectApprovedProductVersion(scope.tenantId(),scope.clientId(),text(target,"productVersionId"));
             if(approved==null||!HexFormat.of().formatHex(approved.getPackageSha256()).equals(target.get("packageSha256")))continue;
-            if(i.getOrderId()!=null) {var o=app.order(scope.tenantId(),scope.clientId(),i.getOrderId());if(o==null||!"ACTIVE".equals(o.getStatus()))continue;}
+            if(i.getOrderId()!=null) {var o=trade.order(scope.tenantId(),scope.clientId(),i.getOrderId());if(o==null||!"ACTIVE".equals(o.getStatus()))continue;}
             var pkg=packages.getObject().describe(approved);var manifest=packages.getObject().manifest(pkg);
             if(manifest==null) {
                 if(!"INSTRUCTION".equals(target.get("kind"))||target.get("manifestSha256")!=null)continue;
@@ -1151,7 +1153,7 @@ public final class SkillManagementService {
             var i=app.installation(tenant,client,installationId);
             var entitlements=market.selectEntitlementsByAgent(tenant,client,agent).stream().filter(e->installationId.equals(e.getInstallationId())).toList();
             require(i!=null&&"SUCCEEDED".equals(i.getStatus())&&agent.equals(i.getTargetAgentId())&&entitlements.size()==1,409,"SKILL_STATE_CONFLICT");
-            var e=entitlements.getFirst();var order=app.order(tenant,client,i.getOrderId());
+            var e=entitlements.getFirst();var order=trade.order(tenant,client,i.getOrderId());
             var binding=app.deliveryBinding(tenant,client,installationId);var v=market.selectApprovedProductVersion(tenant,client,i.getProductVersionId());
             require(order!=null&&"ACTIVE".equals(order.getStatus())&&agent.equals(order.getTargetAgentId())
                     &&"ACTIVE".equals(e.getStatus())&&Objects.equals(i.getOrderId(),e.getOrderId())&&Objects.equals(i.getProductVersionId(),e.getProductVersionId())

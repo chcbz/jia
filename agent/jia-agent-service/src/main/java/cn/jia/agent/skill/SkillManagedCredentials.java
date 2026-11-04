@@ -1,9 +1,9 @@
 package cn.jia.agent.skill;
+import cn.jia.economy.service.skill.*;
 import cn.jia.agent.dao.AgentRuntimeDao;
 import cn.jia.agent.hosting.HostingRentHttp;
-import cn.jia.economy.config.EconomyPreviewGate;
-import cn.jia.economy.mapper.*;
-import cn.jia.economy.entity.skill.SkillManagedCredentialEntity;
+import cn.jia.agent.mapper.skill.*;
+import cn.jia.agent.entity.skill.SkillManagedCredentialEntity;
 import cn.jia.oauth.entity.OauthApiKeyEntity;
 import cn.jia.oauth.service.ApiKeyService;
 import org.springframework.beans.factory.ObjectProvider;
@@ -18,22 +18,23 @@ import static cn.jia.agent.skill.SkillMarketplaceService.*;
  * by that existing credential service, returned once and never copied into our receipt tables. */
 @Service
 public final class SkillManagedCredentials {
-    private final EconomySkillCredentialMapper mapper;
-    private final EconomySkillApplicationMapper roots;
-    private final EconomyHostingRentMapper rent;
+    private final SkillCredentialMapper mapper;
+    private final SkillInstallationMapper roots;
+    private final SkillHostingCredentialLookup rent;
     private final SkillAgentVersions versions;
     private final AgentRuntimeDao runtimes;
     private final ObjectProvider<ApiKeyService> keys;
-    private final EconomyPreviewGate preview;
     private final TransactionTemplate tx;
-    public SkillManagedCredentials(EconomySkillCredentialMapper mapper,EconomySkillApplicationMapper roots,
-            EconomyHostingRentMapper rent,SkillAgentVersions versions,AgentRuntimeDao runtimes,
-            ObjectProvider<ApiKeyService> keys,EconomyPreviewGate preview,PlatformTransactionManager manager) {
+    private final SkillTradeService trade;
+    public SkillManagedCredentials(SkillCredentialMapper mapper,SkillInstallationMapper roots,
+            SkillHostingCredentialLookup rent,SkillAgentVersions versions,AgentRuntimeDao runtimes,
+            ObjectProvider<ApiKeyService> keys,PlatformTransactionManager manager,SkillTradeService trade) {
+        this.trade=trade;
         this.mapper=mapper;this.roots=roots;this.rent=rent;this.versions=versions;this.runtimes=runtimes;
-        this.keys=keys;this.preview=preview;this.tx=new TransactionTemplate(manager);
+        this.keys=keys;this.tx=new TransactionTemplate(manager);
     }
     public Map<String,Object> rotate(HostingRentHttp.Actor actor,String agent,String idem,long expected) {
-        require(preview.allows(actor.tenantId(),actor.clientId()) && keys.getIfAvailable()!=null,503,"SKILL_MARKETPLACE_DISABLED");
+        require(keys.getIfAvailable()!=null,503,"SKILL_MARKETPLACE_DISABLED");
         HostingRentHttp.key(idem); HostingRentHttp.exact(agent,100); require(expected>0,400,"BAD_REQUEST");
         byte[] hash=HostingRentHttp.hash("skill-credential-rotation-v1",Map.of("agent",agent,"expectedVersion",Long.toString(expected)));
         return tx.execute(s->{
@@ -45,8 +46,8 @@ public final class SkillManagedCredentials {
             var runtime=runtimes.findByAgentIdForUpdate(agent);
             var old=mapper.active(actor.tenantId(),actor.clientId(),agent);
             // Hosted profiles already use their original fresh key. Do not silently orphan that runner.
-            require(mapper.hostingCandidates(actor.tenantId(),actor.clientId(),agent).isEmpty(),409,"SKILL_HOSTING_CREDENTIAL_ROTATION_UNSUPPORTED");
-            require(roots.pendingInstalls(actor.tenantId(),actor.clientId(),agent)==0,409,"SKILL_INSTALLATION_PENDING");
+            require(rent.candidates(actor.tenantId(),actor.clientId(),agent).isEmpty(),409,"SKILL_HOSTING_CREDENTIAL_ROTATION_UNSUPPORTED");
+            require(trade.pendingInstalls(actor.tenantId(),actor.clientId(),agent)==0,409,"SKILL_INSTALLATION_PENDING");
             if(old!=null) {
                 var prior=keys.getObject().get(old.getApiKeyId());
                 require(prior!=null && old.getApiKeyId().equals(prior.getId()) && actor.tenantId().equals(prior.getTenantId())
@@ -82,13 +83,13 @@ public final class SkillManagedCredentials {
         return binding.getApiKeyId();
     }
     private SkillManagedCredentialEntity adopt(HostingRentHttp.Actor actor,String agent,long bindingId) {
-        var candidates=mapper.hostingCandidates(actor.tenantId(),actor.clientId(),agent);
+        var candidates=rent.candidates(actor.tenantId(),actor.clientId(),agent);
         require(candidates.size()==1,409,"SKILL_AGENT_CREDENTIAL_UNPROVEN");
         var intent=candidates.getFirst(); var key=keys.getObject().get(intent.getManagedApiKeyId());
         require("USER".equals(intent.getPrincipalType()) && actor.actorId().equals(intent.getPrincipalId())
                 && validKey(actor,key,intent.getManagedApiKeyId()) && ("hosting:"+intent.getIntentId()).equals(key.getKeyName())
-                && mapper.hostingReferenceCount(intent.getManagedApiKeyId())==1,409,"SKILL_AGENT_CREDENTIAL_UNPROVEN");
-        var lease=rent.selectLeaseForUpdate(actor.tenantId(),actor.clientId(),intent.getLeaseId());
+                && rent.referenceCount(intent.getManagedApiKeyId())==1,409,"SKILL_AGENT_CREDENTIAL_UNPROVEN");
+        var lease=rent.lockLease(actor.tenantId(),actor.clientId(),intent.getLeaseId());
         require(lease!=null && agent.equals(lease.getAgentId()) && Long.toString(bindingId).equals(lease.getBindingId())
                 && "ACTIVE".equals(lease.getStatus()),409,"SKILL_AGENT_CREDENTIAL_UNPROVEN");
         // The global UNIQUE(api_key_id) prevents importing this key for any other Agent/scope.

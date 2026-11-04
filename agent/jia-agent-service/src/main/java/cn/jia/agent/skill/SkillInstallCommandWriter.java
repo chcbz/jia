@@ -1,9 +1,10 @@
 package cn.jia.agent.skill;
+import cn.jia.agent.entity.skill.SkillChangeCommandEntity;
+import cn.jia.agent.entity.skill.SkillChangeEntity;
 
 import cn.jia.agent.dao.AgentCommandTransportDao;
 import cn.jia.agent.entity.*;
 import cn.jia.agent.service.impl.AgentCommandCanonicalCodec;
-import cn.jia.economy.config.EconomyPreviewGate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import java.util.*;
@@ -16,11 +17,10 @@ import static cn.jia.agent.skill.SkillMarketplaceService.one;
 public final class SkillInstallCommandWriter {
     public static final String DESTINATION="agent.skill-install.ws.v1";
     private final AgentCommandTransportDao commands;
-    private final EconomyPreviewGate preview;
-    public SkillInstallCommandWriter(AgentCommandTransportDao commands,EconomyPreviewGate preview) {
-        this.commands=commands;this.preview=preview;
+    public SkillInstallCommandWriter(AgentCommandTransportDao commands) {
+        this.commands=commands;
     }
-    public boolean allows(String tenant,String client) { return "0".equals(tenant) && preview.allows(tenant,client); }
+    public boolean allows(String tenant,String client) { return "0".equals(tenant); }
     public AgentCommandTransportWriteResult write(AgentCommandDraft draft) {
         require(TransactionSynchronizationManager.isActualTransactionActive(),503,"SKILL_COMMAND_TRANSACTION_REQUIRED");
         require("SKILL_INSTALL".equals(draft.commandType()) && allows(draft.tenantId(),draft.clientId()),403,"SKILL_DELIVERY_FENCED");
@@ -46,8 +46,8 @@ public final class SkillInstallCommandWriter {
         one(commands.insertOutbox(o));return new AgentCommandTransportWriteResult(d.getId(),draft.commandId(),message,event,false);
     }
     /** SM-C1 producer: exact frozen data goes into the SAME delivery/outbox, never a task wire. */
-    public AgentCommandTransportWriteResult writeManagement(cn.jia.economy.entity.skill.SkillChangeEntity change, byte[] wire,
-            cn.jia.economy.entity.skill.SkillChangeCommandEntity command, Map<String,Object> data) {
+    public AgentCommandTransportWriteResult writeManagement(cn.jia.agent.entity.skill.SkillChangeEntity change, byte[] wire,
+            cn.jia.agent.entity.skill.SkillChangeCommandEntity command, Map<String,Object> data) {
         require(TransactionSynchronizationManager.isActualTransactionActive(),503,"SKILL_STATE_UNAVAILABLE");
         require(allows(change.getTenantId(),change.getClientId()),403,"SKILL_DELIVERY_FENCED");
         SkillManagementCodec.validate("Command",SkillManagementCodec.read(wire,"Command"));

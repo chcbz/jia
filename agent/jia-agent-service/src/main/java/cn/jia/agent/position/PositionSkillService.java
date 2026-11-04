@@ -2,7 +2,7 @@ package cn.jia.agent.position;
 
 import cn.jia.agent.service.AgentIdentityService;
 import cn.jia.agent.service.PositionAuthority;
-import cn.jia.economy.mapper.EconomySkillMarketplaceMapper;
+import cn.jia.agent.mapper.skill.SkillCatalogMapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import org.springframework.stereotype.Service;
@@ -20,11 +20,11 @@ public class PositionSkillService implements PositionAuthority {
     public record View(String operationId, String resultId, long revision, PositionSkillState state) { }
     private final PositionSkillStore store;
     private final AgentIdentityService identities;
-    private final EconomySkillMarketplaceMapper packages;
+    private final SkillCatalogMapper packages;
     private final TransactionTemplate tx;
     private final ObjectMapper codec = new ObjectMapper().enable(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS);
     public PositionSkillService(PositionSkillStore store, AgentIdentityService identities,
-            EconomySkillMarketplaceMapper packages, PlatformTransactionManager manager) {
+            SkillCatalogMapper packages, PlatformTransactionManager manager) {
         this.store=store;this.identities=identities;this.packages=packages;this.tx=new TransactionTemplate(manager);
     }
     public View read(Scope scope) {

@@ -9,10 +9,13 @@ import cn.jia.agent.mapper.*;
 import cn.jia.agent.security.*;
 import cn.jia.agent.service.*;
 import cn.jia.economy.config.*;
-import cn.jia.economy.config.skillseed.PlatformSkillPackageCatalog;
+import cn.jia.agent.config.skill.skillseed.PlatformSkillPackageCatalog;
 import cn.jia.economy.entity.*;
-import cn.jia.economy.entity.skill.*;
+import cn.jia.agent.entity.skill.*;
+import cn.jia.economy.service.skill.*;
+import cn.jia.economy.service.impl.SkillTradeServiceImpl;
 import cn.jia.economy.mapper.*;
+import cn.jia.agent.mapper.skill.*;
 import cn.jia.economy.service.impl.EconomyPostingServiceImpl;
 import org.junit.jupiter.api.*;
 import org.mybatis.spring.*;
@@ -40,8 +43,8 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
     private String database;
     protected JdbcTemplate jdbc;
     protected SkillManagementService service;
-    protected EconomySkillMarketplaceMapper market;
-    protected EconomySkillManagementMapper db;
+    protected SkillCatalogMapper market;
+    protected SkillManagementMapper db;
     protected SkillInstallCommandWriter writer;
     protected SkillInstallRecoveryService recovery;
     protected AgentRuntimeAuthenticationService authentication;
@@ -53,7 +56,8 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
     protected SkillAgentVersions versions;
     protected TransactionTemplate tx;
     private SkillExecutionDao taskAttachments;
-    private EconomySkillApplicationMapper app;
+    private SkillInstallationMapper app;
+    protected SkillTradeService trade;
     private SkillMarketplaceService marketplace;
     private SkillPackages packages;
     private org.springframework.transaction.PlatformTransactionManager manager;
@@ -70,15 +74,16 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
                 "db/agent-command-transport-schema.sql","db/economy-skill-management-sm-c1.sql","db/agent-skill-execution-v1.sql"))
             new ResourceDatabasePopulator(new ClassPathResource(resource)).execute(ds);
         var config=new org.apache.ibatis.session.Configuration();config.setMapUnderscoreToCamelCase(true);
-        for(Class<?> type:List.of(EconomySkillMarketplaceMapper.class,EconomySkillApplicationMapper.class,EconomyLedgerMapper.class,
-                EconomySkillManagementMapper.class,SkillExecutionMapper.class,AgentCommandTransportMapper.class,AgentCommandRecoveryMapper.class,AgentSkillInstallRecoveryMapper.class,AgentOutboxRelayMapper.class))config.addMapper(type);
+        for(Class<?> type:List.of(SkillCatalogMapper.class,SkillInstallationMapper.class,SkillTradeMapper.class,EconomyLedgerMapper.class,
+                SkillManagementMapper.class,SkillExecutionMapper.class,AgentCommandTransportMapper.class,AgentCommandRecoveryMapper.class,AgentSkillInstallRecoveryMapper.class,AgentOutboxRelayMapper.class))config.addMapper(type);
         var factory=new SqlSessionFactoryBean();factory.setDataSource(ds);factory.setConfiguration(config);
         sql=new SqlSessionTemplate(Objects.requireNonNull(factory.getObject()));
         taskAttachments=new SkillExecutionDaoImpl(sql.getMapper(SkillExecutionMapper.class));
-        market=sql.getMapper(EconomySkillMarketplaceMapper.class);app=sql.getMapper(EconomySkillApplicationMapper.class);
-        db=sql.getMapper(EconomySkillManagementMapper.class);var ledger=sql.getMapper(EconomyLedgerMapper.class);
+        market=sql.getMapper(SkillCatalogMapper.class);app=sql.getMapper(SkillInstallationMapper.class);
+        db=sql.getMapper(SkillManagementMapper.class);var ledger=sql.getMapper(EconomyLedgerMapper.class);
         var gate=new EconomyPreviewGate(new EconomyPreviewProperties(true,List.of(new EconomyPreviewProperties.AllowedScope("0",ACTOR.clientId()))));
         var posting=new EconomyPostingServiceImpl(ledger,manager,gate);
+        trade=new SkillTradeServiceImpl(sql.getMapper(SkillTradeMapper.class),ledger,posting,gate);
         var agents=mock(AgentService.class);var owner=mock(HostingRentOwnerResolver.class);var runtimes=mock(AgentRuntimeDao.class);runtimeLocks=runtimes;identityLocks=mock(AgentIdentityService.class);
         runtime=new AgentRuntimeEntity().setAgentId(AGENT).setOwnerJiacn(ACTOR.ownerJiacn()).setBindingId(7L).setTokenHash("registered").setStatus("online")
                 .setRuntimeInstallationId("rti_"+"a".repeat(32)).setRuntimeHostId("host-1").setRuntimeInstanceId("runtime-1").setRuntimeSessionGeneration(1L);
@@ -100,7 +105,7 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         when(agents.requireApiKeyOwnedAgent(ACTOR.clientId(),ACTOR.ownerJiacn(),AGENT)).thenReturn(dto);
         when(agents.requireOwnedAgentCapabilities(ACTOR.tenantId(),ACTOR.clientId(),ACTOR.ownerJiacn(),AGENT)).thenReturn(dto);
         versions=new SkillAgentVersions(app,runtimes,provider(agents),owner,manager);
-        var commands=new AgentCommandTransportDaoImpl(sql.getMapper(AgentCommandTransportMapper.class));writer=spy(new SkillInstallCommandWriter(commands,gate));
+        var commands=new AgentCommandTransportDaoImpl(sql.getMapper(AgentCommandTransportMapper.class));writer=spy(new SkillInstallCommandWriter(commands));
         // Provision this fixture's private store explicitly; production never creates it at startup.
         Path packageRoot=Files.createDirectory(scratch.resolve(database+"-packages"),
                 java.nio.file.attribute.PosixFilePermissions.asFileAttribute(
@@ -112,12 +117,12 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         positionService=mock(cn.jia.agent.position.PositionSkillService.class);
         when(positionService.currentState(any())).thenReturn(cn.jia.agent.position.PositionSkillState.empty());
         when(positionService.read(any())).thenReturn(new cn.jia.agent.position.PositionSkillService.View(null,null,0,cn.jia.agent.position.PositionSkillState.empty()));
-        marketplace=new SkillMarketplaceService(market,app,ledger,posting,gate,versions,runtimes,provider(writer),provider(packages),provider(authentication),provider(sessions),manager,positionService);
-        service=new SkillManagementService(db,market,app,marketplace,versions,runtimes,installations,authentication,identityLocks,provider(packages),provider(writer),provider(sessions),provider(capabilities),manager);
+        marketplace=new SkillMarketplaceService(market,app,trade,versions,runtimes,provider(writer),provider(packages),provider(authentication),provider(sessions),manager,positionService);
+        service=new SkillManagementService(db,market,app,marketplace,trade,versions,runtimes,installations,authentication,identityLocks,provider(packages),provider(writer),provider(sessions),provider(capabilities),manager);
         dispatch=new SkillInstallDispatchService(app,market,marketplace,versions,authentication,commands,provider(sessions),manager);dispatch.setManagement(service);
         recoveryMapper=sql.getMapper(AgentSkillInstallRecoveryMapper.class);
         recoveryDao=new AgentCommandRecoveryDaoImpl(sql.getMapper(AgentCommandRecoveryMapper.class));
-        recovery=new SkillInstallRecoveryService(recoveryMapper,recoveryDao,gate,dispatch,manager,new FixedTenantAdmissionPolicy("0", null));
+        recovery=new SkillInstallRecoveryService(recoveryMapper,recoveryDao,dispatch,manager,new FixedTenantAdmissionPolicy("0", null));
         for(var p:new PlatformSkillPackageCatalog().products()) {
             market.insertProduct(new SkillProductEntity().setProductId(p.productId()).setSellerType("SYSTEM").setSellerId("SKILL_STORE").setName(p.name()).setDescription(p.description())
                 .setStatus("DRAFT").setVersion(1L).setTenantId("0").setClientId(ACTOR.clientId()).setCreateTime(1L).setUpdateTime(1L));
@@ -181,7 +186,7 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         when(agents.requireApiKeyOwnedAgent(ACTOR.clientId(),ACTOR.ownerJiacn(),AGENT)).thenReturn(dto);
         when(agents.requireOwnedAgentCapabilities(ACTOR.tenantId(),ACTOR.clientId(),ACTOR.ownerJiacn(),AGENT)).thenReturn(dto);
         versions=new SkillAgentVersions(app,rows,provider(agents),owner,manager);
-        service=new SkillManagementService(db,market,app,marketplace,versions,rows,installs,authentication,identities,provider(packages),provider(writer),provider(sessions),provider(capabilities),manager);
+        service=new SkillManagementService(db,market,app,marketplace,trade,versions,rows,installs,authentication,identities,provider(packages),provider(writer),provider(sessions),provider(capabilities),manager);
     }
     /** Immutable snapshot of ALL relevant SQL business rows, including versions and transport leases. */
     protected Map<String,Object> businessSnapshot() {
@@ -386,7 +391,7 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         String old=text(object(first.get("target")),"skillInstallationId");
         var identities=mock(AgentIdentityService.class);
         when(identities.requireCanonicalAgentIdInScope("0",ACTOR.clientId(),ACTOR.ownerJiacn(),AGENT)).thenReturn(AGENT);
-        var descriptors=new InstalledSkillDescriptorService(identities,market,app,provider(packages));
+        var descriptors=new InstalledSkillDescriptorService(identities,market,app,provider(packages),trade);
         descriptors.setManagement(service,db);
         assertEquals(List.of(old),descriptors.readCurrent(scope()).skills().stream().map(InstalledSkillDescriptorLookup.Descriptor::installationId).toList());
         var frozen=service.admit(scope(),"pdf-export",old,()->service.taskBinding("0",ACTOR.clientId(),"exec-old","grant-old",1,AGENT,old));
@@ -727,7 +732,7 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         var before=businessSnapshot();var failing=spy(recoveryMapper);
         doReturn(0).when(failing).claimOutbox(any(),anyString(),anyLong(),anyLong());
         var gate=new EconomyPreviewGate(new EconomyPreviewProperties(true,List.of(new EconomyPreviewProperties.AllowedScope("0",ACTOR.clientId()))));
-        var fixture=new SkillInstallRecoveryService(failing,recoveryDao,gate,dispatch,manager,new FixedTenantAdmissionPolicy("0", null));
+        var fixture=new SkillInstallRecoveryService(failing,recoveryDao,dispatch,manager,new FixedTenantAdmissionPolicy("0", null));
         assertThrows(SkillMarketplaceException.class,()->fixture.recover(hint,now));
         assertEquals(before,businessSnapshot());verify(sessions,never()).dispatch(anyString(),anyString(),anyString(),any(),any());
     }

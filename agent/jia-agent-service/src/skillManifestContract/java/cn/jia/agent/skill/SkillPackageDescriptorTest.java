@@ -1,7 +1,8 @@
 package cn.jia.agent.skill;
+import cn.jia.agent.config.skill.skillseed.PlatformSkillPackageCatalog;
 
-import cn.jia.economy.config.skillseed.PlatformSkillPackageCatalog.PlatformSkillPackage;
-import cn.jia.economy.config.skillseed.PlatformSkillPackageCatalog.PlatformSkillProduct;
+import cn.jia.agent.config.skill.skillseed.PlatformSkillPackageCatalog.PlatformSkillPackage;
+import cn.jia.agent.config.skill.skillseed.PlatformSkillPackageCatalog.PlatformSkillProduct;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import java.io.ByteArrayOutputStream;

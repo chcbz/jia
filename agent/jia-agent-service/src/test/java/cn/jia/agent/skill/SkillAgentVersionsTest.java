@@ -5,8 +5,8 @@ import cn.jia.agent.entity.AgentRuntimeDTO;
 import cn.jia.agent.hosting.HostingRentHttp;
 import cn.jia.agent.service.AgentService;
 import cn.jia.agent.hosting.HostingRentOwnerResolver;
-import cn.jia.economy.entity.skill.SkillAgentVersionEntity;
-import cn.jia.economy.mapper.EconomySkillApplicationMapper;
+import cn.jia.agent.entity.skill.SkillAgentVersionEntity;
+import cn.jia.agent.mapper.skill.SkillInstallationMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.datasource.*;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -28,7 +28,7 @@ class SkillAgentVersionsTest {
     }
     @Test void onlineOfflineOnlineAbaAdvancesDurableCasTwice() {
         var ds=new DriverManagerDataSource("jdbc:h2:mem:skill_versions;MODE=MYSQL","sa","");
-        var manager=new DataSourceTransactionManager(ds);var mapper=mock(EconomySkillApplicationMapper.class);
+        var manager=new DataSourceTransactionManager(ds);var mapper=mock(SkillInstallationMapper.class);
         var runtimes=mock(AgentRuntimeDao.class);var row=runtime();
         var state=new SkillAgentVersionEntity();state.setVersion(17L);state.setSourceHash(SkillAgentVersions.sourceHash(row));
         when(runtimes.findByAgentIdForUpdate("agt_1")).thenReturn(row);
@@ -42,13 +42,13 @@ class SkillAgentVersionsTest {
         verify(mapper,times(2)).advanceVersion(anyString(),anyString(),anyString(),any(),anyLong());
     }
     @Test void unboundRuntimeDoesNotTouchSkillState() {
-        var mapper=mock(EconomySkillApplicationMapper.class);var runtimes=mock(AgentRuntimeDao.class);
+        var mapper=mock(SkillInstallationMapper.class);var runtimes=mock(AgentRuntimeDao.class);
         var versions=new SkillAgentVersions(mapper,runtimes,SkillMarketplaceRealTransactionTest.provider(mock(cn.jia.agent.service.AgentService.class)),mock(HostingRentOwnerResolver.class),
                 mock(org.springframework.transaction.PlatformTransactionManager.class));
         versions.observe(new AgentRuntimeEntity().setAgentId("unbound"));versions.observe(null);verifyNoInteractions(mapper,runtimes);
     }
     @Test void readAndConsumeUsePartitionNotOwnerWithoutExtraLookup() {
-        var mapper=mock(EconomySkillApplicationMapper.class);
+        var mapper=mock(SkillInstallationMapper.class);
         var runtimes=mock(AgentRuntimeDao.class);var agents=mock(AgentService.class);
         var owners=mock(HostingRentOwnerResolver.class);
         var actor=new HostingRentHttp.Actor("user", "tenant-blue", "client", "owner");
@@ -81,9 +81,9 @@ class SkillAgentVersionsTest {
                     +"tenant_id VARCHAR(50) NOT NULL, client_id VARCHAR(50) NOT NULL, agent_id VARCHAR(100) NOT NULL, "
                     +"source_hash VARBINARY(32) NOT NULL, version BIGINT NOT NULL, UNIQUE(tenant_id,client_id,agent_id))");
             var config=new org.apache.ibatis.session.Configuration();config.setMapUnderscoreToCamelCase(true);
-            config.addMapper(EconomySkillApplicationMapper.class);
+            config.addMapper(SkillInstallationMapper.class);
             var factory=new SqlSessionFactoryBean();factory.setDataSource(ds);factory.setConfiguration(config);
-            var mapper=new SqlSessionTemplate(java.util.Objects.requireNonNull(factory.getObject())).getMapper(EconomySkillApplicationMapper.class);
+            var mapper=new SqlSessionTemplate(java.util.Objects.requireNonNull(factory.getObject())).getMapper(SkillInstallationMapper.class);
             var runtimes=mock(AgentRuntimeDao.class);var manager=new DataSourceTransactionManager(ds);
             var versions=new SkillAgentVersions(mapper,runtimes,SkillMarketplaceRealTransactionTest.provider(mock(AgentService.class)),
                     mock(HostingRentOwnerResolver.class),manager);

@@ -1,9 +1,10 @@
 package cn.jia.agent.position;
+import cn.jia.agent.mapper.skill.SkillManagementMapper;
 
 import cn.jia.agent.service.*;
 import cn.jia.agent.service.PositionAuthority.Scope;
 import cn.jia.agent.skill.SkillPackages;
-import cn.jia.economy.mapper.EconomySkillMarketplaceMapper;
+import cn.jia.agent.mapper.skill.SkillCatalogMapper;
 import org.springframework.stereotype.Service;
 import java.util.*;
 import static cn.jia.agent.service.InstalledSkillDescriptorLookup.*;
@@ -13,15 +14,15 @@ import static cn.jia.agent.service.InstalledSkillDescriptorLookup.*;
 public class PositionInstalledSkills {
     private final PositionSkillService positions;
     private final AgentIdentityService identities;
-    private final EconomySkillMarketplaceMapper market;
+    private final SkillCatalogMapper market;
     private final SkillPackages packages;
-    public PositionInstalledSkills(PositionSkillService positions,AgentIdentityService identities,EconomySkillMarketplaceMapper market,SkillPackages packages){
+    public PositionInstalledSkills(PositionSkillService positions,AgentIdentityService identities,SkillCatalogMapper market,SkillPackages packages){
         this.positions=positions;this.identities=identities;this.market=market;this.packages=packages;
     }
     private cn.jia.agent.skill.SkillManagementService management;
-    private cn.jia.economy.mapper.EconomySkillManagementMapper managed;
+    private cn.jia.agent.mapper.skill.SkillManagementMapper managed;
     @org.springframework.beans.factory.annotation.Autowired
-    public void setManagement(cn.jia.agent.skill.SkillManagementService service,cn.jia.economy.mapper.EconomySkillManagementMapper mapper){management=service;managed=mapper;}
+    public void setManagement(cn.jia.agent.skill.SkillManagementService service,cn.jia.agent.mapper.skill.SkillManagementMapper mapper){management=service;managed=mapper;}
     public List<Descriptor> read(SkillCapabilityLookup.Scope s){
         var state=positions.read(new Scope(s.tenantId(),s.clientId(),s.ownerJiacn())).state();
         var ids=new HashSet<String>();

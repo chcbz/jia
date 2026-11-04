@@ -1,5 +1,5 @@
 package cn.jia.agent.skill;
-import cn.jia.economy.entity.skill.SkillInstallationEntity;
+import cn.jia.agent.entity.skill.SkillInstallationEntity;
 import org.junit.jupiter.api.Test;
 import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
