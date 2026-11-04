@@ -610,7 +610,7 @@ public final class SkillManagementService {
         return "INSTRUCTION".equals(kind) ? "NOT_EXECUTABLE".equals(runtimeState)
                 : "EXECUTABLE".equals(kind)&&admission&&"READY".equals(runtimeState);
     }
-    public Map<String,List<RecommendationSkill>> recommendationSkills(HostingRentHttp.Actor a,List<String> agents) {
+    public Map<String,List<RecommendationSkill>> recommendationSkills(HostingRentHttp.Actor a,List<AgentTaskAssigneeCandidateDTO> agents) {
         if(agents.isEmpty())return Map.of();
         enabled(a);
         return tx.execute(transaction->{
@@ -619,8 +619,11 @@ public final class SkillManagementService {
             var approved=new HashMap<String,Optional<SkillProductVersionEntity>>();
             var result=new LinkedHashMap<String,List<RecommendationSkill>>();
             boolean productsLoaded=false;
-            for(String agent:new LinkedHashSet<>(agents)) {
-                path(agent);versions.readOwned(a,agent);
+            for(var candidate:agents) {
+                // Discovery owns task/opt-in authorization. This path only reads capability summaries,
+                // never impersonates the provider Actor or opens skill-management operations.
+                String agent=candidate.target().agentId();
+                String providerOwner=candidate.skillProviderOwnerJiacn();
                 var states=db.states(a.tenantId(),a.clientId(),agent).stream()
                         .filter(state->state.getActiveInstallationId()!=null).toList();
                 if(states.isEmpty()){result.put(agent,List.of());continue;}
@@ -633,16 +636,21 @@ public final class SkillManagementService {
                 // The registry owns live session/fence isolation. Capture one coherent catalog,
                 // not two full catalogs whose timestamps/unrelated skills may differ.
                 SkillCapabilityLookup.View observed=null;
+                boolean providerMatches=false;
                 try {
                     var proof=authentication.currentRegisteredProof(a.tenantId(),a.clientId(),agent);
                     var lookup=capabilities.getIfAvailable();
-                    if(a.ownerJiacn().equals(proof.scope().ownerJiacn())&&lookup!=null) {
-                        var view=lookup.lookup(new SkillCapabilityLookup.Scope(a.tenantId(),a.clientId(),a.ownerJiacn(),agent),SkillMarketplaceService.sessionFence(proof));
+                    providerMatches=providerOwner.equals(proof.scope().ownerJiacn());
+                    if(providerMatches&&lookup!=null) {
+                        var view=lookup.lookup(new SkillCapabilityLookup.Scope(a.tenantId(),a.clientId(),providerOwner,agent),SkillMarketplaceService.sessionFence(proof));
                         if(view.state()==SkillCapabilityLookup.State.AVAILABLE)observed=view;
                     }
                 } catch(IllegalArgumentException absent) { /* No authenticated live catalog is positive evidence. */ }
+                // Do not advertise installations left behind by a different provider/binding.
+                if(!candidate.target().isMine()&&!providerMatches){result.put(agent,List.of());continue;}
                 var rows=new ArrayList<RecommendationSkill>();
                 for(var state:states) {
+                    if(!candidate.target().isMine()&&!Boolean.TRUE.equals(state.getDesiredEnabled()))continue;
                     var auth=authorizations.get(state.getActiveInstallationId());if(auth==null)continue;
                     var status=runtime(a,agent,state,auth,observed,observed!=null);
                     var pkg=ref(auth);String versionId=text(pkg,"productVersionId");

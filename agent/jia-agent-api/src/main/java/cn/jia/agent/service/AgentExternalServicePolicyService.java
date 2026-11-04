@@ -8,5 +8,7 @@ public interface AgentExternalServicePolicyService {
     Policy write(AgentTaskExecutionGrantService.Scope scope,String agentId,String key,boolean enabled,long expectedRevision);
     Policy receipt(AgentTaskExecutionGrantService.Scope scope,String agentId,String key);
     Candidates candidates(AgentTaskExecutionGrantService.Scope scope,String taskId,String afterAgentId,int pageSize);
+    /** Internal projection for task-authorized recommendations; not a management permission or HTTP DTO. */
+    List<cn.jia.agent.entity.AgentTaskAssigneeCandidateDTO> recommendationCandidates(AgentTaskExecutionGrantService.Scope scope,String taskId);
     AgentTaskTargetSummaryDTO assignedTarget(AgentTaskExecutionGrantService.Scope scope,String taskId);
 }

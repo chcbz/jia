@@ -1979,9 +1979,8 @@ class AgentServiceImplTest extends BaseMockTest {
     private void wireAssigneeCandidates(List<AgentRuntimeEntity> agents) {
         var items = agents.stream().map(agent -> new cn.jia.agent.entity.AgentTaskTargetSummaryDTO(
                 agent.getAgentId(), agent.getName(), null, true, agent.getStatus())).toList();
-        when(externalServicePolicies.candidates(any(), org.mockito.ArgumentMatchers.eq("task-001"),
-                org.mockito.ArgumentMatchers.isNull(), org.mockito.ArgumentMatchers.eq(100)))
-                .thenReturn(new cn.jia.agent.service.AgentExternalServicePolicyService.Candidates(items, null));
+        when(externalServicePolicies.recommendationCandidates(any(), org.mockito.ArgumentMatchers.eq("task-001")))
+                .thenReturn(items.stream().map(t->new AgentTaskAssigneeCandidateDTO(t,List.of(),"jiacn")).toList());
         for (var agent : agents) when(agentRuntimeDao.findByAgentId(agent.getAgentId())).thenReturn(agent);
     }
 
@@ -2079,12 +2078,10 @@ class AgentServiceImplTest extends BaseMockTest {
         var first = java.util.stream.IntStream.range(0, 5).mapToObj(i -> new cn.jia.agent.entity.AgentTaskTargetSummaryDTO(
                 "external-" + i, "External " + i, "Provider", false, "online")).toList();
         var last = new cn.jia.agent.entity.AgentTaskTargetSummaryDTO("external-5", "External 5", "Provider", false, "online");
-        when(externalServicePolicies.candidates(any(), org.mockito.ArgumentMatchers.eq("task-001"),
-                org.mockito.ArgumentMatchers.isNull(), org.mockito.ArgumentMatchers.eq(100)))
-                .thenReturn(new cn.jia.agent.service.AgentExternalServicePolicyService.Candidates(first, "external-4"));
-        when(externalServicePolicies.candidates(any(), org.mockito.ArgumentMatchers.eq("task-001"),
-                org.mockito.ArgumentMatchers.eq("external-4"), org.mockito.ArgumentMatchers.eq(100)))
-                .thenReturn(new cn.jia.agent.service.AgentExternalServicePolicyService.Candidates(List.of(last), null));
+        var authorized = new java.util.ArrayList<AgentTaskAssigneeCandidateDTO>();
+        for(var item:first)authorized.add(new AgentTaskAssigneeCandidateDTO(item,List.of(),"provider-owner"));
+        authorized.add(new AgentTaskAssigneeCandidateDTO(last,List.of(),"provider-owner"));
+        when(externalServicePolicies.recommendationCandidates(any(), org.mockito.ArgumentMatchers.eq("task-001"))).thenReturn(authorized);
         var result = agentService.listTaskAssigneeCandidates("task-001");
         assertEquals(6, result.size());
         assertTrue(result.stream().allMatch(agent -> agent.abilities().isEmpty() && !agent.target().isMine()));

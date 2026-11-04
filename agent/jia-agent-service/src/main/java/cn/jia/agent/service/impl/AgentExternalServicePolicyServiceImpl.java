@@ -61,6 +61,21 @@ public class AgentExternalServicePolicyServiceImpl implements AgentExternalServi
         var page=rows.subList(0,Math.min(size,rows.size()));
         return new Candidates(page.stream().map(i->summary(scope,i)).toList(),more?page.getLast().getCanonicalAgentId():null);
     }
+    public List<AgentTaskAssigneeCandidateDTO> recommendationCandidates(AgentTaskExecutionGrantService.Scope scope,String task) {
+        requireTask(scope,task);
+        var result=new ArrayList<AgentTaskAssigneeCandidateDTO>();
+        String after="";
+        for (;;) {
+            // Same SQL authority as the public picker: active binding, same scope, owned or external opt-in.
+            var rows=policies.candidates(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),after,101);
+            var page=rows.subList(0,Math.min(100,rows.size()));
+            for(var identity:page)result.add(new AgentTaskAssigneeCandidateDTO(summary(scope,identity),List.of(),identity.getOwnerJiacn()));
+            if(rows.size()<=100)return List.copyOf(result);
+            String next=page.getLast().getCanonicalAgentId();
+            if(next.equals(after))throw new IllegalStateException("Candidate pagination did not advance");
+            after=next;
+        }
+    }
     public AgentTaskTargetSummaryDTO assignedTarget(AgentTaskExecutionGrantService.Scope scope,String task) {
         requireTask(scope,task);
         var grant=grants.findActiveByTask(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),task);

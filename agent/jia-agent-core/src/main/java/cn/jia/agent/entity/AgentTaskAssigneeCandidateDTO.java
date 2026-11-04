@@ -2,7 +2,8 @@ package cn.jia.agent.entity;
 
 import java.util.List;
 
-/** Task-public candidate facts only; never an Agent management/runtime DTO or an execution grant. */
-public record AgentTaskAssigneeCandidateDTO(AgentTaskTargetSummaryDTO target, List<String> abilities) {
+/** Internal authorized recommendation candidate. Provider scope comes from candidate discovery, never request input. */
+public record AgentTaskAssigneeCandidateDTO(AgentTaskTargetSummaryDTO target, List<String> abilities,
+        @com.fasterxml.jackson.annotation.JsonIgnore String skillProviderOwnerJiacn) {
     public AgentTaskAssigneeCandidateDTO { abilities = List.copyOf(abilities); }
 }

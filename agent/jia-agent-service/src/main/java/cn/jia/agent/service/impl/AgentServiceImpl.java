@@ -1457,21 +1457,15 @@ public class AgentServiceImpl implements AgentService {
         String ownerJiacn = resolveCurrentJiacn();
         var scope = new cn.jia.agent.service.AgentTaskExecutionGrantService.Scope(resolveCurrentTenantId(), clientId, ownerJiacn);
         var candidates = new java.util.LinkedHashMap<String, AgentTaskAssigneeCandidateDTO>();
-        var cursors = new java.util.HashSet<String>();
-        String after = null;
-        do {
-            var page = externalServicePolicies.candidates(scope, taskId, after, 100);
-            for (var candidate : page.items()) {
-                List<String> abilities = List.of();
-                if (candidate.isMine()) {
-                    var owned = requireOwnedAgentCapabilities(scope.tenantId(), clientId, ownerJiacn, candidate.agentId());
-                    abilities = List.copyOf(Optional.ofNullable(owned.getAbilities()).orElseGet(List::of));
-                }
-                candidates.put(candidate.agentId(), new AgentTaskAssigneeCandidateDTO(candidate, abilities));
+        for (var authorized : externalServicePolicies.recommendationCandidates(scope, taskId)) {
+            var candidate = authorized.target();
+            List<String> abilities = List.of();
+            if (candidate.isMine()) {
+                var owned = requireOwnedAgentCapabilities(scope.tenantId(), clientId, ownerJiacn, candidate.agentId());
+                abilities = List.copyOf(Optional.ofNullable(owned.getAbilities()).orElseGet(List::of));
             }
-            after = page.nextAfterAgentId();
-            if (after != null && !cursors.add(after)) throw new IllegalStateException("Candidate pagination did not advance");
-        } while (after != null);
+            candidates.put(candidate.agentId(), new AgentTaskAssigneeCandidateDTO(candidate, abilities, authorized.skillProviderOwnerJiacn()));
+        }
         return List.copyOf(candidates.values());
     }
 

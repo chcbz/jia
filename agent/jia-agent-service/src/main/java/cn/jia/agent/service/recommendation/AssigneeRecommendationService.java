@@ -96,7 +96,8 @@ public final class AssigneeRecommendationService {
     private record ModelMaterial(String name, String originalFilename, String contentMimeType, String role, String summary) { }
     private record ModelEvidence(String id, String kind, String label, String description, boolean available) { }
     private record ModelCandidate(String agentId, boolean boundToMe, List<ModelEvidence> evidence) { }
-    private record Observation(List<Candidate> candidates, List<ModelCandidate> modelCandidates) { }
+    private record Observation(List<Candidate> candidates, List<ModelCandidate> modelCandidates,
+            Map<String,String> providerOwners, Map<String,List<SkillManagementService.RecommendationSkill>> skillFacts) { }
     private static String candidateRef(int index) { return "A" + (index + 1); }
     private static String evidenceRef(int candidate, int evidence) { return candidateRef(candidate) + "E" + (evidence + 1); }
     private Observation observe(HostingRentHttp.Actor actor, String taskId) {
@@ -106,10 +107,11 @@ public final class AssigneeRecommendationService {
         var available = agents.listTaskAssigneeCandidates(taskId).stream()
                 .sorted(Comparator.comparing(row -> row.target().agentId())).toList();
         long listed = System.nanoTime();
-        var owned = available.stream().filter(row -> row.target().isMine()).map(row -> row.target().agentId()).toList();
-        var skillFacts = owned.isEmpty() ? Map.<String,List<SkillManagementService.RecommendationSkill>>of()
-                : skills.recommendationSkills(actor, owned);
+        var skillFacts = available.isEmpty() ? Map.<String,List<SkillManagementService.RecommendationSkill>>of()
+                : skills.recommendationSkills(actor, available);
+        var providerOwners = new LinkedHashMap<String,String>();
         for (var runtime : available) {
+            providerOwners.put(runtime.target().agentId(), runtime.skillProviderOwnerJiacn());
             List<String> abilities = runtime.abilities();
             var target = runtime.target();
             var agent = new Agent(target.agentId(), target.displayName(), target.availability(), abilities,
@@ -121,20 +123,21 @@ public final class AssigneeRecommendationService {
                         abilities.get(i), "已登记本领，是能力声明而非完成保证。", true));
                 descriptions.add("");
             }
-            if (agent.boundToMe()) {
-                // Existing native management authority; do not revive a legacy runner-specific capability path.
-                for (var skill : skillFacts.getOrDefault(agent.agentId(), List.of())) {
-                    String description = "产品当前用途声明（不保证与安装版本完全一致）：" + string(skill.description())
+            int publicSkillIndex=0;
+            for (var skill : skillFacts.getOrDefault(agent.agentId(), List.of())) {
+                String description = agent.boundToMe()
+                        ? "产品当前用途声明（不保证与安装版本完全一致）：" + string(skill.description())
                             + "；技能类型：" + skill.kind() + "；已安装版本：" + skill.skillVersion() + "；运行状态：" + skill.runtimeState()
-                            + "；INSTRUCTION是原生指令经验，不是可直接执行的工具；技能证据不等于未报告的工具依赖可用，也不保证任务结果。";
-                    descriptions.add(string(skill.description()));
-                    evidence.add(new Evidence("skill:" + skill.installationId(), "INSTALLED_SKILL",
-                            skill.title(), description, skill.available()));
-                }
-            } else {
-                evidence.add(new Evidence("private-skills", "UNKNOWN", "技能信息未公开",
-                        "外部候选仅提供接单公开摘要；未读取其私有技能、本领或成果。", false));
-                descriptions.add("技能信息未公开");
+                            + "；INSTRUCTION是原生指令经验，不是可直接执行的工具；技能证据不等于未报告的工具依赖可用，也不保证任务结果。"
+                        : "接单技能用途：" + string(skill.description()) + "；运行状态：" + skill.runtimeState();
+                descriptions.add(string(skill.description()));
+                evidence.add(new Evidence(agent.boundToMe() ? "skill:" + skill.installationId() : "public-skill:" + (++publicSkillIndex),
+                        "INSTALLED_SKILL", skill.title(), description, skill.available()));
+            }
+            if (!agent.boundToMe() && evidence.isEmpty()) {
+                evidence.add(new Evidence("public-skills", "UNKNOWN", "暂无可确认的接单技能",
+                        "当前没有可供推荐参考的接单技能摘要，不代表没有相关能力。", false));
+                descriptions.add("暂无可确认的接单技能");
             }
             var modelEvidence = new ArrayList<ModelEvidence>();
             for (int i = 0; i < evidence.size(); i++) {
@@ -147,7 +150,7 @@ public final class AssigneeRecommendationService {
         }
         LOG.info("assignee_recommendation_observe candidates={} candidateMs={} evidenceMs={}",
                 result.size(), millis(listed - started), millis(System.nanoTime() - listed));
-        return new Observation(List.copyOf(result), List.copyOf(modelCandidates));
+        return new Observation(List.copyOf(result), List.copyOf(modelCandidates), Map.copyOf(providerOwners), skillFacts);
     }
     private static Failure stale(String reason) {
         LOG.info("assignee_recommendation_stale reason={}", reason);
@@ -156,11 +159,12 @@ public final class AssigneeRecommendationService {
     private static void verifyCandidates(Observation before, Observation after) {
         if (!before.candidates().stream().map(c -> c.agent().agentId()).toList()
                 .equals(after.candidates().stream().map(c -> c.agent().agentId()).toList())) throw stale("CANDIDATE_SET");
+        if (!before.providerOwners().equals(after.providerOwners())) throw stale("CANDIDATE_FACTS");
+        if (!before.skillFacts().equals(after.skillFacts())) throw stale("SKILL_EVIDENCE");
         for (int i = 0; i < before.candidates().size(); i++) {
             var old = before.candidates().get(i); var now = after.candidates().get(i);
             if (old.agent().boundToMe() != now.agent().boundToMe() || old.agent().canOperate() != now.agent().canOperate()
                     || !old.agent().abilities().equals(now.agent().abilities())) throw stale("CANDIDATE_FACTS");
-            if (!old.evidence().equals(now.evidence())) throw stale("SKILL_EVIDENCE");
         }
     }
     // Business-specific output contract belongs to API; the model adapter only transports it.
