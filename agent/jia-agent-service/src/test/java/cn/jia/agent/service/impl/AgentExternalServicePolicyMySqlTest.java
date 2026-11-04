@@ -390,6 +390,8 @@ class AgentExternalServicePolicyMySqlTest {
         assertEquals("busy", all.get(1).availability()); assertEquals("offline", all.get(2).availability());
         assertTrue(all.stream().allMatch(item -> item.providerDisplayName() == null));
         assertFailure(NOT_FOUND, () -> policies.candidates(PROVIDER, "task-a", null, 50));
+        assertFailure(NOT_FOUND, () -> policies.recommendationCandidates(PROVIDER, "task-a"));
+        assertFailure(NOT_FOUND, () -> policies.recommendationCandidates(scope("client-b", "task-owner"), "task-a"));
         assertFailure(NOT_FOUND, () -> policies.candidates(scope("client-b", "task-owner"), "task-a", null, 50));
         assertFailure(BAD_REQUEST, () -> policies.candidates(TASK_OWNER, "task-a", null, 0));
         assertFailure(BAD_REQUEST, () -> policies.candidates(TASK_OWNER, "task-a", null, 101));
@@ -538,7 +540,11 @@ class AgentExternalServicePolicyMySqlTest {
         catch (AgentTaskExecutionGrantException failure) { return failure.reason(); }
     }
     private int policyCount() { return jdbc.queryForObject("SELECT COUNT(*) FROM agent_external_service_policy", Integer.class); }
-    private List<String> candidateIds() { return policies.candidates(TASK_OWNER, "task-a", null, 50).items().stream().map(AgentTaskTargetSummaryDTO::agentId).toList(); }
+    private List<String> candidateIds() {
+        var ids=policies.candidates(TASK_OWNER,"task-a",null,50).items().stream().map(AgentTaskTargetSummaryDTO::agentId).toList();
+        assertEquals(ids,policies.recommendationCandidates(TASK_OWNER,"task-a").stream().map(c->c.target().agentId()).toList());
+        return ids;
+    }
     private void lockTask() {
         assertEquals("task-a", jdbc.queryForObject("SELECT task_id FROM agent_task_meta WHERE tenant_id='0' AND client_id='client-a' AND owner_jiacn='task-owner' AND task_id='task-a' FOR UPDATE", String.class));
     }

@@ -1,6 +1,7 @@
 package cn.jia.agent.skill;
 
 import cn.jia.agent.dao.*;
+import cn.jia.agent.entity.*;
 import cn.jia.agent.hosting.HostingRentHttp;
 import cn.jia.agent.security.AgentRuntimeAuthentication;
 import cn.jia.agent.security.AgentRuntimeAuthenticationService;
@@ -18,6 +19,10 @@ import static org.mockito.ArgumentMatchers.*;
 
 class SkillManagementRecommendationTest {
     static final HostingRentHttp.Actor ACTOR=new HostingRentHttp.Actor("user","0","client","owner");
+    static List<AgentTaskAssigneeCandidateDTO> candidates(String... ids) {
+        return Arrays.stream(ids).map(id->new AgentTaskAssigneeCandidateDTO(
+                new AgentTaskTargetSummaryDTO(id,id,null,true,"online"),List.of(),"owner")).toList();
+    }
     static final String HASH="a".repeat(64);
     @SuppressWarnings("unchecked") static <T> ObjectProvider<T> provider(T value) {
         ObjectProvider<T> p=mock(ObjectProvider.class);when(p.getIfAvailable()).thenReturn(value);when(p.getObject()).thenReturn(value);return p;
@@ -61,15 +66,15 @@ class SkillManagementRecommendationTest {
             return new SkillCapabilityLookup.View(SkillCapabilityLookup.State.AVAILABLE,"session",new AgentManagedSessionLookup.SessionFence("rt_"+agent,"host","instance",1L),new SkillCapabilityLookup.Catalog("1",List.of(fact)));
         }
     }
-    @Test void emptySkillsAvoidCatalogProductsAndVersionLookupsButStillCheckOwnership() {
+    @Test void emptySkillsAvoidCatalogProductsAndVersionLookupsAfterCandidateAuthority() {
         var f=new Fixture();
-        assertEquals(Map.of("agent",List.of()),f.service.recommendationSkills(ACTOR,List.of("agent")));
-        verify(f.versions).readOwned(ACTOR,"agent");verify(f.db,never()).products(anyString(),anyString());
+        assertEquals(Map.of("agent",List.of()),f.service.recommendationSkills(ACTOR,candidates("agent")));
+        verifyNoInteractions(f.versions);verify(f.db,never()).products(anyString(),anyString());
         verifyNoInteractions(f.auth,f.catalog,f.packages,f.writer,f.market,f.sessions);
     }
     @Test void oneBatchSharesProductsVersionsAndReadsOnlyOneCatalogPerAgent() {
         var f=new Fixture();f.installed("a");f.installed("b");
-        var rows=f.service.recommendationSkills(ACTOR,List.of("a","b"));
+        var rows=f.service.recommendationSkills(ACTOR,candidates("a","b"));
         assertTrue(rows.get("a").getFirst().available());assertTrue(rows.get("b").getFirst().available());
         assertEquals("识图",rows.get("a").getFirst().title());
         verify(f.db).products("0","client");verify(f.market).selectApprovedProductVersion("0","client","spv_vision");
@@ -81,23 +86,22 @@ class SkillManagementRecommendationTest {
         var f=new Fixture();f.installed("a");
         when(f.catalog.lookup(any(),any())).thenReturn(f.view("a",1L,SkillCapabilityLookup.Readiness.NOT_EXECUTABLE),
                 f.view("a",2L,SkillCapabilityLookup.Readiness.NOT_EXECUTABLE),f.view("a",3L,SkillCapabilityLookup.Readiness.UNKNOWN));
-        var first=f.service.recommendationSkills(ACTOR,List.of("a"));
+        var first=f.service.recommendationSkills(ACTOR,candidates("a"));
         assertTrue(first.get("a").getFirst().available());
-        assertEquals(first,f.service.recommendationSkills(ACTOR,List.of("a")));
-        assertFalse(f.service.recommendationSkills(ACTOR,List.of("a")).get("a").getFirst().available());
+        assertEquals(first,f.service.recommendationSkills(ACTOR,candidates("a")));
+        assertFalse(f.service.recommendationSkills(ACTOR,candidates("a")).get("a").getFirst().available());
         verify(f.db,times(3)).products("0","client");verify(f.market,times(3)).selectApprovedProductVersion("0","client","spv_vision");
     }
-    @Test void deniedOwnershipAndFencedCatalogNeverProducePositiveEvidence() {
+    @Test void fencedCatalogNeverProducesPositiveEvidence() {
         var f=new Fixture();f.installed("a");
         when(f.catalog.lookup(any(),any())).thenReturn(SkillCapabilityLookup.View.unavailable(SkillCapabilityLookup.State.FENCED));
-        assertFalse(f.service.recommendationSkills(ACTOR,List.of("a")).get("a").getFirst().available());
-        when(f.versions.readOwned(ACTOR,"other")).thenThrow(new IllegalArgumentException("not owned"));
-        assertThrows(IllegalArgumentException.class,()->f.service.recommendationSkills(ACTOR,List.of("other")));
-        verify(f.db,never()).states("0","client","other");
+        assertFalse(f.service.recommendationSkills(ACTOR,candidates("a")).get("a").getFirst().available());
+        verifyNoInteractions(f.versions); // Candidate discovery owns authorization; management authority is unchanged.
+
     }
     @Test void withdrawnProductsRemainExcludedInBatchProjection() {
         var f=new Fixture();f.installed("a");when(f.db.products("0","client")).thenReturn(List.of());
-        assertTrue(f.service.recommendationSkills(ACTOR,List.of("a")).get("a").isEmpty());
+        assertTrue(f.service.recommendationSkills(ACTOR,candidates("a")).get("a").isEmpty());
     }
     @Test void enabledConfirmedInstructionIsCitableWithoutOpeningExecutableAdmission() {
         assertTrue(SkillManagementService.recommendationEvidenceAvailable("INSTRUCTION",true,false,"NOT_EXECUTABLE"));
@@ -113,5 +117,26 @@ class SkillManagementRecommendationTest {
         assertFalse(SkillManagementService.recommendationEvidenceAvailable("EXECUTABLE",false,true,"READY"));
         assertFalse(SkillManagementService.recommendationEvidenceAvailable("EXECUTABLE",true,true,"DEPENDENCY_MISSING"));
         assertFalse(SkillManagementService.recommendationEvidenceAvailable("UNKNOWN_KIND",true,true,"READY"));
+    }
+
+    @Test void externalSkillsUseProviderCatalogWithoutGrantingManagementAuthority() {
+        var f=new Fixture();f.installed("external");
+        var candidate=new AgentTaskAssigneeCandidateDTO(new AgentTaskTargetSummaryDTO("external","External",null,false,"online"),List.of(),"provider");
+        var proof=new AgentRuntimeAuthenticationService.Proof(new AgentRuntimeAuthentication.Scope("0","client","provider","external","instance"),"rt_external","host",1L,HASH,1L,1L);
+        when(f.auth.currentRegisteredProof("0","client","external")).thenReturn(proof);
+        when(f.catalog.lookup(eq(new SkillCapabilityLookup.Scope("0","client","provider","external")),any()))
+                .thenReturn(f.view("external",1L,SkillCapabilityLookup.Readiness.NOT_EXECUTABLE));
+        assertTrue(f.service.recommendationSkills(ACTOR,List.of(candidate)).get("external").getFirst().available());
+        verify(f.catalog).lookup(eq(new SkillCapabilityLookup.Scope("0","client","provider","external")),any());
+        verify(f.catalog,never()).lookup(eq(new SkillCapabilityLookup.Scope("0","client","owner","external")),any());
+        verifyNoInteractions(f.versions,f.packages,f.writer,f.sessions);
+        var state=f.db.states("0","client","external").getFirst();state.setDesiredEnabled(false);
+        assertTrue(f.service.recommendationSkills(ACTOR,List.of(candidate)).get("external").isEmpty());
+    }
+    @Test void externalProviderMismatchNeverBorrowsAnotherOwnersCatalog() {
+        var f=new Fixture();f.installed("external");
+        var candidate=new AgentTaskAssigneeCandidateDTO(new AgentTaskTargetSummaryDTO("external","External",null,false,"online"),List.of(),"different-provider");
+        assertFalse(f.service.recommendationSkills(ACTOR,List.of(candidate)).get("external").stream().anyMatch(SkillManagementService.RecommendationSkill::available));
+        verifyNoInteractions(f.catalog,f.versions);
     }
 }
