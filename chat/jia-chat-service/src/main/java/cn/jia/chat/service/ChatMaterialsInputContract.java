@@ -12,10 +12,10 @@ public final class ChatMaterialsInputContract {
         for(var value:list) {
             if(!(value instanceof Map<?,?> item)||!item.keySet().equals(Set.of("mediaKind","mimeType","carrier","carrierContractDigest")))throw new IllegalArgumentException("materials input");
             String media=(String)item.get("mediaKind"),mime=(String)item.get("mimeType"),carrier=(String)item.get("carrier"),digest=(String)item.get("carrierContractDigest");
-            if(media==null||!Set.of("text","image","audio","file").contains(media)||mime==null||!mime.matches("[a-z0-9.+-]+/[a-z0-9.+-]+")
-                    ||carrier==null||!Set.of("DIRECT_TEXT","LOCAL_IMAGE","LOCAL_AUDIO","PARSED_TEXT").contains(carrier)
+            if(media==null||!Set.of("text","image","audio","file").contains(media)||mime==null||(!mime.matches("[a-z0-9.+-]+/[a-z0-9.+-]+") && !("LOCAL_FILE".equals(carrier)&&"*/*".equals(mime)))
+                    ||carrier==null||!Set.of("DIRECT_TEXT","LOCAL_IMAGE","LOCAL_AUDIO","PARSED_TEXT","LOCAL_FILE").contains(carrier)
                     ||digest==null||!digest.matches("sha256:[0-9a-f]{64}")||!seen.add(mime)
-                    ||!Map.of("DIRECT_TEXT","text","LOCAL_IMAGE","image","LOCAL_AUDIO","audio","PARSED_TEXT","file").get(carrier).equals(media))throw new IllegalArgumentException("materials input");
+                    ||!Map.of("DIRECT_TEXT","text","LOCAL_IMAGE","image","LOCAL_AUDIO","audio","PARSED_TEXT","file","LOCAL_FILE","file").get(carrier).equals(media))throw new IllegalArgumentException("materials input");
             inputs.add(Map.of("mediaKind",media,"mimeType",mime,"carrier",carrier,"carrierContractDigest",digest));
         }
         return Map.of("schemaVersion",1,"supportedInputs",List.copyOf(inputs));
@@ -23,8 +23,16 @@ public final class ChatMaterialsInputContract {
     public static Map<String,Object> candidates(Map<String,Object> registration,List<Map<String,Object>> catalog) {
         Object raw=registration.get("materialsInput");
         var profile=raw==null ? Map.<String,Object>of("schemaVersion",1,"supportedInputs",List.of()) : declaration(raw);var selected=new ArrayList<Map<String,Object>>();
-        for(var source:catalog)for(Object supported:(List<?>)profile.get("supportedInputs")) {
-            var input=(Map<?,?>)supported;if(!source.get("contentMimeType").equals(input.get("mimeType")))continue;
+        // Exact native inputs take precedence; the generic file capability conveys
+        // authorized bytes, not a promise that a particular document can be parsed.
+        var formats=new HashMap<String,Map<?,?>>();
+        for(Object supported:(List<?>)profile.get("supportedInputs")) {
+            var input=(Map<?,?>)supported;formats.put((String)input.get("mimeType"),input);
+        }
+        for(var source:catalog) {
+            var input=formats.get(source.get("contentMimeType"));
+            if(input==null)input=formats.get("*/*");
+            if(input==null)continue;
             selected.add(Map.of("sourceRefId",source.get("sourceRefId"),"sourceKind",source.get("sourceKind"),"sha256",source.get("contentHash"),
                     "byteLength",source.get("byteLength"),"mimeType",source.get("contentMimeType"),"carrier",input.get("carrier"),"carrierContractDigest",input.get("carrierContractDigest")));
         }

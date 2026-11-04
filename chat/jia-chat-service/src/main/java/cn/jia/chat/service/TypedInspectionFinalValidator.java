@@ -329,7 +329,7 @@ public final class TypedInspectionFinalValidator {
             if (!boundedSourceIdentifier(id) || prior != null && prior.compareTo(id) >= 0
                     || !sha.matches("[0-9a-f]{64}") || !bytes.matches("0|[1-9][0-9]*")
                     || !mime.matches("[a-z0-9.+-]+/[a-z0-9.+-]+")
-                    || !Set.of("DIRECT_TEXT","LOCAL_IMAGE","LOCAL_AUDIO","PARSED_TEXT").contains(carrier)
+                    || !Set.of("DIRECT_TEXT","LOCAL_IMAGE","LOCAL_AUDIO","PARSED_TEXT","LOCAL_FILE").contains(carrier)
                     || !carrierDigest.matches("sha256:[0-9a-f]{64}")) fail(Reason.INVALID_RECEIPT);
             prior = id; normalized.add(new ManifestSource(id, sha, bytes, mime, carrier, carrierDigest));
         }
