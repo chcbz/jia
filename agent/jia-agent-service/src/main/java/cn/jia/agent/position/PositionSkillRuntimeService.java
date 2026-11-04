@@ -5,7 +5,7 @@ import cn.jia.agent.service.PositionAuthority.Scope;
 import cn.jia.agent.security.AgentRuntimeAuthenticationService.Proof;
 import cn.jia.agent.skill.SkillPackages;
 import cn.jia.agent.skill.SkillManifestCodec;
-import cn.jia.economy.mapper.EconomySkillMarketplaceMapper;
+import cn.jia.agent.mapper.skill.SkillCatalogMapper;
 import cn.jia.agent.skill.SkillPackages.Description;
 import org.springframework.stereotype.Service;
 import java.util.*;
@@ -21,10 +21,10 @@ public class PositionSkillRuntimeService {
             String packageDigest,String manifestSha256,String errorCode) { }
     private final PositionSkillService positions;
     private final AgentIdentityService identities;
-    private final EconomySkillMarketplaceMapper market;
+    private final SkillCatalogMapper market;
     private final SkillPackages packages;
     public PositionSkillRuntimeService(PositionSkillService positions,AgentIdentityService identities,
-            EconomySkillMarketplaceMapper market,SkillPackages packages){
+            SkillCatalogMapper market,SkillPackages packages){
         this.positions=positions;this.identities=identities;this.market=market;this.packages=packages;
     }
     /** IO occurs before the native transaction; exact persisted metadata is rechecked inside it. */

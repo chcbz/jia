@@ -3,8 +3,9 @@ import cn.jia.agent.dao.AgentCommandTransportDao;
 import cn.jia.agent.dao.AgentRuntimeDao;
 import cn.jia.agent.entity.AgentCommandDeliveryEntity;
 import cn.jia.agent.hosting.HostingRentHttp;
-import cn.jia.economy.entity.skill.*;
-import cn.jia.economy.mapper.*;
+import cn.jia.agent.entity.skill.*;
+import cn.jia.economy.service.skill.*;
+import cn.jia.agent.mapper.skill.*;
 import cn.jia.agent.security.AgentRuntimeAuthenticationService;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
@@ -20,17 +21,19 @@ public final class SkillInstallResultService {
     // Installer codes proven to occur before activation. IO/CONFLICT/unknown are deliberately absent.
     static final Set<String> SAFE_FAILURES=Set.of("SKILL_INSTALL_DISABLED","SKILL_DOWNLOAD_FORBIDDEN",
             "SKILL_PACKAGE_TOO_LARGE","SKILL_PACKAGE_DIGEST_MISMATCH","SKILL_ARCHIVE_INVALID","SKILL_IDENTITY_MISMATCH");
-    private final EconomySkillMarketplaceMapper market;
-    private final EconomySkillApplicationMapper app;
+    private final SkillCatalogMapper market;
+    private final SkillInstallationMapper app;
     private final AgentCommandTransportDao commands;
     private final SkillMarketplaceService skills;
     private final SkillAgentVersions versions;
     private final AgentRuntimeAuthenticationService authentication;
     private final ObjectProvider<SkillPackages> packages;
     private final TransactionTemplate tx;
-    public SkillInstallResultService(EconomySkillMarketplaceMapper market,EconomySkillApplicationMapper app,
+    private final SkillTradeService trade;
+    public SkillInstallResultService(SkillCatalogMapper market,SkillInstallationMapper app,
             AgentCommandTransportDao commands,SkillMarketplaceService skills,SkillAgentVersions versions,
-            AgentRuntimeAuthenticationService authentication,ObjectProvider<SkillPackages> packages,PlatformTransactionManager manager) {
+            AgentRuntimeAuthenticationService authentication,ObjectProvider<SkillPackages> packages,PlatformTransactionManager manager,SkillTradeService trade) {
+        this.trade=trade;
         this.market=market;this.app=app;this.commands=commands;this.skills=skills;this.versions=versions;
         this.authentication=authentication;this.packages=packages;this.tx=new TransactionTemplate(manager);
     }
@@ -55,7 +58,7 @@ public final class SkillInstallResultService {
         String installId=text(body,"installationId"),messageId=text(body,"messageId");
         var hint=app.installation(tenant,client,installId);
         require(hint!=null && registeredAgent.equals(hint.getTargetAgentId()),403,"SKILL_RESULT_REJECTED");
-        var visible=app.order(tenant,client,hint.getOrderId());
+        var visible=trade.order(tenant,client,hint.getOrderId());
         require(visible!=null,403,"SKILL_RESULT_REJECTED");
         byte[] hash=resultHash(body);
         // Immutable receipt replay does not depend on a package still being resident/readable.
@@ -85,7 +88,7 @@ public final class SkillInstallResultService {
             }
             // Immutable installation/host binding survives an ordinary authorized reconnect.
             versions.requireOwned(actor,registeredAgent,null,false);
-            var order=market.selectOrderForUpdate(tenant,client,hint.getOrderId());
+            var order=trade.selectOrderForUpdate(tenant,client,hint.getOrderId());
             var i=market.selectInstallationForUpdate(tenant,client,registeredAgent,installId);
             require(order!=null && i!=null && order.getOrderId().equals(i.getOrderId()),403,"SKILL_RESULT_REJECTED");
             validateEnvelope(body,i);
@@ -119,11 +122,11 @@ public final class SkillInstallResultService {
                 if(success) {
                     one(market.markInstallationSucceeded(tenant,client,registeredAgent,installId,i.getCommandId(),i.getAttempt(),i.getFencingToken(),i.getDeliveryEpoch(),i.getVersion(),i.getPackageSha256(),installedAt));
                     one(market.markEntitlementActive(tenant,client,registeredAgent,entitlement.getEntitlementId(),installId,entitlement.getVersion(),installedAt));
-                    one(market.markOrderActive(tenant,client,order.getOrderId(),order.getVersion(),transactionId,now));
+                    one(trade.markOrderActive(tenant,client,order.getOrderId(),order.getVersion(),transactionId,now));
                 } else {
                     one(market.markInstallationFailed(tenant,client,registeredAgent,installId,i.getCommandId(),i.getAttempt(),i.getFencingToken(),i.getDeliveryEpoch(),i.getVersion(),failure,now));
                     one(market.markEntitlementFailed(tenant,client,registeredAgent,entitlement.getEntitlementId(),installId,entitlement.getVersion(),now));
-                    one(market.markOrderRefunded(tenant,client,order.getOrderId(),order.getVersion(),transactionId,now));
+                    one(trade.markOrderRefunded(tenant,client,order.getOrderId(),order.getVersion(),transactionId,now));
                 }
             }
             one(app.insertResult(tenant,client,messageId,installId,hash,outcome,now));
@@ -142,12 +145,12 @@ public final class SkillInstallResultService {
         var approved=market.selectApprovedProductVersion(t,c,hint.getProductVersionId());
         var pkg=packages.getObject().prepare(approved);
         return authentication.withFence(proof,false,()->tx.execute(s->{
-            var visible=app.order(t,c,hint.getOrderId());
+            var visible=trade.order(t,c,hint.getOrderId());
             require(visible!=null,403,"SKILL_DOWNLOAD_FORBIDDEN");
             var actor=new HostingRentHttp.Actor(visible.getBuyerId(),t,c,ownerJiacn);
             require(skills.available(actor),503,"SKILL_MARKETPLACE_DISABLED");
             skills.actorLock(actor); versions.requireOwned(actor,hint.getTargetAgentId(),null,false);
-            var o=market.selectOrderForUpdate(t,c,hint.getOrderId());
+            var o=trade.selectOrderForUpdate(t,c,hint.getOrderId());
             var i=market.selectInstallationForUpdate(t,c,hint.getTargetAgentId(),installationId);
             require(o!=null && "INSTALLING".equals(o.getStatus()) && i!=null && "INSTALLING".equals(i.getStatus()),403,"SKILL_DOWNLOAD_FORBIDDEN");
             var binding=app.deliveryBinding(t,c,installationId);

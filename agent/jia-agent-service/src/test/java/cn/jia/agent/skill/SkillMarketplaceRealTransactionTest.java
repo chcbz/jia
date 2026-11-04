@@ -15,10 +15,13 @@ import cn.jia.agent.security.AgentRuntimeAuthentication;
 import cn.jia.agent.security.AgentRuntimeAuthenticationService;
 import cn.jia.agent.service.impl.AgentCommandTransportWriterImpl;
 import cn.jia.economy.config.*;
-import cn.jia.economy.config.skillseed.PlatformSkillPackageCatalog;
+import cn.jia.agent.config.skill.skillseed.PlatformSkillPackageCatalog;
 import cn.jia.economy.entity.*;
-import cn.jia.economy.entity.skill.*;
+import cn.jia.agent.entity.skill.*;
+import cn.jia.economy.service.skill.*;
+import cn.jia.economy.service.impl.SkillTradeServiceImpl;
 import cn.jia.economy.mapper.*;
+import cn.jia.agent.mapper.skill.*;
 import cn.jia.economy.service.impl.EconomyPostingServiceImpl;
 import cn.jia.oauth.entity.OauthApiKeyEntity;
 import cn.jia.oauth.service.ApiKeyService;
@@ -88,8 +91,9 @@ public class SkillMarketplaceRealTransactionTest {
     @TempDir Path packageRoot;
     private Connection schemaConnection;
     private JdbcTemplate jdbc;
-    private EconomySkillMarketplaceMapper market;
-    private EconomySkillApplicationMapper app;
+    private SkillCatalogMapper market;
+    private SkillInstallationMapper app;
+    protected SkillTradeService trade;
     private SkillMarketplaceService service;
     protected SkillInstallResultService results;
     private SkillInstallRecoveryService recovery;
@@ -102,7 +106,7 @@ public class SkillMarketplaceRealTransactionTest {
     private OauthApiKeyEntity key;
     private TransactionTemplate tx;
     private SkillManagedCredentials credentials;
-    private EconomySkillCredentialMapper credentialMapper;
+    private SkillCredentialMapper credentialMapper;
     private ApiKeyService keys;
     private AgentManagedSessionLookup sessions;
     private AgentService agents;
@@ -113,6 +117,9 @@ public class SkillMarketplaceRealTransactionTest {
     private AgentCommandRecoveryDao ackCommands;
 
 
+    private boolean economyEnabled=true;
+    protected boolean economyEnabled() { return economyEnabled; }
+
     @BeforeEach protected void setup() throws Exception {
         var ds=fixtureDataSource();
         jdbc=new JdbcTemplate(ds); var manager=new DataSourceTransactionManager(ds); tx=new TransactionTemplate(manager);
@@ -122,13 +129,14 @@ public class SkillMarketplaceRealTransactionTest {
         for(String resource:List.of("db/economy-v0-foundation.sql","db/economy-v0-skill-marketplace.sql","db/economy-v0-skill-application.sql","db/agent-command-transport-schema.sql")) schema(resource);
         var config=new org.apache.ibatis.session.Configuration();config.setMapUnderscoreToCamelCase(true);
         if(!mysqlFixture()) config.addInterceptor(new SkillExecutionMapperRealTransactionTest.MySqlBinaryCastAdapter());
-        for(Class<?> type:List.of(EconomySkillMarketplaceMapper.class,EconomySkillApplicationMapper.class,EconomySkillCredentialMapper.class,EconomyLedgerMapper.class,AgentCommandTransportMapper.class,AgentCommandRecoveryMapper.class,AgentSkillInstallRecoveryMapper.class)) config.addMapper(type);
+        for(Class<?> type:List.of(SkillCatalogMapper.class,SkillInstallationMapper.class,SkillTradeMapper.class,SkillCredentialMapper.class,SkillHostingCredentialMapper.class,EconomyLedgerMapper.class,AgentCommandTransportMapper.class,AgentCommandRecoveryMapper.class,AgentSkillInstallRecoveryMapper.class)) config.addMapper(type);
         var factory=new SqlSessionFactoryBean();factory.setDataSource(ds);factory.setConfiguration(config);
         var sql=new SqlSessionTemplate(Objects.requireNonNull(factory.getObject()));
-        market=spy(sql.getMapper(EconomySkillMarketplaceMapper.class));app=sql.getMapper(EconomySkillApplicationMapper.class);
+        market=spy(sql.getMapper(SkillCatalogMapper.class));app=sql.getMapper(SkillInstallationMapper.class);
         ledger=sql.getMapper(EconomyLedgerMapper.class);
-        var gate=new EconomyPreviewGate(new EconomyPreviewProperties(true,List.of(new EconomyPreviewProperties.AllowedScope(ACTOR.tenantId(),ACTOR.clientId()))));
+        var gate=new EconomyPreviewGate(new EconomyPreviewProperties(economyEnabled(),List.of(new EconomyPreviewProperties.AllowedScope(ACTOR.tenantId(),ACTOR.clientId()))));
         var posting=new EconomyPostingServiceImpl(ledger,manager,gate);
+        trade=new SkillTradeServiceImpl(sql.getMapper(SkillTradeMapper.class),ledger,posting,gate);
         agents=mock(AgentService.class); owner=mock(HostingRentOwnerResolver.class); var runtimes=mock(AgentRuntimeDao.class);
         runtime=new AgentRuntimeEntity().setAgentId(AGENT).setOwnerJiacn(ACTOR.ownerJiacn()).setBindingId(7L).setTokenHash("registration-1").setStatus("online");
         runtime.setTenantId(ACTOR.tenantId());
@@ -159,27 +167,27 @@ public class SkillMarketplaceRealTransactionTest {
         when(agents.requireOwnedAgentCapabilities(ACTOR.tenantId(),ACTOR.clientId(),ACTOR.ownerJiacn(),AGENT)).thenReturn(dto);
         versions=new SkillAgentVersions(app,runtimes,provider(agents),owner,manager);
         var commands=new AgentCommandTransportDaoImpl(sql.getMapper(AgentCommandTransportMapper.class));
-        var writer=new SkillInstallCommandWriter(commands,gate);
+        var writer=new SkillInstallCommandWriter(commands);
         var packages=new SkillPackages(packageRoot); keys=mock(ApiKeyService.class);
         key=new OauthApiKeyEntity();key.setId("key-1");key.setJiacn(ACTOR.ownerJiacn());key.setClientId(ACTOR.clientId());key.setTenantId(ACTOR.tenantId());key.setStatus(1);
         when(keys.get("key-1")).thenReturn(key);
-        credentialMapper=spy(sql.getMapper(EconomySkillCredentialMapper.class));
+        credentialMapper=spy(sql.getMapper(SkillCredentialMapper.class));
         doReturn(List.of()).when(credentialMapper).hostingCandidates(anyString(),anyString(),anyString());
         credentialMapper.insert("sc_1","key-1",AGENT,7L,ACTOR.tenantId(),ACTOR.clientId(),1L);
-        credentials=new SkillManagedCredentials(credentialMapper,app,mock(EconomyHostingRentMapper.class),versions,runtimes,provider(keys),gate,manager);
+        credentials=new SkillManagedCredentials(credentialMapper,app,new cn.jia.economy.service.impl.SkillHostingCredentialLookupImpl(sql.getMapper(SkillHostingCredentialMapper.class),mock(EconomyHostingRentMapper.class)),versions,runtimes,provider(keys),manager,trade);
         sessions=mock(AgentManagedSessionLookup.class);
         when(sessions.isReady(eq(ACTOR.tenantId()),eq(ACTOR.clientId()),eq(AGENT),any())).thenReturn(true);
         positionService=mock(cn.jia.agent.position.PositionSkillService.class);
         when(positionService.currentState(any())).thenReturn(cn.jia.agent.position.PositionSkillState.empty());
         when(positionService.read(any())).thenReturn(new cn.jia.agent.position.PositionSkillService.View(null,null,0,cn.jia.agent.position.PositionSkillState.empty()));
-        service=new SkillMarketplaceService(market,app,ledger,posting,gate,versions,runtimes,provider(writer),provider(packages),provider(authentication),provider(sessions),manager,positionService);
+        service=new SkillMarketplaceService(market,app,trade,versions,runtimes,provider(writer),provider(packages),provider(authentication),provider(sessions),manager,positionService);
         dispatch=new SkillInstallDispatchService(app,market,service,versions,authentication,commands,provider(sessions),manager);
         recoveryMapper=sql.getMapper(AgentSkillInstallRecoveryMapper.class);
-        recovery=new SkillInstallRecoveryService(recoveryMapper,new AgentCommandRecoveryDaoImpl(sql.getMapper(AgentCommandRecoveryMapper.class)),gate,dispatch,manager,new FixedTenantAdmissionPolicy("0", null));
+        recovery=new SkillInstallRecoveryService(recoveryMapper,new AgentCommandRecoveryDaoImpl(sql.getMapper(AgentCommandRecoveryMapper.class)),dispatch,manager,new FixedTenantAdmissionPolicy("0", null));
         ackCommands=spy(new AgentCommandRecoveryDaoImpl(sql.getMapper(AgentCommandRecoveryMapper.class)));
-        nativeAcks=new SkillInstallAckService(app,market,ackCommands,recoveryMapper,authentication,gate,service,manager);
+        nativeAcks=new SkillInstallAckService(app,market,ackCommands,recoveryMapper,authentication,service,manager);
         commandsForResults=commands;transactionManagerForResults=manager;
-        results=new SkillInstallResultService(market,app,commands,service,versions,authentication,provider(packages),manager);
+        results=new SkillInstallResultService(market,app,commands,service,versions,authentication,provider(packages),manager,trade);
         for(var p:new PlatformSkillPackageCatalog().products()) {
             market.insertProduct(new SkillProductEntity().setProductId(p.productId()).setSellerType("SYSTEM").setSellerId("SKILL_STORE")
                     .setName(p.name()).setDescription(p.description()).setStatus("DRAFT").setVersion(1L)
@@ -355,7 +363,7 @@ public class SkillMarketplaceRealTransactionTest {
         assertEquals(0,app.successfulReceipts(ACTOR.tenantId(),ACTOR.clientId(),i.getInstallationId().toUpperCase(Locale.ROOT)));
         var identities=mock(AgentIdentityService.class);
         when(identities.requireCanonicalAgentIdInScope(ACTOR.tenantId(),ACTOR.clientId(),ACTOR.ownerJiacn(),AGENT)).thenReturn(AGENT);
-        var descriptors=new InstalledSkillDescriptorService(identities,market,app,provider(new SkillPackages(packageRoot)));
+        var descriptors=new InstalledSkillDescriptorService(identities,market,app,provider(new SkillPackages(packageRoot)),trade);
         var descriptor=descriptors.read(new SkillCapabilityLookup.Scope(ACTOR.tenantId(),ACTOR.clientId(),ACTOR.ownerJiacn(),AGENT)).skills().getFirst();
         assertTrue(descriptor.verified()); assertEquals(success.get("manifestSha256"),descriptor.manifestSha256());
         assertEquals("pdf-export",descriptor.skillKey());
@@ -364,7 +372,7 @@ public class SkillMarketplaceRealTransactionTest {
         // New service/process with cold package cache still replays the immutable receipt after object retirement.
         java.nio.file.Files.delete(packageRoot.resolve(HexFormat.of().formatHex(SkillPackageStore.sha256(packageBytes))+".zip"));
         var cold=new SkillInstallResultService(market,app,commandsForResults,service,versions,authentication,
-                provider(new SkillPackages(packageRoot)),transactionManagerForResults);
+                provider(new SkillPackages(packageRoot)),transactionManagerForResults,trade);
         assertEquals(results.accept(proof(),success),cold.accept(proof(),success));
         assertEquals("ACTIVE",service.order(ACTOR,i.getOrderId()).get("status"));
         assertEquals(receipt,service.purchase(ACTOR,idem,body,false));assertEquals(100000000L,wallet());
@@ -471,11 +479,24 @@ public class SkillMarketplaceRealTransactionTest {
         results.accept(proof(),result(i,"SUCCEEDED",null));
         assertEquals(2,count("economy_transaction"));assertEquals("ACTIVE",service.order(ACTOR,i.getOrderId()).get("status"));
     }
+    @Test void disabledEconomyStillAllowsCatalogAndFreeInstallButRejectsPaidMutation() throws Exception {
+        tearDown();
+        economyEnabled=false;
+        setup();
+        assertTrue(service.available(ACTOR));
+        assertFalse(service.catalog(ACTOR,false).isEmpty());
+        var paid=purchaseBody("spv_repo_test_1_0_0");
+        assertThrows(cn.jia.economy.exception.EconomyPostingException.class,
+                ()->service.purchase(ACTOR,uuid(),paid,false));
+        assertEquals(0,count("economy_transaction"));
+        assertEquals(0,count("economy_skill_order"));
+        freeSkillHasDurableInstallationAndNoInventedMoneyReferences();
+    }
     @Test void freeSkillHasDurableInstallationAndNoInventedMoneyReferences() {
         service.purchase(ACTOR,uuid(),purchaseBody("spv_repo_inspector_1_0_0"),false);var i=installation();sent(i);
         results.accept(proof(),result(i,"SUCCEEDED",null));
         assertEquals(0,count("economy_transaction"));assertEquals(0,count("economy_escrow"));assertEquals(100000000L,wallet());
-        var o=app.order(ACTOR.tenantId(),ACTOR.clientId(),i.getOrderId());assertNull(o.getEscrowId());assertNull(o.getReserveTransactionId());assertNull(o.getCaptureTransactionId());
+        var o=trade.order(ACTOR.tenantId(),ACTOR.clientId(),i.getOrderId());assertNull(o.getEscrowId());assertNull(o.getReserveTransactionId());assertNull(o.getCaptureTransactionId());
         assertEquals("ACTIVE",o.getStatus());
     }
     @Test void insufficientOrFailedPendingInsertRollsBackFundsCommandVersionAndAllBusinessRows() {
@@ -512,7 +533,7 @@ public class SkillMarketplaceRealTransactionTest {
     }
     @Test void exactRuntimeProofNeverBypassesRealHostingRentAdmissionOrConsumesVersion() {
         var body=purchaseBody("spv_repo_test_1_0_0");long version=versions.requireOwned(ACTOR,AGENT,null,false);
-        var rentMapper=mock(EconomyHostingRentMapper.class);
+        var rentMapper=new cn.jia.economy.service.impl.SkillHostingCredentialLookupImpl(sql.getMapper(SkillHostingCredentialMapper.class),mock(EconomyHostingRentMapper.class));
         var lease=new EconomyHostingLeaseEntity().setStatus("ACTIVE").setPaidThrough(1L);
         when(rentMapper.selectLatestLease(ACTOR.tenantId(),ACTOR.clientId(),AGENT)).thenReturn(lease);
         var rentAdmission=new cn.jia.agent.hosting.HostingRentWorkAdmission(rentMapper,true);
@@ -550,7 +571,7 @@ public class SkillMarketplaceRealTransactionTest {
         assertEquals("INSTALLING",service.order(ACTOR,i.getOrderId()).get("status"));
     }
     @Test void fundingLookupUsesOnlyPersistedInstalledActiveExactAgentSkills() {
-        var lookup=new InstalledSkillEntitlementLookup(market,app,versions,service);
+        var lookup=new InstalledSkillEntitlementLookup(market,app,versions,service,trade);
         var requirement=new cn.jia.agent.entity.funding.AgentSkillRequirementDTO();requirement.setSkillKey("repo-test");requirement.setVersionRange(">=1.0.0");
         var actor=new cn.jia.agent.service.funding.FundedBountyActor(ACTOR.tenantId(),ACTOR.clientId(),ACTOR.ownerJiacn(), ACTOR.actorId());
         service.purchase(ACTOR,uuid(),purchaseBody("spv_repo_test_1_0_0"),false);var i=installation();sent(i);

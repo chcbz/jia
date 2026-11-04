@@ -12,7 +12,8 @@ import cn.jia.agent.security.*;
 import cn.jia.chat.archive.controller.*;
 import cn.jia.chat.archive.store.*;
 import cn.jia.economy.mapper.*;
-import cn.jia.economy.entity.skill.SkillProductVersionEntity;
+import cn.jia.agent.mapper.skill.*;
+import cn.jia.agent.entity.skill.SkillProductVersionEntity;
 import cn.jia.common.dao.BaseDaoImpl;
 import cn.jia.core.security.*;
 import cn.jia.user.dao.*;
@@ -143,7 +144,7 @@ class ArchiveNativeHttpMySqlTest {
         byte[] generalZip=variantPackage(zip,"archive-general");new SkillPackageStore(packageRoot).publish(generalZip);
         jdbc.update("INSERT INTO economy_skill_product(product_id,name,description,status,version,tenant_id,client_id,create_time,update_time) VALUES('archive-package','Archive maintenance','Isolated approved fixture','DRAFT',1,?,?,?,?)",TENANT,CLIENT,now,now);
         startHttp();
-        var market=spring.getBean(EconomySkillMarketplaceMapper.class);
+        var market=spring.getBean(SkillCatalogMapper.class);
         var version=new SkillProductVersionEntity().setProductVersionId("archive-v1").setProductId("archive-package").setVersionSequence(1L).setSkillKey("archive-maintenance").setSkillVersion("1.1.1").setPriceMicro(0L).setPackageSha256(hash(zip)).setPackageSize((long)zip.length).setApprovedPermissionsManifest("[]").setApprovedPermissionsSha256(hash("[]")).setDeploymentRestriction("NONE").setReviewStatus("APPROVED");
         version.setTenantId(TENANT);version.setClientId(CLIENT);version.setCreateTime(now);assertEquals(1,market.insertProductVersion(version));
         var generalVersion=new SkillProductVersionEntity().setProductVersionId("archive-general-v1").setProductId("archive-package").setVersionSequence(2L).setSkillKey("archive-general").setSkillVersion("1.1.1").setPriceMicro(0L).setPackageSha256(hash(generalZip)).setPackageSize((long)generalZip.length).setApprovedPermissionsManifest("[]").setApprovedPermissionsSha256(hash("[]")).setDeploymentRestriction("NONE").setReviewStatus("APPROVED");
@@ -214,7 +215,7 @@ class ArchiveNativeHttpMySqlTest {
         assertEquals(InstallState.REMOVED,positions.read(scope).state().installations().values().stream().filter(i->i.skillKey().equals("archive-maintenance")).findFirst().orElseThrow().state());
         assertTrue(Files.isRegularFile(root.resolve("codex-home/skills/archive-general/SKILL.md")));
         var retained=new PositionInstalledSkills(positions,spring.getBean(AgentIdentityService.class),market,spring.getBean(SkillPackages.class));
-        retained.setManagement(spring.getBean(SkillManagementService.class),spring.getBean(EconomySkillManagementMapper.class));
+        retained.setManagement(spring.getBean(SkillManagementService.class),spring.getBean(SkillManagementMapper.class));
         var lookupScope=new SkillCapabilityLookup.Scope(TENANT,CLIENT,OWNER,AGENT);
         assertEquals(List.of("archive-general"),retained.read(lookupScope).stream().map(InstalledSkillDescriptorLookup.Descriptor::skillKey).toList());
         int entitled=new org.springframework.transaction.support.TransactionTemplate(spring.getBean(DataSourceTransactionManager.class)).execute(status->retained.entitlements(lookupScope).size());
@@ -271,7 +272,7 @@ class ArchiveNativeHttpMySqlTest {
             configuration.setMapUnderscoreToCamelCase(true); configuration.setLogImpl(NoLoggingImpl.class);
             for (Class<?> mapper : List.of(AgentRuntimeV1InstallationMapper.class, AgentRuntimeMapper.class,
                     AgentIdentityRegistryMapper.class, AgentIdentityAliasMapper.class, AgentPersonaBindingMapper.class,
-                    EconomySkillMarketplaceMapper.class,EconomySkillManagementMapper.class,EconomySkillApplicationMapper.class)) configuration.addMapper(mapper);
+                    SkillCatalogMapper.class,SkillManagementMapper.class,SkillInstallationMapper.class)) configuration.addMapper(mapper);
             GlobalConfig global = new GlobalConfig(); global.setBanner(false);
             global.setIdentifierGenerator(new DefaultIdentifierGenerator());
             MybatisSqlSessionFactoryBean bean = new MybatisSqlSessionFactoryBean();
@@ -342,9 +343,9 @@ class ArchiveNativeHttpMySqlTest {
         @Bean SensitiveResponseProperties sensitiveProperties() { return new SensitiveResponseProperties(); }
         @Bean SensitiveResponseBodyAdvice sensitiveAdvice(SensitiveResponseProperties properties) { return new SensitiveResponseBodyAdvice(properties); }
 
-        @Bean EconomySkillMarketplaceMapper market(SqlSessionTemplate session) { return session.getMapper(EconomySkillMarketplaceMapper.class); }
-        @Bean EconomySkillManagementMapper managementMapper(SqlSessionTemplate session) {return session.getMapper(EconomySkillManagementMapper.class);}
-        @Bean EconomySkillApplicationMapper applicationMapper(SqlSessionTemplate session) {return session.getMapper(EconomySkillApplicationMapper.class);}
+        @Bean SkillCatalogMapper market(SqlSessionTemplate session) { return session.getMapper(SkillCatalogMapper.class); }
+        @Bean SkillManagementMapper managementMapper(SqlSessionTemplate session) {return session.getMapper(SkillManagementMapper.class);}
+        @Bean SkillInstallationMapper applicationMapper(SqlSessionTemplate session) {return session.getMapper(SkillInstallationMapper.class);}
         @Bean SkillMarketplaceService marketplace() {return mock(SkillMarketplaceService.class);}
         @Bean SkillAgentVersions versions() {return mock(SkillAgentVersions.class);}
         @Bean AgentManagedSessionLookup sessions(AgentRuntimeAuthenticationService auth) {
@@ -356,19 +357,19 @@ class ArchiveNativeHttpMySqlTest {
         }
         @Bean SkillCapabilityLookup capabilities() {return (scope,fence)->measuredCatalog.state()==SkillCapabilityLookup.State.AVAILABLE && measuredCatalog.fence().equals(fence)
                 ?measuredCatalog:SkillCapabilityLookup.View.unavailable(SkillCapabilityLookup.State.DISCONNECTED);}
-        @Bean SkillManagementService management(EconomySkillManagementMapper db,EconomySkillMarketplaceMapper market,
-                EconomySkillApplicationMapper app,SkillMarketplaceService marketplace,SkillAgentVersions versions,
-                AgentRuntimeDao runtimes,AgentRuntimeV1InstallationDao installations,AgentRuntimeAuthenticationService auth,
+        @Bean SkillManagementService management(SkillManagementMapper db,SkillCatalogMapper market,
+                SkillInstallationMapper app,SkillMarketplaceService marketplace, cn.jia.economy.service.skill.SkillTradeService trade,SkillAgentVersions versions,
+                AgentRuntimeDao runtimes,AgentRuntimeV1InstallationDao installations,AgentRuntimeAuthenticationService auth,cn.jia.agent.service.AgentIdentityService identities,
                 ObjectProvider<SkillPackages> packages,ObjectProvider<SkillInstallCommandWriter> writer,
                 ObjectProvider<AgentManagedSessionLookup> sessions,ObjectProvider<SkillCapabilityLookup> capabilities,DataSourceTransactionManager tx) {
-            return new SkillManagementService(db,market,app,marketplace,versions,runtimes,installations,auth,packages,writer,sessions,capabilities,tx);
+            return new SkillManagementService(db,market,app,marketplace,trade,versions,runtimes,installations,auth,identities,packages,writer,sessions,capabilities,tx);
         }
         @Bean SkillPackageController skillPackageController(SkillManagementService management) {return new SkillPackageController(management);}
         @Bean JdbcTemplate jdbc(DataSource ds) { return new JdbcTemplate(ds); }
         @Bean PositionSkillStore positionStore(JdbcTemplate jdbc) { return new PositionSkillStore(jdbc); }
-        @Bean PositionSkillService positions(PositionSkillStore store,AgentIdentityService ids,EconomySkillMarketplaceMapper market,DataSourceTransactionManager tx) {return new PositionSkillService(store,ids,market,tx);}
+        @Bean PositionSkillService positions(PositionSkillStore store,AgentIdentityService ids,SkillCatalogMapper market,DataSourceTransactionManager tx) {return new PositionSkillService(store,ids,market,tx);}
         @Bean SkillPackages packages() {return new SkillPackages(packageRoot);}
-        @Bean PositionSkillRuntimeService positionRuntime(PositionSkillService p,AgentIdentityService ids,EconomySkillMarketplaceMapper m,SkillPackages packages) {return new PositionSkillRuntimeService(p,ids,m,packages);}
+        @Bean PositionSkillRuntimeService positionRuntime(PositionSkillService p,AgentIdentityService ids,SkillCatalogMapper m,SkillPackages packages) {return new PositionSkillRuntimeService(p,ids,m,packages);}
         @Bean PositionSkillRuntimeController positionController(PositionSkillRuntimeService service,AgentRuntimeAuthenticationService auth) {return new PositionSkillRuntimeController(service,auth);}
         @Bean SpringArchiveTransactions archiveTx(DataSourceTransactionManager tx) {return new SpringArchiveTransactions(tx);}
         @Bean JdbcArchiveContentStore content(JdbcTemplate jdbc) {return new JdbcArchiveContentStore(jdbc);}

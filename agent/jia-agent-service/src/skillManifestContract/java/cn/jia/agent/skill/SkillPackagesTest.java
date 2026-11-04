@@ -1,7 +1,7 @@
 package cn.jia.agent.skill;
 
-import cn.jia.economy.entity.skill.SkillProductVersionEntity;
-import cn.jia.economy.config.skillseed.PlatformSkillPackageCatalog;
+import cn.jia.agent.entity.skill.SkillProductVersionEntity;
+import cn.jia.agent.config.skill.skillseed.PlatformSkillPackageCatalog;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.transaction.support.TransactionSynchronizationManager;

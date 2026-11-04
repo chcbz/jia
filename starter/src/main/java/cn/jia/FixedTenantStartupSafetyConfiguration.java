@@ -43,6 +43,6 @@ public class FixedTenantStartupSafetyConfiguration {
         }
         String className = type == null ? beanFactory.getBeanDefinition(beanName).getBeanClassName() : type.getName();
         return className != null && (className.endsWith("SchemaInitializer")
-                || className.endsWith("EconomyPlatformSkillSeeder"));
+                || className.endsWith("PlatformSkillSeeder"));
     }
 }

@@ -3,10 +3,11 @@ package cn.jia.agent.skill;
 import cn.jia.agent.service.PositionAuthority;
 import cn.jia.agent.service.PositionAuthority.Scope;
 import cn.jia.agent.service.PositionAuthority.Grant;
-import cn.jia.economy.config.skillseed.PlatformSkillPackageCatalog;
-import cn.jia.economy.config.skillseed.PlatformSkillPackageCatalog.*;
-import cn.jia.economy.entity.skill.*;
-import cn.jia.economy.mapper.EconomySkillMarketplaceMapper;
+import cn.jia.agent.config.skill.skillseed.PlatformSkillPackageCatalog;
+import cn.jia.agent.config.skill.skillseed.PlatformSkillPackageCatalog.*;
+import cn.jia.agent.entity.skill.*;
+import cn.jia.economy.service.skill.*;
+import cn.jia.agent.mapper.skill.SkillCatalogMapper;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
@@ -22,10 +23,10 @@ public final class SkillPackagePublicationService {
             String packageSha256,String manifestSha256,long expectedProductVersion,String coveredUpgradeFromProductVersionId) { }
     public record Receipt(String productId,String productVersionId,long productVersion,String packageSha256,
             String manifestSha256,String disposition,String coveredUpgradeFromProductVersionId) { }
-    private final EconomySkillMarketplaceMapper market;
+    private final SkillCatalogMapper market;
     private final ObjectProvider<SkillPackages> packages;
     private final PositionAuthority positions;
-    public SkillPackagePublicationService(EconomySkillMarketplaceMapper market,ObjectProvider<SkillPackages> packages,PositionAuthority positions) {
+    public SkillPackagePublicationService(SkillCatalogMapper market,ObjectProvider<SkillPackages> packages,PositionAuthority positions) {
         this.positions=Objects.requireNonNull(positions);this.market=Objects.requireNonNull(market);this.packages=Objects.requireNonNull(packages);
     }
     public Receipt publish(Scope actor,Grant grant,Publish command,byte[] archive) {

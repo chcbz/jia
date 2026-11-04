@@ -6,8 +6,10 @@ import cn.jia.agent.hosting.HostingRentHttp;
 import cn.jia.agent.security.AgentRuntimeAuthentication;
 import cn.jia.agent.security.AgentRuntimeAuthenticationService;
 import cn.jia.agent.service.*;
-import cn.jia.economy.entity.skill.*;
+import cn.jia.agent.entity.skill.*;
+import cn.jia.economy.service.skill.*;
 import cn.jia.economy.mapper.*;
+import cn.jia.agent.mapper.skill.*;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -28,8 +30,9 @@ class SkillManagementRecommendationTest {
         ObjectProvider<T> p=mock(ObjectProvider.class);when(p.getIfAvailable()).thenReturn(value);when(p.getObject()).thenReturn(value);return p;
     }
     static class Fixture {
-        final EconomySkillManagementMapper db=mock(EconomySkillManagementMapper.class);
-        final EconomySkillMarketplaceMapper market=mock(EconomySkillMarketplaceMapper.class);
+        final SkillTradeService trade=mock(SkillTradeService.class);
+        final SkillManagementMapper db=mock(SkillManagementMapper.class);
+        final SkillCatalogMapper market=mock(SkillCatalogMapper.class);
         final SkillAgentVersions versions=mock(SkillAgentVersions.class);
         final SkillMarketplaceService marketplace=mock(SkillMarketplaceService.class);
         final AgentRuntimeAuthenticationService auth=mock(AgentRuntimeAuthenticationService.class);
@@ -41,7 +44,7 @@ class SkillManagementRecommendationTest {
         Fixture() {
             var tx=mock(PlatformTransactionManager.class);when(tx.getTransaction(any())).thenReturn(new SimpleTransactionStatus());
             when(marketplace.available(ACTOR)).thenReturn(true);
-            service=new SkillManagementService(db,market,mock(EconomySkillApplicationMapper.class),marketplace,versions,
+            service=new SkillManagementService(db,market,mock(SkillInstallationMapper.class),marketplace,trade,versions,
                     mock(AgentRuntimeDao.class),mock(AgentRuntimeV1InstallationDao.class),auth,mock(AgentIdentityService.class),
                     provider(packages),provider(writer),provider(sessions),provider(catalog),tx);
         }

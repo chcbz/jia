@@ -13,8 +13,8 @@ import cn.jia.agent.service.funding.FundedBountyQuoteCalculator;
 import cn.jia.economy.entity.EconomyHostingLeaseEntity;
 import cn.jia.economy.entity.EconomyWalletLedgerRow;
 import cn.jia.economy.entity.EconomyWalletSnapshotRow;
-import cn.jia.economy.entity.skill.SkillEntitlementEntity;
-import cn.jia.economy.entity.skill.SkillInstallationEntity;
+import cn.jia.agent.entity.skill.SkillEntitlementEntity;
+import cn.jia.agent.entity.skill.SkillInstallationEntity;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 

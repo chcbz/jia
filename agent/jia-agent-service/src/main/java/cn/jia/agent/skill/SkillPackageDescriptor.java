@@ -1,6 +1,7 @@
 package cn.jia.agent.skill;
+import cn.jia.agent.config.skill.skillseed.PlatformSkillPackageCatalog;
 
-import cn.jia.economy.config.skillseed.PlatformSkillPackageCatalog.PlatformSkillPackage;
+import cn.jia.agent.config.skill.skillseed.PlatformSkillPackageCatalog.PlatformSkillPackage;
 import java.io.IOException;
 import java.nio.file.*;
 import java.nio.file.attribute.PosixFilePermissions;

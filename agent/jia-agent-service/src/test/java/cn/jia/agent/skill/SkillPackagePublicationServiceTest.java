@@ -2,9 +2,10 @@ package cn.jia.agent.skill;
 import cn.jia.agent.service.PositionAuthority;
 import cn.jia.agent.position.PositionSkillException;
 import java.util.function.Supplier;
-import cn.jia.economy.config.skillseed.PlatformSkillPackageCatalog;
-import cn.jia.economy.entity.skill.*;
-import cn.jia.economy.mapper.EconomySkillMarketplaceMapper;
+import cn.jia.agent.config.skill.skillseed.PlatformSkillPackageCatalog;
+import cn.jia.agent.entity.skill.*;
+import cn.jia.economy.service.skill.*;
+import cn.jia.agent.mapper.skill.SkillCatalogMapper;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.beans.factory.ObjectProvider;
@@ -21,7 +22,7 @@ class SkillPackagePublicationServiceTest {
     final PositionAuthority.Scope actor=new PositionAuthority.Scope("0","client","owner");
     final PositionAuthority.Grant grant=new PositionAuthority.Grant("appointment",1,1,"agent",1,null,true);
     final PositionAuthority positions=mock(PositionAuthority.class);
-    final EconomySkillMarketplaceMapper mapper=mock(EconomySkillMarketplaceMapper.class);
+    final SkillCatalogMapper mapper=mock(SkillCatalogMapper.class);
     final Map<String,SkillProductEntity> products=new HashMap<>();final Map<String,SkillProductVersionEntity> versions=new HashMap<>();
     SkillPackages packages;SkillPackagePublicationService service;PlatformSkillPackageCatalog.PlatformSkillPackage original;
     @BeforeEach void setup() {

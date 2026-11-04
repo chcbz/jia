@@ -1,9 +1,9 @@
 package cn.jia.agent.skill;
 
-import cn.jia.economy.config.skillseed.PlatformSkillPackageCatalog;
-import cn.jia.economy.config.skillseed.PlatformSkillPackageCatalog.PlatformSkillPackage;
-import cn.jia.economy.config.skillseed.PlatformSkillPackageCatalog.PlatformSkillProduct;
-import cn.jia.economy.entity.skill.SkillProductVersionEntity;
+import cn.jia.agent.config.skill.skillseed.PlatformSkillPackageCatalog;
+import cn.jia.agent.config.skill.skillseed.PlatformSkillPackageCatalog.PlatformSkillPackage;
+import cn.jia.agent.config.skill.skillseed.PlatformSkillPackageCatalog.PlatformSkillProduct;
+import cn.jia.agent.entity.skill.SkillProductVersionEntity;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import java.nio.file.Path;
 import java.util.*;
