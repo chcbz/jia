@@ -22,7 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class SkillSchemaContractTest {
     private static final Set<String> MUTABLE_METHODS = Set.of(
-            "publishProductVersion",
+            "publishProductVersion", "updateProductMetadata", "retireProduct",
             "markOrderInstalling", "markOrderActive", "markOrderRefunded",
             "markInstallationInstalling", "markInstallationSucceeded", "markInstallationFailed",
             "markEntitlementActive", "markEntitlementFailed");

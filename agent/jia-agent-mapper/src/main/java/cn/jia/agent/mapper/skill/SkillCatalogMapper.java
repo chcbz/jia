@@ -384,6 +384,9 @@ public interface SkillCatalogMapper {
               AND v.product_version_id=i.product_version_id
             JOIN economy_skill_product p ON p.tenant_id=v.tenant_id AND p.client_id=v.client_id AND p.product_id=v.product_id
             WHERE i.tenant_id=#{tenantId} AND i.client_id=#{clientId} AND i.target_agent_id=#{agentId}
+              AND OCTET_LENGTH(i.tenant_id)=OCTET_LENGTH(#{tenantId})
+              AND OCTET_LENGTH(i.client_id)=OCTET_LENGTH(#{clientId})
+              AND OCTET_LENGTH(i.target_agent_id)=OCTET_LENGTH(#{agentId})
             """)
     java.util.List<java.util.Map<String,Object>> selectInstallationTitles(@Param("tenantId") String tenant,
             @Param("clientId") String client,@Param("agentId") String agent);

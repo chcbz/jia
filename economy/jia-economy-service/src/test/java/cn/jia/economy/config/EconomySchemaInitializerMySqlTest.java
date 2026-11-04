@@ -228,12 +228,12 @@ class EconomySchemaInitializerMySqlTest {
                 + rs.getString("event_object_table") + "|"
                 + rs.getString("action_timing") + "|"
                 + rs.getString("event_manipulation") + "|"
-                + EconomySchemaInitializer.normalizeTriggerSql(rs.getString("action_statement"))));
+                + cn.jia.core.sql.SchemaSqlText.normalizeTriggerSql(rs.getString("action_statement"))));
         return List.copyOf(snapshot);
     }
 
     private void executeSql(JdbcTemplate jdbc, String sql) {
-        for (String statement : EconomySchemaInitializer.splitSql(sql)) jdbc.execute(statement);
+        for (String statement : cn.jia.core.sql.SchemaSqlText.splitSql(sql)) jdbc.execute(statement);
     }
 
     private String readResource(String resource) throws Exception {

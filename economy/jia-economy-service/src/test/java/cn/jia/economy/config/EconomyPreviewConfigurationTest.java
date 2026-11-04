@@ -131,11 +131,11 @@ class EconomyPreviewConfigurationTest {
                 + "SET `MESSAGE_TEXT` = _UTF8MB4 'immutable'; END )) ";
 
         assertEquals("begin signal sqlstate '45000' set message_text='_utf8mb4 MiXeD (A = B)  O''Brien\\'s'; end",
-                EconomySchemaInitializer.normalizeTriggerSql(literal));
-        assertNotEquals(EconomySchemaInitializer.normalizeTriggerSql(literal),
-                EconomySchemaInitializer.normalizeTriggerSql(changedLiteral));
-        assertEquals(EconomySchemaInitializer.normalizeTriggerSql(canonical),
-                EconomySchemaInitializer.normalizeTriggerSql(formatted));
+                cn.jia.core.sql.SchemaSqlText.normalizeTriggerSql(literal));
+        assertNotEquals(cn.jia.core.sql.SchemaSqlText.normalizeTriggerSql(literal),
+                cn.jia.core.sql.SchemaSqlText.normalizeTriggerSql(changedLiteral));
+        assertEquals(cn.jia.core.sql.SchemaSqlText.normalizeTriggerSql(canonical),
+                cn.jia.core.sql.SchemaSqlText.normalizeTriggerSql(formatted));
     }
 
     @Test

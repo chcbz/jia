@@ -284,8 +284,8 @@ public final class SkillApplicationSchemaInitializer implements InitializingBean
         return expected.table().equalsIgnoreCase(actual.table())
                 && expected.timing().equalsIgnoreCase(actual.timing())
                 && expected.event().equalsIgnoreCase(actual.event())
-                && EconomySchemaInitializer.normalizeTriggerSql(expected.statement())
-                .equals(EconomySchemaInitializer.normalizeTriggerSql(actual.statement()));
+                && cn.jia.core.sql.SchemaSqlText.normalizeTriggerSql(expected.statement())
+                .equals(cn.jia.core.sql.SchemaSqlText.normalizeTriggerSql(actual.statement()));
     }
 
     static List<String> tableDdlStatements() {
@@ -295,12 +295,12 @@ public final class SkillApplicationSchemaInitializer implements InitializingBean
         } catch (IOException exception) {
             throw new IllegalStateException("Missing ECO-V0 skill DDL resource " + DDL_RESOURCE, exception);
         }
-        List<String> statements = EconomySchemaInitializer.splitSql(sql);
+        List<String> statements = cn.jia.core.sql.SchemaSqlText.splitSql(sql);
         if (statements.size() != TABLES.size()) {
             throw new IllegalStateException("ECO-V0 skill DDL must contain only six additive tables");
         }
         for (int index = 0; index < statements.size(); index++) {
-            String normalized = EconomySchemaInitializer.normalizeSql(statements.get(index));
+            String normalized = cn.jia.core.sql.SchemaSqlText.normalizeSql(statements.get(index));
             if (!normalized.startsWith("create table if not exists " + TABLES.get(index) + " ")
                     || containsUnsafeSql(normalized)) {
                 throw new IllegalStateException("ECO-V0 skill DDL contains unsafe or reordered SQL");
