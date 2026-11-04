@@ -41,9 +41,14 @@ public class PersonalWorkspaceServiceImpl implements PersonalWorkspaceService {
     private final PersonalWorkspaceWriteService writes;
     private final PersonalWorkspacePreviewRenderer previewRenderer = new PersonalWorkspacePreviewRenderer();
 
+    private final cn.jia.agent.service.AgentTaskArtifactContentService artifactContents;
+
+    public PersonalWorkspaceServiceImpl(PersonalWorkspaceDao dao, PersonalWorkspaceStorage storage,
+            PersonalWorkspaceWriteService writes) { this(dao, storage, writes, null); }
+
     @Inject public PersonalWorkspaceServiceImpl(PersonalWorkspaceDao dao, PersonalWorkspaceStorage storage,
-            PersonalWorkspaceWriteService writes) {
-        this.dao=dao; this.storage=storage; this.writes=writes;
+            PersonalWorkspaceWriteService writes, cn.jia.agent.service.AgentTaskArtifactContentService artifactContents) {
+        this.dao=dao; this.storage=storage; this.writes=writes; this.artifactContents=artifactContents;
     }
 
     @Override public PersonalWorkspaceViews.ListView list(Scope scope, ListQuery query) {
@@ -109,13 +114,46 @@ public class PersonalWorkspaceServiceImpl implements PersonalWorkspaceService {
         if (!command.sha256().equals(valid.sha256())) bad();
         String requestHash = hash("ARCHIVE_ASSET", command.assetId(), Long.toString(command.revision()),
                 command.sha256(), valid.key(), valid.displayName(), valid.filename(), valid.mime());
-        PersonalWorkspaceWriteService.Claim claim = writes.claim(writeScope(scope), "ARCHIVE_ASSET",
+        return archiveGeneratedFile(scope, valid, command.sha256(), "ARCHIVE_ASSET", requestHash);
+    }
+
+    /** Explicit browser action: a task file is not personal material until requested.
+     * Exact owner ACL and content integrity belong to the existing artifact read boundary.
+     * A stable source key makes network retries and repeated clicks return the same file.
+     */
+    @Override public PersonalWorkspaceViews.UploadView archiveTaskArtifact(Scope scope, TaskArtifactArchiveCommand command) {
+        validateScope(scope);
+        if (command == null || command.artifactVersion() < 1 || command.contentSha256() == null
+                || !command.contentSha256().matches("[0-9a-f]{64}")) bad();
+        text(command.taskId(),100); text(command.artifactId(),100);
+        String sourceKey=hash((command.taskId()+"\n"+command.artifactId()+"\n"+command.artifactVersion()).getBytes(StandardCharsets.UTF_8));
+        if(command.idempotency()==null || !("task-artifact-"+sourceKey).equals(command.idempotency().key())) bad();
+        try (var content=artifactContents.openContentForTaskOwner(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),
+                command.taskId(),command.artifactId(),command.artifactVersion())) {
+            if (!command.contentSha256().equals(content.sha256()))
+                throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.IDEMPOTENCY_CONFLICT);
+            UploadSource source=() -> artifactContents.openContentForTaskOwner(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),
+                    command.taskId(),command.artifactId(),command.artifactVersion()).content();
+            ValidUpload valid=validate(new UploadCommand(new Idempotency("task-artifact-"+sourceKey),
+                    command.filename(),command.filename(),content.contentMimeType(),source,content.byteLength()));
+            if (!command.contentSha256().equals(valid.sha256()))
+                throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.STORAGE_CORRUPT);
+            return archiveGeneratedFile(scope,valid,command.contentSha256(),"ARCHIVE_ARTIFACT",
+                    hash("ARCHIVE_ARTIFACT",sourceKey,command.contentSha256(),valid.filename()));
+        } catch (java.io.IOException failure) {
+            throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.STORAGE_UNAVAILABLE);
+        }
+    }
+
+    private PersonalWorkspaceViews.UploadView archiveGeneratedFile(Scope scope, ValidUpload valid,
+            String expectedSha256, String operationType, String requestHash) {
+        PersonalWorkspaceWriteService.Claim claim = writes.claim(writeScope(scope), operationType,
                 valid.key(), requestHash);
         if (!claim.claimed()) return completedUpload(scope, claim.operation());
         String fileId = "pws_" + UUID.randomUUID().toString().replace("-", "");
         try {
             PersonalWorkspaceStorage.StoredObject stored = storeUpload(scope, valid);
-            if (!command.sha256().equals(stored.sha256())
+            if (!expectedSha256.equals(stored.sha256())
                     || valid.byteLength() != stored.byteLength())
                 throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.STORAGE_CORRUPT);
             long now = System.currentTimeMillis();

@@ -67,6 +67,25 @@ public class PersonalWorkspaceController {
         PersonalWorkspaceViews.UploadView view = service.create(scope(authentication), upload(file, displayName, key));
         return cn.jia.core.config.ApiJsonResponses.success(ResponseEntity.status(HttpStatus.CREATED).header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL).body(view), PersonalWorkspaceWire::from);
     }
+    public record ArtifactRegistrationRequest(String taskId, String artifactId, String artifactVersion,
+            String contentSha256, String filename) { }
+    @PostMapping(value = "/task-artifact-registrations", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<cn.jia.core.entity.JsonResult<PersonalWorkspaceWire.UploadView>> registerArtifact(
+            @RequestBody JsonRequest<ArtifactRegistrationRequest> protocolRequest, @RequestHeader("Idempotency-Key") String key, Authentication authentication) {
+        ArtifactRegistrationRequest body=protocolRequest==null?null:protocolRequest.data();
+        if(body==null) throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.BAD_REQUEST);
+        var result=service.archiveTaskArtifact(scope(authentication),new PersonalWorkspaceService.TaskArtifactArchiveCommand(
+                new PersonalWorkspaceService.Idempotency(key),body.taskId(),body.artifactId(),version(body.artifactVersion()),body.contentSha256(),body.filename()));
+        return cn.jia.core.config.ApiJsonResponses.success(json(result),PersonalWorkspaceWire::from);
+    }
+    @ExceptionHandler(cn.jia.agent.exception.AgentTaskCollaborationException.class)
+    public ResponseEntity<cn.jia.core.entity.JsonResult<Void>> artifactFailure(cn.jia.agent.exception.AgentTaskCollaborationException failure) {
+        return switch(failure.getReason()) {
+            case NOT_FOUND, FORBIDDEN -> error(HttpStatus.NOT_FOUND,"FILE_NOT_FOUND","Task artifact is unavailable");
+            case VERSION_CONFLICT, INVALID_TRANSITION -> error(HttpStatus.CONFLICT,"FILE_VERSION_CONFLICT","Task artifact changed");
+            default -> error(HttpStatus.SERVICE_UNAVAILABLE,"STORAGE_UNAVAILABLE","Task artifact is unavailable");
+        };
+    }
     @GetMapping(value = "/files/{fileId}", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<cn.jia.core.entity.JsonResult<PersonalWorkspaceWire.FileDetailView>> get(@PathVariable String fileId, Authentication authentication) {
         PersonalWorkspaceViews.FileDetailView view = service.get(scope(authentication), fileId);

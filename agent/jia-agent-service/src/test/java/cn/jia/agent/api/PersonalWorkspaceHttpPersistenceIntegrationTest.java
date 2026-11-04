@@ -86,6 +86,7 @@ class PersonalWorkspaceHttpPersistenceIntegrationTest {
     private PersonalWorkspaceDao dao;
     private CountingStorage storage;
     private MockMvc mvc;
+    private final cn.jia.agent.service.AgentTaskArtifactContentService artifactContents = org.mockito.Mockito.mock(cn.jia.agent.service.AgentTaskArtifactContentService.class);
 
     @BeforeEach
     void setUp() throws Exception {
@@ -126,6 +127,40 @@ class PersonalWorkspaceHttpPersistenceIntegrationTest {
         if (schemaConnection != null) {
             schemaConnection.close();
         }
+    }
+
+    @Test
+    void fixedTaskArtifactRegistrationUsesRealFileTransactionsAndIsVisibleAsResultWithoutUpload() throws Exception {
+        org.mockito.Mockito.when(artifactContents.openContentForTaskOwner("0",CLIENT,OWNER,"task-a","artifact-a",2))
+                .thenAnswer(call -> new cn.jia.agent.service.AgentTaskArtifactContentService.StreamContent(
+                        "artifact-a",2,sha256(VERSION_TWO),VERSION_TWO.length,MIME,new java.io.ByteArrayInputStream(VERSION_TWO)));
+        org.mockito.Mockito.when(artifactContents.openContentForTaskOwner("0",CLIENT,"Other-owner","task-a","artifact-a",2))
+                .thenThrow(new cn.jia.agent.exception.AgentTaskCollaborationException(cn.jia.agent.exception.AgentTaskCollaborationException.Reason.NOT_FOUND,"not found"));
+        String route="/agent/personal-workspace/task-artifact-registrations";
+        var fixture=JsonUtil.getMapper().readTree(getClass().getResourceAsStream("/contracts/task-artifact-registration.json"));
+        String key=fixture.get("idempotencyKey").asText();
+        String body=fixture.get("request").toString();
+        var first=mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(route)
+                .principal(jwt(OWNER,CLIENT)).header("Idempotency-Key",key).contentType("application/json").content(body))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.code").value("E0"))
+                .andExpect(jsonPath("$.data.file.originKind").value("AGENT_DELIVERY"))
+                .andExpect(jsonPath("$.data.version.version").value("1"))
+                .andExpect(jsonPath("$.data.version.sha256").value(sha256(VERSION_TWO))).andReturn();
+        String file=JsonUtil.getMapper().readTree(first.getResponse().getContentAsByteArray()).at("/data/file/fileId").asText();
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(route)
+                .principal(jwt(OWNER,CLIENT)).header("Idempotency-Key",key).contentType("application/json").content(body))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data.file.fileId").value(file));
+        assertEquals(1,storage.storeCalls());
+        mvc.perform(get("/agent/personal-workspace/files").principal(jwt(OWNER,CLIENT)))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data.items[0].originKind").value("AGENT_DELIVERY"));
+        assertSafeDownload(mvc,file,1,VERSION_TWO);
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(route)
+                .principal(jwt("Other-owner",CLIENT)).header("Idempotency-Key",key).contentType("application/json").content(body))
+                .andExpect(status().isNotFound());
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(route)
+                .principal(jwt(OWNER,CLIENT)).header("Idempotency-Key",key).contentType("application/json")
+                .content(body.replace(sha256(VERSION_TWO),"a".repeat(64))))
+                .andExpect(status().isConflict());
     }
 
     @Test
@@ -363,7 +398,7 @@ class PersonalWorkspaceHttpPersistenceIntegrationTest {
         PersonalWorkspaceWriteService transactionalWrites =
                 (PersonalWorkspaceWriteService) proxyFactory.getProxy();
         PersonalWorkspaceService service = new PersonalWorkspaceServiceImpl(
-                dao, storage, transactionalWrites);
+                dao, storage, transactionalWrites, artifactContents);
         return MockMvcBuilders.standaloneSetup(new PersonalWorkspaceController(service)).build();
     }
 

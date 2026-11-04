@@ -25,6 +25,8 @@ public interface PersonalWorkspaceService {
      */
     UploadView archiveConversationAsset(Scope scope, ConversationArchiveCommand command);
     /** Trusted server-side archive of an immutable persisted Chat text selection. */
+    UploadView archiveTaskArtifact(Scope scope, TaskArtifactArchiveCommand command);
+    record TaskArtifactArchiveCommand(Idempotency idempotency, String taskId, String artifactId, int artifactVersion, String contentSha256, String filename) { }
     UploadView archiveConversationText(Scope scope, ConversationTextArchiveCommand command);
     UploadView appendVersion(Scope scope, String fileId, UploadCommand command, int expectedPreviousVersion);
     FileView rename(Scope scope, String fileId, String displayName, String ifMatch, Idempotency idempotency);

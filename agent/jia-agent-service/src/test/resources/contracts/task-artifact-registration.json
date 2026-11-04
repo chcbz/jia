@@ -1,0 +1,53 @@
+{
+  "request": {
+    "protocolVersion": 1,
+    "requestId": "registration-http-test",
+    "data": {
+      "taskId": "task-a",
+      "artifactId": "artifact-a",
+      "artifactVersion": "2",
+      "contentSha256": "61067a54075afc7f5ad7f7e56f404aa581bf4fa38f13ee7a9af63e2c22bc49be",
+      "filename": "report:Q1.txt"
+    }
+  },
+  "idempotencyKey": "task-artifact-7c030c47c9b8f17b59b4c8913a1f3ed04fe7d01bcfe9bb8bd6b6176bd7a1cd04",
+  "response": {
+    "protocolVersion": 1,
+    "requestId": "registration-http-test",
+    "code": "E0",
+    "msg": "ok",
+    "data": {
+      "operation": {
+        "operationId": "pwo_example",
+        "state": "COMMITTED",
+        "fileId": "pws_example",
+        "fileVersion": "1",
+        "errorCode": null
+      },
+      "file": {
+        "fileId": "pws_example",
+        "sourceKind": "UPLOAD",
+        "originKind": "AGENT_DELIVERY",
+        "displayName": "report:Q1.txt",
+        "mediaFamily": "TEXT",
+        "state": "ACTIVE",
+        "metadataRevision": "1",
+        "latestVersion": "1",
+        "createdAt": 1793779200000,
+        "capabilities": {
+          "preview": "AVAILABLE"
+        }
+      },
+      "version": {
+        "fileId": "pws_example",
+        "version": "1",
+        "originalFilename": "report:Q1.txt",
+        "contentMimeType": "text/plain",
+        "byteLength": "22",
+        "sha256": "61067a54075afc7f5ad7f7e56f404aa581bf4fa38f13ee7a9af63e2c22bc49be",
+        "createdAt": 1793779200000,
+        "previewState": "AVAILABLE"
+      }
+    }
+  }
+}

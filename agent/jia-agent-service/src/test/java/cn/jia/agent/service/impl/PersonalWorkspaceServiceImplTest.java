@@ -42,6 +42,33 @@ class PersonalWorkspaceServiceImplTest {
             new PersonalWorkspaceService.Scope("0", "mobile", "owner-a");
 
     @Test
+    void explicitTaskArtifactRegistrationKeepsFixedVersionOriginAndIdempotency() throws Exception {
+        Fixture f=new Fixture();
+        var contents=org.mockito.Mockito.mock(cn.jia.agent.service.AgentTaskArtifactContentService.class);
+        byte[] original=bytes("accepted artifact v2");
+        org.mockito.Mockito.when(contents.openContentForTaskOwner("0","browser","owner-a","task-a","artifact-a",2))
+                .thenAnswer(call -> new cn.jia.agent.service.AgentTaskArtifactContentService.StreamContent(
+                        "artifact-a",2,sha256(original),original.length,"text/plain",new java.io.ByteArrayInputStream(original)));
+        var service=new PersonalWorkspaceServiceImpl(f.dao,f.storage,new PersonalWorkspaceWriteService(f.dao,
+                new PersonalWorkspaceOperationClaimTx(f.dao)),contents);
+        String key="task-artifact-"+sha256(bytes("task-a\nartifact-a\n2"));
+        var command=new PersonalWorkspaceService.TaskArtifactArchiveCommand(new PersonalWorkspaceService.Idempotency(key),
+                "task-a","artifact-a",2,sha256(original),"accepted.txt");
+        assertEquals(0,f.dao.fileCount());
+        var saved=service.archiveTaskArtifact(OWNER_A,command);
+        assertEquals("AGENT_DELIVERY",saved.file().originKind());
+        assertEquals(sha256(original),saved.version().sha256());
+        assertArrayEquals(original,service.readContent(OWNER_A,saved.file().fileId(),1).bytes());
+        assertEquals(saved.file().fileId(),service.archiveTaskArtifact(OWNER_A,command).file().fileId());
+        assertEquals(1,f.dao.fileCount()); assertEquals(1,f.storage.storeCount);
+        var badHash=new PersonalWorkspaceService.TaskArtifactArchiveCommand(command.idempotency(),"task-a","artifact-a",2,"a".repeat(64),"accepted.txt");
+        assertThrows(PersonalWorkspaceException.class,()->service.archiveTaskArtifact(OWNER_A,badHash));
+        var badKey=new PersonalWorkspaceService.TaskArtifactArchiveCommand(new PersonalWorkspaceService.Idempotency("wrong-key"),"task-a","artifact-a",2,sha256(original),"accepted.txt");
+        assertThrows(PersonalWorkspaceException.class,()->service.archiveTaskArtifact(OWNER_A,badKey));
+        assertEquals(1,f.dao.fileCount());
+    }
+
+    @Test
     void arbitraryFormatsAndExtensionlessFilesRoundTripWithoutEnablingPreview() {
         Fixture fixture = new Fixture();
         String[][] cases = {{"data.custom", "application/x-custom"}, {"page.html", "text/html"},
