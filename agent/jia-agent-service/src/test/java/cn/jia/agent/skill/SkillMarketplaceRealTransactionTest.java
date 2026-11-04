@@ -393,7 +393,11 @@ public class SkillMarketplaceRealTransactionTest {
     @Test void nativeWsPurchaseDrainsOriginalCommittedBytesWithoutRabbitAndActivatesOnlyFromTrustedResult() {
         service.purchase(ACTOR,uuid(),purchaseBody("spv_repo_test_1_0_0"),false);var i=installation();
         assertRetiredWireCannotRecover(i);
-        assertTrue(service.available(ACTOR));assertFalse(service.available(new HostingRentHttp.Actor("payer-sub","0","client-a","Tenant-A")));
+        assertTrue(service.available(ACTOR));
+        var otherClient=new HostingRentHttp.Actor("payer-sub","0","client-a","Tenant-A");
+        assertTrue(service.available(otherClient)); // Capability is not economy's allow-list or resource authorization.
+        assertFalse(trade.allows(otherClient.tenantId(),otherClient.clientId()));
+        assertTrue(service.catalog(otherClient,false).isEmpty());
         assertEquals("NONE",jdbc.queryForObject("SELECT publisher_confirm_status FROM agent_outbox_event",String.class));
         assertEquals(0,count("agent_consumer_inbox"));
         assertRetiredAck(i,"SUCCEEDED",System.currentTimeMillis());
