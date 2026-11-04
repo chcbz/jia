@@ -209,7 +209,16 @@ class TaskBootstrapTenantIsolationMySqlTest extends SkillManagementMySqlFixture 
         assertEquals(beforeSnapshots,jdbc.queryForList("SELECT * FROM agent_task_requirement_snapshot ORDER BY tenant_id"));
         assertThrows(IllegalStateException.class,()->service.captureOnCreate(scope("1","client"),"task","title",null));
         assertEquals(gray.sha256(),service.requireCurrent(scope("1","client"),"task",1).sha256());
-        jdbc.update("UPDATE agent_task_requirement_snapshot SET content_sha256=? WHERE tenant_id='1'",production.sha256());
+        rootTransactions.executeWithLockedTaskRootInOwnerScope("1","client","owner","task",root ->
+                service.updateCurrent(scope("1","client"),"task",1,"Changed gray","Full current body"));
+        assertEquals(1,jdbc.queryForObject("SELECT COUNT(*) FROM agent_task_current_requirement WHERE tenant_id='1'",Integer.class));
+        assertEquals(1,jdbc.queryForObject("SELECT COUNT(*) FROM agent_task_requirement_snapshot WHERE tenant_id='1'",Integer.class));
+        rootTransactions.executeWithLockedTaskRootInOwnerScope("1","client","owner","task",root ->
+                service.freezeCurrent(scope("1","client"),"task",2));
+        assertEquals("Changed gray",service.read(scope("1","client"),"task",2).title());
+        assertEquals("Title 1",service.read(scope("1","client"),"task",1).title());
+
+        jdbc.update("UPDATE agent_task_current_requirement SET content_sha256=? WHERE tenant_id='1'",production.sha256());
         assertEquals(cn.jia.agent.service.AgentTaskRequirementReadException.Reason.INTEGRITY_ERROR,
                 assertThrows(cn.jia.agent.service.AgentTaskRequirementReadException.class,
                         ()->service.readCurrent(scope("1","client"),"task")).reason());
@@ -278,6 +287,8 @@ class TaskBootstrapTenantIsolationMySqlTest extends SkillManagementMySqlFixture 
             jdbc.update("INSERT INTO agent_task_requirement_snapshot "
                     + "(tenant_id,client_id,owner_jiacn,task_id,revision,confirmation_id,task_version_at_confirmation,title,content_sha256,source,created_at) "
                     + "VALUES (?,?,'owner','task',1,'CREATE',0,?,?,'CREATE',1)",tenant,client,"Title "+tenant,hash);
+            jdbc.update("INSERT INTO agent_task_current_requirement(tenant_id,client_id,owner_jiacn,task_id,revision,title,content_sha256,source) "
+                    + "VALUES (?,?,'owner','task',1,?,?,'CREATE')",tenant,client,"Title "+tenant,hash);
         });
     }
 }
