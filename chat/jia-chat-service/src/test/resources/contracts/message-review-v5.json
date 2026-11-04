@@ -64,5 +64,18 @@
   },
   "parentOutcomeId": "parent_outcome_fixture",
   "parentFinalDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
-  "expectedRevisionDigest": "21354f98d9a2ab8326bb538206255bd1073c694ef81f4af37a38018cc02e017e"
+  "expectedRevisionDigest": "21354f98d9a2ab8326bb538206255bd1073c694ef81f4af37a38018cc02e017e",
+  "clarificationWithoutFacts": {
+    "schemaVersion": 5,
+    "kind": "CLARIFY",
+    "text": "你希望修改已提交的内容，还是仅重看原文？",
+    "revision": null,
+    "deliverable": false,
+    "deliveryRelation": null,
+    "clarification": {
+      "question": "你希望修改已提交的内容，还是仅重看原文？",
+      "requiredFacts": []
+    },
+    "action": null
+  }
 }

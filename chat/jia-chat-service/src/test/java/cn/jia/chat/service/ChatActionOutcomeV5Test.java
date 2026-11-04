@@ -147,6 +147,56 @@ class ChatActionOutcomeV5Test {
         }
     }
 
+    @SuppressWarnings("unchecked") @Test void emptyClarificationFactsPreserveQuestionAndDigestWithoutAuthority() {
+        var f=fixture();var facts=ChatActionOutcomeContract.facts(f.get("facts"));
+        var value=(Map<String,Object>)f.get("clarificationWithoutFacts");
+        var result=ChatActionFinalValidator.validateJson((Map<String,Object>)f.get("binding"), f.get("facts"), null,
+                (String)value.get("text"),5,ChatDeliveryReviewContract.json(value),null);
+        assertEquals(List.of(),result.interactionOutcome().clarification().requiredFacts());
+        assertNull(result.interactionOutcome().action());assertNull(result.interactionOutcome().revision());
+        assertFalse(result.interactionOutcome().deliverable());
+        assertEquals(value,ChatActionFinalValidator.outcomeMap(result.interactionOutcome()));
+        var c=(Map<String,Object>)value.get("clarification");
+        c.put("requiredFacts",List.of("修改还是重看"));
+        var withFacts=ChatActionFinalValidator.validateJson((Map<String,Object>)f.get("binding"),f.get("facts"),null,
+                (String)value.get("text"),5,ChatDeliveryReviewContract.json(value),null);
+        assertNotEquals(result.finalDigest(),withFacts.finalDigest());
+        for(Object invalid:Arrays.asList(null,"",List.of(""),List.of("x","x"),List.of(1))) {
+            c.put("requiredFacts",invalid);
+            assertThrows(RuntimeException.class,()->ChatActionOutcomeContract.outcomeJson(ChatDeliveryReviewContract.json(value),facts));
+        }
+        c.put("requiredFacts",List.of());c.put("question","");
+        assertThrows(RuntimeException.class,()->ChatActionOutcomeContract.outcomeJson(ChatDeliveryReviewContract.json(value),facts));
+    }
+
+    /** Real pending serialization/projection and duplicate-final branch; storage is mocked, not a DB integration test. */
+    @SuppressWarnings("unchecked") @Test void emptyClarificationFactsPersistAndReplayWithoutDispatch() {
+        var f=fixture();var value=(Map<String,Object>)f.get("clarificationWithoutFacts");
+        var validated=ChatActionFinalValidator.validateJson((Map<String,Object>)f.get("binding"),f.get("facts"),null,
+                (String)value.get("text"),5,ChatDeliveryReviewContract.json(value),null);
+        var store=mock(ChatTypedDeliberationStore.class);var dao=mock(ChatDeliberationDao.class);
+        var service=new ChatActionFinalService(store,dao,mock(TypedInspectionSessionRegistry.class));
+        var scope=new ChatTypedDeliberationStore.Scope("0","owner","client","7",1);
+        var admission=new ChatTypedDeliberationStore.Admission("admission",scope,"key","sha256:"+"1".repeat(64),"sha256:"+"1".repeat(64),
+                "DISCUSSION","task_fixture",1,null,null,"discussion_parent_fixture",1,100,"[\"turn\"]","[]","ADMITTED",0,0,1);
+        when(store.insertOutcome(any())).thenReturn(1);
+        when(store.insertPending(any())).thenAnswer(call -> {
+            ChatTypedDeliberationStore.PendingQuestion pending=call.getArgument(0);
+            assertEquals("[]",pending.requiredFactsJson());
+            when(store.findPendingByOutcome(scope,pending.outcomeId(),false)).thenReturn(pending);
+            return 1;
+        });
+        var view=service.persist(new ChatActionFinalService.Prepared(validated,scope,admission,null),101,1);
+        var clarification=(Map<String,Object>)view.get("clarification");
+        assertEquals(List.of(),clarification.get("requiredFacts"));assertEquals("OPEN",clarification.get("state"));
+        assertEquals(((Map<?,?>)value.get("clarification")).get("question"),clarification.get("question"));
+        var captured=org.mockito.ArgumentCaptor.forClass(ChatTypedDeliberationStore.Outcome.class);
+        verify(store).insertOutcome(captured.capture());
+        assertEquals(view,service.persist(new ChatActionFinalService.Prepared(validated,scope,admission,captured.getValue()),101,2));
+        verify(store,times(1)).insertOutcome(any());verify(store,times(1)).insertPending(any());
+        verify(dao,never()).insertOutbox(any());
+    }
+
     @Test void ordinaryAnswerAndClarificationCannotReplacePendingBatchOrAuthorizeAnAction() {
         var f=fixture();var basis=ChatDeliveryRevisionContract.basis(f.get("basis"));var facts=ChatActionOutcomeContract.facts(f.get("facts"));
         for(String kind:List.of("ANSWER","CLARIFY")) {
