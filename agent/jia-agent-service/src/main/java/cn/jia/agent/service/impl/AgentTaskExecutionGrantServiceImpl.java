@@ -209,7 +209,7 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
 
     private void requireCurrentRequirement(Scope scope, String taskId, long requirementRevision) {
         try {
-            var confirmed = requirementSnapshots.requireCurrent(scope,taskId,requirementRevision);
+            var confirmed = requirementSnapshots.freezeCurrent(scope,taskId,requirementRevision);
             if (confirmed == null || confirmed.revision()!=requirementRevision
                     || !scope.tenantId().equals(confirmed.tenantId())
                     || !scope.clientId().equals(confirmed.clientId())

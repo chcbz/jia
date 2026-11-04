@@ -30,8 +30,9 @@ public class AgentTaskRequirementEditController {
 
     @GetMapping(produces=MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<JsonResult<AgentTaskRequirementEditService.View>> read(@PathVariable String taskId,
-            Authentication authentication) {
-        return ok(service.read(scope(authentication),taskId));
+            @RequestHeader(value="Idempotency-Key",required=false) String key, Authentication authentication) {
+        var owner=scope(authentication);
+        return ok(key==null?service.read(owner,taskId):service.readSaved(owner,taskId,key));
     }
     @PutMapping(consumes=MediaType.APPLICATION_JSON_VALUE,produces=MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<JsonResult<AgentTaskRequirementEditService.View>> save(@PathVariable String taskId,

@@ -26,16 +26,18 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Objects;
 
-/** Insert-only, source-exact history; no reconstruction from task_plan or task event projections. */
+/** Current requirements are mutable; exact creation/assignment snapshots remain immutable. */
 @Named
 public final class AgentTaskRequirementSnapshotServiceImpl implements AgentTaskRequirementSnapshotService {
     private final JdbcTemplate jdbc;
     private final AgentTaskMutationTransaction transactions;
+    private final AgentTaskCurrentRequirementStore currentRequirements;
 
     @Inject
     public AgentTaskRequirementSnapshotServiceImpl(JdbcTemplate jdbc, AgentTaskMutationTransaction transactions) {
         this.jdbc=Objects.requireNonNull(jdbc);
         this.transactions=Objects.requireNonNull(transactions);
+        this.currentRequirements=new AgentTaskCurrentRequirementStore(jdbc);
     }
 
     @Override public Snapshot captureOnCreate(AgentTaskExecutionGrantService.Scope scope, String taskId,
@@ -43,7 +45,9 @@ public final class AgentTaskRequirementSnapshotServiceImpl implements AgentTaskR
         validReadScope(scope,taskId);
         writeTransaction();
         if (latest(scope,taskId,true)!=null) throw new IllegalStateException("Requirement snapshot already exists");
-        return insert(scope,taskId,1,0,"CREATE",title,description,"CREATE");
+        var created=insert(scope,taskId,1,0,"CREATE",title,description,"CREATE");
+        currentRequirements.insert(created);
+        return created;
     }
 
     @Override public Snapshot reconfirm(AgentTaskExecutionGrantService.Scope scope, String taskId,
@@ -64,7 +68,7 @@ public final class AgentTaskRequirementSnapshotServiceImpl implements AgentTaskR
         return transactions.executeWithLockedTaskRootInOwnerScope(scope.tenantId(),scope.clientId(),
                 scope.ownerJiacn(),taskId,root -> {
                     writeTransaction();
-                    Snapshot previous=latest(scope,taskId,true);
+                    Snapshot previous=currentRequirements.read(scope,taskId);
                     List<Snapshot> repeated=jdbc.query("SELECT tenant_id,client_id,owner_jiacn,task_id,revision,title,description,"
                                     + "content_sha256,source FROM agent_task_requirement_snapshot WHERE tenant_id=? "
                                     + "AND client_id=? AND owner_jiacn=? AND task_id=? AND confirmation_id=? "
@@ -105,8 +109,11 @@ public final class AgentTaskRequirementSnapshotServiceImpl implements AgentTaskR
                     if (funded==null || funded!=0) throw new IllegalStateException("Funded task confirmation is not authorized");
                     if (previous!=null && previous.revision()==Long.MAX_VALUE)
                         throw new IllegalStateException("Requirement revision exhausted");
-                    return insert(scope,taskId,previous==null?1:previous.revision()+1,
+                    var confirmed=insert(scope,taskId,previous==null?1:previous.revision()+1,
                             expectedTaskVersion,confirmationId,title,description,"RECONFIRM");
+                    if (previous==null) currentRequirements.insert(confirmed);
+                    else currentRequirements.replace(scope,taskId,previous.revision(),title,description);
+                    return confirmed;
                 });
     }
 
@@ -141,7 +148,7 @@ public final class AgentTaskRequirementSnapshotServiceImpl implements AgentTaskR
                                 || root.getTaskVersion()==null || root.getTaskVersion()<0) {
                             throw new SnapshotIntegrityException();
                         }
-                        Snapshot current=latest(scope,taskId,true);
+                        Snapshot current=currentRequirements.read(scope,taskId);
                         if (current==null) {
                             throw new AgentTaskRequirementReadException(
                                     AgentTaskRequirementReadException.Reason.RECONFIRM_REQUIRED);
@@ -173,10 +180,32 @@ public final class AgentTaskRequirementSnapshotServiceImpl implements AgentTaskR
     @Override public Snapshot requireCurrent(AgentTaskExecutionGrantService.Scope scope,String taskId,long revision) {
         validReadScope(scope,taskId);
         if (revision<1) throw new IllegalArgumentException("requirement revision invalid");
-        Snapshot current=latest(scope,taskId,true);
+        Snapshot current=currentRequirements.read(scope,taskId);
         if (current==null || current.revision()!=revision)
             throw new IllegalStateException("Current requirement revision not confirmed by owner");
         return current;
+    }
+
+    @Override public Snapshot updateCurrent(AgentTaskExecutionGrantService.Scope scope,String taskId,
+            long expectedRevision,String title,String description) {
+        validReadScope(scope,taskId);
+        writeTransaction();
+        return currentRequirements.replace(scope,taskId,expectedRevision,title,description);
+    }
+
+    @Override public Snapshot freezeCurrent(AgentTaskExecutionGrantService.Scope scope,String taskId,long revision) {
+        writeTransaction();
+        var current=requireCurrent(scope,taskId,revision);
+        Integer count=jdbc.queryForObject("SELECT COUNT(*) FROM agent_task_requirement_snapshot "
+                + "WHERE tenant_id=? AND client_id=? AND owner_jiacn=? AND task_id=? AND revision=?",
+                Integer.class,scope.tenantId(),scope.clientId(),scope.ownerJiacn(),taskId,revision);
+        if (count!=null && count>0) {
+            var frozen=read(scope,taskId,revision);
+            if (!Objects.equals(frozen,current)) throw new IllegalStateException("Frozen requirement differs from current");
+            return frozen;
+        }
+        return insert(scope,taskId,revision,readCurrent(scope,taskId).taskVersion(),
+                "ASSIGN:"+revision,current.title(),current.description(),current.source());
     }
 
     private Snapshot latest(AgentTaskExecutionGrantService.Scope scope,String taskId,boolean lock) {
@@ -226,7 +255,7 @@ public final class AgentTaskRequirementSnapshotServiceImpl implements AgentTaskR
                 revision,title,description,hash,source);
     }
 
-    private static Snapshot verified(Snapshot row,AgentTaskExecutionGrantService.Scope scope,String taskId) {
+    static Snapshot verified(Snapshot row,AgentTaskExecutionGrantService.Scope scope,String taskId) {
         if (!Objects.equals(row.tenantId(),scope.tenantId()) || !Objects.equals(row.clientId(),scope.clientId())
                 || !Objects.equals(row.ownerJiacn(),scope.ownerJiacn()) || !Objects.equals(row.taskId(),taskId)
                 || row.revision()<1 || row.title()==null || row.title().isBlank()
@@ -238,7 +267,7 @@ public final class AgentTaskRequirementSnapshotServiceImpl implements AgentTaskR
         return row;
     }
 
-    private static String digest(AgentTaskExecutionGrantService.Scope scope,String taskId,long revision,
+    static String digest(AgentTaskExecutionGrantService.Scope scope,String taskId,long revision,
             String source,String title,String description) {
         try {
             MessageDigest md=MessageDigest.getInstance("SHA-256");
@@ -295,9 +324,9 @@ public final class AgentTaskRequirementSnapshotServiceImpl implements AgentTaskR
     private static boolean isPadding(int codePoint) {
         return Character.isWhitespace(codePoint) || Character.isSpaceChar(codePoint);
     }
-    private static final class SnapshotIntegrityException extends IllegalStateException {
+    static final class SnapshotIntegrityException extends IllegalStateException {
         private SnapshotIntegrityException() { super("Requirement snapshot integrity failure"); }
-        private SnapshotIntegrityException(Throwable cause) {
+        SnapshotIntegrityException(Throwable cause) {
             super("Requirement snapshot integrity failure",cause);
         }
     }

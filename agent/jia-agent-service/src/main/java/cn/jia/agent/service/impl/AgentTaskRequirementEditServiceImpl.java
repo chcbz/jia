@@ -44,19 +44,25 @@ public class AgentTaskRequirementEditServiceImpl implements AgentTaskRequirement
                     editable(scope,taskId,root);
                     var current=requirements.readCurrent(scope,taskId);
                     var existing=list(scope,taskId);
-                    // A lost reply may replay exactly this confirmation, never overwrite newer work.
-                    if (root.getTaskVersion()==command.expectedTaskVersion()+1
-                            && current.requirementRevision()==command.expectedRequirementRevision()+1
-                            && Objects.equals(current.title(),command.title())
-                            && Objects.equals(current.description(),command.description())
-                            && new HashSet<>(selections(existing)).equals(new HashSet<>(command.attachments()))) {
-                        confirm(scope,taskId,key,command);
+                    String requestHash=requestHash(command);
+                    var priorOperation=operation(scope,taskId,key);
+                    if (priorOperation!=null) {
+                        if (!requestHash.equals(priorOperation.hash())
+                                || root.getTaskVersion()!=priorOperation.taskVersion()
+                                || current.requirementRevision()!=priorOperation.revision()
+                                || !priorOperation.resultHash().equals(resultHash(current.title(),current.description(),selections(existing)))) throw failure(Reason.CONFLICT);
                         return view(current,selections(existing));
                     }
                     if (root.getTaskVersion()!=command.expectedTaskVersion()
                             || current.requirementRevision()!=command.expectedRequirementRevision())
                         throw failure(Reason.CONFLICT);
-                    confirm(scope,taskId,key,command);
+                    if (Objects.equals(current.title(),command.title())
+                            && Objects.equals(current.description(),command.description())
+                            && new HashSet<>(selections(existing)).equals(new HashSet<>(command.attachments()))) {
+                        recordOperation(scope,taskId,key,requestHash,resultHash(command.title(),command.description(),command.attachments()),root.getTaskVersion(),current.requirementRevision());
+                        return view(current,selections(existing));
+                    }
+                    requirements.updateCurrent(scope,taskId,current.requirementRevision(),command.title(),command.description());
                     var linkScope=new PersonalWorkspaceTaskLinkService.Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn());
                     var selected=new HashSet<>(command.attachments());
                     for (var link:existing) if (!selected.contains(new Attachment(link.fileId(),link.version()))) {
@@ -77,15 +83,60 @@ public class AgentTaskRequirementEditServiceImpl implements AgentTaskRequirement
                     root.setTaskVersion(command.expectedTaskVersion()+1);
                     root.setUpdateTime(System.currentTimeMillis());
                     if (tasks.updateById(root)!=1) throw failure(Reason.UNAVAILABLE);
+                    recordOperation(scope,taskId,key,requestHash,resultHash(command.title(),command.description(),command.attachments()),root.getTaskVersion(),command.expectedRequirementRevision()+1);
                     return new View(taskId,Long.toString(root.getTaskVersion()),
                             Long.toString(command.expectedRequirementRevision()+1),command.title(),
                             command.description(),List.copyOf(command.attachments()));
                 });
     }
 
-    private void confirm(AgentTaskExecutionGrantService.Scope scope,String taskId,String key,Command command) {
-        try { requirements.reconfirm(scope,taskId,command.expectedTaskVersion(),key,command.title(),command.description()); }
-        catch (IllegalStateException conflict) { throw failure(Reason.CONFLICT); }
+    @Override public View readSaved(AgentTaskExecutionGrantService.Scope scope,String taskId,String key) {
+        validKey(key);
+        return transactions.executeWithLockedTaskRootInOwnerScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),taskId,root -> {
+            editable(scope,taskId,root);
+            var committed=operation(scope,taskId,key);
+            if (committed==null) throw failure(Reason.NOT_FOUND);
+            var current=requirements.readCurrent(scope,taskId);
+            if (root.getTaskVersion()!=committed.taskVersion() || current.requirementRevision()!=committed.revision())
+                throw failure(Reason.CONFLICT);
+            var attachments=selections(list(scope,taskId));
+            if (!committed.resultHash().equals(resultHash(current.title(),current.description(),attachments))) throw failure(Reason.CONFLICT);
+            return view(current,attachments);
+        });
+    }
+    private record Operation(String hash,String resultHash,long taskVersion,long revision) { }
+    private Operation operation(AgentTaskExecutionGrantService.Scope scope,String taskId,String key) {
+        var rows=jdbc.query("SELECT request_sha256,result_sha256,task_version,requirement_revision FROM agent_task_requirement_edit_operation "
+                + "WHERE tenant_id=? AND client_id=? AND owner_jiacn=? AND task_id=? AND operation_key=?",
+                (r,n)->new Operation(r.getString(1),r.getString(2),r.getLong(3),r.getLong(4)),
+                scope.tenantId(),scope.clientId(),scope.ownerJiacn(),taskId,key);
+        return rows.isEmpty()?null:rows.getFirst();
+    }
+    private void recordOperation(AgentTaskExecutionGrantService.Scope scope,String taskId,String key,String hash,String resultHash,long taskVersion,long revision) {
+        if (jdbc.update("INSERT INTO agent_task_requirement_edit_operation "
+                + "(tenant_id,client_id,owner_jiacn,task_id,operation_key,request_sha256,result_sha256,task_version,requirement_revision) VALUES (?,?,?,?,?,?,?,?,?)",
+                scope.tenantId(),scope.clientId(),scope.ownerJiacn(),taskId,key,hash,resultHash,taskVersion,revision)!=1) throw failure(Reason.UNAVAILABLE);
+    }
+    private static String resultHash(String title,String description,List<Attachment> attachments) {
+        return requestHash(new Command(0,1,title,description,attachments));
+    }
+    private static String requestHash(Command command) {
+        try {
+            var digest=java.security.MessageDigest.getInstance("SHA-256");
+            var fields=new ArrayList<String>();
+            fields.add("MATTER_EDIT_V1"); fields.add(Long.toString(command.expectedTaskVersion()));
+            fields.add(Long.toString(command.expectedRequirementRevision()));fields.add(command.title());fields.add(command.description());
+            command.attachments().stream().sorted(Comparator.comparing(Attachment::fileId).thenComparingInt(Attachment::version))
+                    .forEach(a -> {fields.add(a.fileId());fields.add(Integer.toString(a.version()));});
+            for (String field:fields) {
+                byte[] bytes=field.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                digest.update(java.nio.ByteBuffer.allocate(4).putInt(bytes.length).array());digest.update(bytes);
+            }
+            return HexFormat.of().formatHex(digest.digest());
+        } catch (java.security.NoSuchAlgorithmException unavailable) {throw new IllegalStateException(unavailable);}
+    }
+    private static void validKey(String key) {
+        if (key==null || !key.matches("[A-Za-z0-9_-]{1,80}") || "CREATE".equals(key)) throw failure(Reason.BAD_REQUEST);
     }
     private void editable(AgentTaskExecutionGrantService.Scope scope,String taskId,AgentTaskMetaEntity root) {
         if (root==null) throw failure(Reason.NOT_FOUND);
@@ -116,8 +167,8 @@ public class AgentTaskRequirementEditServiceImpl implements AgentTaskRequirement
                 current.title(),current.description(),attachments);
     }
     private static void validate(String key,Command command) {
-        if (key==null || !key.matches("[A-Za-z0-9_-]{1,80}") || "CREATE".equals(key)
-                || command==null || command.expectedTaskVersion()<0 || command.expectedTaskVersion()==Long.MAX_VALUE
+        validKey(key);
+        if (command==null || command.expectedTaskVersion()<0 || command.expectedTaskVersion()==Long.MAX_VALUE
                 || command.expectedRequirementRevision()<1 || command.expectedRequirementRevision()==Long.MAX_VALUE
                 || command.title()==null || command.title().isBlank() || command.title().length()>200
                 || command.description()==null || command.description().isBlank() || command.description().length()>20000
