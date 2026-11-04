@@ -2015,11 +2015,11 @@ class AgentServiceImplTest extends BaseMockTest {
         assertEquals(List.of("agent-linchong", "agent-offline", "agent-error", "agent-busy", "agent-wuyong"),
                 result.stream().map(c -> c.target().agentId()).toList());
         assertTrue(result.stream().allMatch(agent -> agent.target().isMine()));
-        assertEquals(2, AgentTaskAssigneeCandidateDTO.class.getRecordComponents().length);
+        assertEquals("jiacn", result.getFirst().skillProviderOwnerJiacn());
         assertEquals(List.of("planning", "analysis"), result.stream().filter(c -> "agent-wuyong".equals(c.target().agentId())).findFirst().orElseThrow().abilities());
         verify(agentTaskMetaDao, never()).findByAgentInOwnerScope(anyString(), anyString(), anyString(), anyString(), anyInt());
         verify(externalServicePolicies, never()).assignedTarget(any(), anyString());
-        verify(externalServicePolicies).candidates(any(), org.mockito.ArgumentMatchers.eq("task-001"), org.mockito.ArgumentMatchers.isNull(), org.mockito.ArgumentMatchers.eq(100));
+        verify(externalServicePolicies).recommendationCandidates(any(), org.mockito.ArgumentMatchers.eq("task-001"));
         verify(agentRuntimeDao, never()).findRosterByOwner("0", "jia_client", "jiacn", null, null);
     }
 
