@@ -34,6 +34,7 @@ import static cn.jia.agent.skill.SkillManagementCodec.*;
  * The default trusted identity/session fixture can be replaced by persistent proof validation
  * for targeted consumer tests. No paid IO. */
 public class SkillManagementTransactionTest extends SkillManagementMySqlFixture {
+    cn.jia.agent.position.PositionSkillService positionService;
     protected static final HostingRentHttp.Actor ACTOR=new HostingRentHttp.Actor("buyer","0","sm-client","owner");
     protected static final String AGENT="agt_sm";
     private String database;
@@ -108,7 +109,10 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         when(sessions.isReady(eq("0"),eq(ACTOR.clientId()),eq(AGENT),any())).thenReturn(true);
         when(sessions.dispatch(anyString(),anyString(),anyString(),any(),any())).thenReturn(AgentRawCommandDispatchResult.sent(1,1));
         capabilities=mock(SkillCapabilityLookup.class);when(capabilities.lookup(any(),any())).thenReturn(SkillCapabilityLookup.View.unavailable(SkillCapabilityLookup.State.DISCONNECTED));
-        marketplace=new SkillMarketplaceService(market,app,ledger,posting,gate,versions,runtimes,provider(writer),provider(packages),provider(authentication),provider(sessions),manager);
+        positionService=mock(cn.jia.agent.position.PositionSkillService.class);
+        when(positionService.currentState(any())).thenReturn(cn.jia.agent.position.PositionSkillState.empty());
+        when(positionService.read(any())).thenReturn(new cn.jia.agent.position.PositionSkillService.View(null,null,0,cn.jia.agent.position.PositionSkillState.empty()));
+        marketplace=new SkillMarketplaceService(market,app,ledger,posting,gate,versions,runtimes,provider(writer),provider(packages),provider(authentication),provider(sessions),manager,positionService);
         service=new SkillManagementService(db,market,app,marketplace,versions,runtimes,installations,authentication,identityLocks,provider(packages),provider(writer),provider(sessions),provider(capabilities),manager);
         dispatch=new SkillInstallDispatchService(app,market,marketplace,versions,authentication,commands,provider(sessions),manager);dispatch.setManagement(service);
         recoveryMapper=sql.getMapper(AgentSkillInstallRecoveryMapper.class);
@@ -270,6 +274,35 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
                 .setApprovedPermissionsManifest("[]").setApprovedPermissionsSha256(SkillPackageStore.sha256("[]".getBytes(java.nio.charset.StandardCharsets.UTF_8)))
                 .setDeploymentRestriction("NONE").setReviewStatus("APPROVED").setTenantId("0").setClientId(ACTOR.clientId()).setCreateTime(1L));
         assertEquals(1,market.publishProductVersion("0",ACTOR.clientId(),"sp_pdf","spv_pdf_"+sequence,sequence,System.currentTimeMillis()));
+    }
+    private void markPositionSkill() {
+        var skill=new cn.jia.agent.position.PositionSkillState.Skill("repo-test",cn.jia.agent.position.PositionSkillState.SkillType.POSITION,"spv_repo_test_1_0_0");
+        var state=new cn.jia.agent.position.PositionSkillState(1,Map.of(skill.key(),skill),Map.of(),Map.of(),Map.of());
+        when(positionService.currentState(any())).thenReturn(state);
+        when(positionService.read(any())).thenReturn(new cn.jia.agent.position.PositionSkillService.View(null,null,1,state));
+    }
+    @Test void positionSkillHasViewButNoOrdinaryLifecycleActionsEvenForAdmin() {
+        markPositionSkill();
+        var list=service.skills(ACTOR,AGENT,true);
+        var row=((List<?>)list.get("items")).stream().map(SkillManagementCodec::object)
+                .filter(item->"repo-test".equals(item.get("skillKey"))).findFirst().orElseThrow();
+        assertEquals(List.of("VIEW"),row.get("allowedActions"));
+        assertTrue(((List<?>)row.get("deniedActions")).stream().map(SkillManagementCodec::object)
+                .allMatch(item->"POSITION_MANAGED_SKILL".equals(item.get("reasonCode"))));
+        var product=marketplace.catalog(ACTOR,true).stream().filter(item->"repo-test".equals(item.get("skillKey"))).findFirst().orElseThrow();
+        assertEquals(false,product.get("canPurchase"));assertEquals("POSITION_MANAGED_SKILL",product.get("denialReason"));
+    }
+    @Test void positionSkillCannotQuoteOrSpendEvenForAdmin() {
+        markPositionSkill();long before=wallet();
+        var failure=assertThrows(SkillMarketplaceException.class,()->service.quote(ACTOR,"position-quote",quoteData(),true));
+        assertEquals("POSITION_MANAGED_SKILL",failure.code());assertEquals(before,wallet());
+        assertEquals(0,count("economy_skill_purchase_quote"));
+    }
+    @Test void positionClassificationAfterQuoteBlocksCreateWithoutSpending() {
+        var data=quoteData();var quote=service.quote(ACTOR,"ordinary-quote",data,false);long before=wallet();markPositionSkill();
+        var failure=assertThrows(SkillMarketplaceException.class,()->service.create(ACTOR,AGENT,"position-create","position-request",creation(quote,data),true));
+        assertEquals("POSITION_MANAGED_SKILL",failure.code());assertEquals(before,wallet());
+        assertEquals(0,count("economy_skill_order"));
     }
     @Test void managementLocksIdentityBeforeRuntimeAndVersionOwnershipChecks() throws Exception {
         publishExecutable("1.0.0",1);

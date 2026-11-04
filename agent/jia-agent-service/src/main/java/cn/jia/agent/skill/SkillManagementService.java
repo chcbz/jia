@@ -254,6 +254,7 @@ public final class SkillManagementService {
         return auth;
     }
     private void intent(HostingRentHttp.Actor a,SkillManagedStateEntity state,Map<String,Object> data) {
+        marketplace.requireManualSkill(a,state.getSkillKey());
         require(state.getSkillRevision().toString().equals(data.get("expectedSkillRevision")),409,"SKILL_STATE_CONFLICT");
         require(state.getPendingChangeId()==null,409,"SKILL_CHANGE_PENDING");
         var source=source(a,state,data.get("sourceSkillInstallationId"));
@@ -544,6 +545,7 @@ public final class SkillManagementService {
             var r=replay(a,route,key,data);if(r!=null)return visibleChange(a,agent,r.getResourceId(),false);
             var c=db.lockChange(a.tenantId(),a.clientId(),change);
             require(c!=null&&agent.equals(c.getAgentId())&&a.ownerJiacn().equals(c.getOwnerJiacn()),404,"RESOURCE_NOT_FOUND");
+            marketplace.requireManualSkill(a,c.getSkillKey());
             var value=dto(c);require(value.get("changeRevision").equals(data.get("expectedChangeRevision")),409,"SKILL_STATE_CONFLICT");
             require("FAILED_RETRYABLE".equals(value.get("status"))&&Boolean.TRUE.equals(value.get("retryAllowed"))
                     &&Set.of("NONE","HELD").contains(value.get("fundingStatus")),409,"SKILL_RETRY_NOT_ALLOWED");
@@ -682,6 +684,7 @@ public final class SkillManagementService {
             var records=db.changes(a.tenantId(),a.clientId(),agent);var keys=new TreeSet<String>(UTF8);keys.addAll(candidates.keySet());keys.addAll(states.keySet());
             // Preserve legacy installed evidence as an explicit unknown row; never infer successful SM-C1 activation.
             for(var e:market.selectEntitlementsByAgent(a.tenantId(),a.clientId(),agent))keys.add(e.getSkillKey());
+            var positionSkills=marketplace.positionSkills(a);
             var rows=new ArrayList<Map<String,Object>>();boolean connected=online(a,agent);var catalog=catalog(a,agent);
             var binding=runtimes.findInScope(a.tenantId(),a.clientId(),agent);boolean mapped=binding!=null&&binding.getRuntimeInstallationId()!=null&&binding.getRuntimeHostId()!=null;
             for(String skill:keys) {
@@ -701,7 +704,11 @@ public final class SkillManagementService {
                 boolean pending=s!=null&&s.getPendingChangeId()!=null;String blocked=pending?"SKILL_CHANGE_PENDING":null;
                 boolean historical=auth==null&&market.selectEntitlementsByAgent(a.tenantId(),a.clientId(),agent).stream()
                         .anyMatch(e->skill.equals(e.getSkillKey())&&db.findAuthorization(a.tenantId(),a.clientId(),e.getInstallationId())==null);
-                if(auth==null) {
+                boolean positionOnly=positionSkills.positionOnly(skill);
+                if(positionOnly) {
+                    for(String action:List.of("INSTALL","UPGRADE","UNINSTALL","ENABLE","DISABLE","RETRY"))
+                        denied.add(map("action",action,"reasonCode","POSITION_MANAGED_SKILL"));
+                } else if(auth==null) {
                     if(candidate!=null&&mapped&&!historical&&blocked==null&&(admin||"NONE".equals(candidate.version().getDeploymentRestriction())))allowed.add("INSTALL");
                     else denied.add(map("action","INSTALL","reasonCode",blocked!=null?blocked:!mapped?"RUNTIME_MAPPING_REQUIRED":historical?"INTEGRITY_UNPROVEN":"PUBLICATION_UNAVAILABLE"));
                 } else {
@@ -714,7 +721,7 @@ public final class SkillManagementService {
                     else denied.add(map("action",action,"reasonCode",blocked!=null?blocked:"AGENT_OFFLINE"));
                 }
                 if(latest!=null) {
-                    var value=dto(latest);if(Boolean.TRUE.equals(value.get("retryAllowed")))allowed.add("RETRY");
+                    var value=dto(latest);if(!positionOnly&&Boolean.TRUE.equals(value.get("retryAllowed")))allowed.add("RETRY");
                     if(Set.of("RECOVERY_REQUIRED","VERIFYING","WAITING_AGENT","ACTIVATING","PREPARING").contains(value.get("status")))allowed.add("RECONCILE");
                 }
                 rows.add(map("skillKey",skill,"name",product==null?skill:product.getName(),"description",product==null?"":product.getDescription(),

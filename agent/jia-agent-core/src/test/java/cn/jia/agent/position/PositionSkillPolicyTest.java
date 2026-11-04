@@ -21,6 +21,14 @@ class PositionSkillPolicyTest {
     private Installation installation(PositionSkillPolicy p, String key) {
         return p.state().installations().values().stream().filter(i -> i.skillKey().equals(key)).findFirst().orElseThrow();
     }
+    @Test void ordinaryInstallClassificationUsesDefinedTypeNotSkillName() {
+        var position=new PositionSkillState.Skill("arbitrary-key",PositionSkillState.SkillType.POSITION,"v1");
+        var general=new PositionSkillState.Skill("skill-management",PositionSkillState.SkillType.GENERAL,"v2");
+        var state=new PositionSkillState(1,Map.of(position.key(),position,general.key(),general),Map.of(),Map.of(),Map.of());
+        assertTrue(state.positionOnly("arbitrary-key"));
+        assertFalse(state.positionOnly("skill-management"));
+        assertFalse(state.positionOnly("unknown"));
+    }
     @Test void skillManagementIsNotAnArchivePermissionAndResignationRevokesIt() {
         var p=policy();
         p.configure(new Position("skill-management","技能管理",1,"skills:platform",true,List.of(),0),0);

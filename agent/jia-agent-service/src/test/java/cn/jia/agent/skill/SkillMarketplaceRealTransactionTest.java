@@ -47,6 +47,7 @@ import static org.mockito.ArgumentMatchers.*;
  * No sockets, broker, runner, or provisioning. Runtime/owner/key adapters are explicit trusted fixtures.
  * Paid terminal selectors require W06's centralized CAPTURE_SKILL/REFUND_SKILL primitive integration. */
 public class SkillMarketplaceRealTransactionTest {
+    cn.jia.agent.position.PositionSkillService positionService;
     private static final HostingRentHttp.Actor ACTOR=new HostingRentHttp.Actor("payer-sub","0","Client-A","Tenant-A");
     private static final String AGENT="agt_00000000000000000000000000000001";
     private static final String TRANSPORT_SCHEMA="db/agent-command-transport-schema.sql";
@@ -168,7 +169,10 @@ public class SkillMarketplaceRealTransactionTest {
         credentials=new SkillManagedCredentials(credentialMapper,app,mock(EconomyHostingRentMapper.class),versions,runtimes,provider(keys),gate,manager);
         sessions=mock(AgentManagedSessionLookup.class);
         when(sessions.isReady(eq(ACTOR.tenantId()),eq(ACTOR.clientId()),eq(AGENT),any())).thenReturn(true);
-        service=new SkillMarketplaceService(market,app,ledger,posting,gate,versions,runtimes,provider(writer),provider(packages),provider(authentication),provider(sessions),manager);
+        positionService=mock(cn.jia.agent.position.PositionSkillService.class);
+        when(positionService.currentState(any())).thenReturn(cn.jia.agent.position.PositionSkillState.empty());
+        when(positionService.read(any())).thenReturn(new cn.jia.agent.position.PositionSkillService.View(null,null,0,cn.jia.agent.position.PositionSkillState.empty()));
+        service=new SkillMarketplaceService(market,app,ledger,posting,gate,versions,runtimes,provider(writer),provider(packages),provider(authentication),provider(sessions),manager,positionService);
         dispatch=new SkillInstallDispatchService(app,market,service,versions,authentication,commands,provider(sessions),manager);
         recoveryMapper=sql.getMapper(AgentSkillInstallRecoveryMapper.class);
         recovery=new SkillInstallRecoveryService(recoveryMapper,new AgentCommandRecoveryDaoImpl(sql.getMapper(AgentCommandRecoveryMapper.class)),gate,dispatch,manager,new FixedTenantAdmissionPolicy("0", null));
@@ -233,6 +237,16 @@ public class SkillMarketplaceRealTransactionTest {
     private void drainNative() {
         when(sessions.dispatch(anyString(),anyString(),anyString(),any(),any())).thenReturn(AgentRawCommandDispatchResult.sent(1,1));
         recovery.recover();
+    }
+    @Test void legacyPurchaseCannotBypassPositionLifecycleAsAdmin() {
+        var skill=new cn.jia.agent.position.PositionSkillState.Skill("repo-test",cn.jia.agent.position.PositionSkillState.SkillType.POSITION,"spv_repo_test_1_0_0");
+        var state=new cn.jia.agent.position.PositionSkillState(1,Map.of(skill.key(),skill),Map.of(),Map.of(),Map.of());
+        // Quote is obtained before reclassification; purchase must check again before money/order writes.
+        var body=purchaseBody("spv_repo_test_1_0_0");long before=wallet();
+        when(positionService.currentState(any())).thenReturn(state);
+        var failure=assertThrows(SkillMarketplaceException.class,()->service.purchase(ACTOR,uuid(),body,true));
+        assertEquals("POSITION_MANAGED_SKILL",failure.code());assertEquals(before,wallet());
+        assertEquals(0,count("economy_skill_order"));
     }
     @Test void nativeSkillInstallRemainsAuthorizedAfterInvitationHintButRejectsInactiveOrder() {
         service.purchase(ACTOR,uuid(),purchaseBody("spv_repo_test_1_0_0"),false);var i=installation();

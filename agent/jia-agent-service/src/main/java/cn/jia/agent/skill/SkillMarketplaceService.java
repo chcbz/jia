@@ -24,6 +24,7 @@ import static cn.jia.agent.skill.SkillMarketplaceException.require;
  * The existing committed WS outbox dispatcher owns all network I/O and crash recovery. */
 @Service
 public final class SkillMarketplaceService {
+    private final cn.jia.agent.position.PositionSkillService positions;
     private final EconomySkillMarketplaceMapper market;
     private final EconomySkillApplicationMapper application;
     private final EconomyLedgerMapper ledger;
@@ -40,10 +41,23 @@ public final class SkillMarketplaceService {
             EconomyLedgerMapper ledger,EconomyPostingService posting,EconomyPreviewGate preview,
             SkillAgentVersions versions,AgentRuntimeDao runtimes,ObjectProvider<SkillInstallCommandWriter> writer,
             ObjectProvider<SkillPackages> packages,
-            ObjectProvider<AgentRuntimeAuthenticationService> authentication,ObjectProvider<AgentManagedSessionLookup> sessions,PlatformTransactionManager manager) {
+            ObjectProvider<AgentRuntimeAuthenticationService> authentication,ObjectProvider<AgentManagedSessionLookup> sessions,PlatformTransactionManager manager,
+            cn.jia.agent.position.PositionSkillService positions) {
+        this.positions=positions;
         this.market=market; this.application=application; this.ledger=ledger; this.posting=posting;
         this.preview=preview; this.versions=versions; this.runtimes=runtimes; this.writer=writer;
         this.packages=packages; this.authentication=authentication; this.tx=new TransactionTemplate(manager);this.sessions=sessions;
+    }
+    private cn.jia.agent.service.PositionAuthority.Scope positionScope(HostingRentHttp.Actor a) {
+        return new cn.jia.agent.service.PositionAuthority.Scope(a.tenantId(),a.clientId(),a.ownerJiacn());
+    }
+    cn.jia.agent.position.PositionSkillState positionSkills(HostingRentHttp.Actor a) {
+        return positions.read(positionScope(a)).state();
+    }
+    /** Same position root as definition changes; called inside the existing intent transaction,
+     * before product/money locks. An admin flag does not bypass a position lifecycle. */
+    void requireManualSkill(HostingRentHttp.Actor a,String skillKey) {
+        require(!positions.currentState(positionScope(a)).positionOnly(skillKey),403,"POSITION_MANAGED_SKILL");
     }
     public boolean available(HostingRentHttp.Actor a) {
         var transport=writer.getIfAvailable();
@@ -63,21 +77,24 @@ public final class SkillMarketplaceService {
     }
     public List<Map<String,Object>> catalog(HostingRentHttp.Actor a,boolean admin) {
         enabled(a);
-        return market.selectPublishedProducts(a.tenantId(),a.clientId(),0,100).stream().map(p->detail(a,p,admin)).toList();
+        var policy=positionSkills(a);
+        return market.selectPublishedProducts(a.tenantId(),a.clientId(),0,100).stream().map(p->detail(a,p,admin,policy)).toList();
     }
     public Map<String,Object> detail(HostingRentHttp.Actor a,String id,boolean admin) {
         enabled(a); var p=application.product(a.tenantId(),a.clientId(),id);
-        require(p!=null,404,"SKILL_PRODUCT_NOT_FOUND"); return detail(a,p,admin);
+        require(p!=null,404,"SKILL_PRODUCT_NOT_FOUND"); return detail(a,p,admin,positionSkills(a));
     }
-    private Map<String,Object> detail(HostingRentHttp.Actor a,SkillProductEntity p,boolean admin) {
+    private Map<String,Object> detail(HostingRentHttp.Actor a,SkillProductEntity p,boolean admin,
+            cn.jia.agent.position.PositionSkillState policy) {
         var v=market.selectPurchasableProductVersion(a.tenantId(),a.clientId(),p.getCurrentProductVersionId());
         require(v!=null,404,"SKILL_PRODUCT_NOT_FOUND"); packages.getObject().describe(v);
         Map<String,Object> dto=new LinkedHashMap<>();
         dto.put("productId",p.getProductId()); dto.put("name",p.getName()); dto.put("description",p.getDescription());
         dto.put("productVersionId",v.getProductVersionId()); dto.put("skillKey",v.getSkillKey()); dto.put("skillVersion",v.getSkillVersion());
         dto.put("price",cn.jia.economy.common.Money.silver(v.getPriceMicro())); dto.put("permissions",SkillMarketplaceHttp.permissions(v.getApprovedPermissionsManifest()));
-        boolean allowed=admin || "NONE".equals(v.getDeploymentRestriction());
-        dto.put("canPurchase",allowed); dto.put("denialReason",allowed?null:"SKILL_ADMIN_REQUIRED");
+        boolean positionOnly=policy.positionOnly(v.getSkillKey());
+        boolean allowed=!positionOnly && (admin || "NONE".equals(v.getDeploymentRestriction()));
+        dto.put("canPurchase",allowed); dto.put("denialReason",allowed?null:positionOnly?"POSITION_MANAGED_SKILL":"SKILL_ADMIN_REQUIRED");
         dto.put("deploymentRestriction",v.getDeploymentRestriction()); return dto;
     }
     public Map<String,Object> quote(HostingRentHttp.Actor a,String key,Map<String,String> body,boolean admin) {
@@ -190,6 +207,7 @@ public final class SkillMarketplaceService {
     }
     private SkillProductVersionEntity productLocked(HostingRentHttp.Actor a,String id,boolean admin,
             SkillPackages.Description prepared) {
+        requireManualSkill(a,prepared.product().skillKey());
         var published=market.selectPurchasableProductVersion(a.tenantId(),a.clientId(),id);
         require(published!=null,404,"SKILL_PRODUCT_NOT_FOUND");
         var p=market.selectProductForUpdate(a.tenantId(),a.clientId(),published.getProductId());

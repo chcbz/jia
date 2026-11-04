@@ -29,6 +29,10 @@ public record PositionSkillState(int schemaVersion, Map<String, Skill> skills,
         skills = Map.copyOf(skills); positions = Map.copyOf(positions);
         appointments = Map.copyOf(appointments); installations = Map.copyOf(installations);
     }
+    public boolean positionOnly(String skillKey) {
+        var skill=skills.get(skillKey);
+        return skill!=null && skill.type()==SkillType.POSITION;
+    }
     public static PositionSkillState empty() {
         return new PositionSkillState(1, Map.of(), Map.of(), Map.of(), Map.of());
     }
