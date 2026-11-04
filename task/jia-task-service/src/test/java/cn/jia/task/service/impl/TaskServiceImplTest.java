@@ -186,6 +186,7 @@ class TaskServiceImplTest extends BaseMockTest {
         when(taskPlanDao.updateById(any(TaskPlanEntity.class))).thenReturn(1);
         org.junit.jupiter.api.Assertions.assertTrue(taskServiceImpl.updateSummaryInOwnerScope("0","client","owner",1L,"New title","New description"));
         var summary=ArgumentCaptor.forClass(TaskPlanEntity.class);
+        verify(taskPlanDao).findInOwnerScope("0","client","owner",1L);
         verify(taskPlanDao).updateById(summary.capture());
         assertEquals("New title",summary.getValue().getName());
         assertEquals("New description",summary.getValue().getDescription());
@@ -195,6 +196,7 @@ class TaskServiceImplTest extends BaseMockTest {
     @Test
     void summaryOnlyEditDoesNotWriteOutsideOwnerScope() {
         org.junit.jupiter.api.Assertions.assertFalse(taskServiceImpl.updateSummaryInOwnerScope("0","client","other",1L,"Title","Description"));
+        verify(taskPlanDao).findInOwnerScope("0","client","other",1L);
         verify(taskPlanDao,never()).updateById(any(TaskPlanEntity.class));
         verifyNoInteractions(taskItemDao,taskDetailDao);
     }
