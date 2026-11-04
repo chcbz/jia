@@ -23,13 +23,13 @@ class AgentTaskRequirementEditControllerTest {
         mvc=MockMvcBuilders.standaloneSetup(new AgentTaskRequirementEditController(service))
                 .setControllerAdvice(new cn.jia.core.config.ApiEnvelopeAdvice(),new cn.jia.core.config.ApiRequestEnvelopeAdvice(),new cn.jia.core.config.ExceptionHandlerAdvice())
                 .addFilters(new cn.jia.core.filter.RequestIdFilter()).build();
-        var context=new EsContext();context.setClientId("client");context.setJiacn("owner");EsContextHolder.setContext(context);
+        var context=new EsContext();context.setTenantId("0");context.setClientId("client");context.setJiacn("owner");EsContextHolder.setContext(context);
     }
     @AfterEach void cleanup() { EsContextHolder.clearContext(); }
     JwtAuthenticationToken owner() {
         return new JwtAuthenticationToken(Jwt.withTokenValue("test").header("alg","RS256").subject("owner")
                 .claim("jiacn","owner").claim("client_id","client").claim("tenant_id","0")
-                .issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(600)).build());
+                .issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(600)).build(), List.of());
     }
     String body(String version) { return "{\"protocolVersion\":1,\"requestId\":\"edit-test\",\"data\":{\"expectedTaskVersion\":"+version+",\"expectedRequirementRevision\":\"1\",\"title\":\"事项标题\",\"description\":\"需求\",\"attachments\":[{\"fileId\":\"file\",\"version\":1}]}}"; }
     String fixtureBody() throws Exception {
@@ -51,6 +51,11 @@ class AgentTaskRequirementEditControllerTest {
         mvc.perform(put("/agent/tasks/1/requirements/edit").principal(owner()).header("Idempotency-Key","edit-key")
                 .contentType(MediaType.APPLICATION_JSON).content(body("0"))).andExpect(status().isBadRequest());
         verify(service,never()).save(any(),anyString(),anyString(),any());
+    }
+    @Test void unauthenticatedJwtIsRejected() throws Exception {
+        mvc.perform(get("/agent/tasks/1/requirements/edit").principal(new JwtAuthenticationToken(owner().getToken())))
+                .andExpect(status().isUnauthorized());
+        verifyNoInteractions(service);
     }
     @Test void concurrentStateChangeIs409NotSuccess() throws Exception {
         when(service.save(any(),anyString(),anyString(),any())).thenThrow(new AgentTaskRequirementEditService.Failure(AgentTaskRequirementEditService.Reason.NOT_EDITABLE));
