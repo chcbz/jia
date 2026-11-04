@@ -139,7 +139,7 @@ class EconomyPreviewConfigurationTest {
     }
 
     @Test
-    void allBundledProfilesExplicitlyRemainDisabled() throws Exception {
+    void bundledProfilesPreserveExplicitEconomicScope() throws Exception {
         Path root = apiRoot();
         for (String profile : List.of(
                 "starter/src/main/resources/application-dev.properties",
@@ -149,7 +149,16 @@ class EconomyPreviewConfigurationTest {
             List<String> declarations = Files.readAllLines(root.resolve(profile), StandardCharsets.UTF_8).stream()
                     .filter(line -> line.startsWith("economy.preview.enabled="))
                     .toList();
-            assertEquals(List.of("economy.preview.enabled=false"), declarations, profile);
+            boolean production=profile.endsWith("application-prod.properties");
+            assertEquals(List.of("economy.preview.enabled="+production), declarations, profile);
+            if(production) {
+                var scope=Files.readAllLines(root.resolve(profile),StandardCharsets.UTF_8).stream()
+                        .filter(line->line.startsWith("economy.preview.allowed-scopes[")).toList();
+                assertEquals(List.of("economy.preview.allowed-scopes[0].tenant-id=0",
+                        "economy.preview.allowed-scopes[0].client-id=jiafewnnv58ec2379c"),scope);
+                assertTrue(Files.readAllLines(root.resolve(profile),StandardCharsets.UTF_8)
+                        .contains("economy.preview.test-issuance-enabled=false"));
+            }
         }
     }
 

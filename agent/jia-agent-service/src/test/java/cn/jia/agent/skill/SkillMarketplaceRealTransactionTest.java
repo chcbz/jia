@@ -172,9 +172,8 @@ public class SkillMarketplaceRealTransactionTest {
         key=new OauthApiKeyEntity();key.setId("key-1");key.setJiacn(ACTOR.ownerJiacn());key.setClientId(ACTOR.clientId());key.setTenantId(ACTOR.tenantId());key.setStatus(1);
         when(keys.get("key-1")).thenReturn(key);
         credentialMapper=spy(sql.getMapper(SkillCredentialMapper.class));
-        doReturn(List.of()).when(credentialMapper).hostingCandidates(anyString(),anyString(),anyString());
         credentialMapper.insert("sc_1","key-1",AGENT,7L,ACTOR.tenantId(),ACTOR.clientId(),1L);
-        credentials=new SkillManagedCredentials(credentialMapper,app,new cn.jia.economy.service.impl.SkillHostingCredentialLookupImpl(sql.getMapper(SkillHostingCredentialMapper.class),mock(EconomyHostingRentMapper.class)),versions,runtimes,provider(keys),manager,trade);
+        credentials=new SkillManagedCredentials(credentialMapper,app,mock(SkillHostingCredentialLookup.class),versions,runtimes,provider(keys),manager,trade);
         sessions=mock(AgentManagedSessionLookup.class);
         when(sessions.isReady(eq(ACTOR.tenantId()),eq(ACTOR.clientId()),eq(AGENT),any())).thenReturn(true);
         positionService=mock(cn.jia.agent.position.PositionSkillService.class);
@@ -533,7 +532,7 @@ public class SkillMarketplaceRealTransactionTest {
     }
     @Test void exactRuntimeProofNeverBypassesRealHostingRentAdmissionOrConsumesVersion() {
         var body=purchaseBody("spv_repo_test_1_0_0");long version=versions.requireOwned(ACTOR,AGENT,null,false);
-        var rentMapper=new cn.jia.economy.service.impl.SkillHostingCredentialLookupImpl(sql.getMapper(SkillHostingCredentialMapper.class),mock(EconomyHostingRentMapper.class));
+        var rentMapper=mock(EconomyHostingRentMapper.class);
         var lease=new EconomyHostingLeaseEntity().setStatus("ACTIVE").setPaidThrough(1L);
         when(rentMapper.selectLatestLease(ACTOR.tenantId(),ACTOR.clientId(),AGENT)).thenReturn(lease);
         var rentAdmission=new cn.jia.agent.hosting.HostingRentWorkAdmission(rentMapper,true);

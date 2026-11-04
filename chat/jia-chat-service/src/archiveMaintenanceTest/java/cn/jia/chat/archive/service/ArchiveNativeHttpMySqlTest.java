@@ -220,7 +220,7 @@ class ArchiveNativeHttpMySqlTest {
         assertEquals(List.of("archive-general"),retained.read(lookupScope).stream().map(InstalledSkillDescriptorLookup.Descriptor::skillKey).toList());
         int entitled=new org.springframework.transaction.support.TransactionTemplate(spring.getBean(DataSourceTransactionManager.class)).execute(status->retained.entitlements(lookupScope).size());
         assertEquals(1,entitled);
-        verifyNoInteractions(spring.getBean(SkillMarketplaceService.class));
+        verifyNoInteractions(spring.getBean(SkillMarketplaceService.class),spring.getBean(cn.jia.economy.service.skill.SkillTradeService.class));
         assertEquals(0,jdbc.queryForObject("SELECT count(*) FROM economy_skill_order",Integer.class));
         assertEquals("STOPPED",exchange(Map.of("op","STOP")).get("op"));assertTrue(node.waitFor(10,TimeUnit.SECONDS));assertEquals(0,node.exitValue());
     }
@@ -347,6 +347,7 @@ class ArchiveNativeHttpMySqlTest {
         @Bean SkillManagementMapper managementMapper(SqlSessionTemplate session) {return session.getMapper(SkillManagementMapper.class);}
         @Bean SkillInstallationMapper applicationMapper(SqlSessionTemplate session) {return session.getMapper(SkillInstallationMapper.class);}
         @Bean SkillMarketplaceService marketplace() {return mock(SkillMarketplaceService.class);}
+        @Bean cn.jia.economy.service.skill.SkillTradeService skillTrade() {return mock(cn.jia.economy.service.skill.SkillTradeService.class);}
         @Bean SkillAgentVersions versions() {return mock(SkillAgentVersions.class);}
         @Bean AgentManagedSessionLookup sessions(AgentRuntimeAuthenticationService auth) {
             var sessions=mock(AgentManagedSessionLookup.class);
