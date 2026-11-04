@@ -144,7 +144,7 @@ class AgentTaskRequirementSnapshotServiceImplTest {
         assertEquals(description,current.description());
         assertEquals("RECONFIRM",current.source());
         assertEquals(64,current.sha256().length());
-        assertEquals(List.of("task-root","requirement-snapshot"),lockOrder);
+        assertEquals(List.of("task-root","requirement-current"),lockOrder);
         assertEquals(updatesBefore,jdbc.updateCalls,"GET projection must not write");
     }
 
@@ -159,7 +159,7 @@ class AgentTaskRequirementSnapshotServiceImplTest {
         assertThrows(IllegalArgumentException.class, () -> service.readCurrent(OWNER,"task-1 "));
 
         service.captureOnCreate(OWNER,"task-1","Original","Full immutable body");
-        jdbc.rows.getFirst().description="tampered";
+        jdbc.current.getFirst().description="tampered";
         assertReason(AgentTaskRequirementReadException.Reason.INTEGRITY_ERROR,
                 () -> service.readCurrent(OWNER,"task-1"));
 
@@ -286,6 +286,19 @@ class AgentTaskRequirementSnapshotServiceImplTest {
         verifyNoInteractions(snapshots);
     }
 
+    @Test void editsReplaceOneCurrentRowAndOnlyAssignmentFreezesHistory() {
+        service.captureOnCreate(OWNER,"task-1","Created","Body");
+        service.updateCurrent(OWNER,"task-1",1,"Edited once","Body 2");
+        service.updateCurrent(OWNER,"task-1",2,"Edited twice","Body 3");
+        assertEquals(1,jdbc.rows.size()); assertEquals(1,jdbc.current.size());
+        assertEquals("Edited twice",service.readCurrent(OWNER,"task-1").title());
+        assertEquals("Created",service.read(OWNER,"task-1",1).title());
+        assertThrows(IllegalStateException.class,()->service.read(OWNER,"task-1",3));
+        var frozen=service.freezeCurrent(OWNER,"task-1",3);
+        assertEquals(frozen,service.freezeCurrent(OWNER,"task-1",3));
+        assertEquals(2,jdbc.rows.size());assertEquals("Edited twice",service.read(OWNER,"task-1",3).title());
+    }
+
     private static JwtAuthenticationToken tenantJwt(java.util.Map<String,Object> claims) {
         var builder=Jwt.withTokenValue("token").header("alg","none").claim("jiacn","owner").claim("client_id","client");
         claims.forEach(builder::claim);
@@ -318,6 +331,7 @@ class AgentTaskRequirementSnapshotServiceImplTest {
     /** Source-only JDBC fixture; does NOT simulate actual MySQL row locks or schema behavior. */
     private static final class MemoryJdbc extends JdbcTemplate {
         private final List<Row> rows=new ArrayList<>();
+        private final List<Row> current=new ArrayList<>();
         private final List<String> lockOrder;
         private boolean funded;
         private boolean failReads;
@@ -325,6 +339,13 @@ class AgentTaskRequirementSnapshotServiceImplTest {
         private MemoryJdbc(List<String> lockOrder) { this.lockOrder=lockOrder; }
         @Override public int update(String sql,Object... args) {
             updateCalls++;
+            if (sql.startsWith("INSERT INTO agent_task_current_requirement")) {
+                current.add(new Row((String)args[0],(String)args[1],(String)args[2],(String)args[3],(long)args[4],"",0,(String)args[5],(String)args[6],(String)args[7],(String)args[8]));return 1;
+            }
+            if (sql.startsWith("UPDATE agent_task_current_requirement")) {
+                var prior=current.getFirst();
+                current.set(0,new Row(prior.tenant,prior.client,prior.owner,prior.taskId,(long)args[0],"",0,(String)args[1],(String)args[2],(String)args[3],(String)args[4]));return 1;
+            }
             if (!sql.startsWith("INSERT INTO agent_task_requirement_snapshot")) throw new AssertionError(sql);
             if (rows.stream().anyMatch(r -> r.taskId.equals(args[3]) && r.revision==(long)args[4]))
                 throw new IllegalStateException("Duplicate revision");
@@ -334,6 +355,7 @@ class AgentTaskRequirementSnapshotServiceImplTest {
             return 1;
         }
         @Override public <T> T queryForObject(String sql,Class<T> type,Object... args) {
+            if (sql.contains("COUNT(*) FROM agent_task_requirement_snapshot")) return type.cast((int)rows.stream().filter(r->r.revision==(long)args[4]).count());
             if (sql.contains("FROM agent_task_funding")) return type.cast(funded?1:0);
             if (sql.contains("task_version_at_confirmation")) return type.cast(rows.stream()
                     .filter(r -> Objects.equals(r.confirmationId,args[4]) && r.revision==(long)args[5])
@@ -344,7 +366,9 @@ class AgentTaskRequirementSnapshotServiceImplTest {
             if (failReads) throw new DataAccessResourceFailureException("database unavailable");
             if (sql.contains("ORDER BY revision DESC") && sql.contains("FOR UPDATE"))
                 lockOrder.add("requirement-snapshot");
-            List<Row> matches=rows.stream().filter(r -> r.tenant.equals(args[0])
+            boolean currentRead=sql.contains("FROM agent_task_current_requirement");
+            if(currentRead) lockOrder.add("requirement-current");
+            List<Row> matches=(currentRead?current:rows).stream().filter(r -> r.tenant.equals(args[0])
                     && r.client.equals(args[1]) && r.owner.equals(args[2])
                     && r.taskId.equals(args[3])).filter(r -> {
                         if (sql.contains("AND confirmation_id=?")) return r.confirmationId.equals(args[4]);
@@ -362,6 +386,10 @@ class AgentTaskRequirementSnapshotServiceImplTest {
                     when(rs.getLong(5)).thenReturn(row.revision);when(rs.getString(6)).thenReturn(row.title);
                     when(rs.getString(7)).thenReturn(row.description);when(rs.getString(8)).thenReturn(row.hash);
                     when(rs.getString(9)).thenReturn(row.source);
+                    if(currentRead) {
+                        when(rs.getLong(1)).thenReturn(row.revision);when(rs.getString(2)).thenReturn(row.title);
+                        when(rs.getString(3)).thenReturn(row.description);when(rs.getString(4)).thenReturn(row.hash);when(rs.getString(5)).thenReturn(row.source);
+                    }
                     results.add(mapper.mapRow(rs,results.size()));
                 } catch (SQLException ex) { throw new IllegalStateException(ex); }
             }

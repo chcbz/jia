@@ -51,6 +51,8 @@ class AgentTaskExecutionGrantServiceImplTest {
         root.setTenantId("0"); root.setClientId("client"); root.setOwnerJiacn("owner");
         root.setTaskId("task-1"); root.setTaskVersion(0L); root.setCurrentEventVersion(0L);
         root.setRewardStatus("open");
+        lenient().when(requirementSnapshots.freezeCurrent(any(),anyString(),anyLong()))
+                .thenAnswer(i->requirementSnapshots.requireCurrent(i.getArgument(0),i.getArgument(1),i.getArgument(2)));
         when(requirementSnapshots.requireCurrent(any(),eq("task-1"),anyLong()))
                 .thenAnswer(i -> new AgentTaskRequirementSnapshotService.Snapshot(
                         "0","client","owner","task-1",i.getArgument(2),

@@ -51,6 +51,7 @@ class TaskBootstrapTenantIsolationMySqlTest extends SkillManagementMySqlFixture 
         transactions = new DataSourceTransactionManager(source);
         script("db/agent-task-bounty-bootstrap-outbox-v1.sql");
         script("db/agent-task-requirement-snapshot-v1.sql");
+        script("db/agent-task-current-requirement-v1.sql");
         script("db/agent-task-creation-operation-v1.sql");
         var configuration = new MybatisConfiguration();
         configuration.setMapUnderscoreToCamelCase(true);

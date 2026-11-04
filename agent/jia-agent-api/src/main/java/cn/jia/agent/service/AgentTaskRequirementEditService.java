@@ -10,6 +10,7 @@ public interface AgentTaskRequirementEditService {
     record View(String taskId, String taskVersion, String requirementRevision,
                 String title, String description, List<Attachment> attachments) { }
     View read(AgentTaskExecutionGrantService.Scope scope, String taskId);
+    View readSaved(AgentTaskExecutionGrantService.Scope scope,String taskId,String key);
     View save(AgentTaskExecutionGrantService.Scope scope, String taskId, String key, Command command);
     enum Reason { BAD_REQUEST, NOT_FOUND, CONFLICT, NOT_EDITABLE, UNAVAILABLE }
     final class Failure extends RuntimeException {

@@ -31,6 +31,11 @@ public final class AgentTaskRequirementSnapshotSchemaInitializer implements Init
                 + "WHERE table_schema=DATABASE() AND table_name=?", Integer.class, TABLE);
         if (count == null || count == 0) jdbc.execute(ddl());
         validate();
+        // Explicit schema-maintenance only. Production backfill is a separate controlled migration.
+        for (String resource:List.of("db/agent-task-current-requirement-v1.sql","db/agent-task-requirement-edit-operation-v1.sql")) {
+            try { jdbc.execute(new ClassPathResource(resource).getContentAsString(StandardCharsets.UTF_8)); }
+            catch (java.io.IOException failure) {throw new IllegalStateException("Current requirement DDL unavailable",failure);}
+        }
     }
 
     static String ddl() {

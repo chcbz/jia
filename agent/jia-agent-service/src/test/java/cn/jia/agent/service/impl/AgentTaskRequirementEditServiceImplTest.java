@@ -14,7 +14,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
-/** Real REQUIRED transaction proves edits cannot leave a new snapshot with old materials. */
+/** Real REQUIRED transaction proves atomic mutable current state and minimal operation receipts. */
 class AgentTaskRequirementEditServiceImplTest {
     static final AgentTaskExecutionGrantService.Scope OWNER=new AgentTaskExecutionGrantService.Scope("0","client","owner");
     JdbcTemplate jdbc; AgentTaskRequirementSnapshotService snapshots; PersonalWorkspaceTaskLinkService links;
@@ -24,6 +24,7 @@ class AgentTaskRequirementEditServiceImplTest {
         jdbc=new JdbcTemplate(ds);
         jdbc.execute("CREATE TABLE fixture_task(version BIGINT,status VARCHAR(20),assignee VARCHAR(100),name VARCHAR(200),description VARCHAR(20000))");
         jdbc.execute("CREATE TABLE fixture_snapshot(revision BIGINT,title VARCHAR(200),description VARCHAR(20000),confirmation VARCHAR(100),version BIGINT)");
+        jdbc.execute("CREATE TABLE agent_task_requirement_edit_operation(tenant_id VARCHAR(50),client_id VARCHAR(50),owner_jiacn VARCHAR(50),task_id VARCHAR(100),operation_key VARCHAR(80),request_sha256 VARCHAR(64),result_sha256 VARCHAR(64),task_version BIGINT,requirement_revision BIGINT,PRIMARY KEY(tenant_id,client_id,owner_jiacn,task_id,operation_key))");
         jdbc.execute("CREATE TABLE fixture_link(file_id VARCHAR(100),file_version INT)");
         jdbc.execute("CREATE TABLE agent_task_funding(tenant_id VARCHAR(50),client_id VARCHAR(50),owner_jiacn VARCHAR(50),task_id VARCHAR(100))");
         jdbc.update("INSERT INTO fixture_task VALUES (0,'open',NULL,'Old','Old body')");
@@ -42,11 +43,8 @@ class AgentTaskRequirementEditServiceImplTest {
         snapshots=mock(AgentTaskRequirementSnapshotService.class);
         when(snapshots.readCurrent(eq(OWNER),eq("1"))).thenAnswer(i -> jdbc.queryForObject("SELECT revision,title,description FROM fixture_snapshot ORDER BY revision DESC LIMIT 1",(r,n) ->
                 new AgentTaskRequirementSnapshotService.CurrentSnapshot("1",jdbc.queryForObject("SELECT version FROM fixture_task",Long.class),r.getLong(1),r.getString(2),r.getString(3),"a".repeat(64),"RECONFIRM")));
-        when(snapshots.reconfirm(eq(OWNER),eq("1"),anyLong(),anyString(),anyString(),anyString())).thenAnswer(i -> {
-            String key=i.getArgument(3),title=i.getArgument(4),body=i.getArgument(5); long version=i.getArgument(2);
-            var rows=jdbc.queryForList("SELECT title,description,version FROM fixture_snapshot WHERE confirmation=?",key);
-            if (rows.isEmpty()) jdbc.update("INSERT INTO fixture_snapshot SELECT MAX(revision)+1,?,?,?,? FROM fixture_snapshot",title,body,key,version);
-            else if (!title.equals(rows.getFirst().get("TITLE")) || !body.equals(rows.getFirst().get("DESCRIPTION")) || ((Number)rows.getFirst().get("VERSION")).longValue()!=version) throw new IllegalStateException("key conflict");
+        when(snapshots.updateCurrent(eq(OWNER),eq("1"),anyLong(),anyString(),anyString())).thenAnswer(i -> {
+            jdbc.update("UPDATE fixture_snapshot SET revision=revision+1,title=?,description=? WHERE revision=?",(String)i.getArgument(3),(String)i.getArgument(4),(Long)i.getArgument(2));
             return null;
         });
         links=mock(PersonalWorkspaceTaskLinkService.class);
@@ -69,9 +67,9 @@ class AgentTaskRequirementEditServiceImplTest {
         assertEquals("1",saved.taskVersion());assertEquals("2",saved.requirementRevision());
         assertEquals(command().attachments(),saved.attachments());
         assertEquals(saved,service.save(OWNER,"1","edit-key",command()));
-        assertEquals(2,jdbc.queryForObject("SELECT COUNT(*) FROM fixture_snapshot",Integer.class));
+        assertEquals(1,jdbc.queryForObject("SELECT COUNT(*) FROM fixture_snapshot",Integer.class));
         assertEquals("new-file",jdbc.queryForObject("SELECT file_id FROM fixture_link",String.class));
-        assertEquals("Old",jdbc.queryForObject("SELECT title FROM fixture_snapshot WHERE revision=1",String.class));
+        assertEquals("New title",jdbc.queryForObject("SELECT title FROM fixture_snapshot",String.class));
     }
     @Test void failedMaterialWriteRollsBackSnapshotDetachSummaryAndVersion() {
         failLink=true;
@@ -87,12 +85,12 @@ class AgentTaskRequirementEditServiceImplTest {
         jdbc.update("UPDATE fixture_task SET status='open',assignee=NULL");jdbc.update("INSERT INTO agent_task_funding VALUES ('0','client','owner','1')");
         assertThrows(AgentTaskRequirementEditService.Failure.class,() -> service.save(OWNER,"1","key",command()));
         assertThrows(cn.jia.agent.exception.AgentTaskCollaborationException.class,() -> service.read(new AgentTaskExecutionGrantService.Scope("0","client","other"),"1"));
-        verify(snapshots,never()).reconfirm(any(),anyString(),anyLong(),anyString(),anyString(),anyString());
+        verify(snapshots,never()).updateCurrent(any(),anyString(),anyLong(),anyString(),anyString());
     }
     @Test void staleVersionOrRequirementCannotOverwriteNewerEdits() {
         jdbc.update("UPDATE fixture_task SET version=1");
         assertEquals(AgentTaskRequirementEditService.Reason.CONFLICT,assertThrows(AgentTaskRequirementEditService.Failure.class,() -> service.save(OWNER,"1","key",command())).reason());
-        verify(snapshots,never()).reconfirm(any(),anyString(),anyLong(),anyString(),anyString(),anyString());
+        verify(snapshots,never()).updateCurrent(any(),anyString(),anyLong(),anyString(),anyString());
     }
     @Test void failedFinalWriteRollsBackEverything() {
         when(tasks.updateById(any(AgentTaskMetaEntity.class))).thenReturn(0);
@@ -107,4 +105,30 @@ class AgentTaskRequirementEditServiceImplTest {
         assertEquals(c.description(),service.read(OWNER,"1").description());
         assertTrue(service.read(OWNER,"1").attachments().isEmpty());
     }
+    @Test void unchangedSaveDoesNotVersionOrRewriteAndIsIdempotent() {
+        var c=new AgentTaskRequirementEditService.Command(0,1,"Old","Old body",List.of(new AgentTaskRequirementEditService.Attachment("old-file",1)));
+        var result=service.save(OWNER,"1","no-change",c);
+        assertEquals("0",result.taskVersion());assertEquals("1",result.requirementRevision());
+        assertEquals(result,service.save(OWNER,"1","no-change",c));
+        assertEquals(result,service.readSaved(OWNER,"1","no-change"));
+        verify(snapshots,never()).updateCurrent(any(),anyString(),anyLong(),anyString(),anyString());
+        verify(tasks,never()).updateById(any(AgentTaskMetaEntity.class));
+    }
+    @Test void identityNotJustMatchingContentProvesSavedOperation() {
+        service.save(OWNER,"1","real-key",command());
+        assertEquals(AgentTaskRequirementEditService.Reason.NOT_FOUND,assertThrows(AgentTaskRequirementEditService.Failure.class,()->service.readSaved(OWNER,"1","other-key")).reason());
+        var c=new AgentTaskRequirementEditService.Command(1,2,"Later","Later body",command().attachments());
+        service.save(OWNER,"1","next-key",c);
+        assertEquals(AgentTaskRequirementEditService.Reason.CONFLICT,assertThrows(AgentTaskRequirementEditService.Failure.class,()->service.save(OWNER,"1","real-key",command())).reason());
+        assertEquals(1,jdbc.queryForObject("SELECT COUNT(*) FROM fixture_snapshot",Integer.class));
+        assertEquals(2,jdbc.queryForObject("SELECT COUNT(*) FROM agent_task_requirement_edit_operation",Integer.class));
+    }
+    @Test void sameKeyDifferentInputAndIndependentMaterialChangeCannotReplaySuccess() {
+        service.save(OWNER,"1","real-key",command());
+        assertThrows(AgentTaskRequirementEditService.Failure.class,()->service.save(OWNER,"1","real-key",new AgentTaskRequirementEditService.Command(0,1,"Other","New body",command().attachments())));
+        jdbc.update("DELETE FROM fixture_link");
+        assertThrows(AgentTaskRequirementEditService.Failure.class,()->service.readSaved(OWNER,"1","real-key"));
+        assertThrows(AgentTaskRequirementEditService.Failure.class,()->service.save(OWNER,"1","real-key",command()));
+    }
+
 }
