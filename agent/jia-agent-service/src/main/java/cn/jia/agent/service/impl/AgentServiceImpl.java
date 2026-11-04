@@ -1263,6 +1263,7 @@ public class AgentServiceImpl implements AgentService {
                 new AgentBizException(AgentErrorConstants.TASK_NOT_FOUND, "Task not found"));
         requireOwnedTaskProjection(meta, scope.tenantId(), scope.clientId(), scope.ownerJiacn(), taskId);
         var result = toTaskDTO(meta, scope.ownerJiacn());
+        enrichCurrentRequirement(result, meta);
         result.setAssignedTarget(externalServicePolicies.assignedTarget(
                 new AgentTaskExecutionGrantService.Scope(scope.tenantId(), scope.clientId(),
                         scope.ownerJiacn()), taskId));
@@ -1279,12 +1280,15 @@ public class AgentServiceImpl implements AgentService {
         dto.setTaskVersion(meta.getTaskVersion() == null ? null : Long.toString(meta.getTaskVersion()));
         dto.setRequiredAbilities(parseList(meta.getRequiredAbilities()));
         enrichTaskPlan(dto, meta);
+        enrichCurrentRequirement(dto, meta);
         return dto;
     }
 
     @Override
     public AgentTaskDTO getTask(String taskId) {
-        var result=toTaskDTO(requireTask(taskId));
+        var root=requireTask(taskId);
+        var result=toTaskDTO(root);
+        enrichCurrentRequirement(result,root);
         result.setAssignedTarget(externalServicePolicies.assignedTarget(
                 new cn.jia.agent.service.AgentTaskExecutionGrantService.Scope(resolveCurrentTenantId(),resolveCurrentClientId(),resolveCurrentJiacn()),taskId));
         return result;
@@ -3049,6 +3053,22 @@ public class AgentServiceImpl implements AgentService {
         dto.setAgentName(agent == null ? null : agent.getName());
         dto.setStatus(agent == null ? null : agent.getStatus());
         return dto;
+    }
+
+    /** Full requirement text is authoritative; the legacy plan remains a short list summary. */
+    private void enrichCurrentRequirement(AgentTaskDTO dto, AgentTaskMetaEntity meta) {
+        if (requirementSnapshots == null) return;
+        try {
+            var current=requirementSnapshots.readCurrent(new AgentTaskExecutionGrantService.Scope(
+                    meta.getTenantId(),meta.getClientId(),meta.getOwnerJiacn()),meta.getTaskId());
+            if (current!=null) {
+                dto.setTitle(current.title()); dto.setDescription(current.description());
+                dto.setTaskVersion(Long.toString(current.taskVersion()));
+            }
+        } catch (cn.jia.agent.service.AgentTaskRequirementReadException failure) {
+            if (failure.reason()!=cn.jia.agent.service.AgentTaskRequirementReadException.Reason.RECONFIRM_REQUIRED) throw failure;
+            // Historical read-only summaries are not fabricated requirement snapshots.
+        }
     }
 
     private void enrichTaskPlan(AgentTaskDTO dto, AgentTaskMetaEntity meta) {

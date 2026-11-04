@@ -10,6 +10,10 @@ public interface TaskService extends IBaseService<TaskPlanEntity> {
 	/** Exact private plan projection; scope must come from a trusted owner boundary. */
 	TaskPlanEntity getInOwnerScope(String tenantId, String clientId, String ownerJiacn, Long id);
 
+    /** Updates only the existing plan summary, never replaces plan items or execution facts. */
+    boolean updateSummaryInOwnerScope(String tenantId, String clientId, String ownerJiacn,
+                                     Long id, String title, String description);
+
 	void cancel(Long id);
 
 	PageInfo<TaskDetailEntity> findItems(TaskDetailVO example, int pageNum, int pageSize, String orderBy);

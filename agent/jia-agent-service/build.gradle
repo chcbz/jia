@@ -51,6 +51,7 @@ dependencies {
     testImplementation platform("org.springframework.boot:spring-boot-dependencies:${libs.versions.spring.boot.asProvider().get()}")
     testImplementation 'io.projectreactor:reactor-test'
     testRuntimeOnly libs.mysql
+    testRuntimeOnly libs.h2
 }
 
 version = '1.1.2-SNAPSHOT'

@@ -107,6 +107,14 @@ public class TaskServiceImpl extends BaseServiceImpl<TaskPlanDao, TaskPlanEntity
 		return baseDao.findInOwnerScope(tenantId, clientId, ownerJiacn, id);
 	}
 
+    @Override
+    public boolean updateSummaryInOwnerScope(String tenantId, String clientId, String ownerJiacn,
+            Long id, String title, String description) {
+        if (baseDao.findInOwnerScope(tenantId, clientId, ownerJiacn, id)==null) return false;
+        var summary=new TaskPlanEntity();summary.setId(id);summary.setName(title);summary.setDescription(description);
+        return baseDao.updateById(summary)==1;
+    }
+
 	@Override
 	public TaskPlanEntity update(TaskPlanEntity task) {
 		//保存任务信息

@@ -1,0 +1,44 @@
+{
+  "request": {
+    "method": "PUT",
+    "path": "/agent/tasks/1/requirements/edit",
+    "headers": {
+      "Idempotency-Key": "edit-key"
+    },
+    "body": {
+      "protocolVersion": 1,
+      "requestId": "edit-test",
+      "data": {
+        "expectedTaskVersion": "0",
+        "expectedRequirementRevision": "1",
+        "title": "事项标题",
+        "description": "需求",
+        "attachments": [
+          {
+            "fileId": "file",
+            "version": 1
+          }
+        ]
+      }
+    }
+  },
+  "response": {
+    "protocolVersion": 1,
+    "requestId": "edit-test",
+    "code": "E0",
+    "msg": "ok",
+    "data": {
+      "taskId": "1",
+      "taskVersion": "1",
+      "requirementRevision": "2",
+      "title": "事项标题",
+      "description": "需求",
+      "attachments": [
+        {
+          "fileId": "file",
+          "version": 1
+        }
+      ]
+    }
+  }
+}
