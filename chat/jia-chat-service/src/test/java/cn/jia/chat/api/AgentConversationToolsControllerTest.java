@@ -1,8 +1,9 @@
 package cn.jia.chat.api;
 
+import cn.jia.agent.api.AgentConversationToolsController;
 import cn.jia.agent.skill.SkillMarketplaceException;
 import cn.jia.agent.skill.SkillPackagePublicationService;
-import cn.jia.chat.service.ChatSkillMaintenanceService;
+import cn.jia.agent.api.SkillConversationToolAdapter;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.security.core.Authentication;
@@ -11,7 +12,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 class AgentConversationToolsControllerTest {
-    private final ChatSkillMaintenanceService service=mock(ChatSkillMaintenanceService.class);
+    private final SkillConversationToolAdapter service=mock(SkillConversationToolAdapter.class);
     private final AgentConversationToolsController controller=new AgentConversationToolsController(service);
     private final Authentication principal=mock(Authentication.class);
     private final MockHttpServletRequest request=new MockHttpServletRequest();

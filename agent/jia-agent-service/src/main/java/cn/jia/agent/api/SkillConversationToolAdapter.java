@@ -1,4 +1,7 @@
-package cn.jia.chat.service;
+package cn.jia.agent.api;
+
+import cn.jia.chat.service.PrivateConversationToolAccess;
+import cn.jia.chat.service.PrivateConversationToolAccess.Denied;
 
 import cn.jia.agent.position.PositionSkillPolicy;
 import cn.jia.agent.position.PositionSkillService;
@@ -6,8 +9,6 @@ import cn.jia.agent.security.AgentRuntimeAuthenticationService;
 import cn.jia.agent.service.AgentIdentityService;
 import cn.jia.agent.service.PositionAuthority;
 import cn.jia.agent.skill.SkillPackagePublicationService;
-import cn.jia.chat.dao.ChatConversationDao;
-import cn.jia.chat.deliberation.ChatDeliberationDao;
 import org.springframework.security.core.Authentication;
 import org.springframework.stereotype.Service;
 
@@ -18,22 +19,20 @@ import java.util.function.Function;
 
 import static cn.jia.agent.skill.SkillMarketplaceException.require;
 
-/** Private conversation transport authority, delegating all product mutations to the existing service. */
+/** Native HTTP tool adapter. Chat admission crosses its API port; product mutations stay in Agent. */
 @Service
-public final class ChatSkillMaintenanceService {
+public final class SkillConversationToolAdapter {
     private final AgentRuntimeAuthenticationService authentication;
-    private final ChatDispatchAuthorityService dispatches;
-    private final ChatDeliberationDao turns;
-    private final ChatConversationDao conversations;
+    private final PrivateConversationToolAccess conversations;
     private final AgentIdentityService identities;
     private final PositionSkillService positions;
     private final SkillPackagePublicationService publications;
 
-    public ChatSkillMaintenanceService(AgentRuntimeAuthenticationService authentication,
-            ChatDispatchAuthorityService dispatches, ChatDeliberationDao turns, ChatConversationDao conversations,
+    public SkillConversationToolAdapter(AgentRuntimeAuthenticationService authentication,
+            PrivateConversationToolAccess conversations,
             AgentIdentityService identities, PositionSkillService positions,
             SkillPackagePublicationService publications) {
-        this.authentication=authentication; this.dispatches=dispatches; this.turns=turns;
+        this.authentication=authentication;
         this.conversations=conversations; this.identities=identities; this.positions=positions;
         this.publications=publications;
     }
@@ -53,7 +52,9 @@ public final class ChatSkillMaintenanceService {
             var skills=installed.readCurrent(scope).skills().stream()
                     .filter(d->"skill-management".equals(d.skillKey())&&d.verifiedNative()&&d.manifestSha256()==null)
                     .map(d->new Skill(d.skillKey(),d.skillVersion(),d.installationId(),d.packageSha256())).toList();
-            return new Catalog("1",skills.isEmpty()?java.util.List.of():ChatSkillMaintenanceTools.catalog(),skills);
+            return new Catalog("1",skills.isEmpty()?java.util.List.of():SkillConversationTools.catalog(),skills);
+        } catch(Denied denied) {
+            return new Catalog("1",java.util.List.of(),java.util.List.of());
         } catch(cn.jia.agent.skill.SkillMarketplaceException failure) {
             if(failure.status()!=403)throw failure;
             return new Catalog("1",java.util.List.of(),java.util.List.of());
@@ -113,25 +114,8 @@ public final class ChatSkillMaintenanceService {
         var runtime=AgentRuntimeAuthenticationService.requireProof(principal).scope();
         // Native identity precedes conversation/turn and position/product locks. Cancellation holds
         // the same conversation lock; resignation is serialized by the existing publication service.
-        return authentication.withNativeFence(principal,()->{
-            var locator=turns.findTurn(runtime.tenantId(),runtime.ownerJiacn(),runtime.clientId(),turnId);
-            require(locator!=null,403,"SKILL_MAINTENANCE_CONVERSATION_FORBIDDEN");
-            var conversation=conversations.lockScopedById(runtime.tenantId(),runtime.ownerJiacn(),runtime.clientId(),locator.getConversationId());
-            require(conversation!=null&&conversation.getDeletedAt()==null
-                    &&"private".equals(conversation.getConversationScopeType())
-                    &&Objects.equals(conversation.getLifecycleGeneration(),locator.getConversationGeneration()),
-                    403,"SKILL_MAINTENANCE_CONVERSATION_FORBIDDEN");
-            var turn=turns.lockTurn(runtime.tenantId(),runtime.ownerJiacn(),runtime.clientId(),turnId);
-            require(turn!=null&&Objects.equals(requestId,turn.getRequestId())
-                    &&Objects.equals(runtime.agentId(),turn.getTargetAgentId())
-                    &&Objects.equals(locator.getConversationId(),turn.getConversationId())
-                    &&Objects.equals(conversation.getLifecycleGeneration(),turn.getConversationGeneration())
-                    &&"CHAT".equals(turn.getRoute())&&Set.of("DISPATCHED","STREAMING").contains(turn.getState()),
-                    403,"SKILL_MAINTENANCE_CONVERSATION_FORBIDDEN");
-            dispatches.incomingTurn(runtime.tenantId(),runtime.clientId(),runtime.ownerJiacn(),runtime.agentId(),turnId);
-            var request=turns.findRequest(runtime.tenantId(),runtime.ownerJiacn(),runtime.clientId(),requestId);
-            require(request!=null&&Objects.equals(request.getRequestRevision(),turn.getRequestRevision()),
-                    403,"SKILL_MAINTENANCE_CONVERSATION_FORBIDDEN");
+        return authentication.withNativeFence(principal,()->conversations.withCurrentTurn(
+                new PrivateConversationToolAccess.Subject(runtime.tenantId(),runtime.clientId(),runtime.ownerJiacn(),runtime.agentId()),requestId,turnId,()->{
             var scope=new PositionAuthority.Scope(runtime.tenantId(),runtime.clientId(),runtime.ownerJiacn());
             var identity=identities.requireRegistrationIdentityInScope(runtime.tenantId(),runtime.clientId(),runtime.ownerJiacn(),runtime.agentId());
             var state=positions.read(scope).state();
@@ -149,6 +133,6 @@ public final class ChatSkillMaintenanceService {
             var grant=new PositionAuthority.Grant(appointment.id(),appointment.revision(),position.revision(),
                     runtime.agentId(),appointment.bindingId(),null,true);
             return operation.apply(new Context(scope,grant));
-        });
+        }));
     }
 }

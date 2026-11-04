@@ -1,4 +1,4 @@
-package cn.jia.chat.service;
+package cn.jia.agent.api;
 
 import cn.jia.agent.skill.SkillPackagePublicationService;
 import cn.jia.agent.skill.SkillPublicationToolArchive;
@@ -8,8 +8,8 @@ import java.util.*;
 import static cn.jia.agent.skill.SkillMarketplaceException.require;
 
 /** Business tool schemas and protocol conversion. Runtime transports them without skill-name branches. */
-public final class ChatSkillMaintenanceTools {
-    private ChatSkillMaintenanceTools() { }
+public final class SkillConversationTools {
+    private SkillConversationTools() { }
     private static final Map<String,Object> TEXT=Map.of("type","string");
     private static final Map<String,Object> DECIMAL=Map.of("type","string","pattern","^(0|[1-9][0-9]*)$");
     private static Map<String,Object> schema(Map<String,Object> fields) {
@@ -31,7 +31,7 @@ public final class ChatSkillMaintenanceTools {
                 Map.entry("approvedPermissionsManifest",TEXT),Map.entry("expectedProductVersion",DECIMAL),
                 Map.entry("files",Map.of("type","array","items",schema(Map.of("path",TEXT,"content",TEXT,"encoding",Map.of("type","string","enum",List.of("utf8","base64")))))))));
     }
-    public static Object call(ChatSkillMaintenanceService service,Authentication principal,String request,String turn,String tool,JsonNode args) {
+    public static Object call(SkillConversationToolAdapter service,Authentication principal,String request,String turn,String tool,JsonNode args) {
         var spec=catalog().stream().filter(value->tool.equals(value.get("name"))).findFirst().orElse(null);
         require(spec!=null,400,"CONVERSATION_TOOL_UNKNOWN");
         require(args!=null&&args.isObject(),400,"BAD_REQUEST");

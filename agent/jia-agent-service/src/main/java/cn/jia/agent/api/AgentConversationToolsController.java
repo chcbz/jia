@@ -1,11 +1,9 @@
-package cn.jia.chat.api;
+package cn.jia.agent.api;
 
 import cn.jia.agent.position.PositionSkillException;
 import cn.jia.agent.skill.SkillMarketplaceException;
 import cn.jia.agent.skill.SkillPackagePublicationService;
-import cn.jia.chat.service.ChatDeliberationException;
-import cn.jia.chat.service.ChatSkillMaintenanceService;
-import cn.jia.chat.service.ChatSkillMaintenanceTools;
+import cn.jia.chat.service.PrivateConversationToolAccess.Denied;
 import cn.jia.core.entity.JsonResult;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.ResponseEntity;
@@ -22,8 +20,8 @@ import java.util.LinkedHashMap;
 public final class AgentConversationToolsController {
     private static final JsonMapper JSON=JsonMapper.builder().enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
             .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS).build();
-    private final ChatSkillMaintenanceService service;
-    public AgentConversationToolsController(ChatSkillMaintenanceService service) {this.service=service;}
+    private final SkillConversationToolAdapter service;
+    public AgentConversationToolsController(SkillConversationToolAdapter service) {this.service=service;}
     @GetMapping
     public ResponseEntity<?> catalog(Authentication principal,@PathVariable String requestId,@PathVariable String turnId,HttpServletRequest request) {
         noQuery(request);return ok(service.catalog(principal,requestId,turnId));
@@ -32,7 +30,7 @@ public final class AgentConversationToolsController {
     public ResponseEntity<?> call(Authentication principal,@PathVariable String requestId,@PathVariable String turnId,@PathVariable String tool,
             @cn.jia.core.annotation.ApiJsonData @RequestBody String raw,HttpServletRequest request) {
         noQuery(request);
-        return ok(wire(ChatSkillMaintenanceTools.call(service,principal,requestId,turnId,tool,JSON.readTree(raw))));
+        return ok(wire(SkillConversationTools.call(service,principal,requestId,turnId,tool,JSON.readTree(raw))));
     }
     private static Object wire(Object value) {
         var result=new LinkedHashMap<String,Object>();
@@ -52,7 +50,7 @@ public final class AgentConversationToolsController {
     @ExceptionHandler(Exception.class)
     public ResponseEntity<?> failure(Exception failure) {
         int status=failure instanceof SkillMarketplaceException e?e.status():failure instanceof PositionSkillException p?p.status()
-                :failure instanceof ChatDeliberationException?403:failure instanceof IllegalArgumentException
+                :failure instanceof Denied?403:failure instanceof IllegalArgumentException
                 ||failure instanceof tools.jackson.core.JacksonException
                 ||failure instanceof org.springframework.http.converter.HttpMessageNotReadableException?400:503;
         String code=failure instanceof SkillMarketplaceException e?e.code():failure instanceof PositionSkillException p?p.getMessage()
