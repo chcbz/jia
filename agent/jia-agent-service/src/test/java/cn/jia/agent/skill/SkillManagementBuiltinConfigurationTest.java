@@ -1,7 +1,7 @@
 package cn.jia.agent.skill;
 
 import cn.jia.agent.config.SkillMarketplaceConfiguration;
-import cn.jia.economy.config.EconomySkillApplicationSchemaInitializer;
+import cn.jia.agent.config.skill.SkillApplicationSchemaInitializer;
 import org.junit.jupiter.api.Test;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import org.springframework.core.env.MapPropertySource;
@@ -20,7 +20,7 @@ class SkillManagementBuiltinConfigurationTest {
                 context.register(SkillMarketplaceConfiguration.class);
                 context.refresh();
                 assertEquals(1, context.getBeansOfType(SkillPackages.class).size());
-                assertTrue(context.getBeansOfType(EconomySkillApplicationSchemaInitializer.class).isEmpty(),
+                assertTrue(context.getBeansOfType(SkillApplicationSchemaInitializer.class).isEmpty(),
                         "ordinary startup must not initialize or migrate tables");
             }
         }

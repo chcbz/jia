@@ -1,11 +1,13 @@
 package cn.jia.agent.skill;
+import cn.jia.agent.mapper.skill.SkillManagementMapper;
 
 import cn.jia.agent.service.AgentIdentityService;
 import cn.jia.agent.service.InstalledSkillDescriptorLookup;
 import cn.jia.agent.service.SkillCapabilityLookup;
-import cn.jia.economy.entity.skill.*;
-import cn.jia.economy.mapper.EconomySkillApplicationMapper;
-import cn.jia.economy.mapper.EconomySkillMarketplaceMapper;
+import cn.jia.agent.entity.skill.*;
+import cn.jia.economy.service.skill.*;
+import cn.jia.agent.mapper.skill.SkillInstallationMapper;
+import cn.jia.agent.mapper.skill.SkillCatalogMapper;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 
@@ -16,18 +18,20 @@ import java.util.*;
 @Service
 public final class InstalledSkillDescriptorService implements InstalledSkillDescriptorLookup {
     private final AgentIdentityService identities;
-    private final EconomySkillMarketplaceMapper market;
-    private final EconomySkillApplicationMapper app;
+    private final SkillCatalogMapper market;
+    private final SkillInstallationMapper app;
     private final ObjectProvider<SkillPackages> packages;
-    public InstalledSkillDescriptorService(AgentIdentityService identities, EconomySkillMarketplaceMapper market,
-            EconomySkillApplicationMapper app, ObjectProvider<SkillPackages> packages) {
+    private final SkillTradeService trade;
+    public InstalledSkillDescriptorService(AgentIdentityService identities, SkillCatalogMapper market,
+            SkillInstallationMapper app, ObjectProvider<SkillPackages> packages,SkillTradeService trade) {
+        this.trade=trade;
         this.identities=Objects.requireNonNull(identities);this.market=Objects.requireNonNull(market);
         this.app=Objects.requireNonNull(app);this.packages=Objects.requireNonNull(packages);
     }
     private SkillManagementService management;
-    private cn.jia.economy.mapper.EconomySkillManagementMapper managed;
+    private cn.jia.agent.mapper.skill.SkillManagementMapper managed;
     @org.springframework.beans.factory.annotation.Autowired
-    public void setManagement(SkillManagementService management,cn.jia.economy.mapper.EconomySkillManagementMapper managed) {
+    public void setManagement(SkillManagementService management,cn.jia.agent.mapper.skill.SkillManagementMapper managed) {
         this.management=management;this.managed=managed;
     }
     private cn.jia.agent.position.PositionInstalledSkills positionSkills;
@@ -120,7 +124,7 @@ public final class InstalledSkillDescriptorService implements InstalledSkillDesc
     private Descriptor descriptor(SkillCapabilityLookup.Scope s,SkillEntitlementEntity e) {
         if(!"ACTIVE".equals(e.getStatus())) return unavailable(e,"SKILL_NOT_INSTALLED");
         var i=app.installation(s.tenantId(),s.clientId(),e.getInstallationId());
-        var o=app.order(s.tenantId(),s.clientId(),e.getOrderId());
+        var o=trade.order(s.tenantId(),s.clientId(),e.getOrderId());
         var v=market.selectApprovedProductVersion(s.tenantId(),s.clientId(),e.getProductVersionId());
         if(i==null||o==null||v==null || !exact(s,i.getTenantId(),i.getClientId(),i.getTargetAgentId())
                 || !exact(s,o.getTenantId(),o.getClientId(),o.getTargetAgentId())

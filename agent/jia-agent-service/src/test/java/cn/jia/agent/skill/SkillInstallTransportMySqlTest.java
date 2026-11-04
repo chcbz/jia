@@ -1,4 +1,6 @@
 package cn.jia.agent.skill;
+import cn.jia.agent.entity.skill.SkillChangeCommandEntity;
+import cn.jia.agent.entity.skill.SkillChangeEntity;
 
 import cn.jia.core.security.FixedTenantAdmissionPolicy;
 import cn.jia.agent.dao.impl.AgentCommandTransportDaoImpl;
@@ -32,8 +34,8 @@ class SkillInstallTransportMySqlTest {
     private SkillInstallCommandWriter writer;
     private SkillInstallRecoveryService recovery;
     private SkillInstallDispatchService dispatch;
-    private cn.jia.economy.entity.skill.SkillChangeEntity change;
-    private cn.jia.economy.entity.skill.SkillChangeCommandEntity command;
+    private cn.jia.agent.entity.skill.SkillChangeEntity change;
+    private cn.jia.agent.entity.skill.SkillChangeCommandEntity command;
     private Map<String,Object> data;
     private byte[] wire;
     @BeforeEach void setup() throws Exception {
@@ -56,13 +58,13 @@ class SkillInstallTransportMySqlTest {
         commands=sql.getMapper(AgentCommandTransportMapper.class);mapper=sql.getMapper(AgentSkillInstallRecoveryMapper.class);
         var manager=new DataSourceTransactionManager(ds);tx=new TransactionTemplate(manager);
         var preview=new EconomyPreviewGate(new EconomyPreviewProperties(true,List.of(new EconomyPreviewProperties.AllowedScope("0","Client-A"))));
-        writer=new SkillInstallCommandWriter(new AgentCommandTransportDaoImpl(commands),preview);dispatch=mock(SkillInstallDispatchService.class);
-        recovery=new SkillInstallRecoveryService(mapper,new AgentCommandRecoveryDaoImpl(sql.getMapper(AgentCommandRecoveryMapper.class)),preview,dispatch,manager,new FixedTenantAdmissionPolicy("0", null));
+        writer=new SkillInstallCommandWriter(new AgentCommandTransportDaoImpl(commands));dispatch=mock(SkillInstallDispatchService.class);
+        recovery=new SkillInstallRecoveryService(mapper,new AgentCommandRecoveryDaoImpl(sql.getMapper(AgentCommandRecoveryMapper.class)),dispatch,manager,new FixedTenantAdmissionPolicy("0", null));
         long now=System.currentTimeMillis();
-        change=new cn.jia.economy.entity.skill.SkillChangeEntity().setChangeId("change-fixture")
+        change=new cn.jia.agent.entity.skill.SkillChangeEntity().setChangeId("change-fixture")
                 .setAgentId("agt_fixture").setOwnerJiacn("Owner-A");
         change.setTenantId("0");change.setClientId("Client-A");
-        command=new cn.jia.economy.entity.skill.SkillChangeCommandEntity()
+        command=new cn.jia.agent.entity.skill.SkillChangeCommandEntity()
                 .setCommandId("command-fixture").setMessageId("message-fixture");
         var target=new LinkedHashMap<String,Object>();
         target.putAll(Map.of("skillInstallationId","si_fixture","productVersionId","pv_fixture",

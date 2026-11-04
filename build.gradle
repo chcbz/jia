@@ -299,6 +299,36 @@ tasks.register('validateLayering') {
             violations << "common/jia-common-service/src/main/java/cn/jia/core/dao/IBaseDao.java: IBaseDao belongs in common-api"
         }
 
+        // RB-1 skill/economy v1: skills own lifecycle; economy owns trade and money.
+        fileTree(file('economy')) {
+            include '**/src/main/java/**/*.java'
+        }.each { sourceFile ->
+            if (sourceFile.text =~ /\bcn\.jia\.agent\./) {
+                violations << "${rootDir.toPath().relativize(sourceFile.toPath())}: economy must not depend on agent"
+            }
+        }
+        fileTree(file('agent')) {
+            include '**/src/main/java/**/skill/**/*.java'
+        }.each { sourceFile ->
+            if (sourceFile.text =~ /\bcn\.jia\.economy\.(entity|mapper)\./) {
+                violations << "${rootDir.toPath().relativize(sourceFile.toPath())}: skill lifecycle must use economy API, not trade persistence"
+            }
+        }
+        def tradeEntities = ['SkillOrderEntity.java', 'SkillPurchaseQuoteEntity.java', 'SkillOrderReceiptEntity.java']
+        fileTree(file('economy/jia-economy-core/src/main/java/cn/jia/economy/entity/skill')) {
+            include '*.java'
+        }.each { sourceFile ->
+            if (!tradeEntities.contains(sourceFile.name)) {
+                violations << "${sourceFile.name}: non-trade skill entities belong to agent-core"
+            }
+        }
+        ['EconomySkillMarketplaceMapper', 'EconomySkillApplicationMapper',
+         'EconomySkillManagementMapper', 'EconomySkillCredentialMapper'].each { legacy ->
+            if (file("economy/jia-economy-mapper/src/main/java/cn/jia/economy/mapper/${legacy}.java").exists()) {
+                violations << "${legacy}: mixed skill persistence must be split by responsibility"
+            }
+        }
+
         // Exact pre-existing exceptions only. No auto-accept or baseline generation mode in the task.
         def baseline = new groovy.json.JsonSlurper().parse(file('docs/architecture-boundary-baseline.json'))
         def key = { item -> [item.rule, item.sourcePath, item.symbol] }

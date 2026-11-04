@@ -5,7 +5,7 @@ import cn.jia.agent.entity.AgentRuntimeEntity;
 import cn.jia.agent.hosting.HostingRentHttp;
 import cn.jia.agent.hosting.HostingRentOwnerResolver;
 import cn.jia.agent.service.AgentService;
-import cn.jia.economy.mapper.EconomySkillApplicationMapper;
+import cn.jia.agent.mapper.skill.SkillInstallationMapper;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -16,12 +16,12 @@ import static cn.jia.agent.skill.SkillMarketplaceException.require;
 /** Runtime/binding locks precede this persistent CAS root; heartbeat timestamps are not versions. */
 @Service
 public final class SkillAgentVersions {
-    private final EconomySkillApplicationMapper mapper;
+    private final SkillInstallationMapper mapper;
     private final AgentRuntimeDao runtimes;
     private final ObjectProvider<AgentService> agents;
     private final HostingRentOwnerResolver owners;
     private final TransactionTemplate tx;
-    public SkillAgentVersions(EconomySkillApplicationMapper mapper, AgentRuntimeDao runtimes,
+    public SkillAgentVersions(SkillInstallationMapper mapper, AgentRuntimeDao runtimes,
             ObjectProvider<AgentService> agents, HostingRentOwnerResolver owners,
             PlatformTransactionManager manager) {
         this.mapper=mapper; this.runtimes=runtimes; this.agents=agents; this.owners=owners;

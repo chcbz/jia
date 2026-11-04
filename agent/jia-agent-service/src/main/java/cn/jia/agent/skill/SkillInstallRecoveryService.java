@@ -4,7 +4,6 @@ import cn.jia.core.security.FixedTenantAdmissionPolicy;
 import cn.jia.agent.mapper.AgentSkillInstallRecoveryMapper;
 import cn.jia.agent.entity.*;
 import cn.jia.agent.service.impl.AgentCommandCanonicalCodec;
-import cn.jia.economy.config.EconomyPreviewGate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -20,14 +19,13 @@ import static cn.jia.agent.skill.SkillMarketplaceService.one;
 public final class SkillInstallRecoveryService {
     private final AgentSkillInstallRecoveryMapper mapper;
     private final AgentCommandRecoveryDao dao;
-    private final EconomyPreviewGate preview;
     private final SkillInstallDispatchService dispatch;
     private final TransactionTemplate tx;
     private final FixedTenantAdmissionPolicy processScope;
     public SkillInstallRecoveryService(AgentSkillInstallRecoveryMapper mapper,AgentCommandRecoveryDao dao,
-            EconomyPreviewGate preview,SkillInstallDispatchService dispatch,PlatformTransactionManager manager,
+            SkillInstallDispatchService dispatch,PlatformTransactionManager manager,
             FixedTenantAdmissionPolicy processScope) {
-        this.mapper=mapper;this.dao=dao;this.preview=preview;this.dispatch=dispatch;tx=new TransactionTemplate(manager);
+        this.mapper=mapper;this.dao=dao;this.dispatch=dispatch;tx=new TransactionTemplate(manager);
         this.processScope=processScope;
     }
     @Scheduled(fixedDelayString="${economy.skill.marketplace.recovery-delay-ms:5000}")
@@ -41,7 +39,8 @@ public final class SkillInstallRecoveryService {
         }
     }
     void recover(AgentCommandDeliveryEntity hint,long now) {
-        if(!preview.allows(hint.getTenantId(),hint.getClientId())) return;
+        if(!processScope.businessTenantId().equals(hint.getTenantId())
+                || processScope.clientId()!=null&&!processScope.clientId().equals(hint.getClientId())) return;
         String owner="skill-ws-"+UUID.randomUUID();
         Claim claim=tx.execute(s->{
             var d=dao.lockDelivery(hint.getTenantId(),hint.getClientId(),hint.getId());

@@ -77,6 +77,7 @@ import cn.jia.agent.cache.AgentPersonaCatalogCache;
 import cn.jia.agent.hosting.*;
 import cn.jia.agent.skill.SkillAgentVersions;
 import cn.jia.economy.mapper.*;
+import cn.jia.agent.mapper.skill.*;
 import cn.jia.chat.config.AgentRuntimeHandshakeInterceptor;
 import cn.jia.chat.handler.AgentWebSocketHandler;
 import cn.jia.chat.dao.ChatMessageDao;
@@ -626,7 +627,7 @@ public final class Ur04E05HttpFixture {
                     AgentTaskMemberMapper.class, AgentTaskWorkItemMapper.class, AgentTaskRequestMapper.class,
                     AgentTaskArtifactMapper.class, AgentTaskEventMapper.class, AgentWorkItemReassignmentMapper.class,
                     AgentTaskNoteMapper.class, DialogueTemplateMapper.class, AgentCommandTransportMapper.class,
-                    EconomyHostingRentMapper.class, EconomySkillApplicationMapper.class, ChatMessageMapper.class)) configuration.addMapper(mapper);
+                    EconomyHostingRentMapper.class, SkillInstallationMapper.class, ChatMessageMapper.class)) configuration.addMapper(mapper);
             GlobalConfig global = new GlobalConfig(); global.setBanner(false);
             global.setIdentifierGenerator(new DefaultIdentifierGenerator());
             MybatisSqlSessionFactoryBean bean = new MybatisSqlSessionFactoryBean();
@@ -720,7 +721,7 @@ public final class Ur04E05HttpFixture {
         @Bean HostingRentOwnerResolver hostingOwners(ObjectProvider<AccountSecurityService> accounts, ObjectProvider<UserService> users) { return new HostingRentOwnerResolver(accounts, users); }
         @Bean SkillAgentVersions skillVersions(SqlSessionTemplate s, AgentRuntimeDao runtimes, ObjectProvider<AgentService> agents,
                 HostingRentOwnerResolver owners, DataSourceTransactionManager manager) {
-            return new SkillAgentVersions(s.getMapper(EconomySkillApplicationMapper.class), runtimes, agents, owners, manager);
+            return new SkillAgentVersions(s.getMapper(SkillInstallationMapper.class), runtimes, agents, owners, manager);
         }
         @Bean AgentService agents(AgentRuntimeDao runtimes, AgentIdentityService identity, AgentPersonaDao personas, AgentPersonaBindingDao bindings,
                 AgentTaskMetaDao meta, AgentTaskMemberDao members, AgentLegacyTaskCompatibilityService legacy, AgentTaskNoteDao notes, DialogueTemplateDao dialogues,

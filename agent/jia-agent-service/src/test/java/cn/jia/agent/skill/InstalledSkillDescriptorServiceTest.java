@@ -1,8 +1,10 @@
 package cn.jia.agent.skill;
 
 import cn.jia.agent.service.*;
-import cn.jia.economy.entity.skill.*;
+import cn.jia.agent.entity.skill.*;
+import cn.jia.economy.service.skill.*;
 import cn.jia.economy.mapper.*;
+import cn.jia.agent.mapper.skill.*;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.ObjectProvider;
 import java.util.*;
@@ -11,15 +13,16 @@ import static org.mockito.Mockito.*;
 import static org.mockito.ArgumentMatchers.*;
 
 class InstalledSkillDescriptorServiceTest {
+    private final SkillTradeService trade=mock(SkillTradeService.class);
     private final SkillCapabilityLookup.Scope scope=new SkillCapabilityLookup.Scope("0","client","owner","agent");
     private final AgentIdentityService identities=mock(AgentIdentityService.class);
-    private final EconomySkillMarketplaceMapper market=mock(EconomySkillMarketplaceMapper.class);
-    private final EconomySkillApplicationMapper app=mock(EconomySkillApplicationMapper.class);
+    private final SkillCatalogMapper market=mock(SkillCatalogMapper.class);
+    private final SkillInstallationMapper app=mock(SkillInstallationMapper.class);
     @SuppressWarnings("unchecked") private final ObjectProvider<SkillPackages> packages=mock(ObjectProvider.class);
-    private final InstalledSkillDescriptorService service=new InstalledSkillDescriptorService(identities,market,app,packages);
+    private final InstalledSkillDescriptorService service=new InstalledSkillDescriptorService(identities,market,app,packages,trade);
     private SkillEntitlementEntity e;
     private SkillInstallationEntity i;
-    private SkillOrderEntity o;
+    private SkillOrder o;
     private SkillProductVersionEntity v;
     @BeforeEach void setup() {
         when(identities.requireCanonicalAgentIdInScope("0","client","owner","agent")).thenReturn("agent");
@@ -31,7 +34,7 @@ class InstalledSkillDescriptorServiceTest {
         i=new SkillInstallationEntity().setTenantId("0").setClientId("client").setTargetAgentId("agent")
                 .setInstallationId("ins").setOrderId("ord").setProductVersionId("pv").setStatus("SUCCEEDED")
                 .setSkillKey("text-file").setSkillVersion("1.0.0").setPackageSha256(hash).setPackageSize(100L).setInstalledAt(1L);
-        o=new SkillOrderEntity().setTenantId("0").setClientId("client").setTargetAgentId("agent").setOrderId("ord")
+        o=new SkillOrder().setTenantId("0").setClientId("client").setTargetAgentId("agent").setOrderId("ord")
                 .setProductVersionId("pv").setStatus("ACTIVE").setPermissionGrantVersion(1L)
                 .setApprovedPermissionsManifest(permissions).setApprovedPermissionsSha256(hash);
         v=new SkillProductVersionEntity().setTenantId("0").setClientId("client").setProductVersionId("pv")
@@ -39,7 +42,7 @@ class InstalledSkillDescriptorServiceTest {
                 .setPackageSha256(hash).setPackageSize(100L).setApprovedPermissionsManifest(permissions)
                 .setApprovedPermissionsSha256(hash);
         when(market.selectEntitlementsByAgent("0","client","agent")).thenReturn(List.of(e));
-        when(app.installation("0","client","ins")).thenReturn(i); when(app.order("0","client","ord")).thenReturn(o);
+        when(app.installation("0","client","ins")).thenReturn(i); when(trade.order("0","client","ord")).thenReturn(o);
         when(market.selectApprovedProductVersion("0","client","pv")).thenReturn(v);
         when(app.successfulReceipts("0","client","ins")).thenReturn(1L);
         var binding=new SkillDeliveryBindingEntity();binding.setCanonicalAgentId("agent");
@@ -48,7 +51,7 @@ class InstalledSkillDescriptorServiceTest {
     }
     @Test void currentPointerSelectsOneVersionWithoutDiscardingHistory() {
         var management=mock(SkillManagementService.class);
-        var managed=mock(EconomySkillManagementMapper.class);
+        var managed=mock(SkillManagementMapper.class);
         service.setManagement(management,managed);
         when(market.selectEntitlementsByAgent("0","client","agent")).thenReturn(List.of());
         var old=new InstalledSkillDescriptorLookup.Descriptor("image-edit","1.0.0","old","a","b","{}","runtime","host",null);

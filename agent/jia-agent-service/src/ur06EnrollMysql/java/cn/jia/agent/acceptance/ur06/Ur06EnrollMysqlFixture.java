@@ -1,4 +1,5 @@
 package cn.jia.agent.acceptance.ur06;
+import cn.jia.agent.config.skill.SkillApplicationSchemaInitializer;
 
 import cn.jia.agent.api.AgentRuntimeV1Controller;
 import cn.jia.agent.event.AgentEventPublisher;
@@ -72,6 +73,7 @@ import cn.jia.agent.cache.AgentPersonaCatalogCache;
 import cn.jia.agent.hosting.*;
 import cn.jia.agent.skill.SkillAgentVersions;
 import cn.jia.economy.mapper.*;
+import cn.jia.agent.mapper.skill.*;
 import cn.jia.chat.config.AgentRuntimeHandshakeInterceptor;
 import cn.jia.chat.handler.AgentWebSocketHandler;
 import cn.jia.chat.dao.ChatMessageDao;
@@ -191,7 +193,7 @@ public final class Ur06EnrollMysqlFixture {
                         new AgentRuntimeV1SchemaInitializer(jdbc).afterPropertiesSet();
                         new AgentRuntimeSessionFenceSchemaInitializer(jdbc).afterPropertiesSet();
                         new AgentCommandTransportSchemaInitializer(jdbc).afterPropertiesSet();
-        new cn.jia.economy.config.EconomySkillApplicationSchemaInitializer(jdbc).afterPropertiesSet();
+        new cn.jia.agent.config.skill.SkillApplicationSchemaInitializer(jdbc).afterPropertiesSet();
                         require(before.equals(catalog(jdbc)) && rows.equals(legacy(jdbc)), "REPEAT_CATALOG_ROWS_REQUIRED");
                         emit(Map.of("stage", "SCHEMA_REPEATED", "unchanged", true));
                     } else if (op.equals("SEED_ACK")) {
@@ -237,7 +239,7 @@ public final class Ur06EnrollMysqlFixture {
         new AgentRuntimeV1SchemaInitializer(jdbc).afterPropertiesSet();
         new AgentRuntimeSessionFenceSchemaInitializer(jdbc).afterPropertiesSet();
         new AgentCommandTransportSchemaInitializer(jdbc).afterPropertiesSet();
-        new cn.jia.economy.config.EconomySkillApplicationSchemaInitializer(jdbc).afterPropertiesSet();
+        new cn.jia.agent.config.skill.SkillApplicationSchemaInitializer(jdbc).afterPropertiesSet();
         require(legacy(jdbc).size() == 1, "LEGACY_KEY_REQUIRED");
         require(jdbc.queryForObject("SELECT COUNT(*) FROM agent_runtime WHERE agent_id='ur06-legacy' AND runtime_installation_id IS NULL AND runtime_host_id IS NULL AND runtime_instance_id IS NULL AND runtime_session_generation IS NULL AND create_time=17 AND update_time=17", Integer.class) == 1,
             "NULL_OWNERSHIP_PRESERVED_REQUIRED");
@@ -767,7 +769,7 @@ public final class Ur06EnrollMysqlFixture {
                     AgentTaskMemberMapper.class, AgentTaskWorkItemMapper.class, AgentTaskRequestMapper.class,
                     AgentTaskArtifactMapper.class, AgentTaskEventMapper.class, AgentWorkItemReassignmentMapper.class,
                     AgentTaskNoteMapper.class, DialogueTemplateMapper.class, AgentCommandTransportMapper.class,
-                    EconomyHostingRentMapper.class, EconomySkillApplicationMapper.class, ChatMessageMapper.class)) configuration.addMapper(mapper);
+                    EconomyHostingRentMapper.class, SkillInstallationMapper.class, ChatMessageMapper.class)) configuration.addMapper(mapper);
             GlobalConfig global = new GlobalConfig(); global.setBanner(false);
             global.setIdentifierGenerator(new DefaultIdentifierGenerator());
             MybatisSqlSessionFactoryBean bean = new MybatisSqlSessionFactoryBean();
@@ -861,7 +863,7 @@ public final class Ur06EnrollMysqlFixture {
         @Bean HostingRentOwnerResolver hostingOwners(ObjectProvider<AccountSecurityService> accounts, ObjectProvider<UserService> users) { return new HostingRentOwnerResolver(accounts, users); }
         @Bean SkillAgentVersions skillVersions(SqlSessionTemplate s, AgentRuntimeDao runtimes, ObjectProvider<AgentService> agents,
                 HostingRentOwnerResolver owners, DataSourceTransactionManager manager) {
-            return new SkillAgentVersions(s.getMapper(EconomySkillApplicationMapper.class), runtimes, agents, owners, manager);
+            return new SkillAgentVersions(s.getMapper(SkillInstallationMapper.class), runtimes, agents, owners, manager);
         }
         @Bean AgentService agents(AgentRuntimeDao runtimes, AgentIdentityService identity, AgentPersonaDao personas, AgentPersonaBindingDao bindings,
                 AgentTaskMetaDao meta, AgentTaskMemberDao members, AgentLegacyTaskCompatibilityService legacy, AgentTaskNoteDao notes, DialogueTemplateDao dialogues,

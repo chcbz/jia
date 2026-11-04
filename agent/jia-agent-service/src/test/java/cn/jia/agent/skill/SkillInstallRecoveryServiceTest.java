@@ -17,7 +17,7 @@ class SkillInstallRecoveryServiceTest {
     private final AgentCommandRecoveryDao dao=mock(AgentCommandRecoveryDao.class);
     private final SkillInstallDispatchService dispatch=mock(SkillInstallDispatchService.class);
     private final EconomyPreviewGate preview=new EconomyPreviewGate(new EconomyPreviewProperties(true,List.of(new EconomyPreviewProperties.AllowedScope("0","c"))));
-    private final SkillInstallRecoveryService service=new SkillInstallRecoveryService(mapper,dao,preview,dispatch,mock(PlatformTransactionManager.class),new FixedTenantAdmissionPolicy("0", null));
+    private final SkillInstallRecoveryService service=new SkillInstallRecoveryService(mapper,dao,dispatch,mock(PlatformTransactionManager.class),new FixedTenantAdmissionPolicy("0", null));
     private AgentCommandDeliveryEntity d;
     private AgentOutboxEventEntity o;
     void fixture() { fixture("0"); }
@@ -74,13 +74,13 @@ class SkillInstallRecoveryServiceTest {
         d.setLeaseUntil(null).setNextRetryAt(now+100);service.recover(d,now);
         verifyNoInteractions(dispatch);verify(mapper,never()).claimDelivery(any(),anyString(),anyLong(),anyLong());
     }
-    @Test void scanRequiresExactPreviewScope() {
-        fixture();d.setClientId("C");when(mapper.candidates(eq("0"),isNull(),anyLong(),anyLong())).thenReturn(List.of(d));service.recover();
+    @Test void scanRequiresConfiguredProcessScope() {
+        fixture();d.setTenantId("different-tenant");when(mapper.candidates(eq("0"),isNull(),anyLong(),anyLong())).thenReturn(List.of(d));service.recover();
         verifyNoInteractions(dao,dispatch);
     }
     @Test void configuredPartitionIsPassedToDiscoveryBeforeLimit() {
         var policy=new FixedTenantAdmissionPolicy("tenant-blue", "c");
-        var scoped=new SkillInstallRecoveryService(mapper,dao,preview,dispatch,mock(PlatformTransactionManager.class),policy);
+        var scoped=new SkillInstallRecoveryService(mapper,dao,dispatch,mock(PlatformTransactionManager.class),policy);
         when(mapper.candidates(eq("tenant-blue"),eq("c"),anyLong(),anyLong())).thenReturn(List.of());
         scoped.recover();
         verify(mapper).candidates(eq("tenant-blue"),eq("c"),anyLong(),anyLong());
@@ -90,7 +90,7 @@ class SkillInstallRecoveryServiceTest {
         fixture("tenant-blue");
         var gate=new EconomyPreviewGate(new EconomyPreviewProperties(true,
                 List.of(new EconomyPreviewProperties.AllowedScope("tenant-blue","c"))));
-        var scoped=new SkillInstallRecoveryService(mapper,dao,gate,dispatch,mock(PlatformTransactionManager.class),
+        var scoped=new SkillInstallRecoveryService(mapper,dao,dispatch,mock(PlatformTransactionManager.class),
                 new FixedTenantAdmissionPolicy("tenant-blue", "c"));
         when(mapper.claimDelivery(eq(d),anyString(),anyLong(),anyLong())).thenReturn(1);
         when(mapper.claimOutbox(eq(o),anyString(),anyLong(),anyLong())).thenReturn(1);

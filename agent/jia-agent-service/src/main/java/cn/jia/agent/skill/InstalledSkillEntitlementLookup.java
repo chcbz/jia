@@ -1,11 +1,13 @@
 package cn.jia.agent.skill;
+import cn.jia.agent.mapper.skill.SkillManagementMapper;
 
+import cn.jia.economy.service.skill.*;
 import cn.jia.agent.entity.funding.AgentSkillRequirementDTO;
 import cn.jia.agent.hosting.HostingRentHttp;
 import cn.jia.agent.service.funding.FundedBountyActor;
 import cn.jia.agent.service.funding.FundedBountySkillEntitlementLookup;
-import cn.jia.economy.mapper.EconomySkillMarketplaceMapper;
-import cn.jia.economy.mapper.EconomySkillApplicationMapper;
+import cn.jia.agent.mapper.skill.SkillCatalogMapper;
+import cn.jia.agent.mapper.skill.SkillInstallationMapper;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import java.util.*;
@@ -15,18 +17,20 @@ import java.math.BigInteger;
  * Runtime ability strings are never skill ownership evidence. */
 @Service
 public class InstalledSkillEntitlementLookup implements FundedBountySkillEntitlementLookup {
-    private final EconomySkillMarketplaceMapper market;
-    private final EconomySkillApplicationMapper application;
+    private final SkillCatalogMapper market;
+    private final SkillInstallationMapper application;
     private final SkillAgentVersions versions;
     private final SkillMarketplaceService skills;
-    public InstalledSkillEntitlementLookup(EconomySkillMarketplaceMapper market,EconomySkillApplicationMapper application,
-            SkillAgentVersions versions,SkillMarketplaceService skills) {
+    private final SkillTradeService trade;
+    public InstalledSkillEntitlementLookup(SkillCatalogMapper market,SkillInstallationMapper application,
+            SkillAgentVersions versions,SkillMarketplaceService skills,SkillTradeService trade) {
+        this.trade=trade;
         this.market=market;this.application=application;this.versions=versions;this.skills=skills;
     }
-    private cn.jia.economy.mapper.EconomySkillManagementMapper managed;
+    private cn.jia.agent.mapper.skill.SkillManagementMapper managed;
     private SkillManagementService management;
     @org.springframework.beans.factory.annotation.Autowired
-    public void setManagement(cn.jia.economy.mapper.EconomySkillManagementMapper mapper,SkillManagementService service) {managed=mapper;management=service;}
+    public void setManagement(cn.jia.agent.mapper.skill.SkillManagementMapper mapper,SkillManagementService service) {managed=mapper;management=service;}
     private cn.jia.agent.position.PositionInstalledSkills positionSkills;
     @org.springframework.beans.factory.annotation.Autowired(required=false)
     public void setPositionSkills(cn.jia.agent.position.PositionInstalledSkills value){this.positionSkills=value;}
@@ -47,7 +51,7 @@ public class InstalledSkillEntitlementLookup implements FundedBountySkillEntitle
                 continue;
             }
             var i=application.installation(a.tenantId(),a.clientId(),e.getInstallationId());
-            var o=application.order(a.tenantId(),a.clientId(),e.getOrderId());
+            var o=trade.order(a.tenantId(),a.clientId(),e.getOrderId());
             if(i==null || o==null || !"SUCCEEDED".equals(i.getStatus()) || !"ACTIVE".equals(o.getStatus())
                     || !agentId.equals(i.getTargetAgentId()) || !agentId.equals(o.getTargetAgentId())
                     || !e.getOrderId().equals(i.getOrderId()) || !e.getProductVersionId().equals(i.getProductVersionId())

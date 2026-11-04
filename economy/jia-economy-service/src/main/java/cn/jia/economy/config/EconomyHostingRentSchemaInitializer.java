@@ -172,7 +172,7 @@ public final class EconomyHostingRentSchemaInitializer implements InitializingBe
                 ORDER BY trigger_name
                 """, (RowCallbackHandler) rs -> {
             TriggerMeta meta = new TriggerMeta(rs.getString(1), rs.getString(2), rs.getString(3),
-                    rs.getString(4), EconomySchemaInitializer.normalizeTriggerSql(rs.getString(5)));
+                    rs.getString(4), cn.jia.core.sql.SchemaSqlText.normalizeTriggerSql(rs.getString(5)));
             if (result.put(meta.name(), meta) != null) {
                 throw new IllegalStateException("Duplicate hosting-rent trigger name");
             }
@@ -197,7 +197,7 @@ public final class EconomyHostingRentSchemaInitializer implements InitializingBe
         } catch (IOException failure) {
             throw new IllegalStateException("Missing hosting-rent DDL resource", failure);
         }
-        List<String> statements = EconomySchemaInitializer.splitSql(sql);
+        List<String> statements = cn.jia.core.sql.SchemaSqlText.splitSql(sql);
         if (statements.size() != TABLES.size()) {
             throw new IllegalStateException("Hosting-rent DDL must contain exactly five CREATE TABLE statements");
         }
@@ -432,7 +432,7 @@ public final class EconomyHostingRentSchemaInitializer implements InitializingBe
     private record TriggerSpec(String name, String table, String event) {
         private boolean matches(TriggerMeta actual) {
             if (actual == null) return false;
-            String expectedBody = EconomySchemaInitializer.normalizeTriggerSql(
+            String expectedBody = cn.jia.core.sql.SchemaSqlText.normalizeTriggerSql(
                     "BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='immutable hosting-rent row'; END");
             return name.equals(actual.name()) && table.equals(actual.table())
                     && "BEFORE".equalsIgnoreCase(actual.timing())
