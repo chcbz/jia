@@ -32,9 +32,14 @@ public class ChatDeliveryContextStore {
 
     /** The limit bounds returned objects, not worst-case index work in the anti-join. */
     public List<Choice> heads(Scope scope, Cursor before, int limit) {
+        return heads(scope, before, limit, null);
+    }
+    public List<Choice> selectedHead(Scope scope, String outcomeId) { return heads(scope, null, 1, outcomeId); }
+    private List<Choice> heads(Scope scope, Cursor before, int limit, String outcomeId) {
         Map<String, Object> parameters = parameters(scope);
         parameters.put("limit", limit);
         String cursor = "";
+        if (outcomeId != null) { parameters.put("selected", outcomeId); cursor = " AND o.outcome_id=:selected"; }
         if (before != null) {
             parameters.put("beforeMessage", before.assistantMessageId());
             parameters.put("beforeOutcome", before.outcomeId());

@@ -57,7 +57,11 @@ public class ChatBountyRequestIndexService {
             String nextAfter, boolean hasMore, List<Entry> entries, String eventCursor) { }
 
     public record DeliveryQuery(String expectedGeneration, String expectedAssignmentRevision,
-            String beforeMessageId, String beforeOutcomeId) { }
+            String beforeMessageId, String beforeOutcomeId, String outcomeId) {
+        public DeliveryQuery(String generation, String assignment, String message, String outcome) {
+            this(generation, assignment, message, outcome, null);
+        }
+    }
     public record DeliveryChoice(String outcomeId, String requestId, String assistantMessageId,
             String finalSha256, String kind, String label) { }
     public record DeliveryPage(int schemaVersion, Scope scope, String assignmentRevision, String targetAgentId,
@@ -171,6 +175,7 @@ public class ChatBountyRequestIndexService {
         Long generation = query.expectedGeneration() == null ? null : parseDecimal(query.expectedGeneration(), true);
         Long expectedAssignment = query.expectedAssignmentRevision() == null ? null : parseDecimal(query.expectedAssignmentRevision(), false);
         if ((query.beforeMessageId() == null) != (query.beforeOutcomeId() == null)) throw invalid();
+        if (query.outcomeId() != null && (!validIdentity(query.outcomeId(), 64) || query.beforeMessageId() != null)) throw invalid();
         ChatDeliveryContextStore.Cursor before = null;
         if (query.beforeMessageId() != null) {
             if (generation == null || expectedAssignment == null || !validIdentity(query.beforeOutcomeId(), 64)) throw invalid();
@@ -188,7 +193,8 @@ public class ChatBountyRequestIndexService {
             if (assignment == null || expectedAssignment != null && !expectedAssignment.equals(assignment)) throw conflict();
             var sqlScope = new ChatDeliveryContextStore.Scope(tenant, owner, client, id, scope.generation(),
                     scope.taskId(), assignment, targets.getFirst());
-            var rows = deliveries.heads(sqlScope, before, 51);
+            var rows = query.outcomeId() == null ? deliveries.heads(sqlScope, before, 51)
+                    : deliveries.selectedHead(sqlScope, query.outcomeId());
             boolean hasMore = rows.size() > 50;
             var page = hasMore ? rows.subList(0, 50) : rows;
             var items = page.stream().map(row -> new DeliveryChoice(row.outcomeId(), row.requestId(),

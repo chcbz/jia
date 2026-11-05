@@ -88,6 +88,17 @@ class ChatBountyRequestIndexHttpTest {
         assertTrue(response.getHeader("Cache-Control").contains("no-store"));
         verify(service).deliveryContext("0", "owner", "client", "101", query); verifyNoMoreInteractions(service);
     }
+    @Test void deliveryContextAcceptsExactSelectionWithoutClientScopeOverrides() throws Exception {
+        var mapper=new ObjectMapper();
+        var fixture=mapper.readTree(getClass().getResourceAsStream("/contracts/hall-delivery-context.json"));
+        var page=mapper.treeToValue(fixture.get("data"),ChatBountyRequestIndexService.DeliveryPage.class);
+        var query=new ChatBountyRequestIndexService.DeliveryQuery("1","3",null,null,"outcome-a");
+        when(service.deliveryContext("0","owner","client","101",query)).thenReturn(page);
+        mvc.perform(get("/chat/conversations/101/delivery-context").param("expectedGeneration","1")
+                .param("expectedAssignmentRevision","3").param("outcomeId","outcome-a").principal(auth))
+                .andExpect(status().isOk());
+        verify(service).deliveryContext("0","owner","client","101",query);verifyNoMoreInteractions(service);
+    }
     @Test void deliveryContextCannotOverrideTaskOrSendAmbiguousPagination() throws Exception {
         mvc.perform(get("/chat/conversations/101/delivery-context").param("taskId", "other").principal(auth))
                 .andExpect(status().isBadRequest());

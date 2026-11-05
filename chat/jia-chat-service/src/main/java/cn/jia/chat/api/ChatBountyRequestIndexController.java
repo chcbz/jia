@@ -67,12 +67,12 @@ public class ChatBountyRequestIndexController {
     public ResponseEntity<JsonResult<ChatBountyRequestIndexService.DeliveryPage>> deliveryContext(
             @PathVariable String conversationId, HttpServletRequest request, Authentication authentication) {
         var parameters = request.getParameterMap();
-        if (!Set.of("expectedGeneration", "expectedAssignmentRevision", "beforeMessageId", "beforeOutcomeId")
+        if (!Set.of("expectedGeneration", "expectedAssignmentRevision", "beforeMessageId", "beforeOutcomeId", "outcomeId")
                 .containsAll(parameters.keySet()) || parameters.values().stream().anyMatch(value -> value == null || value.length != 1)
                 || hasBody(request)) throw invalid();
         var identity = identity(authentication);
         var query = new ChatBountyRequestIndexService.DeliveryQuery(value(parameters, "expectedGeneration"),
-                value(parameters, "expectedAssignmentRevision"), value(parameters, "beforeMessageId"), value(parameters, "beforeOutcomeId"));
+                value(parameters, "expectedAssignmentRevision"), value(parameters, "beforeMessageId"), value(parameters, "beforeOutcomeId"), value(parameters, "outcomeId"));
         return response(HttpStatus.OK, JsonResult.success(index.deliveryContext(identity.tenant(),
                 identity.sender().jiacn(), identity.sender().clientId(), conversationId, query)));
     }

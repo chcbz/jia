@@ -86,6 +86,18 @@ class ChatDeliveryContextStoreTest {
         assertNull(store.assignment("0","Owner","client","task",101));
         assertNull(store.assignment("0","owner","client","task",102));
     }
+    @Test void selectedHeadChecksTheSameScopeAndReadinessWithoutRequiringPageOne() {
+        outcome("older",1,null,"ANSWER");
+        for (int i=2;i<=60;i++) outcome("root-"+i,i,null,"ANSWER");
+        assertFalse(heads().contains("older"));
+        assertEquals(List.of("older"),store.selectedHead(scope,"older").stream().map(ChatDeliveryContextStore.Choice::outcomeId).toList());
+        outcome("child",61,"older","ANSWER");
+        assertTrue(store.selectedHead(scope,"older").isEmpty());
+        jdbc.update("UPDATE chat_typed_outcome SET owner_jiacn='other' WHERE outcome_id='child'");
+        assertTrue(store.selectedHead(scope,"child").isEmpty());
+        assertEquals(1,store.selectedHead(scope,"older").size());
+        assertTrue(store.selectedHead(scope,"missing").isEmpty());
+    }
     @Test void pagingUsesMessageAndIdTieBreakAndReturnsOnlyShortLabels() {
         outcome("a",9007199254740993L,null,"ANSWER");outcome("b",9007199254740993L,null,"ANSWER");outcome("c",9007199254740994L,null,"ANSWER");
         var first=store.heads(scope,null,2);assertEquals(List.of("c","b"),first.stream().map(ChatDeliveryContextStore.Choice::outcomeId).toList());

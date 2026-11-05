@@ -41,6 +41,27 @@ class ChatDeliveryContextPageTest {
         verify(deliveries).heads(scope,null,51);verify(deliveries).pendingExecution(scope);
         verifyNoMoreInteractions(deliveries);verifyNoInteractions(catalogue);
     }
+    @Test void explicitSelectionUsesOneHeadLookupNotTheFirstPage() {
+        var selected=new ChatBountyRequestIndexService.DeliveryQuery("1","3",null,null,"older");
+        when(deliveries.selectedHead(scope,"older")).thenReturn(List.of(
+                new ChatDeliveryContextStore.Choice("older","request-old",1,"sha256:"+"a".repeat(64),"ANSWER","label")));
+        var result=service.deliveryContext("0","owner","client","101",selected);
+        assertEquals("older",result.items().getFirst().outcomeId());assertFalse(result.hasMore());
+        assertNull(result.nextBeforeMessageId());assertNull(result.nextBeforeOutcomeId());
+        verify(deliveries).assignment("0","owner","client","task",101);
+        verify(deliveries).selectedHead(scope,"older");verify(deliveries).pendingExecution(scope);
+        verifyNoMoreInteractions(deliveries);verifyNoInteractions(catalogue);
+    }
+    @Test void explicitSelectionCannotAlsoPageAndMissingHeadIsNotSubstituted() {
+        var mixed=new ChatBountyRequestIndexService.DeliveryQuery("1","3","8","cursor","older");
+        assertEquals(ChatBountyRequestIndexService.Reason.INVALID_REQUEST,
+                assertThrows(ChatBountyRequestIndexService.Failure.class,()->service.deliveryContext("0","owner","client","101",mixed)).reason());
+        verifyNoInteractions(deliveries);
+        when(deliveries.selectedHead(scope,"gone")).thenReturn(List.of());
+        var result=service.deliveryContext("0","owner","client","101",new ChatBountyRequestIndexService.DeliveryQuery("1","3",null,null,"gone"));
+        assertTrue(result.items().isEmpty());assertFalse(result.hasMore());
+        verify(deliveries,never()).heads(any(),any(),anyInt());
+    }
     @Test void pendingExecutionIsReportedWithoutPretendingToBeADeliverableOrRejectingRead() {
         when(deliveries.heads(scope,null,51)).thenReturn(List.of());when(deliveries.pendingExecution(scope)).thenReturn(true);
         var result=service.deliveryContext("0","owner","client","101",query);
