@@ -38,3 +38,13 @@
 这是原成果状态发生变化的通知，**不是最终回复、任务完成或turn状态转换**，不写消息/覆盖turn stateVersion。Web读取原回合与新子回合的权威投影，不能依据事件直接宣布完成。已删除/不可访问任务的原拒绝处理仍不发布可读事件，不新增极端场景恢复机制。回归入口`ChatDeliveryReviewChangedEventTest`、`ChatDeliveryRevisionServiceTest`及Web重连/定向读取测试。
 
 本阶段仍保留首次与显式resync全目录/全成果恢复。发送父成果仍依赖完整上下文，不能提前截断，也不能把本阶段当作全部历史读取有界。
+
+## 当前轮恢复（2026-11-05 追加候选，未上线）
+
+同一目录GET支持`latest=true`，与`requestId/after/through/pageSize`互斥，可携带`expectedGeneration`。该selector用于恢复当前回合，不用于发送时选择父成果；不以“最新”代替成果因果链。仍返回Page：after为0、through为最大ordinal、至多一个entry，无后续页；空会话through为0、entries为空。其他latest值走INVALID_REQUEST，避免歧义查询。授权及精确代际边界不变。
+
+存储在精确scope内`ORDER BY id DESC LIMIT 1`，仅对这一轮执行既有集合投影查询，不先取全目录/全部成果。Web恢复取消逐页循环及历史request ID集合；旧状态重放只推进已认证会话游标，不接管当前轮。实时非当前轮状态仍触发该轮投影更新；未知其他会话事件不据此准入。切换会话/身份仍丢弃旧读，取消动作仍绑定恢复轮的精确turn/checkpoint。
+
+回归入口：`ChatBountyRequestIndexStoreTest.latestSelectsOneOrdinalAfterExactScopeFiltering`、`ChatBountyRequestIndexPageTest`最新/空会话/互斥参数用例、`ChatBountyRequestIndexHttpTest.latestSelectorPreservesTheSharedPageEnvelope`、Web `juyiting-restored-request.test.js`（最大ordinal10001只发一次查询、历史重放与实时其他回合、空会话和切换竞态）。HTTP复用相同单项Page完整fixture；不新增公共信封。Java测试待Flow。
+
+2026-11-05真实MySQL只读EXPLAIN：现有`idx_chat_request_context_order`已含scope+id，但11行样本优化器选择`idx_chat_request_conversation`并Using filesort。单次SQL约1ms只说明该样本，不是接口/长会话性能；未添加强制索引或生产DDL。上线前长会话查询计划仍需验证，不能将LIMIT1等同数据库常量工作量。

@@ -68,6 +68,18 @@ public class ChatBountyRequestIndexStore {
                 rs.getString("conversation_id"), rs.getLong("conversation_generation")), args));
     }
 
+    /** Current-round recovery reads only the greatest ordinal in the exact live scope. */
+    public List<Row> latest(Scope scope) {
+        require(scope);
+        return jdbc.query("""
+                SELECT id,tenant_id,owner_jiacn,client_id,request_id,request_revision,
+                       conversation_id,conversation_generation FROM chat_request WHERE
+                """ + EXACT_SCOPE + " ORDER BY id DESC LIMIT 1",
+                (rs, ignored) -> new Row(rs.getLong("id"), rs.getString("tenant_id"),
+                        rs.getString("owner_jiacn"), rs.getString("client_id"), rs.getString("request_id"),
+                        rs.getLong("request_revision"), rs.getString("conversation_id"), rs.getLong("conversation_generation")), scopeArgs(scope));
+    }
+
     /** Event-targeted discovery; never scans earlier catalogue pages or infers ordinal from request id. */
     public List<Row> byRequest(Scope scope, String requestId) {
         require(scope);

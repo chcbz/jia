@@ -42,9 +42,12 @@ public class ChatBountyRequestIndexService {
         public Reason reason() { return reason; }
     }
 
-    public record Query(String expectedGeneration, String after, String through, String pageSize, String requestId) {
+    public record Query(String expectedGeneration, String after, String through, String pageSize, String requestId, String latest) {
         public Query(String expectedGeneration, String after, String through, String pageSize) {
-            this(expectedGeneration, after, through, pageSize, null);
+            this(expectedGeneration, after, through, pageSize, null, null);
+        }
+        public Query(String expectedGeneration, String after, String through, String pageSize, String requestId) {
+            this(expectedGeneration, after, through, pageSize, requestId, null);
         }
     }
     public record Scope(String conversationId, String conversationGeneration, String taskId) { }
@@ -97,7 +100,11 @@ public class ChatBountyRequestIndexService {
                     canonicalConversation, scope.generation());
             List<ChatBountyRequestIndexStore.Row> rows;
             long through;
-            if (parsed.requestId() != null) {
+            if (parsed.latest()) {
+                rows = store.latest(sqlScope);
+                if (rows == null || rows.size() > 1) throw unavailable();
+                through = rows.isEmpty() ? 0 : rows.getFirst().ordinal();
+            } else if (parsed.requestId() != null) {
                 rows = store.byRequest(sqlScope, parsed.requestId());
                 if (rows == null || rows.size() != 1) throw notFound();
                 through = rows.getFirst().ordinal();
@@ -255,7 +262,9 @@ public class ChatBountyRequestIndexService {
         if (through != null && after > through) throw invalid();
         if (value.requestId() != null && (!validIdentity(value.requestId(), 100)
                 || value.after() != null || value.through() != null || value.pageSize() != null)) throw invalid();
-        return new Parsed(expected, after, through, pageSize, value.requestId());
+        if (value.latest() != null && (!"true".equals(value.latest()) || value.requestId() != null
+                || value.after() != null || value.through() != null || value.pageSize() != null)) throw invalid();
+        return new Parsed(expected, after, through, pageSize, value.requestId(), value.latest() != null);
     }
 
     private static long positiveCanonical(String value) {
@@ -294,7 +303,7 @@ public class ChatBountyRequestIndexService {
                 && value.codePoints().noneMatch(Character::isISOControl);
     }
 
-    private record Parsed(Long expectedGeneration, long after, Long through, int pageSize, String requestId) { }
+    private record Parsed(Long expectedGeneration, long after, Long through, int pageSize, String requestId, boolean latest) { }
     private record ConversationScope(long generation, String taskId) { }
     private static Failure invalid() { return new Failure(Reason.INVALID_REQUEST); }
     private static Failure notFound() { return new Failure(Reason.NOT_FOUND_OR_FORBIDDEN); }

@@ -98,4 +98,35 @@ class ChatBountyRequestIndexPageTest {
                         new ChatBountyRequestIndexService.Query("1", null, null, null, "foreign"))).reason());
         verify(store).byRequest(scope, "foreign"); verifyNoMoreInteractions(store);
     }
+    @Test void latestRecoveryExpandsOnlyTheNewestRoundWithoutWatermarkOrPaging() {
+        when(store.latest(scope)).thenReturn(List.of(row));
+        var result = service.read("0", "owner", "client", "101",
+                new ChatBountyRequestIndexService.Query(null, null, null, null, null, "true"));
+        assertEquals("7", result.through()); assertEquals("0", result.after());
+        assertEquals("r7", result.entries().getFirst().request().requestId());
+        assertFalse(result.hasMore()); assertNull(result.nextAfter());
+        verify(store).latest(scope); verify(store).projections(scope, List.of(row)); verifyNoMoreInteractions(store);
+    }
+    @Test void latestEmptyConversationReturnsNoRequest() {
+        when(store.latest(scope)).thenReturn(List.of());
+        when(store.projections(scope, List.of())).thenReturn(new ChatBountyRequestIndexStore.ProjectionRows(List.of(), List.of(), List.of()));
+        var result = service.read("0", "owner", "client", "101",
+                new ChatBountyRequestIndexService.Query("1", null, null, null, null, "true"));
+        assertEquals("0", result.through()); assertTrue(result.entries().isEmpty()); assertFalse(result.hasMore());
+        verify(store).latest(scope); verify(store).projections(scope, List.of()); verifyNoMoreInteractions(store);
+    }
+    @Test void latestDoesNotAcceptAmbiguousPagingOrTargetSelectors() {
+        for (var query : List.of(
+                new ChatBountyRequestIndexService.Query(null, null, null, null, null, "false"),
+                new ChatBountyRequestIndexService.Query(null, "0", null, null, null, "true"),
+                new ChatBountyRequestIndexService.Query(null, null, "7", null, null, "true"),
+                new ChatBountyRequestIndexService.Query(null, null, null, "1", null, "true"),
+                new ChatBountyRequestIndexService.Query(null, null, null, null, "r7", "true"))) {
+            assertEquals(ChatBountyRequestIndexService.Reason.INVALID_REQUEST,
+                    assertThrows(ChatBountyRequestIndexService.Failure.class,
+                            () -> service.read("0", "owner", "client", "101", query)).reason());
+        }
+        verifyNoInteractions(store);
+    }
+
 }

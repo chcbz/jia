@@ -103,4 +103,17 @@ class ChatBountyRequestIndexStoreTest {
         assertTrue(store.byRequest(new ChatBountyRequestIndexStore.Scope("tenant", "owner", "client", "101", 1), "r1").isEmpty());
         assertTrue(store.byRequest(new ChatBountyRequestIndexStore.Scope("tenant", "Owner", "client", "102", 1), "r1").isEmpty());
     }
+    @Test void latestSelectsOneOrdinalAfterExactScopeFiltering() {
+        assertTrue(store.latest(scope).isEmpty());
+        for (long id = 1; id <= 105; id++) insert(id);
+        jdbc.update("UPDATE chat_request SET conversation_id='102' WHERE id=105");
+        jdbc.update("UPDATE chat_request SET conversation_generation=2 WHERE id=104");
+        jdbc.update("UPDATE chat_request SET owner_jiacn='owner' WHERE id=103");
+        jdbc.update("UPDATE chat_request SET client_id='Client' WHERE id=102");
+        jdbc.update("UPDATE chat_request SET tenant_id='Tenant' WHERE id=101");
+        clearInvocations(jdbc);
+        assertEquals(List.of(row(100)), store.latest(scope));
+        assertEquals(1, queryCount());
+    }
+
 }

@@ -60,6 +60,19 @@ class ChatBountyRequestIndexHttpTest {
         assertTrue(response.getHeader("Cache-Control").contains("no-store"));
         verify(service).read("0", "owner", "client", "101", query); verifyNoMoreInteractions(service);
     }
+    @Test void latestSelectorPreservesTheSharedPageEnvelope() throws Exception {
+        var mapper = new ObjectMapper();
+        var fixture = mapper.readTree(getClass().getResourceAsStream("/contracts/hall-request-index-entry.json"));
+        var page = mapper.treeToValue(fixture.get("data"), ChatBountyRequestIndexService.Page.class);
+        var query = new ChatBountyRequestIndexService.Query("1", null, null, null, null, "true");
+        when(service.read("0", "owner", "client", "101", query)).thenReturn(page);
+        var response = mvc.perform(get("/chat/conversations/101/requests").param("expectedGeneration", "1").param("latest", "true")
+                .principal(auth).header("X-Request-Id", "hall-request-index-entry"))
+                .andExpect(status().isOk()).andReturn().getResponse();
+        var body = mapper.readTree(response.getContentAsString());
+        assertEquals(fixture.get("data"), body.get("data"));
+        verify(service).read("0", "owner", "client", "101", query); verifyNoMoreInteractions(service);
+    }
     @Test void duplicateRequestIdIsRejectedAtProtocolBoundary() throws Exception {
         mvc.perform(get("/chat/conversations/101/requests").param("requestId", "one", "two").principal(auth))
                 .andExpect(status().isBadRequest());

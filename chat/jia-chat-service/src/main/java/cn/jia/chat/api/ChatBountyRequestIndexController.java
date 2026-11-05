@@ -31,7 +31,7 @@ import java.util.Set;
 @ConditionalOnProperty(prefix = "chat.bounty-media", name = "enabled", havingValue = "true")
 public class ChatBountyRequestIndexController {
     private static final Set<String> QUERY_KEYS = Set.of(
-            "expectedGeneration", "after", "through", "pageSize", "requestId");
+            "expectedGeneration", "after", "through", "pageSize", "requestId", "latest");
     private static final String CACHE_CONTROL = "private, no-store";
 
     private final ChatBountyRequestIndexService index;
@@ -75,7 +75,7 @@ public class ChatBountyRequestIndexController {
         }
         var query = new ChatBountyRequestIndexService.Query(value(parameters, "expectedGeneration"),
                 value(parameters, "after"), value(parameters, "through"),
-                value(parameters, "pageSize"), value(parameters, "requestId"));
+                value(parameters, "pageSize"), value(parameters, "requestId"), value(parameters, "latest"));
         return response(HttpStatus.OK, JsonResult.success(index.read(tenant, sender.jiacn(),
                 sender.clientId(), conversationId, query)));
     }
