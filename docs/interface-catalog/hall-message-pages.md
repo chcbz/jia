@@ -125,7 +125,7 @@
 - 只读这些请求的typed详情，并补**直接ACTION执行子请求**（执行没有独立聊天消息）；不沿review child链递归读取整个后续历史。SSE事实事件继续定向刷新；token文本变化不改变请求ID集合，不触发该加载路径。
 - `typed.refresh`不再追加sessionStorage中所有ACCEPTED receipt；已知路由的显示读取也不逐条反复解析整个本地receipt历史。UNKNOWN原请求恢复仍不变；此条不声明所有本地状态存储已做容量优化。
 - Inline成果组件复用父页面已读的请求快照和typed cards，只移除`purpose/key`两个展示注解后按原文字成果映射处理；不二次GET请求详情/typed-outcome，不构造全历史交付图。执行结果与文件清单仍按具体可见请求读取，身份/摘要保护保留。
-- 当前窗口仅决定显示候选；选择某版本的验收仍由`useHallSelectedOutputReview`及后端权威review事实确认，不把局部窗口拼成整个任务交付集合。独立任务详情的BountyAcceptancePanel、取消任务历史页仍使用原完整目录实例，尚待单独收口，不能机械截断其依赖。
+- 当前窗口仅决定显示候选；选择某版本的验收仍由`useHallSelectedOutputReview`及后端权威review事实确认，不把局部窗口拼成整个任务交付集合。独立任务详情的BountyAcceptancePanel仍使用原完整目录实例，尚待单独收口，不能机械截断其依赖。取消任务文字历史的后续窗口候选见下节。
 
 回归入口：`ChatBountyRequestIndexStoreTest`一次批量查询/精确scope与ID、`ChatBountyRequestIndexPageTest`批量无watermark/互斥/缺失、`ChatBountyRequestIndexHttpTest`重复query字段和完整共享信封；这些Java用例尚未执行。Web实际composable覆盖10000个合成历史ID仅选择50个的一次批量请求、旧页只补新增、100项分批、合并等待/失效与不完整结果；实际SFC覆盖inline无重复请求、复用文字成果精确来源、选择事件仅传outcomeId。轻量420项通过约6秒是测试耗时，不是生产延迟或压测。
 
@@ -134,3 +134,9 @@
 新增显式 `ChatTypedDeliberationSchemaInitializer.backfillDeliveryIndex(configuredTenant)`，复用原维护上下文/schema锁，正常initialize、HTTP、流式链路不调用。详情见 `ops/schema/README.md`。只补两个派生列，按主键100条/事务，幂等核对；正文/摘要/完成事实不改，不重验当前工具授权或重放旧执行。既有v1/v2非交付语义保留，v5从持久化deliveryRelation抽取，未知语义/冲突不猜测覆盖。
 
 这是维护源码候选，不是历史数据已经回填：Java尚未运行，MySQL演练、主机安装器调用、备份/停旧writer和实际迁移仍待完成。仅加列不能启用新读取。主议事页与任务历史/验收页的优化完成范围仍按前节，不因增加维护方法扩大完成声明。
+
+## 2026-11-05 取消事项文字历史窗口候选
+
+Web `useHallTerminalTextHistory`复用现有owner/task会话发现，但不扫描完整请求目录；首读最近50条消息，按metadata中的requestId批量取得原请求快照，仅对已持久化CHAT读取一次typed成果，不重复GET请求详情。显式加载旧页只补新增ID，普通CHAT无typed成果的404不作为错误。空窗口不是全历史为空；旧页/详情失败保留已读成果并重试当前窗口，不跳过失败页。显式刷新重置窗口，身份/事项切换及卸载隔离迟到响应。无新增接口、轮询、SSE或持久缓存。
+
+正式验收面板的完整因果图不变。轻量Web465项通过，仅证明候选消费者行为；Java/真实数据库/Flow/上线均未完成，不能据此声明接口已发布或实际延迟下降。
