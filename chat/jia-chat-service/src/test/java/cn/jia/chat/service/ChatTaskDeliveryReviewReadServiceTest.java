@@ -23,6 +23,14 @@ class ChatTaskDeliveryReviewReadServiceTest {
     AgentTaskFormalDeliveryViewDTO batch() {
         var b=ChatDeliveryReviewContractTest.batch(); b.setManifestArtifactId("artifact_manifest"); b.setManifestArtifactVersion(1); b.setSubmittedAt(123L); return b;
     }
+    @Test void displayMetadataPassesThroughWithoutChangingSourceOrBatchDigest() {
+        var b = batch(); String before = ChatDeliveryReviewContract.batchDigest("task_fixture", b);
+        b.getItems().getFirst().setDisplay(new cn.jia.agent.entity.AgentTaskFormalDeliveryItemDTO.Display("report.txt", "text/plain", 12L, null));
+        var result = reads.sourceItems(scope, "task_fixture", b);
+        assertEquals("report.txt", result.getFirst().display().title());
+        assertEquals(before, ChatDeliveryReviewContract.batchDigest("task_fixture", b));
+        assertEquals("SOURCE_UNAVAILABLE", result.getFirst().unavailableReason());
+    }
     @Test void unresolvableResultIsVisibleButNeverAcquiresWriteEligibility() {
         var b=batch(); var items=reads.sourceItems(scope,"task_fixture",b);
         assertEquals(2,items.size()); assertEquals("SOURCE_UNAVAILABLE",items.getFirst().unavailableReason());
@@ -79,6 +87,43 @@ class ChatTaskDeliveryReviewReadServiceTest {
         assertEquals("81",page.nextCursor());assertTrue(page.hasMore());assertEquals(List.of("VIEW"),page.items().getFirst().allowedActions());
         verify(deliveries,never()).currentForTaskOwner(anyString(),anyString(),anyString(),anyString(),anyBoolean());
         verifyNoInteractions(submissions);
+    }
+    @Test void displaySourcesUsePageQueriesNotPerItemRevalidation() {
+        when(jdbc.query(anyString(),any(RowMapper.class),any(Object[].class))).thenAnswer(call -> {
+            String sql=call.getArgument(0); Object[] args=(Object[])call.getRawArguments()[2];
+            assertEquals(sql.chars().filter(c -> c=='?').count(),args.length);
+            assertTrue(sql.contains(" IN (")); assertFalse(sql.contains("FOR UPDATE"));
+            return List.of();
+        });
+        var window = java.util.stream.IntStream.range(0,20).mapToObj(i -> { var b=batch(); b.setDeliveryId("d-"+i); return b; }).toList();
+        var result = reads.displayItems(scope,"task_fixture",window);
+        assertEquals(20,result.size());
+        assertTrue(result.values().stream().allMatch(items -> "SOURCE_UNAVAILABLE".equals(items.getFirst().unavailableReason())));
+        // No promoted rows => only promotion lookup plus workspace lookup, regardless of window size.
+        verify(jdbc,times(2)).query(anyString(),any(RowMapper.class),any(Object[].class));
+        verifyNoInteractions(submissions,deliveries);
+    }
+    @Test void committedPromotionDisplayUsesSelectedRowsWithoutReplayingItsReceipt() throws Exception {
+        var b=batch(); var item=b.getItems().getFirst();
+        when(jdbc.query(contains("SELECT p.delivery_id"),any(RowMapper.class),any(Object[].class))).thenAnswer(i -> {
+            RowMapper<?> mapper=i.getArgument(1);ResultSet r=mock(ResultSet.class);
+            when(r.getString(1)).thenReturn(b.getDeliveryId());when(r.getString(2)).thenReturn("op");
+            when(r.getString(3)).thenReturn(b.getManifestArtifactId());
+            when(r.getString(4)).thenReturn(ChatDeliveryReviewContract.json(List.of(java.util.Map.of("id",item.getArtifactId(),"version",1,"hash",item.getContentHash(),"purpose",item.getPurpose()))));
+            return List.of(mapper.mapRow(r,0));
+        });
+        when(jdbc.query(contains("SELECT i.operation_id"),any(RowMapper.class),any(Object[].class))).thenAnswer(i -> {
+            RowMapper<?> mapper=i.getArgument(1);ResultSet r=mock(ResultSet.class);
+            when(r.getString(1)).thenReturn("op");when(r.getInt(2)).thenReturn(0);when(r.getString(3)).thenReturn(item.getContentHash());
+            when(r.getString(4)).thenReturn(item.getPurpose());when(r.getString(5)).thenReturn("OUTPUT");
+            when(r.getString(6)).thenReturn("request");when(r.getString(7)).thenReturn("step");when(r.getString(8)).thenReturn("output");
+            return List.of(mapper.mapRow(r,0));
+        });
+        var result=reads.displayItems(scope,"task_fixture",List.of(b)).get(b.getDeliveryId());
+        assertEquals(java.util.Map.of("kind","CONVERSATION_OUTPUT","requestId","request","stepId","step","outputId","output"),result.getFirst().source());
+        assertTrue(ChatTaskDeliveryReviewReadService.sourcesComplete(result));
+        verify(jdbc,times(3)).query(anyString(),any(RowMapper.class),any(Object[].class));
+        verifyNoInteractions(submissions,deliveries);
     }
     @Test void ownerAuthorizationPrecedesEveryAssociatedRead() {
         when(submissions.task("0","owner","client","task_fixture")).thenThrow(new ChatSelectedOutputFinalizationStore.Missing());

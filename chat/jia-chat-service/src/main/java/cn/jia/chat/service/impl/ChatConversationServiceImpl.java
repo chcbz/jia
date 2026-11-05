@@ -163,7 +163,7 @@ public class ChatConversationServiceImpl implements ChatConversationService {
             try { beforeTime = "n".equals(parts[0]) ? -1L : Long.valueOf(parts[0]); beforeId = Long.valueOf(parts[1]); }
             catch (NumberFormatException invalid) { throw invalidMessageCursor(); }
         }
-        final int pageSize = 50;
+        final int pageSize = 20;
         List<ChatMessageEntity> rows = chatMessageDao.findOwnedMessagePage(
                 context.getTenantId(), context.getJiacn(), context.getClientId(),
                 Long.toString(conversation.getId()), beforeTime, beforeId, pageSize + 1);

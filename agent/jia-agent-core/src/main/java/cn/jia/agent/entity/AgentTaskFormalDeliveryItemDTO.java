@@ -15,4 +15,8 @@ public class AgentTaskFormalDeliveryItemDTO implements Serializable {
     private Integer artifactVersion;
     private String contentHash;
     private String purpose;
+    /** Read-only display metadata, excluded from the immutable batch digest and write commands. */
+    private Display display;
+    public record Display(String title, String contentMimeType, Long contentByteLength,
+            String unavailableReason) implements Serializable { }
 }

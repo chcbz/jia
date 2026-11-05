@@ -44,33 +44,66 @@ class ChatConversationMessagePageTest {
     }
     @Test void boundedLatestUsesOneExtraRowAndReturnsChronologicalPage() {
         var rows = new ArrayList<ChatMessageEntity>();
-        for (long id = 101; id >= 51; id--) rows.add(message(id));
-        when(messages.findOwnedMessagePage("tenant-a", "owner", "client", "100", null, null, 51)).thenReturn(rows);
+        for (long id = 101; id >= 81; id--) rows.add(message(id));
+        when(messages.findOwnedMessagePage("tenant-a", "owner", "client", "100", null, null, 21)).thenReturn(rows);
         var page = service.findMessagePage("100", null);
-        assertEquals(50, page.messages().size());
-        assertEquals(52L, page.messages().getFirst().getId());
+        assertEquals(20, page.messages().size());
+        assertEquals(82L, page.messages().getFirst().getId());
         assertEquals(101L, page.messages().getLast().getId());
-        assertTrue(page.hasMore()); assertEquals("1000:52", page.nextBefore());
-        verify(messages).findOwnedMessagePage("tenant-a", "owner", "client", "100", null, null, 51);
+        assertTrue(page.hasMore()); assertEquals("1000:82", page.nextBefore());
+        verify(messages).findOwnedMessagePage("tenant-a", "owner", "client", "100", null, null, 21);
         verifyNoMoreInteractions(messages);
     }
     @Test void olderPageUsesExactLongCursorAndStopsWithoutCountingHistory() {
-        when(messages.findOwnedMessagePage("tenant-a", "owner", "client", "100", 1000L, 9007199254740993L, 51))
+        when(messages.findOwnedMessagePage("tenant-a", "owner", "client", "100", 1000L, 9007199254740993L, 21))
                 .thenReturn(List.of(message(9), message(8)));
         var page = service.findMessagePage("100", "1000:9007199254740993");
         assertEquals(List.of(8L, 9L), page.messages().stream().map(ChatMessageEntity::getId).toList());
         assertFalse(page.hasMore()); assertNull(page.nextBefore());
     }
     @Test void emptyPageHasNoCursor() {
-        when(messages.findOwnedMessagePage("tenant-a", "owner", "client", "100", null, null, 51)).thenReturn(List.of());
+        when(messages.findOwnedMessagePage("tenant-a", "owner", "client", "100", null, null, 21)).thenReturn(List.of());
         assertEquals(new ChatConversationService.MessagePage(List.of(), false, null), service.findMessagePage("100", null));
     }
     @Test void nullableTimestampCursorDoesNotLoseHistoricalRows() {
         var rows = new ArrayList<ChatMessageEntity>();
-        for (long id = 101; id >= 51; id--) rows.add(new ChatMessageEntity().setId(id));
-        when(messages.findOwnedMessagePage("tenant-a", "owner", "client", "100", -1L, 102L, 51)).thenReturn(rows);
+        for (long id = 101; id >= 81; id--) rows.add(new ChatMessageEntity().setId(id));
+        when(messages.findOwnedMessagePage("tenant-a", "owner", "client", "100", -1L, 102L, 21)).thenReturn(rows);
         var page = service.findMessagePage("100", "n:102");
-        assertEquals("n:52", page.nextBefore()); assertTrue(page.hasMore());
+        assertEquals("n:82", page.nextBefore()); assertTrue(page.hasMore());
+    }
+    @Test void exactTwentyRowsIsTheLastPageWithoutProbe() {
+        var rows = new ArrayList<ChatMessageEntity>();
+        for (long id = 20; id >= 1; id--) rows.add(message(id));
+        when(messages.findOwnedMessagePage("tenant-a", "owner", "client", "100", null, null, 21)).thenReturn(rows);
+        var page = service.findMessagePage("100", null);
+        assertEquals(20, page.messages().size());
+        assertEquals(1L, page.messages().getFirst().getId());
+        assertFalse(page.hasMore()); assertNull(page.nextBefore());
+        verify(messages).findOwnedMessagePage("tenant-a", "owner", "client", "100", null, null, 21);
+        verifyNoMoreInteractions(messages);
+    }
+    @Test void adjacentTwentyRowPagesDoNotSkipOrRepeatTheLookaheadRow() {
+        var latest = new ArrayList<ChatMessageEntity>();
+        var older = new ArrayList<ChatMessageEntity>();
+        for (long id = 41; id >= 21; id--) latest.add(message(id));
+        for (long id = 21; id >= 1; id--) older.add(message(id));
+        when(messages.findOwnedMessagePage("tenant-a", "owner", "client", "100", null, null, 21)).thenReturn(latest);
+        when(messages.findOwnedMessagePage("tenant-a", "owner", "client", "100", 1000L, 22L, 21)).thenReturn(older);
+        when(messages.findOwnedMessagePage("tenant-a", "owner", "client", "100", 1000L, 2L, 21)).thenReturn(List.of(message(1)));
+        var first = service.findMessagePage("100", null);
+        var second = service.findMessagePage("100", first.nextBefore());
+        var last = service.findMessagePage("100", second.nextBefore());
+        assertEquals(20, first.messages().size()); assertEquals("1000:22", first.nextBefore());
+        assertEquals(20, second.messages().size()); assertEquals("1000:2", second.nextBefore());
+        var ids = java.util.stream.Stream.of(last, second, first).flatMap(page -> page.messages().stream())
+                .map(ChatMessageEntity::getId).toList();
+        assertEquals(java.util.stream.LongStream.rangeClosed(1, 41).boxed().toList(), ids);
+        assertFalse(last.hasMore()); assertNull(last.nextBefore());
+        verify(messages).findOwnedMessagePage("tenant-a", "owner", "client", "100", null, null, 21);
+        verify(messages).findOwnedMessagePage("tenant-a", "owner", "client", "100", 1000L, 22L, 21);
+        verify(messages).findOwnedMessagePage("tenant-a", "owner", "client", "100", 1000L, 2L, 21);
+        verifyNoMoreInteractions(messages);
     }
     @Test void invalidCursorFailsBeforeMessageQuery() {
         for (String cursor : List.of("", "1", "-1:1", "1:0", "01:1", "1:01", "1:2:3", "9223372036854775808:1", "1:9223372036854775808")) {

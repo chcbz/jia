@@ -85,6 +85,13 @@ public class AgentTaskFormalDeliveryDaoImpl implements AgentTaskFormalDeliveryDa
     }
 
     @Override
+    public List<DisplayItem> listDisplayItems(String tenantId, String clientId, String ownerJiacn,
+            String taskId, List<String> deliveryIds) {
+        if (deliveryIds.isEmpty()) return List.of();
+        return mapper.selectDisplayItems(tenantId, clientId, ownerJiacn, taskId, deliveryIds);
+    }
+
+    @Override
     public int reviewByVersion(String tenantId, String clientId, String deliveryId, String expectedState,
             long expectedVersion, String nextState, String reviewedByJiacn, String reviewReason,
             long reviewedAt) {

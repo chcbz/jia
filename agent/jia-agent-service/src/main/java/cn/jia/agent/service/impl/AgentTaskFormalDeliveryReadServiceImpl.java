@@ -2,13 +2,10 @@ package cn.jia.agent.service.impl;
 
 import cn.jia.agent.dao.AgentTaskFormalDeliveryDao;
 import cn.jia.agent.dao.AgentTaskMetaDao;
-import cn.jia.agent.dao.AgentTaskWorkItemDao;
 import cn.jia.agent.entity.AgentTaskFormalDeliveryEntity;
 import cn.jia.agent.entity.AgentTaskFormalDeliveryItemDTO;
-import cn.jia.agent.entity.AgentTaskFormalDeliveryItemEntity;
 import cn.jia.agent.entity.AgentTaskFormalDeliveryViewDTO;
 import cn.jia.agent.entity.AgentTaskMetaEntity;
-import cn.jia.agent.entity.AgentTaskWorkItemEntity;
 import cn.jia.agent.exception.AgentTaskCollaborationException;
 import cn.jia.agent.service.AgentTaskFormalDeliveryReadService;
 import cn.jia.agent.state.AgentTaskFormalDeliveryState;
@@ -19,6 +16,8 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.stream.Collectors;
+import tools.jackson.databind.json.JsonMapper;
 
 /**
  * Browser-owner read model for immutable R2 delivery batches.
@@ -35,14 +34,12 @@ public class AgentTaskFormalDeliveryReadServiceImpl implements AgentTaskFormalDe
 
     private final AgentTaskFormalDeliveryDao deliveryDao;
     private final AgentTaskMetaDao taskMetaDao;
-    private final AgentTaskWorkItemDao workItemDao;
 
     @Inject
     public AgentTaskFormalDeliveryReadServiceImpl(AgentTaskFormalDeliveryDao deliveryDao,
-            AgentTaskMetaDao taskMetaDao, AgentTaskWorkItemDao workItemDao) {
+            AgentTaskMetaDao taskMetaDao) {
         this.deliveryDao = Objects.requireNonNull(deliveryDao, "deliveryDao");
         this.taskMetaDao = Objects.requireNonNull(taskMetaDao, "taskMetaDao");
-        this.workItemDao = Objects.requireNonNull(workItemDao, "workItemDao");
     }
 
     @Override
@@ -96,38 +93,48 @@ public class AgentTaskFormalDeliveryReadServiceImpl implements AgentTaskFormalDe
     private List<AgentTaskFormalDeliveryViewDTO> projectWindow(List<AgentTaskFormalDeliveryEntity> rows,
             AgentTaskMetaEntity task, String tenantId, String clientId, String ownerJiacn, String taskId) {
         var result = new ArrayList<AgentTaskFormalDeliveryViewDTO>();
+        if (rows.isEmpty()) return List.of();
         long previousRevision = Long.MAX_VALUE;
+        // Validate the window before querying associated rows, including excluding the lookahead.
         for (var delivery : rows) {
             requireDelivery(delivery, tenantId, clientId, taskId, previousRevision);
             previousRevision = delivery.getRevision();
-            var workItem = workItemDao.findByTaskAndWorkItemId(tenantId, clientId, ownerJiacn, taskId, delivery.getWorkItemId());
-            requireWorkItem(workItem, tenantId, clientId, ownerJiacn, taskId, delivery);
-            result.add(view(delivery, deliveryDao.listItems(tenantId, clientId, delivery.getDeliveryId()), task.getTaskVersion(), workItem.getVersion()));
+        }
+        var grouped = deliveryDao.listDisplayItems(tenantId, clientId, ownerJiacn, taskId,
+                rows.stream().map(AgentTaskFormalDeliveryEntity::getDeliveryId).toList()).stream()
+                .collect(Collectors.groupingBy(AgentTaskFormalDeliveryDao.DisplayItem::deliveryId));
+        for (var delivery : rows) {
+            var items = grouped.getOrDefault(delivery.getDeliveryId(), List.of());
+            if (items.isEmpty() || items.getFirst().workItemVersion() == null
+                    || items.getFirst().workItemVersion() < 0 || items.getFirst().workItemVersion() == Long.MAX_VALUE)
+                throw unavailable("Formal delivery work item is unavailable");
+            result.add(view(delivery, items, task.getTaskVersion(), items.getFirst().workItemVersion()));
         }
         return List.copyOf(result);
     }
 
     private static AgentTaskFormalDeliveryViewDTO view(AgentTaskFormalDeliveryEntity delivery,
-            List<AgentTaskFormalDeliveryItemEntity> rows, long taskVersion, long workItemVersion) {
+            List<AgentTaskFormalDeliveryDao.DisplayItem> rows, long taskVersion, long workItemVersion) {
         if (rows == null || rows.isEmpty() || rows.size() > MAX_ITEMS) {
             throw unavailable("Formal delivery item catalog is unavailable");
         }
         List<AgentTaskFormalDeliveryItemDTO> items = new ArrayList<>(rows.size());
         for (int index = 0; index < rows.size(); index++) {
-            AgentTaskFormalDeliveryItemEntity row = rows.get(index);
-            if (row == null || !delivery.getDeliveryId().equals(row.getDeliveryId())
-                    || !Objects.equals(index, row.getItemOrder())
-                    || !exact(row.getArtifactId(), 100) || row.getArtifactVersion() == null
-                    || row.getArtifactVersion() < 1 || row.getContentHash() == null
-                    || !row.getContentHash().matches("[0-9a-f]{64}")
-                    || !text(row.getPurpose(), 255)) {
+            var row = rows.get(index);
+            if (row == null || !delivery.getDeliveryId().equals(row.deliveryId())
+                    || !Objects.equals(index, row.itemOrder())
+                    || !exact(row.artifactId(), 100) || row.artifactVersion() == null
+                    || row.artifactVersion() < 1 || row.contentHash() == null
+                    || !row.contentHash().matches("[0-9a-f]{64}")
+                    || !text(row.purpose(), 255)) {
                 throw unavailable("Formal delivery item data is invalid");
             }
             AgentTaskFormalDeliveryItemDTO item = new AgentTaskFormalDeliveryItemDTO();
-            item.setArtifactId(row.getArtifactId());
-            item.setArtifactVersion(row.getArtifactVersion());
-            item.setContentHash(row.getContentHash());
-            item.setPurpose(row.getPurpose());
+            item.setArtifactId(row.artifactId());
+            item.setArtifactVersion(row.artifactVersion());
+            item.setContentHash(row.contentHash());
+            item.setPurpose(row.purpose());
+            item.setDisplay(display(row));
             items.add(item);
         }
         AgentTaskFormalDeliveryViewDTO value = new AgentTaskFormalDeliveryViewDTO();
@@ -142,6 +149,28 @@ public class AgentTaskFormalDeliveryReadServiceImpl implements AgentTaskFormalDe
         value.setReviewReason(delivery.getReviewReason()); value.setTaskVersion(taskVersion);
         value.setWorkItemVersion(workItemVersion); value.setReplayed(false); value.setItems(List.copyOf(items));
         return value;
+    }
+
+    private static final JsonMapper JSON = JsonMapper.builder().build();
+    static AgentTaskFormalDeliveryItemDTO.Display display(AgentTaskFormalDeliveryDao.DisplayItem item) {
+        if (item.title() == null)
+            return new AgentTaskFormalDeliveryItemDTO.Display(null, null, null, "VERSION_UNAVAILABLE");
+        if (item.inlineByteLength() != null)
+            return new AgentTaskFormalDeliveryItemDTO.Display(item.title(), "text/plain", item.inlineByteLength(), null);
+        if (item.storageMetadata() != null) {
+            try {
+                var metadata = JSON.readTree(item.storageMetadata());
+                if (metadata == null) return new AgentTaskFormalDeliveryItemDTO.Display(item.title(), null, null, "METADATA_UNAVAILABLE");
+                var length = metadata.path("byteLength");
+                var mime = metadata.path("mimeType");
+                if (length.isIntegralNumber() && length.canConvertToLong() && length.longValue() >= 0
+                        && mime.isTextual() && mime.textValue().matches("[a-z0-9][a-z0-9!#$&^_.+-]{0,63}/[a-z0-9][a-z0-9!#$&^_.+-]{0,63}"))
+                    return new AgentTaskFormalDeliveryItemDTO.Display(item.title(), mime.textValue(), length.longValue(), null);
+            } catch (tools.jackson.core.JacksonException invalid) {
+                // Display metadata is not execution authority; one damaged label cannot erase the batch.
+            }
+        }
+        return new AgentTaskFormalDeliveryItemDTO.Display(item.title(), null, null, "METADATA_UNAVAILABLE");
     }
 
     private static void requireTask(AgentTaskMetaEntity task, String tenantId, String clientId,
@@ -187,16 +216,6 @@ public class AgentTaskFormalDeliveryReadServiceImpl implements AgentTaskFormalDe
                 && (delivery.getReviewedAt() == null || delivery.getReviewedAt() <= 0
                         || !text(delivery.getReviewReason(), 4_000))) {
             throw unavailable("Rework formal delivery has an invalid review");
-        }
-    }
-
-    private static void requireWorkItem(AgentTaskWorkItemEntity item, String tenantId,
-            String clientId, String ownerJiacn, String taskId, AgentTaskFormalDeliveryEntity delivery) {
-        if (item == null || !tenantId.equals(item.getTenantId()) || !clientId.equals(item.getClientId())
-                || !ownerJiacn.equals(item.getOwnerJiacn()) || !taskId.equals(item.getTaskId()) || !delivery.getWorkItemId().equals(item.getWorkItemId())
-                || item.getVersion() == null || item.getVersion() < 0
-                || item.getVersion() == Long.MAX_VALUE) {
-            throw unavailable("Formal delivery work item is unavailable");
         }
     }
 

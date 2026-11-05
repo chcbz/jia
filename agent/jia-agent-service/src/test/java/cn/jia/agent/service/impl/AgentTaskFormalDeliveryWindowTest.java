@@ -14,7 +14,7 @@ class AgentTaskFormalDeliveryWindowTest {
     final AgentTaskFormalDeliveryDao dao = mock(AgentTaskFormalDeliveryDao.class);
     final AgentTaskMetaDao tasks = mock(AgentTaskMetaDao.class);
     final AgentTaskWorkItemDao work = mock(AgentTaskWorkItemDao.class);
-    final AgentTaskFormalDeliveryReadServiceImpl service = new AgentTaskFormalDeliveryReadServiceImpl(dao, tasks, work);
+    final AgentTaskFormalDeliveryReadServiceImpl service = new AgentTaskFormalDeliveryReadServiceImpl(dao, tasks);
     void authorize() {
         var task = new AgentTaskMetaEntity().setTaskId("task").setOwnerJiacn("owner").setTaskVersion(7L);
         task.setTenantId("0"); task.setClientId("client");
@@ -22,10 +22,10 @@ class AgentTaskFormalDeliveryWindowTest {
         var item = new AgentTaskWorkItemEntity().setTaskId("task").setWorkItemId("work").setOwnerJiacn("owner").setVersion(1L);
         item.setTenantId("0"); item.setClientId("client");
         when(work.findByTaskAndWorkItemId("0", "client", "owner", "task", "work")).thenReturn(item);
-        when(dao.listItems(eq("0"), eq("client"), anyString())).thenAnswer(call -> {
-            var row = new AgentTaskFormalDeliveryItemEntity().setDeliveryId(call.getArgument(2)).setArtifactId("artifact")
-                .setArtifactVersion(1).setContentHash("a".repeat(64)).setPurpose("result").setItemOrder(0);
-            row.setTenantId("0"); row.setClientId("client"); return List.of(row);
+        when(dao.listDisplayItems(eq("0"), eq("client"), eq("owner"), eq("task"), anyList())).thenAnswer(call -> {
+            List<String> ids = call.getArgument(4);
+            return ids.stream().map(id -> new AgentTaskFormalDeliveryDao.DisplayItem(id, 0, "artifact", 1,
+                    "a".repeat(64), "result", 1L, "result.txt", 12L, null)).toList();
         });
     }
     AgentTaskFormalDeliveryEntity delivery(long revision, String state) {
@@ -66,12 +66,32 @@ class AgentTaskFormalDeliveryWindowTest {
         });
         var first=service.historyForTaskOwner("0","client","owner","task",null);
         assertEquals(20,first.items().size()); assertEquals("186",first.nextCursor()); assertTrue(first.hasMore());
-        verify(dao, times(20)).listItems(anyString(),anyString(),anyString());
+        verify(dao).listDisplayItems(eq("0"),eq("client"),eq("owner"),eq("task"),argThat(ids -> ids.size() == 20 && !ids.contains("d-185")));
+        verifyNoInteractions(work);
         verify(dao, never()).listItems("0","client","d-185");
         int count=20; var page=first;
         while(page.hasMore()) { page=service.historyForTaskOwner("0","client","owner","task",Long.valueOf(page.nextCursor()));count+=page.items().size(); }
         assertEquals(205,count);assertNull(page.nextCursor());
-        verify(dao, times(205)).listItems(anyString(),anyString(),anyString());
+        verify(dao, times(11)).listDisplayItems(eq("0"),eq("client"),eq("owner"),eq("task"),anyList());
+        verify(dao, never()).listItems(anyString(),anyString(),anyString());
         verify(dao, never()).listTaskDeliveries(anyString(),anyString(),anyString(),anyInt());
     }
+    @Test void fixedVersionMetadataDoesNotRequireContentOrManagedStorageReads() {
+        authorize();
+        when(dao.listTaskDeliveryWindow("0","client","task","submitted",null,2)).thenReturn(List.of(delivery(1,"submitted")));
+        var display = service.currentForTaskOwner("0","client","owner","task",false).getItems().getFirst().getDisplay();
+        assertEquals("result.txt", display.title()); assertEquals("text/plain", display.contentMimeType());
+        assertEquals(12L, display.contentByteLength()); assertNull(display.unavailableReason());
+        verifyNoInteractions(work);
+    }
+    @Test void missingVersionAndMalformedMetadataAreItemLocalNotBatchFailures() {
+        var missing = new AgentTaskFormalDeliveryDao.DisplayItem("d",0,"artifact",1,"a".repeat(64),"result",1L,null,null,null);
+        assertEquals("VERSION_UNAVAILABLE", AgentTaskFormalDeliveryReadServiceImpl.display(missing).unavailableReason());
+        var malformed = new AgentTaskFormalDeliveryDao.DisplayItem("d",0,"artifact",1,"a".repeat(64),"result",1L,"report",null,"{");
+        assertEquals("METADATA_UNAVAILABLE", AgentTaskFormalDeliveryReadServiceImpl.display(malformed).unavailableReason());
+        var managed = new AgentTaskFormalDeliveryDao.DisplayItem("d",0,"artifact",1,"a".repeat(64),"result",1L,"report.pdf",null,
+                "{\"schemaVersion\":1,\"byteLength\":123,\"mimeType\":\"application/pdf\"}");
+        assertEquals(123L, AgentTaskFormalDeliveryReadServiceImpl.display(managed).contentByteLength());
+    }
+
 }

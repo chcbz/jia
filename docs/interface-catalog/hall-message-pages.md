@@ -4,7 +4,7 @@
 
 `GET /chat/conversation/messages?id=<conversationId>&cursor=<createTime>:<messageId>`
 
-- cursor可省略，首次取最新50条；否则严格取该排序键以前50条。按(create_time,id)倒序LIMIT 51查库，以额外一条判断hasMore，响应items正序，nextCursor为本页最早消息键，仅hasMore时非null。不COUNT、无OFFSET、不自动翻完，不以页大小拒绝长会话。
+- cursor可省略，首次取最新20条；否则严格取该排序键以前20条。按(create_time,id)倒序LIMIT 21查库，以额外一条判断hasMore，响应items正序，nextCursor为本页最早消息键，仅hasMore时非null。不COUNT、无OFFSET、不自动翻完，不以页大小拒绝长会话。
 - data: `{items: [...既有ConversationMessageResponse], hasMore: boolean, nextCursor: string|null}`。消息ID保持十进制字符串，附件parts仅批量查询本页消息；沿用现有live parent及owner/client/tenant隔离和任务线程禁入，不重新逐行鉴权。
 - cursor为无授权含义的排序位置，格式为两个非负/正规范十进制long(createTime>=0,id>0)；schema允许的无时间戳记录以n:id标识，按SQL NULL最后规则读取，不伪造创建时间，无效参数400；不允许注入SQL。游标不代替身份，始终在已授权会话内查询。新消息到达不改变旧页边界；同时间戳以id断开。
 - 保留旧content接口供未迁移调用方，本次聚义厅改用messages；不以此声称整个系统无全量读取。
@@ -121,7 +121,7 @@
 
 ### 主议事页消费者
 
-- JuyiHall的显示集合由已加载消息的requestId与当前活动requestId构成；首次通常来自最新50条消息。请求记录通过`refreshWindow`每批最多100项取得；旧消息显式加载后只补新增请求，不自动发现其他历史。
+- JuyiHall的显示集合由已加载消息的requestId与当前活动requestId构成；首次通常来自最新20条消息。请求记录通过`refreshWindow`每批最多100项取得；旧消息显式加载后只补新增请求，不自动发现其他历史。
 - 只读这些请求的typed详情，并补**直接ACTION执行子请求**（执行没有独立聊天消息）；不沿review child链递归读取整个后续历史。SSE事实事件继续定向刷新；token文本变化不改变请求ID集合，不触发该加载路径。
 - `typed.refresh`不再追加sessionStorage中所有ACCEPTED receipt；已知路由的显示读取也不逐条反复解析整个本地receipt历史。UNKNOWN原请求恢复仍不变；此条不声明所有本地状态存储已做容量优化。
 - Inline成果组件复用父页面已读的请求快照和typed cards，只移除`purpose/key`两个展示注解后按原文字成果映射处理；不二次GET请求详情/typed-outcome，不构造全历史交付图。执行结果与文件清单仍按具体可见请求读取，身份/摘要保护保留。
@@ -137,7 +137,7 @@
 
 ## 2026-11-05 取消事项文字历史窗口候选
 
-Web `useHallTerminalTextHistory`复用现有owner/task会话发现，但不扫描完整请求目录；首读最近50条消息，按metadata中的requestId批量取得原请求快照，仅对已持久化CHAT读取一次typed成果，不重复GET请求详情。显式加载旧页只补新增ID，普通CHAT无typed成果的404不作为错误。空窗口不是全历史为空；旧页/详情失败保留已读成果并重试当前窗口，不跳过失败页。显式刷新重置窗口，身份/事项切换及卸载隔离迟到响应。无新增接口、轮询、SSE或持久缓存。
+Web `useHallTerminalTextHistory`复用现有owner/task会话发现，但不扫描完整请求目录；首读最近20条消息，按metadata中的requestId批量取得原请求快照，仅对已持久化CHAT读取一次typed成果，不重复GET请求详情。显式加载旧页只补新增ID，普通CHAT无typed成果的404不作为错误。空窗口不是全历史为空；旧页/详情失败保留已读成果并重试当前窗口，不跳过失败页。显式刷新重置窗口，身份/事项切换及卸载隔离迟到响应。无新增接口、轮询、SSE或持久缓存。
 
 正式验收面板的完整因果图不变。轻量Web465项通过，仅证明候选消费者行为；Java/真实数据库/Flow/上线均未完成，不能据此声明接口已发布或实际延迟下降。
 
@@ -155,3 +155,18 @@ BountyAcceptancePanel保留父页面deliveryReview的正式currentDelivery/histo
 - Web `useHallDeliveryReview`独立管理history窗口，`context`仅当前权威，`historyContext`只供BountyAcceptancePanel/HallCompletedRecords展示。首读/确认验收不发历史请求；展开读一页，更多显式追加；失败保留窗口并重试同cursor，摘要不符不推进。身份/事项/任务版本变化/卸载取消并隔离迟到页。旧Context v1仍按其明确的完整history消费，不探测新history接口；因此发布应Web先、API后，不让旧Web接收schema2。
 - 完整双端公共信封fixture `delivery-review-pages.json`，复用原批次摘要向量；Java Controller/source/mapper/window测试覆盖授权、cursor、只读actions、lookahead不hydrate、205批逐页及多submitted冲突，均待Flow运行。旧其他调用者的`listForTaskOwner`原100上限未扩改；本轮只收口聚义厅review路径。
 - 剩余独立读取：HallCompletedRecords还会为固定成果元数据补齐自动翻outputs页，以及按已加载记录取原成果名称；本轮没有宣称这些路径已经有界。此处完成为源码候选，非线上完成。
+
+## 2026-11-06 候选：正式交付页直接提供固定版本展示元数据
+
+`delivery-review-context`及`delivery-review-history`的每个item增加可空`display`：
+
+```json
+{"title":"正式文本.txt","contentMimeType":"text/plain","contentByteLength":12,"unavailableReason":null}
+```
+
+- `display`不参与batchSha256，不改变写命令、验收CAS、source或原`unavailableReason`。历史/混合响应可无此字段；新Web按已声明的可选字段接收，不猜测最新版、不自动目录补查。
+- 版本缺失/hash不匹配：display的title/MIME/size为空，原因VERSION_UNAVAILABLE；元数据缺失/无法解析：尽量保留title，原因METADATA_UNAVAILABLE。仅代表显示/预览可用性，不更改已提交交付/验收事实。
+- 后端先授权task owner并选择交付窗口，再一次集合查询正式item+工作项版本+精确artifact版本的元数据。仅把DB长度/元数据取入应用，不加载内容或storageUri，不在GET做内容sha重算。已有内容接口继续负责下载/预览的授权及内容完整性。
+- Chat展示来源改用页级promotion、selection、workspace查询（有promotion时3次，否则2次），不逐批读取操作回执重算摘要、不逐文件查询workspace。写入验收事务仍调用原sourceItems校验，不把展示projection当写授权。
+- 正文页级投影、议事SSE衔接与前端长列表仍未完成；本节不能标为整个历史优化已完成。
+- 共享fixture两端`delivery-review-pages.json`同步，当前SHA-256为`9afd79b5b93f22252ef696422c35784cf79d0fca2d45ffc980131c416b0e8e80`。Java/真实MySQL/云端验证待执行；本候选未部署。旧Web严格字段检查尚不认识display，最终统一发布须核对Web先行兼容及旧页面刷新，不能直接沿用未核实的API先行顺序。
