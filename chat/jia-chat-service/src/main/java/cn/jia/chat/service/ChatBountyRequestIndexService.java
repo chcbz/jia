@@ -3,6 +3,8 @@ package cn.jia.chat.service;
 import cn.jia.agent.entity.AgentTaskMetaEntity;
 import cn.jia.chat.dao.ChatConversationDao;
 import cn.jia.chat.deliberation.ChatBountyRequestIndexStore;
+import cn.jia.chat.deliberation.ChatRequestEntity;
+import cn.jia.chat.deliberation.ChatTurnEntity;
 import cn.jia.chat.entity.ChatConversationEntity;
 import cn.jia.core.entity.JsonRequestPage;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -21,6 +23,8 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 /** Owner-authoritative discovery of all persisted requests in one bounty conversation generation. */
 @Service
@@ -48,7 +52,6 @@ public class ChatBountyRequestIndexService {
     private final ChatConversationDao conversations;
     private final Object taskRoots;
     private final Method findTaskRoot;
-    private final ChatDeliberationService deliberations;
 
     /**
      * AgentTaskMetaDao is deliberately reached through its existing named bean because the chat
@@ -57,12 +60,10 @@ public class ChatBountyRequestIndexService {
      */
     public ChatBountyRequestIndexService(ChatBountyRequestIndexStore store,
             ChatConversationDao conversations,
-            @Qualifier("agentTaskMetaDaoImpl") Object taskRoots,
-            ChatDeliberationService deliberations) {
+            @Qualifier("agentTaskMetaDaoImpl") Object taskRoots) {
         this.store = Objects.requireNonNull(store, "store");
         this.conversations = Objects.requireNonNull(conversations, "conversations");
         this.taskRoots = Objects.requireNonNull(taskRoots, "taskRoots");
-        this.deliberations = Objects.requireNonNull(deliberations, "deliberations");
         try {
             this.findTaskRoot = taskRoots.getClass().getMethod("findByTaskIdInOwnerScope",
                     String.class, String.class, String.class, String.class);
@@ -107,17 +108,17 @@ public class ChatBountyRequestIndexService {
                     ? rows.subList(0, parsed.pageSize()) : rows;
             List<Entry> entries = new ArrayList<>(delivered.size());
             Set<String> requestIds = new HashSet<>();
+            var projections = store.projections(sqlScope, delivered);
+            Map<Long, ChatRequestEntity> requests = projections.requests().stream()
+                    .collect(Collectors.toMap(ChatRequestEntity::getId, value -> value));
+            var turns = projections.turns().stream().collect(Collectors.groupingBy(ChatTurnEntity::getRequestId));
+            var steps = projections.steps().stream().collect(Collectors.groupingBy(ChatBountyRequestIndexStore.StepRow::requestId));
             for (ChatBountyRequestIndexStore.Row row : delivered) {
                 if (!requestIds.add(row.requestId())) throw unavailable();
-                ChatDeliberationService.RequestView request;
-                try {
-                    request = deliberations.getRequest(tenantId, ownerJiacn, clientId, row.requestId());
-                } catch (ChatDeliberationException failure) {
-                    if (failure.reason() == ChatDeliberationException.Reason.NOT_FOUND_OR_FORBIDDEN) {
-                        throw conflict(failure);
-                    }
-                    throw unavailable(failure);
-                }
+                ChatRequestEntity stored = requests.get(row.ordinal());
+                if (stored == null) throw conflict();
+                var request = presentation(stored, turns.getOrDefault(row.requestId(), List.of()),
+                        steps.getOrDefault(row.requestId(), List.of()));
                 requireProjection(request, row, scope.taskId());
                 entries.add(new Entry(Long.toString(row.ordinal()), request));
             }
@@ -132,6 +133,23 @@ public class ChatBountyRequestIndexService {
         } catch (RuntimeException failure) {
             throw unavailable(failure);
         }
+    }
+
+    private static ChatDeliberationService.RequestView presentation(ChatRequestEntity request,
+            List<ChatTurnEntity> turns, List<ChatBountyRequestIndexStore.StepRow> steps) {
+        if ("PLANNING".equals(request.getAggregateState()) && steps.isEmpty()) throw unavailable();
+        return new ChatDeliberationService.RequestView(request.getRequestId(), Long.toString(request.getRequestRevision()),
+                request.getConversationId(), Long.toString(request.getConversationGeneration()),
+                Long.toString(request.getUserMessageId()), request.getAggregateState(), Long.toString(request.getStateVersion()),
+                turns.stream().map(turn -> new ChatDeliberationService.TurnView(turn.getTurnId(), turn.getRequestId(),
+                        Long.toString(turn.getRequestRevision()), turn.getConversationId(), Long.toString(turn.getConversationGeneration()),
+                        turn.getTargetAgentId(), turn.getSnapshotId(), turn.getDispatchId(), turn.getRoute(), turn.getState(),
+                        Long.toString(turn.getStateVersion()), Long.toString(turn.getLastDeltaSeq()), turn.getTerminalReason(),
+                        turn.getFinalMessageId() == null ? null : Long.toString(turn.getFinalMessageId()),
+                        Long.toString(turn.getCreatedAt()), Long.toString(turn.getUpdatedAt()))).toList(),
+                steps.stream().map(step -> new ChatDeliberationService.StepView(step.stepId(), Long.toString(step.stepNumber()),
+                        step.taskId(), Long.toString(step.assignmentRevision()), step.targetAgentId(), step.kind(), step.state(),
+                        Long.toString(step.stateVersion()), step.executionIntentId(), step.executionId(), step.executionState())).toList());
     }
 
     private AgentTaskMetaEntity taskRoot(String tenant, String client, String owner, String taskId) {
