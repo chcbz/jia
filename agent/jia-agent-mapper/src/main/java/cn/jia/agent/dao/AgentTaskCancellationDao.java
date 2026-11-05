@@ -10,7 +10,7 @@ public interface AgentTaskCancellationDao {
     List<AgentTaskExecutionGrantEntity> lockGrants(String tenantId, String clientId, String ownerJiacn, String taskId);
     List<cn.jia.agent.entity.AgentTaskBountyBootstrapOutboxEntity> lockBootstraps(
             String tenantId, String clientId, String ownerJiacn, String taskId);
-    int cancelRetryBootstrap(String tenantId, String clientId, String ownerJiacn,
+    int cancelQueuedBootstrap(String tenantId, String clientId, String ownerJiacn,
             String taskId, long id, long version, long now);
     boolean hasMoneyFacts(String tenantId, String clientId, String ownerJiacn, String taskId);
     boolean hasExecutionFacts(String tenantId, String clientId, String ownerJiacn, String taskId);

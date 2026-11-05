@@ -178,12 +178,19 @@ class AgentTaskCancellationPersistenceTest {
     }
     @Test void retryBootstrapBecomesDeadWithoutAttemptMutationClaimedNeverForceCancelled() {
         jdbc.update("INSERT INTO agent_task_bounty_bootstrap_outbox VALUES(5,'0','client','owner','417','RETRY',10,100,NULL,NULL,NULL,NULL,999,'old',NULL,1,0)");
-        var q=query("cancelRetryBootstrap",scope()); assertEquals(1,jdbc.update(q.sql(),q.params()));
+        var q=query("cancelQueuedBootstrap",scope()); assertEquals(1,jdbc.update(q.sql(),q.params()));
         assertEquals("DEAD",jdbc.queryForObject("SELECT status FROM agent_task_bounty_bootstrap_outbox",String.class));
         assertEquals(100,jdbc.queryForObject("SELECT attempt_count FROM agent_task_bounty_bootstrap_outbox",Integer.class));
         assertEquals("TASK_CANCELLED",jdbc.queryForObject("SELECT last_error_code FROM agent_task_bounty_bootstrap_outbox",String.class));
         assertEquals(0,jdbc.update(q.sql(),q.params()));
         jdbc.update("UPDATE agent_task_bounty_bootstrap_outbox SET status='CLAIMED',version=10,lease_owner='inflight',lease_until=1100");
+        assertEquals(0,jdbc.update(q.sql(),q.params()));
+    }
+    @Test void pendingBootstrapClosesWithZeroAttemptsAndCannotBeCancelledTwice() {
+        jdbc.update("INSERT INTO agent_task_bounty_bootstrap_outbox VALUES(5,'0','client','owner','417','PENDING',10,0,NULL,NULL,NULL,NULL,NULL,NULL,NULL,1,0)");
+        var q=query("cancelQueuedBootstrap",scope()); assertEquals(1,jdbc.update(q.sql(),q.params()));
+        assertEquals("DEAD",jdbc.queryForObject("SELECT status FROM agent_task_bounty_bootstrap_outbox",String.class));
+        assertEquals(0,jdbc.queryForObject("SELECT attempt_count FROM agent_task_bounty_bootstrap_outbox",Integer.class));
         assertEquals(0,jdbc.update(q.sql(),q.params()));
     }
     @Test void productionDaoNeverIgnoresMissingSchemaOrOrphanOutbox() {

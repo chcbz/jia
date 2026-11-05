@@ -7,7 +7,7 @@ import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 import java.util.List;
 
-/** GSS-CANCEL-20261010: current scoped facts, no DDL/payload reads; only unleased RETRY bootstrap closes. */
+/** GSS-CANCEL-20261010: current scoped facts, no DDL/payload reads; only unleased PENDING/RETRY bootstrap closes. */
 public interface AgentTaskCancellationMapper {
     String SCOPE = " WHERE tenant_id=#{tenantId} AND client_id=#{clientId} AND owner_jiacn=#{ownerJiacn}"
             + " AND task_id=#{taskId}" + AgentTaskExecutionGrantMapper.EXACT_SCOPE
@@ -78,18 +78,18 @@ public interface AgentTaskCancellationMapper {
     List<cn.jia.agent.entity.AgentTaskBountyBootstrapOutboxEntity> lockBootstraps(@Param("tenantId") String tenantId, @Param("clientId") String clientId,
             @Param("ownerJiacn") String ownerJiacn, @Param("taskId") String taskId);
 
-    // RETRY has real attempts; use the existing DEAD disposition, without inventing an attempt.
-    // PENDING(0 attempts) and CLAIMED are outside this bounded queue-cancellation slice.
+    // Close queued admission only. Preserve the real attempt count, including never-claimed zero.
+    // CLAIMED remains fenced by its worker lease; cancellation never steals an in-flight claim.
     @Update("""
             UPDATE agent_task_bounty_bootstrap_outbox
             SET status='DEAD',next_retry_at=NULL,last_error_code='TASK_CANCELLED',
                 reconciled_at=GREATEST(#{now},created_at),version=version+1,update_time=#{now}
             """ + SCOPE + """
-            AND id=#{id} AND version=#{version} AND status='RETRY' AND attempt_count>0
+            AND id=#{id} AND version=#{version} AND status IN ('PENDING','RETRY')
             AND lease_owner IS NULL AND lease_until IS NULL
             AND admitted_conversation_id IS NULL AND admitted_request_id IS NULL
             """)
-    int cancelRetryBootstrap(@Param("tenantId") String tenantId, @Param("clientId") String clientId,
+    int cancelQueuedBootstrap(@Param("tenantId") String tenantId, @Param("clientId") String clientId,
             @Param("ownerJiacn") String ownerJiacn, @Param("taskId") String taskId, @Param("id") long id,
             @Param("version") long version, @Param("now") long now);
 

@@ -69,6 +69,7 @@ class AgentTaskBillingMySqlTransactionTest {
     private AgentTaskExecutionGrantServiceImpl assignment;
     private AgentTaskFormalDeliveryDecisionService decisions;
     private AgentTaskCancellationService cancellation;
+    private AgentTaskBountyBootstrapOutboxDao outbox;
     private AgentTaskEventAfterCommitPublisher publisher;
     private final AgentTaskEventBroker broker = mock(AgentTaskEventBroker.class);
     private String failEvent;
@@ -156,7 +157,7 @@ class AgentTaskBillingMySqlTransactionTest {
                 1, "Fixture title", "Fixture description", "a".repeat(64), "CREATE");
         when(requirements.requireCurrent(any(), eq(TASK), eq(1L))).thenReturn(requirement);
         when(requirements.freezeCurrent(any(), eq(TASK), eq(1L))).thenReturn(requirement);
-        var outbox = spy(new AgentTaskBountyBootstrapOutboxDaoImpl(sql.getMapper(AgentTaskBountyBootstrapOutboxMapper.class)));
+        outbox = spy(new AgentTaskBountyBootstrapOutboxDaoImpl(sql.getMapper(AgentTaskBountyBootstrapOutboxMapper.class)));
         doAnswer(call -> {
             Object written = call.callRealMethod();
             if (failBootstrap) throw new InjectedFailure();
@@ -311,6 +312,49 @@ class AgentTaskBillingMySqlTransactionTest {
     }
 
     @Test
+    void pendingBootstrapCancellationRefundsWithoutInventingAttemptAndCannotBeClaimed() throws Exception {
+        prepareCancellation(); assign();
+        var receipt = cancel(); assertCancelled();
+        assertEquals(0, jdbc.queryForObject("SELECT attempt_count FROM agent_task_bounty_bootstrap_outbox", Integer.class));
+        assertEquals(receipt, cancel());
+        new TransactionTemplate(manager).executeWithoutResult(status ->
+                assertNull(outbox.findClaimableForUpdate(TENANT, CLIENT, OWNER, System.currentTimeMillis())));
+    }
+
+    @Test
+    void claimVersusPendingCancellationCannotRefundAnInflightBootstrap() throws Exception {
+        prepareCancellation(); assign();
+        var start = new CountDownLatch(1);
+        try (var pool = Executors.newFixedThreadPool(2)) {
+            var cancelled = pool.submit(() -> {
+                start.await();
+                try { cancel(); return true; }
+                catch (cn.jia.agent.exception.AgentTaskStateException expected) {
+                    assertEquals(cn.jia.agent.exception.AgentTaskStateException.Reason.INVALID_TRANSITION, expected.getReason());
+                    return false;
+                }
+            });
+            var claimed = pool.submit(() -> {
+                start.await();
+                return new TransactionTemplate(manager).execute(status -> {
+                    long now = System.currentTimeMillis();
+                    var row = outbox.findClaimableForUpdate(TENANT, CLIENT, OWNER, now);
+                    return row != null && outbox.claim(row, "fixture-worker", now + 30_000, now);
+                });
+            });
+            start.countDown();
+            boolean didCancel = cancelled.get(20, TimeUnit.SECONDS);
+            assertNotEquals(didCancel, claimed.get(20, TimeUnit.SECONDS));
+            if (didCancel) assertCancelled();
+            else {
+                assertEquals("assigned", taskState()); assertEquals("HELD", charge());
+                assertEquals(50, wallet(jdbc)); assertEquals(1, count("economy_transaction"));
+                assertEquals("CLAIMED", jdbc.queryForObject("SELECT status FROM agent_task_bounty_bootstrap_outbox", String.class));
+            }
+        }
+    }
+
+    @Test
     void cancellationEventFailureRestoresMoneyGrantBootstrapAndChildren() throws Exception {
         prepareCancellation(); assign(); prepareRetry(); clearInvocations(broker);
         int events = count("agent_task_event");
@@ -394,7 +438,7 @@ class AgentTaskBillingMySqlTransactionTest {
         String schema = Files.readString(source);
         int start = schema.indexOf("CREATE TABLE " + (ifNotExists ? "IF NOT EXISTS " : "") + table + " (");
         assertTrue(start >= 0, table);
-        jdbc.execute(schema.substring(start, schema.indexOf(";", start)));
+        jdbc.execute(schema.substring(start, schema.indexOf(";\n", start)));
     }
 
     private void prepareRetry() {

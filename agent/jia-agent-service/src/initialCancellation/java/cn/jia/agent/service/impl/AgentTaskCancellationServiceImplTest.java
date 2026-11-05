@@ -93,7 +93,7 @@ class AgentTaskCancellationServiceImplTest {
     void noWrites() {
         verifyNoInteractions(states,grants,billing);
         verify(dao,never()).releaseTaskOccupation(anyString(),anyString(),anyString(),anyString(),anyLong());
-        verify(dao,never()).cancelRetryBootstrap(anyString(),anyString(),anyString(),anyString(),anyLong(),anyLong(),anyLong());
+        verify(dao,never()).cancelQueuedBootstrap(anyString(),anyString(),anyString(),anyString(),anyLong(),anyLong(),anyLong());
     }
     @Test void grayCancellationLocksAndMutatesOnlyGrayPartition() {
         root.setTenantId("1");
@@ -208,9 +208,16 @@ class AgentTaskCancellationServiceImplTest {
     }
     @Test void retryBootstrapTerminalizesWithoutInventingAttemptAndAdmittedPreserved() {
         when(dao.lockBootstraps("0","client","owner","417")).thenReturn(List.of(bootstrap("RETRY")));
-        when(dao.cancelRetryBootstrap(eq("0"),eq("client"),eq("owner"),eq("417"),eq(5L),eq(10L),anyLong())).thenReturn(1);
+        when(dao.cancelQueuedBootstrap(eq("0"),eq("client"),eq("owner"),eq("417"),eq(5L),eq(10L),anyLong())).thenReturn(1);
         assertEquals(2,cancel().taskVersion());
-        verify(dao).cancelRetryBootstrap(eq("0"),eq("client"),eq("owner"),eq("417"),eq(5L),eq(10L),anyLong());
+        verify(dao).cancelQueuedBootstrap(eq("0"),eq("client"),eq("owner"),eq("417"),eq(5L),eq(10L),anyLong());
+    }
+    @Test void pendingBootstrapClosesWithoutAttemptOrLease() {
+        when(dao.lockBootstraps("0","client","owner","417")).thenReturn(List.of(
+                bootstrap("PENDING").setAttemptCount(0).setNextRetryAt(null)));
+        when(dao.cancelQueuedBootstrap(eq("0"),eq("client"),eq("owner"),eq("417"),eq(5L),eq(10L),anyLong())).thenReturn(1);
+        assertEquals(2,cancel().taskVersion());
+        verify(dao).cancelQueuedBootstrap(eq("0"),eq("client"),eq("owner"),eq("417"),eq(5L),eq(10L),anyLong());
     }
     @Test void claimedBootstrapEvenExpiredRejected() {
         when(dao.lockBootstraps("0","client","owner","417")).thenReturn(List.of(bootstrap("CLAIMED").setLeaseUntil(1L)));
