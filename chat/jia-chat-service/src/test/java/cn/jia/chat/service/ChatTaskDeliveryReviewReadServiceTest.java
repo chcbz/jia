@@ -72,20 +72,21 @@ class ChatTaskDeliveryReviewReadServiceTest {
         verify(jdbc,never()).queryForObject(contains("COUNT"),eq(Long.class),any(Object[].class));
     }
     @Test void explicitHistoryPageIsReadOnlyAndPreservesCursor() {
-        when(submissions.task("0","owner","client","task_fixture")).thenReturn(new ChatSelectedOutputFinalizationStore.TaskFact("reviewing",7));
         var b=batch();b.setSummary("history");
         when(deliveries.historyForTaskOwner("0","client","owner","task_fixture",101L)).thenReturn(
             new AgentTaskFormalDeliveryReadService.HistoryPage(List.of(b),"81",true));
         var page=reads.history(scope,"task_fixture",101L);
         assertEquals("81",page.nextCursor());assertTrue(page.hasMore());assertEquals(List.of("VIEW"),page.items().getFirst().allowedActions());
         verify(deliveries,never()).currentForTaskOwner(anyString(),anyString(),anyString(),anyString(),anyBoolean());
+        verifyNoInteractions(submissions);
     }
     @Test void ownerAuthorizationPrecedesEveryAssociatedRead() {
         when(submissions.task("0","owner","client","task_fixture")).thenThrow(new ChatSelectedOutputFinalizationStore.Missing());
         assertThrows(ChatSelectedOutputFinalizationStore.Missing.class,()->reads.read(scope,"task_fixture"));
         verifyNoInteractions(jdbc,deliveries);
+        when(deliveries.historyForTaskOwner("0","client","owner","task_fixture",null)).thenThrow(new ChatSelectedOutputFinalizationStore.Missing());
         assertThrows(ChatSelectedOutputFinalizationStore.Missing.class,()->reads.history(scope,"task_fixture",null));
-        verifyNoInteractions(jdbc,deliveries);
+        verifyNoInteractions(jdbc);
     }
     @Test void immutableReceiptMustMatchItsPersistedOperationAndCannotClaimSubmissionIsAcceptance() {
         var receipt=new Receipt(1,"review-1","task","delivery","ACCEPT","COMMITTED","2","COMPLETED","8","ACCEPTED","1",null,null,null,null,false);

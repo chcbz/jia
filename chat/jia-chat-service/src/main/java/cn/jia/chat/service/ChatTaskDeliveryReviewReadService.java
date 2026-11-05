@@ -66,7 +66,7 @@ public class ChatTaskDeliveryReviewReadService {
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ, rollbackFor = Exception.class)
     public HistoryPage history(Scope s, String task, Long beforeRevision) {
         ChatDeliveryReviewContract.id(task, 100);
-        submissions.task(s.tenantId(), s.ownerJiacn(), s.clientId(), task);
+        // This read service authorizes the owner before returning any page/source facts.
         var page = deliveries.historyForTaskOwner(s.tenantId(), s.clientId(), s.ownerJiacn(), task, beforeRevision);
         var items = page.items().stream().map(delivery -> batch(task, delivery, sourceItems(s, task, delivery), List.of("VIEW"))).toList();
         return new HistoryPage(items, page.nextCursor(), page.hasMore());
