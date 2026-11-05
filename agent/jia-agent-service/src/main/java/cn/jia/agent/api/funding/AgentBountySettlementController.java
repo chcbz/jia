@@ -2,9 +2,7 @@ package cn.jia.agent.api.funding;
 
 import cn.jia.core.security.TenantClaimPolicy;
 
-import cn.jia.core.entity.JsonRequest;
 
-import cn.jia.agent.entity.funding.AgentTaskFundingCompleteDTO;
 import cn.jia.agent.service.funding.FundedBountyActor;
 import cn.jia.agent.service.funding.FundedBountyException;
 import cn.jia.agent.service.funding.FundedBountySettlementService;
@@ -18,7 +16,6 @@ import org.springframework.web.bind.annotation.*;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
-import java.util.Set;
 
 @RestController
 @RequestMapping("/agent/tasks/{taskId}")
@@ -33,21 +30,6 @@ public class AgentBountySettlementController {
                 .body(JsonResult.success(service().read(actor, taskId)));
     }
 
-    @PostMapping("/funding/complete")
-    public ResponseEntity<?> complete(@PathVariable String taskId, @RequestBody JsonRequest<Map<String, Object>> protocolRequest,
-            @RequestHeader(value = "Idempotency-Key", required = false) String key, Authentication authentication) {
-        Map<String, Object> body = protocolRequest == null ? null : protocolRequest.data();
-        FundedBountyActor actor = actor(authentication);
-        // No JSON-number coercion, caller fee/recipient override, or ignored extra monetary input.
-        if (body == null || !body.keySet().equals(Set.of("expectedTaskVersion", "actualComputeWen"))
-                || !(body.get("expectedTaskVersion") instanceof String version)
-                || !(body.get("actualComputeWen") instanceof String compute)) {
-            throw new FundedBountyException(HttpStatus.BAD_REQUEST, "BAD_REQUEST", "Exact canonical-string completion body required");
-        }
-        return ResponseEntity.ok().header("Cache-Control", "private, no-store").body(JsonResult.success(
-                service().complete(actor, key, taskId, new AgentTaskFundingCompleteDTO(version, compute))));
-    }
-
     @ExceptionHandler(FundedBountyException.class)
     public ResponseEntity<JsonResult<Void>> rejected(FundedBountyException failure) {
         JsonResult<Void> result = JsonResult.failure(failure.code(), failure.getMessage());
@@ -58,7 +40,7 @@ public class AgentBountySettlementController {
     private FundedBountySettlementService service() {
         FundedBountySettlementService service = services.getIfAvailable();
         if (service == null) throw new FundedBountyException(HttpStatus.SERVICE_UNAVAILABLE,
-                "ECONOMY_PREVIEW_DISABLED", "Bounty settlement preview is disabled");
+                "FUNDED_HISTORY_UNAVAILABLE", "Historical settlement read is unavailable");
         return service;
     }
 

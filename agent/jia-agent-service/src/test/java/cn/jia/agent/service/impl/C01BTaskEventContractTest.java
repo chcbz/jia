@@ -62,8 +62,6 @@ class C01BTaskEventContractTest {
 
     private static final Map<String, Integer> PRODUCTION_APPEND_COUNTS = Map.ofEntries(
             Map.entry("agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentWorkItemPlanServiceImpl.java", 1),
-            Map.entry("agent/jia-agent-service/src/main/java/cn/jia/agent/service/funding/FundedBountyServiceImpl.java", 2),
-            Map.entry("agent/jia-agent-service/src/main/java/cn/jia/agent/service/funding/FundedBountySettlementServiceImpl.java", 1),
             Map.entry("agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentTaskStateServiceImpl.java", 1),
             Map.entry("agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentWorkItemLeaseServiceImpl.java", 1),
             Map.entry("agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentWorkItemReassignmentServiceImpl.java", 1),
@@ -79,8 +77,6 @@ class C01BTaskEventContractTest {
 
     private static final Set<String> ALLOWED_WRITER_IMPORTS = Set.of(
             "agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentWorkItemPlanServiceImpl.java",
-            "agent/jia-agent-service/src/main/java/cn/jia/agent/service/funding/FundedBountyServiceImpl.java",
-            "agent/jia-agent-service/src/main/java/cn/jia/agent/service/funding/FundedBountySettlementServiceImpl.java",
             "agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentTaskStateServiceImpl.java",
             "agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentWorkItemLeaseServiceImpl.java",
             "agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentWorkItemReassignmentServiceImpl.java",
