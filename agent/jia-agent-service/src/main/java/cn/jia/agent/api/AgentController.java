@@ -24,9 +24,6 @@ import cn.jia.agent.entity.AgentTaskTeamRecommendationRequestDTO;
 import cn.jia.agent.entity.AgentTaskReportDTO;
 import cn.jia.agent.entity.AgentTaskSearchDTO;
 import cn.jia.agent.entity.DialogueRequestDTO;
-import cn.jia.agent.entity.funding.AgentTaskClaimRequestDTO;
-import cn.jia.agent.entity.funding.AgentTaskFundingCancelDTO;
-import cn.jia.agent.entity.funding.AgentTaskQuoteRequestDTO;
 import cn.jia.agent.hosting.HostingRentApplicationException;
 import cn.jia.agent.hosting.HostingRentApplicationService;
 import cn.jia.agent.hosting.HostingRentErrors;
@@ -38,11 +35,7 @@ import cn.jia.agent.service.AgentService;
 import cn.jia.agent.service.AgentTaskExecutionGrantException;
 import cn.jia.agent.service.AgentTaskExecutionGrantService;
 import cn.jia.agent.service.HostingRentAdmissionException;
-import cn.jia.agent.service.funding.FundedBountyActor;
 import cn.jia.agent.service.funding.FundedBountyException;
-import cn.jia.agent.service.funding.FundedBountyQuoteClaimService;
-import cn.jia.agent.service.funding.FundedBountyRequestDigest;
-import cn.jia.agent.service.funding.FundedBountyService;
 import cn.jia.agent.service.impl.AgentServiceImpl.AgentBizException;
 import cn.jia.core.entity.JsonResult;
 import cn.jia.core.entity.JsonResultPage;
@@ -51,7 +44,6 @@ import cn.jia.economy.hosting.HostingRentException;
 import com.github.pagehelper.PageInfo;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -71,7 +63,6 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -84,57 +75,21 @@ public class AgentController {
     private final AgentService agentService;
     private final AbilityEvaluationService abilityEvaluationService;
     private final AgentPersonaProvisioningService personaProvisioningService;
-    private final FundedBountyService fundedBountyService;
-    private final FundedBountyQuoteClaimService fundedBountyQuoteClaimService;
     private cn.jia.agent.skill.SkillRosterProjection skillRoster;
     private HostingRentApplicationService hostingRent;
     private AgentTaskExecutionGrantService taskExecutionGrants;
 
     public AgentController(AgentService agentService, AbilityEvaluationService abilityEvaluationService) {
-        this(agentService, abilityEvaluationService, null, (FundedBountyService) null,
-                (FundedBountyQuoteClaimService) null);
-    }
-
-    AgentController(AgentService agentService, AbilityEvaluationService abilityEvaluationService,
-            FundedBountyService fundedBountyService) {
-        this(agentService, abilityEvaluationService, null, fundedBountyService, null);
-    }
-
-    AgentController(AgentService agentService, AbilityEvaluationService abilityEvaluationService,
-            FundedBountyService fundedBountyService,
-            FundedBountyQuoteClaimService fundedBountyQuoteClaimService) {
-        this(agentService, abilityEvaluationService, null,
-                fundedBountyService, fundedBountyQuoteClaimService);
-    }
-
-    public AgentController(AgentService agentService, AbilityEvaluationService abilityEvaluationService,
-            AgentPersonaProvisioningService personaProvisioningService) {
-        this(agentService, abilityEvaluationService, personaProvisioningService,
-                (FundedBountyService) null, (FundedBountyQuoteClaimService) null);
+        this(agentService, abilityEvaluationService, null);
     }
 
     @Autowired
     public AgentController(AgentService agentService, AbilityEvaluationService abilityEvaluationService,
-            AgentPersonaProvisioningService personaProvisioningService,
-            ObjectProvider<FundedBountyService> fundedBountyServiceProvider,
-            ObjectProvider<FundedBountyQuoteClaimService> fundedBountyQuoteClaimServiceProvider) {
-        this(agentService, abilityEvaluationService, personaProvisioningService,
-                Objects.requireNonNull(fundedBountyServiceProvider, "fundedBountyServiceProvider")
-                        .getIfAvailable(),
-                Objects.requireNonNull(fundedBountyQuoteClaimServiceProvider,
-                        "fundedBountyQuoteClaimServiceProvider").getIfAvailable());
-    }
-
-    private AgentController(AgentService agentService, AbilityEvaluationService abilityEvaluationService,
-            AgentPersonaProvisioningService personaProvisioningService,
-            FundedBountyService fundedBountyService,
-            FundedBountyQuoteClaimService fundedBountyQuoteClaimService) {
+            AgentPersonaProvisioningService personaProvisioningService) {
         this.agentService = Objects.requireNonNull(agentService, "agentService");
         this.abilityEvaluationService = Objects.requireNonNull(
                 abilityEvaluationService, "abilityEvaluationService");
         this.personaProvisioningService = personaProvisioningService;
-        this.fundedBountyService = fundedBountyService;
-        this.fundedBountyQuoteClaimService = fundedBountyQuoteClaimService;
     }
 
     @Autowired
@@ -389,58 +344,19 @@ public class AgentController {
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             Authentication authentication) {
         AgentTaskCreateDTO request = protocolRequest == null ? null : protocolRequest.data();
-        if (!hasFundingFields(request)) {
-            var scope = requireJwtScope(authentication);
-            return JsonResult.success(agentService.createTask(new AgentService.TaskOwnerScope(
-                    scope.tenantId(), scope.clientId(), scope.ownerJiacn()), request));
+        var scope = requireJwtScope(authentication);
+        // An old money request must never become an ordinary task or replay a retired debit.
+        if (hasFundingFields(request)) {
+            throw new FundedBountyException(HttpStatus.GONE, "FUNDED_BOUNTY_RETIRED",
+                    "Funded bounty writes are retired; create a matter and confirm its quoted assignee");
         }
-        FundedBountyActor actor = requireMoneyActor(authentication);
-        FundedBountyService service = requireFundedBountyService();
-        return JsonResult.success(service.create(actor, idempotencyKey,
-                FundedBountyRequestDigest.create(request), request));
+        return JsonResult.success(agentService.createTask(new AgentService.TaskOwnerScope(
+                scope.tenantId(), scope.clientId(), scope.ownerJiacn()), request));
     }
 
     @GetMapping("/tasks/{taskId}")
     public Object getTask(@PathVariable String taskId) {
         return JsonResult.success(agentService.getTask(taskId));
-    }
-
-    @PostMapping("/tasks/{taskId}/funding/cancel")
-    public Object cancelTaskFunding(@PathVariable String taskId,
-            @RequestBody JsonRequest<AgentTaskFundingCancelDTO> protocolRequest,
-            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
-            Authentication authentication) {
-        AgentTaskFundingCancelDTO request = protocolRequest == null ? null : protocolRequest.data();
-        FundedBountyActor actor = requireMoneyActor(authentication);
-        FundedBountyService service = requireFundedBountyService();
-        String expected = request == null ? null : request.getExpectedTaskVersion();
-        long expectedVersion = parseCanonicalVersion(expected);
-        return JsonResult.success(service.cancel(actor, idempotencyKey,
-                FundedBountyRequestDigest.cancel(taskId, expected), taskId, expectedVersion));
-    }
-
-    @PostMapping("/tasks/{taskId}/quotes")
-    public Object quoteTask(@PathVariable String taskId,
-            @RequestBody JsonRequest<AgentTaskQuoteRequestDTO> protocolRequest,
-            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
-            Authentication authentication) {
-        AgentTaskQuoteRequestDTO request = protocolRequest == null ? null : protocolRequest.data();
-        FundedBountyActor actor = requireMoneyActor(authentication);
-        FundedBountyQuoteClaimService service = requireFundedBountyQuoteClaimService();
-        return JsonResult.success(EconomyOperationWire.from(service.quote(actor, idempotencyKey,
-                FundedBountyRequestDigest.quote(taskId, request), taskId, request)));
-    }
-
-    @PostMapping("/tasks/{taskId}/claim")
-    public Object claimTask(@PathVariable String taskId,
-            @RequestBody JsonRequest<AgentTaskClaimRequestDTO> protocolRequest,
-            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
-            Authentication authentication) {
-        AgentTaskClaimRequestDTO request = protocolRequest == null ? null : protocolRequest.data();
-        FundedBountyActor actor = requireMoneyActor(authentication);
-        FundedBountyQuoteClaimService service = requireFundedBountyQuoteClaimService();
-        return JsonResult.success(EconomyOperationWire.from(service.claim(actor, idempotencyKey,
-                FundedBountyRequestDigest.claim(taskId, request), taskId, request)));
     }
 
     @PostMapping("/tasks/{taskId}/assign")
@@ -627,65 +543,10 @@ public class AgentController {
         return taskExecutionGrants;
     }
 
-    private FundedBountyService requireFundedBountyService() {
-        if (fundedBountyService == null) {
-            throw new FundedBountyException(HttpStatus.SERVICE_UNAVAILABLE,
-                    "ECONOMY_PREVIEW_DISABLED", "Funded bounty preview is unavailable");
-        }
-        return fundedBountyService;
-    }
-
-    private FundedBountyQuoteClaimService requireFundedBountyQuoteClaimService() {
-        if (fundedBountyQuoteClaimService == null) {
-            throw new FundedBountyException(HttpStatus.SERVICE_UNAVAILABLE,
-                    "ECONOMY_PREVIEW_DISABLED", "Funded bounty quote/claim preview is unavailable");
-        }
-        return fundedBountyQuoteClaimService;
-    }
-
     private static boolean hasFundingFields(AgentTaskCreateDTO request) {
         return request != null && (request.getGrossBountyAmountWen() != null
                 || request.getSettlementPolicy() != null
                 || request.getRequiredSkillRequirements() != null);
-    }
-
-    private static FundedBountyActor requireMoneyActor(Authentication authentication) {
-        if (authentication == null || !authentication.isAuthenticated()
-                || !(authentication instanceof JwtAuthenticationToken jwt)) {
-            throw new FundedBountyException(HttpStatus.UNAUTHORIZED,
-                    "ECONOMY_UNAUTHENTICATED", "Authentication is required");
-        }
-        Map<String, Object> claims = jwt.getToken().getClaims();
-        String subject = requiredMoneyClaim(claims, "sub", 100);
-        if (!exact(authentication.getName(), subject)) {
-            throw new FundedBountyException(HttpStatus.FORBIDDEN,
-                    "ECONOMY_FORBIDDEN", "Authenticated money scope is incomplete");
-        }
-        try {
-            return new FundedBountyActor(TenantClaimPolicy.resolve(claims),
-                    requiredMoneyClaim(claims, "client_id", 50),
-                    requiredMoneyClaim(claims, "jiacn", 50), subject);
-        } catch (IllegalArgumentException denied) {
-            throw new FundedBountyException(HttpStatus.FORBIDDEN,
-                    "ECONOMY_FORBIDDEN", "Authenticated money scope is incomplete");
-        }
-    }
-
-    private static String requiredMoneyClaim(Map<String, Object> claims, String name, int maxBytes) {
-        Object value = claims.get(name);
-        if (!(value instanceof String text) || text.isEmpty() || hasUnpairedSurrogate(text)
-                || text.getBytes(StandardCharsets.UTF_8).length > maxBytes
-                || !text.equals(text.strip())
-                || text.codePoints().anyMatch(Character::isISOControl)) {
-            throw new FundedBountyException(HttpStatus.FORBIDDEN,
-                    "ECONOMY_FORBIDDEN", "Authenticated money scope is incomplete");
-        }
-        return text;
-    }
-
-    private static boolean exact(String left, String right) {
-        return left != null && right != null && MessageDigest.isEqual(
-                left.getBytes(StandardCharsets.UTF_8), right.getBytes(StandardCharsets.UTF_8));
     }
 
     private static boolean hasUnpairedSurrogate(String value) {
@@ -698,23 +559,6 @@ public class AgentController {
             }
         }
         return false;
-    }
-
-    private static long parseCanonicalVersion(String value) {
-        if (value == null || value.isEmpty()
-                || !(value.equals("0") || value.charAt(0) >= '1' && value.charAt(0) <= '9')
-                || value.chars().anyMatch(character -> character < '0' || character > '9')) {
-            throw new FundedBountyException(HttpStatus.BAD_REQUEST,
-                    "BAD_REQUEST", "expectedTaskVersion must be a canonical unsigned decimal string");
-        }
-        try {
-            long parsed = Long.parseLong(value);
-            if (parsed == Long.MAX_VALUE) throw new NumberFormatException();
-            return parsed;
-        } catch (NumberFormatException exception) {
-            throw new FundedBountyException(HttpStatus.BAD_REQUEST,
-                    "BAD_REQUEST", "expectedTaskVersion is outside the supported range");
-        }
     }
 
     private <T> JsonResultPage<T> page(PageInfo<T> pageInfo) {
