@@ -574,7 +574,7 @@ class AgentTaskBountyBootstrapOutboxServiceImplTest {
             var mvc=MockMvcBuilders.standaloneSetup(new AgentTaskDeliberationOperationController(reads,grants)).build();
             mvc.perform(post("/agent/tasks/task-1/point-and-deliberate").principal(jwtToken("owner","client"))
                     .header("Idempotency-Key","point-key").contentType("application/json")
-                    .content("{\"targetAgentId\":\"agent-1\",\"expectedTaskVersion\":\"0\",\"requirementRevision\":\"1\",\"quoteId\":\"quote-1\",\"recommendationId\":\"rec-1\"}"))
+                    .content(java.util.Objects.requireNonNull(getClass().getResourceAsStream("/billing/task-assignment-quote.json")).readAllBytes()))
                     .andExpect(status().isOk()).andExpect(header().string(HttpHeaders.CACHE_CONTROL,"private, no-store"))
                     .andExpect(jsonPath("$.data.schemaVersion").value(2))
                     .andExpect(jsonPath("$.data.inputs[0].version").value("1"))

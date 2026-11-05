@@ -451,10 +451,16 @@ public class AgentController {
         if (!hasV2GrantFields(request)) {
             return JsonResult.success(agentService.assignTask(taskId, request));
         }
-        AgentTaskExecutionGrantService.Scope scope = requireTaskGrantScope(authentication);
+        HostingRentHttp.Actor actor;
+        try { actor = HostingRentHttp.actor(authentication); }
+        catch (HostingRentApplicationException invalid) {
+            throw new AgentTaskExecutionGrantException(AgentTaskExecutionGrantException.Reason.UNAUTHENTICATED,
+                    "Authenticated assignment payer and owner are required");
+        }
+        var scope = new AgentTaskExecutionGrantService.Scope(actor.tenantId(), actor.clientId(), actor.ownerJiacn());
         return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL, "private, no-store")
                 .body(JsonResult.success(requireTaskExecutionGrants().assignAndGrant(
-                        scope, taskId, idempotencyKey, request, requireMoneyActor(authentication).userId())));
+                        scope, taskId, idempotencyKey, request, actor.actorId())));
     }
 
     @PostMapping("/tasks/{taskId}/execution-authorizations/{grantId}/revoke")
