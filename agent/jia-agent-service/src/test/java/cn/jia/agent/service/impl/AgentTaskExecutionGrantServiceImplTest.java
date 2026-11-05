@@ -405,6 +405,8 @@ class AgentTaskExecutionGrantServiceImplTest {
     }
 
     @Test
+    // Fixed digest fixtures include ASSIGN_TASK_QUOTE_V1, the previous assignment digest,
+    // and the selected [quoteId,recommendationId]; do not compute expectations with production code.
     void sameKeySamePayloadReplaysAndDifferentPayloadConflicts() {
         AgentTaskAssignDTO request=request();
         var first=service.assignAndGrant(scope(),"task-1","key-1",request, "payer-1");
@@ -414,7 +416,7 @@ class AgentTaskExecutionGrantServiceImplTest {
         assertEquals(first.getGrantId(),replay.getGrantId());
         assertEquals(1L,first.getAssignmentRevision());
         assertFalse(first.getPaidExecutionAuthorized());
-        assertEquals("db82df399bed89b72c4bacb5d3e0616d4745fcf1e314bf55e4713f4c9f76e963",
+        assertEquals("88175ee435b647e902915df23ff5b5bde862adac9e61148a11333b0c5faa9b39",
                 grants.byAction.values().iterator().next().getRequestHash());
         assertEquals(1,bootstraps.byAction.size());
         AgentTaskBountyBootstrapOutboxEntity intent=bootstraps.byAction.values().iterator().next();
@@ -444,7 +446,7 @@ class AgentTaskExecutionGrantServiceImplTest {
                 stored.getPermittedOperationsJson());
         assertFalse(stored.getAllowOwnTaskDerivedAssets());
         assertNull(stored.getCostAuthorizationRef());
-        assertEquals("7725b9e4962fab28e928a45052eeade3ee9e89a3d10f63bdb5af6077f56f221d",
+        assertEquals("f76e694c3cca8d8f24ae46237a4724589318ed113b1517d3a6d32299c9c46f51",
                 stored.getRequestHash());
         assertEquals(1,bootstraps.byAction.size());
         assertEquals("GENERATE_IMAGE",
@@ -468,7 +470,7 @@ class AgentTaskExecutionGrantServiceImplTest {
                 grant.getPermittedOperations());
         assertEquals("INSPECT_INPUTS",
                 bootstraps.byAction.values().iterator().next().getPermittedOperation());
-        assertEquals("0a999a29f38b5682654947762bc7a2d620de192e2a75591350142c07af3a3599",
+        assertEquals("7eb99709f6940e8749cba5b53b3a2ae226cb2979f0500df70cfc567aee869e0f",
                 grants.byAction.values().iterator().next().getRequestHash());
     }
 
@@ -501,7 +503,7 @@ class AgentTaskExecutionGrantServiceImplTest {
     }
 
     @Test
-    void missingSelectorStillSupportsTheLegacyInspectOnlyRequestAndHashDomain() {
+    void missingSelectorSupportsInspectOnlyWithQuoteBoundHashDomain() {
         AgentTaskAssignDTO request=request();
         request.setRequestedOperations(List.of("INSPECT_INPUTS"));
         var grant=service.assignAndGrant(scope(),"task-1","key-legacy-inspect",request, "payer-1");
@@ -509,7 +511,7 @@ class AgentTaskExecutionGrantServiceImplTest {
         assertEquals(List.of("INSPECT_INPUTS"),grant.getPermittedOperations());
         assertEquals("INSPECT_INPUTS",
                 bootstraps.byAction.values().iterator().next().getPermittedOperation());
-        assertEquals("37b778f9ffac39db3881ddd585c10dc6f63ba44cf8dc080c744b55c6e555a43f",
+        assertEquals("8bf86e98a83b8571d8c2e9662eb708367615ccb5d93e8ed06de3777a52940011",
                 grants.byAction.values().iterator().next().getRequestHash());
     }
 
