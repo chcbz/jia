@@ -51,7 +51,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class FundedBountyQuoteClaimServiceTest {
-    private static final FundedBountyActor ACTOR = new FundedBountyActor("tenant", "client", "tenant", "user");
+    private static final FundedBountyActor ACTOR = new FundedBountyActor("0", "client", "owner", "user");
     private static final String TASK = "task-1";
     private static final String AGENT = "agt_00000000000000000000000000000001";
     private static final String QUOTE = "q_00000000000000000000000000000001";
@@ -62,7 +62,7 @@ class FundedBountyQuoteClaimServiceTest {
         Fixture fixture = fixture(new TrackingTransactionManager());
         AgentTaskQuoteEntity replay = replayQuote();
         when(fixture.quoteMapper.selectQuoteByActorKeyForUpdate(
-                eq("tenant"), eq("client"), eq("USER"), eq("user"),
+                eq("0"), eq("client"), eq("USER"), eq("user"),
                 aryEq(key(0).getBytes(StandardCharsets.US_ASCII))))
                 .thenReturn(replay);
 
@@ -107,7 +107,7 @@ class FundedBountyQuoteClaimServiceTest {
         operation.setReceiptTaskVersion(1L);
         operation.setClaimedAt(100L);
         when(fixture.quoteMapper.selectClaimOperationForUpdate(
-                eq("tenant"), eq("client"), eq("USER"), eq("user"),
+                eq("0"), eq("client"), eq("USER"), eq("user"),
                 aryEq(key(8).getBytes(StandardCharsets.US_ASCII))))
                 .thenReturn(operation);
         fixture.root.setRewardStatus(AgentConstants.TASK_STATUS_RUNNING);
@@ -174,7 +174,7 @@ class FundedBountyQuoteClaimServiceTest {
 
         assertTrue(manager.rolledBack.get());
         assertFalse(manager.committed.get());
-        verify(fixture.quoteMapper).markClaimed("tenant", "client", TASK, QUOTE, 100L);
+        verify(fixture.quoteMapper).markClaimed("0", "client", TASK, QUOTE, 100L);
         verify(fixture.quoteMapper).completeClaimOperation(
                 anyString(), anyString(), anyString(), anyString(), any(), anyLong(), anyLong());
     }
@@ -205,11 +205,11 @@ class FundedBountyQuoteClaimServiceTest {
         Object rootLock = new Object();
         doAnswer(invocation -> {
             synchronized (rootLock) {
-                return ((AgentTaskMutationTransaction.LockedTaskMutation<?>) invocation.getArgument(3))
+                return ((AgentTaskMutationTransaction.LockedTaskMutation<?>) invocation.getArgument(4))
                         .apply(fixture.root);
             }
-        }).when(fixture.mutation).executeWithLockedTaskRoot(
-                anyString(), anyString(), anyString(), any());
+        }).when(fixture.mutation).executeWithLockedTaskRootInOwnerScope(
+                anyString(), anyString(), anyString(), anyString(), any());
         stubSuccessfulAssignment(fixture);
         when(fixture.quoteMapper.markClaimed(anyString(), anyString(), anyString(), anyString(), anyLong()))
                 .thenAnswer(invocation -> {
@@ -272,19 +272,20 @@ class FundedBountyQuoteClaimServiceTest {
 
         AgentTaskMetaEntity root = new AgentTaskMetaEntity();
         root.setTaskId(TASK);
-        root.setTenantId("tenant");
+        root.setTenantId("0");
+        root.setOwnerJiacn("owner");
         root.setClientId("client");
         root.setRewardStatus(AgentConstants.TASK_STATUS_OPEN);
         root.setTaskVersion(0L);
         root.setCurrentEventVersion(0L);
         root.setRequiredAbilities("[]");
-        when(mutation.executeWithLockedTaskRoot(anyString(), anyString(), anyString(), any()))
+        when(mutation.executeWithLockedTaskRootInOwnerScope(anyString(), anyString(), anyString(), anyString(), any()))
                 .thenAnswer(invocation -> ((AgentTaskMutationTransaction.LockedTaskMutation<?>)
-                        invocation.getArgument(3)).apply(root));
+                        invocation.getArgument(4)).apply(root));
 
         AgentTaskFundingEntity funding = new AgentTaskFundingEntity();
         funding.setTaskId(TASK);
-        funding.setTenantId("tenant");
+        funding.setTenantId("0");
         funding.setClientId("client");
         funding.setPayerPrincipalType("USER");
         funding.setPayerPrincipalId("user");
@@ -292,15 +293,15 @@ class FundedBountyQuoteClaimServiceTest {
         funding.setRemainingWen(1_000_000_000L);
         funding.setRequiredSkillRequirements("[]");
         funding.setVersion(1L);
-        when(fundingMapper.selectFundingForUpdate("tenant", "client", TASK)).thenReturn(funding);
+        when(fundingMapper.selectFundingForUpdate("0", "client", TASK)).thenReturn(funding);
         when(identity.lockActiveCanonicalAgentIdsInScope(
-                "tenant", "client", "tenant", List.of(AGENT))).thenReturn(List.of(AGENT));
+                "0", "client", "owner", List.of(AGENT))).thenReturn(List.of(AGENT));
 
         AgentTaskQuoteEntity quote = new AgentTaskQuoteEntity();
         quote.setQuoteId(QUOTE);
         quote.setTaskId(TASK);
         quote.setAgentId(AGENT);
-        quote.setTenantId("tenant");
+        quote.setTenantId("0");
         quote.setClientId("client");
         quote.setPrincipalType("USER");
         quote.setPrincipalId("user");
@@ -310,7 +311,7 @@ class FundedBountyQuoteClaimServiceTest {
         quote.setStatus("OPEN");
         quote.setExpiresAt(Long.MAX_VALUE);
         quote.setSkillSetHash(skillLookup.lookup(ACTOR, AGENT, List.of()).skillSetHash());
-        when(quoteMapper.selectQuoteForUpdate("tenant", "client", TASK, QUOTE)).thenReturn(quote);
+        when(quoteMapper.selectQuoteForUpdate("0", "client", TASK, QUOTE)).thenReturn(quote);
         when(quoteMapper.insertClaimOperation(any())).thenReturn(1);
         when(quoteMapper.markClaimed(anyString(), anyString(), anyString(), anyString(), anyLong())).thenReturn(1);
         when(quoteMapper.completeClaimOperation(
@@ -319,12 +320,12 @@ class FundedBountyQuoteClaimServiceTest {
         AgentRuntimeEntity runtime = new AgentRuntimeEntity();
         runtime.setAgentId(AGENT);
         runtime.setClientId("client");
-        runtime.setOwnerJiacn("tenant");
-        runtime.setTenantId("tenant"); runtime.setBindingId(1L);
+        runtime.setOwnerJiacn("owner");
+        runtime.setTenantId("0"); runtime.setBindingId(1L);
         cn.jia.agent.entity.AgentIdentityRegistryEntity identityRow = new cn.jia.agent.entity.AgentIdentityRegistryEntity();
         identityRow.setCanonicalAgentId(AGENT); identityRow.setBindingId(1L);
-        identityRow.setTenantId("tenant"); identityRow.setOwnerJiacn("tenant"); identityRow.setClientId("client");
-        when(identity.requireActiveIdentityForBinding("tenant", "client", "tenant", 1L, AGENT)).thenReturn(identityRow);
+        identityRow.setTenantId("0"); identityRow.setOwnerJiacn("owner"); identityRow.setClientId("client");
+        when(identity.requireActiveIdentityForBinding("0", "client", "owner", 1L, AGENT)).thenReturn(identityRow);
         runtime.setStatus(AgentConstants.STATUS_ONLINE);
         runtime.setAbilities("[]");
         when(runtimeDao.findByAgentIdForUpdate(AGENT)).thenReturn(runtime);

@@ -223,6 +223,7 @@ class FundedBountyLegacyGuardRaceRealTransactionTest {
         jdbc.execute("""
                 CREATE TABLE agent_task_meta(
                     id BIGINT AUTO_INCREMENT PRIMARY KEY, task_id VARCHAR(100) NOT NULL,
+                    owner_jiacn VARCHAR(50) NOT NULL,
                     reward_status VARCHAR(32) NOT NULL, required_abilities VARCHAR(2000), reward INT,
                     assigned_agent_id VARCHAR(100), collaboration_mode VARCHAR(16) NOT NULL,
                     risk_level VARCHAR(16) NOT NULL, max_agents INT NOT NULL, review_required BOOLEAN NOT NULL,
@@ -259,11 +260,11 @@ class FundedBountyLegacyGuardRaceRealTransactionTest {
 
     private void insertRoot() {
         jdbc.update("""
-                INSERT INTO agent_task_meta(task_id,reward_status,required_abilities,reward,
+                INSERT INTO agent_task_meta(task_id,owner_jiacn,reward_status,required_abilities,reward,
                     collaboration_mode,risk_level,max_agents,review_required,task_version,
                     current_event_version,tenant_id,client_id,create_time,update_time)
-                VALUES(?,'open','[]',1,'single','low',1,FALSE,0,0,?,?,1,1)
-                """, TASK, TENANT, CLIENT);
+                VALUES(?,?,'open','[]',1,'single','low',1,FALSE,0,0,?,?,1,1)
+                """, TASK, TENANT, TENANT, CLIENT);
     }
 
     private void insertHeldFunding() {

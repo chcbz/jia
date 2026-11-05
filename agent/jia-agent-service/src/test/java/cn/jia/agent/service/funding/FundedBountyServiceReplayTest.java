@@ -35,14 +35,14 @@ class FundedBountyServiceReplayTest {
         Fixture fixture = fixture();
         byte[] hash = new byte[32];
         AgentTaskFundingEntity funding = refunded(hash);
-        when(fixture.mapper.selectFundingForUpdate("tenant", "client", "task-1")).thenReturn(funding);
+        when(fixture.mapper.selectFundingForUpdate("0", "client", "task-1")).thenReturn(funding);
         AgentTaskMetaEntity root = root(99L);
-        when(fixture.mutation.executeWithLockedTaskRoot(eq("tenant"), eq("client"), eq("task-1"), any()))
+        when(fixture.mutation.executeWithLockedTaskRootInOwnerScope(eq("0"), eq("client"), eq("owner"), eq("task-1"), any()))
                 .thenAnswer(invocation -> ((AgentTaskMutationTransaction.LockedTaskMutation<?>)
-                        invocation.getArgument(3)).apply(root));
+                        invocation.getArgument(4)).apply(root));
 
         AgentTaskFundingCancelReceiptDTO receipt = fixture.service.cancel(
-                new FundedBountyActor("tenant", "client", "tenant", "user-1"), KEY, hash, "task-1", 0L);
+                new FundedBountyActor("0", "client", "owner", "user-1"), KEY, hash, "task-1", 0L);
 
         assertEquals("1", receipt.taskVersion());
         assertEquals("37", receipt.refundedWen());
@@ -56,14 +56,14 @@ class FundedBountyServiceReplayTest {
         byte[] original = new byte[32];
         byte[] changed = new byte[32];
         changed[0] = 1;
-        when(fixture.mapper.selectFundingForUpdate("tenant", "client", "task-1"))
+        when(fixture.mapper.selectFundingForUpdate("0", "client", "task-1"))
                 .thenReturn(refunded(original));
-        when(fixture.mutation.executeWithLockedTaskRoot(eq("tenant"), eq("client"), eq("task-1"), any()))
+        when(fixture.mutation.executeWithLockedTaskRootInOwnerScope(eq("0"), eq("client"), eq("owner"), eq("task-1"), any()))
                 .thenAnswer(invocation -> ((AgentTaskMutationTransaction.LockedTaskMutation<?>)
-                        invocation.getArgument(3)).apply(root(1L)));
+                        invocation.getArgument(4)).apply(root(1L)));
 
         FundedBountyException failure = assertThrows(FundedBountyException.class, () ->
-                fixture.service.cancel(new FundedBountyActor("tenant", "client", "tenant", "user-1"),
+                fixture.service.cancel(new FundedBountyActor("0", "client", "owner", "user-1"),
                         KEY, changed, "task-1", 0L));
 
         assertEquals("IDEMPOTENCY_CONFLICT", failure.code());
@@ -97,7 +97,8 @@ class FundedBountyServiceReplayTest {
         root.setTaskId("task-1");
         root.setTaskVersion(version);
         root.setCurrentEventVersion(1L);
-        root.setTenantId("tenant");
+        root.setTenantId("0");
+        root.setOwnerJiacn("owner");
         root.setClientId("client");
         root.setRewardStatus("cancelled");
         return root;
@@ -123,7 +124,7 @@ class FundedBountyServiceReplayTest {
         funding.setCancelTaskVersion(1L);
         funding.setRefundedAt(100L);
         funding.setVersion(2L);
-        funding.setTenantId("tenant");
+        funding.setTenantId("0");
         funding.setClientId("client");
         return funding;
     }
