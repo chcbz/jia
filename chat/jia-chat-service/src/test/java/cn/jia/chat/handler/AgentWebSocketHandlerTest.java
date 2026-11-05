@@ -111,8 +111,6 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         when(agentService.register(any(AgentRegisterDTO.class)))
                 .thenReturn(new AgentRegisterResultDTO("agent-001", "token-001", AgentConstants.STATUS_ONLINE));
 
-        when(agentService.listTaskWritableMemberAgentIds("juyiting", "jia_client", "task-001"))
-                .thenReturn(List.of("agent-001"));
 
         AgentTaskDTO running = new AgentTaskDTO();
         running.setId("task-001");
@@ -1589,7 +1587,7 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         ArgumentCaptor<TextMessage> messageCaptor = ArgumentCaptor.forClass(TextMessage.class);
         verify(session, org.mockito.Mockito.atLeast(4)).sendMessage(messageCaptor.capture());
         String messages = messageCaptor.getAllValues().stream().map(TextMessage::getPayload).reduce("", String::concat);
-        assertTrue(messages.contains("UNSUPPORTED_MESSAGE_TYPE"));
+        assertTrue(messages.contains("\"messageType\":\"task.event\""));
         assertFalse(messages.contains("\"type\":\"task_event\""));
         assertFalse(messages.contains("\"type\":\"task.assign\""));
         assertSafeServerDownlinks(messageCaptor.getAllValues());

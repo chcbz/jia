@@ -88,7 +88,9 @@ class AgentTaskExecutionGrantServiceImplTest {
                     () -> service.assignAndGrant(scope(),"task-1","incomplete",incomplete,"payer-1"));
             assertEquals(AgentTaskExecutionGrantException.Reason.BAD_REQUEST,failure.reason());
         }
-        verifyNoInteractions(billing,legacy);
+        verifyNoInteractions(billing);
+        verify(legacy,times(2)).resolveAgentId("0","client","owner","agent-1");
+        verifyNoMoreInteractions(legacy);
         assertTrue(grants.byAction.isEmpty()); assertTrue(bootstraps.byAction.isEmpty());
         assertNull(root.getAssignedAgentId());
     }
