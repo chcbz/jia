@@ -3467,4 +3467,20 @@ class AgentServiceImplTest extends BaseMockTest {
         persona.setSystemAgent(false);
         return persona;
     }
+
+    private void markOwned(AgentRuntimeEntity agent) {
+        agent.setTenantId("0");
+        agent.setClientId("jia_client");
+        agent.setOwnerJiacn("jiacn");
+        agent.setBindingId(1L);
+        AgentPersonaBindingEntity binding = binding(
+                agent.getAgentId(), agent.getPersonaCode() == null ? agent.getAgentId() : agent.getPersonaCode());
+        AgentIdentityRegistryEntity identity = identity(binding, AgentConstants.IDENTITY_STATUS_ACTIVE);
+        org.mockito.Mockito.lenient().when(agentIdentityService.requireCanonicalAgentIdInScope(
+                "0", "jia_client", "jiacn", agent.getAgentId())).thenReturn(agent.getAgentId());
+        org.mockito.Mockito.lenient().when(agentIdentityService.requireActiveIdentityForBinding(
+                "0", "jia_client", "jiacn", 1L, agent.getAgentId())).thenReturn(identity);
+        org.mockito.Mockito.lenient().when(agentIdentityService.requireActiveBinding(identity, null)).thenReturn(binding);
+    }
+
 }

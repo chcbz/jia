@@ -551,4 +551,27 @@ class AgentLegacyTaskCompatibilityRealDatabaseTest {
         return new AgentTaskEventWriteResult().setEvent(event);
     }
 
+
+    private void assertReasonMessage(Reason reason, String message, Runnable action) {
+        AgentTaskCollaborationException error = assertThrows(
+                AgentTaskCollaborationException.class, action::run);
+        assertEquals(reason, error.getReason());
+        assertTrue(error.getMessage().contains(message), error.getMessage());
+    }
+
+
+    private void insertTask(String taskId, String tenant, String status, long version) {
+        jdbc.update("INSERT INTO agent_task_meta "
+                        + "(task_id,reward_status,task_version,tenant_id,client_id,owner_jiacn,create_time,update_time) "
+                        + "VALUES (?,?,?,?,?,?,1,1)",
+                taskId, status, version, tenant, CLIENT, OWNER);
+    }
+
+
+    private void assertReason(Reason reason, Runnable action) {
+        AgentTaskCollaborationException error = assertThrows(
+                AgentTaskCollaborationException.class, action::run);
+        assertEquals(reason, error.getReason());
+    }
+
 }
