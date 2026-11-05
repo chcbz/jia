@@ -125,6 +125,7 @@ class FundedBountyServiceReplayTest {
         funding.setRefundedAt(100L);
         funding.setVersion(2L);
         funding.setTenantId("0");
+        funding.setOwnerJiacn("owner");
         funding.setClientId("client");
         return funding;
     }
