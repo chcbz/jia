@@ -17,7 +17,7 @@ import cn.jia.economy.task.TaskBillingService.Charge;
 import cn.jia.economy.task.TaskBillingService.Quote;
 import cn.jia.economy.task.TaskBillingService.State;
 import cn.jia.economy.task.TaskBillingService.Task;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -110,6 +110,34 @@ class TaskBillingServiceMySqlTest {
         assertReason(CHARGE_CONFLICT, () -> inTask(TASK, () -> billing.quote(TASK, BINDING, "other-payer", estimate(), price("0"), Map.of())));
         Binding next = new Binding(1, "requirement-sha", "input-sha", "agent-1", "recommendation-2");
         assertEquals(10, quote(TASK, next, "0.1").amountWen());
+    }
+
+    @Test
+    void snapshotPreservesToolIdentityAndRoundsOnlyWholeTaskTotal() throws Exception {
+        var tool = new TaskQuoteCalculator.ToolKey("test-channel", "render", "image");
+        var estimate = new TaskQuoteCalculator.Estimate("test-rule", "2",
+                Map.of(ModelTokenPrice.Category.INPUT, 1_000_000L), Map.of(tool, BigDecimal.ONE));
+        Quote quote = inTask(TASK, () -> billing.quote(TASK, BINDING, "payer-1", estimate, price("0.004"),
+                Map.of(tool, new TaskQuoteCalculator.ToolPrice("tool-v2", new BigDecimal("0.004")))));
+        assertEquals(1, quote.amountWen());
+        var tree = new ObjectMapper().readTree(quote.snapshotJson());
+        assertTrue(tree.get("tools").isArray());
+        assertEquals("render", tree.get("tools").get(0).get("key").get("tool").asText());
+        assertEquals("tool-v2", tree.get("tools").get(0).get("price").get("version").asText());
+        assertEquals("0.008", tree.get("estimatedYuan").asText());
+    }
+
+    @Test
+    void concurrentAcceptanceAcrossTasksSharesIncomeAccountWithoutLockUpgrade() throws Exception {
+        Task other = new Task(SCOPE, TASK.ownerJiacn(), "task-2");
+        reserve(TASK, quote(TASK, BINDING, "0.3"));
+        reserve(other, quote(other, BINDING, "0.4"));
+        var results = race(() -> inTask(TASK, () -> billing.capture(TASK)),
+                () -> inTask(other, () -> billing.capture(other)));
+        for (Object result : results) assertEquals(State.CAPTURED, assertInstanceOf(Charge.class, result).state());
+        assertEquals(70L, jdbc.queryForObject("SELECT balance_wen FROM economy_account WHERE purpose='TASK_FEE'", Long.class));
+        assertEquals(30, wallet());
+        assertEquals(4, count("economy_transaction"));
     }
 
     @Test

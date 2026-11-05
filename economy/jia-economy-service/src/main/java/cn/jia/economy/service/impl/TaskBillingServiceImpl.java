@@ -23,8 +23,7 @@ import cn.jia.economy.service.EconomyPostingService;
 import cn.jia.economy.service.EconomyPrincipal;
 import cn.jia.economy.task.TaskBillingException;
 import cn.jia.economy.task.TaskBillingService;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -205,8 +204,7 @@ public class TaskBillingServiceImpl implements TaskBillingService {
     }
 
     private String encode(Object value) {
-        try { return json.writeValueAsString(value); }
-        catch (JsonProcessingException exception) { throw new IllegalStateException("Cannot serialize task quote", exception); }
+        return json.writeValueAsString(value);
     }
 
     private static byte[] digest(byte[] input) {

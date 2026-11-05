@@ -88,7 +88,8 @@ public final class EconomySchemaInitializer implements InitializingBean {
                 FROM information_schema.tables
                 WHERE table_schema=DATABASE()
                   AND table_name IN ('economy_account','economy_transaction','economy_entry',
-                                     'economy_escrow','economy_escrow_funding_lot')
+                                     'economy_escrow','economy_escrow_funding_lot',
+                                     'economy_task_quote','economy_task_charge')
                 ORDER BY table_name
                 """, String.class);
     }
