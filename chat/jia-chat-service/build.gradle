@@ -516,7 +516,7 @@ tasks.register('skillManagementWire', Test) {
 // Position/archive production SQL against an explicitly owned isolated MySQL.
 def archiveMaintenanceSourceSet = sourceSets.create('archiveMaintenanceTest') {
     java.setSrcDirs(['src/archiveMaintenanceTest/java', 'src/test/java'])
-    java.include 'cn/jia/chat/archive/service/Archive*MySqlTest.java'
+    java.include 'cn/jia/chat/archive/service/ArchiveConversationMySqlTest.java'
     java.include 'cn/jia/chat/archive/content/ArchiveTextCompilerTest.java'
     java.include 'cn/jia/chat/api/AgentConversationToolsControllerTest.java'
     java.include 'cn/jia/chat/service/ChatSkillMaintenanceToolsTest.java'

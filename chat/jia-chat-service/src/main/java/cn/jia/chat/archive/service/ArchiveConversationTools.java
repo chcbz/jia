@@ -1,7 +1,13 @@
 package cn.jia.chat.archive.service;
 
-import cn.jia.agent.position.*;
-import cn.jia.agent.service.*;
+import cn.jia.agent.position.PositionSkillException;
+import cn.jia.agent.position.PositionSkillPolicy;
+import cn.jia.agent.service.PositionArchiveAccess;
+import cn.jia.agent.service.PositionArchiveAccess.Session;
+import cn.jia.agent.service.PositionAuthority;
+import cn.jia.agent.service.InstalledSkillDescriptorLookup;
+import cn.jia.agent.service.PersonalWorkspaceService;
+import cn.jia.agent.service.SkillCapabilityLookup;
 import cn.jia.chat.service.ConversationToolProvider;
 import cn.jia.chat.archive.content.*;
 import cn.jia.chat.archive.model.*;
@@ -21,13 +27,13 @@ public final class ArchiveConversationTools implements ConversationToolProvider 
     private static final Map<String,Object> TEXT=Map.of("type","string");
     private static final Map<String,Object> VERSION=Map.of("type","string","pattern","^[1-9][0-9]*$");
     private static final ObjectMapper JSON=new ObjectMapper();
-    private final PositionSkillService positions;
+    private final PositionArchiveAccess positions;
     private final InstalledSkillDescriptorLookup installed;
     private final PersonalWorkspaceService files;
     private final ArchiveMaintenanceStore jobs;
     private final ArchiveContentStore content;
     private final ArchiveTransactions transactions;
-    public ArchiveConversationTools(PositionSkillService positions,InstalledSkillDescriptorLookup installed,
+    public ArchiveConversationTools(PositionArchiveAccess positions,InstalledSkillDescriptorLookup installed,
             PersonalWorkspaceService files,ArchiveMaintenanceStore jobs,ArchiveContentStore content,ArchiveTransactions transactions) {
         this.positions=positions;this.installed=installed;this.files=files;this.jobs=jobs;this.content=content;this.transactions=transactions;
     }
@@ -44,7 +50,6 @@ public final class ArchiveConversationTools implements ConversationToolProvider 
             tool("archive_recover","按原operationKey只读恢复已提交结果；未知响应先恢复，不能换key盲重试。",Map.of("operationKey",TEXT)));
     }
     @Override public Set<String> names(){return Set.of("archive_source","archive_prepare","archive_publish","archive_read","archive_recover");}
-    private record Session(PositionAuthority.Grant grant,InstalledSkillDescriptorLookup.Descriptor skill) { }
     @Override public Catalog catalog(Context context,Boundary boundary) {
         var descriptors=descriptors(context);
         try {
@@ -74,7 +79,7 @@ public final class ArchiveConversationTools implements ConversationToolProvider 
         require(work.matches("[A-Za-z0-9][A-Za-z0-9._-]{0,63}"),400,"ARCHIVE_WORK_INVALID");
         for(String field:List.of("title","author","sourceName","sourceRights"))require(text(args,field).length()<=255,400,"ARCHIVE_SOURCE_METADATA_INVALID");
         require(text(args,"sourceSha256").matches("[0-9a-f]{64}"),400,"ARCHIVE_SOURCE_DIGEST_INVALID");
-        String requestDigest=PositionSkillService.hash(encode(new TreeMap<>(args)));
+        String requestDigest=ArchiveEtags.sha256(encode(new TreeMap<>(args)).getBytes(StandardCharsets.UTF_8));
         record Prepared(Session session,String edition,String expectedActive,Map<String,Object> previous) { }
         var prepared=boundary.execute(()->authorized(c,descriptors,work,false,s->{
             var prior=jobs.operation(owner(c),key,true);
@@ -140,21 +145,7 @@ public final class ArchiveConversationTools implements ConversationToolProvider 
         return Map.of("fileId",id,"fileVersion",Integer.toString(version),"sha256",metadata.sha256(),"byteLength",Long.toString(metadata.byteLength()),"filename",metadata.originalFilename());
     }
     private <T>T authorized(Context c,List<InstalledSkillDescriptorLookup.Descriptor> descriptors,String work,boolean publish,Function<Session,T> operation) {
-        var scope=scope(c);var state=positions.read(scope).state();
-        var appointment=state.appointments().values().stream().filter(a->a.active()&&a.agentId().equals(c.subject().agentId()))
-                .filter(a->{var p=state.positions().get(a.positionId());return p!=null&&"archive:public".equals(p.resource())&&p.skillKeys().contains(SKILL)&&(!publish||p.allowPublish());})
-                .sorted(Comparator.comparing(PositionSkillState.Appointment::id)).findFirst().orElse(null);
-        require(appointment!=null,403,"ARCHIVE_APPOINTMENT_REQUIRED");var position=state.positions().get(appointment.positionId());
-        var grant=new PositionAuthority.Grant(appointment.id(),appointment.revision(),position.revision(),appointment.agentId(),appointment.bindingId(),work,publish);
-        return positions.withAuthority(scope,grant,()->{
-            var current=positions.currentState(scope);
-            var descriptor=descriptors.stream().filter(d->current.installations().values().stream().anyMatch(i->
-                i.usable()&&i.skillKey().equals(SKILL)&&i.agentId().equals(grant.agentId())&&i.bindingId()==grant.bindingId()
-                &&Objects.equals(PositionSkillRuntimeService.physical(i),d.installationId())&&Objects.equals(i.packageDigest(),"sha256:"+d.packageSha256())
-                &&i.manifestSha256()==null&&Objects.equals(i.runtimeInstallationId(),c.runtimeInstallationId())&&Objects.equals(i.runtimeHostId(),c.runtimeHostId())))
-                .findFirst().orElse(null);
-            require(descriptor!=null,403,"ARCHIVE_SKILL_NOT_READY");return operation.apply(new Session(grant,descriptor));
-        });
+        return positions.withAuthority(scope(c),c.subject().agentId(),c.runtimeInstallationId(),c.runtimeHostId(),work,publish,descriptors,operation);
     }
     private List<InstalledSkillDescriptorLookup.Descriptor> descriptors(Context c) {
         var s=c.subject();return installed.readCurrent(new SkillCapabilityLookup.Scope(s.tenantId(),s.clientId(),s.ownerJiacn(),s.agentId())).skills().stream()
