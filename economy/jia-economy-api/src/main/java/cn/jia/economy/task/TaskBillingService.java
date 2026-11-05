@@ -1,9 +1,8 @@
 package cn.jia.economy.task;
 
-import cn.jia.economy.pricing.ModelTokenPrice;
-import cn.jia.economy.pricing.TaskQuoteCalculator;
+import cn.jia.economy.pricing.TaskPricingService;
+import cn.jia.economy.pricing.TaskWorkload;
 import cn.jia.economy.service.EconomyScope;
-import java.util.Map;
 import java.util.Objects;
 
 /** Internal economy boundary. Callers authorize the task and bind current requirement/material facts.
@@ -30,8 +29,7 @@ public interface TaskBillingService {
             String terminalTransactionId) { }
 
     /** Immutable per recommendation+candidate binding. Replay returns stored prices without recalculating. */
-    Quote quote(Task task, Binding binding, String payerUserId, TaskQuoteCalculator.Estimate estimate,
-            ModelTokenPrice modelPrice, Map<TaskQuoteCalculator.ToolKey, TaskQuoteCalculator.ToolPrice> toolPrices);
+    Quote quote(Task task, Binding binding, String payerUserId, TaskWorkload workload, TaskPricingService.ModelKey model);
     /** Reserve exactly the selected quote, or replay the same reservation; never top up/reprice. */
     Charge reserve(Task task, String quoteId, Binding currentBinding);
     /** Missing reservation is not free. Legacy-free requires an explicit cutover record. */

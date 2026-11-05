@@ -57,9 +57,10 @@ public final class TaskQuoteCalculator {
     }
 
     /** Manually registered RMB price. An explicit zero is different from a missing entry. */
-    public record ToolPrice(String version, BigDecimal yuanPerUnit) {
+    public record ToolPrice(String version, String basis, BigDecimal yuanPerUnit) {
         public ToolPrice {
             required(version, "version");
+            required(basis, "basis");
             CnyAmounts.nonNegative(yuanPerUnit);
         }
     }

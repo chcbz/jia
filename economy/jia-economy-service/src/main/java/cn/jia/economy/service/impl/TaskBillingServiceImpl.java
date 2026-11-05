@@ -12,6 +12,9 @@ import cn.jia.economy.entity.EconomyTaskQuoteEntity;
 import cn.jia.economy.mapper.EconomyLedgerMapper;
 import cn.jia.economy.mapper.EconomyTaskBillingMapper;
 import cn.jia.economy.pricing.ModelTokenPrice;
+import cn.jia.economy.pricing.TaskPricingService;
+import cn.jia.economy.pricing.TaskEstimateRule;
+import cn.jia.economy.pricing.TaskWorkload;
 import cn.jia.economy.pricing.TaskQuoteCalculator;
 import cn.jia.economy.service.EconomyAccountKey;
 import cn.jia.economy.service.EconomyEscrowFunding;
@@ -50,18 +53,19 @@ public class TaskBillingServiceImpl implements TaskBillingService {
     private final EconomyLedgerMapper ledger;
     private final EconomyPostingService posting;
     private final ObjectMapper json;
+    private final TaskPricingService pricing;
 
     public TaskBillingServiceImpl(EconomyTaskBillingMapper mapper, EconomyLedgerMapper ledger,
-            EconomyPostingService posting, ObjectMapper json) {
+            EconomyPostingService posting, ObjectMapper json, TaskPricingService pricing) {
         this.mapper = mapper;
         this.ledger = ledger;
         this.posting = posting;
         this.json = json;
+        this.pricing = pricing;
     }
 
     @Override
-    public Quote quote(Task task, Binding binding, String payerUserId, TaskQuoteCalculator.Estimate estimate,
-            ModelTokenPrice modelPrice, Map<TaskQuoteCalculator.ToolKey, TaskQuoteCalculator.ToolPrice> toolPrices) {
+    public Quote quote(Task task, Binding binding, String payerUserId, TaskWorkload workload, TaskPricingService.ModelKey model) {
         Objects.requireNonNull(payerUserId, "payerUserId");
         String bindingHash = bindingHash(binding);
         EconomyTaskQuoteEntity stored = mapper.findQuoteByBinding(task.scope().tenantId(), task.scope().clientId(),
@@ -70,12 +74,22 @@ public class TaskBillingServiceImpl implements TaskBillingService {
             if (!payerUserId.equals(stored.getPayerUserId())) throw new TaskBillingException(CHARGE_CONFLICT);
             return receipt(stored);
         }
-        TaskQuoteCalculator.Quote calculated = TaskQuoteCalculator.calculate(estimate, modelPrice, toolPrices);
+        // Replay above precedes all price/rule lookup, including a now-removed configuration entry.
+        var prepared = pricing.prepare(workload, model);
+        var estimate = prepared.estimate();
+        var modelPrice = prepared.modelPrice();
+        TaskQuoteCalculator.Quote calculated;
+        try { calculated = TaskQuoteCalculator.calculate(estimate, modelPrice, prepared.toolPrices()); }
+        catch (ArithmeticException overflow) {
+            throw new TaskPricingService.Unavailable(TaskPricingService.Unavailable.Reason.QUOTE_AMOUNT_OVERFLOW);
+        }
         // Structured tool keys, not JSON object keys: the immutable snapshot can be read without guessing.
         List<ToolEstimate> tools = estimate.toolUnits().entrySet().stream()
                 .map(entry -> new ToolEstimate(entry.getKey(), entry.getValue(), calculated.toolPrices().get(entry.getKey())))
                 .toList();
-        String snapshot = encode(new QuoteSnapshot(binding, estimate.ruleId(), estimate.ruleVersion(),
+        String snapshot = encode(new QuoteSnapshot(binding, prepared.rule(),
+                new WorkloadSnapshot(workload.kind(), workload.complexity(), workload.inputFiles(), workload.deliverables()),
+                estimate.ruleId(), estimate.ruleVersion(),
                 estimate.tokens(), modelPrice, tools, calculated.estimatedYuan(), calculated.amountWen()));
         EconomyTaskQuoteEntity row = new EconomyTaskQuoteEntity().setQuoteId("tq_" + UUID.randomUUID())
                 .setBindingSha256(bindingHash).setTenantId(task.scope().tenantId()).setClientId(task.scope().clientId())
@@ -225,7 +239,8 @@ public class TaskBillingServiceImpl implements TaskBillingService {
     }
 
     private record ToolEstimate(TaskQuoteCalculator.ToolKey key, BigDecimal units, TaskQuoteCalculator.ToolPrice price) { }
-    private record QuoteSnapshot(Binding binding, String ruleId, String ruleVersion,
+    private record WorkloadSnapshot(String kind, TaskWorkload.Complexity complexity, long inputFiles, long deliverables) { }
+    private record QuoteSnapshot(Binding binding, TaskEstimateRule rule, WorkloadSnapshot workload, String ruleId, String ruleVersion,
             Map<ModelTokenPrice.Category, Long> tokens, ModelTokenPrice modelPrice, List<ToolEstimate> tools,
             BigDecimal estimatedYuan, long amountWen) { }
 }

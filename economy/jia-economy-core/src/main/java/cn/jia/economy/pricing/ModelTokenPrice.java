@@ -5,12 +5,12 @@ import java.util.Map;
 import java.util.Objects;
 
 /** Immutable RMB-per-million-token snapshot. Model/channel/tier and version are exact keys. */
-public record ModelTokenPrice(String channel, String model, String tier, String version,
+public record ModelTokenPrice(String channel, String model, String tier, String version, String basis,
         Map<Category, BigDecimal> yuanPerMillionTokens) {
     public enum Category { INPUT, OUTPUT, CACHED_INPUT, CACHE_WRITE_30M, CACHE_WRITE_12H }
 
     public ModelTokenPrice {
-        for (String key : new String[]{channel, model, tier, version}) {
+        for (String key : new String[]{channel, model, tier, version, basis}) {
             if (key == null || key.isBlank()) throw new IllegalArgumentException("Price identity is required");
         }
         yuanPerMillionTokens = Map.copyOf(yuanPerMillionTokens);

@@ -4,6 +4,10 @@ import cn.jia.economy.config.EconomyMySqlTestFixture;
 import cn.jia.economy.config.EconomyPreviewGate;
 import cn.jia.economy.config.EconomyPreviewProperties;
 import cn.jia.economy.config.EconomySchemaInitializer;
+import cn.jia.economy.config.EconomyPricingProperties;
+import cn.jia.economy.pricing.TaskPricingService;
+import cn.jia.economy.pricing.TaskEstimateRule;
+import cn.jia.economy.pricing.TaskWorkload;
 import cn.jia.economy.exception.EconomyPostingException;
 import cn.jia.economy.mapper.EconomyLedgerMapper;
 import cn.jia.economy.mapper.EconomyTaskBillingMapper;
@@ -83,7 +87,12 @@ class TaskBillingServiceMySqlTest {
         var gate = new EconomyPreviewGate(new EconomyPreviewProperties(true,
                 List.of(new EconomyPreviewProperties.AllowedScope(SCOPE.tenantId(), SCOPE.clientId()))));
         var target = new TaskBillingServiceImpl(session.getMapper(EconomyTaskBillingMapper.class), ledger,
-                new EconomyPostingServiceImpl(ledger, manager, gate), new ObjectMapper());
+                new EconomyPostingServiceImpl(ledger, manager, gate), new ObjectMapper(),
+                new ConfiguredTaskPricingService(new EconomyPricingProperties(
+                        List.of("0", "0.004", "0.1", "0.3", "0.4", "0.5", "0.500001", "0.8", "999999999999999999999").stream().map(TaskBillingServiceMySqlTest::price).toList(),
+                        List.of(new EconomyPricingProperties.ToolEntry("test-channel", "render", "image", "tool-v2", "synthetic-test-price", new BigDecimal("0.004"))),
+                        List.of(new TaskEstimateRule("test-rule", "1", "synthetic-test-rule", "test", TaskWorkload.Complexity.STANDARD,
+                                Map.of(ModelTokenPrice.Category.INPUT, 1_000_000L), Map.of(), Map.of())))));
         var proxy = new ProxyFactory(target);
         proxy.addAdvice(new TransactionInterceptor(manager, new AnnotationTransactionAttributeSource()));
         billing = (TaskBillingService) proxy.getProxy();
@@ -95,30 +104,50 @@ class TaskBillingServiceMySqlTest {
     @Test
     void requiresCallerTransactionEvenForZeroPrice() {
         assertThrows(IllegalTransactionStateException.class, () -> billing.capture(TASK));
-        assertThrows(IllegalTransactionStateException.class, () -> billing.quote(TASK, BINDING, "payer-1", estimate(), price("0"), Map.of()));
+        assertThrows(IllegalTransactionStateException.class, () -> billing.quote(TASK, BINDING, "payer-1", workload(), route("0")));
         assertEquals(0, count("economy_task_quote"));
     }
 
     @Test
     void freezesQuotePricePayerAndStructuredSnapshot() throws Exception {
         Quote first = quote(TASK, BINDING, "0.500001");
-        Quote replay = inTask(TASK, () -> billing.quote(TASK, BINDING, "payer-1", null, null, null));
+        Quote replay = inTask(TASK, () -> billing.quote(TASK, BINDING, "payer-1", null, null));
         assertEquals(first, replay);
         assertEquals(51, first.amountWen());
-        assertEquals("0.500001", new ObjectMapper().readTree(first.snapshotJson()).get("estimatedYuan").asText());
+        var snapshot = new ObjectMapper().readTree(first.snapshotJson());
+        assertEquals("0.500001", snapshot.get("estimatedYuan").asText());
+        assertEquals("synthetic-test-rule", snapshot.get("rule").get("basis").asText());
+        assertEquals(1_000_000L, snapshot.get("rule").get("baseTokens").get("INPUT").asLong());
+        assertEquals("synthetic-test-price", snapshot.get("modelPrice").get("basis").asText());
+        assertEquals(1L, snapshot.get("workload").get("deliverables").asLong());
         assertEquals(1, count("economy_task_quote"));
-        assertReason(CHARGE_CONFLICT, () -> inTask(TASK, () -> billing.quote(TASK, BINDING, "other-payer", estimate(), price("0"), Map.of())));
+        assertReason(CHARGE_CONFLICT, () -> inTask(TASK, () -> billing.quote(TASK, BINDING, "other-payer", workload(), route("0"))));
         Binding next = new Binding(1, "requirement-sha", "input-sha", "agent-1", "recommendation-2");
         assertEquals(10, quote(TASK, next, "0.1").amountWen());
     }
 
     @Test
+    void unknownPriceDoesNotPersistFreeQuoteOrTouchWallet() {
+        var missing = assertThrows(TaskPricingService.Unavailable.class, () -> quote(TASK, BINDING, "unknown"));
+        assertEquals(TaskPricingService.Unavailable.Reason.MODEL_PRICE_MISSING, missing.reason());
+        assertEquals(0, count("economy_task_quote"));
+        assertEquals(0, count("economy_transaction"));
+        assertEquals(100, wallet());
+    }
+
+    @Test
+    void amountOverflowIsUnavailableWithoutPersistingQuote() {
+        var overflow = assertThrows(TaskPricingService.Unavailable.class, () -> quote(TASK, BINDING, "999999999999999999999"));
+        assertEquals(TaskPricingService.Unavailable.Reason.QUOTE_AMOUNT_OVERFLOW, overflow.reason());
+        assertEquals(0, count("economy_task_quote"));
+        assertEquals(100, wallet());
+    }
+
+    @Test
     void snapshotPreservesToolIdentityAndRoundsOnlyWholeTaskTotal() throws Exception {
         var tool = new TaskQuoteCalculator.ToolKey("test-channel", "render", "image");
-        var estimate = new TaskQuoteCalculator.Estimate("test-rule", "2",
-                Map.of(ModelTokenPrice.Category.INPUT, 1_000_000L), Map.of(tool, BigDecimal.ONE));
-        Quote quote = inTask(TASK, () -> billing.quote(TASK, BINDING, "payer-1", estimate, price("0.004"),
-                Map.of(tool, new TaskQuoteCalculator.ToolPrice("tool-v2", new BigDecimal("0.004")))));
+        var workload = new TaskWorkload("test", TaskWorkload.Complexity.STANDARD, 0, 1, Map.of(tool, BigDecimal.ONE));
+        Quote quote = inTask(TASK, () -> billing.quote(TASK, BINDING, "payer-1", workload, route("0.004")));
         assertEquals(1, quote.amountWen());
         var tree = new ObjectMapper().readTree(quote.snapshotJson());
         assertTrue(tree.get("tools").isArray());
@@ -295,7 +324,7 @@ class TaskBillingServiceMySqlTest {
     }
 
     private Quote quote(Task task, Binding binding, String yuan) {
-        return inTask(task, () -> billing.quote(task, binding, "payer-1", estimate(), price(yuan), Map.of()));
+        return inTask(task, () -> billing.quote(task, binding, "payer-1", workload(), route(yuan)));
     }
     private Charge reserve(Task task, Quote quote) {
         return inTask(task, () -> billing.reserve(task, quote.quoteId(), BINDING));
@@ -306,11 +335,14 @@ class TaskBillingServiceMySqlTest {
             return work.get();
         });
     }
-    private static TaskQuoteCalculator.Estimate estimate() {
-        return new TaskQuoteCalculator.Estimate("test-rule", "1", Map.of(ModelTokenPrice.Category.INPUT, 1_000_000L), Map.of());
+    private static TaskWorkload workload() {
+        return new TaskWorkload("test", TaskWorkload.Complexity.STANDARD, 0, 1, Map.of());
+    }
+    private static TaskPricingService.ModelKey route(String yuan) {
+        return new TaskPricingService.ModelKey("test-channel", "test-model-" + yuan, "standard");
     }
     private static ModelTokenPrice price(String yuan) {
-        return new ModelTokenPrice("test-channel", "test-model", "standard", "1",
+        return new ModelTokenPrice("test-channel", "test-model-" + yuan, "standard", "1", "synthetic-test-price",
                 Map.of(ModelTokenPrice.Category.INPUT, new BigDecimal(yuan)));
     }
     private int count(String table) { return jdbc.queryForObject("SELECT COUNT(*) FROM " + table, Integer.class); }
