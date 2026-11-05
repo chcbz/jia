@@ -93,7 +93,7 @@ class AgentTaskCancellationServiceImplTest {
     void noWrites() {
         verifyNoInteractions(states,grants,billing);
         verify(dao,never()).releaseTaskOccupation(anyString(),anyString(),anyString(),anyString(),anyLong());
-        verify(dao,never()).cancelQueuedBootstrap(anyString(),anyString(),anyString(),anyString(),anyLong(),anyLong(),anyLong());
+        verify(dao,never()).cancelUnadmittedBootstrap(anyString(),anyString(),anyString(),anyString(),anyLong(),anyLong(),anyLong());
     }
     @Test void grayCancellationLocksAndMutatesOnlyGrayPartition() {
         root.setTenantId("1");
@@ -208,18 +208,25 @@ class AgentTaskCancellationServiceImplTest {
     }
     @Test void retryBootstrapTerminalizesWithoutInventingAttemptAndAdmittedPreserved() {
         when(dao.lockBootstraps("0","client","owner","417")).thenReturn(List.of(bootstrap("RETRY")));
-        when(dao.cancelQueuedBootstrap(eq("0"),eq("client"),eq("owner"),eq("417"),eq(5L),eq(10L),anyLong())).thenReturn(1);
+        when(dao.cancelUnadmittedBootstrap(eq("0"),eq("client"),eq("owner"),eq("417"),eq(5L),eq(10L),anyLong())).thenReturn(1);
         assertEquals(2,cancel().taskVersion());
-        verify(dao).cancelQueuedBootstrap(eq("0"),eq("client"),eq("owner"),eq("417"),eq(5L),eq(10L),anyLong());
+        verify(dao).cancelUnadmittedBootstrap(eq("0"),eq("client"),eq("owner"),eq("417"),eq(5L),eq(10L),anyLong());
     }
     @Test void pendingBootstrapClosesWithoutAttemptOrLease() {
         when(dao.lockBootstraps("0","client","owner","417")).thenReturn(List.of(
                 bootstrap("PENDING").setAttemptCount(0).setNextRetryAt(null)));
-        when(dao.cancelQueuedBootstrap(eq("0"),eq("client"),eq("owner"),eq("417"),eq(5L),eq(10L),anyLong())).thenReturn(1);
+        when(dao.cancelUnadmittedBootstrap(eq("0"),eq("client"),eq("owner"),eq("417"),eq(5L),eq(10L),anyLong())).thenReturn(1);
         assertEquals(2,cancel().taskVersion());
-        verify(dao).cancelQueuedBootstrap(eq("0"),eq("client"),eq("owner"),eq("417"),eq(5L),eq(10L),anyLong());
+        verify(dao).cancelUnadmittedBootstrap(eq("0"),eq("client"),eq("owner"),eq("417"),eq(5L),eq(10L),anyLong());
     }
-    @Test void claimedBootstrapEvenExpiredRejected() {
+    @Test void ownedCancellationClosesClaimedButUnadmittedBootstrap() {
+        when(dao.lockBootstraps("0","client","owner","417")).thenReturn(List.of(
+                bootstrap("CLAIMED").setLeaseOwner("worker").setLeaseUntil(Long.MAX_VALUE).setNextRetryAt(null)));
+        when(dao.cancelUnadmittedBootstrap(eq("0"),eq("client"),eq("owner"),eq("417"),eq(5L),eq(10L),anyLong())).thenReturn(1);
+        assertEquals(2,cancel().taskVersion());
+        verify(dao).cancelUnadmittedBootstrap(eq("0"),eq("client"),eq("owner"),eq("417"),eq(5L),eq(10L),anyLong());
+    }
+    @Test void claimedBootstrapWithoutLeaseOwnerRejected() {
         when(dao.lockBootstraps("0","client","owner","417")).thenReturn(List.of(bootstrap("CLAIMED").setLeaseUntil(1L)));
         assertThrows(AgentTaskStateException.class,this::cancel); noWrites();
     }

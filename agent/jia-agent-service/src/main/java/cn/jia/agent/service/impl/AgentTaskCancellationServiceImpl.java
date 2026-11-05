@@ -138,10 +138,13 @@ public class AgentTaskCancellationServiceImpl implements AgentTaskCancellationSe
                         || bootstrap.getAttemptCount()<0 || bootstrap.getCreatedAt()==null
                         || bootstrap.getCreatedAt()<=0) throw error(INVALID_PERSISTED_STATE);
                 version(bootstrap.getVersion());
-                if (bootstrap.getLeaseOwner()!=null || bootstrap.getLeaseUntil()!=null
-                        || !Set.of("PENDING","RETRY","ADMITTED","DEAD").contains(
+                boolean claimed = "CLAIMED".equals(bootstrap.getStatus());
+                if ((claimed ? !exact(bootstrap.getLeaseOwner(),100) || bootstrap.getLeaseUntil()==null
+                            || bootstrap.getLeaseUntil()<=0
+                        : bootstrap.getLeaseOwner()!=null || bootstrap.getLeaseUntil()!=null)
+                        || !Set.of("PENDING","RETRY","CLAIMED","ADMITTED","DEAD").contains(
                                 bootstrap.getStatus()==null ? "" : bootstrap.getStatus())
-                        || replay && queued(bootstrap)) throw error(INVALID_TRANSITION);
+                        || replay && unadmitted(bootstrap)) throw error(INVALID_TRANSITION);
                 // A never-claimed cancellation is DEAD with zero attempts, not a fictional failed attempt.
                 boolean pending = "PENDING".equals(bootstrap.getStatus());
                 boolean cancelledBeforeClaim = "DEAD".equals(bootstrap.getStatus())
@@ -151,8 +154,9 @@ public class AgentTaskCancellationServiceImpl implements AgentTaskCancellationSe
                             || bootstrap.getAdmittedConversationId()!=null || bootstrap.getAdmittedRequestId()!=null)) {
                     throw error(INVALID_PERSISTED_STATE);
                 }
-                if ("RETRY".equals(bootstrap.getStatus()) && (bootstrap.getAdmittedConversationId()!=null
-                        || bootstrap.getAdmittedRequestId()!=null || bootstrap.getNextRetryAt()==null)) {
+                if (unadmitted(bootstrap) && (bootstrap.getAdmittedConversationId()!=null
+                        || bootstrap.getAdmittedRequestId()!=null
+                        || "RETRY".equals(bootstrap.getStatus()) && bootstrap.getNextRetryAt()==null)) {
                     throw error(INVALID_PERSISTED_STATE);
                 }
             }
@@ -187,7 +191,7 @@ public class AgentTaskCancellationServiceImpl implements AgentTaskCancellationSe
                         "cancel_"+hash,hash,Math.max(now,grant.getCreatedAt()))) throw error(VERSION_CONFLICT);
             }
             for (var bootstrap:bootstraps) {
-                if (queued(bootstrap) && cancellation.cancelQueuedBootstrap(
+                if (unadmitted(bootstrap) && cancellation.cancelUnadmittedBootstrap(
                         tenant,client,owner,taskId,bootstrap.getId(),bootstrap.getVersion(),now)!=1) {
                     throw error(VERSION_CONFLICT);
                 }
@@ -201,8 +205,9 @@ public class AgentTaskCancellationServiceImpl implements AgentTaskCancellationSe
         });
     }
 
-    private static boolean queued(AgentTaskBountyBootstrapOutboxEntity bootstrap) {
-        return "PENDING".equals(bootstrap.getStatus()) || "RETRY".equals(bootstrap.getStatus());
+    private static boolean unadmitted(AgentTaskBountyBootstrapOutboxEntity bootstrap) {
+        return "PENDING".equals(bootstrap.getStatus()) || "RETRY".equals(bootstrap.getStatus())
+                || "CLAIMED".equals(bootstrap.getStatus());
     }
     private static boolean scoped(cn.jia.core.entity.BaseEntity row,String t,String c,String o,String id) {
         if (!t.equals(row.getTenantId()) || !c.equals(row.getClientId())) return false;

@@ -176,19 +176,22 @@ class AgentTaskCancellationPersistenceTest {
         assertEquals("online",jdbc.queryForObject("SELECT status FROM agent_runtime WHERE current_task_id IS NULL",String.class));
         assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM agent_runtime WHERE current_task_id IS NULL AND owner_jiacn<>'owner'",Integer.class));
     }
-    @Test void retryBootstrapBecomesDeadWithoutAttemptMutationClaimedNeverForceCancelled() {
+    @Test void unadmittedBootstrapCancellationPreservesAttemptsAndFencesClaim() {
         jdbc.update("INSERT INTO agent_task_bounty_bootstrap_outbox VALUES(5,'0','client','owner','417','RETRY',10,100,NULL,NULL,NULL,NULL,999,'old',NULL,1,0)");
-        var q=query("cancelQueuedBootstrap",scope()); assertEquals(1,jdbc.update(q.sql(),q.params()));
+        var q=query("cancelUnadmittedBootstrap",scope()); assertEquals(1,jdbc.update(q.sql(),q.params()));
         assertEquals("DEAD",jdbc.queryForObject("SELECT status FROM agent_task_bounty_bootstrap_outbox",String.class));
         assertEquals(100,jdbc.queryForObject("SELECT attempt_count FROM agent_task_bounty_bootstrap_outbox",Integer.class));
         assertEquals("TASK_CANCELLED",jdbc.queryForObject("SELECT last_error_code FROM agent_task_bounty_bootstrap_outbox",String.class));
         assertEquals(0,jdbc.update(q.sql(),q.params()));
         jdbc.update("UPDATE agent_task_bounty_bootstrap_outbox SET status='CLAIMED',version=10,lease_owner='inflight',lease_until=1100");
+        assertEquals(1,jdbc.update(q.sql(),q.params()));
+        assertNull(jdbc.queryForObject("SELECT lease_owner FROM agent_task_bounty_bootstrap_outbox",String.class));
+        assertEquals(100,jdbc.queryForObject("SELECT attempt_count FROM agent_task_bounty_bootstrap_outbox",Integer.class));
         assertEquals(0,jdbc.update(q.sql(),q.params()));
     }
     @Test void pendingBootstrapClosesWithZeroAttemptsAndCannotBeCancelledTwice() {
         jdbc.update("INSERT INTO agent_task_bounty_bootstrap_outbox VALUES(5,'0','client','owner','417','PENDING',10,0,NULL,NULL,NULL,NULL,NULL,NULL,NULL,1,0)");
-        var q=query("cancelQueuedBootstrap",scope()); assertEquals(1,jdbc.update(q.sql(),q.params()));
+        var q=query("cancelUnadmittedBootstrap",scope()); assertEquals(1,jdbc.update(q.sql(),q.params()));
         assertEquals("DEAD",jdbc.queryForObject("SELECT status FROM agent_task_bounty_bootstrap_outbox",String.class));
         assertEquals(0,jdbc.queryForObject("SELECT attempt_count FROM agent_task_bounty_bootstrap_outbox",Integer.class));
         assertEquals(0,jdbc.update(q.sql(),q.params()));

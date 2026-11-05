@@ -28,9 +28,9 @@ public class AgentTaskCancellationDaoImpl implements AgentTaskCancellationDao {
             String t, String c, String o, String id) {
         scope(t,c,o,id); return mapper.lockBootstraps(t,c,o,id);
     }
-    @Override public int cancelQueuedBootstrap(String t, String c, String o, String task,
+    @Override public int cancelUnadmittedBootstrap(String t, String c, String o, String task,
             long id, long version, long now) {
-        scope(t,c,o,task); return mapper.cancelQueuedBootstrap(t,c,o,task,id,version,now);
+        scope(t,c,o,task); return mapper.cancelUnadmittedBootstrap(t,c,o,task,id,version,now);
     }
     @Override public boolean hasMoneyFacts(String t, String c, String o, String id) {
         scope(t,c,o,id); return mapper.funding(t,c,o,id)!=null || mapper.fundingOperation(t,c,o,id)!=null;

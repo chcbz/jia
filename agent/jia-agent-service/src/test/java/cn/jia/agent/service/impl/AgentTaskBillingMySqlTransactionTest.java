@@ -70,6 +70,7 @@ class AgentTaskBillingMySqlTransactionTest {
     private AgentTaskFormalDeliveryDecisionService decisions;
     private AgentTaskCancellationService cancellation;
     private AgentTaskBountyBootstrapOutboxDao outbox;
+    private AgentTaskBountyBootstrapOutboxService bootstrap;
     private AgentTaskEventAfterCommitPublisher publisher;
     private final AgentTaskEventBroker broker = mock(AgentTaskEventBroker.class);
     private String failEvent;
@@ -157,12 +158,15 @@ class AgentTaskBillingMySqlTransactionTest {
                 1, "Fixture title", "Fixture description", "a".repeat(64), "CREATE");
         when(requirements.requireCurrent(any(), eq(TASK), eq(1L))).thenReturn(requirement);
         when(requirements.freezeCurrent(any(), eq(TASK), eq(1L))).thenReturn(requirement);
+        when(requirements.read(SCOPE, TASK, 1L)).thenReturn(requirement);
         outbox = spy(new AgentTaskBountyBootstrapOutboxDaoImpl(sql.getMapper(AgentTaskBountyBootstrapOutboxMapper.class)));
         doAnswer(call -> {
             Object written = call.callRealMethod();
             if (failBootstrap) throw new InjectedFailure();
             return written;
         }).when(outbox).insert(any());
+        bootstrap = new AgentTaskBountyBootstrapOutboxServiceImpl(outbox, new ObjectMapper(), manager,
+                requirements, new cn.jia.core.security.FixedTenantAdmissionPolicy(TENANT, null));
         assignment = new AgentTaskExecutionGrantServiceImpl(
                 new AgentTaskExecutionGrantDaoImpl(sql.getMapper(AgentTaskExecutionGrantMapper.class)),
                 outbox, links, mock(PersonalWorkspaceDao.class), legacy, identities, roots,
@@ -322,35 +326,66 @@ class AgentTaskBillingMySqlTransactionTest {
     }
 
     @Test
-    void claimVersusPendingCancellationCannotRefundAnInflightBootstrap() throws Exception {
+    void claimVersusCancellationAlwaysClosesUnadmittedIntentAndRefundsOnce() throws Exception {
         prepareCancellation(); assign();
         var start = new CountDownLatch(1);
         try (var pool = Executors.newFixedThreadPool(2)) {
-            var cancelled = pool.submit(() -> {
-                start.await();
-                try { cancel(); return true; }
-                catch (cn.jia.agent.exception.AgentTaskStateException expected) {
-                    assertEquals(cn.jia.agent.exception.AgentTaskStateException.Reason.INVALID_TRANSITION, expected.getReason());
-                    return false;
-                }
-            });
+            var cancelled = pool.submit(() -> { start.await(); return cancel(); });
             var claimed = pool.submit(() -> {
-                start.await();
-                return new TransactionTemplate(manager).execute(status -> {
-                    long now = System.currentTimeMillis();
-                    var row = outbox.findClaimableForUpdate(TENANT, CLIENT, OWNER, now);
-                    return row != null && outbox.claim(row, "fixture-worker", now + 30_000, now);
-                });
+                start.await(); return bootstrap.claimNext(SCOPE, "fixture-worker", System.currentTimeMillis());
             });
             start.countDown();
-            boolean didCancel = cancelled.get(20, TimeUnit.SECONDS);
-            assertNotEquals(didCancel, claimed.get(20, TimeUnit.SECONDS));
-            if (didCancel) assertCancelled();
-            else {
-                assertEquals("assigned", taskState()); assertEquals("HELD", charge());
-                assertEquals(50, wallet(jdbc)); assertEquals(1, count("economy_transaction"));
-                assertEquals("CLAIMED", jdbc.queryForObject("SELECT status FROM agent_task_bounty_bootstrap_outbox", String.class));
-            }
+            assertEquals("cancelled", cancelled.get(20, TimeUnit.SECONDS).status());
+            var oldClaim = claimed.get(20, TimeUnit.SECONDS);
+            assertCancelled();
+            if (oldClaim != null) assertStaleClaim(oldClaim);
+            assertNull(bootstrap.claimNext(SCOPE, "next-worker", System.currentTimeMillis()));
+        }
+    }
+
+    @Test
+    void claimedCancellationRejectsLateAdmissionAndAllOldReconcileOutcomes() throws Exception {
+        prepareCancellation(); assign();
+        var claim = bootstrap.claimNext(SCOPE, "fixture-worker", System.currentTimeMillis());
+        assertNotNull(claim); assertEquals(1, claim.claimAttempt());
+        var receipt = cancel(); assertCancelled(); assertEquals(receipt, cancel());
+        assertNull(jdbc.queryForObject("SELECT lease_owner FROM agent_task_bounty_bootstrap_outbox", String.class));
+        assertNull(jdbc.queryForObject("SELECT lease_until FROM agent_task_bounty_bootstrap_outbox", Long.class));
+        assertEquals(1, jdbc.queryForObject("SELECT attempt_count FROM agent_task_bounty_bootstrap_outbox", Integer.class));
+        var denied = assertThrows(cn.jia.agent.exception.AgentTaskExecutionGrantException.class, () ->
+                assignment.admit(SCOPE, TASK, claim.grantId(), claim.grantVersion(), claim.assignmentRevision(),
+                        AGENT, claim.permittedOperation(), false));
+        assertEquals(cn.jia.agent.exception.AgentTaskExecutionGrantException.Reason.CONFLICT, denied.getReason());
+        assertStaleClaim(claim); assertCancelled();
+    }
+
+    @Test
+    void claimedCancellationFailureRestoresOriginalWorkerLeaseAndHold() throws Exception {
+        prepareCancellation(); assign();
+        var claim = bootstrap.claimNext(SCOPE, "fixture-worker", System.currentTimeMillis());
+        assertNotNull(claim);
+        failOccupation = true;
+        assertThrows(InjectedFailure.class, this::cancel);
+        assertEquals("HELD", charge()); assertEquals(50, wallet(jdbc));
+        assertEquals("assigned", taskState());
+        assertEquals("ACTIVE", jdbc.queryForObject("SELECT state FROM agent_task_execution_grant", String.class));
+        assertEquals("CLAIMED", jdbc.queryForObject("SELECT status FROM agent_task_bounty_bootstrap_outbox", String.class));
+        assertEquals(claim.leaseOwner(), jdbc.queryForObject("SELECT lease_owner FROM agent_task_bounty_bootstrap_outbox", String.class));
+        assertEquals(claim.outboxVersion(), jdbc.queryForObject("SELECT version FROM agent_task_bounty_bootstrap_outbox", Long.class));
+        var retry = new AgentTaskBountyBootstrapReconcileDTO(claim.bootstrapId(), claim.outboxVersion(),
+                claim.leaseOwner(), claim.claimAttempt(), AgentTaskBountyBootstrapReconcileDTO.Outcome.RETRYABLE_FAILURE,
+                null, null, "FIXTURE_RETRY");
+        assertEquals("RETRY", bootstrap.reconcile(SCOPE, retry, System.currentTimeMillis()).status());
+        failOccupation = false; cancel(); assertCancelled();
+    }
+
+    private void assertStaleClaim(AgentTaskBountyBootstrapClaimDTO claim) {
+        for (var outcome : AgentTaskBountyBootstrapReconcileDTO.Outcome.values()) {
+            boolean admitted = outcome == AgentTaskBountyBootstrapReconcileDTO.Outcome.ADMITTED;
+            var late = new AgentTaskBountyBootstrapReconcileDTO(claim.bootstrapId(), claim.outboxVersion(),
+                    claim.leaseOwner(), claim.claimAttempt(), outcome, admitted ? "late-conversation" : null,
+                    admitted ? "late-request" : null, admitted ? null : "LATE_FAILURE");
+            assertThrows(IllegalStateException.class, () -> bootstrap.reconcile(SCOPE, late, System.currentTimeMillis()));
         }
     }
 

@@ -90,7 +90,7 @@ class AgentTaskCancellationTransactionTest {
             jdbc.queryForList("SELECT * FROM bootstrap FOR UPDATE");
             return List.of(AgentTaskCancellationServiceImplTest.bootstrap(text("bootstrap","status"))
                     .setVersion(number("bootstrap","version"))); });
-        when(dao.cancelQueuedBootstrap(anyString(),anyString(),anyString(),anyString(),anyLong(),anyLong(),anyLong()))
+        when(dao.cancelUnadmittedBootstrap(anyString(),anyString(),anyString(),anyString(),anyLong(),anyLong(),anyLong()))
                 .thenAnswer(i -> jdbc.update("UPDATE bootstrap SET status='DEAD',error='TASK_CANCELLED',version=version+1 WHERE id=? AND version=? AND status='RETRY'",
                         new Object[]{i.getArgument(4),i.getArgument(5)}));
         when(grants.revoke(anyString(),anyString(),anyString(),anyString(),anyString(),anyLong(),anyString(),anyString(),anyLong()))
