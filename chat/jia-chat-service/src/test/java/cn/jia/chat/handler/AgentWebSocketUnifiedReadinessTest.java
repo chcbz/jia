@@ -96,7 +96,7 @@ class AgentWebSocketUnifiedReadinessTest {
         for (var types : List.of(List.of("NEW_BUSINESS_COMMAND"), List.of("TASK_INVITE", "TASK_INVITE"))) {
             var f = new Fixture(); var a = f.session("a", "agent-a");
             f.handler.afterConnectionEstablished(a);
-            f.handler.handleTextMessage(a, new TextMessage(new ObjectMapper().writeValueAsString(Map.of(
+            UnifiedRuntimeTestSupport.deliver(f.handler, a, new TextMessage(new ObjectMapper().writeValueAsString(Map.of(
                     "type", "agent.register", "agentId", "agent-a", "runtimeInstanceId", "boot",
                     "durableStateHealthy", true, "readyCommandTypes", types))));
             verify(f.service, never()).register(any());
@@ -116,7 +116,7 @@ class AgentWebSocketUnifiedReadinessTest {
         f.register(a, true, true); f.register(b, true, true);
         var runtime = new AgentRuntimeDTO(); runtime.setAgentId("agent-a"); runtime.setStatus("online");
         when(f.service.updateStatus(eq("agent-a"), any())).thenReturn(runtime);
-        f.handler.handleTextMessage(a, new TextMessage("{\"schemaVersion\":1,\"messageType\":\"agent.presence\",\"messageId\":\"health\","
+        UnifiedRuntimeTestSupport.deliver(f.handler, a, new TextMessage("{\"schemaVersion\":1,\"messageType\":\"agent.presence\",\"messageId\":\"health\","
                 + "\"agentId\":\"agent-a\",\"runtimeInstanceId\":\"boot\",\"status\":\"online\",\"durableStateHealthy\":false}"));
         assertFalse(f.handler.isExactAgentConnected("0", "client", "agent-a"));
         assertTrue(f.handler.isExactAgentConnected("0", "client", "agent-b"));
@@ -129,9 +129,9 @@ class AgentWebSocketUnifiedReadinessTest {
         var presence = new TextMessage("{\"type\":\"agent.presence\",\"agentId\":\"agent-a\","
                 + "\"runtimeInstanceId\":\"boot\",\"status\":\"online\"}");
 
-        f.handler.handleTextMessage(old, presence);
+        UnifiedRuntimeTestSupport.deliver(f.handler, old, presence);
         verify(f.service, never()).updateStatus(any(), any());
-        f.handler.handleTextMessage(current, presence);
+        UnifiedRuntimeTestSupport.deliver(f.handler, current, presence);
         verify(f.service).updateStatus(eq("agent-a"), any());
         assertTrue(f.handler.isExactAgentConnected("0", "client", "agent-a"));
     }
@@ -139,7 +139,7 @@ class AgentWebSocketUnifiedReadinessTest {
         var f = new Fixture(); var a = f.session("a", "agent-a"); f.register(a, false, true);
         clearInvocations(f.service, a);
 
-        f.handler.handleTextMessage(a, new TextMessage("{\"type\":\"task.report\",\"agentId\":\"agent-a\","
+        UnifiedRuntimeTestSupport.deliver(f.handler, a, new TextMessage("{\"type\":\"task.report\",\"agentId\":\"agent-a\","
                 + "\"runtimeInstanceId\":\"boot\",\"taskId\":\"original-task\",\"status\":\"completed\"}"));
 
         verifyNoInteractions(f.service);
@@ -156,7 +156,7 @@ class AgentWebSocketUnifiedReadinessTest {
         doThrow(new IllegalArgumentException("stale generation"))
                 .when(f.auth).withFence(eq(proof), eq(false), any());
 
-        f.handler.handleTextMessage(a, new TextMessage("{\"type\":\"agent.presence\",\"agentId\":\"agent-a\","
+        UnifiedRuntimeTestSupport.deliver(f.handler, a, new TextMessage("{\"type\":\"agent.presence\",\"agentId\":\"agent-a\","
                 + "\"runtimeInstanceId\":\"boot\",\"status\":\"online\"}"));
 
         verify(f.auth).withFence(eq(proof), eq(false), any());
@@ -170,7 +170,7 @@ class AgentWebSocketUnifiedReadinessTest {
         var b = f.session("b", "agent-b"); f.register(b, true, true);
         var runtime = new AgentRuntimeDTO(); runtime.setAgentId("agent-b"); runtime.setStatus("online");
         when(f.service.updateStatus(eq("agent-b"), any())).thenReturn(runtime);
-        f.handler.handleTextMessage(b, new TextMessage("{\"type\":\"agent.presence\",\"agentId\":\"agent-b\","
+        UnifiedRuntimeTestSupport.deliver(f.handler, b, new TextMessage("{\"type\":\"agent.presence\",\"agentId\":\"agent-b\","
                 + "\"runtimeInstanceId\":\"boot\",\"status\":\"online\"}"));
         verify(f.service).updateStatus(eq("agent-b"), any());
         verify(f.service, never()).updateStatus(eq("agent-a"), any());
@@ -192,7 +192,7 @@ class AgentWebSocketUnifiedReadinessTest {
         var disposable = trackStream(f.handler, "old", "original-request", "original-conversation");
         f.stop(old, "original-request", "original-conversation");
         f.stop(current, "original-request", "original-conversation");
-        f.handler.handleTextMessage(old, new TextMessage("{\"type\":\"chat.stop\",\"requestId\":\"original-request\"}"));
+        UnifiedRuntimeTestSupport.deliver(f.handler, old, new TextMessage("{\"type\":\"chat.stop\",\"requestId\":\"original-request\"}"));
         verify(disposable, never()).dispose();
     }
     // Seed only the existing private stream recovery handle; no network/provider execution.
@@ -236,10 +236,10 @@ class AgentWebSocketUnifiedReadinessTest {
             var payload = new HashMap<String, Object>(); payload.put("type", "agent.register"); payload.put("agentId", s.getAttributes().get("agentId"));
             UnifiedRuntimeTestSupport.registrationProof(s, payload);
             payload.put("runtimeInstanceId", "boot"); payload.put("durableStateHealthy", durable); payload.put("readyCommandTypes", execute ? List.of("TASK_INVITE") : List.of());
-            handler.handleTextMessage(s, new TextMessage(new ObjectMapper().writeValueAsString(payload)));
+            UnifiedRuntimeTestSupport.deliver(handler, s, new TextMessage(new ObjectMapper().writeValueAsString(payload)));
         }
         void stop(WebSocketSession session, String requestId, String conversationId) throws Exception {
-            handler.handleTextMessage(session, new TextMessage(new ObjectMapper().writeValueAsString(Map.of(
+            UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage(new ObjectMapper().writeValueAsString(Map.of(
                     "type", "chat.stop", "requestId", requestId, "conversationId", conversationId))));
         }
         AgentRawCommandDispatchResult dispatch(String agent) { return handler.dispatchExactRawCommand("0", "client", "task", agent, wire(agent)); }

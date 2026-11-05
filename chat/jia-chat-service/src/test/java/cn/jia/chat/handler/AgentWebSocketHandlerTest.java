@@ -141,6 +141,7 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         assertFalse(messages.contains("\"type\":\"task_assigned\""));
         assertFalse(messages.contains("task.report.receipt"));
         verify(agentService).register(any(AgentRegisterDTO.class));
+        verify(agentService).listCapabilities();
         org.mockito.Mockito.verifyNoMoreInteractions(agentService);
         assertSafeServerDownlinks(messageCaptor.getAllValues());
     }

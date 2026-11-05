@@ -71,7 +71,7 @@ class C01BTaskEventContractTest {
             Map.entry("agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentWorkItemResultCommitServiceImpl.java", 1),
             Map.entry("agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentTaskFormalDeliveryServiceImpl.java", 3),
             Map.entry("agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentTaskFormalDeliveryDecisionServiceImpl.java", 4),
-            Map.entry("agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentLegacyTaskCompatibilityService.java", 5),
+            Map.entry("agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentLegacyTaskCompatibilityService.java", 3),
             Map.entry("agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentServiceImpl.java", 3),
             Map.entry("chat/jia-chat-service/src/main/java/cn/jia/chat/service/impl/AgentTaskThreadCreationTransaction.java", 2));
 
