@@ -140,3 +140,8 @@
 Web `useHallTerminalTextHistory`复用现有owner/task会话发现，但不扫描完整请求目录；首读最近50条消息，按metadata中的requestId批量取得原请求快照，仅对已持久化CHAT读取一次typed成果，不重复GET请求详情。显式加载旧页只补新增ID，普通CHAT无typed成果的404不作为错误。空窗口不是全历史为空；旧页/详情失败保留已读成果并重试当前窗口，不跳过失败页。显式刷新重置窗口，身份/事项切换及卸载隔离迟到响应。无新增接口、轮询、SSE或持久缓存。
 
 正式验收面板的完整因果图不变。轻量Web465项通过，仅证明候选消费者行为；Java/真实数据库/Flow/上线均未完成，不能据此声明接口已发布或实际延迟下降。
+
+## 2026-11-05 正式验收页责任收口（Web后续候选）
+BountyAcceptancePanel保留父页面deliveryReview的正式currentDelivery/history及预览/验收；删除另挂的BountyExecutionOutputs和其完整请求目录、逐条request/typed/steps读取及客户端交付图推导。原会话发现仅供继续议事，不读取请求目录或独立订阅SSE。未提交成果和历史版选择仍在原议事中，无接口/验收写入变化，不以截断图判定当前成果。前节“独立验收页仍读完整请求目录”由本候选覆盖，未上线。
+
+未完成：ChatTaskDeliveryReviewReadService.read仍COUNT正式批次，超过100直接Conflict，否则listForTaskOwner读取全部批次并逐批sourceItems；折叠Web history不减少这部分读。需以独立当前正式交付查询+显式历史分页替代，不放大上限或简单截断。真实消费者含useHallDeliveryReview/hallDeliveryReviewIntent、BountyAcceptancePanel、HallCompletedRecords，后者还会为补显示名称追取成果目录，需一并核对必要性；本轮未修改这些后端/已完成记录路径。
