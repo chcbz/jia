@@ -10,6 +10,18 @@ import static org.mockito.Mockito.*;
 
 /** In-memory claim follows commit, never a SQL write that may still roll back. */
 class ChatDeliberationOutboxCommitTest {
+    // A FactoryBean product is not property-populated as a real deliberation bean:
+    // only the production outbox is under wiring test; unrelated service setters
+    // must not turn this focused startup regression into a full application fixture.
+    static class PreparationFactory implements org.springframework.beans.factory.FactoryBean<ChatDeliberationService> {
+        private final ChatDeliberationService preparation;
+        PreparationFactory(ChatDeliberationOutboxService outbox, ChatDeliberationService preparation) {
+            assertNotNull(outbox);
+            this.preparation = preparation;
+        }
+        @Override public ChatDeliberationService getObject() { return preparation; }
+        @Override public Class<?> getObjectType() { return ChatDeliberationService.class; }
+    }
     @Test void contextStartsWithoutCircularReferencesAndClaimResolvesPreparationService() {
         var preparation = mock(ChatDeliberationService.class);
         try (var context = new org.springframework.context.annotation.AnnotationConfigApplicationContext()) {
@@ -21,10 +33,8 @@ class ChatDeliberationOutboxCommitTest {
             context.registerBean(ChatDeliberationOutboxService.class);
             // Production deliberation -> final/submission -> outbox graph must not
             // cause outbox's preparation callback to instantiate deliberation early.
-            context.registerBean(ChatDeliberationService.class, () -> {
-                context.getBean(ChatDeliberationOutboxService.class);
-                return preparation;
-            });
+            context.registerBean("chatDeliberationService", PreparationFactory.class,
+                    () -> new PreparationFactory(context.getBean(ChatDeliberationOutboxService.class), preparation));
             context.refresh();
             verifyNoInteractions(preparation);
             var candidate = new ChatDispatchOutboxEntity();
