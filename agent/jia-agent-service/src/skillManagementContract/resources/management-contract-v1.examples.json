@@ -2438,7 +2438,7 @@
         }
       },
       "canonicalUtf8": "{\"data\":{\"action\":\"UPGRADE\",\"approvedPermissions\":[\"READ_AUTHORIZED_INPUT\",\"WRITE_TASK_RESULT\"],\"expectedAgentVersion\":\"12\",\"expectedPrice\":{\"amountMinor\":\"0\",\"currency\":\"WEN\"},\"expectedSkillRevision\":\"7\",\"quoteId\":\"sq_demo\",\"skillKey\":\"image-edit\",\"sourceSkillInstallationId\":\"si_old\",\"targetProductVersionId\":\"spv_new\"},\"method\":\"POST\",\"path\":\"/agent/agt_demo/skill-changes\"}",
-      "sha256": "9e47aa8c2ddd81cafbb933c8f7eae624e0adf6d6f9064b6814e868ab4e3e465a"
+      "sha256": "526008a0e27763650cc43c0e4367488b463596f64118c995bc0149ede5ce5619"
     },
     {
       "domain": "cyf.skill.canonical.test.v1",

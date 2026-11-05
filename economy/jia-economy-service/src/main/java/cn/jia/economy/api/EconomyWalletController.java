@@ -114,6 +114,23 @@ public final class EconomyWalletController {
         }
     }
 
+    @PostMapping(value = "/preview/issuances", consumes = MediaType.APPLICATION_JSON_VALUE,
+            produces = MediaType.APPLICATION_JSON_VALUE)
+    public cn.jia.core.entity.JsonResult<IssuanceResponse> issue(@cn.jia.core.annotation.ApiJsonData @RequestBody byte[] rawBody, HttpServletRequest request,
+            Authentication authentication) {
+        requireNoQuery(request);
+        Subject subject = requireSubject(authentication);
+        requirePreviewScope(subject.scope());
+        if (!gate.testIssuanceEnabled()) throw disabled();
+        String idempotencyKey = singleHeader(request, "Idempotency-Key");
+        if (!CANONICAL_UUID.matcher(idempotencyKey).matches()) throw badRequest();
+        IssuanceRequest body = parseIssuanceBody(rawBody);
+        byte[] requestHash = requestHash(subject, body);
+        EconomyPostingResult result = walletService.issue(subject.scope(), subject.actorId(), idempotencyKey,
+                requestHash, body.amountWen(), body.campaignRef());
+        return cn.jia.core.entity.JsonResult.success(new IssuanceResponse(result.transactionId(), result.status(), Money.wen(body.amountWen())));
+    }
+
     @ExceptionHandler(EconomyRequestException.class)
     public ResponseEntity<cn.jia.core.entity.JsonResult<EconomyErrorDetails>> requestFailure(EconomyRequestException exception) {
         return error(exception.status, exception.code, exception.getMessage(), false);
