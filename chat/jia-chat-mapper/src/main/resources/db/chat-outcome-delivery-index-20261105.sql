@@ -1,5 +1,6 @@
 -- Candidate only. Apply through the authorized host migration with a fixed backup.
 -- This DDL does NOT backfill historical rows or authorize switching readers to the index.
+-- After DDL, explicitly invoke the maintenance backfill described in ops/schema/README.md.
 -- Historical canonical JSON/digests must stay unchanged. Do not run from application startup.
 ALTER TABLE chat_typed_outcome
   ADD COLUMN delivery_target_agent_id VARCHAR(100) DEFAULT NULL,

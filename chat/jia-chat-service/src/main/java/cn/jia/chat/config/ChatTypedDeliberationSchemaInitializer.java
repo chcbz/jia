@@ -76,6 +76,25 @@ public final class ChatTypedDeliberationSchemaInitializer implements Application
         }
     }
 
+    public record DeliveryIndexBackfillResult(long scanned, long updated, int batches) { }
+
+    /** Explicit, separately authorized maintenance action; not part of startup/initialize.
+     * The operator must stop old writers and retain a fixed backup before calling. */
+    public synchronized DeliveryIndexBackfillResult backfillDeliveryIndex(String tenant) throws Exception {
+        if (!enabled || !allowMigration) throw new IllegalStateException("Typed maintenance is not enabled");
+        DataSource source = jdbc.getDataSource();
+        if (source == null) throw new IllegalStateException("Typed deliberation DataSource unavailable");
+        try (Connection connection = source.getConnection()) {
+            requireMySql8(connection);
+            JdbcTemplate locked = new JdbcTemplate(new SingleConnectionDataSource(connection, true));
+            acquire(locked);
+            try {
+                validateCatalog(locked);
+                return ChatOutcomeDeliveryIndexBackfill.run(connection, tenant);
+            } finally { release(locked); }
+        }
+    }
+
     private boolean initializeSchema() throws Exception {
         if (deliberationSchema != null) deliberationSchema.ensureInitialized();
         DataSource source = jdbc.getDataSource();

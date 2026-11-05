@@ -128,3 +128,9 @@
 - 当前窗口仅决定显示候选；选择某版本的验收仍由`useHallSelectedOutputReview`及后端权威review事实确认，不把局部窗口拼成整个任务交付集合。独立任务详情的BountyAcceptancePanel、取消任务历史页仍使用原完整目录实例，尚待单独收口，不能机械截断其依赖。
 
 回归入口：`ChatBountyRequestIndexStoreTest`一次批量查询/精确scope与ID、`ChatBountyRequestIndexPageTest`批量无watermark/互斥/缺失、`ChatBountyRequestIndexHttpTest`重复query字段和完整共享信封；这些Java用例尚未执行。Web实际composable覆盖10000个合成历史ID仅选择50个的一次批量请求、旧页只补新增、100项分批、合并等待/失效与不完整结果；实际SFC覆盖inline无重复请求、复用文字成果精确来源、选择事件仅传outcomeId。轻量420项通过约6秒是测试耗时，不是生产延迟或压测。
+
+## 2026-11-05 历史交付索引维护候选
+
+新增显式 `ChatTypedDeliberationSchemaInitializer.backfillDeliveryIndex(configuredTenant)`，复用原维护上下文/schema锁，正常initialize、HTTP、流式链路不调用。详情见 `ops/schema/README.md`。只补两个派生列，按主键100条/事务，幂等核对；正文/摘要/完成事实不改，不重验当前工具授权或重放旧执行。既有v1/v2非交付语义保留，v5从持久化deliveryRelation抽取，未知语义/冲突不猜测覆盖。
+
+这是维护源码候选，不是历史数据已经回填：Java尚未运行，MySQL演练、主机安装器调用、备份/停旧writer和实际迁移仍待完成。仅加列不能启用新读取。主议事页与任务历史/验收页的优化完成范围仍按前节，不因增加维护方法扩大完成声明。
