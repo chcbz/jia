@@ -3,6 +3,7 @@ package cn.jia.chat.service;
 import cn.jia.agent.entity.AgentTaskMetaEntity;
 import cn.jia.chat.dao.ChatConversationDao;
 import cn.jia.chat.deliberation.ChatBountyRequestIndexStore;
+import cn.jia.chat.deliberation.ChatDeliveryContextStore;
 import cn.jia.chat.deliberation.ChatRequestEntity;
 import cn.jia.chat.deliberation.ChatTurnEntity;
 import cn.jia.chat.entity.ChatConversationEntity;
@@ -55,6 +56,16 @@ public class ChatBountyRequestIndexService {
     public record Page(int schemaVersion, Scope scope, String after, String through,
             String nextAfter, boolean hasMore, List<Entry> entries, String eventCursor) { }
 
+    public record DeliveryQuery(String expectedGeneration, String expectedAssignmentRevision,
+            String beforeMessageId, String beforeOutcomeId) { }
+    public record DeliveryChoice(String outcomeId, String requestId, String assistantMessageId,
+            String finalSha256, String kind, String label) { }
+    public record DeliveryPage(int schemaVersion, Scope scope, String assignmentRevision, String targetAgentId,
+            boolean pendingExecution, List<DeliveryChoice> items, boolean hasMore,
+            String nextBeforeMessageId, String nextBeforeOutcomeId) { }
+
+    private final ChatDeliveryContextStore deliveries;
+    private final JuyitingConversationScopeService conversationScopes;
     private final ChatBountyRequestIndexStore store;
     private final ChatConversationDao conversations;
     private final Object taskRoots;
@@ -67,7 +78,10 @@ public class ChatBountyRequestIndexService {
      */
     public ChatBountyRequestIndexService(ChatBountyRequestIndexStore store,
             ChatConversationDao conversations,
-            @Qualifier("agentTaskMetaDaoImpl") Object taskRoots) {
+            @Qualifier("agentTaskMetaDaoImpl") Object taskRoots,
+            ChatDeliveryContextStore deliveries, JuyitingConversationScopeService conversationScopes) {
+        this.deliveries = Objects.requireNonNull(deliveries);
+        this.conversationScopes = Objects.requireNonNull(conversationScopes);
         this.store = Objects.requireNonNull(store, "store");
         this.conversations = Objects.requireNonNull(conversations, "conversations");
         this.taskRoots = Objects.requireNonNull(taskRoots, "taskRoots");
@@ -89,12 +103,8 @@ public class ChatBountyRequestIndexService {
         long conversationNumber = positiveCanonical(conversationId);
         String canonicalConversation = Long.toString(conversationNumber);
         try {
-            ChatConversationEntity conversation = conversations.findScopedById(
-                    ownerJiacn, clientId, canonicalConversation);
-            ConversationScope scope = requireConversation(conversation, tenantId, ownerJiacn,
-                    clientId, canonicalConversation, parsed.expectedGeneration());
-            AgentTaskMetaEntity task = taskRoot(tenantId, clientId, ownerJiacn, scope.taskId());
-            requireTask(task, tenantId, clientId, ownerJiacn, scope.taskId());
+            ConversationScope scope = authorize(tenantId, ownerJiacn, clientId,
+                    canonicalConversation, parsed.expectedGeneration()).scope();
 
             var sqlScope = new ChatBountyRequestIndexStore.Scope(tenantId, ownerJiacn, clientId,
                     canonicalConversation, scope.generation());
@@ -151,6 +161,54 @@ public class ChatBountyRequestIndexService {
         } catch (RuntimeException failure) {
             throw unavailable(failure);
         }
+    }
+
+    /** Current send choices are separate from historical detail pages and never mint write authority. */
+    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ, rollbackFor = Exception.class)
+    public DeliveryPage deliveryContext(String tenant, String owner, String client, String conversationId,
+            DeliveryQuery query) {
+        if (query == null) throw invalid();
+        Long generation = query.expectedGeneration() == null ? null : parseDecimal(query.expectedGeneration(), true);
+        Long expectedAssignment = query.expectedAssignmentRevision() == null ? null : parseDecimal(query.expectedAssignmentRevision(), false);
+        if ((query.beforeMessageId() == null) != (query.beforeOutcomeId() == null)) throw invalid();
+        ChatDeliveryContextStore.Cursor before = null;
+        if (query.beforeMessageId() != null) {
+            if (generation == null || expectedAssignment == null || !validIdentity(query.beforeOutcomeId(), 64)) throw invalid();
+            before = new ChatDeliveryContextStore.Cursor(parseDecimal(query.beforeMessageId(), true), query.beforeOutcomeId());
+        }
+        requireIdentity(owner, 50); requireIdentity(client, 50);
+        if (!"0".equals(tenant)) throw notFound();
+        String id = Long.toString(positiveCanonical(conversationId));
+        try {
+            var authorized = authorize(tenant, owner, client, id, generation);
+            var scope = authorized.scope();
+            var targets = conversationScopes.parsePersistedTargetAgentIds(authorized.conversation().getTargetAgentIds());
+            if (targets.size() != 1) throw conflict();
+            Long assignment = deliveries.assignment(tenant, owner, client, scope.taskId(), Long.parseLong(id));
+            if (assignment == null || expectedAssignment != null && !expectedAssignment.equals(assignment)) throw conflict();
+            var sqlScope = new ChatDeliveryContextStore.Scope(tenant, owner, client, id, scope.generation(),
+                    scope.taskId(), assignment, targets.getFirst());
+            var rows = deliveries.heads(sqlScope, before, 51);
+            boolean hasMore = rows.size() > 50;
+            var page = hasMore ? rows.subList(0, 50) : rows;
+            var items = page.stream().map(row -> new DeliveryChoice(row.outcomeId(), row.requestId(),
+                    Long.toString(row.assistantMessageId()), row.finalDigest().substring("sha256:".length()),
+                    row.kind(), row.label())).toList();
+            var last = hasMore ? page.getLast() : null;
+            return new DeliveryPage(1, new Scope(id, Long.toString(scope.generation()), scope.taskId()),
+                    Long.toString(assignment), targets.getFirst(), deliveries.pendingExecution(sqlScope), items,
+                    hasMore, last == null ? null : Long.toString(last.assistantMessageId()),
+                    last == null ? null : last.outcomeId());
+        } catch (Failure failure) { throw failure; }
+        catch (RuntimeException failure) { throw unavailable(failure); }
+    }
+
+    private record Authorized(ConversationScope scope, ChatConversationEntity conversation) { }
+    private Authorized authorize(String tenant, String owner, String client, String id, Long generation) {
+        var conversation = conversations.findScopedById(owner, client, id);
+        var scope = requireConversation(conversation, tenant, owner, client, id, generation);
+        requireTask(taskRoot(tenant, client, owner, scope.taskId()), tenant, client, owner, scope.taskId());
+        return new Authorized(scope, conversation);
     }
 
     private static ChatDeliberationService.RequestView presentation(ChatRequestEntity request,

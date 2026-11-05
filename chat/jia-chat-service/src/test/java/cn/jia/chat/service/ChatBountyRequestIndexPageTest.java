@@ -34,7 +34,8 @@ class ChatBountyRequestIndexPageTest {
                 .setConversationScopeKey("task:task").setTaskId("task").setLifecycleGeneration(1L);
         conversation.setTenantId("0"); conversation.setClientId("client");
         when(conversations.findScopedById("owner", "client", "101")).thenReturn(conversation);
-        service = new ChatBountyRequestIndexService(store, conversations, new TaskRoots());
+        service = new ChatBountyRequestIndexService(store, conversations, new TaskRoots(),
+                mock(cn.jia.chat.deliberation.ChatDeliveryContextStore.class), mock(JuyitingConversationScopeService.class));
         request = new ChatRequestEntity().setId(7L).setRequestId("r7").setRequestRevision(1L)
                 .setConversationId("101").setConversationGeneration(1L).setUserMessageId(9007199254740993L)
                 .setAggregateState("RUNNING").setStateVersion(2L);

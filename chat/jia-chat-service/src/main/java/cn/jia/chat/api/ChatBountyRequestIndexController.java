@@ -53,6 +53,32 @@ public class ChatBountyRequestIndexController {
         if (!QUERY_KEYS.containsAll(parameters.keySet()) || parameters.entrySet().stream()
                 .anyMatch(entry -> entry.getValue() == null || entry.getValue().length != 1)
                 || hasBody(request)) throw invalid();
+        var identity = identity(authentication);
+        String tenant = identity.tenant();
+        var sender = identity.sender();
+        var query = new ChatBountyRequestIndexService.Query(value(parameters, "expectedGeneration"),
+                value(parameters, "after"), value(parameters, "through"),
+                value(parameters, "pageSize"), value(parameters, "requestId"), value(parameters, "latest"));
+        return response(HttpStatus.OK, JsonResult.success(index.read(tenant, sender.jiacn(),
+                sender.clientId(), conversationId, query)));
+    }
+
+    @GetMapping("/{conversationId}/delivery-context")
+    public ResponseEntity<JsonResult<ChatBountyRequestIndexService.DeliveryPage>> deliveryContext(
+            @PathVariable String conversationId, HttpServletRequest request, Authentication authentication) {
+        var parameters = request.getParameterMap();
+        if (!Set.of("expectedGeneration", "expectedAssignmentRevision", "beforeMessageId", "beforeOutcomeId")
+                .containsAll(parameters.keySet()) || parameters.values().stream().anyMatch(value -> value == null || value.length != 1)
+                || hasBody(request)) throw invalid();
+        var identity = identity(authentication);
+        var query = new ChatBountyRequestIndexService.DeliveryQuery(value(parameters, "expectedGeneration"),
+                value(parameters, "expectedAssignmentRevision"), value(parameters, "beforeMessageId"), value(parameters, "beforeOutcomeId"));
+        return response(HttpStatus.OK, JsonResult.success(index.deliveryContext(identity.tenant(),
+                identity.sender().jiacn(), identity.sender().clientId(), conversationId, query)));
+    }
+
+    private record Identity(String tenant, ServerResolvedSender sender) { }
+    private Identity identity(Authentication authentication) {
         String tenant = tenants.resolve(authentication);
         if (!(authentication instanceof JwtAuthenticationToken jwt) || !authentication.isAuthenticated()) {
             throw notFound();
@@ -73,11 +99,7 @@ public class ChatBountyRequestIndexController {
                 || !owner.equals(context.getJiacn()) || !client.equals(context.getClientId())) {
             throw notFound();
         }
-        var query = new ChatBountyRequestIndexService.Query(value(parameters, "expectedGeneration"),
-                value(parameters, "after"), value(parameters, "through"),
-                value(parameters, "pageSize"), value(parameters, "requestId"), value(parameters, "latest"));
-        return response(HttpStatus.OK, JsonResult.success(index.read(tenant, sender.jiacn(),
-                sender.clientId(), conversationId, query)));
+        return new Identity(tenant, sender);
     }
 
     private static String value(Map<String, String[]> values, String key) {

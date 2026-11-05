@@ -73,6 +73,28 @@ class ChatBountyRequestIndexHttpTest {
         assertEquals(fixture.get("data"), body.get("data"));
         verify(service).read("0", "owner", "client", "101", query); verifyNoMoreInteractions(service);
     }
+    @Test void deliveryContextUsesSharedEnvelopeAndBoundedChoiceContract() throws Exception {
+        var mapper = new ObjectMapper();
+        var fixture = mapper.readTree(getClass().getResourceAsStream("/contracts/hall-delivery-context.json"));
+        var page = mapper.treeToValue(fixture.get("data"), ChatBountyRequestIndexService.DeliveryPage.class);
+        var query = new ChatBountyRequestIndexService.DeliveryQuery("1", "3", null, null);
+        when(service.deliveryContext("0", "owner", "client", "101", query)).thenReturn(page);
+        var response = mvc.perform(get("/chat/conversations/101/delivery-context")
+                .param("expectedGeneration", "1").param("expectedAssignmentRevision", "3")
+                .principal(auth).header("X-Request-Id", "hall-delivery-context"))
+                .andExpect(status().isOk()).andReturn().getResponse();
+        var body = mapper.readTree(response.getContentAsString());
+        for (String field : List.of("data", "code", "protocolVersion", "requestId")) assertEquals(fixture.get(field), body.get(field));
+        assertTrue(response.getHeader("Cache-Control").contains("no-store"));
+        verify(service).deliveryContext("0", "owner", "client", "101", query); verifyNoMoreInteractions(service);
+    }
+    @Test void deliveryContextCannotOverrideTaskOrSendAmbiguousPagination() throws Exception {
+        mvc.perform(get("/chat/conversations/101/delivery-context").param("taskId", "other").principal(auth))
+                .andExpect(status().isBadRequest());
+        mvc.perform(get("/chat/conversations/101/delivery-context").param("beforeMessageId", "1", "2").principal(auth))
+                .andExpect(status().isBadRequest());
+        verifyNoInteractions(service);
+    }
     @Test void duplicateRequestIdIsRejectedAtProtocolBoundary() throws Exception {
         mvc.perform(get("/chat/conversations/101/requests").param("requestId", "one", "two").principal(auth))
                 .andExpect(status().isBadRequest());
