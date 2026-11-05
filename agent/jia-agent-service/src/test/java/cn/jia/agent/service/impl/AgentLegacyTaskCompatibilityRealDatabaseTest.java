@@ -1,5 +1,6 @@
 package cn.jia.agent.service.impl;
 
+import cn.jia.agent.common.TaskEventType;
 import cn.jia.agent.dao.AgentTaskMemberDao;
 import cn.jia.agent.dao.AgentTaskMetaDao;
 import cn.jia.agent.dao.AgentTaskWorkItemDao;
@@ -34,6 +35,7 @@ import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.AnnotationTransactionAttributeSource;
 import org.springframework.transaction.interceptor.TransactionInterceptor;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import javax.sql.DataSource;
 import java.util.List;
@@ -206,7 +208,87 @@ class AgentLegacyTaskCompatibilityRealDatabaseTest {
         jdbc.execute("DROP ALL OBJECTS");
     }
 
-member_role='worker' "
+    @Test
+    void assignmentEventFailureRollsBackReservedRootMembersAndWorkItems() {
+        doAnswer(invocation -> {
+            AgentTaskEventWriteCommand command = invocation.getArgument(0);
+            if (TaskEventType.TASK_ASSIGNED.equals(command.getEventType())) {
+                throw new IllegalStateException("forced assignment event failure");
+            }
+            return null;
+        }).when(eventWriter).append(any());
+
+        assertThrows(IllegalStateException.class, () ->
+                service.assign(TENANT, CLIENT, OWNER, TASK, List.of(AGENT_A), false));
+        assertEquals(0, count("agent_task_meta"));
+        assertEquals(0, count("agent_task_member"));
+        assertEquals(0, count("agent_task_work_item"));
+    }
+
+    @Test
+    void outerRollbackRemovesAssignmentRootMembersAndWorkItems() {
+        TransactionTemplate outer = new TransactionTemplate(transactionManager);
+        outer.executeWithoutResult(status -> {
+            service.assign(TENANT, CLIENT, OWNER, TASK, List.of(AGENT_A), false);
+            status.setRollbackOnly();
+        });
+        assertEquals(0, count("agent_task_meta"));
+        assertEquals(0, count("agent_task_member"));
+        assertEquals(0, count("agent_task_work_item"));
+    }
+
+    @Test
+    void sameMemberSetIsIdempotentButDifferentReassignmentFailsClosed() {
+        insertTask(TASK, TENANT, "assigned", 0L);
+        AgentLegacyTaskCompatibilityService.AssignOutcome first = service.assign(
+                TENANT, CLIENT, OWNER, TASK, List.of(AGENT_A, AGENT_B), false);
+        AgentLegacyTaskCompatibilityService.AssignOutcome sameSet = service.assign(
+                TENANT, CLIENT, OWNER, TASK, List.of(AGENT_B, AGENT_A), true);
+
+        assertTrue(first.changed());
+        assertFalse(sameSet.changed());
+        assertEquals(List.of(AGENT_A, AGENT_B), sameSet.agentIds());
+        assertReason(Reason.INVALID_REQUEST, () -> service.assign(
+                TENANT, CLIENT, OWNER, TASK, List.of(AGENT_A, AGENT_C), false));
+        assertEquals(2, count("agent_task_member"));
+        assertEquals(2, count("agent_task_work_item"));
+        assertEquals(AGENT_A, value("SELECT assigned_agent_id FROM agent_task_meta"));
+        assertEquals(AGENT_A, value("SELECT coordinator_agent_id FROM agent_task_meta"));
+        assertEquals(2L, number("SELECT max_agents FROM agent_task_meta"));
+        assertEquals("team", value("SELECT collaboration_mode FROM agent_task_meta"));
+    }
+
+    @Test
+    void preexistingNonLegacyWorkItemBlocksCompatibilityAssignment() {
+        insertTask(TASK, TENANT, "assigned", 0L);
+        jdbc.update("INSERT INTO agent_task_work_item "
+                        + "(work_item_id,task_id,title,work_type,assignee_agent_id,status,"
+                        + "priority,required_item,attempt_count,max_attempts,version,"
+                        + "tenant_id,client_id,owner_jiacn,create_time,update_time) "
+                        + "VALUES ('existing-work',?,'existing','implementation',?,'ready',"
+                        + "0,1,0,3,0,?,?,?,1,1)",
+                TASK, AGENT_A, TENANT, CLIENT, OWNER);
+
+        assertReason(Reason.INVALID_PERSISTED_STATE, () -> service.assign(
+                TENANT, CLIENT, OWNER, TASK, List.of(AGENT_A), false));
+        assertEquals(0, count("agent_task_member"));
+        assertEquals(1, count("agent_task_work_item"));
+        assertNull(value("SELECT assigned_agent_id FROM agent_task_meta"));
+    }
+
+    @Test
+    void idempotentAssignmentRejectsHiddenDependencyOrCoordinatorDrift() {
+        insertTask(TASK, TENANT, "assigned", 0L);
+        service.assign(TENANT, CLIENT, OWNER, TASK, List.of(AGENT_A, AGENT_B), false);
+
+        jdbc.update("UPDATE agent_task_work_item SET dependency_json='[\"missing\"]' "
+                + "WHERE assignee_agent_id=?", AGENT_B);
+        assertReason(Reason.INVALID_PERSISTED_STATE, () -> service.assign(
+                TENANT, CLIENT, OWNER, TASK, List.of(AGENT_A, AGENT_B), false));
+
+        jdbc.update("UPDATE agent_task_work_item SET dependency_json='[]' "
+                + "WHERE assignee_agent_id=?", AGENT_B);
+        jdbc.update("UPDATE agent_task_member SET member_role='worker' "
                 + "WHERE agent_id=?", AGENT_A);
         assertReason(Reason.INVALID_PERSISTED_STATE, () -> service.assign(
                 TENANT, CLIENT, OWNER, TASK, List.of(AGENT_A, AGENT_B), false));
@@ -322,7 +404,65 @@ member_role='worker' "
         }
     }
 
-client_id, task_id)
+    @Test
+    void assignmentRejectsTruncatedWorkItemSnapshotWithoutPartialWrites() {
+        insertTask(TASK, TENANT, "assigned", 0L);
+        for (int index = 0; index < 501; index++) {
+            jdbc.update("INSERT INTO agent_task_work_item "
+                            + "(work_item_id,task_id,title,work_type,status,priority,required_item,"
+                            + "attempt_count,max_attempts,version,tenant_id,client_id,owner_jiacn,create_time,update_time) "
+                            + "VALUES (?,?,?,'implementation','ready',0,1,0,3,0,?,?,?,1,1)",
+                    "extra-" + index, TASK, "extra-" + index, TENANT, CLIENT, OWNER);
+        }
+
+        assertReason(Reason.INVALID_PERSISTED_STATE, () -> service.assign(
+                TENANT, CLIENT, OWNER, TASK, List.of(AGENT_A), false));
+        assertEquals(0, count("agent_task_member"));
+        assertEquals(501, count("agent_task_work_item"));
+        assertNull(value("SELECT assigned_agent_id FROM agent_task_meta"));
+    }
+
+    @Test
+    void assignmentPersistenceFailureRollsBackEarlierMemberAndWorkItemWrites() {
+        insertTask(TASK, TENANT, "assigned", 0L);
+        jdbc.execute("ALTER TABLE agent_task_work_item ADD CONSTRAINT fixture_one_item_per_task UNIQUE (task_id)");
+
+        assertThrows(RuntimeException.class, () -> service.assign(
+                TENANT, CLIENT, OWNER, TASK, List.of(AGENT_A, AGENT_B), false));
+        assertEquals(0, count("agent_task_member"));
+        assertEquals(0, count("agent_task_work_item"));
+        assertEquals("assigned", value("SELECT reward_status FROM agent_task_meta"));
+        assertNull(value("SELECT assigned_agent_id FROM agent_task_meta"));
+        assertNull(value("SELECT coordinator_agent_id FROM agent_task_meta"));
+    }
+
+    private Object assignOutcomeAfterBarrier(CountDownLatch start, List<String> agentIds) {
+        try {
+            if (!start.await(10, TimeUnit.SECONDS)) {
+                return new AssertionError("assignment barrier timeout");
+            }
+            return service.assign(TENANT, CLIENT, OWNER, TASK, agentIds, false);
+        } catch (Throwable error) {
+            return error;
+        }
+    }
+
+    private void createTables() {
+        jdbc.execute("""
+                CREATE TABLE agent_task_meta (
+                    id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                    owner_jiacn VARCHAR(50) NOT NULL,
+                    task_id VARCHAR(100) NOT NULL,
+                    reward_status VARCHAR(20) NOT NULL,
+                    assigned_agent_id VARCHAR(100), required_abilities TEXT, reward INT,
+                    assigned_at BIGINT, started_at BIGINT, completed_at BIGINT,
+                    failure_reason VARCHAR(1000), collaboration_mode VARCHAR(20) NOT NULL DEFAULT 'team',
+                    risk_level VARCHAR(20) NOT NULL DEFAULT 'low', max_agents INT NOT NULL DEFAULT 2,
+                    coordinator_agent_id VARCHAR(100), review_required TINYINT NOT NULL DEFAULT 1,
+                    task_version BIGINT NOT NULL DEFAULT 0, current_event_version BIGINT NOT NULL DEFAULT 0,
+                    create_time BIGINT, update_time BIGINT,
+                    tenant_id VARCHAR(50) NOT NULL, client_id VARCHAR(50) NOT NULL,
+                    UNIQUE (tenant_id, client_id, task_id)
                 )""");
         jdbc.execute("""
                 CREATE TABLE agent_task_member (
@@ -354,13 +494,6 @@ client_id, task_id)
                 )""");
     }
 
-    private void insertTask(String taskId, String tenant, String status, long version) {
-        jdbc.update("INSERT INTO agent_task_meta "
-                        + "(task_id,reward_status,task_version,tenant_id,client_id,owner_jiacn,create_time,update_time) "
-                        + "VALUES (?,?,?,?,?,?,1,1)",
-                taskId, status, version, tenant, CLIENT, OWNER);
-    }
-
     private int count(String table) {
         return jdbc.queryForObject("SELECT COUNT(*) FROM " + table, Integer.class);
     }
@@ -371,12 +504,6 @@ client_id, task_id)
 
     private long number(String sql) {
         return ((Number) value(sql)).longValue();
-    }
-
-    private void assertReason(Reason reason, Runnable action) {
-        AgentTaskCollaborationException error = assertThrows(
-                AgentTaskCollaborationException.class, action::run);
-        assertEquals(reason, error.getReason());
     }
 
     private <T> T transactionalInterfaceProxy(Object target, Class<T> type) {

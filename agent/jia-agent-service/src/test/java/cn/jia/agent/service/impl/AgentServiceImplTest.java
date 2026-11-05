@@ -2922,7 +2922,76 @@ class AgentServiceImplTest extends BaseMockTest {
         }
     }
 
-;
+    @Test
+    void secondaryMemberCanListTaskWhenCompatibilityColumnStoresOnlyPrimary() {
+        AgentRuntimeEntity secondary = ownedAgent(
+                "agent-linchong", "Lin Chong", AgentConstants.STATUS_ONLINE, "[\"execution\"]");
+        when(agentRuntimeDao.findByAgentId("agent-linchong")).thenReturn(secondary);
+        AgentTaskMemberEntity membership = new AgentTaskMemberEntity();
+        membership.setTenantId("0"); membership.setOwnerJiacn("jiacn");
+        membership.setClientId("jia_client");
+        membership.setTaskId("task-001");
+        membership.setAgentId("agent-linchong");
+        membership.setMemberStatus("working");
+        when(agentTaskMemberDao.listByAgent(
+                "0", "jia_client", "jiacn", "agent-linchong", null, 500))
+                .thenReturn(List.of(membership));
+        AgentTaskMemberEntity primary = taskMember(
+                "0", "jia_client", "task-001", "agent-wuyong", "working");
+        when(agentTaskMemberDao.listByTask("0", "jia_client", "jiacn", "task-001"))
+                .thenReturn(List.of(primary, membership));
+        AgentTaskMetaEntity meta = new AgentTaskMetaEntity();
+        meta.setTenantId("0"); meta.setOwnerJiacn("jiacn");
+        meta.setClientId("jia_client");
+        meta.setTaskId("task-001");
+        meta.setTenantId("0"); meta.setOwnerJiacn("jiacn");
+        meta.setClientId("jia_client");
+        meta.setRewardStatus(AgentConstants.TASK_STATUS_RUNNING);
+        meta.setAssignedAgentId("agent-wuyong");
+        when(agentTaskMetaDao.findByTaskIdInOwnerScope("0", "jia_client", "jiacn", "task-001"))
+                .thenReturn(meta);
+
+        List<AgentTaskDTO> result = agentService.getAgentTasks("agent-linchong");
+
+        assertEquals(1, result.size());
+        assertEquals(List.of("agent-wuyong", "agent-linchong"),
+                result.getFirst().getAssignedAgentIds());
+        verify(agentTaskMetaDao, never()).findByAgentId("0", "jia_client", "agent-linchong", 500);
+    }
+
+
+    @Test
+    void legacyTaskFallbackPushesExactScopeAndAgentIntoBoundedDaoQuery() {
+        AgentRuntimeEntity agent = ownedAgent(
+                "agent-linchong", "Lin Chong", AgentConstants.STATUS_ONLINE, "[]");
+        when(agentRuntimeDao.findByAgentId("agent-linchong")).thenReturn(agent);
+        AgentTaskMetaEntity task = new AgentTaskMetaEntity();
+        task.setId(1L);
+        task.setTaskId("task-legacy");
+        task.setTenantId("0"); task.setOwnerJiacn("jiacn");
+        task.setClientId("jia_client");
+        task.setAssignedAgentId("agent-linchong");
+        task.setRewardStatus(AgentConstants.TASK_STATUS_COMPLETED);
+        when(agentTaskMetaDao.findByAgentInOwnerScope(
+                "0", "jia_client", "jiacn", "agent-linchong", 500))
+                .thenReturn(List.of(task));
+
+        List<AgentTaskDTO> result = agentService.getAgentTasks("agent-linchong");
+
+        assertEquals(1, result.size());
+        assertEquals("task-legacy", result.getFirst().getId());
+        verify(agentTaskMetaDao).findByAgentInOwnerScope(
+                "0", "jia_client", "jiacn", "agent-linchong", 500);
+    }
+
+    @Test
+    void legacyTaskFallbackTruncationFailsClosed() {
+        AgentRuntimeEntity agent = ownedAgent(
+                "agent-linchong", "Lin Chong", AgentConstants.STATUS_ONLINE, "[]");
+        when(agentRuntimeDao.findByAgentId("agent-linchong")).thenReturn(agent);
+        AgentTaskMetaEntity task = new AgentTaskMetaEntity();
+        task.setTaskId("task-legacy");
+        task.setTenantId("0"); task.setOwnerJiacn("jiacn");
         task.setClientId("jia_client");
         task.setAssignedAgentId("agent-linchong");
         when(agentTaskMetaDao.findByAgentInOwnerScope(
@@ -3283,21 +3352,6 @@ class AgentServiceImplTest extends BaseMockTest {
         }).when(coordinator).execute(
                 eq("jia_client"), eq("jiacn"), any(Runnable.class));
         return coordinator;
-    }
-
-    private void markOwned(AgentRuntimeEntity agent) {
-        agent.setTenantId("0");
-        agent.setClientId("jia_client");
-        agent.setOwnerJiacn("jiacn");
-        agent.setBindingId(1L);
-        AgentPersonaBindingEntity binding = binding(
-                agent.getAgentId(), agent.getPersonaCode() == null ? agent.getAgentId() : agent.getPersonaCode());
-        AgentIdentityRegistryEntity identity = identity(binding, AgentConstants.IDENTITY_STATUS_ACTIVE);
-        org.mockito.Mockito.lenient().when(agentIdentityService.requireCanonicalAgentIdInScope(
-                "0", "jia_client", "jiacn", agent.getAgentId())).thenReturn(agent.getAgentId());
-        org.mockito.Mockito.lenient().when(agentIdentityService.requireActiveIdentityForBinding(
-                "0", "jia_client", "jiacn", 1L, agent.getAgentId())).thenReturn(identity);
-        org.mockito.Mockito.lenient().when(agentIdentityService.requireActiveBinding(identity, null)).thenReturn(binding);
     }
 
     private AgentRuntimeEntity ownedAgent(String agentId, String name, String status, String abilities) {
