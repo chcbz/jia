@@ -424,7 +424,15 @@ class AgentTaskBillingMySqlTransactionTest {
                 "agent-task-provider-cost-consent-v1.sql")) {
             new ResourceDatabasePopulator(new FileSystemResource(DDL.resolve(file))).execute(jdbc.getDataSource());
         }
-        new cn.jia.agent.config.PersonalWorkspaceExecutionSchemaInitializer(jdbc).afterPropertiesSet();
+        // Inventory reads need the production execution/lease columns, not a full Runtime schema upgrade.
+        // Its standalone initializer also validates columns owned by a later native-protocol initializer.
+        for (String file : List.of("agent-personal-workspace-v1_11-executions.sql",
+                "agent-personal-workspace-v1_13-task-execution.sql",
+                "agent-personal-workspace-v1_14-conversation-execution.sql",
+                "agent-personal-workspace-v1_15-conversation-lease.sql")) {
+            new ResourceDatabasePopulator(new org.springframework.core.io.ClassPathResource("db/" + file))
+                    .execute(jdbc.getDataSource());
+        }
         // Legacy Chat base-table DDL lives in the existing mapper fixture; it is read-only in this suite.
         createTable(Path.of("../../chat/jia-chat-mapper/src/test/resources/db/schema.sql"), "chat_conversation", false);
         new ResourceDatabasePopulator(new FileSystemResource(Path.of(
