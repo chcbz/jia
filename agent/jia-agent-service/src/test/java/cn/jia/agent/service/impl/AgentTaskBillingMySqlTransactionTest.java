@@ -352,10 +352,10 @@ class AgentTaskBillingMySqlTransactionTest {
         assertNull(jdbc.queryForObject("SELECT lease_owner FROM agent_task_bounty_bootstrap_outbox", String.class));
         assertNull(jdbc.queryForObject("SELECT lease_until FROM agent_task_bounty_bootstrap_outbox", Long.class));
         assertEquals(1, jdbc.queryForObject("SELECT attempt_count FROM agent_task_bounty_bootstrap_outbox", Integer.class));
-        var denied = assertThrows(cn.jia.agent.exception.AgentTaskExecutionGrantException.class, () ->
+        var denied = assertThrows(AgentTaskExecutionGrantException.class, () ->
                 assignment.admit(SCOPE, TASK, claim.grantId(), claim.grantVersion(), claim.assignmentRevision(),
                         AGENT, claim.permittedOperation(), false));
-        assertEquals(cn.jia.agent.exception.AgentTaskExecutionGrantException.Reason.CONFLICT, denied.getReason());
+        assertEquals(AgentTaskExecutionGrantException.Reason.CONFLICT, denied.reason());
         assertStaleClaim(claim); assertCancelled();
     }
 
