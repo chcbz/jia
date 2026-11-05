@@ -26,7 +26,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 
-import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -39,19 +39,55 @@ class ArchiveQuestionControllerTest {
     private static final String ID = "123e4567-e89b-42d3-a456-426614174000";
 
     @Test
-    void directJwtDerivesExactOwnerAndCreateReturnsStored202BytesUntouched() {
+    void replayed202UsesCurrentRequestIdForBothCreateAndRetry() throws Exception {
+        var service = mock(ArchiveQuestionService.class);
+        var controller = new ArchiveQuestionController(service, mock(ArchiveQuestionSseService.class), enabledPolicy());
+        var converters = new java.util.ArrayList<org.springframework.http.converter.HttpMessageConverter<?>>();
+        converters.add(new org.springframework.http.converter.ByteArrayHttpMessageConverter());
+        converters.add(new org.springframework.http.converter.json.JacksonJsonHttpMessageConverter());
+        new cn.jia.core.config.ApiEnvelopeJsonConfig().extendMessageConverters(converters);
+        var mvc = org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(controller)
+                .setControllerAdvice(new cn.jia.core.config.ApiEnvelopeAdvice(), new cn.jia.core.config.ApiRequestEnvelopeAdvice())
+                .setMessageConverters(converters.toArray(org.springframework.http.converter.HttpMessageConverter[]::new))
+                .addFilters(new cn.jia.core.filter.RequestIdFilter()).build();
+        for (String oldId : List.of("null", "\"previous-request\"")) {
+            byte[] stored = ("{\"protocolVersion\":1,\"requestId\":" + oldId
+                    + ",\"code\":\"E0\",\"msg\":\"ok\",\"data\":{\"version\":\"1\"}}")
+                    .getBytes(StandardCharsets.UTF_8);
+            var result = new ArchiveMutationResult(202, "application/json;charset=UTF-8", stored, true);
+            when(service.create(any(), any(), any(), any(), any())).thenReturn(result);
+            when(service.retry(any(), any(), any(), any(), any())).thenReturn(result);
+            for (String suffix : List.of("", "/retry")) {
+                var request = suffix.isEmpty()
+                        ? org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put("/archive/v1/me/questions/" + ID)
+                        : org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post("/archive/v1/me/questions/" + ID + suffix);
+                mvc.perform(request.principal(jwt(Map.of("jiacn", "owner-a", "client_id", "client-a")))
+                        .header("Idempotency-Key", "replay-key").contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                        .content("{\"protocolVersion\":1,\"requestId\":\"current-request\",\"data\":{}}"))
+                        .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isAccepted())
+                        .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.header().string("X-Request-Id", "current-request"))
+                        .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.requestId").value("current-request"))
+                        .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.data.version").value("1"));
+                org.junit.jupiter.api.Assertions.assertArrayEquals(stored, result.body());
+            }
+        }
+    }
+
+    @Test
+    void directJwtDerivesExactOwnerAndCreateReturnsStored202BusinessResult() {
         ArchiveQuestionService service = mock(ArchiveQuestionService.class);
         ArchiveQuestionSseService streams = mock(ArchiveQuestionSseService.class);
         ArchiveQuestionController controller = new ArchiveQuestionController(service, streams, enabledPolicy());
         HttpServletRequest request = mock(HttpServletRequest.class);
-        byte[] stored = "{\"status\":200,\"data\":{\"version\":\"1\"}}".getBytes(StandardCharsets.UTF_8);
+        byte[] stored = "{\"protocolVersion\":1,\"requestId\":null,\"code\":\"E0\",\"msg\":\"ok\",\"data\":{\"version\":\"1\"}}".getBytes(StandardCharsets.UTF_8);
         when(service.create(any(), any(), any(), any(), any())).thenReturn(
                 new ArchiveMutationResult(202, "application/json;charset=UTF-8", stored, true));
 
         var response = controller.create(ID, "key", "{}".getBytes(StandardCharsets.UTF_8), request,
                 jwt(Map.of("jiacn", "owner-a", "client_id", "client-a")));
         assertEquals(HttpStatus.ACCEPTED, response.getStatusCode());
-        assertArrayEquals(stored, (byte[]) response.getBody());
+        assertEquals(cn.jia.core.util.JsonUtil.getMapper().readTree(stored).get("data"),
+                cn.jia.core.util.JsonUtil.getMapper().valueToTree(((JsonResult<?>) response.getBody()).getData()));
         ArgumentCaptor<ArchiveOwnerScope> owner = ArgumentCaptor.forClass(ArchiveOwnerScope.class);
         verify(service).create(owner.capture(), org.mockito.ArgumentMatchers.eq(ID),
                 org.mockito.ArgumentMatchers.eq("/archive/v1/me/questions/" + ID),

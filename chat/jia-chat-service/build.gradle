@@ -563,6 +563,7 @@ def archiveReaderRegressionSourceSet = sourceSets.create('archiveReaderRegressio
     java.include 'cn/jia/chat/archive/service/ArchivePersonalDataServiceTest.java'
     java.include 'cn/jia/chat/archive/http/ArchiveControllerTest.java'
     java.include 'cn/jia/chat/archive/http/ArchivePersonalDataControllerTest.java'
+    java.include 'cn/jia/chat/archive/http/ArchiveQuestionControllerTest.java'
     java.include 'cn/jia/chat/archive/config/ArchiveReaderAccessPolicyTest.java'
     resources.setSrcDirs(['src/test/resources'])
     resources.include 'archive/**'
