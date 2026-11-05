@@ -75,8 +75,8 @@ class AssigneeRecommendationQuotesTest {
         verify(billing, never()).reserve(any(), any(), any());
     }
     @Test void missingRouteOrPriceIsLocalToCandidateAndNeverZeroMoney() {
-        when(billing.quote(any(), any(), anyString(), any(), eq(new TaskPricingService.ModelKey("other-channel", "model", "standard"))))
-                .thenThrow(new TaskPricingService.Unavailable(TaskPricingService.Unavailable.Reason.MODEL_PRICE_MISSING));
+        doThrow(new TaskPricingService.Unavailable(TaskPricingService.Unavailable.Reason.MODEL_PRICE_MISSING))
+                .when(billing).quote(any(), any(), anyString(), any(), eq(new TaskPricingService.ModelKey("other-channel", "model", "standard")));
         var result = service.prepare(actor, "task", () -> advice("a", "b", "unconfigured"));
         assertEquals("AVAILABLE", result.recommendations().get(0).quote().state());
         assertEquals("MODEL_PRICE_MISSING", result.recommendations().get(1).quote().unavailableReason());
@@ -88,7 +88,7 @@ class AssigneeRecommendationQuotesTest {
         verifyNoInteractions(requirements, grants, billing);
     }
     @Test void persistenceFailureIsNotMisrepresentedAsCandidateUnavailability() {
-        when(billing.quote(any(), any(), anyString(), any(), any())).thenThrow(new IllegalStateException("database"));
+        doThrow(new IllegalStateException("database")).when(billing).quote(any(), any(), anyString(), any(), any());
         assertThrows(IllegalStateException.class, () -> service.prepare(actor, "task", () -> advice("a")));
     }
 }
