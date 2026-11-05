@@ -18,6 +18,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.reactivestreams.Subscription;
+import org.springframework.test.util.ReflectionTestUtils;
 import reactor.core.Disposable;
 import reactor.core.publisher.BaseSubscriber;
 import reactor.core.publisher.Flux;
@@ -674,31 +675,41 @@ class AgentTaskEventReplayServiceImplTest {
                 }
             }
         };
-        service.replay(SCOPE, 0L).subscribe(subscriber);
-        await(callbackEntered);
+        try {
+            service.replay(SCOPE, 0L).subscribe(subscriber);
+            await(callbackEntered);
 
-        for (int i = 0; i < 100; i++) {
-            broker.publish(BROKER_SCOPE, i + 1L);
+            for (int i = 0; i < 100; i++) {
+                broker.publish(BROKER_SCOPE, i + 1L);
+            }
+            // publish is asynchronous: first drain the broker's FIFO before checking
+            // workers. A transient zero counter is not proof all hints were observed.
+            var dispatcher = (ThreadPoolExecutor) ReflectionTestUtils.getField(broker, "dispatcher");
+            dispatcher.submit(() -> { }).get(2, TimeUnit.SECONDS);
+            awaitCondition(() -> service.scheduledWorkerTaskCount() == 0
+                    && service.inFlightCatchUpCount() == 0
+                    && worker.getActiveCount() == 0 && worker.getQueue().isEmpty());
+            assertEquals(1, service.inFlightDeliveryCount());
+            assertEquals(0, worker.getQueue().size());
+
+            Thread cancel = new Thread(subscriber::cancel, "c03-blocking-downstream-cancel");
+            cancel.start();
+            cancel.join(TimeUnit.SECONDS.toMillis(2));
+            assertTrue(!cancel.isAlive(), "cancel must not wait for a blocking callback");
+            await(callbackInterrupted);
+            assertEquals(0, service.activeSubscriptionCount());
+            assertEquals(0, service.activeTimerCount());
+            assertEquals(0, broker.trackedLeaseCount());
+
+            assertEquals(1, service.deliveryPermitCount());
+            releaseCallback.countDown();
+            awaitCleaned();
+            awaitCondition(() -> service.deliveryPermitCount() == 0
+                    && service.inFlightDeliveryCount() == 0);
+        } finally {
+            releaseCallback.countDown();
+            subscriber.cancel();
         }
-        awaitCondition(() -> service.scheduledWorkerTaskCount() == 0
-                && service.inFlightCatchUpCount() == 0);
-        assertEquals(1, service.inFlightDeliveryCount());
-        assertEquals(0, worker.getQueue().size());
-
-        Thread cancel = new Thread(subscriber::cancel, "c03-blocking-downstream-cancel");
-        cancel.start();
-        cancel.join(TimeUnit.SECONDS.toMillis(2));
-        assertTrue(!cancel.isAlive(), "cancel must not wait for a blocking callback");
-        await(callbackInterrupted);
-        assertEquals(0, service.activeSubscriptionCount());
-        assertEquals(0, service.activeTimerCount());
-        assertEquals(0, broker.trackedLeaseCount());
-
-        assertEquals(1, service.deliveryPermitCount());
-        releaseCallback.countDown();
-        awaitCleaned();
-        awaitCondition(() -> service.deliveryPermitCount() == 0
-                && service.inFlightDeliveryCount() == 0);
     }
 
     @Test
