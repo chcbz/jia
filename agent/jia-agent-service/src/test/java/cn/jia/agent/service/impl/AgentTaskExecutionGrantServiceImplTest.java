@@ -132,6 +132,17 @@ class AgentTaskExecutionGrantServiceImplTest {
         verify(billing).reserve(any(), eq("quote-1"), any(), eq("payer-1"));
     }
 
+    @Test void controlledSubsetStillBindsPriceToAllTaskInputs() {
+        var linked = pointMaterial("file-1", 1, "INPUT", "text/plain");
+        when(links.list("0","client","owner","task-1",null,null,33)).thenReturn(List.of(linked));
+        var all = service.snapshotTaskInputsWithinLockedTask(scope(), "task-1");
+        var request = request(); request.setRequestedOperations(List.of("GENERATE_IMAGE"));
+        request.setInitialOperation("GENERATE_IMAGE"); request.setInputRefs(List.of());
+        var receipt = service.assignControlledWithinLockedTask(scope(), "task-1", "controlled", request, root, "payer-1");
+        assertTrue(receipt.getInputs().isEmpty());
+        verify(billing).reserve(any(), eq("quote-1"), argThat(binding -> all.digest().equals(binding.inputSnapshotDigest())), eq("payer-1"));
+    }
+
     @Test void missingQuoteCannotCreateAssignmentOrBootstrap() {
         var request = request(); request.setQuoteId(null);
         var failure = assertThrows(AgentTaskExecutionGrantException.class,

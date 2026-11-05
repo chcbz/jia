@@ -116,7 +116,7 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
         try {
             return transactions.executeWithLockedTaskRootInOwnerScope(scope.tenantId(),scope.clientId(),
                     scope.ownerJiacn(),valid.taskId(),root -> assignLocked(scope,valid,canonicalAgent,
-                            requestHash,actionId,root,payerUserId));
+                            requestHash,actionId,root,payerUserId,false));
         } catch (AgentTaskCollaborationException failure) {
             throw translate(failure);
         }
@@ -152,7 +152,7 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
                 request.setRequestedOperations(List.of("DELIBERATE","EXECUTE_SKILL"));
                 request.setInitialOperation("DELIBERATE"); request.setInputRefs(inputs);
                 ValidAssign valid=validateAssign(scope,taskId,key,request);
-                return assignLocked(scope,valid,canonicalAgent,paymentHash(valid,canonicalAgent),actionId,root,payment.payerUserId());
+                return assignLocked(scope,valid,canonicalAgent,paymentHash(valid,canonicalAgent),actionId,root,payment.payerUserId(),true);
             });
         } catch (AgentTaskCollaborationException failure) { throw translate(failure); }
     }
@@ -211,7 +211,7 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
         String canonicalAgent=legacyAssignments.resolveAgentId(scope.tenantId(),scope.clientId(),
                 scope.ownerJiacn(),valid.requestedAgentId());
         return assignLocked(scope,valid,canonicalAgent,paymentHash(valid,canonicalAgent),
-                "ASSIGN_AND_START:"+valid.idempotencyKey(),root,payerUserId);
+                "ASSIGN_AND_START:"+valid.idempotencyKey(),root,payerUserId,false);
     }
 
     private AgentTaskRequirementSnapshotService.Snapshot requireCurrentRequirement(Scope scope, String taskId, long requirementRevision) {
@@ -231,7 +231,7 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
     }
 
     private AgentTaskExecutionGrantDTO assignLocked(Scope scope, ValidAssign valid,
-            String canonicalAgent, String requestHash, String actionId, AgentTaskMetaEntity root, String payerUserId) {
+            String canonicalAgent, String requestHash, String actionId, AgentTaskMetaEntity root, String payerUserId, boolean inputsAreTaskCatalogue) {
         // Frozen task-root lock order: requirement latest read -> grant action ->
         // bootstrap action -> target/input rows. Requirement history is append-only.
         // The command-delivery outbox is intentionally not reused: this row coordinates Chat
@@ -276,7 +276,12 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
                             public String identityOwner(String taskOwner) { return target.get().ownerJiacn(); }
                             public void validate(AgentTaskMetaEntity task,List<String> agentIds) {
                                 snapshot.set(validateAndSnapshotInputs(scope,valid.taskId(),valid.inputs()));
-                                var catalogue = snapshotTaskInputsWithinLockedTask(scope, valid.taskId());
+                                // Point-and-deliberate already read the complete catalogue under this root.
+                                // Reuse the same snapshots instead of locking/reading every file twice.
+                                var allInputs = inputsAreTaskCatalogue ? valid.inputs()
+                                        : canonicalInputs(allTaskMaterials(scope, valid.taskId()));
+                                var catalogue = inputCatalogue(allInputs.equals(valid.inputs()) ? snapshot.get()
+                                        : validateAndSnapshotInputs(scope, valid.taskId(), allInputs));
                                 var taskBilling = billingTask(scope, valid.taskId());
                                 try { billing.reserve(taskBilling, valid.quoteId(),
                                         new cn.jia.economy.task.TaskBillingService.Binding(requirement.revision(),
@@ -406,6 +411,10 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
         // Caller holds the owner task root; no second catalogue/digest implementation for pricing.
         List<InputSnapshot> snapshots = validateAndSnapshotInputs(scope, taskId,
                 canonicalInputs(allTaskMaterials(scope, taskId)));
+        return inputCatalogue(snapshots);
+    }
+
+    private InputCatalogue inputCatalogue(List<InputSnapshot> snapshots) {
         return new InputCatalogue(sha256("TASK_LINKED_INPUT_SNAPSHOT_V1\n" + write(snapshots)),
                 snapshots.stream().map(input -> new AuthorizedInput(input.fileId(), input.version(),
                         input.purpose(), input.contentMimeType(), input.byteLength(), input.contentHash())).toList());
