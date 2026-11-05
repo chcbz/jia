@@ -2208,7 +2208,8 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
                 .thenReturn(new AgentRegisterResultDTO("agent-001", "token-001", AgentConstants.STATUS_ONLINE));
         var deliberation = org.mockito.Mockito.mock(ChatDeliberationService.class);
         var outbox = org.mockito.Mockito.mock(cn.jia.chat.service.ChatDeliberationOutboxService.class);
-        when(outbox.acknowledgeHostedDispatch(any(),any(),any(),any(),any(),any(),org.mockito.ArgumentMatchers.anyLong())).thenReturn(true);
+        if (!"false".equals(executionStarted))
+            when(outbox.acknowledgeHostedDispatch(any(),any(),any(),any(),any(),any(),org.mockito.ArgumentMatchers.anyLong())).thenReturn(true);
         var handler = UnifiedRuntimeTestSupport.authorize(new AgentWebSocketHandler(
                 chatClient, agentServiceProvider, chatMessageDao, chatConversationEventBroker));
         handler.setChatDeliberationService(deliberation); handler.setChatDeliberationOutboxService(outbox);

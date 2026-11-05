@@ -121,7 +121,7 @@ class ChatActionOutcomeV5Test {
             when(routedFinals.prepare(turn,snapshot,(String)outcome.get("text"),5,raw,null)).thenThrow(reachedActionBranch);
             assertSame(reachedActionBranch,assertThrows(IllegalStateException.class,()->org.springframework.test.util.ReflectionTestUtils.invokeMethod(
                     deliberation,"persistFinalLocked","0","owner","client","7",1L,"wuyong","request","turn","dispatch","snapshot",turn.getContextDigest(),
-                    (String)outcome.get("text"),5,raw,null,new ServerResolvedAgentSender("agent","吴用","owner","client","wuyong"),turn)));
+                    (String)outcome.get("text"),5,raw,null,null,new ServerResolvedAgentSender("agent","吴用","owner","client","wuyong"),turn)));
             var prepared=service.prepare(turn,snapshot,(String)outcome.get("text"),5,raw,null);
             assertEquals(6,prepared.validated().dispatchFacts().schemaVersion());
             assertThrows(RuntimeException.class,()->service.prepare(turn,snapshot,(String)outcome.get("text"),6,raw,null));
