@@ -117,58 +117,10 @@ class AgentLegacyTaskCompatibilityEventTest extends BaseMockTest {
         assertEquals(TaskEventType.ActorType.SYSTEM, events.getAllValues().getFirst().getActorType());
     }
 
-    @Test
-    void reportAppendsMemberThenWorkItemBeforeAggregateAndDuplicateIsZeroEvent() {
-        task = root("assigned", 0L);
-        AgentTaskMemberEntity member = member("accepted", 0L);
-        AgentTaskWorkItemEntity item = workItem("ready", 0L);
-        when(identityService.lockActiveCanonicalAgentIdsInScope(
-                TENANT, CLIENT, OWNER, List.of(AGENT))).thenReturn(List.of(AGENT));
-        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, OWNER, TASK, AGENT)).thenReturn(member);
-        when(workItemDao.listByTaskAndAssignee(TENANT, CLIENT, OWNER, TASK, AGENT, 500))
-                .thenReturn(List.of(item));
-        when(memberDao.updateByVersion(eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK), eq(AGENT), eq(0L), any()))
-                .thenReturn(1);
-        when(workItemDao.updateByVersion(eq(TENANT), eq(CLIENT), eq(OWNER), eq(item.getWorkItemId()), eq(0L), any()))
-                .thenReturn(1);
-        AgentTaskAggregationDTO aggregate = aggregate("running", 1L, true);
-        when(aggregationService.aggregate(eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK), any()))
-                .thenReturn(aggregate);
-        when(memberDao.listByTask(TENANT, CLIENT, OWNER, TASK)).thenReturn(List.of(member));
-
-        AgentLegacyTaskCompatibilityService.ReportOutcome outcome = service().reportResolved(
-                TENANT, CLIENT, OWNER, TASK, AGENT, "running", null);
-
-        assertTrue(outcome.changed());
-        ArgumentCaptor<AgentTaskEventWriteCommand> events =
-                ArgumentCaptor.forClass(AgentTaskEventWriteCommand.class);
-        verify(eventWriter, org.mockito.Mockito.times(2)).append(events.capture());
-        assertEquals(List.of(TaskEventType.MEMBER_WORKING, TaskEventType.WORK_ITEM_STARTED),
-                events.getAllValues().stream().map(AgentTaskEventWriteCommand::getEventType).toList());
-
-        org.mockito.Mockito.reset(eventWriter, aggregationService, memberDao, workItemDao);
-        member.setMemberStatus("working").setStartedAt(1_000L).setVersion(1L);
-        item.setStatus("running").setLeaseToken(legacyLeaseToken()).setLeaseUntil(Long.MAX_VALUE - 1)
-                .setVersion(1L);
-        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, OWNER, TASK, AGENT)).thenReturn(member);
-        when(workItemDao.listByTaskAndAssignee(TENANT, CLIENT, OWNER, TASK, AGENT, 500))
-                .thenReturn(List.of(item));
-        when(aggregationService.aggregate(eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK), any()))
-                .thenReturn(aggregate("running", 0L, false));
-        when(memberDao.listByTask(TENANT, CLIENT, OWNER, TASK)).thenReturn(List.of(member));
-
-        AgentLegacyTaskCompatibilityService.ReportOutcome duplicate = service().reportResolved(
-                TENANT, CLIENT, OWNER, TASK, AGENT, "running", null);
-        assertFalse(duplicate.changed());
-        verify(eventWriter, never()).append(any());
-    }
-
     private AgentLegacyTaskCompatibilityService service() {
         AgentLegacyTaskCompatibilityService service = new AgentLegacyTaskCompatibilityService(
-                taskMetaDao, memberDao, workItemDao, aggregationService, identityService,
+                taskMetaDao, memberDao, workItemDao, identityService,
                 mutationTransaction, eventWriter, () -> 1_000L);
-        when(draftProvider.getIfAvailable()).thenReturn(drafts);
-        service.configureHallDraftGuard(draftProvider);
         return service;
     }
 

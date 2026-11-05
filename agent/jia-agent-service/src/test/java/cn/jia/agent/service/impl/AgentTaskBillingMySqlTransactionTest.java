@@ -149,8 +149,7 @@ class AgentTaskBillingMySqlTransactionTest {
         var identities = mock(AgentIdentityService.class);
         when(identities.resolveAgentIdInScope(TENANT, CLIENT, OWNER, AGENT)).thenReturn(AGENT);
         when(identities.lockActiveCanonicalAgentIdsInScope(TENANT, CLIENT, OWNER, List.of(AGENT))).thenReturn(List.of(AGENT));
-        var legacy = new AgentLegacyTaskCompatibilityService(meta, members, work,
-                mock(AgentTaskAggregationService.class), identities, roots, events);
+        var legacy = new AgentLegacyTaskCompatibilityService(meta, members, work, identities, roots, events);
         var links = mock(PersonalWorkspaceTaskLinkDao.class);
         when(links.list(TENANT, CLIENT, OWNER, TASK, null, null, 33)).thenReturn(List.of());
         var requirements = mock(AgentTaskRequirementSnapshotService.class);

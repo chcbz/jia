@@ -14,7 +14,6 @@ import cn.jia.agent.entity.AgentRegisterResultDTO;
 import cn.jia.agent.entity.AgentRawCommandDispatchResult;
 import cn.jia.agent.entity.AgentStatusDTO;
 import cn.jia.agent.entity.AgentTaskDTO;
-import cn.jia.agent.entity.AgentTaskReportDTO;
 import cn.jia.agent.event.AgentEventPublisher;
 import cn.jia.agent.service.AgentCommandReconnectSignal;
 import cn.jia.agent.service.AgentExecutionReportService;
@@ -460,13 +459,8 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             case AgentProtocolConstants.TYPE_CHAT_MESSAGE -> saveAgentMessage(session, payload);
             case AgentProtocolConstants.TYPE_CHAT_MESSAGE_DELTA -> publishAgentMessageDelta(session, payload);
             case AgentProtocolConstants.TYPE_CHAT_DISPATCH_ACK -> acknowledgeChatDispatch(session, payload);
-            case AgentProtocolConstants.TYPE_WORK_RESULT -> {
-                if (normalized.legacyTaskReport()) {
-                    reportTask(session, payload);
-                } else {
+            case AgentProtocolConstants.TYPE_WORK_RESULT ->
                     handleExecutionReport(session, payload, normalized.canonicalType());
-                }
-            }
             case AgentProtocolConstants.TYPE_COMMAND_ACK -> sendProtocolError(session, payload,
                     "COMMAND_ACK_HTTP_REQUIRED", "Command ACK must be committed through Runtime HTTP");
             case AgentProtocolConstants.TYPE_WORK_PROGRESS,
@@ -1161,35 +1155,6 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             event.put("currentTaskId", agent.getCurrentTaskId());
             event.put("currentTaskTitle", agent.getCurrentTaskTitle());
             sendEvent(session, "agent_status_updated", event);
-        } catch (Exception e) {
-            sendError(session, payload, errorCode(e), e.getMessage());
-        }
-    }
-
-    private void reportTask(WebSocketSession session, Map<String, Object> payload) {
-        AgentService agentService = agentServiceProvider.getIfAvailable();
-        if (agentService == null) {
-            sendError(session, payload, "AGENT_SERVICE_UNAVAILABLE", "Agent service is unavailable");
-            return;
-        }
-        try {
-            String taskId = asString(payload.get("taskId"));
-            String agentId = requireAllowedSessionAgentId(session, payload);
-            if (agentId == null) {
-                return;
-            }
-            AgentTaskReportDTO request = new AgentTaskReportDTO();
-            request.setAgentId(agentId);
-            request.setStatus(asString(payload.get("status")));
-            request.setCurrentTaskTitle(asString(payload.get("currentTaskTitle")));
-            request.setFailureReason(asString(payload.get("failureReason")));
-            AgentTaskDTO task = withSessionContext(session, () -> withSessionMutationFence(session, () -> agentService.reportTask(taskId, request)));
-            Map<String, Object> event = copyTrace(payload);
-            event.put("taskId", task.getId());
-            event.put("status", task.getStatus());
-            event.put("assignedAgentId", task.getAssignedAgentId());
-            event.put("assignedAgentName", task.getAssignedAgentName());
-            sendEvent(session, "task_reported", event);
         } catch (Exception e) {
             sendError(session, payload, errorCode(e), e.getMessage());
         }

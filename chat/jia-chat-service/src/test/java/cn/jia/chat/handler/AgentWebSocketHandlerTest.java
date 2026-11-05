@@ -11,7 +11,6 @@ import cn.jia.agent.entity.AgentRegisterResultDTO;
 import cn.jia.agent.entity.AgentRuntimeDTO;
 import cn.jia.agent.entity.AgentStatusDTO;
 import cn.jia.agent.entity.AgentTaskDTO;
-import cn.jia.agent.entity.AgentTaskReportDTO;
 import cn.jia.agent.service.AgentService;
 import cn.jia.agent.service.PersonalWorkspaceTaskLinkService;
 import cn.jia.chat.dao.ChatMessageDao;
@@ -105,19 +104,12 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
 
 
     @Test
-    void handlesAgentRegisterRejectsLegacyAssignAndReports() throws Exception {
+    void handlesAgentRegisterAndRejectsLegacyAssignAndReport() throws Exception {
         stubAgentSession("session-001", "agent-001");
         when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
         when(agentService.register(any(AgentRegisterDTO.class)))
                 .thenReturn(new AgentRegisterResultDTO("agent-001", "token-001", AgentConstants.STATUS_ONLINE));
 
-
-        AgentTaskDTO running = new AgentTaskDTO();
-        running.setId("task-001");
-        running.setStatus(AgentConstants.TASK_STATUS_RUNNING);
-        running.setAssignedAgentId("agent-001");
-        running.setAssignedAgentName("Wu Yong");
-        when(agentService.reportTask(any(String.class), any(AgentTaskReportDTO.class))).thenReturn(running);
 
         AgentWebSocketHandler handler = UnifiedRuntimeTestSupport.authorize(new AgentWebSocketHandler(chatClient, agentServiceProvider,
                 chatMessageDao, chatConversationEventBroker));
@@ -147,9 +139,9 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         assertTrue(messages.contains("UNSUPPORTED_MESSAGE_TYPE"));
         assertFalse(messages.contains("task.assignment.accepted"));
         assertFalse(messages.contains("\"type\":\"task_assigned\""));
-        assertTrue(messages.contains("\"messageType\":\"task.report.receipt\""));
-        assertTrue(messages.contains("\"status\":\"running\""));
-        verify(agentService).reportTask(any(String.class), any(AgentTaskReportDTO.class));
+        assertFalse(messages.contains("task.report.receipt"));
+        verify(agentService).register(any(AgentRegisterDTO.class));
+        org.mockito.Mockito.verifyNoMoreInteractions(agentService);
         assertSafeServerDownlinks(messageCaptor.getAllValues());
     }
 
@@ -929,7 +921,6 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         assertTrue(messages.contains("\"messageType\":\"chat.message\""));
         assertTrue(messages.contains("\"conversationId\":\"1001\""));
         assertTrue(messages.contains("Inspect the current state first."));
-        verify(agentService, never()).reportTask(any(String.class), any(AgentTaskReportDTO.class));
     }
 
     @ParameterizedTest
@@ -1499,7 +1490,6 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
                 {"schemaVersion":1,"type":"work.result","messageId":"result-1","sourceAgentId":"agent-001","runtimeInstanceId":"runtime-1","taskId":"task-001","status":"completed"}
                 """));
 
-        verify(agentService, never()).reportTask(any(String.class), any(AgentTaskReportDTO.class));
         ArgumentCaptor<TextMessage> messageCaptor = ArgumentCaptor.forClass(TextMessage.class);
         verify(session, org.mockito.Mockito.atLeast(2)).sendMessage(messageCaptor.capture());
         String messages = messageCaptor.getAllValues().stream().map(TextMessage::getPayload).reduce("", String::concat);

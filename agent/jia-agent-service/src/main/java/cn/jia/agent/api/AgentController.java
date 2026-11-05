@@ -9,19 +9,15 @@ import cn.jia.agent.entity.AbilityEvaluationRequestDTO;
 import cn.jia.agent.entity.AgentCapabilityDTO;
 import cn.jia.agent.entity.AgentAbilitiesUpdateDTO;
 import cn.jia.agent.entity.AgentPersonaBindRequestDTO;
-import cn.jia.agent.entity.AgentPersonaEntity;
 import cn.jia.agent.entity.AgentRegisterDTO;
 import cn.jia.agent.entity.AgentRosterSearchDTO;
-import cn.jia.agent.entity.AgentRuntimeDTO;
 import cn.jia.agent.entity.AgentStatusDTO;
 import cn.jia.agent.entity.AgentTaskAssignDTO;
 import cn.jia.agent.entity.AgentTaskCreateDTO;
 import cn.jia.agent.entity.AgentTaskExecutionGrantRevokeDTO;
-import cn.jia.agent.entity.AgentTaskDTO;
 import cn.jia.agent.entity.AgentTaskNoteDTO;
 import cn.jia.agent.entity.AgentTaskTeamRecommendationDTO;
 import cn.jia.agent.entity.AgentTaskTeamRecommendationRequestDTO;
-import cn.jia.agent.entity.AgentTaskReportDTO;
 import cn.jia.agent.entity.AgentTaskSearchDTO;
 import cn.jia.agent.entity.DialogueRequestDTO;
 import cn.jia.agent.hosting.HostingRentApplicationException;
@@ -404,12 +400,6 @@ public class AgentController {
         return ResponseEntity.ok()
                 .header(HttpHeaders.CACHE_CONTROL, "private, no-store")
                 .body(JsonResult.success(recommendation));
-    }
-
-    @PostMapping("/tasks/{taskId}/report")
-    public Object reportTask(@PathVariable String taskId, @RequestBody JsonRequest<AgentTaskReportDTO> protocolRequest) {
-        AgentTaskReportDTO request = protocolRequest == null ? null : protocolRequest.data();
-        return JsonResult.success(agentService.reportTask(taskId, request));
     }
 
     @PostMapping("/tasks/{taskId}/notes")

@@ -13,8 +13,6 @@ import cn.jia.agent.dao.impl.AgentPersonaBindingDaoImpl;
 import cn.jia.agent.dao.impl.AgentTaskMemberDaoImpl;
 import cn.jia.agent.dao.impl.AgentTaskMetaDaoImpl;
 import cn.jia.agent.dao.impl.AgentTaskWorkItemDaoImpl;
-import cn.jia.agent.entity.AgentIdentityRegistryEntity;
-import cn.jia.agent.entity.AgentPersonaBindingEntity;
 import cn.jia.agent.entity.AgentTaskAggregationCommandDTO;
 import cn.jia.agent.entity.AgentTaskEventEntity;
 import cn.jia.agent.entity.AgentTaskEventWriteCommand;
@@ -129,7 +127,7 @@ class AgentLegacyTaskIdentityRaceRealTransactionTest {
         AgentTaskMutationTransaction mutationTransaction =
                 new AgentTaskMutationTransactionImpl(taskMetaDao, transactionManager);
         compatibilityService = transactionalClassProxy(new AgentLegacyTaskCompatibilityService(
-                taskMetaDao, memberDao, workItemDao, aggregationService,
+                taskMetaDao, memberDao, workItemDao,
                 pausingIdentityService, mutationTransaction, this::persistedEvent,
                 () -> 1_000L));
     }
@@ -141,14 +139,14 @@ class AgentLegacyTaskIdentityRaceRealTransactionTest {
     }
 
     @Test
-    void suspendedHistoricalMemberDoesNotBlockRemainingMemberOrBecomeActiveAgain() {
+    void suspendedHistoricalMemberRemainsReadableWithoutBecomingActive() {
         historicalLifecycleDoesNotBlock(
                 AgentConstants.IDENTITY_STATUS_SUSPENDED,
                 AgentConstants.BINDING_STATUS_SUSPENDED, "suspended_at");
     }
 
     @Test
-    void retiredHistoricalMemberDoesNotBlockRemainingMemberOrBecomeActiveAgain() {
+    void retiredHistoricalMemberRemainsReadableWithoutBecomingActive() {
         historicalLifecycleDoesNotBlock(
                 AgentConstants.IDENTITY_STATUS_RETIRED,
                 AgentConstants.BINDING_STATUS_RETIRED, "retired_at");
@@ -247,76 +245,6 @@ class AgentLegacyTaskIdentityRaceRealTransactionTest {
         }
     }
 
-    @Test
-    void reportLocksIdentityUntilMutationCommitThenSuspendMayProceed() throws Exception {
-        long bindingId = insertIdentity(TENANT, CLIENT, AGENT_A,
-                AgentConstants.IDENTITY_STATUS_ACTIVE, AgentConstants.BINDING_STATUS_ACTIVE);
-        compatibilityService.assign(TENANT, CLIENT, OWNER, TASK, List.of(AGENT_A), false);
-        pauseNextIdentityLock();
-        ExecutorService executor = Executors.newFixedThreadPool(2);
-        try {
-            Future<AgentLegacyTaskCompatibilityService.ReportOutcome> report = executor.submit(() ->
-                    compatibilityService.report(
-                            TENANT, CLIENT, OWNER, TASK, AGENT_A, "running", null));
-            assertTrue(identityLocked.await(10, TimeUnit.SECONDS));
-            Future<Void> suspend = executor.submit(() -> {
-                suspendBinding(bindingId, null, null);
-                return null;
-            });
-            Thread.sleep(150L);
-            assertFalse(suspend.isDone(), "suspend must wait for the reporting identity lock");
-            allowTaskCommit.countDown();
-
-            assertEquals("running", report.get(10, TimeUnit.SECONDS).taskStatus());
-            suspend.get(10, TimeUnit.SECONDS);
-            assertEquals("working", scalar(
-                    "SELECT member_status FROM agent_task_member", String.class));
-            assertEquals("running", scalar(
-                    "SELECT status FROM agent_task_work_item", String.class));
-            assertEquals("SUSPENDED", scalar(
-                    "SELECT lifecycle_status FROM agent_identity_registry WHERE binding_id=?",
-                    String.class, bindingId));
-        } finally {
-            allowTaskCommit.countDown();
-            executor.shutdownNow();
-        }
-    }
-
-    @Test
-    void suspendCommitBeforeReportRejectsMutationWithoutDeadlock() throws Exception {
-        long bindingId = insertIdentity(TENANT, CLIENT, AGENT_A,
-                AgentConstants.IDENTITY_STATUS_ACTIVE, AgentConstants.BINDING_STATUS_ACTIVE);
-        compatibilityService.assign(TENANT, CLIENT, OWNER, TASK, List.of(AGENT_A), false);
-        CountDownLatch suspended = new CountDownLatch(1);
-        CountDownLatch allowSuspendCommit = new CountDownLatch(1);
-        ExecutorService executor = Executors.newFixedThreadPool(2);
-        try {
-            Future<Void> suspend = executor.submit(() -> {
-                suspendBinding(bindingId, suspended, allowSuspendCommit);
-                return null;
-            });
-            assertTrue(suspended.await(10, TimeUnit.SECONDS));
-            Future<Object> report = executor.submit(() -> capture(() ->
-                    compatibilityService.report(
-                            TENANT, CLIENT, OWNER, TASK, AGENT_A, "running", null)));
-            Thread.sleep(150L);
-            assertFalse(report.isDone(), "report must wait for the suspension locks");
-            allowSuspendCommit.countDown();
-            suspend.get(10, TimeUnit.SECONDS);
-
-            AgentServiceImpl.AgentBizException error = assertInstanceOf(
-                    AgentServiceImpl.AgentBizException.class, report.get(10, TimeUnit.SECONDS));
-            assertEquals(cn.jia.agent.common.AgentErrorConstants.AGENT_FORBIDDEN, error.getCode());
-            assertEquals("accepted", scalar(
-                    "SELECT member_status FROM agent_task_member", String.class));
-            assertEquals("ready", scalar(
-                    "SELECT status FROM agent_task_work_item", String.class));
-        } finally {
-            allowSuspendCommit.countDown();
-            executor.shutdownNow();
-        }
-    }
-
     private void historicalLifecycleDoesNotBlock(
             String lifecycle, int bindingStatus, String timestampColumn) {
         long bindingA = insertIdentity(TENANT, CLIENT, AGENT_A,
@@ -324,7 +252,6 @@ class AgentLegacyTaskIdentityRaceRealTransactionTest {
         insertIdentity(TENANT, CLIENT, AGENT_B,
                 AgentConstants.IDENTITY_STATUS_ACTIVE, AgentConstants.BINDING_STATUS_ACTIVE);
         compatibilityService.assign(TENANT, CLIENT, OWNER, TASK, List.of(AGENT_A, AGENT_B), false);
-        compatibilityService.report(TENANT, CLIENT, OWNER, TASK, AGENT_A, "completed", null);
 
         if (AgentConstants.IDENTITY_STATUS_SUSPENDED.equals(lifecycle)) {
             suspendBinding(bindingA, null, null);
@@ -342,18 +269,11 @@ class AgentLegacyTaskIdentityRaceRealTransactionTest {
                 () -> identityService.requireCanonicalAgentIdInScope(
                         TENANT, CLIENT, OWNER, AGENT_A));
 
-        AgentLegacyTaskCompatibilityService.ReportOutcome completed = compatibilityService.report(
-                TENANT, CLIENT, OWNER, TASK, AGENT_B, "completed", null);
-        assertEquals("completed", completed.taskStatus());
+        assertEquals(AGENT_B, identityService.requireCanonicalAgentIdInScope(
+                TENANT, CLIENT, OWNER, AGENT_B));
         assertEquals(2, count("agent_task_member"));
         assertEquals(2, count("agent_task_work_item"));
 
-        AgentServiceImpl.AgentBizException reportError = assertThrows(
-                AgentServiceImpl.AgentBizException.class,
-                () -> compatibilityService.report(
-                        TENANT, CLIENT, OWNER, TASK, AGENT_A, "completed", null));
-        assertEquals(cn.jia.agent.common.AgentErrorConstants.AGENT_FORBIDDEN,
-                reportError.getCode());
         AgentServiceImpl.AgentBizException assignError = assertThrows(
                 AgentServiceImpl.AgentBizException.class,
                 () -> compatibilityService.assign(

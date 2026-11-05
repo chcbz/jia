@@ -3,7 +3,6 @@ package cn.jia.agent.service.impl;
 import cn.jia.agent.cache.AgentPersonaCatalogCache;
 import cn.jia.agent.cache.AgentPersonaCatalogCache.CatalogEntry;
 import cn.jia.agent.common.AgentConstants;
-import cn.jia.agent.common.AgentProtocolConstants;
 import cn.jia.agent.common.AgentErrorConstants;
 import cn.jia.agent.common.AgentSceneConstants;
 import cn.jia.agent.common.TaskEventPayload;
@@ -38,7 +37,6 @@ import cn.jia.agent.entity.AgentTaskMemberEntity;
 import cn.jia.agent.entity.AgentTaskMetaEntity;
 import cn.jia.agent.entity.AgentTaskNoteDTO;
 import cn.jia.agent.entity.AgentTaskNoteEntity;
-import cn.jia.agent.entity.AgentTaskReportDTO;
 import cn.jia.agent.entity.AgentTaskRecommendationDTO;
 import cn.jia.agent.entity.AgentTaskTeamRecommendationCandidateDTO;
 import cn.jia.agent.entity.AgentTaskTeamRecommendationDTO;
@@ -1634,63 +1632,6 @@ public class AgentServiceImpl implements AgentService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public AgentTaskDTO reportTask(String taskId, AgentTaskReportDTO request) {
-        require(request != null, "report request is required");
-        require(!StringUtil.isBlank(request.getAgentId()), "agentId is required");
-        String tenantId = resolveCurrentTenantId();
-        String clientId = resolveCurrentClientId();
-        String ownerJiacn = resolveCurrentJiacn();
-        requireTask(taskId);
-        requireLegacyLifecycleAllowed(tenantId, clientId, taskId);
-        String reportingAgentId = legacyTaskCompatibilityService.resolveAgentId(
-                tenantId, clientId, ownerJiacn, request.getAgentId());
-        requireOwnedAgent(requireAgent(reportingAgentId));
-
-        AgentLegacyTaskCompatibilityService.ReportOutcome outcome =
-                legacyTaskCompatibilityService.reportResolved(
-                        tenantId, clientId, ownerJiacn, taskId, reportingAgentId,
-                        request.getStatus(), request.getFailureReason());
-        AgentTaskMetaEntity meta = Optional.ofNullable(
-                agentTaskMetaDao.findByTaskIdInOwnerScope(
-                        tenantId, clientId, ownerJiacn, taskId)).orElseThrow(() ->
-                new AgentBizException(AgentErrorConstants.TASK_NOT_FOUND, "Task not found"));
-        requireOwnedTaskProjection(meta, tenantId, clientId, ownerJiacn, taskId);
-        require(outcome.taskStatus().equals(meta.getRewardStatus())
-                        && Objects.equals(outcome.taskVersion(), meta.getTaskVersion()),
-                "task aggregate does not match the compatibility report outcome");
-
-        AgentTaskDTO task = toTaskDTO(meta);
-        applyTaskAssignees(task, outcome.memberAgentIds());
-        if (!outcome.changed()) {
-            return task;
-        }
-
-        List<AgentRuntimeDTO> updatedAgents;
-        if (outcome.terminalTransition()) {
-            updatedAgents = outcome.memberAgentIds().stream()
-                    .map(agentId -> updateLegacyReportRuntime(
-                            agentId, meta.getTaskId(),
-                            terminalRuntimeReportStatus(agentId, outcome.reportingAgentId(),
-                                    meta.getRewardStatus()),
-                            null, Objects.equals(agentId, outcome.reportingAgentId())
-                                    ? request.getFailureReason() : null,
-                            true))
-                    .toList();
-        } else {
-            updatedAgents = List.of(updateLegacyReportRuntime(
-                    outcome.reportingAgentId(), meta.getTaskId(), request.getStatus(),
-                    request.getCurrentTaskTitle(), request.getFailureReason(), false));
-        }
-        publishLegacyReportSideEffectsAfterCommit(
-                ownerJiacn, "task_" + meta.getRewardStatus(), task, updatedAgents);
-        if (outcome.terminalTransition()) {
-            publishReturnHomeSceneStates(meta.getTaskId(), updatedAgents);
-        }
-        return task;
-    }
-
-    @Override
-    @Transactional(rollbackFor = Exception.class)
     public AgentTaskNoteDTO addTaskNote(String taskId, AgentTaskNoteDTO request) {
         require(request != null && !StringUtil.isBlank(request.getContent()),
                 "note content is required");
@@ -2768,10 +2709,6 @@ public class AgentServiceImpl implements AgentService {
         return dto;
     }
 
-    private void requireLegacyLifecycleAllowed(String tenantId, String clientId, String taskId) {
-        fundedBountyLegacyGuard.requireLifecycleAllowed(tenantId, clientId, taskId, false);
-    }
-
     private void requireLegacyLifecycleAllowedLocked(String tenantId, String clientId, String taskId) {
         fundedBountyLegacyGuard.requireLifecycleAllowed(tenantId, clientId, taskId, true);
     }
@@ -2895,56 +2832,6 @@ public class AgentServiceImpl implements AgentService {
                 AgentConstants.TASK_STATUS_FAILED, AgentConstants.TASK_STATUS_ARCHIVED).contains(status), "Invalid task status");
     }
 
-    private String resolveAgentStatus(String taskStatus) {
-        return switch (taskStatus) {
-            case AgentConstants.TASK_STATUS_RUNNING -> AgentConstants.STATUS_BUSY;
-            case AgentConstants.TASK_STATUS_FAILED -> AgentConstants.STATUS_ERROR;
-            default -> AgentConstants.STATUS_ONLINE;
-        };
-    }
-
-    private AgentRuntimeDTO updateLegacyReportRuntime(
-            String agentId, String taskId, String reportedStatus,
-            String currentTaskTitle, String failureReason, boolean wholeTeamTerminal) {
-        AgentRuntimeEntity entity = requireAgent(agentId);
-        requireOwnedAgent(entity);
-        entity.setStatus(resolveAgentStatus(reportedStatus));
-        boolean memberTerminal = AgentConstants.TASK_STATUS_COMPLETED.equals(reportedStatus)
-                || AgentConstants.TASK_STATUS_FAILED.equals(reportedStatus);
-        if (wholeTeamTerminal || memberTerminal) {
-            entity.setCurrentTaskId(null);
-            entity.setCurrentTaskTitle(null);
-        } else {
-            entity.setCurrentTaskId(taskId);
-            entity.setCurrentTaskTitle(currentTaskTitle);
-        }
-        entity.setErrorMessage(AgentConstants.TASK_STATUS_FAILED.equals(reportedStatus)
-                ? failureReason : null);
-        entity.setLastSeenAt(System.currentTimeMillis());
-        require(agentRuntimeDao.updateById(entity) == 1, "Agent runtime update failed");
-        observeSkillLifecycle(entity);
-        return toRuntimeDTO(entity);
-    }
-
-    private String terminalRuntimeReportStatus(
-            String agentId, String reportingAgentId, String aggregateStatus) {
-        if (AgentConstants.TASK_STATUS_FAILED.equals(aggregateStatus)
-                && Objects.equals(agentId, reportingAgentId)) {
-            return AgentConstants.TASK_STATUS_FAILED;
-        }
-        return AgentConstants.TASK_STATUS_COMPLETED;
-    }
-
-    private void publishLegacyReportSideEffectsAfterCommit(
-            String ownerJiacn, String eventType, AgentTaskDTO task, List<AgentRuntimeDTO> updatedAgents) {
-        List<AgentRuntimeDTO> agents = List.copyOf(updatedAgents);
-        String clientId = task.getClientId();
-        publishOptionalAfterCommit("legacy-task-report", () -> {
-            publishScopedAgentSnapshots(clientId, ownerJiacn, agents);
-            publishTaskEvent(eventType, task);
-        });
-    }
-
     private void publishDiscussionSceneState(String personaName, String dialogueType) {
         String normalizedType = Optional.ofNullable(dialogueType).orElse("")
                 .trim().toUpperCase(Locale.ROOT);
@@ -2978,22 +2865,6 @@ public class AgentServiceImpl implements AgentService {
             publishSceneState(sceneService, movementState(
                     agent.getAgentId(), agent.getPersonaCode(), "moving_to_discussion",
                     REGION_COUNCIL_TABLE, relatedType, relatedId, now));
-        });
-    }
-
-    private void publishReturnHomeSceneStates(String taskId, List<AgentRuntimeDTO> agents) {
-        List<AgentRuntimeDTO> copiedAgents = List.copyOf(agents);
-        publishOptionalSceneAfterCommit("task-return-home", () -> {
-            AgentSceneService sceneService = sceneServiceProvider.getIfAvailable();
-            if (sceneService == null) {
-                return;
-            }
-            long now = System.currentTimeMillis();
-            for (AgentRuntimeDTO agent : copiedAgents) {
-                publishSceneState(sceneService, movementState(
-                        agent.getAgentId(), agent.getPersonaCode(), "returning_home",
-                        REGION_MAIN_SEAT, "task", taskId, now));
-            }
         });
     }
 
@@ -3115,13 +2986,6 @@ public class AgentServiceImpl implements AgentService {
                             List.of(toRuntimeDTO(current, clientId, ownerJiacn)),
                             listCapabilities(tenantId, clientId, ownerJiacn));
                 }));
-    }
-
-    private void publishScopedAgentSnapshots(
-            String clientId, String ownerJiacn, List<AgentRuntimeDTO> agents) {
-        scopePublicationCoordinator.execute(clientId, ownerJiacn,
-                () -> publishAgentSnapshots(clientId, ownerJiacn, agents,
-                        listCapabilities(resolveCurrentTenantId(), clientId, ownerJiacn)));
     }
 
     private void publishAgentSnapshots(

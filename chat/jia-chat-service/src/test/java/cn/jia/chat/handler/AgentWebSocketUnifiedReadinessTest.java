@@ -135,15 +135,18 @@ class AgentWebSocketUnifiedReadinessTest {
         verify(f.service).updateStatus(eq("agent-a"), any());
         assertTrue(f.handler.isExactAgentConnected("0", "client", "agent-a"));
     }
-    @Test void queueHealthLossDoesNotRejectExistingTerminalTaskReport() throws Exception {
+    @Test void queueHealthLossDoesNotReenableRetiredTaskReport() throws Exception {
         var f = new Fixture(); var a = f.session("a", "agent-a"); f.register(a, false, true);
-        var task = new AgentTaskDTO(); task.setId("original-task"); task.setStatus("completed");
-        when(f.service.reportTask(eq("original-task"), any())).thenReturn(task);
+        clearInvocations(f.service, a);
 
         f.handler.handleTextMessage(a, new TextMessage("{\"type\":\"task.report\",\"agentId\":\"agent-a\","
                 + "\"runtimeInstanceId\":\"boot\",\"taskId\":\"original-task\",\"status\":\"completed\"}"));
 
-        verify(f.service).reportTask(eq("original-task"), any());
+        verifyNoInteractions(f.service);
+        var receipt = org.mockito.ArgumentCaptor.forClass(TextMessage.class);
+        verify(a).sendMessage(receipt.capture());
+        assertTrue(receipt.getValue().getPayload().contains("UNSUPPORTED_MESSAGE_TYPE"));
+        assertFalse(receipt.getValue().getPayload().contains("task.report.receipt"));
         assertFalse(f.handler.isExactAgentConnected("0", "client", "agent-a"));
     }
     @Test void staleFencedBusinessCallbackNeverMutatesEvenIfChannelWasSelected() throws Exception {

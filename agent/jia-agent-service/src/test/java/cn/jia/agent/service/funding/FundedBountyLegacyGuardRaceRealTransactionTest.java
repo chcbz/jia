@@ -89,8 +89,7 @@ class FundedBountyLegacyGuardRaceRealTransactionTest {
         memberDao = mock(AgentTaskMemberDao.class);
         workItemDao = mock(AgentTaskWorkItemDao.class);
         eventWriter = mock(AgentTaskEventWriter.class);
-        compatibility = new AgentLegacyTaskCompatibilityService(metaDao, memberDao, workItemDao,
-                mock(AgentTaskAggregationService.class), identityService, mutation, eventWriter);
+        compatibility = new AgentLegacyTaskCompatibilityService(metaDao, memberDao, workItemDao, identityService, mutation, eventWriter);
         Field guardField = AgentLegacyTaskCompatibilityService.class
                 .getDeclaredField("fundedBountyLegacyGuard");
         guardField.setAccessible(true);
@@ -205,18 +204,6 @@ class FundedBountyLegacyGuardRaceRealTransactionTest {
         assertEquals(0, count("agent_task_work_item"));
         assertEquals("open", jdbc.queryForObject(
                 "SELECT reward_status FROM agent_task_meta WHERE task_id=?", String.class, TASK));
-    }
-
-    @Test
-    void reportLockedHookRejectsCommittedFundingBeforeCanonicalIdentityLock() {
-        createFundingTable();
-        insertHeldFunding();
-
-        FundedBountyException failure = assertThrows(FundedBountyException.class, () ->
-                compatibility.reportResolved(TENANT, CLIENT, TENANT, TASK, AGENT, "running", null));
-
-        assertEquals("QUOTE_REQUIRED", failure.code());
-        verifyNoInteractions(identityService, memberDao, workItemDao, eventWriter);
     }
 
     private void createRootAndLegacyTables() {

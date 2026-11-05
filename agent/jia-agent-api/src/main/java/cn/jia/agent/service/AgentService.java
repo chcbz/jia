@@ -12,7 +12,6 @@ import cn.jia.agent.entity.AgentTaskCreateDTO;
 import cn.jia.agent.entity.AgentTaskDTO;
 import cn.jia.agent.entity.AgentTaskCountsDTO;
 import cn.jia.agent.entity.AgentTaskNoteDTO;
-import cn.jia.agent.entity.AgentTaskReportDTO;
 import cn.jia.agent.entity.AgentTaskTeamRecommendationDTO;
 import cn.jia.agent.entity.AgentTaskTeamRecommendationRequestDTO;
 import cn.jia.agent.entity.AgentTaskSearchDTO;
@@ -20,7 +19,6 @@ import cn.jia.agent.entity.DialogueRequestDTO;
 import com.github.pagehelper.PageInfo;
 
 import java.util.List;
-import java.util.Map;
 
 public interface AgentService {
     void requireHostingNewWork(String tenantId, String clientId, String canonicalAgentId);
@@ -100,8 +98,6 @@ public interface AgentService {
     AgentTaskTeamRecommendationDTO recommendTaskTeam(
             String tenantId, String clientId, String taskId,
             AgentTaskTeamRecommendationRequestDTO request);
-
-    AgentTaskDTO reportTask(String taskId, AgentTaskReportDTO request);
 
     AgentTaskNoteDTO addTaskNote(String taskId, AgentTaskNoteDTO request);
 
