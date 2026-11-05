@@ -105,6 +105,29 @@ public class ChatBountyRequestIndexStore {
                 rs.getLong("request_revision"), rs.getString("conversation_id"), rs.getLong("conversation_generation")), args);
     }
 
+    /** One bounded selection for displayed messages, not a scan of historical pages. */
+    public List<Row> byRequests(Scope scope, List<String> requestIds) {
+        require(scope);
+        if (requestIds == null || requestIds.isEmpty() || requestIds.size() > 100)
+            throw new IllegalArgumentException("Request selection is invalid");
+        String slots = String.join(",", java.util.Collections.nCopies(requestIds.size(), "?"));
+        String exactSlots = String.join(",", java.util.Collections.nCopies(requestIds.size(), "CAST(? AS BINARY)"));
+        Object[] exact = scopeArgs(scope);
+        Object[] args = java.util.Arrays.copyOf(exact, exact.length + requestIds.size() * 2);
+        for (int i = 0; i < requestIds.size(); i++) {
+            args[exact.length+i] = requestIds.get(i);
+            args[exact.length+requestIds.size()+i] = requestIds.get(i);
+        }
+        return jdbc.query("""
+                SELECT id,tenant_id,owner_jiacn,client_id,request_id,request_revision,
+                       conversation_id,conversation_generation FROM chat_request WHERE
+                """ + EXACT_SCOPE + " AND request_id IN (" + slots + ") AND CAST(request_id AS BINARY) IN ("
+                + exactSlots + ") ORDER BY id ASC LIMIT 101",
+                (rs, ignored) -> new Row(rs.getLong("id"), rs.getString("tenant_id"), rs.getString("owner_jiacn"),
+                        rs.getString("client_id"), rs.getString("request_id"), rs.getLong("request_revision"),
+                        rs.getString("conversation_id"), rs.getLong("conversation_generation")), args);
+    }
+
     public record StepRow(String requestId, long requestRevision, String stepId, long stepNumber,
             String taskId, long assignmentRevision, String targetAgentId, String kind, String state,
             long stateVersion, String executionIntentId, String executionId, String executionState) { }

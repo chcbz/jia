@@ -73,6 +73,18 @@ class ChatBountyRequestIndexHttpTest {
         assertEquals(fixture.get("data"), body.get("data"));
         verify(service).read("0", "owner", "client", "101", query); verifyNoMoreInteractions(service);
     }
+    @Test void repeatedWindowIdsUseTheSharedBoundedResponseWithoutChangingSingleIdRules() throws Exception {
+        var mapper=new ObjectMapper();
+        var fixture=mapper.readTree(getClass().getResourceAsStream("/contracts/hall-request-index-window.json"));
+        var page=mapper.treeToValue(fixture.get("data"),ChatBountyRequestIndexService.Page.class);
+        var query=new ChatBountyRequestIndexService.Query("1",null,null,null,null,null,List.of("r7","r9000"));
+        when(service.read("0","owner","client","101",query)).thenReturn(page);
+        var response=mvc.perform(get("/chat/conversations/101/requests").param("expectedGeneration","1")
+                .param("requestIds","r7","r9000").principal(auth).header("X-Request-Id","hall-request-index-window"))
+                .andExpect(status().isOk()).andReturn().getResponse();
+        assertEquals(fixture,mapper.readTree(response.getContentAsString()));
+        verify(service).read("0","owner","client","101",query);verifyNoMoreInteractions(service);
+    }
     @Test void deliveryContextUsesSharedEnvelopeAndBoundedChoiceContract() throws Exception {
         var mapper = new ObjectMapper();
         var fixture = mapper.readTree(getClass().getResourceAsStream("/contracts/hall-delivery-context.json"));

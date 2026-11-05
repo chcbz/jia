@@ -108,6 +108,16 @@ class ChatBountyRequestIndexStoreTest {
         assertTrue(store.byRequest(new ChatBountyRequestIndexStore.Scope("tenant", "owner", "client", "101", 1), "r1").isEmpty());
         assertTrue(store.byRequest(new ChatBountyRequestIndexStore.Scope("tenant", "Owner", "client", "102", 1), "r1").isEmpty());
     }
+    @Test void displayWindowSelectionUsesOneQueryAndKeepsExactOwnerAndIds() {
+        for (long id=1;id<=105;id++) insert(id);
+        clearInvocations(jdbc);
+        assertEquals(List.of(row(1),row(104)),store.byRequests(scope,List.of("r104","r1")));
+        assertEquals(1,queryCount());
+        assertTrue(store.byRequests(scope,List.of("R1","missing")).isEmpty());
+        assertTrue(store.byRequests(new ChatBountyRequestIndexStore.Scope("tenant","owner","client","101",1),List.of("r1")).isEmpty());
+        assertTrue(store.byRequests(new ChatBountyRequestIndexStore.Scope("tenant","Owner","client","101",2),List.of("r1")).isEmpty());
+        assertThrows(IllegalArgumentException.class,()->store.byRequests(scope,LongStream.range(1,102).mapToObj(n->"r"+n).toList()));
+    }
     @Test void latestSelectsOneOrdinalAfterExactScopeFiltering() {
         assertTrue(store.latest(scope).isEmpty());
         for (long id = 1; id <= 105; id++) insert(id);

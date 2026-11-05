@@ -31,7 +31,7 @@ import java.util.Set;
 @ConditionalOnProperty(prefix = "chat.bounty-media", name = "enabled", havingValue = "true")
 public class ChatBountyRequestIndexController {
     private static final Set<String> QUERY_KEYS = Set.of(
-            "expectedGeneration", "after", "through", "pageSize", "requestId", "latest");
+            "expectedGeneration", "after", "through", "pageSize", "requestId", "latest", "requestIds");
     private static final String CACHE_CONTROL = "private, no-store";
 
     private final ChatBountyRequestIndexService index;
@@ -51,14 +51,15 @@ public class ChatBountyRequestIndexController {
             Authentication authentication) {
         Map<String, String[]> parameters = request.getParameterMap();
         if (!QUERY_KEYS.containsAll(parameters.keySet()) || parameters.entrySet().stream()
-                .anyMatch(entry -> entry.getValue() == null || entry.getValue().length != 1)
+                .anyMatch(entry -> entry.getValue() == null || (!entry.getKey().equals("requestIds") && entry.getValue().length != 1))
                 || hasBody(request)) throw invalid();
         var identity = identity(authentication);
         String tenant = identity.tenant();
         var sender = identity.sender();
         var query = new ChatBountyRequestIndexService.Query(value(parameters, "expectedGeneration"),
                 value(parameters, "after"), value(parameters, "through"),
-                value(parameters, "pageSize"), value(parameters, "requestId"), value(parameters, "latest"));
+                value(parameters, "pageSize"), value(parameters, "requestId"), value(parameters, "latest"),
+                parameters.containsKey("requestIds") ? java.util.Arrays.asList(parameters.get("requestIds")) : null);
         return response(HttpStatus.OK, JsonResult.success(index.read(tenant, sender.jiacn(),
                 sender.clientId(), conversationId, query)));
     }

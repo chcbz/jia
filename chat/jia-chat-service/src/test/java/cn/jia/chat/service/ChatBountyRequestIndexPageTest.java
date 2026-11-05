@@ -99,6 +99,29 @@ class ChatBountyRequestIndexPageTest {
                         new ChatBountyRequestIndexService.Query("1", null, null, null, "foreign"))).reason());
         verify(store).byRequest(scope, "foreign"); verifyNoMoreInteractions(store);
     }
+    @Test void displayedRequestsUseExactBatchWithoutWholeHistoryDiscovery() {
+        var selected=List.of("r7");
+        when(store.byRequests(scope,selected)).thenReturn(List.of(row));
+        var result=service.read("0","owner","client","101",new ChatBountyRequestIndexService.Query("1",null,null,null,null,null,selected));
+        assertEquals("r7",result.entries().getFirst().request().requestId());assertFalse(result.hasMore());
+        verify(store).byRequests(scope,selected);verify(store).projections(scope,List.of(row));verifyNoMoreInteractions(store);
+    }
+    @Test void windowCannotMixDiscoveryModesOrTreatForeignMissingRowsAsComplete() {
+        for (var query:List.of(
+                new ChatBountyRequestIndexService.Query("1","0",null,null,null,null,List.of("r7")),
+                new ChatBountyRequestIndexService.Query("1",null,null,null,"r7",null,List.of("r7")),
+                new ChatBountyRequestIndexService.Query("1",null,null,null,null,"true",List.of("r7")),
+                new ChatBountyRequestIndexService.Query("1",null,null,null,null,null,List.of("r7","r7")),
+                new ChatBountyRequestIndexService.Query("1",null,null,null,null,null,List.of()))) {
+            assertEquals(ChatBountyRequestIndexService.Reason.INVALID_REQUEST,assertThrows(ChatBountyRequestIndexService.Failure.class,
+                    ()->service.read("0","owner","client","101",query)).reason());
+        }
+        verifyNoInteractions(store);
+        when(store.byRequests(scope,List.of("r7","foreign"))).thenReturn(List.of(row));
+        assertEquals(ChatBountyRequestIndexService.Reason.NOT_FOUND_OR_FORBIDDEN,assertThrows(ChatBountyRequestIndexService.Failure.class,
+                ()->service.read("0","owner","client","101",new ChatBountyRequestIndexService.Query("1",null,null,null,null,null,List.of("r7","foreign")))).reason());
+        verify(store).byRequests(scope,List.of("r7","foreign"));verifyNoMoreInteractions(store);
+    }
     @Test void latestRecoveryExpandsOnlyTheNewestRoundWithoutWatermarkOrPaging() {
         when(store.latest(scope)).thenReturn(List.of(row));
         when(store.eventCursor(scope)).thenReturn(9007199254740993L);
