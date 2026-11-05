@@ -20,6 +20,8 @@ CREATE TABLE IF NOT EXISTS chat_typed_outcome (
   outcome_json MEDIUMTEXT NOT NULL,
   source_catalog_json MEDIUMTEXT NOT NULL,
   created_at BIGINT NOT NULL,
+  delivery_target_agent_id VARCHAR(100) DEFAULT NULL,
+  delivery_parent_outcome_id VARCHAR(64) DEFAULT NULL,
   PRIMARY KEY (outcome_id),
   UNIQUE KEY uk_chat_typed_outcome_scope_id
     (tenant_id,owner_jiacn,client_id,conversation_id,conversation_generation,outcome_id),
@@ -29,6 +31,10 @@ CREATE TABLE IF NOT EXISTS chat_typed_outcome (
     (tenant_id,owner_jiacn,client_id,conversation_id,conversation_generation,request_id,request_revision),
   KEY idx_chat_typed_outcome_message
     (tenant_id,owner_jiacn,client_id,conversation_id,conversation_generation,assistant_message_id),
+  KEY idx_chat_typed_outcome_delivery_order
+    (tenant_id,owner_jiacn,client_id,conversation_id,conversation_generation,task_id,assignment_revision,delivery_target_agent_id,assistant_message_id),
+  KEY idx_chat_typed_outcome_delivery_parent
+    (tenant_id,owner_jiacn,client_id,conversation_id,conversation_generation,task_id,assignment_revision,delivery_target_agent_id,delivery_parent_outcome_id),
   KEY idx_chat_typed_outcome_turn_fk (turn_id),
   CONSTRAINT fk_chat_typed_outcome_turn FOREIGN KEY (turn_id) REFERENCES chat_turn(turn_id) ON UPDATE RESTRICT ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;

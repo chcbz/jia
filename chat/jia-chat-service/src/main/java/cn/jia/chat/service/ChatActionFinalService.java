@@ -143,6 +143,11 @@ public class ChatActionFinalService {
     public Map<String, Object> persist(Prepared p, long messageId, long now) {
         if (p.existing() != null) return projection(p.existing(), p.validated());
         var v = p.validated(); var union = v.interactionOutcome(); String id = outcomeId(p);
+        // Index immutable relations once, from the already validated final. An action
+        // candidate is NOT proof of execution completion; readers must join actual progress.
+        boolean deliveryCandidate = "CHAT".equals(v.binding().get("route"))
+                && ("ACTION_REQUEST".equals(union.kind()) || "SUBMISSION_REQUEST".equals(union.kind())
+                    || "ANSWER".equals(union.kind()) && Boolean.TRUE.equals(union.deliverable()));
         var stored = new LinkedHashMap<String, Object>(); stored.put("schemaVersion", 5);
         stored.put("interactionOutcome", ChatActionFinalValidator.outcomeMap(union));
         stored.put("inspectionInputReceipt", v.inspectionInputReceipt() == null ? null
@@ -151,7 +156,9 @@ public class ChatActionFinalService {
                 p.admission().requestRevision(), (String) v.binding().get("turnId"), p.admission().taskId(),
                 p.admission().assignmentRevision(), messageId, v.finalDigest(), union.kind(), union.text(),
                 canonical(v.binding()), canonical(ChatActionFinalValidator.factsMap(v.dispatchFacts())),
-                canonical(stored), p.admission().sourceCatalogJson(), now);
+                canonical(stored), p.admission().sourceCatalogJson(), now,
+                deliveryCandidate ? (String) v.binding().get("targetAgentId") : null,
+                deliveryCandidate && union.deliveryRelation() != null ? union.deliveryRelation().parentOutcomeId() : null);
         if (store.insertOutcome(row) != 1) throw persistence("Unable to persist action outcome");
         if ("CLARIFY".equals(union.kind())) {
             var c = union.clarification();

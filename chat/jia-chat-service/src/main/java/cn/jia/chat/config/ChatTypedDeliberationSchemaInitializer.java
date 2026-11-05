@@ -331,7 +331,8 @@ public final class ChatTypedDeliberationSchemaInitializer implements Application
                         col("task_id",v100,false,null), num("assignment_revision",b,false,null), num("assistant_message_id",b,false,null),
                         col("final_digest",v100,false,null), col("kind","varchar(30)",false,null), col("text","mediumtext",false,null),
                         col("binding_json","mediumtext",false,null), col("facts_json","mediumtext",false,null),
-                        col("outcome_json","mediumtext",false,null), col("source_catalog_json","mediumtext",false,null), num("created_at",b,false,null)),
+                        col("outcome_json","mediumtext",false,null), col("source_catalog_json","mediumtext",false,null), num("created_at",b,false,null),
+                        col("delivery_target_agent_id",v100,true,null), col("delivery_parent_outcome_id",v64,true,null)),
                 "chat_typed_pending_question", List.of(
                         col("pending_question_id",v64,false,null), col("outcome_id",v64,false,null), col("tenant_id",v50,false,null),
                         col("owner_jiacn",v50,false,null), col("client_id",v50,false,null), col("conversation_id",v100,false,null),
@@ -366,6 +367,8 @@ public final class ChatTypedDeliberationSchemaInitializer implements Application
                         "uk_chat_typed_outcome_scope_turn", idx(true,scope,"turn_id"),
                         "uk_chat_typed_outcome_scope_request", idx(true,scope,"request_id","request_revision"),
                         "idx_chat_typed_outcome_message", idx(false,scope,"assistant_message_id"),
+                        "idx_chat_typed_outcome_delivery_order", idx(false,scope,"task_id","assignment_revision","delivery_target_agent_id","assistant_message_id"),
+                        "idx_chat_typed_outcome_delivery_parent", idx(false,scope,"task_id","assignment_revision","delivery_target_agent_id","delivery_parent_outcome_id"),
                         "idx_chat_typed_outcome_turn_fk", idx(false,"turn_id")),
                 "chat_typed_pending_question", Map.of(
                         "PRIMARY", idx(true,"pending_question_id"),

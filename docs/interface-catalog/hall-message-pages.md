@@ -63,3 +63,24 @@
 共享fixture：单项`hall-request-index-entry.json`新增eventCursor:null，SHA256 `0acc016394c3e88d3859522db84038b5d5f9fdee0483bdd4e7c95b2d3e7a4fe9`；最新快照`hall-request-latest.json`使用大于JS安全整数的字符串cursor，SHA256 `f65865e99b408f1e0fe1efe1e566da1fe26f369687093c4131e85b37b1bafb91`。两端完整报文相同，前端既有解码器接受新增字段；其他分页核心字段不变。
 
 回归：SQL cursor精确scope/空会话、服务latest才查询cursor、HTTP shared fixture、ChatConversationEventsHttpTest.restoredSnapshotCursorSkipsOldEventsButReplaysTheConnectionGap；Web恢复50条消息后使用精确大整数Last-Event-ID、收到窗口内新delta而非旧历史。Java编译/并发事务验证待Flow，不能以测试源码或mock证明上线。2026-11-05真实库只读查询使用idx_chat_conversation_event_replay覆盖索引，13行样本单次约0.674ms，无事件正文读取；仅SQL样本，不是端到端/长历史性能结论。
+
+## 2026-11-05 候选：发送上下文的关系索引（尚未切换读取）
+
+当前发送仍依赖前端加载完整目录和成果图，本节只是解除该依赖的持久化基础，**不代表首次成果加载已经有界**。
+
+在现有 `chat_typed_outcome` 增加两个可空字段，不能作为新的执行授权：
+
+- `delivery_target_agent_id`：已验证 `CHAT` final 的 `targetAgentId`；仅可交付 `ANSWER`、`ACTION_REQUEST`、`SUBMISSION_REQUEST` 填写。
+- `delivery_parent_outcome_id`：上述 final 已验证 `deliveryRelation.parentOutcomeId`；独立根为空。不能用 admission 的 parent 替代，该 parent 也可能表示澄清或其他上下文关系。
+- 两个复合索引以现有精确 scope、task、assignment revision、agent 为前缀，分别支持成果消息顺序与父子关系查询；不对 MEDIUMTEXT JSON 扫描/排序。查询执行计划与长历史耗时尚未验证，不能由新增索引推出恒定成本。
+
+责任及成本：`ChatActionFinalService.persist` 使用已经验证的 final，在原事务的同一个 INSERT 写关系字段；无额外 SELECT/UPDATE、后台扫描、缓存表或 Runtime 字段。重复 final 仍直接返回原记录，不重写关系；canonical `outcome_json`、binding、facts 与 final digest 不变。普通回答、澄清及 INSPECT 不被标记为可交付成果。原历史写入构造器保留空值，不把旧合同猜测升级为当前成果。
+
+`ACTION_REQUEST` 的索引项仅为候选，**绝不证明执行完成**。后续发送上下文查询须使用真实 child/step/execution 的提交状态；失败子动作不得遮蔽可用父成果，进行中动作不得冒充成功。多独立根/分支仍须明确选择，不按最大 message ID 选父成果。明确选中父成果的准入沿用既有权威权限、状态、保留输出与幂等处理，不重算已接纳请求的正文摘要。
+
+迁移边界：`db/chat-outcome-delivery-index-20261105.sql` 仅为加字段/索引候选，与新建库 DDL 和 schema-maintenance 描述同步，无 CHECK。未在生产执行。旧库须在获授权的备份/受控迁移中先加列，不能直接安装会写这些列的代码；该脚本**没有完成历史回填**。切换新读路径前必须完成各历史合同的关系提取与覆盖核对，不得将未回填 null 行当成没有成果，也不得在每次请求中全历史 JSON 扫描作为兼容兜底。尚未添加新读端点、改变发送契约或删除前端现有全量路径。
+
+定向回归入口（已添加源码、尚未运行Java）：
+- `ChatTypedOutcomeDeliveryIndexTest`：实际JDBC插入/三种现有读取入口、原正文/摘要、空历史关系、大小写owner/代际隔离；插入不增元数据查询。
+- `ChatOutcomeDeliveryIndexTest`：当前已验证文字/提交关系、独立根、非交付回答、INSPECT、admission parent 不混用、重复 final 不改写。
+- `ChatActionOutcomeV5Test`：真实native v6 facts/v5 final写入路径的候选关系、动作仍QUEUED；澄清不产生关系索引。
