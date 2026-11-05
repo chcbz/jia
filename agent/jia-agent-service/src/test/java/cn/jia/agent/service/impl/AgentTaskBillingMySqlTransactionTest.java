@@ -68,10 +68,12 @@ class AgentTaskBillingMySqlTransactionTest {
     private TaskBillingService billing;
     private AgentTaskExecutionGrantServiceImpl assignment;
     private AgentTaskFormalDeliveryDecisionService decisions;
+    private AgentTaskCancellationService cancellation;
     private AgentTaskEventAfterCommitPublisher publisher;
     private final AgentTaskEventBroker broker = mock(AgentTaskEventBroker.class);
     private String failEvent;
     private boolean failBootstrap;
+    private boolean failOccupation;
     private String quoteId;
 
     @BeforeEach
@@ -111,7 +113,7 @@ class AgentTaskBillingMySqlTransactionTest {
         var config = new MybatisConfiguration(); config.setMapUnderscoreToCamelCase(true);
         for (Class<?> mapper : List.of(AgentTaskMetaMapper.class, AgentTaskMemberMapper.class,
                 AgentTaskWorkItemMapper.class, AgentTaskEventMapper.class, AgentTaskExecutionGrantMapper.class,
-                AgentTaskBountyBootstrapOutboxMapper.class, AgentTaskFormalDeliveryMapper.class,
+                AgentTaskBountyBootstrapOutboxMapper.class, AgentTaskFormalDeliveryMapper.class, AgentTaskCancellationMapper.class,
                 EconomyLedgerMapper.class, EconomyTaskBillingMapper.class)) config.addMapper(mapper);
         var global = new GlobalConfig(); global.setIdentifierGenerator(new DefaultIdentifierGenerator());
         var factory = new MybatisSqlSessionFactoryBean(); factory.setDataSource(source);
@@ -173,6 +175,15 @@ class AgentTaskBillingMySqlTransactionTest {
         decisions = proxy(new AgentTaskFormalDeliveryDecisionServiceImpl(
                 new AgentTaskFormalDeliveryDaoImpl(sql.getMapper(AgentTaskFormalDeliveryMapper.class)),
                 meta, members, work, roots, events, billing), AgentTaskFormalDeliveryDecisionService.class);
+        var cancelDao = spy(new AgentTaskCancellationDaoImpl(sql.getMapper(AgentTaskCancellationMapper.class)));
+        doAnswer(call -> {
+            Object changed = call.callRealMethod();
+            if (failOccupation) throw new InjectedFailure();
+            return changed;
+        }).when(cancelDao).releaseTaskOccupation(anyString(), anyString(), anyString(), anyString(), anyLong());
+        cancellation = new AgentTaskCancellationServiceImpl(roots,
+                new AgentTaskStateServiceImpl(meta, members, work, roots, events), work,
+                new AgentTaskExecutionGrantDaoImpl(sql.getMapper(AgentTaskExecutionGrantMapper.class)), cancelDao, billing);
         jdbc.update("INSERT INTO agent_task_meta(task_id,owner_jiacn,tenant_id,client_id) VALUES(?,?,?,?)",
                 TASK, OWNER, TENANT, CLIENT);
         jdbc.update("""
@@ -283,6 +294,141 @@ class AgentTaskBillingMySqlTransactionTest {
         assertEquals("HELD", charge()); assertEquals(1, count("economy_transaction"));
         assertEquals(50, wallet(jdbc)); assertEquals("running", taskState());
         assertTrue(decide("changes_requested").getReplayed());
+    }
+
+    @Test
+    void initialCancellationRefundsOriginalPayerAndReplaysWithoutMoreWrites() throws Exception {
+        prepareCancellation(); assign(); prepareRetry();
+        var receipt = cancel();
+        assertEquals("cancelled", receipt.status());
+        assertCancelled();
+        int events = count("agent_task_event");
+        assertEquals(receipt, cancel());
+        assertEquals(events, count("agent_task_event"));
+        assertEquals(2, count("economy_transaction"));
+        assertEquals(1, count("economy_task_quote"));
+        assertEquals(1, count("agent_task_execution_grant"));
+    }
+
+    @Test
+    void cancellationEventFailureRestoresMoneyGrantBootstrapAndChildren() throws Exception {
+        prepareCancellation(); assign(); prepareRetry(); clearInvocations(broker);
+        int events = count("agent_task_event");
+        failEvent = TaskEventType.TASK_CANCELLED;
+        assertThrows(InjectedFailure.class, this::cancel);
+        assertCancellationRolledBack();
+        assertEquals(events, count("agent_task_event")); verifyNoInteractions(broker);
+        failEvent = null; cancel(); assertCancelled();
+    }
+
+    @Test
+    void finalOccupationFailureAndOuterCommitKeepCancellationAtomic() throws Exception {
+        prepareCancellation(); assign(); prepareRetry(); clearInvocations(broker);
+        failOccupation = true;
+        assertThrows(InjectedFailure.class, this::cancel);
+        assertCancellationRolledBack(); verifyNoInteractions(broker);
+        failOccupation = false;
+        new TransactionTemplate(manager).executeWithoutResult(status -> {
+            cancel();
+            assertEquals(100, wallet(jdbc)); assertEquals(50, wallet(independent));
+            assertEquals("assigned", independent.queryForObject("SELECT reward_status FROM agent_task_meta", String.class));
+            assertEquals("ACTIVE", independent.queryForObject("SELECT state FROM agent_task_execution_grant", String.class));
+            verifyNoInteractions(broker);
+        });
+        assertCancelled();
+    }
+
+    @Test
+    void concurrentInitialCancellationRefundsOnceUnderTaskRootLock() throws Exception {
+        prepareCancellation(); assign(); prepareRetry();
+        var start = new CountDownLatch(1);
+        try (var pool = Executors.newFixedThreadPool(2)) {
+            var a = pool.submit(() -> { start.await(); return cancel(); });
+            var b = pool.submit(() -> { start.await(); return cancel(); });
+            start.countDown();
+            assertEquals(a.get(20, TimeUnit.SECONDS), b.get(20, TimeUnit.SECONDS));
+        }
+        assertCancelled();
+    }
+
+    @Test
+    void neverAssignedCancellationNeedsNoBillAndCreatesNoMoneyTransactions() throws Exception {
+        prepareCancellation();
+        assertEquals("cancelled", cancellation.cancel(TENANT, CLIENT, OWNER, PAYER, TASK, 0).status());
+        assertEquals(100, wallet(jdbc)); assertEquals(0, count("economy_task_charge"));
+        assertEquals(0, count("economy_transaction"));
+    }
+
+    @Test
+    void assignedMissingBillCannotCancelOrReleaseUnattributedFunds() throws Exception {
+        prepareCancellation(); assign(); prepareRetry();
+        // Explicit corruption fixture: never infer a free bill or refund arbitrary escrow.
+        jdbc.update("DELETE FROM economy_task_charge");
+        var failure = assertThrows(cn.jia.economy.task.TaskBillingException.class, this::cancel);
+        assertEquals(cn.jia.economy.task.TaskBillingException.Reason.RESERVATION_REQUIRED, failure.reason());
+        assertEquals(50, wallet(jdbc)); assertEquals("assigned", taskState());
+        assertEquals("ACTIVE", jdbc.queryForObject("SELECT state FROM agent_task_execution_grant", String.class));
+        assertEquals(1, count("economy_transaction"));
+    }
+
+    private void prepareCancellation() throws Exception {
+        // All cancellation inventories and writes use the production mapper, not fake existence results.
+        createTable(DDL.resolve("schema.sql"), "agent_runtime", true);
+        createTable(DDL.resolve("schema.sql"), "agent_command_delivery", true);
+        createTable(DDL.resolve("schema.sql"), "agent_outbox_event", true);
+        for (String file : List.of("agent-task-funding-v0.sql", "agent-selected-output-finalization-v1.sql",
+                "agent-task-provider-cost-consent-v1.sql")) {
+            new ResourceDatabasePopulator(new FileSystemResource(DDL.resolve(file))).execute(jdbc.getDataSource());
+        }
+        new cn.jia.agent.config.PersonalWorkspaceExecutionSchemaInitializer(jdbc).afterPropertiesSet();
+        // Legacy Chat base-table DDL lives in the existing mapper fixture; it is read-only in this suite.
+        createTable(Path.of("../../chat/jia-chat-mapper/src/test/resources/db/schema.sql"), "chat_conversation", false);
+        new ResourceDatabasePopulator(new FileSystemResource(Path.of(
+                "../../chat/jia-chat-mapper/src/main/resources/db/chat-deliberation-schema.sql")))
+                .execute(jdbc.getDataSource());
+        jdbc.update("INSERT INTO agent_runtime(agent_id,name,status,current_task_id,tenant_id,client_id,owner_jiacn) "
+                + "VALUES(?,?,'busy',?,?,?,?)", AGENT, "fixture", TASK, TENANT, CLIENT, OWNER);
+    }
+
+    private void createTable(Path source, String table, boolean ifNotExists) throws Exception {
+        String schema = Files.readString(source);
+        int start = schema.indexOf("CREATE TABLE " + (ifNotExists ? "IF NOT EXISTS " : "") + table + " (");
+        assertTrue(start >= 0, table);
+        jdbc.execute(schema.substring(start, schema.indexOf(";", start)));
+    }
+
+    private void prepareRetry() {
+        // Seed a failed, unleased bootstrap attempt; this suite does not claim relay/network coverage.
+        jdbc.update("UPDATE agent_task_bounty_bootstrap_outbox SET status='RETRY',attempt_count=1,"
+                + "next_retry_at=1,version=2,last_error_code='FIXTURE_ADMISSION_FAILURE'");
+    }
+
+    private AgentTaskCancellationService.Receipt cancel() {
+        return cancellation.cancel(TENANT, CLIENT, OWNER, PAYER, TASK, 1);
+    }
+
+    private void assertCancelled() {
+        assertEquals("cancelled", taskState()); assertEquals("RELEASED", charge());
+        assertEquals(100, wallet(jdbc)); assertEquals(2, count("economy_transaction"));
+        assertEquals("REVOKED", jdbc.queryForObject("SELECT state FROM agent_task_execution_grant", String.class));
+        assertEquals("DEAD", jdbc.queryForObject("SELECT status FROM agent_task_bounty_bootstrap_outbox", String.class));
+        assertEquals("TASK_CANCELLED", jdbc.queryForObject("SELECT last_error_code FROM agent_task_bounty_bootstrap_outbox", String.class));
+        assertEquals("left", jdbc.queryForObject("SELECT member_status FROM agent_task_member", String.class));
+        assertEquals("cancelled", jdbc.queryForObject("SELECT status FROM agent_task_work_item", String.class));
+        assertNull(jdbc.queryForObject("SELECT current_task_id FROM agent_runtime", String.class));
+        assertEquals("online", jdbc.queryForObject("SELECT status FROM agent_runtime", String.class));
+        assertEquals(0L, jdbc.queryForObject("SELECT SUM(balance_wen) FROM economy_account WHERE owner_type='TASK'", Long.class));
+    }
+
+    private void assertCancellationRolledBack() {
+        assertEquals("assigned", taskState()); assertEquals("HELD", charge());
+        assertEquals(50, wallet(jdbc)); assertEquals(1, count("economy_transaction"));
+        assertEquals("ACTIVE", jdbc.queryForObject("SELECT state FROM agent_task_execution_grant", String.class));
+        assertEquals("RETRY", jdbc.queryForObject("SELECT status FROM agent_task_bounty_bootstrap_outbox", String.class));
+        assertEquals("accepted", jdbc.queryForObject("SELECT member_status FROM agent_task_member", String.class));
+        assertEquals("ready", jdbc.queryForObject("SELECT status FROM agent_task_work_item", String.class));
+        assertEquals(TASK, jdbc.queryForObject("SELECT current_task_id FROM agent_runtime", String.class));
+        assertEquals("busy", jdbc.queryForObject("SELECT status FROM agent_runtime", String.class));
     }
 
     private AgentTaskExecutionGrantDTO assign() {
