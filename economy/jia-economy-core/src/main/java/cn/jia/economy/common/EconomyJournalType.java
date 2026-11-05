@@ -3,6 +3,7 @@ package cn.jia.economy.common;
 public enum EconomyJournalType {
     ISSUE_WEN,
     RESERVE_BOUNTY,
+    CAPTURE_TASK,
     CAPTURE_COMPUTE,
     PAY_AGENT,
     CAPTURE_FEE,

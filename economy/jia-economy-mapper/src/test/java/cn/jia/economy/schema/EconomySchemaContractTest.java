@@ -27,11 +27,11 @@ class EconomySchemaContractTest {
     }
 
     @Test
-    void schemaContainsExactFiveTablesAndNonDestructiveBootstrapConstraints() throws Exception {
+    void schemaContainsExactSevenTablesAndNonDestructiveBootstrapConstraints() throws Exception {
         String sql = Files.readString(Path.of("src/main/resources/db/schema.sql"), StandardCharsets.UTF_8);
         String normalized = sql.toLowerCase(Locale.ROOT).replaceAll("\\s+", " ");
         for (String table : List.of("economy_account", "economy_transaction", "economy_entry",
-                "economy_escrow", "economy_escrow_funding_lot")) {
+                "economy_escrow", "economy_escrow_funding_lot", "economy_task_quote", "economy_task_charge")) {
             assertEquals(1, occurrences(normalized, "create table if not exists " + table + " ("), table);
         }
         assertTrue(normalized.contains("idempotency_key varbinary(36) not null"));
@@ -44,6 +44,8 @@ class EconomySchemaContractTest {
         assertEquals(0, occurrences(normalized, "signal sqlstate '45000'"));
         assertFalse(normalized.contains("then null"));
         assertFalse(normalized.contains("set new.status"));
+        assertEquals(7, occurrences(normalized, "create table if not exists "));
+        assertFalse(normalized.contains("check ("));
         assertFalse(normalized.contains("decimal("));
         assertFalse(normalized.contains("double"));
         assertFalse(normalized.contains("float"));

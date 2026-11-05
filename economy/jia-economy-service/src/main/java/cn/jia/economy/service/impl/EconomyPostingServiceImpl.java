@@ -65,7 +65,7 @@ public class EconomyPostingServiceImpl implements EconomyPostingService {
             EconomyJournalType.CAPTURE_HOSTING_RENT,
             EconomyJournalType.REFUND_HOSTING_RENT,
             EconomyJournalType.REFUND_BOUNTY,
-            EconomyJournalType.CAPTURE_COMPUTE, EconomyJournalType.CAPTURE_FEE, EconomyJournalType.PAY_AGENT,
+            EconomyJournalType.CAPTURE_TASK, EconomyJournalType.CAPTURE_COMPUTE, EconomyJournalType.CAPTURE_FEE, EconomyJournalType.PAY_AGENT,
             EconomyJournalType.CAPTURE_SKILL, EconomyJournalType.REFUND_SKILL);
 
     private final EconomyLedgerMapper mapper;
@@ -579,7 +579,7 @@ public class EconomyPostingServiceImpl implements EconomyPostingService {
 
 
     private static boolean isBountyCapture(EconomyJournalType type) {
-        return type == EconomyJournalType.CAPTURE_COMPUTE || type == EconomyJournalType.CAPTURE_FEE
+        return type == EconomyJournalType.CAPTURE_TASK || type == EconomyJournalType.CAPTURE_COMPUTE || type == EconomyJournalType.CAPTURE_FEE
                 || type == EconomyJournalType.PAY_AGENT;
     }
 
@@ -616,6 +616,9 @@ public class EconomyPostingServiceImpl implements EconomyPostingService {
         if (isBountyCapture(command.journalType())) {
             EconomyAccountKey destination = settlement.destinationAccount();
             destinationMatches = switch (command.journalType()) {
+                case CAPTURE_TASK -> destination.ownerType() == EconomyAccountOwnerType.SYSTEM
+                        && destination.purpose() == EconomyAccountPurpose.TASK_FEE
+                        && "TASK_FEE".equals(destination.ownerId());
                 case CAPTURE_COMPUTE -> destination.ownerType() == EconomyAccountOwnerType.SYSTEM
                         && destination.purpose() == EconomyAccountPurpose.MODEL_COST
                         && "MODEL_COST".equals(destination.ownerId());

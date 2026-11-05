@@ -195,6 +195,19 @@ public interface EconomyLedgerMapper {
             """)
     int insertAccountIfAbsent(EconomyAccountEntity account);
 
+    /** Provision and acquire an exclusive account lock. Call in EconomyAccountKey.LOCK_ORDER.
+     * Unlike INSERT IGNORE, duplicate provisioning cannot hold a shared lock then upgrade on posting. */
+    @Insert("""
+            INSERT INTO economy_account(
+                account_id,owner_type,owner_id,purpose,currency,balance_wen,
+                allow_negative,status,version,tenant_id,client_id,create_time,update_time)
+            VALUES(
+                #{accountId},#{ownerType},#{ownerId},#{purpose},#{currency},#{balanceWen},
+                #{allowNegative},#{status},#{version},#{tenantId},#{clientId},#{createTime},#{updateTime})
+            ON DUPLICATE KEY UPDATE id=id
+            """)
+    int insertAccountIfAbsentAndLock(EconomyAccountEntity account);
+
     @Update("""
             UPDATE economy_account
             SET balance_wen=#{newBalance},version=#{newVersion},update_time=#{now}

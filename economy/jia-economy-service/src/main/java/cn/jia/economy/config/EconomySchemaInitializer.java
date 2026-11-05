@@ -22,13 +22,13 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.TreeMap;
 
-/** Fail-closed initializer and catalog validator for the exact ECO-V0-W02 five-table schema. */
+/** Fail-closed initializer and catalog validator for the exact ECO-V0-W02 seven-table schema. */
 @org.springframework.context.annotation.Profile("schema-maintenance")
 public final class EconomySchemaInitializer implements InitializingBean {
     static final String DDL_RESOURCE = "db/economy-v0-foundation.sql";
     static final List<String> TABLES = List.of(
             "economy_account", "economy_transaction", "economy_entry",
-            "economy_escrow", "economy_escrow_funding_lot");
+            "economy_escrow", "economy_escrow_funding_lot", "economy_task_quote", "economy_task_charge");
     private static final String BINARY_COLLATION = "utf8mb4_0900_bin";
     private static final String TRIGGER_INITIALIZATION_LOCK = "cyf:economy-v0:immutable-triggers";
     private static final int TRIGGER_INITIALIZATION_LOCK_SECONDS = 10;
@@ -57,7 +57,7 @@ public final class EconomySchemaInitializer implements InitializingBean {
         }
         present = inspectPresentTables();
         if (!sameTables(present, TABLES)) {
-            throw new IllegalStateException("ECO-V0 schema creation did not produce exact 5/5 tables: " + present);
+            throw new IllegalStateException("ECO-V0 schema creation did not produce exact 7/7 tables: " + present);
         }
         validateSchema();
     }
@@ -267,7 +267,7 @@ public final class EconomySchemaInitializer implements InitializingBean {
     static List<String> tableDdlStatements() {
         List<String> all = allDdlStatements();
         if (all.size() != TABLES.size()) {
-            throw new IllegalStateException("ECO-V0 DDL must contain only the five additive tables");
+            throw new IllegalStateException("ECO-V0 DDL must contain only the seven additive tables");
         }
         List<String> tables = all;
         for (int index = 0; index < tables.size(); index++) {
@@ -403,6 +403,26 @@ public final class EconomySchemaInitializer implements InitializingBean {
                 index("uk_economy_funding_sequence", true, "tenant_id", "client_id", "escrow_id", "funding_sequence"),
                 index("uk_economy_funding_transaction", true, "tenant_id", "client_id", "reserve_transaction_id"),
                 index("idx_economy_funding_escrow", false, "tenant_id", "client_id", "escrow_id", "id"))));
+        tables.put("economy_task_quote", table("economy_task_quote", List.of(
+                id(), varchar("quote_id", 100, false, null), varchar("binding_sha256", 64, false, null),
+                varchar("tenant_id", 50, false, null), varchar("client_id", 50, false, null),
+                varchar("owner_jiacn", 100, false, null), varchar("task_id", 100, false, null),
+                varchar("payer_user_id", 100, false, null), bigint("amount_wen", false, null),
+                new ColumnDefinition("snapshot_json", "longtext", "longtext", false, null, BINARY_COLLATION, ""),
+                bigint("created_at", false, null)), List.of(
+                index("PRIMARY", true, "id"),
+                index("uk_economy_task_quote_id", true, "tenant_id", "client_id", "quote_id"),
+                index("uk_economy_task_quote_binding", true, "tenant_id", "client_id", "owner_jiacn", "task_id", "binding_sha256"))));
+        tables.put("economy_task_charge", table("economy_task_charge", List.of(
+                id(), varchar("tenant_id", 50, false, null), varchar("client_id", 50, false, null),
+                varchar("owner_jiacn", 100, false, null), varchar("task_id", 100, false, null),
+                varchar("quote_id", 100, true, null), varchar("payer_user_id", 100, true, null),
+                bigint("amount_wen", false, null), varchar("state", 24, false, null),
+                varchar("reserve_transaction_id", 100, true, null), bigint("escrow_version", true, null),
+                varchar("terminal_transaction_id", 100, true, null),
+                bigint("created_at", false, null), bigint("updated_at", false, null)), List.of(
+                index("PRIMARY", true, "id"),
+                index("uk_economy_task_charge", true, "tenant_id", "client_id", "owner_jiacn", "task_id"))));
         return Map.copyOf(tables);
     }
 
@@ -451,8 +471,8 @@ public final class EconomySchemaInitializer implements InitializingBean {
     }
 
     private static IllegalStateException partialSchema(List<String> present) {
-        return new IllegalStateException("ECO-V0 economy schema must be exact 0/5 or 5/5; found "
-                + present.size() + "/5: " + present);
+        return new IllegalStateException("ECO-V0 economy schema must be exact 0/7 or 7/7; found "
+                + present.size() + "/7: " + present);
     }
 
     record TableDefinition(String engine, String collation) {

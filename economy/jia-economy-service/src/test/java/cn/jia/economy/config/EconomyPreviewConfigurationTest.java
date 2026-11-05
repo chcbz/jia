@@ -118,7 +118,7 @@ class EconomyPreviewConfigurationTest {
     }
 
     @Test void compoundTriggerDdlIsBounded() {
-        assertEquals(5, EconomySchemaInitializer.tableDdlStatements().size());
+        assertEquals(7, EconomySchemaInitializer.tableDdlStatements().size());
     }
 
     @Test

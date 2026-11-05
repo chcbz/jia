@@ -110,3 +110,40 @@ CREATE TABLE IF NOT EXISTS economy_escrow_funding_lot (
     UNIQUE KEY uk_economy_funding_transaction (tenant_id, client_id, reserve_transaction_id),
     KEY idx_economy_funding_escrow (tenant_id, client_id, escrow_id, id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Immutable initial and top-up escrow funding lots';
+
+-- Fixed task quotes and charges. Business state rules live in TaskBillingService, not CHECKs.
+CREATE TABLE IF NOT EXISTS economy_task_quote (
+    id                  BIGINT NOT NULL AUTO_INCREMENT,
+    quote_id            VARCHAR(100) NOT NULL,
+    binding_sha256      VARCHAR(64) NOT NULL,
+    tenant_id           VARCHAR(50) NOT NULL,
+    client_id           VARCHAR(50) NOT NULL,
+    owner_jiacn         VARCHAR(100) NOT NULL,
+    task_id             VARCHAR(100) NOT NULL,
+    payer_user_id       VARCHAR(100) NOT NULL,
+    amount_wen          BIGINT NOT NULL,
+    snapshot_json       LONGTEXT NOT NULL,
+    created_at          BIGINT NOT NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_economy_task_quote_id (tenant_id, client_id, quote_id),
+    UNIQUE KEY uk_economy_task_quote_binding (tenant_id, client_id, owner_jiacn, task_id, binding_sha256)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Immutable whole-task quote and price snapshot';
+
+CREATE TABLE IF NOT EXISTS economy_task_charge (
+    id                      BIGINT NOT NULL AUTO_INCREMENT,
+    tenant_id               VARCHAR(50) NOT NULL,
+    client_id               VARCHAR(50) NOT NULL,
+    owner_jiacn             VARCHAR(100) NOT NULL,
+    task_id                 VARCHAR(100) NOT NULL,
+    quote_id                VARCHAR(100) DEFAULT NULL,
+    payer_user_id           VARCHAR(100) DEFAULT NULL,
+    amount_wen              BIGINT NOT NULL,
+    state                   VARCHAR(24) NOT NULL,
+    reserve_transaction_id  VARCHAR(100) DEFAULT NULL,
+    escrow_version          BIGINT DEFAULT NULL,
+    terminal_transaction_id VARCHAR(100) DEFAULT NULL,
+    created_at              BIGINT NOT NULL,
+    updated_at              BIGINT NOT NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_economy_task_charge (tenant_id, client_id, owner_jiacn, task_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Fixed task reservation and terminal settlement';
