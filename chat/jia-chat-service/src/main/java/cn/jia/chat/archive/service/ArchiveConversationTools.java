@@ -23,7 +23,6 @@ import static cn.jia.agent.position.PositionSkillException.require;
 /** Archive-owned native conversation tools. No polling, shell, model-produced full text or legacy task replay. */
 @Service
 public final class ArchiveConversationTools implements ConversationToolProvider {
-    private static final String SKILL="archive-maintenance";
     private static final Map<String,Object> TEXT=Map.of("type","string");
     private static final Map<String,Object> VERSION=Map.of("type","string","pattern","^[1-9][0-9]*$");
     private static final ObjectMapper JSON=new ObjectMapper();
@@ -50,13 +49,13 @@ public final class ArchiveConversationTools implements ConversationToolProvider 
             tool("archive_recover","按原operationKey只读恢复已提交结果；未知响应先恢复，不能换key盲重试。",Map.of("operationKey",TEXT)));
     }
     @Override public Set<String> names(){return Set.of("archive_source","archive_prepare","archive_publish","archive_read","archive_recover");}
-    @Override public Catalog catalog(Context context,Boundary boundary) {
+    @Override public List<Map<String,Object>> catalog(Context context,Boundary boundary) {
         var descriptors=descriptors(context);
         try {
             var session=boundary.execute(()->authorized(context,descriptors,"catalog",false,Function.identity()));
-            var skill=session.skill();return new Catalog(schemas(),List.of(new Skill(skill.skillKey(),skill.skillVersion(),skill.installationId(),skill.packageSha256())));
-        } catch(PositionSkillException failure) {if(failure.status()!=403&&failure.status()!=409)throw failure;return Catalog.empty();}
-        catch(cn.jia.chat.service.PrivateConversationToolAccess.Denied denied){return Catalog.empty();}
+            return schemas();
+        } catch(PositionSkillException failure) {if(failure.status()!=403&&failure.status()!=409)throw failure;return List.of();}
+        catch(cn.jia.chat.service.PrivateConversationToolAccess.Denied denied){return List.of();}
     }
     @Override public Object call(Context context,Boundary boundary,String name,Map<String,Object> args) {
         validate(name,args);var descriptors=descriptors(context);
@@ -102,7 +101,7 @@ public final class ArchiveConversationTools implements ConversationToolProvider 
             if(prior!=null){requireAgent(c,prior);require(requestDigest.equals(prior.requestDigest()),409,"ARCHIVE_IDEMPOTENCY_CONFLICT");return view(c,prior);}
             require(jobs.publicationOperation(owner(c),key,true)==null,409,"ARCHIVE_IDEMPOTENCY_CONFLICT");
             String id=prepared.edition().substring("edition-".length());
-            var request=new ArchiveMaintenanceService.Create(s.grant().appointmentId(),c.subject().agentId(),SKILL,work,text(args,"title"),text(args,"author"),text(args,"sourceName"),text(args,"sourceRights"),new String(bytes,StandardCharsets.UTF_8),ArchiveMaintenanceService.Mode.DRAFT_ONLY);
+            var request=new ArchiveMaintenanceService.Create(s.grant().appointmentId(),c.subject().agentId(),s.skill().skillKey(),work,text(args,"title"),text(args,"author"),text(args,"sourceName"),text(args,"sourceRights"),new String(bytes,StandardCharsets.UTF_8),ArchiveMaintenanceService.Mode.DRAFT_ONLY);
             var spec=new ArchiveMaintenanceService.Specification(request,prepared.edition(),text(args,"sourceSha256"),s.grant(),prepared.expectedActive(),s.skill().installationId(),s.skill().packageSha256(),null,text(args,"fileId"),version(args));
             jobs.insert(owner(c),new ArchiveMaintenanceStore.Job(id,key,requestDigest,c.subject().agentId(),"WAITING",encode(spec),null,null));
             require(jobs.complete(owner(c),id,"DRAFT",compiled.manifestJson(),compiled.manifestFileSha256())==1,409,"ARCHIVE_RESULT_CONFLICT");
@@ -149,7 +148,7 @@ public final class ArchiveConversationTools implements ConversationToolProvider 
     }
     private List<InstalledSkillDescriptorLookup.Descriptor> descriptors(Context c) {
         var s=c.subject();return installed.readCurrent(new SkillCapabilityLookup.Scope(s.tenantId(),s.clientId(),s.ownerJiacn(),s.agentId())).skills().stream()
-                .filter(d->SKILL.equals(d.skillKey())&&d.verifiedNative()&&d.manifestSha256()==null
+                .filter(d->d.verifiedNative()&&d.manifestSha256()==null
                     &&Objects.equals(d.runtimeInstallationId(),c.runtimeInstallationId())&&Objects.equals(d.runtimeHostId(),c.runtimeHostId())).toList();
     }
     private ArchiveMaintenanceStore.Job job(Context c,String id){PositionSkillPolicy.key(id);var job=jobs.find(owner(c),id,false);require(job!=null,404,"ARCHIVE_JOB_NOT_FOUND");requireAgent(c,job);return job;}

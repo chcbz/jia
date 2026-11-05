@@ -14,25 +14,37 @@ public final class ConversationToolExtensions {
     private final AgentRuntimeAuthenticationService authentication;
     private final PrivateConversationToolAccess conversations;
     private final List<ConversationToolProvider> providers;
+    private final cn.jia.agent.service.InstalledSkillDescriptorLookup installed;
     public ConversationToolExtensions(AgentRuntimeAuthenticationService authentication,
-            PrivateConversationToolAccess conversations,List<ConversationToolProvider> providers) {
-        this.authentication=authentication;this.conversations=conversations;this.providers=List.copyOf(providers);
+            PrivateConversationToolAccess conversations,List<ConversationToolProvider> providers,cn.jia.agent.service.InstalledSkillDescriptorLookup installed) {
+        this.authentication=authentication;this.conversations=conversations;this.providers=List.copyOf(providers);this.installed=installed;
         var names=new HashSet<String>();
-        SkillConversationTools.catalog().forEach(t->names.add((String)t.get("name")));
         for(var provider:providers)for(var name:provider.names())
             if(!names.add(name))throw new IllegalStateException("Duplicate conversation tool");
     }
     public ConversationToolProvider.Catalog catalog(Authentication principal,String request,String turn) {
         var context=context(principal);var boundary=boundary(principal,request,turn,context);
-        var tools=new ArrayList<Map<String,Object>>();var skills=new ArrayList<ConversationToolProvider.Skill>();
-        for(var provider:providers){var catalog=provider.catalog(context,boundary);tools.addAll(catalog.tools());skills.addAll(catalog.skills());}
-        return new ConversationToolProvider.Catalog(tools,skills);
+        // Check the turn before reading installation metadata. Package I/O stays outside locks.
+        try { boundary.execute(()->true); }
+        catch(PrivateConversationToolAccess.Denied denied) { return ConversationToolProvider.Catalog.empty(); }
+        var subject=context.subject();
+        var snapshot=installed.readCurrent(new cn.jia.agent.service.SkillCapabilityLookup.Scope(
+                subject.tenantId(),subject.clientId(),subject.ownerJiacn(),subject.agentId()));
+        var skills=snapshot.skills().stream()
+                .filter(d->d.verifiedNative()&&d.manifestSha256()==null
+                        &&Objects.equals(context.runtimeInstallationId(),d.runtimeInstallationId())
+                        &&Objects.equals(context.runtimeHostId(),d.runtimeHostId()))
+                .map(d->new ConversationToolProvider.Skill(d.skillKey(),d.skillVersion(),d.installationId(),d.packageSha256())).toList();
+        var tools=new ArrayList<Map<String,Object>>();
+        for(var provider:providers)tools.addAll(provider.catalog(context,boundary));
+        return boundary.execute(()->new ConversationToolProvider.Catalog(tools,skills));
     }
-    public boolean supports(String name) {return providers.stream().anyMatch(p->p.names().contains(name));}
     public Object call(Authentication principal,String request,String turn,String name,Map<String,Object> arguments) {
         var provider=providers.stream().filter(p->p.names().contains(name)).findFirst().orElseThrow(IllegalArgumentException::new);
         var context=context(principal);
-        return provider.call(context,boundary(principal,request,turn,context),name,arguments);
+        var boundary=boundary(principal,request,turn,context);
+        boundary.execute(()->true);
+        return provider.call(context,boundary,name,arguments);
     }
     private ConversationToolProvider.Context context(Authentication principal) {
         var proof=AgentRuntimeAuthenticationService.requireProof(principal);var s=proof.scope();

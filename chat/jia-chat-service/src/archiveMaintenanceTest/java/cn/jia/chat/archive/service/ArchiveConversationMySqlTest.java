@@ -46,13 +46,13 @@ class ArchiveConversationMySqlTest {
         when(identities.requireRegistrationIdentityInScope("0","test-client","owner-a","agent1")).thenReturn(identity);
         when(identities.lockActiveCanonicalAgentIdsInScope(anyString(),anyString(),anyString(),anyList())).thenAnswer(i->i.getArgument(3));
         var market=mock(SkillCatalogMapper.class);
-        when(market.selectApprovedProductVersion("0","test-client","v1")).thenReturn(new SkillProductVersionEntity().setReviewStatus("APPROVED").setSkillKey("archive-maintenance"));
+        when(market.selectApprovedProductVersion("0","test-client","v1")).thenReturn(new SkillProductVersionEntity().setReviewStatus("APPROVED").setSkillKey("configured-editorial-guide"));
         var manager=new DataSourceTransactionManager(ds);tx=new SpringArchiveTransactions(manager);content=new JdbcArchiveContentStore(jdbc);
         positions=new PositionSkillService(new PositionSkillStore(jdbc),identities,market,manager);
 
         for(String permission:List.of("MANAGE_POSITIONS","ARCHIVE_WRITE","ARCHIVE_PUBLISH"))jdbc.update("INSERT INTO agent_position_authority VALUES(?,?,?,?,?)","0","test-client","owner-a",permission,permission.equals("MANAGE_POSITIONS")?"positions":"archive:public");
-        positions.defineSkill(scope,"skill",new Skill("archive-maintenance",SkillType.POSITION,"v1"));
-        positions.configure(scope,"position",new Position("editor","Editor",2,"archive:public",true,List.of("archive-maintenance"),0),0);
+        positions.defineSkill(scope,"skill",new Skill("configured-editorial-guide",SkillType.POSITION,"v1"));
+        positions.configure(scope,"position",new Position("editor","Editor",2,"archive:public",true,List.of("configured-editorial-guide"),0),0);
         appointment=positions.appoint(scope,"appoint","editor","agent1").resultId();
         positions.runtimeState(scope,"agent1",p->{var i=p.state().installations().values().iterator().next();p.receipt(i.id(),i.revision(),true,"a".repeat(64),"runtime1","host1",null,"sha256:"+"b".repeat(64),null);return null;});
         nativeTools();
@@ -61,7 +61,7 @@ class ArchiveConversationMySqlTest {
         descriptors=mock(InstalledSkillDescriptorLookup.class);files=mock(PersonalWorkspaceService.class);
         var installation=positions.read(scope).state().installations().values().iterator().next();
         when(descriptors.readCurrent(any())).thenReturn(new InstalledSkillDescriptorLookup.Snapshot(List.of(
-            new InstalledSkillDescriptorLookup.Descriptor("archive-maintenance","2.0.0",PositionSkillRuntimeService.physical(installation),"b".repeat(64),null,null,"runtime1","host1",null))));
+            new InstalledSkillDescriptorLookup.Descriptor("configured-editorial-guide","2.0.0",PositionSkillRuntimeService.physical(installation),"b".repeat(64),null,null,"runtime1","host1",null))));
         store=new ArchiveMaintenanceStore(jdbc);tools=new ArchiveConversationTools(new PositionArchiveAccessService(positions),descriptors,files,store,content,tx);
         boundary=new ConversationToolProvider.Boundary(){public <T>T execute(java.util.function.Supplier<T> action){return tx.required(action);}};
         source("第一回 开端\n甲。\n第二回 结尾\n乙。\n");
@@ -81,7 +81,7 @@ class ArchiveConversationMySqlTest {
     Map<String,Object> draft(String key,String work){return call("archive_prepare",args(key,work));}
     Map<String,Object> publish(String key,Object id){return call("archive_publish",Map.of("operationKey",key,"jobId",id));}
     @Test void nativeInstructionCatalogAndFullDraftPublishReadback() {
-        assertEquals(5,tools.catalog(context,boundary).tools().size());
+        assertEquals(5,tools.catalog(context,boundary).size());
         var draft=draft("prepare","novel");assertEquals("DRAFT",draft.get("state"));assertEquals(false,draft.get("active"));assertNull(content.findWork("novel"));
         assertEquals("2",draft.get("chapterCount"));assertEquals("第二回 结尾",draft.get("lastChapter"));
         var published=publish("publish",draft.get("jobId"));assertEquals("PUBLISHED",published.get("state"));assertEquals(true,published.get("active"));
@@ -116,9 +116,9 @@ class ArchiveConversationMySqlTest {
     }
     @Test void wrongNativeHostAndUninstalledDescriptorAreNotTools() {
         var other=new ConversationToolProvider.Context(context.subject(),"runtime1","other-host");
-        assertTrue(tools.catalog(other,boundary).tools().isEmpty());
+        assertTrue(tools.catalog(other,boundary).isEmpty());
         when(descriptors.readCurrent(any())).thenReturn(new InstalledSkillDescriptorLookup.Snapshot(List.of()));
-        assertTrue(tools.catalog(context,boundary).tools().isEmpty());
+        assertTrue(tools.catalog(context,boundary).isEmpty());
         assertThrows(PositionSkillException.class,()->draft("prepare","novel"));
     }
     @Test void badDigestEmptyChapterAndUnknownResponseDoNotCommit() {

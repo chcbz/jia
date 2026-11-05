@@ -39,7 +39,17 @@ class ChatSkillMaintenanceServiceTest {
     private final PositionAuthority.Scope scope=new PositionAuthority.Scope("0","client","owner");
     private final SkillPackagePublicationService.UpdateMetadata command=
             new SkillPackagePublicationService.UpdateMetadata("product","技能标题","精简描述",4L);
-    private final SkillConversationToolAdapter service=new SkillConversationToolAdapter(authentication,new PrivateConversationToolAccessService(dispatches,turns,conversations),identities,positions,publications);
+    private final SkillConversationToolAdapter service=new SkillConversationToolAdapter(identities,positions,publications);
+    private final ConversationToolProvider.Context context=new ConversationToolProvider.Context(
+            new PrivateConversationToolAccess.Subject("0","client","owner","agent"),"installation","host");
+    private final PrivateConversationToolAccess access=new PrivateConversationToolAccessService(dispatches,turns,conversations);
+    private ConversationToolProvider.Boundary boundary(String request) {
+        return new ConversationToolProvider.Boundary() {
+            public <T>T execute(Supplier<T> action) {
+                return authentication.withNativeFence(principal,()->access.withCurrentTurn(context.subject(),request,"turn",action));
+            }
+        };
+    }
     private ChatTurnEntity turn;
     private ChatConversationEntity conversation;
 
@@ -70,7 +80,7 @@ class ChatSkillMaintenanceServiceTest {
         var grant=new PositionAuthority.Grant("appointment",2,3,"agent",1,null,true);
         var receipt=new SkillPackagePublicationService.MetadataReceipt("product","技能标题","精简描述",5,"UPDATED");
         when(publications.updateMetadata(scope,grant,command)).thenReturn(receipt);
-        assertSame(receipt,service.updateMetadata(principal,"request","turn",command));
+        assertSame(receipt,service.updateMetadata(context,boundary("request"),command));
         verify(authentication).withNativeFence(eq(principal),any());
         verify(dispatches).incomingTurn("0","client","owner","agent","turn");
         verify(publications).updateMetadata(scope,grant,command);
@@ -78,38 +88,38 @@ class ChatSkillMaintenanceServiceTest {
 
     @Test void missingOwnerScopedTurnCannotUseExternalExecutorAuthority() {
         when(turns.findTurn("0","owner","client","turn")).thenReturn(null);
-        assertThrows(PrivateConversationToolAccess.Denied.class,()->service.updateMetadata(principal,"request","turn",command));
+        assertThrows(PrivateConversationToolAccess.Denied.class,()->service.updateMetadata(context,boundary("request"),command));
         verifyNoInteractions(publications,positions,dispatches);
     }
 
     @Test void taskDiscussionDoesNotAuthorizePlatformMaintenance() {
         conversation.setConversationScopeType("bounty");
-        assertThrows(PrivateConversationToolAccess.Denied.class,()->service.updateMetadata(principal,"request","turn",command));
+        assertThrows(PrivateConversationToolAccess.Denied.class,()->service.updateMetadata(context,boundary("request"),command));
         verifyNoInteractions(publications,positions,dispatches);
     }
 
     @Test void cancelledTurnAndDeletedOrRecreatedConversationCannotWrite() {
         for(String state:List.of("CANCELLED","PUBLISHED","RECOVERY_REQUIRED")) {
             turn.setState(state);
-            assertThrows(PrivateConversationToolAccess.Denied.class,()->service.updateMetadata(principal,"request","turn",command));
+            assertThrows(PrivateConversationToolAccess.Denied.class,()->service.updateMetadata(context,boundary("request"),command));
         }
         turn.setState("DISPATCHED");conversation.setLifecycleGeneration(2L);
-        assertThrows(PrivateConversationToolAccess.Denied.class,()->service.updateMetadata(principal,"request","turn",command));
+        assertThrows(PrivateConversationToolAccess.Denied.class,()->service.updateMetadata(context,boundary("request"),command));
         conversation.setLifecycleGeneration(1L).setDeletedAt(1L);
-        assertThrows(PrivateConversationToolAccess.Denied.class,()->service.updateMetadata(principal,"request","turn",command));
+        assertThrows(PrivateConversationToolAccess.Denied.class,()->service.updateMetadata(context,boundary("request"),command));
         verifyNoInteractions(publications,positions);
     }
 
     @Test void wrongRequestOrTargetDoesNotBorrowAnotherTurn() {
-        assertThrows(PrivateConversationToolAccess.Denied.class,()->service.updateMetadata(principal,"different","turn",command));
+        assertThrows(PrivateConversationToolAccess.Denied.class,()->service.updateMetadata(context,boundary("different"),command));
         turn.setTargetAgentId("other-agent");
-        assertThrows(PrivateConversationToolAccess.Denied.class,()->service.updateMetadata(principal,"request","turn",command));
+        assertThrows(PrivateConversationToolAccess.Denied.class,()->service.updateMetadata(context,boundary("request"),command));
         verifyNoInteractions(publications,positions);
     }
 
     @Test void missingAppointmentIsNotReplacedWithPlatformAdministratorAuthority() {
         when(positions.read(scope)).thenReturn(new PositionSkillService.View(null,null,4,PositionSkillState.empty()));
-        assertThrows(SkillMarketplaceException.class,()->service.updateMetadata(principal,"request","turn",command));
+        assertThrows(SkillMarketplaceException.class,()->service.updateMetadata(context,boundary("request"),command));
         verifyNoInteractions(publications);
     }
 
@@ -117,28 +127,20 @@ class ChatSkillMaintenanceServiceTest {
         var failure=new SkillMarketplaceException(409,"SKILL_PRODUCT_CHANGED");
         when(publications.updateMetadata(eq(scope),any(),eq(command))).thenThrow(failure);
         assertSame(failure,assertThrows(SkillMarketplaceException.class,
-                ()->service.updateMetadata(principal,"request","turn",command)));
+                ()->service.updateMetadata(context,boundary("request"),command)));
     }
-    @Test void catalogRequiresCurrentVerifiedInstallationAsWellAsAppointment() {
-        var installed=mock(cn.jia.agent.service.InstalledSkillDescriptorLookup.class);
-        service.setInstalled(installed);
+    @Test void toolCatalogUsesResourceAuthorityNotAnInstalledSkillName() {
         when(positions.withSkillManagementAuthority(eq(scope),any(),any())).thenAnswer(c->((Supplier<?>)c.getArgument(2)).get());
-        when(installed.readCurrent(any())).thenReturn(new cn.jia.agent.service.InstalledSkillDescriptorLookup.Snapshot(List.of()));
-        assertTrue(service.catalog(principal,"request","turn").tools().isEmpty());
-        var descriptor=new cn.jia.agent.service.InstalledSkillDescriptorLookup.Descriptor("skill-management","1.0.0","si","a".repeat(64),null,null,"runtime","host",null);
-        when(installed.readCurrent(any())).thenReturn(new cn.jia.agent.service.InstalledSkillDescriptorLookup.Snapshot(List.of(descriptor)));
-        var catalog=service.catalog(principal,"request","turn");
-        assertEquals(6,catalog.tools().size());assertEquals("si",catalog.skills().getFirst().skillInstallationId());
+        assertEquals(6,service.catalog(context,boundary("request")).size());
         when(positions.read(scope)).thenReturn(new PositionSkillService.View(null,null,4,PositionSkillState.empty()));
-        assertTrue(service.catalog(principal,"request","turn").tools().isEmpty());
+        assertTrue(service.catalog(context,boundary("request")).isEmpty());
     }
-
     @Test void packageReadCannotReturnContentAfterConversationCancellation() {
         when(positions.withSkillManagementAuthority(eq(scope),any(),any())).thenAnswer(c->((Supplier<?>)c.getArgument(2)).get());
         when(publications.readPackage(eq(scope),any(),eq("v1"),eq("SKILL.md"))).thenAnswer(c->{
             turn.setState("CANCELLED");return Map.of("data","private bytes");
         });
-        assertThrows(PrivateConversationToolAccess.Denied.class,()->service.readPackage(principal,"request","turn","v1","SKILL.md"));
+        assertThrows(PrivateConversationToolAccess.Denied.class,()->service.readPackage(context,boundary("request"),"v1","SKILL.md"));
     }
 
     @Test void cancelledDuringPackagePreparationCannotCommit() {
@@ -147,7 +149,7 @@ class ChatSkillMaintenanceServiceTest {
         when(publications.prepare(eq(scope),any(),any(),any())).thenAnswer(c->{turn.setState("CANCELLED");return prepared;});
         var command=new SkillPackagePublicationService.Publish("p","v","名称","描述","example","1.0.0",0,"NONE","[]",null,null,0,null);
         var files=List.of(new cn.jia.agent.skill.SkillPublicationToolArchive.File("SKILL.md","real file","utf8"));
-        assertThrows(PrivateConversationToolAccess.Denied.class,()->service.publish(principal,"request","turn",command,files));
+        assertThrows(PrivateConversationToolAccess.Denied.class,()->service.publish(context,boundary("request"),command,files));
         verify(publications,never()).commitPrepared(any());
     }
 

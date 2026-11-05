@@ -14,6 +14,6 @@ public interface ConversationToolProvider {
         public static Catalog empty() { return new Catalog(List.of(),List.of()); }
     }
     Set<String> names();
-    Catalog catalog(Context context,Boundary boundary);
+    List<Map<String,Object>> catalog(Context context,Boundary boundary);
     Object call(Context context,Boundary boundary,String name,Map<String,Object> arguments);
 }
