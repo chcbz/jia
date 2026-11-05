@@ -27,7 +27,7 @@ public final class FundedBountyRequestDigest {
             write(out, request.getDescription());
             writeStrings(out, request.getRequiredAbilities());
             write(out, request.getReward() == null ? null : Integer.toString(request.getReward()));
-            write(out, request.getGrossBountyAmountMicro());
+            write(out, request.getGrossBountyAmountWen());
             write(out, request.getSettlementPolicy());
             List<AgentSkillRequirementDTO> requirements = request.getRequiredSkillRequirements();
             if (requirements == null) {
@@ -68,7 +68,7 @@ public final class FundedBountyRequestDigest {
                     write(out, request.getModelPreference().getModel());
                 }
                 write(out, request.getContextRevision());
-                write(out, request.getMinimumAcceptedPayoutMicro());
+                write(out, request.getMinimumAcceptedPayoutWen());
             }
         } catch (IOException impossible) {
             throw new IllegalStateException("Unable to hash funded bounty quote request", impossible);
@@ -83,8 +83,8 @@ public final class FundedBountyRequestDigest {
                 request.getAllowQueue() == null ? null : request.getAllowQueue().toString()));
     }
 
-    public static byte[] complete(String taskId, String expectedTaskVersion, String actualComputeMicro) {
-        return digest(fields("funded-bounty-complete-v0", taskId, expectedTaskVersion, actualComputeMicro));
+    public static byte[] complete(String taskId, String expectedTaskVersion, String actualComputeWen) {
+        return digest(fields("funded-bounty-complete-v0", taskId, expectedTaskVersion, actualComputeWen));
     }
 
     public static byte[] cancel(String taskId, String expectedTaskVersion) {

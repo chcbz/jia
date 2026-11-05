@@ -39,9 +39,9 @@ public class AgentBountySettlementController {
         Map<String, Object> body = protocolRequest == null ? null : protocolRequest.data();
         FundedBountyActor actor = actor(authentication);
         // No JSON-number coercion, caller fee/recipient override, or ignored extra monetary input.
-        if (body == null || !body.keySet().equals(Set.of("expectedTaskVersion", "actualComputeMicro"))
+        if (body == null || !body.keySet().equals(Set.of("expectedTaskVersion", "actualComputeWen"))
                 || !(body.get("expectedTaskVersion") instanceof String version)
-                || !(body.get("actualComputeMicro") instanceof String compute)) {
+                || !(body.get("actualComputeWen") instanceof String compute)) {
             throw new FundedBountyException(HttpStatus.BAD_REQUEST, "BAD_REQUEST", "Exact canonical-string completion body required");
         }
         return ResponseEntity.ok().header("Cache-Control", "private, no-store").body(JsonResult.success(

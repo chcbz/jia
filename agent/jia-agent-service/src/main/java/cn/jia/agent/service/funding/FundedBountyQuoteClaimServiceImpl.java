@@ -24,7 +24,7 @@ import cn.jia.agent.service.impl.AgentCommandTransportCapture;
 import cn.jia.agent.service.impl.AgentLegacyTaskCompatibilityService;
 import cn.jia.core.util.JsonUtil;
 import cn.jia.economy.common.EconomyPrincipalType;
-import cn.jia.economy.common.MicroSilver;
+import cn.jia.economy.common.WenAmount;
 import cn.jia.economy.exception.EconomyPostingException;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -140,7 +140,7 @@ public final class FundedBountyQuoteClaimServiceImpl implements FundedBountyQuot
                 requireSkillSnapshot(skillLookup.lookup(actor, request.agentId(), requirements));
         boolean agentReady = isReady(runtime, false);
         boolean abilityMatch = abilityMatch(root, runtime);
-        long gross = requirePositive(funding.getRemainingMicro(), "remainingMicro");
+        long gross = requirePositive(funding.getRemainingWen(), "remainingWen");
         FundedBountyQuoteCalculator.QuoteAmounts amounts;
         try {
             amounts = FundedBountyQuoteCalculator.calculate(gross, request.minimumAcceptedPayout(),
@@ -172,14 +172,14 @@ public final class FundedBountyQuoteClaimServiceImpl implements FundedBountyQuot
         quote.setSkillSetHash(skillSnapshot.skillSetHash());
         quote.setModelRouteVersion(FundedBountyPreviewPriceBook.MODEL_ROUTE_VERSION);
         applyTokens(quote, FundedBountyPreviewPriceBook.ESTIMATED_TOKENS);
-        quote.setEstimatedComputeMicro(amounts.estimatedComputeMicro());
-        quote.setWorstComputeMicro(amounts.worstComputeMicro());
-        quote.setPlatformFeeMicro(amounts.platformFeeMicro());
-        quote.setGrossAllocationMicro(gross);
-        quote.setEstimatedAgentPayoutMicro(amounts.estimatedAgentPayoutMicro());
-        quote.setWorstAgentPayoutMicro(amounts.worstAgentPayoutMicro());
-        quote.setMinimumAcceptedPayoutMicro(request.minimumAcceptedPayout());
-        quote.setBudgetHeadroomMicro(amounts.budgetHeadroomMicro());
+        quote.setEstimatedComputeWen(amounts.estimatedComputeWen());
+        quote.setWorstComputeWen(amounts.worstComputeWen());
+        quote.setPlatformFeeWen(amounts.platformFeeWen());
+        quote.setGrossAllocationWen(gross);
+        quote.setEstimatedAgentPayoutWen(amounts.estimatedAgentPayoutWen());
+        quote.setWorstAgentPayoutWen(amounts.worstAgentPayoutWen());
+        quote.setMinimumAcceptedPayoutWen(request.minimumAcceptedPayout());
+        quote.setBudgetHeadroomWen(amounts.budgetHeadroomWen());
         quote.setVerifiedSkillMatch(skillSnapshot.allRequirementsMatched());
         quote.setAdvisoryAbilityMatch(abilityMatch);
         quote.setBudgetCovered(amounts.budgetCovered());
@@ -371,11 +371,11 @@ public final class FundedBountyQuoteClaimServiceImpl implements FundedBountyQuot
                 quote.getSkillSetHash(), quote.getModelRouteVersion(),
                 new AgentTokenEstimateDTO(decimal(quote.getEstimatedInputTokens()),
                         decimal(quote.getEstimatedCachedInputTokens()), decimal(quote.getEstimatedOutputTokens()),
-                        decimal(quote.getEstimatedReasoningTokens())), decimal(quote.getEstimatedComputeMicro()),
-                decimal(quote.getWorstComputeMicro()), decimal(quote.getPlatformFeeMicro()),
-                decimal(quote.getGrossAllocationMicro()), decimal(quote.getEstimatedAgentPayoutMicro()),
-                decimal(quote.getWorstAgentPayoutMicro()), decimal(quote.getMinimumAcceptedPayoutMicro()),
-                decimal(quote.getBudgetHeadroomMicro()), Boolean.TRUE.equals(quote.getVerifiedSkillMatch()),
+                        decimal(quote.getEstimatedReasoningTokens())), decimal(quote.getEstimatedComputeWen()),
+                decimal(quote.getWorstComputeWen()), decimal(quote.getPlatformFeeWen()),
+                decimal(quote.getGrossAllocationWen()), decimal(quote.getEstimatedAgentPayoutWen()),
+                decimal(quote.getWorstAgentPayoutWen()), decimal(quote.getMinimumAcceptedPayoutWen()),
+                decimal(quote.getBudgetHeadroomWen()), Boolean.TRUE.equals(quote.getVerifiedSkillMatch()),
                 Boolean.TRUE.equals(quote.getAdvisoryAbilityMatch()), quote.getRecommendation(), reasons,
                 decimal(quote.getExpiresAt()));
     }
@@ -405,7 +405,7 @@ public final class FundedBountyQuoteClaimServiceImpl implements FundedBountyQuot
         reasons.add(ready ? "AGENT_READY" : "AGENT_NOT_READY");
         reasons.add(amounts.budgetCovered() ? "BUDGET_COVERED" : "BUDGET_NOT_COVERED");
         if (!ready || !skills || !amounts.budgetCovered()) return new Recommendation("reject", reasons);
-        boolean lowHeadroom = amounts.budgetHeadroomMicro() < gross / 10L;
+        boolean lowHeadroom = amounts.budgetHeadroomWen() < gross / 10L;
         if (lowHeadroom) reasons.add("LOW_BUDGET_HEADROOM");
         return new Recommendation(ability && !lowHeadroom ? "recommended" : "caution", reasons);
     }
@@ -508,7 +508,7 @@ public final class FundedBountyQuoteClaimServiceImpl implements FundedBountyQuot
                     "Only the configured synthetic V0 preview model route is available");
         }
         long contextRevision = canonicalUnsigned(request.getContextRevision(), "contextRevision", true);
-        long minimum = canonicalMoney(request.getMinimumAcceptedPayoutMicro(), "minimumAcceptedPayoutMicro");
+        long minimum = canonicalMoney(request.getMinimumAcceptedPayoutWen(), "minimumAcceptedPayoutWen");
         return new QuoteRequest(request.getAgentId(), request.getModelPreference().getProvider(),
                 request.getModelPreference().getModel(), Long.toString(contextRevision), minimum);
     }
@@ -525,7 +525,7 @@ public final class FundedBountyQuoteClaimServiceImpl implements FundedBountyQuot
 
     private static long canonicalMoney(String value, String field) {
         try {
-            return MicroSilver.parseUnsigned(value);
+            return WenAmount.parseUnsigned(value);
         } catch (EconomyPostingException exception) {
             throw badRequest(field + " must be a canonical unsigned decimal string");
         }
@@ -556,7 +556,7 @@ public final class FundedBountyQuoteClaimServiceImpl implements FundedBountyQuot
 
     private static void requireOwnedHeldFunding(FundedBountyActor actor, AgentTaskFundingEntity funding) {
         requireOwnedFunding(actor, funding);
-        if (!FUNDS_HELD.equals(funding.getFundingStatus()) || funding.getRemainingMicro() == null
+        if (!FUNDS_HELD.equals(funding.getFundingStatus()) || funding.getRemainingWen() == null
                 || funding.getVersion() == null || funding.getVersion() < 1) {
             throw conflict("Task funding is not available for quote or claim");
         }

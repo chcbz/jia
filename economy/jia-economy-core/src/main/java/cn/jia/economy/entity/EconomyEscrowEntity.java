@@ -13,9 +13,9 @@ public class EconomyEscrowEntity {
     private String payerAccountId;
     private String escrowAccountId;
     private String currency;
-    private Long grossMicro;
-    private Long capturedMicro;
-    private Long refundedMicro;
+    private Long grossWen;
+    private Long capturedWen;
+    private Long refundedWen;
     private String status;
     private Long version;
     private String tenantId;

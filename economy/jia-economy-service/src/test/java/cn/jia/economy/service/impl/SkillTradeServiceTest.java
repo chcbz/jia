@@ -25,7 +25,7 @@ class SkillTradeServiceTest {
     @Test void freeSettlementDoesNotRequireEconomyOrInventFinancialEffects() {
         assertFalse(service.allows("0","client"));
         assertNull(service.reserve(scope,actor,"order",0,1));
-        var order=new SkillOrder().setOrderId("order").setPriceMicro(0L);
+        var order=new SkillOrder().setOrderId("order").setPriceWen(0L);
         assertNull(service.settle(scope,actor,order,null,true,1));
         assertNull(service.settle(scope,actor,order,null,false,1));
         verifyNoInteractions(trades,ledger,posting);
@@ -34,7 +34,7 @@ class SkillTradeServiceTest {
     @Test void paidOperationsFailBeforeAnyWriteWhenEconomyIsDisabled() {
         var reserve=assertThrows(EconomyPostingException.class,()->service.reserve(scope,actor,"order",1,1));
         assertEquals(EconomyPostingException.Reason.FEATURE_DISABLED,reserve.reason());
-        var order=new SkillOrder().setOrderId("order").setPriceMicro(1L);
+        var order=new SkillOrder().setOrderId("order").setPriceWen(1L);
         for(boolean capture:new boolean[]{true,false}) {
             var failure=assertThrows(EconomyPostingException.class,()->service.settle(scope,actor,order,1L,capture,1));
             assertEquals(EconomyPostingException.Reason.FEATURE_DISABLED,failure.reason());

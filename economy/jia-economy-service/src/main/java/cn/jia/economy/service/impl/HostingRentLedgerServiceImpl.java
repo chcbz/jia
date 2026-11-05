@@ -145,7 +145,7 @@ public final class HostingRentLedgerServiceImpl implements HostingRentLedgerServ
                 .setQuotePurpose(command.command().purpose().name())
                 .setPlanId(plan.getPlanId())
                 .setPlanVersion(plan.getPlanVersion())
-                .setAmountMicro(plan.getAmountMicro())
+                .setAmountWen(plan.getAmountWen())
                 .setPeriodSeconds(plan.getPeriodSeconds())
                 .setPrincipalType(command.principal().type().name())
                 .setPrincipalId(command.principal().id())
@@ -213,11 +213,11 @@ public final class HostingRentLedgerServiceImpl implements HostingRentLedgerServ
         EconomyPostingResult posting = postingService.post(new EconomyPostingCommand(
                 validated.scope(), validated.principal(), command.idempotencyKey(), command.requestHash(),
                 EconomyJournalType.RESERVE_HOSTING_RENT, leaseId, List.of(
-                    new EconomyPostingLine(userAvailable(validated.principal().id()), -quote.getAmountMicro()),
-                    new EconomyPostingLine(escrowAccount, quote.getAmountMicro())),
+                    new EconomyPostingLine(userAvailable(validated.principal().id()), -quote.getAmountWen()),
+                    new EconomyPostingLine(escrowAccount, quote.getAmountWen())),
                 new EconomyEscrowFunding(EconomyEscrowType.HOSTING_RENT,
                         userAvailable(validated.principal().id()), escrowAccount,
-                        quote.getAmountMicro(), null)));
+                        quote.getAmountWen(), null)));
         if (posting.escrow() == null || posting.escrow().escrowVersion() <= 0) {
             throw new HostingRentException(DATA_CORRUPT, "hosting reserve did not create escrow evidence");
         }
@@ -231,7 +231,7 @@ public final class HostingRentLedgerServiceImpl implements HostingRentLedgerServ
                 .setBindingId(null)
                 .setPlanId(quote.getPlanId())
                 .setPlanVersion(quote.getPlanVersion())
-                .setAmountMicro(quote.getAmountMicro())
+                .setAmountWen(quote.getAmountWen())
                 .setPeriodSeconds(quote.getPeriodSeconds())
                 .setStatus(HostingRentLeaseStatus.PROVISIONING.name())
                 .setPaidFrom(null)
@@ -251,7 +251,7 @@ public final class HostingRentLedgerServiceImpl implements HostingRentLedgerServ
                 .setPrincipalId(validated.principal().id())
                 .setPersonaCode(quote.getPersonaCode())
                 .setAgentId(quote.getAgentId())
-                .setAmountMicro(quote.getAmountMicro())
+                .setAmountWen(quote.getAmountWen())
                 .setPeriodSeconds(quote.getPeriodSeconds())
                 .setStatus(HostingRentIntentStatus.FUNDS_RESERVED.name())
                 .setReserveIdempotencyKey(validated.idempotencyKey())
@@ -293,7 +293,7 @@ public final class HostingRentLedgerServiceImpl implements HostingRentLedgerServ
                     throw new HostingRentException(DATA_CORRUPT, "incomplete atomic renewal");
                 }
                 return new HostingRentMutationReceipt(old.getIntentId(), old.getLeaseId(), old.getQuoteId(),
-                        old.getCaptureTransactionId(), "ACTIVE", old.getAmountMicro(), old.getPeriodSeconds(), old.getCapturedAt());
+                        old.getCaptureTransactionId(), "ACTIVE", old.getAmountWen(), old.getPeriodSeconds(), old.getCapturedAt());
             }
             if (quote.getExpiresAt() <= positiveNow()) throw new HostingRentException(QUOTE_EXPIRED, "renewal quote expired");
             EconomyHostingLeaseEntity lease = hostingMapper.selectLeaseForUpdate(
@@ -314,15 +314,15 @@ public final class HostingRentLedgerServiceImpl implements HostingRentLedgerServ
             EconomyPostingResult reserved = postingService.post(new EconomyPostingCommand(
                     validated.scope(), validated.principal(), command.idempotencyKey(), command.requestHash(),
                     EconomyJournalType.RESERVE_HOSTING_RENT, intentId, List.of(
-                    new EconomyPostingLine(userAvailable(validated.principal().id()), -quote.getAmountMicro()),
-                    new EconomyPostingLine(held, quote.getAmountMicro())),
+                    new EconomyPostingLine(userAvailable(validated.principal().id()), -quote.getAmountWen()),
+                    new EconomyPostingLine(held, quote.getAmountWen())),
                     new EconomyEscrowFunding(EconomyEscrowType.HOSTING_RENT,
-                            userAvailable(validated.principal().id()), held, quote.getAmountMicro(), null)));
+                            userAvailable(validated.principal().id()), held, quote.getAmountWen(), null)));
             EconomyHostingProvisioningIntentEntity intent = new EconomyHostingProvisioningIntentEntity()
                     .setIntentId(intentId).setLeaseId(lease.getLeaseId()).setQuoteId(quote.getQuoteId())
                     .setQuotePurpose("RENEWAL").setPrincipalType("USER").setPrincipalId(validated.principal().id())
                     .setPersonaCode(quote.getPersonaCode()).setAgentId(quote.getAgentId())
-                    .setAmountMicro(quote.getAmountMicro()).setPeriodSeconds(quote.getPeriodSeconds())
+                    .setAmountWen(quote.getAmountWen()).setPeriodSeconds(quote.getPeriodSeconds())
                     .setStatus("SERVICE_READY").setReserveIdempotencyKey(validated.idempotencyKey())
                     .setReserveRequestHash(command.requestHash()).setReserveTransactionId(reserved.transactionId())
                     .setReservedAt(reserved.postedAt()).setServiceReadyAt(reserved.postedAt())
@@ -337,10 +337,10 @@ public final class HostingRentLedgerServiceImpl implements HostingRentLedgerServ
             EconomyPostingResult captured = postingService.post(new EconomyPostingCommand(
                     validated.scope(), validated.principal(), captureKey, command.requestHash(),
                     EconomyJournalType.CAPTURE_HOSTING_RENT, intentId, List.of(
-                    new EconomyPostingLine(held, -quote.getAmountMicro()),
-                    new EconomyPostingLine(hostingRevenue(), quote.getAmountMicro())), null,
+                    new EconomyPostingLine(held, -quote.getAmountWen()),
+                    new EconomyPostingLine(hostingRevenue(), quote.getAmountWen())), null,
                     new EconomyEscrowSettlement(EconomyEscrowType.HOSTING_RENT, held, hostingRevenue(),
-                            quote.getAmountMicro(), 1L, reserved.transactionId())));
+                            quote.getAmountWen(), 1L, reserved.transactionId())));
             long paidFrom = Math.max(captured.postedAt(), lease.getPaidThrough());
             long paidThrough = checkedAdd(paidFrom, checkedMultiply(quote.getPeriodSeconds(), 1_000L));
             intent.setPaidFrom(paidFrom).setPaidThrough(paidThrough);
@@ -350,7 +350,7 @@ public final class HostingRentLedgerServiceImpl implements HostingRentLedgerServ
             requireOne(hostingMapper.renewLease(validated.scope().tenantId(), validated.scope().clientId(),
                     lease, quote, intentId, paidFrom, paidThrough, captured.postedAt()), "renewal lease CAS");
             return new HostingRentMutationReceipt(intentId, lease.getLeaseId(), quote.getQuoteId(),
-                    captured.transactionId(), "ACTIVE", quote.getAmountMicro(), quote.getPeriodSeconds(), captured.postedAt());
+                    captured.transactionId(), "ACTIVE", quote.getAmountWen(), quote.getPeriodSeconds(), captured.postedAt());
         });
     }
 
@@ -479,10 +479,10 @@ public final class HostingRentLedgerServiceImpl implements HostingRentLedgerServ
                 validated.scope(), validated.principal(), command.idempotencyKey(), command.requestHash(),
                 capture ? EconomyJournalType.CAPTURE_HOSTING_RENT : EconomyJournalType.REFUND_HOSTING_RENT,
                 intent.getLeaseId(), List.of(
-                    new EconomyPostingLine(escrow, -intent.getAmountMicro()),
-                    new EconomyPostingLine(destination, intent.getAmountMicro())), null,
+                    new EconomyPostingLine(escrow, -intent.getAmountWen()),
+                    new EconomyPostingLine(destination, intent.getAmountWen())), null,
                 new EconomyEscrowSettlement(EconomyEscrowType.HOSTING_RENT,
-                        escrow, destination, intent.getAmountMicro(), intent.getEscrowVersion(),
+                        escrow, destination, intent.getAmountWen(), intent.getEscrowVersion(),
                         intent.getReserveTransactionId())));
         long nextIntentVersion = checkedAdd(intent.getVersion(), 1L);
         long nextLeaseVersion = checkedAdd(lease.getVersion(), 1L);
@@ -509,7 +509,7 @@ public final class HostingRentLedgerServiceImpl implements HostingRentLedgerServ
         return new HostingRentMutationReceipt(intent.getIntentId(), intent.getLeaseId(), intent.getQuoteId(),
                 posting.transactionId(), capture ? HostingRentIntentStatus.ACTIVE.name()
                         : HostingRentIntentStatus.REFUNDED.name(),
-                intent.getAmountMicro(), intent.getPeriodSeconds(), posting.postedAt());
+                intent.getAmountWen(), intent.getPeriodSeconds(), posting.postedAt());
     }
 
     private ValidatedQuote validateQuote(HostingRentQuoteCommand command) {
@@ -569,9 +569,9 @@ public final class HostingRentLedgerServiceImpl implements HostingRentLedgerServ
     private void requireActivePlan(ValidatedQuote command, EconomyHostingRentPlanEntity plan) {
         if (plan == null) throw new HostingRentException(NOT_CONFIGURED, "hosting-rent plan is not configured");
         if (plan.getId() == null || !"ACTIVE".equals(plan.getStatus())
-                || !EconomyConstants.CURRENCY_SILVER.equals(plan.getCurrency())
+                || !EconomyConstants.CURRENCY_WEN.equals(plan.getCurrency())
                 || plan.getPlanVersion() == null || plan.getPlanVersion() <= 0
-                || plan.getAmountMicro() == null || plan.getAmountMicro() <= 0
+                || plan.getAmountWen() == null || plan.getAmountWen() <= 0
                 || plan.getPeriodSeconds() == null || plan.getPeriodSeconds() <= 0
                 || plan.getQuoteTtlSeconds() == null || plan.getQuoteTtlSeconds() <= 0
                 || !exact(plan.getTenantId(), command.scope().tenantId())
@@ -601,7 +601,7 @@ public final class HostingRentLedgerServiceImpl implements HostingRentLedgerServ
                 || !exact(quote.getClientId(), command.scope().clientId())
                 || !exact(quote.getPrincipalType(), command.principal().type().name())
                 || !exact(quote.getPrincipalId(), command.principal().id())
-                || quote.getAmountMicro() == null || quote.getAmountMicro() <= 0
+                || quote.getAmountWen() == null || quote.getAmountWen() <= 0
                 || quote.getPeriodSeconds() == null || quote.getPeriodSeconds() <= 0
                 || quote.getExpiresAt() == null || quote.getRequestHash() == null
                 || quote.getAgentId() == null || quote.getPersonaCode() == null) {
@@ -677,13 +677,13 @@ public final class HostingRentLedgerServiceImpl implements HostingRentLedgerServ
         return new HostingRentMutationReceipt(intent.getIntentId(), intent.getLeaseId(), intent.getQuoteId(),
                 capture ? intent.getCaptureTransactionId() : intent.getRefundTransactionId(),
                 capture ? HostingRentIntentStatus.ACTIVE.name() : HostingRentIntentStatus.REFUNDED.name(),
-                intent.getAmountMicro(), intent.getPeriodSeconds(),
+                intent.getAmountWen(), intent.getPeriodSeconds(),
                 capture ? intent.getCapturedAt() : intent.getRefundedAt());
     }
 
     private HostingRentQuoteReceipt toQuoteReceipt(EconomyHostingRentQuoteEntity quote) {
         return new HostingRentQuoteReceipt(quote.getQuoteId(), HostingRentQuotePurpose.valueOf(quote.getQuotePurpose()),
-                quote.getPlanId(), quote.getPlanVersion(), quote.getAmountMicro(), quote.getPeriodSeconds(),
+                quote.getPlanId(), quote.getPlanVersion(), quote.getAmountWen(), quote.getPeriodSeconds(),
                 quote.getPersonaCode(), quote.getAgentId(), quote.getLeaseId(),
                 quote.getExpectedLeaseVersion(), quote.getExpiresAt());
     }
@@ -691,7 +691,7 @@ public final class HostingRentLedgerServiceImpl implements HostingRentLedgerServ
     private HostingRentMutationReceipt reserveReceipt(EconomyHostingProvisioningIntentEntity intent) {
         return new HostingRentMutationReceipt(intent.getIntentId(), intent.getLeaseId(), intent.getQuoteId(),
                 intent.getReserveTransactionId(), HostingRentIntentStatus.FUNDS_RESERVED.name(),
-                intent.getAmountMicro(), intent.getPeriodSeconds(), intent.getReservedAt());
+                intent.getAmountWen(), intent.getPeriodSeconds(), intent.getReservedAt());
     }
 
     private void ensureAccount(EconomyScope scope, EconomyAccountKey key, String accountId, long now) {
@@ -701,7 +701,7 @@ public final class HostingRentLedgerServiceImpl implements HostingRentLedgerServ
                 .setOwnerId(key.ownerId())
                 .setPurpose(key.purpose().name())
                 .setCurrency(key.currency())
-                .setBalanceMicro(0L)
+                .setBalanceWen(0L)
                 .setAllowNegative(0)
                 .setStatus("ACTIVE")
                 .setVersion(0L)
@@ -713,17 +713,17 @@ public final class HostingRentLedgerServiceImpl implements HostingRentLedgerServ
     }
 
     private EconomyAccountKey userAvailable(String actorId) {
-        return new EconomyAccountKey(EconomyConstants.CURRENCY_SILVER,
+        return new EconomyAccountKey(EconomyConstants.CURRENCY_WEN,
                 EconomyAccountOwnerType.USER, actorId, EconomyAccountPurpose.AVAILABLE);
     }
 
     private EconomyAccountKey leaseEscrow(String leaseId) {
-        return new EconomyAccountKey(EconomyConstants.CURRENCY_SILVER,
+        return new EconomyAccountKey(EconomyConstants.CURRENCY_WEN,
                 EconomyAccountOwnerType.LEASE, leaseId, EconomyAccountPurpose.ESCROW);
     }
 
     private EconomyAccountKey hostingRevenue() {
-        return new EconomyAccountKey(EconomyConstants.CURRENCY_SILVER,
+        return new EconomyAccountKey(EconomyConstants.CURRENCY_WEN,
                 EconomyAccountOwnerType.SYSTEM, EconomyConstants.HOSTING_RENT_SYSTEM_OWNER_ID,
                 EconomyAccountPurpose.HOSTING_RENT);
     }

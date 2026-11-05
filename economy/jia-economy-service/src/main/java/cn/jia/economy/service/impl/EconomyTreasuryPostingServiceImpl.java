@@ -23,9 +23,9 @@ final class EconomyTreasuryPostingServiceImpl implements EconomyTreasuryPostingS
 
     @Override
     public EconomyPostingResult issue(EconomyPostingCommand command) {
-        if (command == null || command.journalType() != EconomyJournalType.ISSUE_SILVER) {
+        if (command == null || command.journalType() != EconomyJournalType.ISSUE_WEN) {
             throw new EconomyPostingException(EconomyPostingException.Reason.INVALID_COMMAND,
-                    "treasury authority only permits ISSUE_SILVER");
+                    "treasury authority only permits ISSUE_WEN");
         }
         return postingService.postTreasuryIssue(command);
     }

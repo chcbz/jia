@@ -138,7 +138,7 @@ class AgentFundedBountyControllerTest {
         request.setTitle("funded");
         request.setDescription("body");
         request.setRequiredAbilities(List.of("test"));
-        request.setGrossBountyAmountMicro("1000000");
+        request.setGrossBountyAmountWen("1000000");
         request.setSettlementPolicy("GROSS_INCLUSIVE");
         AgentSkillRequirementDTO skill = new AgentSkillRequirementDTO();
         skill.setSkillKey("repo-test");

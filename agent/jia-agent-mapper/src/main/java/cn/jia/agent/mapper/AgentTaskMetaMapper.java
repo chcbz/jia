@@ -418,7 +418,7 @@ public interface AgentTaskMetaMapper extends BaseMapper<AgentTaskMetaEntity> {
                    plan.create_time AS planCreateTime, plan.update_time AS planUpdateTime,
                    0 AS fundingPresent,
                    NULL AS fundingMode, NULL AS fundingStatus, NULL AS escrowId,
-                   NULL AS grossBountyAmountMicro, NULL AS remainingMicro,
+                   NULL AS grossBountyAmountWen, NULL AS remainingWen,
                    NULL AS requiredSkillRequirements, NULL AS fundingProjectionValid
             FROM agent_task_meta task
             LEFT JOIN task_plan plan
@@ -459,16 +459,16 @@ public interface AgentTaskMetaMapper extends BaseMapper<AgentTaskMetaEntity> {
                    CASE WHEN funding.task_id IS NULL THEN 0 ELSE 1 END AS fundingPresent,
                    funding.funding_mode AS fundingMode, funding.funding_status AS fundingStatus,
                    funding.escrow_id AS escrowId,
-                   funding.gross_bounty_amount_micro AS grossBountyAmountMicro,
-                   funding.remaining_micro AS remainingMicro,
+                   funding.gross_bounty_amount_wen AS grossBountyAmountWen,
+                   funding.remaining_wen AS remainingWen,
                    funding.required_skill_requirements AS requiredSkillRequirements,
                    CASE
                      WHEN funding.task_id IS NULL THEN NULL
                      WHEN funding.funding_mode = 'FUNDED_SINGLE_AGENT'
                       AND funding.funding_status IN ('FUNDS_HELD', 'REFUNDED', 'SETTLED')
-                      AND funding.gross_bounty_amount_micro &gt; 0
-                      AND funding.remaining_micro &gt;= 0
-                      AND funding.remaining_micro &lt;= funding.gross_bounty_amount_micro
+                      AND funding.gross_bounty_amount_wen &gt; 0
+                      AND funding.remaining_wen &gt;= 0
+                      AND funding.remaining_wen &lt;= funding.gross_bounty_amount_wen
                       AND funding.escrow_id IS NOT NULL
                      THEN 1 ELSE 0 END AS fundingProjectionValid
             FROM agent_task_meta task

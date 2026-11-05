@@ -113,7 +113,7 @@ class FundedBountySettlementRealTransactionTest {
     @Test
     void realSplitCaptureConservesAndStaysInvisibleUntilOuterCommitWithImmutableReplayAndReadback() {
         claim();
-        long actual = Long.parseLong(quote.worstComputeMicro());
+        long actual = Long.parseLong(quote.worstComputeWen());
         AgentTaskSettlementReceiptDTO receipt = new TransactionTemplate(tm).execute(status -> {
             AgentTaskSettlementReceiptDTO pending = complete(actual);
             assertEquals(4, broker.wakeups.size(), "completion wakeup must wait for outer physical commit");
@@ -144,9 +144,9 @@ class FundedBountySettlementRealTransactionTest {
         claim();
         AgentTaskSettlementReceiptDTO receipt = complete(0);
         assertSettlement(receipt, 0, 2);
-        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM economy_entry WHERE signed_amount_micro=0", Integer.class));
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM economy_entry WHERE signed_amount_wen=0", Integer.class));
         assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM economy_transaction WHERE business_type='CAPTURE_COMPUTE'", Integer.class));
-        assertEquals("0", receipt.refundedMicro());
+        assertEquals("0", receipt.refundedWen());
     }
 
     @Test
@@ -185,7 +185,7 @@ class FundedBountySettlementRealTransactionTest {
                     new AgentTaskFundingCompleteDTO(version, "0")));
         }
         assertEquals("ACTUAL_COMPUTE_EXCEEDS_QUOTE", assertThrows(FundedBountyException.class,
-                () -> complete(Long.parseLong(quote.worstComputeMicro()) + 1)).code());
+                () -> complete(Long.parseLong(quote.worstComputeWen()) + 1)).code());
         assertThrows(FundedBountyException.class, () -> complete(Long.MAX_VALUE));
         assertEquals("TASK_VERSION_CONFLICT", assertThrows(FundedBountyException.class, () -> settlement.complete(
                 ACTOR, key(4), taskId, new AgentTaskFundingCompleteDTO("0", "0"))).code());
@@ -209,9 +209,9 @@ class FundedBountySettlementRealTransactionTest {
         AgentTaskSettlementReceiptDTO first = complete(1);
         String firstTask = taskId;
         // Explicit test funding fixture, not an unjournaled application issuance path.
-        jdbc.update("UPDATE economy_account SET balance_micro=? WHERE owner_type='USER' AND purpose='AVAILABLE'", GROSS);
+        jdbc.update("UPDATE economy_account SET balance_wen=? WHERE owner_type='USER' AND purpose='AVAILABLE'", GROSS);
         cn.jia.agent.entity.AgentTaskCreateDTO create = new cn.jia.agent.entity.AgentTaskCreateDTO();
-        create.setTitle("second bounded settlement"); create.setGrossBountyAmountMicro(Long.toString(GROSS));
+        create.setTitle("second bounded settlement"); create.setGrossBountyAmountWen(Long.toString(GROSS));
         create.setSettlementPolicy("GROSS_INCLUSIVE"); create.setRequiredAbilities(List.of("test"));
         create.setRequiredSkillRequirements(List.of());
         taskId = foundation.funding().create(ACTOR, key(6), FundedBountyRequestDigest.create(create), create).getId();
@@ -224,18 +224,18 @@ class FundedBountySettlementRealTransactionTest {
         assertEquals(first, settlement.read(ACTOR, firstTask).settlement());
         assertEquals("FUNDS_HELD", settlement.read(ACTOR, taskId).status());
         assertEquals(1, count("agent_task_bounty_settlement")); assertEquals(5, count("economy_transaction"));
-        assertEquals(0L, jdbc.queryForObject("SELECT captured_micro FROM economy_escrow WHERE business_id=?", Long.class, taskId));
-        assertEquals(2 * GROSS, jdbc.queryForObject("SELECT SUM(balance_micro) FROM economy_account", Long.class));
+        assertEquals(0L, jdbc.queryForObject("SELECT captured_wen FROM economy_escrow WHERE business_id=?", Long.class, taskId));
+        assertEquals(2 * GROSS, jdbc.queryForObject("SELECT SUM(balance_wen) FROM economy_account", Long.class));
     }
 
     @Test
     void insufficientEscrowOrMismatchedAcceptedAgentCannotCapture() {
         claim();
-        jdbc.update("UPDATE economy_account SET balance_micro=balance_micro-1 WHERE purpose='ESCROW'");
+        jdbc.update("UPDATE economy_account SET balance_wen=balance_wen-1 WHERE purpose='ESCROW'");
         assertThrows(FundedBountyException.class, () -> complete(1));
         assertEquals(1, count("economy_transaction"));
         assertEquals(0, count("agent_task_bounty_settlement"));
-        jdbc.update("UPDATE economy_account SET balance_micro=balance_micro+1 WHERE purpose='ESCROW'");
+        jdbc.update("UPDATE economy_account SET balance_wen=balance_wen+1 WHERE purpose='ESCROW'");
         jdbc.update("UPDATE agent_task_meta SET assigned_agent_id='agt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'");
         assertThrows(FundedBountyException.class, () -> complete(1));
         jdbc.update("UPDATE agent_task_meta SET assigned_agent_id=?", AGENT);
@@ -247,24 +247,24 @@ class FundedBountySettlementRealTransactionTest {
         EconomyPostingService posting = context.getBean(EconomyPostingService.class);
         EconomyScope scope = new EconomyScope(ACTOR.tenantId(), ACTOR.clientId());
         EconomyPrincipal actor = new EconomyPrincipal(EconomyPrincipalType.USER, ACTOR.userId());
-        EconomyAccountKey payer = new EconomyAccountKey("SILVER", EconomyAccountOwnerType.USER, ACTOR.userId(), EconomyAccountPurpose.AVAILABLE);
-        EconomyAccountKey store = new EconomyAccountKey("SILVER", EconomyAccountOwnerType.SYSTEM, "SKILL_STORE", EconomyAccountPurpose.SKILL_STORE);
+        EconomyAccountKey payer = new EconomyAccountKey("WEN", EconomyAccountOwnerType.USER, ACTOR.userId(), EconomyAccountPurpose.AVAILABLE);
+        EconomyAccountKey store = new EconomyAccountKey("WEN", EconomyAccountOwnerType.SYSTEM, "SKILL_STORE", EconomyAccountPurpose.SKILL_STORE);
         jdbc.update("""
-                INSERT INTO economy_account(account_id,owner_type,owner_id,purpose,currency,balance_micro,
+                INSERT INTO economy_account(account_id,owner_type,owner_id,purpose,currency,balance_wen,
                   allow_negative,status,version,tenant_id,client_id,create_time,update_time)
-                VALUES('skill-store-fixture','SYSTEM','SKILL_STORE','SKILL_STORE','SILVER',0,0,'ACTIVE',0,?,?,1,1)
+                VALUES('skill-store-fixture','SYSTEM','SKILL_STORE','SKILL_STORE','WEN',0,0,'ACTIVE',0,?,?,1,1)
                 """, ACTOR.tenantId(), ACTOR.clientId());
         for (int index = 0; index < 2; index++) {
             boolean capture = index == 0;
             String order = "skill-order-" + index;
             // Test account/funds fixture only; actual reserve and settlement are production posting.
-            jdbc.update("UPDATE economy_account SET balance_micro=10 WHERE owner_type='USER' AND purpose='AVAILABLE'");
+            jdbc.update("UPDATE economy_account SET balance_wen=10 WHERE owner_type='USER' AND purpose='AVAILABLE'");
             jdbc.update("""
-                    INSERT INTO economy_account(account_id,owner_type,owner_id,purpose,currency,balance_micro,
+                    INSERT INTO economy_account(account_id,owner_type,owner_id,purpose,currency,balance_wen,
                       allow_negative,status,version,tenant_id,client_id,create_time,update_time)
-                    VALUES(?,'ORDER',?,'ESCROW','SILVER',0,0,'ACTIVE',0,?,?,1,1)
+                    VALUES(?,'ORDER',?,'ESCROW','WEN',0,0,'ACTIVE',0,?,?,1,1)
                     """, order + "-escrow", order, ACTOR.tenantId(), ACTOR.clientId());
-            EconomyAccountKey escrow = new EconomyAccountKey("SILVER", EconomyAccountOwnerType.ORDER, order, EconomyAccountPurpose.ESCROW);
+            EconomyAccountKey escrow = new EconomyAccountKey("WEN", EconomyAccountOwnerType.ORDER, order, EconomyAccountPurpose.ESCROW);
             EconomyPostingResult reserve = posting.post(new EconomyPostingCommand(scope, actor, key(10 + index), new byte[32],
                     EconomyJournalType.RESERVE_SKILL, order,
                     List.of(new EconomyPostingLine(payer, -10), new EconomyPostingLine(escrow, 10)),
@@ -303,23 +303,23 @@ class FundedBountySettlementRealTransactionTest {
             assertEquals(EconomyPostingException.Reason.IDEMPOTENCY_CONFLICT,
                     assertThrows(EconomyPostingException.class, () -> posting.post(conflicting)).reason());
             assertEquals(journals + 1, count("economy_transaction"));
-            assertEquals(0L, jdbc.queryForObject("SELECT SUM(signed_amount_micro) FROM economy_entry", Long.class));
-            assertEquals(GROSS + 10L * (index + 1), jdbc.queryForObject("SELECT SUM(balance_micro) FROM economy_account", Long.class));
-            assertEquals(0L, jdbc.queryForObject("SELECT balance_micro FROM economy_account WHERE account_id=?", Long.class, order + "-escrow"));
+            assertEquals(0L, jdbc.queryForObject("SELECT SUM(signed_amount_wen) FROM economy_entry", Long.class));
+            assertEquals(GROSS + 10L * (index + 1), jdbc.queryForObject("SELECT SUM(balance_wen) FROM economy_account", Long.class));
+            assertEquals(0L, jdbc.queryForObject("SELECT balance_wen FROM economy_account WHERE account_id=?", Long.class, order + "-escrow"));
             assertEquals(2L, jdbc.queryForObject("SELECT version FROM economy_escrow WHERE business_id=?", Long.class, order));
-            assertEquals(10L, jdbc.queryForObject("SELECT " + (capture ? "captured_micro" : "refunded_micro")
+            assertEquals(10L, jdbc.queryForObject("SELECT " + (capture ? "captured_wen" : "refunded_wen")
                     + " FROM economy_escrow WHERE business_id=?", Long.class, order));
         }
-        assertEquals(10L, jdbc.queryForObject("SELECT balance_micro FROM economy_account WHERE account_id='skill-store-fixture'", Long.class));
-        assertEquals(10L, jdbc.queryForObject("SELECT balance_micro FROM economy_account WHERE owner_type='USER' AND purpose='AVAILABLE'", Long.class));
+        assertEquals(10L, jdbc.queryForObject("SELECT balance_wen FROM economy_account WHERE account_id='skill-store-fixture'", Long.class));
+        assertEquals(10L, jdbc.queryForObject("SELECT balance_wen FROM economy_account WHERE owner_type='USER' AND purpose='AVAILABLE'", Long.class));
     }
 
     @Test
     void sharedCaptureTemplatesStillRejectWrongCounterpartyAndImbalancedLinesBeforeAnyJournal() {
         claim();
         EconomyPostingService posting = context.getBean(EconomyPostingService.class);
-        EconomyAccountKey escrow = new EconomyAccountKey("SILVER", EconomyAccountOwnerType.TASK, taskId, EconomyAccountPurpose.ESCROW);
-        EconomyAccountKey wrong = new EconomyAccountKey("SILVER", EconomyAccountOwnerType.USER, ACTOR.userId(), EconomyAccountPurpose.AVAILABLE);
+        EconomyAccountKey escrow = new EconomyAccountKey("WEN", EconomyAccountOwnerType.TASK, taskId, EconomyAccountPurpose.ESCROW);
+        EconomyAccountKey wrong = new EconomyAccountKey("WEN", EconomyAccountOwnerType.USER, ACTOR.userId(), EconomyAccountPurpose.AVAILABLE);
         String reserve = jdbc.queryForObject("SELECT reserve_transaction_id FROM agent_task_funding", String.class);
         for (EconomyJournalType type : List.of(EconomyJournalType.CAPTURE_COMPUTE, EconomyJournalType.CAPTURE_FEE, EconomyJournalType.PAY_AGENT)) {
             EconomyPostingException failure = assertThrows(EconomyPostingException.class, () -> posting.post(
@@ -329,7 +329,7 @@ class FundedBountySettlementRealTransactionTest {
                             new EconomyEscrowSettlement(EconomyEscrowType.BOUNTY, escrow, wrong, 1, 1, reserve))));
             assertEquals(EconomyPostingException.Reason.INVALID_COMMAND, failure.reason());
         }
-        EconomyAccountKey model = new EconomyAccountKey("SILVER", EconomyAccountOwnerType.SYSTEM, "MODEL_COST", EconomyAccountPurpose.MODEL_COST);
+        EconomyAccountKey model = new EconomyAccountKey("WEN", EconomyAccountOwnerType.SYSTEM, "MODEL_COST", EconomyAccountPurpose.MODEL_COST);
         EconomyPostingException imbalance = assertThrows(EconomyPostingException.class, () -> posting.post(
                 new EconomyPostingCommand(new EconomyScope(ACTOR.tenantId(), ACTOR.clientId()),
                         new EconomyPrincipal(EconomyPrincipalType.USER, ACTOR.userId()), key(9), new byte[32],
@@ -344,16 +344,16 @@ class FundedBountySettlementRealTransactionTest {
     void feeAccountOverflowAfterComputePostingRollsBackTheFirstCaptureToo() {
         claim();
         jdbc.update("""
-                INSERT INTO economy_account(account_id,owner_type,owner_id,purpose,currency,balance_micro,
+                INSERT INTO economy_account(account_id,owner_type,owner_id,purpose,currency,balance_wen,
                   allow_negative,status,version,tenant_id,client_id,create_time,update_time)
-                VALUES('fee-overflow','SYSTEM','PLATFORM_FEE','PLATFORM_FEE','SILVER',?,0,'ACTIVE',0,?,?,1,1)
+                VALUES('fee-overflow','SYSTEM','PLATFORM_FEE','PLATFORM_FEE','WEN',?,0,'ACTIVE',0,?,?,1,1)
                 """, Long.MAX_VALUE, ACTOR.tenantId(), ACTOR.clientId());
         assertThrows(FundedBountyException.class, () -> complete(1));
         assertHeldClaim();
-        assertEquals(Long.MAX_VALUE, jdbc.queryForObject("SELECT balance_micro FROM economy_account WHERE account_id='fee-overflow'", Long.class));
+        assertEquals(Long.MAX_VALUE, jdbc.queryForObject("SELECT balance_wen FROM economy_account WHERE account_id='fee-overflow'", Long.class));
         assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM economy_account WHERE purpose='MODEL_COST'", Integer.class),
                 "recipient provisioning and first successful compute posting must both roll back");
-        jdbc.update("UPDATE economy_account SET balance_micro=0 WHERE account_id='fee-overflow'");
+        jdbc.update("UPDATE economy_account SET balance_wen=0 WHERE account_id='fee-overflow'");
         assertSettlement(complete(1), 1, 3);
     }
 
@@ -400,15 +400,15 @@ class FundedBountySettlementRealTransactionTest {
                 FundedBountyRequestDigest.cancel(taskId, "0"), taskId, 0);
         AgentTaskSettlementDTO cancelled = settlement.read(ACTOR, taskId);
         assertEquals("REFUNDED", cancelled.status()); assertEquals(refund, cancelled.cancellation()); assertNull(cancelled.settlement());
-        assertEquals(Long.toString(GROSS), refund.refundedMicro());
+        assertEquals(Long.toString(GROSS), refund.refundedWen());
         assertEquals(0, count("agent_task_bounty_settlement"));
-        assertEquals(GROSS, jdbc.queryForObject("SELECT SUM(balance_micro) FROM economy_account", Long.class));
+        assertEquals(GROSS, jdbc.queryForObject("SELECT SUM(balance_wen) FROM economy_account", Long.class));
     }
 
     @Test
     void successfulReceiptNumbersRemainNonnullable() {
         claim(); complete(1);
-        for (String field : List.of("actual_compute_micro", "platform_fee_micro", "agent_payout_micro",
+        for (String field : List.of("actual_compute_wen", "platform_fee_wen", "agent_payout_wen",
                 "task_version", "funding_version", "escrow_version", "settled_at")) {
             assertThrows(DataAccessException.class, () -> jdbc.update("UPDATE agent_task_bounty_settlement SET " + field + "=NULL"));
         }
@@ -426,34 +426,34 @@ class FundedBountySettlementRealTransactionTest {
         assertEquals("CLAIMED", jdbc.queryForObject("SELECT status FROM agent_task_bounty_quote", String.class));
         assertEquals(1L, jdbc.queryForObject("SELECT task_version FROM agent_task_meta", Long.class));
         assertEquals(1L, jdbc.queryForObject("SELECT version FROM economy_escrow", Long.class));
-        assertEquals(0L, jdbc.queryForObject("SELECT captured_micro FROM economy_escrow", Long.class));
-        assertEquals(GROSS, jdbc.queryForObject("SELECT balance_micro FROM economy_account WHERE purpose='ESCROW'", Long.class));
+        assertEquals(0L, jdbc.queryForObject("SELECT captured_wen FROM economy_escrow", Long.class));
+        assertEquals(GROSS, jdbc.queryForObject("SELECT balance_wen FROM economy_account WHERE purpose='ESCROW'", Long.class));
         assertEquals(1, count("economy_transaction")); assertEquals(2, count("economy_entry"));
         assertEquals(0, count("agent_task_bounty_settlement")); assertEquals(4, count("agent_task_event"));
         assertEquals(4, broker.wakeups.size());
     }
 
     private void assertSettlement(AgentTaskSettlementReceiptDTO receipt, long compute, int components) {
-        long fee = Long.parseLong(quote.platformFeeMicro());
+        long fee = Long.parseLong(quote.platformFeeWen());
         assertEquals("SETTLED", receipt.status()); assertEquals(AGENT, receipt.agentId());
-        assertEquals(Long.toString(GROSS), receipt.grossBountyAmountMicro());
-        assertEquals(Long.toString(compute), receipt.actualComputeMicro());
-        assertEquals(Long.toString(fee), receipt.platformFeeMicro());
-        assertEquals(Long.toString(GROSS - compute - fee), receipt.agentPayoutMicro());
-        assertEquals("0", receipt.refundedMicro()); assertEquals("0", receipt.remainingMicro());
+        assertEquals(Long.toString(GROSS), receipt.grossBountyAmountWen());
+        assertEquals(Long.toString(compute), receipt.actualComputeWen());
+        assertEquals(Long.toString(fee), receipt.platformFeeWen());
+        assertEquals(Long.toString(GROSS - compute - fee), receipt.agentPayoutWen());
+        assertEquals("0", receipt.refundedWen()); assertEquals("0", receipt.remainingWen());
         assertEquals("2", receipt.taskVersion()); assertEquals("2", receipt.fundingVersion());
         assertEquals(Integer.toString(1 + components), receipt.escrowVersion());
         assertEquals(components, receipt.transactionIds().size());
         assertEquals(components + 1, count("economy_transaction")); assertEquals(2 * (components + 1), count("economy_entry"));
-        assertEquals(0L, jdbc.queryForObject("SELECT SUM(signed_amount_micro) FROM economy_entry", Long.class));
-        assertEquals(GROSS, jdbc.queryForObject("SELECT SUM(balance_micro) FROM economy_account", Long.class));
-        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM economy_account WHERE balance_micro<0", Integer.class));
-        assertEquals(compute, jdbc.queryForObject("SELECT balance_micro FROM economy_account WHERE purpose='MODEL_COST'", Long.class));
-        assertEquals(fee, jdbc.queryForObject("SELECT balance_micro FROM economy_account WHERE purpose='PLATFORM_FEE'", Long.class));
-        assertEquals(GROSS - compute - fee, jdbc.queryForObject("SELECT balance_micro FROM economy_account WHERE owner_type='AGENT' AND owner_id=? AND purpose='EARNINGS'", Long.class, AGENT));
+        assertEquals(0L, jdbc.queryForObject("SELECT SUM(signed_amount_wen) FROM economy_entry", Long.class));
+        assertEquals(GROSS, jdbc.queryForObject("SELECT SUM(balance_wen) FROM economy_account", Long.class));
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM economy_account WHERE balance_wen<0", Integer.class));
+        assertEquals(compute, jdbc.queryForObject("SELECT balance_wen FROM economy_account WHERE purpose='MODEL_COST'", Long.class));
+        assertEquals(fee, jdbc.queryForObject("SELECT balance_wen FROM economy_account WHERE purpose='PLATFORM_FEE'", Long.class));
+        assertEquals(GROSS - compute - fee, jdbc.queryForObject("SELECT balance_wen FROM economy_account WHERE owner_type='AGENT' AND owner_id=? AND purpose='EARNINGS'", Long.class, AGENT));
         assertEquals("CAPTURED", jdbc.queryForObject("SELECT status FROM economy_escrow", String.class));
-        assertEquals(GROSS, jdbc.queryForObject("SELECT captured_micro FROM economy_escrow", Long.class));
-        assertEquals(0L, jdbc.queryForObject("SELECT refunded_micro FROM economy_escrow", Long.class));
+        assertEquals(GROSS, jdbc.queryForObject("SELECT captured_wen FROM economy_escrow", Long.class));
+        assertEquals(0L, jdbc.queryForObject("SELECT refunded_wen FROM economy_escrow", Long.class));
         assertEquals(1, count("agent_task_bounty_settlement"));
         assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM agent_task_event WHERE event_type=?", Integer.class, TaskEventType.TASK_COMPLETED));
         assertEquals(5, broker.wakeups.size());

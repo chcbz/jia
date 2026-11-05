@@ -27,7 +27,7 @@ public final class SkillConversationTools {
             tool("skill_retire","下架用户指定技能；不卸载现有安装或删除历史。",Map.of("productId",TEXT,"expectedProductVersion",DECIMAL)),
             tool("skill_publish","审核通过并发布原生技能新版本。提交已审阅的完整文件；工具计算真实ZIP摘要。旧版本不可覆盖，包必须含SKILL.md，不包含旧执行manifest.json。",Map.ofEntries(
                 Map.entry("productId",TEXT),Map.entry("productVersionId",TEXT),Map.entry("name",TEXT),Map.entry("description",TEXT),
-                Map.entry("skillKey",TEXT),Map.entry("skillVersion",TEXT),Map.entry("priceMicro",DECIMAL),
+                Map.entry("skillKey",TEXT),Map.entry("skillVersion",TEXT),Map.entry("priceWen",DECIMAL),
                 Map.entry("approvedPermissionsManifest",TEXT),Map.entry("expectedProductVersion",DECIMAL),
                 Map.entry("files",Map.of("type","array","items",schema(Map.of("path",TEXT,"content",TEXT,"encoding",Map.of("type","string","enum",List.of("utf8","base64")))))))));
     }
@@ -50,7 +50,7 @@ public final class SkillConversationTools {
                 var files=new ArrayList<SkillPublicationToolArchive.File>();
                 for(var file:args.get("files"))files.add(new SkillPublicationToolArchive.File(text(file,"path"),text(file,"content"),text(file,"encoding")));
                 var command=new SkillPackagePublicationService.Publish(text(args,"productId"),text(args,"productVersionId"),text(args,"name"),text(args,"description"),
-                        text(args,"skillKey"),text(args,"skillVersion"),number(args,"priceMicro"),"NONE",text(args,"approvedPermissionsManifest"),null,null,number(args,"expectedProductVersion"),null);
+                        text(args,"skillKey"),text(args,"skillVersion"),number(args,"priceWen"),"NONE",text(args,"approvedPermissionsManifest"),null,null,number(args,"expectedProductVersion"),null);
                 yield service.publish(principal,request,turn,command,files);
             }
             default -> throw new IllegalArgumentException();

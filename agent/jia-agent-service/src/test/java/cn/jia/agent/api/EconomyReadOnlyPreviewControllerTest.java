@@ -59,8 +59,8 @@ class EconomyReadOnlyPreviewControllerTest {
     @Test
     void walletDoesNotNormalizeCaseTenantClientActorOrFallbackLegacyZero() throws Exception {
         when(mapper.selectWallet("Tenant-A", "Client-A", "actor-A"))
-                .thenReturn(new EconomyWalletSnapshotRow().setAvailableMicro(1L).setHeldMicro(0L)
-                        .setMinimumHeldComponentMicro(0L).setVersion(2L));
+                .thenReturn(new EconomyWalletSnapshotRow().setAvailableWen(1L).setHeldWen(0L)
+                        .setMinimumHeldComponentWen(0L).setVersion(2L));
         mvc.perform(get("/economy/preview/wallet").principal(jwt("Tenant-A", "Client-A", "actor-A")))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.data.available.amountMinor").value("1"));
         verify(mapper).selectWallet("Tenant-A", "Client-A", "actor-A");
@@ -94,7 +94,7 @@ class EconomyReadOnlyPreviewControllerTest {
     @Test
     void estimateRejectsUnknownDuplicateNumericOverflowAndEstimatedAboveWorst() throws Exception {
         String valid = """
-                {"grossBountyAmount":{"amountMinor":"1000000000","currency":"SILVER"},"minimumAcceptedPayout":{"amountMinor":"0","currency":"SILVER"},
+                {"grossBountyAmount":{"amountMinor":"1000000000","currency":"WEN"},"minimumAcceptedPayout":{"amountMinor":"0","currency":"WEN"},
                  "estimatedTokens":{"input":"18000","cachedInput":"4000","output":"6000","reasoning":"3000"},
                  "worstTokens":{"input":"36000","cachedInput":"8000","output":"12000","reasoning":"6000"}}
                 """;

@@ -125,8 +125,8 @@ class FundedBountyServiceRealTransactionTest {
         interleaving = context.getBean(CommitInterleaving.class);
         jdbc.update("""
                 INSERT INTO economy_account(account_id,owner_type,owner_id,purpose,currency,
-                    balance_micro,allow_negative,status,version,tenant_id,client_id,create_time,update_time)
-                VALUES('wallet-fixture','USER',?,'AVAILABLE','SILVER',1000,0,'ACTIVE',0,?,?,1,1)
+                    balance_wen,allow_negative,status,version,tenant_id,client_id,create_time,update_time)
+                VALUES('wallet-fixture','USER',?,'AVAILABLE','WEN',1000,0,'ACTIVE',0,?,?,1,1)
                 """, USER, TENANT, CLIENT);
     }
 
@@ -184,13 +184,13 @@ class FundedBountyServiceRealTransactionTest {
         AgentTaskFundingCancelReceiptDTO cancelled = service.cancel(
                 ACTOR, key(2), cancelHash, created.getId(), 0L);
         assertEquals("REFUNDED", cancelled.fundingStatus());
-        assertEquals("400", cancelled.refundedMicro());
+        assertEquals("400", cancelled.refundedWen());
         assertEquals(1000L, wallet());
         assertEquals(0L, escrow(created.getId()));
         assertEquals("cancelled", jdbc.queryForObject("SELECT reward_status FROM agent_task_meta", String.class));
         assertEquals(1L, jdbc.queryForObject("SELECT task_version FROM agent_task_meta", Long.class));
         assertEquals(2L, jdbc.queryForObject("SELECT current_event_version FROM agent_task_meta", Long.class));
-        assertEquals(400L, jdbc.queryForObject("SELECT refunded_micro FROM economy_escrow", Long.class));
+        assertEquals(400L, jdbc.queryForObject("SELECT refunded_wen FROM economy_escrow", Long.class));
         assertJournalAndEvents(2, 2);
         assertEquals(List.of(1L, 2L), broker.wakeups.stream().map(CommittedWakeup::version).toList());
         assertEquals(cancelled, service.cancel(ACTOR, key(2), cancelHash, created.getId(), 0L));
@@ -202,7 +202,7 @@ class FundedBountyServiceRealTransactionTest {
         AgentTaskCreateDTO request = request("1001", "too-expensive");
         FundedBountyException failure = assertThrows(FundedBountyException.class, () ->
                 service.create(ACTOR, key(3), FundedBountyRequestDigest.create(request), request));
-        assertEquals("INSUFFICIENT_SILVER", failure.code());
+        assertEquals("INSUFFICIENT_WEN", failure.code());
         assertNoCreateArtifacts();
     }
 
@@ -229,7 +229,7 @@ class FundedBountyServiceRealTransactionTest {
         assertEquals("FUNDS_HELD", jdbc.queryForObject("SELECT funding_status FROM agent_task_funding", String.class));
         assertEquals(0L, jdbc.queryForObject("SELECT task_version FROM agent_task_meta", Long.class));
         assertEquals(1L, jdbc.queryForObject("SELECT current_event_version FROM agent_task_meta", Long.class));
-        assertEquals(0L, jdbc.queryForObject("SELECT refunded_micro FROM economy_escrow", Long.class));
+        assertEquals(0L, jdbc.queryForObject("SELECT refunded_wen FROM economy_escrow", Long.class));
         assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM agent_task_funding "
                 + "WHERE cancel_idempotency_key IS NOT NULL OR refund_transaction_id IS NOT NULL", Integer.class));
         assertJournalAndEvents(1, 1);
@@ -345,12 +345,12 @@ class FundedBountyServiceRealTransactionTest {
         assertEquals(journals, count("economy_transaction"));
         assertEquals(journals * 2, count("economy_entry"));
         assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM (SELECT transaction_id FROM economy_entry "
-                + "GROUP BY transaction_id HAVING SUM(signed_amount_micro)<>0) unbalanced", Integer.class));
-        assertEquals(1000L, jdbc.queryForObject("SELECT SUM(balance_micro) FROM economy_account", Long.class));
-        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM economy_account WHERE balance_micro<0", Integer.class));
+                + "GROUP BY transaction_id HAVING SUM(signed_amount_wen)<>0) unbalanced", Integer.class));
+        assertEquals(1000L, jdbc.queryForObject("SELECT SUM(balance_wen) FROM economy_account", Long.class));
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM economy_account WHERE balance_wen<0", Integer.class));
         assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM economy_escrow e JOIN economy_account a "
                 + "ON a.account_id=e.escrow_account_id AND a.tenant_id=e.tenant_id AND a.client_id=e.client_id "
-                + "WHERE e.gross_micro<>e.captured_micro+e.refunded_micro+a.balance_micro", Integer.class));
+                + "WHERE e.gross_wen<>e.captured_wen+e.refunded_wen+a.balance_wen", Integer.class));
         assertEquals(events, count("agent_task_event"));
         assertEquals(events, jdbc.queryForObject("SELECT COUNT(*) FROM agent_task_event "
                 + "WHERE tenant_id=? AND client_id=? AND owner_jiacn=?", Integer.class, TENANT, CLIENT, OWNER));
@@ -362,12 +362,12 @@ class FundedBountyServiceRealTransactionTest {
     }
 
     private long wallet() {
-        return jdbc.queryForObject("SELECT balance_micro FROM economy_account WHERE owner_type='USER' "
+        return jdbc.queryForObject("SELECT balance_wen FROM economy_account WHERE owner_type='USER' "
                 + "AND owner_id=? AND tenant_id=? AND client_id=?", Long.class, USER, TENANT, CLIENT);
     }
 
     private long escrow(String taskId) {
-        return jdbc.queryForObject("SELECT balance_micro FROM economy_account WHERE owner_type='TASK' "
+        return jdbc.queryForObject("SELECT balance_wen FROM economy_account WHERE owner_type='TASK' "
                 + "AND owner_id=? AND tenant_id=? AND client_id=?", Long.class, taskId, TENANT, CLIENT);
     }
 
@@ -381,7 +381,7 @@ class FundedBountyServiceRealTransactionTest {
         request.setDescription("real collaborator integration fixture");
         request.setRequiredAbilities(List.of("test"));
         request.setReward(1);
-        request.setGrossBountyAmountMicro(amount);
+        request.setGrossBountyAmountWen(amount);
         request.setSettlementPolicy("GROSS_INCLUSIVE");
         request.setRequiredSkillRequirements(List.of());
         return request;

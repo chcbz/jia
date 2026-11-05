@@ -168,14 +168,14 @@ class FundedBountyQuoteClaimRealTransactionTest {
         seedAgent(1, AGENT_A);
         seedAgent(2, AGENT_B);
         jdbc.update("""
-                INSERT INTO economy_account(account_id,owner_type,owner_id,purpose,currency,balance_micro,
+                INSERT INTO economy_account(account_id,owner_type,owner_id,purpose,currency,balance_wen,
                     allow_negative,status,version,tenant_id,client_id,create_time,update_time)
-                VALUES('wallet-fixture','USER',?,'AVAILABLE','SILVER',?,0,'ACTIVE',0,?,?,1,1)
+                VALUES('wallet-fixture','USER',?,'AVAILABLE','WEN',?,0,'ACTIVE',0,?,?,1,1)
                 """, USER, GROSS, TENANT, CLIENT);
         AgentTaskCreateDTO create = new AgentTaskCreateDTO();
         create.setTitle("W05 claim transaction");
         create.setRequiredAbilities(List.of("test"));
-        create.setGrossBountyAmountMicro(Long.toString(GROSS));
+        create.setGrossBountyAmountWen(Long.toString(GROSS));
         create.setSettlementPolicy("GROSS_INCLUSIVE");
         create.setRequiredSkillRequirements(List.of());
         taskId = foundation.funding().create(ACTOR, key(1), FundedBountyRequestDigest.create(create), create).getId();
@@ -401,12 +401,12 @@ class FundedBountyQuoteClaimRealTransactionTest {
 
     private void assertReserveUnchanged() {
         assertEquals("FUNDS_HELD", jdbc.queryForObject("SELECT funding_status FROM agent_task_funding", String.class));
-        assertEquals(GROSS, jdbc.queryForObject("SELECT remaining_micro FROM agent_task_funding", Long.class));
+        assertEquals(GROSS, jdbc.queryForObject("SELECT remaining_wen FROM agent_task_funding", Long.class));
         assertEquals(1, count("economy_transaction"));
         assertEquals(2, count("economy_entry"));
-        assertEquals(0L, jdbc.queryForObject("SELECT SUM(signed_amount_micro) FROM economy_entry", Long.class));
-        assertEquals(GROSS, jdbc.queryForObject("SELECT SUM(balance_micro) FROM economy_account", Long.class));
-        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM economy_account WHERE balance_micro<0", Integer.class));
+        assertEquals(0L, jdbc.queryForObject("SELECT SUM(signed_amount_wen) FROM economy_entry", Long.class));
+        assertEquals(GROSS, jdbc.queryForObject("SELECT SUM(balance_wen) FROM economy_account", Long.class));
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM economy_account WHERE balance_wen<0", Integer.class));
     }
 
     private AgentTaskQuoteDTO quote(String agent, int key) {
@@ -422,7 +422,7 @@ class FundedBountyQuoteClaimRealTransactionTest {
         request.setAgentId(agent);
         request.setModelPreference(model);
         request.setContextRevision("0");
-        request.setMinimumAcceptedPayoutMicro("1");
+        request.setMinimumAcceptedPayoutWen("1");
         return request;
     }
 

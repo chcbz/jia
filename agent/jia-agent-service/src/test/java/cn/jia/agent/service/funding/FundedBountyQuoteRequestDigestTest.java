@@ -16,7 +16,7 @@ class FundedBountyQuoteRequestDigestTest {
         AgentTaskQuoteRequestDTO original = quote();
         byte[] digest = FundedBountyRequestDigest.quote("task-1", original);
         AgentTaskQuoteRequestDTO changed = quote();
-        changed.setMinimumAcceptedPayoutMicro("2");
+        changed.setMinimumAcceptedPayoutWen("2");
         assertFalse(Arrays.equals(digest, FundedBountyRequestDigest.quote("task-1", changed)));
         assertTrue(Arrays.equals(digest, FundedBountyRequestDigest.quote("task-1", quote())));
     }
@@ -37,7 +37,7 @@ class FundedBountyQuoteRequestDigestTest {
         request.setAgentId("agt_00000000000000000000000000000001");
         request.setModelPreference(model);
         request.setContextRevision("0");
-        request.setMinimumAcceptedPayoutMicro("1");
+        request.setMinimumAcceptedPayoutWen("1");
         return request;
     }
 

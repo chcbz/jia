@@ -36,16 +36,16 @@ class AgentBountySettlementControllerTest {
         };
         StaticListableBeanFactory beans = new StaticListableBeanFactory(); beans.addBean("settlement", boundary);
         AgentBountySettlementController controller = new AgentBountySettlementController(beans.getBeanProvider(FundedBountySettlementService.class));
-        var response = controller.complete("task", new cn.jia.core.entity.JsonRequest<>(1, "test-request", Map.of("expectedTaskVersion", "1", "actualComputeMicro", "1")), KEY, jwt("sub", "Tenant", "Client"));
+        var response = controller.complete("task", new cn.jia.core.entity.JsonRequest<>(1, "test-request", Map.of("expectedTaskVersion", "1", "actualComputeWen", "1")), KEY, jwt("sub", "Tenant", "Client"));
         assertEquals(HttpStatus.OK, response.getStatusCode());
         assertEquals("private, no-store", response.getHeaders().getFirst("Cache-Control"));
         assertEquals(new FundedBountyActor("0", "Client", "Tenant", "sub"), actor.get());
         assertEquals(new AgentTaskFundingCompleteDTO("1", "1"), request.get());
         for (Map<String, Object> body : List.<Map<String, Object>>of(
-                Map.of("expectedTaskVersion", 1, "actualComputeMicro", "1"),
-                Map.of("expectedTaskVersion", "1", "actualComputeMicro", 1),
-                Map.of("expectedTaskVersion", "1", "actualComputeMicro", "1", "platformFeeMicro", "0"),
-                Map.of("expectedTaskVersion", "1", "actualComputeMicro", "1", "agentId", "another"))) {
+                Map.of("expectedTaskVersion", 1, "actualComputeWen", "1"),
+                Map.of("expectedTaskVersion", "1", "actualComputeWen", 1),
+                Map.of("expectedTaskVersion", "1", "actualComputeWen", "1", "platformFeeWen", "0"),
+                Map.of("expectedTaskVersion", "1", "actualComputeWen", "1", "agentId", "another"))) {
             assertEquals(HttpStatus.BAD_REQUEST, assertThrows(FundedBountyException.class,
                     () -> controller.complete("task", new cn.jia.core.entity.JsonRequest<>(1, "test-request", body), KEY, jwt("sub", "Tenant", "Client"))).status());
         }

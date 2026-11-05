@@ -36,7 +36,7 @@ class EconomySchemaContractTest {
         }
         assertTrue(normalized.contains("idempotency_key varbinary(36) not null"));
         assertTrue(normalized.contains("request_hash binary(32) not null"));
-        assertTrue(normalized.contains("signed_amount_micro bigint not null"));
+        assertTrue(normalized.contains("signed_amount_wen bigint not null"));
         assertTrue(normalized.contains("unique key uk_economy_transaction_idempotency (tenant_id, client_id, principal_type, principal_id, idempotency_key)"));
         assertTrue(normalized.contains("unique key uk_economy_escrow_business (tenant_id, client_id, business_type, business_id)"));
         assertFalse(normalized.contains("drop trigger"));

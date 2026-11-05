@@ -68,8 +68,8 @@ class FundedBountyLedgerServiceSpringTransactionTest {
         observing = context.getBean(ObservingPostingService.class);
         jdbc.update("""
                 INSERT INTO economy_account(account_id,owner_type,owner_id,purpose,currency,
-                    balance_micro,allow_negative,status,version,tenant_id,client_id,create_time,update_time)
-                VALUES('wallet-fixture','USER',?,'AVAILABLE','SILVER',?,0,'ACTIVE',0,?,?,1,1)
+                    balance_wen,allow_negative,status,version,tenant_id,client_id,create_time,update_time)
+                VALUES('wallet-fixture','USER',?,'AVAILABLE','WEN',?,0,'ACTIVE',0,?,?,1,1)
                 """, USER, INITIAL, TENANT, CLIENT);
     }
 
@@ -89,11 +89,11 @@ class FundedBountyLedgerServiceSpringTransactionTest {
         assertEquals(INITIAL, balance("USER", USER, "AVAILABLE"));
         assertEquals(0L, balance("TASK", "task-conserve", "ESCROW"));
         assertEquals(0L, jdbc.queryForObject(
-                "SELECT SUM(signed_amount_micro) FROM economy_entry", Long.class));
+                "SELECT SUM(signed_amount_wen) FROM economy_entry", Long.class));
         assertEquals(2, count("economy_transaction"));
         assertEquals(4, count("economy_entry"));
         assertEquals(400L, jdbc.queryForObject(
-                "SELECT refunded_micro FROM economy_escrow", Long.class));
+                "SELECT refunded_wen FROM economy_escrow", Long.class));
         assertEquals(2L, refund.escrowVersion());
     }
 
@@ -176,7 +176,7 @@ class FundedBountyLedgerServiceSpringTransactionTest {
 
     private long balance(String ownerType, String ownerId, String purpose) {
         return jdbc.queryForObject("""
-                SELECT balance_micro FROM economy_account
+                SELECT balance_wen FROM economy_account
                 WHERE tenant_id=? AND client_id=? AND owner_type=? AND owner_id=? AND purpose=?
                 """, Long.class, TENANT, CLIENT, ownerType, ownerId, purpose);
     }
@@ -201,7 +201,7 @@ class FundedBountyLedgerServiceSpringTransactionTest {
                     id BIGINT AUTO_INCREMENT PRIMARY KEY, account_id VARCHAR(100) NOT NULL,
                     owner_type VARCHAR(20) NOT NULL, owner_id VARCHAR(100) NOT NULL,
                     purpose VARCHAR(32) NOT NULL, currency VARCHAR(16) NOT NULL,
-                    balance_micro BIGINT NOT NULL DEFAULT 0, allow_negative TINYINT NOT NULL DEFAULT 0,
+                    balance_wen BIGINT NOT NULL DEFAULT 0, allow_negative TINYINT NOT NULL DEFAULT 0,
                     status VARCHAR(16) NOT NULL DEFAULT 'ACTIVE', version BIGINT NOT NULL DEFAULT 0,
                     tenant_id VARCHAR(50) NOT NULL, client_id VARCHAR(50) NOT NULL,
                     create_time BIGINT NOT NULL, update_time BIGINT NOT NULL,
@@ -215,8 +215,8 @@ class FundedBountyLedgerServiceSpringTransactionTest {
                     idempotency_key VARBINARY(36) NOT NULL, request_hash BINARY(32) NOT NULL,
                     business_type VARCHAR(32) NOT NULL, business_id VARCHAR(100) NOT NULL,
                     currency VARCHAR(16) NOT NULL, status VARCHAR(16) NOT NULL,
-                    entry_count INT NOT NULL, debit_total_micro BIGINT NOT NULL,
-                    credit_total_micro BIGINT NOT NULL, posted_at BIGINT,
+                    entry_count INT NOT NULL, debit_total_wen BIGINT NOT NULL,
+                    credit_total_wen BIGINT NOT NULL, posted_at BIGINT,
                     tenant_id VARCHAR(50) NOT NULL, client_id VARCHAR(50) NOT NULL,
                     create_time BIGINT NOT NULL, update_time BIGINT NOT NULL,
                     UNIQUE(tenant_id,client_id,transaction_id),
@@ -226,8 +226,8 @@ class FundedBountyLedgerServiceSpringTransactionTest {
                 CREATE TABLE economy_entry (
                     id BIGINT AUTO_INCREMENT PRIMARY KEY, entry_id VARCHAR(140) NOT NULL,
                     transaction_id VARCHAR(100) NOT NULL, account_id VARCHAR(100) NOT NULL,
-                    entry_sequence INT NOT NULL, signed_amount_micro BIGINT NOT NULL,
-                    balance_after_micro BIGINT NOT NULL, currency VARCHAR(16) NOT NULL,
+                    entry_sequence INT NOT NULL, signed_amount_wen BIGINT NOT NULL,
+                    balance_after_wen BIGINT NOT NULL, currency VARCHAR(16) NOT NULL,
                     status VARCHAR(16) NOT NULL, posted_at BIGINT NOT NULL,
                     tenant_id VARCHAR(50) NOT NULL, client_id VARCHAR(50) NOT NULL,
                     create_time BIGINT NOT NULL,
@@ -239,8 +239,8 @@ class FundedBountyLedgerServiceSpringTransactionTest {
                     id BIGINT AUTO_INCREMENT PRIMARY KEY, escrow_id VARCHAR(100) NOT NULL,
                     business_type VARCHAR(32) NOT NULL, business_id VARCHAR(100) NOT NULL,
                     payer_account_id VARCHAR(100) NOT NULL, escrow_account_id VARCHAR(100) NOT NULL,
-                    currency VARCHAR(16) NOT NULL, gross_micro BIGINT NOT NULL,
-                    captured_micro BIGINT NOT NULL, refunded_micro BIGINT NOT NULL,
+                    currency VARCHAR(16) NOT NULL, gross_wen BIGINT NOT NULL,
+                    captured_wen BIGINT NOT NULL, refunded_wen BIGINT NOT NULL,
                     status VARCHAR(24) NOT NULL, version BIGINT NOT NULL,
                     tenant_id VARCHAR(50) NOT NULL, client_id VARCHAR(50) NOT NULL,
                     create_time BIGINT NOT NULL, update_time BIGINT NOT NULL,
@@ -252,8 +252,8 @@ class FundedBountyLedgerServiceSpringTransactionTest {
                 CREATE TABLE economy_escrow_funding_lot (
                     id BIGINT AUTO_INCREMENT PRIMARY KEY, escrow_id VARCHAR(100) NOT NULL,
                     funding_sequence INT NOT NULL, reserve_transaction_id VARCHAR(100) NOT NULL,
-                    payer_account_id VARCHAR(100) NOT NULL, amount_micro BIGINT NOT NULL,
-                    escrow_gross_after_micro BIGINT NOT NULL, escrow_version_after BIGINT NOT NULL,
+                    payer_account_id VARCHAR(100) NOT NULL, amount_wen BIGINT NOT NULL,
+                    escrow_gross_after_wen BIGINT NOT NULL, escrow_version_after BIGINT NOT NULL,
                     currency VARCHAR(16) NOT NULL, tenant_id VARCHAR(50) NOT NULL,
                     client_id VARCHAR(50) NOT NULL, created_at BIGINT NOT NULL,
                     UNIQUE(tenant_id,client_id,escrow_id,funding_sequence),

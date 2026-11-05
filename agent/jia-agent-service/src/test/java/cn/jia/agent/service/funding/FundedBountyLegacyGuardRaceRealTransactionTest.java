@@ -245,11 +245,11 @@ class FundedBountyLegacyGuardRaceRealTransactionTest {
                     id BIGINT AUTO_INCREMENT PRIMARY KEY, task_id VARCHAR(100) NOT NULL,
                     funding_mode VARCHAR(32) NOT NULL, funding_status VARCHAR(24) NOT NULL,
                     payer_principal_type VARCHAR(20) NOT NULL, payer_principal_id VARCHAR(100) NOT NULL,
-                    settlement_policy VARCHAR(32) NOT NULL, gross_bounty_amount_micro BIGINT NOT NULL,
-                    remaining_micro BIGINT NOT NULL, escrow_id VARCHAR(100), escrow_version BIGINT,
+                    settlement_policy VARCHAR(32) NOT NULL, gross_bounty_amount_wen BIGINT NOT NULL,
+                    remaining_wen BIGINT NOT NULL, escrow_id VARCHAR(100), escrow_version BIGINT,
                     reserve_transaction_id VARCHAR(100), required_skill_requirements CLOB NOT NULL,
                     cancel_idempotency_key VARBINARY(36), cancel_request_hash BINARY(32),
-                    refund_transaction_id VARCHAR(100), cancel_refunded_micro BIGINT,
+                    refund_transaction_id VARCHAR(100), cancel_refunded_wen BIGINT,
                     cancel_task_version BIGINT, refunded_at BIGINT, version BIGINT NOT NULL,
                     tenant_id VARCHAR(50) NOT NULL, client_id VARCHAR(50) NOT NULL,
                     create_time BIGINT NOT NULL, update_time BIGINT NOT NULL,
@@ -270,7 +270,7 @@ class FundedBountyLegacyGuardRaceRealTransactionTest {
         jdbc.update("""
                 INSERT INTO agent_task_funding(task_id,funding_mode,funding_status,
                     payer_principal_type,payer_principal_id,settlement_policy,
-                    gross_bounty_amount_micro,remaining_micro,escrow_id,escrow_version,
+                    gross_bounty_amount_wen,remaining_wen,escrow_id,escrow_version,
                     reserve_transaction_id,required_skill_requirements,version,
                     tenant_id,client_id,create_time,update_time)
                 VALUES(?,'FUNDED_SINGLE_AGENT','FUNDS_HELD','USER','jwt-sub',

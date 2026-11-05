@@ -10,7 +10,7 @@ import java.nio.charset.StandardCharsets;
 /** Explicit HTTP projections. Internal price calculation, ledger facts and scopes are unchanged. */
 final class EconomyPreviewWire {
     private EconomyPreviewWire() { }
-    private static Money money(String value) { return new Money(value, "SILVER"); }
+    private static Money money(String value) { return new Money(value, "WEN"); }
     private static Long epoch(String value) {
         if (value == null) return null;
         long result = Long.parseLong(value);
@@ -21,12 +21,12 @@ final class EconomyPreviewWire {
             Map<String,Boolean> features,Map<String,Boolean> actions) { }
     static CapabilitiesView from(Capabilities v) { return new CapabilitiesView("economy-readonly-v2",v.mode(),v.enabled(),v.principalScopeFingerprint(),v.features(),v.actions()); }
     record WalletView(String currency,Money available,Money held,String version) { }
-    static WalletView from(Wallet v) { return new WalletView(v.currency(),money(v.availableMicro()),money(v.heldMicro()),v.version()); }
+    static WalletView from(Wallet v) { return new WalletView(v.currency(),money(v.availableWen()),money(v.heldWen()),v.version()); }
     record CursorPage<T>(List<T> items,String nextCursor,boolean hasMore) { }
     record LedgerItemView(String transactionId,String entryId,String businessType,String businessRef,String direction,Money amount,String status,Long postedAt) { }
-    static CursorPage<LedgerItemView> from(LedgerPage v) { return new CursorPage<>(v.items().stream().map(i -> new LedgerItemView(i.transactionId(),i.entryId(),i.businessType(),i.businessRef(),i.direction(),money(i.amountMicro()),i.status(),epoch(i.postedAt()))).toList(),v.nextCursor(),v.nextCursor()!=null); }
+    static CursorPage<LedgerItemView> from(LedgerPage v) { return new CursorPage<>(v.items().stream().map(i -> new LedgerItemView(i.transactionId(),i.entryId(),i.businessType(),i.businessRef(),i.direction(),money(i.amountWen()),i.status(),epoch(i.postedAt()))).toList(),v.nextCursor(),v.nextCursor()!=null); }
     record ProductView(String productId,String name,String description,String productVersionId,String skillKey,String skillVersion,Money price,List<String> permissions,String deploymentRestriction,String priceSource,boolean purchaseAllowed) { }
-    static ProductView from(Product v) { return new ProductView(v.productId(),v.name(),v.description(),v.productVersionId(),v.skillKey(),v.skillVersion(),money(v.priceMicro()),v.permissions(),v.deploymentRestriction(),v.priceSource(),v.purchaseAllowed()); }
+    static ProductView from(Product v) { return new ProductView(v.productId(),v.name(),v.description(),v.productVersionId(),v.skillKey(),v.skillVersion(),money(v.priceWen()),v.permissions(),v.deploymentRestriction(),v.priceSource(),v.purchaseAllowed()); }
     static CursorPage<ProductView> from(ProductPage v) {
         String cursor = v.nextOffset()==null ? null : productCursor(Integer.parseInt(v.nextOffset()));
         return new CursorPage<>(v.items().stream().map(EconomyPreviewWire::from).toList(),cursor,cursor!=null);
@@ -48,10 +48,10 @@ final class EconomyPreviewWire {
     record AgentSkillsView(String agentId,List<EntitlementView> entitlements,List<EvidenceView> installationEvidence,Long observedAt) { }
     static AgentSkillsView from(AgentSkills v) { return new AgentSkillsView(v.agentId(),v.entitlements().stream().map(i -> new EntitlementView(i.entitlementId(),i.orderId(),i.installationId(),i.productVersionId(),i.skillKey(),i.skillVersion(),i.status(),i.permissionGrantVersion())).toList(),v.installationEvidence().stream().map(i -> new EvidenceView(i.installationId(),i.skillKey(),i.skillVersion(),i.status(),i.evidenceKind(),epoch(i.verifiedAt()))).toList(),epoch(v.observedAt())); }
     record HostingPlanView(String source,String planVersion,Money amount,String periodSeconds,String currency,boolean activationAllowed) { }
-    static HostingPlanView from(HostingPlan v) { return new HostingPlanView(v.source(),v.planVersion(),money(v.amountMicro()),v.periodSeconds(),v.currency(),v.activationAllowed()); }
+    static HostingPlanView from(HostingPlan v) { return new HostingPlanView(v.source(),v.planVersion(),money(v.amountWen()),v.periodSeconds(),v.currency(),v.activationAllowed()); }
     record LeaseView(String leaseId,String version,String status,String planVersion,Money amount,String periodSeconds,Long paidFrom,Long paidThrough) { }
     record HostingLeaseView(String agentId,String applicability,LeaseView lease) { }
-    static HostingLeaseView from(HostingLease v) { var i=v.lease(); return new HostingLeaseView(v.agentId(),v.applicability(),i==null?null:new LeaseView(i.leaseId(),i.version(),i.status(),i.planVersion(),money(i.amountMicro()),i.periodSeconds(),epoch(i.paidFrom()),epoch(i.paidThrough()))); }
+    static HostingLeaseView from(HostingLease v) { var i=v.lease(); return new HostingLeaseView(v.agentId(),v.applicability(),i==null?null:new LeaseView(i.leaseId(),i.version(),i.status(),i.planVersion(),money(i.amountWen()),i.periodSeconds(),epoch(i.paidFrom()),epoch(i.paidThrough()))); }
     record EstimateView(String mode,boolean charged,boolean persisted,String currency,String priceBookVersion,String rateProvenance,TokenClasses estimatedTokens,TokenClasses worstTokens,Money estimatedCompute,Money worstCompute,Money platformFee,Money estimatedAgentPayout,Money worstAgentPayout,Money budgetHeadroom,boolean budgetCovered) { }
-    static EstimateView from(BountyEstimate v) { return new EstimateView(v.mode(),v.charged(),v.persisted(),v.currency(),v.priceBookVersion(),v.rateProvenance(),v.estimatedTokens(),v.worstTokens(),money(v.estimatedComputeMicro()),money(v.worstComputeMicro()),money(v.platformFeeMicro()),money(v.estimatedAgentPayoutMicro()),money(v.worstAgentPayoutMicro()),money(v.budgetHeadroomMicro()),v.budgetCovered()); }
+    static EstimateView from(BountyEstimate v) { return new EstimateView(v.mode(),v.charged(),v.persisted(),v.currency(),v.priceBookVersion(),v.rateProvenance(),v.estimatedTokens(),v.worstTokens(),money(v.estimatedComputeWen()),money(v.worstComputeWen()),money(v.platformFeeWen()),money(v.estimatedAgentPayoutWen()),money(v.worstAgentPayoutWen()),money(v.budgetHeadroomWen()),v.budgetCovered()); }
 }

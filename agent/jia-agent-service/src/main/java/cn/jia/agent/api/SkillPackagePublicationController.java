@@ -21,7 +21,7 @@ public final class SkillPackagePublicationController {
     private final SkillPackagePublicationService publisher;
     public SkillPackagePublicationController(SkillPackagePublicationService publisher){this.publisher=publisher;}
     private static final JsonMapper JSON=JsonMapper.builder().enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION).enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS).build();
-    private static final Set<String> FIELDS=Set.of("productId","productVersionId","name","description","skillKey","skillVersion","priceMicro","deploymentRestriction","approvedPermissionsManifest","packageSha256","manifestSha256","expectedProductVersion","positionAuthority");
+    private static final Set<String> FIELDS=Set.of("productId","productVersionId","name","description","skillKey","skillVersion","priceWen","deploymentRestriction","approvedPermissionsManifest","packageSha256","manifestSha256","expectedProductVersion","positionAuthority");
     @PostMapping(value="/agent/skill-maintenance/product-versions",consumes=MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<?> publish(Authentication authentication,HttpServletRequest request,@RequestPart("metadata") String metadata,@RequestPart("package") MultipartFile archive) throws java.io.IOException {
         HostingRentHttp.noQuery(request);var actor=HostingRentHttp.actor(authentication);
@@ -58,7 +58,7 @@ public final class SkillPackagePublicationController {
     }
     private static SkillPackagePublicationService.Publish command(JsonNode node) {
         var manifest=node.get("manifestSha256");if(manifest==null||!manifest.isNull()&&!manifest.isTextual())throw new IllegalArgumentException();
-        return new SkillPackagePublicationService.Publish(text(node,"productId"),text(node,"productVersionId"),text(node,"name"),text(node,"description"),text(node,"skillKey"),text(node,"skillVersion"),decimal(node,"priceMicro"),text(node,"deploymentRestriction"),text(node,"approvedPermissionsManifest"),text(node,"packageSha256"),manifest.isNull()?null:manifest.textValue(),decimal(node,"expectedProductVersion"),optionalText(node,"coveredUpgradeFromProductVersionId"));
+        return new SkillPackagePublicationService.Publish(text(node,"productId"),text(node,"productVersionId"),text(node,"name"),text(node,"description"),text(node,"skillKey"),text(node,"skillVersion"),decimal(node,"priceWen"),text(node,"deploymentRestriction"),text(node,"approvedPermissionsManifest"),text(node,"packageSha256"),manifest.isNull()?null:manifest.textValue(),decimal(node,"expectedProductVersion"),optionalText(node,"coveredUpgradeFromProductVersionId"));
     }
     private static String optionalText(JsonNode node,String key){var value=node.get(key);return value==null||value.isNull()?null:text(node,key);}
     private static PositionAuthority.Grant grant(JsonNode node) {

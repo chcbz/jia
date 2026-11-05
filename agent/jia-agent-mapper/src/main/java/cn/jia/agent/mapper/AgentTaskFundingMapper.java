@@ -56,11 +56,11 @@ public interface AgentTaskFundingMapper {
     @Insert("""
             INSERT INTO agent_task_funding
                 (task_id,funding_mode,funding_status,payer_principal_type,payer_principal_id,
-                 settlement_policy,gross_bounty_amount_micro,remaining_micro,required_skill_requirements,
+                 settlement_policy,gross_bounty_amount_wen,remaining_wen,required_skill_requirements,
                  version,tenant_id,client_id,owner_jiacn,create_time,update_time)
             VALUES
                 (#{taskId},#{fundingMode},#{fundingStatus},#{payerPrincipalType},#{payerPrincipalId},
-                 #{settlementPolicy},#{grossBountyAmountMicro},#{remainingMicro},#{requiredSkillRequirements},
+                 #{settlementPolicy},#{grossBountyAmountWen},#{remainingWen},#{requiredSkillRequirements},
                  #{version},#{tenantId},#{clientId},#{ownerJiacn},#{createTime},#{updateTime})
             """)
     int insertFunding(AgentTaskFundingEntity funding);
@@ -94,9 +94,9 @@ public interface AgentTaskFundingMapper {
 
     @Update("""
             UPDATE agent_task_funding
-            SET funding_status='REFUNDED',remaining_micro=0,escrow_version=#{escrowVersion},
+            SET funding_status='REFUNDED',remaining_wen=0,escrow_version=#{escrowVersion},
                 cancel_idempotency_key=#{idempotencyKey},cancel_request_hash=#{requestHash},
-                refund_transaction_id=#{transactionId},cancel_refunded_micro=#{refundedMicro},
+                refund_transaction_id=#{transactionId},cancel_refunded_wen=#{refundedWen},
                 cancel_task_version=#{cancelTaskVersion},refunded_at=#{refundedAt},
                 version=version+1,update_time=#{refundedAt}
             WHERE tenant_id=#{tenantId} AND client_id=#{clientId}
@@ -109,7 +109,7 @@ public interface AgentTaskFundingMapper {
             @Param("taskId") String taskId, @Param("expectedVersion") long expectedVersion,
             @Param("escrowVersion") long escrowVersion, @Param("idempotencyKey") byte[] idempotencyKey,
             @Param("requestHash") byte[] requestHash, @Param("transactionId") String transactionId,
-            @Param("refundedMicro") long refundedMicro, @Param("cancelTaskVersion") long cancelTaskVersion,
+            @Param("refundedWen") long refundedWen, @Param("cancelTaskVersion") long cancelTaskVersion,
             @Param("refundedAt") long refundedAt);
 
     @Select("SELECT COUNT(*) FROM agent_task_member WHERE " + EXACT_SCOPE + " AND task_id=#{taskId}")

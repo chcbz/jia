@@ -85,7 +85,7 @@ class HostingRentReprovisionTransactionTest {
             assertFalse(TransactionSynchronizationManager.isActualTransactionActive());
             return provider.available();
         });
-        app = new HostingRentApplicationService(new AgentHostingRentProperties(true, null, null, null),
+        app = new HostingRentApplicationService(new AgentHostingRentProperties(true, "1", "1000000000", "2592000"),
                 new EconomyPreviewGate(new EconomyPreviewProperties(true, List.of(new EconomyPreviewProperties.AllowedScope("0", "Client-A")))),
                 owners, rent, ledger, mock(AgentHostingRentBindingMapper.class), bindings, mock(AgentRuntimeDao.class), identities,
                 providers, reconciler, new DataSourceTransactionManager(dataSource), true);
@@ -105,7 +105,7 @@ class HostingRentReprovisionTransactionTest {
 
     @Test void immutableFreeReceiptReplaysAfterLeaseChangesWithoutProviderOrMoney() {
         var receipt = (HostingRentApplicationService.ReprovisionView) confirm(KEY, "4");
-        assertEquals("5", receipt.leaseVersion()); assertEquals("0", receipt.amountMicro()); assertEquals("ACCEPTED", receipt.status());
+        assertEquals("5", receipt.leaseVersion()); assertEquals("0", receipt.amountWen()); assertEquals("ACCEPTED", receipt.status());
         assertEquals(Long.toString(paidThrough), receipt.paidThrough());
         jdbc.update("UPDATE lease_root SET version=99,status='REFUNDED',paid_through=1");
         when(provider.available()).thenReturn(false);

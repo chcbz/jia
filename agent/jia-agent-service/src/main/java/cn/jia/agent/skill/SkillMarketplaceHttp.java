@@ -35,11 +35,11 @@ public final class SkillMarketplaceHttp {
                 } else if (name.equals("expectedPrice")) {
                     require(value instanceof Map<?,?>,400,"BAD_REQUEST");
                     Map<?,?> money=(Map<?,?>)value;
-                    require(money.keySet().equals(Set.of("amountMinor","currency")) && "SILVER".equals(money.get("currency")),400,"BAD_REQUEST");
+                    require(money.keySet().equals(Set.of("amountMinor","currency")) && "WEN".equals(money.get("currency")),400,"BAD_REQUEST");
                     require(money.get("amountMinor") instanceof String,400,"BAD_REQUEST");
                     String amount=(String)money.get("amountMinor");
                     require(amount.matches("0|[1-9][0-9]{0,18}"),400,"BAD_REQUEST"); Long.parseLong(amount);
-                    out.put("expectedPriceMicro",amount); // original business hash and ledger units are unchanged
+                    out.put("expectedPriceWen",amount); // original business hash and ledger units are unchanged
                 } else {
                     require(value instanceof String,400,"BAD_REQUEST");
                     String text=(String)value; HostingRentHttp.exact(text,100); out.put(name,text);
@@ -47,7 +47,7 @@ public final class SkillMarketplaceHttp {
             }
             HostingRentHttp.positive(out.get("expectedAgentVersion"));
             if(purchase) {
-                String price=out.get("expectedPriceMicro");
+                String price=out.get("expectedPriceWen");
                 require(price.matches("0|[1-9][0-9]{0,18}"),400,"BAD_REQUEST"); Long.parseLong(price);
             }
             return Collections.unmodifiableMap(out);

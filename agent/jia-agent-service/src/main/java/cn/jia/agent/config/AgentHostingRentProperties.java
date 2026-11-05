@@ -12,17 +12,17 @@ import java.util.regex.Pattern;
 public record AgentHostingRentProperties(
         boolean enabled,
         String planVersion,
-        String amountMicro,
+        String amountWen,
         String periodSeconds) {
     public static final String PREVIEW_PLAN_VERSION = "1";
-    public static final String PREVIEW_AMOUNT_MICRO = "1000000000";
+    public static final String PREVIEW_AMOUNT_WEN = ""; // Explicit WEN price required; no legacy conversion.
     public static final String PREVIEW_PERIOD_SECONDS = "2592000";
 
     private static final Pattern POSITIVE_DECIMAL = Pattern.compile("[1-9][0-9]{0,18}");
 
     public AgentHostingRentProperties {
         planVersion = planVersion == null ? PREVIEW_PLAN_VERSION : planVersion;
-        amountMicro = amountMicro == null ? PREVIEW_AMOUNT_MICRO : amountMicro;
+        amountWen = amountWen == null ? PREVIEW_AMOUNT_WEN : amountWen;
         periodSeconds = periodSeconds == null ? PREVIEW_PERIOD_SECONDS : periodSeconds;
     }
 
@@ -33,7 +33,7 @@ public record AgentHostingRentProperties(
 
     public boolean descriptorConfigured() {
         return canonicalPositiveLong(planVersion)
-                && canonicalPositiveLong(amountMicro)
+                && canonicalPositiveLong(amountWen)
                 && canonicalPositiveLong(periodSeconds);
     }
 

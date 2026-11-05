@@ -289,7 +289,7 @@ class FundedBountyQuoteClaimServiceTest {
         funding.setPayerPrincipalType("USER");
         funding.setPayerPrincipalId("user");
         funding.setFundingStatus("FUNDS_HELD");
-        funding.setRemainingMicro(1_000_000_000L);
+        funding.setRemainingWen(1_000_000_000L);
         funding.setRequiredSkillRequirements("[]");
         funding.setVersion(1L);
         when(fundingMapper.selectFundingForUpdate("tenant", "client", TASK)).thenReturn(funding);
@@ -340,7 +340,7 @@ class FundedBountyQuoteClaimServiceTest {
         request.setAgentId(AGENT);
         request.setModelPreference(model);
         request.setContextRevision("0");
-        request.setMinimumAcceptedPayoutMicro("1");
+        request.setMinimumAcceptedPayoutWen("1");
         return request;
     }
 
@@ -359,14 +359,14 @@ class FundedBountyQuoteClaimServiceTest {
         quote.setEstimatedCachedInputTokens(2L);
         quote.setEstimatedOutputTokens(3L);
         quote.setEstimatedReasoningTokens(4L);
-        quote.setEstimatedComputeMicro(5L);
-        quote.setWorstComputeMicro(6L);
-        quote.setPlatformFeeMicro(7L);
-        quote.setGrossAllocationMicro(100L);
-        quote.setEstimatedAgentPayoutMicro(88L);
-        quote.setWorstAgentPayoutMicro(87L);
-        quote.setMinimumAcceptedPayoutMicro(80L);
-        quote.setBudgetHeadroomMicro(7L);
+        quote.setEstimatedComputeWen(5L);
+        quote.setWorstComputeWen(6L);
+        quote.setPlatformFeeWen(7L);
+        quote.setGrossAllocationWen(100L);
+        quote.setEstimatedAgentPayoutWen(88L);
+        quote.setWorstAgentPayoutWen(87L);
+        quote.setMinimumAcceptedPayoutWen(80L);
+        quote.setBudgetHeadroomWen(7L);
         quote.setVerifiedSkillMatch(true);
         quote.setAdvisoryAbilityMatch(true);
         quote.setRecommendation("recommended");

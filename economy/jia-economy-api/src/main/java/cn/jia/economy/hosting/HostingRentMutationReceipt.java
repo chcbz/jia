@@ -6,7 +6,7 @@ public record HostingRentMutationReceipt(
         String quoteId,
         String transactionId,
         String status,
-        long amountMicro,
+        long amountWen,
         long periodSeconds,
         long occurredAt) {
 }

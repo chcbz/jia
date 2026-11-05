@@ -16,7 +16,7 @@ public final class EconomyReadOnlyPreviewRows {
         private String productVersionId;
         private String skillKey;
         private String skillVersion;
-        private Long priceMicro;
+        private Long priceWen;
         private String approvedPermissionsManifest;
         private String deploymentRestriction;
     }

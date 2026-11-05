@@ -101,8 +101,8 @@ class EconomyPostingServiceMySqlConcurrencyTest {
     void sameActorKeyRaceReturnsOnePostingStableReplayAndBodyHashConflict() throws Exception {
         insertAccount(TENANT, CLIENT, "acct-user", EconomyAccountOwnerType.USER, USER,
                 EconomyAccountPurpose.AVAILABLE, 0, false);
-        insertAccount(TENANT, CLIENT, "acct-issuance", EconomyAccountOwnerType.SYSTEM, "silver",
-                EconomyAccountPurpose.SILVER_ISSUANCE, 0, true);
+        insertAccount(TENANT, CLIENT, "acct-issuance", EconomyAccountOwnerType.SYSTEM, "wen",
+                EconomyAccountPurpose.WEN_ISSUANCE, 0, true);
         String key = "10000000-0000-0000-0000-000000000001";
         EconomyPostingCommand command = issueCommand(scope(TENANT, CLIENT), key, HASH_ONE, 100);
 
@@ -181,24 +181,24 @@ class EconomyPostingServiceMySqlConcurrencyTest {
         assertEquals(0L, balance(TENANT, CLIENT, "acct-user"));
         assertEquals(60L, jdbc.queryForObject("SELECT version FROM economy_account WHERE account_id='acct-user'",
                 Long.class));
-        assertEquals(0L, jdbc.queryForObject("SELECT MIN(balance_micro) FROM economy_account", Long.class));
+        assertEquals(0L, jdbc.queryForObject("SELECT MIN(balance_wen) FROM economy_account", Long.class));
         assertEquals(60, count("economy_transaction"));
         assertEquals(120, count("economy_entry"));
-        assertEquals(0L, jdbc.queryForObject("SELECT SUM(signed_amount_micro) FROM economy_entry", Long.class));
+        assertEquals(0L, jdbc.queryForObject("SELECT SUM(signed_amount_wen) FROM economy_entry", Long.class));
         assertEquals(-60L, jdbc.queryForObject("""
-                SELECT SUM(signed_amount_micro) FROM economy_entry e
+                SELECT SUM(signed_amount_wen) FROM economy_entry e
                 JOIN economy_account a ON a.tenant_id=e.tenant_id AND a.client_id=e.client_id
                     AND a.account_id=e.account_id
                 WHERE a.owner_type='USER' AND a.purpose='AVAILABLE'
                 """, Long.class));
-        assertEquals(60L, jdbc.queryForObject("SELECT SUM(balance_micro) FROM economy_account "
+        assertEquals(60L, jdbc.queryForObject("SELECT SUM(balance_wen) FROM economy_account "
                 + "WHERE owner_type='TASK' AND purpose='ESCROW'", Long.class));
         assertEquals(60L, jdbc.queryForObject("SELECT SUM(version) FROM economy_account "
                 + "WHERE owner_type='TASK' AND purpose='ESCROW'", Long.class));
         assertEquals(60, count("economy_escrow"));
         assertEquals(60, count("economy_escrow_funding_lot"));
-        assertEquals(60L, jdbc.queryForObject("SELECT SUM(gross_micro) FROM economy_escrow", Long.class));
-        assertEquals(60L, jdbc.queryForObject("SELECT SUM(amount_micro) FROM economy_escrow_funding_lot", Long.class));
+        assertEquals(60L, jdbc.queryForObject("SELECT SUM(gross_wen) FROM economy_escrow", Long.class));
+        assertEquals(60L, jdbc.queryForObject("SELECT SUM(amount_wen) FROM economy_escrow_funding_lot", Long.class));
     }
 
     @Test
@@ -207,7 +207,7 @@ class EconomyPostingServiceMySqlConcurrencyTest {
             insertAccount(scope.tenantId(), scope.clientId(), "acct-user",
                     EconomyAccountOwnerType.USER, USER, EconomyAccountPurpose.AVAILABLE, 0, false);
             insertAccount(scope.tenantId(), scope.clientId(), "acct-issuance",
-                    EconomyAccountOwnerType.SYSTEM, "silver", EconomyAccountPurpose.SILVER_ISSUANCE, 0, true);
+                    EconomyAccountOwnerType.SYSTEM, "wen", EconomyAccountPurpose.WEN_ISSUANCE, 0, true);
         }
         String key = "10000000-0000-0000-0000-000000000006";
 
@@ -320,7 +320,7 @@ class EconomyPostingServiceMySqlConcurrencyTest {
     private EconomyPostingCommand issueCommand(
             EconomyScope scope, String key, byte[] hash, long amount) {
         return new EconomyPostingCommand(scope, principal(), key, hash,
-                EconomyJournalType.ISSUE_SILVER, "issue-1", List.of(
+                EconomyJournalType.ISSUE_WEN, "issue-1", List.of(
                 new EconomyPostingLine(userAvailable(), amount),
                 new EconomyPostingLine(issuance(), -amount)), null);
     }
@@ -350,13 +350,13 @@ class EconomyPostingServiceMySqlConcurrencyTest {
     }
 
     private EconomyAccountKey userAvailable() {
-        return new EconomyAccountKey("SILVER", EconomyAccountOwnerType.USER,
+        return new EconomyAccountKey("WEN", EconomyAccountOwnerType.USER,
                 USER, EconomyAccountPurpose.AVAILABLE);
     }
 
     private EconomyAccountKey issuance() {
-        return new EconomyAccountKey("SILVER", EconomyAccountOwnerType.SYSTEM,
-                "silver", EconomyAccountPurpose.SILVER_ISSUANCE);
+        return new EconomyAccountKey("WEN", EconomyAccountOwnerType.SYSTEM,
+                "wen", EconomyAccountPurpose.WEN_ISSUANCE);
     }
 
     private EconomyAccountKey taskEscrow() {
@@ -364,7 +364,7 @@ class EconomyPostingServiceMySqlConcurrencyTest {
     }
 
     private EconomyAccountKey taskEscrow(String taskId) {
-        return new EconomyAccountKey("SILVER", EconomyAccountOwnerType.TASK,
+        return new EconomyAccountKey("WEN", EconomyAccountOwnerType.TASK,
                 taskId, EconomyAccountPurpose.ESCROW);
     }
 
@@ -373,9 +373,9 @@ class EconomyPostingServiceMySqlConcurrencyTest {
                                EconomyAccountPurpose purpose, long balance, boolean allowNegative) {
         jdbc.update("""
                 INSERT INTO economy_account(
-                    account_id,owner_type,owner_id,purpose,currency,balance_micro,
+                    account_id,owner_type,owner_id,purpose,currency,balance_wen,
                     allow_negative,status,version,tenant_id,client_id,create_time,update_time)
-                VALUES(?,?,?,?, 'SILVER', ?, ?, 'ACTIVE', 0, ?, ?, 1, 1)
+                VALUES(?,?,?,?, 'WEN', ?, ?, 'ACTIVE', 0, ?, ?, 1, 1)
                 """, accountId, ownerType.name(), ownerId, purpose.name(), balance,
                 allowNegative ? 1 : 0, tenantId, clientId);
     }
@@ -386,13 +386,13 @@ class EconomyPostingServiceMySqlConcurrencyTest {
 
     private long balance(String tenantId, String clientId, String accountId) {
         return jdbc.queryForObject("""
-                SELECT balance_micro FROM economy_account
+                SELECT balance_wen FROM economy_account
                 WHERE tenant_id=? AND client_id=? AND account_id=?
                 """, Long.class, tenantId, clientId, accountId);
     }
 
     private long escrowGross() {
-        return jdbc.queryForObject("SELECT gross_micro FROM economy_escrow", Long.class);
+        return jdbc.queryForObject("SELECT gross_wen FROM economy_escrow", Long.class);
     }
 
     private String failureChain(Throwable failure) {

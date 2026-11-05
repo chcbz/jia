@@ -11,8 +11,8 @@ public class EconomyEscrowFundingLotEntity {
     private Integer fundingSequence;
     private String reserveTransactionId;
     private String payerAccountId;
-    private Long amountMicro;
-    private Long escrowGrossAfterMicro;
+    private Long amountWen;
+    private Long escrowGrossAfterWen;
     private Long escrowVersionAfter;
     private String currency;
     private String tenantId;

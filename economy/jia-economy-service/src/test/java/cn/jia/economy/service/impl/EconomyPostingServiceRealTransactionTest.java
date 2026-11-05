@@ -110,6 +110,72 @@ class EconomyPostingServiceRealTransactionTest {
         jdbc.execute("DROP ALL OBJECTS");
     }
 
+    private EconomyWalletService campaignWallet(cn.jia.economy.config.EconomyCampaignProperties.Campaign... rules) {
+        return new EconomyWalletService(mapper, treasury, new MockEnvironment(),
+                new EconomyPreviewGate(new EconomyPreviewProperties(true, true, List.of(
+                        new EconomyPreviewProperties.AllowedScope(TENANT, CLIENT)))),
+                new cn.jia.economy.config.EconomyCampaignProperties(List.of(rules)));
+    }
+
+    private static cn.jia.economy.config.EconomyCampaignProperties.Campaign campaign(
+            String id, long amount, boolean enabled, Long start, Long end) {
+        return new cn.jia.economy.config.EconomyCampaignProperties.Campaign(id,
+                cn.jia.economy.config.EconomyCampaignProperties.Event.HALL_ENTERED,
+                enabled, amount, start, end);
+    }
+
+    private List<EconomyWalletService.CampaignReceipt> enter(EconomyWalletService wallet) {
+        return wallet.observeEvent(scope(), USER,
+                cn.jia.economy.config.EconomyCampaignProperties.Event.HALL_ENTERED);
+    }
+
+    @Test
+    void campaignReplayUsesOriginalClaimAfterAmountChangeAndNewCampaignIsIndependent() {
+        var first = enter(campaignWallet(campaign("beta", 3500, true, null, null))).getFirst();
+        var replay = enter(campaignWallet(campaign("beta", 9900, true, null, null))).getFirst();
+        assertEquals(first, replay);
+        assertEquals(3500L, replay.amountWen());
+        enter(campaignWallet(campaign("another", 100, true, null, null)));
+        assertEquals(3600L, balance("wallet_" + walletHash(USER)));
+        assertEquals(2L, jdbc.queryForObject("SELECT COUNT(*) FROM economy_transaction", Long.class));
+    }
+
+    @Test
+    void disabledFutureAndExpiredCampaignsDoNotIssueOrProvisionAccounts() {
+        assertTrue(enter(campaignWallet(campaign("off", 3500, false, null, null),
+                campaign("future", 3500, true, Long.MAX_VALUE, null),
+                campaign("expired", 3500, true, null, 1L))).isEmpty());
+        assertEquals(0L, jdbc.queryForObject("SELECT COUNT(*) FROM economy_account", Long.class));
+    }
+
+    @Test
+    void concurrentHallEntriesHaveOnlyOneCampaignClaim() throws Exception {
+        var wallet = campaignWallet(campaign("beta", 3500, true, null, null));
+        var start = new CountDownLatch(1);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Callable<EconomyWalletService.CampaignReceipt> call = () -> {
+                start.await(); return enter(wallet).getFirst();
+            };
+            var left = pool.submit(call); var right = pool.submit(call); start.countDown();
+            assertEquals(left.get(10, TimeUnit.SECONDS), right.get(10, TimeUnit.SECONDS));
+            assertEquals(3500L, balance("wallet_" + walletHash(USER)));
+            assertEquals(1L, jdbc.queryForObject("SELECT COUNT(*) FROM economy_transaction", Long.class));
+        } finally { pool.shutdownNow(); }
+    }
+
+    @Test
+    void campaignPostingFailureRollsBackAndSameEventCanRecover() {
+        var wallet = campaignWallet(campaign("beta", 3500, true, null, null));
+        org.mockito.Mockito.doThrow(new IllegalStateException("fixture write failure"))
+                .when(mapper).insertEntry(any());
+        assertThrows(IllegalStateException.class, () -> enter(wallet));
+        assertEquals(0L, balance("wallet_" + walletHash(USER)));
+        assertEquals(0L, jdbc.queryForObject("SELECT COUNT(*) FROM economy_transaction", Long.class));
+        org.mockito.Mockito.reset(mapper);
+        assertEquals(3500L, enter(wallet).getFirst().amountWen());
+    }
+
     @Test
     void issuanceProvisioningUsesTreasuryReplayAndOriginalReceiptAfterLaterWalletChanges() {
         MockEnvironment environment = new MockEnvironment();
@@ -124,10 +190,10 @@ class EconomyPostingServiceRealTransactionTest {
         EconomyPostingResult replay = wallet.issue(scope(), USER, firstKey, HASH_ONE, 100, "preview-welcome");
 
         assertEquals(first, replay);
-        assertEquals(100L, first.creditTotalMicro());
-        assertEquals(50L, later.creditTotalMicro());
+        assertEquals(100L, first.creditTotalWen());
+        assertEquals(50L, later.creditTotalWen());
         assertEquals(150L, balance("wallet_" + walletHash(USER)));
-        assertEquals(-150L, balance("system_silver_issuance"));
+        assertEquals(-150L, balance("system_wen_issuance"));
         assertEquals(2, jdbc.queryForObject("SELECT COUNT(*) FROM economy_transaction", Integer.class));
     }
 
@@ -153,7 +219,7 @@ class EconomyPostingServiceRealTransactionTest {
         }
         assertEquals(3, jdbc.queryForObject("SELECT COUNT(*) FROM economy_account", Integer.class));
         assertEquals(2, jdbc.queryForObject("SELECT COUNT(*) FROM economy_account WHERE owner_type='USER' AND purpose='AVAILABLE' AND allow_negative=0 AND version=1", Integer.class));
-        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM economy_account WHERE owner_type='SYSTEM' AND purpose='SILVER_ISSUANCE' AND allow_negative=1 AND version=2", Integer.class));
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM economy_account WHERE owner_type='SYSTEM' AND purpose='WEN_ISSUANCE' AND allow_negative=1 AND version=2", Integer.class));
         assertEquals(100L, balance("wallet_" + walletHash(USER)));
         assertEquals(100L, balance("wallet_" + walletHash("user-2")));
     }
@@ -169,12 +235,12 @@ class EconomyPostingServiceRealTransactionTest {
         String accountId = "wallet_" + walletHash(USER);
         jdbc.update("""
                 INSERT INTO economy_escrow(escrow_id,business_type,business_id,payer_account_id,escrow_account_id,
-                    currency,gross_micro,captured_micro,refunded_micro,status,version,tenant_id,client_id,create_time,update_time)
-                VALUES('esc-held','BOUNTY','task-held',?,'escrow-account','SILVER',100,30,20,'ACTIVE',1,?,?,1,1)
+                    currency,gross_wen,captured_wen,refunded_wen,status,version,tenant_id,client_id,create_time,update_time)
+                VALUES('esc-held','BOUNTY','task-held',?,'escrow-account','WEN',100,30,20,'ACTIVE',1,?,?,1,1)
                 """, accountId, TENANT, CLIENT);
         EconomyWalletService.WalletSnapshot snapshot = wallet.wallet(scope(), USER);
-        assertEquals(100L, snapshot.availableMicro());
-        assertEquals(50L, snapshot.heldMicro());
+        assertEquals(100L, snapshot.availableWen());
+        assertEquals(50L, snapshot.heldWen());
         assertEquals(1L, snapshot.version());
     }
 
@@ -206,14 +272,14 @@ class EconomyPostingServiceRealTransactionTest {
         String accountId = "wallet_" + walletHash(USER);
         jdbc.update("""
                 INSERT INTO economy_escrow(escrow_id,business_type,business_id,payer_account_id,escrow_account_id,
-                    currency,gross_micro,captured_micro,refunded_micro,status,version,tenant_id,client_id,create_time,update_time)
-                VALUES('esc-interleave','BOUNTY','task-interleave',?,'escrow-account','SILVER',100,30,20,'ACTIVE',1,?,?,1,1)
+                    currency,gross_wen,captured_wen,refunded_wen,status,version,tenant_id,client_id,create_time,update_time)
+                VALUES('esc-interleave','BOUNTY','task-interleave',?,'escrow-account','WEN',100,30,20,'ACTIVE',1,?,?,1,1)
                 """, accountId, TENANT, CLIENT);
 
         EconomyLedgerMapper interleavingMapper = mock(EconomyLedgerMapper.class);
         when(interleavingMapper.selectUserWalletSnapshot(TENANT, CLIENT, USER)).thenAnswer(ignored -> {
             EconomyWalletSnapshotRow row = mapper.selectUserWalletSnapshot(TENANT, CLIENT, USER);
-            jdbc.update("UPDATE economy_escrow SET gross_micro=200 WHERE escrow_id='esc-interleave'");
+            jdbc.update("UPDATE economy_escrow SET gross_wen=200 WHERE escrow_id='esc-interleave'");
             return row;
         });
         EconomyWalletService wallet = new EconomyWalletService(interleavingMapper, treasury, environment, gate);
@@ -221,7 +287,7 @@ class EconomyPostingServiceRealTransactionTest {
         EconomyWalletService.WalletSnapshot snapshot = wallet.wallet(scope(), USER);
 
         assertEquals(new EconomyWalletService.WalletSnapshot(100L, 50L, 1L), snapshot);
-        assertEquals(150L, mapper.selectUserWalletSnapshot(TENANT, CLIENT, USER).getHeldMicro());
+        assertEquals(150L, mapper.selectUserWalletSnapshot(TENANT, CLIENT, USER).getHeldWen());
         verify(interleavingMapper).selectUserWalletSnapshot(TENANT, CLIENT, USER);
     }
 
@@ -229,8 +295,8 @@ class EconomyPostingServiceRealTransactionTest {
     void balancedPostingUsesDeterministicLocksAndDuplicateReturnsOriginalResult() {
         insertAccount("acct-user", EconomyAccountOwnerType.USER, USER,
                 EconomyAccountPurpose.AVAILABLE, 0, false);
-        insertAccount("acct-issuance", EconomyAccountOwnerType.SYSTEM, "silver",
-                EconomyAccountPurpose.SILVER_ISSUANCE, 0, true);
+        insertAccount("acct-issuance", EconomyAccountOwnerType.SYSTEM, "wen",
+                EconomyAccountPurpose.WEN_ISSUANCE, 0, true);
 
         EconomyPostingCommand firstCommand = issueCommand(
                 "00000000-0000-0000-0000-000000000001", HASH_ONE, 100);
@@ -240,22 +306,22 @@ class EconomyPostingServiceRealTransactionTest {
         EconomyPostingResult replay = treasury.issue(firstCommand);
 
         assertEquals(first, replay);
-        assertEquals(100, first.debitTotalMicro());
-        assertEquals(first.debitTotalMicro(), first.creditTotalMicro());
+        assertEquals(100, first.debitTotalWen());
+        assertEquals(first.debitTotalWen(), first.creditTotalWen());
         assertEquals(0L, jdbc.queryForObject(
-                "SELECT SUM(signed_amount_micro) FROM economy_entry WHERE transaction_id='etx-1'",
+                "SELECT SUM(signed_amount_wen) FROM economy_entry WHERE transaction_id='etx-1'",
                 Long.class));
         assertEquals(2, first.lines().size());
-        assertEquals(-100, first.lines().get(0).balanceAfterMicro());
-        assertEquals(100, first.lines().get(1).balanceAfterMicro());
-        assertEquals(-150, later.lines().get(0).balanceAfterMicro());
-        assertEquals(150, later.lines().get(1).balanceAfterMicro());
+        assertEquals(-100, first.lines().get(0).balanceAfterWen());
+        assertEquals(100, first.lines().get(1).balanceAfterWen());
+        assertEquals(-150, later.lines().get(0).balanceAfterWen());
+        assertEquals(150, later.lines().get(1).balanceAfterWen());
         assertEquals(2, jdbc.queryForObject("SELECT COUNT(*) FROM economy_transaction", Integer.class));
         assertEquals(4, jdbc.queryForObject("SELECT COUNT(*) FROM economy_entry", Integer.class));
 
         var owners = org.mockito.ArgumentCaptor.forClass(String.class);
         verify(mapper, times(4)).selectAccountForUpdate(
-                eq(TENANT), eq(CLIENT), eq("SILVER"), owners.capture(), anyString(), anyString());
+                eq(TENANT), eq(CLIENT), eq("WEN"), owners.capture(), anyString(), anyString());
         assertEquals(List.of("SYSTEM", "USER", "SYSTEM", "USER"), owners.getAllValues());
     }
 
@@ -274,11 +340,11 @@ class EconomyPostingServiceRealTransactionTest {
     void imbalanceIsRejectedBeforeAnyTransactionOrBalanceDml() {
         insertAccount("acct-user", EconomyAccountOwnerType.USER, USER,
                 EconomyAccountPurpose.AVAILABLE, 0, false);
-        insertAccount("acct-issuance", EconomyAccountOwnerType.SYSTEM, "silver",
-                EconomyAccountPurpose.SILVER_ISSUANCE, 0, true);
+        insertAccount("acct-issuance", EconomyAccountOwnerType.SYSTEM, "wen",
+                EconomyAccountPurpose.WEN_ISSUANCE, 0, true);
         EconomyPostingCommand imbalanced = new EconomyPostingCommand(
                 scope(), principal(), "00000000-0000-0000-0000-000000000003", HASH_ONE,
-                EconomyJournalType.ISSUE_SILVER, "issue-1", List.of(
+                EconomyJournalType.ISSUE_WEN, "issue-1", List.of(
                 new EconomyPostingLine(userAvailable(), 100),
                 new EconomyPostingLine(issuance(), -99)), null);
 
@@ -295,7 +361,7 @@ class EconomyPostingServiceRealTransactionTest {
     @Test
     void insufficientFundsRollsBackReservationAndLeavesNoPartialPosting() {
         EconomyAccountKey payer = userAvailable();
-        EconomyAccountKey held = new EconomyAccountKey("SILVER", EconomyAccountOwnerType.TASK,
+        EconomyAccountKey held = new EconomyAccountKey("WEN", EconomyAccountOwnerType.TASK,
                 "task-1", EconomyAccountPurpose.ESCROW);
         insertAccount("acct-user", payer.ownerType(), payer.ownerId(), payer.purpose(), 75, false);
         insertAccount("acct-escrow", held.ownerType(), held.ownerId(), held.purpose(), 0, false);
@@ -318,8 +384,8 @@ class EconomyPostingServiceRealTransactionTest {
     void overflowRollsBackReservationAndAccountWrites() {
         insertAccount("acct-user", EconomyAccountOwnerType.USER, USER,
                 EconomyAccountPurpose.AVAILABLE, Long.MAX_VALUE, false);
-        insertAccount("acct-issuance", EconomyAccountOwnerType.SYSTEM, "silver",
-                EconomyAccountPurpose.SILVER_ISSUANCE, 0, true);
+        insertAccount("acct-issuance", EconomyAccountOwnerType.SYSTEM, "wen",
+                EconomyAccountPurpose.WEN_ISSUANCE, 0, true);
 
         EconomyPostingException failure = assertThrows(EconomyPostingException.class,
                 () -> treasury.issue(issueCommand(
@@ -335,7 +401,7 @@ class EconomyPostingServiceRealTransactionTest {
     @Test
     void escrowTopUpReusesOneRootAppendsImmutableLotsAndReplayKeepsOriginalLot() {
         EconomyAccountKey payer = userAvailable();
-        EconomyAccountKey held = new EconomyAccountKey("SILVER", EconomyAccountOwnerType.TASK,
+        EconomyAccountKey held = new EconomyAccountKey("WEN", EconomyAccountOwnerType.TASK,
                 "task-1", EconomyAccountPurpose.ESCROW);
         insertAccount("acct-user", payer.ownerType(), payer.ownerId(), payer.purpose(), 1_000, false);
         insertAccount("acct-escrow", held.ownerType(), held.ownerId(), held.purpose(), 0, false);
@@ -351,28 +417,28 @@ class EconomyPostingServiceRealTransactionTest {
         assertEquals(first, replay);
         assertEquals("esc-1", first.escrow().escrowId());
         assertEquals(1, first.escrow().fundingSequence());
-        assertEquals(300, first.escrow().grossAfterMicro());
+        assertEquals(300, first.escrow().grossAfterWen());
         assertEquals(1, first.escrow().escrowVersion());
         assertEquals(2, second.escrow().fundingSequence());
-        assertEquals(500, second.escrow().grossAfterMicro());
+        assertEquals(500, second.escrow().grossAfterWen());
         assertEquals(2, second.escrow().escrowVersion());
         assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM economy_escrow", Integer.class));
         assertEquals(2, jdbc.queryForObject("SELECT COUNT(*) FROM economy_escrow_funding_lot", Integer.class));
         assertEquals(List.of(1, 2), jdbc.queryForList(
                 "SELECT funding_sequence FROM economy_escrow_funding_lot ORDER BY funding_sequence",
                 Integer.class));
-        assertEquals(500L, jdbc.queryForObject("SELECT gross_micro FROM economy_escrow", Long.class));
+        assertEquals(500L, jdbc.queryForObject("SELECT gross_wen FROM economy_escrow", Long.class));
         assertEquals(500L, balance("acct-escrow"));
         assertEquals(500L, balance("acct-user"));
-        assertTrue(second.lines().stream().noneMatch(line -> line.signedAmountMicro() == 0));
+        assertTrue(second.lines().stream().noneMatch(line -> line.signedAmountWen() == 0));
     }
 
 
     @Test
     void reserveRequiresUserPrincipalAndByteExactPrincipalOwnedPayerBeforeAnyDml() {
-        EconomyAccountKey held = new EconomyAccountKey("SILVER", EconomyAccountOwnerType.TASK,
+        EconomyAccountKey held = new EconomyAccountKey("WEN", EconomyAccountOwnerType.TASK,
                 "task-1", EconomyAccountPurpose.ESCROW);
-        EconomyAccountKey anotherUsersPayer = new EconomyAccountKey("SILVER", EconomyAccountOwnerType.USER,
+        EconomyAccountKey anotherUsersPayer = new EconomyAccountKey("WEN", EconomyAccountOwnerType.USER,
                 "User-1", EconomyAccountPurpose.AVAILABLE);
         EconomyPostingCommand crossUser = new EconomyPostingCommand(
                 scope(), principal(), "00000000-0000-0000-0000-000000000008", HASH_ONE,
@@ -403,7 +469,7 @@ class EconomyPostingServiceRealTransactionTest {
 
     @Test
     void userAvailableCannotUseAllowNegativeMisprovisionAndNeverPostsNegativeBalance() {
-        EconomyAccountKey held = new EconomyAccountKey("SILVER", EconomyAccountOwnerType.TASK,
+        EconomyAccountKey held = new EconomyAccountKey("WEN", EconomyAccountOwnerType.TASK,
                 "task-1", EconomyAccountPurpose.ESCROW);
         insertAccount("acct-user", EconomyAccountOwnerType.USER, USER,
                 EconomyAccountPurpose.AVAILABLE, 10, true);
@@ -423,7 +489,7 @@ class EconomyPostingServiceRealTransactionTest {
 
     @Test
     void nonSystemEscrowCannotBeMisprovisionedNegative() {
-        EconomyAccountKey held = new EconomyAccountKey("SILVER", EconomyAccountOwnerType.TASK,
+        EconomyAccountKey held = new EconomyAccountKey("WEN", EconomyAccountOwnerType.TASK,
                 "task-1", EconomyAccountPurpose.ESCROW);
         insertAccount("acct-user", EconomyAccountOwnerType.USER, USER,
                 EconomyAccountPurpose.AVAILABLE, 10, false);
@@ -444,7 +510,7 @@ class EconomyPostingServiceRealTransactionTest {
             EconomyPostingCommand principalInvalid = new EconomyPostingCommand(
                     scope(), new EconomyPrincipal(EconomyPrincipalType.USER, invalid),
                     "00000000-0000-0000-0000-000000000011", HASH_ONE,
-                    EconomyJournalType.ISSUE_SILVER, "issue-1", List.of(
+                    EconomyJournalType.ISSUE_WEN, "issue-1", List.of(
                     new EconomyPostingLine(userAvailable(), 1),
                     new EconomyPostingLine(issuance(), -1)), null);
             EconomyPostingException principalFailure = assertThrows(EconomyPostingException.class,
@@ -452,10 +518,10 @@ class EconomyPostingServiceRealTransactionTest {
             assertEquals(EconomyPostingException.Reason.INVALID_COMMAND, principalFailure.reason());
 
             EconomyAccountKey invalidOwner = new EconomyAccountKey(
-                    "SILVER", EconomyAccountOwnerType.USER, invalid, EconomyAccountPurpose.AVAILABLE);
+                    "WEN", EconomyAccountOwnerType.USER, invalid, EconomyAccountPurpose.AVAILABLE);
             EconomyPostingCommand ownerInvalid = new EconomyPostingCommand(
                     scope(), principal(), "00000000-0000-0000-0000-000000000011", HASH_ONE,
-                    EconomyJournalType.ISSUE_SILVER, "issue-1", List.of(
+                    EconomyJournalType.ISSUE_WEN, "issue-1", List.of(
                     new EconomyPostingLine(invalidOwner, 1),
                     new EconomyPostingLine(issuance(), -1)), null);
             EconomyPostingException ownerFailure = assertThrows(EconomyPostingException.class,
@@ -468,11 +534,11 @@ class EconomyPostingServiceRealTransactionTest {
     @Test
     void accountLockOrderUsesUnsignedUtf8BytesRatherThanUtf16CodeUnits() {
         EconomyAccountKey privateUseBmp = new EconomyAccountKey(
-                "SILVER", EconomyAccountOwnerType.USER, "\ue000", EconomyAccountPurpose.AVAILABLE);
+                "WEN", EconomyAccountOwnerType.USER, "\ue000", EconomyAccountPurpose.AVAILABLE);
         EconomyAccountKey supplementary = new EconomyAccountKey(
-                "SILVER", EconomyAccountOwnerType.USER, "\ud800\udc00", EconomyAccountPurpose.AVAILABLE);
+                "WEN", EconomyAccountOwnerType.USER, "\ud800\udc00", EconomyAccountPurpose.AVAILABLE);
         EconomyAccountKey malformed = new EconomyAccountKey(
-                "SILVER", EconomyAccountOwnerType.USER, "\ud800", EconomyAccountPurpose.AVAILABLE);
+                "WEN", EconomyAccountOwnerType.USER, "\ud800", EconomyAccountPurpose.AVAILABLE);
 
         assertTrue(privateUseBmp.ownerId().compareTo(supplementary.ownerId()) > 0);
         assertTrue(EconomyAccountKey.LOCK_ORDER.compare(privateUseBmp, supplementary) < 0);
@@ -484,8 +550,8 @@ class EconomyPostingServiceRealTransactionTest {
     void sameActorKeyDifferentBodyHashConflictsAndOriginalBodyStillReplays() {
         insertAccount("acct-user", EconomyAccountOwnerType.USER, USER,
                 EconomyAccountPurpose.AVAILABLE, 0, false);
-        insertAccount("acct-issuance", EconomyAccountOwnerType.SYSTEM, "silver",
-                EconomyAccountPurpose.SILVER_ISSUANCE, 0, true);
+        insertAccount("acct-issuance", EconomyAccountOwnerType.SYSTEM, "wen",
+                EconomyAccountPurpose.WEN_ISSUANCE, 0, true);
         String key = "00000000-0000-0000-0000-000000000012";
         EconomyPostingCommand original = issueCommand(key, HASH_ONE, 100);
         EconomyPostingResult first = treasury.issue(original);
@@ -504,12 +570,12 @@ class EconomyPostingServiceRealTransactionTest {
     void caseLookalikeTenantAndClientRemainDistinctIdempotencyAndBalanceScopes() {
         insertAccount(TENANT, CLIENT, "acct-user", EconomyAccountOwnerType.USER, USER,
                 EconomyAccountPurpose.AVAILABLE, 0, false);
-        insertAccount(TENANT, CLIENT, "acct-issuance", EconomyAccountOwnerType.SYSTEM, "silver",
-                EconomyAccountPurpose.SILVER_ISSUANCE, 0, true);
+        insertAccount(TENANT, CLIENT, "acct-issuance", EconomyAccountOwnerType.SYSTEM, "wen",
+                EconomyAccountPurpose.WEN_ISSUANCE, 0, true);
         insertAccount(LOWER_TENANT, LOWER_CLIENT, "acct-user", EconomyAccountOwnerType.USER, USER,
                 EconomyAccountPurpose.AVAILABLE, 0, false);
-        insertAccount(LOWER_TENANT, LOWER_CLIENT, "acct-issuance", EconomyAccountOwnerType.SYSTEM, "silver",
-                EconomyAccountPurpose.SILVER_ISSUANCE, 0, true);
+        insertAccount(LOWER_TENANT, LOWER_CLIENT, "acct-issuance", EconomyAccountOwnerType.SYSTEM, "wen",
+                EconomyAccountPurpose.WEN_ISSUANCE, 0, true);
         String key = "00000000-0000-0000-0000-000000000013";
 
         treasury.issue(issueCommand(new EconomyScope(TENANT, CLIENT), key, HASH_ONE, 100));
@@ -522,7 +588,7 @@ class EconomyPostingServiceRealTransactionTest {
 
     @Test
     void lateFundingLotFailureRollsBackAccountsEscrowEntriesAndReservation() {
-        EconomyAccountKey held = new EconomyAccountKey("SILVER", EconomyAccountOwnerType.TASK,
+        EconomyAccountKey held = new EconomyAccountKey("WEN", EconomyAccountOwnerType.TASK,
                 "task-1", EconomyAccountPurpose.ESCROW);
         insertAccount("acct-user", EconomyAccountOwnerType.USER, USER,
                 EconomyAccountPurpose.AVAILABLE, 500, false);
@@ -548,7 +614,7 @@ class EconomyPostingServiceRealTransactionTest {
 
     private EconomyPostingCommand issueCommand(EconomyScope scope, String key, byte[] hash, long amount) {
         return new EconomyPostingCommand(scope, principal(), key, hash,
-                EconomyJournalType.ISSUE_SILVER, "issue-1", List.of(
+                EconomyJournalType.ISSUE_WEN, "issue-1", List.of(
                 new EconomyPostingLine(userAvailable(), amount),
                 new EconomyPostingLine(issuance(), -amount)), null);
     }
@@ -572,13 +638,13 @@ class EconomyPostingServiceRealTransactionTest {
     }
 
     private EconomyAccountKey userAvailable() {
-        return new EconomyAccountKey("SILVER", EconomyAccountOwnerType.USER,
+        return new EconomyAccountKey("WEN", EconomyAccountOwnerType.USER,
                 USER, EconomyAccountPurpose.AVAILABLE);
     }
 
     private EconomyAccountKey issuance() {
-        return new EconomyAccountKey("SILVER", EconomyAccountOwnerType.SYSTEM,
-                "silver", EconomyAccountPurpose.SILVER_ISSUANCE);
+        return new EconomyAccountKey("WEN", EconomyAccountOwnerType.SYSTEM,
+                "wen", EconomyAccountPurpose.WEN_ISSUANCE);
     }
 
     private void insertAccount(String accountId, EconomyAccountOwnerType ownerType, String ownerId,
@@ -591,9 +657,9 @@ class EconomyPostingServiceRealTransactionTest {
                                EconomyAccountPurpose purpose, long balance, boolean allowNegative) {
         jdbc.update("""
                 INSERT INTO economy_account(
-                    account_id,owner_type,owner_id,purpose,currency,balance_micro,
+                    account_id,owner_type,owner_id,purpose,currency,balance_wen,
                     allow_negative,status,version,tenant_id,client_id,create_time,update_time)
-                VALUES(?,?,?,?, 'SILVER', ?, ?, 'ACTIVE', 0, ?, ?, 1, 1)
+                VALUES(?,?,?,?, 'WEN', ?, ?, 'ACTIVE', 0, ?, ?, 1, 1)
                 """, accountId, ownerType.name(), ownerId, purpose.name(), balance,
                 allowNegative ? 1 : 0, tenantId, clientId);
     }
@@ -604,7 +670,7 @@ class EconomyPostingServiceRealTransactionTest {
 
     private long balance(String tenantId, String clientId, String accountId) {
         return jdbc.queryForObject(
-                "SELECT balance_micro FROM economy_account "
+                "SELECT balance_wen FROM economy_account "
                         + "WHERE tenant_id=? AND client_id=? AND account_id=?",
                 Long.class, tenantId, clientId, accountId);
     }
@@ -618,7 +684,7 @@ class EconomyPostingServiceRealTransactionTest {
                     owner_id VARCHAR(100) NOT NULL,
                     purpose VARCHAR(32) NOT NULL,
                     currency VARCHAR(16) NOT NULL,
-                    balance_micro BIGINT NOT NULL DEFAULT 0,
+                    balance_wen BIGINT NOT NULL DEFAULT 0,
                     allow_negative TINYINT NOT NULL DEFAULT 0,
                     status VARCHAR(16) NOT NULL DEFAULT 'ACTIVE',
                     version BIGINT NOT NULL DEFAULT 0,
@@ -642,8 +708,8 @@ class EconomyPostingServiceRealTransactionTest {
                     currency VARCHAR(16) NOT NULL,
                     status VARCHAR(16) NOT NULL,
                     entry_count INT NOT NULL,
-                    debit_total_micro BIGINT NOT NULL,
-                    credit_total_micro BIGINT NOT NULL,
+                    debit_total_wen BIGINT NOT NULL,
+                    credit_total_wen BIGINT NOT NULL,
                     posted_at BIGINT,
                     tenant_id VARCHAR(50) NOT NULL,
                     client_id VARCHAR(50) NOT NULL,
@@ -659,8 +725,8 @@ class EconomyPostingServiceRealTransactionTest {
                     transaction_id VARCHAR(100) NOT NULL,
                     account_id VARCHAR(100) NOT NULL,
                     entry_sequence INT NOT NULL,
-                    signed_amount_micro BIGINT NOT NULL,
-                    balance_after_micro BIGINT NOT NULL,
+                    signed_amount_wen BIGINT NOT NULL,
+                    balance_after_wen BIGINT NOT NULL,
                     currency VARCHAR(16) NOT NULL,
                     status VARCHAR(16) NOT NULL,
                     posted_at BIGINT NOT NULL,
@@ -679,9 +745,9 @@ class EconomyPostingServiceRealTransactionTest {
                     payer_account_id VARCHAR(100) NOT NULL,
                     escrow_account_id VARCHAR(100) NOT NULL,
                     currency VARCHAR(16) NOT NULL,
-                    gross_micro BIGINT NOT NULL,
-                    captured_micro BIGINT NOT NULL,
-                    refunded_micro BIGINT NOT NULL,
+                    gross_wen BIGINT NOT NULL,
+                    captured_wen BIGINT NOT NULL,
+                    refunded_wen BIGINT NOT NULL,
                     status VARCHAR(24) NOT NULL,
                     version BIGINT NOT NULL,
                     tenant_id VARCHAR(50) NOT NULL,
@@ -699,8 +765,8 @@ class EconomyPostingServiceRealTransactionTest {
                     funding_sequence INT NOT NULL,
                     reserve_transaction_id VARCHAR(100) NOT NULL,
                     payer_account_id VARCHAR(100) NOT NULL,
-                    amount_micro BIGINT NOT NULL,
-                    escrow_gross_after_micro BIGINT NOT NULL,
+                    amount_wen BIGINT NOT NULL,
+                    escrow_gross_after_wen BIGINT NOT NULL,
                     escrow_version_after BIGINT NOT NULL,
                     currency VARCHAR(16) NOT NULL,
                     tenant_id VARCHAR(50) NOT NULL,

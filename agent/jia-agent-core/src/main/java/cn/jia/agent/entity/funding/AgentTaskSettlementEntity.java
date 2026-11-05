@@ -18,11 +18,11 @@ public class AgentTaskSettlementEntity {
     private String agentId;
     private String escrowId;
     private String status;
-    private Long grossMicro;
-    private Long actualComputeMicro;
-    private Long platformFeeMicro;
-    private Long agentPayoutMicro;
-    private Long refundedMicro;
+    private Long grossWen;
+    private Long actualComputeWen;
+    private Long platformFeeWen;
+    private Long agentPayoutWen;
+    private Long refundedWen;
     private Long taskVersion;
     private Long fundingVersion;
     private Long escrowVersion;

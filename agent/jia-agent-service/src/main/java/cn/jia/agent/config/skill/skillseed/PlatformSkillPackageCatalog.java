@@ -70,9 +70,9 @@ public final class PlatformSkillPackageCatalog {
 
     private static PlatformSkillProduct product(
             String productId, String productVersionId, String skillKey, String name, String description,
-            long priceMicro, String deploymentRestriction, String packageSha256Hex, long packageSize) {
+            long priceWen, String deploymentRestriction, String packageSha256Hex, long packageSize) {
         return new PlatformSkillProduct(productId, productVersionId, skillKey, SKILL_VERSION, name, description,
-                priceMicro, deploymentRestriction, "skill-packages/" + skillKey + "-" + SKILL_VERSION + ".zip",
+                priceWen, deploymentRestriction, "skill-packages/" + skillKey + "-" + SKILL_VERSION + ".zip",
                 hex(packageSha256Hex), packageSize, APPROVED_PERMISSIONS_MANIFEST,
                 sha256(APPROVED_PERMISSIONS_MANIFEST.getBytes(StandardCharsets.UTF_8)));
     }
@@ -129,7 +129,7 @@ public final class PlatformSkillPackageCatalog {
             String skillVersion,
             String name,
             String description,
-            long priceMicro,
+            long priceWen,
             String deploymentRestriction,
             String resourcePath,
             byte[] packageSha256,

@@ -15,7 +15,7 @@ public class SkillOrderReceipt {
     private byte[] requestHash;
     private Long orderVersion;
     private String orderStatus;
-    private Long priceMicro;
+    private Long priceWen;
     private Long permissionGrantVersion;
     private byte[] approvedPermissionsSha256;
     private String escrowId;

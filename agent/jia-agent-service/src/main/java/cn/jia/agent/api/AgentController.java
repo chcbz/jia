@@ -195,7 +195,7 @@ public class AgentController {
         }
         Map<String, String> body = HostingRentHttp.body(rawBody,
                 Set.of("mode", "hostingAction", "agentId", "quoteId", "leaseId",
-                        "expectedLeaseVersion", "expectedPlanVersion", "expectedAmountMicro",
+                        "expectedLeaseVersion", "expectedPlanVersion", "expectedAmountWen",
                         "expectedPeriodSeconds"),
                 Set.of("mode", "agentId", "leaseId"));
         String mode = body.get("mode");
@@ -663,7 +663,7 @@ public class AgentController {
     }
 
     private static boolean hasFundingFields(AgentTaskCreateDTO request) {
-        return request != null && (request.getGrossBountyAmountMicro() != null
+        return request != null && (request.getGrossBountyAmountWen() != null
                 || request.getSettlementPolicy() != null
                 || request.getRequiredSkillRequirements() != null);
     }

@@ -63,8 +63,8 @@ class EconomyReadOnlyPreviewSpringContextTest {
             when(mapper.selectWallet("Tenant-A", "Client-A", "actor-A")).thenAnswer(invocation -> {
                 transactionObserved.set(TransactionSynchronizationManager.isActualTransactionActive()
                         && TransactionSynchronizationManager.isCurrentTransactionReadOnly());
-                return new EconomyWalletSnapshotRow().setAvailableMicro(9L).setHeldMicro(2L)
-                        .setMinimumHeldComponentMicro(2L).setVersion(4L);
+                return new EconomyWalletSnapshotRow().setAvailableWen(9L).setHeldWen(2L)
+                        .setMinimumHeldComponentWen(2L).setVersion(4L);
             });
 
             EconomyReadOnlyPreviewService service = context.getBean(EconomyReadOnlyPreviewService.class);
@@ -83,8 +83,8 @@ class EconomyReadOnlyPreviewSpringContextTest {
                     .andExpect(jsonPath("$.message").doesNotExist())
                     .andExpect(jsonPath("$.status").doesNotExist())
                     .andExpect(jsonPath("$.location").doesNotExist())
-                    .andExpect(jsonPath("$.data.availableMicro").value("9"))
-                    .andExpect(jsonPath("$.data.heldMicro").value("2"))
+                    .andExpect(jsonPath("$.data.availableWen").value("9"))
+                    .andExpect(jsonPath("$.data.heldWen").value("2"))
                     .andExpect(jsonPath("$.data.version").value("4"));
         });
     }

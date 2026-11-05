@@ -13,8 +13,8 @@ public class AgentTaskFundingEntity {
     private String payerPrincipalType;
     private String payerPrincipalId;
     private String settlementPolicy;
-    private Long grossBountyAmountMicro;
-    private Long remainingMicro;
+    private Long grossBountyAmountWen;
+    private Long remainingWen;
     private String escrowId;
     private Long escrowVersion;
     private String reserveTransactionId;
@@ -22,7 +22,7 @@ public class AgentTaskFundingEntity {
     private byte[] cancelIdempotencyKey;
     private byte[] cancelRequestHash;
     private String refundTransactionId;
-    private Long cancelRefundedMicro;
+    private Long cancelRefundedWen;
     private Long cancelTaskVersion;
     private Long refundedAt;
     private Long version;

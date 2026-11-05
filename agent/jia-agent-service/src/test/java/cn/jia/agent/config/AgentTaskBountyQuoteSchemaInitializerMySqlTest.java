@@ -70,7 +70,7 @@ class AgentTaskBountyQuoteSchemaInitializerMySqlTest {
 
     @Test
     void fullColumnAndIndexPropertiesDriftFailClosed() {
-        assertCatalogDrift("col_type", 0, ddl -> ddl.replace("worst_compute_micro BIGINT", "worst_compute_micro INT"), "column");
+        assertCatalogDrift("col_type", 0, ddl -> ddl.replace("worst_compute_wen BIGINT", "worst_compute_wen INT"), "column");
         assertCatalogDrift("col_null", 0, ddl -> ddl.replace("budget_covered TINYINT(1) NOT NULL", "budget_covered TINYINT(1) NULL"), "column");
         assertCatalogDrift("col_default", 0, ddl -> ddl.replace("DEFAULT 'OPEN'", "DEFAULT 'CLAIMED'"), "column");
         assertCatalogDrift("col_collation", 0, ddl -> ddl.replace("agent_id VARCHAR(100) COLLATE utf8mb4_0900_bin", "agent_id VARCHAR(100) COLLATE utf8mb4_0900_ai_ci"), "column");
@@ -102,9 +102,9 @@ class AgentTaskBountyQuoteSchemaInitializerMySqlTest {
                   skill_set_hash='sha256:test',model_route_version='test',
                   estimated_input_tokens=0,estimated_cached_input_tokens=0,
                   estimated_output_tokens=0,estimated_reasoning_tokens=0,
-                  estimated_compute_micro=0,worst_compute_micro=0,platform_fee_micro=0,
-                  gross_allocation_micro=1,estimated_agent_payout_micro=1,worst_agent_payout_micro=1,
-                  minimum_accepted_payout_micro=0,budget_headroom_micro=0,
+                  estimated_compute_wen=0,worst_compute_wen=0,platform_fee_wen=0,
+                  gross_allocation_wen=1,estimated_agent_payout_wen=1,worst_agent_payout_wen=1,
+                  minimum_accepted_payout_wen=0,budget_headroom_wen=0,
                   verified_skill_match=1,advisory_ability_match=1,budget_covered=1,agent_ready=1,
                   recommendation='recommended',reason_codes='[]',status='OPEN',expires_at=3,claimed_at=NULL,
                   tenant_id='Tenant-W05',client_id='Client-W05',create_time=1,update_time=1

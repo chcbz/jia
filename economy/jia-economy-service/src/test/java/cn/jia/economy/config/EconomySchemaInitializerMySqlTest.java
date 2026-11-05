@@ -85,7 +85,7 @@ class EconomySchemaInitializerMySqlTest {
         JdbcTemplate jdbc = fixture.newDatabase("nonnegative").jdbc();
         new EconomySchemaInitializer(jdbc).afterPropertiesSet();
 
-        insertTypedAccount(jdbc, "acct-issuance", "SYSTEM", "silver", "SILVER_ISSUANCE", -1, 1);
+        insertTypedAccount(jdbc, "acct-issuance", "SYSTEM", "wen", "WEN_ISSUANCE", -1, 1);
         insertTypedAccount(jdbc, "acct-variance", "SYSTEM", "variance", "PROVIDER_VARIANCE", -1, 1);
         insertAccount(jdbc, "acct-user-zero", 0, 0);
 
@@ -127,23 +127,23 @@ class EconomySchemaInitializerMySqlTest {
         insertPostingTransaction(jdbc, "etx-posting");
         assertEquals(1, jdbc.update("""
                 UPDATE economy_transaction
-                SET status='POSTED',entry_count=2,debit_total_micro=10,credit_total_micro=10,
+                SET status='POSTED',entry_count=2,debit_total_wen=10,credit_total_wen=10,
                     posted_at=2,update_time=2
                 WHERE transaction_id='etx-posting' AND status='POSTING'
                 """));
         jdbc.update("""
                 INSERT INTO economy_entry(
-                    entry_id,transaction_id,account_id,entry_sequence,signed_amount_micro,
-                    balance_after_micro,currency,status,posted_at,tenant_id,client_id,create_time)
-                VALUES('entry-1','etx-posting','account-1',1,-10,90,'SILVER','POSTED',2,
+                    entry_id,transaction_id,account_id,entry_sequence,signed_amount_wen,
+                    balance_after_wen,currency,status,posted_at,tenant_id,client_id,create_time)
+                VALUES('entry-1','etx-posting','account-1',1,-10,90,'WEN','POSTED',2,
                        'Tenant-A','Client-A',2)
                 """);
         jdbc.update("""
                 INSERT INTO economy_escrow_funding_lot(
                     escrow_id,funding_sequence,reserve_transaction_id,payer_account_id,
-                    amount_micro,escrow_gross_after_micro,escrow_version_after,currency,
+                    amount_wen,escrow_gross_after_wen,escrow_version_after,currency,
                     tenant_id,client_id,created_at)
-                VALUES('escrow-1',1,'etx-posting','account-1',10,10,1,'SILVER',
+                VALUES('escrow-1',1,'etx-posting','account-1',10,10,1,'WEN',
                        'Tenant-A','Client-A',2)
                 """);
 
@@ -154,11 +154,11 @@ class EconomySchemaInitializerMySqlTest {
         assertThrows(RuntimeException.class, () -> jdbc.update(
                 "DELETE FROM economy_transaction WHERE transaction_id='etx-posting'"));
         assertThrows(RuntimeException.class, () -> jdbc.update(
-                "UPDATE economy_entry SET balance_after_micro=91 WHERE entry_id='entry-1'"));
+                "UPDATE economy_entry SET balance_after_wen=91 WHERE entry_id='entry-1'"));
         assertThrows(RuntimeException.class, () -> jdbc.update(
                 "DELETE FROM economy_entry WHERE entry_id='entry-1'"));
         assertThrows(RuntimeException.class, () -> jdbc.update("""
-                UPDATE economy_escrow_funding_lot SET amount_micro=11
+                UPDATE economy_escrow_funding_lot SET amount_wen=11
                 WHERE reserve_transaction_id='etx-posting'
                 """));
         assertThrows(RuntimeException.class, () -> jdbc.update("""
@@ -169,9 +169,9 @@ class EconomySchemaInitializerMySqlTest {
         assertEquals("POSTED", jdbc.queryForObject(
                 "SELECT status FROM economy_transaction WHERE transaction_id='etx-posting'", String.class));
         assertEquals(90L, jdbc.queryForObject(
-                "SELECT balance_after_micro FROM economy_entry WHERE entry_id='entry-1'", Long.class));
+                "SELECT balance_after_wen FROM economy_entry WHERE entry_id='entry-1'", Long.class));
         assertEquals(10L, jdbc.queryForObject("""
-                SELECT amount_micro FROM economy_escrow_funding_lot
+                SELECT amount_wen FROM economy_escrow_funding_lot
                 WHERE reserve_transaction_id='etx-posting'
                 """, Long.class));
     }
@@ -193,9 +193,9 @@ class EconomySchemaInitializerMySqlTest {
             long balance, int allowNegative) {
         jdbc.update("""
                 INSERT INTO economy_account(
-                    account_id,owner_type,owner_id,purpose,currency,balance_micro,
+                    account_id,owner_type,owner_id,purpose,currency,balance_wen,
                     allow_negative,status,version,tenant_id,client_id,create_time,update_time)
-                VALUES(?,?,?,?, 'SILVER',?,?,'ACTIVE',0,'Tenant-A','Client-A',1,1)
+                VALUES(?,?,?,?, 'WEN',?,?,'ACTIVE',0,'Tenant-A','Client-A',1,1)
                 """, accountId, ownerType, ownerId, purpose, balance, allowNegative);
     }
 
@@ -204,9 +204,9 @@ class EconomySchemaInitializerMySqlTest {
                 INSERT INTO economy_transaction(
                     transaction_id,principal_type,principal_id,idempotency_key,request_hash,
                     business_type,business_id,currency,status,entry_count,
-                    debit_total_micro,credit_total_micro,posted_at,
+                    debit_total_wen,credit_total_wen,posted_at,
                     tenant_id,client_id,create_time,update_time)
-                VALUES(?, 'USER','user-1', ?, ?, 'ISSUE_SILVER','issue-1','SILVER','POSTING',
+                VALUES(?, 'USER','user-1', ?, ?, 'ISSUE_WEN','issue-1','WEN','POSTING',
                        0,0,0,NULL,'Tenant-A','Client-A',1,1)
                 """, transactionId,
                 "00000000-0000-0000-0000-000000000001".getBytes(StandardCharsets.US_ASCII),

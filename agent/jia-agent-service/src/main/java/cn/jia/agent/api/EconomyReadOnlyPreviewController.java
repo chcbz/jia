@@ -240,7 +240,7 @@ public final class EconomyReadOnlyPreviewController {
 
     private static long money(JsonNode value) {
         if (value==null || !value.isObject() || value.size()!=2 || !value.has("amountMinor") || !value.has("currency")
-                || !value.get("currency").isTextual() || !"SILVER".equals(value.get("currency").textValue())) throw badRequest();
+                || !value.get("currency").isTextual() || !"WEN".equals(value.get("currency").textValue())) throw badRequest();
         return decimal(value.get("amountMinor"));
     }
 

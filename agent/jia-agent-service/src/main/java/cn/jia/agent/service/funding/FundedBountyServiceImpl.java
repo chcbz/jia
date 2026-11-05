@@ -25,7 +25,7 @@ import cn.jia.economy.bounty.FundedBountyRefundReceipt;
 import cn.jia.economy.bounty.FundedBountyReserveCommand;
 import cn.jia.economy.bounty.FundedBountyReserveReceipt;
 import cn.jia.economy.common.EconomyPrincipalType;
-import cn.jia.economy.common.MicroSilver;
+import cn.jia.economy.common.WenAmount;
 import cn.jia.economy.exception.EconomyPostingException;
 import cn.jia.economy.service.EconomyPrincipal;
 import cn.jia.economy.service.EconomyScope;
@@ -224,7 +224,7 @@ public final class FundedBountyServiceImpl implements FundedBountyService {
             return cancelReceipt(root.getTaskId(), funding);
         }
         if (!FUNDS_HELD.equals(funding.getFundingStatus()) || funding.getVersion() == null
-                || funding.getEscrowVersion() == null || funding.getRemainingMicro() == null
+                || funding.getEscrowVersion() == null || funding.getRemainingWen() == null
                 || funding.getReserveTransactionId() == null) {
             throw conflict("Task funding is not cancellable");
         }
@@ -242,7 +242,7 @@ public final class FundedBountyServiceImpl implements FundedBountyService {
         FundedBountyRefundReceipt refund;
         try {
             refund = ledgerService.refund(new FundedBountyRefundCommand(scope(actor), principal(actor),
-                    idempotencyKey, requestHash, root.getTaskId(), funding.getRemainingMicro(),
+                    idempotencyKey, requestHash, root.getTaskId(), funding.getRemainingWen(),
                     funding.getEscrowVersion(), funding.getReserveTransactionId()));
         } catch (EconomyPostingException exception) {
             throw mapEconomy(exception);
@@ -252,7 +252,7 @@ public final class FundedBountyServiceImpl implements FundedBountyService {
                 "funded task cancellation version CAS");
         requireOne(fundingMapper.markRefunded(actor.tenantId(), actor.clientId(), root.getTaskId(),
                 funding.getVersion(), refund.escrowVersion(), keyBytes, requestHash,
-                refund.transactionId(), refund.amountMicro(), expectedTaskVersion + 1,
+                refund.transactionId(), refund.amountWen(), expectedTaskVersion + 1,
                 refund.postedAt()), "funded task refund projection CAS");
         root.setRewardStatus(AgentConstants.TASK_STATUS_CANCELLED);
         root.setTaskVersion(expectedTaskVersion + 1);
@@ -317,8 +317,8 @@ public final class FundedBountyServiceImpl implements FundedBountyService {
         funding.setPayerPrincipalType(EconomyPrincipalType.USER.name());
         funding.setPayerPrincipalId(actor.userId());
         funding.setSettlementPolicy(POLICY);
-        funding.setGrossBountyAmountMicro(amount);
-        funding.setRemainingMicro(amount);
+        funding.setGrossBountyAmountWen(amount);
+        funding.setRemainingWen(amount);
         funding.setRequiredSkillRequirements(JsonUtil.toJson(requirements == null ? List.of() : requirements));
         funding.setVersion(0L);
         funding.setTenantId(actor.tenantId());
@@ -358,8 +358,8 @@ public final class FundedBountyServiceImpl implements FundedBountyService {
         dto.setMode(MODE);
         dto.setStatus(FUNDS_HELD);
         dto.setEscrowId(funding.getEscrowId());
-        dto.setGrossBountyAmountMicro(MicroSilver.format(funding.getGrossBountyAmountMicro()));
-        dto.setRemainingMicro(MicroSilver.format(funding.getGrossBountyAmountMicro()));
+        dto.setGrossBountyAmountWen(WenAmount.format(funding.getGrossBountyAmountWen()));
+        dto.setRemainingWen(WenAmount.format(funding.getGrossBountyAmountWen()));
         return dto;
     }
 
@@ -369,8 +369,8 @@ public final class FundedBountyServiceImpl implements FundedBountyService {
         dto.setMode(funding.getFundingMode());
         dto.setStatus(funding.getFundingStatus());
         dto.setEscrowId(funding.getEscrowId());
-        dto.setGrossBountyAmountMicro(MicroSilver.format(funding.getGrossBountyAmountMicro()));
-        dto.setRemainingMicro(MicroSilver.format(funding.getRemainingMicro()));
+        dto.setGrossBountyAmountWen(WenAmount.format(funding.getGrossBountyAmountWen()));
+        dto.setRemainingWen(WenAmount.format(funding.getRemainingWen()));
         return dto;
     }
 
@@ -388,7 +388,7 @@ public final class FundedBountyServiceImpl implements FundedBountyService {
 
     private void validateCreateReceiptFunding(AgentTaskFundingEntity funding) {
         if (funding == null || !MODE.equals(funding.getFundingMode())
-                || funding.getGrossBountyAmountMicro() == null || funding.getGrossBountyAmountMicro() <= 0
+                || funding.getGrossBountyAmountWen() == null || funding.getGrossBountyAmountWen() <= 0
                 || funding.getEscrowId() == null || funding.getEscrowVersion() == null
                 || funding.getReserveTransactionId() == null) {
             throw unavailable("Funded create receipt projection is corrupt");
@@ -399,9 +399,9 @@ public final class FundedBountyServiceImpl implements FundedBountyService {
         if (funding == null || !MODE.equals(funding.getFundingMode())
                 || !(FUNDS_HELD.equals(funding.getFundingStatus()) || REFUNDED.equals(funding.getFundingStatus())
                     || "SETTLED".equals(funding.getFundingStatus()))
-                || funding.getGrossBountyAmountMicro() == null || funding.getGrossBountyAmountMicro() <= 0
-                || funding.getRemainingMicro() == null || funding.getRemainingMicro() < 0
-                || funding.getRemainingMicro() > funding.getGrossBountyAmountMicro()
+                || funding.getGrossBountyAmountWen() == null || funding.getGrossBountyAmountWen() <= 0
+                || funding.getRemainingWen() == null || funding.getRemainingWen() < 0
+                || funding.getRemainingWen() > funding.getGrossBountyAmountWen()
                 || funding.getEscrowId() == null || funding.getEscrowVersion() == null
                 || funding.getReserveTransactionId() == null || funding.getVersion() == null) {
             throw unavailable("Funded task projection is corrupt");
@@ -484,14 +484,14 @@ public final class FundedBountyServiceImpl implements FundedBountyService {
     private AgentTaskFundingCancelReceiptDTO cancelReceipt(String taskId, AgentTaskFundingEntity funding) {
         validateFunding(funding);
         if (!REFUNDED.equals(funding.getFundingStatus()) || funding.getRefundTransactionId() == null
-                || funding.getCancelRefundedMicro() == null || funding.getCancelRefundedMicro() <= 0
+                || funding.getCancelRefundedWen() == null || funding.getCancelRefundedWen() <= 0
                 || funding.getCancelTaskVersion() == null || funding.getCancelTaskVersion() <= 0
                 || funding.getRefundedAt() == null) {
             throw unavailable("Funded cancellation receipt is corrupt");
         }
         return new AgentTaskFundingCancelReceiptDTO(taskId, REFUNDED, funding.getRefundTransactionId(),
-                MicroSilver.format(funding.getCancelRefundedMicro()),
-                MicroSilver.format(funding.getRemainingMicro()), Long.toString(funding.getCancelTaskVersion()),
+                WenAmount.format(funding.getCancelRefundedWen()),
+                WenAmount.format(funding.getRemainingWen()), Long.toString(funding.getCancelTaskVersion()),
                 Long.toString(funding.getVersion()), Long.toString(funding.getRefundedAt()));
     }
 
@@ -499,9 +499,9 @@ public final class FundedBountyServiceImpl implements FundedBountyService {
         if (request == null || StringUtil.isBlank(request.getTitle())) throw badRequest("title is required");
         if (!POLICY.equals(request.getSettlementPolicy())) throw badRequest("settlementPolicy must be GROSS_INCLUSIVE");
         long amount;
-        try { amount = MicroSilver.parseUnsigned(request.getGrossBountyAmountMicro()); }
-        catch (EconomyPostingException exception) { throw badRequest("grossBountyAmountMicro is invalid"); }
-        if (amount <= 0) throw badRequest("grossBountyAmountMicro must be positive");
+        try { amount = WenAmount.parseUnsigned(request.getGrossBountyAmountWen()); }
+        catch (EconomyPostingException exception) { throw badRequest("grossBountyAmountWen is invalid"); }
+        if (amount <= 0) throw badRequest("grossBountyAmountWen must be positive");
         List<AgentSkillRequirementDTO> requirements = request.getRequiredSkillRequirements();
         if (requirements == null) throw badRequest("requiredSkillRequirements is required");
         if (requirements.size() > 64) throw badRequest("requiredSkillRequirements is too large");
@@ -588,7 +588,7 @@ public final class FundedBountyServiceImpl implements FundedBountyService {
     private static FundedBountyException mapEconomy(EconomyPostingException exception) {
         return switch (exception.reason()) {
             case INSUFFICIENT_FUNDS -> new FundedBountyException(HttpStatus.CONFLICT,
-                    "INSUFFICIENT_SILVER", "Insufficient SILVER balance");
+                    "INSUFFICIENT_WEN", "Insufficient WEN balance");
             case IDEMPOTENCY_CONFLICT -> idempotencyConflict();
             case FEATURE_DISABLED -> new FundedBountyException(HttpStatus.FORBIDDEN,
                     "ECONOMY_PREVIEW_DISABLED", "Economy preview is disabled");

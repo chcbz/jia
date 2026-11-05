@@ -97,7 +97,7 @@ class AgentHostingRentControllerTest {
     void quoteBodyMustBeOnlyOneEmptyJsonObjectWithNoQueryParameters() throws Exception {
         JwtAuthenticationToken authentication = jwt("actor-1", "Tenant-A", "Client-A");
         for (String body : List.of(
-                "", "null", "[]", "{\"amountMicro\":\"0\"}",
+                "", "null", "[]", "{\"amountWen\":\"0\"}",
                 "{\"actor\":\"forged\"}", "{} {}", "{\"x\":1,\"x\":2}")) {
             mvc.perform(post(PATH).principal(authentication)
                             .contentType(MediaType.APPLICATION_JSON).content(body))

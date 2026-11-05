@@ -97,7 +97,7 @@ public final class AgentHostingRentController {
             HttpServletRequest request, @cn.jia.core.annotation.ApiJsonData @RequestBody byte[] body) {
         return success(application.renew(HostingRentHttp.actor(authentication), leaseId,
                 HostingRentHttp.key(request), HostingRentHttp.body(body, Set.of("agentId", "quoteId",
-                        "expectedLeaseVersion", "expectedPlanVersion", "expectedAmountMicro", "expectedPeriodSeconds"), Set.of())));
+                        "expectedLeaseVersion", "expectedPlanVersion", "expectedAmountWen", "expectedPeriodSeconds"), Set.of())));
     }
 
     @ExceptionHandler(RuntimeException.class)

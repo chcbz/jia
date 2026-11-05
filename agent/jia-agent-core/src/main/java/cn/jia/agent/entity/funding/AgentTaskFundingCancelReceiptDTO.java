@@ -4,8 +4,8 @@ public record AgentTaskFundingCancelReceiptDTO(
         String taskId,
         String fundingStatus,
         String refundTransactionId,
-        String refundedMicro,
-        String remainingMicro,
+        String refundedWen,
+        String remainingWen,
         String taskVersion,
         String fundingVersion,
         String refundedAt) {

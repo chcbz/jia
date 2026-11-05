@@ -23,17 +23,17 @@ public interface AgentTaskSettlementMapper {
     @Insert("""
             INSERT INTO agent_task_bounty_settlement
               (tenant_id,client_id,principal_type,principal_id,idempotency_key,request_hash,task_id,
-               quote_id,agent_id,escrow_id,status,gross_micro,actual_compute_micro,platform_fee_micro,
-               agent_payout_micro,refunded_micro,task_version,funding_version,escrow_version,settled_at,transaction_ids)
+               quote_id,agent_id,escrow_id,status,gross_wen,actual_compute_wen,platform_fee_wen,
+               agent_payout_wen,refunded_wen,task_version,funding_version,escrow_version,settled_at,transaction_ids)
             VALUES (#{tenantId},#{clientId},#{principalType},#{principalId},#{idempotencyKey},#{requestHash},#{taskId},
-               #{quoteId},#{agentId},#{escrowId},#{status},#{grossMicro},#{actualComputeMicro},#{platformFeeMicro},
-               #{agentPayoutMicro},#{refundedMicro},#{taskVersion},#{fundingVersion},#{escrowVersion},#{settledAt},#{transactionIds})
+               #{quoteId},#{agentId},#{escrowId},#{status},#{grossWen},#{actualComputeWen},#{platformFeeWen},
+               #{agentPayoutWen},#{refundedWen},#{taskVersion},#{fundingVersion},#{escrowVersion},#{settledAt},#{transactionIds})
             """)
     int insert(AgentTaskSettlementEntity receipt);
 
-    @Update("UPDATE agent_task_funding SET funding_status='SETTLED',remaining_micro=0,"
+    @Update("UPDATE agent_task_funding SET funding_status='SETTLED',remaining_wen=0,"
             + "escrow_version=#{escrowVersion},version=version+1,update_time=#{now} WHERE " + SCOPE + TASK
-            + " AND funding_status='FUNDS_HELD' AND version=#{version} AND remaining_micro=gross_bounty_amount_micro")
+            + " AND funding_status='FUNDS_HELD' AND version=#{version} AND remaining_wen=gross_bounty_amount_wen")
     int markSettled(@Param("tenantId") String tenantId, @Param("clientId") String clientId,
             @Param("taskId") String taskId, @Param("version") long version,
             @Param("escrowVersion") long escrowVersion, @Param("now") long now);

@@ -9,7 +9,7 @@ public class EconomyHostingRentPlanEntity {
     private Long id;
     private String planId;
     private Long planVersion;
-    private Long amountMicro;
+    private Long amountWen;
     private Long periodSeconds;
     private Long quoteTtlSeconds;
     private String currency;

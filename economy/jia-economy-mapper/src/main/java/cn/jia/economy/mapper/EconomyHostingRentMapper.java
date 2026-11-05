@@ -19,15 +19,15 @@ public interface EconomyHostingRentMapper {
 
     @Insert("""
             INSERT INTO economy_hosting_rent_plan(
-                plan_id,plan_version,amount_micro,period_seconds,quote_ttl_seconds,
+                plan_id,plan_version,amount_wen,period_seconds,quote_ttl_seconds,
                 currency,status,tenant_id,client_id,create_time)
-            VALUES(#{planId},#{planVersion},#{amountMicro},#{periodSeconds},#{quoteTtlSeconds},
+            VALUES(#{planId},#{planVersion},#{amountWen},#{periodSeconds},#{quoteTtlSeconds},
                 #{currency},#{status},#{tenantId},#{clientId},#{createTime})
             """)
     int insertPlanVersion(EconomyHostingRentPlanEntity plan);
 
     @Select("""
-            SELECT id,plan_id,plan_version,amount_micro,period_seconds,quote_ttl_seconds,
+            SELECT id,plan_id,plan_version,amount_wen,period_seconds,quote_ttl_seconds,
                    currency,status,tenant_id,client_id,create_time
             FROM economy_hosting_rent_plan
             WHERE """ + EXACT_SCOPE + """
@@ -43,17 +43,17 @@ public interface EconomyHostingRentMapper {
 
     @Insert("""
             INSERT INTO economy_hosting_rent_quote(
-                quote_id,quote_purpose,plan_id,plan_version,amount_micro,period_seconds,
+                quote_id,quote_purpose,plan_id,plan_version,amount_wen,period_seconds,
                 principal_type,principal_id,persona_code,agent_id,lease_id,expected_lease_version,
                 idempotency_key,request_hash,expires_at,tenant_id,client_id,create_time)
-            VALUES(#{quoteId},#{quotePurpose},#{planId},#{planVersion},#{amountMicro},#{periodSeconds},
+            VALUES(#{quoteId},#{quotePurpose},#{planId},#{planVersion},#{amountWen},#{periodSeconds},
                 #{principalType},#{principalId},#{personaCode},#{agentId},#{leaseId},#{expectedLeaseVersion},
                 #{idempotencyKey},#{requestHash},#{expiresAt},#{tenantId},#{clientId},#{createTime})
             """)
     int insertQuote(EconomyHostingRentQuoteEntity quote);
 
     @Select("""
-            SELECT id,quote_id,quote_purpose,plan_id,plan_version,amount_micro,period_seconds,
+            SELECT id,quote_id,quote_purpose,plan_id,plan_version,amount_wen,period_seconds,
                    principal_type,principal_id,persona_code,agent_id,lease_id,expected_lease_version,
                    idempotency_key,request_hash,expires_at,tenant_id,client_id,create_time
             FROM economy_hosting_rent_quote
@@ -73,7 +73,7 @@ public interface EconomyHostingRentMapper {
             @Param("idempotencyKey") byte[] idempotencyKey);
 
     @Select("""
-            SELECT id,quote_id,quote_purpose,plan_id,plan_version,amount_micro,period_seconds,
+            SELECT id,quote_id,quote_purpose,plan_id,plan_version,amount_wen,period_seconds,
                    principal_type,principal_id,persona_code,agent_id,lease_id,expected_lease_version,
                    idempotency_key,request_hash,expires_at,tenant_id,client_id,create_time
             FROM economy_hosting_rent_quote
@@ -89,17 +89,17 @@ public interface EconomyHostingRentMapper {
     @Insert("""
             INSERT INTO economy_hosting_lease(
                 lease_id,principal_type,principal_id,persona_code,agent_id,binding_id,
-                plan_id,plan_version,amount_micro,period_seconds,status,paid_from,paid_through,
+                plan_id,plan_version,amount_wen,period_seconds,status,paid_from,paid_through,
                 latest_intent_id,version,tenant_id,client_id,create_time,update_time)
             VALUES(#{leaseId},#{principalType},#{principalId},#{personaCode},#{agentId},#{bindingId},
-                #{planId},#{planVersion},#{amountMicro},#{periodSeconds},#{status},#{paidFrom},#{paidThrough},
+                #{planId},#{planVersion},#{amountWen},#{periodSeconds},#{status},#{paidFrom},#{paidThrough},
                 #{latestIntentId},#{version},#{tenantId},#{clientId},#{createTime},#{updateTime})
             """)
     int insertLease(EconomyHostingLeaseEntity lease);
 
     @Select("""
             SELECT id,lease_id,principal_type,principal_id,persona_code,agent_id,binding_id,
-                   plan_id,plan_version,amount_micro,period_seconds,status,paid_from,paid_through,
+                   plan_id,plan_version,amount_wen,period_seconds,status,paid_from,paid_through,
                    latest_intent_id,version,tenant_id,client_id,create_time,update_time
             FROM economy_hosting_lease
             WHERE """ + EXACT_SCOPE + """
@@ -113,7 +113,7 @@ public interface EconomyHostingRentMapper {
 
     @Select("""
             SELECT id,lease_id,principal_type,principal_id,persona_code,agent_id,binding_id,
-                   plan_id,plan_version,amount_micro,period_seconds,status,paid_from,paid_through,
+                   plan_id,plan_version,amount_wen,period_seconds,status,paid_from,paid_through,
                    latest_intent_id,version,tenant_id,client_id,create_time,update_time
             FROM economy_hosting_lease
             WHERE """ + EXACT_SCOPE + """
@@ -165,13 +165,13 @@ public interface EconomyHostingRentMapper {
     @Insert("""
             INSERT INTO economy_hosting_provisioning_intent(
                 intent_id,lease_id,quote_id,quote_purpose,principal_type,principal_id,
-                persona_code,agent_id,amount_micro,period_seconds,status,
+                persona_code,agent_id,amount_wen,period_seconds,status,
                 reserve_idempotency_key,reserve_request_hash,reserve_transaction_id,reserved_at,escrow_version,
                 capture_idempotency_key,capture_request_hash,capture_transaction_id,captured_at,
                 refund_idempotency_key,refund_request_hash,refund_transaction_id,refunded_at,
                 outcome_evidence_ref,service_ready_at,paid_from,paid_through,version,tenant_id,client_id,create_time,update_time)
             VALUES(#{intentId},#{leaseId},#{quoteId},#{quotePurpose},#{principalType},#{principalId},
-                #{personaCode},#{agentId},#{amountMicro},#{periodSeconds},#{status},
+                #{personaCode},#{agentId},#{amountWen},#{periodSeconds},#{status},
                 #{reserveIdempotencyKey},#{reserveRequestHash},#{reserveTransactionId},#{reservedAt},#{escrowVersion},
                 #{captureIdempotencyKey},#{captureRequestHash},#{captureTransactionId},#{capturedAt},
                 #{refundIdempotencyKey},#{refundRequestHash},#{refundTransactionId},#{refundedAt},
@@ -181,7 +181,7 @@ public interface EconomyHostingRentMapper {
     int insertIntent(EconomyHostingProvisioningIntentEntity intent);
 
     String INTENT_COLUMNS = " id,intent_id,lease_id,quote_id,quote_purpose,principal_type,principal_id,"
-            + "persona_code,agent_id,amount_micro,period_seconds,status,"
+            + "persona_code,agent_id,amount_wen,period_seconds,status,"
             + "reserve_idempotency_key,reserve_request_hash,reserve_transaction_id,reserved_at,escrow_version,"
             + "capture_idempotency_key,capture_request_hash,capture_transaction_id,captured_at,"
             + "refund_idempotency_key,refund_request_hash,refund_transaction_id,refunded_at,"
@@ -323,7 +323,7 @@ public interface EconomyHostingRentMapper {
     @Update("""
             UPDATE economy_hosting_lease SET paid_from=#{paidFrom},paid_through=#{paidThrough},
                 latest_intent_id=#{intentId},plan_id=#{quote.planId},plan_version=#{quote.planVersion},
-                amount_micro=#{quote.amountMicro},period_seconds=#{quote.periodSeconds},
+                amount_wen=#{quote.amountWen},period_seconds=#{quote.periodSeconds},
                 version=version+1,update_time=#{now}
             WHERE """ + EXACT_SCOPE + """
               AND id=#{lease.id} AND lease_id=#{lease.leaseId} AND status='ACTIVE' AND live_slot=1

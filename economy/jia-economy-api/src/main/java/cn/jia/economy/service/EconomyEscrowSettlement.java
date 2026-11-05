@@ -7,7 +7,7 @@ public record EconomyEscrowSettlement(
         EconomyEscrowType escrowType,
         EconomyAccountKey escrowAccount,
         EconomyAccountKey destinationAccount,
-        long amountMicro,
+        long amountWen,
         long expectedEscrowVersion,
         String reserveTransactionId) {
 }

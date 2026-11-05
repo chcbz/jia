@@ -82,7 +82,7 @@ public final class SkillConversationToolAdapter {
         try {digest=java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes));}
         catch(java.security.NoSuchAlgorithmException impossible){throw new IllegalStateException(impossible);}
         var actual=new SkillPackagePublicationService.Publish(command.productId(),command.productVersionId(),command.name(),command.description(),
-                command.skillKey(),command.skillVersion(),command.priceMicro(),command.deploymentRestriction(),command.approvedPermissionsManifest(),
+                command.skillKey(),command.skillVersion(),command.priceWen(),command.deploymentRestriction(),command.approvedPermissionsManifest(),
                 digest,null,command.expectedProductVersion(),command.coveredUpgradeFromProductVersionId());
         var prepared=publications.prepare(context.scope(),context.grant(),actual,bytes);
         return withConversation(principal,requestId,turnId,c->{

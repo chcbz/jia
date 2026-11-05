@@ -1,7 +1,7 @@
 package cn.jia.economy.common;
 
 public enum EconomyJournalType {
-    ISSUE_SILVER,
+    ISSUE_WEN,
     RESERVE_BOUNTY,
     CAPTURE_COMPUTE,
     PAY_AGENT,

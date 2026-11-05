@@ -1121,7 +1121,7 @@ public class AgentServiceImpl implements AgentService {
         // Validate full original Unicode and SQL MEDIUMTEXT capacity before lossy TaskPlan work.
         AgentTaskRequirementSnapshotServiceImpl.validateOriginalInput(
                 request.getTitle(), request.getDescription());
-        require(request.getGrossBountyAmountMicro() == null && request.getSettlementPolicy() == null
+        require(request.getGrossBountyAmountWen() == null && request.getSettlementPolicy() == null
                         && request.getRequiredSkillRequirements() == null,
                 "funded task fields require the funded bounty endpoint");
 
@@ -2912,8 +2912,8 @@ public class AgentServiceImpl implements AgentService {
                             && row.getFundingMode() == null
                             && row.getFundingStatus() == null
                             && row.getEscrowId() == null
-                            && row.getGrossBountyAmountMicro() == null
-                            && row.getRemainingMicro() == null
+                            && row.getGrossBountyAmountWen() == null
+                            && row.getRemainingWen() == null
                             && row.getRequiredSkillRequirements() == null,
                     "Persisted unfunded task search projection is contaminated");
             dto.setRequiredSkillRequirements(List.of());
@@ -2926,11 +2926,11 @@ public class AgentServiceImpl implements AgentService {
                             || "REFUNDED".equals(row.getFundingStatus())
                             || "SETTLED".equals(row.getFundingStatus()))
                         && !StringUtil.isBlank(row.getEscrowId())
-                        && row.getGrossBountyAmountMicro() != null
-                        && row.getGrossBountyAmountMicro() > 0
-                        && row.getRemainingMicro() != null
-                        && row.getRemainingMicro() >= 0
-                        && row.getRemainingMicro() <= row.getGrossBountyAmountMicro(),
+                        && row.getGrossBountyAmountWen() != null
+                        && row.getGrossBountyAmountWen() > 0
+                        && row.getRemainingWen() != null
+                        && row.getRemainingWen() >= 0
+                        && row.getRemainingWen() <= row.getGrossBountyAmountWen(),
                 "Persisted funded task search projection is corrupt");
         String requirementsJson = row.getRequiredSkillRequirements();
         List<AgentSkillRequirementDTO> requirements = JsonUtil.jsonToList(
@@ -2942,9 +2942,9 @@ public class AgentServiceImpl implements AgentService {
         funding.setMode(row.getFundingMode());
         funding.setStatus(row.getFundingStatus());
         funding.setEscrowId(row.getEscrowId());
-        funding.setGrossBountyAmountMicro(
-                Long.toString(row.getGrossBountyAmountMicro()));
-        funding.setRemainingMicro(Long.toString(row.getRemainingMicro()));
+        funding.setGrossBountyAmountWen(
+                Long.toString(row.getGrossBountyAmountWen()));
+        funding.setRemainingWen(Long.toString(row.getRemainingWen()));
         dto.setFunding(funding);
         dto.setRequiredSkillRequirements(List.copyOf(requirements));
     }

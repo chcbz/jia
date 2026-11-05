@@ -311,7 +311,6 @@ class Mmd29ceUpgradeWiringMySqlTest {
         properties.put("agent.rabbit-consume.enabled", "false");
         properties.put("agent.rabbit-dispatch.enabled", "false");
         properties.put("economy.preview.enabled", "false");
-        properties.put("economy.onboarding-grant.enabled", "false");
 
         properties.put("agent.personal-workspace-storage.enabled", "true");
         properties.put("agent.personal-workspace-storage.root-directory", fixture.workspace().toString());

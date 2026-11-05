@@ -117,18 +117,18 @@ public interface SkillCatalogMapper {
 
     @Insert("""
             INSERT INTO agent_skill_product_version(
-                product_version_id,product_id,version_sequence,skill_key,skill_version,price_micro,
+                product_version_id,product_id,version_sequence,skill_key,skill_version,price_wen,
                 package_sha256,package_size,approved_permissions_manifest,approved_permissions_sha256,
                 deployment_restriction,review_status,tenant_id,client_id,create_time)
             VALUES(
-                #{productVersionId},#{productId},#{versionSequence},#{skillKey},#{skillVersion},#{priceMicro},
+                #{productVersionId},#{productId},#{versionSequence},#{skillKey},#{skillVersion},#{priceWen},
                 #{packageSha256},#{packageSize},#{approvedPermissionsManifest},#{approvedPermissionsSha256},
                 #{deploymentRestriction},#{reviewStatus},#{tenantId},#{clientId},#{createTime})
             """)
     int insertProductVersion(SkillProductVersionEntity version);
 
     @Select("""
-            SELECT id,product_version_id,product_id,version_sequence,skill_key,skill_version,price_micro,
+            SELECT id,product_version_id,product_id,version_sequence,skill_key,skill_version,price_wen,
                    package_sha256,package_size,approved_permissions_manifest,approved_permissions_sha256,
                    deployment_restriction,review_status,tenant_id,client_id,create_time
             FROM agent_skill_product_version
@@ -143,7 +143,7 @@ public interface SkillCatalogMapper {
             @Param("productVersionId") String productVersionId);
 
     @Select("""
-            SELECT id,product_version_id,product_id,version_sequence,skill_key,skill_version,price_micro,
+            SELECT id,product_version_id,product_id,version_sequence,skill_key,skill_version,price_wen,
                    package_sha256,package_size,approved_permissions_manifest,approved_permissions_sha256,
                    deployment_restriction,review_status,tenant_id,client_id,create_time
             FROM agent_skill_product_version
@@ -159,7 +159,7 @@ public interface SkillCatalogMapper {
 
     @Select("""
             SELECT v.id,v.product_version_id,v.product_id,v.version_sequence,v.skill_key,v.skill_version,
-                   v.price_micro,v.package_sha256,v.package_size,v.approved_permissions_manifest,
+                   v.price_wen,v.package_sha256,v.package_size,v.approved_permissions_manifest,
                    v.approved_permissions_sha256,v.deployment_restriction,v.review_status,
                    v.tenant_id,v.client_id,v.create_time
             FROM agent_skill_product_version v

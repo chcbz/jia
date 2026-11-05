@@ -19,8 +19,8 @@ public class AgentTaskSearchRow extends AgentTaskMetaEntity {
     private String fundingMode;
     private String fundingStatus;
     private String escrowId;
-    private Long grossBountyAmountMicro;
-    private Long remainingMicro;
+    private Long grossBountyAmountWen;
+    private Long remainingWen;
     private String requiredSkillRequirements;
     private Integer fundingProjectionValid;
 }

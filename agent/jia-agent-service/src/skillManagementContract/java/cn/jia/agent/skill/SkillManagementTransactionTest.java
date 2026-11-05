@@ -127,13 +127,13 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
             market.insertProduct(new SkillProductEntity().setProductId(p.productId()).setSellerType("SYSTEM").setSellerId("SKILL_STORE").setName(p.name()).setDescription(p.description())
                 .setStatus("DRAFT").setVersion(1L).setTenantId("0").setClientId(ACTOR.clientId()).setCreateTime(1L).setUpdateTime(1L));
             market.insertProductVersion(new SkillProductVersionEntity().setProductVersionId(p.productVersionId()).setProductId(p.productId()).setVersionSequence(1L)
-                .setSkillKey(p.skillKey()).setSkillVersion(p.skillVersion()).setPriceMicro(p.priceMicro()).setPackageSha256(p.packageSha256()).setPackageSize(p.packageSize())
+                .setSkillKey(p.skillKey()).setSkillVersion(p.skillVersion()).setPriceWen(p.priceWen()).setPackageSha256(p.packageSha256()).setPackageSize(p.packageSize())
                 .setApprovedPermissionsManifest(p.approvedPermissionsManifest()).setApprovedPermissionsSha256(p.approvedPermissionsSha256()).setDeploymentRestriction(p.deploymentRestriction())
                 .setReviewStatus("APPROVED").setTenantId("0").setClientId(ACTOR.clientId()).setCreateTime(1L));
             market.publishProductVersion("0",ACTOR.clientId(),p.productId(),p.productVersionId(),1,2);
         }
         ledger.insertAccountIfAbsent(new EconomyAccountEntity().setAccountId("wallet").setOwnerType("USER").setOwnerId(ACTOR.actorId()).setPurpose("AVAILABLE")
-            .setCurrency("SILVER").setBalanceMicro(100000000L).setAllowNegative(0).setStatus("ACTIVE").setVersion(0L).setTenantId("0").setClientId(ACTOR.clientId()).setCreateTime(1L).setUpdateTime(1L));
+            .setCurrency("WEN").setBalanceWen(100000000L).setAllowNegative(0).setStatus("ACTIVE").setVersion(0L).setTenantId("0").setClientId(ACTOR.clientId()).setCreateTime(1L).setUpdateTime(1L));
     }
     @AfterEach void cleanup() {if(admin!=null&&database!=null&&database.matches("cyf_sm_[a-f0-9]{32}"))admin.execute("DROP DATABASE `"+database+"`");}
     /** Replace only this test's trusted channel stub with actual persistent proof validation.
@@ -239,7 +239,7 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         when(capabilities.lookup(any(),any())).thenReturn(new SkillCapabilityLookup.View(SkillCapabilityLookup.State.AVAILABLE,"session-1",fence,new SkillCapabilityLookup.Catalog("1",List.of(fact))));
         service.capabilitiesChanged(proof());
     }
-    long wallet(){return jdbc.queryForObject("SELECT balance_micro FROM economy_account WHERE account_id='wallet'",Long.class);}
+    long wallet(){return jdbc.queryForObject("SELECT balance_wen FROM economy_account WHERE account_id='wallet'",Long.class);}
     int count(String table){return jdbc.queryForObject("SELECT COUNT(*) FROM "+table,Integer.class);}
 
     protected void publishExecutable(String version,long sequence) throws Exception {
@@ -258,7 +258,7 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         if(sequence==1)market.insertProduct(new SkillProductEntity().setProductId("sp_pdf").setSellerType("SYSTEM").setSellerId("SKILL_STORE").setName("PDF").setDescription("synthetic fixture")
                 .setStatus("DRAFT").setVersion(1L).setTenantId("0").setClientId(ACTOR.clientId()).setCreateTime(1L).setUpdateTime(1L));
         market.insertProductVersion(new SkillProductVersionEntity().setProductVersionId("spv_pdf_"+sequence).setProductId("sp_pdf").setVersionSequence(sequence)
-            .setSkillKey("pdf-export").setSkillVersion(version).setPriceMicro(5_000_000L).setPackageSha256(SkillPackageStore.sha256(bytes)).setPackageSize((long)bytes.length)
+            .setSkillKey("pdf-export").setSkillVersion(version).setPriceWen(5_000_000L).setPackageSha256(SkillPackageStore.sha256(bytes)).setPackageSize((long)bytes.length)
             .setApprovedPermissionsManifest("[]").setApprovedPermissionsSha256(SkillPackageStore.sha256("[]".getBytes(java.nio.charset.StandardCharsets.UTF_8)))
             .setDeploymentRestriction("NONE").setReviewStatus("APPROVED").setTenantId("0").setClientId(ACTOR.clientId()).setCreateTime(1L));
         assertEquals(1,market.publishProductVersion("0",ACTOR.clientId(),"sp_pdf","spv_pdf_"+sequence,sequence,System.currentTimeMillis()));
@@ -275,7 +275,7 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         if(sequence==1)market.insertProduct(new SkillProductEntity().setProductId("sp_pdf").setSellerType("SYSTEM").setSellerId("SKILL_STORE").setName("PDF").setDescription("instruction fixture")
                 .setStatus("DRAFT").setVersion(1L).setTenantId("0").setClientId(ACTOR.clientId()).setCreateTime(1L).setUpdateTime(1L));
         market.insertProductVersion(new SkillProductVersionEntity().setProductVersionId("spv_pdf_"+sequence).setProductId("sp_pdf").setVersionSequence(sequence)
-                .setSkillKey("pdf-export").setSkillVersion(version).setPriceMicro(5_000_000L).setPackageSha256(SkillPackageStore.sha256(bytes)).setPackageSize((long)bytes.length)
+                .setSkillKey("pdf-export").setSkillVersion(version).setPriceWen(5_000_000L).setPackageSha256(SkillPackageStore.sha256(bytes)).setPackageSize((long)bytes.length)
                 .setApprovedPermissionsManifest("[]").setApprovedPermissionsSha256(SkillPackageStore.sha256("[]".getBytes(java.nio.charset.StandardCharsets.UTF_8)))
                 .setDeploymentRestriction("NONE").setReviewStatus("APPROVED").setTenantId("0").setClientId(ACTOR.clientId()).setCreateTime(1L));
         assertEquals(1,market.publishProductVersion("0",ACTOR.clientId(),"sp_pdf","spv_pdf_"+sequence,sequence,System.currentTimeMillis()));

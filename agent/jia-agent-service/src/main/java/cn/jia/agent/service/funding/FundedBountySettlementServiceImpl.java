@@ -16,7 +16,7 @@ import cn.jia.agent.service.AgentTaskMutationTransaction;
 import cn.jia.core.util.JsonUtil;
 import cn.jia.economy.bounty.*;
 import cn.jia.economy.common.EconomyPrincipalType;
-import cn.jia.economy.common.MicroSilver;
+import cn.jia.economy.common.WenAmount;
 import cn.jia.economy.exception.EconomyPostingException;
 import cn.jia.economy.service.EconomyPrincipal;
 import cn.jia.economy.service.EconomyScope;
@@ -63,9 +63,9 @@ public final class FundedBountySettlementServiceImpl implements FundedBountySett
         byte[] keyBytes = canonicalKey(key);
         if (request == null) throw bad("Completion body is required");
         long expected = number(request.expectedTaskVersion());
-        long actual = number(request.actualComputeMicro());
+        long actual = number(request.actualComputeWen());
         if (expected == Long.MAX_VALUE) throw bad("Task version has no successor");
-        byte[] hash = FundedBountyRequestDigest.complete(taskId, request.expectedTaskVersion(), request.actualComputeMicro());
+        byte[] hash = FundedBountyRequestDigest.complete(taskId, request.expectedTaskVersion(), request.actualComputeWen());
         return locked(actor, taskId, root -> completeLocked(actor, key, keyBytes, hash, expected, actual, root));
     }
 
@@ -84,8 +84,8 @@ public final class FundedBountySettlementServiceImpl implements FundedBountySett
         if (!"FUNDS_HELD".equals(held.getFundingStatus()) || held.getVersion() == null || held.getVersion() < 1
                 || held.getVersion() == Long.MAX_VALUE || held.getEscrowVersion() == null
                 || held.getEscrowVersion() < 1 || held.getEscrowVersion() > Long.MAX_VALUE - 3
-                || held.getGrossBountyAmountMicro() == null || held.getGrossBountyAmountMicro() <= 0
-                || !Objects.equals(held.getRemainingMicro(), held.getGrossBountyAmountMicro())
+                || held.getGrossBountyAmountWen() == null || held.getGrossBountyAmountWen() <= 0
+                || !Objects.equals(held.getRemainingWen(), held.getGrossBountyAmountWen())
                 || !(AgentConstants.TASK_STATUS_ASSIGNED.equals(root.getRewardStatus())
                     || AgentConstants.TASK_STATUS_RUNNING.equals(root.getRewardStatus()))
                 || root.getCompletedAt() != null || root.getAssignedAt() == null
@@ -99,14 +99,14 @@ public final class FundedBountySettlementServiceImpl implements FundedBountySett
         AgentTaskQuoteEntity quote = quotes.selectQuoteForUpdate(
                 actor.tenantId(), actor.clientId(), root.getTaskId(), claim.getQuoteId());
         requireAccepted(actor, root, held, claim, quote);
-        long gross = held.getGrossBountyAmountMicro();
-        long fee = quote.getPlatformFeeMicro();
+        long gross = held.getGrossBountyAmountWen();
+        long fee = quote.getPlatformFeeWen();
         // Subtraction only after ordering checks: never overflow and never round/floor a negative payout.
-        if (actual > quote.getWorstComputeMicro() || actual > gross || fee > gross - actual) {
+        if (actual > quote.getWorstComputeWen() || actual > gross || fee > gross - actual) {
             throw error(HttpStatus.CONFLICT, "ACTUAL_COMPUTE_EXCEEDS_QUOTE", "Actual compute exceeds accepted budget");
         }
         long payout = gross - actual - fee;
-        if (payout < quote.getMinimumAcceptedPayoutMicro()) throw conflict("Accepted minimum payout is not covered");
+        if (payout < quote.getMinimumAcceptedPayoutWen()) throw conflict("Accepted minimum payout is not covered");
         FundedBountyCaptureReceipt captured = capture.capture(new FundedBountyCaptureCommand(
                 new EconomyScope(actor.tenantId(), actor.clientId()), new EconomyPrincipal(EconomyPrincipalType.USER, actor.userId()),
                 key, hash, root.getTaskId(), claim.getAgentId(), gross, actual, fee, payout,
@@ -121,8 +121,8 @@ public final class FundedBountySettlementServiceImpl implements FundedBountySett
         result.setPrincipalType("USER"); result.setPrincipalId(actor.userId()); result.setIdempotencyKey(keyBytes);
         result.setRequestHash(hash); result.setTaskId(root.getTaskId()); result.setQuoteId(quote.getQuoteId());
         result.setAgentId(claim.getAgentId()); result.setEscrowId(held.getEscrowId()); result.setStatus("SETTLED");
-        result.setGrossMicro(gross); result.setActualComputeMicro(actual); result.setPlatformFeeMicro(fee);
-        result.setAgentPayoutMicro(payout); result.setRefundedMicro(0L); result.setTaskVersion(expected + 1);
+        result.setGrossWen(gross); result.setActualComputeWen(actual); result.setPlatformFeeWen(fee);
+        result.setAgentPayoutWen(payout); result.setRefundedWen(0L); result.setTaskVersion(expected + 1);
         result.setFundingVersion(held.getVersion() + 1); result.setEscrowVersion(captured.escrowVersion());
         result.setSettledAt(now); result.setTransactionIds(JsonUtil.toJson(captured.transactionIds()));
         // Unique actor/key across all tasks plus unique task: collisions roll back EVERY ledger/task write.
@@ -159,22 +159,22 @@ public final class FundedBountySettlementServiceImpl implements FundedBountySett
                     if (settled == null || !actor.userId().equals(settled.getPrincipalId())
                             || !Objects.equals(row.getVersion(), settled.getFundingVersion())
                             || !Objects.equals(row.getEscrowVersion(), settled.getEscrowVersion())
-                            || !Objects.equals(row.getGrossBountyAmountMicro(), settled.getGrossMicro())
+                            || !Objects.equals(row.getGrossBountyAmountWen(), settled.getGrossWen())
                             || !Objects.equals(row.getEscrowId(), settled.getEscrowId())
-                            || !Long.valueOf(0).equals(row.getRemainingMicro())) throw unavailable("Settlement audit mismatch");
+                            || !Long.valueOf(0).equals(row.getRemainingWen())) throw unavailable("Settlement audit mismatch");
                     receipt = receipt(settled);
                 }
                 case "REFUNDED" -> {
                     if (settled != null || row.getRefundTransactionId() == null) throw unavailable("Refund audit mismatch");
                     cancel = new AgentTaskFundingCancelReceiptDTO(taskId, "REFUNDED", row.getRefundTransactionId(),
-                            decimal(row.getCancelRefundedMicro()), decimal(row.getRemainingMicro()),
+                            decimal(row.getCancelRefundedWen()), decimal(row.getRemainingWen()),
                             decimal(row.getCancelTaskVersion()), decimal(row.getVersion()), decimal(row.getRefundedAt()));
                 }
                 case "FUNDS_HELD" -> { if (settled != null) throw unavailable("Held audit mismatch"); }
                 default -> throw conflict("Funding is not readable in its current state");
             }
             return new AgentTaskSettlementDTO(taskId, row.getFundingStatus(), row.getSettlementPolicy(), row.getEscrowId(),
-                    decimal(row.getGrossBountyAmountMicro()), decimal(row.getRemainingMicro()), decimal(root.getTaskVersion()),
+                    decimal(row.getGrossBountyAmountWen()), decimal(row.getRemainingWen()), decimal(root.getTaskVersion()),
                     decimal(row.getVersion()), receipt, cancel);
         });
     }
@@ -186,7 +186,7 @@ public final class FundedBountySettlementServiceImpl implements FundedBountySett
                 || !actor.userId().equals(quote.getPrincipalId()) || !root.getAssignedAgentId().equals(claim.getAgentId())
                 || !claim.getAgentId().equals(quote.getAgentId()) || !root.getTaskId().equals(quote.getTaskId())
                 || !actor.tenantId().equals(quote.getTenantId()) || !actor.clientId().equals(quote.getClientId())
-                || !Objects.equals(quote.getGrossAllocationMicro(), funding.getGrossBountyAmountMicro())
+                || !Objects.equals(quote.getGrossAllocationWen(), funding.getGrossBountyAmountWen())
                 || quote.getTaskVersion() == null || quote.getTaskVersion() < 0 || quote.getTaskVersion() == Long.MAX_VALUE
                 || !Long.valueOf(quote.getTaskVersion() + 1).equals(claim.getReceiptTaskVersion())
                 || claim.getReceiptTaskVersion() > root.getTaskVersion()
@@ -194,14 +194,14 @@ public final class FundedBountySettlementServiceImpl implements FundedBountySett
                 || !claim.getClaimedAt().equals(quote.getClaimedAt())
                 || !claim.getClaimedAt().equals(root.getAssignedAt())
                 || !Boolean.TRUE.equals(quote.getBudgetCovered()) || !Boolean.TRUE.equals(quote.getVerifiedSkillMatch())
-                || quote.getWorstComputeMicro() == null || quote.getWorstComputeMicro() < 0
-                || quote.getPlatformFeeMicro() == null || quote.getPlatformFeeMicro() < 0
-                || quote.getMinimumAcceptedPayoutMicro() == null || quote.getMinimumAcceptedPayoutMicro() < 0) {
+                || quote.getWorstComputeWen() == null || quote.getWorstComputeWen() < 0
+                || quote.getPlatformFeeWen() == null || quote.getPlatformFeeWen() < 0
+                || quote.getMinimumAcceptedPayoutWen() == null || quote.getMinimumAcceptedPayoutWen() < 0) {
             throw conflict("Accepted quote/claim snapshot is incompatible");
         }
-        long gross = funding.getGrossBountyAmountMicro();
-        if (quote.getWorstComputeMicro() > gross || quote.getPlatformFeeMicro() > gross - quote.getWorstComputeMicro()
-                || quote.getMinimumAcceptedPayoutMicro() > gross - quote.getWorstComputeMicro() - quote.getPlatformFeeMicro()) {
+        long gross = funding.getGrossBountyAmountWen();
+        if (quote.getWorstComputeWen() > gross || quote.getPlatformFeeWen() > gross - quote.getWorstComputeWen()
+                || quote.getMinimumAcceptedPayoutWen() > gross - quote.getWorstComputeWen() - quote.getPlatformFeeWen()) {
             throw conflict("Accepted worst budget is not covered");
         }
     }
@@ -241,12 +241,12 @@ public final class FundedBountySettlementServiceImpl implements FundedBountySett
     private static AgentTaskSettlementReceiptDTO receipt(AgentTaskSettlementEntity row) {
         List<String> ids = JsonUtil.jsonToList(row.getTransactionIds(), String.class);
         if (ids == null || ids.isEmpty() || ids.size() > 3 || ids.stream().anyMatch(Objects::isNull)
-                || !"SETTLED".equals(row.getStatus()) || !Long.valueOf(0).equals(row.getRefundedMicro())) {
+                || !"SETTLED".equals(row.getStatus()) || !Long.valueOf(0).equals(row.getRefundedWen())) {
             throw unavailable("Settlement receipt is corrupt");
         }
         return new AgentTaskSettlementReceiptDTO(row.getTaskId(), "SETTLED", row.getQuoteId(), row.getAgentId(),
-                row.getEscrowId(), decimal(row.getGrossMicro()), decimal(row.getActualComputeMicro()),
-                decimal(row.getPlatformFeeMicro()), decimal(row.getAgentPayoutMicro()), "0", "0",
+                row.getEscrowId(), decimal(row.getGrossWen()), decimal(row.getActualComputeWen()),
+                decimal(row.getPlatformFeeWen()), decimal(row.getAgentPayoutWen()), "0", "0",
                 decimal(row.getTaskVersion()), decimal(row.getFundingVersion()), decimal(row.getEscrowVersion()),
                 decimal(row.getSettledAt()), ids);
     }
@@ -268,7 +268,7 @@ public final class FundedBountySettlementServiceImpl implements FundedBountySett
         }
     }
     private static long number(String value) {
-        try { return MicroSilver.parseUnsigned(value); }
+        try { return WenAmount.parseUnsigned(value); }
         catch (EconomyPostingException failure) { throw bad("Canonical unsigned BIGINT string required"); }
     }
     private static String decimal(Long value) {

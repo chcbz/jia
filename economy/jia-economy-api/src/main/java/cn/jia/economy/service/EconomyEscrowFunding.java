@@ -6,6 +6,6 @@ public record EconomyEscrowFunding(
         EconomyEscrowType escrowType,
         EconomyAccountKey payerAccount,
         EconomyAccountKey escrowAccount,
-        long amountMicro,
+        long amountWen,
         Long expectedEscrowVersion) {
 }

@@ -45,7 +45,7 @@ class HostingRentHttpTest {
         mvc.perform(post(QUOTES).principal(jwt()).header("Idempotency-Key", KEY)
                         .contentType(MediaType.APPLICATION_JSON).content("{\"purpose\":\"INITIAL\",\"agentId\":null}"))
                 .andExpect(status().isOk()).andExpect(header().string("Cache-Control", "private, no-store"))
-                .andExpect(jsonPath("$.data.amountMicro").value("1000000000"))
+                .andExpect(jsonPath("$.data.amountWen").value("1000000000"))
                 .andExpect(jsonPath("$.data.periodSeconds").value("2592000"))
                 .andExpect(jsonPath("$.data.planVersion").value("1"))
                 .andExpect(jsonPath("$.data.expiresAt").value("1800000300000"));
@@ -65,14 +65,14 @@ class HostingRentHttpTest {
     @Test
     void freeReprovisionHasFrozenZeroPriceReceiptNotPaidOrRenewalFields() throws Exception {
         var free = new HostingRentApplicationService.ReprovisionView("hrr-test", AGENT, "hrl-test", "REPROVISION", "ACCEPTED",
-                "SILVER", "0", "5", "1802592000000", "1800000000000");
+                "WEN", "0", "5", "1802592000000", "1800000000000");
         when(application.bind(eq(ACTOR), eq("wuyong"), eq(KEY), anyMap())).thenReturn(free);
         mvc.perform(post(BIND).principal(jwt()).header("Idempotency-Key", KEY).contentType(MediaType.APPLICATION_JSON)
                         .content("{\"mode\":\"server\",\"hostingAction\":\"REPROVISION\",\"agentId\":\"" + AGENT
                                 + "\",\"leaseId\":\"hrl-test\",\"expectedLeaseVersion\":\"4\"}"))
                 .andExpect(status().isAccepted()).andExpect(header().string("Cache-Control", "private, no-store"))
                 .andExpect(jsonPath("$.data.requestId").value("hrr-test"))
-                .andExpect(jsonPath("$.data.amountMicro").value("0"))
+                .andExpect(jsonPath("$.data.amountWen").value("0"))
                 .andExpect(jsonPath("$.data.leaseVersion").value("5"))
                 .andExpect(jsonPath("$.data.paidThrough").value("1802592000000"))
                 .andExpect(jsonPath("$.data.transactionId").doesNotExist())
@@ -92,7 +92,7 @@ class HostingRentHttpTest {
         when(application.renew(eq(ACTOR), eq("hrl-test"), eq(KEY), anyMap())).thenReturn(receipt());
         mvc.perform(post("/agent/hosting-leases/hrl-test/renewals").principal(jwt()).header("Idempotency-Key", KEY)
                         .contentType(MediaType.APPLICATION_JSON).content("{\"agentId\":\"" + AGENT + "\",\"quoteId\":\"hrq-test\","
-                                + "\"expectedLeaseVersion\":\"2\",\"expectedPlanVersion\":\"1\",\"expectedAmountMicro\":\"1000000000\",\"expectedPeriodSeconds\":\"2592000\"}"))
+                                + "\"expectedLeaseVersion\":\"2\",\"expectedPlanVersion\":\"1\",\"expectedAmountWen\":\"1000000000\",\"expectedPeriodSeconds\":\"2592000\"}"))
                 .andExpect(status().isOk());
         verify(application).renewalQuote(ACTOR, "hrl-test", KEY, Map.of("agentId", AGENT, "expectedLeaseVersion", "2"));
         verify(application, never()).bind(any(), anyString(), anyString(), anyMap());
@@ -156,15 +156,15 @@ class HostingRentHttpTest {
 
     private HostingRentApplicationService.QuoteView quote() {
         return new HostingRentApplicationService.QuoteView("hrq-test", "INITIAL", "wuyong", AGENT, null, null,
-                "agent-hosting-preview", "1", "SILVER", "1000000000", "2592000", "1800000300000");
+                "agent-hosting-preview", "1", "WEN", "1000000000", "2592000", "1800000300000");
     }
     private HostingRentApplicationService.MutationView receipt() {
         return new HostingRentApplicationService.MutationView(AGENT, "hri-test", "hrl-test", "hrq-test", "etx-test",
-                "FUNDS_RESERVED", "SILVER", "1000000000", "2592000", "1800000000000");
+                "FUNDS_RESERVED", "WEN", "1000000000", "2592000", "1800000000000");
     }
     private String confirmation() {
         return "{\"mode\":\"server\",\"hostingAction\":\"INITIAL\",\"agentId\":\"" + AGENT
-                + "\",\"quoteId\":\"hrq-test\",\"expectedPlanVersion\":\"1\",\"expectedAmountMicro\":\"1000000000\",\"expectedPeriodSeconds\":\"2592000\"}";
+                + "\",\"quoteId\":\"hrq-test\",\"expectedPlanVersion\":\"1\",\"expectedAmountWen\":\"1000000000\",\"expectedPeriodSeconds\":\"2592000\"}";
     }
     private JwtAuthenticationToken jwt() {
         return new JwtAuthenticationToken(Jwt.withTokenValue("fixture").claim("tenant_id", "0").header("alg", "none").subject("Login-A")

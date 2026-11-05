@@ -344,7 +344,7 @@ public final class EconomySchemaInitializer implements InitializingBean {
         tables.put("economy_account", table("economy_account", List.of(
                 id(), varchar("account_id", 100, false, null), varchar("owner_type", 20, false, null),
                 varchar("owner_id", 100, false, null), varchar("purpose", 32, false, null),
-                varchar("currency", 16, false, null), bigint("balance_micro", false, "0"),
+                varchar("currency", 16, false, null), bigint("balance_wen", false, "0"),
                 tinyint("allow_negative", false, "0"), varchar("status", 16, false, "ACTIVE"),
                 bigint("version", false, "0"), varchar("tenant_id", 50, false, null),
                 varchar("client_id", 50, false, null), bigint("create_time", false, null),
@@ -358,8 +358,8 @@ public final class EconomySchemaInitializer implements InitializingBean {
                 varchar("principal_id", 100, false, null), varbinary("idempotency_key", 36), binary("request_hash", 32),
                 varchar("business_type", 32, false, null), varchar("business_id", 100, false, null),
                 varchar("currency", 16, false, null), varchar("status", 16, false, "POSTING"),
-                integer("entry_count", false, "0"), bigint("debit_total_micro", false, "0"),
-                bigint("credit_total_micro", false, "0"), bigint("posted_at", true, null),
+                integer("entry_count", false, "0"), bigint("debit_total_wen", false, "0"),
+                bigint("credit_total_wen", false, "0"), bigint("posted_at", true, null),
                 varchar("tenant_id", 50, false, null), varchar("client_id", 50, false, null),
                 bigint("create_time", false, null), bigint("update_time", false, null)), List.of(
                 index("PRIMARY", true, "id"),
@@ -369,7 +369,7 @@ public final class EconomySchemaInitializer implements InitializingBean {
         tables.put("economy_entry", table("economy_entry", List.of(
                 id(), varchar("entry_id", 140, false, null), varchar("transaction_id", 100, false, null),
                 varchar("account_id", 100, false, null), integer("entry_sequence", false, null),
-                bigint("signed_amount_micro", false, null), bigint("balance_after_micro", false, null),
+                bigint("signed_amount_wen", false, null), bigint("balance_after_wen", false, null),
                 varchar("currency", 16, false, null), varchar("status", 16, false, "POSTED"),
                 bigint("posted_at", false, null), varchar("tenant_id", 50, false, null),
                 varchar("client_id", 50, false, null), bigint("create_time", false, null)), List.of(
@@ -382,8 +382,8 @@ public final class EconomySchemaInitializer implements InitializingBean {
                 id(), varchar("escrow_id", 100, false, null), varchar("business_type", 32, false, null),
                 varchar("business_id", 100, false, null), varchar("payer_account_id", 100, false, null),
                 varchar("escrow_account_id", 100, false, null), varchar("currency", 16, false, null),
-                bigint("gross_micro", false, null), bigint("captured_micro", false, "0"),
-                bigint("refunded_micro", false, "0"), varchar("status", 24, false, "ACTIVE"),
+                bigint("gross_wen", false, null), bigint("captured_wen", false, "0"),
+                bigint("refunded_wen", false, "0"), varchar("status", 24, false, "ACTIVE"),
                 bigint("version", false, "1"), varchar("tenant_id", 50, false, null),
                 varchar("client_id", 50, false, null), bigint("create_time", false, null),
                 bigint("update_time", false, null)), List.of(
@@ -395,7 +395,7 @@ public final class EconomySchemaInitializer implements InitializingBean {
         tables.put("economy_escrow_funding_lot", table("economy_escrow_funding_lot", List.of(
                 id(), varchar("escrow_id", 100, false, null), integer("funding_sequence", false, null),
                 varchar("reserve_transaction_id", 100, false, null), varchar("payer_account_id", 100, false, null),
-                bigint("amount_micro", false, null), bigint("escrow_gross_after_micro", false, null),
+                bigint("amount_wen", false, null), bigint("escrow_gross_after_wen", false, null),
                 bigint("escrow_version_after", false, null), varchar("currency", 16, false, null),
                 varchar("tenant_id", 50, false, null), varchar("client_id", 50, false, null),
                 bigint("created_at", false, null)), List.of(

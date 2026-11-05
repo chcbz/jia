@@ -61,7 +61,7 @@ class FundedBountyRequestDigestTest {
         request.setDescription("description");
         request.setRequiredAbilities(List.of("test"));
         request.setReward(1);
-        request.setGrossBountyAmountMicro(amount);
+        request.setGrossBountyAmountWen(amount);
         request.setSettlementPolicy("GROSS_INCLUSIVE");
         AgentSkillRequirementDTO requirement = new AgentSkillRequirementDTO();
         requirement.setSkillKey("repo-test");

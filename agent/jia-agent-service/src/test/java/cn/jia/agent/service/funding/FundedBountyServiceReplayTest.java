@@ -45,7 +45,7 @@ class FundedBountyServiceReplayTest {
                 new FundedBountyActor("tenant", "client", "tenant", "user-1"), KEY, hash, "task-1", 0L);
 
         assertEquals("1", receipt.taskVersion());
-        assertEquals("37", receipt.refundedMicro());
+        assertEquals("37", receipt.refundedWen());
         assertEquals("2", receipt.fundingVersion());
         verify(fixture.ledger, never()).refund(any());
     }
@@ -111,15 +111,15 @@ class FundedBountyServiceReplayTest {
         funding.setPayerPrincipalType("USER");
         funding.setPayerPrincipalId("user-1");
         funding.setSettlementPolicy("GROSS_INCLUSIVE");
-        funding.setGrossBountyAmountMicro(37L);
-        funding.setRemainingMicro(0L);
+        funding.setGrossBountyAmountWen(37L);
+        funding.setRemainingWen(0L);
         funding.setEscrowId("esc-1");
         funding.setEscrowVersion(2L);
         funding.setReserveTransactionId("etx-reserve");
         funding.setCancelIdempotencyKey(KEY.getBytes(StandardCharsets.US_ASCII));
         funding.setCancelRequestHash(hash);
         funding.setRefundTransactionId("etx-refund");
-        funding.setCancelRefundedMicro(37L);
+        funding.setCancelRefundedWen(37L);
         funding.setCancelTaskVersion(1L);
         funding.setRefundedAt(100L);
         funding.setVersion(2L);
