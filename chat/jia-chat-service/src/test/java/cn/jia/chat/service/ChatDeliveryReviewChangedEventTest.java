@@ -22,7 +22,7 @@ class ChatDeliveryReviewChangedEventTest {
                 .setFinalDigest(row.finalDigest()).setState("FINAL_PERSISTED").setStateVersion(3L);
         when(dao.lockTurn(scope.tenantId(),scope.ownerJiacn(),scope.clientId(),row.turnId())).thenReturn(turn);
         when(dao.insertEvent(any())).thenAnswer(call->{call.<ChatConversationEventEntity>getArgument(0).setEventSequence(42L);return 1;});
-        when(dao.assignEventVersion(42L)).thenReturn(1);
+
         for (String state : java.util.List.of("COMMITTED", "REJECTED")) {
             String child = "COMMITTED".equals(state) ? "child" : null;
             var receipt = new ChatDeliveryReviewContract.Receipt(1, "operation", row.taskId(), "delivery", "REQUEST_CHANGES",
@@ -41,6 +41,6 @@ class ChatDeliveryReviewChangedEventTest {
         assertEquals("FINAL_PERSISTED", turn.getState()); assertEquals(3L, turn.getStateVersion());
         verifyNoInteractions(messages);
         verify(dao,times(2)).lockTurn(scope.tenantId(),scope.ownerJiacn(),scope.clientId(),row.turnId());
-        verify(dao,times(2)).insertEvent(any()); verify(dao,times(2)).assignEventVersion(42L); verifyNoMoreInteractions(dao);
+        verify(dao,times(2)).insertEvent(any()); verifyNoMoreInteractions(dao);
     }
 }

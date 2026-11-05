@@ -312,7 +312,7 @@ class ChatConversationEventsHttpTest {
     }
     private static ChatConversationEventEntity event(long sequence,String type,String payload) {
         return new ChatConversationEventEntity().setEventId("event-"+sequence).setEventSequence(sequence)
-                .setEventVersion(sequence).setConversationId("42").setConversationGeneration(3L)
+                .setConversationId("42").setConversationGeneration(3L)
                 .setEventType(type).setPayloadJson(payload).setOccurredAt(1000L);
     }
     private static JwtAuthenticationToken jwt(String tenant) {

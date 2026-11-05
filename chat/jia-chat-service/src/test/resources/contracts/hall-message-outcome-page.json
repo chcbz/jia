@@ -1,0 +1,105 @@
+{
+  "protocolVersion": 1,
+  "requestId": "hall-message-outcome-page-fixture",
+  "code": "E0",
+  "msg": "",
+  "data": {
+    "items": [
+      {
+        "id": "9",
+        "conversationId": "42",
+        "messageType": "ASSISTANT",
+        "content": "处理中",
+        "createTime": 2,
+        "metadata": "{\"requestId\": \"request\", \"turnId\": \"turn\", \"outcomeId\": \"action-outcome_2e73906e2d5109ae1253d51ecef0a48b82aa1a95\"}"
+      }
+    ],
+    "hasMore": false,
+    "nextCursor": null,
+    "requestPage": {
+      "schemaVersion": 1,
+      "scope": {
+        "conversationId": "42",
+        "conversationGeneration": "1",
+        "taskId": "task"
+      },
+      "after": "0",
+      "through": "1",
+      "nextAfter": null,
+      "hasMore": false,
+      "eventCursor": "2",
+      "entries": [
+        {
+          "ordinal": "1",
+          "request": {
+            "requestId": "request",
+            "requestRevision": "1",
+            "conversationId": "42",
+            "conversationGeneration": "1",
+            "userMessageId": "8",
+            "state": "COMPLETED",
+            "stateVersion": "2",
+            "steps": [],
+            "turns": [
+              {
+                "turnId": "turn",
+                "requestId": "request",
+                "requestRevision": "1",
+                "conversationId": "42",
+                "conversationGeneration": "1",
+                "targetAgentId": "agent",
+                "contextSnapshotId": "snapshot",
+                "dispatchId": "dispatch",
+                "route": "CHAT",
+                "state": "PUBLISHED",
+                "stateVersion": "2",
+                "lastDeltaSeq": "0",
+                "terminalReason": null,
+                "finalMessageId": "9",
+                "createdAt": "1",
+                "updatedAt": "2"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "outcomeSummaries": [
+      {
+        "schemaVersion": 1,
+        "route": "CHAT",
+        "conversationId": "42",
+        "conversationGeneration": "1",
+        "requestId": "request",
+        "requestRevision": "1",
+        "turnId": "turn",
+        "state": "READY",
+        "outcome": {
+          "outcomeContractVersion": 3,
+          "outcomeId": "action-outcome_2e73906e2d5109ae1253d51ecef0a48b82aa1a95",
+          "taskId": "task",
+          "assignmentRevision": "3",
+          "assistantMessageId": "9",
+          "kind": "ANSWER",
+          "deliverable": true,
+          "messageSource": {
+            "messageId": "9",
+            "snapshotId": "snapshot",
+            "turnId": "turn",
+            "finalSha256": "efefeb5d5de44cc6dbdb9fd4ace843d72cd68f1775034e25241d3bc1aa7f796f"
+          },
+          "clarification": null,
+          "action": null,
+          "proposal": null,
+          "deliveryRelation": null,
+          "revision": null,
+          "finalSha256": "efefeb5d5de44cc6dbdb9fd4ace843d72cd68f1775034e25241d3bc1aa7f796f"
+        },
+        "inspection": null,
+        "actionProgress": null,
+        "submissionProgress": null,
+        "reviewProgress": null
+      }
+    ]
+  }
+}

@@ -63,7 +63,9 @@ class ChatConversationMessagePageTest {
     }
     @Test void emptyPageHasNoCursor() {
         when(messages.findOwnedMessagePage("tenant-a", "owner", "client", "100", null, null, 21)).thenReturn(List.of());
-        assertEquals(new ChatConversationService.MessagePage(List.of(), false, null), service.findMessagePage("100", null));
+        var page = service.findMessagePage("100", null);
+        assertTrue(page.messages().isEmpty()); assertFalse(page.hasMore()); assertNull(page.nextBefore());
+        assertEquals(100L, page.conversation().getId());
     }
     @Test void nullableTimestampCursorDoesNotLoseHistoricalRows() {
         var rows = new ArrayList<ChatMessageEntity>();

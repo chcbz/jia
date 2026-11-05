@@ -1219,12 +1219,10 @@ public class ChatDeliberationService {
                 .setClientId(turn.getClientId()).setConversationId(turn.getConversationId())
                 .setConversationGeneration(turn.getConversationGeneration()).setRequestId(turn.getRequestId())
                 .setTurnId(turn.getTurnId()).setDispatchId(turn.getDispatchId()).setEventType(eventType)
-                .setEventVersion(0L).setPayloadJson(CanonicalContextJson.write(wire)).setOccurredAt(now);
-        if (dao.insertEvent(event) != 1 || event.getEventSequence() == null
-                || dao.assignEventVersion(event.getEventSequence()) != 1) {
+                .setPayloadJson(CanonicalContextJson.write(wire)).setOccurredAt(now);
+        if (dao.insertEvent(event) != 1 || event.getEventSequence() == null) {
             throw persistence("Unable to persist conversation event");
         }
-        event.setEventVersion(event.getEventSequence());
         closePreviewAfterCommit(turn);
         return event;
     }

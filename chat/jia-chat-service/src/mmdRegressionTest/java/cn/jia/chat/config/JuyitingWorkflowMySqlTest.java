@@ -677,6 +677,38 @@ class JuyitingWorkflowMySqlTest {
         }
     }
 
+    @Test void messagePageOutcomeQueriesReadCommittedFactsWithExactScopeOnRealMysql() throws Exception {
+        try (var revision = new RevisionHarness()) {
+            for (String sql : resource("db/agent-skill-execution-v1.sql").split(";"))
+                if (!sql.isBlank()) jdbc.execute(sql);
+            // The existing revision harness seeds its execution validator separately. Give this
+            // display test the exact production persisted envelope rather than a validator mock.
+            jdbc.update("UPDATE chat_typed_outcome SET outcome_json=JSON_SET(outcome_json,'$.schemaVersion',5)");
+            var scope = new ChatBountyRequestIndexStore.Scope("0", "owner", "client", "7", 1);
+            var store = new ChatMessageOutcomeStore(jdbc);
+            var rows = store.read(scope, List.of("parent"));
+            assertEquals(1, rows.outcomes().size());
+            assertFalse(rows.outcomes().getFirst().containsKey("text"));
+            assertEquals(1, rows.progress().size());
+            assertEquals("REVIEW_REQUESTED", rows.progress().getFirst().get("event_type"));
+            var reader = new ChatMessageOutcomeReadService(store);
+            var before = reader.read(scope, List.of("parent")).getFirst();
+            assertEquals("READY", before.get("state"));
+            assertEquals("QUEUED", ((Map<?, ?>) before.get("reviewProgress")).get("state"));
+            revision.consume();
+            var after = reader.read(scope, List.of("parent")).getFirst();
+            assertNotNull(((Map<?, ?>) after.get("reviewProgress")).get("childRequestId"));
+            for (var wrong : List.of(
+                    new ChatBountyRequestIndexStore.Scope("other", "owner", "client", "7", 1),
+                    new ChatBountyRequestIndexStore.Scope("0", "Owner", "client", "7", 1),
+                    new ChatBountyRequestIndexStore.Scope("0", "owner", "other", "7", 1),
+                    new ChatBountyRequestIndexStore.Scope("0", "owner", "client", "07", 1),
+                    new ChatBountyRequestIndexStore.Scope("0", "owner", "client", "7", 2)))
+                assertTrue(store.read(wrong, List.of("parent")).outcomes().isEmpty());
+            assertTrue(store.read(scope, List.of("Parent")).outcomes().isEmpty());
+        }
+    }
+
     /** Real consumer, real continuation/admission, real DAOs and domain transaction.
      * Only the already-validated model final and external capability/catalog reads are seeded. */
     private final class RevisionHarness implements AutoCloseable {

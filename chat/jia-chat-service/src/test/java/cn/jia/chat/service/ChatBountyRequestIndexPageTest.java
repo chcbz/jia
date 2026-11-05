@@ -46,6 +46,36 @@ class ChatBountyRequestIndexPageTest {
     private ChatBountyRequestIndexService.Page read() {
         return service.read("0", "owner", "client", "101", new ChatBountyRequestIndexService.Query(null, null, null, "1"));
     }
+    @Test void messageWindowUsesOnlyPersistedPageReferencesAndCurrentRequestInOneSnapshot() {
+        var conversation = conversations.findScopedById("owner", "client", "101");
+        clearInvocations(conversations, store);
+        var message = new cn.jia.chat.entity.ChatMessageEntity().setId(21L)
+                .setMetadata("{\"requestId\":\"r7\"}");
+        var duplicate = new cn.jia.chat.entity.ChatMessageEntity().setId(22L)
+                .setMetadata("{\"requestId\":\"r7\"}");
+        when(store.byRequests(scope, List.of("r7"))).thenReturn(List.of(row));
+        when(store.latest(scope)).thenReturn(List.of(row));
+        when(store.eventCursor(scope)).thenReturn(9007199254740993L);
+        var result = service.messageWindow(new ChatConversationService.MessagePage(
+                List.of(message, duplicate), false, null, conversation), true);
+        assertEquals(1, result.entries().size());
+        assertEquals("r7", result.entries().getFirst().request().requestId());
+        assertEquals("9007199254740993", result.eventCursor());
+        verify(store).byRequests(scope, List.of("r7"));
+        verify(store).latest(scope); verify(store).eventCursor(scope);
+        verify(store).projections(scope, List.of(row));
+        verifyNoMoreInteractions(store); verifyNoInteractions(conversations);
+    }
+    @Test void olderMessageWindowNeverReadsOrAdvancesLiveEventCursor() {
+        var conversation = conversations.findScopedById("owner", "client", "101");
+        var message = new cn.jia.chat.entity.ChatMessageEntity().setId(21L).setMetadata("plain legacy value");
+        when(store.projections(scope, List.of())).thenReturn(new ChatBountyRequestIndexStore.ProjectionRows(List.of(), List.of(), List.of()));
+        var result = service.messageWindow(new ChatConversationService.MessagePage(
+                List.of(message), false, null, conversation), false);
+        assertTrue(result.entries().isEmpty()); assertNull(result.eventCursor());
+        verify(store, never()).latest(any()); verify(store, never()).eventCursor(any());
+        verify(store, never()).byRequests(any(), any());
+    }
     @Test void mapsOneBatchWithoutPerRequestServiceReadsAndKeepsWire() {
         var page = read();
         assertEquals("9007199254740993", page.entries().getFirst().request().userMessageId());

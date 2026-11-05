@@ -24,6 +24,8 @@
       }
     ],
     "hasMore": true,
-    "nextCursor": "1000:9007199254740993"
+    "nextCursor": "1000:9007199254740993",
+    "requestPage": null,
+    "outcomeSummaries": []
   }
 }

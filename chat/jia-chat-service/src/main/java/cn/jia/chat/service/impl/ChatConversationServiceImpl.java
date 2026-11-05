@@ -173,7 +173,7 @@ public class ChatConversationServiceImpl implements ChatConversationService {
         String nextBefore = hasMore
                 ? (messages.getFirst().getCreateTime() == null ? "n" : messages.getFirst().getCreateTime().toString())
                         + ":" + messages.getFirst().getId() : null;
-        return new MessagePage(List.copyOf(messages), hasMore, nextBefore);
+        return new MessagePage(List.copyOf(messages), hasMore, nextBefore, conversation);
     }
 
     private static cn.jia.chat.service.ChatDeliberationException invalidMessageCursor() {

@@ -170,3 +170,25 @@ BountyAcceptancePanel保留父页面deliveryReview的正式currentDelivery/histo
 - Chat展示来源改用页级promotion、selection、workspace查询（有promotion时3次，否则2次），不逐批读取操作回执重算摘要、不逐文件查询workspace。写入验收事务仍调用原sourceItems校验，不把展示projection当写授权。
 - 正文页级投影、议事SSE衔接与前端长列表仍未完成；本节不能标为整个历史优化已完成。
 - 共享fixture两端`delivery-review-pages.json`同步，当前SHA-256为`9afd79b5b93f22252ef696422c35784cf79d0fca2d45ffc980131c416b0e8e80`。Java/真实MySQL/云端验证待执行；本候选未部署。旧Web严格字段检查尚不认识display，最终统一发布须核对Web先行兼容及旧页面刷新，不能直接沿用未核实的API先行顺序。
+
+## 2026-11-06 收口候选：消息页直接携带展示关联（覆盖上文显示补查方案）
+
+**源码候选，尚未经过Flow/安装/线上验收。** `GET /chat/conversation/messages?id=...&cursor=...`仍一次返回最多20条消息。当前响应为：
+
+- `items / hasMore / nextCursor`：原消息页字段；持久消息的正文只在`items.content`携带一次。
+- `requestPage`：本页消息对应的请求/回合/步骤展示投影；最新页额外带当前请求及同一数据库快照的`eventCursor`。普通非悬赏会话为null。旧页不更新活动订阅游标。只追加当前页成果指向的直接子请求，不递归历史请求图。
+- `outcomeSummaries`：消息页上下文中的schemaVersion=1成果摘要数组。字段沿用独立typed-outcome的展示投影，但`outcome`不含`text`；其`assistantMessageId`必须引用同页消息。待完成回合可以没有`outcome`。
+- 无法解析的历史结构化成果返回`{schemaVersion:1,requestId,turnId,unavailableReason:"STORED_OUTCOME_UNAVAILABLE"}`。歧义进度也只影响对应回合；其他摘要及消息正文继续可读，不推断完成状态、不重放任务。
+
+服务端`ChatHallMessagePageService`在一个REPEATABLE_READ只读事务内组装消息页、请求展示与成果摘要。`ChatMessageOutcomeStore`按已授权scope及页内request集合执行两组集合SQL；不调用执行验收reader，不重读完整材料目录/合同，不重新计算原成果摘要。JSON结果去掉旧正文副本后传到Java。身份/任务归属仍由原责任层检查，最终回复写入、事务、幂等不变。
+
+Web`useHallMessagePages`只从同页message还原内部展示对象的text，不发ID集合补查或逐请求typed GET；`useHallTerminalTextHistory`复用同一页。`useHallBountyRequestCatalog.refreshRequests/refreshWindow`已删除，`adoptPage`接收服务端页投影。`useHallTypedDeliberation.refresh/refreshRequests/relatedRequestIds`亦已删除；发送/明确恢复仍保留独立readOne。旧独立读取接口及仍待收口的catalog完整扫描暂未删除，不能据此宣称所有旧消费方法已经收口。
+
+恢复持久消息同时恢复其metadata.turnId，用于把同一回合的旧流式占位替换为最终消息。另一个尚在回复的回合不能被清掉。结构化成果不可用时不进入无限“正在读取答复”状态，显示原文与独立不可用提示。
+
+### 验证与剩余边界
+
+- 前端轻量测试覆盖同页正文还原、无后续网络读取、同请求不同回合、游标/身份切换、原文保留和流式→最终替换。准确数量/源码见根handoff，不是线上耗时。
+- 新Java测试含`ChatMessageOutcomeReadServiceTest`、`ChatHallMessagePageServiceTest`、`ChatMessageOutcomeStoreTest`；现有`JuyitingWorkflowMySqlTest`新增真实MySQL下的成果/修改进度/scope隔离用例，**尚未运行**。
+- 可变高度虚拟列表、远离页面的数据释放/双向重取、旧全量扫描消费者最终删除、真实SQL计划及迁移演练仍未完成；不能把本节当作“全部优化完成”。
+- event_version物理列暂保留为旧协议占位，当前candidate以event_sequence作为wire eventVersion，删除每次INSERT后的重复UPDATE。旧二进制回退需要核实旧列读取/约束并受控处理，不承诺直接回退兼容；不得恢复旧库快照覆盖新业务事实。

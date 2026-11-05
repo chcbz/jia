@@ -57,7 +57,7 @@ class ChatContextReceiptFinalTest {
         when(dao.insertEvent(any())).thenAnswer(call -> {
             ChatConversationEventEntity event = call.getArgument(0); event.setEventSequence(201L); return 1;
         });
-        when(dao.assignEventVersion(201L)).thenReturn(1);
+
         when(dao.insertOutbox(any())).thenReturn(1);
     }
     ChatDeliberationService.FinalResult complete(Object raw) {

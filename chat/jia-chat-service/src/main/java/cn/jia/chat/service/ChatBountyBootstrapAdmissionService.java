@@ -271,12 +271,11 @@ public class ChatBountyBootstrapAdmissionService {
                 .setTenantId(claim.tenantId()).setOwnerJiacn(claim.ownerJiacn())
                 .setClientId(claim.clientId()).setConversationId(discussion.conversationId())
                 .setConversationGeneration(discussion.generation()).setRequestId(requestId)
-                .setEventType("interaction.state_changed").setEventVersion(0L)
+                .setEventType("interaction.state_changed")
                 .setPayloadJson(JsonUtil.toJson(Map.of("requestId", requestId, "state", "PLANNING",
                         "userMessageId", Long.toString(message.getId()), "stepId", stepId)))
                 .setOccurredAt(now);
-        if (deliberation.insertEvent(event) != 1 || event.getEventSequence() == null
-                || deliberation.assignEventVersion(event.getEventSequence()) != 1)
+        if (deliberation.insertEvent(event) != 1 || event.getEventSequence() == null)
             throw new IllegalStateException("Initial bounty event was not committed");
         // DB event is authoritative. Live notification is merely a post-commit optimization.
         if (TransactionSynchronizationManager.isSynchronizationActive()) {

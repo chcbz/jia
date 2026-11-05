@@ -123,6 +123,7 @@ CREATE TABLE IF NOT EXISTS chat_conversation_event (
   turn_id VARCHAR(64) DEFAULT NULL,
   dispatch_id VARCHAR(64) DEFAULT NULL,
   event_type VARCHAR(40) NOT NULL,
+  -- Retained storage slot for existing installations. Wire version derives from event_sequence; new writes use 0.
   event_version BIGINT NOT NULL,
   payload_json MEDIUMTEXT NOT NULL,
   occurred_at BIGINT NOT NULL,

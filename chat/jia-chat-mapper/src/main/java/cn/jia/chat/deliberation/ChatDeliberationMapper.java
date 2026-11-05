@@ -69,6 +69,7 @@ public interface ChatDeliberationMapper {
             """)
     int insertOutbox(ChatDispatchOutboxEntity entity);
 
+    // event_version is a retained legacy storage slot. Do not add a post-insert UPDATE.
     @Insert("""
             INSERT INTO chat_conversation_event
               (event_id,tenant_id,owner_jiacn,client_id,conversation_id,conversation_generation,
@@ -80,8 +81,6 @@ public interface ChatDeliberationMapper {
     @Options(useGeneratedKeys = true, keyProperty = "eventSequence")
     int insertEvent(ChatConversationEventEntity entity);
 
-    @Update("UPDATE chat_conversation_event SET event_version=event_sequence WHERE event_sequence=#{eventSequence} AND event_version=0")
-    int assignEventVersion(@Param("eventSequence") long eventSequence);
 
     @Select("""
             SELECT * FROM chat_request WHERE

@@ -175,6 +175,64 @@ public class ChatBountyRequestIndexService {
         }
     }
 
+    /** Page association comes from persisted messages, never from a browser-supplied ID set.
+     * Called by the aggregate page reader inside its repeatable-read snapshot. */
+    Page messageWindow(ChatConversationService.MessagePage page, boolean latest) {
+        var conversation = page.conversation();
+        if (conversation == null || !"bounty".equals(conversation.getConversationScopeType())) return null;
+        String tenant = conversation.getTenantId(), owner = conversation.getJiacn(), client = conversation.getClientId();
+        String id = Long.toString(conversation.getId());
+        var scope = requireConversation(conversation, tenant, owner, client, id, null);
+        requireTask(taskRoot(tenant, client, owner, scope.taskId()), tenant, client, owner, scope.taskId());
+        var sqlScope = new ChatBountyRequestIndexStore.Scope(tenant, owner, client, id, scope.generation());
+        var ids = new java.util.LinkedHashSet<String>();
+        for (var message : page.messages()) {
+            if (message.getMetadata() == null || message.getMetadata().isBlank()) continue;
+            // Old ordinary messages may have no structured metadata. They remain readable text.
+            try {
+                var metadata = cn.jia.core.util.JsonUtil.getMapper().readTree(message.getMetadata());
+                var requestId = metadata.get("requestId");
+                if (requestId != null && requestId.isTextual() && validIdentity(requestId.asText(), 100)) ids.add(requestId.asText());
+            } catch (tools.jackson.core.JacksonException malformedHistoricalMetadata) {
+                // No request association is invented for unstructured historical metadata.
+            }
+        }
+        var selected = new java.util.TreeMap<Long, ChatBountyRequestIndexStore.Row>();
+        if (!ids.isEmpty()) for (var row : store.byRequests(sqlScope, List.copyOf(ids))) selected.put(row.ordinal(), row);
+        if (latest) for (var row : store.latest(sqlScope)) selected.put(row.ordinal(), row);
+        var rows = List.copyOf(selected.values());
+        var projection = store.projections(sqlScope, rows);
+        var requests = projection.requests().stream().collect(Collectors.toMap(ChatRequestEntity::getId, value -> value));
+        var turns = projection.turns().stream().collect(Collectors.groupingBy(ChatTurnEntity::getRequestId));
+        var steps = projection.steps().stream().collect(Collectors.groupingBy(ChatBountyRequestIndexStore.StepRow::requestId));
+        var entries = rows.stream().map(row -> {
+            var request = requests.get(row.ordinal());
+            if (request == null) throw unavailable();
+            return new Entry(Long.toString(row.ordinal()), presentation(request,
+                    turns.getOrDefault(row.requestId(), List.of()), steps.getOrDefault(row.requestId(), List.of())));
+        }).toList();
+        return new Page(1, new Scope(id, Long.toString(scope.generation()), scope.taskId()), "0",
+                rows.isEmpty() ? "0" : Long.toString(rows.getLast().ordinal()), null, false, entries,
+                latest ? Long.toString(store.eventCursor(sqlScope)) : null);
+    }
+
+    Page withDirectChildren(ChatBountyRequestIndexStore.Scope scope, Page page, List<String> children) {
+        var existing = page.entries().stream().map(entry -> entry.request().requestId()).collect(Collectors.toSet());
+        var missing = children.stream().filter(id -> !existing.contains(id)).distinct().toList();
+        if (missing.isEmpty()) return page;
+        var rows = store.byRequests(scope, missing);
+        var projection = store.projections(scope, rows);
+        var requests = projection.requests().stream().collect(Collectors.toMap(ChatRequestEntity::getId, value -> value));
+        var turns = projection.turns().stream().collect(Collectors.groupingBy(ChatTurnEntity::getRequestId));
+        var steps = projection.steps().stream().collect(Collectors.groupingBy(ChatBountyRequestIndexStore.StepRow::requestId));
+        var entries = new ArrayList<>(page.entries());
+        for (var row : rows) entries.add(new Entry(Long.toString(row.ordinal()), presentation(requests.get(row.ordinal()),
+                turns.getOrDefault(row.requestId(), List.of()), steps.getOrDefault(row.requestId(), List.of()))));
+        entries.sort(java.util.Comparator.comparing(entry -> Long.parseLong(entry.ordinal())));
+        return new Page(1, page.scope(), "0", entries.isEmpty() ? "0" : entries.getLast().ordinal(), null, false,
+                List.copyOf(entries), page.eventCursor());
+    }
+
     /** Current send choices are separate from historical detail pages and never mint write authority. */
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ, rollbackFor = Exception.class)
     public DeliveryPage deliveryContext(String tenant, String owner, String client, String conversationId,

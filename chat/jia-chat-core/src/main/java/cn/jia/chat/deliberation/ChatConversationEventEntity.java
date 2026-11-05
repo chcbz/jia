@@ -22,7 +22,8 @@ public class ChatConversationEventEntity {
     private String turnId;
     private String dispatchId;
     private String eventType;
-    private Long eventVersion;
+    /** Wire version is the durable event order, not an independently mutable column. */
+    public Long getEventVersion() { return eventSequence; }
     private String payloadJson;
     private Long occurredAt;
 }

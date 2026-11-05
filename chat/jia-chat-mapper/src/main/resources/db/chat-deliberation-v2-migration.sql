@@ -170,7 +170,6 @@ SELECT SHA2(CONCAT('legacy-resync:',t.dispatch_id),256),t.tenant_id,t.owner_jiac
  'reason','LEGACY_FINAL_UNRECOVERABLE'),t.updated_at
 FROM chat_turn t LEFT JOIN chat_message m ON m.id=t.final_message_id
 WHERE t.state IN ('FINAL_PERSISTED','PUBLISHED') AND (t.final_digest IS NULL OR m.id IS NULL);
-UPDATE chat_conversation_event SET event_version=event_sequence WHERE event_version=0;
 
 UPDATE chat_dispatch_outbox o JOIN chat_turn t ON t.turn_id=o.turn_id AND t.dispatch_id=o.dispatch_id
 JOIN chat_message m ON m.id=t.final_message_id
@@ -179,7 +178,7 @@ SET o.payload_json=JSON_OBJECT('requestId',t.request_id,'turnId',t.turn_id,'disp
  'targetAgentId',t.target_agent_id,'contextSnapshotId',t.snapshot_id,'messageId',CAST(m.id AS CHAR),
  'conversationId',t.conversation_id,'conversationGeneration',CAST(t.conversation_generation AS CHAR),
  'content',m.content,'senderName',COALESCE(m.sender_name,t.target_agent_id),
- 'eventSequence',CAST(e.event_sequence AS CHAR),'eventVersion',CAST(e.event_version AS CHAR),'finalDigest',t.final_digest),
+ 'eventSequence',CAST(e.event_sequence AS CHAR),'eventVersion',CAST(e.event_sequence AS CHAR),'finalDigest',t.final_digest),
  o.status=CASE WHEN o.status IN ('SENT','DEAD') THEN o.status ELSE 'READY' END,
  o.available_at=COALESCE(o.available_at,o.created_at),o.last_error=NULL
 WHERE o.event_type='FINAL_PERSISTED'
@@ -222,7 +221,6 @@ SELECT SHA2(CONCAT('legacy-cancel-recovery:',o.event_id),256),o.tenant_id,o.owne
 FROM chat_dispatch_outbox o
 WHERE o.event_type='CANCEL_REQUESTED' AND o.status='DEAD'
  AND o.last_error='LEGACY_CANCEL_UNRECOVERABLE_RESYNC_REQUIRED';
-UPDATE chat_conversation_event SET event_version=event_sequence WHERE event_version=0;
 
 INSERT INTO chat_deliberation_schema_version(version,stage,updated_at)
 VALUES(2,'DATA_BACKFILLED',UNIX_TIMESTAMP(CURRENT_TIMESTAMP(3))*1000)
@@ -326,9 +324,9 @@ IF v_invariant_count <> 0 THEN
 END IF;
 
 SELECT COUNT(*) INTO v_invariant_count FROM chat_conversation_event
-WHERE event_version<>event_sequence OR event_version<1;
+WHERE event_sequence<1;
 IF v_invariant_count <> 0 THEN
-  SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='chat event sequence/version invariant mismatch';
+  SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='chat event sequence invariant mismatch';
 END IF;
 
 -- APPLIED is reachable only after all schema and data guards above succeed.

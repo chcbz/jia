@@ -125,7 +125,7 @@ class ChatBountyExecutionTerminationMySqlTest {
         var session=new SqlSessionTemplate(Objects.requireNonNull(factory.getObject()));
         events=spy(new ChatDeliberationDaoImpl(session.getMapper(ChatDeliberationMapper.class)));
         doAnswer(i->{if(failEvent.get())throw new IllegalStateException("injected journal failure");return i.callRealMethod();})
-                .when(events).assignEventVersion(anyLong());
+                .when(events).insertEvent(any(ChatConversationEventEntity.class));
         executions=new PersonalWorkspaceExecutionDaoImpl(session.getMapper(PersonalWorkspaceExecutionMapper.class),
                 session.getMapper(PersonalWorkspaceExecutionInputMapper.class),session.getMapper(PersonalWorkspaceExecutionOutputMapper.class));
         roots=mock(AgentTaskMutationTransaction.class);
@@ -178,7 +178,7 @@ class ChatBountyExecutionTerminationMySqlTest {
                 jdbc.queryForObject("SELECT failure_code FROM agent_personal_workspace_execution",String.class));
         assertEquals(receipt,inTx(()->service.get(OWNER,"req",KEY)));
         assertEquals(receipt,abandon());assertEquals(1,countEvents());
-        assertEquals(1L,jdbc.queryForObject("SELECT event_version FROM chat_conversation_event",Long.class));
+        assertEquals(1L,jdbc.queryForObject("SELECT event_sequence FROM chat_conversation_event",Long.class));
         verify(broker,times(1)).publishIfSubscribed(eq("42"),eq(1L),any(),any());
     }
 
