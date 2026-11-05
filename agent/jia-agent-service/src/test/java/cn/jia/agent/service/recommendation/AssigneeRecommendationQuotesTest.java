@@ -72,7 +72,7 @@ class AssigneeRecommendationQuotesTest {
         }
         assertEquals(List.of(1L, 1L), work.getAllValues().stream().map(TaskWorkload::inputFiles).toList());
         verify(grants, times(1)).snapshotTaskInputsWithinLockedTask(any(), eq("task"));
-        verify(billing, never()).reserve(any(), any(), any());
+        verify(billing, never()).reserve(any(), any(), any(), any());
     }
     @Test void missingRouteOrPriceIsLocalToCandidateAndNeverZeroMoney() {
         doThrow(new TaskPricingService.Unavailable(TaskPricingService.Unavailable.Reason.MODEL_PRICE_MISSING))
