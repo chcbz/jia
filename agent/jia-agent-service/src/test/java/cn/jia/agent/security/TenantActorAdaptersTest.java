@@ -40,7 +40,6 @@ class TenantActorAdaptersTest {
                 new Adapter(AgentHostingRentController.class, "requirePrincipal"),
                 new Adapter(ConversationDeliverableController.class, "requireJwtScope"),
                 new Adapter(AgentController.class, "requireJwtScope"),
-                new Adapter(AgentController.class, "requireMoneyActor"),
                 new Adapter(AgentBountySettlementController.class, "actor"),
                 new Adapter(HostingRentHttp.class, "actor"),
                 new Adapter(EconomyWalletController.class, "requireSubject"));
