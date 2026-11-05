@@ -116,6 +116,26 @@ public interface ChatMessageMapper extends BaseMapper<ChatMessageEntity> {
             @Param("numericConversationId") Long numericConversationId,
             @Param("limit") int limit);
 
+    /** Same authorized latest window, without transferring history bodies or metadata. */
+    @Select("""
+            SELECT m.id
+            FROM chat_message m
+            JOIN chat_conversation c ON c.id = #{numericConversationId}
+            WHERE 1 = 1
+            """ + EXACT_MESSAGE_CONVERSATION_SCOPE
+            + LIVE_CONVERSATION_OWNER_SCOPE
+            + EXACT_MESSAGE_OWNER_SCOPE + """
+            ORDER BY m.create_time DESC, m.id DESC
+            LIMIT #{limit}
+            """)
+    List<Long> findExactOwnedConversationMessageIdsWithLimit(
+            @Param("tenantId") String tenantId,
+            @Param("ownerJiacn") String ownerJiacn,
+            @Param("clientId") String clientId,
+            @Param("conversationId") String conversationId,
+            @Param("numericConversationId") Long numericConversationId,
+            @Param("limit") int limit);
+
     @Select("""
             SELECT COUNT(*)
             FROM chat_message m

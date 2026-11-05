@@ -363,6 +363,12 @@ public class ChatDeliberationSchemaInitializer implements ApplicationRunner {
 
     private void validateIndexes(String table) {
         Map<String, IndexDef> actual = readIndexes(table);
+        // These old unique keys prohibit a second, explicitly unexecuted context attempt.
+        // Never drop them on application startup; installation owns the controlled migration.
+        String obsolete = "chat_context_snapshot".equals(table) ? "uk_chat_snapshot_request_target"
+                : "chat_dispatch_outbox".equals(table) ? "uk_chat_outbox_turn_event" : null;
+        if (obsolete != null && actual.containsKey(obsolete))
+            throw incompatible(table + " index " + obsolete, "removed by context-attempt migration", "present");
         Map<String, IndexDef> expected = INDEXES.get(table);
         for (var entry : expected.entrySet()) {
             if (!entry.getValue().equals(actual.get(entry.getKey()))) {
@@ -500,17 +506,19 @@ public class ChatDeliberationSchemaInitializer implements ApplicationRunner {
         Map<String, Map<String, IndexDef>> all = new LinkedHashMap<>();
         all.put("chat_context_snapshot", Map.of(
                 "PRIMARY", ix(true,"snapshot_id"),
-                "uk_chat_snapshot_request_target", ix(true,"tenant_id","owner_jiacn","client_id","request_id","request_revision","target_agent_id"),
+                "idx_chat_snapshot_request_target", ix(false,"tenant_id","owner_jiacn","client_id","request_id","request_revision","target_agent_id"),
                 "idx_chat_snapshot_conversation", ix(false,"tenant_id","owner_jiacn","client_id","conversation_id","conversation_generation","created_at")));
         all.put("chat_request", Map.of("PRIMARY",ix(true,"id"),
                 "uk_chat_request_scope_revision",ix(true,"tenant_id","owner_jiacn","client_id","request_id","request_revision"),
-                "idx_chat_request_conversation",ix(false,"tenant_id","owner_jiacn","client_id","conversation_id","conversation_generation","created_at")));
+                "idx_chat_request_conversation",ix(false,"tenant_id","owner_jiacn","client_id","conversation_id","conversation_generation","created_at"),
+                "idx_chat_request_context_order",ix(false,"tenant_id","owner_jiacn","client_id","conversation_id","conversation_generation","id"),
+                "idx_chat_request_user_message",ix(false,"user_message_id")));
         all.put("chat_turn", Map.of("PRIMARY",ix(true,"turn_id"),
                 "uk_chat_turn_request_target",ix(true,"tenant_id","owner_jiacn","client_id","request_id","target_agent_id"),
                 "uk_chat_turn_dispatch",ix(true,"dispatch_id"), "uk_chat_turn_snapshot",ix(true,"snapshot_id"),
                 "idx_chat_turn_conversation",ix(false,"tenant_id","owner_jiacn","client_id","conversation_id","conversation_generation","state","updated_at")));
         all.put("chat_dispatch_outbox", Map.of("PRIMARY",ix(true,"event_id"),
-                "uk_chat_outbox_turn_event",ix(true,"turn_id","event_type"),
+                "uk_chat_outbox_turn_dispatch_event",ix(true,"turn_id","dispatch_id","event_type"),
                 "idx_chat_outbox_ready",ix(false,"status","available_at","event_id"),
                 "idx_chat_outbox_dispatch",ix(false,"tenant_id","client_id","dispatch_id","event_type"),
                 "idx_chat_outbox_scope",ix(false,"tenant_id","owner_jiacn","client_id","turn_id","event_type")));

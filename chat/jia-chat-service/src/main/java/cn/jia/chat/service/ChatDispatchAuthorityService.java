@@ -65,6 +65,14 @@ public class ChatDispatchAuthorityService {
         return authenticate(bind(row, true),executorOwner,agentId);
     }
 
+    /** Only repeats an already recorded pre-turn rejection; never authorizes an old final or tool call. */
+    public Binding incomingContextRejection(String tenant, String client, String executorOwner, String agentId, String dispatchId) {
+        var row=unique(mapper.findDispatch(tenant,client,dispatchId));
+        if (!Objects.equals(tenant,row.getTenantId()) || !Objects.equals(client,row.getClientId())
+                || !Objects.equals(dispatchId,row.getDispatchId())) throw denied();
+        return authenticate(bind(row,true,true),executorOwner,agentId);
+    }
+
     public Binding incomingTurn(String tenant, String client, String executorOwner, String agentId, String turnId) {
         var row=unique(mapper.findTurnDispatch(tenant,client,turnId));
         if (!Objects.equals(tenant,row.getTenantId()) || !Objects.equals(client,row.getClientId())
@@ -86,8 +94,14 @@ public class ChatDispatchAuthorityService {
     }
 
     private Binding bind(ChatDispatchOutboxEntity row, boolean requireActive) {
+        return bind(row,requireActive,false);
+    }
+
+    private Binding bind(ChatDispatchOutboxEntity row, boolean requireActive, boolean contextRejectionOnly) {
         var turn=turns.findTurn(row.getTenantId(),row.getOwnerJiacn(),row.getClientId(),row.getTurnId());
-        if (turn==null || !Objects.equals(row.getDispatchId(),turn.getDispatchId())
+        boolean rejectedAttempt=contextRejectionOnly && "DEAD".equals(row.getStatus())
+                && "CHAT_CONTEXT_BOOTSTRAP_REQUIRED".equals(row.getLastError());
+        if (turn==null || (!Objects.equals(row.getDispatchId(),turn.getDispatchId()) && !rejectedAttempt)
                 || !Objects.equals(row.getTenantId(),turn.getTenantId())
                 || !Objects.equals(row.getClientId(),turn.getClientId())
                 || !Objects.equals(row.getOwnerJiacn(),turn.getOwnerJiacn())) throw denied();

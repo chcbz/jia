@@ -179,4 +179,15 @@ class ChatDispatchAuthorityServiceTest {
                 ()->service.outgoing(row)));
     }
 
+    @Test void onlyRecordedPreExecutionRejectionCanRepeatAfterDispatchReplacement() {
+        turn.setDispatchId("replacement");
+        assertThrows(ChatDeliberationException.class, () -> service.incomingContextRejection("0","client","B","agent-B","dispatch"));
+        row.setStatus("DEAD").setLastError("CHAT_CONTEXT_BOOTSTRAP_REQUIRED");
+        assertEquals("A",service.incomingContextRejection("0","client","B","agent-B","dispatch").turn().getOwnerJiacn());
+        assertThrows(ChatDeliberationException.class, () -> service.incoming("0","client","B","agent-B","dispatch"));
+        assertThrows(ChatDeliberationException.class, () -> service.incomingContextRejection("0","client","C","agent-B","dispatch"));
+        row.setLastError("TURN_ACCEPTANCE_UNKNOWN");
+        assertThrows(ChatDeliberationException.class, () -> service.incomingContextRejection("0","client","B","agent-B","dispatch"));
+    }
+
 }

@@ -36,7 +36,7 @@ public class ChatDeliberationDaoImpl implements ChatDeliberationDao {
     public int persistFinal(ChatTurnEntity t,String d,long m,long n){return mapper.persistFinal(t.getTenantId(),t.getOwnerJiacn(),t.getClientId(),t.getTurnId(),t.getStateVersion(),d,m,n);}
     public int updateTurnState(ChatTurnEntity t,String s,String r,long n){return mapper.updateTurnState(t.getTenantId(),t.getOwnerJiacn(),t.getClientId(),t.getTurnId(),t.getStateVersion(),s,r,n);}
     public int publishFinal(ChatTurnEntity t,long n){return mapper.publishFinal(t.getTenantId(),t.getOwnerJiacn(),t.getClientId(),t.getTurnId(),t.getStateVersion(),n);}
-    public int updateOutbox(ChatDispatchOutboxEntity o,String s,long n){return mapper.updateOutbox(o.getTenantId(),o.getOwnerJiacn(),o.getClientId(),o.getTurnId(),o.getEventType(),o.getVersion(),s,n);}
+    public int updateOutbox(ChatDispatchOutboxEntity o,String s,long n){return mapper.updateOutbox(o.getTenantId(),o.getOwnerJiacn(),o.getClientId(),o.getEventId(),o.getVersion(),s,n);}
     public int claimOutbox(ChatDispatchOutboxEntity o,String owner,long until,long fence,long now){return mapper.claimOutbox(o.getTenantId(),o.getOwnerJiacn(),o.getClientId(),o.getEventId(),o.getVersion(),owner,until,fence,now);}
     public int renewOutbox(ChatDispatchOutboxEntity o,long until,long now){return mapper.renewOutbox(o.getTenantId(),o.getOwnerJiacn(),o.getClientId(),o.getEventId(),o.getVersion(),o.getLeaseOwner(),o.getFencingToken(),until,now);}
     public int settleOutbox(ChatDispatchOutboxEntity o,String status,Long available,String error,Long sent,long now){return mapper.settleOutbox(o.getTenantId(),o.getOwnerJiacn(),o.getClientId(),o.getEventId(),o.getVersion(),o.getLeaseOwner(),o.getFencingToken(),status,available,error,sent,now);}

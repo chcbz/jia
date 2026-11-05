@@ -18,7 +18,9 @@ public interface ChatDispatchAuthorityMapper {
             @Param("clientId") String clientId, @Param("dispatchId") String dispatchId);
 
     @Select("""
-            SELECT o.* FROM chat_dispatch_outbox o
+            SELECT o.* FROM chat_turn t JOIN chat_dispatch_outbox o
+              ON o.dispatch_id=t.dispatch_id AND o.turn_id=t.turn_id
+              AND o.tenant_id=t.tenant_id AND o.client_id=t.client_id AND o.owner_jiacn=t.owner_jiacn
             WHERE BINARY o.tenant_id=BINARY #{tenantId} AND BINARY o.client_id=BINARY #{clientId}
               AND BINARY o.turn_id=BINARY #{turnId} AND o.event_type='DISPATCH'
             LIMIT 2

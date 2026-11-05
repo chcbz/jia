@@ -555,6 +555,7 @@ class JuyitingWorkflowMySqlTest {
             config.addMapper(cn.jia.agent.mapper.AgentTaskFormalDeliveryMapper.class);
             config.addMapper(cn.jia.agent.mapper.AgentTaskEventMapper.class);
             config.addMapper(ChatDeliberationMapper.class);
+            config.addMapper(cn.jia.chat.deliberation.ChatContextHistoryMapper.class);
             config.addMapper(cn.jia.chat.mapper.ChatConversationMapper.class);
             config.addMapper(cn.jia.chat.mapper.ChatMessageMapper.class);
             var factory=new com.baomidou.mybatisplus.extension.spring.MybatisSqlSessionFactoryBean();
@@ -736,6 +737,8 @@ class JuyitingWorkflowMySqlTest {
             when(dispatchAuthority.forTurn(any())).thenAnswer(call -> new ChatDispatchAuthorityService.Binding(null,call.getArgument(0),"owner"));
             context.registerBean(ChatDispatchAuthorityService.class,()->dispatchAuthority);
             context.registerBean(cn.jia.chat.service.ChatReplyPreviewRegistry.class, cn.jia.chat.service.ChatReplyPreviewRegistry::new);
+            context.registerBean(cn.jia.chat.deliberation.ChatContextHistoryMapper.class,
+                    () -> domain.sql.getMapper(cn.jia.chat.deliberation.ChatContextHistoryMapper.class));
             context.registerBean(ChatDeliberationService.class,()->new ChatDeliberationService(dao,conversations,messages,agents));
             context.registerBean(ChatDeliberationOutboxService.class,()->new ChatDeliberationOutboxService(dao, new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null)));
             context.registerBean(ChatDeliveryRevisionService.class,()->new ChatDeliveryRevisionService(dao,
@@ -750,6 +753,9 @@ class JuyitingWorkflowMySqlTest {
             var admitted=deliberation.admit("0",new ServerResolvedSender("user","测试","owner","client",DisplayNameSource.JIACN),"7",1,
                     new JuyitingConversationScope("bounty","task:task","task","wuyong",List.of("wuyong"),List.of("wuyong")),
                     InteractionRoute.CHAT,input,null,facts,Map.of("intent","DISCUSSION"));
+            var dispatch = admitted.dispatches().getFirst();
+            assertNotNull(outbox.claim(dao.findOutboxById("0","owner","client",dispatch.dispatchEventId()),
+                    "revision-parent-worker",System.currentTimeMillis()+1000,120000));
             var turn=dao.findTurnsByRequest("0","owner","client","parent").getFirst();
             var basis=app.getBean(ChatTypedReviewContextStore.class).require(owner,"parent",1);
             var binding=new LinkedHashMap<String,Object>();binding.put("tenantId","0");binding.put("ownerJiacn","owner");binding.put("clientId","client");

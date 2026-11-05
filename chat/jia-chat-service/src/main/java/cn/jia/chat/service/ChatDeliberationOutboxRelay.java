@@ -349,13 +349,12 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
         long generation = decimal(p, "conversationGeneration");
         if (dispatchAuthority == null) throw new IllegalStateException("Dispatch authority unavailable");
         var binding = dispatchAuthority.outgoing(row);
-        Map<String,Object> wire = hostedWire(row, p);
         AtomicReference<AgentWebSocketHandler.CapabilityDispatchResult> dispatch = new AtomicReference<>();
         boolean live = broker.runIfLiveOrThrow(conversationId, generation,
                 () -> conversations.isLiveGeneration(row.getTenantId(), row.getOwnerJiacn(),
                         row.getClientId(), conversationId, generation),
                 () -> dispatch.set(sockets.sendNegotiatedChatMessageToAgent(
-                        row.getTenantId(), binding.executorOwner(), row.getClientId(), agentId, route, wire)));
+                        row.getTenantId(), binding.executorOwner(), row.getClientId(), agentId, route, hostedWire(row, p))));
         if (!live) {
             log.warn("Durable chat dispatch rejected by exact live-generation fence, eventId={}, conversationId={}, generation={}",
                     row.getEventId(), conversationId, generation);
@@ -368,7 +367,7 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
             return;
         }
         boolean delivered = result.delivered();
-        deliberation.markDispatch(row.getTenantId(), row.getOwnerJiacn(), row.getClientId(), row.getTurnId(), delivered);
+        deliberation.markDispatch(row.getTenantId(), row.getOwnerJiacn(), row.getClientId(), row.getTurnId(), row.getDispatchId(), delivered);
         if (delivered) {
             try {
                 outbox.awaitingAck(claim, System.currentTimeMillis(), HOSTED_ACK_TIMEOUT_MILLIS);
@@ -436,7 +435,7 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
         try {
             if (stop.get() != BuiltinStop.NONE) throwForStop(stop.get());
             deliberation.markDispatch(claim.row().getTenantId(), claim.row().getOwnerJiacn(),
-                    claim.row().getClientId(), claim.row().getTurnId(), true);
+                    claim.row().getClientId(), claim.row().getTurnId(), claim.row().getDispatchId(), true);
             signalTerminalTurn(claim.row(), stop, cancelled);
             if (stop.get() != BuiltinStop.NONE) throwForStop(stop.get());
             runBuiltin(claim.row(), p, leaseLost.asMono(), cancelled, stop);
@@ -582,7 +581,11 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
     }
 
     Map<String,Object> hostedWire(ChatDispatchOutboxEntity row, Map<String,Object> p) {
-        Map<String,Object> wire=new LinkedHashMap<>(p); wire.put("schemaVersion",AgentProtocolConstants.VERSION_1);
+        if ("PENDING".equals(p.get("contextPreparation")))
+            throw new IllegalStateException("Draft context must be prepared before wire delivery");
+        Map<String,Object> wire=new LinkedHashMap<>(p);
+        wire.remove("contextInputRefs"); wire.remove("contextPreparation");
+        wire.put("schemaVersion",AgentProtocolConstants.VERSION_1);
         wire.put("messageType",AgentProtocolConstants.TYPE_CHAT_MESSAGE); wire.put("messageId",row.getEventId());
         wire.put("dispatchAckType", AgentProtocolConstants.TYPE_CHAT_DISPATCH_ACK);
         wire.put("ackRequired", true); wire.put("deliverySemantics", "AT_LEAST_ONCE_DURABLE_DEDUPE_REQUIRED");

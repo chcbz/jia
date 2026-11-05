@@ -20,6 +20,10 @@ public class ChatDeliberationOutboxService {
     @org.springframework.beans.factory.annotation.Autowired
     public void setOutboxEvents(org.springframework.context.ApplicationEventPublisher value) { outboxEvents = value; }
 
+    private ChatDeliberationService deliberation;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setDeliberation(ChatDeliberationService value) { deliberation = value; }
+
     private final ChatDeliberationDao dao;
     private final cn.jia.core.security.FixedTenantAdmissionPolicy processScope;
     private ChatDispatchAuthorityService dispatchAuthority;
@@ -43,8 +47,9 @@ public class ChatDeliberationOutboxService {
     @Transactional(rollbackFor = Exception.class)
     public Claim claim(ChatDispatchOutboxEntity candidate, String leaseOwner, long now, long leaseMillis) {
         if (candidate == null || leaseMillis < 1) return null;
-        ChatDispatchOutboxEntity row = dao.lockOutboxById(candidate.getTenantId(), candidate.getOwnerJiacn(),
-                candidate.getClientId(), candidate.getEventId());
+        ChatDispatchOutboxEntity row = deliberation == null
+                ? dao.lockOutboxById(candidate.getTenantId(), candidate.getOwnerJiacn(), candidate.getClientId(), candidate.getEventId())
+                : deliberation.prepareContextForClaim(candidate, now);
         if (row == null || terminal(row.getStatus())) return null;
         boolean staleLease = "CLAIMED".equals(row.getStatus())
                 && row.getLeaseUntil() != null && row.getLeaseUntil() <= now;

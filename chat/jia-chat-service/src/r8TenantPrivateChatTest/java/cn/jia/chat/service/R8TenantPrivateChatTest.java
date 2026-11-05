@@ -11,6 +11,8 @@ import cn.jia.chat.deliberation.ChatBountyBindingStore;
 import cn.jia.chat.deliberation.ChatDeliberationDao;
 import cn.jia.chat.deliberation.ChatDeliberationDaoImpl;
 import cn.jia.chat.deliberation.ChatDeliberationMapper;
+import cn.jia.chat.deliberation.ChatContextHistoryMapper;
+import cn.jia.chat.deliberation.ChatContextDelivery;
 import cn.jia.chat.deliberation.ChatDispatchOutboxEntity;
 import cn.jia.chat.deliberation.ChatTurnEntity;
 import cn.jia.chat.deliberation.InteractionRoute;
@@ -83,6 +85,7 @@ class R8TenantPrivateChatTest {
     private ChatConversationDao conversations;
     private ChatMessageDao messages;
     private ChatDeliberationDao deliberationDao;
+    private ChatContextHistoryMapper contextHistory;
     private ChatDispatchAuthorityService dispatchAuthority;
     private ChatDeliberationService deliberation;
     private ChatDeliberationOutboxService outbox;
@@ -106,6 +109,7 @@ class R8TenantPrivateChatTest {
         configuration.addMapper(ChatConversationMapper.class);
         configuration.addMapper(ChatMessageMapper.class);
         configuration.addMapper(ChatDeliberationMapper.class);
+        configuration.addMapper(ChatContextHistoryMapper.class);
         MybatisSqlSessionFactoryBean factory = new MybatisSqlSessionFactoryBean();
         factory.setDataSource(dataSource);
         factory.setConfiguration(configuration);
@@ -139,10 +143,13 @@ class R8TenantPrivateChatTest {
         ChatDeliberationService rawDeliberation = new ChatDeliberationService(
                 deliberationDao, conversations, messages, mock(AgentService.class));
         rawDeliberation.setDispatchAuthority(dispatchAuthority);
+        contextHistory = spy(sql.getMapper(ChatContextHistoryMapper.class));
+        rawDeliberation.setContextHistory(contextHistory);
         ChatDeliberationOutboxService rawOutbox = new ChatDeliberationOutboxService(deliberationDao, new cn.jia.core.security.FixedTenantAdmissionPolicy(TENANT, CLIENT));
         rawOutbox.setDispatchAuthority(dispatchAuthority);
         transactionManager = new DataSourceTransactionManager(dataSource);
         deliberation = transactional(rawDeliberation, transactionManager);
+        rawOutbox.setDeliberation(deliberation);
         outbox = transactional(rawOutbox, transactionManager);
         assertTrue(AopUtils.isAopProxy(deliberation));
         assertTrue(AopUtils.isAopProxy(outbox));
@@ -201,8 +208,8 @@ class R8TenantPrivateChatTest {
 
         ChatDeliberationService.FinalResult result = deliberation.persistFinal(
                 TENANT, OWNER, CLIENT, CONVERSATION, 1L, AGENT, REQUEST,
-                dispatch.turnId(), dispatch.dispatchId(), dispatch.contextSnapshotId(), dispatch.contextHash(),
-                "native tenant-1 reply", new ServerResolvedAgentSender(
+                turn.getTurnId(), turn.getDispatchId(), turn.getSnapshotId(), turn.getContextDigest(),
+                "native tenant-1 reply", null, null, null, preparedReceipt(turn), new ServerResolvedAgentSender(
                         ServerResolvedAgentSender.AGENT_TYPE, "Melon Ready", OWNER, CLIENT, AGENT));
         assertEquals(ChatDeliberationService.FinalStatus.PERSISTED, result.status());
         ChatDeliberationService.RequestView request = deliberation.getRequest(TENANT, OWNER, CLIENT, REQUEST);
@@ -373,6 +380,46 @@ class R8TenantPrivateChatTest {
     }
 
     @Test
+    void pendingDraftFromDeletedGenerationSettlesWithoutReadingHistoryOrSending() throws Exception {
+        seedConversation(TENANT, OWNER, CLIENT, CONVERSATION, AGENT);
+        var admission = admit(TENANT, OWNER, CLIENT, CONVERSATION, REQUEST, AGENT, InteractionRoute.CHAT);
+        var dispatch = admission.dispatches().getFirst();
+        var candidate = contextDraft(admission);
+        jdbc.update("UPDATE chat_conversation SET lifecycle_generation=2 WHERE id=?", Long.parseLong(CONVERSATION));
+        var claim = outbox.claim(candidate, "stale-draft-worker", System.currentTimeMillis() + 1000, 120000);
+        assertNotNull(claim);
+        bindOutgoingAuthority(TENANT, OWNER, CLIENT, AGENT, dispatch,
+                deliberationDao.findTurn(TENANT, OWNER, CLIENT, dispatch.turnId()));
+        var sockets = mock(AgentWebSocketHandler.class);
+        var broker = new ChatConversationEventBroker();
+        try (var relay = new ChatDeliberationOutboxRelay(outbox, deliberation, sockets,
+                mock(BuiltinHallAgentSupport.class), broker, realConversationService(broker), mock(ChatClient.class))) {
+            relay.setDispatchAuthority(dispatchAuthority);
+            relay.deliverClaim(claim);
+        }
+        assertEquals("DEAD", deliberationDao.findOutboxById(TENANT, OWNER, CLIENT, dispatch.dispatchEventId()).getStatus());
+        verifyNoInteractions(sockets);
+        assertEquals(candidate.getPayloadJson(), claim.row().getPayloadJson());
+    }
+
+    @Test
+    void draftCannotFinishBeforeClaimAndMessageReferencesUseTheSameScopedWindow() throws Exception {
+        seedConversation(TENANT, OWNER, CLIENT, CONVERSATION, AGENT);
+        var admission = admit(TENANT, OWNER, CLIENT, CONVERSATION, REQUEST, AGENT, InteractionRoute.CHAT);
+        var dispatch = admission.dispatches().getFirst();
+        var row = contextDraft(admission);
+        var turn = deliberationDao.findTurn(TENANT, OWNER, CLIENT, dispatch.turnId());
+        bindAuthority(TENANT, OWNER, CLIENT, AGENT, row, turn);
+        assertThrows(ChatDeliberationException.class, () -> finalReply(TENANT, OWNER, CLIENT, 1, AGENT,
+                dispatch, new ServerResolvedAgentSender("agent", "Melon Ready", OWNER, CLIENT, AGENT)));
+        assertEquals(1, count("chat_message"));
+        assertEquals(List.of(Long.parseLong(admission.userMessageId())),
+                messages.findOwnedMessageIdsWithLimit(TENANT, OWNER, CLIENT, CONVERSATION, 200));
+        assertEquals(List.of(), messages.findOwnedMessageIdsWithLimit("foreign", OWNER, CLIENT, CONVERSATION, 200));
+        assertEquals(List.of(), messages.findOwnedMessageIdsWithLimit(TENANT, OWNER + " ", CLIENT, CONVERSATION, 200));
+    }
+
+    @Test
     void cleanGenerationMismatchStillDeadLettersWithoutAttemptingSocketPublication() {
         seedConversation(TENANT, OWNER, CLIENT, CONVERSATION, AGENT);
         ChatDeliberationService.Admission admission = admit(
@@ -466,10 +513,13 @@ class R8TenantPrivateChatTest {
             relay.stop();
         }
 
+        turn = deliberationDao.findTurn(TENANT, OWNER, CLIENT, dispatch.turnId());
+        bindAuthority(TENANT, OWNER, CLIENT, AGENT,
+                deliberationDao.findOutboxById(TENANT, OWNER, CLIENT, dispatch.dispatchEventId()), turn);
         ChatDeliberationService.FinalResult result = deliberation.persistFinal(
                 TENANT, OWNER, CLIENT, CONVERSATION, 1L, AGENT, REQUEST,
-                dispatch.turnId(), dispatch.dispatchId(), dispatch.contextSnapshotId(), dispatch.contextHash(),
-                "recovered original reply", new ServerResolvedAgentSender(
+                turn.getTurnId(), turn.getDispatchId(), turn.getSnapshotId(), turn.getContextDigest(),
+                "recovered original reply", null, null, null, preparedReceipt(turn), new ServerResolvedAgentSender(
                         ServerResolvedAgentSender.AGENT_TYPE, "Melon Ready", OWNER, CLIENT, AGENT));
         assertEquals(ChatDeliberationService.FinalStatus.PERSISTED, result.status());
         ChatDeliberationService.RequestView request = deliberation.getRequest(TENANT, OWNER, CLIENT, REQUEST);
@@ -496,12 +546,14 @@ class R8TenantPrivateChatTest {
         ChatDeliberationService.Dispatch dispatch = admission.dispatches().getFirst();
         ChatDispatchOutboxEntity row = deliberationDao.findOutboxById(
                 tenant, owner, client, dispatch.dispatchEventId());
+        var claim = outbox.claim(row, "tenant0-worker", System.currentTimeMillis() + 1000, 120000);
+        assertNotNull(claim);
         ChatTurnEntity turn = deliberationDao.findTurn(tenant, owner, client, dispatch.turnId());
-        bindAuthority(tenant, owner, client, AGENT, row, turn);
+        bindAuthority(tenant, owner, client, AGENT, claim.row(), turn);
         ChatDeliberationService.FinalResult result = deliberation.persistFinal(
                 tenant, owner, client, conversation, 1L, AGENT, requestId,
-                dispatch.turnId(), dispatch.dispatchId(), dispatch.contextSnapshotId(), dispatch.contextHash(),
-                "legacy reply", new ServerResolvedAgentSender("agent", "Legacy Agent", owner, client, AGENT));
+                turn.getTurnId(), turn.getDispatchId(), turn.getSnapshotId(), turn.getContextDigest(),
+                "legacy reply", null, null, null, preparedReceipt(turn), new ServerResolvedAgentSender("agent", "Legacy Agent", owner, client, AGENT));
         assertEquals(ChatDeliberationService.FinalStatus.PERSISTED, result.status());
         assertEquals("COMPLETED", deliberation.getRequest(tenant, owner, client, requestId).state());
         assertEquals(2, messages.findOwnedByConversationIdWithLimit(
@@ -828,6 +880,200 @@ class R8TenantPrivateChatTest {
         return (T) factory.getProxy();
     }
 
+    /** Admission is not activated yet: create an explicit draft only in this integration fixture. */
+    private ChatDispatchOutboxEntity contextDraft(ChatDeliberationService.Admission admission) throws Exception {
+        var dispatch = admission.dispatches().getFirst();
+        var row = deliberationDao.findOutboxById(TENANT, OWNER, CLIENT, dispatch.dispatchEventId());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> payload = JsonUtil.getMapper().readValue(row.getPayloadJson(), Map.class);
+        assertEquals("PENDING", payload.get("contextPreparation"));
+        assertTrue(payload.get("contextInputRefs") instanceof List<?>);
+        return row;
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> preparedFacts(ChatDeliberationOutboxService.Claim claim) throws Exception {
+        Map<String, Object> payload = JsonUtil.getMapper().readValue(claim.row().getPayloadJson(), Map.class);
+        assertTrue(!payload.containsKey("contextPreparation"));
+        assertTrue(payload.get("contextInputRefs") instanceof List<?>); // Internal refs retained, hostedWire strips them.
+        return (Map<String, Object>) payload.get("factsManifest");
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> preparedReceipt(ChatTurnEntity turn) {
+        var snapshot = deliberationDao.findSnapshot(turn.getTenantId(), turn.getOwnerJiacn(), turn.getClientId(), turn.getSnapshotId());
+        Map<String, Object> facts = JsonUtil.getMapper().readValue(snapshot.getFactsManifestJson(), Map.class);
+        var plan = ChatContextDelivery.readPlan((Map<String, Object>) facts.get("contextDelivery"));
+        return new ChatContextDelivery.Receipt(plan.mode(), "native-A", "native-" + turn.getTurnId(), plan.throughMessageId()).wire();
+    }
+
+    private ChatDeliberationService.FinalResult completePrepared(ChatDeliberationOutboxService.Claim claim) throws Exception {
+        var turn = deliberationDao.findTurn(TENANT, OWNER, CLIENT, claim.row().getTurnId());
+        bindAuthority(TENANT, OWNER, CLIENT, AGENT, claim.row(), turn);
+        @SuppressWarnings("unchecked")
+        var plan = ChatContextDelivery.readPlan((Map<String, Object>) preparedFacts(claim).get("contextDelivery"));
+        var receipt = new ChatContextDelivery.Receipt(plan.mode(), "native-A", "native-" + turn.getTurnId(), plan.throughMessageId());
+        return deliberation.persistFinal(TENANT, OWNER, CLIENT, CONVERSATION, 1L, AGENT, turn.getRequestId(),
+                turn.getTurnId(), turn.getDispatchId(), turn.getSnapshotId(), turn.getContextDigest(),
+                "answer", null, null, null, receipt.wire(),
+                new ServerResolvedAgentSender("agent", "Melon Ready", OWNER, CLIENT, AGENT));
+    }
+
+    @Test
+    void admissionReplayUsesSavedSnapshotWithoutRereadingHistoryBodies() {
+        seedConversation(TENANT, OWNER, CLIENT, CONVERSATION, AGENT);
+        var first = admit(TENANT, OWNER, CLIENT, CONVERSATION, "context-replay", AGENT, InteractionRoute.CHAT);
+        doThrow(new AssertionError("replay must use saved snapshot"))
+                .when(messages).findOwnedByConversationIdWithLimit(TENANT, OWNER, CLIENT, CONVERSATION, 200);
+        var replay = admit(TENANT, OWNER, CLIENT, CONVERSATION, "context-replay", AGENT, InteractionRoute.CHAT);
+        assertTrue(replay.replay());
+        assertEquals(first.dispatches(), replay.dispatches());
+        assertEquals(first.userMessageId(), replay.userMessageId());
+        assertEquals(1, count("chat_message"));
+        assertEquals(1, count("chat_request"));
+        assertEquals(1, count("chat_context_snapshot"));
+        assertEquals(1, count("chat_dispatch_outbox"));
+    }
+
+    @Test
+    void queuedUserBeforePriorFinalIsStillDeliveredAndPriorNativeAnswerIsNotReinjected() throws Exception {
+        seedConversation(TENANT, OWNER, CLIENT, CONVERSATION, AGENT);
+        var first = admit(TENANT, OWNER, CLIENT, CONVERSATION, "context-first", AGENT, InteractionRoute.CHAT);
+        var firstRow = contextDraft(first);
+        var second = admit(TENANT, OWNER, CLIENT, CONVERSATION, "context-second", AGENT, InteractionRoute.CHAT);
+        var secondRow = contextDraft(second);
+        long now = System.currentTimeMillis() + 1000;
+        // Even a stale/explicit caller cannot prepare a later request ahead of its predecessor.
+        assertEquals(null, outbox.claim(secondRow, "worker", now, 120000));
+        assertEquals(List.of(firstRow.getEventId()), outbox.discover(now, 1).stream().map(ChatDispatchOutboxEntity::getEventId).toList());
+        var firstClaim = outbox.claim(firstRow, "worker", now, 120000);
+        assertNotNull(firstClaim);
+        var firstFinal = completePrepared(firstClaim);
+        assertTrue(firstFinal.messageId() > Long.parseLong(second.userMessageId()));
+        var secondClaim = outbox.claim(secondRow, "worker", now, 120000);
+        assertNotNull(secondClaim);
+        var facts = preparedFacts(secondClaim);
+        @SuppressWarnings("unchecked")
+        var plan = ChatContextDelivery.readPlan((Map<String, Object>) facts.get("contextDelivery"));
+        assertEquals(ChatContextDelivery.Mode.DELTA, plan.mode());
+        assertEquals(first.dispatches().getFirst().turnId(), plan.baseTurnId());
+        assertTrue(plan.afterMessageId() >= Long.parseLong(second.userMessageId()));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> history = (Map<String, Object>) facts.get("authorizedContext");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> current = (Map<String, Object>) history.get("currentUserMessage");
+        assertEquals(second.userMessageId(), current.get("messageId"));
+        assertEquals(List.of(), history.get("recentMessages"));
+        completePrepared(secondClaim);
+    }
+
+    @Test
+    void newNativeContextIncludesAnEarlierRequestReplyEvenWhenItsMessageIdIsAfterCurrentUser() throws Exception {
+        seedConversation(TENANT, OWNER, CLIENT, CONVERSATION, AGENT);
+        var first = admit(TENANT, OWNER, CLIENT, CONVERSATION, "legacy-first", AGENT, InteractionRoute.CHAT);
+        var second = admit(TENANT, OWNER, CLIENT, CONVERSATION, "bootstrap-second", AGENT, InteractionRoute.CHAT);
+        var secondRow = contextDraft(second);
+        var dispatch = first.dispatches().getFirst();
+        var reply = completePrepared(outbox.claim(contextDraft(first), "worker", System.currentTimeMillis() + 1000, 120000));
+        // Model a pre-upgrade completed final with no native checkpoint. Never replay it.
+        jdbc.update("UPDATE chat_message SET metadata=JSON_REMOVE(metadata,'$.contextReceipt') WHERE id=?", reply.messageId());
+        var claim = outbox.claim(secondRow, "worker", System.currentTimeMillis() + 1000, 120000);
+        var facts = preparedFacts(claim);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> history = (Map<String, Object>) facts.get("authorizedContext");
+        assertTrue(reply.messageId() > Long.parseLong(second.userMessageId()));
+        assertEquals(List.of(first.userMessageId(), reply.messageId().toString()), history.get("sourceMessageIds"));
+    }
+
+    @Test
+    void unexecutedDeltaGetsNewImmutableBootstrapAttemptAndDuplicateRejectionDoesNotRepeatIt() throws Exception {
+        seedConversation(TENANT, OWNER, CLIENT, CONVERSATION, AGENT);
+        var first = admit(TENANT, OWNER, CLIENT, CONVERSATION, "attempt-first", AGENT, InteractionRoute.CHAT);
+        long now = System.currentTimeMillis() + 1000;
+        completePrepared(outbox.claim(contextDraft(first), "worker", now, 120000));
+        var second = admit(TENANT, OWNER, CLIENT, CONVERSATION, "attempt-second", AGENT, InteractionRoute.CHAT);
+        var claimed = outbox.claim(contextDraft(second), "worker", now, 120000);
+        var old = claimed.row();
+        var before = deliberationDao.findTurn(TENANT, OWNER, CLIENT, old.getTurnId());
+        var frozen = deliberationDao.findSnapshot(TENANT, OWNER, CLIENT, before.getSnapshotId());
+        when(dispatchAuthority.incomingContextRejection(TENANT, CLIENT, OWNER, AGENT, old.getDispatchId()))
+                .thenAnswer(call -> new ChatDispatchAuthorityService.Binding(
+                        deliberationDao.findOutboxById(TENANT, OWNER, CLIENT, old.getEventId()),
+                        deliberationDao.findTurn(TENANT, OWNER, CLIENT, old.getTurnId()), OWNER));
+        var event = deliberation.reprepareUnexecutedContext(TENANT, OWNER, CLIENT, AGENT, old.getDispatchId(), old.getEventId());
+        assertNotNull(event);
+        var after = deliberationDao.findTurn(TENANT, OWNER, CLIENT, old.getTurnId());
+        assertTrue(!before.getDispatchId().equals(after.getDispatchId()));
+        assertTrue(!before.getSnapshotId().equals(after.getSnapshotId()));
+        var retired = deliberationDao.findOutboxById(TENANT, OWNER, CLIENT, old.getEventId());
+        assertEquals("DEAD", retired.getStatus()); assertEquals(old.getPayloadJson(), retired.getPayloadJson());
+        assertEquals(frozen.getFactsManifestJson(), deliberationDao.findSnapshot(TENANT, OWNER, CLIENT, before.getSnapshotId()).getFactsManifestJson());
+        assertEquals(frozen.getContextDigest(), deliberationDao.findSnapshot(TENANT, OWNER, CLIENT, before.getSnapshotId()).getContextDigest());
+        assertEquals(null, deliberation.reprepareUnexecutedContext(TENANT, OWNER, CLIENT, AGENT, old.getDispatchId(), old.getEventId()));
+        // The old sender can finish after replacement; it must not mark the new attempt dispatched.
+        deliberation.markDispatch(TENANT, OWNER, CLIENT, old.getTurnId(), old.getDispatchId(), true);
+        assertEquals("RECEIVED", deliberationDao.findTurn(TENANT, OWNER, CLIENT, old.getTurnId()).getState());
+        var ready = outbox.discover(now, 32).stream().filter(row -> after.getDispatchId().equals(row.getDispatchId())).toList();
+        assertEquals(1, ready.size());
+        var retry = outbox.claim(ready.getFirst(), "replacement-worker", now, 120000);
+        @SuppressWarnings("unchecked") var plan = (Map<String,Object>) preparedFacts(retry).get("contextDelivery");
+        assertEquals("BOOTSTRAP", plan.get("mode")); assertEquals(old.getDispatchId(), plan.get("replacesDispatchId"));
+        completePrepared(retry);
+        assertEquals(3, count("chat_context_snapshot")); // first + immutable delta + replacement
+    }
+
+    @Test
+    void failedReplacementRollsBackRetirementAndBothNewRecords() throws Exception {
+        seedConversation(TENANT, OWNER, CLIENT, CONVERSATION, AGENT);
+        long now = System.currentTimeMillis() + 1000;
+        var first = admit(TENANT, OWNER, CLIENT, CONVERSATION, "attempt-rollback-first", AGENT, InteractionRoute.CHAT);
+        completePrepared(outbox.claim(contextDraft(first), "worker", now, 120000));
+        var second = admit(TENANT, OWNER, CLIENT, CONVERSATION, "attempt-rollback-second", AGENT, InteractionRoute.CHAT);
+        var claimed = outbox.claim(contextDraft(second), "worker", now, 120000);
+        var old = claimed.row(); var before = deliberationDao.findTurn(TENANT, OWNER, CLIENT, old.getTurnId());
+        when(dispatchAuthority.incomingContextRejection(TENANT, CLIENT, OWNER, AGENT, old.getDispatchId()))
+                .thenReturn(new ChatDispatchAuthorityService.Binding(old, before, OWNER));
+        doReturn(0).when(contextHistory).replaceUnexecutedDispatch(any(),anyString(),anyString(),anyString(),anyLong());
+        int rows = count("chat_dispatch_outbox");
+        assertThrows(ChatDeliberationException.class, () -> deliberation.reprepareUnexecutedContext(
+                TENANT, OWNER, CLIENT, AGENT, old.getDispatchId(), old.getEventId()));
+        assertEquals("CLAIMED", deliberationDao.findOutboxById(TENANT, OWNER, CLIENT, old.getEventId()).getStatus());
+        assertEquals(before.getDispatchId(), deliberationDao.findTurn(TENANT, OWNER, CLIENT, old.getTurnId()).getDispatchId());
+        assertEquals(2, count("chat_context_snapshot")); assertEquals(rows, count("chat_dispatch_outbox"));
+    }
+
+    @Test
+    void preparationFailureRollsBackSnapshotTurnAndOutboxTogether() throws Exception {
+        seedConversation(TENANT, OWNER, CLIENT, CONVERSATION, AGENT);
+        var admission = admit(TENANT, OWNER, CLIENT, CONVERSATION, "rollback-context", AGENT, InteractionRoute.CHAT);
+        var row = contextDraft(admission);
+        var dispatch = admission.dispatches().getFirst();
+        doReturn(0).when(contextHistory).freezeOutboxContext(any(), anyString(), anyLong());
+        assertThrows(ChatDeliberationException.class, () -> outbox.claim(row, "worker", System.currentTimeMillis() + 1000, 120000));
+        assertEquals(dispatch.contextHash(), deliberationDao.findTurn(TENANT, OWNER, CLIENT, dispatch.turnId()).getContextDigest());
+        assertEquals(dispatch.contextHash(), deliberationDao.findSnapshot(TENANT, OWNER, CLIENT, dispatch.contextSnapshotId()).getContextDigest());
+        var after = deliberationDao.findOutboxById(TENANT, OWNER, CLIENT, row.getEventId());
+        assertEquals("READY", after.getStatus()); assertEquals(row.getPayloadJson(), after.getPayloadJson());
+        assertEquals(row.getVersion(), after.getVersion());
+    }
+
+    @Test
+    void retryKeepsFrozenInputDespiteNewHistoryAndDoesNotReadHistoryAgain() throws Exception {
+        seedConversation(TENANT, OWNER, CLIENT, CONVERSATION, AGENT);
+        var admission = admit(TENANT, OWNER, CLIENT, CONVERSATION, "immutable-context", AGENT, InteractionRoute.CHAT);
+        var row = contextDraft(admission);
+        long now = System.currentTimeMillis() + 1000;
+        var claim = outbox.claim(row, "worker", now, 120000);
+        String frozen = claim.row().getPayloadJson();
+        assertTrue(outbox.retry(claim, "OFFLINE", now));
+        admit(TENANT, OWNER, CLIENT, CONVERSATION, "later-user", AGENT, InteractionRoute.CHAT);
+        var retry = deliberationDao.findOutboxById(TENANT, OWNER, CLIENT, row.getEventId());
+        var retried = outbox.claim(retry, "worker", retry.getAvailableAt() + 1, 120000);
+        assertNotNull(retried); assertEquals(frozen, retried.row().getPayloadJson());
+        verify(contextHistory, org.mockito.Mockito.times(1)).messageHighWatermark(any());
+        verify(contextHistory, org.mockito.Mockito.times(1)).freezeOutboxContext(any(), anyString(), anyLong());
+    }
+
     private void createSchema() {
         jdbc.execute("""
                 CREATE TABLE chat_conversation (
@@ -850,7 +1096,9 @@ class R8TenantPrivateChatTest {
                   client_id VARCHAR(50), conversation_id VARCHAR(100), conversation_generation BIGINT,
                   request_id VARCHAR(100), request_revision BIGINT, target_agent_id VARCHAR(100),
                   route VARCHAR(20), source_vector_json TEXT, facts_manifest_json MEDIUMTEXT,
-                  context_digest VARCHAR(100), created_at BIGINT)
+                  context_digest VARCHAR(100), created_at BIGINT,
+                  KEY idx_chat_snapshot_request_target
+                    (tenant_id,owner_jiacn,client_id,request_id,request_revision,target_agent_id))
                 """);
         jdbc.execute("""
                 CREATE TABLE chat_request (
@@ -878,7 +1126,8 @@ class R8TenantPrivateChatTest {
                   task_requirement_revision BIGINT, status VARCHAR(30), payload_json MEDIUMTEXT,
                   version BIGINT, available_at BIGINT, lease_owner VARCHAR(100), lease_until BIGINT,
                   attempt_count INT, fencing_token BIGINT, last_error VARCHAR(500), sent_at BIGINT,
-                  created_at BIGINT, updated_at BIGINT)
+                  created_at BIGINT, updated_at BIGINT,
+                  UNIQUE KEY uk_chat_outbox_turn_dispatch_event(turn_id,dispatch_id,event_type))
                 """);
         jdbc.execute("""
                 CREATE TABLE chat_conversation_event (

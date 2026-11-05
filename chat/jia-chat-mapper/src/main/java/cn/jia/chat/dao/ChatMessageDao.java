@@ -26,6 +26,10 @@ public interface ChatMessageDao extends IBaseDao<ChatMessageEntity> {
     List<ChatMessageEntity> findOwnedByConversationIdWithLimit(
             String tenantId, String ownerJiacn, String clientId, String conversationId, int limit);
 
+    /** IDs only, with the same scope/order/window as the bounded history read. */
+    List<Long> findOwnedMessageIdsWithLimit(
+            String tenantId, String ownerJiacn, String clientId, String conversationId, int limit);
+
     /** Deletes every byte-exact row for an already locked and authenticated conversation. */
     default int deleteExactOwnedConversationMessages(String ownerJiacn, String clientId, String conversationId) {
         return deleteExactOwnedConversationMessages("0", ownerJiacn, clientId, conversationId);

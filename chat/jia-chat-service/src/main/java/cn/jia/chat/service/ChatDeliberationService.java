@@ -5,6 +5,8 @@ import cn.jia.agent.service.AgentService;
 import cn.jia.chat.dao.ChatConversationDao;
 import cn.jia.chat.dao.ChatMessageDao;
 import cn.jia.chat.deliberation.ChatContextSnapshotEntity;
+import cn.jia.chat.deliberation.ChatContextDelivery;
+import cn.jia.chat.deliberation.ChatContextHistoryMapper;
 import cn.jia.chat.deliberation.ChatConversationEventEntity;
 import cn.jia.chat.deliberation.ChatDeliberationDao;
 import cn.jia.chat.deliberation.ChatDeliberationStates;
@@ -65,6 +67,10 @@ public class ChatDeliberationService {
     private final ChatConversationDao conversationDao;
     private final ChatMessageDao messageDao;
     private final AgentService agentService;
+    private final BuiltinHallAgentSupport builtin;
+    private ChatContextHistoryMapper contextHistory;
+    @Autowired public void setContextHistory(ChatContextHistoryMapper value) { contextHistory = value; }
+
     private ChatInteractionStepStore interactionSteps;
     private ChatTypedDeliberationService typedDeliberation;
     private ChatTypedInspectionService typedInspection;
@@ -134,6 +140,13 @@ public class ChatDeliberationService {
 
     public ChatDeliberationService(ChatDeliberationDao dao, ChatConversationDao conversationDao,
             ChatMessageDao messageDao, AgentService agentService) {
+        this(dao, conversationDao, messageDao, agentService, new BuiltinHallAgentSupport(agentService));
+    }
+
+    @Autowired
+    public ChatDeliberationService(ChatDeliberationDao dao, ChatConversationDao conversationDao,
+            ChatMessageDao messageDao, AgentService agentService, BuiltinHallAgentSupport builtin) {
+        this.builtin = builtin;
         this.dao = dao;
         this.conversationDao = conversationDao;
         this.messageDao = messageDao;
@@ -339,13 +352,16 @@ public class ChatDeliberationService {
         ChatConversationEntity conversation = requireLockedConversation(
                 tenantId, ownerJiacn, clientId, conversationId, expectedGeneration);
         requireConversationScope(conversation, scope);
-        List<ChatMessageEntity> existingMessages = messageDao.findOwnedByConversationIdWithLimit(
-                tenantId, ownerJiacn, clientId, conversationId, HISTORY_QUERY_LIMIT);
-        if (existingMessages == null) throw unavailable();
+        // Reference admission only needs the existing authorized latest-200 ID window.
+        // Native CHAT history bodies are loaded when its execution lane is ready, not here.
+        boolean hasMessageRefs = input.getInputRefs() != null && input.getInputRefs().stream()
+                .anyMatch(ref -> ref != null && "message".equals(ref.get("type")));
+        List<Long> referenceIds = hasMessageRefs
+                ? messageDao.findOwnedMessageIdsWithLimit(tenantId, ownerJiacn, clientId, conversationId, HISTORY_QUERY_LIMIT)
+                : List.of();
+        if (referenceIds == null) throw unavailable();
         List<Map<String, Object>> inputRefs = authorizeInputRefs(
-                input.getInputRefs(), route, conversation, scope, existingMessages,
-                trustedTypedInspection != null);
-        AgentTaskDTO task = taskFacts(scope, tenantId, ownerJiacn, clientId);
+                input.getInputRefs(), route, conversation, scope, referenceIds, trustedTypedInspection != null);
         Map<String, Object> requestDigestInput = new LinkedHashMap<>();
         requestDigestInput.put("schemaVersion", "1");
         requestDigestInput.put("conversationId", conversationId);
@@ -377,6 +393,12 @@ public class ChatDeliberationService {
             throw conflict("requestId was already admitted under a different revision");
         }
 
+        // Immutable task/material/action facts remain admission-owned. Only history is deferred.
+        AgentTaskDTO task = taskFacts(scope, tenantId, ownerJiacn, clientId);
+        boolean needsAdmissionHistory = route != InteractionRoute.CHAT
+                || scope.targetAgentIds().stream().anyMatch(builtin::isBuiltinAgent);
+        List<ChatMessageEntity> existingMessages = needsAdmissionHistory
+                ? admissionHistory(tenantId, ownerJiacn, clientId, conversationId) : List.of();
         long now = System.currentTimeMillis();
         ChatMessageEntity userMessage = continuationUser;
         if (userMessage == null) {
@@ -431,9 +453,10 @@ public class ChatDeliberationService {
         for (String targetAgentId : scope.targetAgentIds()) {
             String turnId = stableId("turn", tenantId, ownerJiacn, clientId, requestId, targetAgentId);
             String dispatchId = stableId("dispatch", tenantId, ownerJiacn, clientId, requestId, targetAgentId);
+            boolean contextDraft = route == InteractionRoute.CHAT && !builtin.isBuiltinAgent(targetAgentId);
             Map<String, Object> authorizedContext = authorizedContext(
                     tenantId, ownerJiacn, clientId, conversationId, targetAgentId,
-                    existingMessages, userMessage, inputRefs, taskMaterials);
+                    contextDraft ? List.of() : existingMessages, userMessage, inputRefs, taskMaterials);
             Map<String, Object> sourceVector = sourceVector(
                     expectedGeneration, userMessage.getId(), task, authorizedContext);
             Map<String, Object> facts = factsManifest(
@@ -463,6 +486,11 @@ public class ChatDeliberationService {
                         "requirementRevision", Long.toString(taskGrant.requirementRevision())));
                 facts = java.util.Collections.unmodifiableMap(boundFacts);
             }
+            if (contextDraft) {
+                var draftFacts = new LinkedHashMap<>(facts);
+                draftFacts.put("contextPreparation", "PENDING");
+                facts = java.util.Collections.unmodifiableMap(draftFacts);
+            }
             String sourceJson = CanonicalContextJson.write(sourceVector);
             String factsJson = CanonicalContextJson.write(facts);
             String contextDigest = contextDigest(sourceVector, facts);
@@ -486,6 +514,10 @@ public class ChatDeliberationService {
                     conversationId, expectedGeneration, requestId, revision, turnId, dispatchId,
                     targetAgentId, snapshotId, contextDigest, route, content, input, scope,
                     trustedSender, taskMaterials, now, sourceVector, facts);
+            if (contextDraft) {
+                eventPayload.put("contextPreparation", "PENDING");
+                eventPayload.put("contextInputRefs", inputRefs);
+            }
             ChatDispatchOutboxEntity outbox = new ChatDispatchOutboxEntity()
                     .setEventId(stableId("evt", dispatchId, "DISPATCH"))
                     .setTenantId(tenantId).setOwnerJiacn(ownerJiacn).setClientId(clientId)
@@ -505,13 +537,186 @@ public class ChatDeliberationService {
                 expectedGeneration, route, List.copyOf(dispatches), false);
     }
 
+    /**
+     * Runs inside the existing outbox claim transaction, before its outbox lock.
+     * Conversation -> turn -> outbox is the same order as final persistence.
+     * Native CHAT admission supplies a draft; builtin and INSPECT snapshots stay admission-owned.
+     */
+    @Transactional(propagation = Propagation.MANDATORY, rollbackFor = Exception.class)
+    public ChatDispatchOutboxEntity prepareContextForClaim(ChatDispatchOutboxEntity candidate, long now) {
+        String tenant = candidate.getTenantId(), owner = candidate.getOwnerJiacn(), client = candidate.getClientId();
+        Map<String, Object> initial = !"DISPATCH".equals(candidate.getEventType()) || candidate.getPayloadJson() == null
+                ? Map.of() : parseJsonMap(candidate.getPayloadJson());
+        if (!"PENDING".equals(initial.get("contextPreparation")))
+            return dao.lockOutboxById(tenant, owner, client, candidate.getEventId());
+        if (contextHistory == null) throw persistence("Dispatch context store is unavailable");
+        // The candidate comes from the scoped outbox, not an external identity input.
+        String conversationId = (String) initial.get("conversationId");
+        long generation = Long.parseLong((String) initial.get("conversationGeneration"));
+        var conversation = conversationDao.lockScopedById(tenant, owner, client, conversationId);
+        if (conversation == null || conversation.getDeletedAt() != null
+                || !Objects.equals(conversation.getLifecycleGeneration(), generation)) {
+            // Let the existing relay settle stale/deleted work, without reading history or
+            // converting a dead conversation into an endlessly failing preparation attempt.
+            return dao.lockOutboxById(tenant, owner, client, candidate.getEventId());
+        }
+        ChatTurnEntity turn = requireLockedTurn(tenant, owner, client, candidate.getTurnId());
+        if (!Objects.equals(turn.getConversationId(), conversationId)
+                || !Objects.equals(turn.getConversationGeneration(), generation)) throw unavailable();
+        ChatDispatchOutboxEntity row = dao.lockOutboxById(tenant, owner, client, candidate.getEventId());
+        if (row == null) return null;
+        Map<String, Object> payload = new LinkedHashMap<>(parseJsonMap(row.getPayloadJson()));
+        if (!"PENDING".equals(payload.get("contextPreparation"))) return row;
+        if (!("READY".equals(row.getStatus()) || "RETRY".equals(row.getStatus()))
+                || row.getAvailableAt() == null || row.getAvailableAt() > now) return null;
+        if (!Objects.equals(turn.getDispatchId(), row.getDispatchId()) || !"CHAT".equals(turn.getRoute())
+                || !"RECEIVED".equals(turn.getState())) throw conflict("Draft context is no longer preparable");
+        ChatRequestEntity request = dao.findRequest(tenant, owner, client, turn.getRequestId());
+        if (request == null || request.getId() == null || request.getId() < 1) throw unavailable();
+        if (contextHistory.hasUnfinishedPredecessor(turn, request.getId())) return null;
+        // The claimed outbox already carries the admitted snapshot. Do not fetch/decode it twice.
+        Map<String, Object> facts = new LinkedHashMap<>(castContextMap(payload.get("factsManifest")));
+        Map<String, Object> source = new LinkedHashMap<>(castContextMap(payload.get("sourceVector")));
+        if (!contextDigest(source, facts).equals(turn.getContextDigest())) throw persistence("Draft context digest differs");
+        ChatContextSnapshotEntity snapshot = new ChatContextSnapshotEntity().setSnapshotId(turn.getSnapshotId())
+                .setTenantId(tenant).setOwnerJiacn(owner).setClientId(client);
+
+        ChatContextDelivery.Checkpoint checkpoint = null;
+        long afterRequestSequence = 0, nativeFinalMessageId = 0;
+        var previous = contextHistory.previousContext(turn, request.getId());
+        if (previous != null && ("FINAL_PERSISTED".equals(previous.state()) || "PUBLISHED".equals(previous.state()))
+                && previous.finalMessageId() != null && previous.finalMetadata() != null) {
+            Object stored = parseJsonMap(previous.finalMetadata()).get("contextReceipt");
+            if (stored instanceof Map<?, ?> wire) {
+                // Final persistence already validated this receipt against its frozen plan.
+                var receipt = ChatContextDelivery.readReceipt(castContextMap(wire));
+                checkpoint = new ChatContextDelivery.Checkpoint(previous.turnId(), receipt.engineThreadId(), receipt.throughMessageId());
+                afterRequestSequence = previous.requestSequence();
+                nativeFinalMessageId = previous.finalMessageId();
+            }
+        }
+        long throughMessageId = contextHistory.messageHighWatermark(turn);
+        var plan = ChatContextDelivery.prepare(true, checkpoint, throughMessageId).orElseThrow();
+        // Reuse admitted, immutable input instead of re-reading/re-authorizing the same USER row.
+        var current = new ChatMessageEntity().setId(request.getUserMessageId()).setContent((String) payload.get("content"));
+        List<ChatMessageEntity> history = new ArrayList<>(plan.mode() == ChatContextDelivery.Mode.BOOTSTRAP
+                ? contextHistory.bootstrapCandidates(turn, request.getId(), throughMessageId, current.getId(), HISTORY_QUERY_LIMIT)
+                : contextHistory.historyCandidates(turn, afterRequestSequence, request.getId(), plan.afterMessageId(),
+                        throughMessageId, current.getId(), nativeFinalMessageId, HISTORY_QUERY_LIMIT));
+        java.util.Collections.reverse(history);
+        if (!(payload.get("contextInputRefs") instanceof List<?> rawRefs)) throw persistence("Draft references missing");
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> refs = (List<Map<String, Object>>) (List<?>) rawRefs;
+        Map<String, Object> materials = payload.get("taskMaterials") instanceof Map<?, ?> value ? castContextMap(value) : null;
+        var authorized = authorizedContext(tenant, owner, client, turn.getConversationId(), turn.getTargetAgentId(),
+                history, current, refs, materials);
+        facts.remove("contextPreparation");
+        facts.put("authorizedContext", authorized);
+        facts.put("contextDelivery", plan.wire());
+        // Keep the public sourceVector USER identity unchanged. It was never the native history cursor.
+        source.put("authorizedHistoryDigest", authorized.get("historyDigest"));
+        source.put("sourceMessageIds", authorized.get("sourceMessageIds"));
+        Map<String, Object> summary = castContextMap(authorized.get("summary"));
+        List<?> summaryIds = (List<?>) summary.get("sourceMessageIds");
+        source.put("summaryRevision", summaryIds == null || summaryIds.isEmpty() ? "0" : String.valueOf(summaryIds.getLast()));
+        String expectedDigest = turn.getContextDigest(), frozenDigest = contextDigest(source, facts);
+        snapshot.setSourceVectorJson(CanonicalContextJson.write(source)).setFactsManifestJson(CanonicalContextJson.write(facts))
+                .setContextDigest(frozenDigest);
+        payload.remove("contextPreparation"); // Keep authorized refs internal for a possible unexecuted bootstrap attempt.
+        payload.put("sourceVector", source); payload.put("factsManifest", facts); payload.put("contextHash", frozenDigest);
+        String frozenPayload = CanonicalContextJson.write(payload);
+        if (contextHistory.freezeSnapshot(snapshot, expectedDigest) != 1
+                || contextHistory.freezeTurnContext(turn, frozenDigest) != 1
+                || contextHistory.freezeOutboxContext(row, frozenPayload, now) != 1)
+            throw conflict("Concurrent dispatch context preparation");
+        return row.setPayloadJson(frozenPayload).setVersion(row.getVersion() + 1).setUpdatedAt(now);
+    }
+
+    /** Replaces only a DELTA rejected before native turn/start. The old snapshot and bytes remain immutable. */
     @Transactional(rollbackFor = Exception.class)
-    public void markDispatch(String tenantId, String ownerJiacn, String clientId, String turnId, boolean delivered) {
+    public ChatConversationEventEntity reprepareUnexecutedContext(String tenant, String executorOwner, String client,
+            String agent, String dispatchId, String messageId) {
+        var binding = requireDispatchAuthority().incomingContextRejection(tenant, client, executorOwner, agent, dispatchId);
+        var visible = binding.turn();
+        String owner = visible.getOwnerJiacn();
+        if (!Objects.equals(messageId, binding.dispatch().getEventId())) throw unavailable();
+        requireLockedConversation(tenant, owner, client, visible.getConversationId(), visible.getConversationGeneration());
+        var turn = requireLockedTurn(tenant, owner, client, visible.getTurnId());
+        var old = dao.lockOutboxById(tenant, owner, client, messageId);
+        if (old == null || !Objects.equals(dispatchId, old.getDispatchId())
+                || !Objects.equals(turn.getTurnId(), old.getTurnId())) throw unavailable();
+        String replacementId = stableId("dispatch", dispatchId, "CONTEXT_BOOTSTRAP");
+        if (!Objects.equals(turn.getDispatchId(), dispatchId)) {
+            if (replacementId.equals(turn.getDispatchId()) && "DEAD".equals(old.getStatus())
+                    && "CHAT_CONTEXT_BOOTSTRAP_REQUIRED".equals(old.getLastError())) return null;
+            throw unavailable();
+        }
+        if (contextHistory == null || !"CHAT".equals(turn.getRoute())
+                || !Set.of("RECEIVED", "QUEUED", "DISPATCHED").contains(turn.getState())
+                || turn.getFinalMessageId() != null || !Objects.equals(turn.getLastDeltaSeq(), 0L))
+            throw conflict("Context retry requires an unexecuted turn");
+        var payload = new LinkedHashMap<>(parseJsonMap(old.getPayloadJson()));
+        var facts = new LinkedHashMap<>(castContextMap(payload.get("factsManifest")));
+        var source = new LinkedHashMap<>(castContextMap(payload.get("sourceVector")));
+        var oldPlan = ChatContextDelivery.readPlan(castContextMap(facts.get("contextDelivery")));
+        if (oldPlan.mode() != ChatContextDelivery.Mode.DELTA
+                || !contextDigest(source, facts).equals(turn.getContextDigest()))
+            throw conflict("Only a frozen delta can be replaced by bootstrap");
+        var request = dao.findRequest(tenant, owner, client, turn.getRequestId());
+        if (request == null || request.getId() == null) throw unavailable();
+        long through = contextHistory.messageHighWatermark(turn);
+        var history = new ArrayList<>(contextHistory.bootstrapCandidates(turn, request.getId(), through,
+                request.getUserMessageId(), HISTORY_QUERY_LIMIT));
+        java.util.Collections.reverse(history);
+        if (!(payload.get("contextInputRefs") instanceof List<?> rawRefs))
+            throw persistence("Frozen context references missing");
+        @SuppressWarnings("unchecked")
+        var refs = (List<Map<String, Object>>) (List<?>) rawRefs;
+        var current = new ChatMessageEntity().setId(request.getUserMessageId()).setContent((String) payload.get("content"));
+        var materials = payload.get("taskMaterials") instanceof Map<?, ?> value ? castContextMap(value) : null;
+        var authorized = authorizedContext(tenant, owner, client, turn.getConversationId(), agent, history, current, refs, materials);
+        var plan = new LinkedHashMap<>(ChatContextDelivery.prepare(true, null, through).orElseThrow().wire());
+        plan.put("replacesDispatchId", dispatchId);
+        facts.put("authorizedContext", authorized); facts.put("contextDelivery", plan);
+        source.put("authorizedHistoryDigest", authorized.get("historyDigest"));
+        source.put("sourceMessageIds", authorized.get("sourceMessageIds"));
+        var summaryIds = (List<?>) castContextMap(authorized.get("summary")).get("sourceMessageIds");
+        source.put("summaryRevision", summaryIds == null || summaryIds.isEmpty() ? "0" : String.valueOf(summaryIds.getLast()));
+        String hash = contextDigest(source, facts), snapshotId = stableId("ctx", turn.getTurnId(), hash);
+        long now = System.currentTimeMillis();
+        var snapshot = new ChatContextSnapshotEntity().setSnapshotId(snapshotId).setTenantId(tenant).setOwnerJiacn(owner)
+                .setClientId(client).setConversationId(turn.getConversationId()).setConversationGeneration(turn.getConversationGeneration())
+                .setRequestId(turn.getRequestId()).setRequestRevision(turn.getRequestRevision()).setTargetAgentId(agent).setRoute("CHAT")
+                .setSourceVectorJson(CanonicalContextJson.write(source)).setFactsManifestJson(CanonicalContextJson.write(facts))
+                .setContextDigest(hash).setCreatedAt(now);
+        payload.put("dispatchId", replacementId); payload.put("contextSnapshotId", snapshotId); payload.put("contextHash", hash);
+        payload.put("sourceVector", source); payload.put("factsManifest", facts);
+        payload.put("sentAt", Long.toString(now)); payload.put("timestamp", Long.toString(now));
+        var replacement = new ChatDispatchOutboxEntity().setEventId(stableId("evt", replacementId, "DISPATCH"))
+                .setTenantId(tenant).setOwnerJiacn(owner).setClientId(client).setTurnId(turn.getTurnId()).setDispatchId(replacementId)
+                .setEventType("DISPATCH").setStatus("READY").setPayloadJson(CanonicalContextJson.write(payload))
+                .setTaskGrantId(old.getTaskGrantId()).setTaskGrantVersion(old.getTaskGrantVersion())
+                .setTaskAssignmentRevision(old.getTaskAssignmentRevision()).setTaskRequirementRevision(old.getTaskRequirementRevision())
+                .setVersion(0L).setAvailableAt(now).setAttemptCount(0).setFencingToken(0L).setCreatedAt(now).setUpdatedAt(now);
+        if (contextHistory.rejectUnexecutedDispatch(old, now) != 1 || dao.insertSnapshot(snapshot) != 1
+                || dao.insertOutbox(replacement) != 1
+                || contextHistory.replaceUnexecutedDispatch(turn, replacementId, snapshotId, hash, now) != 1)
+            throw conflict("Concurrent unexecuted context replacement");
+        turn.setDispatchId(replacementId).setSnapshotId(snapshotId).setContextDigest(hash).setState("RECEIVED")
+                .setStateVersion(turn.getStateVersion() + 1).setUpdatedAt(now);
+        var event = persistEvent(turn, stableId("evt", replacementId, "CONTEXT_BOOTSTRAP"), "resync_required",
+                Map.of("reason", "CHAT_CONTEXT_BOOTSTRAP_PREPARED"), now);
+        ChatDeliberationOutboxWakeup.afterCommit(outboxEvents, now);
+        return event;
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public void markDispatch(String tenantId, String ownerJiacn, String clientId, String turnId, String dispatchId, boolean delivered) {
         ChatTurnEntity candidate = requireVisibleTurn(tenantId, ownerJiacn, clientId, turnId);
         requireLockedConversation(tenantId, ownerJiacn, clientId, candidate.getConversationId(),
                 candidate.getConversationGeneration());
         ChatTurnEntity turn = requireLockedTurn(tenantId, ownerJiacn, clientId, turnId);
-        if (terminal(turn.getState())) return;
+        if (!Objects.equals(dispatchId, turn.getDispatchId()) || terminal(turn.getState())) return;
         String next = delivered ? ChatDeliberationStates.DISPATCHED : ChatDeliberationStates.QUEUED;
         if (Objects.equals(next, turn.getState())) return;
         long now = System.currentTimeMillis();
@@ -547,6 +752,17 @@ public class ChatDeliberationService {
             String snapshotId, String contextDigest, String content, Integer outcomeContractVersion,
             String rawInteractionOutcomeJson, String rawInspectionInputReceiptJson,
             ServerResolvedAgentSender sender) {
+        return persistFinal(tenantId, ownerJiacn, clientId, conversationId, conversationGeneration, agentId,
+                requestId, turnId, dispatchId, snapshotId, contextDigest, content, outcomeContractVersion,
+                rawInteractionOutcomeJson, rawInspectionInputReceiptJson, null, sender);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public FinalResult persistFinal(String tenantId, String ownerJiacn, String clientId, String conversationId,
+            long conversationGeneration, String agentId, String requestId, String turnId, String dispatchId,
+            String snapshotId, String contextDigest, String content, Integer outcomeContractVersion,
+            String rawInteractionOutcomeJson, String rawInspectionInputReceiptJson, Object rawContextReceipt,
+            ServerResolvedAgentSender sender) {
         requireAgentSender(sender, agentId, ownerJiacn, clientId, tenantId, dispatchId);
         String safeContent = requireContent(content);
         ChatTurnEntity visible = requireVisibleTurn(tenantId, ownerJiacn, clientId, turnId);
@@ -555,33 +771,32 @@ public class ChatDeliberationService {
             return inspectionAuthority.withFinalAuthority(visible, () -> persistFinalLocked(tenantId, ownerJiacn,
                     clientId, conversationId, conversationGeneration, agentId, requestId, turnId, dispatchId,
                     snapshotId, contextDigest, safeContent, outcomeContractVersion, rawInteractionOutcomeJson,
-                    rawInspectionInputReceiptJson, sender, visible));
+                    rawInspectionInputReceiptJson, rawContextReceipt, sender, visible));
         }
         if(InteractionRoute.CHAT.name().equals(visible.getRoute())&&materialsAuthority!=null) {
             return materialsAuthority.withFinalAuthority(visible,()->persistFinalLocked(tenantId,ownerJiacn,clientId,conversationId,
                     conversationGeneration,agentId,requestId,turnId,dispatchId,snapshotId,contextDigest,safeContent,outcomeContractVersion,
-                    rawInteractionOutcomeJson,rawInspectionInputReceiptJson,sender,visible));
+                    rawInteractionOutcomeJson,rawInspectionInputReceiptJson,rawContextReceipt,sender,visible));
         }
         if (rawInspectionInputReceiptJson != null) throw invalid("Material receipt requires trusted CHAT authority");
         return persistFinalLocked(tenantId, ownerJiacn, clientId, conversationId, conversationGeneration, agentId,
                 requestId, turnId, dispatchId, snapshotId, contextDigest, safeContent, outcomeContractVersion,
-                rawInteractionOutcomeJson, null, sender, visible);
+                rawInteractionOutcomeJson, null, rawContextReceipt, sender, visible);
     }
 
     private FinalResult persistFinalLocked(String tenantId, String ownerJiacn, String clientId, String conversationId,
             long conversationGeneration, String agentId, String requestId, String turnId, String dispatchId,
             String snapshotId, String contextDigest, String safeContent, Integer outcomeContractVersion,
-            String rawInteractionOutcomeJson, String rawInspectionInputReceiptJson,
+            String rawInteractionOutcomeJson, String rawInspectionInputReceiptJson, Object rawContextReceipt,
             ServerResolvedAgentSender sender, ChatTurnEntity visible) {
         ChatConversationEntity conversation = requireLockedConversation(tenantId, ownerJiacn, clientId,
                 visible.getConversationId(), visible.getConversationGeneration());
         ChatTurnEntity turn = requireLockedTurn(tenantId, ownerJiacn, clientId, turnId);
-        requireCallbackBinding(turn, tenantId, ownerJiacn, clientId, conversationId, conversationGeneration,
-                agentId, requestId, dispatchId, snapshotId, contextDigest);
+        ChatContextSnapshotEntity finalSnapshot = requireCallbackBinding(turn, tenantId, ownerJiacn, clientId,
+                conversationId, conversationGeneration, agentId, requestId, dispatchId, snapshotId, contextDigest);
         ServerResolvedAgentSender trustedSender = requireAgentSender(sender, agentId, ownerJiacn, clientId, tenantId, dispatchId);
-        ChatContextSnapshotEntity finalSnapshot = dao.findSnapshot(tenantId, ownerJiacn, clientId, snapshotId);
-        if (finalSnapshot == null) throw unavailable();
         Map<String, Object> finalFacts = parseJsonMap(finalSnapshot.getFactsManifestJson());
+        var contextReceipt = ChatContextDelivery.finalReceipt(turnId, finalFacts, rawContextReceipt);
         boolean inspectionMarker = finalFacts.containsKey("typedInspection");
         boolean deliberationMarker = finalFacts.containsKey("typedDeliberation");
         if (inspectionMarker && deliberationMarker) throw persistence("Snapshot has conflicting typed contracts");
@@ -611,6 +826,15 @@ public class ChatDeliberationService {
         }
         if (turn.getFinalDigest() != null) {
             if (finalDigest.equals(turn.getFinalDigest())) {
+                // Preserve the business outcome digest used by action continuations. Only duplicate
+                // finals read back the existing receipt; normal completion adds no query or write.
+                if (contextReceipt.isPresent()) {
+                    var persisted = messageDao.selectById(turn.getFinalMessageId());
+                    if (persisted == null || !contextReceipt.equals(ChatContextDelivery.finalReceipt(turnId,
+                            finalFacts, parseJsonMap(persisted.getMetadata()).get("contextReceipt")))) {
+                        throw conflict("Turn context receipt already differs");
+                    }
+                }
                 ChatRequestEntity existingRequest = dao.findRequest(
                         tenantId, ownerJiacn, clientId, turn.getRequestId());
                 if (existingRequest == null) throw unavailable();
@@ -640,6 +864,7 @@ public class ChatDeliberationService {
         metadata.put("replyToMessageId", Long.toString(request.getUserMessageId()));
         metadata.put("targetAgentId", turn.getTargetAgentId());
         metadata.put("finalDigest", finalDigest);
+        contextReceipt.ifPresent(receipt -> metadata.put("contextReceipt", receipt.wire()));
         if (actionPrepared != null) metadata.put("outcomeId", actionFinals.outcomeId(actionPrepared));
         if (typedPrepared != null) metadata.put("outcomeId", typedDeliberation.outcomeId(typedPrepared));
         if (inspectionPrepared != null) metadata.put("outcomeId", typedInspection.outcomeId(inspectionPrepared));
@@ -1228,16 +1453,24 @@ public class ChatDeliberationService {
         }
     }
 
+    private List<ChatMessageEntity> admissionHistory(String tenantId, String ownerJiacn,
+            String clientId, String conversationId) {
+        List<ChatMessageEntity> messages = messageDao.findOwnedByConversationIdWithLimit(
+                tenantId, ownerJiacn, clientId, conversationId, HISTORY_QUERY_LIMIT);
+        if (messages == null) throw unavailable();
+        return messages;
+    }
+
     private List<Map<String, Object>> authorizeInputRefs(List<Map<String, Object>> candidates,
             InteractionRoute route, ChatConversationEntity conversation, JuyitingConversationScope scope,
-            List<ChatMessageEntity> messages, boolean trustedInspection) {
+            List<Long> authorizedMessageIds, boolean trustedInspection) {
         if (candidates == null || candidates.isEmpty()) {
             if (route == InteractionRoute.INSPECT && !trustedInspection) throw invalid("INSPECT requires authorized inputRefs");
             return List.of();
         }
         Set<String> messageIds = new LinkedHashSet<>();
-        for (ChatMessageEntity message : messages) {
-            if (message != null && message.getId() != null) messageIds.add(Long.toString(message.getId()));
+        for (Long id : authorizedMessageIds) {
+            if (id != null) messageIds.add(Long.toString(id));
         }
         List<Map<String, Object>> result = new ArrayList<>();
         Set<String> seen = new LinkedHashSet<>();
@@ -1605,7 +1838,7 @@ public class ChatDeliberationService {
         return value;
     }
 
-    private void requireCallbackBinding(ChatTurnEntity turn, String tenantId, String ownerJiacn,
+    private ChatContextSnapshotEntity requireCallbackBinding(ChatTurnEntity turn, String tenantId, String ownerJiacn,
             String clientId, String conversationId, long conversationGeneration, String agentId,
             String requestId, String dispatchId, String snapshotId, String contextDigest) {
         requireIdentity(tenantId, 50); requireIdentity(ownerJiacn, 50); requireIdentity(clientId, 50);
@@ -1631,6 +1864,10 @@ public class ChatDeliberationService {
                 || !Objects.equals(snapshot.getContextDigest(), contextDigest)) {
             throw unavailable();
         }
+        if (snapshot.getFactsManifestJson() != null
+                && "PENDING".equals(parseJsonMap(snapshot.getFactsManifestJson()).get("contextPreparation")))
+            throw conflict("Draft context has not been dispatched");
+        return snapshot;
     }
 
     /** Event replay is read-only: SELECT FOR UPDATE is rejected by MySQL read-only transactions.
@@ -1732,6 +1969,8 @@ public class ChatDeliberationService {
                 && dao.updateRequestState(request, state, now) != 1) {
             throw conflict("Concurrent request aggregate change");
         }
+        if (turns != null && turns.stream().anyMatch(t -> terminal(t.getState())))
+            ChatDeliberationOutboxWakeup.afterCommit(outboxEvents, now);
     }
 
     static String aggregate(List<ChatTurnEntity> turns) {

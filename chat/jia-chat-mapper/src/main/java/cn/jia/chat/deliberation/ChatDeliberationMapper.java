@@ -163,6 +163,9 @@ public interface ChatDeliberationMapper {
               AND turn_id=#{turnId} AND event_type=#{eventType}
               AND CAST(turn_id AS BINARY)=CAST(#{turnId} AS BINARY)
               AND CAST(event_type AS BINARY)=CAST(#{eventType} AS BINARY)
+              AND (#{eventType}!='DISPATCH' OR dispatch_id=(SELECT t.dispatch_id FROM chat_turn t
+                  WHERE t.turn_id=#{turnId} AND t.tenant_id=#{tenantId}
+                    AND t.owner_jiacn=#{ownerJiacn} AND t.client_id=#{clientId}))
             LIMIT 1 FOR UPDATE
             """)
     ChatDispatchOutboxEntity lockOutbox(@Param("tenantId") String tenantId,
@@ -202,10 +205,31 @@ public interface ChatDeliberationMapper {
             @Param("ownerJiacn") String ownerJiacn, @Param("clientId") String clientId,
             @Param("dispatchId") String dispatchId);
 
+    // Filter blocked lanes before LIMIT; never reclaim a queued row merely to discover it must wait.
+    // Retransmission of an already-sent immutable dispatch and non-dispatch events stay independent.
+    String CONTEXT_LANE_READY = """
+              AND (o.event_type != 'DISPATCH' OR o.status IN ('AWAITING_ACK','CLAIMED') OR NOT EXISTS (
+                SELECT 1 FROM chat_turn current_turn
+                JOIN chat_request current_request ON current_request.tenant_id=current_turn.tenant_id
+                  AND current_request.owner_jiacn=current_turn.owner_jiacn AND current_request.client_id=current_turn.client_id
+                  AND current_request.request_id=current_turn.request_id AND current_request.request_revision=current_turn.request_revision
+                JOIN chat_request earlier ON earlier.tenant_id=current_request.tenant_id
+                  AND earlier.owner_jiacn=current_request.owner_jiacn AND earlier.client_id=current_request.client_id
+                  AND earlier.conversation_id=current_request.conversation_id
+                  AND earlier.conversation_generation=current_request.conversation_generation AND current_request.id > earlier.id
+                JOIN chat_turn prior ON prior.tenant_id=earlier.tenant_id AND prior.owner_jiacn=earlier.owner_jiacn
+                  AND prior.client_id=earlier.client_id AND prior.request_id=earlier.request_id
+                  AND prior.request_revision=earlier.request_revision AND prior.target_agent_id=current_turn.target_agent_id
+                WHERE current_turn.turn_id=o.turn_id AND current_turn.tenant_id=o.tenant_id
+                  AND current_turn.owner_jiacn=o.owner_jiacn AND current_turn.client_id=o.client_id
+                  AND prior.state NOT IN ('FINAL_PERSISTED','PUBLISHED','CANCELLED','FAILED')
+              ))
+            """;
+
     @Select("""
             <script>
             SELECT MIN(CASE WHEN status='CLAIMED' THEN lease_until ELSE available_at END)
-            FROM chat_dispatch_outbox WHERE tenant_id=#{tenantId}
+            FROM chat_dispatch_outbox o WHERE tenant_id=#{tenantId}
               AND BINARY tenant_id=BINARY #{tenantId}
               AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(#{tenantId})
               <if test="clientId != null">
@@ -214,25 +238,27 @@ public interface ChatDeliberationMapper {
               </if>
               AND ((status IN ('READY','RETRY','AWAITING_ACK') AND available_at &gt; #{now})
                 OR (status='CLAIMED' AND lease_until &gt; #{now}))
+            """ + CONTEXT_LANE_READY + """
             </script>
             """)
     Long nextOutboxDue(@Param("tenantId") String tenantId, @Param("clientId") String clientId,
             @Param("now") long now);
 
     @Select("""
-            SELECT * FROM chat_dispatch_outbox
+            SELECT * FROM chat_dispatch_outbox o
             WHERE tenant_id=#{tenantId}
               AND CAST(tenant_id AS BINARY)=CAST(#{tenantId} AS BINARY)
               AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(#{tenantId})
               AND ((status IN ('READY','RETRY','AWAITING_ACK') AND available_at<=#{now})
                 OR (status='CLAIMED' AND lease_until<=#{now}))
+            """ + CONTEXT_LANE_READY + """
             ORDER BY available_at,event_id LIMIT #{limit}
             """)
     List<ChatDispatchOutboxEntity> findDueOutboxInTenant(@Param("tenantId") String tenantId,
             @Param("now") long now, @Param("limit") int limit);
 
     @Select("""
-            SELECT * FROM chat_dispatch_outbox
+            SELECT * FROM chat_dispatch_outbox o
             WHERE tenant_id=#{tenantId} AND client_id=#{clientId}
               AND CAST(tenant_id AS BINARY)=CAST(#{tenantId} AS BINARY)
               AND CAST(client_id AS BINARY)=CAST(#{clientId} AS BINARY)
@@ -240,6 +266,7 @@ public interface ChatDeliberationMapper {
               AND OCTET_LENGTH(client_id)=OCTET_LENGTH(#{clientId})
               AND (((status IN ('READY','RETRY','AWAITING_ACK') AND available_at<=#{now})
                 OR (status='CLAIMED' AND lease_until<=#{now})))
+            """ + CONTEXT_LANE_READY + """
             ORDER BY available_at,event_id LIMIT #{limit}
             """)
     List<ChatDispatchOutboxEntity> findDueOutboxInScope(@Param("tenantId") String tenantId,
@@ -321,10 +348,10 @@ public interface ChatDeliberationMapper {
     @Update("""
             UPDATE chat_dispatch_outbox SET status=#{status}, version=version+1, updated_at=#{updatedAt}
             WHERE tenant_id=#{tenantId} AND owner_jiacn=#{ownerJiacn} AND client_id=#{clientId}
-              AND turn_id=#{turnId} AND event_type=#{eventType} AND version=#{version}
+              AND event_id=#{eventId} AND version=#{version}
             """)
     int updateOutbox(@Param("tenantId") String tenantId, @Param("ownerJiacn") String ownerJiacn,
-            @Param("clientId") String clientId, @Param("turnId") String turnId, @Param("eventType") String eventType,
+            @Param("clientId") String clientId, @Param("eventId") String eventId,
             @Param("version") long version, @Param("status") String status,
             @Param("updatedAt") long updatedAt);
 

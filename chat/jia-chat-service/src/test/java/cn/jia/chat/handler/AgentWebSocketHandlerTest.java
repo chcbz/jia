@@ -1143,7 +1143,7 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
                 org.mockito.ArgumentMatchers.anyLong(), anyString(), anyString(), anyString(), anyString(),
                 anyString(), anyString(), anyString(), org.mockito.ArgumentMatchers.<Integer>isNull(),
                 org.mockito.ArgumentMatchers.<String>isNull(), org.mockito.ArgumentMatchers.<String>isNull(),
-                any(ServerResolvedAgentSender.class)))
+                org.mockito.ArgumentMatchers.isNull(), any(ServerResolvedAgentSender.class)))
                 .thenReturn(new ChatDeliberationService.FinalResult(
                         ChatDeliberationService.FinalStatus.PERSISTED, 501L, "401", "evt-final", turn, null),
                         new ChatDeliberationService.FinalResult(
@@ -1209,7 +1209,7 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
                 eq(1L), eq("agent-001"), eq("req-1"), eq("turn-1"), eq("dispatch-1"),
                 eq("snapshot-1"), eq("sha256:ctx"), eq("final"),
                 org.mockito.ArgumentMatchers.<Integer>isNull(), org.mockito.ArgumentMatchers.<String>isNull(),
-                org.mockito.ArgumentMatchers.<String>isNull(), finalSender.capture());
+                org.mockito.ArgumentMatchers.<String>isNull(), org.mockito.ArgumentMatchers.isNull(), finalSender.capture());
         Map<String, Object> registration = findOutboundEnvelope(finalReceipt.getAllValues(), "agent.registered");
         assertEquals("reg-1", registration.get("requestId"));
         assertEquals("register-message-1", registration.get("correlationId"));
@@ -2197,6 +2197,39 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         }
         order.verify(outbox).acknowledgeHostedDispatch(eq("0"), eq("juyiting"), eq("jia_client"), eq("agent-001"),
                 eq("dispatch-1"), eq("dispatch-message-1"), org.mockito.ArgumentMatchers.anyLong());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"false", "true", "null", "\"false\""})
+    void bootstrapReprepareRequiresExplicitBooleanNonExecutionProof(String executionStarted) throws Exception {
+        stubAgentSession("session-context-retry", "agent-001");
+        when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
+        when(agentService.register(any(AgentRegisterDTO.class)))
+                .thenReturn(new AgentRegisterResultDTO("agent-001", "token-001", AgentConstants.STATUS_ONLINE));
+        var deliberation = org.mockito.Mockito.mock(ChatDeliberationService.class);
+        var outbox = org.mockito.Mockito.mock(cn.jia.chat.service.ChatDeliberationOutboxService.class);
+        when(outbox.acknowledgeHostedDispatch(any(),any(),any(),any(),any(),any(),org.mockito.ArgumentMatchers.anyLong())).thenReturn(true);
+        var handler = UnifiedRuntimeTestSupport.authorize(new AgentWebSocketHandler(
+                chatClient, agentServiceProvider, chatMessageDao, chatConversationEventBroker));
+        handler.setChatDeliberationService(deliberation); handler.setChatDeliberationOutboxService(outbox);
+        handler.afterConnectionEstablished(session);
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
+                {"schemaVersion":1,"type":"agent.register","runtimeInstanceId":"runtime-1",
+                 "messageId":"register-message-1","requestId":"reg-1","agentId":"agent-001","name":"Wu Yong"}
+                """));
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
+                {"schemaVersion":1,"type":"chat.dispatch.ack","runtimeInstanceId":"runtime-1",
+                 "agentId":"agent-001","messageId":"dispatch-message-1","dispatchId":"dispatch-1",
+                 "status":"recovery_required","errorCode":"CHAT_CONTEXT_BOOTSTRAP_REQUIRED","executionStarted":%s}
+                """.formatted(executionStarted)));
+        if ("false".equals(executionStarted)) {
+            verify(deliberation).reprepareUnexecutedContext("0","juyiting","jia_client","agent-001","dispatch-1","dispatch-message-1");
+            verify(deliberation,never()).requireRuntimeRecovery(any(),any(),any(),any(),any(),any(),any());
+            verify(outbox,never()).acknowledgeHostedDispatch(any(),any(),any(),any(),any(),any(),org.mockito.ArgumentMatchers.anyLong());
+        } else {
+            verify(deliberation,never()).reprepareUnexecutedContext(any(),any(),any(),any(),any(),any());
+            verify(deliberation).requireRuntimeRecovery("0","juyiting","jia_client","agent-001","dispatch-1","dispatch-message-1","CHAT_CONTEXT_BOOTSTRAP_REQUIRED");
+        }
     }
 
     private void stubAgentSession(String sessionId, String agentId) {

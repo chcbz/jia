@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS chat_context_snapshot (
   context_digest VARCHAR(100) NOT NULL,
   created_at BIGINT NOT NULL,
   PRIMARY KEY (snapshot_id),
-  UNIQUE KEY uk_chat_snapshot_request_target
+  KEY idx_chat_snapshot_request_target
     (tenant_id, owner_jiacn, client_id, request_id, request_revision, target_agent_id),
   KEY idx_chat_snapshot_conversation
     (tenant_id, owner_jiacn, client_id, conversation_id, conversation_generation, created_at)
@@ -40,7 +40,10 @@ CREATE TABLE IF NOT EXISTS chat_request (
   UNIQUE KEY uk_chat_request_scope_revision
     (tenant_id, owner_jiacn, client_id, request_id, request_revision),
   KEY idx_chat_request_conversation
-    (tenant_id, owner_jiacn, client_id, conversation_id, conversation_generation, created_at)
+    (tenant_id, owner_jiacn, client_id, conversation_id, conversation_generation, created_at),
+  KEY idx_chat_request_context_order
+    (tenant_id, owner_jiacn, client_id, conversation_id, conversation_generation, id),
+  KEY idx_chat_request_user_message (user_message_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
 
 CREATE TABLE IF NOT EXISTS chat_turn (
@@ -100,7 +103,7 @@ CREATE TABLE IF NOT EXISTS chat_dispatch_outbox (
   created_at BIGINT NOT NULL,
   updated_at BIGINT NOT NULL,
   PRIMARY KEY (event_id),
-  UNIQUE KEY uk_chat_outbox_turn_event (turn_id, event_type),
+  UNIQUE KEY uk_chat_outbox_turn_dispatch_event (turn_id, dispatch_id, event_type),
   KEY idx_chat_outbox_dispatch (tenant_id, client_id, dispatch_id, event_type),
   KEY idx_chat_outbox_ready
     (status, available_at, event_id),

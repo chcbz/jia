@@ -86,6 +86,17 @@ public class ChatMessageDaoImpl extends BaseDaoImpl<ChatMessageMapper, ChatMessa
     }
 
     @Override
+    public List<Long> findOwnedMessageIdsWithLimit(
+            String tenantId, String ownerJiacn, String clientId, String conversationId, int limit) {
+        requireScope(tenantId, clientId); requireIdentity(ownerJiacn, "ownerJiacn");
+        requireLimit(limit);
+        Long numericId = parseConversationId(conversationId);
+        // The shared exact-scope SQL owns isolation; no body read or row-by-row reauthorization.
+        return baseMapper.findExactOwnedConversationMessageIdsWithLimit(
+                tenantId, ownerJiacn, clientId, Long.toString(numericId), numericId, limit);
+    }
+
+    @Override
     public int deleteExactOwnedConversationMessages(
             String tenantId, String ownerJiacn, String clientId, String conversationId) {
         requireScope(tenantId, clientId); requireIdentity(ownerJiacn, "ownerJiacn");

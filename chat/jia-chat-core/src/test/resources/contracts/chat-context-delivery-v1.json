@@ -1,0 +1,1 @@
+{"bootstrap":{"schemaVersion":1,"mode":"BOOTSTRAP","baseTurnId":null,"engineThreadId":null,"afterMessageId":"0","throughMessageId":"9007199254740993"},"delta":{"schemaVersion":1,"mode":"DELTA","baseTurnId":"turn-1","engineThreadId":"native-A","afterMessageId":"9007199254740993","throughMessageId":"9007199254740995"}}

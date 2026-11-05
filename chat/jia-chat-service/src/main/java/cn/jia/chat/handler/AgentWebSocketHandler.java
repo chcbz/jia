@@ -1286,6 +1286,16 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             String rejection = strictString(payload.get("errorCode"));
             if ("recovery_required".equals(payload.get("status"))) {
                 if (chatDeliberationService == null) throw new IllegalStateException("Turn service unavailable");
+                if ("CHAT_CONTEXT_BOOTSTRAP_REQUIRED".equals(rejection)
+                        && Boolean.FALSE.equals(payload.get("executionStarted"))) {
+                    var event = withSessionMutationFence(session, () -> chatDeliberationService.reprepareUnexecutedContext(
+                            sessionTenantId(session), sessionJiacn(session), sessionClientId(session), agentId, dispatchId, messageId));
+                    publishStoredConversationEvent(event);
+                    // The old immutable attempt was retired transactionally; do not ACK it again via the current-turn path.
+                    sendEvent(session, "chat_dispatch_acknowledged", Map.of(
+                            "messageId", messageId, "dispatchId", dispatchId, "duplicateSafe", true));
+                    return;
+                }
                 var recoveryEvent = withSessionMutationFence(session, () ->
                         ChatDeliberationService.isInvalidAgentOutcome(rejection)
                                 ? chatDeliberationService.failInvalidAgentOutcome(
@@ -1379,7 +1389,8 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                         contextValue(payload, "contextHash"), content,
                         typedOutcomeContractVersion(payload),
                         strictString(payload.get("__typedRawInteractionOutcomeJson")),
-                        strictString(payload.get("__typedRawInspectionInputReceiptJson")), sender));
+                        strictString(payload.get("__typedRawInspectionInputReceiptJson")),
+                        payload.get("contextReceipt"), sender));
             } catch (RuntimeException rejected) {
                 if (timing != null) timing.persistEndUs = timing.elapsedUs();
                 sendError(session, payload, "CHAT_TURN_FINAL_REJECTED", "Durable chat final was rejected");
