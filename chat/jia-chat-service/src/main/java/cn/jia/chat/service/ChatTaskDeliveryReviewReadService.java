@@ -36,13 +36,8 @@ public class ChatTaskDeliveryReviewReadService {
         ChatDeliveryReviewContract.id(task, 100);
         // Read authorization before any associated operation/source data.
         var root = submissions.task(s.tenantId(), s.ownerJiacn(), s.clientId(), task);
-        Long count = jdbc.queryForObject("""
-            SELECT COUNT(*) FROM agent_task_formal_delivery WHERE BINARY tenant_id=BINARY ?
-             AND BINARY client_id=BINARY ? AND BINARY task_id=BINARY ?
-            """, Long.class, s.tenantId(), s.clientId(), task);
-        if (count == null || count > 100) throw new Conflict();
-        var all = deliveries.listForTaskOwner(s.tenantId(), s.clientId(), s.ownerJiacn(), task);
-        if (all.size() != count) throw new Conflict();
+        var current = deliveries.currentForTaskOwner(s.tenantId(), s.clientId(), s.ownerJiacn(), task,
+                List.of("completed", "archived").contains(root.state()));
         var revisions = jdbc.query("""
             SELECT assignment_revision FROM agent_task_execution_grant WHERE BINARY tenant_id=BINARY ?
              AND BINARY client_id=BINARY ? AND BINARY owner_jiacn=BINARY ? AND BINARY task_id=BINARY ? AND state='ACTIVE'
@@ -50,29 +45,36 @@ public class ChatTaskDeliveryReviewReadService {
         if (revisions.size() > 1) throw new Conflict();
         String revision = revisions.isEmpty() ? "0" : revisions.getFirst().toString();
         Pending pending = pending(s, task);
-        var submitted = all.stream().filter(v -> "submitted".equals(v.getState())).toList();
-        if (submitted.size() > 1) throw new Conflict();
-        AgentTaskFormalDeliveryViewDTO current = submitted.isEmpty() ?
-                ("completed".equals(root.state()) ? all.stream().filter(v -> "accepted".equals(v.getState())).findFirst().orElse(null) : null)
-                : submitted.getFirst();
         if (("reviewing".equals(root.state()) && current == null)
                 || (current != null && "submitted".equals(current.getState()) && !"reviewing".equals(root.state()))) throw new Conflict();
-        List<Batch> history = new ArrayList<>(); Batch currentBatch = null;
-        for (var delivery : all) {
-            var items = sourceItems(s, task, delivery);
+        Batch currentBatch = null;
+        if (current != null) {
+            var items = sourceItems(s, task, current);
             List<String> actions = new ArrayList<>(List.of("VIEW"));
-            if (current == delivery && "reviewing".equals(root.state()) && "submitted".equals(delivery.getState())
+            if ("reviewing".equals(root.state()) && "submitted".equals(current.getState())
                     && revisions.size() == 1 && pending == null && sourcesComplete(items)) {
                 actions.add("ACCEPT"); actions.add("REQUEST_CHANGES");
             }
-            if (pending != null && current == delivery) actions.add("CHECK_OPERATION");
-            Batch batch = new Batch(delivery.getDeliveryId(), delivery.getDeliveryVersion().toString(),
-                    delivery.getState().toUpperCase(Locale.ROOT), ChatDeliveryReviewContract.batchDigest(task, delivery),
-                    delivery.getSummary(), delivery.getSubmittedAt(), items, List.copyOf(actions));
-            if (current == delivery) currentBatch = batch; else history.add(batch);
+            if (pending != null) actions.add("CHECK_OPERATION");
+            currentBatch = batch(task, current, items, actions);
         }
-        return new Context(1, task, Long.toString(root.version()), root.state().toUpperCase(Locale.ROOT),
-                revision, currentBatch, List.copyOf(history), pending);
+        // v2 is current-only. Historical pages never participate in acceptance eligibility.
+        return new Context(2, task, Long.toString(root.version()), root.state().toUpperCase(Locale.ROOT),
+                revision, currentBatch, List.of(), pending);
+    }
+    public record HistoryPage(List<Batch> items, String nextCursor, boolean hasMore) { }
+    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ, rollbackFor = Exception.class)
+    public HistoryPage history(Scope s, String task, Long beforeRevision) {
+        ChatDeliveryReviewContract.id(task, 100);
+        submissions.task(s.tenantId(), s.ownerJiacn(), s.clientId(), task);
+        var page = deliveries.historyForTaskOwner(s.tenantId(), s.clientId(), s.ownerJiacn(), task, beforeRevision);
+        var items = page.items().stream().map(delivery -> batch(task, delivery, sourceItems(s, task, delivery), List.of("VIEW"))).toList();
+        return new HistoryPage(items, page.nextCursor(), page.hasMore());
+    }
+    private static Batch batch(String task, AgentTaskFormalDeliveryViewDTO delivery, List<Item> items, List<String> actions) {
+        return new Batch(delivery.getDeliveryId(), delivery.getDeliveryVersion().toString(),
+                delivery.getState().toUpperCase(Locale.ROOT), ChatDeliveryReviewContract.batchDigest(task, delivery),
+                delivery.getSummary(), delivery.getSubmittedAt(), items, List.copyOf(actions));
     }
     private Pending pending(Scope s, String task) {
         List<Pending> rows = jdbc.query("""

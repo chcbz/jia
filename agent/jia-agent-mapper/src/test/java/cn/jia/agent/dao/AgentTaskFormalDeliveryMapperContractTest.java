@@ -22,6 +22,16 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class AgentTaskFormalDeliveryMapperContractTest {
 
+    @Test void historyWindowIsScopedKeysetBeforeLimitWithoutCountOrOffset() throws Exception {
+        var method=AgentTaskFormalDeliveryMapper.class.getDeclaredMethod("selectTaskDeliveryWindow",String.class,String.class,String.class,String.class,Long.class,int.class);
+        String sql=String.join("\n",method.getAnnotation(Select.class).value());
+        assertTrue(sql.contains("d.revision &lt; #{beforeRevision}"));
+        assertTrue(sql.contains("AND d.state=#{state}"));
+        assertTrue(sql.indexOf("d.task_id=#{taskId}")<sql.indexOf("LIMIT #{limit}"));
+        assertTrue(sql.contains("CAST(d.task_id AS BINARY)"));
+        assertFalse(sql.contains("COUNT("));assertFalse(sql.contains("OFFSET"));assertFalse(sql.contains("FOR UPDATE"));
+    }
+
     @Test
     void lockAndReviewCasAreByteExactAndScoped() throws Exception {
         Method lock = AgentTaskFormalDeliveryMapper.class.getDeclaredMethod(

@@ -16,6 +16,8 @@ public interface AgentTaskFormalDeliveryDao {
     int insertItem(String tenantId, String clientId, AgentTaskFormalDeliveryItemEntity item);
     List<AgentTaskFormalDeliveryEntity> listTaskDeliveries(
             String tenantId, String clientId, String taskId, int limit);
+    List<AgentTaskFormalDeliveryEntity> listTaskDeliveryWindow(
+            String tenantId, String clientId, String taskId, String state, Long beforeRevision, int limit);
     List<AgentTaskFormalDeliveryItemEntity> listItems(String tenantId, String clientId, String deliveryId);
     int reviewByVersion(String tenantId, String clientId, String deliveryId, String expectedState,
             long expectedVersion, String nextState, String reviewedByJiacn, String reviewReason,

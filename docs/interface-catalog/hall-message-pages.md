@@ -145,3 +145,13 @@ Web `useHallTerminalTextHistory`复用现有owner/task会话发现，但不扫�
 BountyAcceptancePanel保留父页面deliveryReview的正式currentDelivery/history及预览/验收；删除另挂的BountyExecutionOutputs和其完整请求目录、逐条request/typed/steps读取及客户端交付图推导。原会话发现仅供继续议事，不读取请求目录或独立订阅SSE。未提交成果和历史版选择仍在原议事中，无接口/验收写入变化，不以截断图判定当前成果。前节“独立验收页仍读完整请求目录”由本候选覆盖，未上线。
 
 未完成：ChatTaskDeliveryReviewReadService.read仍COUNT正式批次，超过100直接Conflict，否则listForTaskOwner读取全部批次并逐批sourceItems；折叠Web history不减少这部分读。需以独立当前正式交付查询+显式历史分页替代，不放大上限或简单截断。真实消费者含useHallDeliveryReview/hallDeliveryReviewIntent、BountyAcceptancePanel、HallCompletedRecords，后者还会为补显示名称追取成果目录，需一并核对必要性；本轮未修改这些后端/已完成记录路径。
+
+## 2026-11-05 正式交付当前/历史分读候选（覆盖上一节待改项）
+
+- `GET /agent/tasks/{taskId}/delivery-review-context`返回Context业务`schemaVersion=2`，其余字段/公共信封不变；`history=[]`明确表示此读模型只含当前交付，不代表没有历史。当前查询复用owner授权；submitted最多读2条以检查唯一当前，已完成/归档无submitted时取最新accepted。不读取COUNT，不加载历史批次。不改变验收操作/批次摘要schema1、任务版本、pending操作和CAS。
+- `GET /agent/tasks/{taskId}/delivery-review-history[?beforeRevision=<正整数字符串>]`返回标准Page `{items,nextCursor,hasMore}`，固定20批，额外取1行判断后续但不读取其items/sources。cursor是最后返回批次的不可变revision（task内唯一），降序keyset；无OFFSET/COUNT。不提供客户端pageSize/tenant覆盖；重复cursor参数、非规范数字/溢出400。Page可包含当前批次，但allowedActions恒为`["VIEW"]`，不能获得验收权限；Web按deliveryId去重并排除当前展示，历史页不参与当前资格判定。
+- 采用既有task/revision唯一索引与task/state索引，不新增表/缓存/轮询/DDL。页内复用既有workItem/item/source完整性与来源投影；失败返回本页失败，不拿局部页充当完整批次。真实MySQL EXPLAIN及Java执行尚未完成，不保证执行计划。
+- 新增批次在已读游标之前时，不自动回头追取；显式刷新或任务权威版本变化重置历史。允许历史跨页最终一致，不为只读历史锁住整个任务。每次仍在原授权与只读事务边界取得当前结果。
+- Web `useHallDeliveryReview`独立管理history窗口，`context`仅当前权威，`historyContext`只供BountyAcceptancePanel/HallCompletedRecords展示。首读/确认验收不发历史请求；展开读一页，更多显式追加；失败保留窗口并重试同cursor，摘要不符不推进。身份/事项/任务版本变化/卸载取消并隔离迟到页。旧Context v1仍按其明确的完整history消费，不探测新history接口；因此发布应Web先、API后，不让旧Web接收schema2。
+- 完整双端公共信封fixture `delivery-review-pages.json`，复用原批次摘要向量；Java Controller/source/mapper/window测试覆盖授权、cursor、只读actions、lookahead不hydrate、205批逐页及多submitted冲突，均待Flow运行。旧其他调用者的`listForTaskOwner`原100上限未扩改；本轮只收口聚义厅review路径。
+- 剩余独立读取：HallCompletedRecords还会为固定成果元数据补齐自动翻outputs页，以及按已加载记录取原成果名称；本轮没有宣称这些路径已经有界。此处完成为源码候选，非线上完成。

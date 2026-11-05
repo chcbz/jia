@@ -58,17 +58,51 @@ public class AgentTaskFormalDeliveryReadServiceImpl implements AgentTaskFormalDe
         if (deliveries == null || deliveries.size() > MAX_DELIVERIES) {
             throw unavailable("Formal delivery catalog is unavailable");
         }
-        List<AgentTaskFormalDeliveryViewDTO> result = new ArrayList<>(deliveries.size());
+        return projectWindow(deliveries, task, tenantId, clientId, ownerJiacn, taskId);
+    }
+
+    /** Current authority never depends on traversing historical batches. */
+    @Override
+    @Transactional(readOnly = true, rollbackFor = Exception.class)
+    public AgentTaskFormalDeliveryViewDTO currentForTaskOwner(String tenantId, String clientId, String ownerJiacn, String taskId, boolean includeAccepted) {
+        var task = authorizedTask(tenantId, clientId, ownerJiacn, taskId);
+        var submitted = deliveryDao.listTaskDeliveryWindow(tenantId, clientId, taskId, "submitted", null, 2);
+        if (submitted.size() > 1) throw unavailable("Multiple current formal deliveries");
+        var rows = submitted;
+        if (rows.isEmpty() && includeAccepted)
+            rows = deliveryDao.listTaskDeliveryWindow(tenantId, clientId, taskId, "accepted", null, 1);
+        return rows.isEmpty() ? null : projectWindow(rows, task, tenantId, clientId, ownerJiacn, taskId).getFirst();
+    }
+
+    @Override
+    @Transactional(readOnly = true, rollbackFor = Exception.class)
+    public HistoryPage historyForTaskOwner(String tenantId, String clientId, String ownerJiacn, String taskId, Long beforeRevision) {
+        var task = authorizedTask(tenantId, clientId, ownerJiacn, taskId);
+        // The extra row determines continuation, but its items/sources are never hydrated.
+        var rows = deliveryDao.listTaskDeliveryWindow(tenantId, clientId, taskId, null, beforeRevision, 21);
+        boolean more = rows.size() > 20;
+        var window = more ? rows.subList(0, 20) : rows;
+        var items = projectWindow(window, task, tenantId, clientId, ownerJiacn, taskId);
+        return new HistoryPage(items, more ? Long.toString(window.getLast().getRevision()) : null, more);
+    }
+
+    private AgentTaskMetaEntity authorizedTask(String tenantId, String clientId, String ownerJiacn, String taskId) {
+        requireScope(tenantId, clientId, ownerJiacn, taskId);
+        var task = taskMetaDao.findByTaskIdInOwnerScope(tenantId, clientId, ownerJiacn, taskId);
+        requireTask(task, tenantId, clientId, ownerJiacn, taskId);
+        return task;
+    }
+
+    private List<AgentTaskFormalDeliveryViewDTO> projectWindow(List<AgentTaskFormalDeliveryEntity> rows,
+            AgentTaskMetaEntity task, String tenantId, String clientId, String ownerJiacn, String taskId) {
+        var result = new ArrayList<AgentTaskFormalDeliveryViewDTO>();
         long previousRevision = Long.MAX_VALUE;
-        for (AgentTaskFormalDeliveryEntity delivery : deliveries) {
+        for (var delivery : rows) {
             requireDelivery(delivery, tenantId, clientId, taskId, previousRevision);
             previousRevision = delivery.getRevision();
-            AgentTaskWorkItemEntity workItem = workItemDao.findByTaskAndWorkItemId(
-                    tenantId, clientId, ownerJiacn, taskId, delivery.getWorkItemId());
+            var workItem = workItemDao.findByTaskAndWorkItemId(tenantId, clientId, ownerJiacn, taskId, delivery.getWorkItemId());
             requireWorkItem(workItem, tenantId, clientId, ownerJiacn, taskId, delivery);
-            List<AgentTaskFormalDeliveryItemEntity> rows = deliveryDao.listItems(
-                    tenantId, clientId, delivery.getDeliveryId());
-            result.add(view(delivery, rows, task.getTaskVersion(), workItem.getVersion()));
+            result.add(view(delivery, deliveryDao.listItems(tenantId, clientId, delivery.getDeliveryId()), task.getTaskVersion(), workItem.getVersion()));
         }
         return List.copyOf(result);
     }
