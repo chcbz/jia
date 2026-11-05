@@ -45,6 +45,14 @@ class AssigneeRecommendationControllerTest {
                 .andExpect(jsonPath("$.data.state").value("NO_MATCH")).andExpect(jsonPath("$.data.taskVersion").value("7"))
                 .andExpect(jsonPath("$.data.recommendations[0].recommendationLevel").value("UNKNOWN")).andExpect(jsonPath("$.data.score").doesNotExist());
     }
+    @Test void responseMatchesSharedWebQuoteFixture() throws Exception {
+        var response = mvc.perform(post("/agent/tasks/task/recommend").principal(login).contentType(MediaType.APPLICATION_JSON).content(BODY)
+                .header("X-Request-Id", "recommend-test")).andExpect(status().isOk()).andReturn().getResponse();
+        var mapper = new tools.jackson.databind.ObjectMapper();
+        try (var fixture = getClass().getResourceAsStream("/billing/task-recommendation-quote.json")) {
+            org.junit.jupiter.api.Assertions.assertEquals(mapper.readTree(fixture), mapper.readTree(response.getContentAsString(java.nio.charset.StandardCharsets.UTF_8)));
+        }
+    }
     @Test void missingIdentityAndMismatchedContextNeverInvokeModelService() throws Exception {
         mvc.perform(post("/agent/tasks/task/recommend").contentType(MediaType.APPLICATION_JSON).content(BODY)).andExpect(status().isUnauthorized());
         EsContextHolder.getContext().setJiacn("other");
