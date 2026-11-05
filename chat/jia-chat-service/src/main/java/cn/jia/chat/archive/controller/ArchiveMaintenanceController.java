@@ -21,15 +21,6 @@ public class ArchiveMaintenanceController {
     @GetMapping("/operations/request") public ResponseEntity<?> recover(Authentication auth,@RequestHeader("Idempotency-Key")String key){return ok(service.recover(scope(auth),key));}
     @GetMapping("/{id}") public ResponseEntity<?> read(Authentication auth,@PathVariable String id){return ok(service.read(scope(auth),id));}
     @GetMapping("/{id}/draft") public ResponseEntity<?> draft(Authentication auth,@PathVariable String id){return ok(service.draft(scope(auth),id));}
-    @PostMapping public ResponseEntity<?> create(Authentication auth,@RequestHeader("Idempotency-Key")String key,@RequestBody JsonRequest<ArchiveMaintenanceService.Create> request){
-        require(request!=null && request.data()!=null,400,"ARCHIVE_REQUEST_INVALID");return ok(service.create(scope(auth),key,request.data()));
-    }
-    @PostMapping("/{id}/retry") public ResponseEntity<?> retry(Authentication auth,@PathVariable String id,@RequestHeader("Idempotency-Key")String key,@RequestBody JsonRequest<java.util.Map<String,Object>> request){
-        require(request!=null && request.data()!=null && request.data().isEmpty(),400,"ARCHIVE_REQUEST_INVALID");return ok(service.retry(scope(auth),key,id));
-    }
-    @PostMapping("/{id}/publish") public ResponseEntity<?> publish(Authentication auth,@PathVariable String id,@RequestHeader("Idempotency-Key")String key,@RequestBody JsonRequest<java.util.Map<String,Object>> request){
-        require(request!=null && request.data()!=null && request.data().isEmpty(),400,"ARCHIVE_REQUEST_INVALID");return ok(service.publishDraft(scope(auth),key,id));
-    }
     private static Scope scope(Authentication a){var s=AgentController.requireJwtScope(a);return new Scope(s.tenantId(),s.clientId(),s.ownerJiacn());}
     private static ResponseEntity<?> ok(Object d){return ResponseEntity.ok().header("Cache-Control","private, no-store").body(JsonResult.success(d));}
     @ExceptionHandler(PositionSkillException.class) public ResponseEntity<?> reject(PositionSkillException e){return ResponseEntity.status(e.status()).body(JsonResult.failure(e.getMessage(),e.getMessage()));}

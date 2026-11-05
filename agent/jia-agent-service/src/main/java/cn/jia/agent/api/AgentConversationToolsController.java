@@ -22,15 +22,30 @@ public final class AgentConversationToolsController {
             .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS).build();
     private final SkillConversationToolAdapter service;
     public AgentConversationToolsController(SkillConversationToolAdapter service) {this.service=service;}
+    private ConversationToolExtensions extensions;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setExtensions(ConversationToolExtensions extensions) {this.extensions=extensions;}
     @GetMapping
     public ResponseEntity<?> catalog(Authentication principal,@PathVariable String requestId,@PathVariable String turnId,HttpServletRequest request) {
-        noQuery(request);return ok(service.catalog(principal,requestId,turnId));
+        noQuery(request);
+        var base=service.catalog(principal,requestId,turnId);
+        if(extensions==null)return ok(base);
+        var extra=extensions.catalog(principal,requestId,turnId);
+        var tools=new java.util.ArrayList<>(base.tools());tools.addAll(extra.tools());
+        var skills=new java.util.ArrayList<Object>(base.skills());skills.addAll(extra.skills());
+        return ok(java.util.Map.of("schemaVersion","1","tools",tools,"skills",skills));
     }
     @PostMapping("/{tool}")
     public ResponseEntity<?> call(Authentication principal,@PathVariable String requestId,@PathVariable String turnId,@PathVariable String tool,
             @cn.jia.core.annotation.ApiJsonData @RequestBody String raw,HttpServletRequest request) {
         noQuery(request);
-        return ok(wire(SkillConversationTools.call(service,principal,requestId,turnId,tool,JSON.readTree(raw))));
+        var args=JSON.readTree(raw);
+        if(extensions!=null&&extensions.supports(tool)) {
+            if(args==null||!args.isObject())throw new IllegalArgumentException();
+            @SuppressWarnings("unchecked") var fields=(java.util.Map<String,Object>)JSON.convertValue(args,java.util.Map.class);
+            return ok(extensions.call(principal,requestId,turnId,tool,fields));
+        }
+        return ok(wire(SkillConversationTools.call(service,principal,requestId,turnId,tool,args)));
     }
     private static Object wire(Object value) {
         var result=new LinkedHashMap<String,Object>();
