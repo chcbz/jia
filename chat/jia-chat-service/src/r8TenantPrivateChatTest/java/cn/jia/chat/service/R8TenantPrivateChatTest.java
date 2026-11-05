@@ -417,7 +417,9 @@ class R8TenantPrivateChatTest {
         assertEquals(List.of(Long.parseLong(admission.userMessageId())),
                 messages.findOwnedMessageIdsWithLimit(TENANT, OWNER, CLIENT, CONVERSATION, 200));
         assertEquals(List.of(), messages.findOwnedMessageIdsWithLimit("foreign", OWNER, CLIENT, CONVERSATION, 200));
-        assertEquals(List.of(), messages.findOwnedMessageIdsWithLimit(TENANT, OWNER + " ", CLIENT, CONVERSATION, 200));
+        assertEquals(List.of(), messages.findOwnedMessageIdsWithLimit(TENANT, "foreign-owner", CLIENT, CONVERSATION, 200));
+        assertThrows(IllegalArgumentException.class,
+                () -> messages.findOwnedMessageIdsWithLimit(TENANT, OWNER + " ", CLIENT, CONVERSATION, 200));
     }
 
     @Test
@@ -472,7 +474,8 @@ class R8TenantPrivateChatTest {
         ChatDispatchOutboxEntity dead = deliberationDao.findOutboxById(
                 TENANT, OWNER, CLIENT, dispatch.dispatchEventId());
         assertEquals("DEAD", dead.getStatus());
-        assertEquals(2L, dead.getVersion());
+        // First claim freezes native context, then claims it; dead-letter adds one more version.
+        assertEquals(3L, dead.getVersion());
         assertEquals(1, dead.getAttemptCount());
         assertEquals(1L, dead.getFencingToken());
 
@@ -489,7 +492,7 @@ class R8TenantPrivateChatTest {
         assertEquals("RETRY", jdbc.queryForObject(
                 "SELECT status FROM chat_dispatch_outbox WHERE event_id=?", String.class,
                 dispatch.dispatchEventId()));
-        assertEquals(3L, jdbc.queryForObject(
+        assertEquals(4L, jdbc.queryForObject(
                 "SELECT version FROM chat_dispatch_outbox WHERE event_id=?", Long.class,
                 dispatch.dispatchEventId()));
 
