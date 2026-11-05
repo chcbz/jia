@@ -24,6 +24,8 @@ import cn.jia.agent.service.AgentTaskFormalDeliveryDecisionService;
 import cn.jia.agent.service.AgentTaskMutationTransaction;
 import cn.jia.agent.state.AgentTaskFormalDeliveryState;
 import cn.jia.agent.state.AgentTaskMemberStatus;
+import cn.jia.economy.service.EconomyScope;
+import cn.jia.economy.task.TaskBillingService;
 import jakarta.inject.Inject;
 import jakarta.inject.Named;
 import org.springframework.transaction.annotation.Transactional;
@@ -55,27 +57,29 @@ public class AgentTaskFormalDeliveryDecisionServiceImpl implements AgentTaskForm
     private final AgentTaskWorkItemDao workItemDao;
     private final AgentTaskMutationTransaction mutationTransaction;
     private final AgentTaskEventWriter eventWriter;
+    private final TaskBillingService billing;
     private final LongSupplier clock;
 
     @Inject
     public AgentTaskFormalDeliveryDecisionServiceImpl(AgentTaskFormalDeliveryDao deliveryDao,
             AgentTaskMetaDao taskMetaDao, AgentTaskMemberDao memberDao,
             AgentTaskWorkItemDao workItemDao, AgentTaskMutationTransaction mutationTransaction,
-            AgentTaskEventWriter eventWriter) {
-        this(deliveryDao, taskMetaDao, memberDao, workItemDao, mutationTransaction, eventWriter,
+            AgentTaskEventWriter eventWriter, TaskBillingService billing) {
+        this(deliveryDao, taskMetaDao, memberDao, workItemDao, mutationTransaction, eventWriter, billing,
                 System::currentTimeMillis);
     }
 
     AgentTaskFormalDeliveryDecisionServiceImpl(AgentTaskFormalDeliveryDao deliveryDao,
             AgentTaskMetaDao taskMetaDao, AgentTaskMemberDao memberDao,
             AgentTaskWorkItemDao workItemDao, AgentTaskMutationTransaction mutationTransaction,
-            AgentTaskEventWriter eventWriter, LongSupplier clock) {
+            AgentTaskEventWriter eventWriter, TaskBillingService billing, LongSupplier clock) {
         this.deliveryDao = Objects.requireNonNull(deliveryDao, "deliveryDao");
         this.taskMetaDao = Objects.requireNonNull(taskMetaDao, "taskMetaDao");
         this.memberDao = Objects.requireNonNull(memberDao, "memberDao");
         this.workItemDao = Objects.requireNonNull(workItemDao, "workItemDao");
         this.mutationTransaction = Objects.requireNonNull(mutationTransaction, "mutationTransaction");
         this.eventWriter = Objects.requireNonNull(eventWriter, "eventWriter");
+        this.billing = Objects.requireNonNull(billing, "billing");
         this.clock = Objects.requireNonNull(clock, "clock");
     }
 
@@ -109,6 +113,11 @@ public class AgentTaskFormalDeliveryDecisionServiceImpl implements AgentTaskForm
                 ? requireActiveAssignee(tenantId, clientId, ownerJiacn, taskId, workItem)
                 : null;
 
+        // Fixed quote settlement joins the existing root-lock transaction. Rework keeps the hold;
+        // replay above is read-only and must not retroactively charge historical completion facts.
+        if (decision.state() == AgentTaskFormalDeliveryState.ACCEPTED) {
+            billing.capture(new TaskBillingService.Task(new EconomyScope(tenantId, clientId), ownerJiacn, taskId));
+        }
         long decidedAt = now();
         int reviewed = deliveryDao.reviewByVersion(tenantId, clientId, delivery.getDeliveryId(),
                 AgentTaskFormalDeliveryState.SUBMITTED.value(), decision.expectedDeliveryVersion(),

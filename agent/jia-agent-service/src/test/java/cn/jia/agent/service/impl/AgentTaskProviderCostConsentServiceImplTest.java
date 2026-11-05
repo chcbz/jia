@@ -8,6 +8,7 @@ import cn.jia.agent.entity.AgentTaskMetaEntity;
 import cn.jia.agent.entity.AgentTaskProviderCostConsentEntity;
 import cn.jia.agent.entity.AgentTaskProviderCostConsentIssueDTO;
 import cn.jia.agent.service.AgentTaskExecutionGrantService;
+import cn.jia.agent.service.AgentTaskExecutionGrantException;
 import cn.jia.agent.service.AgentTaskMutationTransaction;
 import cn.jia.agent.service.AgentTaskProviderCostConsentService;
 import cn.jia.agent.service.NativeProviderCredentialBindingLookup;
@@ -70,6 +71,20 @@ class AgentTaskProviderCostConsentServiceImplTest {
                 eq(6L),eq("agent-a"),eq("c".repeat(64)),eq("d".repeat(64))))
                 .thenReturn(new AgentTaskExecutionGrantService.Admission("grant-a",1,6,
                         "agent-a","GENERATE_IMAGE",false,List.of(input)));
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.EnumSource(value = AgentTaskExecutionGrantException.Reason.class,
+            names = {"TASK_QUOTE_UNAVAILABLE", "TASK_QUOTE_PAYER_FORBIDDEN", "TASK_FUNDS_INSUFFICIENT"})
+    void assignmentBillingFailuresPreserveConsentFailureSemantics(AgentTaskExecutionGrantException.Reason reason) {
+        when(grants.previewAssignmentWithinLockedTask(any(),eq("task-1"),eq(5L),eq("assign-key"),any()))
+                .thenThrow(new AgentTaskExecutionGrantException(reason, "billing denied"));
+        var failure = assertThrows(AgentTaskProviderCostConsentService.Failure.class,
+                () -> service.issue(scope(), "task-1", "billing-failure", request("binding-a")));
+        assertEquals(reason == AgentTaskExecutionGrantException.Reason.TASK_QUOTE_PAYER_FORBIDDEN
+                ? AgentTaskProviderCostConsentService.Reason.FORBIDDEN
+                : AgentTaskProviderCostConsentService.Reason.CONFLICT, failure.reason());
+        assertEquals(0, rows.inserts);
     }
 
     @Test void issueReplayConflictAndOwnerReadsAreImmutable() {
