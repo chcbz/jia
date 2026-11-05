@@ -53,7 +53,7 @@ public class ChatBountyRequestIndexService {
     public record Scope(String conversationId, String conversationGeneration, String taskId) { }
     public record Entry(String ordinal, ChatDeliberationService.RequestView request) { }
     public record Page(int schemaVersion, Scope scope, String after, String through,
-            String nextAfter, boolean hasMore, List<Entry> entries) { }
+            String nextAfter, boolean hasMore, List<Entry> entries, String eventCursor) { }
 
     private final ChatBountyRequestIndexStore store;
     private final ChatConversationDao conversations;
@@ -143,7 +143,7 @@ public class ChatBountyRequestIndexService {
             String nextAfter = hasMore ? entries.getLast().ordinal() : null;
             return new Page(1, new Scope(canonicalConversation, Long.toString(scope.generation()),
                     scope.taskId()), Long.toString(parsed.after()), Long.toString(through),
-                    nextAfter, hasMore, List.copyOf(entries));
+                    nextAfter, hasMore, List.copyOf(entries), parsed.latest() ? Long.toString(store.eventCursor(sqlScope)) : null);
         } catch (Failure failure) {
             throw failure;
         } catch (DataAccessException | TransactionException failure) {

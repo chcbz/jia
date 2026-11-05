@@ -62,7 +62,7 @@ class ChatBountyRequestIndexHttpTest {
     }
     @Test void latestSelectorPreservesTheSharedPageEnvelope() throws Exception {
         var mapper = new ObjectMapper();
-        var fixture = mapper.readTree(getClass().getResourceAsStream("/contracts/hall-request-index-entry.json"));
+        var fixture = mapper.readTree(getClass().getResourceAsStream("/contracts/hall-request-latest.json"));
         var page = mapper.treeToValue(fixture.get("data"), ChatBountyRequestIndexService.Page.class);
         var query = new ChatBountyRequestIndexService.Query("1", null, null, null, null, "true");
         when(service.read("0", "owner", "client", "101", query)).thenReturn(page);

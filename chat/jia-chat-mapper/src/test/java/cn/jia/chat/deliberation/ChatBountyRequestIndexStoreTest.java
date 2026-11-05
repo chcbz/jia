@@ -43,6 +43,11 @@ class ChatBountyRequestIndexStoreTest {
                   owner_jiacn VARCHAR_IGNORECASE(50),client_id VARCHAR_IGNORECASE(50),
                   execution_intent_id VARCHAR(100),execution_id VARCHAR(100),state VARCHAR(30))
                 """);
+        jdbc.execute("""
+                CREATE TABLE chat_conversation_event(event_sequence BIGINT PRIMARY KEY,
+                  tenant_id VARCHAR_IGNORECASE(50),owner_jiacn VARCHAR_IGNORECASE(50),client_id VARCHAR_IGNORECASE(50),
+                  conversation_id VARCHAR(100),conversation_generation BIGINT)
+                """);
         store = new ChatBountyRequestIndexStore(jdbc);
     }
     private ChatBountyRequestIndexStore.Row row(long id) {
@@ -114,6 +119,15 @@ class ChatBountyRequestIndexStoreTest {
         clearInvocations(jdbc);
         assertEquals(List.of(row(100)), store.latest(scope));
         assertEquals(1, queryCount());
+    }
+
+    @Test void recoveryCursorIsExactScopedAndDoesNotReadEventBodies() {
+        assertEquals(0, store.eventCursor(scope));
+        jdbc.update("INSERT INTO chat_conversation_event VALUES(9007199254740993,'tenant','Owner','client','101',1)");
+        jdbc.update("INSERT INTO chat_conversation_event VALUES(9007199254740994,'tenant','owner','client','101',1)");
+        jdbc.update("INSERT INTO chat_conversation_event VALUES(9007199254740995,'tenant','Owner','client','102',1)");
+        jdbc.update("INSERT INTO chat_conversation_event VALUES(9007199254740996,'tenant','Owner','client','101',2)");
+        assertEquals(9007199254740993L, store.eventCursor(scope));
     }
 
 }

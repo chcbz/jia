@@ -68,6 +68,14 @@ public class ChatBountyRequestIndexStore {
                 rs.getString("conversation_id"), rs.getLong("conversation_generation")), args));
     }
 
+    /** Read in the same repeatable-read snapshot as the restored request, before live subscription. */
+    public long eventCursor(Scope scope) {
+        require(scope);
+        Long value = jdbc.queryForObject("SELECT COALESCE(MAX(event_sequence),0) FROM chat_conversation_event WHERE "
+                + EXACT_SCOPE, Long.class, scopeArgs(scope));
+        return value == null ? 0L : value;
+    }
+
     /** Current-round recovery reads only the greatest ordinal in the exact live scope. */
     public List<Row> latest(Scope scope) {
         require(scope);

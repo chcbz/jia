@@ -26,7 +26,7 @@
 
 现有目录GET增加可选`requestId`，与`after/through/pageSize`互斥，可带`expectedGeneration`。只查已授权会话/代际中的这一请求，仍返回原Page：`after="0"`、`through=该项ordinal`、一个entry、`hasMore=false`、`nextAfter=null`。没有匹配项走既有NOT_FOUND_OR_FORBIDDEN，不泄露其他会话记录。不查询全目录watermark，不展开其他回合。互斥参数避免把单项查询误当分页；入口重复参数按现有公共协议拒绝。页面合并单项不得删除其他已加载项。
 
-- API与Web共享报文：`chat/jia-chat-service/src/test/resources/contracts/hall-request-index-entry.json`、Web `tests/fixtures/hall-request-index-entry.json`，SHA256 `5ae7686403a866c47799b3d90c2b500f97db806794ff71abb60728b4f321adcf`。真实公共HTTP信封测试入口`ChatBountyRequestIndexHttpTest`；Java未运行。
+- API与Web共享报文：`chat/jia-chat-service/src/test/resources/contracts/hall-request-index-entry.json`、Web `tests/fixtures/hall-request-index-entry.json`，SHA256 `0acc016394c3e88d3859522db84038b5d5f9fdee0483bdd4e7c95b2d3e7a4fe9`。真实公共HTTP信封测试入口`ChatBountyRequestIndexHttpTest`；Java未运行。
 - Web实时事件按requestId及已知父/子成果关系读取目录与typed-outcome；不是仅凭READY停止更新。删除目录深监听导致的全成果重查，同轮并发读取复用，身份/会话切换中止旧读。重放期间合并更新，在stream_ready统一恢复；断线前已推进游标但未恢复的提示跨重连保留。如果重连核对已执行完整恢复，不在ready重复读取。失败保留可重试状态，不用新轮询兜底。
 
 ### 改稿操作状态事件
@@ -48,3 +48,18 @@
 回归入口：`ChatBountyRequestIndexStoreTest.latestSelectsOneOrdinalAfterExactScopeFiltering`、`ChatBountyRequestIndexPageTest`最新/空会话/互斥参数用例、`ChatBountyRequestIndexHttpTest.latestSelectorPreservesTheSharedPageEnvelope`、Web `juyiting-restored-request.test.js`（最大ordinal10001只发一次查询、历史重放与实时其他回合、空会话和切换竞态）。HTTP复用相同单项Page完整fixture；不新增公共信封。Java测试待Flow。
 
 2026-11-05真实MySQL只读EXPLAIN：现有`idx_chat_request_context_order`已含scope+id，但11行样本优化器选择`idx_chat_request_conversation`并Using filesort。单次SQL约1ms只说明该样本，不是接口/长会话性能；未添加强制索引或生产DDL。上线前长会话查询计划仍需验证，不能将LIMIT1等同数据库常量工作量。
+
+
+## 首次恢复与SSE接续（2026-11-05 追加候选，未上线）
+
+确认另一个全量入口：`conversation/events`缺省after=0，旧事件重放可能重新追加页外旧消息。消息分页不能单独解决这个放大。
+
+- latest=true的Page增加`eventCursor`（非负十进制long字符串）。与最新request及其投影在既有REPEATABLE_READ只读事务中读取已提交事件的MAX(event_sequence)，绑定同一owner/client/tenant/conversation/generation。普通分页和requestId单项读的该字段为null，不额外读watermark。
+- 前端事项会话恢复按“最新回合及cursor → 最新消息页 → 从cursor建立SSE”执行。消息页可能比回合快照更新，依靠既有消息ID去重；快照后至连接建立之间的提交仍由原事件重放补齐，不使用连接时最新watermark跳过这一窗口。不新增连接/轮询/缓存或消息副本。
+- cursor只初始化尚未建连且没有cursor的恢复会话。显示刷新不覆盖已运行/重连中的cursor；加载旧消息页不接触它。身份/会话生命周期继续清理，其他会话事件不获准。首次latest响应缺少/格式错误的cursor使该次恢复失败可重试，不能静默回到全历史重放。
+- `eventCursor`是只读接续位置，不是身份或写入授权。业务完成/幂等/成果校验保持原责任层，不新增逐帧检查。它沿用现有事件序列提交/重放语义，不在本次重建事件协议。
+- 此补充只覆盖已有latest=true事项会话恢复入口；bootstrap/typed receipt直接接管、普通非事项会话等旁路尚未据此声明已优化。发送上下文/成果列表初始全量依赖仍未收口。
+
+共享fixture：单项`hall-request-index-entry.json`新增eventCursor:null，SHA256 `0acc016394c3e88d3859522db84038b5d5f9fdee0483bdd4e7c95b2d3e7a4fe9`；最新快照`hall-request-latest.json`使用大于JS安全整数的字符串cursor，SHA256 `f65865e99b408f1e0fe1efe1e566da1fe26f369687093c4131e85b37b1bafb91`。两端完整报文相同，前端既有解码器接受新增字段；其他分页核心字段不变。
+
+回归：SQL cursor精确scope/空会话、服务latest才查询cursor、HTTP shared fixture、ChatConversationEventsHttpTest.restoredSnapshotCursorSkipsOldEventsButReplaysTheConnectionGap；Web恢复50条消息后使用精确大整数Last-Event-ID、收到窗口内新delta而非旧历史。Java编译/并发事务验证待Flow，不能以测试源码或mock证明上线。2026-11-05真实库只读查询使用idx_chat_conversation_event_replay覆盖索引，13行样本单次约0.674ms，无事件正文读取；仅SQL样本，不是端到端/长历史性能结论。

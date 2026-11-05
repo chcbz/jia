@@ -146,6 +146,28 @@ class ChatConversationEventsHttpTest {
         verify(subscription).close();
     }
 
+    @Test void restoredSnapshotCursorSkipsOldEventsButReplaysTheConnectionGap() throws Exception {
+        long checkpoint = 9007199254740993L;
+        when(events.eventHighWatermark("0", "owner", "client", "42", 3)).thenReturn(checkpoint);
+        var readyOnly = payloads(read(Long.toString(checkpoint)));
+        assertEquals(1, readyOnly.size());
+        assertEquals("stream_ready", readyOnly.getFirst().get("type"));
+        assertEquals(Long.toString(checkpoint), readyOnly.getFirst().get("nextCursor"));
+        verify(events).eventHighWatermark("0", "owner", "client", "42", 3);
+        verifyNoMoreInteractions(events);
+        clearInvocations(events);
+        when(events.eventHighWatermark("0", "owner", "client", "42", 3)).thenReturn(checkpoint + 1);
+        when(events.replayEventsThrough("0", "owner", "client", "42", 3, checkpoint, checkpoint + 1, 500))
+                .thenReturn(List.of(event(checkpoint + 1, "agent_message", "{\"messageId\":\"101\",\"content\":\"connection-gap-reply\"}")));
+        var gap = payloads(read(Long.toString(checkpoint)));
+        assertEquals(2, gap.size());
+        assertEquals("connection-gap-reply", gap.getFirst().get("content"));
+        assertEquals("stream_ready", gap.getLast().get("type"));
+        verify(events).eventHighWatermark("0", "owner", "client", "42", 3);
+        verify(events).replayEventsThrough("0", "owner", "client", "42", 3, checkpoint, checkpoint + 1, 500);
+        verifyNoMoreInteractions(events);
+    }
+
     @Test void liveSignalCatchesUpDurableMediaAndLastEventIdDoesNotReplayPriorFrames() throws Exception {
         when(subscription.flux()).thenReturn(Flux.just("{\"eventSequence\":\"8\"}"));
         when(events.replayEventsThrough("0","owner","client","42",3,7,8,500))

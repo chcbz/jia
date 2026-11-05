@@ -100,12 +100,14 @@ class ChatBountyRequestIndexPageTest {
     }
     @Test void latestRecoveryExpandsOnlyTheNewestRoundWithoutWatermarkOrPaging() {
         when(store.latest(scope)).thenReturn(List.of(row));
+        when(store.eventCursor(scope)).thenReturn(9007199254740993L);
         var result = service.read("0", "owner", "client", "101",
                 new ChatBountyRequestIndexService.Query(null, null, null, null, null, "true"));
         assertEquals("7", result.through()); assertEquals("0", result.after());
         assertEquals("r7", result.entries().getFirst().request().requestId());
         assertFalse(result.hasMore()); assertNull(result.nextAfter());
-        verify(store).latest(scope); verify(store).projections(scope, List.of(row)); verifyNoMoreInteractions(store);
+        assertEquals("9007199254740993", result.eventCursor());
+        verify(store).latest(scope); verify(store).projections(scope, List.of(row)); verify(store).eventCursor(scope); verifyNoMoreInteractions(store);
     }
     @Test void latestEmptyConversationReturnsNoRequest() {
         when(store.latest(scope)).thenReturn(List.of());
@@ -113,7 +115,8 @@ class ChatBountyRequestIndexPageTest {
         var result = service.read("0", "owner", "client", "101",
                 new ChatBountyRequestIndexService.Query("1", null, null, null, null, "true"));
         assertEquals("0", result.through()); assertTrue(result.entries().isEmpty()); assertFalse(result.hasMore());
-        verify(store).latest(scope); verify(store).projections(scope, List.of()); verifyNoMoreInteractions(store);
+        assertEquals("0", result.eventCursor());
+        verify(store).latest(scope); verify(store).projections(scope, List.of()); verify(store).eventCursor(scope); verifyNoMoreInteractions(store);
     }
     @Test void latestDoesNotAcceptAmbiguousPagingOrTargetSelectors() {
         for (var query : List.of(
