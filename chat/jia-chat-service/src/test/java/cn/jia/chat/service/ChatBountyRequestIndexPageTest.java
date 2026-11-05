@@ -78,4 +78,24 @@ class ChatBountyRequestIndexPageTest {
                 assertThrows(ChatBountyRequestIndexService.Failure.class, this::read).reason());
         verifyNoInteractions(store);
     }
+    @Test void eventNamedRequestSkipsWatermarkAndWholePageDiscovery() {
+        when(store.byRequest(scope, "r7")).thenReturn(List.of(row));
+        var result = service.read("0", "owner", "client", "101",
+                new ChatBountyRequestIndexService.Query("1", null, null, null, "r7"));
+        assertEquals("7", result.through()); assertFalse(result.hasMore()); assertNull(result.nextAfter());
+        assertEquals("r7", result.entries().getFirst().request().requestId());
+        verify(store).byRequest(scope, "r7"); verify(store).projections(scope, List.of(row));
+        verifyNoMoreInteractions(store);
+    }
+    @Test void targetedQueryCannotAlsoScanOrEscapeConversationScope() {
+        assertEquals(ChatBountyRequestIndexService.Reason.INVALID_REQUEST,
+                assertThrows(ChatBountyRequestIndexService.Failure.class, () -> service.read("0", "owner", "client", "101",
+                        new ChatBountyRequestIndexService.Query("1", "0", null, null, "r7"))).reason());
+        verifyNoInteractions(store);
+        when(store.byRequest(scope, "foreign")).thenReturn(List.of());
+        assertEquals(ChatBountyRequestIndexService.Reason.NOT_FOUND_OR_FORBIDDEN,
+                assertThrows(ChatBountyRequestIndexService.Failure.class, () -> service.read("0", "owner", "client", "101",
+                        new ChatBountyRequestIndexService.Query("1", null, null, null, "foreign"))).reason());
+        verify(store).byRequest(scope, "foreign"); verifyNoMoreInteractions(store);
+    }
 }

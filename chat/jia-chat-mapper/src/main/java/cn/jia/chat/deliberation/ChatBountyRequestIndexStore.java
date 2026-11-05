@@ -68,6 +68,23 @@ public class ChatBountyRequestIndexStore {
                 rs.getString("conversation_id"), rs.getLong("conversation_generation")), args));
     }
 
+    /** Event-targeted discovery; never scans earlier catalogue pages or infers ordinal from request id. */
+    public List<Row> byRequest(Scope scope, String requestId) {
+        require(scope);
+        Object[] exact = scopeArgs(scope);
+        Object[] args = java.util.Arrays.copyOf(exact, exact.length + 2);
+        args[exact.length] = requestId; args[exact.length + 1] = requestId;
+        return jdbc.query("""
+                SELECT id,tenant_id,owner_jiacn,client_id,request_id,request_revision,
+                       conversation_id,conversation_generation FROM chat_request WHERE
+                """ + EXACT_SCOPE + """
+                  AND request_id=? AND CAST(request_id AS BINARY)=CAST(? AS BINARY)
+                ORDER BY request_revision DESC LIMIT 2
+                """, (rs, ignored) -> new Row(rs.getLong("id"), rs.getString("tenant_id"),
+                rs.getString("owner_jiacn"), rs.getString("client_id"), rs.getString("request_id"),
+                rs.getLong("request_revision"), rs.getString("conversation_id"), rs.getLong("conversation_generation")), args);
+    }
+
     public record StepRow(String requestId, long requestRevision, String stepId, long stepNumber,
             String taskId, long assignmentRevision, String targetAgentId, String kind, String state,
             long stateVersion, String executionIntentId, String executionId, String executionState) { }

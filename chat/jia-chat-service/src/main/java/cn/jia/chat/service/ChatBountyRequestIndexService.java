@@ -42,7 +42,11 @@ public class ChatBountyRequestIndexService {
         public Reason reason() { return reason; }
     }
 
-    public record Query(String expectedGeneration, String after, String through, String pageSize) { }
+    public record Query(String expectedGeneration, String after, String through, String pageSize, String requestId) {
+        public Query(String expectedGeneration, String after, String through, String pageSize) {
+            this(expectedGeneration, after, through, pageSize, null);
+        }
+    }
     public record Scope(String conversationId, String conversationGeneration, String taskId) { }
     public record Entry(String ordinal, ChatDeliberationService.RequestView request) { }
     public record Page(int schemaVersion, Scope scope, String after, String through,
@@ -91,10 +95,17 @@ public class ChatBountyRequestIndexService {
 
             var sqlScope = new ChatBountyRequestIndexStore.Scope(tenantId, ownerJiacn, clientId,
                     canonicalConversation, scope.generation());
-            long through = parsed.through() == null ? store.highWatermark(sqlScope) : parsed.through();
-            if (parsed.after() > through) throw invalid();
-            List<ChatBountyRequestIndexStore.Row> rows = through == 0 ? List.of()
-                    : store.page(sqlScope, parsed.after(), through, parsed.pageSize() + 1);
+            List<ChatBountyRequestIndexStore.Row> rows;
+            long through;
+            if (parsed.requestId() != null) {
+                rows = store.byRequest(sqlScope, parsed.requestId());
+                if (rows == null || rows.size() != 1) throw notFound();
+                through = rows.getFirst().ordinal();
+            } else {
+                through = parsed.through() == null ? store.highWatermark(sqlScope) : parsed.through();
+                if (parsed.after() > through) throw invalid();
+                rows = through == 0 ? List.of() : store.page(sqlScope, parsed.after(), through, parsed.pageSize() + 1);
+            }
             if (rows == null || rows.size() > parsed.pageSize() + 1) throw unavailable();
             long previousOrdinal = parsed.after();
             for (ChatBountyRequestIndexStore.Row row : rows) {
@@ -242,7 +253,9 @@ public class ChatBountyRequestIndexService {
         if ((after > 0 || through != null) && expected == null) throw invalid();
         if (after > 0 && through == null) throw invalid();
         if (through != null && after > through) throw invalid();
-        return new Parsed(expected, after, through, pageSize);
+        if (value.requestId() != null && (!validIdentity(value.requestId(), 100)
+                || value.after() != null || value.through() != null || value.pageSize() != null)) throw invalid();
+        return new Parsed(expected, after, through, pageSize, value.requestId());
     }
 
     private static long positiveCanonical(String value) {
@@ -281,7 +294,7 @@ public class ChatBountyRequestIndexService {
                 && value.codePoints().noneMatch(Character::isISOControl);
     }
 
-    private record Parsed(Long expectedGeneration, long after, Long through, int pageSize) { }
+    private record Parsed(Long expectedGeneration, long after, Long through, int pageSize, String requestId) { }
     private record ConversationScope(long generation, String taskId) { }
     private static Failure invalid() { return new Failure(Reason.INVALID_REQUEST); }
     private static Failure notFound() { return new Failure(Reason.NOT_FOUND_OR_FORBIDDEN); }

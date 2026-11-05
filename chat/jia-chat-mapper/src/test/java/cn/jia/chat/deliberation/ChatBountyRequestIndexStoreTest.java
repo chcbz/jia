@@ -96,4 +96,11 @@ class ChatBountyRequestIndexStoreTest {
         assertTrue(store.projections(scope, List.of()).requests().isEmpty());
         verifyNoInteractions(jdbc);
     }
+    @Test void targetedDiscoveryKeepsExactScopeAndRequestIdentity() {
+        insert(1); insert(2);
+        assertEquals(List.of(row(1)), store.byRequest(scope, "r1"));
+        assertTrue(store.byRequest(scope, "R1").isEmpty());
+        assertTrue(store.byRequest(new ChatBountyRequestIndexStore.Scope("tenant", "owner", "client", "101", 1), "r1").isEmpty());
+        assertTrue(store.byRequest(new ChatBountyRequestIndexStore.Scope("tenant", "Owner", "client", "102", 1), "r1").isEmpty());
+    }
 }
