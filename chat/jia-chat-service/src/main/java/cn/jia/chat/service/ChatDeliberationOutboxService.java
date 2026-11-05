@@ -22,7 +22,7 @@ public class ChatDeliberationOutboxService {
 
     private ChatDeliberationService deliberation;
     @org.springframework.beans.factory.annotation.Autowired
-    public void setDeliberation(ChatDeliberationService value) { deliberation = value; }
+    public void setDeliberation(@org.springframework.context.annotation.Lazy ChatDeliberationService value) { deliberation = value; }
 
     private final ChatDeliberationDao dao;
     private final cn.jia.core.security.FixedTenantAdmissionPolicy processScope;

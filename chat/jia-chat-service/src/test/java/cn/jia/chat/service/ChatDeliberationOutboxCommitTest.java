@@ -10,6 +10,29 @@ import static org.mockito.Mockito.*;
 
 /** In-memory claim follows commit, never a SQL write that may still roll back. */
 class ChatDeliberationOutboxCommitTest {
+    @Test void contextStartsWithoutCircularReferencesAndClaimResolvesPreparationService() {
+        var preparation = mock(ChatDeliberationService.class);
+        try (var context = new org.springframework.context.annotation.AnnotationConfigApplicationContext()) {
+            context.getDefaultListableBeanFactory().setAllowCircularReferences(false);
+            context.registerBean(ChatDeliberationDao.class, () -> mock(ChatDeliberationDao.class));
+            context.registerBean(cn.jia.core.security.FixedTenantAdmissionPolicy.class,
+                    () -> new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null));
+            context.registerBean(ChatDispatchAuthorityService.class, () -> mock(ChatDispatchAuthorityService.class));
+            context.registerBean(ChatDeliberationOutboxService.class);
+            // Production deliberation -> final/submission -> outbox graph must not
+            // cause outbox's preparation callback to instantiate deliberation early.
+            context.registerBean(ChatDeliberationService.class, () -> {
+                context.getBean(ChatDeliberationOutboxService.class);
+                return preparation;
+            });
+            context.refresh();
+            verifyNoInteractions(preparation);
+            var candidate = new ChatDispatchOutboxEntity();
+            assertNull(context.getBean(ChatDeliberationOutboxService.class).claim(candidate, "worker", 10, 100));
+            verify(preparation).prepareContextForClaim(candidate, 10);
+        }
+    }
+
     @Test void rollbackKeepsClaimReusableAndCommitAloneMakesItTerminal() {
         var dao=mock(ChatDeliberationDao.class);var service=new ChatDeliberationOutboxService(dao, new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null));
         var row=new ChatDispatchOutboxEntity().setTenantId("0").setOwnerJiacn("owner").setClientId("client")
