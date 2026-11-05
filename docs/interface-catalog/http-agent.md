@@ -2545,3 +2545,12 @@ TASK概览和事项分页/阶段计数复用同一 `AgentTaskPhaseSql.PHASE`。`
 - 与keyword、phase/status条件组合；在数据库分页前执行。列表total与状态计数复用同一谓词，计数跨phase、不是当前页条数。身份与owner scope仍来自既有认证配置，不接受筛选参数覆盖授权。
 - 保持既有响应信封、分页结构和PENDING_ASSIGNMENT枚举。Web将其显示为“待承办”。不增加数据库CHECK、迁移或Runtime联动。
 - 责任层回归：AgentTaskMetaScopedDaoTest（共享SQL绑定/分页前/精确scope/禁用筛选）、AgentServiceImplTest（列表total/page/计数同字段）。源码基线8ad42be7815e499077c6a97439f0f13c96c7650e；正式执行结果见根仓JUYITING-LIST-CLICK-20261101 handoff。
+
+
+### 2026-11-05：好汉详情默认执行模型（实现候选，未上线）
+
+`GET /agent/{agentId}/profile-capabilities` 新增 `executionModel: string|null`。该字段只由拥有者详情投影公开，公共Roster/Map DTO序列化不携带。现有拥有者权限、缓存策略及读取入口不变；来源为该Agent最近一次已认证注册上报的默认执行模型，离线保留最近记录，未上报为null。并非推荐服务、工具或特定调用实际模型，不能用于实际成本归因。Web仅投影已知字段，允许无害新增字段，不把目标模型写成默认值。
+
+`agent.register`/现有注册DTO新增同名可选字段；Runtime复用已有配置readback，显式codexModel覆盖home默认，不使用chatModel代替执行模型。空白、控制字符、超过200字符或非字符串的显示元数据作未上报，不阻塞注册。注册更新允许清空；普通presence不覆盖此字段。注册权限/会话fence沿既有责任层执行。
+
+存储：`agent_runtime.execution_model VARCHAR(200) NULL`，无CHECK；建表、既有schema-maintenance入口、显式迁移脚本及相关fixture已同步。不自动回填历史模型，不在普通应用启动时迁移。生产执行须先完成固定快照/恢复与迁移授权。定向回归：AgentServiceImplTest、AgentIdentityRuntimeRealTransactionTest、AgentProfileCapabilitiesServiceTest/ControllerTest及Web模型投影/组件测试。

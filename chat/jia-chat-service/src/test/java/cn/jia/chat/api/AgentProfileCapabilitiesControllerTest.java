@@ -31,7 +31,7 @@ class AgentProfileCapabilitiesControllerTest {
                 .setMessageConverters(new JacksonJsonHttpMessageConverter()).setControllerAdvice(new ApiEnvelopeAdvice())
                 .addFilters(new RequestIdFilter()).build();
         when(profiles.read(any(), eq("agent"))).thenReturn(new AgentProfileCapabilitiesService.ProfileCapabilities("agent", 10000,
-                List.of("内容管理"), null, new AgentProfileCapabilitiesService.SkillDirectory("AVAILABLE", null, null, List.of())));
+                List.of("内容管理"), null, new AgentProfileCapabilitiesService.SkillDirectory("AVAILABLE", null, null, List.of()), "fixture-model/v2"));
     }
     @AfterEach void cleanup() { EsContextHolder.clearContext(); }
     @Test void successUsesOneClosedEnvelopeRealStatusAndPrivateNoStore() throws Exception {
@@ -41,6 +41,7 @@ class AgentProfileCapabilitiesControllerTest {
                 .andExpect(jsonPath("$.protocolVersion").value(1)).andExpect(jsonPath("$.code").value("E0"))
                 .andExpect(jsonPath("$.status").doesNotExist()).andExpect(jsonPath("$.data.abilities[0]").value("内容管理"))
                 .andExpect(jsonPath("$.data.skills.items").isEmpty())
+                .andExpect(jsonPath("$.data.executionModel").value("fixture-model/v2"))
                 .andExpect(jsonPath("$.data.lastSeenAt").value(org.hamcrest.Matchers.nullValue()))
                 .andExpect(jsonPath("$.data.skills.catalogRevision").value(org.hamcrest.Matchers.nullValue()))
                 .andExpect(jsonPath("$.data.skills.reasonCode").value(org.hamcrest.Matchers.nullValue())).andReturn();

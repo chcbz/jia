@@ -34,6 +34,7 @@ CREATE TABLE agent_runtime_v1_installation (
     tenant_id VARCHAR(50), client_id VARCHAR(50), create_time BIGINT, update_time BIGINT
 );
 CREATE TABLE agent_runtime (
+                    execution_model VARCHAR(200) DEFAULT NULL,
     id BIGINT AUTO_INCREMENT PRIMARY KEY, agent_id VARCHAR(100) NOT NULL UNIQUE,
     name VARCHAR(100) NOT NULL, avatar VARCHAR(500), owner_jiacn VARCHAR(50), persona_code VARCHAR(50),
     persona_name VARCHAR(50), binding_id BIGINT, abilities LONGTEXT, endpoint VARCHAR(500), token_hash VARCHAR(200),

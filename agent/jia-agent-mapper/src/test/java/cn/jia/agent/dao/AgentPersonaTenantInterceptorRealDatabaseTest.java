@@ -79,6 +79,7 @@ class AgentPersonaTenantInterceptorRealDatabaseTest {
                 """);
         jdbc.execute("""
                 CREATE TABLE agent_runtime (
+                    execution_model VARCHAR(200) DEFAULT NULL,
                     id BIGINT PRIMARY KEY, agent_id VARCHAR(100), tenant_id VARCHAR(50), client_id VARCHAR(50),
                     owner_jiacn VARCHAR(50), binding_id BIGINT, abilities VARCHAR(1000), status VARCHAR(50)
                 )

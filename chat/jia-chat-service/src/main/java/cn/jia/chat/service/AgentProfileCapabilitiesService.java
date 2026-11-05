@@ -39,7 +39,7 @@ public final class AgentProfileCapabilitiesService {
     }
     @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.ALWAYS)
     public record ProfileCapabilities(String agentId, long observedAt, List<String> abilities,
-            Long lastSeenAt, SkillDirectory skills) {
+            Long lastSeenAt, SkillDirectory skills, String executionModel) {
         public ProfileCapabilities { abilities = List.copyOf(abilities); }
     }
     @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.ALWAYS)
@@ -86,7 +86,7 @@ public final class AgentProfileCapabilitiesService {
             throw new IllegalStateException("AGENT_PROFILE_ABILITIES_INVALID");
         long observedAt = safeTime(clock.millis());
         Long lastSeenAt = agent.getLastSeenAt() == null ? null : safeTime(agent.getLastSeenAt());
-        return new ProfileCapabilities(agentId, observedAt, agent.getAbilities(), lastSeenAt, directory);
+        return new ProfileCapabilities(agentId, observedAt, agent.getAbilities(), lastSeenAt, directory, agent.getExecutionModel());
     }
 
     private AgentRuntimeDTO requireOwned(HostingRentHttp.Actor actor, String owner, String agentId) {

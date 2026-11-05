@@ -6,6 +6,9 @@ import cn.jia.core.dao.IBaseDao;
 import java.util.List;
 
 public interface AgentRuntimeDao extends IBaseDao<AgentRuntimeEntity> {
+    /** Registration alone owns model updates; presence must not overwrite a newer report. */
+    int updateRegistration(AgentRuntimeEntity entity);
+
     AgentRuntimeEntity findByAgentId(String agentId);
 
     AgentRuntimeEntity findInScope(String tenantId, String clientId, String agentId);

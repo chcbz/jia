@@ -724,7 +724,7 @@ class AgentServiceImplTest extends BaseMockTest {
             AgentRuntimeEntity inserted = invocation.getArgument(0);
             committedRuntime.set(inserted);
             return 1;
-        }).when(agentRuntimeDao).updateById(any(AgentRuntimeEntity.class));
+        }).when(agentRuntimeDao).updateRegistration(any(AgentRuntimeEntity.class));
         when(eventPublisherProvider.getIfAvailable()).thenReturn(eventPublisher);
 
         var sessionClaim = claimedRuntime("agent-001");
@@ -734,6 +734,7 @@ class AgentServiceImplTest extends BaseMockTest {
         AgentRegisterDTO request = new AgentRegisterDTO();
         request.setAgentId("agent-001");
         request.setEndpoint("wss://example.com/openclaw/agent-001");
+        request.setExecutionModel("fixture-execution/v2");
 
         AgentRegisterResultDTO result = agentService.register(request);
 
@@ -742,8 +743,9 @@ class AgentServiceImplTest extends BaseMockTest {
         assertNull(result.getToken());
 
         ArgumentCaptor<AgentRuntimeEntity> entityCaptor = ArgumentCaptor.forClass(AgentRuntimeEntity.class);
-        verify(agentRuntimeDao).updateById(entityCaptor.capture());
+        verify(agentRuntimeDao).updateRegistration(entityCaptor.capture());
         AgentRuntimeEntity saved = entityCaptor.getValue();
+        assertEquals("fixture-execution/v2", saved.getExecutionModel());
         assertEquals("agent-001", saved.getAgentId());
         assertEquals("吴用", saved.getName());
         assertEquals("wuyong", saved.getPersonaCode());
@@ -784,7 +786,7 @@ class AgentServiceImplTest extends BaseMockTest {
         agentService.register(request);
 
         ArgumentCaptor<AgentRuntimeEntity> captor = ArgumentCaptor.forClass(AgentRuntimeEntity.class);
-        verify(agentRuntimeDao).updateById(captor.capture());
+        verify(agentRuntimeDao).updateRegistration(captor.capture());
         assertEquals("[]", captor.getValue().getAbilities());
         assertEquals("本人维护名称", captor.getValue().getName());
         assertEquals("user-avatar", captor.getValue().getAvatar());
@@ -807,6 +809,7 @@ class AgentServiceImplTest extends BaseMockTest {
 
         var sessionClaim = claimedRuntime("agent-001");
         sessionClaim.setAbilities("[]");
+        sessionClaim.setExecutionModel("old-model");
         sessionClaim.setName("本人维护名称");
         sessionClaim.setAvatar("user-avatar");
         sessionClaim.setPersonaCode("wuyong");
@@ -818,8 +821,9 @@ class AgentServiceImplTest extends BaseMockTest {
 
         ArgumentCaptor<AgentRuntimeEntity> captor = ArgumentCaptor.forClass(AgentRuntimeEntity.class);
         verify(agentRuntimeDao).lockInScope("0", "jia_client", "agent-001");
-        verify(agentRuntimeDao).updateById(captor.capture());
+        verify(agentRuntimeDao).updateRegistration(captor.capture());
         assertEquals("[]", captor.getValue().getAbilities());
+        assertNull(captor.getValue().getExecutionModel());
     }
 
     @Test
@@ -853,19 +857,19 @@ class AgentServiceImplTest extends BaseMockTest {
         assertEquals("[\"stale-skill\"]", stale.getAbilities());
         verify(agentRuntimeDao).findByAgentId("agent-001");
         verify(agentRuntimeDao).lockInScope("0", "jia_client", "agent-001");
-        verify(agentRuntimeDao).updateById(lockedCurrent);
+        verify(agentRuntimeDao).updateRegistration(lockedCurrent);
         org.mockito.InOrder lockOrder = org.mockito.Mockito.inOrder(
                 agentIdentityService, agentRuntimeDao);
         lockOrder.verify(agentIdentityService).activateForFirstRegistration(identity);
         lockOrder.verify(agentRuntimeDao).lockInScope("0", "jia_client", "agent-001");
-        lockOrder.verify(agentRuntimeDao).updateById(lockedCurrent);
+        lockOrder.verify(agentRuntimeDao).updateRegistration(lockedCurrent);
         lockOrder.verify(agentRuntimeDao).findByAgentId("agent-001");
     }
 
     @Test
     void registrationAndStatusDtosContainOnlyRuntimeFields() throws Exception {
         var mapper = JsonUtil.getMapper();
-        assertEquals(java.util.Set.of("agentId", "endpoint"),
+        assertEquals(java.util.Set.of("agentId", "endpoint", "executionModel"),
                 mapper.convertValue(new AgentRegisterDTO(), java.util.Map.class).keySet());
         assertEquals(java.util.Set.of("status", "currentTaskId", "currentTaskTitle", "errorMessage"),
                 mapper.convertValue(new AgentStatusDTO(), java.util.Map.class).keySet());
@@ -1971,7 +1975,7 @@ class AgentServiceImplTest extends BaseMockTest {
 
         assertEquals(canonical, result.getAgentId());
         ArgumentCaptor<AgentRuntimeEntity> runtimeCaptor = ArgumentCaptor.forClass(AgentRuntimeEntity.class);
-        verify(agentRuntimeDao).updateById(runtimeCaptor.capture());
+        verify(agentRuntimeDao).updateRegistration(runtimeCaptor.capture());
         assertEquals(canonical, runtimeCaptor.getValue().getAgentId());
         assertEquals(binding.getId(), runtimeCaptor.getValue().getBindingId());
     }

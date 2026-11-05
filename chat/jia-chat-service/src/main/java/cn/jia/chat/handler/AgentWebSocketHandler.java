@@ -944,6 +944,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             AgentRegisterDTO request = new AgentRegisterDTO();
             request.setAgentId(agentId);
             request.setEndpoint(asString(payload.get("endpoint")));
+            request.setExecutionModel(payload.get("executionModel") instanceof String model ? model : null);
             stage = "runtime_register";
             AgentRegisterResultDTO result = withSessionContext(session, () -> runtimeAuthentication.withFence(sessionProof(session), true, () -> agentService.register(request)));
             if (result == null || !agentId.equals(result.getAgentId())) {

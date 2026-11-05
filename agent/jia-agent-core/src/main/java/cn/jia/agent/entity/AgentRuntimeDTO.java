@@ -31,6 +31,9 @@ public class AgentRuntimeDTO implements Serializable {
     private List<String> abilities;
     private String status;
     private String endpoint;
+    /** Latest reported default execution model; null means not reported, not free. */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    private String executionModel;
     private String currentTaskId;
     private String currentTaskTitle;
     private Long lastSeenAt;

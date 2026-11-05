@@ -165,7 +165,7 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
     }
 
     @Test
-    void registrationPassesOnlyConnectionFieldsToService() throws Exception {
+    void registrationPassesConnectionAndReportedModelToService() throws Exception {
         stubAgentSession("session-register-minimal", "agent-001", "runtime-1");
         when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
         when(agentService.register(any(AgentRegisterDTO.class))).thenReturn(
@@ -174,13 +174,14 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
                 chatClient, agentServiceProvider, chatMessageDao, chatConversationEventBroker));
         UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
                 {"type":"agent.register","agentId":"agent-001","runtimeInstanceId":"runtime-1",
-                 "endpoint":"wss://example.com/agent"}
+                 "endpoint":"wss://example.com/agent","executionModel":"fixture-model"}
                 """));
         ArgumentCaptor<AgentRegisterDTO> captor = ArgumentCaptor.forClass(AgentRegisterDTO.class);
         verify(agentService).register(captor.capture());
         assertEquals("agent-001", captor.getValue().getAgentId());
         assertEquals("wss://example.com/agent", captor.getValue().getEndpoint());
-        assertEquals(java.util.Set.of("agentId", "endpoint"),
+        assertEquals("fixture-model", captor.getValue().getExecutionModel());
+        assertEquals(java.util.Set.of("agentId", "endpoint", "executionModel"),
                 JsonUtil.getMapper().convertValue(captor.getValue(), java.util.Map.class).keySet());
     }
 

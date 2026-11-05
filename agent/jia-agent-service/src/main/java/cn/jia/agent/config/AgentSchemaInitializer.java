@@ -54,6 +54,8 @@ public class AgentSchemaInitializer implements InitializingBean {
     }
 
     private void ensureAgentRuntimeColumns() {
+        addColumnIfMissing("agent_runtime", "execution_model",
+                "execution_model VARCHAR(200) DEFAULT NULL COMMENT 'Reported default execution model'");
         addColumnIfMissing("agent_runtime", "owner_jiacn",
                 "owner_jiacn VARCHAR(50) DEFAULT NULL COMMENT 'Bound user Jia account'");
         addColumnIfMissing("agent_runtime", "persona_code",

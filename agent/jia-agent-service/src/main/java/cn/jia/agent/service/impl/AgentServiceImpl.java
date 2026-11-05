@@ -383,6 +383,10 @@ public class AgentServiceImpl implements AgentService {
         entity.setBindingId(binding.getId());
         entity.setClientId(clientId);
         entity.setEndpoint(request.getEndpoint());
+        // Optional display metadata never blocks registration; do not retain a stale model.
+        String model = request.getExecutionModel();
+        entity.setExecutionModel(model != null && !model.isBlank() && model.length() <= 200
+                && model.codePoints().noneMatch(Character::isISOControl) ? model.strip() : null);
         require(entity.getRuntimeInstallationId() != null && entity.getRuntimeHostId() != null
                 && entity.getRuntimeInstanceId() != null && entity.getRuntimeSessionGeneration() != null
                 && entity.getRuntimeSessionGeneration() > 0 && entity.getTokenHash() != null
@@ -395,7 +399,7 @@ public class AgentServiceImpl implements AgentService {
             agentRuntimeDao.insert(entity);
             observeSkillLifecycle(entity);
         } else {
-            agentRuntimeDao.updateById(entity);
+            agentRuntimeDao.updateRegistration(entity);
             observeSkillLifecycle(entity);
         }
         publishAgentSnapshotAfterCommit("agent-register", tenantId, clientId, jiacn,
@@ -2249,6 +2253,7 @@ public class AgentServiceImpl implements AgentService {
         }
         dto.setStatus(entity.getStatus());
         dto.setEndpoint(entity.getEndpoint());
+        dto.setExecutionModel(entity.getExecutionModel());
         dto.setCurrentTaskId(entity.getCurrentTaskId());
         dto.setCurrentTaskTitle(entity.getCurrentTaskTitle());
         dto.setLastSeenAt(entity.getLastSeenAt());
@@ -2293,6 +2298,7 @@ public class AgentServiceImpl implements AgentService {
         }
         dto.setStatus(entity.getStatus());
         dto.setEndpoint(entity.getEndpoint());
+        dto.setExecutionModel(entity.getExecutionModel());
         dto.setCurrentTaskId(entity.getCurrentTaskId());
         dto.setCurrentTaskTitle(entity.getCurrentTaskTitle());
         dto.setLastSeenAt(entity.getLastSeenAt());
