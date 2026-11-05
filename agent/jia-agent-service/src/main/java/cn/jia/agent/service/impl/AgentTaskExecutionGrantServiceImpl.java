@@ -64,6 +64,7 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
     private final AgentIdentityService identities;
     private final AgentTaskMutationTransaction transactions;
     private final ObjectMapper json;
+    private final cn.jia.economy.task.TaskBillingService billing;
     private ControlledImageGrantAuthority controlledAuthority;
     private cn.jia.agent.service.TaskAssigneeAuthorityService assigneeAuthority;
     private AgentTaskBountyBootstrapWakeupPublisher wakeups;
@@ -90,7 +91,8 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
             PersonalWorkspaceTaskLinkDao taskLinks, PersonalWorkspaceDao workspace,
             AgentLegacyTaskCompatibilityService legacyAssignments, AgentIdentityService identities,
             AgentTaskMutationTransaction transactions, ObjectMapper json,
-            AgentTaskRequirementSnapshotService requirementSnapshots) {
+            AgentTaskRequirementSnapshotService requirementSnapshots, cn.jia.economy.task.TaskBillingService billing) {
+        this.billing = Objects.requireNonNull(billing,"billing");
         this.grants = Objects.requireNonNull(grants,"grants");
         this.bootstrapOutbox = Objects.requireNonNull(bootstrapOutbox,"bootstrapOutbox");
         this.taskLinks = Objects.requireNonNull(taskLinks,"taskLinks");
@@ -104,16 +106,17 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
 
     @Override
     public AgentTaskExecutionGrantDTO assignAndGrant(Scope scope, String taskId,
-            String idempotencyKey, AgentTaskAssignDTO request) {
+            String idempotencyKey, AgentTaskAssignDTO request, String payerUserId) {
         ValidAssign valid = validateAssign(scope,taskId,idempotencyKey,request);
         String canonicalAgent = legacyAssignments.resolveAgentId(scope.tenantId(),scope.clientId(),
                 scope.ownerJiacn(),valid.requestedAgentId());
-        String requestHash = hashAssign(valid,canonicalAgent);
+        exact(payerUserId, "payerUserId", 100);
+        String requestHash = paymentHash(valid, canonicalAgent);
         String actionId = "ASSIGN_AND_START:" + valid.idempotencyKey();
         try {
             return transactions.executeWithLockedTaskRootInOwnerScope(scope.tenantId(),scope.clientId(),
                     scope.ownerJiacn(),valid.taskId(),root -> assignLocked(scope,valid,canonicalAgent,
-                            requestHash,actionId,root));
+                            requestHash,actionId,root,payerUserId));
         } catch (AgentTaskCollaborationException failure) {
             throw translate(failure);
         }
@@ -121,7 +124,9 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
 
     @Override
     public AgentTaskExecutionGrantDTO assignForDeliberation(Scope scope, String taskId,
-            String key, String targetAgentId, long expectedTaskVersion, long requirementRevision) {
+            String key, String targetAgentId, long expectedTaskVersion, long requirementRevision, Payment payment) {
+        if (payment == null) throw bad("Selected task quote is required");
+        exact(payment.payerUserId(), "payerUserId", 100);
         validateScope(scope); exact(taskId,"taskId",100); exact(key,"Idempotency-Key",100);
         exact(targetAgentId,"targetAgentId",100);
         if (expectedTaskVersion<0 || expectedTaskVersion==Long.MAX_VALUE || requirementRevision<1)
@@ -143,10 +148,11 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
                 request.setWorkflowVersion(2); request.setBusinessAction(ACTION);
                 request.setAgentId(canonicalAgent); request.setExpectedTaskVersion(expectedTaskVersion);
                 request.setRequirementRevision(requirementRevision);
+                request.setQuoteId(payment.quoteId()); request.setRecommendationId(payment.recommendationId());
                 request.setRequestedOperations(List.of("DELIBERATE","EXECUTE_SKILL"));
                 request.setInitialOperation("DELIBERATE"); request.setInputRefs(inputs);
                 ValidAssign valid=validateAssign(scope,taskId,key,request);
-                return assignLocked(scope,valid,canonicalAgent,hashAssign(valid,canonicalAgent),actionId,root);
+                return assignLocked(scope,valid,canonicalAgent,paymentHash(valid,canonicalAgent),actionId,root,payment.payerUserId());
             });
         } catch (AgentTaskCollaborationException failure) { throw translate(failure); }
     }
@@ -189,7 +195,8 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
     }
 
     AgentTaskExecutionGrantDTO assignControlledWithinLockedTask(Scope scope,String taskId,
-            String idempotencyKey,AgentTaskAssignDTO request,AgentTaskMetaEntity root) {
+            String idempotencyKey,AgentTaskAssignDTO request,AgentTaskMetaEntity root,String payerUserId) {
+        exact(payerUserId, "payerUserId", 100);
         ValidAssign valid=validateAssign(scope,taskId,idempotencyKey,request);
         if (!valid.initialOperationPresent()
                 || !List.of("GENERATE_IMAGE").equals(valid.operations())
@@ -203,11 +210,11 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
             throw conflict("Task changed before controlled assignment");
         String canonicalAgent=legacyAssignments.resolveAgentId(scope.tenantId(),scope.clientId(),
                 scope.ownerJiacn(),valid.requestedAgentId());
-        return assignLocked(scope,valid,canonicalAgent,hashAssign(valid,canonicalAgent),
-                "ASSIGN_AND_START:"+valid.idempotencyKey(),root);
+        return assignLocked(scope,valid,canonicalAgent,paymentHash(valid,canonicalAgent),
+                "ASSIGN_AND_START:"+valid.idempotencyKey(),root,payerUserId);
     }
 
-    private void requireCurrentRequirement(Scope scope, String taskId, long requirementRevision) {
+    private AgentTaskRequirementSnapshotService.Snapshot requireCurrentRequirement(Scope scope, String taskId, long requirementRevision) {
         try {
             var confirmed = requirementSnapshots.freezeCurrent(scope,taskId,requirementRevision);
             if (confirmed == null || confirmed.revision()!=requirementRevision
@@ -216,6 +223,7 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
                     || !scope.ownerJiacn().equals(confirmed.ownerJiacn())
                     || !taskId.equals(confirmed.taskId()))
                 throw new IllegalStateException("Requirement snapshot scope/revision mismatch");
+            return confirmed;
         }
         catch (IllegalArgumentException | IllegalStateException absent) {
             throw invalidState("Current owner-confirmed requirement revision is missing or stale");
@@ -223,14 +231,14 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
     }
 
     private AgentTaskExecutionGrantDTO assignLocked(Scope scope, ValidAssign valid,
-            String canonicalAgent, String requestHash, String actionId, AgentTaskMetaEntity root) {
+            String canonicalAgent, String requestHash, String actionId, AgentTaskMetaEntity root, String payerUserId) {
         // Frozen task-root lock order: requirement latest read -> grant action ->
         // bootstrap action -> target/input rows. Requirement history is append-only.
         // The command-delivery outbox is intentionally not reused: this row coordinates Chat
         // admission and must never acquire Rabbit/Agent delivery semantics.
         // Root is already locked. Client revision is only a hint: compare with latest
         // server-owned immutable requirement before taking grant/outbox action locks.
-        requireCurrentRequirement(scope, valid.taskId(), valid.requirementRevision());
+        var requirement = requireCurrentRequirement(scope, valid.taskId(), valid.requirementRevision());
         AgentTaskExecutionGrantEntity replay = grants.findByActionForUpdate(scope.tenantId(),
                 scope.clientId(),scope.ownerJiacn(),actionId);
         AgentTaskBountyBootstrapOutboxEntity existingBootstrap =
@@ -238,6 +246,8 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
                         scope.ownerJiacn(), actionId);
         if (replay != null) {
             AgentTaskExecutionGrantDTO result = replay(requestHash,valid.taskId(),replay);
+            try { billing.reservation(billingTask(scope, valid.taskId()), valid.quoteId(), payerUserId); }
+            catch (cn.jia.economy.task.TaskBillingException failure) { throw billingFailure(failure); }
             if (valid.initialOperation()==null) {
                 throw bad("assign_and_start requires exactly one initial permitted operation");
             }
@@ -266,6 +276,20 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
                             public String identityOwner(String taskOwner) { return target.get().ownerJiacn(); }
                             public void validate(AgentTaskMetaEntity task,List<String> agentIds) {
                                 snapshot.set(validateAndSnapshotInputs(scope,valid.taskId(),valid.inputs()));
+                                var catalogue = snapshotTaskInputsWithinLockedTask(scope, valid.taskId());
+                                var taskBilling = billingTask(scope, valid.taskId());
+                                try { billing.reserve(taskBilling, valid.quoteId(),
+                                        new cn.jia.economy.task.TaskBillingService.Binding(requirement.revision(),
+                                                requirement.sha256(), catalogue.digest(), canonicalAgent,
+                                                valid.recommendationId()), payerUserId);
+                                } catch (cn.jia.economy.task.TaskBillingException failure) {
+                                    throw billingFailure(failure);
+                                } catch (cn.jia.economy.exception.EconomyPostingException failure) {
+                                    if (failure.reason() == cn.jia.economy.exception.EconomyPostingException.Reason.INSUFFICIENT_FUNDS)
+                                        throw new AgentTaskExecutionGrantException(Reason.TASK_FUNDS_INSUFFICIENT,
+                                                "Available balance is insufficient for the selected task quotation");
+                                    throw failure;
+                                }
                             }
                         },root);
         long assignmentRevision = assignment.changed()
@@ -419,7 +443,7 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
                 input.fileId(), input.version(), input.purpose(), input.contentMimeType(),
                 input.byteLength(), input.contentHash())).toList();
         return new AssignmentPreview(canonicalAgent, lockedTaskVersion,
-                confirmed.revision(), confirmed.sha256(), hashAssign(valid, canonicalAgent),
+                confirmed.revision(), confirmed.sha256(), paymentHash(valid, canonicalAgent),
                 sha256("TASK_LINKED_INPUT_SNAPSHOT_V1\n" + write(snapshots)), authorized);
     }
 
@@ -1042,7 +1066,7 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
         List<ValidInput> inputs=canonicalInputs(request.getInputRefs());
         return new ValidAssign(taskId,key,request.getAgentId(),request.getExpectedTaskVersion(),
                 request.getRequirementRevision(),operations,inputs,initialOperation,
-                initialOperationPresent);
+                initialOperationPresent, request.getQuoteId(), request.getRecommendationId());
     }
 
     private static String explicitInitialOperation(String selected,List<String> operations) {
@@ -1085,6 +1109,23 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
         result.sort(Comparator.comparing(ValidInput::fileId,AgentTaskExecutionGrantServiceImpl::compareUtf8)
                 .thenComparingInt(ValidInput::version).thenComparing(ValidInput::purpose));
         return List.copyOf(result);
+    }
+
+    private static cn.jia.economy.task.TaskBillingService.Task billingTask(Scope scope, String taskId) {
+        return new cn.jia.economy.task.TaskBillingService.Task(
+                new cn.jia.economy.service.EconomyScope(scope.tenantId(), scope.clientId()), scope.ownerJiacn(), taskId);
+    }
+    private static AgentTaskExecutionGrantException billingFailure(cn.jia.economy.task.TaskBillingException failure) {
+        return new AgentTaskExecutionGrantException(
+                failure.reason() == cn.jia.economy.task.TaskBillingException.Reason.QUOTE_PAYER_MISMATCH
+                        ? Reason.TASK_QUOTE_PAYER_FORBIDDEN : Reason.TASK_QUOTE_UNAVAILABLE,
+                "Selected task quotation is not available for this assignment");
+    }
+    private String paymentHash(ValidAssign valid, String canonicalAgent) {
+        exact(valid.quoteId(), "quoteId", 100);
+        exact(valid.recommendationId(), "recommendationId", 100);
+        return sha256("ASSIGN_TASK_QUOTE_V1\n" + hashAssign(valid, canonicalAgent) + "\n"
+                + write(List.of(valid.quoteId(), valid.recommendationId())));
     }
 
     private String hashAssign(ValidAssign valid,String canonicalAgent) {
@@ -1195,7 +1236,8 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
 
     private record ValidAssign(String taskId,String idempotencyKey,String requestedAgentId,
             long expectedTaskVersion,long requirementRevision,List<String> operations,
-            List<ValidInput> inputs,String initialOperation,boolean initialOperationPresent) { }
+            List<ValidInput> inputs,String initialOperation,boolean initialOperationPresent,
+            String quoteId,String recommendationId) { }
     private record ValidInput(String fileId,int version,String purpose) { }
     private record InputSnapshot(String fileId,int version,String purpose,String contentMimeType,
             long byteLength,String contentHash) { }

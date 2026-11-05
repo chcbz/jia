@@ -192,12 +192,68 @@ class TaskBillingServiceMySqlTest {
                 new Binding(1, "requirement-sha", "other", "agent-1", "recommendation-1"),
                 new Binding(1, "requirement-sha", "input-sha", "other", "recommendation-1"),
                 new Binding(1, "requirement-sha", "input-sha", "agent-1", "other"))) {
-            assertReason(QUOTE_BINDING_CHANGED, () -> inTask(TASK, () -> billing.reserve(TASK, quote.quoteId(), changed)));
+            assertReason(QUOTE_BINDING_CHANGED, () -> inTask(TASK, () -> billing.reserve(TASK, quote.quoteId(), changed, "payer-1")));
         }
         Task other = new Task(SCOPE, "other-owner", TASK.taskId());
-        assertReason(QUOTE_NOT_FOUND, () -> inTask(other, () -> billing.reserve(other, quote.quoteId(), BINDING)));
+        assertReason(QUOTE_NOT_FOUND, () -> inTask(other, () -> billing.reserve(other, quote.quoteId(), BINDING, "payer-1")));
         assertEquals(100, wallet());
         assertEquals(0, count("economy_task_charge"));
+    }
+
+    @Test
+    void reservationRequiresQuotedWalletPrincipalNotJustTaskOwner() {
+        Quote quote = quote(TASK, BINDING, "0.5");
+        for (String unauthorized : java.util.Arrays.asList("other-payer", TASK.ownerJiacn(), "", null)) {
+            assertReason(QUOTE_PAYER_MISMATCH, () -> inTask(TASK,
+                    () -> billing.reserve(TASK, quote.quoteId(), BINDING, unauthorized)));
+        }
+        assertEquals(100, wallet());
+        assertEquals(0, count("economy_task_charge"));
+        assertEquals(0, count("economy_transaction"));
+        assertEquals(0, count("economy_escrow"));
+        assertEquals(State.HELD, reserve(TASK, quote).state());
+        assertEquals(50, wallet());
+    }
+
+    @Test
+    void reservationReplayStillRequiresTheOriginalPayerAndPreservesHeldFunds() {
+        Quote quote = quote(TASK, BINDING, "0.5");
+        Charge held = reserve(TASK, quote);
+        assertReason(QUOTE_PAYER_MISMATCH, () -> inTask(TASK,
+                () -> billing.reserve(TASK, quote.quoteId(), BINDING, "other-payer")));
+        assertEquals(held, reserve(TASK, quote));
+        assertEquals(50, wallet());
+        assertEquals(1, count("economy_task_charge"));
+        assertEquals(1, count("economy_transaction"));
+    }
+
+    @Test
+    void replayReadsOriginalReservationWithoutReopeningSettledCharge() {
+        Quote quote = quote(TASK, BINDING, "0.5");
+        assertReason(RESERVATION_REQUIRED, () -> inTask(TASK,
+                () -> billing.reservation(TASK, quote.quoteId(), "payer-1")));
+        Charge held = reserve(TASK, quote);
+        assertEquals(held, inTask(TASK, () -> billing.reservation(TASK, quote.quoteId(), "payer-1")));
+        assertReason(QUOTE_PAYER_MISMATCH, () -> inTask(TASK,
+                () -> billing.reservation(TASK, quote.quoteId(), "other-payer")));
+        assertReason(CHARGE_CONFLICT, () -> inTask(TASK,
+                () -> billing.reservation(TASK, "other-quote", "payer-1")));
+        Charge released = inTask(TASK, () -> billing.release(TASK, true));
+        assertEquals(released, inTask(TASK, () -> billing.reservation(TASK, quote.quoteId(), "payer-1")));
+        assertEquals(100, wallet()); assertEquals(2, count("economy_transaction"));
+    }
+
+    @Test
+    void zeroQuoteDoesNotBypassPayerAuthorization() {
+        Quote quote = quote(TASK, BINDING, "0");
+        assertReason(QUOTE_PAYER_MISMATCH, () -> inTask(TASK,
+                () -> billing.reserve(TASK, quote.quoteId(), BINDING, "other-payer")));
+        assertEquals(0, count("economy_task_charge"));
+        assertEquals(State.HELD, reserve(TASK, quote).state());
+        assertReason(QUOTE_PAYER_MISMATCH, () -> inTask(TASK,
+                () -> billing.reserve(TASK, quote.quoteId(), BINDING, "other-payer")));
+        assertEquals(0, count("economy_transaction"));
+        assertEquals(100, wallet());
     }
 
     @Test
@@ -261,7 +317,7 @@ class TaskBillingServiceMySqlTest {
     void outerAssignmentFailureRollsBackChargeJournalAccountsAndBusinessTogether() {
         Quote quote = quote(TASK, BINDING, "0.5");
         assertThrows(IllegalStateException.class, () -> inTask(TASK, () -> {
-            billing.reserve(TASK, quote.quoteId(), BINDING);
+            billing.reserve(TASK, quote.quoteId(), BINDING, "payer-1");
             jdbc.update("UPDATE test_task_root SET state='ASSIGNED' WHERE id='task-1'");
             throw new IllegalStateException("assignment persistence failed");
         }));
@@ -342,7 +398,7 @@ class TaskBillingServiceMySqlTest {
         return inTask(task, () -> billing.quote(task, binding, "payer-1", workload(), route(yuan)));
     }
     private Charge reserve(Task task, Quote quote) {
-        return inTask(task, () -> billing.reserve(task, quote.quoteId(), BINDING));
+        return inTask(task, () -> billing.reserve(task, quote.quoteId(), BINDING, "payer-1"));
     }
     private <T> T inTask(Task task, Supplier<T> work) {
         return tx.execute(status -> {

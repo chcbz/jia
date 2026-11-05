@@ -102,10 +102,15 @@ public class TaskBillingServiceImpl implements TaskBillingService {
     }
 
     @Override
-    public Charge reserve(Task task, String quoteId, Binding currentBinding) {
+    public Charge reserve(Task task, String quoteId, Binding currentBinding, String payerUserId) {
         EconomyTaskQuoteEntity quote = mapper.findQuote(task.scope().tenantId(), task.scope().clientId(),
                 task.ownerJiacn(), task.taskId(), quoteId);
         if (quote == null) throw new TaskBillingException(QUOTE_NOT_FOUND);
+        // The task owner is a business identity, not the wallet principal. Check the immutable
+        // payer before any write (and before returning an existing reservation).
+        if (!quote.getPayerUserId().equals(payerUserId)) {
+            throw new TaskBillingException(QUOTE_PAYER_MISMATCH);
+        }
         if (!quote.getBindingSha256().equals(bindingHash(currentBinding))) {
             throw new TaskBillingException(QUOTE_BINDING_CHANGED);
         }
@@ -133,6 +138,17 @@ public class TaskBillingServiceImpl implements TaskBillingService {
         }
         row.setState(State.HELD.name());
         requireTransition(mapper.markHeld(row));
+        return receipt(row);
+    }
+
+    @Override
+    public Charge reservation(Task task, String quoteId, String payerUserId) {
+        EconomyTaskChargeEntity row = lock(task);
+        if (row == null) throw new TaskBillingException(RESERVATION_REQUIRED);
+        if (!Objects.equals(row.getPayerUserId(), payerUserId) || payerUserId == null)
+            throw new TaskBillingException(QUOTE_PAYER_MISMATCH);
+        if (!Objects.equals(row.getQuoteId(), quoteId) || quoteId == null)
+            throw new TaskBillingException(CHARGE_CONFLICT);
         return receipt(row);
     }
 

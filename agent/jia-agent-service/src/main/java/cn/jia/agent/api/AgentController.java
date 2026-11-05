@@ -454,7 +454,7 @@ public class AgentController {
         AgentTaskExecutionGrantService.Scope scope = requireTaskGrantScope(authentication);
         return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL, "private, no-store")
                 .body(JsonResult.success(requireTaskExecutionGrants().assignAndGrant(
-                        scope, taskId, idempotencyKey, request)));
+                        scope, taskId, idempotencyKey, request, requireMoneyActor(authentication).userId())));
     }
 
     @PostMapping("/tasks/{taskId}/execution-authorizations/{grantId}/revoke")
@@ -613,6 +613,7 @@ public class AgentController {
                 || request.getBusinessAction() != null
                 || request.getExpectedTaskVersion() != null
                 || request.getRequirementRevision() != null
+                || request.getQuoteId() != null || request.getRecommendationId() != null
                 || request.getRequestedOperations() != null
                 || request.getInitialOperation() != null
                 || request.getInputRefs() != null

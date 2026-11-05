@@ -45,7 +45,7 @@ import java.util.Objects;
 public final class AgentTaskDeliberationOperationController {
     static final String CACHE_CONTROL = "private, no-store";
     private static final Set<String> POINT_FIELDS = Set.of(
-            "targetAgentId", "expectedTaskVersion", "requirementRevision");
+            "targetAgentId", "expectedTaskVersion", "requirementRevision", "quoteId", "recommendationId");
     private static final ObjectMapper STRICT_JSON = JsonMapper.builder()
             .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
             .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS).build();
@@ -84,7 +84,8 @@ public final class AgentTaskDeliberationOperationController {
         requireRequest(taskId, idempotencyKey, request);
         PointCommand command = command(rawBody);
         grants.assignForDeliberation(scope, taskId, idempotencyKey, command.targetAgentId(),
-                command.expectedTaskVersion(), command.requirementRevision());
+                command.expectedTaskVersion(), command.requirementRevision(),
+                new AgentTaskExecutionGrantService.Payment(requirePayer(authentication), command.quoteId(), command.recommendationId()));
         // Read the committed operation; an unavailable read never authorizes another key/POST.
         return pointReceipt(scope, taskId, idempotencyKey);
     }
@@ -119,7 +120,8 @@ public final class AgentTaskDeliberationOperationController {
                 || !request.getParameterMap().isEmpty()) throw new InvalidRequest();
     }
 
-    private record PointCommand(String targetAgentId, long expectedTaskVersion, long requirementRevision) { }
+    private record PointCommand(String targetAgentId, long expectedTaskVersion, long requirementRevision,
+            String quoteId, String recommendationId) { }
     private static PointCommand command(String raw) {
         if (raw == null || raw.isBlank()) throw new InvalidRequest();
         try {
@@ -131,7 +133,11 @@ public final class AgentTaskDeliberationOperationController {
             requireExact(target, 100);
             long expected = decimal(body.get("expectedTaskVersion"), false);
             if (expected == Long.MAX_VALUE) throw new InvalidRequest();
-            return new PointCommand(target, expected, decimal(body.get("requirementRevision"), true));
+            if (!body.get("quoteId").isTextual() || !body.get("recommendationId").isTextual()) throw new InvalidRequest();
+            String quoteId = body.get("quoteId").textValue();
+            String recommendationId = body.get("recommendationId").textValue();
+            requireExact(quoteId, 100); requireExact(recommendationId, 100);
+            return new PointCommand(target, expected, decimal(body.get("requirementRevision"), true), quoteId, recommendationId);
         } catch (Exception invalid) { throw new InvalidRequest(); }
     }
 
@@ -230,6 +236,13 @@ public final class AgentTaskDeliberationOperationController {
             throw new AuthenticationFailure();
         }
         return new AgentTaskExecutionGrantService.Scope("0", clientId, ownerJiacn);
+    }
+
+    // requireOwnerJwt already authenticates this boundary; only extract the separate wallet principal.
+    private static String requirePayer(Authentication authentication) {
+        Object subject = ((JwtAuthenticationToken) authentication).getToken().getClaims().get("sub");
+        if (!(subject instanceof String payer) || !validExact(payer, 100)) throw new AuthenticationFailure();
+        return payer;
     }
 
     private static void requireExact(String value, int maxCodePoints) {

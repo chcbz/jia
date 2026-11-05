@@ -30,8 +30,14 @@ public interface TaskBillingService {
 
     /** Immutable per recommendation+candidate binding. Replay returns stored prices without recalculating. */
     Quote quote(Task task, Binding binding, String payerUserId, TaskWorkload workload, TaskPricingService.ModelKey model);
-    /** Reserve exactly the selected quote, or replay the same reservation; never top up/reprice. */
-    Charge reserve(Task task, String quoteId, Binding currentBinding);
+    /** Reserve exactly the selected quote, or replay the same reservation; never top up/reprice.
+     * payerUserId comes from the caller's authenticated actor, never the request body or ownerJiacn.
+     * Matching the quote payer is required even for zero-price quotes and reservation replays.
+     */
+    Charge reserve(Task task, String quoteId, Binding currentBinding, String payerUserId);
+    /** Verify original assignment replay without re-reserving or consulting mutable requirements/inputs.
+     * A completed/released original remains readable, but never authorizes a new execution. */
+    Charge reservation(Task task, String quoteId, String payerUserId);
     /** Missing reservation is not free. Legacy-free requires an explicit cutover record. */
     Charge capture(Task task);
     /** Cancelling an unassigned task can have no reservation; an assigned task must have one. */

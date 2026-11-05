@@ -39,11 +39,13 @@ class AgentTaskExecutionGrantServiceImplTest {
     private final AgentTaskRequirementSnapshotService requirementSnapshots = mock(AgentTaskRequirementSnapshotService.class);
     private final AgentTaskMetaEntity root = new AgentTaskMetaEntity();
     private AgentTaskExecutionGrantServiceImpl service;
+    private final cn.jia.economy.task.TaskBillingService billing = mock(cn.jia.economy.task.TaskBillingService.class);
     private final cn.jia.agent.service.TaskAssigneeAuthorityService authority=mock(cn.jia.agent.service.TaskAssigneeAuthorityService.class);
 
 
     @BeforeEach
     void setUp() {
+        when(links.list("0","client","owner","task-1",null,null,33)).thenReturn(List.of());
         when(authority.lockForAssignment(eq("0"),eq("client"),eq("owner"),anyString()))
                 .thenAnswer(i->new cn.jia.agent.service.TaskAssigneeAuthorityService.Target("0","client","owner",i.getArgument(3),1L,null));
         when(authority.requireGrantTarget(eq("0"),eq("client"),eq("owner"),anyString(),anyString(),anyLong()))
@@ -73,14 +75,87 @@ class AgentTaskExecutionGrantServiceImplTest {
                     : new AgentLegacyTaskCompatibilityService.AssignOutcome(List.of("agent-1"),false);
         });
         service=new AgentTaskExecutionGrantServiceImpl(grants,bootstraps,links,workspace,legacy,identities,
-                new DirectTransaction(root),new ObjectMapper(),requirementSnapshots);
+                new DirectTransaction(root),new ObjectMapper(),requirementSnapshots, billing);
         service.setAssigneeAuthority(authority);
+    }
+
+    @Test void selectedQuoteAndAuthenticatedPayerReachCommonReservationBeforeAssignmentMutation() {
+        doAnswer(call -> {
+            assertNull(root.getAssignedAgentId());
+            assertTrue(grants.byAction.isEmpty());
+            assertTrue(bootstraps.byAction.isEmpty());
+            var task = (cn.jia.economy.task.TaskBillingService.Task) call.getArgument(0);
+            var binding = (cn.jia.economy.task.TaskBillingService.Binding) call.getArgument(2);
+            assertEquals("owner", task.ownerJiacn()); assertEquals("task-1", task.taskId());
+            assertEquals("quote-1", call.getArgument(1)); assertEquals("payer-1", call.getArgument(3));
+            assertEquals("rec-1", binding.recommendationId()); assertEquals("agent-1", binding.agentId());
+            assertEquals("a".repeat(64), binding.requirementSha256());
+            assertEquals(service.snapshotTaskInputsWithinLockedTask(scope(), "task-1").digest(), binding.inputSnapshotDigest());
+            return null;
+        }).when(billing).reserve(any(), anyString(), any(), anyString());
+        service.assignForDeliberation(scope(), "task-1", "funded", "agent-1", 0, 1,
+                new AgentTaskExecutionGrantService.Payment("payer-1", "quote-1", "rec-1"));
+        service.assignForDeliberation(scope(), "task-1", "funded", "agent-1", 0, 1,
+                new AgentTaskExecutionGrantService.Payment("payer-1", "quote-1", "rec-1"));
+        verify(billing, times(1)).reserve(any(), eq("quote-1"), any(), eq("payer-1"));
+    }
+
+    @Test void quoteAndRecommendationArePartOfOriginalAssignmentIdempotency() {
+        service.assignForDeliberation(scope(), "task-1", "funded", "agent-1", 0, 1,
+                new AgentTaskExecutionGrantService.Payment("payer-1", "quote-1", "rec-1"));
+        for (var payment : List.of(new AgentTaskExecutionGrantService.Payment("payer-1", "quote-2", "rec-1"),
+                new AgentTaskExecutionGrantService.Payment("payer-1", "quote-1", "rec-2"))) {
+            var failure = assertThrows(AgentTaskExecutionGrantException.class,
+                    () -> service.assignForDeliberation(scope(), "task-1", "funded", "agent-1", 0, 1, payment));
+            assertEquals(AgentTaskExecutionGrantException.Reason.IDEMPOTENCY_CONFLICT, failure.reason());
+        }
+        verify(billing, times(1)).reserve(any(), anyString(), any(), anyString());
+    }
+
+    @Test void originalAssignmentReplayCannotBypassWalletPrincipal() {
+        service.assignForDeliberation(scope(), "task-1", "funded", "agent-1", 0, 1,
+                new AgentTaskExecutionGrantService.Payment("payer-1", "quote-1", "rec-1"));
+        doThrow(new cn.jia.economy.task.TaskBillingException(
+                cn.jia.economy.task.TaskBillingException.Reason.QUOTE_PAYER_MISMATCH))
+                .when(billing).reservation(any(), eq("quote-1"), eq("other-payer"));
+        var failure = assertThrows(AgentTaskExecutionGrantException.class,
+                () -> service.assignForDeliberation(scope(), "task-1", "funded", "agent-1", 0, 1,
+                        new AgentTaskExecutionGrantService.Payment("other-payer", "quote-1", "rec-1")));
+        assertEquals(AgentTaskExecutionGrantException.Reason.TASK_QUOTE_PAYER_FORBIDDEN, failure.reason());
+        verify(billing, times(1)).reserve(any(), anyString(), any(), anyString());
+    }
+
+    @Test void controlledAssignmentUsesSameTaskReservationBoundary() {
+        var request = request(); request.setRequestedOperations(List.of("GENERATE_IMAGE"));
+        request.setInitialOperation("GENERATE_IMAGE");
+        service.assignControlledWithinLockedTask(scope(), "task-1", "controlled", request, root, "payer-1");
+        verify(billing).reserve(any(), eq("quote-1"), any(), eq("payer-1"));
+    }
+
+    @Test void missingQuoteCannotCreateAssignmentOrBootstrap() {
+        var request = request(); request.setQuoteId(null);
+        var failure = assertThrows(AgentTaskExecutionGrantException.class,
+                () -> service.assignAndGrant(scope(), "task-1", "no-quote", request, "payer-1"));
+        assertEquals(AgentTaskExecutionGrantException.Reason.BAD_REQUEST, failure.reason());
+        verifyNoInteractions(billing);
+        assertNull(root.getAssignedAgentId()); assertTrue(grants.byAction.isEmpty()); assertTrue(bootstraps.byAction.isEmpty());
+    }
+
+    @Test void insufficientBalanceStopsAssignmentGrantAndBootstrap() {
+        doThrow(new cn.jia.economy.exception.EconomyPostingException(
+                cn.jia.economy.exception.EconomyPostingException.Reason.INSUFFICIENT_FUNDS, "test"))
+                .when(billing).reserve(any(), anyString(), any(), anyString());
+        var failure = assertThrows(AgentTaskExecutionGrantException.class,
+                () -> service.assignForDeliberation(scope(), "task-1", "funded", "agent-1", 0, 1,
+                        new AgentTaskExecutionGrantService.Payment("payer-1", "quote-1", "rec-1")));
+        assertEquals(AgentTaskExecutionGrantException.Reason.TASK_FUNDS_INSUFFICIENT, failure.reason());
+        assertNull(root.getAssignedAgentId()); assertTrue(grants.byAction.isEmpty()); assertTrue(bootstraps.byAction.isEmpty());
     }
 
     @Test void grayScopeReachesTenantBoundRootLockWithoutProductionFallback() {
         var transactions = mock(AgentTaskMutationTransaction.class);
         var scoped = new AgentTaskExecutionGrantServiceImpl(grants,bootstraps,links,workspace,
-                legacy,identities,transactions,new ObjectMapper(),requirementSnapshots);
+                legacy,identities,transactions,new ObjectMapper(),requirementSnapshots, billing);
         var gray = new AgentTaskExecutionGrantService.Scope("1","client","owner");
         scoped.admit(gray,"task-1","grant-1",1,0,"agent-1","READ_TASK",false);
         verify(transactions).executeWithLockedTaskRootInOwnerScope(eq("1"),eq("client"),
@@ -103,19 +178,19 @@ class AgentTaskExecutionGrantServiceImplTest {
         when(links.list("0","client","owner","task-1",null,null,33)).thenReturn(List.of());
         when(authority.lockForAssignment("0","client","owner","agent-1"))
                 .thenReturn(new cn.jia.agent.service.TaskAssigneeAuthorityService.Target("0","client","provider","agent-1",7L,2L));
-        service.assignForDeliberation(scope(),"task-1","external","agent-1",0,1);
+        service.assignForDeliberation(scope(),"task-1","external","agent-1",0,1, new AgentTaskExecutionGrantService.Payment("payer-1", "quote-1", "rec-1"));
         var row=grants.byAction.values().iterator().next();
         assertEquals("owner",row.getOwnerJiacn());assertEquals("provider",row.getExecutorOwnerJiacn());
         assertEquals(7L,row.getExecutorBindingId());assertEquals(2L,row.getExternalPolicyRevision());
         assertEquals("DELIBERATE",bootstraps.byAction.values().iterator().next().getPermittedOperation());
-        service.assignForDeliberation(scope(),"task-1","external","agent-1",0,1);
+        service.assignForDeliberation(scope(),"task-1","external","agent-1",0,1, new AgentTaskExecutionGrantService.Payment("payer-1", "quote-1", "rec-1"));
         verify(authority,times(1)).lockForAssignment("0","client","owner","agent-1");
         verify(wakeups, times(1)).afterCommit(row.getCreatedAt());
     }
 
     @Test void pendingReviewAllowsReadOnlyDiscussionContextWithoutGrantingImageExecution() {
         when(links.list("0","client","owner","task-1",null,null,33)).thenReturn(List.of());
-        var grant=service.assignForDeliberation(scope(),"task-1","review-context","agent-1",0,1);
+        var grant=service.assignForDeliberation(scope(),"task-1","review-context","agent-1",0,1, new AgentTaskExecutionGrantService.Payment("payer-1", "quote-1", "rec-1"));
         root.setRewardStatus("reviewing");
         var context=service.currentFollowupContext(scope(),"task-1","agent-1");
         assertEquals(grant.getAssignmentRevision(),context.assignmentRevision());
@@ -129,7 +204,7 @@ class AgentTaskExecutionGrantServiceImplTest {
     @Test
     void pointWithoutMaterialsCreatesDeliberationNotImageOrPaidAuthority() {
         when(links.list("0","client","owner","task-1",null,null,33)).thenReturn(List.of());
-        var receipt=service.assignForDeliberation(scope(),"task-1","point-empty","agent-1",0,1);
+        var receipt=service.assignForDeliberation(scope(),"task-1","point-empty","agent-1",0,1, new AgentTaskExecutionGrantService.Payment("payer-1", "quote-1", "rec-1"));
         assertEquals(List.of("DELIBERATE","EXECUTE_SKILL"),receipt.getPermittedOperations());
         assertFalse(receipt.getPaidExecutionAuthorized());
         assertTrue(receipt.getInputs().isEmpty());
@@ -139,7 +214,7 @@ class AgentTaskExecutionGrantServiceImplTest {
 
     @Test void newOrdinaryGrantAdmitsSkillButAnOldGrantDoesNotGainTheOperation() {
         when(links.list("0","client","owner","task-1",null,null,33)).thenReturn(List.of());
-        var grant=service.assignForDeliberation(scope(),"task-1","text-grant","agent-1",0,1);
+        var grant=service.assignForDeliberation(scope(),"task-1","text-grant","agent-1",0,1, new AgentTaskExecutionGrantService.Payment("payer-1", "quote-1", "rec-1"));
         assertEquals("EXECUTE_SKILL",service.admit(scope(),"task-1",grant.getGrantId(),grant.getGrantVersion(),
                 grant.getAssignmentRevision(),"agent-1","EXECUTE_SKILL",false).operation());
         assertThrows(AgentTaskExecutionGrantException.class,()->service.admit(scope(),"task-1",grant.getGrantId(),
@@ -151,7 +226,7 @@ class AgentTaskExecutionGrantServiceImplTest {
 
     @Test void unknownToolPolicyDoesNotBecomeNativeExecutionAuthority() {
         when(links.list("0","client","owner","task-1",null,null,33)).thenReturn(List.of());
-        var grant=service.assignForDeliberation(scope(),"task-1","unknown-tools","agent-1",0,1);
+        var grant=service.assignForDeliberation(scope(),"task-1","unknown-tools","agent-1",0,1, new AgentTaskExecutionGrantService.Payment("payer-1", "quote-1", "rec-1"));
         var row=grants.byAction.values().iterator().next();
         for(String policy:List.of("ALL_TOOLS","NATIVE_LOCAL_FILES_V1","NO_TOOLS_V1")) {
             row.setPermittedToolPolicyRef(policy);
@@ -172,7 +247,7 @@ class AgentTaskExecutionGrantServiceImplTest {
         assertEquals(1, catalogue.inputs().size()); assertEquals("INPUT", catalogue.inputs().getFirst().purpose());
         assertTrue(catalogue.digest().matches("[0-9a-f]{64}"));
         assertTrue(grants.byAction.isEmpty()); assertTrue(bootstraps.byAction.isEmpty());
-        var assigned = service.assignForDeliberation(scope(), "task-1", "priced", "agent-1", 0, 1);
+        var assigned = service.assignForDeliberation(scope(), "task-1", "priced", "agent-1", 0, 1, new AgentTaskExecutionGrantService.Payment("payer-1", "quote-1", "rec-1"));
         assertEquals(catalogue.inputs().getFirst().contentHash(), assigned.getInputs().getFirst().contentHash());
         var persisted = grants.byAction.values().iterator().next().getInputScopeJson();
         assertEquals(catalogue.digest(), java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
@@ -188,13 +263,13 @@ class AgentTaskExecutionGrantServiceImplTest {
             materials.add(link);
         }
         when(links.list("0","client","owner","task-1",null,null,33)).thenReturn(materials);
-        var first=service.assignForDeliberation(scope(),"task-1","point-mixed","agent-1",0,1);
+        var first=service.assignForDeliberation(scope(),"task-1","point-mixed","agent-1",0,1, new AgentTaskExecutionGrantService.Payment("payer-1", "quote-1", "rec-1"));
         assertEquals(4,first.getInputs().size());
         assertEquals(List.of("image/png","application/pdf","audio/ogg","text/plain"),
                 first.getInputs().stream().map(v->v.contentMimeType()).toList());
         when(links.list("0","client","owner","task-1",null,null,33))
                 .thenThrow(new AssertionError("Replay must use the original fixed catalogue"));
-        var again=service.assignForDeliberation(scope(),"task-1","point-mixed","agent-1",0,1);
+        var again=service.assignForDeliberation(scope(),"task-1","point-mixed","agent-1",0,1, new AgentTaskExecutionGrantService.Payment("payer-1", "quote-1", "rec-1"));
         assertEquals(first.getGrantId(),again.getGrantId());
         assertEquals(first.getInputs(),again.getInputs());
         assertEquals(1,bootstraps.byAction.size());
@@ -206,12 +281,12 @@ class AgentTaskExecutionGrantServiceImplTest {
     @Test
     void pointSameKeyDifferentTargetOrVersionConflictsWithoutSecondAssignment() {
         when(links.list("0","client","owner","task-1",null,null,33)).thenReturn(List.of());
-        service.assignForDeliberation(scope(),"task-1","point-conflict","agent-1",0,1);
+        service.assignForDeliberation(scope(),"task-1","point-conflict","agent-1",0,1, new AgentTaskExecutionGrantService.Payment("payer-1", "quote-1", "rec-1"));
         when(legacy.resolveAgentId("0","client","owner","agent-2")).thenReturn("agent-2");
         for(Runnable changed:List.<Runnable>of(
-                ()->service.assignForDeliberation(scope(),"task-1","point-conflict","agent-2",0,1),
-                ()->service.assignForDeliberation(scope(),"task-1","point-conflict","agent-1",1,1),
-                ()->service.assignForDeliberation(scope(),"task-1","point-conflict","agent-1",0,2))) {
+                ()->service.assignForDeliberation(scope(),"task-1","point-conflict","agent-2",0,1, new AgentTaskExecutionGrantService.Payment("payer-1", "quote-1", "rec-1")),
+                ()->service.assignForDeliberation(scope(),"task-1","point-conflict","agent-1",1,1, new AgentTaskExecutionGrantService.Payment("payer-1", "quote-1", "rec-1")),
+                ()->service.assignForDeliberation(scope(),"task-1","point-conflict","agent-1",0,2, new AgentTaskExecutionGrantService.Payment("payer-1", "quote-1", "rec-1")))) {
             var failure=assertThrows(AgentTaskExecutionGrantException.class,changed::run);
             assertEquals(AgentTaskExecutionGrantException.Reason.IDEMPOTENCY_CONFLICT,failure.reason());
         }
@@ -227,7 +302,7 @@ class AgentTaskExecutionGrantServiceImplTest {
         var removed=pointMaterial("removed",1,"INPUT","image/png").setLinkState("REMOVED");
         when(links.list("0","client","owner","task-1",null,null,33))
                 .thenReturn(List.of(reference,input,second,output,removed));
-        var receipt=service.assignForDeliberation(scope(),"task-1","point-versions","agent-1",0,1);
+        var receipt=service.assignForDeliberation(scope(),"task-1","point-versions","agent-1",0,1, new AgentTaskExecutionGrantService.Payment("payer-1", "quote-1", "rec-1"));
         assertEquals(2,receipt.getInputs().size());
         assertEquals(List.of(1,2),receipt.getInputs().stream().map(v->v.version()).toList());
         assertTrue(receipt.getInputs().stream().allMatch(v->"INPUT".equals(v.purpose())));
@@ -241,7 +316,7 @@ class AgentTaskExecutionGrantServiceImplTest {
         when(links.list("0","client","owner","task-1",null,null,33)).thenReturn(first);
         var late=pointMaterial("late-input",1,"INPUT","audio/ogg");
         when(links.list("0","client","owner","task-1",100L,"r32",33)).thenReturn(List.of(late));
-        var receipt=service.assignForDeliberation(scope(),"task-1","point-page","agent-1",0,1);
+        var receipt=service.assignForDeliberation(scope(),"task-1","point-page","agent-1",0,1, new AgentTaskExecutionGrantService.Payment("payer-1", "quote-1", "rec-1"));
         assertEquals("late-input",receipt.getInputs().getFirst().fileId());
     }
 
@@ -251,7 +326,7 @@ class AgentTaskExecutionGrantServiceImplTest {
         for(int i=0;i<33;i++)rows.add(pointMaterial("file-"+i,1,"INPUT","text/plain"));
         when(links.list("0","client","owner","task-1",null,null,33)).thenReturn(rows);
         var failure=assertThrows(AgentTaskExecutionGrantException.class,
-                ()->service.assignForDeliberation(scope(),"task-1","point-limit","agent-1",0,1));
+                ()->service.assignForDeliberation(scope(),"task-1","point-limit","agent-1",0,1, new AgentTaskExecutionGrantService.Payment("payer-1", "quote-1", "rec-1")));
         assertEquals(AgentTaskExecutionGrantException.Reason.BAD_REQUEST,failure.reason());
         assertNull(root.getAssignedAgentId()); assertTrue(grants.byAction.isEmpty());
     }
@@ -261,7 +336,7 @@ class AgentTaskExecutionGrantServiceImplTest {
         var foreign=pointMaterial("foreign",1,"INPUT","text/plain").setOwnerJiacn("other");
         when(links.list("0","client","owner","task-1",null,null,33)).thenReturn(List.of(foreign));
         var failure=assertThrows(AgentTaskExecutionGrantException.class,
-                ()->service.assignForDeliberation(scope(),"task-1","point-acl","agent-1",0,1));
+                ()->service.assignForDeliberation(scope(),"task-1","point-acl","agent-1",0,1, new AgentTaskExecutionGrantService.Payment("payer-1", "quote-1", "rec-1")));
         assertEquals(AgentTaskExecutionGrantException.Reason.INVALID_PERSISTED_STATE,failure.reason());
         assertNull(root.getAssignedAgentId()); assertTrue(grants.byAction.isEmpty());
         verify(workspace,never()).lockFile(anyString(),anyString(),anyString(),anyString());
@@ -273,7 +348,7 @@ class AgentTaskExecutionGrantServiceImplTest {
         when(links.list("0","client","owner","task-1",null,null,33)).thenReturn(List.of(row));
         when(workspace.findVersion("0","client","owner","gone",1)).thenReturn(null);
         var failure=assertThrows(AgentTaskExecutionGrantException.class,
-                ()->service.assignForDeliberation(scope(),"task-1","point-gone","agent-1",0,1));
+                ()->service.assignForDeliberation(scope(),"task-1","point-gone","agent-1",0,1, new AgentTaskExecutionGrantService.Payment("payer-1", "quote-1", "rec-1")));
         assertEquals(AgentTaskExecutionGrantException.Reason.NOT_FOUND,failure.reason());
         assertNull(root.getAssignedAgentId()); assertTrue(grants.byAction.isEmpty());
         assertTrue(bootstraps.byAction.isEmpty());
@@ -283,11 +358,11 @@ class AgentTaskExecutionGrantServiceImplTest {
     void pointBootstrapFailureRollsBackAssignmentGrantAndIntentInTransactionHarness() {
         when(links.list("0","client","owner","task-1",null,null,33)).thenReturn(List.of());
         service=new AgentTaskExecutionGrantServiceImpl(grants,bootstraps,links,workspace,legacy,identities,
-                new RollbackTransaction(root,grants,bootstraps),new ObjectMapper(),requirementSnapshots);
+                new RollbackTransaction(root,grants,bootstraps),new ObjectMapper(),requirementSnapshots, billing);
         service.setAssigneeAuthority(authority);
         bootstraps.failInsert=true;
         assertThrows(IllegalStateException.class,
-                ()->service.assignForDeliberation(scope(),"task-1","point-rollback","agent-1",0,1));
+                ()->service.assignForDeliberation(scope(),"task-1","point-rollback","agent-1",0,1, new AgentTaskExecutionGrantService.Payment("payer-1", "quote-1", "rec-1")));
         assertNull(root.getAssignedAgentId()); assertEquals(0L,root.getTaskVersion());
         assertTrue(grants.byAction.isEmpty()); assertTrue(bootstraps.byAction.isEmpty());
     }
@@ -311,7 +386,7 @@ class AgentTaskExecutionGrantServiceImplTest {
         when(requirementSnapshots.requireCurrent(any(),eq("task-1"),anyLong()))
                 .thenThrow(new IllegalStateException("No persisted owner confirmation"));
         var failure=assertThrows(AgentTaskExecutionGrantException.class,
-                () -> service.assignAndGrant(scope(),"task-1","key-unconfirmed",request()));
+                () -> service.assignAndGrant(scope(),"task-1","key-unconfirmed",request(), "payer-1"));
         assertEquals(AgentTaskExecutionGrantException.Reason.INVALID_PERSISTED_STATE,failure.reason());
         assertNull(root.getAssignedAgentId());
         assertTrue(grants.byAction.isEmpty());
@@ -321,10 +396,10 @@ class AgentTaskExecutionGrantServiceImplTest {
     @Test
     void sameKeySamePayloadReplaysAndDifferentPayloadConflicts() {
         AgentTaskAssignDTO request=request();
-        var first=service.assignAndGrant(scope(),"task-1","key-1",request);
+        var first=service.assignAndGrant(scope(),"task-1","key-1",request, "payer-1");
         AgentTaskAssignDTO reordered=request();
         reordered.setRequestedOperations(List.of("INSPECT_INPUTS","GENERATE_IMAGE"));
-        var replay=service.assignAndGrant(scope(),"task-1","key-1",reordered);
+        var replay=service.assignAndGrant(scope(),"task-1","key-1",reordered, "payer-1");
         assertEquals(first.getGrantId(),replay.getGrantId());
         assertEquals(1L,first.getAssignmentRevision());
         assertFalse(first.getPaidExecutionAuthorized());
@@ -342,14 +417,14 @@ class AgentTaskExecutionGrantServiceImplTest {
 
         AgentTaskAssignDTO conflict=request(); conflict.setRequirementRevision(2L);
         AgentTaskExecutionGrantException failure=assertThrows(AgentTaskExecutionGrantException.class,
-                () -> service.assignAndGrant(scope(),"task-1","key-1",conflict));
+                () -> service.assignAndGrant(scope(),"task-1","key-1",conflict, "payer-1"));
         assertEquals(AgentTaskExecutionGrantException.Reason.IDEMPOTENCY_CONFLICT,failure.reason());
     }
 
     @Test
     void explicitInitialOperationKeepsFullGrantAndCreatesOneBootstrapIntent() {
         AgentTaskAssignDTO request=explicitRequest("GENERATE_IMAGE");
-        var first=service.assignAndGrant(scope(),"task-1","key-explicit",request);
+        var first=service.assignAndGrant(scope(),"task-1","key-explicit",request, "payer-1");
 
         assertEquals(List.of("EDIT_IMAGE","GENERATE_IMAGE","INSPECT_INPUTS"),
                 first.getPermittedOperations());
@@ -366,7 +441,7 @@ class AgentTaskExecutionGrantServiceImplTest {
 
         AgentTaskAssignDTO reordered=explicitRequest("GENERATE_IMAGE");
         reordered.setRequestedOperations(List.of("INSPECT_INPUTS","GENERATE_IMAGE","EDIT_IMAGE"));
-        var replay=service.assignAndGrant(scope(),"task-1","key-explicit",reordered);
+        var replay=service.assignAndGrant(scope(),"task-1","key-explicit",reordered, "payer-1");
         assertEquals(first.getGrantId(),replay.getGrantId());
         assertEquals(1,bootstraps.byAction.size());
         verify(legacy,times(1)).assignResolvedVersionedWithLockedTask(anyString(),anyString(),anyString(),
@@ -376,7 +451,7 @@ class AgentTaskExecutionGrantServiceImplTest {
     @Test
     void explicitInspectIsAValidSingleInitialActionWithinTheFullGrant() {
         AgentTaskAssignDTO request=explicitRequest("INSPECT_INPUTS");
-        var grant=service.assignAndGrant(scope(),"task-1","key-inspect",request);
+        var grant=service.assignAndGrant(scope(),"task-1","key-inspect",request, "payer-1");
 
         assertEquals(List.of("EDIT_IMAGE","GENERATE_IMAGE","INSPECT_INPUTS"),
                 grant.getPermittedOperations());
@@ -388,17 +463,17 @@ class AgentTaskExecutionGrantServiceImplTest {
 
     @Test
     void selectorValueOrPresenceChangeConflictsForTheSameKey() {
-        service.assignAndGrant(scope(),"task-1","key-selector",explicitRequest("GENERATE_IMAGE"));
+        service.assignAndGrant(scope(),"task-1","key-selector",explicitRequest("GENERATE_IMAGE"), "payer-1");
 
         AgentTaskExecutionGrantException changed=assertThrows(AgentTaskExecutionGrantException.class,
                 () -> service.assignAndGrant(scope(),"task-1","key-selector",
-                        explicitRequest("EDIT_IMAGE")));
+                        explicitRequest("EDIT_IMAGE"), "payer-1"));
         assertEquals(AgentTaskExecutionGrantException.Reason.IDEMPOTENCY_CONFLICT,changed.reason());
 
         AgentTaskAssignDTO removed=explicitRequest("GENERATE_IMAGE");
         removed.setInitialOperation(null);
         AgentTaskExecutionGrantException missing=assertThrows(AgentTaskExecutionGrantException.class,
-                () -> service.assignAndGrant(scope(),"task-1","key-selector",removed));
+                () -> service.assignAndGrant(scope(),"task-1","key-selector",removed, "payer-1"));
         assertEquals(AgentTaskExecutionGrantException.Reason.IDEMPOTENCY_CONFLICT,missing.reason());
         assertEquals(1,grants.byAction.size());
         assertEquals(1,bootstraps.byAction.size());
@@ -406,11 +481,11 @@ class AgentTaskExecutionGrantServiceImplTest {
 
     @Test
     void addingSelectorToLegacySameKeyConflictsEvenWhenActionIsTheSame() {
-        service.assignAndGrant(scope(),"task-1","key-domain",request());
+        service.assignAndGrant(scope(),"task-1","key-domain",request(), "payer-1");
         AgentTaskAssignDTO explicit=request(); explicit.setInitialOperation("GENERATE_IMAGE");
 
         AgentTaskExecutionGrantException failure=assertThrows(AgentTaskExecutionGrantException.class,
-                () -> service.assignAndGrant(scope(),"task-1","key-domain",explicit));
+                () -> service.assignAndGrant(scope(),"task-1","key-domain",explicit, "payer-1"));
         assertEquals(AgentTaskExecutionGrantException.Reason.IDEMPOTENCY_CONFLICT,failure.reason());
     }
 
@@ -418,7 +493,7 @@ class AgentTaskExecutionGrantServiceImplTest {
     void missingSelectorStillSupportsTheLegacyInspectOnlyRequestAndHashDomain() {
         AgentTaskAssignDTO request=request();
         request.setRequestedOperations(List.of("INSPECT_INPUTS"));
-        var grant=service.assignAndGrant(scope(),"task-1","key-legacy-inspect",request);
+        var grant=service.assignAndGrant(scope(),"task-1","key-legacy-inspect",request, "payer-1");
 
         assertEquals(List.of("INSPECT_INPUTS"),grant.getPermittedOperations());
         assertEquals("INSPECT_INPUTS",
@@ -433,7 +508,7 @@ class AgentTaskExecutionGrantServiceImplTest {
                 "EDIT_AUDIO","UNKNOWN","\t")) {
             AgentTaskAssignDTO request=request(); request.setInitialOperation(selected);
             AgentTaskExecutionGrantException failure=assertThrows(AgentTaskExecutionGrantException.class,
-                    () -> service.assignAndGrant(scope(),"task-1","key-invalid",request),selected);
+                    () -> service.assignAndGrant(scope(),"task-1","key-invalid",request, "payer-1"),selected);
             assertEquals(AgentTaskExecutionGrantException.Reason.BAD_REQUEST,failure.reason(),selected);
         }
         verify(legacy,never()).resolveAgentId(anyString(),anyString(),anyString(),anyString());
@@ -456,7 +531,7 @@ class AgentTaskExecutionGrantServiceImplTest {
                         .setContentMimeType("image/png").setByteLength(123L)
                         .setContentHash("a".repeat(64)).setStorageUri("secret/path"));
 
-        var result=service.assignAndGrant(scope(),"task-1","key-input",request);
+        var result=service.assignAndGrant(scope(),"task-1","key-input",request, "payer-1");
 
         assertEquals(1,result.getInputs().size());
         assertEquals("REFERENCE",result.getInputs().getFirst().purpose());
@@ -476,7 +551,7 @@ class AgentTaskExecutionGrantServiceImplTest {
         AgentTaskAssignDTO request=request();
         request.setRequestedOperations(List.of("GENERATE_IMAGE","EDIT_IMAGE"));
         AgentTaskExecutionGrantException failure=assertThrows(AgentTaskExecutionGrantException.class,
-                () -> service.assignAndGrant(scope(),"task-1","key-ambiguous",request));
+                () -> service.assignAndGrant(scope(),"task-1","key-ambiguous",request, "payer-1"));
         assertEquals(AgentTaskExecutionGrantException.Reason.BAD_REQUEST,failure.reason());
         verify(legacy,times(1)).resolveAgentId("0","client","owner","agent-1");
         verify(legacy,never()).assignResolvedVersionedWithLockedTask(anyString(),anyString(),anyString(),
@@ -489,10 +564,10 @@ class AgentTaskExecutionGrantServiceImplTest {
     void bootstrapFailureRollsBackAssignmentAndGrantBoundary() {
         bootstraps.failInsert=true;
         service=new AgentTaskExecutionGrantServiceImpl(grants,bootstraps,links,workspace,legacy,identities,
-                new RollbackTransaction(root,grants,bootstraps),new ObjectMapper(),requirementSnapshots);
+                new RollbackTransaction(root,grants,bootstraps),new ObjectMapper(),requirementSnapshots, billing);
         service.setAssigneeAuthority(authority);
         assertThrows(IllegalStateException.class,
-                () -> service.assignAndGrant(scope(),"task-1","key-rollback",request()));
+                () -> service.assignAndGrant(scope(),"task-1","key-rollback",request(), "payer-1"));
         assertNull(root.getAssignedAgentId());
         assertEquals(0L,root.getTaskVersion());
         assertTrue(grants.byAction.isEmpty());
@@ -501,11 +576,11 @@ class AgentTaskExecutionGrantServiceImplTest {
 
     @Test
     void replayFailsClosedWhenSameActionBootstrapPayloadDrifts() {
-        service.assignAndGrant(scope(),"task-1","key-drift",request());
+        service.assignAndGrant(scope(),"task-1","key-drift",request(), "payer-1");
         AgentTaskBountyBootstrapOutboxEntity intent=bootstraps.byAction.values().iterator().next();
         intent.setPermittedOperation("EDIT_IMAGE");
         AgentTaskExecutionGrantException failure=assertThrows(AgentTaskExecutionGrantException.class,
-                () -> service.assignAndGrant(scope(),"task-1","key-drift",request()));
+                () -> service.assignAndGrant(scope(),"task-1","key-drift",request(), "payer-1"));
         assertEquals(AgentTaskExecutionGrantException.Reason.INVALID_PERSISTED_STATE,failure.reason());
         verify(legacy,times(1)).assignResolvedVersionedWithLockedTask(anyString(),anyString(),anyString(),
                 anyString(),anyList(),eq(false),anyLong(),any(),same(root));
@@ -514,7 +589,7 @@ class AgentTaskExecutionGrantServiceImplTest {
     @Test
     void replayUsesPersistedInitialActionAndRejectsARehashedActionDrift() {
         service.assignAndGrant(scope(),"task-1","key-action-drift",
-                explicitRequest("GENERATE_IMAGE"));
+                explicitRequest("GENERATE_IMAGE"), "payer-1");
         AgentTaskBountyBootstrapOutboxEntity intent=bootstraps.byAction.values().iterator().next();
         intent.setPermittedOperation("EDIT_IMAGE");
         intent.setPayloadHash(AgentTaskBountyBootstrapPayload.payloadHash(intent.getTenantId(),
@@ -526,7 +601,7 @@ class AgentTaskExecutionGrantServiceImplTest {
 
         AgentTaskExecutionGrantException failure=assertThrows(AgentTaskExecutionGrantException.class,
                 () -> service.assignAndGrant(scope(),"task-1","key-action-drift",
-                        explicitRequest("GENERATE_IMAGE")));
+                        explicitRequest("GENERATE_IMAGE"), "payer-1"));
         assertEquals(AgentTaskExecutionGrantException.Reason.INVALID_PERSISTED_STATE,failure.reason());
         assertEquals("EDIT_IMAGE",intent.getPermittedOperation());
         assertEquals(1,bootstraps.byAction.size());
@@ -535,12 +610,12 @@ class AgentTaskExecutionGrantServiceImplTest {
     @Test
     void replayRejectsMissingBootstrapInsteadOfRecreatingIt() {
         service.assignAndGrant(scope(),"task-1","key-missing-bootstrap",
-                explicitRequest("GENERATE_IMAGE"));
+                explicitRequest("GENERATE_IMAGE"), "payer-1");
         bootstraps.byAction.clear(); bootstraps.byId.clear();
 
         AgentTaskExecutionGrantException failure=assertThrows(AgentTaskExecutionGrantException.class,
                 () -> service.assignAndGrant(scope(),"task-1","key-missing-bootstrap",
-                        explicitRequest("GENERATE_IMAGE")));
+                        explicitRequest("GENERATE_IMAGE"), "payer-1"));
         assertEquals(AgentTaskExecutionGrantException.Reason.INVALID_PERSISTED_STATE,failure.reason());
         assertTrue(bootstraps.byAction.isEmpty());
     }
@@ -548,13 +623,13 @@ class AgentTaskExecutionGrantServiceImplTest {
     @Test
     void replayRejectsMissingPersistedInitialAction() {
         service.assignAndGrant(scope(),"task-1","key-missing-action",
-                explicitRequest("GENERATE_IMAGE"));
+                explicitRequest("GENERATE_IMAGE"), "payer-1");
         AgentTaskBountyBootstrapOutboxEntity intent=bootstraps.byAction.values().iterator().next();
         intent.setPermittedOperation(null);
 
         AgentTaskExecutionGrantException failure=assertThrows(AgentTaskExecutionGrantException.class,
                 () -> service.assignAndGrant(scope(),"task-1","key-missing-action",
-                        explicitRequest("GENERATE_IMAGE")));
+                        explicitRequest("GENERATE_IMAGE"), "payer-1"));
         assertEquals(AgentTaskExecutionGrantException.Reason.INVALID_PERSISTED_STATE,failure.reason());
         assertNull(intent.getPermittedOperation());
         assertEquals(1,bootstraps.byAction.size());
@@ -563,24 +638,24 @@ class AgentTaskExecutionGrantServiceImplTest {
     @Test
     void bootstrapWithoutGrantFailsClosed() {
         service.assignAndGrant(scope(),"task-1","key-half-outbox",
-                explicitRequest("GENERATE_IMAGE"));
+                explicitRequest("GENERATE_IMAGE"), "payer-1");
         AgentTaskExecutionGrantEntity grant=grants.byAction.remove("ASSIGN_AND_START:key-half-outbox");
         grants.byId.remove(grant.getGrantId());
         AgentTaskExecutionGrantException half=assertThrows(AgentTaskExecutionGrantException.class,
                 () -> service.assignAndGrant(scope(),"task-1","key-half-outbox",
-                        explicitRequest("GENERATE_IMAGE")));
+                        explicitRequest("GENERATE_IMAGE"), "payer-1"));
         assertEquals(AgentTaskExecutionGrantException.Reason.INVALID_PERSISTED_STATE,half.reason());
     }
 
     @Test
     void persistedGrantSetCannotDropTheSelectedInitialOperation() {
         service.assignAndGrant(scope(),"task-1","key-set-drift",
-                explicitRequest("GENERATE_IMAGE"));
+                explicitRequest("GENERATE_IMAGE"), "payer-1");
         AgentTaskExecutionGrantEntity stored=grants.byAction.values().iterator().next();
         stored.setPermittedOperationsJson("[\"EDIT_IMAGE\",\"INSPECT_INPUTS\"]");
         AgentTaskExecutionGrantException drift=assertThrows(AgentTaskExecutionGrantException.class,
                 () -> service.assignAndGrant(scope(),"task-1","key-set-drift",
-                        explicitRequest("GENERATE_IMAGE")));
+                        explicitRequest("GENERATE_IMAGE"), "payer-1"));
         assertEquals(AgentTaskExecutionGrantException.Reason.INVALID_PERSISTED_STATE,drift.reason());
     }
 
@@ -588,7 +663,7 @@ class AgentTaskExecutionGrantServiceImplTest {
     void clientToolOrCostAuthorityIsRejectedBeforeAnyMutation() {
         AgentTaskAssignDTO request=request(); request.setCostAuthorizationRef("client-money");
         AgentTaskExecutionGrantException failure=assertThrows(AgentTaskExecutionGrantException.class,
-                () -> service.assignAndGrant(scope(),"task-1","key-money",request));
+                () -> service.assignAndGrant(scope(),"task-1","key-money",request, "payer-1"));
         assertEquals(AgentTaskExecutionGrantException.Reason.BAD_REQUEST,failure.reason());
         verify(legacy,never()).resolveAgentId(anyString(),anyString(),anyString(),anyString());
         assertTrue(grants.byAction.isEmpty());
@@ -596,7 +671,7 @@ class AgentTaskExecutionGrantServiceImplTest {
 
     @Test
     void serverSideResolveDoesNotNeedBrowserGrantIdAndPaidAdmissionFailsClosed() {
-        var grant=service.assignAndGrant(scope(),"task-1","key-admit",request());
+        var grant=service.assignAndGrant(scope(),"task-1","key-admit",request(), "payer-1");
         root.setTaskVersion(grant.getAssignmentRevision()); root.setAssignedAgentId("agent-1");
 
         var free=service.resolveAndAdmit(scope(),"task-1",grant.getAssignmentRevision(),
@@ -613,7 +688,7 @@ class AgentTaskExecutionGrantServiceImplTest {
 
     @Test
     void selectedOutputPromotionUsesCurrentUnpaidGrantAndFailsAfterRevocation() {
-        var grant=service.assignAndGrant(scope(),"task-1","key-finalize",request());
+        var grant=service.assignAndGrant(scope(),"task-1","key-finalize",request(), "payer-1");
         root.setTaskVersion(grant.getAssignmentRevision());root.setAssignedAgentId("agent-1");
         var admitted=service.admitSelectedOutputPromotion(scope(),"task-1",grant.getGrantId(),
                 grant.getGrantVersion(),grant.getAssignmentRevision(),"agent-1");
@@ -625,7 +700,7 @@ class AgentTaskExecutionGrantServiceImplTest {
     }
 
     @Test void serverResolvedPromotionGrantIsCurrentUnpaidAndStillChecksAssignmentAndRevocation(){
-        var grant=service.assignAndGrant(scope(),"task-1","key-resolve-final",request());
+        var grant=service.assignAndGrant(scope(),"task-1","key-resolve-final",request(), "payer-1");
         root.setTaskVersion(grant.getAssignmentRevision());root.setAssignedAgentId("agent-1");
         var admitted=service.resolveSelectedOutputPromotion(scope(),"task-1",grant.getAssignmentRevision(),"agent-1");
         assertEquals(grant.getGrantId(),admitted.grantId());assertEquals("FINALIZE_SELECTED_OUTPUTS",admitted.operation());
@@ -637,7 +712,7 @@ class AgentTaskExecutionGrantServiceImplTest {
 
     @Test
     void ownerReconfirmationInvalidatesPreviouslyIssuedGrantForBothAdmissionPaths() {
-        var grant=service.assignAndGrant(scope(),"task-1","key-reconfirmed",request());
+        var grant=service.assignAndGrant(scope(),"task-1","key-reconfirmed",request(), "payer-1");
         root.setTaskVersion(grant.getAssignmentRevision()); root.setAssignedAgentId("agent-1");
         when(requirementSnapshots.requireCurrent(any(),eq("task-1"),eq(1L)))
                 .thenThrow(new IllegalStateException("Owner has confirmed revision 2"));
@@ -653,9 +728,9 @@ class AgentTaskExecutionGrantServiceImplTest {
 
     @Test
     void newBusinessActionSupersedesPriorGrantAndOldGrantCannotAdmit() {
-        var first=service.assignAndGrant(scope(),"task-1","key-old",request());
+        var first=service.assignAndGrant(scope(),"task-1","key-old",request(), "payer-1");
         AgentTaskAssignDTO next=request(); next.setExpectedTaskVersion(first.getAssignmentRevision());
-        var second=service.assignAndGrant(scope(),"task-1","key-new",next);
+        var second=service.assignAndGrant(scope(),"task-1","key-new",next, "payer-1");
         assertEquals(first.getAssignmentRevision(),second.getAssignmentRevision());
         assertEquals("SUPERSEDED",grants.byId.get(first.getGrantId()).getState());
         assertThrows(AgentTaskExecutionGrantException.class,
@@ -665,7 +740,7 @@ class AgentTaskExecutionGrantServiceImplTest {
 
     @Test
     void statusVersionDriftKeepsAssignmentButSameAgentRepointAndMissingEpochRevoke() {
-        var first=service.assignAndGrant(scope(),"task-1","epoch-first",request());
+        var first=service.assignAndGrant(scope(),"task-1","epoch-first",request(), "payer-1");
         root.setTaskVersion(first.getAssignmentRevision()+3);
         // Ordinary task status/event changes are not assignment changes.
         assertEquals(first.getGrantId(),service.admit(scope(),"task-1",first.getGrantId(),
@@ -689,7 +764,7 @@ class AgentTaskExecutionGrantServiceImplTest {
 
     @Test
     void revokeIsIdempotentOnlyForSameKeyAndPayloadAndBlocksAdmission() {
-        var grant=service.assignAndGrant(scope(),"task-1","key-revoke-create",request());
+        var grant=service.assignAndGrant(scope(),"task-1","key-revoke-create",request(), "payer-1");
         root.setTaskVersion(grant.getAssignmentRevision()); root.setAssignedAgentId("agent-1");
         var revoked=service.revoke(scope(),"task-1",grant.getGrantId(),"key-revoke",1L);
         var replay=service.revoke(scope(),"task-1",grant.getGrantId(),"key-revoke",1L);
@@ -704,6 +779,7 @@ class AgentTaskExecutionGrantServiceImplTest {
     private static AgentTaskAssignDTO request() {
         AgentTaskAssignDTO request=new AgentTaskAssignDTO(); request.setAgentId("agent-1");
         request.setWorkflowVersion(2); request.setBusinessAction("assign_and_start");
+        request.setQuoteId("quote-1"); request.setRecommendationId("rec-1");
         request.setExpectedTaskVersion(0L); request.setRequirementRevision(1L);
         request.setRequestedOperations(List.of("GENERATE_IMAGE","INSPECT_INPUTS"));
         request.setInputRefs(List.of()); return request;
@@ -717,7 +793,7 @@ class AgentTaskExecutionGrantServiceImplTest {
 
     @Test void oldBaselineIsReplacedByDistinctLatestGrantWithoutFeesOrBootstrapReplay() {
         when(links.list("0","client","owner","task-1",null,null,33)).thenReturn(List.of());
-        var original=service.assignForDeliberation(scope(),"task-1","old","agent-1",0,1);
+        var original=service.assignForDeliberation(scope(),"task-1","old","agent-1",0,1, new AgentTaskExecutionGrantService.Payment("payer-1", "quote-1", "rec-1"));
         var old=grants.byId.get(original.getGrantId());old.setPermittedOperationsJson("[\"DELIBERATE\"]").setPermittedToolPolicyRef("NO_TOOLS_V1");
         var next=service.resolveSkillBaseline(scope(),"task-1",original.getAssignmentRevision(),"agent-1");
         assertNotEquals(original.getGrantId(),next.grantId());assertEquals("SUPERSEDED",old.getState());assertEquals("EXECUTE_SKILL",next.operation());assertFalse(next.paidExecutionAuthorized());
@@ -726,7 +802,7 @@ class AgentTaskExecutionGrantServiceImplTest {
     }
     @Test void nativeBaselineDoesNotReauthorizeDetachedBootstrapInputs() {
         when(links.list("0","client","owner","task-1",null,null,33)).thenReturn(List.of());
-        var original=service.assignForDeliberation(scope(),"task-1","native-input-change","agent-1",0,1);
+        var original=service.assignForDeliberation(scope(),"task-1","native-input-change","agent-1",0,1, new AgentTaskExecutionGrantService.Payment("payer-1", "quote-1", "rec-1"));
         var grant=grants.byId.get(original.getGrantId());
         grant.setInputScopeJson("[{\"fileId\":\"original-file\",\"version\":1,\"purpose\":\"INPUT\","
                 +"\"contentMimeType\":\"image/png\",\"byteLength\":1499,\"contentHash\":\""+"a".repeat(64)+"\"}]");
@@ -765,7 +841,7 @@ class AgentTaskExecutionGrantServiceImplTest {
 
     @Test void discussionRoutingAndReceiptsDoNotAuthorizeDetachedBootstrapInputs() {
         when(links.list("0","client","owner","task-1",null,null,33)).thenReturn(List.of());
-        var original=service.assignForDeliberation(scope(),"task-1","discussion-input-change","agent-1",0,1);
+        var original=service.assignForDeliberation(scope(),"task-1","discussion-input-change","agent-1",0,1, new AgentTaskExecutionGrantService.Payment("payer-1", "quote-1", "rec-1"));
         var grant=grants.byId.get(original.getGrantId());
         grant.setInputScopeJson("[{\"fileId\":\"original-file\",\"version\":1,\"purpose\":\"INPUT\","
                 +"\"contentMimeType\":\"image/png\",\"byteLength\":1499,\"contentHash\":\""+"a".repeat(64)+"\"}]");
@@ -793,7 +869,7 @@ class AgentTaskExecutionGrantServiceImplTest {
 
     @Test void latestBaselineDoesNotReviveRevokedGrantOrDifferentAssignment() {
         when(links.list("0","client","owner","task-1",null,null,33)).thenReturn(List.of());
-        var original=service.assignForDeliberation(scope(),"task-1","old-revoked","agent-1",0,1);
+        var original=service.assignForDeliberation(scope(),"task-1","old-revoked","agent-1",0,1, new AgentTaskExecutionGrantService.Payment("payer-1", "quote-1", "rec-1"));
         assertThrows(AgentTaskExecutionGrantException.class,()->service.resolveSkillBaseline(scope(),"task-1",99,"agent-1"));
         grants.byId.get(original.getGrantId()).setState("REVOKED");assertThrows(AgentTaskExecutionGrantException.class,()->service.resolveSkillBaseline(scope(),"task-1",original.getAssignmentRevision(),"agent-1"));assertEquals(1,grants.byId.size());
     }

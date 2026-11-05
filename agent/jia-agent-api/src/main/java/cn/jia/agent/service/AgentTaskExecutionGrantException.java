@@ -2,6 +2,9 @@ package cn.jia.agent.service;
 
 public final class AgentTaskExecutionGrantException extends RuntimeException {
     public enum Reason {
+        TASK_QUOTE_UNAVAILABLE(409, "TASK_QUOTE_UNAVAILABLE"),
+        TASK_QUOTE_PAYER_FORBIDDEN(403, "TASK_QUOTE_PAYER_FORBIDDEN"),
+        TASK_FUNDS_INSUFFICIENT(409, "TASK_FUNDS_INSUFFICIENT"),
         BAD_REQUEST(400, "AGENT_GRANT_BAD_REQUEST"),
         UNAUTHENTICATED(401, "AGENT_GRANT_UNAUTHENTICATED"),
         NOT_FOUND(404, "AGENT_GRANT_NOT_FOUND"),

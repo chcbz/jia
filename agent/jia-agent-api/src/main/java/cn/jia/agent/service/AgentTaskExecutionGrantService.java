@@ -7,12 +7,12 @@ import java.util.List;
 /** Admission boundary for v2 task-scoped execution grants; it never starts an execution. */
 public interface AgentTaskExecutionGrantService {
     AgentTaskExecutionGrantDTO assignAndGrant(Scope scope, String taskId,
-            String idempotencyKey, AgentTaskAssignDTO request);
+            String idempotencyKey, AgentTaskAssignDTO request, String payerUserId);
 
     /** New product entry: the server snapshots all active task materials; no image/paid action is selected. */
     AgentTaskExecutionGrantDTO assignForDeliberation(Scope scope, String taskId,
             String idempotencyKey, String targetAgentId, long expectedTaskVersion,
-            long requirementRevision);
+            long requirementRevision, Payment payment);
 
     AgentTaskExecutionGrantDTO revoke(Scope scope, String taskId, String grantId,
             String idempotencyKey, long expectedGrantVersion);
@@ -87,6 +87,8 @@ public interface AgentTaskExecutionGrantService {
     /** Resolves the current owner-scoped grant for promotion, never grants tool execution. */
     Admission resolveSelectedOutputPromotion(Scope scope,String taskId,long expectedAssignmentRevision,String targetAgentId);
 
+    /** Created at the authenticated admission boundary; payerUserId is never client-supplied. */
+    record Payment(String payerUserId, String quoteId, String recommendationId) { }
     record Scope(String tenantId, String clientId, String ownerJiacn) { }
     /** Byte-free, fixed-version inputs verified under the same live root/grant admission. */
     record AuthorizedInput(String fileId, int version, String purpose, String contentMimeType,
