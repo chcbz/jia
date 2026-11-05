@@ -247,6 +247,16 @@ class TaskBillingServiceMySqlTest {
     }
 
     @Test
+    void differentTasksCanCreateQuotesConcurrentlyWithoutMissingRowGapLocks() throws Exception {
+        Task other = new Task(SCOPE, TASK.ownerJiacn(), "task-2");
+        var results = race(() -> quote(TASK, BINDING, "0.3"), () -> quote(other, BINDING, "0.4"));
+        for (Object result : results) assertInstanceOf(Quote.class, result, result::toString);
+        assertEquals(2, count("economy_task_quote"));
+        assertEquals(0, count("economy_task_charge"));
+        assertEquals(100, wallet());
+    }
+
+    @Test
     void sameTaskConcurrentReservationReplaysOneCharge() throws Exception {
         Quote quote = quote(TASK, BINDING, "0.8");
         List<Object> results = race(() -> reserve(TASK, quote), () -> reserve(TASK, quote));
@@ -262,7 +272,8 @@ class TaskBillingServiceMySqlTest {
         Quote a = quote(TASK, BINDING, "0.8"), b = quote(other, BINDING, "0.8");
         List<Object> results = race(() -> reserve(TASK, a), () -> reserve(other, b));
         assertEquals(1, results.stream().filter(Charge.class::isInstance).count());
-        EconomyPostingException failure = (EconomyPostingException) results.stream().filter(Throwable.class::isInstance).findFirst().orElseThrow();
+        Object error = results.stream().filter(Throwable.class::isInstance).findFirst().orElseThrow();
+        EconomyPostingException failure = assertInstanceOf(EconomyPostingException.class, error, error::toString);
         assertEquals(EconomyPostingException.Reason.INSUFFICIENT_FUNDS, failure.reason());
         assertEquals(20, wallet());
         assertEquals(1, count("economy_task_charge"));

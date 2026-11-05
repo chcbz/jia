@@ -93,20 +93,19 @@ public class TaskBillingServiceImpl implements TaskBillingService {
         if (!quote.getBindingSha256().equals(bindingHash(currentBinding))) {
             throw new TaskBillingException(QUOTE_BINDING_CHANGED);
         }
-        EconomyTaskChargeEntity existing = lock(task);
-        if (existing != null) {
-            if (!quoteId.equals(existing.getQuoteId()) || !State.HELD.name().equals(existing.getState())) {
-                throw new TaskBillingException(CHARGE_CONFLICT);
-            }
-            return receipt(existing);
-        }
         long now = System.currentTimeMillis();
         EconomyTaskChargeEntity row = new EconomyTaskChargeEntity()
                 .setTenantId(task.scope().tenantId()).setClientId(task.scope().clientId())
                 .setOwnerJiacn(task.ownerJiacn()).setTaskId(task.taskId()).setQuoteId(quoteId)
                 .setPayerUserId(quote.getPayerUserId()).setAmountWen(quote.getAmountWen())
                 .setState("RESERVING").setCreatedAt(now).setUpdatedAt(now);
-        mapper.insertCharge(row);
+        // Insert first: locking an absent charge then inserting would take overlapping InnoDB
+        // gap locks across unrelated tasks. The upsert never changes an existing charge.
+        mapper.insertChargeIfAbsent(row);
+        row = lock(task);
+        if (!quoteId.equals(row.getQuoteId())) throw new TaskBillingException(CHARGE_CONFLICT);
+        if (State.HELD.name().equals(row.getState())) return receipt(row);
+        if (!"RESERVING".equals(row.getState())) throw new TaskBillingException(CHARGE_CONFLICT);
         if (row.getAmountWen() > 0) {
             EconomyAccountKey payer = payer(row);
             EconomyAccountKey escrow = escrow(task);

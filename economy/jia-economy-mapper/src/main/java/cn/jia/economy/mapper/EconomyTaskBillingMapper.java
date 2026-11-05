@@ -11,7 +11,7 @@ import org.apache.ibatis.annotations.Param;
 public interface EconomyTaskBillingMapper {
     String SCOPE = "tenant_id=#{tenantId} AND client_id=#{clientId} AND owner_jiacn=#{ownerJiacn} AND task_id=#{taskId}";
 
-    @Select("SELECT * FROM economy_task_quote WHERE " + SCOPE + " AND binding_sha256=#{bindingSha256} FOR UPDATE")
+    @Select("SELECT * FROM economy_task_quote WHERE " + SCOPE + " AND binding_sha256=#{bindingSha256}")
     EconomyTaskQuoteEntity findQuoteByBinding(@Param("tenantId") String tenant, @Param("clientId") String client,
             @Param("ownerJiacn") String owner, @Param("taskId") String task, @Param("bindingSha256") String binding);
 
@@ -36,8 +36,9 @@ public interface EconomyTaskBillingMapper {
                 amount_wen,state,created_at,updated_at)
             VALUES(#{tenantId},#{clientId},#{ownerJiacn},#{taskId},#{quoteId},#{payerUserId},
                 #{amountWen},'RESERVING',#{createdAt},#{updatedAt})
+            ON DUPLICATE KEY UPDATE task_id=task_id
             """)
-    int insertCharge(EconomyTaskChargeEntity charge);
+    int insertChargeIfAbsent(EconomyTaskChargeEntity charge);
 
     @Update("UPDATE economy_task_charge SET state='HELD',reserve_transaction_id=#{reserveTransactionId},"
             + "escrow_version=#{escrowVersion},updated_at=#{updatedAt} WHERE " + SCOPE + " AND state='RESERVING'")
