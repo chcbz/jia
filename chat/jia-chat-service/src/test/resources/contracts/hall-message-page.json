@@ -1,0 +1,29 @@
+{
+  "protocolVersion": 1,
+  "requestId": "hall-message-page-fixture",
+  "code": "E0",
+  "msg": "",
+  "data": {
+    "items": [
+      {
+        "id": "9007199254740993",
+        "conversationId": "100",
+        "messageType": "USER",
+        "content": "fixture message",
+        "metadata": "{}",
+        "jiacn": "owner",
+        "syncStatus": "PENDING",
+        "conversationType": "juyiting",
+        "senderType": "user",
+        "senderName": "fixture user",
+        "createTime": 1000,
+        "updateTime": 1000,
+        "tenantId": "0",
+        "clientId": "client",
+        "parts": []
+      }
+    ],
+    "hasMore": true,
+    "nextCursor": "1000:9007199254740993"
+  }
+}

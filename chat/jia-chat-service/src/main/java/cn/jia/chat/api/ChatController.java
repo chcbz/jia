@@ -629,6 +629,26 @@ public class ChatController {
         return JsonResult.success(messages);
     }
 
+    @RequestMapping(value = "/conversation/messages", method = RequestMethod.GET)
+    public Object getConversationMessages(@RequestParam(name = "id") String id,
+            @RequestParam(name = "cursor", required = false) String cursor) {
+        var page = chatConversationService.findMessagePage(id, cursor);
+        var owned = page.messages();
+        var parts = owned.isEmpty() || bountyAssets == null
+                ? Map.<String, List<ChatBountyAssetProjector.Part>>of()
+                : bountyAssets.partsFor(new PersonalWorkspaceExecutionService.OwnerScope(
+                        owned.getFirst().getTenantId(), owned.getFirst().getClientId(),
+                        owned.getFirst().getJiacn()), id,
+                        owned.stream().map(ChatMessageEntity::getId).toList());
+        var messages = owned.stream().map(message -> ConversationMessageResponse.from(message,
+                parts.getOrDefault(ExactWireIds.decimal(message.getId()), List.of()))).toList();
+        return ResponseEntity.ok().cacheControl(org.springframework.http.CacheControl.noStore())
+                .body(JsonResult.success(new ConversationMessagePageResponse(messages, page.hasMore(), page.nextBefore())));
+    }
+
+    private record ConversationMessagePageResponse(List<ConversationMessageResponse> items,
+            boolean hasMore, String nextCursor) { }
+
     private record ConversationMessageResponse(
             // The response sanitizer reflects beans into maps before Jackson, so wire IDs must already be strings.
             String id,

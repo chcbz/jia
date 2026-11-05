@@ -22,7 +22,7 @@ public final class MinimalGreyTenantRouteFilter implements Filter {
     private static final Pattern INSTALLATION = Pattern.compile("/agent/runtime/v1/installations/[^/]{1,100}(?:/revoke)?");
     private static final Pattern RUNTIME_ACK = Pattern.compile("/agent/runtime/v1/commands/[^/]{1,100}/acks");
     private static final Set<String> CHAT_GET = Set.of("/chat/capabilities", "/chat/conversation/content",
-            "/chat/conversation/events");
+            "/chat/conversation/events", "/chat/conversation/messages");
     private static final Set<String> CHAT_POST = Set.of("/chat/stream", "/chat/stop_stream",
             "/chat/conversation/list", "/chat/conversation/update");
 

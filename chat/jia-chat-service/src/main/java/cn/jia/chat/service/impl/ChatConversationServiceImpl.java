@@ -150,6 +150,38 @@ public class ChatConversationServiceImpl implements ChatConversationService {
     }
 
     @Override
+    @Transactional(readOnly = true)
+    public MessagePage findMessagePage(String conversationId, String before) {
+        EsContext context = requireIdentity();
+        ChatConversationEntity conversation = requireGenericConversationForIdentity(
+                context.getTenantId(), context.getJiacn(), context.getClientId(), conversationId);
+        Long beforeTime = null;
+        Long beforeId = null;
+        if (before != null) {
+            if (!before.matches("(n|0|[1-9][0-9]*):[1-9][0-9]*")) throw invalidMessageCursor();
+            String[] parts = before.split(":", -1);
+            try { beforeTime = "n".equals(parts[0]) ? -1L : Long.valueOf(parts[0]); beforeId = Long.valueOf(parts[1]); }
+            catch (NumberFormatException invalid) { throw invalidMessageCursor(); }
+        }
+        final int pageSize = 50;
+        List<ChatMessageEntity> rows = chatMessageDao.findOwnedMessagePage(
+                context.getTenantId(), context.getJiacn(), context.getClientId(),
+                Long.toString(conversation.getId()), beforeTime, beforeId, pageSize + 1);
+        boolean hasMore = rows.size() > pageSize;
+        var messages = new java.util.ArrayList<>(rows.subList(0, Math.min(rows.size(), pageSize)));
+        java.util.Collections.reverse(messages);
+        String nextBefore = hasMore
+                ? (messages.getFirst().getCreateTime() == null ? "n" : messages.getFirst().getCreateTime().toString())
+                        + ":" + messages.getFirst().getId() : null;
+        return new MessagePage(List.copyOf(messages), hasMore, nextBefore);
+    }
+
+    private static cn.jia.chat.service.ChatDeliberationException invalidMessageCursor() {
+        return new cn.jia.chat.service.ChatDeliberationException(
+                cn.jia.chat.service.ChatDeliberationException.Reason.INVALID_REQUEST, "Invalid message cursor");
+    }
+
+    @Override
     @Transactional(rollbackFor = Exception.class)
     public ChatConversationEntity create(ChatConversationEntity entity) {
         if (entity == null) {

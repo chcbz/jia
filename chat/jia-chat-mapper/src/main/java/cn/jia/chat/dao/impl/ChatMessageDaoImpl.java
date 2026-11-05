@@ -58,6 +58,15 @@ public class ChatMessageDaoImpl extends BaseDaoImpl<ChatMessageMapper, ChatMessa
     }
 
     @Override
+    public List<ChatMessageEntity> findOwnedMessagePage(String tenantId, String ownerJiacn,
+            String clientId, String conversationId, Long beforeTime, Long beforeId, int limit) {
+        // Shared exact-scope SQL owns row isolation. Do not run a whole-conversation
+        // contamination COUNT or repeat per-row authorization on each display page.
+        return baseMapper.findExactOwnedMessagePage(tenantId, ownerJiacn, clientId,
+                conversationId, Long.parseLong(conversationId), beforeTime, beforeId, limit);
+    }
+
+    @Override
     public List<ChatMessageEntity> findOwnedByConversationId(
             String tenantId, String ownerJiacn, String clientId, String conversationId) {
         requireScope(tenantId, clientId); requireIdentity(ownerJiacn, "ownerJiacn");

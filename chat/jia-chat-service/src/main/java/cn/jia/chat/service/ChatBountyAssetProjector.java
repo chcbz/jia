@@ -387,7 +387,21 @@ public class ChatBountyAssetProjector {
     @Transactional(readOnly = true)
     public Map<String, List<Part>> partsFor(PersonalWorkspaceExecutionService.OwnerScope owner,
             String conversationId) {
-        if (owner == null || !safe(conversationId)) return Map.of();
+        return partsFor(owner, conversationId, null);
+    }
+
+    /** Restrict projection reads in SQL to the displayed message page, not all history. */
+    @Transactional(readOnly = true)
+    public Map<String, List<Part>> partsFor(PersonalWorkspaceExecutionService.OwnerScope owner,
+            String conversationId, List<Long> messageIds) {
+        if (owner == null || !safe(conversationId) || (messageIds != null && messageIds.isEmpty())) return Map.of();
+        var arguments = new java.util.ArrayList<Object>();
+        java.util.Collections.addAll(arguments, owner.tenantId(), owner.ownerJiacn(), owner.clientId(), conversationId);
+        String messageFilter = "";
+        if (messageIds != null) {
+            messageFilter = " AND a.message_id IN (" + String.join(",", java.util.Collections.nCopies(messageIds.size(), "?")) + ") ";
+            arguments.addAll(messageIds);
+        }
         var rows = jdbc.query("""
                 SELECT CAST(a.message_id AS CHAR),a.part_id,a.kind,a.asset_id,
                   a.content_mime_type,a.sha256,a.byte_length,a.revision,o.original_filename
@@ -407,11 +421,9 @@ public class ChatBountyAssetProjector {
                   AND o.output_state='COMMITTED' AND BINARY o.content_hash=BINARY a.sha256
                 WHERE BINARY a.tenant_id=BINARY ? AND BINARY a.owner_jiacn=BINARY ?
                   AND BINARY a.client_id=BINARY ? AND BINARY a.conversation_id=BINARY ?
-                ORDER BY a.message_id,a.created_at,a.part_id
-                """, (rs, n) -> Map.entry(rs.getString(1), new Part(rs.getString(2), rs.getString(3),
+                """ + messageFilter + " ORDER BY a.message_id,a.created_at,a.part_id", (rs, n) -> Map.entry(rs.getString(1), new Part(rs.getString(2), rs.getString(3),
                 "ready", rs.getString(4), rs.getString(5), Objects.requireNonNullElse(rs.getString(9), ""), Long.toString(rs.getLong(8)),
-                rs.getString(6), rs.getLong(7))), owner.tenantId(), owner.ownerJiacn(),
-                owner.clientId(), conversationId);
+                rs.getString(6), rs.getLong(7))), arguments.toArray());
         Map<String, List<Part>> collected = new java.util.LinkedHashMap<>();
         for (var row : rows) collected.computeIfAbsent(row.getKey(), ignored -> new java.util.ArrayList<>())
                 .add(row.getValue());

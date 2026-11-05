@@ -22,6 +22,25 @@ class ChatBountyAssetFilenameTest {
         checkFilename(null, "");
     }
 
+    @Test void messagePageReadsOnlyItsAssetIdsAndEmptyPageDoesNotQuery() {
+        var jdbc = mock(JdbcTemplate.class);
+        var projector = new ChatBountyAssetProjector(jdbc, mock(ChatDeliberationService.class),
+                mock(ChatDeliberationDao.class), mock(ChatConversationDao.class), mock(ChatMessageDao.class),
+                mock(PersonalWorkspaceExecutionService.class), mock(ChatConversationEventBroker.class));
+        var owner = new PersonalWorkspaceExecutionService.OwnerScope("tenant", "client", "owner");
+        assertTrue(projector.partsFor(owner, "42", List.of()).isEmpty());
+        verifyNoInteractions(jdbc);
+        when(jdbc.query(anyString(), any(RowMapper.class), eq("tenant"), eq("owner"), eq("client"), eq("42"), eq(12L), eq(13L)))
+                .thenAnswer(call -> {
+                    String sql = call.getArgument(0);
+                    assertTrue(sql.contains("AND a.message_id IN (?,?)"));
+                    assertTrue(sql.contains("c.deleted_at IS NULL"));
+                    return List.of();
+                });
+        assertTrue(projector.partsFor(owner, "42", List.of(12L, 13L)).isEmpty());
+        verify(jdbc).query(anyString(), any(RowMapper.class), eq("tenant"), eq("owner"), eq("client"), eq("42"), eq(12L), eq(13L));
+    }
+
     private void checkFilename(String storedName, String expected) throws Exception {
         var jdbc = mock(JdbcTemplate.class);
         var projector = new ChatBountyAssetProjector(jdbc, mock(ChatDeliberationService.class),
