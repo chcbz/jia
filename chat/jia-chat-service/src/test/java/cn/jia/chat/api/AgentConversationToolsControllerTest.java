@@ -64,4 +64,18 @@ class AgentConversationToolsControllerTest {
         verify(service,times(1)).read(principal,"r","t","p");
     }
 
+    @Test void extensionCatalogAndCallbackPreserveDomainFieldsWithoutReplacingSkillTools() {
+        var extensions=mock(cn.jia.agent.api.ConversationToolExtensions.class);controller.setExtensions(extensions);
+        var skills=java.util.List.of(new SkillConversationToolAdapter.Skill("skill-management","1","s1","a".repeat(64)));
+        when(service.catalog(principal,"r","t")).thenReturn(new SkillConversationToolAdapter.Catalog("1",java.util.List.of(java.util.Map.of("name","skill_read")),skills));
+        when(extensions.catalog(principal,"r","t")).thenReturn(new cn.jia.chat.service.ConversationToolProvider.Catalog(
+            java.util.List.of(java.util.Map.of("name","archive_read")),java.util.List.of(new cn.jia.chat.service.ConversationToolProvider.Skill("archive-maintenance","2.0.0","s2","b".repeat(64)))));
+        var json=JsonMapper.builder().build();var catalog=json.valueToTree(controller.catalog(principal,"r","t",request).getBody());
+        assertEquals(2,catalog.at("/data/tools").size());assertEquals(2,catalog.at("/data/skills").size());
+        when(extensions.supports("archive_read")).thenReturn(true);
+        when(extensions.call(principal,"r","t","archive_read",java.util.Map.of("jobId","job1"))).thenReturn(java.util.Map.of("jobId","job1","chapterCount","2","state","DRAFT","active",false));
+        var reply=json.valueToTree(controller.call(principal,"r","t","archive_read","{\"jobId\":\"job1\"}",request).getBody());
+        assertEquals("2",reply.at("/data/chapterCount").asText());assertFalse(reply.at("/data/active").asBoolean());
+        verify(extensions).call(principal,"r","t","archive_read",java.util.Map.of("jobId","job1"));
+    }
 }

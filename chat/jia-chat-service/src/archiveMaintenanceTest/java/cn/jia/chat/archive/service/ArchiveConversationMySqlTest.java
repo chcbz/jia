@@ -61,7 +61,7 @@ class ArchiveConversationMySqlTest {
         descriptors=mock(InstalledSkillDescriptorLookup.class);files=mock(PersonalWorkspaceService.class);
         var installation=positions.read(scope).state().installations().values().iterator().next();
         when(descriptors.readCurrent(any())).thenReturn(new InstalledSkillDescriptorLookup.Snapshot(List.of(
-            new InstalledSkillDescriptorLookup.Descriptor("archive-maintenance","2.0.0",installation.id(),"b".repeat(64),null,null,"runtime1","host1",null))));
+            new InstalledSkillDescriptorLookup.Descriptor("archive-maintenance","2.0.0",PositionSkillRuntimeService.physical(installation),"b".repeat(64),null,null,"runtime1","host1",null))));
         store=new ArchiveMaintenanceStore(jdbc);tools=new ArchiveConversationTools(new PositionArchiveAccessService(positions),descriptors,files,store,content,tx);
         boundary=new ConversationToolProvider.Boundary(){public <T>T execute(java.util.function.Supplier<T> action){return tx.required(action);}};
         source("第一回 开端\n甲。\n第二回 结尾\n乙。\n");
