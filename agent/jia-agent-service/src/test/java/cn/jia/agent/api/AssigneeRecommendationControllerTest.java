@@ -30,7 +30,7 @@ class AssigneeRecommendationControllerTest {
         mvc = MockMvcBuilders.standaloneSetup(new AssigneeRecommendationController(service))
                 .setMessageConverters(new JacksonJsonHttpMessageConverter()).setControllerAdvice(new ApiEnvelopeAdvice())
                 .addFilters(new RequestIdFilter()).build();
-        when(service.recommend(any(), eq("task"), any())).thenReturn(new Result("task", "7", 1000, "NO_MATCH", "资料不足", List.of(new Recommendation(new Agent("a", "Agent", "online", List.of(), true, true, null), "UNKNOWN", "尚无能力介绍", List.of(), List.of())), List.of(), true));
+        when(service.recommend(any(), eq("task"), any())).thenReturn(new Result("task", "7", 1000, "NO_MATCH", "资料不足", List.of(new Recommendation(new Agent("a", "Agent", "online", List.of(), true, true, null), "UNKNOWN", "尚无能力介绍", List.of(), List.of())), List.of(), true, new Workload(Workload.Kind.DOCUMENT, Workload.Complexity.STANDARD, 1)));
     }
     @AfterEach void cleanup() { EsContextHolder.clearContext(); }
     @Test void sameEndpointReturnsNewObjectInOneEnvelopeWithoutLegacyScores() throws Exception {
@@ -38,6 +38,7 @@ class AssigneeRecommendationControllerTest {
                 .header("X-Request-Id", "recommend-test"))
                 .andExpect(status().isOk()).andExpect(header().string("Cache-Control", "private, no-store"))
                 .andExpect(jsonPath("$.protocolVersion").value(1)).andExpect(jsonPath("$.code").value("E0"))
+                .andExpect(jsonPath("$.data.workload").doesNotExist())
                 .andExpect(jsonPath("$.data.state").value("NO_MATCH")).andExpect(jsonPath("$.data.taskVersion").value("7"))
                 .andExpect(jsonPath("$.data.recommendations[0].recommendationLevel").value("UNKNOWN")).andExpect(jsonPath("$.data.score").doesNotExist());
     }

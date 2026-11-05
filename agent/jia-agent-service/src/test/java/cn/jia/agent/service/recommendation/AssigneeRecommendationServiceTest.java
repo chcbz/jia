@@ -18,9 +18,38 @@ import static org.mockito.ArgumentMatchers.*;
 class AssigneeRecommendationServiceTest {
     private static final HostingRentHttp.Actor ACTOR = new HostingRentHttp.Actor("user", "0", "client", "owner");
     private static final String ANSWER = """
-        {"state":"READY","requirementSummary":"写说明","recommendations":{
+        {"state":"READY","requirementSummary":"写说明","workload":{"kind":"DOCUMENT","complexity":"STANDARD","deliverables":1},"recommendations":{
         "A1":{"rank":1,"recommendationLevel":"HIGH","reason":"登记写作本领","evidenceIds":["A1E1"],"gaps":[]}}}
         """;
+    @Test void retainsWorkloadWithoutLettingTheModelSupplyPricesOrInputCounts() throws Exception {
+        var result = AssigneeRecommendationService.decode("task", "7", 1, List.of(candidate()),
+                ANSWER.replace("\"deliverables\":1", "\"deliverables\":3,\"inputFiles\":999,\"price\":0"));
+        assertEquals(new Workload(Workload.Kind.DOCUMENT, Workload.Complexity.STANDARD, 3), result.workload());
+        assertFalse(new com.fasterxml.jackson.databind.ObjectMapper().readTree(
+                new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(result)).has("workload"));
+        assertFalse(new tools.jackson.databind.ObjectMapper().readTree(
+                new tools.jackson.databind.ObjectMapper().writeValueAsString(result)).has("workload"));
+    }
+    @Test void acceptsAllDeclaredWorkloadClassesWithoutInventingPrices() {
+        for (var kind : Workload.Kind.values()) for (var complexity : Workload.Complexity.values()) {
+            var result = AssigneeRecommendationService.decode("task", "7", 1, List.of(candidate()),
+                    ANSWER.replace("DOCUMENT", kind.name()).replace("STANDARD", complexity.name()));
+            assertEquals(new Workload(kind, complexity, 1), result.workload());
+        }
+    }
+    @Test void rejectsMissingOrInvalidWorkloadInsteadOfGuessingACheaperRule() {
+        for (String invalid : List.of(
+                ANSWER.replace("\"workload\"", "\"missingWorkload\""),
+                ANSWER.replace("DOCUMENT", "unknown"), ANSWER.replace("STANDARD", "unknown"),
+                ANSWER.replace("\"deliverables\":1", "\"deliverables\":0"),
+                ANSWER.replace("\"deliverables\":1", "\"deliverables\":-1"),
+                ANSWER.replace("\"deliverables\":1", "\"deliverables\":1.5"),
+                ANSWER.replace("\"deliverables\":1", "\"deliverables\":\"1\""),
+                ANSWER.replace("\"deliverables\":1", "\"deliverables\":9223372036854775808"))) {
+            assertEquals("RECOMMENDATION_INVALID_RESULT", assertThrows(Failure.class, () ->
+                    AssigneeRecommendationService.decode("task", "7", 1, List.of(candidate()), invalid)).code());
+        }
+    }
     private static Candidate candidate() { return new Candidate(new Agent("a", "Agent", "online", List.of("写作"), true, true, null),
             List.of(new Evidence("ability:0", "DECLARED_ABILITY", "写作", "登记声明", true))); }
     private static AgentTaskDTO task(String version) {
@@ -65,9 +94,9 @@ class AssigneeRecommendationServiceTest {
         assertThrows(Failure.class, () -> AssigneeRecommendationService.decode("task", "7", 1, List.of(candidate(), other), ANSWER));
         String row = "\"A1\":{\"rank\":1,\"recommendationLevel\":\"HIGH\",\"reason\":\"写作\",\"evidenceIds\":[\"A1E1\"],\"gaps\":[]}";
         assertThrows(Failure.class, () -> AssigneeRecommendationService.decode("task", "7", 1, List.of(candidate()),
-                "{\"requirementSummary\":\"写作\",\"recommendations\":{" + row + "," + row + "}}"));
+                "{\"requirementSummary\":\"写作\",\"workload\":{\"kind\":\"DOCUMENT\",\"complexity\":\"STANDARD\",\"deliverables\":1},\"recommendations\":{" + row + "," + row + "}}"));
         assertThrows(Failure.class, () -> AssigneeRecommendationService.decode("task", "7", 1, List.of(candidate()),
-                "{\"requirementSummary\":\"写作\",\"recommendations\":{}}"));
+                "{\"requirementSummary\":\"写作\",\"workload\":{\"kind\":\"DOCUMENT\",\"complexity\":\"STANDARD\",\"deliverables\":1},\"recommendations\":{}}"));
     }
     @Test void noCandidatesMakesNoModelOrSkillCallAndVersionMismatchDoesNotInvokeModel() {
         var agents = mock(AgentService.class); var skills = mock(SkillManagementService.class); var model = mock(AgentAssigneeRecommendationModel.class);
@@ -219,6 +248,11 @@ class AssigneeRecommendationServiceTest {
     @Test void schemaRequiresEveryCandidateAndRankControlsOrderWithStableTies() throws Exception {
         var other = new Candidate(new Agent("b", "Other", "online", List.of(), true, false, null), List.of());
         var schema = new com.fasterxml.jackson.databind.ObjectMapper().readTree(AssigneeRecommendationService.outputSchema(List.of(candidate(), other)));
+        assertTrue(schema.path("required").toString().contains("workload"));
+        var workloadSchema = schema.path("properties").path("workload");
+        assertEquals("[\"kind\",\"complexity\",\"deliverables\"]", workloadSchema.path("required").toString());
+        assertEquals(1, workloadSchema.path("properties").path("deliverables").path("minimum").asInt());
+        assertFalse(workloadSchema.path("additionalProperties").asBoolean());
         assertEquals("[\"A1\",\"A2\"]", schema.path("properties").path("recommendations").path("required").toString());
         assertFalse(schema.path("properties").path("recommendations").path("additionalProperties").asBoolean());
         String both = ANSWER.replace("\"gaps\":[]}}}", "\"gaps\":[]},\"A2\":{\"rank\":1,\"recommendationLevel\":\"UNKNOWN\",\"reason\":\"不足\",\"evidenceIds\":[],\"gaps\":[]}}}");

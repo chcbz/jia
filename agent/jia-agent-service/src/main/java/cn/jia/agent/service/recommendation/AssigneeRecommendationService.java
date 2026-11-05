@@ -41,7 +41,7 @@ public final class AssigneeRecommendationService {
             if (candidates.isEmpty()) {
                 outcome = "no_candidates";
                 return new Result(taskId, task.getTaskVersion(), observedAt,
-                        "NO_CANDIDATES", "当前没有可承办候选", List.of(), List.of(), true);
+                        "NO_CANDIDATES", "当前没有可承办候选", List.of(), List.of(), true, null);
             }
             var materialObservation = materials.observe(actor, taskId);
             String raw;
@@ -181,6 +181,11 @@ public final class AssigneeRecommendationService {
         }
         var root = new LinkedHashMap<String,Object>();
         root.put("requirementSummary", string); root.put("recommendations", objectSchema(rows));
+        var workload = new LinkedHashMap<String, Object>();
+        workload.put("kind", Map.of("type", "string", "enum", Arrays.stream(Workload.Kind.values()).map(Enum::name).toList()));
+        workload.put("complexity", Map.of("type", "string", "enum", Arrays.stream(Workload.Complexity.values()).map(Enum::name).toList()));
+        workload.put("deliverables", Map.of("type", "integer", "minimum", 1));
+        root.put("workload", objectSchema(workload));
         return JSON.writeValueAsString(objectSchema(root));
     }
     private static Map<String,Object> objectSchema(Map<String,Object> properties) {
@@ -191,6 +196,7 @@ public final class AssigneeRecommendationService {
             JsonNode root = JSON.readTree(raw);
             if (root == null || !root.isObject()) throw invalid("JSON_OBJECT");
             String summary = text(root, "requirementSummary");
+            Workload workload = workload(root.get("workload"));
             // Questions are not part of the model contract; HTTP keeps its fixed empty array.
             if (root.has("questions")) throw invalid("QUESTIONS_NOT_SUPPORTED");
             JsonNode rows = root.get("recommendations");
@@ -230,9 +236,21 @@ public final class AssigneeRecommendationService {
             }
             String state = recommendations.stream().anyMatch(r -> Set.of("HIGH", "MEDIUM").contains(r.recommendationLevel()))
                     ? "READY" : "NO_MATCH";
-            return new Result(taskId, taskVersion, observedAt, state, summary, List.copyOf(recommendations), List.of(), true);
+            return new Result(taskId, taskVersion, observedAt, state, summary, List.copyOf(recommendations), List.of(), true, workload);
         } catch (Failure failure) { throw failure; }
         catch (Exception invalid) { throw invalid("JSON_DECODE"); }
+    }
+    private static Workload workload(JsonNode node) {
+        // This boundary owns model-output validation. No inferred default means a broken
+        // judgement cannot silently select a cheaper rule or become a free quote.
+        if (node == null || !node.isObject()) throw invalid("WORKLOAD_OBJECT");
+        JsonNode count = node.get("deliverables");
+        if (count == null || !count.isIntegralNumber() || !count.canConvertToLong() || count.longValue() < 1)
+            throw invalid("WORKLOAD_DELIVERABLES");
+        try {
+            return new Workload(Workload.Kind.valueOf(text(node, "kind")),
+                    Workload.Complexity.valueOf(text(node, "complexity")), count.longValue());
+        } catch (IllegalArgumentException unknown) { throw invalid("WORKLOAD_CLASSIFICATION"); }
     }
     private static List<String> strings(JsonNode node) {
         if (node == null || !node.isArray()) throw invalid("STRING_ARRAY");
