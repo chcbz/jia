@@ -8,7 +8,6 @@ import cn.jia.agent.dao.AgentTaskMemberDao;
 import cn.jia.agent.dao.AgentTaskMetaDao;
 import cn.jia.agent.dao.AgentTaskNoteDao;
 import cn.jia.agent.dao.DialogueTemplateDao;
-import cn.jia.agent.entity.AgentTaskAssignDTO;
 import cn.jia.agent.entity.AgentTaskReportDTO;
 import cn.jia.agent.service.AgentIdentityService;
 import cn.jia.agent.service.AgentSceneService;
@@ -39,40 +38,6 @@ class AgentServiceFundedBountyGuardTest {
     @AfterEach
     void clearContext() {
         cn.jia.core.context.EsContextHolder.clearContext();
-    }
-
-    @Test
-    void manualSingleAndGroupAssignmentFailBeforeLegacyIdentityOrTaskMutation() {
-        Fixture fixture = fixture();
-        doThrow(new FundedBountyException(org.springframework.http.HttpStatus.CONFLICT,
-                "QUOTE_REQUIRED", "quote required")).when(fixture.guard)
-                .requireAssignmentAllowed(anyString(), anyString(), anyString(),
-                        org.mockito.ArgumentMatchers.eq(false), anyInt(),
-                        org.mockito.ArgumentMatchers.eq(false));
-        AgentTaskAssignDTO request = new AgentTaskAssignDTO();
-        request.setAgentIds(List.of("agent-1"));
-
-        FundedBountyException failure = assertThrows(FundedBountyException.class,
-                () -> fixture.service.assignTask("task-1", request));
-
-        assertEquals("QUOTE_REQUIRED", failure.code());
-        verifyNoInteractions(fixture.legacy);
-    }
-
-    @Test
-    void autoAssignmentFailsAsUnsupportedBeforeRecommendationOrMutation() {
-        Fixture fixture = fixture();
-        doThrow(new FundedBountyException(org.springframework.http.HttpStatus.CONFLICT,
-                "FUNDED_TEAM_NOT_SUPPORTED", "unsupported")).when(fixture.guard)
-                .requireAssignmentAllowed(anyString(), anyString(), anyString(),
-                        org.mockito.ArgumentMatchers.eq(true), anyInt(),
-                        org.mockito.ArgumentMatchers.eq(false));
-
-        FundedBountyException failure = assertThrows(FundedBountyException.class,
-                () -> fixture.service.autoAssignTask("task-1", new AgentTaskAssignDTO()));
-
-        assertEquals("FUNDED_TEAM_NOT_SUPPORTED", failure.code());
-        verifyNoInteractions(fixture.legacy);
     }
 
     @Test

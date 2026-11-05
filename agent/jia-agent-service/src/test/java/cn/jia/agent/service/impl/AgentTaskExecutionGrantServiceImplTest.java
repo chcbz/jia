@@ -79,6 +79,20 @@ class AgentTaskExecutionGrantServiceImplTest {
         service.setAssigneeAuthority(authority);
     }
 
+    @Test void incompleteOrLegacyAssignmentCannotMutateOrReserve() {
+        var missingQuote=request(); missingQuote.setQuoteId(null);
+        var missingRecommendation=request(); missingRecommendation.setRecommendationId(null);
+        var legacyRequest=new AgentTaskAssignDTO(); legacyRequest.setAgentId("agent-1");
+        for (var incomplete:List.of(missingQuote,missingRecommendation,legacyRequest)) {
+            var failure=assertThrows(AgentTaskExecutionGrantException.class,
+                    () -> service.assignAndGrant(scope(),"task-1","incomplete",incomplete,"payer-1"));
+            assertEquals(AgentTaskExecutionGrantException.Reason.BAD_REQUEST,failure.reason());
+        }
+        verifyNoInteractions(billing,legacy);
+        assertTrue(grants.byAction.isEmpty()); assertTrue(bootstraps.byAction.isEmpty());
+        assertNull(root.getAssignedAgentId());
+    }
+
     @Test void selectedQuoteAndAuthenticatedPayerReachCommonReservationBeforeAssignmentMutation() {
         doAnswer(call -> {
             assertNull(root.getAssignedAgentId());

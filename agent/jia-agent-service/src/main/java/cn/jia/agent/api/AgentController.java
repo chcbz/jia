@@ -448,9 +448,6 @@ public class AgentController {
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             Authentication authentication) {
         AgentTaskAssignDTO request = protocolRequest == null ? null : protocolRequest.data();
-        if (!hasV2GrantFields(request)) {
-            return JsonResult.success(agentService.assignTask(taskId, request));
-        }
         HostingRentHttp.Actor actor;
         try { actor = HostingRentHttp.actor(authentication); }
         catch (HostingRentApplicationException invalid) {
@@ -491,12 +488,6 @@ public class AgentController {
         return ResponseEntity.ok()
                 .header(HttpHeaders.CACHE_CONTROL, "private, no-store")
                 .body(JsonResult.success(recommendation));
-    }
-
-    @PostMapping("/tasks/{taskId}/auto-assign")
-    public Object autoAssignTask(@PathVariable String taskId, @RequestBody(required = false) JsonRequest<AgentTaskAssignDTO> protocolRequest) {
-        AgentTaskAssignDTO request = protocolRequest == null ? null : protocolRequest.data();
-        return JsonResult.success(agentService.autoAssignTask(taskId, request == null ? new AgentTaskAssignDTO() : request));
     }
 
     @PostMapping("/tasks/{taskId}/report")
@@ -612,23 +603,6 @@ public class AgentController {
         JsonResult<Void> result = JsonResult.failure("AGENT_ERROR", e.getMessage());
 
         return result;
-    }
-
-    private static boolean hasV2GrantFields(AgentTaskAssignDTO request) {
-        return request != null && (request.getWorkflowVersion() != null
-                || request.getBusinessAction() != null
-                || request.getExpectedTaskVersion() != null
-                || request.getRequirementRevision() != null
-                || request.getQuoteId() != null || request.getRecommendationId() != null
-                || request.getRequestedOperations() != null
-                || request.getInitialOperation() != null
-                || request.getInputRefs() != null
-                || request.getExistingCostAuthorizationRef() != null
-                || request.getCostAuthorizationRef() != null
-                || request.getPermittedToolPolicyRef() != null
-                || request.getTools() != null
-                || request.getAuthorized() != null
-                || request.getPaidExecutionAuthorized() != null);
     }
 
     private static AgentTaskExecutionGrantService.Scope requireTaskGrantScope(

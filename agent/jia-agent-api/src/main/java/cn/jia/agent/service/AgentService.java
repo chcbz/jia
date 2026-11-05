@@ -8,7 +8,6 @@ import cn.jia.agent.entity.AgentRegisterResultDTO;
 import cn.jia.agent.entity.AgentRuntimeDTO;
 import cn.jia.agent.entity.AgentTaskAssigneeCandidateDTO;
 import cn.jia.agent.entity.AgentStatusDTO;
-import cn.jia.agent.entity.AgentTaskAssignDTO;
 import cn.jia.agent.entity.AgentTaskCreateDTO;
 import cn.jia.agent.entity.AgentTaskDTO;
 import cn.jia.agent.entity.AgentTaskCountsDTO;
@@ -95,16 +94,12 @@ public interface AgentService {
     /** Returns only canonical members currently allowed to append task conversation messages. */
     List<String> listTaskWritableMemberAgentIds(String tenantId, String clientId, String taskId);
 
-    AgentTaskDTO assignTask(String taskId, AgentTaskAssignDTO request);
-
     /** All task-authorized candidates, unranked; never truncates using the retired single-assignee score. */
     List<AgentTaskAssigneeCandidateDTO> listTaskAssigneeCandidates(String taskId);
 
     AgentTaskTeamRecommendationDTO recommendTaskTeam(
             String tenantId, String clientId, String taskId,
             AgentTaskTeamRecommendationRequestDTO request);
-
-    AgentTaskDTO autoAssignTask(String taskId, AgentTaskAssignDTO request);
 
     AgentTaskDTO reportTask(String taskId, AgentTaskReportDTO request);
 

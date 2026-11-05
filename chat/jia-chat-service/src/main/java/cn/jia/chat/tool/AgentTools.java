@@ -2,7 +2,6 @@ package cn.jia.chat.tool;
 
 import cn.jia.agent.entity.AgentCapabilityDTO;
 import cn.jia.agent.entity.AgentRuntimeDTO;
-import cn.jia.agent.entity.AgentTaskAssignDTO;
 import cn.jia.agent.entity.AgentTaskCreateDTO;
 import cn.jia.agent.entity.AgentTaskCountsDTO;
 import cn.jia.agent.entity.AgentTaskDTO;
@@ -97,21 +96,6 @@ public class AgentTools {
         result.put("pageSize", page.getPageSize());
         result.put("list", page.getList());
         return result;
-    }
-
-    @Tool(name = "assignAgentTask", description = "将任务分配给指定的智能体执行")
-    public AgentTaskDTO assignAgentTask(
-            @ToolParam(description = "任务ID") String taskId,
-            @ToolParam(description = "目标智能体ID") String agentId) {
-        AgentTaskAssignDTO request = new AgentTaskAssignDTO();
-        request.setAgentId(agentId);
-        return agentService.assignTask(taskId, request);
-    }
-
-    @Tool(name = "autoAssignTask", description = "自动将任务分配给系统选出的最佳智能体")
-    public AgentTaskDTO autoAssignTask(
-            @ToolParam(description = "任务ID") String taskId) {
-        return agentService.autoAssignTask(taskId, new AgentTaskAssignDTO());
     }
 
     @Tool(name = "reportAgentTask", description = "上报任务执行结果，标记任务完成或失败")

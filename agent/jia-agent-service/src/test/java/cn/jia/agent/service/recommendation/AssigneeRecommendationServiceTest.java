@@ -120,7 +120,7 @@ class AssigneeRecommendationServiceTest {
         when(agents.getTaskRecommendationInput("task")).thenReturn(task("7")); when(agents.listTaskAssigneeCandidates("task")).thenReturn(List.of(a));
         when(skills.recommendationSkills(eq(ACTOR), anyList())).thenReturn(Map.of()); when(model.judge(anyString(), anyString())).thenReturn(ANSWER);
         assertEquals("READY", service.recommend(ACTOR, "task", new Request("7")).state());
-        verify(model, times(1)).judge(anyString(), anyString()); verify(agents, never()).assignTask(anyString(), any());
+        verify(model, times(1)).judge(anyString(), anyString());
         when(agents.getTaskRecommendationInput("task")).thenReturn(task("7"), task("8"));
         assertEquals(409, assertThrows(Failure.class, () -> service.recommend(ACTOR, "task", new Request("7"))).status());
     }
@@ -144,7 +144,6 @@ class AssigneeRecommendationServiceTest {
         var service = new AssigneeRecommendationService(agents, skills, model, mock(RecommendationMaterials.class), quotePassThrough());
         Failure failure = assertThrows(Failure.class, () -> service.recommend(ACTOR, "task", new Request("7")));
         assertEquals("RECOMMENDATION_UNAVAILABLE", failure.code()); verify(model, times(1)).judge(anyString(), anyString());
-        verify(agents, never()).assignTask(anyString(), any());
     }
     @Test void installedDisabledSkillIsNeverPositiveEvidence() {
         var agent = candidate().agent();
@@ -203,7 +202,7 @@ class AssigneeRecommendationServiceTest {
         assertEquals("写作经验", projected.path("evidence").get(0).path("description").asText());
         assertFalse(captured.getValue().contains("NOT_EXECUTABLE"));
         assertFalse(projected.has("abilities")); assertFalse(projected.has("canOperate"));
-        verify(model, times(1)).judge(anyString(), anyString()); verify(agents, never()).assignTask(anyString(), any());
+        verify(model, times(1)).judge(anyString(), anyString());
     }
 
     @Test void imageMetadataEntersSingleModelCallWithoutPrivateSnapshotFields() throws Exception {
@@ -315,7 +314,7 @@ class AssigneeRecommendationServiceTest {
             assertFalse(input.contains(secret));assertFalse(output.contains(secret));
         }
         assertTrue(output.contains("public-skill:1"));
-        verify(skills,times(2)).recommendationSkills(ACTOR,List.of(a));verify(agents,never()).assignTask(anyString(),any());
+        verify(skills,times(2)).recommendationSkills(ACTOR,List.of(a));
     }
     @Test void externalPolicyWithdrawalOrOwnerChangeInvalidatesRecommendation() {
         var agents=mock(AgentService.class);var skills=mock(SkillManagementService.class);var model=mock(AgentAssigneeRecommendationModel.class);

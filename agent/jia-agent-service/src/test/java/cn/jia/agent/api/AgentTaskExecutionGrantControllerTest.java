@@ -19,13 +19,41 @@ import static org.mockito.Mockito.*;
 
 class AgentTaskExecutionGrantControllerTest {
     @Test
-    void legacyAssignWithoutV2FieldsPreservesOriginalServicePath() {
-        AgentService legacy=mock(AgentService.class); AgentTaskExecutionGrantService grants=mock(AgentTaskExecutionGrantService.class);
+    void unquotedRequestCannotFallBackToLegacyService() {
+        AgentService legacy=mock(AgentService.class);
+        AgentTaskExecutionGrantService grants=mock(AgentTaskExecutionGrantService.class);
         AgentController controller=new AgentController(legacy,mock(AbilityEvaluationService.class));
-        controller.setTaskExecutionGrants(grants); AgentTaskAssignDTO request=new AgentTaskAssignDTO(); request.setAgentId("agent-1");
-        assertNull(request.getInitialOperation());
-        controller.assignTask("task-1",new cn.jia.core.entity.JsonRequest<>(1, "test-request", request),null,null);
-        verify(legacy).assignTask("task-1",request); verifyNoInteractions(grants);
+        controller.setTaskExecutionGrants(grants);
+        AgentTaskAssignDTO request=new AgentTaskAssignDTO(); request.setAgentId("agent-1");
+        var denied=new AgentTaskExecutionGrantException(AgentTaskExecutionGrantException.Reason.BAD_REQUEST,
+                "quoted assignment required");
+        when(grants.assignAndGrant(any(),eq("task-1"),isNull(),same(request),eq("payer-1"))).thenThrow(denied);
+        assertSame(denied,assertThrows(AgentTaskExecutionGrantException.class,()->controller.assignTask(
+                "task-1",new cn.jia.core.entity.JsonRequest<>(1,"test-request",request),null,jwt("owner","client"))));
+        verifyNoInteractions(legacy);
+    }
+
+    @Test
+    void unquotedRequestStillRequiresAuthenticatedPayer() {
+        AgentService legacy=mock(AgentService.class);
+        AgentTaskExecutionGrantService grants=mock(AgentTaskExecutionGrantService.class);
+        AgentController controller=new AgentController(legacy,mock(AbilityEvaluationService.class));
+        controller.setTaskExecutionGrants(grants);
+        AgentTaskAssignDTO request=new AgentTaskAssignDTO();request.setAgentId("agent-1");
+        var failure=assertThrows(AgentTaskExecutionGrantException.class,()->controller.assignTask(
+                "task-1",new cn.jia.core.entity.JsonRequest<>(1,"test-request",request),null,null));
+        assertEquals(AgentTaskExecutionGrantException.Reason.UNAUTHENTICATED,failure.reason());
+        verifyNoInteractions(legacy,grants);
+    }
+
+    @Test
+    void unquotedServiceAndAutoAssignHttpEntrypointsAreAbsent() {
+        for (var type:List.of(AgentService.class,cn.jia.agent.service.impl.AgentServiceImpl.class)) {
+            assertFalse(java.util.Arrays.stream(type.getMethods()).anyMatch(m ->
+                    m.getName().equals("assignTask") || m.getName().equals("autoAssignTask")));
+        }
+        assertFalse(java.util.Arrays.stream(AgentController.class.getMethods())
+                .anyMatch(m -> m.getName().equals("autoAssignTask")));
     }
 
     @Test
