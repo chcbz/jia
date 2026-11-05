@@ -1,6 +1,7 @@
 package cn.jia.agent.service.impl;
 
 import cn.jia.agent.dao.*;
+import cn.jia.economy.task.TaskBillingService;
 import cn.jia.agent.entity.*;
 import cn.jia.agent.exception.AgentTaskStateException;
 import cn.jia.agent.service.*;
@@ -21,6 +22,7 @@ class AgentTaskCancellationServiceImplTest {
     AgentTaskExecutionGrantDao grants;
     AgentTaskCancellationDao dao;
     AgentTaskCancellationServiceImpl service;
+    TaskBillingService billing;
 
     @BeforeEach void setup() {
         root=new AgentTaskMetaEntity().setTaskId("417").setOwnerJiacn("owner").setRewardStatus("assigned")
@@ -28,7 +30,7 @@ class AgentTaskCancellationServiceImplTest {
         root.setTenantId("0"); root.setClientId("client");
         tx=mock(AgentTaskMutationTransaction.class); states=mock(AgentTaskStateService.class);
         items=mock(AgentTaskWorkItemDao.class); grants=mock(AgentTaskExecutionGrantDao.class);
-        dao=mock(AgentTaskCancellationDao.class);
+        dao=mock(AgentTaskCancellationDao.class); billing=mock(TaskBillingService.class);
         when(tx.executeWithLockedTaskRootInOwnerScope(anyString(),anyString(),anyString(),anyString(),any()))
                 .thenAnswer(i -> {
                     if (!Objects.equals(root.getOwnerJiacn(),i.getArgument(2)))
@@ -46,7 +48,26 @@ class AgentTaskCancellationServiceImplTest {
             var state=new AgentTaskStateDTO(); state.setTaskId("417"); state.setStatus("cancelled"); state.setVersion(2L);
             return state;
         });
-        service=new AgentTaskCancellationServiceImpl(tx,states,items,grants,dao);
+        service=new AgentTaskCancellationServiceImpl(tx,states,items,grants,dao,billing);
+    }
+    @Test void assignedCancellationReleasesInRootTransactionBeforeStateWrites() {
+        cancel();
+        var order=inOrder(billing,states);
+        order.verify(billing).release(argThat(t -> t.taskId().equals("417")),eq(true));
+        order.verify(states).transitionMember(anyString(),anyString(),anyString(),anyString(),anyString(),any());
+    }
+    @Test void neverAssignedCancellationAllowsMissingBill() {
+        root.setRewardStatus("open");
+        when(dao.lockMembers("0","client","owner","417")).thenReturn(List.of());
+        when(dao.lockGrants("0","client","owner","417")).thenReturn(List.of());
+        cancel();
+        verify(billing).release(any(),eq(false));
+    }
+    @Test void missingAssignedBillPreventsStateAndAuthorizationChanges() {
+        when(billing.release(any(),eq(true))).thenThrow(new IllegalStateException("missing bill"));
+        assertThrows(IllegalStateException.class,this::cancel);
+        verifyNoInteractions(states,grants);
+        verify(dao,never()).releaseTaskOccupation(anyString(),anyString(),anyString(),anyString(),anyLong());
     }
     static AgentTaskMemberEntity member(String id,String status) {
         var row=new AgentTaskMemberEntity().setTaskId("417").setOwnerJiacn("owner").setAgentId(id)
@@ -70,7 +91,7 @@ class AgentTaskCancellationServiceImplTest {
     }
     AgentTaskCancellationService.Receipt cancel() { return service.cancel("0","client","owner","actor","417",1); }
     void noWrites() {
-        verifyNoInteractions(states,grants);
+        verifyNoInteractions(states,grants,billing);
         verify(dao,never()).releaseTaskOccupation(anyString(),anyString(),anyString(),anyString(),anyLong());
         verify(dao,never()).cancelRetryBootstrap(anyString(),anyString(),anyString(),anyString(),anyLong(),anyLong(),anyLong());
     }

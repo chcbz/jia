@@ -1,6 +1,7 @@
 package cn.jia.agent.service.impl;
 
 import cn.jia.agent.dao.*;
+import cn.jia.economy.task.TaskBillingService;
 import cn.jia.agent.api.AgentTaskCancellationController;
 import cn.jia.agent.entity.*;
 import cn.jia.agent.exception.AgentTaskStateException;
@@ -104,7 +105,8 @@ class AgentTaskCancellationTransactionTest {
                 .thenAnswer(i -> jdbc.update("UPDATE occupation SET task=NULL WHERE task=?",new Object[]{i.getArgument(3)}));
         tx=new AgentTaskMutationTransactionImpl(roots,new DataSourceTransactionManager(ds));
         states=new AgentTaskStateServiceImpl(roots,members,items,tx,events);
-        service=new AgentTaskCancellationServiceImpl(tx,states,items,grants,dao);
+        var billing=mock(TaskBillingService.class);
+        service=new AgentTaskCancellationServiceImpl(tx,states,items,grants,dao,billing);
     }
     AgentTaskMetaEntity readRoot(String owner,String task,boolean lock) {
         var rows=jdbc.query("SELECT * FROM root WHERE owner=? AND task_id=?"+(lock ? " FOR UPDATE" : ""),(rs,n) -> {

@@ -11,6 +11,8 @@ import cn.jia.agent.service.AgentTaskMutationTransaction;
 import cn.jia.agent.service.AgentTaskStateService;
 import cn.jia.agent.state.AgentTaskMemberStatus;
 import cn.jia.agent.state.AgentTaskWorkItemStatus;
+import cn.jia.economy.service.EconomyScope;
+import cn.jia.economy.task.TaskBillingService;
 import jakarta.inject.Inject;
 import jakarta.inject.Named;
 import java.util.HashSet;
@@ -29,16 +31,18 @@ public class AgentTaskCancellationServiceImpl implements AgentTaskCancellationSe
     private final AgentTaskWorkItemDao workItems;
     private final AgentTaskExecutionGrantDao grants;
     private final AgentTaskCancellationDao cancellation;
+    private final TaskBillingService billing;
 
     @Inject
     public AgentTaskCancellationServiceImpl(AgentTaskMutationTransaction transactions,
             AgentTaskStateService states, AgentTaskWorkItemDao workItems,
-            AgentTaskExecutionGrantDao grants, AgentTaskCancellationDao cancellation) {
+            AgentTaskExecutionGrantDao grants, AgentTaskCancellationDao cancellation, TaskBillingService billing) {
         this.transactions=Objects.requireNonNull(transactions);
         this.states=Objects.requireNonNull(states);
         this.workItems=Objects.requireNonNull(workItems);
         this.grants=Objects.requireNonNull(grants);
         this.cancellation=Objects.requireNonNull(cancellation);
+        this.billing=Objects.requireNonNull(billing);
     }
 
     @Override
@@ -147,6 +151,12 @@ public class AgentTaskCancellationServiceImpl implements AgentTaskCancellationSe
             // State-idempotent closed-root readback, including the original version after a lost response.
             // No separate public idempotency key/receipt is claimed or created.
             if (replay) return new Receipt(taskId,"cancelled",root.getTaskVersion());
+            // Assignment facts require an explicit HELD/LEGACY_FREE bill; missing money is not free.
+            // Only a never-assigned task may cancel without a bill. Release joins this root transaction.
+            boolean assigned = "assigned".equals(root.getRewardStatus()) || root.getAssignedAgentId()!=null
+                    || root.getAssignedAt()!=null || !taskGrants.isEmpty()
+                    || members.stream().anyMatch(m -> Set.of("accepted","left").contains(m.getMemberStatus()));
+            billing.release(new TaskBillingService.Task(new EconomyScope(tenant,client),owner,taskId),assigned);
             for (var member:members) {
                 String target=switch (member.getMemberStatus()) {
                     case "invited" -> "rejected";
