@@ -899,12 +899,37 @@ class JuyitingWorkflowMySqlTest {
 
 
     @Test void chatOutboxFutureDeadlineIsPartitionedAndPreservesRetryAckAndExpiredLeaseSemantics() {
-        jdbc.execute("CREATE TABLE chat_dispatch_outbox (tenant_id VARCHAR(50),client_id VARCHAR(50),status VARCHAR(30),available_at BIGINT,lease_until BIGINT,KEY idx_ready(status,available_at))");
+        // The deadline query also checks conversation lanes. Use the production schema in
+        // this disposable database rather than a partial outbox/request definition.
+        jdbc.execute("DROP TABLE chat_request");
+        for (String sql : resource("db/chat-deliberation-schema.sql").split(";")) {
+            if (!sql.isBlank()) jdbc.execute(sql);
+        }
         var config=new com.baomidou.mybatisplus.core.MybatisConfiguration();
         config.setEnvironment(new org.apache.ibatis.mapping.Environment("owned",new org.mybatis.spring.transaction.SpringManagedTransactionFactory(),jdbc.getDataSource()));
         config.addMapper(cn.jia.chat.deliberation.ChatDeliberationMapper.class);
         var mapper=new org.mybatis.spring.SqlSessionTemplate(new org.apache.ibatis.session.SqlSessionFactoryBuilder().build(config)).getMapper(cn.jia.chat.deliberation.ChatDeliberationMapper.class);
-        jdbc.update("INSERT INTO chat_dispatch_outbox VALUES ('0','client','READY',900,NULL),('0','client','RETRY',1500,NULL),('0','client','AWAITING_ACK',2000,NULL),('0','client','CLAIMED',0,1200),('0','client','SENT',1001,NULL),('1','client','RETRY',1001,NULL),('0','other','RETRY',1100,NULL),('0 ','client','RETRY',1001,NULL),('0','Client','RETRY',1001,NULL)");
+        Object[][] deadlines = {
+                {"0", "client", "READY", 900L, null},
+                {"0", "client", "RETRY", 1500L, null},
+                {"0", "client", "AWAITING_ACK", 2000L, null},
+                {"0", "client", "CLAIMED", 0L, 1200L},
+                {"0", "client", "SENT", 1001L, null},
+                {"1", "client", "RETRY", 1001L, null},
+                {"0", "other", "RETRY", 1100L, null},
+                {"0 ", "client", "RETRY", 1001L, null},
+                {"0", "Client", "RETRY", 1001L, null}
+        };
+        for (int i = 0; i < deadlines.length; i++) {
+            Object[] row = deadlines[i];
+            jdbc.update("""
+                    INSERT INTO chat_dispatch_outbox
+                    (event_id,tenant_id,owner_jiacn,client_id,turn_id,dispatch_id,event_type,
+                     status,payload_json,available_at,lease_until,created_at,updated_at)
+                    VALUES (?,?,'owner',?,?,?,'DISPATCH',?,'{}',?,?,0,0)
+                    """, "event-" + i, row[0], row[1], "turn-" + i, "dispatch-" + i,
+                    row[2], row[3], row[4]);
+        }
         assertEquals(1200L,mapper.nextOutboxDue("0","client",1000));
         assertEquals(1500L,mapper.nextOutboxDue("0","client",1200));
         assertEquals(2000L,mapper.nextOutboxDue("0","client",1500));

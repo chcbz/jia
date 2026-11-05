@@ -976,7 +976,11 @@ class R8TenantPrivateChatTest {
         var dispatch = first.dispatches().getFirst();
         var reply = completePrepared(outbox.claim(contextDraft(first), "worker", System.currentTimeMillis() + 1000, 120000));
         // Model a pre-upgrade completed final with no native checkpoint. Never replay it.
-        jdbc.update("UPDATE chat_message SET metadata=JSON_REMOVE(metadata,'$.contextReceipt') WHERE id=?", reply.messageId());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> legacyMetadata = JsonUtil.getMapper().readValue(jdbc.queryForObject(
+                "SELECT metadata FROM chat_message WHERE id=?", String.class, reply.messageId()), Map.class);
+        legacyMetadata.remove("contextReceipt");
+        jdbc.update("UPDATE chat_message SET metadata=? WHERE id=?", JsonUtil.toJson(legacyMetadata), reply.messageId());
         var claim = outbox.claim(secondRow, "worker", System.currentTimeMillis() + 1000, 120000);
         var facts = preparedFacts(claim);
         @SuppressWarnings("unchecked")

@@ -6,7 +6,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import java.util.UUID;
 
-/** Same two-process discovery/claim regression on the existing private MySQL fixture, no external DB. */
+/** Discovery, context preparation and replacement transactions on private MySQL, never an external DB. */
 class TenantOutboxIsolationMySqlTest extends SkillManagementMySqlFixture {
     private String database;
     private R8TenantPrivateChatTest scenario;
@@ -25,5 +25,23 @@ class TenantOutboxIsolationMySqlTest extends SkillManagementMySqlFixture {
     }
     @Test void configuredLegacyTenantPreservesAllOfItsClients() {
         scenario.discoveryHonorsConfiguredTenantAndNeverRestrictsItsMultipleClients();
+    }
+    @Test void queuedNativeContextUsesBothRequestAndMessageOrder() throws Exception {
+        scenario.queuedUserBeforePriorFinalIsStillDeliveredAndPriorNativeAnswerIsNotReinjected();
+    }
+    @Test void missingCheckpointBootstrapsWithLatePriorAnswer() throws Exception {
+        scenario.newNativeContextIncludesAnEarlierRequestReplyEvenWhenItsMessageIdIsAfterCurrentUser();
+    }
+    @Test void nativeContextFreezeRollsBackAllThreeRecords() throws Exception {
+        scenario.preparationFailureRollsBackSnapshotTurnAndOutboxTogether();
+    }
+    @Test void unexecutedAttemptIsReplacedWithoutRepeatingOrChangingOldInput() throws Exception {
+        scenario.unexecutedDeltaGetsNewImmutableBootstrapAttemptAndDuplicateRejectionDoesNotRepeatIt();
+    }
+    @Test void replacementFailureRestoresOriginalAttempt() throws Exception {
+        scenario.failedReplacementRollsBackRetirementAndBothNewRecords();
+    }
+    @Test void retransmissionNeverRefreshesFrozenContext() throws Exception {
+        scenario.retryKeepsFrozenInputDespiteNewHistoryAndDoesNotReadHistoryAgain();
     }
 }
