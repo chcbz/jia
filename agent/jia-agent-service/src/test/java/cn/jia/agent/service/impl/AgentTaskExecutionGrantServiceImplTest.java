@@ -164,6 +164,22 @@ class AgentTaskExecutionGrantServiceImplTest {
     }
 
     @Test
+    void pricingCatalogueSharesAssignmentInputsAndDoesNotCreateGrant() throws Exception {
+        var reference = pointMaterial("file-1", 1, "REFERENCE", "text/plain");
+        var input = pointMaterial("file-1", 1, "INPUT", "text/plain");
+        when(links.list("0","client","owner","task-1",null,null,33)).thenReturn(List.of(reference, input));
+        var catalogue = service.snapshotTaskInputsWithinLockedTask(scope(), "task-1");
+        assertEquals(1, catalogue.inputs().size()); assertEquals("INPUT", catalogue.inputs().getFirst().purpose());
+        assertTrue(catalogue.digest().matches("[0-9a-f]{64}"));
+        assertTrue(grants.byAction.isEmpty()); assertTrue(bootstraps.byAction.isEmpty());
+        var assigned = service.assignForDeliberation(scope(), "task-1", "priced", "agent-1", 0, 1);
+        assertEquals(catalogue.inputs().getFirst().contentHash(), assigned.getInputs().getFirst().contentHash());
+        var persisted = grants.byAction.values().iterator().next().getInputScopeJson();
+        assertEquals(catalogue.digest(), java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
+                .digest(("TASK_LINKED_INPUT_SNAPSHOT_V1\n" + persisted).getBytes(java.nio.charset.StandardCharsets.UTF_8))));
+    }
+
+    @Test
     void pointFreezesAllMixedMediaAndReplayDoesNotReadChangedCatalogue() {
         List<PersonalWorkspaceTaskFileLinkEntity> materials=new java.util.ArrayList<>();
         int i=0;

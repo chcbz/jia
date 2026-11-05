@@ -136,6 +136,21 @@ class TaskBillingServiceMySqlTest {
     }
 
     @Test
+    void unavailableCandidateDoesNotMarkSharedQuoteTransactionRollbackOnly() {
+        Quote available = inTask(TASK, () -> {
+            var first = billing.quote(TASK, BINDING, "payer-1", workload(), route("0.1"));
+            var second = new Binding(1, "requirement-sha", "input-sha", "unpriced-agent", "recommendation-1");
+            assertThrows(TaskPricingService.Unavailable.class,
+                    () -> billing.quote(TASK, second, "payer-1", workload(), route("missing")));
+            return first;
+        });
+        assertEquals(10, available.amountWen());
+        assertEquals(1, count("economy_task_quote"));
+        assertEquals(100, wallet());
+        assertEquals(0, count("economy_transaction"));
+    }
+
+    @Test
     void amountOverflowIsUnavailableWithoutPersistingQuote() {
         var overflow = assertThrows(TaskPricingService.Unavailable.class, () -> quote(TASK, BINDING, "999999999999999999999"));
         assertEquals(TaskPricingService.Unavailable.Reason.QUOTE_AMOUNT_OVERFLOW, overflow.reason());

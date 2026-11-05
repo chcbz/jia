@@ -28,6 +28,13 @@ public interface AgentTaskExecutionGrantService {
     AssignmentPreview previewAssignmentWithinLockedTask(Scope scope, String taskId,
             long lockedTaskVersion, String assignmentIdempotencyKey, AgentTaskAssignDTO request);
 
+    /** Read all current fixed-version task inputs under the caller's task-root transaction.
+     * Reuses assignment authorization, de-duplication and digest; does not create a grant. */
+    InputCatalogue snapshotTaskInputsWithinLockedTask(Scope scope, String taskId);
+    record InputCatalogue(String digest, List<AuthorizedInput> inputs) {
+        public InputCatalogue { inputs = List.copyOf(inputs); }
+    }
+
     /** Internal consent lifecycle verification; it still starts no execution. */
     Admission admitProviderConsentBinding(Scope scope, String taskId, String grantId,
             long expectedGrantVersion, long expectedAssignmentRevision, String targetAgentId,

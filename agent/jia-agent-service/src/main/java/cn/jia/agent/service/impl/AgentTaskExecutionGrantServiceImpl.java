@@ -378,6 +378,16 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
     }
 
     @Override
+    public InputCatalogue snapshotTaskInputsWithinLockedTask(Scope scope, String taskId) {
+        // Caller holds the owner task root; no second catalogue/digest implementation for pricing.
+        List<InputSnapshot> snapshots = validateAndSnapshotInputs(scope, taskId,
+                canonicalInputs(allTaskMaterials(scope, taskId)));
+        return new InputCatalogue(sha256("TASK_LINKED_INPUT_SNAPSHOT_V1\n" + write(snapshots)),
+                snapshots.stream().map(input -> new AuthorizedInput(input.fileId(), input.version(),
+                        input.purpose(), input.contentMimeType(), input.byteLength(), input.contentHash())).toList());
+    }
+
+    @Override
     public AssignmentPreview previewAssignmentWithinLockedTask(Scope scope, String taskId,
             long lockedTaskVersion, String assignmentIdempotencyKey, AgentTaskAssignDTO request) {
         ValidAssign valid = validateAssign(scope, taskId, assignmentIdempotencyKey, request);

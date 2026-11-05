@@ -1,5 +1,6 @@
 dependencies {
     api project(':common:jia-common-core')
+    api project(':economy:jia-economy-core')
     api(libs.swagger.annotations)
     api(libs.mybatis.plus.annotation)
     testImplementation libs.junit.jupiter

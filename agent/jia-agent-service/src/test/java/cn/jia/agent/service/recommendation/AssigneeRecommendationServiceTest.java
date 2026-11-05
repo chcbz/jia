@@ -50,6 +50,13 @@ class AssigneeRecommendationServiceTest {
                     AssigneeRecommendationService.decode("task", "7", 1, List.of(candidate()), invalid)).code());
         }
     }
+    private static AssigneeRecommendationQuotes quotePassThrough() {
+        var quotes = mock(AssigneeRecommendationQuotes.class);
+        when(quotes.prepare(any(), anyString(), any())).thenAnswer(call -> {
+            java.util.function.Supplier<Result> advice = call.getArgument(2); return advice.get();
+        });
+        return quotes;
+    }
     private static Candidate candidate() { return new Candidate(new Agent("a", "Agent", "online", List.of("写作"), true, true, null),
             List.of(new Evidence("ability:0", "DECLARED_ABILITY", "写作", "登记声明", true))); }
     private static AgentTaskDTO task(String version) {
@@ -100,7 +107,7 @@ class AssigneeRecommendationServiceTest {
     }
     @Test void noCandidatesMakesNoModelOrSkillCallAndVersionMismatchDoesNotInvokeModel() {
         var agents = mock(AgentService.class); var skills = mock(SkillManagementService.class); var model = mock(AgentAssigneeRecommendationModel.class);
-        var service = new AssigneeRecommendationService(agents, skills, model, mock(RecommendationMaterials.class));
+        var service = new AssigneeRecommendationService(agents, skills, model, mock(RecommendationMaterials.class), quotePassThrough());
         when(agents.getTaskRecommendationInput("task")).thenReturn(task("7")); when(agents.listTaskAssigneeCandidates("task")).thenReturn(List.of());
         assertEquals("NO_CANDIDATES", service.recommend(ACTOR, "task", new Request("7")).state());
         assertEquals(409, assertThrows(Failure.class, () -> service.recommend(ACTOR, "task", new Request("6"))).status());
@@ -108,7 +115,7 @@ class AssigneeRecommendationServiceTest {
     }
     @Test void usesSingleCallNoAssignmentAndChecksTaskAgainAfterInference() {
         var agents = mock(AgentService.class); var skills = mock(SkillManagementService.class); var model = mock(AgentAssigneeRecommendationModel.class);
-        var service = new AssigneeRecommendationService(agents, skills, model, mock(RecommendationMaterials.class));
+        var service = new AssigneeRecommendationService(agents, skills, model, mock(RecommendationMaterials.class), quotePassThrough());
         var a = new AgentTaskAssigneeCandidateDTO(new AgentTaskTargetSummaryDTO("a", "Agent", null, true, "online"), List.of("写作"), "owner");
         when(agents.getTaskRecommendationInput("task")).thenReturn(task("7")); when(agents.listTaskAssigneeCandidates("task")).thenReturn(List.of(a));
         when(skills.recommendationSkills(eq(ACTOR), anyList())).thenReturn(Map.of()); when(model.judge(anyString(), anyString())).thenReturn(ANSWER);
@@ -122,7 +129,7 @@ class AssigneeRecommendationServiceTest {
         var a = new AgentTaskAssigneeCandidateDTO(new AgentTaskTargetSummaryDTO("external", "Agent", "公开提供方", false, "online"), List.of(), "owner");
         when(agents.getTaskRecommendationInput("task")).thenReturn(task("7")); when(agents.listTaskAssigneeCandidates("task")).thenReturn(List.of(a));
         when(model.judge(anyString(), anyString())).thenReturn(ANSWER.replace("HIGH", "UNKNOWN").replace("[\"A1E1\"]", "[]"));
-        var service = new AssigneeRecommendationService(agents, skills, model, mock(RecommendationMaterials.class));
+        var service = new AssigneeRecommendationService(agents, skills, model, mock(RecommendationMaterials.class), quotePassThrough());
         var result = service.recommend(ACTOR, "task", new Request("7"));
         assertEquals("NO_MATCH", result.state());
         assertEquals("UNKNOWN", result.recommendations().getFirst().recommendationLevel());
@@ -134,7 +141,7 @@ class AssigneeRecommendationServiceTest {
         when(agents.getTaskRecommendationInput("task")).thenReturn(task("7")); when(agents.listTaskAssigneeCandidates("task")).thenReturn(List.of(a));
         when(skills.recommendationSkills(eq(ACTOR), anyList())).thenReturn(Map.of());
         when(model.judge(anyString(), anyString())).thenThrow(new RuntimeException("private upstream details"));
-        var service = new AssigneeRecommendationService(agents, skills, model, mock(RecommendationMaterials.class));
+        var service = new AssigneeRecommendationService(agents, skills, model, mock(RecommendationMaterials.class), quotePassThrough());
         Failure failure = assertThrows(Failure.class, () -> service.recommend(ACTOR, "task", new Request("7")));
         assertEquals("RECOMMENDATION_UNAVAILABLE", failure.code()); verify(model, times(1)).judge(anyString(), anyString());
         verify(agents, never()).assignTask(anyString(), any());
@@ -154,7 +161,7 @@ class AssigneeRecommendationServiceTest {
         when(skills.recommendationSkills(eq(ACTOR), anyList())).thenReturn(Map.of());
         String all = ANSWER.replace("\"gaps\":[]}}}", "\"gaps\":[]},\"A2\":{\"rank\":2,\"recommendationLevel\":\"UNKNOWN\",\"reason\":\"资料不足\",\"evidenceIds\":[],\"gaps\":[]}}}");
         when(model.judge(anyString(), anyString())).thenReturn(all);
-        var result = new AssigneeRecommendationService(agents, skills, model, mock(RecommendationMaterials.class)).recommend(ACTOR, "task", new Request("7"));
+        var result = new AssigneeRecommendationService(agents, skills, model, mock(RecommendationMaterials.class), quotePassThrough()).recommend(ACTOR, "task", new Request("7"));
         assertEquals("READY", result.state()); assertTrue(result.candidateSetComplete());
         var input = org.mockito.ArgumentCaptor.forClass(String.class); verify(model, times(1)).judge(input.capture(), anyString());
         var rows = new com.fasterxml.jackson.databind.ObjectMapper().readTree(input.getValue()).get("candidates");
@@ -170,7 +177,7 @@ class AssigneeRecommendationServiceTest {
         when(skills.recommendationSkills(eq(ACTOR), anyList())).thenReturn(Map.of("a", List.of(new SkillManagementService.RecommendationSkill(
                 "installed", "image", "1", "图片", "经验", false, "VERSION_MISMATCH", "INSTRUCTION"))));
         when(model.judge(anyString(), anyString())).thenReturn(ANSWER.replace("HIGH", "UNKNOWN").replace("[\"A1E1\"]", "[]"));
-        var result = new AssigneeRecommendationService(agents, skills, model, mock(RecommendationMaterials.class)).recommend(ACTOR, "task", new Request("7"));
+        var result = new AssigneeRecommendationService(agents, skills, model, mock(RecommendationMaterials.class), quotePassThrough()).recommend(ACTOR, "task", new Request("7"));
         assertEquals("NO_MATCH", result.state()); assertEquals("UNKNOWN", result.recommendations().getFirst().recommendationLevel());
         verify(model, times(1)).judge(anyString(), anyString());
     }
@@ -186,7 +193,7 @@ class AssigneeRecommendationServiceTest {
         when(skills.recommendationSkills(eq(ACTOR), anyList())).thenReturn(Map.of("a", List.of(new SkillManagementService.RecommendationSkill(
                 "installed", "writing", "1", "写作", "写作经验", true, "NOT_EXECUTABLE", "INSTRUCTION"))));
         when(model.judge(anyString(), anyString())).thenReturn(ANSWER);
-        var result = new AssigneeRecommendationService(agents, skills, model, mock(RecommendationMaterials.class)).recommend(ACTOR, "task", new Request("7"));
+        var result = new AssigneeRecommendationService(agents, skills, model, mock(RecommendationMaterials.class), quotePassThrough()).recommend(ACTOR, "task", new Request("7"));
         assertEquals("READY", result.state());
         var evidence = result.recommendations().getFirst().evidence().getFirst();
         assertEquals("skill:installed", evidence.id()); assertTrue(evidence.available());
@@ -211,7 +218,7 @@ class AssigneeRecommendationServiceTest {
                 "private-sha", new RecommendationMaterials.Material("检测图片", "result.png", "image/png", 1, "INPUT", "ACTIVE", null)));
         when(materials.observe(ACTOR, "task")).thenReturn(snapshot);
         when(model.judge(anyString(), anyString())).thenReturn(ANSWER);
-        var service = new AssigneeRecommendationService(agents, skills, model, materials);
+        var service = new AssigneeRecommendationService(agents, skills, model, materials, quotePassThrough());
         assertEquals("READY", service.recommend(ACTOR, "task", new Request("7")).state());
         var input = org.mockito.ArgumentCaptor.forClass(String.class); verify(model, times(1)).judge(input.capture(), anyString());
         var root = new com.fasterxml.jackson.databind.ObjectMapper().readTree(input.getValue());
@@ -263,7 +270,7 @@ class AssigneeRecommendationServiceTest {
     }
     @Test void statusOnlyChangeUsesFreshDisplayWhileRealCapabilityChangeIsStale() {
         var agents=mock(AgentService.class);var skills=mock(SkillManagementService.class);var model=mock(AgentAssigneeRecommendationModel.class);
-        var service=new AssigneeRecommendationService(agents,skills,model,mock(RecommendationMaterials.class));
+        var service=new AssigneeRecommendationService(agents,skills,model,mock(RecommendationMaterials.class), quotePassThrough());
         var online=new AgentTaskAssigneeCandidateDTO(new AgentTaskTargetSummaryDTO("a","Old",null,true,"online"),List.of("写作"), "owner");
         var offline=new AgentTaskAssigneeCandidateDTO(new AgentTaskTargetSummaryDTO("a","New",null,true,"offline"),List.of("写作"), "owner");
         when(agents.getTaskRecommendationInput("task")).thenReturn(task("7"));
@@ -278,7 +285,7 @@ class AssigneeRecommendationServiceTest {
     }
     @Test void actualInstalledSkillChangeAfterModelStillInvalidatesResult() {
         var agents=mock(AgentService.class);var skills=mock(SkillManagementService.class);var model=mock(AgentAssigneeRecommendationModel.class);
-        var service=new AssigneeRecommendationService(agents,skills,model,mock(RecommendationMaterials.class));
+        var service=new AssigneeRecommendationService(agents,skills,model,mock(RecommendationMaterials.class), quotePassThrough());
         when(agents.getTaskRecommendationInput("task")).thenReturn(task("7"));
         when(agents.listTaskAssigneeCandidates("task")).thenReturn(List.of(new AgentTaskAssigneeCandidateDTO(
                 new AgentTaskTargetSummaryDTO("a","A",null,true,"online"),List.of(), "owner")));
@@ -298,7 +305,7 @@ class AssigneeRecommendationServiceTest {
         var fact=new SkillManagementService.RecommendationSkill("private-installation","private-key","private-version","甜点制作","制作蛋糕和甜点",true,"NOT_EXECUTABLE","INSTRUCTION");
         when(skills.recommendationSkills(ACTOR,List.of(a))).thenReturn(Map.of("external",List.of(fact)));
         when(model.judge(anyString(),anyString())).thenReturn(ANSWER);
-        var result=new AssigneeRecommendationService(agents,skills,model,mock(RecommendationMaterials.class)).recommend(ACTOR,"task",new Request("7"));
+        var result=new AssigneeRecommendationService(agents,skills,model,mock(RecommendationMaterials.class), quotePassThrough()).recommend(ACTOR,"task",new Request("7"));
         assertEquals("READY",result.state());assertFalse(result.recommendations().getFirst().agent().boundToMe());
         assertEquals("甜点制作",result.recommendations().getFirst().evidence().getFirst().label());
         var captor=org.mockito.ArgumentCaptor.forClass(String.class);verify(model).judge(captor.capture(),anyString());
@@ -314,7 +321,7 @@ class AssigneeRecommendationServiceTest {
         var agents=mock(AgentService.class);var skills=mock(SkillManagementService.class);var model=mock(AgentAssigneeRecommendationModel.class);
         var a=new AgentTaskAssigneeCandidateDTO(new AgentTaskTargetSummaryDTO("external","External",null,false,"online"),List.of(),"provider");
         when(agents.getTaskRecommendationInput("task")).thenReturn(task("7"));when(model.judge(anyString(),anyString())).thenReturn(ANSWER);
-        var service=new AssigneeRecommendationService(agents,skills,model,mock(RecommendationMaterials.class));
+        var service=new AssigneeRecommendationService(agents,skills,model,mock(RecommendationMaterials.class), quotePassThrough());
         when(agents.listTaskAssigneeCandidates("task")).thenReturn(List.of(a),List.of());
         assertEquals(409,assertThrows(Failure.class,()->service.recommend(ACTOR,"task",new Request("7"))).status());
         var rebound=new AgentTaskAssigneeCandidateDTO(a.target(),a.abilities(),"new-provider");

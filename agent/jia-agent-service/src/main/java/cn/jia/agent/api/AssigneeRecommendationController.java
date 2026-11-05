@@ -53,6 +53,14 @@ public final class AssigneeRecommendationController {
     public ResponseEntity<JsonResult<Void>> task(AgentServiceImpl.AgentBizException error) {
         return failure(new Failure(404, "RECOMMENDATION_NOT_FOUND"));
     }
+    @ExceptionHandler(cn.jia.agent.exception.AgentTaskCollaborationException.class)
+    public ResponseEntity<JsonResult<Void>> lockedTask(cn.jia.agent.exception.AgentTaskCollaborationException error) {
+        return switch (error.getReason()) {
+            case NOT_FOUND, FORBIDDEN -> failure(new Failure(404, "RECOMMENDATION_NOT_FOUND"));
+            case VERSION_CONFLICT, INVALID_TRANSITION -> failure(new Failure(409, "RECOMMENDATION_STALE"));
+            default -> failure(new Failure(503, "RECOMMENDATION_UNAVAILABLE"));
+        };
+    }
     @ExceptionHandler(RuntimeException.class)
     public ResponseEntity<JsonResult<Void>> unavailable(RuntimeException error) {
         LOG.warn("RECOMMENDATION_UNAVAILABLE requestId={} category={}", org.slf4j.MDC.get("request_id"), error.getClass().getSimpleName());

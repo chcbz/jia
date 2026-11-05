@@ -65,6 +65,8 @@ public class TaskBillingServiceImpl implements TaskBillingService {
     }
 
     @Override
+    @Transactional(propagation = Propagation.MANDATORY, rollbackFor = Exception.class,
+            noRollbackFor = TaskPricingService.Unavailable.class)
     public Quote quote(Task task, Binding binding, String payerUserId, TaskWorkload workload, TaskPricingService.ModelKey model) {
         Objects.requireNonNull(payerUserId, "payerUserId");
         String bindingHash = bindingHash(binding);

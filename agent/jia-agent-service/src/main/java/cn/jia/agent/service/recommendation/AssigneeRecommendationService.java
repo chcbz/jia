@@ -23,8 +23,9 @@ public final class AssigneeRecommendationService {
     private final SkillManagementService skills;
     private final AgentAssigneeRecommendationModel model;
     private final RecommendationMaterials materials;
-    public AssigneeRecommendationService(AgentService agents, SkillManagementService skills, AgentAssigneeRecommendationModel model, RecommendationMaterials materials) {
-        this.agents = agents; this.skills = skills; this.model = model; this.materials = materials;
+    private final AssigneeRecommendationQuotes quotes;
+    public AssigneeRecommendationService(AgentService agents, SkillManagementService skills, AgentAssigneeRecommendationModel model, RecommendationMaterials materials, AssigneeRecommendationQuotes quotes) {
+        this.agents = agents; this.skills = skills; this.model = model; this.materials = materials; this.quotes = quotes;
     }
     public Result recommend(HostingRentHttp.Actor actor, String taskId, Request request) {
         long started = System.nanoTime(), modelStarted = 0, modelEnded = 0;
@@ -60,16 +61,18 @@ public final class AssigneeRecommendationService {
             } catch (Failure error) { throw error; }
             catch (Exception unavailable) { throw new Failure(503, "RECOMMENDATION_UNAVAILABLE"); }
             // A response is advice on exactly these facts, not an indefinitely valid admission token.
-            AgentTaskDTO current = agents.getTaskRecommendationInput(taskId);
-            if (!Objects.equals(task.getTaskVersion(), current.getTaskVersion())
-                    || !Objects.equals(taskInput(task), taskInput(current))
-                    || !Objects.equals(task.getStatus(), current.getStatus())) throw stale("TASK");
-            var after = observe(actor, taskId);
-            verifyCandidates(observation, after);
-            try { materials.verifyUnchanged(actor, taskId, materialObservation); }
-            catch (Failure failure) { if (failure.status() == 409) throw stale("MATERIAL"); throw failure; }
-            // Display current status/name; recommendation is not execution admission.
-            var result = decode(taskId, task.getTaskVersion(), observedAt, after.candidates(), raw);
+            var result = quotes.prepare(actor, taskId, () -> {
+                AgentTaskDTO current = agents.getTaskRecommendationInput(taskId);
+                if (!Objects.equals(task.getTaskVersion(), current.getTaskVersion())
+                        || !Objects.equals(taskInput(task), taskInput(current))
+                        || !Objects.equals(task.getStatus(), current.getStatus())) throw stale("TASK");
+                var after = observe(actor, taskId);
+                verifyCandidates(observation, after);
+                try { materials.verifyUnchanged(actor, taskId, materialObservation); }
+                catch (Failure failure) { if (failure.status() == 409) throw stale("MATERIAL"); throw failure; }
+                // Display current status/name; recommendation is not execution admission.
+                return decode(taskId, task.getTaskVersion(), observedAt, after.candidates(), raw);
+            });
             outcome = "success";
             return result;
         } catch (Failure failure) {
@@ -232,7 +235,7 @@ public final class AssigneeRecommendationService {
                 }
                 var gaps = new ArrayList<>(strings(row.get("gaps")));
                 if (!"online".equalsIgnoreCase(candidate.agent().status())) gaps.add("当前运行状态：" + candidate.agent().status() + "；确认承办不代表已开始运行。");
-                recommendations.add(new Recommendation(candidate.agent(), level, text(row, "reason"), List.copyOf(evidence), List.copyOf(gaps)));
+                recommendations.add(new Recommendation(candidate.agent(), level, text(row, "reason"), List.copyOf(evidence), List.copyOf(gaps), null));
             }
             String state = recommendations.stream().anyMatch(r -> Set.of("HIGH", "MEDIUM").contains(r.recommendationLevel()))
                     ? "READY" : "NO_MATCH";
