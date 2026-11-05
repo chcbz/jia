@@ -98,9 +98,7 @@ class AgentWebSocketNativeBountyExecutionTest {
         assertEquals(shared.get("correlationId"),receipt.get("correlationId"));
         assertEquals(false,receipt.get("data").has("nativeWorkNotifications")); // conversation feature is off
         assertEquals(java.util.List.of(new cn.jia.agent.entity.NativeConversationWorkAvailable("0","client-a","agent-a","WORKSPACE_FILE")),handler.nativeWorkTargets());
-        var archiveEnabled=AgentWebSocketHandler.class.getDeclaredField("archiveJobDiscoveryEnabled");
-        archiveEnabled.setAccessible(true);archiveEnabled.setBoolean(handler,true);
-        registration.put("archiveJobDiscovery",0); // Server capability, not a client override.
+        registration.put("archiveJobDiscovery",1); // Client cannot re-enable retired execution.
         registration.remove("workspaceFileWorkNotifications");registration.put("messageId","register-file-2");
         handler.handleTextMessage(current,new TextMessage(json.writeValueAsString(cn.jia.agent.common.AgentMessageWire.event("agent.register",registration,null))));
         assertEquals(java.util.List.of(),handler.nativeWorkTargets());
@@ -109,7 +107,7 @@ class AgentWebSocketNativeBountyExecutionTest {
         var enabledReceipt=enabled.getAllValues().stream().map(message->json.readTree(message.getPayload()))
                 .filter(value->"agent.registered".equals(value.get("messageType").asString()))
                 .reduce((first,last)->last).orElseThrow();
-        assertEquals(1,enabledReceipt.get("data").get("archiveJobDiscovery").asInt());
+        assertEquals(0,enabledReceipt.get("data").get("archiveJobDiscovery").asInt());
     }
 
     @Test @SuppressWarnings("unchecked")

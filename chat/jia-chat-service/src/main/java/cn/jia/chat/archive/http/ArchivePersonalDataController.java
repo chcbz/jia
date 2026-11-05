@@ -182,7 +182,7 @@ public class ArchivePersonalDataController {
             return ResponseEntity.status(result.status())
                     .contentType(MediaType.parseMediaType(result.contentType()))
                     .header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
-                    .body(result.body());
+                    .body(ArchiveMutationResponses.envelope(result));
         } catch (ArchivePersonalDataException failure) {
             return personalError(failure);
         }

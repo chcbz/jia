@@ -56,6 +56,69 @@ class ArchivePersonalDataServiceTest {
     }
 
     @Test
+    void httpSaveReplayAndNextSaveUseCurrentRequestCorrelationWithoutFalseConflict() throws Exception {
+        var properties = new cn.jia.chat.archive.config.ArchiveReaderProperties();
+        properties.setEnabled(true);
+        var scope = new cn.jia.chat.archive.config.ArchiveReaderProperties.AllowedScope();
+        scope.setTenantId("0");
+        scope.setClientId("client-a");
+        properties.setAllowedScopes(new ArrayList<>(List.of(scope)));
+        var controller = new cn.jia.chat.archive.http.ArchivePersonalDataController(service,
+                cn.jia.chat.archive.config.ArchiveReaderAccessPolicy.from(properties));
+        var converters = new ArrayList<org.springframework.http.converter.HttpMessageConverter<?>>();
+        converters.add(new org.springframework.http.converter.ByteArrayHttpMessageConverter());
+        converters.add(new org.springframework.http.converter.json.JacksonJsonHttpMessageConverter());
+        new cn.jia.core.config.ApiEnvelopeJsonConfig().extendMessageConverters(converters);
+        var mvc = org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(controller)
+                .setControllerAdvice(new cn.jia.core.config.ApiEnvelopeAdvice(),
+                        new cn.jia.core.config.ApiRequestEnvelopeAdvice(), new cn.jia.core.config.ExceptionHandlerAdvice())
+                .setMessageConverters(converters.toArray(org.springframework.http.converter.HttpMessageConverter[]::new))
+                .addFilters(new cn.jia.core.filter.RequestIdFilter()).build();
+        var jwt = new org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken(
+                new org.springframework.security.oauth2.jwt.Jwt("token", Instant.EPOCH, NOW,
+                        Map.of("alg", "none"), Map.of("jiacn", "owner-a", "client_id", "client-a")));
+        String path = "/archive/v1/me/progress/" + EDITION;
+        var mapper = cn.jia.core.util.JsonUtil.getMapper();
+        String version = "0";
+        byte[] firstReceipt = null;
+        for (int i = 0; i < 4; i++) {
+            String requestId = "progress-http-" + i;
+            boolean replay = i == 1;
+            boolean stale = i == 3;
+            String expected = replay || stale ? "0" : version;
+            String key = replay ? "save-0" : "save-" + i;
+            String body = "{\"protocolVersion\":1,\"requestId\":\"" + requestId
+                    + "\",\"data\":" + progressJson(expected, 3, MANIFEST, paragraphHash) + "}";
+            var response = mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put(path)
+                    .principal(jwt).header("Idempotency-Key", key)
+                    .contentType(org.springframework.http.MediaType.APPLICATION_JSON).content(body))
+                    .andReturn().getResponse();
+            assertEquals(stale ? 409 : 200, response.getStatus(), response.getContentAsString());
+            var envelope = mapper.readTree(response.getContentAsByteArray());
+            assertEquals(1, envelope.get("protocolVersion").asInt());
+            assertEquals(requestId, envelope.get("requestId").asString());
+            assertEquals(requestId, response.getHeader("X-Request-Id"));
+            assertEquals("private, no-store", response.getHeader("Cache-Control"));
+            assertEquals(stale ? "VERSION_CONFLICT" : "E0", envelope.get("code").asString());
+            if (!stale) {
+                version = envelope.get("data").get("version").asString();
+                assertEquals(i < 2 ? "1" : "2", version);
+            }
+            if (i == 0) firstReceipt = store.idempotency.values().iterator().next().responseBody();
+            if (replay) {
+                assertEquals(1, store.progress.version());
+                assertEquals(0, store.progressUpdates);
+                assertArrayEquals(firstReceipt, store.idempotency.values().iterator().next().responseBody());
+            }
+            // Actual MVC output is available in the fixed Run's XML for consumer verification.
+            System.out.println("ARCHIVE_HTTP_ENVELOPE " + response.getStatus() + " " + requestId + " "
+                    + response.getContentAsString());
+        }
+        assertEquals(2, store.progress.version());
+        assertEquals(1, store.progressUpdates);
+    }
+
+    @Test
     void completionUsesActualFinalParagraphForAnyEdition() {
         String edition = "short-book-v3";
         String block = "closing-chapter";

@@ -114,7 +114,7 @@ public class ArchiveQuestionController {
             ArchiveMutationResult result = mutation.run();
             return ResponseEntity.status(result.status())
                     .contentType(MediaType.parseMediaType(result.contentType()))
-                    .header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL).body(result.body());
+                    .header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL).body(ArchiveMutationResponses.envelope(result));
         } catch (ArchivePersonalDataException failure) {
             return error(failure);
         }
