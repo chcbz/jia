@@ -242,7 +242,7 @@ class AssigneeRecommendationServiceTest {
         when(agents.listTaskAssigneeCandidates("task")).thenReturn(List.of(online),List.of(changed));
         assertEquals(409,assertThrows(Failure.class,()->service.recommend(ACTOR,"task",new Request("7"))).status());
     }
-    @Test void actualInstalledSkillChangeAfterModelStillInvalidatesResult() {
+    @Test void transientSkillReadinessChangeReturnsCurrentAdviceWithoutRetryingModel() {
         var agents=mock(AgentService.class);var skills=mock(SkillManagementService.class);var model=mock(AgentAssigneeRecommendationModel.class);
         var service=new AssigneeRecommendationService(agents,skills,model,mock(RecommendationMaterials.class));
         when(agents.getTaskRecommendationInput("task")).thenReturn(task("7"));
@@ -252,8 +252,15 @@ class AssigneeRecommendationServiceTest {
         var disabled=new SkillManagementService.RecommendationSkill("installation","vision","1.0.0","识图","读图片",false,"UNKNOWN","INSTRUCTION");
         when(skills.recommendationSkills(eq(ACTOR), anyList())).thenReturn(Map.of("a",List.of(ready)),Map.of("a",List.of(disabled)));
         when(model.judge(anyString(),anyString())).thenReturn(ANSWER);
-        assertEquals(409,assertThrows(Failure.class,()->service.recommend(ACTOR,"task",new Request("7"))).status());
+        var result=service.recommend(ACTOR,"task",new Request("7"));
+        assertEquals("NO_MATCH",result.state());
+        assertEquals("UNKNOWN",result.recommendations().getFirst().recommendationLevel());
+        assertTrue(result.recommendations().getFirst().evidence().isEmpty());
+        assertTrue(result.recommendations().getFirst().gaps().stream().anyMatch(g->g.contains("技能当前未就绪")));
         verify(model,times(1)).judge(anyString(),anyString());
+        var upgraded=new SkillManagementService.RecommendationSkill("installation","vision","2.0.0","识图","读图片",true,"NOT_EXECUTABLE","INSTRUCTION");
+        when(skills.recommendationSkills(eq(ACTOR), anyList())).thenReturn(Map.of("a",List.of(ready)),Map.of("a",List.of(upgraded)));
+        assertEquals(409,assertThrows(Failure.class,()->service.recommend(ACTOR,"task",new Request("7"))).status());
     }
 
 

@@ -520,6 +520,10 @@ public Object recommendTaskAssignees(@PathVariable String taskId)
 - 目标封装规则：自有JSON按公共信封；现行@RequestBody业务参数移至data；path/query/header位置不变；返回值为统一data中的业务DTO。外部协议/视图出口须人工分类，不能直接按本条批量改。
 - 未核定：嵌套DTO完整约束、实际认证链/资源ACL、全部错误码/状态、幂等持久键、实际消费者与条件装配。**此条不作为可发布完整契约**；关键链人工定义优先见上述链接。
 
+### 2026-11-06 定向核对：推荐瞬态可用性
+当前实现入口为 `AssigneeRecommendationController` / `AssigneeRecommendationService`，上方自动清单为历史声明。HTTP结构未改；本次仅核对推荐前后变化处理，不将历史未核定项宣称全部关闭。
+任务/授权候选/供应方/本领/技能安装与版本及材料变化仍使建议失效。单纯运行可用性变化不返回409，也不再次调用模型；按原模型输入验证引用后，用当前可用性展示。被引用技能当前不可用则移除该证据、候选降为UNKNOWN并标明缺口，不能替代实际执行准入。回归：`AssigneeRecommendationServiceTest.transientSkillReadinessChangeReturnsCurrentAdviceWithoutRetryingModel`；仍覆盖真实版本变化409及不可引用证据502。候选源码、正式测试和部署分别见根handoff `HALL-THREE-FIXES-20261106`。
+
 ## `POST /agent/tasks/{taskId}/team-recommendation`
 
 - operationId：`AgentController.recommendTaskTeam.POST`
