@@ -16,6 +16,10 @@ public interface PersonalWorkspaceExecutionDao {
     PersonalWorkspaceExecutionEntity findForRuntime(String tenantId,String clientId,String executorOwner,
             String agentId,String taskId,String runId);
 
+    /** Historical native cost authority, not active execution admission. */
+    PersonalWorkspaceExecutionEntity findForNativeUsageCost(String tenantId, String clientId, String executorOwner,
+            String agentId, String taskId, String runId, String executionId);
+
     PersonalWorkspaceExecutionEntity find(String tenantId, String clientId, String ownerJiacn,
             String executionId);
     PersonalWorkspaceExecutionEntity findByIdempotency(String tenantId, String clientId,

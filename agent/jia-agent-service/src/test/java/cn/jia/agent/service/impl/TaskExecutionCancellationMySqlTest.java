@@ -123,6 +123,48 @@ class TaskExecutionCancellationMySqlTest {
                 "CONSUMED".equals(state)?"paid-lease":null,"CONSUMED".equals(state)?123L:null);
     }
     void cancelConsents() { consents.cancelForTask(new cn.jia.agent.service.AgentTaskProviderCostConsentService.Scope("0","client","owner"),"task"); }
+    @Test void lateNativeCostAuthorityUsesOriginalExecutorBindingNotCurrentGrantVersion() throws Exception {
+        var source = Objects.requireNonNull(jdbc.getDataSource());
+        new ResourceDatabasePopulator(new ClassPathResource("db/agent-task-execution-grant-v1.sql")).execute(source);
+        String schema;
+        try (var input = new ClassPathResource("db/schema.sql").getInputStream()) {
+            schema = new String(input.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+        }
+        int start = schema.indexOf("CREATE TABLE IF NOT EXISTS agent_runtime (");
+        assertTrue(start >= 0);
+        jdbc.execute(schema.substring(start, schema.indexOf(";", start)));
+        jdbc.update("INSERT INTO agent_runtime(agent_id,name,tenant_id,client_id,owner_jiacn,binding_id) VALUES('agent','fixture','0','client','executor',77)");
+        jdbc.update("""
+            INSERT INTO agent_task_execution_grant(grant_id,tenant_id,client_id,owner_jiacn,task_id,
+              requirement_revision,assignment_revision,target_agent_id,executor_owner_jiacn,executor_binding_id,
+              permitted_operations_json,permitted_tool_policy_ref,input_scope_json,source_business_action_id,
+              idempotency_key,request_hash,policy_revision,grant_version,state,issued_by,created_at)
+            VALUES('grant','0','client','owner','task',1,1,'agent','executor',77,'[]','policy','{}',
+              'action','key',REPEAT('a',64),'policy',1,'ACTIVE','owner',1)
+            """);
+        row("late", "owner", "task", "CONVERSATION", "QUEUED", 5);
+        jdbc.update("UPDATE agent_personal_workspace_execution SET task_grant_id='grant',task_grant_version=1 WHERE execution_id='late'");
+        assertNotNull(executions.findForRuntime("0","client","executor","agent","task","run-late"));
+        for (String state : List.of("CANCELLED", "RESULT_COMMITTED", "FAILED")) {
+            jdbc.update("UPDATE agent_personal_workspace_execution SET execution_state=? WHERE execution_id='late'", state);
+            jdbc.update("UPDATE agent_task_execution_grant SET state='REVOKED',grant_version=2");
+            assertNull(executions.findForRuntime("0","client","executor","agent","task","run-late"));
+            var historical = executions.findForNativeUsageCost("0","client","executor","agent","task","run-late","late");
+            assertNotNull(historical); assertEquals("owner", historical.getOwnerJiacn());
+            assertEquals(state, historical.getExecutionState());
+        }
+        assertNull(executions.findForNativeUsageCost("other","client","executor","agent","task","run-late","late"));
+        assertNull(executions.findForNativeUsageCost("0","other","executor","agent","task","run-late","late"));
+        assertNull(executions.findForNativeUsageCost("0","client","intruder","agent","task","run-late","late"));
+        assertNull(executions.findForNativeUsageCost("0","client","executor","other","task","run-late","late"));
+        assertNull(executions.findForNativeUsageCost("0","client","executor","agent","Task","run-late","late"));
+        assertNull(executions.findForNativeUsageCost("0","client","executor","agent","task","other","late"));
+        assertNull(executions.findForNativeUsageCost("0","client","executor","agent","task","run-late","other"));
+        jdbc.update("UPDATE agent_runtime SET binding_id=88");
+        assertNull(executions.findForNativeUsageCost("0","client","executor","agent","task","run-late","late"));
+        assertEquals("REVOKED", jdbc.queryForObject("SELECT state FROM agent_task_execution_grant",String.class));
+    }
+
     @Test void taskConsentCancellationUsesRealPurposeCasAndPreservesConsumedHistory() {
         for(String purpose:List.of("INITIAL_ASSIGN_AND_START","FOLLOWUP_EXECUTE","ORDINARY_ACTION"))
             for(String state:List.of("ISSUED","BOUND","RESERVED")) consent(purpose+state,purpose,state);

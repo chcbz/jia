@@ -71,6 +71,10 @@ public class PersonalWorkspaceExecutionDaoImpl implements PersonalWorkspaceExecu
         scope(tenantId, clientId, ownerJiacn); id(idempotencyKey, "idempotencyKey");
         return executions.findByRevokeIdempotency(tenantId, clientId, ownerJiacn, idempotencyKey);
     }
+    @Override public PersonalWorkspaceExecutionEntity findForNativeUsageCost(String tenantId, String clientId,
+            String executorOwner, String agentId, String taskId, String runId, String executionId) {
+        return executions.findForNativeUsageCost(tenantId, clientId, executorOwner, agentId, taskId, runId, executionId);
+    }
     @Override public PersonalWorkspaceExecutionEntity findForRuntime(String tenantId,String clientId,
             String executorOwner,String agentId,String taskId,String runId) {
         return executions.findForRuntime(tenantId,clientId,executorOwner,agentId,taskId,runId);
