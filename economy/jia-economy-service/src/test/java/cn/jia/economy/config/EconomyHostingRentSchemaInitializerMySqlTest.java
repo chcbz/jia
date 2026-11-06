@@ -153,6 +153,63 @@ class EconomyHostingRentSchemaInitializerMySqlTest {
         assertEquals(3, jdbc.queryForObject("SELECT COUNT(*) FROM economy_hosting_lease", Integer.class));
     }
 
+    @Test
+    void retainedMigrationPreservesTermsIdentityAndReadyReprovisionWithoutNewMoney() throws Exception {
+        JdbcTemplate jdbc = legacyHostingFixture("retained");
+        var leases = jdbc.queryForList("SELECT lease_id,agent_id,binding_id,status,paid_from,paid_through,latest_intent_id,version FROM economy_hosting_lease ORDER BY id");
+        var identities = jdbc.queryForList("SELECT intent_id,lease_id,status,managed_api_key_id,runtime_installation_id,runtime_manifest_sha256,runtime_provision_generation,version FROM economy_hosting_provisioning_intent ORDER BY id");
+        var reprovision = jdbc.queryForList("SELECT * FROM economy_hosting_reprovision");
+        jdbc.execute("CALL cyf_beta_retain_hosting_terms()");
+        new EconomyHostingRentSchemaInitializer(jdbc).afterPropertiesSet();
+        assertEquals(leases, jdbc.queryForList("SELECT lease_id,agent_id,binding_id,status,paid_from,paid_through,latest_intent_id,version FROM economy_hosting_lease ORDER BY id"));
+        assertEquals(identities, jdbc.queryForList("SELECT intent_id,lease_id,status,managed_api_key_id,runtime_installation_id,runtime_manifest_sha256,runtime_provision_generation,version FROM economy_hosting_provisioning_intent ORDER BY id"));
+        assertEquals(reprovision, jdbc.queryForList("SELECT * FROM economy_hosting_reprovision"));
+        assertEquals(2, jdbc.queryForObject("SELECT COUNT(*) FROM economy_hosting_provisioning_intent WHERE settlement_kind='RETAINED' AND amount_wen=0 AND reserve_transaction_id IS NULL AND capture_transaction_id IS NULL AND refund_transaction_id IS NULL AND escrow_version=0", Integer.class));
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM economy_hosting_rent_plan", Integer.class));
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM economy_hosting_rent_quote", Integer.class));
+        // A replay is not a second conversion. Restore snapshots for partial failures, never guess.
+        assertThrows(RuntimeException.class, () -> jdbc.execute("CALL cyf_beta_retain_hosting_terms()"));
+        assertEquals(leases, jdbc.queryForList("SELECT lease_id,agent_id,binding_id,status,paid_from,paid_through,latest_intent_id,version FROM economy_hosting_lease ORDER BY id"));
+        jdbc.execute("DROP PROCEDURE cyf_beta_retain_hosting_terms");
+    }
+
+    @Test
+    void retainedMigrationRejectsUnsettledIntentBeforeChangingSchemaOrTerms() throws Exception {
+        JdbcTemplate jdbc = legacyHostingFixture("retain_pending");
+        jdbc.update("UPDATE economy_hosting_provisioning_intent SET status='PROVISIONING_UNKNOWN' WHERE intent_id='intent-1'");
+        assertThrows(RuntimeException.class, () -> jdbc.execute("CALL cyf_beta_retain_hosting_terms()"));
+        assertEquals(4, jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=DATABASE() AND column_name='amount_micro'", Integer.class));
+        assertEquals(7L, jdbc.queryForObject("SELECT amount_micro FROM economy_hosting_lease WHERE lease_id='lease-1'", Long.class));
+        assertEquals(4, jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.triggers WHERE trigger_schema=DATABASE()", Integer.class));
+        assertEquals(1, jdbc.queryForObject("SELECT IS_FREE_LOCK('cyf:economy-v0:hosting-rent-schema')", Integer.class));
+    }
+
+    private JdbcTemplate legacyHostingFixture(String name) throws Exception {
+        JdbcTemplate jdbc = fixture.newDatabase(name).jdbc();
+        for (String ddl : EconomyHostingRentSchemaInitializer.tableDdlStatements()) {
+            jdbc.execute(ddl.replace("amount_wen", "amount_micro")
+                    .replace("settlement_kind          VARCHAR(16) NOT NULL DEFAULT 'PAID',", "")
+                    .replace("reserve_transaction_id   VARCHAR(100) DEFAULT NULL", "reserve_transaction_id   VARCHAR(100) NOT NULL"));
+        }
+        jdbc.update("INSERT INTO economy_hosting_rent_plan(plan_id,plan_version,amount_micro,period_seconds,quote_ttl_seconds,currency,status,tenant_id,client_id,create_time) VALUES('plan',1,7,100,300,'SILVER','ACTIVE','t','c',1)");
+        jdbc.update("INSERT INTO economy_hosting_rent_quote(quote_id,quote_purpose,plan_id,plan_version,amount_micro,period_seconds,principal_type,principal_id,persona_code,agent_id,idempotency_key,request_hash,expires_at,tenant_id,client_id,create_time) VALUES('quote-1','INITIAL','plan',1,7,100,'USER','u','p','agent-1','quote-key',UNHEX(REPEAT('11',32)),200,'t','c',1)");
+        for (int n = 1; n <= 2; n++) {
+            String state = n == 1 ? "ACTIVE" : "REFUNDED";
+            jdbc.update("INSERT INTO economy_hosting_lease(lease_id,principal_type,principal_id,persona_code,agent_id,binding_id,live_slot,plan_id,plan_version,amount_micro,period_seconds,status,paid_from,paid_through,latest_intent_id,version,tenant_id,client_id,create_time,update_time) VALUES(?,'USER','u','p',?,? ,?,'plan',1,7,100,?,100,200,?,3,'t','c',1,2)", "lease-" + n, "agent-" + n, "binding-" + n, n == 1 ? 1 : null, state, "intent-" + n);
+            jdbc.update("INSERT INTO economy_hosting_provisioning_intent(intent_id,lease_id,quote_id,quote_purpose,principal_type,principal_id,persona_code,agent_id,amount_micro,period_seconds,status,reserve_idempotency_key,reserve_request_hash,reserve_transaction_id,reserved_at,escrow_version,capture_transaction_id,refund_transaction_id,managed_api_key_id,runtime_installation_id,runtime_manifest_sha256,runtime_provision_generation,paid_from,paid_through,version,tenant_id,client_id,create_time,update_time) VALUES(?,?,?,'INITIAL','USER','u','p',?,7,100,?,?,UNHEX(REPEAT('22',32)),?,1,2,?,?,?, ?,REPEAT('a',64),2,100,200,3,'t','c',1,2)", "intent-" + n, "lease-" + n, "quote-" + n, "agent-" + n, state, "reserve-key-" + n, "reserve-" + n, n == 1 ? "capture-1" : null, n == 2 ? "refund-2" : null, "managed-key-" + n, "installation-" + n);
+        }
+        jdbc.update("INSERT INTO economy_hosting_reprovision(request_id,lease_id,intent_id,agent_id,persona_code,principal_id,idempotency_key,request_hash,lease_version,paid_through,requested_at,status,version,service_ready_at,runtime_target_generation,evidence_ref,tenant_id,client_id) VALUES('request-1','lease-1','intent-1','agent-1','p','u','reprovision-key',UNHEX(REPEAT('33',32)),3,200,120,'SERVICE_READY',2,130,3,'ready-evidence','t','c')");
+        for (String table : List.of("plan", "quote")) for (String event : List.of("UPDATE", "DELETE")) {
+            jdbc.execute("CREATE TRIGGER trg_hosting_" + table + "_no_" + event.toLowerCase()
+                    + " BEFORE " + event + " ON economy_hosting_rent_" + table
+                    + " FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='immutable hosting-rent row'; END");
+        }
+        String sql = new org.springframework.core.io.ClassPathResource("db/migration-retained-hosting-terms-20261106.sql")
+                .getContentAsString(java.nio.charset.StandardCharsets.UTF_8);
+        jdbc.execute(sql.substring(sql.indexOf("CREATE PROCEDURE"), sql.indexOf("END$$") + 3));
+        return jdbc;
+    }
+
     private void insertLease(JdbcTemplate jdbc, String leaseId, String status, Integer liveSlot) {
         jdbc.update("""
                 INSERT INTO economy_hosting_lease(

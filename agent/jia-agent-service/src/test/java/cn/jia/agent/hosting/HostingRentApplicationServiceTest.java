@@ -98,6 +98,28 @@ class HostingRentApplicationServiceTest {
     }
 
     @Test
+    void lookupRetainedRightsExposesSourceAndOriginalExpiryWithoutWalletReceipts() {
+        var identity = new AgentIdentityRegistryEntity().setCanonicalAgentId(AGENT);
+        when(identities.requireRegistrationIdentityInScope("0", "Client-A", "Tenant-A", AGENT)).thenReturn(identity);
+        long through = System.currentTimeMillis() + 100_000;
+        when(rent.selectLatestLease("0", "Client-A", AGENT)).thenReturn(new EconomyHostingLeaseEntity()
+                .setLeaseId("lease-retained").setAgentId(AGENT).setPersonaCode("wuyong").setBindingId("binding-1")
+                .setPrincipalId("login-sub").setPrincipalType("USER").setStatus("ACTIVE").setVersion(3L)
+                .setPlanVersion(1L).setAmountWen(0L).setPeriodSeconds(100L).setPaidFrom(1000L)
+                .setPaidThrough(through).setLatestIntentId("intent-retained"));
+        when(rent.selectIntent("0", "Client-A", "intent-retained")).thenReturn(new EconomyHostingProvisioningIntentEntity()
+                .setIntentId("intent-retained").setPrincipalId("login-sub").setStatus("ACTIVE").setVersion(3L)
+                .setSettlementKind("RETAINED"));
+        var result = application.lookup(ACTOR, AGENT);
+        assertEquals("ALLOWED", result.admission());
+        assertEquals("RETAINED", result.lease().settlementKind());
+        assertEquals(Long.toString(through), result.lease().paidThrough());
+        assertNull(result.intent().reserveTransactionId());
+        assertNull(result.intent().captureTransactionId());
+        verifyNoInteractions(ledger, runtimes);
+    }
+
+    @Test
     void reserveIdentityAndBindingShareTransactionAndOnlyWakeAfterCommit() {
         doAnswer(call -> { assertEquals(4, count()); return null; }).when(reconciler).wake();
         var result = application.bind(ACTOR, "wuyong", KEY, confirmation());

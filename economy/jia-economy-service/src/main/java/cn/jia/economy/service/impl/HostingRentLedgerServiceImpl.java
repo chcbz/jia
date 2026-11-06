@@ -449,6 +449,7 @@ public final class HostingRentLedgerServiceImpl implements HostingRentLedgerServ
         // Frozen R01 order: intent -> lease -> account provisioning -> REQUIRED W02 posting.
         EconomyHostingProvisioningIntentEntity intent = requireOwnedIntent(
                 validated.scope(), validated.principal(), command.intentId());
+        requirePaidIntent(intent);
         HostingRentMutationReceipt replay = replaySettlementIfPresent(validated, intent, capture);
         if (replay != null) return replay;
         if (intent.getVersion() != command.expectedIntentVersion()) {
@@ -619,7 +620,8 @@ public final class HostingRentLedgerServiceImpl implements HostingRentLedgerServ
                 || !exact(intent.getTenantId(), scope.tenantId())
                 || !exact(intent.getClientId(), scope.clientId())
                 || intent.getVersion() == null || intent.getVersion() <= 0
-                || intent.getEscrowVersion() == null || intent.getEscrowVersion() <= 0) {
+                || ("PAID".equals(intent.getSettlementKind())
+                    && (intent.getEscrowVersion() == null || intent.getEscrowVersion() <= 0))) {
             throw new HostingRentException(NOT_FOUND_OR_FORBIDDEN, "provisioning intent is not visible");
         }
         return intent;
@@ -661,7 +663,14 @@ public final class HostingRentLedgerServiceImpl implements HostingRentLedgerServ
             throw new HostingRentException(QUOTE_ALREADY_CONSUMED,
                     "quote is already bound to a different reserve operation");
         }
+        requirePaidIntent(intent);
         return reserveReceipt(intent);
+    }
+
+    private static void requirePaidIntent(EconomyHostingProvisioningIntentEntity intent) {
+        if (!"PAID".equals(intent.getSettlementKind())) {
+            throw new HostingRentException(INTENT_CONFLICT, "retained terms are not wallet payment receipts");
+        }
     }
 
     private HostingRentMutationReceipt replaySettlementIfPresent(

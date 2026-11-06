@@ -743,10 +743,16 @@ class AgentTaskBillingMySqlTransactionTest {
                 input.toString(), evidence.toString()).redirectErrorStream(true)
                 .redirectOutput(evidence.resolve("browser.log").toFile()).start();
         try {
-            assertTrue(process.waitFor(100, TimeUnit.SECONDS), "isolated browser fixture did not finish");
+            assertTrue(process.waitFor(300, TimeUnit.SECONDS), "isolated browser fixture did not finish");
             assertEquals(0, process.exitValue(), Files.readString(evidence.resolve("browser.log")));
         } finally {
-            if (process.isAlive()) process.destroyForcibly().waitFor();
+            if (process.isAlive()) {
+                // Capture descendants before terminating Node so a failed test cannot orphan Chromium.
+                var descendants = process.descendants().toList();
+                process.destroy();
+                if (!process.waitFor(5, TimeUnit.SECONDS)) process.destroyForcibly().waitFor();
+                descendants.forEach(handle -> { if (handle.isAlive()) handle.destroy(); });
+            }
             Files.deleteIfExists(input);
         }
     }

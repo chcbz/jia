@@ -181,7 +181,7 @@ public interface EconomyHostingRentMapper {
     int insertIntent(EconomyHostingProvisioningIntentEntity intent);
 
     String INTENT_COLUMNS = " id,intent_id,lease_id,quote_id,quote_purpose,principal_type,principal_id,"
-            + "persona_code,agent_id,amount_wen,period_seconds,status,"
+            + "persona_code,agent_id,amount_wen,period_seconds,status,settlement_kind,"
             + "reserve_idempotency_key,reserve_request_hash,reserve_transaction_id,reserved_at,escrow_version,"
             + "capture_idempotency_key,capture_request_hash,capture_transaction_id,captured_at,"
             + "refund_idempotency_key,refund_request_hash,refund_transaction_id,refunded_at,"

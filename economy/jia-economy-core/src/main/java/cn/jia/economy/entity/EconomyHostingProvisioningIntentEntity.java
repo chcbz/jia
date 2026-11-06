@@ -18,6 +18,8 @@ public class EconomyHostingProvisioningIntentEntity {
     private Long amountWen;
     private Long periodSeconds;
     private String status;
+    /** RETAINED records preserve settled rights, not a current wallet payment. */
+    private String settlementKind = "PAID";
     private byte[] reserveIdempotencyKey;
     private byte[] reserveRequestHash;
     private String reserveTransactionId;

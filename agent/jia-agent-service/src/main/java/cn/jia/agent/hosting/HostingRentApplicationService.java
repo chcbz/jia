@@ -243,7 +243,7 @@ public final class HostingRentApplicationService {
                     : "REFUNDED".equals(lease.getStatus()) ? "INITIAL_REQUIRED" : "PENDING";
             return new LeaseView(true, new LeaseSnapshot(lease.getLeaseId(), agentId, lease.getPersonaCode(),
                     lease.getBindingId(), number(lease.getVersion()), lease.getStatus(), number(lease.getPlanVersion()),
-                    number(lease.getAmountWen()), number(lease.getPeriodSeconds()), number(lease.getPaidFrom()), number(lease.getPaidThrough())),
+                    number(lease.getAmountWen()), number(lease.getPeriodSeconds()), number(lease.getPaidFrom()), number(lease.getPaidThrough()), intent.getSettlementKind()),
                     new IntentSnapshot(intent.getIntentId(), number(intent.getVersion()), intent.getStatus(),
                             number(intent.getServiceReadyAt()), intent.getReserveTransactionId(), intent.getCaptureTransactionId(),
                             intent.getRefundTransactionId()), admission, reprovisionSnapshot(rent.selectLatestReprovision(
@@ -440,7 +440,7 @@ public final class HostingRentApplicationService {
     }
     public record LeaseSnapshot(String leaseId, String agentId, String personaCode, String bindingId, String version,
                                 String status, String planVersion, String amountWen, String periodSeconds,
-                                String paidFrom, String paidThrough) { }
+                                String paidFrom, String paidThrough, String settlementKind) { }
     public record IntentSnapshot(String intentId, String version, String status, String serviceReadyAt,
                                  String reserveTransactionId, String captureTransactionId, String refundTransactionId) { }
 }
