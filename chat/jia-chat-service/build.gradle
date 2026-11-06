@@ -410,6 +410,8 @@ tasks.register('mmdU3ConversationArchive', Test) {
 def mmdExecutionTerminationSourceSet = sourceSets.create('mmdExecutionTermination') {
     java {
         srcDir 'src/mmdRegressionTest/java'
+        srcDir '../../agent/jia-agent-service/src/skillManagementContract/java'
+        include 'cn/jia/agent/skill/SkillManagementMySqlFixture.java'
         include 'cn/jia/chat/archive/conversation/ChatConversationArchiveMySqlTestGuard.java'
         include 'cn/jia/chat/archive/conversation/ChatBountyExecutionTerminationMySqlTest.java'
         include 'cn/jia/chat/api/ChatBountyExecutionTerminationControllerTest.java'
