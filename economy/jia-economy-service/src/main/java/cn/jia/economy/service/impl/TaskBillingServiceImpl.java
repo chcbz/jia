@@ -142,13 +142,20 @@ public class TaskBillingServiceImpl implements TaskBillingService {
     }
 
     @Override
-    public Charge reservation(Task task, String quoteId, String payerUserId) {
+    public Charge reservation(Task task, String quoteId, String payerUserId, String recommendationId) {
         EconomyTaskChargeEntity row = lock(task);
         if (row == null) throw new TaskBillingException(RESERVATION_REQUIRED);
         if (!Objects.equals(row.getPayerUserId(), payerUserId) || payerUserId == null)
             throw new TaskBillingException(QUOTE_PAYER_MISMATCH);
         if (!Objects.equals(row.getQuoteId(), quoteId) || quoteId == null)
             throw new TaskBillingException(CHARGE_CONFLICT);
+        EconomyTaskQuoteEntity quote = mapper.findQuote(task.scope().tenantId(), task.scope().clientId(),
+                task.ownerJiacn(), task.taskId(), quoteId);
+        if (quote == null) throw new TaskBillingException(QUOTE_NOT_FOUND);
+        String originalRecommendation = json.readTree(quote.getSnapshotJson())
+                .at("/binding/recommendationId").asText(null);
+        if (recommendationId == null || !recommendationId.equals(originalRecommendation))
+            throw new TaskBillingException(QUOTE_BINDING_CHANGED);
         return receipt(row);
     }
 

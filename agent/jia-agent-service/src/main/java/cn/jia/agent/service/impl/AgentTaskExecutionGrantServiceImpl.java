@@ -111,7 +111,7 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
         String canonicalAgent = legacyAssignments.resolveAgentId(scope.tenantId(),scope.clientId(),
                 scope.ownerJiacn(),valid.requestedAgentId());
         exact(payerUserId, "payerUserId", 100);
-        String requestHash = paymentHash(valid, canonicalAgent);
+        String requestHash = validatedAssignmentHash(valid, canonicalAgent);
         String actionId = "ASSIGN_AND_START:" + valid.idempotencyKey();
         try {
             return transactions.executeWithLockedTaskRootInOwnerScope(scope.tenantId(),scope.clientId(),
@@ -152,7 +152,7 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
                 request.setRequestedOperations(List.of("DELIBERATE","EXECUTE_SKILL"));
                 request.setInitialOperation("DELIBERATE"); request.setInputRefs(inputs);
                 ValidAssign valid=validateAssign(scope,taskId,key,request);
-                return assignLocked(scope,valid,canonicalAgent,paymentHash(valid,canonicalAgent),actionId,root,payment.payerUserId(),true);
+                return assignLocked(scope,valid,canonicalAgent,validatedAssignmentHash(valid,canonicalAgent),actionId,root,payment.payerUserId(),true);
             });
         } catch (AgentTaskCollaborationException failure) { throw translate(failure); }
     }
@@ -210,7 +210,7 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
             throw conflict("Task changed before controlled assignment");
         String canonicalAgent=legacyAssignments.resolveAgentId(scope.tenantId(),scope.clientId(),
                 scope.ownerJiacn(),valid.requestedAgentId());
-        return assignLocked(scope,valid,canonicalAgent,paymentHash(valid,canonicalAgent),
+        return assignLocked(scope,valid,canonicalAgent,validatedAssignmentHash(valid,canonicalAgent),
                 "ASSIGN_AND_START:"+valid.idempotencyKey(),root,payerUserId,false);
     }
 
@@ -246,7 +246,7 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
                         scope.ownerJiacn(), actionId);
         if (replay != null) {
             AgentTaskExecutionGrantDTO result = replay(requestHash,valid.taskId(),replay);
-            try { billing.reservation(billingTask(scope, valid.taskId()), valid.quoteId(), payerUserId); }
+            try { billing.reservation(billingTask(scope, valid.taskId()), valid.quoteId(), payerUserId, valid.recommendationId()); }
             catch (cn.jia.economy.task.TaskBillingException failure) { throw billingFailure(failure); }
             if (valid.initialOperation()==null) {
                 throw bad("assign_and_start requires exactly one initial permitted operation");
@@ -452,7 +452,7 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
                 input.fileId(), input.version(), input.purpose(), input.contentMimeType(),
                 input.byteLength(), input.contentHash())).toList();
         return new AssignmentPreview(canonicalAgent, lockedTaskVersion,
-                confirmed.revision(), confirmed.sha256(), paymentHash(valid, canonicalAgent),
+                confirmed.revision(), confirmed.sha256(), validatedAssignmentHash(valid, canonicalAgent),
                 sha256("TASK_LINKED_INPUT_SNAPSHOT_V1\n" + write(snapshots)), authorized);
     }
 
@@ -1130,11 +1130,12 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
                         ? Reason.TASK_QUOTE_PAYER_FORBIDDEN : Reason.TASK_QUOTE_UNAVAILABLE,
                 "Selected task quotation is not available for this assignment");
     }
-    private String paymentHash(ValidAssign valid, String canonicalAgent) {
+    private String validatedAssignmentHash(ValidAssign valid, String canonicalAgent) {
         exact(valid.quoteId(), "quoteId", 100);
         exact(valid.recommendationId(), "recommendationId", 100);
-        return sha256("ASSIGN_TASK_QUOTE_V1\n" + hashAssign(valid, canonicalAgent) + "\n"
-                + write(List.of(valid.quoteId(), valid.recommendationId())));
+        // Authorization readback verifies this domain from its own immutable facts.
+        // Economy owns selected quote/payer/recommendation replay, not the grant reader.
+        return hashAssign(valid, canonicalAgent);
     }
 
     private String hashAssign(ValidAssign valid,String canonicalAgent) {

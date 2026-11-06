@@ -121,9 +121,12 @@ class AgentTaskExecutionGrantServiceImplTest {
                 new AgentTaskExecutionGrantService.Payment("payer-1", "quote-1", "rec-1"));
         for (var payment : List.of(new AgentTaskExecutionGrantService.Payment("payer-1", "quote-2", "rec-1"),
                 new AgentTaskExecutionGrantService.Payment("payer-1", "quote-1", "rec-2"))) {
+            doThrow(new cn.jia.economy.task.TaskBillingException(
+                    cn.jia.economy.task.TaskBillingException.Reason.QUOTE_BINDING_CHANGED))
+                    .when(billing).reservation(any(), eq(payment.quoteId()), eq(payment.payerUserId()), eq(payment.recommendationId()));
             var failure = assertThrows(AgentTaskExecutionGrantException.class,
                     () -> service.assignForDeliberation(scope(), "task-1", "funded", "agent-1", 0, 1, payment));
-            assertEquals(AgentTaskExecutionGrantException.Reason.IDEMPOTENCY_CONFLICT, failure.reason());
+            assertEquals(AgentTaskExecutionGrantException.Reason.TASK_QUOTE_UNAVAILABLE, failure.reason());
         }
         verify(billing, times(1)).reserve(any(), anyString(), any(), anyString());
     }
@@ -133,7 +136,7 @@ class AgentTaskExecutionGrantServiceImplTest {
                 new AgentTaskExecutionGrantService.Payment("payer-1", "quote-1", "rec-1"));
         doThrow(new cn.jia.economy.task.TaskBillingException(
                 cn.jia.economy.task.TaskBillingException.Reason.QUOTE_PAYER_MISMATCH))
-                .when(billing).reservation(any(), eq("quote-1"), eq("other-payer"));
+                .when(billing).reservation(any(), eq("quote-1"), eq("other-payer"), eq("rec-1"));
         var failure = assertThrows(AgentTaskExecutionGrantException.class,
                 () -> service.assignForDeliberation(scope(), "task-1", "funded", "agent-1", 0, 1,
                         new AgentTaskExecutionGrantService.Payment("other-payer", "quote-1", "rec-1")));

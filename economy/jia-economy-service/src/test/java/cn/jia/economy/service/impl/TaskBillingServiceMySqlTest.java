@@ -231,15 +231,17 @@ class TaskBillingServiceMySqlTest {
     void replayReadsOriginalReservationWithoutReopeningSettledCharge() {
         Quote quote = quote(TASK, BINDING, "0.5");
         assertReason(RESERVATION_REQUIRED, () -> inTask(TASK,
-                () -> billing.reservation(TASK, quote.quoteId(), "payer-1")));
+                () -> billing.reservation(TASK, quote.quoteId(), "payer-1", BINDING.recommendationId())));
         Charge held = reserve(TASK, quote);
-        assertEquals(held, inTask(TASK, () -> billing.reservation(TASK, quote.quoteId(), "payer-1")));
+        assertEquals(held, inTask(TASK, () -> billing.reservation(TASK, quote.quoteId(), "payer-1", BINDING.recommendationId())));
         assertReason(QUOTE_PAYER_MISMATCH, () -> inTask(TASK,
-                () -> billing.reservation(TASK, quote.quoteId(), "other-payer")));
+                () -> billing.reservation(TASK, quote.quoteId(), "other-payer", BINDING.recommendationId())));
         assertReason(CHARGE_CONFLICT, () -> inTask(TASK,
-                () -> billing.reservation(TASK, "other-quote", "payer-1")));
+                () -> billing.reservation(TASK, "other-quote", "payer-1", BINDING.recommendationId())));
+        assertReason(QUOTE_BINDING_CHANGED, () -> inTask(TASK,
+                () -> billing.reservation(TASK, quote.quoteId(), "payer-1", "different-recommendation")));
         Charge released = inTask(TASK, () -> billing.release(TASK, true));
-        assertEquals(released, inTask(TASK, () -> billing.reservation(TASK, quote.quoteId(), "payer-1")));
+        assertEquals(released, inTask(TASK, () -> billing.reservation(TASK, quote.quoteId(), "payer-1", BINDING.recommendationId())));
         assertEquals(100, wallet()); assertEquals(2, count("economy_transaction"));
     }
 

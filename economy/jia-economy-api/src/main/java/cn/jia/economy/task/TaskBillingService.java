@@ -36,8 +36,9 @@ public interface TaskBillingService {
      */
     Charge reserve(Task task, String quoteId, Binding currentBinding, String payerUserId);
     /** Verify original assignment replay without re-reserving or consulting mutable requirements/inputs.
+     * Checks the original quote, payer and recommendation; no mutable requirement reads.
      * A completed/released original remains readable, but never authorizes a new execution. */
-    Charge reservation(Task task, String quoteId, String payerUserId);
+    Charge reservation(Task task, String quoteId, String payerUserId, String recommendationId);
     /** Missing reservation is not free. Legacy-free requires an explicit cutover record. */
     Charge capture(Task task);
     /** Cancelling an unassigned task can have no reservation; an assigned task must have one. */

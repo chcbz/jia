@@ -657,6 +657,8 @@ class AgentTaskBillingMySqlTransactionTest {
     @Test void realHttpAssignmentAcceptanceAndReplayHaveOneFinancialEffect() throws Exception {
         startHttp();
         pointHttp(200); pointHttp(200);
+        httpPost("/point-and-deliberate", pointBody().replace("recommendation-1", "other-recommendation"), "assign-http", true, 409);
+        httpPost("/point-and-deliberate", pointBody().replace(quoteId, "other-quote"), "assign-http", true, 409);
         assertEquals(50, wallet(independent)); assertEquals("HELD", charge());
         assertEquals(1, count("economy_transaction")); assertEquals(1, count("agent_task_execution_grant"));
         prepareSubmitted();
@@ -683,7 +685,7 @@ class AgentTaskBillingMySqlTransactionTest {
         assertEquals(49, wallet(independent)); assertEquals("open", taskState());
         assertEquals(0, count("economy_transaction")); assertEquals(0, count("agent_task_execution_grant"));
         jdbc.update("UPDATE economy_account SET balance_wen=100 WHERE account_id='wallet'");
-        failBootstrap = true; pointHttp(500); assertAssignmentAbsent();
+        failBootstrap = true; pointHttp(503); assertAssignmentAbsent();
         failBootstrap = false; pointHttp(200);
         assertEquals(50, wallet(independent)); assertEquals("HELD", charge());
     }
