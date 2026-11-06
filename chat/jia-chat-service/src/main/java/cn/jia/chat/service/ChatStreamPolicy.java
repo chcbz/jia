@@ -4,6 +4,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import reactor.core.publisher.BufferOverflowStrategy;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Sinks;
 
 import java.time.Duration;
 import java.util.Objects;
@@ -11,6 +12,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import java.util.function.LongSupplier;
+import java.util.function.Supplier;
 
 /**
  * Shared bounds and observations for the legacy chat streaming routes.
@@ -25,6 +27,25 @@ public final class ChatStreamPolicy {
     static final Duration FIRST_FRAME_SLOW_THRESHOLD = Duration.ofMillis(2500);
 
     private ChatStreamPolicy() {
+    }
+
+    /** Transport keepalive only; never reads business state or advances a replay cursor. */
+    public static <T> Flux<T> keepAlive(Flux<T> source, Supplier<T> comment) {
+        // Well below the deployed proxy's 300-second idle read timeout.
+        return keepAlive(source, comment, Flux.interval(Duration.ofSeconds(30)));
+    }
+
+    static <T> Flux<T> keepAlive(Flux<T> source, Supplier<T> comment, Flux<Long> ticks) {
+        return Flux.defer(() -> {
+            Sinks.Empty<Void> finished = Sinks.empty();
+            Flux<T> heartbeat = ticks.onBackpressureDrop()
+                    .map(ignored -> comment.get())
+                    .takeUntilOther(finished.asMono());
+            // Exactly one business subscription; prefetch one, not an eager replay drain.
+            // At most one pending comment; excess ticks are disposable under backpressure.
+            return Flux.merge(1,
+                    source.doFinally(ignored -> finished.tryEmitEmpty()), heartbeat);
+        });
     }
 
     public static <T> Flux<T> bounded(Flux<T> source) {
