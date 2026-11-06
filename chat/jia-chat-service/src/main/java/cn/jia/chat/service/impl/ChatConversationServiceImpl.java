@@ -157,6 +157,8 @@ public class ChatConversationServiceImpl implements ChatConversationService {
                 context.getTenantId(), context.getJiacn(), context.getClientId(), conversationId);
         Long beforeTime = null;
         Long beforeId = null;
+        boolean anchored = before != null && before.startsWith("at:");
+        if (anchored) before = before.substring("at:".length());
         if (before != null) {
             if (!before.matches("(n|0|[1-9][0-9]*):[1-9][0-9]*")) throw invalidMessageCursor();
             String[] parts = before.split(":", -1);
@@ -164,15 +166,20 @@ public class ChatConversationServiceImpl implements ChatConversationService {
             catch (NumberFormatException invalid) { throw invalidMessageCursor(); }
         }
         final int pageSize = 20;
-        List<ChatMessageEntity> rows = chatMessageDao.findOwnedMessagePage(
+        List<ChatMessageEntity> rows = anchored
+                ? chatMessageDao.findOwnedMessagePageAt(
+                    context.getTenantId(), context.getJiacn(), context.getClientId(),
+                    Long.toString(conversation.getId()), beforeTime, beforeId, pageSize + 1)
+                : chatMessageDao.findOwnedMessagePage(
                 context.getTenantId(), context.getJiacn(), context.getClientId(),
                 Long.toString(conversation.getId()), beforeTime, beforeId, pageSize + 1);
         boolean hasMore = rows.size() > pageSize;
         var messages = new java.util.ArrayList<>(rows.subList(0, Math.min(rows.size(), pageSize)));
         java.util.Collections.reverse(messages);
+        ChatMessageEntity boundary = messages.isEmpty() ? null : messages.getFirst();
         String nextBefore = hasMore
-                ? (messages.getFirst().getCreateTime() == null ? "n" : messages.getFirst().getCreateTime().toString())
-                        + ":" + messages.getFirst().getId() : null;
+                ? (boundary.getCreateTime() == null ? "n" : boundary.getCreateTime().toString())
+                        + ":" + boundary.getId() : null;
         return new MessagePage(List.copyOf(messages), hasMore, nextBefore, conversation);
     }
 

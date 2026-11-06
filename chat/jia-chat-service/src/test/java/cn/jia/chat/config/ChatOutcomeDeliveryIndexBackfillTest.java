@@ -22,6 +22,22 @@ class ChatOutcomeDeliveryIndexBackfillTest {
     private JdbcTemplate jdbc;
     private static final String BINDING = "{\"route\":\"CHAT\",\"targetAgentId\":\"wuyong\"}";
 
+    @Test void explicitMaintenanceEntryRequiresActionAndHostEnvironmentWithoutExposingValues() {
+        var environment = new java.util.HashMap<>(Map.of(
+                "SPRING_DATASOURCE_URL", "jdbc:mysql://fixture/jia", "SPRING_DATASOURCE_USERNAME", "fixture",
+                "SPRING_DATASOURCE_PASSWORD", "fixture-secret", "CYF_SECURITY_FIXED_TENANT_TENANT_ID", "0"));
+        String[] action = {"--backfill-delivery-index"};
+        assertDoesNotThrow(() -> ChatTypedDeliberationSchemaInitializer.validateBackfillCommand(action, environment));
+        var emptyPassword = new java.util.HashMap<>(environment); emptyPassword.put("SPRING_DATASOURCE_PASSWORD", "");
+        assertDoesNotThrow(() -> ChatTypedDeliberationSchemaInitializer.validateBackfillCommand(action, emptyPassword));
+        for (String[] invalid : List.of(new String[0], new String[]{"--initialize"}, new String[]{action[0], "tenant"}))
+            assertThrows(IllegalArgumentException.class, () -> ChatTypedDeliberationSchemaInitializer.validateBackfillCommand(invalid, environment));
+        environment.remove("CYF_SECURITY_FIXED_TENANT_TENANT_ID");
+        var failure = assertThrows(IllegalArgumentException.class,
+                () -> ChatTypedDeliberationSchemaInitializer.validateBackfillCommand(action, environment));
+        assertFalse(failure.getMessage().contains("fixture-secret"));
+    }
+
     @BeforeEach void setup() {
         source = new DriverManagerDataSource("jdbc:h2:mem:delivery_backfill_" + UUID.randomUUID() + ";MODE=MySQL;DB_CLOSE_DELAY=-1", "sa", "");
         jdbc = new JdbcTemplate(source);

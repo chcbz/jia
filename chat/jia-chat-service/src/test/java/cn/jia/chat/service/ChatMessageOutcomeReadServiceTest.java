@@ -31,9 +31,9 @@ class ChatMessageOutcomeReadServiceTest {
         var fixture = mapper.readTree(getClass().getResourceAsStream("/contracts/hall-message-outcome-page.json"));
         var store = mock(ChatMessageOutcomeStore.class);
         var stored = row(); stored.remove("text"); // production SQL does not read the redundant body
-        when(store.read(SCOPE, List.of("request"))).thenReturn(new ChatMessageOutcomeStore.Rows(List.of(stored), List.of()));
+        when(store.read(SCOPE, List.of("request"), List.of(9L))).thenReturn(new ChatMessageOutcomeStore.Rows(List.of(stored), List.of()));
         assertEquals(fixture.get("data").get("outcomeSummaries"),
-                mapper.valueToTree(new ChatMessageOutcomeReadService(store).read(SCOPE, List.of("request"))));
+                mapper.valueToTree(new ChatMessageOutcomeReadService(store).read(SCOPE, List.of("request"), List.of(9L))));
     }
 
     @Test void oneStoreBatchForTwentyRequestsPreservesIndividualTurnAssociations() {
@@ -42,12 +42,12 @@ class ChatMessageOutcomeReadServiceTest {
         for (int i = 0; i < 20; i++) {
             ids.add("request-" + i); var row = row(); row.put("request_id", ids.getLast()); row.put("turn_id", "turn-" + i); rows.add(row);
         }
-        when(store.read(SCOPE, ids)).thenReturn(new ChatMessageOutcomeStore.Rows(rows, List.of()));
-        var output = new ChatMessageOutcomeReadService(store).read(SCOPE, ids);
+        when(store.read(SCOPE, ids, List.of(9L))).thenReturn(new ChatMessageOutcomeStore.Rows(rows, List.of()));
+        var output = new ChatMessageOutcomeReadService(store).read(SCOPE, ids, List.of(9L));
         assertEquals(20, output.size()); assertEquals("turn-19", output.getLast().get("turnId"));
         assertEquals(1, output.getFirst().get("schemaVersion"));
         assertFalse(((Map<?, ?>) output.getFirst().get("outcome")).containsKey("text"));
-        verify(store).read(SCOPE, ids); verifyNoMoreInteractions(store);
+        verify(store).read(SCOPE, ids, List.of(9L)); verifyNoMoreInteractions(store);
     }
     @Test void malformedHistoryOnlyDisablesItsOwnStructuredPresentation() {
         var store = mock(ChatMessageOutcomeStore.class);
@@ -56,9 +56,9 @@ class ChatMessageOutcomeReadServiceTest {
         missing.put("turn_id", "missing"); missing.remove("snapshot_id");
         ambiguous.put("turn_id", "ambiguous");
         var progress = Map.<String, Object>of("turn_id", "ambiguous", "event_type", "ACTION_REQUESTED");
-        when(store.read(SCOPE, List.of("request"))).thenReturn(new ChatMessageOutcomeStore.Rows(
+        when(store.read(SCOPE, List.of("request"), List.of(9L))).thenReturn(new ChatMessageOutcomeStore.Rows(
                 List.of(good, malformed, missing, ambiguous), List.of(progress, progress)));
-        var views = new ChatMessageOutcomeReadService(store).read(SCOPE, List.of("request"));
+        var views = new ChatMessageOutcomeReadService(store).read(SCOPE, List.of("request"), List.of(9L));
         assertEquals(4, views.size()); assertEquals("READY", views.getFirst().get("state"));
         for (var view : views.subList(1, 4)) assertEquals("STORED_OUTCOME_UNAVAILABLE", view.get("unavailableReason"));
     }

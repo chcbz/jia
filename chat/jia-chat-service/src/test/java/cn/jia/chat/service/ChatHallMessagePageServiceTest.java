@@ -36,7 +36,7 @@ class ChatHallMessagePageServiceTest {
         var scope = new ChatBountyRequestIndexStore.Scope("0", "owner", "client", "42", 1);
         when(conversations.findMessagePage("42", "1:2")).thenReturn(page);
         when(requests.messageWindow(page, false)).thenReturn(requestPage);
-        when(outcomes.read(scope, List.of())).thenReturn(List.of());
+        when(outcomes.read(scope, List.of(), List.of())).thenReturn(List.of());
         when(requests.withDirectChildren(scope, requestPage, List.of())).thenReturn(requestPage);
         var result = new ChatHallMessagePageService(conversations, requests, outcomes).read("42", "1:2");
         assertNull(result.requestPage().eventCursor());

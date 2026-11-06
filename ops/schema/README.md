@@ -35,3 +35,17 @@
 - 返回scanned/updated/batches只是本次维护统计。正式启用读取前还须保留同源码正式测试、MySQL隔离演练、实际回填结果及长历史查询计划，不能把返回数字当线上业务验收。恢复遵循原受控备份流程；不要用旧整库快照覆盖迁移后新增事实。
 
 回归入口：`ChatOutcomeDeliveryIndexBackfillTest`（真实JDBC小批量/原文不变/租户大小写/重跑/冲突与写入异常回滚/固定上界/历史版本），`ChatOutcomeDeliveryIndexTest`（当前writer）。Java回归尚未运行，不以测试源码替代证据。
+
+### 2026-11-06 候选：使用同 Run JAR 的一次性回填入口
+
+`ChatTypedDeliberationSchemaInitializer.main`只接受`--backfill-delivery-index`，不创建Spring容器、不注册worker、不调用initialize/其他模块迁移。主机Owner核对固定制品摘要、真实备份、发布/schema锁、旧writer已停止及两列/索引已按授权准备后，向子进程传入现行部署配置的标准环境变量`SPRING_DATASOURCE_URL/USERNAME/PASSWORD`及`CYF_SECURITY_FIXED_TENANT_TENANT_ID`（密码不放参数或日志）。
+
+```sh
+java -Dloader.main=cn.jia.chat.config.ChatTypedDeliberationSchemaInitializer \
+  -cp /absolute/verified-run/cyf-api-kit.jar \
+  org.springframework.boot.loader.launch.PropertiesLauncher --backfill-delivery-index
+```
+
+入口复用原backfill方法、完整catalog核对和共享schema锁，不重新实现SQL/JSON抽取或启动全应用。主机直接执行已通过Flow的字节码；不在主机编译或伪造Flow身份。输出仅scanned/updated/batches，执行失败保持非零退出；不得把前置授权/备份/停writer当成这个命令已自动完成。当前仅源代码候选，尚未Flow、主机演练或生产执行。
+
+本候选还删除了事件event_version冗余UPDATE，物理列保留为0；回退到仍读取物理event_version的旧JAR前，需要在停止新writer、固定真实备份与原维护锁的受控窗口，按现行配置租户将`chat_conversation_event.event_version=0`的行回填为其`event_sequence`。这是恢复派生列，不改payload/消息/完成事实，不删除新事件。不能仅替换旧JAR然后声称回退兼容，正常启动不再自动补全这一列。

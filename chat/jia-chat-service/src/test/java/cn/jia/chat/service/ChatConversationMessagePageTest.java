@@ -107,8 +107,26 @@ class ChatConversationMessagePageTest {
         verify(messages).findOwnedMessagePage("tenant-a", "owner", "client", "100", 1000L, 2L, 21);
         verifyNoMoreInteractions(messages);
     }
+    @Test void anchoredPageReloadsTheSameWindowEvenWhenLatestMoves() {
+        var rows = new ArrayList<ChatMessageEntity>();
+        for (long id = 40; id >= 20; id--) rows.add(message(id));
+        when(messages.findOwnedMessagePageAt("tenant-a", "owner", "client", "100", 1000L, 40L, 21)).thenReturn(rows);
+        var page = service.findMessagePage("100", "at:1000:40");
+        assertEquals(java.util.stream.LongStream.rangeClosed(21, 40).boxed().toList(),
+                page.messages().stream().map(ChatMessageEntity::getId).toList());
+        assertTrue(page.hasMore()); assertEquals("1000:21", page.nextBefore());
+        verify(messages).findOwnedMessagePageAt("tenant-a", "owner", "client", "100", 1000L, 40L, 21);
+        verifyNoMoreInteractions(messages);
+    }
+    @Test void anchoredNullableTimeIncludesTheBoundary() {
+        when(messages.findOwnedMessagePageAt("tenant-a", "owner", "client", "100", -1L, 8L, 21))
+                .thenReturn(List.of(new ChatMessageEntity().setId(8L)));
+        var page = service.findMessagePage("100", "at:n:8");
+        assertEquals(List.of(8L), page.messages().stream().map(ChatMessageEntity::getId).toList());
+        assertFalse(page.hasMore()); assertNull(page.nextBefore());
+    }
     @Test void invalidCursorFailsBeforeMessageQuery() {
-        for (String cursor : List.of("", "1", "-1:1", "1:0", "01:1", "1:01", "1:2:3", "9223372036854775808:1", "1:9223372036854775808")) {
+        for (String cursor : List.of("", "1", "-1:1", "1:0", "01:1", "1:01", "1:2:3", "9223372036854775808:1", "1:9223372036854775808", "at:", "at:at:1:2", "at:n:0", "at:01:2", "after:1:2")) {
             assertThrows(ChatDeliberationException.class, () -> service.findMessagePage("100", cursor));
         }
         verifyNoInteractions(messages);

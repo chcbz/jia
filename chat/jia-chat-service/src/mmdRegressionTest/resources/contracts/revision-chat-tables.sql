@@ -46,6 +46,7 @@ CREATE TABLE chat_message (
   sender_name varchar(100) DEFAULT NULL COMMENT '发送者名称',
   PRIMARY KEY (id),
   KEY idx_conversation_id (conversation_id),
+  KEY idx_chat_message_history_page (tenant_id, client_id, jiacn, conversation_id, create_time, id),
   KEY idx_tenant_id (tenant_id),
   KEY idx_jiacn (jiacn),
   KEY idx_conversation_type (conversation_type)

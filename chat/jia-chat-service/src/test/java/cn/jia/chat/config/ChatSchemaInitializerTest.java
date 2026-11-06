@@ -92,7 +92,7 @@ class ChatSchemaInitializerTest extends BaseMockTest {
                             .contains(String.valueOf(args[0])) ? 0 : 1);
                 }
                 if (normalized.contains("from information_schema.statistics")) {
-                    return (T) Integer.valueOf("idx_chat_conversation_live_owner".equals(args[1]) ? 0 : 1);
+                    return (T) Integer.valueOf(List.of("idx_chat_conversation_live_owner", "idx_chat_message_history_page").contains(args[1]) ? 0 : 1);
                 }
                 return (T) Integer.valueOf(1);
             }
@@ -114,6 +114,8 @@ class ChatSchemaInitializerTest extends BaseMockTest {
         };
 
         new ChatSchemaInitializer(template).run(null);
+        assertTrue(executed.stream().anyMatch(sql -> sql.contains("create index idx_chat_message_history_page on chat_message")
+                && sql.contains("(tenant_id, client_id, jiacn, conversation_id, create_time, id)")));
 
         assertTrue(executed.stream().anyMatch(sql -> sql.contains(
                 "alter table chat_conversation add column deleted_at bigint")), executed.toString());

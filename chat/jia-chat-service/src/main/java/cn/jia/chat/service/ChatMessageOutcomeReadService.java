@@ -17,8 +17,8 @@ public class ChatMessageOutcomeReadService {
     private final ChatMessageOutcomeStore store;
     public ChatMessageOutcomeReadService(ChatMessageOutcomeStore store) { this.store = store; }
 
-    public List<Map<String, Object>> read(ChatBountyRequestIndexStore.Scope scope, List<String> requestIds) {
-        var rows = store.read(scope, requestIds);
+    public List<Map<String, Object>> read(ChatBountyRequestIndexStore.Scope scope, List<String> requestIds, List<Long> messageIds) {
+        var rows = store.read(scope, requestIds, messageIds);
         var progress = new LinkedHashMap<String, Map<String, Object>>();
         var ambiguousTurns = new java.util.HashSet<String>();
         for (var row : rows.progress()) {

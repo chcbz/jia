@@ -126,6 +126,32 @@ public interface ChatMessageMapper extends BaseMapper<ChatMessageEntity> {
             @Param("limit") int limit);
 
     @Select("""
+            <script>
+            SELECT m.* FROM chat_message m
+            JOIN chat_conversation c ON c.id = #{numericConversationId}
+            WHERE 1 = 1
+            """ + EXACT_MESSAGE_CONVERSATION_SCOPE + LIVE_CONVERSATION_OWNER_SCOPE
+            + EXACT_MESSAGE_OWNER_SCOPE + """
+            <choose>
+              <when test="anchorTime &lt; 0">
+                AND m.create_time IS NULL AND m.id &lt;= #{anchorId}
+              </when>
+              <otherwise>
+                AND (m.create_time IS NULL OR m.create_time &lt; #{anchorTime}
+                  OR (m.create_time = #{anchorTime} AND m.id &lt;= #{anchorId}))
+              </otherwise>
+            </choose>
+            ORDER BY m.create_time DESC, m.id DESC LIMIT #{limit}
+            </script>
+            """)
+    List<ChatMessageEntity> findExactOwnedMessagePageAt(
+            @Param("tenantId") String tenantId, @Param("ownerJiacn") String ownerJiacn,
+            @Param("clientId") String clientId, @Param("conversationId") String conversationId,
+            @Param("numericConversationId") Long numericConversationId,
+            @Param("anchorTime") Long anchorTime, @Param("anchorId") Long anchorId,
+            @Param("limit") int limit);
+
+    @Select("""
             SELECT m.*
             FROM chat_message m
             JOIN chat_conversation c ON c.id = #{numericConversationId}

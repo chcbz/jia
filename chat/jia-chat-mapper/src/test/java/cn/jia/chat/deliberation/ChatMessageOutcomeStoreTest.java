@@ -9,7 +9,7 @@ import static org.mockito.Mockito.*;
 class ChatMessageOutcomeStoreTest {
     @Test void emptyWindowDoesNotReadAnything() {
         var jdbc = mock(NamedParameterJdbcTemplate.class);
-        assertTrue(new ChatMessageOutcomeStore(jdbc).read(scope(), List.of()).outcomes().isEmpty());
+        assertTrue(new ChatMessageOutcomeStore(jdbc).read(scope(), List.of(), List.of()).outcomes().isEmpty());
         verifyNoInteractions(jdbc);
     }
     @Test void queryCountIsIndependentOfPageSizeAndNeitherQueryLocksOrReadsFullSourceCatalogs() {
@@ -25,11 +25,12 @@ class ChatMessageOutcomeStoreTest {
             if (sql.size() == 1) assertTrue(query.contains("JSON_REMOVE(o.outcome_json"));
             assertFalse(query.contains("SELECT *")); assertFalse(query.contains("payload_json"));
             assertTrue(query.contains("t.request_id IN (:requests)"));
+            assertTrue(query.contains("t.final_message_id IS NULL OR t.final_message_id IN (:messages)"));
             assertTrue(query.contains("CAST(t.owner_jiacn AS BINARY)=CAST(:owner AS BINARY)"));
             return sql.size() == 1 ? List.of(Map.of("turn_id", "turn")) : List.of();
         });
         var requests = java.util.stream.IntStream.range(0, 20).mapToObj(i -> "request-" + i).toList();
-        new ChatMessageOutcomeStore(jdbc).read(scope(), requests);
+        new ChatMessageOutcomeStore(jdbc).read(scope(), requests, List.of(9L));
         assertEquals(2, sql.size());
         verify(jdbc, times(2)).queryForList(anyString(), anyMap()); verifyNoMoreInteractions(jdbc);
     }

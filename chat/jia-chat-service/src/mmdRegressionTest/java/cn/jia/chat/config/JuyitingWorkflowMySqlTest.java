@@ -677,6 +677,58 @@ class JuyitingWorkflowMySqlTest {
         }
     }
 
+    @Test void messageHistoryIndexSupportsBoundedReloadOnRealMysql() {
+        jdbc.execute("DROP TABLE chat_message"); jdbc.execute("DROP TABLE chat_conversation");
+        for (String statement : resource("contracts/revision-chat-tables.sql").split(";"))
+            if (!statement.isBlank()) jdbc.execute(statement);
+        jdbc.update("INSERT INTO chat_conversation(id,tenant_id,jiacn,client_id) VALUES(7,'0','owner','client')");
+        var inserts = new ArrayList<Object[]>();
+        for (long id = 1; id <= 2000; id++) inserts.add(new Object[]{id});
+        jdbc.batchUpdate("INSERT INTO chat_message(id,tenant_id,jiacn,client_id,conversation_id,create_time,content) VALUES(?,'0','owner','client','7',1000,'fixture')", inserts);
+        jdbc.execute("ANALYZE TABLE chat_message");
+        var config = new com.baomidou.mybatisplus.core.MybatisConfiguration();
+        config.setEnvironment(new org.apache.ibatis.mapping.Environment("owned-history-mysql",
+                new org.mybatis.spring.transaction.SpringManagedTransactionFactory(), jdbc.getDataSource()));
+        config.addMapper(cn.jia.chat.mapper.ChatMessageMapper.class);
+        var mapper = new org.mybatis.spring.SqlSessionTemplate(new org.apache.ibatis.session.SqlSessionFactoryBuilder().build(config))
+                .getMapper(cn.jia.chat.mapper.ChatMessageMapper.class);
+        var rows = mapper.findExactOwnedMessagePageAt("0", "owner", "client", "7", 7L, 1000L, 1500L, 21);
+        assertEquals(java.util.stream.LongStream.iterate(1500, id -> id - 1).limit(21).boxed().toList(),
+                rows.stream().map(cn.jia.chat.entity.ChatMessageEntity::getId).toList());
+        assertTrue(mapper.findExactOwnedMessagePageAt("0", "Owner", "client", "7", 7L, 1000L, 1500L, 21).isEmpty());
+        var parameters = new HashMap<String, Object>();
+        parameters.put("tenantId", "0"); parameters.put("ownerJiacn", "owner"); parameters.put("clientId", "client");
+        parameters.put("conversationId", "7"); parameters.put("numericConversationId", 7L);
+        parameters.put("anchorTime", 1000L); parameters.put("anchorId", 1500L); parameters.put("limit", 21);
+        var bound = config.getMappedStatement(cn.jia.chat.mapper.ChatMessageMapper.class.getName() + ".findExactOwnedMessagePageAt").getBoundSql(parameters);
+        var plan = jdbc.queryForList("EXPLAIN " + bound.getSql(), bound.getParameterMappings().stream().map(parameter -> parameters.get(parameter.getProperty())).toArray());
+        assertTrue(plan.stream().anyMatch(row -> "idx_chat_message_history_page".equals(row.get("key"))), plan.toString());
+        assertFalse(plan.stream().anyMatch(row -> String.valueOf(row.get("Extra")).contains("filesort")), plan.toString());
+        System.out.println("HALL_HISTORY_WINDOW_EXPLAIN=" + CanonicalContextJson.write(plan));
+    }
+
+    @Test void deliveryIndexMaintenanceRehearsalPreservesCommittedBytesOnRealMysql() throws Exception {
+        try (var revision = new RevisionHarness()) {
+            // Synthetic committed ANSWER on the real typed schema; never invokes model execution.
+            var answer = new ChatActionOutcomeContract.Outcome(5, "ANSWER", "历史正文", null, null, true, null, null);
+            var envelope = new LinkedHashMap<String, Object>();
+            envelope.put("schemaVersion", 5);
+            envelope.put("interactionOutcome", ChatActionFinalValidator.outcomeMap(answer));
+            envelope.put("inspectionInputReceipt", null);
+            jdbc.update("UPDATE chat_typed_outcome SET kind='ANSWER',outcome_json=?,delivery_target_agent_id=NULL,delivery_parent_outcome_id=NULL",
+                    CanonicalContextJson.write(envelope));
+            var before = jdbc.queryForList("SELECT outcome_id,HEX(binding_json) binding_bytes,HEX(outcome_json) outcome_bytes,final_digest,text FROM chat_typed_outcome");
+            var maintenance = new ChatTypedDeliberationSchemaInitializer(jdbc, true, true);
+            var first = maintenance.backfillDeliveryIndex("0");
+            assertEquals(1, first.scanned()); assertEquals(1, first.updated());
+            assertEquals("wuyong", jdbc.queryForObject("SELECT delivery_target_agent_id FROM chat_typed_outcome WHERE outcome_id='parent-outcome'", String.class));
+            assertEquals(before, jdbc.queryForList("SELECT outcome_id,HEX(binding_json) binding_bytes,HEX(outcome_json) outcome_bytes,final_digest,text FROM chat_typed_outcome"));
+            assertEquals(0, maintenance.backfillDeliveryIndex("0").updated());
+            assertEquals(0, maintenance.backfillDeliveryIndex("other").scanned());
+            assertFalse(maintenance.ready()); // Explicit backfill does not pretend startup/catalog activation.
+        }
+    }
+
     @Test void messagePageOutcomeQueriesReadCommittedFactsWithExactScopeOnRealMysql() throws Exception {
         try (var revision = new RevisionHarness()) {
             for (String sql : resource("db/agent-skill-execution-v1.sql").split(";"))
@@ -686,17 +738,18 @@ class JuyitingWorkflowMySqlTest {
             jdbc.update("UPDATE chat_typed_outcome SET outcome_json=JSON_SET(outcome_json,'$.schemaVersion',5)");
             var scope = new ChatBountyRequestIndexStore.Scope("0", "owner", "client", "7", 1);
             var store = new ChatMessageOutcomeStore(jdbc);
-            var rows = store.read(scope, List.of("parent"));
+            var rows = store.read(scope, List.of("parent"), List.of(101L));
             assertEquals(1, rows.outcomes().size());
+            assertTrue(store.read(scope, List.of("parent"), List.of(102L)).outcomes().isEmpty());
             assertFalse(rows.outcomes().getFirst().containsKey("text"));
             assertEquals(1, rows.progress().size());
             assertEquals("REVIEW_REQUESTED", rows.progress().getFirst().get("event_type"));
             var reader = new ChatMessageOutcomeReadService(store);
-            var before = reader.read(scope, List.of("parent")).getFirst();
+            var before = reader.read(scope, List.of("parent"), List.of(101L)).getFirst();
             assertEquals("READY", before.get("state"));
             assertEquals("QUEUED", ((Map<?, ?>) before.get("reviewProgress")).get("state"));
             revision.consume();
-            var after = reader.read(scope, List.of("parent")).getFirst();
+            var after = reader.read(scope, List.of("parent"), List.of(101L)).getFirst();
             assertNotNull(((Map<?, ?>) after.get("reviewProgress")).get("childRequestId"));
             for (var wrong : List.of(
                     new ChatBountyRequestIndexStore.Scope("other", "owner", "client", "7", 1),
@@ -704,8 +757,8 @@ class JuyitingWorkflowMySqlTest {
                     new ChatBountyRequestIndexStore.Scope("0", "owner", "other", "7", 1),
                     new ChatBountyRequestIndexStore.Scope("0", "owner", "client", "07", 1),
                     new ChatBountyRequestIndexStore.Scope("0", "owner", "client", "7", 2)))
-                assertTrue(store.read(wrong, List.of("parent")).outcomes().isEmpty());
-            assertTrue(store.read(scope, List.of("Parent")).outcomes().isEmpty());
+                assertTrue(store.read(wrong, List.of("parent"), List.of(101L)).outcomes().isEmpty());
+            assertTrue(store.read(scope, List.of("Parent"), List.of(101L)).outcomes().isEmpty());
         }
     }
 

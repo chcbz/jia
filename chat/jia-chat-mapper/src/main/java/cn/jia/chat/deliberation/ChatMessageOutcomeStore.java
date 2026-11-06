@@ -19,14 +19,15 @@ public class ChatMessageOutcomeStore {
 
     public record Rows(List<Map<String, Object>> outcomes, List<Map<String, Object>> progress) { }
 
-    public Rows read(ChatBountyRequestIndexStore.Scope scope, List<String> requests) {
+    public Rows read(ChatBountyRequestIndexStore.Scope scope, List<String> requests, List<Long> messageIds) {
         if (requests.isEmpty()) return new Rows(List.of(), List.of());
         var params = Map.<String, Object>of("tenant", scope.tenantId(), "owner", scope.ownerJiacn(),
                 "client", scope.clientId(), "conversation", scope.conversationId(),
-                "generation", scope.conversationGeneration(), "requests", requests);
+                "generation", scope.conversationGeneration(), "requests", requests, "messages", messageIds.isEmpty() ? List.of(0L) : messageIds);
         String from = " FROM chat_turn t JOIN chat_typed_admission a ON " + requestBinding("a", "t") + " ";
         String where = " WHERE " + scope("t") + " AND t.request_id IN (:requests)"
-                + " AND CAST(t.request_id AS BINARY) IN (:requests) AND t.route IN ('CHAT','INSPECT')";
+                + " AND CAST(t.request_id AS BINARY) IN (:requests) AND t.route IN ('CHAT','INSPECT')"
+                + " AND (t.final_message_id IS NULL OR t.final_message_id IN (:messages))";
         var outcomes = jdbc.queryForList("""
                 SELECT t.request_id,t.request_revision,t.turn_id,t.route,t.state AS turn_state,t.snapshot_id,
                   a.task_id,a.assignment_revision,o.outcome_id,o.assistant_message_id,o.final_digest,

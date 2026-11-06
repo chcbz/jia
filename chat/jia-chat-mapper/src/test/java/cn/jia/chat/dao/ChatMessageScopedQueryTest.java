@@ -240,6 +240,27 @@ class ChatMessageScopedQueryTest {
         assertTrue(dao.findOwnedMessagePage(TENANT, OWNER, CLIENT, "1", null, null, 51).isEmpty());
     }
 
+    @Test
+    void anchoredMessagePagesRemainStableAndPreserveExactScope() {
+        jdbc.update("INSERT INTO chat_conversation(id,jiacn,tenant_id,client_id) VALUES (1,?,?,?)", OWNER, TENANT, CLIENT);
+        for (int id = 1; id <= 41; id++) insertOwned(id, "1", OWNER, TENANT, CLIENT, 1000, "row-" + id);
+        insertOwned(50, "1", "other-owner", TENANT, CLIENT, 999, "foreign-owner");
+        insertOwned(51, "1", OWNER, "other-tenant", CLIENT, 999, "foreign-tenant");
+        insertOwned(52, "1", OWNER, TENANT, "other-client", 999, "foreign-client");
+        insertOwned(53, "2", OWNER, TENANT, CLIENT, 999, "other-conversation");
+        assertEquals(java.util.stream.LongStream.iterate(40, id -> id - 1).limit(21).boxed().toList(),
+                dao.findOwnedMessagePageAt(TENANT, OWNER, CLIENT, "1", 1000L, 40L, 21)
+                        .stream().map(ChatMessageEntity::getId).toList());
+        insertOwned(60, "1", OWNER, TENANT, CLIENT, 0, "legacy-null-time");
+        jdbc.update("UPDATE chat_message SET create_time=NULL WHERE id=60");
+        assertEquals(List.of(60L), dao.findOwnedMessagePageAt(TENANT, OWNER, CLIENT, "1", -1L, 60L, 21)
+                .stream().map(ChatMessageEntity::getId).toList());
+        assertEquals(List.of(1L, 60L), dao.findOwnedMessagePageAt(TENANT, OWNER, CLIENT, "1", 1000L, 1L, 21)
+                .stream().map(ChatMessageEntity::getId).toList());
+        jdbc.update("UPDATE chat_conversation SET deleted_at=1 WHERE id=1");
+        assertTrue(dao.findOwnedMessagePageAt(TENANT, OWNER, CLIENT, "1", 1000L, 40L, 21).isEmpty());
+    }
+
     private void insert(
             long id, String tenantId, String clientId, String conversationId,
             long createTime, String content) {

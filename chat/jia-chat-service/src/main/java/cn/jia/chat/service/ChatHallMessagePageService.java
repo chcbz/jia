@@ -30,7 +30,8 @@ public class ChatHallMessagePageService {
         var scope = new cn.jia.chat.deliberation.ChatBountyRequestIndexStore.Scope(conversation.getTenantId(),
                 conversation.getJiacn(), conversation.getClientId(), conversationId, conversation.getLifecycleGeneration());
         var messageIds = page.messages().stream().map(message -> Long.toString(message.getId())).collect(java.util.stream.Collectors.toSet());
-        var typed = outcomes.read(scope, requestPage.entries().stream().map(entry -> entry.request().requestId()).toList())
+        var typed = outcomes.read(scope, requestPage.entries().stream().map(entry -> entry.request().requestId()).toList(),
+                        page.messages().stream().map(cn.jia.chat.entity.ChatMessageEntity::getId).toList())
                 .stream().filter(projection -> !(projection.get("outcome") instanceof java.util.Map<?, ?> outcome)
                         || messageIds.contains(outcome.get("assistantMessageId"))).toList();
         var children = new java.util.LinkedHashSet<String>();

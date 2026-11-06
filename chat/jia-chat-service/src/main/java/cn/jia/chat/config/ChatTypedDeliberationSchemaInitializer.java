@@ -78,6 +78,29 @@ public final class ChatTypedDeliberationSchemaInitializer implements Application
 
     public record DeliveryIndexBackfillResult(long scanned, long updated, int batches) { }
 
+    /** One-shot host maintenance entry. No Spring context, web server or business worker. */
+    public static void main(String[] args) throws Exception {
+        Map<String, String> environment = System.getenv();
+        validateBackfillCommand(args, environment);
+        var source = new org.springframework.jdbc.datasource.DriverManagerDataSource(
+                environment.get("SPRING_DATASOURCE_URL"), environment.get("SPRING_DATASOURCE_USERNAME"),
+                environment.get("SPRING_DATASOURCE_PASSWORD"));
+        var maintenance = new ChatTypedDeliberationSchemaInitializer(new JdbcTemplate(source), true, true);
+        var result = maintenance.backfillDeliveryIndex(environment.get("CYF_SECURITY_FIXED_TENANT_TENANT_ID"));
+        System.out.printf("{\"scanned\":%d,\"updated\":%d,\"batches\":%d}%n", result.scanned(), result.updated(), result.batches());
+    }
+
+    static void validateBackfillCommand(String[] args, Map<String, String> environment) {
+        if (args.length != 1 || !"--backfill-delivery-index".equals(args[0]))
+            throw new IllegalArgumentException("Expected --backfill-delivery-index; this entry never initializes schemas");
+        for (String key : List.of("SPRING_DATASOURCE_URL", "SPRING_DATASOURCE_USERNAME", "SPRING_DATASOURCE_PASSWORD",
+                "CYF_SECURITY_FIXED_TENANT_TENANT_ID")) {
+            if (environment.get(key) == null || (!"SPRING_DATASOURCE_PASSWORD".equals(key) && environment.get(key).isBlank()))
+                throw new IllegalArgumentException("Missing maintenance environment: " + key);
+        }
+    }
+
+
     /** Explicit, separately authorized maintenance action; not part of startup/initialize.
      * The operator must stop old writers and retain a fixed backup before calling. */
     public synchronized DeliveryIndexBackfillResult backfillDeliveryIndex(String tenant) throws Exception {

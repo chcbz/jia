@@ -57,6 +57,12 @@ public class ChatSchemaInitializer implements ApplicationRunner {
                     """);
         }
         ensureLiveOwnerIndex();
+        if (tableExists("chat_message") && !indexExists("chat_message", "idx_chat_message_history_page")) {
+            jdbcTemplate.execute("""
+                    CREATE INDEX idx_chat_message_history_page ON chat_message
+                        (tenant_id, client_id, jiacn, conversation_id, create_time, id)
+                    """);
+        }
         ensureTaskThreadTable();
     }
 

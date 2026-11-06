@@ -180,9 +180,9 @@ BountyAcceptancePanel保留父页面deliveryReview的正式currentDelivery/histo
 - `outcomeSummaries`：消息页上下文中的schemaVersion=1成果摘要数组。字段沿用独立typed-outcome的展示投影，但`outcome`不含`text`；其`assistantMessageId`必须引用同页消息。待完成回合可以没有`outcome`。
 - 无法解析的历史结构化成果返回`{schemaVersion:1,requestId,turnId,unavailableReason:"STORED_OUTCOME_UNAVAILABLE"}`。歧义进度也只影响对应回合；其他摘要及消息正文继续可读，不推断完成状态、不重放任务。
 
-服务端`ChatHallMessagePageService`在一个REPEATABLE_READ只读事务内组装消息页、请求展示与成果摘要。`ChatMessageOutcomeStore`按已授权scope及页内request集合执行两组集合SQL；不调用执行验收reader，不重读完整材料目录/合同，不重新计算原成果摘要。JSON结果去掉旧正文副本后传到Java。身份/任务归属仍由原责任层检查，最终回复写入、事务、幂等不变。
+服务端`ChatHallMessagePageService`在一个REPEATABLE_READ只读事务内组装消息页、请求展示与成果摘要。`ChatMessageOutcomeStore`按已授权scope、页内request及消息ID范围执行两组集合SQL（无最终消息回合保留）；正文范围在SQL中限制，不先读取请求全部成果后再丢弃；不调用执行验收reader，不重读完整材料目录/合同，不重新计算原成果摘要。JSON结果去掉旧正文副本后传到Java。身份/任务归属仍由原责任层检查，最终回复写入、事务、幂等不变。
 
-Web`useHallMessagePages`只从同页message还原内部展示对象的text，不发ID集合补查或逐请求typed GET；`useHallTerminalTextHistory`复用同一页。`useHallBountyRequestCatalog.refreshRequests/refreshWindow`已删除，`adoptPage`接收服务端页投影。`useHallTypedDeliberation.refresh/refreshRequests/relatedRequestIds`亦已删除；发送/明确恢复仍保留独立readOne。旧独立读取接口及仍待收口的catalog完整扫描暂未删除，不能据此宣称所有旧消费方法已经收口。
+Web`useHallMessagePages`只从同页message还原内部展示对象的text，不发ID集合补查或逐请求typed GET；`useHallTerminalTextHistory`复用同一页。`useHallBountyRequestCatalog.refreshRequests/refreshWindow`已删除，`adoptPage`接收服务端页投影。`useHallTypedDeliberation.refresh/refreshRequests/relatedRequestIds`亦已删除；发送/明确恢复仍保留独立readOne。独立发送/恢复读取接口保留；展示端旧catalog完整扫描、独立acceptance SSE/定时刷新已删除，发现会话后统一消费消息聚合页。
 
 恢复持久消息同时恢复其metadata.turnId，用于把同一回合的旧流式占位替换为最终消息。另一个尚在回复的回合不能被清掉。结构化成果不可用时不进入无限“正在读取答复”状态，显示原文与独立不可用提示。
 
@@ -190,5 +190,12 @@ Web`useHallMessagePages`只从同页message还原内部展示对象的text，不
 
 - 前端轻量测试覆盖同页正文还原、无后续网络读取、同请求不同回合、游标/身份切换、原文保留和流式→最终替换。准确数量/源码见根handoff，不是线上耗时。
 - 新Java测试含`ChatMessageOutcomeReadServiceTest`、`ChatHallMessagePageServiceTest`、`ChatMessageOutcomeStoreTest`；现有`JuyitingWorkflowMySqlTest`新增真实MySQL下的成果/修改进度/scope隔离用例，**尚未运行**。
-- 可变高度虚拟列表、远离页面的数据释放/双向重取、旧全量扫描消费者最终删除、真实SQL计划及迁移演练仍未完成；不能把本节当作“全部优化完成”。
-- event_version物理列暂保留为旧协议占位，当前candidate以event_sequence作为wire eventVersion，删除每次INSERT后的重复UPDATE。旧二进制回退需要核实旧列读取/约束并受控处理，不承诺直接回退兼容；不得恢复旧库快照覆盖新业务事实。
+- Web连续窗口与旧全量扫描消费者删除已实现；本机浏览器1440/390验证可见锚点、变高锚点、展开编辑和正文释放/重取。真实MySQL计划、迁移演练和正式Flow仍待执行，不能据此当作上线。
+- event_version物理列暂保留为旧协议占位，当前candidate以event_sequence作为wire eventVersion，删除每次INSERT后的重复UPDATE。已核实旧二进制读取物理event_version；必须先停止writer并按配置租户把0值恢复为event_sequence，详见ops/schema/README.md，不允许直接二进制回退；不得恢复旧库快照覆盖新业务事实。
+
+### 2026-11-06 连续窗口的稳定重读游标（候选，未部署）
+
+- 无cursor仍返回最新20条；`time:id`仍读取该位置之前的20条。新增`at:time:id`包含该锚点，返回截至该位置的20条，所有items始终按时间、ID升序。`n`代表历史NULL时间，排序在有时间值之前。
+- 前端由页末消息构造at游标。释放正文后的页只需保留游标和实测高度，向任一方向滚回时准确重取；新消息不使旧页的范围漂移。无需新表、全历史COUNT、偏移分页或完整历史缓存。
+- hasMore/nextCursor仍描述更早方向，nextCursor保持原格式。at不是订阅初始化，不更新eventCursor；最新页才携带同快照当前请求与订阅起点。
+- 查询由既有DAO/Mapper负责，精确scope在排序与LIMIT之前落实。原20条与向前分页契约不变。

@@ -67,6 +67,13 @@ public class ChatMessageDaoImpl extends BaseDaoImpl<ChatMessageMapper, ChatMessa
     }
 
     @Override
+    public List<ChatMessageEntity> findOwnedMessagePageAt(String tenantId, String ownerJiacn,
+            String clientId, String conversationId, Long anchorTime, Long anchorId, int limit) {
+        return baseMapper.findExactOwnedMessagePageAt(tenantId, ownerJiacn, clientId,
+                conversationId, Long.parseLong(conversationId), anchorTime, anchorId, limit);
+    }
+
+    @Override
     public List<ChatMessageEntity> findOwnedByConversationId(
             String tenantId, String ownerJiacn, String clientId, String conversationId) {
         requireScope(tenantId, clientId); requireIdentity(ownerJiacn, "ownerJiacn");
