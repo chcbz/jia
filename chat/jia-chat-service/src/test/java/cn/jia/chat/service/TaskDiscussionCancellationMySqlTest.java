@@ -100,9 +100,9 @@ class TaskDiscussionCancellationMySqlTest {
         jdbc.update("UPDATE chat_turn SET last_delta_seq=1 WHERE turn_id='chat'");
         var event=new ChatConversationEventEntity().setEventId("delta").setTenantId("0").setOwnerJiacn("owner").setClientId("client")
                 .setConversationId("1").setConversationGeneration(1L).setRequestId("request-chat").setTurnId("chat")
-                .setDispatchId("dispatch-chat").setEventType("agent_message_delta").setEventVersion(0L)
+                .setDispatchId("dispatch-chat").setEventType("agent_message_delta")
                 .setPayloadJson("{\"content\":\"fixture partial\",\"senderName\":\"fixture\"}").setOccurredAt(110L);
-        tx.executeWithoutResult(s->{assertEquals(1,dao.insertEvent(event));assertEquals(1,dao.assignEventVersion(event.getEventSequence()));});
+        tx.executeWithoutResult(s->{assertEquals(1,dao.insertEvent(event));assertNotNull(event.getEventSequence());assertEquals(event.getEventSequence(),event.getEventVersion());});
         cancel();cancel();assertEquals(1,count("chat_message"));
         assertEquals("fixture partial",jdbc.queryForObject("SELECT content FROM chat_message",String.class));
         assertTrue(jdbc.queryForObject("SELECT metadata FROM chat_message",String.class).contains("CANCELLED"));
