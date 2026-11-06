@@ -35,7 +35,7 @@ public class HallReadServiceImpl implements HallReadService {
     private static final int PAGE_SIZE = 20; // same delivery page size as the existing draft read API
     private static final List<String> SOURCES = List.of("private", "task", "draft");
     private static final Set<String> PRIVATE_STATES = Set.of(
-            "QUEUED", "OUTPUT_STAGED", "OUTPUT_COMMITTED", "FAILED", "INPUTS_REVOKED");
+            "QUEUED", "OUTPUT_STAGED", "OUTPUT_COMMITTED", "FAILED", "INPUTS_REVOKED", "CANCELLED");
     private static final Set<String> TASK_STATES = Arrays.stream(AgentTaskStatus.values())
             .map(AgentTaskStatus::value).collect(java.util.stream.Collectors.toUnmodifiableSet());
     private final HallReadDao reads;

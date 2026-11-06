@@ -89,7 +89,7 @@ public class ChatBountyAssetProjector {
                   AND l.tenant_id=s.tenant_id AND l.owner_jiacn=s.owner_jiacn AND l.client_id=s.client_id
                 JOIN agent_personal_workspace_execution e ON e.execution_id=l.execution_id
                   AND e.tenant_id=s.tenant_id AND e.client_id=s.client_id AND e.owner_jiacn=s.owner_jiacn
-                  AND e.execution_state IN ('OUTPUT_COMMITTED','RESULT_COMMITTED','FAILED','INPUTS_REVOKED') AND e.execution_mode='CONVERSATION'
+                  AND e.execution_state IN ('OUTPUT_COMMITTED','RESULT_COMMITTED','FAILED','INPUTS_REVOKED','CANCELLED') AND e.execution_mode='CONVERSATION'
                 WHERE e.execution_protocol_version<>4 AND s.kind='EXECUTE' AND l.state='RUNNING'
                   AND (s.state='RUNNING' OR (s.state=e.execution_state AND e.execution_state IN ('OUTPUT_COMMITTED','RESULT_COMMITTED')))
                 """ + suffix, (rs, n) -> new Candidate(rs.getString(1), rs.getString(2), rs.getString(3),
@@ -126,7 +126,7 @@ public class ChatBountyAssetProjector {
                 candidate.clientId(), candidate.ownerJiacn());
         var execution = executions.get(scope, candidate.executionId());
         if (execution == null || !"CONVERSATION".equals(execution.executionMode())
-                || !Set.of("OUTPUT_COMMITTED", "RESULT_COMMITTED", "FAILED", "INPUTS_REVOKED").contains(execution.state())
+                || !Set.of("OUTPUT_COMMITTED", "RESULT_COMMITTED", "FAILED", "INPUTS_REVOKED", "CANCELLED").contains(execution.state())
                 || !candidate.executionId().equals(execution.executionId())
                 || !step.taskId().equals(execution.taskId())
                 || !request.conversationId().equals(execution.conversationId())
@@ -342,7 +342,7 @@ public class ChatBountyAssetProjector {
                 || !Objects.equals(live.getLifecycleGeneration(), row.getConversationGeneration())
                 || !Objects.equals(Long.valueOf(request.requestRevision()), row.getRequestRevision()))
             throw new IllegalStateException("Failure request scope changed");
-        String state = "INPUTS_REVOKED".equals(executionState) ? "CANCELLED" : "FAILED";
+        String state = Set.of("INPUTS_REVOKED", "CANCELLED").contains(executionState) ? "CANCELLED" : "FAILED";
         long now = System.currentTimeMillis();
         finalizeExecutionLink(candidate, executionState, now);
         if (jdbc.update("""

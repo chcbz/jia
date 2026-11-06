@@ -28,6 +28,16 @@ public class PersonalWorkspaceExecutionDaoImpl implements PersonalWorkspaceExecu
         this.inputs = Objects.requireNonNull(inputs, "inputs");
         this.outputs = Objects.requireNonNull(outputs, "outputs");
     }
+    @Override public List<PersonalWorkspaceExecutionEntity> lockUnfinishedTaskExecutions(
+            String tenant, String client, String owner, String task) {
+        scope(tenant, client, owner); id(task, "taskId");
+        return executions.lockUnfinishedTaskExecutions(tenant, client, owner, task);
+    }
+    @Override public boolean cancelLockedTaskExecution(PersonalWorkspaceExecutionEntity execution, long now) {
+        return executions.cancelLockedTaskExecution(execution.getTenantId(), execution.getClientId(),
+                execution.getOwnerJiacn(), execution.getTaskId(), execution.getExecutionId(),
+                execution.getExecutionState(), now) == 1;
+    }
     @Override public PersonalWorkspaceExecutionEntity find(String tenantId, String clientId,
             String ownerJiacn, String executionId) {
         scope(tenantId, clientId, ownerJiacn); id(executionId, "executionId");

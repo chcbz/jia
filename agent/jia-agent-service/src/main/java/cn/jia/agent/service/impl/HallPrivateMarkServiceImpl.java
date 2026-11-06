@@ -117,7 +117,7 @@ public class HallPrivateMarkServiceImpl implements HallPrivateMarkService {
         if (!executionId.equals(execution.getExecutionId()) || !scope.tenantId().equals(execution.getTenantId())
                 || !scope.clientId().equals(execution.getClientId()) || !scope.ownerJiacn().equals(execution.getOwnerJiacn())
                 || execution.getCreatedAt()==null || execution.getCreatedAt()<0 || execution.getExecutionState()==null
-                || !Set.of("QUEUED","OUTPUT_STAGED","OUTPUT_COMMITTED","FAILED","INPUTS_REVOKED").contains(execution.getExecutionState())) throw failure(Reason.STORAGE_UNAVAILABLE);
+                || !Set.of("QUEUED","OUTPUT_STAGED","OUTPUT_COMMITTED","FAILED","INPUTS_REVOKED", "CANCELLED").contains(execution.getExecutionState())) throw failure(Reason.STORAGE_UNAVAILABLE);
         long time=Math.max(caseUpdated,execution.getCreatedAt());
         for (Long value : new Long[]{execution.getUpdateTime(),execution.getFailedAt(),execution.getRevokedAt()}) if (value!=null) time=Math.max(time,value);
         return new Subject(executionId,execution.getExecutionState(),time);
@@ -140,7 +140,7 @@ public class HallPrivateMarkServiceImpl implements HallPrivateMarkService {
                 || !type.equals(row.getSourceType()) || !id.equals(row.getSourceId()) || row.getRevision()==null || row.getRevision()<1
                 || row.getRevision()>MAX_REVISION || row.getArchived()==null
                 || !storedId(row.getSnapshotExecutionId(),100)
-                || !Set.of("QUEUED","OUTPUT_STAGED","OUTPUT_COMMITTED","FAILED","INPUTS_REVOKED").contains(Objects.toString(row.getSnapshotState(),""))
+                || !Set.of("QUEUED","OUTPUT_STAGED","OUTPUT_COMMITTED","FAILED","INPUTS_REVOKED", "CANCELLED").contains(Objects.toString(row.getSnapshotState(),""))
                 || row.getSnapshotUpdatedAt()==null || row.getSnapshotUpdatedAt()<0
                 || row.getUpdatedAt()==null || row.getUpdatedAt()<0
                 || (row.getViewedExecutionId()==null)!=(row.getViewedManifestId()==null)

@@ -21,7 +21,7 @@ public class ConversationDeliverableReadAdapter {
     private static final Pattern MIME = Pattern.compile(
             "[a-z0-9][a-z0-9!#$&^_.+-]{0,63}/[a-z0-9][a-z0-9!#$&^_.+-]{0,63}");
     private static final Set<String> EXECUTION_STATES = Set.of(
-            "QUEUED", "INPUTS_REVOKED", "OUTPUT_STAGED", "OUTPUT_COMMITTED", "FAILED");
+            "QUEUED", "INPUTS_REVOKED", "CANCELLED", "OUTPUT_STAGED", "OUTPUT_COMMITTED", "FAILED");
 
     private final WorkspaceConversationAccessService conversations;
     private final JdbcTemplate jdbc;

@@ -8,6 +8,33 @@ import org.apache.ibatis.annotations.Update;
 
 public interface PersonalWorkspaceExecutionMapper extends BaseMapper<PersonalWorkspaceExecutionEntity> {
     @Select("""
+            SELECT * FROM agent_personal_workspace_execution
+            WHERE tenant_id=#{tenantId} AND client_id=#{clientId} AND owner_jiacn=#{ownerJiacn}
+              AND task_id=#{taskId} AND execution_mode IN ('TASK','CONVERSATION')
+              AND BINARY tenant_id=BINARY #{tenantId} AND BINARY client_id=BINARY #{clientId}
+              AND BINARY owner_jiacn=BINARY #{ownerJiacn} AND BINARY task_id=BINARY #{taskId}
+              AND execution_state NOT IN ('OUTPUT_COMMITTED','RESULT_COMMITTED','FAILED','INPUTS_REVOKED','CANCELLED')
+            ORDER BY execution_id FOR UPDATE
+            """)
+    java.util.List<PersonalWorkspaceExecutionEntity> lockUnfinishedTaskExecutions(
+            @Param("tenantId") String tenantId, @Param("clientId") String clientId,
+            @Param("ownerJiacn") String ownerJiacn, @Param("taskId") String taskId);
+
+    @Update("""
+            UPDATE agent_personal_workspace_execution SET execution_state='CANCELLED',update_time=#{now}
+            WHERE tenant_id=#{tenantId} AND client_id=#{clientId} AND owner_jiacn=#{ownerJiacn}
+              AND task_id=#{taskId} AND execution_id=#{executionId} AND execution_state=#{expectedState}
+              AND execution_mode IN ('TASK','CONVERSATION')
+              AND BINARY tenant_id=BINARY #{tenantId} AND BINARY client_id=BINARY #{clientId}
+              AND BINARY owner_jiacn=BINARY #{ownerJiacn} AND BINARY task_id=BINARY #{taskId}
+              AND BINARY execution_id=BINARY #{executionId}
+            """)
+    int cancelLockedTaskExecution(@Param("tenantId") String tenantId, @Param("clientId") String clientId,
+            @Param("ownerJiacn") String ownerJiacn, @Param("taskId") String taskId,
+            @Param("executionId") String executionId, @Param("expectedState") String expectedState,
+            @Param("now") long now);
+
+    @Select("""
         SELECT e.* FROM agent_personal_workspace_execution e
         WHERE BINARY e.tenant_id=BINARY #{tenantId} AND BINARY e.client_id=BINARY #{clientId}
           AND BINARY e.target_agent_id=BINARY #{agentId} AND BINARY e.task_id=BINARY #{taskId}
