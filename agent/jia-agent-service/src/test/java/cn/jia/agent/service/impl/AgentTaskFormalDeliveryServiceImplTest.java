@@ -116,6 +116,13 @@ class AgentTaskFormalDeliveryServiceImplTest {
         assertFalse(events.getAllValues().stream()
                 .anyMatch(event -> event.getEventJson().contains(TOKEN)));
         // Validate the actual producer payload using the reader shared by snapshots and streams.
+        for (var event : events.getAllValues()) {
+            java.util.Map<String,Object> payload = new tools.jackson.databind.ObjectMapper()
+                    .readValue(event.getEventJson(), new tools.jackson.core.type.TypeReference<>() { });
+            assertDoesNotThrow(() -> AgentTaskWorkspaceEventValidator.validate(event.getEventType(),
+                    event.getActorType(), event.getActorId(), event.getAggregateType(),
+                    event.getAggregateId(), payload, TASK), event.getEventType());
+        }
         var reviewing = events.getAllValues().get(2);
         java.util.Map<String,Object> reviewingPayload = new tools.jackson.databind.ObjectMapper()
                 .readValue(reviewing.getEventJson(), new tools.jackson.core.type.TypeReference<>() { });
