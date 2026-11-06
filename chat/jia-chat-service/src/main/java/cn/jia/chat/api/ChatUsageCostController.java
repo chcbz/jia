@@ -1,6 +1,6 @@
 package cn.jia.chat.api;
 
-import cn.jia.agent.security.AgentRuntimeAuthenticationService;
+import cn.jia.agent.service.AuthenticatedRuntimeOperation;
 import cn.jia.chat.service.ChatDeliberationException;
 import cn.jia.chat.service.usage.ChatUsageCostRecorder;
 import cn.jia.core.entity.JsonRequest;
@@ -18,8 +18,8 @@ public final class ChatUsageCostController {
     public record Request(ChatUsageCostRecorder.Phase phase, String requestedModel, JsonNode usageEvidence) { }
     public record Receipt(String dispatchId, String attemptId, String revision, String status, String costYuan) { }
     private final ChatUsageCostRecorder recorder;
-    private final AgentRuntimeAuthenticationService authentication;
-    public ChatUsageCostController(ChatUsageCostRecorder recorder, AgentRuntimeAuthenticationService authentication) {
+    private final AuthenticatedRuntimeOperation authentication;
+    public ChatUsageCostController(ChatUsageCostRecorder recorder, AuthenticatedRuntimeOperation authentication) {
         this.recorder = recorder; this.authentication = authentication;
     }
 
@@ -31,8 +31,8 @@ public final class ChatUsageCostController {
                 || body.phase() == ChatUsageCostRecorder.Phase.STARTED && body.usageEvidence() != null && !body.usageEvidence().isNull()
                 || body.usageEvidence() != null && !body.usageEvidence().isNull() && !body.usageEvidence().isObject())
             throw new IllegalArgumentException("Invalid CHAT usage evidence");
-        var receipt = authentication.withNativeFence(principal, () -> recorder.record(
-                AgentRuntimeAuthenticationService.requireProof(principal).scope(), dispatchId,
+        var receipt = authentication.withAuthenticatedRuntime(principal, scope -> recorder.record(
+                scope, dispatchId,
                 new ChatUsageCostRecorder.Evidence(body.phase(), body.requestedModel(),
                         body.usageEvidence() == null ? "null" : body.usageEvidence().toString())));
         return ResponseEntity.ok().header("Cache-Control", "private, no-store").body(JsonResult.success(

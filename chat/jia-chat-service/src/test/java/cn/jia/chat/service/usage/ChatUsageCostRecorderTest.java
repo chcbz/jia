@@ -1,6 +1,6 @@
 package cn.jia.chat.service.usage;
 
-import cn.jia.agent.security.AgentRuntimeAuthentication;
+import cn.jia.agent.service.AuthenticatedRuntimeOperation;
 import cn.jia.chat.deliberation.*;
 import cn.jia.chat.service.ChatDeliberationException;
 import cn.jia.economy.usage.*;
@@ -18,8 +18,8 @@ class ChatUsageCostRecorderTest {
     private final ChatDeliberationDao turns = mock(ChatDeliberationDao.class);
     private final UsageCostService costs = mock(UsageCostService.class);
     private final ChatUsageCostRecorder recorder = new ChatUsageCostRecorder(dispatches, turns, costs);
-    private final AgentRuntimeAuthentication.Scope scope =
-            new AgentRuntimeAuthentication.Scope("0", "client", "executor", "agent", "instance");
+    private final AuthenticatedRuntimeOperation.Scope scope =
+            new AuthenticatedRuntimeOperation.Scope("0", "client", "executor", "agent");
     private ChatDispatchOutboxEntity dispatch;
     private ChatTurnEntity turn;
     private String payload(String task, String type) {

@@ -1,6 +1,6 @@
 package cn.jia.chat.service.usage;
 
-import cn.jia.agent.security.AgentRuntimeAuthentication;
+import cn.jia.agent.service.AuthenticatedRuntimeOperation;
 import cn.jia.chat.deliberation.ChatDeliberationDao;
 import cn.jia.chat.deliberation.ChatDispatchAuthorityMapper;
 import cn.jia.chat.service.ChatDeliberationException;
@@ -27,7 +27,7 @@ public final class ChatUsageCostRecorder {
         this.dispatches = dispatches; this.turns = turns; this.costs = costs;
     }
 
-    public UsageCostService.Receipt record(AgentRuntimeAuthentication.Scope scope, String dispatchId, Evidence evidence) {
+    public UsageCostService.Receipt record(AuthenticatedRuntimeOperation.Scope scope, String dispatchId, Evidence evidence) {
         var rows = dispatches.findDispatch(scope.tenantId(), scope.clientId(), dispatchId);
         if (rows == null || rows.size() != 1) throw denied();
         var dispatch = rows.getFirst();

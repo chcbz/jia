@@ -1,13 +1,14 @@
 package cn.jia.chat.service.usage;
 
 import cn.jia.agent.security.*;
+import cn.jia.agent.service.AuthenticatedRuntimeOperation;
 import cn.jia.chat.api.ChatUsageCostController;
 import cn.jia.core.entity.JsonRequest;
 import cn.jia.economy.usage.*;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockHttpServletRequest;
 import tools.jackson.databind.ObjectMapper;
-import java.util.function.Supplier;
+import java.util.function.Function;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
@@ -23,14 +24,11 @@ class ChatUsageCostControllerTest {
     }
     @Test void acknowledgementUsesAuthenticatedScopeAndDoesNotInventCost() {
         var recorder = mock(ChatUsageCostRecorder.class);
-        var auth = mock(AgentRuntimeAuthenticationService.class);
+        var auth = mock(AuthenticatedRuntimeOperation.class);
         var principal = mock(AgentRuntimeAuthentication.class);
-        var scope = new AgentRuntimeAuthentication.Scope("0", "client", "executor", "agent", "instance");
-        when(principal.isAuthenticated()).thenReturn(true);
-        when(principal.getPrincipal()).thenReturn(scope);
-        when(principal.getDetails()).thenReturn(new AgentRuntimeAuthenticationService.Proof(
-                scope, "installation", "host", 1, "digest", 1, 1));
-        when(auth.withNativeFence(eq(principal), any())).thenAnswer(i -> ((Supplier<?>) i.getArgument(1)).get());
+        var scope = new AuthenticatedRuntimeOperation.Scope("0", "client", "executor", "agent");
+        when(auth.withAuthenticatedRuntime(eq(principal), any())).thenAnswer(i ->
+                ((Function<AuthenticatedRuntimeOperation.Scope, ?>) i.getArgument(1)).apply(scope));
         when(recorder.record(eq(scope), eq("dispatch"), any())).thenReturn(
                 new UsageCostService.Receipt("attempt", 2, TokenUsageCost.Status.PENDING_USAGE, null, false));
         var body = new ChatUsageCostController.Request(ChatUsageCostRecorder.Phase.TERMINAL,
@@ -43,12 +41,12 @@ class ChatUsageCostControllerTest {
         assertEquals("2", response.getBody().getData().revision());
         assertEquals("PENDING_USAGE", response.getBody().getData().status());
         assertNull(response.getBody().getData().costYuan());
-        verify(auth).withNativeFence(eq(principal), any());
+        verify(auth).withAuthenticatedRuntime(eq(principal), any());
         verify(recorder).record(eq(scope), eq("dispatch"), any());
     }
     @Test void protocolRejectsUnknownPhaseAndNonObjectUsageBeforeRecording() {
         var recorder = mock(ChatUsageCostRecorder.class);
-        var auth = mock(AgentRuntimeAuthenticationService.class);
+        var auth = mock(AuthenticatedRuntimeOperation.class);
         var controller = new ChatUsageCostController(recorder, auth);
         var json = new ObjectMapper();
         for (var body : new ChatUsageCostController.Request[]{
