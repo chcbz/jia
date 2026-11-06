@@ -53,6 +53,9 @@ public interface AgentTaskExecutionGrantService {
     /** Read-only owner metadata for discussion, including pending review. Grants no operation.
      * Execution admissions retain their separate task-state and capability restrictions. */
     FollowupContext currentFollowupContext(Scope scope,String taskId,String targetAgentId);
+
+    /** Display-only snapshot; caller supplies a repeatable-read transaction. Grants no execution authority. */
+    FollowupContext observeFollowupContext(Scope scope,String taskId,String targetAgentId);
     record FollowupContext(String taskId,String targetAgentId,long taskVersion,
             long assignmentRevision,long baselineGrantVersion,long requirementRevision) { }
 

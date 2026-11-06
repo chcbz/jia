@@ -2,6 +2,7 @@ package cn.jia.agent.service.impl;
 
 import cn.jia.agent.common.TaskEventPayload;
 import cn.jia.agent.common.TaskEventType;
+import cn.jia.agent.exception.AgentTaskWorkspaceException;
 import cn.jia.agent.dao.AgentTaskArtifactDao;
 import cn.jia.agent.dao.AgentTaskFormalDeliveryDao;
 import cn.jia.agent.dao.AgentTaskMetaDao;
@@ -114,6 +115,22 @@ class AgentTaskFormalDeliveryServiceImplTest {
                 events.getAllValues().stream().map(AgentTaskEventWriteCommand::getEventType).toList());
         assertFalse(events.getAllValues().stream()
                 .anyMatch(event -> event.getEventJson().contains(TOKEN)));
+        // Validate the actual producer payload using the reader shared by snapshots and streams.
+        var reviewing = events.getAllValues().get(2);
+        java.util.Map<String,Object> reviewingPayload = new tools.jackson.databind.ObjectMapper()
+                .readValue(reviewing.getEventJson(), new tools.jackson.core.type.TypeReference<>() { });
+        assertDoesNotThrow(() -> AgentTaskWorkspaceEventValidator.validate(reviewing.getEventType(),
+                reviewing.getActorType(), reviewing.getActorId(), reviewing.getAggregateType(),
+                reviewing.getAggregateId(), reviewingPayload, TASK));
+        assertDoesNotThrow(() -> AgentTaskWorkspaceEventValidator.validate(reviewing.getEventType(),
+                TaskEventType.ActorType.SYSTEM, null, reviewing.getAggregateType(),
+                reviewing.getAggregateId(), reviewingPayload, TASK));
+        assertThrows(AgentTaskWorkspaceException.class, () -> AgentTaskWorkspaceEventValidator.validate(
+                reviewing.getEventType(), TaskEventType.ActorType.AGENT, null,
+                reviewing.getAggregateType(), reviewing.getAggregateId(), reviewingPayload, TASK));
+        assertThrows(AgentTaskWorkspaceException.class, () -> AgentTaskWorkspaceEventValidator.validate(
+                TaskEventType.TASK_STARTED, reviewing.getActorType(), reviewing.getActorId(),
+                reviewing.getAggregateType(), reviewing.getAggregateId(), reviewingPayload, TASK));
 
         var order = inOrder(deliveryDao, workItemDao, taskMetaDao, eventWriter);
         order.verify(deliveryDao).insert(eq(TENANT), eq(CLIENT), any());

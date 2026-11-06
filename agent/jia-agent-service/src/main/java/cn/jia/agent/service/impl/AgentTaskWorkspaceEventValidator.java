@@ -66,7 +66,13 @@ public final class AgentTaskWorkspaceEventValidator {
         }
         if (TASK_TRANSITIONS.contains(eventType)) {
             requireAggregate(row, TaskEventType.Aggregate.TASK, taskId);
-            requireSystemActor(row, false);
+            // Formal delivery is submitted by the executing Agent; aggregation uses system.
+            if (TaskEventType.TASK_REVIEWING.equals(eventType)
+                    && TaskEventType.ActorType.AGENT.equals(actorType)) {
+                requireAgentActor(row);
+            } else {
+                requireSystemActor(row, false);
+            }
             if (payload.containsKey(TaskEventPayload.Key.TASK_ID)) {
                 requireEqualId(payload, TaskEventPayload.Key.TASK_ID, taskId);
             }

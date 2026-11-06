@@ -19,7 +19,7 @@ public class ChatBountyInteractionV3PreviewService {
    cn.jia.chat.deliberation.ChatBountyBindingStore bindings){this.conversations=Objects.requireNonNull(conversations);this.scopes=Objects.requireNonNull(scopes);this.grants=Objects.requireNonNull(grants);this.sources=Objects.requireNonNull(sources);this.authority=Objects.requireNonNull(authority);this.bindings=Objects.requireNonNull(bindings);}
  public record Prepared(ControlledImageFollowupAuthorityService.PreviewCommand command,
    ControlledImageFollowupAuthorityService.Preview authorityPreview,String ownerPayloadSha256,String instructionSha256,String sourceSnapshotSha256) { }
- @Transactional(rollbackFor=Exception.class)
+ @Transactional(readOnly=true,isolation=org.springframework.transaction.annotation.Isolation.REPEATABLE_READ,rollbackFor=Exception.class)
  public ChatBountyInteractionV3Wire.ContextData context(String tenant,ServerResolvedSender sender,String conversation){
   if(!"0".equals(tenant)||sender==null||!"user".equals(sender.type()))throw notFound();
   try {
@@ -33,26 +33,15 @@ public class ChatBountyInteractionV3PreviewService {
      ||!("task:"+observed.getTaskId()).equals(observed.getConversationScopeKey()))throw conflict();
    List<String> targets=scopes.parsePersistedTargetAgentIds(observed.getTargetAgentIds());
    if(targets.size()!=1)throw conflict();String target=targets.getFirst();
-   var current=grants.currentFollowupContext(new AgentTaskExecutionGrantService.Scope(tenant,
+   var current=grants.observeFollowupContext(new AgentTaskExecutionGrantService.Scope(tenant,
      sender.clientId(),sender.jiacn()),observed.getTaskId(),target);
-   var binding=bindings.lock(new cn.jia.chat.deliberation.ChatBountyBindingStore.Scope(
+   var binding=bindings.find(new cn.jia.chat.deliberation.ChatBountyBindingStore.Scope(
      tenant,sender.jiacn(),sender.clientId()),observed.getTaskId());
    if(binding==null)throw conflict();
-   ChatConversationEntity locked=conversations.lockScopedById(
-     sender.jiacn(),sender.clientId(),conversation);
    if(binding.conversationId()==null||!conversation.equals(Long.toString(binding.conversationId()))
-     ||binding.assignmentRevision()!=current.assignmentRevision()||locked==null||locked.getId()==null
-     ||!conversation.equals(Long.toString(locked.getId()))
-     ||!Objects.equals(observed.getLifecycleGeneration(),locked.getLifecycleGeneration())
-     ||!Objects.equals(observed.getTaskId(),locked.getTaskId())
-     ||!tenant.equals(locked.getTenantId())||!sender.jiacn().equals(locked.getJiacn())
-     ||!sender.clientId().equals(locked.getClientId())
-     ||!"juyiting".equals(locked.getConversationType())||!"bounty".equals(locked.getConversationScopeType())
-     ||!("task:"+current.taskId()).equals(locked.getConversationScopeKey())
-     ||!List.of(target).equals(scopes.parsePersistedTargetAgentIds(locked.getTargetAgentIds()))
-     ||locked.getDeletedAt()!=null)throw conflict();
+     ||binding.assignmentRevision()!=current.assignmentRevision())throw conflict();
    return new ChatBountyInteractionV3Wire.ContextData(1,conversation,
-     Long.toString(locked.getLifecycleGeneration()),current.taskId(),current.targetAgentId(),
+     Long.toString(observed.getLifecycleGeneration()),current.taskId(),current.targetAgentId(),
      Long.toString(current.taskVersion()),Long.toString(current.assignmentRevision()),
      Long.toString(current.baselineGrantVersion()),Long.toString(current.requirementRevision()));
   } catch(ChatDeliberationException typed) { throw typed; }

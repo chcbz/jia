@@ -1,10 +1,6 @@
 package cn.jia.chat.service;
 
-import cn.jia.agent.dao.AgentTaskMetaDao;
-import cn.jia.agent.entity.AgentTaskMetaEntity;
 import cn.jia.agent.service.AgentTaskExecutionGrantService;
-import cn.jia.agent.service.AgentTaskMutationTransaction;
-import cn.jia.agent.service.impl.AgentTaskMutationTransactionImpl;
 import cn.jia.agent.service.ControlledImageFollowupAuthorityService;
 import cn.jia.chat.dao.ChatConversationDao;
 import cn.jia.chat.deliberation.ChatBountyBindingStore;
@@ -41,12 +37,11 @@ class ChatBountyInteractionV3PreviewServiceTest {
     @Test void contextReturnsOneConsistentCurrentTupleAndAcceptsZeroTaskAndAssignmentVersions() throws Exception {
         var row=conversation(1,0);
         when(conversations.findScopedById("owner","client","10")).thenReturn(row);
-        when(conversations.lockScopedById("owner","client","10")).thenReturn(row);
         when(scopes.parsePersistedTargetAgentIds("[\"agent\"]")).thenReturn(List.of("agent"));
-        when(grants.currentFollowupContext(new AgentTaskExecutionGrantService.Scope("0","client","owner"),
+        when(grants.observeFollowupContext(new AgentTaskExecutionGrantService.Scope("0","client","owner"),
                 "task","agent")).thenReturn(new AgentTaskExecutionGrantService.FollowupContext(
                 "task","agent",0,0,1,1));
-        when(bindings.lock(new ChatBountyBindingStore.Scope("0","owner","client"),"task"))
+        when(bindings.find(new ChatBountyBindingStore.Scope("0","owner","client"),"task"))
                 .thenReturn(new ChatBountyBindingStore.Binding(0,10L));
 
         var context=service.context("0",sender,"10");
@@ -61,105 +56,100 @@ class ChatBountyInteractionV3PreviewServiceTest {
         var annotation=ChatBountyInteractionV3PreviewService.class
                 .getMethod("context",String.class,ServerResolvedSender.class,String.class)
                 .getAnnotation(Transactional.class);
-        assertNotNull(annotation);assertFalse(annotation.readOnly());
+        assertNotNull(annotation);assertTrue(annotation.readOnly());
+        assertEquals(org.springframework.transaction.annotation.Isolation.REPEATABLE_READ,annotation.isolation());
+        verify(conversations,never()).lockScopedById(anyString(),anyString(),anyString());
+        verify(bindings,never()).lock(any(),anyString());
     }
 
-    @Test void contextUsesWritableSpringTransactionForRequiredTaskAndProjectionLocks() {
+    @Test void contextUsesOneReadOnlyRepeatableReadSpringTransaction() {
         DriverManagerDataSource dataSource=new DriverManagerDataSource(
-                "jdbc:h2:mem:v3_context_lock;MODE=MYSQL;DB_CLOSE_DELAY=-1","sa","");
-        ChatConversationDao realConversations=mock(ChatConversationDao.class);
-        JuyitingConversationScopeService realScopes=mock(JuyitingConversationScopeService.class);
-        AgentTaskExecutionGrantService realGrants=mock(AgentTaskExecutionGrantService.class);
-        ChatBountyBindingStore realBindings=mock(ChatBountyBindingStore.class);
-        AgentTaskMetaDao roots=mock(AgentTaskMetaDao.class);
-        AtomicInteger lockReads=new AtomicInteger();
-        AgentTaskMutationTransaction mutations=new AgentTaskMutationTransactionImpl(roots,
-                new DataSourceTransactionManager(dataSource));
-        ChatConversationEntity row=conversation(1,0);
-        when(realConversations.findScopedById("owner","client","10")).thenReturn(row);
-        when(realScopes.parsePersistedTargetAgentIds("[\"agent\"]")).thenReturn(List.of("agent"));
-        when(roots.findByTaskIdForUpdateInOwnerScope("0","client","owner","task"))
-                .thenAnswer(invocation->{
-                    assertWritableTransaction();
-                    lockReads.incrementAndGet();
-                    return taskRoot();
-                });
-        when(realGrants.currentFollowupContext(
-                new AgentTaskExecutionGrantService.Scope("0","client","owner"),"task","agent"))
-                .thenAnswer(invocation->mutations.executeWithLockedTaskRootInOwnerScope(
-                        "0","client","owner","task",locked->new AgentTaskExecutionGrantService.FollowupContext(
-                                "task","agent",0,0,1,1)));
-        when(realBindings.lock(new ChatBountyBindingStore.Scope("0","owner","client"),"task"))
-                .thenAnswer(invocation->{assertWritableTransaction();lockReads.incrementAndGet();
-                    return new ChatBountyBindingStore.Binding(0,10L);});
-        when(realConversations.lockScopedById("owner","client","10"))
-                .thenAnswer(invocation->{assertWritableTransaction();lockReads.incrementAndGet();return row;});
-
+                "jdbc:h2:mem:v3_context_snapshot;MODE=MYSQL;DB_CLOSE_DELAY=-1","sa","");
+        var row=conversation(1,0);
+        AtomicInteger reads=new AtomicInteger();
+        when(conversations.findScopedById("owner","client","10")).thenAnswer(invocation->{
+            assertSnapshotTransaction();reads.incrementAndGet();return row;});
+        when(scopes.parsePersistedTargetAgentIds("[\"agent\"]")).thenReturn(List.of("agent"));
+        when(grants.observeFollowupContext(any(),eq("task"),eq("agent"))).thenAnswer(invocation->{
+            assertSnapshotTransaction();reads.incrementAndGet();
+            return new AgentTaskExecutionGrantService.FollowupContext("task","agent",0,0,1,1);});
+        when(bindings.find(any(),eq("task"))).thenAnswer(invocation->{
+            assertSnapshotTransaction();reads.incrementAndGet();
+            return new ChatBountyBindingStore.Binding(0,10L);});
         try(AnnotationConfigApplicationContext context=new AnnotationConfigApplicationContext()) {
             context.register(TransactionConfiguration.class);
             context.registerBean(DataSourceTransactionManager.class,
                     ()->new DataSourceTransactionManager(dataSource));
-            context.registerBean(ChatBountyInteractionV3PreviewService.class,
-                    ()->new ChatBountyInteractionV3PreviewService(realConversations,realScopes,realGrants,
-                            mock(ChatConversationAssetSourceResolver.class),
-                            mock(ControlledImageFollowupAuthorityService.class),realBindings));
+            context.registerBean(ChatBountyInteractionV3PreviewService.class,()->service);
             context.refresh();
-            ChatBountyInteractionV3PreviewService proxied=
-                    context.getBean(ChatBountyInteractionV3PreviewService.class);
+            var proxied=context.getBean(ChatBountyInteractionV3PreviewService.class);
             assertTrue(AopUtils.isCglibProxy(proxied));
             assertEquals("task",proxied.context("0",sender,"10").taskId());
         }
-        assertEquals(3,lockReads.get());
+        assertEquals(3,reads.get());
+        verify(conversations,times(1)).findScopedById("owner","client","10");
+        verify(conversations,never()).lockScopedById(anyString(),anyString(),anyString());
+        verify(bindings,never()).lock(any(),anyString());
+        verify(grants,never()).currentFollowupContext(any(),anyString(),anyString());
         assertFalse(TransactionSynchronizationManager.isActualTransactionActive());
     }
 
-    @Test void readOnlyOuterTransactionTurnsTheRequiredLockFailureIntoUnavailable() {
-        DriverManagerDataSource dataSource=new DriverManagerDataSource(
-                "jdbc:h2:mem:v3_context_read_only_guard;MODE=MYSQL;DB_CLOSE_DELAY=-1","sa","");
-        ChatConversationDao realConversations=mock(ChatConversationDao.class);
-        JuyitingConversationScopeService realScopes=mock(JuyitingConversationScopeService.class);
-        AgentTaskExecutionGrantService realGrants=mock(AgentTaskExecutionGrantService.class);
-        ChatBountyBindingStore realBindings=mock(ChatBountyBindingStore.class);
-        AgentTaskMetaDao roots=mock(AgentTaskMetaDao.class);
-        DataSourceTransactionManager manager=new DataSourceTransactionManager(dataSource);
-        AgentTaskMutationTransaction mutations=new AgentTaskMutationTransactionImpl(roots,manager);
-        ChatConversationEntity row=conversation(1,0);
-        when(realConversations.findScopedById("owner","client","10")).thenReturn(row);
-        when(realScopes.parsePersistedTargetAgentIds("[\"agent\"]")).thenReturn(List.of("agent"));
-        when(roots.findByTaskIdForUpdateInOwnerScope("0","client","owner","task"))
-                .thenAnswer(invocation->{
-                    if(TransactionSynchronizationManager.isCurrentTransactionReadOnly())
-                        throw new CannotAcquireLockException(
-                                "SELECT FOR UPDATE is not valid in a read-only transaction");
-                    return taskRoot();
-                });
-        when(realGrants.currentFollowupContext(
-                new AgentTaskExecutionGrantService.Scope("0","client","owner"),"task","agent"))
-                .thenAnswer(invocation->mutations.executeWithLockedTaskRootInOwnerScope(
-                        "0","client","owner","task",locked->new AgentTaskExecutionGrantService.FollowupContext(
-                                "task","agent",0,0,1,1)));
-        ChatBountyInteractionV3PreviewService direct=new ChatBountyInteractionV3PreviewService(
-                realConversations,realScopes,realGrants,mock(ChatConversationAssetSourceResolver.class),
-                mock(ControlledImageFollowupAuthorityService.class),realBindings);
-        org.springframework.transaction.support.TransactionTemplate readOnly=
-                new org.springframework.transaction.support.TransactionTemplate(manager);
-        readOnly.setReadOnly(true);
-
-        ChatDeliberationException failure=assertThrows(ChatDeliberationException.class,
-                ()->readOnly.execute(status->direct.context("0",sender,"10")));
-        assertEquals(ChatDeliberationException.Reason.PERSISTENCE_ERROR,failure.reason());
-        verifyNoInteractions(realBindings);
-        verify(realConversations,never()).lockScopedById(anyString(),anyString(),anyString());
+    @Test void bindingSnapshotDoesNotWaitForConcurrentWriterAndRemainsConsistent() throws Exception {
+        var dataSource=new DriverManagerDataSource(
+                "jdbc:h2:mem:v3_binding_snapshot;MODE=MYSQL;DB_CLOSE_DELAY=-1;LOCK_TIMEOUT=1000","sa","");
+        var jdbc=new org.springframework.jdbc.core.JdbcTemplate(dataSource);
+        jdbc.execute("CREATE TABLE chat_bounty_binding (tenant_id VARCHAR(50),owner_jiacn VARCHAR(100),"
+                +"client_id VARCHAR(50),task_id VARCHAR(100),assignment_revision BIGINT,conversation_id BIGINT)");
+        jdbc.update("INSERT INTO chat_bounty_binding VALUES ('0','owner','client','task',0,10)");
+        var store=new ChatBountyBindingStore(jdbc);
+        var scope=new ChatBountyBindingStore.Scope("0","owner","client");
+        var manager=new DataSourceTransactionManager(dataSource);
+        var reader=new org.springframework.transaction.support.TransactionTemplate(manager);
+        reader.setReadOnly(true);
+        reader.setIsolationLevel(org.springframework.transaction.TransactionDefinition.ISOLATION_REPEATABLE_READ);
+        var locked=new java.util.concurrent.CountDownLatch(1);
+        var release=new java.util.concurrent.CountDownLatch(1);
+        var executor=java.util.concurrent.Executors.newSingleThreadExecutor();
+        try {
+            var writer=executor.submit(()->new org.springframework.transaction.support.TransactionTemplate(manager)
+                    .execute(status->{
+                        jdbc.update("UPDATE chat_bounty_binding SET assignment_revision=1");
+                        locked.countDown();
+                        try { assertTrue(release.await(10,java.util.concurrent.TimeUnit.SECONDS)); }
+                        catch(InterruptedException interrupted) { throw new RuntimeException(interrupted); }
+                        return null;
+                    }));
+            assertTrue(locked.await(5,java.util.concurrent.TimeUnit.SECONDS));
+            reader.execute(status->{
+                assertEquals(0,store.find(scope,"task").assignmentRevision());
+                release.countDown();
+                try { writer.get(5,java.util.concurrent.TimeUnit.SECONDS); }
+                catch(Exception failure) { throw new RuntimeException(failure); }
+                assertEquals(0,store.find(scope,"task").assignmentRevision());
+                return null;
+            });
+            assertEquals(1,store.find(scope,"task").assignmentRevision());
+        } finally { release.countDown();executor.shutdownNow(); }
     }
 
-    @Test void contextNeverCombinesObservedConversationWithChangedBindingOrGeneration() {
-        var observed=conversation(1,0);var changed=conversation(2,0);
-        when(conversations.findScopedById("owner","client","10")).thenReturn(observed);
-        when(conversations.lockScopedById("owner","client","10")).thenReturn(changed);
+    @Test void storageFailureStillReturnsUnavailableWithoutRetryOrWriteFallback() {
+        when(conversations.findScopedById("owner","client","10")).thenReturn(conversation(1,0));
         when(scopes.parsePersistedTargetAgentIds("[\"agent\"]")).thenReturn(List.of("agent"));
-        when(grants.currentFollowupContext(any(),eq("task"),eq("agent"))).thenReturn(
+        when(grants.observeFollowupContext(any(),eq("task"),eq("agent")))
+                .thenThrow(new CannotAcquireLockException("storage unavailable"));
+        var failure=assertThrows(ChatDeliberationException.class,()->service.context("0",sender,"10"));
+        assertEquals(ChatDeliberationException.Reason.PERSISTENCE_ERROR,failure.reason());
+        verify(grants,times(1)).observeFollowupContext(any(),eq("task"),eq("agent"));
+        verifyNoInteractions(bindings);
+    }
+
+    @Test void contextRejectsBindingOutsideTheObservedAssignment() {
+        var observed=conversation(1,0);
+        when(conversations.findScopedById("owner","client","10")).thenReturn(observed);
+        when(scopes.parsePersistedTargetAgentIds("[\"agent\"]")).thenReturn(List.of("agent"));
+        when(grants.observeFollowupContext(any(),eq("task"),eq("agent"))).thenReturn(
                 new AgentTaskExecutionGrantService.FollowupContext("task","agent",0,0,1,1));
-        when(bindings.lock(any(),eq("task"))).thenReturn(new ChatBountyBindingStore.Binding(0,10L));
+        when(bindings.find(any(),eq("task"))).thenReturn(new ChatBountyBindingStore.Binding(1,10L));
 
         var failure=assertThrows(ChatDeliberationException.class,()->service.context("0",sender,"10"));
         assertEquals(ChatDeliberationException.Reason.CONFLICT,failure.reason());
@@ -184,21 +174,16 @@ class ChatBountyInteractionV3PreviewServiceTest {
         verifyNoInteractions(grants,bindings,sources,authority);
     }
 
-    private static void assertWritableTransaction() {
+    private static void assertSnapshotTransaction() {
         assertTrue(TransactionSynchronizationManager.isActualTransactionActive());
-        assertFalse(TransactionSynchronizationManager.isCurrentTransactionReadOnly());
+        assertTrue(TransactionSynchronizationManager.isCurrentTransactionReadOnly());
+        assertEquals(java.sql.Connection.TRANSACTION_REPEATABLE_READ,
+                TransactionSynchronizationManager.getCurrentTransactionIsolationLevel());
     }
 
     @Configuration
     @EnableTransactionManagement(proxyTargetClass=true)
     static class TransactionConfiguration { }
-
-    private static AgentTaskMetaEntity taskRoot() {
-        AgentTaskMetaEntity root=new AgentTaskMetaEntity().setTaskId("task")
-                .setTaskVersion(0L).setCurrentEventVersion(0L);
-        root.setTenantId("0");root.setClientId("client");root.setOwnerJiacn("owner");
-        return root;
-    }
 
     private static ChatConversationEntity conversation(long generation,long ignoredAssignment) {
         var row=new ChatConversationEntity().setId(10L).setJiacn("owner")
