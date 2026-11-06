@@ -140,12 +140,14 @@ class TaskExecutionCancellationMySqlTest {
         row("active","owner","task","CONVERSATION","QUEUED",5);skill("active","RUNNING");
         doReturn(false).when(executions).cancelLockedTaskExecution(any(),anyLong());
         assertThrows(IllegalStateException.class,this::cancel);
-        assertEquals("RUNNING",skills.find("0","client","owner","active").getPhase());assertEquals("QUEUED",state("active"));verifyNoInteractions(events);
+        assertEquals("RUNNING",skills.find("0","client","owner","active").getPhase());assertThrows(IllegalArgumentException.class,()->tx.executeWithoutResult(s->service.cancelTaskExecutions("0","client","owner","task ")));
+        assertEquals("QUEUED",state("active"));verifyNoInteractions(events);
     }
     @Test void exactCaseOwnerClientAndTaskDoNotSelectOtherExecution() {
         row("active","owner","task","CONVERSATION","QUEUED",1);
-        for(String[] scope:List.of(new String[]{"0","Client","owner","task"},new String[]{"0","client","Owner","task"},new String[]{"0","client","owner","Task"},new String[]{"0","client","owner","task "}))
+        for(String[] scope:List.of(new String[]{"0","Client","owner","task"},new String[]{"0","client","Owner","task"},new String[]{"0","client","owner","Task"}))
             tx.executeWithoutResult(s->service.cancelTaskExecutions(scope[0],scope[1],scope[2],scope[3]));
+        assertThrows(IllegalArgumentException.class,()->tx.executeWithoutResult(s->service.cancelTaskExecutions("0","client","owner","task ")));
         assertEquals("QUEUED",state("active"));verifyNoInteractions(events);
     }
     @Test void concurrentCancellationCommitsOneStateChangeAndOneWakeup() throws Exception {
