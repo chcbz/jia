@@ -3,6 +3,8 @@ package cn.jia.chat.deliberation;
 import java.util.List;
 
 public interface ChatDeliberationDao {
+    /** Ordered candidates only; caller locks conversation then each turn beneath the task root. */
+    List<ChatTurnEntity> findTaskDiscussions(String tenantId, String ownerJiacn, String clientId, String taskId);
     Long nextOutboxDue(String tenantId, String clientId, long now);
     int insertSnapshot(ChatContextSnapshotEntity entity);
     int insertRequest(ChatRequestEntity entity);

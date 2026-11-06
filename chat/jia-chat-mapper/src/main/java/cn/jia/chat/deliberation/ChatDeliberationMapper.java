@@ -84,6 +84,25 @@ public interface ChatDeliberationMapper {
     int assignEventVersion(@Param("eventSequence") long eventSequence);
 
     @Select("""
+            SELECT t.* FROM chat_turn t JOIN chat_conversation c
+              ON t.conversation_id=CAST(c.id AS CHAR)
+              AND t.tenant_id=c.tenant_id AND t.client_id=c.client_id AND t.owner_jiacn=c.jiacn
+            WHERE c.tenant_id=#{tenantId} AND c.client_id=#{clientId} AND c.jiacn=#{ownerJiacn}
+              AND c.task_id=#{taskId}
+              AND BINARY c.tenant_id=BINARY #{tenantId} AND BINARY c.client_id=BINARY #{clientId}
+              AND BINARY c.jiacn=BINARY #{ownerJiacn} AND BINARY c.task_id=BINARY #{taskId}
+              AND BINARY t.tenant_id=BINARY c.tenant_id AND BINARY t.client_id=BINARY c.client_id
+              AND BINARY t.owner_jiacn=BINARY c.jiacn
+              AND BINARY t.conversation_id=BINARY CAST(c.id AS CHAR)
+              AND t.route IN ('CHAT','INSPECT')
+              AND t.state NOT IN ('FINAL_PERSISTED','PUBLISHED','FAILED','CANCELLED')
+            ORDER BY c.id,t.turn_id
+            """)
+    List<ChatTurnEntity> findTaskDiscussions(@Param("tenantId") String tenantId,
+            @Param("ownerJiacn") String ownerJiacn, @Param("clientId") String clientId,
+            @Param("taskId") String taskId);
+
+    @Select("""
             SELECT * FROM chat_request WHERE
             """ + EXACT_SCOPE + """
               AND request_id=#{requestId} AND request_revision=#{requestRevision}
