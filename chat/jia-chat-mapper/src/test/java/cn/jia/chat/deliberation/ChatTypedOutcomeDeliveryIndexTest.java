@@ -17,7 +17,13 @@ class ChatTypedOutcomeDeliveryIndexTest {
 
     @BeforeEach void setup() {
         jdbc = spy(new JdbcTemplate(new DriverManagerDataSource(
-                "jdbc:h2:mem:typed_delivery_index;MODE=MYSQL;DB_CLOSE_DELAY=-1", "sa", "")));
+                "jdbc:h2:mem:typed_delivery_index;MODE=MYSQL;DB_CLOSE_DELAY=-1", "sa", "")) {
+            // H2 lacks MySQL's unary BINARY spelling. Keep byte-exact comparison via
+            // equivalent CAST for this mapping test; production SQL is exercised on MySQL.
+            @Override public <T> java.util.List<T> query(String sql, org.springframework.jdbc.core.RowMapper<T> mapper, Object... args) {
+                return super.query(sql.replaceAll("BINARY ([a-z_]+|\\?)", "CAST($1 AS BINARY)"), mapper, args);
+            }
+        });
         jdbc.execute("DROP ALL OBJECTS");
         jdbc.execute("""
                 CREATE TABLE chat_typed_outcome (
@@ -42,7 +48,8 @@ class ChatTypedOutcomeDeliveryIndexTest {
         // No metadata SELECT/UPDATE accompanies the existing outcome INSERT.
         assertEquals(1, mockingDetails(jdbc).getInvocations().stream()
                 .filter(call -> call.getMethod().getName().equals("update")
-                        && call.getMethod().getParameterTypes()[0] == String.class).count());
+                        && call.getMethod().getParameterTypes()[0] == String.class
+                        && call.getMethod().getParameterTypes()[1] == Object[].class).count());
         assertFalse(mockingDetails(jdbc).getInvocations().stream()
                 .anyMatch(call -> call.getMethod().getName().startsWith("query")));
         assertEquals(row, store.findOutcome(scope, "outcome", false));

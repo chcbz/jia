@@ -139,18 +139,18 @@ class ChatMessageScopedQueryTest {
     }
 
     @Test
-    void genericConversationQueriesAndDeletesFixTenantZeroWhileKeepingOwnerAndClientExact() throws Exception {
+    void genericConversationQueriesAndDeletesUseConfiguredTenantWhileKeepingOwnerAndClientExact() throws Exception {
         String conversationScope = normalize(ChatConversationMapper.EXACT_OWNER_SCOPE);
-        assertTrue(conversationScope.contains("tenant_id = '0'"), conversationScope);
+        assertTrue(conversationScope.contains("tenant_id = #{tenantid}"), conversationScope);
         assertFalse(conversationScope.contains("or tenant_id"), conversationScope);
         assertTrue(conversationScope.contains("jiacn = #{ownerjiacn}"), conversationScope);
         assertTrue(conversationScope.contains("client_id = #{clientid}"), conversationScope);
 
         Method delete = ChatMessageMapper.class.getDeclaredMethod("deleteExactOwnedConversationMessages",
-                String.class, String.class, String.class, Long.class);
+                String.class, String.class, String.class, String.class, Long.class);
         String deleteSql = normalize(String.join(" ", delete.getAnnotation(Delete.class).value()));
         assertTrue(deleteSql.contains("delete m from chat_message m join chat_conversation c"), deleteSql);
-        assertTrue(deleteSql.contains("c.tenant_id = '0'"), deleteSql);
+        assertTrue(deleteSql.contains("c.tenant_id = #{tenantid}"), deleteSql);
         assertTrue(deleteSql.contains("c.jiacn = #{ownerjiacn}"), deleteSql);
         assertTrue(deleteSql.contains("c.client_id = #{clientid}"), deleteSql);
     }
