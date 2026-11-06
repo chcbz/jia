@@ -158,12 +158,12 @@ class EconomyHostingRentSchemaInitializerMySqlTest {
         JdbcTemplate jdbc = legacyHostingFixture("retained");
         var leases = jdbc.queryForList("SELECT lease_id,agent_id,binding_id,status,paid_from,paid_through,latest_intent_id,version FROM economy_hosting_lease ORDER BY id");
         var identities = jdbc.queryForList("SELECT intent_id,lease_id,status,managed_api_key_id,runtime_installation_id,runtime_manifest_sha256,runtime_provision_generation,version FROM economy_hosting_provisioning_intent ORDER BY id");
-        var reprovision = jdbc.queryForList("SELECT * FROM economy_hosting_reprovision");
+        var reprovision = reprovisionSnapshot(jdbc);
         jdbc.execute("CALL cyf_beta_retain_hosting_terms()");
         new EconomyHostingRentSchemaInitializer(jdbc).afterPropertiesSet();
         assertEquals(leases, jdbc.queryForList("SELECT lease_id,agent_id,binding_id,status,paid_from,paid_through,latest_intent_id,version FROM economy_hosting_lease ORDER BY id"));
         assertEquals(identities, jdbc.queryForList("SELECT intent_id,lease_id,status,managed_api_key_id,runtime_installation_id,runtime_manifest_sha256,runtime_provision_generation,version FROM economy_hosting_provisioning_intent ORDER BY id"));
-        assertEquals(reprovision, jdbc.queryForList("SELECT * FROM economy_hosting_reprovision"));
+        assertEquals(reprovision, reprovisionSnapshot(jdbc));
         assertEquals(2, jdbc.queryForObject("SELECT COUNT(*) FROM economy_hosting_provisioning_intent WHERE settlement_kind='RETAINED' AND amount_wen=0 AND reserve_transaction_id IS NULL AND capture_transaction_id IS NULL AND refund_transaction_id IS NULL AND escrow_version=0", Integer.class));
         assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM economy_hosting_rent_plan", Integer.class));
         assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM economy_hosting_rent_quote", Integer.class));
@@ -182,6 +182,13 @@ class EconomyHostingRentSchemaInitializerMySqlTest {
         assertEquals(7L, jdbc.queryForObject("SELECT amount_micro FROM economy_hosting_lease WHERE lease_id='lease-1'", Long.class));
         assertEquals(4, jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.triggers WHERE trigger_schema=DATABASE()", Integer.class));
         assertEquals(1, jdbc.queryForObject("SELECT IS_FREE_LOCK('cyf:economy-v0:hosting-rent-schema')", Integer.class));
+    }
+
+    private List<java.util.Map<String, Object>> reprovisionSnapshot(JdbcTemplate jdbc) {
+        var rows = jdbc.queryForList("SELECT * FROM economy_hosting_reprovision ORDER BY id");
+        rows.forEach(row -> row.replaceAll((key, value) -> value instanceof byte[] bytes
+                ? java.util.HexFormat.of().formatHex(bytes) : value));
+        return rows;
     }
 
     private JdbcTemplate legacyHostingFixture(String name) throws Exception {
