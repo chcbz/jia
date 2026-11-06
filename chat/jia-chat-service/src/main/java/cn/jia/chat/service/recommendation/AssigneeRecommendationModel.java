@@ -93,8 +93,9 @@ public final class AssigneeRecommendationModel implements cn.jia.agent.service.A
         }
         if (!(options instanceof org.springframework.ai.openai.OpenAiChatOptions structured))
             throw new Failure(503, "RECOMMENDATION_UNAVAILABLE");
-        // A recommendation is one billable attempt, not an opaque SDK retry group.
-        options = structured.mutate().outputSchema(outputSchema).maxRetries(0).build();
+        // SDK retries are disabled at client construction by AiModelBeanPostProcessor.
+        // Request options cannot change that transport setting in Spring AI 2.0.
+        options = structured.mutate().outputSchema(outputSchema).build();
         var attempt = costs.begin(context, options.getModel());
         var response = model.call(new Prompt(List.of(new SystemMessage(INSTRUCTIONS), new UserMessage(inputJson)), options));
         costs.complete(attempt, response);

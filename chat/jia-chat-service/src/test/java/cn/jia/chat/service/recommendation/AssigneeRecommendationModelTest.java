@@ -123,7 +123,7 @@ class AssigneeRecommendationModelTest {
 
     @Test void costReceiptIsRecordedEvenWhenReturnedBusinessAnswerIsInvalid() {
         var model = mock(ChatModel.class);
-        when(model.getOptions()).thenReturn(OpenAiChatOptions.builder().model("model").maxRetries(3).build());
+        when(model.getOptions()).thenReturn(OpenAiChatOptions.builder().model("model").maxRetries(0).build());
         var response = new ChatResponse(List.of());
         when(model.call(any(Prompt.class))).thenReturn(response);
         var costs = mock(RecommendationCostRecorder.class);
@@ -171,7 +171,7 @@ class AssigneeRecommendationModelTest {
         try {
             var defaults = OpenAiChatOptions.builder().model("configured-model")
                     .baseUrl("http://127.0.0.1:" + server.getAddress().getPort() + "/v1")
-                    .apiKey("synthetic-test-key").maxRetries(3).build();
+                    .apiKey("synthetic-test-key").maxRetries(0).build();
             var model = OpenAiChatModel.builder().options(defaults).build();
             var adapter = new AssigneeRecommendationModel(model, mock(RecommendationCostRecorder.class), overrideModel, reasoning);
             if (status == 200) assertEquals("{}", adapter.judge(CONTEXT, "{\"task\":\"synthetic\"}", SCHEMA));
