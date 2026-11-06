@@ -1,6 +1,33 @@
 package cn.jia.agent.service.impl;
 
 import cn.jia.agent.common.TaskEventType;
+import cn.jia.agent.api.AgentTaskDeliberationOperationController;
+import cn.jia.agent.api.AgentTaskFormalDeliveryController;
+import cn.jia.agent.api.AgentTaskCancellationController;
+import cn.jia.core.config.*;
+import cn.jia.core.filter.RequestIdFilter;
+import org.apache.catalina.startup.Tomcat;
+import org.apache.tomcat.util.descriptor.web.FilterDef;
+import org.apache.tomcat.util.descriptor.web.FilterMap;
+import org.springframework.context.annotation.*;
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+import org.springframework.security.oauth2.jose.jws.MacAlgorithm;
+import org.springframework.security.oauth2.jwt.*;
+import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.web.context.support.AnnotationConfigWebApplicationContext;
+import org.springframework.web.filter.DelegatingFilterProxy;
+import org.springframework.web.servlet.DispatcherServlet;
+import org.springframework.web.servlet.config.annotation.EnableWebMvc;
+import jakarta.servlet.DispatcherType;
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
+import java.net.URI;
+import java.net.http.*;
+import java.nio.charset.StandardCharsets;
+import java.security.SecureRandom;
+import java.time.Instant;
+import java.util.Base64;
 import cn.jia.agent.dao.*;
 import cn.jia.agent.dao.impl.*;
 import cn.jia.agent.entity.*;
@@ -77,6 +104,23 @@ class AgentTaskBillingMySqlTransactionTest {
     private boolean failBootstrap;
     private boolean failOccupation;
     private String quoteId;
+    private AgentTaskDeliberationOperationReadService operationReads;
+    @org.junit.jupiter.api.io.TempDir Path httpDirectory;
+    private Tomcat httpServer;
+    private AnnotationConfigWebApplicationContext httpContext;
+    private String origin;
+    private byte[] signingKey;
+
+    @Configuration
+    @EnableWebMvc
+    @EnableWebSecurity
+    @Import({ApiEnvelopeJsonConfig.class, ApiEnvelopeAdvice.class, ApiRequestEnvelopeAdvice.class, ExceptionHandlerAdvice.class})
+    public static class HttpApp {
+        @Bean SecurityFilterChain security(HttpSecurity http) throws Exception {
+            return http.csrf(c -> c.disable()).authorizeHttpRequests(a -> a.anyRequest().authenticated())
+                    .oauth2ResourceServer(o -> o.jwt(j -> {})).build();
+        }
+    }
 
     @BeforeEach
     void setUp() throws Exception {
@@ -117,7 +161,7 @@ class AgentTaskBillingMySqlTransactionTest {
                 AgentTaskWorkItemMapper.class, AgentTaskEventMapper.class, AgentTaskExecutionGrantMapper.class,
                 AgentTaskBountyBootstrapOutboxMapper.class, AgentTaskFormalDeliveryMapper.class, AgentTaskCancellationMapper.class,
                 PersonalWorkspaceExecutionMapper.class, PersonalWorkspaceExecutionInputMapper.class, PersonalWorkspaceExecutionOutputMapper.class, SkillExecutionMapper.class, AgentTaskProviderCostConsentMapper.class,
-                EconomyLedgerMapper.class, EconomyTaskBillingMapper.class)) config.addMapper(mapper);
+                EconomyLedgerMapper.class, EconomyTaskBillingMapper.class, ControlledImageBridgeOperationMapper.class)) config.addMapper(mapper);
         var global = new GlobalConfig(); global.setIdentifierGenerator(new DefaultIdentifierGenerator());
         var factory = new MybatisSqlSessionFactoryBean(); factory.setDataSource(source);
         factory.setConfiguration(config); factory.setGlobalConfig(global);
@@ -171,6 +215,10 @@ class AgentTaskBillingMySqlTransactionTest {
                 new AgentTaskExecutionGrantDaoImpl(sql.getMapper(AgentTaskExecutionGrantMapper.class)),
                 outbox, links, mock(PersonalWorkspaceDao.class), legacy, identities, roots,
                 new ObjectMapper(), requirements, billing);
+        operationReads = new AgentTaskDeliberationOperationReadServiceImpl(
+                new AgentTaskExecutionGrantDaoImpl(sql.getMapper(AgentTaskExecutionGrantMapper.class)), outbox,
+                new ControlledImageBridgeOperationDaoImpl(sql.getMapper(ControlledImageBridgeOperationMapper.class)),
+                requirements, roots, new ObjectMapper());
         var authority = mock(TaskAssigneeAuthorityService.class);
         var target = new TaskAssigneeAuthorityService.Target(TENANT, CLIENT, OWNER, AGENT, 1L, null);
         when(authority.lockForAssignment(TENANT, CLIENT, OWNER, AGENT)).thenReturn(target);
@@ -217,7 +265,10 @@ class AgentTaskBillingMySqlTransactionTest {
     }
 
     @AfterEach
-    void close() {
+    void close() throws Exception {
+        try {
+            if (httpServer != null) { httpServer.stop(); httpServer.destroy(); }
+        } finally { if (httpContext != null) httpContext.close(); }
         if (publisher != null) publisher.close();
         if (admin != null && database != null) admin.execute("DROP DATABASE IF EXISTS `" + database + "`");
     }
@@ -599,6 +650,106 @@ class AgentTaskBillingMySqlTransactionTest {
         assertEquals("ready", jdbc.queryForObject("SELECT status FROM agent_task_work_item", String.class));
         assertEquals(TASK, jdbc.queryForObject("SELECT current_task_id FROM agent_runtime", String.class));
         assertEquals("busy", jdbc.queryForObject("SELECT status FROM agent_runtime", String.class));
+    }
+
+    /** Actual production controllers, signed JWT, Q/R codecs, task SQL and money SQL.
+     * Identity/material observations remain the declared fixture doubles; no model/relay is run. */
+    @Test void realHttpAssignmentAcceptanceAndReplayHaveOneFinancialEffect() throws Exception {
+        startHttp();
+        pointHttp(200); pointHttp(200);
+        assertEquals(50, wallet(independent)); assertEquals("HELD", charge());
+        assertEquals(1, count("economy_transaction")); assertEquals(1, count("agent_task_execution_grant"));
+        prepareSubmitted();
+        String decision = "{\"expectedTaskVersion\":\"4\",\"expectedDeliveryVersion\":\"0\",\"decision\":\"accepted\"}";
+        httpPost("/formal-deliveries/delivery-1/decision", decision, "accept-http", true, 200);
+        httpPost("/formal-deliveries/delivery-1/decision", decision, "accept-http", true, 200);
+        assertEquals("CAPTURED", charge()); assertEquals("completed", taskState());
+        assertEquals(50, wallet(independent)); assertEquals(2, count("economy_transaction"));
+    }
+
+    @Test void realHttpCancellationReleasesOnceAndRejectsUnauthenticatedMutation() throws Exception {
+        prepareCancellation(); startHttp();
+        httpPost("/point-and-deliberate", pointBody(), "assign-http", false, 401);
+        assertAssignmentAbsent(); pointHttp(200); prepareRetry();
+        String body = "{\"expectedTaskVersion\":\"1\"}";
+        httpPost("/cancel", body, "cancel-http", true, 200);
+        httpPost("/cancel", body, "cancel-http", true, 200);
+        assertCancelled();
+    }
+
+    @Test void realHttpInsufficientBalanceAndFailedAssignmentNeverPartiallyCommit() throws Exception {
+        startHttp(); jdbc.update("UPDATE economy_account SET balance_wen=49 WHERE account_id='wallet'");
+        pointHttp(409);
+        assertEquals(49, wallet(independent)); assertEquals("open", taskState());
+        assertEquals(0, count("economy_transaction")); assertEquals(0, count("agent_task_execution_grant"));
+        jdbc.update("UPDATE economy_account SET balance_wen=100 WHERE account_id='wallet'");
+        failBootstrap = true; pointHttp(500); assertAssignmentAbsent();
+        failBootstrap = false; pointHttp(200);
+        assertEquals(50, wallet(independent)); assertEquals("HELD", charge());
+    }
+
+    private String pointBody() {
+        return "{\"targetAgentId\":\"" + AGENT + "\",\"expectedTaskVersion\":\"0\",\"requirementRevision\":\"1\","
+                + "\"quoteId\":\"" + quoteId + "\",\"recommendationId\":\"recommendation-1\"}";
+    }
+    private void pointHttp(int expected) throws Exception { httpPost("/point-and-deliberate", pointBody(), "assign-http", true, expected); }
+    private void startHttp() throws Exception {
+        signingKey = new byte[32]; new SecureRandom().nextBytes(signingKey);
+        var decoder = NimbusJwtDecoder.withSecretKey(new SecretKeySpec(signingKey, "HmacSHA256"))
+                .macAlgorithm(MacAlgorithm.HS256).build();
+        decoder.setJwtValidator(JwtValidators.createDefaultWithIssuer("cyf-agent-billing-fixture"));
+        httpServer = new Tomcat(); httpServer.setBaseDir(httpDirectory.toString()); httpServer.setPort(0);
+        httpServer.getConnector().setProperty("address", "127.0.0.1");
+        var context = httpServer.addContext("", Files.createDirectory(httpDirectory.resolve("webroot")).toString());
+        context.setParentClassLoader(getClass().getClassLoader());
+        httpContext = new AnnotationConfigWebApplicationContext(); httpContext.setServletContext(context.getServletContext());
+        httpContext.register(HttpApp.class);
+        httpContext.addBeanFactoryPostProcessor(factory -> {
+            factory.registerSingleton("jwtDecoder", decoder);
+            factory.registerSingleton("assignmentController", new AgentTaskDeliberationOperationController(operationReads, assignment));
+            factory.registerSingleton("cancellationController", new AgentTaskCancellationController(cancellation));
+            factory.registerSingleton("decisionController", new AgentTaskFormalDeliveryController(
+                    mock(AgentTaskFormalDeliveryService.class), decisions, mock(AgentTaskFormalDeliveryReadService.class),
+                    mock(AgentTaskReworkExecutionService.class)));
+        });
+        httpContext.refresh();
+        Tomcat.addServlet(context, "dispatcher", new DispatcherServlet(httpContext)).setLoadOnStartup(1);
+        context.addServletMappingDecoded("/", "dispatcher");
+        addHttpFilter(context, "requestId", new RequestIdFilter());
+        addHttpFilter(context, "security", new DelegatingFilterProxy("springSecurityFilterChain", httpContext));
+        httpServer.start(); origin = "http://127.0.0.1:" + httpServer.getConnector().getLocalPort();
+    }
+    private static void addHttpFilter(org.apache.catalina.Context context, String name, jakarta.servlet.Filter filter) {
+        var def = new FilterDef(); def.setFilterName(name); def.setFilter(filter); context.addFilterDef(def);
+        var map = new FilterMap(); map.setFilterName(name); map.addURLPattern("/*");
+        map.setDispatcher(DispatcherType.REQUEST.name()); context.addFilterMap(map);
+    }
+    private void httpPost(String route, String data, String key, boolean authenticated, int expected) throws Exception {
+        String body = "{\"protocolVersion\":1,\"requestId\":\"billing-http\",\"data\":" + data + "}";
+        var request = HttpRequest.newBuilder(URI.create(origin + "/agent/tasks/" + TASK + route))
+                .header("Content-Type", "application/json").header("X-Request-Id", "billing-http")
+                .header("Idempotency-Key", key).POST(HttpRequest.BodyPublishers.ofString(body));
+        if (authenticated) request.header("Authorization", "Bearer " + httpToken());
+        try (var client = HttpClient.newHttpClient()) {
+            var response = client.send(request.build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(expected, response.statusCode(), response.body());
+            if (expected == 200) {
+                var json = new ObjectMapper().readTree(response.body());
+                assertEquals(1, json.path("protocolVersion").asInt());
+                assertEquals("E0", json.path("code").asText());
+                assertEquals("billing-http", json.path("requestId").asText());
+            }
+        }
+    }
+    private String httpToken() throws Exception {
+        var encoder = Base64.getUrlEncoder().withoutPadding(); long now = Instant.now().getEpochSecond();
+        String header = encoder.encodeToString("{\"alg\":\"HS256\",\"typ\":\"JWT\"}".getBytes(StandardCharsets.UTF_8));
+        String payload = encoder.encodeToString(new ObjectMapper().writeValueAsBytes(Map.of(
+                "iss", "cyf-agent-billing-fixture", "sub", PAYER, "jiacn", OWNER, "tenant_id", TENANT,
+                "client_id", CLIENT, "iat", now, "exp", now + 3600)));
+        String content = header + "." + payload; var mac = Mac.getInstance("HmacSHA256");
+        mac.init(new SecretKeySpec(signingKey, "HmacSHA256"));
+        return content + "." + encoder.encodeToString(mac.doFinal(content.getBytes(StandardCharsets.US_ASCII)));
     }
 
     private AgentTaskExecutionGrantDTO assign() {
